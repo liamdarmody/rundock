@@ -26,7 +26,46 @@ const read = (...parts) => fs.readFileSync(path.join(ROOT, ...parts), 'utf8');
 // Commands that throw away working-tree state. A document that names one is
 // telling its reader to run it, whatever the surrounding tense, because a
 // reproduce narrative is read as a recipe.
-const DESTRUCTIVE = /git checkout (?:HEAD )?--|git checkout HEAD\b|git reset --hard|git clean -f/;
+//
+// THE VOCABULARY COVERS THE CLASS, NOT ONE SPELLING: checkout with a pathspec
+// after any ref or a bare dot, reset --hard, clean with any -f combination,
+// and restore in every worktree-touching form, while a staged-only restore, a
+// branch switch, and a dry-run clean stay non-hits. Each shape is proven in
+// both directions by the specimen block in the test below, so narrowing this
+// pattern fails by name.
+const DESTRUCTIVE = new RegExp([
+  /git checkout (?:\S+ )?--(?=\s|$|`)/.source,
+  /git checkout HEAD\b/.source,
+  /git checkout \.(?=\s|$|`)/.source,
+  /git reset --hard/.source,
+  /git clean [^\n`]*-[a-zA-Z]*f/.source,
+  /git restore (?!--staged\b(?!.*--worktree))/.source,
+].join('|'));
+
+// The one decision the scan makes, callable on supplied lines so the
+// classification itself is driven on specimens rather than only exercised by
+// whatever the live tree happens to contain. Returns the offender sentences
+// and the per-file count of allowlisted hits.
+function destructiveOffenders(file, lines) {
+  const offenders = [];
+  let allowed = 0;
+  const entry = ALLOWED_DESTRUCTIVE.find(a => a.file === file);
+  lines.forEach((line, i) => {
+    if (!DESTRUCTIVE.test(line)) return;
+    if (!entry) {
+      offenders.push(`${file}:${i + 1} documents a destructive command with no allowlist entry: ${line.trim().slice(0, 100)}`);
+      return;
+    }
+    // The caution must live within a few lines of the command it excuses.
+    const nearby = lines.slice(Math.max(0, i - 3), i + 7).join('\n');
+    if (!entry.mustContainNearby.test(nearby)) {
+      offenders.push(`${file}:${i + 1} carries an allowlisted destructive command whose caution is gone`);
+      return;
+    }
+    allowed += 1;
+  });
+  return { offenders, allowed };
+}
 
 // Every documented destructive command the repository is allowed to carry,
 // and what must stand beside it. `mustContainNearby` is required within a few
@@ -34,9 +73,20 @@ const DESTRUCTIVE = /git checkout (?:HEAD )?--|git checkout HEAD\b|git reset --h
 // allowlist entry is the caution's presence, not the file's name alone.
 const ALLOWED_DESTRUCTIVE = [
   {
+    // Safe by construction rather than by caution: the recipe creates a
+    // throwaway worktree two lines earlier and the checkout runs inside it,
+    // so what a reader following the page erases is a copy the page itself
+    // made. The nearby requirement pins the worktree-add step, so moving the
+    // checkout out of the throwaway tree un-allowlists it.
+    file: 'docs/evidence/navigation-inventory-evidence.md',
+    mustContainNearby: /git worktree add \/tmp\/nav-redfirst/,
+    reason: 'the checkout runs inside a throwaway worktree the same recipe creates, so no reader working tree is touched',
+    expected: 1,
+  },
+  {
     file: 'docs/evidence/setup-race-flakes-evidence.md',
     mustContainNearby: /erases any uncommitted\s+work|it is erased, not restored/,
-    reason: 'historical narrative of a measured break, with the hazard named beside the command',
+    reason: 'the caution the nearby-requirement enforces converts the recipe: it names the erasure and redirects the reader to copy aside and restore from the copy, so what a reader following the page actually runs is the non-destructive route',
     expected: 2,
   },
 ];
@@ -55,14 +105,59 @@ function trackedMarkdown() {
 }
 
 describe('documented steps and uncommitted work', () => {
-  test('every destructive command in the tracked docs stands beside its caution, and nowhere else', () => {
-    // The pattern proves it still bites, in both directions, before an empty
-    // result is believed.
-    assert.ok(DESTRUCTIVE.test('Reverted with `git checkout -- scripts/red-first.js`'),
-      'the destructive-command pattern no longer matches its own specimen');
-    assert.ok(!DESTRUCTIVE.test('run `git checkout -b my-branch` and `git status` first'),
-      'the destructive-command pattern matches ordinary branch and status commands');
+  test('the destructive-command pattern bites every covered shape and no neighbour', () => {
+    // One positive and one near-miss per shape, so a narrowing of the
+    // pattern, or an over-match into the innocent form beside each command,
+    // fails here by name before any empty offender list is believed.
+    const hits = [
+      'Reverted with `git checkout -- scripts/red-first.js`',
+      'then `git checkout HEAD~2 -- server.js` to put it back',
+      'run `git checkout .` in the repo root',
+      '`git reset --hard origin/main` and retry',
+      'clear it with `git clean -xfd` first',
+      'Reverted with `git restore scripts/red-first.js`',
+      'then `git restore .` to reset the tree',
+      '`git restore --source=HEAD~1 server.js` restores the old copy',
+      'and `git restore --staged --worktree server.js` discards both sides',
+    ];
+    const nonHits = [
+      'run `git checkout -b my-branch` and `git status` first',
+      'switch back with `git checkout feature-branch`',
+      'open `git checkout .github/workflows/ci.yml` in the editor',
+      'unstage with `git restore --staged scripts/red-first.js`',
+      'preview with `git clean -n` before anything',
+      'a soft `git reset HEAD~1` keeps the tree',
+    ];
+    for (const line of hits) {
+      assert.ok(DESTRUCTIVE.test(line), `the pattern no longer matches a destructive shape: ${line}`);
+    }
+    for (const line of nonHits) {
+      assert.ok(!DESTRUCTIVE.test(line), `the pattern over-matches an innocent command: ${line}`);
+    }
+  });
 
+  test('the offender decision itself is exercised on specimens, in all three states', () => {
+    // The live tree currently carries only allowlisted hits, so without these
+    // the branch that reports a NEW destructive step never runs and could be
+    // deleted with the suite green, which is the exact silence this criterion
+    // exists to end.
+    const command = 'Reverted with `git checkout -- scripts/red-first.js`';
+    const caution = 'that command erases any uncommitted work in the file, so copy it aside first';
+
+    const fresh = destructiveOffenders('docs/some-new-note.md', ['a step:', command]);
+    assert.strictEqual(fresh.offenders.length, 1, 'a destructive command in an unallowlisted file must be an offender');
+    assert.ok(fresh.offenders[0].includes('docs/some-new-note.md:2'),
+      'the offender names its file and line');
+
+    const excused = destructiveOffenders('docs/evidence/setup-race-flakes-evidence.md', [caution, command]);
+    assert.deepStrictEqual(excused.offenders, [], 'an allowlisted command with its caution nearby is not an offender');
+    assert.strictEqual(excused.allowed, 1, 'and it counts toward the expected allowlisted hits');
+
+    const stripped = destructiveOffenders('docs/evidence/setup-race-flakes-evidence.md', ['no caution here', command]);
+    assert.strictEqual(stripped.offenders.length, 1, 'the same command with its caution removed is an offender again');
+  });
+
+  test('every destructive command in the tracked docs stands beside its caution, and nowhere else', () => {
     const docs = trackedMarkdown();
     // Dozens are tracked today (62 at the time of writing); a walk that finds
     // far fewer has stopped finding documents, which must never read as an
@@ -72,22 +167,9 @@ describe('documented steps and uncommitted work', () => {
     const offenders = [];
     const allowedHits = new Map(ALLOWED_DESTRUCTIVE.map(a => [a.file, 0]));
     for (const file of docs) {
-      const lines = read(file).split('\n');
-      lines.forEach((line, i) => {
-        if (!DESTRUCTIVE.test(line)) return;
-        const entry = ALLOWED_DESTRUCTIVE.find(a => a.file === file);
-        if (!entry) {
-          offenders.push(`${file}:${i + 1} documents a destructive command with no allowlist entry: ${line.trim().slice(0, 100)}`);
-          return;
-        }
-        // The caution must live within a few lines of the command it excuses.
-        const nearby = lines.slice(Math.max(0, i - 3), i + 7).join('\n');
-        if (!entry.mustContainNearby.test(nearby)) {
-          offenders.push(`${file}:${i + 1} carries an allowlisted destructive command whose caution is gone`);
-          return;
-        }
-        allowedHits.set(file, allowedHits.get(file) + 1);
-      });
+      const result = destructiveOffenders(file, read(file).split('\n'));
+      offenders.push(...result.offenders);
+      if (allowedHits.has(file)) allowedHits.set(file, result.allowed);
     }
     assert.deepStrictEqual(offenders, [],
       'a documented step that destroys uncommitted work needs its caution beside it, or needs rewriting: refuse on a dirty tree, or copy the file aside and restore from the copy');
@@ -126,39 +208,39 @@ describe('documented steps and uncommitted work', () => {
 // recorded.
 const ENUMERATIONS = [
   { file: 'test/unit/client-styles.test.js', extraction: 'stylesheet links out of index.html', failLoudBy: 'count', where: 'sheets.length floor beside the extraction', anchor: 'sheets.length' },
-  { file: 'test/unit/config.test.js', extraction: 'workspace-root assignments out of server.js', failLoudBy: 'count', where: 'exact deepStrictEqual against the two permitted assignments', anchor: 'deepStrictEqual' },
+  { file: 'test/unit/config.test.js', extraction: 'workspace-root assignments out of server.js', failLoudBy: 'count', where: 'exact deepStrictEqual against the two permitted assignments', anchor: 'assignments.map(s => s.trim())' },
   { file: 'test/unit/design-doc.test.js', extraction: 'declared tokens and documented tokens', failLoudBy: 'count', where: 'set difference asserted empty in both directions', anchor: 'two empty sets' },
   { file: 'test/unit/doc-claims.test.js', extraction: 'changelog headings, hook directory list, doc-named files and statuses', failLoudBy: 'count', where: 'each match asserted found, list sizes floored, status sets equal', anchor: 'dirs.length >= 3' },
   { file: 'test/unit/doc-links.test.js', extraction: 'relative markdown links across the docs', failLoudBy: 'count', where: 'checked-links floor beside the scan', anchor: 'checked >=' },
-  { file: 'test/unit/navigation-doors.test.js', extraction: 'inline handlers and call sites out of index.html and the client', failLoudBy: 'count', where: 'manifest equality over the collected sites', anchor: 'deepStrictEqual' },
-  { file: 'test/unit/package-import-apply.test.js', extraction: 'frontmatter field counts out of written agent files', failLoudBy: 'count', where: 'exact strictEqual on each match count', anchor: 'strictEqual' },
+  { file: 'test/unit/navigation-doors.test.js', extraction: 'inline handlers and call sites out of index.html and the client', failLoudBy: 'count', where: 'manifest equality over the collected sites', anchor: 'DESTINATIONS.map(d => d.site).sort()' },
+  { file: 'test/unit/package-import-apply.test.js', extraction: 'frontmatter field counts out of written agent files', failLoudBy: 'count', where: 'exact strictEqual on each match count', anchor: 'written.match(/^source:/gm).length, 1' },
   { file: 'test/unit/packaging.test.js', extraction: 'local requires and asset tags out of server.js, electron/main.js and index.html', failLoudBy: 'count', where: 'require-coverage refusals per file plus an entry-requires floor', anchor: 'entryRequires.length >= 1' },
   { file: 'test/unit/profile-boxes.test.js', extraction: 'app.js arms cut out for pressing', failLoudBy: 'count', where: 'appPiece refuses when a piece is missing', anchor: 'appPiece(' },
-  { file: 'test/unit/regression.test.js', extraction: 'pinned call-shape occurrences in client source', failLoudBy: 'count', where: 'every match wrapped in an exact or floored count assertion', anchor: 'length' },
+  { file: 'test/unit/regression.test.js', extraction: 'pinned call-shape occurrences in client source', failLoudBy: 'count', where: 'every match wrapped in an exact or floored count assertion', anchor: 'each engine scope-return/auto-return kill window arms the shared scheduler' },
   { file: 'test/unit/routine-editor-doors.test.js', extraction: 'editor entry calls and rendered handler names', failLoudBy: 'count', where: 'found-vs-DOORS equality and a handlers.size floor', anchor: 'handlers.size' },
-  { file: 'test/unit/routine-schedule-edit.test.js', extraction: 'routines-section counts out of written files', failLoudBy: 'count', where: 'exact strictEqual on each match count', anchor: 'strictEqual' },
-  { file: 'test/unit/routine-timezone.test.js', extraction: 'frontmatter block out of a written file', failLoudBy: 'count', where: 'indexing the match throws when the pattern misses', anchor: 'frontmatter' },
-  { file: 'test/unit/routine-write.test.js', extraction: 'routines-section counts and frontmatter out of written files', failLoudBy: 'count', where: 'exact counts asserted; missing frontmatter throws', anchor: 'strictEqual' },
+  { file: 'test/unit/routine-schedule-edit.test.js', extraction: 'routines-section counts out of written files', failLoudBy: 'count', where: 'exact strictEqual on each match count', anchor: 'match(/- name: morning-digest/g) || []).length, 1' },
+  { file: 'test/unit/routine-timezone.test.js', extraction: 'frontmatter block out of a written file', failLoudBy: 'count', where: 'indexing the match throws when the pattern misses', anchor: 'frontmatterOf(' },
+  { file: 'test/unit/routine-write.test.js', extraction: 'routines-section counts and frontmatter out of written files', failLoudBy: 'count', where: 'exact counts asserted; missing frontmatter throws', anchor: 'exactly one section' },
   { file: 'test/unit/routines-end-to-end.test.js', extraction: 'app.js pieces cut out for pressing', failLoudBy: 'count', where: 'appPiece refuses when a piece is missing', anchor: 'appPiece(' },
   { file: 'test/unit/routines-truth.test.js', extraction: 'status literals out of the scheduler writers and refusal returns', failLoudBy: 'count', where: 'set equality against the declared vocabulary; every return accounted for', anchor: 'statusesTheSchedulerRecords' },
   { file: 'test/unit/routines-view-doors.test.js', extraction: 'navigation calls across the client and the palette', failLoudBy: 'count', where: 'specimen self-test beside the prohibition scan; palette set equality', anchor: 'NAV_CALL' },
   { file: 'test/unit/routines-view.test.js', extraction: 'app.js arms cut out for pressing', failLoudBy: 'count', where: 'appPiece refuses when a piece is missing', anchor: 'appPiece(' },
-  { file: 'test/unit/run-detail-doors.test.js', extraction: 'run-detail entry calls across the client', failLoudBy: 'count', where: 'found-vs-manifest equality', anchor: 'deepStrictEqual' },
-  { file: 'test/unit/run-detail-model.test.js', extraction: 'unknown-reason words out of the transcript reader and scheduler', failLoudBy: 'count', where: 'floor asserted against the scan, per its own comment', anchor: 'floor' },
+  { file: 'test/unit/run-detail-doors.test.js', extraction: 'run-detail entry calls across the client', failLoudBy: 'count', where: 'found-vs-manifest equality', anchor: '[...new Set(DOORS.map(' },
+  { file: 'test/unit/run-detail-model.test.js', extraction: 'unknown-reason words out of the transcript reader and scheduler', failLoudBy: 'count', where: 'floor asserted against the scan, per its own comment', anchor: 'emitted.size >= 9' },
   { file: 'test/unit/scaffold-integrity.test.js', extraction: 'skill references out of scaffold markdown', failLoudBy: 'count', where: 'specimen self-test beside the prohibition scan', anchor: 'SKILL_REF' },
-  { file: 'test/unit/session-transcript-capture.test.js', extraction: 'the content-block union out of types.d.ts', failLoudBy: 'count', where: 'size floor and set equality against the known block types', anchor: 'size' },
+  { file: 'test/unit/session-transcript-capture.test.js', extraction: 'the content-block union out of types.d.ts', failLoudBy: 'count', where: 'size floor and set equality against the known block types', anchor: 'the block types the reader knows are the union the type model declares' },
   { file: 'test/unit/style-resolve-diff.test.js', extraction: 'var() fallbacks out of stylesheets', failLoudBy: 'count', where: 'a dedicated that-check-can-actually-fail specimen pair', anchor: '<<UNRESOLVED>>' },
   { file: 'test/unit/team-sidebar.test.js', extraction: 'the roster dispatch case cut out of app.js', failLoudBy: 'count', where: 'appPiece refuses when the case is missing', anchor: 'appPiece(' },
   { file: 'test/unit/token-references.test.js', extraction: 'declared and referenced custom properties across public/', failLoudBy: 'count', where: 'used.size floor and a named-token canary', anchor: 'used.size' },
-  { file: 'test/unit/workspace-modes.test.js', extraction: 'gitignore entry count', failLoudBy: 'count', where: 'exact strictEqual on the match count', anchor: 'strictEqual' },
-  { file: 'test/tools/coverage-areas.js', extraction: 'SF and DA records out of the lcov', failLoudBy: 'count', where: 'a floored area that was not measured raises a violation', anchor: 'violation' },
-  { file: 'test/tools/style-drift.js', extraction: 'colour, function and radius literals out of stylesheets', failLoudBy: 'count', where: 'stale allowlist entries error when a listed literal is no longer found', anchor: 'stale' },
+  { file: 'test/unit/workspace-modes.test.js', extraction: 'gitignore entry count', failLoudBy: 'count', where: 'exact strictEqual on the match count', anchor: '(gitignore.match(/\\.rundock\\//g) || []).length, 1' },
+  { file: 'test/tools/coverage-areas.js', extraction: 'SF and DA records out of the lcov', failLoudBy: 'count', where: 'a floored area that was not measured raises a violation', anchor: 'has a floor (' },
+  { file: 'test/tools/style-drift.js', extraction: 'colour, function and radius literals out of stylesheets', failLoudBy: 'count', where: 'stale allowlist entries error when a listed literal is no longer found', anchor: 'which is no longer written. Remove it.' },
   { file: 'test/tools/style-resolve-diff.js', extraction: 'declarations and rule blocks out of stylesheets', failLoudBy: 'count', where: 'its companion test file proves the patterns on specimens', anchor: 'tokensAt' },
   { file: 'test/unit/sdlc-gate-hardening.test.js', extraction: 'destructive commands in tracked markdown, redTests and report bodies out of the harnesses, scanner rules out of check-internal-refs', failLoudBy: 'count', where: 'specimen self-tests, document and per-directory floors, and exact extraction counts throughout this file', anchor: 'looksLikeExtraction' },
   { file: 'test/helpers/scheduler-statuses.js', extraction: 'status literals out of the scheduler writers', failLoudBy: 'count', where: 'its consumers assert the vocabulary in both directions (profile-boxes) and drive every word', anchor: 'statusesTheSchedulerRecords' },
   { file: 'test/integration/http-api.test.js', extraction: 'script and stylesheet links out of served index.html', failLoudBy: 'count', where: 'floors on both lists plus a token-sheet canary', anchor: 'tokens.css' },
   { file: 'test/integration/ws-handler-edges.test.js', extraction: 'frontmatter and order lines out of written agent files', failLoudBy: 'count', where: 'exact match counts; missing frontmatter refuses', anchor: 'exactly one order line' },
-  { file: 'test/tools/innerhtml-sites.js', extraction: 'innerHTML assignment sites across the client', failLoudBy: 'count', where: 'pinned per-file totals in innerhtml-inventory.test.js', anchor: 'sites' },
+  { file: 'test/tools/innerhtml-sites.js', extraction: 'innerHTML assignment sites across the client', failLoudBy: 'count', where: 'pinned per-file totals in innerhtml-inventory.test.js', anchor: 'ASSIGNMENT.source' },
   { file: 'test/unit/app-retentions.test.js', extraction: 'DOM-writing functions out of app.js', failLoudBy: 'count', where: 'owners.size floor plus the stale-manifest check in both directions', anchor: 'owners.size' },
   { file: 'test/unit/client-namespace.test.js', extraction: 'top-level declarations and uses across client sources', failLoudBy: 'count', where: 'declaration-count floor beside the extraction', anchor: 'appTop.size' },
   { file: 'test/unit/guide-name.test.js', extraction: 'pronoun scan over rendered surfaces', failLoudBy: 'count', where: 'specimen pair beside the pattern, added with this registry row', anchor: 'no longer matches its own specimen' },
@@ -563,28 +645,42 @@ describe('a fresh install works without the media encoder', () => {
     assert.ok(encoderOnly.length >= 10,
       `only ${encoderOnly.length} encoder-only packages computed; the closure walk has gone blind`);
 
-    // THE EFFECT, NOT THE SPELLING: each name is resolved through the build's
-    // own file rules the way the packer reads them (a path is packed when a
-    // positive pattern selects it and no negation deselects it), so a pattern
-    // that is present but ineffective, or an equivalent spelling, is judged
-    // by what it selects rather than by its text.
-    const globToRe = (glob) => new RegExp('^' + glob
-      .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-      .replace(/\*\*/g, '\u0000')
-      .replace(/\*/g, '[^/]*')
-      .replace(/\u0000/g, '.*') + '$');
-    const positives = pkg.build.files.filter(f => !f.startsWith('!')).map(globToRe);
-    const negatives = pkg.build.files.filter(f => f.startsWith('!')).map(f => globToRe(f.slice(1)));
-    const packed = (rel) => positives.some(re => re.test(rel)) && !negatives.some(re => re.test(rel));
+    // THE EFFECT, NOT THE SPELLING, judged with the matcher the packer
+    // actually uses: electron-builder resolves its file globs through
+    // minimatch with dot files included, so the same library from this tree,
+    // configured the same way, is what decides selection here. A path is
+    // packed when a positive pattern selects it and no negation deselects
+    // it. Each package is probed on more than one representative path,
+    // including a nested one, so a pattern that selects by subdirectory or
+    // extension is exercised rather than dodged.
+    const { minimatch } = require('minimatch');
+    const MM = { dot: true };
+    const positives = pkg.build.files.filter(f => !f.startsWith('!'));
+    const negatives = pkg.build.files.filter(f => f.startsWith('!')).map(f => f.slice(1));
+    const packed = (rel) => positives.some(g => minimatch(rel, g, MM))
+      && !negatives.some(g => minimatch(rel, g, MM));
 
-    const shipped = encoderOnly.filter(name => packed(`node_modules/${name}/index.js`));
+    // The matcher model is validated against selections known true of the
+    // real build before it judges anything: the entry file packs, a dotfile
+    // under an excluded tree does not, and the screenshots pipeline is out.
+    assert.ok(packed('server.js'), 'matcher validation: the entry file must select');
+    assert.ok(packed('node_modules/express/index.js'), 'matcher validation: a runtime dependency must select');
+    assert.ok(!packed('scripts/screenshots/run.mjs'), 'matcher validation: the excluded pipeline must not select');
+    assert.ok(!packed('node_modules/ffmpeg-static/.npmignore'), 'matcher validation: a dotfile under an excluded tree must not select');
+
+    const probes = (name) => [
+      `node_modules/${name}/index.js`,
+      `node_modules/${name}/lib/nested/deep.bin`,
+      `node_modules/${name}/package.json`,
+    ];
+    const shipped = encoderOnly.filter(name => probes(name).some(packed));
     assert.deepStrictEqual(shipped, [],
       'these packages are in the production tree only because of the optional encoder, and the build '
       + 'rules still select them: exclude each, or show which runtime dependency really needs it');
     // The two sides of the line: what a real dependency needs stays packed,
     // named here so the decision is visible rather than implied.
     for (const name of shared) {
-      assert.ok(packed(`node_modules/${name}/index.js`),
+      assert.ok(probes(name).every(packed),
         `${name} is needed by a real runtime dependency and must stay packed; an exclusion has caught it`);
     }
   });

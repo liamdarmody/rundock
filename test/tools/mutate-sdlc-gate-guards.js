@@ -52,6 +52,9 @@ const SCANNER = { src: path.join(ROOT, 'scripts', 'check-internal-refs.js'), sui
 // The one harness that proved parser and report can drift apart, watched by
 // the report-path uniformity tests.
 const ROLLBACK_HARNESS = { src: path.join(ROOT, 'test', 'tools', 'mutate-workspace-rollback-guards.js'), suite: 'test/unit/sdlc-gate-hardening.test.js' };
+// A registered enumeration whose guard the registry claims: deleting the
+// guard must redden the registry's anchor check, or the inventory is prose.
+const DOC_LINKS = { src: path.join(ROOT, 'test', 'unit', 'doc-links.test.js'), suite: 'test/unit/sdlc-gate-hardening.test.js' };
 
 const MUTATIONS = [
   // ===== A DESTRUCTIVE STEP WITHOUT ITS CAUTION =====
@@ -89,6 +92,14 @@ const MUTATIONS = [
     "    re: /\\bNEVER-MATCHES-ANYTHING-[0-9]+\\b/,\n    amnesty: AC_LABEL_AMNESTY,"],
   // Remove the amnesty consult and every legacy file fails the gate at once,
   // which is the ratchet collapsing into a flag day nobody scheduled.
+  // ===== A REGISTERED GUARD DELETED UNDER A GREEN INVENTORY =====
+  // Remove a registered file's floor and the registry row still says the
+  // enumeration fails loudly; the anchor check is what has to notice, by
+  // row, or the whole inventory is a list of claims.
+  [DOC_LINKS, 'deleting a registered guard reddens the registry by row',
+    "  assert.ok(checked >= 10, `only ${checked} relative links found; the link pattern has gone blind`);\n",
+    ''],
+
   // ===== A REFUSAL MISREPORTED AS A DEFINITE RESULT =====
   // Remove the report branch and a parser refusal falls through to the
   // nothing-turned-red case: a definite verdict about a mutation for which
@@ -134,7 +145,7 @@ function redTests(suite) {
 }
 
 function run() {
-  const targets = [EVIDENCE, ENVELOPE, FOCUSED, TRUTH_HARNESS, SCANNER, ROLLBACK_HARNESS];
+  const targets = [EVIDENCE, ENVELOPE, FOCUSED, TRUTH_HARNESS, SCANNER, ROLLBACK_HARNESS, DOC_LINKS];
   const session = beginMutationRun({ files: [...new Set(targets.map((target) => target.src))] });
   const originals = new Map();
   for (const target of targets) originals.set(target, session.original(target.src));
