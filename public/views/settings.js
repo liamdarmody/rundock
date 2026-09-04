@@ -158,9 +158,16 @@ function renderSettingsSection(section) {
     const agentCount = agents.filter(a => a.status === 'onTeam').length;
     const skillCount = skills.length;
     const isCode = workspaceMode === 'code';
+    // The mode control is the only permissions concept a user meets: no
+    // separate sandbox switch. Knowledge mode is additionally enforced by
+    // the operating system on macOS; Code mode withdraws that OS-level
+    // block because a command sandbox refuses process-launch primitives
+    // (a headless browser's startup check-in, for one) categorically, no
+    // matter what folder permissions say, so a tool that launches its own
+    // processes needs Code mode on macOS to work at all.
     const modeDesc = isCode
-      ? 'Agents can write any file type and run commands without approval.'
-      : 'Agents work with documents only. Terminal commands need approval.';
+      ? 'Agents can write any file type and run commands without approval. On macOS, the extra operating-system write block is off here, because tools that launch their own processes, such as a headless browser, can fail under it regardless of folder permissions.'
+      : 'Agents work with documents only. Terminal commands need approval. On macOS, this is additionally enforced at the operating-system level, on top of the approval cards.';
     el.innerHTML = `<div class="settings-section-title">Workspace</div>
       <div class="settings-card">
         <div class="settings-row">
@@ -186,14 +193,12 @@ function renderSettingsSection(section) {
           <div class="mode-description" id="mode-description">${modeDesc}</div>
         </div>
       </div>
-      <div class="settings-card" id="sandbox-card" style="display:none"></div>
       <div class="settings-card" id="runtimes-card">${runtimesCardHtml()}</div>
       <button class="settings-btn" onclick="changeWorkspace()">Change workspace</button>`;
     // Refresh runtime state whenever the card becomes visible (the user may
     // have just installed or signed in to a CLI).
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: 'get_runtime_status' }));
-      ws.send(JSON.stringify({ type: 'get_sandbox_mode' }));
     }
   } else if (section === 'appearance') {
     const isLight = document.body.classList.contains('light');
@@ -217,36 +222,6 @@ function renderSettingsSection(section) {
         </div>
       </div>`;
   }
-}
-
-// The command sandbox card, drawn only where the server says the switch
-// exists (macOS with a workspace open). The copy says exactly what turning
-// it off withdraws, and names the class the block can never help either
-// way, because an honest switch is the difference between a setting and a
-// trap: a person whose tooling launches a headless browser needs to know
-// the block was never the thing in their way or exactly the thing in their
-// way, depending on the failure they saw.
-function renderSandboxCard(msg) {
-  const el = document.getElementById('sandbox-card');
-  if (!el) return;
-  if (!msg.available) { el.style.display = 'none'; return; }
-  const on = !msg.optedOut;
-  el.style.display = '';
-  el.innerHTML = `<div class="settings-row" style="flex-direction:column;align-items:stretch;gap:12px">
-      <span class="settings-label">Command sandbox</span>
-      <div class="mode-toggle">
-        <button class="mode-toggle-btn${on ? ' active' : ''}" onclick="setSandboxMode(true)">On</button>
-        <button class="mode-toggle-btn${on ? '' : ' active'}" onclick="setSandboxMode(false)">Off</button>
-      </div>
-      <div class="mode-description">${on
-        ? 'macOS refuses writes outside this workspace and the runtime\'s own folders at the operating-system level, on top of the approval cards. It governs writes, not reads. Tools that launch their own processes, such as a headless browser, can fail under any command sandbox regardless of folder permissions; if yours do, turning this off is the fix.'
-        : 'The operating-system write block is off for this workspace. Approval cards remain the whole boundary, exactly as on Windows and Linux. Turn it back on for the extra layer if your tools do not launch their own processes.'}</div>
-    </div>`;
-}
-
-function setSandboxMode(enabled) {
-  if (!ws || ws.readyState !== WebSocket.OPEN) return;
-  ws.send(JSON.stringify({ type: 'set_sandbox_mode', enabled }));
 }
 
 function setWorkspaceMode(mode) {
@@ -316,7 +291,6 @@ function changeWorkspace() {
 }
 
 return { showSettingsSection, renderSettingsSection, setWorkspaceMode, runtimeRowHtml, runtimesCardHtml, renderRuntimesCard, changeWorkspace,
-  renderSandboxCard, setSandboxMode,
   packagesSubmit, packagesCancel, packagesConfirm, packagesRetry,
   packagesReplyArrived, packagesWorkspaceChanged, packagesConnectionLost };
 }));

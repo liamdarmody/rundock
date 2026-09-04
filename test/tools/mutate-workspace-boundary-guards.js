@@ -31,7 +31,6 @@ const HOOK = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'te
 const SCAFFOLD = { src: path.join(ROOT, 'lib', 'workspace', 'scaffold.js'), suite: 'test/unit/workspace-boundary.test.js' };
 const BOUNDARY = { src: path.join(ROOT, 'lib', 'workspace', 'boundary.js'), suite: 'test/unit/workspace-boundary.test.js' };
 const CHAT_VIEW = { src: path.join(ROOT, 'public', 'views', 'chat.js'), suite: 'test/unit/boundary-card.test.js' };
-const SETTINGS_VIEW = { src: path.join(ROOT, 'public', 'views', 'settings.js'), suite: 'test/unit/workspace-boundary.test.js' };
 // Same file as HOOK, a different suite: the attach site this target's own
 // mutation breaks is never called by the unit suite (which tests
 // sensitiveEnrichment and card rendering each in isolation), only by the
@@ -85,17 +84,17 @@ const MUTATIONS = [
     "  if (tail.length === 2 && tail[1] !== path.posix.join('/private', tail[0])) return false;\n",
     ''],
 
-  // ===== THE SWITCH WITHDRAWS HONESTLY =====
-  // Ignore the choice and the off switch writes the block anyway.
-  [SCAFFOLD, 'opting out really withdraws the block',
-    '  const desired = off ? null : sandboxSettings(dir, platform);',
+  // ===== THE BLOCK IS DRIVEN BY MODE, AND ONLY BY MODE =====
+  // Ignore the mode and the switch writes the block for code mode too.
+  [SCAFFOLD, 'the mode switch really withdraws the block in code mode',
+    "  const desired = mode === 'code' ? null : sandboxSettings(dir, platform);",
     '  const desired = sandboxSettings(dir, platform);'],
-  // Ignore the choice on the NEXT OPEN specifically, not through the switch:
-  // scaffoldWorkspace's own reconcile has to read the opt-out too, or an
-  // opted-out workspace has its block silently rewritten the next time it is
-  // opened.
-  [SCAFFOLD, 'the next open honours an existing opt-out, not only the switch',
-    '    const desired = sandboxOptedOut(dir) ? null : sandboxSettings(dir, platform);',
+  // Ignore the mode on the NEXT OPEN specifically, not through the switch:
+  // scaffoldWorkspace's own reconcile has to read the persisted mode too, or
+  // a code-mode workspace has its block silently rewritten the next time it
+  // is opened.
+  [SCAFFOLD, 'the next open honours the persisted mode, not only the switch',
+    "    const desired = workspaceModeFor(dir) === 'code' ? null : sandboxSettings(dir, platform);",
     '    const desired = sandboxSettings(dir, platform);'],
 
   // ===== THE SENSITIVE TABLE AND THE NARROW GRANT =====
@@ -123,26 +122,6 @@ const MUTATIONS = [
   [HOOK_INTEGRATION, 'the sensitive enrichment reaches the crossing the hook actually emits',
     '            .map(c => ({ ...c, ...(sensitiveEnrichment(c.path, wsRoot) || {}) })),',
     '            .map(c => c),'],
-
-  // ===== THE SANDBOX CARD REACHES THE REAL SETTINGS SECTION =====
-  // A test that renders renderSandboxCard against a hand-built container
-  // proves nothing about whether the card ever reaches a real user: these
-  // two lines are what actually put the container on the page and ask the
-  // server for its state when the workspace section opens.
-  [SETTINGS_VIEW, 'the workspace section renders the sandbox card container, not only a fixture a test built itself',
-    '      <div class="settings-card" id="sandbox-card" style="display:none"></div>\n',
-    ''],
-  [SETTINGS_VIEW, 'opening the workspace section asks the server for the sandbox mode',
-    "      ws.send(JSON.stringify({ type: 'get_sandbox_mode' }));\n",
-    ''],
-
-  // ===== THE VIEW MODULE'S EXPORT CONTRACT =====
-  // Un-republish the sandbox card's render and toggle functions and the WS
-  // dispatch and the card's own onclick markup resolve against nothing: the
-  // control exists in markup but throws ReferenceError on every click.
-  [SETTINGS_VIEW, 'the sandbox card\'s render and toggle functions are republished, not just declared',
-    '  renderSandboxCard, setSandboxMode,\n',
-    ''],
 ];
 
 const REPORTER = ['--test-reporter', 'spec'];
@@ -174,7 +153,7 @@ function redTests(suite) {
 }
 
 function run() {
-  const targets = [HOOK, SCAFFOLD, BOUNDARY, CHAT_VIEW, SETTINGS_VIEW, HOOK_INTEGRATION];
+  const targets = [HOOK, SCAFFOLD, BOUNDARY, CHAT_VIEW, HOOK_INTEGRATION];
   const session = beginMutationRun({ files: [...new Set(targets.map((target) => target.src))] });
   const originals = new Map();
   for (const target of targets) originals.set(target, session.original(target.src));

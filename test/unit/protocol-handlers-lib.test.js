@@ -17,18 +17,18 @@ const { buildDispatch } = require('../../lib/protocol/handlers/index.js');
 const { _internal: srv } = require('../../server.js');
 const config = require('../../lib/config.js');
 
-// The full routing surface of the dispatch table, frozen: 41 message types
+// The full routing surface of the dispatch table, frozen: 39 message types
 // plus save_agent's two legacy aliases. The four root shims (chat, delegate,
 // end_delegation, flush_buffer) must NEVER appear here: chat is the
 // kill-window chat shim, delegate/end_delegation are delegation glue, and
 // flush_buffer drains safeSend's own reconnect buffer.
+// There is no sandbox switch: set_workspace_mode is the only message that
+// can move the OS write block, proven end to end by
+// test/unit/workspace-boundary.test.js.
 const EXPECTED_TYPES = [
   'permission_response', 'cancel',
   'get_workspaces', 'client_render_time', 'list_workspaces', 'set_workspace',
   'pick_folder', 'create_workspace', 'set_workspace_mode',
-  // The command sandbox's per-workspace switch: read and write, driven end
-  // to end by test/unit/workspace-boundary.test.js.
-  'get_sandbox_mode', 'set_sandbox_mode',
   'get_agents', 'get_runtime_status', 'get_files', 'get_skills', 'get_run',
   'cancel_routine_run',
   'plan_package_import', 'apply_package_import',
@@ -451,7 +451,11 @@ describe('cancel seams (stub ctx)', () => {
 // after the announce and the rollback puts the old root back without saying
 // so. Here the rollback IS a call to this function, so the retraction cannot
 // be forgotten.
-describe('the command sandbox switch, through the real dispatch', () => {
+// PM-1: the OS write block is driven by workspace mode and by nothing else.
+// There is no sandbox switch any more; set_workspace_mode is the single
+// rewiring point, and these tests drive it through the real dispatch table
+// so the wiring proven is the wiring a client message actually reaches.
+describe('the OS write block is driven by mode alone, through the real dispatch', () => {
   const workspace = require('../../lib/protocol/handlers/workspace.js');
 
   function withWorkspace(dir, fn) {
@@ -460,90 +464,88 @@ describe('the command sandbox switch, through the real dispatch', () => {
     try { return fn(); } finally { config.setWorkspace(original); }
   }
   function tempWs() {
-    const d = fs.mkdtempSync(path.join(os.tmpdir(), 'proto-sandbox-'));
+    const d = fs.mkdtempSync(path.join(os.tmpdir(), 'proto-mode-'));
     fs.mkdirSync(path.join(d, '.claude'), { recursive: true });
     return d;
   }
+  function blockPresent(dir) {
+    try {
+      const settings = JSON.parse(fs.readFileSync(path.join(dir, '.claude', 'settings.local.json'), 'utf8'));
+      return 'sandbox' in settings;
+    } catch (e) { return false; }
+  }
 
-  test('the dispatch entries answer, whichever arm this host takes', () => {
-    // Driven through the real table so the wiring is what is proven; the
-    // reply differs by host platform, and each host covers its own arm here
-    // while the direct calls below cover the other, which is what keeps the
-    // file fully covered on macOS and the Linux runners alike.
+  test('on macOS, Knowledge mode carries the block, Code mode withdraws it, and moving back restores it', () => {
     const table = buildDispatch();
     const dir = tempWs();
     withWorkspace(dir, () => {
-      const get = captureWs();
-      table.get_sandbox_mode({}, get, {});
-      assert.strictEqual(get.sent[0].type, 'sandbox_mode');
-      assert.strictEqual(get.sent[0].available, process.platform === 'darwin');
+      const toKnowledge = captureWs();
+      table.set_workspace_mode({}, toKnowledge, { mode: 'knowledge' }, 'darwin');
+      assert.deepStrictEqual(toKnowledge.sent[0], { type: 'workspace_mode_changed', mode: 'knowledge' });
+      assert.ok(blockPresent(dir), 'Knowledge mode on macOS carries the block');
 
-      const set = captureWs();
-      table.set_sandbox_mode({}, set, { enabled: false });
-      assert.strictEqual(set.sent[0].type,
-        process.platform === 'darwin' ? 'sandbox_mode' : 'workspace_error');
+      const toCode = captureWs();
+      table.set_workspace_mode({}, toCode, { mode: 'code' }, 'darwin');
+      assert.deepStrictEqual(toCode.sent[0], { type: 'workspace_mode_changed', mode: 'code' });
+      assert.strictEqual(blockPresent(dir), false, 'Code mode withdraws it');
+
+      const backToKnowledge = captureWs();
+      table.set_workspace_mode({}, backToKnowledge, { mode: 'knowledge' }, 'darwin');
+      assert.ok(blockPresent(dir), 'moving back to Knowledge mode restores it');
     });
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  test('on macOS the switch withdraws and restores, and the reply says which', () => {
+  test('on a platform with no OS sandbox, mode still persists but no block is ever written, in either mode', () => {
+    const table = buildDispatch();
     const dir = tempWs();
     withWorkspace(dir, () => {
-      // Opting in first writes the block, so the withdrawal below has a file
-      // to be observed in; a fresh workspace opted out writes nothing at all.
-      const on = captureWs();
-      workspace.handleSetSandboxMode({}, on, { enabled: true }, 'darwin');
-      assert.deepStrictEqual(on.sent[0], { type: 'sandbox_mode', available: true, optedOut: false });
-      let settings = JSON.parse(fs.readFileSync(path.join(dir, '.claude', 'settings.local.json'), 'utf8'));
-      assert.ok(settings.sandbox, 'opted in: the block is written');
+      const toKnowledge = captureWs();
+      table.set_workspace_mode({}, toKnowledge, { mode: 'knowledge' }, 'linux');
+      assert.strictEqual(toKnowledge.sent[0].type, 'workspace_mode_changed');
+      assert.strictEqual(blockPresent(dir), false, 'Linux never gets an OS block, even in Knowledge mode');
 
-      const off = captureWs();
-      workspace.handleSetSandboxMode({}, off, { enabled: false }, 'darwin');
-      assert.deepStrictEqual(off.sent[0], { type: 'sandbox_mode', available: true, optedOut: true });
-      settings = JSON.parse(fs.readFileSync(path.join(dir, '.claude', 'settings.local.json'), 'utf8'));
-      assert.strictEqual('sandbox' in settings, false, 'our block is withdrawn');
-
-      const get = captureWs();
-      workspace.handleGetSandboxMode({}, get, {}, 'darwin');
-      assert.deepStrictEqual(get.sent[0], { type: 'sandbox_mode', available: true, optedOut: true });
+      const toCode = captureWs();
+      table.set_workspace_mode({}, toCode, { mode: 'code' }, 'linux');
+      assert.strictEqual(blockPresent(dir), false);
     });
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  test('a platform with no sandbox is refused for set and unavailable for get', () => {
+  // THE ABSENCE OF ANY OTHER ROUTE. There is no set_sandbox_mode or
+  // get_sandbox_mode message any more: the dispatch table carries no entry
+  // for either name, so a client (or a prompt-injected instruction) that
+  // sends one reaches no handler at all, exactly as any other unrecognised
+  // message type would, and the block is untouched by it.
+  test('a direct attempt to set the block is not a message the protocol recognises', () => {
+    const table = buildDispatch();
+    assert.strictEqual('set_sandbox_mode' in table, false, 'no handler exists to set the block directly');
+    assert.strictEqual('get_sandbox_mode' in table, false, 'no handler exists to read a standalone switch either');
     const dir = tempWs();
     withWorkspace(dir, () => {
-      const set = captureWs();
-      workspace.handleSetSandboxMode({}, set, { enabled: false }, 'linux');
-      assert.strictEqual(set.sent[0].type, 'workspace_error');
-      const get = captureWs();
-      workspace.handleGetSandboxMode({}, get, {}, 'linux');
-      assert.deepStrictEqual(get.sent[0], { type: 'sandbox_mode', available: false, optedOut: false });
+      // First put the block in place, in Knowledge mode, then attempt the
+      // removed message: an unrecognised type dispatches to nothing
+      // (server.js: `if (dispatchHandler) dispatchHandler(...)`), so the
+      // block bystanding this must be exactly what mode left it as.
+      table.set_workspace_mode({}, captureWs(), { mode: 'knowledge' }, 'darwin');
+      assert.ok(blockPresent(dir), 'sanity: the block is present before the attempt');
+      const dispatchHandler = table['set_sandbox_mode'];
+      assert.strictEqual(dispatchHandler, undefined, 'there is nothing to call');
+      assert.ok(blockPresent(dir), 'and the block is unchanged: nothing else could have touched it');
     });
     fs.rmSync(dir, { recursive: true, force: true });
-  });
-
-  test('no workspace open is a refusal for set and unavailable for get', () => {
-    withWorkspace(null, () => {
-      const set = captureWs();
-      workspace.handleSetSandboxMode({}, set, { enabled: false }, 'darwin');
-      assert.strictEqual(set.sent[0].type, 'workspace_error');
-      const get = captureWs();
-      workspace.handleGetSandboxMode({}, get, {}, 'darwin');
-      assert.strictEqual(get.sent[0].available, false);
-    });
   });
 
   test('a write the workspace refuses becomes a named error, never silence', () => {
     // .rundock exists as a FILE, so the state write inside cannot happen and
-    // the switch's failure surfaces as a workspace_error carrying the cause.
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'proto-sandbox-bad-'));
+    // the failure surfaces as a workspace_error carrying the cause.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'proto-mode-bad-'));
     fs.writeFileSync(path.join(dir, '.rundock'), 'not a directory');
     withWorkspace(dir, () => {
       const set = captureWs();
-      workspace.handleSetSandboxMode({}, set, { enabled: false }, 'darwin');
+      workspace.handleSetWorkspaceMode({}, set, { mode: 'code' }, 'darwin');
       assert.strictEqual(set.sent[0].type, 'workspace_error');
-      assert.match(set.sent[0].message, /Could not update the sandbox setting/);
+      assert.match(set.sent[0].message, /Could not update workspace mode/);
     });
     fs.rmSync(dir, { recursive: true, force: true });
   });

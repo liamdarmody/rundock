@@ -2,17 +2,17 @@
 // The boundary stops flooding, proven at its three layers: the block the
 // runtime is started with names the runtime's own measured plumbing, every
 // comparison canonicalises so one directory under two names is one identity,
-// the switch that withdraws the block is honest about what that withdraws,
-// and a crossing into the runtime's home carries its stakes and a narrower
-// grant. Fixtures are real directories, real symlinks and the machine's own
-// /private alias, because every false card in the field came from a spelling
-// a hand-built fixture would not have thought to write.
+// the block is driven by workspace mode alone (Knowledge mode carries it,
+// Code mode withdraws it, and nothing else can reach it), and a crossing
+// into the runtime's home carries its stakes and a narrower grant. Fixtures
+// are real directories, real symlinks and the machine's own /private alias,
+// because every false card in the field came from a spelling a hand-built
+// fixture would not have thought to write.
 const { test, describe, after } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { JSDOM } = require('jsdom');
 
 const ROOT = path.join(__dirname, '..', '..');
 const hook = require('../../scripts/permission-hook.js');
@@ -20,11 +20,6 @@ const scaffold = require('../../lib/workspace/scaffold.js');
 const boundary = require('../../lib/workspace/boundary.js');
 const permissions = require('../../public/permissions.js');
 const config = require('../../lib/config.js');
-// Evaluated into a fresh JSDOM window (not required as a CJS module) so the
-// UMD wrapper's browser branch runs and republishes the view's functions as
-// window properties, the same route app.js's inline onclick markup and WS
-// dispatch resolve them through.
-const SETTINGS_VIEW_SRC = fs.readFileSync(path.join(ROOT, 'public', 'views', 'settings.js'), 'utf8');
 
 const made = [];
 after(() => { for (const d of made) fs.rmSync(d, { recursive: true, force: true }); });
@@ -263,80 +258,88 @@ describe('one directory under two names is one identity', () => {
   });
 });
 
-describe('the switch that withdraws the block is honest', () => {
+// PM-1: the OS write block is driven by workspace mode and by nothing else.
+// There is no separate opt-out any more; lib/protocol/handlers/workspace.js's
+// handleSetWorkspaceMode drives lib/workspace/scaffold.js's
+// reconcileSandboxForMode directly, and these tests exercise that function
+// (and scaffoldWorkspace's own reconcile, which reads the persisted mode on
+// every ordinary open) at the scaffold layer. The protocol-level proof that
+// no OTHER message can reach the block lives alongside the rest of the
+// dispatch table in test/unit/protocol-handlers-lib.test.js.
+describe('the block is driven by mode, and only by mode', () => {
   function workspaceWithBlock() {
-    const ws = tmp('wb-switch-');
+    const ws = tmp('wb-mode-');
     fs.mkdirSync(path.join(ws, '.claude'), { recursive: true });
     return ws;
   }
 
-  test('opting out removes our block and remembers the choice; opting in restores it', () => {
+  test('reconcileSandboxForMode writes the block for knowledge mode and withdraws it for code mode; switching back restores it', () => {
     const ws = workspaceWithBlock();
     // 'darwin' explicitly: sandboxSettings returns null on any other
     // platform, so a call defaulted to process.platform writes no block at
     // all on a non-darwin host and the read-back below throws ENOENT there,
-    // the same reason handleSetSandboxMode's own tests pass 'darwin' and
-    // scaffoldWorkspace is given { platform: 'darwin' } in the sibling test.
-    scaffold.setSandboxOptOut(ws, false, 'darwin');
+    // the same reason scaffoldWorkspace is given { platform: 'darwin' } in
+    // the sibling tests below.
+    scaffold.reconcileSandboxForMode(ws, 'knowledge', 'darwin');
     const settingsPath = path.join(ws, '.claude', 'settings.local.json');
     let settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
-    assert.ok(settings.sandbox, 'opted in: the block is written');
-    scaffold.setSandboxOptOut(ws, true);
+    assert.ok(settings.sandbox, 'knowledge mode: the block is written');
+    scaffold.reconcileSandboxForMode(ws, 'code', 'darwin');
     settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
-    assert.strictEqual('sandbox' in settings, false, 'opted out: the block is withdrawn');
-    assert.strictEqual(scaffold.sandboxOptedOut(ws), true, 'and the choice survives to the next open');
-    scaffold.setSandboxOptOut(ws, false, 'darwin');
+    assert.strictEqual('sandbox' in settings, false, 'code mode: the block is withdrawn');
+    scaffold.reconcileSandboxForMode(ws, 'knowledge', 'darwin');
     settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
-    assert.ok(settings.sandbox, 'opting back in restores the block');
+    assert.ok(settings.sandbox, 'moving back to knowledge mode restores the block');
   });
 
-  test('the next open honours an existing opt-out: the block is withdrawn, not refreshed, and an opted-in workspace still gets it', () => {
-    // The switch test above proves setSandboxOptOut's own immediate write.
-    // This is the separate branch in scaffoldWorkspace itself (the ternary
-    // gating `desired` on sandboxOptedOut(dir)), reached on every ordinary
+  test('the next open honours the persisted mode, not only the switch\'s immediate write: withdrawn for a code-mode workspace, present for a knowledge-mode one', () => {
+    // reconcileSandboxForMode proves the switch's own immediate write above.
+    // This is the separate branch in scaffoldWorkspace itself
+    // (workspaceModeFor(dir) gating `desired`), reached on every ordinary
     // workspace open, not only through the switch. Nothing exercised it: the
     // only prior assertion about it read back the state flag rather than
-    // running scaffoldWorkspace against an opted-out workspace and checking
+    // running scaffoldWorkspace against a code-mode workspace and checking
     // what landed in settings.local.json.
     const prevDeps = scaffold.wireScaffoldDeps({ invalidateAgentCache: () => {}, rebaselineAgentsWatcher: () => {} });
     try {
-      const optedOutWs = tmp('wb-scaffold-optout-');
+      const codeModeWs = tmp('wb-scaffold-codemode-');
       // A Rundock-written block already present, as it would be from an
-      // earlier, opted-in open.
-      scaffold.scaffoldWorkspace(optedOutWs, { platform: 'darwin' });
-      const settingsPath = path.join(optedOutWs, '.claude', 'settings.local.json');
+      // earlier, knowledge-mode open.
+      scaffold.scaffoldWorkspace(codeModeWs, { platform: 'darwin' });
+      const settingsPath = path.join(codeModeWs, '.claude', 'settings.local.json');
       assert.ok(JSON.parse(fs.readFileSync(settingsPath, 'utf8')).sandbox,
-        'fixture sanity: a block is present before the opt-out');
+        'fixture sanity: a block is present before the mode changes');
 
-      scaffold.setSandboxOptOut(optedOutWs, true);
-      // The next open, not the switch, is what is under test: state.json now
-      // records the opt-out, and scaffoldWorkspace's own reconcile is what
-      // must read it, independent of the switch's own immediate write.
-      scaffold.scaffoldWorkspace(optedOutWs, { platform: 'darwin' });
+      // Persist code mode directly in state.json, the way the mode-change
+      // handler does, WITHOUT going through reconcileSandboxForMode's own
+      // immediate write: the next open, not the switch, is what is under
+      // test.
+      fs.writeFileSync(path.join(codeModeWs, '.rundock', 'state.json'), JSON.stringify({ workspaceMode: 'code' }));
+      scaffold.scaffoldWorkspace(codeModeWs, { platform: 'darwin' });
       const afterNextOpen = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
       assert.strictEqual('sandbox' in afterNextOpen, false,
         'withdrawn on the next open, not left in place as a refresh would leave it');
 
-      const stillOptedIn = tmp('wb-scaffold-stillin-');
-      scaffold.scaffoldWorkspace(stillOptedIn, { platform: 'darwin' });
-      const inSettings = JSON.parse(fs.readFileSync(path.join(stillOptedIn, '.claude', 'settings.local.json'), 'utf8'));
-      assert.ok(inSettings.sandbox, 'and a workspace that never opted out still gets the block from the same call');
+      const knowledgeModeWs = tmp('wb-scaffold-knowledgemode-');
+      scaffold.scaffoldWorkspace(knowledgeModeWs, { platform: 'darwin' });
+      const inSettings = JSON.parse(fs.readFileSync(path.join(knowledgeModeWs, '.claude', 'settings.local.json'), 'utf8'));
+      assert.ok(inSettings.sandbox, 'and a workspace with no persisted mode (default knowledge) still gets the block from the same call');
     } finally {
       scaffold.wireScaffoldDeps(prevDeps);
     }
   });
 
-  test('a person\'s own block is never touched by the switch, in either direction', () => {
+  test('a person\'s own block is never touched by a mode change, in either direction', () => {
     const ws = workspaceWithBlock();
     const theirs = { enabled: false, note: 'mine' };
     fs.writeFileSync(path.join(ws, '.claude', 'settings.local.json'), JSON.stringify({ sandbox: theirs }));
-    scaffold.setSandboxOptOut(ws, true);
-    scaffold.setSandboxOptOut(ws, false);
+    scaffold.reconcileSandboxForMode(ws, 'code', 'darwin');
+    scaffold.reconcileSandboxForMode(ws, 'knowledge', 'darwin');
     const settings = JSON.parse(fs.readFileSync(path.join(ws, '.claude', 'settings.local.json'), 'utf8'));
     assert.deepStrictEqual(settings.sandbox, theirs, 'whoever wrote it decided something');
   });
 
-  test('the legacy block upgrades to the measured shape through the switch\'s reconcile', () => {
+  test('the legacy block upgrades to the measured shape through the mode reconcile', () => {
     const ws = workspaceWithBlock();
     const home = os.homedir();
     const legacy = {
@@ -345,74 +348,16 @@ describe('the switch that withdraws the block is honest', () => {
       network: { allowedDomains: ['*'] },
     };
     fs.writeFileSync(path.join(ws, '.claude', 'settings.local.json'), JSON.stringify({ sandbox: legacy }));
-    // 'darwin' explicitly, for the same reason as the switch test above: the
-    // legacy block is recognised as ours regardless of host platform (its
-    // authorship check is always against the darwin shape), but on a
+    // 'darwin' explicitly, for the same reason as the reconcile test above:
+    // the legacy block is recognised as ours regardless of host platform
+    // (its authorship check is always against the darwin shape), but on a
     // non-darwin host a defaulted `desired` computes null, so `ours && !desired`
     // DELETES the legacy block instead of upgrading it, and the read below
     // throws TypeError on the now-absent settings.sandbox.filesystem.
-    scaffold.setSandboxOptOut(ws, false, 'darwin');
+    scaffold.reconcileSandboxForMode(ws, 'knowledge', 'darwin');
     const settings = JSON.parse(fs.readFileSync(path.join(ws, '.claude', 'settings.local.json'), 'utf8'));
     assert.ok(settings.sandbox.filesystem.allowWrite.includes(path.posix.join(home, '.claude')),
       'the two-root block became the measured block on the next reconcile');
-  });
-
-  test('the sandbox card renders inside the real settings section, not a hand-built container, and opening the section asks for the mode', () => {
-    // A test that builds its own <div id="sandbox-card"> and calls
-    // renderSandboxCard directly proves the card renders against a fixture,
-    // never that it reaches a real user: delete the container from
-    // renderSettingsSection('workspace'), or drop the get_sandbox_mode
-    // request the section sends on open, and a hand-built fixture would stay
-    // green while the switch silently vanished from the product (renderSandboxCard
-    // just returns at `if (!el) return;`). Driving renderSettingsSection
-    // itself, with the globals it reads stubbed, is what makes either
-    // deletion visible; renderSandboxCard and setSandboxMode are declared
-    // inside the view's UMD factory, so if either is not part of what the
-    // factory returns, the WS dispatch and the card's own onclick markup
-    // resolve against nothing and this test fails on the click, exactly
-    // where a person's click would fail, rather than staying green on a grep.
-    const dom = new JSDOM(
-      '<!doctype html><html><body><div id="settings-content"></div></body></html>',
-      { runScripts: 'dangerously' });
-    const w = dom.window;
-    const sent = [];
-    w.ws = { readyState: w.WebSocket.OPEN, send: (s) => sent.push(JSON.parse(s)) };
-    // The shared state renderSettingsSection('workspace') reads lexically
-    // (app.js's own globals in production); esc/escAttr are app.js helpers
-    // this view leans on without importing, so they need stubs too.
-    w.agents = [{ status: 'onTeam' }];
-    w.skills = [];
-    w.workspaceMode = 'knowledge';
-    w.currentWorkspacePath = '/some/workspace';
-    w.runtimeStatus = null;
-    w.esc = (t) => { const d = w.document.createElement('div'); d.textContent = t; return d.innerHTML; };
-    w.escAttr = (t) => String(t).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    w.eval(SETTINGS_VIEW_SRC);
-
-    w.renderSettingsSection('workspace');
-    const card = w.document.getElementById('sandbox-card');
-    assert.ok(card, 'renderSettingsSection(\'workspace\') itself puts the sandbox card container into the DOM');
-    assert.deepStrictEqual(sent.filter(m => m.type === 'get_sandbox_mode'), [{ type: 'get_sandbox_mode' }],
-      'opening the workspace section asks the server for the sandbox mode');
-
-    // From here on, the existing renderSandboxCard assertions run against
-    // the container render actually produced, not one the test wrote itself.
-    w.renderSandboxCard({ available: true, optedOut: false });
-    assert.notStrictEqual(card.style.display, 'none', 'the card is unhidden once the server says the switch exists');
-    // Both copy states, since "Windows and Linux" is only ever printed once
-    // the switch is off (that copy is what names the fallback boundary).
-    assert.match(card.innerHTML, /operating-system level/, 'On: what the block does is named');
-    assert.match(card.innerHTML, /headless browser/, 'On: the process-launch class no writable root can reach is named');
-    w.renderSandboxCard({ available: true, optedOut: true });
-    assert.match(card.innerHTML, /operating-system write block/, 'Off: what turning it off withdrew is named');
-    assert.match(card.innerHTML, /Windows and Linux/, 'Off: and where the card is already the whole boundary');
-    w.renderSandboxCard({ available: true, optedOut: false });
-
-    const offButton = [...card.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Off');
-    assert.ok(offButton, 'the Off control is in the rendered markup');
-    offButton.click();
-    assert.deepStrictEqual(sent.filter(m => m.type === 'set_sandbox_mode'), [{ type: 'set_sandbox_mode', enabled: false }],
-      'pressing the rendered control reaches setSandboxMode, which sends the switch\'s message');
   });
 });
 
