@@ -243,4 +243,39 @@ describe('workspace file-access boundary', () => {
     await h.delay(300);
     assert.strictEqual(client.messages.slice(since).filter(m => m.type === 'control_request').length, 0);
   });
+
+  test('a crossing into the runtime\'s own home carries its sensitive stakes and the narrow grant, on the emitted request itself', async () => {
+    // sensitiveEnrichment is unit-tested as a function, and boundary-card.test.js
+    // renders a card given a hand-assembled enrichment object; neither
+    // exercises the one production site that joins them, the
+    // `.map(c => ({ ...c, ...(sensitiveEnrichment(...) || {}) }))` attach in
+    // this file's own request builder. Dropping that map, or swapping its
+    // arguments, would leave every existing test green while a real crossing
+    // into the runtime's home rendered the ordinary card, stakes unstated.
+    // This drives the real hook process for exactly that crossing and reads
+    // the emitted control_request.
+    //
+    // h.boot() already isolates HOME to a fresh temp directory for this whole
+    // file (so the tests above can card `os.homedir()` paths without touching
+    // the real machine), and the spawned hook inherits that HOME from
+    // process.env, so os.homedir() in the hook process names this same temp
+    // directory: no override needed to make this host-independent.
+    const home = os.homedir();
+    const flattened = path.resolve(h.workspaceDir).replace(/[^A-Za-z0-9-]/g, '-');
+    const transcripts = path.join(home, '.claude', 'projects', flattened);
+    fs.mkdirSync(transcripts, { recursive: true });
+    const target = path.join(home, '.claude', 'settings.json');
+
+    const since = client.messages.length;
+    const pending = runHook('Write', { file_path: target, content: 'x' });
+    const { msg } = await client.waitFor(m => m.type === 'control_request'
+      && m.request && m.request.boundary === true, { since, label: 'runtime-home crossing card' });
+    const crossing = (msg.request.crossings || [])[0];
+    assert.ok(crossing, 'the crossing reaches the card');
+    assert.strictEqual(crossing.sensitive, 'claude-home', 'the emitted crossing carries the sensitive stakes');
+    assert.strictEqual(crossing.narrowGrantDir, transcripts,
+      'and this workspace\'s own transcripts folder, because the installed layout has it');
+    client.send({ type: 'permission_response', requestId: msg.request_id, conversationId: 'boundary-test', allow: false });
+    assert.strictEqual(decisionOf(await pending), 'deny');
+  });
 });

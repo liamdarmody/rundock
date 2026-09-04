@@ -232,6 +232,35 @@ describe('one directory under two names is one identity', () => {
       config.setWorkspace(original);
     }
   });
+
+  test('a grant stored under an older, non-canonical spelling still covers what its author meant, on the read side alone', () => {
+    // The test above writes through addBoundaryGrant, so its write-side
+    // canonicalize already stores the real path: that assertion would hold
+    // even with read-side canonicalisation deleted, and proves nothing about
+    // it on its own. Here the grants file is written directly, the way an
+    // older release (before write-side canonicalisation existed) would have
+    // left it on disk: the symlink spelling itself, never resolved. Only
+    // canonicalising the stored grant AT READ TIME can make this cover the
+    // folder its author meant.
+    const target = tmp('wb-readgrant-target-');
+    const linkHome = tmp('wb-readgrant-link-');
+    const link = path.join(linkHome, 'shared');
+    fs.symlinkSync(target, link);
+    const ws = tmp('wb-readgrant-ws-');
+    const original = config.getWorkspace();
+    config.setWorkspace(ws);
+    try {
+      const grantsFile = boundary.boundaryPermissionsPath();
+      fs.mkdirSync(path.dirname(grantsFile), { recursive: true });
+      fs.writeFileSync(grantsFile, JSON.stringify({ allowedDirs: [link] }));
+      assert.strictEqual(boundary.boundaryGrantCovers(path.join(fs.realpathSync(target), 'file.md')), true,
+        'a file under the granted folder\'s real path is covered, even though the grant on disk is still spelled through the symlink');
+      assert.strictEqual(boundary.boundaryGrantCovers(path.join(linkHome, 'other', 'f.md')), false,
+        'and a sibling outside the granted folder is not, so this is not merely "everything covers everything"');
+    } finally {
+      config.setWorkspace(original);
+    }
+  });
 });
 
 describe('the switch that withdraws the block is honest', () => {
@@ -243,7 +272,12 @@ describe('the switch that withdraws the block is honest', () => {
 
   test('opting out removes our block and remembers the choice; opting in restores it', () => {
     const ws = workspaceWithBlock();
-    scaffold.setSandboxOptOut(ws, false);
+    // 'darwin' explicitly: sandboxSettings returns null on any other
+    // platform, so a call defaulted to process.platform writes no block at
+    // all on a non-darwin host and the read-back below throws ENOENT there,
+    // the same reason handleSetSandboxMode's own tests pass 'darwin' and
+    // scaffoldWorkspace is given { platform: 'darwin' } in the sibling test.
+    scaffold.setSandboxOptOut(ws, false, 'darwin');
     const settingsPath = path.join(ws, '.claude', 'settings.local.json');
     let settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
     assert.ok(settings.sandbox, 'opted in: the block is written');
@@ -251,7 +285,7 @@ describe('the switch that withdraws the block is honest', () => {
     settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
     assert.strictEqual('sandbox' in settings, false, 'opted out: the block is withdrawn');
     assert.strictEqual(scaffold.sandboxOptedOut(ws), true, 'and the choice survives to the next open');
-    scaffold.setSandboxOptOut(ws, false);
+    scaffold.setSandboxOptOut(ws, false, 'darwin');
     settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
     assert.ok(settings.sandbox, 'opting back in restores the block');
   });
@@ -311,30 +345,59 @@ describe('the switch that withdraws the block is honest', () => {
       network: { allowedDomains: ['*'] },
     };
     fs.writeFileSync(path.join(ws, '.claude', 'settings.local.json'), JSON.stringify({ sandbox: legacy }));
-    scaffold.setSandboxOptOut(ws, false);
+    // 'darwin' explicitly, for the same reason as the switch test above: the
+    // legacy block is recognised as ours regardless of host platform (its
+    // authorship check is always against the darwin shape), but on a
+    // non-darwin host a defaulted `desired` computes null, so `ours && !desired`
+    // DELETES the legacy block instead of upgrading it, and the read below
+    // throws TypeError on the now-absent settings.sandbox.filesystem.
+    scaffold.setSandboxOptOut(ws, false, 'darwin');
     const settings = JSON.parse(fs.readFileSync(path.join(ws, '.claude', 'settings.local.json'), 'utf8'));
     assert.ok(settings.sandbox.filesystem.allowWrite.includes(path.posix.join(home, '.claude')),
       'the two-root block became the measured block on the next reconcile');
   });
 
-  test('the sandbox card renders in the browser and its On/Off controls fire, not by reading the source as text', () => {
-    // A source-text grep proves the words exist in the file; it does not
-    // prove the card ever reaches the page or that its buttons do anything.
-    // renderSandboxCard and setSandboxMode are declared inside the view's
-    // UMD factory: if either one is not part of what the factory returns,
-    // the WS dispatch and the card's own onclick markup resolve against
-    // nothing and this test fails on the click, exactly where a person's
-    // click would fail, rather than staying green on a grep.
+  test('the sandbox card renders inside the real settings section, not a hand-built container, and opening the section asks for the mode', () => {
+    // A test that builds its own <div id="sandbox-card"> and calls
+    // renderSandboxCard directly proves the card renders against a fixture,
+    // never that it reaches a real user: delete the container from
+    // renderSettingsSection('workspace'), or drop the get_sandbox_mode
+    // request the section sends on open, and a hand-built fixture would stay
+    // green while the switch silently vanished from the product (renderSandboxCard
+    // just returns at `if (!el) return;`). Driving renderSettingsSection
+    // itself, with the globals it reads stubbed, is what makes either
+    // deletion visible; renderSandboxCard and setSandboxMode are declared
+    // inside the view's UMD factory, so if either is not part of what the
+    // factory returns, the WS dispatch and the card's own onclick markup
+    // resolve against nothing and this test fails on the click, exactly
+    // where a person's click would fail, rather than staying green on a grep.
     const dom = new JSDOM(
-      '<!doctype html><html><body><div id="sandbox-card" style="display:none"></div></body></html>',
+      '<!doctype html><html><body><div id="settings-content"></div></body></html>',
       { runScripts: 'dangerously' });
     const w = dom.window;
     const sent = [];
     w.ws = { readyState: w.WebSocket.OPEN, send: (s) => sent.push(JSON.parse(s)) };
+    // The shared state renderSettingsSection('workspace') reads lexically
+    // (app.js's own globals in production); esc/escAttr are app.js helpers
+    // this view leans on without importing, so they need stubs too.
+    w.agents = [{ status: 'onTeam' }];
+    w.skills = [];
+    w.workspaceMode = 'knowledge';
+    w.currentWorkspacePath = '/some/workspace';
+    w.runtimeStatus = null;
+    w.esc = (t) => { const d = w.document.createElement('div'); d.textContent = t; return d.innerHTML; };
+    w.escAttr = (t) => String(t).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     w.eval(SETTINGS_VIEW_SRC);
 
-    w.renderSandboxCard({ available: true, optedOut: false });
+    w.renderSettingsSection('workspace');
     const card = w.document.getElementById('sandbox-card');
+    assert.ok(card, 'renderSettingsSection(\'workspace\') itself puts the sandbox card container into the DOM');
+    assert.deepStrictEqual(sent.filter(m => m.type === 'get_sandbox_mode'), [{ type: 'get_sandbox_mode' }],
+      'opening the workspace section asks the server for the sandbox mode');
+
+    // From here on, the existing renderSandboxCard assertions run against
+    // the container render actually produced, not one the test wrote itself.
+    w.renderSandboxCard({ available: true, optedOut: false });
     assert.notStrictEqual(card.style.display, 'none', 'the card is unhidden once the server says the switch exists');
     // Both copy states, since "Windows and Linux" is only ever printed once
     // the switch is off (that copy is what names the fallback boundary).
@@ -348,7 +411,7 @@ describe('the switch that withdraws the block is honest', () => {
     const offButton = [...card.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Off');
     assert.ok(offButton, 'the Off control is in the rendered markup');
     offButton.click();
-    assert.deepStrictEqual(sent, [{ type: 'set_sandbox_mode', enabled: false }],
+    assert.deepStrictEqual(sent.filter(m => m.type === 'set_sandbox_mode'), [{ type: 'set_sandbox_mode', enabled: false }],
       'pressing the rendered control reaches setSandboxMode, which sends the switch\'s message');
   });
 });

@@ -32,6 +32,11 @@ const SCAFFOLD = { src: path.join(ROOT, 'lib', 'workspace', 'scaffold.js'), suit
 const BOUNDARY = { src: path.join(ROOT, 'lib', 'workspace', 'boundary.js'), suite: 'test/unit/workspace-boundary.test.js' };
 const CHAT_VIEW = { src: path.join(ROOT, 'public', 'views', 'chat.js'), suite: 'test/unit/boundary-card.test.js' };
 const SETTINGS_VIEW = { src: path.join(ROOT, 'public', 'views', 'settings.js'), suite: 'test/unit/workspace-boundary.test.js' };
+// Same file as HOOK, a different suite: the attach site this target's own
+// mutation breaks is never called by the unit suite (which tests
+// sensitiveEnrichment and card rendering each in isolation), only by the
+// real hook process the integration suite spawns.
+const HOOK_INTEGRATION = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/integration/boundary-permissions.test.js' };
 
 const MUTATIONS = [
   // ===== ONE DIRECTORY UNDER TWO NAMES IS ONE IDENTITY =====
@@ -47,6 +52,14 @@ const MUTATIONS = [
   [BOUNDARY, 'grants are canonicalised on write and on read',
     '  const t = canonicalize(targetPath);',
     '  const t = path.resolve(targetPath);'],
+  // The two calls mask each other in a fixture that only ever writes through
+  // addBoundaryGrant (which already canonicalises on write): removing the
+  // read-side call alone needs a grant stored under its raw, uncanonicalised
+  // spelling to notice, which is exactly what the dedicated read-side test
+  // writes directly to the grants file.
+  [BOUNDARY, 'a stored grant is canonicalised again on read, for the ones written before write-side canonicalisation existed',
+    '    const g = canonicalize(d);',
+    '    const g = d;'],
 
   // ===== THE BLOCK NAMES THE MEASURED PLUMBING =====
   // Drop the runtime home from the measured roots and the field storm is
@@ -103,6 +116,25 @@ const MUTATIONS = [
   [CHAT_VIEW, 'the narrow grant is offered only where a folder grant may be remembered at all',
     '  const sensNarrow = grantable && sensitiveCrossing ? sensitiveCrossing.narrowGrantDir || null : null;',
     '  const sensNarrow = sensitiveCrossing ? sensitiveCrossing.narrowGrantDir || null : null;'],
+  // sensitiveEnrichment and card rendering are each tested in isolation; only
+  // this attach site in the request builder joins them into what a real
+  // crossing emits. Proven through the real hook process (the integration
+  // suite), because the unit suite never reaches this line either.
+  [HOOK_INTEGRATION, 'the sensitive enrichment reaches the crossing the hook actually emits',
+    '            .map(c => ({ ...c, ...(sensitiveEnrichment(c.path, wsRoot) || {}) })),',
+    '            .map(c => c),'],
+
+  // ===== THE SANDBOX CARD REACHES THE REAL SETTINGS SECTION =====
+  // A test that renders renderSandboxCard against a hand-built container
+  // proves nothing about whether the card ever reaches a real user: these
+  // two lines are what actually put the container on the page and ask the
+  // server for its state when the workspace section opens.
+  [SETTINGS_VIEW, 'the workspace section renders the sandbox card container, not only a fixture a test built itself',
+    '      <div class="settings-card" id="sandbox-card" style="display:none"></div>\n',
+    ''],
+  [SETTINGS_VIEW, 'opening the workspace section asks the server for the sandbox mode',
+    "      ws.send(JSON.stringify({ type: 'get_sandbox_mode' }));\n",
+    ''],
 
   // ===== THE VIEW MODULE'S EXPORT CONTRACT =====
   // Un-republish the sandbox card's render and toggle functions and the WS
@@ -142,7 +174,7 @@ function redTests(suite) {
 }
 
 function run() {
-  const targets = [HOOK, SCAFFOLD, BOUNDARY, CHAT_VIEW, SETTINGS_VIEW];
+  const targets = [HOOK, SCAFFOLD, BOUNDARY, CHAT_VIEW, SETTINGS_VIEW, HOOK_INTEGRATION];
   const session = beginMutationRun({ files: [...new Set(targets.map((target) => target.src))] });
   const originals = new Map();
   for (const target of targets) originals.set(target, session.original(target.src));
