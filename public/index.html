@@ -166,7 +166,22 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
           Workspace
         </div>
-        <div class="settings-nav-item" data-settings="packages" onclick="showSettingsSection('packages')">
+        <!-- The Packages door is held shut until the room behind it is
+             finished. The import half is real: a package colliding with
+             nothing plans, confirms, applies and leaves a receipt. A package
+             colliding with anything disables confirm and tells the person
+             each item needs its own decision, and the surface that takes
+             those decisions is not built yet. A door opening onto an
+             instruction the product cannot carry out is worse than no door.
+             HIDDEN, NOT DELETED, and the distinction is load-bearing:
+             packagesSectionVisible() reads dataset.settings off the active
+             nav item, so deleting this element makes that guard permanently
+             false, packagesRenderIfVisible() stops firing, and the flow never
+             redraws past its first paint. The e2e suite reaches the section
+             through showSettingsSection() rather than through this rail, so
+             the foundation keeps being proven while it is out of reach.
+             Remove the style attribute in the Packages release. -->
+        <div class="settings-nav-item" data-settings="packages" style="display:none" onclick="showSettingsSection('packages')">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
           Packages
         </div>
