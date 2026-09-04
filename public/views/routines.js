@@ -364,6 +364,16 @@ function rowHtml(entry, index, withActions) {
       + ` onclick="routinesSetEnabled(${index}, true)">${esc(row.offer.label)}</button>`
       + '</div>';
   }
+  // A plan awaiting its one tap. Drawn with the offer's own chrome because it
+  // is the same kind of thing, a consent question with one truthful action,
+  // and a second visual language for consent would make the reader learn two.
+  if (row.approval && withActions) {
+    body += '<div class="rr-meta rr-offer-line rr-approval-line">'
+      + `<span class="rr-offer-text">${esc(row.approval.text)}</span>`
+      + `<button class="btn-link rr-enable" type="button" data-routines-action="approve"`
+      + ` onclick="routinesApprovePlan(${index})">${esc(row.approval.label)}</button>`
+      + '</div>';
+  }
   // A run in progress, checked before the three-tone line below and instead
   // of it: outcomeOf (routines-model.js) deliberately answers `null` while
   // `lastRunStatus` is 'running', because "on time / caught up / missed /
@@ -834,6 +844,14 @@ function routinesSetEnabled(index, enabled) {
   routinesSetFlag(index, 'set_routine_enabled', 'enabled', enabled);
 }
 
+// Approving carries no flag value: the message names the routine and the
+// server computes and records the hash of the plan as it stands on disk at
+// that moment, never a hash the client claims. A client-supplied hash would
+// let a stale window approve a plan that has since changed under it.
+function routinesApprovePlan(index) {
+  routinesSetFlag(index, 'approve_routine_plan', 'approve', true);
+}
+
 function routinesSetPaused(index, paused) {
   routinesSetFlag(index, 'set_routine_paused', 'paused', paused);
 }
@@ -866,7 +884,7 @@ function routinesEditSchedule(index) {
 return {
   renderRoutines, showRoutinesForAgent,
   routinesAskDelete, routinesCancelDelete, routinesConfirmDelete, routinesSetPaused, routinesSetEnabled,
-  routinesOpenSkill, routinesEditSchedule,
+  routinesApprovePlan, routinesOpenSkill, routinesEditSchedule,
   routinesActionFailed, routinesActionCleared, routinesViewLastRun,
 };
 }));

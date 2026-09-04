@@ -110,6 +110,9 @@ describe('nested frontmatter block parsers', () => {
       enabled: false,
       paused: false,
       planHash: null,
+      // The approval record joined the shape: the hash that was approved,
+      // beside the moment it was, absent on a file that has recorded neither.
+      planApprovedHash: null,
       planApprovedAt: null,
     });
     assert.strictEqual(routines[1].name, 'weekly-review');

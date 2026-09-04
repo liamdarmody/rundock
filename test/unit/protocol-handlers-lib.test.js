@@ -17,7 +17,7 @@ const { buildDispatch } = require('../../lib/protocol/handlers/index.js');
 const { _internal: srv } = require('../../server.js');
 const config = require('../../lib/config.js');
 
-// The full routing surface of the dispatch table, frozen: 39 message types
+// The full routing surface of the dispatch table, frozen: 41 message types
 // plus save_agent's two legacy aliases. The four root shims (chat, delegate,
 // end_delegation, flush_buffer) must NEVER appear here: chat is the
 // kill-window chat shim, delegate/end_delegation are delegation glue, and
@@ -32,12 +32,16 @@ const EXPECTED_TYPES = [
   'get_agents', 'get_runtime_status', 'get_files', 'get_skills', 'get_run',
   'cancel_routine_run',
   'plan_package_import', 'apply_package_import',
+  // The extension mount reads: the installed roster, and one renderer's
+  // payload. Driven through the dispatch table in the handler-seam tests
+  // below, against a real temporary workspace.
+  'list_extensions', 'get_extension_ui',
   'get_conversations', 'set_last_active_conversation', 'save_conversation',
   'get_lists', 'create_list', 'delete_list', 'delete_conversation',
   'read_file', 'add_to_team',
   'save_agent', 'create_agent', 'update_agent', 'delete_agent',
   'save_skill', 'delete_skill', 'save_routine', 'delete_routine', 'set_routine_paused',
-  'set_routine_enabled', 'set_routine_schedule',
+  'set_routine_enabled', 'set_routine_schedule', 'approve_routine_plan',
   'search_conversations', 'search_universal', 'get_session_history',
   'save_file', 'create_path', 'reveal_in_finder',
 ];
@@ -111,6 +115,91 @@ describe('handler seams (stub ctx, capture ws)', () => {
       const ws2 = captureWs();
       table.set_workspace_mode({}, ws2, { type: 'set_workspace_mode', mode: 'sideways' });
       assert.strictEqual(ws2.sent[0].type, 'workspace_error', 'invalid modes are refused');
+    } finally {
+      config.setWorkspace(original);
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // THE EXTENSION MOUNT HANDLERS, driven against a real temporary workspace
+  // so the envelopes are the ones the client would receive, and the
+  // no-workspace path is exercised rather than assumed.
+  function extensionWorkspace(fixture) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'proto-ext-'));
+    for (const [rel, content] of Object.entries(fixture)) {
+      const p = path.join(dir, rel);
+      fs.mkdirSync(path.dirname(p), { recursive: true });
+      fs.writeFileSync(p, content);
+    }
+    return dir;
+  }
+  const EXT_MANIFEST = JSON.stringify({
+    schemaVersion: 1, id: 'charts', name: 'Charts', version: '1.0.0',
+    renderers: [{ id: 'chart', target: '.chart', entry: 'ui/index.js' }],
+    resources: [{ id: 'data', maximumBytes: 1024 }],
+  });
+
+  test('list_extensions answers the roster, and refuses with one reply when no workspace is open', () => {
+    const table = buildDispatch();
+    const original = config.getWorkspace();
+    const dir = extensionWorkspace({
+      '.rundock/plugins/charts/manifest.json': EXT_MANIFEST,
+      '.rundock/plugin-state.json': JSON.stringify({ plugins: { charts: { enabled: true } } }),
+    });
+    try {
+      config.setWorkspace(dir);
+      const ws = captureWs();
+      table.list_extensions({}, ws, { type: 'list_extensions' });
+      assert.strictEqual(ws.sent.length, 1);
+      assert.strictEqual(ws.sent[0].type, 'extensions');
+      assert.strictEqual(ws.sent[0].extensions[0].id, 'charts');
+
+      config.setWorkspace(null);
+      const ws2 = captureWs();
+      table.list_extensions({}, ws2, { type: 'list_extensions' });
+      assert.deepStrictEqual(ws2.sent, [{ type: 'extensions_error', reason: 'no workspace is open' }]);
+    } finally {
+      config.setWorkspace(original);
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('get_extension_ui answers the payload, and refuses cleanly on every bad input', () => {
+    const table = buildDispatch();
+    const original = config.getWorkspace();
+    const dir = extensionWorkspace({
+      '.rundock/plugins/charts/manifest.json': EXT_MANIFEST,
+      '.rundock/plugins/charts/ui/index.js': 'draw();',
+      '.rundock/plugins/thief/manifest.json': JSON.stringify({
+        schemaVersion: 1, id: 'thief',
+        renderers: [{ id: 'r', target: '.x', entry: '../../../secrets.txt' }],
+      }),
+      'secrets.txt': 'not yours',
+    });
+    try {
+      config.setWorkspace(dir);
+      const ok = captureWs();
+      table.get_extension_ui({}, ok, { type: 'get_extension_ui', extensionId: 'charts', rendererId: 'chart' });
+      assert.strictEqual(ok.sent.length, 1);
+      assert.strictEqual(ok.sent[0].type, 'extension_ui');
+      assert.strictEqual(ok.sent[0].entry, 'draw();');
+
+      const unknown = captureWs();
+      table.get_extension_ui({}, unknown, { type: 'get_extension_ui', extensionId: 'charts', rendererId: 'nope' });
+      assert.strictEqual(unknown.sent[0].type, 'extension_ui_error');
+      assert.match(unknown.sent[0].reason, /declares no renderer/);
+
+      const escaping = captureWs();
+      table.get_extension_ui({}, escaping, { type: 'get_extension_ui', extensionId: 'thief', rendererId: 'r' });
+      assert.strictEqual(escaping.sent[0].type, 'extension_ui_error');
+      assert.match(escaping.sent[0].reason, /inside the extension's own directory/);
+
+      config.setWorkspace(null);
+      const noWs = captureWs();
+      table.get_extension_ui({}, noWs, { type: 'get_extension_ui', extensionId: 'charts', rendererId: 'chart' });
+      assert.strictEqual(noWs.sent.length, 1);
+      assert.strictEqual(noWs.sent[0].type, 'extension_ui_error');
+      assert.match(noWs.sent[0].reason, /no workspace is open/);
     } finally {
       config.setWorkspace(original);
       fs.rmSync(dir, { recursive: true, force: true });

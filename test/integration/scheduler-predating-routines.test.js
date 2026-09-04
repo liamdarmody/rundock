@@ -319,7 +319,7 @@ test('a workspace whose agents directory cannot be written to does not fire eith
 // scheduler then runs the thing: the two are separated by a file, a migration
 // and a gate, which is exactly where a routine created live could stop being
 // live without a single test noticing.
-test('a routine created in the editor is live without a second act', async (t) => {
+test('a routine created in the editor is enabled at once, and runs after its one plan approval', async (t) => {
   clock.at = NEXT_LATE;
   armControl();
   const client = await h.connect();
@@ -345,6 +345,19 @@ test('a routine created in the editor is live without a second act', async (t) =
     'the editor wrote a routine without saying whether it may run');
 
   invalidateAgentCache();
+
+  // THE ONE SECOND ACT THE PRODUCT NOW ASKS FOR, by design rather than by
+  // omission: a new plan takes one tap of approval before its first run, and
+  // never again unless the plan changes. Before it, the tick holds the run;
+  // this is asserted rather than skipped so the old behaviour (running with
+  // no approval at all) cannot quietly return.
+  driveTick(t);
+  assert.strictEqual(h.internal.routineState['briefer:brand-new'], undefined,
+    'an unapproved brand-new plan does not run on the tick');
+
+  client.send({ type: 'approve_routine_plan', agentId: 'briefer', name: 'brand-new', occurrence: 0 });
+  await client.waitFor(m => m.type === 'routine_plan_approved', { label: 'the approval landing' });
+  invalidateAgentCache();
   driveTick(t);
 
   await h.waitUntil(() => {
@@ -352,7 +365,7 @@ test('a routine created in the editor is live without a second act', async (t) =
     return s && s.status !== 'running';
   });
   assert.strictEqual(h.internal.routineState['briefer:brand-new'].status, 'completed',
-    'a routine made a moment ago did not run, so making one now needs a second act');
+    'approved once, the routine runs with no further act, enabled from the moment it was made');
 
   await settleControl();
   client.ws.close();

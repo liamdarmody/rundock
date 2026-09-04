@@ -217,3 +217,16 @@ textarea.editor-content { resize: none; border: none; background: transparent; w
 .tiptap-editor .ProseMirror .callout-edit.callout-edit-invalid { border-color: var(--danger); box-shadow: 0 0 0 2px color-mix(in srgb, var(--danger) 30%, transparent); }
 .tiptap-editor .ProseMirror .callout-edit.callout-edit-shaking { animation: callout-edit-shake 0.3s ease; }
 @keyframes callout-edit-shake { 0%,100% { transform: translateX(0); } 25% { transform: translateX(-3px); } 75% { transform: translateX(3px); } }
+
+/* The connections list under a rendered file: what links here and what this
+   links to. An appendix to the document above it, never competition for it,
+   so everything sits at caption scale in the quiet tones; the rows are the
+   one interactive thing and take the accent on hover, the way other
+   navigable rows do. Empty states use the idle tone because an empty list
+   here is a fact about the file, not a fault in it. */
+.file-connections { margin: 32px 0 8px; padding-top: 16px; border-top: 1px solid var(--border); }
+.file-connections-heading { font-size: var(--caption); font-weight: 600; color: var(--text-1); margin-bottom: 4px; }
+.file-connections-group { font-size: var(--label); font-weight: 600; color: var(--text-2); margin: 12px 0 4px; }
+.file-connections-row { display: block; font-size: var(--caption); color: var(--text-2); padding: 3px 0; cursor: pointer; transition: color var(--duration-base) ease; }
+.file-connections-row:hover { color: var(--accent); }
+.file-connections-empty { font-size: var(--caption); color: var(--idle); }

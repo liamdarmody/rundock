@@ -130,8 +130,11 @@ async function initTiptapEditor(path, content) {
     // Frontmatter wikilinks that match no file render visibly dead.
     resolveWikilink: (target) => {
       if (!cachedFileTree) return true; // tree not loaded yet: never false-flag
-      const base = String(target).split('#')[0].trim();
-      return !!findFileInTree(cachedFileTree, base.endsWith('.md') ? base : base + '.md');
+      // Through the shared search-name rule, which also fixes a drift this
+      // check had grown: it appended .md to anything not already ending .md,
+      // so a frontmatter [[chart.png]] was tested as chart.png.md and
+      // rendered dead while clicking it worked.
+      return !!findFileInTree(cachedFileTree, wikilinkSearchName(target));
     },
     // Review identity: workspace profile name -> 'me' fallback; the agent
     // roster lets review attribution render known agents as agent chips.
@@ -320,12 +323,19 @@ function closeOpenFile() {
   boardPendingSave = null;
   destroyActiveFileViewer();      // artifact review + iframe/board viewer
   destroyTiptapEditorIfActive();  // tiptap editor
+  // The extension mount is a file-scoped surface too, released in the one
+  // place that releases them all: without this, a workspace switch leaves
+  // the previous workspace's frame in the pane with its mediator still
+  // listening, and its open messages driving navigation against the new
+  // workspace.
+  releaseExtensionMount();
   currentFilePath = null;
   rawFileContent = ''; fileFrontmatter = ''; fileBody = '';
   editorMode = 'preview';
   editorDirty = false;
   fileHistory = [];
   closeFindBar();
+  removeFileConnections();
   document.querySelectorAll('.file-item.active').forEach((el) => el.classList.remove('active'));
 }
 
@@ -348,6 +358,13 @@ let renderedWorkspace = null;
 // used to shadow it existed only to survive the rebuild that no longer
 // happens.
 function renderFileTree(tree) {
+  // A changed tree can change what any link resolves to, and a file opened
+  // before the first tree arrived rendered its connections against nothing:
+  // redraw the open file's section now that there is a tree to resolve with.
+  if (currentFilePath && document.getElementById('file-connections')) {
+    const section = document.getElementById('file-connections');
+    renderFileConnections(section.parentElement);
+  }
   const c = document.getElementById('file-tree');
   const next = tree || [];
 
@@ -598,6 +615,10 @@ function loadFileContent(path, content) {
   hideExternalEditConflict();
   currentFilePath = path;
   rawFileContent = content;
+  // The previous file's connections must not outlive it under ANY next
+  // surface, including the read-only viewers and boards that never draw a
+  // section of their own.
+  removeFileConnections();
   editorDirty = false; // freshly loaded: no unsaved edits
   // Reset the Preview/Code mode on every open. Only the legacy text surface
   // used to reset it, so a stale 'edit' left over from a previous text file
@@ -621,6 +642,13 @@ function loadFileContent(path, content) {
   // lands as one registry entry + one surface function, no dispatch edits.
   loadViewersModule().then((viewers) => {
     if (currentFilePath !== path) return; // stale: another file opened while the module loaded
+    // EVERY OPEN RELEASES THE LIVE MOUNT, before the board-or-seam decision,
+    // so the board branch that returns early cannot leave a previous
+    // extension's frame and listener alive in the pane it is about to claim.
+    // The token bump also invalidates any seam open still resolving, so a
+    // board opening after a claimed file cannot be repainted by the earlier
+    // mount's late callback.
+    releaseExtensionMount();
     // A markdown file whose frontmatter carries the kanban-plugin key opens as
     // a board (detection is content-based, so it cannot ride the path-keyed
     // classify table); everything else dispatches by file kind.
@@ -629,8 +657,141 @@ function loadFileContent(path, content) {
       return;
     }
     const surface = FILE_SURFACES[viewers.classify(path)] || openBinaryOrUnsupportedFile;
-    surface(viewers, path, content);
+    // THE RENDER-TARGET SEAM. An installed extension may claim this file's
+    // extension through the renderer registry; a claimed file mounts through
+    // the sandboxed host, and everything else falls through to the plain
+    // surface exactly as before. The plain surface is also every failure's
+    // destination: an unregistered target, a mount that cannot be built, a
+    // view that errors or never starts, all land on `surface` with the
+    // reason named, because the one thing this seam is forbidden to produce
+    // is a broken frame where a working plain rendering used to be.
+    openThroughRendererSeam(viewers, path, content, surface);
   });
+}
+
+// The seam's own function, cut small so a test can drive it without the rest
+// of the file: consult the registry, mount through the host on a claim,
+// degrade to the plain surface with the failure named on anything else.
+function openThroughRendererSeam(viewers, path, content, surface) {
+  // A PER-OPEN TOKEN, because currentFilePath cannot tell two opens of ONE
+  // path apart. A double-click sends read_file twice and a watcher push
+  // re-opens the same path; without a token both resolutions pass a
+  // path-equality guard and both mount, leaking the first frame and its
+  // listener, and the first's superseded degrade then repaints over the
+  // live second mount. The token is captured at entry and checked in every
+  // async callback: a superseded open neither mounts nor degrades.
+  const token = ++extensionSeamToken;
+  const superseded = () => currentFilePath !== path || token !== extensionSeamToken;
+  const registry = window.rundockRendererRegistry;
+  const claim = registry && registry.rendererFor ? registry.rendererFor(path) : null;
+  if (!claim || !claim.registered) {
+    surface(viewers, path, content);
+    return;
+  }
+  Promise.all([
+    loadExtensionHost(),
+    fetchExtensionUi(claim.extension, claim.renderer),
+  ]).then(([host, payload]) => {
+    if (superseded()) return;
+    // SUCCESS IS AN ENTRY, NOT A FLAG. The server sends its payload without
+    // an `ok`, so the seam decides from the field a mount actually needs,
+    // which means a transport can forward the server message verbatim. A
+    // reply that names a reason, or carries no entry string, degrades.
+    if (!payload || typeof payload.entry !== 'string') {
+      surface(viewers, path, content);
+      noteRendererFailure(payload && payload.reason
+        ? payload.reason : 'the renderer payload carried no entry to mount');
+      return;
+    }
+    const pane = claimEditorPane();
+    activeExtensionMount = host.mountExtension({
+      paneElement: pane,
+      payload,
+      onOpen: (target) => openWikilink(target),
+      onDegrade: (reason) => {
+        // A superseded mount that degrades tears down its own frame (the
+        // host does that before calling onDegrade) but must not repaint the
+        // surface: a newer open owns the pane now. It also nulls the shared
+        // handle only when it still owns it, so a later closeOpenFile is
+        // never handed a dead handle.
+        if (token === extensionSeamToken) activeExtensionMount = null;
+        if (superseded()) return;
+        surface(viewers, path, content);
+        noteRendererFailure(reason);
+      },
+    });
+  }).catch((e) => {
+    if (superseded()) return;
+    surface(viewers, path, content);
+    noteRendererFailure(String(e && e.message || e));
+  });
+}
+
+// CLAIM THE EDITOR PANE, the way every surface opener does before it draws.
+// Factored so an extension mount is a peer of the other surfaces rather than
+// an overlay on whichever one was open: it destroys the live viewer and
+// Tiptap editor (so no pending or future editor save can fire against the
+// newly opened path), cancels the debounced editor save, hides the Tiptap
+// pane, the textarea and the mode toggles, and resets editor-content. Every
+// opener below and this seam call it, so the claim has one definition.
+function claimEditorPane() {
+  destroyActiveFileViewer();
+  destroyTiptapEditorIfActive();
+  clearTimeout(_tiptapSaveTimer);
+  document.getElementById('tiptap-editor-pane').classList.add('hidden');
+  document.getElementById('editor-textarea').classList.add('hidden');
+  document.getElementById('toggle-preview').classList.add('hidden');
+  document.getElementById('toggle-edit').classList.add('hidden');
+  const pane = document.getElementById('editor-content');
+  pane.classList.remove('hidden');
+  pane.className = 'editor-content';
+  pane.textContent = '';
+  return pane;
+}
+
+// The host module loader, overridable so the seam can be driven in a test
+// without a real dynamic import (which resolves against the filesystem root
+// under Node and would always fail). Product code takes the import; a test
+// assigns window.rundockExtensionHostLoader to hand in a stub host.
+function loadExtensionHost() {
+  const loader = window.rundockExtensionHostLoader;
+  if (typeof loader === 'function') return Promise.resolve(loader());
+  return import('/extension-host.js');
+}
+
+// The registered payload fetcher. Overridable so the seam is testable and so
+// the integration that delivers extension rosters can supply its own
+// transport; until one is registered the seam answers as an unregistered
+// target would, which renders the plain surface.
+function fetchExtensionUi(extensionId, rendererId) {
+  const fetcher = window.rundockExtensionUiFetcher;
+  if (typeof fetcher !== 'function') {
+    return Promise.resolve({ reason: 'no extension transport is registered yet' });
+  }
+  return Promise.resolve(fetcher(extensionId, rendererId));
+}
+
+let activeExtensionMount = null;
+// Monotonic per-open token: every seam entry claims the next value, and an
+// async callback whose token is no longer current abandons its work.
+let extensionSeamToken = 0;
+
+// Release the live extension mount and invalidate any pending seam open. One
+// definition, called before every file open and by closeOpenFile, so no
+// frame or mediator listener outlives its file or its workspace.
+function releaseExtensionMount() {
+  extensionSeamToken += 1;
+  if (activeExtensionMount) { activeExtensionMount.teardown(); activeExtensionMount = null; }
+}
+
+// A renderer failure is a note beside the plain rendering, never a blank:
+// the person keeps their file, and the message says what stood down.
+function noteRendererFailure(reason) {
+  const status = document.getElementById('editor-status');
+  if (status) {
+    status.textContent = `Extension renderer stood down: ${reason}`;
+    status.style.color = 'var(--attention)';
+  }
 }
 
 // Board view: a writable registry view. Mounts the board into the editor pane
@@ -697,6 +858,12 @@ function openMarkdownFile(viewers, path, content) {
   fileFrontmatter = '';
   fileBody = content;
   initTiptapEditor(path, content);
+  // The connections list rides this surface because this is the surface a
+  // linked document is read on: markdown is the one file kind that carries
+  // wikilinks. Mounted on the pane, beside the editor element rather than
+  // inside it, because the editor owns its own element's children and clears
+  // them on init.
+  renderFileConnections(document.getElementById('tiptap-editor-pane'));
 }
 
 // Text keeps the legacy preview/edit chrome; artifacts share it so the Code
@@ -759,7 +926,11 @@ function renderEditorContent() {
     }
     previewEl.className = 'editor-content formatted';
     previewEl.innerHTML = formatMdFull(fileBody);
+    renderFileConnections(previewEl.parentElement);
   } else {
+    // Leaving preview for the code view: the section describes the rendered
+    // document, and the code view is not it.
+    removeFileConnections();
     destroyActiveFileViewer();
     previewEl.classList.add('hidden');
     textareaEl.classList.remove('hidden');
@@ -767,6 +938,92 @@ function renderEditorContent() {
     textareaEl.value = rawFileContent;
     textareaEl.focus();
   }
+}
+
+// The connections list: what links here, what this links to. A LIST, not a
+// canvas, drawn under the rendered file from the same resolver every click
+// goes through. Built with createElement throughout: nothing here may
+// interpolate file names into markup.
+//
+// ONE REMOVER, CALLED ON EVERY WAY OUT. The section describes one file, so
+// its lifetime is the file's: every open of any surface starts by removing
+// it (loadFileContent), closing the file removes it, and leaving preview for
+// the code view removes it. The first version removed it only at the top of
+// its own renderer, so a text file's connections stayed mounted under the
+// next markdown file, naming links that belonged to a document no longer on
+// screen.
+function removeFileConnections() {
+  const section = document.getElementById('file-connections');
+  if (section) section.remove();
+}
+
+function renderFileConnections(host) {
+  if (!host) return;
+  removeFileConnections();
+  if (!currentFilePath) return;
+  const section = document.createElement('div');
+  section.id = 'file-connections';
+  section.className = 'file-connections';
+  host.appendChild(section);
+  const forFile = currentFilePath;
+  fetchWorkspaceLinks().then((data) => {
+    // The reader may have moved on while the fetch was out.
+    if (currentFilePath !== forFile || !document.getElementById('file-connections')) return;
+    drawFileConnections(section, forFile, data);
+  }).catch(() => {
+    // Links unavailable is a statement, not a blank: say why the list is
+    // not here rather than leaving a heading over nothing.
+    drawFileConnections(section, forFile, null);
+  });
+}
+
+function drawFileConnections(section, filePath, data) {
+  while (section.firstChild) section.removeChild(section.firstChild);
+  const heading = document.createElement('div');
+  heading.className = 'file-connections-heading';
+  heading.textContent = 'Connections';
+  section.appendChild(heading);
+  const note = (text) => {
+    const p = document.createElement('div');
+    p.className = 'file-connections-empty';
+    p.textContent = text;
+    section.appendChild(p);
+  };
+  if (!data) { note('Connections are unavailable: the link index could not be read.'); return; }
+  if (data.indexed === false) { note('Connections need the search index, which this runtime does not have.'); return; }
+  const { outgoing, incoming } = fileConnections(filePath, data.links, cachedFileTree || []);
+  const group = (label, rows, pathOf) => {
+    const title = document.createElement('div');
+    title.className = 'file-connections-group';
+    title.textContent = label;
+    section.appendChild(title);
+    if (!rows.length) { note('None.'); return; }
+    for (const row of rows) {
+      const target = pathOf(row);
+      const a = document.createElement('a');
+      a.className = 'file-connections-row';
+      a.textContent = target;
+      a.addEventListener('click', () => openWorkspaceFilePath(target));
+      section.appendChild(a);
+    }
+  };
+  group('Links to', outgoing, (r) => r.resolved);
+  group('Linked from', incoming, (r) => r.src);
+}
+
+function fetchWorkspaceLinks() {
+  // ONE FETCH PER RENDER, AND NO CACHE ACROSS OPENS, deliberately. A file's
+  // links change on a content edit, and a content edit changes no tree: the
+  // tree carries only names and paths, so no client event reliably announces
+  // that an answer moved. A first version cached this answer and dropped it
+  // only when the tree redrew, which meant a link typed into a note was
+  // missing from every connections list for the rest of the session. The
+  // payload is small and a render happens on a file open, so the honest
+  // fetch costs less than the stale answer did.
+  return fetch('/api/graph').then((r) => {
+    if (!r.ok) throw new Error('links unavailable');
+    return r.json();
+  });
 }
 
 function setEditorMode(mode) {
@@ -791,12 +1048,11 @@ function getFileContentForSave() {
 
 // Wikilink navigation
 function openWikilink(name) {
-  const baseName = name.split('#')[0].trim();
   // Agents reference their outputs by wikilink: [[chart.png]] or
   // [[report.pdf]] must open the real file through the registry, not chase
-  // a phantom chart.png.md. Only extensionless targets get the .md default.
-  const hasViewableExt = /\.(md|mdx|txt|json|html?|svg|png|jpe?g|gif|webp|pdf)$/i.test(baseName);
-  const searchName = hasViewableExt ? baseName : baseName + '.md';
+  // a phantom chart.png.md. Only extensionless targets get the .md default,
+  // decided in wikilinkSearchName so every resolving surface agrees.
+  const searchName = wikilinkSearchName(name);
   editorReturnView = 'editor';
 
   // Push current file onto history so back button returns to it
@@ -862,27 +1118,93 @@ function highlightFileInSidebar(filePath) {
   if (target.scrollIntoView) target.scrollIntoView({ block: 'nearest' });
 }
 
+// THE ONE RESOLVER, and the precedence is the point.
+//
+// The first version of this applied its rules PER FILE while walking the
+// tree, so a basename match on an earlier file returned before an exact path
+// match on a later file was ever considered. Since a file whose full path
+// equals the search string also has a matching basename by definition, exact
+// path matching could only ever fire when the first basename match in tree
+// order happened to also be the exact path: it was effectively unreachable,
+// and a fully qualified link could open a different file of the same name in
+// whichever folder sorted first. Renaming an unrelated folder changed where
+// links went.
+//
+// So the rules are now applied ACROSS the whole tree, in order:
+//   1. Exact path match (case-insensitive). A full path names one file; if it
+//      is present, nothing else may win.
+//   2. Basename match, tied by SHORTEST PATH first and TREE ORDER second. A
+//      bare [[Notes]] most plausibly means the least-nested Notes; between
+//      equals, the tree's own order decides, which is the one deterministic
+//      answer the previous behavior gave that was worth keeping.
+//
+// The old third rule (basename with the first '.md' occurrence stripped and
+// re-appended) is gone: for every ordinary name it was identical to rule 2,
+// and for a name carrying '.md' mid-string it could match a file the link
+// never named. Nothing may match under a rule a reader cannot predict.
 function findFileInTree(items, searchName) {
-  // Normalise search: could be "filename.md" or "path/to/filename.md"
-  const searchLower = searchName.toLowerCase();
-  const searchBase = searchName.split('/').pop().toLowerCase();
+  const searchLower = String(searchName).toLowerCase();
+  const searchBase = searchLower.split('/').pop();
+  let best = null;
+  let order = 0;
+  (function walk(list) {
+    for (const item of list) {
+      if (item.type === 'file') {
+        const at = order++;
+        if (item.path.toLowerCase() === searchLower) {
+          if (!best || !best.exact) best = { path: item.path, exact: true };
+        } else if (!(best && best.exact) && item.name.toLowerCase() === searchBase) {
+          const depth = item.path.split('/').length;
+          if (!best || depth < best.depth || (depth === best.depth && at < best.at)) {
+            best = { path: item.path, exact: false, depth, at };
+          }
+        }
+      } else if (item.type === 'folder' && item.children) {
+        walk(item.children);
+      }
+    }
+  })(items);
+  return best ? best.path : null;
+}
 
-  for (const item of items) {
-    if (item.type === 'file') {
-      const itemPath = item.path.toLowerCase();
-      const itemName = item.name.toLowerCase();
-      // Exact path match
-      if (itemPath === searchLower) return item.path;
-      // Exact name match
-      if (itemName === searchBase) return item.path;
-      // Name without .md match
-      if (itemName === searchBase.replace('.md', '') + '.md') return item.path;
-    } else if (item.type === 'folder' && item.children) {
-      const found = findFileInTree(item.children, searchName);
-      if (found) return found;
+// The search string a link target becomes, in one place: the #anchor dropped
+// (it is parsed and never used to scroll), and .md appended unless the target
+// already names an extension the app can view. Every surface that resolves a
+// link builds its search string here, so no two surfaces can disagree about
+// what a target means before resolution even starts.
+const VIEWABLE_LINK_EXT_RE = /\.(md|mdx|txt|json|html?|svg|png|jpe?g|gif|webp|pdf)$/i;
+function wikilinkSearchName(target) {
+  const baseName = String(target).split('#')[0].trim();
+  return VIEWABLE_LINK_EXT_RE.test(baseName) ? baseName : baseName + '.md';
+}
+
+/**
+ * What links here, and what this links to, as data the view can draw.
+ *
+ * Pure, so the whole answer is testable without a browser. `links` is the
+ * as-written link list (source path, raw target); resolution happens here,
+ * through the same findFileInTree every click goes through, so the list and
+ * the click can never name different files. Embeds are excluded: they render
+ * a file inside another rather than linking to it.
+ */
+function fileConnections(filePath, links, tree) {
+  const outgoing = [];
+  const incoming = [];
+  const seenOut = new Set();
+  const seenIn = new Set();
+  for (const link of links || []) {
+    if (link.kind === 'embed') continue;
+    const resolved = findFileInTree(tree || [], wikilinkSearchName(link.target));
+    if (link.src === filePath && resolved && resolved !== filePath && !seenOut.has(resolved)) {
+      seenOut.add(resolved);
+      outgoing.push({ target: link.target, resolved });
+    }
+    if (resolved === filePath && link.src !== filePath && !seenIn.has(link.src)) {
+      seenIn.add(link.src);
+      incoming.push({ src: link.src });
     }
   }
-  return null;
+  return { outgoing, incoming };
 }
 
 
@@ -946,7 +1268,9 @@ return {
   openBoardFile, openMarkdownFile, openLegacyTextFile,
   openBinaryOrUnsupportedFile, renderEditorContent, setEditorMode,
   getFileContentForSave, openWikilink, openWorkspaceFilePath,
-  highlightFileInSidebar, findFileInTree, updateEditorBackButton,
+  highlightFileInSidebar, findFileInTree, wikilinkSearchName, fileConnections,
+  renderFileConnections, drawFileConnections, removeFileConnections,
+  updateEditorBackButton,
   openSkillFile, editorGoBack,
 };
 }));

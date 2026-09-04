@@ -283,7 +283,7 @@ const MUTATIONS = [
   // point of sharing it: one guard, one mutation, and no second copy free to
   // admit something the first refuses.
   [HANDLER, 'a routine flag change asks whether the write happened, not whether the bytes moved',
-    '  if (!written || written[field] !== value) {',
+    '  if (!written || Object.entries(updates).some(([key, wanted]) => written[key] !== wanted)) {',
     '  if (next === before && false) {'],
   [HANDLER, 'a delete counts the blocks rather than looking one up by index',
     '  if (readRoutineBlocks(next, found.name).length !== readRoutineBlocks(before, found.name).length - 1) {',
@@ -490,8 +490,8 @@ const MUTATIONS = [
   // otherwise: dropping the occurrence still makes every control act on the
   // first routine of its name whatever the reader pointed at.
   [HANDLER, 'a routine field change tells the writer which block',
-    '    next = updateRoutineBlock(before, found.name, { [field]: value }, found.occurrence);',
-    '    next = updateRoutineBlock(before, found.name, { [field]: value });'],
+    '    next = updateRoutineBlock(before, found.name, updates, found.occurrence);',
+    '    next = updateRoutineBlock(before, found.name, updates);'],
 
   // ===== THE GUARD A SCHEDULE EDIT HAS TO SURVIVE =====
   //
@@ -1153,10 +1153,13 @@ function redTests(suite) {
   const marker = out.indexOf('failing tests:');
   if (marker === -1) {
     if (!failed) return [];
-    throw new Error(
-      'the suite failed but its output carries no "failing tests:" summary, so no '
-      + 'test names could be read. The spec reporter\'s format is what this parses; '
-      + 'if it changed, fix this parser rather than trusting the empty result.');
+    // A suite that failed with output this could not read has produced no
+    // verdict: not red, not green, nothing. Refused as a named row rather
+    // than thrown, so the report says which mutation was in flight instead
+    // of a stack trace that names nothing. The spec reporter's format is
+    // what this parses; if it changed, fix the parser rather than trusting
+    // an empty result.
+    return { unparsable: true };
   }
   const names = [];
   for (const line of out.slice(marker).split('\n')) {
@@ -1196,7 +1199,10 @@ function run() {
         continue;
       }
       fs.writeFileSync(target.src, original.replace(guard, without));
-      results.push({ label, applied: true, red: redTests(target.suite) });
+      const red = redTests(target.suite);
+      results.push(red && red.unparsable
+        ? { label, applied: true, unparsable: true, red: [] }
+        : { label, applied: true, red });
       fs.writeFileSync(target.src, original);
     }
   } finally {
@@ -1208,7 +1214,14 @@ function run() {
 function report(results, markdown) {
   let failed = 0;
   const lines = [];
-  for (const { label, applied, red, ambiguous } of results) {
+  for (const { label, applied, red, ambiguous, unparsable } of results) {
+    if (unparsable) {
+      failed++;
+      const why = 'no verdict: the suite failed but its output could not be parsed, so nothing '
+        + 'about this mutation is known; fix the reporter parsing rather than trusting a rerun';
+      lines.push(markdown ? `| ${label} | **${why}** | |` : `${label}\n  ${why.toUpperCase()}`);
+      continue;
+    }
     if (ambiguous) {
       failed++;
       const why = `the guard text matches ${ambiguous} places, so it would break whichever came first`;

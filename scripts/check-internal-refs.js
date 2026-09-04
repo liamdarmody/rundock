@@ -43,6 +43,50 @@ const SKIP = [
   /^scripts\/[a-z-]+\/captured-[a-z-]+\.json$/,
 ];
 
+// The files amnestied for the acceptance-criteria label rule below: every
+// file that carried the shape on the day the rule was written, listed by
+// exact path so the list can only shrink. See the rule for the reasoning.
+const AC_LABEL_AMNESTY = new Set([
+  'test/e2e/file-tree-icons.spec.js',
+  'test/e2e/theme.spec.js',
+  'test/integration/scheduler-gating.test.js',
+  'test/integration/scheduler-output-drain.test.js',
+  'test/integration/scheduler-predating-routines.test.js',
+  'test/integration/scheduler-run-observation.test.js',
+  'test/integration/scheduler-run-records.test.js',
+  'test/integration/scheduler-workspace-lifecycle.test.js',
+  'test/tools/mutate-routines-guards.js',
+  'test/tools/mutate-run-detail-guards.js',
+  'test/unit/boundary.test.js',
+  'test/unit/guide-name.test.js',
+  'test/unit/profile-boxes.test.js',
+  'test/unit/red-first-orphans.test.js',
+  'test/unit/red-first.test.js',
+  'test/unit/routine-actions.test.js',
+  'test/unit/routine-editor-contract.test.js',
+  'test/unit/routine-editor-doors.test.js',
+  'test/unit/routine-editor-model.test.js',
+  'test/unit/routine-editor-view.test.js',
+  'test/unit/routine-model.test.js',
+  'test/unit/routine-timezone.test.js',
+  'test/unit/routines-end-to-end.test.js',
+  'test/unit/routines-model.test.js',
+  'test/unit/routines-next-run.test.js',
+  'test/unit/routines-panel.test.js',
+  'test/unit/routines-view-doors.test.js',
+  'test/unit/routines-view.test.js',
+  'test/unit/scheduler-lib.test.js',
+  'test/unit/scheduler-lifecycle-doors.test.js',
+  'test/unit/session-transcript-capture.test.js',
+  'test/unit/session-transcript.test.js',
+  'test/unit/team-sidebar.test.js',
+  'scripts/red-first.js',
+  'docs/TEST-TIMING.md',
+  'docs/evidence/red-first-orphans-evidence.md',
+  'docs/evidence/scheduler-lifecycle-evidence.md',
+  'docs/evidence/setup-race-flakes-evidence.md',
+]);
+
 // Each rule: a label and a regex that identifies an internal reference. Keep
 // these precise so ordinary code never trips them.
 const RULES = [
@@ -87,6 +131,20 @@ const RULES = [
   {
     label: 'external tool cited as design rationale (state the reason itself)',
     re: /\b(following|per|as in|mirrors?|matching|copying|like)\s+(Obsidian|Notion|Cursor|VS ?Code|Linear)\b|\b(Obsidian|Notion|Cursor|VS ?Code|Linear)('s)?\s+(convention|precedent|rule|behaviou?r)\b/i,
+  },
+  // Acceptance-criteria label prefixes (AC-3, AC-C2, AC-B6) point at a
+  // private acceptance document a contributor cannot open, the same class as
+  // the board-card ids above. RATCHETED rather than swept: the shape had been
+  // shipping for weeks before this rule existed and sits in several hundred
+  // test names, comments and captured evidence transcripts, whose wholesale
+  // rename is its own piece of work. Files carrying the legacy shape are
+  // amnestied by name below; a NEW file cannot ship the shape, and a file
+  // that burns its labels down leaves the list. Do not add a file to the
+  // amnesty: reword instead, naming the behaviour rather than the label.
+  {
+    label: 'acceptance-criteria label prefix (e.g. AC-3, AC-C2)',
+    re: /\bAC-[A-Z]?[0-9]+\b/,
+    amnesty: AC_LABEL_AMNESTY,
   },
   // Owner-attributed decisions. The name itself is legitimate here: it is in
   // the LICENSE, the README byline, and the example agent files. What does not
@@ -133,6 +191,7 @@ function scanLines(label, text, { skipHashComments = false } = {}) {
     if (line.includes('internal-refs-allow')) return;
     if (skipHashComments && line.startsWith('#')) return;
     for (const rule of RULES) {
+      if (rule.amnesty && rule.amnesty.has(label)) continue;
       const m = line.match(rule.re);
       if (m) out.push({ file: label, line: i + 1, label: rule.label, match: m[0], text: line.trim().slice(0, 120) });
     }
