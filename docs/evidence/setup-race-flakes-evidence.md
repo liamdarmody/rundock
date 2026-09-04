@@ -99,7 +99,10 @@ Ran `node --test test/unit/red-first.test.js --test-name-pattern="traps SIGINT"`
 A real pid (`69486`), not `0`: the marker-race fix did its job even under this same
 deliberately-broken run. That is the pid-liveness assertion this test exists for, not
 a precondition. Reverted with `git checkout -- scripts/red-first.js`; `git status
---porcelain` showed the file clean. Re-ran the same command: **30 pass, 0 fail**,
+--porcelain` showed the file clean. (A caution before repeating that revert: it
+restores the committed file by throwing away whatever is in the working copy, so
+if you carry uncommitted work in that file it is erased, not restored. Copy the
+file aside before making the break, and put the copy back instead.) Re-ran the same command: **30 pass, 0 fail**,
 including this test at 424ms.
 
 ### Break 2: `server.js`, the sweep never retires anything
@@ -165,7 +168,9 @@ recap rather than hanging after the summary line.
 
 Reverted both the `.only` marker and `server.js` with `git checkout -- server.js
 test/integration/process-lifecycle.test.js`; `git status --porcelain` showed the tree
-clean. Re-ran `node --test test/integration/process-lifecycle.test.js` (the committed
+clean. (The same caution as the first break: that command erases any uncommitted
+work in those files. Copy each file aside before breaking it, and restore from
+the copies.) Re-ran `node --test test/integration/process-lifecycle.test.js` (the committed
 file, unrestricted, no `.only`): **6 pass, 0 fail**, no hang, including the target
 test at ~1000ms.
 

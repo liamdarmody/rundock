@@ -46,6 +46,16 @@
 // pre-commit gate stages everything and then runs these harnesses, so refusing
 // on any modification at all would refuse every change that touches a file a
 // harness mutates, which is most of them.
+//
+// WHAT A CLEAN TREE DOES NOT PROVE, stated here because this is the check a
+// reader will trust. A residue scan asks whether the tree matches HEAD. Work
+// that was never committed and then erased produces a clean tree,
+// indistinguishable from a tree that was never touched: the scan cannot tell
+// untouched from erased, and it once reported clean over a builder's
+// destroyed, uncommitted implementation. That blindness is structural, not a
+// bug to fix here, and it is the whole reason the refusal above exists: the
+// only defence for uncommitted work is to refuse before anything destructive
+// starts, because afterwards there is nothing left to detect.
 
 const fs = require('node:fs');
 const path = require('node:path');

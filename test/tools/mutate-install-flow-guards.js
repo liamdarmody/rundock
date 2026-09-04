@@ -75,10 +75,13 @@ function redTests(suite) {
   const marker = out.indexOf('failing tests:');
   if (marker === -1) {
     if (!failed) return [];
-    throw new Error(
-      'the suite failed but its output carries no "failing tests:" summary, so no '
-      + 'test names could be read. The spec reporter\'s format is what this parses; '
-      + 'if it changed, fix this parser rather than trusting the empty result.');
+    // A suite that failed with output this could not read has produced no
+    // verdict: not red, not green, nothing. Refused as a named row rather
+    // than thrown, so the report says which mutation was in flight instead
+    // of a stack trace that names nothing. The spec reporter's format is
+    // what this parses; if it changed, fix the parser rather than trusting
+    // an empty result.
+    return { unparsable: true };
   }
   const names = [];
   for (const line of out.slice(marker).split('\n')) {
@@ -109,7 +112,10 @@ function run() {
         continue;
       }
       fs.writeFileSync(target.src, original.replace(guard, without));
-      results.push({ label, applied: true, matches, red: redTests(target.suite) });
+      const red = redTests(target.suite);
+      results.push(red && red.unparsable
+        ? { label, applied: true, matches, unparsable: true, red: [] }
+        : { label, applied: true, matches, red });
       fs.writeFileSync(target.src, original);
     }
   } finally {
@@ -121,7 +127,14 @@ function run() {
 function report(results, markdown) {
   let failed = 0;
   const lines = [];
-  for (const { label, applied, red, ambiguous, matches } of results) {
+  for (const { label, applied, red, ambiguous, matches, unparsable } of results) {
+    if (unparsable) {
+      failed++;
+      const why = 'no verdict: the suite failed but its output could not be parsed, so nothing '
+        + 'about this mutation is known; fix the reporter parsing rather than trusting a rerun';
+      lines.push(markdown ? `| ${label} | ${matches} | **${why}** | |` : `${label}\n  ${why.toUpperCase()}`);
+      continue;
+    }
     if (ambiguous) {
       failed++;
       const why = `the guard text matches ${ambiguous} places, so it would break whichever came first`;
