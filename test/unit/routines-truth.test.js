@@ -33,6 +33,13 @@ const scheduler = require('../../lib/scheduler.js');
 const config = require('../../lib/config.js');
 const { invalidateAgentCache, discoverAgents } = require('../../lib/agents/discovery.js');
 const { agentFile, makeWorkspace, cleanup } = require('../helpers/workspace.js');
+const { computePlanHash } = require('../../lib/agents/routines.js');
+
+// A routine whose plan carries its standing approval, for rows meant to be
+// stopped by something other than the approval step. Built from the plan
+// fields the hash actually reads, so these fixtures stay honest when the
+// hash's inputs change.
+const approved = (routine) => ({ ...routine, planApprovedHash: computePlanHash(routine) });
 
 after(cleanup);
 
@@ -186,16 +193,17 @@ describe('RT-4: the row\'s promise and the scheduler\'s refusals are one list', 
   test('each understood refusal word is one a real routine elicits', () => {
     const elicits = {
       paused: { paused: true, enabled: true, runOn: 'local', prompt: 'go' },
-      enabled: { enabled: false, runOn: 'local', prompt: 'go' },
+      enabled: approved({ enabled: false, runOn: 'local', prompt: 'go' }),
       runOn: { enabled: true, runOn: 'the-moon', prompt: 'go' },
       prompt: { enabled: true, runOn: 'local', prompt: '' },
+      approval: { enabled: true, runOn: 'local', prompt: 'go' },
     };
     for (const word of m.REFUSALS_UNDERSTOOD) {
       assert.ok(elicits[word], `${word}: no routine shape elicits this word; teach this table with the new branch`);
       assert.strictEqual(scheduler.routineRefusal(elicits[word]), word);
     }
-    assert.strictEqual(scheduler.routineRefusal({ enabled: true, runOn: 'local', prompt: 'go' }), null,
-      'a runnable routine is refused for nothing');
+    assert.strictEqual(scheduler.routineRefusal(approved({ enabled: true, runOn: 'local', prompt: 'go' })), null,
+      'a runnable, approved routine is refused for nothing');
   });
 
   // The offer's sentence is true on every state the scheduler can refuse for.
@@ -248,7 +256,7 @@ describe('RT-4: the row\'s promise and the scheduler\'s refusals are one list', 
     assert.strictEqual(m.somethingElseStopsIt({ ...RUNNABLE, runOn: 'the-moon', enabled: false,
       refusal: scheduler.routineRefusal(offOnUnsupportedTarget) }), true);
 
-    const offAndOtherwiseFine = { enabled: false, runOn: 'local', prompt: 'go' };
+    const offAndOtherwiseFine = approved({ enabled: false, runOn: 'local', prompt: 'go' });
     assert.strictEqual(scheduler.routineRefusal(offAndOtherwiseFine), 'enabled',
       'a routine where the switch really is the only thing in the way says so, and only that routine');
     assert.strictEqual(m.somethingElseStopsIt({ ...RUNNABLE, enabled: false,
