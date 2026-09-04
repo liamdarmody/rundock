@@ -169,6 +169,38 @@ describe('the links table lives and dies with its file', { skip: !sqlite.availab
       'the editor renders wikilinks inside frontmatter, so they are links');
   });
 
+  test('an index from the previous schema is rebuilt on open, so links appear for untouched files', () => {
+    // The version bump is the only thing that gives links to a workspace that
+    // ALREADY has an index: the reconcile pass skips any file whose mtime and
+    // size are unchanged, so without the mismatch-triggered rebuild a
+    // pre-existing note is never re-read and its links never exist. This
+    // walks the upgrade path itself: an index whose stored version is the
+    // previous one, holding a files row for a file that is not touched again,
+    // reopened at the current version. It must go red if the version constant
+    // reverts.
+    write('old-note.md', 'Points at [[Alpha]].');
+    idx = fresh();
+    reconcile(idx);
+    assert.strictEqual(linksFrom(idx, 'old-note.md').length, 1, 'sanity: indexed at the current version');
+    idx.close();
+
+    // Age the index back one schema version and erase the links, which is
+    // exactly what an index written before the links table looked like:
+    // files rows present, links absent, version one behind.
+    // The literal 3 is the point: written relative to the current constant,
+    // a reverted constant would move this value with it and the mismatch
+    // would fire anyway, hiding exactly the revert this test exists to catch.
+    const raw = new sqlite.DatabaseSync(dbPath);
+    raw.prepare("UPDATE meta SET value = '3' WHERE key = 'schema_version'").run();
+    raw.prepare('DELETE FROM links').run();
+    raw.close();
+
+    idx = fresh();
+    reconcile(idx);
+    assert.deepStrictEqual(linksFrom(idx, 'old-note.md'), ['wikilink:Alpha'],
+      'opening at the current version rebuilds, so an untouched file\'s links exist without an edit');
+  });
+
   test('the table stores the target as written, never a resolution', () => {
     write('a/Notes.md', 'x');
     write('src.md', 'To [[Notes]].');
@@ -300,6 +332,7 @@ describe('the connections list rides the real open path', () => {
       <span id="editor-filename"></span><span id="editor-status"></span>
       <button id="toggle-preview"></button><button id="toggle-edit"></button>
       <div id="editor-empty"></div>
+      <div id="file-tree"></div>
       <div id="editor-pane">
         <div id="editor-content" class="hidden"></div>
         <textarea id="editor-textarea" class="hidden"></textarea>
@@ -320,7 +353,11 @@ describe('the connections list rides the real open path', () => {
       rawFileContent: '', fileFrontmatter: '', fileBody: '', editorMode: 'preview',
       editorDirty: false, saveTimer: null, boardSaveTimer: null, boardPendingSave: null,
       diskBaselines: new Map(),
-      workspaceAnalysis: null, agents: [],
+      workspaceAnalysis: null, agents: [], currentWorkspacePath: null,
+      TREE_ICONS: new Proxy({}, { get: () => '<svg></svg>' }),
+      esc: (v) => String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'),
+      paletteFileIcon: () => '<svg></svg>', menuIconSvg: () => '<svg></svg>',
+      CREATABLE_TYPES: [],
       switchNav: () => {}, showView: () => {}, highlightFileInSidebar: () => {},
       closeFindBar: () => {}, findState: { open: false }, syncTiptapFindStateFromPlugin: () => {},
       paletteOpenFile: () => {},
@@ -421,17 +458,60 @@ describe('the connections list rides the real open path', () => {
     } finally { cleanup(); }
   });
 
+  test('a link typed into a note reaches the next render, with no tree change anywhere', async () => {
+    // The staleness this pins: links change on content edits, and a content
+    // edit changes no tree, so any cache keyed to the tree serves yesterday's
+    // answer for the rest of the session. Here the server's answer changes
+    // between renders while the tree never does, and the next render must
+    // show the new set.
+    const { doc, cleanup, settle } = shell();
+    try {
+      filesView.loadFileContent('a/Here.md', 'To [[Other]].');
+      await settle();
+      let rows = [...doc.querySelectorAll('#file-connections .file-connections-row')].map(r => r.textContent);
+      assert.deepStrictEqual(rows, ['a/Other.md', 'Top.md'], 'sanity: the first answer rendered');
+      // The edit lands server-side: the graph now also links Here to Top.
+      global.fetch = () => Promise.resolve({ ok: true, json: () => Promise.resolve({
+        indexed: true,
+        links: LINKS.concat([{ src: 'a/Here.md', target: 'Top', kind: 'wikilink' }]),
+      }) });
+      filesView.loadFileContent('a/Here.md', 'To [[Other]] and [[Top]].');
+      await settle();
+      rows = [...doc.querySelectorAll('#file-connections .file-connections-row')].map(r => r.textContent);
+      assert.deepStrictEqual(rows, ['a/Other.md', 'Top.md', 'Top.md'],
+        'the next render carries the new link, because no cache outlives a render');
+    } finally { cleanup(); }
+  });
+
+  test('a file opened before the tree arrives gets its rows when the tree does', async () => {
+    const { doc, cleanup, settle } = shell();
+    try {
+      global.cachedFileTree = null;
+      filesView.loadFileContent('a/Here.md', 'To [[Other]].');
+      await settle();
+      const before = [...doc.querySelectorAll('#file-connections .file-connections-row')];
+      assert.strictEqual(before.length, 0, 'sanity: nothing resolves against no tree');
+      // The tree arrives, the way the shell delivers it: renderFileTree.
+      global.cachedFileTree = TREE;
+      global.renderedTree = null;
+      filesView.renderFileTree(TREE);
+      await settle();
+      const rows = [...doc.querySelectorAll('#file-connections .file-connections-row')].map(r => r.textContent);
+      assert.deepStrictEqual(rows, ['a/Other.md', 'Top.md'],
+        'the section recovers when the data it depended on arrives');
+      await settle();
+    } finally { cleanup(); }
+  });
+
   test('the rendered list says why it is empty, in both empty states', async () => {
     const { doc, cleanup, settle } = shell();
     try {
       global.fetch = () => Promise.resolve({ ok: true, json: () => Promise.resolve({ indexed: false, nodes: [], links: [] }) });
-      filesView.invalidateWorkspaceLinks();
       filesView.loadFileContent('a/Here.md', 'To [[Other]].');
       await settle(); await settle();
       assert.match(doc.getElementById('file-connections').textContent, /need the search index/,
         'no index is named, not rendered as a workspace with no links');
       global.fetch = () => Promise.reject(new Error('down'));
-      filesView.invalidateWorkspaceLinks();
       filesView.loadFileContent('Top.md', 'x');
       await settle(); await settle();
       assert.match(doc.getElementById('file-connections').textContent, /could not be read/,

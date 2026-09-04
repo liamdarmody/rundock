@@ -352,9 +352,13 @@ let renderedWorkspace = null;
 // used to shadow it existed only to survive the rebuild that no longer
 // happens.
 function renderFileTree(tree) {
-  // A changed tree can change what any link resolves to, so the cached link
-  // list is stale the moment a new tree is drawn.
-  invalidateWorkspaceLinks();
+  // A changed tree can change what any link resolves to, and a file opened
+  // before the first tree arrived rendered its connections against nothing:
+  // redraw the open file's section now that there is a tree to resolve with.
+  if (currentFilePath && document.getElementById('file-connections')) {
+    const section = document.getElementById('file-connections');
+    renderFileConnections(section.parentElement);
+  }
   const c = document.getElementById('file-tree');
   const next = tree || [];
 
@@ -861,18 +865,20 @@ function drawFileConnections(section, filePath, data) {
   group('Linked from', incoming, (r) => r.src);
 }
 
-let _workspaceLinksCache = null;
 function fetchWorkspaceLinks() {
-  // One fetch per file open, not per keystroke: the cache is dropped whenever
-  // the file tree changes, which is also when an answer could change.
-  if (_workspaceLinksCache) return _workspaceLinksCache;
-  _workspaceLinksCache = fetch('/api/graph').then((r) => {
+  // ONE FETCH PER RENDER, AND NO CACHE ACROSS OPENS, deliberately. A file's
+  // links change on a content edit, and a content edit changes no tree: the
+  // tree carries only names and paths, so no client event reliably announces
+  // that an answer moved. A first version cached this answer and dropped it
+  // only when the tree redrew, which meant a link typed into a note was
+  // missing from every connections list for the rest of the session. The
+  // payload is small and a render happens on a file open, so the honest
+  // fetch costs less than the stale answer did.
+  return fetch('/api/graph').then((r) => {
     if (!r.ok) throw new Error('links unavailable');
     return r.json();
-  }).catch((e) => { _workspaceLinksCache = null; throw e; });
-  return _workspaceLinksCache;
+  });
 }
-function invalidateWorkspaceLinks() { _workspaceLinksCache = null; }
 
 function setEditorMode(mode) {
   if (mode !== editorMode && findState.open) closeFindBar(); // find backend differs per mode
@@ -1118,7 +1124,7 @@ return {
   getFileContentForSave, openWikilink, openWorkspaceFilePath,
   highlightFileInSidebar, findFileInTree, wikilinkSearchName, fileConnections,
   renderFileConnections, drawFileConnections, removeFileConnections,
-  invalidateWorkspaceLinks, updateEditorBackButton,
+  updateEditorBackButton,
   openSkillFile, editorGoBack,
 };
 }));

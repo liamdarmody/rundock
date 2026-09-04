@@ -30,6 +30,9 @@ const ROOT = path.join(__dirname, '..', '..');
 const FILES = { src: path.join(ROOT, 'public', 'views', 'files.js'), suite: 'test/unit/map-foothold.test.js' };
 const SEARCH = { src: path.join(ROOT, 'search.js'), suite: 'test/unit/map-foothold.test.js' };
 const ROUTER = { src: path.join(ROOT, 'lib', 'http-router.js'), suite: 'test/unit/map-foothold.test.js' };
+// The one wiring line that makes the endpoint real, watched by the suite
+// that boots the real server: no injected dependency can notice its absence.
+const SERVER = { src: path.join(ROOT, 'server.js'), suite: 'test/integration/map-foothold-graph.test.js' };
 
 const MUTATIONS = [
   // ===== EXACT PATH FIRST, ACROSS THE WHOLE TREE =====
@@ -109,6 +112,17 @@ const MUTATIONS = [
   [FILES, 'a row opens the resolved file, not the text the link was written as',
     "  group('Links to', outgoing, (r) => r.resolved);",
     "  group('Links to', outgoing, (r) => r.target);"],
+  // Drop the tree-arrival redraw and a file opened before the first tree
+  // shows None for as long as it stays open, links or not.
+  [FILES, 'a section drawn before the tree arrives recovers when it does',
+    "  if (currentFilePath && document.getElementById('file-connections')) {\n    const section = document.getElementById('file-connections');\n    renderFileConnections(section.parentElement);\n  }",
+    ""],
+  // Unwire the engine from the router and the endpoint answers 500 forever
+  // while every dependency-injected test stays green; only the booted-server
+  // suite can notice.
+  [SERVER, 'the booted server hands the router its own search engine',
+    "  getSearchEngine: () => searchEngine,\n",
+    ""],
 ];
 
 const REPORTER = ['--test-reporter', 'spec'];
@@ -141,7 +155,7 @@ function redTests(suite) {
 }
 
 function run() {
-  const targets = [FILES, SEARCH, ROUTER];
+  const targets = [FILES, SEARCH, ROUTER, SERVER];
   const session = beginMutationRun({ files: [...new Set(targets.map((target) => target.src))] });
   const originals = new Map();
   for (const target of targets) originals.set(target, session.original(target.src));
