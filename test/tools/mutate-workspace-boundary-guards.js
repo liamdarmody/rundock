@@ -30,6 +30,8 @@ const ROOT = path.join(__dirname, '..', '..');
 const HOOK = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/workspace-boundary.test.js' };
 const SCAFFOLD = { src: path.join(ROOT, 'lib', 'workspace', 'scaffold.js'), suite: 'test/unit/workspace-boundary.test.js' };
 const BOUNDARY = { src: path.join(ROOT, 'lib', 'workspace', 'boundary.js'), suite: 'test/unit/workspace-boundary.test.js' };
+const CHAT_VIEW = { src: path.join(ROOT, 'public', 'views', 'chat.js'), suite: 'test/unit/boundary-card.test.js' };
+const SETTINGS_VIEW = { src: path.join(ROOT, 'public', 'views', 'settings.js'), suite: 'test/unit/workspace-boundary.test.js' };
 
 const MUTATIONS = [
   // ===== ONE DIRECTORY UNDER TWO NAMES IS ONE IDENTITY =====
@@ -62,12 +64,26 @@ const MUTATIONS = [
   [SCAFFOLD, 'another machine\'s temp tail is ours to reconcile, not a stranger\'s edit',
     "  if (!tail.every(t => typeof t === 'string' && t.length > 0)) return false;",
     '  if (JSON.stringify(tail) !== JSON.stringify(tempRoots())) return false;'],
+  // Drop the pairing check and a root a person appends, sitting in the
+  // second tail slot, is structurally indistinguishable from a legitimate
+  // temp-directory real path: the block is read as ours and their root is
+  // rewritten away on the next reconcile.
+  [SCAFFOLD, 'a second tail entry must be the first entry\'s own /private pairing, or it is somebody\'s edit',
+    "  if (tail.length === 2 && tail[1] !== path.posix.join('/private', tail[0])) return false;\n",
+    ''],
 
   // ===== THE SWITCH WITHDRAWS HONESTLY =====
   // Ignore the choice and the off switch writes the block anyway.
   [SCAFFOLD, 'opting out really withdraws the block',
-    '  const desired = off ? null : sandboxSettings(dir);',
-    '  const desired = sandboxSettings(dir);'],
+    '  const desired = off ? null : sandboxSettings(dir, platform);',
+    '  const desired = sandboxSettings(dir, platform);'],
+  // Ignore the choice on the NEXT OPEN specifically, not through the switch:
+  // scaffoldWorkspace's own reconcile has to read the opt-out too, or an
+  // opted-out workspace has its block silently rewritten the next time it is
+  // opened.
+  [SCAFFOLD, 'the next open honours an existing opt-out, not only the switch',
+    '    const desired = sandboxOptedOut(dir) ? null : sandboxSettings(dir, platform);',
+    '    const desired = sandboxSettings(dir, platform);'],
 
   // ===== THE SENSITIVE TABLE AND THE NARROW GRANT =====
   // Empty the table and a crossing into the runtime home renders the
@@ -80,6 +96,21 @@ const MUTATIONS = [
   [HOOK, 'the narrow grant is offered only when the layout confirms it',
     '    return entries.includes(flattened) ? derived : null;',
     '    return derived;'],
+  // Drop the grantable gate and the narrow-grant button renders on a shell
+  // crossing, which would let approving a command leave behind a standing
+  // folder grant: the exact regression 'a shell request never carries a
+  // standing folder grant' exists to prevent.
+  [CHAT_VIEW, 'the narrow grant is offered only where a folder grant may be remembered at all',
+    '  const sensNarrow = grantable && sensitiveCrossing ? sensitiveCrossing.narrowGrantDir || null : null;',
+    '  const sensNarrow = sensitiveCrossing ? sensitiveCrossing.narrowGrantDir || null : null;'],
+
+  // ===== THE VIEW MODULE'S EXPORT CONTRACT =====
+  // Un-republish the sandbox card's render and toggle functions and the WS
+  // dispatch and the card's own onclick markup resolve against nothing: the
+  // control exists in markup but throws ReferenceError on every click.
+  [SETTINGS_VIEW, 'the sandbox card\'s render and toggle functions are republished, not just declared',
+    '  renderSandboxCard, setSandboxMode,\n',
+    ''],
 ];
 
 const REPORTER = ['--test-reporter', 'spec'];
@@ -111,7 +142,7 @@ function redTests(suite) {
 }
 
 function run() {
-  const targets = [HOOK, SCAFFOLD, BOUNDARY];
+  const targets = [HOOK, SCAFFOLD, BOUNDARY, CHAT_VIEW, SETTINGS_VIEW];
   const session = beginMutationRun({ files: [...new Set(targets.map((target) => target.src))] });
   const originals = new Map();
   for (const target of targets) originals.set(target, session.original(target.src));

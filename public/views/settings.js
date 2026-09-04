@@ -316,6 +316,7 @@ function changeWorkspace() {
 }
 
 return { showSettingsSection, renderSettingsSection, setWorkspaceMode, runtimeRowHtml, runtimesCardHtml, renderRuntimesCard, changeWorkspace,
+  renderSandboxCard, setSandboxMode,
   packagesSubmit, packagesCancel, packagesConfirm, packagesRetry,
   packagesReplyArrived, packagesWorkspaceChanged, packagesConnectionLost };
 }));

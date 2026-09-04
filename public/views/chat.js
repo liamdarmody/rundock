@@ -619,6 +619,20 @@ function renderPermissionCard(d, convoId) {
   // says this command may run, and everything in the command runs rather than
   // only the part touching the folder.
   const grantable = boundary && !!req.grant_dir;
+  // The sensitive crossing, its copy, and its narrow grant directory: resolved
+  // once, here, rather than re-derived in three shapes below (the card's
+  // context, the narrow button, and pendingPermissions), which is how the
+  // three used to drift out of proving they agree. `crossings` is already
+  // `[]` when `boundary` is false, so `sensitiveCrossing` falls out to null
+  // on its own and needs no separate boundary guard.
+  const sensitiveCrossing = crossings.find(c => c && c.sensitive) || null;
+  const sensCopy = sensitiveCrossing ? RundockPermissions.sensitiveBoundaryCopy(sensitiveCrossing.sensitive) : null;
+  // The narrow grant is a folder grant: it can only be remembered where a
+  // folder grant can be remembered at all, which `grantable` already decides
+  // for "Always allow this folder". A shell crossing carries grantable false,
+  // so gating on it here means approving a command can never leave behind a
+  // standing folder grant, narrow or otherwise.
+  const sensNarrow = grantable && sensitiveCrossing ? sensitiveCrossing.narrowGrantDir || null : null;
   if (boundary) {
     const shell = toolName === 'Bash' || toolName === 'PowerShell';
     const reads = toolName === 'Read' || toolName === 'Glob' || toolName === 'Grep';
@@ -646,19 +660,11 @@ function renderPermissionCard(d, convoId) {
     // states the stakes, and offers the narrow grant when the hook could
     // derive one. The whole-folder grant stays available and is demoted by
     // position, never removed: operator authority is the product's rule.
-    const sensitiveCrossing = crossings.find(c => c && c.sensitive) || null;
-    if (sensitiveCrossing) {
-      const copy = RundockPermissions.sensitiveBoundaryCopy(sensitiveCrossing.sensitive);
-      if (copy) context = copy.context;
-    }
+    if (sensCopy) context = sensCopy.context;
   }
 
   // Store callback data for safe event handling (no inline onclick injection).
   // toolInput is echoed back in control_response (required by Claude Code).
-  const sensNarrow = boundary ? (crossings.find(c => c && c.narrowGrantDir) || {}).narrowGrantDir || null : null;
-  const sensCopy = boundary && crossings.some(c => c && c.sensitive)
-    ? RundockPermissions.sensitiveBoundaryCopy((crossings.find(c => c && c.sensitive) || {}).sensitive)
-    : null;
   pendingPermissions.set(requestId, { convoId, key, toolInput: input, grantDir: grantable ? req.grant_dir : null, narrowGrantDir: sensNarrow });
 
   const icons = {

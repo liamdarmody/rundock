@@ -12,6 +12,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { JSDOM } = require('jsdom');
 
 const ROOT = path.join(__dirname, '..', '..');
 const hook = require('../../scripts/permission-hook.js');
@@ -19,6 +20,11 @@ const scaffold = require('../../lib/workspace/scaffold.js');
 const boundary = require('../../lib/workspace/boundary.js');
 const permissions = require('../../public/permissions.js');
 const config = require('../../lib/config.js');
+// Evaluated into a fresh JSDOM window (not required as a CJS module) so the
+// UMD wrapper's browser branch runs and republishes the view's functions as
+// window properties, the same route app.js's inline onclick markup and WS
+// dispatch resolve them through.
+const SETTINGS_VIEW_SRC = fs.readFileSync(path.join(ROOT, 'public', 'views', 'settings.js'), 'utf8');
 
 const made = [];
 after(() => { for (const d of made) fs.rmSync(d, { recursive: true, force: true }); });
@@ -79,13 +85,53 @@ describe('the block names the runtime\'s measured plumbing, and the doc names th
   });
 
   test('a block a person edited is not ours, in either shape', () => {
-    const edited = scaffold.sandboxSettings('/w/ws', 'darwin', '/Users/me');
-    edited.filesystem.allowWrite.push('/Users/me/their-own-root');
-    assert.strictEqual(scaffold.isRundockSandbox(edited), false);
     const reordered = scaffold.sandboxSettings('/w/ws', 'darwin', '/Users/me');
     const w = reordered.filesystem.allowWrite;
     [w[2], w[3]] = [w[3], w[2]];
     assert.strictEqual(scaffold.isRundockSandbox(reordered), false, 'the order is contract');
+  });
+
+  // Pinned against EXPLICIT tail values via sandboxSettings' own tmpRoots
+  // parameter, not against whatever os.tmpdir() happens to realpath to on
+  // the machine running the suite. The old version of this test pushed an
+  // extra root onto a block built from THIS host's tempRoots(): on a host
+  // with a two-entry tail (macOS, with its /var -> /private/var alias) that
+  // pushes the block past the permitted head+2 length and the extra root is
+  // rejected for the wrong reason; on a host whose tmpdir has no distinct
+  // real path (most Linux runners) the tail is one entry, the push lands
+  // inside the still-permitted one-or-two-entry window, and the assertion
+  // fails outright, meaning 'anything else is somebody's edit' went
+  // unenforced there entirely.
+  test('a user-added extra root is never recognised as ours, for a one-entry or a two-entry tail', () => {
+    const oneEntryTail = ['/var/folders/zz/one-entry-host/T'];
+    const legitOne = scaffold.sandboxSettings('/w/ws', 'darwin', '/Users/me', oneEntryTail);
+    assert.strictEqual(scaffold.isRundockSandbox(legitOne), true, 'a lone temp root, on its own, is ours');
+    const oneEntryPlusExtra = scaffold.sandboxSettings('/w/ws', 'darwin', '/Users/me', oneEntryTail);
+    oneEntryPlusExtra.filesystem.allowWrite.push('/Users/me/their-own-root');
+    assert.strictEqual(scaffold.isRundockSandbox(oneEntryPlusExtra), false,
+      'still within the permitted one-or-two-entry tail length, so the length check alone cannot catch this: '
+      + 'the appended root is not a temp-directory spelling, and that is what has to reject it');
+
+    // The two-entry tail is the raw temp-dir name and its own /private real
+    // path (the only shape tempRoots() ever produces): recognised as a
+    // matched pair, an appended THIRD entry is not.
+    const twoEntryTail = ['/var/folders/zz/two-entry-host/T', '/private/var/folders/zz/two-entry-host/T'];
+    const legitTwo = scaffold.sandboxSettings('/w/ws', 'darwin', '/Users/me', twoEntryTail);
+    assert.strictEqual(scaffold.isRundockSandbox(legitTwo), true, 'the raw spelling and its /private pairing are ours');
+    const twoEntryPlusExtra = scaffold.sandboxSettings('/w/ws', 'darwin', '/Users/me', twoEntryTail);
+    twoEntryPlusExtra.filesystem.allowWrite.push('/Users/me/their-own-root');
+    assert.strictEqual(scaffold.isRundockSandbox(twoEntryPlusExtra), false,
+      'a third tail entry pushes length past the permitted window, and it is rejected either way');
+  });
+
+  test('a second tail entry that is not the first entry\'s /private pairing is not recognised as ours', () => {
+    // Same length as a legitimate two-entry tail, so only the pairing check
+    // (not the length check) can catch this: a person's folder happens to
+    // land in the second tail slot instead of being visibly appended.
+    const impersonating = scaffold.sandboxSettings('/w/ws', 'darwin', '/Users/me', ['/var/folders/zz/mixed-host/T']);
+    impersonating.filesystem.allowWrite.push('/Users/me/their-own-root');
+    assert.strictEqual(scaffold.isRundockSandbox(impersonating), false,
+      'a root of their own, sitting where the /private pairing would be, is not a temp-directory spelling');
   });
 });
 
@@ -115,13 +161,38 @@ describe('one directory under two names is one identity', () => {
     assert.strictEqual(hook.classifyFileAccess('Read', { file_path: path.join(ws, 'f.txt') }, real, []).where, 'inside');
   });
 
-  test('a case variant of an inside path never cards', () => {
+  test('a case variant of an inside path never cards, and canonicalises to the real spelling', () => {
+    // The old version of this test built the target by joining the variant
+    // onto `ws` itself, so the target already started with the root spelled
+    // byte for byte. An unresolved startsWith comparison passes on that
+    // prefix alone and never even looks at the differing segment, so it read
+    // 'inside' with or without canonicalisation and proved nothing about
+    // case. Checking resolvedPath rather than only `where` is what makes the
+    // case spelling decide the outcome: canonicalisation is the only thing
+    // that can turn the handed-in variant into the file's real casing.
     const ws = tmp('wb-case-');
     fs.mkdirSync(path.join(ws, 'Docs'));
     fs.writeFileSync(path.join(ws, 'Docs', 'a.md'), 'x');
+    const real = path.join(ws, 'Docs', 'a.md');
     const variant = path.join(ws, 'dOCS', 'a.md');
-    assert.strictEqual(hook.classifyFileAccess('Read', { file_path: variant }, ws, []).where, 'inside',
-      'on the default case-insensitive filesystem this is the same file; on a case-sensitive one it is an unborn path under the workspace, and both are inside');
+    // True only on a filesystem that folds case (macOS default, Windows):
+    // there `variant` names the SAME on-disk file as `real`. On a
+    // case-sensitive filesystem (most Linux runners) `dOCS` is simply a
+    // directory that does not exist.
+    const caseFolds = fs.existsSync(variant);
+    const result = hook.classifyFileAccess('Read', { file_path: variant }, ws, []);
+    assert.strictEqual(result.where, 'inside');
+    if (caseFolds) {
+      assert.strictEqual(result.resolvedPath, hook.canonicalize(real),
+        'the classifier reports the file\'s real on-disk spelling, not the variant case it was handed');
+    } else {
+      // Nothing exists at the variant spelling, so it is judged as an unborn
+      // target under the workspace: the nearest existing ancestor (ws)
+      // canonicalises, and the missing tail rides on unresolved. Correctly
+      // 'inside', but this branch cannot exercise case folding at all, which
+      // is why the assertion above is the one that matters.
+      assert.strictEqual(result.resolvedPath, path.join(hook.canonicalize(ws), 'dOCS', 'a.md'));
+    }
   });
 
   test('a target that does not exist yet is judged by its nearest existing ancestor', () => {
@@ -185,6 +256,42 @@ describe('the switch that withdraws the block is honest', () => {
     assert.ok(settings.sandbox, 'opting back in restores the block');
   });
 
+  test('the next open honours an existing opt-out: the block is withdrawn, not refreshed, and an opted-in workspace still gets it', () => {
+    // The switch test above proves setSandboxOptOut's own immediate write.
+    // This is the separate branch in scaffoldWorkspace itself (the ternary
+    // gating `desired` on sandboxOptedOut(dir)), reached on every ordinary
+    // workspace open, not only through the switch. Nothing exercised it: the
+    // only prior assertion about it read back the state flag rather than
+    // running scaffoldWorkspace against an opted-out workspace and checking
+    // what landed in settings.local.json.
+    const prevDeps = scaffold.wireScaffoldDeps({ invalidateAgentCache: () => {}, rebaselineAgentsWatcher: () => {} });
+    try {
+      const optedOutWs = tmp('wb-scaffold-optout-');
+      // A Rundock-written block already present, as it would be from an
+      // earlier, opted-in open.
+      scaffold.scaffoldWorkspace(optedOutWs, { platform: 'darwin' });
+      const settingsPath = path.join(optedOutWs, '.claude', 'settings.local.json');
+      assert.ok(JSON.parse(fs.readFileSync(settingsPath, 'utf8')).sandbox,
+        'fixture sanity: a block is present before the opt-out');
+
+      scaffold.setSandboxOptOut(optedOutWs, true);
+      // The next open, not the switch, is what is under test: state.json now
+      // records the opt-out, and scaffoldWorkspace's own reconcile is what
+      // must read it, independent of the switch's own immediate write.
+      scaffold.scaffoldWorkspace(optedOutWs, { platform: 'darwin' });
+      const afterNextOpen = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+      assert.strictEqual('sandbox' in afterNextOpen, false,
+        'withdrawn on the next open, not left in place as a refresh would leave it');
+
+      const stillOptedIn = tmp('wb-scaffold-stillin-');
+      scaffold.scaffoldWorkspace(stillOptedIn, { platform: 'darwin' });
+      const inSettings = JSON.parse(fs.readFileSync(path.join(stillOptedIn, '.claude', 'settings.local.json'), 'utf8'));
+      assert.ok(inSettings.sandbox, 'and a workspace that never opted out still gets the block from the same call');
+    } finally {
+      scaffold.wireScaffoldDeps(prevDeps);
+    }
+  });
+
   test('a person\'s own block is never touched by the switch, in either direction', () => {
     const ws = workspaceWithBlock();
     const theirs = { enabled: false, note: 'mine' };
@@ -210,11 +317,39 @@ describe('the switch that withdraws the block is honest', () => {
       'the two-root block became the measured block on the next reconcile');
   });
 
-  test('the switch\'s copy names what it withdraws and the class it can never help', () => {
-    const src = fs.readFileSync(path.join(ROOT, 'public', 'views', 'settings.js'), 'utf8');
-    assert.match(src, /operating-system level|operating-system write block/, 'what turning it off withdraws is named');
-    assert.match(src, /headless browser/, 'the process-launch class no writable root can reach is named');
-    assert.match(src, /Windows and Linux/, 'and where the card is already the whole boundary');
+  test('the sandbox card renders in the browser and its On/Off controls fire, not by reading the source as text', () => {
+    // A source-text grep proves the words exist in the file; it does not
+    // prove the card ever reaches the page or that its buttons do anything.
+    // renderSandboxCard and setSandboxMode are declared inside the view's
+    // UMD factory: if either one is not part of what the factory returns,
+    // the WS dispatch and the card's own onclick markup resolve against
+    // nothing and this test fails on the click, exactly where a person's
+    // click would fail, rather than staying green on a grep.
+    const dom = new JSDOM(
+      '<!doctype html><html><body><div id="sandbox-card" style="display:none"></div></body></html>',
+      { runScripts: 'dangerously' });
+    const w = dom.window;
+    const sent = [];
+    w.ws = { readyState: w.WebSocket.OPEN, send: (s) => sent.push(JSON.parse(s)) };
+    w.eval(SETTINGS_VIEW_SRC);
+
+    w.renderSandboxCard({ available: true, optedOut: false });
+    const card = w.document.getElementById('sandbox-card');
+    assert.notStrictEqual(card.style.display, 'none', 'the card is unhidden once the server says the switch exists');
+    // Both copy states, since "Windows and Linux" is only ever printed once
+    // the switch is off (that copy is what names the fallback boundary).
+    assert.match(card.innerHTML, /operating-system level/, 'On: what the block does is named');
+    assert.match(card.innerHTML, /headless browser/, 'On: the process-launch class no writable root can reach is named');
+    w.renderSandboxCard({ available: true, optedOut: true });
+    assert.match(card.innerHTML, /operating-system write block/, 'Off: what turning it off withdrew is named');
+    assert.match(card.innerHTML, /Windows and Linux/, 'Off: and where the card is already the whole boundary');
+    w.renderSandboxCard({ available: true, optedOut: false });
+
+    const offButton = [...card.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Off');
+    assert.ok(offButton, 'the Off control is in the rendered markup');
+    offButton.click();
+    assert.deepStrictEqual(sent, [{ type: 'set_sandbox_mode', enabled: false }],
+      'pressing the rendered control reaches setSandboxMode, which sends the switch\'s message');
   });
 });
 
@@ -252,6 +387,46 @@ describe('a crossing into the runtime\'s home carries its stakes', () => {
     assert.ok(hit && hit.sensitive === 'claude-home', 'the stakes are still stated');
     assert.strictEqual('narrowGrantDir' in hit, false,
       'but no folder is offered that the runtime might not mean');
+  });
+
+  test('answering the narrow grant persists exactly that folder: the transcripts are silenced, the parent runtime home still cards', () => {
+    // What respondPermission sends for the allow-transcripts action is an
+    // ordinary grantDir (chat.js's own comment: "it IS a folder grant"), so
+    // this exercises addBoundaryGrant/boundaryGrantCovers, the same call an
+    // "Always allow this folder" answer makes, with the narrow directory the
+    // hook derived rather than a whole-folder one.
+    const home = tmp('wb-narrow-home-');
+    const ws = tmp('wb-narrow-ws-');
+    const flattened = path.resolve(ws).replace(/[^A-Za-z0-9-]/g, '-');
+    const narrowDir = path.join(home, '.claude', 'projects', flattened);
+    fs.mkdirSync(narrowDir, { recursive: true });
+    const enrichment = hook.sensitiveEnrichment(path.join(home, '.claude', 'settings.json'), ws, home);
+    assert.strictEqual(enrichment.narrowGrantDir, narrowDir);
+
+    const original = config.getWorkspace();
+    config.setWorkspace(ws);
+    try {
+      boundary.addBoundaryGrant(enrichment.narrowGrantDir);
+      const grants = JSON.parse(fs.readFileSync(boundary.boundaryPermissionsPath(), 'utf8'));
+      assert.deepStrictEqual(grants.allowedDirs, [hook.canonicalize(narrowDir)],
+        'exactly the narrow folder is persisted, nothing wider');
+
+      // Silenced: a file inside the granted transcripts folder is now covered.
+      const insideNarrow = path.join(narrowDir, 'session.jsonl');
+      assert.strictEqual(hook.classifyFileAccess('Read', { file_path: insideNarrow }, ws, []).where, 'outside',
+        'still outside the workspace (the grant answers this, not the boundary)');
+      assert.strictEqual(boundary.boundaryGrantCovers(insideNarrow), true,
+        'and the narrow grant covers it: no card on the next access');
+
+      // Still carded: the credential file sits in the parent runtime home,
+      // outside the narrow folder, and the narrow grant must not have become
+      // a standing grant for the whole thing.
+      const credentials = path.join(home, '.claude', '.credentials.json');
+      assert.strictEqual(boundary.boundaryGrantCovers(credentials), false,
+        'the narrow grant for the transcripts folder never widens to cover the runtime home it lives inside');
+    } finally {
+      config.setWorkspace(original);
+    }
   });
 
   test('the card copy names the stakes concretely and offers the narrow grant by name', () => {
