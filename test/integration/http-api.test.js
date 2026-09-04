@@ -296,32 +296,76 @@ describe('path traversal guards', () => {
   // are handed exactly the bytes the read returned and the save is the bytes
   // they produce, so the round trip is proven through the roads the running
   // product uses rather than a file the test wrote itself.
-  test('the connectors tab reads and writes the workspace .mcp.json through its real transports', async () => {
-    const settings = require('../../public/views/settings.js');
-    const { resolveMcpConfigPath } = require('../../lib/workspace/mcp-secrets.js');
+  // The connectors tab's OWN read and write legs, driven against the real
+  // server: the page's connectorsLoad fetches through the running product's
+  // /api/file, and connectorsAdd emits the real save_file the server writes.
+  // Nothing here restates the URL or the message beside the tab; both are
+  // whatever the tab actually issues.
+  const { JSDOM } = require('jsdom');
+  const { resolveMcpConfigPath } = require('../../lib/workspace/mcp-secrets.js');
+  const SETTINGS_SRC = fs.readFileSync(path.join(__dirname, '..', '..', 'public', 'views', 'settings.js'), 'utf8');
+
+  function connectorsPage() {
+    const dom = new JSDOM('<!doctype html><html><body>'
+      + '<div class="settings-nav"><div class="settings-nav-item active" data-settings="connectors"></div></div>' 
+      + '<div id="settings-content"></div></body></html>', { runScripts: 'dangerously' });
+    const w = dom.window;
+    // fetch is the running product's fetch, pointed at the booted server.
+    w.fetch = (u, opts) => fetch(`http://127.0.0.1:${h.port}${u}`, opts);
+    // ws is the real client: connectorsAdd's own save_file travels it.
+    w.WebSocket = { OPEN: 1 };
+    w.ws = { readyState: 1, send: (str) => client.send(JSON.parse(str)) };
+    w.eval(SETTINGS_SRC);
+    // The Add form is drawn by connectorsLoad into #settings-content; a
+    // caller types into THOSE rendered inputs, which connectorsAdd reads.
+    dom.type = (name, target) => {
+      w.document.getElementById('connector-name').value = name;
+      w.document.getElementById('connector-target').value = target;
+    };
+    return { w, dom };
+  }
+
+  test('connectorsLoad reads the workspace .mcp.json through /api/file and renders its servers', async () => {
+    fs.writeFileSync(path.join(h.workspaceDir, '.mcp.json'), JSON.stringify({
+      mcpServers: { notion: { command: 'npx', args: ['-y', '@notionhq/notion-mcp-server'] } },
+    }, null, 2) + '\n');
+    const { w, dom } = connectorsPage();
+    await w.connectorsLoad();
+    const page = w.document.getElementById('settings-content').innerHTML;
+    assert.match(page, /notion/, 'the tab read the real file and rendered what it contains');
+    assert.doesNotMatch(page, /No connectors configured/, 'not the empty state, because the file has servers');
+    dom.window.close();
+  });
+
+  test('connectorsAdd emits the real save_file the tab issues, for a url and for a command, landing beside what was there', async () => {
     fs.writeFileSync(path.join(h.workspaceDir, '.mcp.json'), JSON.stringify({
       mcpServers: { notion: { command: 'npx', args: ['-y', '@notionhq/notion-mcp-server'] } },
     }, null, 2) + '\n');
 
-    // The read leg: the exact request connectorsLoad makes.
-    const read = await get('/api/file?path=' + encodeURIComponent('.mcp.json'));
-    assert.strictEqual(read.status, 200, 'the tab can read the workspace connector file');
-    const parsed = settings.connectorsParse(read.body);
-    assert.deepStrictEqual(parsed.servers.map(x => x.name), ['notion'], 'and sees what is configured');
+    // A URL target: connectorsAdd records it as a url entry and saves.
+    const urlPage = connectorsPage();
+    await urlPage.w.connectorsLoad();
+    urlPage.dom.type('granola', 'https://mcp.granola.ai/mcp');
+    const sinceUrl = client.messages.length;
+    urlPage.w.connectorsAdd();
+    await client.waitFor(m => m.type === 'file_saved' && m.path === '.mcp.json', { since: sinceUrl, label: 'url save' });
+    let runtimeSees = JSON.parse(fs.readFileSync(resolveMcpConfigPath(h.workspaceDir), 'utf-8'));
+    assert.strictEqual(runtimeSees.mcpServers.granola.url, 'https://mcp.granola.ai/mcp', 'the url entry landed');
+    assert.ok(runtimeSees.mcpServers.notion, 'beside what was already configured');
+    urlPage.dom.window.close();
 
-    // The tab builds the save from the bytes it just read, never from empty.
-    const merged = settings.connectorsMerge(read.body, 'granola', { url: 'https://mcp.granola.ai/mcp' });
-    assert.strictEqual(merged.reason, null);
-
-    // The write leg: the exact message connectorsAdd sends.
-    client.send({ type: 'save_file', path: '.mcp.json', content: merged.next });
-    await client.waitFor(m => m.type === 'file_saved' && m.path === '.mcp.json', { label: 'mcp saved' });
-
-    // Read back through the runtime's own resolver: both servers present,
-    // nothing destroyed.
-    const runtimeSees = JSON.parse(fs.readFileSync(resolveMcpConfigPath(h.workspaceDir), 'utf-8'));
-    assert.deepStrictEqual(Object.keys(runtimeSees.mcpServers).sort(), ['granola', 'notion'],
-      'the add landed in the file the runtime reads, beside what was already there');
+    // A command with arguments: recorded as command plus args.
+    const cmdPage = connectorsPage();
+    await cmdPage.w.connectorsLoad();
+    cmdPage.dom.type('local-tool', 'node my-server.js --port 4000');
+    const sinceCmd = client.messages.length;
+    cmdPage.w.connectorsAdd();
+    await client.waitFor(m => m.type === 'file_saved' && m.path === '.mcp.json', { since: sinceCmd, label: 'cmd save' });
+    runtimeSees = JSON.parse(fs.readFileSync(resolveMcpConfigPath(h.workspaceDir), 'utf-8'));
+    assert.strictEqual(runtimeSees.mcpServers['local-tool'].command, 'node', 'the command is split from its args');
+    assert.deepStrictEqual(runtimeSees.mcpServers['local-tool'].args, ['my-server.js', '--port', '4000']);
+    assert.ok(runtimeSees.mcpServers.granola && runtimeSees.mcpServers.notion, 'and nothing earlier was destroyed');
+    cmdPage.dom.window.close();
   });
 
   test('WS save_file writes inside the workspace and silently drops traversal attempts', async () => {

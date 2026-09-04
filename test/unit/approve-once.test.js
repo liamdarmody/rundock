@@ -13,6 +13,7 @@ const path = require('node:path');
 const { JSDOM } = require('jsdom');
 const {
   PLAN_FIELDS, computePlanHash, planApproved, APPROVAL_PENDING, stampPendingApprovals,
+  markApprovalFeatureRan,
   normalizeRoutine, parseRoutineBlocks, updateRoutineBlock, appendRoutineBlock,
   migrateAgentRoutines, readRoutineBlock,
 } = require('../../lib/agents/routines.js');
@@ -159,7 +160,12 @@ describe('approval persists in the file, which is what a restart reads', () => {
 describe('the grandfather line: an upgrade never stops work you already run', () => {
   test('migration approves every pre-existing routine as it stands, switched on or not', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'approve-migrate-'));
-    const file = path.join(dir, 'piper.md');
+    const agentDir = path.join(dir, '.claude', 'agents');
+    fs.mkdirSync(agentDir, { recursive: true });
+    // The real <workspace>/.claude/agents/<name>.md layout, so the feature
+    // marker resolves inside this test's own workspace and cannot be reached
+    // by a sibling temp dir climbing to a shared ancestor.
+    const file = path.join(agentDir, 'piper.md');
     // A pre-approval-era file: routines with none of the migrated keys, one
     // running today and one switched off.
     fs.writeFileSync(file, [
@@ -192,7 +198,12 @@ describe('the grandfather line: an upgrade never stops work you already run', ()
   // later addition, or a record that was lost, and either way meets the step.
   test('a key-less block beside an approved sibling is pending, not grandfathered', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'approve-mixed-'));
-    const file = path.join(dir, 'piper.md');
+    const agentDir = path.join(dir, '.claude', 'agents');
+    fs.mkdirSync(agentDir, { recursive: true });
+    // The real <workspace>/.claude/agents/<name>.md layout, so the feature
+    // marker resolves inside this test's own workspace and cannot be reached
+    // by a sibling temp dir climbing to a shared ancestor.
+    const file = path.join(agentDir, 'piper.md');
     fs.writeFileSync(file, [
       '---', 'name: piper', 'type: specialist', 'order: 1', 'routines:',
       '  - name: established', '    schedule: every day at 07:00', '    prompt: go',
@@ -208,6 +219,37 @@ describe('the grandfather line: an upgrade never stops work you already run', ()
       assert.strictEqual(require('../../lib/scheduler.js').routineRefusal(newcomer), 'approval');
       const established = normalizeRoutine(readRoutineBlock(migrated, 'established', 0));
       assert.strictEqual(planApproved(established), true, 'and the sibling whose record stands keeps it');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // AC-3's lost-record clause, in the ordinary single-routine file. Once the
+  // approval feature has demonstrably run in a workspace, a routine whose
+  // record is hand-stripped is a plan awaiting a fresh tap, never re-approved
+  // by absence, even though it is the only routine and has no sibling to
+  // borrow the signal from.
+  test('a single routine whose approval record is stripped after the feature ran is refused, not re-approved', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'approve-lost-'));
+    const agentDir = path.join(dir, '.claude', 'agents');
+    fs.mkdirSync(agentDir, { recursive: true });
+    const file = path.join(agentDir, 'piper.md');
+    try {
+      // The workspace has been through the feature: its durable marker is set.
+      markApprovalFeatureRan(dir);
+      // A single-routine file whose only approval record has been removed by
+      // a hand edit of the frontmatter.
+      fs.writeFileSync(file, [
+        '---', 'name: piper', 'type: specialist', 'order: 1', 'routines:',
+        '  - name: solo', '    schedule: every day at 07:00', '    prompt: an edited plan',
+        '    enabled: true', '    planHash: ' + computePlanHash(normalizeRoutine({ prompt: 'an edited plan', runOn: 'local' })),
+        '---', '',
+      ].join('\n'));
+      const migrated = migrateAgentRoutines(file, fs.readFileSync(file, 'utf-8'));
+      const solo = normalizeRoutine(readRoutineBlock(migrated, 'solo', 0));
+      assert.strictEqual(planApproved(solo), false,
+        'absence of the record in a workspace the feature has touched is never-approved, not approved');
+      assert.strictEqual(scheduler.routineRefusal(solo), 'approval', 'so the tick asks for a fresh tap');
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -444,14 +486,6 @@ describe('the connectors tab edits the file the runtime reads', () => {
     assert.deepStrictEqual(reread.servers.map(srv => srv.name).sort(), ['calendar', 'granola', 'notion']);
   });
 
-  test('a read that did not succeed is an error, never an empty state, and blocks the Add form', () => {
-    const failed = settings.connectorsParse ? { servers: [], missing: false, readFailed: true, error: 'Could not read .mcp.json' } : null;
-    const html = settings.connectorsSectionHtml(failed);
-    assert.match(html, /Could not read/, 'a failed read shows the error');
-    assert.doesNotMatch(html, /No connectors configured/, 'and never the reassuring empty state');
-    assert.doesNotMatch(html, /connector-name|Add to \.mcp\.json/, 'and draws no Add form to write from bytes it never read');
-  });
-
   test('after a read that failed, connectorsAdd writes nothing', () => {
     // The refuse guard lives in connectorsAdd, which reads the page and the
     // socket, so it is driven in a real DOM. A failed read (non-ok response)
@@ -474,6 +508,14 @@ describe('the connectors tab edits the file the runtime reads', () => {
     w.eval(SETTINGS_SRC);
 
     return w.connectorsLoad().then(() => {
+      // The state connectorsLoad ACTUALLY produced is what rendered, not an
+      // object the test built: the error sentence is on the page, the
+      // reassuring empty state is not, and no Add form is drawn.
+      const page = w.document.getElementById('settings-content').innerHTML;
+      assert.match(page, /Could not read \.mcp\.json/i, 'the failed read renders its error');
+      assert.doesNotMatch(page, /No connectors configured/, 'never the empty state over a file it could not read');
+      assert.doesNotMatch(page, /connector-name|Add to \.mcp\.json/, 'and no Add form built from bytes it never saw');
+
       w.connectorsAdd();
       assert.deepStrictEqual(sent, [], 'nothing was saved from a file that was never read');
       assert.match(w.document.getElementById('connector-add-note').textContent, /could not be read/i,
