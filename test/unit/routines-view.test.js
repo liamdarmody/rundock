@@ -1963,3 +1963,30 @@ describe('a routine the upgrade held back', () => {
     dom.window.close();
   });
 });
+
+describe('the Approve control is a real press that reaches the handler', () => {
+  test('a routine whose plan awaits approval draws the control, and pressing it sends the exact message', () => {
+    // A namesake is present so the occurrence carried by the message is
+    // load-bearing rather than incidentally zero: the routine pressed is the
+    // SECOND "Compile the ops summary", occurrence 1.
+    const { doc, w, dom } = shell([
+      routine('Compile the ops summary', { refusal: null, nextRun: iso(TOMORROWS_SLOT) }),
+      routine('Compile the ops summary', { refusal: 'approval', skill: 'ops-summary' }),
+    ]);
+    w.renderRoutines();
+
+    const rowEls = rows(doc);
+    const approvalRow = rowEls.find(r => r.querySelector('[data-routines-action="approve"]'));
+    assert.ok(approvalRow, 'the row whose plan awaits approval draws the Approve control');
+    assert.match(text(approvalRow), /Approve plan/, 'and it carries the model\'s label');
+    // The first namesake, whose plan is not awaiting approval, draws none.
+    assert.strictEqual(rowEls[0].querySelector('[data-routines-action="approve"]'), null,
+      'a row not awaiting approval draws no control');
+
+    press(approvalRow, '[data-routines-action="approve"]');
+    assert.deepStrictEqual(w.sent, [{
+      type: 'approve_routine_plan', agentId: 'piper', name: 'Compile the ops summary', occurrence: 1, approve: true,
+    }], 'the press reaches the handler with the routine it pointed at, occurrence and all');
+    dom.window.close();
+  });
+});

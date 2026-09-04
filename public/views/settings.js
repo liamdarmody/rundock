@@ -353,6 +353,12 @@ function connectorsMerge(text, name, entry) {
 }
 
 function connectorsSectionHtml(state) {
+  // A read we could not trust draws its error and NOTHING ELSE: no server
+  // list to misread as empty, and no Add form, because a write built on text
+  // we never saw is the overwrite this whole state exists to prevent.
+  if (state.error && state.readFailed) {
+    return `<div class="settings-section-title">Connectors</div><div class="settings-card"><div class="settings-row"><span class="settings-value">${connectorsEsc(state.error)}</span></div></div>`;
+  }
   let body;
   if (state.error) {
     body = `<div class="settings-card"><div class="settings-row"><span class="settings-value">${connectorsEsc(state.error)}</span></div></div>`;
@@ -380,26 +386,67 @@ function connectorsSectionHtml(state) {
     <div class="settings-row"><span class="settings-value">Edits land in <code>.mcp.json</code>, the same file agents read their connectors from on their next start.</span></div>`;
 }
 
+// Three states, kept apart because conflating them destroys a file. `null`
+// means "not yet read" and also "read and the file is genuinely absent"; a
+// string is the file's known-current bytes; the read-failed flag is neither,
+// and is the one state from which a write must never proceed. connectorsAdd
+// reads these, so a save can only ever be built from bytes we actually saw.
 let connectorsFileText = null;
+let connectorsReadFailed = false;
+
+function connectorsRenderIfShowing(state) {
+  const el = document.getElementById('settings-content');
+  const active = document.querySelector('.settings-nav-item.active');
+  if (el && active && active.getAttribute('data-settings') === 'connectors') {
+    el.innerHTML = connectorsSectionHtml(state);
+  }
+}
 
 function connectorsLoad() {
-  fetch('/api/file?path=' + encodeURIComponent('.mcp.json'))
-    .then(r => (r.ok ? r.text() : null))
-    .then((text) => {
-      connectorsFileText = text;
-      const el = document.getElementById('settings-content');
-      const active = document.querySelector('.settings-nav-item.active');
-      if (el && active && active.getAttribute('data-settings') === 'connectors') {
-        el.innerHTML = connectorsSectionHtml(connectorsParse(text));
-      }
+  connectorsReadFailed = false;
+  // Returns its promise so a caller (a test, or a later chained refresh) can
+  // wait for the read to resolve; the running product ignores the return.
+  return fetch('/api/file?path=' + encodeURIComponent('.mcp.json'))
+    .then((r) => {
+      // 404 is the file genuinely not there, an empty workspace: honest to
+      // show as "no connectors yet". Every other non-ok answer is a read
+      // that DID NOT succeed, and dressing it as an empty workspace is what
+      // lets the next Add overwrite a file we simply failed to read.
+      if (r.ok) return r.text().then((text) => { connectorsFileText = text; connectorsReadFailed = false; return connectorsParse(text); });
+      if (r.status === 404) { connectorsFileText = null; connectorsReadFailed = false; return connectorsParse(null); }
+      connectorsFileText = null; connectorsReadFailed = true;
+      return { servers: [], missing: false, readFailed: true, error: 'Could not read .mcp.json, so its connectors are not shown and nothing new can be added until the read succeeds. Reopen this tab to retry.' };
     })
-    .catch(() => { /* the section keeps its loading copy; the next open retries */ });
+    .catch(() => {
+      connectorsFileText = null; connectorsReadFailed = true;
+      connectorsRenderIfShowing({ servers: [], missing: false, readFailed: true, error: 'Could not read .mcp.json, so its connectors are not shown and nothing new can be added until the read succeeds. Reopen this tab to retry.' });
+      return null;
+    })
+    .then((state) => { if (state) connectorsRenderIfShowing(state); });
+}
+
+// Per-workspace state must not outlive its workspace: the same rule
+// packagesWorkspaceChanged enforces. Dropped so a save can never carry one
+// workspace's connectors into another's file after a switch.
+function connectorsWorkspaceChanged() {
+  connectorsFileText = null;
+  connectorsReadFailed = false;
+  connectorsRenderIfShowing({ servers: [], missing: false, readFailed: true, error: 'Reopen this tab to read this workspace\'s connectors.' });
 }
 
 function connectorsAdd() {
+  const note = document.getElementById('connector-add-note');
+  // Never build a save from text we did not read. connectorsFileText is null
+  // for both "absent" and "read failed"; the flag tells them apart, and a
+  // failed read is the one case where merging from null would drop the real
+  // file's servers. A missing file (flag clear, text null) legitimately
+  // merges from an empty object.
+  if (connectorsReadFailed) {
+    if (note) note.textContent = 'The connector file could not be read, so nothing can be added until it can. Reopen this tab to retry.';
+    return;
+  }
   const name = (document.getElementById('connector-name') || {}).value || '';
   const target = ((document.getElementById('connector-target') || {}).value || '').trim();
-  const note = document.getElementById('connector-add-note');
   if (!target) { if (note) note.textContent = 'Say what it starts or where it lives.'; return; }
   const entry = /^https?:\/\//.test(target)
     ? { url: target }
@@ -419,5 +466,5 @@ function connectorsAdd() {
 return { showSettingsSection, renderSettingsSection, setWorkspaceMode, runtimeRowHtml, runtimesCardHtml, renderRuntimesCard, changeWorkspace,
   packagesSubmit, packagesCancel, packagesConfirm, packagesRetry,
   packagesReplyArrived, packagesWorkspaceChanged, packagesConnectionLost,
-  connectorsParse, connectorsMerge, connectorsSectionHtml, connectorsLoad, connectorsAdd };
+  connectorsParse, connectorsMerge, connectorsSectionHtml, connectorsLoad, connectorsAdd, connectorsWorkspaceChanged };
 }));

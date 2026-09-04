@@ -63,7 +63,7 @@ const MUTATIONS = [
   // every plan on every machine: the predating-routines defect in mirror
   // image, work halted by a release.
   [ROUTINES, 'a pre-existing routine carries its consent over the upgrade',
-    '        updates[key] = computePlanHash(routine);\n        continue;',
+    '        updates[key] = fileHasApproval ? APPROVAL_PENDING : computePlanHash(routine);\n        continue;',
     '        updates[key] = APPROVAL_PENDING;\n        continue;'],
   // A freshly created routine arriving pre-approved is a first run that
   // never asks.
@@ -78,7 +78,24 @@ const MUTATIONS = [
     "    if (!input || input.refusal !== 'approval') return null;",
     '    if (!input || !input.refusal) return null;'],
 
+  // The file-level discriminator: grandfather only a wholly key-less file.
+  // Approve every key-less block regardless of siblings and a later addition
+  // (or a lost record) inherits consent nobody gave.
+  [ROUTINES, 'a key-less block beside an approved sibling meets the step',
+    "        updates[key] = fileHasApproval ? APPROVAL_PENDING : computePlanHash(routine);",
+    '        updates[key] = computePlanHash(routine);'],
+
   // ===== THE CONNECTORS FILE IS EDITED, NEVER CLOBBERED =====
+  // Render a read-failed state as the empty state and the next Add writes over
+  // a file we merely could not read.
+  [SETTINGS, 'a read that failed draws its error, never the empty state',
+    "  if (state.error && state.readFailed) {\n    return `<div class=\"settings-section-title\">Connectors</div><div class=\"settings-card\"><div class=\"settings-row\"><span class=\"settings-value\">${connectorsEsc(state.error)}</span></div></div>`;\n  }",
+    ''],
+  // Let connectorsAdd proceed after a failed read and it merges from null,
+  // dropping the real file's servers.
+  [SETTINGS, 'the Add refuses when the file was never successfully read',
+    "  if (connectorsReadFailed) {",
+    '  if (false) {'],
   // Let the merge replace an existing name and adding a connector can
   // silently rewrite one somebody configured.
   [SETTINGS, 'the merge refuses to replace an existing connector',

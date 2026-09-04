@@ -10,8 +10,9 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { JSDOM } = require('jsdom');
 const {
-  PLAN_FIELDS, computePlanHash, planApproved, APPROVAL_PENDING,
+  PLAN_FIELDS, computePlanHash, planApproved, APPROVAL_PENDING, stampPendingApprovals,
   normalizeRoutine, parseRoutineBlocks, updateRoutineBlock, appendRoutineBlock,
   migrateAgentRoutines, readRoutineBlock,
 } = require('../../lib/agents/routines.js');
@@ -185,6 +186,52 @@ describe('the grandfather line: an upgrade never stops work you already run', ()
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  // The discriminator both ways: the file tells a pre-feature plan from a
+  // later one. A key-less block in a file whose siblings carry the key is a
+  // later addition, or a record that was lost, and either way meets the step.
+  test('a key-less block beside an approved sibling is pending, not grandfathered', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'approve-mixed-'));
+    const file = path.join(dir, 'piper.md');
+    fs.writeFileSync(file, [
+      '---', 'name: piper', 'type: specialist', 'order: 1', 'routines:',
+      '  - name: established', '    schedule: every day at 07:00', '    prompt: go',
+      '    enabled: true', '    planApprovedHash: ' + computePlanHash(normalizeRoutine({ prompt: 'go', runOn: 'local' })),
+      '  - name: newcomer', '    schedule: every day at 07:00', '    prompt: go', '    enabled: true',
+      '---', '',
+    ].join('\n'));
+    try {
+      const migrated = migrateAgentRoutines(file, fs.readFileSync(file, 'utf-8'));
+      const newcomer = normalizeRoutine(readRoutineBlock(migrated, 'newcomer', 0));
+      assert.strictEqual(planApproved(newcomer), false,
+        'a key-less block in a feature-aware file is a later addition or a lost record: it meets the step');
+      assert.strictEqual(require('../../lib/scheduler.js').routineRefusal(newcomer), 'approval');
+      const established = normalizeRoutine(readRoutineBlock(migrated, 'established', 0));
+      assert.strictEqual(planApproved(established), true, 'and the sibling whose record stands keeps it');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // The save-agent bound: a whole agent file written verbatim, carrying
+  // key-less routine blocks, is stamped pending by the writer rather than
+  // grandfathered by the migration. A block that already carries a record is
+  // left as it stands, so saving an edited agent never lapses an approval.
+  test('stampPendingApprovals marks new routine blocks and leaves standing ones alone', () => {
+    const approvedHash = computePlanHash(normalizeRoutine({ prompt: 'keep', runOn: 'local' }));
+    const content = [
+      '---', 'name: piper', 'type: specialist', 'routines:',
+      '  - name: brought-in', '    schedule: every day at 07:00', '    prompt: go', '    enabled: true',
+      '  - name: standing', '    schedule: every day at 07:00', '    prompt: keep',
+      '    enabled: true', '    planApprovedHash: ' + approvedHash,
+      '---', '',
+    ].join('\n');
+    const stamped = stampPendingApprovals(content);
+    assert.strictEqual(normalizeRoutine(readRoutineBlock(stamped, 'brought-in', 0)).planApprovedHash, APPROVAL_PENDING,
+      'a routine block arriving with no record is stamped pending, so it meets the tap');
+    assert.strictEqual(normalizeRoutine(readRoutineBlock(stamped, 'standing', 0)).planApprovedHash, approvedHash,
+      'and a block whose record stands is untouched, so an edited agent keeps its approvals');
+  });
 });
 
 describe('the approve message, driven through the real dispatch', () => {
@@ -281,6 +328,68 @@ describe('the approve message, driven through the real dispatch', () => {
   });
 });
 
+describe('a routine reaching a file through save_agent meets the step, not the grandfather', () => {
+  const config = require('../../lib/config.js');
+  const { invalidateAgentCache, discoverAgents } = require('../../lib/agents/discovery.js');
+  const { buildDispatch } = require('../../lib/protocol/handlers/index.js');
+
+  function saveAgentFixture() {
+    const dir = makeWorkspace({ agents: {} });
+    const original = config.getWorkspace();
+    config.setWorkspace(dir);
+    invalidateAgentCache();
+    const sent = [];
+    const ctx = {
+      agents: {
+        validateAgentSlug: () => true, invalidateAgentCache: () => invalidateAgentCache(),
+        discoverSkills: () => [], flagRosterRefresh: () => {}, maybeCompleteSetup: () => {},
+      },
+      workspace: { isInsideWorkspace: (pth) => pth.startsWith(dir) },
+    };
+    const ws = { send: (m) => sent.push(JSON.parse(m)), readyState: 1 };
+    const file = path.join(dir, '.claude', 'agents', 'piper.md');
+    return {
+      dir, sent, file,
+      save: (content) => buildDispatch().save_agent(ctx, ws, { type: 'save_agent', name: 'piper', content }),
+      restore: () => { config.setWorkspace(original); invalidateAgentCache(); },
+    };
+  }
+
+  test('a whole agent file written with a key-less routine block lands pending, and does not run unattended', () => {
+    const f = saveAgentFixture();
+    try {
+      // The RUNDOCK:SAVE_AGENT shape: a whole agent file, verbatim, carrying a
+      // routine the approval step has never seen.
+      f.save([
+        '---', 'name: piper', 'displayName: Piper', 'type: specialist', 'order: 1', 'routines:',
+        '  - name: brought-in', '    schedule: every day at 07:00', '    prompt: go', '    enabled: true',
+        '---', '',
+      ].join('\n'));
+      assert.ok(f.sent.some(m => m.type === 'agent_saved'), 'the agent saved');
+      const routine = normalizeRoutine(readRoutineBlock(fs.readFileSync(f.file, 'utf-8'), 'brought-in', 0));
+      assert.strictEqual(routine.planApprovedHash, APPROVAL_PENDING,
+        'the writer stamped the plan pending, so it is not grandfathered into running');
+      assert.strictEqual(scheduler.routineRefusal(routine), 'approval', 'and the tick asks for the tap');
+    } finally { f.restore(); }
+  });
+
+  test('saving an agent whose routine already carries an approval keeps it', () => {
+    const f = saveAgentFixture();
+    try {
+      const approvedHash = computePlanHash(normalizeRoutine({ prompt: 'go', runOn: 'local' }));
+      f.save([
+        '---', 'name: piper', 'displayName: Piper', 'type: specialist', 'order: 1', 'routines:',
+        '  - name: standing', '    schedule: every day at 07:00', '    prompt: go',
+        '    enabled: true', '    planApprovedHash: ' + approvedHash,
+        '---', '',
+      ].join('\n'));
+      const routine = normalizeRoutine(readRoutineBlock(fs.readFileSync(f.file, 'utf-8'), 'standing', 0));
+      assert.strictEqual(planApproved(routine), true,
+        'an edited agent whose routine keeps its record keeps its approval: the save does not lapse it');
+    } finally { f.restore(); }
+  });
+});
+
 describe('the connectors tab edits the file the runtime reads', () => {
   const MCP = JSON.stringify({
     mcpServers: {
@@ -333,6 +442,44 @@ describe('the connectors tab edits the file the runtime reads', () => {
     // both readers, no drift.
     const reread = settings.connectorsParse(fs.readFileSync(path.join(dir, '.mcp.json'), 'utf-8'));
     assert.deepStrictEqual(reread.servers.map(srv => srv.name).sort(), ['calendar', 'granola', 'notion']);
+  });
+
+  test('a read that did not succeed is an error, never an empty state, and blocks the Add form', () => {
+    const failed = settings.connectorsParse ? { servers: [], missing: false, readFailed: true, error: 'Could not read .mcp.json' } : null;
+    const html = settings.connectorsSectionHtml(failed);
+    assert.match(html, /Could not read/, 'a failed read shows the error');
+    assert.doesNotMatch(html, /No connectors configured/, 'and never the reassuring empty state');
+    assert.doesNotMatch(html, /connector-name|Add to \.mcp\.json/, 'and draws no Add form to write from bytes it never read');
+  });
+
+  test('after a read that failed, connectorsAdd writes nothing', () => {
+    // The refuse guard lives in connectorsAdd, which reads the page and the
+    // socket, so it is driven in a real DOM. A failed read (non-ok response)
+    // must leave the module unable to build a save: any save_file here would
+    // be built from bytes we never saw and would drop the real file's servers.
+    const SETTINGS_SRC = fs.readFileSync(path.join(__dirname, '..', '..', 'public', 'views', 'settings.js'), 'utf8');
+    const dom = new JSDOM('<!doctype html><html><body>'
+      + '<div class="settings-nav"><div class="settings-nav-item active" data-settings="connectors"></div></div>'
+      + '<div id="settings-content"></div>'
+      + '<input id="connector-name" value="calendar"><input id="connector-target" value="https://mcp.example.com">'
+      + '<div id="connector-add-note"></div>'
+      + '</body></html>', { runScripts: 'dangerously' });
+    const w = dom.window;
+    const sent = [];
+    w.ws = { readyState: 1, send: (m) => sent.push(JSON.parse(m)) };
+    w.WebSocket = { OPEN: 1 };
+    // The read that does not succeed: a non-ok response, which connectorsLoad
+    // must record as read-failed rather than as an empty workspace.
+    w.fetch = () => Promise.resolve({ ok: false, status: 500, text: () => Promise.resolve('') });
+    w.eval(SETTINGS_SRC);
+
+    return w.connectorsLoad().then(() => {
+      w.connectorsAdd();
+      assert.deepStrictEqual(sent, [], 'nothing was saved from a file that was never read');
+      assert.match(w.document.getElementById('connector-add-note').textContent, /could not be read/i,
+        'and the reader is told why, rather than silently overwriting');
+      dom.window.close();
+    });
   });
 
   test('the merge refuses to replace a connector somebody configured', () => {

@@ -246,6 +246,7 @@ const MANIFEST = {
     "connectorsMerge",
     "connectorsParse",
     "connectorsSectionHtml",
+    "connectorsWorkspaceChanged",
     "packagesCancel",
     "packagesConfirm",
     "packagesConnectionLost",
