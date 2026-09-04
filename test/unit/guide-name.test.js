@@ -40,6 +40,10 @@ const DEFAULT_GUIDE = /\bDoc\b/;
 // as words, and deliberately not including "it": a schedule that runs is an
 // "it", and that is a pronoun for a routine rather than for an agent.
 const PRONOUNS = /\b(he|him|his|she|her|hers|they|them|their|theirs)\b/i;
+// The scans below assert an ABSENCE, so a pattern gone blind reads as every
+// surface being clean. The specimen proves it still bites first.
+assert.ok(PRONOUNS.test('and then she said'), 'the pronoun pattern no longer matches its own specimen');
+assert.ok(!PRONOUNS.test('the theme of the sidebar'), 'the pronoun pattern matches words it must not');
 
 // The four surfaces, each named with the function that draws it and the
 // question a reader is answering when they meet it. A fifth one naming the

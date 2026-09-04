@@ -22,6 +22,15 @@ npm start
 
 This starts the server at `http://localhost:3000`. There is no build step. Changes to source files take effect on the next server restart (or page reload for frontend changes).
 
+**Working in a git worktree.** A fresh worktree shares the repository's history but not its `node_modules`, so nothing runs in it until dependencies exist. Either run `npm install` in the worktree, or borrow the main checkout's install with a symlink, which is faster and gives both trees identical dependency versions:
+
+```bash
+git worktree add ../rundock-mybranch -b my-branch
+ln -s "$(pwd)/node_modules" ../rundock-mybranch/node_modules
+```
+
+The symlink is gitignored along with the directory it points at, so it never reaches a commit. If your environment restricts network access at install time, the symlink route works fully offline; a plain `npm install` also survives a restricted network, because the one dependency fetched from outside the npm registry (`ffmpeg-static`, used only by the marketing capture pipeline) is optional, and an install without it still runs every test and the full gate. A worktree prepared either way runs `npm run precommit` unchanged.
+
 ## Code structure
 
 Rundock is intentionally simple. A handful of source files, three runtime dependencies, no bundler.
@@ -58,7 +67,9 @@ Before opening a PR:
 - **Vanilla JS only.** No frameworks, no TypeScript. The codebase is readable without tooling.
 - **Commit messages:** Start with a verb in imperative mood. Keep the first line under 72 characters. Examples: `fix permission card timeout race condition`, `add workspace mode toggle to settings panel`.
 - **UK spelling** in user-facing strings, comments, and documentation.
-- **No internal references.** Comments, tests, and docs should read as plain descriptive language to any external contributor. Do not leave in run codenames, review-round or priority labels (e.g. `P0-1`, `Review R1`, `KAN2`, `HARDEN1`), private workspace paths, or owner-attributed decision notes. `npm run check:refs` scans the repo for these and runs in CI as the `Hygiene` job; it must pass before merge. If a match is a false positive, reword the line, or as a last resort add an inline `internal-refs-allow` marker. To catch these before you commit, install the optional local hook: `git config core.hooksPath scripts/hooks`.
+- **No internal references.** Comments, tests, and docs should read as plain descriptive language to any external contributor. Do not leave in run codenames, review-round, priority or acceptance-criteria labels (e.g. `P0-1`, `Review R1`, `KAN2`, `HARDEN1`, `AC-3`), private workspace paths, or owner-attributed decision notes. `npm run check:refs` scans the repo for these and runs in CI as the `Hygiene` job; it must pass before merge. If a match is a false positive, reword the line, or as a last resort add an inline `internal-refs-allow` marker. To catch these before you commit, install the optional local hook: `git config core.hooksPath scripts/hooks`.
+
+  The scanner catches labels and paths. It cannot catch a sentence that is entirely ordinary English and still means nothing to somebody who has only this repository, so that half is a review question, not a regex: before opening the PR, read each comment you added and ask whether it helps a reader who has no access to any private document, person or process. A named example of the shape that slips through a scanner: a docblock recording that two acceptance criteria conflicted and that the project's owner ruled between them after a review raised it. Every word of it is plain English; none of it means anything outside the project. A ruling belongs in the project's own records; the code states behaviour, and a comment explains it on its own merits.
 
 ### Design conventions
 

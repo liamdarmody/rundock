@@ -69,7 +69,10 @@ describe('electron-builder files whitelist', () => {
   });
 
   test('every local module the packaged entry point requires is packaged', () => {
-    for (const f of localRequires('electron/main.js')) {
+    const entryRequires = localRequires('electron/main.js');
+    assert.ok(entryRequires.length >= 1,
+      'electron/main.js requires no local modules per the scan; the require pattern has gone blind');
+    for (const f of entryRequires) {
       const rel = f.startsWith('electron/') ? f : `electron/${f}`.replace('electron/../', '');
       assert.ok(covered(f) || covered(rel), `electron/main.js requires ./${f} but build.files does not package it`);
     }
