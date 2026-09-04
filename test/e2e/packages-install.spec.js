@@ -1,8 +1,10 @@
 'use strict';
-// E2E for the Packages install flow: the PL4 states against the real server.
-// A plan is only requested on submit, an apply only on confirm, cancel writes
-// nothing, a collision disables the confirm with its stated copy, and a
-// completed apply lands the agents, the skills and the receipt on disk.
+// E2E for the Packages install flow against the real server. A plan is only
+// requested on submit, an apply only on confirm, cancel writes nothing, and
+// a completed apply lands the agents, the skills and the receipt on disk.
+// A collision opens the review with skip preselected in both themes,
+// overwrite is a deliberate switch, a blocked row offers only skipping, and
+// a workspace that moves mid-review voids every decision.
 const base = require('@playwright/test');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -224,9 +226,17 @@ test('a collision opens the review with skip preselected, in both themes, and sk
   await expect(row.locator('.packages-dt-selected')).toHaveText(/Skip: keep yours/);
   await expect(card.locator('.packages-confirm')).toHaveText('Skip 1, nothing added');
   // The same card in the other theme: the review renders whole either way.
+  // Toggling text alone would pass with every colour the new CSS rules
+  // reach for undefined in one theme, since an undefined custom property
+  // inherits rather than erroring; read the tokens themselves too, on both
+  // sides of the toggle, so a token missing from one theme fails here.
+  const tokensDefined = () => page.evaluate(() => ['--danger', '--attention', '--success', '--accent-glow']
+    .map((t) => getComputedStyle(document.body).getPropertyValue(t).trim()));
+  await expect.poll(tokensDefined).not.toContain('');
   await page.evaluate(() => toggleTheme());
   await expect(card.locator('.packages-headline')).toHaveText('Review this package');
   await expect(row.locator('.packages-dt-selected')).toHaveText(/Skip: keep yours/);
+  await expect.poll(tokensDefined).not.toContain('');
   await page.evaluate(() => toggleTheme());
   // Confirming an untouched review keeps what the person already has.
   await card.locator('.packages-confirm').click();
@@ -302,4 +312,29 @@ test('a workspace that moves mid-review voids every decision, with danger weight
   await stale.getByRole('button', { name: 'Re-plan' }).click();
   // The re-plan reads the moved workspace and the review reopens against it.
   await expect(page.locator('.packages-review-card')).toBeVisible();
+});
+
+test('a mixed package renders the will-add and skipped-new rows against the real server', async ({ page }) => {
+  await boot(page);
+  await seedPackage(page, '.claude/skills/mixed-writer', [['SKILL.md', 'existing']]);
+  const source = await seedPackage(page, 'pkg-mixed', [
+    ['.claude/skills/mixed-writer/SKILL.md', 'incoming'],
+    ['.claude/skills/mixed-fresh/SKILL.md', 'brand new'],
+  ]);
+  await openPackages(page);
+  await page.fill('#packages-source-path', source);
+  await page.getByRole('button', { name: 'Read it' }).click();
+  const freshRow = page.locator('[data-item="skill:mixed-fresh"]');
+  await expect(freshRow).toHaveAttribute('data-row', 'willAdd');
+  await expect(freshRow.locator('.packages-ready-mark')).toHaveText('Will add');
+  // No control on this card can reach the skipped-new row yet (setDecision
+  // accepts 'skip' on a non-colliding item, but no button here sends it),
+  // per the recorded scope note beside setDecision in the model. Driving the
+  // model function directly still exercises the real evaluate round trip
+  // and the real renderer, which is what this row needs proving against.
+  await page.evaluate(() => packagesSetDecision('skill:mixed-fresh', 'skip'));
+  await expect(freshRow).toHaveAttribute('data-row', 'skippedNew');
+  await expect(freshRow.locator('.packages-skip-mark')).toHaveText('Will skip');
+  await freshRow.getByRole('button', { name: 'Add it back' }).click();
+  await expect(freshRow).toHaveAttribute('data-row', 'willAdd');
 });

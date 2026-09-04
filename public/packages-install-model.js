@@ -1,7 +1,7 @@
 'use strict';
 /**
- * The install flow's model: which of PL4's states the flow is in, every word
- * it says, and the only two messages it is ever allowed to send.
+ * The install flow's model: every state the flow can be in, every word it
+ * says, and the only messages it is ever allowed to send.
  *
  * WHY THIS IS A MODULE AND NOT A VIEW: the same reason the routines model is
  * one. Everything this flow is judged on is copy, a state rule, or a promise
@@ -10,12 +10,16 @@
  * `{ state, send }`, `send` is undefined unless the person explicitly asked
  * for something, and the suite exhausts the transitions.
  *
- * THE RULING THIS FILE HOLDS: nothing is silent, and collisions fail closed.
- * Planning happens only on submit; writing happens only on confirm; cancel
- * sends nothing at all. And a plan containing any colliding item can never
- * produce an apply message from this flow, because deciding a collision is a
- * per-item choice this slice does not offer, and defaulting that choice in
- * either direction is an unreviewed write or a silent loss.
+ * THE RULING THIS FILE HOLDS: nothing is silent, and nothing is silently
+ * overwritten. Planning happens only on submit; writing happens only on
+ * confirm; cancel sends nothing at all. A colliding item opens the review
+ * decided skip, and overwriting it is always a deliberate switch the person
+ * throws themselves, never a default. Whether a decided review is safe to
+ * apply is never computed here: the review's projection is asked of the
+ * server's evaluator, the one place that rule lives, and this file only
+ * renders what comes back. Three messages leave this model, each only on an
+ * explicit action: the plan request on submit, the evaluation request
+ * whenever the decided set changes, and the apply on confirm.
  */
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) {
@@ -31,6 +35,18 @@
     return `${n} ${word}${n === 1 ? '' : 's'}`;
   }
 
+  // Every evaluate and apply request carries its own id, echoed back by the
+  // server, so a reply is matched to the very request that produced it
+  // rather than to whatever phase the flow happens to be in when the reply
+  // lands. Random, not sequential: nothing here needs ordering, only
+  // uniqueness against every other id this flow instance has already sent.
+  // Plan requests do not need one: their success reply carries a type
+  // (`package_import_plan`) no other request can produce, so there is no
+  // shared envelope for a stray reply to be misread through.
+  function nextRequestId() {
+    return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  }
+
   function submit(state, rawPath) {
     const sourcePath = String(rawPath || '').trim();
     if (!sourcePath) {
@@ -42,11 +58,15 @@
     };
   }
 
-  // The one reply entry: the model's own phase decides which handler runs,
-  // so no routing ever depends on a wire field the model has not verified.
-  // A result arriving in the offer phase is the review's own projection (the
-  // server evaluated the current decisions without writing), which is why no
-  // new wire type exists for it: it is an import result, computed not applied.
+  // The one reply entry: the phase picks which family of handler runs, and
+  // each handler then checks the message's OWN identity before touching it,
+  // so a reply is matched to the request that produced it rather than being
+  // read as whatever the current phase happens to expect. This matters
+  // because evaluate_package_decisions and apply_package_import share one
+  // reply envelope (package_import_result): confirm can be pressed before an
+  // outstanding evaluate reply lands, moving the phase to 'applying' while
+  // that projection is still in flight, and the projection's own reply must
+  // then change nothing rather than being misread as a completed apply.
   function reply(state, msg) {
     if (state.phase === 'classifying') return planReply(state, msg);
     if (state.phase === 'offer') return evaluationReply(state, msg);
@@ -57,6 +77,9 @@
   function planReply(state, msg) {
     if (state.phase !== 'classifying') return { state };
     if (msg.type === 'package_import_error') {
+      // A stray evaluate or apply refusal reaching this phase is not this
+      // request's answer and must not be read as one.
+      if (msg.operation && msg.operation !== 'plan') return { state };
       // Classified by code, never by message prose: the wording belongs to
       // the producer and may change without ceremony.
       if (msg.code === 'empty-package') {
@@ -64,6 +87,10 @@
       }
       return { state: { phase: 'failed', sourcePath: state.sourcePath, message: msg.message || 'The package could not be read.' } };
     }
+    // A projection or apply result sharing no field with a plan reply must
+    // be refused here rather than dereferenced: `package_import_plan` is the
+    // only type this phase's success case ever produces.
+    if (msg.type !== 'package_import_plan' || !msg.plan) return { state };
     const items = msg.plan.items;
     // NOTHING IS SILENTLY OVERWRITTEN: every colliding item starts decided
     // skip, so a person who reviews the list and moves on keeps what they
@@ -79,12 +106,22 @@
       collisions: items.filter((i) => i.collision).map((i) => ({ id: i.id, kind: i.kind, slug: i.slug })),
       decisions,
       projection: null,
+      // The id of the evaluate request this offer is currently waiting on,
+      // if any. Set here rather than left implicit so a reply can be matched
+      // to it: see askEvaluation and evaluationReply below.
+      evaluateRequestId: null,
     };
+    // A collision-free plan never asks for a projection, so a plan the
+    // evaluator would still block on (a default conflict among only-new
+    // agents, say) cannot show the blocked treatment or its skip action on
+    // this surface today. That is a recorded limit of this slice, not an
+    // accident: only a plan with collisions opens the review at all, and the
+    // review is the one surface a projection is asked for.
     if (offer.collisions.length === 0) return { state: offer };
     // A review with decisions to make is projected by the one evaluator on
     // the server, never by a second copy of its rules here: the same message
     // family that applies an import evaluates it, without writing.
-    return { state: offer, send: evaluateMessage(offer) };
+    return askEvaluation(offer);
   }
 
   function decisionsFor(state) {
@@ -93,18 +130,34 @@
     return decisions;
   }
 
-  function evaluateMessage(state) {
+  // Ask the server to project the current decisions, tagging the request
+  // with a fresh id and carrying that same id forward on the state so the
+  // eventual reply can be matched to THIS request rather than to whichever
+  // one the offer phase happens to be in when a reply lands. Every place
+  // that changes what is being decided (the initial ask, and every decision
+  // flip below) goes through here, never around it.
+  function askEvaluation(state) {
+    const requestId = nextRequestId();
     return {
-      type: 'evaluate_package_decisions',
-      sourcePath: state.sourcePath,
-      approval: sharedDecide()(state.plan, decisionsFor(state)),
+      state: { ...state, evaluateRequestId: requestId },
+      send: {
+        type: 'evaluate_package_decisions',
+        requestId,
+        sourcePath: state.sourcePath,
+        approval: sharedDecide()(state.plan, decisionsFor(state)),
+      },
     };
   }
 
   // One decision, changed. Only combinations the evaluator itself accepts
   // can be chosen: a colliding item is overwritten or skipped, a new item is
   // added or skipped (skipping a new item is how a blocked row clears its
-  // conflict). Anything else is refused unchanged, and every change asks the
+  // conflict). Deciding a non-colliding item at all is scope beyond what the
+  // collision criteria ask for, kept deliberately: the review card already
+  // renders a skipped-new row for it (reviewRowClass, reviewCopy), so a
+  // person who wants to leave one fresh item out of an otherwise-accepted
+  // package can, even though no control on this card reaches it yet. Every
+  // other combination is refused unchanged, and every change asks the
   // server to project the result so blocking is never computed locally.
   function setDecision(state, id, decision) {
     if (state.phase !== 'offer') return { state };
@@ -114,14 +167,21 @@
     if (allowed.indexOf(decision) === -1) return { state };
     if (state.decisions[id] === decision) return { state };
     const next = { ...state, decisions: { ...state.decisions, [id]: decision }, projection: null };
-    return { state: next, send: evaluateMessage(next) };
+    return askEvaluation(next);
   }
 
   // What the projection said about the current decisions. Stale voids the
   // whole review, per the state model: the workspace or source moved, so
   // every choice above no longer describes what is actually there.
+  //
+  // Both checks below identify the message itself, not just this phase: an
+  // apply result shares this same package_import_result envelope, and a
+  // decision made after this projection was asked for sends a NEW evaluate
+  // request, superseding this one. Either kind of stray reply changes
+  // nothing, leaving the offer waiting on the request it actually sent.
   function evaluationReply(state, msg) {
     if (state.phase !== 'offer') return { state };
+    if (msg.operation !== 'evaluate' || msg.requestId !== state.evaluateRequestId) return { state };
     if (msg.type === 'package_import_error') {
       return { state: { phase: 'failed', sourcePath: state.sourcePath, message: msg.message || 'The review could not be checked.', canReplan: true } };
     }
@@ -170,9 +230,14 @@
 
   function confirm(state) {
     if (state.phase !== 'offer') return { state };
+    // Tagged the same way an evaluate request is, and for the same reason:
+    // an evaluate reply this offer already asked for can still be in flight
+    // when confirm is pressed, and applyReply below must be able to tell
+    // that reply apart from the one this request will eventually produce.
+    const requestId = nextRequestId();
     return {
-      state: { phase: 'applying', sourcePath: state.sourcePath },
-      send: { type: 'apply_package_import', sourcePath: state.sourcePath, approval: sharedDecide()(state.plan, decisionsFor(state)) },
+      state: { phase: 'applying', sourcePath: state.sourcePath, requestId },
+      send: { type: 'apply_package_import', requestId, sourcePath: state.sourcePath, approval: sharedDecide()(state.plan, decisionsFor(state)) },
     };
   }
 
@@ -191,8 +256,14 @@
 
   // WHERE EACH EVALUATOR BUCKET REACHES THIS SURFACE. The keys are the
   // evaluator's own result shape; a bucket added there without a home here
-  // fails the walk that compares the two, so an outcome can never be
-  // computed that this surface silently has no words for.
+  // fails the key-parity walk that compares the two, so an outcome can
+  // never be computed that this surface silently has no words for. That
+  // walk only proves a KEY exists, though: it is a sentence, not something
+  // rendered, so it cannot notice a row class going unexercised. The class
+  // walk in the suite is the one that drives every rowClass reviewRowClass
+  // can return through a real scenario and asserts the row it produces; read
+  // this map as a cross-reference between the two vocabularies, not as
+  // proof on its own.
   var RESULT_RENDERINGS = {
     status: 'routes the review: stale voids it, ready and decisions-blocked keep it open',
     writes: 'the will-add and overwrite rows, counted into the confirm label',
@@ -238,6 +309,16 @@
     return joined.charAt(0).toUpperCase() + joined.slice(1);
   }
 
+  // The reason the projection attached to a blocked item, or null if this
+  // item is not (or not yet) blocked. The one place reviewCopy reaches into
+  // the projection for a row's cause, so the wire's own reason is what ends
+  // up in blockedNote below rather than a second, hand-written guess at it.
+  function blockedReasonFor(state, item) {
+    if (!state.projection) return null;
+    const entry = state.projection.blocked.filter((b) => b.id === item.id)[0];
+    return entry ? entry.reason : null;
+  }
+
   function reviewCopy(state) {
     const counts = reviewCounts(state);
     const rows = state.plan.items.map((item) => {
@@ -260,9 +341,13 @@
             : "The package's version. Overwrite replaces yours with it.",
         },
         // NEVER OVERWRITE AS THE WAY OUT: the blocked row's one action is
-        // skipping, and the copy says what skipping keeps.
+        // skipping. The cause clause comes from the projection's own reason,
+        // said through the one reason vocabulary (reasonWords) rather than a
+        // second, hard-coded copy of what that vocabulary already says: a
+        // blocking reason the evaluator ever grows besides default-conflict
+        // is named correctly here instead of being reported as one.
         blockedNote: rowClass !== 'blocked' ? null
-          : 'Blocked: this would give your team a second default agent. Rundock allows exactly one. '
+          : `Blocked: ${reasonWords(blockedReasonFor(state, item))}. `
             + 'Skipping this item keeps your workspace exactly as it is and clears the conflict.',
         blockedAction: rowClass !== 'blocked' ? null
           : { label: 'Skip this item', decision: 'skip' },
@@ -302,8 +387,15 @@
     return reason;
   }
 
+  // Identified the same way evaluationReply identifies its own replies: an
+  // evaluate reply asked for before confirm was pressed can still be in
+  // flight when this phase is entered, sharing this same result envelope,
+  // and it must never be read as the apply this phase is actually waiting
+  // on. Rejecting it here, unread, is what keeps the flow in 'applying'
+  // until the real apply result (matched by its own requestId) arrives.
   function applyReply(state, msg) {
     if (state.phase !== 'applying') return { state };
+    if (msg.operation !== 'apply' || msg.requestId !== state.requestId) return { state };
     if (msg.type === 'package_import_error') {
       return { state: { phase: 'failed', sourcePath: state.sourcePath, message: msg.message || 'The import could not be applied.' } };
     }
@@ -342,7 +434,10 @@
   // A dropped connection ends any wait: for a lost plan the person just
   // reads again; for a lost apply the truth is unknown, because the write
   // may or may not have landed, so the copy claims neither and points at
-  // where the answer actually lives.
+  // where the answer actually lives. A dropped connection in the stale
+  // phase changes nothing: the review is already void and the only action
+  // re-plans, which checks the connection itself on the way out, so neither
+  // branch here needs to name that phase.
   function connectionLost(state) {
     if (state.phase === 'classifying') {
       return { state: { phase: 'failed', sourcePath: state.sourcePath, message: 'The connection dropped before an answer arrived. Nothing was added. Read the package again to continue.', canReplan: true } };
@@ -357,10 +452,6 @@
     if (!state.sourcePath) return { state: initial() };
     return submit(initial(), state.sourcePath);
   }
-
-  // A dropped connection in the stale phase changes nothing: the review is
-  // already void and the only action re-plans, which checks the connection
-  // itself on the way out.
 
   return { initial, submit, reply, planReply, offerCopy, cancel, confirm, applyReply, doneCopy, retry, connectionLost,
     setDecision, reviewCopy, staleCopy, confirmLabel, reasonWords, REVIEW_TONES, RESULT_RENDERINGS };

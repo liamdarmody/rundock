@@ -66,6 +66,32 @@ function collidingScenario({ workspaceAgent = '---\nname: helper\n---\n\nOld.\n'
   return { workspace, sourceRoot, planMsg, offer: out.state, firstSend: out.send };
 }
 
+// The complete tree under a root as one comparable value: every path and
+// every byte, directories included so an orphaned empty one is visible too.
+// Used to prove a mid-apply failure leaves the workspace exactly as it was,
+// which a single file's bytes cannot: a stray journal or receipts directory
+// under a path the test never names would pass a narrower check.
+function workspaceTree(root) {
+  const result = [];
+  const walk = (dir) => {
+    let entries = [];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+      const absolute = path.join(dir, entry.name);
+      const relative = path.relative(root, absolute).split(path.sep).join('/');
+      if (entry.isDirectory()) {
+        const before = result.length;
+        walk(absolute);
+        if (result.length === before) result.push(`${relative}/`);
+      } else {
+        result.push(`${relative}:${fs.readFileSync(absolute).toString('base64')}`);
+      }
+    }
+  };
+  walk(root);
+  return result;
+}
+
 describe('the review opens with skip preselected, and nothing is silent', () => {
   test('a fresh collision is decided skip, and the projection is asked for through the wire', () => {
     const { offer, firstSend } = collidingScenario();
@@ -110,6 +136,87 @@ describe('the review opens with skip preselected, and nothing is silent', () => 
   });
 });
 
+describe('a reply is matched to the request that produced it, not to the phase it lands in', () => {
+  test('an evaluate reply delivered after Confirm leaves the flow in applying until the real apply result arrives', () => {
+    const { workspace, offer } = collidingScenario();
+    // A decision changes, asking a fresh projection, and Confirm is pressed
+    // before that projection's reply lands: the flow moves to 'applying'
+    // with an evaluate reply still outstanding.
+    const flipped = model.setDecision(offer, 'agent:helper', 'overwrite');
+    const confirmed = model.confirm(flipped.state);
+    assert.strictEqual(confirmed.state.phase, 'applying');
+
+    // The stale evaluate reply arrives first. It carries the same operation
+    // and envelope shape an apply reply does, but not this apply's own
+    // requestId, so it must change nothing.
+    const staleEvalReply = realReply(workspace, 'evaluate_package_decisions', flipped.send);
+    assert.strictEqual(staleEvalReply.operation, 'evaluate');
+    const afterStale = model.reply(confirmed.state, staleEvalReply);
+    assert.strictEqual(afterStale.state, confirmed.state, 'the stale projection is ignored outright, by identity');
+    assert.strictEqual(afterStale.state.phase, 'applying');
+
+    // The real apply reply, matched by its own requestId, is the one that
+    // actually lands the flow.
+    const applyReplyMsg = realReply(workspace, 'apply_package_import', confirmed.send);
+    assert.strictEqual(applyReplyMsg.operation, 'apply');
+    const done = model.reply(afterStale.state, applyReplyMsg);
+    assert.strictEqual(done.state.phase, 'done');
+    assert.strictEqual(done.state.written.length, 1);
+  });
+
+  test('an evaluate reply delivered after a cancel-and-resubmit leaves the flow classifying rather than throwing', () => {
+    const { workspace, sourceRoot, offer, firstSend } = collidingScenario();
+    // Cancel discards the review; resubmitting re-enters 'classifying' while
+    // the FIRST review's evaluate request is still out on the wire.
+    const cancelled = model.cancel(offer);
+    const resubmitted = model.submit(cancelled.state, sourceRoot);
+    assert.strictEqual(resubmitted.state.phase, 'classifying');
+
+    const staleEvalReply = realReply(workspace, 'evaluate_package_decisions', firstSend);
+    const result = model.reply(resubmitted.state, staleEvalReply);
+    assert.strictEqual(result.state, resubmitted.state,
+      'the stray projection changes nothing; planReply must refuse a result message rather than read msg.plan.items');
+    assert.strictEqual(result.state.phase, 'classifying');
+  });
+
+  test('a superseded evaluate reply changes nothing once a newer decision has asked its own projection', () => {
+    const { workspace, offer } = collidingScenario();
+    // Two decisions in a row: the first ask is still outstanding when the
+    // second is made, superseding it. Nothing here guarantees delivery
+    // order on the wire, so the older reply is delivered LAST, after the
+    // newer one has already landed, which is the harder direction to get
+    // right.
+    const first = model.setDecision(offer, 'agent:helper', 'overwrite');
+    const second = model.setDecision(first.state, 'agent:helper', 'skip');
+    assert.notStrictEqual(first.send.requestId, second.send.requestId);
+
+    const secondReply = realReply(workspace, 'evaluate_package_decisions', second.send);
+    const afterSecond = model.reply(second.state, secondReply);
+    assert.ok(afterSecond.state.projection, 'the current request\'s own answer is applied');
+
+    const firstReply = realReply(workspace, 'evaluate_package_decisions', first.send);
+    const afterFirst = model.reply(afterSecond.state, firstReply);
+    assert.strictEqual(afterFirst.state, afterSecond.state,
+      'a reply to a decision this review has since moved past must not overwrite the current projection');
+  });
+
+  test('a real evaluate refusal renders the failed state with a re-plan path, matched by the outstanding request', () => {
+    const { workspace, offer } = collidingScenario();
+    // Malformed enough to hit the handler's catch (no sourcePath), but
+    // carrying the offer's own outstanding evaluateRequestId, so this is
+    // read as the answer to the request the offer is actually waiting on
+    // rather than dropped as foreign.
+    const refusal = realReply(workspace, 'evaluate_package_decisions',
+      { requestId: offer.evaluateRequestId, approval: {} });
+    assert.strictEqual(refusal.type, 'package_import_error');
+    assert.strictEqual(refusal.operation, 'evaluate');
+    assert.match(refusal.message, /sourcePath is required/);
+    const failed = model.reply(offer, refusal);
+    assert.strictEqual(failed.state.phase, 'failed');
+    assert.strictEqual(failed.state.canReplan, true);
+  });
+});
+
 describe('the bucket walk: every evaluator outcome has a home on this surface', () => {
   test('the rendering map keys are exactly the evaluator result shape', () => {
     const item = {
@@ -144,6 +251,106 @@ describe('the bucket walk: every evaluator outcome has a home on this surface', 
       assert.ok(words.length > 10, reason);
     }
   });
+
+  test('the evaluator can only ever attach default-conflict to a blocked item, pinned against its own source', () => {
+    // Isolated to the blocked array's own construction, not the whole file:
+    // the reason walk above already covers every reason literal that exists
+    // anywhere in this source, including the ones stale outcomes carry, so
+    // this reads only the slice that builds `blocked` and holds it to one
+    // literal. A second blocking reason added there fails this assertion,
+    // naming itself, rather than reviewCopy's blockedNote silently keeping
+    // the default-conflict sentence for a cause it no longer names.
+    const source = fs.readFileSync(path.join(ROOT, 'lib', 'packages', 'import-evaluate.js'), 'utf8');
+    const blockedBuild = source.slice(source.indexOf('const blocked ='), source.indexOf('const writes ='));
+    assert.ok(blockedBuild.length > 20, 'the parse found the blocked-array construction; an empty read is a broken instrument');
+    const reasons = [...new Set([...blockedBuild.matchAll(/reason: '([a-z-]+)'/g)].map((hit) => hit[1]))];
+    assert.deepStrictEqual(reasons, ['default-conflict']);
+  });
+
+  test('the blocked row\'s copy is the projection\'s own reason, said through reasonWords, not a second hard-coded copy', () => {
+    const { projected } = (() => {
+      const scenario = collidingScenario({
+        incomingAgent: '---\nname: helper\norder: 0\n---\n\nNew default.\n',
+        extraWorkspace: [['.claude/agents/coach.md', '---\nname: coach\norder: 0\n---\n\nC.\n']],
+      });
+      const flipped = model.setDecision(scenario.offer, 'agent:helper', 'overwrite');
+      const evalMsg = realReply(scenario.workspace, 'evaluate_package_decisions', flipped.send);
+      return { projected: model.reply(flipped.state, evalMsg).state };
+    })();
+    const row = model.reviewCopy(projected).rows.filter((r) => r.id === 'agent:helper')[0];
+    assert.strictEqual(row.blockedNote, `Blocked: ${model.reasonWords('default-conflict')}. `
+      + 'Skipping this item keeps your workspace exactly as it is and clears the conflict.');
+  });
+});
+
+describe('the class walk: every rowClass reviewRowClass can produce is rendered, not merely named', () => {
+  // The classes are read from the surface's own source, the same technique
+  // the reason walk uses: a class reviewRowClass can return without a
+  // scenario here that exercises it fails this assertion by name, instead of
+  // the walk quietly trusting whatever set of tests happens to exist today.
+  test('the literals reviewRowClass can return match what this file exercises', () => {
+    const source = fs.readFileSync(path.join(ROOT, 'public', 'packages-install-model.js'), 'utf8');
+    const body = source.slice(source.indexOf('function reviewRowClass('), source.indexOf('function reviewCounts('));
+    // Only the strings the function actually RETURNS: directly after
+    // `return`, or as one branch of the trailing ternary (after `?` or `:`).
+    // 'skip', compared against but never returned, must not count as a class.
+    const classes = [...new Set([...body.matchAll(/(?:return\s+|\?\s*|:\s*)'([a-zA-Z]+)'/g)].map((hit) => hit[1]))].sort();
+    assert.deepStrictEqual(classes, ['blocked', 'collision', 'skippedNew', 'willAdd'],
+      'reviewRowClass can return a class this walk does not know to exercise; teach this walk the new one');
+  });
+
+  test('willAdd and collision both render through one real plan, side by side', () => {
+    // extraSources adds a second, non-colliding item to the same collision
+    // scenario every other describe block already uses, so the willAdd row
+    // is produced by the real plan handler rather than a hand-built state.
+    const { offer } = collidingScenario({
+      extraSources: [['.claude/skills/writer/SKILL.md', 'incoming skill']],
+    });
+    const copy = model.reviewCopy(offer);
+    const willAddRow = copy.rows.filter((r) => r.id === 'skill:writer')[0];
+    assert.strictEqual(willAddRow.rowClass, 'willAdd');
+    assert.strictEqual(willAddRow.tone, 'success');
+    assert.strictEqual(willAddRow.compare, null);
+    const collisionRow = copy.rows.filter((r) => r.id === 'agent:helper')[0];
+    assert.strictEqual(collisionRow.rowClass, 'collision');
+    assert.strictEqual(collisionRow.tone, 'neutral');
+    assert.ok(collisionRow.compare, 'a collision carries the have/arrives compare');
+  });
+
+  test('skippedNew: a new item explicitly skipped renders the row that offers to add it back', () => {
+    const { offer } = collidingScenario({
+      extraSources: [['.claude/skills/writer/SKILL.md', 'incoming skill']],
+    });
+    const skipped = model.setDecision(offer, 'skill:writer', 'skip');
+    assert.strictEqual(skipped.send.type, 'evaluate_package_decisions');
+    const row = model.reviewCopy(skipped.state).rows.filter((r) => r.id === 'skill:writer')[0];
+    assert.strictEqual(row.rowClass, 'skippedNew');
+    assert.strictEqual(row.tone, 'neutral');
+    assert.strictEqual(row.compare, null);
+  });
+
+  // 'blocked' is exercised end to end by the describe block above (a real
+  // evaluator refusal driving reviewCopy's blockedNote and blockedAction),
+  // against a real default-conflict rather than a hand-built projection.
+
+  test('a byte-identical collision renders the compare copy that says so, judged by the real digests', () => {
+    // Skills are used here rather than agents: materialise() rewrites an
+    // agent with a provenance line, so an agent's approvedDigest can never
+    // equal a bare workspace copy's plannedDigest, and this branch could
+    // never be reached with the agent-based scenario every other test uses.
+    const workspace = makeTempDir('cd-ws-');
+    const sourceRoot = makeTempDir('cd-src-');
+    write(workspace, '.claude/skills/notes/SKILL.md', 'identical content');
+    write(sourceRoot, '.claude/skills/notes/SKILL.md', 'identical content');
+    const planMsg = realReply(workspace, 'plan_package_import', {
+      sourcePath: sourceRoot, source: { id: sourceRoot, reference: null },
+    });
+    const offer = model.reply(model.submit(model.initial(), sourceRoot).state, planMsg).state;
+    const row = model.reviewCopy(offer).rows.filter((r) => r.id === 'skill:notes')[0];
+    assert.strictEqual(row.rowClass, 'collision');
+    assert.match(row.compare.have, /identical to what arrives/);
+    assert.match(row.compare.arrives, /byte for byte what you have/);
+  });
 });
 
 describe('the review-void state is the only danger, proven by the tone walk', () => {
@@ -153,6 +360,28 @@ describe('the review-void state is the only danger, proven by the tone walk', ()
       'nothing on this surface executes anything, so nothing but the voided review may alarm');
     assert.strictEqual(model.staleCopy().tone, 'danger');
     assert.match(model.staleCopy().body, /discarded and nothing was written/);
+  });
+
+  test('the danger tone the model claims is bound to the one CSS carrier that actually paints it', () => {
+    // REVIEW_TONES and the data-tone attribute it feeds are markup for tests
+    // to read; no selector on this surface matches [data-tone]. What a
+    // person actually sees comes from the class-based rules below, so this
+    // walk reads those rules directly rather than trusting the model's own
+    // claim about itself. A second review-surface rule reaching for
+    // var(--danger) turns this red even though REVIEW_TONES never changes.
+    const css = fs.readFileSync(path.join(ROOT, 'public', 'styles', 'views', 'settings.css'), 'utf8');
+    // Scoped to the review card's own section (through the stale card at
+    // the end of the file), not every packages-prefixed rule in the
+    // stylesheet: the field error and failed-state cards are earlier,
+    // separate states this walk is not about.
+    const stripped = css.slice(css.indexOf('/* The collision review card.')).replace(/\/\*[\s\S]*?\*\//g, '');
+    assert.ok(stripped.length > 100, 'the review card section marker moved; update this slice to match');
+    const rules = [...stripped.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+      .map(([, selector, body]) => ({ selector: selector.trim(), body }));
+    assert.ok(rules.length > 10, 'the parse found the review-surface rules; an empty read here is a broken instrument');
+    const dangerSelectors = rules.filter(({ body }) => body.includes('var(--danger)')).map((r) => r.selector).sort();
+    assert.deepStrictEqual(dangerSelectors, ['.packages-stale-body', '.packages-stale-card'],
+      'a second review-surface rule now reaches for the danger token; the tone walk holds this to exactly the voided review');
   });
 
   test('a stale projection voids the review, and a stale apply reply is never a success', () => {
@@ -222,15 +451,22 @@ describe('applying decisions is atomic with the import transaction', () => {
       extraSources: [['.claude/skills/writer/SKILL.md', 'incoming skill']],
     });
     const approval = decide(planMsg.plan, { 'agent:helper': 'overwrite', 'skill:writer': 'add' });
-    const before = fs.readFileSync(path.join(workspace, '.claude/agents/helper.md'), 'utf8');
+    const before = workspaceTree(workspace);
     assert.throws(() => applyImport(workspace, sourceRoot, approval, {
       afterStep: () => { throw new Error('power gone mid-apply'); },
     }), /power gone/);
+    // The atomicity promise itself: the workspace right after the failure,
+    // not after some later recovery, equals the workspace right before the
+    // attempt. Every path and every byte, including the absence of a
+    // receipts directory and of any journal-visible content the failed
+    // transaction might have left behind.
+    assert.deepStrictEqual(workspaceTree(workspace), before);
     // The next apply recovers the interrupted transaction before looking, so
-    // the workspace reads as it did before anything started.
+    // the workspace reads as it did before anything started, and can proceed
+    // as its own, separate claim, not as the proof of rollback above.
     const result = applyImport(workspace, sourceRoot, approval, { receipt: {} });
     assert.strictEqual(result.status, 'ready');
-    assert.notStrictEqual(fs.readFileSync(path.join(workspace, '.claude/agents/helper.md'), 'utf8'), before,
+    assert.notDeepStrictEqual(workspaceTree(workspace), before,
       'sanity: the completed apply really overwrites');
   });
 

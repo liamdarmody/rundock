@@ -73,6 +73,18 @@ const MUTATIONS = [
   [MODEL, 'a stale projection voids the review',
     "    if (msg.status === 'stale') {\n      return { state: { phase: 'stale', sourcePath: state.sourcePath } };\n    }",
     ''],
+  // A reply is matched to the request that produced it: an evaluate reply
+  // still in flight when confirm is pressed must not be read as the apply
+  // this phase is actually waiting on, even though both share one envelope.
+  [MODEL, 'an apply reply is matched to the request that asked for it, not just the phase',
+    "    if (msg.operation !== 'apply' || msg.requestId !== state.requestId) return { state };\n",
+    ''],
+  // The same identity check on the other side: a decision made after this
+  // projection was asked for supersedes it, and the superseded reply must
+  // not overwrite the newer one it lost the race to.
+  [MODEL, 'an evaluate reply is matched to the request that asked for it, not just the phase',
+    "    if (msg.operation !== 'evaluate' || msg.requestId !== state.evaluateRequestId) return { state };\n",
+    ''],
   // The apply transaction recovers any interrupted predecessor before it
   // looks, so a half-committed workspace can never be read as current truth.
   [APPLY_RECOVERY, 'an interrupted transaction is recovered before anything is read',

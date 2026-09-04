@@ -90,7 +90,7 @@ function packagesConnectionLost() {
   if (out.state !== packagesInstall) packagesApplyTransition(out);
 }
 
-// The PL5 review card: every offered item as a row, collisions carrying
+// The collision review card: every offered item as a row, collisions carrying
 // their own overwrite-or-skip choice with skip preselected, blocked rows
 // carrying the one action that clears them, and a confirm whose label says
 // exactly what pressing it does. All words come from the model.
