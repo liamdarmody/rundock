@@ -96,6 +96,14 @@ const MUTATIONS = [
   [HANDLERS, 'declining discards the acquired snapshot',
     '  if (pending) discardAcquisition(pending.snapshot);',
     ''],
+  // Skip the discard in beginExtensionPlan's own catch and a snapshot that
+  // was fetched but then failed to plan (a fetch that fails after acquiring
+  // some bytes; a repository with no rundock.json) leaks its temporary
+  // directory instead of leaving nothing behind, the same promise a decline
+  // makes for an offer the person actually saw.
+  [HANDLERS, 'a failed plan discards whatever the acquirer already fetched',
+    '    discardAcquisition(snapshot);',
+    ''],
 
   // ===== AN UPDATE READS ITS URL FROM THE RECORD, NEVER FROM THE CALLER =====
   // Let a caller-supplied url win over the record's own and the whole point
@@ -112,8 +120,12 @@ const MUTATIONS = [
   // meant to send: the named refusal a caller could act on is gone.
   [HANDLERS, 'planning an update for a name with no installed record is refused by name',
     `    if (!record) throw new Error(\`no extension named "\${msg.name}" is installed\`);
-    if (!record.source || typeof record.source.url !== 'string') {`,
-    `    if (!record.source || typeof record.source.url !== 'string') {`],
+    if (!record.source || typeof record.source.url !== 'string') {
+      throw new Error(\`the installed record for "\${msg.name}" carries no source url; refusing to update\`);
+    }`,
+    `    if (!record.source || typeof record.source.url !== 'string') {
+      throw new Error(\`the installed record for "\${msg.name}" carries no source url; refusing to update\`);
+    }`],
   // Skip the missing-source check and a record with no source field falls
   // straight into parseGitHubSource with an undefined url, refused only by
   // accident rather than by a stated rule about what this record must carry.
@@ -128,6 +140,14 @@ const MUTATIONS = [
   [HANDLERS, 'the stored url is revalidated through the same GitHub-source validation a fresh install uses',
     '    source = parseGitHubSource(record.source.url, msg.reference);',
     '    source = { url: record.source.url, reference: msg.reference };'],
+  // Skip the revalidation on the update-check path and the persisted url
+  // reaches listRefsWithGit's ls-remote argv unchecked: the sibling
+  // update-plan path above already revalidates this same field for exactly
+  // this reason, and a records file that arrives tampered or shared must not
+  // be trusted here either.
+  [HANDLERS, 'the stored url is revalidated on the update-check path before it can reach the ref-lister',
+    '    const { url } = parseGitHubSource(record.source.url, record.source.reference);',
+    '    const url = record.source.url;'],
 
   // ===== CONSENT BINDS TO THE WORKSPACE IT WAS SHOWN AGAINST =====
   // Skip the workspace check and a confirm answered after the server moved

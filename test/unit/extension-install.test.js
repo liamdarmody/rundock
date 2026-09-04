@@ -349,6 +349,26 @@ function withWorkspace(fn) {
   try { return fn(ws); } finally { config.setWorkspace(previous); }
 }
 
+describe('the module wires its real dependencies by default, not only the fakes the suite injects', () => {
+  test('extensionDeps.acquire and .listRefs are acquireWithGit and listRefsWithGit by identity, before any override', () => {
+    // wireExtensionDeps({}) merges nothing in and returns what extensionDeps
+    // was before this call, so read here, before any other test in this file
+    // has overridden it, this is the module's own default wiring rather than
+    // a fake shaped like it. Restored immediately so no later test sees a
+    // different object than the one it already expects.
+    const defaults = handlers.wireExtensionDeps({});
+    try {
+      assert.strictEqual(defaults.acquire, acquireWithGit,
+        'the default acquirer must be the real acquireWithGit, checked by identity so a rename or '
+        + 're-point of the default would fail this even if the shape still looked right');
+      assert.strictEqual(defaults.listRefs, listRefsWithGit,
+        'the default ref-lister must be the real listRefsWithGit, checked by identity for the same reason');
+    } finally {
+      handlers.wireExtensionDeps(defaults);
+    }
+  });
+});
+
 describe('consent order at the wire: plan, then one answer', () => {
   test('decline discards the acquired snapshot and the workspace is untouched', () => {
     withWorkspace((ws) => {
@@ -397,6 +417,72 @@ describe('consent order at the wire: plan, then one answer', () => {
         assert.strictEqual(sock.sent[0].type, 'extension_install_error');
         assert.strictEqual(sock.sent[0].code, 'unpinned-reference');
         assert.strictEqual(acquired, 0, 'refusal comes before any fetch, so nothing ever reaches a git argv');
+      } finally {
+        handlers.wireExtensionDeps(previousDeps);
+      }
+    });
+  });
+});
+
+describe('a failure between acquire and offer discards the snapshot and issues no token', () => {
+  test('a real acquire-failed from the acquirer is answered as one error, and nothing it created survives', () => {
+    withWorkspace(() => {
+      // A real repository, reached with no network, pinned at a reference
+      // that does not exist: acquireWithGit itself refuses with code
+      // 'acquire-failed', exactly the failure beginExtensionPlan's try block
+      // has never been driven through before.
+      const repo = tempDir('ext-acquire-fail-repo-');
+      const git = (args) => execFileSync('git', args, { cwd: repo, stdio: ['ignore', 'pipe', 'pipe'] });
+      git(['init', '--quiet']);
+      git(['config', 'user.email', 'test@example.com']);
+      git(['config', 'user.name', 'Test']);
+      fs.writeFileSync(path.join(repo, 'marker.txt'), 'x\n');
+      git(['add', '.']);
+      git(['commit', '--quiet', '-m', 'first']);
+      git(['tag', 'v1.0.0']);
+
+      const before = new Set(fs.readdirSync(os.tmpdir()).filter((n) => n.startsWith('rundock-ext-')));
+      const previousDeps = handlers.wireExtensionDeps({
+        acquire: () => acquireWithGit({ url: repo, reference: 'v9.9.9-does-not-exist' }),
+      });
+      try {
+        const sock = captureWs();
+        handlers.handlePlanExtensionInstall({}, sock, { type: 'plan_extension_install', url: 'someone/test-ext', reference: 'v1.0.0' });
+        assert.strictEqual(sock.sent.length, 1, 'exactly one reply answers the failed plan');
+        assert.strictEqual(sock.sent[0].type, 'extension_install_error');
+        assert.strictEqual(sock.sent[0].code, 'acquire-failed');
+
+        const after = new Set(fs.readdirSync(os.tmpdir()).filter((n) => n.startsWith('rundock-ext-')));
+        assert.deepStrictEqual([...after].filter((n) => !before.has(n)), [],
+          'nothing the failed acquisition created survives it');
+
+        handlers.handleConfirmExtensionInstall({}, sock, { type: 'confirm_extension_install', token: 'ext-never-issued' });
+        assert.strictEqual(sock.sent[1].type, 'extension_install_error',
+          'a plan that never reached the offer issued no token; any confirm answers a refusal');
+        assert.match(sock.sent[1].message, /nothing is awaiting this confirmation/);
+      } finally {
+        handlers.wireExtensionDeps(previousDeps);
+      }
+    });
+  });
+
+  test('a fetched snapshot with no rundock.json is answered as one not-an-extension error, and the snapshot is deleted', () => {
+    withWorkspace(() => {
+      const snap = tempDir('ext-no-manifest-');
+      const previousDeps = handlers.wireExtensionDeps({ acquire: () => snap });
+      try {
+        const sock = captureWs();
+        handlers.handlePlanExtensionInstall({}, sock, { type: 'plan_extension_install', url: 'someone/test-ext', reference: 'v1.0.0' });
+        assert.strictEqual(sock.sent.length, 1, 'exactly one reply answers the failed plan');
+        assert.strictEqual(sock.sent[0].type, 'extension_install_error');
+        assert.strictEqual(sock.sent[0].code, 'not-an-extension');
+        assert.strictEqual(fs.existsSync(snap), false,
+          'the acquired snapshot is discarded when planning it fails, exactly as a decline discards it');
+
+        handlers.handleConfirmExtensionInstall({}, sock, { type: 'confirm_extension_install', token: 'ext-never-issued' });
+        assert.strictEqual(sock.sent[1].type, 'extension_install_error',
+          'a plan that never reached the offer issued no token; any confirm answers a refusal');
+        assert.match(sock.sent[1].message, /nothing is awaiting this confirmation/);
       } finally {
         handlers.wireExtensionDeps(previousDeps);
       }
@@ -548,6 +634,60 @@ describe('install, the record, and the update check that reads it', () => {
         assert.deepStrictEqual(status.newer, ['v1.1.0'], 'the moved reference is reported');
         assert.deepStrictEqual(asked, ['https://github.com/someone/test-ext'],
           'the URL the remote was asked about came from the record, nowhere else');
+      } finally {
+        handlers.wireExtensionDeps(previousDeps);
+      }
+    });
+  });
+
+  test('a stored url that is argv-shaped is refused before the update check runs, and listRefs is never called', () => {
+    withWorkspace((ws) => {
+      const recordsPath = path.join(ws, ...RECORDS_PATH.split('/'));
+      fs.mkdirSync(path.dirname(recordsPath), { recursive: true });
+      fs.writeFileSync(recordsPath, JSON.stringify({
+        schema: 'rundock.extensions/v1',
+        extensions: [{
+          name: 'test-ext', version: '1.0.0', entry: 'view/index.html', match: '*.md',
+          source: { url: '--upload-pack=evil', reference: 'v1.0.0' },
+          installedAt: '2026-01-01T00:00:00.000Z', root: `${EXTENSIONS_ROOT}/test-ext`,
+        }],
+      }, null, 2));
+      let asked = 0;
+      const previousDeps = handlers.wireExtensionDeps({ listRefs: () => { asked += 1; return []; } });
+      try {
+        const sock = captureWs();
+        handlers.handleCheckExtensionUpdate({}, sock, { type: 'check_extension_update', name: 'test-ext' });
+        assert.strictEqual(sock.sent[0].type, 'extension_install_error');
+        assert.match(sock.sent[0].message, /not a GitHub repository/);
+        assert.strictEqual(asked, 0,
+          'the argv-shaped stored url failed validation before the ref-lister was ever called');
+      } finally {
+        handlers.wireExtensionDeps(previousDeps);
+      }
+    });
+  });
+
+  test('a stored url that is not a canonical GitHub url is refused before the update check runs, and listRefs is never called', () => {
+    withWorkspace((ws) => {
+      const recordsPath = path.join(ws, ...RECORDS_PATH.split('/'));
+      fs.mkdirSync(path.dirname(recordsPath), { recursive: true });
+      fs.writeFileSync(recordsPath, JSON.stringify({
+        schema: 'rundock.extensions/v1',
+        extensions: [{
+          name: 'test-ext', version: '1.0.0', entry: 'view/index.html', match: '*.md',
+          source: { url: 'not a url at all', reference: 'v1.0.0' },
+          installedAt: '2026-01-01T00:00:00.000Z', root: `${EXTENSIONS_ROOT}/test-ext`,
+        }],
+      }, null, 2));
+      let asked = 0;
+      const previousDeps = handlers.wireExtensionDeps({ listRefs: () => { asked += 1; return []; } });
+      try {
+        const sock = captureWs();
+        handlers.handleCheckExtensionUpdate({}, sock, { type: 'check_extension_update', name: 'test-ext' });
+        assert.strictEqual(sock.sent[0].type, 'extension_install_error');
+        assert.match(sock.sent[0].message, /not a GitHub repository/);
+        assert.strictEqual(asked, 0,
+          'the non-GitHub stored url failed validation before the ref-lister was ever called');
       } finally {
         handlers.wireExtensionDeps(previousDeps);
       }
