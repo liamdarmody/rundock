@@ -323,6 +323,12 @@ function closeOpenFile() {
   boardPendingSave = null;
   destroyActiveFileViewer();      // artifact review + iframe/board viewer
   destroyTiptapEditorIfActive();  // tiptap editor
+  // The extension mount is a file-scoped surface too, released in the one
+  // place that releases them all: without this, a workspace switch leaves
+  // the previous workspace's frame in the pane with its mediator still
+  // listening, and its open messages driving navigation against the new
+  // workspace.
+  releaseExtensionMount();
   currentFilePath = null;
   rawFileContent = ''; fileFrontmatter = ''; fileBody = '';
   editorMode = 'preview';
@@ -636,6 +642,13 @@ function loadFileContent(path, content) {
   // lands as one registry entry + one surface function, no dispatch edits.
   loadViewersModule().then((viewers) => {
     if (currentFilePath !== path) return; // stale: another file opened while the module loaded
+    // EVERY OPEN RELEASES THE LIVE MOUNT, before the board-or-seam decision,
+    // so the board branch that returns early cannot leave a previous
+    // extension's frame and listener alive in the pane it is about to claim.
+    // The token bump also invalidates any seam open still resolving, so a
+    // board opening after a claimed file cannot be repainted by the earlier
+    // mount's late callback.
+    releaseExtensionMount();
     // A markdown file whose frontmatter carries the kanban-plugin key opens as
     // a board (detection is content-based, so it cannot ride the path-keyed
     // classify table); everything else dispatches by file kind.
@@ -644,8 +657,141 @@ function loadFileContent(path, content) {
       return;
     }
     const surface = FILE_SURFACES[viewers.classify(path)] || openBinaryOrUnsupportedFile;
-    surface(viewers, path, content);
+    // THE RENDER-TARGET SEAM. An installed extension may claim this file's
+    // extension through the renderer registry; a claimed file mounts through
+    // the sandboxed host, and everything else falls through to the plain
+    // surface exactly as before. The plain surface is also every failure's
+    // destination: an unregistered target, a mount that cannot be built, a
+    // view that errors or never starts, all land on `surface` with the
+    // reason named, because the one thing this seam is forbidden to produce
+    // is a broken frame where a working plain rendering used to be.
+    openThroughRendererSeam(viewers, path, content, surface);
   });
+}
+
+// The seam's own function, cut small so a test can drive it without the rest
+// of the file: consult the registry, mount through the host on a claim,
+// degrade to the plain surface with the failure named on anything else.
+function openThroughRendererSeam(viewers, path, content, surface) {
+  // A PER-OPEN TOKEN, because currentFilePath cannot tell two opens of ONE
+  // path apart. A double-click sends read_file twice and a watcher push
+  // re-opens the same path; without a token both resolutions pass a
+  // path-equality guard and both mount, leaking the first frame and its
+  // listener, and the first's superseded degrade then repaints over the
+  // live second mount. The token is captured at entry and checked in every
+  // async callback: a superseded open neither mounts nor degrades.
+  const token = ++extensionSeamToken;
+  const superseded = () => currentFilePath !== path || token !== extensionSeamToken;
+  const registry = window.rundockRendererRegistry;
+  const claim = registry && registry.rendererFor ? registry.rendererFor(path) : null;
+  if (!claim || !claim.registered) {
+    surface(viewers, path, content);
+    return;
+  }
+  Promise.all([
+    loadExtensionHost(),
+    fetchExtensionUi(claim.extension, claim.renderer),
+  ]).then(([host, payload]) => {
+    if (superseded()) return;
+    // SUCCESS IS AN ENTRY, NOT A FLAG. The server sends its payload without
+    // an `ok`, so the seam decides from the field a mount actually needs,
+    // which means a transport can forward the server message verbatim. A
+    // reply that names a reason, or carries no entry string, degrades.
+    if (!payload || typeof payload.entry !== 'string') {
+      surface(viewers, path, content);
+      noteRendererFailure(payload && payload.reason
+        ? payload.reason : 'the renderer payload carried no entry to mount');
+      return;
+    }
+    const pane = claimEditorPane();
+    activeExtensionMount = host.mountExtension({
+      paneElement: pane,
+      payload,
+      onOpen: (target) => openWikilink(target),
+      onDegrade: (reason) => {
+        // A superseded mount that degrades tears down its own frame (the
+        // host does that before calling onDegrade) but must not repaint the
+        // surface: a newer open owns the pane now. It also nulls the shared
+        // handle only when it still owns it, so a later closeOpenFile is
+        // never handed a dead handle.
+        if (token === extensionSeamToken) activeExtensionMount = null;
+        if (superseded()) return;
+        surface(viewers, path, content);
+        noteRendererFailure(reason);
+      },
+    });
+  }).catch((e) => {
+    if (superseded()) return;
+    surface(viewers, path, content);
+    noteRendererFailure(String(e && e.message || e));
+  });
+}
+
+// CLAIM THE EDITOR PANE, the way every surface opener does before it draws.
+// Factored so an extension mount is a peer of the other surfaces rather than
+// an overlay on whichever one was open: it destroys the live viewer and
+// Tiptap editor (so no pending or future editor save can fire against the
+// newly opened path), cancels the debounced editor save, hides the Tiptap
+// pane, the textarea and the mode toggles, and resets editor-content. Every
+// opener below and this seam call it, so the claim has one definition.
+function claimEditorPane() {
+  destroyActiveFileViewer();
+  destroyTiptapEditorIfActive();
+  clearTimeout(_tiptapSaveTimer);
+  document.getElementById('tiptap-editor-pane').classList.add('hidden');
+  document.getElementById('editor-textarea').classList.add('hidden');
+  document.getElementById('toggle-preview').classList.add('hidden');
+  document.getElementById('toggle-edit').classList.add('hidden');
+  const pane = document.getElementById('editor-content');
+  pane.classList.remove('hidden');
+  pane.className = 'editor-content';
+  pane.textContent = '';
+  return pane;
+}
+
+// The host module loader, overridable so the seam can be driven in a test
+// without a real dynamic import (which resolves against the filesystem root
+// under Node and would always fail). Product code takes the import; a test
+// assigns window.rundockExtensionHostLoader to hand in a stub host.
+function loadExtensionHost() {
+  const loader = window.rundockExtensionHostLoader;
+  if (typeof loader === 'function') return Promise.resolve(loader());
+  return import('/extension-host.js');
+}
+
+// The registered payload fetcher. Overridable so the seam is testable and so
+// the integration that delivers extension rosters can supply its own
+// transport; until one is registered the seam answers as an unregistered
+// target would, which renders the plain surface.
+function fetchExtensionUi(extensionId, rendererId) {
+  const fetcher = window.rundockExtensionUiFetcher;
+  if (typeof fetcher !== 'function') {
+    return Promise.resolve({ reason: 'no extension transport is registered yet' });
+  }
+  return Promise.resolve(fetcher(extensionId, rendererId));
+}
+
+let activeExtensionMount = null;
+// Monotonic per-open token: every seam entry claims the next value, and an
+// async callback whose token is no longer current abandons its work.
+let extensionSeamToken = 0;
+
+// Release the live extension mount and invalidate any pending seam open. One
+// definition, called before every file open and by closeOpenFile, so no
+// frame or mediator listener outlives its file or its workspace.
+function releaseExtensionMount() {
+  extensionSeamToken += 1;
+  if (activeExtensionMount) { activeExtensionMount.teardown(); activeExtensionMount = null; }
+}
+
+// A renderer failure is a note beside the plain rendering, never a blank:
+// the person keeps their file, and the message says what stood down.
+function noteRendererFailure(reason) {
+  const status = document.getElementById('editor-status');
+  if (status) {
+    status.textContent = `Extension renderer stood down: ${reason}`;
+    status.style.color = 'var(--attention)';
+  }
 }
 
 // Board view: a writable registry view. Mounts the board into the editor pane
