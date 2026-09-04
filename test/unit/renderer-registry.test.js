@@ -95,11 +95,17 @@ describe('the file view seam degrades, and never mounts blind', () => {
   // Drive the seam with an injectable host loader and transport, so each path
   // is reachable and distinguishable rather than all collapsing into the
   // dynamic-import failure a Node test environment forces.
-  function driveSeam({ registry, fetcher, hostLoader, currentPath = 'a.chart' }) {
+  // Build a live scope holding the real seam, its helpers, and the shared
+  // release, with activeExtensionMount and extensionSeamToken as mutable
+  // closure vars the cut functions assign, so a test can drive two opens and
+  // read which mount survived. The four functions are cut from the shipped
+  // source, so the code under test is the code that runs in the product.
+  function seamScope({ registry, fetcher, hostLoader, currentPath = 'a.chart' }) {
     const seam = cut(/function openThroughRendererSeam\(viewers, path, content, surface\) \{[\s\S]*?\n\}/, 'openThroughRendererSeam');
     const fetcherFn = cut(/function fetchExtensionUi\(extensionId, rendererId\) \{[\s\S]*?\n\}/, 'fetchExtensionUi');
     const loaderFn = cut(/function loadExtensionHost\(\) \{[\s\S]*?\n\}/, 'loadExtensionHost');
     const claimFn = cut(/function claimEditorPane\(\) \{[\s\S]*?\n\}/, 'claimEditorPane');
+    const releaseFn = cut(/function releaseExtensionMount\(\) \{[\s\S]*?\n\}/, 'releaseExtensionMount');
     const surfaced = [];
     const noted = [];
     const paneStub = { classList: { remove() {}, add() {} }, className: '', textContent: '' };
@@ -108,21 +114,32 @@ describe('the file view seam degrades, and never mounts blind', () => {
       rundockExtensionUiFetcher: fetcher,
       rundockExtensionHostLoader: hostLoader,
     };
-    const fn = new Function(
+    const api = new Function(
       'window', 'document', 'currentFilePath', 'noteRendererFailure',
-      'openWikilink', 'activeExtensionMount', 'destroyActiveFileViewer', 'destroyTiptapEditorIfActive', 'clearTimeout', '_tiptapSaveTimer',
-      `${claimFn}; ${loaderFn}; ${fetcherFn}; ${seam}; return openThroughRendererSeam;`,
+      'openWikilink', 'destroyActiveFileViewer', 'destroyTiptapEditorIfActive', 'clearTimeout', '_tiptapSaveTimer',
+      `let activeExtensionMount = null; let extensionSeamToken = 0;
+       ${claimFn}; ${loaderFn}; ${fetcherFn}; ${releaseFn}; ${seam};
+       return {
+         open: (surface) => openThroughRendererSeam({}, currentFilePath, 'content', surface),
+         release: releaseExtensionMount,
+         mount: () => activeExtensionMount,
+         setMount: (h) => { activeExtensionMount = h; },
+       };`,
     )(
       windowStub,
       { getElementById: () => paneStub },
       currentPath,
       (reason) => noted.push(reason),
       () => {},
-      null,
       () => {}, () => {}, () => {}, null,
     );
-    fn({}, currentPath, 'content', (v, p) => surfaced.push(p));
-    return { surfaced, noted, windowStub };
+    return { api, surfaced, noted, surface: (v, p) => surfaced.push(p) };
+  }
+
+  function driveSeam(opts) {
+    const scope = seamScope(opts);
+    scope.api.open(scope.surface);
+    return { surfaced: scope.surfaced, noted: scope.noted };
   }
 
   const CLAIMING_REGISTRY = { rendererFor: () => ({ registered: true, extension: 'charts', renderer: 'chart' }) };
@@ -191,6 +208,60 @@ describe('the file view seam degrades, and never mounts blind', () => {
     await new Promise((r) => setTimeout(r, 20));
     assert.deepStrictEqual(surfaced, ['a.chart']);
     assert.deepStrictEqual(noted, ['the renderer is broken']);
+  });
+
+  test('two opens of one path over a slow transport leave exactly one mount and no repaint', async () => {
+    // The double-mount leak: currentFilePath cannot tell two opens of ONE
+    // path apart, and the first has not mounted when the second starts, so
+    // without a per-open token both resolve, both mount, the first frame and
+    // listener leak, and the first's superseded degrade repaints over the
+    // live second mount. The token must let exactly one win.
+    const mounts = [];
+    let hostLoads = 0;
+    // Both opens run before either transport resolves; the loader counts
+    // mounts and hands back tracked handles whose teardown is recorded.
+    const scope2 = seamScope({
+      registry: CLAIMING_REGISTRY,
+      fetcher: () => new Promise((r) => setTimeout(() => r({ entry: 'draw();', styles: [] }), 5)),
+      hostLoader: () => Promise.resolve({
+        mountExtension: (opts) => {
+          hostLoads += 1;
+          const handle = { torn: false, opts, teardown() { this.torn = true; } };
+          mounts.push(handle);
+          return handle;
+        },
+      }),
+    });
+    scope2.api.open((v, p) => scope2.surfaced.push(p));
+    scope2.api.open((v, p) => scope2.surfaced.push(p));
+    await new Promise((r) => setTimeout(r, 30));
+    assert.strictEqual(hostLoads, 1,
+      'exactly one open mounted: the superseded one abandoned before mounting');
+    assert.ok(scope2.api.mount(), 'a live mount is held');
+    assert.strictEqual(scope2.api.mount(), mounts[0],
+      'the one that mounted is the tracked handle, not overwritten and leaked');
+    assert.deepStrictEqual(scope2.surfaced, [],
+      'the superseded open did not repaint the plain surface over the live mount');
+  });
+
+  test('releaseExtensionMount tears down a live handle and clears it, so no mount survives a file or workspace switch', () => {
+    const scope = seamScope({ registry: CLAIMING_REGISTRY });
+    let torn = false;
+    scope.api.setMount({ teardown() { torn = true; } });
+    scope.api.release();
+    assert.strictEqual(torn, true, 'the live mount was torn down');
+    assert.strictEqual(scope.api.mount(), null, 'and the reference cleared, so a later release is handed no dead handle');
+  });
+
+  test('both file-open and file-close release the extension mount through the one helper', () => {
+    // The two call sites the contract points to as the runtime story for a
+    // mount surviving a file switch and a workspace switch. Pinned so removing
+    // either call reddens: loadFileContent releases before the board-or-seam
+    // decision, and closeOpenFile releases on a workspace switch.
+    assert.match(FILES_SRC, /releaseExtensionMount\(\);\n\s*\/\/ A markdown file whose frontmatter/,
+      'loadFileContent releases the mount before the board-or-seam decision, so the board branch is covered too');
+    assert.match(FILES_SRC, /releaseExtensionMount\(\);\n\s*currentFilePath = null;/,
+      'closeOpenFile releases the mount on a workspace switch');
   });
 
   test('the dispatch routes every open through the seam', () => {

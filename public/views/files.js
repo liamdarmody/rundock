@@ -325,7 +325,7 @@ function closeOpenFile() {
   // the previous workspace's frame in the pane with its mediator still
   // listening, and its open messages driving navigation against the new
   // workspace.
-  if (activeExtensionMount) { activeExtensionMount.teardown(); activeExtensionMount = null; }
+  releaseExtensionMount();
   currentFilePath = null;
   rawFileContent = ''; fileFrontmatter = ''; fileBody = '';
   editorMode = 'preview';
@@ -627,6 +627,13 @@ function loadFileContent(path, content) {
   // lands as one registry entry + one surface function, no dispatch edits.
   loadViewersModule().then((viewers) => {
     if (currentFilePath !== path) return; // stale: another file opened while the module loaded
+    // EVERY OPEN RELEASES THE LIVE MOUNT, before the board-or-seam decision,
+    // so the board branch that returns early cannot leave a previous
+    // extension's frame and listener alive in the pane it is about to claim.
+    // The token bump also invalidates any seam open still resolving, so a
+    // board opening after a claimed file cannot be repainted by the earlier
+    // mount's late callback.
+    releaseExtensionMount();
     // A markdown file whose frontmatter carries the kanban-plugin key opens as
     // a board (detection is content-based, so it cannot ride the path-keyed
     // classify table); everything else dispatches by file kind.
@@ -651,9 +658,15 @@ function loadFileContent(path, content) {
 // of the file: consult the registry, mount through the host on a claim,
 // degrade to the plain surface with the failure named on anything else.
 function openThroughRendererSeam(viewers, path, content, surface) {
-  // Whatever renders next, the previous mount's listener must not outlive
-  // its file: torn down here, on every open, before anything is decided.
-  if (activeExtensionMount) { activeExtensionMount.teardown(); activeExtensionMount = null; }
+  // A PER-OPEN TOKEN, because currentFilePath cannot tell two opens of ONE
+  // path apart. A double-click sends read_file twice and a watcher push
+  // re-opens the same path; without a token both resolutions pass a
+  // path-equality guard and both mount, leaking the first frame and its
+  // listener, and the first's superseded degrade then repaints over the
+  // live second mount. The token is captured at entry and checked in every
+  // async callback: a superseded open neither mounts nor degrades.
+  const token = ++extensionSeamToken;
+  const superseded = () => currentFilePath !== path || token !== extensionSeamToken;
   const registry = window.rundockRendererRegistry;
   const claim = registry && registry.rendererFor ? registry.rendererFor(path) : null;
   if (!claim || !claim.registered) {
@@ -664,7 +677,7 @@ function openThroughRendererSeam(viewers, path, content, surface) {
     loadExtensionHost(),
     fetchExtensionUi(claim.extension, claim.renderer),
   ]).then(([host, payload]) => {
-    if (currentFilePath !== path) return; // stale
+    if (superseded()) return;
     // SUCCESS IS AN ENTRY, NOT A FLAG. The server sends its payload without
     // an `ok`, so the seam decides from the field a mount actually needs,
     // which means a transport can forward the server message verbatim. A
@@ -681,13 +694,19 @@ function openThroughRendererSeam(viewers, path, content, surface) {
       payload,
       onOpen: (target) => openWikilink(target),
       onDegrade: (reason) => {
-        if (currentFilePath !== path) return;
+        // A superseded mount that degrades tears down its own frame (the
+        // host does that before calling onDegrade) but must not repaint the
+        // surface: a newer open owns the pane now. It also nulls the shared
+        // handle only when it still owns it, so a later closeOpenFile is
+        // never handed a dead handle.
+        if (token === extensionSeamToken) activeExtensionMount = null;
+        if (superseded()) return;
         surface(viewers, path, content);
         noteRendererFailure(reason);
       },
     });
   }).catch((e) => {
-    if (currentFilePath !== path) return;
+    if (superseded()) return;
     surface(viewers, path, content);
     noteRendererFailure(String(e && e.message || e));
   });
@@ -738,6 +757,17 @@ function fetchExtensionUi(extensionId, rendererId) {
 }
 
 let activeExtensionMount = null;
+// Monotonic per-open token: every seam entry claims the next value, and an
+// async callback whose token is no longer current abandons its work.
+let extensionSeamToken = 0;
+
+// Release the live extension mount and invalidate any pending seam open. One
+// definition, called before every file open and by closeOpenFile, so no
+// frame or mediator listener outlives its file or its workspace.
+function releaseExtensionMount() {
+  extensionSeamToken += 1;
+  if (activeExtensionMount) { activeExtensionMount.teardown(); activeExtensionMount = null; }
+}
 
 // A renderer failure is a note beside the plain rendering, never a blank:
 // the person keeps their file, and the message says what stood down.

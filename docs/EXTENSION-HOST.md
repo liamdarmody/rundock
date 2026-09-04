@@ -41,6 +41,14 @@ absent: a `read` or `write` today is an unnamed type, and the mediator refuses
 it with a reason like any other. When the transport ships, the rows and their
 enforcement arrive together.
 
+The `resources` a manifest declares are carried on the roster and the mount
+payload as inert metadata: they name what an extension will one day be able to
+read and write, so the install trust step can show them, but nothing reads the
+field at runtime today. The host composes the frame from the entry and styles
+only. A reader of the wire should not mistake a declared resource for a
+reachable one; it becomes reachable when the read and write transport above
+ships and enforces it.
+
 ## What a mounted extension cannot reach
 
 - **Rundock's page.** The frame is `sandbox="allow-scripts"` with no

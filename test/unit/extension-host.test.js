@@ -107,6 +107,20 @@ describe('the frame is opaque-origin, and only that', () => {
     assert.match(frame.srcdoc, /window\.onerror/,
       'the bootstrap forwards uncaught failures, because an opaque frame cannot be observed from outside');
   });
+
+  test('an entry containing a closing script tag cannot escape its own element', async () => {
+    const { frame } = await mounted({
+      payload: { entry: 'a();</script><script>steal()', styles: ['x{}</style><style>y{}'] },
+    });
+    // The raw closing sequence must not survive into the composed document,
+    // or the view's script ends early and it never says ready.
+    assert.ok(!frame.srcdoc.includes('</script><script>steal()'),
+      'the entry could close its own script element and inject a second one');
+    assert.ok(!frame.srcdoc.includes('</style><style>y{}'),
+      'the stylesheet could close its own style element');
+    assert.ok(frame.srcdoc.includes('steal()') && frame.srcdoc.includes('y{}'),
+      'the whole payload is still present, escaped rather than dropped');
+  });
 });
 
 describe('the mediator refuses what the contract does not name, on the wire', () => {
@@ -330,10 +344,11 @@ describe('the server reads installations and guards every payload path', () => {
     } finally { fs.rmSync(dir, { recursive: true, force: true }); }
   });
 
-  test('an extension id that is not an installed-directory name is refused before any read', () => {
-    const p = registry.uiPayload('/nowhere', '../escape', 'r');
-    assert.strictEqual(p.ok, false);
-    assert.match(p.reason, /not an installed-directory name/);
+  test('an extension id that is a path of its own is refused before any read', () => {
+    assert.strictEqual(registry.uiPayload('/nowhere', '../escape', 'r').ok, false);
+    assert.match(registry.uiPayload('/nowhere', '../escape', 'r').reason, /single directory name/);
+    assert.strictEqual(registry.uiPayload('/nowhere', 'a/b', 'r').ok, false,
+      'a separator makes an id a path, which the containment guard should never have to see');
   });
 
   test('a manifest whose renderers is not an array is refused, not raised on', () => {
@@ -347,6 +362,60 @@ describe('the server reads installations and guards every payload path', () => {
       assert.strictEqual(p.ok, false);
       assert.match(p.reason, /no renderers array/,
         'a hostile or corrupt manifest cannot make the server raise');
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test('a stylesheet resolving outside the extension directory is refused, even when the target exists', () => {
+    const escaping = JSON.stringify({
+      schemaVersion: 1, id: 'peeker',
+      renderers: [{ id: 'r', target: '.x', entry: 'ui/index.js', styles: ['../../../secrets.css'] }],
+    });
+    const dir = workspace({
+      '.rundock/plugins/peeker/manifest.json': escaping,
+      '.rundock/plugins/peeker/ui/index.js': 'draw();',
+      // The escape target is really present, so a refusal cannot come from a
+      // missing-file realpath failure: it must be the path guard on styles.
+      'secrets.css': 'body { background: url(exfiltrate) }',
+    });
+    try {
+      const p = registry.uiPayload(dir, 'peeker', 'r');
+      assert.strictEqual(p.ok, false);
+      assert.match(p.reason, /inside the extension's own directory/,
+        'a stylesheet is a server-side read of arbitrary workspace files unless the path guard holds');
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test('a styles field that is not an array of strings is refused', () => {
+    const bad = JSON.stringify({
+      schemaVersion: 1, id: 'sloppy',
+      renderers: [{ id: 'r', target: '.x', entry: 'ui/index.js', styles: 'one.css' }],
+    });
+    const dir = workspace({
+      '.rundock/plugins/sloppy/manifest.json': bad,
+      '.rundock/plugins/sloppy/ui/index.js': 'draw();',
+    });
+    try {
+      const p = registry.uiPayload(dir, 'sloppy', 'r');
+      assert.strictEqual(p.ok, false);
+      assert.match(p.reason, /styles must be an array/);
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test('a directory name the roster reports is a name a mount can be served for', () => {
+    // listExtensions reports any directory not starting with a dot, so an id
+    // the roster lists must be an id uiPayload can serve, or the two disagree
+    // about what an installed extension is.
+    const dir = workspace({
+      '.rundock/plugins/My_Ext/manifest.json': JSON.stringify({
+        schemaVersion: 1, id: 'My_Ext', renderers: [{ id: 'r', target: '.x', entry: 'ui/index.js' }],
+      }),
+      '.rundock/plugins/My_Ext/ui/index.js': 'draw();',
+    });
+    try {
+      const listed = registry.listExtensions(dir).map((e) => e.id);
+      assert.ok(listed.includes('My_Ext'), 'the roster lists it');
+      const p = registry.uiPayload(dir, 'My_Ext', 'r');
+      assert.strictEqual(p.ok, true, 'and the mount serves it: the two agree on what an installed id is');
     } finally { fs.rmSync(dir, { recursive: true, force: true }); }
   });
 });

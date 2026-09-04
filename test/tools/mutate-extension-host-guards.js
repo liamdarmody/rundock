@@ -34,6 +34,9 @@ const REGISTRY = { src: path.join(ROOT, 'public', 'renderer-registry.js'), suite
 // The server's payload reader, watched where its path guard is driven with a
 // manifest that tries to escape.
 const SERVER = { src: path.join(ROOT, 'lib', 'packages', 'extension-registry.js'), suite: 'test/unit/extension-host.test.js' };
+// The file view's seam and its shared mount release, watched by the suite
+// that cuts them from source and drives them.
+const FILES = { src: path.join(ROOT, 'public', 'views', 'files.js'), suite: 'test/unit/renderer-registry.test.js' };
 
 const MUTATIONS = [
   // ===== THE POSTURE =====
@@ -42,6 +45,16 @@ const MUTATIONS = [
   [HOST, 'the sandbox grants scripts and nothing else',
     "    frame.setAttribute('sandbox', 'allow-scripts');",
     "    frame.setAttribute('sandbox', 'allow-scripts allow-same-origin');"],
+  // The frame CSP is the contract's no-network enforcement; weakening it must
+  // redden the posture test, or the no-network claim rests on nothing.
+  [HOST, "the frame document denies the network with default-src 'none'",
+    'const FRAME_CSP = "default-src \'none\'; script-src \'unsafe-inline\'; "',
+    'const FRAME_CSP = "default-src * ; script-src \'unsafe-inline\'; "'],
+  // Drop the closing-tag escaping and a payload can break out of its own
+  // script element, so the view never says ready.
+  [HOST, 'the inlined payload cannot close its own element',
+    "  return String(text || '').split(`</${tag}`).join(`<\\\\/${tag}`);",
+    "  return String(text || '');"],
 
   // ===== THE CLOSED TABLE =====
   // Silence instead of refusal: the extension never learns it was refused
@@ -110,6 +123,33 @@ const MUTATIONS = [
   [SERVER, 'a manifest whose renderers is not an array is refused, never raised on',
     "  if (!Array.isArray(manifest.renderers)) {\n    return { ok: false, reason: 'the manifest declares no renderers array' };\n  }\n",
     ''],
+  // Drop the styles path guard and a manifest stylesheet reads arbitrary
+  // workspace files server-side.
+  [SERVER, 'a stylesheet path resolves inside the extension directory or not at all',
+    "    if (!stylePath) return { ok: false, reason: 'a stylesheet does not resolve inside the extension\\'s own directory' };",
+    '    if (!stylePath) { stylePath = path.resolve(dir, name); }'],
+  // Drop the styles-shape check and a non-array styles field is coerced
+  // rather than refused.
+  [SERVER, 'a styles field that is not an array of strings is refused',
+    "  if (!Array.isArray(styleNames) || styleNames.some((n) => typeof n !== 'string')) {\n    return { ok: false, reason: 'the renderer styles must be an array of file names' };\n  }\n",
+    ''],
+
+  // ===== THE FILE VIEW'S MOUNT LIFECYCLE =====
+  // Remove the token guard and two opens of one path both mount, leaking the
+  // first frame and repainting over the second.
+  [FILES, 'a superseded open neither mounts nor degrades',
+    '    if (superseded()) return;\n    // SUCCESS IS AN ENTRY',
+    '    // SUCCESS IS AN ENTRY'],
+  // Remove the release before the board-or-seam decision and a live mount
+  // survives a file open.
+  [FILES, 'every file open releases the live mount before it decides',
+    '    releaseExtensionMount();\n    // A markdown file whose frontmatter',
+    '    // A markdown file whose frontmatter'],
+  // Remove the release in closeOpenFile and a mount survives a workspace
+  // switch.
+  [FILES, 'a workspace switch releases the live mount',
+    '  releaseExtensionMount();\n  currentFilePath = null;',
+    '  currentFilePath = null;'],
 ];
 
 const REPORTER = ['--test-reporter', 'spec'];
@@ -142,7 +182,7 @@ function redTests(suite) {
 }
 
 function run() {
-  const targets = [HOST, REGISTRY, SERVER];
+  const targets = [HOST, REGISTRY, SERVER, FILES];
   const session = beginMutationRun({ files: [...new Set(targets.map((t) => t.src))] });
   const originals = new Map();
   for (const target of targets) originals.set(target, session.original(target.src));

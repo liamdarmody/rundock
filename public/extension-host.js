@@ -74,15 +74,26 @@ function esc(s) {
 // that forwards uncaught failures as `error` messages (a cross-origin frame
 // cannot be observed from outside, so the frame reports on itself), and the
 // entry script.
+// Neutralise a closing tag the inlined payload could use to escape its own
+// element: an entry containing the literal </script> (ordinary in a minified
+// bundle) would otherwise close the script early, so the view never runs its
+// rest and never says ready. The frame executes byte-equivalent code because
+// the browser reads `<\/script>` inside a script element as the same source;
+// the same holds for a stylesheet and </style>.
+function neutraliseClose(text, tag) {
+  return String(text || '').split(`</${tag}`).join(`<\\/${tag}`);
+}
+
 function buildSrcdoc(payload) {
-  const styles = (payload.styles || []).map((css) => `<style>${css}</style>`).join('');
+  const styles = (payload.styles || [])
+    .map((css) => `<style>${neutraliseClose(css, 'style')}</style>`).join('');
   const bootstrap = 'window.onerror=function(m){parent.postMessage({type:"error",message:String(m)},"*");};';
   return '<!doctype html><html><head>'
     + `<meta http-equiv="Content-Security-Policy" content="${esc(FRAME_CSP)}">`
     + styles
     + '</head><body>'
     + `<script>${bootstrap}</scr` + 'ipt>'
-    + `<script>${payload.entry || ''}</scr` + 'ipt>'
+    + `<script>${neutraliseClose(payload.entry, 'script')}</scr` + 'ipt>'
     + '</body></html>';
 }
 
