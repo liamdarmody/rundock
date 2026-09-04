@@ -783,7 +783,7 @@
   // The refusal words this row understands, named so the walk that reads the
   // scheduler's routineRefusal out of its source can prove the two lists are
   // one: a reason added there without a word here fails a test.
-  const REFUSALS_UNDERSTOOD = ['paused', 'enabled', 'runOn', 'prompt'];
+  const REFUSALS_UNDERSTOOD = ['paused', 'enabled', 'runOn', 'prompt', 'approval'];
 
   function somethingElseStopsIt(input) {
     if (!input) return false;
@@ -1036,6 +1036,35 @@
    *
    * @param {{enabled?: boolean}} [input]
    */
+  /**
+   * The one-tap approval, on the row of a routine whose plan awaits it.
+   *
+   * SHOWN ONLY ON THE PUBLISHED WORD. The scheduler is the party that decides
+   * whether a plan is approved (the hash comparison lives beside the tick),
+   * and the row consumes its published refusal rather than growing a second
+   * copy of the rule. A roster without the field draws no approval line,
+   * which is the honest reading of a server that predates the feature:
+   * nothing on it can be unapproved.
+   *
+   * THE SENTENCE NAMES THE PLAN, because approving is consenting to what
+   * will happen: which skill or instruction, and where it runs. It does not
+   * promise a files list; what a run touched is recorded after the fact on
+   * the run record, and promising a prediction this release cannot make
+   * would be the garbled-card class again.
+   */
+  function approvalOffer(input) {
+    if (!input || input.refusal !== 'approval') return null;
+    const what = input.skill
+      ? `run the skill "${input.skill}"`
+      : (typeof input.prompt === 'string' && input.prompt.trim()
+        ? `run: "${input.prompt.trim().length > 80 ? input.prompt.trim().slice(0, 77) + '...' : input.prompt.trim()}"`
+        : 'run this routine');
+    return {
+      text: `Waiting for your approval. This routine will ${what}, on this computer, unattended.`,
+      label: 'Approve plan',
+    };
+  }
+
   function enableOffer(input) {
     if (!input || input.enabled !== false) return null;
     // AND ONLY WHEN TURNING IT ON WOULD ACTUALLY START IT.
@@ -1190,6 +1219,10 @@
       // every other row, so the view draws nothing where there is nothing to
       // offer.
       offer: enableOffer(input),
+      // The row state for a plan awaiting its one tap. Its own field rather
+      // than a reworded enable offer, because the two consents are different
+      // acts on different questions and a row can owe both.
+      approval: approvalOffer(input),
       // The one thing on a row that is neither history nor a promise: a fault
       // in the routine itself, which only the person who wrote the file can fix.
       scheduleProblem: scheduleProblem(input),
@@ -1234,6 +1267,6 @@
     dayWords, clockWords, zoneWords, timeWords, workspaceWords, workspaceNames,
     scheduleWords, routineSentence, sentenceParts,
     RUN_STATUS_WORDS, REFUSALS_UNDERSTOOD,
-    outcomeOf, lastCompletedRunFailed, anyFailure, runStatus, nextRunLabel, enableOffer, scheduleProblem, promptProblem, isServed, workspaceNote, somethingElseStopsIt, orderByNextRun, row, deleteConfirmation,
+    outcomeOf, lastCompletedRunFailed, anyFailure, runStatus, nextRunLabel, enableOffer, approvalOffer, scheduleProblem, promptProblem, isServed, workspaceNote, somethingElseStopsIt, orderByNextRun, row, deleteConfirmation,
   };
 }));

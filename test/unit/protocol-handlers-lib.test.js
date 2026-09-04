@@ -34,7 +34,7 @@ const EXPECTED_TYPES = [
   'read_file', 'add_to_team',
   'save_agent', 'create_agent', 'update_agent', 'delete_agent',
   'save_skill', 'delete_skill', 'save_routine', 'delete_routine', 'set_routine_paused',
-  'set_routine_enabled', 'set_routine_schedule',
+  'set_routine_enabled', 'set_routine_schedule', 'approve_routine_plan',
   'search_conversations', 'search_universal', 'get_session_history',
   'save_file', 'create_path', 'reveal_in_finder',
 ];

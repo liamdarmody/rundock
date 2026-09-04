@@ -98,8 +98,8 @@ const MUTATIONS = [
   // word, because a refusal the row never learned is an offer that promises a
   // run the tick refuses.
   [MODEL, 'the refusal list a divergence check reads is the whole list',
-    "  const REFUSALS_UNDERSTOOD = ['paused', 'enabled', 'runOn', 'prompt'];",
-    "  const REFUSALS_UNDERSTOOD = ['paused', 'enabled', 'runOn'];"],
+    "  const REFUSALS_UNDERSTOOD = ['paused', 'enabled', 'runOn', 'prompt', 'approval'];",
+    "  const REFUSALS_UNDERSTOOD = ['paused', 'enabled', 'runOn', 'prompt'];"],
   // Remove the consumption and the offer stops reading the tick's published
   // answer at all, falling back to its own copy of the reasons, which is the
   // drift this card exists to make impossible.
@@ -126,7 +126,7 @@ const MUTATIONS = [
   // 'enabled', the one word the offer ignores, whatever else is wrong with
   // it: the shadowing this ordering exists to remove.
   [SCHEDULER_DECL, 'the switch is reported last, so it never shadows the real fault',
-    "  if (routine.paused) return 'paused';\n  if (!isRunOnSupported(routine.runOn)) return 'runOn';\n  if (!hasRunnablePrompt(routine)) return 'prompt';\n  if (!routine.enabled) return 'enabled';",
+    "  if (routine.paused) return 'paused';\n  if (!isRunOnSupported(routine.runOn)) return 'runOn';\n  if (!hasRunnablePrompt(routine)) return 'prompt';",
     "  if (routine.paused) return 'paused';\n  if (!routine.enabled) return 'enabled';\n  if (!isRunOnSupported(routine.runOn)) return 'runOn';\n  if (!hasRunnablePrompt(routine)) return 'prompt';"],
   // Delete the enrichment and the roster stops carrying the tick's answer;
   // the model's fallback quietly absorbs the loss everywhere except the walk

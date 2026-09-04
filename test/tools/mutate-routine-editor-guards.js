@@ -484,8 +484,8 @@ const MUTATIONS = [
     "const PLAN_FIELDS = ['prompt', 'skill', 'runOn'];",
     "const PLAN_FIELDS = ['prompt', 'skill', 'runOn', 'timezone'];"],
   [ROUTINES_TZ, 'the migration does not invent a timezone for a routine that never recorded one',
-    "const MIGRATED_KEYS = ['runOn', 'enabled', 'paused', 'planHash'];",
-    "const MIGRATED_KEYS = ['runOn', 'enabled', 'paused', 'planHash', 'timezone'];"],
+    "const MIGRATED_KEYS = ['runOn', 'enabled', 'paused', 'planHash', 'planApprovedHash'];",
+    "const MIGRATED_KEYS = ['runOn', 'enabled', 'paused', 'planHash', 'planApprovedHash', 'timezone'];"],
   // WHICH WORKSPACE RUNS THE ROUTINE BEING MADE, said on the step every route
   // into this editor passes through. A requirement that a sentence APPEARS on
   // a surface is only proved by taking it away and watching something go red;

@@ -283,7 +283,7 @@ const MUTATIONS = [
   // point of sharing it: one guard, one mutation, and no second copy free to
   // admit something the first refuses.
   [HANDLER, 'a routine flag change asks whether the write happened, not whether the bytes moved',
-    '  if (!written || written[field] !== value) {',
+    '  if (!written || Object.entries(updates).some(([key, wanted]) => written[key] !== wanted)) {',
     '  if (next === before && false) {'],
   [HANDLER, 'a delete counts the blocks rather than looking one up by index',
     '  if (readRoutineBlocks(next, found.name).length !== readRoutineBlocks(before, found.name).length - 1) {',
@@ -490,8 +490,8 @@ const MUTATIONS = [
   // otherwise: dropping the occurrence still makes every control act on the
   // first routine of its name whatever the reader pointed at.
   [HANDLER, 'a routine field change tells the writer which block',
-    '    next = updateRoutineBlock(before, found.name, { [field]: value }, found.occurrence);',
-    '    next = updateRoutineBlock(before, found.name, { [field]: value });'],
+    '    next = updateRoutineBlock(before, found.name, updates, found.occurrence);',
+    '    next = updateRoutineBlock(before, found.name, updates);'],
 
   // ===== THE GUARD A SCHEDULE EDIT HAS TO SURVIVE =====
   //
