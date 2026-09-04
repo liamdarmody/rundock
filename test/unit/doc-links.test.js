@@ -34,6 +34,7 @@ test('every relative markdown link in the docs resolves to a file', () => {
   assert.ok(files.length >= 5, `sanity: found ${files.length} markdown files`);
 
   const broken = [];
+  let checked = 0;
   for (const file of files) {
     const lines = fs.readFileSync(file, 'utf-8').split('\n');
     lines.forEach((line, i) => {
@@ -42,6 +43,7 @@ test('every relative markdown link in the docs resolves to a file', () => {
       for (const m of line.matchAll(/\[[^\]]*\]\(([^)#\s]+\.md)(?:#[^)]*)?\)/g)) {
         const target = m[1];
         if (/^[a-z]+:\/\//i.test(target)) continue;
+        checked += 1;
         const resolved = path.resolve(path.dirname(file), target);
         if (!fs.existsSync(resolved)) {
           broken.push(`${path.relative(ROOT, file)}:${i + 1} -> ${target}`);
@@ -49,5 +51,9 @@ test('every relative markdown link in the docs resolves to a file', () => {
       }
     });
   }
+  // The scan is only evidence while it still finds links. The docs carry a
+  // few dozen relative links today; a pattern change that stopped matching
+  // would otherwise report an empty broken list as health.
+  assert.ok(checked >= 10, `only ${checked} relative links found; the link pattern has gone blind`);
   assert.deepStrictEqual(broken, [], 'broken relative links in documentation');
 });

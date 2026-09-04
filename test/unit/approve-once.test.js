@@ -224,7 +224,7 @@ describe('the grandfather line: an upgrade never stops work you already run', ()
     }
   });
 
-  // AC-3's lost-record clause, in the ordinary single-routine file. Once the
+  // the lost-record rule, in the ordinary single-routine file. Once the
   // approval feature has demonstrably run in a workspace, a routine whose
   // record is hand-stripped is a plan awaiting a fresh tap, never re-approved
   // by absence, even though it is the only routine and has no sibling to

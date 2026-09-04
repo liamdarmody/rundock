@@ -245,10 +245,13 @@ function redTests(suite) {
   const marker = out.indexOf('failing tests:');
   if (marker === -1) {
     if (!failed) return [];
-    throw new Error(
-      'the suite failed but its output carries no "failing tests:" summary, so no '
-      + 'test names could be read. The spec reporter\'s format is what this parses; '
-      + 'if it changed, fix this parser rather than trusting the empty result.');
+    // A suite that failed with output this could not read has produced no
+    // verdict: not red, not green, nothing. Refused as a named row rather
+    // than thrown, so the report says which mutation was in flight instead
+    // of a stack trace that names nothing. The spec reporter's format is
+    // what this parses; if it changed, fix the parser rather than trusting
+    // an empty result.
+    return { unparsable: true };
   }
   const names = [];
   for (const line of out.slice(marker).split('\n')) {
@@ -282,7 +285,10 @@ function run() {
         continue;
       }
       fs.writeFileSync(target.src, original.replace(guard, without));
-      results.push({ label, applied: true, red: redTests(target.suite) });
+      const red = redTests(target.suite);
+      results.push(red && red.unparsable
+        ? { label, applied: true, unparsable: true, red: [] }
+        : { label, applied: true, red });
       fs.writeFileSync(target.src, original);
     }
   } finally {
@@ -303,6 +309,13 @@ function report(results, markdown) {
       const why = r.ambiguous
         ? `AMBIGUOUS: the guard text matches ${r.ambiguous} places`
         : 'THE GUARD TEXT WAS NOT FOUND';
+      console.log(markdown ? `| ${r.label} | **${why}** |` : `  ${why}: ${r.label}`);
+      continue;
+    }
+    if (r.unparsable) {
+      bad++;
+      const why = 'NO VERDICT: the suite failed but its output could not be parsed, so nothing '
+        + 'about this mutation is known; fix the reporter parsing rather than trusting a rerun';
       console.log(markdown ? `| ${r.label} | **${why}** |` : `  ${why}: ${r.label}`);
       continue;
     }
