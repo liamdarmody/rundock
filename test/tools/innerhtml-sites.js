@@ -214,8 +214,10 @@ const TABLE = {
     ['b', 'attr-escaper', 'the packages section: model copy and outcomes through esc(), the field value through escAttr()'],
     ['b', 'attr-escaper', 'the workspace card'],
     ['a', 'staticMarkup', 'the appearance card'],
+    ['a', 'staticMarkup', 'the connectors section, waiting state: a constant template with no interpolation'],
     ['a', 'appValues', 'the about card: the app version from package.json'],
     ['a', 'appValues', 'the runtimes card: constant labels and a regex-clamped version'],
+    ['b', 'attr-escaper', 'the connectors section: server names, targets and credential-key names from the user-authored .mcp.json, text through connectorsEsc(), attributes through connectorsEscAttr()'],
   ],
   'views/skills.js': [
     ['a', 'escapedText', 'the skills empty state, esc() copy'],

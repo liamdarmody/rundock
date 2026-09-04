@@ -1515,7 +1515,7 @@ function onWorkspaceReady(dir, analysis, isEmpty, mode, scaffoldError, isSetupCo
   currentSkillId = null;
   // A package plan describes one workspace's collision facts and defaults;
   // a different workspace returns the install flow to idle.
-  if (!isSameWorkspace) packagesWorkspaceChanged();
+  if (!isSameWorkspace) { packagesWorkspaceChanged(); connectorsWorkspaceChanged(); }
 
   if (isSameWorkspace && currentView !== 'workspace') {
     // Reconnect to same workspace: keep in-memory conversations and active view intact.

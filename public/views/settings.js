@@ -200,6 +200,9 @@ function renderSettingsSection(section) {
           <button class="settings-btn" onclick="toggleTheme();renderSettingsSection('appearance')">${isLight ? 'Switch to Dark' : 'Switch to Light'}</button>
         </div>
       </div>`;
+  } else if (section === 'connectors') {
+    el.innerHTML = `<div class="settings-section-title">Connectors</div><div class="settings-card"><div class="settings-row"><span class="settings-value">Reading .mcp.json&hellip;</span></div></div>`;
+    connectorsLoad();
   } else if (section === 'about') {
     el.innerHTML = `<div class="settings-section-title">About</div>
       <div class="settings-card">
@@ -281,7 +284,187 @@ function changeWorkspace() {
   ws.send(JSON.stringify({ type: 'list_workspaces' }));
 }
 
+// ---- Connectors (settings > connectors) ----
+//
+// The tab reads and edits the workspace's own connector configuration,
+// `.mcp.json` at the workspace root, which is the file the runtime reads
+// (per-user credentials from `.rundock/mcp-secrets.json` are merged in at
+// spawn; their KEYS are named here and their values never shown or edited).
+// Everything the tab knows arrives through Rundock's own server: the file
+// read and the file save. No request leaves the machine.
+//
+// PURE HALF FIRST, so what a row says is testable without a page. The parse
+// is tolerant of a file that is missing (an empty state, not an error) and
+// loud about one that cannot be read as JSON (an error naming the file,
+// never rendered as "no connectors": a person with a broken config needs
+// told, not reassured).
+
+// Local escapes, so the pure half stays requireable off the page. The page
+// defines global helpers; under node there is no page, and a test driving
+// what a row says should not need one.
+function connectorsEsc(v) {
+  return String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+function connectorsEscAttr(v) {
+  return connectorsEsc(v).replace(/"/g, '&quot;');
+}
+
+function connectorsParse(text) {
+  if (text === null || text === undefined) return { servers: [], missing: true, error: null };
+  let parsed;
+  try { parsed = JSON.parse(text); } catch (e) {
+    return { servers: [], missing: false, error: '.mcp.json could not be read as JSON, so nothing here is trustworthy until it is fixed.' };
+  }
+  const raw = (parsed && typeof parsed === 'object' && parsed.mcpServers && typeof parsed.mcpServers === 'object') ? parsed.mcpServers : {};
+  const servers = Object.keys(raw).map((name) => {
+    const entry = raw[name] || {};
+    const isUrl = typeof entry.url === 'string' && entry.url;
+    const target = isUrl ? entry.url
+      : [entry.command].concat(Array.isArray(entry.args) ? entry.args : []).filter(Boolean).join(' ');
+    return {
+      name,
+      transport: isUrl ? 'url' : 'command',
+      // What this connector can reach, stated as the thing it starts or the
+      // address it talks to, which is the honest whole of what the config
+      // knows. Health and per-tool reach are runtime questions this tab does
+      // not claim to answer.
+      target: target || '(nothing configured)',
+      envKeys: entry.env && typeof entry.env === 'object' ? Object.keys(entry.env) : [],
+    };
+  });
+  return { servers, missing: false, error: null };
+}
+
+// Merging an added server re-reads nothing: the caller hands the freshest
+// text it has, and the merge refuses to replace an existing name, because
+// silently replacing a connector somebody configured is an edit they did not
+// make. Returns the next file text, or null with the reason on refusals.
+function connectorsMerge(text, name, entry) {
+  let parsed = {};
+  if (text) {
+    try { parsed = JSON.parse(text); } catch (e) { return { next: null, reason: '.mcp.json is not valid JSON; fix the file before adding to it.' }; }
+  }
+  if (!parsed || typeof parsed !== 'object') parsed = {};
+  if (!parsed.mcpServers || typeof parsed.mcpServers !== 'object') parsed.mcpServers = {};
+  if (!name || !/^[\w.-]+$/.test(name)) return { next: null, reason: 'A connector needs a plain name (letters, digits, dots, dashes).' };
+  if (parsed.mcpServers[name]) return { next: null, reason: `A connector named "${name}" already exists; edit .mcp.json to change it.` };
+  parsed.mcpServers[name] = entry;
+  return { next: JSON.stringify(parsed, null, 2) + '\n', reason: null };
+}
+
+function connectorsSectionHtml(state) {
+  // A read we could not trust draws its error and NOTHING ELSE: no server
+  // list to misread as empty, and no Add form, because a write built on text
+  // we never saw is the overwrite this whole state exists to prevent.
+  if (state.error && state.readFailed) {
+    return `<div class="settings-section-title">Connectors</div><div class="settings-card"><div class="settings-row"><span class="settings-value">${connectorsEsc(state.error)}</span></div></div>`;
+  }
+  let body;
+  if (state.error) {
+    body = `<div class="settings-card"><div class="settings-row"><span class="settings-value">${connectorsEsc(state.error)}</span></div></div>`;
+  } else if (state.missing || state.servers.length === 0) {
+    body = `<div class="settings-card"><div class="settings-row" style="flex-direction:column;align-items:stretch;gap:6px">
+      <span class="settings-value">No connectors configured in this workspace yet.</span>
+      <span class="settings-value">Workspace connectors live in <code>.mcp.json</code> at the workspace root and travel with the folder, so everyone opening this workspace gets them. Connectors added at claude.ai or in Claude Code's own settings are the operator's personal reach and are managed there, not here.</span>
+    </div></div>`;
+  } else {
+    const rows = state.servers.map(srv => `<div class="settings-row" data-connector="${connectorsEscAttr(srv.name)}" style="flex-direction:column;align-items:stretch;gap:2px">
+      <span class="settings-label">${connectorsEsc(srv.name)} <span class="settings-value" style="opacity:.7">Workspace connector: travels with this folder</span></span>
+      <span class="settings-value" title="${connectorsEscAttr(srv.target)}">${connectorsEsc(srv.transport === 'url' ? 'Talks to ' + srv.target : 'Starts ' + srv.target)}</span>
+      ${srv.envKeys.length ? `<span class="settings-value" style="opacity:.7">Credential keys (values kept out of this file): ${connectorsEsc(srv.envKeys.join(', '))}</span>` : ''}
+    </div>`).join('');
+    body = `<div class="settings-card">${rows}</div>`;
+  }
+  return `<div class="settings-section-title">Connectors</div>${body}
+    <div class="settings-card"><div class="settings-row" style="flex-direction:column;align-items:stretch;gap:8px">
+      <span class="settings-label">Add a connector</span>
+      <input class="settings-input" id="connector-name" placeholder="Name (for example: notion)">
+      <input class="settings-input" id="connector-target" placeholder="Command to start it, or its URL">
+      <div class="settings-value" id="connector-add-note" style="min-height:1em"></div>
+      <button class="settings-btn" onclick="connectorsAdd()">Add to .mcp.json</button>
+    </div></div>
+    <div class="settings-row"><span class="settings-value">Edits land in <code>.mcp.json</code>, the same file agents read their connectors from on their next start.</span></div>`;
+}
+
+// Three states, kept apart because conflating them destroys a file. `null`
+// means "not yet read" and also "read and the file is genuinely absent"; a
+// string is the file's known-current bytes; the read-failed flag is neither,
+// and is the one state from which a write must never proceed. connectorsAdd
+// reads these, so a save can only ever be built from bytes we actually saw.
+let connectorsFileText = null;
+let connectorsReadFailed = false;
+
+function connectorsRenderIfShowing(state) {
+  const el = document.getElementById('settings-content');
+  const active = document.querySelector('.settings-nav-item.active');
+  if (el && active && active.getAttribute('data-settings') === 'connectors') {
+    el.innerHTML = connectorsSectionHtml(state);
+  }
+}
+
+function connectorsLoad() {
+  connectorsReadFailed = false;
+  // Returns its promise so a caller (a test, or a later chained refresh) can
+  // wait for the read to resolve; the running product ignores the return.
+  return fetch('/api/file?path=' + encodeURIComponent('.mcp.json'))
+    .then((r) => {
+      // 404 is the file genuinely not there, an empty workspace: honest to
+      // show as "no connectors yet". Every other non-ok answer is a read
+      // that DID NOT succeed, and dressing it as an empty workspace is what
+      // lets the next Add overwrite a file we simply failed to read.
+      if (r.ok) return r.text().then((text) => { connectorsFileText = text; connectorsReadFailed = false; return connectorsParse(text); });
+      if (r.status === 404) { connectorsFileText = null; connectorsReadFailed = false; return connectorsParse(null); }
+      connectorsFileText = null; connectorsReadFailed = true;
+      return { servers: [], missing: false, readFailed: true, error: 'Could not read .mcp.json, so its connectors are not shown and nothing new can be added until the read succeeds. Reopen this tab to retry.' };
+    })
+    .catch(() => {
+      connectorsFileText = null; connectorsReadFailed = true;
+      connectorsRenderIfShowing({ servers: [], missing: false, readFailed: true, error: 'Could not read .mcp.json, so its connectors are not shown and nothing new can be added until the read succeeds. Reopen this tab to retry.' });
+      return null;
+    })
+    .then((state) => { if (state) connectorsRenderIfShowing(state); });
+}
+
+// Per-workspace state must not outlive its workspace: the same rule
+// packagesWorkspaceChanged enforces. Dropped so a save can never carry one
+// workspace's connectors into another's file after a switch.
+function connectorsWorkspaceChanged() {
+  connectorsFileText = null;
+  connectorsReadFailed = false;
+  connectorsRenderIfShowing({ servers: [], missing: false, readFailed: true, error: 'Reopen this tab to read this workspace\'s connectors.' });
+}
+
+function connectorsAdd() {
+  const note = document.getElementById('connector-add-note');
+  // Never build a save from text we did not read. connectorsFileText is null
+  // for both "absent" and "read failed"; the flag tells them apart, and a
+  // failed read is the one case where merging from null would drop the real
+  // file's servers. A missing file (flag clear, text null) legitimately
+  // merges from an empty object.
+  if (connectorsReadFailed) {
+    if (note) note.textContent = 'The connector file could not be read, so nothing can be added until it can. Reopen this tab to retry.';
+    return;
+  }
+  const name = (document.getElementById('connector-name') || {}).value || '';
+  const target = ((document.getElementById('connector-target') || {}).value || '').trim();
+  if (!target) { if (note) note.textContent = 'Say what it starts or where it lives.'; return; }
+  const entry = /^https?:\/\//.test(target)
+    ? { url: target }
+    : { command: target.split(/\s+/)[0], args: target.split(/\s+/).slice(1) };
+  const merged = connectorsMerge(connectorsFileText, name.trim(), entry);
+  if (!merged.next) { if (note) note.textContent = merged.reason; return; }
+  if (typeof ws === 'undefined' || !ws || ws.readyState !== WebSocket.OPEN) {
+    if (note) note.textContent = 'Not connected; try again in a moment.';
+    return;
+  }
+  ws.send(JSON.stringify({ type: 'save_file', path: '.mcp.json', content: merged.next }));
+  // Read back through the same road the render reads, so what the page shows
+  // afterwards is what actually landed rather than what was sent.
+  setTimeout(connectorsLoad, 200);
+}
+
 return { showSettingsSection, renderSettingsSection, setWorkspaceMode, runtimeRowHtml, runtimesCardHtml, renderRuntimesCard, changeWorkspace,
   packagesSubmit, packagesCancel, packagesConfirm, packagesRetry,
-  packagesReplyArrived, packagesWorkspaceChanged, packagesConnectionLost };
+  packagesReplyArrived, packagesWorkspaceChanged, packagesConnectionLost,
+  connectorsParse, connectorsMerge, connectorsSectionHtml, connectorsLoad, connectorsAdd, connectorsWorkspaceChanged };
 }));
