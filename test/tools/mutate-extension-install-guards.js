@@ -65,6 +65,12 @@ const MUTATIONS = [
     refuse(\`"\${reference}" is not a reference; a pin cannot begin with "-"\`, 'unpinned-reference');
   }`,
     ''],
+  // Skip the cleanup on a failed fetch and the temporary directory
+  // acquireWithGit created leaks for the life of the process on every
+  // refused reference.
+  [SOURCE, 'a failed fetch removes the temporary directory acquireWithGit created',
+    '    discardAcquisition(dir);',
+    ''],
 
   // ===== CODE REQUIRES A MANIFEST =====
   // Wave a manifest-less snapshot through as an extension and inference has
@@ -72,6 +78,17 @@ const MUTATIONS = [
   [MANIFEST, 'a snapshot without a manifest is not an extension',
     `      refuse(\`the package has no \${MANIFEST_NAME}; code requires a manifest, always\`, 'not-an-extension');`,
     `      return { name: 'inferred', version: '0.0.0', entry: 'index.html', match: '*' };`],
+  // Skip the symlink check on the entry path and a path segment linking
+  // outside the snapshot is walked straight through instead of refused.
+  [MANIFEST, 'extension.entry is refused when a path segment is a symlink',
+    '    if (stat.isSymbolicLink()) refuse(`extension.entry passes through a symlink at ${segment}`);',
+    ''],
+  // Skip the symlink check inside the mounted directory and a file linking
+  // outside the snapshot is read and materialised as if it were the
+  // package's own bytes.
+  [MANIFEST, 'a file inside the mounted directory is refused when it is a symlink',
+    '    if (stat.isSymbolicLink()) refuse(`${relative} is a symlink`);',
+    ''],
 
   // ===== NO IS REALLY NO =====
   // Keep the snapshot after a decline and "nothing left behind" is false in
@@ -85,8 +102,45 @@ const MUTATIONS = [
   // of persisting the source is undone: an update could be pointed at a
   // repository the person never consented to.
   [HANDLERS, 'the update path sources its URL from the installed record, not the message',
-    '  beginExtensionPlan(ws, workspace, { url: record.source.url, reference });',
-    '  beginExtensionPlan(ws, workspace, { url: (msg.url || record.source.url), reference });'],
+    '    source = parseGitHubSource(record.source.url, msg.reference);',
+    '    source = parseGitHubSource(msg.url || record.source.url, msg.reference);'],
+
+  // ===== A HANDLER ANSWERS, IT NEVER THROWS; A PERSISTED RECORD IS NOT
+  //       TRUSTED INPUT =====
+  // Skip the missing-record refusal and the generic TypeError that follows
+  // is still caught by the same try, but with a message this handler never
+  // meant to send: the named refusal a caller could act on is gone.
+  [HANDLERS, 'planning an update for a name with no installed record is refused by name',
+    `    if (!record) throw new Error(\`no extension named "\${msg.name}" is installed\`);
+    if (!record.source || typeof record.source.url !== 'string') {`,
+    `    if (!record.source || typeof record.source.url !== 'string') {`],
+  // Skip the missing-source check and a record with no source field falls
+  // straight into parseGitHubSource with an undefined url, refused only by
+  // accident rather than by a stated rule about what this record must carry.
+  [HANDLERS, 'a record missing its own source is refused by name',
+    `    if (!record.source || typeof record.source.url !== 'string') {
+      throw new Error(\`the installed record for "\${msg.name}" carries no source url; refusing to update\`);
+    }`,
+    ''],
+  // Skip the revalidation and the persisted url goes straight into
+  // beginExtensionPlan and a git argv unchecked, exactly the trust the
+  // uninstall path refuses to extend to the same file's root.
+  [HANDLERS, 'the stored url is revalidated through the same GitHub-source validation a fresh install uses',
+    '    source = parseGitHubSource(record.source.url, msg.reference);',
+    '    source = { url: record.source.url, reference: msg.reference };'],
+
+  // ===== CONSENT BINDS TO THE WORKSPACE IT WAS SHOWN AGAINST =====
+  // Skip the workspace check and a confirm answered after the server moved
+  // to another workspace installs into whatever is current now, replacing
+  // that workspace's files under a trust card that described a different one.
+  [HANDLERS, 'a confirm is refused when the server\'s workspace has changed since the plan',
+    `    if (pending.workspace !== workspace) {
+      throw Object.assign(
+        new Error('the workspace changed since this package was read; read it again'),
+        { code: 'workspace-changed' },
+      );
+    }`,
+    ''],
 
   // ===== AN UNANSWERED OFFER DOES NOT LIVE FOREVER =====
   // Skip the close release and a dropped connection leaves the fetched
@@ -155,15 +209,15 @@ const MUTATIONS = [
     '  const remaining = records.filter((r) => r.name !== name);',
     '  const remaining = records;'],
 
-  // ===== UNINSTALL NEVER TRUSTS THE PERSISTED ROOT =====
-  // Skip the containment check and a records file carrying "root":
-  // "../../something" makes uninstall recursively delete outside the
-  // workspace's extensions directory.
-  [INSTALL, 'a removal target outside the extensions root is refused',
-    `  const withinExtensionsRoot = targetAbsolute === extensionsRootAbsolute
-    || targetAbsolute.startsWith(extensionsRootAbsolute + path.sep);
-  if (!withinExtensionsRoot) {
-    refuse(\`the installed record for "\${name}" names a root outside the extensions directory; refusing to remove anything\`, 'invalid-record');
+  // ===== UNINSTALL NEVER TRUSTS THE PERSISTED ROOT, AND REMOVES EXACTLY
+  //       WHAT THIS INSTALL CREATED =====
+  // Skip the exact-match check and a records file carrying "root":
+  // ".claude/rundock/extensions" for one entry makes uninstall recursively
+  // delete every installed extension, or one carrying another install's own
+  // root removes that install's directory instead of this one's.
+  [INSTALL, 'the removal target must equal the install-time location exactly, nothing wider',
+    `  if (targetAbsolute !== expectedAbsolute) {
+    refuse(\`the installed record for "\${name}" names a root that does not match its install-time location; refusing to remove anything\`, 'invalid-record');
   }`,
     ''],
   // Skip the missing-root check and a record with no root throws a raw
@@ -172,6 +226,14 @@ const MUTATIONS = [
   [INSTALL, 'a record with no root is refused by name',
     `  if (typeof record.root !== 'string' || !record.root) {
     refuse(\`the installed record for "\${name}" has no root; refusing to remove anything\`, 'invalid-record');
+  }`,
+    ''],
+  // Skip the name-validation and a records file carrying a name shaped like
+  // a traversal ("../../etc") is joined straight into the removal target's
+  // expected path instead of being refused before it is ever used.
+  [INSTALL, 'a record with an invalid name is refused before it is joined into a path',
+    `  if (typeof record.name !== 'string' || !SLUG.test(record.name)) {
+    refuse(\`the installed record for "\${name}" carries an invalid name; refusing to remove anything\`, 'invalid-record');
   }`,
     ''],
 

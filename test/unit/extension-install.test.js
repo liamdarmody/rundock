@@ -33,9 +33,9 @@ atomicWrite.writeAsUnit = (workspace, writes, options) => {
 const { JSDOM } = require('jsdom');
 
 const {
-  parseGitHubSource, discardAcquisition, listRefsWithGit, MOVING_NAMES,
+  parseGitHubSource, acquireWithGit, discardAcquisition, listRefsWithGit, MOVING_NAMES,
 } = require('../../lib/packages/extension-source.js');
-const { readExtensionManifest, deriveFacts } = require('../../lib/packages/extension-manifest.js');
+const { readExtensionManifest, deriveFacts, extensionFileSet } = require('../../lib/packages/extension-manifest.js');
 const {
   RECORDS_PATH, EXTENSIONS_ROOT, readExtensionRecords, serialiseRecords, checkForUpdate,
 } = require('../../lib/packages/extension-record.js');
@@ -174,6 +174,56 @@ describe('the default ref-lister, exercised against real git with no network', (
   });
 });
 
+describe('the real acquirer, exercised against real git with no network', () => {
+  // The same no-network technique as listRefsWithGit above, applied to the
+  // one function every test elsewhere in this file fakes: acquireWithGit
+  // itself is what turns a pasted URL plus pin into bytes, so this is the
+  // only place that claim is checked against what it actually produces
+  // rather than against a fixture built to look like it.
+  function tagRepo() {
+    const repo = tempDir('ext-acquire-repo-');
+    const git = (args) => execFileSync('git', args, { cwd: repo, stdio: ['ignore', 'pipe', 'pipe'] });
+    git(['init', '--quiet']);
+    git(['config', 'user.email', 'test@example.com']);
+    git(['config', 'user.name', 'Test']);
+    fs.writeFileSync(path.join(repo, 'marker.txt'), 'v1 bytes\n');
+    fs.mkdirSync(path.join(repo, 'nested'));
+    fs.writeFileSync(path.join(repo, 'nested', 'file.txt'), 'v1 nested\n');
+    git(['add', '.']);
+    git(['commit', '--quiet', '-m', 'first']);
+    git(['tag', 'v1.0.0']);
+    fs.writeFileSync(path.join(repo, 'marker.txt'), 'v2 bytes\n');
+    git(['commit', '--quiet', '-am', 'second']);
+    git(['tag', 'v2.0.0']);
+    return repo;
+  }
+
+  test('acquireWithGit checks out exactly the pinned tag\'s bytes and leaves no .git behind', () => {
+    const repo = tagRepo();
+    const snapshot = acquireWithGit({ url: repo, reference: 'v1.0.0' });
+    CLEANUP.push(snapshot);
+    assert.strictEqual(fs.readFileSync(path.join(snapshot, 'marker.txt'), 'utf8'), 'v1 bytes\n',
+      'the checked-out bytes are the pinned tag, not the later commit on the same repository');
+    assert.strictEqual(fs.readFileSync(path.join(snapshot, 'nested', 'file.txt'), 'utf8'), 'v1 nested\n');
+    assert.strictEqual(fs.existsSync(path.join(snapshot, '.git')), false,
+      'no .git directory remains in the snapshot the trust step would read');
+  });
+
+  test('a fetch of a reference that does not exist refuses with code acquire-failed and removes the temporary directory it created', () => {
+    const repo = tagRepo();
+    // acquireWithGit creates its own temp directory internally and never
+    // hands its path back on failure, so the proof is by name prefix rather
+    // than by the exact path: nothing new under that prefix survives.
+    const before = new Set(fs.readdirSync(os.tmpdir()).filter((n) => n.startsWith('rundock-ext-')));
+    assert.throws(() => acquireWithGit({ url: repo, reference: 'v9.9.9-does-not-exist' }),
+      (e) => e.code === 'acquire-failed');
+    const after = new Set(fs.readdirSync(os.tmpdir()).filter((n) => n.startsWith('rundock-ext-')));
+    const leaked = [...after].filter((n) => !before.has(n));
+    assert.deepStrictEqual(leaked, [],
+      'the temporary directory acquireWithGit created for the failed fetch was not removed');
+  });
+});
+
 describe('the manifest is required for code, and refused strictly', () => {
   test('a snapshot with no manifest is not an extension, with its own code', () => {
     const dir = tempDir('bare-');
@@ -190,6 +240,34 @@ describe('the manifest is required for code, and refused strictly', () => {
     manifest.extension.entry = '../outside.html';
     fs.writeFileSync(path.join(dir, 'rundock.json'), JSON.stringify(manifest));
     assert.throws(() => readExtensionManifest(dir), /inside the package/);
+  });
+
+  test('an entry path passing through a symlinked directory segment is refused before any bytes are read', () => {
+    const dir = tempDir('symlink-entry-');
+    const outside = tempDir('symlink-outside-');
+    fs.writeFileSync(path.join(outside, 'secret.html'), 'OUTSIDE BYTES\n');
+    // "view" itself is a symlink pointing outside the snapshot; the entry
+    // names a file reached only by walking through it.
+    fs.symlinkSync(outside, path.join(dir, 'view'));
+    fs.writeFileSync(path.join(dir, 'rundock.json'), JSON.stringify({
+      name: 'test-ext', version: '1.0.0', extension: { entry: 'view/secret.html', match: '*.md' },
+    }, null, 2));
+    assert.throws(() => readExtensionManifest(dir), /symlink/,
+      'a symlinked path segment is refused by name, reached only by lstat, before the file it leads to is ever opened');
+  });
+
+  test('a file inside the extension directory that is itself a symlink to outside the snapshot is refused, and nothing outside is read', () => {
+    const dir = extensionSnapshot();
+    const outside = tempDir('symlink-outside-');
+    fs.writeFileSync(path.join(outside, 'secret.txt'), 'OUTSIDE BYTES\n');
+    // A file sitting beside the (legitimate) entry, inside the same
+    // top-level directory extensionFileSet walks whole.
+    fs.symlinkSync(path.join(outside, 'secret.txt'), path.join(dir, 'view', 'leak.txt'));
+    const manifest = readExtensionManifest(dir);
+    assert.throws(() => extensionFileSet(dir, manifest.entry), /symlink/,
+      'a symlinked file inside the mounted directory is refused by name, whatever order the directory walk reaches it in');
+    assert.throws(() => deriveFacts(dir, manifest), /symlink/,
+      'deriveFacts calls extensionFileSet for facts.files too, so the trust step\'s own file list refuses the same way');
   });
 });
 
@@ -619,7 +697,11 @@ describe('an update begins from the installed record, never from the caller', ()
         acquired = 0;
         handlers.handlePlanExtensionUpdate({}, sock, { type: 'plan_extension_update', name: 'test-ext', reference: '   ' });
         assert.strictEqual(sock.sent[2].type, 'extension_install_error');
-        assert.match(sock.sent[2].message, /a reference to update to is required/);
+        // The blank reference goes through the same validation a fresh
+        // install's pasted reference does, so it carries that refusal's
+        // reason and code rather than a bespoke message.
+        assert.match(sock.sent[2].message, /a pinned reference .* is required/);
+        assert.strictEqual(sock.sent[2].code, 'unpinned-reference');
         assert.strictEqual(acquired, 0);
       } finally {
         handlers.wireExtensionDeps(previousDeps);
@@ -655,6 +737,119 @@ describe('an update begins from the installed record, never from the caller', ()
         handlers.wireExtensionDeps(previousDeps);
       }
     });
+  });
+
+  test('handlePlanExtensionUpdate answers rather than throws when the records file is unreadable', () => {
+    withWorkspace((ws) => {
+      const recordsPath = path.join(ws, ...RECORDS_PATH.split('/'));
+      fs.mkdirSync(path.dirname(recordsPath), { recursive: true });
+      fs.writeFileSync(recordsPath, '{ not valid json');
+      let acquired = 0;
+      const previousDeps = handlers.wireExtensionDeps({ acquire: () => { acquired += 1; return extensionSnapshot(); } });
+      try {
+        const sock = captureWs();
+        assert.doesNotThrow(() => {
+          handlers.handlePlanExtensionUpdate({}, sock, { type: 'plan_extension_update', name: 'test-ext', reference: 'v2.0.0' });
+        }, 'a handler answers, it never throws out of the dispatch');
+        assert.strictEqual(sock.sent[0].type, 'extension_install_error');
+        assert.match(sock.sent[0].message, /extension records unreadable/);
+        assert.strictEqual(acquired, 0, 'nothing was acquired for a request that could not even read the record');
+      } finally {
+        handlers.wireExtensionDeps(previousDeps);
+      }
+    });
+  });
+
+  test('handlePlanExtensionUpdate answers rather than throws when the installed record has no source', () => {
+    withWorkspace((ws) => {
+      const recordsPath = path.join(ws, ...RECORDS_PATH.split('/'));
+      fs.mkdirSync(path.dirname(recordsPath), { recursive: true });
+      fs.writeFileSync(recordsPath, JSON.stringify({
+        schema: 'rundock.extensions/v1',
+        extensions: [{
+          name: 'test-ext', version: '1.0.0', entry: 'view/index.html', match: '*.md',
+          installedAt: '2026-01-01T00:00:00.000Z', root: `${EXTENSIONS_ROOT}/test-ext`,
+        }],
+      }, null, 2));
+      let acquired = 0;
+      const previousDeps = handlers.wireExtensionDeps({ acquire: () => { acquired += 1; return extensionSnapshot(); } });
+      try {
+        const sock = captureWs();
+        assert.doesNotThrow(() => {
+          handlers.handlePlanExtensionUpdate({}, sock, { type: 'plan_extension_update', name: 'test-ext', reference: 'v2.0.0' });
+        }, 'a handler answers, it never throws out of the dispatch');
+        assert.strictEqual(sock.sent[0].type, 'extension_install_error');
+        assert.match(sock.sent[0].message, /carries no source url/);
+        assert.strictEqual(acquired, 0);
+      } finally {
+        handlers.wireExtensionDeps(previousDeps);
+      }
+    });
+  });
+
+  test('a stored url that is not a canonical GitHub url is refused, revalidated the same way a fresh install validates a pasted one', () => {
+    withWorkspace((ws) => {
+      const recordsPath = path.join(ws, ...RECORDS_PATH.split('/'));
+      fs.mkdirSync(path.dirname(recordsPath), { recursive: true });
+      fs.writeFileSync(recordsPath, JSON.stringify({
+        schema: 'rundock.extensions/v1',
+        extensions: [{
+          name: 'test-ext', version: '1.0.0', entry: 'view/index.html', match: '*.md',
+          source: { url: 'not a url at all', reference: 'v1.0.0' },
+          installedAt: '2026-01-01T00:00:00.000Z', root: `${EXTENSIONS_ROOT}/test-ext`,
+        }],
+      }, null, 2));
+      let acquired = 0;
+      const previousDeps = handlers.wireExtensionDeps({ acquire: () => { acquired += 1; return extensionSnapshot(); } });
+      try {
+        const sock = captureWs();
+        handlers.handlePlanExtensionUpdate({}, sock, { type: 'plan_extension_update', name: 'test-ext', reference: 'v2.0.0' });
+        assert.strictEqual(sock.sent[0].type, 'extension_install_error');
+        assert.match(sock.sent[0].message, /not a GitHub repository/);
+        assert.strictEqual(acquired, 0, 'the stored url failed validation before any acquisition');
+      } finally {
+        handlers.wireExtensionDeps(previousDeps);
+      }
+    });
+  });
+});
+
+describe('consent binds to the workspace it was shown against', () => {
+  test('a confirm answered after the server workspace changed installs nothing and refuses by name', () => {
+    const workspaceA = workspace();
+    const workspaceB = workspace();
+    const previousWorkspace = config.getWorkspace();
+    config.setWorkspace(workspaceA);
+    const snap = extensionSnapshot();
+    const previousDeps = handlers.wireExtensionDeps({ acquire: () => snap });
+    try {
+      const sock = captureWs();
+      handlers.handlePlanExtensionInstall({}, sock, { type: 'plan_extension_install', url: 'someone/test-ext', reference: 'v1.0.0' });
+      const token = sock.sent[0].token;
+      assert.ok(fs.existsSync(snap), 'sanity: the offer is waiting between offer and answer');
+
+      // Another window moves the server's served workspace before this
+      // window answers. The facts this window read, including whether the
+      // install replaces anything, were true of workspace A alone.
+      config.setWorkspace(workspaceB);
+      handlers.handleConfirmExtensionInstall({}, sock, { type: 'confirm_extension_install', token });
+
+      assert.strictEqual(sock.sent[1].type, 'extension_install_error');
+      assert.strictEqual(sock.sent[1].code, 'workspace-changed');
+      assert.match(sock.sent[1].message, /the workspace changed/);
+      assert.strictEqual(fs.existsSync(snap), false, 'the abandoned snapshot is discarded, not installed');
+      assert.deepStrictEqual(readExtensionRecords(workspaceA), [],
+        'workspace A, where the trust step was shown, was never written to');
+      assert.deepStrictEqual(readExtensionRecords(workspaceB), [],
+        'workspace B, current at confirm time, was never written to either');
+
+      handlers.handleConfirmExtensionInstall({}, sock, { type: 'confirm_extension_install', token });
+      assert.strictEqual(sock.sent[2].type, 'extension_install_error',
+        'the token died with its refused use, the same as any other confirm');
+    } finally {
+      handlers.wireExtensionDeps(previousDeps);
+      config.setWorkspace(previousWorkspace);
+    }
   });
 });
 
@@ -738,6 +933,74 @@ describe('uninstall removes what the install created, and names what stays', () 
       assert.ok(fs.existsSync(path.join(ws, ...EXTENSIONS_ROOT.split('/'), 'test-ext', 'view', 'index.html')),
         'nothing was removed by a refused uninstall');
       assert.strictEqual(readExtensionRecords(ws).length, 1, 'and the record is untouched too');
+    });
+  });
+
+  // Uninstall removes exactly what THIS install created: never the
+  // extensions root itself, and never another installed extension's
+  // directory, however the persisted root is tampered with.
+  test('a record whose root is exactly the extensions root is refused, and every installed extension survives', () => {
+    withWorkspace((ws) => {
+      const testExt = extensionSnapshot({ name: 'test-ext' });
+      const otherExt = extensionSnapshot({ name: 'other-ext' });
+      installExtension(ws, testExt, planExtensionInstall(ws, testExt, SOURCE));
+      installExtension(ws, otherExt, planExtensionInstall(ws, otherExt, { url: 'https://github.com/someone/other-ext', reference: 'v1.0.0' }));
+
+      const records = readExtensionRecords(ws);
+      const target = records.find((r) => r.name === 'test-ext');
+      target.root = EXTENSIONS_ROOT;
+      fs.writeFileSync(path.join(ws, ...RECORDS_PATH.split('/')), serialiseRecords(records));
+
+      assert.throws(() => uninstallExtension(ws, 'test-ext'), (e) => e.code === 'invalid-record',
+        'the extensions root itself is never a legitimate target: it is never what one install created');
+      assert.ok(fs.existsSync(path.join(ws, ...EXTENSIONS_ROOT.split('/'), 'test-ext')), 'test-ext survives');
+      assert.ok(fs.existsSync(path.join(ws, ...EXTENSIONS_ROOT.split('/'), 'other-ext')), 'other-ext survives too');
+      assert.strictEqual(readExtensionRecords(ws).length, 2, 'both records are untouched by the refused uninstall');
+    });
+  });
+
+  test('a record whose root names another installed extension\'s directory is refused, and that extension survives', () => {
+    withWorkspace((ws) => {
+      const testExt = extensionSnapshot({ name: 'test-ext' });
+      const otherExt = extensionSnapshot({ name: 'other-ext' });
+      installExtension(ws, testExt, planExtensionInstall(ws, testExt, SOURCE));
+      installExtension(ws, otherExt, planExtensionInstall(ws, otherExt, { url: 'https://github.com/someone/other-ext', reference: 'v1.0.0' }));
+
+      const records = readExtensionRecords(ws);
+      const target = records.find((r) => r.name === 'test-ext');
+      target.root = `${EXTENSIONS_ROOT}/other-ext`;
+      fs.writeFileSync(path.join(ws, ...RECORDS_PATH.split('/')), serialiseRecords(records));
+
+      assert.throws(() => uninstallExtension(ws, 'test-ext'), (e) => e.code === 'invalid-record',
+        'a root naming a different install-time location than this record\'s own name is refused');
+      assert.ok(fs.existsSync(path.join(ws, ...EXTENSIONS_ROOT.split('/'), 'other-ext', 'view', 'index.html')),
+        'the other extension named by the tampered root was never touched');
+      assert.strictEqual(readExtensionRecords(ws).length, 2, 'both records are untouched by the refused uninstall');
+    });
+  });
+
+  test('a record with an invalid name is refused, and nothing is removed', () => {
+    withWorkspace((ws) => {
+      const snap = extensionSnapshot();
+      installExtension(ws, snap, planExtensionInstall(ws, snap, SOURCE));
+
+      const records = readExtensionRecords(ws);
+      records[0].name = '../../etc';
+      // The root is tampered to resolve the SAME way EXTENSIONS_ROOT plus
+      // this malicious name would, so the separate "root matches its
+      // install-time location" check cannot be what refuses this: only the
+      // name check itself stands between this record and a path built from
+      // an unvalidated name.
+      records[0].root = `${EXTENSIONS_ROOT}/../../etc`;
+      fs.writeFileSync(path.join(ws, ...RECORDS_PATH.split('/')), JSON.stringify({
+        schema: 'rundock.extensions/v1', extensions: records,
+      }, null, 2));
+
+      assert.throws(() => uninstallExtension(ws, '../../etc'), (e) => e.code === 'invalid-record');
+      assert.ok(fs.existsSync(path.join(ws, ...EXTENSIONS_ROOT.split('/'), 'test-ext', 'view', 'index.html')),
+        'the real install is untouched: an invalid name is refused before it is ever joined into a path');
+      assert.strictEqual(fs.existsSync(path.join(ws, '.claude', 'etc')), false,
+        'sanity: nothing was ever materialised at the escaping path this name would have joined into');
     });
   });
 });
