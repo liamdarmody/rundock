@@ -53,6 +53,8 @@ test('the booted server serves the graph for a workspace it indexed itself',
     assert.ok(body.nodes.some((n) => n.path === 'Source.md'), 'the workspace\'s files are nodes');
     const link = body.links.find((l) => l.src === 'Source.md');
     assert.ok(link, 'the link the real indexer extracted is served');
+    assert.strictEqual(link.target, 'Target', 'the raw target the note wrote is served');
+    assert.strictEqual(link.kind, 'wikilink', 'and its kind, which is what excludes embeds client-side');
     assert.strictEqual(link.resolved, 'notes/Target.md',
       'and it resolves through the same resolver a click goes through, on the server\'s own tree');
   });

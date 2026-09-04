@@ -251,6 +251,15 @@ describe('the endpoint resolves at read time against the cached tree', () => {
     assert.deepStrictEqual(body.nodes.map(n => n.path),
       ['alpha/Decoy/Notes.md', 'beta/Target/Notes.md'],
       'every file the tree holds is a node, whether or not anything links it');
+    // THE FIELDS THE CONNECTIONS LIST CONSUMES, pinned where the payload is
+    // produced: the client reads src, target and kind (and ignores resolved,
+    // re-resolving on its own tree), so a projection that narrowed them would
+    // otherwise stay green while every list rendered empty and every embed
+    // counted as a link.
+    assert.deepStrictEqual(
+      { src: body.links[0].src, target: body.links[0].target, kind: body.links[0].kind },
+      { src: 'src.md', target: 'beta/Target/Notes', kind: 'wikilink' },
+      'the served link carries the fields the connections list reads, as the links table holds them');
     assert.strictEqual(body.links[0].resolved, 'beta/Target/Notes.md',
       'the endpoint and a click in a document go through one resolver, so they cannot disagree');
     assert.strictEqual(body.links[1].resolved, null, 'an unresolved link is a fact, not an omission');
