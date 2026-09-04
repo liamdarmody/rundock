@@ -240,6 +240,11 @@ const MANIFEST = {
   ],
   "settings.js": [
     "changeWorkspace",
+    "extensionBack",
+    "extensionConfirm",
+    "extensionDecline",
+    "extensionReplyArrived",
+    "extensionSubmit",
     "packagesCancel",
     "packagesConfirm",
     "packagesConnectionLost",

@@ -17,7 +17,7 @@ const { buildDispatch } = require('../../lib/protocol/handlers/index.js');
 const { _internal: srv } = require('../../server.js');
 const config = require('../../lib/config.js');
 
-// The full routing surface of the dispatch table, frozen: 44 message types
+// The full routing surface of the dispatch table, frozen: 45 message types
 // plus save_agent's two legacy aliases. The four root shims (chat, delegate,
 // end_delegation, flush_buffer) must NEVER appear here: chat is the
 // kill-window chat shim, delegate/end_delegation are delegation glue, and
@@ -30,9 +30,10 @@ const EXPECTED_TYPES = [
   'cancel_routine_run',
   'plan_package_import', 'apply_package_import',
   // The extension install flow: acquire-and-offer, one answer either way,
-  // then update and removal. Pressed by test/unit/extension-install.test.js.
-  'plan_extension_install', 'confirm_extension_install', 'decline_extension_install',
-  'check_extension_update', 'uninstall_extension',
+  // then update (from the wire message or from the installed record) and
+  // removal. Pressed by test/unit/extension-install.test.js.
+  'plan_extension_install', 'plan_extension_update', 'confirm_extension_install',
+  'decline_extension_install', 'check_extension_update', 'uninstall_extension',
   'get_conversations', 'set_last_active_conversation', 'save_conversation',
   'get_lists', 'create_list', 'delete_list', 'delete_conversation',
   'read_file', 'add_to_team',

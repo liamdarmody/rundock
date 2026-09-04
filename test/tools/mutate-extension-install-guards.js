@@ -37,6 +37,7 @@ const RECORD = { src: path.join(ROOT, 'lib', 'packages', 'extension-record.js'),
 const INSTALL = { src: path.join(ROOT, 'lib', 'packages', 'extension-install.js'), suite: SUITE };
 const HANDLERS = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'packages.js'), suite: SUITE };
 const MODEL = { src: path.join(ROOT, 'public', 'packages-install-model.js'), suite: SUITE };
+const SETTINGS_VIEW = { src: path.join(ROOT, 'public', 'views', 'settings.js'), suite: SUITE };
 
 const MUTATIONS = [
   // ===== THE PIN IS REQUIRED =====
@@ -57,6 +58,13 @@ const MUTATIONS = [
     `  if (!reference) {
     return { url: \`https://github.com/\${owner}/\${repo}\`, owner, repo, reference: 'main' };
   }`],
+  // Let a reference beginning with "-" through and it lands in a git argv
+  // position as an option rather than as the thing to fetch.
+  [SOURCE, 'a reference beginning with "-" is refused, not fed to a git argv',
+    `  if (reference.startsWith('-')) {
+    refuse(\`"\${reference}" is not a reference; a pin cannot begin with "-"\`, 'unpinned-reference');
+  }`,
+    ''],
 
   // ===== CODE REQUIRES A MANIFEST =====
   // Wave a manifest-less snapshot through as an extension and inference has
@@ -70,6 +78,30 @@ const MUTATIONS = [
   // the one place the person cannot see.
   [HANDLERS, 'declining discards the acquired snapshot',
     '  if (pending) discardAcquisition(pending.snapshot);',
+    ''],
+
+  // ===== AN UPDATE READS ITS URL FROM THE RECORD, NEVER FROM THE CALLER =====
+  // Let a caller-supplied url win over the record's own and the whole point
+  // of persisting the source is undone: an update could be pointed at a
+  // repository the person never consented to.
+  [HANDLERS, 'the update path sources its URL from the installed record, not the message',
+    '  beginExtensionPlan(ws, workspace, { url: record.source.url, reference });',
+    '  beginExtensionPlan(ws, workspace, { url: (msg.url || record.source.url), reference });'],
+
+  // ===== AN UNANSWERED OFFER DOES NOT LIVE FOREVER =====
+  // Skip the close release and a dropped connection leaves the fetched
+  // snapshot and its token alive for the life of the process.
+  [HANDLERS, 'a dropped connection releases the pending offer',
+    `    if (typeof ws.once === 'function') {
+      ws.once('close', () => releasePending(token));
+    }`,
+    ''],
+  // Skip the supersede release and a second plan on the same connection
+  // leaves the first offer's snapshot and token alive, unreachable and
+  // unanswerable, for the life of the process.
+  [HANDLERS, 'a second plan on the same connection supersedes the first, unanswered one',
+    `    const previousToken = pendingBySocket.get(ws);
+    if (previousToken) releasePending(previousToken);`,
     ''],
 
   // ===== THE TRUST STEP TELLS THE TRUTH =====
@@ -89,10 +121,18 @@ const MUTATIONS = [
     root,
   };
   record.source = { url: source.url, reference: null };`],
-  // Report nothing newer and the check reads as "up to date" forever.
-  [RECORD, 'the update check reports references beyond the pin',
-    "  const newer = refs.filter((name) => typeof name === 'string' && name && name !== record.source.reference);",
-    '  const newer = [];'],
+  // Drop the "actually newer" filter and every reference the listing merely
+  // differs from is offered, including ones behind the installed pin: a
+  // downgrade offered as an update.
+  [RECORD, 'the update check reports only references it can show come after the pin',
+    '    .filter((name) => isNewerReference(name, record.source.reference))',
+    ''],
+  // Drop the sort and the reported order goes back to whatever the listing's
+  // own order was, which for the real default lister is lexicographic:
+  // v10.0.0 before v2.0.0.
+  [RECORD, 'the reported order is the true numeric order, not the listing\'s own order',
+    '    .sort((a, b) => compareSemver(semverParts(a), semverParts(b)));',
+    ';'],
 
   // ===== ONE TRANSACTION CARRIES THE INSTALL =====
   // Split the record from the files and a crash between them leaves a
@@ -114,6 +154,40 @@ const MUTATIONS = [
   [INSTALL, 'uninstall removes the record entry with the files',
     '  const remaining = records.filter((r) => r.name !== name);',
     '  const remaining = records;'],
+
+  // ===== UNINSTALL NEVER TRUSTS THE PERSISTED ROOT =====
+  // Skip the containment check and a records file carrying "root":
+  // "../../something" makes uninstall recursively delete outside the
+  // workspace's extensions directory.
+  [INSTALL, 'a removal target outside the extensions root is refused',
+    `  const withinExtensionsRoot = targetAbsolute === extensionsRootAbsolute
+    || targetAbsolute.startsWith(extensionsRootAbsolute + path.sep);
+  if (!withinExtensionsRoot) {
+    refuse(\`the installed record for "\${name}" names a root outside the extensions directory; refusing to remove anything\`, 'invalid-record');
+  }`,
+    ''],
+  // Skip the missing-root check and a record with no root throws a raw
+  // TypeError from the split() that used to read it, instead of a named
+  // refusal that leaves the workspace untouched.
+  [INSTALL, 'a record with no root is refused by name',
+    `  if (typeof record.root !== 'string' || !record.root) {
+    refuse(\`the installed record for "\${name}" has no root; refusing to remove anything\`, 'invalid-record');
+  }`,
+    ''],
+
+  // ===== THE TRUST CARD SHOWS THE FACT IT DERIVED =====
+  // Drop the rendered file list and the trust card prints its own lead-in
+  // sentence ("read from the package itself") followed by nothing that was
+  // actually read from the package.
+  [SETTINGS_VIEW, 'the trust card renders the derived file list',
+    '        <ul class="extension-facts-files">${copy.files.map((f) => `<li>${esc(f)}</li>`).join(\'\')}</ul>',
+    ''],
+  // Drop extensionReplyArrived from the exported surface and every server
+  // reply for this flow resolves against `window` in a browser and throws,
+  // while every test that calls the handler directly stays green.
+  [SETTINGS_VIEW, 'the extension flow\'s reply entry is on the module\'s exported surface',
+    '  extensionSubmit, extensionConfirm, extensionDecline, extensionBack, extensionReplyArrived };',
+    '  extensionSubmit, extensionConfirm, extensionDecline, extensionBack };'],
 ];
 
 const REPORTER = ['--test-reporter', 'spec'];
@@ -148,7 +222,7 @@ function redTests(suite) {
 }
 
 function run() {
-  const targets = [SOURCE, MANIFEST, RECORD, INSTALL, HANDLERS, MODEL];
+  const targets = [SOURCE, MANIFEST, RECORD, INSTALL, HANDLERS, MODEL, SETTINGS_VIEW];
   const session = beginMutationRun({ files: [...new Set(targets.map((target) => target.src))] });
   const originals = new Map();
   for (const target of targets) originals.set(target, session.original(target.src));

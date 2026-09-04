@@ -206,6 +206,7 @@ function extensionSectionHtml() {
         <div class="packages-headline">${esc(copy.headline)}</div>
         <div class="packages-body">${esc(copy.sourceLine)}</div>
         <div class="packages-body extension-facts-lead">${esc(copy.factsLead)}</div>
+        <ul class="extension-facts-files">${copy.files.map((f) => `<li>${esc(f)}</li>`).join('')}</ul>
         <div class="packages-body">${esc(copy.body)}</div>
         <div class="packages-body extension-match-line">${esc(copy.matchLine)}</div>
         ${copy.replacesLine ? `<div class="packages-body">${esc(copy.replacesLine)}</div>` : ''}
@@ -371,5 +372,10 @@ function changeWorkspace() {
 
 return { showSettingsSection, renderSettingsSection, setWorkspaceMode, runtimeRowHtml, runtimesCardHtml, renderRuntimesCard, changeWorkspace,
   packagesSubmit, packagesCancel, packagesConfirm, packagesRetry,
-  packagesReplyArrived, packagesWorkspaceChanged, packagesConnectionLost };
+  packagesReplyArrived, packagesWorkspaceChanged, packagesConnectionLost,
+  // The extension flow's own onclick names and its reply entry, published
+  // for the same reason the pack flow's are: the generated markup and the
+  // app.js dispatch case resolve these against the module's exported
+  // surface, not against private closure variables.
+  extensionSubmit, extensionConfirm, extensionDecline, extensionBack, extensionReplyArrived };
 }));
