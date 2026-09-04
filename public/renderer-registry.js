@@ -19,12 +19,16 @@ function normaliseTarget(target) {
   return String(target || '').toLowerCase();
 }
 
-// The target grammar, version one: a file extension including the dot, such
-// as ".csv" or ".dataview". Deliberately small; a grammar can grow, but a
-// registry that accepted arbitrary patterns on day one could never shrink
-// them again without breaking somebody's extension.
+// The target grammar, version one: a single dot-prefixed segment, such as
+// ".csv" or ".dataview". A single final segment on purpose, because that is
+// exactly what rendererFor can look up: it resolves a file's target with the
+// last dot, so a multi-segment claim like ".tar.gz" would register, list,
+// and never match anything, the quiet shadowing this module exists to
+// prevent. No dots after the first, so the accepted grammar and the lookup
+// agree. A grammar can grow later, but it can never shrink without breaking
+// an extension, so it starts as small as the lookup can honour.
 export function isValidTarget(target) {
-  return /^\.[a-z0-9][a-z0-9.-]*$/.test(normaliseTarget(target));
+  return /^\.[a-z0-9][a-z0-9-]*$/.test(normaliseTarget(target));
 }
 
 export function createRendererRegistry() {

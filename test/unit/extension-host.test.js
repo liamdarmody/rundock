@@ -48,8 +48,6 @@ async function mounted(opts = {}) {
     payload: opts.payload || PAYLOAD,
     onOpen: (t) => opened.push(t),
     onDegrade: (reason) => degraded.push(reason),
-    readResource: opts.readResource,
-    writeResource: opts.writeResource,
     readyTimeoutMs: opts.readyTimeoutMs || 5000,
   });
   const frame = handle.frame();
@@ -57,18 +55,41 @@ async function mounted(opts = {}) {
     frame.contentWindow.postMessage = (msg) => sent.push(msg);
   }
   const source = frame ? frame.contentWindow : null;
-  return { dom, pane, handle, frame, source, sent, degraded, opened };
+  // A genuine `message` event dispatched on the mounting window, so the real
+  // addEventListener path is what carries it rather than a call into
+  // handle.dispatch. This is the wire the criteria ask the refusal to be
+  // proven on.
+  function wire(data, from) {
+    const ev = new dom.window.Event('message');
+    ev.data = data;
+    Object.defineProperty(ev, 'source', { value: from === undefined ? source : from });
+    dom.window.dispatchEvent(ev);
+  }
+  return { dom, pane, handle, frame, source, sent, degraded, opened, wire };
 }
 
 describe('the contract document and the host agree on every message', () => {
   test('the table the document publishes is the table the host enforces, both ways', async () => {
     const { EXTENSION_MESSAGES, HOST_MESSAGES } = await host();
     const doc = fs.readFileSync(path.join(ROOT, 'docs', 'EXTENSION-HOST.md'), 'utf-8');
-    const rows = [...doc.matchAll(/^\| `([a-z]+)` \| `\{ type/gm)].map((m) => m[1]).sort();
+    // Each message row: the type, and the Shape cell it publishes.
+    const rows = [...doc.matchAll(/^\| `([a-z]+)` \| `(\{ type[^`]*)`/gm)]
+      .map((m) => ({ type: m[1], shape: m[2] }));
+    const types = rows.map((r) => r.type).sort();
     assert.ok(rows.length >= 4, 'the parse found the document\'s message rows; an empty read is a broken instrument');
-    assert.deepStrictEqual(Object.keys(EXTENSION_MESSAGES).sort(), rows,
+    assert.deepStrictEqual(Object.keys(EXTENSION_MESSAGES).sort(), types,
       'a message in one table and not the other is a capability the contract does not govern: '
       + 'edit docs/EXTENSION-HOST.md and EXTENSION_MESSAGES together');
+    // Every field the document's Shape cell names for a type is a field the
+    // host checks for that type, so the Shape column cannot promise a field
+    // the mediator does not enforce.
+    for (const { type, shape } of rows) {
+      const declaredFields = [...shape.matchAll(/,\s*([a-z]+):/g)].map((m) => m[1]);
+      for (const field of declaredFields) {
+        assert.ok(Object.prototype.hasOwnProperty.call(EXTENSION_MESSAGES[type], field),
+          `the document's shape for "${type}" names field "${field}" that the host does not check`);
+      }
+    }
     for (const hostType of HOST_MESSAGES) {
       assert.ok(doc.includes(`\`${hostType}\``),
         `the document never mentions the host-to-extension message "${hostType}"`);
@@ -89,70 +110,86 @@ describe('the frame is opaque-origin, and only that', () => {
 });
 
 describe('the mediator refuses what the contract does not name, on the wire', () => {
-  test('an unknown type is refused with a reason', async () => {
-    const { handle, source, sent } = await mounted();
-    handle.dispatch({ source, data: { type: 'steal-the-socket' } });
+  test('an unknown type is refused with a reason, through the real event listener', async () => {
+    const { wire, sent } = await mounted();
+    wire({ type: 'steal-the-socket' });
     assert.strictEqual(sent.length, 1);
     assert.strictEqual(sent[0].type, 'refused');
     assert.strictEqual(sent[0].of, 'steal-the-socket');
     assert.match(sent[0].reason, /contract names no message/);
   });
 
+  test('a read or write is now an unnamed type, refused by the closed table', async () => {
+    const { wire, sent } = await mounted();
+    wire({ type: 'read', resource: 'notes' });
+    wire({ type: 'write', resource: 'notes', content: 'x' });
+    assert.strictEqual(sent.length, 2);
+    assert.ok(sent.every((m) => m.type === 'refused'),
+      'resource messages are absent from the contract, so the mediator refuses them like any other unnamed type');
+  });
+
   test('a named type with the wrong field shape is refused naming the field', async () => {
-    const { handle, source, sent } = await mounted();
-    handle.dispatch({ source, data: { type: 'resize', height: 'very tall' } });
+    const { wire, sent } = await mounted();
+    wire({ type: 'resize', height: 'very tall' });
     assert.strictEqual(sent[0].type, 'refused');
     assert.match(sent[0].reason, /"height"/);
   });
 
+  test('every named field is enforced: a wrong-shaped open target is refused', async () => {
+    const { wire, sent } = await mounted();
+    wire({ type: 'open', target: '' });
+    assert.strictEqual(sent[0].type, 'refused');
+    assert.match(sent[0].reason, /"target"/);
+  });
+
   test('a message from a window that is not the live frame is ignored entirely', async () => {
-    const { handle, sent } = await mounted();
-    handle.dispatch({ source: {}, data: { type: 'ready' } });
+    const { wire, sent } = await mounted();
+    wire({ type: 'ready' }, {});
     assert.strictEqual(sent.length, 0,
       'not even a refusal: replying to an unknown window would teach it the host is listening');
   });
 
-  test('ready is answered with init, and the watchdog stands down', async () => {
-    const { handle, source, sent } = await mounted({ readyTimeoutMs: 30 });
-    handle.dispatch({ source, data: { type: 'ready' } });
+  test('ready is answered with init over the wire, and the watchdog stands down', async () => {
+    const { wire, handle, sent } = await mounted({ readyTimeoutMs: 30 });
+    wire({ type: 'ready' });
     assert.deepStrictEqual(sent, [{ type: 'init' }]);
     await new Promise((r) => setTimeout(r, 60));
     assert.strictEqual(handle.alive(), true, 'a view that said ready is not torn down by the clock');
   });
 
-  test('a declared resource reads and an undeclared one is refused', async () => {
-    const reads = [];
-    const { handle, source, sent } = await mounted({
-      readResource: (id) => { reads.push(id); return Promise.resolve('the notes'); },
-    });
-    handle.dispatch({ source, data: { type: 'read', resource: 'notes' } });
-    await new Promise((r) => setTimeout(r, 0));
-    assert.deepStrictEqual(reads, ['notes']);
-    assert.deepStrictEqual(sent[0], { type: 'resource', resource: 'notes', content: 'the notes' });
-
-    handle.dispatch({ source, data: { type: 'read', resource: 'the-whole-disk' } });
-    assert.strictEqual(sent[1].type, 'refused');
-    assert.match(sent[1].reason, /declares no resource/);
-  });
-
-  test('a write over the declared cap is refused naming the cap', async () => {
-    const writes = [];
-    const { handle, source, sent } = await mounted({
-      writeResource: (id, content) => writes.push([id, content]),
-    });
-    handle.dispatch({ source, data: { type: 'write', resource: 'notes', content: 'x'.repeat(101) } });
-    assert.strictEqual(sent[0].type, 'refused');
-    assert.match(sent[0].reason, /capped at 100 bytes/);
-    assert.deepStrictEqual(writes, [], 'nothing reached the writer');
-
-    handle.dispatch({ source, data: { type: 'write', resource: 'notes', content: 'small' } });
-    assert.deepStrictEqual(writes, [['notes', 'small']]);
+  test('resize is clamped to the published bounds, never trusted raw', async () => {
+    const mod = await host();
+    const { wire, frame } = await mounted();
+    wire({ type: 'resize', height: 1 });
+    assert.strictEqual(frame.style.height, `${mod.MIN_FRAME_HEIGHT}px`,
+      'a height below the floor is raised to it');
+    wire({ type: 'resize', height: 10000000 });
+    assert.strictEqual(frame.style.height, `${mod.MAX_FRAME_HEIGHT}px`,
+      'a height above the ceiling is lowered to it');
   });
 
   test('open passes the target to the opener and navigates nothing itself', async () => {
-    const { handle, source, opened } = await mounted();
-    handle.dispatch({ source, data: { type: 'open', target: 'Projects/plan.md' } });
+    const { wire, opened } = await mounted();
+    wire({ type: 'open', target: 'Projects/plan.md' });
     assert.deepStrictEqual(opened, ['Projects/plan.md']);
+  });
+
+  test('after teardown the real listener is gone from the window, not merely inert', async () => {
+    // Count the window's message listeners directly, so this proves the
+    // removeEventListener ran rather than proving the alive guard also
+    // blocks a late message (which it does, but that is a second belt): a
+    // teardown that left the listener bound would leak one per mount.
+    const { mountExtension } = await host();
+    const { dom, pane } = shell();
+    let bound = 0;
+    const realAdd = dom.window.addEventListener.bind(dom.window);
+    const realRemove = dom.window.removeEventListener.bind(dom.window);
+    dom.window.addEventListener = (type, fn) => { if (type === 'message') bound += 1; realAdd(type, fn); };
+    dom.window.removeEventListener = (type, fn) => { if (type === 'message') bound -= 1; realRemove(type, fn); };
+    const handle = mountExtension({ paneElement: pane, payload: PAYLOAD, onDegrade() {} });
+    assert.strictEqual(bound, 1, 'the mount bound exactly one message listener');
+    handle.teardown();
+    assert.strictEqual(bound, 0, 'and teardown unbound it, so nothing is left listening on the window');
   });
 });
 
@@ -195,6 +232,18 @@ describe('a misbehaving view degrades to the plain rendering, named', () => {
     assert.throws(() => mountExtension({ paneElement: pane, payload: PAYLOAD }),
       /requires onDegrade/);
   });
+
+  test('the failure handle is the same shape as a live one, so a caller need not know which it holds', async () => {
+    const { mountExtension } = await host();
+    const { doc } = shell();
+    const brokenPane = doc.createElement('div');
+    brokenPane.appendChild = () => { throw new Error('no room'); };
+    const handle = mountExtension({ paneElement: brokenPane, payload: PAYLOAD, onDegrade() {} });
+    assert.strictEqual(typeof handle.frame, 'function', 'frame is an accessor on both paths');
+    assert.strictEqual(handle.frame(), null, 'and answers null after a failed mount');
+    assert.strictEqual(handle.swap(null), null, 'swap answers null the way the live handle does');
+    assert.doesNotThrow(() => { handle.teardown(); handle.dispatch({}); });
+  });
 });
 
 describe('the mount survives update and uninstall mid-session', () => {
@@ -202,11 +251,13 @@ describe('the mount survives update and uninstall mid-session', () => {
     const first = await mounted();
     const oldSource = first.source;
     const oldSent = first.sent;
-    const next = first.handle.swap({ entry: 'parent.postMessage({type:"ready"},"*");' });
+    const next = first.handle.swap({ entry: 'parent.postMessage({type:"ready"},"*");', styles: ['body{color:blue}'] });
     assert.ok(next, 'an update mounts the new payload');
     assert.strictEqual(first.pane.querySelectorAll('iframe').length, 1,
       'exactly one frame on the page: the old one left when the new one arrived');
     assert.notStrictEqual(next.frame(), first.frame);
+    assert.match(next.frame().srcdoc, /color:blue/,
+      'the new frame carries the new payload, so an update is a real version swap and not the old frame renamed');
     next.dispatch({ source: oldSource, data: { type: 'ready' } });
     assert.strictEqual(oldSent.length, 0,
       'the old frame\'s window stopped being the live source at teardown, so its messages fall on nothing');
@@ -283,5 +334,19 @@ describe('the server reads installations and guards every payload path', () => {
     const p = registry.uiPayload('/nowhere', '../escape', 'r');
     assert.strictEqual(p.ok, false);
     assert.match(p.reason, /not an installed-directory name/);
+  });
+
+  test('a manifest whose renderers is not an array is refused, not raised on', () => {
+    const dir = workspace({
+      '.rundock/plugins/corrupt/manifest.json': JSON.stringify({
+        schemaVersion: 1, id: 'corrupt', renderers: { chart: 'ui/index.js' },
+      }),
+    });
+    try {
+      const p = registry.uiPayload(dir, 'corrupt', 'chart');
+      assert.strictEqual(p.ok, false);
+      assert.match(p.reason, /no renderers array/,
+        'a hostile or corrupt manifest cannot make the server raise');
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
   });
 });

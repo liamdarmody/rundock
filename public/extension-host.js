@@ -31,16 +31,23 @@ export const EXTENSION_MESSAGES = {
   resize: { height: (v) => typeof v === 'number' && Number.isFinite(v) },
   error: { message: (v) => typeof v === 'string' },
   open: { target: (v) => typeof v === 'string' && v.length > 0 },
-  read: { resource: (v) => typeof v === 'string' && v.length > 0 },
-  write: {
-    resource: (v) => typeof v === 'string' && v.length > 0,
-    content: (v) => typeof v === 'string',
-  },
 };
+
+// RESOURCE READ AND WRITE ARE NOT IN THIS TABLE, AND THAT IS A DECISION. An
+// extension reading and writing its own declared resources is a real future
+// capability, but it needs a server transport that resolves a resource id
+// inside the extension's directory and enforces a byte cap, and none of that
+// is built in this lane. Naming read and write here while the server drops
+// them would be the absent-contract failure this whole surface exists to
+// avoid: a capability promised and unenforced. So they are absent, which
+// means a read or write is an unnamed type and the mediator refuses it with
+// a reason like any other. When the transport ships, the two rows and their
+// enforcement arrive together.
+
 
 // Messages the host may say to a frame. Listed for the contract test; the
 // host never accepts these directions in reverse.
-export const HOST_MESSAGES = ['init', 'resource', 'refused'];
+export const HOST_MESSAGES = ['init', 'refused'];
 
 // The frame height is a request, not a command. Clamped so a hostile or
 // broken view cannot stretch the page into uselessness.
@@ -105,13 +112,10 @@ export function validateMessage(data) {
  *
  * @param {{
  *   paneElement: Element,
- *   payload: { entry: string, styles?: string[], resources?: Array<{id: string, maximumBytes?: number}> },
+ *   payload: { entry: string, styles?: string[] },
  *   onOpen?: (target: string) => void,
  *   onDegrade: (reason: string) => void,
- *   readResource?: (id: string) => Promise<string>,
- *   writeResource?: (id: string, content: string) => Promise<void>,
  *   readyTimeoutMs?: number,
- *   now?: () => number,
  * }} opts
  *
  * `onDegrade` is not optional, deliberately: a host mounted with nowhere to
@@ -122,7 +126,6 @@ export function validateMessage(data) {
 export function mountExtension(opts) {
   const {
     paneElement, payload, onOpen, onDegrade,
-    readResource, writeResource,
     readyTimeoutMs = READY_TIMEOUT_MS,
   } = opts;
   if (typeof onDegrade !== 'function') {
@@ -130,11 +133,6 @@ export function mountExtension(opts) {
   }
   const doc = paneElement.ownerDocument;
   const win = doc.defaultView;
-
-  // Declared resources, by id. The mediator refuses anything else before the
-  // server is ever asked, so an undeclared id is refused on the wire.
-  const declared = new Map();
-  for (const r of (payload.resources || [])) declared.set(r.id, r);
 
   let frame = null;
   let alive = false;
@@ -190,29 +188,6 @@ export function mountExtension(opts) {
       if (typeof onOpen === 'function') onOpen(data.target);
       return;
     }
-    if (data.type === 'read' || data.type === 'write') {
-      const resource = declared.get(data.resource);
-      if (!resource) {
-        send({ type: 'refused', of: data.type, reason: `the manifest declares no resource "${data.resource}"` });
-        return;
-      }
-      if (data.type === 'write') {
-        const cap = resource.maximumBytes || 65536;
-        if (data.content.length > cap) {
-          send({ type: 'refused', of: 'write', reason: `"${data.resource}" is capped at ${cap} bytes` });
-          return;
-        }
-        if (typeof writeResource === 'function') writeResource(data.resource, data.content);
-        return;
-      }
-      if (typeof readResource === 'function') {
-        Promise.resolve(readResource(data.resource)).then(
-          (content) => send({ type: 'resource', resource: data.resource, content }),
-          (e) => send({ type: 'refused', of: 'read', reason: String(e && e.message || e) }),
-        );
-      }
-      return;
-    }
   }
 
   function onMessage(event) { dispatch(event); }
@@ -233,7 +208,10 @@ export function mountExtension(opts) {
     }, readyTimeoutMs);
   } catch (e) {
     degrade(`the extension could not be mounted: ${String(e && e.message || e)}`);
-    return { alive: () => false, teardown() {}, swap() {}, dispatch() {}, frame: null };
+    // The same shape as the live handle, so a caller that holds one need not
+    // know which it holds: frame answers null the way a torn-down mount's
+    // does, and swap answers null the way the live handle does.
+    return { alive: () => false, frame: () => null, dispatch() {}, teardown() {}, swap: () => null };
   }
 
   const handle = {

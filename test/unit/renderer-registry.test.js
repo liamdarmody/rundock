@@ -66,49 +66,66 @@ describe('the registry answers registered or why not, never a third thing', () =
     assert.deepStrictEqual(r.targets(), ['.chart', '.grid'],
       'what registered is exactly the valid, enabled, unshadowed claims');
   });
+
+  test('a multi-segment target is refused, because the lookup could never match it', async () => {
+    const { createRendererRegistry } = await registryModule();
+    const r = createRendererRegistry();
+    r.registerFromRoster([{ id: 'z', enabled: true, renderers: [{ id: 'g', target: '.tar.gz' }] }]);
+    assert.deepStrictEqual(r.targets(), [],
+      'a target the last-dot lookup cannot reach never enters the registry');
+    assert.strictEqual(r.refusals().length, 1, 'and it is recorded, not silently dropped');
+    assert.strictEqual(r.rendererFor('archive.tar.gz').registered, false,
+      'the accepted grammar and the lookup agree: nothing claims it');
+  });
 });
 
 describe('the file view seam degrades, and never mounts blind', () => {
   const FILES_SRC = fs.readFileSync(path.join(ROOT, 'public', 'views', 'files.js'), 'utf-8');
 
-  // The seam's own function, cut from the shipped file the way the doors
-  // suites cut dispatch cases: the extraction refuses to match nothing, so a
-  // renamed seam fails here instead of testing an empty string.
-  function cutSeam() {
-    const m = FILES_SRC.match(/function openThroughRendererSeam\(viewers, path, content, surface\) \{[\s\S]*?\n\}/);
-    assert.ok(m, 'files.js no longer carries openThroughRendererSeam');
+  // Three functions cut from the shipped file, so the code under test is the
+  // code that runs in the product: the seam, its transport fallback, and its
+  // host loader. Each extraction refuses to match nothing, so a rename fails
+  // here rather than testing an empty string.
+  function cut(re, name) {
+    const m = FILES_SRC.match(re);
+    assert.ok(m, `files.js no longer carries ${name}`);
     return m[0];
   }
 
-  // The transport fallback is cut beside the seam, so the no-transport
-  // answer under test is the shipped one rather than a stand-in.
-  function cutFetcher() {
-    const m = FILES_SRC.match(/function fetchExtensionUi\(extensionId, rendererId\) \{[\s\S]*?\n\}/);
-    assert.ok(m, 'files.js no longer carries fetchExtensionUi');
-    return m[0];
-  }
-
-  function driveSeam({ registry, currentPath = 'a.chart' }) {
-    const seam = cutSeam();
-    const fetcher = cutFetcher();
+  // Drive the seam with an injectable host loader and transport, so each path
+  // is reachable and distinguishable rather than all collapsing into the
+  // dynamic-import failure a Node test environment forces.
+  function driveSeam({ registry, fetcher, hostLoader, currentPath = 'a.chart' }) {
+    const seam = cut(/function openThroughRendererSeam\(viewers, path, content, surface\) \{[\s\S]*?\n\}/, 'openThroughRendererSeam');
+    const fetcherFn = cut(/function fetchExtensionUi\(extensionId, rendererId\) \{[\s\S]*?\n\}/, 'fetchExtensionUi');
+    const loaderFn = cut(/function loadExtensionHost\(\) \{[\s\S]*?\n\}/, 'loadExtensionHost');
+    const claimFn = cut(/function claimEditorPane\(\) \{[\s\S]*?\n\}/, 'claimEditorPane');
     const surfaced = [];
     const noted = [];
-    const windowStub = { rundockRendererRegistry: registry };
+    const paneStub = { classList: { remove() {}, add() {} }, className: '', textContent: '' };
+    const windowStub = {
+      rundockRendererRegistry: registry,
+      rundockExtensionUiFetcher: fetcher,
+      rundockExtensionHostLoader: hostLoader,
+    };
     const fn = new Function(
       'window', 'document', 'currentFilePath', 'noteRendererFailure',
-      'openWikilink', 'activeExtensionMount',
-      `${fetcher}; ${seam}; return openThroughRendererSeam;`,
+      'openWikilink', 'activeExtensionMount', 'destroyActiveFileViewer', 'destroyTiptapEditorIfActive', 'clearTimeout', '_tiptapSaveTimer',
+      `${claimFn}; ${loaderFn}; ${fetcherFn}; ${seam}; return openThroughRendererSeam;`,
     )(
       windowStub,
-      { getElementById: () => ({ classList: { remove() {} }, textContent: '' }) },
+      { getElementById: () => paneStub },
       currentPath,
       (reason) => noted.push(reason),
       () => {},
       null,
+      () => {}, () => {}, () => {}, null,
     );
     fn({}, currentPath, 'content', (v, p) => surfaced.push(p));
-    return { surfaced, noted };
+    return { surfaced, noted, windowStub };
   }
+
+  const CLAIMING_REGISTRY = { rendererFor: () => ({ registered: true, extension: 'charts', renderer: 'chart' }) };
 
   test('an unregistered target lands on the plain surface at once', () => {
     const { surfaced, noted } = driveSeam({
@@ -123,18 +140,57 @@ describe('the file view seam degrades, and never mounts blind', () => {
     assert.deepStrictEqual(surfaced, ['a.chart']);
   });
 
-  test('a claimed target whose transport or mount fails degrades to the plain surface, named', async () => {
+  test('a claimed target with no registered transport degrades, carrying the shipped reason', async () => {
     const { surfaced, noted } = driveSeam({
-      registry: { rendererFor: () => ({ registered: true, extension: 'charts', renderer: 'chart' }) },
+      registry: CLAIMING_REGISTRY,
+      hostLoader: () => Promise.resolve({ mountExtension: () => { throw new Error('should not mount'); } }),
       fetcher: undefined,
     });
-    // The claim path is asynchronous; the degrade must arrive, not be hoped
-    // for. Either the missing transport or the unloadable host module lands
-    // it on the surface with a reason.
-    await new Promise((r) => setTimeout(r, 50));
-    assert.deepStrictEqual(surfaced, ['a.chart'],
-      'a broken renderer never costs the reader their file');
+    await new Promise((r) => setTimeout(r, 20));
+    assert.deepStrictEqual(surfaced, ['a.chart'], 'a broken renderer never costs the reader their file');
     assert.strictEqual(noted.length, 1);
+    assert.match(noted[0], /no extension transport is registered yet/,
+      'the note carries the shipped fallback reason, not a test-environment import error');
+  });
+
+  test('a claimed target with a working transport actually mounts through the host', async () => {
+    const mounts = [];
+    const { surfaced, noted } = driveSeam({
+      registry: CLAIMING_REGISTRY,
+      fetcher: () => Promise.resolve({ entry: 'draw();', styles: [] }),
+      hostLoader: () => Promise.resolve({
+        mountExtension: (opts) => { mounts.push(opts); return { teardown() {} }; },
+      }),
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    assert.strictEqual(mounts.length, 1, 'the host was asked to mount the fetched payload');
+    assert.strictEqual(mounts[0].payload.entry, 'draw();');
+    assert.deepStrictEqual(surfaced, [], 'a working mount does not fall through to the plain surface');
+    assert.deepStrictEqual(noted, []);
+  });
+
+  test('a mount that then degrades calls the plain surface once, with the host reason verbatim', async () => {
+    const { surfaced, noted } = driveSeam({
+      registry: CLAIMING_REGISTRY,
+      fetcher: () => Promise.resolve({ entry: 'draw();', styles: [] }),
+      hostLoader: () => Promise.resolve({
+        mountExtension: (opts) => { opts.onDegrade('the view exploded'); return { teardown() {} }; },
+      }),
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    assert.deepStrictEqual(surfaced, ['a.chart'], 'the degrade returns the reader to the plain surface exactly once');
+    assert.deepStrictEqual(noted, ['the view exploded'], 'the host reason is carried verbatim');
+  });
+
+  test('a reply carrying no entry degrades, whatever else it holds', async () => {
+    const { surfaced, noted } = driveSeam({
+      registry: CLAIMING_REGISTRY,
+      fetcher: () => Promise.resolve({ reason: 'the renderer is broken' }),
+      hostLoader: () => Promise.resolve({ mountExtension: () => { throw new Error('should not mount'); } }),
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    assert.deepStrictEqual(surfaced, ['a.chart']);
+    assert.deepStrictEqual(noted, ['the renderer is broken']);
   });
 
   test('the dispatch routes every open through the seam', () => {

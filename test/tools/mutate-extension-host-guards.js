@@ -75,6 +75,29 @@ const MUTATIONS = [
   [REGISTRY, 'an unregistered target is an answer with a reason, never an invented renderer',
     '      if (!hit) {\n        return { registered: false, reason: `no installed extension renders "${target}"` };\n      }',
     "      if (!hit) {\n        return { registered: true, extension: 'unknown', renderer: 'unknown' };\n      }"],
+  // Widen the grammar to accept multi-segment targets the last-dot lookup can
+  // never match, and the quiet-shadowing refusal this module exists to
+  // prevent comes back.
+  [REGISTRY, 'the accepted grammar is a single segment the lookup can honour',
+    "  return /^\\.[a-z0-9][a-z0-9-]*$/.test(normaliseTarget(target));",
+    "  return /^\\.[a-z0-9][a-z0-9.-]*$/.test(normaliseTarget(target));"],
+
+  // ===== THE CLAMP =====
+  // Assign the raw height and a hostile view stretches the page exactly as
+  // the contract says it cannot.
+  [HOST, 'the requested height is clamped to the published bounds',
+    '      const h = Math.max(MIN_FRAME_HEIGHT, Math.min(MAX_FRAME_HEIGHT, data.height));',
+    '      const h = data.height;'],
+
+  // ===== THE REAL WIRE =====
+  // Remove the listener registration and the host mediates nothing a real
+  // frame posts; remove its teardown and a stale listener survives the mount.
+  [HOST, 'the mediator is bound to the window on mount',
+    "    win.addEventListener('message', onMessage);\n",
+    ''],
+  [HOST, 'the mediator is unbound on teardown',
+    "    alive = false;\n    win.removeEventListener('message', onMessage);",
+    '    alive = false;'],
 
   // ===== THE PATH GUARD =====
   // Let a manifest walk out of its own directory and the server reads
@@ -82,6 +105,11 @@ const MUTATIONS = [
   [SERVER, 'a payload path resolves inside the extension directory or not at all',
     '  if (real === realRoot || real.startsWith(realRoot + path.sep)) return real;\n  return null;',
     '  return real;'],
+  // Drop the array discipline and a manifest whose renderers is a JSON object
+  // makes the server raise on .find rather than refuse.
+  [SERVER, 'a manifest whose renderers is not an array is refused, never raised on',
+    "  if (!Array.isArray(manifest.renderers)) {\n    return { ok: false, reason: 'the manifest declares no renderers array' };\n  }\n",
+    ''],
 ];
 
 const REPORTER = ['--test-reporter', 'spec'];

@@ -320,6 +320,12 @@ function closeOpenFile() {
   boardPendingSave = null;
   destroyActiveFileViewer();      // artifact review + iframe/board viewer
   destroyTiptapEditorIfActive();  // tiptap editor
+  // The extension mount is a file-scoped surface too, released in the one
+  // place that releases them all: without this, a workspace switch leaves
+  // the previous workspace's frame in the pane with its mediator still
+  // listening, and its open messages driving navigation against the new
+  // workspace.
+  if (activeExtensionMount) { activeExtensionMount.teardown(); activeExtensionMount = null; }
   currentFilePath = null;
   rawFileContent = ''; fileFrontmatter = ''; fileBody = '';
   editorMode = 'preview';
@@ -655,19 +661,21 @@ function openThroughRendererSeam(viewers, path, content, surface) {
     return;
   }
   Promise.all([
-    import('/extension-host.js'),
+    loadExtensionHost(),
     fetchExtensionUi(claim.extension, claim.renderer),
   ]).then(([host, payload]) => {
     if (currentFilePath !== path) return; // stale
-    if (!payload || !payload.ok) {
+    // SUCCESS IS AN ENTRY, NOT A FLAG. The server sends its payload without
+    // an `ok`, so the seam decides from the field a mount actually needs,
+    // which means a transport can forward the server message verbatim. A
+    // reply that names a reason, or carries no entry string, degrades.
+    if (!payload || typeof payload.entry !== 'string') {
       surface(viewers, path, content);
       noteRendererFailure(payload && payload.reason
-        ? payload.reason : 'the renderer\'s payload could not be fetched');
+        ? payload.reason : 'the renderer payload carried no entry to mount');
       return;
     }
-    document.getElementById('editor-content').classList.remove('hidden');
-    const pane = document.getElementById('editor-content');
-    pane.textContent = '';
+    const pane = claimEditorPane();
     activeExtensionMount = host.mountExtension({
       paneElement: pane,
       payload,
@@ -685,6 +693,38 @@ function openThroughRendererSeam(viewers, path, content, surface) {
   });
 }
 
+// CLAIM THE EDITOR PANE, the way every surface opener does before it draws.
+// Factored so an extension mount is a peer of the other surfaces rather than
+// an overlay on whichever one was open: it destroys the live viewer and
+// Tiptap editor (so no pending or future editor save can fire against the
+// newly opened path), cancels the debounced editor save, hides the Tiptap
+// pane, the textarea and the mode toggles, and resets editor-content. Every
+// opener below and this seam call it, so the claim has one definition.
+function claimEditorPane() {
+  destroyActiveFileViewer();
+  destroyTiptapEditorIfActive();
+  clearTimeout(_tiptapSaveTimer);
+  document.getElementById('tiptap-editor-pane').classList.add('hidden');
+  document.getElementById('editor-textarea').classList.add('hidden');
+  document.getElementById('toggle-preview').classList.add('hidden');
+  document.getElementById('toggle-edit').classList.add('hidden');
+  const pane = document.getElementById('editor-content');
+  pane.classList.remove('hidden');
+  pane.className = 'editor-content';
+  pane.textContent = '';
+  return pane;
+}
+
+// The host module loader, overridable so the seam can be driven in a test
+// without a real dynamic import (which resolves against the filesystem root
+// under Node and would always fail). Product code takes the import; a test
+// assigns window.rundockExtensionHostLoader to hand in a stub host.
+function loadExtensionHost() {
+  const loader = window.rundockExtensionHostLoader;
+  if (typeof loader === 'function') return Promise.resolve(loader());
+  return import('/extension-host.js');
+}
+
 // The registered payload fetcher. Overridable so the seam is testable and so
 // the integration that delivers extension rosters can supply its own
 // transport; until one is registered the seam answers as an unregistered
@@ -692,7 +732,7 @@ function openThroughRendererSeam(viewers, path, content, surface) {
 function fetchExtensionUi(extensionId, rendererId) {
   const fetcher = window.rundockExtensionUiFetcher;
   if (typeof fetcher !== 'function') {
-    return Promise.resolve({ ok: false, reason: 'no extension transport is registered yet' });
+    return Promise.resolve({ reason: 'no extension transport is registered yet' });
   }
   return Promise.resolve(fetcher(extensionId, rendererId));
 }
