@@ -364,21 +364,21 @@ function connectorsSectionHtml(state) {
   // list to misread as empty, and no Add form, because a write built on text
   // we never saw is the overwrite this whole state exists to prevent.
   if (state.error && state.readFailed) {
-    return `<div class="settings-section-title">Connectors</div><div class="settings-card"><div class="settings-row"><span class="settings-value">${connectorsEsc(state.error)}</span></div></div>`;
+    return `<div class="settings-section-title">Connectors</div><div class="settings-card"><div class="settings-row"><span class="settings-prose">${connectorsEsc(state.error)}</span></div></div>`;
   }
   let body;
   if (state.error) {
-    body = `<div class="settings-card"><div class="settings-row"><span class="settings-value">${connectorsEsc(state.error)}</span></div></div>`;
+    body = `<div class="settings-card"><div class="settings-row"><span class="settings-prose">${connectorsEsc(state.error)}</span></div></div>`;
   } else if (state.missing || state.servers.length === 0) {
     body = `<div class="settings-card"><div class="settings-row" style="flex-direction:column;align-items:stretch;gap:6px">
-      <span class="settings-value">No connectors configured in this workspace yet.</span>
-      <span class="settings-value">Workspace connectors live in <code>.mcp.json</code> at the workspace root and travel with the folder, so everyone opening this workspace gets them. Connectors added at claude.ai or in Claude Code's own settings are the operator's personal reach and are managed there, not here.</span>
+      <span class="settings-prose">No connectors configured in this workspace yet.</span>
+      <span class="settings-prose">Workspace connectors live in <code>.mcp.json</code> at the workspace root and travel with the folder, so everyone opening this workspace gets them. Connectors added at claude.ai or in Claude Code's own settings are the operator's personal reach and are managed there, not here.</span>
     </div></div>`;
   } else {
     const rows = state.servers.map(srv => `<div class="settings-row" data-connector="${connectorsEscAttr(srv.name)}" style="flex-direction:column;align-items:stretch;gap:2px">
-      <span class="settings-label">${connectorsEsc(srv.name)} <span class="settings-value" style="opacity:.7">Workspace connector: travels with this folder</span></span>
+      <span class="settings-label">${connectorsEsc(srv.name)} <span class="settings-prose" style="opacity:.7">Workspace connector: travels with this folder</span></span>
       <span class="settings-value" title="${connectorsEscAttr(srv.target)}">${connectorsEsc(srv.transport === 'url' ? 'Talks to ' + srv.target : 'Starts ' + srv.target)}</span>
-      ${srv.envKeys.length ? `<span class="settings-value" style="opacity:.7">Credential keys (values kept out of this file): ${connectorsEsc(srv.envKeys.join(', '))}</span>` : ''}
+      ${srv.envKeys.length ? `<span class="settings-prose" style="opacity:.7">Credential keys (values kept out of this file): ${connectorsEsc(srv.envKeys.join(', '))}</span>` : ''}
     </div>`).join('');
     body = `<div class="settings-card">${rows}</div>`;
   }
@@ -387,10 +387,10 @@ function connectorsSectionHtml(state) {
       <span class="settings-label">Add a connector</span>
       <input class="settings-input" id="connector-name" placeholder="Name (for example: notion)">
       <input class="settings-input" id="connector-target" placeholder="Command to start it, or its URL">
-      <div class="settings-value" id="connector-add-note" style="min-height:1em"></div>
+      <div class="settings-prose" id="connector-add-note" style="min-height:1em"></div>
       <button class="settings-btn" onclick="connectorsAdd()">Add to .mcp.json</button>
     </div></div>
-    <div class="settings-row"><span class="settings-value">Edits land in <code>.mcp.json</code>, the same file agents read their connectors from on their next start.</span></div>`;
+    <div class="settings-row"><span class="settings-prose">Edits land in <code>.mcp.json</code>, the same file agents read their connectors from on their next start.</span></div>`;
 }
 
 // Three states, kept apart because conflating them destroys a file. `null`

@@ -464,6 +464,40 @@ describe('the connectors tab edits the file the runtime reads', () => {
       'and it is never rendered as an empty state a person would trust');
   });
 
+  // A SENTENCE RENDERED IN THE VALUE STYLE IS A SENTENCE THE READER LOSES.
+  // That style clips to one line with an ellipsis, which is right for a
+  // command or a URL and silently eats the second half of a paragraph. It ate
+  // the empty state's explanation, and it ate the line of feedback the add
+  // button writes, which is why the button was reported as doing nothing: it
+  // worked, and its answer was clipped to invisibility. Pinned by counting,
+  // because the failure is silent in a browser and looks like clean markup
+  // in a diff.
+  test('the sentences render in the prose style, and only real values keep the clipping one', () => {
+    const rendered = [
+      settings.connectorsSectionHtml(settings.connectorsParse(null)),
+      settings.connectorsSectionHtml(settings.connectorsParse('{ not json')),
+      settings.connectorsSectionHtml(settings.connectorsParse(MCP)),
+    ].join('\n');
+    for (const sentence of [
+      'No connectors configured',
+      'Workspace connectors live in',
+      'Edits land in',
+      'could not be read',
+    ]) {
+      const at = rendered.indexOf(sentence);
+      assert.ok(at !== -1, `the rendered markup carries "${sentence}"`);
+      const opensAt = rendered.lastIndexOf('<', at);
+      assert.ok(rendered.slice(opensAt, at).includes('settings-prose'),
+        `"${sentence}" is a sentence, so it wraps rather than being clipped to one line`);
+    }
+    assert.ok(rendered.includes('id="connector-add-note" class="settings-prose"')
+      || /class="settings-prose"[^>]*id="connector-add-note"/.test(rendered),
+      'the line the add button writes its answer into wraps, or the answer is clipped to nothing '
+      + 'and the button reads as broken');
+    assert.match(rendered, /class="settings-value" title=/,
+      'a command or URL keeps the clipping style, with its full text still reachable by title');
+  });
+
   test('an added connector round-trips through the same file the runtime reads', () => {
     const merged = settings.connectorsMerge(MCP, 'calendar', { url: 'https://mcp.example.com/cal' });
     assert.strictEqual(merged.reason, null);
