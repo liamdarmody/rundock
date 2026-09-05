@@ -13,13 +13,9 @@
 // remembers nothing.
 const { test, describe, before, after } = require('node:test');
 const assert = require('node:assert');
-const fs = require('node:fs');
-const os = require('node:os');
-const path = require('node:path');
 const { JSDOM } = require('jsdom');
 
-let chat, hook, dom;
-const made = [];
+let chat, dom;
 before(() => {
   dom = new JSDOM('<div id="messages"></div>');
   global.window = dom.window;
@@ -39,17 +35,10 @@ before(() => {
   // way the real app loads it as a sibling <script>.
   global.RundockChatMarkup = require('../../public/chat-markup.js');
   chat = require('../../public/views/chat.js');
-  hook = require('../../scripts/permission-hook.js');
 });
 after(() => {
   if (dom) dom.window.close();
-  for (const d of made) fs.rmSync(d, { recursive: true, force: true });
 });
-function tmp(prefix) {
-  const d = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-  made.push(d);
-  return d;
-}
 
 function render(request) {
   document.getElementById('messages').innerHTML = '';
@@ -169,84 +158,59 @@ describe('the boundary card', () => {
   });
 });
 
-// The wiring between two already-tested ends: the hook's sensitiveEnrichment
-// (unit-tested in workspace-boundary.test.js) and the copy table
-// (unit-tested in the same file) meet here, in renderPermissionCard and
-// respondPermission. Neither end proves the join: the card could render the
-// ordinary copy, drop the narrow button, or send the wrong grantDir with
-// both suites green.
-describe('the sensitive crossing, rendered and answered', () => {
-  // Built the way the hook actually builds it, not a hand-written stand-in:
-  // a real .claude/projects/<flattened> entry on disk is what makes
-  // sensitiveEnrichment return a narrowGrantDir at all.
-  function sensitiveCrossing(prefix) {
-    const home = tmp(`card-sens-home-${prefix}-`);
-    const ws = tmp(`card-sens-ws-${prefix}-`);
-    const flattened = path.resolve(ws).replace(/[^A-Za-z0-9-]/g, '-');
-    fs.mkdirSync(path.join(home, '.claude', 'projects', flattened), { recursive: true });
-    const crossingPath = path.join(home, '.claude', 'settings.json');
-    const enrichment = hook.sensitiveEnrichment(crossingPath, ws, home);
-    assert.ok(enrichment && enrichment.sensitive === 'claude-home' && enrichment.narrowGrantDir,
-      'fixture sanity: the hook must actually derive a narrow grant here, or the test below proves nothing');
-    return { crossingPath, grantDir: path.dirname(crossingPath), enrichment };
-  }
-
-  test('a file crossing renders the table\'s stakes copy and a narrow-grant button beside the folder grant', () => {
-    const { crossingPath, grantDir, enrichment } = sensitiveCrossing('file');
-    const html = render({
+// The wiring between two already-tested ends: the hook's tagging
+// (agentHomeTags) and the copy table meet here, in renderPermissionCard and
+// respondPermission. Neither end proves the join on its own.
+describe('a crossing into the agent\'s own folder, rendered and answered', () => {
+  test('a secrets-tier crossing renders the copy naming the stakes, offers no folder grant, and answering sends no grantDir', () => {
+    const crossingPath = '/home/u/.claude/.credentials.json';
+    // grant_dir is truthy, as if the server had sent one by mistake, so this
+    // exercises the card's OWN secret gate rather than an absent grant.
+    const request = {
       tool_name: 'Read', input: { file_path: crossingPath },
-      boundary: true, resolved_path: crossingPath, grant_dir: grantDir,
-      crossings: [{ path: crossingPath, grantDir, ...enrichment }],
-    });
-    assert.match(html, /permission-context">This is the runtime.s own home folder/, 'the rendered context is the table\'s copy, not the ordinary one');
-    assert.match(html, /\.credentials\.json/);
-    assert.match(html, /data-perm-action="allow-transcripts">Allow this workspace.s transcripts only</,
-      'the narrow button carries the table\'s own label and action');
+      boundary: true, resolved_path: crossingPath, grant_dir: '/home/u/.claude',
+      crossings: [{ path: crossingPath, grantDir: '/home/u/.claude', secret: true, agentHome: true }],
+    };
+    const html = render(request);
+    assert.match(html, /permission-context">This is the credential file/, 'the rendered context is the secret\'s own copy, not the ordinary one');
+    assert.match(html, /cannot be undone/);
     assert.doesNotMatch(html, /data-perm-action="allow-folder"/,
-      'PM-5: no grant may suppress a sensitive card, so the whole-folder grant is removed, not merely demoted');
-  });
+      'AF-3: no grant may suppress a secrets-tier card, so the whole-folder grant is removed, not merely demoted');
 
-  test('answering the narrow button sends its grantDir; plain allow and deny send none', () => {
-    function pressAndCapture(action) {
-      const { crossingPath, grantDir, enrichment } = sensitiveCrossing(`press-${action}`);
-      document.getElementById('messages').innerHTML = '';
-      global.pendingPermissions.clear();
-      chat.renderPermissionCard({ request_id: `req-${action}`, request: {
-        tool_name: 'Read', input: { file_path: crossingPath },
-        boundary: true, resolved_path: crossingPath, grant_dir: grantDir,
-        crossings: [{ path: crossingPath, grantDir, ...enrichment }],
-      } }, 'convo-1');
-      const sent = [];
-      global.ws = { send: (s) => sent.push(JSON.parse(s)) };
-      try {
-        document.querySelector(`[data-perm-action="${action}"]`).click();
-      } finally {
-        global.ws = null;
-      }
-      assert.strictEqual(sent.length, 1, `the ${action} control sends exactly one response`);
-      return { sent: sent[0], narrowGrantDir: enrichment.narrowGrantDir };
+    const sent = [];
+    global.ws = { send: (s) => sent.push(JSON.parse(s)) };
+    try {
+      document.querySelector('[data-perm-action="allow"]').click();
+    } finally {
+      global.ws = null;
     }
-    const narrow = pressAndCapture('allow-transcripts');
-    assert.strictEqual(narrow.sent.grantDir, narrow.narrowGrantDir, 'the narrow folder travels as the ordinary grantDir field');
-    const allow = pressAndCapture('allow');
-    assert.strictEqual('grantDir' in allow.sent, false, 'plain Allow remembers nothing');
-    const deny = pressAndCapture('deny');
-    assert.strictEqual('grantDir' in deny.sent, false, 'Deny remembers nothing');
+    assert.strictEqual('grantDir' in sent[0], false, 'no folder is remembered for a secrets-tier crossing, however it was answered');
   });
 
-  test('a shell crossing into the same sensitive path states the stakes but offers no narrow or folder grant', () => {
-    const { crossingPath, enrichment } = sensitiveCrossing('shell');
+  test('a persistence-surface write renders the persistence copy and still offers the ordinary folder grant', () => {
+    const crossingPath = '/home/u/.claude/agents/new.md';
     const html = render({
-      tool_name: 'Bash', input: { command: `cat ${crossingPath}` },
-      boundary: true, resolved_path: crossingPath, grant_dir: null,
-      // The hook never attaches grantDir to a shell crossing (see the
-      // "never offers to remember a folder" test above); the sensitive
-      // enrichment still applies to the path, which is exactly the case
-      // this guards.
-      crossings: [{ path: crossingPath, ...enrichment }],
+      tool_name: 'Write', input: { file_path: crossingPath },
+      boundary: true, resolved_path: crossingPath, grant_dir: '/home/u/.claude/agents',
+      crossings: [{ path: crossingPath, grantDir: '/home/u/.claude/agents', persistenceSurface: true, agentHome: true }],
     });
-    assert.match(html, /This is the runtime.s own home folder/, 'the stakes are still stated');
-    assert.doesNotMatch(html, /Always allow this folder/, 'a shell request never carries a standing folder grant');
-    assert.doesNotMatch(html, /data-perm-action="allow-transcripts"/, 'nor a narrow one: both are folder grants a command cannot be answered by');
+    assert.match(html, /permission-context">Writing here persists/, 'the persistence stakes are named');
+    assert.match(html, /Always allow this folder/,
+      'unlike a secret, an ordinary persistence-surface write may still be remembered for a folder');
+  });
+
+  test('a shell crossing into a persistence surface states the stakes but offers no folder grant, secret or not', () => {
+    for (const [tag, needle] of [[{ secret: true }, /cannot be undone/], [{ persistenceSurface: true }, /persists/]]) {
+      const crossingPath = tag.secret ? '/home/u/.claude/.credentials.json' : '/home/u/.claude/agents/new.md';
+      const html = render({
+        tool_name: 'Bash', input: { command: `cat ${crossingPath}` },
+        boundary: true, resolved_path: crossingPath, grant_dir: null,
+        // The hook never attaches grantDir to a shell crossing; the tags
+        // still apply to the path.
+        crossings: [{ path: crossingPath, agentHome: true, ...tag }],
+      });
+      assert.match(html, needle, 'the stakes are still stated for a shell crossing');
+      assert.doesNotMatch(html, /Always allow this folder/, 'a shell request never carries a standing folder grant, for either tier');
+    }
   });
 });

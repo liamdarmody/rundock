@@ -659,6 +659,34 @@ describe('the OS write block is driven by mode alone, through the real dispatch'
     });
     fs.rmSync(dir, { recursive: true, force: true });
   });
+
+  // AF-5: handleSetWorkspaceMode used to persist the new mode to state.json
+  // BEFORE reconciling, so a settings-read failure left the mode committed
+  // while the block stayed untouched. Proven by reading state.json back,
+  // not by inspecting the error text alone (covered above).
+  test('AF-5: a failed mode change never commits the new mode; state.json still names the one before the attempt', () => {
+    const dir = tempWs();
+    const statePath = path.join(dir, '.rundock', 'state.json');
+    withWorkspace(dir, () => {
+      const first = captureWs();
+      workspace.handleSetWorkspaceMode({}, first, { mode: 'knowledge' }, 'darwin');
+      assert.strictEqual(first.sent[0].type, 'workspace_mode_changed');
+      assert.strictEqual(JSON.parse(fs.readFileSync(statePath, 'utf8')).workspaceMode, 'knowledge',
+        'fixture sanity: the successful switch did persist');
+
+      // Corrupt the settings file so the reconcile to code mode throws.
+      const settingsPath = path.join(dir, '.claude', 'settings.local.json');
+      fs.writeFileSync(settingsPath, '{ not json');
+
+      const second = captureWs();
+      workspace.handleSetWorkspaceMode({}, second, { mode: 'code' }, 'darwin');
+      assert.strictEqual(second.sent[0].type, 'workspace_error', 'the failure is named, not silently accepted');
+
+      assert.strictEqual(JSON.parse(fs.readFileSync(statePath, 'utf8')).workspaceMode, 'knowledge',
+        'the mode was never committed: reconcile ran and threw before writeState had a chance to persist code');
+    });
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
 });
 
 describe('the serving-workspace notice', () => {

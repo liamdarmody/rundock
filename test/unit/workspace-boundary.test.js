@@ -4,7 +4,7 @@
 // comparison canonicalises so one directory under two names is one identity,
 // the block is driven by workspace mode alone (Knowledge mode carries it,
 // Code mode withdraws it, and nothing else can reach it), and a crossing
-// into the runtime's home carries its stakes and a narrower grant. Fixtures
+// into the agent's own folder is graded by persistence, not location. Fixtures
 // are real directories, real symlinks and the machine's own /private alias,
 // because every false card in the field came from a spelling a hand-built
 // fixture would not have thought to write.
@@ -400,155 +400,117 @@ describe('the block is driven by mode, and only by mode', () => {
   });
 });
 
-describe('a crossing into the runtime\'s home carries its stakes', () => {
-  test('the sensitive table matches the runtime home under any spelling, and only it', () => {
-    const home = tmp('wb-home-');
-    fs.mkdirSync(path.join(home, '.claude', 'projects'), { recursive: true });
-    const ws = tmp('wb-sens-ws-');
-    const hit = hook.sensitiveEnrichment(path.join(home, '.claude', 'settings.json'), ws, home);
-    assert.ok(hit && hit.sensitive === 'claude-home');
-    const linkHome = tmp('wb-sens-link-');
-    const link = path.join(linkHome, 'dot');
-    fs.symlinkSync(path.join(home, '.claude'), link);
-    const viaLink = hook.sensitiveEnrichment(path.join(link, 'x'), ws, home);
-    assert.ok(viaLink && viaLink.sensitive === 'claude-home', 'a spelling through a symlink is the same folder');
-    assert.strictEqual(hook.sensitiveEnrichment(path.join(home, 'Documents', 'x'), ws, home), null,
-      'an ordinary home path is not sensitive');
-  });
-
-  test('the narrow grant is derived from the installed layout, never hardcoded', () => {
-    const home = tmp('wb-derive-home-');
-    const ws = tmp('wb-derive-ws-');
-    const flattened = path.resolve(ws).replace(/[^A-Za-z0-9-]/g, '-');
-    fs.mkdirSync(path.join(home, '.claude', 'projects', flattened), { recursive: true });
-    const hit = hook.sensitiveEnrichment(path.join(home, '.claude', 'anything'), ws, home);
-    assert.strictEqual(hit.narrowGrantDir, path.join(home, '.claude', 'projects', flattened),
-      'this workspace\'s own transcripts folder, found in the layout the runtime actually keeps');
-  });
-
-  test('a layout the derivation does not recognise withdraws the narrow offer rather than granting the wrong folder', () => {
-    const home = tmp('wb-drift-home-');
-    fs.mkdirSync(path.join(home, '.claude', 'projects'), { recursive: true });
-    const ws = tmp('wb-drift-ws-');
-    const hit = hook.sensitiveEnrichment(path.join(home, '.claude', 'anything'), ws, home);
-    assert.ok(hit && hit.sensitive === 'claude-home', 'the stakes are still stated');
-    assert.strictEqual('narrowGrantDir' in hit, false,
-      'but no folder is offered that the runtime might not mean');
-  });
-
-  test('answering the narrow grant persists exactly that folder: the transcripts are silenced, the parent runtime home still cards', () => {
-    // What respondPermission sends for the allow-transcripts action is an
-    // ordinary grantDir (chat.js's own comment: "it IS a folder grant"), so
-    // this exercises addBoundaryGrant/boundaryGrantCovers, the same call an
-    // "Always allow this folder" answer makes, with the narrow directory the
-    // hook derived rather than a whole-folder one.
-    const home = tmp('wb-narrow-home-');
-    const ws = tmp('wb-narrow-ws-');
-    const flattened = path.resolve(ws).replace(/[^A-Za-z0-9-]/g, '-');
-    const narrowDir = path.join(home, '.claude', 'projects', flattened);
-    fs.mkdirSync(narrowDir, { recursive: true });
-    const enrichment = hook.sensitiveEnrichment(path.join(home, '.claude', 'settings.json'), ws, home);
-    assert.strictEqual(enrichment.narrowGrantDir, narrowDir);
-
-    const original = config.getWorkspace();
-    config.setWorkspace(ws);
-    try {
-      boundary.addBoundaryGrant(enrichment.narrowGrantDir);
-      const grants = JSON.parse(fs.readFileSync(boundary.boundaryPermissionsPath(), 'utf8'));
-      assert.deepStrictEqual(grants.allowedDirs, [hook.canonicalize(narrowDir)],
-        'exactly the narrow folder is persisted, nothing wider');
-
-      // Silenced: a file inside the granted transcripts folder is now covered.
-      const insideNarrow = path.join(narrowDir, 'session.jsonl');
-      assert.strictEqual(hook.classifyFileAccess('Read', { file_path: insideNarrow }, ws, []).where, 'outside',
-        'still outside the workspace (the grant answers this, not the boundary)');
-      assert.strictEqual(boundary.boundaryGrantCovers(insideNarrow), true,
-        'and the narrow grant covers it: no card on the next access');
-
-      // Still carded: the credential file sits in the parent runtime home,
-      // outside the narrow folder, and the narrow grant must not have become
-      // a standing grant for the whole thing.
-      const credentials = path.join(home, '.claude', '.credentials.json');
-      assert.strictEqual(boundary.boundaryGrantCovers(credentials), false,
-        'the narrow grant for the transcripts folder never widens to cover the runtime home it lives inside');
-    } finally {
-      config.setWorkspace(original);
+describe('the agent\'s own folder: three tiers, one registry', () => {
+  test('every registry entry is named in the architecture doc, and the doc/registry binding fails the moment they drift', () => {
+    const doc = fs.readFileSync(path.join(ROOT, 'ARCHITECTURE.md'), 'utf8');
+    const names = [...hook.SECRET_RELATIVE_PATHS, ...hook.PERSISTENCE_SURFACE_DIRS, ...hook.PERSISTENCE_SURFACE_FILES];
+    for (const name of names) {
+      assert.ok(doc.includes(name), `the doc names ${name}, which the registry enforces`);
     }
   });
 
-  test('PM-5: a standing grant over the whole sensitive root does not silence a later crossing into it', () => {
-    // The naive check (boundaryGrantCovers alone) WOULD silence this: a
-    // grant over the runtime home is a prefix of everything inside it,
-    // credentials included. crossingCovered is the actual decision
-    // lib/http-router.js consults before answering a boundary request from a
-    // stored grant, and for a sensitive crossing it must not fall through to
-    // that naive check.
-    const home = tmp('wb-wide-grant-home-');
-    const ws = tmp('wb-wide-grant-ws-');
-    const flattened = path.resolve(ws).replace(/[^A-Za-z0-9-]/g, '-');
-    fs.mkdirSync(path.join(home, '.claude', 'projects', flattened), { recursive: true });
+  test('isSecretPath and isPersistenceSurface match only their own registry entries, under a symlink spelling, and nowhere else', () => {
+    const home = tmp('af-registry-home-');
+    fs.mkdirSync(path.join(home, '.claude', 'projects'), { recursive: true });
+    const linkHome = tmp('af-registry-link-');
+    const link = path.join(linkHome, 'dot');
+    fs.symlinkSync(path.join(home, '.claude'), link);
+    assert.strictEqual(hook.isSecretPath(path.join(link, '.credentials.json'), home), true,
+      'a spelling through a symlink is the same file');
+    assert.strictEqual(hook.isSecretPath(path.join(home, 'Documents', '.credentials.json'), home), false,
+      'the same filename elsewhere in the home directory is not the registry\'s entry');
+    assert.strictEqual(hook.isPersistenceSurface(path.join(home, '.claude', 'projects', 'p', 'settings.json'), home), false,
+      'the named FILE matches only at the folder root, not a same-named file nested somewhere already free');
+  });
+
+  test('AF-1: a read anywhere under the folder is free, with the single exception of the secrets tier', () => {
+    const home = tmp('af-read-home-');
+    fs.mkdirSync(path.join(home, '.claude', 'projects', 'flattened'), { recursive: true });
+    fs.mkdirSync(path.join(home, '.claude', 'agents'), { recursive: true });
+    fs.mkdirSync(path.join(home, '.claude', 'skills', 'my-skill'), { recursive: true });
+    const ws = tmp('af-read-ws-');
+    for (const target of [
+      path.join(home, '.claude', 'projects', 'flattened', 'session.jsonl'), // scratch
+      path.join(home, '.claude', 'agents', 'agent.md'),                     // persistence surface
+      path.join(home, '.claude', 'skills', 'my-skill', 'SKILL.md'),         // persistence surface
+      path.join(home, '.claude', 'settings.json'),                         // persistence surface
+    ]) {
+      for (const tool of ['Read', 'Grep']) {
+        const field = tool === 'Read' ? 'file_path' : 'path';
+        assert.strictEqual(hook.classifyFileAccess(tool, { [field]: target }, ws, [], home).where, 'inside',
+          `${tool} of ${target} is free`);
+      }
+    }
+    const credentials = path.join(home, '.claude', '.credentials.json');
+    const secretRead = hook.classifyFileAccess('Read', { file_path: credentials }, ws, [], home);
+    assert.strictEqual(secretRead.where, 'outside', 'the single exception: a read of the secrets tier still cards');
+    assert.strictEqual(secretRead.secret, true);
+    assert.strictEqual(secretRead.grantDir, null, 'and no grant is offered for it');
+  });
+
+  test('AF-2: a write to a persistence surface cards; a write to scratch, at at least two locations (file and shell), does not', () => {
+    const home = tmp('af-write-home-');
+    fs.mkdirSync(path.join(home, '.claude', 'agents'), { recursive: true });
+    fs.mkdirSync(path.join(home, '.claude', 'cache'), { recursive: true });
+    fs.mkdirSync(path.join(home, '.claude', 'paste-cache'), { recursive: true });
+    const ws = tmp('af-write-ws-');
+
+    const surfaceWrite = hook.classifyFileAccess('Write', { file_path: path.join(home, '.claude', 'agents', 'new.md') }, ws, [], home);
+    assert.strictEqual(surfaceWrite.where, 'outside', 'a write to a persistence surface cards');
+    assert.strictEqual(surfaceWrite.persistenceSurface, true);
+    assert.strictEqual(surfaceWrite.secret, false);
+
+    const settingsWrite = hook.classifyFileAccess('Write', { file_path: path.join(home, '.claude', 'settings.json') }, ws, [], home);
+    assert.strictEqual(settingsWrite.where, 'outside');
+    assert.strictEqual(settingsWrite.persistenceSurface, true);
+
+    for (const scratch of [
+      path.join(home, '.claude', 'cache', 'fetched-page.html'),
+      path.join(home, '.claude', 'paste-cache', 'clip.txt'),
+    ]) {
+      assert.strictEqual(hook.classifyFileAccess('Write', { file_path: scratch }, ws, [], home).where, 'inside',
+        `a routine stash at ${scratch} is free, not a card`);
+    }
+
+    // The same tiers hold for a shell command, which cannot declare read or
+    // write: scratch is free, a persistence surface and a secret still card.
+    const scratchOnly = hook.classifyShellAccess('Bash', { command: `cat ${path.join(home, '.claude', 'cache', 'x.html')}` }, ws, [], home);
+    assert.strictEqual(scratchOnly, null, 'nothing outside the workspace is reported: tier three is free');
+    const surfaceTouch = hook.classifyShellAccess('Bash', { command: `touch ${path.join(home, '.claude', 'agents', 'x.md')}` }, ws, [], home);
+    assert.strictEqual(surfaceTouch.crossings[0].persistenceSurface, true);
+    const secretTouch = hook.classifyShellAccess('Bash', { command: `cat ${path.join(home, '.claude', '.credentials.json')}` }, ws, [], home);
+    assert.strictEqual(secretTouch.crossings[0].secret, true);
+  });
+
+  test('AF-3: a standing grant over the whole runtime home does not silence a later crossing into the secrets tier', () => {
+    // boundaryGrantCovers alone WOULD silence this (a grant over the home
+    // is a prefix of everything inside it); crossingCovered must not.
+    const home = tmp('af-wide-grant-home-');
+    fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+    const ws = tmp('af-wide-grant-ws-');
     const credentials = path.join(home, '.claude', '.credentials.json');
 
     const original = config.getWorkspace();
     config.setWorkspace(ws);
     try {
-      // A grant over the whole runtime home, however it came to exist (an
-      // older build, a hand-edited permissions.json): established directly,
-      // not through the card, because the card no longer offers this button
-      // for a sensitive crossing at all (see boundary-card.test.js).
       boundary.addBoundaryGrant(path.join(home, '.claude'));
       assert.strictEqual(boundary.boundaryGrantCovers(credentials), true,
         'fixture sanity: the naive per-path check does consider this covered');
-
-      const enrichment = hook.sensitiveEnrichment(credentials, ws, home);
-      assert.strictEqual(enrichment.sensitive, 'claude-home');
-      assert.strictEqual(boundary.crossingCovered({ path: credentials, ...enrichment }), false,
-        'the actual decision the server consults still cards it: no grant over the wider root silences a sensitive crossing');
+      assert.strictEqual(boundary.crossingCovered({ path: credentials }, home), false,
+        'the actual decision the server consults still cards it: no grant over the wider root silences a secrets-tier crossing');
+      assert.strictEqual(boundary.crossingCovered({ path: path.join(home, '.claude', 'notes.md') }, home), true,
+        'an ordinary file in the same folder IS covered: the refusal is specific to the registry, not the whole root');
     } finally {
       config.setWorkspace(original);
     }
   });
 
-  test('PM-5: crossingCovered mirrors the narrow grant exactly, once it is recorded', () => {
-    // The same fixture and grant as "answering the narrow grant..." above,
-    // read this time through crossingCovered, the function the server
-    // actually calls, rather than boundaryGrantCovers alone.
-    const home = tmp('wb-covered-home-');
-    const ws = tmp('wb-covered-ws-');
-    const flattened = path.resolve(ws).replace(/[^A-Za-z0-9-]/g, '-');
-    const narrowDir = path.join(home, '.claude', 'projects', flattened);
-    fs.mkdirSync(narrowDir, { recursive: true });
-
-    const original = config.getWorkspace();
-    config.setWorkspace(ws);
-    try {
-      const insideNarrow = path.join(narrowDir, 'session.jsonl');
-      const credentials = path.join(home, '.claude', '.credentials.json');
-      const insideEnrichment = hook.sensitiveEnrichment(insideNarrow, ws, home);
-      const credEnrichment = hook.sensitiveEnrichment(credentials, ws, home);
-
-      assert.strictEqual(boundary.crossingCovered({ path: insideNarrow, ...insideEnrichment }), false,
-        'before the grant exists, the transcripts file still cards');
-
-      boundary.addBoundaryGrant(insideEnrichment.narrowGrantDir);
-
-      assert.strictEqual(boundary.crossingCovered({ path: insideNarrow, ...insideEnrichment }), true,
-        'after the narrow grant, a file inside the transcripts folder is silent');
-      assert.strictEqual(boundary.crossingCovered({ path: credentials, ...credEnrichment }), false,
-        'the runtime home\'s credential file, outside the narrow folder, still cards');
-      assert.strictEqual(boundary.crossingCovered({ path: path.join(home, '.claude'), sensitive: 'claude-home', narrowGrantDir: insideEnrichment.narrowGrantDir }), false,
-        'and so does the runtime home root itself');
-    } finally {
-      config.setWorkspace(original);
-    }
-  });
-
-  test('the card copy names the stakes concretely and offers the narrow grant by name', () => {
-    const copy = permissions.sensitiveBoundaryCopy('claude-home');
-    assert.match(copy.context, /\.credentials\.json/, 'the account token is named');
-    assert.match(copy.context, /transcripts/, 'and the transcripts');
-    assert.match(copy.narrowLabel, /transcripts only/, 'the narrow affordance says what it grants');
-    assert.strictEqual(permissions.sensitiveBoundaryCopy('anything-else'), null,
-      'paths outside the table render the existing card unchanged');
+  test('the card copy names the secret\'s stakes and the persistence surface\'s, and neither for an ordinary crossing', () => {
+    assert.match(permissions.agentHomeBoundaryCopy({ secret: true }), /cannot be undone/);
+    assert.match(permissions.agentHomeBoundaryCopy({ persistenceSurface: true }), /persists/);
+    assert.strictEqual(permissions.agentHomeBoundaryCopy({ secret: true, persistenceSurface: true }),
+      permissions.agentHomeBoundaryCopy({ secret: true }), 'the secret\'s stakes win when a crossing is both');
+    assert.strictEqual(permissions.agentHomeBoundaryCopy({}), null, 'an ordinary crossing renders the existing card unchanged');
+    assert.strictEqual(permissions.agentHomeBoundaryCopy(null), null);
   });
 });

@@ -33,7 +33,7 @@ const BOUNDARY = { src: path.join(ROOT, 'lib', 'workspace', 'boundary.js'), suit
 const CHAT_VIEW = { src: path.join(ROOT, 'public', 'views', 'chat.js'), suite: 'test/unit/boundary-card.test.js' };
 // Same file as HOOK, a different suite: the attach site this target's own
 // mutation breaks is never called by the unit suite (which tests
-// sensitiveEnrichment and card rendering each in isolation), only by the
+// classifyFileAccess and card rendering each in isolation), only by the
 // real hook process the integration suite spawns.
 const HOOK_INTEGRATION = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/integration/boundary-permissions.test.js' };
 // PM-1's ordering guard lives in the protocol handler, not the scaffold
@@ -41,6 +41,9 @@ const HOOK_INTEGRATION = { src: path.join(ROOT, 'scripts', 'permission-hook.js')
 // scaffold-layer tests call scaffoldWorkspace directly and so never see this
 // file's own ordering at all).
 const WORKSPACE_HANDLER = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'workspace.js'), suite: 'test/integration/ws-handler-edges.test.js' };
+// Same file as WORKSPACE_HANDLER, a different suite: AF-5's ordering guard is
+// proven by protocol-handlers-lib.test.js's own read-back, not anything ws-handler-edges.test.js asserts.
+const WORKSPACE_HANDLER_UNIT = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'workspace.js'), suite: 'test/unit/protocol-handlers-lib.test.js' };
 
 const MUTATIONS = [
   // ===== ONE DIRECTORY UNDER TWO NAMES IS ONE IDENTITY =====
@@ -133,59 +136,49 @@ const MUTATIONS = [
     + "    console.log(`  Workspace mode auto-detected: ${state.workspaceMode}`);\n"
     + "  }"],
 
-  // ===== THE SENSITIVE TABLE AND THE NARROW GRANT =====
-  // Empty the table and a crossing into the runtime home renders the
-  // ordinary card, stakes unstated.
-  [HOOK, 'the runtime home is in the sensitive table',
-    "  return [{ id: 'claude-home', root: path.join(home, '.claude') }];",
-    '  return [];'],
-  // Trust the derived name without checking the layout and a scheme drift
-  // grants a folder the runtime never meant.
-  [HOOK, 'the narrow grant is offered only when the layout confirms it',
-    '    return entries.includes(flattened) ? derived : null;',
-    '    return derived;'],
-  // Drop the grantable gate and the narrow-grant button renders on a shell
-  // crossing, which would let approving a command leave behind a standing
-  // folder grant: the exact regression 'a shell request never carries a
-  // standing folder grant' exists to prevent.
-  [CHAT_VIEW, 'the narrow grant is offered only where a folder grant may be remembered at all',
-    "  const sensNarrow = !shell && boundary && sensitiveCrossing ? sensitiveCrossing.narrowGrantDir || null : null;",
-    '  const sensNarrow = sensitiveCrossing ? sensitiveCrossing.narrowGrantDir || null : null;'],
-  // sensitiveEnrichment and card rendering are each tested in isolation; only
-  // this attach site in the request builder joins them into what a real
-  // crossing emits. Proven through the real hook process (the integration
-  // suite), because the unit suite never reaches this line either.
-  [HOOK_INTEGRATION, 'the sensitive enrichment reaches the crossing the hook actually emits',
-    '          const enrichment = sensitiveEnrichment(c.path, wsRoot) || {};',
-    '          const enrichment = {};'],
-
-  // ===== PM-5: NO GRANT SUPPRESSES A SENSITIVE CROSSING =====
-  // The card's whole-folder button is the affordance the standing grant
-  // comes from at all. Drop the sensitivity gate and it renders for a
-  // sensitive crossing exactly as for an ordinary one, which is the button
-  // PM-5 forbids.
-  [CHAT_VIEW, 'the whole-folder button is never offered for a sensitive crossing',
-    '  const wholeFolderOffered = grantable && !sensitiveCrossing;',
+  // ===== THE AGENT'S OWN FOLDER: THREE TIERS, ONE REGISTRY =====
+  // Drop the write gate and a persistence-surface write becomes free, the storm AF-2 exists to end.
+  [HOOK, 'a write to a persistence surface is not free the way a read is',
+    '  if (tags.agentHome && !tags.secret && !(isWrite && tags.persistenceSurface)) {',
+    '  if (tags.agentHome && !tags.secret) {'],
+  // Both tags must come from the registry, not a hardcoded literal.
+  [HOOK, 'a crossing\'s secret and persistence-surface tags come from the registry, not a hardcoded false',
+    '    ? { agentHome: true, secret: isSecretPath(resolvedPath, home), persistenceSurface: isPersistenceSurface(resolvedPath, home) }',
+    '    ? { agentHome: true, secret: false, persistenceSurface: false }'],
+  // Drop tier three's exemption and a shell command merely touching scratch is reported as a crossing.
+  [HOOK, 'a shell crossing into tier three (neither secret nor a persistence surface) is not reported at all',
+    '    if (tags.agentHome && !tags.secret && !tags.persistenceSurface) continue;',
+    '    if (false) continue;'],
+  // The one production site carrying classifyFileAccess's tags onto the emitted request.
+  [HOOK_INTEGRATION, 'a file crossing\'s tags reach the request the hook actually emits',
+    '        path: access.resolvedPath, grantDir: access.grantDir,\n'
+    + '        agentHome: access.agentHome, secret: access.secret, persistenceSurface: access.persistenceSurface,\n'
+    + '      }])',
+    '        path: access.resolvedPath, grantDir: access.grantDir,\n'
+    + '      }])'],
+  // AF-3's decision: drop the registry check and a broad grant silences the credential file inside it.
+  [BOUNDARY, 'a secrets-registry crossing is covered by no stored grant, however broad',
+    '  if (isSecretPath(crossing.path, home)) return false;',
+    '  if (false) return false;'],
+  [CHAT_VIEW, 'the whole-folder button is never offered for a secrets-tier crossing',
+    '  const wholeFolderOffered = grantable && !(flaggedCrossing && flaggedCrossing.secret);',
     '  const wholeFolderOffered = grantable;'],
-  // The hook is the other half of the same rule: even if the card somehow
-  // rendered the button, the request it emits for a sensitive crossing must
-  // carry no grantDir for a stored grant to answer from. Restore the
-  // unconditional spread and a sensitive crossing gets its ordinary
-  // whole-folder grantDir back.
-  [HOOK_INTEGRATION, 'a sensitive crossing carries no whole-folder grantDir in the request the hook emits',
-    '          return enrichment.sensitive\n'
-    + '            ? { ...c, grantDir: null, ...enrichment }\n'
-    + '            : { ...c, ...enrichment };',
-    '          return { ...c, ...enrichment };'],
-  // The decision itself, one level below the hook and the card: a sensitive
-  // crossing must be covered ONLY by its own narrow grant, never by the
-  // ordinary per-path check a standing grant over the wider sensitive root
-  // would satisfy.
-  [BOUNDARY, 'a sensitive crossing is covered only by its own narrow grant, never the ordinary per-path check',
-    '  return crossing.sensitive\n'
-    + '    ? narrowGrantCovers(crossing.path, crossing.narrowGrantDir)\n'
-    + '    : boundaryGrantCovers(crossing.path);',
-    '  return boundaryGrantCovers(crossing.path);'],
+  [CHAT_VIEW, 'the agent-home copy is applied to the card\'s context',
+    '    if (homeCopy) context = homeCopy;',
+    '    if (false) context = homeCopy;'],
+
+  // ===== AF-5: A FAILED MODE CHANGE LEAVES THE WORKSPACE EXACTLY AS IT WAS =====
+  [WORKSPACE_HANDLER_UNIT, 'the block is reconciled before the mode is persisted, not after',
+    '      const dir = getWorkspace();\n'
+    + '      if (dir) reconcileSandboxForMode(dir, mode, platform);\n'
+    + '      const state = readState();\n'
+    + '      state.workspaceMode = mode;\n'
+    + '      writeState(state);',
+    '      const state = readState();\n'
+    + '      state.workspaceMode = mode;\n'
+    + '      writeState(state);\n'
+    + '      const dir = getWorkspace();\n'
+    + '      if (dir) reconcileSandboxForMode(dir, mode, platform);'],
 ];
 
 const REPORTER = ['--test-reporter', 'spec'];
@@ -218,7 +211,7 @@ function redTests(suite) {
 }
 
 function run() {
-  const targets = [HOOK, SCAFFOLD, BOUNDARY, CHAT_VIEW, HOOK_INTEGRATION, WORKSPACE_HANDLER];
+  const targets = [HOOK, SCAFFOLD, BOUNDARY, CHAT_VIEW, HOOK_INTEGRATION, WORKSPACE_HANDLER, WORKSPACE_HANDLER_UNIT];
   const session = beginMutationRun({ files: [...new Set(targets.map((target) => target.src))] });
   const originals = new Map();
   for (const target of targets) originals.set(target, session.original(target.src));

@@ -215,23 +215,22 @@
   // High-risk requests never offer a standing "Always allow".
   function offersAlwaysAllow(risk) { return risk !== 'high'; }
 
-  // The copy for a boundary crossing into a path the sensitive table names.
-  // Pure and table-driven so the card and the tests read one source, and so
-  // the next sensitive path is a row here rather than a rewrite there. The
-  // stakes are named concretely, because "sensitive folder" tells a person
-  // nothing they can weigh: this is a consent surface, and consent asked
-  // without disclosing stakes is the defect this copy exists to remove.
-  const SENSITIVE_COPY = {
-    'claude-home': {
-      context: 'This is the runtime\'s own home folder. A standing grant for all of it exposes '
-        + '.credentials.json, which is your Claude account token, and projects/, which holds every '
-        + 'project\'s transcripts on this machine. Granting the whole folder is rarely what you mean; '
-        + 'the narrow option covers the usual need, this workspace\'s own transcripts.',
-      narrowLabel: 'Allow this workspace\'s transcripts only',
-    },
+  // The copy for a crossing into the agent's own folder, table-driven so the
+  // card and its tests read one source. A read never reaches this: it is
+  // free everywhere except the secrets tier, and a secret always cards
+  // regardless of the act. Only a write to a persistence surface, or any
+  // access at all to a secrets-registry path, needs its stakes named.
+  const AGENT_HOME_COPY = {
+    secret: 'This is the credential file for your Claude account. A leak here cannot be undone, '
+      + 'so this always asks, on any access, and no grant, mode or setting can silence it.',
+    persistenceSurface: 'Writing here persists: it takes effect in every later session and every '
+      + 'other workspace, including an unattended routine run.',
   };
-  function sensitiveBoundaryCopy(sensitiveId) {
-    return SENSITIVE_COPY[sensitiveId] || null;
+  function agentHomeBoundaryCopy(crossing) {
+    if (!crossing) return null;
+    if (crossing.secret) return AGENT_HOME_COPY.secret;
+    if (crossing.persistenceSurface) return AGENT_HOME_COPY.persistenceSurface;
+    return null;
   }
 
   // ── Pending permission requests for background conversations ────────────
@@ -293,6 +292,6 @@
     return m.size;
   }
 
-  return { BASH_DESCRIPTIONS, bashBin, classifyRisk, describeToolRequest, toolAllowKey, decidePermission, offersAlwaysAllow, sensitiveBoundaryCopy,
+  return { BASH_DESCRIPTIONS, bashBin, classifyRisk, describeToolRequest, toolAllowKey, decidePermission, offersAlwaysAllow, agentHomeBoundaryCopy,
     routePermissionRequest, queuePendingPermission, pendingPermissionsFor, removePendingPermission, clearPendingPermissions };
 }));

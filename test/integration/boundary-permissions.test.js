@@ -244,64 +244,81 @@ describe('workspace file-access boundary', () => {
     assert.strictEqual(client.messages.slice(since).filter(m => m.type === 'control_request').length, 0);
   });
 
-  test('a crossing into the runtime\'s own home carries its sensitive stakes and the narrow grant, on the emitted request itself', async () => {
-    // sensitiveEnrichment is unit-tested as a function, and boundary-card.test.js
-    // renders a card given a hand-assembled enrichment object; neither
-    // exercises the one production site that joins them, the
-    // `.map(c => ({ ...c, ...(sensitiveEnrichment(...) || {}) }))` attach in
-    // this file's own request builder. Dropping that map, or swapping its
-    // arguments, would leave every existing test green while a real crossing
-    // into the runtime's home rendered the ordinary card, stakes unstated.
-    // This drives the real hook process for exactly that crossing and reads
-    // the emitted control_request.
-    //
-    // h.boot() already isolates HOME to a fresh temp directory for this whole
-    // file (so the tests above can card `os.homedir()` paths without touching
-    // the real machine), and the spawned hook inherits that HOME from
-    // process.env, so os.homedir() in the hook process names this same temp
-    // directory: no override needed to make this host-independent.
+  // AF-1/AF-2 are claims about what a person sees, driven through the real
+  // hook against the server; h.boot() isolates HOME to a fresh temp dir.
+  test('AF-1: reading a transcript, a global agent file, and a global skill file raises no card', async () => {
     const home = os.homedir();
-    const flattened = path.resolve(h.workspaceDir).replace(/[^A-Za-z0-9-]/g, '-');
-    const transcripts = path.join(home, '.claude', 'projects', flattened);
-    fs.mkdirSync(transcripts, { recursive: true });
-    const target = path.join(home, '.claude', 'settings.json');
-
-    const since = client.messages.length;
-    const pending = runHook('Write', { file_path: target, content: 'x' });
-    const { msg } = await client.waitFor(m => m.type === 'control_request'
-      && m.request && m.request.boundary === true, { since, label: 'runtime-home crossing card' });
-    const crossing = (msg.request.crossings || [])[0];
-    assert.ok(crossing, 'the crossing reaches the card');
-    assert.strictEqual(crossing.sensitive, 'claude-home', 'the emitted crossing carries the sensitive stakes');
-    assert.strictEqual(crossing.narrowGrantDir, transcripts,
-      'and this workspace\'s own transcripts folder, because the installed layout has it');
-    client.send({ type: 'permission_response', requestId: msg.request_id, conversationId: 'boundary-test', allow: false });
-    assert.strictEqual(decisionOf(await pending), 'deny');
+    const targets = [
+      path.join(home, '.claude', 'projects', 'flattened-ws', 'session.jsonl'),
+      path.join(home, '.claude', 'agents', 'some-agent.md'),
+      path.join(home, '.claude', 'skills', 'some-skill', 'SKILL.md'),
+    ];
+    for (const target of targets) {
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, 'x');
+      const since = client.messages.length;
+      const out = await runHook('Read', { file_path: target });
+      assert.strictEqual(decisionOf(out), 'allow', `${target} reads without a card`);
+      await h.delay(200);
+      assert.strictEqual(client.messages.slice(since).filter(m => m.type === 'control_request').length, 0,
+        `${target}: no card raised`);
+    }
   });
 
-  test('PM-5: a sensitive crossing cards in CODE mode too, and offers no whole-folder grant', async () => {
-    // Code mode auto-approves ordinary commands, but classifyFileAccess and
-    // classifyShellAccess both report 'outside' for this crossing, and
-    // main()'s code-mode branch only auto-allows when access is NOT
-    // 'outside' (see the CODE MODE tests above). A sensitive crossing must
-    // still reach the card in this mode, exactly as in knowledge mode.
+  test('AF-2: writing to a persistence surface cards, in both modes, and names what persistence means; writing to scratch does not', async () => {
     const home = os.homedir();
-    const flattened = path.resolve(h.workspaceDir).replace(/[^A-Za-z0-9-]/g, '-');
-    const transcripts = path.join(home, '.claude', 'projects', flattened);
-    fs.mkdirSync(transcripts, { recursive: true });
-    const target = path.join(home, '.claude', 'settings.json');
+    const surfaceTarget = path.join(home, '.claude', 'settings.json');
+    for (const extraEnv of [{}, { RUNDOCK_CODE_MODE: '1' }]) {
+      const since = client.messages.length;
+      const pending = runHook('Write', { file_path: surfaceTarget, content: 'x' }, extraEnv);
+      const { msg } = await client.waitFor(m => m.type === 'control_request'
+        && m.request && m.request.boundary === true, { since, label: 'persistence-surface write card' });
+      const crossing = (msg.request.crossings || [])[0];
+      assert.ok(crossing, 'the crossing reaches the card');
+      assert.strictEqual(crossing.persistenceSurface, true, 'tagged as a persistence surface, in both modes');
+      assert.strictEqual(crossing.secret, false);
+      client.send({ type: 'permission_response', requestId: msg.request_id, conversationId: 'boundary-test', allow: false });
+      assert.strictEqual(decisionOf(await pending), 'deny');
+    }
 
+    const scratchTarget = path.join(home, '.claude', 'cache', 'fetched-page.html');
+    fs.mkdirSync(path.dirname(scratchTarget), { recursive: true });
     const since = client.messages.length;
-    const pending = runHook('Write', { file_path: target, content: 'x' }, { RUNDOCK_CODE_MODE: '1' });
-    const { msg } = await client.waitFor(m => m.type === 'control_request'
-      && m.request && m.request.boundary === true, { since, label: 'runtime-home crossing card, code mode' });
-    const crossing = (msg.request.crossings || [])[0];
-    assert.ok(crossing, 'the crossing reaches the card even in code mode');
-    assert.strictEqual(crossing.sensitive, 'claude-home', 'the stakes are still stated');
-    assert.strictEqual(msg.request.grant_dir, null,
-      'PM-5: no whole-folder grant is offered for a sensitive crossing, in any mode');
-    assert.strictEqual(crossing.grantDir, null, 'and the crossing itself carries none either');
-    client.send({ type: 'permission_response', requestId: msg.request_id, conversationId: 'boundary-test', allow: false });
-    assert.strictEqual(decisionOf(await pending), 'deny');
+    const out = await runHook('Write', { file_path: scratchTarget, content: 'x' });
+    assert.strictEqual(decisionOf(out), 'allow', 'a routine stash in scratch is not the storm this release exists to end');
+    await h.delay(200);
+    assert.strictEqual(client.messages.slice(since).filter(m => m.type === 'control_request').length, 0);
+  });
+
+  test('AF-3 / AF-6: a standing grant over the whole runtime home does not silence the credentials file, proven at the production call site', async () => {
+    // AF-6: /api/permission-request in lib/http-router.js, driven through the
+    // real hook with a standing grant already recorded, not crossingCovered
+    // called directly. Reverting that handler to boundaryGrantCovers (its
+    // pre-change form) would make the grant below cover credentials too.
+    const home = os.homedir();
+    fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+
+    // commands/ is a persistence surface, not the agents/skills path the
+    // separate deterministic-deny guard owns.
+    let since = client.messages.length;
+    const pendingGrant = runHook('Write', { file_path: path.join(home, '.claude', 'commands', 'note.md'), content: 'x' });
+    const grantCard = await client.waitFor(m => m.type === 'control_request'
+      && m.request && m.request.boundary === true, { since, label: 'establish the broad grant' });
+    client.send({
+      type: 'permission_response', requestId: grantCard.msg.request_id, conversationId: 'boundary-test',
+      allow: true, grantDir: path.join(home, '.claude'),
+    });
+    assert.strictEqual(decisionOf(await pendingGrant), 'allow');
+
+    // The credentials file is named by the secrets registry and must not be
+    // covered by the same broad grant that just answered an ordinary write.
+    since = client.messages.length;
+    const target = path.join(home, '.claude', '.credentials.json');
+    const pendingCred = runHook('Read', { file_path: target });
+    const credCard = await client.waitFor(m => m.type === 'control_request'
+      && m.request && m.request.boundary === true, { since, label: 'credentials still card despite the broad grant' });
+    assert.strictEqual(credCard.msg.request.crossings[0].secret, true);
+    client.send({ type: 'permission_response', requestId: credCard.msg.request_id, conversationId: 'boundary-test', allow: false });
+    assert.strictEqual(decisionOf(await pendingCred), 'deny');
   });
 });

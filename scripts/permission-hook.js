@@ -57,43 +57,48 @@ function canonicalize(p, pmod = path) {
   }
 }
 
-// Paths whose standing grant means more than a folder. Version one carries
-// the runtime's own home directory alone, structured as a table so the next
-// entry is a row rather than a mechanism: a grant there exposes the account
-// credential file and every project's transcripts on the machine, which the
-// card must say, and the common legitimate need (this workspace's own
-// transcripts) deserves a narrower grant than the whole folder.
-function sensitivePaths(home = os.homedir()) {
-  return [{ id: 'claude-home', root: path.join(home, '.claude') }];
-}
+// ── The agent's own folder: three tiers, one registry ──────────────────
+// `~/.claude` holds things of very different value; carding every write
+// under it cards routine scratch too (a page cache, task output). The
+// reason to card is PERSISTENCE, not location: is the target named by the
+// secrets registry (cards on any access), or does it sit under a
+// persistence surface (cards on a write, free to read)? Everything else is
+// free both ways, reads and scratch alike. ARCHITECTURE.md names every
+// entry below; a doc/registry binding test (workspace-boundary.test.js)
+// fails if either drifts, and nowhere else may decide either question with
+// a literal of its own.
+const SECRET_RELATIVE_PATHS = ['.credentials.json'];
+// Directories match their whole subtree; the file matches only at the
+// folder root, not a same-named file nested somewhere already free.
+const PERSISTENCE_SURFACE_DIRS = ['agents', 'skills', 'plugins', 'commands', 'hooks'];
+const PERSISTENCE_SURFACE_FILES = ['settings.json'];
 
-// The transcripts folder for ONE workspace, derived rather than hardcoded:
-// the runtime names each project folder by flattening the workspace path,
-// and the scheme belongs to the installed runtime, not to this file. The
-// transform (every character outside letters, digits and hyphen becomes a
-// hyphen) was verified against the installed layout on 2026-09-03; when the
-// projects directory already holds an entry for this workspace the derived
-// name is trusted only if that entry exists, so a scheme drift makes the
-// narrow offer vanish rather than grant the wrong folder.
-function transcriptsDirFor(workspaceRoot, home = os.homedir()) {
-  const flattened = path.resolve(workspaceRoot).replace(/[^A-Za-z0-9-]/g, '-');
-  const projects = path.join(home, '.claude', 'projects');
-  const derived = path.join(projects, flattened);
-  try {
-    const entries = fs.readdirSync(projects);
-    return entries.includes(flattened) ? derived : null;
-  } catch (e) { return null; }
+function agentHomeRoot(home = os.homedir()) {
+  return canonicalize(path.join(home, '.claude'));
 }
-
-// What a crossing into a sensitive path carries beyond its path: the table
-// row's id, and the narrow grant when one can be derived. Attached in one
-// place so the file-tool and shell paths cannot drift apart.
-function sensitiveEnrichment(crossingPath, workspaceRoot, home = os.homedir()) {
-  if (typeof crossingPath !== 'string' || !crossingPath) return null;
-  const hit = sensitivePaths(home).find(sp => isUnder(canonicalize(crossingPath), canonicalize(sp.root)));
-  if (!hit) return null;
-  const narrow = transcriptsDirFor(workspaceRoot, home);
-  return { sensitive: hit.id, ...(narrow ? { narrowGrantDir: narrow } : {}) };
+function secretsRegistry(home = os.homedir()) {
+  const root = agentHomeRoot(home);
+  return SECRET_RELATIVE_PATHS.map(p => path.join(root, p));
+}
+function isSecretPath(candidate, home = os.homedir()) {
+  if (typeof candidate !== 'string' || !candidate) return false;
+  const c = canonicalize(candidate);
+  return secretsRegistry(home).some(p => c === canonicalize(p));
+}
+function isPersistenceSurface(candidate, home = os.homedir()) {
+  if (typeof candidate !== 'string' || !candidate) return false;
+  const c = canonicalize(candidate);
+  const root = agentHomeRoot(home);
+  if (PERSISTENCE_SURFACE_FILES.some(f => c === canonicalize(path.join(root, f)))) return true;
+  return PERSISTENCE_SURFACE_DIRS.some(d => isUnder(c, canonicalize(path.join(root, d))));
+}
+// Every tag a crossing carries, computed once so the file-tool and
+// shell-command paths read the same three answers.
+function agentHomeTags(resolvedPath, home = os.homedir()) {
+  const agentHome = isUnder(resolvedPath, agentHomeRoot(home));
+  return agentHome
+    ? { agentHome: true, secret: isSecretPath(resolvedPath, home), persistenceSurface: isPersistenceSurface(resolvedPath, home) }
+    : { agentHome: false, secret: false, persistenceSurface: false };
 }
 
 // MCP read/write classification. Read-style MCP tools auto-approve; writes,
@@ -149,6 +154,9 @@ const FILE_TOOL_PATH_FIELD = {
   Read: 'file_path', Write: 'file_path', Edit: 'file_path', MultiEdit: 'file_path',
   NotebookEdit: 'notebook_path', Glob: 'path', Grep: 'path',
 };
+// Read-only tools, since a persistence surface's tier depends on whether
+// the access is a read or a write (see agentHomeTags above).
+const READ_FILE_TOOLS = new Set(['Read', 'Glob', 'Grep']);
 
 // The two pieces every boundary decision in this file needs, in one place
 // each. The prefix rule is the load-bearing detail: comparing with a bare
@@ -170,7 +178,9 @@ function isUnder(resolved, root, pmod = path) {
 function buildRoots(workspaceRoot, extraDirs = [], pmod = path) {
   return [canonicalize(workspaceRoot, pmod), ...extraDirs.map(d => canonicalize(d, pmod))];
 }
-function classifyFileAccess(toolName, toolInput, workspaceRoot, extraDirs = []) {
+// `home` is a defaulted seam so a test can pass a fixture home instead of
+// monkey-patching os.homedir(); production never passes it.
+function classifyFileAccess(toolName, toolInput, workspaceRoot, extraDirs = [], home = os.homedir()) {
   const field = FILE_TOOL_PATH_FIELD[toolName];
   if (!field) return null;
   const ti = toolInput || {};
@@ -182,10 +192,18 @@ function classifyFileAccess(toolName, toolInput, workspaceRoot, extraDirs = []) 
   }
   const resolvedPath = canonicalize(path.resolve(workspaceRoot, target));
   const inside = buildRoots(workspaceRoot, extraDirs).some(r => isUnder(resolvedPath, r));
-  // The folder a standing grant would cover: the directory itself for the
-  // directory-scanning tools, the parent directory for file targets.
+  if (inside) return { where: 'inside', resolvedPath };
+  // The agent's own folder: free unless the registry names this exact
+  // access as a secret (always) or a write to a persistence surface.
+  const tags = agentHomeTags(resolvedPath, home);
+  const isWrite = !READ_FILE_TOOLS.has(toolName);
+  if (tags.agentHome && !tags.secret && !(isWrite && tags.persistenceSurface)) {
+    return { where: 'inside', resolvedPath };
+  }
+  // The folder a standing grant would cover (never a secrets-tier crossing):
+  // the directory itself for the directory-scanning tools, the parent for a file.
   const grantDir = (toolName === 'Glob' || toolName === 'Grep') ? resolvedPath : path.dirname(resolvedPath);
-  return { where: inside ? 'inside' : 'outside', resolvedPath, grantDir };
+  return { where: 'outside', resolvedPath, grantDir: tags.secret ? null : grantDir, ...tags };
 }
 
 // The shell-command half of the same boundary.
@@ -325,7 +343,7 @@ function flavourFor(token, workspaceRoot) {
 // folder grant against what it is handed. Given only the first, a command
 // whose first target sits in an already-granted folder is allowed outright
 // and a second target somewhere else rides along with no card at all.
-function shellCrossings(command, workspaceRoot, extraDirs) {
+function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir()) {
   const found = [];
   const seen = new Set();
   for (const raw of shellPathTokens(command)) {
@@ -346,15 +364,21 @@ function shellCrossings(command, workspaceRoot, extraDirs) {
     const pmod = flavourFor(t, workspaceRoot);
     const resolved = canonicalize(pmod.resolve(pmod.resolve(workspaceRoot), t), pmod);
     if (buildRoots(workspaceRoot, extraDirs, pmod).some(r => isUnder(resolved, r, pmod))) continue;
+    // Tier three (neither secret nor a persistence surface) is free, so it
+    // is not reported at all. A command cannot declare which act it
+    // performs, so a persistence surface is conservatively treated as a
+    // write here.
+    const tags = agentHomeTags(resolved, home);
+    if (tags.agentHome && !tags.secret && !tags.persistenceSurface) continue;
     const key = pmod === path.win32 ? resolved.toLowerCase() : resolved;
     if (seen.has(key)) continue;
     seen.add(key);
-    found.push({ path: resolved });
+    found.push({ path: resolved, ...tags });
   }
   return found;
 }
 
-function classifyShellAccess(toolName, toolInput, workspaceRoot, extraDirs = []) {
+function classifyShellAccess(toolName, toolInput, workspaceRoot, extraDirs = [], home = os.homedir()) {
   if (!SHELL_TOOLS.has(toolName)) return null;
   const ti = toolInput || {};
   // Signal 1. No grant folder is offered: a sandbox escape is not about one
@@ -364,12 +388,15 @@ function classifyShellAccess(toolName, toolInput, workspaceRoot, extraDirs = [])
   }
   // Signal 2.
   if (typeof ti.command !== 'string' || !ti.command) return null;
-  const crossings = shellCrossings(ti.command, workspaceRoot, extraDirs);
+  const crossings = shellCrossings(ti.command, workspaceRoot, extraDirs, home);
   if (!crossings.length) return null;
   return { where: 'outside', resolvedPath: crossings[0].path, grantDir: null, grantable: false, crossings };
 }
 
-module.exports = { isProtectedClaudeEdit, isMcpReadTool, classifyFileAccess, classifyShellAccess, canonicalize, sensitivePaths, sensitiveEnrichment, transcriptsDirFor };
+module.exports = {
+  isProtectedClaudeEdit, isMcpReadTool, classifyFileAccess, classifyShellAccess, canonicalize,
+  isSecretPath, isPersistenceSurface, SECRET_RELATIVE_PATHS, PERSISTENCE_SURFACE_DIRS, PERSISTENCE_SURFACE_FILES,
+};
 
 if (require.main === module) main();
 function main() {
@@ -466,23 +493,15 @@ process.stdin.on('end', () => {
   const port = process.env.RUNDOCK_PORT || 3000;
   const convoId = process.env.RUNDOCK_CONVO_ID || '';
 
-  // Every crossing, enriched, with the sensitive ones stripped of their
-  // whole-folder grantDir. PM-5: a crossing into a path the sensitive table
-  // names must never be answerable from a standing grant over that whole
-  // root, so the request this hook emits for one carries no grantable
-  // whole-folder grant at all: the narrow grant (this same enrichment, when
-  // one can be derived) stays the only standing-grant route left for it. The
-  // top-level grant_dir below is read off crossings[0] rather than kept as a
-  // second value, so the two can never say different things about the same
-  // crossing.
+  // Every crossing, already tagged by classifyFileAccess/shellCrossings at
+  // the point each was classified: nothing here re-derives those answers. A
+  // secrets-registry crossing already carries no grantDir (stripped at
+  // classification), so the request emitted for one is never grantable.
   const boundaryCrossings = (access && access.where === 'outside')
-    ? (access.crossings || [{ path: access.resolvedPath, grantDir: access.grantDir }])
-        .map(c => {
-          const enrichment = sensitiveEnrichment(c.path, wsRoot) || {};
-          return enrichment.sensitive
-            ? { ...c, grantDir: null, ...enrichment }
-            : { ...c, ...enrichment };
-        })
+    ? (access.crossings || [{
+        path: access.resolvedPath, grantDir: access.grantDir,
+        agentHome: access.agentHome, secret: access.secret, persistenceSurface: access.persistenceSurface,
+      }])
     : [];
 
   const payload = JSON.stringify({
@@ -506,11 +525,9 @@ process.stdin.on('end', () => {
           // per-command card that already exists, which is the opposite of
           // what this boundary is for.
           //
-          // NOT the whole-folder gate for a sensitive crossing: that is
-          // decided per crossing above (grantDir stripped), because this
-          // flag also has to stay true for a non-sensitive crossing, and for
-          // a sensitive one whose narrow grant should still be able to
-          // silence a later, in-scope request.
+          // NOT the secrets gate, decided per crossing above (grantDir
+          // stripped there): this flag stays true for every crossing so a
+          // standing grant can still silence the ones it covers.
           grantable: access.grantable !== false,
           // Every crossing, so the server can refuse to answer from a
           // standing grant unless EVERY one is covered. A file tool has
