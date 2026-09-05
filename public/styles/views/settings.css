@@ -13,6 +13,17 @@
 .settings-row + .settings-row { border-top: 1px solid var(--border); }
 .settings-label { font-size: var(--body); font-weight: 500; color: var(--text-1); }
 .settings-value { font-size: var(--caption); color: var(--text-2); font-family: 'SF Mono','Fira Code','Consolas',monospace; max-width: 320px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* A SENTENCE IS NOT A VALUE, AND THE VALUE STYLE TRUNCATES ON PURPOSE.
+   .settings-value clips to one 320px monospace line with an ellipsis, which
+   is right for a path or a command that would otherwise push a row wide, and
+   wrong for anything written to be read: a paragraph loses its second half
+   silently, and a line of feedback vanishes into the ellipsis, which reads
+   as a control that did nothing. So sentences get their own class: the body
+   face rather than monospace, wrapping, no width cap, and a line height that
+   makes more than one line comfortable. Values keep the clip, and keep their
+   title attribute so the full text is still reachable. */
+.settings-prose { font-size: var(--caption); color: var(--text-2); line-height: 1.5; white-space: normal; overflow: visible; }
+.settings-prose code { font-family: 'SF Mono','Fira Code','Consolas',monospace; }
 .settings-btn { padding: 6px 14px; font-size: var(--caption); font-weight: 600; border-radius: var(--radius-md); background: var(--card); color: var(--text-1); border: 1px solid var(--border); transition: all var(--duration-base) ease; cursor: pointer; }
 .settings-btn:hover { border-color: var(--accent); color: var(--accent); }
 .settings-btn-primary { padding: 6px 14px; font-size: var(--caption); font-weight: 600; border-radius: var(--radius-md); background: var(--accent); color: white; border: none; transition: all var(--duration-base) ease; cursor: pointer; }

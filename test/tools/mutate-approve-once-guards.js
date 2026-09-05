@@ -89,7 +89,7 @@ const MUTATIONS = [
   // Render a read-failed state as the empty state and the next Add writes over
   // a file we merely could not read.
   [SETTINGS, 'a read that failed draws its error, never the empty state',
-    "  if (state.error && state.readFailed) {\n    return `<div class=\"settings-section-title\">Connectors</div><div class=\"settings-card\"><div class=\"settings-row\"><span class=\"settings-value\">${connectorsEsc(state.error)}</span></div></div>`;\n  }",
+    "  if (state.error && state.readFailed) {\n    return `<div class=\"settings-section-title\">Connectors</div><div class=\"settings-card\"><div class=\"settings-row\"><span class=\"settings-prose\">${connectorsEsc(state.error)}</span></div></div>`;\n  }",
     ''],
   // Let connectorsAdd proceed after a failed read and it merges from null,
   // dropping the real file's servers.
