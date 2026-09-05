@@ -128,6 +128,29 @@ describe('the block names the runtime\'s measured plumbing, and the doc names th
     assert.strictEqual(scaffold.isRundockSandbox(impersonating), false,
       'a root of their own, sitting where the /private pairing would be, is not a temp-directory spelling');
   });
+
+  test('PM-1: a second tail entry that is a real-path spelling of the first, but not the /private one, is still recognised as ours', () => {
+    // A developer-set TMPDIR, or a relocated temp volume, resolves through a
+    // symlink that shares no /private prefix at all: the second entry is a
+    // real-path spelling of the first (it ends with it, the shape every
+    // realpath resolution produces), but is not the macOS-specific pairing.
+    // Before this fix, `ours` read false for a block like this forever, and
+    // reconcileSandboxForMode could neither update nor withdraw it.
+    const relocatedTail = ['/Users/dev/tmp-mount/T', '/Volumes/ExternalDrive/Users/dev/tmp-mount/T'];
+    const block = scaffold.sandboxSettings('/w/ws', 'darwin', '/Users/dev', relocatedTail);
+    assert.strictEqual(scaffold.isRundockSandbox(block), true,
+      'a non-/private real-path pairing is still ours, because it is still a real-path spelling of the raw name');
+
+    const ws = tmp('wb-relocated-tmp-');
+    fs.mkdirSync(path.join(ws, '.claude'), { recursive: true });
+    fs.writeFileSync(path.join(ws, '.claude', 'settings.local.json'), JSON.stringify({
+      sandbox: scaffold.sandboxSettings(ws, 'darwin', '/Users/dev', relocatedTail),
+    }));
+    scaffold.reconcileSandboxForMode(ws, 'code', 'darwin');
+    const settings = JSON.parse(fs.readFileSync(path.join(ws, '.claude', 'settings.local.json'), 'utf8'));
+    assert.strictEqual('sandbox' in settings, false,
+      'moving to Code mode withdraws a block carrying this tail, exactly as it does for the /private pairing');
+  });
 });
 
 describe('one directory under two names is one identity', () => {
@@ -292,6 +315,22 @@ describe('the block is driven by mode, and only by mode', () => {
     assert.ok(settings.sandbox, 'moving back to knowledge mode restores the block');
   });
 
+  test('an unreadable settings file is never overwritten: only a genuinely absent file starts from empty', () => {
+    // The bug this guards: {} stood in for EVERY read failure, absent or
+    // not, so a corrupt settings.local.json (a hand-added comment, a torn
+    // read while Claude Code itself was mid-write) got silently replaced
+    // with a lone { sandbox: ... } key, discarding every permission-hook
+    // entry the file carried, while the caller still reported success.
+    const ws = workspaceWithBlock();
+    const settingsPath = path.join(ws, '.claude', 'settings.local.json');
+    const corrupt = '{ "hooks": { "PreToolUse": [ // a hand-added comment breaks this\n';
+    fs.writeFileSync(settingsPath, corrupt);
+    assert.throws(() => scaffold.reconcileSandboxForMode(ws, 'knowledge', 'darwin'),
+      /could not read/, 'the read/parse failure is surfaced rather than swallowed');
+    assert.strictEqual(fs.readFileSync(settingsPath, 'utf8'), corrupt,
+      'and the file\'s bytes are exactly as they were: nothing started from {} and overwrote it');
+  });
+
   test('the next open honours the persisted mode, not only the switch\'s immediate write: withdrawn for a code-mode workspace, present for a knowledge-mode one', () => {
     // reconcileSandboxForMode proves the switch's own immediate write above.
     // This is the separate branch in scaffoldWorkspace itself
@@ -432,6 +471,73 @@ describe('a crossing into the runtime\'s home carries its stakes', () => {
       const credentials = path.join(home, '.claude', '.credentials.json');
       assert.strictEqual(boundary.boundaryGrantCovers(credentials), false,
         'the narrow grant for the transcripts folder never widens to cover the runtime home it lives inside');
+    } finally {
+      config.setWorkspace(original);
+    }
+  });
+
+  test('PM-5: a standing grant over the whole sensitive root does not silence a later crossing into it', () => {
+    // The naive check (boundaryGrantCovers alone) WOULD silence this: a
+    // grant over the runtime home is a prefix of everything inside it,
+    // credentials included. crossingCovered is the actual decision
+    // lib/http-router.js consults before answering a boundary request from a
+    // stored grant, and for a sensitive crossing it must not fall through to
+    // that naive check.
+    const home = tmp('wb-wide-grant-home-');
+    const ws = tmp('wb-wide-grant-ws-');
+    const flattened = path.resolve(ws).replace(/[^A-Za-z0-9-]/g, '-');
+    fs.mkdirSync(path.join(home, '.claude', 'projects', flattened), { recursive: true });
+    const credentials = path.join(home, '.claude', '.credentials.json');
+
+    const original = config.getWorkspace();
+    config.setWorkspace(ws);
+    try {
+      // A grant over the whole runtime home, however it came to exist (an
+      // older build, a hand-edited permissions.json): established directly,
+      // not through the card, because the card no longer offers this button
+      // for a sensitive crossing at all (see boundary-card.test.js).
+      boundary.addBoundaryGrant(path.join(home, '.claude'));
+      assert.strictEqual(boundary.boundaryGrantCovers(credentials), true,
+        'fixture sanity: the naive per-path check does consider this covered');
+
+      const enrichment = hook.sensitiveEnrichment(credentials, ws, home);
+      assert.strictEqual(enrichment.sensitive, 'claude-home');
+      assert.strictEqual(boundary.crossingCovered({ path: credentials, ...enrichment }), false,
+        'the actual decision the server consults still cards it: no grant over the wider root silences a sensitive crossing');
+    } finally {
+      config.setWorkspace(original);
+    }
+  });
+
+  test('PM-5: crossingCovered mirrors the narrow grant exactly, once it is recorded', () => {
+    // The same fixture and grant as "answering the narrow grant..." above,
+    // read this time through crossingCovered, the function the server
+    // actually calls, rather than boundaryGrantCovers alone.
+    const home = tmp('wb-covered-home-');
+    const ws = tmp('wb-covered-ws-');
+    const flattened = path.resolve(ws).replace(/[^A-Za-z0-9-]/g, '-');
+    const narrowDir = path.join(home, '.claude', 'projects', flattened);
+    fs.mkdirSync(narrowDir, { recursive: true });
+
+    const original = config.getWorkspace();
+    config.setWorkspace(ws);
+    try {
+      const insideNarrow = path.join(narrowDir, 'session.jsonl');
+      const credentials = path.join(home, '.claude', '.credentials.json');
+      const insideEnrichment = hook.sensitiveEnrichment(insideNarrow, ws, home);
+      const credEnrichment = hook.sensitiveEnrichment(credentials, ws, home);
+
+      assert.strictEqual(boundary.crossingCovered({ path: insideNarrow, ...insideEnrichment }), false,
+        'before the grant exists, the transcripts file still cards');
+
+      boundary.addBoundaryGrant(insideEnrichment.narrowGrantDir);
+
+      assert.strictEqual(boundary.crossingCovered({ path: insideNarrow, ...insideEnrichment }), true,
+        'after the narrow grant, a file inside the transcripts folder is silent');
+      assert.strictEqual(boundary.crossingCovered({ path: credentials, ...credEnrichment }), false,
+        'the runtime home\'s credential file, outside the narrow folder, still cards');
+      assert.strictEqual(boundary.crossingCovered({ path: path.join(home, '.claude'), sensitive: 'claude-home', narrowGrantDir: insideEnrichment.narrowGrantDir }), false,
+        'and so does the runtime home root itself');
     } finally {
       config.setWorkspace(original);
     }

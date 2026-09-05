@@ -278,4 +278,30 @@ describe('workspace file-access boundary', () => {
     client.send({ type: 'permission_response', requestId: msg.request_id, conversationId: 'boundary-test', allow: false });
     assert.strictEqual(decisionOf(await pending), 'deny');
   });
+
+  test('PM-5: a sensitive crossing cards in CODE mode too, and offers no whole-folder grant', async () => {
+    // Code mode auto-approves ordinary commands, but classifyFileAccess and
+    // classifyShellAccess both report 'outside' for this crossing, and
+    // main()'s code-mode branch only auto-allows when access is NOT
+    // 'outside' (see the CODE MODE tests above). A sensitive crossing must
+    // still reach the card in this mode, exactly as in knowledge mode.
+    const home = os.homedir();
+    const flattened = path.resolve(h.workspaceDir).replace(/[^A-Za-z0-9-]/g, '-');
+    const transcripts = path.join(home, '.claude', 'projects', flattened);
+    fs.mkdirSync(transcripts, { recursive: true });
+    const target = path.join(home, '.claude', 'settings.json');
+
+    const since = client.messages.length;
+    const pending = runHook('Write', { file_path: target, content: 'x' }, { RUNDOCK_CODE_MODE: '1' });
+    const { msg } = await client.waitFor(m => m.type === 'control_request'
+      && m.request && m.request.boundary === true, { since, label: 'runtime-home crossing card, code mode' });
+    const crossing = (msg.request.crossings || [])[0];
+    assert.ok(crossing, 'the crossing reaches the card even in code mode');
+    assert.strictEqual(crossing.sensitive, 'claude-home', 'the stakes are still stated');
+    assert.strictEqual(msg.request.grant_dir, null,
+      'PM-5: no whole-folder grant is offered for a sensitive crossing, in any mode');
+    assert.strictEqual(crossing.grantDir, null, 'and the crossing itself carries none either');
+    client.send({ type: 'permission_response', requestId: msg.request_id, conversationId: 'boundary-test', allow: false });
+    assert.strictEqual(decisionOf(await pending), 'deny');
+  });
 });

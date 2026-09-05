@@ -638,6 +638,27 @@ describe('the OS write block is driven by mode alone, through the real dispatch'
     });
     fs.rmSync(dir, { recursive: true, force: true });
   });
+
+  test('an unreadable settings.local.json is named in the error, not silently replaced', () => {
+    // The bug this guards: a corrupt or unreadable settings file made the
+    // reconcile start from {}, write over the file, and still report
+    // workspace_mode_changed. This drives the real protocol path
+    // (handleSetWorkspaceMode, not reconcileSandboxForMode directly) so the
+    // wiring between the two is what is proven, not just the function in
+    // isolation.
+    const dir = tempWs();
+    const settingsPath = path.join(dir, '.claude', 'settings.local.json');
+    const corrupt = '{ not json';
+    fs.writeFileSync(settingsPath, corrupt);
+    withWorkspace(dir, () => {
+      const set = captureWs();
+      workspace.handleSetWorkspaceMode({}, set, { mode: 'knowledge' }, 'darwin');
+      assert.strictEqual(set.sent[0].type, 'workspace_error', 'never workspace_mode_changed for this failure');
+      assert.match(set.sent[0].message, /settings\.local\.json/, 'the settings file is named');
+      assert.strictEqual(fs.readFileSync(settingsPath, 'utf8'), corrupt, 'and its bytes are untouched');
+    });
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
 });
 
 describe('the serving-workspace notice', () => {

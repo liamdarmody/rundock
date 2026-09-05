@@ -36,6 +36,11 @@ const CHAT_VIEW = { src: path.join(ROOT, 'public', 'views', 'chat.js'), suite: '
 // sensitiveEnrichment and card rendering each in isolation), only by the
 // real hook process the integration suite spawns.
 const HOOK_INTEGRATION = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/integration/boundary-permissions.test.js' };
+// PM-1's ordering guard lives in the protocol handler, not the scaffold
+// layer, and is reachable only through the real workspace-open path (the
+// scaffold-layer tests call scaffoldWorkspace directly and so never see this
+// file's own ordering at all).
+const WORKSPACE_HANDLER = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'workspace.js'), suite: 'test/integration/ws-handler-edges.test.js' };
 
 const MUTATIONS = [
   // ===== ONE DIRECTORY UNDER TWO NAMES IS ONE IDENTITY =====
@@ -79,9 +84,18 @@ const MUTATIONS = [
   // Drop the pairing check and a root a person appends, sitting in the
   // second tail slot, is structurally indistinguishable from a legitimate
   // temp-directory real path: the block is read as ours and their root is
-  // rewritten away on the next reconcile.
-  [SCAFFOLD, 'a second tail entry must be the first entry\'s own /private pairing, or it is somebody\'s edit',
-    "  if (tail.length === 2 && tail[1] !== path.posix.join('/private', tail[0])) return false;\n",
+  // rewritten away on the next reconcile. PM-1: the pairing check itself is
+  // now a general real-path-spelling test (ends-with), not only the literal
+  // /private case, so a non-/private relocation is recognised too.
+  [SCAFFOLD, 'a second tail entry must be a real-path spelling of the first, or it is somebody\'s edit',
+    '  if (tail.length === 2 && !tail[1].endsWith(tail[0])) return false;\n',
+    ''],
+  // PM-1: a corrupt or unreadable settings.local.json must not be silently
+  // replaced with {}. Only ENOENT may start empty; drop that distinction and
+  // every other read/parse failure quietly overwrites the file instead of
+  // being surfaced.
+  [SCAFFOLD, 'only a genuinely absent settings file may start the reconcile from {}',
+    "    if (e.code !== 'ENOENT') throw new Error(`could not read ${settingsLocalPath}: ${e.message}`);\n",
     ''],
 
   // ===== THE BLOCK IS DRIVEN BY MODE, AND ONLY BY MODE =====
@@ -96,6 +110,28 @@ const MUTATIONS = [
   [SCAFFOLD, 'the next open honours the persisted mode, not only the switch',
     "    const desired = workspaceModeFor(dir) === 'code' ? null : sandboxSettings(dir, platform);",
     '    const desired = sandboxSettings(dir, platform);'],
+  // PM-1: the mode must be PERSISTED before scaffoldWorkspace runs, because
+  // scaffoldWorkspace's own reconcile reads the mode back off disk, not from
+  // this function's local variable. Swap the order and a never-before-opened
+  // code-signal workspace gets the block written on its first open anyway,
+  // catching up only on the next one.
+  [WORKSPACE_HANDLER, 'the mode is persisted before scaffoldWorkspace runs, not after',
+    "  const state = readState();\n"
+    + "  if (!state.workspaceMode) {\n"
+    + "    state.workspaceMode = detectWorkspaceMode(dir);\n"
+    + "    writeState(state);\n"
+    + "    console.log(`  Workspace mode auto-detected: ${state.workspaceMode}`);\n"
+    + "  }\n"
+    + "\n"
+    + "  try { scaffoldWorkspace(dir); } catch (e) { console.warn('Scaffold warning:', e.message); }",
+    "  try { scaffoldWorkspace(dir); } catch (e) { console.warn('Scaffold warning:', e.message); }\n"
+    + "\n"
+    + "  const state = readState();\n"
+    + "  if (!state.workspaceMode) {\n"
+    + "    state.workspaceMode = detectWorkspaceMode(dir);\n"
+    + "    writeState(state);\n"
+    + "    console.log(`  Workspace mode auto-detected: ${state.workspaceMode}`);\n"
+    + "  }"],
 
   // ===== THE SENSITIVE TABLE AND THE NARROW GRANT =====
   // Empty the table and a crossing into the runtime home renders the
@@ -113,15 +149,43 @@ const MUTATIONS = [
   // folder grant: the exact regression 'a shell request never carries a
   // standing folder grant' exists to prevent.
   [CHAT_VIEW, 'the narrow grant is offered only where a folder grant may be remembered at all',
-    '  const sensNarrow = grantable && sensitiveCrossing ? sensitiveCrossing.narrowGrantDir || null : null;',
+    "  const sensNarrow = !shell && boundary && sensitiveCrossing ? sensitiveCrossing.narrowGrantDir || null : null;",
     '  const sensNarrow = sensitiveCrossing ? sensitiveCrossing.narrowGrantDir || null : null;'],
   // sensitiveEnrichment and card rendering are each tested in isolation; only
   // this attach site in the request builder joins them into what a real
   // crossing emits. Proven through the real hook process (the integration
   // suite), because the unit suite never reaches this line either.
   [HOOK_INTEGRATION, 'the sensitive enrichment reaches the crossing the hook actually emits',
-    '            .map(c => ({ ...c, ...(sensitiveEnrichment(c.path, wsRoot) || {}) })),',
-    '            .map(c => c),'],
+    '          const enrichment = sensitiveEnrichment(c.path, wsRoot) || {};',
+    '          const enrichment = {};'],
+
+  // ===== PM-5: NO GRANT SUPPRESSES A SENSITIVE CROSSING =====
+  // The card's whole-folder button is the affordance the standing grant
+  // comes from at all. Drop the sensitivity gate and it renders for a
+  // sensitive crossing exactly as for an ordinary one, which is the button
+  // PM-5 forbids.
+  [CHAT_VIEW, 'the whole-folder button is never offered for a sensitive crossing',
+    '  const wholeFolderOffered = grantable && !sensitiveCrossing;',
+    '  const wholeFolderOffered = grantable;'],
+  // The hook is the other half of the same rule: even if the card somehow
+  // rendered the button, the request it emits for a sensitive crossing must
+  // carry no grantDir for a stored grant to answer from. Restore the
+  // unconditional spread and a sensitive crossing gets its ordinary
+  // whole-folder grantDir back.
+  [HOOK_INTEGRATION, 'a sensitive crossing carries no whole-folder grantDir in the request the hook emits',
+    '          return enrichment.sensitive\n'
+    + '            ? { ...c, grantDir: null, ...enrichment }\n'
+    + '            : { ...c, ...enrichment };',
+    '          return { ...c, ...enrichment };'],
+  // The decision itself, one level below the hook and the card: a sensitive
+  // crossing must be covered ONLY by its own narrow grant, never by the
+  // ordinary per-path check a standing grant over the wider sensitive root
+  // would satisfy.
+  [BOUNDARY, 'a sensitive crossing is covered only by its own narrow grant, never the ordinary per-path check',
+    '  return crossing.sensitive\n'
+    + '    ? narrowGrantCovers(crossing.path, crossing.narrowGrantDir)\n'
+    + '    : boundaryGrantCovers(crossing.path);',
+    '  return boundaryGrantCovers(crossing.path);'],
 ];
 
 const REPORTER = ['--test-reporter', 'spec'];
@@ -154,7 +218,7 @@ function redTests(suite) {
 }
 
 function run() {
-  const targets = [HOOK, SCAFFOLD, BOUNDARY, CHAT_VIEW, HOOK_INTEGRATION];
+  const targets = [HOOK, SCAFFOLD, BOUNDARY, CHAT_VIEW, HOOK_INTEGRATION, WORKSPACE_HANDLER];
   const session = beginMutationRun({ files: [...new Set(targets.map((target) => target.src))] });
   const originals = new Map();
   for (const target of targets) originals.set(target, session.original(target.src));

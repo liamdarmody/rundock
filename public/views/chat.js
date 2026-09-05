@@ -613,6 +613,11 @@ function renderPermissionCard(d, convoId) {
   // Every place the request reaches, so the card cannot show one target while
   // the command reaches three. A person approves what they can see.
   const crossings = boundary && Array.isArray(req.crossings) ? req.crossings : [];
+  // A crossing established by a shell command, not a path (a sandbox escape
+  // retry), has no one folder any grant, narrow or whole, could be about.
+  // Computed once, ahead of every use below, rather than only inside the
+  // summary-copy branch it originally served.
+  const shell = toolName === 'Bash' || toolName === 'PowerShell';
   // A standing folder grant is on offer only when the server names a folder
   // that could answer this request. It never does for a shell command: a
   // folder grant says an agent may touch that folder, while approving here
@@ -627,14 +632,20 @@ function renderPermissionCard(d, convoId) {
   // on its own and needs no separate boundary guard.
   const sensitiveCrossing = crossings.find(c => c && c.sensitive) || null;
   const sensCopy = sensitiveCrossing ? RundockPermissions.sensitiveBoundaryCopy(sensitiveCrossing.sensitive) : null;
-  // The narrow grant is a folder grant: it can only be remembered where a
-  // folder grant can be remembered at all, which `grantable` already decides
-  // for "Always allow this folder". A shell crossing carries grantable false,
-  // so gating on it here means approving a command can never leave behind a
-  // standing folder grant, narrow or otherwise.
-  const sensNarrow = grantable && sensitiveCrossing ? sensitiveCrossing.narrowGrantDir || null : null;
+  // PM-5: no grant may suppress a sensitive crossing's card. The hook never
+  // sends a whole-folder grantDir for one (scripts/permission-hook.js strips
+  // it), but the card enforces this itself too, rather than trusting that
+  // upstream alone: a sensitive crossing never offers the whole-folder button,
+  // whatever `req.grant_dir` happens to carry.
+  const wholeFolderOffered = grantable && !sensitiveCrossing;
+  // The narrow grant is a folder grant, so it is never on offer for a shell
+  // crossing either, but it must NOT be gated on `grantable`/`wholeFolderOffered`:
+  // those two go false for a sensitive crossing precisely so the WHOLE-folder
+  // button never renders for one, and gating the narrow button on either flag
+  // would take the narrow option down with it, leaving a sensitive crossing
+  // with no standing-grant route at all.
+  const sensNarrow = !shell && boundary && sensitiveCrossing ? sensitiveCrossing.narrowGrantDir || null : null;
   if (boundary) {
-    const shell = toolName === 'Bash' || toolName === 'PowerShell';
     const reads = toolName === 'Read' || toolName === 'Glob' || toolName === 'Grep';
     // A shell crossing does not say which act it is. The command may read,
     // write, or reach a host, and the request carries no direction, so naming
@@ -658,14 +669,15 @@ function renderPermissionCard(d, convoId) {
     }
     // A crossing into a path the sensitive table names swaps in copy that
     // states the stakes, and offers the narrow grant when the hook could
-    // derive one. The whole-folder grant stays available and is demoted by
-    // position, never removed: operator authority is the product's rule.
+    // derive one. The whole-folder grant is not offered at all for this
+    // crossing (PM-5): no grant may suppress a sensitive card, and the narrow
+    // grant is the only standing-grant route that survives that rule.
     if (sensCopy) context = sensCopy.context;
   }
 
   // Store callback data for safe event handling (no inline onclick injection).
   // toolInput is echoed back in control_response (required by Claude Code).
-  pendingPermissions.set(requestId, { convoId, key, toolInput: input, grantDir: grantable ? req.grant_dir : null, narrowGrantDir: sensNarrow });
+  pendingPermissions.set(requestId, { convoId, key, toolInput: input, grantDir: wholeFolderOffered ? req.grant_dir : null, narrowGrantDir: sensNarrow });
 
   const icons = {
     low: '<svg class="permission-icon" width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.5"/><path d="M6 8l1.5 1.5L10.5 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>',
@@ -705,7 +717,7 @@ function renderPermissionCard(d, convoId) {
         ${sensNarrow && sensCopy
           ? `<button class="btn-perm btn-always" data-perm-id="${escAttr(requestId)}" data-perm-action="allow-transcripts">${esc(sensCopy.narrowLabel)}</button>`
           : ''}
-        ${grantable
+        ${wholeFolderOffered
           ? `<button class="btn-perm btn-always" data-perm-id="${escAttr(requestId)}" data-perm-action="allow-folder">Always allow this folder</button>`
           : (!boundary && RundockPermissions.offersAlwaysAllow(risk) ? `<button class="btn-perm btn-always" data-perm-id="${escAttr(requestId)}" data-perm-action="always">Always allow</button>` : '')}
         <button class="btn-perm btn-deny" data-perm-id="${escAttr(requestId)}" data-perm-action="deny">Deny</button>

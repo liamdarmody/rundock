@@ -466,6 +466,25 @@ process.stdin.on('end', () => {
   const port = process.env.RUNDOCK_PORT || 3000;
   const convoId = process.env.RUNDOCK_CONVO_ID || '';
 
+  // Every crossing, enriched, with the sensitive ones stripped of their
+  // whole-folder grantDir. PM-5: a crossing into a path the sensitive table
+  // names must never be answerable from a standing grant over that whole
+  // root, so the request this hook emits for one carries no grantable
+  // whole-folder grant at all: the narrow grant (this same enrichment, when
+  // one can be derived) stays the only standing-grant route left for it. The
+  // top-level grant_dir below is read off crossings[0] rather than kept as a
+  // second value, so the two can never say different things about the same
+  // crossing.
+  const boundaryCrossings = (access && access.where === 'outside')
+    ? (access.crossings || [{ path: access.resolvedPath, grantDir: access.grantDir }])
+        .map(c => {
+          const enrichment = sensitiveEnrichment(c.path, wsRoot) || {};
+          return enrichment.sensitive
+            ? { ...c, grantDir: null, ...enrichment }
+            : { ...c, ...enrichment };
+        })
+    : [];
+
   const payload = JSON.stringify({
     tool_name: data.tool_name,
     tool_input: data.tool_input || {},
@@ -475,7 +494,7 @@ process.stdin.on('end', () => {
       ? {
           boundary: true,
           resolved_path: access.resolvedPath || null,
-          grant_dir: access.grantDir || null,
+          grant_dir: (boundaryCrossings[0] && boundaryCrossings[0].grantDir) || null,
           // WHETHER A STANDING FOLDER GRANT MAY ANSWER THIS AT ALL.
           //
           // False for every shell command. A folder grant and a command
@@ -486,6 +505,12 @@ process.stdin.on('end', () => {
           // folder. Letting a grant answer a command would retire the
           // per-command card that already exists, which is the opposite of
           // what this boundary is for.
+          //
+          // NOT the whole-folder gate for a sensitive crossing: that is
+          // decided per crossing above (grantDir stripped), because this
+          // flag also has to stay true for a non-sensitive crossing, and for
+          // a sensitive one whose narrow grant should still be able to
+          // silence a later, in-scope request.
           grantable: access.grantable !== false,
           // Every crossing, so the server can refuse to answer from a
           // standing grant unless EVERY one is covered. A file tool has
@@ -493,8 +518,7 @@ process.stdin.on('end', () => {
           // has none, because no path established it. Always sent, so the
           // server never has to reconstruct it: this is the only producer of
           // boundary requests in the product.
-          crossings: (access.crossings || [{ path: access.resolvedPath, grantDir: access.grantDir }])
-            .map(c => ({ ...c, ...(sensitiveEnrichment(c.path, wsRoot) || {}) })),
+          crossings: boundaryCrossings,
         }
       : {})
   });

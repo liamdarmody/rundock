@@ -202,7 +202,8 @@ describe('the sensitive crossing, rendered and answered', () => {
     assert.match(html, /\.credentials\.json/);
     assert.match(html, /data-perm-action="allow-transcripts">Allow this workspace.s transcripts only</,
       'the narrow button carries the table\'s own label and action');
-    assert.match(html, /data-perm-action="allow-folder"/, 'the whole-folder grant is demoted, not removed');
+    assert.doesNotMatch(html, /data-perm-action="allow-folder"/,
+      'PM-5: no grant may suppress a sensitive card, so the whole-folder grant is removed, not merely demoted');
   });
 
   test('answering the narrow button sends its grantDir; plain allow and deny send none', () => {
