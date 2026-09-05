@@ -51,7 +51,7 @@ const MUTATIONS = [
   // Compare unresolved again and every symlink, alias and case spelling of
   // an inside path reads as outside: the false-positive half of the storm.
   [HOOK, 'file targets are canonicalised before the comparison',
-    '  const resolvedPath = canonicalize(path.resolve(workspaceRoot, target));',
+    '  const resolvedPath = canonicalize(path.resolve(workspaceRoot, target), path, resolvedPathFoldsCase);',
     '  const resolvedPath = path.resolve(workspaceRoot, target);'],
   [HOOK, 'the roots are canonicalised too, or a symlink-opened workspace denies its own files',
     '  return [canonicalize(workspaceRoot, pmod), ...extraDirs.map(d => canonicalize(d, pmod))];',
@@ -216,10 +216,22 @@ const MUTATIONS = [
   [WORKSPACE_HANDLER_UNIT, 'a failed mode change restores the settings file\'s pre-request bytes, not just leaves the mode uncommitted',
     '      try {\n'
     + '        if (existedBefore) fs.writeFileSync(settingsLocalPath, preRequestBytes);\n'
-    + '        else if (fs.existsSync(settingsLocalPath)) fs.unlinkSync(settingsLocalPath);\n'
+    + "        else if (preRequestReadErrorCode === 'ENOENT' && fs.existsSync(settingsLocalPath)) fs.unlinkSync(settingsLocalPath);\n"
     + '      } catch (restoreErr) {',
     '      try {\n'
     + '      } catch (restoreErr) {'],
+  // Delete only when the capture proved the file absent (ENOENT).
+  [WORKSPACE_HANDLER_UNIT, 'the rollback may only delete the settings file when the capture proved it absent, not for any other read failure',
+    "        else if (preRequestReadErrorCode === 'ENOENT' && fs.existsSync(settingsLocalPath)) fs.unlinkSync(settingsLocalPath);",
+    '        else if (fs.existsSync(settingsLocalPath)) fs.unlinkSync(settingsLocalPath);'],
+  // The delete branch alone, not paired with the restore write above.
+  [WORKSPACE_HANDLER_UNIT, 'a mode change that creates settings.local.json where none existed removes it again on failure, not just restores bytes when a file was already there',
+    "        else if (preRequestReadErrorCode === 'ENOENT' && fs.existsSync(settingsLocalPath)) fs.unlinkSync(settingsLocalPath);\n",
+    ''],
+  // The lower length bound is load-bearing too, not only the upper one.
+  [SCAFFOLD, 'a tail of zero entries is rejected by the lower length bound, not only by the upper one',
+    '  if (roots.length < expectedHead.length + 1 || roots.length > expectedHead.length + 2) return false;',
+    '  if (roots.length > expectedHead.length + 2) return false;'],
 ];
 
 const REPORTER = ['--test-reporter', 'spec'];

@@ -38,9 +38,11 @@ const fs = require('fs');
 // non-Windows host (the test flavour) has no filesystem to ask, and on
 // Windows itself the path module is already win32 and the flavour test is an
 // identity.
-function canonicalize(p, pmod = path) {
+function canonicalize(p, pmod = path, foldsCase) {
   const resolved = pmod.resolve(p);
   if (pmod === path.win32 && process.platform !== 'win32') return resolved;
+  // `foldsCase`: a DEFAULTED SEAM (undefined in production); a test drives both kinds by hand.
+  if (foldsCase !== undefined) return canonicalizeCaseSimulated(resolved, foldsCase);
   const tail = [];
   let cur = resolved;
   for (;;) {
@@ -55,6 +57,20 @@ function canonicalize(p, pmod = path) {
       cur = parent;
     }
   }
+}
+
+// Walks a resolved POSIX path segment by segment; a miss folds to a
+// case-insensitive sibling only when `foldsCase` says so. No symlinks.
+function canonicalizeCaseSimulated(resolved, foldsCase) {
+  const segments = resolved.split(path.sep).filter(Boolean);
+  let cur = path.sep;
+  for (const seg of segments) {
+    let entries = [];
+    try { entries = fs.readdirSync(cur); } catch (e) { /* unresolved from here on */ }
+    const real = entries.includes(seg) ? seg : ((foldsCase && entries.find(e => e.toLowerCase() === seg.toLowerCase())) || seg);
+    cur = path.join(cur, real);
+  }
+  return cur;
 }
 
 // ── The agent's own folder: three tiers, one registry ──────────────────
@@ -158,14 +174,15 @@ function isMcpReadTool(toolName) {
 // is the agent's own domain, and those land in the file the app reads); the
 // SAVE_AGENT / SAVE_SKILL markers remain the way to get a live UI refresh.
 const CLAUDE_EDIT_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
+// The refusal's own names, for a test to bind to mechanically.
+const REFUSED_CLAUDE_EDIT_DIRS = ['agents', 'skills'];
 function isProtectedClaudeEdit(toolName, toolInput) {
   if (!CLAUDE_EDIT_TOOLS.has(toolName)) return false;
   const ti = toolInput || {};
   const target = ti.file_path || ti.notebook_path || ti.path;
   if (typeof target !== 'string') return false;
   const resolved = path.resolve(target);
-  return isUnder(resolved, path.join(os.homedir(), '.claude', 'agents'))
-      || isUnder(resolved, path.join(os.homedir(), '.claude', 'skills'));
+  return REFUSED_CLAUDE_EDIT_DIRS.some(d => isUnder(resolved, path.join(os.homedir(), '.claude', d)));
 }
 
 // Workspace file-access boundary (spec: anything outside the workspace
@@ -211,7 +228,7 @@ function buildRoots(workspaceRoot, extraDirs = [], pmod = path) {
 // home instead of monkey-patching os.homedir(), and drive either filesystem
 // kind explicitly instead of inheriting whichever the test host happens to
 // have; production never passes either.
-function classifyFileAccess(toolName, toolInput, workspaceRoot, extraDirs = [], home = os.homedir(), foldsCase = hostFoldsCase()) {
+function classifyFileAccess(toolName, toolInput, workspaceRoot, extraDirs = [], home = os.homedir(), foldsCase = hostFoldsCase(), resolvedPathFoldsCase) {
   const field = FILE_TOOL_PATH_FIELD[toolName];
   if (!field) return null;
   const ti = toolInput || {};
@@ -221,7 +238,8 @@ function classifyFileAccess(toolName, toolInput, workspaceRoot, extraDirs = [], 
     // A path-less Write/Edit is malformed; let the generic card handle it.
     return (toolName === 'Glob' || toolName === 'Grep') ? { where: 'inside' } : null;
   }
-  const resolvedPath = canonicalize(path.resolve(workspaceRoot, target));
+  // Separate seam from `foldsCase` above; stays undefined in production.
+  const resolvedPath = canonicalize(path.resolve(workspaceRoot, target), path, resolvedPathFoldsCase);
   const inside = buildRoots(workspaceRoot, extraDirs).some(r => isUnder(resolvedPath, r));
   if (inside) return { where: 'inside', resolvedPath };
   // The agent's own folder: free unless the registry names this exact
@@ -427,6 +445,7 @@ function classifyShellAccess(toolName, toolInput, workspaceRoot, extraDirs = [],
 module.exports = {
   isProtectedClaudeEdit, isMcpReadTool, classifyFileAccess, classifyShellAccess, canonicalize,
   isSecretPath, isPersistenceSurface, SECRET_RELATIVE_PATHS, PERSISTENCE_SURFACE_DIRS, PERSISTENCE_SURFACE_FILES,
+  REFUSED_CLAUDE_EDIT_DIRS,
 };
 
 if (require.main === module) main();
@@ -515,7 +534,7 @@ process.stdin.on('end', () => {
       hookSpecificOutput: {
         hookEventName: 'PreToolUse',
         permissionDecision: 'deny',
-        permissionDecisionReason: "This edits the global ~/.claude agent or skill config, which Rundock does not use. Manage this workspace's agents and skills through the RUNDOCK:SAVE_AGENT / RUNDOCK:SAVE_SKILL markers (which write into this workspace and refresh the app), or edit the workspace's own .claude file."
+        permissionDecisionReason: "Rundock reads the agents and skills inside the open workspace, never the global ~/.claude copies, so this edit would land where the app never looks and change nothing it can see. Manage this workspace's agents and skills through the RUNDOCK:SAVE_AGENT / RUNDOCK:SAVE_SKILL markers (which write into this workspace and refresh the app), or edit the workspace's own .claude file."
       }
     }));
     process.exit(0);

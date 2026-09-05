@@ -758,6 +758,39 @@ describe('the OS write block is driven by mode alone, through the real dispatch'
     }
   });
 
+  // Denying read on a genuinely-existing file reproduces a non-ENOENT capture failure.
+  test('a pre-request read that fails for a reason other than the file being absent leaves the file untouched', () => {
+    const dir = tempWs();
+    const settingsPath = path.join(dir, '.claude', 'settings.local.json');
+    const original = JSON.stringify({ hooks: { some: 'entry' } }, null, 2);
+    fs.writeFileSync(settingsPath, original);
+    fs.chmodSync(settingsPath, 0o000);
+    try {
+      withWorkspace(dir, () => {
+        const set = captureWs();
+        workspace.handleSetWorkspaceMode({}, set, { mode: 'knowledge' }, 'darwin');
+        assert.strictEqual(set.sent[0].type, 'workspace_error', 'the failure is named');
+      });
+    } finally { fs.chmodSync(settingsPath, 0o600); }
+    assert.strictEqual(fs.readFileSync(settingsPath, 'utf8'), original, 'never deleted');
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  // Every other atomicity test starts from a settings file that already exists; this starts from none.
+  test('a failed state write, when no settings.local.json existed before the request, removes the file the reconcile created and commits no mode', () => {
+    const dir = tempWs();
+    const settingsPath = path.join(dir, '.claude', 'settings.local.json');
+    fs.writeFileSync(path.join(dir, '.rundock'), 'not a directory');
+    withWorkspace(dir, () => {
+      const set = captureWs();
+      workspace.handleSetWorkspaceMode({}, set, { mode: 'knowledge' }, 'darwin');
+      assert.strictEqual(set.sent[0].type, 'workspace_error', 'the failure is named');
+      assert.strictEqual(fs.existsSync(settingsPath), false, 'the file the reconcile created is removed again');
+      assert.strictEqual(fs.existsSync(path.join(dir, '.rundock', 'state.json')), false, 'no mode was ever persisted');
+    });
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
   // REPEATED SWITCHING CONVERGES. Not only the final state after a run of
   // switches: the block on disk and the recorded mode must agree after
   // EVERY switch in the sequence, including two switches to the same mode

@@ -129,6 +129,22 @@ describe('the block names the runtime\'s measured plumbing, and the doc names th
       'a root of their own, sitting where the /private pairing would be, is not a temp-directory spelling');
   });
 
+  // With an empty tail the pairing check is skipped, so a person who
+  // trimmed the temp roots out of Rundock's own block would have that edit
+  // silently reconciled away by the whole-block comparison alone.
+  test('a block whose allowWrite is exactly the head, with no temp-directory tail at all, is not recognised as ours, and a reconcile leaves it untouched', () => {
+    const headOnly = scaffold.sandboxSettings('/w/ws', 'darwin', '/Users/me', []);
+    assert.strictEqual(scaffold.isRundockSandbox(headOnly), false,
+      'a real Rundock block always carries at least one temp root; a head with none is not recognised as ours');
+    const ws = tmp('wb-head-only-');
+    fs.mkdirSync(path.join(ws, '.claude'), { recursive: true });
+    const trimmed = scaffold.sandboxSettings(ws, 'darwin', os.homedir(), []);
+    fs.writeFileSync(path.join(ws, '.claude', 'settings.local.json'), JSON.stringify({ sandbox: trimmed }));
+    scaffold.reconcileSandboxForMode(ws, 'knowledge', 'darwin');
+    const settings = JSON.parse(fs.readFileSync(path.join(ws, '.claude', 'settings.local.json'), 'utf8'));
+    assert.deepStrictEqual(settings.sandbox, trimmed, 'a block a person trimmed the temp roots out of is left exactly as they left it');
+  });
+
   test('a second tail entry that is a real-path spelling of the first, but not the /private one, is still recognised as ours', () => {
     // A developer-set TMPDIR, or a relocated temp volume, resolves through a
     // symlink that shares no /private prefix at all: the second entry is a
@@ -179,7 +195,7 @@ describe('one directory under two names is one identity', () => {
     assert.strictEqual(hook.classifyFileAccess('Read', { file_path: path.join(ws, 'f.txt') }, real, []).where, 'inside');
   });
 
-  test('a case variant of an inside path never cards, and canonicalises to the real spelling', () => {
+  test('a case variant of an inside path never cards, and canonicalises to the real spelling, driven both ways', () => {
     // The old version of this test built the target by joining the variant
     // onto `ws` itself, so the target already started with the root spelled
     // byte for byte. An unresolved startsWith comparison passes on that
@@ -188,29 +204,18 @@ describe('one directory under two names is one identity', () => {
     // case. Checking resolvedPath rather than only `where` is what makes the
     // case spelling decide the outcome: canonicalisation is the only thing
     // that can turn the handed-in variant into the file's real casing.
-    const ws = tmp('wb-case-');
-    fs.mkdirSync(path.join(ws, 'Docs'));
-    fs.writeFileSync(path.join(ws, 'Docs', 'a.md'), 'x');
-    const real = path.join(ws, 'Docs', 'a.md');
-    const variant = path.join(ws, 'dOCS', 'a.md');
-    // True only on a filesystem that folds case (macOS default, Windows):
-    // there `variant` names the SAME on-disk file as `real`. On a
-    // case-sensitive filesystem (most Linux runners) `dOCS` is simply a
-    // directory that does not exist.
-    const caseFolds = fs.existsSync(variant);
-    const result = hook.classifyFileAccess('Read', { file_path: variant }, ws, []);
-    assert.strictEqual(result.where, 'inside');
-    if (caseFolds) {
-      assert.strictEqual(result.resolvedPath, hook.canonicalize(real),
-        'the classifier reports the file\'s real on-disk spelling, not the variant case it was handed');
-    } else {
-      // Nothing exists at the variant spelling, so it is judged as an unborn
-      // target under the workspace: the nearest existing ancestor (ws)
-      // canonicalises, and the missing tail rides on unresolved. Correctly
-      // 'inside', but this branch cannot exercise case folding at all, which
-      // is why the assertion above is the one that matters.
-      assert.strictEqual(result.resolvedPath, path.join(hook.canonicalize(ws), 'dOCS', 'a.md'));
-    }
+    // Both kinds driven explicitly through the injected seam, not by probing the real test host.
+    const wsReal = hook.canonicalize(tmp('wb-case-'));
+    fs.mkdirSync(path.join(wsReal, 'Docs'));
+    fs.writeFileSync(path.join(wsReal, 'Docs', 'a.md'), 'x');
+    const real = path.join(wsReal, 'Docs', 'a.md');
+    const variant = path.join(wsReal, 'dOCS', 'a.md');
+    const folded = hook.classifyFileAccess('Read', { file_path: variant }, wsReal, [], os.homedir(), true, true);
+    assert.strictEqual(folded.where, 'inside');
+    assert.strictEqual(folded.resolvedPath, real, 'folding, the real on-disk spelling is reported, not the variant case handed in');
+    const notFolded = hook.classifyFileAccess('Read', { file_path: variant }, wsReal, [], os.homedir(), true, false);
+    assert.strictEqual(notFolded.where, 'inside', 'still inside: judged by its nearest existing ancestor');
+    assert.strictEqual(notFolded.resolvedPath, variant, 'not folding, nothing resolves the variant to the real spelling');
   });
 
   test('a target that does not exist yet is judged by its nearest existing ancestor', () => {
@@ -543,15 +548,24 @@ describe('the agent\'s own folder: three tiers, one registry', () => {
       assert.strictEqual(hook.isPersistenceSurface(p, home), false, `${p} is not a registry persistence surface`);
     }
 
-    // The one REFUSED folder outside this registry (isProtectedClaudeEdit's
-    // deterministic deny for the global agents/ and skills/ folders) is not
-    // itself registry-driven, but the names it refuses must still be ones
-    // the registry backs, or the refusal would be deciding with a literal
-    // this fail-loud test cannot otherwise see.
-    for (const refused of ['agents', 'skills']) {
-      assert.ok(hook.PERSISTENCE_SURFACE_DIRS.includes(refused),
-        `the deterministic refusal targets ${refused}/, which the registry must also carry`);
+  });
+
+  // A hand-written literal would catch a registry entry deleted but not a
+  // folder ADDED to the refusal without one; names come from the refusal's own source of truth.
+  test('the deterministic refusal is bound to the registry mechanically, not restated as a literal', () => {
+    const home = os.homedir();
+    const write = p => hook.isProtectedClaudeEdit('Write', { file_path: p });
+    for (const name of hook.REFUSED_CLAUDE_EDIT_DIRS) {
+      assert.ok(hook.PERSISTENCE_SURFACE_DIRS.includes(name), `${name}/ must also be a registry entry`);
+      assert.strictEqual(write(path.join(home, '.claude', name, 'x.md')), true, `a write under ${name}/ is refused`);
     }
+    const notRefused = [
+      ...hook.PERSISTENCE_SURFACE_DIRS.filter(d => !hook.REFUSED_CLAUDE_EDIT_DIRS.includes(d)).map(d => path.join(home, '.claude', d, 'x')),
+      path.join(home, '.claude', 'agent.md'),         // near miss: a file, not the 'agents' folder
+      path.join(home, '.claude', 'skill'),            // near miss: singular, not 'skills'
+      path.join(home, 'Documents', 'agents', 'x.md'), // same name, outside the runtime home entirely
+    ];
+    for (const p of notRefused) assert.strictEqual(write(p), false, `${p} is not refused outright`);
   });
 
   test('a read anywhere under the folder is free, with the single exception of the secrets tier', () => {

@@ -57,6 +57,9 @@ function runHook(toolName, toolInput, extraEnv = {}) {
 function decisionOf(hookOutput) {
   return hookOutput.hookSpecificOutput ? hookOutput.hookSpecificOutput.permissionDecision : null;
 }
+function reasonOf(hookOutput) {
+  return hookOutput.hookSpecificOutput ? hookOutput.hookSpecificOutput.permissionDecisionReason : null;
+}
 
 describe('workspace file-access boundary', () => {
   test('an in-workspace write is allowed instantly with no card', async () => {
@@ -236,12 +239,18 @@ describe('workspace file-access boundary', () => {
     assert.strictEqual(decisionOf(await pendingCmd), 'deny');
   });
 
-  test('the global ~/.claude protection still wins outright (deny, no card)', async () => {
-    const since = client.messages.length;
-    const out = await runHook('Write', { file_path: path.join(os.homedir(), '.claude', 'agents', 'x.md'), content: 'x' });
-    assert.strictEqual(decisionOf(out), 'deny', 'deterministic deny, not a card');
-    await h.delay(300);
-    assert.strictEqual(client.messages.slice(since).filter(m => m.type === 'control_request').length, 0);
+  // The reason text is asserted for BOTH refused folders, not inferred from one.
+  test('the global ~/.claude protection still wins outright (deny, no card), with a reason naming why', async () => {
+    for (const folder of ['agents', 'skills']) {
+      const since = client.messages.length;
+      const out = await runHook('Write', { file_path: path.join(os.homedir(), '.claude', folder, 'x.md'), content: 'x' });
+      assert.strictEqual(decisionOf(out), 'deny', `deterministic deny for the global ${folder}/ folder, not a card`);
+      assert.match(reasonOf(out), /reads the agents and skills.*workspace.*never the global.*change nothing/is,
+        `the reason for ${folder}/ names what Rundock reads, and that the edit changes nothing it can see`);
+      await h.delay(300);
+      assert.strictEqual(client.messages.slice(since).filter(m => m.type === 'control_request').length, 0,
+        `no permission card for the refused ${folder}/ write`);
+    }
   });
 
   // THE COPY-IN PATH, END TO END. A user may want a global agent or skill
