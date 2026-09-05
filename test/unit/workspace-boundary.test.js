@@ -568,6 +568,36 @@ describe('the agent\'s own folder: three tiers, one registry', () => {
     for (const p of notRefused) assert.strictEqual(write(p), false, `${p} is not refused outright`);
   });
 
+  // THE REFUSAL AND THE TIER MUST ANSWER THE SAME PATH THE SAME WAY, and a
+  // comparison that reads raw text while its neighbour folds case is how
+  // they came to disagree: on a case-folding filesystem `Agents/` missed the
+  // refusal, fell through, and was offered as an approvable card, which
+  // approved a write into the folder the app never reads. Both verdicts are
+  // compared here over the same spellings, driven through the seam rather
+  // than left to whichever filesystem the suite happens to run on.
+  test('the refusal and the tier agree on every spelling, including one only a case-folding filesystem would unify', () => {
+    // A home that exists nowhere, so no folder on this machine can resolve a
+    // spelling before the comparison sees it. The real home would decide the
+    // answer for whichever of these folders happens to exist locally, which
+    // is the host-dependence this seam was added to remove.
+    const home = path.join(os.tmpdir(), 'no-such-home-' + process.pid);
+    const variants = [
+      path.join(home, '.claude', 'Agents', 'new.md'),
+      path.join(home, '.claude', 'SKILLS', 'x', 'SKILL.md'),
+      path.join(home, '.claude', 'AgEnTs', 'never-created', 'deep.md'),
+    ];
+    for (const p of variants) {
+      assert.strictEqual(hook.isProtectedClaudeEdit('Write', { file_path: p }, home, true), true,
+        `${p} is refused where the filesystem folds case`);
+      assert.strictEqual(hook.isPersistenceSurface(p, home, true), true,
+        'and the tier classifier says the same, so neither can offer what the other refuses');
+      assert.strictEqual(hook.isProtectedClaudeEdit('Write', { file_path: p }, home, false), false,
+        `${p} is a genuinely different folder where case is significant, and is not refused`);
+      assert.strictEqual(hook.isPersistenceSurface(p, home, false), false,
+        'and again the two agree, in the other direction');
+    }
+  });
+
   test('a read anywhere under the folder is free, with the single exception of the secrets tier', () => {
     const home = tmp('af-read-home-');
     fs.mkdirSync(path.join(home, '.claude', 'projects', 'flattened'), { recursive: true });

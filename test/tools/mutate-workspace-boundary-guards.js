@@ -53,6 +53,18 @@ const MUTATIONS = [
   [HOOK, 'file targets are canonicalised before the comparison',
     '  const resolvedPath = canonicalize(path.resolve(workspaceRoot, target), path, resolvedPathFoldsCase);',
     '  const resolvedPath = path.resolve(workspaceRoot, target);'],
+  // The refusal and the tier classifier decide the same paths, so they must
+  // decide them the same way. Drop the folding here and only here, and a
+  // variant spelling misses the refusal, falls through, and is offered as an
+  // ordinary approvable card: the two answers disagree about one path, which
+  // is how the escape existed in the first place. The enclosing line is part
+  // of the guard because the comparison itself is written identically in the
+  // classifier, and a guard that matches twice proves nothing about either.
+  [HOOK, 'the outright refusal folds case exactly as the tier classifier does',
+    '  return REFUSED_CLAUDE_EDIT_DIRS.some(d => {\n'
+    + '    const dir = foldCase(canonicalize(path.join(root, d)), foldsCase);\n',
+    '  return REFUSED_CLAUDE_EDIT_DIRS.some(d => {\n'
+    + '    const dir = canonicalize(path.join(root, d));\n'],
   [HOOK, 'the roots are canonicalised too, or a symlink-opened workspace denies its own files',
     '  return [canonicalize(workspaceRoot, pmod), ...extraDirs.map(d => canonicalize(d, pmod))];',
     '  return [pmod.resolve(workspaceRoot), ...extraDirs.map(d => pmod.resolve(d))];'],

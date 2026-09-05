@@ -176,13 +176,28 @@ function isMcpReadTool(toolName) {
 const CLAUDE_EDIT_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
 // The refusal's own names, for a test to bind to mechanically.
 const REFUSED_CLAUDE_EDIT_DIRS = ['agents', 'skills'];
-function isProtectedClaudeEdit(toolName, toolInput) {
+// ONE COMPARISON, OR THE TWO ANSWERS DISAGREE. This refusal and the tier
+// classifier below both decide what a path under the runtime's home is, and
+// they must decide it the same way. Comparing raw text here while the
+// classifier canonicalises and folds case let a spelling slip between them:
+// on a case-folding filesystem a write to `.claude/Agents/x.md` missed this
+// refusal, fell through to the classifier, and was offered as an ordinary
+// approvable card. Approving it wrote into `.claude/agents/`, the folder the
+// app never reads, which is the very outcome refusing exists to prevent. So
+// the same canonicalisation, the same folding, and the same defaulted seams
+// as the classifier: a variant spelling, a symlinked home and a target whose
+// folder does not exist yet all reach the same answer here as they do there.
+function isProtectedClaudeEdit(toolName, toolInput, home = os.homedir(), foldsCase = hostFoldsCase()) {
   if (!CLAUDE_EDIT_TOOLS.has(toolName)) return false;
   const ti = toolInput || {};
   const target = ti.file_path || ti.notebook_path || ti.path;
   if (typeof target !== 'string') return false;
-  const resolved = path.resolve(target);
-  return REFUSED_CLAUDE_EDIT_DIRS.some(d => isUnder(resolved, path.join(os.homedir(), '.claude', d)));
+  const c = foldCase(canonicalize(path.resolve(target)), foldsCase);
+  const root = agentHomeRoot(home);
+  return REFUSED_CLAUDE_EDIT_DIRS.some(d => {
+    const dir = foldCase(canonicalize(path.join(root, d)), foldsCase);
+    return c === dir || c.startsWith(dir + path.sep);
+  });
 }
 
 // Workspace file-access boundary (spec: anything outside the workspace
