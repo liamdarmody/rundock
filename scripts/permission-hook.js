@@ -17,6 +17,134 @@
 const http = require('http');
 const os = require('os');
 const path = require('path');
+const fs = require('fs');
+
+// One directory, several names. macOS keeps /tmp and /var as symlinks into
+// /private, Dropbox and iCloud vaults are commonly reached through a symlink
+// in ~/Documents, and the default filesystem is case-insensitive while
+// preserving case, so the same inside file arrives here spelled many ways.
+// Compared unresolved, every alternate spelling of an inside path reads as
+// outside and cards, which is the false-positive half of the approval storm
+// two field workspaces reported (one of them Dropbox-symlinked). So both
+// sides of every comparison are canonicalised first.
+//
+// A target that does not exist yet cannot be resolved directly; it is judged
+// by its nearest existing ancestor, canonicalised, with the unborn tail
+// reattached. The same rule the reverting check uses for its run records,
+// for the same reason: resolve alone does not follow links, and one place
+// reached through two names must be one identity.
+//
+// Only real host paths are canonicalised. A Windows-shaped token judged on a
+// non-Windows host (the test flavour) has no filesystem to ask, and on
+// Windows itself the path module is already win32 and the flavour test is an
+// identity.
+function canonicalize(p, pmod = path, foldsCase) {
+  const resolved = pmod.resolve(p);
+  if (pmod === path.win32 && process.platform !== 'win32') return resolved;
+  // `foldsCase`: a DEFAULTED SEAM (undefined in production); a test drives both kinds by hand.
+  if (foldsCase !== undefined) return canonicalizeCaseSimulated(resolved, foldsCase);
+  const tail = [];
+  let cur = resolved;
+  for (;;) {
+    try {
+      const real = fs.realpathSync.native ? fs.realpathSync.native(cur) : fs.realpathSync(cur);
+      tail.reverse();
+      return tail.length ? pmod.join(real, ...tail) : real;
+    } catch (e) {
+      const parent = pmod.dirname(cur);
+      if (parent === cur) return resolved;
+      tail.push(pmod.basename(cur));
+      cur = parent;
+    }
+  }
+}
+
+// Walks a resolved POSIX path segment by segment; a miss folds to a
+// case-insensitive sibling only when `foldsCase` says so. No symlinks.
+function canonicalizeCaseSimulated(resolved, foldsCase) {
+  const segments = resolved.split(path.sep).filter(Boolean);
+  let cur = path.sep;
+  for (const seg of segments) {
+    let entries = [];
+    try { entries = fs.readdirSync(cur); } catch (e) { /* unresolved from here on */ }
+    const real = entries.includes(seg) ? seg : ((foldsCase && entries.find(e => e.toLowerCase() === seg.toLowerCase())) || seg);
+    cur = path.join(cur, real);
+  }
+  return cur;
+}
+
+// ── The agent's own folder: three tiers, one registry ──────────────────
+// `~/.claude` holds things of very different value; carding every write
+// under it cards routine scratch too (a page cache, task output). The
+// reason to card is PERSISTENCE, not location: is the target named by the
+// secrets registry (cards on any access), or does it sit under a
+// persistence surface (cards on a write, free to read)? Everything else is
+// free both ways, reads and scratch alike. ARCHITECTURE.md names every
+// entry below; a doc/registry binding test (workspace-boundary.test.js)
+// fails if either drifts, and nowhere else may decide either question with
+// a literal of its own.
+const SECRET_RELATIVE_PATHS = ['.credentials.json'];
+// Directories match their whole subtree; the file matches only at the
+// folder root, not a same-named file nested somewhere already free.
+const PERSISTENCE_SURFACE_DIRS = ['agents', 'skills', 'plugins', 'commands', 'hooks'];
+const PERSISTENCE_SURFACE_FILES = ['settings.json'];
+
+// canonicalize only folds case for path components that already exist: an
+// unborn target realpaths its nearest existing ancestor and reattaches the
+// remaining components verbatim, spelling and all. On a filesystem that
+// folds case, a registry folder that has not been created yet (a first
+// write to `~/.claude/Hooks/pretool.sh` before `hooks/` exists) then
+// canonicalises to a path whose tail is spelled `Hooks`, which a
+// case-sensitive string comparison against the registry's `hooks` entry
+// never matches, so the write is classified as free scratch and lands in
+// the very folder the runtime reads as `hooks/`.
+//
+// Whether the host folds case is a property of the filesystem, not
+// reliably inferable from `process.platform` alone (a case-sensitive APFS
+// volume exists), but the default filesystem on macOS and Windows folds
+// case while the default on Linux does not, and no installation this
+// registry has to protect runs the exception. `platform` is a DEFAULTED
+// SEAM, the same shape as every other injectable seam in this file:
+// production never passes it, and a test drives either filesystem kind
+// explicitly on any host, rather than asking the real filesystem and
+// letting its answer choose which assertion runs.
+function hostFoldsCase(platform = process.platform) {
+  return platform === 'darwin' || platform === 'win32';
+}
+function foldCase(v, foldsCase) {
+  return foldsCase ? v.toLowerCase() : v;
+}
+
+function agentHomeRoot(home = os.homedir()) {
+  return canonicalize(path.join(home, '.claude'));
+}
+function secretsRegistry(home = os.homedir()) {
+  const root = agentHomeRoot(home);
+  return SECRET_RELATIVE_PATHS.map(p => path.join(root, p));
+}
+function isSecretPath(candidate, home = os.homedir(), foldsCase = hostFoldsCase()) {
+  if (typeof candidate !== 'string' || !candidate) return false;
+  const c = foldCase(canonicalize(candidate), foldsCase);
+  return secretsRegistry(home).some(p => c === foldCase(canonicalize(p), foldsCase));
+}
+function isPersistenceSurface(candidate, home = os.homedir(), foldsCase = hostFoldsCase()) {
+  if (typeof candidate !== 'string' || !candidate) return false;
+  const c = foldCase(canonicalize(candidate), foldsCase);
+  const root = agentHomeRoot(home);
+  if (PERSISTENCE_SURFACE_FILES.some(f => c === foldCase(canonicalize(path.join(root, f)), foldsCase))) return true;
+  return PERSISTENCE_SURFACE_DIRS.some(d => {
+    const dir = foldCase(canonicalize(path.join(root, d)), foldsCase);
+    return c === dir || c.startsWith(dir + path.sep);
+  });
+}
+// Every tag a crossing carries, computed once so the file-tool and
+// shell-command paths read the same three answers.
+function agentHomeTags(resolvedPath, home = os.homedir(), foldsCase = hostFoldsCase()) {
+  const agentHome = isUnder(resolvedPath, agentHomeRoot(home));
+  return agentHome
+    ? { agentHome: true, secret: isSecretPath(resolvedPath, home, foldsCase), persistenceSurface: isPersistenceSurface(resolvedPath, home, foldsCase) }
+    : { agentHome: false, secret: false, persistenceSurface: false };
+}
 
 // MCP read/write classification. Read-style MCP tools auto-approve; writes,
 // destructive actions, and anything unrecognised get a permission card.
@@ -46,14 +174,30 @@ function isMcpReadTool(toolName) {
 // is the agent's own domain, and those land in the file the app reads); the
 // SAVE_AGENT / SAVE_SKILL markers remain the way to get a live UI refresh.
 const CLAUDE_EDIT_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
-function isProtectedClaudeEdit(toolName, toolInput) {
+// The refusal's own names, for a test to bind to mechanically.
+const REFUSED_CLAUDE_EDIT_DIRS = ['agents', 'skills'];
+// ONE COMPARISON, OR THE TWO ANSWERS DISAGREE. This refusal and the tier
+// classifier below both decide what a path under the runtime's home is, and
+// they must decide it the same way. Comparing raw text here while the
+// classifier canonicalises and folds case let a spelling slip between them:
+// on a case-folding filesystem a write to `.claude/Agents/x.md` missed this
+// refusal, fell through to the classifier, and was offered as an ordinary
+// approvable card. Approving it wrote into `.claude/agents/`, the folder the
+// app never reads, which is the very outcome refusing exists to prevent. So
+// the same canonicalisation, the same folding, and the same defaulted seams
+// as the classifier: a variant spelling, a symlinked home and a target whose
+// folder does not exist yet all reach the same answer here as they do there.
+function isProtectedClaudeEdit(toolName, toolInput, home = os.homedir(), foldsCase = hostFoldsCase()) {
   if (!CLAUDE_EDIT_TOOLS.has(toolName)) return false;
   const ti = toolInput || {};
   const target = ti.file_path || ti.notebook_path || ti.path;
   if (typeof target !== 'string') return false;
-  const resolved = path.resolve(target);
-  return isUnder(resolved, path.join(os.homedir(), '.claude', 'agents'))
-      || isUnder(resolved, path.join(os.homedir(), '.claude', 'skills'));
+  const c = foldCase(canonicalize(path.resolve(target)), foldsCase);
+  const root = agentHomeRoot(home);
+  return REFUSED_CLAUDE_EDIT_DIRS.some(d => {
+    const dir = foldCase(canonicalize(path.join(root, d)), foldsCase);
+    return c === dir || c.startsWith(dir + path.sep);
+  });
 }
 
 // Workspace file-access boundary (spec: anything outside the workspace
@@ -71,6 +215,9 @@ const FILE_TOOL_PATH_FIELD = {
   Read: 'file_path', Write: 'file_path', Edit: 'file_path', MultiEdit: 'file_path',
   NotebookEdit: 'notebook_path', Glob: 'path', Grep: 'path',
 };
+// Read-only tools, since a persistence surface's tier depends on whether
+// the access is a read or a write (see agentHomeTags above).
+const READ_FILE_TOOLS = new Set(['Read', 'Glob', 'Grep']);
 
 // The two pieces every boundary decision in this file needs, in one place
 // each. The prefix rule is the load-bearing detail: comparing with a bare
@@ -90,9 +237,13 @@ function isUnder(resolved, root, pmod = path) {
   return r === b || r.startsWith(b + pmod.sep);
 }
 function buildRoots(workspaceRoot, extraDirs = [], pmod = path) {
-  return [pmod.resolve(workspaceRoot), ...extraDirs.map(d => pmod.resolve(d))];
+  return [canonicalize(workspaceRoot, pmod), ...extraDirs.map(d => canonicalize(d, pmod))];
 }
-function classifyFileAccess(toolName, toolInput, workspaceRoot, extraDirs = []) {
+// `home` and `foldsCase` are defaulted seams so a test can pass a fixture
+// home instead of monkey-patching os.homedir(), and drive either filesystem
+// kind explicitly instead of inheriting whichever the test host happens to
+// have; production never passes either.
+function classifyFileAccess(toolName, toolInput, workspaceRoot, extraDirs = [], home = os.homedir(), foldsCase = hostFoldsCase(), resolvedPathFoldsCase) {
   const field = FILE_TOOL_PATH_FIELD[toolName];
   if (!field) return null;
   const ti = toolInput || {};
@@ -102,12 +253,21 @@ function classifyFileAccess(toolName, toolInput, workspaceRoot, extraDirs = []) 
     // A path-less Write/Edit is malformed; let the generic card handle it.
     return (toolName === 'Glob' || toolName === 'Grep') ? { where: 'inside' } : null;
   }
-  const resolvedPath = path.resolve(workspaceRoot, target);
+  // Separate seam from `foldsCase` above; stays undefined in production.
+  const resolvedPath = canonicalize(path.resolve(workspaceRoot, target), path, resolvedPathFoldsCase);
   const inside = buildRoots(workspaceRoot, extraDirs).some(r => isUnder(resolvedPath, r));
-  // The folder a standing grant would cover: the directory itself for the
-  // directory-scanning tools, the parent directory for file targets.
+  if (inside) return { where: 'inside', resolvedPath };
+  // The agent's own folder: free unless the registry names this exact
+  // access as a secret (always) or a write to a persistence surface.
+  const tags = agentHomeTags(resolvedPath, home, foldsCase);
+  const isWrite = !READ_FILE_TOOLS.has(toolName);
+  if (tags.agentHome && !tags.secret && !(isWrite && tags.persistenceSurface)) {
+    return { where: 'inside', resolvedPath };
+  }
+  // The folder a standing grant would cover (never a secrets-tier crossing):
+  // the directory itself for the directory-scanning tools, the parent for a file.
   const grantDir = (toolName === 'Glob' || toolName === 'Grep') ? resolvedPath : path.dirname(resolvedPath);
-  return { where: inside ? 'inside' : 'outside', resolvedPath, grantDir };
+  return { where: 'outside', resolvedPath, grantDir: tags.secret ? null : grantDir, ...tags };
 }
 
 // The shell-command half of the same boundary.
@@ -247,7 +407,7 @@ function flavourFor(token, workspaceRoot) {
 // folder grant against what it is handed. Given only the first, a command
 // whose first target sits in an already-granted folder is allowed outright
 // and a second target somewhere else rides along with no card at all.
-function shellCrossings(command, workspaceRoot, extraDirs) {
+function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), foldsCase = hostFoldsCase()) {
   const found = [];
   const seen = new Set();
   for (const raw of shellPathTokens(command)) {
@@ -266,17 +426,23 @@ function shellCrossings(command, workspaceRoot, extraDirs) {
     if (isExemptToken(t)) continue;
     if (!homed && !t.startsWith('/') && !WIN_DRIVE.test(t) && !WIN_UNC.test(t) && !TRAVERSAL.test(t)) continue;
     const pmod = flavourFor(t, workspaceRoot);
-    const resolved = pmod.resolve(pmod.resolve(workspaceRoot), t);
+    const resolved = canonicalize(pmod.resolve(pmod.resolve(workspaceRoot), t), pmod);
     if (buildRoots(workspaceRoot, extraDirs, pmod).some(r => isUnder(resolved, r, pmod))) continue;
+    // Tier three (neither secret nor a persistence surface) is free, so it
+    // is not reported at all. A command cannot declare which act it
+    // performs, so a persistence surface is conservatively treated as a
+    // write here.
+    const tags = agentHomeTags(resolved, home, foldsCase);
+    if (tags.agentHome && !tags.secret && !tags.persistenceSurface) continue;
     const key = pmod === path.win32 ? resolved.toLowerCase() : resolved;
     if (seen.has(key)) continue;
     seen.add(key);
-    found.push({ path: resolved });
+    found.push({ path: resolved, ...tags });
   }
   return found;
 }
 
-function classifyShellAccess(toolName, toolInput, workspaceRoot, extraDirs = []) {
+function classifyShellAccess(toolName, toolInput, workspaceRoot, extraDirs = [], home = os.homedir(), foldsCase = hostFoldsCase()) {
   if (!SHELL_TOOLS.has(toolName)) return null;
   const ti = toolInput || {};
   // Signal 1. No grant folder is offered: a sandbox escape is not about one
@@ -286,12 +452,16 @@ function classifyShellAccess(toolName, toolInput, workspaceRoot, extraDirs = [])
   }
   // Signal 2.
   if (typeof ti.command !== 'string' || !ti.command) return null;
-  const crossings = shellCrossings(ti.command, workspaceRoot, extraDirs);
+  const crossings = shellCrossings(ti.command, workspaceRoot, extraDirs, home, foldsCase);
   if (!crossings.length) return null;
   return { where: 'outside', resolvedPath: crossings[0].path, grantDir: null, grantable: false, crossings };
 }
 
-module.exports = { isProtectedClaudeEdit, isMcpReadTool, classifyFileAccess, classifyShellAccess };
+module.exports = {
+  isProtectedClaudeEdit, isMcpReadTool, classifyFileAccess, classifyShellAccess, canonicalize,
+  isSecretPath, isPersistenceSurface, SECRET_RELATIVE_PATHS, PERSISTENCE_SURFACE_DIRS, PERSISTENCE_SURFACE_FILES,
+  REFUSED_CLAUDE_EDIT_DIRS,
+};
 
 if (require.main === module) main();
 function main() {
@@ -379,7 +549,7 @@ process.stdin.on('end', () => {
       hookSpecificOutput: {
         hookEventName: 'PreToolUse',
         permissionDecision: 'deny',
-        permissionDecisionReason: "This edits the global ~/.claude agent or skill config, which Rundock does not use. Manage this workspace's agents and skills through the RUNDOCK:SAVE_AGENT / RUNDOCK:SAVE_SKILL markers (which write into this workspace and refresh the app), or edit the workspace's own .claude file."
+        permissionDecisionReason: "Rundock reads the agents and skills inside the open workspace, never the global ~/.claude copies, so this edit would land where the app never looks and change nothing it can see. Manage this workspace's agents and skills through the RUNDOCK:SAVE_AGENT / RUNDOCK:SAVE_SKILL markers (which write into this workspace and refresh the app), or edit the workspace's own .claude file."
       }
     }));
     process.exit(0);
@@ -387,6 +557,17 @@ process.stdin.on('end', () => {
 
   const port = process.env.RUNDOCK_PORT || 3000;
   const convoId = process.env.RUNDOCK_CONVO_ID || '';
+
+  // Every crossing, already tagged by classifyFileAccess/shellCrossings at
+  // the point each was classified: nothing here re-derives those answers. A
+  // secrets-registry crossing already carries no grantDir (stripped at
+  // classification), so the request emitted for one is never grantable.
+  const boundaryCrossings = (access && access.where === 'outside')
+    ? (access.crossings || [{
+        path: access.resolvedPath, grantDir: access.grantDir,
+        agentHome: access.agentHome, secret: access.secret, persistenceSurface: access.persistenceSurface,
+      }])
+    : [];
 
   const payload = JSON.stringify({
     tool_name: data.tool_name,
@@ -397,7 +578,7 @@ process.stdin.on('end', () => {
       ? {
           boundary: true,
           resolved_path: access.resolvedPath || null,
-          grant_dir: access.grantDir || null,
+          grant_dir: (boundaryCrossings[0] && boundaryCrossings[0].grantDir) || null,
           // WHETHER A STANDING FOLDER GRANT MAY ANSWER THIS AT ALL.
           //
           // False for every shell command. A folder grant and a command
@@ -408,6 +589,10 @@ process.stdin.on('end', () => {
           // folder. Letting a grant answer a command would retire the
           // per-command card that already exists, which is the opposite of
           // what this boundary is for.
+          //
+          // NOT the secrets gate, decided per crossing above (grantDir
+          // stripped there): this flag stays true for every crossing so a
+          // standing grant can still silence the ones it covers.
           grantable: access.grantable !== false,
           // Every crossing, so the server can refuse to answer from a
           // standing grant unless EVERY one is covered. A file tool has
@@ -415,7 +600,7 @@ process.stdin.on('end', () => {
           // has none, because no path established it. Always sent, so the
           // server never has to reconstruct it: this is the only producer of
           // boundary requests in the product.
-          crossings: access.crossings || [{ path: access.resolvedPath, grantDir: access.grantDir }],
+          crossings: boundaryCrossings,
         }
       : {})
   });

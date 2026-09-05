@@ -13,7 +13,6 @@
 // remembers nothing.
 const { test, describe, before, after } = require('node:test');
 const assert = require('node:assert');
-const path = require('node:path');
 const { JSDOM } = require('jsdom');
 
 let chat, dom;
@@ -31,6 +30,10 @@ before(() => {
   // The card writes the request id through it rather than through esc().
   global.escAttr = (t) => String(t).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   global.RundockPermissions = require('../../public/permissions.js');
+  // Pure markup builder respondPermission's resolved-card path renders
+  // through; no DOM of its own, so it is safe to load under Node the same
+  // way the real app loads it as a sibling <script>.
+  global.RundockChatMarkup = require('../../public/chat-markup.js');
   chat = require('../../public/views/chat.js');
 });
 after(() => { if (dom) dom.window.close(); });
@@ -150,5 +153,78 @@ describe('the boundary card', () => {
     assert.match(wHtml, /write outside your workspace/);
     const rHtml = render({ tool_name: 'Read', input: { file_path: '/etc/x' }, boundary: true, resolved_path: '/etc/x', grant_dir: '/etc' });
     assert.match(rHtml, /read outside your workspace/);
+  });
+});
+
+// The wiring between two already-tested ends: the hook's tagging
+// (agentHomeTags) and the copy table meet here, in renderPermissionCard and
+// respondPermission. Neither end proves the join on its own.
+describe('a crossing into the agent\'s own folder, rendered and answered', () => {
+  test('a secrets-tier crossing renders the copy naming the stakes, offers no folder grant, and answering sends no grantDir', () => {
+    const crossingPath = '/home/u/.claude/.credentials.json';
+    // grant_dir is truthy, as if the server had sent one by mistake, so this
+    // exercises the card's OWN secret gate rather than an absent grant.
+    const request = {
+      tool_name: 'Read', input: { file_path: crossingPath },
+      boundary: true, resolved_path: crossingPath, grant_dir: '/home/u/.claude',
+      crossings: [{ path: crossingPath, grantDir: '/home/u/.claude', secret: true, agentHome: true }],
+    };
+    const html = render(request);
+    assert.match(html, /permission-context">This is the credential file/, 'the rendered context is the secret\'s own copy, not the ordinary one');
+    assert.match(html, /cannot be undone/);
+    assert.doesNotMatch(html, /data-perm-action="allow-folder"/,
+      'no grant may suppress a secrets-tier card, so the whole-folder grant is removed, not merely demoted');
+
+    const sent = [];
+    global.ws = { send: (s) => sent.push(JSON.parse(s)) };
+    try {
+      document.querySelector('[data-perm-action="allow"]').click();
+    } finally {
+      global.ws = null;
+    }
+    assert.strictEqual('grantDir' in sent[0], false, 'no folder is remembered for a secrets-tier crossing, however it was answered');
+  });
+
+  test('a persistence-surface write renders the persistence copy and still offers the ordinary folder grant', () => {
+    const crossingPath = '/home/u/.claude/agents/new.md';
+    const html = render({
+      tool_name: 'Write', input: { file_path: crossingPath },
+      boundary: true, resolved_path: crossingPath, grant_dir: '/home/u/.claude/agents',
+      crossings: [{ path: crossingPath, grantDir: '/home/u/.claude/agents', persistenceSurface: true, agentHome: true }],
+    });
+    assert.match(html, /permission-context">Writing here persists/, 'the persistence stakes are named');
+    assert.match(html, /Always allow this folder/,
+      'unlike a secret, an ordinary persistence-surface write may still be remembered for a folder');
+  });
+
+  test('a command reaching more than one place composes the multi-crossing warning with the stakes copy, rather than one replacing the other', () => {
+    const taggedPath = '/home/u/.claude/commands/new.md';
+    const plainPath = '/etc/hosts';
+    const html = render({
+      tool_name: 'Bash', input: { command: `cp a ${taggedPath} && cp b ${plainPath}` },
+      boundary: true, resolved_path: taggedPath, grant_dir: null,
+      crossings: [
+        { path: taggedPath, agentHome: true, persistenceSurface: true },
+        { path: plainPath },
+      ],
+    });
+    assert.match(html, /reaches more than one place outside your workspace/,
+      'the multi-crossing fact survives: every listed place is still what approving allows');
+    assert.match(html, /persists/, 'and the persistence-surface stakes are stated alongside it, not instead of it');
+  });
+
+  test('a shell crossing into a persistence surface states the stakes but offers no folder grant, secret or not', () => {
+    for (const [tag, needle] of [[{ secret: true }, /cannot be undone/], [{ persistenceSurface: true }, /persists/]]) {
+      const crossingPath = tag.secret ? '/home/u/.claude/.credentials.json' : '/home/u/.claude/agents/new.md';
+      const html = render({
+        tool_name: 'Bash', input: { command: `cat ${crossingPath}` },
+        boundary: true, resolved_path: crossingPath, grant_dir: null,
+        // The hook never attaches grantDir to a shell crossing; the tags
+        // still apply to the path.
+        crossings: [{ path: crossingPath, agentHome: true, ...tag }],
+      });
+      assert.match(html, needle, 'the stakes are still stated for a shell crossing');
+      assert.doesNotMatch(html, /Always allow this folder/, 'a shell request never carries a standing folder grant, for either tier');
+    }
   });
 });

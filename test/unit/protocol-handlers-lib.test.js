@@ -22,6 +22,9 @@ const config = require('../../lib/config.js');
 // end_delegation, flush_buffer) must NEVER appear here: chat is the
 // kill-window chat shim, delegate/end_delegation are delegation glue, and
 // flush_buffer drains safeSend's own reconnect buffer.
+// There is no sandbox switch: set_workspace_mode is the only message that
+// can move the OS write block, proven end to end by
+// test/unit/workspace-boundary.test.js.
 const EXPECTED_TYPES = [
   'permission_response', 'cancel',
   'get_workspaces', 'client_render_time', 'list_workspaces', 'set_workspace',
@@ -537,6 +540,280 @@ describe('cancel seams (stub ctx)', () => {
 // after the announce and the rollback puts the old root back without saying
 // so. Here the rollback IS a call to this function, so the retraction cannot
 // be forgotten.
+// The OS write block is driven by workspace mode and by nothing else.
+// There is no sandbox switch any more; set_workspace_mode is the single
+// rewiring point, and these tests drive it through the real dispatch table
+// so the wiring proven is the wiring a client message actually reaches.
+describe('the OS write block is driven by mode alone, through the real dispatch', () => {
+  const workspace = require('../../lib/protocol/handlers/workspace.js');
+  const scaffold = require('../../lib/workspace/scaffold.js');
+
+  function withWorkspace(dir, fn) {
+    const original = config.getWorkspace();
+    config.setWorkspace(dir);
+    try { return fn(); } finally { config.setWorkspace(original); }
+  }
+  function tempWs() {
+    const d = fs.mkdtempSync(path.join(os.tmpdir(), 'proto-mode-'));
+    fs.mkdirSync(path.join(d, '.claude'), { recursive: true });
+    return d;
+  }
+  function blockPresent(dir) {
+    try {
+      const settings = JSON.parse(fs.readFileSync(path.join(dir, '.claude', 'settings.local.json'), 'utf8'));
+      return 'sandbox' in settings;
+    } catch (e) { return false; }
+  }
+
+  test('on macOS, Knowledge mode carries the block, Code mode withdraws it, and moving back restores it', () => {
+    const table = buildDispatch();
+    const dir = tempWs();
+    withWorkspace(dir, () => {
+      const toKnowledge = captureWs();
+      table.set_workspace_mode({}, toKnowledge, { mode: 'knowledge' }, 'darwin');
+      assert.deepStrictEqual(toKnowledge.sent[0], { type: 'workspace_mode_changed', mode: 'knowledge' });
+      assert.ok(blockPresent(dir), 'Knowledge mode on macOS carries the block');
+
+      const toCode = captureWs();
+      table.set_workspace_mode({}, toCode, { mode: 'code' }, 'darwin');
+      assert.deepStrictEqual(toCode.sent[0], { type: 'workspace_mode_changed', mode: 'code' });
+      assert.strictEqual(blockPresent(dir), false, 'Code mode withdraws it');
+
+      const backToKnowledge = captureWs();
+      table.set_workspace_mode({}, backToKnowledge, { mode: 'knowledge' }, 'darwin');
+      assert.ok(blockPresent(dir), 'moving back to Knowledge mode restores it');
+    });
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('on a platform with no OS sandbox, mode still persists but no block is ever written, in either mode', () => {
+    const table = buildDispatch();
+    const dir = tempWs();
+    withWorkspace(dir, () => {
+      const toKnowledge = captureWs();
+      table.set_workspace_mode({}, toKnowledge, { mode: 'knowledge' }, 'linux');
+      assert.strictEqual(toKnowledge.sent[0].type, 'workspace_mode_changed');
+      assert.strictEqual(blockPresent(dir), false, 'Linux never gets an OS block, even in Knowledge mode');
+
+      const toCode = captureWs();
+      table.set_workspace_mode({}, toCode, { mode: 'code' }, 'linux');
+      assert.strictEqual(blockPresent(dir), false);
+    });
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  // THE ABSENCE OF ANY OTHER ROUTE. There is no set_sandbox_mode or
+  // get_sandbox_mode message any more: the dispatch table carries no entry
+  // for either name, so a client (or a prompt-injected instruction) that
+  // sends one reaches no handler at all, exactly as any other unrecognised
+  // message type would, and the block is untouched by it.
+  test('a direct attempt to set the block is not a message the protocol recognises', () => {
+    const table = buildDispatch();
+    assert.strictEqual('set_sandbox_mode' in table, false, 'no handler exists to set the block directly');
+    assert.strictEqual('get_sandbox_mode' in table, false, 'no handler exists to read a standalone switch either');
+    const dir = tempWs();
+    withWorkspace(dir, () => {
+      // First put the block in place, in Knowledge mode, then attempt the
+      // removed message: an unrecognised type dispatches to nothing
+      // (server.js: `if (dispatchHandler) dispatchHandler(...)`), so the
+      // block bystanding this must be exactly what mode left it as.
+      table.set_workspace_mode({}, captureWs(), { mode: 'knowledge' }, 'darwin');
+      assert.ok(blockPresent(dir), 'sanity: the block is present before the attempt');
+      const dispatchHandler = table['set_sandbox_mode'];
+      assert.strictEqual(dispatchHandler, undefined, 'there is nothing to call');
+      assert.ok(blockPresent(dir), 'and the block is unchanged: nothing else could have touched it');
+    });
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('a write the workspace refuses becomes a named error, never silence', () => {
+    // .rundock exists as a FILE, so the state write inside cannot happen and
+    // the failure surfaces as a workspace_error carrying the cause.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'proto-mode-bad-'));
+    fs.writeFileSync(path.join(dir, '.rundock'), 'not a directory');
+    withWorkspace(dir, () => {
+      const set = captureWs();
+      workspace.handleSetWorkspaceMode({}, set, { mode: 'code' }, 'darwin');
+      assert.strictEqual(set.sent[0].type, 'workspace_error');
+      assert.match(set.sent[0].message, /Could not update workspace mode/);
+    });
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('an unreadable settings.local.json is named in the error, not silently replaced', () => {
+    // The bug this guards: a corrupt or unreadable settings file made the
+    // reconcile start from {}, write over the file, and still report
+    // workspace_mode_changed. This drives the real protocol path
+    // (handleSetWorkspaceMode, not reconcileSandboxForMode directly) so the
+    // wiring between the two is what is proven, not just the function in
+    // isolation.
+    const dir = tempWs();
+    const settingsPath = path.join(dir, '.claude', 'settings.local.json');
+    const corrupt = '{ not json';
+    fs.writeFileSync(settingsPath, corrupt);
+    withWorkspace(dir, () => {
+      const set = captureWs();
+      workspace.handleSetWorkspaceMode({}, set, { mode: 'knowledge' }, 'darwin');
+      assert.strictEqual(set.sent[0].type, 'workspace_error', 'never workspace_mode_changed for this failure');
+      assert.match(set.sent[0].message, /settings\.local\.json/, 'the settings file is named');
+      assert.strictEqual(fs.readFileSync(settingsPath, 'utf8'), corrupt, 'and its bytes are untouched');
+    });
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  // handleSetWorkspaceMode used to persist the new mode to state.json BEFORE
+  // reconciling, so a settings-read failure left the mode committed while
+  // the block stayed untouched. Proven by reading state.json back, not by
+  // inspecting the error text alone (covered above).
+  test('a failed mode change never commits the new mode; state.json still names the one before the attempt', () => {
+    const dir = tempWs();
+    const statePath = path.join(dir, '.rundock', 'state.json');
+    withWorkspace(dir, () => {
+      const first = captureWs();
+      workspace.handleSetWorkspaceMode({}, first, { mode: 'knowledge' }, 'darwin');
+      assert.strictEqual(first.sent[0].type, 'workspace_mode_changed');
+      assert.strictEqual(JSON.parse(fs.readFileSync(statePath, 'utf8')).workspaceMode, 'knowledge',
+        'fixture sanity: the successful switch did persist');
+
+      // Corrupt the settings file so the reconcile to code mode throws.
+      const settingsPath = path.join(dir, '.claude', 'settings.local.json');
+      fs.writeFileSync(settingsPath, '{ not json');
+
+      const second = captureWs();
+      workspace.handleSetWorkspaceMode({}, second, { mode: 'code' }, 'darwin');
+      assert.strictEqual(second.sent[0].type, 'workspace_error', 'the failure is named, not silently accepted');
+
+      assert.strictEqual(JSON.parse(fs.readFileSync(statePath, 'utf8')).workspaceMode, 'knowledge',
+        'the mode was never committed: reconcile ran and threw before writeState had a chance to persist code');
+    });
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  // A MODE CHANGE IS ALL OR NOTHING, in both directions, including a failure
+  // that happens AFTER a successful reconcile. Reconcile-before-persist alone
+  // only narrows the window where the settings file and the persisted mode
+  // can disagree; a state-write failure after the reconcile has already
+  // rewritten settings.local.json still leaves the two describing different
+  // modes unless the settings file is restored. Each fixture starts from a
+  // settings file the reconcile GENUINELY changes (a real Rundock block
+  // present, or genuinely absent), then breaks the state write by making
+  // `.rundock` a file instead of a directory, and reads the settings file
+  // back afterwards rather than trusting the error message alone.
+  test('a failed mode change restores the settings file to its exact pre-request bytes: Knowledge to Code, after the block was genuinely removed', () => {
+    const dir = tempWs();
+    const settingsPath = path.join(dir, '.claude', 'settings.local.json');
+    const original = JSON.stringify({ sandbox: scaffold.sandboxSettings(dir, 'darwin') }, null, 2);
+    fs.writeFileSync(settingsPath, original);
+    fs.writeFileSync(path.join(dir, '.rundock'), 'not a directory');
+    withWorkspace(dir, () => {
+      const set = captureWs();
+      workspace.handleSetWorkspaceMode({}, set, { mode: 'code' }, 'darwin');
+      assert.strictEqual(set.sent[0].type, 'workspace_error', 'the failure is named');
+      assert.strictEqual(fs.readFileSync(settingsPath, 'utf8'), original,
+        'the reconcile genuinely removed the block, but the failed state write restores it byte for byte');
+    });
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('a failed mode change restores the settings file to its exact pre-request bytes: Code to Knowledge, after the block was genuinely added', () => {
+    const dir = tempWs();
+    const settingsPath = path.join(dir, '.claude', 'settings.local.json');
+    const original = JSON.stringify({ hooks: {} }, null, 2);
+    fs.writeFileSync(settingsPath, original);
+    fs.writeFileSync(path.join(dir, '.rundock'), 'not a directory');
+    withWorkspace(dir, () => {
+      const set = captureWs();
+      workspace.handleSetWorkspaceMode({}, set, { mode: 'knowledge' }, 'darwin');
+      assert.strictEqual(set.sent[0].type, 'workspace_error', 'the failure is named');
+      assert.strictEqual(fs.readFileSync(settingsPath, 'utf8'), original,
+        'the reconcile genuinely added a block, but the failed state write restores the file to carrying none');
+    });
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  // WHEN THE UNDO ITSELF CANNOT RUN. Restoring the file's pre-request bytes
+  // is the answer to a failed switch, but that restore is a write too, and a
+  // permissions problem that stopped the first write will stop it as well.
+  // The person must still be told the switch failed: swallowing the restore
+  // error and reporting success would leave them believing a mode change
+  // happened, which is the one outcome worse than the failure itself.
+  test('a switch that fails, and whose restore also fails, still names the failure rather than reporting a change', () => {
+    const dir = tempWs();
+    const settingsPath = path.join(dir, '.claude', 'settings.local.json');
+    const original = JSON.stringify({ hooks: {} }, null, 2);
+    fs.writeFileSync(settingsPath, original);
+    fs.chmodSync(settingsPath, 0o444);
+    try {
+      withWorkspace(dir, () => {
+        const set = captureWs();
+        workspace.handleSetWorkspaceMode({}, set, { mode: 'knowledge' }, 'darwin');
+        assert.strictEqual(set.sent[0].type, 'workspace_error',
+          'the switch is reported as failed even though the file could not be put back');
+        assert.strictEqual(fs.readFileSync(settingsPath, 'utf8'), original,
+          'and the file is unchanged, because the write that would have changed it is the one that failed');
+      });
+    } finally {
+      fs.chmodSync(settingsPath, 0o600);
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // Denying read on a genuinely-existing file reproduces a non-ENOENT capture failure.
+  test('a pre-request read that fails for a reason other than the file being absent leaves the file untouched', () => {
+    const dir = tempWs();
+    const settingsPath = path.join(dir, '.claude', 'settings.local.json');
+    const original = JSON.stringify({ hooks: { some: 'entry' } }, null, 2);
+    fs.writeFileSync(settingsPath, original);
+    fs.chmodSync(settingsPath, 0o000);
+    try {
+      withWorkspace(dir, () => {
+        const set = captureWs();
+        workspace.handleSetWorkspaceMode({}, set, { mode: 'knowledge' }, 'darwin');
+        assert.strictEqual(set.sent[0].type, 'workspace_error', 'the failure is named');
+      });
+    } finally { fs.chmodSync(settingsPath, 0o600); }
+    assert.strictEqual(fs.readFileSync(settingsPath, 'utf8'), original, 'never deleted');
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  // Every other atomicity test starts from a settings file that already exists; this starts from none.
+  test('a failed state write, when no settings.local.json existed before the request, removes the file the reconcile created and commits no mode', () => {
+    const dir = tempWs();
+    const settingsPath = path.join(dir, '.claude', 'settings.local.json');
+    fs.writeFileSync(path.join(dir, '.rundock'), 'not a directory');
+    withWorkspace(dir, () => {
+      const set = captureWs();
+      workspace.handleSetWorkspaceMode({}, set, { mode: 'knowledge' }, 'darwin');
+      assert.strictEqual(set.sent[0].type, 'workspace_error', 'the failure is named');
+      assert.strictEqual(fs.existsSync(settingsPath), false, 'the file the reconcile created is removed again');
+      assert.strictEqual(fs.existsSync(path.join(dir, '.rundock', 'state.json')), false, 'no mode was ever persisted');
+    });
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  // REPEATED SWITCHING CONVERGES. Not only the final state after a run of
+  // switches: the block on disk and the recorded mode must agree after
+  // EVERY switch in the sequence, including two switches to the same mode
+  // in a row, which is what testing back and forth quickly actually does.
+  test('switching between Knowledge and Code repeatedly converges after every switch, not only at the end', () => {
+    const table = buildDispatch();
+    const dir = tempWs();
+    withWorkspace(dir, () => {
+      const sequence = ['knowledge', 'code', 'knowledge', 'code', 'code', 'knowledge', 'knowledge', 'code'];
+      for (const mode of sequence) {
+        const socket = captureWs();
+        table.set_workspace_mode({}, socket, { mode }, 'darwin');
+        assert.strictEqual(socket.sent[0].type, 'workspace_mode_changed', `switching to ${mode} succeeds`);
+        const state = JSON.parse(fs.readFileSync(path.join(dir, '.rundock', 'state.json'), 'utf8'));
+        assert.strictEqual(state.workspaceMode, mode, `the recorded mode is ${mode} right after this switch`);
+        assert.strictEqual(blockPresent(dir), mode === 'knowledge',
+          `the block on disk agrees with ${mode} right after this switch, not just at the end of the sequence`);
+      }
+    });
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
 describe('the serving-workspace notice', () => {
   const { _internal: root } = require('../../server.js');
   // TWO WINDOWS, NOT ONE, and each with its own inbox. 'Tells every connected

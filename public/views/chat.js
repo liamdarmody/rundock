@@ -613,14 +613,26 @@ function renderPermissionCard(d, convoId) {
   // Every place the request reaches, so the card cannot show one target while
   // the command reaches three. A person approves what they can see.
   const crossings = boundary && Array.isArray(req.crossings) ? req.crossings : [];
+  // A crossing established by a shell command, not a path (a sandbox escape
+  // retry), has no one folder any grant, narrow or whole, could be about.
+  // Computed once, ahead of every use below, rather than only inside the
+  // summary-copy branch it originally served.
+  const shell = toolName === 'Bash' || toolName === 'PowerShell';
   // A standing folder grant is on offer only when the server names a folder
   // that could answer this request. It never does for a shell command: a
   // folder grant says an agent may touch that folder, while approving here
   // says this command may run, and everything in the command runs rather than
   // only the part touching the folder.
   const grantable = boundary && !!req.grant_dir;
+  // The crossing whose tags decide the card's copy, resolved once rather
+  // than re-derived below. A secrets-registry hit wins over an ordinary
+  // persistence-surface write when a command reaches both.
+  const flaggedCrossing = crossings.find(c => c && c.secret) || crossings.find(c => c && c.persistenceSurface) || null;
+  // No grant may suppress a secrets-registry crossing's card. The hook
+  // never sends a whole-folder grantDir for one, but the card enforces this
+  // itself too, rather than trusting that upstream alone.
+  const wholeFolderOffered = grantable && !(flaggedCrossing && flaggedCrossing.secret);
   if (boundary) {
-    const shell = toolName === 'Bash' || toolName === 'PowerShell';
     const reads = toolName === 'Read' || toolName === 'Glob' || toolName === 'Grep';
     // A shell crossing does not say which act it is. The command may read,
     // write, or reach a host, and the request carries no direction, so naming
@@ -642,11 +654,20 @@ function renderPermissionCard(d, convoId) {
         ? 'Outside-workspace access needs your approval. "Always allow this folder" remembers it for this workspace only.'
         : 'Outside-workspace access needs your approval. This one is not remembered: approving it approves this request only.';
     }
+    // A secrets-registry or persistence-surface crossing swaps in copy that
+    // states the stakes; the whole-folder refusal for a secret is decided
+    // above. When more than one place is reached, that fact still matters
+    // to the reader, so the two sentences are COMPOSED rather than one
+    // replacing the other: dropping the multi-crossing sentence here would
+    // leave every place still listed in the detail block while no longer
+    // telling the reader that approving allows all of them at once.
+    const homeCopy = RundockPermissions.agentHomeBoundaryCopy(flaggedCrossing);
+    if (homeCopy) context = crossings.length > 1 ? `${context} ${homeCopy}` : homeCopy;
   }
 
   // Store callback data for safe event handling (no inline onclick injection).
   // toolInput is echoed back in control_response (required by Claude Code).
-  pendingPermissions.set(requestId, { convoId, key, toolInput: input, grantDir: grantable ? req.grant_dir : null });
+  pendingPermissions.set(requestId, { convoId, key, toolInput: input, grantDir: wholeFolderOffered ? req.grant_dir : null });
 
   const icons = {
     low: '<svg class="permission-icon" width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.5"/><path d="M6 8l1.5 1.5L10.5 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>',
@@ -683,7 +704,7 @@ function renderPermissionCard(d, convoId) {
           : `<code class="permission-detail">${esc(detail)}</code>`}
       <div class="permission-actions">
         <button class="btn-perm btn-allow" data-perm-id="${escAttr(requestId)}" data-perm-action="allow">Allow</button>
-        ${grantable
+        ${wholeFolderOffered
           ? `<button class="btn-perm btn-always" data-perm-id="${escAttr(requestId)}" data-perm-action="allow-folder">Always allow this folder</button>`
           : (!boundary && RundockPermissions.offersAlwaysAllow(risk) ? `<button class="btn-perm btn-always" data-perm-id="${escAttr(requestId)}" data-perm-action="always">Always allow</button>` : '')}
         <button class="btn-perm btn-deny" data-perm-id="${escAttr(requestId)}" data-perm-action="deny">Deny</button>

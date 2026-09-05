@@ -14,7 +14,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 
-const { classifyFileAccess, classifyShellAccess } = require('../../scripts/permission-hook.js');
+const { classifyFileAccess, classifyShellAccess, canonicalize } = require('../../scripts/permission-hook.js');
 const { _internal: srv } = require('../../server.js');
 const { makeWorkspace, cleanup } = require('../helpers/workspace.js');
 const claudeRuntime = require('../../lib/runtime/claude.js');
@@ -173,8 +173,11 @@ describe('classifyShellAccess (hook-side)', () => {
     // exemption is judged on the NORMALISED token for this reason: matched
     // raw, `/usr/bin/../../etc/passwd` begins with an exempt prefix and would
     // be waved through while reading the password file.
-    assert.strictEqual(classifyShellAccess('Bash', { command: 'cat /usr/bin/../../etc/passwd' }, ws, []).crossings[0].path, '/etc/passwd');
-    assert.strictEqual(classifyShellAccess('Bash', { command: 'cat /dev/fd/../../etc/passwd' }, ws, []).crossings[0].path, '/etc/passwd');
+    // Canonicalised: the reported path is the file's real name, so on macOS
+    // /etc resolves through /private. The comparison goes through the hook's
+    // own canonicaliser so the pin holds on hosts where /etc is no symlink.
+    assert.strictEqual(classifyShellAccess('Bash', { command: 'cat /usr/bin/../../etc/passwd' }, ws, []).crossings[0].path, canonicalize('/etc/passwd'));
+    assert.strictEqual(classifyShellAccess('Bash', { command: 'cat /dev/fd/../../etc/passwd' }, ws, []).crossings[0].path, canonicalize('/etc/passwd'));
   });
 
   test('a shell crossing never carries a folder to remember, and says so', () => {
@@ -215,9 +218,9 @@ describe('classifyShellAccess (hook-side)', () => {
     const first = '/etc/one';
     const second = path.join(home, 'two');
     const r = classifyShellAccess('Bash', { command: `cp a ${first} && cp b "${second}"` }, ws, []);
-    assert.deepStrictEqual(r.crossings.map(c => c.path), [first, second],
+    assert.deepStrictEqual(r.crossings.map(c => c.path), [canonicalize(first), canonicalize(second)],
       'source order, so the headline target is the one named first');
-    assert.strictEqual(r.resolvedPath, first);
+    assert.strictEqual(r.resolvedPath, canonicalize(first));
   });
 
   test('a path written after an equals sign is recognised too', () => {
@@ -226,9 +229,9 @@ describe('classifyShellAccess (hook-side)', () => {
     // best-effort check, NOT a claim that the check is now complete: the
     // copy says what it recognises and says a spelling it does not recognise
     // raises no card.
-    assert.strictEqual(classifyShellAccess('Bash', { command: 'tar --output=/etc/x .' }, ws, []).crossings[0].path, '/etc/x');
+    assert.strictEqual(classifyShellAccess('Bash', { command: 'tar --output=/etc/x .' }, ws, []).crossings[0].path, canonicalize('/etc/x'));
     const home = os.homedir();
-    assert.strictEqual(classifyShellAccess('Bash', { command: 'OUT=$HOME/x; cp a "$OUT"' }, ws, []).crossings[0].path, path.join(home, 'x'));
+    assert.strictEqual(classifyShellAccess('Bash', { command: 'OUT=$HOME/x; cp a "$OUT"' }, ws, []).crossings[0].path, canonicalize(path.join(home, 'x')));
     assert.strictEqual(classifyShellAccess('Bash', { command: 'run --dest=../../elsewhere' }, ws, []).where, 'outside');
   });
 

@@ -158,9 +158,16 @@ function renderSettingsSection(section) {
     const agentCount = agents.filter(a => a.status === 'onTeam').length;
     const skillCount = skills.length;
     const isCode = workspaceMode === 'code';
+    // The mode control is the only permissions concept a user meets: no
+    // separate sandbox switch. Knowledge mode is additionally enforced by
+    // the operating system on macOS; Code mode withdraws that OS-level
+    // block because a command sandbox refuses process-launch primitives
+    // (a headless browser's startup check-in, for one) categorically, no
+    // matter what folder permissions say, so a tool that launches its own
+    // processes needs Code mode on macOS to work at all.
     const modeDesc = isCode
-      ? 'Agents can write any file type and run commands without approval.'
-      : 'Agents work with documents only. Terminal commands need approval.';
+      ? 'Agents can write any file type and run commands without approval. On macOS, the extra operating-system write block is off here, because tools that launch their own processes, such as a headless browser, can fail under it regardless of folder permissions.'
+      : 'Agents work with documents only. Terminal commands need approval. On macOS, this is additionally enforced at the operating-system level, on top of the approval cards.';
     el.innerHTML = `<div class="settings-section-title">Workspace</div>
       <div class="settings-card">
         <div class="settings-row">

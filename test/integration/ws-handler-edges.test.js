@@ -80,6 +80,50 @@ describe('workspace lifecycle edges', () => {
     }
   });
 
+  // openWorkspace persists the auto-detected mode BEFORE calling
+  // scaffoldWorkspace, because scaffoldWorkspace's own reconcile reads the
+  // mode back off disk (workspaceModeFor), not from the caller's in-memory
+  // state. A never-before-opened directory has no state.json yet, so if the
+  // persist ever moved back to AFTER the scaffold call, workspaceModeFor
+  // would read the file's absence, default to knowledge, and write the
+  // block into a code-signal workspace on its very first open, catching up
+  // only on the NEXT one. Driven through the real dispatch path (set_workspace),
+  // not scaffoldWorkspace directly, so the ordering itself is what is proven.
+  test('a never-before-opened workspace gets the right block on its FIRST open, mode auto-detected: none for a code signal, one without', async () => {
+    const realPlatform = process.platform;
+    Object.defineProperty(process, 'platform', { value: 'darwin' });
+    try {
+      const codeDir = makeTempDir('rundock-test-firstopen-code-');
+      fs.writeFileSync(path.join(codeDir, 'package.json'), '{}');
+      try {
+        const since = client.messages.length;
+        client.send({ type: 'set_workspace', path: codeDir });
+        const wsSet = (await client.waitFor(m => m.type === 'workspace_set', { since, label: 'first open, code signal' })).msg;
+        assert.strictEqual(wsSet.workspaceMode, 'code', 'auto-detected as code from the package.json');
+        const settings = JSON.parse(fs.readFileSync(path.join(codeDir, '.claude', 'settings.local.json'), 'utf8'));
+        assert.strictEqual('sandbox' in settings, false,
+          'no block on the first open of a code-signal workspace, not one only withdrawn on the second');
+      } finally {
+        h.internal.setWorkspace(h.workspaceDir);
+      }
+
+      const knowledgeDir = makeTempDir('rundock-test-firstopen-knowledge-');
+      fs.writeFileSync(path.join(knowledgeDir, 'notes.md'), '# just notes\n');
+      try {
+        const since = client.messages.length;
+        client.send({ type: 'set_workspace', path: knowledgeDir });
+        const wsSet = (await client.waitFor(m => m.type === 'workspace_set', { since, label: 'first open, no code signal' })).msg;
+        assert.strictEqual(wsSet.workspaceMode, 'knowledge', 'auto-detected as knowledge: nothing code-shaped here');
+        const settings = JSON.parse(fs.readFileSync(path.join(knowledgeDir, '.claude', 'settings.local.json'), 'utf8'));
+        assert.ok(settings.sandbox, 'the block is present on the first open of a knowledge-mode workspace');
+      } finally {
+        h.internal.setWorkspace(h.workspaceDir);
+      }
+    } finally {
+      Object.defineProperty(process, 'platform', { value: realPlatform });
+    }
+  });
+
   test('set_workspace_mode surfaces a persistence failure as a workspace_error', async () => {
     // .rundock as a FILE makes writeState throw (the slice-3 trick). The
     // switch happens through the internal seam because the WS open path now

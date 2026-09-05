@@ -5,7 +5,7 @@
 // functions, and the licence invites anyone to audit them. Same UMD pattern
 // as code-language.js and markers.js.
 //
-// The permission decision path spans THREE layers (see docs/ARCHITECTURE):
+// The permission decision path spans THREE layers (see ARCHITECTURE.md):
 // the PreToolUse hook script, the server bridge, and THIS module in the
 // browser. The auto-allow policy for low-risk read-only commands lives
 // here, client-side, and nowhere else.
@@ -215,6 +215,24 @@
   // High-risk requests never offer a standing "Always allow".
   function offersAlwaysAllow(risk) { return risk !== 'high'; }
 
+  // The copy for a crossing into the agent's own folder, table-driven so the
+  // card and its tests read one source. A read never reaches this: it is
+  // free everywhere except the secrets tier, and a secret always cards
+  // regardless of the act. Only a write to a persistence surface, or any
+  // access at all to a secrets-registry path, needs its stakes named.
+  const AGENT_HOME_COPY = {
+    secret: 'This is the credential file for your Claude account. A leak here cannot be undone, '
+      + 'so this always asks, on any access, and no grant, mode or setting can silence it.',
+    persistenceSurface: 'Writing here persists: it takes effect in every later session and every '
+      + 'other workspace, including an unattended routine run.',
+  };
+  function agentHomeBoundaryCopy(crossing) {
+    if (!crossing) return null;
+    if (crossing.secret) return AGENT_HOME_COPY.secret;
+    if (crossing.persistenceSurface) return AGENT_HOME_COPY.persistenceSurface;
+    return null;
+  }
+
   // ── Pending permission requests for background conversations ────────────
   // A control_request for a conversation that is not on screen must never
   // be dropped (the server auto-denies an unanswered request at the
@@ -274,6 +292,6 @@
     return m.size;
   }
 
-  return { BASH_DESCRIPTIONS, bashBin, classifyRisk, describeToolRequest, toolAllowKey, decidePermission, offersAlwaysAllow,
+  return { BASH_DESCRIPTIONS, bashBin, classifyRisk, describeToolRequest, toolAllowKey, decidePermission, offersAlwaysAllow, agentHomeBoundaryCopy,
     routePermissionRequest, queuePendingPermission, pendingPermissionsFor, removePendingPermission, clearPendingPermissions };
 }));
