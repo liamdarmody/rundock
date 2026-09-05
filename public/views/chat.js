@@ -628,7 +628,7 @@ function renderPermissionCard(d, convoId) {
   // than re-derived below. A secrets-registry hit wins over an ordinary
   // persistence-surface write when a command reaches both.
   const flaggedCrossing = crossings.find(c => c && c.secret) || crossings.find(c => c && c.persistenceSurface) || null;
-  // AF-3: no grant may suppress a secrets-registry crossing's card. The hook
+  // No grant may suppress a secrets-registry crossing's card. The hook
   // never sends a whole-folder grantDir for one, but the card enforces this
   // itself too, rather than trusting that upstream alone.
   const wholeFolderOffered = grantable && !(flaggedCrossing && flaggedCrossing.secret);
@@ -655,9 +655,14 @@ function renderPermissionCard(d, convoId) {
         : 'Outside-workspace access needs your approval. This one is not remembered: approving it approves this request only.';
     }
     // A secrets-registry or persistence-surface crossing swaps in copy that
-    // states the stakes; AF-3's whole-folder refusal is decided above.
+    // states the stakes; the whole-folder refusal for a secret is decided
+    // above. When more than one place is reached, that fact still matters
+    // to the reader, so the two sentences are COMPOSED rather than one
+    // replacing the other: dropping the multi-crossing sentence here would
+    // leave every place still listed in the detail block while no longer
+    // telling the reader that approving allows all of them at once.
     const homeCopy = RundockPermissions.agentHomeBoundaryCopy(flaggedCrossing);
-    if (homeCopy) context = homeCopy;
+    if (homeCopy) context = crossings.length > 1 ? `${context} ${homeCopy}` : homeCopy;
   }
 
   // Store callback data for safe event handling (no inline onclick injection).

@@ -129,7 +129,7 @@ describe('the block names the runtime\'s measured plumbing, and the doc names th
       'a root of their own, sitting where the /private pairing would be, is not a temp-directory spelling');
   });
 
-  test('PM-1: a second tail entry that is a real-path spelling of the first, but not the /private one, is still recognised as ours', () => {
+  test('a second tail entry that is a real-path spelling of the first, but not the /private one, is still recognised as ours', () => {
     // A developer-set TMPDIR, or a relocated temp volume, resolves through a
     // symlink that shares no /private prefix at all: the second entry is a
     // real-path spelling of the first (it ends with it, the shape every
@@ -281,7 +281,7 @@ describe('one directory under two names is one identity', () => {
   });
 });
 
-// PM-1: the OS write block is driven by workspace mode and by nothing else.
+// The OS write block is driven by workspace mode and by nothing else.
 // There is no separate opt-out any more; lib/protocol/handlers/workspace.js's
 // handleSetWorkspaceMode drives lib/workspace/scaffold.js's
 // reconcileSandboxForMode directly, and these tests exercise that function
@@ -401,11 +401,50 @@ describe('the block is driven by mode, and only by mode', () => {
 });
 
 describe('the agent\'s own folder: three tiers, one registry', () => {
-  test('every registry entry is named in the architecture doc, and the doc/registry binding fails the moment they drift', () => {
+  // Scoped to the boundary passage itself (marked off in ARCHITECTURE.md by
+  // an HTML comment pair) rather than matched anywhere in the whole file: a
+  // bare substring search would pass even with the paragraph deleted,
+  // because several of these names ('agents', 'skills', 'commands',
+  // 'hooks') already occur elsewhere in the document for unrelated reasons.
+  // Bound in BOTH directions: every registry entry must appear in the
+  // passage, and the passage must name no secret or persistence-surface
+  // path the registry does not also enforce, so a name added to prose
+  // without a matching registry entry is caught too.
+  function boundaryPassage() {
     const doc = fs.readFileSync(path.join(ROOT, 'ARCHITECTURE.md'), 'utf8');
-    const names = [...hook.SECRET_RELATIVE_PATHS, ...hook.PERSISTENCE_SURFACE_DIRS, ...hook.PERSISTENCE_SURFACE_FILES];
-    for (const name of names) {
-      assert.ok(doc.includes(name), `the doc names ${name}, which the registry enforces`);
+    const start = doc.indexOf('<!-- boundary-registry-start -->');
+    const end = doc.indexOf('<!-- boundary-registry-end -->');
+    assert.ok(start !== -1 && end !== -1 && end > start, 'the boundary passage markers are present in ARCHITECTURE.md');
+    return doc.slice(start, end);
+  }
+  // Every backtick-quoted, path-shaped token the passage cites as a name
+  // living under `~/.claude`: the registry side of the binding checks that
+  // none of these are strays the registry does not also enforce.
+  function passageNames(passage) {
+    const names = [];
+    const re = /`([a-zA-Z0-9_.-]+(?:\/|\.json))`/g;
+    let m;
+    while ((m = re.exec(passage)) !== null) names.push(m[1].replace(/\/$/, ''));
+    return [...new Set(names)];
+  }
+
+  test('the registry and the boundary passage name each other, in both directions', () => {
+    const passage = boundaryPassage();
+    const registryNames = [...hook.SECRET_RELATIVE_PATHS, ...hook.PERSISTENCE_SURFACE_DIRS, ...hook.PERSISTENCE_SURFACE_FILES];
+    for (const name of registryNames) {
+      assert.ok(passage.includes(name), `the boundary passage names ${name}, which the registry enforces`);
+    }
+    // The reverse direction: a name the passage cites is not free to be a
+    // stray. `.claude` and `.claude.json`-shaped scratch entries the passage
+    // lists as FREE are not registry entries and are excluded on purpose;
+    // everything else the passage cites as secret or persistence-tier must
+    // be one the registry actually carries.
+    const scratchNamedInPassage = ['projects', 'cache', 'paste-cache', 'downloads', 'tasks',
+      'file-history', 'shell-snapshots', 'session-env', 'history.jsonl'];
+    for (const name of passageNames(passage)) {
+      if (scratchNamedInPassage.includes(name)) continue;
+      assert.ok(registryNames.includes(name),
+        `the boundary passage names ${name} as governed, but the registry does not enforce it`);
     }
   });
 
@@ -423,7 +462,99 @@ describe('the agent\'s own folder: three tiers, one registry', () => {
       'the named FILE matches only at the folder root, not a same-named file nested somewhere already free');
   });
 
-  test('AF-1: a read anywhere under the folder is free, with the single exception of the secrets tier', () => {
+  // A REGISTRY PATH IS RECOGNISED HOWEVER IT IS SPELLED, INCLUDING BEFORE IT
+  // EXISTS. canonicalize only folds case for path components that already
+  // exist: an unborn target realpaths its nearest existing ancestor and
+  // reattaches the rest verbatim, spelling and all. A write to a case
+  // variant of a registry folder that has not been created yet (`Hooks/`
+  // before `hooks/` exists) would otherwise escape the registry comparison
+  // entirely on a filesystem that folds case. The host's case behaviour is a
+  // defaulted seam (`foldsCase`) so both filesystem kinds are exercised
+  // explicitly here, on any machine running the suite, rather than one
+  // behaviour being selected by whatever the test host's real filesystem
+  // happens to do.
+  test('a case variant of an unborn persistence-surface folder is recognised, or not, exactly as the host\'s case-folding behaviour says, driven both ways', () => {
+    const home = tmp('af-case-home-');
+    fs.mkdirSync(path.join(home, '.claude'), { recursive: true }); // 'hooks/' itself is NOT created
+    const variant = path.join(home, '.claude', 'Hooks', 'pretool.sh');
+    assert.strictEqual(hook.isPersistenceSurface(variant, home, true), true,
+      'on a filesystem that folds case, the unborn folder\'s case variant is still the registry\'s hooks/ entry');
+    assert.strictEqual(hook.isPersistenceSurface(variant, home, false), false,
+      'on a filesystem that does not fold case, a differently-cased name is a genuinely different folder');
+
+    const secretVariant = path.join(home, '.claude', '.CREDENTIALS.json');
+    assert.strictEqual(hook.isSecretPath(secretVariant, home, true), true,
+      'the secrets registry folds case the same way, even though the file does not exist yet either');
+    assert.strictEqual(hook.isSecretPath(secretVariant, home, false), false);
+
+    // Driven through classifyFileAccess, which is what actually decides
+    // whether the write cards: the same unborn case variant reaches a card
+    // on a case-folding host, and stays free (a genuinely different,
+    // never-registered folder) on one that does not fold case.
+    const ws = tmp('af-case-ws-');
+    const folded = hook.classifyFileAccess('Write', { file_path: variant }, ws, [], home, true);
+    assert.strictEqual(folded.where, 'outside', 'a card is raised on a case-folding host');
+    assert.strictEqual(folded.persistenceSurface, true);
+    const notFolded = hook.classifyFileAccess('Write', { file_path: variant }, ws, [], home, false);
+    assert.strictEqual(notFolded.where, 'inside', 'and free on a host that does not fold case');
+  });
+
+  // THE REGISTRY IS FAIL-LOUD IN THE CODE DIRECTION TOO. The doc/registry
+  // binding above catches a name added to prose without a registry entry;
+  // this catches the opposite failure mode, a path CLASSIFIED as secret or
+  // persistence-tier without the registry backing it, by exercising the two
+  // functions that are the registry's only consumers (scripts/
+  // permission-hook.js says as much of itself: "nowhere else may decide
+  // either question with a literal of its own") against a corpus that
+  // includes every registry-derived path alongside a wide spread of
+  // neighbours chosen to defeat a sloppy literal: a name one character off,
+  // the same name in the wrong folder, a nested file under a registered
+  // directory's own name, and a path outside the runtime home entirely.
+  test('nothing is classified as a secret or a persistence surface unless the registry says so', () => {
+    const home = tmp('af-corpus-home-');
+    const root = path.join(home, '.claude');
+    fs.mkdirSync(root, { recursive: true });
+
+    for (const p of hook.SECRET_RELATIVE_PATHS.map(p => path.join(root, p))) {
+      assert.strictEqual(hook.isSecretPath(p, home), true, `${p} is the registry's own secret`);
+    }
+    for (const p of [
+      ...hook.PERSISTENCE_SURFACE_DIRS.map(d => path.join(root, d, 'x')),
+      ...hook.PERSISTENCE_SURFACE_FILES.map(f => path.join(root, f)),
+    ]) {
+      assert.strictEqual(hook.isPersistenceSurface(p, home), true, `${p} is the registry's own persistence surface`);
+    }
+
+    const neighbours = [
+      path.join(root, 'projects', 'p', 'session.jsonl'),
+      path.join(root, 'cache', 'x.html'),
+      path.join(root, 'history.jsonl'),
+      path.join(root, 'credentials.json'),                 // no leading dot: not the registry's entry
+      path.join(root, '.credentials.json.bak'),             // a neighbour, not the entry itself
+      path.join(root, 'Documents', '.credentials.json'),    // same name, wrong folder
+      path.join(root, 'agent.md'),                          // 'agent', not the 'agents' folder
+      path.join(root, 'skill'),                             // 'skill', not 'skills'
+      path.join(root, 'commands.json'),                     // not the 'commands' folder
+      path.join(root, 'settings.json.bak'),                 // not the registry's exact file
+      path.join(home, 'Documents', 'hooks', 'x.sh'),        // 'hooks' exists, but outside the runtime home
+    ];
+    for (const p of neighbours) {
+      assert.strictEqual(hook.isSecretPath(p, home), false, `${p} is not a registry secret`);
+      assert.strictEqual(hook.isPersistenceSurface(p, home), false, `${p} is not a registry persistence surface`);
+    }
+
+    // The one REFUSED folder outside this registry (isProtectedClaudeEdit's
+    // deterministic deny for the global agents/ and skills/ folders) is not
+    // itself registry-driven, but the names it refuses must still be ones
+    // the registry backs, or the refusal would be deciding with a literal
+    // this fail-loud test cannot otherwise see.
+    for (const refused of ['agents', 'skills']) {
+      assert.ok(hook.PERSISTENCE_SURFACE_DIRS.includes(refused),
+        `the deterministic refusal targets ${refused}/, which the registry must also carry`);
+    }
+  });
+
+  test('a read anywhere under the folder is free, with the single exception of the secrets tier', () => {
     const home = tmp('af-read-home-');
     fs.mkdirSync(path.join(home, '.claude', 'projects', 'flattened'), { recursive: true });
     fs.mkdirSync(path.join(home, '.claude', 'agents'), { recursive: true });
@@ -448,7 +579,7 @@ describe('the agent\'s own folder: three tiers, one registry', () => {
     assert.strictEqual(secretRead.grantDir, null, 'and no grant is offered for it');
   });
 
-  test('AF-2: a write to a persistence surface cards; a write to scratch, at at least two locations (file and shell), does not', () => {
+  test('a write to a persistence surface cards; a write to scratch, at at least two locations (file and shell), does not', () => {
     const home = tmp('af-write-home-');
     fs.mkdirSync(path.join(home, '.claude', 'agents'), { recursive: true });
     fs.mkdirSync(path.join(home, '.claude', 'cache'), { recursive: true });
@@ -482,7 +613,7 @@ describe('the agent\'s own folder: three tiers, one registry', () => {
     assert.strictEqual(secretTouch.crossings[0].secret, true);
   });
 
-  test('AF-3: a standing grant over the whole runtime home does not silence a later crossing into the secrets tier', () => {
+  test('a standing grant over the whole runtime home does not silence a later crossing into the secrets tier', () => {
     // boundaryGrantCovers alone WOULD silence this (a grant over the home
     // is a prefix of everything inside it); crossingCovered must not.
     const home = tmp('af-wide-grant-home-');

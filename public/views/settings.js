@@ -197,9 +197,7 @@ function renderSettingsSection(section) {
       <button class="settings-btn" onclick="changeWorkspace()">Change workspace</button>`;
     // Refresh runtime state whenever the card becomes visible (the user may
     // have just installed or signed in to a CLI).
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: 'get_runtime_status' }));
-    }
+    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'get_runtime_status' }));
   } else if (section === 'appearance') {
     const isLight = document.body.classList.contains('light');
     el.innerHTML = `<div class="settings-section-title">Appearance</div>

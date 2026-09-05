@@ -36,13 +36,14 @@ const CHAT_VIEW = { src: path.join(ROOT, 'public', 'views', 'chat.js'), suite: '
 // classifyFileAccess and card rendering each in isolation), only by the
 // real hook process the integration suite spawns.
 const HOOK_INTEGRATION = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/integration/boundary-permissions.test.js' };
-// PM-1's ordering guard lives in the protocol handler, not the scaffold
-// layer, and is reachable only through the real workspace-open path (the
-// scaffold-layer tests call scaffoldWorkspace directly and so never see this
-// file's own ordering at all).
+// The mode-persisted-before-scaffold ordering guard lives in the protocol
+// handler, not the scaffold layer, and is reachable only through the real
+// workspace-open path (the scaffold-layer tests call scaffoldWorkspace
+// directly and so never see this file's own ordering at all).
 const WORKSPACE_HANDLER = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'workspace.js'), suite: 'test/integration/ws-handler-edges.test.js' };
-// Same file as WORKSPACE_HANDLER, a different suite: AF-5's ordering guard is
-// proven by protocol-handlers-lib.test.js's own read-back, not anything ws-handler-edges.test.js asserts.
+// Same file as WORKSPACE_HANDLER, a different suite: the mode-switch
+// atomicity guards are proven by protocol-handlers-lib.test.js's own
+// read-back, not anything ws-handler-edges.test.js asserts.
 const WORKSPACE_HANDLER_UNIT = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'workspace.js'), suite: 'test/unit/protocol-handlers-lib.test.js' };
 
 const MUTATIONS = [
@@ -87,13 +88,13 @@ const MUTATIONS = [
   // Drop the pairing check and a root a person appends, sitting in the
   // second tail slot, is structurally indistinguishable from a legitimate
   // temp-directory real path: the block is read as ours and their root is
-  // rewritten away on the next reconcile. PM-1: the pairing check itself is
-  // now a general real-path-spelling test (ends-with), not only the literal
+  // rewritten away on the next reconcile. The pairing check itself is a
+  // general real-path-spelling test (ends-with), not only the literal
   // /private case, so a non-/private relocation is recognised too.
   [SCAFFOLD, 'a second tail entry must be a real-path spelling of the first, or it is somebody\'s edit',
     '  if (tail.length === 2 && !tail[1].endsWith(tail[0])) return false;\n',
     ''],
-  // PM-1: a corrupt or unreadable settings.local.json must not be silently
+  // A corrupt or unreadable settings.local.json must not be silently
   // replaced with {}. Only ENOENT may start empty; drop that distinction and
   // every other read/parse failure quietly overwrites the file instead of
   // being surfaced.
@@ -113,7 +114,7 @@ const MUTATIONS = [
   [SCAFFOLD, 'the next open honours the persisted mode, not only the switch',
     "    const desired = workspaceModeFor(dir) === 'code' ? null : sandboxSettings(dir, platform);",
     '    const desired = sandboxSettings(dir, platform);'],
-  // PM-1: the mode must be PERSISTED before scaffoldWorkspace runs, because
+  // The mode must be PERSISTED before scaffoldWorkspace runs, because
   // scaffoldWorkspace's own reconcile reads the mode back off disk, not from
   // this function's local variable. Swap the order and a never-before-opened
   // code-signal workspace gets the block written on its first open anyway,
@@ -137,18 +138,42 @@ const MUTATIONS = [
     + "  }"],
 
   // ===== THE AGENT'S OWN FOLDER: THREE TIERS, ONE REGISTRY =====
-  // Drop the write gate and a persistence-surface write becomes free, the storm AF-2 exists to end.
+  // Drop the write gate and a persistence-surface write becomes free, the storm this tiering exists to end.
   [HOOK, 'a write to a persistence surface is not free the way a read is',
     '  if (tags.agentHome && !tags.secret && !(isWrite && tags.persistenceSurface)) {',
     '  if (tags.agentHome && !tags.secret) {'],
   // Both tags must come from the registry, not a hardcoded literal.
   [HOOK, 'a crossing\'s secret and persistence-surface tags come from the registry, not a hardcoded false',
-    '    ? { agentHome: true, secret: isSecretPath(resolvedPath, home), persistenceSurface: isPersistenceSurface(resolvedPath, home) }',
+    '    ? { agentHome: true, secret: isSecretPath(resolvedPath, home, foldsCase), persistenceSurface: isPersistenceSurface(resolvedPath, home, foldsCase) }',
     '    ? { agentHome: true, secret: false, persistenceSurface: false }'],
   // Drop tier three's exemption and a shell command merely touching scratch is reported as a crossing.
   [HOOK, 'a shell crossing into tier three (neither secret nor a persistence surface) is not reported at all',
     '    if (tags.agentHome && !tags.secret && !tags.persistenceSurface) continue;',
     '    if (false) continue;'],
+  // A registry path is recognised however it is spelled, including before it
+  // exists: drop the fold on the CANDIDATE side (the fold on the registry's
+  // own, already-lowercase names changes nothing, which is why this targets
+  // the side that actually carries the variance) and a case variant of an
+  // unborn registry folder escapes the comparison on a case-folding host.
+  [HOOK, 'the case-fold seam actually folds the candidate before it is compared against the registry',
+    'function isPersistenceSurface(candidate, home = os.homedir(), foldsCase = hostFoldsCase()) {\n'
+    + '  if (typeof candidate !== \'string\' || !candidate) return false;\n'
+    + '  const c = foldCase(canonicalize(candidate), foldsCase);',
+    'function isPersistenceSurface(candidate, home = os.homedir(), foldsCase = hostFoldsCase()) {\n'
+    + '  if (typeof candidate !== \'string\' || !candidate) return false;\n'
+    + '  const c = canonicalize(candidate);'],
+  // The registry is fail-loud in the code direction: a literal folder name
+  // hardcoded alongside the registry's own, rather than reasoned from it,
+  // must make an unregistered neighbour classify as governed.
+  [HOOK, 'no folder is a persistence surface unless PERSISTENCE_SURFACE_DIRS says so',
+    '  return PERSISTENCE_SURFACE_DIRS.some(d => {',
+    '  return [...PERSISTENCE_SURFACE_DIRS, \'projects\'].some(d => {'],
+  // The registry is fail-loud in the doc direction too: a name removed from
+  // the registry while the boundary passage still cites it must be caught,
+  // not just the reverse.
+  [HOOK, 'every persistence-surface directory the registry declares is bound to the architecture doc',
+    'const PERSISTENCE_SURFACE_DIRS = [\'agents\', \'skills\', \'plugins\', \'commands\', \'hooks\'];',
+    'const PERSISTENCE_SURFACE_DIRS = [\'agents\', \'skills\', \'commands\', \'hooks\'];'],
   // The one production site carrying classifyFileAccess's tags onto the emitted request.
   [HOOK_INTEGRATION, 'a file crossing\'s tags reach the request the hook actually emits',
     '        path: access.resolvedPath, grantDir: access.grantDir,\n'
@@ -156,7 +181,7 @@ const MUTATIONS = [
     + '      }])',
     '        path: access.resolvedPath, grantDir: access.grantDir,\n'
     + '      }])'],
-  // AF-3's decision: drop the registry check and a broad grant silences the credential file inside it.
+  // Drop the registry check and a broad grant silences the credential file inside it.
   [BOUNDARY, 'a secrets-registry crossing is covered by no stored grant, however broad',
     '  if (isSecretPath(crossing.path, home)) return false;',
     '  if (false) return false;'],
@@ -164,21 +189,37 @@ const MUTATIONS = [
     '  const wholeFolderOffered = grantable && !(flaggedCrossing && flaggedCrossing.secret);',
     '  const wholeFolderOffered = grantable;'],
   [CHAT_VIEW, 'the agent-home copy is applied to the card\'s context',
-    '    if (homeCopy) context = homeCopy;',
-    '    if (false) context = homeCopy;'],
+    '    if (homeCopy) context = crossings.length > 1 ? `${context} ${homeCopy}` : homeCopy;',
+    '    if (false) context = crossings.length > 1 ? `${context} ${homeCopy}` : homeCopy;'],
+  // The multi-crossing warning is COMPOSED with the stakes copy, not
+  // replaced by it: dropping the ternary back to a plain overwrite is the
+  // exact regression an earlier version shipped, where approving a command
+  // that reached several places was no longer told it was approving all of them.
+  [CHAT_VIEW, 'the multi-crossing warning survives alongside the agent-home stakes copy, rather than being overwritten by it',
+    'crossings.length > 1 ? `${context} ${homeCopy}` : homeCopy;',
+    'homeCopy;'],
 
-  // ===== AF-5: A FAILED MODE CHANGE LEAVES THE WORKSPACE EXACTLY AS IT WAS =====
+  // ===== A MODE CHANGE IS ALL OR NOTHING, IN EVERY FAILURE, IN BOTH DIRECTIONS =====
   [WORKSPACE_HANDLER_UNIT, 'the block is reconciled before the mode is persisted, not after',
-    '      const dir = getWorkspace();\n'
-    + '      if (dir) reconcileSandboxForMode(dir, mode, platform);\n'
-    + '      const state = readState();\n'
-    + '      state.workspaceMode = mode;\n'
-    + '      writeState(state);',
-    '      const state = readState();\n'
-    + '      state.workspaceMode = mode;\n'
-    + '      writeState(state);\n'
-    + '      const dir = getWorkspace();\n'
-    + '      if (dir) reconcileSandboxForMode(dir, mode, platform);'],
+    '    if (dir) reconcileSandboxForMode(dir, mode, platform);\n'
+    + '    const state = readState();\n'
+    + '    state.workspaceMode = mode;\n'
+    + '    writeState(state);',
+    '    const state = readState();\n'
+    + '    state.workspaceMode = mode;\n'
+    + '    writeState(state);\n'
+    + '    if (dir) reconcileSandboxForMode(dir, mode, platform);'],
+  // A failed mode change restores the settings file to its exact pre-request
+  // bytes, not just refuses to commit the new mode. Drop the restore write
+  // and a reconcile that genuinely changed the file leaves that change in
+  // place even though the state write after it failed.
+  [WORKSPACE_HANDLER_UNIT, 'a failed mode change restores the settings file\'s pre-request bytes, not just leaves the mode uncommitted',
+    '      try {\n'
+    + '        if (existedBefore) fs.writeFileSync(settingsLocalPath, preRequestBytes);\n'
+    + '        else if (fs.existsSync(settingsLocalPath)) fs.unlinkSync(settingsLocalPath);\n'
+    + '      } catch (restoreErr) {',
+    '      try {\n'
+    + '      } catch (restoreErr) {'],
 ];
 
 const REPORTER = ['--test-reporter', 'spec'];

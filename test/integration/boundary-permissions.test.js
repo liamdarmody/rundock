@@ -244,9 +244,40 @@ describe('workspace file-access boundary', () => {
     assert.strictEqual(client.messages.slice(since).filter(m => m.type === 'control_request').length, 0);
   });
 
-  // AF-1/AF-2 are claims about what a person sees, driven through the real
-  // hook against the server; h.boot() isolates HOME to a fresh temp dir.
-  test('AF-1: reading a transcript, a global agent file, and a global skill file raises no card', async () => {
+  // THE COPY-IN PATH, END TO END. A user may want a global agent or skill
+  // added to their workspace: the guide agent lists what is in the global
+  // folder (a read) and copies one INTO the workspace (a write, inside).
+  // Neither step may card, because the refusal above only governs editing
+  // the global file in place, a different act entirely. This is the case a
+  // later tightening would most easily break by accident, so it gets its
+  // own end-to-end proof rather than being inferred from the read test and
+  // the deny test separately.
+  test('the copy-in path: reading a global skill file and writing its content into the workspace both raise no card', async () => {
+    const globalSkill = path.join(os.homedir(), '.claude', 'skills', 'shared-skill', 'SKILL.md');
+    fs.mkdirSync(path.dirname(globalSkill), { recursive: true });
+    const content = '# Shared Skill\n\nSomething useful, defined once, globally.\n';
+    fs.writeFileSync(globalSkill, content);
+
+    let since = client.messages.length;
+    const readOut = await runHook('Read', { file_path: globalSkill });
+    assert.strictEqual(decisionOf(readOut), 'allow', 'listing the global skill is a free read');
+    await h.delay(200);
+    assert.strictEqual(client.messages.slice(since).filter(m => m.type === 'control_request').length, 0,
+      'no card for reading the global copy');
+
+    const workspaceSkill = path.join(h.workspaceDir, '.claude', 'skills', 'shared-skill', 'SKILL.md');
+    since = client.messages.length;
+    const writeOut = await runHook('Write', { file_path: workspaceSkill, content });
+    assert.strictEqual(decisionOf(writeOut), 'allow', 'copying it into the workspace is an ordinary inside write');
+    await h.delay(200);
+    assert.strictEqual(client.messages.slice(since).filter(m => m.type === 'control_request').length, 0,
+      'no card for writing the copy into the workspace either: the refusal governs the global file in place, not this');
+  });
+
+  // The following two are claims about what a person sees, driven through
+  // the real hook against the server; h.boot() isolates HOME to a fresh
+  // temp dir.
+  test('reading a transcript, a global agent file, and a global skill file raises no card', async () => {
     const home = os.homedir();
     const targets = [
       path.join(home, '.claude', 'projects', 'flattened-ws', 'session.jsonl'),
@@ -265,7 +296,7 @@ describe('workspace file-access boundary', () => {
     }
   });
 
-  test('AF-2: writing to a persistence surface cards, in both modes, and names what persistence means; writing to scratch does not', async () => {
+  test('writing to a persistence surface cards, in both modes, and names what persistence means; writing to scratch does not', async () => {
     const home = os.homedir();
     const surfaceTarget = path.join(home, '.claude', 'settings.json');
     for (const extraEnv of [{}, { RUNDOCK_CODE_MODE: '1' }]) {
@@ -290,8 +321,8 @@ describe('workspace file-access boundary', () => {
     assert.strictEqual(client.messages.slice(since).filter(m => m.type === 'control_request').length, 0);
   });
 
-  test('AF-3 / AF-6: a standing grant over the whole runtime home does not silence the credentials file, proven at the production call site', async () => {
-    // AF-6: /api/permission-request in lib/http-router.js, driven through the
+  test('a standing grant over the whole runtime home does not silence the credentials file, proven at the production call site', async () => {
+    // /api/permission-request in lib/http-router.js, driven through the
     // real hook with a standing grant already recorded, not crossingCovered
     // called directly. Reverting that handler to boundaryGrantCovers (its
     // pre-change form) would make the grant below cover credentials too.

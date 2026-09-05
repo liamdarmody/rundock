@@ -36,9 +36,7 @@ before(() => {
   global.RundockChatMarkup = require('../../public/chat-markup.js');
   chat = require('../../public/views/chat.js');
 });
-after(() => {
-  if (dom) dom.window.close();
-});
+after(() => { if (dom) dom.window.close(); });
 
 function render(request) {
   document.getElementById('messages').innerHTML = '';
@@ -175,7 +173,7 @@ describe('a crossing into the agent\'s own folder, rendered and answered', () =>
     assert.match(html, /permission-context">This is the credential file/, 'the rendered context is the secret\'s own copy, not the ordinary one');
     assert.match(html, /cannot be undone/);
     assert.doesNotMatch(html, /data-perm-action="allow-folder"/,
-      'AF-3: no grant may suppress a secrets-tier card, so the whole-folder grant is removed, not merely demoted');
+      'no grant may suppress a secrets-tier card, so the whole-folder grant is removed, not merely demoted');
 
     const sent = [];
     global.ws = { send: (s) => sent.push(JSON.parse(s)) };
@@ -197,6 +195,22 @@ describe('a crossing into the agent\'s own folder, rendered and answered', () =>
     assert.match(html, /permission-context">Writing here persists/, 'the persistence stakes are named');
     assert.match(html, /Always allow this folder/,
       'unlike a secret, an ordinary persistence-surface write may still be remembered for a folder');
+  });
+
+  test('a command reaching more than one place composes the multi-crossing warning with the stakes copy, rather than one replacing the other', () => {
+    const taggedPath = '/home/u/.claude/commands/new.md';
+    const plainPath = '/etc/hosts';
+    const html = render({
+      tool_name: 'Bash', input: { command: `cp a ${taggedPath} && cp b ${plainPath}` },
+      boundary: true, resolved_path: taggedPath, grant_dir: null,
+      crossings: [
+        { path: taggedPath, agentHome: true, persistenceSurface: true },
+        { path: plainPath },
+      ],
+    });
+    assert.match(html, /reaches more than one place outside your workspace/,
+      'the multi-crossing fact survives: every listed place is still what approving allows');
+    assert.match(html, /persists/, 'and the persistence-surface stakes are stated alongside it, not instead of it');
   });
 
   test('a shell crossing into a persistence surface states the stakes but offers no folder grant, secret or not', () => {

@@ -80,7 +80,7 @@ describe('workspace lifecycle edges', () => {
     }
   });
 
-  // PM-1: openWorkspace persists the auto-detected mode BEFORE calling
+  // openWorkspace persists the auto-detected mode BEFORE calling
   // scaffoldWorkspace, because scaffoldWorkspace's own reconcile reads the
   // mode back off disk (workspaceModeFor), not from the caller's in-memory
   // state. A never-before-opened directory has no state.json yet, so if the

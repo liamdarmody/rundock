@@ -73,6 +73,32 @@ const SECRET_RELATIVE_PATHS = ['.credentials.json'];
 const PERSISTENCE_SURFACE_DIRS = ['agents', 'skills', 'plugins', 'commands', 'hooks'];
 const PERSISTENCE_SURFACE_FILES = ['settings.json'];
 
+// canonicalize only folds case for path components that already exist: an
+// unborn target realpaths its nearest existing ancestor and reattaches the
+// remaining components verbatim, spelling and all. On a filesystem that
+// folds case, a registry folder that has not been created yet (a first
+// write to `~/.claude/Hooks/pretool.sh` before `hooks/` exists) then
+// canonicalises to a path whose tail is spelled `Hooks`, which a
+// case-sensitive string comparison against the registry's `hooks` entry
+// never matches, so the write is classified as free scratch and lands in
+// the very folder the runtime reads as `hooks/`.
+//
+// Whether the host folds case is a property of the filesystem, not
+// reliably inferable from `process.platform` alone (a case-sensitive APFS
+// volume exists), but the default filesystem on macOS and Windows folds
+// case while the default on Linux does not, and no installation this
+// registry has to protect runs the exception. `platform` is a DEFAULTED
+// SEAM, the same shape as every other injectable seam in this file:
+// production never passes it, and a test drives either filesystem kind
+// explicitly on any host, rather than asking the real filesystem and
+// letting its answer choose which assertion runs.
+function hostFoldsCase(platform = process.platform) {
+  return platform === 'darwin' || platform === 'win32';
+}
+function foldCase(v, foldsCase) {
+  return foldsCase ? v.toLowerCase() : v;
+}
+
 function agentHomeRoot(home = os.homedir()) {
   return canonicalize(path.join(home, '.claude'));
 }
@@ -80,24 +106,27 @@ function secretsRegistry(home = os.homedir()) {
   const root = agentHomeRoot(home);
   return SECRET_RELATIVE_PATHS.map(p => path.join(root, p));
 }
-function isSecretPath(candidate, home = os.homedir()) {
+function isSecretPath(candidate, home = os.homedir(), foldsCase = hostFoldsCase()) {
   if (typeof candidate !== 'string' || !candidate) return false;
-  const c = canonicalize(candidate);
-  return secretsRegistry(home).some(p => c === canonicalize(p));
+  const c = foldCase(canonicalize(candidate), foldsCase);
+  return secretsRegistry(home).some(p => c === foldCase(canonicalize(p), foldsCase));
 }
-function isPersistenceSurface(candidate, home = os.homedir()) {
+function isPersistenceSurface(candidate, home = os.homedir(), foldsCase = hostFoldsCase()) {
   if (typeof candidate !== 'string' || !candidate) return false;
-  const c = canonicalize(candidate);
+  const c = foldCase(canonicalize(candidate), foldsCase);
   const root = agentHomeRoot(home);
-  if (PERSISTENCE_SURFACE_FILES.some(f => c === canonicalize(path.join(root, f)))) return true;
-  return PERSISTENCE_SURFACE_DIRS.some(d => isUnder(c, canonicalize(path.join(root, d))));
+  if (PERSISTENCE_SURFACE_FILES.some(f => c === foldCase(canonicalize(path.join(root, f)), foldsCase))) return true;
+  return PERSISTENCE_SURFACE_DIRS.some(d => {
+    const dir = foldCase(canonicalize(path.join(root, d)), foldsCase);
+    return c === dir || c.startsWith(dir + path.sep);
+  });
 }
 // Every tag a crossing carries, computed once so the file-tool and
 // shell-command paths read the same three answers.
-function agentHomeTags(resolvedPath, home = os.homedir()) {
+function agentHomeTags(resolvedPath, home = os.homedir(), foldsCase = hostFoldsCase()) {
   const agentHome = isUnder(resolvedPath, agentHomeRoot(home));
   return agentHome
-    ? { agentHome: true, secret: isSecretPath(resolvedPath, home), persistenceSurface: isPersistenceSurface(resolvedPath, home) }
+    ? { agentHome: true, secret: isSecretPath(resolvedPath, home, foldsCase), persistenceSurface: isPersistenceSurface(resolvedPath, home, foldsCase) }
     : { agentHome: false, secret: false, persistenceSurface: false };
 }
 
@@ -178,9 +207,11 @@ function isUnder(resolved, root, pmod = path) {
 function buildRoots(workspaceRoot, extraDirs = [], pmod = path) {
   return [canonicalize(workspaceRoot, pmod), ...extraDirs.map(d => canonicalize(d, pmod))];
 }
-// `home` is a defaulted seam so a test can pass a fixture home instead of
-// monkey-patching os.homedir(); production never passes it.
-function classifyFileAccess(toolName, toolInput, workspaceRoot, extraDirs = [], home = os.homedir()) {
+// `home` and `foldsCase` are defaulted seams so a test can pass a fixture
+// home instead of monkey-patching os.homedir(), and drive either filesystem
+// kind explicitly instead of inheriting whichever the test host happens to
+// have; production never passes either.
+function classifyFileAccess(toolName, toolInput, workspaceRoot, extraDirs = [], home = os.homedir(), foldsCase = hostFoldsCase()) {
   const field = FILE_TOOL_PATH_FIELD[toolName];
   if (!field) return null;
   const ti = toolInput || {};
@@ -195,7 +226,7 @@ function classifyFileAccess(toolName, toolInput, workspaceRoot, extraDirs = [], 
   if (inside) return { where: 'inside', resolvedPath };
   // The agent's own folder: free unless the registry names this exact
   // access as a secret (always) or a write to a persistence surface.
-  const tags = agentHomeTags(resolvedPath, home);
+  const tags = agentHomeTags(resolvedPath, home, foldsCase);
   const isWrite = !READ_FILE_TOOLS.has(toolName);
   if (tags.agentHome && !tags.secret && !(isWrite && tags.persistenceSurface)) {
     return { where: 'inside', resolvedPath };
@@ -343,7 +374,7 @@ function flavourFor(token, workspaceRoot) {
 // folder grant against what it is handed. Given only the first, a command
 // whose first target sits in an already-granted folder is allowed outright
 // and a second target somewhere else rides along with no card at all.
-function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir()) {
+function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), foldsCase = hostFoldsCase()) {
   const found = [];
   const seen = new Set();
   for (const raw of shellPathTokens(command)) {
@@ -368,7 +399,7 @@ function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir()) 
     // is not reported at all. A command cannot declare which act it
     // performs, so a persistence surface is conservatively treated as a
     // write here.
-    const tags = agentHomeTags(resolved, home);
+    const tags = agentHomeTags(resolved, home, foldsCase);
     if (tags.agentHome && !tags.secret && !tags.persistenceSurface) continue;
     const key = pmod === path.win32 ? resolved.toLowerCase() : resolved;
     if (seen.has(key)) continue;
@@ -378,7 +409,7 @@ function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir()) 
   return found;
 }
 
-function classifyShellAccess(toolName, toolInput, workspaceRoot, extraDirs = [], home = os.homedir()) {
+function classifyShellAccess(toolName, toolInput, workspaceRoot, extraDirs = [], home = os.homedir(), foldsCase = hostFoldsCase()) {
   if (!SHELL_TOOLS.has(toolName)) return null;
   const ti = toolInput || {};
   // Signal 1. No grant folder is offered: a sandbox escape is not about one
@@ -388,7 +419,7 @@ function classifyShellAccess(toolName, toolInput, workspaceRoot, extraDirs = [],
   }
   // Signal 2.
   if (typeof ti.command !== 'string' || !ti.command) return null;
-  const crossings = shellCrossings(ti.command, workspaceRoot, extraDirs, home);
+  const crossings = shellCrossings(ti.command, workspaceRoot, extraDirs, home, foldsCase);
   if (!crossings.length) return null;
   return { where: 'outside', resolvedPath: crossings[0].path, grantDir: null, grantable: false, crossings };
 }

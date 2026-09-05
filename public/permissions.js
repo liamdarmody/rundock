@@ -5,7 +5,7 @@
 // functions, and the licence invites anyone to audit them. Same UMD pattern
 // as code-language.js and markers.js.
 //
-// The permission decision path spans THREE layers (see docs/ARCHITECTURE):
+// The permission decision path spans THREE layers (see ARCHITECTURE.md):
 // the PreToolUse hook script, the server bridge, and THIS module in the
 // browser. The auto-allow policy for low-risk read-only commands lives
 // here, client-side, and nowhere else.
