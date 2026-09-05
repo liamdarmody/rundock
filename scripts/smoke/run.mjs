@@ -224,7 +224,17 @@ record('S5 permission event recorded', s5ev);
   record('S7 folder approval resolves the hook with allow',
     !!(outsideOut && outsideOut.hookSpecificOutput && outsideOut.hookSpecificOutput.permissionDecision === 'allow'));
   const grantsFile = path.join(workspace, '.rundock', 'permissions.json');
-  const granted = fs.existsSync(grantsFile) && JSON.parse(fs.readFileSync(grantsFile, 'utf8')).allowedDirs.includes(outsideDir);
+  // A GRANT IS FOR A FOLDER, NOT FOR A SPELLING OF ONE. Grants are stored
+  // canonicalised, so on macOS a temp directory handed out as /var/folders/…
+  // is recorded as its real /private/var/folders/… path. Comparing the raw
+  // string would fail here while the grant works perfectly, which is exactly
+  // the confusion between a path and the directory it names that produced
+  // the card storm this release fixes. So the question asked is the real
+  // one: does some stored grant name this same directory?
+  const realOutside = fs.realpathSync(outsideDir);
+  const granted = fs.existsSync(grantsFile)
+    && JSON.parse(fs.readFileSync(grantsFile, 'utf8')).allowedDirs
+      .some(d => { try { return fs.realpathSync(d) === realOutside; } catch { return d === realOutside; } });
   record('S7 grant persisted into the workspace, folder-level', granted);
   const secondOut = await runHook({ file_path: path.join(outsideDir, 'export-two.md'), content: 'y' });
   record('S7 granted folder allows silently on the next access',
