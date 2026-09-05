@@ -25,8 +25,23 @@ async function boot(page) {
   await expect(page.locator('.convo-item').first()).toBeVisible();
 }
 
+// ASKING ONCE IS NOT ENOUGH RIGHT AFTER A WORKSPACE SWITCH. The switch
+// announces itself to every window, and that announcement redraws the shell.
+// A single showView() racing that redraw can be undone by it, leaving the
+// field present in the page but not on screen, which is what a plain
+// toBeVisible then waits seven seconds to discover. Asking again each time
+// the poll runs costs nothing when the view is already right and removes the
+// race when it is not.
 async function openPackages(page) {
-  await page.evaluate(() => { showView('settings'); showSettingsSection('packages'); });
+  await expect.poll(
+    () => page.evaluate(() => {
+      showView('settings');
+      showSettingsSection('packages');
+      const el = document.getElementById('packages-source-path');
+      return !!(el && el.offsetParent !== null);
+    }),
+    { message: 'the packages field is on screen after asking for it' },
+  ).toBe(true);
   await expect(page.locator('#packages-source-path')).toBeVisible();
 }
 
@@ -133,15 +148,23 @@ test('switching workspace returns the flow to idle, discarding the previous plan
   const original = await page.evaluate(() => currentWorkspacePath);
   const other = original + '-b';
   fs.mkdirSync(other, { recursive: true });
-  await page.evaluate((dir) => ws.send(JSON.stringify({ type: 'set_workspace', path: dir })), other);
-  await expect.poll(() => page.evaluate(() => currentWorkspacePath)).toBe(other);
-  await openPackages(page);
-  await expect(page.locator('#packages-source-path')).toBeVisible();
-  await expect(page.locator('#packages-source-path')).toHaveValue('');
-  await expect(page.locator('.packages-confirm-card')).toHaveCount(0);
-  // Hand the server back to the original workspace for the tests that follow.
-  await page.evaluate((dir) => ws.send(JSON.stringify({ type: 'set_workspace', path: dir })), original);
-  await expect.poll(() => page.evaluate(() => currentWorkspacePath)).toBe(original);
+  // THE SERVER IS SHARED, SO THE HANDBACK CANNOT BE AN ORDINARY LAST LINE.
+  // This moves the one server every spec in this run talks to. If an
+  // assertion below fails before the handback, every later spec boots into
+  // the empty second workspace, finds no conversations, and fails waiting for
+  // a row that will never render: one flake reported as a hundred, with the
+  // real one buried at the top. The handback belongs in a finally, so a
+  // failure here stays a failure here.
+  try {
+    await page.evaluate((dir) => ws.send(JSON.stringify({ type: 'set_workspace', path: dir })), other);
+    await expect.poll(() => page.evaluate(() => currentWorkspacePath)).toBe(other);
+    await openPackages(page);
+    await expect(page.locator('#packages-source-path')).toHaveValue('');
+    await expect(page.locator('.packages-confirm-card')).toHaveCount(0);
+  } finally {
+    await page.evaluate((dir) => ws.send(JSON.stringify({ type: 'set_workspace', path: dir })), original);
+    await expect.poll(() => page.evaluate(() => currentWorkspacePath)).toBe(original);
+  }
 });
 
 test('a connection lost mid-wait ends the wait and re-enables the flow', async ({ page }) => {
