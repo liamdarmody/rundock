@@ -17,7 +17,12 @@ on:
 jobs:
   smoke:
     name: Boot the packaged app
-    runs-on: macos-latest
+    # The same pin as the signing job in release.yml, and for a reason of its
+    # own: this test exists to prove the packaged app boots on the platform we
+    # ship. Run it on a different macOS from the one the release is built and
+    # signed on and it stops answering that question, while still reporting
+    # green. The two must move together or the check is decorative.
+    runs-on: macos-15
     steps:
       - name: Checkout
         uses: actions/checkout@v5

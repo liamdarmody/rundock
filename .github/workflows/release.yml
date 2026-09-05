@@ -139,7 +139,21 @@ jobs:
   macos:
     name: Build macOS (arm64 + x64)
     needs: [test, e2e, smoke, create-release]
-    runs-on: macos-latest
+    # PINNED, NOT LATEST, AND THE SIGNING JOB IS EXACTLY WHERE THAT MATTERS.
+    # `macos-latest` is a moving label. It rolled onto macOS 26 (image dated
+    # 2026-08-31) four days after the last release signed successfully on the
+    # image before it, and the signing broke: the keychain call electron-builder
+    # makes to authorise the imported certificate fails there, reported as
+    # "the user name or passphrase you entered is not correct", which sends
+    # whoever reads it hunting through credentials that were never wrong. The
+    # secrets had not been touched in a fortnight.
+    #
+    # A release build that quietly changes operating system between runs is
+    # not reproducible, and reproducibility is the property this job needs
+    # most: it is the one that signs the software other people install. So the
+    # version is stated here, and moving it is a deliberate edit with a build
+    # to prove it, rather than something that happens to us on a Tuesday.
+    runs-on: macos-15
     # Declares the protected release environment, which is where the signing
     # secrets now live. They were repository secrets, readable by ANY workflow
     # in this repo including one added on a pull request branch. The
