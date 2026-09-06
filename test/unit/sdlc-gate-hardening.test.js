@@ -207,6 +207,7 @@ describe('documented steps and uncommitted work', () => {
 // unexecuted experiment, and this registry is where the experiment's name is
 // recorded.
 const ENUMERATIONS = [
+  { file: 'test/unit/approve-once.test.js', extraction: "the client's getGuide declaration and body out of app.js, and the startConversation declaration out of conversations.js", failLoudBy: 'count', where: 'the declaration match is asserted found, so a pattern that stops matching fails rather than skipping, and the extracted body is run against a specimen team and must resolve the platform agent carrying an id', anchor: "resolved.id, 'agent-doc-1'" },
   { file: 'test/unit/client-styles.test.js', extraction: 'stylesheet links out of index.html', failLoudBy: 'count', where: 'sheets.length floor beside the extraction', anchor: 'sheets.length' },
   { file: 'test/unit/config.test.js', extraction: 'workspace-root assignments out of server.js', failLoudBy: 'count', where: 'exact deepStrictEqual against the two permitted assignments', anchor: 'assignments.map(s => s.trim())' },
   { file: 'test/unit/design-doc.test.js', extraction: 'declared tokens and documented tokens', failLoudBy: 'count', where: 'set difference asserted empty in both directions', anchor: 'two empty sets' },

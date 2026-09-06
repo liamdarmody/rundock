@@ -36,6 +36,11 @@ const CHAT_VIEW = { src: path.join(ROOT, 'public', 'views', 'chat.js'), suite: '
 // classifyFileAccess and card rendering each in isolation), only by the
 // real hook process the integration suite spawns.
 const HOOK_INTEGRATION = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/integration/boundary-permissions.test.js' };
+// Same file as HOOK again, a third suite: the outright refusals are pure
+// predicates tested on their own, away from the classifier corpus the
+// workspace-boundary suite drives, so a mutation to either is invisible
+// there and only this suite can notice it.
+const HOOK_REFUSAL = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/permission-agent-guard.test.js' };
 // The mode-persisted-before-scaffold ordering guard lives in the protocol
 // handler, not the scaffold layer, and is reachable only through the real
 // workspace-open path (the scaffold-layer tests call scaffoldWorkspace
@@ -65,6 +70,41 @@ const MUTATIONS = [
     + '    const dir = foldCase(canonicalize(path.join(root, d)), foldsCase);\n',
     '  return REFUSED_CLAUDE_EDIT_DIRS.some(d => {\n'
     + '    const dir = canonicalize(path.join(root, d));\n'],
+  // Drop the refusal and a write to commands/, hooks/, plugins/ or
+  // settings.json is offered an "Approve always" the runtime overrules
+  // underneath, which is the false promise this rule removes.
+  [HOOK_REFUSAL, 'a persistence-surface write under the runtime home is refused, not carded',
+    '  return isPersistenceSurface(resolved, home, foldsCase);',
+    '  return false;'],
+  // Cover reads as well and listing the global agents and skills breaks,
+  // which is the capability the freeing tier exists to give.
+  [HOOK_REFUSAL, 'the runtime-home surface refusal covers edits only, never reads',
+    'function isRuntimeHomeSurfaceEdit(toolName, toolInput, home = os.homedir(), foldsCase = hostFoldsCase()) {\n'
+    + '  if (!CLAUDE_EDIT_TOOLS.has(toolName)) return false;',
+    'function isRuntimeHomeSurfaceEdit(toolName, toolInput, home = os.homedir(), foldsCase = hostFoldsCase()) {\n'
+    + '  if (false) return false;'],
+  // Put either refusal back behind Code mode and the hole returns: a refused
+  // edit is tagged as no crossing at all, Code mode auto-approves anything not
+  // tagged outside, and a write to the GLOBAL agents folder is allowed, lands
+  // where the app never reads, and reports success.
+  // Drop the workspace exemption and anyone who opens a workspace under the
+  // runtime home has every ordinary write in it refused outright, with no card
+  // and no way past.
+  [HOOK_INTEGRATION, 'a target inside the open workspace is never refused, even under the runtime home',
+    '  const targetInsideWorkspace = refusalTarget !== null\n'
+    + '    && buildRoots(wsRoot, extraDirs).some(r => isUnder(refusalTarget, r));',
+    '  const targetInsideWorkspace = false;'],
+  // Only the surface refusal is mutated for this rule, and deliberately so.
+  // `agents/` and `skills/` are persistence surfaces as well, so gating the
+  // agents-and-skills refusal alone changes no verdict: the surface refusal
+  // below it catches the same paths and still denies. The overlap is real
+  // protection, but it means that mutation proves nothing on its own, and a
+  // row that proves nothing is worse than no row because it reads as coverage.
+  // The ordering rule these two share is proven by the one that can move a
+  // verdict.
+  [HOOK_INTEGRATION, 'Code mode cannot answer the runtime-home surface refusal',
+    '  if (!targetInsideWorkspace && isRuntimeHomeSurfaceEdit(data.tool_name, data.tool_input)) {',
+    "  if (process.env.RUNDOCK_CODE_MODE !== '1' && !targetInsideWorkspace && isRuntimeHomeSurfaceEdit(data.tool_name, data.tool_input)) {"],
   [HOOK, 'the roots are canonicalised too, or a symlink-opened workspace denies its own files',
     '  return [canonicalize(workspaceRoot, pmod), ...extraDirs.map(d => canonicalize(d, pmod))];',
     '  return [pmod.resolve(workspaceRoot), ...extraDirs.map(d => pmod.resolve(d))];'],
@@ -168,6 +208,22 @@ const MUTATIONS = [
   [HOOK, 'a persistence-surface shell crossing is freed by a read-only command, not only by staying in tier three',
     '(!tags.persistenceSurface || readOnly)',
     '(!tags.persistenceSurface)'],
+  // Stop treating a lone `&` as a separator and `ls x & rm -rf x` is judged by
+  // its leading word again, freeing the removal against a persistence surface.
+  [HOOK, 'a lone & separates commands, so the second cannot ride the first',
+    "    if (ch === ';' || ch === '|' || ch === '&') { segments.push(cur); cur = ''; continue; }",
+    "    if (ch === ';' || ch === '|') { segments.push(cur); cur = ''; continue; }"],
+  // Stop stripping the discarding redirects and one `2>/dev/null` appended
+  // to `ls` grades the whole command a WRITE again, which is the card a real
+  // session was shown for a command that writes nothing.
+  [HOOK, 'a redirection that discards output does not disqualify a read-only command',
+    "  const str = String(command).replace(DISCARDING_REDIRECT_RE, ' ');",
+    '  const str = String(command);'],
+  // Widen the exemption to any redirect target and the fail-safe inverts:
+  // `ls x > x/listing.txt` writes into the surface and would read as free.
+  [HOOK, 'only /dev/null and descriptor duplication are exempt, never an arbitrary redirect target',
+    'const DISCARDING_REDIRECT_RE = /\\d*>>?\\s*(?:\\/dev\\/null|&\\s*\\d+)/g;',
+    'const DISCARDING_REDIRECT_RE = /\\d*>>?\\s*\\S+/g;'],
   // A command is read-only only if every leading word is actually in the
   // registry: drop the check and any command (a bare `rm`, included) reads
   // as free against a persistence surface.
@@ -307,7 +363,7 @@ function redTests(suite) {
 }
 
 function run() {
-  const targets = [HOOK, SCAFFOLD, BOUNDARY, CHAT_VIEW, HOOK_INTEGRATION, WORKSPACE_HANDLER, WORKSPACE_HANDLER_UNIT];
+  const targets = [HOOK, SCAFFOLD, BOUNDARY, CHAT_VIEW, HOOK_INTEGRATION, HOOK_REFUSAL, WORKSPACE_HANDLER, WORKSPACE_HANDLER_UNIT];
   const session = beginMutationRun({ files: [...new Set(targets.map((target) => target.src))] });
   const originals = new Map();
   for (const target of targets) originals.set(target, session.original(target.src));

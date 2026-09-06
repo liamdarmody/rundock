@@ -305,14 +305,143 @@ describe('workspace file-access boundary', () => {
     }
   });
 
-  test('writing to a persistence surface cards, in both modes, and names what persistence means; writing to scratch does not', async () => {
+  test('a workspace opened under the runtime home is still a workspace: its own files are writable', async () => {
+    // The refusals are about reaching the runtime's configuration from
+    // somewhere else, never about the folder a person deliberately opened.
+    // Running them ahead of the boundary classification (so no mode could
+    // answer them) put them ahead of the 'inside the open workspace' answer
+    // too, which locked out anyone authoring a plugin in
+    // `~/.claude/plugins/<name>`: every ordinary write in their own workspace
+    // was denied outright, with no card and no way past, by a message telling
+    // them to go and edit the workspace they were already in.
+    const home = os.homedir();
+    const pluginWs = path.join(home, '.claude', 'plugins', 'my-plugin');
+    fs.mkdirSync(path.join(pluginWs, '.claude', 'agents'), { recursive: true });
+
+    const inWorkspace = { RUNDOCK_WORKSPACE: pluginWs };
+    for (const rel of ['README.md', path.join('src', 'index.js'), path.join('.claude', 'agents', 'mine.md')]) {
+      const out = await runHook('Write', { file_path: path.join(pluginWs, rel), content: 'x' }, inWorkspace);
+      assert.strictEqual(decisionOf(out), 'allow', `${rel} is inside the opened workspace and is written normally`);
+    }
+
+    // AND THE REFUSAL STILL HOLDS FOR THE RUNTIME'S OWN CONFIGURATION, reached
+    // from that same workspace: being opened under the folder does not hand
+    // over the folder.
+    const out = await runHook('Write', { file_path: path.join(home, '.claude', 'agents', 'dev.md'), content: 'x' }, inWorkspace);
+    assert.strictEqual(decisionOf(out), 'deny', 'the runtime home above the workspace is still refused');
+  });
+
+  test('the two tool families split at one persistence-surface path, and the refusal names what to do instead', async () => {
+    // THIS TEST EXISTS TO BIND THE TRUST PAGE TO THE HOOK. ARCHITECTURE.md
+    // states that a file-edit tool writing to a persistence surface under the
+    // runtime home is refused outright, while a shell command reaching the
+    // same path still cards and can genuinely land, because the runtime's
+    // sensitive-file rule governs its file-edit tools and the command layer is
+    // governed by the OS block, which names this folder writable. Both halves
+    // are read here at ONE path, so the page cannot drift from the product:
+    // the registry-binding test compares names only and could never catch a
+    // claim about verdicts.
+    const home = os.homedir();
+    fs.mkdirSync(path.join(home, '.claude', 'commands'), { recursive: true });
+
+    for (const target of [
+      path.join(home, '.claude', 'settings.json'),
+      path.join(home, '.claude', 'commands', 'note.md'),
+    ]) {
+      // The file-edit family: refused, with no question put.
+      let since = client.messages.length;
+      const refused = await runHook('Write', { file_path: target, content: 'x' });
+      assert.strictEqual(decisionOf(refused), 'deny', `${path.basename(target)}: the file-edit tool is refused`);
+      await h.delay(150);
+      assert.strictEqual(client.messages.slice(since).filter(m => m.type === 'control_request').length, 0,
+        `${path.basename(target)}: refused without asking`);
+
+      // AND THE REASON HAS TO EARN ITS PLACE. A refusal that names no
+      // alternative leaves the reader stuck, so the copy is asserted rather
+      // than merely the verdict: blanking or genericising it fails here.
+      const reason = reasonOf(refused);
+      assert.match(reason, /refuses this write whatever/i,
+        `${path.basename(target)}: the reason says the runtime refuses it regardless of approval`);
+      assert.match(reason, /reading and listing/i,
+        `${path.basename(target)}: the reason says reads are unaffected`);
+      assert.match(reason, /workspace/i,
+        `${path.basename(target)}: the reason names the workspace as where to make the change`);
+
+      // The shell family at the SAME path: still carded, still approvable.
+      since = client.messages.length;
+      const pending = runHook('Bash', { command: `echo x > ${target}` });
+      const { msg } = await client.waitFor(m => m.type === 'control_request'
+        && m.request && m.request.boundary === true, { since, label: `${path.basename(target)}: shell write cards` });
+      client.send({ type: 'permission_response', requestId: msg.request_id, conversationId: 'boundary-test', allow: true });
+      assert.strictEqual(decisionOf(await pending), 'allow',
+        `${path.basename(target)}: a shell write to the same path is approvable, which is why the page must not claim otherwise`);
+    }
+  });
+
+  test('Code mode does not auto-approve a refusal: the deterministic denials outrank it', async () => {
+    // PRE-EXISTING, found while narrowing the surface refusal. The refusals
+    // are enforcement rather than a prompt, so nothing may answer them for the
+    // reader, and Code mode was doing exactly that: it auto-approves anything
+    // the boundary did not tag as an outside crossing, and a refused edit is
+    // tagged as nothing at all, so it fell through the hole in the middle.
+    //
+    // The cost was the whole point of the agents/skills denial. In Code mode a
+    // write to the GLOBAL agents folder was allowed, landed where the app
+    // never reads, and reported success, which is the silent failure that
+    // refusal exists to prevent, in the one mode a developer is most likely to
+    // be running.
+    const home = os.homedir();
+    fs.mkdirSync(path.join(home, '.claude', 'agents'), { recursive: true });
+    const CODE = { RUNDOCK_CODE_MODE: '1' };
+
+    for (const target of [
+      path.join(home, '.claude', 'agents', 'dev.md'),      // refused: Rundock reads the workspace copy
+      path.join(home, '.claude', 'settings.json'),          // refused: the runtime rejects it underneath
+      path.join(home, '.claude', 'commands', 'note.md'),
+    ]) {
+      const since = client.messages.length;
+      const out = await runHook('Write', { file_path: target, content: 'x' }, CODE);
+      assert.strictEqual(decisionOf(out), 'deny', `${path.basename(target)} stays refused in Code mode`);
+      await h.delay(150);
+      assert.strictEqual(client.messages.slice(since).filter(m => m.type === 'control_request').length, 0,
+        `${path.basename(target)} is refused without asking, in Code mode too`);
+    }
+
+    // AND CODE MODE STILL DOES ITS JOB. An ordinary in-workspace write is
+    // still auto-approved, or this fix has simply broken the mode.
+    const ordinary = await runHook('Write', { file_path: path.join(h.workspaceDir, 'note.md'), content: 'x' }, CODE);
+    assert.strictEqual(decisionOf(ordinary), 'allow', 'Code mode still auto-approves ordinary work');
+  });
+
+  test('a file-tool write to a persistence surface is refused in both modes, a shell write to one still cards and names persistence, and writing to scratch does neither', async () => {
     const home = os.homedir();
     const surfaceTarget = path.join(home, '.claude', 'settings.json');
+
+    // THE FILE-EDIT TOOLS ARE REFUSED, NOT CARDED, in both modes and with no
+    // card raised at all. Measured against the runtime: it rejects every
+    // file-tool write under its own home as a sensitive file whatever is
+    // approved here, so a card offering to allow one is a promise this
+    // product cannot keep, and approving it and being refused anyway teaches
+    // the reader that the card means nothing.
     for (const extraEnv of [{}, { RUNDOCK_CODE_MODE: '1' }]) {
       const since = client.messages.length;
-      const pending = runHook('Write', { file_path: surfaceTarget, content: 'x' }, extraEnv);
+      const out = await runHook('Write', { file_path: surfaceTarget, content: 'x' }, extraEnv);
+      assert.strictEqual(decisionOf(out), 'deny', 'refused outright, in both modes');
+      await h.delay(200);
+      assert.strictEqual(client.messages.slice(since).filter(m => m.type === 'control_request').length, 0,
+        'and refused without asking, because there was no honest question to put');
+    }
+
+    // A SHELL WRITE TO THE SAME PATH STILL CARDS. The runtime's own refusal
+    // covers the file-edit tools, not a redirect, and the sandbox grants this
+    // folder to the command layer, so a shell write can genuinely land here.
+    // Carding it is therefore the honest answer, and the tag the card carries
+    // is what names persistence to the reader.
+    for (const extraEnv of [{}, { RUNDOCK_CODE_MODE: '1' }]) {
+      const since = client.messages.length;
+      const pending = runHook('Bash', { command: `echo x > ${surfaceTarget}` }, extraEnv);
       const { msg } = await client.waitFor(m => m.type === 'control_request'
-        && m.request && m.request.boundary === true, { since, label: 'persistence-surface write card' });
+        && m.request && m.request.boundary === true, { since, label: 'persistence-surface shell write card' });
       const crossing = (msg.request.crossings || [])[0];
       assert.ok(crossing, 'the crossing reaches the card');
       assert.strictEqual(crossing.persistenceSurface, true, 'tagged as a persistence surface, in both modes');
@@ -385,23 +514,42 @@ describe('workspace file-access boundary', () => {
     assert.strictEqual(decisionOf(await pendingCompound), 'deny');
   });
 
-  test('a settings.json write never offers the runtime home root as a folder to remember, so approving it cannot silence a later hooks/ write', async () => {
+  test('no crossing at settings.json offers the runtime home root as a folder to remember, so nothing approved there can silence a later hooks/ write', async () => {
     const home = os.homedir();
     fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
 
+    const settingsTarget = path.join(home, '.claude', 'settings.json');
+
+    // The file-tool write is refused before any card, so it offers nothing to
+    // remember by construction. Asserted rather than assumed, because "no
+    // grant is offered" and "no card is drawn" are different claims and only
+    // the second is true here.
     let since = client.messages.length;
-    const pendingSettings = runHook('Write', { file_path: path.join(home, '.claude', 'settings.json'), content: 'x' });
+    const refused = await runHook('Write', { file_path: settingsTarget, content: 'x' });
+    assert.strictEqual(decisionOf(refused), 'deny');
+    await h.delay(150);
+    assert.strictEqual(client.messages.slice(since).filter(m => m.type === 'control_request').length, 0,
+      'nothing to remember, because nothing was asked');
+
+    // A SHELL write to the same file does still card, and it is the crossing
+    // that could carry a grant. settings.json is the one persistence-surface
+    // FILE, so the directory beside it is not a sub-folder of the runtime home,
+    // it IS the root: offering that would silence agents/, skills/, plugins/,
+    // commands/ and hooks/ in one click, which is the wide grant this release
+    // removed returning through the crossing shaped unlike the others.
+    since = client.messages.length;
+    const pendingSettings = runHook('Bash', { command: `echo x > ${settingsTarget}` });
     const settingsCard = await client.waitFor(m => m.type === 'control_request'
-      && m.request && m.request.boundary === true, { since, label: 'settings.json write card' });
+      && m.request && m.request.boundary === true, { since, label: 'settings.json shell write card' });
     assert.strictEqual(settingsCard.msg.request.grant_dir, null,
-      'the runtime home root is never offered as a folder to remember: settings.json is the one persistence-surface FILE, and its parent IS the root');
+      'the runtime home root is never offered as a folder to remember');
     client.send({ type: 'permission_response', requestId: settingsCard.msg.request_id, conversationId: 'boundary-test', allow: true });
     assert.strictEqual(decisionOf(await pendingSettings), 'allow');
 
-    // Nothing was remembered, so an unrelated persistence-surface write still
-    // cards on its own merits.
+    // Nothing was remembered, so an unrelated persistence-surface crossing
+    // still cards on its own merits.
     since = client.messages.length;
-    const pendingHooks = runHook('Write', { file_path: path.join(home, '.claude', 'hooks', 'pretool.sh'), content: 'x' });
+    const pendingHooks = runHook('Bash', { command: `echo x > ${path.join(home, '.claude', 'hooks', 'pretool.sh')}` });
     const hooksCard = await client.waitFor(m => m.type === 'control_request'
       && m.request && m.request.boundary === true, { since, label: 'hooks/ write still cards' });
     assert.strictEqual(hooksCard.msg.request.crossings[0].persistenceSurface, true);
@@ -417,10 +565,16 @@ describe('workspace file-access boundary', () => {
     const home = os.homedir();
     fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
 
-    // commands/ is a persistence surface, not the agents/skills path the
-    // separate deterministic-deny guard owns.
+    // A SHELL write, not the Write tool. commands/ is a persistence surface,
+    // and a file-tool edit to one is now refused outright rather than carded,
+    // because the runtime rejects those writes itself whatever is approved
+    // here. That refusal covers the file-edit tools only, which is the same
+    // set the runtime's own rule covers: a shell redirect can genuinely land
+    // in this folder, so it still cards, and it is the crossing left that can
+    // carry a grant. The grant directory below is the client's choice in its
+    // response, not something the card has to have offered.
     let since = client.messages.length;
-    const pendingGrant = runHook('Write', { file_path: path.join(home, '.claude', 'commands', 'note.md'), content: 'x' });
+    const pendingGrant = runHook('Bash', { command: `echo x > ${path.join(home, '.claude', 'commands', 'note.md')}` });
     const grantCard = await client.waitFor(m => m.type === 'control_request'
       && m.request && m.request.boundary === true, { since, label: 'establish the broad grant' });
     client.send({

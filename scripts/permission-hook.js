@@ -212,6 +212,51 @@ function isProtectedClaudeEdit(toolName, toolInput, home = os.homedir(), foldsCa
   });
 }
 
+// A PERSISTENCE-SURFACE WRITE UNDER THE RUNTIME'S OWN HOME IS REFUSED, NOT
+// CARDED. Measured against the runtime rather than assumed: writes were
+// attempted at eight paths under `~/.claude` and judged by the transcript's
+// own error text and by whether a file appeared afterwards, not by asking a
+// model what had happened. Every one came back "which is a sensitive file"
+// and none was written. A path in the home directory but outside `.claude`
+// came back with the ordinary "you haven't granted it yet".
+//
+// So Rundock cannot approve past the runtime here, and a card offering
+// "Approve" and "Approve always" is a promise the product cannot keep: the
+// reported experience was approving one and being refused anyway, which
+// teaches the user that the card means nothing. `agents/` and `skills/` were
+// already refused for a different reason; this extends the same treatment to
+// the rest of the surface tier for this one.
+//
+// SCOPED DELIBERATELY, and the three exclusions matter more than the rule:
+//   - Reads are untouched. Listing and reading the global agents and skills
+//     is the capability the freeing tier exists to give.
+//   - The secrets tier is untouched, so `.credentials.json` still CARDS on
+//     every access, read and write, in both modes, exactly as documented. A
+//     write there being refused by the runtime anyway is not reason enough to
+//     weaken the one guarantee that says nothing silences that card.
+//   - Free scratch (`projects/`, `cache/`, `tasks/`) is untouched. Rundock
+//     offers no card there, so there is no false promise to withdraw.
+// The workspace's own `.claude` is not this folder and is never covered:
+// agents, skills, routines, connectors and their credentials all live in the
+// workspace, which is where the product reads them from.
+function isRuntimeHomeSurfaceEdit(toolName, toolInput, home = os.homedir(), foldsCase = hostFoldsCase()) {
+  if (!CLAUDE_EDIT_TOOLS.has(toolName)) return false;
+  const ti = toolInput || {};
+  const target = ti.file_path || ti.notebook_path || ti.path;
+  if (typeof target !== 'string') return false;
+  const resolved = canonicalize(path.resolve(target));
+  // NO SECRETS-TIER PATH REACHES THIS, and the reason is a property of the
+  // registries rather than a check here: the secrets registry names a file at
+  // the runtime home root, and no persistence surface covers that root, so
+  // `isPersistenceSurface` is already false for every secret. A defensive
+  // `isSecretPath` guard stood here and was removed because nothing could make
+  // it fire, and an unreachable guard reads as protection that is not there.
+  // The non-overlap is asserted directly instead, so an addition that broke it
+  // would fail a test rather than silently convert a secrets card into a
+  // refusal.
+  return isPersistenceSurface(resolved, home, foldsCase);
+}
+
 // Workspace file-access boundary (spec: anything outside the workspace
 // requires a permission card unless a standing per-workspace folder grant
 // covers it; the server owns the grants). This function only CLASSIFIES:
@@ -445,7 +490,14 @@ function shellSegments(command) {
     if ((ch === '&' && str[i + 1] === '&') || (ch === '|' && str[i + 1] === '|')) {
       segments.push(cur); cur = ''; i++; continue;
     }
-    if (ch === ';' || ch === '|') { segments.push(cur); cur = ''; continue; }
+    // A LONE `&` JOINS TWO COMMANDS TOO. It backgrounds what precedes it and
+    // runs what follows, so `ls x & rm -rf x` is two commands exactly as
+    // `ls x && rm -rf x` is. Passing it through as ordinary text left the whole
+    // line judged by its leading word, so the removal rode in free on the `ls`.
+    // `&&` is consumed above, so any `&` reaching here is the single form; a
+    // trailing one yields an empty segment, which carries nothing to
+    // disqualify and leaves a backgrounded read a read.
+    if (ch === ';' || ch === '|' || ch === '&') { segments.push(cur); cur = ''; continue; }
     cur += ch;
   }
   segments.push(cur);
@@ -468,8 +520,21 @@ function shellSegments(command) {
 //   on the list) fails the whole command, not just that segment: a
 //   compound like `ls ~/.claude/agents && rm -rf ~/.claude/agents/x` must
 //   still card, and it does because `rm` is not in the registry.
+// A redirection that cannot create or modify a file: output thrown away at
+// /dev/null, or a file descriptor duplicated onto another (`2>&1`). Stripped
+// before the write test below because the test reads the whole command string
+// and cannot otherwise tell a discard from a write. MEASURED: a plain
+// `ls ~/.claude/agents 2>/dev/null` was graded a WRITE to a persistence
+// surface on the strength of that one `>`, and carded as "writing here
+// persists" for a command that writes nothing.
+//
+// EXHAUSTIVE BY INTENT. Only these two shapes are exempt, because only these
+// two provably reach no path. Every other target is a real file, including
+// one inside the surface itself, so the fail-safe direction is unchanged.
+const DISCARDING_REDIRECT_RE = /\d*>>?\s*(?:\/dev\/null|&\s*\d+)/g;
+
 function isReadOnlyShellCommand(command) {
-  const str = String(command);
+  const str = String(command).replace(DISCARDING_REDIRECT_RE, ' ');
   if (/>>?|\btee\b/.test(str)) return false;
   const segments = shellSegments(str);
   return segments.length > 0 && segments.every(seg => {
@@ -547,7 +612,7 @@ function classifyShellAccess(toolName, toolInput, workspaceRoot, extraDirs = [],
 }
 
 module.exports = {
-  isProtectedClaudeEdit, isMcpReadTool, classifyFileAccess, classifyShellAccess, canonicalize,
+  isProtectedClaudeEdit, isRuntimeHomeSurfaceEdit, isMcpReadTool, classifyFileAccess, classifyShellAccess, canonicalize,
   isSecretPath, isPersistenceSurface, SECRET_RELATIVE_PATHS, PERSISTENCE_SURFACE_DIRS, PERSISTENCE_SURFACE_FILES,
   REFUSED_CLAUDE_EDIT_DIRS, READ_ONLY_SHELL_COMMANDS, isReadOnlyShellCommand,
 };
@@ -572,16 +637,81 @@ process.stdin.on('end', () => {
     process.exit(0);
   }
 
+  const wsRoot = process.env.RUNDOCK_WORKSPACE || process.cwd();
+  const extraDirs = (process.env.RUNDOCK_EXTRA_DIRS || '').split(path.delimiter).filter(Boolean);
+  // A WORKSPACE OPENED UNDER THE RUNTIME HOME IS STILL A WORKSPACE. Both
+  // refusals below are about reaching the runtime's own configuration from
+  // somewhere else; neither is about the folder a person deliberately opened.
+  // Someone authoring a plugin in `~/.claude/plugins/my-plugin` writes
+  // ordinary files there, and without this the refusals would deny every one
+  // of them outright, with no card and no way past it, telling them to go and
+  // edit the workspace they are already in. The containment test is the
+  // classifier's own, so one place cannot be inside for the boundary and
+  // outside for the refusals.
+  const refusalTarget = (function () {
+    const ti = (data && data.tool_input) || {};
+    const t = ti.file_path || ti.notebook_path || ti.path;
+    return typeof t === 'string' && t ? canonicalize(path.resolve(wsRoot, t)) : null;
+  }());
+  const targetInsideWorkspace = refusalTarget !== null
+    && buildRoots(wsRoot, extraDirs).some(r => isUnder(refusalTarget, r));
+
+  // THE REFUSALS RUN FIRST, BEFORE ANYTHING CAN ANSWER THEM. They are
+  // enforcement rather than a prompt, so no mode, grant or classification may
+  // speak for the reader here. Placed after the boundary classification, they
+  // were reachable only when that classification produced an outside crossing:
+  // a refused edit is tagged as nothing at all, and Code mode auto-approves
+  // anything not tagged outside, so in Code mode a write to the GLOBAL agents
+  // folder was allowed, landed where the app never reads, and reported
+  // success. That is the silent failure the denial exists to prevent, in the
+  // mode a developer is most likely to be running.
+  // Agents and skills are managed ONLY through the RUNDOCK:SAVE_AGENT /
+  // RUNDOCK:SAVE_SKILL markers, which write into THIS workspace's .claude folder
+  // and refresh the UI. Deterministically deny any direct file edit to a
+  // .claude/agents or .claude/skills path, in the workspace OR the global
+  // ~/.claude (Claude Code's native default). Without this, a direct edit
+  // silently succeeds in the wrong place: an edit to the global agents folder
+  // that Rundock never reads, leaving the user told "done" while the workspace
+  // file, and the profile panel, never changed. This is enforcement, not a
+  // prompt: the wrong path can no longer look like a success.
+  if (!targetInsideWorkspace && isProtectedClaudeEdit(data.tool_name, data.tool_input)) {
+    process.stdout.write(JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        permissionDecision: 'deny',
+        permissionDecisionReason: "Rundock reads the agents and skills inside the open workspace, never the global ~/.claude copies, so this edit would land where the app never looks and change nothing it can see. Manage this workspace's agents and skills through the RUNDOCK:SAVE_AGENT / RUNDOCK:SAVE_SKILL markers (which write into this workspace and refresh the app), or edit the workspace's own .claude file."
+      }
+    }));
+    process.exit(0);
+  }
+
+  // The rest of the persistence tier under the runtime's own home. The branch
+  // above names the two folders Rundock manages and can redirect the user to;
+  // this one covers plugins/, commands/, hooks/ and settings.json, which the
+  // runtime refuses outright (measured; see isRuntimeHomeSurfaceEdit). Rundock
+  // cannot approve past it, so a card saying "Approve always" for such a write
+  // is a promise the product cannot keep.
+  if (!targetInsideWorkspace && isRuntimeHomeSurfaceEdit(data.tool_name, data.tool_input)) {
+    process.stdout.write(JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        permissionDecision: 'deny',
+        permissionDecisionReason: "Claude Code protects its own configuration folder, so it refuses this write whatever Rundock or you approve: approving it would still fail. Reading and listing that folder is unaffected. Agents, skills, routines and connectors for this workspace live in the workspace itself, which is where Rundock reads them from, so make the change there and it will take effect."
+      }
+    }));
+    process.exit(0);
+  }
+
   // Workspace file-access boundary. Classified BEFORE the code-mode
   // short-circuit on purpose: code mode trusts commands inside the
   // workspace, it does not extend the workspace to the whole machine.
-  const wsRoot = process.env.RUNDOCK_WORKSPACE || process.cwd();
-  const extraDirs = (process.env.RUNDOCK_EXTRA_DIRS || '').split(path.delimiter).filter(Boolean);
   // File tools and shell commands are classified by the same boundary and
   // reach the same card. classifyShellAccess only ever answers 'outside' or
   // null, so an ordinary command keeps whatever card it already had: the
   // instant-allow branch below stays reachable only by file tools.
-  const access = (typeof data.tool_name === 'string' && !isProtectedClaudeEdit(data.tool_name, data.tool_input))
+  // No refusal reaches here: both exit above, so this guard is the tool-name
+  // check alone rather than restating them.
+  const access = (typeof data.tool_name === 'string')
     ? classifyFileAccess(data.tool_name, data.tool_input, wsRoot, extraDirs)
       || classifyShellAccess(data.tool_name, data.tool_input, wsRoot, extraDirs)
     : null;
@@ -619,26 +749,6 @@ process.stdin.on('end', () => {
         hookEventName: 'PreToolUse',
         permissionDecision: 'allow',
         permissionDecisionReason: 'Auto-approved: MCP read'
-      }
-    }));
-    process.exit(0);
-  }
-
-  // Agents and skills are managed ONLY through the RUNDOCK:SAVE_AGENT /
-  // RUNDOCK:SAVE_SKILL markers, which write into THIS workspace's .claude folder
-  // and refresh the UI. Deterministically deny any direct file edit to a
-  // .claude/agents or .claude/skills path, in the workspace OR the global
-  // ~/.claude (Claude Code's native default). Without this, a direct edit
-  // silently succeeds in the wrong place: an edit to the global agents folder
-  // that Rundock never reads, leaving the user told "done" while the workspace
-  // file, and the profile panel, never changed. This is enforcement, not a
-  // prompt: the wrong path can no longer look like a success.
-  if (isProtectedClaudeEdit(data.tool_name, data.tool_input)) {
-    process.stdout.write(JSON.stringify({
-      hookSpecificOutput: {
-        hookEventName: 'PreToolUse',
-        permissionDecision: 'deny',
-        permissionDecisionReason: "Rundock reads the agents and skills inside the open workspace, never the global ~/.claude copies, so this edit would land where the app never looks and change nothing it can see. Manage this workspace's agents and skills through the RUNDOCK:SAVE_AGENT / RUNDOCK:SAVE_SKILL markers (which write into this workspace and refresh the app), or edit the workspace's own .claude file."
       }
     }));
     process.exit(0);

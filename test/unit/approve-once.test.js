@@ -481,7 +481,7 @@ describe('the connectors tab edits the file the runtime reads', () => {
     for (const sentence of [
       'No connectors configured',
       'Workspace connectors live in',
-      'Edits land in',
+      'Connectors are read from',
       'could not be read',
     ]) {
       const at = rendered.indexOf(sentence);
@@ -490,80 +490,144 @@ describe('the connectors tab edits the file the runtime reads', () => {
       assert.ok(rendered.slice(opensAt, at).includes('settings-prose'),
         `"${sentence}" is a sentence, so it wraps rather than being clipped to one line`);
     }
-    assert.ok(rendered.includes('id="connector-add-note" class="settings-prose"')
-      || /class="settings-prose"[^>]*id="connector-add-note"/.test(rendered),
-      'the line the add button writes its answer into wraps, or the answer is clipped to nothing '
-      + 'and the button reads as broken');
     assert.match(rendered, /class="settings-value" title=/,
       'a command or URL keeps the clipping style, with its full text still reachable by title');
   });
 
-  test('an added connector round-trips through the same file the runtime reads', () => {
-    const merged = settings.connectorsMerge(MCP, 'calendar', { url: 'https://mcp.example.com/cal' });
-    assert.strictEqual(merged.reason, null);
+  // The three tests that stood here drove the two-field add form: a merge
+  // round-trip, the refusal to write after a failed read, and the refusal to
+  // replace a connector somebody configured. The form is gone, and with it
+  // connectorsAdd and connectorsMerge, because a name and one free-text field
+  // cannot express what a connector actually needs to start (a command's
+  // arguments, an HTTP server's auth, credentials either way), so its ordinary
+  // outcome was an entry that looked accepted and could never run. Adding is
+  // now a conversation with the guide, the same route Files, Skills and the
+  // routine editor already take. Nothing asserts on the removed path because
+  // there is no longer a path: the guide writes through the ordinary file
+  // tools, and the guarantees that belong to THAT write are the subject of the
+  // follow-up that gives it a verification step.
 
-    // Written to a real workspace .mcp.json and read back through the
-    // runtime's own config resolver, which is the honest meaning of "the
-    // same file the runtime reads": not a parse of what the tab sent, but
-    // what a spawn would actually be handed.
-    const dir = makeWorkspace({ agents: {} });
-    fs.writeFileSync(path.join(dir, '.mcp.json'), merged.next);
-    const { resolveMcpConfigPath } = require('../../lib/workspace/mcp-secrets.js');
-    const resolved = resolveMcpConfigPath(dir);
-    const runtimeSees = JSON.parse(fs.readFileSync(resolved, 'utf-8'));
-    assert.ok(runtimeSees.mcpServers.calendar, 'the runtime sees the added connector');
-    assert.ok(runtimeSees.mcpServers.notion, 'beside everything that was already there');
-
-    // And the same bytes read back through the tab's own parse: one file,
-    // both readers, no drift.
-    const reread = settings.connectorsParse(fs.readFileSync(path.join(dir, '.mcp.json'), 'utf-8'));
-    assert.deepStrictEqual(reread.servers.map(srv => srv.name).sort(), ['calendar', 'granola', 'notion']);
-  });
-
-  test('after a read that failed, connectorsAdd writes nothing', () => {
-    // The refuse guard lives in connectorsAdd, which reads the page and the
-    // socket, so it is driven in a real DOM. A failed read (non-ok response)
-    // must leave the module unable to build a save: any save_file here would
-    // be built from bytes we never saw and would drop the real file's servers.
-    const SETTINGS_SRC = fs.readFileSync(path.join(__dirname, '..', '..', 'public', 'views', 'settings.js'), 'utf8');
-    const dom = new JSDOM('<!doctype html><html><body>'
-      + '<div class="settings-nav"><div class="settings-nav-item active" data-settings="connectors"></div></div>'
-      + '<div id="settings-content"></div>'
-      + '<input id="connector-name" value="calendar"><input id="connector-target" value="https://mcp.example.com">'
-      + '<div id="connector-add-note"></div>'
-      + '</body></html>', { runScripts: 'dangerously' });
-    const w = dom.window;
-    const sent = [];
-    w.ws = { readyState: 1, send: (m) => sent.push(JSON.parse(m)) };
-    w.WebSocket = { OPEN: 1 };
-    // The read that does not succeed: a non-ok response, which connectorsLoad
-    // must record as read-failed rather than as an empty workspace.
-    w.fetch = () => Promise.resolve({ ok: false, status: 500, text: () => Promise.resolve('') });
-    w.eval(SETTINGS_SRC);
-
-    return w.connectorsLoad().then(() => {
-      // The state connectorsLoad ACTUALLY produced is what rendered, not an
-      // object the test built: the error sentence is on the page, the
-      // reassuring empty state is not, and no Add form is drawn.
-      const page = w.document.getElementById('settings-content').innerHTML;
-      assert.match(page, /Could not read \.mcp\.json/i, 'the failed read renders its error');
-      assert.doesNotMatch(page, /No connectors configured/, 'never the empty state over a file it could not read');
-      assert.doesNotMatch(page, /connector-name|Add to \.mcp\.json/, 'and no Add form built from bytes it never saw');
-
-      w.connectorsAdd();
-      assert.deepStrictEqual(sent, [], 'nothing was saved from a file that was never read');
-      assert.match(w.document.getElementById('connector-add-note').textContent, /could not be read/i,
-        'and the reader is told why, rather than silently overwriting');
-      dom.window.close();
+  test('a workspace whose connector file could not be read shows why, never the empty state', () => {
+    // The two are opposite claims about the same workspace: "there are none"
+    // and "we could not find out". Drawing the first when the second is true
+    // tells somebody their connectors are gone. This guard used to be proven
+    // by the add form's refuse-after-failed-read test; the form has gone and
+    // the distinction has not, so it is asserted directly here.
+    const failed = settings.connectorsSectionHtml({
+      servers: [], missing: false, readFailed: true,
+      error: 'Could not read .mcp.json, so its connectors are not shown. Reopen this tab to retry.',
     });
+    assert.match(failed, /Could not read \.mcp\.json/, 'the reason the panel is empty is on the panel');
+    assert.doesNotMatch(failed, /No connectors configured/,
+      'a file that could not be read is not a workspace with no connectors');
+    // AND NOTHING ELSE. Both the ordinary error branch and this one print the
+    // reason, so printing it proves little; what this state alone withholds is
+    // the rest of the panel. Inviting a change to a file whose contents are
+    // unknown, or describing a connector landscape this read never
+    // established, is the failure the early return exists to prevent.
+    // The stub is installed here on purpose. Without it the affordance is
+    // omitted because no guide resolves, and the assertion would pass with the
+    // read-failed early return deleted, proving nothing about the branch its
+    // message names.
+    global.getGuide = () => ({ id: 'agent-doc-1', type: 'platform', name: 'rundock-guide', displayName: 'Doc' });
+    try {
+      const withGuide = settings.connectorsSectionHtml({
+        servers: [], missing: false, readFailed: true,
+        error: 'Could not read .mcp.json, so its connectors are not shown. Reopen this tab to retry.',
+      });
+      assert.doesNotMatch(withGuide, /Talk to Doc/,
+        'a read that failed does not invite an add against a file it could not read, even with a guide present');
+    } finally {
+      delete global.getGuide;
+    }
+    assert.doesNotMatch(failed, /Account connectors are added at claude\.ai/,
+      'nor does it describe the wider connector picture it never established');
+    assert.doesNotMatch(failed, /Connectors are read from/);
   });
 
-  test('the merge refuses to replace a connector somebody configured', () => {
-    const merged = settings.connectorsMerge(MCP, 'notion', { url: 'https://elsewhere' });
-    assert.strictEqual(merged.next, null);
-    assert.match(merged.reason, /already exists/);
-    const bad = settings.connectorsMerge(MCP, 'has spaces', { url: 'https://x' });
-    assert.strictEqual(bad.next, null, 'and a name the file format would mangle is refused, not written');
+  test('the guide accessor the add affordance calls is the one the running client declares, returning an object with an id', () => {
+    // THE DOUBLE IS COMPARED AGAINST THE REAL CONTRACT. The affordance calls a
+    // bare global `getGuide()` and interpolates `.id`. Every test here supplies
+    // that itself, so renaming the accessor, moving it out of reach as a bare
+    // global, or returning a shape without `id` would leave the button
+    // silently absent (or carrying `data-agent-id="undefined"`) with the whole
+    // suite still green. This reads the client's own declaration instead.
+    const appSrc = fs.readFileSync(path.join(__dirname, '..', '..', 'public', 'app.js'), 'utf8');
+    assert.match(appSrc, /^function getGuide\s*\(/m,
+      'getGuide is declared as a bare function in the client, reachable as a global from the settings module');
+
+    // And it returns something carrying the property the markup interpolates.
+    const body = /^function getGuide\s*\([^)]*\)\s*\{([\s\S]*?)\}\s*$/m.exec(appSrc);
+    assert.ok(body, 'the declaration is readable, or this proves nothing about its result');
+    const agents = [{ id: 'agent-doc-1', type: 'platform', name: 'rundock-guide', displayName: 'Doc' }, { id: 'other', type: 'team' }];
+    const resolved = new Function('agents', body[1])(agents);
+    assert.ok(resolved && typeof resolved.id === 'string' && resolved.id,
+      'the guide it resolves carries the id this markup interpolates');
+    assert.strictEqual(resolved.id, 'agent-doc-1', 'and it is the platform agent, which is what the guide is');
+    assert.ok(typeof resolved.displayName === 'string' && resolved.displayName,
+      'and it carries the display name this copy puts in a sentence, rather than only the slug');
+
+    // The no-guide branch is the product's own empty answer, not merely the
+    // symbol being absent under node: a workspace with no platform agent.
+    assert.strictEqual(new Function('agents', body[1])([{ id: 'x', type: 'team' }]), undefined,
+      'a workspace with no platform agent resolves no guide, which is the branch that must draw nothing');
+  });
+
+  test('the handler the affordance emits is the one the running client declares, taking the agent id it passes', () => {
+    // THE OTHER HALF OF THE AFFORDANCE'S CONTRACT. The markup emits
+    // onclick="startConversation(this.dataset.agentId)", and asserting that
+    // string against the markup only proves the markup matches itself. If the
+    // handler is renamed, stops being reachable as a bare global from this
+    // module, or starts wanting an agent object or a slug rather than the id,
+    // the button does nothing and every test here still passes.
+    const src = fs.readFileSync(path.join(__dirname, '..', '..', 'public', 'views', 'conversations.js'), 'utf8');
+    const decl = /^function startConversation\s*\(([^)]*)\)/m.exec(src);
+    assert.ok(decl, 'startConversation is declared as a bare function, reachable as a global from the settings module');
+
+    // One parameter, and it is the identifier this markup passes, not an agent
+    // object: `data-agent-id` carries an id, and dataset values are strings.
+    const params = decl[1].split(',').map(t => t.trim()).filter(Boolean);
+    assert.deepStrictEqual(params, ['agentId'],
+      'it takes exactly the agent id the affordance hands it');
+
+    // And the id the markup emits is the one getGuide resolves, so the two
+    // halves meet: the value put into the attribute is the value the handler
+    // is declared to receive.
+    global.getGuide = () => ({ id: 'agent-doc-1', type: 'platform', name: 'rundock-guide', displayName: 'Doc' });
+    try {
+      const html = settings.connectorsSectionHtml(settings.connectorsParse(MCP));
+      assert.match(html, /data-agent-id="agent-doc-1"/,
+        'the resolved guide id is what travels in the attribute the handler reads back');
+    } finally {
+      delete global.getGuide;
+    }
+  });
+
+  test('adding a connector is handed to the guide, and the affordance is absent when there is no guide', () => {
+    // The three surfaces that already do this (Files, Skills, the routine
+    // editor) all guard on the guide existing and render nothing without one,
+    // rather than offering a button that opens no conversation. A workspace
+    // with no platform agent is the ordinary case for a folder somebody just
+    // opened, so the empty branch is the one that must not draw a dead button.
+    const withoutGuide = settings.connectorsSectionHtml(settings.connectorsParse(MCP));
+    assert.doesNotMatch(withoutGuide, /Talk to Doc/,
+      'no guide, no button: a control that opens nothing is worse than no control');
+
+    global.getGuide = () => ({ id: 'agent-doc-1', type: 'platform', name: 'rundock-guide', displayName: 'Doc' });
+    try {
+      const withGuide = settings.connectorsSectionHtml(settings.connectorsParse(MCP));
+      assert.match(withGuide, /Talk to Doc/);
+      // The id travels as data, read back by the handler, rather than being
+      // interpolated into the handler string where a quote would break it.
+      assert.match(withGuide, /data-agent-id="agent-doc-1"[^>]*onclick="startConversation\(this\.dataset\.agentId\)"/,
+        'the agent id is passed as data and read back, never spliced into the handler');
+      // The form it replaced must be gone from the markup entirely, or both
+      // routes are offered and the broken one still wins.
+      assert.doesNotMatch(withGuide, /connector-name|connector-target|Add to \.mcp\.json/,
+        'the two-field form is gone, not merely hidden beside its replacement');
+    } finally {
+      delete global.getGuide;
+    }
   });
 
   // ===== FOUR SOURCES: workspace .mcp.json / .codex/config.toml, and

@@ -296,11 +296,10 @@ describe('path traversal guards', () => {
   // are handed exactly the bytes the read returned and the save is the bytes
   // they produce, so the round trip is proven through the roads the running
   // product uses rather than a file the test wrote itself.
-  // The connectors tab's OWN read and write legs, driven against the real
-  // server: the page's connectorsLoad fetches through the running product's
-  // /api/file, and connectorsAdd emits the real save_file the server writes.
-  // Nothing here restates the URL or the message beside the tab; both are
-  // whatever the tab actually issues.
+  // The connectors tab's OWN read leg, driven against the real server: the
+  // page's connectorsLoad fetches through the running product's /api/file.
+  // Nothing here restates the URL beside the tab; it is whatever the tab
+  // actually issues.
   const { JSDOM } = require('jsdom');
   const { resolveMcpConfigPath } = require('../../lib/workspace/mcp-secrets.js');
   const SETTINGS_SRC = fs.readFileSync(path.join(__dirname, '..', '..', 'public', 'views', 'settings.js'), 'utf8');
@@ -312,16 +311,9 @@ describe('path traversal guards', () => {
     const w = dom.window;
     // fetch is the running product's fetch, pointed at the booted server.
     w.fetch = (u, opts) => fetch(`http://127.0.0.1:${h.port}${u}`, opts);
-    // ws is the real client: connectorsAdd's own save_file travels it.
     w.WebSocket = { OPEN: 1 };
     w.ws = { readyState: 1, send: (str) => client.send(JSON.parse(str)) };
     w.eval(SETTINGS_SRC);
-    // The Add form is drawn by connectorsLoad into #settings-content; a
-    // caller types into THOSE rendered inputs, which connectorsAdd reads.
-    dom.type = (name, target) => {
-      w.document.getElementById('connector-name').value = name;
-      w.document.getElementById('connector-target').value = target;
-    };
     return { w, dom };
   }
 
@@ -337,36 +329,35 @@ describe('path traversal guards', () => {
     dom.window.close();
   });
 
-  test('connectorsAdd emits the real save_file the tab issues, for a url and for a command, landing beside what was there', async () => {
-    fs.writeFileSync(path.join(h.workspaceDir, '.mcp.json'), JSON.stringify({
-      mcpServers: { notion: { command: 'npx', args: ['-y', '@notionhq/notion-mcp-server'] } },
-    }, null, 2) + '\n');
+  test('a read that fails renders why, and never the empty state, driven through connectorsLoad itself', async () => {
+    // THE WIRING, NOT THE RENDERER. The pure renderer is asserted in the unit
+    // suite with a hand-built state, which cannot prove that a failing read
+    // actually produces that state. This drives connectorsLoad against a real
+    // non-ok response, so the one assignment that separates "we could not find
+    // out" from "there are none" is covered where it is made: drop
+    // `readFailed: true` from the error branch and the panel falls through to
+    // the sourceErrors path with no rows, rendering "No connectors configured
+    // in this workspace yet." beside the error, which is the confusion this
+    // panel must never create. Every other test still passes if that happens.
+    const { w, dom } = connectorsPage();
+    const realFetch = w.fetch;
+    w.fetch = (u, opts) => (String(u).includes('.mcp.json')
+      ? Promise.resolve({ ok: false, status: 500, text: () => Promise.resolve('') })
+      : realFetch(u, opts));
 
-    // A URL target: connectorsAdd records it as a url entry and saves.
-    const urlPage = connectorsPage();
-    await urlPage.w.connectorsLoad();
-    urlPage.dom.type('granola', 'https://mcp.granola.ai/mcp');
-    const sinceUrl = client.messages.length;
-    urlPage.w.connectorsAdd();
-    await client.waitFor(m => m.type === 'file_saved' && m.path === '.mcp.json', { since: sinceUrl, label: 'url save' });
-    let runtimeSees = JSON.parse(fs.readFileSync(resolveMcpConfigPath(h.workspaceDir), 'utf-8'));
-    assert.strictEqual(runtimeSees.mcpServers.granola.url, 'https://mcp.granola.ai/mcp', 'the url entry landed');
-    assert.ok(runtimeSees.mcpServers.notion, 'beside what was already configured');
-    urlPage.dom.window.close();
-
-    // A command with arguments: recorded as command plus args.
-    const cmdPage = connectorsPage();
-    await cmdPage.w.connectorsLoad();
-    cmdPage.dom.type('local-tool', 'node my-server.js --port 4000');
-    const sinceCmd = client.messages.length;
-    cmdPage.w.connectorsAdd();
-    await client.waitFor(m => m.type === 'file_saved' && m.path === '.mcp.json', { since: sinceCmd, label: 'cmd save' });
-    runtimeSees = JSON.parse(fs.readFileSync(resolveMcpConfigPath(h.workspaceDir), 'utf-8'));
-    assert.strictEqual(runtimeSees.mcpServers['local-tool'].command, 'node', 'the command is split from its args');
-    assert.deepStrictEqual(runtimeSees.mcpServers['local-tool'].args, ['my-server.js', '--port', '4000']);
-    assert.ok(runtimeSees.mcpServers.granola && runtimeSees.mcpServers.notion, 'and nothing earlier was destroyed');
-    cmdPage.dom.window.close();
+    await w.connectorsLoad();
+    const page = w.document.getElementById('settings-content').innerHTML;
+    assert.match(page, /Could not read \.mcp\.json/, 'the reason the panel is empty is on the panel');
+    assert.doesNotMatch(page, /No connectors configured/,
+      'a file that could not be read is not a workspace with no connectors');
+    dom.window.close();
   });
+
+  // The write leg that stood here drove the two-field add form end to end.
+  // The form is gone: a name and one free-text field cannot express what a
+  // connector needs to start, so adding is now a conversation with the guide.
+  // The read leg above is unchanged and still runs against the real server,
+  // because reading the file the runtime reads is still this tab's job.
 
   test('WS save_file writes inside the workspace and silently drops traversal attempts', async () => {
     client.send({ type: 'save_file', path: 'saved.md', content: 'saved content' });

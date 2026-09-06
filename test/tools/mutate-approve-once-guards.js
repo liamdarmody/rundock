@@ -37,6 +37,11 @@ const SCHEDULER = { src: path.join(ROOT, 'lib', 'scheduler.js'), suite: 'test/un
 const MODEL = { src: path.join(ROOT, 'public', 'routines-model.js'), suite: 'test/unit/approve-once.test.js' };
 // The settings view's pure half, where the connectors file is parsed and merged.
 const SETTINGS = { src: path.join(ROOT, 'public', 'views', 'settings.js'), suite: 'test/unit/approve-once.test.js' };
+// Same file as SETTINGS, a different suite: the read-failed WIRING is only
+// reachable through connectorsLoad against a real non-ok response, which the
+// unit suite (which drives the pure renderer with a state it builds itself)
+// cannot see.
+const SETTINGS_WIRING = { src: path.join(ROOT, 'public', 'views', 'settings.js'), suite: 'test/integration/http-api.test.js' };
 
 const MUTATIONS = [
   // ===== APPROVAL IS THE HASH, MATCHED, NOT A FLAG =====
@@ -86,21 +91,24 @@ const MUTATIONS = [
     '        updates[key] = computePlanHash(routine);'],
 
   // ===== THE CONNECTORS FILE IS EDITED, NEVER CLOBBERED =====
-  // Render a read-failed state as the empty state and the next Add writes over
-  // a file we merely could not read.
+  // Drop the flag the failing read sets and the panel falls through to the
+  // sourceErrors path with no rows, drawing "No connectors configured in this
+  // workspace yet." beside the error: the two opposite claims about one
+  // workspace, which is the confusion the panel must never create.
+  [SETTINGS_WIRING, 'a failing read is recorded as a failed read, not as an absent file',
+    '      if (res.error) return { servers: [], missing: false, readFailed: true, error: res.error };',
+    '      if (res.error) return { servers: [], missing: false, error: res.error };'],
+  // Render a read-failed state as the empty state and a workspace whose
+  // connector file could not be read looks like a workspace with none, which
+  // is the one confusion this panel must never create.
   [SETTINGS, 'a read that failed draws its error, never the empty state',
     "  if (state.error && state.readFailed) {\n    return `<div class=\"settings-section-title\">Connectors</div><div class=\"settings-card\"><div class=\"settings-row\"><span class=\"settings-prose\">${connectorsEsc(state.error)}</span></div></div>`;\n  }",
     ''],
-  // Let connectorsAdd proceed after a failed read and it merges from null,
-  // dropping the real file's servers.
-  [SETTINGS, 'the Add refuses when the file was never successfully read',
-    "  if (connectorsReadFailed) {",
-    '  if (false) {'],
-  // Let the merge replace an existing name and adding a connector can
-  // silently rewrite one somebody configured.
-  [SETTINGS, 'the merge refuses to replace an existing connector',
-    '  if (parsed.mcpServers[name]) return { next: null, reason: `A connector named "${name}" already exists; edit .mcp.json to change it.` };\n',
-    ''],
+  // Draw the guide button unconditionally and a workspace with no platform
+  // agent gets a control that opens nothing.
+  [SETTINGS, 'the add affordance is omitted when the workspace has no guide',
+    "  const addHtml = guide\n",
+    '  const addHtml = true\n'],
   // Render a broken config as an empty state and a person with a corrupt
   // file is reassured instead of told.
   [SETTINGS, 'a config that cannot be parsed is an error, never an empty state',
@@ -154,7 +162,7 @@ function redTests(suite) {
 }
 
 function run() {
-  const targets = [ROUTINES, SCHEDULER, MODEL, SETTINGS];
+  const targets = [ROUTINES, SCHEDULER, MODEL, SETTINGS, SETTINGS_WIRING];
   const session = beginMutationRun({ files: [...new Set(targets.map((target) => target.src))] });
   const originals = new Map();
   for (const target of targets) originals.set(target, session.original(target.src));
