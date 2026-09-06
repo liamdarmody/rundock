@@ -247,11 +247,9 @@ const MANIFEST = {
   ],
   "settings.js": [
     "changeWorkspace",
-    "connectorsAdd",
     "connectorsBuildRows",
     "connectorsBuildState",
     "connectorsLoad",
-    "connectorsMerge",
     "connectorsParse",
     "connectorsParseToml",
     "connectorsParseUserGlobalJson",

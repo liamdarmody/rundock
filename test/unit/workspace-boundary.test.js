@@ -769,6 +769,55 @@ describe('the agent\'s own folder: three tiers, one registry', () => {
     assert.strictEqual(secretRead.crossings[0].secret, true, 'a read-only command touching the credential file still cards');
   });
 
+  test('a redirection that discards output is not a write, so it cannot turn a read-only command into a persistence-surface card', () => {
+    // MEASURED FROM A REAL SESSION. Asked to list the global agents and
+    // skills, an agent reached for
+    //   ls -1 ~/.claude/agents/ 2>/dev/null; echo ...; ls -1 ~/.claude/skills/
+    // and the user was shown "this reaches more than one place outside your
+    // workspace ... writing here persists". Nothing in that command writes.
+    // The whole-string test for `>` could not tell a discard from a write, so
+    // one `2>/dev/null` dropped the command out of the read-only registry and
+    // it was graded as a WRITE to two persistence surfaces.
+    //
+    // A redirect to /dev/null throws output away and a redirect to a file
+    // descriptor duplicates a handle. Neither can create or modify a file, so
+    // neither is evidence of a write. Every other redirect target still is.
+    const home = tmp('af-discard-home-');
+    fs.mkdirSync(path.join(home, '.claude', 'agents'), { recursive: true });
+    fs.mkdirSync(path.join(home, '.claude', 'skills'), { recursive: true });
+    const ws = tmp('af-discard-ws-');
+    const agents = path.join(home, '.claude', 'agents');
+    const skills = path.join(home, '.claude', 'skills');
+
+    for (const command of [
+      `ls -1 ${agents} 2>/dev/null`,
+      `ls -1 ${agents} >/dev/null`,
+      `ls -1 ${agents} &>/dev/null`,
+      `ls -1 ${agents} 2>&1`,
+      `ls -1 ${agents} 2>/dev/null | head`,
+      // The exact command from the session above.
+      `ls -1 ${agents} 2>/dev/null; echo "=== SKILLS ==="; ls -1 ${skills} 2>/dev/null`,
+    ]) {
+      assert.strictEqual(hook.classifyShellAccess('Bash', { command }, ws, [], home), null,
+        `discarding output writes nothing, so this raises no crossing: ${command}`);
+    }
+
+    // FAIL SAFE IS UNCHANGED. Only /dev/null and descriptor duplication are
+    // exempt; a redirect to any real path is still a write, including one
+    // that lands inside the surface itself, and `tee` still writes.
+    for (const command of [
+      `echo x > ${path.join(agents, 'y.md')}`,
+      `ls -1 ${agents} > ${path.join(agents, 'listing.txt')}`,
+      `ls -1 ${agents} 2>/dev/null > ${path.join(agents, 'listing.txt')}`,
+      `ls -1 ${agents} >> ${path.join(home, '.claude', 'log.txt')}`,
+      `ls -1 ${agents} | tee ${path.join(agents, 'listing.txt')}`,
+    ]) {
+      const verdict = hook.classifyShellAccess('Bash', { command }, ws, [], home);
+      assert.ok(verdict && verdict.crossings.some(c => c.persistenceSurface),
+        `a redirect to a real path is still a write, so this must still card: ${command}`);
+    }
+  });
+
   test('the runtime home root is never offered as a folder to remember: settings.json is the one persistence-surface FILE, and its parent IS the root', () => {
     // Every other persistence surface is a folder, so the grant offered
     // beside its card is scoped to that folder alone. settings.json sits

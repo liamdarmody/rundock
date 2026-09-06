@@ -555,29 +555,6 @@ function connectorsBuildState(sources) {
   return { error: null, readFailed: false, missing: rows.length === 0, servers: rows, sourceErrors };
 }
 
-// Merging an added server re-reads nothing: the caller hands the freshest
-// text it has, and the merge refuses to replace an existing name, because
-// silently replacing a connector somebody configured is an edit they did not
-// make. Returns the next file text, or null with the reason on refusals.
-function connectorsMerge(text, name, entry) {
-  let parsed = {};
-  if (text) {
-    try { parsed = JSON.parse(text); } catch (e) { return { next: null, reason: '.mcp.json is not valid JSON; fix the file before adding to it.' }; }
-  }
-  if (!parsed || typeof parsed !== 'object') parsed = {};
-  if (!parsed.mcpServers || typeof parsed.mcpServers !== 'object') parsed.mcpServers = {};
-  if (!name || !/^[\w.-]+$/.test(name)) return { next: null, reason: 'A connector needs a plain name (letters, digits, dots, dashes).' };
-  if (parsed.mcpServers[name]) return { next: null, reason: `A connector named "${name}" already exists; edit .mcp.json to change it.` };
-  parsed.mcpServers[name] = entry;
-  return { next: JSON.stringify(parsed, null, 2) + '\n', reason: null };
-}
-
-// One row per merged connector. `srv` is either a connectorsBuildRows row
-// (carries runtimes/scopes/drift) or a bare connectorsParse row (name,
-// transport, target, envKeys only, from a caller that never merged
-// anything); the defaults below make the two render the same way for a
-// single-source, no-drift connector, which is what every pre-existing test
-// exercises directly.
 function connectorsRowHtml(srv) {
   const runtimes = srv.runtimes || ['claude'];
   const scopes = srv.scopes || ['workspace'];
@@ -618,8 +595,9 @@ const CONNECTORS_ACCOUNT_TIER_HTML = `<div class="settings-card"><div class="set
 
 function connectorsSectionHtml(state) {
   // A read we could not trust draws its error and NOTHING ELSE: no server
-  // list to misread as empty, and no Add form, because a write built on text
-  // we never saw is the overwrite this whole state exists to prevent.
+  // list to misread as empty, and nothing inviting a change to a file whose
+  // current contents are unknown. The panel below it, the add affordance and
+  // the account-tier note all describe a state this read never established.
   if (state.error && state.readFailed) {
     return `<div class="settings-section-title">Connectors</div><div class="settings-card"><div class="settings-row"><span class="settings-prose">${connectorsEsc(state.error)}</span></div></div>`;
   }
@@ -641,25 +619,33 @@ function connectorsSectionHtml(state) {
     const rows = state.servers.map((srv) => connectorsRowHtml(srv)).join('');
     body = `${sourceErrorsHtml}<div class="settings-card">${rows}</div>`;
   }
-  return `<div class="settings-section-title">Connectors</div>${body}
-    <div class="settings-card"><div class="settings-row" style="flex-direction:column;align-items:stretch;gap:8px">
+  // ADDING A CONNECTOR IS A CONVERSATION, NOT A FORM. A working entry needs
+  // more than a name and one field: a command server needs its arguments and
+  // usually credentials in `env`, and an HTTP server usually needs auth
+  // headers. Two inputs cannot express any of that, so the form's best case
+  // was an entry that works only for a server needing no arguments and no
+  // auth, and its ordinary case was an entry that looked accepted and could
+  // never start. Handing this to the guide matches what Files, Skills and the
+  // routine editor already do when a user reaches something they should not
+  // hand-author.
+  //
+  // The affordance is omitted entirely when the workspace has no guide,
+  // exactly as those three surfaces omit theirs, rather than offering a
+  // button that opens nothing.
+  const guide = (typeof getGuide === 'function') ? getGuide() : null;
+  const addHtml = guide
+    ? `<div class="settings-card"><div class="settings-row" style="flex-direction:column;align-items:stretch;gap:8px">
       <span class="settings-label">Add a connector</span>
-      <input class="settings-input" id="connector-name" placeholder="Name (for example: notion)">
-      <input class="settings-input" id="connector-target" placeholder="Command to start it, or its URL">
-      <div class="settings-prose" id="connector-add-note" style="min-height:1em"></div>
-      <button class="settings-btn" onclick="connectorsAdd()">Add to .mcp.json</button>
-    </div></div>
-    <div class="settings-row"><span class="settings-prose">Edits land in <code>.mcp.json</code>, the same file agents read their connectors from on their next start.</span></div>
+      <span class="settings-prose">Connectors differ in what they need to start: some take a command and arguments, some a URL, and most need credentials. Doc can work out which this one is, write it into <code>.mcp.json</code>, and tell you what it still needs.</span>
+      <button class="settings-btn" data-agent-id="${connectorsEsc(guide.id)}" onclick="startConversation(this.dataset.agentId)">Talk to Doc</button>
+    </div></div>`
+    : '';
+  return `<div class="settings-section-title">Connectors</div>${body}
+    ${addHtml}
+    <div class="settings-row"><span class="settings-prose">Connectors are read from <code>.mcp.json</code> at the workspace root, and agents pick up a change on their next start.</span></div>
     ${CONNECTORS_ACCOUNT_TIER_HTML}`;
 }
 
-// Three states, kept apart because conflating them destroys a file. `null`
-// means "not yet read" and also "read and the file is genuinely absent"; a
-// string is the file's known-current bytes; the read-failed flag is neither,
-// and is the one state from which a write must never proceed. connectorsAdd
-// reads these, so a save can only ever be built from bytes we actually saw.
-let connectorsFileText = null;
-let connectorsReadFailed = false;
 
 function connectorsRenderIfShowing(state) {
   const el = document.getElementById('settings-content');
@@ -704,21 +690,13 @@ function connectorsFetchUserGlobal() {
 }
 
 function connectorsLoad() {
-  connectorsReadFailed = false;
   // All four reads run together; none depends on another. Returns the
   // combined promise so a caller (a test, or a later chained refresh) can
   // wait for all of them; the running product ignores the return.
   const claudeWorkspacePromise = connectorsFetchWorkspaceFile('.mcp.json',
-    'Could not read .mcp.json, so its connectors are not shown and nothing new can be added until the read succeeds. Reopen this tab to retry.')
+    'Could not read .mcp.json, so its connectors are not shown. Reopen this tab to retry.')
     .then((res) => {
-      if (res.error) {
-        // Never build a save from text this did not read: readFailed is the
-        // one state connectorsAdd must refuse from, so it is set here and
-        // nowhere else.
-        connectorsFileText = null; connectorsReadFailed = true;
-        return { servers: [], missing: false, readFailed: true, error: res.error };
-      }
-      connectorsFileText = res.text; connectorsReadFailed = false;
+      if (res.error) return { servers: [], missing: false, readFailed: true, error: res.error };
       return connectorsParse(res.text);
     });
   const codexWorkspacePromise = connectorsFetchWorkspaceFile('.codex/config.toml',
@@ -745,47 +723,16 @@ function connectorsLoad() {
 }
 
 // Per-workspace state must not outlive its workspace: the same rule
-// packagesWorkspaceChanged enforces. Dropped so a save can never carry one
-// workspace's connectors into another's file after a switch.
+// packagesWorkspaceChanged enforces. The panel is cleared so a switch never
+// leaves one workspace's connectors on screen under another's name.
 function connectorsWorkspaceChanged() {
-  connectorsFileText = null;
-  connectorsReadFailed = false;
   connectorsRenderIfShowing({ servers: [], missing: false, readFailed: true, error: 'Reopen this tab to read this workspace\'s connectors.' });
-}
-
-function connectorsAdd() {
-  const note = document.getElementById('connector-add-note');
-  // Never build a save from text we did not read. connectorsFileText is null
-  // for both "absent" and "read failed"; the flag tells them apart, and a
-  // failed read is the one case where merging from null would drop the real
-  // file's servers. A missing file (flag clear, text null) legitimately
-  // merges from an empty object.
-  if (connectorsReadFailed) {
-    if (note) note.textContent = 'The connector file could not be read, so nothing can be added until it can. Reopen this tab to retry.';
-    return;
-  }
-  const name = (document.getElementById('connector-name') || {}).value || '';
-  const target = ((document.getElementById('connector-target') || {}).value || '').trim();
-  if (!target) { if (note) note.textContent = 'Say what it starts or where it lives.'; return; }
-  const entry = /^https?:\/\//.test(target)
-    ? { url: target }
-    : { command: target.split(/\s+/)[0], args: target.split(/\s+/).slice(1) };
-  const merged = connectorsMerge(connectorsFileText, name.trim(), entry);
-  if (!merged.next) { if (note) note.textContent = merged.reason; return; }
-  if (typeof ws === 'undefined' || !ws || ws.readyState !== WebSocket.OPEN) {
-    if (note) note.textContent = 'Not connected; try again in a moment.';
-    return;
-  }
-  ws.send(JSON.stringify({ type: 'save_file', path: '.mcp.json', content: merged.next }));
-  // Read back through the same road the render reads, so what the page shows
-  // afterwards is what actually landed rather than what was sent.
-  setTimeout(connectorsLoad, 200);
 }
 
 return { showSettingsSection, renderSettingsSection, setWorkspaceMode, runtimeRowHtml, runtimesCardHtml, renderRuntimesCard, changeWorkspace,
   packagesSubmit, packagesCancel, packagesConfirm, packagesRetry,
   packagesReplyArrived, packagesWorkspaceChanged, packagesConnectionLost,
-  connectorsParse, connectorsParseToml, connectorsParseUserGlobalJson, connectorsMerge,
+  connectorsParse, connectorsParseToml, connectorsParseUserGlobalJson,
   connectorsBuildRows, connectorsBuildState, connectorsRowHtml, connectorsScopeText,
-  connectorsSectionHtml, connectorsLoad, connectorsAdd, connectorsWorkspaceChanged };
+  connectorsSectionHtml, connectorsLoad, connectorsWorkspaceChanged };
 }));

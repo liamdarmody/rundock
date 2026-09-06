@@ -86,21 +86,17 @@ const MUTATIONS = [
     '        updates[key] = computePlanHash(routine);'],
 
   // ===== THE CONNECTORS FILE IS EDITED, NEVER CLOBBERED =====
-  // Render a read-failed state as the empty state and the next Add writes over
-  // a file we merely could not read.
+  // Render a read-failed state as the empty state and a workspace whose
+  // connector file could not be read looks like a workspace with none, which
+  // is the one confusion this panel must never create.
   [SETTINGS, 'a read that failed draws its error, never the empty state',
     "  if (state.error && state.readFailed) {\n    return `<div class=\"settings-section-title\">Connectors</div><div class=\"settings-card\"><div class=\"settings-row\"><span class=\"settings-prose\">${connectorsEsc(state.error)}</span></div></div>`;\n  }",
     ''],
-  // Let connectorsAdd proceed after a failed read and it merges from null,
-  // dropping the real file's servers.
-  [SETTINGS, 'the Add refuses when the file was never successfully read',
-    "  if (connectorsReadFailed) {",
-    '  if (false) {'],
-  // Let the merge replace an existing name and adding a connector can
-  // silently rewrite one somebody configured.
-  [SETTINGS, 'the merge refuses to replace an existing connector',
-    '  if (parsed.mcpServers[name]) return { next: null, reason: `A connector named "${name}" already exists; edit .mcp.json to change it.` };\n',
-    ''],
+  // Draw the guide button unconditionally and a workspace with no platform
+  // agent gets a control that opens nothing.
+  [SETTINGS, 'the add affordance is omitted when the workspace has no guide',
+    "  const addHtml = guide\n",
+    '  const addHtml = true\n'],
   // Render a broken config as an empty state and a person with a corrupt
   // file is reassured instead of told.
   [SETTINGS, 'a config that cannot be parsed is an error, never an empty state',
