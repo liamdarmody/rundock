@@ -29,6 +29,8 @@ Write a `CLAUDE.md` at the workspace root with:
 
 Keep it concise. CLAUDE.md should be a quick reference, not a manual.
 
+**When writing a wikilink to a file, qualify it with enough of its path to be unambiguous.** A bare `[[README]]` matches every README in the workspace, and the reader may land on a different one than the one you meant. Prefer `[[Projects/Client-X/README]]` over `[[README]]`.
+
 ### Set up folder structure
 
 Suggest the best-fit structure based on the workspace purpose:

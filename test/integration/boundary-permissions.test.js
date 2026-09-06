@@ -330,6 +330,85 @@ describe('workspace file-access boundary', () => {
     assert.strictEqual(client.messages.slice(since).filter(m => m.type === 'control_request').length, 0);
   });
 
+  // The read-only re-grading and the settings.json grant-directory fix are
+  // both placed BEFORE the standing-grant test below establishes a broad
+  // grant over the whole runtime home: once that grant exists, every crossing
+  // inside `~/.claude` other than the secrets tier is answered silently by
+  // it, which would prove nothing about either fix on its own merits.
+  test('a read-only shell command against a persistence surface raises no card: the failing scenario this release fixes', async () => {
+    // The reported failure happens in Code mode, where an ordinary command
+    // is already auto-approved and the only cards left are boundary ones: a
+    // plain `ls`/`cat` against the agent's own agents/skills folders raised
+    // TWO of them. A write reaching the same folders, whatever shape the
+    // command takes, still has to card.
+    const CODE = { RUNDOCK_CODE_MODE: '1' };
+    const home = os.homedir();
+    fs.mkdirSync(path.join(home, '.claude', 'agents'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.claude', 'agents', 'dev.md'), 'x');
+    fs.mkdirSync(path.join(home, '.claude', 'skills', 'spec-writer'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.claude', 'skills', 'spec-writer', 'SKILL.md'), 'x');
+
+    let since = client.messages.length;
+    let out = await runHook('Bash', { command: `ls ${path.join(home, '.claude', 'agents')}` }, CODE);
+    assert.strictEqual(decisionOf(out), 'allow');
+    await h.delay(200);
+    assert.strictEqual(client.messages.slice(since).filter(m => m.type === 'control_request').length, 0,
+      'listing the global agents folder raises no card');
+
+    since = client.messages.length;
+    out = await runHook('Bash', { command: `cat ${path.join(home, '.claude', 'skills', 'spec-writer', 'SKILL.md')}` }, CODE);
+    assert.strictEqual(decisionOf(out), 'allow');
+    await h.delay(200);
+    assert.strictEqual(client.messages.slice(since).filter(m => m.type === 'control_request').length, 0,
+      'reading a global skill file the same way raises no card');
+
+    since = client.messages.length;
+    const pendingRm = runHook('Bash', { command: `rm -rf ${path.join(home, '.claude', 'agents', 'dev.md')}` }, CODE);
+    const rmCard = await client.waitFor(m => m.type === 'control_request'
+      && m.request && m.request.boundary === true, { since, label: 'a write command still cards' });
+    client.send({ type: 'permission_response', requestId: rmCard.msg.request_id, conversationId: 'boundary-test', allow: false });
+    assert.strictEqual(decisionOf(await pendingRm), 'deny');
+
+    since = client.messages.length;
+    const pendingEcho = runHook('Bash', { command: `echo x > ${path.join(home, '.claude', 'hooks', 'y')}` }, CODE);
+    const echoCard = await client.waitFor(m => m.type === 'control_request'
+      && m.request && m.request.boundary === true, { since, label: 'a redirected echo still cards' });
+    client.send({ type: 'permission_response', requestId: echoCard.msg.request_id, conversationId: 'boundary-test', allow: false });
+    assert.strictEqual(decisionOf(await pendingEcho), 'deny');
+
+    since = client.messages.length;
+    const pendingCompound = runHook('Bash',
+      { command: `ls ${path.join(home, '.claude', 'agents')} && rm -rf ${path.join(home, '.claude', 'agents', 'dev.md')}` }, CODE);
+    const compoundCard = await client.waitFor(m => m.type === 'control_request'
+      && m.request && m.request.boundary === true, { since, label: 'a compound command with a non-read-only segment still cards' });
+    client.send({ type: 'permission_response', requestId: compoundCard.msg.request_id, conversationId: 'boundary-test', allow: false });
+    assert.strictEqual(decisionOf(await pendingCompound), 'deny');
+  });
+
+  test('a settings.json write never offers the runtime home root as a folder to remember, so approving it cannot silence a later hooks/ write', async () => {
+    const home = os.homedir();
+    fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+
+    let since = client.messages.length;
+    const pendingSettings = runHook('Write', { file_path: path.join(home, '.claude', 'settings.json'), content: 'x' });
+    const settingsCard = await client.waitFor(m => m.type === 'control_request'
+      && m.request && m.request.boundary === true, { since, label: 'settings.json write card' });
+    assert.strictEqual(settingsCard.msg.request.grant_dir, null,
+      'the runtime home root is never offered as a folder to remember: settings.json is the one persistence-surface FILE, and its parent IS the root');
+    client.send({ type: 'permission_response', requestId: settingsCard.msg.request_id, conversationId: 'boundary-test', allow: true });
+    assert.strictEqual(decisionOf(await pendingSettings), 'allow');
+
+    // Nothing was remembered, so an unrelated persistence-surface write still
+    // cards on its own merits.
+    since = client.messages.length;
+    const pendingHooks = runHook('Write', { file_path: path.join(home, '.claude', 'hooks', 'pretool.sh'), content: 'x' });
+    const hooksCard = await client.waitFor(m => m.type === 'control_request'
+      && m.request && m.request.boundary === true, { since, label: 'hooks/ write still cards' });
+    assert.strictEqual(hooksCard.msg.request.crossings[0].persistenceSurface, true);
+    client.send({ type: 'permission_response', requestId: hooksCard.msg.request_id, conversationId: 'boundary-test', allow: false });
+    assert.strictEqual(decisionOf(await pendingHooks), 'deny');
+  });
+
   test('a standing grant over the whole runtime home does not silence the credentials file, proven at the production call site', async () => {
     // /api/permission-request in lib/http-router.js, driven through the
     // real hook with a standing grant already recorded, not crossingCovered
@@ -360,5 +439,28 @@ describe('workspace file-access boundary', () => {
     assert.strictEqual(credCard.msg.request.crossings[0].secret, true);
     client.send({ type: 'permission_response', requestId: credCard.msg.request_id, conversationId: 'boundary-test', allow: false });
     assert.strictEqual(decisionOf(await pendingCred), 'deny');
+  });
+
+  test('the credentials file cards on both a read and a write, with and without code mode, always with the secret marker and no grant directory', async () => {
+    const home = os.homedir();
+    fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+    const target = path.join(home, '.claude', '.credentials.json');
+
+    for (const tool of ['Read', 'Write']) {
+      for (const extraEnv of [{}, { RUNDOCK_CODE_MODE: '1' }]) {
+        const label = `${tool}${extraEnv.RUNDOCK_CODE_MODE ? ' in code mode' : ''}`;
+        const since = client.messages.length;
+        const toolInput = tool === 'Write' ? { file_path: target, content: 'x' } : { file_path: target };
+        const pending = runHook(tool, toolInput, extraEnv);
+        const { msg } = await client.waitFor(m => m.type === 'control_request'
+          && m.request && m.request.boundary === true, { since, label: `${label}: credentials card` });
+        const crossing = (msg.request.crossings || [])[0];
+        assert.ok(crossing, `${label}: the crossing reaches the card`);
+        assert.strictEqual(crossing.secret, true, `${label}: the secret marker is set`);
+        assert.strictEqual(msg.request.grant_dir, null, `${label}: no grant directory is offered for the secrets tier`);
+        client.send({ type: 'permission_response', requestId: msg.request_id, conversationId: 'boundary-test', allow: false });
+        assert.strictEqual(decisionOf(await pending), 'deny', `${label}: the request is not silently allowed`);
+      }
+    }
   });
 });

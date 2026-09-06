@@ -106,6 +106,22 @@ const MUTATIONS = [
   [SETTINGS, 'a config that cannot be parsed is an error, never an empty state',
     "    return { servers: [], missing: false, error: '.mcp.json could not be read as JSON, so nothing here is trustworthy until it is fixed.' };",
     "    return { servers: [], missing: true, error: null };"],
+
+  // ===== FOUR SOURCES MERGED INTO ONE ROW PER NAME =====
+  // Skip the shape comparison and a connector defined differently by the two
+  // runtimes (a URL for one, a local command for the other) merges silently
+  // into whichever definition happened to be picked, with nothing on the
+  // page ever saying the two disagree.
+  [SETTINGS, 'a connector defined differently by the two runtimes is flagged as drift',
+    "    if (claudeDef && codexDef && (claudeDef.transport !== codexDef.transport || claudeDef.target !== codexDef.target)) {",
+    '    if (false) {'],
+  // Read env values instead of just their keys and a credential VALUE, not
+  // only its name, reaches the rendered page: the one thing this tab must
+  // never do, worse here than for .mcp.json alone because ~/.claude.json can
+  // carry live OAuth tokens.
+  [SETTINGS, 'a connector\'s credential keys are named, and their values are never read',
+    "      envKeys: entry.env && typeof entry.env === 'object' ? Object.keys(entry.env) : [],",
+    "      envKeys: entry.env && typeof entry.env === 'object' ? Object.values(entry.env) : [],"],
 ];
 
 const REPORTER = ['--test-reporter', 'spec'];

@@ -133,8 +133,10 @@ async function initTiptapEditor(path, content) {
       // Through the shared search-name rule, which also fixes a drift this
       // check had grown: it appended .md to anything not already ending .md,
       // so a frontmatter [[chart.png]] was tested as chart.png.md and
-      // rendered dead while clicking it worked.
-      return !!findFileInTree(cachedFileTree, wikilinkSearchName(target));
+      // rendered dead while clicking it worked. currentFilePath is this
+      // file's own path, so a bare target resolves against the folder it was
+      // actually written in, the same as a click on it would.
+      return !!findFileInTree(cachedFileTree, wikilinkSearchName(target), currentFilePath);
     },
     // Review identity: workspace profile name -> 'me' fallback; the agent
     // roster lets review attribution render known agents as agent chips.
@@ -855,15 +857,22 @@ function openMarkdownFile(viewers, path, content) {
   document.getElementById('toggle-preview').classList.add('hidden');
   document.getElementById('toggle-edit').classList.add('hidden');
   document.getElementById('tiptap-editor-pane').classList.remove('hidden');
-  fileFrontmatter = '';
-  fileBody = content;
-  initTiptapEditor(path, content);
   // The connections list rides this surface because this is the surface a
   // linked document is read on: markdown is the one file kind that carries
   // wikilinks. Mounted on the pane, beside the editor element rather than
   // inside it, because the editor owns its own element's children and clears
   // them on init.
+  //
+  // Mounted BEFORE the editor is initialised, not after: initTiptapEditor is
+  // async and its first await hands control straight back here, so this is
+  // the earliest point the connections fetch can start. Starting it before
+  // the (heavier, synchronous-until-its-own-await) editor init gives the
+  // request the most possible time to resolve on the network while the
+  // editor does its own work, instead of queueing behind it.
   renderFileConnections(document.getElementById('tiptap-editor-pane'));
+  fileFrontmatter = '';
+  fileBody = content;
+  initTiptapEditor(path, content);
 }
 
 // Text keeps the legacy preview/edit chrome; artifacts share it so the Code
@@ -925,8 +934,15 @@ function renderEditorContent() {
       return;
     }
     previewEl.className = 'editor-content formatted';
-    previewEl.innerHTML = formatMdFull(fileBody);
+    // Fetch first, format second: formatMdFull is synchronous markdown-to-
+    // HTML work that can take real time on a large file, and it used to run
+    // in front of the connections fetch rather than beside it, so the
+    // network round trip only started once the formatting was already done.
+    // renderFileConnections only reads previewEl.parentElement as a mount
+    // point; it does not need previewEl's content, so nothing here depends
+    // on the order.
     renderFileConnections(previewEl.parentElement);
+    previewEl.innerHTML = formatMdFull(fileBody);
   } else {
     // Leaving preview for the code view: the section describes the rendered
     // document, and the code view is not it.
@@ -965,6 +981,10 @@ function renderFileConnections(host) {
   section.id = 'file-connections';
   section.className = 'file-connections';
   host.appendChild(section);
+  // Drawn the instant the section mounts, before the fetch below has even
+  // started: see drawFileConnectionsLoading for why this is the fix for the
+  // page moving under the reader, not just a cosmetic nicety.
+  drawFileConnectionsLoading(section);
   const forFile = currentFilePath;
   fetchWorkspaceLinks().then((data) => {
     // The reader may have moved on while the fetch was out.
@@ -975,6 +995,30 @@ function renderFileConnections(host) {
     // not here rather than leaving a heading over nothing.
     drawFileConnections(section, forFile, null);
   });
+}
+
+// A SETTLED PLACEHOLDER, drawn synchronously the moment the section mounts.
+// The section used to mount with no content at all and wait for its bytes:
+// on a content-heavy workspace the fetch and its resolution took long enough
+// to be visible, so a heading-less, near-zero-height div sat at the bottom of
+// the pane for a few seconds and then, all at once, became a heading plus a
+// tree of groups and rows. Nothing moved on the way in; a whole block simply
+// replaced empty space wherever the reader's eye already was.
+//
+// Drawing the heading and a settled loading line up front means the block's
+// TOP EDGE is fixed from the instant the file opens. Only the space below the
+// heading changes once the real rows are known, and it grows from a line
+// that was already sitting there rather than appearing from nothing.
+function drawFileConnectionsLoading(section) {
+  while (section.firstChild) section.removeChild(section.firstChild);
+  const heading = document.createElement('div');
+  heading.className = 'file-connections-heading';
+  heading.textContent = 'Connections';
+  section.appendChild(heading);
+  const loading = document.createElement('div');
+  loading.className = 'file-connections-empty';
+  loading.textContent = 'Loading connections…';
+  section.appendChild(loading);
 }
 
 function drawFileConnections(section, filePath, data) {
@@ -1059,9 +1103,11 @@ function openWikilink(name) {
   if (currentFilePath) fileHistory.push(currentFilePath);
   if (fileHistory.length > 20) fileHistory.shift();
 
-  // Search the cached file tree data (not the DOM)
+  // Search the cached file tree data (not the DOM). currentFilePath is still
+  // the file the link was clicked in: proximity resolves a bare target
+  // against ITS folder, not whatever folder happens to sort first.
   if (cachedFileTree) {
-    const match = findFileInTree(cachedFileTree, searchName);
+    const match = findFileInTree(cachedFileTree, searchName, currentFilePath);
     if (match) {
       switchNav('files');
       ws.send(JSON.stringify({ type: 'read_file', path: match }));
@@ -1131,32 +1177,50 @@ function highlightFileInSidebar(filePath) {
 // links went.
 //
 // So the rules are now applied ACROSS the whole tree, in order:
-//   1. Exact path match (case-insensitive). A full path names one file; if it
-//      is present, nothing else may win.
-//   2. Basename match, tied by SHORTEST PATH first and TREE ORDER second. A
-//      bare [[Notes]] most plausibly means the least-nested Notes; between
-//      equals, the tree's own order decides, which is the one deterministic
-//      answer the previous behavior gave that was worth keeping.
+//   1. Exact path match (case-insensitive), and ONLY when the search string
+//      itself names a folder (it contains a '/'). A bare name with no folder
+//      in it is never "a path"; it is a basename, and a basename cannot
+//      disambiguate itself just because it happens to equal some file's whole
+//      path. Without this qualifier, a root-level file's path IS its bare
+//      name (the root has no prefix to put in front of it), so [[README]]
+//      would "exactly" match the root's README.md before proximity or any
+//      other tie-break ever ran, which is the shape the reported bug actually
+//      took: a bare link short-circuited straight to root, tie-break rules
+//      notwithstanding.
+//   2. Basename match, tied by PROXIMITY TO fromPath first, then SHORTEST
+//      PATH, then TREE ORDER. `fromPath` is the file the link was read from
+//      (optional; every caller that knows its source passes it). A bare
+//      [[README]] almost never means the workspace root's README, it means
+//      the README nearest the note that wrote the link, so the candidate
+//      sharing the most leading folders with fromPath wins first. Depth and
+//      tree order are what decide for a caller that passes no fromPath, or
+//      for a genuine tie once proximity is exhausted, which is the one
+//      deterministic answer the previous behavior gave that was worth
+//      keeping.
 //
 // The old third rule (basename with the first '.md' occurrence stripped and
 // re-appended) is gone: for every ordinary name it was identical to rule 2,
 // and for a name carrying '.md' mid-string it could match a file the link
 // never named. Nothing may match under a rule a reader cannot predict.
-function findFileInTree(items, searchName) {
+function findFileInTree(items, searchName, fromPath) {
   const searchLower = String(searchName).toLowerCase();
   const searchBase = searchLower.split('/').pop();
+  const searchIsQualified = searchLower.includes('/');
+  const fromSegments = fromPath ? dirSegments(fromPath) : null;
   let best = null;
   let order = 0;
   (function walk(list) {
     for (const item of list) {
       if (item.type === 'file') {
         const at = order++;
-        if (item.path.toLowerCase() === searchLower) {
+        if (searchIsQualified && item.path.toLowerCase() === searchLower) {
           if (!best || !best.exact) best = { path: item.path, exact: true };
         } else if (!(best && best.exact) && item.name.toLowerCase() === searchBase) {
           const depth = item.path.split('/').length;
-          if (!best || depth < best.depth || (depth === best.depth && at < best.at)) {
-            best = { path: item.path, exact: false, depth, at };
+          const shared = fromSegments ? commonPrefixLen(fromSegments, dirSegments(item.path)) : 0;
+          if (!best || shared > best.shared ||
+              (shared === best.shared && (depth < best.depth || (depth === best.depth && at < best.at)))) {
+            best = { path: item.path, exact: false, depth, at, shared };
           }
         }
       } else if (item.type === 'folder' && item.children) {
@@ -1165,6 +1229,26 @@ function findFileInTree(items, searchName) {
     }
   })(items);
   return best ? best.path : null;
+}
+
+// A path's folder, as lowercase segments with the filename dropped. A
+// root-level file (no '/') has none. Lowercased to match the
+// case-insensitive comparisons everywhere else in this resolver.
+function dirSegments(p) {
+  const parts = String(p).split('/');
+  parts.pop();
+  return parts.map((s) => s.toLowerCase());
+}
+
+// How many leading folders two segment lists share, stopping at the first
+// difference. This is the proximity score: fromPath and a candidate in the
+// very same folder share every segment; a candidate one folder further out
+// shares one fewer; a candidate in an unrelated part of the tree shares none,
+// however shallow it is.
+function commonPrefixLen(a, b) {
+  let n = 0;
+  while (n < a.length && n < b.length && a[n] === b[n]) n++;
+  return n;
 }
 
 // The search string a link target becomes, in one place: the #anchor dropped
@@ -1194,7 +1278,26 @@ function fileConnections(filePath, links, tree) {
   const seenIn = new Set();
   for (const link of links || []) {
     if (link.kind === 'embed') continue;
-    const resolved = findFileInTree(tree || [], wikilinkSearchName(link.target));
+    // The server (lib/http-router.js, the /api/graph handler) resolves every
+    // link in the workspace once, memoised per tree generation, and hands
+    // the answer back on the row as `resolved`. This used to be ignored and
+    // recomputed here via findFileInTree for every link in the WHOLE
+    // workspace on every single file open, not just the current file's own
+    // links: an O(all links x tree size) walk on the main thread, repeated
+    // on every open, which is exactly the kind of stall a large, densely
+    // linked vault feels as the connections list sitting blank for seconds.
+    // Prefer the given answer; only resolve locally when a caller hands raw,
+    // unresolved links (the unit test below, and any future caller that
+    // isn't the /api/graph payload).
+    //
+    // The local fallback passes link.src for the same reason the server
+    // does: a bare target resolves against the folder the link was written
+    // in rather than the shallowest match in the tree, so the two roads
+    // reach the same file rather than disagreeing about which README was
+    // meant.
+    const resolved = Object.prototype.hasOwnProperty.call(link, 'resolved')
+      ? link.resolved
+      : findFileInTree(tree || [], wikilinkSearchName(link.target), link.src);
     if (link.src === filePath && resolved && resolved !== filePath && !seenOut.has(resolved)) {
       seenOut.add(resolved);
       outgoing.push({ target: link.target, resolved });
@@ -1269,7 +1372,7 @@ return {
   openBinaryOrUnsupportedFile, renderEditorContent, setEditorMode,
   getFileContentForSave, openWikilink, openWorkspaceFilePath,
   highlightFileInSidebar, findFileInTree, wikilinkSearchName, fileConnections,
-  renderFileConnections, drawFileConnections, removeFileConnections,
+  renderFileConnections, drawFileConnections, drawFileConnectionsLoading, removeFileConnections,
   updateEditorBackButton,
   openSkillFile, editorGoBack,
 };

@@ -24,6 +24,13 @@
    title attribute so the full text is still reachable. */
 .settings-prose { font-size: var(--caption); color: var(--text-2); line-height: 1.5; white-space: normal; overflow: visible; }
 .settings-prose code { font-family: 'SF Mono','Fira Code','Consolas',monospace; }
+.settings-prose a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+/* Connectors tab: one badge per runtime that reaches a connector, and a note
+   when Claude Code and Codex disagree about what the same name is. Mirrors
+   the existing .runtime-default pill (chat.css) rather than inventing a new
+   shape. */
+.connector-badge { display: inline-block; font-size: 10px; font-weight: 600; letter-spacing: 0.04em; color: var(--text-2); border: 1px solid var(--border); padding: 1px 6px; border-radius: var(--radius-sm); margin-left: 4px; }
+.connector-drift { color: var(--attention); }
 .settings-btn { padding: 6px 14px; font-size: var(--caption); font-weight: 600; border-radius: var(--radius-md); background: var(--card); color: var(--text-1); border: 1px solid var(--border); transition: all var(--duration-base) ease; cursor: pointer; }
 .settings-btn:hover { border-color: var(--accent); color: var(--accent); }
 .settings-btn-primary { padding: 6px 14px; font-size: var(--caption); font-weight: 600; border-radius: var(--radius-md); background: var(--accent); color: white; border: none; transition: all var(--duration-base) ease; cursor: pointer; }

@@ -160,8 +160,32 @@ const MUTATIONS = [
     '    ? { agentHome: true, secret: false, persistenceSurface: false }'],
   // Drop tier three's exemption and a shell command merely touching scratch is reported as a crossing.
   [HOOK, 'a shell crossing into tier three (neither secret nor a persistence surface) is not reported at all',
-    '    if (tags.agentHome && !tags.secret && !tags.persistenceSurface) continue;',
+    '    if (tags.agentHome && !tags.secret && (!tags.persistenceSurface || readOnly)) continue;',
     '    if (false) continue;'],
+  // Drop the read-only re-grading and a command built entirely from `ls`,
+  // `cat` and their neighbours cards against a persistence surface again,
+  // the two-card storm this row exists to end.
+  [HOOK, 'a persistence-surface shell crossing is freed by a read-only command, not only by staying in tier three',
+    '(!tags.persistenceSurface || readOnly)',
+    '(!tags.persistenceSurface)'],
+  // A command is read-only only if every leading word is actually in the
+  // registry: drop the check and any command (a bare `rm`, included) reads
+  // as free against a persistence surface.
+  [HOOK, 'a command is read-only only when the registry actually names its leading word',
+    '    return READ_ONLY_SHELL_COMMANDS.includes(bare);',
+    '    return true;'],
+  // Every segment of a compound command must qualify, not merely one of
+  // them: drop `every` for `some` and `ls x && rm -rf x` reads as free
+  // because its first segment alone is a read.
+  [HOOK, 'every segment of a compound command must be read-only, not merely one of them',
+    'segments.every(seg => {',
+    'segments.some(seg => {'],
+  // A write-shaped redirection makes an otherwise read-only leading command
+  // write anyway: drop the check and `echo x > ~/.claude/hooks/y` reads as
+  // free because `echo` alone is on the registry.
+  [HOOK, 'a write-shaped redirection disqualifies a command as read-only, whatever its leading words are',
+    "  if (/>>?|\\btee\\b/.test(str)) return false;",
+    ''],
   // A registry path is recognised however it is spelled, including before it
   // exists: drop the fold on the CANDIDATE side (the fold on the registry's
   // own, already-lowercase names changes nothing, which is why this targets
@@ -186,6 +210,13 @@ const MUTATIONS = [
   [HOOK, 'every persistence-surface directory the registry declares is bound to the architecture doc',
     'const PERSISTENCE_SURFACE_DIRS = [\'agents\', \'skills\', \'plugins\', \'commands\', \'hooks\'];',
     'const PERSISTENCE_SURFACE_DIRS = [\'agents\', \'skills\', \'commands\', \'hooks\'];'],
+  // settings.json is the one persistence-surface FILE, so the folder beside
+  // its card is the runtime home root itself: drop the exclusion and
+  // approving that card's "Always allow this folder" would silence every
+  // later write to agents/, skills/, plugins/, commands/ and hooks/ too.
+  [HOOK, 'no standing folder grant is offered when the grant directory would be the runtime home root itself',
+    '  const noGrant = tags.secret || (tags.agentHome && grantDir === agentHomeRoot(home));',
+    '  const noGrant = tags.secret;'],
   // The one production site carrying classifyFileAccess's tags onto the emitted request.
   [HOOK_INTEGRATION, 'a file crossing\'s tags reach the request the hook actually emits',
     '        path: access.resolvedPath, grantDir: access.grantDir,\n'

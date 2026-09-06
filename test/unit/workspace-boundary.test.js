@@ -551,14 +551,56 @@ describe('the agent\'s own folder: three tiers, one registry', () => {
   });
 
   // A hand-written literal would catch a registry entry deleted but not a
-  // folder ADDED to the refusal without one; names come from the refusal's own source of truth.
-  test('the deterministic refusal is bound to the registry mechanically, not restated as a literal', () => {
-    const home = os.homedir();
-    const write = p => hook.isProtectedClaudeEdit('Write', { file_path: p });
+  // folder ADDED to the refusal without one. A NAME-LIST comparison (every
+  // REFUSED_CLAUDE_EDIT_DIRS entry also appears in PERSISTENCE_SURFACE_DIRS)
+  // proves the two registries agree on names; it proves nothing about what
+  // either matcher actually DECIDES for a real path, since each could read a
+  // different literal internally and still pass a name-list check. Compared
+  // here instead are the two matchers' VERDICTS, over a corpus wide enough
+  // that a future divergence between them has to turn this red: the exact
+  // spelling, the same folder reached through a symlinked home, a target
+  // whose folder has not been created yet, and a case variant (checked both
+  // ways the case-folding seam can answer, since a real host's own behaviour
+  // must not decide which assertion runs).
+  test('the outright refusal and the persistence tier agree on verdicts over a shared corpus of spellings, not just a shared name list', () => {
     for (const name of hook.REFUSED_CLAUDE_EDIT_DIRS) {
       assert.ok(hook.PERSISTENCE_SURFACE_DIRS.includes(name), `${name}/ must also be a registry entry`);
-      assert.strictEqual(write(path.join(home, '.claude', name, 'x.md')), true, `a write under ${name}/ is refused`);
+
+      const home = tmp('af-verdict-home-');
+      fs.mkdirSync(path.join(home, '.claude', name), { recursive: true });
+      const exact = path.join(home, '.claude', name, 'x.md');
+
+      const linkHome = tmp('af-verdict-link-');
+      const link = path.join(linkHome, 'dot');
+      fs.symlinkSync(path.join(home, '.claude'), link);
+      const symlinked = path.join(link, name, 'x.md');
+
+      const unbornHome = tmp('af-verdict-unborn-');
+      fs.mkdirSync(path.join(unbornHome, '.claude'), { recursive: true }); // the name/ folder itself is NOT created
+      const unborn = path.join(unbornHome, '.claude', name, 'never-created', 'deep.md');
+
+      const caseHome = tmp('af-verdict-case-');
+      fs.mkdirSync(path.join(caseHome, '.claude'), { recursive: true }); // the case variant is unborn too
+      const caseVariant = path.join(caseHome, '.claude', name.toUpperCase(), 'x.md');
+
+      const corpus = [
+        ['exact', exact, home, undefined, true],
+        ['symlinked', symlinked, home, undefined, true],
+        ['unborn folder', unborn, unbornHome, undefined, true],
+        ['case variant, folding host', caseVariant, caseHome, true, true],
+        ['case variant, non-folding host', caseVariant, caseHome, false, false],
+      ];
+      for (const [label, target, targetHome, foldsCase, mustBeTrue] of corpus) {
+        const refused = hook.isProtectedClaudeEdit('Write', { file_path: target }, targetHome, foldsCase);
+        const tiered = hook.isPersistenceSurface(target, targetHome, foldsCase);
+        assert.strictEqual(refused, tiered,
+          `${name}/ (${label}): the refusal and the tier must agree (refused=${refused}, tiered=${tiered})`);
+        assert.strictEqual(refused, mustBeTrue, `${name}/ (${label}): expected refused=${mustBeTrue}`);
+      }
     }
+
+    const home = os.homedir();
+    const write = p => hook.isProtectedClaudeEdit('Write', { file_path: p });
     const notRefused = [
       ...hook.PERSISTENCE_SURFACE_DIRS.filter(d => !hook.REFUSED_CLAUDE_EDIT_DIRS.includes(d)).map(d => path.join(home, '.claude', d, 'x')),
       path.join(home, '.claude', 'agent.md'),         // near miss: a file, not the 'agents' folder
@@ -687,5 +729,88 @@ describe('the agent\'s own folder: three tiers, one registry', () => {
       permissions.agentHomeBoundaryCopy({ secret: true }), 'the secret\'s stakes win when a crossing is both');
     assert.strictEqual(permissions.agentHomeBoundaryCopy({}), null, 'an ordinary crossing renders the existing card unchanged');
     assert.strictEqual(permissions.agentHomeBoundaryCopy(null), null);
+  });
+
+  // A shell command cannot declare which act it performs, so a persistence
+  // surface it touches is graded as a write by default (see the test above).
+  // That default is wrong for a command built ENTIRELY from commands this
+  // registry knows only read: `ls`, `cat` and their neighbours. Re-grading
+  // covers only a crossing under the runtime's OWN home; a command reaching
+  // some other outside folder is unaffected by any of this.
+  test('a shell command built entirely from read-only commands is free against a persistence surface, exactly as Read/Glob/Grep already are', () => {
+    const home = tmp('af-readonly-home-');
+    fs.mkdirSync(path.join(home, '.claude', 'agents'), { recursive: true });
+    fs.mkdirSync(path.join(home, '.claude', 'skills', 'x'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.claude', 'skills', 'x', 'SKILL.md'), 'x');
+    const ws = tmp('af-readonly-ws-');
+
+    assert.strictEqual(hook.classifyShellAccess('Bash', { command: `ls ${path.join(home, '.claude', 'agents')}` }, ws, [], home), null,
+      'a bare read-only command against a persistence surface raises no crossing');
+    assert.strictEqual(hook.classifyShellAccess('Bash', { command: `cat ${path.join(home, '.claude', 'skills', 'x', 'SKILL.md')}` }, ws, [], home), null);
+
+    // FAIL SAFE, three ways: a write command alone, a redirection appended to
+    // an otherwise read-only leading command, and a compound where only ONE
+    // segment qualifies must all still card.
+    const rm = hook.classifyShellAccess('Bash', { command: `rm -rf ${path.join(home, '.claude', 'agents', 'x')}` }, ws, [], home);
+    assert.strictEqual(rm.crossings[0].persistenceSurface, true, 'a write command against a persistence surface still cards');
+
+    const redirected = hook.classifyShellAccess('Bash', { command: `echo x > ${path.join(home, '.claude', 'hooks', 'y')}` }, ws, [], home);
+    assert.strictEqual(redirected.crossings[0].persistenceSurface, true,
+      'echo alone is read-only, but a write-shaped redirection still writes, so this still cards');
+
+    const compound = hook.classifyShellAccess('Bash',
+      { command: `ls ${path.join(home, '.claude', 'agents')} && rm -rf ${path.join(home, '.claude', 'agents', 'x')}` }, ws, [], home);
+    assert.ok(compound && compound.crossings.some(c => c.persistenceSurface),
+      'one non-read-only segment fails the whole command, so a compound that mixes ls with rm still cards');
+
+    // The secrets tier is never re-graded by this: it cards on any access,
+    // read or write, whatever the command is built from.
+    const secretRead = hook.classifyShellAccess('Bash', { command: `cat ${path.join(home, '.claude', '.credentials.json')}` }, ws, [], home);
+    assert.strictEqual(secretRead.crossings[0].secret, true, 'a read-only command touching the credential file still cards');
+  });
+
+  test('the runtime home root is never offered as a folder to remember: settings.json is the one persistence-surface FILE, and its parent IS the root', () => {
+    // Every other persistence surface is a folder, so the grant offered
+    // beside its card is scoped to that folder alone. settings.json sits
+    // directly at the runtime home root, so path.dirname of it is not a
+    // sub-folder at all: it is `~/.claude` itself. Offering that as a
+    // "whole folder" grant would silence agents/, skills/, plugins/,
+    // commands/ and hooks/ too, which is the wide-grant shape this release
+    // removed, returning through the one crossing shaped like a file.
+    const home = tmp('af-grantdir-home-');
+    fs.mkdirSync(path.join(home, '.claude', 'hooks'), { recursive: true });
+    const ws = tmp('af-grantdir-ws-');
+
+    const settingsWrite = hook.classifyFileAccess('Write', { file_path: path.join(home, '.claude', 'settings.json') }, ws, [], home);
+    assert.strictEqual(settingsWrite.grantDir, null, 'no folder grant is offered for the runtime home root');
+
+    const hooksWrite = hook.classifyFileAccess('Write', { file_path: path.join(home, '.claude', 'hooks', 'pretool.sh') }, ws, [], home);
+    assert.strictEqual(hooksWrite.grantDir, hook.canonicalize(path.join(home, '.claude', 'hooks')),
+      'a folder-shaped persistence surface still offers a grant, scoped no wider than its own folder');
+  });
+});
+
+// ARCHITECTURE.md's boundary passage names two guarantees about the same
+// credential file that hold at DIFFERENT layers: the OS-level sandbox block
+// (lib/workspace/scaffold.js's runtimeRoots) permits writing anywhere under
+// `~/.claude`, because the runtime's own bookkeeping lives there, while the
+// permission card (the secrets registry) always refuses the credential file
+// regardless, in both modes. That distinction only holds while the
+// credential file actually sits inside the root the OS-level block names as
+// writable: a future secrets-registry entry that landed outside it, or a
+// writable-roots change that stopped naming `~/.claude`, would silently
+// change which layer is doing the refusing without either document noticing.
+describe('the secrets registry sits inside the OS-permitted root, which is what makes it a different layer\'s guarantee', () => {
+  test('every secrets-registry path resolves under the same runtime-home root the sandbox block names as writable', () => {
+    const home = '/Users/someone';
+    const block = scaffold.sandboxSettings('/w/ws', 'darwin', home);
+    const claudeRoot = path.posix.join(home, '.claude');
+    assert.ok(block.filesystem.allowWrite.includes(claudeRoot),
+      'the OS-level block names the runtime home as a writable root');
+    for (const relative of hook.SECRET_RELATIVE_PATHS) {
+      const secretPath = path.posix.join(claudeRoot, relative);
+      assert.ok(secretPath === claudeRoot || secretPath.startsWith(claudeRoot + '/'),
+        `${secretPath} must sit inside the root the OS-level block permits, or the card is no longer the only thing refusing it`);
+    }
   });
 });
