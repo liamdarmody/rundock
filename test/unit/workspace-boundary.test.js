@@ -769,6 +769,38 @@ describe('the agent\'s own folder: three tiers, one registry', () => {
     assert.strictEqual(secretRead.crossings[0].secret, true, 'a read-only command touching the credential file still cards');
   });
 
+  test('a bare & joins two commands, so the second is graded on its own and cannot ride the first', () => {
+    // A single `&` backgrounds what precedes it and runs what follows, so it
+    // joins two commands exactly as `&&` does. The segmenter split on `&&`,
+    // `||`, `;` and `|` and passed a lone `&` through as ordinary text, so the
+    // whole command was judged by its leading word: `ls x & rm -rf x` read as
+    // read-only on the strength of the `ls`, and the removal against a
+    // persistence surface was freed without a card.
+    const home = tmp('af-amp-home-');
+    fs.mkdirSync(path.join(home, '.claude', 'agents'), { recursive: true });
+    const ws = tmp('af-amp-ws-');
+    const agents = path.join(home, '.claude', 'agents');
+
+    for (const command of [
+      `ls -1 ${agents} & rm -rf ${path.join(agents, 'dev.md')}`,
+      `ls -1 ${agents} 2>/dev/null & rm -rf ${path.join(agents, 'dev.md')}`,
+      // Backgrounding the destructive half instead must fail the same way.
+      `rm -rf ${path.join(agents, 'dev.md')} & ls -1 ${agents}`,
+      // And the existing separators keep failing, so the fix adds one rather
+      // than replacing the set.
+      `ls -1 ${agents} && rm -rf ${path.join(agents, 'dev.md')}`,
+    ]) {
+      const verdict = hook.classifyShellAccess('Bash', { command }, ws, [], home);
+      assert.ok(verdict && verdict.crossings.some(c => c.persistenceSurface),
+        `one unregistered command disqualifies the whole line, however it is joined: ${command}`);
+    }
+
+    // A command that is merely backgrounded, with nothing after it, is still
+    // only that command: the separator must not turn a read into a write.
+    assert.strictEqual(hook.classifyShellAccess('Bash', { command: `ls -1 ${agents} &` }, ws, [], home), null,
+      'backgrounding a read is still a read');
+  });
+
   test('a redirection that discards output is not a write, so it cannot turn a read-only command into a persistence-surface card', () => {
     // MEASURED FROM A REAL SESSION. Asked to list the global agents and
     // skills, an agent reached for

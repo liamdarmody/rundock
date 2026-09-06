@@ -573,6 +573,36 @@ describe('the connectors tab edits the file the runtime reads', () => {
       'a workspace with no platform agent resolves no guide, which is the branch that must draw nothing');
   });
 
+  test('the handler the affordance emits is the one the running client declares, taking the agent id it passes', () => {
+    // THE OTHER HALF OF THE AFFORDANCE'S CONTRACT. The markup emits
+    // onclick="startConversation(this.dataset.agentId)", and asserting that
+    // string against the markup only proves the markup matches itself. If the
+    // handler is renamed, stops being reachable as a bare global from this
+    // module, or starts wanting an agent object or a slug rather than the id,
+    // the button does nothing and every test here still passes.
+    const src = fs.readFileSync(path.join(__dirname, '..', '..', 'public', 'views', 'conversations.js'), 'utf8');
+    const decl = /^function startConversation\s*\(([^)]*)\)/m.exec(src);
+    assert.ok(decl, 'startConversation is declared as a bare function, reachable as a global from the settings module');
+
+    // One parameter, and it is the identifier this markup passes, not an agent
+    // object: `data-agent-id` carries an id, and dataset values are strings.
+    const params = decl[1].split(',').map(t => t.trim()).filter(Boolean);
+    assert.deepStrictEqual(params, ['agentId'],
+      'it takes exactly the agent id the affordance hands it');
+
+    // And the id the markup emits is the one getGuide resolves, so the two
+    // halves meet: the value put into the attribute is the value the handler
+    // is declared to receive.
+    global.getGuide = () => ({ id: 'agent-doc-1', type: 'platform', name: 'rundock-guide', displayName: 'Doc' });
+    try {
+      const html = settings.connectorsSectionHtml(settings.connectorsParse(MCP));
+      assert.match(html, /data-agent-id="agent-doc-1"/,
+        'the resolved guide id is what travels in the attribute the handler reads back');
+    } finally {
+      delete global.getGuide;
+    }
+  });
+
   test('adding a connector is handed to the guide, and the affordance is absent when there is no guide', () => {
     // The three surfaces that already do this (Files, Skills, the routine
     // editor) all guard on the guide existing and render nothing without one,

@@ -490,7 +490,14 @@ function shellSegments(command) {
     if ((ch === '&' && str[i + 1] === '&') || (ch === '|' && str[i + 1] === '|')) {
       segments.push(cur); cur = ''; i++; continue;
     }
-    if (ch === ';' || ch === '|') { segments.push(cur); cur = ''; continue; }
+    // A LONE `&` JOINS TWO COMMANDS TOO. It backgrounds what precedes it and
+    // runs what follows, so `ls x & rm -rf x` is two commands exactly as
+    // `ls x && rm -rf x` is. Passing it through as ordinary text left the whole
+    // line judged by its leading word, so the removal rode in free on the `ls`.
+    // `&&` is consumed above, so any `&` reaching here is the single form; a
+    // trailing one yields an empty segment, which carries nothing to
+    // disqualify and leaves a backgrounded read a read.
+    if (ch === ';' || ch === '|' || ch === '&') { segments.push(cur); cur = ''; continue; }
     cur += ch;
   }
   segments.push(cur);

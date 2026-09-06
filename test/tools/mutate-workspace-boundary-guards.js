@@ -208,6 +208,11 @@ const MUTATIONS = [
   [HOOK, 'a persistence-surface shell crossing is freed by a read-only command, not only by staying in tier three',
     '(!tags.persistenceSurface || readOnly)',
     '(!tags.persistenceSurface)'],
+  // Stop treating a lone `&` as a separator and `ls x & rm -rf x` is judged by
+  // its leading word again, freeing the removal against a persistence surface.
+  [HOOK, 'a lone & separates commands, so the second cannot ride the first',
+    "    if (ch === ';' || ch === '|' || ch === '&') { segments.push(cur); cur = ''; continue; }",
+    "    if (ch === ';' || ch === '|') { segments.push(cur); cur = ''; continue; }"],
   // Stop stripping the discarding redirects and one `2>/dev/null` appended
   // to `ls` grades the whole command a WRITE again, which is the card a real
   // session was shown for a command that writes nothing.
