@@ -88,6 +88,18 @@ const SECRET_RELATIVE_PATHS = ['.credentials.json'];
 // folder root, not a same-named file nested somewhere already free.
 const PERSISTENCE_SURFACE_DIRS = ['agents', 'skills', 'plugins', 'commands', 'hooks'];
 const PERSISTENCE_SURFACE_FILES = ['settings.json'];
+// Shell commands known to only read, never write, when invoked alone. Used
+// ONLY to re-grade a crossing under the runtime's OWN home (see
+// isReadOnlyShellCommand below): a shell command cannot declare which act it
+// performs, so this is the one place that infers a read from the command
+// text rather than from which tool was called. FAIL SAFE: a command not
+// entirely built from this list is never treated as read-only, whatever it
+// is. Outside the runtime's home this registry is never consulted at all;
+// the existing text-heuristic crossing detection is unaffected.
+const READ_ONLY_SHELL_COMMANDS = [
+  'ls', 'cat', 'head', 'tail', 'find', 'grep', 'rg', 'wc', 'file', 'stat',
+  'realpath', 'basename', 'dirname', 'echo', 'pwd', 'tree', 'du',
+];
 
 // canonicalize only folds case for path components that already exist: an
 // unborn target realpaths its nearest existing ancestor and reattaches the
@@ -267,7 +279,17 @@ function classifyFileAccess(toolName, toolInput, workspaceRoot, extraDirs = [], 
   // The folder a standing grant would cover (never a secrets-tier crossing):
   // the directory itself for the directory-scanning tools, the parent for a file.
   const grantDir = (toolName === 'Glob' || toolName === 'Grep') ? resolvedPath : path.dirname(resolvedPath);
-  return { where: 'outside', resolvedPath, grantDir: tags.secret ? null : grantDir, ...tags };
+  // `settings.json` is the one persistence-surface entry that is a FILE
+  // rather than a folder, so the "grant directory" beside it is not a
+  // sub-folder of the runtime home, it IS the runtime home root. Offering a
+  // whole-folder grant there would silence every later write to agents/,
+  // skills/, plugins/, commands/ and hooks/ too: the wide-grant shape this
+  // release removed, reappearing through the one crossing that does not fit
+  // the folder-shaped assumption behind grantDir. No standing grant is
+  // offered for the runtime home root itself, exactly as the secrets tier
+  // already refuses one for any folder.
+  const noGrant = tags.secret || (tags.agentHome && grantDir === agentHomeRoot(home));
+  return { where: 'outside', resolvedPath, grantDir: noGrant ? null : grantDir, ...tags };
 }
 
 // The shell-command half of the same boundary.
@@ -401,6 +423,64 @@ function flavourFor(token, workspaceRoot) {
   return path;
 }
 
+// Splits a command into its top-level segments on the separators a shell
+// actually uses to run more than one thing (`;`, `&&`, `||`, a pipe), aware
+// of quoting so a separator character inside a quoted string is not one.
+// Order does not matter here (unlike shellPathTokens): every segment must
+// qualify for the command to be read-only, so which one is checked first
+// changes nothing about the answer.
+function shellSegments(command) {
+  const segments = [];
+  let cur = '';
+  let quote = null;
+  const str = String(command);
+  for (let i = 0; i < str.length; i++) {
+    const ch = str[i];
+    if (quote) {
+      cur += ch;
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === "'" || ch === '"') { quote = ch; cur += ch; continue; }
+    if ((ch === '&' && str[i + 1] === '&') || (ch === '|' && str[i + 1] === '|')) {
+      segments.push(cur); cur = ''; i++; continue;
+    }
+    if (ch === ';' || ch === '|') { segments.push(cur); cur = ''; continue; }
+    cur += ch;
+  }
+  segments.push(cur);
+  return segments;
+}
+
+// Whether a shell command, taken as a whole, only reads. Used ONLY to
+// re-grade an agent-home crossing that would otherwise card because it
+// touches a persistence surface (see shellCrossings): the tier itself is
+// unaffected, and a secrets-registry crossing is never re-graded regardless
+// of this answer.
+//
+// FAIL SAFE, both ways at once:
+// - Any write-shaped redirection (`>`, `>>`) or a `tee` invocation anywhere
+//   in the command disqualifies the WHOLE command, because which stream a
+//   redirection targets is not decidable from text alone, and echo alone is
+//   only harmless without one (`echo x > ~/.claude/hooks/y` still writes).
+// - EVERY segment must lead with a word this registry names. One
+//   unrecognised leading word (an env assignment, a subshell, a command not
+//   on the list) fails the whole command, not just that segment: a
+//   compound like `ls ~/.claude/agents && rm -rf ~/.claude/agents/x` must
+//   still card, and it does because `rm` is not in the registry.
+function isReadOnlyShellCommand(command) {
+  const str = String(command);
+  if (/>>?|\btee\b/.test(str)) return false;
+  const segments = shellSegments(str);
+  return segments.length > 0 && segments.every(seg => {
+    const trimmed = seg.trim();
+    if (!trimmed) return true; // an empty segment (trailing separator) carries nothing to disqualify it
+    const word = (trimmed.match(/^(\S+)/) || [])[1] || '';
+    const bare = word.includes('/') ? word.slice(word.lastIndexOf('/') + 1) : word;
+    return READ_ONLY_SHELL_COMMANDS.includes(bare);
+  });
+}
+
 // EVERY distinct target in the command that resolves outside, not the first.
 //
 // One reported path is not enough, because the server decides a standing
@@ -410,6 +490,11 @@ function flavourFor(token, workspaceRoot) {
 function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), foldsCase = hostFoldsCase()) {
   const found = [];
   const seen = new Set();
+  // Computed once for the whole command, not per token: whether it may read
+  // a persistence surface under the runtime's OWN home free is a property of
+  // the command as a whole (see isReadOnlyShellCommand), never of one target
+  // in isolation.
+  const readOnly = isReadOnlyShellCommand(command);
   for (const raw of shellPathTokens(command)) {
     let t = raw;
     let homed = false;
@@ -431,9 +516,13 @@ function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), 
     // Tier three (neither secret nor a persistence surface) is free, so it
     // is not reported at all. A command cannot declare which act it
     // performs, so a persistence surface is conservatively treated as a
-    // write here.
+    // write here UNLESS the command is built entirely from read-only
+    // commands (isReadOnlyShellCommand above), in which case it is free too,
+    // exactly as a Read/Glob/Grep of the same path already is via
+    // classifyFileAccess. The secrets tier is never re-graded this way: it
+    // cards on any access, read or write, regardless of what the command is.
     const tags = agentHomeTags(resolved, home, foldsCase);
-    if (tags.agentHome && !tags.secret && !tags.persistenceSurface) continue;
+    if (tags.agentHome && !tags.secret && (!tags.persistenceSurface || readOnly)) continue;
     const key = pmod === path.win32 ? resolved.toLowerCase() : resolved;
     if (seen.has(key)) continue;
     seen.add(key);
@@ -460,7 +549,7 @@ function classifyShellAccess(toolName, toolInput, workspaceRoot, extraDirs = [],
 module.exports = {
   isProtectedClaudeEdit, isMcpReadTool, classifyFileAccess, classifyShellAccess, canonicalize,
   isSecretPath, isPersistenceSurface, SECRET_RELATIVE_PATHS, PERSISTENCE_SURFACE_DIRS, PERSISTENCE_SURFACE_FILES,
-  REFUSED_CLAUDE_EDIT_DIRS,
+  REFUSED_CLAUDE_EDIT_DIRS, READ_ONLY_SHELL_COMMANDS, isReadOnlyShellCommand,
 };
 
 if (require.main === module) main();

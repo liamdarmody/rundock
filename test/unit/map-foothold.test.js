@@ -85,6 +85,82 @@ describe('the resolver: exact path first, then the stated tie rule', () => {
   });
 });
 
+describe('the resolver: proximity to fromPath breaks a basename tie before depth does', () => {
+  // The reported defect: [[README|...]] written inside a project folder that
+  // also holds a README opened the workspace ROOT's README instead, because
+  // depth alone always prefers the shallowest candidate and the root's
+  // README is shallower than every other README in the vault.
+  test('from a nested file, a bare [[README]] resolves to the README in its own folder, not the root one', () => {
+    const tree = [
+      file('README.md'),
+      folder('nested', [file('nested/README.md')]),
+    ];
+    assert.strictEqual(findFileInTree(tree, 'README.md', 'nested/File.md'), 'nested/README.md',
+      'the caller\'s own folder holds a match, so the root candidate never gets to compete on depth');
+  });
+
+  test('from a file whose own folder has no match, it walks outward: parent folder\'s match beats the root\'s', () => {
+    const tree = [
+      file('README.md'),
+      folder('parent', [
+        file('parent/README.md'),
+        folder('parent/child', [file('parent/child/Other.md')]),
+      ]),
+    ];
+    assert.strictEqual(findFileInTree(tree, 'README.md', 'parent/child/File.md'), 'parent/README.md',
+      'no match in the caller\'s own folder falls back to the nearest ancestor\'s, not straight to the root');
+  });
+
+  test('with no source path given, the old shallowest-then-tree-order behaviour is unchanged', () => {
+    const tree = [
+      folder('deep', [folder('deep/deeper', [file('deep/deeper/Notes.md')])]),
+      folder('shallow', [file('shallow/Notes.md')]),
+    ];
+    assert.strictEqual(findFileInTree(tree, 'Notes.md'), 'shallow/Notes.md',
+      'omitting fromPath is every existing caller\'s behaviour, and must not change');
+    const tied = [
+      folder('a', [file('a/Notes.md')]),
+      folder('b', [file('b/Notes.md')]),
+    ];
+    assert.strictEqual(findFileInTree(tied, 'Notes.md'), 'a/Notes.md',
+      'and with no proximity to break the tie, tree order still does');
+  });
+
+  test('an exact path match still wins over any nearer basename match', () => {
+    const tree = [
+      folder('nested', [file('nested/Notes.md')]),
+      folder('other', [file('other/Notes.md')]),
+    ];
+    // fromPath sits right beside nested/Notes.md, which proximity would pick
+    // over other/Notes.md on a basename search; the search name here instead
+    // names other/Notes.md exactly, and an exact path may not be outranked by
+    // any basename candidate, however close.
+    assert.strictEqual(findFileInTree(tree, 'other/Notes.md', 'nested/Something.md'), 'other/Notes.md');
+  });
+
+  // The shape that made this worth fixing: a workspace with a README in
+  // nearly every folder, and links written as the bare name. Every one of
+  // them used to open the README at the root, whichever folder it was
+  // written in, so a link read as pointing at the project it sat inside and
+  // went somewhere else entirely.
+  test('with a README in every folder, a bare link finds the one beside it', () => {
+    const tree = [
+      file('README.md'),
+      folder('projects', [
+        file('projects/README.md'),
+        folder('projects/spring-launch', [
+          file('projects/spring-launch/README.md'),
+          file('projects/spring-launch/Talk-Notes.md'),
+        ]),
+      ]),
+    ];
+    assert.strictEqual(
+      findFileInTree(tree, 'README.md', 'projects/spring-launch/Talk-Notes.md'),
+      'projects/spring-launch/README.md',
+      'of three README candidates, the one sharing the link\'s own folder wins');
+  });
+});
+
 describe('extraction stores what a file says, and nothing it resolves', () => {
   test('wikilinks, aliases, embeds and workspace markdown links are told apart', () => {
     const links = extractLinks([

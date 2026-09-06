@@ -39,13 +39,20 @@ const MUTATIONS = [
   // Blind the exact-path branch and a fully qualified link falls back to the
   // basename rule, which is the wrong-file defect this lane removes.
   [FILES, 'an exact path match beats every basename match',
-    "        if (item.path.toLowerCase() === searchLower) {",
-    "        if (false && item.path.toLowerCase() === searchLower) {"],
-  // Invert the depth half of the tie rule and a bare name resolves to the
-  // most nested candidate instead of the least.
+    "        if (searchIsQualified && item.path.toLowerCase() === searchLower) {",
+    "        if (false && searchIsQualified && item.path.toLowerCase() === searchLower) {"],
+  // Zero out the proximity term and a nearer folder's file stops winning over
+  // a stranger the depth-first tie rule would have preferred instead: the
+  // regression this guards is a bare [[README]] opening the workspace root's
+  // README again, from inside a project folder that has its own.
+  [FILES, 'basename ties break to the nearest folder first, before depth',
+    "          const shared = fromSegments ? commonPrefixLen(fromSegments, dirSegments(item.path)) : 0;",
+    "          const shared = 0;"],
+  // Invert the depth half of the tie rule and, once proximity is tied, a bare
+  // name resolves to the most nested candidate instead of the least.
   [FILES, 'basename ties break to the shortest path first',
-    "          if (!best || depth < best.depth || (depth === best.depth && at < best.at)) {",
-    "          if (!best || depth > best.depth || (depth === best.depth && at < best.at)) {"],
+    "          if (!best || shared > best.shared ||\n              (shared === best.shared && (depth < best.depth || (depth === best.depth && at < best.at)))) {",
+    "          if (!best || shared > best.shared ||\n              (shared === best.shared && (depth > best.depth || (depth === best.depth && at < best.at)))) {"],
   // Invert the order half and equal-depth ties stop being deterministic in
   // the tree's own order.
   [FILES, 'equal-depth ties break to tree order',
@@ -87,7 +94,7 @@ const MUTATIONS = [
   // Resolve on every request and the memo is decoration: the counting test
   // is what notices the criterion's own words stopped being true.
   [ROUTER, 'an unchanged tree is answered from the memo, never re-resolved',
-    "        if (!graphMemo.resolved.has(target)) {",
+    "        if (!graphMemo.resolved.has(key)) {",
     "        if (true) {"],
   // Swallow a real failure into a success and a corrupt index renders as an
   // empty workspace with nothing telling anybody.
