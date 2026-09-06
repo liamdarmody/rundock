@@ -37,6 +37,11 @@ const SCHEDULER = { src: path.join(ROOT, 'lib', 'scheduler.js'), suite: 'test/un
 const MODEL = { src: path.join(ROOT, 'public', 'routines-model.js'), suite: 'test/unit/approve-once.test.js' };
 // The settings view's pure half, where the connectors file is parsed and merged.
 const SETTINGS = { src: path.join(ROOT, 'public', 'views', 'settings.js'), suite: 'test/unit/approve-once.test.js' };
+// Same file as SETTINGS, a different suite: the read-failed WIRING is only
+// reachable through connectorsLoad against a real non-ok response, which the
+// unit suite (which drives the pure renderer with a state it builds itself)
+// cannot see.
+const SETTINGS_WIRING = { src: path.join(ROOT, 'public', 'views', 'settings.js'), suite: 'test/integration/http-api.test.js' };
 
 const MUTATIONS = [
   // ===== APPROVAL IS THE HASH, MATCHED, NOT A FLAG =====
@@ -86,6 +91,13 @@ const MUTATIONS = [
     '        updates[key] = computePlanHash(routine);'],
 
   // ===== THE CONNECTORS FILE IS EDITED, NEVER CLOBBERED =====
+  // Drop the flag the failing read sets and the panel falls through to the
+  // sourceErrors path with no rows, drawing "No connectors configured in this
+  // workspace yet." beside the error: the two opposite claims about one
+  // workspace, which is the confusion the panel must never create.
+  [SETTINGS_WIRING, 'a failing read is recorded as a failed read, not as an absent file',
+    '      if (res.error) return { servers: [], missing: false, readFailed: true, error: res.error };',
+    '      if (res.error) return { servers: [], missing: false, error: res.error };'],
   // Render a read-failed state as the empty state and a workspace whose
   // connector file could not be read looks like a workspace with none, which
   // is the one confusion this panel must never create.
@@ -150,7 +162,7 @@ function redTests(suite) {
 }
 
 function run() {
-  const targets = [ROUTINES, SCHEDULER, MODEL, SETTINGS];
+  const targets = [ROUTINES, SCHEDULER, MODEL, SETTINGS, SETTINGS_WIRING];
   const session = beginMutationRun({ files: [...new Set(targets.map((target) => target.src))] });
   const originals = new Map();
   for (const target of targets) originals.set(target, session.original(target.src));

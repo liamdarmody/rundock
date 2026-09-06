@@ -329,6 +329,30 @@ describe('path traversal guards', () => {
     dom.window.close();
   });
 
+  test('a read that fails renders why, and never the empty state, driven through connectorsLoad itself', async () => {
+    // THE WIRING, NOT THE RENDERER. The pure renderer is asserted in the unit
+    // suite with a hand-built state, which cannot prove that a failing read
+    // actually produces that state. This drives connectorsLoad against a real
+    // non-ok response, so the one assignment that separates "we could not find
+    // out" from "there are none" is covered where it is made: drop
+    // `readFailed: true` from the error branch and the panel falls through to
+    // the sourceErrors path with no rows, rendering "No connectors configured
+    // in this workspace yet." beside the error, which is the confusion this
+    // panel must never create. Every other test still passes if that happens.
+    const { w, dom } = connectorsPage();
+    const realFetch = w.fetch;
+    w.fetch = (u, opts) => (String(u).includes('.mcp.json')
+      ? Promise.resolve({ ok: false, status: 500, text: () => Promise.resolve('') })
+      : realFetch(u, opts));
+
+    await w.connectorsLoad();
+    const page = w.document.getElementById('settings-content').innerHTML;
+    assert.match(page, /Could not read \.mcp\.json/, 'the reason the panel is empty is on the panel');
+    assert.doesNotMatch(page, /No connectors configured/,
+      'a file that could not be read is not a workspace with no connectors');
+    dom.window.close();
+  });
+
   // The write leg that stood here drove the two-field add form end to end.
   // The form is gone: a name and one free-text field cannot express what a
   // connector needs to start, so adding is now a conversation with the guide.

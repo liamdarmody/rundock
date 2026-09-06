@@ -87,6 +87,13 @@ const MUTATIONS = [
   // edit is tagged as no crossing at all, Code mode auto-approves anything not
   // tagged outside, and a write to the GLOBAL agents folder is allowed, lands
   // where the app never reads, and reports success.
+  // Drop the workspace exemption and anyone who opens a workspace under the
+  // runtime home has every ordinary write in it refused outright, with no card
+  // and no way past.
+  [HOOK_INTEGRATION, 'a target inside the open workspace is never refused, even under the runtime home',
+    '  const targetInsideWorkspace = refusalTarget !== null\n'
+    + '    && buildRoots(wsRoot, extraDirs).some(r => isUnder(refusalTarget, r));',
+    '  const targetInsideWorkspace = false;'],
   // Only the surface refusal is mutated for this rule, and deliberately so.
   // `agents/` and `skills/` are persistence surfaces as well, so gating the
   // agents-and-skills refusal alone changes no verdict: the surface refusal
@@ -96,8 +103,8 @@ const MUTATIONS = [
   // The ordering rule these two share is proven by the one that can move a
   // verdict.
   [HOOK_INTEGRATION, 'Code mode cannot answer the runtime-home surface refusal',
-    '  if (isRuntimeHomeSurfaceEdit(data.tool_name, data.tool_input)) {',
-    "  if (process.env.RUNDOCK_CODE_MODE !== '1' && isRuntimeHomeSurfaceEdit(data.tool_name, data.tool_input)) {"],
+    '  if (!targetInsideWorkspace && isRuntimeHomeSurfaceEdit(data.tool_name, data.tool_input)) {',
+    "  if (process.env.RUNDOCK_CODE_MODE !== '1' && !targetInsideWorkspace && isRuntimeHomeSurfaceEdit(data.tool_name, data.tool_input)) {"],
   [HOOK, 'the roots are canonicalised too, or a symlink-opened workspace denies its own files',
     '  return [canonicalize(workspaceRoot, pmod), ...extraDirs.map(d => canonicalize(d, pmod))];',
     '  return [pmod.resolve(workspaceRoot), ...extraDirs.map(d => pmod.resolve(d))];'],

@@ -525,11 +525,52 @@ describe('the connectors tab edits the file the runtime reads', () => {
     // the rest of the panel. Inviting a change to a file whose contents are
     // unknown, or describing a connector landscape this read never
     // established, is the failure the early return exists to prevent.
-    assert.doesNotMatch(failed, /Talk to Doc/,
-      'a read that failed does not invite an add against a file it could not read');
+    // The stub is installed here on purpose. Without it the affordance is
+    // omitted because no guide resolves, and the assertion would pass with the
+    // read-failed early return deleted, proving nothing about the branch its
+    // message names.
+    global.getGuide = () => ({ id: 'agent-doc-1', type: 'platform', name: 'rundock-guide', displayName: 'Doc' });
+    try {
+      const withGuide = settings.connectorsSectionHtml({
+        servers: [], missing: false, readFailed: true,
+        error: 'Could not read .mcp.json, so its connectors are not shown. Reopen this tab to retry.',
+      });
+      assert.doesNotMatch(withGuide, /Talk to Doc/,
+        'a read that failed does not invite an add against a file it could not read, even with a guide present');
+    } finally {
+      delete global.getGuide;
+    }
     assert.doesNotMatch(failed, /Account connectors are added at claude\.ai/,
       'nor does it describe the wider connector picture it never established');
     assert.doesNotMatch(failed, /Connectors are read from/);
+  });
+
+  test('the guide accessor the add affordance calls is the one the running client declares, returning an object with an id', () => {
+    // THE DOUBLE IS COMPARED AGAINST THE REAL CONTRACT. The affordance calls a
+    // bare global `getGuide()` and interpolates `.id`. Every test here supplies
+    // that itself, so renaming the accessor, moving it out of reach as a bare
+    // global, or returning a shape without `id` would leave the button
+    // silently absent (or carrying `data-agent-id="undefined"`) with the whole
+    // suite still green. This reads the client's own declaration instead.
+    const appSrc = fs.readFileSync(path.join(__dirname, '..', '..', 'public', 'app.js'), 'utf8');
+    assert.match(appSrc, /^function getGuide\s*\(/m,
+      'getGuide is declared as a bare function in the client, reachable as a global from the settings module');
+
+    // And it returns something carrying the property the markup interpolates.
+    const body = /^function getGuide\s*\([^)]*\)\s*\{([\s\S]*?)\}\s*$/m.exec(appSrc);
+    assert.ok(body, 'the declaration is readable, or this proves nothing about its result');
+    const agents = [{ id: 'agent-doc-1', type: 'platform', name: 'rundock-guide', displayName: 'Doc' }, { id: 'other', type: 'team' }];
+    const resolved = new Function('agents', body[1])(agents);
+    assert.ok(resolved && typeof resolved.id === 'string' && resolved.id,
+      'the guide it resolves carries the id this markup interpolates');
+    assert.strictEqual(resolved.id, 'agent-doc-1', 'and it is the platform agent, which is what the guide is');
+    assert.ok(typeof resolved.displayName === 'string' && resolved.displayName,
+      'and it carries the display name this copy puts in a sentence, rather than only the slug');
+
+    // The no-guide branch is the product's own empty answer, not merely the
+    // symbol being absent under node: a workspace with no platform agent.
+    assert.strictEqual(new Function('agents', body[1])([{ id: 'x', type: 'team' }]), undefined,
+      'a workspace with no platform agent resolves no guide, which is the branch that must draw nothing');
   });
 
   test('adding a connector is handed to the guide, and the affordance is absent when there is no guide', () => {
@@ -542,7 +583,7 @@ describe('the connectors tab edits the file the runtime reads', () => {
     assert.doesNotMatch(withoutGuide, /Talk to Doc/,
       'no guide, no button: a control that opens nothing is worse than no control');
 
-    global.getGuide = () => ({ id: 'agent-doc-1', type: 'platform' });
+    global.getGuide = () => ({ id: 'agent-doc-1', type: 'platform', name: 'rundock-guide', displayName: 'Doc' });
     try {
       const withGuide = settings.connectorsSectionHtml(settings.connectorsParse(MCP));
       assert.match(withGuide, /Talk to Doc/);

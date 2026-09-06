@@ -630,6 +630,25 @@ process.stdin.on('end', () => {
     process.exit(0);
   }
 
+  const wsRoot = process.env.RUNDOCK_WORKSPACE || process.cwd();
+  const extraDirs = (process.env.RUNDOCK_EXTRA_DIRS || '').split(path.delimiter).filter(Boolean);
+  // A WORKSPACE OPENED UNDER THE RUNTIME HOME IS STILL A WORKSPACE. Both
+  // refusals below are about reaching the runtime's own configuration from
+  // somewhere else; neither is about the folder a person deliberately opened.
+  // Someone authoring a plugin in `~/.claude/plugins/my-plugin` writes
+  // ordinary files there, and without this the refusals would deny every one
+  // of them outright, with no card and no way past it, telling them to go and
+  // edit the workspace they are already in. The containment test is the
+  // classifier's own, so one place cannot be inside for the boundary and
+  // outside for the refusals.
+  const refusalTarget = (function () {
+    const ti = (data && data.tool_input) || {};
+    const t = ti.file_path || ti.notebook_path || ti.path;
+    return typeof t === 'string' && t ? canonicalize(path.resolve(wsRoot, t)) : null;
+  }());
+  const targetInsideWorkspace = refusalTarget !== null
+    && buildRoots(wsRoot, extraDirs).some(r => isUnder(refusalTarget, r));
+
   // THE REFUSALS RUN FIRST, BEFORE ANYTHING CAN ANSWER THEM. They are
   // enforcement rather than a prompt, so no mode, grant or classification may
   // speak for the reader here. Placed after the boundary classification, they
@@ -648,7 +667,7 @@ process.stdin.on('end', () => {
   // that Rundock never reads, leaving the user told "done" while the workspace
   // file, and the profile panel, never changed. This is enforcement, not a
   // prompt: the wrong path can no longer look like a success.
-  if (isProtectedClaudeEdit(data.tool_name, data.tool_input)) {
+  if (!targetInsideWorkspace && isProtectedClaudeEdit(data.tool_name, data.tool_input)) {
     process.stdout.write(JSON.stringify({
       hookSpecificOutput: {
         hookEventName: 'PreToolUse',
@@ -665,7 +684,7 @@ process.stdin.on('end', () => {
   // runtime refuses outright (measured; see isRuntimeHomeSurfaceEdit). Rundock
   // cannot approve past it, so a card saying "Approve always" for such a write
   // is a promise the product cannot keep.
-  if (isRuntimeHomeSurfaceEdit(data.tool_name, data.tool_input)) {
+  if (!targetInsideWorkspace && isRuntimeHomeSurfaceEdit(data.tool_name, data.tool_input)) {
     process.stdout.write(JSON.stringify({
       hookSpecificOutput: {
         hookEventName: 'PreToolUse',
@@ -679,8 +698,6 @@ process.stdin.on('end', () => {
   // Workspace file-access boundary. Classified BEFORE the code-mode
   // short-circuit on purpose: code mode trusts commands inside the
   // workspace, it does not extend the workspace to the whole machine.
-  const wsRoot = process.env.RUNDOCK_WORKSPACE || process.cwd();
-  const extraDirs = (process.env.RUNDOCK_EXTRA_DIRS || '').split(path.delimiter).filter(Boolean);
   // File tools and shell commands are classified by the same boundary and
   // reach the same card. classifyShellAccess only ever answers 'outside' or
   // null, so an ordinary command keeps whatever card it already had: the

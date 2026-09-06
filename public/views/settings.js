@@ -633,11 +633,17 @@ function connectorsSectionHtml(state) {
   // exactly as those three surfaces omit theirs, rather than offering a
   // button that opens nothing.
   const guide = (typeof getGuide === 'function') ? getGuide() : null;
+  // Which agent is the guide is a property of the workspace, so its name is
+  // read from the guide rather than written into this copy as a constant.
+  // displayName first, then name: `name` is the slug (`rundock-guide`), and
+  // putting that in a sentence reads as machinery. Same order skills.js uses
+  // for the same reason.
+  const guideName = (guide && (guide.displayName || guide.name)) || 'the guide';
   const addHtml = guide
     ? `<div class="settings-card"><div class="settings-row" style="flex-direction:column;align-items:stretch;gap:8px">
       <span class="settings-label">Add a connector</span>
-      <span class="settings-prose">Connectors differ in what they need to start: some take a command and arguments, some a URL, and most need credentials. Doc can work out which this one is, write it into <code>.mcp.json</code>, and tell you what it still needs.</span>
-      <button class="settings-btn" data-agent-id="${connectorsEsc(guide.id)}" onclick="startConversation(this.dataset.agentId)">Talk to Doc</button>
+      <span class="settings-prose">Connectors differ in what they need to start: some take a command and arguments, some a URL, and most need credentials. ${connectorsEsc(guideName)} can work out which this one is, write it into <code>.mcp.json</code>, and tell you what it still needs.</span>
+      <button class="settings-btn" data-agent-id="${connectorsEscAttr(guide.id)}" onclick="startConversation(this.dataset.agentId)">Talk to ${connectorsEsc(guideName)}</button>
     </div></div>`
     : '';
   return `<div class="settings-section-title">Connectors</div>${body}

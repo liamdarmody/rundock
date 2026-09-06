@@ -305,6 +305,79 @@ describe('workspace file-access boundary', () => {
     }
   });
 
+  test('a workspace opened under the runtime home is still a workspace: its own files are writable', async () => {
+    // The refusals are about reaching the runtime's configuration from
+    // somewhere else, never about the folder a person deliberately opened.
+    // Running them ahead of the boundary classification (so no mode could
+    // answer them) put them ahead of the 'inside the open workspace' answer
+    // too, which locked out anyone authoring a plugin in
+    // `~/.claude/plugins/<name>`: every ordinary write in their own workspace
+    // was denied outright, with no card and no way past, by a message telling
+    // them to go and edit the workspace they were already in.
+    const home = os.homedir();
+    const pluginWs = path.join(home, '.claude', 'plugins', 'my-plugin');
+    fs.mkdirSync(path.join(pluginWs, '.claude', 'agents'), { recursive: true });
+
+    const inWorkspace = { RUNDOCK_WORKSPACE: pluginWs };
+    for (const rel of ['README.md', path.join('src', 'index.js'), path.join('.claude', 'agents', 'mine.md')]) {
+      const out = await runHook('Write', { file_path: path.join(pluginWs, rel), content: 'x' }, inWorkspace);
+      assert.strictEqual(decisionOf(out), 'allow', `${rel} is inside the opened workspace and is written normally`);
+    }
+
+    // AND THE REFUSAL STILL HOLDS FOR THE RUNTIME'S OWN CONFIGURATION, reached
+    // from that same workspace: being opened under the folder does not hand
+    // over the folder.
+    const out = await runHook('Write', { file_path: path.join(home, '.claude', 'agents', 'dev.md'), content: 'x' }, inWorkspace);
+    assert.strictEqual(decisionOf(out), 'deny', 'the runtime home above the workspace is still refused');
+  });
+
+  test('the two tool families split at one persistence-surface path, and the refusal names what to do instead', async () => {
+    // THIS TEST EXISTS TO BIND THE TRUST PAGE TO THE HOOK. ARCHITECTURE.md
+    // states that a file-edit tool writing to a persistence surface under the
+    // runtime home is refused outright, while a shell command reaching the
+    // same path still cards and can genuinely land, because the runtime's
+    // sensitive-file rule governs its file-edit tools and the command layer is
+    // governed by the OS block, which names this folder writable. Both halves
+    // are read here at ONE path, so the page cannot drift from the product:
+    // the registry-binding test compares names only and could never catch a
+    // claim about verdicts.
+    const home = os.homedir();
+    fs.mkdirSync(path.join(home, '.claude', 'commands'), { recursive: true });
+
+    for (const target of [
+      path.join(home, '.claude', 'settings.json'),
+      path.join(home, '.claude', 'commands', 'note.md'),
+    ]) {
+      // The file-edit family: refused, with no question put.
+      let since = client.messages.length;
+      const refused = await runHook('Write', { file_path: target, content: 'x' });
+      assert.strictEqual(decisionOf(refused), 'deny', `${path.basename(target)}: the file-edit tool is refused`);
+      await h.delay(150);
+      assert.strictEqual(client.messages.slice(since).filter(m => m.type === 'control_request').length, 0,
+        `${path.basename(target)}: refused without asking`);
+
+      // AND THE REASON HAS TO EARN ITS PLACE. A refusal that names no
+      // alternative leaves the reader stuck, so the copy is asserted rather
+      // than merely the verdict: blanking or genericising it fails here.
+      const reason = reasonOf(refused);
+      assert.match(reason, /refuses this write whatever/i,
+        `${path.basename(target)}: the reason says the runtime refuses it regardless of approval`);
+      assert.match(reason, /reading and listing/i,
+        `${path.basename(target)}: the reason says reads are unaffected`);
+      assert.match(reason, /workspace/i,
+        `${path.basename(target)}: the reason names the workspace as where to make the change`);
+
+      // The shell family at the SAME path: still carded, still approvable.
+      since = client.messages.length;
+      const pending = runHook('Bash', { command: `echo x > ${target}` });
+      const { msg } = await client.waitFor(m => m.type === 'control_request'
+        && m.request && m.request.boundary === true, { since, label: `${path.basename(target)}: shell write cards` });
+      client.send({ type: 'permission_response', requestId: msg.request_id, conversationId: 'boundary-test', allow: true });
+      assert.strictEqual(decisionOf(await pending), 'allow',
+        `${path.basename(target)}: a shell write to the same path is approvable, which is why the page must not claim otherwise`);
+    }
+  });
+
   test('Code mode does not auto-approve a refusal: the deterministic denials outrank it', async () => {
     // PRE-EXISTING, found while narrowing the surface refusal. The refusals
     // are enforcement rather than a prompt, so nothing may answer them for the
