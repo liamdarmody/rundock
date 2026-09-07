@@ -468,3 +468,64 @@ describe('a manual run leaves the scheduler\'s own facts exactly as they were', 
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// The row's verdicts are computed from scheduled runs only
+// ---------------------------------------------------------------------------
+
+describe('the row\'s on-time, caught-up and missed verdicts ignore a manual run', () => {
+  const model = require('../../public/routines-model.js');
+  const ZONE = 'Europe/London';
+
+  // The status line the row renders, from the scheduler's own facts, the way
+  // discovery hands them over and the view passes them on.
+  function statusLine(sched) {
+    const facts = sched.routineDisplayFacts(KEY, SCHEDULE);
+    const state = sched.routineState[KEY] || null;
+    const row = model.row({
+      name: ROUTINE, schedule: SCHEDULE, agentName: 'Piper', runOn: 'local', enabled: true, paused: false,
+      lastStart: facts.lastStart, lastSlot: facts.lastSlot, missedSlot: facts.missedSlot, nextRun: facts.nextRun,
+      scheduleReadable: facts.scheduleReadable, lastRunStatus: state ? state.status : null, refusal: null,
+      prompt: 'go', now: NOW, zone: ZONE,
+    });
+    return { facts, status: row.status, nextRun: row.nextRun };
+  }
+
+  // Three histories, one per verdict the row can give.
+  const HISTORIES = {
+    'on time': { state: { lastRun: new Date(2026, 7, 20, 7, 0, 15).toISOString(), status: 'completed', duration: 3 } },
+    'caught up': { state: { lastRun: new Date(2026, 7, 20, 9, 14, 3).toISOString(), status: 'completed', duration: 3 } },
+    missed: {
+      state: { lastRun: new Date(2026, 7, 18, 7, 0, 3).toISOString(), status: 'completed', duration: 3 },
+      slots: { due: TODAYS_SLOT.toISOString(), schedule: 'daily:7:0', missed: [{ slot: new Date(2026, 7, 19, 7, 0).toISOString() }] },
+    },
+  };
+
+  for (const [verdict, history] of Object.entries(HISTORIES)) {
+    test(`a manual run leaves the ${verdict} line exactly as it was, during and after`, () => {
+      withRun(({ sched, agent, routine, children }) => {
+        sched.recordRoutineRun(KEY, history.state);
+        if (history.slots) sched.routineSlots.routines[KEY] = history.slots;
+        const before = statusLine(sched);
+        assert.ok(before.status, `sanity: the ${verdict} history renders a status line`);
+        assert.ok(before.status.text.toLowerCase().includes(verdict.split(' ')[0]), `sanity: it reads as ${verdict}`);
+
+        assert.strictEqual(sched.runRoutineNow(agent, routine, KEY).started, true);
+        assert.deepStrictEqual(statusLine(sched), before, 'while the pressed run is going');
+        children[0].emit('close', 0);
+        assert.deepStrictEqual(statusLine(sched), before, 'and after it has ended');
+      });
+    });
+  }
+
+  test('a failed manual run does not turn the row red', () => {
+    withRun(({ sched, agent, routine, children }) => {
+      sched.recordRoutineRun(KEY, HISTORIES['on time'].state);
+      const before = statusLine(sched);
+      assert.strictEqual(sched.runRoutineNow(agent, routine, KEY).started, true);
+      children[0].emit('close', 1);
+      assert.deepStrictEqual(statusLine(sched), before,
+        'a test run that failed is on its own record, not on the row\'s verdict about the schedule');
+    });
+  });
+});
