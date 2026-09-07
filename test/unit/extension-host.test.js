@@ -22,8 +22,8 @@ async function host() {
   return hostModule;
 }
 
-function shell() {
-  const dom = new JSDOM('<!doctype html><html><body><div id="pane"></div></body></html>', {
+function shell(bodyClass = '') {
+  const dom = new JSDOM(`<!doctype html><html><body class="${bodyClass}"><div id="pane"></div></body></html>`, {
     runScripts: 'outside-only',
   });
   return { dom, doc: dom.window.document, pane: dom.window.document.getElementById('pane') };
@@ -39,13 +39,15 @@ const PAYLOAD = {
 // the extension is read off the wire rather than inferred.
 async function mounted(opts = {}) {
   const { mountExtension } = await host();
-  const { dom, pane } = shell();
+  const { dom, pane } = shell(opts.bodyClass);
   const sent = [];
   const degraded = [];
   const opened = [];
   const handle = mountExtension({
     paneElement: pane,
     payload: opts.payload || PAYLOAD,
+    path: opts.path === undefined ? 'notes/q3.chart' : opts.path,
+    content: opts.content === undefined ? 'a,b\n1,2\n' : opts.content,
     onOpen: (t) => opened.push(t),
     onDegrade: (reason) => degraded.push(reason),
     readyTimeoutMs: opts.readyTimeoutMs || 5000,
@@ -68,15 +70,32 @@ async function mounted(opts = {}) {
   return { dom, pane, handle, frame, source, sent, degraded, opened, wire };
 }
 
+// The document's message rows, one list per table. A table starts at its
+// header row; the first is what an extension may say to the host, the second
+// what the host says to an extension. Each row: the type and the Shape cell.
+function documentTables() {
+  const doc = fs.readFileSync(path.join(ROOT, 'docs', 'EXTENSION-HOST.md'), 'utf-8');
+  const tables = [];
+  for (const line of doc.split('\n')) {
+    if (/^\| Type \|/.test(line)) { tables.push([]); continue; }
+    const m = /^\| `([a-z]+)` \| `(\{ type[^`]*)`/.exec(line);
+    if (m && tables.length) tables[tables.length - 1].push({ type: m[1], shape: m[2] });
+  }
+  return { doc, tables };
+}
+
+function fieldsOf(shape) {
+  return [...shape.matchAll(/,\s*([a-z]+):/g)].map((m) => m[1]).sort();
+}
+
 describe('the contract document and the host agree on every message', () => {
   test('the table the document publishes is the table the host enforces, both ways', async () => {
-    const { EXTENSION_MESSAGES, HOST_MESSAGES } = await host();
-    const doc = fs.readFileSync(path.join(ROOT, 'docs', 'EXTENSION-HOST.md'), 'utf-8');
-    // Each message row: the type, and the Shape cell it publishes.
-    const rows = [...doc.matchAll(/^\| `([a-z]+)` \| `(\{ type[^`]*)`/gm)]
-      .map((m) => ({ type: m[1], shape: m[2] }));
+    const { EXTENSION_MESSAGES } = await host();
+    const { tables } = documentTables();
+    assert.ok(tables.length >= 2 && tables[0].length >= 4,
+      'the parse found the document\'s message tables; an empty read is a broken instrument');
+    const rows = tables[0];
     const types = rows.map((r) => r.type).sort();
-    assert.ok(rows.length >= 4, 'the parse found the document\'s message rows; an empty read is a broken instrument');
     assert.deepStrictEqual(Object.keys(EXTENSION_MESSAGES).sort(), types,
       'a message in one table and not the other is a capability the contract does not govern: '
       + 'edit docs/EXTENSION-HOST.md and EXTENSION_MESSAGES together');
@@ -84,16 +103,35 @@ describe('the contract document and the host agree on every message', () => {
     // host checks for that type, so the Shape column cannot promise a field
     // the mediator does not enforce.
     for (const { type, shape } of rows) {
-      const declaredFields = [...shape.matchAll(/,\s*([a-z]+):/g)].map((m) => m[1]);
-      for (const field of declaredFields) {
+      for (const field of fieldsOf(shape)) {
         assert.ok(Object.prototype.hasOwnProperty.call(EXTENSION_MESSAGES[type], field),
           `the document's shape for "${type}" names field "${field}" that the host does not check`);
       }
     }
-    for (const hostType of HOST_MESSAGES) {
-      assert.ok(doc.includes(`\`${hostType}\``),
-        `the document never mentions the host-to-extension message "${hostType}"`);
+  });
+
+  test('the host-to-extension table matches what the host posts, type for type and field for field', async () => {
+    const { HOST_MESSAGES, HOST_MESSAGE_FIELDS } = await host();
+    const { tables } = documentTables();
+    const rows = tables[1] || [];
+    assert.deepStrictEqual(rows.map((r) => r.type).sort(), [...HOST_MESSAGES].sort(),
+      'a host message in one table and not the other: edit docs/EXTENSION-HOST.md and HOST_MESSAGES together');
+    assert.deepStrictEqual(Object.keys(HOST_MESSAGE_FIELDS).sort(), [...HOST_MESSAGES].sort(),
+      'every host message declares the fields it carries');
+    for (const { type, shape } of rows) {
+      assert.deepStrictEqual(fieldsOf(shape), [...HOST_MESSAGE_FIELDS[type]].sort(),
+        `the document's shape for "${type}" and the fields the host posts must be the same set`);
     }
+  });
+
+  test('the cap the document states for init is the cap the host enforces', async () => {
+    const { MAX_INIT_CONTENT_CHARS } = await host();
+    const { doc } = documentTables();
+    const m = /`MAX_INIT_CONTENT_CHARS` \((\d+) characters\)/.exec(doc);
+    assert.ok(m, 'the document states the init content cap by its constant name and value');
+    assert.strictEqual(Number(m[1]), MAX_INIT_CONTENT_CHARS,
+      'the document cannot promise a different limit than the host enforces');
+    assert.ok(Number.isInteger(MAX_INIT_CONTENT_CHARS) && MAX_INIT_CONTENT_CHARS > 0);
   });
 });
 
@@ -163,12 +201,35 @@ describe('the mediator refuses what the contract does not name, on the wire', ()
       'not even a refusal: replying to an unknown window would teach it the host is listening');
   });
 
-  test('ready is answered with init over the wire, and the watchdog stands down', async () => {
-    const { wire, handle, sent } = await mounted({ readyTimeoutMs: 30 });
+  test('ready is answered with init over the wire carrying the opened file, and the watchdog stands down', async () => {
+    const { wire, handle, sent } = await mounted({ readyTimeoutMs: 30, path: 'data/sales.csv', content: 'a,b\n1,2\n' });
     wire({ type: 'ready' });
-    assert.deepStrictEqual(sent, [{ type: 'init' }]);
+    assert.deepStrictEqual(sent, [{ type: 'init', path: 'data/sales.csv', content: 'a,b\n1,2\n', theme: 'dark' }],
+      'the frame receives the file it was mounted for, path and text, once, after ready');
     await new Promise((r) => setTimeout(r, 60));
     assert.strictEqual(handle.alive(), true, 'a view that said ready is not torn down by the clock');
+  });
+
+  test('init carries the theme the page shows at mount time, read from the body class the toggle sets', async () => {
+    const light = await mounted({ bodyClass: 'light' });
+    light.wire({ type: 'ready' });
+    assert.strictEqual(light.sent[0].theme, 'light');
+    const dark = await mounted({ bodyClass: '' });
+    dark.wire({ type: 'ready' });
+    assert.strictEqual(dark.sent[0].theme, 'dark');
+  });
+
+  test('text over the exported cap degrades before any frame is appended, with the cap named', async () => {
+    const { MAX_INIT_CONTENT_CHARS } = await host();
+    const over = 'x'.repeat(MAX_INIT_CONTENT_CHARS + 1);
+    const { pane, handle, degraded } = await mounted({ content: over });
+    assert.strictEqual(pane.querySelector('iframe'), null, 'no frame was ever appended');
+    assert.strictEqual(handle.alive(), false);
+    assert.strictEqual(degraded.length, 1);
+    assert.match(degraded[0], new RegExp(String(MAX_INIT_CONTENT_CHARS)), 'the reason names the cap');
+    const atCap = await mounted({ content: 'x'.repeat(MAX_INIT_CONTENT_CHARS) });
+    assert.ok(atCap.pane.querySelector('iframe'), 'text at the cap mounts');
+    assert.deepStrictEqual(atCap.degraded, []);
   });
 
   test('resize is clamped to the published bounds, never trusted raw', async () => {

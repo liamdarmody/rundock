@@ -27,9 +27,15 @@ extension can see what it did wrong.
 | `error` | `{ type: 'error', message: <string> }` | Reports that the view has failed. The host tears the frame down and shows the plain rendering with the message named. |
 | `open` | `{ type: 'open', target: <string> }` | Asks Rundock to open a workspace file, the way a wikilink would. The host passes the request to Rundock's own opener; the extension never navigates anything itself. |
 
-Messages from the host to the extension: `init` (once, after `ready`) and
-`refused` (`{ type: 'refused', of, reason }`, the answer to anything the table
-does not allow).
+## What the host says to a mounted extension
+
+Exactly these two messages, posted into the frame. The frame is told about
+the one file it was mounted for and nothing else about the page.
+
+| Type | Shape | What it does |
+|---|---|---|
+| `init` | `{ type: 'init', path: <string>, content: <string>, theme: <string> }` | Sent once, after `ready`. Carries the opened file's workspace path and its text, read-only: the text is a copy, and no message in the table above can write it back. `theme` is `'dark'` or `'light'`, the theme the page shows at mount time, because an opaque frame has no other way to match it. Text longer than the host's cap, `MAX_INIT_CONTENT_CHARS` (2000000 characters), is never handed to a frame: the mount degrades to the plain rendering before any frame is appended, with the cap named. |
+| `refused` | `{ type: 'refused', of: <string>, reason: <string> }` | The answer to anything the table above does not allow: `of` names the message type that was refused and `reason` says why. |
 
 Resource read and write are deliberately not in this table. An extension
 reading and writing its own declared resources is a real future capability,
