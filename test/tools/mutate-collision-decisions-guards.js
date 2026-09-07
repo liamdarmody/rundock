@@ -89,6 +89,35 @@ const MUTATIONS = [
   [APPLY, 'receipt entries carry the decision that governed them',
     '  const entry = (outcome) => (o) => ({ id: o.id, kind: o.kind, destination: o.destination, decision: decisions.get(o.id), outcome });',
     '  const entry = (outcome) => (o) => ({ id: o.id, kind: o.kind, destination: o.destination, outcome });'],
+  // The zero-write shortcut governs destination files, never the decision
+  // record: an all-skip apply is remembered.
+  [APPLY, 'an all-skip apply writes a receipt',
+    '  if (options.receipt && (evaluation.writes.length > 0 || evaluation.skipped.length > 0)) {',
+    '  if (options.receipt && evaluation.writes.length > 0) {'],
+  // The counts are the projection's: a byte-identical collision decided
+  // overwrite is unchanged, never an overwrite.
+  [MODEL, 'the overwrite count comes from the projection, not from local decisions',
+    '      overwrites: p.writes.filter((id) => colliding.has(id)).length,',
+    "      overwrites: state.plan.items.filter((i) => i.collision && state.decisions[i.id] === 'overwrite').length,"],
+  [MODEL, 'an unchanged row is marked from the projection\'s own membership',
+    '        unchanged: !!(state.projection && state.projection.unchanged.indexOf(item.id) !== -1),',
+    '        unchanged: false,'],
+  // REVIEW_TONES is what renders, not a table the rendering restates.
+  [MODEL, 'the rendered tone is read from REVIEW_TONES',
+    '        tone: REVIEW_TONES[rowClass],',
+    "        tone: rowClass === 'blocked' ? 'attention' : rowClass === 'willAdd' ? 'success' : 'neutral',"],
+  // One cause, one vocabulary: the confirm note's clause is reasonWords'.
+  [MODEL, 'the confirm note says the blocked cause through reasonWords',
+    "          ? `${count(counts.blocked, 'item')} will not be written because ${blockedCauses(state)}.`",
+    "          ? `${count(counts.blocked, 'item')} will not be written until the default conflict clears.`"],
+  // The plan reply's guards: a stray refusal for another operation, or a
+  // result sharing no field with a plan, is refused rather than read.
+  [MODEL, 'a refusal stamped for another operation is not the plan failing',
+    "      if (msg.operation && msg.operation !== 'plan') return { state };\n",
+    ''],
+  [MODEL, 'only a package_import_plan carrying a plan lands the offer',
+    "    if (msg.type !== 'package_import_plan' || !msg.plan) return { state };\n",
+    ''],
 ];
 
 // Guards deliberately NOT mutated, each with the reason.
