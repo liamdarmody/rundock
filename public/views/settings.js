@@ -103,14 +103,11 @@ function packagesWorkspaceChanged() {
 }
 
 // ---- The managed list and the receipts (the manage half of the page) ----
-// The manage model owns every row state, every chip tone and every message;
-// this half draws its rows and forwards the person's actions. The Update
-// action is the one handoff: the manage model names the target and the
-// install flow plans it, so the confirmation is the same trust card an
-// install shows.
-// The manage model is a page global in the browser; under Node, where this
-// view is required by its suites, it is required beside it the way the
-// install flow reaches its shared decision module.
+// The manage model owns every row state, chip tone and message; this half
+// draws its rows and forwards actions. Update is the one handoff: the manage
+// model names the target and the install flow plans it, so the confirmation
+// is the trust card an install shows. The model is a page global in the
+// browser and is required beside this view under Node.
 function manageModel() {
   if (typeof RundockPackagesManageModel !== 'undefined') return RundockPackagesManageModel;
   return (typeof module === 'object' && module.exports) ? require('../packages-manage-model.js') : null;

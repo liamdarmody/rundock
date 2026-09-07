@@ -100,23 +100,19 @@
 .packages-spinner { width: 16px; height: 16px; border: 2px solid var(--border); border-top-color: var(--text-2); border-radius: 50%; animation: packages-spin 0.8s linear infinite; }
 
 /* ---- The Packages page: managed extensions and receipts ---- */
-/* Every colour below is a token, and every tint is a color-mix over one, so
-   the drift lint has nothing to allow here and a token edit moves the whole
-   surface. The danger family follows the split: --danger-text for words,
-   --danger for the one filled button, which lives inside a confirmation and
-   never rests on the page. */
+/* Every colour is a token and every tint a color-mix over one. The danger
+   family follows the split: --danger-text for words, --danger for the one
+   filled button, which lives inside a confirmation and never rests. */
 .settings-section-label { font-size: var(--label); font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--text-3); margin: 0 0 8px 2px; }
-/* The list card clips to its own radius and carries no vertical padding, so
-   a row's hover tint fills the rounded card edge to edge. */
+/* The list card clips to its radius with no vertical padding, so a hover tint fills it edge to edge. */
 .settings-card.ext-list { padding: 0; overflow: hidden; }
-.ext-empty { padding: 18px 16px; font-size: var(--caption); color: var(--text-3); line-height: 1.55; }
-.ext-error { padding: 18px 16px; font-size: var(--caption); color: var(--danger-text); line-height: 1.55; }
+.ext-empty, .ext-error { padding: 18px 16px; font-size: var(--caption); color: var(--text-3); line-height: 1.55; }
+.ext-error { color: var(--danger-text); }
 .ext-notice { font-size: var(--caption); color: var(--text-2); line-height: 1.55; margin: -8px 2px 16px; }
 .ext-notice.danger { color: var(--danger-text); }
 
-/* The managed row: name, chip and derived facts on the left, actions on the
-   right. No radius on the row itself: the card is rounded and clips, so a
-   hover tint reads as a flush highlight between the hairlines. */
+/* The managed row: name, chip and facts left, actions right. No radius on
+   the row: the card clips, so a hover tint reads as a flush highlight. */
 .ext-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; padding: 16px; transition: background var(--duration-base) ease; }
 .ext-row + .ext-row { border-top: 1px solid var(--border); }
 .ext-row.dimmed { opacity: 0.6; }
@@ -136,12 +132,10 @@
 .ext-row .meta .src { white-space: normal; overflow-wrap: anywhere; }
 .ext-row .meta .dot { color: var(--text-3); margin: 0 6px; flex-shrink: 0; }
 .ext-row .actions { display: flex; align-items: center; justify-content: flex-end; gap: 10px; flex-shrink: 0; flex-wrap: wrap; padding-top: 1px; }
-/* A failure that stops the extension working: the danger text on a faint
-   danger tint, so it reads as the row's problem rather than as a note. */
+/* A failure that stops the extension working: danger text on a faint danger tint. */
 .ext-row .problem { font-size: var(--caption); color: var(--danger-text); line-height: 1.5; background: color-mix(in srgb, var(--danger-text) 8%, transparent); border-radius: var(--radius-sm); padding: 7px 10px; margin-top: 7px; }
-/* A fact beneath the chip that does not change what the chip says: a failed
-   update on a working extension, an update waiting on a disabled one, the
-   answer to a check. Prose, never a second chip of equal weight. */
+/* A fact beneath the chip that does not change what the chip says: prose,
+   never a second chip of equal weight. */
 .ext-row .row-note { font-size: var(--label); color: var(--text-3); margin-top: 6px; line-height: 1.5; }
 .ext-row .row-note.danger { color: var(--danger-text); }
 .ext-row .row-note.attention { color: var(--attention); }
@@ -169,8 +163,8 @@
 .ext-chip.bad { background: color-mix(in srgb, var(--danger-text) 12%, transparent); color: var(--danger-text); }
 
 /* Receipts: a different silhouette on purpose. No chip, no toggle, no danger
-   action, because a pack dissolved into the workspace on arrival and there
-   is nothing left to manage; each item links to where it now lives. */
+   action, because there is nothing left to manage; each item links to where
+   it now lives. */
 .receipt-row { padding: 13px 16px; }
 .receipt-row + .receipt-row { border-top: 1px solid var(--border); }
 .receipt-row .top { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }

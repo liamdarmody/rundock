@@ -2,26 +2,17 @@
 /**
  * The manage half of the Packages page: what the Installed extensions list
  * shows for every installed record, what Recently added shows for every
- * receipt, and the only messages the section may send.
+ * receipt, and the only messages the section may send. A module rather
+ * than a view for the same reason the install flow's model is one: what the
+ * section is judged on is the state each row takes, the tone its chip
+ * carries, and promises about what is sent when. Every transition returns
+ * `{ state, send }`, and `send` is undefined unless the person asked.
  *
- * WHY THIS IS A MODULE AND NOT A VIEW: the same reason the install flow's
- * model is one. What the section is judged on is the state each row takes,
- * the tone its chip carries, and a set of promises about what is sent when:
- * an uninstall sends nothing before its confirmation, a check carries the
- * name and never a url, an enable names the extension and nothing else.
- * Every transition returns `{ state, send }`, and `send` is undefined
- * unless the person asked for something.
- *
- * THE ROWS ARE READ FROM THE ROSTER THE HOST READS. The server answers one
- * roster from the install store, and this model draws it; there is no
- * second list of installed extensions anywhere for the two to disagree
- * about. A record's own facts (its source repository, its pin, its install
- * date) ride on the roster entry, and the row states them as facts.
- *
- * A ROW LEADS WITH ONE CHIP. Two facts at once (disabled with an update
- * waiting; working with a failed update behind it) keep the chip that says
- * what the extension IS, and put the second fact in prose beneath it. A
- * failed update never wears a Failed chip: the extension still runs.
+ * The rows are read from the roster the host reads, so the two surfaces
+ * cannot disagree. A row leads with one chip that says what the extension
+ * IS, and puts a second fact (an update waiting on a disabled one, a failed
+ * update behind a working one) in prose beneath it: a failed update never
+ * wears a Failed chip, because the extension still runs.
  */
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) {
@@ -31,9 +22,7 @@
 
   const RECENT_LIMIT = 5;
 
-  // The one tone table. Each chip class names the tone token the stylesheet
-  // draws it in; a chip added here without a rule, or a rule without a row
-  // that reaches it, is what the render walk in the suite catches.
+  // The one tone table: each chip class names the tone token that draws it.
   const CHIP_TONES = { enabled: 'success', disabled: 'idle', update: 'attention', working: 'working', bad: 'danger' };
 
   const CHIPS = {
@@ -52,17 +41,10 @@
   function initial() {
     return {
       loaded: false, error: null, extensions: [], receipts: [],
-      // The one operation in flight, so a reply can be matched to it and a
-      // second click waits rather than racing the first.
-      busy: null,
-      // Per-extension facts learned since the page was read: the last update
-      // check's answer, and the last operation's failure.
-      statuses: {}, notes: {},
-      // The row whose uninstall confirmation is open, if any.
-      confirming: null,
-      // A sentence beneath the list: the uninstall reply's own account of what
-      // stayed, or the reason the last ask did not go out.
-      notice: null,
+      // One operation in flight, matched by its reply; per-extension facts
+      // learned since the read (check answers, failures); the row whose
+      // uninstall question is open; a sentence beneath the list.
+      busy: null, statuses: {}, notes: {}, confirming: null, notice: null,
       seeAll: false,
     };
   }
@@ -75,8 +57,6 @@
   function count(n, word) {
     return `${n} ${word}${n === 1 ? '' : 's'}`;
   }
-
-  // ---- what the server said
 
   function open(state) {
     return {
@@ -97,59 +77,34 @@
 
   function reply(state, msg) {
     if (!msg || typeof msg.type !== 'string') return { state };
+    const freed = (operation) => (state.busy && state.busy.operation === operation ? null : state.busy);
     if (msg.type === 'packages_page') {
-      return {
-        state: {
-          ...state, loaded: true, error: null,
-          extensions: Array.isArray(msg.extensions) ? msg.extensions : [],
-          receipts: Array.isArray(msg.receipts) ? msg.receipts : [],
-          busy: state.busy && state.busy.operation === 'page' ? null : state.busy,
-        },
-      };
+      return { state: { ...state, loaded: true, error: null, busy: freed('page'), extensions: Array.isArray(msg.extensions) ? msg.extensions : [], receipts: Array.isArray(msg.receipts) ? msg.receipts : [] } };
     }
     if (msg.type === 'packages_page_error') {
       return { state: { ...state, loaded: true, error: msg.reason || 'the Packages page could not be read', extensions: [], receipts: [], busy: null } };
     }
     if (msg.type === 'extension_update_status') {
-      const busy = state.busy && state.busy.operation === 'update-check' && state.busy.name === msg.name ? null : state.busy;
-      return {
-        state: {
-          ...state, busy,
-          statuses: { ...state.statuses, [msg.name]: { outcome: msg.outcome, newer: Array.isArray(msg.newer) ? msg.newer : [], current: msg.current } },
-          notes: without(state.notes, msg.name),
-        },
-      };
+      const status = { outcome: msg.outcome, newer: Array.isArray(msg.newer) ? msg.newer : [], current: msg.current };
+      return { state: { ...state, busy: freed('update-check'), statuses: { ...state.statuses, [msg.name]: status }, notes: without(state.notes, msg.name) } };
     }
     if (msg.type === 'extension_state') {
-      return {
-        state: {
-          ...state,
-          extensions: Array.isArray(msg.extensions) ? msg.extensions : state.extensions,
-          busy: state.busy && state.busy.operation === 'set-enabled' ? null : state.busy,
-          notes: without(state.notes, msg.name),
-        },
-      };
+      return { state: { ...state, busy: freed('set-enabled'), extensions: Array.isArray(msg.extensions) ? msg.extensions : state.extensions, notes: without(state.notes, msg.name) } };
     }
     if (msg.type === 'extension_uninstalled') {
       return {
         state: {
-          ...state,
+          ...state, busy: freed('uninstall'),
           extensions: (Array.isArray(msg.extensions) ? msg.extensions : state.extensions).filter((e) => e && e.id !== msg.name),
-          statuses: without(state.statuses, msg.name),
-          notes: without(state.notes, msg.name),
-          busy: state.busy && state.busy.operation === 'uninstall' ? null : state.busy,
+          statuses: without(state.statuses, msg.name), notes: without(state.notes, msg.name),
           confirming: state.confirming === msg.name ? null : state.confirming,
           notice: typeof msg.untouched === 'string' && msg.untouched ? { text: msg.untouched, tone: 'neutral' } : state.notice,
         },
       };
     }
-    // A record changed under a flow this model does not drive: the trust
-    // step installed or replaced an extension, or an import landed files and
-    // a receipt. Read the page again so the list, and the host's registry
-    // that rides on the same reply, see what changed.
-    // Only a page that has been read refreshes itself: before the section is
-    // first opened there is nothing on screen to keep true, and the open
-    // reads it fresh anyway.
+    // A record or a receipt changed under a flow this model does not drive:
+    // read the page again, once it has been read at all, so the list and the
+    // host's registry that rides on the same reply see what changed.
     if (msg.type === 'extension_install_result') return state.loaded ? open(state) : { state };
     if (msg.type === 'package_import_result' && msg.operation === 'apply') return state.loaded ? open(state) : { state };
     // An error is this section's only when it names the operation the
@@ -157,18 +112,11 @@
     // flow's to render, not a note on a row.
     if (msg.type === 'package_install_error' && state.busy && state.busy.name && msg.operation === state.busy.operation
       && (msg.name === undefined || msg.name === state.busy.name)) {
-      return {
-        state: {
-          ...state, busy: null,
-          confirming: state.busy.operation === 'uninstall' ? null : state.confirming,
-          notes: { ...state.notes, [state.busy.name]: { text: msg.message || 'That did not work.', tone: 'danger' } },
-        },
-      };
+      const notes = { ...state.notes, [state.busy.name]: { text: msg.message || 'That did not work.', tone: 'danger' } };
+      return { state: { ...state, busy: null, notes, confirming: state.busy.operation === 'uninstall' ? null : state.confirming } };
     }
     return { state };
   }
-
-  // ---- what the person asked for
 
   function ask(state, operation, name, send) {
     if (state.busy || !entryFor(state, name)) return { state };
@@ -183,8 +131,7 @@
     return ask(state, 'set-enabled', name, { type: 'set_extension_enabled', name, enabled: !!enabled });
   }
 
-  // Uninstall is a question first. Nothing is sent until the confirmation
-  // inside the row is answered, and the filled danger button lives there.
+  // Uninstall is a question first: nothing is sent until it is answered.
   function askUninstall(state, name) {
     if (!entryFor(state, name)) return { state };
     return { state: { ...state, confirming: name, notice: null } };
@@ -203,10 +150,7 @@
     return { state: { ...state, seeAll: !state.seeAll } };
   }
 
-  // What the Update action hands the install flow: the name, the newest
-  // reference the check found, the installed version and the stored link,
-  // so the trust card says where the update comes from. Null until a check
-  // has found something newer.
+  // What Update hands the install flow; null until a check found something newer.
   function updateTarget(state, name) {
     const e = entryFor(state, name);
     const status = state.statuses[name];
@@ -220,13 +164,9 @@
 
   function connectionLost(state) {
     if (!state.busy) return { state: { ...state, busy: null } };
-    const name = state.busy.name;
-    return {
-      state: {
-        ...state, busy: null, confirming: null,
-        notes: name ? { ...state.notes, [name]: { text: 'The connection dropped before an answer arrived. Try again once it returns.', tone: 'danger' } } : state.notes,
-      },
-    };
+    const note = { text: 'The connection dropped before an answer arrived. Try again once it returns.', tone: 'danger' };
+    const notes = state.busy.name ? { ...state.notes, [state.busy.name]: note } : state.notes;
+    return { state: { ...state, busy: null, confirming: null, notes } };
   }
 
   function unsent(state) {
@@ -236,8 +176,6 @@
   function workspaceChanged() {
     return initial();
   }
-
-  // ---- the rows
 
   const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
@@ -250,8 +188,7 @@
     return d.getUTCFullYear() === today.getUTCFullYear() ? base : `${base} ${d.getUTCFullYear()}`;
   }
 
-  // owner/repo out of a stored GitHub url; the string itself for anything
-  // else, because a source is a fact to show whole rather than to tidy.
+  // owner/repo out of a GitHub url; anything else is shown whole.
   function repoOf(url) {
     if (typeof url !== 'string' || !url) return null;
     const m = /^https?:\/\/github\.com\/([^/]+\/[^/]+?)(?:\.git)?\/?$/.exec(url.trim());
@@ -274,10 +211,8 @@
     };
   }
 
-  // The install flow's state, read for the two things it knows that the
-  // roster does not: an install or update in flight for a name, and the
-  // last one that failed. `updating` names the installed extension a plan
-  // was begun for; `manifest` names what a fresh install was reading.
+  // What the install flow knows that the roster does not: an install or
+  // update in flight for a name, and the last one that failed.
   function flowFor(flow, name) {
     if (!flow) return null;
     const updating = flow.updating && flow.updating.name === name ? flow.updating : null;
@@ -371,10 +306,8 @@
     return row;
   }
 
-  // A fresh install the flow is reading or that just failed has no record
-  // yet, so it is drawn as a transient row from the flow alone: the working
-  // chip while it runs, the danger chip with the failure line when it did
-  // not. Its actions live on the flow's own card, not here.
+  // A fresh install has no record yet, so it is a transient row drawn from
+  // the flow alone; its actions live on the flow's own card.
   function transientRow(flow) {
     const activity = flow && flow.manifest && !flow.updating ? flowFor(flow, flow.manifest.name) : null;
     if (!activity || !activity.fresh) return null;
@@ -397,8 +330,6 @@
     if (transient && !out.some((r) => r.id === transient.id)) out.unshift(transient);
     return out;
   }
-
-  // ---- the receipts
 
   const KIND_WORDS = { agent: 'agent', skill: 'skill', file: 'file', folder: 'folder' };
   const ARRIVED = new Set(['written', 'unchanged']);
@@ -431,8 +362,7 @@
       date: dateLabel(r.appliedAt, now),
       countLine: countLine || 'nothing arrived',
       skipped: items.length - arrived.length,
-      // Each item links to the live thing: an agent to its profile, a skill
-      // to its page, a file or folder to its path in Files.
+      // Each arrived item links to the live thing.
       items: arrived.map((i) => ({
         label: slugOf(i), kind: i.kind,
         open: i.kind === 'agent' ? 'agent' : i.kind === 'skill' ? 'skill' : 'file',
