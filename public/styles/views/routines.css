@@ -9,11 +9,15 @@
    idle grey, the one state where nothing ran at all. Only a real failure is
    red.
 
-   AMBER APPEARS NOWHERE, deliberately. var(--attention) is spent on "needs the
-   user, not an error", which none of these states is, and amber reads as an
-   alert whatever a legend says. For someone on a laptop, missing runs is the
-   ordinary case: an interface that turns amber every time the machine was shut
-   overnight teaches its user to stop trusting amber. */
+   AMBER APPEARS ON NONE OF THE FOUR OUTCOMES, deliberately. var(--attention)
+   is spent on "needs the user, not an error", which none of these states is,
+   and amber reads as an alert whatever a legend says. For someone on a laptop,
+   missing runs is the ordinary case: an interface that turns amber every time
+   the machine was shut overnight teaches its user to stop trusting amber. The
+   one row state that IS "needs the user, not an error" takes it: a routine
+   paused because what it runs changed since it was approved (.paused-consent
+   below), which is precisely a row that cannot be trusted to run unattended
+   until someone looks, and nothing broken. */
 
 /* 720px, shared with .routine-editor and .run-detail: see the comment on
    .routine-editor in routine-editor.css for why these three panels take one
@@ -69,7 +73,7 @@
 /* The spacing every second line on a row shares. One rule rather than three
    identical ones: the lines differ in what they say and in their tone, not in
    where they sit. */
-.rr-run-line, .rr-problem-line, .rr-offer-line, .rr-note-line { margin-top: 2px; }
+.rr-run-line, .rr-problem-line, .rr-offer-line, .rr-note-line, .rr-consent-line { margin-top: 2px; }
 
 .run-status { font-size: var(--caption); }
 .run-status.ok { font-weight: 600; color: var(--success); }
@@ -90,6 +94,34 @@
 .icon-btn { width: 32px; height: 32px; border-radius: var(--radius-md); display: flex; align-items: center; justify-content: center; color: var(--text-2); background: transparent; border: 1px solid transparent; cursor: pointer; }
 .icon-btn:hover { color: var(--text-1); background: var(--elevated); border-color: var(--border); }
 .icon-btn.danger:hover { color: var(--danger); }
+/* Run, first in the group. Disabled rather than hidden while a run is in
+   flight, so the group never reflows and a reader can see at a glance that
+   a run is already going. Its hover takes the accent because it is the one
+   control here that starts something. */
+.icon-btn:disabled { opacity: 0.35; cursor: default; }
+.icon-btn:disabled:hover { color: var(--text-2); background: transparent; border-color: transparent; }
+.icon-btn.run:hover { color: var(--accent); background: var(--accent-glow); border-color: var(--accent); }
+
+/* The two paused states, told apart by tone AND words.
+
+   A pause the reader applied takes the idle grey the four outcomes already
+   use for "history, not alarm": a dot, the word, and the quiet way back. The
+   row itself dims (.routine-row.paused above).
+
+   A pause the plan's own change applied takes var(--attention), the token
+   this file reserves for "needs the user, not an error": the row keeps full
+   weight and takes an inset ring, the sentence names what changed, and the
+   one action reviews and resumes. Rendered identically to a self-applied
+   pause it would be resumed reflexively, which is the outcome the consent
+   mechanism exists to prevent. */
+.rr-paused-label { display: inline-flex; align-items: center; gap: 6px; }
+.rr-paused-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-3); flex-shrink: 0; }
+.rr-resume-quiet { font-size: var(--caption); font-weight: 600; color: var(--accent); background: none; border: 0; padding: 0; font-family: inherit; cursor: pointer; transition: opacity var(--duration-base) ease; }
+.rr-resume-quiet:hover { opacity: 0.8; }
+.routine-row.paused-consent { opacity: 1; box-shadow: 0 0 0 1px var(--attention) inset; }
+.rr-consent-text { font-size: var(--caption); font-weight: 500; color: var(--attention); line-height: 1.5; }
+.rr-resume-btn { font-size: var(--caption); font-weight: 700; color: var(--attention); background: none; border: 0; padding: 0; font-family: inherit; cursor: pointer; margin-left: 2px; transition: opacity var(--duration-base) ease; }
+.rr-resume-btn:hover { opacity: 0.8; }
 
 /* Delete: a real fork, so confirming and cancelling are equal weight (danger
    fill against plain outline, not accent against a muted link). */

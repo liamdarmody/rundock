@@ -654,3 +654,197 @@ describe('the roster carries whether a run is in flight, stamped beside the refu
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// The row: Run first, paused-ness as a state, two paused states told apart
+// ---------------------------------------------------------------------------
+
+describe('the row', () => {
+  const { JSDOM } = require('jsdom');
+  const ROOT = path.join(__dirname, '..', '..');
+  const readSrc = (...parts) => fs.readFileSync(path.join(ROOT, ...parts), 'utf-8');
+  const ZONE = 'Europe/London';
+  const iso = (d) => d.toISOString();
+  const PLAY = '6 3 20 12 6 21 6 3';
+
+  function rowFacts(name, facts) {
+    return {
+      name, schedule: SCHEDULE, prompt: 'p', runOn: 'local', enabled: true, paused: false,
+      state: null, nextRun: null, lastStart: null, lastSlot: null, missedSlot: null,
+      scheduleReadable: true, refusal: null, running: null, ...facts,
+    };
+  }
+
+  // The shipped view, model and stylesheet in a document, pressed rather than
+  // called: every assertion below reads the rendered markup.
+  function shell(routines) {
+    const dom = new JSDOM('<!doctype html><html><head><style>' + readSrc('public', 'styles', 'views', 'routines.css')
+      + '</style></head><body><nav class="nav-rail"><button class="nav-item" data-nav="routines"></button></nav>'
+      + '<div id="view-routines"><div id="routines-content"></div></div></body></html>', { runScripts: 'dangerously' });
+    const w = dom.window;
+    w.eval(readSrc('public', 'routine-editor-model.js'));
+    w.eval(readSrc('public', 'skills-model.js'));
+    w.eval(readSrc('public', 'routines-model.js'));
+    w.eval(readSrc('public', 'views', 'routines.js'));
+    w.agents = [{ id: AGENT, name: AGENT, displayName: 'Piper', type: 'specialist', colour: '#E87A5A', icon: 'P', routines }];
+    w.skills = [];
+    w.skillsLoaded = true;
+    w.esc = (v) => String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    w.sent = [];
+    w.ws = { send: (m) => w.sent.push(JSON.parse(m)) };
+    w.routinesNow = () => NOW;
+    w.Intl = { DateTimeFormat: () => ({ resolvedOptions: () => ({ timeZone: ZONE }) }) };
+    w.renderRoutines();
+    return { w, doc: w.document, dom };
+  }
+  const rows = (doc) => [...doc.querySelectorAll('.routine-row')];
+  const text = (el) => el.textContent.replace(/\s+/g, ' ').trim();
+  const rowNamed = (doc, name) => {
+    const found = rows(doc).filter(r => text(r.querySelector('.rr-sentence')).includes(name));
+    assert.strictEqual(found.length, 1, `expected one row for "${name}"`);
+    return found[0];
+  };
+  const playGlyphs = (el) => [...el.querySelectorAll('svg polygon')].filter(p => p.getAttribute('points') === PLAY);
+
+  // Every state the list draws with actions, one row each.
+  const STATES = [
+    rowFacts('Idle', { state: { status: 'completed', duration: 3 }, lastStart: iso(new Date(2026, 7, 20, 7, 0, 12)), lastSlot: iso(TODAYS_SLOT), nextRun: iso(TOMORROWS_SLOT) }),
+    rowFacts('Paused by hand', { paused: true, refusal: 'paused', nextRun: iso(TOMORROWS_SLOT) }),
+    rowFacts('Plan changed', { refusal: 'approval', nextRun: iso(TOMORROWS_SLOT) }),
+    rowFacts('Not enabled', { enabled: false, refusal: 'enabled', nextRun: iso(TOMORROWS_SLOT) }),
+    rowFacts('Never run', { nextRun: iso(TOMORROWS_SLOT) }),
+    rowFacts('In flight', { state: { status: 'completed', duration: 3 }, lastStart: iso(TODAYS_SLOT), lastSlot: iso(TODAYS_SLOT), nextRun: iso(TOMORROWS_SLOT), running: { trigger: 'manual', startedAt: iso(NOW) } }),
+    rowFacts('Tick in flight', { state: { status: 'running' }, lastStart: iso(TODAYS_SLOT), nextRun: iso(TOMORROWS_SLOT), running: { trigger: 'scheduled', startedAt: iso(NOW) } }),
+  ];
+
+  test('every row carries Run first in its action group, with the play glyph, disabled exactly while a run is in flight', () => {
+    const { doc, dom } = shell(STATES);
+    assert.strictEqual(rows(doc).length, STATES.length);
+    for (const facts of STATES) {
+      const row = rowNamed(doc, facts.name);
+      const actions = row.querySelector('.rr-actions');
+      assert.ok(actions, `${facts.name}: the row has an action group`);
+      const first = actions.firstElementChild;
+      assert.strictEqual(first.getAttribute('data-routines-action'), 'run', `${facts.name}: Run is first in the group`);
+      assert.strictEqual(playGlyphs(first).length, 1, `${facts.name}: Run bears the play glyph`);
+      assert.strictEqual(first.hasAttribute('disabled'), !!facts.running,
+        `${facts.name}: Run is disabled exactly while a run of this routine is in flight`);
+      assert.strictEqual(first.getAttribute('title'), facts.running ? 'Run in progress' : 'Run now');
+      const order = [...actions.children].map(el => el.getAttribute('data-routines-action'));
+      assert.deepStrictEqual(order.slice(-2), ['edit', 'delete'], `${facts.name}: Edit schedule and Delete keep their places after Run`);
+    }
+    dom.window.close();
+  });
+
+  test('pressing Run sends one message naming the routine, and a refusal is drawn on the row\'s road', () => {
+    const { doc, w, dom } = shell([STATES[0], rowFacts('Idle', { nextRun: iso(TOMORROWS_SLOT) })]);
+    rows(doc)[1].querySelector('[data-routines-action="run"]').click();
+    assert.deepStrictEqual(w.sent, [{ type: 'run_routine_now', agentId: AGENT, name: 'Idle', occurrence: 1 }],
+      'the press names the namesake it was pressed on and asks for nothing else');
+    w.routinesActionFailed({ type: 'routine_action_error', agentId: AGENT, name: 'Idle', message: 'Routine "Idle" is already running.', reason: 'running' });
+    const problem = doc.querySelector('[data-routines-problem]');
+    assert.ok(problem, 'the refusal is drawn on the list the control was pressed on');
+    assert.match(text(problem), /already running/);
+    dom.window.close();
+  });
+
+  test('the play glyph appears once per row and only on Run, and paused-ness is one switch bound to set_routine_paused', () => {
+    const { doc, w, dom } = shell(STATES);
+    for (const facts of STATES) {
+      const row = rowNamed(doc, facts.name);
+      const glyphs = playGlyphs(row);
+      assert.strictEqual(glyphs.length, 1, `${facts.name}: one play glyph on the row`);
+      assert.strictEqual(glyphs[0].closest('button').getAttribute('data-routines-action'), 'run', `${facts.name}: and it is Run's`);
+      const switches = row.querySelectorAll('[role="switch"]');
+      if (facts.refusal === 'approval') {
+        assert.strictEqual(switches.length, 0, `${facts.name}: a consent-paused row has one action, and it is not the switch`);
+        continue;
+      }
+      assert.strictEqual(switches.length, 1, `${facts.name}: one state control for paused-ness`);
+      assert.strictEqual(switches[0].getAttribute('aria-checked'), String(!!facts.paused), `${facts.name}: the switch shows the state`);
+      assert.strictEqual(playGlyphs(switches[0]).length, 0, `${facts.name}: the switch never wears the play glyph`);
+      w.sent.length = 0;
+      switches[0].click();
+      assert.deepStrictEqual(w.sent, [{ type: 'set_routine_paused', agentId: AGENT, name: facts.name, occurrence: 0, paused: !facts.paused }],
+        `${facts.name}: pressing the switch flips paused through the one message`);
+    }
+    dom.window.close();
+  });
+
+  test('a self-applied pause and a withdrawn consent render as two paused rows with different sentences and different actions', () => {
+    const { doc, w, dom } = shell([STATES[1], STATES[2]]);
+    const self = rowNamed(doc, 'Paused by hand');
+    const consent = rowNamed(doc, 'Plan changed');
+
+    const selfLabel = self.querySelector('.rr-paused-label');
+    assert.ok(selfLabel, 'the self-paused row carries the paused label');
+    assert.strictEqual(text(selfLabel), 'Paused', 'a sentence that names no change');
+    assert.ok(self.classList.contains('paused') && !self.classList.contains('paused-consent'));
+    assert.strictEqual(self.querySelector('.rr-consent-line'), null);
+
+    const consentText = consent.querySelector('.rr-consent-text');
+    assert.ok(consentText, 'the consent-paused row carries the consent sentence');
+    assert.match(text(consentText), /^Paused: what this runs has changed/, 'a sentence that names the change');
+    assert.ok(consent.classList.contains('paused-consent') && !consent.classList.contains('paused'));
+    assert.strictEqual(consent.querySelector('.rr-paused-label'), null);
+    assert.strictEqual(consent.querySelector('.next-run'), null, 'and no next run is promised on it');
+    assert.notStrictEqual(text(selfLabel), text(consentText), 'the two sentences differ');
+
+    const selfAction = self.querySelector('[data-routines-action="resume"]');
+    const consentAction = consent.querySelector('[data-routines-action="approve"]');
+    assert.ok(selfAction && consentAction);
+    assert.strictEqual(text(selfAction), 'Resume');
+    assert.strictEqual(text(consentAction), 'Review and resume');
+    assert.strictEqual(self.querySelector('[data-routines-action="approve"]'), null, 'the self-paused row offers no approval');
+    assert.strictEqual(consent.querySelector('[data-routines-action="resume"], [data-routines-action="pause"]'), null,
+      'the consent-paused row offers no pause switch');
+
+    selfAction.click();
+    consentAction.click();
+    assert.deepStrictEqual(w.sent.map(m => m.type), ['set_routine_paused', 'approve_routine_plan'], 'the bound actions differ');
+    assert.strictEqual(w.sent[0].paused, false);
+
+    // The tones, read off the page rather than off a table: the self pause
+    // takes the idle grey, the consent pause the attention tone.
+    const colour = (el) => w.getComputedStyle(el).color;
+    assert.strictEqual(colour(selfLabel), 'var(--text-3)');
+    assert.strictEqual(colour(consentText), 'var(--attention)');
+    dom.window.close();
+  });
+
+  test('a pressed run in flight says so in its own words, and Run reads the roster\'s fact rather than the state slot', () => {
+    const { doc, dom } = shell([
+      STATES[5], STATES[6],
+      rowFacts('Stale roster', { state: { status: 'running' }, lastStart: iso(TODAYS_SLOT), running: undefined }),
+    ]);
+    const manual = rowNamed(doc, 'In flight');
+    assert.strictEqual(text(manual.querySelector('.run-status.live')), 'Running now (started manually)');
+    assert.ok(manual.querySelector('.rr-view-run'), 'and offers the way into the run');
+    assert.strictEqual(manual.querySelectorAll('.rr-run-line').length, 1, 'the verdict line yields to the live one');
+    assert.ok(manual.querySelector('[data-routines-action="run"]').hasAttribute('disabled'));
+
+    const tick = rowNamed(doc, 'Tick in flight');
+    assert.strictEqual(text(tick.querySelector('.run-status.live')), 'Still going');
+    assert.ok(tick.querySelector('[data-routines-action="run"]').hasAttribute('disabled'));
+
+    // A roster from a server that predates the in-flight fact: the row still
+    // says the tick's run is going, and Run is left to the server to refuse,
+    // because the row derives nothing.
+    const stale = rowNamed(doc, 'Stale roster');
+    assert.strictEqual(text(stale.querySelector('.run-status.live')), 'Still going');
+    assert.ok(!stale.querySelector('[data-routines-action="run"]').hasAttribute('disabled'));
+    dom.window.close();
+  });
+
+  test('the delete confirmation draws the row with no Run, no switch and no consent action', () => {
+    const { doc, dom } = shell([STATES[1]]);
+    doc.querySelector('[data-routines-action="delete"]').click();
+    const row = doc.querySelector('.routine-row');
+    assert.ok(row, 'the confirmation shows the row it asks about');
+    assert.strictEqual(row.querySelector('.rr-actions'), null);
+    assert.strictEqual(row.querySelector('[role="switch"]'), null);
+    assert.strictEqual(row.querySelector('[data-routines-action="run"]'), null);
+    assert.strictEqual(text(row.querySelector('.rr-paused-label')), 'Paused', 'the state is still said');
+    dom.window.close();
+  });
+});

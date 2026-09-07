@@ -102,18 +102,34 @@ describe('the scheduler refuses an unapproved plan, visibly', () => {
   });
 
   // The row's model consumes the published word: the offer to turn on is
-  // withheld while approval is the real blocker, and the approval line is
-  // shown with the plan named.
-  test('the row shows the plan and the one tap, and only for the approval word', () => {
+  // withheld while approval is the real blocker, and the row reads as paused
+  // with the sentence that says why.
+  //
+  // REVERSED DELIBERATELY. This used to assert an approval LINE: "Waiting for
+  // your approval. This routine will run the skill ..., unattended" beside an
+  // Approve link, drawn on a row that also carried a pause control implying
+  // the routine was live. Approval was framed as a toll on the first run. It
+  // is now consent to a CHANGED plan: routines are born approved, and the
+  // word is published only when what a routine runs changed after it was
+  // approved, so the row renders as PAUSED, names that the plan changed, and
+  // offers one action, review and resume, which is the same approve message.
+  // The plan itself is the row's first line, so the sentence no longer
+  // repeats it.
+  test('the row reads as paused because the plan changed, and only for the approval word', () => {
     const m = require('../../public/routines-model.js');
-    const offer = m.approvalOffer({ refusal: 'approval', skill: 'ops-summary', prompt: 'go' });
-    assert.ok(offer, 'an unapproved routine gets the approval line');
-    assert.match(offer.text, /ops-summary/, 'the sentence names the plan being consented to');
-    assert.match(offer.text, /unattended/, 'and says what approving allows');
-    assert.strictEqual(m.approvalOffer({ refusal: 'enabled' }), null, 'any other refusal draws no approval line');
+    const state = m.pausedState({ refusal: 'approval', skill: 'ops-summary', prompt: 'go' });
+    assert.ok(state, 'an unapproved routine gets the consent-paused state');
+    assert.strictEqual(state.kind, 'consent');
+    assert.match(state.text, /^Paused/, 'it reads as paused');
+    assert.match(state.text, /changed/, 'and says why: what it runs changed');
+    assert.strictEqual(state.action, 'approve_routine_plan', 'and its one action is the existing approval');
+    assert.strictEqual(m.approvalOffer({ refusal: 'enabled' }), null, 'any other refusal draws no consent line');
+    assert.strictEqual(m.pausedState({ refusal: 'enabled' }), null);
     assert.strictEqual(m.approvalOffer({}), null, 'a roster without the field draws none, because a server that predates the feature has nothing unapproved');
     assert.strictEqual(m.somethingElseStopsIt({ schedule: 'every day at 07:00', scheduleReadable: true, prompt: 'go', refusal: 'approval' }), true,
       'and the Turn on offer is withheld while approval is what actually stands in the way');
+    assert.strictEqual(m.nextRunLabel({ refusal: 'approval', schedule: 'every day at 07:00', scheduleReadable: true, prompt: 'go', nextRun: new Date().toISOString(), now: new Date() }), null,
+      'and no next run is promised on a row the tick will refuse');
   });
 });
 

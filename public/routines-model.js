@@ -1054,15 +1054,92 @@
    */
   function approvalOffer(input) {
     if (!input || input.refusal !== 'approval') return null;
-    const what = input.skill
-      ? `run the skill "${input.skill}"`
-      : (typeof input.prompt === 'string' && input.prompt.trim()
-        ? `run: "${input.prompt.trim().length > 80 ? input.prompt.trim().slice(0, 77) + '...' : input.prompt.trim()}"`
-        : 'run this routine');
-    return {
-      text: `Waiting for your approval. This routine will ${what}, on this computer, unattended.`,
-      label: 'Approve plan',
-    };
+    // CHANGED DELIBERATELY. This used to read "Waiting for your approval.
+    // This routine will run ..., unattended" beside an Approve link, drawn
+    // next to a pause control that implied the routine was live. Two
+    // controls saying opposite things on one row. Now the row reads as
+    // PAUSED, with one sentence and one action, and the sentence says WHY it
+    // is paused, because a plan change rendered identically to a pause the
+    // reader applied themselves gets resumed reflexively, which is the
+    // outcome the mechanism exists to prevent. The plan itself is on the
+    // row's first line; what the reader is being asked is whether that
+    // sentence, as it now reads, may run unattended.
+    return { text: PAUSED_WORDS.consent, label: PAUSED_WORDS.consentAction };
+  }
+
+  // The two ways a row can be paused, in words. They differ on wording as
+  // well as on tone, because "I stopped this" and "something else changed
+  // this" are different facts and must not wear the same clothes.
+  const PAUSED_WORDS = {
+    self: 'Paused',
+    selfAction: 'Resume',
+    consent: 'Paused: what this runs has changed since you last approved it.',
+    consentAction: 'Review and resume',
+  };
+
+  /**
+   * Which of the two paused states this row is in, or nothing.
+   *
+   * READ OFF THE PUBLISHED REFUSAL FIRST. The scheduler answers which thing
+   * is holding a routine, and the approval word is what tells a withdrawn
+   * consent from a pause the reader chose: the row derives the state from
+   * that answer and never from a second copy of the rule. A routine that is
+   * both paused and unapproved reports the pause, because that is the fact
+   * its owner acted on most recently, and the consent question follows once
+   * it is resumed.
+   *
+   * `kind` is what the view branches on; `action` names the message the one
+   * control on the line sends, so the two states are proven to bind to
+   * different acts rather than to differently worded copies of one.
+   */
+  function pausedState(input) {
+    if (!input) return null;
+    if (input.paused) {
+      return { kind: 'self', text: PAUSED_WORDS.self, label: PAUSED_WORDS.selfAction, action: 'set_routine_paused' };
+    }
+    const consent = approvalOffer(input);
+    if (consent) return { kind: 'consent', text: consent.text, label: consent.label, action: 'approve_routine_plan' };
+    return null;
+  }
+
+  // What a run in flight says, by who started it. A tick's run keeps the
+  // shipped words; a pressed run needs its own so a reader can tell a press
+  // from an unattended firing without opening the record.
+  const RUNNING_WORDS = { scheduled: 'Still going', manual: 'Running now (started manually)' };
+
+  /**
+   * The run going right now, in words, or nothing.
+   *
+   * READ OFF THE ROSTER'S IN-FLIGHT FACT, which the scheduler stamps beside
+   * the refusal from its own live set. The state slot's 'running' word is
+   * kept as the second reading, for a roster from a server that predates the
+   * fact: it can only ever describe a tick's run, because a pressed run
+   * writes nothing there.
+   */
+  function liveRun(input) {
+    if (!input) return null;
+    if (input.running) {
+      const manual = input.running.trigger === 'manual';
+      return { text: manual ? RUNNING_WORDS.manual : RUNNING_WORDS.scheduled, manual };
+    }
+    if (input.lastRunStatus === 'running') return { text: RUNNING_WORDS.scheduled, manual: false };
+    return null;
+  }
+
+  /**
+   * The Run control: present on every row, disabled exactly while a run of
+   * this routine is in flight.
+   *
+   * IT READS THE IN-FLIGHT FACT AND DERIVES NOTHING. A control that decided
+   * from the state slot would enable itself during a pressed run, because a
+   * pressed run leaves that slot alone; one that decided from the refusal
+   * would withhold itself from a paused or unapproved routine, which is the
+   * routine a person most wants to press Run on. The server refuses a press
+   * during a run in any case; the disabled state is the row saying so first.
+   */
+  function runControl(input) {
+    const running = !!(input && input.running);
+    return { label: running ? 'Run in progress' : 'Run now', disabled: running };
   }
 
   function enableOffer(input) {
@@ -1111,6 +1188,10 @@
    */
   function nextRunLabel(input) {
     if (input && input.paused) return { text: 'Paused', className: 'next-run paused-label' };
+    // A ROUTINE WHOSE CONSENT WAS WITHDRAWN IS PAUSED TOO, and promises no
+    // next run for the same reason: the tick will refuse it. The consent
+    // line takes this line's place, saying why.
+    if (approvalOffer(input)) return null;
     // A ROUTINE NOBODY HAS TURNED ON PROMISES NOTHING, and the guard is here
     // rather than at the caller because the instant is real. The server works
     // a next run out from the schedule alone, so a routine the upgrade held
@@ -1219,10 +1300,15 @@
       // every other row, so the view draws nothing where there is nothing to
       // offer.
       offer: enableOffer(input),
-      // The row state for a plan awaiting its one tap. Its own field rather
-      // than a reworded enable offer, because the two consents are different
-      // acts on different questions and a row can owe both.
-      approval: approvalOffer(input),
+      // Which of the two paused states the row is in, if either: a pause the
+      // reader applied, or a consent the plan's change withdrew. Its own
+      // field rather than a reworded enable offer, because the two consents
+      // are different acts on different questions and a row can owe both.
+      pausedState: pausedState(input),
+      // The run in flight, if one is, in the words for who started it.
+      live: liveRun(input),
+      // The one-shot control, and whether a run in flight disables it.
+      run: runControl(input),
       // The one thing on a row that is neither history nor a promise: a fault
       // in the routine itself, which only the person who wrote the file can fix.
       scheduleProblem: scheduleProblem(input),
@@ -1266,7 +1352,7 @@
     actionProblem, emptyState, header,
     dayWords, clockWords, zoneWords, timeWords, workspaceWords, workspaceNames,
     scheduleWords, routineSentence, sentenceParts,
-    RUN_STATUS_WORDS, REFUSALS_UNDERSTOOD,
-    outcomeOf, lastCompletedRunFailed, anyFailure, runStatus, nextRunLabel, enableOffer, approvalOffer, scheduleProblem, promptProblem, isServed, workspaceNote, somethingElseStopsIt, orderByNextRun, row, deleteConfirmation,
+    RUN_STATUS_WORDS, REFUSALS_UNDERSTOOD, PAUSED_WORDS, RUNNING_WORDS,
+    outcomeOf, lastCompletedRunFailed, anyFailure, runStatus, nextRunLabel, enableOffer, approvalOffer, pausedState, liveRun, runControl, scheduleProblem, promptProblem, isServed, workspaceNote, somethingElseStopsIt, orderByNextRun, row, deleteConfirmation,
   };
 }));
