@@ -376,7 +376,13 @@ const HARNESSES = fs.readdirSync(path.join(ROOT, 'test', 'tools'))
 
 // The harness scripts the gate actually runs, parsed out of the chain that
 // runs them. This is the second source the discovered set is judged against.
-const CHAIN_HARNESSES = (JSON.parse(read('package.json')).scripts['mutate:guards'].match(/test\/tools\/[\w-]+\.js/g) || []).sort();
+// The full chain moved to `mutate:guards:all` when the gate's own step became
+// a SELECTOR rather than the chain itself: the gate now runs the harnesses a
+// change can affect and names the rest. The chain is still the roll of every
+// harness there is, so it is still what disk is bound against, and the selector
+// is bound to the same set below: a harness missing from any of the three is a
+// harness that never runs and nothing says so.
+const CHAIN_HARNESSES = (JSON.parse(read('package.json')).scripts['mutate:guards:all'].match(/test\/tools\/[\w-]+\.js/g) || []).sort();
 
 // EVERY claim below is generated per harness, so a short or empty list would
 // register fewer tests and pass having proven nothing, which is the exact
@@ -482,6 +488,19 @@ describe('a mutation result that cannot be parsed is a refusal, not a crash', ()
       }
     });
   }
+
+  test('the scoped selector discovers every harness the chain runs, both ways', () => {
+    // THE THIRD SIDE OF THE BINDING, added when the gate stopped running the
+    // chain directly. Disk and the chain agreeing is no longer enough: the
+    // gate's mutation step now asks a selector which harnesses a change needs,
+    // so a harness the selector cannot see is one that never runs locally, and
+    // CI runs only one harness, so nothing else would notice.
+    const { harnessFiles } = require('../../scripts/mutation-scope.js');
+    const discovered = harnessFiles(path.join(__dirname, '..', 'tools'))
+      .map(n => `test/tools/${n}`).sort();
+    assert.deepStrictEqual(discovered, CHAIN_HARNESSES,
+      'the selector sees exactly the harnesses the chain runs, in both directions');
+  });
 
   test('the discovered harnesses and the mutate:guards chain are one set, both ways', () => {
     // Restated as a test for the reader; the load-time assertion above is

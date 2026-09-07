@@ -46,3 +46,4 @@ scripts/screenshots/.banned-tokens.json
 # and the mechanism disagreed, and only the habit of deleting kept the two from
 # meeting.
 .rundock/
+.mutation-scope.json
