@@ -857,6 +857,30 @@ function routinesSetPaused(index, paused) {
 }
 
 /**
+ * Run the routine under `index` now, once, watched.
+ *
+ * ONE MESSAGE, AND NOTHING ELSE CHANGES. It carries the same triple every
+ * other control sends, so the run is the namesake the reader pointed at, and
+ * it carries no flag: there is nothing to set. The server starts the run
+ * through the tick's own entry or answers on the row's refusal road, and the
+ * roster broadcast that follows a start is what redraws the row with the
+ * control disabled. Pressing it while a run is going sends the message and
+ * is refused, which is the same answer a stale window gets, rather than the
+ * row guessing at the server's in-flight set.
+ */
+function routinesRunNow(index) {
+  // The last refusal goes before the lookup, for the reason every other
+  // control clears it: this press is a new question.
+  pendingProblem = null;
+  const entry = allRoutines()[index];
+  if (!entry || typeof ws === 'undefined' || !ws) return;
+  ws.send(JSON.stringify({
+    type: 'run_routine_now', agentId: entry.agent.id, name: entry.routine.name,
+    occurrence: entry.occurrence,
+  }));
+}
+
+/**
  * Open the editor on this routine's schedule.
  *
  * IT SENDS NOTHING, which is what separates it from every other control on this
@@ -884,7 +908,7 @@ function routinesEditSchedule(index) {
 return {
   renderRoutines, showRoutinesForAgent,
   routinesAskDelete, routinesCancelDelete, routinesConfirmDelete, routinesSetPaused, routinesSetEnabled,
-  routinesApprovePlan, routinesOpenSkill, routinesEditSchedule,
+  routinesApprovePlan, routinesRunNow, routinesOpenSkill, routinesEditSchedule,
   routinesActionFailed, routinesActionCleared, routinesViewLastRun,
 };
 }));

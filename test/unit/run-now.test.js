@@ -243,3 +243,228 @@ describe('the run record carries an explicit trigger from both writers', () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// The run message, through the real dispatch, into the single-flight entry
+// ---------------------------------------------------------------------------
+
+// One tick of the private scheduler with the interval mocked, the same drive
+// every scheduler integration test uses.
+function tick(sched) {
+  const { mock } = require('node:test');
+  mock.timers.enable({ apis: ['setInterval'] });
+  try {
+    sched.startScheduler();
+    mock.timers.tick(60_000);
+  } finally {
+    sched.stopScheduler();
+    mock.timers.reset();
+  }
+}
+
+/**
+ * The real handler table, with the run entry it reaches pointed at the
+ * private scheduler of this test. The handler reaches the scheduler through
+ * the module, which is the seam that makes this drivable: the table, the
+ * handler, the locate step and the reply are all the shipped ones, and the
+ * entry they call is the real entry in a scheduler whose child is a fake.
+ */
+function withDispatch(fn, opts = {}) {
+  return withRun((run) => {
+    const shared = require(SCHEDULER_KEY);
+    const real = shared.runRoutineNow;
+    shared.runRoutineNow = run.sched.runRoutineNow;
+    const { buildDispatch } = require('../../lib/protocol/handlers/index.js');
+    const sent = [];
+    const ws = { send: (m) => sent.push(JSON.parse(m)), readyState: 1 };
+    const ctx = { agents: { invalidateAgentCache: () => invalidateAgentCache() } };
+    const press = (extra = {}) => buildDispatch().run_routine_now(ctx, ws,
+      { type: 'run_routine_now', agentId: AGENT, name: ROUTINE, occurrence: 0, ...extra });
+    try {
+      return fn({ ...run, sent, press });
+    } finally {
+      shared.runRoutineNow = real;
+    }
+  }, opts);
+}
+
+const started = (sent) => sent.filter(m => m.type === 'routine_run_started');
+const refused = (sent) => sent.filter(m => m.type === 'routine_action_error');
+
+describe('the run message, driven through the real dispatch', () => {
+  test('two presses during one run start one run, and the second is answered on the row\'s road', () => {
+    withDispatch(({ press, sent, children, ws }) => {
+      press();
+      assert.strictEqual(children.length, 1, 'the first press starts a run');
+      assert.strictEqual(started(sent).length, 1, 'and is answered as started');
+      assert.strictEqual(started(sent)[0].agentId, AGENT);
+      assert.strictEqual(started(sent)[0].name, ROUTINE);
+      assert.ok(started(sent)[0].runId, 'naming the run it started');
+      assert.strictEqual(recordsOn(ws)[0].trigger, 'manual');
+
+      press();
+      assert.strictEqual(children.length, 1, 'a second press during the run starts nothing');
+      assert.strictEqual(refused(sent).length, 1, 'and is refused');
+      assert.strictEqual(refused(sent)[0].reason, 'running', 'naming the reason');
+      assert.strictEqual(refused(sent)[0].name, ROUTINE, 'on the row it was pressed on');
+      assert.match(refused(sent)[0].message, /already running/);
+
+      children[0].emit('close', 0);
+      press();
+      assert.strictEqual(children.length, 2, 'once the run has ended a press starts another');
+    });
+  });
+
+  test('a run target this release cannot run is refused, naming the target', () => {
+    withDispatch(({ press, sent, children }) => {
+      press();
+      assert.strictEqual(children.length, 0);
+      assert.strictEqual(refused(sent)[0].reason, 'runOn');
+    }, { routine: approvedRoutine({ runOn: 'agent-computer' }) });
+  });
+
+  test('a routine with nothing to send is refused, naming the prompt', () => {
+    withDispatch(({ press, sent, children }) => {
+      press();
+      assert.strictEqual(children.length, 0);
+      assert.strictEqual(refused(sent)[0].reason, 'prompt');
+    }, { routine: { name: ROUTINE, schedule: SCHEDULE, runOn: 'local', enabled: true } });
+  });
+
+  test('a paused routine runs when pressed: a press is not the tick', () => {
+    withDispatch(({ press, sent, children }) => {
+      press();
+      assert.strictEqual(children.length, 1, 'paused holds the tick and nothing else');
+      assert.strictEqual(refused(sent).length, 0);
+    }, { routine: approvedRoutine({ paused: true }) });
+  });
+
+  test('a routine nobody has turned on runs when pressed', () => {
+    withDispatch(({ press, sent, children }) => {
+      press();
+      assert.strictEqual(children.length, 1, 'the switch is consent to run unattended, and this run is attended');
+      assert.strictEqual(refused(sent).length, 0);
+    }, { routine: approvedRoutine({ enabled: false }) });
+  });
+
+  test('a routine whose plan awaits approval runs when pressed', () => {
+    withDispatch(({ press, sent, children, routine }) => {
+      assert.strictEqual(require(SCHEDULER_KEY).routineRefusal(routine), 'approval', 'sanity: the tick would refuse it');
+      press();
+      assert.strictEqual(children.length, 1, 'approval is consent to run unattended, and running it is how somebody decides whether to give it');
+      assert.strictEqual(refused(sent).length, 0);
+    // Written with the pending sentinel, because a key-less block on a
+    // workspace the feature has never run over is grandfathered as it stands.
+    }, { routine: { name: ROUTINE, schedule: SCHEDULE, prompt: 'go', runOn: 'local', enabled: true, planApprovedHash: 'pending' } });
+  });
+
+  test('the reasons a press can be refused for are exactly the three that leave nothing to run', () => {
+    const sched = require(SCHEDULER_KEY);
+    assert.deepStrictEqual(sched.MANUAL_RUN_REFUSALS.slice().sort(), ['prompt', 'runOn', 'running']);
+    const ok = approvedRoutine();
+    assert.strictEqual(sched.manualRunRefusal(ok, 'nobody:nothing'), null);
+    assert.strictEqual(sched.manualRunRefusal({ ...ok, paused: true }, 'nobody:nothing'), null);
+    assert.strictEqual(sched.manualRunRefusal({ ...ok, enabled: false }, 'nobody:nothing'), null);
+    assert.strictEqual(sched.manualRunRefusal({ ...ok, planApprovedHash: undefined }, 'nobody:nothing'), null);
+    assert.strictEqual(sched.manualRunRefusal({ ...ok, runOn: 'agent-computer' }, 'nobody:nothing'), 'runOn');
+    assert.strictEqual(sched.manualRunRefusal({ ...ok, prompt: '' }, 'nobody:nothing'), 'prompt');
+  });
+
+  test('a routine the roster does not carry is refused rather than invented', () => {
+    withDispatch(({ press, sent, children }) => {
+      press({ name: 'never-written' });
+      press({ agentId: 'nobody' });
+      press({ occurrence: undefined });
+      assert.strictEqual(children.length, 0);
+      assert.strictEqual(refused(sent).length, 3, 'every request that cannot be met is answered');
+      assert.match(refused(sent)[0].message, /could not be found/);
+      assert.match(refused(sent)[1].message, /not found/);
+      assert.match(refused(sent)[2].message, /Which routine/);
+    });
+  });
+
+  test('a press on the second of two namesakes runs that one', () => {
+    withDispatch(({ press, children }) => {
+      press({ occurrence: 1 });
+      assert.strictEqual(children.length, 1);
+      // The prompt the child was handed is the second block's, not the first's.
+      assert.ok(children[0].args.some(a => typeof a === 'string' && a.includes('second body')),
+        'the run carries the namesake the press pointed at');
+    }, { routines: [approvedRoutine({ prompt: 'first body' }), approvedRoutine({ prompt: 'second body' })] });
+  });
+
+  test('a start that throws is answered on the row\'s road and holds nothing', () => {
+    withDispatch(({ press, sent, sched, children }) => {
+      const real = sched.runRoutineNow;
+      require(SCHEDULER_KEY).runRoutineNow = () => { throw new Error('no room to open a record'); };
+      try {
+        press();
+      } finally {
+        require(SCHEDULER_KEY).runRoutineNow = real;
+      }
+      assert.strictEqual(children.length, 0);
+      assert.strictEqual(refused(sent).length, 1);
+      assert.match(refused(sent)[0].message, /no room to open a record/);
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A manual run moves no schedule
+// ---------------------------------------------------------------------------
+
+describe('a manual run leaves the scheduler\'s own facts exactly as they were', () => {
+  // Half past six, before today's seven o'clock slot, on a routine that ran
+  // on time yesterday: the next run is today's slot and nothing is due yet.
+  const EARLY = new Date(2026, 7, 20, 6, 30);
+  const YESTERDAY_RUN = new Date(2026, 7, 19, 7, 0, 12);
+
+  test('routineState, its file, the slot records and the next-run instant are unchanged, and the slot then fires on the tick', () => {
+    withRun(({ sched, ws, agent, routine, children, clock }) => {
+      sched.recordRoutineRun(KEY, { lastRun: YESTERDAY_RUN.toISOString(), status: 'completed', duration: 3 });
+      const stateBefore = JSON.stringify(sched.routineState[KEY]);
+      const fileBefore = readIfThere(stateFile(ws));
+      const slotsBefore = JSON.stringify(sched.routineSlots);
+      const slotsFileBefore = readIfThere(slotsFile(ws));
+      const nextBefore = sched.nextRunFor(KEY, SCHEDULE);
+      assert.deepStrictEqual(nextBefore, TODAYS_SLOT, 'sanity: the next run is today\'s slot');
+
+      const answer = sched.runRoutineNow(agent, routine, KEY);
+      assert.strictEqual(answer.started, true);
+      assert.strictEqual(JSON.stringify(sched.routineState[KEY]), stateBefore,
+        'a run in flight that somebody pressed is not written into the state the tick decides with');
+      children[0].emit('close', 0);
+
+      assert.strictEqual(JSON.stringify(sched.routineState[KEY]), stateBefore, 'nor is its ending');
+      assert.strictEqual(readIfThere(stateFile(ws)), fileBefore, 'the persisted file is byte-for-byte what it was');
+      assert.strictEqual(JSON.stringify(sched.routineSlots), slotsBefore, 'the slot records are untouched');
+      assert.strictEqual(readIfThere(slotsFile(ws)), slotsFileBefore);
+      assert.deepStrictEqual(sched.nextRunFor(KEY, SCHEDULE), nextBefore,
+        'so the routine fires next at exactly the instant it would have');
+      assert.strictEqual(recordsOn(ws).length, 1, 'the run itself is on record');
+      assert.strictEqual(recordsOn(ws)[0].trigger, 'manual');
+
+      clock.at = new Date(2026, 7, 20, 7, 1);
+      tick(sched);
+      assert.strictEqual(children.length, 2, 'the slot the manual run did not serve fires when it comes');
+      children[1].emit('close', 0);
+      const records = recordsOn(ws).sort((a, b) => a.startedAt.localeCompare(b.startedAt));
+      assert.deepStrictEqual(records.map(r => r.trigger), ['manual', 'scheduled']);
+      assert.strictEqual(sched.routineState[KEY].status, 'completed');
+      assert.notStrictEqual(sched.routineState[KEY].lastRun, YESTERDAY_RUN.toISOString(),
+        'and the scheduled run is the one that moves lastRun');
+    }, { now: EARLY });
+  });
+
+  test('a manual run that fails, or is stopped, still writes nothing into the state', () => {
+    withRun(({ sched, ws, agent, routine, children }) => {
+      const fileBefore = readIfThere(stateFile(ws));
+      assert.strictEqual(sched.runRoutineNow(agent, routine, KEY).started, true);
+      children[0].emit('close', 1);
+      assert.strictEqual(sched.routineState[KEY], undefined, 'a failed press leaves no state slot behind');
+      assert.strictEqual(readIfThere(stateFile(ws)), fileBefore);
+      assert.strictEqual(recordsOn(ws)[0].status, 'failed', 'the record still says what happened');
+      assert.strictEqual(recordsOn(ws)[0].trigger, 'manual');
+    });
+  });
+});
