@@ -70,11 +70,14 @@ const MUTATIONS = [
   [ROUTINES, 'a pre-existing routine carries its consent over the upgrade',
     '        updates[key] = featureHasRun ? APPROVAL_PENDING : computePlanHash(routine);',
     '        updates[key] = APPROVAL_PENDING;'],
-  // A freshly created routine arriving pre-approved is a first run that
-  // never asks.
-  [ROUTINES, 'a new routine arrives pending, not approved',
-    '    planApprovedHash: APPROVAL_PENDING,',
-    '    planApprovedHash: computePlanHash(normalized),'],
+  // Put a new routine back to pending and the row that was just created says
+  // "Waiting for your approval" beside a pause icon implying it is already
+  // live, which is the state a reader could not read either way. Writing a
+  // routine is consenting to it; the consent that still has to be collected is
+  // consent to a CHANGE, and that is the row above and the edit case below.
+  [ROUTINES, 'a new routine is born carrying consent to the plan it was created with',
+    '    planApprovedHash: computePlanHash(normalized),',
+    '    planApprovedHash: APPROVAL_PENDING,'],
 
   // ===== THE ROW'S ONE TAP =====
   // Show the approval line for every refusal and the reader is asked to
