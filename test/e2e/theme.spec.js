@@ -34,7 +34,7 @@ test.afterAll(async () => {
 // to catch.
 const THEMED = [
   '--base', '--surface', '--elevated', '--chrome', '--card',
-  '--border', '--text-1', '--text-2', '--accent-glow',
+  '--border', '--text-1', '--text-2', '--accent-glow', '--danger-text',
 ];
 
 // Tokens deliberately shared by both themes. The accent is the brand and does
