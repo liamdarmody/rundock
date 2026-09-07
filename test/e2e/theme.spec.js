@@ -118,6 +118,16 @@ function luma(hex) {
   return 0.2126 * ((n >> 16) & 255) + 0.7152 * ((n >> 8) & 255) + 0.0722 * (n & 255);
 }
 
+// A six-digit hex as its channels, for building the rgb() and rgba() forms a
+// browser reports. Null on any other shape, so a token rewritten in another
+// form fails by name where it is used rather than as a mismatched string.
+function channelsOf(hex) {
+  const m = /^#([0-9a-f]{6})$/i.exec(hex.trim());
+  if (!m) return null;
+  const n = parseInt(m[1], 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
 // ── the cascade ──────────────────────────────────────────────────────────────
 
 test('every light-theme token override actually takes effect', async ({ page }) => {
@@ -332,7 +342,12 @@ test('the editor stylesheet, injected at runtime, can see the tokens it uses', a
     };
   });
 
-  const DANGER = 'rgb(232, 90, 90)';
+  // The expected colour is the fill token as the page resolves it, never a
+  // literal: the split of the danger token changed this value once, and a
+  // pinned literal failed for the right change.
+  const fill = channelsOf((await readTokens(page, ['--danger']))['--danger']);
+  expect(fill, '--danger must resolve to a six-digit hex').not.toBeNull();
+  const DANGER = `rgb(${fill.join(', ')})`;
   expect(seen.hostFound, 'the editor host must exist').toBe(true);
   expect(seen.criticDelete, '.critic-delete must render --danger').toBe(DANGER);
   expect(seen.reviewSubFrom, '.review-sub-from must render --danger').toBe(DANGER);
@@ -342,28 +357,30 @@ test('the editor stylesheet, injected at runtime, can see the tokens it uses', a
   expect(seen.plainSpan, 'an unstyled span must NOT be red').not.toBe(DANGER);
 });
 
-test('every color-mix tint renders the colour the literal it replaced rendered', async ({ page }) => {
-  // AC-5 asked for the channel values either side of each substitution, and
-  // nothing computed them. The allowlist prose asserted the tints were safe;
-  // an assertion in prose cannot fail.
+test('every color-mix tint renders the fill token at its stated alpha', async ({ page }) => {
+  // The channel values either side of each tint were once asserted in
+  // allowlist prose, and an assertion in prose cannot fail. These tints
+  // replaced rgba literals of the red the token unified; the expectation is
+  // now the fill token itself at each alpha, read off the page rather than
+  // written as a literal, so the test follows the token when it moves and
+  // still catches a tint written at the wrong percentage.
   //
-  // color-mix is resolved by the browser, so this has to run in one. Each pair
-  // is the literal that was there before and the expression that replaced it.
+  // color-mix is resolved by the browser, so this has to run in one.
+  await boot(page);
+  const fill = channelsOf((await readTokens(page, ['--danger']))['--danger']);
+  expect(fill, '--danger must resolve to a six-digit hex').not.toBeNull();
+  const tint = (alpha) => `rgba(${fill.join(',')},${alpha})`;
   const PAIRS = [
-    ['rgba(232,90,90,0.1)',  'color-mix(in srgb, var(--danger) 10%, transparent)', 'connection-bar disconnected'],
-    ['rgba(232,90,90,0.08)', 'color-mix(in srgb, var(--danger) 8%, transparent)',  'danger callout background'],
-    ['rgba(232,90,90,0.20)', 'color-mix(in srgb, var(--danger) 20%, transparent)', 'danger callout border'],
+    [tint(0.1),  'color-mix(in srgb, var(--danger) 10%, transparent)', 'connection-bar disconnected'],
+    [tint(0.08), 'color-mix(in srgb, var(--danger) 8%, transparent)',  'danger callout background'],
+    [tint(0.20), 'color-mix(in srgb, var(--danger) 20%, transparent)', 'danger callout border'],
   ];
-  // These three replaced a DIFFERENT red (232,93,93) as part of unifying the
-  // reds, so they are expected to differ by exactly that, and the expectation
-  // is written as the new red rather than the old one.
   const UNIFIED = [
-    ['rgba(232,90,90,0.15)', 'color-mix(in srgb, var(--danger) 15%, transparent)', 'cancel button'],
-    ['rgba(232,90,90,0.25)', 'color-mix(in srgb, var(--danger) 25%, transparent)', 'cancel button hover'],
-    ['rgba(232,90,90,0.12)', 'color-mix(in srgb, var(--danger) 12%, transparent)', 'cancelled badge'],
+    [tint(0.15), 'color-mix(in srgb, var(--danger) 15%, transparent)', 'cancel button'],
+    [tint(0.25), 'color-mix(in srgb, var(--danger) 25%, transparent)', 'cancel button hover'],
+    [tint(0.12), 'color-mix(in srgb, var(--danger) 12%, transparent)', 'cancelled badge'],
   ];
 
-  await boot(page);
   const resolve = (pairs) => page.evaluate((list) => {
     // Compare CHANNELS, not serialisations. Chromium reports an rgba() literal
     // as "rgba(232, 90, 90, 0.1)" and the equivalent color-mix as
