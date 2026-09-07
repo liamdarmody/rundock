@@ -1541,3 +1541,49 @@ describe('a snapshot carrying both an extension and content: the card says what 
     });
   });
 });
+
+describe('every safety claim on the trust card is computed from a host fact the code enforces', () => {
+  // The expected claim table is read from the host module (the sandbox
+  // attribute and frame policy off a real mount, the closed message table
+  // off its export) and from the contract document's tables, never from
+  // either document's prose. The init fields come from the document's init
+  // row once it carries one; until then HOST_FACTS.init is the named seam
+  // the host's own suite binds to that row.
+  test('the claim table equals the host and document tables, and each rendered sentence names the fact behind it', async () => {
+    const host = await import('../../public/extension-host.js');
+    const dom = new JSDOM('<!doctype html><html><body><div id="pane"></div></body></html>', { runScripts: 'outside-only' });
+    const handle = host.mountExtension({ paneElement: dom.window.document.getElementById('pane'), payload: { entry: '' }, onDegrade: () => {} });
+    const frame = handle.frame();
+    const policy = /Content-Security-Policy" content="([^"]*)"/.exec(frame.srcdoc);
+    assert.ok(policy, 'the frame document carries a policy this can read');
+    const doc = fs.readFileSync(path.join(__dirname, '..', '..', 'docs', 'EXTENSION-HOST.md'), 'utf-8');
+    const rows = [...doc.matchAll(/^\| `([a-z]+)` \| `(\{ type[^`]*)`/gm)].map((m) => ({ type: m[1], fields: [...m[2].matchAll(/,\s*([a-z]+)/g)].map((f) => f[1]) }));
+    assert.ok(rows.length >= 4, 'the document\'s message table was found at all');
+    const initRow = rows.find((r) => r.type === 'init');
+    const computed = {
+      sandbox: frame.getAttribute('sandbox'),
+      network: policy[1].split(';')[0].trim(),
+      messages: Object.keys(host.EXTENSION_MESSAGES),
+      init: initRow ? model.HOST_FACTS.init.filter((f) => initRow.fields.includes(f)) : model.HOST_FACTS.init,
+    };
+    handle.teardown();
+    assert.deepStrictEqual(model.HOST_FACTS, computed, 'a claim appears only where a host fact stands behind it');
+    assert.deepStrictEqual(rows.filter((r) => !host.HOST_MESSAGES.includes(r.type)).map((r) => r.type).sort(), [...computed.messages].sort(),
+      'the document\'s table names the same closed set');
+
+    const copy = model.trustCopy({
+      manifest: { name: 'test-ext', version: '1.0.0' }, link: SOURCE.url, reference: SOURCE.reference,
+      facts: { agents: 0, skills: 0, files: [], match: '*.md' }, replaces: null,
+    });
+    assert.deepStrictEqual(copy.runsLines, model.hostClaims(computed));
+    const [sandboxLine, networkLine, messagesLine, initLine] = copy.runsLines;
+    assert.ok(sandboxLine.includes(computed.sandbox), 'the sandbox sentence names the exact grant');
+    assert.ok(networkLine.includes(computed.network), 'the network sentence names the exact policy');
+    assert.strictEqual(/only these messages: ([a-z, ]+)\./.exec(messagesLine)[1], computed.messages.join(', '),
+      'the messages sentence lists exactly the closed table, so it can claim neither more nor less');
+    assert.match(initLine, /read-only/, 'the frame receives the opened file read-only');
+    for (const field of computed.init) assert.ok(initLine.includes(field), `the init sentence names "${field}"`);
+    assert.strictEqual(copy.runsLines.length, 4, 'four facts, four sentences: no claim without a fact');
+  });
+});
+

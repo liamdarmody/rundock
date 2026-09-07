@@ -194,6 +194,17 @@ const MUTATIONS = [
   [MODEL, 'the trust step says Rundock does not review extensions',
     "      reviewLine: 'Rundock does not review extensions; what you install is your choice.',",
     "      reviewLine: '',"],
+  // Narrow the fact table below what the host allows and the card claims the
+  // frame cannot ask Rundock to open a file, which the closed table permits:
+  // a safety claim wider than the fact behind it.
+  [MODEL, 'every claim on the trust card is backed by the host table it is computed from',
+    "    messages: ['ready', 'resize', 'error', 'open'],",
+    "    messages: ['ready', 'resize', 'error'],"],
+  // Drop the sentence about the opened file and the card no longer says the
+  // frame receives the file's path and text, read-only.
+  [MODEL, 'the trust card states that the frame receives the opened file read-only',
+    "      `It receives the opened file's ${facts.init.join(' and ')}, read-only, and nothing else about your workspace.`,",
+    ''],
   // Make the content half's sentence claim the agents land with the
   // extension and the card lies about what confirm does: the disk says
   // otherwise, and the suite holds the two together.
