@@ -597,15 +597,23 @@ describe('pan and zoom', () => {
       assert.strictEqual(prevented, 1, 'the pan branch prevents default');
       const panned = view.mapNodeScreenPosition('Hub.md');
       assert.ok(Math.abs(panned.x - (before.x - 7)) < 1e-6 && Math.abs(panned.y - (before.y + 11)) < 1e-6, 'the picture follows the scroll in both axes');
-      // Pinch with the cursor exactly on a node: after the zoom the node is
-      // still under the cursor.
-      const pinch = new s.w.WheelEvent('wheel', { deltaY: -40, ctrlKey: true, clientX: panned.x, clientY: panned.y, cancelable: true, bubbles: true });
+      // Back off the zoom cap first, or a pinch changes nothing and any
+      // anchoring would look right. Then pinch with the cursor exactly on a
+      // node: after the zoom the node is still under the cursor, and another
+      // node has moved, which is what proves the scale changed.
+      for (let i = 0; i < 4; i++) view.mapZoomOut();
+      s.flushFrames();
+      const hubBefore = view.mapNodeScreenPosition('Hub.md');
+      const otherBefore = view.mapNodeScreenPosition('A.md');
+      const pinch = new s.w.WheelEvent('wheel', { deltaY: -40, ctrlKey: true, clientX: hubBefore.x, clientY: hubBefore.y, cancelable: true, bubbles: true });
       pinch.preventDefault = () => { prevented += 1; };
       s.canvas().dispatchEvent(pinch);
       s.flushFrames();
       assert.strictEqual(prevented, 2, 'the zoom branch prevents default too, or the gesture zooms the whole page');
       const zoomed = view.mapNodeScreenPosition('Hub.md');
-      assert.ok(Math.abs(zoomed.x - panned.x) < 1e-6 && Math.abs(zoomed.y - panned.y) < 1e-6, 'the world point under the cursor is the same point after the zoom');
+      const otherAfter = view.mapNodeScreenPosition('A.md');
+      assert.ok(Math.hypot(otherAfter.x - otherBefore.x, otherAfter.y - otherBefore.y) > 1, 'sanity: the pinch changed the scale');
+      assert.ok(Math.abs(zoomed.x - hubBefore.x) < 1e-6 && Math.abs(zoomed.y - hubBefore.y) < 1e-6, 'the world point under the cursor is the same point after the zoom');
     } finally { await s.cleanup(); }
   });
 
