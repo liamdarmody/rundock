@@ -24,11 +24,10 @@
 // ---- Packages install flow (lane: PL2 hosting section, PL4 states) ----
 // All flow logic lives in RundockPackagesInstallModel; this file only renders
 // the model's state and forwards the person's actions and the server's
-// replies. The model decides what, if anything, is sent.
+// replies. The model decides what, if anything, is sent. One link field
+// serves both kinds: the server classifies the bytes and answers with either
+// the trust step or the plain offer, and this file draws whichever arrived.
 let packagesInstall = (typeof RundockPackagesInstallModel !== 'undefined') ? RundockPackagesInstallModel.initial() : null;
-// The extension half of the install section: same model module, its own
-// state, because a person can abandon one flow without disturbing the other.
-let extensionInstall = (typeof RundockPackagesInstallModel !== 'undefined') ? RundockPackagesInstallModel.extInitial() : null;
 
 // One guard for every packages render path: markup goes into the settings
 // pane only when the pane is showing and Packages is the displayed section;
@@ -44,15 +43,16 @@ function packagesRenderIfVisible() {
   if (packagesSectionVisible()) renderSettingsSection('packages');
 }
 
+// The one transition: a step that wants to send only takes effect if the
+// message was actually handed to an open socket; otherwise the flow stays
+// usable and says plainly that nothing went out.
 function packagesApplyTransition(out) {
-  // A transition that wants to send only takes effect if the message was
-  // actually handed to an open socket; otherwise the flow stays usable and
-  // says plainly that nothing went out.
   if (out.send) {
     if (!(ws && ws.readyState === WebSocket.OPEN)) {
       packagesInstall = {
         ...RundockPackagesInstallModel.initial(),
-        sourcePath: (packagesInstall && packagesInstall.sourcePath) || '',
+        link: (packagesInstall && packagesInstall.link) || '',
+        reference: (packagesInstall && packagesInstall.reference) || '',
         fieldError: 'Not connected: nothing was sent. Try again once the connection returns.',
       };
       packagesRenderIfVisible();
@@ -65,55 +65,34 @@ function packagesApplyTransition(out) {
 }
 
 function packagesSubmit() {
-  const field = document.getElementById('packages-source-path');
-  packagesApplyTransition(RundockPackagesInstallModel.submit(packagesInstall, field ? field.value : ''));
+  const link = document.getElementById('packages-source-link');
+  const ref = document.getElementById('packages-source-ref');
+  packagesApplyTransition(RundockPackagesInstallModel.submit(packagesInstall, link ? link.value : '', ref ? ref.value : ''));
 }
 
 function packagesCancel() { packagesApplyTransition(RundockPackagesInstallModel.cancel(packagesInstall)); }
+function packagesDecline() { packagesApplyTransition(RundockPackagesInstallModel.decline(packagesInstall)); }
 function packagesConfirm() { packagesApplyTransition(RundockPackagesInstallModel.confirm(packagesInstall)); }
 function packagesRetry() { packagesApplyTransition(RundockPackagesInstallModel.retry(packagesInstall)); }
 
 function packagesReplyArrived(msg) { packagesApplyTransition(RundockPackagesInstallModel.reply(packagesInstall, msg)); }
-
-// The extension flow's transitions travel the same one-socket rule as the
-// pack flow's: a send that cannot go out resets to a stated not-connected
-// error rather than pretending something is in flight.
-function extensionApplyTransition(out) {
-  if (out.send) {
-    if (!(ws && ws.readyState === WebSocket.OPEN)) {
-      extensionInstall = {
-        ...RundockPackagesInstallModel.extInitial(),
-        url: (extensionInstall && extensionInstall.url) || '',
-        reference: (extensionInstall && extensionInstall.reference) || '',
-        fieldError: 'Not connected: nothing was sent. Try again once the connection returns.',
-      };
-      packagesRenderIfVisible();
-      return;
-    }
-    ws.send(JSON.stringify(out.send));
-  }
-  extensionInstall = out.state;
-  packagesRenderIfVisible();
-}
-
-function extensionSubmit() {
-  const urlField = document.getElementById('extension-source-url');
-  const refField = document.getElementById('extension-source-ref');
-  extensionApplyTransition(RundockPackagesInstallModel.extSubmit(
-    extensionInstall, urlField ? urlField.value : '', refField ? refField.value : ''));
-}
-function extensionConfirm() { extensionApplyTransition(RundockPackagesInstallModel.extConfirm(extensionInstall)); }
-function extensionDecline() { extensionApplyTransition(RundockPackagesInstallModel.extDecline(extensionInstall)); }
-function extensionBack() { extensionApplyTransition({ state: RundockPackagesInstallModel.extInitial() }); }
-function extensionReplyArrived(msg) { extensionApplyTransition(RundockPackagesInstallModel.extReply(extensionInstall, msg)); }
 
 // Per-workspace state must not outlive the workspace it was built from: a
 // plan's collision facts, planned digests and default readings all describe
 // one workspace, so a change of workspace returns the flow to idle.
 function packagesWorkspaceChanged() {
   packagesInstall = RundockPackagesInstallModel.initial();
-  extensionInstall = RundockPackagesInstallModel.extInitial();
   packagesRenderIfVisible();
+}
+
+// The server serving a different workspace than this window opened, which
+// is what a switch made from another window looks like from here: an offer
+// or trust step on screen described this window's workspace, and the server
+// would refuse its confirm now, so the flow returns to its start rather
+// than showing a card whose facts no longer hold.
+function packagesServingWorkspaceChanged(servingPath) {
+  if (typeof currentWorkspacePath === 'undefined' || servingPath === currentWorkspacePath) return;
+  packagesWorkspaceChanged();
 }
 
 // A dropped connection ends any wait this flow is in; the model owns the
@@ -121,27 +100,34 @@ function packagesWorkspaceChanged() {
 function packagesConnectionLost() {
   const out = RundockPackagesInstallModel.connectionLost(packagesInstall);
   // Identity means no wait was in progress: repainting here would wipe a
-  // half-typed path for nothing.
+  // half-typed link for nothing.
   if (out.state !== packagesInstall) packagesApplyTransition(out);
-  const extOut = RundockPackagesInstallModel.extConnectionLost(extensionInstall);
-  if (extOut.state !== extensionInstall) extensionApplyTransition(extOut);
 }
 
 function packagesSectionHtml() {
   const m = RundockPackagesInstallModel;
   const st = packagesInstall;
+  const idle = st.phase === 'idle';
   const field = `<div class="settings-card">
-      <div class="packages-field-label">Add a package from a folder</div>
+      <div class="packages-field-label">Add from GitHub</div>
       <div class="packages-field-row">
-        <input id="packages-source-path" class="packages-input" type="text" placeholder="Path to a folder of agents and skills"
-          value="${escAttr(st.sourcePath || '')}" ${st.phase === 'idle' ? '' : 'disabled'}>
-        <button class="settings-btn" onclick="packagesSubmit()" ${st.phase === 'idle' ? '' : 'disabled'}>Read it</button>
+        <input id="packages-source-link" class="packages-input" type="text" placeholder="Repository link or owner/repo"
+          value="${escAttr(st.link || '')}" ${idle ? '' : 'disabled'}>
+        <input id="packages-source-ref" class="packages-input packages-input-ref" type="text" placeholder="Tag or commit"
+          value="${escAttr(st.reference || '')}" ${idle ? '' : 'disabled'}>
+        <button class="settings-btn" onclick="packagesSubmit()" ${idle ? '' : 'disabled'}>Read it</button>
       </div>
+      <div class="packages-field-hint">Agents and skills, or an extension pinned to a tag or commit. Rundock does not review packages; what you add is your choice.</div>
       ${st.fieldError ? `<div class="packages-field-error">${esc(st.fieldError)}</div>` : ''}
     </div>`;
+  const where = `${esc(st.link)}${st.reference ? ` · ${esc(st.reference)}` : ''}`;
   let stateHtml = '';
   if (st.phase === 'classifying') {
-    stateHtml = `<div class="settings-card packages-state"><div class="packages-spinner"></div>Reading the package…</div>`;
+    stateHtml = `<div class="settings-card packages-state">
+        <div class="packages-spinner"></div>Reading the repository…
+        <div class="packages-body packages-where">${where}</div>
+        <div class="packages-body packages-still-reading">Still reading. Larger repositories take longer.</div>
+      </div>`;
   } else if (st.phase === 'offer') {
     const copy = m.offerCopy(st);
     stateHtml = `<div class="settings-card packages-confirm-card">
@@ -150,23 +136,47 @@ function packagesSectionHtml() {
         ${copy.collisionNote ? `<div class="packages-collision-note">${esc(copy.collisionNote)}</div>` : ''}
         <div class="packages-actions">
           <button class="settings-btn packages-confirm" onclick="packagesConfirm()" ${copy.confirmDisabled ? 'disabled' : ''}>${esc(copy.confirmLabel)}</button>
-          <button class="settings-btn packages-cancel" onclick="packagesCancel()">${esc(copy.cancelLabel)}</button>
+          <button class="settings-btn packages-cancel" onclick="packagesDecline()">${esc(copy.cancelLabel)}</button>
+        </div>
+      </div>`;
+  } else if (st.phase === 'trust') {
+    const copy = m.trustCopy(st);
+    stateHtml = `<div class="settings-card packages-confirm-card extension-trust-card">
+        <div class="packages-headline">${esc(copy.headline)}</div>
+        <div class="packages-body">${esc(copy.sourceLine)}</div>
+        <div class="packages-body extension-facts-lead">${esc(copy.factsLead)}</div>
+        <ul class="extension-facts-files">${copy.files.map((f) => `<li>${esc(f)}</li>`).join('')}</ul>
+        <div class="packages-body extension-match-line">${esc(copy.matchLine)}</div>
+        <div class="packages-headline extension-half-heading">${esc(copy.runsHeading)}</div>
+        <ul class="extension-host-claims">${copy.runsLines.map((line) => `<li>${esc(line)}</li>`).join('')}</ul>
+        <div class="packages-body extension-half-extension">${esc(copy.halves.extension)}</div>
+        <div class="packages-headline extension-half-heading">${esc(copy.keepsHeading)}</div>
+        <div class="packages-body extension-half-content">${esc(copy.halves.content)}</div>
+        <div class="packages-body">${esc(copy.reviewLine)}</div>
+        ${copy.replacesLine ? `<div class="packages-body">${esc(copy.replacesLine)}</div>` : ''}
+        <div class="packages-actions">
+          <button class="settings-btn packages-confirm" onclick="packagesConfirm()">${esc(copy.confirmLabel)}</button>
+          <button class="settings-btn packages-cancel" onclick="packagesDecline()">${esc(copy.declineLabel)}</button>
         </div>
       </div>`;
   } else if (st.phase === 'applying') {
     stateHtml = `<div class="settings-card packages-state"><div class="packages-spinner"></div>Adding to your team…</div>`;
+  } else if (st.phase === 'installing') {
+    stateHtml = `<div class="settings-card packages-state"><div class="packages-spinner"></div>Installing…</div>`;
   } else if (st.phase === 'nothing-usable') {
+    // Neutral by decision: nothing failed, the repository was read correctly
+    // and holds nothing to add.
     stateHtml = `<div class="settings-card packages-state">
-        <div class="packages-headline">Nothing usable in that folder</div>
-        <div class="packages-body">Rundock looked for agents and skills and found neither.</div>
-        <div class="packages-actions"><button class="settings-btn" onclick="packagesCancel()">Back</button></div>
+        <div class="packages-headline">Nothing to add</div>
+        <div class="packages-body">${esc(st.link)} doesn't look like a Rundock package. Rundock couldn't find any agents, skills or a manifest in it.</div>
+        <div class="packages-actions"><button class="settings-btn" onclick="packagesCancel()">Try a different link</button></div>
       </div>`;
   } else if (st.phase === 'failed') {
     stateHtml = `<div class="settings-card packages-state packages-failed">
         <div class="packages-headline">That didn't work</div>
         <div class="packages-body">${esc(st.message)}</div>
         <div class="packages-actions">
-          ${st.canReplan ? `<button class="settings-btn" onclick="packagesRetry()">Review the package again</button>` : ''}
+          ${st.canReplan ? `<button class="settings-btn" onclick="packagesRetry()">Try again</button>` : ''}
           <button class="settings-btn" onclick="packagesCancel()">Back</button>
         </div>
       </div>`;
@@ -176,61 +186,11 @@ function packagesSectionHtml() {
         <div class="packages-headline">${esc(copy.headline)}</div>
         ${copy.parts.map((p) => `<div class="packages-part"><span class="packages-part-label">${esc(p.label)}</span><span class="packages-part-dest">${esc(p.destination)}</span></div>`).join('')}
         ${copy.blockedLines.map((line) => `<div class="packages-blocked-line">${esc(line)}</div>`).join('')}
+        ${copy.note ? `<div class="packages-body">${esc(copy.note)}</div>` : ''}
         <div class="packages-actions"><button class="settings-btn" onclick="packagesCancel()">Done</button></div>
       </div>`;
   }
-  return `<div class="settings-section-title">Packages</div>${field}${stateHtml}${extensionSectionHtml()}`;
-}
-
-function extensionSectionHtml() {
-  const m = RundockPackagesInstallModel;
-  const st = extensionInstall;
-  const idle = st.phase === 'ext-idle';
-  const field = `<div class="settings-card">
-      <div class="packages-field-label">Install an extension from GitHub</div>
-      <div class="packages-field-row">
-        <input id="extension-source-url" class="packages-input" type="text" placeholder="Repository URL or owner/repo"
-          value="${escAttr(st.url || '')}" ${idle ? '' : 'disabled'}>
-        <input id="extension-source-ref" class="packages-input packages-input-ref" type="text" placeholder="Tag or commit"
-          value="${escAttr(st.reference || '')}" ${idle ? '' : 'disabled'}>
-        <button class="settings-btn" onclick="extensionSubmit()" ${idle ? '' : 'disabled'}>Read it</button>
-      </div>
-      ${st.fieldError ? `<div class="packages-field-error">${esc(st.fieldError)}</div>` : ''}
-    </div>`;
-  let stateHtml = '';
-  if (st.phase === 'ext-acquiring') {
-    stateHtml = `<div class="settings-card packages-state"><div class="packages-spinner"></div>Fetching the pinned snapshot…</div>`;
-  } else if (st.phase === 'ext-trust') {
-    const copy = m.extTrustCopy(st);
-    stateHtml = `<div class="settings-card packages-confirm-card extension-trust-card">
-        <div class="packages-headline">${esc(copy.headline)}</div>
-        <div class="packages-body">${esc(copy.sourceLine)}</div>
-        <div class="packages-body extension-facts-lead">${esc(copy.factsLead)}</div>
-        <ul class="extension-facts-files">${copy.files.map((f) => `<li>${esc(f)}</li>`).join('')}</ul>
-        <div class="packages-body">${esc(copy.body)}</div>
-        <div class="packages-body extension-match-line">${esc(copy.matchLine)}</div>
-        ${copy.replacesLine ? `<div class="packages-body">${esc(copy.replacesLine)}</div>` : ''}
-        <div class="packages-actions">
-          <button class="settings-btn packages-confirm" onclick="extensionConfirm()">${esc(copy.confirmLabel)}</button>
-          <button class="settings-btn packages-cancel" onclick="extensionDecline()">${esc(copy.declineLabel)}</button>
-        </div>
-      </div>`;
-  } else if (st.phase === 'ext-installing') {
-    stateHtml = `<div class="settings-card packages-state"><div class="packages-spinner"></div>Installing…</div>`;
-  } else if (st.phase === 'ext-failed') {
-    stateHtml = `<div class="settings-card packages-state packages-failed">
-        <div class="packages-headline">That didn't work</div>
-        <div class="packages-body">${esc(st.message)}</div>
-        <div class="packages-actions"><button class="settings-btn" onclick="extensionBack()">Back</button></div>
-      </div>`;
-  } else if (st.phase === 'ext-done') {
-    stateHtml = `<div class="settings-card packages-success-card">
-        <div class="packages-headline">Installed ${esc(st.record.name)} ${esc(st.record.version)}</div>
-        <div class="packages-body">Pinned at ${esc(st.record.source.reference)}. Update checks read this record, so you never enter the URL again.</div>
-        <div class="packages-actions"><button class="settings-btn" onclick="extensionBack()">Done</button></div>
-      </div>`;
-  }
-  return field + stateHtml;
+  return `<div class="settings-section-title">Packages</div>${field}${stateHtml}`;
 }
 
 function showSettingsSection(section) {
@@ -824,15 +784,14 @@ function connectorsWorkspaceChanged() {
   connectorsRenderIfShowing({ servers: [], missing: false, readFailed: true, error: 'Reopen this tab to read this workspace\'s connectors.' });
 }
 
+// The install flow's onclick names, its reply entry and its two workspace
+// resets are published because the generated markup and the app.js dispatch
+// cases resolve them against the module's exported surface, not against
+// private closure variables.
 return { showSettingsSection, renderSettingsSection, setWorkspaceMode, runtimeRowHtml, runtimesCardHtml, renderRuntimesCard, changeWorkspace,
-  packagesSubmit, packagesCancel, packagesConfirm, packagesRetry,
-  packagesReplyArrived, packagesWorkspaceChanged, packagesConnectionLost,
+  packagesSubmit, packagesCancel, packagesDecline, packagesConfirm, packagesRetry,
+  packagesReplyArrived, packagesWorkspaceChanged, packagesServingWorkspaceChanged, packagesConnectionLost,
   connectorsParse, connectorsParseToml, connectorsParseUserGlobalJson,
   connectorsBuildRows, connectorsBuildState, connectorsRowHtml, connectorsScopeText,
-  connectorsSectionHtml, connectorsLoad, connectorsWorkspaceChanged,
-  // The extension flow's own onclick names and its reply entry, published
-  // for the same reason the pack flow's are: the generated markup and the
-  // app.js dispatch case resolve these against the module's exported
-  // surface, not against private closure variables.
-  extensionSubmit, extensionConfirm, extensionDecline, extensionBack, extensionReplyArrived };
+  connectorsSectionHtml, connectorsLoad, connectorsWorkspaceChanged };
 }));

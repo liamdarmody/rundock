@@ -50,14 +50,15 @@ const MUTATIONS = [
       'unpinned-reference');
   }`,
     ''],
-  // Default the absent pin and the refusal's whole reason is inverted.
-  [SOURCE, 'an absent reference is refused, never defaulted to a branch',
-    `  if (!reference) {
-    refuse('a pinned reference (tag, release or commit) is required; an install is a promise '
-      + 'about exact bytes, and a moving branch cannot keep it', 'unpinned-reference');
+  // Default the absent pin and the refusal's whole reason is inverted: the
+  // repository's head, read only to classify, would be installed as code.
+  [SOURCE, 'an absent reference is refused for code, never defaulted to a branch',
+    `  if (!source || typeof source.reference !== 'string' || !source.reference) {
+    refuse('this repository is an extension, and installing one needs an exact tag, release or commit; '
+      + 'an install is a promise about exact bytes, and a moving branch cannot keep it', 'unpinned-reference');
   }`,
-    `  if (!reference) {
-    return { url: \`https://github.com/\${owner}/\${repo}\`, owner, repo, reference: 'main' };
+    `  if (!source || typeof source.reference !== 'string' || !source.reference) {
+    return { ...source, reference: 'main' };
   }`],
   // Let a reference beginning with "-" through and it lands in a git argv
   // position as an option rather than as the thing to fetch.
@@ -73,12 +74,18 @@ const MUTATIONS = [
     '    discardAcquisition(dir);',
     ''],
 
-  // ===== CODE REQUIRES A MANIFEST =====
+  // ===== CODE REQUIRES A MANIFEST, AND THE BYTES DECIDE THE KIND =====
   // Wave a manifest-less snapshot through as an extension and inference has
   // quietly grown the one thing it must never infer.
   [MANIFEST, 'a snapshot without a manifest is not an extension',
     `      refuse(\`the package has no \${MANIFEST_NAME}; code requires a manifest, always\`, 'not-an-extension');`,
     `      return { name: 'inferred', version: '0.0.0', entry: 'index.html', match: '*' };`],
+  // Invert the classification and a repository of agents and skills is
+  // answered with a trust step for code it does not carry, while a real
+  // extension is offered as content and its view never installs.
+  [MANIFEST, 'the kind of a snapshot is read from its bytes: an extension block means the trust step, its absence the offer',
+    "    if (e && e.code === 'not-an-extension') return { kind: 'content', manifest: null };",
+    "    if (e && e.code === 'not-an-extension') return { kind: 'extension', manifest: { name: 'inferred', version: '0.0.0', entry: 'index.html', match: '*' } };"],
   // Skip the symlink check on the entry path and a path segment linking
   // outside the snapshot is walked straight through instead of refused.
   [MANIFEST, 'extension.entry is refused when a path segment is a symlink',
@@ -95,24 +102,24 @@ const MUTATIONS = [
   // Keep the snapshot after a decline and "nothing left behind" is false in
   // the one place the person cannot see.
   [HANDLERS, 'declining discards the acquired snapshot',
-    '  if (pending) discardAcquisition(pending.snapshot);',
-    ''],
+    '  discardPending(msg.token);\n  ws.send(JSON.stringify({ type: \'package_install_declined\'',
+    '  releasePending(msg.token);\n  ws.send(JSON.stringify({ type: \'package_install_declined\''],
   // Skip the discard in beginExtensionPlan's own catch and a snapshot that
   // was fetched but then failed to plan (a fetch that fails after acquiring
   // some bytes; a repository with no rundock.json) leaks its temporary
   // directory instead of leaving nothing behind, the same promise a decline
   // makes for an offer the person actually saw.
   [HANDLERS, 'a failed plan discards whatever the acquirer already fetched',
-    '    discardAcquisition(snapshot);',
-    ''],
+    '    discardAcquisition(snapshot);\n    installFail(ws, \'plan\', null, e);',
+    '    installFail(ws, \'plan\', null, e);'],
 
   // ===== AN UPDATE READS ITS URL FROM THE RECORD, NEVER FROM THE CALLER =====
   // Let a caller-supplied url win over the record's own and the whole point
   // of persisting the source is undone: an update could be pointed at a
   // repository the person never consented to.
   [HANDLERS, 'the update path sources its URL from the installed record, not the message',
-    '    source = parseGitHubSource(record.source.url, msg.reference);',
-    '    source = parseGitHubSource(msg.url || record.source.url, msg.reference);'],
+    '    source = requirePin(parseGitHubSource(record.source.url, msg.reference));',
+    '    source = requirePin(parseGitHubSource(msg.url || record.source.url, msg.reference));'],
 
   // ===== A HANDLER ANSWERS, IT NEVER THROWS; A PERSISTED RECORD IS NOT
   //       TRUSTED INPUT =====
@@ -139,7 +146,7 @@ const MUTATIONS = [
   // beginExtensionPlan and a git argv unchecked, exactly the trust the
   // uninstall path refuses to extend to the same file's root.
   [HANDLERS, 'the stored url is revalidated through the same GitHub-source validation a fresh install uses',
-    '    source = parseGitHubSource(record.source.url, msg.reference);',
+    '    source = requirePin(parseGitHubSource(record.source.url, msg.reference));',
     '    source = { url: record.source.url, reference: msg.reference };'],
   // Skip the revalidation on the update-check path and the persisted url
   // reaches listRefsWithGit's ls-remote argv unchecked: the sibling
@@ -155,35 +162,44 @@ const MUTATIONS = [
   // to another workspace installs into whatever is current now, replacing
   // that workspace's files under a trust card that described a different one.
   [HANDLERS, 'a confirm is refused when the server\'s workspace has changed since the plan',
-    `    if (pending.workspace !== workspace) {
-      throw Object.assign(
-        new Error('the workspace changed since this package was read; read it again'),
-        { code: 'workspace-changed' },
-      );
-    }`,
-    ''],
+    '  if (pending.workspace !== workspace) {\n    discardAcquisition(pending.snapshot);',
+    '  if (false) {\n    discardAcquisition(pending.snapshot);'],
 
   // ===== AN UNANSWERED OFFER DOES NOT LIVE FOREVER =====
   // Skip the close release and a dropped connection leaves the fetched
   // snapshot and its token alive for the life of the process.
   [HANDLERS, 'a dropped connection releases the pending offer',
-    `    if (typeof ws.once === 'function') {
-      ws.once('close', () => releasePending(token));
-    }`,
+    `  if (typeof ws.once === 'function') {
+    pending.onClose = () => discardPending(token);
+    ws.once('close', pending.onClose);
+  }`,
     ''],
   // Skip the supersede release and a second plan on the same connection
   // leaves the first offer's snapshot and token alive, unreachable and
   // unanswerable, for the life of the process.
   [HANDLERS, 'a second plan on the same connection supersedes the first, unanswered one',
-    `    const previousToken = pendingBySocket.get(ws);
-    if (previousToken) releasePending(previousToken);`,
+    `  const previousToken = pendingBySocket.get(ws);
+  if (previousToken) discardPending(previousToken);`,
     ''],
+  // Let the extension confirm also write the content half and the trust
+  // card's sentence about that half ("not added by this step") is false on
+  // disk: agents land under a card that said they would not.
+  [HANDLERS, 'confirming the extension writes the extension half only; the content half waits for its own answer',
+    '    const record = installExtension(workspace, pending.snapshot, pending.plan);',
+    `    const record = installExtension(workspace, pending.snapshot, pending.plan);
+    if (pending.content) applyImport(workspace, pending.snapshot, require('../../../public/packages-install-model.js').allAddApproval(pending.content), {});`],
 
   // ===== THE TRUST STEP TELLS THE TRUTH =====
   // Drop the no-review sentence and the screen implies a vetting nobody did.
   [MODEL, 'the trust step says Rundock does not review extensions',
-    `        + 'Rundock does not review extensions; what you install is your choice.',`,
-    `        + '',`],
+    "      reviewLine: 'Rundock does not review extensions; what you install is your choice.',",
+    "      reviewLine: '',"],
+  // Make the content half's sentence claim the agents land with the
+  // extension and the card lies about what confirm does: the disk says
+  // otherwise, and the suite holds the two together.
+  [MODEL, 'the trust card says the content half is not added by the extension confirm, which is what the disk shows',
+    'in this repository are not added by this step. `',
+    'in this repository are added by this step. `'],
 
   // ===== THE RECORD REMEMBERS THE SOURCE =====
   // Forget the pin and every update check needs the URL and reference typed
@@ -268,9 +284,9 @@ const MUTATIONS = [
   // Drop extensionReplyArrived from the exported surface and every server
   // reply for this flow resolves against `window` in a browser and throws,
   // while every test that calls the handler directly stays green.
-  [SETTINGS_VIEW, 'the extension flow\'s reply entry is on the module\'s exported surface',
-    '  extensionSubmit, extensionConfirm, extensionDecline, extensionBack, extensionReplyArrived };',
-    '  extensionSubmit, extensionConfirm, extensionDecline, extensionBack };'],
+  [SETTINGS_VIEW, 'the install flow\'s reply entry is on the module\'s exported surface',
+    '  packagesReplyArrived, packagesWorkspaceChanged, packagesServingWorkspaceChanged, packagesConnectionLost,',
+    '  packagesWorkspaceChanged, packagesServingWorkspaceChanged, packagesConnectionLost,'],
 ];
 
 const REPORTER = ['--test-reporter', 'spec'];

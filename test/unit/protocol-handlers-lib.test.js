@@ -39,8 +39,8 @@ const EXPECTED_TYPES = [
   // The extension install flow: acquire-and-offer, one answer either way,
   // then update (from the wire message or from the installed record) and
   // removal. Pressed by test/unit/extension-install.test.js.
-  'plan_extension_install', 'plan_extension_update', 'confirm_extension_install',
-  'decline_extension_install', 'check_extension_update', 'uninstall_extension',
+  'plan_package_install', 'plan_extension_update', 'confirm_extension_install',
+  'confirm_package_install', 'decline_package_install', 'check_extension_update', 'uninstall_extension',
   'get_conversations', 'set_last_active_conversation', 'save_conversation',
   'get_lists', 'create_list', 'delete_list', 'delete_conversation',
   'read_file', 'add_to_team',

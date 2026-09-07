@@ -33,9 +33,11 @@ atomicWrite.writeAsUnit = (workspace, writes, options) => {
 const { JSDOM } = require('jsdom');
 
 const {
-  parseGitHubSource, acquireWithGit, discardAcquisition, listRefsWithGit, MOVING_NAMES,
+  parseGitHubSource, requirePin, acquireWithGit, discardAcquisition, listRefsWithGit, MOVING_NAMES,
 } = require('../../lib/packages/extension-source.js');
-const { readExtensionManifest, deriveFacts, extensionFileSet } = require('../../lib/packages/extension-manifest.js');
+const {
+  readExtensionManifest, classifySnapshot, deriveFacts, extensionFileSet,
+} = require('../../lib/packages/extension-manifest.js');
 const {
   RECORDS_PATH, EXTENSIONS_ROOT, readExtensionRecords, serialiseRecords, checkForUpdate,
 } = require('../../lib/packages/extension-record.js');
@@ -74,14 +76,16 @@ function workspace() {
 
 // One extension snapshot: a manifest, a view directory, and optionally the
 // content items the trust step counts.
-function extensionSnapshot({ name = 'test-ext', version = '1.0.0', agents = 0, skills = 0 } = {}) {
+function extensionSnapshot({ name = 'test-ext', version = '1.0.0', agents = 0, skills = 0, manifest = true } = {}) {
   const dir = tempDir('ext-snap-');
   fs.mkdirSync(path.join(dir, 'view'));
   fs.writeFileSync(path.join(dir, 'view', 'index.html'), '<main>rendered by the extension</main>\n');
   fs.writeFileSync(path.join(dir, 'view', 'style.css'), 'main { display: block; }\n');
-  fs.writeFileSync(path.join(dir, 'rundock.json'), JSON.stringify({
-    name, version, extension: { entry: 'view/index.html', match: '*.dataview.md' },
-  }, null, 2));
+  if (manifest) {
+    fs.writeFileSync(path.join(dir, 'rundock.json'), JSON.stringify({
+      name, version, extension: { entry: 'view/index.html', match: '*.dataview.md' },
+    }, null, 2));
+  }
   if (agents || skills) {
     fs.mkdirSync(path.join(dir, '.claude', 'agents'), { recursive: true });
     fs.mkdirSync(path.join(dir, '.claude', 'skills'), { recursive: true });
@@ -116,11 +120,13 @@ describe('the pin is required, and a moving name is not a pin', () => {
     assert.strictEqual(source.reference, 'a1b2c3d4');
   });
 
-  test('a missing reference is refused with the reason, never defaulted', () => {
-    assert.throws(() => parseGitHubSource('someone/test-ext', ''),
-      (e) => e.code === 'unpinned-reference' && /required/.test(e.message)
-        && /moving branch/.test(e.message),
-      'the refusal names why a pin is required rather than silently choosing a branch');
+  test('a missing reference parses to null, and requirePin refuses it with the reason, never defaulted', () => {
+    for (const absent of [undefined, null, '', '   ']) {
+      const source = parseGitHubSource('someone/test-ext', absent);
+      assert.strictEqual(source.reference, null, 'agents and skills may be read unpinned, so absence is carried as null');
+      assert.throws(() => requirePin(source), (e) => e.code === 'unpinned-reference' && /exact tag, release or commit/.test(e.message));
+    }
+    assert.strictEqual(requirePin(parseGitHubSource('someone/test-ext', 'v1.0.0')).reference, 'v1.0.0');
   });
 
   test('every well-known moving name is refused as not a pin', () => {
@@ -291,36 +297,51 @@ describe('the trust step shows derived facts, before anything is installed', () 
     assert.strictEqual(unitCalls.length, 0, 'no transaction ran for a plan');
   });
 
-  test('the trust copy says the honest halves: sandboxed view, unsandboxed agents, no review', () => {
+  test('the trust copy says the honest halves: the view inside the host boundary, the agents and skills outside it, no review', () => {
     const state = {
-      phase: 'ext-trust', url: SOURCE.url, reference: SOURCE.reference, token: 't',
+      phase: 'trust', link: SOURCE.url, reference: SOURCE.reference, token: 't',
       manifest: { name: 'test-ext', version: '1.0.0' },
       facts: { agents: 2, skills: 1, files: ['view/index.html'], match: '*.dataview.md' },
       replaces: null,
     };
-    const copy = model.extTrustCopy(state);
-    assert.match(copy.body, /runs sandboxed/, 'the view half of the boundary is stated');
-    assert.match(copy.body, /not sandboxed.*same access your own agents have/,
+    const copy = model.trustCopy(state);
+    assert.match(copy.halves.content, /not sandboxed.*same access your own agents have/,
       'the agents half is stated, because it is the larger part of the blast radius');
-    assert.match(copy.body, /larger part of what you are trusting/);
-    assert.match(copy.body, /Rundock does not review extensions/,
+    assert.match(copy.reviewLine, /Rundock does not review extensions/,
       'the no-review fact is on the screen, not only in a document');
     assert.match(copy.factsLead, /Read from the package itself, not from its author/,
       'derived beats declared, and the reader is told which kind these are');
   });
 
-  test('the model sends nothing except on an explicit ask', () => {
-    let state = model.extInitial();
-    assert.strictEqual(model.extReply(state, { type: 'anything' }).send, undefined);
-    const submitted = model.extSubmit(state, 'someone/test-ext', 'v1');
-    assert.strictEqual(submitted.send.type, 'plan_extension_install');
-    const trusting = model.extReply(submitted.state, {
-      type: 'extension_install_plan', token: 'tok',
+  test('the model sends nothing except on an explicit ask, and every message it can send is link-driven', () => {
+    const sends = [];
+    const record = (out) => { if (out.send) sends.push(out.send); return out; };
+    let state = model.initial();
+    assert.strictEqual(record(model.reply(state, { type: 'anything' })).send, undefined);
+    const submitted = record(model.submit(state, 'someone/test-ext', 'v1'));
+    assert.strictEqual(submitted.send.type, 'plan_package_install');
+    const trusting = record(model.reply(submitted.state, {
+      type: 'extension_install_plan', operation: 'plan', token: 'tok',
       manifest: { name: 'x', version: '1' }, facts: { agents: 0, skills: 0, files: [], match: 'm' },
-    });
+    }));
     assert.strictEqual(trusting.send, undefined, 'arriving at the trust step asks for nothing');
-    assert.strictEqual(model.extConfirm(trusting.state).send.type, 'confirm_extension_install');
-    assert.strictEqual(model.extDecline(trusting.state).send.type, 'decline_extension_install');
+    assert.strictEqual(record(model.confirm(trusting.state)).send.type, 'confirm_extension_install');
+    assert.strictEqual(record(model.decline(trusting.state)).send.type, 'decline_package_install');
+    const plan = withWorkspace((ws) => buildPlan(ws, extensionSnapshot({ skills: 1, manifest: false }), { id: 'x', reference: null }));
+    const offered = record(model.reply(submitted.state, { type: 'package_import_plan', operation: 'plan', token: 'tok2', plan }));
+    assert.strictEqual(offered.send, undefined);
+    assert.strictEqual(record(model.confirm(offered.state)).send.type, 'confirm_package_install');
+    assert.strictEqual(record(model.decline(offered.state)).send.type, 'decline_package_install');
+    record(model.retry({ phase: 'failed', link: 'someone/test-ext', reference: '' }));
+    assert.strictEqual(record(model.cancel(offered.state)).send, undefined, 'cancel sends nothing');
+    assert.deepStrictEqual([...new Set(sends.map((m) => m.type))].sort(),
+      ['confirm_extension_install', 'confirm_package_install', 'decline_package_install', 'plan_package_install'],
+      'the whole outgoing set, from every sending transition');
+    for (const m of sends) {
+      assert.ok(!('sourcePath' in m), `${m.type} names a path; the client only ever sends the link`);
+    }
+    assert.deepStrictEqual(sends.filter((m) => m.type === 'plan_package_install').map((m) => [m.url, m.reference]),
+      [['someone/test-ext', 'v1'], ['someone/test-ext', null]], 'the link travels with the pin, or with null when none was given');
   });
 });
 
@@ -376,13 +397,13 @@ describe('consent order at the wire: plan, then one answer', () => {
       const previousDeps = handlers.wireExtensionDeps({ acquire: () => snap });
       try {
         const sock = captureWs();
-        handlers.handlePlanExtensionInstall({}, sock, { type: 'plan_extension_install', url: 'someone/test-ext', reference: 'v1.0.0' });
+        handlers.handlePlanPackageInstall({}, sock, { type: 'plan_package_install', url: 'someone/test-ext', reference: 'v1.0.0' });
         const plan = sock.sent[0];
         assert.strictEqual(plan.type, 'extension_install_plan');
         assert.ok(fs.existsSync(snap), 'the snapshot waits between offer and answer');
 
-        handlers.handleDeclineExtensionInstall({}, sock, { type: 'decline_extension_install', token: plan.token });
-        assert.strictEqual(sock.sent[1].type, 'extension_install_declined');
+        handlers.handleDeclinePackageInstall({}, sock, { type: 'decline_package_install', token: plan.token });
+        assert.strictEqual(sock.sent[1].type, 'package_install_declined');
         assert.strictEqual(fs.existsSync(snap), false, 'no is nothing left behind, the temporary snapshot included');
         assert.deepStrictEqual(fs.readdirSync(ws), [], 'and the workspace never changed');
       } finally {
@@ -397,8 +418,8 @@ describe('consent order at the wire: plan, then one answer', () => {
       const previousDeps = handlers.wireExtensionDeps({ acquire: () => { acquired += 1; return extensionSnapshot(); } });
       try {
         const sock = captureWs();
-        handlers.handlePlanExtensionInstall({}, sock, { type: 'plan_extension_install', url: 'someone/test-ext', reference: 'main' });
-        assert.strictEqual(sock.sent[0].type, 'extension_install_error');
+        handlers.handlePlanPackageInstall({}, sock, { type: 'plan_package_install', url: 'someone/test-ext', reference: 'main' });
+        assert.strictEqual(sock.sent[0].type, 'package_install_error');
         assert.strictEqual(sock.sent[0].code, 'unpinned-reference');
         assert.strictEqual(acquired, 0, 'refusal comes before any fetch');
       } finally {
@@ -413,8 +434,8 @@ describe('consent order at the wire: plan, then one answer', () => {
       const previousDeps = handlers.wireExtensionDeps({ acquire: () => { acquired += 1; return extensionSnapshot(); } });
       try {
         const sock = captureWs();
-        handlers.handlePlanExtensionInstall({}, sock, { type: 'plan_extension_install', url: 'someone/test-ext', reference: '--upload-pack=evil' });
-        assert.strictEqual(sock.sent[0].type, 'extension_install_error');
+        handlers.handlePlanPackageInstall({}, sock, { type: 'plan_package_install', url: 'someone/test-ext', reference: '--upload-pack=evil' });
+        assert.strictEqual(sock.sent[0].type, 'package_install_error');
         assert.strictEqual(sock.sent[0].code, 'unpinned-reference');
         assert.strictEqual(acquired, 0, 'refusal comes before any fetch, so nothing ever reaches a git argv');
       } finally {
@@ -447,9 +468,9 @@ describe('a failure between acquire and offer discards the snapshot and issues n
       });
       try {
         const sock = captureWs();
-        handlers.handlePlanExtensionInstall({}, sock, { type: 'plan_extension_install', url: 'someone/test-ext', reference: 'v1.0.0' });
+        handlers.handlePlanPackageInstall({}, sock, { type: 'plan_package_install', url: 'someone/test-ext', reference: 'v1.0.0' });
         assert.strictEqual(sock.sent.length, 1, 'exactly one reply answers the failed plan');
-        assert.strictEqual(sock.sent[0].type, 'extension_install_error');
+        assert.strictEqual(sock.sent[0].type, 'package_install_error');
         assert.strictEqual(sock.sent[0].code, 'acquire-failed');
 
         const after = new Set(fs.readdirSync(os.tmpdir()).filter((n) => n.startsWith('rundock-ext-')));
@@ -457,7 +478,7 @@ describe('a failure between acquire and offer discards the snapshot and issues n
           'nothing the failed acquisition created survives it');
 
         handlers.handleConfirmExtensionInstall({}, sock, { type: 'confirm_extension_install', token: 'ext-never-issued' });
-        assert.strictEqual(sock.sent[1].type, 'extension_install_error',
+        assert.strictEqual(sock.sent[1].type, 'package_install_error',
           'a plan that never reached the offer issued no token; any confirm answers a refusal');
         assert.match(sock.sent[1].message, /nothing is awaiting this confirmation/);
       } finally {
@@ -466,21 +487,21 @@ describe('a failure between acquire and offer discards the snapshot and issues n
     });
   });
 
-  test('a fetched snapshot with no rundock.json is answered as one not-an-extension error, and the snapshot is deleted', () => {
+  test('a fetched snapshot with neither a manifest nor content is answered as one empty-package error, and the snapshot is deleted', () => {
     withWorkspace(() => {
       const snap = tempDir('ext-no-manifest-');
       const previousDeps = handlers.wireExtensionDeps({ acquire: () => snap });
       try {
         const sock = captureWs();
-        handlers.handlePlanExtensionInstall({}, sock, { type: 'plan_extension_install', url: 'someone/test-ext', reference: 'v1.0.0' });
+        handlers.handlePlanPackageInstall({}, sock, { type: 'plan_package_install', url: 'someone/test-ext', reference: 'v1.0.0' });
         assert.strictEqual(sock.sent.length, 1, 'exactly one reply answers the failed plan');
-        assert.strictEqual(sock.sent[0].type, 'extension_install_error');
-        assert.strictEqual(sock.sent[0].code, 'not-an-extension');
+        assert.strictEqual(sock.sent[0].type, 'package_install_error');
+        assert.strictEqual(sock.sent[0].code, 'empty-package');
         assert.strictEqual(fs.existsSync(snap), false,
           'the acquired snapshot is discarded when planning it fails, exactly as a decline discards it');
 
-        handlers.handleConfirmExtensionInstall({}, sock, { type: 'confirm_extension_install', token: 'ext-never-issued' });
-        assert.strictEqual(sock.sent[1].type, 'extension_install_error',
+        handlers.handleConfirmExtensionInstall({}, sock, { type: 'confirm_extension_install', token: 'pkg-never-issued' });
+        assert.strictEqual(sock.sent[1].type, 'package_install_error',
           'a plan that never reached the offer issued no token; any confirm answers a refusal');
         assert.match(sock.sent[1].message, /nothing is awaiting this confirmation/);
       } finally {
@@ -495,7 +516,7 @@ describe('the token dies with its use, and an unanswered offer does not live for
     withWorkspace((ws) => {
       const sock = captureWs();
       handlers.handleConfirmExtensionInstall({}, sock, { type: 'confirm_extension_install', token: 'ext-never-issued' });
-      assert.strictEqual(sock.sent[0].type, 'extension_install_error');
+      assert.strictEqual(sock.sent[0].type, 'package_install_error');
       assert.match(sock.sent[0].message, /nothing is awaiting this confirmation/);
       assert.strictEqual(fs.existsSync(path.join(ws, ...RECORDS_PATH.split('/'))), false,
         'no records file was written for a confirmation nothing was awaiting');
@@ -510,14 +531,14 @@ describe('the token dies with its use, and an unanswered offer does not live for
       const previousDeps = handlers.wireExtensionDeps({ acquire: () => snap });
       try {
         const sock = captureWs();
-        handlers.handlePlanExtensionInstall({}, sock, { type: 'plan_extension_install', url: 'someone/test-ext', reference: 'v1.0.0' });
+        handlers.handlePlanPackageInstall({}, sock, { type: 'plan_package_install', url: 'someone/test-ext', reference: 'v1.0.0' });
         const token = sock.sent[0].token;
         handlers.handleConfirmExtensionInstall({}, sock, { type: 'confirm_extension_install', token });
         assert.strictEqual(sock.sent[1].type, 'extension_install_result');
         const afterFirst = fs.statSync(path.join(ws, ...EXTENSIONS_ROOT.split('/'), 'test-ext', 'view', 'index.html')).mtimeMs;
 
         handlers.handleConfirmExtensionInstall({}, sock, { type: 'confirm_extension_install', token });
-        assert.strictEqual(sock.sent[2].type, 'extension_install_error',
+        assert.strictEqual(sock.sent[2].type, 'package_install_error',
           'the same token answered twice must not install a second time');
         assert.match(sock.sent[2].message, /nothing is awaiting this confirmation/);
 
@@ -537,7 +558,7 @@ describe('the token dies with its use, and an unanswered offer does not live for
       const previousDeps = handlers.wireExtensionDeps({ acquire: () => snap });
       try {
         const sock = closableWs();
-        handlers.handlePlanExtensionInstall({}, sock, { type: 'plan_extension_install', url: 'someone/test-ext', reference: 'v1.0.0' });
+        handlers.handlePlanPackageInstall({}, sock, { type: 'plan_package_install', url: 'someone/test-ext', reference: 'v1.0.0' });
         const token = sock.sent[0].token;
         assert.ok(fs.existsSync(snap), 'sanity: the snapshot is waiting between offer and answer');
 
@@ -545,7 +566,7 @@ describe('the token dies with its use, and an unanswered offer does not live for
         assert.strictEqual(fs.existsSync(snap), false, 'the connection dropped and the fetched snapshot was left behind');
 
         handlers.handleConfirmExtensionInstall({}, sock, { type: 'confirm_extension_install', token });
-        assert.strictEqual(sock.sent[1].type, 'extension_install_error',
+        assert.strictEqual(sock.sent[1].type, 'package_install_error',
           'the token a dropped connection was holding must not still be answerable');
       } finally {
         handlers.wireExtensionDeps(previousDeps);
@@ -561,17 +582,17 @@ describe('the token dies with its use, and an unanswered offer does not live for
       const previousDeps = handlers.wireExtensionDeps({ acquire: () => (calls++ === 0 ? first : second) });
       try {
         const sock = captureWs();
-        handlers.handlePlanExtensionInstall({}, sock, { type: 'plan_extension_install', url: 'someone/first-ext', reference: 'v1.0.0' });
+        handlers.handlePlanPackageInstall({}, sock, { type: 'plan_package_install', url: 'someone/first-ext', reference: 'v1.0.0' });
         const firstToken = sock.sent[0].token;
         assert.ok(fs.existsSync(first), 'sanity: the first offer is waiting');
 
-        handlers.handlePlanExtensionInstall({}, sock, { type: 'plan_extension_install', url: 'someone/second-ext', reference: 'v1.0.0' });
+        handlers.handlePlanPackageInstall({}, sock, { type: 'plan_package_install', url: 'someone/second-ext', reference: 'v1.0.0' });
         assert.strictEqual(fs.existsSync(first), false,
           'reading a second package on the same connection abandoned the first, unanswered offer');
         assert.ok(fs.existsSync(second), 'the second offer is the one now waiting');
 
         handlers.handleConfirmExtensionInstall({}, sock, { type: 'confirm_extension_install', token: firstToken });
-        assert.strictEqual(sock.sent[2].type, 'extension_install_error',
+        assert.strictEqual(sock.sent[2].type, 'package_install_error',
           'the superseded token must not still confirm');
       } finally {
         handlers.wireExtensionDeps(previousDeps);
@@ -587,7 +608,7 @@ describe('install, the record, and the update check that reads it', () => {
       const previousDeps = handlers.wireExtensionDeps({ acquire: () => snap });
       try {
         const sock = captureWs();
-        handlers.handlePlanExtensionInstall({}, sock, { type: 'plan_extension_install', url: 'someone/test-ext', reference: 'v1.0.0' });
+        handlers.handlePlanPackageInstall({}, sock, { type: 'plan_package_install', url: 'someone/test-ext', reference: 'v1.0.0' });
         handlers.handleConfirmExtensionInstall({}, sock, { type: 'confirm_extension_install', token: sock.sent[0].token });
         const result = sock.sent[1];
         assert.strictEqual(result.type, 'extension_install_result');
@@ -624,7 +645,7 @@ describe('install, the record, and the update check that reads it', () => {
       });
       try {
         const sock = captureWs();
-        handlers.handlePlanExtensionInstall({}, sock, { type: 'plan_extension_install', url: 'someone/test-ext', reference: 'v1.0.0' });
+        handlers.handlePlanPackageInstall({}, sock, { type: 'plan_package_install', url: 'someone/test-ext', reference: 'v1.0.0' });
         handlers.handleConfirmExtensionInstall({}, sock, { type: 'confirm_extension_install', token: sock.sent[0].token });
 
         handlers.handleCheckExtensionUpdate({}, sock, { type: 'check_extension_update', name: 'test-ext' });
@@ -657,7 +678,7 @@ describe('install, the record, and the update check that reads it', () => {
       try {
         const sock = captureWs();
         handlers.handleCheckExtensionUpdate({}, sock, { type: 'check_extension_update', name: 'test-ext' });
-        assert.strictEqual(sock.sent[0].type, 'extension_install_error');
+        assert.strictEqual(sock.sent[0].type, 'package_install_error');
         assert.match(sock.sent[0].message, /not a GitHub repository/);
         assert.strictEqual(asked, 0,
           'the argv-shaped stored url failed validation before the ref-lister was ever called');
@@ -684,7 +705,7 @@ describe('install, the record, and the update check that reads it', () => {
       try {
         const sock = captureWs();
         handlers.handleCheckExtensionUpdate({}, sock, { type: 'check_extension_update', name: 'test-ext' });
-        assert.strictEqual(sock.sent[0].type, 'extension_install_error');
+        assert.strictEqual(sock.sent[0].type, 'package_install_error');
         assert.match(sock.sent[0].message, /not a GitHub repository/);
         assert.strictEqual(asked, 0,
           'the non-GitHub stored url failed validation before the ref-lister was ever called');
@@ -755,7 +776,7 @@ describe('an update begins from the installed record, never from the caller', ()
       try {
         const sock = captureWs();
         // Install at the pinned reference.
-        handlers.handlePlanExtensionInstall({}, sock, { type: 'plan_extension_install', url: 'someone/test-ext', reference: 'v1.0.0' });
+        handlers.handlePlanPackageInstall({}, sock, { type: 'plan_package_install', url: 'someone/test-ext', reference: 'v1.0.0' });
         handlers.handleConfirmExtensionInstall({}, sock, { type: 'confirm_extension_install', token: sock.sent[0].token });
         assert.strictEqual(sock.sent[1].type, 'extension_install_result');
 
@@ -816,7 +837,7 @@ describe('an update begins from the installed record, never from the caller', ()
       try {
         const sock = captureWs();
         handlers.handlePlanExtensionUpdate({}, sock, { type: 'plan_extension_update', name: 'ghost', reference: 'v2.0.0' });
-        assert.strictEqual(sock.sent[0].type, 'extension_install_error');
+        assert.strictEqual(sock.sent[0].type, 'package_install_error');
         assert.match(sock.sent[0].message, /no extension named "ghost" is installed/);
         assert.strictEqual(acquired, 0, 'nothing installed means nothing to acquire');
       } finally {
@@ -832,15 +853,15 @@ describe('an update begins from the installed record, never from the caller', ()
       const previousDeps = handlers.wireExtensionDeps({ acquire: () => { acquired += 1; return v1; } });
       try {
         const sock = captureWs();
-        handlers.handlePlanExtensionInstall({}, sock, { type: 'plan_extension_install', url: 'someone/test-ext', reference: 'v1.0.0' });
+        handlers.handlePlanPackageInstall({}, sock, { type: 'plan_package_install', url: 'someone/test-ext', reference: 'v1.0.0' });
         handlers.handleConfirmExtensionInstall({}, sock, { type: 'confirm_extension_install', token: sock.sent[0].token });
         acquired = 0;
         handlers.handlePlanExtensionUpdate({}, sock, { type: 'plan_extension_update', name: 'test-ext', reference: '   ' });
-        assert.strictEqual(sock.sent[2].type, 'extension_install_error');
+        assert.strictEqual(sock.sent[2].type, 'package_install_error');
         // The blank reference goes through the same validation a fresh
         // install's pasted reference does, so it carries that refusal's
         // reason and code rather than a bespoke message.
-        assert.match(sock.sent[2].message, /a pinned reference .* is required/);
+        assert.match(sock.sent[2].message, /needs an exact tag, release or commit/);
         assert.strictEqual(sock.sent[2].code, 'unpinned-reference');
         assert.strictEqual(acquired, 0);
       } finally {
@@ -860,7 +881,7 @@ describe('an update begins from the installed record, never from the caller', ()
       });
       try {
         const sock = captureWs();
-        handlers.handlePlanExtensionInstall({}, sock, { type: 'plan_extension_install', url: 'someone/test-ext', reference: 'v1.0.0' });
+        handlers.handlePlanPackageInstall({}, sock, { type: 'plan_package_install', url: 'someone/test-ext', reference: 'v1.0.0' });
         handlers.handleConfirmExtensionInstall({}, sock, { type: 'confirm_extension_install', token: sock.sent[0].token });
 
         handlers.handlePlanExtensionUpdate({}, sock, {
@@ -891,7 +912,7 @@ describe('an update begins from the installed record, never from the caller', ()
         assert.doesNotThrow(() => {
           handlers.handlePlanExtensionUpdate({}, sock, { type: 'plan_extension_update', name: 'test-ext', reference: 'v2.0.0' });
         }, 'a handler answers, it never throws out of the dispatch');
-        assert.strictEqual(sock.sent[0].type, 'extension_install_error');
+        assert.strictEqual(sock.sent[0].type, 'package_install_error');
         assert.match(sock.sent[0].message, /extension records unreadable/);
         assert.strictEqual(acquired, 0, 'nothing was acquired for a request that could not even read the record');
       } finally {
@@ -918,7 +939,7 @@ describe('an update begins from the installed record, never from the caller', ()
         assert.doesNotThrow(() => {
           handlers.handlePlanExtensionUpdate({}, sock, { type: 'plan_extension_update', name: 'test-ext', reference: 'v2.0.0' });
         }, 'a handler answers, it never throws out of the dispatch');
-        assert.strictEqual(sock.sent[0].type, 'extension_install_error');
+        assert.strictEqual(sock.sent[0].type, 'package_install_error');
         assert.match(sock.sent[0].message, /carries no source url/);
         assert.strictEqual(acquired, 0);
       } finally {
@@ -944,7 +965,7 @@ describe('an update begins from the installed record, never from the caller', ()
       try {
         const sock = captureWs();
         handlers.handlePlanExtensionUpdate({}, sock, { type: 'plan_extension_update', name: 'test-ext', reference: 'v2.0.0' });
-        assert.strictEqual(sock.sent[0].type, 'extension_install_error');
+        assert.strictEqual(sock.sent[0].type, 'package_install_error');
         assert.match(sock.sent[0].message, /not a GitHub repository/);
         assert.strictEqual(acquired, 0, 'the stored url failed validation before any acquisition');
       } finally {
@@ -964,7 +985,7 @@ describe('consent binds to the workspace it was shown against', () => {
     const previousDeps = handlers.wireExtensionDeps({ acquire: () => snap });
     try {
       const sock = captureWs();
-      handlers.handlePlanExtensionInstall({}, sock, { type: 'plan_extension_install', url: 'someone/test-ext', reference: 'v1.0.0' });
+      handlers.handlePlanPackageInstall({}, sock, { type: 'plan_package_install', url: 'someone/test-ext', reference: 'v1.0.0' });
       const token = sock.sent[0].token;
       assert.ok(fs.existsSync(snap), 'sanity: the offer is waiting between offer and answer');
 
@@ -974,7 +995,7 @@ describe('consent binds to the workspace it was shown against', () => {
       config.setWorkspace(workspaceB);
       handlers.handleConfirmExtensionInstall({}, sock, { type: 'confirm_extension_install', token });
 
-      assert.strictEqual(sock.sent[1].type, 'extension_install_error');
+      assert.strictEqual(sock.sent[1].type, 'package_install_error');
       assert.strictEqual(sock.sent[1].code, 'workspace-changed');
       assert.match(sock.sent[1].message, /the workspace changed/);
       assert.strictEqual(fs.existsSync(snap), false, 'the abandoned snapshot is discarded, not installed');
@@ -984,7 +1005,7 @@ describe('consent binds to the workspace it was shown against', () => {
         'workspace B, current at confirm time, was never written to either');
 
       handlers.handleConfirmExtensionInstall({}, sock, { type: 'confirm_extension_install', token });
-      assert.strictEqual(sock.sent[2].type, 'extension_install_error',
+      assert.strictEqual(sock.sent[2].type, 'package_install_error',
         'the token died with its refused use, the same as any other confirm');
     } finally {
       handlers.wireExtensionDeps(previousDeps);
@@ -1168,31 +1189,31 @@ describe('an update reopens the flow and replaces through the same transaction',
 });
 
 describe('the model transitions are driven by real replies, not by literals that merely copy their shape', () => {
-  test('extReply from ext-acquiring on a real error reply reaches ext-failed', () => {
+  const acquiring = () => model.submit(model.initial(), 'someone/test-ext', 'v1.0.0').state;
+
+  test('reply from classifying on a real error reply reaches failed, in the producer\'s words', () => {
     withWorkspace(() => {
       const sock = captureWs();
-      handlers.handlePlanExtensionInstall({}, sock, { type: 'plan_extension_install', url: 'someone/test-ext', reference: 'main' });
+      handlers.handlePlanPackageInstall({}, sock, { type: 'plan_package_install', url: 'not a link at all', reference: 'v1.0.0' });
       const errorMsg = sock.sent[0];
-      assert.strictEqual(errorMsg.type, 'extension_install_error');
-      const acquiring = model.extSubmit(model.extInitial(), 'someone/test-ext', 'main').state;
-      const failed = model.extReply(acquiring, errorMsg).state;
-      assert.strictEqual(failed.phase, 'ext-failed');
+      assert.strictEqual(errorMsg.type, 'package_install_error');
+      const failed = model.reply(acquiring(), errorMsg).state;
+      assert.strictEqual(failed.phase, 'failed');
       assert.strictEqual(failed.message, errorMsg.message,
         'the failure copy is the producer\'s own words, not a literal restated in this file');
     });
   });
 
-  test('extReply from ext-acquiring on a real plan reaches ext-trust carrying the real manifest and facts', () => {
+  test('reply from classifying on a real plan reaches trust carrying the real manifest and facts', () => {
     withWorkspace(() => {
       const snap = extensionSnapshot({ agents: 1, skills: 1 });
       const previousDeps = handlers.wireExtensionDeps({ acquire: () => snap });
       try {
         const sock = captureWs();
-        handlers.handlePlanExtensionInstall({}, sock, { type: 'plan_extension_install', url: 'someone/test-ext', reference: 'v1.0.0' });
+        handlers.handlePlanPackageInstall({}, sock, { type: 'plan_package_install', url: 'someone/test-ext', reference: 'v1.0.0' });
         const planMsg = sock.sent[0];
-        const acquiring = model.extSubmit(model.extInitial(), 'someone/test-ext', 'v1.0.0').state;
-        const trusting = model.extReply(acquiring, planMsg).state;
-        assert.strictEqual(trusting.phase, 'ext-trust');
+        const trusting = model.reply(acquiring(), planMsg).state;
+        assert.strictEqual(trusting.phase, 'trust');
         assert.strictEqual(trusting.token, planMsg.token);
         assert.deepStrictEqual(trusting.facts, planMsg.facts,
           'a renamed or dropped field on the wire would drift from what this asserts if it were restated by hand');
@@ -1203,75 +1224,67 @@ describe('the model transitions are driven by real replies, not by literals that
     });
   });
 
-  test('extReply from ext-installing on a real install result reaches ext-done carrying the real record', () => {
+  test('reply from installing on a real install result reaches done carrying the real record; on a real error, failed', () => {
     withWorkspace(() => {
       const snap = extensionSnapshot();
       const previousDeps = handlers.wireExtensionDeps({ acquire: () => snap });
       try {
         const sock = captureWs();
-        handlers.handlePlanExtensionInstall({}, sock, { type: 'plan_extension_install', url: 'someone/test-ext', reference: 'v1.0.0' });
+        handlers.handlePlanPackageInstall({}, sock, { type: 'plan_package_install', url: 'someone/test-ext', reference: 'v1.0.0' });
+        const installing = model.confirm(model.reply(acquiring(), sock.sent[0]).state).state;
         handlers.handleConfirmExtensionInstall({}, sock, { type: 'confirm_extension_install', token: sock.sent[0].token });
         const resultMsg = sock.sent[1];
         assert.strictEqual(resultMsg.type, 'extension_install_result');
-        const installing = { phase: 'ext-installing', url: 'someone/test-ext', reference: 'v1.0.0' };
-        const done = model.extReply(installing, resultMsg).state;
-        assert.strictEqual(done.phase, 'ext-done');
-        assert.deepStrictEqual(done.record, resultMsg.record);
-        assert.strictEqual(done.record.source.reference, 'v1.0.0',
-          'the done state carries the field the success card renders');
+        const done = model.reply(installing, resultMsg).state;
+        assert.strictEqual(done.phase, 'done');
+        assert.deepStrictEqual(done.installed, resultMsg.record);
+        assert.match(model.doneCopy(done).note, /Pinned at v1\.0\.0/, 'the done card renders the field the record carries');
+
+        handlers.handleConfirmExtensionInstall({}, sock, { type: 'confirm_extension_install', token: sock.sent[0].token });
+        const errorMsg = sock.sent[2];
+        assert.strictEqual(errorMsg.type, 'package_install_error');
+        const failed = model.reply(installing, errorMsg).state;
+        assert.strictEqual(failed.phase, 'failed');
+        assert.strictEqual(failed.message, errorMsg.message);
       } finally {
         handlers.wireExtensionDeps(previousDeps);
       }
     });
   });
 
-  test('extReply from ext-installing on a real error reaches ext-failed', () => {
-    withWorkspace(() => {
-      const sock = captureWs();
-      handlers.handleConfirmExtensionInstall({}, sock, { type: 'confirm_extension_install', token: 'never-issued' });
-      const errorMsg = sock.sent[0];
-      assert.strictEqual(errorMsg.type, 'extension_install_error');
-      const installing = { phase: 'ext-installing', url: 'someone/test-ext', reference: 'v1.0.0' };
-      const failed = model.extReply(installing, errorMsg).state;
-      assert.strictEqual(failed.phase, 'ext-failed');
-      assert.strictEqual(failed.message, errorMsg.message);
-    });
-  });
-
-  test('extSubmit refuses with a field error, and sends nothing, when either field is blank', () => {
-    for (const [url, ref] of [['', 'v1'], ['someone/test-ext', ''], ['', '']]) {
-      const out = model.extSubmit(model.extInitial(), url, ref);
-      assert.strictEqual(out.send, undefined, `blank field must not send for url=${JSON.stringify(url)} reference=${JSON.stringify(ref)}`);
-      assert.match(out.state.fieldError, /repository URL and the exact tag/);
+  test('submit refuses with a field error, and sends nothing, when the link is blank; the pin alone may be blank', () => {
+    for (const [link, ref] of [['', 'v1'], ['', '']]) {
+      const out = model.submit(model.initial(), link, ref);
+      assert.strictEqual(out.send, undefined, `a blank link must not send for reference=${JSON.stringify(ref)}`);
+      assert.match(out.state.fieldError, /Paste the GitHub link/);
     }
+    assert.strictEqual(model.submit(model.initial(), 'someone/pack', '').send.reference, null);
   });
 
-  test('every extConnectionLost branch fails honestly, and none of them sends', () => {
-    for (const phase of ['ext-acquiring', 'ext-trust']) {
-      const out = model.extConnectionLost({ phase, url: 'u', reference: 'r' });
+  test('every connectionLost branch fails honestly, and none of them sends', () => {
+    const waiting = { link: 'u', reference: 'r', token: 't' };
+    for (const phase of ['classifying', 'trust', 'offer', 'applying', 'installing']) {
+      const out = model.connectionLost({ phase, ...waiting });
       assert.strictEqual(out.send, undefined);
-      assert.strictEqual(out.state.phase, 'ext-failed');
-      assert.match(out.state.message, /connection dropped\. Nothing was installed/);
+      assert.strictEqual(out.state.phase, 'failed', `${phase} is a wait the dropped connection ends`);
+      assert.match(out.state.message, /connection dropped/);
+      assert.strictEqual(out.state.canReplan, true);
     }
-    const installing = model.extConnectionLost({ phase: 'ext-installing', url: 'u', reference: 'r' });
-    assert.strictEqual(installing.send, undefined);
-    assert.strictEqual(installing.state.phase, 'ext-failed');
-    assert.match(installing.state.message, /connection dropped while installing/);
-    const idleState = model.extInitial();
-    assert.strictEqual(model.extConnectionLost(idleState).state, idleState,
+    const idleState = model.initial();
+    assert.strictEqual(model.connectionLost(idleState).state, idleState,
       'idle is not a wait, so a dropped connection changes nothing');
   });
 
-  test('extTrustCopy states no agents and no skills honestly, and carries the replaces line only when there is one', () => {
-    const bare = model.extTrustCopy({
-      manifest: { name: 'test-ext', version: '1.0.0' }, url: SOURCE.url, reference: SOURCE.reference,
+  test('trustCopy states no agents and no skills honestly, and carries the replaces line only when there is one', () => {
+    const bare = model.trustCopy({
+      manifest: { name: 'test-ext', version: '1.0.0' }, link: SOURCE.url, reference: SOURCE.reference,
       facts: { agents: 0, skills: 0, files: [], match: '*.md' }, replaces: null,
     });
-    assert.match(bare.body, /It adds no agents and no skills\./);
+    assert.strictEqual(bare.halves.content, 'It adds no agents and no skills.');
     assert.strictEqual(bare.replacesLine, null);
 
-    const replacing = model.extTrustCopy({
-      manifest: { name: 'test-ext', version: '2.0.0' }, url: SOURCE.url, reference: 'v2.0.0',
+    const replacing = model.trustCopy({
+      manifest: { name: 'test-ext', version: '2.0.0' }, link: SOURCE.url, reference: 'v2.0.0',
       facts: { agents: 0, skills: 0, files: [], match: '*.md' },
       replaces: { version: '1.0.0', reference: 'v1.0.0' },
     });
@@ -1279,76 +1292,249 @@ describe('the model transitions are driven by real replies, not by literals that
   });
 });
 
-describe('the settings view exports every function its own extension markup and app.js call by name', () => {
-  const SETTINGS_SRC = fs.readFileSync(path.join(__dirname, '..', '..', 'public', 'views', 'settings.js'), 'utf8');
-  const APP_SRC = fs.readFileSync(path.join(__dirname, '..', '..', 'public', 'app.js'), 'utf8');
+const SETTINGS_SRC = fs.readFileSync(path.join(__dirname, '..', '..', 'public', 'views', 'settings.js'), 'utf8');
+const APP_SRC = fs.readFileSync(path.join(__dirname, '..', '..', 'public', 'app.js'), 'utf8');
 
-  test('every onclick name inside extensionSectionHtml, and extensionReplyArrived on the app.js dispatch case, are on the module surface', () => {
-    // Derived from the file, not hand-listed, so a sixth handler added to the
+// The app.js dispatch case for this flow, cut out of the shell and RUN, so a
+// reply type the case does not route never reaches the view in these tests
+// either. The extraction asserts the case exists, so a renamed or deleted
+// one fails here rather than yielding a function that routes nothing.
+function appDispatch(view) {
+  const found = /(case 'package_import_plan':[\s\S]*?packagesReplyArrived\(d\); break;)/.exec(APP_SRC);
+  assert.ok(found, 'app.js no longer carries the packages reply dispatch case');
+  const route = new Function('d', 'packagesReplyArrived', `switch (d.type) { ${found[1]} }`);
+  return (d) => route(d, view.packagesReplyArrived);
+}
+
+describe('the settings view exports every function its own packages markup and app.js call by name', () => {
+  test('every onclick name inside packagesSectionHtml, and packagesReplyArrived on the app.js dispatch case, are on the module surface', () => {
+    // Derived from the file, not hand-listed, so a handler added to the
     // markup later fails here without anyone updating a list in this test.
-    const sectionMatch = /function extensionSectionHtml\(\) \{([\s\S]*?)\n\}\n/.exec(SETTINGS_SRC);
-    assert.ok(sectionMatch, 'settings.js no longer defines extensionSectionHtml the way this test expects');
+    const sectionMatch = /function packagesSectionHtml\(\) \{([\s\S]*?)\n\}\n/.exec(SETTINGS_SRC);
+    assert.ok(sectionMatch, 'settings.js no longer defines packagesSectionHtml the way this test expects');
     const onclickNames = new Set();
     for (const m of sectionMatch[1].matchAll(/onclick="([a-zA-Z_$][\w$]*)\(/g)) onclickNames.add(m[1]);
-    assert.ok(onclickNames.has('extensionSubmit'), 'sanity: the extension section markup was found at all');
+    assert.ok(onclickNames.has('packagesSubmit'), 'sanity: the packages section markup was found at all');
 
-    assert.match(APP_SRC, /case 'extension_install_plan':[\s\S]*?extensionReplyArrived\(d\);/,
-      'sanity: app.js no longer routes extension replies to extensionReplyArrived');
+    assert.match(APP_SRC, /case 'extension_install_plan':[\s\S]*?packagesReplyArrived\(d\);/,
+      'sanity: app.js no longer routes extension replies to packagesReplyArrived');
 
     const settingsView = require('../../public/views/settings.js');
     const exported = new Set(Object.keys(settingsView));
-    for (const name of [...onclickNames, 'extensionReplyArrived']) {
+    for (const name of [...onclickNames, 'packagesReplyArrived', 'packagesServingWorkspaceChanged']) {
       assert.ok(exported.has(name),
-        `"${name}" is called by name from the extension markup or the app.js dispatch case, but is not on `
+        `"${name}" is called by name from the packages markup or app.js, but is not on `
         + 'the object public/views/settings.js returns, so it resolves against window in a browser and throws');
     }
   });
 });
 
-describe('the trust card renders what the model derived, driven through the real settings view', () => {
-  test('the rendered trust markup contains the file names the plan actually carried', () => {
+// The real settings view under jsdom, with the globals the module reads at
+// call time, its flow returned to idle, and the section drawn. Every test
+// that renders goes through here so the markup on screen is the product's.
+function settingsShell() {
+  const dom = new JSDOM('<div id="settings-content"></div><div class="settings-nav-item active" data-settings="packages"></div>');
+  global.document = dom.window.document;
+  global.window = dom.window;
+  global.currentView = 'settings';
+  global.currentWorkspacePath = config.getWorkspace();
+  const sent = [];
+  global.ws = { readyState: 1, send: (raw) => sent.push(JSON.parse(raw)) };
+  global.WebSocket = { OPEN: 1 };
+  global.esc = (t) => String(t == null ? '' : t)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  global.escAttr = (t) => String(t == null ? '' : t)
+    .replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;')
+    .replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const view = require('../../public/views/settings.js');
+  view.packagesWorkspaceChanged();
+  const content = () => dom.window.document.getElementById('settings-content');
+  return {
+    view, sent, content, dispatch: appDispatch(view),
+    // Pressed as the controls they are, so a renamed exported name fails
+    // here rather than in a browser only.
+    submit(link, reference) {
+      content().querySelector('#packages-source-link').value = link;
+      content().querySelector('#packages-source-ref').value = reference;
+      view.packagesSubmit();
+    },
+    release() {
+      for (const g of ['document', 'window', 'currentView', 'currentWorkspacePath', 'ws', 'WebSocket', 'esc', 'escAttr']) delete global[g];
+    },
+  };
+}
+
+describe('one link field for both kinds, rendered through the real settings view', () => {
+  test('the section renders one link field, its reference field and one submit, and no typed path', () => {
     withWorkspace(() => {
-      const snap = extensionSnapshot({ agents: 1, skills: 1 });
+      const shell = settingsShell();
+      try {
+        const inputs = [...shell.content().querySelectorAll('input')].map((el) => el.id);
+        assert.deepStrictEqual(inputs, ['packages-source-link', 'packages-source-ref'],
+          'exactly the link and its reference: a typed folder path is not in the interface');
+        const submits = [...shell.content().querySelectorAll('button')].filter((b) => /packagesSubmit/.test(b.getAttribute('onclick')));
+        assert.strictEqual(submits.length, 1, 'one submit serves both kinds');
+        shell.submit('someone/test-ext', 'v1.0.0');
+        assert.deepStrictEqual(shell.sent, [{ type: 'plan_package_install', url: 'someone/test-ext', reference: 'v1.0.0' }],
+          'the client sends only the link with its reference; the server acquires the snapshot itself');
+      } finally {
+        shell.release();
+      }
+    });
+  });
+});
+
+describe('the link is classified from the acquired bytes, and each outcome reaches the real view', () => {
+  // Submit through the real view, answer through the real handler, route the
+  // reply through the real dispatch case into the real model and view.
+  function drive(shell, snapshot, reference) {
+    const previousDeps = handlers.wireExtensionDeps({ acquire: () => snapshot });
+    try {
+      shell.submit('someone/test-ext', reference);
+      const sock = captureWs();
+      handlers.handlePlanPackageInstall({}, sock, shell.sent[shell.sent.length - 1]);
+      shell.dispatch(sock.sent[0]);
+      return sock;
+    } finally {
+      handlers.wireExtensionDeps(previousDeps);
+    }
+  }
+
+  test('a manifest with an extension block reaches the trust step', () => {
+    withWorkspace(() => {
+      const shell = settingsShell();
+      try {
+        const sock = drive(shell, extensionSnapshot({ agents: 1, skills: 1 }), 'v1.0.0');
+        assert.strictEqual(sock.sent[0].type, 'extension_install_plan');
+        const card = shell.content().querySelector('.extension-trust-card');
+        assert.ok(card, 'the trust card is on screen');
+        for (const file of sock.sent[0].facts.files) {
+          assert.ok(card.innerHTML.includes(file), `the rendered trust card does not carry "${file}", one of the facts the plan derived`);
+        }
+      } finally {
+        shell.release();
+      }
+    });
+  });
+
+  test('a snapshot without an extension block reaches the offer, and its receipt carries the link with the reference given', () => {
+    withWorkspace((ws) => {
+      for (const [reference, expected] of [['v1.0.0', 'v1.0.0'], ['', null]]) {
+        const shell = settingsShell();
+        try {
+          const sock = drive(shell, extensionSnapshot({ agents: 2, skills: 1, manifest: false }), reference);
+          assert.strictEqual(sock.sent[0].type, 'package_import_plan');
+          const card = shell.content().querySelector('.packages-confirm-card');
+          assert.ok(card && !card.classList.contains('extension-trust-card'), 'the plain offer, never the amber trust card');
+          assert.match(card.querySelector('.packages-headline').textContent, /This isn't a Rundock package/);
+          assert.match(card.querySelector('.packages-body').textContent, /found 2 agents and 1 skill/);
+
+          shell.view.packagesConfirm();
+          const confirmMsg = shell.sent[shell.sent.length - 1];
+          assert.strictEqual(confirmMsg.type, 'confirm_package_install');
+          handlers.handleConfirmPackageInstall({}, sock, confirmMsg);
+          shell.dispatch(sock.sent[1]);
+          assert.strictEqual(sock.sent[1].type, 'package_import_result');
+          const receipt = JSON.parse(fs.readFileSync(path.join(ws, sock.sent[1].receipt), 'utf8'));
+          assert.deepStrictEqual(receipt.source, { id: 'https://github.com/someone/test-ext', reference: expected },
+            'the receipt names the link and the reference given, null when none was');
+          assert.match(shell.content().querySelector('.packages-success-card .packages-headline').textContent, /Added to your team/);
+          fs.rmSync(path.join(ws, '.claude'), { recursive: true, force: true });
+        } finally {
+          shell.release();
+        }
+      }
+    });
+  });
+
+  test('an extension reached without a pin is refused with the pin asked for, and the fetched bytes are discarded', () => {
+    withWorkspace((ws) => {
+      const shell = settingsShell();
+      const snap = extensionSnapshot();
+      try {
+        const sock = drive(shell, snap, '');
+        assert.strictEqual(sock.sent[0].type, 'package_install_error');
+        assert.strictEqual(sock.sent[0].code, 'unpinned-reference');
+        assert.strictEqual(fs.existsSync(snap), false, 'the classification read is discarded, not installed');
+        assert.deepStrictEqual(fs.readdirSync(ws), [], 'and the workspace is untouched');
+        const field = shell.content().querySelector('.packages-field-error');
+        assert.ok(field && /exact tag, release or commit/.test(field.textContent), 'the field asks for the pin');
+        assert.strictEqual(shell.content().querySelector('#packages-source-link').value, 'someone/test-ext', 'with the link kept');
+        assert.strictEqual(shell.content().querySelector('#packages-source-link').disabled, false, 'and the flow open to try again');
+      } finally {
+        shell.release();
+      }
+    });
+  });
+});
+
+describe('a snapshot carrying both an extension and content: the card says what confirm does with each half, and the filesystem agrees', () => {
+  test('confirm installs the extension only; the agents and skills are offered as the second step the card promised', () => {
+    withWorkspace((ws) => {
+      const shell = settingsShell();
+      const snap = extensionSnapshot({ agents: 2, skills: 1 });
       const previousDeps = handlers.wireExtensionDeps({ acquire: () => snap });
       try {
-        const dom = new JSDOM('<div id="settings-content"></div>'
-          + '<div class="settings-nav-item active" data-settings="packages"></div>'
-          + '<input id="extension-source-url"><input id="extension-source-ref">');
-        global.document = dom.window.document;
-        global.window = dom.window;
-        global.currentView = 'settings';
-        global.ws = { readyState: 1, send: () => {} };
-        global.WebSocket = { OPEN: 1 };
-        global.esc = (t) => String(t == null ? '' : t)
-          .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-        global.escAttr = (t) => String(t == null ? '' : t)
-          .replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;')
-          .replace(/</g, '&lt;').replace(/>/g, '&gt;');
-        try {
-          const settingsView = require('../../public/views/settings.js');
-          global.document.getElementById('extension-source-url').value = 'someone/test-ext';
-          global.document.getElementById('extension-source-ref').value = 'v1.0.0';
-          // Pressed as the control it is, so a rename of the exported name
-          // fails here rather than in a browser only.
-          settingsView.extensionSubmit();
+        shell.submit('someone/test-ext', 'v1.0.0');
+        const sock = captureWs();
+        handlers.handlePlanPackageInstall({}, sock, shell.sent[0]);
+        shell.dispatch(sock.sent[0]);
+        const card = shell.content().querySelector('.extension-trust-card');
+        const extensionHalf = card.querySelector('.extension-half-extension').textContent;
+        const contentHalf = card.querySelector('.extension-half-content').textContent;
+        assert.match(extensionHalf, /Install puts the view above under \.claude\/rundock\/extensions\/test-ext/);
+        assert.match(contentHalf, /2 agents and 1 skill in this repository are not added by this step/);
+        assert.match(contentHalf, /offered them separately/);
 
-          const sock = captureWs();
-          handlers.handlePlanExtensionInstall({}, sock, { type: 'plan_extension_install', url: 'someone/test-ext', reference: 'v1.0.0' });
-          const planMsg = sock.sent[0];
-          assert.strictEqual(planMsg.type, 'extension_install_plan');
-          assert.ok(planMsg.facts.files.length > 0, 'sanity: the real plan carries a real file list');
+        shell.view.packagesConfirm();
+        handlers.handleConfirmExtensionInstall({}, sock, shell.sent[1]);
+        assert.strictEqual(sock.sent[1].type, 'extension_install_result');
+        // Each half of the statement, held against the disk.
+        assert.ok(fs.existsSync(path.join(ws, '.claude', 'rundock', 'extensions', 'test-ext', 'view', 'index.html')),
+          'the extension half: the view is where the card said install puts it');
+        assert.strictEqual(fs.existsSync(path.join(ws, '.claude', 'agents')), false,
+          'the content half: no agent was added by this step, exactly as the card said');
+        assert.strictEqual(fs.existsSync(path.join(ws, '.claude', 'skills')), false, 'and no skill');
 
-          settingsView.extensionReplyArrived(planMsg);
+        shell.dispatch(sock.sent[1]);
+        const offer = shell.content().querySelector('.packages-confirm-card');
+        assert.ok(offer && !offer.classList.contains('extension-trust-card'), 'the second step is the plain offer');
+        assert.match(offer.querySelector('.packages-headline').textContent, /test-ext 1\.0\.0 is installed\. Add its agents and skills too\?/);
+        shell.view.packagesConfirm();
+        const confirmMsg = shell.sent[2];
+        assert.strictEqual(confirmMsg.type, 'confirm_package_install');
+        assert.strictEqual(confirmMsg.token, sock.sent[1].content.token, 'the offer answers under the token the result issued for it');
+        handlers.handleConfirmPackageInstall({}, sock, confirmMsg);
+        assert.strictEqual(sock.sent[2].type, 'package_import_result');
+        assert.strictEqual(sock.sent[2].status, 'ready');
+        assert.strictEqual(fs.readdirSync(path.join(ws, '.claude', 'agents')).length, 2, 'now the agents landed');
+        assert.strictEqual(fs.readdirSync(path.join(ws, '.claude', 'skills')).length, 1, 'and the skill');
+        assert.strictEqual(fs.existsSync(snap), false, 'the snapshot leaves with the last answer');
+        shell.dispatch(sock.sent[2]);
+        const done = shell.content().querySelector('.packages-success-card');
+        assert.match(done.querySelector('.packages-headline').textContent, /Installed test-ext 1\.0\.0/);
+        assert.strictEqual(done.querySelectorAll('.packages-part').length, 4, 'the extension and the three items, each with where it went');
+      } finally {
+        handlers.wireExtensionDeps(previousDeps);
+        shell.release();
+      }
+    });
+  });
 
-          const rendered = global.document.getElementById('settings-content').innerHTML;
-          for (const file of planMsg.facts.files) {
-            assert.ok(rendered.includes(file),
-              `the rendered trust card does not carry "${file}", one of the facts the plan derived from the package`);
-          }
-        } finally {
-          delete global.document; delete global.window; delete global.currentView;
-          delete global.ws; delete global.WebSocket; delete global.esc; delete global.escAttr;
-        }
+  test('declining the second step keeps the extension and discards the snapshot', () => {
+    withWorkspace((ws) => {
+      const snap = extensionSnapshot({ agents: 1 });
+      const previousDeps = handlers.wireExtensionDeps({ acquire: () => snap });
+      try {
+        const sock = captureWs();
+        handlers.handlePlanPackageInstall({}, sock, { type: 'plan_package_install', url: 'someone/test-ext', reference: 'v1.0.0' });
+        handlers.handleConfirmExtensionInstall({}, sock, { type: 'confirm_extension_install', token: sock.sent[0].token });
+        const contentToken = sock.sent[1].content.token;
+        assert.ok(fs.existsSync(snap), 'the snapshot waits for the second answer');
+        handlers.handleDeclinePackageInstall({}, sock, { type: 'decline_package_install', token: contentToken });
+        assert.strictEqual(fs.existsSync(snap), false);
+        assert.strictEqual(readExtensionRecords(ws).length, 1, 'the extension stays installed');
+        assert.strictEqual(fs.existsSync(path.join(ws, '.claude', 'agents')), false, 'and nothing else landed');
       } finally {
         handlers.wireExtensionDeps(previousDeps);
       }

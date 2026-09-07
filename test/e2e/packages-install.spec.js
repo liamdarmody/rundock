@@ -3,9 +3,15 @@
 // A plan is only requested on submit, an apply only on confirm, cancel writes
 // nothing, a collision disables the confirm with its stated copy, and a
 // completed apply lands the agents, the skills and the receipt on disk.
+//
+// The link field is the only way in, and the server fetches with real git:
+// each spec seeds a git repository beside the workspace under a fixture
+// organisation that test/e2e/serve.js points git at, so the whole acquire
+// path runs unchanged with no network.
 const base = require('@playwright/test');
 const fs = require('node:fs');
 const path = require('node:path');
+const { execFileSync } = require('node:child_process');
 const { appendRawCoverage, writeLcov, isClientEntry } = require('./coverage.js');
 
 const test = base.test.extend({
@@ -37,18 +43,18 @@ async function openPackages(page) {
     () => page.evaluate(() => {
       showView('settings');
       showSettingsSection('packages');
-      const el = document.getElementById('packages-source-path');
+      const el = document.getElementById('packages-source-link');
       return !!(el && el.offsetParent !== null);
     }),
     { message: 'the packages field is on screen after asking for it' },
   ).toBe(true);
-  await expect(page.locator('#packages-source-path')).toBeVisible();
+  await expect(page.locator('#packages-source-link')).toBeVisible();
 }
 
-// Seed a package source under the live workspace from the test process,
-// because the product's own create paths rightly refuse dot segments. Reads
-// still go through the server, so what the assertions see is server truth.
-async function seedPackage(page, dir, files) {
+// Seed files from the test process, because the product's own create paths
+// rightly refuse dot segments. Reads still go through the server, so what
+// the assertions see is server truth.
+async function seedFiles(page, dir, files) {
   const workspace = await page.evaluate(() => currentWorkspacePath);
   for (const [rel, content] of files) {
     const absolute = path.join(workspace, dir, rel);
@@ -56,6 +62,31 @@ async function seedPackage(page, dir, files) {
     fs.writeFileSync(absolute, content);
   }
   return path.join(workspace, dir);
+}
+
+// A package as a tagged git repository under the fixture organisation, and
+// the link the field takes for it.
+async function seedRepo(page, name, files) {
+  const workspace = await page.evaluate(() => currentWorkspacePath);
+  const dir = path.join(workspace, '..', 'repos', name);
+  fs.rmSync(dir, { recursive: true, force: true });
+  for (const [rel, content] of files) {
+    fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+    fs.writeFileSync(path.join(dir, rel), content);
+  }
+  const git = (...args) => execFileSync('git', ['-c', 'user.email=e2e@example.com', '-c', 'user.name=e2e', ...args], { cwd: dir, stdio: 'ignore' });
+  git('init', '--quiet');
+  git('add', '.');
+  git('commit', '--quiet', '-m', 'package');
+  git('tag', 'v1.0.0');
+  return `e2e-fixture/${name}`;
+}
+
+// Paste the link, pin it when asked to, and read it.
+async function readLink(page, link, reference = '') {
+  await page.fill('#packages-source-link', link);
+  await page.fill('#packages-source-ref', reference);
+  await page.getByRole('button', { name: 'Read it' }).click();
 }
 
 async function fileExists(page, rel) {
@@ -67,13 +98,12 @@ const AGENT = '---\nname: scribe\n---\n\nWrite things.\n';
 
 test('plan, confirm and apply land the package with its receipt', async ({ page }) => {
   await boot(page);
-  const source = await seedPackage(page, 'pkg-happy', [
+  const link = await seedRepo(page, 'pkg-happy', [
     ['.claude/agents/happy-scribe.md', AGENT],
     ['.claude/skills/happy-writer/SKILL.md', 'the skill'],
   ]);
   await openPackages(page);
-  await page.fill('#packages-source-path', source);
-  await page.getByRole('button', { name: 'Read it' }).click();
+  await readLink(page, link, 'v1.0.0');
   const card = page.locator('.packages-confirm-card');
   await expect(card.locator('.packages-headline')).toHaveText("This isn't a Rundock package");
   await expect(card.locator('.packages-body')).toContainText('1 agent and 1 skill');
@@ -88,6 +118,9 @@ test('plan, confirm and apply land the package with its receipt', async ({ page 
   const receipt = await page.locator('.packages-success-card').getAttribute('data-receipt');
   expect(receipt).toMatch(/^\.claude\/rundock\/receipts\//);
   expect(await fileExists(page, receipt)).toBe(true);
+  const written = JSON.parse(await (await page.request.get('/api/file?path=' + encodeURIComponent(receipt))).text());
+  expect(written.source).toEqual({ id: 'https://github.com/e2e-fixture/pkg-happy', reference: 'v1.0.0' },
+    'the receipt names the link and the pin it was read at');
 });
 
 // The complete .claude subtree as one comparable value, read directly.
@@ -110,16 +143,15 @@ function claudeTree(workspace) {
 test('cancel leaves the workspace byte-identical', async ({ page }) => {
   await boot(page);
   const workspace = await page.evaluate(() => currentWorkspacePath);
-  const source = await seedPackage(page, 'pkg-cancel', [
+  const link = await seedRepo(page, 'pkg-cancel', [
     ['.claude/agents/cancel-scribe.md', AGENT],
   ]);
   await openPackages(page);
   const before = claudeTree(workspace);
-  await page.fill('#packages-source-path', source);
-  await page.getByRole('button', { name: 'Read it' }).click();
+  await readLink(page, link);
   await expect(page.locator('.packages-confirm-card')).toBeVisible();
   await page.getByRole('button', { name: 'Cancel' }).click();
-  await expect(page.locator('#packages-source-path')).toBeVisible();
+  await expect(page.locator('#packages-source-link')).toBeVisible();
   // Every path and every byte under .claude, unchanged: a receipt, a journal,
   // an empty destination directory or a touched file all fail here.
   expect(claudeTree(workspace)).toEqual(before);
@@ -127,22 +159,21 @@ test('cancel leaves the workspace byte-identical', async ({ page }) => {
 
 test('with the socket closed, nothing is sent and the flow stays usable', async ({ page }) => {
   await boot(page);
-  const source = await seedPackage(page, 'pkg-offline', [['.claude/agents/offline-scribe.md', AGENT]]);
+  const link = await seedRepo(page, 'pkg-offline', [['.claude/agents/offline-scribe.md', AGENT]]);
   await openPackages(page);
-  await page.fill('#packages-source-path', source);
+  await page.fill('#packages-source-link', link);
   await page.evaluate(() => ws.close());
   await page.getByRole('button', { name: 'Read it' }).click();
   await expect(page.locator('.packages-field-error')).toContainText('Not connected: nothing was sent');
-  await expect(page.locator('#packages-source-path')).toBeEnabled();
+  await expect(page.locator('#packages-source-link')).toBeEnabled();
   expect(await fileExists(page, '.claude/agents/offline-scribe.md')).toBe(false);
 });
 
 test('switching workspace returns the flow to idle, discarding the previous plan', async ({ page }) => {
   await boot(page);
-  const source = await seedPackage(page, 'pkg-switch', [['.claude/agents/switch-scribe.md', AGENT]]);
+  const link = await seedRepo(page, 'pkg-switch', [['.claude/agents/switch-scribe.md', AGENT]]);
   await openPackages(page);
-  await page.fill('#packages-source-path', source);
-  await page.getByRole('button', { name: 'Read it' }).click();
+  await readLink(page, link);
   await expect(page.locator('.packages-confirm-card')).toBeVisible();
   // A second workspace, made real on disk, opened through the real path.
   const original = await page.evaluate(() => currentWorkspacePath);
@@ -159,7 +190,7 @@ test('switching workspace returns the flow to idle, discarding the previous plan
     await page.evaluate((dir) => ws.send(JSON.stringify({ type: 'set_workspace', path: dir })), other);
     await expect.poll(() => page.evaluate(() => currentWorkspacePath)).toBe(other);
     await openPackages(page);
-    await expect(page.locator('#packages-source-path')).toHaveValue('');
+    await expect(page.locator('#packages-source-link')).toHaveValue('');
     await expect(page.locator('.packages-confirm-card')).toHaveCount(0);
   } finally {
     await page.evaluate((dir) => ws.send(JSON.stringify({ type: 'set_workspace', path: dir })), original);
@@ -169,38 +200,39 @@ test('switching workspace returns the flow to idle, discarding the previous plan
 
 test('a connection lost mid-wait ends the wait and re-enables the flow', async ({ page }) => {
   await boot(page);
-  const source = await seedPackage(page, 'pkg-midwait', [['.claude/agents/midwait-scribe.md', AGENT]]);
+  const link = await seedRepo(page, 'pkg-midwait', [['.claude/agents/midwait-scribe.md', AGENT]]);
   await openPackages(page);
-  await page.fill('#packages-source-path', source);
+  await page.fill('#packages-source-link', link);
   // Send for real, then cut the socket before handling any reply.
   await page.evaluate(() => { ws.onmessage = null; });
   await page.getByRole('button', { name: 'Read it' }).click();
   await page.evaluate(() => ws.close());
   const failed = page.locator('.packages-failed');
   await expect(failed.locator('.packages-body')).toContainText('connection dropped before an answer arrived');
-  await expect(failed.getByRole('button', { name: 'Review the package again' })).toBeVisible();
+  await expect(failed.getByRole('button', { name: 'Try again' })).toBeVisible();
 });
 
-test('with the socket closed at confirm, nothing is applied and the flow stays usable', async ({ page }) => {
+// An open offer is held on the server under a token the connection owns,
+// so a dropped socket ends the offer rather than leaving a confirm that
+// nothing could answer.
+test('with the socket closed at the offer, the offer ends honestly and nothing is applied', async ({ page }) => {
   await boot(page);
-  const source = await seedPackage(page, 'pkg-offline-confirm', [['.claude/agents/offline-confirm-scribe.md', AGENT]]);
+  const link = await seedRepo(page, 'pkg-offline-confirm', [['.claude/agents/offline-confirm-scribe.md', AGENT]]);
   await openPackages(page);
-  await page.fill('#packages-source-path', source);
-  await page.getByRole('button', { name: 'Read it' }).click();
+  await readLink(page, link);
   await expect(page.locator('.packages-confirm-card')).toBeVisible();
   await page.evaluate(() => ws.close());
-  await page.locator('.packages-confirm-card').getByRole('button', { name: 'Add to my team' }).click();
-  await expect(page.locator('.packages-field-error')).toContainText('Not connected: nothing was sent');
-  await expect(page.locator('#packages-source-path')).toBeEnabled();
+  const failed = page.locator('.packages-failed');
+  await expect(failed.locator('.packages-body')).toContainText('The connection dropped. Nothing was installed.');
+  await expect(failed.getByRole('button', { name: 'Try again' })).toBeVisible();
   expect(await fileExists(page, '.claude/agents/offline-confirm-scribe.md')).toBe(false);
 });
 
 test('a refusal from the real server renders the failure card, not a spinner', async ({ page }) => {
   await boot(page);
-  const source = await seedPackage(page, 'pkg-refused', [['.claude/skills/Bad Name/SKILL.md', 'x']]);
+  const link = await seedRepo(page, 'pkg-refused', [['.claude/skills/Bad Name/SKILL.md', 'x']]);
   await openPackages(page);
-  await page.fill('#packages-source-path', source);
-  await page.getByRole('button', { name: 'Read it' }).click();
+  await readLink(page, link);
   const failed = page.locator('.packages-failed');
   await expect(failed.locator('.packages-headline')).toHaveText("That didn't work");
   await expect(failed.locator('.packages-body')).toContainText('not a canonical skill name');
@@ -208,13 +240,12 @@ test('a refusal from the real server renders the failure card, not a spinner', a
 
 test('a collision disables confirm and says each item needs its own decision', async ({ page }) => {
   await boot(page);
-  await seedPackage(page, '.claude/skills/collide-writer', [['SKILL.md', 'existing']]);
-  const source = await seedPackage(page, 'pkg-collide', [
+  await seedFiles(page, '.claude/skills/collide-writer', [['SKILL.md', 'existing']]);
+  const link = await seedRepo(page, 'pkg-collide', [
     ['.claude/skills/collide-writer/SKILL.md', 'incoming'],
   ]);
   await openPackages(page);
-  await page.fill('#packages-source-path', source);
-  await page.getByRole('button', { name: 'Read it' }).click();
+  await readLink(page, link);
   const card = page.locator('.packages-confirm-card');
   await expect(card.locator('.packages-collision-note')).toContainText('collide-writer');
   await expect(card.locator('.packages-collision-note')).toContainText('keep-or-replace decision');
