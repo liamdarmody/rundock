@@ -386,6 +386,37 @@
   }
 
   /**
+   * Who started the run: the tick, or a person pressing Run on the row.
+   *
+   * A RECORD WITH NO WORD IS A TICK'S RUN. Records from before runs could be
+   * pressed carry no trigger, and every one of them was the scheduler's, so
+   * absence reads as scheduled here exactly as it does in the reader that
+   * serves the record. Only the one other word this version knows is read as
+   * anything else: a value the writer has never produced is not guessed at.
+   */
+  function triggerOf(record) {
+    return record && record.trigger === 'manual' ? 'manual' : 'scheduled';
+  }
+
+  // The words that mark a pressed run on the line that says when it started.
+  // On that line rather than on a line of its own because it is a fact about
+  // the start, and the start is the one moment every outcome carries.
+  const STARTED_MANUALLY = 'started manually';
+
+  /**
+   * The started line with the trigger on it: "today, 2:14pm, started
+   * manually" for a pressed run, and the bare moment for a tick's. A record
+   * with no readable moment still says it was pressed, because that is the
+   * fact a reader of a manual run most needs and it does not depend on the
+   * clock.
+   */
+  function startedWhen(record, now) {
+    const words = startedWords(record.startedAt, now);
+    if (triggerOf(record) !== 'manual') return words;
+    return words ? `${words}, ${STARTED_MANUALLY}` : STARTED_MANUALLY;
+  }
+
+  /**
    * One run's record, as the words a reader sees.
    *
    * `now` is taken rather than read, so nothing here depends on the machine
@@ -416,7 +447,10 @@
       // failed one, one still going and one nobody saw the end of all
       // started at some recorded moment, and the box that reports the
       // outcome is also the only place on this screen that names it.
-      when: found ? startedWords(record.startedAt, opts.now) : null,
+      when: found ? startedWhen(record, opts.now) : null,
+      // Which of the two ways a run can start this one did, as a word the
+      // screen can branch on without reading the record's own field.
+      trigger: found ? triggerOf(record) : null,
       now: opts.now || null,
       state: {
         tone: state.tone,
@@ -446,6 +480,6 @@
   return {
     RUN_STATES, UNRECOGNISED_STATE, NO_RECORD_STATE, FILES_UNKNOWN_WORDS, FILES_UNKNOWN_FALLBACK,
     CHANGE_LABELS, CHANGE_FALLBACK, FILES_LABELS, NO_FILES_CHANGED, UNKNOWN_FILES_LEAD, NO_REASON_GIVEN,
-    changedFiles, unknownWords, durationWords, describeRun, baseName, startedWords,
+    changedFiles, unknownWords, durationWords, describeRun, baseName, startedWords, triggerOf, STARTED_MANUALLY,
   };
 }));
