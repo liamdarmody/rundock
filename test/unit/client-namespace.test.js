@@ -102,6 +102,7 @@ const MANIFEST = {
     "drawFileConnectionsLoading",
     "editorGoBack",
     "fileConnections",
+    "fileConnectionsIndexReady",
     "findFileInTree",
     "flushBoardSave",
     "getFileContentForSave",

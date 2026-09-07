@@ -103,3 +103,42 @@ describe('the vendored layout library', () => {
     dom.window.close();
   });
 });
+
+// ===== THE INDEX ARRIVING =====
+//
+// The server announces its index warm-up on the system channel. The map and
+// the open file's connections both drew a warming state in its absence, so
+// its arrival is news for two surfaces, and the client's dispatch is what
+// carries it to them. The arm is cut out of app.js and RUN rather than
+// matched, so a dispatch that names the wrong state or drops one surface
+// fails here by behaviour.
+describe('the index reporting ready redraws the active map and the open file\'s connections', () => {
+  const APP_SRC = read('public', 'app.js');
+  function searchIndexArm() {
+    const system = /case 'system':([\s\S]*?)\n    case '/.exec(APP_SRC);
+    assert.ok(system, 'app.js no longer carries a system case');
+    const arm = /^\s*if\(d\.subtype==='search_index'.*$/m.exec(system[1]);
+    assert.ok(arm, 'app.js no longer carries the search_index arm inside the system case');
+    // eslint-disable-next-line no-new-func
+    return new Function('d', 'mapIndexReady', 'fileConnectionsIndexReady', arm[0]);
+  }
+
+  test('ready calls both redraws; indexing calls neither', () => {
+    const arm = searchIndexArm();
+    const calls = [];
+    const map = () => calls.push('map');
+    const files = () => calls.push('files');
+    arm({ type: 'system', subtype: 'search_index', state: 'ready' }, map, files);
+    assert.deepStrictEqual(calls.sort(), ['files', 'map']);
+    calls.length = 0;
+    arm({ type: 'system', subtype: 'search_index', state: 'indexing' }, map, files);
+    assert.deepStrictEqual(calls, [], 'the start of a warm-up redraws nothing: there is nothing new to draw');
+    arm({ type: 'system', subtype: 'done', state: 'ready' }, map, files);
+    assert.deepStrictEqual(calls, [], 'and another subtype carrying a state word is not the index');
+  });
+
+  test('the arm survives a surface that has not loaded, so the dispatch cannot throw on a page without the map', () => {
+    const arm = searchIndexArm();
+    assert.doesNotThrow(() => arm({ type: 'system', subtype: 'search_index', state: 'ready' }, undefined, undefined));
+  });
+});

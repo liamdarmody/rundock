@@ -305,6 +305,15 @@ function handle(d) {
       // and delegation lives in RundockConversationState (conversation-state.js);
       // this branch builds the read-only ctx facts, applies the reduced state
       // and executes the returned effects against the DOM/WebSocket.
+      //
+      // THE INDEX ARRIVING IS NEWS FOR TWO SURFACES. The map and the open
+      // file's connections both draw a warming state while the server's
+      // index warm-up is in flight, and nothing else tells them it landed.
+      // Ready redraws both; the start of a warm-up redraws nothing, because
+      // there is nothing new to draw. Each surface is asked for by name and
+      // only if it has loaded, so a page without one still dispatches to
+      // the other.
+      if(d.subtype==='search_index' && d.state==='ready') { if (typeof mapIndexReady === 'function') mapIndexReady(); if (typeof fileConnectionsIndexReady === 'function') fileConnectionsIndexReady(); }
       // Track active process per conversation to ignore stale events
       if(d.subtype==='process_started' && convoId && d._processId) {
         const state = getConvoState(convoId);
