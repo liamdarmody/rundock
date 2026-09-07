@@ -75,7 +75,7 @@
 .run-status.ok { font-weight: 600; color: var(--success); }
 .run-status.ok-quiet { font-weight: 500; color: var(--success); }
 .run-status.neutral { font-weight: 500; color: var(--idle); }
-.run-status.failed { font-weight: 600; color: var(--danger); }
+.run-status.failed { font-weight: 600; color: var(--danger-text); }
 /* A run in progress. Not one of the model's four tones (outcomeOf never
    returns while lastRunStatus is 'running'): this is the row's own "Still
    going" line, styled to match run-detail's .rd-chip.live on the same token. */
@@ -89,7 +89,7 @@
 .rr-actions { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
 .icon-btn { width: 32px; height: 32px; border-radius: var(--radius-md); display: flex; align-items: center; justify-content: center; color: var(--text-2); background: transparent; border: 1px solid transparent; cursor: pointer; }
 .icon-btn:hover { color: var(--text-1); background: var(--elevated); border-color: var(--border); }
-.icon-btn.danger:hover { color: var(--danger); }
+.icon-btn.danger:hover { color: var(--danger-text); }
 
 /* Delete: a real fork, so confirming and cancelling are equal weight (danger
    fill against plain outline, not accent against a muted link). */
@@ -129,7 +129,7 @@
    them separate declarations is how two faults meant to read alike drift into
    reading differently. They keep separate NAMES because a row can carry both
    at once and each names a different thing to fix. */
-.schedule-problem, .prompt-problem { font-size: var(--caption); font-weight: 600; color: var(--danger); }
+.schedule-problem, .prompt-problem { font-size: var(--caption); font-weight: 600; color: var(--danger-text); }
 
 /* The row for a routine the scheduler has moved away from.
 

@@ -511,7 +511,7 @@ describe('the review-void state is the only danger, proven by the tone walk', ()
     // person actually sees comes from the class-based rules below, so this
     // walk reads those rules directly rather than trusting the model's own
     // claim about itself. A second review-surface rule reaching for
-    // var(--danger) turns this red even though REVIEW_TONES never changes.
+    // the danger family turns this red even though REVIEW_TONES never changes.
     const css = fs.readFileSync(path.join(ROOT, 'public', 'styles', 'views', 'settings.css'), 'utf8');
     // Scoped to the review card's own section (through the stale card at
     // the end of the file), not every packages-prefixed rule in the
@@ -522,7 +522,10 @@ describe('the review-void state is the only danger, proven by the tone walk', ()
     const rules = [...stripped.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
       .map(([, selector, body]) => ({ selector: selector.trim(), body }));
     assert.ok(rules.length > 10, 'the parse found the review-surface rules; an empty read here is a broken instrument');
-    const dangerSelectors = rules.filter(({ body }) => body.includes('var(--danger)')).map((r) => r.selector).sort();
+    // Both halves of the danger family count: the fill on the card's edge and
+    // the text token on its body are one tone, and a rule reaching for either
+    // is a rule reaching for danger.
+    const dangerSelectors = rules.filter(({ body }) => /var\(--danger(-text)?\)/.test(body)).map((r) => r.selector).sort();
     assert.deepStrictEqual(dangerSelectors, ['.packages-stale-body', '.packages-stale-card'],
       'a second review-surface rule now reaches for the danger token; the tone walk holds this to exactly the voided review');
   });

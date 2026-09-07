@@ -261,7 +261,7 @@ test('a collision opens the review with skip preselected, in both themes, and sk
   // reach for undefined in one theme, since an undefined custom property
   // inherits rather than erroring; read the tokens themselves too, on both
   // sides of the toggle, so a token missing from one theme fails here.
-  const tokensDefined = () => page.evaluate(() => ['--danger', '--attention', '--success', '--accent-glow']
+  const tokensDefined = () => page.evaluate(() => ['--danger', '--danger-text', '--attention', '--success', '--accent-glow']
     .map((t) => getComputedStyle(document.body).getPropertyValue(t).trim()));
   await expect.poll(tokensDefined).not.toContain('');
   await page.evaluate(() => toggleTheme());

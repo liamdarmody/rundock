@@ -49,8 +49,24 @@
   --success: #6BC67E; --attention: #E8A84C; --working: #7AA2E8; --idle: #7A756E;
   /* The status set had no red, so every destructive and error surface reached
      for a hex of its own and they drifted: three near-identical reds were in
-     the stylesheets when this token was added. This is the one. */
-  --danger: #E85A5A;
+     the stylesheets when this token was added. This is the one, and it is TWO
+     tokens, one meaning at two jobs.
+
+     --danger is the FILL and the EDGE: backgrounds, borders, shadows, and the
+     tints color-mix() makes of it. The same in both themes. It sits apart from
+     --accent by lightness rather than by hue: the two hues are thirteen
+     degrees apart, which is exactly the distinction protanopes and
+     deuteranopes lose, and the previous value read as another orange button.
+     White text on this fill clears 4.5:1.
+
+     --danger-text is for TEXT, and it is theme-aware because the fill fails
+     as text on a dark card (2.52:1). Lifted in the dark theme, where it reads
+     at 4.36 on --card and 6.01 on --base; the fill value itself in light,
+     where that reads on every surface (4.29 on --card at worst). A `color:`
+     declaration that reaches for the fill fails test/unit/danger-token.test.js,
+     which also recomputes every ratio above from these values. */
+  --danger: #D42C2A;
+  --danger-text: #F0706E;
   --heading: 22px; --title: 18px; --body: 14px; --caption: 12px; --label: 11px;
   --org-name: 20px; --org-role: 15px;
 
@@ -124,6 +140,9 @@ body.light {
   --card: #F0EDE8; --border: #E5E0D8;
   --text-1: #1A1A1A; --text-2: #7A756E; --text-3: #8C867E;
   --accent-glow: rgba(232,122,90,0.08);
+  /* Danger text in light is the fill value itself, which reads on every light
+     surface. The dark theme's lifted value would wash out here. */
+  --danger-text: #D42C2A;
 }
 
 /* The window chrome reserves an inset on each side and the platform supplies
