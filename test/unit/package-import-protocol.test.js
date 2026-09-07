@@ -188,6 +188,26 @@ describe('the protocol boundary', () => {
     assert.strictEqual(fs.readdirSync(path.join(workspace, RECEIPTS)).length, 1);
   });
 
+  test('an all-skip apply writes a receipt recording every decision', () => {
+    // The zero-write shortcut governs destination files, never the decision
+    // record: a person who skipped everything still confirmed decisions, and
+    // that is what a receipt records. Only a pure replay, every item already
+    // at its approved bytes, writes none: the replay test above holds that.
+    const { workspace, sourceRoot } = fixture();
+    const approval = decide(planVia(sourceRoot), { 'agent:scribe': 'skip', 'skill:writer': 'skip' });
+    const before = tree(workspace);
+    const reply = dispatchJson('apply_package_import', { sourcePath: sourceRoot, approval });
+    assert.strictEqual(reply.status, 'ready');
+    assert.deepStrictEqual(reply.writes, []);
+    assert.ok(reply.receipt, 'the decision record is written even though nothing reached a destination');
+    const receipt = JSON.parse(fs.readFileSync(path.join(workspace, reply.receipt), 'utf8'));
+    assert.deepStrictEqual(receipt.items.map((i) => [i.id, i.decision, i.outcome]),
+      [['agent:scribe', 'skip', 'skipped'], ['skill:writer', 'skip', 'skipped']]);
+    const added = tree(workspace).filter((line) => !before.includes(line));
+    assert.deepStrictEqual(added.map((line) => line.split(':')[0]), [reply.receipt],
+      'the receipt is the transaction\'s one write');
+  });
+
   test('an evaluate_package_decisions dispatch leaves the complete tree byte-identical, receipts included', () => {
     const { workspace, sourceRoot } = fixture();
     // An apply first, so there is a receipts directory to be left alone, and
