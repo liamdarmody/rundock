@@ -29,15 +29,16 @@ const { preflight } = require('../helpers/temp-root.js');
 const { beginMutationRun } = require('./mutation-run.js');
 
 const ROOT = path.join(__dirname, '..', '..');
-const SUITE = 'test/unit/extension-install.test.js';
-
-const SOURCE = { src: path.join(ROOT, 'lib', 'packages', 'extension-source.js'), suite: SUITE };
-const MANIFEST = { src: path.join(ROOT, 'lib', 'packages', 'extension-manifest.js'), suite: SUITE };
-const RECORD = { src: path.join(ROOT, 'lib', 'packages', 'extension-record.js'), suite: SUITE };
-const INSTALL = { src: path.join(ROOT, 'lib', 'packages', 'extension-install.js'), suite: SUITE };
-const HANDLERS = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'packages.js'), suite: SUITE };
-const MODEL = { src: path.join(ROOT, 'public', 'packages-install-model.js'), suite: SUITE };
-const SETTINGS_VIEW = { src: path.join(ROOT, 'public', 'views', 'settings.js'), suite: SUITE };
+// Every row names its suite as a string literal beside its target: the
+// scoped gate (scripts/mutation-scope.js) reads both statically, and a suite
+// reached through a constant is a suite the selector cannot see.
+const SOURCE = { src: path.join(ROOT, 'lib', 'packages', 'extension-source.js'), suite: 'test/unit/extension-install.test.js' };
+const MANIFEST = { src: path.join(ROOT, 'lib', 'packages', 'extension-manifest.js'), suite: 'test/unit/extension-install.test.js' };
+const RECORD = { src: path.join(ROOT, 'lib', 'packages', 'extension-record.js'), suite: 'test/unit/extension-install.test.js' };
+const INSTALL = { src: path.join(ROOT, 'lib', 'packages', 'extension-install.js'), suite: 'test/unit/extension-install.test.js' };
+const HANDLERS = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'packages.js'), suite: 'test/unit/extension-install.test.js' };
+const MODEL = { src: path.join(ROOT, 'public', 'packages-install-model.js'), suite: 'test/unit/extension-install.test.js' };
+const SETTINGS_VIEW = { src: path.join(ROOT, 'public', 'views', 'settings.js'), suite: 'test/unit/extension-install.test.js' };
 
 const MUTATIONS = [
   // ===== THE PIN IS REQUIRED =====
