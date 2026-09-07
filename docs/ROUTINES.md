@@ -112,7 +112,23 @@ The catch-up window is the calendar day for daily routines and the weekday for w
 
 Catch-up means routines run late, not on time. A 05:00 briefing on a machine opened at 09:00 runs at 09:00. If the timing matters rather than the fact that it ran, see the always-on options below.
 
-The scheduler runs each routine by spawning a headless Claude Code subprocess with the routine's prompt as the input message. The agent slug is passed so Claude Code loads the correct system prompt. The subprocess runs with `--dangerously-skip-permissions` because there is no user available to approve tool calls in real time.
+### Running a routine now
+
+Every row on the Routines list carries a **Run** control, first in its group of controls, and pressing it runs the routine once, immediately, while you watch. It goes through the same path a scheduled run takes, so what it does, the record it leaves and the way it can be stopped are the same. It is available on every row, including a routine that is paused, not enabled, or whose plan is waiting for approval: those three hold the scheduler back because they are consent to run *unattended*, and a run you pressed is attended. Running a routine first is how you decide whether to approve it at all. The control is disabled while a run of that routine is in flight, whether the scheduler started it or you did, and a second press during a run starts nothing.
+
+A press is refused only when nothing could run: the routine names a run target this release cannot run, it has no prompt to send, or a run of it is already going. The refusal is drawn on the row you pressed, saying which of those it was.
+
+**A manual run moves no schedule.** The routine's `lastRun` guard is not written, the slot records are not written, and the next run stays at exactly the instant it was going to be. A test run at two in the afternoon does not satisfy that evening's slot: the scheduler fires it when it comes, as if the press had never happened. The row's on-time, caught-up and missed verdicts are computed from scheduled runs only, so a test run that fails does not turn the row red; its outcome is on its own record.
+
+**The record says the run was manual.** Every run record carries a `trigger` field, `manual` for a pressed run and `scheduled` for the scheduler's, written when the run opens and again when it closes. A record from before the field existed is read as scheduled, because nothing but the scheduler could start a run then. The run's own page names a pressed run on the line that says when it started, and the row says "Running now (started manually)" while one is going, where a scheduled run says "Still going".
+
+### Approval is consent to a changed plan
+
+A routine made through the editor is approved from the moment it exists: making it is the consent, and nothing is asked of you. What is asked is a **change** to what the routine runs. Editing the prompt, the skill it runs or where it runs lapses the approval, because an agent can edit a routine and a person who does not know an edit happened has nothing to pause. Editing when it runs, its timezone, pausing it, turning it on or off, and editing the skill's own file leave the approval standing: those change when or whether, not what.
+
+A routine whose approval has lapsed shows as **paused**, and it does not look like a pause you applied yourself. The row keeps its full weight, takes the attention colour, and says that what this runs has changed since you last approved it, with one action: **Review and resume**, which approves the plan as it stands on disk at that moment. A pause you applied is quieter: the row dims, the word is simply **Paused**, and the way back is **Resume**. The two are told apart by words as well as colour on purpose, because a changed routine that looked like an ordinary pause would be resumed without a glance, which is the outcome the approval exists to prevent. Pausing is a switch on the row, off beside Run and on beside the word Paused, and it is the only control that sets or clears `paused`; the play glyph belongs to Run alone.
+
+Rundock runs each routine by spawning a headless Claude Code subprocess with the routine's prompt as the input message. The agent slug is passed so Claude Code loads the correct system prompt. The subprocess runs with `--dangerously-skip-permissions` because there is no user available to approve tool calls in real time.
 
 If you want routines to fire while you are away from your computer, see [Always-on routines: VPS or Claude routines](#always-on-routines-vps-or-claude-routines) for two practical paths.
 
@@ -205,7 +221,7 @@ These fields update in the Routines panel and on the agent profile in real time 
 
 ### What a run can say it changed
 
-Every run keeps a record of its own under `.rundock/runs/`, and that record lists the files the run changed: the path, the tool that touched it, whether the file was created or edited, and when.
+Every run keeps a record of its own under `.rundock/runs/`, and that record lists the files the run changed: the path, the tool that touched it, whether the file was created or edited, and when. It also says who started the run, in its `trigger` field: see [Running a routine now](#running-a-routine-now).
 
 It comes from the session transcript Claude Code writes for the run, not from the run's output. Each run tells Claude Code which session to be, so its transcript is found by an identity the run chose rather than by looking for whatever changed most recently, which would answer with another run's files and look perfectly plausible doing it. The transcript records each tool call's outcome, so a write that failed is not listed as a file the run changed.
 
@@ -251,7 +267,7 @@ Each row in the panel shows three things:
 
 While a routine is running, the schedule text is replaced with a `Running...` indicator in the workspace's working colour.
 
-The panel is display-only: rows there are not clickable. The controls live on the Routines list itself, which each row reaches. A routine that is not enabled carries a **Turn on** control on its row, and the offer says what pressing it does, including that a routine whose time has already gone today runs shortly after being turned on rather than waiting for tomorrow. The offer is withheld where turning it on would not actually start the routine, such as a routine that is also paused or whose schedule cannot be read, because there is nothing truthful a Turn on control can promise on a row that will not run once it is pressed.
+The panel is display-only: rows there are not clickable. The controls live on the Routines list itself, which each row reaches: Run, the pause switch, Edit schedule and Delete, in that order, with Run first because it is the control reached for most while a routine is being set up (see [Running a routine now](#running-a-routine-now)). A routine that is not enabled carries a **Turn on** control on its row, and the offer says what pressing it does, including that a routine whose time has already gone today runs shortly after being turned on rather than waiting for tomorrow. The offer is withheld where turning it on would not actually start the routine, such as a routine that is also paused or whose schedule cannot be read, because there is nothing truthful a Turn on control can promise on a row that will not run once it is pressed.
 
 The agent profile page shows a richer Routines card for each agent that owns routines. Each entry on the profile shows the routine's `name`, the raw `schedule` string, and a status line: `Last run: <relative time> (<status>)` once a run has occurred, or `Not yet run` before the first run.
 

@@ -216,6 +216,7 @@ describe('the run record carries an explicit trigger from both writers', () => {
       assert.strictEqual(ran.length, 1, 'one routine_run event per run');
       assert.strictEqual(ran[0].fields.d.trigger, 'manual');
       assert.strictEqual(ran[0].fields.d.routine, ROUTINE);
+      assert.strictEqual(ran[0].fields.d.status, 'completed', 'a pressed run ends in the vocabulary a tick\'s run records');
     });
     withRun(({ sched, agent, routine, children, events }) => {
       sched.executeRoutine(agent, routine, KEY, NOW, 'scheduled');
