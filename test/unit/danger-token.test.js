@@ -82,6 +82,30 @@ function ruleOf(file, selector) {
   return rule;
 }
 
+// WCAG 2 relative luminance and contrast ratio, from a six-digit hex. The
+// parse asserts the shape, so a token rewritten as rgb() or a shorthand hex
+// fails by name rather than as a NaN ratio that compares equal to nothing.
+function channels(hex, name) {
+  const m = /^#([0-9a-f]{6})$/i.exec(hex);
+  assert.ok(m, `${name} is ${hex}, not a six-digit hex; this test reads only that shape`);
+  const n = parseInt(m[1], 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+function luminance(rgb) {
+  const [r, g, b] = rgb.map((v) => {
+    const c = v / 255;
+    return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+  });
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+function contrast(fg, bg) {
+  const a = luminance(fg);
+  const b = luminance(bg);
+  return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+}
+const twoPlaces = (x) => Math.round(x * 100) / 100;
+const WHITE = [255, 255, 255];
+
 const rel = (file) => path.relative(ROOT, file);
 const lineOf = (text, index) => text.slice(0, index).split('\n').length;
 
@@ -221,5 +245,63 @@ describe('a resting destructive action is not filled', () => {
     ]) {
       assert.strictEqual(ruleOf(file, selector).get('color'), 'var(--danger-text)', `${selector} in ${file}`);
     }
+  });
+});
+
+describe('the values were chosen against contrast, and stay chosen', () => {
+  // Every figure below is computed from tokens.css on each run, never
+  // written as a constant beside the token, so an edit to either danger
+  // value OR to a surface it lands on fails here with the new ratio in the
+  // message. The expected ratios are pinned to two places because that is
+  // the precision the values were chosen at; the thresholds beneath them are
+  // the bars they were chosen to clear.
+  const read = (block, name) => {
+    assert.ok(block.has(name), `${name} is not declared in that theme block`);
+    return channels(block.get(name), name);
+  };
+
+  test('white on the fill clears AA, and the fill is a fill in both themes', () => {
+    const { dark } = tokenBlocks();
+    const ratio = contrast(WHITE, read(dark, '--danger'));
+    assert.strictEqual(twoPlaces(ratio), 5.01, `white on the fill measures ${ratio.toFixed(4)}`);
+    assert.ok(ratio >= 4.5, 'white on the fill must clear 4.5:1');
+  });
+
+  test('dark-theme text reads on the card and the base', () => {
+    const { dark } = tokenBlocks();
+    const text = read(dark, '--danger-text');
+    const onCard = contrast(text, read(dark, '--card'));
+    const onBase = contrast(text, read(dark, '--base'));
+    assert.strictEqual(twoPlaces(onCard), 4.36, `dark text on --card measures ${onCard.toFixed(4)}`);
+    assert.strictEqual(twoPlaces(onBase), 6.01, `dark text on --base measures ${onBase.toFixed(4)}`);
+    for (const [label, r] of [['card', onCard], ['base', onBase]]) {
+      assert.ok(r >= 3.0, `dark text on the ${label} must clear 3:1`);
+    }
+  });
+
+  test('light-theme text reads on the card, the base and the elevated surface', () => {
+    const { light } = tokenBlocks();
+    const text = read(light, '--danger-text');
+    const onCard = contrast(text, read(light, '--card'));
+    const onBase = contrast(text, read(light, '--base'));
+    const onElevated = contrast(text, read(light, '--elevated'));
+    assert.strictEqual(twoPlaces(onCard), 4.29, `light text on --card measures ${onCard.toFixed(4)}`);
+    assert.strictEqual(twoPlaces(onBase), 4.49, `light text on --base measures ${onBase.toFixed(4)}`);
+    assert.strictEqual(twoPlaces(onElevated), 5.01, `light text on --elevated measures ${onElevated.toFixed(4)}`);
+    for (const [label, r] of [['card', onCard], ['base', onBase], ['elevated', onElevated]]) {
+      assert.ok(r >= 3.0, `light text on the ${label} must clear 3:1`);
+    }
+  });
+
+  test('the fill sits apart from the accent in lightness, not only in hue', () => {
+    // A hue rotation is what protanopes and deuteranopes lose, so the two
+    // fills have to differ in value as well. The bar is the gray-scale
+    // contrast between the two, computed from the tokens so a drift that
+    // closes the gap fails here: the old pair measured 1.22 and read as the
+    // same button.
+    const { dark, light } = tokenBlocks();
+    assert.ok(!light.has('--accent') && !light.has('--danger'), 'both fills are shared by the themes, so one block is enough');
+    const apart = contrast(read(dark, '--accent'), read(dark, '--danger'));
+    assert.ok(apart >= 1.70, `accent and danger fills measure ${apart.toFixed(4)} apart, under the 1.70 bar`);
   });
 });
