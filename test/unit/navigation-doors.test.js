@@ -220,6 +220,37 @@ const DESTINATIONS = [
     surface: 'a file result in the search palette',
     pressedBy: 'every view the shell can show lands the rail on the section its own table names',
   },
+  // THE ONE VIEW WITH TWO SECTIONS. Pins is the Files view with the tree
+  // swapped for a short list, and the file it opens shows in the same editor
+  // pane, so the editor's section depends on where the reader came in from:
+  // a file opened from the Pins list keeps Pins lit and the Pins panel up,
+  // and the same file opened from the tree lights Files. The table still
+  // decides: its editor row names Files, and navSectionFor reads the entry
+  // beside it. These rows name the section the resolver gives them, with the
+  // entry they arrive under, and the check below resolves them the same way.
+  {
+    site: "views/pins.js: function openPinnedFile(path) -> showView('editor')",
+    view: 'editor',
+    section: 'pins',
+    entry: 'pins',
+    surface: 'a row in the Pins list being clicked',
+    pressedBy: 'a file entered from Pins lights Pins, and the same view entered from Files lights Files',
+  },
+  {
+    site: "views/pins.js: function openPinsSection() -> showView('editor')",
+    view: 'editor',
+    section: 'pins',
+    entry: 'pins',
+    surface: 'the Pins entry on the nav rail, with a pinned file already open',
+    pressedBy: 'a file entered from Pins lights Pins, and the same view entered from Files lights Files',
+  },
+  {
+    site: "views/pins.js: function openPinsSection() -> showView('pins')",
+    view: 'pins',
+    section: 'pins',
+    surface: 'the Pins entry on the nav rail, with nothing pinned that can be opened',
+    pressedBy: 'every view the shell can show lands the rail on the section its own table names',
+  },
   {
     site: "views/profile.js: function showProfile(agentId) -> showView('profile')",
     view: 'profile',
@@ -502,6 +533,19 @@ function navForView() {
   return new Function(`${NAV_FOR_VIEW_SRC[0]}\nreturn NAV_FOR_VIEW;`)();
 }
 
+// The section showView asks for, resolved as the shipped code resolves it:
+// the table, read beside the one thing the table cannot say on its own, which
+// is where the editor was entered from. The resolving statement is cut out of
+// showView's own body and run, so a table this file agrees with is the table
+// the product reads, under the entry the product reads beside it.
+function resolvedSection(view, entry) {
+  const body = appPiece(/^function showView\(v\) \{(.*)\}\s*$/m, 'showView');
+  const statement = /const nav=(.+?); if\(nav\) setNavState\(nav\);/.exec(body);
+  assert.ok(statement, 'showView no longer resolves the section in one statement this file can read');
+  // eslint-disable-next-line no-new-func
+  return new Function('v', 'entry', `${NAV_FOR_VIEW_SRC[0]}\nlet editorEntry = entry;\nreturn ${statement[1]};`)(view, entry || 'files');
+}
+
 // The views showView knows how to reveal, read off its own hide list rather
 // than written again here. A view added there and nowhere else is what this
 // exists to catch.
@@ -645,8 +689,12 @@ describe('every destination in this client is enumerated', () => {
           `${d.site} says it takes no nav state but the source gives ${d.view} a section`);
         continue;
       }
-      assert.strictEqual(table[d.view], d.section,
-        `${d.site} says ${d.view} lands on ${d.section} and the source says ${table[d.view]}`);
+      // A row that names an entry is resolved under it; every other row is
+      // held to its table cell, and the two agree wherever no entry is named.
+      const resolved = resolvedSection(d.view, d.entry);
+      if (!d.entry) assert.strictEqual(resolved, table[d.view], `${d.view}: the resolver disagrees with the table`);
+      assert.strictEqual(resolved, d.section,
+        `${d.site} says ${d.view} lands on ${d.section} and the source says ${resolved}`);
     }
   });
 
@@ -838,6 +886,11 @@ function shell() {
   // over them, which is also how they sit in app.js.
   w.eval([
     NAV_FOR_VIEW_SRC[0],
+    // The entry the editor was reached through, declared here as app.js
+    // declares it and set from a test through a function, because a lexical
+    // declaration inside this eval is reachable by nothing outside it.
+    "let editorEntry = 'files';",
+    'function enterFrom(entry) { editorEntry = entry; }',
     `function setNavState(nav) {${appPiece(/function setNavState\(nav\) \{([\s\S]*?)\n\}/, 'setNavState')}\n}`,
     `function showView(v) {${appPiece(/^function showView\(v\) \{(.*)\}\s*$/m, 'showView')}}`,
     `function setWorkspaceChrome(present) {${appPiece(/function setWorkspaceChrome\(present\) \{([\s\S]*?)\n\}/, 'setWorkspaceChrome')}\n}`,
@@ -875,6 +928,28 @@ describe('the chrome, pressed', () => {
         `showing ${view} lit the rail and did not reveal the pane`);
       dom.window.close();
     }
+  });
+
+  // THE EDITOR UNDER BOTH ENTRIES, pressed through the shipped resolver. Pins
+  // is the Files view with the tree swapped for a short list, and both open
+  // files in the one editor pane, so which entry is lit is the only thing
+  // telling a reader which list they are in. Opened from the Pins list, Pins
+  // stays lit and the Pins panel stays up; opened from the tree, Files does.
+  test('a file entered from Pins lights Pins, and the same view entered from Files lights Files', () => {
+    const { w, doc, dom } = shell();
+    w.enterFrom('pins');
+    w.showView('editor');
+    assert.deepStrictEqual(litSections(doc), ['pins'], 'a file opened from the Pins list left the rail elsewhere');
+    assert.deepStrictEqual(visiblePanels(doc), ['pins'], 'a file opened from the Pins list hid the Pins panel');
+    w.enterFrom('files');
+    w.showView('editor');
+    assert.deepStrictEqual(litSections(doc), ['files'], 'the same file opened from the tree did not light Files');
+    assert.deepStrictEqual(visiblePanels(doc), ['files']);
+    // And the entry moves nothing else: a view with its own section ignores it.
+    w.enterFrom('pins');
+    w.showView('skills');
+    assert.deepStrictEqual(litSections(doc), ['skills'], 'the editor entry leaked into another view');
+    dom.window.close();
   });
 
   // Kept as a test of its own because it is the one a reader will look for. It

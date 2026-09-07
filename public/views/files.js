@@ -19,7 +19,7 @@
 // _tiptapSaveTimer, _viewersModule, _viewersModuleResolved, activeFileViewer,
 // serverPlatform, editorMode, rawFileContent, fileFrontmatter, fileBody,
 // editorDirty, saveTimer, workspaceOpenStartedAt, cachedFileTree,
-// editorReturnView, fileHistory, findState, plus the call-time constants
+// editorReturnView, editorEntry, fileHistory, findState, plus the call-time constants
 // TREE_ICONS and CREATABLE_TYPES (their declarations read FilesMenuModel at
 // load time, which a side-effect-free factory cannot do). Helpers reached the
 // same way: esc, getGuide, formatMdFull, closeFindBar,
@@ -318,6 +318,15 @@ function destroyTiptapEditorIfActive() {
 // the time this runs the server's WORKSPACE has already changed, so a flush
 // would resolve the old relative path against the new workspace and could
 // overwrite a same-named file there with stale content.
+// The editor is entered from the tree or from the Pins list, and the rail
+// lights whichever the reader came in through (showView reads editorEntry
+// beside its table). Every opener here says Files; the Pins list says Pins
+// for itself. Guarded by typeof so this module runs in node with no shell
+// around it, where the state does not exist and there is no rail to light.
+function enteredFromFiles() {
+  if (typeof editorEntry !== 'undefined') editorEntry = 'files';
+}
+
 function closeOpenFile() {
   clearTimeout(_tiptapSaveTimer);
   clearTimeout(saveTimer);
@@ -336,6 +345,7 @@ function closeOpenFile() {
   editorMode = 'preview';
   editorDirty = false;
   fileHistory = [];
+  enteredFromFiles();
   closeFindBar();
   removeFileConnections();
   document.querySelectorAll('.file-item.active').forEach((el) => el.classList.remove('active'));
@@ -498,7 +508,7 @@ function buildTree(items,container) {
       const fi=document.createElement('div'); fi.className='file-item';
       fi.innerHTML=`${treeIconSvg(TREE_ICONS[item.kind]||TREE_ICONS.file)}<span class="file-item-name">${esc(item.name)}</span>`;
       fi.dataset.path = item.path;
-      fi.onclick=()=>{document.querySelectorAll('.file-item').forEach(x=>x.classList.remove('active'));fi.classList.add('active');editorReturnView='editor';fileHistory=[];ws.send(JSON.stringify({type:'read_file',path:item.path}));showView('editor');};
+      fi.onclick=()=>{document.querySelectorAll('.file-item').forEach(x=>x.classList.remove('active'));fi.classList.add('active');editorReturnView='editor';enteredFromFiles();fileHistory=[];ws.send(JSON.stringify({type:'read_file',path:item.path}));showView('editor');};
       fi.oncontextmenu=(e)=>{e.preventDefault();openRowContextMenu(e,item.path,'file');};
       container.appendChild(fi);
     }
@@ -1127,6 +1137,7 @@ function openWikilink(name) {
   // decided in wikilinkSearchName so every resolving surface agrees.
   const searchName = wikilinkSearchName(name);
   editorReturnView = 'editor';
+  enteredFromFiles();
 
   // Push current file onto history so back button returns to it
   if (currentFilePath) fileHistory.push(currentFilePath);
@@ -1161,6 +1172,7 @@ function openWikilink(name) {
 function openWorkspaceFilePath(path) {
   if (!path || !ws) return;
   editorReturnView = 'editor';
+  enteredFromFiles();
   if (currentFilePath) { fileHistory.push(currentFilePath); if (fileHistory.length > 20) fileHistory.shift(); }
   switchNav('files');
   ws.send(JSON.stringify({ type: 'read_file', path }));
@@ -1353,6 +1365,7 @@ function updateEditorBackButton() {
 
 function openSkillFile(filePath) {
   editorReturnView = 'skills';
+  enteredFromFiles();
   fileHistory = [];
   ws.send(JSON.stringify({ type: 'read_file', path: filePath }));
   showView('editor');

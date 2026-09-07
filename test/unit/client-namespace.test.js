@@ -1,7 +1,7 @@
 'use strict';
 // The client's global namespace, guarded.
 //
-// The nine modules under public/views/ republish every function they export
+// The ten modules under public/views/ republish every function they export
 // onto the root object, because index.html's inline handlers, generated
 // onclick attributes and cross-module calls all resolve these names as bare
 // window properties. That is deliberate and load-bearing, and it has one sharp
@@ -270,6 +270,15 @@ const MANIFEST = {
     "runtimesCardHtml",
     "setWorkspaceMode",
     "showSettingsSection",
+  ],
+  "pins.js": [
+    "handlePinsReply",
+    "noteTreeForPins",
+    "openPinnedFile",
+    "openPinsSection",
+    "pinRows",
+    "renderPins",
+    "requestPins",
   ],
   "skills.js": [
     "renderSkills",
