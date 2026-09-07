@@ -346,6 +346,16 @@
     };
   }
 
+  // The update check's three named outcomes, each in its own words. A pin
+  // the check cannot order against the listing (a commit, a codename) is
+  // said to be exactly that, never "up to date", which would be a claim
+  // the code cannot make.
+  function updateStatusCopy(status) {
+    if (status.outcome === 'newer-available') return `Update available: ${status.newer[status.newer.length - 1]}. Installing it asks for permission again.`;
+    if (status.outcome === 'up-to-date') return `Up to date at ${status.current}.`;
+    return `Pinned at ${status.current}, which cannot be compared with the tags this repository publishes. Pin a tag to have updates checked.`;
+  }
+
   return { initial, submit, reply, planReply, offerCopy, cancel, decline, confirm, applyReply, installReply, doneCopy,
-    retry, connectionLost, allAddApproval, HOST_FACTS, hostClaims, trustCopy };
+    retry, connectionLost, allAddApproval, HOST_FACTS, hostClaims, trustCopy, updateStatusCopy };
 }));

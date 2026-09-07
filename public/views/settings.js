@@ -104,6 +104,11 @@ function packagesConnectionLost() {
   if (out.state !== packagesInstall) packagesApplyTransition(out);
 }
 
+// One installed extension's update outcome, for the card that lists it.
+function extensionUpdateStatusHtml(status) {
+  return `<div class="packages-body extension-update-note" data-outcome="${escAttr(status.outcome)}">${esc(RundockPackagesInstallModel.updateStatusCopy(status))}</div>`;
+}
+
 function packagesSectionHtml() {
   const m = RundockPackagesInstallModel;
   const st = packagesInstall;
@@ -791,6 +796,7 @@ function connectorsWorkspaceChanged() {
 return { showSettingsSection, renderSettingsSection, setWorkspaceMode, runtimeRowHtml, runtimesCardHtml, renderRuntimesCard, changeWorkspace,
   packagesSubmit, packagesCancel, packagesDecline, packagesConfirm, packagesRetry,
   packagesReplyArrived, packagesWorkspaceChanged, packagesServingWorkspaceChanged, packagesConnectionLost,
+  extensionUpdateStatusHtml,
   connectorsParse, connectorsParseToml, connectorsParseUserGlobalJson,
   connectorsBuildRows, connectorsBuildState, connectorsRowHtml, connectorsScopeText,
   connectorsSectionHtml, connectorsLoad, connectorsWorkspaceChanged };

@@ -128,19 +128,15 @@ const MUTATIONS = [
   // meant to send: the named refusal a caller could act on is gone.
   [HANDLERS, 'planning an update for a name with no installed record is refused by name',
     `    if (!record) throw new Error(\`no extension named "\${msg.name}" is installed\`);
-    if (!record.source || typeof record.source.url !== 'string') {
-      throw new Error(\`the installed record for "\${msg.name}" carries no source url; refusing to update\`);
-    }`,
-    `    if (!record.source || typeof record.source.url !== 'string') {
-      throw new Error(\`the installed record for "\${msg.name}" carries no source url; refusing to update\`);
-    }`],
+    // The stored url travels with the workspace and is not trusted input,
+    // exactly as the uninstall path refuses to trust the same file's root:`,
+    `    // The stored url travels with the workspace and is not trusted input,
+    // exactly as the uninstall path refuses to trust the same file's root:`],
   // Skip the missing-source check and a record with no source field falls
   // straight into parseGitHubSource with an undefined url, refused only by
   // accident rather than by a stated rule about what this record must carry.
-  [HANDLERS, 'a record missing its own source is refused by name',
-    `    if (!record.source || typeof record.source.url !== 'string') {
-      throw new Error(\`the installed record for "\${msg.name}" carries no source url; refusing to update\`);
-    }`,
+  [RECORD, 'a record missing its own source is refused by name, once, at the reader',
+    "  if (!record.source || typeof record.source.url !== 'string' || !record.source.url) return `\"${record.name}\" carries no source url`;\n",
     ''],
   // Skip the revalidation and the persisted url goes straight into
   // beginExtensionPlan and a git argv unchecked, exactly the trust the
@@ -241,14 +237,19 @@ const MUTATIONS = [
   // differs from is offered, including ones behind the installed pin: a
   // downgrade offered as an update.
   [RECORD, 'the update check reports only references it can show come after the pin',
-    '    .filter((name) => isNewerReference(name, record.source.reference))',
-    ''],
+    '    .filter(([, parts]) => parts && compareSemver(parts, pin) > 0)',
+    '    .filter(([, parts]) => parts && compareSemver(parts, pin) !== 0)'],
+  // Call an unorderable pin "up to date" and a commit-pinned extension is
+  // told it is current on the strength of a comparison the code never made.
+  [RECORD, 'a pin the check cannot order is reported as exactly that, never as up to date',
+    "  const outcome = pin === null ? 'unorderable-pin' : (newer.length ? 'newer-available' : 'up-to-date');",
+    "  const outcome = newer.length ? 'newer-available' : 'up-to-date';"],
   // Drop the sort and the reported order goes back to whatever the listing's
   // own order was, which for the real default lister is lexicographic:
   // v10.0.0 before v2.0.0.
   [RECORD, 'the reported order is the true numeric order, not the listing\'s own order',
-    '    .sort((a, b) => compareSemver(semverParts(a), semverParts(b)));',
-    ';'],
+    '    .sort(([, a], [, b]) => compareSemver(a, b))\n',
+    ''],
 
   // ===== ONE TRANSACTION CARRIES THE INSTALL =====
   // Split the record from the files and a crash between them leaves a
@@ -278,25 +279,26 @@ const MUTATIONS = [
   // delete every installed extension, or one carrying another install's own
   // root removes that install's directory instead of this one's.
   [INSTALL, 'the removal target must equal the install-time location exactly, nothing wider',
-    `  if (targetAbsolute !== expectedAbsolute) {
+    `  if (path.resolve(workspace, ...record.root.split('/')) !== target) {
     refuse(\`the installed record for "\${name}" names a root that does not match its install-time location; refusing to remove anything\`, 'invalid-record');
   }`,
     ''],
-  // Skip the missing-root check and a record with no root throws a raw
-  // TypeError from the split() that used to read it, instead of a named
-  // refusal that leaves the workspace untouched.
-  [INSTALL, 'a record with no root is refused by name',
-    `  if (typeof record.root !== 'string' || !record.root) {
-    refuse(\`the installed record for "\${name}" has no root; refusing to remove anything\`, 'invalid-record');
-  }`,
+  // Skip the missing-root check at the reader and a record with no root
+  // throws a raw TypeError from the split() that reads it, instead of a
+  // named refusal that leaves the workspace untouched.
+  [RECORD, 'a record with no root is refused by name',
+    "  if (typeof record.root !== 'string' || !record.root) return `\"${record.name}\" has no root`;\n",
     ''],
   // Skip the name-validation and a records file carrying a name shaped like
-  // a traversal ("../../etc") is joined straight into the removal target's
-  // expected path instead of being refused before it is ever used.
-  [INSTALL, 'a record with an invalid name is refused before it is joined into a path',
-    `  if (typeof record.name !== 'string' || !SLUG.test(record.name)) {
-    refuse(\`the installed record for "\${name}" carries an invalid name; refusing to remove anything\`, 'invalid-record');
-  }`,
+  // a traversal ("../../etc") is joined straight into the removal target
+  // instead of being refused before it is ever used.
+  [RECORD, 'a record with an invalid name is refused before it is joined into a path',
+    "  if (typeof record.name !== 'string' || !SLUG.test(record.name)) return 'an entry carries an invalid name';\n",
+    ''],
+  // Leave the close listener on the socket after its offer was answered and
+  // a long-lived connection grows one listener per install.
+  [HANDLERS, 'the close listener leaves with the offer it guarded',
+    "  if (pending.onClose && typeof pending.ws.off === 'function') pending.ws.off('close', pending.onClose);\n",
     ''],
 
   // ===== THE TRUST CARD SHOWS THE FACT IT DERIVED =====

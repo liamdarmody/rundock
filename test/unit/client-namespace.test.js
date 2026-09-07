@@ -257,6 +257,7 @@ const MANIFEST = {
     "connectorsScopeText",
     "connectorsSectionHtml",
     "connectorsWorkspaceChanged",
+    "extensionUpdateStatusHtml",
     "packagesCancel",
     "packagesConfirm",
     "packagesConnectionLost",

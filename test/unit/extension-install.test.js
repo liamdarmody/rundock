@@ -14,6 +14,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
+const { EventEmitter } = require('node:events');
 
 // The transaction seam is wrapped BEFORE the modules under test are loaded,
 // so the suite can see how many transactions an install really is without
@@ -715,9 +716,13 @@ describe('install, the record, and the update check that reads it', () => {
     });
   });
 
-  test('checkForUpdate takes a record and a lister, and refuses a record without a source', () => {
-    assert.throws(() => checkForUpdate({ name: 'x', source: { url: 'u' } }, () => []),
-      /source\.url and source\.reference/);
+  test('checkForUpdate takes a record and a lister; a record without a source never reaches it, because the reader refuses the file', () => {
+    withWorkspace((ws) => {
+      const recordsPath = path.join(ws, ...RECORDS_PATH.split('/'));
+      fs.mkdirSync(path.dirname(recordsPath), { recursive: true });
+      fs.writeFileSync(recordsPath, JSON.stringify({ schema: 'rundock.extensions/v1', extensions: [{ name: 'x', version: '1', root: 'r' }] }));
+      assert.throws(() => readExtensionRecords(ws), (e) => e.code === 'invalid-record' && /carries no source url/.test(e.message));
+    });
     const status = checkForUpdate(
       { name: 'x', source: { url: 'u', reference: 'v1.0.0' } },
       (url) => (url === 'u' ? ['v1.0.0', 'v2.0.0'] : []),
@@ -1090,10 +1095,10 @@ describe('uninstall removes what the install created, and names what stays', () 
       delete records[0].root;
       fs.writeFileSync(path.join(ws, ...RECORDS_PATH.split('/')), serialiseRecords(records));
 
-      assert.throws(() => uninstallExtension(ws, 'test-ext'), (e) => e.code === 'invalid-record');
+      assert.throws(() => uninstallExtension(ws, 'test-ext'), (e) => e.code === 'invalid-record' && /has no root/.test(e.message));
       assert.ok(fs.existsSync(path.join(ws, ...EXTENSIONS_ROOT.split('/'), 'test-ext', 'view', 'index.html')),
         'nothing was removed by a refused uninstall');
-      assert.strictEqual(readExtensionRecords(ws).length, 1, 'and the record is untouched too');
+      assert.strictEqual(JSON.parse(fs.readFileSync(path.join(ws, ...RECORDS_PATH.split('/')), 'utf8')).extensions.length, 1, 'and the record is untouched too');
     });
   });
 
@@ -1644,6 +1649,56 @@ describe('consent binds to the workspace it was shown against, on the client too
       } finally {
         handlers.wireExtensionDeps(previousDeps);
         shell.release();
+      }
+    });
+  });
+});
+
+describe('a commit-pinned record reports a named outcome, never a false "up to date"', () => {
+  test('a forty-hex pin against a listing holding newer tags is unorderable, and the view says so in its own words', () => {
+    withWorkspace(() => {
+      const pin = 'a'.repeat(40);
+      const status = checkForUpdate({ name: 'x', source: { url: 'u', reference: pin } }, () => ['v1.0.0', 'v2.0.0']);
+      assert.strictEqual(status.outcome, 'unorderable-pin', 'a commit cannot be placed before or after a tag, and the check says so');
+      assert.deepStrictEqual(status.newer, [], 'nothing is claimed newer on the strength of a comparison this cannot make');
+      assert.strictEqual(checkForUpdate({ name: 'x', source: { url: 'u', reference: 'v1.0.0' } }, () => ['v1.0.0']).outcome, 'up-to-date');
+      assert.strictEqual(checkForUpdate({ name: 'x', source: { url: 'u', reference: 'v1.0.0' } }, () => ['v2.0.0']).outcome, 'newer-available');
+      const shell = settingsShell();
+      try {
+        const rendered = shell.view.extensionUpdateStatusHtml(status);
+        assert.match(rendered, /cannot be compared/, 'the rendered state says the pin cannot be ordered against the listing');
+        assert.ok(!/up to date/i.test(rendered), 'and never claims currency it cannot show');
+        assert.match(shell.view.extensionUpdateStatusHtml({ outcome: 'newer-available', current: 'v1.0.0', newer: ['v2.0.0'] }), /v2\.0\.0/);
+        assert.match(shell.view.extensionUpdateStatusHtml({ outcome: 'up-to-date', current: 'v1.0.0', newer: [] }), /up to date/i);
+      } finally {
+        shell.release();
+      }
+    });
+  });
+});
+
+describe('the per-request close listener leaves with the request', () => {
+  test('confirm, decline, supersede and a closed socket each leave the close listener count where it began', () => {
+    withWorkspace(() => {
+      const previousDeps = handlers.wireExtensionDeps({ acquire: () => extensionSnapshot() });
+      try {
+        const sock = Object.assign(new EventEmitter(), { readyState: 1, sent: [], send(raw) { this.sent.push(JSON.parse(raw)); } });
+        const plan = () => { handlers.handlePlanPackageInstall({}, sock, { type: 'plan_package_install', url: 'someone/test-ext', reference: 'v1.0.0' }); return sock.sent[sock.sent.length - 1].token; };
+        const before = sock.listenerCount('close');
+        let token = plan();
+        assert.strictEqual(sock.listenerCount('close'), before + 1, 'sanity: an open offer holds one listener');
+        handlers.handleConfirmExtensionInstall({}, sock, { type: 'confirm_extension_install', token });
+        assert.strictEqual(sock.listenerCount('close'), before, 'confirm');
+        token = plan();
+        handlers.handleDeclinePackageInstall({}, sock, { type: 'decline_package_install', token });
+        assert.strictEqual(sock.listenerCount('close'), before, 'decline');
+        plan();
+        plan();
+        assert.strictEqual(sock.listenerCount('close'), before + 1, 'supersede: the first offer\'s listener left with it');
+        sock.emit('close');
+        assert.strictEqual(sock.listenerCount('close'), before, 'close');
+      } finally {
+        handlers.wireExtensionDeps(previousDeps);
       }
     });
   });
