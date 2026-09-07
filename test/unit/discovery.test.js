@@ -503,7 +503,17 @@ describe('rosters and system prompt', () => {
     assert.ok(prompt.includes('Connectors tab'), 'the tab that exists is named');
     assert.doesNotMatch(prompt, /Rundock has no connector settings/,
       'and the claim that contradicts it is gone, not merely qualified elsewhere');
-    assert.ok(prompt.includes('.mcp.json'), 'the file a workspace connector is actually written into is named');
+    assert.ok(prompt.includes('.mcp.json'), 'the file a workspace connector lives in is named');
+
+    // AND THE ROUTE THAT ACTUALLY WORKS. Measured: .mcp.json is protected
+    // wherever it lives, so an agent's own file tools are refused in any
+    // workspace, with the user's approval already given. Two agents tried and
+    // reported the wall. Telling them to edit it directly, as this prompt did,
+    // sent them at a door that does not open.
+    assert.ok(prompt.includes('SAVE_CONNECTOR'), 'the marker that writes it is named');
+    assert.ok(prompt.includes('DELETE_CONNECTOR'), 'and the one that removes it');
+    assert.match(prompt, /DO NOT try to edit \.mcp\.json with Write, Edit or a shell command/,
+      'and the route that is always refused is ruled out by name, so no agent spends a turn discovering it');
 
     // THE CREDENTIAL RULE IS THE ONE THAT MATTERS. .mcp.json travels with the
     // folder, so a key written there reaches every clone and stays in the

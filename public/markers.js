@@ -57,15 +57,34 @@
       actions.push({ kind: 'save_skill', name: match[1], content: stripCosmeticFence(match[2]) });
     }
 
+    // SAVE_CONNECTOR markers. A connector is the one thing a workspace can be
+    // wired to that an agent CANNOT write for itself: Claude Code protects
+    // .mcp.json wherever it lives, so a file tool is refused in any workspace.
+    // The agent says what it wants written and Rundock writes it, which is the
+    // same division the agent and skill markers already use.
+    //
+    // The name is looser than a slug on purpose: a connector's name is whatever
+    // the server is called, and real ones carry dots and underscores. The
+    // handler validates it against what .mcp.json can actually hold.
+    const connectorMarkerPattern = /<!-- RUNDOCK:SAVE_CONNECTOR name=([\w.-]+) -->\n([\s\S]*?)<!-- \/RUNDOCK:SAVE_CONNECTOR -->/g;
+    while ((match = connectorMarkerPattern.exec(t)) !== null) {
+      actions.push({ kind: 'save_connector', name: match[1], content: stripCosmeticFence(match[2]) });
+    }
+
     // DELETE markers (name only). Scanned over the text with SAVE block spans
     // masked out, so a DELETE marker quoted inside a save body (documentation,
     // an echoed template) is not executed as a live delete.
     const deleteScanText = t
       .replace(/<!-- RUNDOCK:(?:SAVE|CREATE)_AGENT name=[\w-]+ -->[\s\S]*?<!-- \/RUNDOCK:(?:SAVE|CREATE)_AGENT -->/g, '')
-      .replace(/<!-- RUNDOCK:SAVE_SKILL name=[\w-]+ -->[\s\S]*?<!-- \/RUNDOCK:SAVE_SKILL -->/g, '');
+      .replace(/<!-- RUNDOCK:SAVE_SKILL name=[\w-]+ -->[\s\S]*?<!-- \/RUNDOCK:SAVE_SKILL -->/g, '')
+      .replace(/<!-- RUNDOCK:SAVE_CONNECTOR name=[\w.-]+ -->[\s\S]*?<!-- \/RUNDOCK:SAVE_CONNECTOR -->/g, '');
     const deleteSkillPattern = /<!-- RUNDOCK:DELETE_SKILL name=([\w-]+) -->/g;
     while ((match = deleteSkillPattern.exec(deleteScanText)) !== null) {
       actions.push({ kind: 'delete_skill', name: match[1] });
+    }
+    const deleteConnectorPattern = /<!-- RUNDOCK:DELETE_CONNECTOR name=([\w.-]+) -->/g;
+    while ((match = deleteConnectorPattern.exec(deleteScanText)) !== null) {
+      actions.push({ kind: 'delete_connector', name: match[1] });
     }
     const deleteAgentPattern = /<!-- RUNDOCK:DELETE_AGENT name=([\w-]+) -->/g;
     while ((match = deleteAgentPattern.exec(deleteScanText)) !== null) {

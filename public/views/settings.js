@@ -642,7 +642,7 @@ function connectorsSectionHtml(state) {
   const addHtml = guide
     ? `<div class="settings-card"><div class="settings-row" style="flex-direction:column;align-items:stretch;gap:8px">
       <span class="settings-label">Add a connector</span>
-      <span class="settings-prose">Connectors differ in what they need to start: some take a command and arguments, some a URL, and most need credentials. ${connectorsEsc(guideName)} can work out which this one is, write it into <code>.mcp.json</code>, and tell you what it still needs.</span>
+      <span class="settings-prose">Connectors differ in what they need to start: some take a command and arguments, some a URL, and most need credentials. ${connectorsEsc(guideName)} can work out which this one is, write it, and tell you what it still needs. A connector is read when an agent starts, so a new one reaches the next conversation rather than the one you add it in.</span>
       <button class="settings-btn" data-agent-id="${connectorsEscAttr(guide.id)}" onclick="startConversation(this.dataset.agentId)">Talk to ${connectorsEsc(guideName)}</button>
     </div></div>`
     : '';

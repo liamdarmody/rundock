@@ -537,6 +537,64 @@ describe('agent + skill CRUD over WS', () => {
     assert.match(msg.message, /Cannot delete platform agents/);
   });
 
+  test('save_connector and delete_connector write the one file an agent cannot', async () => {
+    // MEASURED. Asked to remove a broken connector, two agents tried to edit
+    // .mcp.json with their own file tools and were refused: Claude Code
+    // protects that file wherever it lives, so the Connectors tab's hand-off
+    // to the guide had nowhere to go. Rundock is not subject to that, so the
+    // agent emits a marker and this writes it. Driven end to end through the
+    // real server rather than by calling the handler.
+    const mcp = path.join(h.workspaceDir, '.mcp.json');
+    let since = client.messages.length;
+    client.send({ type: 'save_connector', name: 'notion', content: '{"command":"npx","args":["-y","@notionhq/notion-mcp-server"]}' });
+    let got = await client.waitFor(m => m.type === 'connector_saved', { since, label: 'connector_saved' });
+    assert.strictEqual(got.msg.action, 'saved');
+    assert.match(got.msg.takesEffect, /next agent start/,
+      'a connector is read when an agent starts, so the reply says so rather than implying it is live');
+    assert.deepStrictEqual(JSON.parse(fs.readFileSync(mcp, 'utf-8')).mcpServers.notion,
+      { command: 'npx', args: ['-y', '@notionhq/notion-mcp-server'] });
+
+    // A SECOND CONNECTOR MERGES, it does not replace the file. This is the
+    // property the removed add form carried and the one that matters most:
+    // getting it wrong drops every server somebody already had.
+    since = client.messages.length;
+    client.send({ type: 'save_connector', name: 'granola', content: '{"url":"https://mcp.granola.ai/mcp"}' });
+    await client.waitFor(m => m.type === 'connector_saved', { since, label: 'second connector' });
+    const both = JSON.parse(fs.readFileSync(mcp, 'utf-8')).mcpServers;
+    assert.deepStrictEqual(Object.keys(both).sort(), ['granola', 'notion']);
+
+    since = client.messages.length;
+    client.send({ type: 'delete_connector', name: 'notion' });
+    await client.waitFor(m => m.type === 'connector_saved' && m.action === 'removed', { since, label: 'connector removed' });
+    assert.deepStrictEqual(Object.keys(JSON.parse(fs.readFileSync(mcp, 'utf-8')).mcpServers), ['granola'],
+      'the named one goes and the other stays');
+
+    // Removing what is not there SAYS SO. Reporting success for a name that
+    // was never configured tells somebody a broken connector is gone when it
+    // is still listed.
+    since = client.messages.length;
+    client.send({ type: 'delete_connector', name: 'never-configured' });
+    let err = await client.waitFor(m => m.type === 'connector_error', { since, label: 'absent connector' });
+    assert.match(err.msg.message, /No connector named/);
+
+    // A FILE THIS COULD NOT PARSE IS NEVER OVERWRITTEN. A merge built on a
+    // failed read drops every server in it, which is the whole file for
+    // anyone with more than one.
+    fs.writeFileSync(mcp, '{ not json', 'utf-8');
+    since = client.messages.length;
+    client.send({ type: 'save_connector', name: 'notion', content: '{"url":"https://x"}' });
+    err = await client.waitFor(m => m.type === 'connector_error', { since, label: 'unparsable file' });
+    assert.match(err.msg.message, /not valid JSON, so nothing was changed/);
+    assert.strictEqual(fs.readFileSync(mcp, 'utf-8'), '{ not json',
+      'and the bytes it could not read are still there, untouched');
+
+    fs.unlinkSync(mcp);
+    since = client.messages.length;
+    client.send({ type: 'save_connector', name: '../../etc/passwd', content: '{}' });
+    err = await client.waitFor(m => m.type === 'connector_error', { since, label: 'bad name' });
+    assert.match(err.msg.message, /Invalid connector name/);
+  });
+
   test('save_skill and delete_skill manage .claude/skills/<name>/SKILL.md', async () => {
     let since = client.messages.length;
     client.send({ type: 'save_skill', name: 'test-skill', content: '---\nname: Test Skill\ndescription: A test\n---\nDo the thing.' });

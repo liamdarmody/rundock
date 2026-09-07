@@ -40,7 +40,12 @@ const EXPECTED_TYPES = [
   'get_lists', 'create_list', 'delete_list', 'delete_conversation',
   'read_file', 'add_to_team',
   'save_agent', 'create_agent', 'update_agent', 'delete_agent',
-  'save_skill', 'delete_skill', 'save_routine', 'delete_routine', 'set_routine_paused',
+  'save_skill', 'delete_skill',
+  // The one file an agent cannot write for itself: .mcp.json is protected
+  // wherever it lives, so a connector reaches the file through Rundock or
+  // not at all. Measured, after two agents were refused editing it directly.
+  'save_connector', 'delete_connector',
+  'save_routine', 'delete_routine', 'set_routine_paused',
   'set_routine_enabled', 'set_routine_schedule', 'approve_routine_plan',
   'search_conversations', 'search_universal', 'get_session_history',
   'save_file', 'create_path', 'reveal_in_finder',
@@ -52,6 +57,91 @@ function captureWs() {
 }
 
 describe('dispatch table', () => {
+  test('a connector write refuses every way the file can be untrustworthy, and destroys nothing', () => {
+    // .mcp.json is the one file an agent cannot write for itself, so Rundock
+    // writes it. That makes Rundock responsible for the property the removed
+    // add form carried: NEVER WRITE FROM BYTES YOU DID NOT READ. Every refusal
+    // below leaves the file exactly as it was, because a merge built on a
+    // failed or unparsable read drops every server already configured, which
+    // for anyone with more than one connector is the whole file.
+    const table = buildDispatch();
+    const original = config.getWorkspace();
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'proto-connectors-'));
+    const file = path.join(dir, '.mcp.json');
+    try {
+      config.setWorkspace(dir);
+      const ctx = { workspace: { isInsideWorkspace: () => true }, agents: { validateAgentSlug: () => true } };
+
+      // An entry that is not JSON, and one that is JSON but not an object.
+      let w = captureWs();
+      table.save_connector(ctx, w, { name: 'x', content: 'not json' });
+      assert.match(w.sent[0].message, /not valid JSON/);
+      w = captureWs();
+      table.save_connector(ctx, w, { name: 'x', content: '["a"]' });
+      assert.match(w.sent[0].message, /must be an object/);
+      assert.ok(!fs.existsSync(file), 'and neither created the file');
+
+      // A file holding something that is not an object at all.
+      fs.writeFileSync(file, '["not", "an", "object"]');
+      w = captureWs();
+      table.save_connector(ctx, w, { name: 'x', content: '{}' });
+      assert.match(w.sent[0].message, /does not hold an object/);
+      assert.strictEqual(fs.readFileSync(file, 'utf-8'), '["not", "an", "object"]', 'untouched');
+
+      // A file whose mcpServers is the wrong shape is repaired rather than
+      // refused: the servers map is what this owns, and an object with no
+      // usable map is an empty one.
+      fs.writeFileSync(file, '{"mcpServers": "nonsense"}');
+      w = captureWs();
+      table.save_connector(ctx, w, { name: 'x', content: '{"url":"https://x"}' });
+      assert.strictEqual(w.sent[0].type, 'connector_saved');
+      assert.deepStrictEqual(JSON.parse(fs.readFileSync(file, 'utf-8')).mcpServers, { x: { url: 'https://x' } });
+
+      // A file that exists and cannot be READ. Same precedent as the other
+      // unreadable-file tests in this suite.
+      fs.chmodSync(file, 0o000);
+      w = captureWs();
+      table.save_connector(ctx, w, { name: 'y', content: '{}' });
+      fs.chmodSync(file, 0o644);
+      assert.match(w.sent[0].message, /could not be read, so nothing was changed/);
+      assert.deepStrictEqual(Object.keys(JSON.parse(fs.readFileSync(file, 'utf-8')).mcpServers), ['x'],
+        'and what it held is still there');
+
+      // A file that reads but cannot be WRITTEN.
+      fs.chmodSync(file, 0o444);
+      w = captureWs();
+      table.save_connector(ctx, w, { name: 'z', content: '{}' });
+      fs.chmodSync(file, 0o644);
+      assert.match(w.sent[0].message, /could not be written/);
+
+      // Deleting refuses the same ways, and refuses a name that is a path.
+      w = captureWs();
+      table.delete_connector(ctx, w, { name: '../../etc/passwd' });
+      assert.match(w.sent[0].message, /Invalid connector name/);
+    } finally {
+      try { fs.chmodSync(file, 0o644); } catch (e) { /* already gone */ }
+      config.setWorkspace(original);
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a connector path outside the workspace is refused before anything is read', () => {
+    const table = buildDispatch();
+    const original = config.getWorkspace();
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'proto-connectors-out-'));
+    try {
+      config.setWorkspace(dir);
+      const ctx = { workspace: { isInsideWorkspace: () => false }, agents: { validateAgentSlug: () => true } };
+      const w = captureWs();
+      table.save_connector(ctx, w, { name: 'x', content: '{}' });
+      assert.deepStrictEqual(w.sent, [{ type: 'connector_error', message: 'Invalid path.' }]);
+      assert.ok(!fs.existsSync(path.join(dir, '.mcp.json')), 'nothing written');
+    } finally {
+      config.setWorkspace(original);
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test('routes exactly the enumerated message types, every entry a function', () => {
     const table = buildDispatch();
     assert.deepStrictEqual(Object.keys(table).sort(), [...EXPECTED_TYPES].sort(),
