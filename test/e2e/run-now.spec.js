@@ -3,24 +3,21 @@
 // while the stub runtime runs, and the row comes back afterwards.
 //
 // THE STUB RUNTIME HAS TO BE THE ONE THE SERVER RESOLVES. The E2E launcher
-// boots the server with the invoking shell's PATH, so this spec refuses to
-// press unless `claude` resolves to the stub (a real agent would run with
-// permissions skipped otherwise), and names the invocation:
-//   PATH="$PWD/test/helpers/stub-claude:$PATH" npx playwright test test/e2e/run-now.spec.js
+// puts it first on the server's PATH; this spec still asks the server what it
+// resolved, through runtime_status, and refuses to press unless the answer
+// is the stub, because a real agent would otherwise run with permissions
+// skipped.
 const { test, expect } = require('@playwright/test');
 const fs = require('node:fs');
 const path = require('node:path');
-const { execSync } = require('node:child_process');
 const WebSocket = require('ws');
 
-const STUB = path.join(__dirname, '..', 'helpers', 'stub-claude', 'claude');
+// What the stub answers `--version` with, as the server's probe reads it.
+const STUB_VERSION = '0.0.0-stub';
 const PORT = Number(process.env.E2E_PORT || 34517);
 const ROUTINE = 'Pressed check';
 const PROMPT = 'pressed e2e body';
 
-function resolvedClaude() {
-  try { return execSync('which claude', { encoding: 'utf-8' }).trim(); } catch { return null; }
-}
 // One WS session from the test's own process: learns the workspace the
 // launcher seeded and writes the routine through the real save road.
 function overWs(fn) {
@@ -39,8 +36,11 @@ function overWs(fn) {
 }
 
 test('pressing Run disables the control while the stub runtime runs, and the row comes back afterwards', async ({ page }) => {
-  test.skip(resolvedClaude() !== STUB, `claude resolves to ${resolvedClaude()}, not the stub; put test/helpers/stub-claude first on PATH to run this spec`);
-  const workspace = await overWs(async ({ send, waitFor }) => {
+  const { workspace, version } = await overWs(async ({ send, waitFor }) => {
+    send({ type: 'get_runtime_status' });
+    const status = await waitFor(m => m.type === 'runtime_status');
+    const version = status.claude && status.claude.version;
+    if (version !== STUB_VERSION) return { workspace: null, version };
     send({ type: 'get_workspaces' });
     const set = await waitFor(m => m.type === 'workspaces' && m.current);
     fs.writeFileSync(path.join(set.current, 'stub-scenario.json'), JSON.stringify({
@@ -48,8 +48,9 @@ test('pressing Run disables the control while the stub runtime runs, and the row
     }));
     send({ type: 'save_routine', agentId: 'penn', routine: { name: ROUTINE, schedule: 'every day at 07:00', prompt: PROMPT, runOn: 'local' } });
     await waitFor(m => m.type === 'routine_saved' && m.name === ROUTINE);
-    return set.current;
+    return { workspace: set.current, version };
   });
+  test.skip(version !== STUB_VERSION, `the server resolved claude ${version}, not the stub, so nothing is pressed`);
   expect(fs.existsSync(path.join(workspace, '.claude', 'agents', 'penn.md'))).toBe(true);
   await page.goto('/');
   await page.click('.nav-item[data-nav="routines"]');
