@@ -263,7 +263,7 @@ function cutFiles(re, name) {
   return m[0];
 }
 
-function seamScope({ registry, fetcher, hostLoader, pane, currentPath = 'data/sales.csv', content = 'a,b\n1,2\n' }) {
+function seamScope({ registry, fetcher, hostLoader, pane, openWikilink, currentPath = 'data/sales.csv', content = 'a,b\n1,2\n' }) {
   const pieces = [
     'openThroughRendererSeam(viewers, path, content, surface)', 'fetchExtensionUi(extensionId, rendererId)',
     'loadExtensionHost()', 'claimEditorPane()', 'releaseExtensionMount()', 'reconcileExtensionMount(roster)',
@@ -299,7 +299,7 @@ function seamScope({ registry, fetcher, hostLoader, pane, currentPath = 'data/sa
     { getElementById: (id) => (pane && id === 'editor-content' ? pane : paneStub) },
     state,
     (reason) => noted.push(reason),
-    () => {},
+    openWikilink || (() => {}),
     () => {}, () => {}, () => {}, null,
     () => Promise.resolve({ classify: () => 'unsupported' }),
     {},
@@ -543,5 +543,70 @@ describe('the extension frame has a stylesheet rule that follows the theme', () 
     const at = links.indexOf('/styles/components/extension-frame.css');
     assert.ok(at > links.indexOf('/styles/tokens.css'), 'linked, and after tokens.css so var() resolves');
     assert.strictEqual(links.filter((l) => l === '/styles/components/extension-frame.css').length, 1);
+  });
+});
+
+// ===== AN OPEN FROM THE FRAME RESOLVES LIKE A WIKILINK CLICK =====
+
+describe('an open message from the frame takes the wikilink route', () => {
+  // The resolver and the wikilink opener, cut from the file view and run
+  // over a fixture tree with a stub socket, so the path each route sends
+  // is read off the wire.
+  function resolverScope(currentPath) {
+    const pieces = [
+      cutFiles(/const VIEWABLE_LINK_EXT_RE = [^\n]+\n/, 'VIEWABLE_LINK_EXT_RE'),
+      cutFiles(/function wikilinkSearchName\(target\) \{[\s\S]*?\n\}/, 'wikilinkSearchName'),
+      cutFiles(/function findFileInTree\(items, searchName, fromPath\) \{[\s\S]*?\n\}/, 'findFileInTree'),
+      cutFiles(/function dirSegments\(p\) \{[\s\S]*?\n\}/, 'dirSegments'),
+      cutFiles(/function commonPrefixLen\(a, b\) \{[\s\S]*?\n\}/, 'commonPrefixLen'),
+      cutFiles(/function openWikilink\(name\) \{[\s\S]*?\n\}/, 'openWikilink'),
+    ];
+    const sent = [];
+    const tree = [
+      { type: 'folder', name: 'other', path: 'other', children: [
+        { type: 'file', name: 'sibling-note.md', path: 'other/sibling-note.md' },
+      ] },
+      { type: 'folder', name: 'data', path: 'data', children: [
+        { type: 'file', name: 'sales.csv', path: 'data/sales.csv' },
+        { type: 'file', name: 'sibling-note.md', path: 'data/sibling-note.md' },
+      ] },
+    ];
+    const open = new Function(
+      'ws', 'cachedFileTree', 'currentFilePath', 'switchNav', 'showView', 'highlightFileInSidebar',
+      `let editorReturnView = null; let fileHistory = [];
+       ${pieces.join(';\n')};
+       return openWikilink;`,
+    )({ send: (m) => sent.push(JSON.parse(m)) }, tree, currentPath, () => {}, () => {}, () => {});
+    return { open, sent };
+  }
+
+  test('both routes send read_file for the same path, resolved from the same current file', async () => {
+    const hostModule = await import('../../public/extension-host.js');
+    const dom = new JSDOM('<!doctype html><html><body><div id="editor-content"></div></body></html>', { runScripts: 'outside-only' });
+    const pane = dom.window.document.getElementById('editor-content');
+    const resolver = resolverScope('data/sales.csv');
+    const { api } = seamScope({
+      registry: CLAIM,
+      fetcher: () => Promise.resolve({ entry: 'parent.postMessage({type:"ready"},"*");', styles: [] }),
+      hostLoader: () => Promise.resolve(hostModule),
+      pane,
+      openWikilink: resolver.open,
+    });
+    api.open();
+    await sleep(30);
+    const frame = pane.querySelector('iframe.extension-frame');
+    assert.ok(frame, 'the frame is live');
+    // The frame asks for a sibling by bare name, through the closed table.
+    const ev = new dom.window.Event('message');
+    ev.data = { type: 'open', target: 'sibling-note' };
+    Object.defineProperty(ev, 'source', { value: frame.contentWindow });
+    dom.window.dispatchEvent(ev);
+    const viaFrame = resolver.sent.splice(0);
+    assert.deepStrictEqual(viaFrame, [{ type: 'read_file', path: 'data/sibling-note.md' }],
+      'the frame\'s open resolved by proximity to the open file, not to the first match in tree order');
+    // The same target clicked as a wikilink in the same file.
+    resolver.open('sibling-note');
+    const viaClick = resolver.sent.splice(0);
+    assert.deepStrictEqual(viaClick, viaFrame, 'one resolver, one answer, whichever route asked');
   });
 });
