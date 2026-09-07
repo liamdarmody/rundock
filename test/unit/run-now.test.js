@@ -257,6 +257,7 @@ describe('the run message, driven through the real dispatch', () => {
       press();
       assert.strictEqual(children.length, 0);
       assert.strictEqual(refused(sent)[0].reason, 'runOn');
+      assert.strictEqual(refused(sent)[0].message, require('../../lib/protocol/handlers/runs.js').MANUAL_RUN_REFUSAL_WORDS.runOn(ROUTINE), 'in the shipped sentence');
     }, { routine: approvedRoutine({ runOn: 'agent-computer' }) });
   });
   test('a routine with nothing to send is refused, naming the prompt', () => {
@@ -264,6 +265,7 @@ describe('the run message, driven through the real dispatch', () => {
       press();
       assert.strictEqual(children.length, 0);
       assert.strictEqual(refused(sent)[0].reason, 'prompt');
+      assert.strictEqual(refused(sent)[0].message, require('../../lib/protocol/handlers/runs.js').MANUAL_RUN_REFUSAL_WORDS.prompt(ROUTINE), 'in the shipped sentence');
     }, { routine: { name: ROUTINE, schedule: SCHEDULE, runOn: 'local', enabled: true } });
   });
   test('a paused routine runs when pressed: a press is not the tick', () => {
@@ -291,6 +293,7 @@ describe('the run message, driven through the real dispatch', () => {
   test('the reasons a press can be refused for are exactly the three that leave nothing to run', () => {
     const sched = require(SCHEDULER_KEY);
     assert.deepStrictEqual(sched.MANUAL_RUN_REFUSALS.slice().sort(), ['prompt', 'runOn', 'running']);
+    assert.deepStrictEqual(Object.keys(require('../../lib/protocol/handlers/runs.js').MANUAL_RUN_REFUSAL_WORDS).sort(), sched.MANUAL_RUN_REFUSALS.slice().sort(), 'the handler has a sentence for exactly the words the scheduler declares');
     const ok = approvedRoutine();
     assert.strictEqual(sched.manualRunRefusal(ok, 'nobody:nothing'), null);
     assert.strictEqual(sched.manualRunRefusal({ ...ok, paused: true }, 'nobody:nothing'), null);
@@ -371,8 +374,8 @@ describe('a manual run leaves the scheduler\'s own facts exactly as they were', 
       assert.notStrictEqual(sched.routineState[KEY].lastRun, YESTERDAY_RUN.toISOString(), 'and the scheduled run is the one that moves lastRun');
     }, { now: EARLY });
   });
-  test('a manual run that fails, or is stopped, still writes nothing into the state', () => {
-    withRun(({ sched, ws, agent, routine, children }) => {
+  test('a manual run that fails, or is stopped, still writes nothing into the state, and ends in the tick\'s own words', () => {
+    withRun(({ sched, ws, agent, routine, children, events }) => {
       const fileBefore = readIfThere(stateFile(ws));
       assert.strictEqual(sched.runRoutineNow(agent, routine, KEY).started, true);
       children[0].emit('close', 1);
@@ -380,6 +383,16 @@ describe('a manual run leaves the scheduler\'s own facts exactly as they were', 
       assert.strictEqual(readIfThere(stateFile(ws)), fileBefore);
       assert.strictEqual(recordsOn(ws)[0].status, 'failed', 'the record still says what happened');
       assert.strictEqual(recordsOn(ws)[0].trigger, 'manual');
+      assert.strictEqual(events.find(e => e.name === 'routine_run').fields.d.status, 'failed', 'the failed arm of the pressed run\'s ending word');
+      // Stopped: the fake child has no pid, so the signaller sends nothing and
+      // the ending arrives as any ending does, with the stop already delivered.
+      const second = sched.runRoutineNow(agent, routine, KEY);
+      assert.strictEqual(second.started, true);
+      children[1].pid = undefined;
+      assert.strictEqual(sched.cancelRun(second.runId), true);
+      children[1].emit('close', null);
+      assert.strictEqual(events.filter(e => e.name === 'routine_run')[1].fields.d.status, 'cancelled', 'the cancelled arm');
+      assert.strictEqual(sched.routineState[KEY], undefined, 'and still nothing in the state slot');
     });
   });
 });
@@ -516,7 +529,7 @@ describe('the roster carries whether a run is in flight, stamped beside the refu
         assert.strictEqual(r.refusal, null, 'and the refusal is stamped beside it');
         shared.runningRuns = () => [{ id: 'x', key: KEY, agent: AGENT, routine: ROUTINE, startedAt: NOW.toISOString(), trigger: 'manual' }];
         r = rosterRoutine();
-        assert.deepStrictEqual(r.running, { trigger: 'manual', startedAt: NOW.toISOString() }, 'a pressed run in flight reaches the roster with the word that says it was pressed');
+        assert.deepStrictEqual(r.running, { trigger: 'manual' }, 'a pressed run in flight reaches the roster with the word that says it was pressed, and nothing no reader consumes');
         shared.runningRuns = () => [{ id: 'y', key: KEY, agent: AGENT, routine: ROUTINE, startedAt: NOW.toISOString(), trigger: 'scheduled' }];
         assert.strictEqual(rosterRoutine().running.trigger, 'scheduled');
         shared.runningRuns = () => [{ id: 'z', key: 'someone:else', agent: 'someone', routine: 'else', startedAt: NOW.toISOString(), trigger: 'manual' }];

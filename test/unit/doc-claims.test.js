@@ -721,7 +721,7 @@ describe('ROUTINES.md: running a routine now, and consent as change-consent', ()
   const runDetail = require('../../public/run-detail-model.js');
   const section = routinesDoc.slice(
     routinesDoc.indexOf('### Running a routine now'),
-    routinesDoc.indexOf('Rundock runs each routine by spawning'),
+    routinesDoc.indexOf('### Routines run for the workspace that is open'),
   );
 
   test('the section exists and names the control the row draws', () => {
@@ -755,13 +755,38 @@ describe('ROUTINES.md: running a routine now, and consent as change-consent', ()
       'the page carries the row\'s own words for a run in flight, from the model');
   });
 
-  test('a manual run moves no schedule: the page says so and the scheduler leaves the guard alone', () => {
+  test('a manual run moves no schedule: the page says so, and the scheduler\'s own answers are the same before, during and after', () => {
     assert.match(section, /moves no schedule/i);
-    // Proven where the run is driven (test/unit/run-now.test.js); here the
-    // two writers are read for the conditional that keeps it true.
-    const src = fs.readFileSync(path.join(ROOT, 'lib', 'scheduler.js'), 'utf-8');
-    assert.strictEqual((src.match(/if \(run\.trigger !== 'manual'\) \{\s*\n\s*recordRoutineRun\(/g) || []).length, 2,
-      'both state writes are gated on the run not being a press');
+    // The run is driven through the entry the row's message uses, in a
+    // private scheduler whose child is a fake, and the guard is read back
+    // from the scheduler itself: a trigger that stopped reaching the writers
+    // as manual would move both answers.
+    const key = require.resolve('../../lib/scheduler.js');
+    const claude = require('../../lib/runtime/claude.js');
+    const dir = useWorkspace({ agents: { piper: require('../helpers/workspace.js').agentFile({ name: 'piper', type: 'specialist', order: 1,
+      routines: [{ name: 'digest', schedule: 'every day at 07:00', prompt: 'go', enabled: true }] }) } });
+    const cached = require.cache[key]; delete require.cache[key];
+    const realSpawn = claude.spawnClaude;
+    const prevDeps = claude.wireClaudeRuntimeDeps({ getActualPort: () => 0 });
+    const children = [];
+    claude.spawnClaude = () => { const c = new (require('node:events').EventEmitter)(); c.kill = () => {}; children.push(c); return c; };
+    try {
+      const sched = require(key);
+      sched.wireSchedulerDeps({ now: () => new Date(2026, 7, 20, 6, 30), getWssClients: () => [] });
+      sched.recordRoutineRun('piper:digest', { lastRun: new Date(2026, 7, 19, 7, 0, 5).toISOString(), status: 'completed', duration: 3 });
+      require('../../lib/agents/discovery.js').invalidateAgentCache();
+      const agent = require('../../lib/agents/discovery.js').discoverAgents().find(a => a.id === 'piper');
+      const read = () => [JSON.stringify(sched.routineState['piper:digest']), String(sched.nextRunFor('piper:digest', 'every day at 07:00'))];
+      const before = read();
+      assert.strictEqual(sched.runRoutineNow(agent, agent.routines[0], 'piper:digest').started, true);
+      assert.deepStrictEqual(read(), before, 'while the pressed run is going');
+      children[0].emit('close', 0);
+      assert.deepStrictEqual(read(), before, 'and after it closed');
+      assert.strictEqual(sched.readRunRecords()[0].trigger, 'manual', 'and the run that happened is on record as pressed');
+    } finally {
+      claude.spawnClaude = realSpawn; claude.wireClaudeRuntimeDeps(prevDeps);
+      delete require.cache[key]; if (cached) require.cache[key] = cached;
+    }
   });
 
   test('the two paused states on the page carry the model\'s own labels, and bind to different acts', () => {

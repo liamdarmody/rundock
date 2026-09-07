@@ -55,7 +55,7 @@ const MUTATIONS = [
     "  if (routine.paused) { refuse(`Routine \"${name}\" is paused.`, 'paused'); return; }\n  const key = `${agent.id}:${routine.name}`;\n  let answer;"],
   // ===== THE ROSTER CARRIES THE IN-FLIGHT FACT, AND THE ROW READS IT =====
   [DISCOVERY, 'the roster carries whether a run is in flight',
-    "        r.running = going ? { trigger: going.trigger === 'manual' ? 'manual' : 'scheduled', startedAt: going.startedAt } : null;",
+    "        r.running = going ? { trigger: going.trigger } : null;",
     "        r.running = null;"],
   [VIEW, 'the row hands the in-flight fact to the model rather than deriving it',
     "    running: r.running,\n",

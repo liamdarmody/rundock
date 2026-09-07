@@ -1037,20 +1037,17 @@
    * @param {{enabled?: boolean}} [input]
    */
   /**
-   * The one-tap approval, on the row of a routine whose plan awaits it.
+   * The sentence and label for a row whose consent has lapsed, or nothing.
+   * Answers both pausedState (the consent-paused state) and nextRunLabel
+   * (no next run is promised on such a row).
    *
-   * SHOWN ONLY ON THE PUBLISHED WORD. The scheduler is the party that decides
-   * whether a plan is approved (the hash comparison lives beside the tick),
-   * and the row consumes its published refusal rather than growing a second
-   * copy of the rule. A roster without the field draws no approval line,
-   * which is the honest reading of a server that predates the feature:
-   * nothing on it can be unapproved.
-   *
-   * THE SENTENCE NAMES THE PLAN, because approving is consenting to what
-   * will happen: which skill or instruction, and where it runs. It does not
-   * promise a files list; what a run touched is recorded after the fact on
-   * the run record, and promising a prediction this release cannot make
-   * would be the garbled-card class again.
+   * SHOWN ONLY ON THE PUBLISHED WORD. The scheduler decides whether a plan is
+   * approved (the hash comparison lives beside the tick), and the row
+   * consumes its published refusal rather than growing a second copy of the
+   * rule. A roster without the field draws no consent line, the honest
+   * reading of a server that predates the feature. The sentence names that
+   * what the routine runs has changed; the plan itself is the row's first
+   * line, so it is not repeated here.
    */
   function approvalOffer(input) {
     if (!input || input.refusal !== 'approval') return null;
@@ -1096,11 +1093,8 @@
    */
   function liveRun(input) {
     if (!input) return null;
-    if (input.running) {
-      const manual = input.running.trigger === 'manual';
-      return { text: manual ? RUNNING_WORDS.manual : RUNNING_WORDS.scheduled, manual };
-    }
-    if (input.lastRunStatus === 'running') return { text: RUNNING_WORDS.scheduled, manual: false };
+    if (input.running) return { text: input.running.trigger === 'manual' ? RUNNING_WORDS.manual : RUNNING_WORDS.scheduled };
+    if (input.lastRunStatus === 'running') return { text: RUNNING_WORDS.scheduled };
     return null;
   }
 

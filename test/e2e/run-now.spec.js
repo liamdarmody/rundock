@@ -4,9 +4,14 @@
 //
 // THE STUB RUNTIME HAS TO BE THE ONE THE SERVER RESOLVES. The E2E launcher
 // puts it first on the server's PATH; this spec still asks the server what it
-// resolved, through runtime_status, and refuses to press unless the answer
-// is the stub, because a real agent would otherwise run with permissions
-// skipped.
+// resolved and fails, rather than skipping, if the answer is not the stub,
+// because a real agent would otherwise run with permissions skipped.
+//
+// THE SCHEDULER IS LIVE ON THE REAL CLOCK and a daily routine with no history
+// is due the moment its time has passed today, so the routine is given a
+// weekly slot three days out and the server's own next-run instant is
+// asserted to be in the future before anything is pressed: the pressed run
+// is the only run of this routine the spec can observe.
 const { test, expect } = require('@playwright/test');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -16,6 +21,8 @@ const WebSocket = require('ws');
 const STUB_VERSION = '0.0.0-stub';
 const PORT = Number(process.env.E2E_PORT || 34517);
 const ROUTINE = 'Pressed check';
+const WEEKDAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+const SCHEDULE = `every ${WEEKDAYS[(new Date().getDay() + 3) % 7]} at 07:00`;
 const PROMPT = 'pressed e2e body';
 
 // One WS session from the test's own process: learns the workspace the
@@ -36,7 +43,7 @@ function overWs(fn) {
 }
 
 test('pressing Run disables the control while the stub runtime runs, and the row comes back afterwards', async ({ page }) => {
-  const { workspace, version } = await overWs(async ({ send, waitFor }) => {
+  const { workspace, version, nextRun } = await overWs(async ({ send, waitFor }) => {
     send({ type: 'get_runtime_status' });
     const status = await waitFor(m => m.type === 'runtime_status');
     const version = status.claude && status.claude.version;
@@ -46,11 +53,14 @@ test('pressing Run disables the control while the stub runtime runs, and the row
     fs.writeFileSync(path.join(set.current, 'stub-scenario.json'), JSON.stringify({
       rules: [{ match: { agent: 'penn', promptIncludes: PROMPT }, delayMs: 3000, turn: [{ text: 'pressed run ran' }] }],
     }));
-    send({ type: 'save_routine', agentId: 'penn', routine: { name: ROUTINE, schedule: 'every day at 07:00', prompt: PROMPT, runOn: 'local' } });
+    send({ type: 'save_routine', agentId: 'penn', routine: { name: ROUTINE, schedule: SCHEDULE, prompt: PROMPT, runOn: 'local' } });
     await waitFor(m => m.type === 'routine_saved' && m.name === ROUTINE);
-    return { workspace: set.current, version };
+    const roster = await waitFor(m => m.type === 'agents' && m.agents.some(a => (a.routines || []).some(r => r.name === ROUTINE)));
+    const row = roster.agents.find(a => a.id === 'penn').routines.find(r => r.name === ROUTINE);
+    return { workspace: set.current, version, nextRun: row.nextRun };
   });
-  test.skip(version !== STUB_VERSION, `the server resolved claude ${version}, not the stub, so nothing is pressed`);
+  expect(version, 'the server must resolve the stub runtime, or nothing may be pressed').toBe(STUB_VERSION);
+  expect(new Date(nextRun).getTime(), 'the server must not be able to bring this routine due during the spec').toBeGreaterThan(Date.now() + 60 * 60 * 1000);
   expect(fs.existsSync(path.join(workspace, '.claude', 'agents', 'penn.md'))).toBe(true);
   await page.goto('/');
   await page.click('.nav-item[data-nav="routines"]');
