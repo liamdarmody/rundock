@@ -181,3 +181,87 @@ describe('two workspaces, two keys', () => {
     assert.deepStrictEqual(Object.keys(homeFile()), [store.workspaceKey(keep)]);
   });
 });
+
+describe('the protocol reaches the store', () => {
+  function captureWs() {
+    const sent = [];
+    return { sent, send: (m) => sent.push(JSON.parse(m)), readyState: 1 };
+  }
+  // The guard the root injects, in the shape the root writes it.
+  function realGuard(dir) {
+    return (p) => { const root = path.resolve(dir); const r = path.resolve(p); return r === root || r.startsWith(root + path.sep); };
+  }
+
+  let originalWorkspace;
+  beforeEach(() => { originalWorkspace = config.getWorkspace(); });
+  afterEach(() => { config.setWorkspace(originalWorkspace); });
+
+  test('get_pins, pin_file and unpin_file each reply pins with the full list for the current workspace', () => {
+    const ws = makeWorkspace({ 'a.md': '', 'notes/b.md': '' });
+    config.setWorkspace(ws);
+    const table = buildDispatch();
+    const ctx = { workspace: { isInsideWorkspace: realGuard(ws) } };
+
+    const w1 = captureWs();
+    table.get_pins(ctx, w1, { type: 'get_pins' });
+    assert.deepStrictEqual(w1.sent, [{ type: 'pins', pins: [] }]);
+
+    const w2 = captureWs();
+    table.pin_file(ctx, w2, { type: 'pin_file', path: 'notes/b.md' });
+    table.pin_file(ctx, w2, { type: 'pin_file', path: 'a.md' });
+    assert.deepStrictEqual(w2.sent, [
+      { type: 'pins', pins: ['notes/b.md'] },
+      { type: 'pins', pins: ['notes/b.md', 'a.md'] },
+    ]);
+
+    const w3 = captureWs();
+    table.unpin_file(ctx, w3, { type: 'unpin_file', path: 'notes/b.md' });
+    assert.deepStrictEqual(w3.sent, [{ type: 'pins', pins: ['a.md'] }]);
+    assert.deepStrictEqual(store.loadPins(ws), ['a.md'], 'the reply is what the store holds');
+  });
+
+  test('a pin_file whose path resolves outside the workspace is refused with no write', () => {
+    const ws = makeWorkspace({ 'a.md': '' });
+    config.setWorkspace(ws);
+    const table = buildDispatch();
+    // The injected guard says no, in the shape every other handler test uses.
+    const refusing = { workspace: { isInsideWorkspace: () => false } };
+    const w1 = captureWs();
+    table.pin_file(refusing, w1, { type: 'pin_file', path: 'a.md' });
+    assert.deepStrictEqual(w1.sent, [{ type: 'pins', pins: [] }], 'the reply is the list as it was');
+    assert.ok(!fs.existsSync(store.pinsFile()), 'a refusal writes nothing, not even an empty file');
+
+    // And the real guard refuses a traversal on its own.
+    const w2 = captureWs();
+    table.pin_file({ workspace: { isInsideWorkspace: realGuard(ws) } }, w2, { type: 'pin_file', path: '../outside.md' });
+    assert.deepStrictEqual(w2.sent, [{ type: 'pins', pins: [] }]);
+    assert.ok(!fs.existsSync(store.pinsFile()));
+  });
+
+  test('a pin_file for a path that is not a file in the workspace is refused too', () => {
+    const ws = makeWorkspace({ 'a.md': '', 'notes/b.md': '' });
+    config.setWorkspace(ws);
+    const table = buildDispatch();
+    const ctx = { workspace: { isInsideWorkspace: realGuard(ws) } };
+    const w = captureWs();
+    table.pin_file(ctx, w, { type: 'pin_file', path: 'missing.md' });
+    table.pin_file(ctx, w, { type: 'pin_file', path: 'notes' });
+    table.pin_file(ctx, w, { type: 'pin_file', path: '' });
+    assert.deepStrictEqual(w.sent, [
+      { type: 'pins', pins: [] }, { type: 'pins', pins: [] }, { type: 'pins', pins: [] },
+    ]);
+    assert.ok(!fs.existsSync(store.pinsFile()));
+  });
+
+  test('with no workspace set, every message answers an empty list and writes nothing', () => {
+    config.setWorkspace(null);
+    const table = buildDispatch();
+    const ctx = { workspace: { isInsideWorkspace: () => true } };
+    const w = captureWs();
+    table.get_pins(ctx, w, { type: 'get_pins' });
+    table.pin_file(ctx, w, { type: 'pin_file', path: 'a.md' });
+    table.unpin_file(ctx, w, { type: 'unpin_file', path: 'a.md' });
+    assert.deepStrictEqual(w.sent, [{ type: 'pins', pins: [] }, { type: 'pins', pins: [] }, { type: 'pins', pins: [] }]);
+    assert.ok(!fs.existsSync(store.pinsFile()));
+  });
+});
