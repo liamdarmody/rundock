@@ -1587,3 +1587,64 @@ describe('every safety claim on the trust card is computed from a host fact the 
   });
 });
 
+describe('a reply is matched to the request that produced it, by operation and token', () => {
+  test('an uninstall error and an update-check error arriving mid-install leave the install state deep-equal to before, at the wire', () => {
+    withWorkspace(() => {
+      const snap = extensionSnapshot();
+      const previousDeps = handlers.wireExtensionDeps({ acquire: () => snap, listRefs: () => { throw new Error('no remote in this test'); } });
+      try {
+        const sock = captureWs();
+        handlers.handlePlanPackageInstall({}, sock, { type: 'plan_package_install', url: 'someone/test-ext', reference: 'v1.0.0' });
+        const token = sock.sent[0].token;
+        const installing = model.confirm(model.reply(model.submit(model.initial(), 'someone/test-ext', 'v1.0.0').state, sock.sent[0]).state).state;
+        const before = JSON.parse(JSON.stringify(installing));
+
+        handlers.handleUninstallExtension({}, sock, { type: 'uninstall_extension', name: 'ghost' });
+        const uninstallError = sock.sent[1];
+        assert.strictEqual(uninstallError.type, 'package_install_error');
+        assert.strictEqual(uninstallError.operation, 'uninstall');
+        assert.strictEqual(model.reply(installing, uninstallError).state, installing, 'not this flow\'s answer: identity, nothing redrawn');
+        handlers.handleCheckExtensionUpdate({}, sock, { type: 'check_extension_update', name: 'ghost' });
+        assert.strictEqual(model.reply(installing, sock.sent[2]).state, installing);
+        assert.strictEqual(model.reply(installing, { type: 'package_install_error', operation: 'install', token: 'pkg-someone-else', message: 'x' }).state, installing,
+          'the right operation under another token is another request\'s answer');
+        assert.deepStrictEqual(installing, before, 'and the state was never mutated in place');
+
+        handlers.handleConfirmExtensionInstall({}, sock, { type: 'confirm_extension_install', token });
+        assert.strictEqual(model.reply(installing, sock.sent[3]).state.phase, 'done', 'the install\'s own answer still lands');
+      } finally {
+        handlers.wireExtensionDeps(previousDeps);
+      }
+    });
+  });
+});
+
+describe('consent binds to the workspace it was shown against, on the client too', () => {
+  test('the shell\'s serving-workspace writer returns the flow to its start when another window moved the server', () => {
+    withWorkspace(() => {
+      const shell = settingsShell();
+      const previousDeps = handlers.wireExtensionDeps({ acquire: () => extensionSnapshot() });
+      try {
+        shell.submit('someone/test-ext', 'v1.0.0');
+        const sock = captureWs();
+        handlers.handlePlanPackageInstall({}, sock, shell.sent[0]);
+        shell.dispatch(sock.sent[0]);
+        assert.ok(shell.content().querySelector('.extension-trust-card'), 'sanity: the trust step is on screen');
+        // The shell's own writer, cut out of app.js and run with the view's
+        // reset in scope, exactly as the dispatch case calls it.
+        const found = /(function setServingWorkspace\(path\) \{[\s\S]*?\n\})/.exec(APP_SRC);
+        assert.ok(found, 'app.js no longer carries the serving-workspace writer');
+        const writer = new Function('packagesServingWorkspaceChanged', `let servingWorkspacePath = null; ${found[1]}; return setServingWorkspace;`)(shell.view.packagesServingWorkspaceChanged);
+        writer(global.currentWorkspacePath);
+        assert.ok(shell.content().querySelector('.extension-trust-card'), 'the server still serving this window\'s workspace changes nothing');
+        writer(global.currentWorkspacePath + '-elsewhere');
+        assert.strictEqual(shell.content().querySelector('.extension-trust-card'), null, 'the trust step left the screen');
+        assert.strictEqual(shell.content().querySelector('#packages-source-link').disabled, false, 'and the flow is at its start');
+        assert.strictEqual(shell.content().querySelector('#packages-source-link').value, '');
+      } finally {
+        handlers.wireExtensionDeps(previousDeps);
+        shell.release();
+      }
+    });
+  });
+});

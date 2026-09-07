@@ -189,6 +189,20 @@ const MUTATIONS = [
     `    const record = installExtension(workspace, pending.snapshot, pending.plan);
     if (pending.content) applyImport(workspace, pending.snapshot, require('../../../public/packages-install-model.js').allAddApproval(pending.content), {});`],
 
+  // ===== A REPLY IS MATCHED TO THE REQUEST THAT PRODUCED IT =====
+  // Restore type-only routing and an uninstall's error, arriving while an
+  // install is in flight, is read as that install's answer and drives its
+  // state machine into failed.
+  [MODEL, 'a reply is matched by operation and token, never by type alone',
+    '    if (!correlated(state, msg)) return { state };\n',
+    ''],
+  // Ignore the served workspace and a trust step read against this window's
+  // workspace stays on screen after another window moved the server, with a
+  // confirm the server would refuse.
+  [SETTINGS_VIEW, 'a switch announced from another window returns the flow to its start',
+    "  if (typeof currentWorkspacePath === 'undefined' || servingPath === currentWorkspacePath) return;",
+    '  return;'],
+
   // ===== THE TRUST STEP TELLS THE TRUTH =====
   // Drop the no-review sentence and the screen implies a vetting nobody did.
   [MODEL, 'the trust step says Rundock does not review extensions',
