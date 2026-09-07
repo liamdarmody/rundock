@@ -388,6 +388,81 @@ describe('handler seams (stub ctx, capture ws)', () => {
     }
   });
 
+  test('the file tree lists a file whose extension an enabled record claims, and stops when the record is disabled or removed', () => {
+    const files = {
+      'notes.md': '# notes',
+      'sales.csv': 'a,b\n1,2\n',
+      'data/more.csv': 'c,d\n',
+      'data/readme.txt': 'plain',
+      'script.py': 'print(1)',
+    };
+    const names = (tree) => tree.flatMap((n) => (n.type === 'folder' ? names(n.children) : [n.path])).sort();
+    const build = (store) => {
+      const dir = extensionWorkspace({ ...files, ...store });
+      try { return names(srv.getFileTree(dir)); } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+    };
+    const withStore = (rec) => ({
+      [RECORDS_FILE]: records(rec),
+      [`${EXT_DIR}/rundock.json`]: manifest({ entry: 'index.js', match: '*.csv' }),
+      [`${EXT_DIR}/index.js`]: 'draw();',
+    });
+    assert.deepStrictEqual(build({}), ['data/readme.txt', 'notes.md'],
+      'with no record the built-in kinds alone are listed: never csv, never code');
+    assert.deepStrictEqual(build(withStore(record())), ['data/more.csv', 'data/readme.txt', 'notes.md', 'sales.csv'],
+      'an enabled record claiming *.csv lists every csv, at any depth');
+    assert.deepStrictEqual(build(withStore(record({ enabled: false }))), ['data/readme.txt', 'notes.md'],
+      'a disabled record claims nothing for the tree');
+    assert.deepStrictEqual(build({ [RECORDS_FILE]: records() }), ['data/readme.txt', 'notes.md'],
+      'a removed record claims nothing for the tree');
+    assert.deepStrictEqual(build({ [RECORDS_FILE]: 'not json' }), ['data/readme.txt', 'notes.md'],
+      'an unreadable roster claims nothing; the tree still stands');
+    assert.strictEqual(typeof srv.noteExtensionRecordsChanged, 'function', 'the invalidation the install and manage flows call');
+    assert.strictEqual(typeof srv.wsHandlerContext.workspace.noteExtensionRecordsChanged, 'function',
+      'reachable through ctx.workspace, the way handlers reach every root file cache');
+  });
+
+  test('a records change alone makes the cached tree stale, and the invalidation call covers a change the stat cannot see', () => {
+    // The records file lives under a dot directory the tree never walks, so
+    // no directory mtime says it changed. The freshness pass stats the file
+    // itself; the install and manage flows call noteExtensionRecordsChanged
+    // as well, which is what catches a rewrite that lands on the same mtime.
+    const original = config.getWorkspace();
+    const dir = extensionWorkspace({
+      'sales.csv': 'a,b\n',
+      'notes.md': '# notes',
+      [RECORDS_FILE]: records(record()),
+      [`${EXT_DIR}/rundock.json`]: manifest({ entry: 'index.js', match: '*.csv' }),
+      [`${EXT_DIR}/index.js`]: 'draw();',
+    });
+    const recordsFile = path.join(dir, RECORDS_FILE);
+    const names = (tree) => tree.map((n) => n.path).sort();
+    const cached = () => srv.wsHandlerContext.workspace.getFileTreeCached();
+    try {
+      srv.setWorkspace(dir);
+      assert.deepStrictEqual(names(cached()), ['notes.md', 'sales.csv']);
+      assert.strictEqual(cached(), cached(), 'an unchanged store is a cache hit by identity');
+      // Disable the record; the file's mtime moves and nothing else does.
+      fs.writeFileSync(recordsFile, records(record({ enabled: false })));
+      const later = new Date(fs.statSync(recordsFile).mtimeMs + 5000);
+      fs.utimesSync(recordsFile, later, later);
+      assert.deepStrictEqual(names(cached()), ['notes.md'],
+        'the next read rebuilt from the records file alone, with no directory change and no call');
+      // Re-enable, but pin the mtime to the value the cache recorded (a whole
+      // millisecond, so the pin is exact) so the stat cannot see it: only the
+      // explicit call can.
+      fs.writeFileSync(recordsFile, records(record()));
+      fs.utimesSync(recordsFile, later, later);
+      assert.deepStrictEqual(names(cached()), ['notes.md'], 'same mtime reads as fresh');
+      srv.noteExtensionRecordsChanged();
+      assert.deepStrictEqual(names(cached()), ['notes.md', 'sales.csv'],
+        'the call the install and manage flows make rebuilds at once');
+    } finally {
+      srv.setWorkspace(null);
+      config.setWorkspace(original);
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test('get_extension_ui serves the entry from the install store, and refuses cleanly on every bad input', () => {
     const table = buildDispatch();
     const original = config.getWorkspace();

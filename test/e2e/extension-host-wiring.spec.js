@@ -6,10 +6,12 @@
 // .claude/rundock/extensions/csv-echo/) exactly the way the install flow
 // writes them. Its entry says ready, writes the content it receives in init
 // into the frame, and offers a button that asks the host to open a sibling.
-// The spec opens a .csv through the file tree and reads the frame; then
-// flips the record to enabled: false, re-hydrates, and reads the plain
-// surface. Nothing here is stubbed: roster, transport, mount, teardown and
-// the open route all run through the real socket.
+// The spec opens a .csv through the file tree (which lists it only because
+// an enabled record claims it) and reads the frame; then flips the record to
+// enabled: false, re-hydrates, sees the tree stop listing the file, opens it
+// by exact path, and reads the plain surface. Nothing here is stubbed:
+// roster, tree, transport, mount, teardown and the open route all run
+// through the real socket.
 const base = require('@playwright/test');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -133,7 +135,14 @@ test('with the record disabled, the same file renders the plain surface after re
     return r ? r.rendererFor('sales.csv').registered : null;
   })).toBe(false);
 
-  await openFromTree(page, 'sales.csv');
+  // With the record disabled the tree no longer lists the file at all: the
+  // tree lists what an enabled record claims, and nothing else renders csv.
+  await page.locator('.nav-item[data-nav="files"]').click();
+  await expect(page.locator('.file-item', { hasText: 'Roadmap-2026.md' }).first()).toBeVisible();
+  await expect(page.locator('.file-item', { hasText: 'sales.csv' })).toHaveCount(0);
+  // Opened by its exact path, the way a wikilink or the palette would, the
+  // file renders the plain surface with no frame in the pane.
+  await page.evaluate(() => openWorkspaceFilePath('sales.csv'));
   await expect(page.locator('#editor-content .viewer-unsupported')).toBeVisible();
   await expect(page.locator('#editor-content iframe.extension-frame')).toHaveCount(0);
   expect(await page.evaluate(() => currentFilePath)).toBe('sales.csv');

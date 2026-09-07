@@ -39,6 +39,9 @@ const APP = { src: path.join(ROOT, 'public', 'app.js'), suite: 'test/unit/host-w
 const FILES = { src: path.join(ROOT, 'public', 'views', 'files.js'), suite: 'test/unit/host-wiring.test.js' };
 const REGISTRY = { src: path.join(ROOT, 'public', 'renderer-registry.js'), suite: 'test/unit/host-wiring.test.js' };
 const SHEET = { src: path.join(ROOT, 'public', 'styles', 'components', 'extension-frame.css'), suite: 'test/unit/host-wiring.test.js' };
+// The file tree's filter, watched by the handler suite that builds a tree
+// over a workspace carrying the install store.
+const TREE = { src: path.join(ROOT, 'server.js'), suite: 'test/unit/protocol-handlers-lib.test.js' };
 
 const MUTATIONS = [
   // ===== ONE STORE =====
@@ -73,6 +76,17 @@ const MUTATIONS = [
   [SERVER, 'the one renderer id is the only one served',
     '  if (rendererId !== RENDERER_ID) {',
     '  if (false) {'],
+
+  // Restore the fixed filter and a file an installed extension renders is
+  // never listed, so the roster's claim can never be opened from the tree.
+  [TREE, 'the tree lists what an enabled record claims, beside the built-in kinds',
+    '      } else if (VIEWABLE_FILE_RE.test(item.name) || (claimed && claimed.test(item.name))) {',
+    '      } else if (VIEWABLE_FILE_RE.test(item.name)) {'],
+  // Stop the freshness pass reading the records file and a disabled record
+  // goes on being listed until some directory happens to change.
+  [TREE, 'a records change alone makes the cached tree stale',
+    '  if (_treeCache.records !== extensionRecordsMtime()) return false;\n',
+    ''],
 
   // ===== THE INIT MESSAGE =====
   // Strip the file from init and a renderer has nothing to render.
@@ -205,7 +219,7 @@ function redTests(suite) {
 }
 
 function run() {
-  const targets = [SERVER, HOST, APP, FILES, REGISTRY, SHEET];
+  const targets = [SERVER, HOST, APP, FILES, REGISTRY, SHEET, TREE];
   const session = beginMutationRun({ files: [...new Set(targets.map((t) => t.src))] });
   const originals = new Map();
   for (const target of targets) originals.set(target, session.original(target.src));

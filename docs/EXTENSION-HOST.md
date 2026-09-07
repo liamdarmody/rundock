@@ -146,3 +146,8 @@ The roster itself is read from the install store: one entry per record in
 `rundock.json` (`extension.entry`, `extension.match`), with a match of the
 form `*.<ext>` mapped to the registry target `.<ext>` and any other rule
 reported on the roster as a named refusal rather than a claim.
+
+The file tree lists a file whose extension an enabled record claims, beside
+the kinds Rundock renders itself, and stops listing it when the record is
+disabled or removed; the tree reads the same roster reader at build time,
+and a records change makes the cached tree stale on the next read or poll.
