@@ -198,6 +198,19 @@ describe('the protocol boundary', () => {
     assert.deepStrictEqual(tree(workspace), before);
   });
 
+  test('the evaluate handler and applyImport reach the evaluator through one function, and agree', () => {
+    const { workspace, sourceRoot } = fixture();
+    const { evaluateApproval, applyImport } = require('../../lib/packages/import-apply.js');
+    const approval = decide(planVia(sourceRoot), { 'agent:scribe': 'add', 'skill:writer': 'overwrite' });
+    const buckets = (r) => JSON.parse(JSON.stringify(
+      { status: r.status, writes: r.writes, unchanged: r.unchanged, skipped: r.skipped, blocked: r.blocked, stale: r.stale }));
+    const direct = buckets(evaluateApproval(workspace, sourceRoot, approval));
+    assert.strictEqual(direct.writes.length, 2);
+    const viaHandler = dispatchJson('evaluate_package_decisions', { requestId: 'r2', sourcePath: sourceRoot, approval });
+    assert.deepStrictEqual(buckets(viaHandler), direct);
+    assert.deepStrictEqual(buckets(applyImport(workspace, sourceRoot, approval, { receipt: {} })), direct);
+  });
+
   test('the receipt is the complete record of a mixed-outcome apply', () => {
     const workspace = makeTempDir('proto-ws-');
     const sourceRoot = makeTempDir('proto-src-');
