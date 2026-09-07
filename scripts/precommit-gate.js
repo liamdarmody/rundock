@@ -404,7 +404,18 @@ function writeRecord(record, file = RECORD) {
 
 /** The record `run()` would write for this tree and branch. */
 function buildRecord({ tree, branch, at }) {
-  return { tree, branch, at, steps: STEPS.map(s => s.name) };
+  // THE SCOPE THE MUTATION STEP RAN UNDER travels with the record. That step
+  // no longer runs every harness: it runs the ones the change can affect and
+  // names the rest. A record saying the step passed, without saying what it
+  // covered, would be a pass taken on trust, so the scope is carried here and
+  // its absence is recorded as plainly as its contents.
+  let mutationScope = null;
+  try {
+    mutationScope = JSON.parse(fs.readFileSync(path.join(ROOT, '.mutation-scope.json'), 'utf-8'));
+  } catch (e) {
+    mutationScope = { unavailable: 'the mutation step recorded no scope' };
+  }
+  return { tree, branch, at, steps: STEPS.map(s => s.name), mutationScope };
 }
 
 // The release commit's footprint.
