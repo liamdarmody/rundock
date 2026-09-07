@@ -205,10 +205,143 @@ function connect() {
   ws = new WebSocket(`${p}//${location.host}`);
   ws.onopen = () => { setConn('connected'); ws.send(JSON.stringify({type:'get_workspaces'})); };
   ws.onmessage = e => handle(JSON.parse(e.data));
-  ws.onclose = () => { setConn('disconnected'); packagesConnectionLost(); setTimeout(connect, 2000); };
+  ws.onclose = () => { setConn('disconnected'); packagesConnectionLost(); extensionFetchesConnectionLost(); setTimeout(connect, 2000); };
   ws.onerror = () => {}; // Prevent unhandled error; onclose fires next
 }
 function setConn(s) { const b=document.getElementById('connection-bar'); b.className=`connection-bar ${s}`; b.textContent=s==='connected'?'Connected':s==='disconnected'?'Disconnected. Reconnecting...':'Connecting...'; if(s==='connected')setTimeout(()=>b.style.display='none',2000); else b.style.display='block'; }
+
+// ===== 3b. EXTENSION HOST WIRING =====
+//
+// The three joins between the sandboxed extension host and the running
+// client: the roster hydrates the renderer registry the file view's seam
+// reads, a transport fetches a renderer's payload over the socket, and every
+// roster arrival reconciles the live mount (reconcileExtensionMount, in the
+// file view, which owns the mount). The seam reads two globals,
+// window.rundockRendererRegistry and window.rundockExtensionUiFetcher, and
+// this section is the only product code that assigns them.
+
+// How long a payload fetch waits for its reply before the seam is told to
+// draw the plain surface instead. The seam holds the pane blank until the
+// fetch settles, so a reply that never comes must still settle it.
+const EXTENSION_UI_TIMEOUT_MS = 15000;
+
+// Each roster arrival takes the next number; the registry it builds is
+// installed only if no later roster has arrived since, because the registry
+// module loads asynchronously and two rosters in flight can resolve out of
+// order. The last roster is the truth, whatever order the promises settle.
+let extensionRosterSeq = 0;
+
+// Fetches waiting on a reply, keyed by extension id plus renderer id, so
+// two fetches in flight each get the reply that names them.
+const extensionUiWaiters = new Map();
+
+// The registry module is an ES module the classic client script reaches by
+// dynamic import. Overridable so the wiring can be driven in a test without
+// a real import against a URL.
+function loadRendererRegistryModule() {
+  const loader = window.rundockRendererRegistryLoader;
+  if (typeof loader === 'function') return Promise.resolve(loader());
+  return import('/renderer-registry.js');
+}
+
+// Build a registry with the module's own constructor and install it on the
+// global, unless a later roster has arrived meanwhile. Resolves with the
+// registry installed, or null when superseded.
+function installRendererRegistry(build) {
+  const seq = ++extensionRosterSeq;
+  return loadRendererRegistryModule().then((mod) => {
+    if (seq !== extensionRosterSeq) return null;
+    const registry = build(mod);
+    window.rundockRendererRegistry = registry;
+    return registry;
+  });
+}
+
+// A roster reply: the new workspace's registry REPLACES the previous one
+// rather than merging into it, and the live mount is reconciled against the
+// roster once the registry stands, so a mounted extension that the roster
+// no longer names, or names disabled, is torn down.
+function extensionRosterArrived(d) {
+  const roster = Array.isArray(d.extensions) ? d.extensions : [];
+  return installRendererRegistry((mod) => {
+    const registry = mod.createRendererRegistry();
+    registry.registerFromRoster(roster);
+    return registry;
+  }).then((registry) => {
+    if (registry) reconcileExtensionMount(roster);
+    return registry;
+  });
+}
+
+// A roster error: an EMPTY registry carrying the reason, never the previous
+// workspace's registry, so every lookup answers "unregistered, because the
+// roster could not be read". The live mount is left alone: an unreadable
+// records file says nothing about the extension already on screen, and
+// tearing it down with a reason about its absence would state a falsehood.
+function extensionRosterFailed(d) {
+  const reason = d && typeof d.reason === 'string' && d.reason
+    ? d.reason : 'the extension roster could not be read';
+  return installRendererRegistry((mod) => mod.createRendererRegistry({ unavailable: reason }));
+}
+
+function extensionUiKey(extensionId, rendererId) {
+  return `${extensionId} ${rendererId}`;
+}
+
+// The transport the seam calls: send get_extension_ui, resolve with the
+// server's reply object forwarded as is. An extension_ui reply carries its
+// entry string, which is what the seam mounts; an extension_ui_error carries
+// a reason, which the seam shows beside the plain rendering. A reply that
+// never arrives, because the socket closed or the clock ran out, resolves
+// with a reason too, so the seam always settles.
+function requestExtensionUi(extensionId, rendererId, timeoutMs = EXTENSION_UI_TIMEOUT_MS) {
+  return new Promise((resolve) => {
+    const key = extensionUiKey(extensionId, rendererId);
+    const waiter = { settle: null, timer: null };
+    waiter.settle = (reply) => {
+      clearTimeout(waiter.timer);
+      const list = extensionUiWaiters.get(key);
+      if (list) {
+        const at = list.indexOf(waiter);
+        if (at >= 0) list.splice(at, 1);
+        if (list.length === 0) extensionUiWaiters.delete(key);
+      }
+      resolve(reply);
+    };
+    if (!extensionUiWaiters.has(key)) extensionUiWaiters.set(key, []);
+    extensionUiWaiters.get(key).push(waiter);
+    waiter.timer = setTimeout(() => {
+      waiter.settle({ extensionId, rendererId, reason: `no renderer payload arrived within ${timeoutMs}ms` });
+    }, timeoutMs);
+    try {
+      ws.send(JSON.stringify({ type: 'get_extension_ui', extensionId, rendererId }));
+    } catch (e) {
+      waiter.settle({ extensionId, rendererId, reason: `the renderer payload could not be requested: ${String(e && e.message || e)}` });
+    }
+  });
+}
+
+// An extension_ui or extension_ui_error reply: settle every fetch waiting
+// under the ids it names, and only those. A reply nothing waits for (a fetch
+// that already timed out) changes nothing.
+function extensionUiReplyArrived(d) {
+  const list = extensionUiWaiters.get(extensionUiKey(d.extensionId, d.rendererId));
+  if (!list) return;
+  for (const waiter of list.slice()) waiter.settle(d);
+}
+
+// The socket closed: no reply in flight is coming, so every waiting fetch is
+// settled with the reason now rather than left to the clock.
+function extensionFetchesConnectionLost() {
+  for (const list of [...extensionUiWaiters.values()]) {
+    for (const waiter of list.slice()) {
+      waiter.settle({ reason: 'the connection closed before the renderer payload arrived' });
+    }
+  }
+  extensionUiWaiters.clear();
+}
+
+window.rundockExtensionUiFetcher = requestExtensionUi;
 
 // ===== 4. MESSAGE HANDLING =====
 
@@ -216,6 +349,12 @@ function handle(d) {
   const convoId = d._conversationId;
   switch(d.type) {
     case 'package_import_plan': case 'package_import_result': case 'package_import_error': packagesReplyArrived(d); break;
+    // The extension host's joins: a roster hydrates the renderer registry,
+    // a payload reply settles the fetch that asked for it.
+    case 'extensions': extensionRosterArrived(d); break;
+    case 'extensions_error': extensionRosterFailed(d); break;
+    case 'extension_ui': extensionUiReplyArrived(d); break;
+    case 'extension_ui_error': extensionUiReplyArrived(d); break;
     case 'workspaces': handleWorkspaces(d); break;
     case 'workspace_set':
       // Start the clock on the renderer's share of opening a workspace. The
@@ -1509,6 +1648,10 @@ function onWorkspaceReady(dir, analysis, isEmpty, mode, scaffoldError, isSetupCo
   // Load workspace data
   ws.send(JSON.stringify({ type: 'get_agents' }));
   ws.send(JSON.stringify({ type: 'get_files' }));
+  // The installed-extension roster rides the same batch: a file opened from
+  // the tree consults the registry the roster builds, so the two must arrive
+  // together or the first open of a claimed file renders plain.
+  ws.send(JSON.stringify({ type: 'list_extensions' }));
   ws.send(JSON.stringify({ type: 'get_skills' }));
   ws.send(JSON.stringify({ type: 'get_conversations' }));
   ws.send(JSON.stringify({ type: 'get_lists' }));
