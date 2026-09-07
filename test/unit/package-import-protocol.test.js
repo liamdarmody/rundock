@@ -166,6 +166,15 @@ describe('the protocol boundary', () => {
     });
   }
 
+  test('evaluate_package_decisions refuses with one stamped reply when no workspace is open, echoing the requestId', () => {
+    config.setWorkspace(null);
+    const reply = dispatchJson('evaluate_package_decisions', { requestId: 'r3', sourcePath: '/nowhere', approval: {} });
+    // The echoed id is what lets the model's identity check match this
+    // refusal to the request that asked, rather than drop it as foreign.
+    assert.deepStrictEqual([reply.type, reply.operation, reply.requestId], ['package_import_error', 'evaluate', 'r3']);
+    assert.match(reply.message, /no workspace is open/);
+  });
+
   test('a replayed identical approval performs zero writes and writes no second receipt', () => {
     const { workspace, sourceRoot } = fixture();
     const approval = decide(planVia(sourceRoot), { 'agent:scribe': 'add', 'skill:writer': 'overwrite' });

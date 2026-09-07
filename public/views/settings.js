@@ -47,11 +47,17 @@ function packagesApplyTransition(out) {
   // says plainly that nothing went out.
   if (out.send) {
     if (!(ws && ws.readyState === WebSocket.OPEN)) {
-      packagesInstall = {
-        ...RundockPackagesInstallModel.initial(),
-        sourcePath: (packagesInstall && packagesInstall.sourcePath) || '',
-        fieldError: 'Not connected: nothing was sent. Try again once the connection returns.',
-      };
+      // A projection that could not be asked for must not cost the review:
+      // the plan and every decision stand, the new decision included, with
+      // no projection until one can be asked. Submit and confirm have no
+      // decision work to lose, so those still return the section to idle.
+      packagesInstall = out.send.type === 'evaluate_package_decisions'
+        ? { ...out.state, fieldError: 'Not connected: your decisions are kept, but the last one could not be checked. Try again once the connection returns.' }
+        : {
+          ...RundockPackagesInstallModel.initial(),
+          sourcePath: (packagesInstall && packagesInstall.sourcePath) || '',
+          fieldError: 'Not connected: nothing was sent. Try again once the connection returns.',
+        };
       packagesRenderIfVisible();
       return;
     }
@@ -117,10 +123,11 @@ function packagesReviewRowHtml(row) {
       <div class="packages-compare-side"><div class="packages-compare-label">What arrives</div><p>${esc(row.compare.arrives)}</p></div>
     </div>` : '';
   if (row.rowClass === 'blocked') {
+    // One action, one control: the toggle collapses to the disabled
+    // overwrite beside the reason, and skipping is offered once, by the
+    // notice's own action below.
     const toggle = !row.colliding ? '' : `<div class="packages-decision-toggle">
         <button class="packages-dt-btn packages-dt-blocked" disabled>Overwrite: blocked</button>
-        <button class="packages-dt-btn${row.decision === 'skip' ? ' packages-dt-selected' : ''}"
-          onclick="packagesSetDecision('${escAttr(row.id)}', 'skip')">Skip: keep yours</button>
       </div>`;
     return `${open}
         <div class="packages-item-top"><span class="packages-item-name">${esc(row.name)}</span>${kindTag}</div>
@@ -188,7 +195,7 @@ function packagesSectionHtml() {
   let stateHtml = '';
   if (st.phase === 'classifying') {
     stateHtml = `<div class="settings-card packages-state"><div class="packages-spinner"></div>Reading the package…</div>`;
-  } else if (st.phase === 'offer' && st.collisions.length === 0) {
+  } else if (st.phase === 'offer' && !st.review) {
     const copy = m.offerCopy(st);
     stateHtml = `<div class="settings-card packages-confirm-card">
         <div class="packages-headline">${esc(copy.headline)}</div>

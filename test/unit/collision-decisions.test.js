@@ -174,6 +174,7 @@ describe('the review opens with skip preselected, and nothing is silent', () => 
   test('a fresh collision is decided skip, and the projection is asked for through the wire', () => {
     const { offer, firstSend } = collidingScenario();
     assert.strictEqual(offer.phase, 'offer');
+    assert.strictEqual(offer.review, true, 'the model says which surface this offer is');
     assert.strictEqual(offer.decisions['agent:helper'], 'skip');
     assert.strictEqual(firstSend.type, 'evaluate_package_decisions');
     const row = model.reviewCopy(offer).rows.filter((r) => r.id === 'agent:helper')[0];
@@ -190,6 +191,7 @@ describe('the review opens with skip preselected, and nothing is silent', () => 
     });
     const out = model.reply(model.submit(model.initial(), sourceRoot).state, planMsg);
     assert.strictEqual(out.state.phase, 'offer');
+    assert.strictEqual(out.state.review, false);
     assert.strictEqual(out.send, undefined, 'nothing to decide means nothing to project');
   });
 
@@ -203,6 +205,14 @@ describe('the review opens with skip preselected, and nothing is silent', () => 
     // evaluator itself refuses, so the model never lets them exist.
     assert.strictEqual(model.setDecision(offer, 'agent:helper', 'add').state, offer);
     assert.strictEqual(model.setDecision(offer, 'agent:helper', 'nonsense').state, offer);
+    // Pressing the already-selected control changes nothing and sends
+    // nothing: no fresh projection request, so the counts never blank on a
+    // click that decided nothing. An id the plan does not carry is refused
+    // the same way rather than thrown on.
+    const same = model.setDecision(offer, 'agent:helper', 'skip');
+    assert.strictEqual(same.state, offer);
+    assert.strictEqual(same.send, undefined);
+    assert.strictEqual(model.setDecision(offer, 'skill:nowhere', 'skip').state, offer);
   });
 
   test('confirm sends the decided approval through the shared decide module', () => {

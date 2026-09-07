@@ -197,6 +197,24 @@ test('with the socket closed at confirm, nothing is applied and the flow stays u
   expect(await fileExists(page, '.claude/agents/offline-confirm-scribe.md')).toBe(false);
 });
 
+test('a decision made with the socket closed keeps the review standing, and says the check did not go out', async ({ page }) => {
+  await boot(page);
+  await seedPackage(page, '.claude/skills/offline-decide', [['SKILL.md', 'existing']]);
+  const source = await seedPackage(page, 'pkg-offline-decide', [['.claude/skills/offline-decide/SKILL.md', 'incoming']]);
+  await openPackages(page);
+  await page.fill('#packages-source-path', source);
+  await page.getByRole('button', { name: 'Read it' }).click();
+  const row = page.locator('[data-item="skill:offline-decide"]');
+  await expect(row.locator('.packages-dt-selected')).toHaveText(/Skip: keep yours/);
+  await page.evaluate(() => ws.close());
+  await row.getByRole('button', { name: /Overwrite: replace what you have/ }).click();
+  // The plan and the decision just made survive; only the projection is missing.
+  await expect(page.locator('.packages-review-card')).toBeVisible();
+  await expect(row.locator('.packages-dt-selected')).toHaveText(/Overwrite/);
+  await expect(page.locator('.packages-review-card .packages-confirm')).toHaveText('Checking your decisions…');
+  await expect(page.locator('.packages-field-error')).toContainText('your decisions are kept');
+});
+
 test('a refusal from the real server renders the failure card, not a spinner', async ({ page }) => {
   await boot(page);
   const source = await seedPackage(page, 'pkg-refused', [['.claude/skills/Bad Name/SKILL.md', 'x']]);

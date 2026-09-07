@@ -97,13 +97,18 @@
     // already have, and overwrite always requires a deliberate switch.
     const decisions = {};
     for (const item of items) decisions[item.id] = item.collision ? 'skip' : 'add';
+    const collisions = items.filter((i) => i.collision).map((i) => ({ id: i.id, kind: i.kind, slug: i.slug }));
     const offer = {
       phase: 'offer',
       sourcePath: state.sourcePath,
       plan: msg.plan,
       agents: items.filter((i) => i.kind === 'agent').length,
       skills: items.filter((i) => i.kind === 'skill').length,
-      collisions: items.filter((i) => i.collision).map((i) => ({ id: i.id, kind: i.kind, slug: i.slug })),
+      collisions,
+      // Which surface this offer is: the plain confirm card, or the review
+      // with decisions to make. The model says so; the view branches on
+      // this and holds no rule of its own about collisions.
+      review: collisions.length > 0,
       decisions,
       projection: null,
       // The id of the evaluate request this offer is currently waiting on,
@@ -117,7 +122,7 @@
     // this surface today. That is a recorded limit of this slice, not an
     // accident: only a plan with collisions opens the review at all, and the
     // review is the one surface a projection is asked for.
-    if (offer.collisions.length === 0) return { state: offer };
+    if (!offer.review) return { state: offer };
     // A review with decisions to make is projected by the one evaluator on
     // the server, never by a second copy of its rules here: the same message
     // family that applies an import evaluates it, without writing.
@@ -197,7 +202,6 @@
       state: {
         ...state,
         projection: {
-          status: msg.status,
           writes: ids(msg.writes),
           unchanged: ids(msg.unchanged),
           skipped: ids(msg.skipped),

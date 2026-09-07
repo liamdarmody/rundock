@@ -110,6 +110,11 @@ const MUTATIONS = [
   [MODEL, 'the confirm note says the blocked cause through reasonWords',
     "          ? `${count(counts.blocked, 'item')} will not be written because ${blockedCauses(state)}.`",
     "          ? `${count(counts.blocked, 'item')} will not be written until the default conflict clears.`"],
+  // A click that decided nothing asks nothing: no projection request, no
+  // blanked counts.
+  [MODEL, 'pressing the selected option changes nothing and sends nothing',
+    "    if (state.decisions[id] === decision) return { state };\n",
+    ''],
   // The plan reply's guards: a stray refusal for another operation, or a
   // result sharing no field with a plan, is refused rather than read.
   [MODEL, 'a refusal stamped for another operation is not the plan failing',
