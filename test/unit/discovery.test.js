@@ -452,18 +452,80 @@ describe('rosters and system prompt', () => {
     assert.ok(!prompt.includes('Claude Code') && !prompt.includes('Codex'), 'no runtime named in the shared identity');
   });
 
-  test('buildSystemPrompt: agents are told the truth about missing connectors', () => {
-    // Live finding (issue #70): when a connector's authorisation lapses, its
-    // tools are silently absent and the agent improvises an explanation. One
-    // user was sent hunting for "Rundock connector settings", which do not
-    // exist. The base rules now state the honest cause and the terminal-free
-    // fix. Phrased runtime-neutrally: the neutrality test below must keep
-    // passing, and a Codex agent's connectors are not Claude Code's anyway.
+  test('buildSystemPrompt: agents are told to attempt file operations, not decline on a guess', () => {
+    // MEASURED. Asked to create a file under the runtime home, an agent
+    // declined without attempting anything, and explained that .claude is
+    // off-limits "as well as this workspace's", attributing the block to a
+    // sandbox. Both claims are false: the workspace's own .claude is writable,
+    // which is how its agents and skills are edited, and the global folder is
+    // protected by the runtime and by Rundock's refusal, not by a sandbox.
+    //
+    // The outcome looked like a pass, which is what makes it worth a rule: the
+    // user was refused, so nothing appeared broken, while the product's own
+    // controls never ran and the reason given was invented. The existing rule
+    // covers terminal commands only, and this was a file write.
     useWorkspace({ agents: standardTeam() });
     const prompt = srv.buildSystemPrompt(srv.discoverAgents().find(a => a.id === 'content-lead'));
-    assert.ok(prompt.includes('Rundock has no connector settings'), 'the non-existent settings are ruled out');
-    assert.ok(prompt.includes('claude.ai'), 'points at where connectors are actually managed');
-    assert.ok(prompt.includes('Never invent Rundock settings'), 'the hallucination is named and forbidden');
+    assert.match(prompt, /reading and writing files: attempt the operation/i,
+      'the attempt-first rule reaches file operations, not only terminal commands');
+    // AND THE TWO RULES AGREE. The marker rule was written for .claude/agents
+    // and .claude/skills, then generalised in its own last sentence to all of
+    // .claude/, and agents quoted that generalisation back while declining to
+    // touch anything there. Adding an attempt-first rule beside it would have
+    // left the prompt arguing with itself, so the over-reach is removed at
+    // source and this pins the pair: the exception is named, and it is narrow.
+    assert.match(prompt, /THAT IS THE WHOLE OF THE RULE/,
+      'the marker rule says how far it reaches, because it was read as reaching further');
+    assert.doesNotMatch(prompt, /Do not attempt to create, modify, or delete files in \.claude\/ directly/,
+      'and the sentence that generalised it to the whole directory is gone');
+    assert.match(prompt, /marker rule above is the one real exception/i,
+      'the attempt-first rule defers to it rather than contradicting it');
+  });
+
+  test('buildSystemPrompt: agents are told the truth about connectors, which is now that the tab exists', () => {
+    // Live finding (issue #70): when a connector's authorisation lapses its
+    // tools are silently absent and the agent improvises, and one user was
+    // sent hunting for "Rundock connector settings" that did not exist. The
+    // rules said so plainly, and that was right until 0.13.0 shipped a
+    // Connectors tab.
+    //
+    // THE GUARD THEN INVERTED, and this is the case that caught it. Asked to
+    // help set up a connector, the guide answered that Rundock has no
+    // connector settings and that the request did not match its documentation,
+    // because that is what it had been told. The tab's own copy hands adding a
+    // connector to that guide, so the product pointed at an agent instructed to
+    // deny the feature. A rule written to stop a hallucination had started
+    // suppressing the truth, which is the failure a pinned prompt claim can
+    // always decay into once the product moves.
+    useWorkspace({ agents: standardTeam() });
+    const prompt = srv.buildSystemPrompt(srv.discoverAgents().find(a => a.id === 'content-lead'));
+
+    assert.ok(prompt.includes('Connectors tab'), 'the tab that exists is named');
+    assert.doesNotMatch(prompt, /Rundock has no connector settings/,
+      'and the claim that contradicts it is gone, not merely qualified elsewhere');
+    assert.ok(prompt.includes('.mcp.json'), 'the file a workspace connector lives in is named');
+
+    // AND THE ROUTE THAT ACTUALLY WORKS. Measured: .mcp.json is protected
+    // wherever it lives, so an agent's own file tools are refused in any
+    // workspace, with the user's approval already given. Two agents tried and
+    // reported the wall. Telling them to edit it directly, as this prompt did,
+    // sent them at a door that does not open.
+    assert.ok(prompt.includes('SAVE_CONNECTOR'), 'the marker that writes it is named');
+    assert.ok(prompt.includes('DELETE_CONNECTOR'), 'and the one that removes it');
+    assert.match(prompt, /DO NOT try to edit \.mcp\.json with Write, Edit or a shell command/,
+      'and the route that is always refused is ruled out by name, so no agent spends a turn discovering it');
+
+    // THE CREDENTIAL RULE IS THE ONE THAT MATTERS. .mcp.json travels with the
+    // folder, so a key written there reaches every clone and stays in the
+    // history. An agent asked to add a connector will be handed a key, so the
+    // prompt has to say where it goes before it guesses.
+    assert.ok(prompt.includes('.rundock/mcp-secrets.json'), 'the per-user file credential values belong in is named');
+    assert.match(prompt, /CREDENTIAL VALUES DO NOT GO IN \.mcp\.json/,
+      'and the file they must not go in is named unmissably, not implied');
+
+    // The original protections survive the rewrite.
+    assert.ok(prompt.includes('claude.ai'), 'account connectors still point at where they are managed');
+    assert.ok(prompt.includes('Never invent Rundock settings'), 'inventing panels is still forbidden');
   });
 
   test('buildSystemPrompt: a lead with direct reports gets the sequential-delegation rule, same as the orchestrator', () => {

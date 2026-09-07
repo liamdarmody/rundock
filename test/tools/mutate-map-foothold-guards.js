@@ -117,12 +117,17 @@ const MUTATIONS = [
   // Point the rows at the raw link text and a click opens a different file
   // from the same link clicked in the document.
   [FILES, 'a row opens the resolved file, not the text the link was written as',
-    "  group('Links to', outgoing, (r) => r.resolved);",
-    "  group('Links to', outgoing, (r) => r.target);"],
+    "  if (LINK_SOURCE_EXTENSIONS.has(extensionOf(filePath))) group('Links to', outgoing, (r) => r.resolved);",
+    "  if (LINK_SOURCE_EXTENSIONS.has(extensionOf(filePath))) group('Links to', outgoing, (r) => r.target);"],
+  // Show the outgoing group for every kind and a JSON file claims "Links to:
+  // None", which is not an empty list but a question that cannot apply to it.
+  [FILES, 'the outgoing group is omitted for a kind the index never reads links from',
+    "  if (LINK_SOURCE_EXTENSIONS.has(extensionOf(filePath))) group('Links to', outgoing, (r) => r.resolved);",
+    "  group('Links to', outgoing, (r) => r.resolved);"],
   // Drop the tree-arrival redraw and a file opened before the first tree
   // shows None for as long as it stays open, links or not.
   [FILES, 'a section drawn before the tree arrives recovers when it does',
-    "  if (currentFilePath && document.getElementById('file-connections')) {\n    const section = document.getElementById('file-connections');\n    renderFileConnections(section.parentElement);\n  }",
+    "  if (currentFilePath && document.getElementById('file-connections')) {\n    const section = document.getElementById('file-connections');\n    renderFileConnections(section.parentElement, { inset: section.classList.contains('file-connections-inset') });\n  }",
     ""],
   // Unwire the engine from the router and the endpoint answers 500 forever
   // while every dependency-injected test stays green; only the booted-server

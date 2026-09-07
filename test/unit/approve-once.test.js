@@ -146,14 +146,32 @@ describe('approval persists in the file, which is what a restart reads', () => {
     assert.strictEqual(scheduler.routineRefusal(editedRoutine), 'approval', 'and the tick asks it');
   });
 
-  test('a newly created routine arrives pending, in as many words', () => {
+  test('a newly created routine is born approved: making it is the consent', () => {
+    // CHANGED DELIBERATELY. A routine arrived pending, so the row that had
+    // just been created said "Waiting for your approval" beside a pause icon
+    // implying it was live, and the reader could not tell whether it would
+    // fire. Writing a routine IS consenting to it; there is nobody else whose
+    // agreement was being collected, and a routine somebody is unsure about
+    // can be paused.
+    //
+    // WHAT SURVIVES IS THE LAPSE ON CHANGE, which is the half that protects
+    // somebody rather than interrupting them: agents can edit routines, and an
+    // edited plan is a question nobody has answered. Creation appends a block
+    // and editing updates one, so approving at birth cannot approve an edit.
     const base = agentFile({ name: 'piper', displayName: 'Piper', type: 'specialist', order: 1, routines: [] });
     const next = appendRoutineBlock(base, { name: 'fresh', schedule: 'every day at 07:00', prompt: 'go' });
     const routine = normalizeRoutine(readRoutineBlock(next, 'fresh', 0));
-    assert.strictEqual(routine.planApprovedHash, APPROVAL_PENDING,
-      'the file says the plan awaits approval rather than leaving it to be inferred from absence');
-    assert.strictEqual(planApproved(routine), false);
-    assert.strictEqual(scheduler.routineRefusal(routine), 'approval', 'so the first run meets the approval step');
+    assert.strictEqual(routine.planApprovedHash, routine.planHash,
+      'the file records consent to the plan it was created with');
+    assert.strictEqual(planApproved(routine), true);
+    assert.strictEqual(scheduler.routineRefusal(routine), null,
+      'so it is scheduled from the moment it exists, with nothing else asked of the reader');
+
+    // And an edit still asks, which is the whole reason the mechanism stays.
+    const edited = normalizeRoutine(readRoutineBlock(
+      updateRoutineBlock(next, 'fresh', { prompt: 'do something else entirely' }, 0), 'fresh', 0));
+    assert.strictEqual(planApproved(edited), false, 'a changed plan is a new question');
+    assert.strictEqual(scheduler.routineRefusal(edited), 'approval', 'and the tick asks it');
   });
 });
 
@@ -801,8 +819,13 @@ describe('the connectors tab edits the file the runtime reads', () => {
     const empty = { servers: [], missing: true, error: null };
     const state = settings.connectorsBuildState({ claudeWorkspace: empty, codexWorkspace: empty, claudeUserGlobal: empty, codexUserGlobal: empty });
     const html = settings.connectorsSectionHtml(state);
+    // The sentence named the destination twice, once as prose and once as a
+    // bare URL in brackets. The path now carries the link itself, which is how
+    // a link is normally written and one fewer thing to read.
     assert.match(html,
-      /Account connectors are added at claude\.ai and reach every workspace on this machine\. Rundock does not list them here because it cannot read their state honestly\. Manage them at claude\.ai settings \(<a href="https:\/\/claude\.ai\/settings\/connectors"[^>]*>https:\/\/claude\.ai\/settings\/connectors<\/a>\)\./,
-      'the exact approved sentence, with the URL as a real link');
+      /Account connectors are added at claude\.ai and reach every workspace on this machine\. Rundock does not list them here because it cannot read their state honestly\. Manage them at <a href="https:\/\/claude\.ai\/settings\/connectors"[^>]*>claude\.ai\/settings\/connectors<\/a>\./,
+      'the exact approved sentence, with the path itself as the link');
+    assert.doesNotMatch(html, /claude\.ai settings \(/,
+      'and the destination is not also spelled out beside the link it duplicates');
   });
 });

@@ -365,7 +365,7 @@ function renderFileTree(tree) {
   // redraw the open file's section now that there is a tree to resolve with.
   if (currentFilePath && document.getElementById('file-connections')) {
     const section = document.getElementById('file-connections');
-    renderFileConnections(section.parentElement);
+    renderFileConnections(section.parentElement, { inset: section.classList.contains('file-connections-inset') });
   }
   const c = document.getElementById('file-tree');
   const next = tree || [];
@@ -941,7 +941,7 @@ function renderEditorContent() {
     // renderFileConnections only reads previewEl.parentElement as a mount
     // point; it does not need previewEl's content, so nothing here depends
     // on the order.
-    renderFileConnections(previewEl.parentElement);
+    renderFileConnections(previewEl.parentElement, { inset: true });
     previewEl.innerHTML = formatMdFull(fileBody);
   } else {
     // Leaving preview for the code view: the section describes the rendered
@@ -973,13 +973,30 @@ function removeFileConnections() {
   if (section) section.remove();
 }
 
-function renderFileConnections(host) {
+// The kinds the link index actually reads links out of, kept in step with
+// INDEXED_EXTENSIONS in search.js by a test: a kind missing here hides a
+// group that should show, and a kind wrongly here shows an empty group that
+// can never fill.
+const LINK_SOURCE_EXTENSIONS = new Set(['.md', '.txt', '.html', '.htm', '.svg']);
+function extensionOf(p) {
+  const base = String(p || '').split('/').pop();
+  const dot = base.lastIndexOf('.');
+  return dot === -1 ? '' : base.slice(dot).toLowerCase();
+}
+
+// `inset` is set by the callers that mount OUTSIDE a padded element. The
+// section is appended as a sibling of the preview pane rather than inside it,
+// because the viewer owns that pane and clears it on teardown, and the parent
+// carries no padding of its own, so without this the list sat flush against
+// the sidebar for every non-markdown file. The markdown pane pads its own
+// children, so it must not be inset again or the list indents twice.
+function renderFileConnections(host, opts) {
   if (!host) return;
   removeFileConnections();
   if (!currentFilePath) return;
   const section = document.createElement('div');
   section.id = 'file-connections';
-  section.className = 'file-connections';
+  section.className = (opts && opts.inset) ? 'file-connections file-connections-inset' : 'file-connections';
   host.appendChild(section);
   // Drawn the instant the section mounts, before the fetch below has even
   // started: see drawFileConnectionsLoading for why this is the fix for the
@@ -1041,7 +1058,13 @@ function drawFileConnections(section, filePath, data) {
     title.className = 'file-connections-group';
     title.textContent = label;
     section.appendChild(title);
-    if (!rows.length) { note('None.'); return; }
+    // No full stop: this sits in the row position, where every other item is a
+    // bare path, and it is the app's only empty state that punctuates itself
+    // (compare "No matches", "No team agents yet"). The heading above it
+    // carries no colon for the same reason no heading in the product does:
+    // a colon promises the value follows on that line, and here the rows are
+    // separate elements beneath it.
+    if (!rows.length) { note('None'); return; }
     for (const row of rows) {
       const target = pathOf(row);
       const a = document.createElement('a');
@@ -1051,7 +1074,13 @@ function drawFileConnections(section, filePath, data) {
       section.appendChild(a);
     }
   };
-  group('Links to', outgoing, (r) => r.resolved);
+  // "Links to" is omitted for a file whose kind is never read for links, and
+  // omitted rather than shown empty because the two say different things. A
+  // JSON file has no outgoing links and never can, so "None" there implies a
+  // state that could one day change and cannot: it is not an empty list, it is
+  // a question that does not apply. "Linked from" always applies, because any
+  // indexed file can point at anything.
+  if (LINK_SOURCE_EXTENSIONS.has(extensionOf(filePath))) group('Links to', outgoing, (r) => r.resolved);
   group('Linked from', incoming, (r) => r.src);
 }
 

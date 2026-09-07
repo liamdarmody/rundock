@@ -796,6 +796,8 @@ function handleResult(d, convoId) {
     const MARKER_SENDS = {
       save_agent:   a => ({ type: 'save_agent', name: a.name, content: a.content }),
       save_skill:   a => ({ type: 'save_skill', name: a.name, content: a.content }),
+      save_connector:   a => ({ type: 'save_connector', name: a.name, content: a.content }),
+      delete_connector: a => ({ type: 'delete_connector', name: a.name }),
       delete_skill: a => ({ type: 'delete_skill', name: a.name }),
       delete_agent: a => ({ type: 'delete_agent', agentId: a.name }),
     };

@@ -591,7 +591,7 @@ function connectorsRowHtml(srv) {
 // no status, so none is shown here and `claude mcp list` is never called for
 // this purpose. The one honest thing left to say is where the real state
 // lives. Codex has no account tier, so there is nothing to caveat for it.
-const CONNECTORS_ACCOUNT_TIER_HTML = `<div class="settings-card"><div class="settings-row"><span class="settings-prose">Account connectors are added at claude.ai and reach every workspace on this machine. Rundock does not list them here because it cannot read their state honestly. Manage them at claude.ai settings (<a href="https://claude.ai/settings/connectors" target="_blank" rel="noopener">https://claude.ai/settings/connectors</a>).</span></div></div>`;
+const CONNECTORS_ACCOUNT_TIER_HTML = `<div class="settings-card"><div class="settings-row"><span class="settings-prose">Account connectors are added at claude.ai and reach every workspace on this machine. Rundock does not list them here because it cannot read their state honestly. Manage them at <a href="https://claude.ai/settings/connectors" target="_blank" rel="noopener">claude.ai/settings/connectors</a>.</span></div></div>`;
 
 function connectorsSectionHtml(state) {
   // A read we could not trust draws its error and NOTHING ELSE: no server
@@ -642,7 +642,7 @@ function connectorsSectionHtml(state) {
   const addHtml = guide
     ? `<div class="settings-card"><div class="settings-row" style="flex-direction:column;align-items:stretch;gap:8px">
       <span class="settings-label">Add a connector</span>
-      <span class="settings-prose">Connectors differ in what they need to start: some take a command and arguments, some a URL, and most need credentials. ${connectorsEsc(guideName)} can work out which this one is, write it into <code>.mcp.json</code>, and tell you what it still needs.</span>
+      <span class="settings-prose">Connectors differ in what they need to start: some take a command and arguments, some a URL, and most need credentials. ${connectorsEsc(guideName)} can work out which this one is, write it, and tell you what it still needs. A connector is read when an agent starts, so a new one reaches the next conversation rather than the one you add it in.</span>
       <button class="settings-btn" data-agent-id="${connectorsEscAttr(guide.id)}" onclick="startConversation(this.dataset.agentId)">Talk to ${connectorsEsc(guideName)}</button>
     </div></div>`
     : '';

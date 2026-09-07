@@ -142,6 +142,80 @@ describe('one path produces every row\'s next-run time', () => {
     });
   });
 
+  test('a routine created after today\'s slot is not born overdue', () => {
+    // MEASURED ON A REAL MACHINE. A routine was created at about 23:30 and
+    // scheduled for midnight. Pressing "Approve plan" ran it at 23:44, well
+    // before its scheduled time, and looked like the button had triggered a
+    // test run. It had not: the routine was already due, because its slot is
+    // computed on TODAY'S date and today's midnight had passed sixteen hours
+    // before the routine existed. The approval was the only thing holding it
+    // back, so lifting it released a run for a slot the routine was never
+    // owed. Without the approval gate it would have run on creation.
+    //
+    // A slot that passed BEFORE a routine was first seen was never owed. A
+    // slot that passed while it existed still is, which is the catch-up a
+    // sleeping machine needs and is asserted below.
+    withWorkspace((sched) => {
+      sched.wireSchedulerDeps({ now: () => NOW });
+      // First seen at 09:20 today, scheduled for 07:00: that slot predates it.
+      sched.routineSlots.observedAt = null;
+      sched.routineSlots.routines[KEY] = {
+        due: TODAYS_SLOT.toISOString(), schedule: 'daily:7:0', missed: [],
+        since: NOW.toISOString(),
+      };
+      assert.deepStrictEqual(sched.nextRunFor(KEY, SCHEDULE), TOMORROWS_SLOT,
+        'the first run is the next one it could actually keep, not one from before it existed');
+    });
+  });
+
+  test('a routine that existed through the slot still catches it up today', () => {
+    // The other half, and the one AC-5 is about: this routine was there when
+    // the slot passed, so it is owed. Rolling it to tomorrow would lose the
+    // catch-up a machine that slept through the morning depends on.
+    withWorkspace((sched) => {
+      sched.wireSchedulerDeps({ now: () => NOW });
+      sched.routineSlots.observedAt = null;
+      sched.routineSlots.routines[KEY] = {
+        due: TODAYS_SLOT.toISOString(), schedule: 'daily:7:0', missed: [],
+        since: YESTERDAYS_SLOT.toISOString(),
+      };
+      assert.deepStrictEqual(sched.nextRunFor(KEY, SCHEDULE), TODAYS_SLOT,
+        'a slot that passed while the routine existed stays on today');
+    });
+  });
+
+  test('a routine that has already run is judged by its runs, not by when it was first seen', () => {
+    // The roll-forward is scoped to routines with NO run history, and this is
+    // the case that proves the scope earns its place. A routine first seen at
+    // 09:20 today has a lastRun from yesterday, so it plainly existed before
+    // then and its first-seen instant says nothing useful. Rolling forward on
+    // it would push today's slot to tomorrow and lose a catch-up that is
+    // genuinely owed, which is the failure AC-5 exists to prevent.
+    withWorkspace((sched) => {
+      sched.wireSchedulerDeps({ now: () => NOW });
+      sched.routineSlots.observedAt = null;
+      sched.routineSlots.routines[KEY] = {
+        due: TODAYS_SLOT.toISOString(), schedule: 'daily:7:0', missed: [],
+        since: NOW.toISOString(),
+      };
+      sched.routineState[KEY] = { lastRun: YESTERDAYS_SLOT.toISOString(), status: 'ok', duration: 1 };
+      assert.deepStrictEqual(sched.nextRunFor(KEY, SCHEDULE), TODAYS_SLOT,
+        'a routine with runs behind it keeps today, whatever its first-seen says');
+    });
+  });
+
+  test('an entry written before first-seen was recorded keeps the old behaviour', () => {
+    // State files from earlier versions carry no `since`. Guessing one would
+    // either invent a history or silently skip a genuine catch-up, so an
+    // entry without it is treated exactly as it was before this change.
+    withWorkspace((sched) => {
+      sched.wireSchedulerDeps({ now: () => NOW });
+      anchor(sched, TODAYS_SLOT);
+      assert.deepStrictEqual(sched.nextRunFor(KEY, SCHEDULE), TODAYS_SLOT,
+        'no first-seen recorded means no claim about what predates the routine');
+    });
+  });
+
   test('a missed row takes its next run from that same path and gets today', () => {
     withWorkspace((sched) => {
       sched.wireSchedulerDeps({ now: () => NOW });

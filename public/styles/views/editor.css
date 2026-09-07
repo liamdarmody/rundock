@@ -225,6 +225,10 @@ textarea.editor-content { resize: none; border: none; background: transparent; w
    navigable rows do. Empty states use the idle tone because an empty list
    here is a fact about the file, not a fault in it. */
 .file-connections { margin: 32px 0 8px; padding-top: 16px; border-top: 1px solid var(--border); }
+/* Mounted beside the preview pane rather than inside it, where nothing
+   supplies horizontal padding: matches .editor-content's own 32px so the
+   list lines up with the file above it instead of sitting on the edge. */
+.file-connections-inset { padding-left: 32px; padding-right: 32px; }
 .file-connections-heading { font-size: var(--caption); font-weight: 600; color: var(--text-1); margin-bottom: 4px; }
 .file-connections-group { font-size: var(--label); font-weight: 600; color: var(--text-2); margin: 12px 0 4px; }
 .file-connections-row { display: block; font-size: var(--caption); color: var(--text-2); padding: 3px 0; cursor: pointer; transition: color var(--duration-base) ease; }

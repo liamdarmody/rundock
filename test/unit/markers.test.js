@@ -12,6 +12,38 @@ const { scanMarkers, extractFrontmatterAgents, stripMarkers, stripDelegateTail }
 
 // ── scanMarkers: saves ──────────────────────────────────────────────────────
 
+test('a connector marker becomes a save action carrying its entry', () => {
+  // MEASURED. Asked to delete a broken connector, an agent tried to edit
+  // .mcp.json directly and was refused: Claude Code protects that file wherever
+  // it lives, so no agent can write it with a file tool, in any workspace. The
+  // Connectors tab hands adding a connector to the guide, so without a path the
+  // agent CAN take, that hand-off leads nowhere.
+  //
+  // The same shape as the agent and skill markers, for the same reason: the
+  // agent says what it wants written and Rundock writes it, and Rundock is not
+  // subject to the agent's file-tool restrictions.
+  const text = 'Adding it.\n<!-- RUNDOCK:SAVE_CONNECTOR name=notion -->\n'
+    + '{"command":"npx","args":["-y","@notionhq/notion-mcp-server"]}\n'
+    + '<!-- /RUNDOCK:SAVE_CONNECTOR -->';
+  assert.deepStrictEqual(scanMarkers(text).actions, [
+    { kind: 'save_connector', name: 'notion', content: '{"command":"npx","args":["-y","@notionhq/notion-mcp-server"]}' },
+  ]);
+});
+
+test('a connector delete marker becomes a delete action', () => {
+  assert.deepStrictEqual(scanMarkers('Removing it.\n<!-- RUNDOCK:DELETE_CONNECTOR name=Test -->').actions,
+    [{ kind: 'delete_connector', name: 'Test' }]);
+});
+
+test('a connector delete quoted inside a save body is not acted on', () => {
+  // The masking the agent and skill deletes already get: an agent documenting
+  // the marker inside a skill must not delete a connector by describing one.
+  const text = '<!-- RUNDOCK:SAVE_SKILL name=howto -->\n'
+    + 'To remove one, emit <!-- RUNDOCK:DELETE_CONNECTOR name=Test -->\n'
+    + '<!-- /RUNDOCK:SAVE_SKILL -->';
+  assert.deepStrictEqual(scanMarkers(text).actions.map(a => a.kind), ['save_skill']);
+});
+
 test('SAVE_AGENT marker produces a save_agent action with trimmed content', () => {
   const text = 'Done!\n<!-- RUNDOCK:SAVE_AGENT name=my-agent -->\n---\nname: my-agent\n---\nBody here.\n<!-- /RUNDOCK:SAVE_AGENT -->';
   const { actions } = scanMarkers(text);
