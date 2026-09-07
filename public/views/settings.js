@@ -129,8 +129,9 @@ function packagesReviewRowHtml(row) {
         </div>
       </div>`;
   }
+  const unchangedMark = row.unchanged ? '<span class="packages-skip-mark">Already identical</span>' : '';
   return `<div class="packages-item-row" data-row="collision" data-item="${escAttr(row.id)}">
-      <div class="packages-item-top"><span class="packages-item-name">${esc(row.name)}</span>${kindTag}</div>
+      <div class="packages-item-top"><span class="packages-item-name">${esc(row.name)}</span>${kindTag}${unchangedMark}</div>
       ${compare}
       <div class="packages-decision-toggle">
         <button class="packages-dt-btn${row.decision === 'overwrite' ? ' packages-dt-selected packages-dt-overwrite' : ''}"

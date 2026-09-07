@@ -87,7 +87,6 @@ describe('the offer', () => {
     assert.match(copy.body, /They're not sandboxed: once added they act with the same access your own agents have\./);
     assert.match(copy.body, /Nothing runs until you add them\./);
     assert.strictEqual(copy.confirmLabel, 'Add to my team');
-    assert.strictEqual(copy.confirmDisabled, false);
   });
 
   test('a real empty-package refusal classifies by its code, other real refusals as failure', () => {

@@ -66,6 +66,12 @@ function collidingScenario({ workspaceAgent = '---\nname: helper\n---\n\nOld.\n'
   return { workspace, sourceRoot, planMsg, offer: out.state, firstSend: out.send };
 }
 
+// A transition's own outstanding projection, answered by the real evaluator
+// through the real dispatch, and landed on the state that asked for it.
+function projected(workspace, out) {
+  return model.reply(out.state, realReply(workspace, 'evaluate_package_decisions', out.send)).state;
+}
+
 // The complete tree under a root as one comparable value: every path and
 // every byte, directories included so an orphaned empty one is visible too.
 // Used to prove a mid-apply failure leaves the workspace exactly as it was,
@@ -345,11 +351,20 @@ describe('the class walk: every rowClass reviewRowClass can produce is rendered,
     const planMsg = realReply(workspace, 'plan_package_import', {
       sourcePath: sourceRoot, source: { id: sourceRoot, reference: null },
     });
-    const offer = model.reply(model.submit(model.initial(), sourceRoot).state, planMsg).state;
-    const row = model.reviewCopy(offer).rows.filter((r) => r.id === 'skill:notes')[0];
+    const out = model.reply(model.submit(model.initial(), sourceRoot).state, planMsg);
+    const row = model.reviewCopy(out.state).rows.filter((r) => r.id === 'skill:notes')[0];
     assert.strictEqual(row.rowClass, 'collision');
     assert.match(row.compare.have, /identical to what arrives/);
     assert.match(row.compare.arrives, /byte for byte what you have/);
+    // Decided overwrite, the evaluator puts it in `unchanged`, not `writes`,
+    // and the confirm label must not warn about destroying something that
+    // will not be written: zero overwrites, one unchanged, nothing added.
+    const decided = projected(workspace, model.setDecision(out.state, 'skill:notes', 'overwrite'));
+    const copy = model.reviewCopy(decided);
+    assert.strictEqual(copy.counts.overwrites, 0);
+    assert.strictEqual(copy.counts.unchanged, 1);
+    assert.strictEqual(copy.confirmLabel, '1 unchanged, nothing added');
+    assert.strictEqual(copy.rows[0].unchanged, true, 'the row says the bytes match, from the projection');
   });
 });
 
@@ -542,21 +557,36 @@ describe('receipts record each decision beside the item it governed', () => {
 
 describe('the confirm label says what pressing it will actually do', () => {
   test('the three shapes from the review: mixed, blocked, and everything skipped', () => {
-    assert.strictEqual(model.confirmLabel({ adds: 2, overwrites: 1, skips: 1, blocked: 0 }),
+    assert.strictEqual(model.confirmLabel({ adds: 2, overwrites: 1, unchanged: 0, skips: 1, blocked: 0 }),
       'Add 2, overwrite 1, skip 1');
-    assert.strictEqual(model.confirmLabel({ adds: 1, overwrites: 1, skips: 0, blocked: 2 }),
+    assert.strictEqual(model.confirmLabel({ adds: 1, overwrites: 1, unchanged: 0, skips: 0, blocked: 2 }),
       'Add 1, overwrite 1, 2 blocked');
-    assert.strictEqual(model.confirmLabel({ adds: 0, overwrites: 0, skips: 4, blocked: 0 }),
+    assert.strictEqual(model.confirmLabel({ adds: 0, overwrites: 0, unchanged: 0, skips: 4, blocked: 0 }),
       'Skip 4, nothing added');
+    assert.strictEqual(model.confirmLabel({ adds: 0, overwrites: 0, unchanged: 1, skips: 1, blocked: 0 }),
+      'Skip 1, 1 unchanged, nothing added');
+    assert.strictEqual(model.confirmLabel(null), 'Checking your decisions…');
   });
 
-  test('the live counts follow the decisions and the projection', () => {
-    const { offer } = collidingScenario({
+  test('the counts come from the projection alone: they change with it and stay when only local decisions change', () => {
+    const { workspace, offer, firstSend } = collidingScenario({
       extraSources: [['.claude/skills/writer/SKILL.md', 'incoming skill']],
     });
-    const copy = model.reviewCopy(offer);
-    assert.strictEqual(copy.confirmLabel, 'Add 1, skip 1');
-    const flipped = model.setDecision(offer, 'agent:helper', 'overwrite').state;
-    assert.strictEqual(model.reviewCopy(flipped).confirmLabel, 'Add 1, overwrite 1');
+    // Before the projection lands nothing is counted, and the label says so
+    // rather than guessing from decisions.
+    assert.strictEqual(model.reviewCopy(offer).counts, null);
+    assert.strictEqual(model.reviewCopy(offer).confirmLabel, 'Checking your decisions…');
+    const first = projected(workspace, { state: offer, send: firstSend });
+    assert.deepStrictEqual(model.reviewCopy(first).counts, { adds: 1, overwrites: 0, unchanged: 0, skips: 1, blocked: 0 });
+    assert.strictEqual(model.reviewCopy(first).confirmLabel, 'Add 1, skip 1');
+    // The same projection with a different local decision counts the same.
+    const decidedElsewhere = { ...first, decisions: { ...first.decisions, 'agent:helper': 'overwrite' } };
+    assert.deepStrictEqual(model.reviewCopy(decidedElsewhere).counts, model.reviewCopy(first).counts);
+    // A new projection, for the decision actually made, is what moves them.
+    const flipped = model.setDecision(first, 'agent:helper', 'overwrite');
+    assert.strictEqual(model.reviewCopy(flipped.state).counts, null, 'a decision change voids the old projection');
+    const second = projected(workspace, flipped);
+    assert.deepStrictEqual(model.reviewCopy(second).counts, { adds: 1, overwrites: 1, unchanged: 0, skips: 0, blocked: 0 });
+    assert.strictEqual(model.reviewCopy(second).confirmLabel, 'Add 1, overwrite 1');
   });
 });

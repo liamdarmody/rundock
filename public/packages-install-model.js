@@ -189,11 +189,19 @@
     if (msg.status === 'stale') {
       return { state: { phase: 'stale', sourcePath: state.sourcePath } };
     }
+    // The projection is kept as MEMBERSHIP, one id list per evaluator bucket,
+    // because every count and every row mark below is read from it and never
+    // from local decisions: a byte-identical collision decided overwrite is in
+    // `unchanged`, not `writes`, and must be counted as what it is.
+    const ids = (list) => (list || []).map((entry) => entry.id);
     return {
       state: {
         ...state,
         projection: {
           status: msg.status,
+          writes: ids(msg.writes),
+          unchanged: ids(msg.unchanged),
+          skipped: ids(msg.skipped),
           blocked: (msg.blocked || []).map((b) => ({ id: b.id, reason: b.reason })),
         },
       },
@@ -210,7 +218,6 @@
         + 'Nothing runs until you add them.',
       confirmLabel: 'Add to my team',
       cancelLabel: 'Cancel',
-      confirmDisabled: false,
     };
   }
 
@@ -281,30 +288,38 @@
     return state.decisions[item.id] === 'skip' ? 'skippedNew' : 'willAdd';
   }
 
+  // THE COUNTS ARE THE PROJECTION'S, never a local guess: overwrites are the
+  // colliding members of the evaluator's `writes`, adds the rest of it, and
+  // unchanged, skipped and blocked are their buckets' sizes. Until the
+  // projection for the current decisions lands there are no counts at all,
+  // and the label says so rather than warning about a write that would not
+  // happen.
   function reviewCounts(state) {
-    const counts = { adds: 0, overwrites: 0, skips: 0, blocked: 0 };
-    for (const item of state.plan.items) {
-      const rowClass = reviewRowClass(state, item);
-      if (rowClass === 'blocked') counts.blocked += 1;
-      else if (state.decisions[item.id] === 'skip') counts.skips += 1;
-      else if (item.collision) counts.overwrites += 1;
-      else counts.adds += 1;
-    }
-    return counts;
+    const p = state.projection;
+    if (!p) return null;
+    const colliding = new Set(state.plan.items.filter((i) => i.collision).map((i) => i.id));
+    return {
+      adds: p.writes.filter((id) => !colliding.has(id)).length,
+      overwrites: p.writes.filter((id) => colliding.has(id)).length,
+      unchanged: p.unchanged.length,
+      skips: p.skipped.length,
+      blocked: p.blocked.length,
+    };
   }
 
   // The confirm button's own label carries the breakdown, the same honesty
   // rule as the success receipts: never a generic Confirm with the detail
-  // left to body copy underneath.
+  // left to body copy underneath. Whenever nothing reaches a destination the
+  // label ends by saying so.
   function confirmLabel(counts) {
-    if (counts.adds === 0 && counts.overwrites === 0 && counts.blocked === 0 && counts.skips > 0) {
-      return `Skip ${counts.skips}, nothing added`;
-    }
+    if (!counts) return 'Checking your decisions…';
     const parts = [];
     if (counts.adds) parts.push(`add ${counts.adds}`);
     if (counts.overwrites) parts.push(`overwrite ${counts.overwrites}`);
     if (counts.skips) parts.push(`skip ${counts.skips}`);
+    if (counts.unchanged) parts.push(`${counts.unchanged} unchanged`);
     if (counts.blocked) parts.push(`${counts.blocked} blocked`);
+    if (counts.adds === 0 && counts.overwrites === 0) parts.push('nothing added');
     const joined = parts.join(', ');
     return joined.charAt(0).toUpperCase() + joined.slice(1);
   }
@@ -332,6 +347,9 @@
         tone: REVIEW_TONES[rowClass],
         decision: state.decisions[item.id],
         colliding: item.collision,
+        // Said from the projection's own `unchanged` membership: the bytes
+        // already match, so whatever is decided, nothing is written here.
+        unchanged: !!(state.projection && state.projection.unchanged.indexOf(item.id) !== -1),
         compare: !item.collision ? null : {
           have: identical
             ? 'Already in your workspace, identical to what arrives.'
@@ -358,12 +376,14 @@
       rows,
       counts,
       confirmLabel: confirmLabel(counts),
-      confirmNote: counts.blocked > 0
-        ? `${counts.blocked} item${counts.blocked === 1 ? '' : 's'} will not be written until the default conflict clears.`
-        : counts.adds === 0 && counts.overwrites === 0
-          ? 'Confirming writes nothing, and says so rather than doing something silent.'
-          : 'Nothing else in your workspace changes.',
-      confirmWarn: counts.blocked > 0,
+      confirmNote: !counts
+        ? 'Checking your decisions against your workspace.'
+        : counts.blocked > 0
+          ? `${counts.blocked} item${counts.blocked === 1 ? '' : 's'} will not be written until the default conflict clears.`
+          : counts.adds === 0 && counts.overwrites === 0
+            ? 'Confirming writes nothing, and says so rather than doing something silent.'
+            : 'Nothing else in your workspace changes.',
+      confirmWarn: !!counts && counts.blocked > 0,
       cancelLabel: 'Cancel',
     };
   }
