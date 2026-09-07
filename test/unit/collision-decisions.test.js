@@ -496,6 +496,48 @@ describe('receipts record each decision beside the item it governed', () => {
     // the decision, not an inference from bytes.
     for (const entry of receipt.items) assert.ok(entry.decision, `${entry.id} carries its decision`);
   });
+
+  // Amendment R1 to the receipts addendum: the zero-write shortcut governs
+  // destination files, never the decision record. A person who skipped
+  // everything still confirmed decisions, and that is what a receipt records;
+  // only a pure replay, every item already at its approved bytes, records
+  // nothing, because nothing was decided and nothing can be proven about who
+  // wrote what is there.
+  test('an all-skip apply writes a receipt recording every decision, in the same transaction', () => {
+    const { workspace, sourceRoot, planMsg } = collidingScenario({
+      extraSources: [['.claude/skills/writer/SKILL.md', 'incoming skill']],
+      extraWorkspace: [['.claude/skills/writer/SKILL.md', 'existing skill']],
+    });
+    const approval = decide(planMsg.plan, { 'agent:helper': 'skip', 'skill:writer': 'skip' });
+    const before = workspaceTree(workspace);
+    const result = applyImport(workspace, sourceRoot, approval, { receipt: {} });
+    assert.strictEqual(result.status, 'ready');
+    assert.deepStrictEqual(result.writes, [], 'nothing reaches a destination');
+    assert.ok(result.receipt, 'the decision record is written anyway');
+    const receipt = JSON.parse(fs.readFileSync(path.join(workspace, result.receipt), 'utf8'));
+    assert.deepStrictEqual(receipt.items.map((i) => [i.id, i.decision, i.outcome]),
+      [['agent:helper', 'skip', 'skipped'], ['skill:writer', 'skip', 'skipped']]);
+    // The receipt is the transaction's one write: the tree differs from
+    // before by exactly that file and nothing else.
+    const added = workspaceTree(workspace).filter((line) => !before.includes(line));
+    assert.deepStrictEqual(added.map((line) => line.split(':')[0]), [result.receipt]);
+    assert.throws(() => applyImport(workspace, sourceRoot, approval, {
+      receipt: {}, afterStep: () => { throw new Error('mid-apply'); },
+    }), /mid-apply/);
+    assert.strictEqual(fs.readdirSync(path.join(workspace, '.claude/rundock/receipts')).length, 1,
+      'a receipt lands only with the transaction that carries it');
+  });
+
+  test('a pure replay of an applied approval leaves the receipts directory as it was', () => {
+    const { workspace, sourceRoot, planMsg } = collidingScenario();
+    const approval = decide(planMsg.plan, { 'agent:helper': 'overwrite' });
+    assert.ok(applyImport(workspace, sourceRoot, approval, { receipt: {} }).receipt);
+    const before = workspaceTree(workspace);
+    const replay = applyImport(workspace, sourceRoot, approval, { receipt: {} });
+    assert.deepStrictEqual(replay.unchanged.map((u) => u.id), ['agent:helper']);
+    assert.strictEqual(replay.receipt, null);
+    assert.deepStrictEqual(workspaceTree(workspace), before);
+  });
 });
 
 describe('the confirm label says what pressing it will actually do', () => {
