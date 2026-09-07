@@ -101,26 +101,28 @@ function packagesConnectionLost() {
 // carrying the one action that clears them, and a confirm whose label says
 // exactly what pressing it does. All words come from the model, and so does
 // every row's data-tone: REVIEW_TONES there is the one source, read at
-// render time, never restated here.
+// render time, never restated here. Escaped through this file's own
+// Node-safe helpers, as the connectors half is, so a test renders the real
+// rows without a page and without a second copy of the escaping rule.
 function packagesReviewRowHtml(row) {
-  const kindTag = `<span class="packages-kind-tag">${esc(row.kind)}</span>`;
-  const open = `<div class="packages-item-row" data-row="${escAttr(row.rowClass)}" data-tone="${escAttr(row.tone)}" data-item="${escAttr(row.id)}">`;
+  const kindTag = `<span class="packages-kind-tag">${connectorsEsc(row.kind)}</span>`;
+  const open = `<div class="packages-item-row" data-row="${connectorsEscAttr(row.rowClass)}" data-tone="${connectorsEscAttr(row.tone)}" data-item="${connectorsEscAttr(row.id)}">`;
   if (row.rowClass === 'willAdd') {
     return `${open}
-        <div class="packages-item-top"><span class="packages-item-name">${esc(row.name)}</span>${kindTag}
+        <div class="packages-item-top"><span class="packages-item-name">${connectorsEsc(row.name)}</span>${kindTag}
           <span class="packages-ready-mark">Will add</span></div>
       </div>`;
   }
   if (row.rowClass === 'skippedNew') {
     return `${open}
-        <div class="packages-item-top"><span class="packages-item-name">${esc(row.name)}</span>${kindTag}
+        <div class="packages-item-top"><span class="packages-item-name">${connectorsEsc(row.name)}</span>${kindTag}
           <span class="packages-skip-mark">Will skip</span>
-          <button class="settings-btn packages-row-btn" onclick="packagesSetDecision('${escAttr(row.id)}', 'add')">Add it back</button></div>
+          <button class="settings-btn packages-row-btn" onclick="packagesSetDecision('${connectorsEscAttr(row.id)}', 'add')">Add it back</button></div>
       </div>`;
   }
   const compare = row.compare ? `<div class="packages-compare">
-      <div class="packages-compare-side"><div class="packages-compare-label">What you have</div><p>${esc(row.compare.have)}</p></div>
-      <div class="packages-compare-side"><div class="packages-compare-label">What arrives</div><p>${esc(row.compare.arrives)}</p></div>
+      <div class="packages-compare-side"><div class="packages-compare-label">What you have</div><p>${connectorsEsc(row.compare.have)}</p></div>
+      <div class="packages-compare-side"><div class="packages-compare-label">What arrives</div><p>${connectorsEsc(row.compare.arrives)}</p></div>
     </div>` : '';
   if (row.rowClass === 'blocked') {
     // One action, one control: the toggle collapses to the disabled
@@ -130,38 +132,38 @@ function packagesReviewRowHtml(row) {
         <button class="packages-dt-btn packages-dt-blocked" disabled>Overwrite: blocked</button>
       </div>`;
     return `${open}
-        <div class="packages-item-top"><span class="packages-item-name">${esc(row.name)}</span>${kindTag}</div>
+        <div class="packages-item-top"><span class="packages-item-name">${connectorsEsc(row.name)}</span>${kindTag}</div>
         ${compare}${toggle}
         <div class="packages-blocked-block">
-          <div class="packages-blocked-note">${esc(row.blockedNote)}</div>
+          <div class="packages-blocked-note">${connectorsEsc(row.blockedNote)}</div>
           <button class="settings-btn packages-blocked-resolve"
-            onclick="packagesSetDecision('${escAttr(row.id)}', '${escAttr(row.blockedAction.decision)}')">${esc(row.blockedAction.label)}</button>
+            onclick="packagesSetDecision('${connectorsEscAttr(row.id)}', '${connectorsEscAttr(row.blockedAction.decision)}')">${connectorsEsc(row.blockedAction.label)}</button>
         </div>
       </div>`;
   }
   const unchangedMark = row.unchanged ? '<span class="packages-skip-mark">Already identical</span>' : '';
   return `${open}
-      <div class="packages-item-top"><span class="packages-item-name">${esc(row.name)}</span>${kindTag}${unchangedMark}</div>
+      <div class="packages-item-top"><span class="packages-item-name">${connectorsEsc(row.name)}</span>${kindTag}${unchangedMark}</div>
       ${compare}
       <div class="packages-decision-toggle">
         <button class="packages-dt-btn${row.decision === 'overwrite' ? ' packages-dt-selected packages-dt-overwrite' : ''}"
-          onclick="packagesSetDecision('${escAttr(row.id)}', 'overwrite')">Overwrite: replace what you have</button>
+          onclick="packagesSetDecision('${connectorsEscAttr(row.id)}', 'overwrite')">Overwrite: replace what you have</button>
         <button class="packages-dt-btn${row.decision === 'skip' ? ' packages-dt-selected' : ''}"
-          onclick="packagesSetDecision('${escAttr(row.id)}', 'skip')">Skip: keep yours</button>
+          onclick="packagesSetDecision('${connectorsEscAttr(row.id)}', 'skip')">Skip: keep yours</button>
       </div>
     </div>`;
 }
 
 function packagesReviewCardHtml(copy, st) {
   return `<div class="settings-card packages-review-card">
-      <div class="packages-headline">${esc(copy.title)}</div>
-      <div class="packages-review-sub">${esc(st.sourcePath)}</div>
+      <div class="packages-headline">${connectorsEsc(copy.title)}</div>
+      <div class="packages-review-sub">${connectorsEsc(st.sourcePath)}</div>
       <div class="packages-item-list">${copy.rows.map(packagesReviewRowHtml).join('')}</div>
       <div class="packages-review-confirm">
-        <div class="packages-review-note${copy.confirmWarn ? ' packages-review-warn' : ''}">${esc(copy.confirmNote)}</div>
+        <div class="packages-review-note${copy.confirmWarn ? ' packages-review-warn' : ''}">${connectorsEsc(copy.confirmNote)}</div>
         <div class="packages-actions">
-          <button class="settings-btn packages-confirm" onclick="packagesConfirm()">${esc(copy.confirmLabel)}</button>
-          <button class="settings-btn packages-cancel" onclick="packagesCancel()">${esc(copy.cancelLabel)}</button>
+          <button class="settings-btn packages-confirm" onclick="packagesConfirm()">${connectorsEsc(copy.confirmLabel)}</button>
+          <button class="settings-btn packages-cancel" onclick="packagesCancel()">${connectorsEsc(copy.cancelLabel)}</button>
         </div>
       </div>
     </div>`;
@@ -170,11 +172,11 @@ function packagesReviewCardHtml(copy, st) {
 // The review-void state: the one danger-toned surface, its tone from the
 // same table as the rows'.
 function packagesStaleCardHtml(copy) {
-  return `<div class="settings-card packages-stale-card" data-tone="${escAttr(copy.tone)}">
-      <div class="packages-stale-headline">${esc(copy.headline)}</div>
-      <div class="packages-stale-body">${esc(copy.body)}</div>
+  return `<div class="settings-card packages-stale-card" data-tone="${connectorsEscAttr(copy.tone)}">
+      <div class="packages-stale-headline">${connectorsEsc(copy.headline)}</div>
+      <div class="packages-stale-body">${connectorsEsc(copy.body)}</div>
       <div class="packages-actions">
-        <button class="settings-btn packages-replan" onclick="packagesRetry()">${esc(copy.actionLabel)}</button>
+        <button class="settings-btn packages-replan" onclick="packagesRetry()">${connectorsEsc(copy.actionLabel)}</button>
         <button class="settings-btn packages-cancel" onclick="packagesCancel()">Back</button>
       </div>
     </div>`;
@@ -433,7 +435,7 @@ function connectorsEsc(v) {
   return String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 function connectorsEscAttr(v) {
-  return connectorsEsc(v).replace(/"/g, '&quot;');
+  return connectorsEsc(v).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
 // Shared by every JSON source (both .mcp.json's shape and ~/.claude.json's

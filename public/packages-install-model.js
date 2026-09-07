@@ -328,6 +328,12 @@
     return reasons.map(reasonWords).join(', and ');
   }
 
+  // The review does not repeat the plain offer card's not-sandboxed
+  // sentence: the signed-off mock draws the review without it, spending the
+  // card on the decisions, and the fact is stated once, at plan time, on
+  // the offer card every collision-free import confirms through. A person
+  // reaching the review has already read the package's contents item by
+  // item, which is more than the plain card asks of them.
   function reviewCopy(state) {
     const counts = reviewCounts(state);
     const rows = state.plan.items.map((item) => {

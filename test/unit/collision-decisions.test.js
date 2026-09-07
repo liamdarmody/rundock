@@ -19,11 +19,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const model = require('../../public/packages-install-model.js');
-// The view resolves esc and escAttr from the global lexical environment, as
-// it does in the browser; the same escaping app.js defines, so the rendered
-// rows read here are the rows a person sees.
-global.esc = (t) => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-global.escAttr = (t) => global.esc(t).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+// The review renderers escape through settings.js's own Node-safe helpers,
+// so the rows rendered here are the product's, with no page and no copy of
+// the escaping rule in this file.
 const settings = require('../../public/views/settings.js');
 const { buildPlan, decide } = require('../../lib/packages/import-plan.js');
 const { applyImport } = require('../../lib/packages/import-apply.js');
