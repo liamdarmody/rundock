@@ -257,6 +257,16 @@ describe('a reply is matched to the request that produced it, not to the phase i
     assert.strictEqual(result.state.phase, 'classifying');
   });
 
+  test('a stray evaluate refusal reaching the classifying phase is not read as the plan failing', () => {
+    const { workspace, sourceRoot, offer, firstSend } = collidingScenario();
+    const resubmitted = model.submit(model.cancel(offer).state, sourceRoot).state;
+    // A refusal stamped for the FIRST review's evaluate request lands while
+    // the second plan is in flight: same error envelope, other operation.
+    const refusal = realReply(workspace, 'evaluate_package_decisions', { requestId: firstSend.requestId, approval: {} });
+    assert.deepStrictEqual([refusal.type, refusal.operation], ['package_import_error', 'evaluate']);
+    assert.strictEqual(model.reply(resubmitted, refusal).state, resubmitted, 'the stray refusal changes nothing, by identity');
+  });
+
   test('a superseded evaluate reply changes nothing once a newer decision has asked its own projection', () => {
     const { workspace, offer } = collidingScenario();
     // Two decisions in a row: the first ask is still outstanding when the

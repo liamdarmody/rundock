@@ -179,6 +179,25 @@ describe('the protocol boundary', () => {
     assert.strictEqual(fs.readdirSync(path.join(workspace, RECEIPTS)).length, 1);
   });
 
+  test('an evaluate_package_decisions dispatch leaves the complete tree byte-identical, receipts included', () => {
+    const { workspace, sourceRoot } = fixture();
+    // An apply first, so there is a receipts directory to be left alone, and
+    // an interrupted-transaction recovery would have something to do if the
+    // evaluate path ever ran one.
+    dispatchJson('apply_package_import', {
+      sourcePath: sourceRoot, approval: decide(planVia(sourceRoot), { 'agent:scribe': 'skip', 'skill:writer': 'skip' }),
+    });
+    assert.strictEqual(fs.readdirSync(path.join(workspace, RECEIPTS)).length, 1);
+    const approval = decide(planVia(sourceRoot), { 'agent:scribe': 'add', 'skill:writer': 'overwrite' });
+    const before = tree(workspace);
+    const reply = dispatchJson('evaluate_package_decisions', { requestId: 'r1', sourcePath: sourceRoot, approval });
+    assert.strictEqual(reply.type, 'package_import_result');
+    assert.deepStrictEqual([reply.operation, reply.requestId, reply.status], ['evaluate', 'r1', 'ready']);
+    assert.strictEqual(reply.writes.length, 2, 'the evaluation has writes to make, and makes none of them');
+    assert.strictEqual('written' in reply, false);
+    assert.deepStrictEqual(tree(workspace), before);
+  });
+
   test('the receipt is the complete record of a mixed-outcome apply', () => {
     const workspace = makeTempDir('proto-ws-');
     const sourceRoot = makeTempDir('proto-src-');

@@ -32,13 +32,10 @@ const MODEL = {
 const MUTATIONS = [
   // THE FAIL-CLOSED GUARD IS GONE BECAUSE ITS RULE IS. A colliding plan now
   // enters the review surface with every collision decided skip, and that
-  // rule has its own guards in mutate-collision-decisions-guards.js (the
-  // skip default, the decided approval on the wire, and the rest). A guard
-  // kept here would pin the overturned shape and report its own target as
-  // unmutated forever.
-  [MODEL, 'a fresh collision is decided skip, never anything writable',
-    "    for (const item of items) decisions[item.id] = item.collision ? 'skip' : 'add';\n",
-    "    for (const item of items) decisions[item.id] = item.collision ? 'overwrite' : 'add';\n"],
+  // rule is guarded once, in mutate-collision-decisions-guards.js (the skip
+  // default, the decided approval on the wire, and the rest). One guard,
+  // one harness: a second row here would mutate the same line for the same
+  // proof.
   [MODEL, 'cancel sends nothing at all',
     '  function cancel() {\n    return { state: initial() };\n  }',
     "  function cancel() {\n    return { state: initial(), send: { type: 'apply_package_import' } };\n  }"],
