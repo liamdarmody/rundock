@@ -529,3 +529,70 @@ describe('the row\'s on-time, caught-up and missed verdicts ignore a manual run'
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Consent is change-consent
+// ---------------------------------------------------------------------------
+
+describe('approval is consent to a changed plan, and nothing else asks for it', () => {
+  const routines = require('../../lib/agents/routines.js');
+  const { PLAN_FIELDS, planApproved } = routines;
+  const approve = (routine) => ({ ...routine, planApprovedHash: computePlanHash(routine) });
+
+  test('each plan field lapses approval when it changes, and each other field keeps it, walked from the hash inputs', () => {
+    const base = approve({ name: ROUTINE, schedule: SCHEDULE, prompt: 'go', skill: 'ops', runOn: 'local', enabled: true, paused: false, timezone: 'Europe/London' });
+    assert.strictEqual(planApproved(base), true, 'sanity');
+    assert.deepStrictEqual(PLAN_FIELDS.slice().sort(), ['prompt', 'runOn', 'skill'],
+      'what a routine RUNS is its prompt, its skill and where it runs: nothing else is the plan');
+    for (const field of PLAN_FIELDS) {
+      assert.strictEqual(planApproved({ ...base, [field]: `changed-${field}` }), false,
+        `a change to "${field}" changes what this runs, so consent lapses`);
+    }
+    for (const [field, value] of Object.entries({ schedule: 'every weekday at 09:30', timezone: 'Australia/Sydney', paused: true, enabled: false })) {
+      assert.ok(!PLAN_FIELDS.includes(field), `sanity: "${field}" is not a plan field`);
+      assert.strictEqual(planApproved({ ...base, [field]: value }), true,
+        `a change to "${field}" changes when or whether, not what, so consent stands`);
+    }
+  });
+
+  test('editing the skill\'s own body keeps approval, on the roster the tick reads', () => {
+    withRun(({ ws }) => {
+      const { discoverAgents } = require('../../lib/agents/discovery.js');
+      const skillDir = path.join(ws, '.claude', 'skills', 'ops');
+      fs.mkdirSync(skillDir, { recursive: true });
+      fs.writeFileSync(path.join(skillDir, 'SKILL.md'), '---\nname: ops\ndescription: the ops summary\n---\nCompile the summary.\n');
+      invalidateAgentCache();
+      const before = discoverAgents().find(a => a.id === AGENT).routines[0];
+      assert.strictEqual(before.refusal, null, 'sanity: approved and runnable');
+      const hashBefore = computePlanHash(before);
+
+      fs.writeFileSync(path.join(skillDir, 'SKILL.md'), '---\nname: ops\ndescription: the ops summary\n---\nCompile the summary, and file it.\n');
+      invalidateAgentCache();
+      const after = discoverAgents().find(a => a.id === AGENT).routines[0];
+      assert.strictEqual(computePlanHash(after), hashBefore, 'the hash reads the routine, never the skill\'s file');
+      assert.strictEqual(after.refusal, null, 'so a skill edited in place keeps the routine scheduled');
+    }, { routine: approvedRoutine({ skill: 'ops' }) });
+  });
+
+  test('a routine written through the editor\'s save road is approved from birth, on the roster the tick reads', () => {
+    withRun(({ ws }) => {
+      const { discoverAgents } = require('../../lib/agents/discovery.js');
+      const { buildDispatch } = require('../../lib/protocol/handlers/index.js');
+      const sent = [];
+      const ctx = {
+        agents: { invalidateAgentCache: () => invalidateAgentCache(), discoverSkills: () => [], flagRosterRefresh: () => {} },
+        workspace: { isInsideWorkspace: (p) => p.startsWith(ws) },
+      };
+      buildDispatch().save_routine(ctx, { send: (m) => sent.push(JSON.parse(m)), readyState: 1 }, {
+        type: 'save_routine', agentId: AGENT,
+        routine: { name: 'fresh', schedule: 'every day at 08:00', skill: 'ops', prompt: 'Use the ops skill.', runOn: 'local' },
+      });
+      assert.ok(sent.some(m => m.type === 'routine_saved'), 'the save landed');
+      invalidateAgentCache();
+      const fresh = discoverAgents().find(a => a.id === AGENT).routines.find(r => r.name === 'fresh');
+      assert.ok(fresh, 'the routine is on the roster');
+      assert.strictEqual(planApproved(fresh), true, 'making it is the consent');
+      assert.strictEqual(fresh.refusal, null, 'and the tick would run it with nothing else asked');
+    });
+  });
+});
