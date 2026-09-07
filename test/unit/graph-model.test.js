@@ -478,3 +478,31 @@ describe('layout parameters follow the three levers', () => {
     assert.strictEqual(m.CENTER_FORCE, null, 'no compensating centre force: the fit pass frames the picture instead');
   });
 });
+
+describe('start positions: nodes that share an anchor start spread, not stacked', () => {
+  test('every node starts at a finite, distinct point near its anchor, and unlinked nodes start on the rim', () => {
+    const g = m.buildGraph(PAYLOAD);
+    const a = m.assignAnchors(g.nodes, g.edges, { seed: 12345 });
+    const starts = m.startPositions(a.anchors);
+    assert.strictEqual(starts.length, g.nodes.length);
+    const seen = new Set();
+    starts.forEach((p, i) => {
+      assert.ok(Number.isFinite(p.x) && Number.isFinite(p.y), `node ${i} starts somewhere finite`);
+      const key = p.x.toFixed(6) + ',' + p.y.toFixed(6);
+      assert.ok(!seen.has(key), `node ${i} does not start on top of another: a stack of coincident points is the worst case for every force`);
+      seen.add(key);
+      const d = Math.hypot(p.x - a.anchors[i].ax, p.y - a.anchors[i].ay);
+      assert.ok(d <= m.START_SPREAD * Math.sqrt(g.nodes.length), `node ${i} starts within its community's disc (${d.toFixed(1)})`);
+    });
+    // The rim keeps its place: an unlinked node starts on its own anchor,
+    // which already differs per node.
+    const lonely = g.nodes.findIndex(n => n.path === 'Lonely.md');
+    assert.strictEqual(starts[lonely].x, a.anchors[lonely].ax);
+    assert.strictEqual(starts[lonely].y, a.anchors[lonely].ay);
+  });
+  test('start positions are deterministic', () => {
+    const g = m.buildGraph(PAYLOAD);
+    const a = m.assignAnchors(g.nodes, g.edges, { seed: 12345 });
+    assert.deepStrictEqual(m.startPositions(a.anchors), m.startPositions(a.anchors));
+  });
+});

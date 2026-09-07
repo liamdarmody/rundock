@@ -117,9 +117,10 @@
     // Layout nodes: the model's anchors are the starting positions and the
     // kinds decide which force holds each node.
     const placed = model.assignAnchors(graph.nodes, graph.edges, { seed: model.COMMUNITY_SEED });
+    const starts = model.startPositions(placed.anchors);
     const N = graph.nodes.map((n, i) => {
       const a = placed.anchors[i];
-      return { i, x: a.ax, y: a.ay, ax: a.ax, ay: a.ay, degree: n.degree, kind: a.kind };
+      return { i, x: starts[i].x, y: starts[i].y, ax: a.ax, ay: a.ay, degree: n.degree, kind: a.kind };
     });
     const steps = model.recencyRanks(graph.nodes).map(model.recencyStep);
 
@@ -136,6 +137,8 @@
     let appear = reduceMotion ? 1 : 0;
     let warnedDiverged = false;
     const frames = [];
+    const tickGaps = [];
+    let lastTickAt = null;
 
     const viewState = () => ({ threshold: model.visibleThreshold(graph.degreesSorted, t.k / (kFit || 1)), filter });
     const screenOf = (n) => [n.x * t.k + t.tx, n.y * t.k + t.ty];
@@ -182,10 +185,10 @@
       if (!perfOn || frames.length % 10 !== 0) return;
       const el = document.getElementById(IDS.perf);
       if (!el) return;
-      const sorted = frames.slice().sort((a, b) => a - b);
-      const median = sorted[Math.floor(sorted.length / 2)];
-      el.textContent = 'draw median ' + median.toFixed(2) + 'ms over ' + frames.length + ' frames'
+      const median = (xs) => { const sorted = xs.slice().sort((a, b) => a - b); return sorted[Math.floor(sorted.length / 2)]; };
+      el.textContent = 'draw median ' + median(frames).toFixed(2) + 'ms over ' + frames.length + ' frames'
         + (layoutMs !== null ? ' · layout ' + layoutMs + 'ms' : ' · settling')
+        + (tickGaps.length ? ' · tick median ' + median(tickGaps).toFixed(1) + 'ms over ' + tickGaps.length + ' ticks' : '')
         + ' · ' + N.length + ' nodes';
     }
 
@@ -351,6 +354,7 @@
       .force('collide', d3.forceCollide().radius((n) => model.collideRadius(n)).iterations(1))
       .alphaDecay(model.alphaDecay(N.length))
       .on('tick.map', () => {
+        if (perfOn) { const now = performance.now(); if (lastTickAt !== null) tickGaps.push(now - lastTickAt); lastTickAt = now; }
         // alpha runs 1 -> 0 as the layout cools: a real measure of how
         // settled the picture is rather than a wall-clock guess.
         if (!reduceMotion) appear = Math.max(0, Math.min(1, 1 - sim.alpha()));

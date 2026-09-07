@@ -211,6 +211,26 @@
     return { anchors, communities: K, coreRadius, rimRadius };
   }
 
+  // Where each node STARTS. An anchor is where a group belongs, and every
+  // member of a community shares one, so starting every member exactly on it
+  // stacks hundreds of nodes on a single point: the worst case for the
+  // quadtree behind repulsion and collision, and the first few hundred ticks
+  // are spent unstacking them. Members that share an anchor start spread on
+  // a small spiral around it instead, deterministically; a node with an
+  // anchor of its own (the rim) starts on it.
+  const START_SPREAD = 6;
+  function startPositions(anchors) {
+    const ordinal = new Map();
+    return anchors.map((a) => {
+      const key = a.ax.toFixed(6) + ',' + a.ay.toFixed(6);
+      const n = ordinal.get(key) || 0;
+      ordinal.set(key, n + 1);
+      if (n === 0) return { x: a.ax, y: a.ay };
+      const r = START_SPREAD * Math.sqrt(n), ang = n * GOLDEN;
+      return { x: a.ax + Math.cos(ang) * r, y: a.ay + Math.sin(ang) * r };
+    });
+  }
+
   // ===== PROGRESSIVE DISCLOSURE =====
   //
   // At the fit zoom the map shows its hubs and its rim; zooming in reveals
@@ -486,7 +506,7 @@
 
   return {
     buildGraph, sortedDegrees,
-    detectCommunities, components, assignAnchors, COMMUNITY_SEED,
+    detectCommunities, components, assignAnchors, COMMUNITY_SEED, startPositions, START_SPREAD,
     visibleThreshold, isVisible, hiddenCount,
     matchesKeyword, applyFilter,
     baseRadius, radius, ZOOM_EXPONENT, RADIUS_MIN, RADIUS_MAX,
