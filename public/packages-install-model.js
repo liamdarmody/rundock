@@ -608,22 +608,28 @@
   // trust card's safety claims are generated from this table, one sentence
   // per fact, and the focused suite compares it to the host's own tables and
   // to the contract document, so a claim can never outlive the thing that
-  // makes it true. `init` names the fields of the opened file the frame is
-  // told about; the host's own suite binds it to the contract document's
-  // init row once that row exists.
+  // makes it true. `init` names the fields the frame is told about in the
+  // one message the host sends it: the opened file's path and text, and the
+  // theme the page shows at mount time; the suite binds this row to the
+  // contract document's init row.
   const HOST_FACTS = {
     sandbox: 'allow-scripts',
     network: "default-src 'none'",
     messages: ['ready', 'resize', 'error', 'open'],
-    init: ['path', 'content'],
+    init: ['path', 'content', 'theme'],
   };
+
+  function listWords(items) {
+    if (items.length < 2) return items.join('');
+    return `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;
+  }
 
   function hostClaims(facts) {
     return [
       `Its view runs in a frame whose only sandbox grant is ${facts.sandbox}: an opaque origin with no access to Rundock's page, storage or scripts.`,
       `The frame's own policy is ${facts.network}: it cannot load or contact anything on the network.`,
       `It can send Rundock only these messages: ${facts.messages.join(', ')}. Anything else is refused.`,
-      `It receives the opened file's ${facts.init.join(' and ')}, read-only, and nothing else about your workspace.`,
+      `It receives the opened file's ${listWords(facts.init)}, read-only, and nothing else about your workspace.`,
     ];
   }
 

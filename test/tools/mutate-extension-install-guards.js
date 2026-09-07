@@ -238,7 +238,7 @@ const MUTATIONS = [
   // Drop the sentence about the opened file and the card no longer says the
   // frame receives the file's path and text, read-only.
   [MODEL, 'the trust card states that the frame receives the opened file read-only',
-    "      `It receives the opened file's ${facts.init.join(' and ')}, read-only, and nothing else about your workspace.`,",
+    "      `It receives the opened file's ${listWords(facts.init)}, read-only, and nothing else about your workspace.`,",
     ''],
   // Make the content half's sentence claim the agents land with the
   // extension and the card lies about what confirm does: the disk says

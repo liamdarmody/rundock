@@ -351,6 +351,14 @@ function captureWs() {
   return { readyState: 1, sent: [], send(raw) { this.sent.push(JSON.parse(raw)); } };
 }
 
+// The handler context in the shape server.js builds it, carrying the one
+// root-owned capability these handlers reach for: the file tree's cache is
+// told when the extension records change. Inert here; the notification
+// suite below hands in a counting one.
+function ctx() {
+  return { workspace: { noteExtensionRecordsChanged() {} } };
+}
+
 // The same capture socket, plus the one real-socket method the pending-offer
 // release touches: `.once('close', fn)`. Kept separate from captureWs()
 // because every other test's socket has to stay exactly as bare as a fake
@@ -398,12 +406,12 @@ describe('consent order at the wire: plan, then one answer', () => {
       const previousDeps = handlers.wireExtensionDeps({ acquire: () => snap });
       try {
         const sock = captureWs();
-        handlers.handlePlanPackageInstall({}, sock, { type: 'plan_package_install', url: 'someone/test-ext', reference: 'v1.0.0' });
+        handlers.handlePlanPackageInstall(ctx(), sock, { type: 'plan_package_install', url: 'someone/test-ext', reference: 'v1.0.0' });
         const plan = sock.sent[0];
         assert.strictEqual(plan.type, 'extension_install_plan');
         assert.ok(fs.existsSync(snap), 'the snapshot waits between offer and answer');
 
-        handlers.handleDeclinePackageInstall({}, sock, { type: 'decline_package_install', token: plan.token });
+        handlers.handleDeclinePackageInstall(ctx(), sock, { type: 'decline_package_install', token: plan.token });
         assert.strictEqual(sock.sent[1].type, 'package_install_declined');
         assert.strictEqual(fs.existsSync(snap), false, 'no is nothing left behind, the temporary snapshot included');
         assert.deepStrictEqual(fs.readdirSync(ws), [], 'and the workspace never changed');
@@ -419,7 +427,7 @@ describe('consent order at the wire: plan, then one answer', () => {
       const previousDeps = handlers.wireExtensionDeps({ acquire: () => { acquired += 1; return extensionSnapshot(); } });
       try {
         const sock = captureWs();
-        handlers.handlePlanPackageInstall({}, sock, { type: 'plan_package_install', url: 'someone/test-ext', reference: 'main' });
+        handlers.handlePlanPackageInstall(ctx(), sock, { type: 'plan_package_install', url: 'someone/test-ext', reference: 'main' });
         assert.strictEqual(sock.sent[0].type, 'package_install_error');
         assert.strictEqual(sock.sent[0].code, 'unpinned-reference');
         assert.strictEqual(acquired, 0, 'refusal comes before any fetch');
@@ -435,7 +443,7 @@ describe('consent order at the wire: plan, then one answer', () => {
       const previousDeps = handlers.wireExtensionDeps({ acquire: () => { acquired += 1; return extensionSnapshot(); } });
       try {
         const sock = captureWs();
-        handlers.handlePlanPackageInstall({}, sock, { type: 'plan_package_install', url: 'someone/test-ext', reference: '--upload-pack=evil' });
+        handlers.handlePlanPackageInstall(ctx(), sock, { type: 'plan_package_install', url: 'someone/test-ext', reference: '--upload-pack=evil' });
         assert.strictEqual(sock.sent[0].type, 'package_install_error');
         assert.strictEqual(sock.sent[0].code, 'unpinned-reference');
         assert.strictEqual(acquired, 0, 'refusal comes before any fetch, so nothing ever reaches a git argv');
@@ -469,7 +477,7 @@ describe('a failure between acquire and offer discards the snapshot and issues n
       });
       try {
         const sock = captureWs();
-        handlers.handlePlanPackageInstall({}, sock, { type: 'plan_package_install', url: 'someone/test-ext', reference: 'v1.0.0' });
+        handlers.handlePlanPackageInstall(ctx(), sock, { type: 'plan_package_install', url: 'someone/test-ext', reference: 'v1.0.0' });
         assert.strictEqual(sock.sent.length, 1, 'exactly one reply answers the failed plan');
         assert.strictEqual(sock.sent[0].type, 'package_install_error');
         assert.strictEqual(sock.sent[0].code, 'acquire-failed');
@@ -478,7 +486,7 @@ describe('a failure between acquire and offer discards the snapshot and issues n
         assert.deepStrictEqual([...after].filter((n) => !before.has(n)), [],
           'nothing the failed acquisition created survives it');
 
-        handlers.handleConfirmExtensionInstall({}, sock, { type: 'confirm_extension_install', token: 'ext-never-issued' });
+        handlers.handleConfirmExtensionInstall(ctx(), sock, { type: 'confirm_extension_install', token: 'ext-never-issued' });
         assert.strictEqual(sock.sent[1].type, 'package_install_error',
           'a plan that never reached the offer issued no token; any confirm answers a refusal');
         assert.match(sock.sent[1].message, /nothing is awaiting this confirmation/);
@@ -494,14 +502,14 @@ describe('a failure between acquire and offer discards the snapshot and issues n
       const previousDeps = handlers.wireExtensionDeps({ acquire: () => snap });
       try {
         const sock = captureWs();
-        handlers.handlePlanPackageInstall({}, sock, { type: 'plan_package_install', url: 'someone/test-ext', reference: 'v1.0.0' });
+        handlers.handlePlanPackageInstall(ctx(), sock, { type: 'plan_package_install', url: 'someone/test-ext', reference: 'v1.0.0' });
         assert.strictEqual(sock.sent.length, 1, 'exactly one reply answers the failed plan');
         assert.strictEqual(sock.sent[0].type, 'package_install_error');
         assert.strictEqual(sock.sent[0].code, 'empty-package');
         assert.strictEqual(fs.existsSync(snap), false,
           'the acquired snapshot is discarded when planning it fails, exactly as a decline discards it');
 
-        handlers.handleConfirmExtensionInstall({}, sock, { type: 'confirm_extension_install', token: 'pkg-never-issued' });
+        handlers.handleConfirmExtensionInstall(ctx(), sock, { type: 'confirm_extension_install', token: 'pkg-never-issued' });
         assert.strictEqual(sock.sent[1].type, 'package_install_error',
           'a plan that never reached the offer issued no token; any confirm answers a refusal');
         assert.match(sock.sent[1].message, /nothing is awaiting this confirmation/);
@@ -516,7 +524,7 @@ describe('the token dies with its use, and an unanswered offer does not live for
   test('a confirm carrying a token that was never issued installs nothing and answers an error', () => {
     withWorkspace((ws) => {
       const sock = captureWs();
-      handlers.handleConfirmExtensionInstall({}, sock, { type: 'confirm_extension_install', token: 'ext-never-issued' });
+      handlers.handleConfirmExtensionInstall(ctx(), sock, { type: 'confirm_extension_install', token: 'ext-never-issued' });
       assert.strictEqual(sock.sent[0].type, 'package_install_error');
       assert.match(sock.sent[0].message, /nothing is awaiting this confirmation/);
       assert.strictEqual(fs.existsSync(path.join(ws, ...RECORDS_PATH.split('/'))), false,
@@ -532,13 +540,13 @@ describe('the token dies with its use, and an unanswered offer does not live for
       const previousDeps = handlers.wireExtensionDeps({ acquire: () => snap });
       try {
         const sock = captureWs();
-        handlers.handlePlanPackageInstall({}, sock, { type: 'plan_package_install', url: 'someone/test-ext', reference: 'v1.0.0' });
+        handlers.handlePlanPackageInstall(ctx(), sock, { type: 'plan_package_install', url: 'someone/test-ext', reference: 'v1.0.0' });
         const token = sock.sent[0].token;
-        handlers.handleConfirmExtensionInstall({}, sock, { type: 'confirm_extension_install', token });
+        handlers.handleConfirmExtensionInstall(ctx(), sock, { type: 'confirm_extension_install', token });
         assert.strictEqual(sock.sent[1].type, 'extension_install_result');
         const afterFirst = fs.statSync(path.join(ws, ...EXTENSIONS_ROOT.split('/'), 'test-ext', 'view', 'index.html')).mtimeMs;
 
-        handlers.handleConfirmExtensionInstall({}, sock, { type: 'confirm_extension_install', token });
+        handlers.handleConfirmExtensionInstall(ctx(), sock, { type: 'confirm_extension_install', token });
         assert.strictEqual(sock.sent[2].type, 'package_install_error',
           'the same token answered twice must not install a second time');
         assert.match(sock.sent[2].message, /nothing is awaiting this confirmation/);
@@ -559,14 +567,14 @@ describe('the token dies with its use, and an unanswered offer does not live for
       const previousDeps = handlers.wireExtensionDeps({ acquire: () => snap });
       try {
         const sock = closableWs();
-        handlers.handlePlanPackageInstall({}, sock, { type: 'plan_package_install', url: 'someone/test-ext', reference: 'v1.0.0' });
+        handlers.handlePlanPackageInstall(ctx(), sock, { type: 'plan_package_install', url: 'someone/test-ext', reference: 'v1.0.0' });
         const token = sock.sent[0].token;
         assert.ok(fs.existsSync(snap), 'sanity: the snapshot is waiting between offer and answer');
 
         sock.dropConnection();
         assert.strictEqual(fs.existsSync(snap), false, 'the connection dropped and the fetched snapshot was left behind');
 
-        handlers.handleConfirmExtensionInstall({}, sock, { type: 'confirm_extension_install', token });
+        handlers.handleConfirmExtensionInstall(ctx(), sock, { type: 'confirm_extension_install', token });
         assert.strictEqual(sock.sent[1].type, 'package_install_error',
           'the token a dropped connection was holding must not still be answerable');
       } finally {
@@ -583,16 +591,16 @@ describe('the token dies with its use, and an unanswered offer does not live for
       const previousDeps = handlers.wireExtensionDeps({ acquire: () => (calls++ === 0 ? first : second) });
       try {
         const sock = captureWs();
-        handlers.handlePlanPackageInstall({}, sock, { type: 'plan_package_install', url: 'someone/first-ext', reference: 'v1.0.0' });
+        handlers.handlePlanPackageInstall(ctx(), sock, { type: 'plan_package_install', url: 'someone/first-ext', reference: 'v1.0.0' });
         const firstToken = sock.sent[0].token;
         assert.ok(fs.existsSync(first), 'sanity: the first offer is waiting');
 
-        handlers.handlePlanPackageInstall({}, sock, { type: 'plan_package_install', url: 'someone/second-ext', reference: 'v1.0.0' });
+        handlers.handlePlanPackageInstall(ctx(), sock, { type: 'plan_package_install', url: 'someone/second-ext', reference: 'v1.0.0' });
         assert.strictEqual(fs.existsSync(first), false,
           'reading a second package on the same connection abandoned the first, unanswered offer');
         assert.ok(fs.existsSync(second), 'the second offer is the one now waiting');
 
-        handlers.handleConfirmExtensionInstall({}, sock, { type: 'confirm_extension_install', token: firstToken });
+        handlers.handleConfirmExtensionInstall(ctx(), sock, { type: 'confirm_extension_install', token: firstToken });
         assert.strictEqual(sock.sent[2].type, 'package_install_error',
           'the superseded token must not still confirm');
       } finally {
@@ -609,8 +617,8 @@ describe('install, the record, and the update check that reads it', () => {
       const previousDeps = handlers.wireExtensionDeps({ acquire: () => snap });
       try {
         const sock = captureWs();
-        handlers.handlePlanPackageInstall({}, sock, { type: 'plan_package_install', url: 'someone/test-ext', reference: 'v1.0.0' });
-        handlers.handleConfirmExtensionInstall({}, sock, { type: 'confirm_extension_install', token: sock.sent[0].token });
+        handlers.handlePlanPackageInstall(ctx(), sock, { type: 'plan_package_install', url: 'someone/test-ext', reference: 'v1.0.0' });
+        handlers.handleConfirmExtensionInstall(ctx(), sock, { type: 'confirm_extension_install', token: sock.sent[0].token });
         const result = sock.sent[1];
         assert.strictEqual(result.type, 'extension_install_result');
 
@@ -646,10 +654,10 @@ describe('install, the record, and the update check that reads it', () => {
       });
       try {
         const sock = captureWs();
-        handlers.handlePlanPackageInstall({}, sock, { type: 'plan_package_install', url: 'someone/test-ext', reference: 'v1.0.0' });
-        handlers.handleConfirmExtensionInstall({}, sock, { type: 'confirm_extension_install', token: sock.sent[0].token });
+        handlers.handlePlanPackageInstall(ctx(), sock, { type: 'plan_package_install', url: 'someone/test-ext', reference: 'v1.0.0' });
+        handlers.handleConfirmExtensionInstall(ctx(), sock, { type: 'confirm_extension_install', token: sock.sent[0].token });
 
-        handlers.handleCheckExtensionUpdate({}, sock, { type: 'check_extension_update', name: 'test-ext' });
+        handlers.handleCheckExtensionUpdate(ctx(), sock, { type: 'check_extension_update', name: 'test-ext' });
         const status = sock.sent[2];
         assert.strictEqual(status.type, 'extension_update_status');
         assert.strictEqual(status.current, 'v1.0.0');
@@ -678,7 +686,7 @@ describe('install, the record, and the update check that reads it', () => {
       const previousDeps = handlers.wireExtensionDeps({ listRefs: () => { asked += 1; return []; } });
       try {
         const sock = captureWs();
-        handlers.handleCheckExtensionUpdate({}, sock, { type: 'check_extension_update', name: 'test-ext' });
+        handlers.handleCheckExtensionUpdate(ctx(), sock, { type: 'check_extension_update', name: 'test-ext' });
         assert.strictEqual(sock.sent[0].type, 'package_install_error');
         assert.match(sock.sent[0].message, /not a GitHub repository/);
         assert.strictEqual(asked, 0,
@@ -705,7 +713,7 @@ describe('install, the record, and the update check that reads it', () => {
       const previousDeps = handlers.wireExtensionDeps({ listRefs: () => { asked += 1; return []; } });
       try {
         const sock = captureWs();
-        handlers.handleCheckExtensionUpdate({}, sock, { type: 'check_extension_update', name: 'test-ext' });
+        handlers.handleCheckExtensionUpdate(ctx(), sock, { type: 'check_extension_update', name: 'test-ext' });
         assert.strictEqual(sock.sent[0].type, 'package_install_error');
         assert.match(sock.sent[0].message, /not a GitHub repository/);
         assert.strictEqual(asked, 0,
@@ -781,12 +789,12 @@ describe('an update begins from the installed record, never from the caller', ()
       try {
         const sock = captureWs();
         // Install at the pinned reference.
-        handlers.handlePlanPackageInstall({}, sock, { type: 'plan_package_install', url: 'someone/test-ext', reference: 'v1.0.0' });
-        handlers.handleConfirmExtensionInstall({}, sock, { type: 'confirm_extension_install', token: sock.sent[0].token });
+        handlers.handlePlanPackageInstall(ctx(), sock, { type: 'plan_package_install', url: 'someone/test-ext', reference: 'v1.0.0' });
+        handlers.handleConfirmExtensionInstall(ctx(), sock, { type: 'confirm_extension_install', token: sock.sent[0].token });
         assert.strictEqual(sock.sent[1].type, 'extension_install_result');
 
         // The remote reports a moved reference.
-        handlers.handleCheckExtensionUpdate({}, sock, { type: 'check_extension_update', name: 'test-ext' });
+        handlers.handleCheckExtensionUpdate(ctx(), sock, { type: 'check_extension_update', name: 'test-ext' });
         const status = sock.sent[2];
         assert.strictEqual(status.type, 'extension_update_status');
         assert.deepStrictEqual(status.newer, ['v2.0.0']);
@@ -794,7 +802,7 @@ describe('an update begins from the installed record, never from the caller', ()
         // The update is planned from the record: only a name and the chosen
         // reference are supplied here, and the source URL comes from nowhere
         // this test wrote.
-        handlers.handlePlanExtensionUpdate({}, sock, { type: 'plan_extension_update', name: 'test-ext', reference: status.newer[0] });
+        handlers.handlePlanExtensionUpdate(ctx(), sock, { type: 'plan_extension_update', name: 'test-ext', reference: status.newer[0] });
         const updatePlan = sock.sent[3];
         assert.strictEqual(updatePlan.type, 'extension_install_plan');
         assert.strictEqual(updatePlan.source.url, 'https://github.com/someone/test-ext',
@@ -802,7 +810,7 @@ describe('an update begins from the installed record, never from the caller', ()
         assert.deepStrictEqual(updatePlan.replaces, { version: '1.0.0', reference: 'v1.0.0' },
           'the trust step is reopened, naming what this replaces');
 
-        handlers.handleConfirmExtensionInstall({}, sock, { type: 'confirm_extension_install', token: updatePlan.token });
+        handlers.handleConfirmExtensionInstall(ctx(), sock, { type: 'confirm_extension_install', token: updatePlan.token });
         assert.strictEqual(sock.sent[4].type, 'extension_install_result');
 
         const records = readExtensionRecords(ws);
@@ -823,7 +831,7 @@ describe('an update begins from the installed record, never from the caller', ()
         // The uninstall this record now supports is driven at the wire too,
         // so the reply shape a client would actually read is proven here,
         // not only the library call underneath it.
-        handlers.handleUninstallExtension({}, sock, { type: 'uninstall_extension', name: 'test-ext' });
+        handlers.handleUninstallExtension(ctx(), sock, { type: 'uninstall_extension', name: 'test-ext' });
         const uninstalled = sock.sent[5];
         assert.strictEqual(uninstalled.type, 'extension_uninstalled');
         assert.match(uninstalled.untouched, /ordinary workspace files and remain/);
@@ -841,7 +849,7 @@ describe('an update begins from the installed record, never from the caller', ()
       const previousDeps = handlers.wireExtensionDeps({ acquire: () => { acquired += 1; return extensionSnapshot(); } });
       try {
         const sock = captureWs();
-        handlers.handlePlanExtensionUpdate({}, sock, { type: 'plan_extension_update', name: 'ghost', reference: 'v2.0.0' });
+        handlers.handlePlanExtensionUpdate(ctx(), sock, { type: 'plan_extension_update', name: 'ghost', reference: 'v2.0.0' });
         assert.strictEqual(sock.sent[0].type, 'package_install_error');
         assert.match(sock.sent[0].message, /no extension named "ghost" is installed/);
         assert.strictEqual(acquired, 0, 'nothing installed means nothing to acquire');
@@ -858,10 +866,10 @@ describe('an update begins from the installed record, never from the caller', ()
       const previousDeps = handlers.wireExtensionDeps({ acquire: () => { acquired += 1; return v1; } });
       try {
         const sock = captureWs();
-        handlers.handlePlanPackageInstall({}, sock, { type: 'plan_package_install', url: 'someone/test-ext', reference: 'v1.0.0' });
-        handlers.handleConfirmExtensionInstall({}, sock, { type: 'confirm_extension_install', token: sock.sent[0].token });
+        handlers.handlePlanPackageInstall(ctx(), sock, { type: 'plan_package_install', url: 'someone/test-ext', reference: 'v1.0.0' });
+        handlers.handleConfirmExtensionInstall(ctx(), sock, { type: 'confirm_extension_install', token: sock.sent[0].token });
         acquired = 0;
-        handlers.handlePlanExtensionUpdate({}, sock, { type: 'plan_extension_update', name: 'test-ext', reference: '   ' });
+        handlers.handlePlanExtensionUpdate(ctx(), sock, { type: 'plan_extension_update', name: 'test-ext', reference: '   ' });
         assert.strictEqual(sock.sent[2].type, 'package_install_error');
         // The blank reference goes through the same validation a fresh
         // install's pasted reference does, so it carries that refusal's
@@ -886,10 +894,10 @@ describe('an update begins from the installed record, never from the caller', ()
       });
       try {
         const sock = captureWs();
-        handlers.handlePlanPackageInstall({}, sock, { type: 'plan_package_install', url: 'someone/test-ext', reference: 'v1.0.0' });
-        handlers.handleConfirmExtensionInstall({}, sock, { type: 'confirm_extension_install', token: sock.sent[0].token });
+        handlers.handlePlanPackageInstall(ctx(), sock, { type: 'plan_package_install', url: 'someone/test-ext', reference: 'v1.0.0' });
+        handlers.handleConfirmExtensionInstall(ctx(), sock, { type: 'confirm_extension_install', token: sock.sent[0].token });
 
-        handlers.handlePlanExtensionUpdate({}, sock, {
+        handlers.handlePlanExtensionUpdate(ctx(), sock, {
           type: 'plan_extension_update', name: 'test-ext', reference: 'v2.0.0',
           url: 'https://github.com/attacker/evil',
         });
@@ -915,7 +923,7 @@ describe('an update begins from the installed record, never from the caller', ()
       try {
         const sock = captureWs();
         assert.doesNotThrow(() => {
-          handlers.handlePlanExtensionUpdate({}, sock, { type: 'plan_extension_update', name: 'test-ext', reference: 'v2.0.0' });
+          handlers.handlePlanExtensionUpdate(ctx(), sock, { type: 'plan_extension_update', name: 'test-ext', reference: 'v2.0.0' });
         }, 'a handler answers, it never throws out of the dispatch');
         assert.strictEqual(sock.sent[0].type, 'package_install_error');
         assert.match(sock.sent[0].message, /extension records unreadable/);
@@ -942,7 +950,7 @@ describe('an update begins from the installed record, never from the caller', ()
       try {
         const sock = captureWs();
         assert.doesNotThrow(() => {
-          handlers.handlePlanExtensionUpdate({}, sock, { type: 'plan_extension_update', name: 'test-ext', reference: 'v2.0.0' });
+          handlers.handlePlanExtensionUpdate(ctx(), sock, { type: 'plan_extension_update', name: 'test-ext', reference: 'v2.0.0' });
         }, 'a handler answers, it never throws out of the dispatch');
         assert.strictEqual(sock.sent[0].type, 'package_install_error');
         assert.match(sock.sent[0].message, /carries no source url/);
@@ -969,7 +977,7 @@ describe('an update begins from the installed record, never from the caller', ()
       const previousDeps = handlers.wireExtensionDeps({ acquire: () => { acquired += 1; return extensionSnapshot(); } });
       try {
         const sock = captureWs();
-        handlers.handlePlanExtensionUpdate({}, sock, { type: 'plan_extension_update', name: 'test-ext', reference: 'v2.0.0' });
+        handlers.handlePlanExtensionUpdate(ctx(), sock, { type: 'plan_extension_update', name: 'test-ext', reference: 'v2.0.0' });
         assert.strictEqual(sock.sent[0].type, 'package_install_error');
         assert.match(sock.sent[0].message, /not a GitHub repository/);
         assert.strictEqual(acquired, 0, 'the stored url failed validation before any acquisition');
@@ -990,7 +998,7 @@ describe('consent binds to the workspace it was shown against', () => {
     const previousDeps = handlers.wireExtensionDeps({ acquire: () => snap });
     try {
       const sock = captureWs();
-      handlers.handlePlanPackageInstall({}, sock, { type: 'plan_package_install', url: 'someone/test-ext', reference: 'v1.0.0' });
+      handlers.handlePlanPackageInstall(ctx(), sock, { type: 'plan_package_install', url: 'someone/test-ext', reference: 'v1.0.0' });
       const token = sock.sent[0].token;
       assert.ok(fs.existsSync(snap), 'sanity: the offer is waiting between offer and answer');
 
@@ -998,7 +1006,7 @@ describe('consent binds to the workspace it was shown against', () => {
       // window answers. The facts this window read, including whether the
       // install replaces anything, were true of workspace A alone.
       config.setWorkspace(workspaceB);
-      handlers.handleConfirmExtensionInstall({}, sock, { type: 'confirm_extension_install', token });
+      handlers.handleConfirmExtensionInstall(ctx(), sock, { type: 'confirm_extension_install', token });
 
       assert.strictEqual(sock.sent[1].type, 'package_install_error');
       assert.strictEqual(sock.sent[1].code, 'workspace-changed');
@@ -1009,7 +1017,7 @@ describe('consent binds to the workspace it was shown against', () => {
       assert.deepStrictEqual(readExtensionRecords(workspaceB), [],
         'workspace B, current at confirm time, was never written to either');
 
-      handlers.handleConfirmExtensionInstall({}, sock, { type: 'confirm_extension_install', token });
+      handlers.handleConfirmExtensionInstall(ctx(), sock, { type: 'confirm_extension_install', token });
       assert.strictEqual(sock.sent[2].type, 'package_install_error',
         'the token died with its refused use, the same as any other confirm');
     } finally {
@@ -1199,7 +1207,7 @@ describe('the model transitions are driven by real replies, not by literals that
   test('reply from classifying on a real error reply reaches failed, in the producer\'s words', () => {
     withWorkspace(() => {
       const sock = captureWs();
-      handlers.handlePlanPackageInstall({}, sock, { type: 'plan_package_install', url: 'not a link at all', reference: 'v1.0.0' });
+      handlers.handlePlanPackageInstall(ctx(), sock, { type: 'plan_package_install', url: 'not a link at all', reference: 'v1.0.0' });
       const errorMsg = sock.sent[0];
       assert.strictEqual(errorMsg.type, 'package_install_error');
       const failed = model.reply(acquiring(), errorMsg).state;
@@ -1215,7 +1223,7 @@ describe('the model transitions are driven by real replies, not by literals that
       const previousDeps = handlers.wireExtensionDeps({ acquire: () => snap });
       try {
         const sock = captureWs();
-        handlers.handlePlanPackageInstall({}, sock, { type: 'plan_package_install', url: 'someone/test-ext', reference: 'v1.0.0' });
+        handlers.handlePlanPackageInstall(ctx(), sock, { type: 'plan_package_install', url: 'someone/test-ext', reference: 'v1.0.0' });
         const planMsg = sock.sent[0];
         const trusting = model.reply(acquiring(), planMsg).state;
         assert.strictEqual(trusting.phase, 'trust');
@@ -1235,9 +1243,9 @@ describe('the model transitions are driven by real replies, not by literals that
       const previousDeps = handlers.wireExtensionDeps({ acquire: () => snap });
       try {
         const sock = captureWs();
-        handlers.handlePlanPackageInstall({}, sock, { type: 'plan_package_install', url: 'someone/test-ext', reference: 'v1.0.0' });
+        handlers.handlePlanPackageInstall(ctx(), sock, { type: 'plan_package_install', url: 'someone/test-ext', reference: 'v1.0.0' });
         const installing = model.confirm(model.reply(acquiring(), sock.sent[0]).state).state;
-        handlers.handleConfirmExtensionInstall({}, sock, { type: 'confirm_extension_install', token: sock.sent[0].token });
+        handlers.handleConfirmExtensionInstall(ctx(), sock, { type: 'confirm_extension_install', token: sock.sent[0].token });
         const resultMsg = sock.sent[1];
         assert.strictEqual(resultMsg.type, 'extension_install_result');
         const done = model.reply(installing, resultMsg).state;
@@ -1245,7 +1253,7 @@ describe('the model transitions are driven by real replies, not by literals that
         assert.deepStrictEqual(done.installed, resultMsg.record);
         assert.match(model.doneCopy(done).note, /Pinned at v1\.0\.0/, 'the done card renders the field the record carries');
 
-        handlers.handleConfirmExtensionInstall({}, sock, { type: 'confirm_extension_install', token: sock.sent[0].token });
+        handlers.handleConfirmExtensionInstall(ctx(), sock, { type: 'confirm_extension_install', token: sock.sent[0].token });
         const errorMsg = sock.sent[2];
         assert.strictEqual(errorMsg.type, 'package_install_error');
         const failed = model.reply(installing, errorMsg).state;
@@ -1397,7 +1405,7 @@ describe('the link is classified from the acquired bytes, and each outcome reach
     try {
       shell.submit('someone/test-ext', reference);
       const sock = captureWs();
-      handlers.handlePlanPackageInstall({}, sock, shell.sent[shell.sent.length - 1]);
+      handlers.handlePlanPackageInstall(ctx(), sock, shell.sent[shell.sent.length - 1]);
       shell.dispatch(sock.sent[0]);
       return sock;
     } finally {
@@ -1437,7 +1445,7 @@ describe('the link is classified from the acquired bytes, and each outcome reach
           shell.view.packagesConfirm();
           const confirmMsg = shell.sent[shell.sent.length - 1];
           assert.strictEqual(confirmMsg.type, 'confirm_package_install');
-          handlers.handleConfirmPackageInstall({}, sock, confirmMsg);
+          handlers.handleConfirmPackageInstall(ctx(), sock, confirmMsg);
           shell.dispatch(sock.sent[1]);
           assert.strictEqual(sock.sent[1].type, 'package_import_result');
           const receipt = JSON.parse(fs.readFileSync(path.join(ws, sock.sent[1].receipt), 'utf8'));
@@ -1482,7 +1490,7 @@ describe('a snapshot carrying both an extension and content: the card says what 
       try {
         shell.submit('someone/test-ext', 'v1.0.0');
         const sock = captureWs();
-        handlers.handlePlanPackageInstall({}, sock, shell.sent[0]);
+        handlers.handlePlanPackageInstall(ctx(), sock, shell.sent[0]);
         shell.dispatch(sock.sent[0]);
         const card = shell.content().querySelector('.extension-trust-card');
         const extensionHalf = card.querySelector('.extension-half-extension').textContent;
@@ -1492,7 +1500,7 @@ describe('a snapshot carrying both an extension and content: the card says what 
         assert.match(contentHalf, /offered them separately/);
 
         shell.view.packagesConfirm();
-        handlers.handleConfirmExtensionInstall({}, sock, shell.sent[1]);
+        handlers.handleConfirmExtensionInstall(ctx(), sock, shell.sent[1]);
         assert.strictEqual(sock.sent[1].type, 'extension_install_result');
         // Each half of the statement, held against the disk.
         assert.ok(fs.existsSync(path.join(ws, '.claude', 'rundock', 'extensions', 'test-ext', 'view', 'index.html')),
@@ -1509,7 +1517,7 @@ describe('a snapshot carrying both an extension and content: the card says what 
         const confirmMsg = shell.sent[2];
         assert.strictEqual(confirmMsg.type, 'confirm_package_install');
         assert.strictEqual(confirmMsg.token, sock.sent[1].content.token, 'the offer answers under the token the result issued for it');
-        handlers.handleConfirmPackageInstall({}, sock, confirmMsg);
+        handlers.handleConfirmPackageInstall(ctx(), sock, confirmMsg);
         assert.strictEqual(sock.sent[2].type, 'package_import_result');
         assert.strictEqual(sock.sent[2].status, 'ready');
         assert.strictEqual(fs.readdirSync(path.join(ws, '.claude', 'agents')).length, 2, 'now the agents landed');
@@ -1532,11 +1540,11 @@ describe('a snapshot carrying both an extension and content: the card says what 
       const previousDeps = handlers.wireExtensionDeps({ acquire: () => snap });
       try {
         const sock = captureWs();
-        handlers.handlePlanPackageInstall({}, sock, { type: 'plan_package_install', url: 'someone/test-ext', reference: 'v1.0.0' });
-        handlers.handleConfirmExtensionInstall({}, sock, { type: 'confirm_extension_install', token: sock.sent[0].token });
+        handlers.handlePlanPackageInstall(ctx(), sock, { type: 'plan_package_install', url: 'someone/test-ext', reference: 'v1.0.0' });
+        handlers.handleConfirmExtensionInstall(ctx(), sock, { type: 'confirm_extension_install', token: sock.sent[0].token });
         const contentToken = sock.sent[1].content.token;
         assert.ok(fs.existsSync(snap), 'the snapshot waits for the second answer');
-        handlers.handleDeclinePackageInstall({}, sock, { type: 'decline_package_install', token: contentToken });
+        handlers.handleDeclinePackageInstall(ctx(), sock, { type: 'decline_package_install', token: contentToken });
         assert.strictEqual(fs.existsSync(snap), false);
         assert.strictEqual(readExtensionRecords(ws).length, 1, 'the extension stays installed');
         assert.strictEqual(fs.existsSync(path.join(ws, '.claude', 'agents')), false, 'and nothing else landed');
@@ -1551,9 +1559,9 @@ describe('every safety claim on the trust card is computed from a host fact the 
   // The expected claim table is read from the host module (the sandbox
   // attribute and frame policy off a real mount, the closed message table
   // off its export) and from the contract document's tables, never from
-  // either document's prose. The init fields come from the document's init
-  // row once it carries one; until then HOST_FACTS.init is the named seam
-  // the host's own suite binds to that row.
+  // either document's prose. The init fields are the document's init row,
+  // read from its table, so the card can claim neither more nor less than
+  // the frame is told.
   test('the claim table equals the host and document tables, and each rendered sentence names the fact behind it', async () => {
     const host = await import('../../public/extension-host.js');
     const dom = new JSDOM('<!doctype html><html><body><div id="pane"></div></body></html>', { runScripts: 'outside-only' });
@@ -1565,11 +1573,12 @@ describe('every safety claim on the trust card is computed from a host fact the 
     const rows = [...doc.matchAll(/^\| `([a-z]+)` \| `(\{ type[^`]*)`/gm)].map((m) => ({ type: m[1], fields: [...m[2].matchAll(/,\s*([a-z]+)/g)].map((f) => f[1]) }));
     assert.ok(rows.length >= 4, 'the document\'s message table was found at all');
     const initRow = rows.find((r) => r.type === 'init');
+    assert.ok(initRow && initRow.fields.length >= 2, 'the document carries an init row with its fields');
     const computed = {
       sandbox: frame.getAttribute('sandbox'),
       network: policy[1].split(';')[0].trim(),
       messages: Object.keys(host.EXTENSION_MESSAGES),
-      init: initRow ? model.HOST_FACTS.init.filter((f) => initRow.fields.includes(f)) : model.HOST_FACTS.init,
+      init: initRow.fields,
     };
     handle.teardown();
     assert.deepStrictEqual(model.HOST_FACTS, computed, 'a claim appears only where a host fact stands behind it');
@@ -1592,6 +1601,94 @@ describe('every safety claim on the trust card is computed from a host fact the 
   });
 });
 
+describe('every record write tells the file tree', () => {
+  // The tree lists the extensions an enabled record claims, from a cache the
+  // root owns (server.js), so a record written here without that cache being
+  // told would leave a client reading a tree that predates the install. The
+  // handler context is the seam: each flow that writes the record is driven
+  // at the wire with a counting context, and the count moves once per write.
+  function counting() {
+    const context = { workspace: { noteExtensionRecordsChanged() { context.calls += 1; } }, calls: 0 };
+    return context;
+  }
+
+  test('an install tells the tree once, after the record is written and before the reply', () => {
+    withWorkspace((ws) => {
+      const previousDeps = handlers.wireExtensionDeps({ acquire: () => extensionSnapshot() });
+      try {
+        const sock = captureWs();
+        const context = counting();
+        handlers.handlePlanPackageInstall(context, sock, { type: 'plan_package_install', url: 'someone/test-ext', reference: 'v1.0.0' });
+        assert.strictEqual(context.calls, 0, 'reading a package writes no record, so nothing is told');
+        context.workspace.noteExtensionRecordsChanged = () => {
+          context.calls += 1;
+          assert.strictEqual(readExtensionRecords(ws).length, 1, 'told after the record is on disk');
+          assert.strictEqual(sock.sent.length, 1, 'told before the reply goes out');
+        };
+        handlers.handleConfirmExtensionInstall(context, sock, { type: 'confirm_extension_install', token: sock.sent[0].token });
+        assert.strictEqual(sock.sent[1].type, 'extension_install_result');
+        assert.strictEqual(context.calls, 1);
+      } finally {
+        handlers.wireExtensionDeps(previousDeps);
+      }
+    });
+  });
+
+  test('applying an update tells the tree once more, for the replaced record', () => {
+    withWorkspace((ws) => {
+      const v1 = extensionSnapshot();
+      const v2 = extensionSnapshot({ version: '2.0.0' });
+      let acquireCalls = 0;
+      const previousDeps = handlers.wireExtensionDeps({
+        acquire: () => (acquireCalls++ === 0 ? v1 : v2),
+        listRefs: () => ['v1.0.0', 'v2.0.0'],
+      });
+      try {
+        const sock = captureWs();
+        const context = counting();
+        handlers.handlePlanPackageInstall(context, sock, { type: 'plan_package_install', url: 'someone/test-ext', reference: 'v1.0.0' });
+        handlers.handleConfirmExtensionInstall(context, sock, { type: 'confirm_extension_install', token: sock.sent[0].token });
+        assert.strictEqual(context.calls, 1, 'the install told it');
+        handlers.handlePlanExtensionUpdate(context, sock, { type: 'plan_extension_update', name: 'test-ext', reference: 'v2.0.0' });
+        assert.strictEqual(sock.sent[2].type, 'extension_install_plan');
+        assert.strictEqual(context.calls, 1, 'planning the update writes nothing, so nothing is told');
+        handlers.handleConfirmExtensionInstall(context, sock, { type: 'confirm_extension_install', token: sock.sent[2].token });
+        assert.strictEqual(sock.sent[3].type, 'extension_install_result');
+        assert.strictEqual(context.calls, 2, 'applying the update told it');
+        assert.strictEqual(readExtensionRecords(ws)[0].version, '2.0.0');
+      } finally {
+        handlers.wireExtensionDeps(previousDeps);
+      }
+    });
+  });
+
+  test('an uninstall tells the tree once; a refused uninstall, which writes nothing, tells it nothing', () => {
+    withWorkspace((ws) => {
+      const previousDeps = handlers.wireExtensionDeps({ acquire: () => extensionSnapshot() });
+      try {
+        const sock = captureWs();
+        const context = counting();
+        handlers.handlePlanPackageInstall(context, sock, { type: 'plan_package_install', url: 'someone/test-ext', reference: 'v1.0.0' });
+        handlers.handleConfirmExtensionInstall(context, sock, { type: 'confirm_extension_install', token: sock.sent[0].token });
+        assert.strictEqual(context.calls, 1);
+        handlers.handleUninstallExtension(context, sock, { type: 'uninstall_extension', name: 'ghost' });
+        assert.strictEqual(sock.sent[2].type, 'package_install_error');
+        assert.strictEqual(context.calls, 1, 'a refused uninstall writes nothing and tells nothing');
+        context.workspace.noteExtensionRecordsChanged = () => {
+          context.calls += 1;
+          assert.deepStrictEqual(readExtensionRecords(ws), [], 'told after the record is gone');
+          assert.strictEqual(sock.sent.length, 3, 'told before the reply goes out');
+        };
+        handlers.handleUninstallExtension(context, sock, { type: 'uninstall_extension', name: 'test-ext' });
+        assert.strictEqual(sock.sent[3].type, 'extension_uninstalled');
+        assert.strictEqual(context.calls, 2);
+      } finally {
+        handlers.wireExtensionDeps(previousDeps);
+      }
+    });
+  });
+});
+
 describe('a reply is matched to the request that produced it, by operation and token', () => {
   test('an uninstall error and an update-check error arriving mid-install leave the install state deep-equal to before, at the wire', () => {
     withWorkspace(() => {
@@ -1599,23 +1696,23 @@ describe('a reply is matched to the request that produced it, by operation and t
       const previousDeps = handlers.wireExtensionDeps({ acquire: () => snap, listRefs: () => { throw new Error('no remote in this test'); } });
       try {
         const sock = captureWs();
-        handlers.handlePlanPackageInstall({}, sock, { type: 'plan_package_install', url: 'someone/test-ext', reference: 'v1.0.0' });
+        handlers.handlePlanPackageInstall(ctx(), sock, { type: 'plan_package_install', url: 'someone/test-ext', reference: 'v1.0.0' });
         const token = sock.sent[0].token;
         const installing = model.confirm(model.reply(model.submit(model.initial(), 'someone/test-ext', 'v1.0.0').state, sock.sent[0]).state).state;
         const before = JSON.parse(JSON.stringify(installing));
 
-        handlers.handleUninstallExtension({}, sock, { type: 'uninstall_extension', name: 'ghost' });
+        handlers.handleUninstallExtension(ctx(), sock, { type: 'uninstall_extension', name: 'ghost' });
         const uninstallError = sock.sent[1];
         assert.strictEqual(uninstallError.type, 'package_install_error');
         assert.strictEqual(uninstallError.operation, 'uninstall');
         assert.strictEqual(model.reply(installing, uninstallError).state, installing, 'not this flow\'s answer: identity, nothing redrawn');
-        handlers.handleCheckExtensionUpdate({}, sock, { type: 'check_extension_update', name: 'ghost' });
+        handlers.handleCheckExtensionUpdate(ctx(), sock, { type: 'check_extension_update', name: 'ghost' });
         assert.strictEqual(model.reply(installing, sock.sent[2]).state, installing);
         assert.strictEqual(model.reply(installing, { type: 'package_install_error', operation: 'install', token: 'pkg-someone-else', message: 'x' }).state, installing,
           'the right operation under another token is another request\'s answer');
         assert.deepStrictEqual(installing, before, 'and the state was never mutated in place');
 
-        handlers.handleConfirmExtensionInstall({}, sock, { type: 'confirm_extension_install', token });
+        handlers.handleConfirmExtensionInstall(ctx(), sock, { type: 'confirm_extension_install', token });
         assert.strictEqual(model.reply(installing, sock.sent[3]).state.phase, 'done', 'the install\'s own answer still lands');
       } finally {
         handlers.wireExtensionDeps(previousDeps);
@@ -1632,7 +1729,7 @@ describe('consent binds to the workspace it was shown against, on the client too
       try {
         shell.submit('someone/test-ext', 'v1.0.0');
         const sock = captureWs();
-        handlers.handlePlanPackageInstall({}, sock, shell.sent[0]);
+        handlers.handlePlanPackageInstall(ctx(), sock, shell.sent[0]);
         shell.dispatch(sock.sent[0]);
         assert.ok(shell.content().querySelector('.extension-trust-card'), 'sanity: the trust step is on screen');
         // The shell's own writer, cut out of app.js and run with the view's
@@ -1683,14 +1780,14 @@ describe('the per-request close listener leaves with the request', () => {
       const previousDeps = handlers.wireExtensionDeps({ acquire: () => extensionSnapshot() });
       try {
         const sock = Object.assign(new EventEmitter(), { readyState: 1, sent: [], send(raw) { this.sent.push(JSON.parse(raw)); } });
-        const plan = () => { handlers.handlePlanPackageInstall({}, sock, { type: 'plan_package_install', url: 'someone/test-ext', reference: 'v1.0.0' }); return sock.sent[sock.sent.length - 1].token; };
+        const plan = () => { handlers.handlePlanPackageInstall(ctx(), sock, { type: 'plan_package_install', url: 'someone/test-ext', reference: 'v1.0.0' }); return sock.sent[sock.sent.length - 1].token; };
         const before = sock.listenerCount('close');
         let token = plan();
         assert.strictEqual(sock.listenerCount('close'), before + 1, 'sanity: an open offer holds one listener');
-        handlers.handleConfirmExtensionInstall({}, sock, { type: 'confirm_extension_install', token });
+        handlers.handleConfirmExtensionInstall(ctx(), sock, { type: 'confirm_extension_install', token });
         assert.strictEqual(sock.listenerCount('close'), before, 'confirm');
         token = plan();
-        handlers.handleDeclinePackageInstall({}, sock, { type: 'decline_package_install', token });
+        handlers.handleDeclinePackageInstall(ctx(), sock, { type: 'decline_package_install', token });
         assert.strictEqual(sock.listenerCount('close'), before, 'decline');
         plan();
         plan();
@@ -1779,27 +1876,27 @@ describe('every install-flow view state is rendered through the real settings vi
         shell.submit('someone/test-ext', 'v1.0.0');
         assert.ok(shell.content().querySelector('.packages-spinner') && /Reading the repository/.test(text()), 'classifying');
         assert.ok(shell.content().querySelector('.packages-still-reading'), 'classifying: the reassurance line is in the markup for the stylesheet to reveal');
-        handlers.handlePlanPackageInstall({}, sock, shell.sent[0]);
+        handlers.handlePlanPackageInstall(ctx(), sock, shell.sent[0]);
         shell.dispatch(sock.sent[0]);
         assert.ok(shell.content().querySelector('.extension-trust-card'), 'trust');
         shell.view.packagesConfirm();
         assert.match(text(), /Installing…/, 'installing');
-        handlers.handleConfirmExtensionInstall({}, sock, { type: 'confirm_extension_install', token: 'pkg-never-issued' });
+        handlers.handleConfirmExtensionInstall(ctx(), sock, { type: 'confirm_extension_install', token: 'pkg-never-issued' });
         shell.dispatch({ ...sock.sent[1], token: shell.sent[1].token });
         assert.ok(shell.content().querySelector('.packages-failed') && /That didn't work/.test(text()), 'failed');
         shell.view.packagesCancel();
         shell.submit('someone/test-ext', 'v1.0.0');
-        handlers.handlePlanPackageInstall({}, sock, shell.sent[2]);
+        handlers.handlePlanPackageInstall(ctx(), sock, shell.sent[2]);
         shell.dispatch(sock.sent[2]);
         shell.view.packagesConfirm();
-        handlers.handleConfirmExtensionInstall({}, sock, shell.sent[3]);
+        handlers.handleConfirmExtensionInstall(ctx(), sock, shell.sent[3]);
         shell.dispatch(sock.sent[3]);
         assert.ok(shell.content().querySelector('.packages-success-card') && /Installed test-ext 1\.0\.0/.test(text()), 'done');
         shell.view.packagesCancel();
 
         handlers.wireExtensionDeps({ acquire: () => extensionSnapshot({ agents: 1, manifest: false }) });
         shell.submit('someone/pack', '');
-        handlers.handlePlanPackageInstall({}, sock, shell.sent[4]);
+        handlers.handlePlanPackageInstall(ctx(), sock, shell.sent[4]);
         shell.dispatch(sock.sent[4]);
         assert.ok(shell.content().querySelector('.packages-confirm-card:not(.extension-trust-card)'), 'offer');
         shell.view.packagesConfirm();
@@ -1807,7 +1904,7 @@ describe('every install-flow view state is rendered through the real settings vi
         shell.view.packagesCancel();
         handlers.wireExtensionDeps({ acquire: () => tempDir('ext-empty-') });
         shell.submit('someone/empty', '');
-        handlers.handlePlanPackageInstall({}, sock, shell.sent[6]);
+        handlers.handlePlanPackageInstall(ctx(), sock, shell.sent[6]);
         shell.dispatch(sock.sent[5]);
         assert.match(text(), /Nothing to add/, 'nothing usable');
         assert.strictEqual(shell.content().querySelector('.packages-failed'), null, 'nothing usable is neutral, never the failure card');
