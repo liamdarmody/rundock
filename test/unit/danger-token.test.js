@@ -45,6 +45,24 @@ function stripComments(text) {
   return text.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '));
 }
 
+const TOKENS = path.join(STYLES, 'tokens.css');
+
+// tokens.css as two maps: the dark declarations on :root and the light
+// overrides on body.light. The light block is cut out by its selector, the
+// same way test/unit/token-references.test.js reads it.
+function tokenBlocks() {
+  const clean = stripComments(fs.readFileSync(TOKENS, 'utf-8'));
+  const start = clean.indexOf('body.light {');
+  assert.ok(start !== -1, 'the light theme block should exist');
+  const end = clean.indexOf('}', start);
+  const declare = (text) => new Map(
+    [...text.matchAll(/(--[\w-]+)\s*:\s*([^;]+);/g)].map(m => [m[1], m[2].trim()]),
+  );
+  const blocks = { dark: declare(clean.slice(0, start) + clean.slice(end)), light: declare(clean.slice(start, end)) };
+  assert.ok(blocks.dark.size > 30 && blocks.light.size > 3, 'the token parse found almost nothing, so this proves nothing');
+  return blocks;
+}
+
 const rel = (file) => path.relative(ROOT, file);
 const lineOf = (text, index) => text.slice(0, index).split('\n').length;
 
@@ -131,5 +149,21 @@ describe('text never reaches for the danger fill', () => {
     }
     assert.ok(total >= FAMILY_REFERENCES_AT_SPLIT,
       `${total} danger-family references across the ten files, fewer than the ${FAMILY_REFERENCES_AT_SPLIT} there were at the split`);
+  });
+});
+
+describe('the split is declared', () => {
+  test('the fill is declared on :root and has no light override', () => {
+    const { dark, light } = tokenBlocks();
+    assert.ok(dark.has('--danger'), 'the fill token is not declared on :root');
+    assert.ok(!light.has('--danger'), 'the fill must be the same in both themes, so body.light must not restate it');
+  });
+
+  test('the text token is declared on :root and overridden on body.light', () => {
+    const { dark, light } = tokenBlocks();
+    assert.ok(dark.has('--danger-text'), 'the text token is not declared on :root, so it would be undefined in dark');
+    assert.ok(light.has('--danger-text'), 'the text token has no light override, so light text would take the dark value');
+    assert.notStrictEqual(dark.get('--danger-text'), light.get('--danger-text'),
+      'the light override must change the value, or it is not an override');
   });
 });

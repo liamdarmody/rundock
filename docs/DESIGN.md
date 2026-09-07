@@ -83,11 +83,26 @@ including the worst case of `--elevated`. If you need something fainter than
 | `--attention` | Something needs the user, and is not an error |
 | `--working` | Something is running |
 | `--idle` | Something is present but not doing anything |
-| `--danger` | Destructive actions and errors |
+| `--danger` | Destructive actions and errors, as a fill or an edge: `background`, `border-color`, `box-shadow`, and the `color-mix()` tints feeding those. `#D42C2A` in both themes |
+| `--danger-text` | Destructive actions and errors, as text: any `color` declaration. `#F0706E` in dark, `#D42C2A` in light |
 
 Use these for what they mean, never for what colour they happen to be. If you
 want a red border and nothing has gone wrong, `--danger` is the wrong token and
 the design is probably the thing to revisit.
+
+`--danger` and `--danger-text` are one meaning at two jobs, and the property
+decides which you reach for. A fill or an edge takes `--danger`; a `color`
+declaration takes `--danger-text`. The fill is the same in both themes: it was
+chosen so that white text on it clears 4.5:1, and so that it sits apart from
+`--accent` in lightness rather than only in hue, which is the axis a
+colour-blind reader keeps. That value fails as text on a dark card, so the text
+token is theme-aware: lifted in the dark theme, the fill value itself in light,
+where it reads on every surface. A `color` declaration that references
+`--danger` fails `test/unit/danger-token.test.js`, which also recomputes the
+contrast of every pairing from the token values on each run. A resting
+destructive action is not filled at all: it is a quiet outline button that
+turns danger on hover, and the fill appears only at a confirmation where
+confirming and cancelling carry equal weight.
 
 The status set had no red until 0.11.7, so every destructive surface reached for
 a hex of its own and they drifted. Three near-identical reds were in the
