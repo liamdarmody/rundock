@@ -1703,3 +1703,154 @@ describe('the per-request close listener leaves with the request', () => {
     });
   });
 });
+
+describe('every strict refusal is named, and each guard is the only thing standing between its input and a wrong answer', () => {
+  // One manifest variant per refusal branch of readExtensionManifest, each
+  // asserted on its own message so a removed guard cannot be covered by the
+  // next guard's refusal.
+  test('each manifest refusal names its reason', () => {
+    const cases = [
+      ['not valid JSON', { raw: '{ nope' }, /is not valid JSON/],
+      ['not an object', { raw: 'null' }, /must be an object/],
+      ['a name that is not a slug', (m) => { m.name = 'Not A Slug'; }, /name must be a lowercase slug/],
+      ['a blank version', (m) => { m.version = ' '; }, /version must be a non-empty string/],
+      ['no extension block', (m) => { delete m.extension; }, /declares no extension/],
+      ['an entry that is not a path', (m) => { m.extension.entry = 5; }, /entry must be a relative path/],
+      ['an absolute entry', (m) => { m.extension.entry = '/etc/hosts'; }, /entry must not be absolute/],
+      ['an entry escaping the package', (m) => { m.extension.entry = '../outside.html'; }, /must stay inside the package/],
+      ['an entry that is a directory', (m) => { m.extension.entry = 'view'; }, /is not a regular file/],
+      ['a blank match rule', (m) => { m.extension.match = ''; }, /match must be a non-empty match rule/],
+    ];
+    for (const [label, change, expected] of cases) {
+      const dir = extensionSnapshot();
+      const manifestPath = path.join(dir, 'rundock.json');
+      if (typeof change === 'function') {
+        const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+        change(manifest);
+        fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+      } else fs.writeFileSync(manifestPath, change.raw);
+      assert.throws(() => readExtensionManifest(dir), (e) => typeof e.code === 'string' && expected.test(e.message), `${label}: ${expected}`);
+    }
+  });
+
+  test('each records-file refusal names its reason, and a listing that is not an array is refused', () => {
+    const cases = [
+      ['not valid JSON', '{ nope', /extension records unreadable/],
+      ['an unrecognised schema', JSON.stringify({ schema: 'something-else/v9', extensions: [] }), /not a recognised records file/],
+      ['an entry that is not an object', JSON.stringify({ schema: 'rundock.extensions/v1', extensions: [null] }), /an entry is not an object/],
+      ['a record without a version', JSON.stringify({ schema: 'rundock.extensions/v1', extensions: [{ name: 'x', source: { url: 'u', reference: 'v1' }, root: 'r' }] }), /"x" has no version/],
+      ['a record without a pinned reference', JSON.stringify({ schema: 'rundock.extensions/v1', extensions: [{ name: 'x', version: '1', source: { url: 'u', reference: null }, root: 'r' }] }), /"x" carries no pinned reference/],
+    ];
+    for (const [label, raw, expected] of cases) {
+      const ws = workspace();
+      const recordsPath = path.join(ws, ...RECORDS_PATH.split('/'));
+      fs.mkdirSync(path.dirname(recordsPath), { recursive: true });
+      fs.writeFileSync(recordsPath, raw);
+      assert.throws(() => readExtensionRecords(ws), expected, label);
+    }
+    assert.throws(() => checkForUpdate({ name: 'x', source: { url: 'u', reference: 'v1.0.0' } }, () => 'v2.0.0'), /must return an array/);
+  });
+
+  test('a manifest whose entry sits at the package root installs that one file', () => {
+    withWorkspace((ws) => {
+      const dir = tempDir('ext-root-entry-');
+      fs.writeFileSync(path.join(dir, 'index.html'), '<main>root entry</main>\n');
+      fs.writeFileSync(path.join(dir, 'README.md'), 'not part of the extension\n');
+      fs.writeFileSync(path.join(dir, 'rundock.json'), JSON.stringify({ name: 'root-ext', version: '1.0.0', extension: { entry: 'index.html', match: '*.csv' } }));
+      const manifest = readExtensionManifest(dir);
+      assert.deepStrictEqual(extensionFileSet(dir, manifest.entry).map((f) => f.rel), ['index.html']);
+      assert.deepStrictEqual(deriveFacts(dir, manifest).files, ['index.html']);
+      installExtension(ws, dir, planExtensionInstall(ws, dir, SOURCE));
+      assert.deepStrictEqual(fs.readdirSync(path.join(ws, ...EXTENSIONS_ROOT.split('/'), 'root-ext')), ['index.html'],
+        'the entry file alone, never the whole repository');
+    });
+  });
+});
+
+describe('every install-flow view state is rendered through the real settings view', () => {
+  test('idle, classifying, trust, installing, failed, done, offer, applying, nothing usable and not connected each draw their own state', () => {
+    withWorkspace(() => {
+      const shell = settingsShell();
+      const previousDeps = handlers.wireExtensionDeps({ acquire: () => extensionSnapshot() });
+      try {
+        const text = () => shell.content().textContent.replace(/\s+/g, ' ');
+        const sock = captureWs();
+        assert.ok(!shell.content().querySelector('.settings-card + .settings-card'), 'idle: the field alone');
+        shell.submit('someone/test-ext', 'v1.0.0');
+        assert.ok(shell.content().querySelector('.packages-spinner') && /Reading the repository/.test(text()), 'classifying');
+        assert.ok(shell.content().querySelector('.packages-still-reading'), 'classifying: the reassurance line is in the markup for the stylesheet to reveal');
+        handlers.handlePlanPackageInstall({}, sock, shell.sent[0]);
+        shell.dispatch(sock.sent[0]);
+        assert.ok(shell.content().querySelector('.extension-trust-card'), 'trust');
+        shell.view.packagesConfirm();
+        assert.match(text(), /Installing…/, 'installing');
+        handlers.handleConfirmExtensionInstall({}, sock, { type: 'confirm_extension_install', token: 'pkg-never-issued' });
+        shell.dispatch({ ...sock.sent[1], token: shell.sent[1].token });
+        assert.ok(shell.content().querySelector('.packages-failed') && /That didn't work/.test(text()), 'failed');
+        shell.view.packagesCancel();
+        shell.submit('someone/test-ext', 'v1.0.0');
+        handlers.handlePlanPackageInstall({}, sock, shell.sent[2]);
+        shell.dispatch(sock.sent[2]);
+        shell.view.packagesConfirm();
+        handlers.handleConfirmExtensionInstall({}, sock, shell.sent[3]);
+        shell.dispatch(sock.sent[3]);
+        assert.ok(shell.content().querySelector('.packages-success-card') && /Installed test-ext 1\.0\.0/.test(text()), 'done');
+        shell.view.packagesCancel();
+
+        handlers.wireExtensionDeps({ acquire: () => extensionSnapshot({ agents: 1, manifest: false }) });
+        shell.submit('someone/pack', '');
+        handlers.handlePlanPackageInstall({}, sock, shell.sent[4]);
+        shell.dispatch(sock.sent[4]);
+        assert.ok(shell.content().querySelector('.packages-confirm-card:not(.extension-trust-card)'), 'offer');
+        shell.view.packagesConfirm();
+        assert.match(text(), /Adding to your team…/, 'applying');
+        shell.view.packagesCancel();
+        handlers.wireExtensionDeps({ acquire: () => tempDir('ext-empty-') });
+        shell.submit('someone/empty', '');
+        handlers.handlePlanPackageInstall({}, sock, shell.sent[6]);
+        shell.dispatch(sock.sent[5]);
+        assert.match(text(), /Nothing to add/, 'nothing usable');
+        assert.strictEqual(shell.content().querySelector('.packages-failed'), null, 'nothing usable is neutral, never the failure card');
+        shell.view.packagesCancel();
+
+        global.ws.readyState = 0;
+        shell.submit('someone/test-ext', 'v1.0.0');
+        assert.match(shell.content().querySelector('.packages-field-error').textContent, /Not connected: nothing was sent/, 'not connected');
+        assert.strictEqual(shell.content().querySelector('#packages-source-link').disabled, false, 'and the field stays usable');
+      } finally {
+        handlers.wireExtensionDeps(previousDeps);
+        shell.release();
+      }
+    });
+  });
+});
+
+describe('the link field and every packages input carry the focus convention', () => {
+  test('a focus-visible rule with the accent outline exists for each rendered input, and the token resolves under both themes', () => {
+    withWorkspace(() => {
+      const shell = settingsShell();
+      const settingsCss = fs.readFileSync(path.join(__dirname, '..', '..', 'public', 'styles', 'views', 'settings.css'), 'utf8');
+      const tokensCss = fs.readFileSync(path.join(__dirname, '..', '..', 'public', 'styles', 'tokens.css'), 'utf8');
+      try {
+        const inputs = [...shell.content().querySelectorAll('input')];
+        assert.ok(inputs.length >= 2, 'sanity: the fields rendered');
+        for (const input of inputs) {
+          const classes = [...input.classList];
+          const ruled = classes.filter((c) => new RegExp(`\\.${c}:focus-visible\\s*\\{[^}]*outline:\\s*2px solid var\\(--accent\\)`).test(settingsCss));
+          assert.ok(ruled.length > 0, `#${input.id} (${classes.join(' ')}) has no focus-visible rule with the accent outline`);
+        }
+        const block = (selector) => {
+          const start = tokensCss.indexOf(`${selector} {`);
+          assert.ok(start >= 0, `tokens.css has no ${selector} block`);
+          return tokensCss.slice(start, tokensCss.indexOf('\n}', start));
+        };
+        assert.match(block(':root'), /--accent:\s*#/, 'the dark set declares --accent');
+        // The light set redeclares only what changes; a token it leaves alone
+        // resolves from :root, which is the same resolution the browser makes.
+        assert.ok(/--accent:\s*#/.test(block('body.light')) || /--accent:\s*#/.test(block(':root')), 'the light set resolves --accent');
+      } finally {
+        shell.release();
+      }
+    });
+  });
+});

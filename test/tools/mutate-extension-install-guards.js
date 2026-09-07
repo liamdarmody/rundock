@@ -80,6 +80,31 @@ const MUTATIONS = [
   [MANIFEST, 'a snapshot without a manifest is not an extension',
     `      refuse(\`the package has no \${MANIFEST_NAME}; code requires a manifest, always\`, 'not-an-extension');`,
     `      return { name: 'inferred', version: '0.0.0', entry: 'index.html', match: '*' };`],
+  // Each strict refusal of the manifest reader, one row per branch: with the
+  // guard gone the input is either accepted or refused by a later guard with
+  // a different reason, and the suite asserts the reason.
+  [MANIFEST, 'a manifest that is not valid JSON is refused by name',
+    "    refuse(`${MANIFEST_NAME} is not valid JSON: ${e.message}`);", ''],
+  [MANIFEST, 'a manifest that is not an object is refused by name',
+    "  if (!manifest || typeof manifest !== 'object') refuse(`${MANIFEST_NAME} must be an object`);", ''],
+  [MANIFEST, 'a name that is not a lowercase slug is refused',
+    "    refuse('name must be a lowercase slug');", ''],
+  [MANIFEST, 'a blank version is refused',
+    "    refuse('version must be a non-empty string');", ''],
+  [MANIFEST, 'a manifest without an extension block is not an extension',
+    "    refuse(`${MANIFEST_NAME} declares no extension; code requires a manifest, always`, 'not-an-extension');", ''],
+  [MANIFEST, 'an entry that is not a path is refused before it is walked',
+    "  if (typeof relative !== 'string' || !relative) refuse('extension.entry must be a relative path');", ''],
+  [MANIFEST, 'an absolute entry is refused',
+    "  if (path.isAbsolute(relative)) refuse('extension.entry must not be absolute');", ''],
+  [MANIFEST, 'an entry escaping the package is refused',
+    "  if (normal === '..' || normal.startsWith('../')) refuse('extension.entry must stay inside the package');", ''],
+  [MANIFEST, 'an entry that does not exist is refused by name',
+    "      if (e.code === 'ENOENT' || e.code === 'ENOTDIR') refuse(`extension.entry names ${normal}, which does not exist in the package`);", ''],
+  [MANIFEST, 'an entry that is not a regular file is refused',
+    "  if (!fs.lstatSync(walked).isFile()) refuse(`extension.entry ${normal} is not a regular file`);", ''],
+  [MANIFEST, 'a blank match rule is refused',
+    "    refuse('extension.match must be a non-empty match rule');", ''],
   // Invert the classification and a repository of agents and skills is
   // answered with a trust step for code it does not carry, while a real
   // extension is offered as content and its view never installs.
@@ -250,6 +275,22 @@ const MUTATIONS = [
   [RECORD, 'the reported order is the true numeric order, not the listing\'s own order',
     '    .sort(([, a], [, b]) => compareSemver(a, b))\n',
     ''],
+
+  // Each strict refusal of the records reader and the update check, one row
+  // per branch, for the same reason as the manifest rows above.
+  [RECORD, 'a records file that is not valid JSON is refused by name',
+    "    throw new TypeError(`extension records unreadable: ${e.message}`);", '    throw e;'],
+  [RECORD, 'a records file of another schema is refused',
+    "  if (!parsed || parsed.schema !== RECORDS_SCHEMA || !Array.isArray(parsed.extensions)) {",
+    '  if (!parsed || !Array.isArray(parsed.extensions)) {'],
+  [RECORD, 'a records entry that is not an object is refused by name',
+    "  if (!record || typeof record !== 'object') return 'an entry is not an object';\n", ''],
+  [RECORD, 'a record without a version is refused by name',
+    "  if (typeof record.version !== 'string' || !record.version) return `\"${record.name}\" has no version`;\n", ''],
+  [RECORD, 'a record without a pinned reference is refused by name',
+    "  if (typeof record.source.reference !== 'string' || !record.source.reference) return `\"${record.name}\" carries no pinned reference`;\n", ''],
+  [RECORD, 'a ref-lister that returns no array is refused by name',
+    "  if (!Array.isArray(refs)) throw new TypeError('listRefs must return an array of reference names');\n", ''],
 
   // ===== ONE TRANSACTION CARRIES THE INSTALL =====
   // Split the record from the files and a crash between them leaves a
