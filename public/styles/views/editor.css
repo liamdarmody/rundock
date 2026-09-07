@@ -8,6 +8,28 @@
 .editor-toggle { padding: 4px 12px; font-size: var(--caption); font-weight: 600; border-radius: var(--radius-md); background: var(--card); color: var(--text-2); transition: all var(--duration-base) ease; }
 .editor-toggle:hover { color: var(--text-1); }
 .editor-toggle.active { background: var(--accent-glow); color: var(--accent); }
+/* The pin control: the toggle primitive drawn as an icon-only button, left of
+   Preview and Edit behind its own hairline, because pinned is a property of
+   the file rather than a third mode beside two that exclude each other.
+   Pinned is the accent, the way the rail draws an active entry. */
+.editor-toggle.editor-pin { width: 30px; height: 30px; padding: 0; display: flex; align-items: center; justify-content: center; background: transparent; color: var(--text-2); border: 1px solid transparent; flex-shrink: 0; }
+.editor-toggle.editor-pin svg { width: 16px; height: 16px; }
+.editor-toggle.editor-pin:hover { color: var(--text-1); background: var(--card); }
+.editor-toggle.editor-pin.pinned { color: var(--accent); }
+.editor-toggle.editor-pin.pinned:hover { color: var(--accent-hover); background: var(--accent-glow); }
+.editor-toggle.editor-pin:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--accent); }
+.editor-header-divider { width: 1px; align-self: stretch; background: var(--border); margin: 0 2px; }
+
+/* The Pins pane. Pins is the Files view with the tree swapped for a short
+   list, so its one pane shares the editor's sheet. It shows only when there
+   is no pin to open: the empty state in the four-slot pattern, or the line
+   for a list whose every file has gone. Painted on a card so both its text
+   and its ground come from the theme. */
+.pins-pane { display: flex; align-items: center; justify-content: center; padding: 32px; width: 100%; }
+.pins-empty { max-width: 440px; padding: 32px 28px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-xl); text-align: center; color: var(--text-2); font-size: var(--body); line-height: 1.6; }
+.pins-empty p { margin: 0; }
+.pins-empty-lead { color: var(--text-1); font-weight: 700; margin-bottom: 8px; }
+.pins-empty-aside { color: var(--text-3); font-size: var(--caption); margin-top: 12px; }
 .editor-content { flex: 1; padding: 24px 32px; overflow-y: auto; font-size: var(--body); line-height: 1.7; outline: none; }
 .editor-content.source { white-space: pre-wrap; font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace; font-size: 13px; color: var(--text-2); }
 textarea.editor-content { resize: none; border: none; background: transparent; width: 100%; box-sizing: border-box; }

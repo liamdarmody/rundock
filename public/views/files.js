@@ -370,6 +370,10 @@ let renderedWorkspace = null;
 // used to shadow it existed only to survive the rebuild that no longer
 // happens.
 function renderFileTree(tree) {
+  // The Pins list is read against every tree that arrives, so a pinned file
+  // deleted or renamed outside Rundock is marked on this push rather than on
+  // the next reload. Guarded by typeof for a shell with no pins view loaded.
+  if (typeof noteTreeForPins === 'function') noteTreeForPins(tree || []);
   // A changed tree can change what any link resolves to, and a file opened
   // before the first tree arrived rendered its connections against nothing:
   // redraw the open file's section now that there is a tree to resolve with.
@@ -603,11 +607,15 @@ function openCreateMenu(anchor, folder) {
 }
 
 // Right-click on a row: the same creation rows (creating IN the folder, or the
-// file's parent), plus clipboard and reveal actions.
+// file's parent), plus the pin row for a file, clipboard and reveal actions.
 function openRowContextMenu(e, targetPath, targetKind) {
   const folder = FilesMenuModel.parentFolder(targetPath, targetKind === 'folder');
   const rows = CREATABLE_TYPES.map((t) => creationRow(t, e.clientX, e.clientY, folder));
   rows.push(null);
+  // Pin or Unpin, for a file only: a folder is not a working surface anyone
+  // returns to, and the model would mark it missing. First in the group of
+  // actions on an existing file, ahead of the copy actions, per the mock.
+  if (targetKind !== 'folder' && typeof pinMenuRow === 'function') rows.push(pinMenuRow(targetPath));
   rows.push(['Copy workspace path', () => { try { navigator.clipboard.writeText(targetPath); } catch (err) {} }, FilesMenuModel.ICONS.copy]);
   rows.push(['Copy wikilink', () => { try { navigator.clipboard.writeText(FilesMenuModel.wikilinkFor(targetPath)); } catch (err) {} }, FilesMenuModel.ICONS.link]);
   // Reveal in Finder only works on macOS (the server no-ops elsewhere), so the
@@ -645,6 +653,10 @@ function loadFileContent(path, content) {
   document.getElementById('editor-header').classList.remove('hidden');
   document.getElementById('editor-empty').classList.add('hidden');
   updateEditorBackButton();
+  // The header's pin control reads THIS file against the list, on every
+  // open, so a pinned file followed by an unpinned one never inherits the
+  // first one's answer. Guarded by typeof for a shell with no pins view.
+  if (typeof renderEditorPinControl === 'function') renderEditorPinControl();
 
   // The file-type registry decides the surface for EVERY path (it replaced
   // the old per-type if-chain). markdown -> Tiptap editor,

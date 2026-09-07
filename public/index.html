@@ -313,6 +313,13 @@
         <a class="chat-back" id="editor-back" onclick="editorGoBack()"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg></a>
         <span class="editor-filename" id="editor-filename"></span>
         <span class="editor-status" id="editor-status"></span>
+        <!-- Pin: the primary way to pin, because the moment of intent is
+             while you are in the file. Left of Preview and Edit behind its
+             own hairline, since pinned is a property of the file rather
+             than a third mode. The glyph is drawn by renderEditorPinControl
+             on every open and every pins reply. -->
+        <button class="editor-toggle editor-pin" id="editor-pin" type="button" aria-pressed="false" aria-label="Pin" title="Pin" onclick="toggleCurrentFilePin()"></button>
+        <div class="editor-header-divider"></div>
         <button class="editor-toggle active" id="toggle-preview" onclick="setEditorMode('preview')">Preview</button>
         <button class="editor-toggle" id="toggle-edit" onclick="setEditorMode('edit')">Edit</button>
       </div>

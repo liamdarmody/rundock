@@ -199,6 +199,34 @@
    Both rules are load-bearing together. Without flex-shrink:0 the SVG absorbed
    the overflow, down to 0px at four levels deep. */
 .file-item-icon { width: 14px; height: 14px; color: var(--text-2); flex-shrink: 0; }
+
+/* ---- Pins: the tree swapped for the reader's own short list ----
+   Flat rows, no folders. Each row is the tree's own file icon, the name, the
+   folder underneath, and at rest a filled pin the hover unpin control
+   replaces in the same slot: the idiom .convo-pin already uses for the
+   conversation list's curated rows. A missing file (deleted or renamed
+   outside Rundock) stays listed, struck through, with an explicit Remove,
+   and is not a link. */
+.pin-list { padding: 8px; display: flex; flex-direction: column; gap: 1px; }
+.pin-item { display: flex; align-items: center; gap: 9px; padding: 8px; border-radius: var(--radius-lg); cursor: pointer; position: relative; }
+.pin-item:hover, .pin-item.active { background: var(--elevated); }
+.pin-body { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 1px; }
+.pin-name { font-size: var(--body); color: var(--text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pin-path { font-size: var(--label); color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pin-static { width: 14px; height: 14px; color: var(--accent); opacity: 0.65; flex-shrink: 0; }
+.pin-item:hover .pin-static { opacity: 0; }
+.pin-unpin { position: absolute; top: 6px; right: 6px; width: 24px; height: 24px; border: none; background: transparent; color: var(--text-3); cursor: pointer; border-radius: var(--radius-sm); display: flex; align-items: center; justify-content: center; opacity: 0; transition: opacity var(--duration-base) ease, color var(--duration-base) ease; padding: 0; }
+.pin-item:hover .pin-unpin { opacity: 1; }
+.pin-unpin:hover { color: var(--accent); background: var(--card); }
+.pin-unpin svg { width: 14px; height: 14px; }
+.pin-item.missing { cursor: default; }
+.pin-item.missing:hover { background: transparent; }
+.pin-item.missing .file-item-icon { color: var(--danger); }
+.pin-item.missing .pin-name { color: var(--text-3); text-decoration: line-through; }
+.pin-missing-note { color: var(--danger); white-space: normal; }
+.pin-remove-btn { font-size: var(--caption); font-weight: 600; color: var(--danger); background: transparent; border: none; cursor: pointer; white-space: nowrap; flex-shrink: 0; padding: 4px 8px; border-radius: var(--radius-sm); }
+.pin-remove-btn:hover { background: var(--elevated); }
+.pins-quiet b { color: var(--text-2); font-weight: 600; }
 .file-item-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Add button */
