@@ -1,0 +1,11 @@
+/* The extension host's frame: the sandboxed iframe mountExtension appends
+   to whichever pane claims a file (public/extension-host.js). A component
+   rather than an editor rule because the host, not the editor, owns the
+   element, and the frame keys on the host's own class wherever it lands.
+
+   One rule for both themes. The frame's document paints its own content;
+   the surface it sits on comes through a token, so the light and dark token
+   sets each apply without a second selector. The floor matches the host's
+   MIN_FRAME_HEIGHT, which is the smallest height a resize request can ask
+   for; test/unit/host-wiring.test.js holds the two numbers together. */
+.extension-frame { display: block; width: 100%; border: 0; min-height: 40px; background: var(--surface); }

@@ -499,3 +499,49 @@ describe('one entry point reconciles a roster with the live mount', () => {
     assert.match(APP_SRC, /if \(registry\) reconcileExtensionMount\(roster\);/, 'the roster arrival in app.js calls it once the registry stands');
   });
 });
+
+// ===== THE FRAME'S STYLESHEET RULE =====
+
+describe('the extension frame has a stylesheet rule that follows the theme', () => {
+  const SHEET = path.join('public', 'styles', 'components', 'extension-frame.css');
+
+  function frameRule() {
+    const css = read(SHEET);
+    const m = /\.extension-frame\s*\{([^}]*)\}/.exec(css);
+    assert.ok(m, 'the sheet carries a .extension-frame rule');
+    const declarations = {};
+    for (const decl of m[1].split(';')) {
+      const at = decl.indexOf(':');
+      if (at < 0) continue;
+      declarations[decl.slice(0, at).trim()] = decl.slice(at + 1).trim();
+    }
+    return { css, declarations };
+  }
+
+  test('the frame fills the pane, block, borderless, no shorter than the host\'s minimum', async () => {
+    const { MIN_FRAME_HEIGHT } = await import('../../public/extension-host.js');
+    const { declarations } = frameRule();
+    assert.strictEqual(declarations.display, 'block');
+    assert.strictEqual(declarations.width, '100%');
+    assert.ok(['0', 'none'].includes(declarations.border), `no border, got ${declarations.border}`);
+    assert.strictEqual(declarations['min-height'], `${MIN_FRAME_HEIGHT}px`,
+      'the stylesheet floor and the host\'s clamp floor are one number');
+  });
+
+  test('every color in the rule comes through a token, so both theme sets apply without a second rule', () => {
+    const { css, declarations } = frameRule();
+    const colorProps = Object.entries(declarations).filter(([k]) => /color|background/.test(k));
+    assert.ok(colorProps.length >= 1, 'the rule paints at least one surface');
+    for (const [k, v] of colorProps) assert.match(v, /^var\(--[a-z0-9-]+\)$/, `${k} is a token reference, got ${v}`);
+    assert.strictEqual((css.match(/\.extension-frame/g) || []).length, 1, 'one rule, not one per theme');
+    assert.ok(!/\.light|prefers-color-scheme/.test(css), 'no theme-specific selector: the tokens carry the theme');
+  });
+
+  test('the sheet is linked once from index.html, after the token sheet', () => {
+    const html = read('public', 'index.html');
+    const links = [...html.matchAll(/<link[^>]+href="(\/styles\/[^"]+\.css)"/g)].map((m) => m[1]);
+    const at = links.indexOf('/styles/components/extension-frame.css');
+    assert.ok(at > links.indexOf('/styles/tokens.css'), 'linked, and after tokens.css so var() resolves');
+    assert.strictEqual(links.filter((l) => l === '/styles/components/extension-frame.css').length, 1);
+  });
+});
