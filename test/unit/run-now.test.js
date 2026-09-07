@@ -311,6 +311,20 @@ describe('the run message, driven through the real dispatch', () => {
       assert.match(refused(sent)[2].message, /Which routine/);
     });
   });
+  test('a start that throws is answered on the row\'s road with the reason it gave', () => {
+    withDispatch(({ press, sent, children }) => {
+      // The handler reaches the entry through the module, which is the seam
+      // a throwing start can be driven through without breaking a real one.
+      const shared = require(SCHEDULER_KEY);
+      const real = shared.runRoutineNow;
+      shared.runRoutineNow = () => { throw new Error('no room to open a record'); };
+      try { press(); } finally { shared.runRoutineNow = real; }
+      assert.strictEqual(children.length, 0);
+      assert.strictEqual(refused(sent).length, 1, 'a start that throws is still answered');
+      assert.match(refused(sent)[0].message, /could not be started: no room to open a record/);
+      assert.strictEqual(refused(sent)[0].reason, undefined, 'and carries no refusal word, because nothing refused it');
+    });
+  });
   test('a press on the second of two namesakes runs that one', () => {
     withDispatch(({ press, children }) => {
       press({ occurrence: 1 });
