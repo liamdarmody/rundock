@@ -386,30 +386,21 @@
   }
 
   /**
-   * Who started the run: the tick, or a person pressing Run on the row.
-   *
-   * A RECORD WITH NO WORD IS A TICK'S RUN. Records from before runs could be
-   * pressed carry no trigger, and every one of them was the scheduler's, so
-   * absence reads as scheduled here exactly as it does in the reader that
-   * serves the record. Only the one other word this version knows is read as
-   * anything else: a value the writer has never produced is not guessed at.
+   * Who started the run. A RECORD WITH NO WORD IS A TICK'S RUN: records from
+   * before runs could be pressed carry no trigger and were all the
+   * scheduler's. A value the writer never produced is not guessed at.
    */
   function triggerOf(record) {
     return record && record.trigger === 'manual' ? 'manual' : 'scheduled';
   }
 
-  // The words that mark a pressed run on the line that says when it started.
-  // On that line rather than on a line of its own because it is a fact about
-  // the start, and the start is the one moment every outcome carries.
+  // Marks a pressed run on the line that says when it started: a fact about
+  // the start, the one moment every outcome carries.
   const STARTED_MANUALLY = 'started manually';
 
-  /**
-   * The started line with the trigger on it: "today, 2:14pm, started
-   * manually" for a pressed run, and the bare moment for a tick's. A record
-   * with no readable moment still says it was pressed, because that is the
-   * fact a reader of a manual run most needs and it does not depend on the
-   * clock.
-   */
+  // "today, 2:14pm, started manually" for a pressed run, the bare moment for
+  // a tick's; a record with no readable moment still says it was pressed.
+
   function startedWhen(record, now) {
     const words = startedWords(record.startedAt, now);
     if (triggerOf(record) !== 'manual') return words;

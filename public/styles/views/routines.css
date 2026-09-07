@@ -94,26 +94,18 @@
 .icon-btn { width: 32px; height: 32px; border-radius: var(--radius-md); display: flex; align-items: center; justify-content: center; color: var(--text-2); background: transparent; border: 1px solid transparent; cursor: pointer; }
 .icon-btn:hover { color: var(--text-1); background: var(--elevated); border-color: var(--border); }
 .icon-btn.danger:hover { color: var(--danger); }
-/* Run, first in the group. Disabled rather than hidden while a run is in
-   flight, so the group never reflows and a reader can see at a glance that
-   a run is already going. Its hover takes the accent because it is the one
-   control here that starts something. */
+/* Run, first in the group: disabled rather than hidden while a run is in
+   flight, so the group never reflows. Its hover takes the accent because it
+   is the one control here that starts something. */
 .icon-btn:disabled { opacity: 0.35; cursor: default; }
 .icon-btn:disabled:hover { color: var(--text-2); background: transparent; border-color: transparent; }
 .icon-btn.run:hover { color: var(--accent); background: var(--accent-glow); border-color: var(--accent); }
 
-/* The two paused states, told apart by tone AND words.
-
-   A pause the reader applied takes the idle grey the four outcomes already
-   use for "history, not alarm": a dot, the word, and the quiet way back. The
-   row itself dims (.routine-row.paused above).
-
-   A pause the plan's own change applied takes var(--attention), the token
-   this file reserves for "needs the user, not an error": the row keeps full
-   weight and takes an inset ring, the sentence names what changed, and the
-   one action reviews and resumes. Rendered identically to a self-applied
-   pause it would be resumed reflexively, which is the outcome the consent
-   mechanism exists to prevent. */
+/* The two paused states, told apart by tone AND words. A pause the reader
+   applied takes the idle grey of "history, not alarm" and the row dims. A
+   pause the plan's own change applied takes var(--attention), "needs the
+   user, not an error": full weight, an inset ring, a sentence naming what
+   changed. Rendered alike, the second would be resumed reflexively. */
 .rr-paused-label { display: inline-flex; align-items: center; gap: 6px; }
 .rr-paused-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-3); flex-shrink: 0; }
 .rr-resume-quiet { font-size: var(--caption); font-weight: 600; color: var(--accent); background: none; border: 0; padding: 0; font-family: inherit; cursor: pointer; transition: opacity var(--duration-base) ease; }

@@ -20,14 +20,12 @@ const PROMPT = 'pressed routine body';
 // November 2026, local components, half past six before a seven o'clock slot.
 const clock = { at: new Date(2026, 10, 3, 6, 30, 0) };
 let prevDeps = null;
-
 before(async () => {
   await h.boot({ agents: { runner: agentFile({ name: AGENT, type: 'specialist', order: 1 }) } });
   h.writeScenario([{ match: { agent: AGENT, promptIncludes: PROMPT }, turn: [{ text: 'pressed run ran' }] }]);
   prevDeps = scheduler.wireSchedulerDeps({ now: () => clock.at });
   h.internal.stopScheduler();
 });
-
 after(async () => {
   if (prevDeps) scheduler.wireSchedulerDeps(prevDeps);
   await h.shutdown();
@@ -52,8 +50,6 @@ test('a routine made through save_routine, run by the row\'s message, is recorde
   const stateBefore = JSON.stringify(h.internal.routineState[KEY] || null);
   const fileBefore = readIfThere(stateFile());
   const nextBefore = scheduler.nextRunFor(KEY, 'every day at 07:00').toISOString();
-
-  // Two presses: one run. The second is answered on the row's road.
   const since = client.messages.length;
   client.send({ type: 'run_routine_now', agentId: AGENT, name: ROUTINE, occurrence: 0 });
   client.send({ type: 'run_routine_now', agentId: AGENT, name: ROUTINE, occurrence: 0 });
@@ -63,15 +59,12 @@ test('a routine made through save_routine, run by the row\'s message, is recorde
   assert.strictEqual(refused.msg.reason, 'running');
   const going = await client.waitFor(m => m.type === 'agents' && rosterRoutine(m).running, { since, label: 'the roster carrying the in-flight fact' });
   assert.strictEqual(rosterRoutine(going.msg).running.trigger, 'manual');
-
-  // The record closes when the stub's turn ends.
   assert.ok(await h.waitUntil(() => records().some(r => r.status !== 'running')), 'the record closed');
   const done = records();
   assert.strictEqual(done.length, 1, 'two presses left one record');
   assert.strictEqual(done[0].trigger, 'manual');
   assert.strictEqual(done[0].status, 'succeeded');
   assert.strictEqual(h.readInvocations().filter(inv => inv.agent === AGENT).length, 1, 'and one spawn');
-
   assert.strictEqual(JSON.stringify(h.internal.routineState[KEY] || null), stateBefore, 'the routine state is unchanged');
   assert.strictEqual(readIfThere(stateFile()), fileBefore, 'and so is its file');
   assert.strictEqual(scheduler.nextRunFor(KEY, 'every day at 07:00').toISOString(), nextBefore, 'and the next-run instant');

@@ -711,15 +711,9 @@ describe('ROUTINES.md: where a routine actually runs', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// docs/ROUTINES.md: running a routine now, and the two paused states
-// ---------------------------------------------------------------------------
-//
+// docs/ROUTINES.md: running a routine now, and the two paused states.
 // Bound to the code's own words and lists, never to a sentence of the page:
-// each pin reads a label, a word or a list off the model or the scheduler,
-// proves the behaviour there, and asks only that the page carries that same
-// word. A sentence rewritten for clarity moves nothing here; a label or a
-// refusal that changes reddens the page until it says the new thing.
+// a sentence rewritten for clarity moves nothing here.
 
 describe('ROUTINES.md: running a routine now, and consent as change-consent', () => {
   const scheduler = require('../../lib/scheduler.js');
@@ -739,7 +733,6 @@ describe('ROUTINES.md: running a routine now, and consent as change-consent', ()
   });
 
   test('the refusals the page describes are exactly the ones the scheduler declares, and the tick\'s three consents are not among them', () => {
-    // Each declared word has a phrase the page must carry, keyed by the code.
     const phrases = { runOn: /run target/, prompt: /no prompt/, running: /already going|already running/ };
     assert.deepStrictEqual(Object.keys(phrases).sort(), scheduler.MANUAL_RUN_REFUSALS.slice().sort(),
       'a refusal the scheduler grows needs a phrase here and on the page');
@@ -764,10 +757,8 @@ describe('ROUTINES.md: running a routine now, and consent as change-consent', ()
 
   test('a manual run moves no schedule: the page says so and the scheduler leaves the guard alone', () => {
     assert.match(section, /moves no schedule/i);
-    // The manual path writes nothing into the state slot. Proven where the
-    // run itself is driven (test/unit/run-now.test.js); here the two writers
-    // are read for the one conditional that keeps it true, so the page and
-    // the code move together.
+    // Proven where the run is driven (test/unit/run-now.test.js); here the
+    // two writers are read for the conditional that keeps it true.
     const src = fs.readFileSync(path.join(ROOT, 'lib', 'scheduler.js'), 'utf-8');
     assert.strictEqual((src.match(/if \(run\.trigger !== 'manual'\) \{\s*\n\s*recordRoutineRun\(/g) || []).length, 2,
       'both state writes are gated on the run not being a press');
