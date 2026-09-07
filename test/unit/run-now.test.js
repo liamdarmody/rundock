@@ -596,3 +596,61 @@ describe('approval is consent to a changed plan, and nothing else asks for it', 
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// The roster carries in-flight beside refusal
+// ---------------------------------------------------------------------------
+
+describe('the roster carries whether a run is in flight, stamped beside the refusal', () => {
+  const shared = require(SCHEDULER_KEY);
+
+  function rosterRoutine() {
+    const { discoverAgents } = require('../../lib/agents/discovery.js');
+    invalidateAgentCache();
+    return discoverAgents().find(a => a.id === AGENT).routines.find(r => r.name === ROUTINE);
+  }
+
+  test('the in-flight fact is read from the scheduler\'s live runs, keyed the way the single-flight hold is', () => {
+    withRun(() => {
+      const real = shared.runningRuns;
+      try {
+        shared.runningRuns = () => [];
+        let r = rosterRoutine();
+        assert.strictEqual(r.running, null, 'nothing going: the fact is null, not absent');
+        assert.strictEqual(r.refusal, null, 'and the refusal is stamped beside it');
+
+        shared.runningRuns = () => [{ id: 'x', key: KEY, agent: AGENT, routine: ROUTINE, startedAt: NOW.toISOString(), trigger: 'manual' }];
+        r = rosterRoutine();
+        assert.deepStrictEqual(r.running, { trigger: 'manual', startedAt: NOW.toISOString() },
+          'a pressed run in flight reaches the roster with the word that says it was pressed');
+
+        shared.runningRuns = () => [{ id: 'y', key: KEY, agent: AGENT, routine: ROUTINE, startedAt: NOW.toISOString(), trigger: 'scheduled' }];
+        assert.strictEqual(rosterRoutine().running.trigger, 'scheduled');
+
+        shared.runningRuns = () => [{ id: 'z', key: 'someone:else', agent: 'someone', routine: 'else', startedAt: NOW.toISOString(), trigger: 'manual' }];
+        assert.strictEqual(rosterRoutine().running, null, 'another routine\'s run is not this row\'s');
+      } finally {
+        shared.runningRuns = real;
+      }
+    });
+  });
+
+  test('on the live path, a pressed run puts the fact on the roster and its ending takes it off', () => {
+    withRun(({ sched, agent, routine, children }) => {
+      const real = shared.runningRuns;
+      shared.runningRuns = sched.runningRuns;
+      try {
+        const idle = rosterRoutine();
+        assert.strictEqual(idle.running, null);
+        assert.strictEqual(sched.runRoutineNow(agent, routine, KEY).started, true);
+        const going = rosterRoutine();
+        assert.strictEqual(going.running.trigger, 'manual');
+        assert.deepStrictEqual(going.state, idle.state, 'while the state slot is exactly what it was: a pressed run writes nothing there');
+        children[0].emit('close', 0);
+        assert.strictEqual(rosterRoutine().running, null);
+      } finally {
+        shared.runningRuns = real;
+      }
+    });
+  });
+});
