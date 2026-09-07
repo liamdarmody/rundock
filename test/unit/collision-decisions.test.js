@@ -5,12 +5,13 @@
 // row's one way out is skipping, and receipts record each decision beside the
 // item it governed.
 //
-// Two walks are load-bearing. The bucket walk reads the evaluator's own
-// result shape against the surface's rendering map, so an outcome the
-// evaluator grows without a home on this surface fails here rather than
-// rendering as nothing. The reason walk reads the evaluator's own source for
-// the reason literals it can attach, so a reason added there without prose
-// here fails naming the word.
+// Three walks are load-bearing. The bucket walk reads the evaluator's own
+// result shape and, for each bucket, renders a state that populates it
+// beside one that leaves it empty, so an outcome the evaluator grows
+// without a rendered difference here fails naming the bucket. The class
+// walk reaches every row class through a rendered control. The reason walk
+// reads the evaluator's own source for the reason literals it can attach,
+// so a reason added there without prose here fails naming the word.
 
 const { test, describe } = require('node:test');
 const assert = require('node:assert');
@@ -127,6 +128,20 @@ function classScenario() {
     workspace, first, skipped,
     rows: { willAdd: [first, 'skill:writer'], collision: [first, 'agent:helper'], blocked: [first, 'agent:alpha'], skippedNew: [skipped, 'agent:alpha'] },
   };
+}
+
+// A skill collision whose bytes already match. Skills rather than agents:
+// materialise() rewrites an agent with a provenance line, so an agent's
+// approved digest can never equal a bare workspace copy's.
+function identicalScenario() {
+  const workspace = makeTempDir('cd-ws-');
+  const sourceRoot = makeTempDir('cd-src-');
+  write(workspace, '.claude/skills/notes/SKILL.md', 'identical content');
+  write(sourceRoot, '.claude/skills/notes/SKILL.md', 'identical content');
+  const planMsg = realReply(workspace, 'plan_package_import', {
+    sourcePath: sourceRoot, source: { id: sourceRoot, reference: null },
+  });
+  return { workspace, out: model.reply(model.submit(model.initial(), sourceRoot).state, planMsg) };
 }
 
 // The complete tree under a root as one comparable value: every path and
@@ -280,8 +295,8 @@ describe('a reply is matched to the request that produced it, not to the phase i
   });
 });
 
-describe('the bucket walk: every evaluator outcome has a home on this surface', () => {
-  test('the rendering map keys are exactly the evaluator result shape', () => {
+describe('the bucket walk: every evaluator bucket makes a rendered difference', () => {
+  test('each bucket, populated, renders something that is absent when it is empty', () => {
     const item = {
       id: 'skill:notes', kind: 'skill', slug: 'notes', destination: '.claude/skills/notes',
       collision: false, decision: 'add', plannedDigest: ABSENT_DIGEST,
@@ -297,9 +312,40 @@ describe('the bucket walk: every evaluator outcome has a home on this surface', 
       sources: [{ id: item.id, digest: item.sourceDigest }],
       agents: [],
     });
-    assert.deepStrictEqual(Object.keys(driven).sort(), Object.keys(model.RESULT_RENDERINGS).sort(),
-      'an outcome bucket on one side and not the other is a result this surface would have no words for: '
-      + 'teach RESULT_RENDERINGS in the install model and the evaluator result together');
+    // What the surface shows for a state, whichever card the phase renders.
+    const render = (state) => (state.phase === 'stale'
+      ? settings.packagesStaleCardHtml(model.staleCopy())
+      : settings.packagesReviewCardHtml(model.reviewCopy(state), state));
+    const { first } = classScenario();
+    const lone = collidingScenario();
+    const loneSkipped = projected(lone.workspace, { state: lone.offer, send: lone.firstSend });
+    const identical = identicalScenario();
+    const identicalOverwrite = projected(identical.workspace, model.setDecision(identical.out.state, 'skill:notes', 'overwrite'));
+    const moved = collidingScenario();
+    write(moved.workspace, '.claude/agents/helper.md', '---\nname: helper\n---\n\nMoved.\n');
+    const stale = projected(moved.workspace, model.setDecision(moved.offer, 'agent:helper', 'overwrite'));
+    // One row per bucket: a state whose projection populates it, one whose
+    // projection leaves it empty, and the rendered mark only the first shows.
+    const walk = {
+      writes: { present: first, absent: loneSkipped, mark: /packages-confirm"[^>]*>[^<]*(Add|[Oo]verwrite) \d/ },
+      unchanged: { present: identicalOverwrite, absent: first, mark: /Already identical/ },
+      skipped: { present: loneSkipped, absent: identicalOverwrite, mark: /packages-confirm"[^>]*>[^<]*[Ss]kip \d/ },
+      blocked: { present: first, absent: loneSkipped, mark: /data-row="blocked"/ },
+      stale: { present: stale, absent: loneSkipped, mark: /packages-stale-card/ },
+    };
+    assert.deepStrictEqual(Object.keys(walk).sort(), Object.keys(driven).filter((k) => k !== 'status').sort(),
+      'a result bucket without a rendered difference here is an outcome this surface would show nothing for');
+    for (const [bucket, { present, absent, mark }] of Object.entries(walk)) {
+      if (bucket === 'stale') {
+        assert.strictEqual(present.phase, 'stale');
+        assert.strictEqual(absent.phase, 'offer');
+      } else {
+        assert.ok(present.projection[bucket].length > 0, `${bucket}: the populating scenario really populates it`);
+        assert.strictEqual(absent.projection[bucket].length, 0, `${bucket}: the empty scenario really leaves it empty`);
+      }
+      assert.match(render(present), mark, `${bucket} populated renders its mark`);
+      assert.doesNotMatch(render(absent), mark, `${bucket} empty renders no such mark`);
+    }
   });
 
   test('every reason the evaluator can attach has prose, read from its own source', () => {
@@ -377,18 +423,7 @@ describe('the class walk: every rowClass reviewRowClass can produce is rendered,
   });
 
   test('a byte-identical collision renders the compare copy that says so, judged by the real digests', () => {
-    // Skills are used here rather than agents: materialise() rewrites an
-    // agent with a provenance line, so an agent's approvedDigest can never
-    // equal a bare workspace copy's plannedDigest, and this branch could
-    // never be reached with the agent-based scenario every other test uses.
-    const workspace = makeTempDir('cd-ws-');
-    const sourceRoot = makeTempDir('cd-src-');
-    write(workspace, '.claude/skills/notes/SKILL.md', 'identical content');
-    write(sourceRoot, '.claude/skills/notes/SKILL.md', 'identical content');
-    const planMsg = realReply(workspace, 'plan_package_import', {
-      sourcePath: sourceRoot, source: { id: sourceRoot, reference: null },
-    });
-    const out = model.reply(model.submit(model.initial(), sourceRoot).state, planMsg);
+    const { workspace, out } = identicalScenario();
     const row = model.reviewCopy(out.state).rows.filter((r) => r.id === 'skill:notes')[0];
     assert.strictEqual(row.rowClass, 'collision');
     assert.match(row.compare.have, /identical to what arrives/);

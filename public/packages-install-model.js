@@ -260,25 +260,10 @@
     stale: 'danger',
   };
 
-  // WHERE EACH EVALUATOR BUCKET REACHES THIS SURFACE. The keys are the
-  // evaluator's own result shape; a bucket added there without a home here
-  // fails the key-parity walk that compares the two, so an outcome can
-  // never be computed that this surface silently has no words for. That
-  // walk only proves a KEY exists, though: it is a sentence, not something
-  // rendered, so it cannot notice a row class going unexercised. The class
-  // walk in the suite is the one that drives every rowClass reviewRowClass
-  // can return through a real scenario and asserts the row it produces; read
-  // this map as a cross-reference between the two vocabularies, not as
-  // proof on its own.
-  var RESULT_RENDERINGS = {
-    status: 'routes the review: stale voids it, ready and decisions-blocked keep it open',
-    writes: 'the will-add and overwrite rows, counted into the confirm label',
-    unchanged: 'a collision whose bytes already match what arrives, said on its row',
-    skipped: 'the skip rows, counted into the confirm label',
-    blocked: 'the blocked treatment on the rows the projection names',
-    stale: 'the review-void state over the whole card',
-  };
-
+  // Where each evaluator bucket reaches this surface is not restated here
+  // as prose: the bucket walk in the suite renders a state that populates
+  // each bucket beside one that leaves it empty and asserts the difference,
+  // so a bucket added to the evaluator without a rendered home fails there.
   function reviewRowClass(state, item) {
     const blocked = !!(state.projection
       && state.projection.blocked.some((b) => b.id === item.id));
@@ -482,5 +467,5 @@
   }
 
   return { initial, submit, reply, planReply, offerCopy, cancel, confirm, applyReply, doneCopy, retry, connectionLost,
-    setDecision, reviewCopy, staleCopy, confirmLabel, reasonWords, REVIEW_TONES, RESULT_RENDERINGS };
+    setDecision, reviewCopy, staleCopy, confirmLabel, reasonWords, REVIEW_TONES };
 }));

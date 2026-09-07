@@ -50,11 +50,6 @@ const MUTATIONS = [
   [MODEL, 'a fresh collision opens decided skip',
     "    for (const item of items) decisions[item.id] = item.collision ? 'skip' : 'add';\n",
     "    for (const item of items) decisions[item.id] = item.collision ? 'overwrite' : 'add';\n"],
-  // The evaluator's result shape and this surface's rendering map are one
-  // list: drop a bucket's home and the walk must fail naming it.
-  [MODEL, 'every evaluator bucket has a home on this surface',
-    "    blocked: 'the blocked treatment on the rows the projection names',\n",
-    ''],
   // The review-void state is the only danger on a surface that executes
   // nothing.
   [MODEL, 'only the voided review carries the danger tone',
