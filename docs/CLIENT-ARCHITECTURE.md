@@ -32,7 +32,7 @@ this order:
 
 1. vendored third-party bundles (`marked`, `highlight.js`)
 2. standalone pure modules (`markers.js`, `permissions.js`, `conversation-state.js`, `chat-markup.js`, and others)
-3. the nine view modules under `public/views/`
+3. the fourteen view modules under `public/views/` (the newest, `views/pins.js`, is the Pins list beside `views/files.js`)
 4. `public/app.js`, last
 
 Serving is two route patterns in `lib/http-router.js`: `/^\/[\w-]+\.m?js$/` for
@@ -96,7 +96,7 @@ JavaScript that can say `RundockThing.method()`. `public/chat-markup.js` is the
 worked example of the second case: three modules call it, none of them through an
 inline handler, so it publishes one namespaced global instead of eight bare ones.
 
-The republished surface is currently 165 names across nine modules. It is
+The republished surface is currently 247 names across fourteen modules. It is
 enumerated in `test/unit/client-namespace.test.js`, which fails if two modules
 claim the same name, if a view claims a name `app.js` already declares at top
 level, if the surface drifts from its manifest, or if a republished name is never

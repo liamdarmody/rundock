@@ -423,6 +423,7 @@ function handle(d) {
       renderFileTree(d.tree);
       break;
     }
+    case 'pins': handlePinsReply(d.pins); break;
     case 'file_content': loadFileContent(d.path, d.content); break;
     case 'file_changed': handleExternalFileChange(d.path, d.content); break;
     case 'file_saved': document.getElementById('editor-status').textContent='Saved'; break;
@@ -1050,7 +1051,19 @@ const NAV_FOR_VIEW = {
   profile: 'team',
   chat: 'conversations',
   'convo-empty': 'conversations',
+  // THE ONE ROW WITH A SECOND ANSWER. The editor pane serves two lists: the
+  // file tree, and the Pins list, which is the Files view with the tree
+  // swapped for a short list the reader chose. A file opened from the Pins
+  // list keeps Pins lit and the Pins panel up; the same file opened from the
+  // tree lights Files. The cell below is the default, and showView reads it
+  // beside editorEntry, which every opener sets to say where the reader came
+  // in from: 'pins' resolves this row to Pins, anything else to the cell. The
+  // table stays the mechanism: nothing sets a section for itself, and the
+  // doors test resolves this row under both entries. The read is guarded by
+  // typeof so a shell that runs showView without app.js's state resolves to
+  // the cell, as skills.js guards skillsLoaded for the same reason.
   editor: 'files',
+  pins: 'pins',
   skills: 'skills',
   settings: 'settings',
   'routine-editor': 'routines',
@@ -1084,7 +1097,7 @@ const NAV_FOR_VIEW = {
 function setNavState(nav) {
   document.querySelectorAll('.nav-item[data-nav]').forEach(n=>n.classList.remove('active'));
   document.querySelector(`[data-nav="${nav}"]`)?.classList.add('active');
-  ['team','conversations','skills','files','settings','routines'].forEach(s=>document.getElementById(`sidebar-${s}`).classList.add('hidden'));
+  ['team','conversations','skills','files','settings','routines','pins'].forEach(s=>document.getElementById(`sidebar-${s}`).classList.add('hidden'));
   document.getElementById(`sidebar-${nav}`).classList.remove('hidden');
   // The New conversation footer lives at sidebar level (so the update strip
   // can sit above it without ever moving it), which makes its visibility
@@ -1103,6 +1116,7 @@ function switchNav(nav) {
   if(nav==='settings') { showView('settings'); showSettingsSection('workspace'); }
   else if(nav==='files') {
     editorReturnView = 'editor';
+    editorEntry = 'files';
     if (currentFilePath) {
       // A file is open: keep it open across the view switch (its editor/viewer
       // is still mounted, just hidden) and re-reveal it in the tree.
@@ -1138,8 +1152,12 @@ function switchNav(nav) {
   // A routine row on an agent's profile passes one, which is the deep link
   // that announces itself.
   else if(nav==='routines') { showRoutinesForAgent(null); }
+  // A PERMANENT ENTRY OPENS ONTO SOMETHING, and the view decides what: the
+  // open file if it is pinned, else the first pin, else the pane that says
+  // what pinning is for. The arrival rule lives with the list it reads.
+  else if(nav==='pins') { openPinsSection(); }
 }
-function showView(v) { currentView=v; ['workspace','home','profile','chat','convo-empty','editor','skills','settings','routine-editor','routines','run-detail'].forEach(id=>{const e=document.getElementById(`view-${id}`);if(e){e.classList.add('hidden');e.style.display='none';e.classList.remove('main-view-transition');}}); const e=document.getElementById(`view-${v}`); if(e){e.classList.remove('hidden');e.style.display='flex';e.classList.add('main-view-transition');} const nav=NAV_FOR_VIEW[v]; if(nav) setNavState(nav); }
+function showView(v) { currentView=v; ['workspace','home','profile','chat','convo-empty','editor','pins','skills','settings','routine-editor','routines','run-detail'].forEach(id=>{const e=document.getElementById(`view-${id}`);if(e){e.classList.add('hidden');e.style.display='none';e.classList.remove('main-view-transition');}}); const e=document.getElementById(`view-${v}`); if(e){e.classList.remove('hidden');e.style.display='flex';e.classList.add('main-view-transition');} const nav=(v==='editor'&&typeof editorEntry!=='undefined'&&editorEntry==='pins')?'pins':NAV_FOR_VIEW[v]; if(nav) setNavState(nav); }
 function goHome() { discardIfEmpty(); activeConversation=null; switchNav('conversations'); }
 
 // Whether there is any chrome at all.
@@ -1261,6 +1279,9 @@ let editorMode='preview', rawFileContent='', fileFrontmatter='', fileBody='';
 
 let editorReturnView = 'editor';
 let fileHistory = [];
+// Where the open file was entered from: 'files' or 'pins'. Read by showView
+// to light the list the reader is in; set by every opener.
+let editorEntry = 'files';
 
 // ===== 12. MARKDOWN RENDERING =====
 
@@ -1509,6 +1530,7 @@ function onWorkspaceReady(dir, analysis, isEmpty, mode, scaffoldError, isSetupCo
   // Load workspace data
   ws.send(JSON.stringify({ type: 'get_agents' }));
   ws.send(JSON.stringify({ type: 'get_files' }));
+  requestPins(); // keyed by workspace, so the list is asked for with the tree
   ws.send(JSON.stringify({ type: 'get_skills' }));
   ws.send(JSON.stringify({ type: 'get_conversations' }));
   ws.send(JSON.stringify({ type: 'get_lists' }));
