@@ -182,7 +182,7 @@
 
 /* A refusal from the server, shown next to the button that caused it. The
    editor is still on screen precisely so this has somewhere to go. */
-.re-problem { font-size: var(--caption); color: var(--danger); line-height: 1.5; margin: 0 0 4px; }
+.re-problem { font-size: var(--caption); color: var(--danger-text); line-height: 1.5; margin: 0 0 4px; }
 
 /* A SETTLED VALUE IN A FIELD, which is what the run-on field becomes when an
    existing routine is being rescheduled rather than made.

@@ -63,6 +63,25 @@ function tokenBlocks() {
   return blocks;
 }
 
+// One rule's declarations, by selector, as a property-to-value map, so a
+// pattern is asserted by what it declares rather than by its text. The
+// selector is matched whole, at a rule boundary, so `.settings-btn:hover`
+// cannot be satisfied by `.settings-btn.danger:hover`. Null when the rule
+// is absent; ruleOf asserts it found.
+function findRule(file, selector) {
+  const text = stripComments(fs.readFileSync(path.join(ROOT, file), 'utf-8'));
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const m = new RegExp(`(?:^|\\})\\s*${escaped}\\s*\\{([^}]*)\\}`, 'm').exec(text);
+  if (!m) return null;
+  return new Map(m[1].split(';').map(d => d.trim()).filter(Boolean)
+    .map(d => [d.slice(0, d.indexOf(':')).trim(), d.slice(d.indexOf(':') + 1).trim()]));
+}
+function ruleOf(file, selector) {
+  const rule = findRule(file, selector);
+  assert.ok(rule, `${file} carries no rule for ${selector}; if it moved, move this lookup with it`);
+  return rule;
+}
+
 const rel = (file) => path.relative(ROOT, file);
 const lineOf = (text, index) => text.slice(0, index).split('\n').length;
 
@@ -165,5 +184,42 @@ describe('the split is declared', () => {
     assert.ok(light.has('--danger-text'), 'the text token has no light override, so light text would take the dark value');
     assert.notStrictEqual(dark.get('--danger-text'), light.get('--danger-text'),
       'the light override must change the value, or it is not an override');
+  });
+});
+
+describe('a resting destructive action is not filled', () => {
+  const SETTINGS = 'public/styles/views/settings.css';
+  const ROUTINES = 'public/styles/views/routines.css';
+  const SIDEBAR = 'public/styles/components/sidebar.css';
+
+  test('the outline button turns danger on hover, and nothing fills at rest or on hover', () => {
+    // The resting state is the plain .settings-btn: a rule of its own for
+    // .settings-btn.danger would be a change at rest, which is the thing
+    // this pattern exists to avoid.
+    assert.strictEqual(findRule(SETTINGS, '.settings-btn.danger'), null,
+      'the resting destructive button must be the plain outline, with no rule of its own');
+    const hover = ruleOf(SETTINGS, '.settings-btn.danger:hover');
+    assert.strictEqual(hover.get('border-color'), 'var(--danger)', 'the edge takes the fill token on hover');
+    assert.strictEqual(hover.get('color'), 'var(--danger-text)', 'the label takes the text token on hover');
+    for (const prop of ['background', 'background-color']) {
+      assert.ok(!hover.has(prop), `the hover must not fill: it declares ${prop}`);
+    }
+  });
+
+  test('the confirmation fill keeps its fill and its white text', () => {
+    const fill = ruleOf(SETTINGS, '.settings-btn-danger');
+    assert.strictEqual(fill.get('background'), 'var(--danger)');
+    assert.strictEqual(fill.get('color'), 'white');
+    assert.strictEqual(fill.get('border'), 'none');
+  });
+
+  test('the hover-only destructive rules colour their text with the text token', () => {
+    for (const [file, selector] of [
+      [ROUTINES, '.icon-btn.danger:hover'],
+      [SIDEBAR, '.files-menu-item.danger:hover'],
+      [SIDEBAR, '.convo-delete:hover'],
+    ]) {
+      assert.strictEqual(ruleOf(file, selector).get('color'), 'var(--danger-text)', `${selector} in ${file}`);
+    }
   });
 });

@@ -33,6 +33,11 @@
 .connector-drift { color: var(--attention); }
 .settings-btn { padding: 6px 14px; font-size: var(--caption); font-weight: 600; border-radius: var(--radius-md); background: var(--card); color: var(--text-1); border: 1px solid var(--border); transition: all var(--duration-base) ease; cursor: pointer; }
 .settings-btn:hover { border-color: var(--accent); color: var(--accent); }
+/* A destructive action at rest is this same quiet outline, and turns danger
+   on hover: one hover rule, no fill, no new radius, no new spacing, the same
+   shape as .icon-btn.danger:hover and .files-menu-item.danger:hover. The
+   fill below is for a confirmation, never for a resting button. */
+.settings-btn.danger:hover { border-color: var(--danger); color: var(--danger-text); }
 .settings-btn-primary { padding: 6px 14px; font-size: var(--caption); font-weight: 600; border-radius: var(--radius-md); background: var(--accent); color: white; border: none; transition: all var(--duration-base) ease; cursor: pointer; }
 .settings-btn-primary:hover { background: var(--accent-hover); }
 /* The danger fill, for a fork where confirming and cancelling are equal
@@ -65,12 +70,12 @@
 .packages-field-row { display: flex; gap: 8px; }
 .packages-input { flex: 1; padding: 8px 12px; font-size: var(--body); border-radius: var(--radius-md); border: 1px solid var(--border); background: var(--base); color: var(--text-1); }
 .packages-input:disabled { opacity: 0.6; }
-.packages-field-error { font-size: var(--caption); color: var(--danger); margin-top: 8px; }
+.packages-field-error { font-size: var(--caption); color: var(--danger-text); margin-top: 8px; }
 .packages-state, .packages-confirm-card, .packages-success-card { display: flex; flex-direction: column; gap: 10px; padding: 20px; }
 .packages-headline { font-size: var(--body); font-weight: 600; color: var(--text-1); }
 .packages-body, .packages-collision-note, .packages-blocked-line { font-size: var(--caption); color: var(--text-2); line-height: 1.6; }
 .packages-collision-note { color: var(--text-1); }
-.packages-failed .packages-headline { color: var(--danger); }
+.packages-failed .packages-headline { color: var(--danger-text); }
 .packages-actions { display: flex; gap: 8px; margin-top: 6px; }
 .packages-confirm:disabled { opacity: 0.5; cursor: default; }
 .packages-part { display: flex; justify-content: space-between; gap: 12px; font-size: var(--caption); }

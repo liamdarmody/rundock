@@ -47,7 +47,7 @@ textarea.editor-content { resize: none; border: none; background: transparent; w
 .callout-tip, .callout-important { background: rgba(107,198,126,0.08); border-color: var(--success); }
 .callout-tip .callout-title, .callout-important .callout-title { color: var(--success); }
 .callout-danger, .callout-error, .callout-bug { background: color-mix(in srgb, var(--danger) 8%, transparent); border-color: var(--danger); }
-.callout-danger .callout-title, .callout-error .callout-title, .callout-bug .callout-title { color: var(--danger); }
+.callout-danger .callout-title, .callout-error .callout-title, .callout-bug .callout-title { color: var(--danger-text); }
 .callout-success, .callout-check, .callout-done { background: rgba(107,198,126,0.08); border-color: var(--success); }
 .callout-success .callout-title, .callout-check .callout-title { color: var(--success); }
 .callout-question, .callout-help, .callout-faq { background: rgba(232,168,76,0.08); border-color: var(--attention); }
