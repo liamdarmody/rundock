@@ -65,6 +65,22 @@
 .packages-field-row { display: flex; gap: 8px; }
 .packages-input { flex: 1; padding: 8px 12px; font-size: var(--body); border-radius: var(--radius-md); border: 1px solid var(--border); background: var(--base); color: var(--text-1); }
 .packages-input:disabled { opacity: 0.6; }
+.packages-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.packages-input-ref { flex: 0 1 180px; }
+.packages-field-hint { font-size: var(--caption); color: var(--text-3); margin-top: 8px; line-height: 1.5; }
+.packages-where { font-family: var(--mono, monospace); }
+/* The reassurance line for a long read appears on its own after a few
+   seconds, by a delayed keyframe rather than a timer the view would have to
+   own: a fast classify never shows it, a slow one does. */
+.packages-still-reading { opacity: 0; animation: packages-appear 0s 4.5s forwards; }
+@keyframes packages-appear { to { opacity: 1; } }
+/* The trust step is the one state that runs third-party code, and it wears
+   the amber high-risk chrome the permission card uses; the plain offer never
+   does. */
+.extension-trust-card { border: 1px solid var(--attention); }
+.extension-half-heading { margin-top: 6px; }
+.extension-facts-files, .extension-host-claims { margin: 0; padding-left: 20px; font-size: var(--caption); color: var(--text-2); line-height: 1.6; }
+.extension-facts-files { font-family: var(--mono, monospace); }
 .packages-field-error { font-size: var(--caption); color: var(--danger); margin-top: 8px; }
 .packages-state, .packages-confirm-card, .packages-success-card { display: flex; flex-direction: column; gap: 10px; padding: 20px; }
 .packages-headline { font-size: var(--body); font-weight: 600; color: var(--text-1); }

@@ -41,12 +41,22 @@ function write(root, relative, content) {
 
 // Every wire shape below is produced by the REAL handlers through the real
 // dispatch table, so a renamed field or status on the wire turns this red.
+//
+// The model names the bytes it is deciding about by the token the server
+// issued for the held snapshot; this suite drives the typed-path handlers,
+// which no interface reaches any more and which take the source directory
+// instead, so a send the model stamped with no token is completed here with
+// the directory the scenario built. The model itself never names a path,
+// which test/unit/extension-install.test.js holds it to.
+const sourceRoots = new Map();
 function realReply(workspace, type, payload) {
   const original = config.getWorkspace();
   config.setWorkspace(workspace);
   try {
     const sent = [];
-    buildDispatch()[type]({}, { send: (m) => sent.push(JSON.parse(m)), readyState: 1 }, JSON.parse(JSON.stringify({ type, ...payload })));
+    const message = { type, ...payload };
+    if (message.token === null && message.sourcePath === undefined) message.sourcePath = sourceRoots.get(workspace);
+    buildDispatch()[type]({}, { send: (m) => sent.push(JSON.parse(m)), readyState: 1 }, JSON.parse(JSON.stringify(message)));
     return sent[0];
   } finally {
     config.setWorkspace(original);
@@ -63,6 +73,7 @@ function collidingScenario({ workspaceAgent = '---\nname: helper\n---\n\nOld.\n'
   write(sourceRoot, '.claude/agents/helper.md', incomingAgent);
   for (const [rel, content] of extraSources) write(sourceRoot, rel, content);
   for (const [rel, content] of extraWorkspace) write(workspace, rel, content);
+  sourceRoots.set(workspace, sourceRoot);
   const planMsg = realReply(workspace, 'plan_package_import', {
     sourcePath: sourceRoot, source: { id: sourceRoot, reference: null },
   });
@@ -136,6 +147,7 @@ function identicalScenario() {
   const sourceRoot = makeTempDir('cd-src-');
   write(workspace, '.claude/skills/notes/SKILL.md', 'identical content');
   write(sourceRoot, '.claude/skills/notes/SKILL.md', 'identical content');
+  sourceRoots.set(workspace, sourceRoot);
   const planMsg = realReply(workspace, 'plan_package_import', {
     sourcePath: sourceRoot, source: { id: sourceRoot, reference: null },
   });
@@ -216,7 +228,7 @@ describe('the review opens with skip preselected, and nothing is silent', () => 
   test('confirm sends the decided approval through the shared decide module', () => {
     const { offer, planMsg } = collidingScenario();
     const confirmed = model.confirm(model.setDecision(offer, 'agent:helper', 'overwrite').state);
-    assert.strictEqual(confirmed.send.type, 'apply_package_import');
+    assert.strictEqual(confirmed.send.type, 'confirm_package_install');
     assert.deepStrictEqual(confirmed.send.approval,
       decide(planMsg.plan, { 'agent:helper': 'overwrite' }));
   });
@@ -526,7 +538,7 @@ describe('the review-void state is the only danger, proven by the tone walk', ()
     assert.strictEqual(voided.state.phase, 'stale');
     // The only way forward re-plans; confirming a voided review sends nothing.
     assert.strictEqual(model.confirm(voided.state).send, undefined);
-    assert.strictEqual(model.retry(voided.state).send.type, 'plan_package_import');
+    assert.strictEqual(model.retry(voided.state).send.type, 'plan_package_install');
   });
 });
 

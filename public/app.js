@@ -215,7 +215,9 @@ function setConn(s) { const b=document.getElementById('connection-bar'); b.class
 function handle(d) {
   const convoId = d._conversationId;
   switch(d.type) {
-    case 'package_import_plan': case 'package_import_result': case 'package_import_error': packagesReplyArrived(d); break;
+    case 'package_import_plan': case 'package_import_result': case 'package_import_error':
+    case 'extension_install_plan': case 'extension_install_result': case 'package_install_declined': case 'package_install_error':
+      packagesReplyArrived(d); break;
     case 'workspaces': handleWorkspaces(d); break;
     case 'workspace_set':
       // Start the clock on the renderer's share of opening a workspace. The
@@ -1468,6 +1470,10 @@ function resetSidebarForWorkspace() {
  */
 function setServingWorkspace(path) {
   servingWorkspacePath = typeof path === 'string' && path ? path : null;
+  // The install flow's offer described the workspace this window opened; a
+  // switch announced from elsewhere returns it to its start. Guarded because
+  // the shell can be assembled without the settings view loaded.
+  if (typeof packagesServingWorkspaceChanged === 'function') packagesServingWorkspaceChanged(servingWorkspacePath);
 }
 
 /**

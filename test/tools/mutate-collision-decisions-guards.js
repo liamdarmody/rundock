@@ -66,13 +66,15 @@ const MUTATIONS = [
   // A stale projection voids the whole review rather than quietly carrying
   // decisions whose basis has moved.
   [MODEL, 'a stale projection voids the review',
-    "    if (msg.status === 'stale') {\n      return { state: { phase: 'stale', sourcePath: state.sourcePath } };\n    }",
+    "    if (msg.status === 'stale') {\n      return { state: { phase: 'stale', ...carry, token: state.token, installed: state.installed || null } };\n    }",
     ''],
   // A reply is matched to the request that produced it: an evaluate reply
   // still in flight when confirm is pressed must not be read as the apply
   // this phase is actually waiting on, even though both share one envelope.
+  // The one correlation rule at the reply entry is what holds this, by
+  // operation, token and request id; without it the phase alone decides.
   [MODEL, 'an apply reply is matched to the request that asked for it, not just the phase',
-    "    if (msg.operation !== 'apply' || msg.requestId !== state.requestId) return { state };\n",
+    "    if (!correlated(state, msg)) return { state };\n",
     ''],
   // The same identity check on the other side: a decision made after this
   // projection was asked for supersedes it, and the superseded reply must
@@ -115,11 +117,12 @@ const MUTATIONS = [
   [MODEL, 'pressing the selected option changes nothing and sends nothing',
     "    if (state.decisions[id] === decision) return { state };\n",
     ''],
-  // The plan reply's guards: a stray refusal for another operation, or a
-  // result sharing no field with a plan, is refused rather than read.
+  // The plan reply's guards: a stray refusal for another operation is
+  // refused by the correlation rule's operation half, and a result sharing
+  // no field with a plan is refused rather than read.
   [MODEL, 'a refusal stamped for another operation is not the plan failing',
-    "      if (msg.operation && msg.operation !== 'plan') return { state };\n",
-    ''],
+    "    if (!waiting || !msg || msg.operation !== waiting.operation) return false;\n",
+    "    if (!waiting || !msg) return false;\n"],
   [MODEL, 'only a package_import_plan carrying a plan lands the offer',
     "    if (msg.type !== 'package_import_plan' || !msg.plan) return { state };\n",
     ''],

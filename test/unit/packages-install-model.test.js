@@ -48,20 +48,22 @@ function realPlanMsg({ withCollision = false } = {}) {
   return { workspace, sourceRoot, planMsg };
 }
 
+// The typed-path handler's replies carry their operation like every other,
+// so the one flow reads them through its correlation rule with no token.
+const waitingOn = (operation) => ({ link: 'someone/pack', reference: '', outstanding: { operation, token: null } });
+
 function offered(planMsg) {
-  const submitted = model.submit(model.initial(), '/tmp/somewhere');
+  const submitted = model.submit(model.initial(), 'someone/pack', '');
   return model.reply(submitted.state, planMsg).state;
 }
 
 describe('nothing is silent', () => {
-  test('submit sends the plan request; a blank path refuses without sending', () => {
-    const blank = model.submit(model.initial(), '   ');
+  test('submit sends the plan request; a blank link refuses without sending', () => {
+    const blank = model.submit(model.initial(), '   ', 'v1');
     assert.strictEqual(blank.send, undefined);
-    assert.match(blank.state.fieldError, /Enter the path/);
-    const ok = model.submit(model.initial(), ' /pkg ');
-    assert.deepStrictEqual(ok.send, {
-      type: 'plan_package_import', sourcePath: '/pkg', source: { id: '/pkg', reference: null },
-    });
+    assert.match(blank.state.fieldError, /Paste the GitHub link/);
+    const ok = model.submit(model.initial(), ' someone/pack ', ' v1 ');
+    assert.deepStrictEqual(ok.send, { type: 'plan_package_install', url: 'someone/pack', reference: 'v1' });
     assert.strictEqual(ok.state.phase, 'classifying');
   });
 
@@ -93,7 +95,7 @@ describe('the offer', () => {
     const workspace = makeTempDir('pim-ws-');
     const emptyRoot = makeTempDir('pim-src-');
     fs.mkdirSync(path.join(emptyRoot, '.claude'), { recursive: true });
-    const classifying = model.submit(model.initial(), emptyRoot).state;
+    const classifying = model.submit(model.initial(), 'someone/pack', '').state;
     const emptyMsg = realReply(workspace, 'plan_package_import', { sourcePath: emptyRoot, source: { id: emptyRoot, reference: null } });
     assert.strictEqual(emptyMsg.code, 'empty-package');
     assert.strictEqual(model.reply(classifying, emptyMsg).state.phase, 'nothing-usable');
@@ -122,7 +124,7 @@ describe('collisions enter review, decided skip', () => {
     assert.strictEqual(out.send.approval.items.filter((i) => i.id === 'skill:writer')[0].decision, 'skip');
     // Confirming an untouched review keeps what the person already has.
     const confirmed = model.confirm(out.state);
-    assert.strictEqual(confirmed.send.type, 'apply_package_import');
+    assert.strictEqual(confirmed.send.type, 'confirm_package_install');
     assert.strictEqual(confirmed.send.approval.items.filter((i) => i.id === 'skill:writer')[0].decision, 'skip');
   });
 });
@@ -143,7 +145,7 @@ describe('the approval is the plan module\'s own decision', () => {
     } finally {
       shared.decide = realDecide;
     }
-    assert.strictEqual(out.send.type, 'apply_package_import');
+    assert.strictEqual(out.send.type, 'confirm_package_install');
     assert.strictEqual(out.send.approval.viaSharedDecide, true);
     const allAdd = {};
     for (const item of planMsg.plan.items) allAdd[item.id] = 'add';
@@ -171,7 +173,7 @@ describe('outcomes are rendered honestly, against real apply replies', () => {
     if (tamper) tamper(approval);
     if (prepare) prepare({ workspace, sourceRoot });
     const replyMsg = realReply(workspace, 'apply_package_import', { sourcePath: sourceRoot, approval });
-    return { workspace, applying: { phase: 'applying', sourcePath: sourceRoot }, replyMsg };
+    return { workspace, applying: { phase: 'applying', ...waitingOn('apply') }, replyMsg };
   }
 
   test('a real ready reply names every written item, its destination, and the real receipt', () => {
@@ -228,7 +230,7 @@ describe('outcomes are rendered honestly, against real apply replies', () => {
     assert.match(failed.message, /scribe, because the workspace changed after you reviewed it/);
     assert.strictEqual(failed.canReplan, true);
     const retried = model.retry(failed);
-    assert.strictEqual(retried.send.type, 'plan_package_import');
+    assert.strictEqual(retried.send.type, 'plan_package_install');
   });
 
   test('a real apply error reaches the rendered failure copy from the applying phase', () => {
