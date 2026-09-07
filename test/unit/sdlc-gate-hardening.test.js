@@ -257,6 +257,7 @@ const ENUMERATIONS = [
   { file: 'test/unit/scheduler-lifecycle-doors.test.js', extraction: 'lifecycle call sites and their enclosing functions out of the server sources', failLoudBy: 'count', where: 'manifest equality plus a self-arming floor', anchor: 'selfArming.length' },
   { file: 'test/unit/skills-empty.test.js', extraction: 'markup regions cut out of index.html', failLoudBy: 'count', where: 'every cut refuses when its region is missing', anchor: 'no longer carries' },
   { file: 'test/unit/style-drift.test.js', extraction: 'value literals out of allowlist reasons', failLoudBy: 'count', where: 'specimen beside the pattern, added with this registry row', anchor: 'no longer matches its own specimen' },
+  { file: 'test/unit/danger-token.test.js', extraction: 'text-coloured declarations that reference the danger fill, and the danger-family references, out of the stylesheets', failLoudBy: 'count', where: 'specimen self-test beside the prohibition scan, biting on every text shape and silent on every fill or edge shape; a per-file floor of one and a total floor on the family references', anchor: 'the text-on-fill pattern no longer matches its own specimen' },
 ];
 
 // What makes a file a source-walking extraction. Deliberately the same
