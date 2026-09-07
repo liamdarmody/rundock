@@ -8,6 +8,14 @@
 <script src="/marked.min.js"></script>
 <!-- d3-hierarchy: vendored locally (public/vendor/d3-hierarchy/) so the org chart works offline. -->
 <script src="/vendor/d3-hierarchy/d3-hierarchy.min.js"></script>
+<!-- d3-force: the map view's layout. Four files because the UMD declares the
+     three siblings as externals and reads them off the d3 global, so they must
+     load first. Extends the same `d3` object the org chart's d3-hierarchy uses
+     rather than replacing it. See public/vendor/d3-force/README.md. -->
+<script src="/vendor/d3-force/d3-quadtree.min.js"></script>
+<script src="/vendor/d3-force/d3-dispatch.min.js"></script>
+<script src="/vendor/d3-force/d3-timer.min.js"></script>
+<script src="/vendor/d3-force/d3-force.min.js"></script>
 <!-- highlight.js: vendored locally (public/vendor/highlight/) so code-block highlighting works offline. Light theme starts disabled; toggled with the app theme. -->
 <link id="hljs-dark" rel="stylesheet" href="/vendor/highlight/atom-one-dark.min.css">
 <link id="hljs-light" rel="stylesheet" href="/vendor/highlight/atom-one-light.min.css" disabled>
@@ -37,6 +45,7 @@
 <script src="/packages-decide.js"></script>
 <script src="/packages-install-model.js"></script>
 <script src="/routines-scope-model.js"></script>
+<script src="/graph-model.js"></script>
 <script src="/guide-copy.js"></script>
 <!-- Tokens first: everything below resolves var(--x) against this file. -->
 <link rel="stylesheet" href="/styles/tokens.css">
@@ -62,6 +71,7 @@
 <link rel="stylesheet" href="/styles/views/routine-editor.css">
 <link rel="stylesheet" href="/styles/views/run-detail.css">
 <link rel="stylesheet" href="/styles/views/routines.css">
+<link rel="stylesheet" href="/styles/views/graph.css">
 </head>
 <body>
 <div class="app">
@@ -122,6 +132,15 @@
         <svg class="icon-outline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 11V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v7"/><path d="M5 17h14"/><path d="M7 11l-2 6h14l-2-6"/></svg>
         <svg class="icon-filled" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 11V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v7"/><path d="M5 17h14"/><path d="M7 11l-2 6h14l-2-6"/></svg>
       </button>
+      <!-- Map, last in the rail: a lens over what the other entries contain,
+           so it earns the slot at the bottom, under Files and under the Pins
+           slot when that exists. Three nodes and three edges, which survive
+           being drawn at 21px. Keyed and labelled the same way on purpose: the
+           rail names places you go, and "map" says navigation. -->
+      <button class="nav-item" data-nav="map" onclick="switchNav('map')" data-tooltip="Map">
+        <svg class="icon-outline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="2.4"/><circle cx="5" cy="17" r="2.4"/><circle cx="19" cy="17" r="2.4"/><line x1="10.7" y1="7" x2="6.3" y2="14.9"/><line x1="13.3" y1="7" x2="17.7" y2="14.9"/><line x1="7.4" y1="17" x2="16.6" y2="17"/></svg>
+        <svg class="icon-filled" viewBox="0 0 24 24" fill="currentColor" stroke="none"><circle cx="12" cy="5" r="2.6"/><circle cx="5" cy="17" r="2.6"/><circle cx="19" cy="17" r="2.6"/><path d="M11.2 7.4 6.1 14.6l1.6 1.1 5.1-7.2zM12.8 7.4l5.1 7.2 1.6-1.1-5.1-7.2zM7.4 16.2h9.2v1.6H7.4z"/></svg>
+      </button>
       <!-- Search moved to the top bar. Two affordances for one overlay is what
            made search feel hidden in the first place, so the rail no longer
            carries a magnifier. The shortcut hint moved with it, and lives
@@ -178,6 +197,10 @@
       <div class="sidebar-header"><span class="sidebar-label">Pins</span></div>
       <div class="pin-list" id="pin-list"></div>
     </div>
+    <!-- Map has no sidebar. The panel exists because setNavState addresses
+         #sidebar-<nav> by id without guarding; the aside itself is hidden
+         while this panel is the visible one, by a rule in views/graph.css. -->
+    <div id="sidebar-map" class="hidden"></div>
     <div id="sidebar-settings" class="hidden">
       <div class="sidebar-header"><span class="sidebar-label">Settings</span></div>
       <div class="settings-nav">
@@ -341,6 +364,29 @@
     <div id="view-pins" class="hidden view-panel view-centered">
       <div class="pins-pane" id="pins-content"></div>
     </div>
+    <!-- Map: one canvas filling the pane, no sidebar. The view builds the
+         canvas and its controls into the stage on arrival and removes them on
+         leaving; only the stage is markup. -->
+    <div id="view-map" class="hidden view-panel">
+      <div class="graph-stage" id="graph-stage">
+        <div id="graph-body"></div>
+        <!-- Filter, v1: keyword over name and path. Always visible, top-left,
+             opposite the zoom controls. -->
+        <div class="graph-filter">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <input id="graph-filter-input" type="text" spellcheck="false" autocomplete="off"
+                 placeholder="Filter the map" oninput="mapSetFilter(this.value)">
+          <button id="graph-filter-clear" class="hidden" onclick="mapSetFilter('')" aria-label="Clear filter"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg></button>
+        </div>
+        <div class="graph-perf" id="graph-perf"></div>
+        <div class="graph-readout" id="graph-readout"></div>
+        <div class="graph-zoom">
+          <button onclick="mapZoomIn()" title="Zoom in" aria-label="Zoom in"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
+          <button onclick="mapZoomOut()" title="Zoom out" aria-label="Zoom out"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
+          <button onclick="mapZoomFit()" title="Fit" aria-label="Fit to view"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V5a1 1 0 0 1 1-1h4"/><path d="M20 9V5a1 1 0 0 0-1-1h-4"/><path d="M4 15v4a1 1 0 0 0 1 1h4"/><path d="M20 15v4a1 1 0 0 1-1 1h-4"/></svg></button>
+        </div>
+      </div>
+    </div>
     <!-- Routine editor: pick a skill, then say when it runs. -->
     <!-- Routines -->
     <div id="view-routines" class="hidden view-panel view-scroll">
@@ -396,6 +442,7 @@
 <script src="/views/run-detail.js"></script>
 <script src="/views/routines.js"></script>
 <script src="/views/routines-panel.js"></script>
+<script src="/views/graph.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>

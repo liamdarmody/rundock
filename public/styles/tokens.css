@@ -51,6 +51,24 @@
      for a hex of its own and they drifted: three near-identical reds were in
      the stylesheets when this token was added. This is the one. */
   --danger: #E85A5A;
+
+  /* Map canvas. A canvas resolves no CSS variables: every fill and stroke is
+     a literal read out of the computed style at paint time, so a value the
+     map needs has to exist as a token or it becomes a literal sitting in a
+     view file.
+
+     Two values had nowhere to read from. --border is a hairline meant to sit
+     on a solid surface and vanishes at the alpha an edge wants, so edges need
+     their own colour, and light needs MORE alpha than dark to read at all.
+     --graph-dim is the alpha everything fades to when one node is hovered,
+     the alpha the unlinked rim and the oldest files are drawn at, and the
+     app has no opacity scale to take it from.
+
+     Every other colour the map draws is an existing token read through
+     getComputedStyle, which is what keeps it following a palette change for
+     free. Two tokens, not a graph palette living outside the system. */
+  --graph-edge: rgba(154,149,144,0.22); --graph-dim: 0.18;
+
   --heading: 22px; --title: 18px; --body: 14px; --caption: 12px; --label: 11px;
   --org-name: 20px; --org-role: 15px;
 
@@ -124,6 +142,10 @@ body.light {
   --card: #F0EDE8; --border: #E5E0D8;
   --text-1: #1A1A1A; --text-2: #7A756E; --text-3: #8C867E;
   --accent-glow: rgba(232,122,90,0.08);
+  /* Both values move in light, and not in the same direction: the edge needs
+     a HIGHER alpha to read against a near-white ground, and a dimmed node
+     needs a higher one too before it disappears entirely. */
+  --graph-edge: rgba(122,117,110,0.30); --graph-dim: 0.22;
 }
 
 /* The window chrome reserves an inset on each side and the platform supplies

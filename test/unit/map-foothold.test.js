@@ -318,7 +318,9 @@ describe('the endpoint resolves at read time against the cached tree', () => {
   const httpRouter = require('../../lib/http-router.js');
 
   function drive(deps) {
-    const prev = httpRouter.wireHttpRouterDeps(deps);
+    // The warm-up accessor is wired at boot like the rest; a test that says
+    // nothing about it is a test against a settled index.
+    const prev = httpRouter.wireHttpRouterDeps({ fileIndexInProgress: () => false, ...deps });
     const chunks = [];
     const res = {
       writeHead: (code, headers) => { res.code = code; res.headers = headers; },
@@ -404,6 +406,50 @@ describe('the endpoint resolves at read time against the cached tree', () => {
     });
     assert.strictEqual(code, 500, 'a real failure is a failure, not an empty success');
     assert.match(body.error, /index file is corrupt/, 'and it names its cause');
+  });
+
+  // THE THIRD STATE. Between boot and the index reporting ready the table is
+  // filling, so an indexed answer with few links is not a fact about the
+  // workspace: a consumer told only indexed:true would draw a nearly empty
+  // map and a connections list saying None, both false. The payload says the
+  // warm-up is in flight, read from the server's own accessor.
+  test('the payload says warming while the index warm-up is in flight, and stops saying it when it lands', () => {
+    const warm = drive({ getFileTreeCached: () => TREE, getSearchEngine: () => ENGINE, fileIndexInProgress: () => true });
+    assert.strictEqual(warm.code, 200);
+    assert.strictEqual(warm.body.indexed, true, 'warming is a state of an indexed runtime, not of a missing index');
+    assert.strictEqual(warm.body.warming, true);
+    const settled = drive({ getFileTreeCached: () => TREE, getSearchEngine: () => ENGINE, fileIndexInProgress: () => false });
+    assert.strictEqual(settled.body.warming, false, 'a settled index says so explicitly, so a consumer can tell the field is being written');
+  });
+
+  // Recency needs a time per node, and the tree carries names and paths only,
+  // so the endpoint stats each file. A stat that fails (a file that vanished
+  // between the tree and the request) is null rather than an omission or a
+  // zero that would rank the file as the oldest thing in the workspace.
+  test('each node carries its modified time from a stat of the file, null when the stat fails', () => {
+    const { getWorkspace, setWorkspace } = require('../../lib/config.js');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'map-modified-'));
+    const prevWorkspace = getWorkspace();
+    try {
+      fs.mkdirSync(path.join(dir, 'docs'));
+      fs.writeFileSync(path.join(dir, 'docs', 'Real.md'), 'here');
+      const then = new Date(Date.now() - 3 * 86400000);
+      fs.utimesSync(path.join(dir, 'docs', 'Real.md'), then, then);
+      setWorkspace(dir);
+      const { body } = drive({
+        getFileTreeCached: () => [folder('docs', [file('docs/Real.md'), file('docs/Phantom.md')])],
+        getSearchEngine: () => ({ allLinks: () => [] }),
+      });
+      const real = body.nodes.find((n) => n.path === 'docs/Real.md');
+      const phantom = body.nodes.find((n) => n.path === 'docs/Phantom.md');
+      assert.strictEqual(typeof real.modified, 'number', 'a stat that succeeds yields epoch milliseconds');
+      assert.ok(Math.abs(real.modified - then.getTime()) < 2000, `the number is the file\'s mtime (${real.modified} vs ${then.getTime()})`);
+      assert.strictEqual(phantom.modified, null, 'a stat that fails yields null, never zero');
+      assert.deepStrictEqual(Object.keys(real).sort(), ['modified', 'name', 'path'], 'path, name and modified: no third field rides along');
+    } finally {
+      setWorkspace(prevWorkspace);
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -665,6 +711,48 @@ describe('the connections list rides the real open path', () => {
       await settle(); await settle();
       assert.match(doc.getElementById('file-connections').textContent, /could not be read/,
         'an unreachable link list is named too');
+    } finally { cleanup(); }
+  });
+
+  test('while the index is warming, an empty group says links are still being indexed in place of None', async () => {
+    const { doc, cleanup, settle } = shell();
+    try {
+      global.fetch = () => Promise.resolve({ ok: true, json: () => Promise.resolve({ indexed: true, warming: true, links: [] }) });
+      filesView.loadFileContent('a/Here.md', 'To [[Other]].');
+      await settle(); await settle();
+      const text = doc.getElementById('file-connections').textContent;
+      assert.match(text, /still being indexed/, 'an empty list during warm-up is not a fact about the file');
+      assert.ok(!/None/.test(text), 'and None is not written while the answer is still arriving');
+      // The same file once the index has landed: the honest empty state returns.
+      global.fetch = () => Promise.resolve({ ok: true, json: () => Promise.resolve({ indexed: true, warming: false, links: [] }) });
+      filesView.loadFileContent('a/Here.md', 'To [[Other]].');
+      await settle(); await settle();
+      assert.match(doc.getElementById('file-connections').textContent, /None/);
+    } finally { cleanup(); }
+  });
+
+  test('the index reporting ready redraws the open file\'s connections from a fresh fetch', async () => {
+    const { doc, cleanup, settle } = shell();
+    try {
+      let fetches = 0;
+      let payload = { indexed: true, warming: true, links: [] };
+      global.fetch = () => { fetches += 1; return Promise.resolve({ ok: true, json: () => Promise.resolve(payload) }); };
+      filesView.loadFileContent('a/Here.md', 'To [[Other]].');
+      await settle(); await settle();
+      assert.match(doc.getElementById('file-connections').textContent, /still being indexed/);
+      const before = fetches;
+      payload = { indexed: true, warming: false, links: LINKS };
+      filesView.fileConnectionsIndexReady();
+      await settle(); await settle();
+      assert.strictEqual(fetches, before + 1, 'ready is news: the list is fetched again rather than kept');
+      const rows = [...doc.getElementById('file-connections').querySelectorAll('.file-connections-row')].map(r => r.textContent);
+      assert.deepStrictEqual(rows, ['a/Other.md', 'Top.md'], 'and the rows the index now holds are drawn');
+      // With no file open there is nothing to redraw, and nothing is fetched.
+      filesView.closeOpenFile();
+      const idle = fetches;
+      filesView.fileConnectionsIndexReady();
+      await settle();
+      assert.strictEqual(fetches, idle);
     } finally { cleanup(); }
   });
 });

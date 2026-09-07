@@ -305,6 +305,15 @@ function handle(d) {
       // and delegation lives in RundockConversationState (conversation-state.js);
       // this branch builds the read-only ctx facts, applies the reduced state
       // and executes the returned effects against the DOM/WebSocket.
+      //
+      // THE INDEX ARRIVING IS NEWS FOR TWO SURFACES. The map and the open
+      // file's connections both draw a warming state while the server's
+      // index warm-up is in flight, and nothing else tells them it landed.
+      // Ready redraws both; the start of a warm-up redraws nothing, because
+      // there is nothing new to draw. Each surface is asked for by name and
+      // only if it has loaded, so a page without one still dispatches to
+      // the other.
+      if(d.subtype==='search_index' && d.state==='ready') { if (typeof mapIndexReady === 'function') mapIndexReady(); if (typeof fileConnectionsIndexReady === 'function') fileConnectionsIndexReady(); }
       // Track active process per conversation to ignore stale events
       if(d.subtype==='process_started' && convoId && d._processId) {
         const state = getConvoState(convoId);
@@ -1069,6 +1078,7 @@ const NAV_FOR_VIEW = {
   'routine-editor': 'routines',
   routines: 'routines',
   'run-detail': 'routines',
+  map: 'map',
 };
 
 // Sections whose sidebar belongs to another one. Routines sits beside the
@@ -1097,7 +1107,7 @@ const NAV_FOR_VIEW = {
 function setNavState(nav) {
   document.querySelectorAll('.nav-item[data-nav]').forEach(n=>n.classList.remove('active'));
   document.querySelector(`[data-nav="${nav}"]`)?.classList.add('active');
-  ['team','conversations','skills','files','settings','routines','pins'].forEach(s=>document.getElementById(`sidebar-${s}`).classList.add('hidden'));
+  ['team','conversations','skills','files','settings','routines','pins','map'].forEach(s=>document.getElementById(`sidebar-${s}`).classList.add('hidden'));
   document.getElementById(`sidebar-${nav}`).classList.remove('hidden');
   // The New conversation footer lives at sidebar level (so the update strip
   // can sit above it without ever moving it), which makes its visibility
@@ -1156,8 +1166,11 @@ function switchNav(nav) {
   // open file if it is pinned, else the first pin, else the pane that says
   // what pinning is for. The arrival rule lives with the list it reads.
   else if(nav==='pins') { openPinsSection(); }
+  // The map is a picture of the whole workspace, drawn from a fresh fetch on
+  // every arrival: links change on a content edit and no tree event says so.
+  else if(nav==='map') { showMapView(); }
 }
-function showView(v) { currentView=v; ['workspace','home','profile','chat','convo-empty','editor','pins','skills','settings','routine-editor','routines','run-detail'].forEach(id=>{const e=document.getElementById(`view-${id}`);if(e){e.classList.add('hidden');e.style.display='none';e.classList.remove('main-view-transition');}}); const e=document.getElementById(`view-${v}`); if(e){e.classList.remove('hidden');e.style.display='flex';e.classList.add('main-view-transition');} const nav=(v==='editor'&&typeof editorEntry!=='undefined'&&editorEntry==='pins')?'pins':NAV_FOR_VIEW[v]; if(nav) setNavState(nav); }
+function showView(v) { currentView=v; ['workspace','home','profile','chat','convo-empty','editor','pins','skills','settings','routine-editor','routines','run-detail','map'].forEach(id=>{const e=document.getElementById(`view-${id}`);if(e){e.classList.add('hidden');e.style.display='none';e.classList.remove('main-view-transition');}}); const e=document.getElementById(`view-${v}`); if(e){e.classList.remove('hidden');e.style.display='flex';e.classList.add('main-view-transition');} const nav=(v==='editor'&&typeof editorEntry!=='undefined'&&editorEntry==='pins')?'pins':NAV_FOR_VIEW[v]; if(nav) setNavState(nav); }
 function goHome() { discardIfEmpty(); activeConversation=null; switchNav('conversations'); }
 
 // Whether there is any chrome at all.

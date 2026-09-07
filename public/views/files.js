@@ -1086,7 +1086,11 @@ function drawFileConnections(section, filePath, data) {
     // carries no colon for the same reason no heading in the product does:
     // a colon promises the value follows on that line, and here the rows are
     // separate elements beneath it.
-    if (!rows.length) { note('None'); return; }
+    //
+    // WHILE THE INDEX IS WARMING, an empty group is not a fact about the file:
+    // the table is still filling, and None here would be a false answer that
+    // the ready redraw then silently corrects. Say what is true instead.
+    if (!rows.length) { note(data.warming ? 'Links are still being indexed' : 'None'); return; }
     for (const row of rows) {
       const target = pathOf(row);
       const a = document.createElement('a');
@@ -1104,6 +1108,17 @@ function drawFileConnections(section, filePath, data) {
   // indexed file can point at anything.
   if (LINK_SOURCE_EXTENSIONS.has(extensionOf(filePath))) group('Links to', outgoing, (r) => r.resolved);
   group('Linked from', incoming, (r) => r.src);
+}
+
+// The index reporting ready is news for the open file's connections: they
+// were drawn against a table that was still filling, and the section under
+// the file said so. Redraw from a fresh fetch, through the same render the
+// open path uses, and only when there is a file with a section to redraw.
+function fileConnectionsIndexReady() {
+  if (!currentFilePath) return;
+  const section = document.getElementById('file-connections');
+  if (!section) return;
+  renderFileConnections(section.parentElement, { inset: section.classList.contains('file-connections-inset') });
 }
 
 function fetchWorkspaceLinks() {
@@ -1427,6 +1442,7 @@ return {
   getFileContentForSave, openWikilink, openWorkspaceFilePath,
   highlightFileInSidebar, findFileInTree, wikilinkSearchName, fileConnections,
   renderFileConnections, drawFileConnections, drawFileConnectionsLoading, removeFileConnections,
+  fileConnectionsIndexReady,
   updateEditorBackButton,
   openSkillFile, editorGoBack,
 };

@@ -86,6 +86,15 @@ const MANIFEST = {
     "toggleConvoStatus",
     "togglePin",
   ],
+  "graph.js": [
+    "mapIndexReady",
+    "mapNodeScreenPosition",
+    "mapSetFilter",
+    "mapZoomFit",
+    "mapZoomIn",
+    "mapZoomOut",
+    "showMapView"
+  ],
   "files.js": [
     "attachArtifactReviewForCurrentFile",
     "buildFloatingMenu",
@@ -102,6 +111,7 @@ const MANIFEST = {
     "drawFileConnectionsLoading",
     "editorGoBack",
     "fileConnections",
+    "fileConnectionsIndexReady",
     "findFileInTree",
     "flushBoardSave",
     "getFileContentForSave",
