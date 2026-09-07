@@ -251,3 +251,251 @@ describe('the transport sends get_extension_ui and forwards the reply as is', ()
     assert.match(got.reason, /socket is not open/);
   });
 });
+
+// ===== THE LIVE MOUNT UNDER A WORKSPACE CHANGE AND A ROSTER CHANGE =====
+
+// The seam and its reconcile, cut from the shipped file view and run in a
+// scope with the collaborators stubbed, so the mount lifecycle under test is
+// the one that runs in the product.
+function cutFiles(re, name) {
+  const m = FILES_SRC.match(re);
+  assert.ok(m, `files.js no longer carries ${name}`);
+  return m[0];
+}
+
+function seamScope({ registry, fetcher, hostLoader, pane, currentPath = 'data/sales.csv', content = 'a,b\n1,2\n' }) {
+  const pieces = [
+    'openThroughRendererSeam(viewers, path, content, surface)', 'fetchExtensionUi(extensionId, rendererId)',
+    'loadExtensionHost()', 'claimEditorPane()', 'releaseExtensionMount()', 'reconcileExtensionMount(roster)',
+    'redrawPlainSurface(path, content, reason)', 'mountedExtension()',
+  ].map((sig) => cutFiles(new RegExp(`function ${sig.replace(/[()]/g, '\\$&')} \\{[\\s\\S]*?\\n\\}`), sig));
+  const surfaced = [];
+  const noted = [];
+  const paneStub = pane || { classList: { remove() {}, add() {} }, className: '', textContent: '' };
+  const windowStub = {
+    rundockRendererRegistry: registry,
+    rundockExtensionUiFetcher: fetcher,
+    rundockExtensionHostLoader: hostLoader,
+  };
+  const state = { currentFilePath: currentPath, rawFileContent: content };
+  const api = new Function(
+    'window', 'document', 'state', 'noteRendererFailure', 'openWikilink',
+    'destroyActiveFileViewer', 'destroyTiptapEditorIfActive', 'clearTimeout', '_tiptapSaveTimer',
+    'loadViewersModule', 'FILE_SURFACES', 'openBinaryOrUnsupportedFile', 'surfaced',
+    `let activeExtensionMount = null; let activeExtensionMountInfo = null; let extensionSeamToken = 0;
+     let currentFilePath = state.currentFilePath; let rawFileContent = state.rawFileContent;
+     ${pieces.join(';\n')};
+     return {
+       open: () => openThroughRendererSeam({}, currentFilePath, rawFileContent, (v, p) => surfaced.push(p)),
+       release: releaseExtensionMount,
+       reconcile: reconcileExtensionMount,
+       mounted: mountedExtension,
+       mount: () => activeExtensionMount,
+       setMount: (h, info) => { activeExtensionMount = h; activeExtensionMountInfo = info; },
+       token: () => extensionSeamToken,
+     };`,
+  )(
+    windowStub,
+    { getElementById: (id) => (pane && id === 'editor-content' ? pane : paneStub) },
+    state,
+    (reason) => noted.push(reason),
+    () => {},
+    () => {}, () => {}, () => {}, null,
+    () => Promise.resolve({ classify: () => 'unsupported' }),
+    {},
+    (viewers, p) => surfaced.push(p),
+    surfaced,
+  );
+  return { api, surfaced, noted };
+}
+
+const CLAIM = { rendererFor: () => ({ registered: true, extension: 'csv-echo', renderer: 'view' }), versionOf: () => '1.0.0' };
+
+// A stub mount handle that records what the reconcile does to it.
+function stubHandle(log, label = 'first') {
+  const h = {
+    label,
+    teardown() { log.push(`teardown:${label}`); },
+    swap(payload) { log.push(`swap:${label}:${payload.entry}`); return stubHandle(log, 'swapped'); },
+    alive: () => true,
+  };
+  return h;
+}
+
+describe('the seam hands the host the opened file, and records what it mounted', () => {
+  test('the mount receives path and content, and the mounted identity carries the roster version', async () => {
+    const mounts = [];
+    const { api, surfaced, noted } = seamScope({
+      registry: CLAIM,
+      fetcher: () => Promise.resolve({ entry: 'draw();', styles: [] }),
+      hostLoader: () => Promise.resolve({ mountExtension: (opts) => { mounts.push(opts); return { teardown() {} }; } }),
+    });
+    api.open();
+    await sleep(20);
+    assert.strictEqual(mounts.length, 1);
+    assert.strictEqual(mounts[0].path, 'data/sales.csv', 'the host is told which file, so init can name it');
+    assert.strictEqual(mounts[0].content, 'a,b\n1,2\n', 'and its text, so init can carry it');
+    assert.deepStrictEqual(api.mounted(), { extension: 'csv-echo', renderer: 'view', version: '1.0.0', path: 'data/sales.csv' });
+    assert.deepStrictEqual(surfaced, []);
+    assert.deepStrictEqual(noted, []);
+  });
+
+  test('the over-cap degrade happens whichever caller mounts: the seam lands on the plain surface with the cap named', async () => {
+    const hostModule = await import('../../public/extension-host.js');
+    const dom = new JSDOM('<!doctype html><html><body><div id="editor-content"></div></body></html>');
+    const pane = dom.window.document.getElementById('editor-content');
+    const { api, surfaced, noted } = seamScope({
+      registry: CLAIM,
+      fetcher: () => Promise.resolve({ entry: 'draw();', styles: [] }),
+      hostLoader: () => Promise.resolve(hostModule),
+      pane,
+      content: 'x'.repeat(hostModule.MAX_INIT_CONTENT_CHARS + 1),
+    });
+    api.open();
+    await sleep(30);
+    assert.strictEqual(pane.querySelector('iframe'), null, 'no frame was appended');
+    assert.deepStrictEqual(surfaced, ['data/sales.csv']);
+    assert.strictEqual(noted.length, 1);
+    assert.match(noted[0], new RegExp(String(hostModule.MAX_INIT_CONTENT_CHARS)));
+    assert.strictEqual(api.mounted(), null, 'nothing is recorded as mounted');
+  });
+});
+
+describe('a workspace change tears the live mount down', () => {
+  test('releasing the mount removes the frame, unbinds the mediator, and a late message from the old frame is ignored', async () => {
+    const hostModule = await import('../../public/extension-host.js');
+    const dom = new JSDOM('<!doctype html><html><body><div id="editor-content"></div></body></html>', { runScripts: 'outside-only' });
+    const pane = dom.window.document.getElementById('editor-content');
+    const { api } = seamScope({
+      registry: CLAIM,
+      fetcher: () => Promise.resolve({ entry: 'parent.postMessage({type:"ready"},"*");', styles: [] }),
+      hostLoader: () => Promise.resolve(hostModule),
+      pane,
+    });
+    api.open();
+    await sleep(30);
+    const frame = pane.querySelector('iframe.extension-frame');
+    assert.ok(frame, 'a frame is live in the pane');
+    const oldSource = frame.contentWindow;
+    const sent = [];
+    frame.contentWindow.postMessage = (m) => sent.push(m);
+    const listenersBefore = dom.window.__listeners;
+    void listenersBefore;
+    // closeOpenFile is what onWorkspaceReady calls on a different workspace,
+    // and releaseExtensionMount is the one line in it that owns the mount.
+    assert.match(FILES_SRC, /releaseExtensionMount\(\);\n\s*currentFilePath = null;/, 'closeOpenFile releases the mount');
+    api.release();
+    assert.strictEqual(pane.querySelector('iframe'), null, 'the frame left the document');
+    assert.strictEqual(api.mount(), null);
+    assert.strictEqual(api.mounted(), null, 'nothing is recorded as mounted');
+    const ev = new dom.window.Event('message');
+    ev.data = { type: 'ready' };
+    Object.defineProperty(ev, 'source', { value: oldSource });
+    dom.window.dispatchEvent(ev);
+    assert.deepStrictEqual(sent, [], 'the old frame\'s ready found no listener: not even an init');
+  });
+});
+
+describe('one entry point reconciles a roster with the live mount', () => {
+  const mountedInfo = { extension: 'csv-echo', renderer: 'view', version: '1.0.0', path: 'data/sales.csv' };
+
+  test('nothing mounted is nothing to do', () => {
+    const { api } = seamScope({ registry: CLAIM });
+    assert.deepStrictEqual(api.reconcile([{ id: 'csv-echo', version: '1.0.0' }]), { action: 'none' });
+  });
+
+  test('absent from the roster: torn down, plain surface drawn under a stated reason', async () => {
+    const log = [];
+    const { api, surfaced, noted } = seamScope({ registry: CLAIM });
+    api.setMount(stubHandle(log), mountedInfo);
+    const verdict = api.reconcile([{ id: 'charts', version: '9.9.9' }]);
+    assert.strictEqual(verdict.action, 'torn-down');
+    assert.match(verdict.reason, /no longer installed/);
+    assert.deepStrictEqual(log, ['teardown:first']);
+    assert.strictEqual(api.mount(), null);
+    await sleep(20);
+    assert.deepStrictEqual(surfaced, ['data/sales.csv'], 'the reader keeps their file on the plain surface');
+    assert.deepStrictEqual(noted, [verdict.reason]);
+  });
+
+  test('present but disabled: torn down the same way, with the reason saying disabled', async () => {
+    const log = [];
+    const { api, surfaced, noted } = seamScope({ registry: CLAIM });
+    api.setMount(stubHandle(log), mountedInfo);
+    const verdict = api.reconcile([{ id: 'csv-echo', version: '1.0.0', enabled: false }]);
+    assert.strictEqual(verdict.action, 'torn-down');
+    assert.match(verdict.reason, /disabled/);
+    assert.deepStrictEqual(log, ['teardown:first']);
+    await sleep(20);
+    assert.deepStrictEqual(surfaced, ['data/sales.csv']);
+    assert.deepStrictEqual(noted, [verdict.reason]);
+  });
+
+  test('present with a different version: swapped with a freshly fetched payload', async () => {
+    const log = [];
+    const fetched = [];
+    const { api, surfaced, noted } = seamScope({
+      registry: CLAIM,
+      fetcher: (e, r) => { fetched.push([e, r]); return Promise.resolve({ entry: 'v2();', styles: [] }); },
+    });
+    api.setMount(stubHandle(log), mountedInfo);
+    const verdict = api.reconcile([{ id: 'csv-echo', version: '2.0.0', enabled: true }]);
+    assert.deepStrictEqual(verdict, { action: 'swapping', from: '1.0.0', to: '2.0.0' });
+    await sleep(20);
+    assert.deepStrictEqual(fetched, [['csv-echo', 'view']], 'the payload is fetched fresh, never reused');
+    assert.deepStrictEqual(log, ['swap:first:v2();']);
+    assert.strictEqual(api.mount().label, 'swapped', 'the handle the swap returned is the live mount now');
+    assert.strictEqual(api.mounted().version, '2.0.0', 'the recorded version moves with the swap');
+    assert.deepStrictEqual(surfaced, []);
+    assert.deepStrictEqual(noted, []);
+  });
+
+  test('a new version whose payload cannot be fetched degrades to the plain surface with the reason', async () => {
+    const log = [];
+    const { api, surfaced, noted } = seamScope({
+      registry: CLAIM,
+      fetcher: () => Promise.resolve({ reason: 'the renderer entry could not be read' }),
+    });
+    api.setMount(stubHandle(log), mountedInfo);
+    api.reconcile([{ id: 'csv-echo', version: '2.0.0' }]);
+    await sleep(20);
+    assert.deepStrictEqual(log, ['teardown:first'], 'torn down rather than swapped onto nothing');
+    assert.deepStrictEqual(surfaced, ['data/sales.csv']);
+    assert.deepStrictEqual(noted, ['the renderer entry could not be read']);
+  });
+
+  test('present and unchanged: left alone', async () => {
+    const log = [];
+    const { api, surfaced, noted } = seamScope({ registry: CLAIM, fetcher: () => { throw new Error('must not fetch'); } });
+    const handle = stubHandle(log);
+    api.setMount(handle, mountedInfo);
+    assert.deepStrictEqual(api.reconcile([{ id: 'csv-echo', version: '1.0.0', enabled: true }]), { action: 'kept' });
+    await sleep(10);
+    assert.deepStrictEqual(log, []);
+    assert.strictEqual(api.mount(), handle);
+    assert.deepStrictEqual(surfaced, []);
+    assert.deepStrictEqual(noted, []);
+  });
+
+  test('a file opened while the swap payload is in flight wins: the late swap is abandoned', async () => {
+    const log = [];
+    let release;
+    const { api, surfaced } = seamScope({
+      registry: CLAIM,
+      fetcher: () => new Promise((r) => { release = () => r({ entry: 'v2();', styles: [] }); }),
+    });
+    api.setMount(stubHandle(log), mountedInfo);
+    api.reconcile([{ id: 'csv-echo', version: '2.0.0' }]);
+    api.release();
+    release();
+    await sleep(20);
+    assert.deepStrictEqual(log, ['teardown:first'], 'no swap ran against a mount that was released meanwhile');
+    assert.strictEqual(api.mount(), null);
+    assert.deepStrictEqual(surfaced, []);
+  });
+
+  test('the entry point is published for the manage surface, and every roster arrival calls it', () => {
+    assert.match(FILES_SRC, /\n\s*reconcileExtensionMount,|\breconcileExtensionMount\s*[,}]/, 'files.js exports it, so it is a window global');
+    assert.match(APP_SRC, /if \(registry\) reconcileExtensionMount\(roster\);/, 'the roster arrival in app.js calls it once the registry stands');
+  });
+});
