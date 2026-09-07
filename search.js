@@ -1102,6 +1102,7 @@ function normaliseReviewContent(content) {
 
 module.exports = {
   SCHEMA_VERSION,
+  INDEXED_EXTENSIONS,
   RECONCILE_BATCH_FILES,
   RECONCILE_BATCH_BYTES,
   displayTitle,

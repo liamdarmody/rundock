@@ -100,6 +100,26 @@ const READ_ONLY_SHELL_COMMANDS = [
   'ls', 'cat', 'head', 'tail', 'find', 'grep', 'rg', 'wc', 'file', 'stat',
   'realpath', 'basename', 'dirname', 'echo', 'pwd', 'tree', 'du',
 ];
+// THE SAME REGISTRY FOR THE OTHER SHELL, because Windows is one of the two
+// platforms this product builds for and its agents do not write `ls`. Without
+// these, every Get-ChildItem under the runtime home graded as a WRITE and
+// Windows kept the approval storm this release ended on macOS: measured on a
+// Windows workspace, a plain listing of the global agents and skills folders
+// drew "writing here persists", naming both.
+//
+// Enumerated rather than matched by verb. `Get-*` is read-shaped by
+// PowerShell's own convention, but this list frees a crossing into the
+// runtime's own home, so it names the cmdlets actually seen rather than
+// trusting a naming convention to hold for every cmdlet anyone ever writes.
+// Compared case-insensitively because PowerShell is; the Unix list above is
+// not, because its shells are not.
+const READ_ONLY_POWERSHELL_COMMANDS = [
+  'get-childitem', 'gci', 'dir', 'ls', 'get-content', 'gc', 'cat', 'type',
+  'get-item', 'gi', 'get-location', 'gl', 'pwd', 'test-path', 'resolve-path',
+  'split-path', 'select-string', 'sls', 'measure-object', 'select-object',
+  'sort-object', 'format-table', 'format-list', 'out-string', 'write-output',
+  'write-host', 'echo',
+];
 
 // canonicalize only folds case for path components that already exist: an
 // unborn target realpaths its nearest existing ancestor and reattaches the
@@ -542,7 +562,8 @@ function isReadOnlyShellCommand(command) {
     if (!trimmed) return true; // an empty segment (trailing separator) carries nothing to disqualify it
     const word = (trimmed.match(/^(\S+)/) || [])[1] || '';
     const bare = word.includes('/') ? word.slice(word.lastIndexOf('/') + 1) : word;
-    return READ_ONLY_SHELL_COMMANDS.includes(bare);
+    if (READ_ONLY_SHELL_COMMANDS.includes(bare)) return true;
+    return READ_ONLY_POWERSHELL_COMMANDS.includes(bare.toLowerCase());
   });
 }
 
@@ -614,7 +635,7 @@ function classifyShellAccess(toolName, toolInput, workspaceRoot, extraDirs = [],
 module.exports = {
   isProtectedClaudeEdit, isRuntimeHomeSurfaceEdit, isMcpReadTool, classifyFileAccess, classifyShellAccess, canonicalize,
   isSecretPath, isPersistenceSurface, SECRET_RELATIVE_PATHS, PERSISTENCE_SURFACE_DIRS, PERSISTENCE_SURFACE_FILES,
-  REFUSED_CLAUDE_EDIT_DIRS, READ_ONLY_SHELL_COMMANDS, isReadOnlyShellCommand,
+  REFUSED_CLAUDE_EDIT_DIRS, READ_ONLY_SHELL_COMMANDS, READ_ONLY_POWERSHELL_COMMANDS, isReadOnlyShellCommand,
 };
 
 if (require.main === module) main();

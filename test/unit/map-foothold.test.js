@@ -30,6 +30,32 @@ describe('the resolver: exact path first, then the stated tie rule', () => {
   // per-file walk returned the decoy on its basename before ever reaching the
   // file the link named in full. Renaming an unrelated folder changed where
   // the link went.
+  test('a file kind the index never reads links from shows no outgoing group, and the list pads itself where nothing else does', () => {
+    // MEASURED. Opening a JSON file showed "Links to / None", which is not an
+    // empty list but a question that does not apply: links are only read out of
+    // the indexed kinds, so that file has no outgoing links and never can.
+    // "None" there implies a state that could change. "Linked from" always
+    // applies, because any indexed file can point at anything.
+    //
+    // The same file showed the list flush against the sidebar. The section is
+    // appended beside the preview pane rather than inside it, because the
+    // viewer owns that pane and clears it, and the parent pads nothing.
+    // Read from source rather than imported: the client's published surface is
+    // a pinned registry, and a constant only its own module uses has no place
+    // in it (the same registry refuses exports nothing calls by name).
+    const src = fs.readFileSync(path.join(__dirname, '..', '..', 'public', 'views', 'files.js'), 'utf8');
+    const decl = /LINK_SOURCE_EXTENSIONS = new Set\((\[[^\]]*\])\)/.exec(src);
+    assert.ok(decl, 'the view declares the kinds it treats as link sources where this test can read them');
+    const viewKinds = JSON.parse(decl[1].replace(/'/g, '"'));
+    const indexed = [...require('../../search.js').INDEXED_EXTENSIONS];
+
+    assert.deepStrictEqual(viewKinds.slice().sort(), indexed.slice().sort(),
+      'the kinds the view hides an outgoing group for are exactly the kinds the index reads links from: '
+      + 'a kind missing here hides a group that should fill, and a kind wrongly here shows one that never can');
+    assert.ok(viewKinds.includes('.md'), 'markdown is a link source');
+    assert.ok(!viewKinds.includes('.json'), 'json is not, which is why its outgoing group is omitted');
+  });
+
   test('a fully qualified link opens the exactly matching file, wherever it sits in tree order', () => {
     const tree = [
       folder('alpha', [folder('alpha/Decoy', [file('alpha/Decoy/Notes.md')])]),
@@ -386,6 +412,8 @@ describe('the connections list rides the real open path', () => {
     folder('a', [file('a/Here.md'), file('a/Other.md')]),
     file('Top.md'),
     file('plain.txt'),
+    // A kind the index never reads links out of, for the group-omission test.
+    file('a/data.json'),
   ];
   const LINKS = [
     { src: 'a/Here.md', target: 'Other', kind: 'wikilink' },
@@ -456,7 +484,10 @@ describe('the connections list rides the real open path', () => {
       fetch: () => Promise.resolve({ ok: true, json: () => Promise.resolve({ indexed: true, links: LINKS }) }),
     };
     const viewers = {
-      classify: (p) => (p.endsWith('.md') ? 'markdown' : p.endsWith('.txt') ? 'text' : 'image'),
+      // .json rides the text route, as it does in the product: that is why
+      // the connections section appears under one at all, which is where the
+      // inapplicable outgoing group was seen.
+      classify: (p) => (p.endsWith('.md') ? 'markdown' : (p.endsWith('.txt') || p.endsWith('.json')) ? 'text' : 'image'),
       mountViewer: () => ({ destroy: () => {} }),
     };
     stubs._viewersModuleResolved = viewers;
@@ -491,6 +522,39 @@ describe('the connections list rides the real open path', () => {
       const rows = [...section.querySelectorAll('.file-connections-row')].map(r => r.textContent);
       assert.deepStrictEqual(rows, ['a/Other.md', 'Top.md'],
         'outgoing resolved, incoming source, nothing else');
+    } finally { cleanup(); }
+  });
+
+  test('a kind the index never reads links from draws no outgoing group at all', async () => {
+    // MEASURED. A JSON file showed "Links to / None", which is not an empty
+    // list: links are read only out of the indexed kinds, so that file has no
+    // outgoing links and never can. "None" implies a state that could change.
+    // "Linked from" still applies, because any indexed file can point at it.
+    //
+    // Driven through the real open path rather than by asserting the constant,
+    // because a matching pair of lists proves nothing about what renders.
+    const { doc, cleanup, settle } = shell();
+    try {
+      filesView.loadFileContent('a/data.json', '{"k":1}');
+      await settle();
+      const section = doc.getElementById('file-connections');
+      assert.ok(section, 'the section still mounts, so the feature stays discoverable and the layout does not jump');
+      const groups = [...section.querySelectorAll('.file-connections-group')].map(g => g.textContent);
+      assert.deepStrictEqual(groups, ['Linked from'],
+        'only the group that can apply is drawn, and the one that cannot is absent rather than empty');
+      assert.doesNotMatch(section.textContent, /Links to/,
+        'the heading for the inapplicable group is gone, not merely empty');
+    } finally { cleanup(); }
+  });
+
+  test('a markdown file still draws both groups, so the omission is scoped to the kind', async () => {
+    const { doc, cleanup, settle } = shell();
+    try {
+      filesView.loadFileContent('a/Here.md', 'To [[Other]].');
+      await settle();
+      const groups = [...doc.querySelectorAll('#file-connections .file-connections-group')].map(g => g.textContent);
+      assert.deepStrictEqual(groups, ['Links to', 'Linked from'],
+        'markdown is a link source, so both questions apply to it');
     } finally { cleanup(); }
   });
 

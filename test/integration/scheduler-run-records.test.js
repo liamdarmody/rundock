@@ -676,8 +676,17 @@ test('nothing a record writes reaches the value double-fire suppression reads', 
     'while the record carries a different instant entirely');
   assert.notStrictEqual(h.internal.routineState[KEEPER].lastRun, rec.startedAt,
     'so a record field reaching the suppression stamp would move it, visibly');
-  assert.deepStrictEqual(Object.keys(h.internal.routineSlots.routines[KEEPER]).sort(), ['due', 'missed', 'schedule'],
+  // `since` joins the shape deliberately: it records when a routine was first
+  // seen, so a slot that passed before it existed is not owed. It is written
+  // once, at first sight, and read only when deciding a next run; no record
+  // field reaches it, which is what this assertion is really guarding.
+  assert.deepStrictEqual(Object.keys(h.internal.routineSlots.routines[KEEPER]).sort(),
+    ['due', 'missed', 'schedule', 'since'],
     'and the slot store kept its shape too');
+  assert.strictEqual(typeof h.internal.routineSlots.routines[KEEPER].since, 'string',
+    'first-seen is recorded as an instant');
+  assert.notStrictEqual(h.internal.routineSlots.routines[KEEPER].since, rec.startedAt,
+    'and no record field reaches it either');
 
   // The consequence, which is what the criterion is really about: the routine
   // is still held for the rest of its period. A stamp moved by a record would

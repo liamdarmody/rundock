@@ -214,6 +214,18 @@ const MUTATIONS = [
   // THE ONE THIS FILE EXISTS FOR, in its exact form. The slot store's `due` is
   // today's slot; read as the suppression's argument it says "already ran
   // today", and the catch-up run the routine is still owed never happens.
+  // Drop the first-seen roll-forward and a routine created this evening for a
+  // morning time is born due, running the moment anything stops refusing it:
+  // measured, where an approval tap released a run sixteen hours early.
+  [SCHEDULER, 'a slot that passed before the routine was first seen is never owed',
+    '    while (slot < firstSeen && rolled < MAX_SLOTS_PER_WAKE) {\n      slot = stepSlots(parsed, slot, 1);\n      rolled += 1;\n    }',
+    ''],
+  // Roll forward for a routine that HAS run and the catch-up a sleeping
+  // machine depends on is lost, which is the half AC-5 is about.
+  [SCHEDULER, 'the roll-forward applies only to a routine with no run history',
+    '  if (firstSeen && !isNaN(firstSeen.getTime()) && !(routineState[key] && routineState[key].lastRun)) {',
+    '  if (firstSeen && !isNaN(firstSeen.getTime())) {'],
+
   [SCHEDULER, 'the suppression reads the run state and never the slot store',
     '        const nextRun = getNextRun(routine.schedule, routineState[key]?.lastRun);',
     '        const nextRun = getNextRun(routine.schedule, routineSlots.routines[key]?.due);'],

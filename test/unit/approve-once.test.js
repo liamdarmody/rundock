@@ -801,8 +801,13 @@ describe('the connectors tab edits the file the runtime reads', () => {
     const empty = { servers: [], missing: true, error: null };
     const state = settings.connectorsBuildState({ claudeWorkspace: empty, codexWorkspace: empty, claudeUserGlobal: empty, codexUserGlobal: empty });
     const html = settings.connectorsSectionHtml(state);
+    // The sentence named the destination twice, once as prose and once as a
+    // bare URL in brackets. The path now carries the link itself, which is how
+    // a link is normally written and one fewer thing to read.
     assert.match(html,
-      /Account connectors are added at claude\.ai and reach every workspace on this machine\. Rundock does not list them here because it cannot read their state honestly\. Manage them at claude\.ai settings \(<a href="https:\/\/claude\.ai\/settings\/connectors"[^>]*>https:\/\/claude\.ai\/settings\/connectors<\/a>\)\./,
-      'the exact approved sentence, with the URL as a real link');
+      /Account connectors are added at claude\.ai and reach every workspace on this machine\. Rundock does not list them here because it cannot read their state honestly\. Manage them at <a href="https:\/\/claude\.ai\/settings\/connectors"[^>]*>claude\.ai\/settings\/connectors<\/a>\./,
+      'the exact approved sentence, with the path itself as the link');
+    assert.doesNotMatch(html, /claude\.ai settings \(/,
+      'and the destination is not also spelled out beside the link it duplicates');
   });
 });

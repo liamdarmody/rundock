@@ -591,7 +591,7 @@ function connectorsRowHtml(srv) {
 // no status, so none is shown here and `claude mcp list` is never called for
 // this purpose. The one honest thing left to say is where the real state
 // lives. Codex has no account tier, so there is nothing to caveat for it.
-const CONNECTORS_ACCOUNT_TIER_HTML = `<div class="settings-card"><div class="settings-row"><span class="settings-prose">Account connectors are added at claude.ai and reach every workspace on this machine. Rundock does not list them here because it cannot read their state honestly. Manage them at claude.ai settings (<a href="https://claude.ai/settings/connectors" target="_blank" rel="noopener">https://claude.ai/settings/connectors</a>).</span></div></div>`;
+const CONNECTORS_ACCOUNT_TIER_HTML = `<div class="settings-card"><div class="settings-row"><span class="settings-prose">Account connectors are added at claude.ai and reach every workspace on this machine. Rundock does not list them here because it cannot read their state honestly. Manage them at <a href="https://claude.ai/settings/connectors" target="_blank" rel="noopener">claude.ai/settings/connectors</a>.</span></div></div>`;
 
 function connectorsSectionHtml(state) {
   // A read we could not trust draws its error and NOTHING ELSE: no server

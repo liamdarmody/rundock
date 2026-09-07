@@ -228,8 +228,18 @@ const MUTATIONS = [
   // registry: drop the check and any command (a bare `rm`, included) reads
   // as free against a persistence surface.
   [HOOK, 'a command is read-only only when the registry actually names its leading word',
-    '    return READ_ONLY_SHELL_COMMANDS.includes(bare);',
+    '    if (READ_ONLY_SHELL_COMMANDS.includes(bare)) return true;\n    return READ_ONLY_POWERSHELL_COMMANDS.includes(bare.toLowerCase());',
     '    return true;'],
+  // Drop the PowerShell half and Windows keeps the storm this release ended
+  // on macOS: every Get-ChildItem under the runtime home grades as a write.
+  [HOOK, 'the read-only registry answers for PowerShell as well as the Unix shells',
+    '    return READ_ONLY_POWERSHELL_COMMANDS.includes(bare.toLowerCase());',
+    '    return false;'],
+  // Compare case-sensitively and half the spellings agents actually write
+  // (get-childitem, GCI) stop being reads, because PowerShell is not.
+  [HOOK, 'PowerShell commands are compared case-insensitively, because PowerShell is',
+    'READ_ONLY_POWERSHELL_COMMANDS.includes(bare.toLowerCase())',
+    'READ_ONLY_POWERSHELL_COMMANDS.includes(bare)'],
   // Every segment of a compound command must qualify, not merely one of
   // them: drop `every` for `some` and `ls x && rm -rf x` reads as free
   // because its first segment alone is a read.

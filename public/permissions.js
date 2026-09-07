@@ -46,7 +46,89 @@
   // auto-allow verdict, so a destructive command hidden inside it still cards.
   // Naive splitting can over-flag an operator inside a quoted string, which
   // only ever errs toward showing a card (safe for a gate).
-  function classifyBashRisk(cmd) {
+  // A redirection that cannot create or modify a file: output thrown away at
+  // /dev/null, or a file descriptor duplicated onto another (`2>&1`). Stripped
+  // before this grader segments the command, for two reasons. It writes
+  // nothing, so it must not change what a command is graded as. And this
+  // grader splits on `&`, which cuts `2>&1` into `2>` and a bare `1` that
+  // matches no read-only pattern, so an ordinary listing graded medium and
+  // carded: measured on a real session, on the build that had already taught
+  // the boundary classifier this exact rule.
+  //
+  // KEPT IDENTICAL TO THE COPY IN scripts/permission-hook.js, and bound to it
+  // by a test. Two places deciding the same question about the same text is
+  // how they came to disagree; the client cannot require the hook (it is
+  // node-only and packaged apart), so the rule is duplicated deliberately and
+  // pinned rather than left to drift.
+  var DISCARDING_REDIRECT_RE = /\d*>>?\s*(?:\/dev\/null|&\s*\d+)/g;
+
+  // SPLIT ON OPERATORS, BUT NOT ON TEXT THAT LOOKS LIKE ONE. A regular
+  // expression is full of shell operator characters, and quoting is what tells
+  // them apart: `grep -oE '"(app|window_title)": ...' f | head` runs two
+  // commands, not four. A plain split cut the pattern in half, left a fragment
+  // starting with no command this grader knows, and carded a read: measured on
+  // a real session.
+  //
+  // Newlines separate too, because a shell runs each line, and a read-only
+  // first line must not shield a destructive one below it. Quote state is
+  // carried across them for the same reason it is carried anywhere else.
+  //
+  // The same shape as shellSegments in scripts/permission-hook.js, and bound to
+  // it by a test: the client cannot require that module, so the parser exists
+  // twice deliberately rather than by accident.
+  function shellSegments(command) {
+    var segments = [];
+    var cur = '';
+    var quote = null;
+    var str = String(command);
+    for (var i = 0; i < str.length; i++) {
+      var ch = str[i];
+      if (quote) {
+        cur += ch;
+        if (ch === quote) quote = null;
+        continue;
+      }
+      if (ch === "'" || ch === '"') { quote = ch; cur += ch; continue; }
+      if ((ch === '&' && str[i + 1] === '&') || (ch === '|' && str[i + 1] === '|')) {
+        segments.push(cur); cur = ''; i++; continue;
+      }
+      if (ch === ';' || ch === '|' || ch === '&' || ch === '\n' || ch === '\r') {
+        segments.push(cur); cur = ''; continue;
+      }
+      cur += ch;
+    }
+    segments.push(cur);
+    return segments.map(function (seg) { return seg.trim(); }).filter(Boolean);
+  }
+
+  // ON WINDOWS, -Force IS HOW YOU SEE A HIDDEN FILE AT ALL. Get-ChildItem
+  // -Force lists dot-folders; it overwrites nothing. Treating the switch as
+  // destructive wherever it appeared meant every listing of a config folder
+  // carded, with copy claiming it "may overwrite or delete", which was untrue
+  // of the command in front of the reader. A warning that is wrong is worse
+  // than no warning, because it is the one that teaches people to click
+  // through the real ones.
+  //
+  // So -Force is judged against the cmdlet it modifies, and ONLY a cmdlet
+  // known to read is exempt. Anything else, including a cmdlet this list has
+  // never heard of, keeps the old verdict: the switch genuinely does bypass
+  // confirmation on Remove-Item, Copy-Item, Move-Item, Set-Content and
+  // New-Item, which is why it was here in the first place.
+  var FORCE_SAFE_READ_CMDLETS = /^(Get-ChildItem|gci|dir|ls|Get-Content|gc|cat|type|Get-Item|gi|Get-Location|gl|Test-Path|Resolve-Path|Split-Path|Select-String|sls|Get-Acl|Get-ItemProperty)\b/i;
+
+  function forceIsDestructive(cmd) {
+    if (!/-Force\b/i.test(cmd)) return false;
+    // Judged per segment: a read with -Force must not shield a removal with
+    // -Force later on the same line.
+    var segs = shellSegments(cmd);
+    for (var i = 0; i < segs.length; i++) {
+      if (/-Force\b/i.test(segs[i]) && !FORCE_SAFE_READ_CMDLETS.test(segs[i])) return true;
+    }
+    return false;
+  }
+
+  function classifyBashRisk(rawCmd) {
+    var cmd = String(rawCmd || '').replace(DISCARDING_REDIRECT_RE, ' ').trim();
     if (!cmd) return 'low';
     if (/--force|--hard|-rf\b/.test(cmd)) return 'high';
     if (/git\s+(push|reset|clean|checkout\s+\.)/.test(cmd)) return 'high';
@@ -68,7 +150,7 @@
     // Split on newlines as well as shell operators: bash runs each newline as a
     // separate command, so a read-only first line must not shield a destructive
     // one below it.
-    const segments = cmd.split(/\s*(?:&&|\|\||[;|&\n\r])\s*/).map(function (s) { return s.trim(); }).filter(Boolean);
+    const segments = shellSegments(cmd);
     var anyHigh = false, allSafe = true;
     for (var i = 0; i < segments.length; i++) {
       var seg = segments[i];
@@ -89,7 +171,7 @@
       // Destructive checks run first so a read that also deletes can't be low.
       const cmd = (input.command || '').trim();
       const highRisk = /(^|[;&|]\s*)(Remove-Item|ri|rm|del|erase|rmdir|rd|Stop-Process|spps|kill|Stop-Service|Format-Volume|Clear-Content|Clear-Item|Set-ExecutionPolicy|Uninstall-[A-Za-z]+)\b/i.test(cmd)
-        || /-Force\b/i.test(cmd)
+        || forceIsDestructive(cmd)
         || /\b(iex|Invoke-Expression)\b/i.test(cmd)
         || /\b(irm|Invoke-RestMethod|iwr|Invoke-WebRequest|curl|wget)\b[\s\S]*\|\s*(iex|Invoke-Expression)/i.test(cmd);
       if (highRisk) return 'high';
@@ -138,7 +220,7 @@
       detail = cmd;
       summary = input.description || 'Run PowerShell command';
       if (/(^|[;&|]\s*)(Remove-Item|ri|rm|del|erase|rmdir|rd)\b/i.test(cmd)) context = 'This will delete files';
-      else if (/-Force\b/i.test(cmd)) context = 'This uses -Force and may overwrite or delete without confirmation';
+      else if (forceIsDestructive(cmd)) context = 'This uses -Force and may overwrite or delete without confirmation';
       else if (/\b(iex|Invoke-Expression)\b/i.test(cmd)) context = 'This executes a downloaded or dynamic script';
     } else if (toolName === 'WriteFile') {
       const p = input.path || '';

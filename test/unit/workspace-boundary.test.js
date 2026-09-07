@@ -769,6 +769,58 @@ describe('the agent\'s own folder: three tiers, one registry', () => {
     assert.strictEqual(secretRead.crossings[0].secret, true, 'a read-only command touching the credential file still cards');
   });
 
+  test('a PowerShell read is a read: the registry is not Unix-only', () => {
+    // MEASURED ON WINDOWS. Asked to list the global agents and skills, the
+    // agent ran Get-ChildItem and was shown "this reaches more than one place
+    // outside your workspace ... writing here persists", naming both folders.
+    // The registry that frees a read under the runtime home listed only Unix
+    // commands, so every PowerShell read graded as a write, and the storm this
+    // release exists to end was untouched on Windows while fixed on macOS.
+    //
+    // The risk grader had known PowerShell's verbs all along. Two lists of
+    // what counts as a read, one of them never taught about the platform.
+    const home = tmp('af-ps-home-');
+    fs.mkdirSync(path.join(home, '.claude', 'agents'), { recursive: true });
+    fs.mkdirSync(path.join(home, '.claude', 'skills'), { recursive: true });
+    const ws = tmp('af-ps-ws-');
+    const agents = path.join(home, '.claude', 'agents');
+    const skills = path.join(home, '.claude', 'skills');
+
+    for (const command of [
+      `Get-ChildItem ${agents}, ${skills}`,
+      `Get-ChildItem ${agents} -Force`,
+      `gci ${agents}`,
+      `dir ${agents}`,
+      `Get-Content ${path.join(agents, 'x.md')}`,
+      `gc ${path.join(agents, 'x.md')}`,
+      `Test-Path ${agents}`,
+      // PowerShell is case-insensitive, and agents write it every which way.
+      `get-childitem ${agents}`,
+      `GET-CHILDITEM ${agents}`,
+    ]) {
+      assert.strictEqual(hook.classifyShellAccess('PowerShell', { command }, ws, [], home), null,
+        `a PowerShell read raises no crossing: ${command}`);
+    }
+
+    // FAIL SAFE. A PowerShell write or removal against the same folder still
+    // cards, and one destructive segment still fails the whole line.
+    for (const command of [
+      `Remove-Item ${path.join(agents, 'x.md')}`,
+      `Set-Content ${path.join(agents, 'x.md')} -Value hi`,
+      `Get-ChildItem ${agents}; Remove-Item ${path.join(agents, 'x.md')}`,
+      `New-Item ${path.join(agents, 'x.md')}`,
+    ]) {
+      const verdict = hook.classifyShellAccess('PowerShell', { command }, ws, [], home);
+      assert.ok(verdict && verdict.crossings.some(c => c.persistenceSurface),
+        `a PowerShell write still cards: ${command}`);
+    }
+
+    // And the secrets tier is not re-graded by any of this.
+    const secret = hook.classifyShellAccess('PowerShell',
+      { command: `Get-Content ${path.join(home, '.claude', '.credentials.json')}` }, ws, [], home);
+    assert.strictEqual(secret.crossings[0].secret, true, 'a PowerShell read of the credential file still cards');
+  });
+
   test('a bare & joins two commands, so the second is graded on its own and cannot ride the first', () => {
     // A single `&` backgrounds what precedes it and runs what follows, so it
     // joins two commands exactly as `&&` does. The segmenter split on `&&`,
