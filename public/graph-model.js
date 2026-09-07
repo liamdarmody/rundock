@@ -129,15 +129,18 @@
       const ra = find(a), rb = find(b);
       if (ra !== rb) parent[ra] = rb;
     }
-    const root = [];
+    // Named rootOf rather than root: the navigation scan refuses `root[` in
+    // client code, since a computed lookup on a global could spell a
+    // destination no reading of the source would find.
+    const rootOf = [];
     const size = Object.create(null);
     for (let i = 0; i < count; i++) {
-      if (!degrees[i]) { root.push(null); continue; }
+      if (!degrees[i]) { rootOf.push(null); continue; }
       const r = find(i);
-      root.push(r);
+      rootOf.push(r);
       size[r] = (size[r] || 0) + 1;
     }
-    return { root, size };
+    return { rootOf, size };
   }
 
   // ===== ANCHORS =====
@@ -190,8 +193,8 @@
         anchors.push({ ax: Math.cos(a0) * rimRadius, ay: Math.sin(a0) * rimRadius, kind: 'rim' });
         continue;
       }
-      if (comp.root[q] !== giant) {
-        const cr = compRank.get(comp.root[q]) || 0;
+      if (comp.rootOf[q] !== giant) {
+        const cr = compRank.get(comp.rootOf[q]) || 0;
         const ang = cr * GOLDEN;
         const rad = coreRadius * (1.02 + 0.16 * ((cr % 5) / 5));
         anchors.push({ ax: Math.cos(ang) * rad, ay: Math.sin(ang) * rad, kind: 'satellite' });

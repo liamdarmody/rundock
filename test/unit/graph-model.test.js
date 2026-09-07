@@ -111,10 +111,10 @@ describe('components: which nodes hang together at all', () => {
     const g = m.buildGraph(PAYLOAD);
     const c = m.components(g.nodes.length, g.edges, g.nodes.map(n => n.degree));
     const idx = (p) => g.nodes.findIndex(n => n.path === p);
-    assert.strictEqual(c.root[idx('Hub.md')], c.root[idx('C.md')], 'the hub and its leaf share a component');
-    assert.strictEqual(c.root[idx('pair/One.md')], c.root[idx('pair/Two.md')]);
-    assert.notStrictEqual(c.root[idx('Hub.md')], c.root[idx('pair/One.md')]);
-    assert.strictEqual(c.root[idx('Lonely.md')], null, 'a degree-zero node is in no component');
+    assert.strictEqual(c.rootOf[idx('Hub.md')], c.rootOf[idx('C.md')], 'the hub and its leaf share a component');
+    assert.strictEqual(c.rootOf[idx('pair/One.md')], c.rootOf[idx('pair/Two.md')]);
+    assert.notStrictEqual(c.rootOf[idx('Hub.md')], c.rootOf[idx('pair/One.md')]);
+    assert.strictEqual(c.rootOf[idx('Lonely.md')], null, 'a degree-zero node is in no component');
     assert.deepStrictEqual(Object.values(c.size).sort((a, b) => b - a), [4, 2]);
   });
 });
