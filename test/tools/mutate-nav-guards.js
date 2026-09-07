@@ -94,8 +94,8 @@ const MUTATIONS = [
   // The reverse: a list naming a panel the page no longer has. setNavState
   // resolves panels by id, so this is a null dereference on every navigation.
   [APP, 'the panel list names no panel the page has stopped carrying',
-    "  ['team','conversations','skills','files','settings','routines'].forEach",
-    "  ['team','conversations','skills','files','settings','routines','inspector'].forEach"],
+    "  ['team','conversations','skills','files','settings','routines','map'].forEach",
+    "  ['team','conversations','skills','files','settings','routines','map','inspector'].forEach"],
 
   // ===== THE DESTINATIONS THAT USED TO SET THEIR OWN =====
   // Each of these is the code as it shipped before this change, restored one at

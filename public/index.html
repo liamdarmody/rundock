@@ -118,6 +118,15 @@
         <svg class="icon-outline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
         <svg class="icon-filled" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
       </button>
+      <!-- Map, last in the rail: a lens over what the other entries contain,
+           so it earns the slot at the bottom, under Files and under the Pins
+           slot when that exists. Three nodes and three edges, which survive
+           being drawn at 21px. Keyed and labelled the same way on purpose: the
+           rail names places you go, and "map" says navigation. -->
+      <button class="nav-item" data-nav="map" onclick="switchNav('map')" data-tooltip="Map">
+        <svg class="icon-outline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="2.4"/><circle cx="5" cy="17" r="2.4"/><circle cx="19" cy="17" r="2.4"/><line x1="10.7" y1="7" x2="6.3" y2="14.9"/><line x1="13.3" y1="7" x2="17.7" y2="14.9"/><line x1="7.4" y1="17" x2="16.6" y2="17"/></svg>
+        <svg class="icon-filled" viewBox="0 0 24 24" fill="currentColor" stroke="none"><circle cx="12" cy="5" r="2.6"/><circle cx="5" cy="17" r="2.6"/><circle cx="19" cy="17" r="2.6"/><path d="M11.2 7.4 6.1 14.6l1.6 1.1 5.1-7.2zM12.8 7.4l5.1 7.2 1.6-1.1-5.1-7.2zM7.4 16.2h9.2v1.6H7.4z"/></svg>
+      </button>
       <!-- Search moved to the top bar. Two affordances for one overlay is what
            made search feel hidden in the first place, so the rail no longer
            carries a magnifier. The shortcut hint moved with it, and lives
@@ -135,6 +144,10 @@
   </nav>
 
   <aside class="sidebar" style="display:none">
+    <!-- Map has no sidebar. The panel exists because setNavState addresses
+         #sidebar-<nav> by id without guarding; the aside itself is hidden
+         while this panel is the visible one, by a rule in views/graph.css. -->
+    <div id="sidebar-map" class="hidden"></div>
     <div id="sidebar-team" class="hidden">
       <div class="sidebar-header" id="sidebar-team-header"><span class="sidebar-label">Your Team</span></div>
       <div class="agent-status-list" id="agent-list"></div>
@@ -295,6 +308,12 @@
     <div id="view-skills" class="hidden view-panel">
       <div class="profile" id="skill-detail-content">
       </div>
+    </div>
+    <!-- Map: one canvas filling the pane, no sidebar. The view builds the
+         canvas and its controls into the stage on arrival and removes them on
+         leaving; only the stage is markup. -->
+    <div id="view-map" class="hidden view-panel">
+      <div class="graph-stage" id="graph-stage"></div>
     </div>
     <!-- Editor -->
     <div id="view-editor" class="hidden view-panel">

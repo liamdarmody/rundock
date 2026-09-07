@@ -142,3 +142,51 @@ describe('the index reporting ready redraws the active map and the open file\'s 
     assert.doesNotThrow(() => arm({ type: 'system', subtype: 'search_index', state: 'ready' }, undefined, undefined));
   });
 });
+
+// ===== THE RAIL DESTINATION =====
+//
+// A rail destination is a lockstep edit across the page and the client, and
+// the doors manifest holds most of it. What it does not hold is the order
+// and the name: Map sits last, under Files (and under Pins once that slot
+// exists), is labelled Map, and is keyed `map` everywhere. The prototype
+// keyed it `graph` and labelled it Map, and that mismatch is the one thing a
+// reader of the rail would never see and a reader of the code would trip on.
+describe('the rail destination is keyed map, labelled Map, and last', () => {
+  const APP_SRC = read('public', 'app.js');
+  const page = INDEX_SRC.replace(/<!--[\s\S]*?-->/g, '');
+  const rail = [...page.matchAll(/<button class="nav-item[^"]*" data-nav="([\w-]+)"/g)].map(m => m[1]);
+
+  test('Map is the last main-rail entry, directly below Files or below the Pins slot when that exists', () => {
+    assert.ok(rail.length >= 6, `sanity: the rail carries ${rail.length} entries`);
+    const main = rail.filter(n => n !== 'settings');
+    assert.strictEqual(main[main.length - 1], 'map', `Map is last among ${main.join(', ')}`);
+    const files = main.indexOf('files');
+    assert.ok(files !== -1, 'Files is on the rail');
+    const between = main.slice(files + 1, main.length - 1);
+    assert.ok(between.every(n => n === 'pins'), `nothing but the Pins slot sits between Files and Map (found ${between.join(', ') || 'nothing'})`);
+  });
+
+  test('the entry is labelled Map and its handler goes through switchNav', () => {
+    const button = /<button class="nav-item" data-nav="map" onclick="switchNav\('map'\)" data-tooltip="Map">/.exec(page);
+    assert.ok(button, 'the rail button is keyed map, labelled Map, and switches through the one router');
+    assert.ok(/<div id="sidebar-map" class="hidden"><\/div>/.test(page), 'the (empty) sidebar panel exists so the router can address it');
+    assert.ok(/<div id="view-map" class="hidden view-panel"/.test(page), 'the pane exists for showView to reveal');
+  });
+
+  test('map is in every list the mechanism reads, and graph survives in none of them', () => {
+    const navTable = /const NAV_FOR_VIEW = \{([\s\S]*?)\n\};/.exec(APP_SRC);
+    assert.ok(navTable, 'app.js carries NAV_FOR_VIEW');
+    assert.match(navTable[1], /\n  map: 'map',/, 'the map view lands the rail on the map section');
+    const panels = /\[([^\]]*)\]\.forEach\(s=>document\.getElementById\(`sidebar-\$\{s\}`\)/.exec(APP_SRC);
+    assert.ok(panels, 'app.js carries the one panel list');
+    assert.ok(panels[1].includes("'map'"), 'the panel list names the map panel');
+    const panes = /function showView\(v\) \{ currentView=v; \[([^\]]*)\]\.forEach/.exec(APP_SRC);
+    assert.ok(panes, 'app.js carries the one pane list');
+    assert.ok(panes[1].includes("'map'"), 'the pane list names the map pane');
+    assert.ok(/else if\(nav==='map'\)/.test(APP_SRC), 'switchNav has an arm for map');
+    for (const [label, src] of [['index.html', page], ['app.js', APP_SRC]]) {
+      assert.ok(!/data-nav="graph"|sidebar-graph|view-graph|nav==='graph'|\bgraph: 'graph'|'graph'\]/.test(src),
+        `no graph id survives in ${label}'s nav wiring`);
+    }
+  });
+});

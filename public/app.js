@@ -1065,6 +1065,7 @@ const NAV_FOR_VIEW = {
   'routine-editor': 'routines',
   routines: 'routines',
   'run-detail': 'routines',
+  map: 'map',
 };
 
 // Sections whose sidebar belongs to another one. Routines sits beside the
@@ -1093,7 +1094,7 @@ const NAV_FOR_VIEW = {
 function setNavState(nav) {
   document.querySelectorAll('.nav-item[data-nav]').forEach(n=>n.classList.remove('active'));
   document.querySelector(`[data-nav="${nav}"]`)?.classList.add('active');
-  ['team','conversations','skills','files','settings','routines'].forEach(s=>document.getElementById(`sidebar-${s}`).classList.add('hidden'));
+  ['team','conversations','skills','files','settings','routines','map'].forEach(s=>document.getElementById(`sidebar-${s}`).classList.add('hidden'));
   document.getElementById(`sidebar-${nav}`).classList.remove('hidden');
   // The New conversation footer lives at sidebar level (so the update strip
   // can sit above it without ever moving it), which makes its visibility
@@ -1147,8 +1148,11 @@ function switchNav(nav) {
   // A routine row on an agent's profile passes one, which is the deep link
   // that announces itself.
   else if(nav==='routines') { showRoutinesForAgent(null); }
+  // The map is a picture of the whole workspace, drawn from a fresh fetch on
+  // every arrival: links change on a content edit and no tree event says so.
+  else if(nav==='map') { showView('map'); }
 }
-function showView(v) { currentView=v; ['workspace','home','profile','chat','convo-empty','editor','skills','settings','routine-editor','routines','run-detail'].forEach(id=>{const e=document.getElementById(`view-${id}`);if(e){e.classList.add('hidden');e.style.display='none';e.classList.remove('main-view-transition');}}); const e=document.getElementById(`view-${v}`); if(e){e.classList.remove('hidden');e.style.display='flex';e.classList.add('main-view-transition');} const nav=NAV_FOR_VIEW[v]; if(nav) setNavState(nav); }
+function showView(v) { currentView=v; ['workspace','home','profile','chat','convo-empty','editor','skills','settings','routine-editor','routines','run-detail','map'].forEach(id=>{const e=document.getElementById(`view-${id}`);if(e){e.classList.add('hidden');e.style.display='none';e.classList.remove('main-view-transition');}}); const e=document.getElementById(`view-${v}`); if(e){e.classList.remove('hidden');e.style.display='flex';e.classList.add('main-view-transition');} const nav=NAV_FOR_VIEW[v]; if(nav) setNavState(nav); }
 function goHome() { discardIfEmpty(); activeConversation=null; switchNav('conversations'); }
 
 // Whether there is any chrome at all.

@@ -108,6 +108,15 @@ const DESTINATIONS = [
     pressedBy: 'every view the shell can show lands the rail on the section its own table names',
   },
   {
+    // The map. Last on the rail because it is a lens over what the other
+    // entries contain, and the one destination with no sidebar.
+    site: "app.js: else if(nav==='map') -> showView('map')",
+    view: 'map',
+    section: 'map',
+    surface: 'the Map entry on the nav rail',
+    pressedBy: 'every view the shell can show lands the rail on the section its own table names',
+  },
+  {
     site: "app.js: else if(nav==='skills') -> showView('skills')",
     view: 'skills',
     section: 'skills',
