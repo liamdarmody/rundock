@@ -25,6 +25,7 @@
     "typecheck": "tsc -p tsconfig.server.json && tsc -p tsconfig.client.json",
     "screenshots": "node scripts/screenshots/run.mjs",
     "smoke": "node scripts/smoke/run.mjs",
+    "walk": "node scripts/walk/run.js",
     "smoke:personas": "node scripts/smoke/personas.mjs",
     "stream:truth": "node scripts/stream-truth/run.mjs",
     "transcript:truth": "node scripts/transcript-truth/run.mjs"

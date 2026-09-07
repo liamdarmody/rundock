@@ -47,3 +47,7 @@ scripts/screenshots/.banned-tokens.json
 # meeting.
 .rundock/
 .mutation-scope.json
+
+# Release walk output: screenshots and the report attached to the release PR.
+# Rebuilt on every run, local to the machine that walked.
+.walk/
