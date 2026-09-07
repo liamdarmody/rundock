@@ -110,7 +110,7 @@ const DESTINATIONS = [
   {
     // The map. Last on the rail because it is a lens over what the other
     // entries contain, and the one destination with no sidebar.
-    site: "app.js: else if(nav==='map') -> showView('map')",
+    site: "views/graph.js: function showMapView() -> showView('map')",
     view: 'map',
     section: 'map',
     surface: 'the Map entry on the nav rail',

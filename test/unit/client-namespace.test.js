@@ -86,6 +86,15 @@ const MANIFEST = {
     "toggleConvoStatus",
     "togglePin",
   ],
+  "graph.js": [
+    "mapIndexReady",
+    "mapNodeScreenPosition",
+    "mapSetFilter",
+    "mapZoomFit",
+    "mapZoomIn",
+    "mapZoomOut",
+    "showMapView"
+  ],
   "files.js": [
     "attachArtifactReviewForCurrentFile",
     "buildFloatingMenu",

@@ -44,6 +44,7 @@
 <script src="/packages-decide.js"></script>
 <script src="/packages-install-model.js"></script>
 <script src="/routines-scope-model.js"></script>
+<script src="/graph-model.js"></script>
 <script src="/guide-copy.js"></script>
 <!-- Tokens first: everything below resolves var(--x) against this file. -->
 <link rel="stylesheet" href="/styles/tokens.css">
@@ -69,6 +70,7 @@
 <link rel="stylesheet" href="/styles/views/routine-editor.css">
 <link rel="stylesheet" href="/styles/views/run-detail.css">
 <link rel="stylesheet" href="/styles/views/routines.css">
+<link rel="stylesheet" href="/styles/views/graph.css">
 </head>
 <body>
 <div class="app">
@@ -313,7 +315,24 @@
          canvas and its controls into the stage on arrival and removes them on
          leaving; only the stage is markup. -->
     <div id="view-map" class="hidden view-panel">
-      <div class="graph-stage" id="graph-stage"></div>
+      <div class="graph-stage" id="graph-stage">
+        <div id="graph-body"></div>
+        <!-- Filter, v1: keyword over name and path. Always visible, top-left,
+             opposite the zoom controls. -->
+        <div class="graph-filter">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <input id="graph-filter-input" type="text" spellcheck="false" autocomplete="off"
+                 placeholder="Filter the map" oninput="mapSetFilter(this.value)">
+          <button id="graph-filter-clear" class="hidden" onclick="mapSetFilter('')" aria-label="Clear filter"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg></button>
+        </div>
+        <div class="graph-perf" id="graph-perf"></div>
+        <div class="graph-readout" id="graph-readout"></div>
+        <div class="graph-zoom">
+          <button onclick="mapZoomIn()" title="Zoom in" aria-label="Zoom in"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
+          <button onclick="mapZoomOut()" title="Zoom out" aria-label="Zoom out"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
+          <button onclick="mapZoomFit()" title="Fit" aria-label="Fit to view"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V5a1 1 0 0 1 1-1h4"/><path d="M20 9V5a1 1 0 0 0-1-1h-4"/><path d="M4 15v4a1 1 0 0 0 1 1h4"/><path d="M20 15v4a1 1 0 0 1-1 1h-4"/></svg></button>
+        </div>
+      </div>
     </div>
     <!-- Editor -->
     <div id="view-editor" class="hidden view-panel">
@@ -391,6 +410,7 @@
 <script src="/views/run-detail.js"></script>
 <script src="/views/routines.js"></script>
 <script src="/views/routines-panel.js"></script>
+<script src="/views/graph.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>

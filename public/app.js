@@ -1150,7 +1150,7 @@ function switchNav(nav) {
   else if(nav==='routines') { showRoutinesForAgent(null); }
   // The map is a picture of the whole workspace, drawn from a fresh fetch on
   // every arrival: links change on a content edit and no tree event says so.
-  else if(nav==='map') { showView('map'); }
+  else if(nav==='map') { showMapView(); }
 }
 function showView(v) { currentView=v; ['workspace','home','profile','chat','convo-empty','editor','skills','settings','routine-editor','routines','run-detail','map'].forEach(id=>{const e=document.getElementById(`view-${id}`);if(e){e.classList.add('hidden');e.style.display='none';e.classList.remove('main-view-transition');}}); const e=document.getElementById(`view-${v}`); if(e){e.classList.remove('hidden');e.style.display='flex';e.classList.add('main-view-transition');} const nav=NAV_FOR_VIEW[v]; if(nav) setNavState(nav); }
 function goHome() { discardIfEmpty(); activeConversation=null; switchNav('conversations'); }
