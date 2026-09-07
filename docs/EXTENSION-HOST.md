@@ -27,9 +27,15 @@ extension can see what it did wrong.
 | `error` | `{ type: 'error', message: <string> }` | Reports that the view has failed. The host tears the frame down and shows the plain rendering with the message named. |
 | `open` | `{ type: 'open', target: <string> }` | Asks Rundock to open a workspace file, the way a wikilink would. The host passes the request to Rundock's own opener; the extension never navigates anything itself. |
 
-Messages from the host to the extension: `init` (once, after `ready`) and
-`refused` (`{ type: 'refused', of, reason }`, the answer to anything the table
-does not allow).
+## What the host says to a mounted extension
+
+Exactly these two messages, posted into the frame. The frame is told about
+the one file it was mounted for and nothing else about the page.
+
+| Type | Shape | What it does |
+|---|---|---|
+| `init` | `{ type: 'init', path: <string>, content: <string>, theme: <string> }` | Sent once, after `ready`. Carries the opened file's workspace path and its text, read-only: the text is a copy, and no message in the table above can write it back. `theme` is `'dark'` or `'light'`, the theme the page shows at mount time, because an opaque frame has no other way to match it. Text longer than the host's cap, `MAX_INIT_CONTENT_CHARS` (2000000 characters), is never handed to a frame: the mount degrades to the plain rendering before any frame is appended, with the cap named. |
+| `refused` | `{ type: 'refused', of: <string>, reason: <string> }` | The answer to anything the table above does not allow: `of` names the message type that was refused and `reason` says why. |
 
 Resource read and write are deliberately not in this table. An extension
 reading and writing its own declared resources is a real future capability,
@@ -103,37 +109,45 @@ frame leaves the page, the mediator stops listening to it, and a message that
 arrives late from the old frame is ignored. Nothing about the workspace's
 data or layout is ever in the frame's hands.
 
-## Wiring note, and what this lane deliberately does not connect
+## How the host is wired into the client
 
-The host and registry are modules and a seam; the join that makes them a
-running feature is a separate, tracked piece of work, not an oversight in
-this one. Three connection points are owed by the lane that ships the first
-renderer (the install flow, or the Dataview renderer), because each needs a
-client message handler in `public/app.js`, which is outside this lane's
-permitted paths:
+The host and registry are modules; three joins in the client make them a
+running feature, and each is held by a test that runs the shipped code
+rather than a copy of it (`test/unit/host-wiring.test.js`).
 
-1. **Populate the registry.** On a `list_extensions` roster, build a
-   `createRendererRegistry`, call `registerFromRoster`, and assign it to
-   `window.rundockRendererRegistry`. Until this exists the seam always takes
-   the unregistered branch and renders the plain surface, which is correct
-   for a workspace with no renderers but means the mount, mediator, degrade
-   and swap paths are exercised only by this lane's tests, not yet at
-   runtime.
-2. **Register a transport.** Assign `window.rundockExtensionUiFetcher` to a
-   function that requests `get_extension_ui` and resolves with the server's
-   reply. The server sends `{ type: 'extension_ui', ..., entry, styles,
-   resources }`; the seam treats a reply carrying an `entry` string as a
-   success, so a transport forwards the server message as-is and needs no
-   success flag of its own. A reply without an entry, or an
-   `extension_ui_error`, degrades to the plain surface with the reason named.
-3. **Signal update and uninstall to a live mount.** The mount exposes
-   `swap(newPayload)` (re-mount) and `teardown()` (uninstall), and the file
-   view already tears the mount down on the next file open and on
-   `closeOpenFile`. What has no trigger yet is a roster change arriving while
-   a mount is live: when the manage surface ships, an update or uninstall
-   notice for the mounted extension calls `swap`/`teardown`. Until then the
-   swap and teardown mechanics are proven as units here rather than end to
-   end, which is stated so the evidence is not read as more than it is.
+1. **The registry is hydrated from the roster.** Opening a workspace
+   requests `list_extensions` in the same batch as agents and files. The
+   reply is registered through `createRendererRegistry` and
+   `registerFromRoster` and assigned to `window.rundockRendererRegistry`,
+   replacing the previous workspace's registry rather than merging into it.
+   A roster error installs an empty registry carrying the server's reason,
+   so every lookup answers "unregistered, because the roster could not be
+   read" instead of the old workspace's claims.
 
-This is recorded so the dependency is a tracked handoff rather than a
-paragraph nobody owns.
+2. **The transport is the socket.** `window.rundockExtensionUiFetcher`
+   sends `get_extension_ui` and resolves with the server's reply forwarded
+   as is, correlated by extension id plus renderer id. A reply that never
+   arrives, because the socket closed or the exported timeout elapsed,
+   resolves with a reason, so the seam always settles on the plain surface
+   rather than a blank pane.
+
+3. **A live mount follows the workspace and the roster.** A workspace
+   change closes the open file, which releases the mount: the frame leaves
+   the document, the mediator stops listening, and a late message from the
+   old frame is ignored. Every roster arrival calls
+   `reconcileExtensionMount(roster)`, the one entry point the manage
+   surface also calls: an extension absent from the roster or carrying
+   `enabled: false` is torn down with the plain surface drawn under a stated
+   reason, one present with a different version is swapped with a freshly
+   fetched payload, and one whose version is unchanged is left alone.
+
+The roster itself is read from the install store: one entry per record in
+`.claude/rundock/extensions.json`, its renderer built from the extension's
+`rundock.json` (`extension.entry`, `extension.match`), with a match of the
+form `*.<ext>` mapped to the registry target `.<ext>` and any other rule
+reported on the roster as a named refusal rather than a claim.
+
+The file tree lists a file whose extension an enabled record claims, beside
+the kinds Rundock renders itself, and stops listing it when the record is
+disabled or removed; the tree reads the same roster reader at build time,
+and a records change makes the cached tree stale on the next read or poll.

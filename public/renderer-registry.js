@@ -31,9 +31,16 @@ export function isValidTarget(target) {
   return /^\.[a-z0-9][a-z0-9-]*$/.test(normaliseTarget(target));
 }
 
-export function createRendererRegistry() {
+// AN EMPTY REGISTRY CAN CARRY A REASON. When the roster could not be read,
+// the client installs a registry with nothing in it and the server's reason
+// on it, so every lookup answers "unregistered, because the roster failed"
+// rather than the previous workspace's claims or a silent nothing.
+export function createRendererRegistry(opts = {}) {
   const byTarget = new Map();
   const refusals = [];
+  const versions = new Map();
+  const unavailable = opts && typeof opts.unavailable === 'string' && opts.unavailable
+    ? opts.unavailable : null;
 
   return {
     /**
@@ -43,6 +50,7 @@ export function createRendererRegistry() {
     registerFromRoster(extensions) {
       for (const ext of (extensions || [])) {
         if (ext.enabled === false) continue;
+        versions.set(ext.id, typeof ext.version === 'string' ? ext.version : null);
         for (const renderer of (ext.renderers || [])) {
           const target = normaliseTarget(renderer.target);
           if (!isValidTarget(target)) {
@@ -67,6 +75,7 @@ export function createRendererRegistry() {
      *   | { registered: false, reason: string }}
      */
     rendererFor(path) {
+      if (unavailable) return { registered: false, reason: unavailable };
       const name = String(path || '');
       const dot = name.lastIndexOf('.');
       if (dot < 0 || dot === name.length - 1) {
@@ -83,5 +92,11 @@ export function createRendererRegistry() {
     // Refused claims, kept so silence is explicable.
     refusals: () => refusals.slice(),
     targets: () => [...byTarget.keys()].sort(),
+    // The roster failure this registry stands in for, or null when it was
+    // built from a roster.
+    unavailable: () => unavailable,
+    // The version the roster carried for an extension, so a live mount can
+    // be compared against the next roster without a second copy of it.
+    versionOf: (extensionId) => (versions.has(extensionId) ? versions.get(extensionId) : null),
   };
 }

@@ -32,7 +32,8 @@ const HOST = { src: path.join(ROOT, 'public', 'extension-host.js'), suite: 'test
 // The client registry and the file view's seam over it.
 const REGISTRY = { src: path.join(ROOT, 'public', 'renderer-registry.js'), suite: 'test/unit/renderer-registry.test.js' };
 // The server's payload reader, watched where its path guard is driven with a
-// manifest that tries to escape.
+// record that tries to escape. The install-store rules it reads under are
+// the host-wiring harness's rows; this one keeps the path guard.
 const SERVER = { src: path.join(ROOT, 'lib', 'packages', 'extension-registry.js'), suite: 'test/unit/extension-host.test.js' };
 // The file view's seam and its shared mount release, watched by the suite
 // that cuts them from source and drives them.
@@ -118,22 +119,6 @@ const MUTATIONS = [
   [SERVER, 'a payload path resolves inside the extension directory or not at all',
     '  if (real === realRoot || real.startsWith(realRoot + path.sep)) return real;\n  return null;',
     '  return real;'],
-  // Drop the array discipline and a manifest whose renderers is a JSON object
-  // makes the server raise on .find rather than refuse.
-  [SERVER, 'a manifest whose renderers is not an array is refused, never raised on',
-    "  if (!Array.isArray(manifest.renderers)) {\n    return { ok: false, reason: 'the manifest declares no renderers array' };\n  }\n",
-    ''],
-  // Drop the styles path guard and a manifest stylesheet reads arbitrary
-  // workspace files server-side.
-  [SERVER, 'a stylesheet path resolves inside the extension directory or not at all',
-    "    if (!stylePath) return { ok: false, reason: 'a stylesheet does not resolve inside the extension\\'s own directory' };",
-    '    if (!stylePath) { stylePath = path.resolve(dir, name); }'],
-  // Drop the styles-shape check and a non-array styles field is coerced
-  // rather than refused.
-  [SERVER, 'a styles field that is not an array of strings is refused',
-    "  if (!Array.isArray(styleNames) || styleNames.some((n) => typeof n !== 'string')) {\n    return { ok: false, reason: 'the renderer styles must be an array of file names' };\n  }\n",
-    ''],
-
   // ===== THE FILE VIEW'S MOUNT LIFECYCLE =====
   // Remove the token guard and two opens of one path both mount, leaking the
   // first frame and repainting over the second.
