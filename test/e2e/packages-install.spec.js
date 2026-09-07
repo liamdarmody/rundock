@@ -314,12 +314,16 @@ test('a workspace that moves mid-review voids every decision, with danger weight
   await expect(page.locator('.packages-review-card')).toBeVisible();
 });
 
-test('a mixed package renders the will-add and skipped-new rows against the real server', async ({ page }) => {
+test('a mixed package renders the will-add, blocked-new and skipped-new rows against the real server', async ({ page }) => {
   await boot(page);
   await seedPackage(page, '.claude/skills/mixed-writer', [['SKILL.md', 'existing']]);
   const source = await seedPackage(page, 'pkg-mixed', [
     ['.claude/skills/mixed-writer/SKILL.md', 'incoming'],
     ['.claude/skills/mixed-fresh/SKILL.md', 'brand new'],
+    // Two incoming defaults block each other on rows that collide with
+    // nothing; the blocked row's one control is what reaches skipped-new.
+    ['.claude/agents/mixed-alpha.md', '---\nname: mixed-alpha\norder: 0\n---\n\nA.\n'],
+    ['.claude/agents/mixed-beta.md', '---\nname: mixed-beta\norder: 0\n---\n\nB.\n'],
   ]);
   await openPackages(page);
   await page.fill('#packages-source-path', source);
@@ -327,14 +331,46 @@ test('a mixed package renders the will-add and skipped-new rows against the real
   const freshRow = page.locator('[data-item="skill:mixed-fresh"]');
   await expect(freshRow).toHaveAttribute('data-row', 'willAdd');
   await expect(freshRow.locator('.packages-ready-mark')).toHaveText('Will add');
-  // No control on this card can reach the skipped-new row yet (setDecision
-  // accepts 'skip' on a non-colliding item, but no button here sends it),
-  // per the recorded scope note beside setDecision in the model. Driving the
-  // model function directly still exercises the real evaluate round trip
-  // and the real renderer, which is what this row needs proving against.
-  await page.evaluate(() => packagesSetDecision('skill:mixed-fresh', 'skip'));
-  await expect(freshRow).toHaveAttribute('data-row', 'skippedNew');
-  await expect(freshRow.locator('.packages-skip-mark')).toHaveText('Will skip');
-  await freshRow.getByRole('button', { name: 'Add it back' }).click();
-  await expect(freshRow).toHaveAttribute('data-row', 'willAdd');
+  const alpha = page.locator('[data-item="agent:mixed-alpha"]');
+  await expect(alpha).toHaveAttribute('data-row', 'blocked');
+  await expect(alpha.locator('.packages-decision-toggle')).toHaveCount(0);
+  await expect(alpha.locator('.packages-blocked-note')).toContainText('second default agent');
+  await alpha.getByRole('button', { name: 'Skip this item' }).click();
+  await expect(alpha).toHaveAttribute('data-row', 'skippedNew');
+  await expect(alpha.locator('.packages-skip-mark')).toHaveText('Will skip');
+  await alpha.getByRole('button', { name: 'Add it back' }).click();
+  await expect(alpha).toHaveAttribute('data-row', 'blocked');
+});
+
+// The decide flow walked end to end: a package colliding with an existing
+// agent and an existing skill, one kept and one replaced in a single
+// confirm, then the workspace and the receipt read back through the server.
+test('skip one colliding item and overwrite another: the workspace holds both outcomes and the receipt records both decisions', async ({ page }) => {
+  await boot(page);
+  await seedPackage(page, '.claude/agents', [['decide-keeper.md', '---\nname: decide-keeper\n---\n\nMine.\n']]);
+  await seedPackage(page, '.claude/skills/decide-writer', [['SKILL.md', 'existing']]);
+  const source = await seedPackage(page, 'pkg-decide', [
+    ['.claude/agents/decide-keeper.md', '---\nname: decide-keeper\n---\n\nTheirs.\n'],
+    ['.claude/skills/decide-writer/SKILL.md', 'incoming'],
+  ]);
+  await openPackages(page);
+  await page.fill('#packages-source-path', source);
+  await page.getByRole('button', { name: 'Read it' }).click();
+  const card = page.locator('.packages-review-card');
+  const keeper = card.locator('[data-item="agent:decide-keeper"]');
+  const writer = card.locator('[data-item="skill:decide-writer"]');
+  await expect(keeper.locator('.packages-dt-selected')).toHaveText(/Skip: keep yours/);
+  await writer.getByRole('button', { name: /Overwrite: replace what you have/ }).click();
+  await expect(card.locator('.packages-confirm')).toHaveText('Overwrite 1, skip 1');
+  await card.locator('.packages-confirm').click();
+  await expect(page.locator('.packages-success-card .packages-headline')).toHaveText('Added to your team');
+  const read = async (rel) => (await page.request.get('/api/file?path=' + encodeURIComponent(rel))).text();
+  expect(await read('.claude/skills/decide-writer/SKILL.md')).toContain('incoming');
+  expect(await read('.claude/agents/decide-keeper.md')).toContain('Mine.');
+  const receiptPath = await page.locator('.packages-success-card').getAttribute('data-receipt');
+  const receipt = JSON.parse(await read(receiptPath));
+  expect(receipt.items.map((i) => [i.id, i.decision, i.outcome])).toEqual([
+    ['agent:decide-keeper', 'skip', 'skipped'],
+    ['skill:decide-writer', 'overwrite', 'written'],
+  ]);
 });
