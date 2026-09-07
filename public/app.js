@@ -350,7 +350,16 @@ function handle(d) {
   switch(d.type) {
     case 'package_import_plan': case 'package_import_result': case 'package_import_error':
     case 'extension_install_plan': case 'extension_install_result': case 'package_install_declined': case 'package_install_error':
+    case 'extension_update_status':
       packagesReplyArrived(d); break;
+    // The Packages page's replies that carry a fresh roster: the page read,
+    // an enablement change, an uninstall. Each hydrates the registry and
+    // reconciles the live mount exactly as a roster reply does, then reaches
+    // the page, so a record that changed under an open view is answered in
+    // the same place whichever surface changed it.
+    case 'packages_page': case 'extension_state': case 'extension_uninstalled':
+      extensionRosterArrived(d); packagesReplyArrived(d); break;
+    case 'packages_page_error': packagesReplyArrived(d); break;
     // The extension host's joins: a roster hydrates the renderer registry,
     // a payload reply settles the fetch that asked for it.
     case 'extensions': extensionRosterArrived(d); break;

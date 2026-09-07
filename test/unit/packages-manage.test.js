@@ -343,3 +343,297 @@ describe('receipts are read from the directory and never written', () => {
     withWorkspace((root) => { assert.deepStrictEqual(listReceipts(root), []); });
   });
 });
+
+// ---------------------------------------------------------------------------
+// The view, rendered through the real settings module under jsdom, fed by
+// real handler replies.
+// ---------------------------------------------------------------------------
+
+const { JSDOM } = require('jsdom');
+const installModel = require('../../public/packages-install-model.js');
+global.RundockPackagesInstallModel = installModel;
+
+function shell() {
+  const dom = new JSDOM('<div id="settings-content"></div><div class="settings-nav-item" data-settings="workspace"></div><div class="settings-nav-item" data-settings="packages"></div>');
+  global.document = dom.window.document;
+  global.window = dom.window;
+  global.currentView = 'settings';
+  global.currentWorkspacePath = config.getWorkspace();
+  const sent = [];
+  global.ws = { readyState: 1, send: (raw) => sent.push(JSON.parse(raw)) };
+  global.WebSocket = { OPEN: 1 };
+  global.esc = (t) => String(t == null ? '' : t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  global.escAttr = (t) => global.esc(t).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  const view = require('../../public/views/settings.js');
+  view.packagesWorkspaceChanged();
+  const content = () => dom.window.document.getElementById('settings-content');
+  return {
+    view, sent, content,
+    text: () => content().textContent.replace(/\s+/g, ' '),
+    row: (name) => content().querySelector(`.ext-row[data-extension="${name}"]`),
+    // Open the section the way the nav item does, then answer its read
+    // through the real handler.
+    open() {
+      view.showSettingsSection('packages');
+      const sock = captureWs();
+      handlers.handleGetPackagesPage({}, sock, sent[sent.length - 1]);
+      view.packagesReplyArrived(sock.sent[0]);
+      return sock.sent[0];
+    },
+    // Hand the last message the view sent to the handler that answers it,
+    // and route the reply back.
+    answer(handler, context = counting()) {
+      const sock = captureWs();
+      handler(context, sock, sent[sent.length - 1]);
+      for (const m of sock.sent) view.packagesReplyArrived(m);
+      return sock.sent;
+    },
+    release() { for (const g of ['document', 'window', 'currentView', 'currentWorkspacePath', 'ws', 'WebSocket', 'esc', 'escAttr']) delete global[g]; },
+  };
+}
+
+const REVIEW_SENTENCE = /Rundock does not review packages/;
+
+describe('the page states that Rundock does not review packages, in every state of the section', () => {
+  test('empty: both headings stand with empty copy beneath each, and the sentence sits with the install field', () => {
+    withWorkspace(() => {
+      const s = shell();
+      try {
+        s.open();
+        const labels = [...s.content().querySelectorAll('.settings-section-label')].map((el) => el.textContent);
+        assert.deepStrictEqual(labels, ['Installed extensions', 'Recently added']);
+        assert.strictEqual(s.content().querySelectorAll('.ext-empty').length, 2);
+        assert.match(s.text(), REVIEW_SENTENCE);
+        const field = s.content().querySelector('.packages-field-hint');
+        assert.match(field.textContent, REVIEW_SENTENCE, 'the statement is read where the link is pasted');
+      } finally { s.release(); }
+    });
+  });
+
+  test('populated: every row states name, version, owner/repo and the pin, the repository sits in the wrapping segment, and the sentence stays', () => {
+    withWorkspace((root) => {
+      seedStore(root, [record('csv-echo', { source: { url: 'https://github.com/wellington-park-investment-strategy-group/investment-hub-dashboard-and-portfolio-tools', reference: 'v1.0.0' } })]);
+      const s = shell();
+      try {
+        s.open();
+        const row = s.row('csv-echo');
+        assert.ok(row, 'one row per record');
+        assert.strictEqual(row.querySelector('.name').textContent, 'csv-echo');
+        assert.strictEqual(row.querySelector('.ver').textContent, 'v1.0.0');
+        assert.strictEqual(row.querySelector('.meta .src').textContent.replace(/ ·$/, ''), 'wellington-park-investment-strategy-group/investment-hub-dashboard-and-portfolio-tools');
+        assert.match(row.querySelector('.meta').textContent, /pinned v1\.0\.0/);
+        assert.match(row.querySelector('.meta').textContent, /installed 25 Aug/);
+        assert.match(s.text(), REVIEW_SENTENCE);
+      } finally { s.release(); }
+    });
+  });
+});
+
+describe('every list state renders through the real view with its chip class and tone', () => {
+  test('enabled, disabled, update available, current, failed update, updating, installing, install failed and broken', () => {
+    withWorkspace((root) => {
+      seedStore(root, [record('csv-echo'), record('kanban')]);
+      write(root, '.claude/rundock/extensions.json', JSON.stringify({ schema: 'rundock.extensions/v1', extensions: [
+        record('csv-echo'), record('kanban'), record('broken-one', { entry: null, match: null }),
+      ] }));
+      const s = shell();
+      const v2 = fs.mkdtempSync(path.join(os.tmpdir(), 'manage-snap-'));
+      write(v2, 'rundock.json', JSON.stringify({ name: 'csv-echo', version: '2.0.0', extension: { entry: 'index.js', match: '*.csv' } }));
+      write(v2, 'index.js', 'draw2();');
+      const previousDeps = handlers.wireExtensionDeps({ acquire: () => v2, listRefs: () => ['v0.9.0', 'v1.0.0', 'v2.0.0'] });
+      try {
+        s.open();
+        const chip = (name) => { const c = s.row(name).querySelector('.ext-chip'); return [c.textContent, c.className.replace('ext-chip ', ''), c.dataset.tone]; };
+        assert.deepStrictEqual(chip('csv-echo'), ['Enabled', 'enabled', 'success']);
+        assert.deepStrictEqual(chip('broken-one'), ['Broken', 'bad', 'danger']);
+        assert.match(s.row('broken-one').querySelector('.problem').textContent, /declares an entry/);
+
+        s.view.packagesExtensionAction('disable', 'kanban');
+        assert.deepStrictEqual(s.sent[s.sent.length - 1], { type: 'set_extension_enabled', name: 'kanban', enabled: false });
+        s.answer(handlers.handleSetExtensionEnabled);
+        assert.deepStrictEqual(chip('kanban'), ['Disabled', 'disabled', 'idle']);
+        assert.ok(s.row('kanban').classList.contains('dimmed'), 'the disabled row is dimmed');
+        assert.strictEqual(readExtensionRecords(root).find((r) => r.name === 'kanban').enabled, false);
+
+        s.view.packagesExtensionAction('check', 'csv-echo');
+        assert.deepStrictEqual(s.sent[s.sent.length - 1], { type: 'check_extension_update', name: 'csv-echo' });
+        assert.match(s.row('csv-echo').querySelector('.actions').textContent, /Checking…/);
+        s.answer(handlers.handleCheckExtensionUpdate);
+        assert.deepStrictEqual(chip('csv-echo'), ['Update available', 'update', 'attention']);
+        assert.strictEqual(s.row('csv-echo').querySelector('.ext-chip.retrust'), null, 'no re-trust chip for an ordinary update');
+        assert.strictEqual(s.row('csv-echo').querySelector('.row-note'), null);
+        const update = s.row('csv-echo').querySelector('.actions .linkbtn.accent');
+        assert.strictEqual(update.textContent, 'Update to v2.0.0');
+
+        handlers.wireExtensionDeps({ listRefs: () => ['v1.0.0'] });
+        s.view.packagesExtensionAction('enable', 'kanban');
+        s.answer(handlers.handleSetExtensionEnabled);
+        s.view.packagesExtensionAction('check', 'kanban');
+        s.answer(handlers.handleCheckExtensionUpdate);
+        assert.deepStrictEqual(chip('kanban'), ['Enabled', 'enabled', 'success']);
+        assert.strictEqual(s.row('kanban').querySelector('.row-note').textContent, 'Up to date at v1.0.0.');
+
+        // A failed update keeps the Enabled chip with the failure beneath.
+        handlers.wireExtensionDeps({ acquire: () => { throw Object.assign(new Error('could not verify the tag'), { code: 'acquire-failed' }); } });
+        s.view.packagesExtensionAction('update', 'csv-echo');
+        assert.deepStrictEqual(s.sent[s.sent.length - 1], { type: 'plan_extension_update', name: 'csv-echo', reference: 'v2.0.0' });
+        assert.deepStrictEqual(chip('csv-echo'), ['Updating', 'working', 'working']);
+        assert.strictEqual(s.row('csv-echo').querySelector('.ver').textContent, 'v1.0.0 → v2.0.0');
+        s.answer(handlers.handlePlanExtensionUpdate);
+        assert.deepStrictEqual(chip('csv-echo'), ['Enabled', 'enabled', 'success'], 'the extension still runs, so its chip says so');
+        const note = s.row('csv-echo').querySelector('.row-note');
+        assert.strictEqual(note.dataset.tone, 'danger');
+        assert.match(note.textContent, /Update to v2\.0\.0 failed: .*could not verify the tag.*Still running 1\.0\.0/);
+        assert.strictEqual(s.content().querySelectorAll('.ext-chip.bad').length, 1, 'only the broken record wears a danger chip');
+        s.view.packagesCancel();
+
+        // A fresh install: the working chip while it runs, the danger chip
+        // with the failure line when it did not.
+        const fresh = fs.mkdtempSync(path.join(os.tmpdir(), 'manage-fresh-'));
+        write(fresh, 'rundock.json', JSON.stringify({ name: 'fresh-one', version: '0.1.0', extension: { entry: 'index.js', match: '*.fre' } }));
+        write(fresh, 'index.js', 'draw();');
+        handlers.wireExtensionDeps({ acquire: () => fresh });
+        s.content().querySelector('#packages-source-link').value = 'someone/fresh-one';
+        s.content().querySelector('#packages-source-ref').value = 'v0.1.0';
+        s.view.packagesSubmit();
+        s.answer(handlers.handlePlanPackageInstall);
+        s.view.packagesConfirm();
+        assert.deepStrictEqual(chip('fresh-one'), ['Installing', 'working', 'working']);
+        assert.strictEqual(s.row('fresh-one').querySelector('.actions').children.length, 0, 'a transient row has no actions of its own');
+        s.view.packagesReplyArrived({ type: 'package_install_error', operation: 'install', token: s.sent[s.sent.length - 1].token, message: 'the entry could not be read' });
+        assert.deepStrictEqual(chip('fresh-one'), ['Install failed', 'bad', 'danger']);
+        assert.match(s.row('fresh-one').querySelector('.problem').textContent, /the entry could not be read\. Nothing was enabled\./);
+      } finally {
+        handlers.wireExtensionDeps(previousDeps);
+        s.release();
+      }
+    });
+  });
+});
+
+describe('Update enters the trust step; declining leaves the record, the files and the flag alone', () => {
+  test('the plan reply is the same trust card, with the replaced version named, and no reply changes anything', () => {
+    withWorkspace((root) => {
+      seedStore(root, [record('csv-echo')]);
+      const before = () => [fs.readFileSync(path.join(root, '.claude/rundock/extensions.json'), 'utf8'), fs.readdirSync(path.join(root, '.claude/rundock/extensions/csv-echo')).sort().join(',')];
+      const snapshot = before();
+      const v2 = fs.mkdtempSync(path.join(os.tmpdir(), 'manage-snap-'));
+      write(v2, 'rundock.json', JSON.stringify({ name: 'csv-echo', version: '2.0.0', extension: { entry: 'index.js', match: '*.csv' } }));
+      write(v2, 'index.js', 'draw2();');
+      const previousDeps = handlers.wireExtensionDeps({ acquire: () => v2, listRefs: () => ['v1.0.0', 'v2.0.0'] });
+      const s = shell();
+      try {
+        s.open();
+        s.view.packagesExtensionAction('check', 'csv-echo');
+        s.answer(handlers.handleCheckExtensionUpdate);
+        s.view.packagesExtensionAction('update', 'csv-echo');
+        const [plan] = s.answer(handlers.handlePlanExtensionUpdate);
+        assert.strictEqual(plan.type, 'extension_install_plan');
+        const card = s.content().querySelector('.extension-trust-card');
+        assert.ok(card, 'the update confirms through the trust card an install shows');
+        assert.match(card.textContent, /Install csv-echo 2\.0\.0\?/);
+        assert.match(card.textContent, /This replaces the installed 1\.0\.0 \(pinned at v1\.0\.0\)/);
+        assert.match(card.textContent, /From https:\/\/github\.com\/example\/csv-echo, pinned to v2\.0\.0/);
+        s.view.packagesDecline();
+        assert.deepStrictEqual(s.sent[s.sent.length - 1], { type: 'decline_package_install', token: plan.token });
+        s.answer(handlers.handleDeclinePackageInstall);
+        assert.deepStrictEqual(before(), snapshot, 'declining left the record, the files and the flag as they were');
+        assert.strictEqual(s.content().querySelector('.extension-trust-card'), null);
+        assert.strictEqual(s.row('csv-echo').querySelector('.ext-chip').textContent, 'Update available', 'the offer stands; nothing was installed');
+      } finally {
+        handlers.wireExtensionDeps(previousDeps);
+        s.release();
+      }
+    });
+  });
+});
+
+describe('Uninstall rests quiet, confirms in the row, and sends nothing before the confirmation', () => {
+  test('the resting control is a danger link button; the filled button appears only inside the confirmation; the reply removes the row and renders its untouched sentence', () => {
+    withWorkspace((root) => {
+      seedStore(root, [record('csv-echo'), record('kanban')]);
+      const s = shell();
+      try {
+        s.open();
+        const resting = s.row('csv-echo').querySelector('[data-action="uninstall"]');
+        assert.strictEqual(resting.className, 'linkbtn danger');
+        assert.strictEqual(s.content().querySelector('.settings-btn-danger'), null, 'no filled danger button at rest');
+        const sentBefore = s.sent.length;
+        s.view.packagesExtensionAction('uninstall', 'csv-echo');
+        assert.strictEqual(s.sent.length, sentBefore, 'asking sends nothing');
+        const confirm = s.row('csv-echo').querySelector('.ext-confirm');
+        assert.ok(confirm, 'the confirmation opens inside the row');
+        const filled = confirm.querySelector('.settings-btn-danger');
+        assert.strictEqual(filled.textContent, 'Uninstall csv-echo');
+        assert.strictEqual(s.content().querySelectorAll('.settings-btn-danger').length, 1);
+        s.view.packagesCancelUninstall();
+        assert.strictEqual(s.row('csv-echo').querySelector('.ext-confirm'), null);
+        assert.strictEqual(s.sent.length, sentBefore, 'the way back sends nothing');
+        s.view.packagesExtensionAction('uninstall', 'csv-echo');
+        s.view.packagesConfirmUninstall('csv-echo');
+        assert.deepStrictEqual(s.sent[s.sent.length - 1], { type: 'uninstall_extension', name: 'csv-echo' });
+        const [reply] = s.answer(handlers.handleUninstallExtension);
+        assert.strictEqual(reply.type, 'extension_uninstalled');
+        assert.strictEqual(s.row('csv-echo'), null, 'the row is gone');
+        assert.ok(s.row('kanban'), 'the other row stays');
+        assert.strictEqual(s.content().querySelector('.ext-notice').textContent, reply.untouched, 'the reply\'s own sentence, beneath the list');
+        assert.strictEqual(fs.existsSync(path.join(root, '.claude/rundock/extensions/csv-echo')), false);
+      } finally { s.release(); }
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The client wiring, cut out of app.js and run: every reply that carries a
+// roster reaches the host's reconcile entry point with that roster.
+// ---------------------------------------------------------------------------
+
+const APP_SRC = read('public', 'app.js');
+
+function appPiece(pattern, label) {
+  const found = APP_SRC.match(pattern);
+  assert.ok(found && found[1] && found[1].trim(), `the client no longer carries ${label}`);
+  return found[1];
+}
+const fn = (name) => new RegExp(`(function ${name}\\([^)]*\\) \\{[\\s\\S]*?\\n\\})`);
+const arm = (type) => new RegExp(`(case '${type}': [\\s\\S]*? break;)`);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function wiredWindow() {
+  const dom = new JSDOM('<!doctype html><html><body></body></html>', { runScripts: 'dangerously' });
+  const w = dom.window;
+  const reconciled = [];
+  const reached = [];
+  w.reconcileExtensionMount = (roster) => { reconciled.push(roster); return { action: 'none' }; };
+  w.packagesReplyArrived = (d) => reached.push(d.type);
+  w.rundockRendererRegistryLoader = () => import('../../public/renderer-registry.js');
+  const arms = ['package_import_plan', 'packages_page', 'packages_page_error'].map((t) => appPiece(arm(t), `the ${t} dispatch arm`)).join('\n');
+  w.eval([
+    appPiece(/(let extensionRosterSeq = 0;)/, 'the roster sequence'),
+    ...['loadRendererRegistryModule', 'installRendererRegistry', 'extensionRosterArrived'].map((name) => appPiece(fn(name), name)),
+    `function handle(d) { switch (d.type) { ${arms} } }`,
+    'window.__handle = handle;',
+  ].join('\n'));
+  return { w, reconciled, reached, handle: w.__handle };
+}
+
+describe('after a state, uninstall or page reply, the client hands the fresh roster to the host\'s reconcile entry point', () => {
+  test('each roster-carrying reply reconciles with the roster it carries, in order, and reaches the page; the errors reach the page alone', async () => {
+    const { w, reconciled, reached, handle } = wiredWindow();
+    const a = [{ id: 'csv-echo', version: '1.0.0', enabled: true, renderers: [{ id: 'view', target: '.csv' }] }];
+    const b = [{ id: 'csv-echo', version: '1.0.0', enabled: false, renderers: [{ id: 'view', target: '.csv' }] }];
+    const c = [];
+    handle({ type: 'packages_page', extensions: a, receipts: [] });
+    for (let i = 0; i < 100 && reconciled.length < 1; i += 1) await sleep(5);
+    handle({ type: 'extension_state', operation: 'set-enabled', name: 'csv-echo', enabled: false, extensions: b });
+    for (let i = 0; i < 100 && reconciled.length < 2; i += 1) await sleep(5);
+    handle({ type: 'extension_uninstalled', operation: 'uninstall', name: 'csv-echo', untouched: 'x', extensions: c });
+    for (let i = 0; i < 100 && reconciled.length < 3; i += 1) await sleep(5);
+    assert.deepStrictEqual(reconciled, [a, b, c], 'the reconcile entry point received each fresh roster');
+    assert.strictEqual(w.rundockRendererRegistry.rendererFor('a.csv').registered, false, 'the registry the seam reads was rebuilt from the last roster');
+    handle({ type: 'extension_update_status', operation: 'update-check', name: 'csv-echo', outcome: 'up-to-date', newer: [], current: 'v1.0.0' });
+    handle({ type: 'packages_page_error', reason: 'x' });
+    assert.deepStrictEqual(reached, ['packages_page', 'extension_state', 'extension_uninstalled', 'extension_update_status', 'packages_page_error']);
+    assert.strictEqual(reconciled.length, 3, 'a reply without a roster reconciles nothing');
+  });
+});

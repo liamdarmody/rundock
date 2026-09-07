@@ -267,6 +267,7 @@ describe('the messages the section sends, and when', () => {
     assert.deepStrictEqual(model.reply(state, { type: 'extension_install_result', operation: 'install', token: 'pkg-1', record: entry() }).send, { type: 'get_packages_page' });
     assert.deepStrictEqual(model.reply(state, { type: 'package_import_result', operation: 'apply', status: 'ready', writes: [] }).send, { type: 'get_packages_page' });
     assert.strictEqual(model.reply(state, { type: 'package_import_result', operation: 'evaluate', status: 'ready' }).send, undefined, 'a projection writes nothing, so nothing changed');
+    assert.strictEqual(model.reply(model.initial(), { type: 'extension_install_result', operation: 'install', token: 'pkg-1', record: entry() }).send, undefined, 'a page never read has nothing on screen to refresh');
   });
 
   test('a lost connection frees the section with the reason on the row, and sends nothing', () => {

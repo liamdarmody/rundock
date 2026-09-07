@@ -147,8 +147,11 @@
     // step installed or replaced an extension, or an import landed files and
     // a receipt. Read the page again so the list, and the host's registry
     // that rides on the same reply, see what changed.
-    if (msg.type === 'extension_install_result') return open(state);
-    if (msg.type === 'package_import_result' && msg.operation === 'apply') return open(state);
+    // Only a page that has been read refreshes itself: before the section is
+    // first opened there is nothing on screen to keep true, and the open
+    // reads it fresh anyway.
+    if (msg.type === 'extension_install_result') return state.loaded ? open(state) : { state };
+    if (msg.type === 'package_import_result' && msg.operation === 'apply') return state.loaded ? open(state) : { state };
     // An error is this section's only when it names the operation the
     // section is waiting on; an install's error mid-check is the install
     // flow's to render, not a note on a row.
