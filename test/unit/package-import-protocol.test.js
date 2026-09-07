@@ -166,6 +166,15 @@ describe('the protocol boundary', () => {
     });
   }
 
+  test('evaluate_package_decisions refuses with one stamped reply when no workspace is open, echoing the requestId', () => {
+    config.setWorkspace(null);
+    const reply = dispatchJson('evaluate_package_decisions', { requestId: 'r3', sourcePath: '/nowhere', approval: {} });
+    // The echoed id is what lets the model's identity check match this
+    // refusal to the request that asked, rather than drop it as foreign.
+    assert.deepStrictEqual([reply.type, reply.operation, reply.requestId], ['package_import_error', 'evaluate', 'r3']);
+    assert.match(reply.message, /no workspace is open/);
+  });
+
   test('a replayed identical approval performs zero writes and writes no second receipt', () => {
     const { workspace, sourceRoot } = fixture();
     const approval = decide(planVia(sourceRoot), { 'agent:scribe': 'add', 'skill:writer': 'overwrite' });
@@ -177,6 +186,38 @@ describe('the protocol boundary', () => {
     assert.strictEqual(replay.receipt, null);
     assert.deepStrictEqual(tree(workspace), after);
     assert.strictEqual(fs.readdirSync(path.join(workspace, RECEIPTS)).length, 1);
+  });
+
+  test('an evaluate_package_decisions dispatch leaves the complete tree byte-identical, receipts included', () => {
+    const { workspace, sourceRoot } = fixture();
+    // An apply first, so there is a receipts directory to be left alone, and
+    // an interrupted-transaction recovery would have something to do if the
+    // evaluate path ever ran one.
+    dispatchJson('apply_package_import', {
+      sourcePath: sourceRoot, approval: decide(planVia(sourceRoot), { 'agent:scribe': 'skip', 'skill:writer': 'skip' }),
+    });
+    assert.strictEqual(fs.readdirSync(path.join(workspace, RECEIPTS)).length, 1);
+    const approval = decide(planVia(sourceRoot), { 'agent:scribe': 'add', 'skill:writer': 'overwrite' });
+    const before = tree(workspace);
+    const reply = dispatchJson('evaluate_package_decisions', { requestId: 'r1', sourcePath: sourceRoot, approval });
+    assert.strictEqual(reply.type, 'package_import_result');
+    assert.deepStrictEqual([reply.operation, reply.requestId, reply.status], ['evaluate', 'r1', 'ready']);
+    assert.strictEqual(reply.writes.length, 2, 'the evaluation has writes to make, and makes none of them');
+    assert.strictEqual('written' in reply, false);
+    assert.deepStrictEqual(tree(workspace), before);
+  });
+
+  test('the evaluate handler and applyImport reach the evaluator through one function, and agree', () => {
+    const { workspace, sourceRoot } = fixture();
+    const { evaluateApproval, applyImport } = require('../../lib/packages/import-apply.js');
+    const approval = decide(planVia(sourceRoot), { 'agent:scribe': 'add', 'skill:writer': 'overwrite' });
+    const buckets = (r) => JSON.parse(JSON.stringify(
+      { status: r.status, writes: r.writes, unchanged: r.unchanged, skipped: r.skipped, blocked: r.blocked, stale: r.stale }));
+    const direct = buckets(evaluateApproval(workspace, sourceRoot, approval));
+    assert.strictEqual(direct.writes.length, 2);
+    const viaHandler = dispatchJson('evaluate_package_decisions', { requestId: 'r2', sourcePath: sourceRoot, approval });
+    assert.deepStrictEqual(buckets(viaHandler), direct);
+    assert.deepStrictEqual(buckets(applyImport(workspace, sourceRoot, approval, { receipt: {} })), direct);
   });
 
   test('the receipt is the complete record of a mixed-outcome apply', () => {
@@ -194,11 +235,15 @@ describe('the protocol boundary', () => {
     const reply = dispatchJson('apply_package_import', { sourcePath: sourceRoot, approval });
     assert.strictEqual(reply.status, 'ready');
     const receipt = JSON.parse(fs.readFileSync(path.join(workspace, reply.receipt), 'utf8'));
+    // Each entry also records the decision that governed it, so a later
+    // import can say what was decided last time rather than guessing.
+    const decisionOf = Object.fromEntries(approval.items.map((i) => [i.id, i.decision]));
+    const entry = (outcome) => (o) => ({ id: o.id, kind: o.kind, destination: o.destination, decision: decisionOf[o.id], outcome });
     const expected = [
-      ...reply.writes.map((o) => ({ id: o.id, kind: o.kind, destination: o.destination, outcome: 'written' })),
-      ...reply.unchanged.map((o) => ({ id: o.id, kind: o.kind, destination: o.destination, outcome: 'unchanged' })),
-      ...reply.skipped.map((o) => ({ id: o.id, kind: o.kind, destination: o.destination, outcome: 'skipped' })),
-      ...reply.blocked.map((o) => ({ id: o.id, kind: o.kind, destination: o.destination, outcome: 'blocked' })),
+      ...reply.writes.map(entry('written')),
+      ...reply.unchanged.map(entry('unchanged')),
+      ...reply.skipped.map(entry('skipped')),
+      ...reply.blocked.map(entry('blocked')),
     ].sort((a, b) => (a.id < b.id ? -1 : 1));
     assert.deepStrictEqual(receipt.items, expected);
     assert.deepStrictEqual(receipt.items.map((i) => [i.id, i.outcome]),
