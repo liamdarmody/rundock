@@ -151,14 +151,13 @@
 
   // One decision, changed. Only combinations the evaluator itself accepts
   // can be chosen: a colliding item is overwritten or skipped, a new item is
-  // added or skipped (skipping a new item is how a blocked row clears its
-  // conflict). Deciding a non-colliding item at all is scope beyond what the
-  // collision criteria ask for, kept deliberately: the review card already
-  // renders a skipped-new row for it (reviewRowClass, reviewCopy), so a
-  // person who wants to leave one fresh item out of an otherwise-accepted
-  // package can, even though no control on this card reaches it yet. Every
-  // other combination is refused unchanged, and every change asks the
-  // server to project the result so blocking is never computed locally.
+  // added or skipped. Skipping a new item is how a blocked non-colliding row
+  // (one of two incoming defaults, say) clears its conflict, through the
+  // row's own Skip this item control, and the skipped-new row's Add it back
+  // is the way back; the class walk in the suite reaches every row class
+  // through those rendered controls. Every other combination is refused
+  // unchanged, and every change asks the server to project the result so
+  // blocking is never computed locally.
   function setDecision(state, id, decision) {
     if (state.phase !== 'offer') return { state };
     const item = state.plan.items.filter((i) => i.id === id)[0];
@@ -334,6 +333,12 @@
     return entry ? entry.reason : null;
   }
 
+  function blockedCauses(state) {
+    const reasons = [];
+    for (const b of state.projection.blocked) if (reasons.indexOf(b.reason) === -1) reasons.push(b.reason);
+    return reasons.map(reasonWords).join(', and ');
+  }
+
   function reviewCopy(state) {
     const counts = reviewCounts(state);
     const rows = state.plan.items.map((item) => {
@@ -379,7 +384,10 @@
       confirmNote: !counts
         ? 'Checking your decisions against your workspace.'
         : counts.blocked > 0
-          ? `${counts.blocked} item${counts.blocked === 1 ? '' : 's'} will not be written until the default conflict clears.`
+          // The cause clause comes from reasonWords, the same function the
+          // blocked row's note uses, so one cause reaches the person in one
+          // vocabulary wherever it is shown.
+          ? `${count(counts.blocked, 'item')} will not be written because ${blockedCauses(state)}.`
           : counts.adds === 0 && counts.overwrites === 0
             ? 'Confirming writes nothing, and says so rather than doing something silent.'
             : 'Nothing else in your workspace changes.',

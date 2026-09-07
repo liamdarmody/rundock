@@ -18,6 +18,12 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const model = require('../../public/packages-install-model.js');
+// The view resolves esc and escAttr from the global lexical environment, as
+// it does in the browser; the same escaping app.js defines, so the rendered
+// rows read here are the rows a person sees.
+global.esc = (t) => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+global.escAttr = (t) => global.esc(t).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+const settings = require('../../public/views/settings.js');
 const { buildPlan, decide } = require('../../lib/packages/import-plan.js');
 const { applyImport } = require('../../lib/packages/import-apply.js');
 const { evaluateImport, APPROVAL_SCHEMA, ABSENT_DIGEST } = require('../../lib/packages/import-evaluate.js');
@@ -70,6 +76,57 @@ function collidingScenario({ workspaceAgent = '---\nname: helper\n---\n\nOld.\n'
 // through the real dispatch, and landed on the state that asked for it.
 function projected(workspace, out) {
   return model.reply(out.state, realReply(workspace, 'evaluate_package_decisions', out.send)).state;
+}
+
+function rowOf(state, id) {
+  return model.reviewCopy(state).rows.filter((r) => r.id === id)[0];
+}
+function renderRow(state, id) {
+  return settings.packagesReviewRowHtml(rowOf(state, id));
+}
+
+// Press a control on the RENDERED row: find the button by its label, read the
+// arguments its onclick hands packagesSetDecision, and make that same call
+// on the model. The state reached is the one the markup's own control
+// reaches, not one a test hand-built around the view.
+function press(state, id, label) {
+  const html = renderRow(state, id);
+  const m = new RegExp(`onclick="packagesSetDecision\\('([^']+)', '([^']+)'\\)">${label}<`).exec(html);
+  assert.ok(m, `${label} is a control on the rendered ${id} row`);
+  return model.setDecision(state, m[1], m[2]);
+}
+
+// The real thing behind a blocked COLLIDING row: the workspace's default
+// agent is no part of the import, and overwriting the colliding agent, via
+// the rendered toggle, would create a second default.
+function blockedScenario() {
+  const scenario = collidingScenario({
+    incomingAgent: '---\nname: helper\norder: 0\n---\n\nNew default.\n',
+    extraWorkspace: [['.claude/agents/coach.md', '---\nname: coach\norder: 0\n---\n\nC.\n']],
+  });
+  const first = projected(scenario.workspace, { state: scenario.offer, send: scenario.firstSend });
+  const flipped = press(first, 'agent:helper', 'Overwrite: replace what you have');
+  const evalMsg = realReply(scenario.workspace, 'evaluate_package_decisions', flipped.send);
+  return { ...scenario, projected: model.reply(flipped.state, evalMsg).state, evalMsg };
+}
+
+// One state per row class, each reached by pressing a rendered control: two
+// incoming defaults block each other on NON-colliding rows, whose one
+// control (Skip this item) is what reaches skippedNew.
+function classScenario() {
+  const { workspace, offer, firstSend } = collidingScenario({
+    extraSources: [
+      ['.claude/agents/alpha.md', '---\nname: alpha\norder: 0\n---\n\nA.\n'],
+      ['.claude/agents/beta.md', '---\nname: beta\norder: 0\n---\n\nB.\n'],
+      ['.claude/skills/writer/SKILL.md', 'incoming skill'],
+    ],
+  });
+  const first = projected(workspace, { state: offer, send: firstSend });
+  const skipped = projected(workspace, press(first, 'agent:alpha', 'Skip this item'));
+  return {
+    workspace, first, skipped,
+    rows: { willAdd: [first, 'skill:writer'], collision: [first, 'agent:helper'], blocked: [first, 'agent:alpha'], skippedNew: [skipped, 'agent:alpha'] },
+  };
 }
 
 // The complete tree under a root as one comparable value: every path and
@@ -274,16 +331,7 @@ describe('the bucket walk: every evaluator outcome has a home on this surface', 
   });
 
   test('the blocked row\'s copy is the projection\'s own reason, said through reasonWords, not a second hard-coded copy', () => {
-    const { projected } = (() => {
-      const scenario = collidingScenario({
-        incomingAgent: '---\nname: helper\norder: 0\n---\n\nNew default.\n',
-        extraWorkspace: [['.claude/agents/coach.md', '---\nname: coach\norder: 0\n---\n\nC.\n']],
-      });
-      const flipped = model.setDecision(scenario.offer, 'agent:helper', 'overwrite');
-      const evalMsg = realReply(scenario.workspace, 'evaluate_package_decisions', flipped.send);
-      return { projected: model.reply(flipped.state, evalMsg).state };
-    })();
-    const row = model.reviewCopy(projected).rows.filter((r) => r.id === 'agent:helper')[0];
+    const row = rowOf(blockedScenario().projected, 'agent:helper');
     assert.strictEqual(row.blockedNote, `Blocked: ${model.reasonWords('default-conflict')}. `
       + 'Skipping this item keeps your workspace exactly as it is and clears the conflict.');
   });
@@ -305,39 +353,28 @@ describe('the class walk: every rowClass reviewRowClass can produce is rendered,
       'reviewRowClass can return a class this walk does not know to exercise; teach this walk the new one');
   });
 
-  test('willAdd and collision both render through one real plan, side by side', () => {
-    // extraSources adds a second, non-colliding item to the same collision
-    // scenario every other describe block already uses, so the willAdd row
-    // is produced by the real plan handler rather than a hand-built state.
-    const { offer } = collidingScenario({
-      extraSources: [['.claude/skills/writer/SKILL.md', 'incoming skill']],
-    });
-    const copy = model.reviewCopy(offer);
-    const willAddRow = copy.rows.filter((r) => r.id === 'skill:writer')[0];
-    assert.strictEqual(willAddRow.rowClass, 'willAdd');
-    assert.strictEqual(willAddRow.tone, 'success');
-    assert.strictEqual(willAddRow.compare, null);
-    const collisionRow = copy.rows.filter((r) => r.id === 'agent:helper')[0];
-    assert.strictEqual(collisionRow.rowClass, 'collision');
-    assert.strictEqual(collisionRow.tone, 'neutral');
-    assert.ok(collisionRow.compare, 'a collision carries the have/arrives compare');
+  test('every class is reached through a rendered control and renders as the mock draws it', () => {
+    const { workspace, first, skipped, rows } = classScenario();
+    for (const [rowClass, [state, id]] of Object.entries(rows)) {
+      assert.strictEqual(rowOf(state, id).rowClass, rowClass);
+      assert.match(renderRow(state, id), new RegExp(`data-row="${rowClass}"`));
+    }
+    assert.match(renderRow(first, 'skill:writer'), /Will add/);
+    assert.match(renderRow(first, 'agent:helper'),
+      /What you have[\s\S]*What arrives[\s\S]*packages-dt-selected"[^>]*>Skip: keep yours/, 'skip preselected');
+    // The blocked NON-colliding row: nothing to overwrite, so no toggle at
+    // all, only the note and its one action.
+    const blockedHtml = renderRow(first, 'agent:alpha');
+    assert.doesNotMatch(blockedHtml, /packages-decision-toggle/);
+    assert.match(blockedHtml, /Blocked: this would give your team a second default agent/);
+    // Skipping one of the pair clears the other, and the skipped row offers
+    // the way back, which is the control that reaches willAdd territory.
+    assert.match(renderRow(skipped, 'agent:alpha'), /Will skip/);
+    assert.strictEqual(rowOf(skipped, 'agent:beta').rowClass, 'willAdd');
+    const back = projected(workspace, press(skipped, 'agent:alpha', 'Add it back'));
+    assert.strictEqual(back.decisions['agent:alpha'], 'add');
+    assert.strictEqual(rowOf(back, 'agent:alpha').rowClass, 'blocked', 'its pair is still a default');
   });
-
-  test('skippedNew: a new item explicitly skipped renders the row that offers to add it back', () => {
-    const { offer } = collidingScenario({
-      extraSources: [['.claude/skills/writer/SKILL.md', 'incoming skill']],
-    });
-    const skipped = model.setDecision(offer, 'skill:writer', 'skip');
-    assert.strictEqual(skipped.send.type, 'evaluate_package_decisions');
-    const row = model.reviewCopy(skipped.state).rows.filter((r) => r.id === 'skill:writer')[0];
-    assert.strictEqual(row.rowClass, 'skippedNew');
-    assert.strictEqual(row.tone, 'neutral');
-    assert.strictEqual(row.compare, null);
-  });
-
-  // 'blocked' is exercised end to end by the describe block above (a real
-  // evaluator refusal driving reviewCopy's blockedNote and blockedAction),
-  // against a real default-conflict rather than a hand-built projection.
 
   test('a byte-identical collision renders the compare copy that says so, judged by the real digests', () => {
     // Skills are used here rather than agents: materialise() rewrites an
@@ -375,6 +412,32 @@ describe('the review-void state is the only danger, proven by the tone walk', ()
       'nothing on this surface executes anything, so nothing but the voided review may alarm');
     assert.strictEqual(model.staleCopy().tone, 'danger');
     assert.match(model.staleCopy().body, /discarded and nothing was written/);
+  });
+
+  test('every class renders its data-tone from REVIEW_TONES, and only the voided review renders danger', () => {
+    const { rows } = classScenario();
+    // Read from the ROOT element's open tag alone, so a tone on some inner
+    // mark never stands in for the row's own.
+    const toneOf = (html) => {
+      const m = /^\s*<div [^>]*data-tone="([a-z]+)"/.exec(html);
+      assert.ok(m, 'the rendered root carries a data-tone');
+      return m[1];
+    };
+    const rendered = {};
+    for (const [rowClass, [state, id]] of Object.entries(rows)) rendered[rowClass] = toneOf(renderRow(state, id));
+    rendered.stale = toneOf(settings.packagesStaleCardHtml(model.staleCopy()));
+    assert.deepStrictEqual(rendered, model.REVIEW_TONES);
+    assert.deepStrictEqual(Object.keys(rendered).filter((k) => rendered[k] === 'danger'), ['stale']);
+    // The table is the source, not a restatement of the markup: change a
+    // tone there and the rendering follows.
+    const [state, id] = rows.blocked;
+    const was = model.REVIEW_TONES.blocked;
+    try {
+      model.REVIEW_TONES.blocked = 'danger';
+      assert.strictEqual(toneOf(renderRow(state, id)), 'danger');
+    } finally {
+      model.REVIEW_TONES.blocked = was;
+    }
   });
 
   test('the danger tone the model claims is bound to the one CSS carrier that actually paints it', () => {
@@ -415,28 +478,21 @@ describe('the review-void state is the only danger, proven by the tone walk', ()
 });
 
 describe('blocked rows offer skipping and nothing else', () => {
-  // The real thing: the workspace's default agent is not part of the import,
-  // and overwriting the colliding agent would create a second default.
-  function blockedScenario() {
-    const scenario = collidingScenario({
-      incomingAgent: '---\nname: helper\norder: 0\n---\n\nNew default.\n',
-      extraWorkspace: [['.claude/agents/coach.md', '---\nname: coach\norder: 0\n---\n\nC.\n']],
-    });
-    const flipped = model.setDecision(scenario.offer, 'agent:helper', 'overwrite');
-    const evalMsg = realReply(scenario.workspace, 'evaluate_package_decisions', flipped.send);
-    const projected = model.reply(flipped.state, evalMsg);
-    return { ...scenario, projected: projected.state, evalMsg };
-  }
-
   test('the projection is judged by the real evaluator, and the row renders the blocked treatment', () => {
     const { projected, evalMsg } = blockedScenario();
     assert.deepStrictEqual(evalMsg.blocked.map((b) => b.reason), ['default-conflict']);
-    const row = model.reviewCopy(projected).rows.filter((r) => r.id === 'agent:helper')[0];
+    const row = rowOf(projected, 'agent:helper');
     assert.strictEqual(row.rowClass, 'blocked');
     assert.strictEqual(row.tone, 'attention', 'blocked is a notice where nothing broke, never danger');
     assert.match(row.blockedNote, /second default agent/);
     assert.match(row.blockedNote, /keeps your workspace exactly as it is/,
       'the copy says what skipping keeps');
+    // Rendered: the overwrite control is disabled with the reason beside it,
+    // the skip action stands, and the copy says what skipping keeps.
+    const html = renderRow(projected, 'agent:helper');
+    assert.match(html, /<button class="packages-dt-btn packages-dt-blocked" disabled>Overwrite: blocked<\/button>/);
+    assert.match(html, /packages-blocked-note">Blocked: this would give your team a second default agent\. Skipping this item keeps your workspace exactly as it is/);
+    assert.match(html, /packagesSetDecision\('agent:helper', 'skip'\)">Skip this item</);
   });
 
   test('the one action is skip: no overwrite is ever offered as the way out', () => {
@@ -552,6 +608,30 @@ describe('receipts record each decision beside the item it governed', () => {
     assert.deepStrictEqual(replay.unchanged.map((u) => u.id), ['agent:helper']);
     assert.strictEqual(replay.receipt, null);
     assert.deepStrictEqual(workspaceTree(workspace), before);
+  });
+});
+
+describe('the confirm copy: every branch of the note and the warn, in one vocabulary', () => {
+  test('checking, ordinary, zero-write and blocked each say their own thing, the blocked cause through reasonWords', () => {
+    const { workspace, offer, firstSend } = collidingScenario({
+      extraSources: [['.claude/skills/writer/SKILL.md', 'incoming skill']],
+    });
+    const checking = model.reviewCopy(offer);
+    assert.deepStrictEqual([checking.confirmNote, checking.confirmWarn],
+      ['Checking your decisions against your workspace.', false]);
+    const ordinary = model.reviewCopy(projected(workspace, { state: offer, send: firstSend }));
+    assert.deepStrictEqual([ordinary.confirmNote, ordinary.confirmWarn], ['Nothing else in your workspace changes.', false]);
+    const lone = collidingScenario();
+    const zero = model.reviewCopy(projected(lone.workspace, { state: lone.offer, send: lone.firstSend }));
+    assert.deepStrictEqual([zero.confirmNote, zero.confirmWarn],
+      ['Confirming writes nothing, and says so rather than doing something silent.', false]);
+    // One cause, one vocabulary: the note's clause is the same sentence the
+    // blocked row says, from the same function.
+    const warned = model.reviewCopy(blockedScenario().projected);
+    assert.deepStrictEqual([warned.confirmNote, warned.confirmWarn],
+      [`1 item will not be written because ${model.reasonWords('default-conflict')}.`, true]);
+    const two = model.reviewCopy(classScenario().first);
+    assert.match(two.confirmNote, /^2 items will not be written because this would give your team a second default agent\.$/);
   });
 });
 
