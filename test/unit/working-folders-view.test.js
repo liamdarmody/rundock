@@ -94,6 +94,16 @@ describe('what the block says about what naming a folder does', () => {
     assert.match(prose, /Code mode is where they end/i, 'and what to do about it');
     assert.match(prose, /Codex are not affected/i,
       'and the runtime this setting never reaches, which no reader could otherwise know');
+    // REMOVING IS NOT INSTANT, and a permissions control whose remove does not
+    // remove is the surprise that costs a reader their trust in the whole
+    // surface. The list reaches an agent as its environment when it starts, so
+    // a conversation already running keeps what it was born with. Found by
+    // using the product: a folder was removed and an open conversation carried
+    // on writing there while a new one correctly asked.
+    assert.match(prose, /Removing a folder applies to conversations you start afterwards/i,
+      'when a removal takes effect is stated, rather than left to be discovered');
+    assert.match(prose, /already running keeps the folders it started with/i,
+      'and what happens to the conversation that is open right now');
     assert.match(prose, /~\/\.claude/, 'the excluded folder is named, not described vaguely');
     assert.match(prose, /credentials still ask/i, 'and the guarantee that survives whatever is named');
     assert.doesNotMatch(prose, /covered the same way this workspace/i,

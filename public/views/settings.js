@@ -318,6 +318,7 @@ function workingFoldersInnerHtml() {
     <div class="settings-prose wf-prose">Folders your agents work in outside this workspace. Naming one stops the approval cards that check paths, for everything beneath it.</div>
     <div class="settings-caption wf-note">This workspace's own folder is already included and isn't listed below.</div>
     <div class="settings-prose wf-prose">In Knowledge mode on macOS a terminal write out here is still refused by the operating system, and the retry that follows still raises a card, so naming a folder does not end those: Code mode is where they end. Claude Code's own folder (<code>~/.claude</code>) is never included either, so your credentials still ask every time. Agents running on Codex are not affected by this setting at all.</div>
+    <div class="settings-caption wf-note">Removing a folder applies to conversations you start afterwards. One that is already running keeps the folders it started with, because the list reaches an agent when it starts.</div>
     <div class="settings-caption wf-note">Tip: name a parent folder, such as <code>~/Projects</code>, to cover everything beneath it, including projects you start later.</div>
     ${undo}
     <div class="settings-card wf-list">
