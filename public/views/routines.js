@@ -198,11 +198,36 @@ const ICONS = {
     + '<path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/>',
 };
 
-function iconButton(action, label, paths, onclick, danger) {
-  return `<button class="icon-btn${danger ? ' danger' : ''}" type="button" title="${label}"`
-    + ` aria-label="${label}" data-routines-action="${action}" onclick="${onclick}">`
-    + '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"'
-    + ` stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${paths}</svg></button>`;
+function iconSvg(paths) {
+  return '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"'
+    + ` stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${paths}</svg>`;
+}
+
+// One control in the row's action group. `opts.disabled` is DISABLED RATHER
+// THAN HIDDEN, so the group never reflows between states.
+
+function iconButton(action, label, paths, onclick, danger, opts) {
+  const o = opts || {};
+  return `<button class="icon-btn${danger ? ' danger' : ''}${o.className ? ` ${o.className}` : ''}" type="button" title="${label}"`
+    + ` aria-label="${label}" data-routines-action="${action}" onclick="${onclick}"${o.disabled ? ' disabled' : ''}>`
+    + `${iconSvg(paths)}</button>`;
+}
+
+/**
+ * The one control that both sets and clears `paused`: a switch. Pause used
+ * to be a pair of action buttons sharing the play triangle, so paused-ness
+ * was discoverable only by noticing which icon was showing. Paused is a
+ * STATE where Run is a one-shot act, so: off, the pause glyph in the action
+ * group; on, the labelled way back beside the word Paused. Either way the
+ * only sender of set_routine_paused, and never wearing the play glyph.
+ */
+function pauseSwitch(index, paused) {
+  const words = routinesModel().PAUSED_WORDS;
+  return paused
+    ? `<button class="rr-resume-quiet rr-pause-switch" type="button" role="switch" aria-checked="true"`
+      + ` aria-label="${esc(words.self)}" data-routines-action="resume" onclick="routinesSetPaused(${index}, false)">${esc(words.selfAction)}</button>`
+    : `<button class="icon-btn rr-pause-switch" type="button" role="switch" aria-checked="false" title="Pause"`
+      + ` aria-label="Pause" data-routines-action="pause" onclick="routinesSetPaused(${index}, true)">${iconSvg(ICONS.pause)}</button>`;
 }
 
 /**
@@ -286,6 +311,9 @@ function rowHtml(entry, index, withActions) {
     // for the same reason: the row's offer promises what the tick would do,
     // and the tick's own answer is the only copy of that which cannot drift.
     refusal: r.refusal,
+    // Whether a run of it is going, stamped beside the refusal and passed
+    // through for the same reason: the row derives it from nothing else.
+    running: r.running,
     // WHAT THE ROUTINE SAYS TO DO, passed as the file answered it. The model
     // asks whether there is anything there at all, which the tick's own gate
     // also asks: a routine with nothing to send is refused rather than run,
@@ -304,8 +332,14 @@ function rowHtml(entry, index, withActions) {
   // sentence the product cannot actually assemble.
   const sentence = sentenceHtml(row, r.name, index, withActions);
   const sep = '<span class="sep">&middot;</span>';
+  const selfPaused = row.pausedState && row.pausedState.kind === 'self';
+  // A PAUSED ROUTINE SAYS SO WHERE ITS NEXT RUN WOULD BE, with the way back
+  // beside the word. Withheld on the delete confirmation, like every control.
   const nextRun = row.nextRun
-    ? `<span class="${row.nextRun.className}">${esc(row.nextRun.text)}</span>`
+    ? (selfPaused
+      ? `<span class="${row.nextRun.className} rr-paused-label"><span class="rr-paused-dot"></span>${esc(row.nextRun.text)}</span>`
+        + (withActions ? `${sep}${pauseSwitch(index, true)}` : '')
+      : `<span class="${row.nextRun.className}">${esc(row.nextRun.text)}</span>`)
     : '';
 
   let meta = esc(row.meta || '');
@@ -364,14 +398,14 @@ function rowHtml(entry, index, withActions) {
       + ` onclick="routinesSetEnabled(${index}, true)">${esc(row.offer.label)}</button>`
       + '</div>';
   }
-  // A plan awaiting its one tap. Drawn with the offer's own chrome because it
-  // is the same kind of thing, a consent question with one truthful action,
-  // and a second visual language for consent would make the reader learn two.
-  if (row.approval && withActions) {
-    body += '<div class="rr-meta rr-offer-line rr-approval-line">'
-      + `<span class="rr-offer-text">${esc(row.approval.text)}</span>`
-      + `<button class="btn-link rr-enable" type="button" data-routines-action="approve"`
-      + ` onclick="routinesApprovePlan(${index})">${esc(row.approval.label)}</button>`
+  // A PLAN WHOSE CONSENT WAS WITHDRAWN RENDERS AS PAUSED, in its own tone and
+  // words, so it cannot be mistaken for a pause the reader applied and be
+  // resumed reflexively. The one action is the existing approve message.
+  if (row.pausedState && row.pausedState.kind === 'consent' && withActions) {
+    body += '<div class="rr-meta rr-consent-line">'
+      + `<span class="rr-consent-text">${esc(row.pausedState.text)}</span>`
+      + `<button class="rr-resume-btn" type="button" data-routines-action="approve"`
+      + ` onclick="routinesApprovePlan(${index})">${esc(row.pausedState.label)}</button>`
       + '</div>';
   }
   // A run in progress, checked before the three-tone line below and instead
@@ -383,9 +417,11 @@ function rowHtml(entry, index, withActions) {
   // run was in progress, including "View last run", which is the one control
   // that would have let a reader reach it. See run-detail-model.js's
   // 'running' state ("Still going"), built and unreachable until this line.
-  if (r.state && r.state.status === 'running') {
+  // Read off the model, which reads the roster's in-flight fact: a pressed
+  // run leaves the state slot alone.
+  if (row.live) {
     body += '<div class="rr-meta rr-run-line">'
-      + '<span class="run-status live">Still going</span>'
+      + `<span class="run-status live">${esc(row.live.text)}</span>`
       + (withActions
         ? `${sep}<button class="btn-link rr-view-run" type="button" data-routines-action="view-run"`
           + ` onclick="routinesViewLastRun(${index})">View run</button>`
@@ -413,13 +449,18 @@ function rowHtml(entry, index, withActions) {
   let actions = '';
   if (withActions) {
     actions = '<div class="rr-actions">';
-    actions += r.paused
-      ? iconButton('resume', 'Resume', ICONS.play, `routinesSetPaused(${index}, false)`, false)
-      : iconButton('pause', 'Pause', ICONS.pause, `routinesSetPaused(${index}, true)`, false);
-    // BETWEEN THE TWO IT ALREADY HAD, and the position is the decision. Pause
-    // keeps the place it has always had, because it is the control most
-    // reached for. Delete stays last, where the destructive one belongs. The
-    // new one goes in the gap rather than at either end.
+    // RUN FIRST: the control reached for most while a routine is being set
+    // up. On every row, paused, unapproved or switched off included, because
+    // those hold the tick and a press is not the tick. Disabled, never
+    // hidden, while a run is in flight.
+    actions += iconButton('run', row.run.label, ICONS.play, `routinesRunNow(${index})`, false,
+      { disabled: row.run.disabled, className: 'run' });
+    // The pause switch, off, sits beside Run; on, it is in the body beside
+    // Paused. A consent-paused row carries neither: its one action is the
+    // sentence's.
+    if (!row.pausedState) actions += pauseSwitch(index, false);
+    // Edit keeps the gap between the state controls and Delete. Delete stays
+    // last, where the destructive one belongs.
     //
     // OFFERED ON EVERY ROW, INCLUDING ONES WHOSE SCHEDULE THIS EDITOR CANNOT
     // SHOW. That case is exactly where the control is worth most: a routine
@@ -432,7 +473,10 @@ function rowHtml(entry, index, withActions) {
     actions += '</div>';
   }
 
-  return `<div class="routine-row${r.paused ? ' paused' : ''}">`
+  // Two paused states, two classes: the reader's pause dims, a withdrawn
+  // consent keeps full weight and takes the attention ring.
+  const pausedClass = r.paused ? ' paused' : (row.pausedState ? ' paused-consent' : '');
+  return `<div class="routine-row${pausedClass}">`
     // An agent with no colour of its own falls back to the idle token rather
     // than to a literal, so the one place that value is written stays the one
     // place it is written.
@@ -857,6 +901,21 @@ function routinesSetPaused(index, paused) {
 }
 
 /**
+ * Run the routine under `index` now, once, watched. One message carrying the
+ * same triple every control sends and no flag; the server starts the run or
+ * answers on the row's refusal road, and the roster broadcast redraws.
+ */
+function routinesRunNow(index) {
+  pendingProblem = null;
+  const entry = allRoutines()[index];
+  if (!entry || typeof ws === 'undefined' || !ws) return;
+  ws.send(JSON.stringify({
+    type: 'run_routine_now', agentId: entry.agent.id, name: entry.routine.name,
+    occurrence: entry.occurrence,
+  }));
+}
+
+/**
  * Open the editor on this routine's schedule.
  *
  * IT SENDS NOTHING, which is what separates it from every other control on this
@@ -884,7 +943,7 @@ function routinesEditSchedule(index) {
 return {
   renderRoutines, showRoutinesForAgent,
   routinesAskDelete, routinesCancelDelete, routinesConfirmDelete, routinesSetPaused, routinesSetEnabled,
-  routinesApprovePlan, routinesOpenSkill, routinesEditSchedule,
+  routinesApprovePlan, routinesRunNow, routinesOpenSkill, routinesEditSchedule,
   routinesActionFailed, routinesActionCleared, routinesViewLastRun,
 };
 }));
