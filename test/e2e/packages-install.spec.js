@@ -33,22 +33,20 @@ async function boot(page) {
   await expect(page.locator('.convo-item').first()).toBeVisible();
 }
 
-// ASKING ONCE IS NOT ENOUGH RIGHT AFTER A WORKSPACE SWITCH. The switch
-// announces itself to every window, and that announcement redraws the shell.
-// A single showView() racing that redraw can be undone by it, leaving the
-// field present in the page but not on screen, which is what a plain
-// toBeVisible then waits seven seconds to discover. Asking again each time
-// the poll runs costs nothing when the view is already right and removes the
-// race when it is not.
+// THROUGH THE RAIL, NOT AROUND IT: the Settings entry, then the Packages
+// item, the way a person reaches the section. A workspace switch redraws
+// the shell and can undo one click, so the poll clicks again each time.
 async function openPackages(page) {
   await expect.poll(
-    () => page.evaluate(() => {
-      showView('settings');
-      showSettingsSection('packages');
-      const el = document.getElementById('packages-source-link');
-      return !!(el && el.offsetParent !== null);
-    }),
-    { message: 'the packages field is on screen after asking for it' },
+    async () => {
+      await page.locator('.nav-item[data-nav="settings"]').click();
+      await page.locator('.settings-nav-item[data-settings="packages"]').click();
+      return page.evaluate(() => {
+        const el = document.getElementById('packages-source-link');
+        return !!(el && el.offsetParent !== null);
+      });
+    },
+    { message: 'the packages field is on screen after clicking through the rail' },
   ).toBe(true);
   await expect(page.locator('#packages-source-link')).toBeVisible();
 }

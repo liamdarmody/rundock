@@ -81,6 +81,26 @@
     };
   }
 
+  // An update, begun from the managed row rather than from the field. The
+  // message carries the extension name and the chosen reference and never a
+  // url: the server reads the stored source from the installed record. The
+  // plan reply lands in the same trust step a fresh install reaches, with
+  // the replaced version named on the card. `updating` rides the flow's
+  // states from here so the row can say which install it is watching, and
+  // what to say if that install fails.
+  function beginUpdate(state, target) {
+    if (!target || typeof target.name !== 'string' || typeof target.reference !== 'string' || !target.reference) return { state };
+    if (state.phase !== 'idle') return { state };
+    return {
+      state: {
+        phase: 'classifying', link: target.link || '', reference: target.reference,
+        updating: { name: target.name, reference: target.reference, version: target.version || null },
+        outstanding: { operation: 'plan', token: null },
+      },
+      send: { type: 'plan_extension_update', name: target.name, reference: target.reference },
+    };
+  }
+
   // The correlation rule: a reply belongs to this flow only when it names
   // the operation the flow is waiting on; once a token has been issued, that
   // token; and, when the ask carried a request id, that id. A plan request
@@ -174,13 +194,14 @@
       if (msg.code === 'unpinned-reference') {
         return { state: { ...initial(), ...carry, fieldError: msg.message } };
       }
-      return { state: { phase: 'failed', ...carry, message: msg.message || 'The package could not be read.' } };
+      return { state: { phase: 'failed', ...carry, message: msg.message || 'The package could not be read.', updating: state.updating || null } };
     }
     if (msg.type === 'extension_install_plan') {
       return {
         state: {
           phase: 'trust', ...carry, token: msg.token,
           manifest: msg.manifest, facts: msg.facts, replaces: msg.replaces || null,
+          updating: state.updating || null,
         },
       };
     }
@@ -334,8 +355,14 @@
 
   function confirm(state) {
     if (state.phase === 'trust') {
+      // The manifest and the update it belongs to ride into the wait, so the
+      // managed row can show which extension is installing, and say so if
+      // the install fails.
       return {
-        state: { phase: 'installing', ...carried(state), token: state.token, outstanding: { operation: 'install', token: state.token } },
+        state: {
+          phase: 'installing', ...carried(state), token: state.token, outstanding: { operation: 'install', token: state.token },
+          manifest: state.manifest, updating: state.updating || null,
+        },
         send: { type: 'confirm_extension_install', token: state.token },
       };
     }
@@ -574,7 +601,12 @@
     if (state.phase !== 'installing') return { state };
     const carry = carried(state);
     if (isError(msg)) {
-      return { state: { phase: 'failed', ...carry, message: msg.message || 'The extension could not be installed.' } };
+      return {
+        state: {
+          phase: 'failed', ...carry, message: msg.message || 'The extension could not be installed.',
+          manifest: state.manifest || null, updating: state.updating || null,
+        },
+      };
     }
     if (msg.content && msg.content.plan) return offerFrom(carry, msg.content.token, msg.content.plan, msg.record);
     return { state: { phase: 'done', ...carry, installed: msg.record, written: [], blocked: [], receipt: null } };
@@ -708,7 +740,7 @@
     return `Pinned at ${status.current}, which cannot be compared with the tags this repository publishes. Pin a tag to have updates checked.`;
   }
 
-  return { initial, submit, reply, planReply, offerCopy, cancel, decline, confirm, applyReply, installReply, doneCopy,
+  return { initial, submit, beginUpdate, reply, planReply, offerCopy, cancel, decline, confirm, applyReply, installReply, doneCopy,
     retry, connectionLost, allAddApproval, HOST_FACTS, hostClaims, trustCopy, updateStatusCopy,
     setDecision, reviewCopy, staleCopy, confirmLabel, reasonWords, REVIEW_TONES };
 }));
