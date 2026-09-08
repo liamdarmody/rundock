@@ -127,6 +127,33 @@ describe('selection is conservative in every direction that is not proven safe',
     }
   });
 
+  test('every shared module the real harnesses depend on is still a run-everything trigger', () => {
+    // THE FALSE GREEN THIS CHANGE COULD HAVE CREATED, made checkable instead of
+    // asserted. Removing the directory-wide trigger means a file under
+    // test/tools/ that is neither a harness nor named in the machinery list now
+    // selects NOTHING. That is correct only while no harness depends on such a
+    // file, which is true today and is exactly the kind of thing that stops
+    // being true when somebody adds a helper.
+    //
+    // So this reads the real harnesses rather than a fixture, and requires every
+    // shared module they pull in to be covered. A new helper under test/tools/
+    // fails here, on the day it is added, with a message saying what to do.
+    const tools = path.join(__dirname, '..', 'tools');
+    const shared = new Set();
+    for (const tool of harnessFiles(tools)) {
+      const src = fs.readFileSync(path.join(tools, tool), 'utf8');
+      for (const m of src.matchAll(/require\('\.\/([^']+)'\)/g)) shared.add(`test/tools/${m[1]}`);
+    }
+    assert.ok(shared.size >= 1, 'sanity: the harnesses were read and they do share something');
+    for (const dep of shared) {
+      const covered = RUN_EVERYTHING_WHEN_TOUCHED.some(t => (t.endsWith('/') ? dep.startsWith(t) : dep === t));
+      assert.ok(covered,
+        `${dep} is shared by a harness but changing it would select no harness at all. `
+        + 'Add it to RUN_EVERYTHING_WHEN_TOUCHED, because a change to something every harness '
+        + 'requires can change what any of them proves.');
+    }
+  });
+
   test('the machinery list is not empty, or every guard above passes vacuously', () => {
     assert.ok(RUN_EVERYTHING_WHEN_TOUCHED.length >= 5);
     assert.ok(RUN_EVERYTHING_WHEN_TOUCHED.includes('test/tools/mutation-run.js'),

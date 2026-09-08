@@ -62,6 +62,11 @@ const REGISTRY_SUITES = [
 const CHECKS = [
   { name: 'check:refs', args: ['run', 'check:refs'] },
   { name: 'lint:styles', args: ['run', 'lint:styles'] },
+  // A BROKEN TYPE IS A CHEAP FAILURE TOO, and leaving it as a later step meant
+  // a tree with a registry problem and a type error reported one on this run
+  // and the other on the next: the one-per-run pattern this phase exists to
+  // end, reproduced inside the fix for it. It costs a third of a second.
+  { name: 'typecheck', args: ['run', 'typecheck'] },
 ];
 
 function run(label, command, args) {

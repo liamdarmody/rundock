@@ -33,10 +33,32 @@ describe('what the cheap phase covers', () => {
     assert.match(named, /doc-claims/, 'documents that state the code\'s own numbers');
   });
 
-  test('it runs the fast linters too, so one pass covers everything decidable in seconds', () => {
+  test('it runs the fast linters AND the typecheck, or a type error waits for the next run', () => {
     const names = preflight.CHECKS.map(c => c.name);
     assert.ok(names.includes('check:refs'));
     assert.ok(names.includes('lint:styles'));
+    // Typecheck was a separate step after this phase, which meant a tree with a
+    // registry problem and a type error reported one on this run and the other
+    // on the next: the very pattern this phase exists to end, reproduced inside
+    // the fix for it.
+    assert.ok(names.includes('typecheck'),
+      'a broken type is a cheap failure and must arrive with the other cheap failures');
+  });
+
+  test('the gate prints this phase WHOLE, because truncating it undoes the point of it', () => {
+    // A component can be correct and still be defeated by the host it joins.
+    // The gate keeps the last 25 lines of a failed step, which is right for a
+    // suite whose tail carries the summary and wrong for a phase whose entire
+    // contract is that every failure is on screen at once. With three failures
+    // a reader would have seen the tail of the last one and nothing else.
+    const { STEPS } = require('../../scripts/precommit-gate.js');
+    const step = STEPS.find(s2 => s2.name === 'preflight');
+    assert.ok(step, 'the phase is a step');
+    assert.strictEqual(step.fullOutput, true,
+      'preflight opts out of the tail rule, or its all-at-once report is cut to the last failure');
+    const gate = fs.readFileSync(path.join(ROOT, 'scripts', 'precommit-gate.js'), 'utf8');
+    assert.match(gate, /step\.fullOutput \? detail :/,
+      'and the gate honours the flag rather than declaring it and truncating anyway');
   });
 });
 

@@ -118,7 +118,13 @@ const RECORD = path.join(ROOT, '.precommit-gate.json');
 // step, which is deliberate: the step list is the record's contract and
 // removing entries from it would change what a pass means.
 const STEPS = [
-  { name: 'preflight', args: ['run', 'preflight'] },
+  // PRINTED WHOLE WHEN IT FAILS, unlike every other step. The tail-25 rule below
+  // is right for a suite, whose last lines carry the failure summary, and wrong
+  // for this one: its entire contract is that every failure is on the screen at
+  // once, and truncating it delivers exactly the one-per-run experience it was
+  // built to remove. A component can be correct and still be defeated by the
+  // host it joins.
+  { name: 'preflight', args: ['run', 'preflight'], fullOutput: true },
   { name: 'typecheck', args: ['run', 'typecheck'] },
   { name: 'lint:styles', args: ['run', 'lint:styles'] },
   { name: 'check:refs', args: ['run', 'check:refs'] },
@@ -569,12 +575,20 @@ async function run() {
       // read-the-result step on the one path where reading the result is the
       // entire point.
       const detail = result.out.trim();
-      if (detail) console.error(detail.split('\n').slice(-25).join('\n'));
+      if (detail) console.error(step.fullOutput ? detail : detail.split('\n').slice(-25).join('\n'));
       // Said out loud when a step was ENDED rather than having failed. Reported
       // as a bare failure, a step killed by a signal reads as a broken test and
       // sends the developer looking for one.
       const how = result.signal ? ` (ended by ${result.signal})` : '';
-      console.error(`[precommit] ${step.name} failed${how}. No record written, so the commit stays blocked.`);
+      // WITH THE ELAPSED TIME, because the runs this card is measured on are the
+      // FAILING ones: a cheap failure surfaced in seconds rather than after the
+      // suite is the whole saving, and a failing run used to leave no duration
+      // behind at all. No record is written on this path, correctly, so the
+      // numbers go where a person and a log can both see them.
+      const spent = timings.map(t => `${t.step} ${(t.ms / 1000).toFixed(1)}s`).join(', ');
+      console.error(`[precommit] ${step.name} failed${how} after ${(stepMs / 1000).toFixed(1)}s. `
+        + `Spent so far: ${spent} (${(timings.reduce((a2, t) => a2 + t.ms, 0) / 1000).toFixed(1)}s total). `
+        + 'No record written, so the commit stays blocked.');
       process.exit(1);
     }
 
