@@ -59,15 +59,15 @@ const MUTATIONS = [
   // the rail saying wherever the reader last was, which is the defect on every
   // route rather than on the three that were named.
   [APP, 'showing a view is what sets the section',
-    " const nav=NAV_FOR_VIEW[v]; if(nav) setNavState(nav); }",
+    " const nav=(v==='editor'&&typeof editorEntry!=='undefined'&&editorEntry==='pins')?'pins':NAV_FOR_VIEW[v]; if(nav) setNavState(nav); }",
     ' }'],
   // The exception, inverted. The workspace picker hides the rail and the
   // sidebar, and setNavState resolves a sidebar panel by name, so treating
   // null as a section rather than as a decision throws on the screen a user
   // meets before they have a workspace.
   [APP, 'a view with no section is shown without one rather than with a missing one',
-    ' const nav=NAV_FOR_VIEW[v]; if(nav) setNavState(nav); }',
-    ' setNavState(NAV_FOR_VIEW[v]); }'],
+    " const nav=(v==='editor'&&typeof editorEntry!=='undefined'&&editorEntry==='pins')?'pins':NAV_FOR_VIEW[v]; if(nav) setNavState(nav); }",
+    " setNavState((v==='editor'&&typeof editorEntry!=='undefined'&&editorEntry==='pins')?'pins':NAV_FOR_VIEW[v]); }"],
   [APP, 'the table answers for every view the shell can show',
     "  'routine-editor': 'routines',\n",
     ''],
@@ -94,8 +94,8 @@ const MUTATIONS = [
   // The reverse: a list naming a panel the page no longer has. setNavState
   // resolves panels by id, so this is a null dereference on every navigation.
   [APP, 'the panel list names no panel the page has stopped carrying',
-    "  ['team','conversations','skills','files','settings','routines'].forEach",
-    "  ['team','conversations','skills','files','settings','routines','inspector'].forEach"],
+    "  ['team','conversations','skills','files','settings','routines','pins','map'].forEach",
+    "  ['team','conversations','skills','files','settings','routines','pins','map','inspector'].forEach"],
 
   // ===== THE DESTINATIONS THAT USED TO SET THEIR OWN =====
   // Each of these is the code as it shipped before this change, restored one at

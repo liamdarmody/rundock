@@ -94,6 +94,27 @@ a hex of its own and they drifted. Three near-identical reds were in the
 stylesheets when `--danger` was added. That is what this table exists to
 prevent.
 
+### Canvas
+
+A canvas resolves no CSS variables. Everything drawn on one is a literal passed
+into a draw call, so the code reads these out of the computed style at paint
+time and re-reads them when the theme changes. That is why a value a canvas
+needs has to exist here: without a token it becomes a hardcoded colour sitting
+in a view file, which is exactly what `test/tools/style-drift.js` exists to
+catch.
+
+| Token | Purpose |
+|---|---|
+| `--graph-edge` | A line between two nodes at rest on the map. Not `--border`: a hairline meant to sit on a solid surface disappears at the alpha an edge wants, and light needs more alpha than dark rather than less |
+| `--graph-dim` | The alpha the map fades things to: everything but the lit set while one node is hovered, the unlinked rim, and the oldest files. An opacity, not a colour, and the only one in the system |
+
+Both are drawing values rather than interface colours, which is why they sit
+apart from the status set above. Reach for them when painting into a canvas; in
+CSS, the tokens above already say what you mean. The map's five recency steps
+are colour mixes of `--accent` and `--text-2`, declared on probe elements in
+`public/styles/views/graph.css` per theme and read back resolved, so they are
+not tokens of their own.
+
 ## Type
 
 | Token | Size | Used for |

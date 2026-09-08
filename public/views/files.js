@@ -19,7 +19,7 @@
 // _tiptapSaveTimer, _viewersModule, _viewersModuleResolved, activeFileViewer,
 // serverPlatform, editorMode, rawFileContent, fileFrontmatter, fileBody,
 // editorDirty, saveTimer, workspaceOpenStartedAt, cachedFileTree,
-// editorReturnView, fileHistory, findState, plus the call-time constants
+// editorReturnView, editorEntry, fileHistory, findState, plus the call-time constants
 // TREE_ICONS and CREATABLE_TYPES (their declarations read FilesMenuModel at
 // load time, which a side-effect-free factory cannot do). Helpers reached the
 // same way: esc, getGuide, formatMdFull, closeFindBar,
@@ -318,6 +318,15 @@ function destroyTiptapEditorIfActive() {
 // the time this runs the server's WORKSPACE has already changed, so a flush
 // would resolve the old relative path against the new workspace and could
 // overwrite a same-named file there with stale content.
+// The editor is entered from the tree or from the Pins list, and the rail
+// lights whichever the reader came in through (showView reads editorEntry
+// beside its table). Every opener here says Files; the Pins list says Pins
+// for itself. Guarded by typeof so this module runs in node with no shell
+// around it, where the state does not exist and there is no rail to light.
+function enteredFromFiles() {
+  if (typeof editorEntry !== 'undefined') editorEntry = 'files';
+}
+
 function closeOpenFile() {
   clearTimeout(_tiptapSaveTimer);
   clearTimeout(saveTimer);
@@ -336,6 +345,7 @@ function closeOpenFile() {
   editorMode = 'preview';
   editorDirty = false;
   fileHistory = [];
+  enteredFromFiles();
   closeFindBar();
   removeFileConnections();
   document.querySelectorAll('.file-item.active').forEach((el) => el.classList.remove('active'));
@@ -360,6 +370,10 @@ let renderedWorkspace = null;
 // used to shadow it existed only to survive the rebuild that no longer
 // happens.
 function renderFileTree(tree) {
+  // The Pins list is read against every tree that arrives, so a pinned file
+  // deleted or renamed outside Rundock is marked on this push rather than on
+  // the next reload. Guarded by typeof for a shell with no pins view loaded.
+  if (typeof noteTreeForPins === 'function') noteTreeForPins(tree || []);
   // A changed tree can change what any link resolves to, and a file opened
   // before the first tree arrived rendered its connections against nothing:
   // redraw the open file's section now that there is a tree to resolve with.
@@ -498,7 +512,7 @@ function buildTree(items,container) {
       const fi=document.createElement('div'); fi.className='file-item';
       fi.innerHTML=`${treeIconSvg(TREE_ICONS[item.kind]||TREE_ICONS.file)}<span class="file-item-name">${esc(item.name)}</span>`;
       fi.dataset.path = item.path;
-      fi.onclick=()=>{document.querySelectorAll('.file-item').forEach(x=>x.classList.remove('active'));fi.classList.add('active');editorReturnView='editor';fileHistory=[];ws.send(JSON.stringify({type:'read_file',path:item.path}));showView('editor');};
+      fi.onclick=()=>{document.querySelectorAll('.file-item').forEach(x=>x.classList.remove('active'));fi.classList.add('active');editorReturnView='editor';enteredFromFiles();fileHistory=[];ws.send(JSON.stringify({type:'read_file',path:item.path}));showView('editor');};
       fi.oncontextmenu=(e)=>{e.preventDefault();openRowContextMenu(e,item.path,'file');};
       container.appendChild(fi);
     }
@@ -593,11 +607,15 @@ function openCreateMenu(anchor, folder) {
 }
 
 // Right-click on a row: the same creation rows (creating IN the folder, or the
-// file's parent), plus clipboard and reveal actions.
+// file's parent), plus the pin row for a file, clipboard and reveal actions.
 function openRowContextMenu(e, targetPath, targetKind) {
   const folder = FilesMenuModel.parentFolder(targetPath, targetKind === 'folder');
   const rows = CREATABLE_TYPES.map((t) => creationRow(t, e.clientX, e.clientY, folder));
   rows.push(null);
+  // Pin or Unpin, for a file only: a folder is not a working surface anyone
+  // returns to, and the model would mark it missing. First in the group of
+  // actions on an existing file, ahead of the copy actions, per the mock.
+  if (targetKind !== 'folder' && typeof pinMenuRow === 'function') rows.push(pinMenuRow(targetPath));
   rows.push(['Copy workspace path', () => { try { navigator.clipboard.writeText(targetPath); } catch (err) {} }, FilesMenuModel.ICONS.copy]);
   rows.push(['Copy wikilink', () => { try { navigator.clipboard.writeText(FilesMenuModel.wikilinkFor(targetPath)); } catch (err) {} }, FilesMenuModel.ICONS.link]);
   // Reveal in Finder only works on macOS (the server no-ops elsewhere), so the
@@ -635,6 +653,10 @@ function loadFileContent(path, content) {
   document.getElementById('editor-header').classList.remove('hidden');
   document.getElementById('editor-empty').classList.add('hidden');
   updateEditorBackButton();
+  // The header's pin control reads THIS file against the list, on every
+  // open, so a pinned file followed by an unpinned one never inherits the
+  // first one's answer. Guarded by typeof for a shell with no pins view.
+  if (typeof renderEditorPinControl === 'function') renderEditorPinControl();
 
   // The file-type registry decides the surface for EVERY path (it replaced
   // the old per-type if-chain). markdown -> Tiptap editor,
@@ -1064,7 +1086,11 @@ function drawFileConnections(section, filePath, data) {
     // carries no colon for the same reason no heading in the product does:
     // a colon promises the value follows on that line, and here the rows are
     // separate elements beneath it.
-    if (!rows.length) { note('None'); return; }
+    //
+    // WHILE THE INDEX IS WARMING, an empty group is not a fact about the file:
+    // the table is still filling, and None here would be a false answer that
+    // the ready redraw then silently corrects. Say what is true instead.
+    if (!rows.length) { note(data.warming ? 'Links are still being indexed' : 'None'); return; }
     for (const row of rows) {
       const target = pathOf(row);
       const a = document.createElement('a');
@@ -1082,6 +1108,17 @@ function drawFileConnections(section, filePath, data) {
   // indexed file can point at anything.
   if (LINK_SOURCE_EXTENSIONS.has(extensionOf(filePath))) group('Links to', outgoing, (r) => r.resolved);
   group('Linked from', incoming, (r) => r.src);
+}
+
+// The index reporting ready is news for the open file's connections: they
+// were drawn against a table that was still filling, and the section under
+// the file said so. Redraw from a fresh fetch, through the same render the
+// open path uses, and only when there is a file with a section to redraw.
+function fileConnectionsIndexReady() {
+  if (!currentFilePath) return;
+  const section = document.getElementById('file-connections');
+  if (!section) return;
+  renderFileConnections(section.parentElement, { inset: section.classList.contains('file-connections-inset') });
 }
 
 function fetchWorkspaceLinks() {
@@ -1127,6 +1164,7 @@ function openWikilink(name) {
   // decided in wikilinkSearchName so every resolving surface agrees.
   const searchName = wikilinkSearchName(name);
   editorReturnView = 'editor';
+  enteredFromFiles();
 
   // Push current file onto history so back button returns to it
   if (currentFilePath) fileHistory.push(currentFilePath);
@@ -1161,6 +1199,7 @@ function openWikilink(name) {
 function openWorkspaceFilePath(path) {
   if (!path || !ws) return;
   editorReturnView = 'editor';
+  enteredFromFiles();
   if (currentFilePath) { fileHistory.push(currentFilePath); if (fileHistory.length > 20) fileHistory.shift(); }
   switchNav('files');
   ws.send(JSON.stringify({ type: 'read_file', path }));
@@ -1353,6 +1392,7 @@ function updateEditorBackButton() {
 
 function openSkillFile(filePath) {
   editorReturnView = 'skills';
+  enteredFromFiles();
   fileHistory = [];
   ws.send(JSON.stringify({ type: 'read_file', path: filePath }));
   showView('editor');
@@ -1402,6 +1442,7 @@ return {
   getFileContentForSave, openWikilink, openWorkspaceFilePath,
   highlightFileInSidebar, findFileInTree, wikilinkSearchName, fileConnections,
   renderFileConnections, drawFileConnections, drawFileConnectionsLoading, removeFileConnections,
+  fileConnectionsIndexReady,
   updateEditorBackButton,
   openSkillFile, editorGoBack,
 };
