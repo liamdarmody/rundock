@@ -43,6 +43,10 @@ const EXPECTED_TYPES = [
   // removal. Pressed by test/unit/extension-install.test.js.
   'plan_package_install', 'plan_extension_update', 'confirm_extension_install',
   'confirm_package_install', 'decline_package_install', 'check_extension_update', 'uninstall_extension',
+  // The manage page: enablement written onto the record, and the page's
+  // one read of the roster with the receipts. Pressed by
+  // test/unit/packages-manage.test.js.
+  'set_extension_enabled', 'get_packages_page',
   'get_conversations', 'set_last_active_conversation', 'save_conversation',
   'get_lists', 'create_list', 'delete_list', 'delete_conversation',
   'read_file', 'add_to_team',
@@ -277,7 +281,9 @@ describe('handler seams (stub ctx, capture ws)', () => {
       assert.deepStrictEqual(ws.sent[0].extensions, [{
         id: 'csv-echo', name: 'csv-echo', version: '1.2.0', enabled: true,
         renderers: [{ id: 'view', target: '.csv' }], refusals: [], resources: [],
-      }], 'one roster entry per record, its renderer built from the declared entry and match rule');
+        source: { url: 'https://github.com/example/csv-echo', reference: 'v1.2.0' },
+        installedAt: '2026-09-07T00:00:00.000Z',
+      }], 'one roster entry per record, its renderer built from the declared entry and match rule, its source and install date carried for the manage page');
 
       config.setWorkspace(null);
       const ws2 = captureWs();

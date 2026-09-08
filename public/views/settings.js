@@ -83,14 +83,131 @@ function packagesDecline() { packagesApplyTransition(RundockPackagesInstallModel
 function packagesConfirm() { packagesApplyTransition(RundockPackagesInstallModel.confirm(packagesInstall)); }
 function packagesRetry() { packagesApplyTransition(RundockPackagesInstallModel.retry(packagesInstall)); }
 
-function packagesReplyArrived(msg) { packagesApplyTransition(RundockPackagesInstallModel.reply(packagesInstall, msg)); }
+// Every reply for the page reaches both models: the install flow matches
+// what it is waiting on, the manage model matches its own operations and
+// asks for the page again when a record or a receipt changed under a flow
+// it does not drive.
+function packagesReplyArrived(msg) {
+  packagesApplyTransition(RundockPackagesInstallModel.reply(packagesInstall, msg));
+  packagesManageApply(manageModel().reply(packagesManage, msg));
+}
 
 // Per-workspace state must not outlive the workspace it was built from: a
 // plan's collision facts, planned digests and default readings all describe
-// one workspace, so a change of workspace returns the flow to idle.
+// one workspace, so a change of workspace returns the flow to idle, and the
+// managed list is read again for the workspace now open.
 function packagesWorkspaceChanged() {
   packagesInstall = RundockPackagesInstallModel.initial();
+  packagesManage = manageModel().workspaceChanged();
   packagesRenderIfVisible();
+}
+
+// ---- The managed list and the receipts (the manage half of the page) ----
+// The manage model owns every row state, chip tone and message; this half
+// draws its rows and forwards actions. Update is the one handoff: the manage
+// model names the target and the install flow plans it, so the confirmation
+// is the trust card an install shows. The model is a page global in the
+// browser and is required beside this view under Node.
+function manageModel() {
+  if (typeof RundockPackagesManageModel !== 'undefined') return RundockPackagesManageModel;
+  return (typeof module === 'object' && module.exports) ? require('../packages-manage-model.js') : null;
+}
+let packagesManage = manageModel() ? manageModel().initial() : null;
+
+function packagesManageApply(out) {
+  if (out.send) {
+    if (!(ws && ws.readyState === WebSocket.OPEN)) {
+      packagesManage = manageModel().unsent(out.state);
+      packagesRenderIfVisible();
+      return;
+    }
+    ws.send(JSON.stringify(out.send));
+  }
+  packagesManage = out.state;
+  packagesRenderIfVisible();
+}
+
+function packagesExtensionAction(action, name) {
+  const m = manageModel();
+  if (action === 'check') return packagesManageApply(m.checkForUpdate(packagesManage, name));
+  if (action === 'enable' || action === 'disable') return packagesManageApply(m.setEnabled(packagesManage, name, action === 'enable'));
+  if (action === 'uninstall') return packagesManageApply(m.askUninstall(packagesManage, name));
+  if (action === 'update' || action === 'retry-update') {
+    const target = m.updateTarget(packagesManage, name);
+    if (target) packagesApplyTransition(RundockPackagesInstallModel.beginUpdate(packagesInstall, target));
+  }
+}
+function packagesConfirmUninstall(name) { packagesManageApply(manageModel().confirmUninstall(packagesManage, name)); }
+function packagesCancelUninstall() { packagesManageApply(manageModel().cancelUninstall(packagesManage)); }
+function packagesSeeAll() { packagesManageApply(manageModel().toggleSeeAll(packagesManage)); }
+
+// A receipt item opens the live thing where it now lives: the agent's
+// profile under Team, the skill's page under Skills, the path under Files.
+function packagesOpenReceiptItem(open, target) {
+  if (open === 'agent' && typeof showProfile === 'function') { switchNav('team'); showProfile(target); }
+  else if (open === 'skill' && typeof selectSkill === 'function') { switchNav('skills'); selectSkill(target); }
+  else if (open === 'file' && typeof openWorkspaceFilePath === 'function') openWorkspaceFilePath(target);
+}
+
+function packagesActionHtml(row, a) {
+  const cls = a.danger ? 'linkbtn danger' : a.accent ? 'linkbtn accent' : 'linkbtn quiet';
+  return `<button class="${cls}" data-action="${escAttr(a.action)}" ${a.disabled ? 'disabled' : ''} onclick="packagesExtensionAction('${escAttr(a.action)}', '${escAttr(row.id)}')">${esc(a.label)}</button>`;
+}
+
+function packagesExtensionRowHtml(row) {
+  const meta = [];
+  if (row.repo) meta.push(`<span class="seg src">${esc(row.repo)}${row.reference ? '&nbsp;&middot;' : ''}</span>`);
+  if (row.reference) meta.push(`<span class="seg">pinned ${esc(row.reference)}</span>`);
+  if (row.installedLabel) meta.push(`<span class="dot">&middot;</span><span class="seg">installed ${esc(row.installedLabel)}</span>`);
+  const confirm = row.confirm ? `<div class="ext-confirm">
+          <div class="packages-body">${esc(row.confirm.text)}</div>
+          <div class="packages-actions">
+            <button class="settings-btn-danger" onclick="packagesConfirmUninstall('${escAttr(row.id)}')">${esc(row.confirm.confirmLabel)}</button>
+            <button class="settings-btn" onclick="packagesCancelUninstall()">${esc(row.confirm.cancelLabel)}</button>
+          </div>
+        </div>` : '';
+  return `<div class="ext-row${row.dimmed ? ' dimmed' : ''}" data-extension="${escAttr(row.id)}" data-state="${escAttr(row.state)}">
+      <div class="id">
+        <div class="name-line"><span class="name">${esc(row.name)}</span>${row.versionLabel ? `<span class="ver">${esc(row.versionLabel)}</span>` : ''}<span class="ext-chip ${escAttr(row.chip.className)}" data-tone="${escAttr(row.chip.tone)}">${esc(row.chip.label)}</span></div>
+        ${meta.length ? `<div class="meta">${meta.join('')}</div>` : ''}
+        ${row.problem ? `<div class="problem">${esc(row.problem)}</div>` : ''}
+        ${row.note ? `<div class="row-note ${escAttr(row.note.tone)}" data-tone="${escAttr(row.note.tone)}">${esc(row.note.text)}</div>` : ''}
+        ${confirm}
+      </div>
+      <div class="actions">${row.actions.map((a) => packagesActionHtml(row, a)).join('')}</div>
+    </div>`;
+}
+
+function packagesReceiptRowHtml(r) {
+  const items = r.items.map((i) => `<button class="linkbtn" onclick="packagesOpenReceiptItem('${escAttr(i.open)}', '${escAttr(i.target)}')">${esc(i.label)}<span class="kind">${esc(i.kind)}</span></button>`);
+  if (r.skipped) items.push(`<span class="muted">${r.skipped} skipped</span>`);
+  return `<div class="receipt-row" data-receipt="${escAttr(r.file)}">
+      <div class="top"><span class="name">${esc(r.name)}</span>${r.date ? `<span class="date">${esc(r.date)}</span>` : ''}</div>
+      ${r.repo ? `<div class="from">from ${esc(r.repo)}${r.reference ? ` at ${esc(r.reference)}` : ''}</div>` : ''}
+      <div class="contents">${esc(r.countLine)}</div>
+      ${items.length ? `<div class="items">${items.join('')}</div>` : ''}
+    </div>`;
+}
+
+function packagesManageHtml() {
+  const m = manageModel();
+  const st = packagesManage;
+  let list;
+  if (st.error) list = `<div class="ext-error">${esc(st.error)}</div>`;
+  else if (!st.loaded) list = `<div class="ext-empty">Reading what is installed…</div>`;
+  else {
+    const rows = m.rows(st, packagesInstall);
+    list = rows.length ? rows.map(packagesExtensionRowHtml).join('') : `<div class="ext-empty">${esc(m.EMPTY_EXTENSIONS)}</div>`;
+  }
+  const notice = st.notice ? `<div class="ext-notice ${escAttr(st.notice.tone)}">${esc(st.notice.text)}</div>` : '';
+  const receipts = st.loaded && !st.error ? m.receiptRows(st) : { rows: [], hidden: 0, seeAllLabel: null };
+  const receiptList = receipts.rows.length
+    ? receipts.rows.map(packagesReceiptRowHtml).join('') + (receipts.seeAllLabel ? `<button class="see-all" onclick="packagesSeeAll()">${esc(receipts.seeAllLabel)}</button>` : '')
+    : `<div class="ext-empty">${esc(st.error ? st.error : m.EMPTY_RECEIPTS)}</div>`;
+  return `<div class="settings-section-label">Installed extensions</div>
+    <div class="settings-card ext-list" id="packages-extensions">${list}</div>${notice}
+    <div class="settings-section-label">Recently added</div>
+    <div class="settings-card ext-list" id="packages-receipts">${receiptList}</div>`;
 }
 
 // The server serving a different workspace than this window opened, which
@@ -110,6 +227,7 @@ function packagesConnectionLost() {
   // Identity means no wait was in progress: repainting here would wipe a
   // half-typed link for nothing.
   if (out.state !== packagesInstall) packagesApplyTransition(out);
+  if (packagesManage && packagesManage.busy) packagesManageApply(manageModel().connectionLost(packagesManage));
 }
 
 // The collision review card: every offered item as a row, collisions carrying
@@ -292,12 +410,15 @@ function packagesSectionHtml() {
         <div class="packages-actions"><button class="settings-btn" onclick="packagesCancel()">Done</button></div>
       </div>`;
   }
-  return `<div class="settings-section-title">Packages</div>${field}${stateHtml}`;
+  return `<div class="settings-section-title">Packages</div>${field}${stateHtml}${packagesManageHtml()}`;
 }
 
 function showSettingsSection(section) {
   document.querySelectorAll('.settings-nav-item').forEach(el => el.classList.remove('active'));
   document.querySelector(`.settings-nav-item[data-settings="${section}"]`)?.classList.add('active');
+  // The managed list is read each time the section opens, so what is shown
+  // is what the store holds now rather than what it held last visit.
+  if (section === 'packages' && packagesManage) packagesManageApply(manageModel().open(packagesManage));
   renderSettingsSection(section);
 }
 
@@ -894,6 +1015,8 @@ return { showSettingsSection, renderSettingsSection, setWorkspaceMode, runtimeRo
   packagesSubmit, packagesCancel, packagesDecline, packagesConfirm, packagesRetry, packagesSetDecision,
   packagesReviewRowHtml, packagesReviewCardHtml, packagesStaleCardHtml,
   packagesReplyArrived, packagesWorkspaceChanged, packagesServingWorkspaceChanged, packagesConnectionLost,
+  packagesExtensionAction, packagesConfirmUninstall, packagesCancelUninstall, packagesSeeAll, packagesOpenReceiptItem,
+  packagesManageHtml, packagesExtensionRowHtml, packagesReceiptRowHtml,
   extensionUpdateStatusHtml,
   connectorsParse, connectorsParseToml, connectorsParseUserGlobalJson,
   connectorsBuildRows, connectorsBuildState, connectorsRowHtml, connectorsScopeText,
