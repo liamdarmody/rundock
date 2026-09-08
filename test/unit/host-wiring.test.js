@@ -153,7 +153,7 @@ describe('the roster is requested with the rest of the workspace', () => {
     w.ws = { send: (m) => sent.push(JSON.parse(m).type) };
     for (const name of ['setServingWorkspace', 'setWorkspaceChrome', 'packagesWorkspaceChanged',
       'connectorsWorkspaceChanged', 'renderListPills', 'updateUnreadBadge', 'updateWorkingBadge',
-      'resetSidebarForWorkspace']) {
+      'resetSidebarForWorkspace', 'requestPins']) {
       w[name] = () => calls.push(name);
     }
     w.closeOpenFile = () => calls.push('closeOpenFile');
@@ -559,6 +559,7 @@ describe('an open message from the frame takes the wikilink route', () => {
       cutFiles(/function findFileInTree\(items, searchName, fromPath\) \{[\s\S]*?\n\}/, 'findFileInTree'),
       cutFiles(/function dirSegments\(p\) \{[\s\S]*?\n\}/, 'dirSegments'),
       cutFiles(/function commonPrefixLen\(a, b\) \{[\s\S]*?\n\}/, 'commonPrefixLen'),
+      cutFiles(/function enteredFromFiles\(\) \{[\s\S]*?\n\}/, 'enteredFromFiles'),
       cutFiles(/function openWikilink\(name\) \{[\s\S]*?\n\}/, 'openWikilink'),
     ];
     const sent = [];

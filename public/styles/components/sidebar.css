@@ -221,10 +221,10 @@
 .pin-unpin svg { width: 14px; height: 14px; }
 .pin-item.missing { cursor: default; }
 .pin-item.missing:hover { background: transparent; }
-.pin-item.missing .file-item-icon { color: var(--danger); }
+.pin-item.missing .file-item-icon { color: var(--danger-text); }
 .pin-item.missing .pin-name { color: var(--text-3); text-decoration: line-through; }
-.pin-missing-note { color: var(--danger); white-space: normal; }
-.pin-remove-btn { font-size: var(--caption); font-weight: 600; color: var(--danger); background: transparent; border: none; cursor: pointer; white-space: nowrap; flex-shrink: 0; padding: 4px 8px; border-radius: var(--radius-sm); }
+.pin-missing-note { color: var(--danger-text); white-space: normal; }
+.pin-remove-btn { font-size: var(--caption); font-weight: 600; color: var(--danger-text); background: transparent; border: none; cursor: pointer; white-space: nowrap; flex-shrink: 0; padding: 4px 8px; border-radius: var(--radius-sm); }
 .pin-remove-btn:hover { background: var(--elevated); }
 .pins-quiet b { color: var(--text-2); font-weight: 600; }
 .file-item-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
