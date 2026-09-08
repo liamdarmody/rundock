@@ -1,0 +1,167 @@
+/* Map view. Every value here is a token. The two the canvas needs and the
+   design system did not have, --graph-edge and --graph-dim, are declared in
+   tokens.css and described in docs/DESIGN.md. */
+
+#view-map {
+  flex-direction: column;
+  min-width: 0;
+  position: relative;
+}
+
+/* Map is the one rail destination with no sidebar, so the content pane
+   starts at the rail and carries the corner the sidebar usually carries. The
+   router reveals the (empty) map panel like any other; while it is the
+   visible one, the aside itself comes off. */
+.sidebar:has(> #sidebar-map:not(.hidden)) { display: none !important; }
+
+.graph-stage {
+  flex: 1;
+  position: relative;
+  min-height: 0;
+  background: var(--elevated);
+  border-top-left-radius: var(--content-radius);
+  overflow: hidden;
+}
+/* The canvas host fills the stage absolutely. It has to: a static div takes
+   its height from the canvas inside it while the canvas takes its height from
+   the div, and that circular dependency left a dead strip at the bottom of
+   the pane with the controls stranded in it. */
+#graph-body { position: absolute; inset: 0; }
+.graph-stage canvas { display: block; width: 100%; height: 100%; }
+
+/* Recency as light: five discrete steps, newest warm, resolved here rather
+   than in the view so the canvas reads them back through the computed style
+   like every other colour it paints. Light gets a smaller accent share at
+   each step: the same mix reads hotter on a near-white ground than against a
+   near-black one under additive blending. Step 4 is the resting node colour;
+   step 5 is the same colour drawn at --graph-dim alpha. The probes are
+   invisible and take no space. */
+.graph-recency { position: absolute; visibility: hidden; pointer-events: none; width: 0; height: 0; }
+.graph-recency-1 { color: var(--accent); }
+.graph-recency-2 { color: color-mix(in srgb, var(--accent) 55%, var(--text-2)); }
+.graph-recency-3 { color: color-mix(in srgb, var(--accent) 25%, var(--text-2)); }
+.graph-recency-4 { color: var(--text-2); }
+.graph-recency-5 { color: var(--text-2); }
+body.light .graph-recency-2 { color: color-mix(in srgb, var(--accent) 45%, var(--text-2)); }
+body.light .graph-recency-3 { color: color-mix(in srgb, var(--accent) 15%, var(--text-2)); }
+
+.graph-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  text-align: center;
+  padding: 40px;
+}
+.graph-empty h4 {
+  margin: 0;
+  font-size: var(--title);
+  font-weight: 700;
+  color: var(--text-1);
+}
+.graph-empty p {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-2);
+  max-width: 420px;
+  line-height: 1.65;
+}
+
+/* The readout is the only text in the view at rest, bottom-left. */
+.graph-readout {
+  z-index: 2;
+  position: absolute;
+  left: 16px;
+  bottom: 16px;
+  font-size: var(--label);
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+.graph-readout b { color: var(--text-2); font-weight: 600; }
+
+/* Draw timings, shown only when the page is opened with ?perf=1. */
+.graph-perf {
+  z-index: 2;
+  position: absolute;
+  left: 16px;
+  bottom: 32px;
+  font-size: 10px;
+  color: var(--text-3);
+  opacity: .65;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+/* Filter, top-left over the canvas and opposite the zoom controls, always
+   visible: it is the view's only filter affordance. */
+.graph-filter {
+  z-index: 2;
+  position: absolute;
+  left: 14px;
+  top: 14px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 32px;
+  padding: 0 8px 0 11px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  transition: border-color var(--duration-base) ease;
+}
+.graph-filter:focus-within { border-color: var(--accent); }
+.graph-filter svg { width: 14px; height: 14px; color: var(--text-3); flex-shrink: 0; }
+.graph-filter input {
+  width: 190px;
+  background: none;
+  border: 0;
+  outline: none;
+  color: var(--text-1);
+  font-family: inherit;
+  font-size: var(--caption);
+  padding: 0;
+}
+.graph-filter input::placeholder { color: var(--text-3); }
+.graph-filter button {
+  width: 20px; height: 20px;
+  display: flex; align-items: center; justify-content: center;
+  background: none; border: 0; padding: 0; cursor: pointer;
+  color: var(--text-3); border-radius: var(--radius-circle);
+}
+.graph-filter button:hover { color: var(--text-1); background: var(--elevated); }
+.graph-filter button svg { width: 11px; height: 11px; }
+.graph-filter button.hidden { display: none; }
+
+.graph-zoom {
+  z-index: 2;
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+.graph-zoom button {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: 0;
+  color: var(--text-2);
+  cursor: pointer;
+  padding: 0;
+  transition: color var(--duration-base) ease, background var(--duration-base) ease;
+}
+.graph-zoom button + button { border-top: 1px solid var(--border); }
+.graph-zoom button:hover { color: var(--text-1); background: var(--elevated); }
+.graph-zoom svg { width: 16px; height: 16px; }
