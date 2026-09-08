@@ -23,7 +23,7 @@ const model = require('../../public/packages-install-model.js');
 // so the rows rendered here are the product's, with no page and no copy of
 // the escaping rule in this file.
 const settings = require('../../public/views/settings.js');
-const { buildPlan, decide } = require('../../lib/packages/import-plan.js');
+const { decide } = require('../../lib/packages/import-plan.js');
 const { applyImport } = require('../../lib/packages/import-apply.js');
 const { evaluateImport, APPROVAL_SCHEMA, ABSENT_DIGEST } = require('../../lib/packages/import-evaluate.js');
 const { buildDispatch } = require('../../lib/protocol/handlers/index.js');
@@ -96,14 +96,45 @@ function renderRow(state, id) {
 }
 
 // Press a control on the RENDERED row: find the button by its label, read the
-// arguments its onclick hands packagesSetDecision, and make that same call
-// on the model. The state reached is the one the markup's own control
-// reaches, not one a test hand-built around the view.
+// item and decision its data attributes carry (which is what its handler
+// reads back), and make that same call on the model. The state reached is
+// the one the markup's own control reaches, not one a test hand-built
+// around the view.
 function press(state, id, label) {
   const html = renderRow(state, id);
-  const m = new RegExp(`onclick="packagesSetDecision\\('([^']+)', '([^']+)'\\)">${label}<`).exec(html);
-  assert.ok(m, `${label} is a control on the rendered ${id} row`);
-  return model.setDecision(state, m[1], m[2]);
+  const item = /^<div class="packages-item-row"[^>]*data-item="([^"]+)"/.exec(html);
+  const m = new RegExp(`<button[^>]*data-decision="([^"]+)"[^>]*>${label}<`).exec(html);
+  assert.ok(item && m, `${label} is a control on the rendered ${id} row`);
+  assert.match(html, /onclick="packagesSetDecision\(this\.closest\('\.packages-item-row'\)\.dataset\.item, this\.dataset\.decision\)"/,
+    'the handler reads the attributes; nothing is written into its source');
+  return model.setDecision(state, item[1], m[1]);
+}
+
+// The settings view on a bare page, with the socket under the test's hand,
+// so what a closed socket does to the review is read from the rendered
+// section rather than from the model alone.
+function viewShell() {
+  const { JSDOM } = require('jsdom');
+  const dom = new JSDOM('<div id="settings-content"></div><div class="settings-nav-item active" data-settings="packages"></div>');
+  global.document = dom.window.document;
+  global.window = dom.window;
+  global.currentView = 'settings';
+  global.RundockPackagesInstallModel = model;
+  global.RundockPackagesDecide = require('../../public/packages-decide.js');
+  const sent = [];
+  const socket = { readyState: 1, send: (raw) => sent.push(JSON.parse(raw)) };
+  global.ws = socket;
+  global.WebSocket = { OPEN: 1 };
+  global.esc = (t) => String(t == null ? '' : t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  global.escAttr = (t) => global.esc(t).replace(/"/g, '&quot;');
+  settings.packagesWorkspaceChanged();
+  return {
+    sent, socket,
+    content: () => dom.window.document.getElementById('settings-content'),
+    release() {
+      for (const g of ['document', 'window', 'currentView', 'RundockPackagesInstallModel', 'RundockPackagesDecide', 'ws', 'WebSocket', 'esc', 'escAttr']) delete global[g];
+    },
+  };
 }
 
 // The real thing behind a blocked COLLIDING row: the workspace's default
@@ -578,7 +609,7 @@ describe('blocked rows offer skipping and nothing else', () => {
     const html = renderRow(projected, 'agent:helper');
     assert.match(html, /<button class="packages-dt-btn packages-dt-blocked" disabled>Overwrite: blocked<\/button>/);
     assert.match(html, /packages-blocked-note">Blocked: this would give your team a second default agent\. Skipping this item keeps your workspace exactly as it is/);
-    assert.match(html, /packagesSetDecision\('agent:helper', 'skip'\)">Skip this item</);
+    assert.match(html, /data-decision="skip"[^>]*>Skip this item</);
   });
 
   test('the one action is skip: no overwrite is ever offered as the way out', () => {
@@ -625,6 +656,66 @@ describe('applying decisions is atomic with the import transaction', () => {
     assert.strictEqual(result.status, 'ready');
     assert.notDeepStrictEqual(workspaceTree(workspace), before,
       'sanity: the completed apply really overwrites');
+  });
+
+  test('a confirm or a decision the socket cannot carry leaves the review as it was, and says so; the notice leaves with the next send', () => {
+    const { workspace, sourceRoot, planMsg } = collidingScenario();
+    const shell = viewShell();
+    try {
+      shell.content().querySelector('#packages-source-link').value = sourceRoot;
+      settings.packagesSubmit();
+      settings.packagesReplyArrived(planMsg);
+      settings.packagesReplyArrived(realReply(workspace, 'evaluate_package_decisions', shell.sent[1]));
+      const row = () => shell.content().querySelector('[data-item="agent:helper"]');
+      assert.ok(row(), 'the review is on screen');
+      const confirmLabel = () => shell.content().querySelector('.packages-review-card .packages-confirm').textContent;
+      assert.strictEqual(confirmLabel(), 'Skip 1, nothing added');
+
+      // The socket closes. A decision made now is kept, unchecked.
+      shell.socket.readyState = 3;
+      const sentBefore = shell.sent.length;
+      settings.packagesSetDecision('agent:helper', 'overwrite');
+      assert.strictEqual(shell.sent.length, sentBefore, 'nothing went out');
+      assert.match(row().querySelector('.packages-dt-selected').textContent, /Overwrite/);
+      assert.match(shell.content().querySelector('.packages-field-error').textContent, /your decisions are kept, but nothing was sent/);
+      assert.strictEqual(confirmLabel(), 'Confirm unchecked decisions', 'no check is claimed for a request that never went out');
+
+      // A confirm made now leaves the review exactly as it stands.
+      settings.packagesConfirm();
+      assert.strictEqual(shell.sent.length, sentBefore, 'nothing went out');
+      assert.ok(shell.content().querySelector('.packages-review-card'), 'the review is still on screen, not the idle field');
+      assert.match(row().querySelector('.packages-dt-selected').textContent, /Overwrite/, 'the decision stands');
+      assert.match(shell.content().querySelector('.packages-field-error').textContent, /your decisions are kept, but nothing was sent/);
+
+      // The connection returns: the next decision goes out and the notice
+      // goes with it, so it can never sit beside the projection that lands.
+      shell.socket.readyState = 1;
+      settings.packagesSetDecision('agent:helper', 'skip');
+      assert.strictEqual(shell.sent.length, sentBefore + 1);
+      assert.strictEqual(shell.content().querySelector('.packages-field-error'), null, 'the notice left with the send');
+      settings.packagesReplyArrived(realReply(workspace, 'evaluate_package_decisions', shell.sent[sentBefore]));
+      assert.strictEqual(confirmLabel(), 'Skip 1, nothing added');
+      assert.strictEqual(shell.content().querySelector('.packages-field-error'), null);
+    } finally {
+      shell.release();
+    }
+  });
+
+  test('a review whose projection was in flight when the connection dropped keeps its decisions and stops claiming a check', () => {
+    const { offer } = collidingScenario();
+    const flipped = model.setDecision(offer, 'agent:helper', 'overwrite');
+    assert.ok(flipped.state.evaluateRequestId, 'a projection is outstanding');
+    assert.match(model.reviewCopy(flipped.state).confirmLabel, /^Checking/);
+    const lost = model.connectionLost(flipped.state).state;
+    assert.strictEqual(lost.phase, 'offer');
+    assert.strictEqual(lost.plan, offer.plan, 'the plan stands');
+    assert.strictEqual(lost.decisions['agent:helper'], 'overwrite', 'the decision stands');
+    assert.strictEqual(lost.evaluateRequestId, null, 'the wait is over');
+    assert.doesNotMatch(model.reviewCopy(lost).confirmLabel, /Checking/, 'no check is claimed');
+    assert.match(model.reviewCopy(lost).confirmNote, /not checked/);
+    // A voided review is left exactly alone: its one action re-plans.
+    const stale = { phase: 'stale', link: 'x', reference: '', token: null };
+    assert.strictEqual(model.connectionLost(stale).state, stale);
   });
 
   test('a decline writes nothing: cancel from the review is stateless', () => {

@@ -255,7 +255,7 @@ describe('outcomes are rendered honestly, against real apply replies', () => {
     assert.match(lostApply.message, /may or may not have completed/);
     assert.match(lostApply.message, /receipts/);
     assert.strictEqual(lostApply.canReplan, true);
-    for (const state of [model.initial(), { phase: 'offer', sourcePath: '/p', collisions: [] }]) {
+    for (const state of [model.initial(), { phase: 'offer', link: 'p', reference: '' }, { phase: 'stale', link: 'p', reference: '', token: null }]) {
       assert.strictEqual(model.connectionLost(state).state, state);
     }
   });

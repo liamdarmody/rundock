@@ -7,7 +7,7 @@ const path = require('node:path');
 
 const { buildDispatch } = require('../../lib/protocol/handlers/index.js');
 const { decide, buildPlan } = require('../../lib/packages/import-plan.js');
-const { journalPath } = require('../../lib/workspace/atomic-write.js');
+const { journalPath, IMPORT_SUBDIR } = require('../../lib/workspace/atomic-write.js');
 const { digestFile } = require('../../lib/packages/import-apply.js');
 const config = require('../../lib/config.js');
 const { makeTempDir } = require('../helpers/workspace.js');
@@ -208,23 +208,42 @@ describe('the protocol boundary', () => {
       'the receipt is the transaction\'s one write');
   });
 
-  test('an evaluate_package_decisions dispatch leaves the complete tree byte-identical, receipts included', () => {
+  test('an evaluate_package_decisions dispatch leaves the complete tree byte-identical, receipts and a pending journal included', () => {
     const { workspace, sourceRoot } = fixture();
-    // An apply first, so there is a receipts directory to be left alone, and
-    // an interrupted-transaction recovery would have something to do if the
-    // evaluate path ever ran one.
+    // An apply first, so there is a receipts directory to be left alone.
     dispatchJson('apply_package_import', {
       sourcePath: sourceRoot, approval: decide(planVia(sourceRoot), { 'agent:scribe': 'skip', 'skill:writer': 'skip' }),
     });
     assert.strictEqual(fs.readdirSync(path.join(workspace, RECEIPTS)).length, 1);
     const approval = decide(planVia(sourceRoot), { 'agent:scribe': 'add', 'skill:writer': 'overwrite' });
+    // Then a genuinely half-committed prior transaction, planted the way the
+    // apply suite plants one (which also holds the literal to the shape the
+    // real primitive leaves mid-commit): a destination outside this
+    // approval holds replaced bytes, its pre-transaction bytes live only in
+    // the journal's backup, and the journal says committing. Recovery would
+    // restore the destination and remove the journal, so a tree still
+    // carrying both after the dispatch is what proves evaluation ran none.
+    write(workspace, '.claude/skills/parked/SKILL.md', 'half-committed bytes');
+    write(workspace, path.join(IMPORT_SUBDIR, 'run', 'backup', '0', 'SKILL.md'), 'parked');
+    fs.writeFileSync(journalPath(workspace), JSON.stringify({
+      version: 1,
+      runId: 'stale',
+      createdState: [],
+      phase: 'committing',
+      entries: [{ slot: 0, type: 'dir', priorType: 'dir', destination: '.claude/skills/parked' }],
+      createdDirs: [],
+    }));
     const before = tree(workspace);
+    const journalRel = path.relative(workspace, journalPath(workspace)).split(path.sep).join('/');
+    assert.ok(before.some((line) => line.startsWith(`${journalRel}:`)), 'sanity: the journal is part of the tree being compared');
     const reply = dispatchJson('evaluate_package_decisions', { requestId: 'r1', sourcePath: sourceRoot, approval });
     assert.strictEqual(reply.type, 'package_import_result');
     assert.deepStrictEqual([reply.operation, reply.requestId, reply.status], ['evaluate', 'r1', 'ready']);
     assert.strictEqual(reply.writes.length, 2, 'the evaluation has writes to make, and makes none of them');
     assert.strictEqual('written' in reply, false);
-    assert.deepStrictEqual(tree(workspace), before);
+    assert.deepStrictEqual(tree(workspace), before, 'the journal is neither consumed nor recovered by a projection');
+    assert.strictEqual(fs.readFileSync(path.join(workspace, '.claude/skills/parked/SKILL.md'), 'utf8'), 'half-committed bytes');
+    assert.ok(fs.existsSync(journalPath(workspace)));
   });
 
   test('the evaluate handler and applyImport reach the evaluator through one function, and agree', () => {

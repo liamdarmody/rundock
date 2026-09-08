@@ -33,15 +33,6 @@ const APPLY = {
   src: path.join(ROOT, 'lib', 'packages', 'import-apply.js'),
   suite: 'test/unit/collision-decisions.test.js',
 };
-// The same file watched by the suite that PRESSES the recovery rule: the
-// apply suite plants a genuinely half-committed journal and proves recovery
-// runs before the snapshot. This lane's own suite exercises the seam through
-// a mid-apply failure, which the primitive rolls back in-process, so only
-// the planted-journal test can notice recovery going missing.
-const APPLY_RECOVERY = {
-  src: path.join(ROOT, 'lib', 'packages', 'import-apply.js'),
-  suite: 'test/unit/package-import-apply.test.js',
-};
 
 // [target, label, the guard as it is written, what it becomes without it]
 const MUTATIONS = [
@@ -83,20 +74,10 @@ const MUTATIONS = [
   [MODEL, 'an evaluate reply is matched to the request that asked for it, not just the phase',
     "    return waiting.requestId == null || msg.requestId === waiting.requestId;\n",
     "    return true;\n"],
-  // The apply transaction recovers any interrupted predecessor before it
-  // looks, so a half-committed workspace can never be read as current truth.
-  [APPLY_RECOVERY, 'an interrupted transaction is recovered before anything is read',
-    '  recoverPendingWrites(workspace);\n',
-    ''],
   // The receipt remembers what was decided, beside each item it governed.
   [APPLY, 'receipt entries carry the decision that governed them',
     '  const entry = (outcome) => (o) => ({ id: o.id, kind: o.kind, destination: o.destination, decision: decisions.get(o.id), outcome });',
     '  const entry = (outcome) => (o) => ({ id: o.id, kind: o.kind, destination: o.destination, outcome });'],
-  // The zero-write shortcut governs destination files, never the decision
-  // record: an all-skip apply is remembered.
-  [APPLY, 'an all-skip apply writes a receipt',
-    '  if (options.receipt && (evaluation.writes.length > 0 || evaluation.skipped.length > 0)) {',
-    '  if (options.receipt && evaluation.writes.length > 0) {'],
   // The counts are the projection's: a byte-identical collision decided
   // overwrite is unchanged, never an overwrite.
   [MODEL, 'the overwrite count comes from the projection, not from local decisions',
@@ -141,6 +122,16 @@ const NOT_MUTATED = [
     why: 'pinned by mutate-install-flow-guards.js, whose suite tags the shared module singleton; a '
       + 'second row here would mutate the same line for the same proof.',
   },
+  {
+    what: 'the apply transaction recovering an interrupted predecessor before it looks',
+    why: 'pinned by mutate-import-apply-guards.js against the planted-journal test that owns it; the '
+      + 'same line, mutant and suite here would be the same proof run twice.',
+  },
+  {
+    what: 'the receipt an all-skip apply writes',
+    why: 'pinned by mutate-import-protocol-guards.js, one row per half of the amended rule, against '
+      + 'the suite that drives the apply through the dispatch and reads the receipt back.',
+  },
 ];
 
 const REPORTER = ['--test-reporter=spec', '--test-reporter-destination=stdout'];
@@ -175,7 +166,7 @@ function redTests(suite) {
 }
 
 function run() {
-  const targets = [MODEL, APPLY, APPLY_RECOVERY];
+  const targets = [MODEL, APPLY];
   const session = beginMutationRun({ files: [...new Set(targets.map((target) => target.src))] });
   const originals = new Map();
   for (const target of targets) originals.set(target, session.original(target.src));
