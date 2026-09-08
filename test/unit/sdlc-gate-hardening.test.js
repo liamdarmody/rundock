@@ -105,6 +105,28 @@ function trackedMarkdown() {
 }
 
 describe('documented steps and uncommitted work', () => {
+  test('every gate step has a ceiling, and it matches what CI allows the same work', () => {
+    // A GATE IS A CONTROL ONLY WHILE IT CAN FINISH. On 2026-08-28 test:coverage
+    // ran for ninety-five minutes with no output, because a worker waited on a
+    // port the sandbox would not let it bind; CI caps that job, the local gate
+    // had no ceiling, so nothing ended it and nothing said it was stuck. On
+    // 2026-09-07 the same step hung again and cost an hour. Both were carded;
+    // neither was bounded until now.
+    const gate = require('../../scripts/precommit-gate.js');
+    for (const step of gate.STEPS) {
+      const ms = gate.ceilingFor(step.name);
+      assert.ok(Number.isFinite(ms) && ms > 0, `${step.name} has no ceiling, so it can hang forever`);
+      assert.ok(ms <= 45 * 60 * 1000, `${step.name}'s ceiling is longer than any step should ever take`);
+    }
+    // The two long steps are named explicitly rather than inheriting the
+    // default, because both legitimately exceed it and a default that had to
+    // cover them would be too loose to bound anything else.
+    assert.strictEqual(gate.ceilingFor('test:coverage'), 20 * 60 * 1000,
+      'the suite gets what CI gives the same suite');
+    assert.strictEqual(gate.ceilingFor('typecheck'), gate.DEFAULT_STEP_CEILING_MS,
+      'an ordinary step takes the default rather than a bespoke number nobody maintains');
+  });
+
   test('the destructive-command pattern bites every covered shape and no neighbour', () => {
     // One positive and one near-miss per shape, so a narrowing of the
     // pattern, or an over-match into the innocent form beside each command,
