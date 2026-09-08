@@ -87,7 +87,7 @@ const MUTATIONS = [
   [SETTINGS_VIEW, 'the repository sits in the wrapping segment',
     '<span class="seg src">', '<span class="seg">'],
   [APP, 'a reply that carries a roster reconciles the live mount',
-    "    case 'packages_page': case 'extension_state': case 'extension_uninstalled':\n      extensionRosterArrived(d); packagesReplyArrived(d); break;",
+    "    case 'packages_page': case 'extension_state': case 'extension_uninstalled':\n      extensionRosterArrived(d.extensions); packagesReplyArrived(d); break;",
     "    case 'packages_page': case 'extension_state': case 'extension_uninstalled':\n      packagesReplyArrived(d); break;"],
   [INDEX, 'the Packages nav item carries no hiding style',
     '<div class="settings-nav-item" data-settings="packages" onclick=',

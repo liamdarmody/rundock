@@ -97,6 +97,17 @@ describe('a roster reply hydrates the registry global', () => {
     assert.deepStrictEqual(reconciled, [ROSTER_A], 'every roster arrival reconciles the live mount');
   });
 
+  test('a reply carrying no roster array is nothing to reconcile: the registry stands and the live mount is not touched', async () => {
+    const { w, api, reconciled } = clientWindow();
+    await dispatched(w, api, { type: 'extensions', extensions: ROSTER_A });
+    const before = w.rundockRendererRegistry;
+    await api.extensionRosterArrived(undefined);
+    await api.extensionRosterArrived({ extensions: ROSTER_B });
+    assert.strictEqual(w.rundockRendererRegistry, before, 'the registry was not replaced');
+    assert.strictEqual(w.rundockRendererRegistry.rendererFor('a.csv').registered, true, 'the old claim still answers');
+    assert.strictEqual(reconciled.length, 1, 'no reconcile ran against a roster that was not there');
+  });
+
   test('the next workspace\'s roster replaces the registry rather than merging into it', async () => {
     const { w, api } = clientWindow();
     await dispatched(w, api, { type: 'extensions', extensions: ROSTER_A });
@@ -267,7 +278,7 @@ function seamScope({ registry, fetcher, hostLoader, pane, openWikilink, currentP
   const pieces = [
     'openThroughRendererSeam(viewers, path, content, surface)', 'fetchExtensionUi(extensionId, rendererId)',
     'loadExtensionHost()', 'claimEditorPane()', 'releaseExtensionMount()', 'reconcileExtensionMount(roster)',
-    'redrawPlainSurface(path, content, reason)', 'mountedExtension()',
+    'redrawPlainSurface(path, content, reason)', 'plainSurfaceFor(viewers, path, content)', 'mountedExtension()',
   ].map((sig) => cutFiles(new RegExp(`function ${sig.replace(/[()]/g, '\\$&')} \\{[\\s\\S]*?\\n\\}`), sig));
   const surfaced = [];
   const noted = [];
@@ -366,6 +377,15 @@ describe('a workspace change tears the live mount down', () => {
     const hostModule = await import('../../public/extension-host.js');
     const dom = new JSDOM('<!doctype html><html><body><div id="editor-content"></div></body></html>', { runScripts: 'outside-only' });
     const pane = dom.window.document.getElementById('editor-content');
+    // The unbinding is counted, not inferred: the number of message
+    // listeners bound on the window goes to one with the mount and back to
+    // none with the release, so a release that left the mediator bound
+    // fails here rather than hiding behind the alive guard.
+    let bound = 0;
+    const realAdd = dom.window.addEventListener.bind(dom.window);
+    const realRemove = dom.window.removeEventListener.bind(dom.window);
+    dom.window.addEventListener = (type, fn, ...rest) => { if (type === 'message') bound += 1; realAdd(type, fn, ...rest); };
+    dom.window.removeEventListener = (type, fn, ...rest) => { if (type === 'message') bound -= 1; realRemove(type, fn, ...rest); };
     const { api } = seamScope({
       registry: CLAIM,
       fetcher: () => Promise.resolve({ entry: 'parent.postMessage({type:"ready"},"*");', styles: [] }),
@@ -376,15 +396,15 @@ describe('a workspace change tears the live mount down', () => {
     await sleep(30);
     const frame = pane.querySelector('iframe.extension-frame');
     assert.ok(frame, 'a frame is live in the pane');
+    assert.strictEqual(bound, 1, 'the mount bound exactly one message listener');
     const oldSource = frame.contentWindow;
     const sent = [];
     frame.contentWindow.postMessage = (m) => sent.push(m);
-    const listenersBefore = dom.window.__listeners;
-    void listenersBefore;
     // closeOpenFile is what onWorkspaceReady calls on a different workspace,
     // and releaseExtensionMount is the one line in it that owns the mount.
     assert.match(FILES_SRC, /releaseExtensionMount\(\);\n\s*currentFilePath = null;/, 'closeOpenFile releases the mount');
     api.release();
+    assert.strictEqual(bound, 0, 'the release unbound it');
     assert.strictEqual(pane.querySelector('iframe'), null, 'the frame left the document');
     assert.strictEqual(api.mount(), null);
     assert.strictEqual(api.mounted(), null, 'nothing is recorded as mounted');
@@ -448,6 +468,34 @@ describe('one entry point reconciles a roster with the live mount', () => {
     assert.strictEqual(api.mounted().version, '2.0.0', 'the recorded version moves with the swap');
     assert.deepStrictEqual(surfaced, []);
     assert.deepStrictEqual(noted, []);
+  });
+
+  test('a swap whose re-mount died is not adopted: nothing is recorded as mounted, and the degrade already drew the plain surface', async () => {
+    const log = [];
+    const { api, surfaced, noted } = seamScope({
+      registry: CLAIM,
+      fetcher: () => Promise.resolve({ entry: 'v2();', styles: [] }),
+    });
+    const dead = stubHandle(log);
+    // The host's swap re-mounts; when that fails synchronously the host has
+    // already degraded (nulling the mount and drawing the plain surface) and
+    // hands back an inert handle. The reconcile must not put it back.
+    dead.swap = (payload) => {
+      log.push(`swap:first:${payload.entry}`);
+      api.setMount(null, null);
+      surfaced.push('data/sales.csv');
+      noted.push('the frame could not be built');
+      return { label: 'inert', alive: () => false, teardown() { log.push('teardown:inert'); }, swap: () => null };
+    };
+    api.setMount(dead, mountedInfo);
+    const verdict = api.reconcile([{ id: 'csv-echo', version: '2.0.0', enabled: true }]);
+    assert.strictEqual(verdict.action, 'swapping');
+    await sleep(20);
+    assert.deepStrictEqual(log, ['swap:first:v2();']);
+    assert.strictEqual(api.mount(), null, 'a dead handle is not adopted as the live mount');
+    assert.strictEqual(api.mounted(), null, 'nothing is recorded as mounted over the plain surface');
+    assert.deepStrictEqual(surfaced, ['data/sales.csv']);
+    assert.deepStrictEqual(noted, ['the frame could not be built']);
   });
 
   test('a new version whose payload cannot be fetched degrades to the plain surface with the reason', async () => {

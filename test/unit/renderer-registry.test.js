@@ -258,7 +258,7 @@ describe('the file view seam degrades, and never mounts blind', () => {
     // mount surviving a file switch and a workspace switch. Pinned so removing
     // either call reddens: loadFileContent releases before the board-or-seam
     // decision, and closeOpenFile releases on a workspace switch.
-    assert.match(FILES_SRC, /releaseExtensionMount\(\);\n\s*\/\/ A markdown file whose frontmatter/,
+    assert.match(FILES_SRC, /releaseExtensionMount\(\);\n\s*const surface = plainSurfaceFor\(viewers, path, content\);/,
       'loadFileContent releases the mount before the board-or-seam decision, so the board branch is covered too');
     assert.match(FILES_SRC, /releaseExtensionMount\(\);\n\s*currentFilePath = null;/,
       'closeOpenFile releases the mount on a workspace switch');

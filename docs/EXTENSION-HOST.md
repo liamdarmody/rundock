@@ -47,13 +47,15 @@ absent: a `read` or `write` today is an unnamed type, and the mediator refuses
 it with a reason like any other. When the transport ships, the rows and their
 enforcement arrive together.
 
-The `resources` a manifest declares are carried on the roster and the mount
-payload as inert metadata: they name what an extension will one day be able to
-read and write, so the install trust step can show them, but nothing reads the
-field at runtime today. The host composes the frame from the entry and styles
-only. A reader of the wire should not mistake a declared resource for a
-reachable one; it becomes reachable when the read and write transport above
-ships and enforces it.
+An extension declares one entry and one match rule, and nothing else: no
+resources and no stylesheets are declared or served today. The `resources`
+field on the roster and the mount payload, and the `styles` field on the
+payload, are shape-only placeholders that are always empty, kept so the
+client reads one shape now and when a resource transport ships. The host
+composes the frame from the entry alone. When the read and write transport
+above ships, declared resources, their rows and their enforcement arrive
+together; until then a reader of the wire should treat both fields as empty
+by contract.
 
 ## What a mounted extension cannot reach
 
@@ -68,10 +70,10 @@ ships and enforces it.
   images only, so the view cannot fetch, beacon, or load anything external.
 - **The filesystem.** No message in the table reaches it. The server does
   resolve one class of path inside an extension's own directory, the
-  renderer's own entry and stylesheet bytes it serves to the host at mount
-  time, and refuses any manifest path that escapes that directory; but that
-  is the host reading the extension to display it, never the extension
-  reaching the disk.
+  renderer's own entry bytes it serves to the host at mount time, and
+  refuses any declared path that escapes that directory; but that is the
+  host reading the extension to display it, never the extension reaching
+  the disk.
 - **Other extensions.** Each mount has its own frame and its own mediator.
   There is no shared surface.
 
@@ -94,10 +96,10 @@ Three layers, and each is tested rather than promised:
    refuses everything else with a reason. Messages from a window that is not
    the live frame, including a frame that has since been torn down, are
    ignored entirely.
-3. **The server's path guard for renderer bytes.** The entry script and
-   stylesheets a mount needs are read from inside the extension's own
-   installed directory; a manifest path that resolves outside it is refused
-   server-side regardless of what the manifest or the client asked for.
+3. **The server's path guard for renderer bytes.** The entry script a mount
+   needs is read from inside the extension's own installed directory; a
+   declared path that resolves outside it is refused server-side regardless
+   of what the record, the manifest or the client asked for.
 
 ## Failure, update, and removal
 

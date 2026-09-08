@@ -651,14 +651,11 @@ function loadFileContent(path, content) {
     // board opening after a claimed file cannot be repainted by the earlier
     // mount's late callback.
     releaseExtensionMount();
-    // A markdown file whose frontmatter carries the kanban-plugin key opens as
-    // a board (detection is content-based, so it cannot ride the path-keyed
-    // classify table); everything else dispatches by file kind.
-    if (viewers.classify(path) === 'markdown' && window.Kanban && window.Kanban.isBoardFile(content)) {
+    const surface = plainSurfaceFor(viewers, path, content);
+    if (surface === null) {
       openBoardFile(path, content);
       return;
     }
-    const surface = FILE_SURFACES[viewers.classify(path)] || openBinaryOrUnsupportedFile;
     // THE RENDER-TARGET SEAM. An installed extension may claim this file's
     // extension through the renderer registry; a claimed file mounts through
     // the sandboxed host, and everything else falls through to the plain
@@ -857,7 +854,18 @@ function reconcileExtensionMount(roster) {
       redrawPlainSurface(path, content, reason);
       return;
     }
-    activeExtensionMount = mount.swap(payload);
+    // The swapped handle is adopted only when it lives: a re-mount that
+    // fails synchronously has already degraded through the host's own
+    // callback, which nulls the mount and draws the plain surface, and
+    // recording a dead handle over that would claim a mount that is not
+    // there.
+    const swapped = mount.swap(payload);
+    if (!swapped || typeof swapped.alive !== 'function' || !swapped.alive()) {
+      activeExtensionMount = null;
+      activeExtensionMountInfo = null;
+      return;
+    }
+    activeExtensionMount = swapped;
     activeExtensionMountInfo = { ...info, version };
   }).catch((e) => {
     if (token !== extensionSeamToken || activeExtensionMount !== mount) return;
@@ -876,10 +884,21 @@ function redrawPlainSurface(path, content, reason) {
   if (typeof path !== 'string' || !path) return;
   loadViewersModule().then((viewers) => {
     if (currentFilePath !== path) return;
-    const surface = FILE_SURFACES[viewers.classify(path)] || openBinaryOrUnsupportedFile;
-    surface(viewers, path, content);
+    const surface = plainSurfaceFor(viewers, path, content);
+    if (surface === null) openBoardFile(path, content);
+    else surface(viewers, path, content);
     noteRendererFailure(reason);
   });
+}
+
+// THE PLAIN SURFACE FOR A FILE, decided in one place for the first open and
+// for every redraw after a mount stood down: null means the file is a board
+// (a markdown file whose frontmatter carries the kanban-plugin key; the
+// detection is content-based, so it cannot ride the path-keyed classify
+// table), and everything else dispatches by file kind.
+function plainSurfaceFor(viewers, path, content) {
+  if (viewers.classify(path) === 'markdown' && window.Kanban && window.Kanban.isBoardFile(content)) return null;
+  return FILE_SURFACES[viewers.classify(path)] || openBinaryOrUnsupportedFile;
 }
 
 // A renderer failure is a note beside the plain rendering, never a blank:

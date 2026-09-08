@@ -257,12 +257,15 @@ function installRendererRegistry(build) {
   });
 }
 
-// A roster reply: the new workspace's registry REPLACES the previous one
-// rather than merging into it, and the live mount is reconciled against the
-// roster once the registry stands, so a mounted extension that the roster
-// no longer names, or names disabled, is torn down.
-function extensionRosterArrived(d) {
-  const roster = Array.isArray(d.extensions) ? d.extensions : [];
+// A roster: the new workspace's registry REPLACES the previous one rather
+// than merging into it, and the live mount is reconciled against the roster
+// once the registry stands, so a mounted extension that the roster no longer
+// names, or names disabled, is torn down. The caller hands in the roster
+// array itself, from whichever reply it knows carries one; a reply carrying
+// no roster array is nothing to reconcile, never a roster of none, so it
+// neither replaces the registry nor tears a live mount down.
+function extensionRosterArrived(roster) {
+  if (!Array.isArray(roster)) return Promise.resolve(null);
   return installRendererRegistry((mod) => {
     const registry = mod.createRendererRegistry();
     registry.registerFromRoster(roster);
@@ -376,11 +379,11 @@ function handle(d) {
     // the page, so a record that changed under an open view is answered in
     // the same place whichever surface changed it.
     case 'packages_page': case 'extension_state': case 'extension_uninstalled':
-      extensionRosterArrived(d); packagesReplyArrived(d); break;
+      extensionRosterArrived(d.extensions); packagesReplyArrived(d); break;
     case 'packages_page_error': packagesReplyArrived(d); break;
     // The extension host's joins: a roster hydrates the renderer registry,
     // a payload reply settles the fetch that asked for it.
-    case 'extensions': extensionRosterArrived(d); break;
+    case 'extensions': extensionRosterArrived(d.extensions); break;
     case 'extensions_error': extensionRosterFailed(d); break;
     case 'extension_ui': extensionUiReplyArrived(d); break;
     case 'extension_ui_error': extensionUiReplyArrived(d); break;

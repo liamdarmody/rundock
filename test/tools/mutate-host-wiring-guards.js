@@ -49,13 +49,19 @@ const MUTATIONS = [
   // payload for an installed extension reads from a directory nothing
   // writes to.
   [SERVER, 'the payload reads the install store, not the retired per-directory layout',
-    "const EXTENSIONS_ROOT = '.claude/rundock/extensions';",
-    "const EXTENSIONS_ROOT = '.rundock/plugins';"],
+    "const { RECORDS_PATH, RECORDS_SCHEMA, EXTENSIONS_ROOT } = require('./extension-record.js');",
+    "const { RECORDS_PATH, RECORDS_SCHEMA } = require('./extension-record.js');\nconst EXTENSIONS_ROOT = '.rundock/plugins';"],
   // Point the roster at the retired state file and the records the install
   // flow writes are read by nothing.
   [SERVER, 'the roster reads the records file the install flow writes',
-    "const RECORDS_PATH = '.claude/rundock/extensions.json';",
-    "const RECORDS_PATH = '.rundock/plugin-state.json';"],
+    "const { RECORDS_PATH, RECORDS_SCHEMA, EXTENSIONS_ROOT } = require('./extension-record.js');",
+    "const { RECORDS_SCHEMA, EXTENSIONS_ROOT } = require('./extension-record.js');\nconst RECORDS_PATH = '.rundock/plugin-state.json';"],
+  // Drop the record's copy of the declaration and an install, which
+  // materialises the entry's own path and leaves no manifest behind, has
+  // nothing the roster can read: the path real installs take goes dark.
+  [SERVER, 'the record supplies the declaration when the installed directory carries no manifest',
+    "  const entry = shipped && typeof shipped.entry === 'string' ? shipped.entry : record.entry;\n  const match = shipped && typeof shipped.match === 'string' ? shipped.match : record.match;",
+    "  const entry = shipped && typeof shipped.entry === 'string' ? shipped.entry : null;\n  const match = shipped && typeof shipped.match === 'string' ? shipped.match : null;"],
   // Widen the match grammar and a rule the registry can never honour turns
   // into a claim that silently renders nothing.
   [SERVER, 'only a match of the form *.<ext> becomes a claim',
@@ -127,8 +133,14 @@ const MUTATIONS = [
     '    if (registry) reconcileExtensionMount(roster);\n',
     ''],
   [APP, 'a roster reply reaches the registry through the dispatch',
-    "    case 'extensions': extensionRosterArrived(d); break;\n",
+    "    case 'extensions': extensionRosterArrived(d.extensions); break;\n",
     ''],
+  // Read a missing roster as a roster of none and a reply without one
+  // replaces a good registry with an empty one and tears the live mount
+  // down under a false reason.
+  [APP, 'a reply without a roster array is nothing to reconcile, never a roster of none',
+    '  if (!Array.isArray(roster)) return Promise.resolve(null);\n',
+    '  if (!Array.isArray(roster)) roster = [];\n'],
   [REGISTRY, 'an empty registry carries the roster failure as every answer\'s reason',
     '      if (unavailable) return { registered: false, reason: unavailable };\n',
     ''],
@@ -166,8 +178,8 @@ const MUTATIONS = [
     "  if (version === info.version) return { action: 'kept' };",
     "  if (version !== info.version) return { action: 'kept' };"],
   [FILES, 'a swap mounts the freshly fetched payload',
-    '    activeExtensionMount = mount.swap(payload);',
-    '    activeExtensionMount = mount;'],
+    '    const swapped = mount.swap(payload);',
+    '    const swapped = mount;'],
   [FILES, 'a late swap is abandoned when the mount was released meanwhile',
     '    if (token !== extensionSeamToken || activeExtensionMount !== mount) return;\n    if (!payload',
     '    if (!payload'],

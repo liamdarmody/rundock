@@ -128,8 +128,8 @@ const MUTATIONS = [
   // Remove the release before the board-or-seam decision and a live mount
   // survives a file open.
   [FILES, 'every file open releases the live mount before it decides',
-    '    releaseExtensionMount();\n    // A markdown file whose frontmatter',
-    '    // A markdown file whose frontmatter'],
+    '    releaseExtensionMount();\n    const surface = plainSurfaceFor(viewers, path, content);',
+    '    const surface = plainSurfaceFor(viewers, path, content);'],
   // Remove the release in closeOpenFile and a mount survives a workspace
   // switch.
   [FILES, 'a workspace switch releases the live mount',

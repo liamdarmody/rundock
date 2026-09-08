@@ -234,18 +234,19 @@ describe('handler seams (stub ctx, capture ws)', () => {
     }
     return dir;
   }
-  // THE INSTALL STORE, AS THE INSTALL FLOW WRITES IT: one records file at
-  // .claude/rundock/extensions.json and the extension's own files under
-  // .claude/rundock/extensions/<name>/. The roster reads exactly this and
-  // nothing else, so what an install materialises is what a mount reads.
-  const RECORDS_FILE = '.claude/rundock/extensions.json';
-  const EXT_DIR = '.claude/rundock/extensions/csv-echo';
+  // THE INSTALL STORE, AS THE INSTALL FLOW WRITES IT: the records file and
+  // the extensions root come from the writer's own exported layout, never
+  // from a literal spelled here, so a store the writer moves is a store this
+  // suite reads from the new place and the reader is held to it.
+  const store = require('../../lib/packages/extension-record.js');
+  const RECORDS_FILE = store.RECORDS_PATH;
+  const EXT_DIR = `${store.EXTENSIONS_ROOT}/csv-echo`;
   const record = (extra = {}) => ({
     name: 'csv-echo', version: '1.2.0', entry: 'index.js', match: '*.csv',
     source: { url: 'https://github.com/example/csv-echo', reference: 'v1.2.0' },
     installedAt: '2026-09-07T00:00:00.000Z', root: EXT_DIR, ...extra,
   });
-  const records = (...list) => JSON.stringify({ schema: 'rundock.extensions/v1', extensions: list });
+  const records = (...list) => JSON.stringify({ schema: store.RECORDS_SCHEMA, extensions: list });
   const manifest = (extension) => JSON.stringify({ name: 'csv-echo', version: '1.2.0', extension });
 
   function roster(fixture) {
@@ -263,6 +264,124 @@ describe('handler seams (stub ctx, capture ws)', () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   }
+
+  test('the reader and the writer agree: a real install is what the roster and the payload read, through the layout the writer exports', () => {
+    const registry = require('../../lib/packages/extension-registry.js');
+    for (const key of ['RECORDS_PATH', 'RECORDS_SCHEMA', 'EXTENSIONS_ROOT']) {
+      assert.strictEqual(registry[key], store[key], `${key} is one declaration, the writer's`);
+    }
+    assert.match(fs.readFileSync(path.join(__dirname, '..', '..', 'lib', 'packages', 'extension-registry.js'), 'utf8'),
+      /const \{ RECORDS_PATH, RECORDS_SCHEMA, EXTENSIONS_ROOT \} = require\('\.\/extension-record\.js'\);/,
+      'the reader imports the layout rather than re-spelling it');
+    const { planExtensionInstall, installExtension } = require('../../lib/packages/extension-install.js');
+    const table = buildDispatch();
+    const original = config.getWorkspace();
+    const dir = extensionWorkspace({});
+    const snapshot = extensionWorkspace({
+      'rundock.json': JSON.stringify({ name: 'csv-echo', version: '1.2.0', extension: { entry: 'view/index.html', match: '*.csv' } }),
+      'view/index.html': '<main>drawn</main>',
+    });
+    try {
+      config.setWorkspace(dir);
+      // The writer: the install transaction, over a snapshot shaped as an
+      // extension ships. It materialises the entry's own top-level path and
+      // leaves the manifest behind, so what the reader reads here is the
+      // record's own copy of the declaration, the path real installs take.
+      const written = installExtension(dir, snapshot, planExtensionInstall(dir, snapshot, { url: 'https://github.com/example/csv-echo', reference: 'v1.2.0' }));
+      assert.strictEqual(written.root, EXT_DIR, 'the writer installs under the exported root');
+      assert.strictEqual(fs.existsSync(path.join(dir, EXT_DIR, 'rundock.json')), false, 'sanity: no manifest is materialised');
+      const ws = captureWs();
+      table.list_extensions({}, ws, { type: 'list_extensions' });
+      assert.strictEqual(ws.sent[0].type, 'extensions');
+      const [entry] = ws.sent[0].extensions;
+      assert.deepStrictEqual([entry.id, entry.version, entry.enabled, entry.renderers, entry.source],
+        ['csv-echo', '1.2.0', true, [{ id: 'view', target: '.csv' }], { url: 'https://github.com/example/csv-echo', reference: 'v1.2.0' }],
+        'the roster claims the renderer the record declares');
+      const ui = captureWs();
+      table.get_extension_ui({}, ui, { type: 'get_extension_ui', extensionId: 'csv-echo', rendererId: 'view' });
+      assert.strictEqual(ui.sent[0].type, 'extension_ui');
+      assert.strictEqual(ui.sent[0].entry, '<main>drawn</main>', 'the payload serves the entry the writer materialised');
+    } finally {
+      config.setWorkspace(original);
+      fs.rmSync(dir, { recursive: true, force: true });
+      fs.rmSync(snapshot, { recursive: true, force: true });
+    }
+  });
+
+  test('an installed directory with the entry but no manifest is read from the record: the roster claims it and the payload serves it', () => {
+    const table = buildDispatch();
+    const original = config.getWorkspace();
+    const dir = extensionWorkspace({
+      [RECORDS_FILE]: records(record({ entry: 'view/index.html', match: '*.csv' })),
+      [`${EXT_DIR}/view/index.html`]: '<main>from the record</main>',
+    });
+    try {
+      config.setWorkspace(dir);
+      const ws = captureWs();
+      table.list_extensions({}, ws, { type: 'list_extensions' });
+      assert.deepStrictEqual(ws.sent[0].extensions[0].renderers, [{ id: 'view', target: '.csv' }], 'built from the record, no manifest present');
+      assert.deepStrictEqual(ws.sent[0].extensions[0].refusals, []);
+      const ui = captureWs();
+      table.get_extension_ui({}, ui, { type: 'get_extension_ui', extensionId: 'csv-echo', rendererId: 'view' });
+      assert.strictEqual(ui.sent[0].type, 'extension_ui');
+      assert.strictEqual(ui.sent[0].entry, '<main>from the record</main>');
+    } finally {
+      config.setWorkspace(original);
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('an unparsable records file makes the payload a refusal naming the reason, one reply, and the roster the same', () => {
+    const table = buildDispatch();
+    const original = config.getWorkspace();
+    const dir = extensionWorkspace({ [RECORDS_FILE]: '{ not json', [`${EXT_DIR}/index.js`]: 'draw();' });
+    try {
+      config.setWorkspace(dir);
+      const ui = captureWs();
+      table.get_extension_ui({}, ui, { type: 'get_extension_ui', extensionId: 'csv-echo', rendererId: 'view' });
+      assert.strictEqual(ui.sent.length, 1, 'exactly one reply');
+      assert.deepStrictEqual([ui.sent[0].type, ui.sent[0].extensionId, ui.sent[0].rendererId], ['extension_ui_error', 'csv-echo', 'view'],
+        'the refusal names the ids the client correlates on');
+      assert.match(ui.sent[0].reason, /records unreadable/);
+      const { uiPayload } = require('../../lib/packages/extension-registry.js');
+      assert.match(uiPayload(dir, 'csv-echo', 'view').reason, /records unreadable/, 'the reader itself refuses rather than throwing');
+      const ws = captureWs();
+      table.list_extensions({}, ws, { type: 'list_extensions' });
+      assert.strictEqual(ws.sent[0].type, 'extensions_error');
+    } finally {
+      config.setWorkspace(original);
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('every reply the client reads a roster from carries it as `extensions`, an array, in the shape the handler actually sends', () => {
+    const table = buildDispatch();
+    const original = config.getWorkspace();
+    const dir = extensionWorkspace({
+      [RECORDS_FILE]: records(record()),
+      [`${EXT_DIR}/rundock.json`]: manifest({ entry: 'index.js', match: '*.csv' }),
+      [`${EXT_DIR}/index.js`]: 'draw();',
+    });
+    const ctx = { workspace: { noteExtensionRecordsChanged() {} } };
+    try {
+      config.setWorkspace(dir);
+      const page = captureWs();
+      table.get_packages_page(ctx, page, { type: 'get_packages_page' });
+      const state = captureWs();
+      table.set_extension_enabled(ctx, state, { type: 'set_extension_enabled', name: 'csv-echo', enabled: false });
+      const gone = captureWs();
+      table.uninstall_extension(ctx, gone, { type: 'uninstall_extension', name: 'csv-echo' });
+      for (const [label, sock, type] of [['page', page, 'packages_page'], ['state', state, 'extension_state'], ['uninstall', gone, 'extension_uninstalled']]) {
+        assert.strictEqual(sock.sent[0].type, type, label);
+        assert.ok(Array.isArray(sock.sent[0].extensions), `${label}: the roster rides as an array under extensions`);
+      }
+      assert.strictEqual(state.sent[0].extensions[0].enabled, false, 'the state reply carries the roster after the change');
+      assert.deepStrictEqual(gone.sent[0].extensions, [], 'the uninstall reply carries the roster after the removal');
+    } finally {
+      config.setWorkspace(original);
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 
   test('list_extensions answers the roster from the install store, and refuses with one reply when no workspace is open', () => {
     const table = buildDispatch();

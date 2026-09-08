@@ -1884,16 +1884,9 @@ const VIEWABLE_FILE_RE = /\.(md|txt|json|html?|svg|png|jpe?g|gif|webp|pdf)$/i;
 function claimedExtensionsPattern(workspace) {
   let roster = [];
   try { roster = extensionRegistry.listExtensions(workspace); } catch (e) { return null; }
-  const exts = new Set();
-  for (const ext of roster) {
-    if (!ext || ext.enabled === false || ext.broken) continue;
-    for (const r of ext.renderers || []) {
-      const m = /^\.([a-z0-9][a-z0-9-]*)$/.exec(String(r.target || ''));
-      if (m) exts.add(m[1]);
-    }
-  }
-  if (exts.size === 0) return null;
-  return new RegExp(`\\.(${[...exts].sort().join('|')})$`, 'i');
+  const exts = extensionRegistry.claimedExtensions(roster);
+  if (exts.length === 0) return null;
+  return new RegExp(`\\.(${exts.join('|')})$`, 'i');
 }
 
 // The /workspace-file allowlist: binary types only. Everything else either
@@ -1962,10 +1955,15 @@ function fileKindCached(fullPath, name) {
   return kind;
 }
 
-// `claimed` is the pattern of extensions enabled records claim, computed once
-// at the root and carried down the walk; a nested call never re-reads the
-// roster.
-function getFileTree(dir, prefix = '', claimed = prefix ? null : claimedExtensionsPattern(dir)) {
+// The tree of a workspace root: the pattern of extensions enabled records
+// claim is read once here, then carried down the walk as an ordinary
+// argument, so a nested step never re-reads the roster and the root step
+// is the only one that does.
+function getFileTree(dir) {
+  return walkFileTree(dir, '', claimedExtensionsPattern(dir));
+}
+
+function walkFileTree(dir, prefix, claimed) {
   const entries = [];
   try {
     const items = fs.readdirSync(dir, { withFileTypes: true })
@@ -1978,7 +1976,7 @@ function getFileTree(dir, prefix = '', claimed = prefix ? null : claimedExtensio
     for (const item of items) {
       const relativePath = prefix ? `${prefix}/${item.name}` : item.name;
       if (item.isDirectory()) {
-        entries.push({ type: 'folder', name: item.name, path: relativePath, children: getFileTree(path.join(dir, item.name), relativePath, claimed) });
+        entries.push({ type: 'folder', name: item.name, path: relativePath, children: walkFileTree(path.join(dir, item.name), relativePath, claimed) });
       } else if (VIEWABLE_FILE_RE.test(item.name) || (claimed && claimed.test(item.name))) {
         entries.push({ type: 'file', name: item.name, path: relativePath, kind: fileKindCached(path.join(dir, item.name), item.name) });
       }
@@ -2049,12 +2047,16 @@ function treeCacheIsFresh() {
 function getFileTreeCached() {
   if (!WORKSPACE) return [];
   if (treeCacheIsFresh()) return _treeCache.tree;
+  // The records stamp is taken BEFORE the build reads the roster: a records
+  // write landing during the build then reads as stale on the next check,
+  // rather than being recorded as the state the tree was built from.
+  const records = extensionRecordsMtime();
   const tree = getFileTree(WORKSPACE);
   const dirs = treeDirMtimes(tree);
   // The root is not a node in its own tree, but a file created directly in it
   // bumps only the root's mtime, so it has to be tracked explicitly.
   try { dirs.set(WORKSPACE, fs.statSync(WORKSPACE).mtimeMs); } catch (e) {}
-  _treeCache = { tree, dirs, records: extensionRecordsMtime() };
+  _treeCache = { tree, dirs, records };
   return tree;
 }
 
