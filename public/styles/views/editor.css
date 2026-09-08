@@ -181,12 +181,17 @@ textarea.editor-content { resize: none; border: none; background: transparent; w
 .tiptap-editor .ProseMirror a.wikilink { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; padding: 0 2px; border-radius: var(--radius-xs); transition: background var(--duration-base) ease, color var(--duration-base) ease; }
 .tiptap-editor .ProseMirror a.wikilink:hover { color: var(--accent-hover); background: var(--accent-glow); }
 .tiptap-editor .ProseMirror a.wikilink.ProseMirror-selectednode { background: var(--accent-glow); outline: 1px solid var(--accent); outline-offset: 1px; }
-.tiptap-editor .ProseMirror .callout { background: rgba(122,162,232,0.08); border: 1px solid rgba(122,162,232,0.20); border-radius: var(--radius-lg); padding: 12px 16px; margin: 12px 0; --callout-color: var(--working); }
-.tiptap-editor .ProseMirror .callout-note, .tiptap-editor .ProseMirror .callout-info, .tiptap-editor .ProseMirror .callout-abstract { --callout-color: var(--working); background: rgba(122,162,232,0.08); border-color: rgba(122,162,232,0.20); }
-.tiptap-editor .ProseMirror .callout-tip, .tiptap-editor .ProseMirror .callout-success, .tiptap-editor .ProseMirror .callout-todo { --callout-color: var(--success); background: rgba(107,198,126,0.08); border-color: rgba(107,198,126,0.20); }
-.tiptap-editor .ProseMirror .callout-warning, .tiptap-editor .ProseMirror .callout-question, .tiptap-editor .ProseMirror .callout-example { --callout-color: var(--attention); background: rgba(232,168,76,0.08); border-color: rgba(232,168,76,0.20); }
-.tiptap-editor .ProseMirror .callout-danger, .tiptap-editor .ProseMirror .callout-failure, .tiptap-editor .ProseMirror .callout-bug { --callout-color: var(--danger); background: color-mix(in srgb, var(--danger) 8%, transparent); border-color: color-mix(in srgb, var(--danger) 20%, transparent); }
-.tiptap-editor .ProseMirror .callout-quote { --callout-color: #A07AE8; background: rgba(160,122,232,0.08); border-color: rgba(160,122,232,0.20); }
+.tiptap-editor .ProseMirror .callout { background: rgba(122,162,232,0.08); border: 1px solid rgba(122,162,232,0.20); border-radius: var(--radius-lg); padding: 12px 16px; margin: 12px 0; --callout-color: var(--working); --callout-text: var(--callout-color); }
+/* A callout has two custom properties: --callout-color is its tone, read by
+   the tag fill, the edit border and the hover tint; --callout-text is what its
+   glyphs (the fold caret, the edit control) are coloured with. The text side
+   follows the tone, except where the tone is the danger fill, which is never
+   text: there it is the danger text token. */
+.tiptap-editor .ProseMirror .callout-note, .tiptap-editor .ProseMirror .callout-info, .tiptap-editor .ProseMirror .callout-abstract { --callout-color: var(--working); --callout-text: var(--callout-color); background: rgba(122,162,232,0.08); border-color: rgba(122,162,232,0.20); }
+.tiptap-editor .ProseMirror .callout-tip, .tiptap-editor .ProseMirror .callout-success, .tiptap-editor .ProseMirror .callout-todo { --callout-color: var(--success); --callout-text: var(--callout-color); background: rgba(107,198,126,0.08); border-color: rgba(107,198,126,0.20); }
+.tiptap-editor .ProseMirror .callout-warning, .tiptap-editor .ProseMirror .callout-question, .tiptap-editor .ProseMirror .callout-example { --callout-color: var(--attention); --callout-text: var(--callout-color); background: rgba(232,168,76,0.08); border-color: rgba(232,168,76,0.20); }
+.tiptap-editor .ProseMirror .callout-danger, .tiptap-editor .ProseMirror .callout-failure, .tiptap-editor .ProseMirror .callout-bug { --callout-color: var(--danger); --callout-text: var(--danger-text); background: color-mix(in srgb, var(--danger) 8%, transparent); border-color: color-mix(in srgb, var(--danger) 20%, transparent); }
+.tiptap-editor .ProseMirror .callout-quote { --callout-color: #A07AE8; --callout-text: var(--callout-color); background: rgba(160,122,232,0.08); border-color: rgba(160,122,232,0.20); }
 .tiptap-editor .ProseMirror .callout-header { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
 .tiptap-editor .ProseMirror .callout-tag { display: inline-block; padding: 2px 10px; background: var(--callout-color); color: #fff; border-radius: var(--radius-pill); font-size: var(--label); font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; }
 .tiptap-editor .ProseMirror .callout-title { font-size: var(--body); font-weight: 600; color: var(--text-1); }
@@ -196,7 +201,7 @@ textarea.editor-content { resize: none; border: none; background: transparent; w
 /* Foldable callouts (+ open, - closed): native details/summary, disclosure caret on the header. */
 .tiptap-editor .ProseMirror .callout details.callout-fold > summary { cursor: pointer; list-style: none; }
 .tiptap-editor .ProseMirror .callout details.callout-fold > summary::-webkit-details-marker { display: none; }
-.tiptap-editor .ProseMirror .callout details.callout-fold > summary.callout-header::before { content: '\25B8'; color: var(--callout-color); font-size: var(--org-role); line-height: 1; transition: transform var(--duration-base) ease; }
+.tiptap-editor .ProseMirror .callout details.callout-fold > summary.callout-header::before { content: '\25B8'; color: var(--callout-text); font-size: var(--org-role); line-height: 1; transition: transform var(--duration-base) ease; }
 .tiptap-editor .ProseMirror .callout details.callout-fold[open] > summary.callout-header::before { content: '\25BE'; }
 .tiptap-editor .ProseMirror .callout details.callout-fold > summary.callout-header { margin-bottom: 0; }
 .tiptap-editor .ProseMirror .callout details.callout-fold[open] > summary.callout-header { margin-bottom: 6px; }
@@ -204,7 +209,7 @@ textarea.editor-content { resize: none; border: none; background: transparent; w
 .tiptap-editor .ProseMirror .callout .callout-nested { border: 1px solid rgba(122,162,232,0.20); border-radius: var(--radius-lg); padding: 10px 14px; margin: 8px 0; }
 /* In-place editing: an edit control that reveals on hover, and the raw-markdown textarea. */
 .tiptap-editor .ProseMirror .callout-editable .callout-header { position: relative; }
-.tiptap-editor .ProseMirror .callout-edit-btn { margin-left: auto; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: var(--radius-md); color: var(--callout-color); opacity: 0; transition: opacity var(--duration-fast) ease, background var(--duration-fast) ease; cursor: pointer; }
+.tiptap-editor .ProseMirror .callout-edit-btn { margin-left: auto; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: var(--radius-md); color: var(--callout-text); opacity: 0; transition: opacity var(--duration-fast) ease, background var(--duration-fast) ease; cursor: pointer; }
 .tiptap-editor .ProseMirror .callout-editable:hover .callout-edit-btn { opacity: 0.75; }
 .tiptap-editor .ProseMirror .callout-edit-btn:hover { opacity: 1; background: color-mix(in srgb, var(--callout-color) 16%, transparent); }
 .tiptap-editor .ProseMirror .callout.callout-editing { padding-top: 10px; }

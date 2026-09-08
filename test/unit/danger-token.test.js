@@ -118,6 +118,56 @@ const lineOf = (text, index) => text.slice(0, index).split('\n').length;
 // pulled across the semicolon into a false match.
 const TEXT_ON_FILL = /(^|[{;\s])color\s*:\s*[^;}]*?var\(\s*--danger\s*\)/g;
 
+// The same rule through indirection: a custom property whose declared value
+// carries the fill (`--callout-color: var(--danger)`), or carries another
+// property that does, is a fill-carrying property, and a `color` declaration
+// that references one colours text with the fill just as surely as the
+// literal shape above. Resolved to a fixpoint over the file, so a chain of
+// properties is followed, and closed on the token name so `--danger-text`
+// never counts as the fill.
+function fillCarryingProperties(text) {
+  // Resolved rule by rule: a reference to a property the same rule declares
+  // means that rule's own value (`--callout-text: var(--callout-color)` in a
+  // rule whose tone is a status colour carries that colour, not the fill),
+  // and a reference to a property the rule does not declare means whatever
+  // any rule in the file gave it, so a chain across rules is followed too.
+  const blocks = [...text.matchAll(/\{([^{}]*)\}/g)].map((m) => {
+    const local = new Map();
+    for (const d of m[1].matchAll(/(--[\w-]+)\s*:\s*([^;]*)/g)) local.set(d[1], d[2]);
+    return local;
+  });
+  const refsOf = (value) => [...value.matchAll(/var\(\s*(--[\w-]+)\s*\)/g)].map((m) => m[1]);
+  const carrying = new Set();
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const local of blocks) {
+      const seen = new Set();
+      const localCarries = (name) => {
+        if (seen.has(name)) return false;
+        seen.add(name);
+        return refsOf(local.get(name)).some((r) => r === '--danger'
+          || (local.has(r) ? localCarries(r) : carrying.has(r)));
+      };
+      for (const name of local.keys()) {
+        if (carrying.has(name)) continue;
+        seen.clear();
+        if (localCarries(name)) { carrying.add(name); grew = true; }
+      }
+    }
+  }
+  return carrying;
+}
+function textThroughIndirection(text) {
+  const hits = [];
+  const carrying = fillCarryingProperties(text);
+  if (carrying.size === 0) return hits;
+  const names = [...carrying].map((n) => n.replace(/[-]/g, '\\-')).join('|');
+  const pattern = new RegExp(`(^|[{;\\s])color\\s*:\\s*[^;}]*?var\\(\\s*(${names})\\s*\\)`, 'g');
+  for (const m of text.matchAll(pattern)) hits.push({ index: m.index, text: m[0].trim(), via: m[2] });
+  return hits;
+}
+
 // The ten stylesheets that referenced the danger family before the split, and
 // the number of references across them at that point. Each file must still
 // reference the family afterwards, and the total must not fall, so a use
@@ -158,7 +208,6 @@ describe('text never reaches for the danger fill', () => {
       '.a { background-color: var(--danger); }',
       '.a { background: var(--danger); color: white; }',
       '.a { background: color-mix(in srgb, var(--danger) 10%, transparent); }',
-      '.a { --callout-color: var(--danger); }',
       '.a { color: var(--danger-text); }',
       '.a { color: var(--danger-text); background: color-mix(in srgb, var(--danger) 12%, transparent); }',
       '.a { box-shadow: 0 0 0 2px color-mix(in srgb, var(--danger) 30%, transparent); }',
@@ -168,16 +217,48 @@ describe('text never reaches for the danger fill', () => {
     }
   });
 
-  test('no stylesheet colours text with the fill token', () => {
+  test('the indirect shape is caught: a custom property carrying the fill, read by a color declaration', () => {
+    // The specimen the literal pattern cannot see. A property set to the
+    // fill and then read as text is the callout tone's own shape, so it
+    // must bite, and it must bite through a chain; a property set to the
+    // text token, or a fill-carrying property read only by a fill, is
+    // silent.
+    const bites = [
+      '.a { --callout-color: var(--danger); } .b { color: var(--callout-color); }',
+      '.a { --tone: var(--danger); --ink: var(--tone); } .b { color: var(--ink); }',
+      '.a { --tone: var(--danger); } .b::before { content: "x"; color: var( --tone ); }',
+      // A cross-rule chain still resolves through the file.
+      '.a { --tone: var(--danger); } .c { --ink: var(--tone); } .b { color: var(--ink); }',
+    ];
+    for (const s of bites) {
+      assert.ok(textThroughIndirection(s).length > 0, `indirection is not caught: ${s}`);
+    }
+    const silent = [
+      '.a { --callout-color: var(--danger); --callout-text: var(--danger-text); } .b { color: var(--callout-text); }',
+      // The same-rule reference resolves to that rule's own tone: a status
+      // callout whose text follows its tone is not the danger callout.
+      '.d { --callout-color: var(--danger); --callout-text: var(--danger-text); } .a { --callout-color: var(--success); --callout-text: var(--callout-color); } .b { color: var(--callout-text); }',
+      '.a { --callout-color: var(--danger); } .b { background: var(--callout-color); border-color: var(--callout-color); }',
+      '.a { --tone: var(--danger-text); } .b { color: var(--tone); }',
+    ];
+    for (const s of silent) {
+      assert.deepStrictEqual(textThroughIndirection(s), [], `over-matched: ${s}`);
+    }
+  });
+
+  test('no stylesheet colours text with the fill token, directly or through a custom property', () => {
     const offenders = [];
     for (const file of stylesheets()) {
       const text = stripComments(fs.readFileSync(file, 'utf-8'));
       for (const m of text.matchAll(TEXT_ON_FILL)) {
         offenders.push(`${rel(file)}:${lineOf(text, m.index)}: ${m[0].trim()}`);
       }
+      for (const hit of textThroughIndirection(text)) {
+        offenders.push(`${rel(file)}:${lineOf(text, hit.index)}: ${hit.text} (${hit.via} carries the fill)`);
+      }
     }
     assert.deepStrictEqual(offenders, [],
-      'a `color:` declaration references var(--danger), which is the fill; text takes var(--danger-text)');
+      'a `color:` declaration reaches var(--danger), the fill, directly or through a custom property; text takes var(--danger-text)');
   });
 
   test('every stylesheet that used the family still does, and no reference was dropped', () => {

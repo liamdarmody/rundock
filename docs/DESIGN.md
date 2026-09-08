@@ -104,6 +104,21 @@ destructive action is not filled at all: it is a quiet outline button that
 turns danger on hover, and the fill appears only at a confirmation where
 confirming and cancelling carry equal weight.
 
+One exception is recorded rather than hidden: the editor's injected
+stylesheet, `public/editor/styles.js`, still colours text with `--danger` in
+places. It sits outside the paths of the lane that made the split and the
+focused test walks only `public/styles/`, so the guard does not reach it; it
+is carded to be sorted the same way, text onto `--danger-text`, fills and
+edges kept on `--danger`. Until then the claim above is true of the
+stylesheets under `public/styles/` and of nothing else.
+
+Proposed for the Rundock Design System: the same split in
+`colors_and_type.css`, `--danger` kept as the fill and edge value in both
+themes and a new `--danger-text` token, theme-aware, for every `color`
+declaration that means danger. The values and the contrast they were chosen
+against are the ones recorded here; the design system is the place they are
+meant to live, and this file is the proposal until its owner takes them.
+
 The status set had no red until 0.11.7, so every destructive surface reached for
 a hex of its own and they drifted. Three near-identical reds were in the
 stylesheets when `--danger` was added. That is what this table exists to
