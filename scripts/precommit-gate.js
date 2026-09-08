@@ -103,11 +103,26 @@ const RECORD = path.join(ROOT, '.precommit-gate.json');
 // hand and quoted in a report is a claim about a tree nobody can identify,
 // and it fails on the next run. Measured inside the gate, the floors are
 // enforced against the exact tree this record names.
+//
+// ORDERED BY WHAT THEY COST, CHEAPEST FIRST, and that ordering is load-bearing
+// rather than tidy. Measured on one release: about a dozen runs, no product
+// defect found by any of them, and three failures that were the gate's own
+// bookkeeping. Each of those three was decidable in under a second and each cost
+// a full run, because the slowest step used to run first and the registry checks
+// live inside the test suite behind it.
+//
+// `preflight` is that half, lifted to the front: the registry, count and
+// document bindings plus the two fast linters, all of them run even when one
+// fails, so a person fixes everything in one pass. `check:refs` and
+// `lint:styles` therefore appear twice, once cheaply here and once in their own
+// step, which is deliberate: the step list is the record's contract and
+// removing entries from it would change what a pass means.
 const STEPS = [
-  { name: 'test:coverage', args: ['run', 'test:coverage'] },
+  { name: 'preflight', args: ['run', 'preflight'] },
   { name: 'typecheck', args: ['run', 'typecheck'] },
   { name: 'lint:styles', args: ['run', 'lint:styles'] },
   { name: 'check:refs', args: ['run', 'check:refs'] },
+  { name: 'test:coverage', args: ['run', 'test:coverage'] },
   // Removes each of the renderer's escaping guards in turn and requires a test
   // to go red for it. Slower than the rest because it runs a suite per guard,
   // and worth it here: two of these guards were removable with nothing going
@@ -403,7 +418,7 @@ function writeRecord(record, file = RECORD) {
 }
 
 /** The record `run()` would write for this tree and branch. */
-function buildRecord({ tree, branch, at }) {
+function buildRecord({ tree, branch, at, timings }) {
   // THE SCOPE THE MUTATION STEP RAN UNDER travels with the record. That step
   // no longer runs every harness: it runs the ones the change can affect and
   // names the rest. A record saying the step passed, without saying what it
@@ -415,7 +430,8 @@ function buildRecord({ tree, branch, at }) {
   } catch (e) {
     mutationScope = { unavailable: 'the mutation step recorded no scope' };
   }
-  return { tree, branch, at, steps: STEPS.map(s => s.name), mutationScope };
+  const totalMs = (timings || []).reduce((sum, t) => sum + t.ms, 0);
+  return { tree, branch, at, steps: STEPS.map(s => s.name), mutationScope, timings: timings || [], totalMs };
 }
 
 // The release commit's footprint.
@@ -520,10 +536,16 @@ async function run() {
   process.on('exit', onExit);
   for (const signal of SIGNALS) process.on(signal, onSignal);
 
+  // MEASURED, SO THE NEXT CLAIM ABOUT THIS GATE CAN BE CHECKED. The reordering
+  // this list carries was justified by counting what one release cost; a claim
+  // that it is now cheaper deserves the same evidence rather than a feeling, and
+  // where the time actually goes moves as the suite grows.
+  const timings = [];
   try {
     for (const step of STEPS) {
       process.stdout.write(`[precommit] ${step.name}... `);
       let result;
+      const stepStarted = Date.now();
       try {
         result = await runStep(step);
       } finally {
@@ -532,8 +554,10 @@ async function run() {
         // outlive it, and those were what the gate used to report PASS over.
         endLiveGroup();
       }
+      const stepMs = Date.now() - stepStarted;
+      timings.push({ step: step.name, ms: stepMs });
       if (result.ok) {
-        console.log('ok');
+        console.log(`ok (${(stepMs / 1000).toFixed(1)}s)`);
         continue;
       }
       console.log('FAILED');
@@ -556,7 +580,7 @@ async function run() {
 
     // Written only after every step passed, so the record's existence IS the
     // result being read. There is no separate "did you look at it" step to skip.
-    const record = buildRecord({ tree: currentTree(), branch, at: new Date().toISOString() });
+    const record = buildRecord({ tree: currentTree(), branch, at: new Date().toISOString(), timings });
     writeRecord(record);
     console.log(`[precommit] PASS. Record written for tree ${record.tree.slice(0, 12)} on ${branch}.`);
   } finally {

@@ -83,13 +83,47 @@ describe('selection is conservative in every direction that is not proven safe',
     // shared mutation module decides how a run recovers, a test helper decides
     // what a suite proves, package.json holds the full chain, and a harness
     // file decides what that harness proves at all.
+    // A HARNESS FILE IS NO LONGER IN THIS LIST, deliberately. It used to be, on
+    // the reasoning that it decides what that harness proves; it does, and that
+    // is an argument for running THAT harness, which the case above now covers.
+    // Running the other seventeen for it was the reason the selection almost
+    // never applied to real work, because every card that adds a guard edits a
+    // harness.
     for (const trigger of ['package.json', 'scripts/precommit-gate.js', 'test/tools/mutation-run.js',
-      'test/helpers/harness.js', 'test/tools/mutate-b-guards.js', 'scripts/mutation-scope.js']) {
+      'test/helpers/harness.js', 'scripts/mutation-scope.js']) {
       const plan = selectHarnesses([trigger], HARNESSES);
       assert.deepStrictEqual(plan.run.sort(), HARNESSES.map(h => h.tool).sort(),
         `${trigger} must run every harness`);
       assert.deepStrictEqual(plan.skipped, [], `${trigger} must skip nothing`);
       assert.match(plan.reason, /can change what any harness proves/);
+    }
+  });
+
+  test('touching ONE harness runs that harness, and says nothing about the others', () => {
+    // The rule this replaced ran all eighteen whenever anything under
+    // test/tools/ changed, on the reasoning that a harness file decides what
+    // that harness proves. True, and it does not follow that it decides what
+    // the other seventeen prove: editing the boundary harness cannot change
+    // what the renderer harness asserts. Every card that adds a guard edits a
+    // harness, so in practice the selection almost never applied to real work.
+    const plan = selectHarnesses(['test/tools/mutate-a-guards.js'], HARNESSES);
+    assert.ok(plan.run.includes('mutate-a-guards.js'), 'its own file is a reason to run it');
+    assert.ok(plan.skipped.some(s => s.tool === 'mutate-b-guards.js'),
+      'and an unrelated harness is still skipped, with its reason');
+    // The unreadable one still runs, because that rule is untouched.
+    assert.ok(plan.run.includes('mutate-unknown-guards.js'));
+  });
+
+  test('the shared machinery still runs everything, which is the half that must not move', () => {
+    // The fail-safe direction. A harness file is narrow; the crash marker, the
+    // selector, the gate and the helpers are not, because they can change what
+    // ANY harness proves.
+    for (const trigger of ['test/tools/mutation-run.js', 'scripts/mutation-scope.js',
+      'scripts/precommit-gate.js', 'test/helpers/harness.js', 'package.json']) {
+      const plan = selectHarnesses([trigger], HARNESSES);
+      assert.deepStrictEqual(plan.run.sort(), HARNESSES.map(h => h.tool).sort(),
+        `${trigger} must still run every harness`);
+      assert.deepStrictEqual(plan.skipped, [], `${trigger} must skip nothing`);
     }
   });
 
