@@ -1313,11 +1313,50 @@ const APP_SRC = fs.readFileSync(path.join(__dirname, '..', '..', 'public', 'app.
 // either. The extraction asserts the case exists, so a renamed or deleted
 // one fails here rather than yielding a function that routes nothing.
 function appDispatch(view) {
-  const found = /(case 'package_import_plan':[\s\S]*?packagesReplyArrived\(d\); break;)/.exec(APP_SRC);
+  const found = /(case 'package_import_plan':[\s\S]*?packagesReplyArrived\(d\); packagesImportLanded\(d\); break;)/.exec(APP_SRC);
   assert.ok(found, 'app.js no longer carries the packages reply dispatch case');
-  const route = new Function('d', 'packagesReplyArrived', `switch (d.type) { ${found[1]} }`);
-  return (d) => route(d, view.packagesReplyArrived);
+  const route = new Function('d', 'packagesReplyArrived', 'packagesImportLanded', `switch (d.type) { ${found[1]} }`);
+  return (d) => route(d, view.packagesReplyArrived, () => {});
 }
+
+// The same dispatch case with the real packagesImportLanded beside it, both
+// lifted from app.js, over a socket the test owns: what an import result
+// asks the server for afterwards is read from the messages sent.
+function importLandedDispatch() {
+  const found = /(case 'package_import_plan':[\s\S]*?packagesReplyArrived\(d\); packagesImportLanded\(d\); break;)/.exec(APP_SRC);
+  const fn = /(function packagesImportLanded\(d\) \{[\s\S]*?\n\})/.exec(APP_SRC);
+  assert.ok(found && fn, 'app.js no longer carries the dispatch case and packagesImportLanded the way this test expects');
+  const sent = [];
+  const run = new Function('d', 'packagesReplyArrived', 'ws', 'WebSocket',
+    `let skillsLoaded = true; ${fn[1]} switch (d.type) { ${found[1]} } return skillsLoaded;`);
+  const socket = { readyState: 1, send: (raw) => sent.push(JSON.parse(raw)) };
+  return { sent, dispatch: (d) => run(d, () => {}, socket, { OPEN: 1 }) };
+}
+
+describe('an import that lands agents and skills refreshes Team and Skills', () => {
+  test('a written result re-requests the roster and the skills exactly once and forgets skills were loaded; a zero-write result asks nothing', () => {
+    const written = importLandedDispatch();
+    const skillsStillLoaded = written.dispatch({
+      type: 'package_import_result', operation: 'apply', token: 't', requestId: 'r', status: 'ready',
+      writes: [{ id: 'agent:scribe', kind: 'agent', destination: '.claude/agents/scribe.md' }], unchanged: [], skipped: [], blocked: [],
+    });
+    assert.deepStrictEqual(written.sent, [{ type: 'get_agents' }, { type: 'get_skills' }], 'both asked, each exactly once');
+    assert.strictEqual(skillsStillLoaded, false, 'the Skills rail re-requests on its next open too');
+
+    const zero = importLandedDispatch();
+    const untouched = zero.dispatch({
+      type: 'package_import_result', operation: 'apply', token: 't', requestId: 'r', status: 'ready',
+      writes: [], unchanged: [], skipped: [{ id: 'agent:scribe' }], blocked: [],
+    });
+    assert.deepStrictEqual(zero.sent, [], 'nothing landed, so nothing is asked');
+    assert.strictEqual(untouched, true);
+
+    // A projection shares the envelope and writes nothing by definition.
+    const projection = importLandedDispatch();
+    projection.dispatch({ type: 'package_import_result', operation: 'evaluate', requestId: 'r', status: 'ready', writes: [{ id: 'agent:scribe' }] });
+    assert.deepStrictEqual(projection.sent, [], 'an evaluate result is not a landing');
+  });
+});
 
 describe('the settings view exports every function its own packages markup and app.js call by name', () => {
   test('every onclick name inside packagesSectionHtml, and packagesReplyArrived on the app.js dispatch case, are on the module surface', () => {

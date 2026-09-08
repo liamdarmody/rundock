@@ -49,13 +49,14 @@ function packagesRenderIfVisible() {
 function packagesApplyTransition(out) {
   if (out.send) {
     if (!(ws && ws.readyState === WebSocket.OPEN)) {
-      // A projection that could not be asked for must not cost the review:
-      // the plan and every decision stand, the new decision included, with
-      // no projection until one can be asked. Submit and confirm have no
-      // decision work to lose, so those still return the section to idle,
-      // keeping the typed link and pin.
-      packagesInstall = out.send.type === 'evaluate_package_decisions'
-        ? { ...out.state, fieldError: 'Not connected: your decisions are kept, but the last one could not be checked. Try again once the connection returns.' }
+      // The model says, beside each message it builds, what to hold when
+      // the message cannot go out (`unsent`): a review keeps its plan, every
+      // decision and its projection, and is told that nothing was sent. A
+      // transition with no decision work to lose (a submit, the plain
+      // offer's confirm) returns the section to idle, keeping the typed
+      // link and pin.
+      packagesInstall = out.unsent
+        ? { ...out.unsent, fieldError: 'Not connected: your decisions are kept, but nothing was sent. Try again once the connection returns.' }
         : {
           ...RundockPackagesInstallModel.initial(),
           link: (packagesInstall && packagesInstall.link) || '',
@@ -67,7 +68,10 @@ function packagesApplyTransition(out) {
     }
     ws.send(JSON.stringify(out.send));
   }
-  packagesInstall = out.state;
+  // A not-connected notice describes a send that did not happen; the moment
+  // one does, the notice is gone, so it can never sit beside a projection
+  // that arrived.
+  packagesInstall = out.send ? { ...out.state, fieldError: null } : out.state;
   packagesRenderIfVisible();
 }
 
@@ -237,7 +241,10 @@ function packagesConnectionLost() {
 // every row's data-tone: REVIEW_TONES there is the one source, read at
 // render time, never restated here. Escaped through this file's own
 // Node-safe helpers, as the connectors half is, so a test renders the real
-// rows without a page and without a second copy of the escaping rule.
+// rows without a page and without a second copy of the escaping rule. A
+// control's decision rides on its own data attribute and the item on the
+// row's, which the handler reads back, as the connectors card does, so no
+// value is ever written into handler source.
 function packagesReviewRowHtml(row) {
   const kindTag = `<span class="packages-kind-tag">${connectorsEsc(row.kind)}</span>`;
   const open = `<div class="packages-item-row" data-row="${connectorsEscAttr(row.rowClass)}" data-tone="${connectorsEscAttr(row.tone)}" data-item="${connectorsEscAttr(row.id)}">`;
@@ -251,7 +258,7 @@ function packagesReviewRowHtml(row) {
     return `${open}
         <div class="packages-item-top"><span class="packages-item-name">${connectorsEsc(row.name)}</span>${kindTag}
           <span class="packages-skip-mark">Will skip</span>
-          <button class="settings-btn packages-row-btn" onclick="packagesSetDecision('${connectorsEscAttr(row.id)}', 'add')">Add it back</button></div>
+          <button class="settings-btn packages-row-btn" data-decision="add" onclick="packagesSetDecision(this.closest('.packages-item-row').dataset.item, this.dataset.decision)">Add it back</button></div>
       </div>`;
   }
   const compare = row.compare ? `<div class="packages-compare">
@@ -270,8 +277,8 @@ function packagesReviewRowHtml(row) {
         ${compare}${toggle}
         <div class="packages-blocked-block">
           <div class="packages-blocked-note">${connectorsEsc(row.blockedNote)}</div>
-          <button class="settings-btn packages-blocked-resolve"
-            onclick="packagesSetDecision('${connectorsEscAttr(row.id)}', '${connectorsEscAttr(row.blockedAction.decision)}')">${connectorsEsc(row.blockedAction.label)}</button>
+          <button class="settings-btn packages-blocked-resolve" data-decision="${connectorsEscAttr(row.blockedAction.decision)}"
+            onclick="packagesSetDecision(this.closest('.packages-item-row').dataset.item, this.dataset.decision)">${connectorsEsc(row.blockedAction.label)}</button>
         </div>
       </div>`;
   }
@@ -280,10 +287,10 @@ function packagesReviewRowHtml(row) {
       <div class="packages-item-top"><span class="packages-item-name">${connectorsEsc(row.name)}</span>${kindTag}${unchangedMark}</div>
       ${compare}
       <div class="packages-decision-toggle">
-        <button class="packages-dt-btn${row.decision === 'overwrite' ? ' packages-dt-selected packages-dt-overwrite' : ''}"
-          onclick="packagesSetDecision('${connectorsEscAttr(row.id)}', 'overwrite')">Overwrite: replace what you have</button>
-        <button class="packages-dt-btn${row.decision === 'skip' ? ' packages-dt-selected' : ''}"
-          onclick="packagesSetDecision('${connectorsEscAttr(row.id)}', 'skip')">Skip: keep yours</button>
+        <button class="packages-dt-btn${row.decision === 'overwrite' ? ' packages-dt-selected packages-dt-overwrite' : ''}" data-decision="overwrite"
+          onclick="packagesSetDecision(this.closest('.packages-item-row').dataset.item, this.dataset.decision)">Overwrite: replace what you have</button>
+        <button class="packages-dt-btn${row.decision === 'skip' ? ' packages-dt-selected' : ''}" data-decision="skip"
+          onclick="packagesSetDecision(this.closest('.packages-item-row').dataset.item, this.dataset.decision)">Skip: keep yours</button>
       </div>
     </div>`;
 }
@@ -611,7 +618,7 @@ function connectorsEsc(v) {
   return String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 function connectorsEscAttr(v) {
-  return connectorsEsc(v).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  return connectorsEsc(v).replace(/"/g, '&quot;');
 }
 
 // Shared by every JSON source (both .mcp.json's shape and ~/.claude.json's

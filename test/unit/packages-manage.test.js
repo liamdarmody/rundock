@@ -486,6 +486,10 @@ describe('after a state, uninstall or page reply, the client hands the fresh ros
     const reached = [];
     w.reconcileExtensionMount = (roster) => { reconciled.push(roster); return { action: 'none' }; };
     w.packagesReplyArrived = (d) => reached.push(d.type);
+    // The landing hook beside the reply route belongs to the import flow
+    // (a written result re-requests the roster); this test is about the
+    // reconcile, so it is stubbed the way the reply route is.
+    w.packagesImportLanded = () => {};
     w.rundockRendererRegistryLoader = () => import('../../public/renderer-registry.js');
     const arms = ['package_import_plan', 'packages_page', 'packages_page_error'].map((t) => appPiece(arm(t), `the ${t} dispatch arm`)).join('\n');
     w.eval([

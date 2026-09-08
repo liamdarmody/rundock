@@ -146,7 +146,6 @@
     const items = plan.items;
     const decisions = {};
     for (const item of items) decisions[item.id] = item.collision ? 'skip' : 'add';
-    const collisions = items.filter((i) => i.collision).map((i) => ({ id: i.id, kind: i.kind, slug: i.slug }));
     const offer = {
       phase: 'offer',
       ...carry,
@@ -155,11 +154,11 @@
       installed: installed || null,
       agents: items.filter((i) => i.kind === 'agent').length,
       skills: items.filter((i) => i.kind === 'skill').length,
-      collisions,
       // Which surface this offer is: the plain confirm card, or the review
-      // with decisions to make. The model says so; the view branches on
-      // this and holds no rule of its own about collisions.
-      review: collisions.length > 0,
+      // with decisions to make. The model says so, from the plan's own items,
+      // and the view branches on this with no rule of its own about
+      // collisions.
+      review: items.some((i) => i.collision),
       decisions,
       projection: null,
       // The id of the evaluate request this offer is currently waiting on,
@@ -227,10 +226,17 @@
   // read from the bytes the person is deciding about. Every place that
   // changes what is being decided (the initial ask, and every decision flip
   // below) goes through here, never around it.
+  //
+  // `unsent` is the state to hold if the message cannot be handed to an open
+  // socket: the plan and every decision, the new one included, with no
+  // request outstanding and no projection, so the review stands and says it
+  // is unchecked rather than claiming a check that never went out. A
+  // transition that carries no `unsent` has no decision work to lose.
   function askEvaluation(state) {
     const requestId = nextRequestId();
     return {
       state: { ...state, evaluateRequestId: requestId, outstanding: { operation: 'evaluate', token: state.token, requestId } },
+      unsent: { ...state, evaluateRequestId: null, outstanding: null, projection: null },
       send: {
         type: 'evaluate_package_decisions',
         requestId,
@@ -369,6 +375,10 @@
     const token = state.token || null;
     return {
       state: { phase: 'applying', ...carried(state), installed: state.installed || null, outstanding: { operation: 'apply', token, requestId } },
+      // A confirm from the review that cannot go out leaves the review
+      // exactly as it was: plan, every decision, projection. The plain
+      // offer holds no decision work, so it carries nothing to keep.
+      unsent: state.review ? state : undefined,
       send: { type: 'confirm_package_install', token, requestId, approval: sharedDecide()(state.plan, decisionsFor(state)) },
     };
   }
@@ -472,6 +482,12 @@
         // Said from the projection's own `unchanged` membership: the bytes
         // already match, so whatever is decided, nothing is written here.
         unchanged: !!(state.projection && state.projection.unchanged.indexOf(item.id) !== -1),
+        // The compare copy reads the plan's own digests, because it describes
+        // what the plan read: the copy on disk against the copy arriving, as
+        // they were when this review opened. The projection's `unchanged` is
+        // the live check of the same fact, and the two cannot disagree on a
+        // review that is still open: a workspace or source that moves after
+        // planning makes the next projection stale, which voids the review.
         compare: !item.collision ? null : {
           have: identical
             ? 'Already in your workspace, identical to what arrives.'
@@ -493,12 +509,18 @@
           : { label: 'Skip this item', decision: 'skip' },
       };
     });
+    // No counts and no request outstanding: the check did not go out, or
+    // the connection took it. The review stands, and says it is unchecked
+    // rather than claiming a check that is not running.
+    const unchecked = !counts && !state.evaluateRequestId;
     return {
       title: 'Review this package',
       rows,
       counts,
-      confirmLabel: confirmLabel(counts),
-      confirmNote: !counts
+      confirmLabel: unchecked ? 'Confirm unchecked decisions' : confirmLabel(counts),
+      confirmNote: unchecked
+        ? 'Your decisions were not checked against your workspace. Confirming asks the server to check them before anything is written.'
+        : !counts
         ? 'Checking your decisions against your workspace.'
         : counts.blocked > 0
           // The cause clause comes from reasonWords, the same function the
@@ -619,6 +641,12 @@
     }
     if ((state.phase === 'offer' || state.phase === 'trust') && state.token) {
       return { state: { phase: 'failed', ...carry, message: 'The connection dropped. Nothing was installed. Read the package again to continue.', canReplan: true } };
+    }
+    // A review the server holds nothing for (the typed path) keeps its plan
+    // and decisions, but a projection it was waiting on will never arrive:
+    // the wait ends, and the review says it is unchecked.
+    if (state.phase === 'offer' && state.outstanding && state.outstanding.operation === 'evaluate') {
+      return { state: { ...state, evaluateRequestId: null, outstanding: null, projection: null } };
     }
     if (state.phase === 'applying') {
       return { state: { phase: 'failed', ...carry, message: 'The connection dropped while adding. The import may or may not have completed: check your team and the receipts in .claude/rundock/receipts to see what arrived, then read the package again if it did not.', canReplan: true } };
