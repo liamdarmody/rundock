@@ -72,8 +72,9 @@ async function main() {
   const file = writeReport(fs, OUT, report);
   fs.writeFileSync(path.join(OUT, 'server.log'), serverLog);
   console.log(`\n${outcome.results.length - outcome.failed.length}/${outcome.results.length} steps passed; report at ${path.relative(ROOT, file)}`);
-  if (outcome.failed.length) console.log('Server log tail:\n' + serverLog.slice(-1500));
-  fs.rmSync(root, { recursive: true, force: true });
+  // A failed walk keeps its workspace, so the disk can be read after the fact.
+  if (outcome.failed.length) console.log(`Workspace kept at ${workspace}\nServer log tail:\n` + serverLog.slice(-1500));
+  else fs.rmSync(root, { recursive: true, force: true });
   process.exit(outcome.exitCode);
 }
 

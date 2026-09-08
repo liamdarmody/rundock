@@ -86,7 +86,11 @@ function buildSteps() {
         const up = await waitFor(async () => (await fetch(`http://127.0.0.1:${ctx.port}/`)).ok, 30000);
         check(!!up, `the server did not answer on port ${ctx.port}`);
         await ctx.page.goto(`http://127.0.0.1:${ctx.port}/`);
-        await ctx.page.locator('.convo-item').first().waitFor({ timeout: 20000 });
+        // The tree the server pushes over the socket is the page's proof of
+        // life; it holds for a workspace with no default agent, which the
+        // seed deliberately is.
+        const tree = await waitFor(() => count(ctx.page, '#file-tree .file-item'), 20000);
+        check(!!tree, 'the file tree never arrived over the socket');
         const status = await ctx.page.evaluate(() => new Promise((resolve) => {
           const h = (ev) => { const m = JSON.parse(ev.data); if (m.type === 'runtime_status') { ws.removeEventListener('message', h); resolve(m); } };
           ws.addEventListener('message', h); ws.send(JSON.stringify({ type: 'get_runtime_status' }));
@@ -99,6 +103,10 @@ function buildSteps() {
         const dir = cloneAt(LEAN_TEAM.url, LEAN_TEAM.tag, path.join(ctx.scratch, 'lean-agent-team'));
         const missing = unmet(checkLeanTeam(dir));
         check(!missing, missing);
+        // The product gives an order-0 agent the id `default`, so Team is
+        // asked for that id where the package's own file says order 0.
+        ctx.teamIds = Object.fromEntries(LEAN_TEAM.agents.map((a) =>
+          [a, /^order:\s*0\s*$/m.test(fs.readFileSync(path.join(dir, '.claude', 'agents', `${a}.md`), 'utf8')) ? 'default' : a]));
       } },
     { id: 'repo-csv', name: `${CSV_EXTENSION.repo} at ${CSV_EXTENSION.tag} meets the stated expectations`, precondition: reachable(CSV_EXTENSION),
       run: async (ctx, check) => {
@@ -129,11 +137,12 @@ function buildSteps() {
         ctx.receipt = receipt;
       } },
     { id: 'pack-team', name: 'the three agents appear in Team', needs: ['pack-confirm'],
-      run: async ({ page }, check) => {
+      run: async ({ page, teamIds }, check) => {
         await page.locator('.nav-item[data-nav="team"]').click();
         for (const a of LEAN_TEAM.agents) {
-          const seen = await waitFor(() => count(page, `[data-org-agent="${a}"], [data-agent="${a}"]`), 20000);
-          check(!!seen, `agent ${a} is not shown in Team`);
+          const id = teamIds[a];
+          const seen = await waitFor(() => count(page, `[data-org-agent="${id}"], [data-agent="${id}"]`), 20000);
+          check(!!seen, `agent ${a} (id ${id}) is not shown in Team`);
         }
       } },
     { id: 'pack-skills', name: 'the two skills appear in Skills', needs: ['pack-confirm'],
@@ -210,7 +219,8 @@ function buildSteps() {
       run: async (ctx, check) => {
         const { page } = ctx;
         await page.locator('.ext-row button:has-text("Uninstall")').first().click();
-        const confirm = page.locator('#settings-content button', { hasText: /uninstall|remove/i }).last();
+        // The filled danger button lives only inside the confirmation step.
+        const confirm = page.locator('.ext-row .ext-confirm .settings-btn-danger');
         await confirm.waitFor({ timeout: 10000 });
         await confirm.click();
         const gone = await waitFor(() => !extensionRecord(ctx) && !onDisk(ctx, '.claude/rundock/extensions/csv-table'), 15000);

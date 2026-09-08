@@ -36,17 +36,20 @@ function buildWorkspace() {
   fs.mkdirSync(home, { recursive: true });
   write(workspace, 'CLAUDE.md', '# Walk Workspace\n\nA disposable workspace the release walk drives.\n');
   write(workspace, `.claude/agents/${SEED.agent}.md`,
-    `---\nname: ${SEED.agent}\ndisplayName: Roo\nrole: Chief of Staff\ntype: orchestrator\norder: 0\nmodel: sonnet\nskills: [${SEED.skill}]\n---\nYou are Roo. Route work to the team.\n`);
+    // A specialist, never the default: the package brings its own default
+    // agent, and a seeded one would make the product refuse it as a second.
+    `---\nname: ${SEED.agent}\ndisplayName: Roo\nrole: Operations\ntype: specialist\norder: 1\nmodel: sonnet\nskills: [${SEED.skill}]\n---\nYou are Roo. Keep the workspace tidy.\n`);
   write(workspace, `.claude/skills/${SEED.skill}/SKILL.md`,
     `---\nname: ${SEED.skillName}\ndescription: Checks the workspace and reports one line.\n---\nSay that the walk check ran.\n`);
   write(workspace, SEED.noteA, `# Alpha\n\nLinks onward to [[${SEED.targetKeyword}]] for the map step.\n`);
   write(workspace, SEED.target, `# Walk Target\n\n${SEED.targetSentinel}\n\nBack to [[walk-alpha]].\n`);
   write(workspace, SEED.csv, SEED.csvText);
-  // The stub runtime answers whatever the routine asks with one line, and
+  // The stub runtime answers whatever the routine asks with one line after
+  // a pause long enough for the in-flight state to be seen on the page, and
   // stays silent on anything system-shaped.
   write(workspace, 'stub-scenario.json', JSON.stringify({ rules: [
     { match: { promptIncludes: '[SYSTEM' }, turn: [{ text: '<silent>' }] },
-    { match: {}, turn: [{ text: 'WALK-ROUTINE-REPLY: the walk check ran.' }] },
+    { match: {}, delayMs: 2500, turn: [{ text: 'WALK-ROUTINE-REPLY: the walk check ran.' }] },
   ] }, null, 2));
   return { root, workspace, home };
 }

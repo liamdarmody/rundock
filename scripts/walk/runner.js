@@ -23,15 +23,17 @@
 
 class WalkAssertion extends Error {}
 
-function failure(step, reason) {
-  return { id: step.id, name: step.name, verdict: 'FAIL', reason };
+// `root` is the first reason in a chain of dependents, so a step five deep
+// still names the one thing that actually went wrong.
+function failure(step, reason, root = reason) {
+  return { id: step.id, name: step.name, verdict: 'FAIL', reason, root };
 }
 
 async function runStep(step, ctx, done) {
   for (const need of step.needs || []) {
     const prior = done.get(need);
     if (!prior) return failure(step, `precondition: step ${need} did not run before it`);
-    if (prior.verdict !== 'PASS') return failure(step, `precondition: step ${need} failed (${prior.reason})`);
+    if (prior.verdict !== 'PASS') return failure(step, `precondition: step ${need} failed (${prior.root})`, prior.root);
   }
   let asserted = 0;
   const check = (condition, what) => {
