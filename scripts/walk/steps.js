@@ -225,7 +225,10 @@ function buildSteps() {
         await confirm.click();
         const gone = await waitFor(() => !extensionRecord(ctx) && !onDisk(ctx, '.claude/rundock/extensions/csv-table'), 15000);
         check(!!gone, 'the record or the extension directory is still on disk');
-        check((await page.locator('.ext-row', { hasText: 'csv-table' }).count()) === 0, 'the row is still listed');
+        // The disk changes first and the reply that redraws the list follows
+        // it over the socket, so the row is waited for, not read once.
+        const unlisted = await waitFor(async () => (await page.locator('.ext-row', { hasText: 'csv-table' }).count()) === 0, 15000);
+        check(!!unlisted, 'the row is still listed');
         await openByPath(page, seed(ctx).csv);
         await page.locator('#editor-content .viewer-unsupported').waitFor({ timeout: 15000 });
         check((await count(page, '#editor-content iframe.extension-frame')) === 0, 'a frame is still mounted');
