@@ -35,6 +35,7 @@ const {
 const workspaceBoundary = require('./lib/workspace/boundary.js');
 const { readBoundaryGrants, addBoundaryGrant, boundaryGrantCovers } = workspaceBoundary;
 const workspaceAnalysis = require('./lib/workspace/analysis.js');
+const extensionRegistry = require('./lib/packages/extension-registry.js');
 const { analyzeWorkspace, readMcpServerNames } = workspaceAnalysis;
 const workspaceScaffold = require('./lib/workspace/scaffold.js');
 const {
@@ -1298,7 +1299,7 @@ const wsHandlerContext = {
   workspace: {
     setWorkspaceRoot, healWorkspaceIfMoved, saveRecentWorkspace, loadRecentWorkspaces,
     discoverWorkspaces, isInsideWorkspace, isSafeCreatePath, getFileTreeCached,
-    invalidateFileListCache, invalidateFileTreeCache, watchOpenFile,
+    invalidateFileListCache, invalidateFileTreeCache, noteExtensionRecordsChanged, watchOpenFile,
     fileTreeForSend, broadcastFileTree, armFileTreeWatcher,
   },
   runtime: { getRuntimeStatus, killAllChildren, cleanOrphanedProcesses },
@@ -1871,6 +1872,30 @@ function parseSkillFile(content, slug) {
 // config files stay hidden from the tree, as before.
 const VIEWABLE_FILE_RE = /\.(md|txt|json|html?|svg|png|jpe?g|gif|webp|pdf)$/i;
 
+// THE TREE ALSO LISTS WHAT AN INSTALLED EXTENSION RENDERS. A file whose
+// extension an enabled record on the roster claims is openable (the host
+// mounts the extension's view for it), so it is listed beside the built-in
+// kinds, and stops being listed when the record is disabled or removed. Read
+// through the roster reader at tree-build time, never added to the static
+// regex above, so the tree and the renderer registry cannot disagree about
+// which files an extension is for. A roster that cannot be read claims
+// nothing: the tree shows the built-in kinds and the roster error is the
+// client's to report.
+function claimedExtensionsPattern(workspace) {
+  let roster = [];
+  try { roster = extensionRegistry.listExtensions(workspace); } catch (e) { return null; }
+  const exts = new Set();
+  for (const ext of roster) {
+    if (!ext || ext.enabled === false || ext.broken) continue;
+    for (const r of ext.renderers || []) {
+      const m = /^\.([a-z0-9][a-z0-9-]*)$/.exec(String(r.target || ''));
+      if (m) exts.add(m[1]);
+    }
+  }
+  if (exts.size === 0) return null;
+  return new RegExp(`\\.(${[...exts].sort().join('|')})$`, 'i');
+}
+
 // The /workspace-file allowlist: binary types only. Everything else either
 // rides the WS text path or is not served at all; this endpoint must never
 // become a generic file server for the workspace.
@@ -1937,7 +1962,10 @@ function fileKindCached(fullPath, name) {
   return kind;
 }
 
-function getFileTree(dir, prefix = '') {
+// `claimed` is the pattern of extensions enabled records claim, computed once
+// at the root and carried down the walk; a nested call never re-reads the
+// roster.
+function getFileTree(dir, prefix = '', claimed = prefix ? null : claimedExtensionsPattern(dir)) {
   const entries = [];
   try {
     const items = fs.readdirSync(dir, { withFileTypes: true })
@@ -1950,8 +1978,8 @@ function getFileTree(dir, prefix = '') {
     for (const item of items) {
       const relativePath = prefix ? `${prefix}/${item.name}` : item.name;
       if (item.isDirectory()) {
-        entries.push({ type: 'folder', name: item.name, path: relativePath, children: getFileTree(path.join(dir, item.name), relativePath) });
-      } else if (VIEWABLE_FILE_RE.test(item.name)) {
+        entries.push({ type: 'folder', name: item.name, path: relativePath, children: getFileTree(path.join(dir, item.name), relativePath, claimed) });
+      } else if (VIEWABLE_FILE_RE.test(item.name) || (claimed && claimed.test(item.name))) {
         entries.push({ type: 'file', name: item.name, path: relativePath, kind: fileKindCached(path.join(dir, item.name), item.name) });
       }
     }
@@ -1976,9 +2004,23 @@ function getFileTree(dir, prefix = '') {
 // frontmatter, so adding kanban-plugin frontmatter changes a node's kind
 // without changing any directory mtime. Saves made through Rundock invalidate
 // explicitly, which covers the path a user actually takes to do that.
-let _treeCache = null; // { tree, dirs: Map<absolutePath, mtimeMs> }
+let _treeCache = null; // { tree, dirs: Map<absolutePath, mtimeMs>, records: mtimeMs }
 
 function invalidateFileTreeCache() { _treeCache = null; }
+
+// An extension record changed (installed, updated, enabled, disabled,
+// removed): the set of files the tree lists changed with it, and no
+// directory mtime says so, because the records file lives under a dot
+// directory the tree never walks. The install and manage flows call this
+// after any record write so the next tree read rebuilds at once; the
+// freshness pass below also stats the records file itself, so a change that
+// arrives without the call is caught on the next read or the next poll tick.
+function noteExtensionRecordsChanged() { invalidateFileTreeCache(); }
+
+function extensionRecordsMtime() {
+  if (!WORKSPACE) return 0;
+  try { return fs.statSync(path.join(WORKSPACE, ...extensionRegistry.RECORDS_PATH.split('/'))).mtimeMs; } catch (e) { return 0; }
+}
 
 // Directory list is derived from the tree we just built rather than by walking
 // again: the folder nodes are already there, so this costs one stat per
@@ -1995,6 +2037,7 @@ function treeDirMtimes(nodes, out = new Map()) {
 
 function treeCacheIsFresh() {
   if (!_treeCache || !WORKSPACE) return false;
+  if (_treeCache.records !== extensionRecordsMtime()) return false;
   for (const [dir, mtimeMs] of _treeCache.dirs) {
     let st;
     try { st = fs.statSync(dir); } catch (e) { return false; } // deleted or renamed
@@ -2011,7 +2054,7 @@ function getFileTreeCached() {
   // The root is not a node in its own tree, but a file created directly in it
   // bumps only the root's mtime, so it has to be tracked explicitly.
   try { dirs.set(WORKSPACE, fs.statSync(WORKSPACE).mtimeMs); } catch (e) {}
-  _treeCache = { tree, dirs };
+  _treeCache = { tree, dirs, records: extensionRecordsMtime() };
   return tree;
 }
 
@@ -3196,7 +3239,7 @@ module.exports._internal = {
   setWorkspace(dir) { setWorkspaceRoot(dir); invalidateAgentCache(); armAgentsDirWatcher(); armFileTreeWatcher(); },
   getWorkspace() { return WORKSPACE; },
   // file tree external-change poll
-  armFileTreeWatcher, fileTreeForSend, broadcastFileTree,
+  armFileTreeWatcher, fileTreeForSend, broadcastFileTree, noteExtensionRecordsChanged,
   flatFileListCached, invalidateFileListCache,
   // scheduler
   getNextRun, executeRoutine, routineState, startScheduler, stopScheduler, schedulerRunning,

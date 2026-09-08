@@ -156,12 +156,14 @@
     }
   },
   "public/styles/views/settings.css": {
-    "why": "Three literals predate this entry: the mode-toggle's 10px outer radius is the outer half of a concentric pair (inner token radius plus padding, documented in-file), and the two black alpha shadows rgba(0,0,0,0.08) and rgba(0,0,0,0.18) are one-off elevation tints with no shadow token yet. New with the Packages section: the install spinner's 0.8s revolution period, a continuous rotation rather than a UI transition, sitting above the transition duration scale.",
+    "why": "Three literals predate this entry: the mode-toggle's 10px outer radius is the outer half of a concentric pair (inner token radius plus padding, documented in-file), and the two black alpha shadows rgba(0,0,0,0.08) and rgba(0,0,0,0.18) are one-off elevation tints with no shadow token yet. New with the Packages section: the install spinner's 0.8s revolution period, a continuous rotation rather than a UI transition, sitting above the transition duration scale. Also new with the Packages section: the still-reading delay, a 0s animation held back 4.5s, which is PD-10's rule that a classify running past four to five seconds says \"still reading\"; a wait threshold, not a UI transition, so it sits outside the duration scale like the spinner does.",
     "allow": {
       "rgba(0,0,0,0.08)": 1,
       "rgba(0,0,0,0.18)": 1,
       "10px": 1,
-      "0.8s": 1
+      "0.8s": 1,
+      "0s": 1,
+      "4.5s": 1
     }
   },
   "public/styles/views/routine-editor.css": {

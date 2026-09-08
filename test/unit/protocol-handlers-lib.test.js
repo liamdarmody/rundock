@@ -17,7 +17,7 @@ const { buildDispatch } = require('../../lib/protocol/handlers/index.js');
 const { _internal: srv } = require('../../server.js');
 const config = require('../../lib/config.js');
 
-// The full routing surface of the dispatch table, frozen: 41 message types
+// The full routing surface of the dispatch table, frozen: 48 message types
 // plus save_agent's two legacy aliases. The four root shims (chat, delegate,
 // end_delegation, flush_buffer) must NEVER appear here: chat is the
 // kill-window chat shim, delegate/end_delegation are delegation glue, and
@@ -31,11 +31,18 @@ const EXPECTED_TYPES = [
   'pick_folder', 'create_workspace', 'set_workspace_mode',
   'get_agents', 'get_runtime_status', 'get_files', 'get_skills', 'get_run',
   'cancel_routine_run',
-  'plan_package_import', 'apply_package_import',
+  // The package review's projection message: the submitted decisions are
+  // evaluated without writing, driven in test/unit/collision-decisions.test.js.
+  'plan_package_import', 'evaluate_package_decisions', 'apply_package_import',
   // The extension mount reads: the installed roster, and one renderer's
   // payload. Driven through the dispatch table in the handler-seam tests
   // below, against a real temporary workspace.
   'list_extensions', 'get_extension_ui',
+  // The extension install flow: acquire-and-offer, one answer either way,
+  // then update (from the wire message or from the installed record) and
+  // removal. Pressed by test/unit/extension-install.test.js.
+  'plan_package_install', 'plan_extension_update', 'confirm_extension_install',
+  'confirm_package_install', 'decline_package_install', 'check_extension_update', 'uninstall_extension',
   'get_conversations', 'set_last_active_conversation', 'save_conversation',
   'get_lists', 'create_list', 'delete_list', 'delete_conversation',
   'read_file', 'add_to_team',
@@ -223,18 +230,43 @@ describe('handler seams (stub ctx, capture ws)', () => {
     }
     return dir;
   }
-  const EXT_MANIFEST = JSON.stringify({
-    schemaVersion: 1, id: 'charts', name: 'Charts', version: '1.0.0',
-    renderers: [{ id: 'chart', target: '.chart', entry: 'ui/index.js' }],
-    resources: [{ id: 'data', maximumBytes: 1024 }],
+  // THE INSTALL STORE, AS THE INSTALL FLOW WRITES IT: one records file at
+  // .claude/rundock/extensions.json and the extension's own files under
+  // .claude/rundock/extensions/<name>/. The roster reads exactly this and
+  // nothing else, so what an install materialises is what a mount reads.
+  const RECORDS_FILE = '.claude/rundock/extensions.json';
+  const EXT_DIR = '.claude/rundock/extensions/csv-echo';
+  const record = (extra = {}) => ({
+    name: 'csv-echo', version: '1.2.0', entry: 'index.js', match: '*.csv',
+    source: { url: 'https://github.com/example/csv-echo', reference: 'v1.2.0' },
+    installedAt: '2026-09-07T00:00:00.000Z', root: EXT_DIR, ...extra,
   });
+  const records = (...list) => JSON.stringify({ schema: 'rundock.extensions/v1', extensions: list });
+  const manifest = (extension) => JSON.stringify({ name: 'csv-echo', version: '1.2.0', extension });
 
-  test('list_extensions answers the roster, and refuses with one reply when no workspace is open', () => {
+  function roster(fixture) {
+    const table = buildDispatch();
+    const original = config.getWorkspace();
+    const dir = extensionWorkspace(fixture);
+    try {
+      config.setWorkspace(dir);
+      const ws = captureWs();
+      table.list_extensions({}, ws, { type: 'list_extensions' });
+      assert.strictEqual(ws.sent.length, 1, 'one reply per request');
+      return ws.sent[0];
+    } finally {
+      config.setWorkspace(original);
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  test('list_extensions answers the roster from the install store, and refuses with one reply when no workspace is open', () => {
     const table = buildDispatch();
     const original = config.getWorkspace();
     const dir = extensionWorkspace({
-      '.rundock/plugins/charts/manifest.json': EXT_MANIFEST,
-      '.rundock/plugin-state.json': JSON.stringify({ plugins: { charts: { enabled: true } } }),
+      [RECORDS_FILE]: records(record()),
+      [`${EXT_DIR}/rundock.json`]: manifest({ entry: 'index.js', match: '*.csv' }),
+      [`${EXT_DIR}/index.js`]: 'draw();',
     });
     try {
       config.setWorkspace(dir);
@@ -242,7 +274,10 @@ describe('handler seams (stub ctx, capture ws)', () => {
       table.list_extensions({}, ws, { type: 'list_extensions' });
       assert.strictEqual(ws.sent.length, 1);
       assert.strictEqual(ws.sent[0].type, 'extensions');
-      assert.strictEqual(ws.sent[0].extensions[0].id, 'charts');
+      assert.deepStrictEqual(ws.sent[0].extensions, [{
+        id: 'csv-echo', name: 'csv-echo', version: '1.2.0', enabled: true,
+        renderers: [{ id: 'view', target: '.csv' }], refusals: [], resources: [],
+      }], 'one roster entry per record, its renderer built from the declared entry and match rule');
 
       config.setWorkspace(null);
       const ws2 = captureWs();
@@ -254,39 +289,231 @@ describe('handler seams (stub ctx, capture ws)', () => {
     }
   });
 
-  test('get_extension_ui answers the payload, and refuses cleanly on every bad input', () => {
+  test('a match of the form *.<ext> becomes the registry target .<ext>; any other rule is a named refusal, not a claim', () => {
+    // One case per match shape. The registry grammar is one dot-prefixed
+    // segment, so that is the only rule the roster may turn into a claim;
+    // everything else stays on the roster as a refusal the manage surface
+    // can show, because a silently dropped rule reads as a broken extension.
+    const cases = [
+      ['*.csv', { target: '.csv' }],
+      ['*.CSV', { target: '.csv' }],
+      ['*.tsv', { target: '.tsv' }],
+      ['**/*.csv', { refused: true }],
+      ['data/*.csv', { refused: true }],
+      ['*.tar.gz', { refused: true }],
+      ['csv', { refused: true }],
+      ['*', { refused: true }],
+    ];
+    for (const [match, expected] of cases) {
+      const reply = roster({
+        [RECORDS_FILE]: records(record({ match })),
+        [`${EXT_DIR}/rundock.json`]: manifest({ entry: 'index.js', match }),
+        [`${EXT_DIR}/index.js`]: 'draw();',
+      });
+      assert.strictEqual(reply.type, 'extensions', `${match}: the roster answers`);
+      const [ext] = reply.extensions;
+      if (expected.target) {
+        assert.deepStrictEqual(ext.renderers, [{ id: 'view', target: expected.target }], `${match}: mapped to ${expected.target}`);
+        assert.deepStrictEqual(ext.refusals, [], `${match}: nothing refused`);
+      } else {
+        assert.deepStrictEqual(ext.renderers, [], `${match}: never a claim`);
+        assert.strictEqual(ext.refusals.length, 1, `${match}: one named refusal`);
+        assert.strictEqual(ext.refusals[0].match, match, `${match}: the refusal names the rule`);
+        assert.match(ext.refusals[0].reason, /\*\.<ext>/, `${match}: the reason states the accepted form`);
+      }
+    }
+  });
+
+  test('the record\'s enabled field is what the roster carries, and absent means enabled', () => {
+    const shapes = [
+      [{}, true],
+      [{ enabled: true }, true],
+      [{ enabled: false }, false],
+    ];
+    for (const [extra, enabled] of shapes) {
+      const reply = roster({
+        [RECORDS_FILE]: records(record(extra)),
+        [`${EXT_DIR}/rundock.json`]: manifest({ entry: 'index.js', match: '*.csv' }),
+        [`${EXT_DIR}/index.js`]: 'draw();',
+      });
+      assert.strictEqual(reply.extensions[0].enabled, enabled, `enabled ${JSON.stringify(extra)} carries ${enabled}`);
+      assert.deepStrictEqual(reply.extensions[0].renderers, [{ id: 'view', target: '.csv' }],
+        'the roster still names the renderer of a disabled extension; the client registry is what skips it');
+    }
+  });
+
+  test('a record without entry and match is read from the extension\'s own rundock.json, and a manifest in the directory wins when both are present', () => {
+    const fromManifest = roster({
+      [RECORDS_FILE]: records({ name: 'csv-echo', version: '1.2.0', source: { url: 'u', reference: 'v1.2.0' } }),
+      [`${EXT_DIR}/rundock.json`]: manifest({ entry: 'index.js', match: '*.csv' }),
+      [`${EXT_DIR}/index.js`]: 'draw();',
+    });
+    assert.deepStrictEqual(fromManifest.extensions[0].renderers, [{ id: 'view', target: '.csv' }]);
+    const both = roster({
+      [RECORDS_FILE]: records(record({ match: '*.csv' })),
+      [`${EXT_DIR}/rundock.json`]: manifest({ entry: 'index.js', match: '*.tsv' }),
+      [`${EXT_DIR}/index.js`]: 'draw();',
+    });
+    assert.deepStrictEqual(both.extensions[0].renderers, [{ id: 'view', target: '.tsv' }],
+      'the manifest the extension ships is the declaration; the record is the copy the install took of it');
+    const neither = roster({
+      [RECORDS_FILE]: records({ name: 'csv-echo', version: '1.2.0', source: { url: 'u', reference: 'v1.2.0' } }),
+    });
+    assert.strictEqual(neither.extensions[0].broken, true, 'no declaration anywhere is a broken record, reported rather than skipped');
+    assert.strictEqual(neither.extensions[0].enabled, false);
+  });
+
+  test('an unreadable records file is a roster error carrying the reason, never an empty roster', () => {
+    const reply = roster({ [RECORDS_FILE]: 'not json at all' });
+    assert.strictEqual(reply.type, 'extensions_error');
+    assert.match(reply.reason, /records unreadable/);
+    const wrongSchema = roster({ [RECORDS_FILE]: JSON.stringify({ schema: 'something-else', extensions: [] }) });
+    assert.strictEqual(wrongSchema.type, 'extensions_error');
+  });
+
+  test('the retired per-directory layout is read by nothing: it lists nothing and serves nothing', () => {
     const table = buildDispatch();
     const original = config.getWorkspace();
     const dir = extensionWorkspace({
-      '.rundock/plugins/charts/manifest.json': EXT_MANIFEST,
-      '.rundock/plugins/charts/ui/index.js': 'draw();',
-      '.rundock/plugins/thief/manifest.json': JSON.stringify({
-        schemaVersion: 1, id: 'thief',
-        renderers: [{ id: 'r', target: '.x', entry: '../../../secrets.txt' }],
+      '.rundock/plugins/charts/manifest.json': JSON.stringify({
+        schemaVersion: 1, id: 'charts', renderers: [{ id: 'chart', target: '.chart', entry: 'ui/index.js' }],
       }),
+      '.rundock/plugins/charts/ui/index.js': 'draw();',
+      '.rundock/plugin-state.json': JSON.stringify({ plugins: { charts: { enabled: true } } }),
+    });
+    try {
+      config.setWorkspace(dir);
+      const ws = captureWs();
+      table.list_extensions({}, ws, { type: 'list_extensions' });
+      assert.deepStrictEqual(ws.sent, [{ type: 'extensions', extensions: [] }]);
+      const ui = captureWs();
+      table.get_extension_ui({}, ui, { type: 'get_extension_ui', extensionId: 'charts', rendererId: 'chart' });
+      assert.strictEqual(ui.sent[0].type, 'extension_ui_error');
+    } finally {
+      config.setWorkspace(original);
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('the file tree lists a file whose extension an enabled record claims, and stops when the record is disabled or removed', () => {
+    const files = {
+      'notes.md': '# notes',
+      'sales.csv': 'a,b\n1,2\n',
+      'data/more.csv': 'c,d\n',
+      'data/readme.txt': 'plain',
+      'script.py': 'print(1)',
+    };
+    const names = (tree) => tree.flatMap((n) => (n.type === 'folder' ? names(n.children) : [n.path])).sort();
+    const build = (store) => {
+      const dir = extensionWorkspace({ ...files, ...store });
+      try { return names(srv.getFileTree(dir)); } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+    };
+    const withStore = (rec) => ({
+      [RECORDS_FILE]: records(rec),
+      [`${EXT_DIR}/rundock.json`]: manifest({ entry: 'index.js', match: '*.csv' }),
+      [`${EXT_DIR}/index.js`]: 'draw();',
+    });
+    assert.deepStrictEqual(build({}), ['data/readme.txt', 'notes.md'],
+      'with no record the built-in kinds alone are listed: never csv, never code');
+    assert.deepStrictEqual(build(withStore(record())), ['data/more.csv', 'data/readme.txt', 'notes.md', 'sales.csv'],
+      'an enabled record claiming *.csv lists every csv, at any depth');
+    assert.deepStrictEqual(build(withStore(record({ enabled: false }))), ['data/readme.txt', 'notes.md'],
+      'a disabled record claims nothing for the tree');
+    assert.deepStrictEqual(build({ [RECORDS_FILE]: records() }), ['data/readme.txt', 'notes.md'],
+      'a removed record claims nothing for the tree');
+    assert.deepStrictEqual(build({ [RECORDS_FILE]: 'not json' }), ['data/readme.txt', 'notes.md'],
+      'an unreadable roster claims nothing; the tree still stands');
+    assert.strictEqual(typeof srv.noteExtensionRecordsChanged, 'function', 'the invalidation the install and manage flows call');
+    assert.strictEqual(typeof srv.wsHandlerContext.workspace.noteExtensionRecordsChanged, 'function',
+      'reachable through ctx.workspace, the way handlers reach every root file cache');
+  });
+
+  test('a records change alone makes the cached tree stale, and the invalidation call covers a change the stat cannot see', () => {
+    // The records file lives under a dot directory the tree never walks, so
+    // no directory mtime says it changed. The freshness pass stats the file
+    // itself; the install and manage flows call noteExtensionRecordsChanged
+    // as well, which is what catches a rewrite that lands on the same mtime.
+    const original = config.getWorkspace();
+    const dir = extensionWorkspace({
+      'sales.csv': 'a,b\n',
+      'notes.md': '# notes',
+      [RECORDS_FILE]: records(record()),
+      [`${EXT_DIR}/rundock.json`]: manifest({ entry: 'index.js', match: '*.csv' }),
+      [`${EXT_DIR}/index.js`]: 'draw();',
+    });
+    const recordsFile = path.join(dir, RECORDS_FILE);
+    const names = (tree) => tree.map((n) => n.path).sort();
+    const cached = () => srv.wsHandlerContext.workspace.getFileTreeCached();
+    try {
+      srv.setWorkspace(dir);
+      assert.deepStrictEqual(names(cached()), ['notes.md', 'sales.csv']);
+      assert.strictEqual(cached(), cached(), 'an unchanged store is a cache hit by identity');
+      // Disable the record; the file's mtime moves and nothing else does.
+      fs.writeFileSync(recordsFile, records(record({ enabled: false })));
+      const later = new Date(fs.statSync(recordsFile).mtimeMs + 5000);
+      fs.utimesSync(recordsFile, later, later);
+      assert.deepStrictEqual(names(cached()), ['notes.md'],
+        'the next read rebuilt from the records file alone, with no directory change and no call');
+      // Re-enable, but pin the mtime to the value the cache recorded (a whole
+      // millisecond, so the pin is exact) so the stat cannot see it: only the
+      // explicit call can.
+      fs.writeFileSync(recordsFile, records(record()));
+      fs.utimesSync(recordsFile, later, later);
+      assert.deepStrictEqual(names(cached()), ['notes.md'], 'same mtime reads as fresh');
+      srv.noteExtensionRecordsChanged();
+      assert.deepStrictEqual(names(cached()), ['notes.md', 'sales.csv'],
+        'the call the install and manage flows make rebuilds at once');
+    } finally {
+      srv.setWorkspace(null);
+      config.setWorkspace(original);
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('get_extension_ui serves the entry from the install store, and refuses cleanly on every bad input', () => {
+    const table = buildDispatch();
+    const original = config.getWorkspace();
+    const dir = extensionWorkspace({
+      [RECORDS_FILE]: records(
+        record(),
+        record({ name: 'thief', entry: '../../../secrets.txt', root: '.claude/rundock/extensions/thief' }),
+      ),
+      [`${EXT_DIR}/rundock.json`]: manifest({ entry: 'index.js', match: '*.csv' }),
+      [`${EXT_DIR}/index.js`]: 'draw();',
       'secrets.txt': 'not yours',
     });
     try {
       config.setWorkspace(dir);
       const ok = captureWs();
-      table.get_extension_ui({}, ok, { type: 'get_extension_ui', extensionId: 'charts', rendererId: 'chart' });
+      table.get_extension_ui({}, ok, { type: 'get_extension_ui', extensionId: 'csv-echo', rendererId: 'view' });
       assert.strictEqual(ok.sent.length, 1);
       assert.strictEqual(ok.sent[0].type, 'extension_ui');
       assert.strictEqual(ok.sent[0].entry, 'draw();');
+      assert.deepStrictEqual(ok.sent[0].styles, []);
 
       const unknown = captureWs();
-      table.get_extension_ui({}, unknown, { type: 'get_extension_ui', extensionId: 'charts', rendererId: 'nope' });
+      table.get_extension_ui({}, unknown, { type: 'get_extension_ui', extensionId: 'csv-echo', rendererId: 'nope' });
       assert.strictEqual(unknown.sent[0].type, 'extension_ui_error');
       assert.match(unknown.sent[0].reason, /declares no renderer/);
 
+      const missing = captureWs();
+      table.get_extension_ui({}, missing, { type: 'get_extension_ui', extensionId: 'nobody', rendererId: 'view' });
+      assert.strictEqual(missing.sent[0].type, 'extension_ui_error');
+      assert.match(missing.sent[0].reason, /no installed extension named "nobody"/);
+
       const escaping = captureWs();
-      table.get_extension_ui({}, escaping, { type: 'get_extension_ui', extensionId: 'thief', rendererId: 'r' });
+      table.get_extension_ui({}, escaping, { type: 'get_extension_ui', extensionId: 'thief', rendererId: 'view' });
       assert.strictEqual(escaping.sent[0].type, 'extension_ui_error');
       assert.match(escaping.sent[0].reason, /inside the extension's own directory/);
 
+      const pathy = captureWs();
+      table.get_extension_ui({}, pathy, { type: 'get_extension_ui', extensionId: '../csv-echo', rendererId: 'view' });
+      assert.strictEqual(pathy.sent[0].type, 'extension_ui_error');
+      assert.match(pathy.sent[0].reason, /not an installed extension name/);
+
       config.setWorkspace(null);
       const noWs = captureWs();
-      table.get_extension_ui({}, noWs, { type: 'get_extension_ui', extensionId: 'charts', rendererId: 'chart' });
+      table.get_extension_ui({}, noWs, { type: 'get_extension_ui', extensionId: 'csv-echo', rendererId: 'view' });
       assert.strictEqual(noWs.sent.length, 1);
       assert.strictEqual(noWs.sent[0].type, 'extension_ui_error');
       assert.match(noWs.sent[0].reason, /no workspace is open/);

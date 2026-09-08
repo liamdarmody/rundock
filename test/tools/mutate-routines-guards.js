@@ -568,9 +568,9 @@ const MUTATIONS = [
     '.run-status.ok { font-weight: 500; color: var(--success); }'],
   [STYLES, 'a slot nobody served is not dressed as a failure',
     '.run-status.neutral { font-weight: 500; color: var(--idle); }',
-    '.run-status.neutral { font-weight: 500; color: var(--danger); }'],
+    '.run-status.neutral { font-weight: 500; color: var(--danger-text); }'],
   [STYLES, 'a failure is not dressed as a success',
-    '.run-status.failed { font-weight: 600; color: var(--danger); }',
+    '.run-status.failed { font-weight: 600; color: var(--danger-text); }',
     '.run-status.failed { font-weight: 600; color: var(--success); }'],
 
   // ===== THE SAVE DESTINATION, AND THE SILENCE AROUND IT =====

@@ -22,8 +22,8 @@ async function host() {
   return hostModule;
 }
 
-function shell() {
-  const dom = new JSDOM('<!doctype html><html><body><div id="pane"></div></body></html>', {
+function shell(bodyClass = '') {
+  const dom = new JSDOM(`<!doctype html><html><body class="${bodyClass}"><div id="pane"></div></body></html>`, {
     runScripts: 'outside-only',
   });
   return { dom, doc: dom.window.document, pane: dom.window.document.getElementById('pane') };
@@ -39,13 +39,15 @@ const PAYLOAD = {
 // the extension is read off the wire rather than inferred.
 async function mounted(opts = {}) {
   const { mountExtension } = await host();
-  const { dom, pane } = shell();
+  const { dom, pane } = shell(opts.bodyClass);
   const sent = [];
   const degraded = [];
   const opened = [];
   const handle = mountExtension({
     paneElement: pane,
     payload: opts.payload || PAYLOAD,
+    path: opts.path === undefined ? 'notes/q3.chart' : opts.path,
+    content: opts.content === undefined ? 'a,b\n1,2\n' : opts.content,
     onOpen: (t) => opened.push(t),
     onDegrade: (reason) => degraded.push(reason),
     readyTimeoutMs: opts.readyTimeoutMs || 5000,
@@ -68,15 +70,32 @@ async function mounted(opts = {}) {
   return { dom, pane, handle, frame, source, sent, degraded, opened, wire };
 }
 
+// The document's message rows, one list per table. A table starts at its
+// header row; the first is what an extension may say to the host, the second
+// what the host says to an extension. Each row: the type and the Shape cell.
+function documentTables() {
+  const doc = fs.readFileSync(path.join(ROOT, 'docs', 'EXTENSION-HOST.md'), 'utf-8');
+  const tables = [];
+  for (const line of doc.split('\n')) {
+    if (/^\| Type \|/.test(line)) { tables.push([]); continue; }
+    const m = /^\| `([a-z]+)` \| `(\{ type[^`]*)`/.exec(line);
+    if (m && tables.length) tables[tables.length - 1].push({ type: m[1], shape: m[2] });
+  }
+  return { doc, tables };
+}
+
+function fieldsOf(shape) {
+  return [...shape.matchAll(/,\s*([a-z]+):/g)].map((m) => m[1]).sort();
+}
+
 describe('the contract document and the host agree on every message', () => {
   test('the table the document publishes is the table the host enforces, both ways', async () => {
-    const { EXTENSION_MESSAGES, HOST_MESSAGES } = await host();
-    const doc = fs.readFileSync(path.join(ROOT, 'docs', 'EXTENSION-HOST.md'), 'utf-8');
-    // Each message row: the type, and the Shape cell it publishes.
-    const rows = [...doc.matchAll(/^\| `([a-z]+)` \| `(\{ type[^`]*)`/gm)]
-      .map((m) => ({ type: m[1], shape: m[2] }));
+    const { EXTENSION_MESSAGES } = await host();
+    const { tables } = documentTables();
+    assert.ok(tables.length >= 2 && tables[0].length >= 4,
+      'the parse found the document\'s message tables; an empty read is a broken instrument');
+    const rows = tables[0];
     const types = rows.map((r) => r.type).sort();
-    assert.ok(rows.length >= 4, 'the parse found the document\'s message rows; an empty read is a broken instrument');
     assert.deepStrictEqual(Object.keys(EXTENSION_MESSAGES).sort(), types,
       'a message in one table and not the other is a capability the contract does not govern: '
       + 'edit docs/EXTENSION-HOST.md and EXTENSION_MESSAGES together');
@@ -84,16 +103,35 @@ describe('the contract document and the host agree on every message', () => {
     // host checks for that type, so the Shape column cannot promise a field
     // the mediator does not enforce.
     for (const { type, shape } of rows) {
-      const declaredFields = [...shape.matchAll(/,\s*([a-z]+):/g)].map((m) => m[1]);
-      for (const field of declaredFields) {
+      for (const field of fieldsOf(shape)) {
         assert.ok(Object.prototype.hasOwnProperty.call(EXTENSION_MESSAGES[type], field),
           `the document's shape for "${type}" names field "${field}" that the host does not check`);
       }
     }
-    for (const hostType of HOST_MESSAGES) {
-      assert.ok(doc.includes(`\`${hostType}\``),
-        `the document never mentions the host-to-extension message "${hostType}"`);
+  });
+
+  test('the host-to-extension table matches what the host posts, type for type and field for field', async () => {
+    const { HOST_MESSAGES, HOST_MESSAGE_FIELDS } = await host();
+    const { tables } = documentTables();
+    const rows = tables[1] || [];
+    assert.deepStrictEqual(rows.map((r) => r.type).sort(), [...HOST_MESSAGES].sort(),
+      'a host message in one table and not the other: edit docs/EXTENSION-HOST.md and HOST_MESSAGES together');
+    assert.deepStrictEqual(Object.keys(HOST_MESSAGE_FIELDS).sort(), [...HOST_MESSAGES].sort(),
+      'every host message declares the fields it carries');
+    for (const { type, shape } of rows) {
+      assert.deepStrictEqual(fieldsOf(shape), [...HOST_MESSAGE_FIELDS[type]].sort(),
+        `the document's shape for "${type}" and the fields the host posts must be the same set`);
     }
+  });
+
+  test('the cap the document states for init is the cap the host enforces', async () => {
+    const { MAX_INIT_CONTENT_CHARS } = await host();
+    const { doc } = documentTables();
+    const m = /`MAX_INIT_CONTENT_CHARS` \((\d+) characters\)/.exec(doc);
+    assert.ok(m, 'the document states the init content cap by its constant name and value');
+    assert.strictEqual(Number(m[1]), MAX_INIT_CONTENT_CHARS,
+      'the document cannot promise a different limit than the host enforces');
+    assert.ok(Number.isInteger(MAX_INIT_CONTENT_CHARS) && MAX_INIT_CONTENT_CHARS > 0);
   });
 });
 
@@ -163,12 +201,35 @@ describe('the mediator refuses what the contract does not name, on the wire', ()
       'not even a refusal: replying to an unknown window would teach it the host is listening');
   });
 
-  test('ready is answered with init over the wire, and the watchdog stands down', async () => {
-    const { wire, handle, sent } = await mounted({ readyTimeoutMs: 30 });
+  test('ready is answered with init over the wire carrying the opened file, and the watchdog stands down', async () => {
+    const { wire, handle, sent } = await mounted({ readyTimeoutMs: 30, path: 'data/sales.csv', content: 'a,b\n1,2\n' });
     wire({ type: 'ready' });
-    assert.deepStrictEqual(sent, [{ type: 'init' }]);
+    assert.deepStrictEqual(sent, [{ type: 'init', path: 'data/sales.csv', content: 'a,b\n1,2\n', theme: 'dark' }],
+      'the frame receives the file it was mounted for, path and text, once, after ready');
     await new Promise((r) => setTimeout(r, 60));
     assert.strictEqual(handle.alive(), true, 'a view that said ready is not torn down by the clock');
+  });
+
+  test('init carries the theme the page shows at mount time, read from the body class the toggle sets', async () => {
+    const light = await mounted({ bodyClass: 'light' });
+    light.wire({ type: 'ready' });
+    assert.strictEqual(light.sent[0].theme, 'light');
+    const dark = await mounted({ bodyClass: '' });
+    dark.wire({ type: 'ready' });
+    assert.strictEqual(dark.sent[0].theme, 'dark');
+  });
+
+  test('text over the exported cap degrades before any frame is appended, with the cap named', async () => {
+    const { MAX_INIT_CONTENT_CHARS } = await host();
+    const over = 'x'.repeat(MAX_INIT_CONTENT_CHARS + 1);
+    const { pane, handle, degraded } = await mounted({ content: over });
+    assert.strictEqual(pane.querySelector('iframe'), null, 'no frame was ever appended');
+    assert.strictEqual(handle.alive(), false);
+    assert.strictEqual(degraded.length, 1);
+    assert.match(degraded[0], new RegExp(String(MAX_INIT_CONTENT_CHARS)), 'the reason names the cap');
+    const atCap = await mounted({ content: 'x'.repeat(MAX_INIT_CONTENT_CHARS) });
+    assert.ok(atCap.pane.querySelector('iframe'), 'text at the cap mounts');
+    assert.deepStrictEqual(atCap.degraded, []);
   });
 
   test('resize is clamped to the published bounds, never trusted raw', async () => {
@@ -280,7 +341,7 @@ describe('the mount survives update and uninstall mid-session', () => {
   });
 });
 
-describe('the server reads installations and guards every payload path', () => {
+describe('the server reads the install store and guards every payload path', () => {
   function workspace(fixture) {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ext-reg-'));
     for (const [rel, content] of Object.entries(fixture)) {
@@ -292,130 +353,122 @@ describe('the server reads installations and guards every payload path', () => {
   }
   const registry = require('../../lib/packages/extension-registry.js');
 
-  const MANIFEST = JSON.stringify({
-    schemaVersion: 1, id: 'charts', name: 'Charts', version: '1.0.0',
-    renderers: [{ id: 'chart', target: '.chart', entry: 'ui/index.js', styles: ['ui/chart.css'] }],
-    resources: [{ id: 'data', maximumBytes: 1024 }],
+  // The install store: the records file the install flow writes, and the
+  // extension's files under the Rundock-owned root, with the rundock.json
+  // the extension ships declaring its entry and match rule.
+  const RECORDS = '.claude/rundock/extensions.json';
+  const record = (extra = {}) => ({
+    name: 'charts', version: '1.0.0', entry: 'ui/index.js', match: '*.chart',
+    source: { url: 'https://github.com/example/charts', reference: 'v1.0.0' },
+    installedAt: '2026-09-07T00:00:00.000Z', root: '.claude/rundock/extensions/charts', ...extra,
   });
+  const records = (...list) => JSON.stringify({ schema: 'rundock.extensions/v1', extensions: list });
+  const manifest = (name, extension) => JSON.stringify({ name, version: '1.0.0', extension });
 
-  test('installed extensions list with renderers, and a broken manifest says so', () => {
+  test('installed extensions list with their renderer, and a record with no valid name says so', () => {
     const dir = workspace({
-      '.rundock/plugins/charts/manifest.json': MANIFEST,
-      '.rundock/plugins/mangled/manifest.json': 'not json at all',
-      '.rundock/plugin-state.json': JSON.stringify({ plugins: { charts: { enabled: true } } }),
+      [RECORDS]: records(record(), { name: 'Not A Slug', version: '1', source: { url: 'u', reference: 'r' } }),
+      '.claude/rundock/extensions/charts/rundock.json': manifest('charts', { entry: 'ui/index.js', match: '*.chart' }),
+      '.claude/rundock/extensions/charts/ui/index.js': 'draw();',
     });
     try {
-      const list = registry.listExtensions(dir);
-      assert.strictEqual(list.length, 2);
-      const charts = list.find((e) => e.id === 'charts');
-      assert.deepStrictEqual(charts.renderers, [{ id: 'chart', target: '.chart' }]);
-      const mangled = list.find((e) => e.id === 'mangled');
-      assert.strictEqual(mangled.broken, true, 'an installation that stopped parsing is a fact, not a blank');
+      const listed = registry.listExtensions(dir);
+      assert.strictEqual(listed.length, 2, 'every record is reported, the broken one included');
+      const charts = listed.find((e) => e.id === 'charts');
+      assert.deepStrictEqual(charts, {
+        id: 'charts', name: 'charts', version: '1.0.0', enabled: true,
+        renderers: [{ id: 'view', target: '.chart' }], refusals: [], resources: [],
+      });
+      const broken = listed.find((e) => e.id !== 'charts');
+      assert.strictEqual(broken.broken, true);
+      assert.strictEqual(broken.enabled, false, 'a broken record is never enabled');
+      assert.deepStrictEqual(broken.renderers, []);
     } finally { fs.rmSync(dir, { recursive: true, force: true }); }
   });
 
-  test('a payload reads its entry and styles from inside the extension directory', () => {
+  test('a payload reads its entry from inside the extension directory, with no styles to carry', () => {
     const dir = workspace({
-      '.rundock/plugins/charts/manifest.json': MANIFEST,
-      '.rundock/plugins/charts/ui/index.js': 'draw();',
-      '.rundock/plugins/charts/ui/chart.css': '.c{}',
+      [RECORDS]: records(record()),
+      '.claude/rundock/extensions/charts/rundock.json': manifest('charts', { entry: 'ui/index.js', match: '*.chart' }),
+      '.claude/rundock/extensions/charts/ui/index.js': 'draw();',
     });
     try {
-      const p = registry.uiPayload(dir, 'charts', 'chart');
+      const p = registry.uiPayload(dir, 'charts', 'view');
       assert.strictEqual(p.ok, true);
       assert.strictEqual(p.entry, 'draw();');
-      assert.deepStrictEqual(p.styles, ['.c{}']);
-      assert.deepStrictEqual(p.resources, [{ id: 'data', maximumBytes: 1024 }]);
+      assert.deepStrictEqual(p.styles, []);
+      assert.deepStrictEqual(p.resources, []);
     } finally { fs.rmSync(dir, { recursive: true, force: true }); }
   });
 
   test('an entry that resolves outside the extension directory is refused, spelled any way', () => {
-    const escaping = JSON.stringify({
-      schemaVersion: 1, id: 'thief', renderers: [{ id: 'r', target: '.x', entry: '../../../secrets.txt' }],
-    });
-    const dir = workspace({
-      '.rundock/plugins/thief/manifest.json': escaping,
-      'secrets.txt': 'the workspace\'s own file',
-    });
-    try {
-      const p = registry.uiPayload(dir, 'thief', 'r');
-      assert.strictEqual(p.ok, false);
-      assert.match(p.reason, /inside the extension's own directory/);
-    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+    for (const spelling of ['../../../secret.js', 'ui/../../../secret.js', '/etc/passwd']) {
+      const dir = workspace({
+        [RECORDS]: records(record({ name: 'thief', entry: spelling, root: '.claude/rundock/extensions/thief' })),
+        '.claude/rundock/extensions/thief/rundock.json': manifest('thief', { entry: spelling, match: '*.x' }),
+        'secret.js': 'the workspace\'s own file',
+      });
+      try {
+        const p = registry.uiPayload(dir, 'thief', 'view');
+        assert.strictEqual(p.ok, false, `${spelling}: refused`);
+        assert.match(p.reason, /inside the extension's own directory/);
+      } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+    }
   });
 
-  test('an extension id that is a path of its own is refused before any read', () => {
-    assert.strictEqual(registry.uiPayload('/nowhere', '../escape', 'r').ok, false);
-    assert.match(registry.uiPayload('/nowhere', '../escape', 'r').reason, /single directory name/);
-    assert.strictEqual(registry.uiPayload('/nowhere', 'a/b', 'r').ok, false,
-      'a separator makes an id a path, which the containment guard should never have to see');
-  });
-
-  test('a manifest whose renderers is not an array is refused, not raised on', () => {
+  test('an entry reached through a symlink out of the directory is refused too', () => {
     const dir = workspace({
-      '.rundock/plugins/corrupt/manifest.json': JSON.stringify({
-        schemaVersion: 1, id: 'corrupt', renderers: { chart: 'ui/index.js' },
-      }),
+      [RECORDS]: records(record({ entry: 'ui/link.js' })),
+      '.claude/rundock/extensions/charts/rundock.json': manifest('charts', { entry: 'ui/link.js', match: '*.chart' }),
+      'secret.js': 'the workspace\'s own file',
     });
     try {
-      const p = registry.uiPayload(dir, 'corrupt', 'chart');
-      assert.strictEqual(p.ok, false);
-      assert.match(p.reason, /no renderers array/,
-        'a hostile or corrupt manifest cannot make the server raise');
-    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
-  });
-
-  test('a stylesheet resolving outside the extension directory is refused, even when the target exists', () => {
-    const escaping = JSON.stringify({
-      schemaVersion: 1, id: 'peeker',
-      renderers: [{ id: 'r', target: '.x', entry: 'ui/index.js', styles: ['../../../secrets.css'] }],
-    });
-    const dir = workspace({
-      '.rundock/plugins/peeker/manifest.json': escaping,
-      '.rundock/plugins/peeker/ui/index.js': 'draw();',
-      // The escape target is really present, so a refusal cannot come from a
-      // missing-file realpath failure: it must be the path guard on styles.
-      'secrets.css': 'body { background: url(exfiltrate) }',
-    });
-    try {
-      const p = registry.uiPayload(dir, 'peeker', 'r');
+      fs.mkdirSync(path.join(dir, '.claude', 'rundock', 'extensions', 'charts', 'ui'), { recursive: true });
+      fs.symlinkSync(path.join(dir, 'secret.js'), path.join(dir, '.claude', 'rundock', 'extensions', 'charts', 'ui', 'link.js'));
+      const p = registry.uiPayload(dir, 'charts', 'view');
       assert.strictEqual(p.ok, false);
       assert.match(p.reason, /inside the extension's own directory/,
-        'a stylesheet is a server-side read of arbitrary workspace files unless the path guard holds');
+        'canonicalised on both sides, so a symlink spelling cannot walk out');
     } finally { fs.rmSync(dir, { recursive: true, force: true }); }
   });
 
-  test('a styles field that is not an array of strings is refused', () => {
-    const bad = JSON.stringify({
-      schemaVersion: 1, id: 'sloppy',
-      renderers: [{ id: 'r', target: '.x', entry: 'ui/index.js', styles: 'one.css' }],
-    });
+  test('an extension id that is not an installed name is refused before any read', () => {
     const dir = workspace({
-      '.rundock/plugins/sloppy/manifest.json': bad,
-      '.rundock/plugins/sloppy/ui/index.js': 'draw();',
+      [RECORDS]: records(record()),
+      '.claude/rundock/extensions/charts/ui/index.js': 'draw();',
     });
     try {
-      const p = registry.uiPayload(dir, 'sloppy', 'r');
-      assert.strictEqual(p.ok, false);
-      assert.match(p.reason, /styles must be an array/);
+      for (const bad of ['../charts', 'charts/../charts', '', '.', '..', 'Charts', 'a b']) {
+        const p = registry.uiPayload(dir, bad, 'view');
+        assert.strictEqual(p.ok, false, `${JSON.stringify(bad)} refused`);
+        assert.match(p.reason, /not an installed extension name/);
+      }
+      assert.strictEqual(registry.uiPayload(dir, 'charts', 'other').ok, false, 'the one renderer id is the only one served');
+      assert.strictEqual(registry.uiPayload(dir, 'nobody', 'view').ok, false, 'a name with no record is refused');
     } finally { fs.rmSync(dir, { recursive: true, force: true }); }
   });
 
-  test('a directory name the roster reports is a name a mount can be served for', () => {
-    // listExtensions reports any directory not starting with a dot, so an id
-    // the roster lists must be an id uiPayload can serve, or the two disagree
-    // about what an installed extension is.
+  test('a name the roster reports is a name a mount can be served for', () => {
+    // The roster and the payload read one store through one name rule, so an
+    // id the roster lists as renderable is an id uiPayload serves.
     const dir = workspace({
-      '.rundock/plugins/My_Ext/manifest.json': JSON.stringify({
-        schemaVersion: 1, id: 'My_Ext', renderers: [{ id: 'r', target: '.x', entry: 'ui/index.js' }],
-      }),
-      '.rundock/plugins/My_Ext/ui/index.js': 'draw();',
+      [RECORDS]: records(record({ name: 'my-ext', root: '.claude/rundock/extensions/my-ext' })),
+      '.claude/rundock/extensions/my-ext/rundock.json': manifest('my-ext', { entry: 'ui/index.js', match: '*.chart' }),
+      '.claude/rundock/extensions/my-ext/ui/index.js': 'draw();',
     });
     try {
-      const listed = registry.listExtensions(dir).map((e) => e.id);
-      assert.ok(listed.includes('My_Ext'), 'the roster lists it');
-      const p = registry.uiPayload(dir, 'My_Ext', 'r');
+      const listed = registry.listExtensions(dir).filter((e) => e.renderers.length);
+      assert.deepStrictEqual(listed.map((e) => e.id), ['my-ext'], 'the roster lists it');
+      const p = registry.uiPayload(dir, 'my-ext', listed[0].renderers[0].id);
       assert.strictEqual(p.ok, true, 'and the mount serves it: the two agree on what an installed id is');
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test('a workspace with no records file has no extensions, and no records directory is the same', () => {
+    const dir = workspace({ 'notes.md': 'nothing installed' });
+    try {
+      assert.deepStrictEqual(registry.listExtensions(dir), []);
+      assert.strictEqual(registry.uiPayload(dir, 'charts', 'view').ok, false);
     } finally { fs.rmSync(dir, { recursive: true, force: true }); }
   });
 });

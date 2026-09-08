@@ -11,5 +11,12 @@ process.env.USERPROFILE = home; // Windows equivalent
 process.env.WORKSPACE = workspace;
 process.env.RUNDOCK_ELECTRON = '1'; // keep recent-workspaces file inside the fake home
 
+// Package installs fetch from GitHub through the real acquirer. Git's own
+// url rewriting points one fixture organisation at repositories the specs
+// seed beside the workspace, so that path runs unchanged with no network.
+process.env.GIT_CONFIG_COUNT = '1';
+process.env.GIT_CONFIG_KEY_0 = `url.file://${require('node:path').join(workspace, '..', 'repos')}/.insteadOf`;
+process.env.GIT_CONFIG_VALUE_0 = 'https://github.com/e2e-fixture/';
+
 const PORT = Number(process.env.E2E_PORT || 34517);
 require('../../server.js').startServer({ port: PORT });

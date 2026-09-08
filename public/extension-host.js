@@ -45,9 +45,27 @@ export const EXTENSION_MESSAGES = {
 // enforcement arrive together.
 
 
-// Messages the host may say to a frame. Listed for the contract test; the
-// host never accepts these directions in reverse.
+// Messages the host may say to a frame, and the fields each carries. Listed
+// for the contract test; the host never accepts these directions in reverse.
 export const HOST_MESSAGES = ['init', 'refused'];
+export const HOST_MESSAGE_FIELDS = {
+  init: ['path', 'content', 'theme'],
+  refused: ['of', 'reason'],
+};
+
+// THE FRAME RECEIVES THE OPENED FILE, READ-ONLY, IN `init`: its workspace
+// path, its text, and the theme the page shows, and nothing else about the
+// page. A renderer needs the bytes to render and the theme to match, and a
+// frame with an opaque origin has no other way to learn either. The text is
+// a copy; the host never reads anything back from the frame, so no message
+// in the closed table can change the file.
+//
+// THE CAP IS THE HOST'S, NOT THE CALLER'S. A file longer than this is not
+// handed to a frame at all: the mount degrades to the plain rendering before
+// any frame is appended, with the cap named, whichever caller mounts. One
+// number, exported so the contract document is compared against it rather
+// than allowed to promise a different one.
+export const MAX_INIT_CONTENT_CHARS = 2000000;
 
 // The frame height is a request, not a command. Clamped so a hostile or
 // broken view cannot stretch the page into uselessness.
@@ -118,12 +136,20 @@ export function validateMessage(data) {
   return { ok: true, type: data.type };
 }
 
+// The theme the page shows: the class the theme toggle sets on body, read
+// at mount time so the frame is told what is on screen when it appears.
+function currentTheme(doc) {
+  return doc.body && doc.body.classList.contains('light') ? 'light' : 'dark';
+}
+
 /**
- * Mount one extension view into a pane.
+ * Mount one extension view into a pane, for one opened file.
  *
  * @param {{
  *   paneElement: Element,
  *   payload: { entry: string, styles?: string[] },
+ *   path?: string,
+ *   content?: string,
  *   onOpen?: (target: string) => void,
  *   onDegrade: (reason: string) => void,
  *   readyTimeoutMs?: number,
@@ -141,6 +167,18 @@ export function mountExtension(opts) {
   } = opts;
   if (typeof onDegrade !== 'function') {
     throw new Error('mountExtension requires onDegrade: the plain rendering is the contract\'s floor');
+  }
+  const filePath = String(opts.path == null ? '' : opts.path);
+  const content = typeof opts.content === 'string' ? opts.content : '';
+  // The same shape as the live handle, so a caller that holds one need not
+  // know which it holds: frame answers null the way a torn-down mount's
+  // does, and swap answers null the way the live handle does.
+  const inert = { alive: () => false, frame: () => null, dispatch() {}, teardown() {}, swap: () => null };
+  // Over the cap, nothing is mounted: the plain rendering is the answer,
+  // decided before a frame exists to tear down.
+  if (content.length > MAX_INIT_CONTENT_CHARS) {
+    onDegrade(`the file is ${content.length} characters, over the ${MAX_INIT_CONTENT_CHARS} character limit an extension view may receive`);
+    return inert;
   }
   const doc = paneElement.ownerDocument;
   const win = doc.defaultView;
@@ -183,7 +221,7 @@ export function mountExtension(opts) {
     const data = event.data;
     if (data.type === 'ready') {
       if (readyTimer) { win.clearTimeout(readyTimer); readyTimer = null; }
-      send({ type: 'init' });
+      send({ type: 'init', path: filePath, content, theme: currentTheme(doc) });
       return;
     }
     if (data.type === 'error') {
@@ -219,10 +257,7 @@ export function mountExtension(opts) {
     }, readyTimeoutMs);
   } catch (e) {
     degrade(`the extension could not be mounted: ${String(e && e.message || e)}`);
-    // The same shape as the live handle, so a caller that holds one need not
-    // know which it holds: frame answers null the way a torn-down mount's
-    // does, and swap answers null the way the live handle does.
-    return { alive: () => false, frame: () => null, dispatch() {}, teardown() {}, swap: () => null };
+    return inert;
   }
 
   const handle = {

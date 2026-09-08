@@ -45,9 +45,15 @@ const MUTATIONS = [
     + '    });',
     "    fs.mkdirSync(path.dirname(toAbsolute(workspace, receipt)), { recursive: true });\n"
     + "    fs.writeFileSync(toAbsolute(workspace, receipt), `${JSON.stringify(buildReceipt(approval, evaluation, appliedAt), null, 2)}\\n`);"],
+  // The receipt records decisions, so any apply that decided something (a
+  // write or a skip) leaves one; only a pure replay, every item already at
+  // its approved bytes, writes none. One row per half of that rule.
   [APPLY, 'a zero-write apply writes no receipt',
-    '  if (options.receipt && evaluation.writes.length > 0) {',
+    '  if (options.receipt && (evaluation.writes.length > 0 || evaluation.skipped.length > 0)) {',
     '  if (options.receipt) {'],
+  [APPLY, 'an all-skip apply writes a receipt',
+    '  if (options.receipt && (evaluation.writes.length > 0 || evaluation.skipped.length > 0)) {',
+    '  if (options.receipt && evaluation.writes.length > 0) {'],
   [HANDLERS, 'the approval is used exactly as submitted, never repaired',
     '    const result = applyImport(workspace, sourcePathOf(msg), msg.approval, { receipt: {} });',
     "    const result = applyImport(workspace, sourcePathOf(msg), { ...msg.approval, schema: 'rundock.package-import-approval/v1' }, { receipt: {} });"],

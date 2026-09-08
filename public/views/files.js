@@ -706,9 +706,23 @@ function openThroughRendererSeam(viewers, path, content, surface) {
       return;
     }
     const pane = claimEditorPane();
+    // WHAT IS MOUNTED, recorded beside the handle so a later roster can be
+    // reconciled against it: the extension, its renderer, the version the
+    // roster carried at mount time, and the file. Recorded before the mount
+    // so a host that degrades synchronously clears a record that exists.
+    activeExtensionMountInfo = {
+      extension: claim.extension,
+      renderer: claim.renderer,
+      version: typeof registry.versionOf === 'function' ? registry.versionOf(claim.extension) : null,
+      path,
+    };
     activeExtensionMount = host.mountExtension({
       paneElement: pane,
       payload,
+      // The opened file, read-only, for the init message the host posts
+      // after ready. The host's cap applies here as it does to any caller.
+      path,
+      content,
       onOpen: (target) => openWikilink(target),
       onDegrade: (reason) => {
         // A superseded mount that degrades tears down its own frame (the
@@ -716,12 +730,18 @@ function openThroughRendererSeam(viewers, path, content, surface) {
         // surface: a newer open owns the pane now. It also nulls the shared
         // handle only when it still owns it, so a later closeOpenFile is
         // never handed a dead handle.
-        if (token === extensionSeamToken) activeExtensionMount = null;
+        if (token === extensionSeamToken) { activeExtensionMount = null; activeExtensionMountInfo = null; }
         if (superseded()) return;
         surface(viewers, path, content);
         noteRendererFailure(reason);
       },
     });
+    // A host that refused to mount (over the cap, or a frame it could not
+    // build) has already degraded and holds nothing to reconcile.
+    if (activeExtensionMount && typeof activeExtensionMount.alive === 'function' && !activeExtensionMount.alive()) {
+      activeExtensionMount = null;
+      activeExtensionMountInfo = null;
+    }
   }).catch((e) => {
     if (superseded()) return;
     surface(viewers, path, content);
@@ -774,6 +794,9 @@ function fetchExtensionUi(extensionId, rendererId) {
 }
 
 let activeExtensionMount = null;
+// The identity of the live mount: { extension, renderer, version, path }, or
+// null. What reconcileExtensionMount compares a roster against.
+let activeExtensionMountInfo = null;
 // Monotonic per-open token: every seam entry claims the next value, and an
 // async callback whose token is no longer current abandons its work.
 let extensionSeamToken = 0;
@@ -784,6 +807,79 @@ let extensionSeamToken = 0;
 function releaseExtensionMount() {
   extensionSeamToken += 1;
   if (activeExtensionMount) { activeExtensionMount.teardown(); activeExtensionMount = null; }
+  activeExtensionMountInfo = null;
+}
+
+// The live mount's identity, for whoever needs to know what is on screen
+// before asking for it to change.
+function mountedExtension() {
+  return activeExtensionMountInfo;
+}
+
+// THE ONE ENTRY POINT THAT RECONCILES A ROSTER WITH THE LIVE MOUNT. Called
+// from every roster arrival, and by the manage surface after an update,
+// disable or uninstall, so an extension that changes while its view is on
+// screen is answered in one place rather than by whichever caller
+// remembered. A mounted extension the roster no longer names, or names
+// disabled, is torn down and the plain surface drawn under a stated reason;
+// one present with a different version is swapped with a freshly fetched
+// payload; one whose version is unchanged is left alone. Returns what it
+// decided, so a caller can say so.
+function reconcileExtensionMount(roster) {
+  const info = activeExtensionMountInfo;
+  const mount = activeExtensionMount;
+  if (!info || !mount) return { action: 'none' };
+  const entry = (Array.isArray(roster) ? roster : []).find((e) => e && e.id === info.extension) || null;
+  if (!entry || entry.enabled === false) {
+    const reason = entry
+      ? `the extension "${info.extension}" was disabled`
+      : `the extension "${info.extension}" is no longer installed`;
+    const path = currentFilePath;
+    const content = rawFileContent;
+    releaseExtensionMount();
+    redrawPlainSurface(path, content, reason);
+    return { action: 'torn-down', reason };
+  }
+  const version = typeof entry.version === 'string' ? entry.version : null;
+  if (version === info.version) return { action: 'kept' };
+  // A fresh payload for the new version. The token and the handle are
+  // captured so a file opened, or a mount released, while the fetch is in
+  // flight wins: the late swap is abandoned rather than mounted over it.
+  const token = extensionSeamToken;
+  fetchExtensionUi(info.extension, info.renderer).then((payload) => {
+    if (token !== extensionSeamToken || activeExtensionMount !== mount) return;
+    if (!payload || typeof payload.entry !== 'string') {
+      const reason = payload && payload.reason
+        ? payload.reason : 'the updated renderer payload carried no entry to mount';
+      const path = currentFilePath;
+      const content = rawFileContent;
+      releaseExtensionMount();
+      redrawPlainSurface(path, content, reason);
+      return;
+    }
+    activeExtensionMount = mount.swap(payload);
+    activeExtensionMountInfo = { ...info, version };
+  }).catch((e) => {
+    if (token !== extensionSeamToken || activeExtensionMount !== mount) return;
+    const path = currentFilePath;
+    const content = rawFileContent;
+    releaseExtensionMount();
+    redrawPlainSurface(path, content, String(e && e.message || e));
+  });
+  return { action: 'swapping', from: info.version, to: version };
+}
+
+// The plain surface for the open file, drawn after a mount stood down for a
+// reason that was not the file's: the same surface the seam would have
+// chosen had nothing claimed the file, with the reason noted beside it.
+function redrawPlainSurface(path, content, reason) {
+  if (typeof path !== 'string' || !path) return;
+  loadViewersModule().then((viewers) => {
+    if (currentFilePath !== path) return;
+    const surface = FILE_SURFACES[viewers.classify(path)] || openBinaryOrUnsupportedFile;
+    surface(viewers, path, content);
+    noteRendererFailure(reason);
+  });
 }
 
 // A renderer failure is a note beside the plain rendering, never a blank:
@@ -1404,5 +1500,6 @@ return {
   renderFileConnections, drawFileConnections, drawFileConnectionsLoading, removeFileConnections,
   updateEditorBackButton,
   openSkillFile, editorGoBack,
+  mountedExtension, reconcileExtensionMount,
 };
 }));
