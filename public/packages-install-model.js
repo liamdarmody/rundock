@@ -264,15 +264,16 @@
   // whole review, per the state model: the workspace or source moved, so
   // every choice above no longer describes what is actually there.
   //
-  // Both checks below identify the message itself, not just this phase,
-  // over and above the correlation rule at the entry: an apply result
-  // shares this same package_import_result envelope, and a decision made
-  // after this projection was asked for sends a NEW evaluate request,
-  // superseding this one. Either kind of stray reply changes nothing,
-  // leaving the offer waiting on the request it actually sent.
+  // The message's identity is settled once, by the correlation rule at the
+  // entry, and nowhere else: an apply result shares this same
+  // package_import_result envelope, and a decision made after this
+  // projection was asked for sends a NEW evaluate request, superseding this
+  // one. Either kind of stray reply is refused there, by operation and by
+  // request id, and changes nothing. The request the offer last asked stays
+  // its outstanding one after the projection lands, so a reply to an older
+  // request is still told apart by its id rather than by arriving late.
   function evaluationReply(state, msg) {
     if (state.phase !== 'offer') return { state };
-    if (msg.operation !== 'evaluate' || msg.requestId !== state.evaluateRequestId) return { state };
     const carry = carried(state);
     if (isError(msg)) {
       return { state: { phase: 'failed', ...carry, message: msg.message || 'The review could not be checked.', canReplan: true } };
@@ -289,7 +290,6 @@
     return {
       state: {
         ...state,
-        outstanding: null,
         projection: {
           writes: ids(msg.writes),
           unchanged: ids(msg.unchanged),

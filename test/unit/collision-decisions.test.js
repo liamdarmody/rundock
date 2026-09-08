@@ -287,6 +287,24 @@ describe('a reply is matched to the request that produced it, not to the phase i
     assert.strictEqual(model.reply(resubmitted, refusal).state, resubmitted, 'the stray refusal changes nothing, by identity');
   });
 
+  test('a correlated message that is not a plan-carrying package_import_plan lands nothing, by identity', () => {
+    // The correlation rule matches by operation, so a message stamped for
+    // the plan operation reaches planReply whatever else it is. Only a
+    // package_import_plan that carries a plan may land the offer; a result
+    // envelope wearing the plan stamp, or a plan reply with no plan in it,
+    // is refused unread rather than dereferenced.
+    const { sourceRoot } = collidingScenario();
+    const classifying = model.submit(model.initial(), sourceRoot).state;
+    const strays = [
+      { type: 'package_import_result', operation: 'plan', token: null, status: 'ready', writes: [], unchanged: [], skipped: [], blocked: [] },
+      { type: 'package_import_plan', operation: 'plan', token: null },
+    ];
+    for (const stray of strays) {
+      assert.strictEqual(model.reply(classifying, stray).state, classifying,
+        `${stray.type} without a plan changes nothing, by identity`);
+    }
+  });
+
   test('a superseded evaluate reply changes nothing once a newer decision has asked its own projection', () => {
     const { workspace, offer } = collidingScenario();
     // Two decisions in a row: the first ask is still outstanding when the
