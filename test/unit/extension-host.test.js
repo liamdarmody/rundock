@@ -378,6 +378,8 @@ describe('the server reads the install store and guards every payload path', () 
       assert.deepStrictEqual(charts, {
         id: 'charts', name: 'charts', version: '1.0.0', enabled: true,
         renderers: [{ id: 'view', target: '.chart' }], refusals: [], resources: [],
+        source: { url: 'https://github.com/example/charts', reference: 'v1.0.0' },
+        installedAt: '2026-09-07T00:00:00.000Z',
       });
       const broken = listed.find((e) => e.id !== 'charts');
       assert.strictEqual(broken.broken, true);
