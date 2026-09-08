@@ -10,6 +10,10 @@
 // and "it failed" cannot tell those apart. That distinction is the whole
 // difference between a control and a tripwire nobody trusts.
 
+// A record describes a run, and a run took time. buildRecord refuses one
+// without durations, because a tolerant default there let the real call site
+// stop passing them with every test still green.
+const FIXTURE_TIMINGS = [{ step: 'preflight', ms: 1200 }, { step: 'test:coverage', ms: 88000 }];
 const { test, describe } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -106,7 +110,7 @@ describe('the record and the tree hash, against a real repository', () => {
     const { dir } = tempRepo();
     const file = path.join(dir, '.precommit-gate.json');
     try {
-      const written = buildRecord({ tree: currentTree(dir), branch: 'fix/card', at: '2026-08-20T00:00:00.000Z' });
+      const written = buildRecord({ tree: currentTree(dir), branch: 'fix/card', at: '2026-08-20T00:00:00.000Z', timings: FIXTURE_TIMINGS });
       writeRecord(written, file);
       assert.deepStrictEqual(readRecord(file), written);
       // Named explicitly: these are the fields refusal() compares, and a
@@ -122,7 +126,7 @@ describe('the record and the tree hash, against a real repository', () => {
     const { dir, run } = tempRepo();
     try {
       const before = currentTree(dir);
-      const record = buildRecord({ tree: before, branch: 'fix/card', at: '2026-08-20T00:00:00.000Z' });
+      const record = buildRecord({ tree: before, branch: 'fix/card', at: '2026-08-20T00:00:00.000Z', timings: FIXTURE_TIMINGS });
       // The same tree, unchanged: the gate admits it.
       assert.strictEqual(
         refusal({ record, tree: currentTree(dir), branch: 'fix/card', mainBranch: 'main' }),

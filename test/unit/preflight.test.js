@@ -170,6 +170,18 @@ describe('the gate runs it first', () => {
       'the slowest step runs last');
   });
 
+  test('reordering removed no step: the whole set is pinned, not just the order', () => {
+    // The ordering assertions above name three steps, so deleting any of the
+    // others would have passed every one of them. What this change was allowed
+    // to do is change WHEN checks run; removing one is a different act entirely
+    // and it must not be possible to do it by accident here.
+    const { STEPS } = require('../../scripts/precommit-gate.js');
+    assert.deepStrictEqual(STEPS.map(s2 => s2.name), [
+      'preflight', 'typecheck', 'lint:styles', 'check:refs',
+      'test:coverage', 'mutate:guards', 'check:fixture',
+    ], 'every check that ran before still runs; changing this set is a deliberate edit');
+  });
+
   test('the real loop times each step and hands those timings to the record', async () => {
     // MEASURED, NOT ECHOED. The earlier version handed buildRecord a hand-built
     // array, which proves an object survives a function: drop the argument at
@@ -188,6 +200,7 @@ describe('the gate runs it first', () => {
     }
     const record = buildRecord({ tree: 'deadbeef', branch: 'x', at: 'now', timings: outcome.timings });
     assert.strictEqual(record.timings.length, 2, 'and they reach the record');
+    assert.ok(record.totalMs >= 0, 'with a total, so two runs can be compared directly');
   });
 
   test('a failing step stops the run and reports what had been spent', async () => {
@@ -220,12 +233,17 @@ describe('the gate runs it first', () => {
     assert.strictEqual(record.totalMs, 1502400, 'and the total, so two runs can be compared directly');
   });
 
-  test('a record built without timings still carries the fields, rather than throwing', () => {
-    // Old records exist and the reverting check reads them. A shape that
-    // depended on a field added today would fail on every tree gated before it.
+  test('a record without timings is REFUSED, so the call site cannot quietly stop passing them', () => {
+    // The hole this closes was in the previous version of this very test, which
+    // pinned that a missing argument was tolerated and defaulted to none.
+    // Tolerance there meant the one line that makes the measurement real could
+    // be deleted with every test still green and every record carrying zero.
+    // There is one caller and it always has them, so absence is a defect rather
+    // than a case to accommodate.
     const { buildRecord } = require('../../scripts/precommit-gate.js');
-    const record = buildRecord({ tree: 'deadbeef', branch: 'main', at: new Date().toISOString() });
-    assert.deepStrictEqual(record.timings, []);
-    assert.strictEqual(record.totalMs, 0);
+    for (const bad of [undefined, [], null]) {
+      assert.throws(() => buildRecord({ tree: 'deadbeef', branch: 'main', at: 'now', timings: bad }),
+        /must carry the timings/, `${String(bad)} is refused`);
+    }
   });
 });

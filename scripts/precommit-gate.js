@@ -425,6 +425,12 @@ function writeRecord(record, file = RECORD) {
 
 /** The record `run()` would write for this tree and branch. */
 function buildRecord({ tree, branch, at, timings }) {
+  // REFUSED WITHOUT MEASUREMENTS, rather than defaulted to none. A tolerant
+  // default here is what made the single line that matters untestable: drop
+  // `timings` from the call site and every test still passed while every real
+  // record carried an empty array and a zero total, which is precisely the
+  // silent hole the measurement exists to close. There is one caller, it always
+  // has them, and a record without them is not a record of a run.
   // THE SCOPE THE MUTATION STEP RAN UNDER travels with the record. That step
   // no longer runs every harness: it runs the ones the change can affect and
   // names the rest. A record saying the step passed, without saying what it
@@ -436,8 +442,12 @@ function buildRecord({ tree, branch, at, timings }) {
   } catch (e) {
     mutationScope = { unavailable: 'the mutation step recorded no scope' };
   }
-  const totalMs = (timings || []).reduce((sum, t) => sum + t.ms, 0);
-  return { tree, branch, at, steps: STEPS.map(s => s.name), mutationScope, timings: timings || [], totalMs };
+  if (!Array.isArray(timings) || !timings.length) {
+    throw new Error('buildRecord: a record must carry the timings of the run it describes. '
+      + 'Pass the timings runSteps returned; a record without them cannot be compared to another.');
+  }
+  const totalMs = timings.reduce((sum, t) => sum + t.ms, 0);
+  return { tree, branch, at, steps: STEPS.map(s => s.name), mutationScope, timings, totalMs };
 }
 
 // The release commit's footprint.

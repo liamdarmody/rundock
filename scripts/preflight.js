@@ -56,6 +56,25 @@ const REGISTRY_SUITES = [
   // The client's global namespace and its stylesheet manifest.
   'test/unit/client-namespace.test.js',
   'test/unit/client-styles.test.js',
+  // Manifest equality over discovered call sites and doors. Each of these fails
+  // when something is ADDED and not written down, which is the membership rule,
+  // and each was previously reported only after the suite had run under coverage.
+  // Chosen by the rule rather than by which ones happened to bite: the three that
+  // cost a release a run each are no more deserving than the ones that have not
+  // bitten yet.
+  'test/unit/navigation-doors.test.js',
+  'test/unit/routine-editor-doors.test.js',
+  'test/unit/run-detail-doors.test.js',
+  'test/unit/routines-view-doors.test.js',
+  'test/unit/scheduler-lifecycle-doors.test.js',
+  'test/unit/app-retentions.test.js',
+  'test/unit/token-references.test.js',
+  // Registry-to-document equality, both directions.
+  'test/unit/workspace-boundary.test.js',
+  'test/unit/extension-host.test.js',
+  'test/unit/packaging.test.js',
+  'test/unit/config.test.js',
+  'test/unit/map-foothold.test.js',
 ];
 
 // Checks that are already their own commands, and already fast.
