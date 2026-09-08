@@ -76,12 +76,13 @@ const MUTATIONS = [
   [MODEL, 'an apply reply is matched to the request that asked for it, not just the phase',
     "    if (!correlated(state, msg)) return { state };\n",
     ''],
-  // The same identity check on the other side: a decision made after this
+  // The same identity on the other side: a decision made after this
   // projection was asked for supersedes it, and the superseded reply must
-  // not overwrite the newer one it lost the race to.
+  // not overwrite the newer one it lost the race to. The request id half of
+  // the one correlation rule is what tells the two apart.
   [MODEL, 'an evaluate reply is matched to the request that asked for it, not just the phase',
-    "    if (msg.operation !== 'evaluate' || msg.requestId !== state.evaluateRequestId) return { state };\n",
-    ''],
+    "    return waiting.requestId == null || msg.requestId === waiting.requestId;\n",
+    "    return true;\n"],
   // The apply transaction recovers any interrupted predecessor before it
   // looks, so a half-committed workspace can never be read as current truth.
   [APPLY_RECOVERY, 'an interrupted transaction is recovered before anything is read',
