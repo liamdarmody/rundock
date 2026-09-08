@@ -308,6 +308,25 @@ describe('the gate runs it first', () => {
     assert.ok(record.totalMs >= 0, 'with a total, so two runs can be compared directly');
   });
 
+  test('a step ended at its ceiling is reported as unfinished, not as failed', async () => {
+    // The distinction the ceilings exist for. A step killed at its ceiling
+    // reached no verdict; calling that a failure sends a reader looking for a
+    // broken test that is not there, which is the hour this was written to stop
+    // being lost. The merge that brought the ceilings in did not carry this
+    // through, and a textual merge would not have noticed.
+    const { runSteps, ceilingFor, DEFAULT_STEP_CEILING_MS } = require('../../scripts/precommit-gate.js');
+    assert.strictEqual(typeof ceilingFor('typecheck'), 'number', 'every step has a ceiling');
+    assert.strictEqual(ceilingFor('a step nobody declared'), DEFAULT_STEP_CEILING_MS,
+      'and an undeclared one inherits the default rather than running unbounded');
+    const outcome = await runSteps({
+      steps: [{ name: 'hangs' }],
+      runOne: async () => ({ ok: false, timedOut: true, out: '', code: null, signal: null }),
+    });
+    assert.strictEqual(outcome.ok, false);
+    assert.strictEqual(outcome.result.timedOut, true,
+      'the outcome carries the distinction through, so the caller can report it');
+  });
+
   test('a failing step stops the run and reports what had been spent', async () => {
     const { runSteps } = require('../../scripts/precommit-gate.js');
     const ran = [];

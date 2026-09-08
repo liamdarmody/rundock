@@ -161,6 +161,26 @@ const STEPS = [
 // end and this number is never reached.
 const STEP_END_GRACE_MS = 5000;
 
+// HOW LONG A STEP GETS BEFORE IT IS ENDED, matching the ceilings CI already
+// applies to the same work.
+//
+// On 2026-08-28 `test:coverage` ran for ninety-five minutes with no output: one
+// worker waited on a port the launching shell's sandbox would not let it bind,
+// CI caps that job at twenty minutes, and the local gate had no ceiling at all,
+// so nothing ended it and nothing said it was stuck. On 2026-09-07 the same
+// step hung again, for a different reason, and cost an hour before anybody
+// noticed. A gate is a control only while it can finish.
+//
+// The number is per step rather than for the run, because the run's length is
+// not the signal: a suite that normally takes four minutes and is still going
+// at twenty is stuck whatever the other steps have done.
+const STEP_CEILING_MS = {
+  'test:coverage': 20 * 60 * 1000,
+  'mutate:guards': 45 * 60 * 1000, // every harness, when the change touches the machinery
+};
+const DEFAULT_STEP_CEILING_MS = 10 * 60 * 1000;
+const ceilingFor = (name) => STEP_CEILING_MS[name] || DEFAULT_STEP_CEILING_MS;
+
 // How long a step gets to finish flushing its output after it has exited.
 //
 // The wait below is on 'exit' and not on 'close', because 'close' also waits
@@ -347,16 +367,35 @@ function runStep(step, root = ROOT) {
     let ended = null;
     let settled = false;
     let timer = null;
+    // ENDED THE WAY AN INTERRUPT ALREADY ENDS IT, through the process group,
+    // because the step's own children are what hang and killing only the
+    // parent leaves them running. Reported as a timeout rather than a failure:
+    // a step that never finished proved nothing, and calling that a failure
+    // would say the check ran and disagreed, which it did not.
+    const ceiling = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      const mins = Math.round(ceilingFor(step.name) / 60000);
+      if (kid.pid) endGroup(kid.pid, { graceMs: STEP_END_GRACE_MS });
+      resolve({
+        ok: false, timedOut: true, code: null, signal: null,
+        out: `${out}\n[precommit] ${step.name} passed ${mins} minutes without finishing and was ended. `
+          + 'Nothing it was checking is known: this is a step that never ran to a verdict, not a check that failed.',
+      });
+    }, ceilingFor(step.name));
     const settle = () => {
       if (settled || !ended) return;
       settled = true;
       if (timer) clearTimeout(timer);
+      clearTimeout(ceiling);
       resolve({ ok: ended.code === 0, code: ended.code, signal: ended.signal, out });
     };
     kid.on('error', (err) => {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
+      clearTimeout(ceiling);
       reject(err);
     });
     kid.on('exit', (code, signal) => {
@@ -603,7 +642,13 @@ async function run() {
       const { failed, result, stepMs, timings: spentSoFar } = outcome;
       const detail = result.out.trim();
       if (detail) console.error(failed.fullOutput ? detail : detail.split('\n').slice(-25).join('\n'));
-      const how = result.signal ? ` (ended by ${result.signal})` : '';
+      // A STEP THAT NEVER FINISHED IS NOT A STEP THAT FAILED, and the ceiling
+      // exists to tell them apart. Reported as a plain failure, a step ended at
+      // its ceiling sends a developer looking for a broken test that isn't
+      // there, which is the hour the ceiling was written to stop being lost.
+      const how = result.timedOut
+        ? ` (ended at its ${(ceilingFor(failed.name) / 60000).toFixed(0)} minute ceiling, so it reached no verdict)`
+        : (result.signal ? ` (ended by ${result.signal})` : '');
       // WITH THE ELAPSED TIME, because the runs this ordering is measured on are
       // the FAILING ones: a cheap failure surfaced in seconds rather than after
       // the suite is the whole saving, and a failing run used to leave no
@@ -653,4 +698,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { refusal, runSteps, buildRecord, writeRecord, readRecord, currentTree, defaultBranch, workingTreeDrift, stagedPaths, isReleaseCommit, RELEASE_FOOTPRINT, RECORD, STEPS, STEP_END_GRACE_MS };
+module.exports = { refusal, runSteps, buildRecord, writeRecord, readRecord, currentTree, defaultBranch, workingTreeDrift, stagedPaths, isReleaseCommit, RELEASE_FOOTPRINT, RECORD, STEPS, STEP_END_GRACE_MS, STEP_CEILING_MS, DEFAULT_STEP_CEILING_MS, ceilingFor };

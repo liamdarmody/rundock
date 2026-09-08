@@ -190,6 +190,48 @@ const s5ev = readEvents(workspace).some(e => e.e === 'permission' && e.d && e.d.
 record('S5 permission event recorded', s5ev);
 
 
+// ── S5b: the command shapes that escaped 0.13.0 ─────────────────────────
+// EVERY ONE OF THESE SHIPPED BROKEN AND WAS FOUND BY HAND. S5 above proves
+// the two permission paths exist; it never exercised a command shaped like
+// the ones people actually write, so a grader that disagreed with the
+// boundary classifier about ordinary text passed every gate and reached a
+// user. These are cheap because they ask the real endpoint the same question
+// the running product asks.
+//
+// Each line is a defect that was reported, not a hypothetical.
+// The runtime's own home, which is what these commands reach into: the same
+// folder the boundary frees reads of and refuses writes to.
+const HOME_DIR = os.homedir();
+const askPermission = (command) => fetch(`http://127.0.0.1:${PORT}/api/permission-request`, {
+  method: 'POST', headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({ tool_name: 'Bash', tool_input: { command }, conversation_id: '', session_id: '' }),
+}).then(r => r.json()).catch(() => null);
+
+// Reported: listing the runtime's own agents and skills drew a card, because
+// the grader split on `&` and cut `2>&1` into a redirect and an orphan `1`.
+const s6a = await Promise.race([
+  askPermission(`ls -la ${HOME_DIR}/.claude/agents/ ${HOME_DIR}/.claude/skills/ 2>&1`),
+  new Promise(r => setTimeout(() => r(null), 15000)),
+]);
+record('S5b a listing that discards its error output auto-approves', !!(s6a && s6a.allow === true));
+
+// Reported: a search whose PATTERN contained a pipe drew a card, because the
+// grader's segmenter was not quote-aware and cut the pattern in half.
+const s6b = await Promise.race([
+  askPermission(`grep -oE '"(app|window_title)": "[^"]{0,70}' /tmp/x.txt | head -20`),
+  new Promise(r => setTimeout(() => r(null), 15000)),
+]);
+record('S5b a shell operator inside quotes is text, not a separator', !!(s6b && s6b.allow === true));
+
+// Found in review: a lone `&` joined two commands and the line was judged by
+// its first word, so a removal rode in behind a listing and asked nothing.
+// This one must NOT auto-approve. A card here is the correct answer.
+const s6c = await Promise.race([
+  askPermission(`ls -1 ${HOME_DIR}/.claude/agents & rm -rf ${HOME_DIR}/.claude/agents/x.md`),
+  new Promise(r => setTimeout(() => r(null), 8000)),
+]);
+record('S5b a destructive command after a lone & does not auto-approve', !(s6c && s6c.allow === true));
+
 // ── S7: the workspace boundary, incident replay through the real card ───
 // The real PreToolUse hook binary is invoked exactly as the runtime invokes
 // it, targeting a folder OUTSIDE the workspace. The card must appear, the

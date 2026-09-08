@@ -120,9 +120,30 @@ jobs:
   # instead of transcribed. Not part of `npm test`: it runs that suite once per
   # guard, which is too slow to pay on every run and cheap to pay once per push.
   mutation:
-    name: Renderer guards and fixture provenance
+    # Renamed when this job went from the renderer's guards to every harness.
+    # Checked before renaming: this context is NOT among the required status
+    # checks on main (those are the two Test jobs, E2E, Coverage floors,
+    # Typecheck and Hygiene), so no branch-protection setting names this string
+    # and no pull request can be left waiting on a context that stopped
+    # reporting. If it is ever made required, the setting and this line have to
+    # change together, and neither order is safe on its own.
+    name: Mutation guards and fixture provenance
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Raised from 20 because this job went from one harness to all of them.
+    # Measured at about 31 minutes on a developer machine that was doing other
+    # work at the same time; 45 leaves room without letting a hang run for an
+    # hour, which is the failure a ceiling exists to bound.
+    # SEVENTY-FIVE, NOT FORTY-FIVE. The forty-five came from a developer laptop
+    # running the eighteen harnesses in about thirty-one minutes. Measured again
+    # since: roughly sixteen minutes of a local run, and these runners are
+    # commonly two to three times slower, which puts a serial run somewhere
+    # around thirty-two to forty-eight. A ceiling at the median turns a slow
+    # runner into a red build that says nothing about the code.
+    #
+    # The right answer is to shard the harnesses across a matrix so this is
+    # several short jobs rather than one long one. That is a separate change;
+    # until then the ceiling is set above the range rather than inside it.
+    timeout-minutes: 75
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -143,13 +164,24 @@ jobs:
       - name: Install test-only DOM dependency
         run: npm install --no-save --ignore-scripts jsdom@29.1.1
 
-      - name: Remove each renderer guard and require a red test
-        run: node test/tools/mutate-render-guards.js --markdown
+      # EVERY HARNESS, NOT ONE. The local gate now runs only the harnesses a
+      # change can affect, which is what makes it fast enough to run often. That
+      # trade is only safe while something runs the complete set, and this is
+      # that something: a machine that is not the author's, on every push, with
+      # no selection at all.
+      #
+      # Before this, the local gate was the only exhaustive run and CI checked a
+      # single harness, so a harness wrongly skipped locally was checked nowhere.
+      - name: Remove every guard in turn and require a red test
+        run: npm run mutate:guards:all
 
-      # The file is restored by the tool, including when a run throws. If a
-      # failure ever leaves it modified, that is itself worth seeing.
-      - name: Fail if the tool left the renderer modified
-        run: git diff --exit-code -- public/markdown-render.js
+      # The tools restore what they mutate, including when a run throws. A
+      # failure that leaves any of them modified is itself worth seeing, and
+      # says so about the whole tree rather than one file.
+      - name: Fail if any tool left a file modified
+        run: git diff --exit-code
+
+
 
       # The frozen "before" fixture is the only record of how ordinary markdown
       # rendered before this work, and every claim that it is unchanged is taken
