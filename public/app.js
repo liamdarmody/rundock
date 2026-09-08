@@ -343,6 +343,24 @@ function extensionFetchesConnectionLost() {
 
 window.rundockExtensionUiFetcher = requestExtensionUi;
 
+// A package import that landed agents or skills changed the roster the Team
+// and Skills views show. The server's agents-dir watcher invalidates its
+// caches but broadcasts nothing, so the client asks again, the way a saved
+// agent does in the chat path, and forgets that skills were loaded so the Skills rail
+// re-requests on its next open too. The second-step content result after an
+// extension install arrives on the same envelope. A result that wrote
+// nothing (every item skipped, unchanged or blocked) changed no roster and
+// asks for nothing.
+function packagesImportLanded(d) {
+  if (d.type !== 'package_import_result' || d.operation !== 'apply') return;
+  if (!(Array.isArray(d.writes) && d.writes.length > 0)) return;
+  skillsLoaded = false;
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'get_agents' }));
+    ws.send(JSON.stringify({ type: 'get_skills' }));
+  }
+}
+
 // ===== 4. MESSAGE HANDLING =====
 
 function handle(d) {
@@ -350,7 +368,7 @@ function handle(d) {
   switch(d.type) {
     case 'package_import_plan': case 'package_import_result': case 'package_import_error':
     case 'extension_install_plan': case 'extension_install_result': case 'package_install_declined': case 'package_install_error':
-      packagesReplyArrived(d); break;
+      packagesReplyArrived(d); packagesImportLanded(d); break;
     // The extension host's joins: a roster hydrates the renderer registry,
     // a payload reply settles the fetch that asked for it.
     case 'extensions': extensionRosterArrived(d); break;
