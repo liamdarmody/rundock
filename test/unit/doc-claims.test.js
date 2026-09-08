@@ -61,8 +61,26 @@ const changelog = fs.readFileSync(path.join(ROOT, 'CHANGELOG.md'), 'utf-8');
 // about. So: skip a leading "## Unreleased" and bind to the heading after it,
 // which is 0.12.0 today and will be whatever ships next once 0.12.0 itself is
 // no longer near the top.
+// BOUND TO THE RELEASE THESE CLAIMS ARE ABOUT, by name, rather than to whatever
+// heading happens to be topmost.
+//
+// Taking the top heading (skipping a literal "## Unreleased") worked only while
+// the release in question stayed at the top, and quietly re-pointed itself at
+// the next one the moment a version was named. That is a trap laid at the worst
+// possible moment: the pins go red DURING a release cut, on a changelog entry
+// that is perfectly correct, because they have silently started asking a new
+// entry to carry claims it was never about. The file's own history records this
+// being re-pointed once already, from one release to the next.
+//
+// Named explicitly, a release that moves these claims fails here with a message
+// saying so, which is a decision someone makes rather than a mystery they debug
+// while trying to ship.
+const CLAIMS_BELONG_TO = '0.13.0';
 const changelogHeadings = [...changelog.matchAll(/^## .*$/gm)];
-const shippedIdx = changelogHeadings[0][0].trim() === '## Unreleased' ? 1 : 0;
+const shippedIdx = changelogHeadings.findIndex(h => h[0].includes(CLAIMS_BELONG_TO));
+assert.ok(shippedIdx >= 0,
+  `the changelog no longer has a ${CLAIMS_BELONG_TO} section; if these claims now belong to a `
+  + 'different release, move CLAIMS_BELONG_TO deliberately rather than letting the pins drift');
 const shippedEntry = changelog.slice(
   changelogHeadings[shippedIdx].index,
   changelogHeadings[shippedIdx + 1]?.index ?? changelog.length,

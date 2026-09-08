@@ -159,6 +159,70 @@ describe('the boundary card', () => {
 // The wiring between two already-tested ends: the hook's tagging
 // (agentHomeTags) and the copy table meet here, in renderPermissionCard and
 // respondPermission. Neither end proves the join on its own.
+// The card is where being outside the workspace is actually felt. A person
+// meeting it thirty times in one build has a setting that would end it, and
+// no way to learn that from here unless the card says so.
+describe('the card names the setting that would stop it asking', () => {
+  test('an ordinary outside crossing points at the working folders setting', () => {
+    const html = render({
+      tool_name: 'Bash', input: { command: 'npm run build' },
+      boundary: true, resolved_path: '/home/u/Projects/alchemist', grant_dir: null,
+    });
+    assert.match(html, /name the folder in Settings under Workspace/,
+      'the answer to meeting this repeatedly is named where it is met');
+  });
+
+  test('it appears on a file crossing and on a multi-place command alike', () => {
+    const fileCard = render({
+      tool_name: 'Write', input: { file_path: '/home/u/Projects/x/a.js' },
+      boundary: true, resolved_path: '/home/u/Projects/x/a.js', grant_dir: '/home/u/Projects/x',
+    });
+    assert.match(fileCard, /name the folder in Settings under Workspace/);
+    const multi = render({
+      tool_name: 'Bash', input: { command: 'cp a b' },
+      boundary: true, resolved_path: null, grant_dir: null,
+      crossings: [{ path: '/home/u/Projects/a' }, { path: '/home/u/Projects/b' }],
+    });
+    assert.match(multi, /reaches more than one place/, 'the existing warning survives');
+    assert.match(multi, /name the folder in Settings under Workspace/, 'and the hint is composed with it');
+  });
+
+  test('it is NOT offered on a sandbox-retry card, which carries no path to name', () => {
+    // THE CARD THE REPORTED USER ACTUALLY MEETS in the default mode on macOS.
+    // The operating system established this crossing, not a target the hook
+    // could read, so there is no path here to compare against a named folder,
+    // and the OS write block is unchanged by naming one. A reader who has
+    // ALREADY named the folder would meet this card and be told to name it,
+    // which is the same false advice the runtime-home branch avoids.
+    const html = render({
+      tool_name: 'Bash', input: { command: 'make install', dangerouslyDisableSandbox: true },
+      boundary: true, resolved_path: null, grant_dir: null,
+    });
+    assert.doesNotMatch(html, /name the folder in Settings under Workspace/);
+    // AND IT SAYS WHAT IS ACTUALLY HAPPENING. Silence here is what sends a
+    // reader to the setting that cannot help them: the operating system refused
+    // this write, not a path check, so the card names the refusal and the one
+    // switch that ends it.
+    assert.match(html, /operating system refusing a write outside your workspace/i);
+    assert.match(html, /Naming a working folder does not change it/i);
+    assert.match(html, /Code mode is where these end/i);
+  });
+
+  test('it is NOT offered for a runtime-home crossing, where naming a folder changes nothing', () => {
+    // The one place the advice would be false. The secrets tier and the
+    // persistence surfaces are unmoved by any named folder, so pointing at the
+    // setting here would be an instruction that quietly does nothing, which is
+    // worse than saying nothing at all.
+    const crossingPath = '/home/u/.claude/.credentials.json';
+    const html = render({
+      tool_name: 'Read', input: { file_path: crossingPath },
+      boundary: true, resolved_path: crossingPath, grant_dir: null,
+      crossings: [{ path: crossingPath, secret: true, agentHome: true }],
+    });
+    assert.doesNotMatch(html, /name the folder in Settings under Workspace/);
+  });
+});
+
 describe('a crossing into the agent\'s own folder, rendered and answered', () => {
   test('a secrets-tier crossing renders the copy naming the stakes, offers no folder grant, and answering sends no grantDir', () => {
     const crossingPath = '/home/u/.claude/.credentials.json';

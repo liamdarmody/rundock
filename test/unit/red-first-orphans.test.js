@@ -774,7 +774,17 @@ describe('starting on top of a run that is still going', () => {
 
       // And the first run is left alone by the refusal: refusing must not be a
       // disguised way of clearing somebody else's work.
-      assert.strictEqual(running(written.group), true,
+      // ASKED OF THE GROUP, NOT OF ITS LEADER, which is the distinction the
+      // test below, on a run record kept after a kill, already spells out and
+      // this line did not honour.
+      // `running` looks up ONE pid, so passing a group id asks after the group
+      // LEADER, which is the shell that started the work. That shell can exit
+      // while the child it started is still going, and then this read false and
+      // the assertion failed on a run that was very much alive. It depended on
+      // timing, so it passed alone and failed under a loaded gate, which is the
+      // worst way for a test to be wrong: it reads as a flake and invites a
+      // re-run rather than a diagnosis.
+      assert.strictEqual(groupRunning(written.group), true,
         'the refusal must not end the run it found');
 
       first.kill('SIGTERM');

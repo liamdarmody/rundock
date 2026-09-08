@@ -947,3 +947,153 @@ describe('the secrets registry sits inside the OS-permitted root, which is what 
     }
   });
 });
+
+// ── Named working folders ──────────────────────────────────────────────
+// A workspace can name folders its agents also work in. The mechanism is the
+// same containment comparison the workspace root already uses, so the tests
+// that matter are not the ones proving a named folder works. They are the ones
+// proving it does NOT reach where it must never reach.
+//
+// The comparison runs before the runtime-home tier tags at every site that
+// consults it, so a named ancestor of `~/.claude` would otherwise classify
+// `.credentials.json` as inside and allow it outright: no card, no grading,
+// the secrets tier never consulted. Every assertion below drives a real named
+// folder rather than asserting on the helper, because the helper being correct
+// in isolation is exactly what the escape looked like.
+describe('a named working folder covers what is beneath it, and stops at the runtime home', () => {
+  test('a named parent covers a project beneath it, including one created later', () => {
+    const ws = tmp('nf-ws-');
+    const projects = tmp('nf-projects-');
+    fs.mkdirSync(path.join(projects, 'alchemist', 'src'), { recursive: true });
+
+    const inNamed = hook.classifyFileAccess('Read', { file_path: path.join(projects, 'alchemist', 'src', 'a.js') }, ws, [projects]);
+    assert.strictEqual(inNamed.where, 'inside', 'a file beneath the named parent raises no card');
+
+    // The point of naming a PARENT: a folder that does not exist yet is
+    // covered by the same act, with nothing further to approve.
+    const unborn = path.join(projects, 'a-project-started-next-month', 'index.js');
+    assert.strictEqual(hook.classifyFileAccess('Write', { file_path: unborn }, ws, [projects]).where, 'inside',
+      'a folder created later is covered without naming it');
+
+    // And the reported case end to end: a build is almost all shell, and a
+    // shell crossing offers no standing grant, so this is the one that decides
+    // whether the storm actually stops.
+    assert.strictEqual(
+      hook.classifyShellAccess('Bash', { command: `npm run build --prefix ${path.join(projects, 'alchemist')}` }, ws, [projects]),
+      null, 'a shell command reaching a project beneath the named parent reports no crossing at all');
+
+    // A sibling that was NOT named is untouched by any of this.
+    const elsewhere = tmp('nf-elsewhere-');
+    assert.strictEqual(hook.classifyFileAccess('Read', { file_path: path.join(elsewhere, 'x.md') }, ws, [projects]).where, 'outside',
+      'naming one folder says nothing about any other');
+
+    // AND THE LOOKALIKE, which is how this comparison goes wrong when it goes
+    // wrong: a bare string prefix puts `Projects-old` inside `Projects`,
+    // because the separator stops being part of the comparison. Built as a
+    // deliberate pair rather than two random temporary names, or the case is
+    // never actually exercised.
+    const base = tmp('nf-pair-');
+    const named = path.join(base, 'Projects');
+    const lookalike = path.join(base, 'Projects-old');
+    fs.mkdirSync(named, { recursive: true });
+    fs.mkdirSync(lookalike, { recursive: true });
+    assert.strictEqual(hook.classifyFileAccess('Read', { file_path: path.join(named, 'a.md') }, ws, [named]).where,
+      'inside', 'the named folder itself is covered');
+    assert.strictEqual(hook.classifyFileAccess('Read', { file_path: path.join(lookalike, 'a.md') }, ws, [named]).where,
+      'outside', 'Projects-old is not inside Projects, whatever their names share');
+  });
+
+  test('naming the home folder does not silence the secrets tier, by file tool or by shell', () => {
+    const home = tmp('nf-secret-home-');
+    fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+    const ws = tmp('nf-secret-ws-');
+    const credentials = path.join(home, '.claude', '.credentials.json');
+    fs.writeFileSync(credentials, '{}');
+
+    // `home` is named as a working folder, and it CONTAINS the runtime home.
+    const read = hook.classifyFileAccess('Read', { file_path: credentials }, ws, [home], home);
+    assert.strictEqual(read.where, 'outside', 'the secrets tier still cards, whatever is named');
+    assert.strictEqual(read.secret, true);
+    assert.strictEqual(read.grantDir, null, 'and still offers no standing grant');
+
+    const shell = hook.classifyShellAccess('Bash', { command: `cat ${credentials}` }, ws, [home], home);
+    assert.ok(shell && shell.crossings.length === 1, 'the shell half reports the crossing too');
+    assert.strictEqual(shell.crossings[0].secret, true);
+  });
+
+  test('naming the home folder does not silence a persistence-surface write', () => {
+    const home = tmp('nf-surface-home-');
+    fs.mkdirSync(path.join(home, '.claude', 'agents'), { recursive: true });
+    const ws = tmp('nf-surface-ws-');
+
+    const write = hook.classifyFileAccess('Write', { file_path: path.join(home, '.claude', 'agents', 'new.md') }, ws, [home], home);
+    assert.strictEqual(write.where, 'outside', 'a write to a persistence surface still cards');
+    assert.strictEqual(write.persistenceSurface, true);
+
+    const shell = hook.classifyShellAccess('Bash', { command: `touch ${path.join(home, '.claude', 'agents', 'x.md')}` }, ws, [home], home);
+    assert.strictEqual(shell.crossings[0].persistenceSurface, true);
+
+    // The freeing half of the tier is equally intact: naming a folder must not
+    // change what was already free, or the setting would be silently altering
+    // decisions nobody asked it to alter.
+    fs.mkdirSync(path.join(home, '.claude', 'cache'), { recursive: true });
+    assert.strictEqual(
+      hook.classifyFileAccess('Write', { file_path: path.join(home, '.claude', 'cache', 'page.html') }, ws, [home], home).where,
+      'inside', 'free scratch under the runtime home stays free');
+  });
+
+  test('a runtime home reached through a symlink is still the runtime home, whatever is named', () => {
+    // BOTH SIDES OF THE STOP ARE CANONICALISED, and this is what proves it. A
+    // home whose .claude is a link elsewhere resolves to a real directory that
+    // a named ancestor could otherwise contain: name that ancestor and, if the
+    // stop compared the unresolved spelling, the secrets tier would be reached
+    // through the back door while the front door stayed shut.
+    const home = tmp('nf-linkhome-');
+    const realStore = tmp('nf-linkhome-real-');
+    const claudeReal = path.join(realStore, 'claude-data');
+    fs.mkdirSync(claudeReal, { recursive: true });
+    try { fs.symlinkSync(claudeReal, path.join(home, '.claude'), 'dir'); } catch (e) { return; }
+    assert.notStrictEqual(fs.realpathSync(path.join(home, '.claude')), path.join(home, '.claude'),
+      'the link and its target must differ, or this passes vacuously');
+    const credentials = path.join(home, '.claude', '.credentials.json');
+    fs.writeFileSync(credentials, '{}');
+    const ws = tmp('nf-linkhome-ws-');
+
+    // realStore is named, and it CONTAINS the runtime home's real directory.
+    const read = hook.classifyFileAccess('Read', { file_path: credentials }, ws, [realStore], home);
+    assert.strictEqual(read.where, 'outside', 'the secrets tier is reached through the link and still cards');
+    assert.strictEqual(read.secret, true);
+    const shell = hook.classifyShellAccess('Bash', { command: `cat ${credentials}` }, ws, [realStore], home);
+    assert.ok(shell && shell.crossings.length === 1 && shell.crossings[0].secret === true,
+      'and the shell half agrees, rather than the two disagreeing about one path');
+  });
+
+  test('a named folder is canonicalised, so a folder reached through a symlink still covers its files', () => {
+    // Dropbox and iCloud folders are routinely symlinked, and the storm this
+    // setting ends is partly a symlink story already. A named folder compared
+    // unresolved would cover nothing while looking configured.
+    const real = tmp('nf-link-real-');
+    fs.mkdirSync(path.join(real, 'proj'), { recursive: true });
+    const linkParent = tmp('nf-link-parent-');
+    const link = path.join(linkParent, 'named');
+    try { fs.symlinkSync(real, link, 'dir'); } catch (e) { return; }
+    // Precondition: the two spellings must actually differ, or this passes
+    // vacuously on a host where they coincide.
+    assert.notStrictEqual(fs.realpathSync(link), link, 'the link and its target must be different paths for this to prove anything');
+
+    const ws = tmp('nf-link-ws-');
+    assert.strictEqual(hook.classifyFileAccess('Read', { file_path: path.join(real, 'proj', 'a.md') }, ws, [link]).where, 'inside',
+      'named through the link, reached through the real path');
+    assert.strictEqual(hook.classifyFileAccess('Read', { file_path: path.join(link, 'proj', 'a.md') }, ws, [real]).where, 'inside',
+      'named through the real path, reached through the link');
+  });
+
+  test('naming nothing changes nothing, which is what every other test in this file assumes', () => {
+    const home = tmp('nf-empty-home-');
+    fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+    const ws = tmp('nf-empty-ws-');
+    const outside = tmp('nf-empty-outside-');
+    assert.strictEqual(hook.classifyFileAccess('Read', { file_path: path.join(outside, 'x.md') }, ws, [], home).where, 'outside');
+    assert.strictEqual(hook.classifyFileAccess('Read', { file_path: path.join(ws, 'x.md') }, ws, [], home).where, 'inside');
+  });
+});
