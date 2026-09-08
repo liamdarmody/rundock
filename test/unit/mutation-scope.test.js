@@ -138,12 +138,38 @@ describe('selection is conservative in every direction that is not proven safe',
     // So this reads the real harnesses rather than a fixture, and requires every
     // shared module they pull in to be covered. A new helper under test/tools/
     // fails here, on the day it is added, with a message saying what to do.
-    const tools = path.join(__dirname, '..', 'tools');
-    const shared = new Set();
+    // THE SUITES COUNT TOO, and missing them was the narrower claim this guard
+    // used to make. A harness's verdict comes from the suite it drives, so a
+    // helper required by that SUITE is a shared dependency of the harness just
+    // as much as one required by the harness file, and the directory-wide
+    // trigger used to cover both. Quotes of either kind, and an omitted
+    // extension, because a require that does not match the pattern is a
+    // dependency this guard silently stops seeing.
+    const root = path.join(__dirname, '..', '..');
+    const tools = path.join(root, 'test', 'tools');
+    const readable = (f) => { try { return fs.readFileSync(f, 'utf8'); } catch (e) { return null; } };
+    const sources = [];
     for (const tool of harnessFiles(tools)) {
-      const src = fs.readFileSync(path.join(tools, tool), 'utf8');
-      for (const m of src.matchAll(/require\('\.\/([^']+)'\)/g)) shared.add(`test/tools/${m[1]}`);
+      const src = readable(path.join(tools, tool));
+      if (src) sources.push(src);
+      for (const m of src.matchAll(/suite:\s*'([^']+)'/g)) {
+        const suite = readable(path.join(root, m[1]));
+        if (suite) sources.push(suite);
+      }
     }
+    const shared = new Set();
+    for (const src of sources) {
+      for (const m of src.matchAll(/require\(\s*['"]([^'"]*tools\/[^'"]+)['"]\s*\)/g)) {
+        const rel = m[1].replace(/^.*?tools\//, 'test/tools/');
+        shared.add(rel.endsWith('.js') ? rel : `${rel}.js`);
+      }
+      for (const m of src.matchAll(/require\(\s*['"]\.\/([^'"]+)['"]\s*\)/g)) {
+        const rel = `test/tools/${m[1]}`;
+        shared.add(rel.endsWith('.js') ? rel : `${rel}.js`);
+      }
+    }
+    assert.ok(sources.length > harnessFiles(tools).length,
+      'sanity: the suites were read as well as the harnesses, or this checks half of what it says');
     assert.ok(shared.size >= 1, 'sanity: the harnesses were read and they do share something');
     for (const dep of shared) {
       const covered = RUN_EVERYTHING_WHEN_TOUCHED.some(t => (t.endsWith('/') ? dep.startsWith(t) : dep === t));

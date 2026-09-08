@@ -14,6 +14,17 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
 const ROOT = path.join(__dirname, '..', '..');
+// A CHILD THAT IS ITSELF A TEST RUN must not inherit this one's runner
+// context: with NODE_TEST_CONTEXT set, a nested `node --test` reports to the
+// parent rather than exiting on its own result, so a genuinely failing child
+// hands back status 0 and a test asserting on that status silently proves
+// nothing. Measured while writing the registry case below.
+const cleanEnv = () => {
+  const env = { ...process.env };
+  delete env.NODE_TEST_CONTEXT;
+  delete env.NODE_OPTIONS;
+  return env;
+};
 const preflight = require('../../scripts/preflight.js');
 
 describe('what the cheap phase covers', () => {
@@ -57,7 +68,7 @@ describe('what the cheap phase covers', () => {
     assert.strictEqual(step.fullOutput, true,
       'preflight opts out of the tail rule, or its all-at-once report is cut to the last failure');
     const gate = fs.readFileSync(path.join(ROOT, 'scripts', 'precommit-gate.js'), 'utf8');
-    assert.match(gate, /step\.fullOutput \? detail :/,
+    assert.match(gate, /failed\.fullOutput \? detail :/,
       'and the gate honours the flag rather than declaring it and truncating anyway');
   });
 });
@@ -85,7 +96,7 @@ describe('one pass, not several', () => {
     fs.mkdirSync(path.dirname(tmp), { recursive: true });
     fs.writeFileSync(tmp, rigged);
     try {
-      const r = spawnSync(process.execPath, [tmp], { cwd: ROOT, encoding: 'utf8' });
+      const r = spawnSync(process.execPath, [tmp], { cwd: ROOT, encoding: 'utf8', env: cleanEnv() });
       assert.notStrictEqual(r.status, 0, 'a failing phase must fail the run');
       const out = `${r.stdout}${r.stderr}`;
       assert.match(out, /FIRST FAILURE TEXT/, 'the first failure is reported');
@@ -95,6 +106,49 @@ describe('one pass, not several', () => {
         'and the reader is told the slow steps did not run, so they know what a re-run costs');
     } finally {
       fs.rmSync(tmp, { force: true });
+    }
+  });
+});
+
+describe('the registry suites actually run, and a broken one is reported', () => {
+  test('the phase really executes the suites it names, rather than naming them and running none', () => {
+    // The earlier version of this file rigged a copy with the registries
+    // invocation REMOVED, so deleting that line from the real script would have
+    // left every test here green while the phase checked nothing at all. This
+    // runs the real script and looks for a test name only those suites produce.
+    const r = spawnSync(process.execPath, [path.join(ROOT, 'scripts', 'preflight.js')],
+      { cwd: ROOT, encoding: 'utf8', env: cleanEnv() });
+    assert.strictEqual(r.status, 0, `the real phase should pass on this tree:\n${r.stdout}${r.stderr}`);
+    assert.match(r.stdout, /registries\.\.\. ok/, 'the registries step ran');
+  });
+
+  test('a failing registry suite is surfaced by the phase, and stops it', () => {
+    // A registry failure, replayed. The rigged copy keeps the real registries
+    // invocation and ADDS a failing suite to it, so what is proven is the path
+    // the product uses rather than a substitute for it.
+    const src = fs.readFileSync(path.join(ROOT, 'scripts', 'preflight.js'), 'utf8');
+    const dir = path.join(ROOT, '.rundock');
+    fs.mkdirSync(dir, { recursive: true });
+    const brokenSuite = path.join(dir, 'broken-registry.test.js');
+    fs.writeFileSync(brokenSuite,
+      "const { test } = require('node:test');\n"
+      + "const assert = require('node:assert');\n"
+      + "test('a registry that was not updated', () => { assert.fail('REGISTRY VIOLATION MARKER'); });\n");
+    const rigged = path.join(dir, 'preflight-registry-rigged.js');
+    fs.writeFileSync(rigged, src.replace(
+      /const REGISTRY_SUITES = \[[\s\S]*?\];/,
+      `const REGISTRY_SUITES = ['.rundock/broken-registry.test.js'];`));
+    try {
+      const r = spawnSync(process.execPath, [rigged], { cwd: ROOT, encoding: 'utf8', env: cleanEnv() });
+      assert.notStrictEqual(r.status, 0, 'a broken registry must fail the phase');
+      const out = `${r.stdout}${r.stderr}`;
+      assert.match(out, /REGISTRY VIOLATION MARKER/,
+        'and the reason must be on screen, not just a count of failures');
+      assert.match(out, /Nothing expensive was started/,
+        'and the reader is told the slow steps never ran');
+    } finally {
+      fs.rmSync(rigged, { force: true });
+      fs.rmSync(brokenSuite, { force: true });
     }
   });
 });
@@ -114,6 +168,43 @@ describe('the gate runs it first', () => {
     // And the expensive pair are still last, in cost order.
     assert.ok(names.indexOf('mutate:guards') > names.indexOf('test:coverage'),
       'the slowest step runs last');
+  });
+
+  test('the real loop times each step and hands those timings to the record', async () => {
+    // MEASURED, NOT ECHOED. The earlier version handed buildRecord a hand-built
+    // array, which proves an object survives a function: drop the argument at
+    // the call site and it still passes while every real record carries none.
+    // This drives the shipped loop with a stub runner and a stub step list.
+    const { runSteps, buildRecord } = require('../../scripts/precommit-gate.js');
+    const seen = [];
+    const outcome = await runSteps({
+      steps: [{ name: 'cheap' }, { name: 'dear' }],
+      runOne: async (step) => { seen.push(step.name); return { ok: true, out: '' }; },
+    });
+    assert.deepStrictEqual(seen, ['cheap', 'dear'], 'the steps ran, in order');
+    assert.deepStrictEqual(outcome.timings.map(t => t.step), ['cheap', 'dear']);
+    for (const t of outcome.timings) {
+      assert.strictEqual(typeof t.ms, 'number', `${t.step} carries a measured duration`);
+    }
+    const record = buildRecord({ tree: 'deadbeef', branch: 'x', at: 'now', timings: outcome.timings });
+    assert.strictEqual(record.timings.length, 2, 'and they reach the record');
+  });
+
+  test('a failing step stops the run and reports what had been spent', async () => {
+    const { runSteps } = require('../../scripts/precommit-gate.js');
+    const ran = [];
+    const outcome = await runSteps({
+      steps: [{ name: 'cheap' }, { name: 'broken' }, { name: 'dear' }],
+      runOne: async (step) => {
+        ran.push(step.name);
+        return step.name === 'broken' ? { ok: false, out: 'nope' } : { ok: true, out: '' };
+      },
+    });
+    assert.strictEqual(outcome.ok, false);
+    assert.deepStrictEqual(ran, ['cheap', 'broken'], 'the expensive step after the failure never ran');
+    assert.strictEqual(outcome.failed.name, 'broken');
+    assert.deepStrictEqual(outcome.timings.map(t => t.step), ['cheap', 'broken'],
+      'and the failing run still carries durations, which is the case this ordering is measured on');
   });
 
   test('the record carries how long each step took, so the next claim can be checked', () => {
