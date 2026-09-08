@@ -89,11 +89,9 @@
 .packages-field-error { font-size: var(--caption); color: var(--danger-text); margin-top: 8px; }
 .packages-state, .packages-confirm-card, .packages-success-card { display: flex; flex-direction: column; gap: 10px; padding: 20px; }
 .packages-headline { font-size: var(--body); font-weight: 600; color: var(--text-1); }
-.packages-body, .packages-collision-note, .packages-blocked-line { font-size: var(--caption); color: var(--text-2); line-height: 1.6; }
-.packages-collision-note { color: var(--text-1); }
+.packages-body, .packages-blocked-line { font-size: var(--caption); color: var(--text-2); line-height: 1.6; }
 .packages-failed .packages-headline { color: var(--danger-text); }
 .packages-actions { display: flex; gap: 8px; margin-top: 6px; }
-.packages-confirm:disabled { opacity: 0.5; cursor: default; }
 .packages-part { display: flex; justify-content: space-between; gap: 12px; font-size: var(--caption); }
 .packages-part-label { font-weight: 600; color: var(--text-1); }
 .packages-part-dest { color: var(--text-3); font-family: var(--mono, monospace); }

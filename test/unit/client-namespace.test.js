@@ -259,7 +259,6 @@ const MANIFEST = {
     "connectorsScopeText",
     "connectorsSectionHtml",
     "connectorsWorkspaceChanged",
-    "extensionUpdateStatusHtml",
     "packagesCancel",
     "packagesCancelUninstall",
     "packagesConfirm",

@@ -46,6 +46,14 @@
     return { phase: 'idle', link: '', reference: '', fieldError: null };
   }
 
+  // Every message this model can send, declared once so the suite can hold
+  // the walk over every sending transition to exactly this set, and so a
+  // message added to a transition without being named here fails there.
+  const OUTGOING = [
+    'plan_package_install', 'plan_extension_update', 'evaluate_package_decisions',
+    'confirm_extension_install', 'confirm_package_install', 'decline_package_install',
+  ];
+
   function count(n, word) {
     return `${n} ${word}${n === 1 ? '' : 's'}`;
   }
@@ -197,9 +205,16 @@
       return { state: { phase: 'failed', ...carry, message: msg.message || 'The package could not be read.', updating: state.updating || null } };
     }
     if (msg.type === 'extension_install_plan') {
+      // Provenance is the server's: the canonical url and the reference it
+      // acquired at travel on the reply, and the trust card names those, so
+      // an update begun from a managed row that typed no link still says
+      // where the bytes came from, and a retry from there re-plans it.
+      const source = msg.source && typeof msg.source.url === 'string'
+        ? { link: msg.source.url, reference: msg.source.reference || carry.reference }
+        : carry;
       return {
         state: {
-          phase: 'trust', ...carry, token: msg.token,
+          phase: 'trust', ...source, token: msg.token,
           manifest: msg.manifest, facts: msg.facts, replaces: msg.replaces || null,
           updating: state.updating || null,
         },
@@ -730,17 +745,7 @@
     };
   }
 
-  // The update check's three named outcomes, each in its own words. A pin
-  // the check cannot order against the listing (a commit, a codename) is
-  // said to be exactly that, never "up to date", which would be a claim
-  // the code cannot make.
-  function updateStatusCopy(status) {
-    if (status.outcome === 'newer-available') return `Update available: ${status.newer[status.newer.length - 1]}. Installing it asks for permission again.`;
-    if (status.outcome === 'up-to-date') return `Up to date at ${status.current}.`;
-    return `Pinned at ${status.current}, which cannot be compared with the tags this repository publishes. Pin a tag to have updates checked.`;
-  }
-
   return { initial, submit, beginUpdate, reply, planReply, offerCopy, cancel, decline, confirm, applyReply, installReply, doneCopy,
-    retry, connectionLost, allAddApproval, HOST_FACTS, hostClaims, trustCopy, updateStatusCopy,
+    retry, connectionLost, allAddApproval, HOST_FACTS, hostClaims, trustCopy, OUTGOING,
     setDecision, reviewCopy, staleCopy, confirmLabel, reasonWords, REVIEW_TONES };
 }));

@@ -45,11 +45,15 @@ const MUTATIONS = [
   // Let the well-known moving names through and "pinned at main" becomes a
   // promise about whatever main means tomorrow.
   [SOURCE, 'a moving branch name is refused as not a pin',
-    `  if (MOVING_NAMES.has(reference.toLowerCase())) {
+    `  if (MOVING_NAMES.has(reference.toLowerCase().replace(/^refs\\/heads\\//, '').replace(/^heads\\//, ''))) {
     refuse(\`"\${reference}" is a moving branch name, not a pin; use a tag, release or commit\`,
       'unpinned-reference');
   }`,
     ''],
+  // Compare the raw spelling and "refs/heads/main" walks through as a pin.
+  [SOURCE, 'a moving branch name is refused in its qualified spelling too',
+    "  if (MOVING_NAMES.has(reference.toLowerCase().replace(/^refs\\/heads\\//, '').replace(/^heads\\//, ''))) {",
+    "  if (MOVING_NAMES.has(reference.toLowerCase())) {"],
   // Default the absent pin and the refusal's whole reason is inverted: the
   // repository's head, read only to classify, would be installed as code.
   [SOURCE, 'an absent reference is refused for code, never defaulted to a branch',
@@ -129,7 +133,7 @@ const MUTATIONS = [
   [HANDLERS, 'declining discards the acquired snapshot',
     '  discardPending(msg.token);\n  ws.send(JSON.stringify({ type: \'package_install_declined\'',
     '  releasePending(msg.token);\n  ws.send(JSON.stringify({ type: \'package_install_declined\''],
-  // Skip the discard in beginExtensionPlan's own catch and a snapshot that
+  // Skip the discard in beginPackagePlan's own catch and a snapshot that
   // was fetched but then failed to plan (a fetch that fails after acquiring
   // some bytes; a repository with no rundock.json) leaks its temporary
   // directory instead of leaving nothing behind, the same promise a decline
@@ -164,7 +168,7 @@ const MUTATIONS = [
     "  if (!record.source || typeof record.source.url !== 'string' || !record.source.url) return `\"${record.name}\" carries no source url`;\n",
     ''],
   // Skip the revalidation and the persisted url goes straight into
-  // beginExtensionPlan and a git argv unchecked, exactly the trust the
+  // beginPackagePlan and a git argv unchecked, exactly the trust the
   // uninstall path refuses to extend to the same file's root.
   [HANDLERS, 'the stored url is revalidated through the same GitHub-source validation a fresh install uses',
     '    source = requirePin(parseGitHubSource(record.source.url, msg.reference));',
@@ -319,6 +323,22 @@ const MUTATIONS = [
   // ".claude/rundock/extensions" for one entry makes uninstall recursively
   // delete every installed extension, or one carrying another install's own
   // root removes that install's directory instead of this one's.
+  // Remove the files before the record leaves and a crash between the two
+  // leaves a recorded extension whose files are gone.
+  [INSTALL, 'the record leaves before the files, never after',
+    `  writeAsUnit(workspace, [{ path: recordsPath, content: serialiseRecords(remaining) }]);
+  try {
+    fs.rmSync(target, { recursive: true, force: true });
+  } catch (e) {`,
+    `  try {
+    fs.rmSync(target, { recursive: true, force: true });
+    writeAsUnit(workspace, [{ path: recordsPath, content: serialiseRecords(remaining) }]);
+  } catch (e) {`],
+  // Skip the restore and a removal the filesystem refuses strands the
+  // directory: the record is gone, so no retry can find it.
+  [INSTALL, 'a removal that fails puts the record back before the refusal',
+    "    writeAsUnit(workspace, [{ path: recordsPath, content: serialiseRecords(records) }]);\n",
+    ''],
   [INSTALL, 'the removal target must equal the install-time location exactly, nothing wider',
     `  if (path.resolve(workspace, ...record.root.split('/')) !== target) {
     refuse(\`the installed record for "\${name}" names a root that does not match its install-time location; refusing to remove anything\`, 'invalid-record');
@@ -349,7 +369,7 @@ const MUTATIONS = [
   [SETTINGS_VIEW, 'the trust card renders the derived file list',
     '        <ul class="extension-facts-files">${copy.files.map((f) => `<li>${esc(f)}</li>`).join(\'\')}</ul>',
     ''],
-  // Drop extensionReplyArrived from the exported surface and every server
+  // Drop packagesReplyArrived from the exported surface and every server
   // reply for this flow resolves against `window` in a browser and throws,
   // while every test that calls the handler directly stays green.
   [SETTINGS_VIEW, 'the install flow\'s reply entry is on the module\'s exported surface',

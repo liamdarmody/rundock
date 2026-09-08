@@ -323,11 +323,6 @@ function packagesStaleCardHtml(copy) {
     </div>`;
 }
 
-// One installed extension's update outcome, for the card that lists it.
-function extensionUpdateStatusHtml(status) {
-  return `<div class="packages-body extension-update-note" data-outcome="${escAttr(status.outcome)}">${esc(RundockPackagesInstallModel.updateStatusCopy(status))}</div>`;
-}
-
 function packagesSectionHtml() {
   const m = RundockPackagesInstallModel;
   const st = packagesInstall;
@@ -1024,7 +1019,6 @@ return { showSettingsSection, renderSettingsSection, setWorkspaceMode, runtimeRo
   packagesReplyArrived, packagesWorkspaceChanged, packagesServingWorkspaceChanged, packagesConnectionLost,
   packagesExtensionAction, packagesConfirmUninstall, packagesCancelUninstall, packagesSeeAll, packagesOpenReceiptItem,
   packagesManageHtml, packagesExtensionRowHtml, packagesReceiptRowHtml,
-  extensionUpdateStatusHtml,
   connectorsParse, connectorsParseToml, connectorsParseUserGlobalJson,
   connectorsBuildRows, connectorsBuildState, connectorsRowHtml, connectorsScopeText,
   connectorsSectionHtml, connectorsLoad, connectorsWorkspaceChanged };
