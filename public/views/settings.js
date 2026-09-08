@@ -193,8 +193,10 @@ function renderSettingsSection(section) {
           <div class="mode-description" id="mode-description">${modeDesc}</div>
         </div>
       </div>
+      ${workingFoldersSectionHtml()}
       <div class="settings-card" id="runtimes-card">${runtimesCardHtml()}</div>
       <button class="settings-btn" onclick="changeWorkspace()">Change workspace</button>`;
+    workingFoldersLoad();
     // Refresh runtime state whenever the card becomes visible (the user may
     // have just installed or signed in to a CLI).
     if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'get_runtime_status' }));
@@ -223,6 +225,200 @@ function renderSettingsSection(section) {
         </div>
       </div>`;
   }
+}
+
+// ── Working folders (settings › workspace) ──
+// The folders this workspace's agents work in besides the workspace itself.
+//
+// The setting exists because the product assumed the workspace IS the work.
+// For a team whose agents live in one folder and whose projects live in a
+// dozen others, every project was permanently "outside", and no per-folder
+// approval ever caught up: a build is almost all shell commands, and a shell
+// crossing offers no standing grant at all.
+//
+// NAMING A PARENT IS THE POINT, and the interface says so twice: once in the
+// tip above the list, and once as a live answer when someone types a path
+// something already covers. A person who names `~/Projects` configures this
+// once; a person who names each project configures it again every time they
+// start one.
+let workingFolders = [];
+let workingFoldersHome = '';
+// The last removal, kept only until the next change, so removing is reversible
+// without asking "are you sure?" about an act that is trivially undone.
+let workingFoldersUndo = null;
+
+// `~` for display, because a list of absolute paths under one home reads as
+// noise and the shared prefix is the least interesting part of every row.
+function workingFoldersShort(dir) {
+  if (workingFoldersHome && (dir === workingFoldersHome || dir.startsWith(workingFoldersHome + '/') || dir.startsWith(workingFoldersHome + '\\'))) {
+    return '~' + dir.slice(workingFoldersHome.length);
+  }
+  return dir;
+}
+
+function workingFoldersBasename(dir) {
+  const parts = dir.split(/[\\/]/).filter(Boolean);
+  return parts.length ? parts[parts.length - 1] : dir;
+}
+
+// The client half of the covered-by answer. Advisory only: the server
+// normalises the list it is sent and the hook decides what a folder covers, so
+// this is a hint shown while typing, never a gate.
+function workingFoldersCoveredBy(candidate) {
+  const expanded = workingFoldersExpand(candidate);
+  if (!expanded) return null;
+  return workingFolders.find(f => expanded === f.path || expanded.startsWith(f.path + '/') || expanded.startsWith(f.path + '\\')) || null;
+}
+
+function workingFoldersExpand(raw) {
+  let value = (raw || '').trim();
+  if (!value) return null;
+  if (value === '~') value = workingFoldersHome;
+  else if (value.startsWith('~/') || value.startsWith('~\\')) value = workingFoldersHome + value.slice(1);
+  return value.replace(/[\\/]+$/, '') || value;
+}
+
+// The row is identified by its INDEX, never by its path in a JavaScript string
+// literal. escAttr escapes HTML, and the browser then parses the decoded
+// attribute as JavaScript, so a Windows path arrives with its backslashes live:
+// `C:\Users\tom` gains a tab, `C:\Users\xavier` is a syntax error and the
+// button does nothing at all, and an apostrophe in a folder name breaks the
+// literal on any platform. A number cannot carry an escape.
+function workingFolderRowHtml(f, index) {
+  // A folder that has gone is SHOWN, never quietly dropped: a setting that
+  // edits itself is one a person stops trusting. Amber rather than red because
+  // nothing is broken, the folder is simply not there at the moment, and it may
+  // be a drive that is not mounted.
+  const missing = f.missing
+    ? '<div class="wf-missing">Folder not found. It stays named, and starts covering again if it comes back.</div>'
+    : '';
+  return `<div class="settings-row wf-row">
+      <div class="wf-main">
+        <div class="wf-name">${esc(workingFoldersBasename(f.path))}${f.missing ? '<span class="wf-dot" title="Folder not found"></span>' : ''}</div>
+        <div class="settings-value wf-path" title="${escAttr(f.path)}">${esc(workingFoldersShort(f.path))}</div>
+        ${missing}
+      </div>
+      <button class="wf-remove" title="Remove this folder" onclick="workingFoldersRemoveAt(${index})">&times;</button>
+    </div>`;
+}
+
+function workingFoldersSectionHtml() {
+  return `<div id="working-folders-block">${workingFoldersInnerHtml()}</div>`;
+}
+
+// The block's own contents, separated from its container so an arriving list
+// redraws THIS and nothing else.
+function workingFoldersInnerHtml() {
+  const rows = workingFolders.map(workingFolderRowHtml).join('');
+  const undo = workingFoldersUndo
+    ? `<div class="wf-undo">Removed ${esc(workingFoldersShort(workingFoldersUndo))}.
+         <button class="wf-undo-btn" onclick="workingFoldersUndoRemove()">Undo</button></div>`
+    : '';
+  return `<div class="settings-label wf-heading">Working folders</div>
+    <div class="settings-prose wf-prose">Folders your agents work in outside this workspace. Naming one stops the approval cards that check paths, for everything beneath it.</div>
+    <div class="settings-caption wf-note">This workspace's own folder is already included and isn't listed below.</div>
+    <div class="settings-prose wf-prose">In Knowledge mode on macOS a terminal write out here is still refused by the operating system, and the retry that follows still raises a card, so naming a folder does not end those: Code mode is where they end. Claude Code's own folder (<code>~/.claude</code>) is never included either, so your credentials still ask every time. Agents running on Codex are not affected by this setting at all.</div>
+    <div class="settings-caption wf-note">Tip: name a parent folder, such as <code>~/Projects</code>, to cover everything beneath it, including projects you start later.</div>
+    ${undo}
+    <div class="settings-card wf-list">
+      ${rows}
+      <div class="settings-row wf-add">
+        <input class="packages-input wf-input" id="wf-input" placeholder="Add a folder, such as ~/Projects"
+               oninput="workingFoldersInputChanged()" onkeydown="if(event.key==='Enter')workingFoldersAdd()">
+        <button class="settings-btn" onclick="workingFoldersAdd()">Add</button>
+      </div>
+      <div class="wf-hint" id="wf-hint"></div>
+    </div>`;
+}
+
+// Live, and deliberately NOT a refusal. Someone typing a path already covered
+// has not made an error, they have simply not needed to: saying so as they type
+// teaches what naming a parent did, at the one moment the lesson is useful.
+function workingFoldersInputChanged() {
+  const field = document.getElementById('wf-input');
+  const hint = document.getElementById('wf-hint');
+  if (!field || !hint) return;
+  const covered = workingFoldersCoveredBy(field.value);
+  hint.textContent = covered
+    ? `Already covered by ${workingFoldersShort(covered.path)}, so this isn't necessary.`
+    : '';
+}
+
+function workingFoldersSend(list) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  ws.send(JSON.stringify({ type: 'set_working_folders', folders: list }));
+}
+
+function workingFoldersAdd() {
+  const field = document.getElementById('wf-input');
+  if (!field) return;
+  const value = (field.value || '').trim();
+  if (!value) return;
+  workingFoldersUndo = null;
+  workingFoldersSend(workingFolders.map(f => f.path).concat([value]));
+  field.value = '';
+}
+
+// Resolved from the client's own list at click time, so the path never has to
+// survive a round trip through an HTML attribute and a JavaScript parser.
+function workingFoldersRemoveAt(index) {
+  const row = workingFolders[index];
+  if (!row) return;
+  workingFoldersUndo = row.path;
+  workingFoldersSend(workingFolders.filter((f, i) => i !== index).map(f => f.path));
+}
+
+function workingFoldersUndoRemove() {
+  const restored = workingFoldersUndo;
+  workingFoldersUndo = null;
+  if (restored) workingFoldersSend(workingFolders.map(f => f.path).concat([restored]));
+}
+
+function workingFoldersLoad() {
+  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'get_working_folders' }));
+}
+
+// The server's answer is the only source of the list the interface shows. The
+// client never predicts the result of its own change: what comes back has been
+// normalised and de-duplicated, so a row that collapsed into a parent is gone
+// from the reply rather than lingering until a reload.
+function workingFoldersArrived(msg) {
+  workingFolders = Array.isArray(msg.folders) ? msg.folders : [];
+  if (typeof msg.home === 'string') workingFoldersHome = msg.home;
+  const rejected = Array.isArray(msg.rejected) ? msg.rejected : [];
+  // REDRAWS ITS OWN BLOCK, NEVER THE SECTION. The section renderer issues the
+  // request, so re-entering it here made the reply ask again: an unbounded
+  // exchange at network speed for as long as the pane was open, rebuilding the
+  // pane each time and wiping whatever was being typed. The runtimes card
+  // beside this one already had the right shape and this did not follow it.
+  // Keyed off the block being ON SCREEN rather than off the view, so another
+  // settings section is never overwritten by a reply meant for this one.
+  const container = document.getElementById('working-folders-block');
+  if (container) {
+    // WHAT IS BEING TYPED SURVIVES THE REDRAW. A list can arrive at any moment,
+    // including while someone is halfway through a path, and rebuilding the
+    // block would otherwise empty the field under them. Carried across by hand
+    // because the field is rebuilt rather than updated.
+    const field = document.getElementById('wf-input');
+    const typed = field ? field.value : '';
+    container.innerHTML = workingFoldersInnerHtml();
+    const rebuilt = document.getElementById('wf-input');
+    if (rebuilt && typed) {
+      rebuilt.value = typed;
+      workingFoldersInputChanged();
+    }
+  }
+  // A refused path is NAMED, with the reason, rather than silently absent from
+  // the list a moment after being typed.
+  if (rejected.length) {
+    const hint = document.getElementById('wf-hint');
+    if (hint) hint.textContent = `Could not add ${rejected.join(', ')}: name a full folder path, not the drive root.`;
+  }
+}
+
+function workingFoldersWorkspaceChanged() {
+  workingFolders = [];
+  workingFoldersUndo = null;
 }
 
 function setWorkspaceMode(mode) {
@@ -740,5 +936,10 @@ return { showSettingsSection, renderSettingsSection, setWorkspaceMode, runtimeRo
   packagesReplyArrived, packagesWorkspaceChanged, packagesConnectionLost,
   connectorsParse, connectorsParseToml, connectorsParseUserGlobalJson,
   connectorsBuildRows, connectorsBuildState, connectorsRowHtml, connectorsScopeText,
-  connectorsSectionHtml, connectorsLoad, connectorsWorkspaceChanged };
+  connectorsSectionHtml, connectorsLoad, connectorsWorkspaceChanged,
+  workingFoldersSectionHtml, workingFolderRowHtml, workingFoldersShort, workingFoldersBasename,
+  workingFoldersCoveredBy, workingFoldersExpand, workingFoldersInputChanged, workingFoldersAdd,
+  workingFoldersRemoveAt, workingFoldersUndoRemove, workingFoldersLoad, workingFoldersArrived,
+  workingFoldersInnerHtml,
+  workingFoldersWorkspaceChanged };
 }));

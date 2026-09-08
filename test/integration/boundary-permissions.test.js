@@ -331,6 +331,90 @@ describe('workspace file-access boundary', () => {
     assert.strictEqual(decisionOf(out), 'deny', 'the runtime home above the workspace is still refused');
   });
 
+  test('naming a working folder that contains the runtime home does not hand over the runtime home', async () => {
+    // The counterpart to the test above, and the direction that protects a
+    // tier rather than a capability. Opening a workspace under the runtime home
+    // is a deliberate act on a folder someone chose knowing what is in it.
+    // Naming a working folder is the opposite: its whole value is covering
+    // folders nobody enumerated, including ones that do not exist yet, so it
+    // must never read as consent to the folders inside it that carry their own
+    // rules. Driven through the real hook with the environment an agent would
+    // actually be spawned with, because the escape this prevents lives in the
+    // ORDER of two checks that are each correct alone.
+    const home = os.homedir();
+    fs.mkdirSync(path.join(home, '.claude', 'agents'), { recursive: true });
+    const named = { RUNDOCK_EXTRA_DIRS: home };
+
+    // ASSERTED ON THE REASON, NOT THE DECISION, and the difference is the whole
+    // point. A deterministic refusal and a card the reader happens to deny both
+    // come out as 'deny', so a decision-only assertion cannot tell them apart:
+    // measured, a build that lost this rule still answered 'deny' here, by
+    // raising a card instead of refusing, and the test stayed green. What is
+    // guaranteed is that nothing is ASKED, because a card carries an implicit
+    // promise that approving it would work, and here it would not.
+    const refused = await runHook('Write', { file_path: path.join(home, '.claude', 'agents', 'sneaked.md'), content: 'x' }, named);
+    assert.strictEqual(decisionOf(refused), 'deny',
+      'naming the home folder does not exempt the agents-and-skills refusal');
+    assert.match(reasonOf(refused) || '', /agents and skills inside the open workspace/,
+      'and it is the refusal answering, not a card that was denied');
+
+    const surface = await runHook('Write', { file_path: path.join(home, '.claude', 'settings.json'), content: '{}' }, named);
+    assert.strictEqual(decisionOf(surface), 'deny',
+      'naming the home folder does not exempt the runtime-home surface refusal either');
+    assert.match(reasonOf(surface) || '', /protects its own configuration folder/,
+      'again the refusal, not an answered card');
+
+    // And the setting still does the job it exists for, in the same run, so a
+    // green result here cannot mean the folder was simply ignored. The probe
+    // must sit BENEATH the named folder, which is the real home directory, so
+    // it is made unique and removed whether or not the assertion passes: a test
+    // that proves a boundary must not leave anything behind on the far side of
+    // it.
+    const project = fs.mkdtempSync(path.join(home, 'rundock-named-folder-probe-'));
+    try {
+      const allowed = await runHook('Write', { file_path: path.join(project, 'notes.md'), content: 'x' }, named);
+      assert.strictEqual(decisionOf(allowed), 'allow',
+        'an ordinary file beneath the named folder is written without a card');
+    } finally {
+      fs.rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  test('the environment value this product writes is the one the hook reads, with more than one folder in it', async () => {
+    // THE JOIN AND THE SPLIT, PROVEN ACROSS THE PROCESS BOUNDARY. A unit test
+    // that splits the string itself and passes the array to an exported
+    // function proves only that the test agrees with itself: a hook splitting
+    // on a literal ':' would pass it unchanged, and would be wrong on Windows
+    // where the delimiter is ';'. So the value is built by the real renderer,
+    // handed to the real hook process through the real variable, and TWO
+    // folders are named, because a single-entry value cannot tell a working
+    // split from no split at all.
+    const { workingFoldersEnv } = require('../../lib/workspace/working-folders.js');
+    const first = fs.mkdtempSync(path.join(os.tmpdir(), 'wf-env-one-'));
+    const second = fs.mkdtempSync(path.join(os.tmpdir(), 'wf-env-two-'));
+    const sibling = fs.mkdtempSync(path.join(os.tmpdir(), 'wf-env-unnamed-'));
+    const value = workingFoldersEnv([first, second]);
+    const named = { RUNDOCK_EXTRA_DIRS: value };
+    try {
+      for (const dir of [first, second]) {
+        const out = await runHook('Write', { file_path: path.join(dir, 'a.md'), content: 'x' }, named);
+        assert.strictEqual(decisionOf(out), 'allow',
+          `${dir} arrived from the environment value as a folder the hook honours`);
+      }
+      // The SECOND entry is the one that proves the split happened: without it
+      // the whole string would be one unusable path and this would card.
+      const since = client.messages.length;
+      const pending = runHook('Write', { file_path: path.join(sibling, 'a.md'), content: 'x' }, named);
+      const { msg } = await client.waitFor(m => m.type === 'control_request'
+        && m.request && m.request.boundary === true, { since, label: 'unnamed sibling still cards' });
+      client.send({ type: 'permission_response', requestId: msg.request_id, conversationId: 'boundary-test', allow: false });
+      assert.strictEqual(decisionOf(await pending), 'deny',
+        'and a folder that was not named is still outside, so the value did not widen past what it says');
+    } finally {
+      for (const d of [first, second, sibling]) fs.rmSync(d, { recursive: true, force: true });
+    }
+  });
+
   test('the two tool families split at one persistence-surface path, and the refusal names what to do instead', async () => {
     // THIS TEST EXISTS TO BIND THE TRUST PAGE TO THE HOOK. ARCHITECTURE.md
     // states that a file-edit tool writing to a persistence surface under the

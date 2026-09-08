@@ -244,6 +244,10 @@ function handle(d) {
       if (errEl) { errEl.textContent = d.message; errEl.style.display = 'block'; }
       break;
     }
+    // The list the settings surface renders, and the only source of it: the
+    // client never predicts the result of its own change, because the server
+    // normalises what it is sent.
+    case 'working_folders': workingFoldersArrived(d); break;
     case 'workspace_mode_changed':
       workspaceMode = d.mode;
       // Re-render settings if currently viewing workspace settings
@@ -1517,7 +1521,7 @@ function onWorkspaceReady(dir, analysis, isEmpty, mode, scaffoldError, isSetupCo
   currentSkillId = null;
   // A package plan describes one workspace's collision facts and defaults;
   // a different workspace returns the install flow to idle.
-  if (!isSameWorkspace) { packagesWorkspaceChanged(); connectorsWorkspaceChanged(); }
+  if (!isSameWorkspace) { packagesWorkspaceChanged(); connectorsWorkspaceChanged(); workingFoldersWorkspaceChanged(); }
 
   if (isSameWorkspace && currentView !== 'workspace') {
     // Reconnect to same workspace: keep in-memory conversations and active view intact.
