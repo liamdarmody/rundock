@@ -4,6 +4,12 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
+## 0.13.2: Callouts That Read (2026-09-09)
+
+### Fixed
+
+- **Callouts show their formatting instead of their punctuation:** text inside a callout was displayed exactly as typed, so a bold phrase kept its asterisks, an italic one kept its own, and a list showed its hyphens, while the same writing rendered properly everywhere else in the document. Callout titles had it too, and a callout inside a callout inherited it. It is one cause rather than three faults, and it is fixed in one place, so bold, italics, inline code, links and lists now render inside a callout exactly as they do outside one, in the title as well as the body, however deeply the callouts are nested. Links inside a callout work like links anywhere else: a wikilink opens the page it names, resolved against the file you clicked it in exactly as it would be outside a callout, and an ordinary web link or an email address opens where you would expect. Anything a callout cannot render, such as a script tag, is still shown as plain text rather than acted on. A callout you have not edited still saves back byte for byte identical, which is checked on every build rather than assumed: the point of this change is that your writing appears the way you wrote it, not that it gets rewritten on your behalf.
+
 ## 0.13.1: Working Folders (2026-09-08)
 
 ### Added
