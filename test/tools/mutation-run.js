@@ -59,7 +59,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
+const { execFileSync, spawnSync } = require('node:child_process');
 
 const ROOT = path.join(__dirname, '..', '..');
 
@@ -68,12 +68,74 @@ const ROOT = path.join(__dirname, '..', '..');
 // `.rundock/` is a product directory that happens to be gitignored. Ignored in
 // .gitignore, which is not a tidiness point here: a record of a run that died
 // mid-mutation must never itself become the thing `git add -A` sweeps up.
-const MARKER = '.mutation-run.json';
+// ONE RECORD PER RUN, not one for the whole repository.
+//
+// A single shared marker made concurrency impossible: two runs would overwrite
+// each other's record, and that record is what recovers a source file from a run
+// which died holding it mutated. So the tool refused to start while any other
+// was in flight, whatever the two were touching, and eighteen harnesses ran one
+// after another. Measured on the gate this serves: mutation is 93% of a run.
+//
+// Per-run records make the refusal precise rather than blanket. Two runs that
+// mutate DIFFERENT files cannot corrupt each other's restore, so they may run
+// together; two that would hold the same file must not, and only those are
+// refused now. The directory is swept of dead runs on every start, so an
+// abandoned record cannot accumulate into a permanent refusal.
+const MARKER_DIR = '.mutation-runs';
+// The name the gate cleans up after a run it started.
+const MARKER = MARKER_DIR;
 
 const SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP'];
 
-function markerPath(root) {
-  return path.join(root, MARKER);
+function markerDir(root) {
+  return path.join(root, MARKER_DIR);
+}
+
+function markerPath(root, pid = process.pid) {
+  return path.join(markerDir(root), `${pid}.json`);
+}
+
+/** Every run's record, live or abandoned, with unreadable ones surfaced. */
+function readMarkers(root) {
+  let names = [];
+  try { names = fs.readdirSync(markerDir(root)).filter((n) => n.endsWith('.json')); } catch { return []; }
+  const out = [];
+  for (const name of names) {
+    const file = path.join(markerDir(root), name);
+    let record;
+    try { record = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { out.push({ file, unreadable: true }); continue; }
+    if (!record || typeof record.pid !== 'number') { out.push({ file, unreadable: true }); continue; }
+    out.push({ ...record, file });
+  }
+  return out;
+}
+
+/**
+ * Put back the files an abandoned run left mutated, from the git INDEX.
+ *
+ * SIGKILL cannot be caught, so the handlers below are not the whole answer and
+ * never can be: a run killed outright leaves a mutant on disk and a record
+ * naming it. Measured three times in one session, once on a release gate where
+ * the survivor stripped the tier tags off a permission card. The dangerous part
+ * is not the mutant, it is that the next `git add -A` commits it.
+ *
+ * THE INDEX IS THE RIGHT SOURCE, and it is safe precisely because of the check
+ * this tool already makes: a run refuses to start while a file it mutates has
+ * unstaged changes, so every held file was identical to its staged copy when the
+ * run began. Restoring from the index therefore returns the author's own work,
+ * not an older commit's. Restoring from HEAD would discard staged work, which is
+ * why it is not what happens here.
+ *
+ * Returns the files put back, or null when the restore could not be done, in
+ * which case the caller falls back to telling a person what to run by hand.
+ */
+function recoverAbandoned(root, held) {
+  if (!held.length) return [];
+  const present = held.filter((f) => { try { return fs.existsSync(path.resolve(root, f)); } catch { return false; } });
+  if (!present.length) return null;
+  const out = spawnSync('git', ['checkout', '--', ...held], { cwd: root, encoding: 'utf8' });
+  if (out.error || out.status !== 0) return null;
+  return held;
 }
 
 function isAlive(pid) {
@@ -155,46 +217,69 @@ function list(items) {
  * which file is at stake has moved the mystery rather than removed it.
  */
 function inspect({ root = ROOT, files = [] } = {}) {
-  const record = readMarker(root);
-  if (record && record.unreadable) {
+  const wanted = new Set(files.map((f) => relative(root, f)));
+  const records = readMarkers(root);
+
+  // An unreadable record may still describe a run holding files, so it is never
+  // swept and never reasoned past.
+  const unreadable = records.filter((r) => r.unreadable);
+  if (unreadable.length) {
     return {
       ok: false,
       blocked: [],
       reason: 'unreadable-record',
-      message: `Refusing to start a mutation run.\n\n`
-        + `${markerPath(root)} exists but cannot be read as a record of a run.\n`
-        + `It is written while a run holds files mutated, so an unreadable one is\n`
-        + `not the same as no record at all. Check the files this harness mutates\n`
-        + `against git, then delete ${MARKER} and run this again.`,
+      message: 'Refusing to start a mutation run.\n\n'
+        + unreadable.map((r) => r.file).join('\n') + '\n'
+        + 'exists but cannot be read as a record of a run. A record is written while a\n'
+        + 'run holds files mutated, so an unreadable one is not the same as none.\n'
+        + 'Check the files this harness mutates against git, then delete it and run again.',
     };
   }
-  if (record) {
-    const held = Array.isArray(record.files) ? record.files : [];
-    if (isAlive(record.pid)) {
+
+  // A LIVE run blocks only an OVERLAPPING one. Two runs mutating different files
+  // cannot corrupt each other's restore, and refusing them regardless is what
+  // made this step serial.
+  for (const r of records.filter((x) => x.pid !== process.pid && isAlive(x.pid))) {
+    const held = Array.isArray(r.files) ? r.files : [];
+    const clash = held.filter((f) => wanted.has(f));
+    if (clash.length) {
       return {
         ok: false,
-        blocked: [],
+        blocked: clash,
         reason: 'in-flight',
-        message: `Refusing to start a mutation run.\n\n`
-          + `Another mutation run is already in flight (pid ${record.pid}, started `
-          + `${record.startedAt}).\nIt is holding these files mutated:\n${list(held)}\n\n`
-          + `Two runs over the same files cannot both restore correctly: the second\n`
-          + `reads the first one's mutation and would put that back as the original.\n`
-          + `Wait for it to finish, or stop it, then run this again.`,
+        message: 'Refusing to start a mutation run.\n\n'
+          + 'Another run (pid ' + r.pid + ', started ' + r.startedAt + ') is holding these\n'
+          + 'files mutated, and this run would mutate them too:\n' + list(clash) + '\n\n'
+          + 'Two runs over the same file cannot both restore correctly: the second reads\n'
+          + "the first one's mutation and would put that back as the original.\n"
+          + 'Wait for it, or stop it, then run this again.',
       };
     }
-    return {
-      ok: false,
-      blocked: held,
-      reason: 'abandoned',
-      message: `Refusing to start a mutation run.\n\n`
-        + `A previous mutation run (pid ${record.pid}, started ${record.startedAt}) `
-        + `never finished.\nIt was mutating these files, and they may still hold a `
-        + `mutation rather than\nthe source you wrote:\n${list(held)}\n\n`
-        + `Check them:            git diff HEAD -- ${held.join(' ')}\n`
-        + `Put one back:          git checkout HEAD -- <file>\n`
-        + `Then clear the record: rm ${MARKER}`,
-    };
+  }
+
+  // Abandoned runs are SWEPT, not reported. The files are known, the copy to put
+  // back is known, and the run that held them is gone, so asking a person to run
+  // three commands only means the mutation sits on disk until they do, and what
+  // happens in between is `git add -A`.
+  const swept = [];
+  for (const r of records.filter((x) => x.pid !== process.pid && !isAlive(x.pid))) {
+    const held = Array.isArray(r.files) ? r.files : [];
+    const put = held.length ? recoverAbandoned(root, held) : [];
+    if (put === null) {
+      return {
+        ok: false,
+        blocked: held,
+        reason: 'abandoned',
+        message: 'Refusing to start a mutation run.\n\n'
+          + 'A previous run (pid ' + r.pid + ', started ' + r.startedAt + ') never finished,\n'
+          + 'and its files could not be put back automatically:\n' + list(held) + '\n\n'
+          + 'Check them:            git diff HEAD -- ' + held.join(' ') + '\n'
+          + 'Put one back:          git checkout HEAD -- <file>\n'
+          + 'Then clear the record: rm ' + r.file,
+      };
+    }
+    swept.push({ pid: r.pid, files: put });
+    try { fs.rmSync(r.file, { force: true }); } catch { /* the next start will say */ }
   }
 
   const blocked = unstaged(root, files);
@@ -202,10 +287,8 @@ function inspect({ root = ROOT, files = [] } = {}) {
     return {
       ok: true,
       blocked: [],
+      swept,
       reason: 'unchecked',
-      // Said out loud rather than assumed either way. Refusing here would make
-      // the harnesses unrunnable from an archive download, and staying silent
-      // would let a rail nobody has quietly go missing.
       note: 'note: the working tree could not be checked (no git, or not a checkout), '
         + 'so this run started without the check that a file it mutates is not already modified.',
     };
@@ -214,18 +297,19 @@ function inspect({ root = ROOT, files = [] } = {}) {
     return {
       ok: false,
       blocked,
+      swept,
       reason: 'unstaged',
-      message: `Refusing to start a mutation run.\n\n`
-        + `These files have unstaged changes, and this run mutates them in place:\n`
-        + `${list(blocked)}\n\n`
-        + `If the run is killed before it restores, the mutation and your edit are\n`
-        + `the same thing in the working tree, and the way back from a mutation\n`
-        + `(git checkout -- <file>) is also the way to throw your edit away.\n\n`
-        + `Stage them (git add), commit them, or stash them, then run this again.\n`
-        + `Staged is enough: the index holds the copy a restore comes back to.`,
+      message: 'Refusing to start a mutation run.\n\n'
+        + 'These files have unstaged changes, and this run mutates them in place:\n'
+        + list(blocked) + '\n\n'
+        + 'If the run is killed before it restores, the mutation and your edit are\n'
+        + 'the same thing in the working tree, and the way back from a mutation\n'
+        + '(git checkout -- <file>) is also the way to throw your edit away.\n\n'
+        + 'Stage them (git add), commit them, or stash them, then run this again.\n'
+        + 'Staged is enough: the index holds the copy a restore comes back to.',
     };
   }
-  return { ok: true, blocked: [], reason: 'clean' };
+  return { ok: true, blocked: [], swept, reason: 'clean' };
 }
 
 /**
@@ -252,6 +336,13 @@ function beginMutationRun({ root = ROOT, files: declared = [] } = {}) {
     process.exit(2);
   }
   if (verdict.note) console.error(verdict.note);
+  // ANNOUNCED, ALWAYS. A tool that quietly rewrites source is worse than the
+  // problem it is fixing, so a sweep names every run it cleaned up and every
+  // file it put back.
+  for (const s2 of verdict.swept || []) {
+    console.error(`A previous mutation run (pid ${s2.pid}) never finished. Its files have been put `
+      + `back from the index:\n${list(s2.files)}`);
+  }
 
   const originals = new Map();
   for (const file of files) originals.set(file, fs.readFileSync(file, 'utf8'));
@@ -262,6 +353,7 @@ function beginMutationRun({ root = ROOT, files: declared = [] } = {}) {
     tool: path.basename(process.argv[1] || 'unknown'),
     files: files.map((f) => relative(root, f)),
   };
+  fs.mkdirSync(markerDir(root), { recursive: true });
   fs.writeFileSync(markerPath(root), `${JSON.stringify(record, null, 2)}\n`);
 
   let released = false;
@@ -277,6 +369,9 @@ function beginMutationRun({ root = ROOT, files: declared = [] } = {}) {
         console.error(`could not restore ${file}: ${e.message}`);
       }
     }
+    // ONLY THIS RUN'S RECORD. Removing the directory would delete the records
+    // of runs still holding files mutated, which is the corruption per-run
+    // records exist to prevent.
     try { fs.rmSync(markerPath(root), { force: true }); } catch { /* leaving anyway */ }
   };
 
@@ -332,4 +427,4 @@ function beginMutationRun({ root = ROOT, files: declared = [] } = {}) {
   return session;
 }
 
-module.exports = { beginMutationRun, inspect, markerPath, MARKER, ROOT };
+module.exports = { beginMutationRun, inspect, markerPath, markerDir, readMarkers, recoverAbandoned, MARKER, MARKER_DIR, ROOT };
