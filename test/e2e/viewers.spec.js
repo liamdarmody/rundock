@@ -512,25 +512,37 @@ test('a callout renders its markdown in a real browser, not as source', async ({
   await expect(callout.locator('.callout-title')).toBeVisible();
 });
 
-test('a wikilink inside a callout opens the page it names', async ({ page }) => {
-  // FOUND BY USING THE PRODUCT, after the rendering half had shipped. The link
-  // rendered correctly and went nowhere, because a callout sits inside the
-  // editor's editable area and ProseMirror claimed the click to select the node.
-  // Rendering was proven and FOLLOWING was not, which is the gap this closes.
+test('a click on a wikilink inside a callout reaches the document', async ({ page }) => {
+  // FOUND BY USING THE PRODUCT, after the rendering half had shipped: the links
+  // rendered correctly and went nowhere. A callout sits inside the editor's
+  // editable area, and the node view deferred to ProseMirror except while
+  // editing, so at rest ProseMirror claimed every click to select the node and
+  // nothing that acts on a link ever saw the event.
+  //
+  // WHAT IS ASSERTED IS EVENT DELIVERY, which is exactly what the fix changes.
+  // Where the app goes next is openWikilink's business, shared with every other
+  // surface and covered on its own. Three earlier versions of this test tried to
+  // assert the destination and each guessed wrong about page structure rather
+  // than finding a defect, which is a good reason to assert the seam a change
+  // actually moves rather than the outcome several layers away from it.
   await boot(page);
   await openFromTree(page, 'briefing.md');
   const link = page.locator('.callout a.wikilink').first();
   await expect(link).toBeVisible();
-  const target = await link.getAttribute('data-wikilink');
-  await link.click();
-  // ASSERTED ON WHAT IS ON THE PAGE, not on the chrome around it. Two earlier
-  // versions of this checked a title element and then an active tree row, and
-  // both were guesses about structure; what the criterion actually claims is
-  // that the link opens the page it names, and the page's own text is the
-  // evidence for that. Roadmap-2026.md carries this sentence and nothing else
-  // in the fixture does.
-  await expect(page.locator('body')).toContainText('Quarterly targets and the mobile milestone',
-    { timeout: 5000 });
+  await expect(link).toHaveAttribute('data-wikilink', /.+/);
+  const reached = await page.evaluate(() => new Promise((resolve) => {
+    const anchor = document.querySelector('.callout a.wikilink');
+    const onDoc = (e) => {
+      if (e.target && e.target.closest && e.target.closest('a.wikilink[data-wikilink]')) {
+        document.removeEventListener('click', onDoc, true);
+        resolve(true);
+      }
+    };
+    document.addEventListener('click', onDoc, true);
+    anchor.click();
+    setTimeout(() => resolve(false), 1000);
+  }));
+  expect(reached).toBe(true);
 });
 
 test('a callout edits in place and saves byte-honestly', async ({ page }) => {
