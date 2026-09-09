@@ -5,7 +5,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { JSDOM } from 'jsdom';
-import { bootEditorEnv } from '../helpers/editor-harness.js';
+import { bootEditorEnv, roundTrip } from '../helpers/editor-harness.js';
 import { parseCalloutBody } from '../../public/editor/nodes/callout.js';
 import { renderProperties, parsePropWikilink, dateString } from '../../public/editor/panels/properties.js';
 import { extractFrontmatter } from '../../public/editor/markdown/frontmatter.js';
@@ -18,6 +18,87 @@ async function renderedHtml(src) {
   env.destroyEditor(editor);
   return html;
 }
+
+// ── Markdown inside callouts ────────────────────────────────────────────
+// Text inside a callout rendered as literal source: `**bold**` showed its
+// asterisks and `[[wikilinks]]` their brackets, while the same markup worked
+// everywhere else. One cause, not three bugs: every body line was built as a
+// DOM text node, and a text node cannot contain markup.
+//
+// The body remains the SOURCE OF TRUTH and is rendered through the document's
+// own pipeline. Holding real inline content instead was costed and rejected: it
+// replaces "store the source, re-emit the source" with "parse and serialise
+// back", which cannot be byte-exact for arbitrary markdown, so files nobody
+// edited would change on save.
+//
+// READ FROM THE PAINTED DOM. The node view repaints each callout with a real
+// document a moment after ProseMirror builds it, and rendering needs a document:
+// without one there is nothing to put markup into. Snapshotting innerHTML before
+// that paint sees the unrendered form and would report this as unfixed while a
+// reader sees it fixed.
+async function paintedCallout(src) {
+  return new JSDOM(await renderedHtml(src)).window.document;
+}
+
+describe('a callout renders its own content', () => {
+  test('bold, italics and inline code render as formatting, not as source', async () => {
+    const doc = await paintedCallout('> [!abstract]+ Briefing\n> **Goal pulse** and *emphasis* and `code`.');
+    const body = doc.querySelector('.callout-body');
+    assert.ok(body, `the callout has a body; got: ${doc.body.innerHTML.slice(0, 300)}`);
+    assert.ok(body.querySelector('strong'), 'bold is rendered');
+    assert.ok(body.querySelector('em'), 'italics are rendered');
+    assert.ok(body.querySelector('code'), 'inline code is rendered');
+    assert.ok(!body.textContent.includes('**'), 'and no asterisks survive into the text');
+  });
+
+  test('a list inside a callout is a list, which is why lines render as runs', async () => {
+    // Markdown is a block language: a list only parses when its lines are handed
+    // over together. Rendering line by line was why hyphens showed.
+    const doc = await paintedCallout('> [!note] Team\n> - **Penn:** drafting\n> - **Des:** mocks');
+    const items = doc.querySelectorAll('.callout-body li');
+    assert.equal(items.length, 2, 'both lines became list items');
+    assert.ok(items[0].querySelector('strong'), 'and inline markup inside them renders too');
+  });
+
+  test('the TITLE renders its markup, and stays a single line', async () => {
+    const doc = await paintedCallout('> [!abstract]+ *Briefing* for **today**\n> Body.');
+    const title = doc.querySelector('.callout-title');
+    assert.ok(title.querySelector('em'), 'italics in the title render');
+    assert.ok(title.querySelector('strong'), 'and bold');
+    assert.equal(title.querySelector('p'), null,
+      'and the block wrapper is unwrapped, or the header layout breaks');
+  });
+
+  test('a NESTED callout renders its markup too, because it is one cause', async () => {
+    const doc = await paintedCallout('> [!note] Outer\n> > [!warning] Inner\n> > **inside** the nested one');
+    const nested = doc.querySelector('.callout-nested');
+    assert.ok(nested.querySelector('strong'), 'the nested body renders its markup');
+  });
+
+  test('a script tag in a callout is text, not markup', async () => {
+    // The escaping surface the wikilink node exists to avoid. The pipeline is the
+    // document's own, so this is the same guarantee ordinary body text has;
+    // asserted here because the callout is where a shortcut would be tempting.
+    const doc = await paintedCallout('> [!note] Careful\n> <script>alert(1)</script> and "quoted"');
+    const body = doc.querySelector('.callout-body');
+    assert.equal(body.querySelector('script'), null, 'no script element is created');
+    assert.match(body.textContent, /alert\(1\)/, 'and the text is still shown');
+  });
+
+  test('an untouched callout still round-trips byte for byte', async () => {
+    // THE GUARANTEE THIS ROUTE WAS CHOSEN TO PROTECT. The body is stored as its
+    // source and re-emitted verbatim, so a document opened and saved without
+    // editing is unchanged to the byte, including spacing and fold markers.
+    for (const src of [
+      '> [!abstract]+ Briefing\n> **Goal pulse** and *emphasis*.\n> - a list item',
+      '> [!note] Outer\n> Outer body.\n> > [!warning]- Nested\n> > Nested body.',
+      '> [!tip]\n> No title, one line.',
+      '> [!note] Spacing\n>\n> after a blank line',
+    ]) {
+      assert.equal(await roundTrip(src), src, `round-trip changed this callout:\n${src}`);
+    }
+  });
+});
 
 describe('callout rendering', () => {
   test('foldable callouts render as details/summary with the right default state', async () => {

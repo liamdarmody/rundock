@@ -340,7 +340,10 @@ function buildFixture() {
     '---',
     '',
     '> [!abstract]+ Today at a glance',
-    '> Two meetings, one deadline.',
+    // Inline markup inside the callout body, because the defect this fixture
+    // now covers is that it rendered as literal source. The daily briefing
+    // this is modelled on is written exactly like this.
+    '> **Two meetings**, one deadline.',
     '',
     '> [!warning]- Blocked items',
     '> The vendor reply is overdue.',
