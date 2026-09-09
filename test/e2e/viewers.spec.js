@@ -512,6 +512,39 @@ test('a callout renders its markdown in a real browser, not as source', async ({
   await expect(callout.locator('.callout-title')).toBeVisible();
 });
 
+test('a click on a wikilink inside a callout reaches the document', async ({ page }) => {
+  // FOUND BY USING THE PRODUCT, after the rendering half had shipped: the links
+  // rendered correctly and went nowhere. A callout sits inside the editor's
+  // editable area, and the node view deferred to ProseMirror except while
+  // editing, so at rest ProseMirror claimed every click to select the node and
+  // nothing that acts on a link ever saw the event.
+  //
+  // WHAT IS ASSERTED IS EVENT DELIVERY, which is exactly what the fix changes.
+  // Where the app goes next is openWikilink's business, shared with every other
+  // surface and covered on its own. Three earlier versions of this test tried to
+  // assert the destination and each guessed wrong about page structure rather
+  // than finding a defect, which is a good reason to assert the seam a change
+  // actually moves rather than the outcome several layers away from it.
+  await boot(page);
+  await openFromTree(page, 'briefing.md');
+  const link = page.locator('.callout a.wikilink').first();
+  await expect(link).toBeVisible();
+  await expect(link).toHaveAttribute('data-wikilink', /.+/);
+  const reached = await page.evaluate(() => new Promise((resolve) => {
+    const anchor = document.querySelector('.callout a.wikilink');
+    const onDoc = (e) => {
+      if (e.target && e.target.closest && e.target.closest('a.wikilink[data-wikilink]')) {
+        document.removeEventListener('click', onDoc, true);
+        resolve(true);
+      }
+    };
+    document.addEventListener('click', onDoc, true);
+    anchor.click();
+    setTimeout(() => resolve(false), 1000);
+  }));
+  expect(reached).toBe(true);
+});
+
 test('a callout edits in place and saves byte-honestly', async ({ page }) => {
   await boot(page);
   await openFromTree(page, 'briefing.md');

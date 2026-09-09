@@ -85,6 +85,54 @@ describe('a callout renders its own content', () => {
     assert.match(body.textContent, /alert\(1\)/, 'and the text is still shown');
   });
 
+  test('a wikilink inside a callout is a link that can actually be followed', async () => {
+    // THE DEFECT THIS TEST EXISTS FOR, found by using the product after shipping.
+    // The markup was right and the link went nowhere: a callout sits inside the
+    // editor's contenteditable area, ProseMirror reads a click there as selecting
+    // the node, and the document's own wikilink handler never saw the event.
+    //
+    // Rendering was asserted and FOLLOWING was not, which is the whole gap: the
+    // criterion said wikilinks open on click, and only half of it was proven.
+    const doc = await paintedCallout('> [!note] See also\n> [[Roadmap-2026]] and [[Missing Note]]');
+    const links = doc.querySelectorAll('.callout-body a.wikilink');
+    assert.equal(links.length, 2, 'both wikilinks render as anchors');
+    for (const a2 of links) {
+      assert.ok(a2.getAttribute('data-wikilink'),
+        'each carries the target attribute the document handler dispatches on');
+    }
+    // The container the anchors live in must be out of the editor's reach, or
+    // the click is taken as a node selection and never reaches that handler.
+    const holder = links[0].closest('[contenteditable="false"]');
+    assert.ok(holder, 'the rendered run is not editable, so a click inside it reaches the document');
+  });
+
+  test('a click on a link is left to the document, and everything else is not', async () => {
+    // The mechanism, tested directly. The node view tells ProseMirror to leave
+    // link events alone; without that it claims the click to select the node and
+    // the link is inert however correct its markup. Covers wikilinks, ordinary
+    // hyperlinks and mailto addresses, because all three arrive the same way and
+    // all three were dead for the same reason.
+    const { linkFromEvent } = await import('../../public/editor/nodes/callout.js');
+    const dom = new JSDOM(`<div id="h">
+      <a class="wikilink" data-wikilink="Roadmap-2026">wiki</a>
+      <a href="https://example.com">web</a>
+      <a href="mailto:someone@example.com">mail</a>
+      <span id="plain">not a link</span>
+    </div>`);
+    const d = dom.window.document;
+    for (const [sel, why] of [
+      ['a.wikilink', 'a wikilink is the document\'s to dispatch'],
+      ['a[href^="https"]', 'an ordinary hyperlink navigates'],
+      ['a[href^="mailto"]', 'and so does an email address'],
+    ]) {
+      const found = linkFromEvent({ target: d.querySelector(sel) });
+      assert.ok(found, why);
+    }
+    assert.equal(linkFromEvent({ target: d.querySelector('#plain') }), null,
+      'a click that is not on a link stays with the editor, or selecting a callout stops working');
+    assert.equal(linkFromEvent({ target: null }), null, 'and a click with no target is not a link');
+  });
+
   test('an untouched callout still round-trips byte for byte', async () => {
     // THE GUARANTEE THIS ROUTE WAS CHOSEN TO PROTECT. The body is stored as its
     // source and re-emitted verbatim, so a document opened and saved without
