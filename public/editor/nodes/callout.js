@@ -51,6 +51,9 @@ function bodyLineToRaw(line) {
 // renderHTML describes, so display and editing share one structure.
 function specToDom(doc, spec) {
   if (typeof spec === 'string') return doc.createTextNode(spec);
+  // A rendered run arrives as a real element rather than a spec, because the
+  // markdown pipeline produces markup and a spec cannot carry it.
+  if (spec && typeof spec === 'object' && spec.nodeType) return spec;
   const [tag, attrs, ...children] = spec;
   const el = doc.createElement(tag);
   let rest = children;
@@ -215,24 +218,90 @@ export function parseCalloutBody(body) {
 // expand/collapse works with no script; plain callouts render as divs.
 // Nested callouts in the body render as real nested boxes, never literal
 // `> [!type]` text.
-function calloutChildrenSpec({ type, fold, title, body }) {
-  const headerChildren = [['span', { class: 'callout-tag' }, type]];
-  if (title) headerChildren.push(['span', { class: 'callout-title' }, title]);
+/**
+ * The document's own markdown renderer, or null where it is not loaded.
+ *
+ * THE SAME ENTRY POINT ORDINARY BODY TEXT USES, deliberately, rather than a
+ * second renderer for callouts. The most expensive defect of a recent release
+ * was two layers that both parsed the same thing and learned different rules,
+ * each internally correct. A callout that rendered its own way would be that
+ * again, with the escaping surface the wikilink node exists to avoid.
+ *
+ * `callouts: false` because a callout's body is parsed for callouts here, by
+ * parseCalloutBody, which produces real nested boxes. Letting the pipeline
+ * re-enter would render the same nesting twice.
+ */
+function markdownRenderer() {
+  const root = (typeof globalThis !== 'undefined' && globalThis) || null;
+  const fn = root && (root.renderMarkdown
+    || (root.RundockRenderer && root.RundockRenderer.renderMarkdown));
+  return typeof fn === 'function' ? (text) => fn(text, { callouts: false }) : null;
+}
 
+/**
+ * One run of body lines, rendered.
+ *
+ * Returns a spec when the pipeline is absent so the callout still shows its
+ * text: a document that renders as source is a defect, and a document that
+ * renders as nothing is a worse one.
+ */
+function renderedRun(doc, render, text) {
+  if (!render || !doc) return ['div', { class: 'callout-line' }, text];
+  const holder = doc.createElement('div');
+  holder.className = 'callout-md';
+  holder.innerHTML = render(text);
+  return holder;
+}
+
+/**
+ * A title renders its INLINE markup only.
+ *
+ * The pipeline returns block html, so a title would arrive wrapped in a
+ * paragraph and break the header's layout. The lone wrapper is unwrapped rather
+ * than the renderer being asked for something it does not offer, which would be
+ * a second rendering path by another name.
+ */
+function renderedTitle(doc, render, text) {
+  if (!render || !doc) return ['span', { class: 'callout-title' }, text];
+  const holder = doc.createElement('span');
+  holder.className = 'callout-title';
+  holder.innerHTML = render(text);
+  const only = holder.children.length === 1 ? holder.children[0] : null;
+  if (only && only.tagName === 'P') holder.innerHTML = only.innerHTML;
+  return holder;
+}
+
+function calloutChildrenSpec({ type, fold, title, body }, doc = null) {
+  const render = markdownRenderer();
+  const headerChildren = [['span', { class: 'callout-tag' }, type]];
+  if (title) headerChildren.push(renderedTitle(doc, render, title));
+
+  // RUNS, NOT LINES. Markdown is a block language: a list, or a paragraph
+  // spanning two lines, only parses when its lines are handed over together.
+  // Rendering line by line was why a list inside a callout showed its hyphens.
   const bodyChildren = [];
+  let run = [];
+  const flushRun = () => {
+    if (!run.length) return;
+    bodyChildren.push(renderedRun(doc, render, run.join('\n')));
+    run = [];
+  };
   for (const seg of parseCalloutBody(body)) {
     if (seg.kind === 'callout') {
+      flushRun();
       bodyChildren.push([
         'div',
         { class: `callout callout-${seg.type} callout-nested` },
-        ...calloutChildrenSpec(seg),
+        ...calloutChildrenSpec(seg, doc),
       ]);
     } else if (seg.text.trim().length === 0) {
+      flushRun();
       bodyChildren.push(['div', { class: 'callout-line empty' }, ' ']);
     } else {
-      bodyChildren.push(['div', { class: 'callout-line' }, seg.text]);
+      run.push(seg.text);
     }
   }
+  flushRun();
   const hasBody = body.length > 0;
 
   if (fold) {
@@ -301,6 +370,10 @@ export const Callout = Node.create({
         'data-callout-body':  encodeURIComponent(body),
         'data-callout-head':  encodeURIComponent(head),
       },
+      // NO DOCUMENT HERE, so this returns specs and the runs stay as plain
+      // lines. ProseMirror builds this form itself, and the node view repaints
+      // the same callout with a document a moment later, which is where the
+      // rendering happens. The two agree because both call this one function.
       ...calloutChildrenSpec({ type, fold, title, body }),
     ];
   },
@@ -321,7 +394,7 @@ export const Callout = Node.create({
         dom.className = `callout callout-${type} callout-editable`;
         dom.setAttribute('data-callout-type', type);
         dom.innerHTML = '';
-        for (const spec of calloutChildrenSpec({ type, fold, title, body })) {
+        for (const spec of calloutChildrenSpec({ type, fold, title, body }, document)) {
           dom.appendChild(specToDom(document, spec));
         }
         const header = dom.querySelector('.callout-header');

@@ -96,6 +96,12 @@ const TABLE = {
     ['a', 'cleared', 'the callout title bar, emptied before rebuild'],
     ['a', 'iconConst', 'the edit button glyph'],
     ['a', 'cleared', 'the callout title bar, emptied on the plain path'],
+    ['b', 'attr-escaper', 'a run of callout body lines, rendered through the document\'s own markdown '
+      + 'pipeline (renderMarkdown), which is the same entry point ordinary body text uses and escapes '
+      + 'the same way. The source is the callout body, which is a person\'s own document text'],
+    ['b', 'attr-escaper', 'a callout title, rendered through the same pipeline'],
+    ['a', 'cleared', 'the title\'s block wrapper unwrapped: markup this file just produced, re-read '
+      + 'from the element it was put in, never new input'],
   ],
   'editor/nodes/source-markers.js': [
     ['a', 'closedWithReason', 'the fenced-block newline trim, a read-modify-write of markup'],

@@ -487,9 +487,29 @@ test('clicking a callout does not show the inline formatting toolbar', async ({ 
   await expect(callout).toBeVisible();
   // Clicking a callout selects the atom node; the inline toolbar cannot format
   // it, so it must stay hidden (editing is via the callout's own editor).
-  await callout.locator('.callout-line').first().click();
+  // The body, whatever shape it takes. A non-blank body renders through the
+  // document's markdown pipeline into `.callout-md`; `.callout-line` survives
+  // only for blank lines and the no-pipeline fallback, so selecting it here
+  // would tie this test to a shape the renderer no longer produces.
+  await callout.locator('.callout-body').first().click();
   await page.waitForTimeout(200);
   await expect(page.locator('#tiptap-toolbar')).not.toHaveClass(/\bvisible\b/);
+});
+
+test('a callout renders its markdown in a real browser, not as source', async ({ page }) => {
+  // THE PROOF THAT WAS MISSING. An earlier attempt at this fix was rejected for
+  // having jsdom evidence only: what a reader actually sees is the rendered
+  // surface in a browser, and that is where the defect was reported from.
+  await boot(page);
+  await openFromTree(page, 'briefing.md');
+  const callout = page.locator('.callout.callout-abstract').first();
+  await expect(callout).toBeVisible();
+  const body = callout.locator('.callout-body');
+  // Formatting is rendered as elements rather than shown as punctuation.
+  await expect(body.locator('strong').first()).toBeVisible();
+  await expect(body).not.toContainText('**');
+  // And the title, which the earlier attempt left as plain text.
+  await expect(callout.locator('.callout-title')).toBeVisible();
 });
 
 test('a callout edits in place and saves byte-honestly', async ({ page }) => {
