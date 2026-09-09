@@ -283,6 +283,12 @@ describe('the gate runs it first', () => {
     const { STEPS } = require('../../scripts/precommit-gate.js');
     assert.deepStrictEqual(STEPS.map(s2 => s2.name), [
       'preflight', 'typecheck', 'lint:styles', 'check:refs',
+      // Runs a real adopted mutation harness and requires its verdicts to be the
+      // ones it reported before a baseline pass was added in front of every
+      // harness. Placed with the cheap checks, at about three seconds, and
+      // deliberately not in the suite: a harness rewrites source files on disk,
+      // so it cannot run beside tests reading those same files.
+      'verdicts:pin',
       'test:coverage', 'mutate:guards', 'check:fixture',
     ], 'every check that ran before still runs; changing this set is a deliberate edit');
   });

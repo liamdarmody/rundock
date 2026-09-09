@@ -12,6 +12,10 @@
 // completion, and the reported total was 88 seconds against a real cost of 1628.
 // The number was believed and acted on.
 //
+// The verdicts of a REAL adopted harness are pinned separately, by
+// scripts/verdicts-pin.js, because running a mutation harness rewrites source
+// files on disk and cannot share a process with the ordinary suite.
+//
 // Driven through a REAL harness process rather than by calling the function,
 // because the property under test is what the process does on its way out: exit
 // code, what it prints, and above all what it does NOT print.
