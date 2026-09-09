@@ -103,11 +103,32 @@ const RECORD = path.join(ROOT, '.precommit-gate.json');
 // hand and quoted in a report is a claim about a tree nobody can identify,
 // and it fails on the next run. Measured inside the gate, the floors are
 // enforced against the exact tree this record names.
+//
+// ORDERED BY WHAT THEY COST, CHEAPEST FIRST, and that ordering is load-bearing
+// rather than tidy. Measured on one release: about a dozen runs, no product
+// defect found by any of them, and three failures that were the gate's own
+// bookkeeping. Each of those three was decidable in under a second and each cost
+// a full run, because the slowest step used to run first and the registry checks
+// live inside the test suite behind it.
+//
+// `preflight` is that half, lifted to the front: the registry, count and
+// document bindings plus the two fast linters, all of them run even when one
+// fails, so a person fixes everything in one pass. `check:refs` and
+// `lint:styles` therefore appear twice, once cheaply here and once in their own
+// step, which is deliberate: the step list is the record's contract and
+// removing entries from it would change what a pass means.
 const STEPS = [
-  { name: 'test:coverage', args: ['run', 'test:coverage'] },
+  // PRINTED WHOLE WHEN IT FAILS, unlike every other step. The tail-25 rule below
+  // is right for a suite, whose last lines carry the failure summary, and wrong
+  // for this one: its entire contract is that every failure is on the screen at
+  // once, and truncating it delivers exactly the one-per-run experience it was
+  // built to remove. A component can be correct and still be defeated by the
+  // host it joins.
+  { name: 'preflight', args: ['run', 'preflight'], fullOutput: true },
   { name: 'typecheck', args: ['run', 'typecheck'] },
   { name: 'lint:styles', args: ['run', 'lint:styles'] },
   { name: 'check:refs', args: ['run', 'check:refs'] },
+  { name: 'test:coverage', args: ['run', 'test:coverage'] },
   // Removes each of the renderer's escaping guards in turn and requires a test
   // to go red for it. Slower than the rest because it runs a suite per guard,
   // and worth it here: two of these guards were removable with nothing going
@@ -403,7 +424,13 @@ function writeRecord(record, file = RECORD) {
 }
 
 /** The record `run()` would write for this tree and branch. */
-function buildRecord({ tree, branch, at }) {
+function buildRecord({ tree, branch, at, timings }) {
+  // REFUSED WITHOUT MEASUREMENTS, rather than defaulted to none. A tolerant
+  // default here is what made the single line that matters untestable: drop
+  // `timings` from the call site and every test still passed while every real
+  // record carried an empty array and a zero total, which is precisely the
+  // silent hole the measurement exists to close. There is one caller, it always
+  // has them, and a record without them is not a record of a run.
   // THE SCOPE THE MUTATION STEP RAN UNDER travels with the record. That step
   // no longer runs every harness: it runs the ones the change can affect and
   // names the rest. A record saying the step passed, without saying what it
@@ -415,7 +442,12 @@ function buildRecord({ tree, branch, at }) {
   } catch (e) {
     mutationScope = { unavailable: 'the mutation step recorded no scope' };
   }
-  return { tree, branch, at, steps: STEPS.map(s => s.name), mutationScope };
+  if (!Array.isArray(timings) || !timings.length) {
+    throw new Error('buildRecord: a record must carry the timings of the run it describes. '
+      + 'Pass the timings runSteps returned; a record without them cannot be compared to another.');
+  }
+  const totalMs = timings.reduce((sum, t) => sum + t.ms, 0);
+  return { tree, branch, at, steps: STEPS.map(s => s.name), mutationScope, timings, totalMs };
 }
 
 // The release commit's footprint.
@@ -486,6 +518,39 @@ function refusal({ record, tree, branch, mainBranch, staged = [] }) {
 
 const SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP'];
 
+/**
+ * Run the steps in order, timing each, stopping at the first failure.
+ *
+ * SEPARATED SO THE LOOP ITSELF CAN BE DRIVEN, which is the difference between
+ * measuring and claiming to. Handing buildRecord a hand-written timings array
+ * proves only that an object survives a function; drop the argument at the call
+ * site and that test still passes while every real record carries none. `steps`
+ * and `runOne` are defaulted seams, the same shape this repository uses
+ * everywhere else; production passes neither.
+ */
+async function runSteps({ steps = STEPS, runOne = runStep, onGroupEnd = () => {} } = {}) {
+  const timings = [];
+  for (const step of steps) {
+    process.stdout.write(`[precommit] ${step.name}... `);
+    let result;
+    const stepStarted = Date.now();
+    try {
+      result = await runOne(step);
+    } finally {
+      onGroupEnd();
+    }
+    const stepMs = Date.now() - stepStarted;
+    timings.push({ step: step.name, ms: stepMs });
+    if (result.ok) {
+      console.log(`ok (${(stepMs / 1000).toFixed(1)}s)`);
+      continue;
+    }
+    console.log('FAILED');
+    return { ok: false, timings, failed: step, result, stepMs };
+  }
+  return { ok: true, timings };
+}
+
 async function run() {
   const branch = git(['branch', '--show-current']);
   const mainBranch = defaultBranch();
@@ -520,43 +585,33 @@ async function run() {
   process.on('exit', onExit);
   for (const signal of SIGNALS) process.on(signal, onSignal);
 
+  // MEASURED, SO THE NEXT CLAIM ABOUT THIS GATE CAN BE CHECKED. The reordering
+  // this list carries was justified by counting what one release cost; a claim
+  // that it is now cheaper deserves the same evidence rather than a feeling, and
+  // where the time actually goes moves as the suite grows.
+  let outcome;
   try {
-    for (const step of STEPS) {
-      process.stdout.write(`[precommit] ${step.name}... `);
-      let result;
-      try {
-        result = await runStep(step);
-      } finally {
-        // A step being over means its DIRECT child has closed, which does not
-        // mean its group is empty: a package runner starts children that
-        // outlive it, and those were what the gate used to report PASS over.
-        endLiveGroup();
-      }
-      if (result.ok) {
-        console.log('ok');
-        continue;
-      }
-      console.log('FAILED');
-      // BOTH streams, interleaved as the step wrote them. The node test runner
-      // writes which test failed and why to STDOUT, and tsc writes its
-      // diagnostics there too; stderr carries only npm's "lifecycle script
-      // failed" boilerplate. Capturing stderr alone left the developer with a
-      // bare "test failed" and nothing to act on, which removes the
-      // read-the-result step on the one path where reading the result is the
-      // entire point.
+    outcome = await runSteps({ onGroupEnd: endLiveGroup });
+    if (!outcome.ok) {
+      const { failed, result, stepMs, timings: spentSoFar } = outcome;
       const detail = result.out.trim();
-      if (detail) console.error(detail.split('\n').slice(-25).join('\n'));
-      // Said out loud when a step was ENDED rather than having failed. Reported
-      // as a bare failure, a step killed by a signal reads as a broken test and
-      // sends the developer looking for one.
+      if (detail) console.error(failed.fullOutput ? detail : detail.split('\n').slice(-25).join('\n'));
       const how = result.signal ? ` (ended by ${result.signal})` : '';
-      console.error(`[precommit] ${step.name} failed${how}. No record written, so the commit stays blocked.`);
+      // WITH THE ELAPSED TIME, because the runs this ordering is measured on are
+      // the FAILING ones: a cheap failure surfaced in seconds rather than after
+      // the suite is the whole saving, and a failing run used to leave no
+      // duration behind at all. No record is written on this path, correctly, so
+      // the numbers go where a person and a log can both see them.
+      const spent = spentSoFar.map(t => `${t.step} ${(t.ms / 1000).toFixed(1)}s`).join(', ');
+      console.error(`[precommit] ${failed.name} failed${how} after ${(stepMs / 1000).toFixed(1)}s. `
+        + `Spent so far: ${spent} (${(spentSoFar.reduce((a2, t) => a2 + t.ms, 0) / 1000).toFixed(1)}s total). `
+        + 'No record written, so the commit stays blocked.');
       process.exit(1);
     }
-
+    const timings = outcome.timings;
     // Written only after every step passed, so the record's existence IS the
     // result being read. There is no separate "did you look at it" step to skip.
-    const record = buildRecord({ tree: currentTree(), branch, at: new Date().toISOString() });
+    const record = buildRecord({ tree: currentTree(), branch, at: new Date().toISOString(), timings });
     writeRecord(record);
     console.log(`[precommit] PASS. Record written for tree ${record.tree.slice(0, 12)} on ${branch}.`);
   } finally {
@@ -591,4 +646,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { refusal, buildRecord, writeRecord, readRecord, currentTree, defaultBranch, workingTreeDrift, stagedPaths, isReleaseCommit, RELEASE_FOOTPRINT, RECORD, STEPS, STEP_END_GRACE_MS };
+module.exports = { refusal, runSteps, buildRecord, writeRecord, readRecord, currentTree, defaultBranch, workingTreeDrift, stagedPaths, isReleaseCommit, RELEASE_FOOTPRINT, RECORD, STEPS, STEP_END_GRACE_MS };

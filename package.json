@@ -15,6 +15,7 @@
     "release:gate": "node scripts/release-gate.js",
     "release": "node scripts/release.js",
     "test:e2e": "playwright test",
+    "preflight": "node scripts/preflight.js",
     "check:refs": "node scripts/check-internal-refs.js",
     "precommit": "node scripts/precommit-gate.js",
     "red-first": "node scripts/red-first.js",
