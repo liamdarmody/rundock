@@ -1,0 +1,80 @@
+# The complete mutation set: every harness, no selection at all.
+#
+# WHY THIS IS A SEPARATE WORKFLOW, AND NOT A STEP IN ci.yml.
+# The local gate and the CI mutation job both run the SCOPED set: only the
+# harnesses a change can reach. That selection is what makes them fast enough to
+# run on every commit, and it is safe only while something, somewhere, runs the
+# complete set. This is that something.
+#
+# It does not belong on the critical path. Measured before this was settled: the
+# complete set is 1204s here and 1628s on a developer machine, so putting it on
+# every push cost twenty minutes per review to re-check harnesses no change in
+# the branch could reach. Off the critical path the same twenty minutes costs
+# nobody anything, because nobody is waiting on it.
+#
+# WHAT THIS CATCHES THAT THE SCOPED RUN CANNOT. A harness rots without anyone
+# touching it: pinned to source text that has since moved, or resting on a
+# behaviour of the machine it happened to run on. The first exhaustive run in CI
+# found exactly that. A guard in the boundary harness was passing because the
+# only spelling it compared came from os.tmpdir(), which is aliased on macOS and
+# not on Linux, so the mutation was invisible on the platform CI runs. No commit
+# broke it, so no scoped run would ever have selected it. Only running everything
+# on a machine that is not the author's could surface it, and that is this job.
+#
+# BEFORE A RELEASE. Cutting a release is the other moment the complete set is
+# worth waiting for. Dispatch this workflow and let it finish before tagging.
+name: Nightly mutation sweep
+
+on:
+  schedule:
+    # 03:00 UTC. Nothing waits on this, so the only thing the hour has to do is
+    # avoid competing with the working day.
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Deliberately NOT sharing ci.yml's concurrency group. That group cancels in
+# progress runs on a new push to the same ref, which is right for a job someone
+# is waiting on and wrong for this one: a day of pushes to main would cancel the
+# sweep every time and it would never complete.
+concurrency:
+  group: mutation-nightly
+  cancel-in-progress: false
+
+jobs:
+  mutation-sweep:
+    name: Every guard, no selection
+    runs-on: ubuntu-latest
+    # Measured at 1204s for the complete set. Seventy-five leaves generous room
+    # for a slower runner without letting a hang burn an hour.
+    timeout-minutes: 75
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node 24
+        uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install runtime dependencies
+        run: npm ci --omit=dev
+
+      # The harnesses run suites that need a DOM. Without this the suites fail to
+      # load, every mutation looks red, and the sweep reports a clean table over
+      # a run where nothing was verified.
+      - name: Install test-only DOM dependency
+        run: npm install --no-save --ignore-scripts jsdom@29.1.1
+
+      - name: Remove every guard in turn and require a red test
+        run: npm run mutate:guards:all
+
+      # The tools restore what they mutate, including when a run throws. A
+      # failure that leaves any file modified is itself worth seeing.
+      - name: Fail if any tool left a file modified
+        run: git diff --exit-code
