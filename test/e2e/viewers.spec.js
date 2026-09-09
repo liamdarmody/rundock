@@ -523,9 +523,11 @@ test('a wikilink inside a callout opens the page it names', async ({ page }) => 
   await expect(link).toBeVisible();
   const target = await link.getAttribute('data-wikilink');
   await link.click();
-  // The editor now shows the file the link named, not the one it was clicked in.
-  await expect(page.locator('#file-title, .editor-title').first())
-    .toContainText(String(target).replace(/\.md$/, ''), { timeout: 5000 });
+  // The tree now marks the file the link named as the open one, not the file the
+  // link was clicked in. Asserted the way every other navigation case in this
+  // file asserts it, rather than against a title element invented for this test.
+  await expect(page.locator('.file-item.active', { hasText: String(target).replace(/\.md$/, '') }))
+    .toBeVisible({ timeout: 5000 });
 });
 
 test('a callout edits in place and saves byte-honestly', async ({ page }) => {
