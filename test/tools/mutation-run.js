@@ -324,7 +324,45 @@ function inspect({ root = ROOT, files = [] } = {}) {
  * the temp-root preflight each harness already runs, and it means a harness
  * cannot forget to act on the verdict.
  */
-function beginMutationRun({ root = ROOT, files: declared = [] } = {}) {
+/**
+ * Run each suite once, unmutated, and require it to pass.
+ *
+ * WITHOUT THIS, A DEAD HARNESS AND A CLEAN ONE READ THE SAME. The report says,
+ * for each guard removed, which tests went red. If a suite cannot load at all,
+ * every mutation "turns tests red" for reasons that have nothing to do with the
+ * mutation, and the run reports a full table over machinery that never ran.
+ *
+ * Measured on 2026-09-09: the eighteen harnesses were timed in a worktree with no
+ * node_modules. Every suite needing a dependency exited immediately, all
+ * eighteen ran to completion, and the reported total was 88 seconds against a
+ * real cost of 1628. That number was believed, acted on, and produced a wrong
+ * decision about where mutation should run.
+ *
+ * The env is scrubbed for the same reason preflight scrubs it: a nested
+ * `node --test` inherits NODE_TEST_CONTEXT from the runner that spawned it and
+ * misreports its own results.
+ */
+function baselineGreen(root, suites) {
+  const env = { ...process.env };
+  delete env.NODE_TEST_CONTEXT;
+  delete env.NODE_OPTIONS;
+  for (const suite of suites) {
+    const r = spawnSync(process.execPath, ['--test', suite], { cwd: root, encoding: 'utf8', env });
+    if (r.status !== 0) {
+      // EXIT BEFORE ANY MUTATION, AND BEFORE ANY TABLE. A failed baseline must
+      // never reach the report: a table printed after this point would be read
+      // as verdicts, which is the exact confusion this exists to end.
+      console.error(
+        `mutation run REFUSED: ${suite} does not pass before anything is mutated, so no verdict `
+        + 'from this harness would mean anything. NO MUTATION WAS APPLIED and no results are '
+        + 'reported.\nFix the suite, or the environment it needs, and run again.\n'
+        + `Check it:  node --test ${suite}`);
+      process.exit(3);
+    }
+  }
+}
+
+function beginMutationRun({ root = ROOT, files: declared = [], suites: declaredSuites = [] } = {}) {
   // Deduplicated, because a harness names one target per guard and several
   // guards of the same file are ordinary. Left in, the same path would be read
   // twice, restored twice, and listed twice in a refusal that is supposed to be
@@ -343,6 +381,12 @@ function beginMutationRun({ root = ROOT, files: declared = [] } = {}) {
     console.error(`A previous mutation run (pid ${s2.pid}) never finished. Its files have been put `
       + `back from the index:\n${list(s2.files)}`);
   }
+
+  // BEFORE THE ORIGINALS ARE READ, and so before any mutation can be written.
+  // Deduplicated: a harness names one suite per target and several targets
+  // sharing a suite is ordinary, so the cost is bounded by the number of
+  // DISTINCT suites rather than by the number of guards.
+  if (declaredSuites.length) baselineGreen(root, [...new Set(declaredSuites)]);
 
   const originals = new Map();
   for (const file of files) originals.set(file, fs.readFileSync(file, 'utf8'));
@@ -427,4 +471,4 @@ function beginMutationRun({ root = ROOT, files: declared = [] } = {}) {
   return session;
 }
 
-module.exports = { beginMutationRun, inspect, markerPath, markerDir, readMarkers, recoverAbandoned, MARKER, MARKER_DIR, ROOT };
+module.exports = { beginMutationRun, baselineGreen, inspect, markerPath, markerDir, readMarkers, recoverAbandoned, MARKER, MARKER_DIR, ROOT };
