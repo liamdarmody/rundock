@@ -509,8 +509,13 @@ function renderSessionHistory(d) {
   // a live process, handleActiveProcesses already set the correct activeAgentId
   // and activeProcessId; overriding it here would desync the header/placeholder
   // from actual message routing.
+  // THE SAME RULE THE SERVER APPLIES, and it has to be the same or either one
+  // alone reproduces the bug. A missing process means the delegate is not
+  // running; after a relaunch it does not mean the delegate FINISHED, because
+  // the process map died with the server. Only an observed handback says that,
+  // and `delegationReturned` is written at the moment one is seen.
   const state = getConvoState(convo.id);
-  if (!state.activeProcessId) {
+  if (!state.activeProcessId && convo.delegationReturned) {
     state.activeAgentId = convo.agentId;
   }
   if (activeConversation?.id === convo.id) {
