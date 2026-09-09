@@ -112,6 +112,34 @@ describe('membership is checkable, not hand-picked', () => {
   });
 });
 
+describe('captures of another program, checked before anything expensive', () => {
+  test('every pinned capture exists and records the version it was taken from', () => {
+    for (const pin of preflight.PINNED_RUNTIMES) {
+      const file = path.join(ROOT, pin.capture);
+      assert.ok(fs.existsSync(file), `${pin.name}: ${pin.capture} is named but not present`);
+      const recorded = JSON.parse(fs.readFileSync(file, 'utf8')).runtimeVersion;
+      assert.match(String(recorded), /^\d+\.\d+\.\d+$/,
+        `${pin.name}: a capture without a version cannot be known to be stale`);
+      assert.ok(pin.recapture.length > 10, `${pin.name}: says how to re-take it`);
+    }
+    assert.ok(preflight.PINNED_RUNTIMES.length >= 2, 'sanity: both captures are covered');
+  });
+
+  test('a stale capture is reported, and a matching one is not', () => {
+    // THE FAILURE THIS PREVENTS, twice in two days: a CLI upgrade made a capture
+    // stale, the release gate found it deep in a run, the release was blocked and
+    // a full cycle spent; then the SECOND capture failed for the same reason on
+    // the next attempt. Both are decidable by reading one field.
+    const out = preflight.staleCaptures();
+    if (out.skipped) return; // no runtime here; the release gate still checks
+    assert.ok(Array.isArray(out.stale), 'it answers with a list rather than a verdict');
+    for (const c of out.stale) {
+      assert.notStrictEqual(c.recorded, c.installed, 'a capture is stale only when the versions differ');
+      assert.ok(c.recapture.includes('--capture'), 'and it says how to re-take it');
+    }
+  });
+});
+
 describe('one pass, not several', () => {
   test('a run with more than one failure reports ALL of them, and starts nothing expensive', () => {
     // THE PROPERTY THIS PHASE EXISTS FOR. Stopping at the first failure would
@@ -159,6 +187,44 @@ describe('the registry suites actually run, and a broken one is reported', () =>
       { cwd: ROOT, encoding: 'utf8', env: cleanEnv() });
     assert.strictEqual(r.status, 0, `the real phase should pass on this tree:\n${r.stdout}${r.stderr}`);
     assert.match(r.stdout, /registries\.\.\. ok/, 'the registries step ran');
+  });
+
+  test('it works when run from INSIDE a test run, which is how the gate runs it', () => {
+    // THE BUG THIS PINS, found on a red trunk. The phase spawns `node --test`
+    // for its registry suites. With NODE_TEST_CONTEXT set, a nested runner
+    // reports to the parent instead of exiting on its own result, so the
+    // registries' results were attributed to the OUTER report: one suite showed
+    // as both passed and failed in the same run, and the phase's exit code
+    // stopped meaning anything. It was fixed in this file's own helper first and
+    // not in the tool, which is why continuous integration found it and the
+    // local gate did not.
+    // Proven on a RIGGED copy whose only check reports what it inherited, rather
+    // than by running the real phase a second time: the real one runs 28 suites,
+    // and a test that makes the gate run them twice is expensive and fails under
+    // its own load, which is a worse problem than the one it checks.
+    const src = fs.readFileSync(path.join(ROOT, 'scripts', 'preflight.js'), 'utf8');
+    const rigged = path.join(ROOT, '.rundock', 'preflight-env-rigged.js');
+    fs.mkdirSync(path.dirname(rigged), { recursive: true });
+    fs.writeFileSync(rigged, src
+      .replace(/const CHECKS = \[[\s\S]*?\];/,
+        "const CHECKS = [{ name: 'inherited', args: ['-e', 'console.error(\"CTX=\" + (process.env.NODE_TEST_CONTEXT || \"none\")); process.exit(1)'] }];")
+      .replace("for (const c of CHECKS) results.push(run(c.name, 'npm', c.args));",
+        "for (const c of CHECKS) results.push(run(c.name, process.execPath, c.args));")
+      .replace(/results\.push\(run\('registries'[\s\S]*?\)\);/, ''));
+    try {
+      const r = spawnSync(process.execPath, [rigged], {
+        cwd: ROOT,
+        encoding: 'utf8',
+        env: { ...process.env, NODE_TEST_CONTEXT: 'child' },
+      });
+      // The check exits non-zero so the phase prints its output: a passing
+      // check's output is captured and never shown, which is right for the
+      // tool and would leave nothing here to read.
+      assert.match(`${r.stdout}${r.stderr}`, /CTX=none/,
+        'the runner context must not reach a child that is itself a test run');
+    } finally {
+      fs.rmSync(rigged, { force: true });
+    }
   });
 
   test('a failing registry suite is surfaced by the phase, and stops it', () => {

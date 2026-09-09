@@ -28,6 +28,7 @@
  */
 
 const { spawnSync } = require('node:child_process');
+const fs = require('node:fs');
 const path = require('node:path');
 
 const ROOT = path.join(__dirname, '..');
@@ -148,9 +149,72 @@ const CHECKS = [
   { name: 'typecheck', args: ['run', 'typecheck'] },
 ];
 
+/**
+ * Captures of another program's behaviour, and the version each was taken from.
+ *
+ * WHY THIS IS A CHEAP CHECK. Each of these records what a real CLI actually did,
+ * and is only evidence while the installed CLI still matches. When it moves, the
+ * capture must be re-taken, and that is decidable by reading one field and
+ * running `--version`: milliseconds.
+ *
+ * It was not cheap in practice. The release gate checks them one at a time,
+ * deep in a run, so a CLI upgrade blocked a release, cost a full cycle, and then
+ * blocked it again on the SECOND stale capture for the same reason. Twice in two
+ * days, same cause, discovered serially. Reported together here, before anything
+ * expensive starts.
+ */
+const PINNED_RUNTIMES = [
+  { name: 'stream grammar', capture: 'scripts/stream-truth/captured-grammar.json', recapture: 'npm run stream:truth -- --capture' },
+  { name: 'transcript', capture: 'scripts/transcript-truth/captured-transcript.json', recapture: 'npm run transcript:truth -- --capture' },
+];
+
+function installedRuntimeVersion() {
+  const r = spawnSync('claude', ['--version'], { encoding: 'utf8' });
+  if (r.error || r.status !== 0) return null;
+  const m = String(r.stdout || '').match(/\d+\.\d+\.\d+/);
+  return m ? m[0] : null;
+}
+
+/**
+ * Every capture whose runtime has moved, named together with how to re-take it.
+ *
+ * A version that cannot be read is NOT a failure: the CLI may not be installed
+ * on this machine, and refusing there would make the repository unusable to
+ * anyone without it. The release gate still checks properly.
+ */
+function staleCaptures() {
+  const installed = installedRuntimeVersion();
+  if (!installed) return { skipped: 'the runtime is not installed here, so its captures cannot be checked' };
+  const stale = [];
+  for (const pin of PINNED_RUNTIMES) {
+    let recorded = null;
+    try { recorded = JSON.parse(fs.readFileSync(path.join(ROOT, pin.capture), 'utf8')).runtimeVersion; } catch { continue; }
+    if (recorded && recorded !== installed) stale.push({ ...pin, recorded, installed });
+  }
+  return { stale };
+}
+
+/**
+ * A child that is itself a test run must not inherit ours.
+ *
+ * With NODE_TEST_CONTEXT set, a nested `node --test` reports to the parent
+ * runner instead of exiting on its own result. So this phase, run from inside a
+ * test (which its own test does, and which continuous integration does when the
+ * suite runs under coverage), had its registry results attributed to the OUTER
+ * report: a suite appeared as both passed and failed in the same run, and the
+ * phase's own exit code stopped meaning anything. Measured on a red build of the
+ * trunk, having been fixed in the test and not in the tool.
+ */
+function cleanEnv() {
+  const env = { ...process.env };
+  delete env.NODE_TEST_CONTEXT;
+  delete env.NODE_OPTIONS;
+  return env;
+}
+
 function run(label, command, args) {
   const started = Date.now();
-  const r = spawnSync(command, args, { cwd: ROOT, encoding: 'utf8' });
+  const r = spawnSync(command, args, { cwd: ROOT, encoding: 'utf8', env: cleanEnv() });
   const ms = Date.now() - started;
   const ok = r.status === 0;
   process.stdout.write(`[preflight] ${label}... ${ok ? 'ok' : 'FAILED'} (${(ms / 1000).toFixed(1)}s)\n`);
@@ -163,6 +227,23 @@ function main() {
   // One process for all the registry suites: they are small, and the node test
   // runner reports each file's failures without stopping at the first.
   results.push(run('registries', process.execPath, ['--test', '--test-reporter=spec', ...REGISTRY_SUITES]));
+
+  // The captures, checked together and reported with the rest.
+  const captures = staleCaptures();
+  if (captures.skipped) {
+    process.stdout.write(`[preflight] runtime captures... skipped (${captures.skipped})\n`);
+  } else if (captures.stale.length) {
+    process.stdout.write(`[preflight] runtime captures... FAILED (0.0s)\n`);
+    results.push({
+      label: 'runtime captures',
+      ok: false,
+      ms: 0,
+      output: captures.stale.map(c => `${c.name}: captured from ${c.recorded}, installed is ${c.installed}\n`
+        + `  re-take it with: ${c.recapture}`).join('\n'),
+    });
+  } else {
+    process.stdout.write('[preflight] runtime captures... ok (0.0s)\n');
+  }
 
   const failed = results.filter(r => !r.ok);
   const total = results.reduce((sum, r) => sum + r.ms, 0);
@@ -184,6 +265,6 @@ function main() {
   return 1;
 }
 
-module.exports = { REGISTRY_SUITES, CHECKS, NOT_CHEAP };
+module.exports = { REGISTRY_SUITES, CHECKS, NOT_CHEAP, PINNED_RUNTIMES, staleCaptures };
 
 if (require.main === module) process.exit(main());
