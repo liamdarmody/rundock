@@ -249,6 +249,17 @@ describe('one directory under two names is one identity', () => {
       boundary.addBoundaryGrant(link);
       assert.strictEqual(boundary.boundaryGrantCovers(path.join(target, 'file.md')), true,
         'granted through the symlink, asked about through the real path: one folder, one decision');
+      // The mirror of the line above, and the only assertion here that drives
+      // canonicalisation of the ASKED-ABOUT path. addBoundaryGrant already
+      // canonicalises on write, so the stored grant is the real spelling: the
+      // question arriving under the symlink spelling is the sole thing left
+      // that has to be resolved. Asking through `link`, a symlink this test
+      // makes itself, is what carries that on every platform. Asking through
+      // a path from os.tmpdir() does it only on hosts where the temp dir
+      // itself sits behind an alias (macOS /var -> /private/var), which left
+      // the guard proving nothing on Linux and so nothing in CI.
+      assert.strictEqual(boundary.boundaryGrantCovers(path.join(link, 'file.md')), true,
+        'and granted under the real path, asked about through the symlink: still one folder, one decision');
       assert.strictEqual(boundary.boundaryGrantCovers(path.join(linkHome, 'other', 'f.md')), false,
         'and the grant covers only what its author meant');
     } finally {
