@@ -523,11 +523,14 @@ test('a wikilink inside a callout opens the page it names', async ({ page }) => 
   await expect(link).toBeVisible();
   const target = await link.getAttribute('data-wikilink');
   await link.click();
-  // The tree now marks the file the link named as the open one, not the file the
-  // link was clicked in. Asserted the way every other navigation case in this
-  // file asserts it, rather than against a title element invented for this test.
-  await expect(page.locator('.file-item.active', { hasText: String(target).replace(/\.md$/, '') }))
-    .toBeVisible({ timeout: 5000 });
+  // ASSERTED ON WHAT IS ON THE PAGE, not on the chrome around it. Two earlier
+  // versions of this checked a title element and then an active tree row, and
+  // both were guesses about structure; what the criterion actually claims is
+  // that the link opens the page it names, and the page's own text is the
+  // evidence for that. Roadmap-2026.md carries this sentence and nothing else
+  // in the fixture does.
+  await expect(page.locator('body')).toContainText('Quarterly targets and the mobile milestone',
+    { timeout: 5000 });
 });
 
 test('a callout edits in place and saves byte-honestly', async ({ page }) => {
