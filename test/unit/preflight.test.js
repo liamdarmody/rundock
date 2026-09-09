@@ -67,9 +67,12 @@ describe('what the cheap phase covers', () => {
     assert.ok(step, 'the phase is a step');
     assert.strictEqual(step.fullOutput, true,
       'preflight opts out of the tail rule, or its all-at-once report is cut to the last failure');
-    const gate = fs.readFileSync(path.join(ROOT, 'scripts', 'precommit-gate.js'), 'utf8');
-    assert.match(gate, /failed\.fullOutput \? detail :/,
-      'and the gate honours the flag rather than declaring it and truncating anyway');
+    // That the gate HONOURS the flag is proven by behaviour rather than by
+    // matching a ternary in its source: precommit-gate.test.js runs the real
+    // gate against a noisy failing first step and requires the earliest line to
+    // survive, which is the line a tail would have eaten.
+    assert.ok(STEPS.filter(s3 => s3.fullOutput).length === 1,
+      'exactly one step opts out of the tail rule, so the exception stays deliberate');
   });
 });
 

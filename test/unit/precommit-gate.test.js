@@ -221,6 +221,41 @@ describe('the entry points, against a throwaway repository', () => {
       assert.ok(record, 'a record is written');
       assert.strictEqual(record.branch, 'fix/card');
       assert.strictEqual(record.tree, currentTree(dir), 'and it names the tree that was checked');
+      // THE TIMINGS COME FROM THE RUN THAT JUST HAPPENED, which is what makes
+      // them evidence rather than decoration. Asserting only that the array is
+      // non-empty would pass for a hard-coded literal, or for the durations of
+      // some other loop; these must be this gate's own steps, in order, each
+      // with a real duration.
+      assert.deepStrictEqual(record.timings.map(t => t.step), STEPS.map(st => st.name),
+        'every step the gate ran is timed, in the order it ran');
+      for (const t of record.timings) {
+        assert.strictEqual(typeof t.ms, 'number', `${t.step} carries a number`);
+        assert.ok(t.ms >= 0 && t.ms < 600000, `${t.step} carries a plausible duration, got ${t.ms}`);
+      }
+      assert.strictEqual(record.totalMs, record.timings.reduce((sum, t) => sum + t.ms, 0),
+        'and the total is the sum of them, so two runs can be compared');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a failing cheap phase is printed WHOLE, not tailed to its last lines', () => {
+    // GO-2 as a developer actually meets it. The previous guard matched a
+    // ternary in the source, which proves a ternary exists. This runs the real
+    // gate against a first step that prints far more than the tail the other
+    // steps are cut to, and requires the EARLIEST line to survive: that is the
+    // one a tail would have eaten, and losing it is what turns an all-at-once
+    // report back into one discovery per run.
+    const noisy = 'node -e "for (let i = 1; i <= 60; i++) console.log(\'LINE_\' + i); process.exit(1)"';
+    const { dir } = repoWithScripts({ ...allStepsPass(), [STEPS[0].name]: noisy });
+    try {
+      const { code, out } = spawnGate([], dir);
+      assert.notStrictEqual(code, 0, 'the phase failed, so the gate fails');
+      assert.match(out, /LINE_1\b/,
+        'the first line of the report survives; a 25-line tail would have cut it');
+      assert.match(out, /LINE_60\b/, 'and the last line is there too');
+      assert.doesNotMatch(out, /test:coverage\.\.\. ok/,
+        'and nothing expensive ran after the cheap phase failed');
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
