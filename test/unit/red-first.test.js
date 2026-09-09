@@ -31,6 +31,11 @@ const { redFirst, recordOutcome, namesFrom, NAME_LIMIT } = require('../../script
 // computed its tree a different way, recordOutcome would silently stop matching
 // in production while every test here stayed green, because the fixture and the
 // implementation were built to agree with each other rather than with the gate.
+// A record always describes a run, and a run always took time, so a fixture
+// record carries durations too. buildRecord refuses one without them: a
+// tolerant default there is what let the real call site stop passing them
+// with every test still green.
+const FIXTURE_TIMINGS = [{ step: 'preflight', ms: 1200 }, { step: 'test:coverage', ms: 88000 }];
 const gate = require('../../scripts/precommit-gate.js');
 
 /**
@@ -207,7 +212,7 @@ describe('the outcome reaches the record a reviewer packet can carry', () => {
   // the record has to carry the proof.
   function withRecord(dir, tree) {
     gate.writeRecord(
-      gate.buildRecord({ tree, branch: 'change', at: '2026-08-20T00:00:00.000Z' }),
+      gate.buildRecord({ tree, branch: 'change', at: '2026-08-20T00:00:00.000Z', timings: FIXTURE_TIMINGS }),
       path.join(dir, '.precommit-gate.json'),
     );
   }
@@ -498,7 +503,7 @@ describe('the record carries test counts, not a count of files', () => {
       // The fixture already ignores the record file, so there is nothing to
       // commit here and no reason to touch the tree before measuring it.
       const tree = gate.currentTree(dir);
-      gate.writeRecord(gate.buildRecord({ tree, branch: 'change', at: 'x' }),
+      gate.writeRecord(gate.buildRecord({ tree, branch: 'change', at: 'x', timings: FIXTURE_TIMINGS }),
         path.join(dir, '.precommit-gate.json'));
 
       const outcome = await redFirst({ repo: dir, base: 'main', tests: 'node --test test/check.js' });
@@ -716,6 +721,7 @@ describe('the record contract is the gate is, not this file is', () => {
     try {
       const record = gate.buildRecord({
         tree: gate.currentTree(dir), branch: 'change', at: '2026-08-21T00:00:00.000Z',
+        timings: FIXTURE_TIMINGS,
       });
       gate.writeRecord(record, path.join(dir, '.precommit-gate.json'));
 

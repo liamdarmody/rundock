@@ -54,8 +54,26 @@ const RUN_EVERYTHING_WHEN_TOUCHED = [
   'scripts/mutation-scope.js',
   'test/tools/mutation-run.js',
   'test/helpers/',
-  'test/tools/', // any harness file: its own rows decide what it proves
 ];
+
+// A HARNESS'S OWN FILE IS A TRIGGER FOR THAT HARNESS, NOT FOR ALL OF THEM.
+//
+// `test/tools/` used to sit in the list above, on the reasoning that a harness
+// file decides what that harness proves. True, and it does not follow that it
+// decides what the other seventeen prove. Editing the boundary harness cannot
+// change what the renderer harness asserts about anything.
+//
+// The cost of conflating those was the whole point of the scoping work: every
+// card that adds a guard edits a harness, so in practice real feature work
+// almost never benefited from the selection at all. Measured on the release
+// this comment was written during: twenty-five minutes per run, on eighteen
+// harnesses, for a change that touched one.
+//
+// Fail-safe is unchanged. This makes a harness run in one MORE case than its
+// targets alone would, never one fewer.
+function isOwnHarnessFile(file, tool) {
+  return file === `test/tools/${tool}`;
+}
 
 // `path.join(ROOT, 'a', 'b')` with string literals only. A harness that names a
 // target any other way yields nothing here and is therefore RUN, which is the
@@ -121,6 +139,11 @@ function selectHarnesses(changed, harnesses) {
   const skipped = [];
   for (const h of harnesses) {
     if (!h.targets) {
+      run.push(h.tool);
+      continue;
+    }
+    // Its own file, then the files it names. Either is a reason to run it.
+    if (files.some(f => isOwnHarnessFile(f, h.tool))) {
       run.push(h.tool);
       continue;
     }
@@ -209,6 +232,6 @@ function main() {
   return 0;
 }
 
-module.exports = { harnessTargets, selectHarnesses, harnessFiles, changedFiles, RUN_EVERYTHING_WHEN_TOUCHED };
+module.exports = { harnessTargets, selectHarnesses, harnessFiles, changedFiles, isOwnHarnessFile, RUN_EVERYTHING_WHEN_TOUCHED };
 
 if (require.main === module) process.exit(main());
