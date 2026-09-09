@@ -28,14 +28,24 @@ const _editorHandles = new WeakMap();
 
 // Wires a click delegate on the host element that routes wikilink clicks to
 // the host's onWikilinkClick callback. Returns an unbind function.
-function wireWikilinkClicks(hostElement, onWikilinkClick) {
+export function wireWikilinkClicks(hostElement, onWikilinkClick) {
   if (!hostElement || typeof onWikilinkClick !== 'function') return () => {};
   const handler = (event) => {
     const anchor = event.target && event.target.closest && event.target.closest('a.wikilink');
     if (!anchor) return;
     event.preventDefault();
     event.stopPropagation();
-    const target = anchor.getAttribute('data-target') || '';
+    // TWO SPELLINGS OF THE SAME IDEA, and this delegate knew one of them.
+    // The editor's own wikilink node writes `data-target`; the markdown renderer
+    // writes `data-wikilink`, and a callout's body is rendered through that
+    // renderer. This handler matches `a.wikilink`, which both produce, and then
+    // stopped propagation before reading an attribute only one of them has: the
+    // click was consumed and dropped, so a wikilink inside a callout looked
+    // right and went nowhere while the same link outside one worked. Reading
+    // both is what makes one delegate serve both, rather than adding a second.
+    const target = anchor.getAttribute('data-target')
+      || anchor.getAttribute('data-wikilink')
+      || '';
     const alias  = anchor.getAttribute('data-alias') || null;
     if (target) onWikilinkClick(target, alias);
   };
