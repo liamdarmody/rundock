@@ -93,7 +93,14 @@ function redTests(suite) {
 
 function run() {
   const targets = [MODEL];
-  const session = beginMutationRun({ files: targets.map((target) => target.src) });
+  // The suites are declared so the envelope can run them ONCE, unmutated, before
+  // anything is touched. A suite that cannot pass before the experiment starts
+  // makes every verdict after it meaningless, and a table printed over that is
+  // indistinguishable from a real one.
+  const session = beginMutationRun({
+    files: targets.map((target) => target.src),
+    suites: targets.map((target) => target.suite),
+  });
   const originals = new Map();
   for (const target of targets) originals.set(target, session.original(target.src));
   const results = [];

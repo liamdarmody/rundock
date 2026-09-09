@@ -128,6 +128,11 @@ const STEPS = [
   { name: 'typecheck', args: ['run', 'typecheck'] },
   { name: 'lint:styles', args: ['run', 'lint:styles'] },
   { name: 'check:refs', args: ['run', 'check:refs'] },
+  // Runs a real adopted mutation harness and requires its verdicts to match
+  // what it reported before the baseline check existed. Cheap, and it belongs
+  // here rather than in the suite: a harness rewrites source on disk, so it
+  // cannot run alongside tests that read those same files.
+  { name: 'verdicts:pin', args: ['run', 'verdicts:pin'] },
   { name: 'test:coverage', args: ['run', 'test:coverage'] },
   // Removes each of the renderer's escaping guards in turn and requires a test
   // to go red for it. Slower than the rest because it runs a suite per guard,
