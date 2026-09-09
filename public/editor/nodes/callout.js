@@ -249,6 +249,14 @@ function renderedRun(doc, render, text) {
   if (!render || !doc) return ['div', { class: 'callout-line' }, text];
   const holder = doc.createElement('div');
   holder.className = 'callout-md';
+  // NOT EDITABLE, so a click inside it reaches the document.
+  //
+  // The callout sits inside the editor's contenteditable area, and ProseMirror
+  // reads a click there as selecting the node. A wikilink rendered in here
+  // therefore LOOKED like a link and went nowhere: the markup was right and the
+  // document's own handler never saw the event. The edit button in this same
+  // file already carries this attribute for the same reason.
+  holder.setAttribute('contenteditable', 'false');
   holder.innerHTML = render(text);
   return holder;
 }
@@ -265,10 +273,32 @@ function renderedTitle(doc, render, text) {
   if (!render || !doc) return ['span', { class: 'callout-title' }, text];
   const holder = doc.createElement('span');
   holder.className = 'callout-title';
+  holder.setAttribute('contenteditable', 'false');
   holder.innerHTML = render(text);
   const only = holder.children.length === 1 ? holder.children[0] : null;
   if (only && only.tagName === 'P') holder.innerHTML = only.innerHTML;
   return holder;
+}
+
+/**
+ * The link a click landed on, or null.
+ *
+ * A CALLOUT'S LINKS BELONG TO THE DOCUMENT, NOT TO THE EDITOR. Rendered content
+ * sits inside the editor's editable area, and ProseMirror claims clicks there to
+ * select the node. So a wikilink looked like a link and went nowhere, and an
+ * ordinary link or a mailto: address would have done the same: the markup was
+ * right and the event never reached anything that acts on it.
+ *
+ * Both kinds are covered deliberately. A wikilink is dispatched by the
+ * document's own handler, which resolves it through the same openWikilink that
+ * every other surface uses, so a link inside a callout reaches the same page as
+ * the identical link outside one. An ordinary href navigates natively, which the
+ * desktop app turns into opening the reader's browser.
+ */
+export function linkFromEvent(event) {
+  const target = event && event.target;
+  if (!target || typeof target.closest !== 'function') return null;
+  return target.closest('a.wikilink[data-wikilink], a[href]');
 }
 
 function calloutChildrenSpec({ type, fold, title, body }, doc = null) {
@@ -488,7 +518,13 @@ export const Callout = Node.create({
           if (!editing) paint();
           return true;
         },
-        stopEvent: () => editing, // while editing, the textarea owns its events
+        stopEvent: (event) => {
+          // While editing, the textarea owns its events.
+          if (editing) return true;
+          // A click on a link is the document's business, not the editor's:
+          // claiming it is what made rendered links inert.
+          return !!linkFromEvent(event);
+        },
         ignoreMutation: () => true,
         selectNode() { dom.classList.add('ProseMirror-selectednode'); },
         deselectNode() { dom.classList.remove('ProseMirror-selectednode'); },

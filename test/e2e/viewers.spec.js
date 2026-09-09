@@ -512,6 +512,22 @@ test('a callout renders its markdown in a real browser, not as source', async ({
   await expect(callout.locator('.callout-title')).toBeVisible();
 });
 
+test('a wikilink inside a callout opens the page it names', async ({ page }) => {
+  // FOUND BY USING THE PRODUCT, after the rendering half had shipped. The link
+  // rendered correctly and went nowhere, because a callout sits inside the
+  // editor's editable area and ProseMirror claimed the click to select the node.
+  // Rendering was proven and FOLLOWING was not, which is the gap this closes.
+  await boot(page);
+  await openFromTree(page, 'briefing.md');
+  const link = page.locator('.callout a.wikilink').first();
+  await expect(link).toBeVisible();
+  const target = await link.getAttribute('data-wikilink');
+  await link.click();
+  // The editor now shows the file the link named, not the one it was clicked in.
+  await expect(page.locator('#file-title, .editor-title').first())
+    .toContainText(String(target).replace(/\.md$/, ''), { timeout: 5000 });
+});
+
 test('a callout edits in place and saves byte-honestly', async ({ page }) => {
   await boot(page);
   await openFromTree(page, 'briefing.md');

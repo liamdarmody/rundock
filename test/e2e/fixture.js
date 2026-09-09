@@ -344,6 +344,9 @@ function buildFixture() {
     // now covers is that it rendered as literal source. The daily briefing
     // this is modelled on is written exactly like this.
     '> **Two meetings**, one deadline.',
+    // A wikilink inside the callout body: the link rendered and went nowhere
+    // until the node view stopped claiming clicks that land on one.
+    '> See [[Roadmap-2026]] for the plan.',
     '',
     '> [!warning]- Blocked items',
     '> The vendor reply is overdue.',
