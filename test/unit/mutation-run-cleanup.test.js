@@ -40,7 +40,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync, spawn, spawnSync } = require('node:child_process');
 
-const { inspect, markerPath } = require('../tools/mutation-run.js');
+const { inspect, markerPath, markerDir, readMarkers, MARKER_DIR } = require('../tools/mutation-run.js');
+const markerDirName = () => MARKER_DIR;
 const { makeTempDir } = require('../helpers/workspace.js');
 
 const REPO = path.join(__dirname, '..', '..');
@@ -146,7 +147,16 @@ function runStandIn(fixture) {
 }
 
 const read = (file) => fs.readFileSync(file, 'utf8');
-const marker = (repo) => JSON.parse(read(markerPath(repo)));
+// RECORDS ARE PER RUN NOW, so a test cannot build the path from its own pid:
+// the run it is watching is a child with a different one. These read whatever
+// the directory holds, which is what a later run does too.
+const markers = (repo) => readMarkers(repo);
+const marker = (repo) => {
+  const all = readMarkers(repo);
+  assert.equal(all.length, 1, `expected exactly one run recorded, found ${all.length}`);
+  return all[0];
+};
+const anyMarker = (repo) => readMarkers(repo).length > 0;
 
 describe('a mutation run that is killed leaves no mutated file behind', () => {
   for (const signal of ['SIGINT', 'SIGTERM']) {
@@ -158,7 +168,7 @@ describe('a mutation run that is killed leaves no mutated file behind', () => {
       // harness that had stopped mutating altogether.
       assert.equal(read(fixture.src), SOURCE.replace(GUARD, BROKEN),
         'the file must actually be broken at the moment the signal is sent');
-      assert.equal(fs.existsSync(markerPath(fixture.repo)), true,
+      assert.equal(anyMarker(fixture.repo), true,
         'a run in flight must be recorded while it is in flight');
 
       kid.kill(signal);
@@ -174,7 +184,7 @@ describe('a mutation run that is killed leaves no mutated file behind', () => {
       // tell a script driving it that the run had succeeded.
       assert.equal(how.signal, signal,
         `the harness must still die of ${signal}, not exit normally`);
-      assert.equal(fs.existsSync(markerPath(fixture.repo)), false,
+      assert.equal(anyMarker(fixture.repo), false,
         'the record of a run in flight must go when the run does');
     });
   }
@@ -184,7 +194,7 @@ describe('a mutation run that is killed leaves no mutated file behind', () => {
     const run = runStandIn(fixture);
     assert.equal(run.status, 0, `the run should have finished: ${run.stderr}`);
     assert.equal(read(fixture.src), SOURCE, 'a finished run left the source mutated');
-    assert.equal(fs.existsSync(markerPath(fixture.repo)), false,
+    assert.equal(anyMarker(fixture.repo), false,
       'a finished run left its record behind, which stops the next one for nothing');
   });
 });
@@ -206,7 +216,7 @@ describe('a mutation run refuses to start where a restore would be ambiguous', (
     assert.match(run.stderr, /src\.js/, 'the refusal must name the file it stopped for');
     assert.equal(read(fixture.src), mine,
       'a refusal must leave the working tree exactly as it found it');
-    assert.equal(fs.existsSync(markerPath(fixture.repo)), false,
+    assert.equal(anyMarker(fixture.repo), false,
       'a run that never started must not record one');
   });
 
@@ -238,7 +248,10 @@ describe('a mutation run refuses to start where a restore would be ambiguous', (
 
     assert.equal(second.status, 2,
       `a second run should have refused, got ${second.status}\n${second.stderr}`);
-    assert.match(second.stderr, /already in flight/, 'it refused without saying why');
+    assert.match(second.stderr, /holding these\n?files mutated|holding these/,
+      'it refused without saying which files are at stake');
+    assert.match(second.stderr, /would mutate them too/,
+      'and without saying why that matters for THIS run');
     assert.match(second.stderr, /src\.js/, 'the refusal must name the files at stake');
     // Two runs mutating the same file both restore what they read, and the
     // second reads the first one's mutation.
@@ -248,6 +261,31 @@ describe('a mutation run refuses to start where a restore would be ambiguous', (
 });
 
 describe('a run killed in a way nothing can catch', () => {
+  test('a run holding DIFFERENT files does not block this one, which is what makes concurrency possible', () => {
+    // THE POINT OF PER-RUN RECORDS. A single shared record meant any run in
+    // flight refused every other, whatever the two were touching, so eighteen
+    // harnesses ran one after another and mutation became 93% of a gate. Two
+    // runs over different files cannot corrupt each other's restore: the record
+    // each one reads back is its own.
+    const dir = makeTempDir('marker-overlap-');
+    try {
+      fs.mkdirSync(path.join(dir, markerDirName()), { recursive: true });
+      // A live run, this very process, holding one file.
+      // pid 1 is always alive and is never this process, which inspect skips by
+      // design: a run does not block itself.
+      fs.writeFileSync(path.join(dir, markerDirName(), '1.json'),
+        JSON.stringify({ pid: 1, startedAt: 'now', tool: 'other.js', files: ['lib/other.js'] }));
+      const clear = inspect({ root: dir, files: [path.join(dir, 'lib', 'mine.js')] });
+      assert.equal(clear.reason !== 'in-flight', true,
+        `a run over a different file must not be refused, got ${clear.reason}`);
+      const clash = inspect({ root: dir, files: [path.join(dir, 'lib', 'other.js')] });
+      assert.equal(clash.reason, 'in-flight', 'and a run over the SAME file still is');
+      assert.deepEqual(clash.blocked, ['lib/other.js'], 'naming exactly the file at stake');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test('leaves the file mutated, and leaves a record that says so by name', async (t) => {
     // WHAT THIS DOES NOT COVER, stated as a test rather than as a note because
     // the record only earns its keep here. SIGKILL is delivered to nothing, so
@@ -265,15 +303,22 @@ describe('a run killed in a way nothing can catch', () => {
     assert.deepEqual(record.files, ['src.js'], 'the record must name what the dead run was holding');
     assert.ok(record.pid > 0, 'the record must name the process that was holding it');
 
+    // SWEPT, NOT REPORTED. Refusing and printing three commands was correct and
+    // was not enough: the mutant sits on disk until a person runs them, and what
+    // happens in between is `git add -A`. Measured three times in one session.
     const next = runStandIn(fixture);
-    assert.equal(next.status, 2,
-      `the next run should have refused, got ${next.status}\n${next.stderr}`);
-    assert.match(next.stderr, /never finished/, 'the refusal must say a previous run died');
-    assert.match(next.stderr, /src\.js/, 'the refusal must name the file that may hold a mutation');
+    assert.equal(read(fixture.src), SOURCE,
+      'the surviving mutation is put back from the index rather than left to be noticed');
+    assert.equal(anyMarker(fixture.repo), false, 'and the dead run\'s record is cleared');
+    assert.match(next.stderr, /never finished/, 'the sweep says a previous run died');
+    assert.match(next.stderr, /put back/, 'and says what it did about it');
+    assert.match(next.stderr, /src\.js/, 'and names the file, rather than counting them');
+    assert.notEqual(next.status, 2, 'having swept, the run proceeds rather than refusing');
     // Says how to get out of it. A stop with no way forward is how a tool gets
     // deleted from the gate rather than fixed.
-    assert.match(next.stderr, /git checkout/, 'the refusal must say how to put the file back');
-    assert.match(next.stderr, /\.mutation-run\.json/, 'the refusal must say how to clear the record');
+    // No hand-holding instructions any more: there is nothing left for a person
+    // to do. Those lines survive only on the path where the sweep itself fails,
+    // which the case below covers.
   });
 });
 
@@ -324,7 +369,7 @@ describe('every mutation harness runs inside the envelope', () => {
         + `(status ${run.status}, signal ${run.signal})\n${run.stdout}\n${run.stderr}`);
       assert.ok(run.status === 0 || run.status === 2,
         `${rel} exited ${run.status}, which is neither armed nor refused\n${run.stderr}`);
-      assert.equal(fs.existsSync(markerPath(REPO)), false,
+      assert.equal(anyMarker(REPO), false,
         `${rel} left a record behind, which would refuse the next real run`);
     });
   }
@@ -363,10 +408,12 @@ describe('the verdict, without starting anything', () => {
 
   test('a record it cannot read stops the run rather than being stepped over', (t) => {
     const fixture = scratch(t, 'quick');
+    fs.mkdirSync(markerDir(fixture.repo), { recursive: true });
     fs.writeFileSync(markerPath(fixture.repo), 'not json');
     const verdict = inspect({ root: fixture.repo, files: [fixture.src] });
     assert.equal(verdict.ok, false, 'an unreadable record is not an absent one');
-    assert.match(verdict.message, /\.mutation-run\.json/);
+    assert.match(verdict.message, /\.mutation-runs/,
+      'the refusal names the record it could not read');
   });
 
   test('outside a repository it starts, and says it could not check', (t) => {

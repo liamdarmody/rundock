@@ -234,7 +234,9 @@ function endLiveGroup() {
 
 // The record a mutation run writes while it holds files rewritten. The name is
 // fixed by test/tools/mutation-run.js, which owns the format.
-const MUTATION_MARKER = '.mutation-run.json';
+// A DIRECTORY OF RECORDS, one per run, so concurrent harnesses no longer
+// overwrite each other's. The gate cleans up after runs it started.
+const MUTATION_MARKER = '.mutation-runs';
 
 // How long a pid from an ended group gets to leave the process table before the
 // recovery below gives up on it and says so.
@@ -242,7 +244,12 @@ const SETTLE_MS = 1000;
 
 function readMutationRun(root = ROOT) {
   try {
-    const held = JSON.parse(fs.readFileSync(path.join(root, MUTATION_MARKER), 'utf8'));
+    const dir = path.join(root, MUTATION_MARKER);
+    const files = fs.readdirSync(dir).filter((n) => n.endsWith('.json'));
+    const held = files
+      .map((n) => { try { return JSON.parse(fs.readFileSync(path.join(dir, n), 'utf8')); } catch { return null; } })
+      .filter(Boolean)
+      .reduce((acc, r) => ({ pid: r.pid, files: [...acc.files, ...(r.files || [])] }), { pid: 0, files: [] });
     return held && typeof held.pid === 'number' && Array.isArray(held.files) ? held : null;
   } catch { return null; }
 }
@@ -296,7 +303,7 @@ function reclaim(held, root = ROOT, settleMs = SETTLE_MS) {
       console.error(`[precommit] could not put ${file} back: ${(err && err.message) || err}`);
     }
   }
-  try { fs.rmSync(path.join(root, MUTATION_MARKER), { force: true }); } catch { /* leaving anyway */ }
+  try { fs.rmSync(path.join(root, MUTATION_MARKER), { recursive: true, force: true }); } catch { /* leaving anyway */ }
   if (!restored.length) return;
   console.error(`[precommit] a mutation harness was ended mid-run holding ${restored.length} `
     + 'file(s) rewritten, and its own restore could not run. Put back from the index:');
