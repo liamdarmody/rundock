@@ -28,7 +28,8 @@
     "smoke": "node scripts/smoke/run.mjs",
     "smoke:personas": "node scripts/smoke/personas.mjs",
     "stream:truth": "node scripts/stream-truth/run.mjs",
-    "transcript:truth": "node scripts/transcript-truth/run.mjs"
+    "transcript:truth": "node scripts/transcript-truth/run.mjs",
+    "precommit:detached": "sh -c 'mkdir -p .rundock && nohup node scripts/precommit-gate.js > .rundock/gate.log 2>&1 < /dev/null & echo \"gate detached (pid $!). Follow it: tail -f .rundock/gate.log\"'"
   },
   "dependencies": {
     "electron-updater": "^6.8.9",
