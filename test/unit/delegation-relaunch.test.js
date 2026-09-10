@@ -190,3 +190,123 @@ describe('a handback that cannot be recorded does not take the handback down wit
     }
   });
 });
+
+describe('the rule both sides apply, and the routing that depends on it', () => {
+  const { restoredActiveAgentId } = require(path.join(ROOT, 'public', 'delegation-restore.js'));
+  const { handleSaveConversation } = require(path.join(ROOT, 'lib', 'protocol', 'handlers', 'conversations.js'));
+
+  test('a restored delegation routes the next message to the specialist', () => {
+    // THE REPORTED BUG, AT THE POINT IT ACTUALLY BITES. dispatchMessage resolves
+    // its target as `state.activeAgentId || convo.agentId`, and the runtime
+    // state is seeded from this rule. An earlier version narrowed the reset and
+    // seeded nothing, so the server preserved the specialist on disk while the
+    // client still sent the next message to the orchestrator: the symptom
+    // survived a fix that looked right.
+    assert.strictEqual(
+      restoredActiveAgentId({ agentId: 'chief-of-staff', activeAgentId: 'lead-developer' }),
+      'lead-developer',
+      'no observed handback: the next message goes to the specialist');
+  });
+
+  test('a delegation that handed back routes to the orchestrator', () => {
+    assert.strictEqual(
+      restoredActiveAgentId({ agentId: 'chief-of-staff', activeAgentId: 'lead-developer', delegationReturned: true }),
+      'chief-of-staff',
+      'an observed handback returns the conversation to its owner');
+  });
+
+  test('an undelegated conversation routes to its own agent', () => {
+    assert.strictEqual(restoredActiveAgentId({ agentId: 'chief-of-staff' }), 'chief-of-staff');
+    assert.strictEqual(restoredActiveAgentId({ agentId: 'chief-of-staff', activeAgentId: null }), 'chief-of-staff');
+  });
+
+  test('an ordinary save does not wipe the handback record', () => {
+    // save_conversation rebuilds the record from a whitelist and replaces the
+    // whole entry, and the client sends it after essentially every turn. Left
+    // out of that whitelist, a rename or a finished turn would erase the one
+    // signal saying a delegation ended, and the conversation would stay pointed
+    // at a specialist that had already handed back.
+    const dir = workspaceWith({ ...IN_FLIGHT, delegationReturned: true });
+    const original = config.getWorkspace();
+    config.setWorkspace(dir);
+    try {
+      handleSaveConversation({}, captureWs(), {
+        type: 'save_conversation',
+        conversation: { id: 'c1', agentId: 'chief-of-staff', activeAgentId: 'lead-developer', title: 'Renamed' },
+      });
+      const stored = JSON.parse(fs.readFileSync(path.join(dir, '.rundock', 'conversations.json'), 'utf8'));
+      assert.strictEqual(stored[0].delegationReturned, true, 'the handback record survived an ordinary save');
+      assert.strictEqual(stored[0].title, 'Renamed', 'and the save still did its job');
+    } finally {
+      config.setWorkspace(original);
+    }
+  });
+
+  test('a client cannot assert a handback that never happened', () => {
+    // The flag is server-owned. Only the engine observes a handback, so a
+    // message claiming one is ignored rather than believed.
+    const dir = workspaceWith({ ...IN_FLIGHT });
+    const original = config.getWorkspace();
+    config.setWorkspace(dir);
+    try {
+      handleSaveConversation({}, captureWs(), {
+        type: 'save_conversation',
+        conversation: { id: 'c1', agentId: 'chief-of-staff', activeAgentId: 'lead-developer', title: 'T', delegationReturned: true },
+      });
+      const stored = JSON.parse(fs.readFileSync(path.join(dir, '.rundock', 'conversations.json'), 'utf8'));
+      assert.strictEqual(stored[0].delegationReturned, false,
+        'a handback the engine never saw is not created by a client saying so');
+    } finally {
+      config.setWorkspace(original);
+    }
+  });
+});
+
+describe('every path that returns control to a parent records the handback', () => {
+  // A SOURCE BINDING, AND DELIBERATELY SO. Driving the engine to a real handback
+  // needs a live child process, a session, and an intercepted Agent tool call;
+  // what has to be guaranteed is narrower than that and does not survive being
+  // tested through all of it: wherever control goes back to a parent, the
+  // handback is recorded.
+  //
+  // The first version of this fix marked in ONE place, handleScopeReturn, which
+  // fires only for a second-level event. Ordinary single-level delegations
+  // return through finishDelegateClose and never touched it, so the flag stayed
+  // false for the common case and a finished delegation was never reconciled.
+  // Nothing failed: the unit test passed, because the unit worked.
+  //
+  // The invariant below is what that test could not see. `agent_switch` carrying
+  // a `toAgent` is the engine saying control moved back to a parent, and every
+  // one of those must be accompanied by the record.
+  const src = fs.readFileSync(path.join(ROOT, 'lib', 'delegation', 'engine.js'), 'utf8');
+
+  test('each restoration path marks the handback before announcing the switch', () => {
+    // A switch back to a PARENT, not every switch. The engine announces the
+    // same way when a delegation STARTS (toAgent: targetAgent.id), and marking
+    // there would record a handback that has not happened. The parent-bound
+    // ones name the parent they are returning to.
+    const PARENT_BOUND = /toAgent: (orchestrator\.id|orchestratorAgentId|parentAgentId|delegateEntry\.delegation\.originalAgentId)/;
+    const lines = src.split('\n');
+    const handbacks = [];
+    lines.forEach((line, i) => {
+      if (!line.includes("subtype: 'agent_switch'")) return;
+      // The toAgent sits on this line or the next few, depending on how the
+      // object literal was wrapped.
+      if (PARENT_BOUND.test(lines.slice(i, i + 4).join('\n'))) handbacks.push(i);
+    });
+    assert.ok(handbacks.length >= 3,
+      `the engine still has its parent-bound switches (found ${handbacks.length})`);
+
+    for (const at of handbacks) {
+      // Within the enclosing region rather than a fixed few lines: one of these
+      // marks at the top of its function and announces sixty lines later.
+      const before = lines.slice(Math.max(0, at - 70), at).join('\n');
+      assert.match(before, /markDelegationReturned\(convoId\)/,
+        `the handback announced at line ${at + 1} is recorded nowhere:\n`
+        + `${lines[at].trim()}\n`
+        + 'Every path returning control to a parent must record it, or a finished '
+        + 'delegation is never reconciled and the conversation stays pointed at a '
+        + 'specialist that has already handed back.');
+    }
+  });
+});

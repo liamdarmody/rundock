@@ -514,9 +514,22 @@ function renderSessionHistory(d) {
   // running; after a relaunch it does not mean the delegate FINISHED, because
   // the process map died with the server. Only an observed handback says that,
   // and `delegationReturned` is written at the moment one is seen.
+  // THE SAME RULE THE SERVER APPLIES, and it has to be the same or either one
+  // alone reproduces the bug. A missing process means the delegate is not
+  // running; after a relaunch it does not mean the delegate FINISHED, because
+  // the process map died with the server. Only an observed handback says that,
+  // and `delegationReturned` is written at the moment one is seen.
+  //
+  // BOTH DIRECTIONS ARE WRITTEN, which the first version of this got wrong. It
+  // narrowed the reset and stopped there, so for the restored case nothing ever
+  // seeded this runtime state at all. `state` is a per-session object that does
+  // not inherit convo.activeAgentId on its own, and dispatchMessage resolves
+  // `state.activeAgentId || convo.agentId`, so a message after a relaunch still
+  // went to the orchestrator: the reported bug, unfixed, behind a server-side
+  // fix that looked right.
   const state = getConvoState(convo.id);
-  if (!state.activeProcessId && convo.delegationReturned) {
-    state.activeAgentId = convo.agentId;
+  if (!state.activeProcessId) {
+    state.activeAgentId = restoredActiveAgentId(convo);
   }
   if (activeConversation?.id === convo.id) {
     const displayId = state.activeAgentId || convo.agentId;
