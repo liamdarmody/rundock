@@ -291,8 +291,16 @@ describe('P2/P3 regressions', () => {
       'get_conversations must persist at most once per load');
     assert.match(block, /if \(convosChanged\) writeConversations\(cleaned\)/,
       'the single write must be conditional on a change');
-    assert.match(block, /!ctx\.processes\.has\(c\.id\)/,
-      'reconciliation must skip conversations with a live process');
+    // The property, not one spelling of it. This pinned `!ctx.processes.has(...)`
+    // as an inline condition, which broke when the loop was rewritten to skip
+    // early and delegate the decision to the shared restore rule, even though
+    // the guarantee never changed. Behaviour for both directions is covered by
+    // test/unit/delegation-relaunch.test.js; what stays pinned here is that the
+    // live-process check is still present at all.
+    assert.match(block, /ctx\.processes\.has\(c\.id\)/,
+      'reconciliation must still consult the live process map');
+    assert.match(block, /restoredActiveAgentId\(c\)/,
+      'and must decide through the one shared restore rule, not a second copy of it');
   });
 
   test('the exited guard is per-line so post-kill chunk lines are dropped', () => {
