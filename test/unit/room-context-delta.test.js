@@ -335,3 +335,66 @@ describe('the cap holds when both things happen at once', () => {
     }
   });
 });
+
+describe('every path that resumes an agent gives it the delta', () => {
+  // THREE PATHS, NOT TWO. Review round 3 found the third: a mid-level parent,
+  // a specialist that has its own direct reports, is resumed when its
+  // sub-delegate hands back. It was given the sub-delegate's output and
+  // nothing else, which is the same blindness this change set out to fix, one
+  // level deeper. Real shape: the orchestrator delegates to Ren, Ren delegates
+  // to Sage, Sage returns, and Ren is resumed knowing nothing about what
+  // happened in the conversation while she waited.
+  const fs = require('node:fs');
+  const src = fs.readFileSync(path.join(ROOT, 'lib', 'delegation', 'engine.js'), 'utf8');
+
+  test('the delegate delta is computed against the delegate, not the delegator', () => {
+    // Pinned because the arguments are the whole rule. Computing this against
+    // originalAgentId would hand a resumed delegate its own history back and
+    // hide what it actually missed, and every test that exercises the pure
+    // function with hand-picked ids would stay green.
+    assert.match(src, /deltaSince\(loadTranscript\(convoId\) \|\| \[\], targetAgent\.id\)/,
+      "the target agent's own id, so the delta is what THAT agent missed");
+  });
+
+  test('the orchestrator delta excludes the specialist handing back', () => {
+    assert.match(src, /deltaSince\(loadTranscript\(convoId\) \|\| \[\], orchestrator\.id, undefined, \[specialistEntry\.agentId\]\)/);
+  });
+
+  test('the mid-level parent gets one too, and excludes its returning delegate', () => {
+    assert.match(src, /deltaSince\(loadTranscript\(convoId\) \|\| \[\], parentAgentId, undefined, \[delegateEntry\.agentId\]\)/,
+      'the third resume path, found only because a reviewer walked all of them');
+  });
+
+  test('all three are gated on actually having been resumed', () => {
+    assert.match(src, /\(priorSessionId && !isCodexDelegate\)/, 'delegate');
+    assert.match(src, /orchestratorSession\s*\n?\s*\? deltaSince/, 'orchestrator');
+    assert.match(src, /parentSessionId\s*\n?\s*\? deltaSince/, 'mid-level parent');
+  });
+
+  test('and the mid-level catch-up reaches all three of its prompts', () => {
+    const hits = (src.match(/content: parentCatchUp \+ \w+Prompt/g) || []).length;
+    assert.strictEqual(hits, 3,
+      'resume, complete and normal exit all resume the same parent, so all '
+      + 'three must carry what it missed');
+  });
+});
+
+describe('the log says a delta went only when one went', () => {
+  const fs = require('node:fs');
+  const src = fs.readFileSync(path.join(ROOT, 'lib', 'delegation', 'engine.js'), 'utf8');
+
+  test('the scope-return delta is logged where the prompt is written', () => {
+    // Two branches park the prompt rather than sending it: a buffered user
+    // message that supersedes it, and the auto-resume circuit breaker. Logged
+    // beside the spawn, the line claimed a delta had gone in both cases.
+    const at = src.indexOf('prompt sent');
+    assert.ok(at > -1, 'the send-site log exists');
+    const write = src.indexOf("content: prompt } }) + '\\n');");
+    assert.ok(write > -1, 'the scope-return write is still here');
+    assert.ok(write < at, 'the log must sit after the write');
+    // And nothing that could divert the prompt sits between them.
+    const between = src.slice(write, at);
+    assert.ok(!/bufferedFollowUpTakesOver|incrementAutoResume|spawnClaude/.test(between),
+      'no branch between the write and the log, so the log cannot outrun the send');
+  });
+});
