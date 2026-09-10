@@ -165,3 +165,74 @@ describe('the other paths control can return through', () => {
       + 'which is what makes the mid-chain assertion above discriminating rather than vacuous');
   });
 });
+
+describe('a specialist returning scope on its own', () => {
+  test('a direct specialist that returns scope records where control went', async () => {
+    // THE PATH A SOURCE SCAN COULD NOT PROVE. This one does not go through the
+    // Agent-tool interception at all: the person is talking to the specialist,
+    // the specialist decides the request is outside its scope, emits a RETURN
+    // marker, and its process closes carrying that. Control goes back to the
+    // orchestrator through handleScopeReturn, which is a different branch from
+    // every other test here.
+    const convoId = h.freshConvoId('scopereturn');
+    h.clearInvocations();
+    h.writeScenario([
+      {
+        match: { agent: 'content-lead', promptIncludes: 'not my area' },
+        turn: [{ text: 'That is outside what I handle. <!-- RUNDOCK:RETURN -->' }],
+      },
+      {
+        match: { agent: 'chief-of-staff' },
+        turn: [{ text: 'I will take it from here.' }],
+      },
+    ]);
+
+    // The conversation belongs to the orchestrator; the specialist is who is
+    // being spoken to right now.
+    client.send({ type: 'save_conversation', conversation: { id: convoId, agentId: 'chief-of-staff', activeAgentId: 'content-lead', title: 'Scope return' } });
+    client.send({ type: 'chat', conversationId: convoId, agent: 'content-lead', content: 'not my area' });
+
+    await client.waitFor(m => m.type === 'system' && m.subtype === 'agent_switch'
+      && m._conversationId === convoId && m.toAgent === 'chief-of-staff', { label: 'scope return to the orchestrator' });
+
+    const stored = storedConversation(convoId);
+    assert.ok(stored, 'the conversation was persisted');
+    assert.strictEqual(stored.delegationReturned, true,
+      'a scope return that reaches the base agent is recorded, so a restart reconciles it');
+  });
+});
+
+describe('a delegation whose parent stayed alive', () => {
+  test('restoring a live parent records where control went', async () => {
+    // THE LAST PATH A SOURCE SCAN COULD NOT PROVE. A `delegate` request is not
+    // an Agent-tool interception: the parent process is parked rather than
+    // replaced, so when the delegate finishes the parent is simply restored.
+    // That is its own branch, and nothing here had ever executed it.
+    const convoId = h.freshConvoId('liveparent');
+    h.clearInvocations();
+    h.writeScenario([
+      { match: { agent: 'chief-of-staff', promptIncludes: 'open the thread' }, turn: [{ text: 'ready' }] },
+      {
+        match: { agent: 'content-lead', promptIncludes: 'live-parent brief' },
+        turn: [{ text: 'DELIVERED. <!-- RUNDOCK:COMPLETE -->' }],
+      },
+      { match: { agent: 'chief-of-staff' }, turn: [{ text: 'noted' }] },
+    ]);
+
+    client.send({ type: 'save_conversation', conversation: { id: convoId, agentId: 'chief-of-staff', title: 'Live parent' } });
+    // A live parent to park: the delegation below is refused without one.
+    client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: 'open the thread' });
+    await client.waitFor(m => m.type === 'result' && m._conversationId === convoId, { label: 'parent is live' });
+
+    client.send({ type: 'delegate', conversationId: convoId, targetAgent: 'content-lead', context: 'live-parent brief' });
+    await client.waitFor(m => m.type === 'system' && m.subtype === 'agent_switch'
+      && m._conversationId === convoId && m.toAgent === 'content-lead', { label: 'out to the delegate' });
+    await client.waitFor(m => m.type === 'system' && m.subtype === 'agent_switch'
+      && m._conversationId === convoId && m.toAgent === 'chief-of-staff', { label: 'parent restored' });
+
+    const stored = storedConversation(convoId);
+    assert.ok(stored, 'the conversation was persisted');
+    assert.strictEqual(stored.delegationReturned, true,
+      'restoring the live parent recorded that control reached the base agent');
+  });
+});
