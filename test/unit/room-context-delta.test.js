@@ -463,3 +463,80 @@ describe('every delta log sits at a send, not at a computation', () => {
     assert.strictEqual(hits, 3, 'resume, complete and normal exit each write a prompt');
   });
 });
+
+describe('the separator between turns counts toward the cap', () => {
+  // THE THIRD DEFECT OF THIS SHAPE, and the reason the shape matters more than
+  // the size. kept.join('\n\n') puts two characters between every pair, and
+  // the admission loop counted only the entries. The assembled text could run
+  // two characters per gap past the cap, and the final clamp then chopped the
+  // tail off the NEWEST kept turn while reporting clipped: 0. Two characters
+  // is nothing. An instrument reporting that nothing was cut while something
+  // was cut is the whole defect this release exists to remove.
+  const { deltaSince, DELTA_CAP_CHARS } = require(path.join(ROOT, 'lib', 'store', 'transcripts.js'));
+
+  /** Two newest entries sized to land exactly on the budget boundary. */
+  function boundaryTranscript() {
+    const notice = '[3 earlier turns omitted for length; ask if you need what came before this.]\n\n';
+    const budget = DELTA_CAP_CHARS - notice.length;
+    const half = Math.floor(budget / 2);
+    return [
+      { agent: 'vox', text: 'mine' },
+      { agent: 'a', text: 'x'.repeat(50) },
+      { agent: 'b', text: 'y'.repeat(50) },
+      { agent: 'c', text: 'z'.repeat(50) },
+      { agent: 'd', text: 'd'.repeat(half - 'D: '.length) },
+      { agent: 'e', text: 'e'.repeat(budget - half - 'E: '.length) }
+    ];
+  }
+
+  test('two entries on the boundary still fit inside the cap', () => {
+    const out = deltaSince(boundaryTranscript(), 'vox');
+    assert.ok(out.text.length <= DELTA_CAP_CHARS,
+      `text was ${out.text.length}, cap is ${DELTA_CAP_CHARS}`);
+  });
+
+  test('the newest turn arrives whole, not two characters short', () => {
+    // THE ASSERTION THAT DISTINGUISHES A FIX FROM A CONFESSION. Reporting the
+    // clamp is necessary but not sufficient: with the separator uncounted the
+    // loop admits more than fits, the clamp bites into the newest entry, and
+    // the agent silently reads a truncated final turn. Counting the separator
+    // means it is never admitted in the first place, so it arrives complete.
+    const t = boundaryTranscript();
+    const newest = t[t.length - 1];
+    const out = deltaSince(t, 'vox');
+    assert.ok(out.text.endsWith(newest.text),
+      'the newest turn is cut short: the delta ends '
+      + JSON.stringify(out.text.slice(-8)) + ' and the turn ends '
+      + JSON.stringify(newest.text.slice(-8)));
+  });
+
+  test('and if anything is trimmed anyway, the caller is told', () => {
+    const out = deltaSince(boundaryTranscript(), 'vox');
+    const fits = out.text.length < DELTA_CAP_CHARS;
+    assert.ok(fits || out.clipped === 1,
+      'a clamp that cuts content while reporting clipped: 0 is the defect');
+  });
+
+  test('many small turns do not accumulate separator overflow', () => {
+    // Worst case for this defect: the more gaps, the further past the cap.
+    const many = [{ agent: 'vox', text: 'mine' }];
+    for (let i = 0; i < 400; i++) many.push({ agent: `a${i}`, text: 'q'.repeat(60) });
+    const out = deltaSince(many, 'vox');
+    assert.ok(out.text.length <= DELTA_CAP_CHARS,
+      `text was ${out.text.length} across ${out.text.split('\n\n').length} joined parts`);
+  });
+
+  test('the clamp reports itself whenever it fires', () => {
+    // A tiny cap forces the clamp regardless of the reservation.
+    const out = deltaSince([
+      { agent: 'vox', text: 'mine' },
+      { agent: 'a', text: 'aaaa' },
+      { agent: 'b', text: 'bbbb' }
+    ], 'vox', 12);
+    assert.ok(out.text.length <= 12);
+    if (out.text.length === 12) {
+      assert.ok(out.clipped === 1 || out.truncated > 0,
+        'content that did not fit must be accounted for somewhere the caller sees');
+    }
+  });
+});

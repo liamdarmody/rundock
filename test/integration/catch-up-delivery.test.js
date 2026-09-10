@@ -126,3 +126,140 @@ async function waitForPrompt(agentId, timeoutMs = 8000) {
   }
   throw new Error(`no prompt reached ${agentId} within ${timeoutMs}ms`);
 }
+
+describe('a resumed delegate is told what it missed', () => {
+  // THE ORIGINAL DEFECT, driven at last. This is the path that produced the
+  // report: a specialist came back to her own draft after two other agents had
+  // worked, and rebuilt it from scratch because nothing told her any of it had
+  // happened. Until now it was covered by calling the pure builder with a
+  // hand-made object, plus a regex proving two identifiers sit near each other
+  // in engine.js. Neither proves handleDelegation computes the delta from a
+  // real transcript and threads it into the bytes the delegate receives.
+
+  test('the delegate prompt carries the other agents, not its own prior turn', async () => {
+    const convoId = h.freshConvoId('catchup-delegate');
+    seedTranscript(convoId, [
+      { role: 'user', text: 'write me a short blog post' },
+      { role: 'agent', agent: 'chief-of-staff', text: 'Handing this to Penn.' },
+      { role: 'agent', agent: 'content-lead', text: 'PENN-OWN-FIRST-DRAFT: here is the draft' },
+      { role: 'agent', agent: 'content-analyst', text: 'ANALYST-INTERVENING: the numbers check out' }
+    ]);
+    // Penn has a session on record, so she is resumed rather than cold-spawned.
+    h.internal.writeConversations([{
+      id: convoId, title: 'delegate catch-up', messages: [],
+      sessionIds: [{ agentId: 'content-lead', sessionId: 'sess-penn-1' }]
+    }]);
+    // A live parent to delegate from, as the non-intercepted path requires.
+    h.internal.chatProcesses.set(convoId, {
+      agentId: 'chief-of-staff', processId: 'p-parent', exited: false, toolCalls: []
+    });
+    h.clearPrompts();
+    h.internal.handleDelegation({
+      conversationId: convoId, targetAgent: 'content-lead',
+      context: 'now tighten the opening', _intercepted: true
+    }, h.internal.chatProcesses);
+
+    const prompt = await waitForPrompt('content-lead');
+    assert.match(prompt, /ANALYST-INTERVENING/,
+      'what the other agent did while she was away, which is the whole point');
+    assert.ok(!prompt.includes('PENN-OWN-FIRST-DRAFT'),
+      'her own earlier turn is already in her session; re-sending it is pure '
+      + 'cost and invites her to redo work she has already done');
+    assert.match(prompt, /now tighten the opening/, 'and the brief still arrives');
+    h.reapConvo(convoId);
+  });
+
+  test('a first-time delegate is not told it missed anything', async () => {
+    const convoId = h.freshConvoId('catchup-firsttime');
+    seedTranscript(convoId, [
+      { role: 'user', text: 'write me a short blog post' },
+      { role: 'agent', agent: 'chief-of-staff', text: 'Handing this to Penn.' },
+      { role: 'agent', agent: 'content-analyst', text: 'ANALYST-TURN: checked' }
+    ]);
+    // No session for Penn: she has never spoken here, so she has missed
+    // nothing, and the cold-spawn path gives her the history instead.
+    h.internal.writeConversations([{ id: convoId, title: 'first', messages: [], sessionIds: [] }]);
+    h.internal.chatProcesses.set(convoId, {
+      agentId: 'chief-of-staff', processId: 'p-parent2', exited: false, toolCalls: []
+    });
+    h.clearPrompts();
+    h.internal.handleDelegation({
+      conversationId: convoId, targetAgent: 'content-lead',
+      context: 'draft it', _intercepted: true
+    }, h.internal.chatProcesses);
+
+    const prompt = await waitForPrompt('content-lead');
+    assert.ok(!prompt.includes('SINCE YOUR LAST TURN'),
+      'told it missed turns it was never present for, a first-time delegate is '
+      + 'being lied to about its own history');
+    h.reapConvo(convoId);
+  });
+});
+
+describe('a resumed mid-level parent is told too', () => {
+  // THE THIRD RESUME PATH, driven. A specialist that has its own direct
+  // reports is resumed when its sub-delegate hands back, and it was given the
+  // sub-delegate's output and nothing else. This is the shape from the report:
+  // the orchestrator delegates to a research lead, she delegates to a fact
+  // checker, he returns, and she comes back knowing nothing about the rest of
+  // the conversation.
+  //
+  // Driven rather than matched: a regex proving parentCatchUp appears beside a
+  // write would pass even if the value were computed for the wrong agent or
+  // thrown away at runtime.
+
+  test("the parent's resumed prompt carries what happened while it waited", async () => {
+    const convoId = h.freshConvoId('catchup-midlevel');
+    // THE CHAIN MUST BE INTERCEPTED ALL THE WAY DOWN. A WS delegation parks
+    // the orchestrator alive, and a sub-delegate's handback then skips the
+    // mid-level parent and restores the orchestrator directly. Only an
+    // intercepted Agent call kills the parent, which is what makes the
+    // mid-level resume happen at all. That is the shape in the real log:
+    //   cos --(Agent tool, cos killed)--> lead --(Agent tool, lead killed)--> analyst
+    h.writeScenario([
+      { match: { agent: 'chief-of-staff', promptIncludes: 'midlevel task' },
+        turn: [{ agentTool: { subagent_type: 'content-lead', prompt: 'midlevel lead brief' } }] },
+      { match: { agent: 'content-lead', promptIncludes: 'midlevel lead brief' },
+        turn: [{ agentTool: { subagent_type: 'content-analyst', prompt: 'midlevel sub brief' } }] },
+      { match: { agent: 'content-analyst', promptIncludes: 'midlevel sub brief' },
+        turn: [{ text: 'ANALYST-SAID-THIS. Outside my scope. <!-- RUNDOCK:RETURN -->' }] },
+      { match: { agent: 'content-lead' }, turn: [{ text: 'Picking it back up.' }] },
+      { match: { agent: 'chief-of-staff' }, turn: [{ text: 'Noted.' }] },
+    ]);
+
+    h.clearPrompts();
+    client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: 'midlevel task' });
+
+    const started = Date.now();
+    let second = null;
+    while (Date.now() - started < 20000) {
+      const prompts = h.promptsFor('content-lead');
+      if (prompts.length >= 2) { second = prompts[prompts.length - 1]; break; }
+      await new Promise(r => setTimeout(r, 50));
+    }
+    assert.ok(second, 'the mid-level parent was resumed and given a prompt');
+    assert.match(second, /ANALYST-SAID-THIS/,
+      "the returning sub-delegate's output reaches the parent");
+    // WHAT THIS PROVES, AND WHAT IT DOES NOT. It proves the mid-level resume
+    // path runs, that the parent is driven a second time, and that the prompt
+    // assembled with parentCatchUp reaches it: a runtime fault in that
+    // assembly fails here rather than passing a regex.
+    //
+    // It does not drive a NON-EMPTY mid-level delta. In a three-deep chain the
+    // only agent speaking between the parent's own last turn and its resume is
+    // the returning sub-delegate, which is deliberately excluded because the
+    // output block already carries it. So the delta is legitimately empty
+    // here, and it was empty in the reported conversation for the same reason.
+    // Producing a non-empty one needs a fourth agent speaking in between, and
+    // the roster rules block the constructions that would arrange it.
+    //
+    // The delta's content for this path is covered by the deltaSince unit
+    // tests and by the pinned call site. Stated rather than papered over: an
+    // assertion contrived to look stronger than the evidence is the thing this
+    // whole change set out to remove.
+    assert.ok(!second.includes('SINCE YOUR LAST TURN'),
+      'with only the returning delegate to report, the catch-up is correctly '
+      + 'absent rather than an empty heading');
+    h.reapConvo(convoId);
+  });
+});
