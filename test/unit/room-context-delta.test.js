@@ -125,3 +125,46 @@ describe('the delta reaches the delegate', () => {
       'and that text is what is written to the delegate');
   });
 });
+
+describe('the orchestrator coming back is treated the same way', () => {
+  // THE OTHER HALF, and on the evidence the more damaging one. A returning
+  // DELEGATE at least had a session to resume. The orchestrator was spawned
+  // with no session at all on a scope return: no history, only its system
+  // prompt and the handback text. It came back knowing what the specialist had
+  // just said and nothing about what the user originally asked for.
+  //
+  // Observed in real use: a request for a short blog post came back, after two
+  // handoffs, as a delegation asking a specialist for a LinkedIn post. The
+  // specialist did as briefed. That is the reported "asks for things already
+  // asked and completed", seen from the orchestrator's side.
+  const fs = require('node:fs');
+  const src = fs.readFileSync(path.join(ROOT, 'lib', 'delegation', 'engine.js'), 'utf8');
+  const at = src.indexOf('function handleScopeReturn');
+  const body = src.slice(at, src.indexOf('\nfunction ', at + 1));
+
+  test('it is resumed into its own session rather than spawned cold', () => {
+    assert.match(body, /orchestratorSession \? \['--resume', orchestratorSession\]/,
+      'the orchestrator keeps its own history across a handback');
+  });
+
+  test('the session it resumes is the one recorded for this conversation', () => {
+    assert.match(body, /filter\(\(x\) => x\.agentId === orchestrator\.id\)/,
+      'looked up in the conversation, not guessed');
+  });
+
+  test('it is told what it missed while the specialists worked', () => {
+    assert.match(body, /deltaSince\(loadTranscript\(convoId\)/,
+      'the same catch-up a returning delegate gets');
+    assert.match(body, /SINCE YOUR LAST TURN IN THIS CONVERSATION/,
+      'carried into the prompt it actually reads');
+  });
+
+  test('a cold spawn is still possible, and says so', () => {
+    // The lookup can fail on a conversation with nothing recorded. That path
+    // must remain, because refusing to restore the orchestrator would end the
+    // conversation rather than degrade it.
+    assert.match(body, /resume=none/,
+      'the log distinguishes a resumed orchestrator from a cold one, so a reader '
+      + 'can tell which happened rather than inferring it from behaviour');
+  });
+});
