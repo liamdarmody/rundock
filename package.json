@@ -1,6 +1,6 @@
 {
   "name": "rundock",
-  "version": "0.13.0",
+  "version": "0.13.2",
   "description": "A visual workspace for your AI agent team. Built for people running their own businesses. Works with your Claude or ChatGPT subscription.",
   "main": "electron/main.js",
   "scripts": {
@@ -15,6 +15,7 @@
     "release:gate": "node scripts/release-gate.js",
     "release": "node scripts/release.js",
     "test:e2e": "playwright test",
+    "preflight": "node scripts/preflight.js",
     "check:refs": "node scripts/check-internal-refs.js",
     "precommit": "node scripts/precommit-gate.js",
     "red-first": "node scripts/red-first.js",

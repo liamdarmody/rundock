@@ -509,9 +509,22 @@ function renderSessionHistory(d) {
   // a live process, handleActiveProcesses already set the correct activeAgentId
   // and activeProcessId; overriding it here would desync the header/placeholder
   // from actual message routing.
+  // THE SAME RULE THE SERVER APPLIES, and it has to be the same or either one
+  // alone reproduces the bug. A missing process means the delegate is not
+  // running; after a relaunch it does not mean the delegate FINISHED, because
+  // the process map died with the server. Only an observed handback says that,
+  // and `delegationReturned` is written at the moment one is seen.
+  //
+  // BOTH DIRECTIONS ARE WRITTEN, which the first version of this got wrong. It
+  // narrowed the reset and stopped there, so for the restored case nothing ever
+  // seeded this runtime state at all. `state` is a per-session object that does
+  // not inherit convo.activeAgentId on its own, and dispatchMessage resolves
+  // `state.activeAgentId || convo.agentId`, so a message after a relaunch still
+  // went to the orchestrator: the reported bug, unfixed, behind a server-side
+  // fix that looked right.
   const state = getConvoState(convo.id);
   if (!state.activeProcessId) {
-    state.activeAgentId = convo.agentId;
+    state.activeAgentId = restoredActiveAgentId(convo);
   }
   if (activeConversation?.id === convo.id) {
     const displayId = state.activeAgentId || convo.agentId;
@@ -589,6 +602,21 @@ function handlePermissionRequest(d, convoId) {
 // Render one approval card into the active conversation's message list.
 // Extracted verbatim from handlePermissionRequest so queued background
 // requests render through the exact same path when their conversation opens.
+// Named once, used on every outside-workspace card. A folder a team works in
+// every day is a fact about the team, not thirty separate approvals, and this
+// is the only place in the product where a person is standing in front of that
+// problem while it happens.
+const NAME_THE_FOLDER_HINT = 'If your agents work here often, name the folder in Settings under Workspace and this check stops asking about it. '
+  + 'In Knowledge mode on macOS a terminal write out here can still be refused by the operating system and come back as a card; Code mode is where those end.';
+
+// The card the reported user meets in the DEFAULT mode on macOS. The crossing
+// was established by the operating system, not by a path this product read,
+// so there is nothing here for a named folder to match and naming one changes
+// nothing about it. Saying so is the difference between a reader concluding
+// the setting is broken and a reader knowing which switch actually ends this.
+const SANDBOX_RETRY_HINT = 'This one is the operating system refusing a write outside your workspace, which Knowledge mode switches on. '
+  + 'Naming a working folder does not change it. Code mode is where these end.';
+
 function renderPermissionCard(d, convoId) {
   const req = d.request || {};
   const requestId = d.request_id || '';
@@ -663,6 +691,29 @@ function renderPermissionCard(d, convoId) {
     // telling the reader that approving allows all of them at once.
     const homeCopy = RundockPermissions.agentHomeBoundaryCopy(flaggedCrossing);
     if (homeCopy) context = crossings.length > 1 ? `${context} ${homeCopy}` : homeCopy;
+    // THE CARD AND THE SETTING AGREE, or the setting is undiscoverable at the
+    // one moment it would help. This card is where being outside the workspace
+    // is actually felt, and the answer to meeting it thirty times in one build
+    // is not to approve faster: it is to say where this team works. So the card
+    // names the setting, and names it ONLY where naming a folder would in fact
+    // change the outcome.
+    //
+    // Deliberately not shown for a runtime-home crossing, which is what the
+    // branch above covers: naming a folder does not move the secrets tier or
+    // the persistence surfaces, and offering it there would be advice that
+    // quietly does nothing.
+    // ONLY WHERE A PATH WAS ACTUALLY RECOGNISED. The sandbox-retry card carries
+    // no path at all: the operating system established the crossing, not a
+    // target the hook could read. Naming a folder cannot answer that card, and
+    // in Knowledge mode on macOS it cannot answer it even in principle, because
+    // the OS write block is unchanged by naming. So a reader who HAS named the
+    // folder would meet a card telling them to name it, which is the same
+    // mistake the runtime-home branch above exists to avoid.
+    else if (crossings.length > 0 || req.resolved_path) context = `${context} ${NAME_THE_FOLDER_HINT}`;
+    // No path at all: the sandbox retry. It gets the honest explanation rather
+    // than silence, because a card with nothing to say about why it appeared is
+    // what sends someone to the setting that cannot help.
+    else context = `${context} ${SANDBOX_RETRY_HINT}`;
   }
 
   // Store callback data for safe event handling (no inline onclick injection).

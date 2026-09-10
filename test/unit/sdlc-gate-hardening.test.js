@@ -105,6 +105,28 @@ function trackedMarkdown() {
 }
 
 describe('documented steps and uncommitted work', () => {
+  test('every gate step has a ceiling, and it matches what CI allows the same work', () => {
+    // A GATE IS A CONTROL ONLY WHILE IT CAN FINISH. On 2026-08-28 test:coverage
+    // ran for ninety-five minutes with no output, because a worker waited on a
+    // port the sandbox would not let it bind; CI caps that job, the local gate
+    // had no ceiling, so nothing ended it and nothing said it was stuck. On
+    // 2026-09-07 the same step hung again and cost an hour. Both were carded;
+    // neither was bounded until now.
+    const gate = require('../../scripts/precommit-gate.js');
+    for (const step of gate.STEPS) {
+      const ms = gate.ceilingFor(step.name);
+      assert.ok(Number.isFinite(ms) && ms > 0, `${step.name} has no ceiling, so it can hang forever`);
+      assert.ok(ms <= 45 * 60 * 1000, `${step.name}'s ceiling is longer than any step should ever take`);
+    }
+    // The two long steps are named explicitly rather than inheriting the
+    // default, because both legitimately exceed it and a default that had to
+    // cover them would be too loose to bound anything else.
+    assert.strictEqual(gate.ceilingFor('test:coverage'), 20 * 60 * 1000,
+      'the suite gets what CI gives the same suite');
+    assert.strictEqual(gate.ceilingFor('typecheck'), gate.DEFAULT_STEP_CEILING_MS,
+      'an ordinary step takes the default rather than a bespoke number nobody maintains');
+  });
+
   test('the destructive-command pattern bites every covered shape and no neighbour', () => {
     // One positive and one near-miss per shape, so a narrowing of the
     // pattern, or an over-match into the innocent form beside each command,
@@ -214,6 +236,9 @@ const ENUMERATIONS = [
   { file: 'test/unit/config.test.js', extraction: 'workspace-root assignments out of server.js', failLoudBy: 'count', where: 'exact deepStrictEqual against the two permitted assignments', anchor: 'assignments.map(s => s.trim())' },
   { file: 'test/unit/design-doc.test.js', extraction: 'declared tokens and documented tokens', failLoudBy: 'count', where: 'set difference asserted empty in both directions', anchor: 'two empty sets' },
   { file: 'test/unit/doc-claims.test.js', extraction: 'changelog headings, hook directory list, doc-named files and statuses', failLoudBy: 'count', where: 'each match asserted found, list sizes floored, status sets equal', anchor: 'dirs.length >= 3' },
+  { file: 'test/unit/working-folders-view.test.js', extraction: "the working_folders dispatch arm out of app.js", failLoudBy: 'count', where: 'the dispatch match is asserted found before it is evaluated, so a routing line that is renamed or removed fails here rather than leaving the arm untested while every direct-call test stays green', anchor: "app.js still routes working_folders" },
+  { file: 'test/unit/preflight.test.js', extraction: "the extraction registry's own rows, read out of sdlc-gate-hardening.test.js to check the cheap phase covers every pinned-count suite", failLoudBy: 'count', where: 'the row count is floored before the rows are used, so a read that stops matching fails rather than proving every suite covered by finding none', anchor: "sanity: the inventory was read and has rows" },
+  { file: 'test/unit/mutation-scope.test.js', extraction: "the shared modules each mutation harness requires, read out of the harness sources", failLoudBy: 'count', where: 'the collected set is floored before it is used, so a read that stops matching fails rather than proving every dependency covered by finding none', anchor: "the harnesses were read and they do share something" },
   { file: 'test/unit/doc-links.test.js', extraction: 'relative markdown links across the docs', failLoudBy: 'count', where: 'checked-links floor beside the scan', anchor: 'checked >=' },
   { file: 'test/unit/navigation-doors.test.js', extraction: 'inline handlers and call sites out of index.html and the client', failLoudBy: 'count', where: 'manifest equality over the collected sites', anchor: 'DESTINATIONS.map(d => d.site).sort()' },
   { file: 'test/unit/package-import-apply.test.js', extraction: 'frontmatter field counts out of written agent files', failLoudBy: 'count', where: 'exact strictEqual on each match count', anchor: 'written.match(/^source:/gm).length, 1' },

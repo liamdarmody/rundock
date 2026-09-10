@@ -313,8 +313,43 @@ function isUnder(resolved, root, pmod = path) {
   const b = fold(root);
   return r === b || r.startsWith(b + pmod.sep);
 }
-function buildRoots(workspaceRoot, extraDirs = [], pmod = path) {
-  return [canonicalize(workspaceRoot, pmod), ...extraDirs.map(d => canonicalize(d, pmod))];
+// The folder the user opened. Canonicalised in ONE place: a workspace reached
+// through a symlink resolves to a different string than the files inside it
+// report, and a comparison that skipped this would have the workspace denying
+// its own files.
+function insideWorkspaceRoot(resolvedPath, workspaceRoot, pmod = path) {
+  return isUnder(resolvedPath, canonicalize(workspaceRoot, pmod), pmod);
+}
+
+// A NAMED FOLDER NEVER REACHES INTO THE RUNTIME'S OWN HOME, and this function
+// is the whole of that rule.
+//
+// Naming a folder says where a team works. It is carried into the same
+// containment comparison the workspace root already uses, and that comparison
+// runs BEFORE the runtime-home tier tags at every site that consults it. So
+// without this, naming any ancestor of `~/.claude`, `~` most obviously, would
+// make `.credentials.json` compare as inside and be allowed outright: not
+// carded, not graded, the secrets tier never consulted at all. The same held
+// for a persistence-surface write and for both deterministic refusals. One
+// named parent, chosen for an entirely unrelated reason, would have switched
+// off the tier that exists to protect the one thing worth protecting most.
+//
+// The workspace root is deliberately NOT filtered this way. Its exemption is
+// about a folder someone opened on purpose, knowing what is in it: authoring a
+// plugin in `~/.claude/plugins/my-plugin` is ordinary work in the workspace
+// they chose. A named parent is the opposite act. Its entire value is that it
+// covers folders nobody has enumerated, including ones that do not exist yet,
+// so it must never be read as consent to the folders inside it that carry
+// their own rules.
+//
+// `home` and `foldsCase` are the same defaulted seams the tier functions take.
+function namedFolderCovers(resolvedPath, extraDirs = [], pmod = path, home = os.homedir(), foldsCase = hostFoldsCase()) {
+  if (!extraDirs.length) return false;
+  // Under the runtime home, the tiers decide and a named folder is silent.
+  // Deliberately the WHOLE home, not just the registered tiers: a folder that
+  // becomes a tier later must not already have been named past.
+  if (isUnder(foldCase(resolvedPath, foldsCase), foldCase(agentHomeRoot(home), foldsCase), pmod)) return false;
+  return extraDirs.some(d => isUnder(resolvedPath, canonicalize(d, pmod), pmod));
 }
 // `home` and `foldsCase` are defaulted seams so a test can pass a fixture
 // home instead of monkey-patching os.homedir(), and drive either filesystem
@@ -332,7 +367,10 @@ function classifyFileAccess(toolName, toolInput, workspaceRoot, extraDirs = [], 
   }
   // Separate seam from `foldsCase` above; stays undefined in production.
   const resolvedPath = canonicalize(path.resolve(workspaceRoot, target), path, resolvedPathFoldsCase);
-  const inside = buildRoots(workspaceRoot, extraDirs).some(r => isUnder(resolvedPath, r));
+  // The workspace root, then the named folders, which stop at the runtime home
+  // so the tags below still get to speak for anything inside it.
+  const inside = insideWorkspaceRoot(resolvedPath, workspaceRoot)
+    || namedFolderCovers(resolvedPath, extraDirs, path, home, foldsCase);
   if (inside) return { where: 'inside', resolvedPath };
   // The agent's own folder: free unless the registry names this exact
   // access as a secret (always) or a write to a persistence surface.
@@ -598,7 +636,8 @@ function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), 
     if (!homed && !t.startsWith('/') && !WIN_DRIVE.test(t) && !WIN_UNC.test(t) && !TRAVERSAL.test(t)) continue;
     const pmod = flavourFor(t, workspaceRoot);
     const resolved = canonicalize(pmod.resolve(pmod.resolve(workspaceRoot), t), pmod);
-    if (buildRoots(workspaceRoot, extraDirs, pmod).some(r => isUnder(resolved, r, pmod))) continue;
+    if (insideWorkspaceRoot(resolved, workspaceRoot, pmod)) continue;
+    if (namedFolderCovers(resolved, extraDirs, pmod, home, foldsCase)) continue;
     // Tier three (neither secret nor a persistence surface) is free, so it
     // is not reported at all. A command cannot declare which act it
     // performs, so a persistence surface is conservatively treated as a
@@ -674,8 +713,12 @@ process.stdin.on('end', () => {
     const t = ti.file_path || ti.notebook_path || ti.path;
     return typeof t === 'string' && t ? canonicalize(path.resolve(wsRoot, t)) : null;
   }());
+  // THE WORKSPACE ROOT ONLY. A named folder never exempts these refusals, even
+  // when it contains the target: see namedFolderCovers for why the two acts are
+  // not the same act. Naming `~` must not turn the runtime home into a folder
+  // the refusals stop looking at.
   const targetInsideWorkspace = refusalTarget !== null
-    && buildRoots(wsRoot, extraDirs).some(r => isUnder(refusalTarget, r));
+    && insideWorkspaceRoot(refusalTarget, wsRoot);
 
   // THE REFUSALS RUN FIRST, BEFORE ANYTHING CAN ANSWER THEM. They are
   // enforcement rather than a prompt, so no mode, grant or classification may

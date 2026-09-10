@@ -29,6 +29,10 @@ const EXPECTED_TYPES = [
   'permission_response', 'cancel',
   'get_workspaces', 'client_render_time', 'list_workspaces', 'set_workspace',
   'pick_folder', 'create_workspace', 'set_workspace_mode',
+  // The folders a workspace names besides itself. One message sets the whole
+  // list, because adding and removing are the same act on the store and a
+  // narrower pair would have to agree about normalisation.
+  'set_working_folders', 'get_working_folders',
   'get_agents', 'get_runtime_status', 'get_files', 'get_skills', 'get_run',
   'cancel_routine_run',
   // The row's Run control: a pressed run through the scheduler's own
@@ -208,6 +212,124 @@ describe('handler seams (stub ctx, capture ws)', () => {
       const ws2 = captureWs();
       table.set_workspace_mode({}, ws2, { type: 'set_workspace_mode', mode: 'sideways' });
       assert.strictEqual(ws2.sent[0].type, 'workspace_error', 'invalid modes are refused');
+    } finally {
+      config.setWorkspace(original);
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // THE WORKING FOLDERS HANDLERS, driven against a real temporary workspace so
+  // what is stored and what is answered are both the real thing. The refusals
+  // are exercised rather than assumed, because each one exists to keep a bad
+  // list off disk and an untested refusal is a refusal nobody has seen work.
+  function workingFoldersWorkspace() {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'proto-wf-'));
+    fs.mkdirSync(path.join(dir, '.rundock'), { recursive: true });
+    return dir;
+  }
+
+  test('set_working_folders stores the list, answers with it, and reports what it refused', () => {
+    const table = buildDispatch();
+    const original = config.getWorkspace();
+    const dir = workingFoldersWorkspace();
+    const named = fs.mkdtempSync(path.join(os.tmpdir(), 'proto-wf-named-'));
+    try {
+      config.setWorkspace(dir);
+      const ws = captureWs();
+      // One storable folder, one that can never be stored. The refusal is
+      // NAMED in the reply: a row that vanishes with no reason given is how a
+      // person stops trusting a setting.
+      table.set_working_folders({}, ws, { type: 'set_working_folders', folders: [named, 'not-absolute'] });
+      assert.strictEqual(ws.sent[0].type, 'working_folders');
+      // STORED AS TYPED, resolved but not followed through symlinks. The store
+      // decides nothing about permissions and the hook canonicalises every
+      // entry itself at comparison time, so resolving links here would only
+      // show a person a path they never typed. On macOS this is the difference
+      // between /tmp and /private/tmp for the same folder.
+      const stored = path.resolve(named);
+      assert.deepStrictEqual(ws.sent[0].folders.map(f => f.path), [stored]);
+      assert.deepStrictEqual(ws.sent[0].rejected, ['not-absolute'], 'the refused entry is named back');
+      assert.strictEqual(typeof ws.sent[0].home, 'string', 'the home folder travels with the list');
+
+      const state = JSON.parse(fs.readFileSync(path.join(dir, '.rundock', 'state.json'), 'utf-8'));
+      assert.deepStrictEqual(state.workingFolders, [stored], 'and only the storable one persisted');
+
+      // Read back through the other handler, which resolves existence at read
+      // time rather than trusting what was written earlier.
+      const reader = captureWs();
+      table.get_working_folders({}, reader, { type: 'get_working_folders' });
+      assert.deepStrictEqual(reader.sent[0].folders, [{ path: stored, missing: false }]);
+
+      // A folder that has gone is reported as missing, never dropped.
+      fs.rmSync(named, { recursive: true, force: true });
+      const after = captureWs();
+      table.get_working_folders({}, after, { type: 'get_working_folders' });
+      assert.deepStrictEqual(after.sent[0].folders, [{ path: stored, missing: true }],
+        'the row survives its folder');
+    } finally {
+      config.setWorkspace(original);
+      fs.rmSync(dir, { recursive: true, force: true });
+      fs.rmSync(named, { recursive: true, force: true });
+    }
+  });
+
+  test('the working folders handlers refuse rather than guess when there is nothing to write to', () => {
+    const table = buildDispatch();
+    const original = config.getWorkspace();
+    try {
+      config.setWorkspace(null);
+      const noWorkspace = captureWs();
+      table.set_working_folders({}, noWorkspace, { type: 'set_working_folders', folders: ['/tmp'] });
+      assert.strictEqual(noWorkspace.sent[0].type, 'workspace_error');
+      assert.match(noWorkspace.sent[0].message, /Open a workspace/);
+
+      // The READ answers an empty list rather than an error: a client asking
+      // what is named before a workspace is open has asked a fair question.
+      const reader = captureWs();
+      table.get_working_folders({}, reader, { type: 'get_working_folders' });
+      assert.deepStrictEqual(reader.sent[0].folders, []);
+      assert.strictEqual(reader.sent[0].type, 'working_folders');
+    } finally {
+      config.setWorkspace(original);
+    }
+  });
+
+  test('a message carrying no list is refused, rather than read as "name nothing"', () => {
+    // The dangerous misreading: treating a malformed message as an empty list
+    // would silently clear every folder a person had named.
+    const table = buildDispatch();
+    const original = config.getWorkspace();
+    const dir = workingFoldersWorkspace();
+    try {
+      config.setWorkspace(dir);
+      for (const folders of [undefined, null, 'a string', 7]) {
+        const ws = captureWs();
+        table.set_working_folders({}, ws, { type: 'set_working_folders', folders });
+        assert.strictEqual(ws.sent[0].type, 'workspace_error', `${String(folders)} is refused`);
+        assert.match(ws.sent[0].message, /no list was sent/);
+      }
+      assert.strictEqual(fs.existsSync(path.join(dir, '.rundock', 'state.json')), false,
+        'and nothing was written by any of them');
+    } finally {
+      config.setWorkspace(original);
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a write that fails is reported, not swallowed into a success', () => {
+    const table = buildDispatch();
+    const original = config.getWorkspace();
+    const dir = workingFoldersWorkspace();
+    try {
+      config.setWorkspace(dir);
+      // .rundock as a FILE makes the state write throw, which is the shape a
+      // real failure takes here (a permissions problem, a full disk).
+      fs.rmSync(path.join(dir, '.rundock'), { recursive: true, force: true });
+      fs.writeFileSync(path.join(dir, '.rundock'), 'not a directory');
+      const ws = captureWs();
+      table.set_working_folders({}, ws, { type: 'set_working_folders', folders: [os.tmpdir()] });
+      assert.strictEqual(ws.sent[0].type, 'workspace_error');
+      assert.match(ws.sent[0].message, /Could not save the working folders/);
     } finally {
       config.setWorkspace(original);
       fs.rmSync(dir, { recursive: true, force: true });

@@ -78,3 +78,30 @@
 .packages-part-dest { color: var(--text-3); font-family: var(--mono, monospace); }
 .packages-spinner { width: 16px; height: 16px; border: 2px solid var(--border); border-top-color: var(--text-2); border-radius: 50%; animation: packages-spin 0.8s linear infinite; }
 @keyframes packages-spin { to { transform: rotate(360deg); } }
+
+/* ── Working folders ── */
+/* The rows deliberately reuse the settings-card shell so the list reads as one
+   object with the add row at its foot, rather than a stack of separate cards
+   that would each look independently removable. */
+.wf-heading { display: block; margin: 24px 0 8px; }
+.wf-prose { margin-bottom: 6px; }
+.wf-note { margin-top: 0; margin-bottom: 10px; }
+.wf-list { margin-top: 12px; }
+.wf-row { align-items: flex-start; gap: 12px; }
+.wf-main { min-width: 0; flex: 1; }
+.wf-name { font-size: var(--body); font-weight: 500; color: var(--text-1); display: flex; align-items: center; gap: 8px; }
+.wf-path { max-width: 100%; display: block; margin-top: 2px; }
+/* Amber, not red: the folder is absent, which is not the same as broken, and a
+   drive that is not mounted comes back. */
+.wf-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--attention); flex-shrink: 0; }
+.wf-missing { font-size: var(--caption); color: var(--text-2); line-height: 1.5; margin-top: 4px; }
+.wf-remove { background: none; border: none; color: var(--text-3); font-size: 18px; line-height: 1; cursor: pointer; padding: 0 4px; flex-shrink: 0; }
+.wf-remove:hover { color: var(--danger); }
+.wf-add { gap: 8px; }
+.wf-input { flex: 1; min-width: 0; }
+.wf-hint { font-size: var(--caption); color: var(--text-2); line-height: 1.5; padding: 0 16px 12px; }
+.wf-hint:empty { display: none; }
+/* Removal is reversible rather than confirmed: an undo strip costs one click
+   to ignore, where a confirmation dialog costs one click every single time. */
+.wf-undo { font-size: var(--caption); color: var(--text-2); background: var(--elevated); border-radius: var(--radius-md); padding: 8px 12px; margin-bottom: 10px; display: flex; align-items: center; gap: 8px; }
+.wf-undo-btn { background: none; border: none; color: var(--accent); font-size: var(--caption); font-weight: 600; cursor: pointer; padding: 0; text-decoration: underline; text-underline-offset: 2px; }

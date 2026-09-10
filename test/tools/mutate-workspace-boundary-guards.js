@@ -92,8 +92,24 @@ const MUTATIONS = [
   // and no way past.
   [HOOK_INTEGRATION, 'a target inside the open workspace is never refused, even under the runtime home',
     '  const targetInsideWorkspace = refusalTarget !== null\n'
-    + '    && buildRoots(wsRoot, extraDirs).some(r => isUnder(refusalTarget, r));',
+    + '    && insideWorkspaceRoot(refusalTarget, wsRoot);',
     '  const targetInsideWorkspace = false;'],
+  // THE OTHER DIRECTION OF THE SAME LINE, and the one that protects a tier
+  // rather than a capability. Widen the exemption back to the named folders
+  // and someone who names `~` has both refusals stop looking at the runtime
+  // home entirely: a write to the global agents folder is allowed, lands where
+  // the app never reads, and reports success, which is the silent failure the
+  // refusals exist to prevent.
+  // The mutation deliberately bypasses namedFolderCovers rather than calling
+  // it. Calling it proves NOTHING, measured: that function stops at the runtime
+  // home itself, so a refusal target under `~/.claude` is false either way and
+  // the mutated build behaves identically. The two rules are defence in depth
+  // over the same paths, which is worth having and makes each harder to test
+  // alone. So this row widens the exemption the way a careless edit actually
+  // would, by comparing against the named folders raw.
+  [HOOK_INTEGRATION, 'a named working folder never exempts the refusals, only the open workspace does',
+    '    && insideWorkspaceRoot(refusalTarget, wsRoot);',
+    '    && (insideWorkspaceRoot(refusalTarget, wsRoot) || extraDirs.some(d => isUnder(refusalTarget, canonicalize(d))));'],
   // Only the surface refusal is mutated for this rule, and deliberately so.
   // `agents/` and `skills/` are persistence surfaces as well, so gating the
   // agents-and-skills refusal alone changes no verdict: the surface refusal
@@ -105,9 +121,44 @@ const MUTATIONS = [
   [HOOK_INTEGRATION, 'Code mode cannot answer the runtime-home surface refusal',
     '  if (!targetInsideWorkspace && isRuntimeHomeSurfaceEdit(data.tool_name, data.tool_input)) {',
     "  if (process.env.RUNDOCK_CODE_MODE !== '1' && !targetInsideWorkspace && isRuntimeHomeSurfaceEdit(data.tool_name, data.tool_input)) {"],
-  [HOOK, 'the roots are canonicalised too, or a symlink-opened workspace denies its own files',
-    '  return [canonicalize(workspaceRoot, pmod), ...extraDirs.map(d => canonicalize(d, pmod))];',
-    '  return [pmod.resolve(workspaceRoot), ...extraDirs.map(d => pmod.resolve(d))];'],
+  [HOOK, 'the workspace root is canonicalised, or a symlink-opened workspace denies its own files',
+    '  return isUnder(resolvedPath, canonicalize(workspaceRoot, pmod), pmod);',
+    '  return isUnder(resolvedPath, pmod.resolve(workspaceRoot), pmod);'],
+  // The same rule for a named folder, which reaches the boundary by a
+  // different route and so needs its own row: a folder named through a symlink
+  // (a Dropbox or iCloud path, routinely) would otherwise cover nothing at all,
+  // and the storm this card exists to end would carry on with the setting
+  // apparently configured.
+  [HOOK, 'a named folder is canonicalised too, or naming a symlinked folder covers nothing',
+    '  return extraDirs.some(d => isUnder(resolvedPath, canonicalize(d, pmod), pmod));',
+    '  return extraDirs.some(d => isUnder(resolvedPath, pmod.resolve(d), pmod));'],
+  // THE LOAD-BEARING ROW OF THIS CARD. Remove the runtime-home stop and a
+  // single named ancestor, `~` above all, makes `.credentials.json` compare as
+  // inside and be allowed outright: not carded, not graded, the secrets tier
+  // never consulted. One folder named for an unrelated reason would switch off
+  // the tier protecting the one thing most worth protecting.
+  // THE THIRD THING THE CRITERIA NAME, and the four rows above did not cover it:
+  // a named folder must not reach an UNNAMED sibling. Widened to always true, a
+  // named folder covers the whole machine; widened to a bare string prefix,
+  // `/Projects-old` falls inside `/Projects` because the separator stops being
+  // part of the comparison. Both are the classic way this check goes wrong and
+  // neither was proven to turn anything red.
+  [HOOK, 'a named folder covers only what it names, never an unnamed sibling',
+    '  return extraDirs.some(d => isUnder(resolvedPath, canonicalize(d, pmod), pmod));',
+    '  return true;'],
+  [HOOK, 'the separator is part of the comparison, or a lookalike sibling reads as inside',
+    '  return extraDirs.some(d => isUnder(resolvedPath, canonicalize(d, pmod), pmod));',
+    '  return extraDirs.some(d => resolvedPath.startsWith(canonicalize(d, pmod)));'],
+  // The stop compares BOTH SIDES resolved. Drop the canonicalisation of the home
+  // root and a runtime home whose .claude is a link elsewhere stops being
+  // recognised as the runtime home at all, so a named ancestor of its real
+  // target reaches the secrets tier through the back door.
+  [HOOK, 'the runtime-home root in the stop is canonicalised, like the folders it is compared against',
+    'function agentHomeRoot(home = os.homedir()) {\n  return canonicalize(path.join(home, \'.claude\'));',
+    'function agentHomeRoot(home = os.homedir()) {\n  return path.join(home, \'.claude\');'],
+  [HOOK, 'a named folder stops at the runtime home, so the tiers still decide there',
+    '  if (isUnder(foldCase(resolvedPath, foldsCase), foldCase(agentHomeRoot(home), foldsCase), pmod)) return false;',
+    '  if (false) return false;'],
   // A grant stored under one spelling must cover the other, both directions.
   [BOUNDARY, 'grants are canonicalised on write and on read',
     '  const t = canonicalize(targetPath);',

@@ -83,13 +83,100 @@ describe('selection is conservative in every direction that is not proven safe',
     // shared mutation module decides how a run recovers, a test helper decides
     // what a suite proves, package.json holds the full chain, and a harness
     // file decides what that harness proves at all.
+    // A HARNESS FILE IS NO LONGER IN THIS LIST, deliberately. It used to be, on
+    // the reasoning that it decides what that harness proves; it does, and that
+    // is an argument for running THAT harness, which the case above now covers.
+    // Running the other seventeen for it was the reason the selection almost
+    // never applied to real work, because every card that adds a guard edits a
+    // harness.
     for (const trigger of ['package.json', 'scripts/precommit-gate.js', 'test/tools/mutation-run.js',
-      'test/helpers/harness.js', 'test/tools/mutate-b-guards.js', 'scripts/mutation-scope.js']) {
+      'test/helpers/harness.js', 'scripts/mutation-scope.js']) {
       const plan = selectHarnesses([trigger], HARNESSES);
       assert.deepStrictEqual(plan.run.sort(), HARNESSES.map(h => h.tool).sort(),
         `${trigger} must run every harness`);
       assert.deepStrictEqual(plan.skipped, [], `${trigger} must skip nothing`);
       assert.match(plan.reason, /can change what any harness proves/);
+    }
+  });
+
+  test('touching ONE harness runs that harness, and says nothing about the others', () => {
+    // The rule this replaced ran all eighteen whenever anything under
+    // test/tools/ changed, on the reasoning that a harness file decides what
+    // that harness proves. True, and it does not follow that it decides what
+    // the other seventeen prove: editing the boundary harness cannot change
+    // what the renderer harness asserts. Every card that adds a guard edits a
+    // harness, so in practice the selection almost never applied to real work.
+    const plan = selectHarnesses(['test/tools/mutate-a-guards.js'], HARNESSES);
+    assert.ok(plan.run.includes('mutate-a-guards.js'), 'its own file is a reason to run it');
+    assert.ok(plan.skipped.some(s => s.tool === 'mutate-b-guards.js'),
+      'and an unrelated harness is still skipped, with its reason');
+    // The unreadable one still runs, because that rule is untouched.
+    assert.ok(plan.run.includes('mutate-unknown-guards.js'));
+  });
+
+  test('the shared machinery still runs everything, which is the half that must not move', () => {
+    // The fail-safe direction. A harness file is narrow; the crash marker, the
+    // selector, the gate and the helpers are not, because they can change what
+    // ANY harness proves.
+    for (const trigger of ['test/tools/mutation-run.js', 'scripts/mutation-scope.js',
+      'scripts/precommit-gate.js', 'test/helpers/harness.js', 'package.json']) {
+      const plan = selectHarnesses([trigger], HARNESSES);
+      assert.deepStrictEqual(plan.run.sort(), HARNESSES.map(h => h.tool).sort(),
+        `${trigger} must still run every harness`);
+      assert.deepStrictEqual(plan.skipped, [], `${trigger} must skip nothing`);
+    }
+  });
+
+  test('every shared module the real harnesses depend on is still a run-everything trigger', () => {
+    // THE FALSE GREEN THIS CHANGE COULD HAVE CREATED, made checkable instead of
+    // asserted. Removing the directory-wide trigger means a file under
+    // test/tools/ that is neither a harness nor named in the machinery list now
+    // selects NOTHING. That is correct only while no harness depends on such a
+    // file, which is true today and is exactly the kind of thing that stops
+    // being true when somebody adds a helper.
+    //
+    // So this reads the real harnesses rather than a fixture, and requires every
+    // shared module they pull in to be covered. A new helper under test/tools/
+    // fails here, on the day it is added, with a message saying what to do.
+    // THE SUITES COUNT TOO, and missing them was the narrower claim this guard
+    // used to make. A harness's verdict comes from the suite it drives, so a
+    // helper required by that SUITE is a shared dependency of the harness just
+    // as much as one required by the harness file, and the directory-wide
+    // trigger used to cover both. Quotes of either kind, and an omitted
+    // extension, because a require that does not match the pattern is a
+    // dependency this guard silently stops seeing.
+    const root = path.join(__dirname, '..', '..');
+    const tools = path.join(root, 'test', 'tools');
+    const readable = (f) => { try { return fs.readFileSync(f, 'utf8'); } catch (e) { return null; } };
+    const sources = [];
+    for (const tool of harnessFiles(tools)) {
+      const src = readable(path.join(tools, tool));
+      if (src) sources.push(src);
+      for (const m of src.matchAll(/suite:\s*'([^']+)'/g)) {
+        const suite = readable(path.join(root, m[1]));
+        if (suite) sources.push(suite);
+      }
+    }
+    const shared = new Set();
+    for (const src of sources) {
+      for (const m of src.matchAll(/require\(\s*['"]([^'"]*tools\/[^'"]+)['"]\s*\)/g)) {
+        const rel = m[1].replace(/^.*?tools\//, 'test/tools/');
+        shared.add(rel.endsWith('.js') ? rel : `${rel}.js`);
+      }
+      for (const m of src.matchAll(/require\(\s*['"]\.\/([^'"]+)['"]\s*\)/g)) {
+        const rel = `test/tools/${m[1]}`;
+        shared.add(rel.endsWith('.js') ? rel : `${rel}.js`);
+      }
+    }
+    assert.ok(sources.length > harnessFiles(tools).length,
+      'sanity: the suites were read as well as the harnesses, or this checks half of what it says');
+    assert.ok(shared.size >= 1, 'sanity: the harnesses were read and they do share something');
+    for (const dep of shared) {
+      const covered = RUN_EVERYTHING_WHEN_TOUCHED.some(t => (t.endsWith('/') ? dep.startsWith(t) : dep === t));
+      assert.ok(covered,
+        `${dep} is shared by a harness but changing it would select no harness at all. `
+        + 'Add it to RUN_EVERYTHING_WHEN_TOUCHED, because a change to something every harness '
+        + 'requires can change what any of them proves.');
     }
   });
 

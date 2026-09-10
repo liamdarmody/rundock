@@ -4,6 +4,18 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
+## 0.13.2: Callouts That Read (2026-09-09)
+
+### Fixed
+
+- **Callouts show their formatting instead of their punctuation:** text inside a callout was displayed exactly as typed, so a bold phrase kept its asterisks, an italic one kept its own, and a list showed its hyphens, while the same writing rendered properly everywhere else in the document. Callout titles had it too, and a callout inside a callout inherited it. It is one cause rather than three faults, and it is fixed in one place, so bold, italics, inline code, links and lists now render inside a callout exactly as they do outside one, in the title as well as the body, however deeply the callouts are nested. Links inside a callout work like links anywhere else: a wikilink opens the page it names, resolved against the file you clicked it in exactly as it would be outside a callout, and an ordinary web link or an email address opens where you would expect. Anything a callout cannot render, such as a script tag, is still shown as plain text rather than acted on. A callout you have not edited still saves back byte for byte identical, which is checked on every build rather than assumed: the point of this change is that your writing appears the way you wrote it, not that it gets rewritten on your behalf.
+
+## 0.13.1: Working Folders (2026-09-08)
+
+### Added
+
+- **Tell Rundock which folders your agents work in, and stop approving them one at a time:** if your workspace holds your team and your actual work lives elsewhere, every project you own counted as outside it, and no approval ever caught up: a build is almost all terminal commands, and those are approved for that one request only, never remembered. Settings under Workspace now takes a list of the folders your agents work in besides the workspace itself. Name a parent such as `~/Projects` and everything beneath it is covered, including projects you start next month, so this is something you set once rather than revisit. Naming a folder stops the approval cards that check paths, for everything beneath it, and changes nothing else. Two limits, both stated where you name the folder: in Knowledge mode on macOS a terminal write outside your workspace is still refused by the operating system and the retry still raises a card, so Code mode is where those end; and agents running on Codex are not affected by this setting at all. Claude Code's own folder is never included either, so your Claude account credentials still ask on every single access, whatever you name. Removing a folder applies to conversations you start afterwards, with no restart; one already running keeps the folders it started with. A folder that has gone is shown as missing rather than quietly dropped, and starts covering again if it comes back. Approval cards for a path outside your workspace now point at this setting, so the way to stop being asked is named where you are being asked.
+
 ## 0.13.0: Permissions & Connections (2026-09-06)
 
 Rundock stops asking permission for its own plumbing, and starts showing you what things are connected to.
