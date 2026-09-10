@@ -212,6 +212,20 @@ function setConn(s) { const b=document.getElementById('connection-bar'); b.class
 
 // ===== 4. MESSAGE HANDLING =====
 
+// A pill belongs to the conversation that earned it.
+//
+// addSystemMsg appends to the thread on screen, which is right when the reply
+// belongs to it and wrong otherwise. A save started in one conversation used to
+// announce itself in whichever one the reader was looking at, every time.
+//
+// A reply carrying no conversation id is still shown: some replies are about the
+// workspace rather than a conversation, and dropping them silently would trade a
+// visible bug for an invisible one.
+function addSystemMsgFor(d, text) {
+  if (d && d.conversationId && activeConversation && d.conversationId !== activeConversation.id) return;
+  addSystemMsg(text);
+}
+
 function handle(d) {
   const convoId = d._conversationId;
   switch(d.type) {
@@ -442,23 +456,23 @@ function handle(d) {
     case 'agent_saved':
       if (!d.updated) setupComplete = true;
       // Non-default runtimes are worth calling out on the confirmation pill.
-      addSystemMsg('Agent "' + (d.agentId || '') + '" ' + (d.updated ? 'updated' : 'created') + (d.runtime === 'codex' ? ' · runs on Codex' : ''));
+      addSystemMsgFor(d, 'Agent "' + (d.agentId || '') + '" ' + (d.updated ? 'updated' : 'created') + (d.runtime === 'codex' ? ' · runs on Codex' : ''));
       break;
     case 'runtime_status':
       runtimeStatus = d;
       renderRuntimesCard();
       break;
     case 'agent_error':
-      addSystemMsg(d.message || 'Agent operation failed');
+      addSystemMsgFor(d, d.message || 'Agent operation failed');
       break;
     case 'agent_deleted':
-      addSystemMsg('Agent "' + (d.agentId || '') + '" removed');
+      addSystemMsgFor(d, 'Agent "' + (d.agentId || '') + '" removed');
       break;
     case 'skill_saved':
-      addSystemMsg('Skill "' + (d.skillId || '') + '" ' + (d.updated ? 'updated' : 'created'));
+      addSystemMsgFor(d, 'Skill "' + (d.skillId || '') + '" ' + (d.updated ? 'updated' : 'created'));
       break;
     case 'skill_error':
-      addSystemMsg(d.message || 'Skill operation failed');
+      addSystemMsgFor(d, d.message || 'Skill operation failed');
       break;
     // A routine write is the one save in this client the user waits on: the
     // editor stays on screen until the server answers, so a refusal has
@@ -806,7 +820,11 @@ function handleResult(d, convoId) {
       delete_agent: a => ({ type: 'delete_agent', agentId: a.name }),
     };
     for (const action of scan.actions) {
-      ws.send(JSON.stringify(MARKER_SENDS[action.kind](action)));
+      // THE CONVERSATION THAT PRODUCED THE MARKER, SENT WITH IT. Without this
+      // the reply has nothing to route by, and its confirmation pill lands in
+      // whichever conversation happens to be on screen: a skill created in one
+      // thread announcing itself in another.
+      ws.send(JSON.stringify({ ...MARKER_SENDS[action.kind](action), conversationId: convoId }));
       filesCreated++;
       console.log('[Marker]', action.kind + ':', action.name);
     }
