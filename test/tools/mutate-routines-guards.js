@@ -802,9 +802,11 @@ const MUTATIONS = [
   [VIEW, 'the second line appears only once there is something to say',
     '  } else if (row.status) {',
     '  } else if (true) {'],
+  // Paused-ness is one switch now: on, it is the labelled way back beside the
+  // word Paused, and it must clear `paused` rather than set it again.
   [VIEW, 'a paused row offers resume rather than pause again',
-    "    actions += r.paused\n      ? iconButton('resume', 'Resume', ICONS.play, `routinesSetPaused(${index}, false)`, false)\n      : iconButton('pause', 'Pause', ICONS.pause, `routinesSetPaused(${index}, true)`, false);",
-    "    actions += iconButton('pause', 'Pause', ICONS.pause, `routinesSetPaused(${index}, true)`, false);"],
+    "data-routines-action=\"resume\" onclick=\"routinesSetPaused(${index}, false)\">${esc(words.selfAction)}</button>`",
+    "data-routines-action=\"pause\" onclick=\"routinesSetPaused(${index}, true)\">${esc(words.selfAction)}</button>`"],
   [VIEW, 'delete asks before it acts',
     '  pendingDelete = entry\n    ? { agentId: entry.agent.id, name: entry.routine.name, occurrence: entry.occurrence }\n    : null;',
     '  pendingDelete = null;'],

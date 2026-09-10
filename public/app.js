@@ -213,6 +213,13 @@ function setConn(s) { const b=document.getElementById('connection-bar'); b.class
 // ===== 4. MESSAGE HANDLING =====
 
 function handle(d) {
+  // TWO FIELDS, AND THEY ARE NOT INTERCHANGEABLE. `_conversationId` tags a
+  // message emitted by a running agent process, so it is what the streaming
+  // cases route by. `conversationId` is echoed back by the synchronous
+  // save/delete replies, carrying the id the request was sent with. A new
+  // reply type must pick the one matching how it is produced: reaching for
+  // the wrong one is silent, because both are usually the conversation on
+  // screen and only diverge when a second conversation is running.
   const convoId = d._conversationId;
   switch(d.type) {
     case 'package_import_plan': case 'package_import_result': case 'package_import_error': packagesReplyArrived(d); break;
@@ -442,23 +449,23 @@ function handle(d) {
     case 'agent_saved':
       if (!d.updated) setupComplete = true;
       // Non-default runtimes are worth calling out on the confirmation pill.
-      addSystemMsg('Agent "' + (d.agentId || '') + '" ' + (d.updated ? 'updated' : 'created') + (d.runtime === 'codex' ? ' · runs on Codex' : ''));
+      addSystemMsgToConvo('Agent "' + (d.agentId || '') + '" ' + (d.updated ? 'updated' : 'created') + (d.runtime === 'codex' ? ' · runs on Codex' : ''), d.conversationId, false);
       break;
     case 'runtime_status':
       runtimeStatus = d;
       renderRuntimesCard();
       break;
     case 'agent_error':
-      addSystemMsg(d.message || 'Agent operation failed');
+      addSystemMsgToConvo(d.message || 'Agent operation failed', d.conversationId, false);
       break;
     case 'agent_deleted':
-      addSystemMsg('Agent "' + (d.agentId || '') + '" removed');
+      addSystemMsgToConvo('Agent "' + (d.agentId || '') + '" removed', d.conversationId, false);
       break;
     case 'skill_saved':
-      addSystemMsg('Skill "' + (d.skillId || '') + '" ' + (d.updated ? 'updated' : 'created'));
+      addSystemMsgToConvo('Skill "' + (d.skillId || '') + '" ' + (d.updated ? 'updated' : 'created'), d.conversationId, false);
       break;
     case 'skill_error':
-      addSystemMsg(d.message || 'Skill operation failed');
+      addSystemMsgToConvo(d.message || 'Skill operation failed', d.conversationId, false);
       break;
     // A routine write is the one save in this client the user waits on: the
     // editor stays on screen until the server answers, so a refusal has
@@ -508,7 +515,7 @@ function handle(d) {
       // second answer to a question the list already answers.
       break;
     case 'skill_deleted':
-      addSystemMsg('Skill "' + (d.skillId || '') + '" removed');
+      addSystemMsgToConvo('Skill "' + (d.skillId || '') + '" removed', d.conversationId, false);
       break;
     case 'active_processes':
       // Defer until workspace is ready and conversations are loaded
@@ -806,7 +813,11 @@ function handleResult(d, convoId) {
       delete_agent: a => ({ type: 'delete_agent', agentId: a.name }),
     };
     for (const action of scan.actions) {
-      ws.send(JSON.stringify(MARKER_SENDS[action.kind](action)));
+      // THE CONVERSATION THAT PRODUCED THE MARKER, SENT WITH IT. Without this
+      // the reply has nothing to route by, and its confirmation pill lands in
+      // whichever conversation happens to be on screen: a skill created in one
+      // thread announcing itself in another.
+      ws.send(JSON.stringify({ ...MARKER_SENDS[action.kind](action), conversationId: convoId }));
       filesCreated++;
       console.log('[Marker]', action.kind + ':', action.name);
     }
@@ -829,7 +840,7 @@ function handleResult(d, convoId) {
     // wrapper. Only when the marker scan produced no save/delete actions.
     if(filesCreated === 0) {
       for (const fm of RundockMarkers.extractFrontmatterAgents(textToScan)) {
-        ws.send(JSON.stringify({ type: 'save_agent', name: fm.name, content: fm.content }));
+        ws.send(JSON.stringify({ type: 'save_agent', name: fm.name, content: fm.content, conversationId: convoId }));
         filesCreated++;
         console.log('[Agent] Fallback extraction:', fm.name);
       }
