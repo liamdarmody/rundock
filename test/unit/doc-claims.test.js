@@ -728,3 +728,107 @@ describe('ROUTINES.md: where a routine actually runs', () => {
       'and what would overturn it is stated, so the decision is revisitable rather than fixed');
   });
 });
+
+// docs/ROUTINES.md: running a routine now, and the two paused states.
+// Bound to the code's own words and lists, never to a sentence of the page:
+// a sentence rewritten for clarity moves nothing here.
+
+describe('ROUTINES.md: running a routine now, and consent as change-consent', () => {
+  const scheduler = require('../../lib/scheduler.js');
+  const model = require('../../public/routines-model.js');
+  const runDetail = require('../../public/run-detail-model.js');
+  const section = routinesDoc.slice(
+    routinesDoc.indexOf('### Running a routine now'),
+    routinesDoc.indexOf('### Routines run for the workspace that is open'),
+  );
+
+  test('the section exists and names the control the row draws', () => {
+    assert.ok(section.length > 0, 'ROUTINES.md must carry the running-now section');
+    assert.match(section, /Run/, 'and name the control');
+    assert.match(section, /disabled/i, 'and say the control is disabled while a run is in flight');
+    assert.strictEqual(model.runControl({ running: { trigger: 'manual' } }).disabled, true);
+    assert.strictEqual(model.runControl({ paused: true, refusal: 'paused' }).disabled, false, 'and nothing but a run in flight disables it');
+  });
+
+  test('the refusals the page describes are exactly the ones the scheduler declares, and the tick\'s three consents are not among them', () => {
+    const phrases = { runOn: /run target/, prompt: /no prompt/, running: /already going|already running/ };
+    assert.deepStrictEqual(Object.keys(phrases).sort(), scheduler.MANUAL_RUN_REFUSALS.slice().sort(),
+      'a refusal the scheduler grows needs a phrase here and on the page');
+    for (const [word, phrase] of Object.entries(phrases)) assert.match(section, phrase, `the page must describe the "${word}" refusal`);
+    const ok = { runOn: 'local', prompt: 'go', enabled: true };
+    for (const held of [{ paused: true }, { enabled: false }, { planApprovedHash: 'pending' }]) {
+      assert.strictEqual(scheduler.manualRunRefusal({ ...ok, ...held }, 'k'), null, 'a press ignores what only holds the tick');
+    }
+    assert.match(section, /unattended/, 'and the page gives the reason: those three are consent to run unattended');
+  });
+
+  test('the record words the page names are the ones the run-detail model reads, absence included', () => {
+    assert.match(section, /`trigger`/, 'the page names the field');
+    for (const word of ['manual', 'scheduled']) {
+      assert.match(section, new RegExp('`' + word + '`'), `and the "${word}" value`);
+      assert.strictEqual(runDetail.triggerOf({ trigger: word }), word);
+    }
+    assert.strictEqual(runDetail.triggerOf({}), 'scheduled', 'a record with no field reads as scheduled, as the page says');
+    assert.ok(section.includes(model.RUNNING_WORDS.manual) && section.includes(model.RUNNING_WORDS.scheduled),
+      'the page carries the row\'s own words for a run in flight, from the model');
+  });
+
+  test('a manual run moves no schedule: the page says so, and the scheduler\'s own answers are the same before, during and after', () => {
+    assert.match(section, /moves no schedule/i);
+    // The run is driven through the entry the row's message uses, in a
+    // private scheduler whose child is a fake, and the guard is read back
+    // from the scheduler itself: a trigger that stopped reaching the writers
+    // as manual would move both answers.
+    const key = require.resolve('../../lib/scheduler.js');
+    const claude = require('../../lib/runtime/claude.js');
+    const dir = useWorkspace({ agents: { piper: require('../helpers/workspace.js').agentFile({ name: 'piper', type: 'specialist', order: 1,
+      routines: [{ name: 'digest', schedule: 'every day at 07:00', prompt: 'go', enabled: true }] }) } });
+    const cached = require.cache[key]; delete require.cache[key];
+    const realSpawn = claude.spawnClaude;
+    const prevDeps = claude.wireClaudeRuntimeDeps({ getActualPort: () => 0 });
+    const children = [];
+    claude.spawnClaude = () => { const c = new (require('node:events').EventEmitter)(); c.kill = () => {}; children.push(c); return c; };
+    try {
+      const sched = require(key);
+      sched.wireSchedulerDeps({ now: () => new Date(2026, 7, 20, 6, 30), getWssClients: () => [] });
+      sched.recordRoutineRun('piper:digest', { lastRun: new Date(2026, 7, 19, 7, 0, 5).toISOString(), status: 'completed', duration: 3 });
+      require('../../lib/agents/discovery.js').invalidateAgentCache();
+      const agent = require('../../lib/agents/discovery.js').discoverAgents().find(a => a.id === 'piper');
+      const read = () => [JSON.stringify(sched.routineState['piper:digest']), String(sched.nextRunFor('piper:digest', 'every day at 07:00'))];
+      const before = read();
+      assert.strictEqual(sched.runRoutineNow(agent, agent.routines[0], 'piper:digest').started, true);
+      assert.deepStrictEqual(read(), before, 'while the pressed run is going');
+      children[0].emit('close', 0);
+      assert.deepStrictEqual(read(), before, 'and after it closed');
+      assert.strictEqual(sched.readRunRecords()[0].trigger, 'manual', 'and the run that happened is on record as pressed');
+    } finally {
+      claude.spawnClaude = realSpawn; claude.wireClaudeRuntimeDeps(prevDeps);
+      delete require.cache[key]; if (cached) require.cache[key] = cached;
+    }
+  });
+
+  test('the two paused states on the page carry the model\'s own labels, and bind to different acts', () => {
+    const words = model.PAUSED_WORDS;
+    for (const label of [words.self, words.selfAction, words.consentAction]) {
+      assert.ok(section.includes(`**${label}**`), `the page must carry the label "${label}"`);
+    }
+    const self = model.pausedState({ paused: true, refusal: 'paused' });
+    const consent = model.pausedState({ refusal: 'approval' });
+    assert.notStrictEqual(self.text, consent.text);
+    assert.notStrictEqual(self.action, consent.action);
+    assert.strictEqual(consent.action, 'approve_routine_plan');
+    assert.match(section, /changed/, 'and the page says the consent pause names a change');
+  });
+
+  test('what lapses approval on the page is what lapses it in the hash', () => {
+    const { PLAN_FIELDS, planApproved, computePlanHash } = require('../../lib/agents/routines.js');
+    const base = { prompt: 'go', skill: 'ops', runOn: 'local', schedule: 'every day at 07:00', enabled: true };
+    const approved = { ...base, planApprovedHash: computePlanHash(base) };
+    for (const field of PLAN_FIELDS) assert.strictEqual(planApproved({ ...approved, [field]: 'other' }), false);
+    assert.strictEqual(planApproved({ ...approved, schedule: 'every day at 09:00' }), true);
+    assert.deepStrictEqual(PLAN_FIELDS.slice().sort(), ['prompt', 'runOn', 'skill']);
+    assert.match(section, /prompt/, 'the page names the prompt');
+    assert.match(section, /skill/, 'the skill');
+    assert.match(section, /where it runs/, 'and the run target as what lapses it');
+  });
+});

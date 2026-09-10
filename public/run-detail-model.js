@@ -386,6 +386,28 @@
   }
 
   /**
+   * Who started the run. A RECORD WITH NO WORD IS A TICK'S RUN: records from
+   * before runs could be pressed carry no trigger and were all the
+   * scheduler's. A value the writer never produced is not guessed at.
+   */
+  function triggerOf(record) {
+    return record && record.trigger === 'manual' ? 'manual' : 'scheduled';
+  }
+
+  // Marks a pressed run on the line that says when it started: a fact about
+  // the start, the one moment every outcome carries.
+  const STARTED_MANUALLY = 'started manually';
+
+  // "today, 2:14pm, started manually" for a pressed run, the bare moment for
+  // a tick's; a record with no readable moment still says it was pressed.
+
+  function startedWhen(record, now) {
+    const words = startedWords(record.startedAt, now);
+    if (triggerOf(record) !== 'manual') return words;
+    return words ? `${words}, ${STARTED_MANUALLY}` : STARTED_MANUALLY;
+  }
+
+  /**
    * One run's record, as the words a reader sees.
    *
    * `now` is taken rather than read, so nothing here depends on the machine
@@ -416,7 +438,10 @@
       // failed one, one still going and one nobody saw the end of all
       // started at some recorded moment, and the box that reports the
       // outcome is also the only place on this screen that names it.
-      when: found ? startedWords(record.startedAt, opts.now) : null,
+      when: found ? startedWhen(record, opts.now) : null,
+      // Which of the two ways a run can start this one did, as a word the
+      // screen can branch on without reading the record's own field.
+      trigger: found ? triggerOf(record) : null,
       now: opts.now || null,
       state: {
         tone: state.tone,
@@ -446,6 +471,6 @@
   return {
     RUN_STATES, UNRECOGNISED_STATE, NO_RECORD_STATE, FILES_UNKNOWN_WORDS, FILES_UNKNOWN_FALLBACK,
     CHANGE_LABELS, CHANGE_FALLBACK, FILES_LABELS, NO_FILES_CHANGED, UNKNOWN_FILES_LEAD, NO_REASON_GIVEN,
-    changedFiles, unknownWords, durationWords, describeRun, baseName, startedWords,
+    changedFiles, unknownWords, durationWords, describeRun, baseName, startedWords, triggerOf, STARTED_MANUALLY,
   };
 }));

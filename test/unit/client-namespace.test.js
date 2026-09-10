@@ -231,6 +231,7 @@ const MANIFEST = {
     "routinesConfirmDelete",
     "routinesEditSchedule",
     "routinesOpenSkill",
+    "routinesRunNow",
     "routinesSetEnabled",
     "routinesSetPaused",
     "routinesViewLastRun",
