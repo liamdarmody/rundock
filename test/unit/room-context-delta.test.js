@@ -398,3 +398,68 @@ describe('the log says a delta went only when one went', () => {
       'no branch between the write and the log, so the log cannot outrun the send');
   });
 });
+
+describe('the log line itself, on every branch it has', () => {
+  // EXPORTED TO BE TESTED, AND THEN NOT TESTED. deltaNote exists as its own
+  // function because the two log sites had already drifted apart: one
+  // reported the truncated-turn count and the other did not. Four branches,
+  // no coverage, in the one place a regression would be easiest to
+  // reintroduce silently.
+  const { deltaNote } = require(path.join(ROOT, 'lib', 'delegation', 'catch-up.js'));
+
+  test('a cold agent gets no note at all', () => {
+    assert.strictEqual(deltaNote({ text: null }, false), '',
+      'nothing was resumed, so there is nothing to say');
+  });
+
+  test('a resumed agent with nothing missed says so out loud', () => {
+    assert.strictEqual(deltaNote({ text: null }, true), ' delta=none',
+      'the difference between "no catch-up was sent" and "a catch-up was sent '
+      + 'and ignored" is two different faults with two different fixes');
+  });
+
+  test('a delta reports its size', () => {
+    assert.strictEqual(deltaNote({ text: 'abc', truncated: 0, clipped: 0 }, true), ' delta=3chars');
+  });
+
+  test('and says when it dropped turns', () => {
+    assert.match(deltaNote({ text: 'abc', truncated: 2, clipped: 0 }, true), /\/truncated2/);
+  });
+
+  test('and when it cut one short', () => {
+    assert.match(deltaNote({ text: 'abc', truncated: 0, clipped: 1 }, true), /\/clipped/);
+  });
+
+  test('both at once, because both happened', () => {
+    const note = deltaNote({ text: 'abc', truncated: 1, clipped: 1 }, true);
+    assert.match(note, /\/truncated1/);
+    assert.match(note, /\/clipped/);
+  });
+
+  test('a missing object never throws in a log line', () => {
+    // A logger that can crash the path it observes is worse than no logger.
+    assert.strictEqual(deltaNote(undefined, false), '');
+    assert.strictEqual(deltaNote(null, true), ' delta=none');
+  });
+});
+
+describe('every delta log sits at a send, not at a computation', () => {
+  const fs = require('node:fs');
+  const src = fs.readFileSync(path.join(ROOT, 'lib', 'delegation', 'engine.js'), 'utf8');
+
+  test('no deltaNote call sits beside a spawn', () => {
+    // Both delta logs were written beside their spawn, before branches that
+    // park the prompt rather than sending it. Both then reported a delta that
+    // never went. This pins the shape so the third one cannot repeat it.
+    for (const m of src.matchAll(/deltaNote\(/g)) {
+      const before = src.slice(Math.max(0, m.index - 600), m.index);
+      assert.ok(/stdin\.write|prompt sent/.test(before),
+        'a deltaNote call must follow a write or sit in a helper named for the send');
+    }
+  });
+
+  test('the mid-level parent reports its delta at all three of its sends', () => {
+    const hits = (src.match(/noteParentSend\(\);/g) || []).length;
+    assert.strictEqual(hits, 3, 'resume, complete and normal exit each write a prompt');
+  });
+});
