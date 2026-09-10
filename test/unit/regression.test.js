@@ -351,10 +351,23 @@ describe('P2/P3 regressions', () => {
     const src = fs.readFileSync(path.join(__dirname, '../../server.js'), 'utf-8');
     const anchor = src.indexOf('marker on non-delegated process');
     const region = src.slice(anchor - 800, anchor);
-    assert.match(region, /e\.scopeReturnMode = markers\.mode/,
+    // The assignment moved into noteHandoffMarker when the marker consumers
+    // were consolidated: four of them had each rebuilt this decision by hand,
+    // and two silently ignored a marker added later. The invariant this pin
+    // protects is unchanged and now holds by construction rather than by
+    // repetition, so it asserts the path goes through that one door.
+    // handback-intent.test.js additionally forbids assigning scopeReturnMode
+    // anywhere else, which is the stronger form of the same rule.
+    assert.match(region, /noteHandoffMarker\(/,
       'direct-start path must take its mode from the single resolver');
-    assert.match(region, /resolveMarkers\(e\.responseText\)/,
+    // The scan moved into the helper with the assignment: noteHandoffMarker
+    // calls resolveMarkers itself, so requiring the literal call here would
+    // force the duplication this consolidation removed.
+    assert.match(region, /noteHandoffMarker\(e, e\.responseText/,
       'direct-start path must scan via the single resolver');
+    const markersSrc = fs.readFileSync(path.join(__dirname, '../../lib/delegation/markers.js'), 'utf-8');
+    assert.match(markersSrc, /function noteHandoffMarker[\s\S]{0,400}resolveMarkers\(text\)/,
+      'and that helper is what scans, so there is still exactly one scanner');
   });
 
   test('isResumeFailure guards against cancelled turns', () => {
