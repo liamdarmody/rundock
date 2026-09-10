@@ -53,14 +53,14 @@ function stubDeps() {
 
 describe('engine module shape', () => {
   test('exports exactly the factory and its frozen deps list', () => {
-    // markDelegationReturned is exported deliberately, and the reason is worth
+    // setDelegationReturned is exported deliberately, and the reason is worth
     // the widened surface. It is the ONLY writer of the signal the conversation
     // loader reads to decide a delegation has finished, and a signal nothing
     // writes is a dead condition that silently disables the reset it guards.
     // Exported so that writer can be driven directly and proven to persist,
     // rather than asserted about from the outside.
     assert.deepStrictEqual(Object.keys(engineLib).sort(),
-      ['DEP_NAMES', 'createDelegationEngine', 'markDelegationReturned']);
+      ['DEP_NAMES', 'createDelegationEngine', 'setDelegationReturned']);
     assert.deepStrictEqual([...engineLib.DEP_NAMES].sort(), [...EXPECTED_DEPS].sort(),
       'the deps surface is frozen; growing it is a deliberate seam change');
     assert.deepStrictEqual(engineLib.DEP_NAMES, EXPECTED_DEPS,

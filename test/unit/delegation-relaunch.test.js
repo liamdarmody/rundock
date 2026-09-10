@@ -115,7 +115,7 @@ describe('a delegation in flight survives the app quitting', () => {
 });
 
 describe('the handback signal is written where the handback is seen', () => {
-  const { markDelegationReturned } = require(path.join(ROOT, 'lib', 'delegation', 'engine.js'));
+  const { setDelegationReturned } = require(path.join(ROOT, 'lib', 'delegation', 'engine.js'));
 
   test('an observed handback is recorded on disk, so it outlives the process that saw it', () => {
     // AND THIS IS THE HALF THAT MAKES THE RESET REAL. The loader now resets only
@@ -125,7 +125,7 @@ describe('the handback signal is written where the handback is seen', () => {
     const original = config.getWorkspace();
     config.setWorkspace(dir);
     try {
-      markDelegationReturned('c1');
+      setDelegationReturned('c1', true);
       const stored = JSON.parse(fs.readFileSync(path.join(dir, '.rundock', 'conversations.json'), 'utf8'));
       assert.strictEqual(stored[0].delegationReturned, true,
         'the handback is on disk, readable by a server that did not observe it');
@@ -140,9 +140,9 @@ describe('the handback signal is written where the handback is seen', () => {
     const original = config.getWorkspace();
     config.setWorkspace(dir);
     try {
-      markDelegationReturned('c1');
+      setDelegationReturned('c1', true);
       const after = fs.readFileSync(file, 'utf8');
-      markDelegationReturned('c1');
+      setDelegationReturned('c1', true);
       assert.strictEqual(fs.readFileSync(file, 'utf8'), after, 'the second mark wrote nothing');
     } finally {
       config.setWorkspace(original);
@@ -154,7 +154,7 @@ describe('the handback signal is written where the handback is seen', () => {
     const original = config.getWorkspace();
     config.setWorkspace(dir);
     try {
-      assert.doesNotThrow(() => markDelegationReturned('no-such-conversation'));
+      assert.doesNotThrow(() => setDelegationReturned('no-such-conversation', true));
     } finally {
       config.setWorkspace(original);
     }
@@ -162,7 +162,7 @@ describe('the handback signal is written where the handback is seen', () => {
 });
 
 describe('a handback that cannot be recorded does not take the handback down with it', () => {
-  const { markDelegationReturned } = require(path.join(ROOT, 'lib', 'delegation', 'engine.js'));
+  const { setDelegationReturned } = require(path.join(ROOT, 'lib', 'delegation', 'engine.js'));
 
   test('an unwritable store is warned about, not thrown out of', () => {
     // The caller is mid-handback: the specialist has returned and the
@@ -179,7 +179,7 @@ describe('a handback that cannot be recorded does not take the handback down wit
     config.setWorkspace(dir);
     try {
       fs.chmodSync(file, 0o444);
-      assert.doesNotThrow(() => markDelegationReturned('c1'),
+      assert.doesNotThrow(() => setDelegationReturned('c1', true),
         'the handback survives a store it cannot write');
       assert.ok(warnings.some((w) => /could not record the handback/.test(w)),
         `and says so rather than failing silently (got ${JSON.stringify(warnings)})`);
@@ -301,12 +301,73 @@ describe('every path that returns control to a parent records the handback', () 
       // Within the enclosing region rather than a fixed few lines: one of these
       // marks at the top of its function and announces sixty lines later.
       const before = lines.slice(Math.max(0, at - 70), at).join('\n');
-      assert.match(before, /markDelegationReturned\(convoId\)/,
+      assert.match(before, /setDelegationReturned\(convoId, true\)/,
         `the handback announced at line ${at + 1} is recorded nowhere:\n`
         + `${lines[at].trim()}\n`
         + 'Every path returning control to a parent must record it, or a finished '
         + 'delegation is never reconciled and the conversation stays pointed at a '
         + 'specialist that has already handed back.');
+    }
+  });
+});
+
+describe('the record describes the delegation running now, not the conversation history', () => {
+  const { setDelegationReturned } = require(path.join(ROOT, 'lib', 'delegation', 'engine.js'));
+
+  test('a second delegation after a handback is not reconciled away', () => {
+    // THE FLAG IS ABOUT THIS DELEGATION, NOT ABOUT EVER. Written true on a
+    // handback and never cleared, it answers "has this conversation ever had
+    // one", which is true forever after the first. Every later delegation would
+    // then be reset on a relaunch: the reported bug, back again, for every
+    // delegation after the first in a conversation's life.
+    const dir = workspaceWith({ ...IN_FLIGHT });
+    const original = config.getWorkspace();
+    config.setWorkspace(dir);
+    try {
+      // First delegation hands back.
+      setDelegationReturned('c1', true);
+      // A second delegation starts. The engine clears the record as it spawns.
+      setDelegationReturned('c1', false);
+    } finally {
+      config.setWorkspace(original);
+    }
+    // The app quits mid-second-delegation, and the conversation is loaded again.
+    const { stored } = load(dir);
+    assert.strictEqual(stored[0].activeAgentId, 'lead-developer',
+      'the second delegation keeps its specialist, because it never handed back');
+  });
+
+  test('clearing a record that is already clear writes nothing', () => {
+    const dir = workspaceWith({ ...IN_FLIGHT });
+    const file = path.join(dir, '.rundock', 'conversations.json');
+    const original = config.getWorkspace();
+    config.setWorkspace(dir);
+    try {
+      const before = fs.readFileSync(file, 'utf8');
+      setDelegationReturned('c1', false);
+      assert.strictEqual(fs.readFileSync(file, 'utf8'), before, 'no write for no change');
+    } finally {
+      config.setWorkspace(original);
+    }
+  });
+
+  test('every delegation start clears the record, so the engine cannot forget', () => {
+    // The clear belongs beside the spawn, the same way the mark belongs beside
+    // the handback. Bound here because driving a real spawn needs a live child
+    // process, and what must hold is narrower than that.
+    const src = fs.readFileSync(path.join(ROOT, 'lib', 'delegation', 'engine.js'), 'utf8');
+    const lines = src.split('\n');
+    const starts = [];
+    lines.forEach((line, i) => {
+      if (line.includes("subtype: 'agent_switch'")
+        && lines.slice(i, i + 4).join('\n').includes('toAgent: targetAgent.id')) starts.push(i);
+    });
+    assert.ok(starts.length >= 1, 'the engine still announces a delegation starting');
+    for (const at of starts) {
+      const before = lines.slice(Math.max(0, at - 25), at).join('\n');
+      assert.match(before, /setDelegationReturned\(convoId, false\)/,
+        `the delegation starting at line ${at + 1} does not clear the handback record, so a `
+        + 'previous handback would be read as this one\'s');
     }
   });
 });
