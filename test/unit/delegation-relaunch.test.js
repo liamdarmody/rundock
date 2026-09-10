@@ -269,13 +269,10 @@ describe('every path that returns control to a parent records the handback', () 
   // tested through all of it: wherever control goes back to a parent, the
   // handback is recorded.
   //
-  // The first version of this fix marked in ONE place, handleScopeReturn, which
-  // fires only for a second-level event. Ordinary single-level delegations
-  // return through finishDelegateClose and never touched it, so the flag stayed
-  // false for the common case and a finished delegation was never reconciled.
-  // Nothing failed: the unit test passed, because the unit worked.
-  //
-  // The invariant below is what that test could not see. `agent_switch` carrying
+  // A unit test of the writer cannot see whether the engine calls it. This
+  // invariant covers that gap in the cheap direction; the behavioural proof
+  // that a real handback writes the record lives in
+  // test/integration/delegation-handback-record.test.js. `agent_switch` carrying
   // a `toAgent` is the engine saying control moved back to a parent, and every
   // one of those must be accompanied by the record.
   const src = fs.readFileSync(path.join(ROOT, 'lib', 'delegation', 'engine.js'), 'utf8');

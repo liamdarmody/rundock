@@ -514,11 +514,6 @@ function renderSessionHistory(d) {
   // running; after a relaunch it does not mean the delegate FINISHED, because
   // the process map died with the server. Only an observed handback says that,
   // and `delegationReturned` is written at the moment one is seen.
-  // THE SAME RULE THE SERVER APPLIES, and it has to be the same or either one
-  // alone reproduces the bug. A missing process means the delegate is not
-  // running; after a relaunch it does not mean the delegate FINISHED, because
-  // the process map died with the server. Only an observed handback says that,
-  // and `delegationReturned` is written at the moment one is seen.
   //
   // BOTH DIRECTIONS ARE WRITTEN, which the first version of this got wrong. It
   // narrowed the reset and stopped there, so for the restored case nothing ever
