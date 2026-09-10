@@ -213,6 +213,13 @@ function setConn(s) { const b=document.getElementById('connection-bar'); b.class
 // ===== 4. MESSAGE HANDLING =====
 
 function handle(d) {
+  // TWO FIELDS, AND THEY ARE NOT INTERCHANGEABLE. `_conversationId` tags a
+  // message emitted by a running agent process, so it is what the streaming
+  // cases route by. `conversationId` is echoed back by the synchronous
+  // save/delete replies, carrying the id the request was sent with. A new
+  // reply type must pick the one matching how it is produced: reaching for
+  // the wrong one is silent, because both are usually the conversation on
+  // screen and only diverge when a second conversation is running.
   const convoId = d._conversationId;
   switch(d.type) {
     case 'package_import_plan': case 'package_import_result': case 'package_import_error': packagesReplyArrived(d); break;
