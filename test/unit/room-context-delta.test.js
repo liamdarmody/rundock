@@ -97,30 +97,58 @@ describe('the cap, and saying when it bit', () => {
 });
 
 describe('the delta reaches the delegate', () => {
-  // A BINDING, AND IT SAYS SO. Driving a re-delegation through the stub runtime
-  // proved harder than it looked: the brief reaches a Claude delegate over
-  // stdin, and two attempts at an end-to-end test matched stale messages rather
-  // than the second delegation. Rather than ship a test that passes without
-  // exercising the path, this pins the wiring and the gap is stated openly:
-  // the delta's CONTENT is proven above; that a real re-delegation carries it
-  // has been read in the code and not yet driven.
-  const fs = require('node:fs');
-  const src = fs.readFileSync(path.join(ROOT, 'lib', 'delegation', 'engine.js'), 'utf8');
+  // NOW DRIVEN, NOT READ. The previous version of this block matched regexes
+  // against engine.js: it proved two identifiers sat near each other, and would
+  // have passed unchanged if the wiring were assigned from the wrong variable.
+  // The prompt assembly is a pure function now, so these assert on the bytes a
+  // delegate actually receives.
+  const { buildDelegateContext } = require(path.join(ROOT, 'lib', 'delegation', 'catch-up.js'));
 
-  test('a resumed delegate has the delta built for it', () => {
-    assert.match(src, /\(priorSessionId && !isCodexDelegate\)/,
-      'the delta is built only for a delegate being resumed, and never for Codex, '
-      + 'whose resumed thread already carries the history');
+  const transcript = [
+    { role: 'user', text: 'write me a short blog post' },
+    { agent: 'vox', text: 'here is the first draft' },
+    { agent: 'ed', text: 'I tightened the opening' },
+    { agent: 'nia', text: 'and I checked the facts' }
+  ];
+
+  test('a resumed delegate is sent what the others did while it was away', () => {
+    const missed = deltaSince(transcript, 'vox');
+    const sent = buildDelegateContext({ transcript: null, missed, brief: 'now finish it' });
+    assert.match(sent, /I tightened the opening/, "the other agents' work is in the prompt");
+    assert.match(sent, /and I checked the facts/);
+    assert.match(sent, /\[DELEGATION BRIEF\]\nnow finish it/, 'and the brief still arrives');
   });
 
-  test('and it is carried in the text the delegate is sent', () => {
-    const at = src.indexOf('const contextWithHistory');
-    assert.ok(at > -1, 'the delegate context is still assembled here');
-    const block = src.slice(at, at + 400);
-    assert.match(block, /sinceYouWereHere/,
-      'the delta is part of what the delegate receives');
-    // The same value goes to the Claude delegate over stdin and into the Codex
-    // prompt, so one assertion covers both runtimes.
+  test('and not its own earlier turn, which its session already carries', () => {
+    const missed = deltaSince(transcript, 'vox');
+    const sent = buildDelegateContext({ transcript: null, missed, brief: 'now finish it' });
+    assert.ok(!sent.includes('here is the first draft'),
+      're-sending an agent its own work is pure cost and invites it to redo the work');
+  });
+
+  test('a first-time delegate gets the transcript, and no catch-up section', () => {
+    const sent = buildDelegateContext({
+      transcript: 'USER: write me a short blog post', missed: { text: null }, brief: 'draft it'
+    });
+    assert.match(sent, /CONVERSATION SO FAR:/);
+    assert.ok(!sent.includes('SINCE YOUR LAST TURN'),
+      'an agent that has missed nothing must not be told it missed something');
+  });
+
+  test('a delegate with nothing missed gets the brief alone', () => {
+    const sent = buildDelegateContext({ transcript: null, missed: { text: null }, brief: 'go' });
+    assert.strictEqual(sent, '[DELEGATION BRIEF]\ngo', 'no empty catch-up heading');
+  });
+
+  test('the engine sends that assembled text, and builds the delta only on resume', () => {
+    // The one binding left against source: which VALUES the pure functions are
+    // called with. Their behaviour is driven above.
+    const fs = require('node:fs');
+    const src = fs.readFileSync(path.join(ROOT, 'lib', 'delegation', 'engine.js'), 'utf8');
+    assert.match(src, /\(priorSessionId && !isCodexDelegate\)/,
+      'built only for a delegate being resumed, and never for Codex, whose resumed '
+      + 'thread already carries the history');
+    assert.match(src, /buildDelegateContext\(\{ transcript, missed, brief: msg\.context \}\)/);
     assert.match(src, /stdin\.write\(JSON\.stringify\(\{ type: 'user', message: \{ role: 'user', content: contextWithHistory \}/,
       'and that text is what is written to the delegate');
   });
@@ -134,35 +162,76 @@ describe('the orchestrator coming back is treated the same way', () => {
   // just said and nothing about what the user originally asked for.
   //
   // Observed in real use: a request for a short blog post came back, after two
-  // handoffs, as a delegation asking a specialist for a LinkedIn post. The
-  // specialist did as briefed. That is the reported "asks for things already
-  // asked and completed", seen from the orchestrator's side.
-  const fs = require('node:fs');
-  const src = fs.readFileSync(path.join(ROOT, 'lib', 'delegation', 'engine.js'), 'utf8');
-  const at = src.indexOf('function handleScopeReturn');
-  const body = src.slice(at, src.indexOf('\nfunction ', at + 1));
+  // handoffs, as a delegation asking a specialist for a LinkedIn post.
+  const { buildScopeReturnPrompt, lastSessionFor } = require(path.join(ROOT, 'lib', 'delegation', 'catch-up.js'));
 
-  test('it is resumed into its own session rather than spawned cold', () => {
-    assert.match(body, /orchestratorSession \? \['--resume', orchestratorSession\]/,
-      'the orchestrator keeps its own history across a handback');
+  const transcript = [
+    { role: 'user', text: 'write me a short blog post' },
+    { agent: 'cos', text: 'delegating this to vox' },
+    { agent: 'ed', text: 'I tightened the opening' },
+    { agent: 'vox', text: 'FINAL: here is the finished post' }
+  ];
+
+  test('it is told the original request it delegated on', () => {
+    const missed = deltaSince(transcript, 'cos', undefined, ['vox']);
+    const prompt = buildScopeReturnPrompt({
+      complete: true, orchMissed: missed, specialistId: 'vox',
+      outputBlock: '\n\n--- vox ---\nFINAL: here is the finished post\n---'
+    });
+    assert.match(prompt, /I tightened the opening/,
+      'what happened while it was away, which is what it had no way to know');
+  });
+
+  test("the specialist's handback is not sent twice in one prompt", () => {
+    // outputBlock already carries it. Before the delta excluded the returning
+    // specialist, the same text arrived in both halves on every handback.
+    const missed = deltaSince(transcript, 'cos', undefined, ['vox']);
+    const prompt = buildScopeReturnPrompt({
+      complete: true, orchMissed: missed, specialistId: 'vox',
+      outputBlock: '\n\n--- vox ---\nFINAL: here is the finished post\n---'
+    });
+    const hits = prompt.split('FINAL: here is the finished post').length - 1;
+    assert.strictEqual(hits, 1, 'exactly once, in the block that exists to carry it');
+  });
+
+  test('a routing return carries the catch-up and the pending request', () => {
+    const missed = deltaSince(transcript, 'cos', undefined, ['vox']);
+    const prompt = buildScopeReturnPrompt({
+      complete: false, orchMissed: missed, specialistId: 'vox',
+      outputBlock: '\n\n--- vox ---\nout of scope\n---', pendingRequest: 'book me a flight'
+    });
+    assert.match(prompt, /SINCE YOUR LAST TURN IN THIS CONVERSATION/);
+    assert.match(prompt, /book me a flight/);
+  });
+
+  test('a cold orchestrator is told nothing about turns it cannot remember', () => {
+    const prompt = buildScopeReturnPrompt({
+      complete: true, orchMissed: { text: null }, specialistId: 'vox', outputBlock: ''
+    });
+    assert.ok(!prompt.includes('SINCE YOUR LAST TURN'),
+      'told "since your last turn" while cold-spawned, it hears about a turn it has '
+      + 'no memory of, which is worse than the old cold spawn that claimed nothing');
   });
 
   test('the session it resumes is the one recorded for this conversation', () => {
-    assert.match(body, /filter\(\(x\) => x\.agentId === orchestrator\.id\)/,
-      'looked up in the conversation, not guessed');
+    const convos = [{ id: 'c1', sessionIds: [
+      { agentId: 'cos', sessionId: 'old' }, { agentId: 'vox', sessionId: 'v1' },
+      { agentId: 'cos', sessionId: 'newest' }
+    ] }];
+    assert.strictEqual(lastSessionFor(convos, 'c1', 'cos'), 'newest', 'the latest, not the first');
+    assert.strictEqual(lastSessionFor(convos, 'c1', 'nobody'), null, 'and cold spawn when there is none');
+    assert.strictEqual(lastSessionFor([], 'c1', 'cos'), null);
   });
 
-  test('it is told what it missed while the specialists worked', () => {
-    assert.match(body, /deltaSince\(loadTranscript\(convoId\)/,
-      'the same catch-up a returning delegate gets');
-    assert.match(body, /SINCE YOUR LAST TURN IN THIS CONVERSATION/,
-      'carried into the prompt it actually reads');
-  });
-
-  test('a cold spawn is still possible, and says so', () => {
-    // The lookup can fail on a conversation with nothing recorded. That path
-    // must remain, because refusing to restore the orchestrator would end the
-    // conversation rather than degrade it.
+  test('the engine resumes the orchestrator and says which happened', () => {
+    const fs = require('node:fs');
+    const src = fs.readFileSync(path.join(ROOT, 'lib', 'delegation', 'engine.js'), 'utf8');
+    const at = src.indexOf('function handleScopeReturn');
+    const body = src.slice(at, src.indexOf('\nfunction ', at + 1));
+    assert.match(body, /orchestratorSession \? \['--resume', orchestratorSession\]/,
+      'the orchestrator keeps its own history across a handback');
+    assert.match(body, /deltaSince\(loadTranscript\(convoId\) \|\| \[\], orchestrator\.id, undefined, \[specialistEntry\.agentId\]\)/,
+      'and the returning specialist is excluded from its catch-up');
     assert.match(body, /resume=none/,
       'the log distinguishes a resumed orchestrator from a cold one, so a reader '
       + 'can tell which happened rather than inferring it from behaviour');
@@ -220,5 +289,49 @@ describe('a cold-spawned orchestrator is told nothing about turns it cannot reme
   test('the catch-up is gated on the session actually being found', () => {
     assert.match(body, /orchestratorSession\s*\n?\s*\?\s*deltaSince\(/,
       'no delta on the cold-spawn fallback, matching how the delegate path is gated');
+  });
+});
+
+describe('the cap holds when both things happen at once', () => {
+  // THE SECOND HALF OF THE SAME DEFECT. Clipping an oversized turn was fixed
+  // first; the truncation notice was still prepended afterwards, outside the
+  // budget the loop had just spent. Whenever a turn was dropped AND the kept
+  // turn was clipped, the returned text ran past the one number this module
+  // names, by the length of the notice. A cap that is only usually a cap is
+  // the same class of instrument as a measurement that cannot fail.
+  const { deltaSince, DELTA_CAP_CHARS } = require(path.join(ROOT, 'lib', 'store', 'transcripts.js'));
+
+  test('a dropped turn and a clipped turn together still fit the cap', () => {
+    const out = deltaSince([
+      { agent: 'vox', text: 'mine' },
+      { agent: 'a', text: 'old' },
+      { agent: 'b', text: 'x'.repeat(DELTA_CAP_CHARS * 2) }
+    ], 'vox');
+    assert.strictEqual(out.truncated, 1, 'the older turn went');
+    assert.strictEqual(out.clipped, 1, 'and the newest was cut short');
+    assert.ok(out.text.length <= DELTA_CAP_CHARS,
+      `text was ${out.text.length}, cap is ${DELTA_CAP_CHARS}`);
+  });
+
+  test('the notice and the clip note both survive inside the cap', () => {
+    const out = deltaSince([
+      { agent: 'vox', text: 'mine' },
+      { agent: 'a', text: 'old' },
+      { agent: 'b', text: 'x'.repeat(DELTA_CAP_CHARS * 2) }
+    ], 'vox');
+    assert.match(out.text, /1 earlier turn omitted for length/, 'it says a turn went');
+    assert.match(out.text, /cut off here/, 'and that the one it kept was cut');
+  });
+
+  test('every return path names all three fields', () => {
+    for (const out of [
+      deltaSince([], 'vox'),
+      deltaSince([{ agent: 'vox', text: 'mine' }], 'vox'),
+      deltaSince([{ agent: 'a', text: 'not mine' }], 'vox'),
+      deltaSince(null, 'vox')
+    ]) {
+      assert.strictEqual(typeof out.truncated, 'number');
+      assert.strictEqual(typeof out.clipped, 'number', 'clipped is never undefined');
+    }
   });
 });
