@@ -108,9 +108,9 @@ describe('the delta reaches the delegate', () => {
   const src = fs.readFileSync(path.join(ROOT, 'lib', 'delegation', 'engine.js'), 'utf8');
 
   test('a resumed delegate has the delta built for it', () => {
-    assert.match(src, /priorSessionId\s*\n?\s*\?\s*deltaSince\(/,
-      'the delta is built only for a delegate being resumed, since a cold spawn '
-      + 'already receives the full transcript');
+    assert.match(src, /\(priorSessionId && !isCodexDelegate\)/,
+      'the delta is built only for a delegate being resumed, and never for Codex, '
+      + 'whose resumed thread already carries the history');
   });
 
   test('and it is carried in the text the delegate is sent', () => {
@@ -166,5 +166,59 @@ describe('the orchestrator coming back is treated the same way', () => {
     assert.match(body, /resume=none/,
       'the log distinguishes a resumed orchestrator from a cold one, so a reader '
       + 'can tell which happened rather than inferring it from behaviour');
+  });
+});
+
+describe('one turn longer than the cap is still capped', () => {
+  // THE CASE THE CAP EXISTS FOR, and the one it missed. The newest missed turn
+  // is admitted unconditionally so a delta is never empty, and that admission
+  // skipped the size check: a single 232,770-character turn passed through
+  // whole while reporting `truncated: 0`. The measured corpus names that exact
+  // number as its worst case, so the cap was defeated by precisely the input it
+  // was sized against.
+  test('a single oversized turn is clipped, not passed through', () => {
+    const convo = [
+      { role: 'agent', agent: 'vox', text: 'my own turn' },
+      { role: 'agent', agent: 'ren', text: 'HUGE ' + 'x'.repeat(DELTA_CAP_CHARS * 3) },
+    ];
+    const d = deltaSince(convo, 'vox');
+    assert.ok(d.text.length <= DELTA_CAP_CHARS,
+      `the delta is within the cap it names (got ${d.text.length}, cap ${DELTA_CAP_CHARS})`);
+  });
+
+  test('and the delegate is told it was cut off', () => {
+    const convo = [
+      { role: 'agent', agent: 'vox', text: 'mine' },
+      { role: 'agent', agent: 'ren', text: 'x'.repeat(DELTA_CAP_CHARS * 2) },
+    ];
+    const d = deltaSince(convo, 'vox');
+    assert.strictEqual(d.clipped, 1, 'the clipping is reported');
+    assert.match(d.text, /cut off here/,
+      'and said in the text, because an agent given a silently truncated turn '
+      + 'cannot know it is working from part of one');
+  });
+
+  test('a turn inside the cap is not clipped', () => {
+    const d = deltaSince([{ role: 'agent', agent: 'vox', text: 'mine' },
+                          { role: 'agent', agent: 'ren', text: 'short' }], 'vox');
+    assert.strictEqual(d.clipped, 0);
+    assert.doesNotMatch(d.text, /cut off here/);
+  });
+});
+
+describe('a cold-spawned orchestrator is told nothing about turns it cannot remember', () => {
+  // The delta excludes an agent's own turns on the grounds that its session
+  // already carries them. That reasoning holds only when --resume actually
+  // fired. Told "since your last turn" while cold-spawned, the orchestrator
+  // hears about a turn it has no memory of, which is worse than the old
+  // behaviour: that claimed nothing.
+  const fs = require('node:fs');
+  const src = fs.readFileSync(path.join(ROOT, 'lib', 'delegation', 'engine.js'), 'utf8');
+  const at = src.indexOf('function handleScopeReturn');
+  const body = src.slice(at, src.indexOf('\nfunction ', at + 1));
+
+  test('the catch-up is gated on the session actually being found', () => {
+    assert.match(body, /orchestratorSession\s*\n?\s*\?\s*deltaSince\(/,
+      'no delta on the cold-spawn fallback, matching how the delegate path is gated');
   });
 });
