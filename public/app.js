@@ -212,20 +212,6 @@ function setConn(s) { const b=document.getElementById('connection-bar'); b.class
 
 // ===== 4. MESSAGE HANDLING =====
 
-// A pill belongs to the conversation that earned it.
-//
-// addSystemMsg appends to the thread on screen, which is right when the reply
-// belongs to it and wrong otherwise. A save started in one conversation used to
-// announce itself in whichever one the reader was looking at, every time.
-//
-// A reply carrying no conversation id is still shown: some replies are about the
-// workspace rather than a conversation, and dropping them silently would trade a
-// visible bug for an invisible one.
-function addSystemMsgFor(d, text) {
-  if (d && d.conversationId && activeConversation && d.conversationId !== activeConversation.id) return;
-  addSystemMsg(text);
-}
-
 function handle(d) {
   const convoId = d._conversationId;
   switch(d.type) {
@@ -456,23 +442,23 @@ function handle(d) {
     case 'agent_saved':
       if (!d.updated) setupComplete = true;
       // Non-default runtimes are worth calling out on the confirmation pill.
-      addSystemMsgFor(d, 'Agent "' + (d.agentId || '') + '" ' + (d.updated ? 'updated' : 'created') + (d.runtime === 'codex' ? ' · runs on Codex' : ''));
+      addSystemMsgToConvo('Agent "' + (d.agentId || '') + '" ' + (d.updated ? 'updated' : 'created') + (d.runtime === 'codex' ? ' · runs on Codex' : ''), d.conversationId, false);
       break;
     case 'runtime_status':
       runtimeStatus = d;
       renderRuntimesCard();
       break;
     case 'agent_error':
-      addSystemMsgFor(d, d.message || 'Agent operation failed');
+      addSystemMsgToConvo(d.message || 'Agent operation failed', d.conversationId, false);
       break;
     case 'agent_deleted':
-      addSystemMsgFor(d, 'Agent "' + (d.agentId || '') + '" removed');
+      addSystemMsgToConvo('Agent "' + (d.agentId || '') + '" removed', d.conversationId, false);
       break;
     case 'skill_saved':
-      addSystemMsgFor(d, 'Skill "' + (d.skillId || '') + '" ' + (d.updated ? 'updated' : 'created'));
+      addSystemMsgToConvo('Skill "' + (d.skillId || '') + '" ' + (d.updated ? 'updated' : 'created'), d.conversationId, false);
       break;
     case 'skill_error':
-      addSystemMsgFor(d, d.message || 'Skill operation failed');
+      addSystemMsgToConvo(d.message || 'Skill operation failed', d.conversationId, false);
       break;
     // A routine write is the one save in this client the user waits on: the
     // editor stays on screen until the server answers, so a refusal has
@@ -522,7 +508,7 @@ function handle(d) {
       // second answer to a question the list already answers.
       break;
     case 'skill_deleted':
-      addSystemMsg('Skill "' + (d.skillId || '') + '" removed');
+      addSystemMsgToConvo('Skill "' + (d.skillId || '') + '" removed', d.conversationId, false);
       break;
     case 'active_processes':
       // Defer until workspace is ready and conversations are loaded
@@ -847,7 +833,7 @@ function handleResult(d, convoId) {
     // wrapper. Only when the marker scan produced no save/delete actions.
     if(filesCreated === 0) {
       for (const fm of RundockMarkers.extractFrontmatterAgents(textToScan)) {
-        ws.send(JSON.stringify({ type: 'save_agent', name: fm.name, content: fm.content }));
+        ws.send(JSON.stringify({ type: 'save_agent', name: fm.name, content: fm.content, conversationId: convoId }));
         filesCreated++;
         console.log('[Agent] Fallback extraction:', fm.name);
       }
