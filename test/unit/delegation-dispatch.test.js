@@ -34,6 +34,13 @@ const dom = new JSDOM('<!doctype html><html><body>'
   + '</body></html>');
 global.document = dom.window.document;
 global.window = dom.window;
+// jsdom does not implement scrolling, and the view scrolls.
+dom.window.Element.prototype.scrollIntoView = function () {};
+
+// The view reaches this by name, exactly as it does in the browser where
+// delegation-restore.js attaches it to the window. Requiring it in the test is
+// not enough: the module resolves it from the global environment at call time.
+global.restoredActiveAgentId = restoredActiveAgentId;
 
 // The collaborators chat.js reaches by name. Installed before it is required,
 // because the module captures nothing at load time and resolves each at call
@@ -62,7 +69,7 @@ global.startProcessing = () => {};
 global.renderConvoList = () => {};
 global.persistConversation = () => {};
 
-const { dispatchMessage } = require(path.join(ROOT, 'public', 'views', 'chat.js'));
+const { dispatchMessage, renderSessionHistory } = require(path.join(ROOT, 'public', 'views', 'chat.js'));
 
 function restoredConversation(extra) {
   return {
@@ -79,11 +86,22 @@ function restoredConversation(extra) {
   };
 }
 
-/** What opening a conversation with no live process does to the runtime state. */
+/**
+ * Open the conversation through the REAL view code that opens one.
+ *
+ * An earlier version of this file hand-wrote the two lines renderSessionHistory
+ * runs, and every assertion below then ran against that stand-in. It proved
+ * dispatchMessage routes correctly GIVEN correct state, and proved nothing
+ * about the state ever being set. The double was never checked against the
+ * function it stood in for, which is the failure this whole card is about.
+ */
 function openWithNoLiveProcess(convo) {
+  global.conversations = [convo];
   const state = global.getConvoState(convo.id);
   state.activeProcessId = null;
-  state.activeAgentId = restoredActiveAgentId(convo);
+  // The shape the server sends for get_session_history. No messages, because
+  // what is under test is the pointer, not the rendering.
+  renderSessionHistory({ conversationId: convo.id, messages: [], hasMore: false });
   return state;
 }
 

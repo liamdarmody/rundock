@@ -115,7 +115,7 @@ describe('a delegation in flight survives the app quitting', () => {
 });
 
 describe('the handback signal is written where the handback is seen', () => {
-  const { setDelegationReturned } = require(path.join(ROOT, 'lib', 'delegation', 'engine.js'));
+  const { recordControlReturnedTo } = require(path.join(ROOT, 'lib', 'delegation', 'engine.js'));
 
   test('an observed handback is recorded on disk, so it outlives the process that saw it', () => {
     // AND THIS IS THE HALF THAT MAKES THE RESET REAL. The loader now resets only
@@ -125,7 +125,7 @@ describe('the handback signal is written where the handback is seen', () => {
     const original = config.getWorkspace();
     config.setWorkspace(dir);
     try {
-      setDelegationReturned('c1', true);
+      recordControlReturnedTo('c1', 'chief-of-staff');
       const stored = JSON.parse(fs.readFileSync(path.join(dir, '.rundock', 'conversations.json'), 'utf8'));
       assert.strictEqual(stored[0].delegationReturned, true,
         'the handback is on disk, readable by a server that did not observe it');
@@ -140,9 +140,9 @@ describe('the handback signal is written where the handback is seen', () => {
     const original = config.getWorkspace();
     config.setWorkspace(dir);
     try {
-      setDelegationReturned('c1', true);
+      recordControlReturnedTo('c1', 'chief-of-staff');
       const after = fs.readFileSync(file, 'utf8');
-      setDelegationReturned('c1', true);
+      recordControlReturnedTo('c1', 'chief-of-staff');
       assert.strictEqual(fs.readFileSync(file, 'utf8'), after, 'the second mark wrote nothing');
     } finally {
       config.setWorkspace(original);
@@ -154,7 +154,7 @@ describe('the handback signal is written where the handback is seen', () => {
     const original = config.getWorkspace();
     config.setWorkspace(dir);
     try {
-      assert.doesNotThrow(() => setDelegationReturned('no-such-conversation', true));
+      assert.doesNotThrow(() => recordControlReturnedTo('no-such-conversation', 'chief-of-staff'));
     } finally {
       config.setWorkspace(original);
     }
@@ -162,7 +162,7 @@ describe('the handback signal is written where the handback is seen', () => {
 });
 
 describe('a handback that cannot be recorded does not take the handback down with it', () => {
-  const { setDelegationReturned } = require(path.join(ROOT, 'lib', 'delegation', 'engine.js'));
+  const { recordControlReturnedTo } = require(path.join(ROOT, 'lib', 'delegation', 'engine.js'));
 
   test('an unwritable store is warned about, not thrown out of', () => {
     // The caller is mid-handback: the specialist has returned and the
@@ -179,7 +179,7 @@ describe('a handback that cannot be recorded does not take the handback down wit
     config.setWorkspace(dir);
     try {
       fs.chmodSync(file, 0o444);
-      assert.doesNotThrow(() => setDelegationReturned('c1', true),
+      assert.doesNotThrow(() => recordControlReturnedTo('c1', 'chief-of-staff'),
         'the handback survives a store it cannot write');
       assert.ok(warnings.some((w) => /could not record the handback/.test(w)),
         `and says so rather than failing silently (got ${JSON.stringify(warnings)})`);
@@ -301,8 +301,8 @@ describe('every path that returns control to a parent records the handback', () 
       // Within the enclosing region rather than a fixed few lines: one of these
       // marks at the top of its function and announces sixty lines later.
       const before = lines.slice(Math.max(0, at - 70), at).join('\n');
-      assert.match(before, /setDelegationReturned\(convoId, true\)/,
-        `the handback announced at line ${at + 1} is recorded nowhere:\n`
+      assert.match(before, /recordControlReturnedTo\(convoId/,
+        `the handback announced at line ${at + 1} records nothing about where control went:\n`
         + `${lines[at].trim()}\n`
         + 'Every path returning control to a parent must record it, or a finished '
         + 'delegation is never reconciled and the conversation stays pointed at a '
@@ -312,7 +312,7 @@ describe('every path that returns control to a parent records the handback', () 
 });
 
 describe('the record describes the delegation running now, not the conversation history', () => {
-  const { setDelegationReturned } = require(path.join(ROOT, 'lib', 'delegation', 'engine.js'));
+  const { recordControlReturnedTo } = require(path.join(ROOT, 'lib', 'delegation', 'engine.js'));
 
   test('a second delegation after a handback is not reconciled away', () => {
     // THE FLAG IS ABOUT THIS DELEGATION, NOT ABOUT EVER. Written true on a
@@ -325,9 +325,9 @@ describe('the record describes the delegation running now, not the conversation 
     config.setWorkspace(dir);
     try {
       // First delegation hands back.
-      setDelegationReturned('c1', true);
+      recordControlReturnedTo('c1', 'chief-of-staff');
       // A second delegation starts. The engine clears the record as it spawns.
-      setDelegationReturned('c1', false);
+      recordControlReturnedTo('c1', 'lead-developer');
     } finally {
       config.setWorkspace(original);
     }
@@ -344,7 +344,7 @@ describe('the record describes the delegation running now, not the conversation 
     config.setWorkspace(dir);
     try {
       const before = fs.readFileSync(file, 'utf8');
-      setDelegationReturned('c1', false);
+      recordControlReturnedTo('c1', 'lead-developer');
       assert.strictEqual(fs.readFileSync(file, 'utf8'), before, 'no write for no change');
     } finally {
       config.setWorkspace(original);
@@ -371,3 +371,53 @@ describe('the record describes the delegation running now, not the conversation 
     }
   });
 });
+
+describe('nested delegation: coming back to a parent is not coming home', () => {
+  const { recordControlReturnedTo } = require(path.join(ROOT, 'lib', 'delegation', 'engine.js'));
+  const { restoredActiveAgentId } = require(path.join(ROOT, 'public', 'delegation-restore.js'));
+
+  test('returning to a mid-level parent leaves the conversation delegated', () => {
+    // Orchestrator delegates to a specialist that has its own reports, and that
+    // specialist delegates again. When the sub-delegate returns, control goes
+    // back to the MID-LEVEL parent and the orchestrator's own delegation is
+    // still in flight. A bare "returned" boolean could not say that, and set
+    // there it told the loader the conversation had come home when it had not.
+    const dir = workspaceWith({ ...IN_FLIGHT, activeAgentId: 'content-lead' });
+    const original = config.getWorkspace();
+    config.setWorkspace(dir);
+    try {
+      recordControlReturnedTo('c1', 'content-lead');  // a delegate, not the base agent
+    } finally {
+      config.setWorkspace(original);
+    }
+    const { stored } = load(dir);
+    // Absent, not written false: unreturned is the default and a writer that
+    // rewrote the file to say so would churn the store on every nested return.
+    assert.notStrictEqual(stored[0].delegationReturned, true,
+      'control reached a delegate, so the conversation is still delegated');
+    assert.strictEqual(stored[0].activeAgentId, 'content-lead',
+      'and the pointer stays on the parent that now holds it');
+  });
+
+  test('returning to the base agent does bring the conversation home', () => {
+    const dir = workspaceWith({ ...IN_FLIGHT });
+    const original = config.getWorkspace();
+    config.setWorkspace(dir);
+    try {
+      recordControlReturnedTo('c1', 'chief-of-staff');  // the conversation's own agent
+    } finally {
+      config.setWorkspace(original);
+    }
+    const { stored } = load(dir);
+    assert.strictEqual(stored[0].delegationReturned, true);
+    assert.strictEqual(stored[0].activeAgentId, 'chief-of-staff',
+      'control reached the base agent, so the conversation is reconciled');
+  });
+
+  test('the rule reads that record the same way', () => {
+    assert.strictEqual(
+      restoredActiveAgentId({ agentId: 'chief-of-staff', activeAgentId: 'content-lead', delegationReturned: false }),
+      'content-lead', 'still delegated: the next message goes to whoever holds it');
+  });
+});
+
