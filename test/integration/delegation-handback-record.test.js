@@ -236,3 +236,46 @@ describe('a delegation whose parent stayed alive', () => {
       'restoring the live parent recorded that control reached the base agent');
   });
 });
+
+describe('control skipping a mid-level parent to reach the orchestrator', () => {
+  test('a report handing back past its lead records reaching the base agent', async () => {
+    // THE FOURTH CALL SITE, and the one an earlier claim of completeness had
+    // wrong. It needs a shape none of the tests above build: a non-intercepted
+    // `delegate` to a lead, so the ORCHESTRATOR's process is parked alive and
+    // the lead carries a live originalEntry; then the lead intercepts an
+    // Agent-tool call to one of its own reports; then that report finishes.
+    // Control skips the lead and goes straight back to the parked orchestrator,
+    // which is its own branch.
+    const convoId = h.freshConvoId('skiplevel');
+    h.clearInvocations();
+    h.writeScenario([
+      { match: { agent: 'chief-of-staff', promptIncludes: 'open it' }, turn: [{ text: 'ready' }] },
+      {
+        match: { agent: 'content-lead', promptIncludes: 'lead brief' },
+        turn: [{ agentTool: { subagent_type: 'content-analyst', prompt: 'analyst brief' } }],
+      },
+      {
+        match: { agent: 'content-analyst', promptIncludes: 'analyst brief' },
+        turn: [{ text: 'ANALYST-DONE. <!-- RUNDOCK:COMPLETE -->' }],
+      },
+      { match: { agent: 'chief-of-staff' }, turn: [{ text: '<silent>' }] },
+      { match: { agent: 'content-lead' }, turn: [{ text: '<silent>' }] },
+    ]);
+
+    client.send({ type: 'save_conversation', conversation: { id: convoId, agentId: 'chief-of-staff', title: 'Skip level' } });
+    // A live orchestrator to park, which is what makes this path different.
+    client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: 'open it' });
+    await client.waitFor(m => m.type === 'result' && m._conversationId === convoId, { label: 'orchestrator is live' });
+
+    client.send({ type: 'delegate', conversationId: convoId, targetAgent: 'content-lead', context: 'lead brief' });
+    await client.waitFor(m => m.type === 'system' && m.subtype === 'agent_switch'
+      && m._conversationId === convoId && m.toAgent === 'content-analyst', { label: 'down to the report' });
+    await client.waitFor(m => m.type === 'system' && m.subtype === 'agent_switch'
+      && m._conversationId === convoId && m.toAgent === 'chief-of-staff', { label: 'straight back to the orchestrator' });
+
+    const stored = storedConversation(convoId);
+    assert.ok(stored, 'the conversation was persisted');
+    assert.strictEqual(stored.delegationReturned, true,
+      'control skipped the lead and reached the base agent, so the record says so');
+  });
+});
