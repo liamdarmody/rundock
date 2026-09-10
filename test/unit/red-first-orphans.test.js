@@ -96,6 +96,31 @@ function scratch(name) {
   return path.join(os.tmpdir(), `red-first-orphans-${name}-${process.pid}-${Date.now()}`);
 }
 
+/**
+ * The group is running, and say so honestly when that cannot be measured.
+ *
+ * groupRunning answers null when the process table cannot be read, which is
+ * what a sandbox that blocks `ps` produces. Compared straight against true,
+ * that null reads as "the group is gone" and the check reports a FAILURE for a
+ * measurement it never made. It cost seven gate runs and a backlog card
+ * describing the result as a load flake, which sent the next reader looking at
+ * timing for hours.
+ *
+ * Same rule the gate's step ceiling already follows: a check that could not run
+ * says it reached no verdict, rather than claiming the thing it was measuring
+ * is broken.
+ */
+function assertGroupRunning(pgid, why) {
+  const answer = groupRunning(pgid);
+  if (answer === null) {
+    assert.fail('CANNOT MEASURE, not a failure of the thing being measured: the process '
+      + `table could not be read, so whether group ${pgid} is alive is unknown. This is what a `
+      + 'sandbox blocking `ps` looks like. Run this suite where the process table is readable; '
+      + 'do not read it as the group having gone.');
+  }
+  assert.strictEqual(answer, true, why);
+}
+
 function pidsIn(file) {
   if (!fs.existsSync(file)) return [];
   return fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).map(Number);
@@ -924,7 +949,7 @@ ${r.stdout}`);
       // Asked of the GROUP, not of the group's leader. The leader is the shell,
       // which has exited; what is left is the child it started, which is in the
       // group but is not the pid the group is named after.
-      assert.strictEqual(groupRunning(held.group), true,
+      assertGroupRunning(held.group,
         'and its suite must still be running, or there is nothing to refuse on');
 
       const second = cli(dir, 'echo this must never run');
@@ -937,7 +962,7 @@ ${r.stdout}`);
         `the refusal must name the command that group is running\n${second.stdout}`);
 
       // And refusing must not be a disguised way of clearing it.
-      assert.strictEqual(groupRunning(held.group), true,
+      assertGroupRunning(held.group,
         'the refusal must leave the suite it found alone');
     } finally {
       teardown({ dir, pidFiles: [file] });
