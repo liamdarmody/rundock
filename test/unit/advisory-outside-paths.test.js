@@ -87,7 +87,14 @@ describe('it stays quiet when there is nothing to say', () => {
   });
 
   test('a very long command yields a label, not an inventory', () => {
-    const many = Array.from({ length: 40 }, (_, i) => `/Users/someone/f${i}.txt`).join(' ');
+    // Real files, or the scan names none of them and this passes by finding
+    // nothing rather than by capping something.
+    const files = Array.from({ length: 40 }, (_, i) => {
+      const f = path.join(OUTSIDE_DIR, `f${i}.txt`);
+      fs.writeFileSync(f, 'x');
+      return f;
+    });
+    const many = files.join(' ');
     assert.ok(hook.advisoryOutsidePaths(`cat ${many}`, WS, []).length <= 8,
       'a card naming forty paths is a wall of text, which is the problem this '
       + 'set out to fix rather than a stronger version of the fix');
@@ -146,7 +153,7 @@ describe('a workspace whose path contains a space', () => {
   // space, which is entirely ordinary: "/Users/me/Documents/My Notes/work".
   //
   // The scan reads raw command text, so it splits that path at the space and
-  // produces "/Users/me/Documents/Obsidian" plus a fragment. Neither exists,
+  // produces "/Users/me/Documents/My" plus a fragment. Neither exists,
   // both resolve outside the workspace, and every ordinary command in that
   // workspace would have been labelled as reaching outside it.
   //
@@ -172,7 +179,11 @@ describe('a workspace whose path contains a space', () => {
   });
 
   test('a file about to be created outside is named', () => {
-    const command = 'curl https://x.example -o /private/tmp/claude/fresh.html';
+    // A REAL DIRECTORY THIS TEST MADE, not a platform path. This named
+    // /private/tmp/claude, which exists on macOS and not on Linux, so the scan
+    // correctly named nothing on CI and the assertion failed: the test was
+    // asserting a property of the machine rather than of the code.
+    const command = `curl https://x.example -o ${path.join(OUTSIDE_DIR, 'fresh.html')}`;
     const found = hook.advisoryOutsidePaths(command, WS_WITH_SPACE, []);
     assert.ok(found.some((p) => p.endsWith('fresh.html')),
       'writing somewhere outside is worth naming even before the file exists');
