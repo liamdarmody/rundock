@@ -17,7 +17,7 @@ const codexRuntime = require('./codex.js');
 const PKG_VERSION = require('./package.json').version;
 const searchLib = require('./search.js');
 const { resolvePermissionConvoId } = require('./permission-routing.js');
-const { resolveMarkers } = require('./lib/delegation/markers.js');
+const { resolveMarkers, noteHandoffMarker, HANDOFF_MODES } = require('./lib/delegation/markers.js');
 const { createHandbackBuilder } = require('./lib/delegation/handback.js');
 const { createDelegationRecord, attachDelegationRecord } = require('./lib/delegation/state.js');
 const config = require('./lib/config.js');
@@ -333,6 +333,7 @@ function stripRundockMarkers(t) {
     .replace(/<!-- RUNDOCK:DELEGATE agent=[\w-]+ -->\n?[\s\S]*/g, '')
     .replace(/<!-- RUNDOCK:RETURN -->/g, '')
     .replace(/<!-- RUNDOCK:COMPLETE -->/g, '')
+    .replace(/<!-- RUNDOCK:CONTINUE -->/g, '')
     .replace(/<!-- RUNDOCK:DOCS_GAP[^>]*-->/g, '')
     .replace(/<!-- RUNDOCK:(?:SAVE|CREATE)_AGENT name=[\w-]+ -->[\s\S]*?<!-- \/RUNDOCK:(?:SAVE|CREATE)_AGENT -->/g, '')
     .replace(/<!-- RUNDOCK:SAVE_SKILL name=[\w-]+ -->[\s\S]*?<!-- \/RUNDOCK:SAVE_SKILL -->/g, '')
@@ -973,10 +974,11 @@ function appendTranscript(convoId, role, agentId, text, type, meta) {
   // event can carry tool and skill STRUCTURE (counts and slugs, never
   // arguments); callers without one still produce a valid skinny event.
   if (role === 'agent') {
+    // Listed by hand, this counted two markers and could not see a third, so
+    // the telemetry would have reported a conversation with no handoffs while
+    // CONTINUE handbacks were happening in it.
     const resolved = resolveMarkers(text || '');
-    const markers = [];
-    if (resolved.hasReturn) markers.push('return');
-    if (resolved.hasComplete) markers.push('complete');
+    const markers = HANDOFF_MODES.filter((m) => resolved[`has${m[0].toUpperCase()}${m.slice(1)}`]);
     const toolCalls = (meta && meta.toolCalls) || [];
     recordEvent('turn', {
       conv: convoId, agent: agentId,
@@ -1515,17 +1517,14 @@ wss.on('connection', (ws) => {
                 // Detect scope return on a directly-started specialist. Either marker
                 // triggers a handoff to the orchestrator; scopeReturnMode selects the
                 // downstream behaviour (routing request vs silent exit).
-                const markers = resolveMarkers(e.responseText);
-                if (markers.mode && !e.delegation) {
-                  e.scopeReturn = true;
-                  // mode already applies COMPLETE-beats-RETURN precedence. This
-                  // is the site that once shipped with the precedence inverted,
-                  // which is why the rule now has exactly one implementation.
-                  e.scopeReturnMode = markers.mode;
-                  console.log(`[ScopeReturn] convo=${convoId} agent=${e.agentId} ${e.scopeReturnMode} marker on non-delegated process`);
+                // This is the site that once shipped with the precedence
+                // inverted, which is why the rule has exactly one
+                // implementation and every consumer calls it.
+                noteHandoffMarker(e, e.responseText, (mode) => {
+                  console.log(`[ScopeReturn] convo=${convoId} agent=${e.agentId} ${mode} marker on non-delegated process`);
                   // Follow-up in-window cancels the auto-return; post-kill messages buffer.
                   scheduleScopeReturnKill(e, convoId);
-                }
+                });
                 // Preserve the specialist output for handleScopeReturn:
                 // mirror the delegate path so a direct RETURN injects the real
                 // output into the orchestrator prompt, not an empty block.
@@ -1551,9 +1550,12 @@ wss.on('connection', (ws) => {
               // Pass wasPipelineComplete=true only when the specialist explicitly
               // signalled pipeline completion; out-of-scope returns get the routing prompt.
               if (entry.scopeReturn) {
-                const wasComplete = entry.scopeReturnMode === 'complete';
-                console.log(`[ScopeReturn] convo=${convoId} specialist ${entry.agentId} exited (${entry.scopeReturnMode}), spawning orchestrator (pipelineComplete=${wasComplete})`);
-                handleScopeReturn(entry, convoId, wasComplete);
+                // The MODE, not a boolean. Collapsing three markers into
+                // "complete or not" turned a CONTINUE from a directly started
+                // specialist into an out-of-scope return, which is the opposite
+                // of what it said.
+                console.log(`[ScopeReturn] convo=${convoId} specialist ${entry.agentId} exited (${entry.scopeReturnMode}), spawning orchestrator (mode=${entry.scopeReturnMode})`);
+                handleScopeReturn(entry, convoId, entry.scopeReturnMode);
                 return;
               }
 

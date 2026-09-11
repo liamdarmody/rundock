@@ -56,6 +56,9 @@ const REGISTRY_SUITES = [
   'test/unit/doc-links.test.js',
   // Every path that resumes an agent carries the catch-up it owes that agent.
   'test/unit/room-context-delta.test.js',
+  // The handoff markers the server recognises and the contract that names
+  // them: a marker in one and not the other is silently ignored at runtime.
+  'test/unit/handback-intent.test.js',
   // The client's global namespace and its stylesheet manifest.
   'test/unit/client-namespace.test.js',
   'test/unit/client-styles.test.js',
