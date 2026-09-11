@@ -42,7 +42,13 @@ async function openPackages(page) {
     }),
     { message: 'the packages field is on screen after asking for it' },
   ).toBe(true);
-  await expect(page.locator('#packages-source-path')).toBeVisible();
+  // THE POLL IS THE WAIT. A second, unforced assertion on the same element
+  // re-checks what the poll has already established, and can land during a
+  // re-render: it failed three separate merges in one day, once on a change
+  // that touched only CHANGELOG.md, which is as clear a demonstration as
+  // there is that it was measuring the renderer's timing rather than the
+  // product. The identical line was removed from the sibling test in this
+  // file during 0.13.3 and that one has been stable since.
 }
 
 // Seed a package source under the live workspace from the test process,
