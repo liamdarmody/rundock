@@ -4,7 +4,9 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
-## 0.13.3: Everyone In The Room (2026-09-11)
+## Unreleased
+
+**Name:** Everyone In The Room
 
 ### Fixed
 
