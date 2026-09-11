@@ -851,6 +851,11 @@ function openConversation(id, withAnchor) {
     // Show thinking indicator only if no text has been streamed yet.
     // If we have snapshot text, the stream is active and the bubble is unnecessary.
     if(!state.streamingRawText) {
+      // Same rule as the other two creation sites: never leave two elements
+      // holding this id. getElementById returns the first, so a second
+      // indicator means one bubble shows the agent's activity while another
+      // shows a bare "Thinking", and the activity can land in the wrong one.
+      const stale2 = document.getElementById('thinking-indicator'); if (stale2) stale2.remove();
       const d=document.createElement('div'); d.className='msg msg-agent'; d.id='thinking-indicator';
       d.innerHTML=RundockChatMarkup.thinkingIndicatorHtml(a);
       m2.appendChild(d);

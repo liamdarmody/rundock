@@ -143,6 +143,13 @@ function startProcessing(convoId) {
     // Use the active delegate agent during delegation, otherwise the conversation agent
     const activeId = state.activeAgentId || convo?.agentId;
     const a = (activeId && agents.find(x => x.id === activeId)) || convo?.agent || agents[0];
+    // ONE INDICATOR, BECAUSE AN ID MEANS ONE. A second element carrying this
+    // id can exist: the tool-status path re-creates the indicator below a
+    // streaming message, and a handoff then brings the next agent here to make
+    // another. getElementById returns the FIRST match, so the newer agent's
+    // tool activity was written into the previous agent's bubble while its own
+    // showed a bare "Thinking": Ren fetching pages inside Roo's speech bubble.
+    const stale = document.getElementById('thinking-indicator'); if (stale) stale.remove();
     const m=document.getElementById('messages'),d=document.createElement('div'); d.className='msg msg-agent'; d.id='thinking-indicator';
     d.innerHTML=RundockChatMarkup.thinkingIndicatorHtml(a);
     m.appendChild(d); scrollBottom();
@@ -660,6 +667,34 @@ function renderPermissionCard(d, convoId) {
   // never sends a whole-folder grantDir for one, but the card enforces this
   // itself too, rather than trusting that upstream alone.
   const wholeFolderOffered = grantable && !(flaggedCrossing && flaggedCrossing.secret);
+  // A COMMAND THAT REACHES OUTSIDE WITHOUT TRIPPING THE BOUNDARY CHECK.
+  //
+  // The boundary check inspects tokens that look like paths, which is the
+  // right basis for a decision: it does not guess. A path inside a quoted
+  // interpreter argument is not its own token, so `python3 -c
+  // "open('/Users/me/.ssh/id_rsa')"` reaches outside without being classified
+  // as a crossing. It is still carded, by the risk grader, because invoking an
+  // interpreter grades above the read-only commands that auto-approve. So the
+  // fact was already on the screen: the command text says exactly what it
+  // opens.
+  //
+  // What failed was the question being asked. The card said "may this command
+  // run", which is easy to approve while reading past the path inside it. Said
+  // out loud, it becomes "may this command run, knowing it reaches outside
+  // your workspace", which is the sentence that makes someone stop.
+  //
+  // This changes no decision. It adds a line to a card that was already being
+  // shown, and the scan behind it is deliberately kept out of every decision
+  // path, because it over-matches by design.
+  // READ OFF THE REQUEST, where every other field from the hook lives. Read
+  // off the top-level message it was always undefined, so the line this exists
+  // to add never appeared: the scan ran, the value travelled, and the card was
+  // worded as though it had not. `d` is kept as a fallback so a future
+  // transport that hoists the field does not silently lose it again.
+  const advisoryPaths = Array.isArray(req.advisory_outside_paths) ? req.advisory_outside_paths
+    : (Array.isArray(d.advisory_outside_paths) ? d.advisory_outside_paths : []);
+  const advisoryOnly = !boundary && advisoryPaths.length > 0;
+
   if (boundary) {
     const reads = toolName === 'Read' || toolName === 'Glob' || toolName === 'Grep';
     // A shell crossing does not say which act it is. The command may read,
@@ -730,6 +765,16 @@ function renderPermissionCard(d, convoId) {
   const card = document.createElement('div');
   card.className = 'msg msg-permission';
   card.id = 'perm-' + requestId;
+  if (advisoryOnly) {
+    const list = advisoryPaths.join(', ');
+    context = context
+      ? `${context} This command names a location outside your workspace: ${list}`
+      : `This command names a location outside your workspace: ${list}`;
+  }
+  // Shown at the weight of the question being asked. A command carrying an
+  // outside path is not automatically dangerous, and grading it as though it
+  // were would put a red card in front of ordinary work until the colour meant
+  // nothing.
   const renderRisk = boundary ? 'high' : risk;
   // Every value below is model-chosen: the tool name, the command text, the
   // file paths, up to 1500 characters of the content an agent wants to write.
@@ -776,7 +821,32 @@ function renderPermissionCard(d, convoId) {
   const t = document.getElementById('thinking-indicator');
   if (t) t.style.display = 'none';
 
-  m.appendChild(card);
+  // ABOVE THE RESPONSE BEING WRITTEN, not after it.
+  //
+  // A streaming bubble takes its place in the list when the agent STARTS
+  // speaking, and the final text is rendered back into that same element when
+  // the turn ends. Appending cards meanwhile put them below a response that
+  // had not been written yet, so a reader saw an agent's conclusion followed
+  // by approvals it had already been given before reaching it. Reported from
+  // real use: several approvals sitting under a message that could only have
+  // come after them.
+  //
+  // Inserting above the live bubble reads correctly and, unlike moving the
+  // finished message to the end, does not shift the text a person is midway
+  // through reading. A card belongs next to the work it interrupted.
+  // Positioning must never be able to stop a card rendering. getConvoState is
+  // an injected global, so a context that does not provide it (or a
+  // conversation with no live bubble) falls back to appending, which is the
+  // behaviour this replaced. A card in the wrong place is a reading annoyance;
+  // a card that throws is a decision the person never gets to make.
+  let live = null;
+  try {
+    live = (convoId && typeof getConvoState === 'function')
+      ? (getConvoState(convoId) || {}).currentStreamingMsg || null
+      : null;
+  } catch (e) { live = null; }
+  if (live && live.parentNode === m) m.insertBefore(card, live);
+  else m.appendChild(card);
   scrollBottom();
 }
 
