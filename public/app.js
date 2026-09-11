@@ -689,6 +689,9 @@ const EFFECT_EXECUTORS = {
     if (!status) {
       // Thinking indicator was removed when streaming started; re-add it below the streaming message
       const a = agents.find(x => x.id === ef.agentId) || activeConversation?.agent || agents[0];
+      // Same rule as the other creation site: never leave two elements holding
+      // this id, or the older one silently receives the newer agent's activity.
+      const stale = document.getElementById('thinking-indicator'); if (stale) stale.remove();
       const m = document.getElementById('messages'), el = document.createElement('div');
       el.className = 'msg msg-agent'; el.id = 'thinking-indicator';
       el.innerHTML = RundockChatMarkup.thinkingIndicatorHtml(a);

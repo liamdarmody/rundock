@@ -108,8 +108,10 @@ const SEQUENCE_TABLE = [
       '4:render-stream-text',
       // Orchestrator result carries DELEGATE: no finish-processing.
       '7:finalize-agent-message', '7:remove-thinking-indicator', '7:finalize-stream-bubble', '7:render-convo-list',
-      // Switch out to the specialist.
-      '8:clear-outgoing-working', '8:clear-streaming-bubble', '8:render-convo-list',
+      // Switch out to the specialist. The outgoing agent's thinking indicator
+      // goes with the switch: left behind, the tool-status handlers find it by
+      // id and write the specialist's activity into the orchestrator's bubble.
+      '8:clear-outgoing-working', '8:clear-streaming-bubble', '8:remove-thinking-indicator', '8:render-convo-list',
       '8:show-delegation-divider', '8:update-chat-header', '8:start-processing',
       '9:remove-permission-cards',
       '10:set-session',
@@ -119,7 +121,7 @@ const SEQUENCE_TABLE = [
       '16:finalize-agent-message', '16:remove-thinking-indicator', '16:finalize-stream-bubble',
       '16:finish-processing', '16:render-convo-list',
       // Switch back to the orchestrator: a return, so no start-processing here.
-      '17:clear-outgoing-working', '17:clear-streaming-bubble', '17:render-convo-list',
+      '17:clear-outgoing-working', '17:clear-streaming-bubble', '17:remove-thinking-indicator', '17:render-convo-list',
       '17:show-delegation-divider', '17:update-chat-header',
       // Orchestrator resumes via autoContinue.
       '18:remove-permission-cards', '18:start-processing',
@@ -581,7 +583,12 @@ test('agent_switch with marker-only streamed text promotes nothing', () => {
 test('agent_switch to an unknown agent: no divider, no header, no processing start', () => {
   const ctx = { ...SWITCH_CTX, toAgentExists: false, toAgentType: null, fromAgentExists: true };
   const r = reduce(createState(), seq.agentSwitch('cos', 'ghost', 'p2'), ctx);
-  assert.deepStrictEqual(types(r.effects), ['clear-outgoing-working', 'clear-streaming-bubble', 'render-convo-list']);
+  // remove-thinking-indicator joins the stream here: control has moved, so the
+  // outgoing agent's indicator describes nobody. Left in place, the tool-status
+  // handlers find it by id and write the INCOMING agent's activity into it,
+  // which put a specialist's file reads and web fetches inside the previous
+  // agent's bubble.
+  assert.deepStrictEqual(types(r.effects), ['clear-outgoing-working', 'clear-streaming-bubble', 'remove-thinking-indicator', 'render-convo-list']);
   assert.strictEqual(r.state.delegationActive, false);
   assert.strictEqual(r.state.activeAgentId, 'ghost');
 });

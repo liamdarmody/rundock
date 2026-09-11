@@ -59,6 +59,10 @@ const REGISTRY_SUITES = [
   // The handoff markers the server recognises and the contract that names
   // them: a marker in one and not the other is silently ignored at runtime.
   'test/unit/handback-intent.test.js',
+  // Every place that creates the thinking indicator clears the previous one.
+  'test/unit/single-thinking-indicator.test.js',
+  // The advisory label reaches the card and no decision line.
+  'test/unit/advisory-outside-paths.test.js',
   // The client's global namespace and its stylesheet manifest.
   'test/unit/client-namespace.test.js',
   'test/unit/client-styles.test.js',

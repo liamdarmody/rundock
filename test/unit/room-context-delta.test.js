@@ -230,7 +230,7 @@ describe('the orchestrator coming back is treated the same way', () => {
     const body = src.slice(at, src.indexOf('\nfunction ', at + 1));
     assert.match(body, /orchestratorSession \? \['--resume', orchestratorSession\]/,
       'the orchestrator keeps its own history across a handback');
-    assert.match(body, /deltaSince\(loadTranscript\(convoId\) \|\| \[\], orchestrator\.id, undefined, \[specialistEntry\.agentId\]\)/,
+    assert.match(body, /deltaSince\(loadTranscript\(convoId\) \|\| \[\], orchestrator\.id, undefined, \[specialistEntry\.agentId\], agentDisplayNames\(\)\)/,
       'and the returning specialist is excluded from its catch-up');
     assert.match(body, /resume=none/,
       'the log distinguishes a resumed orchestrator from a cold one, so a reader '
@@ -337,6 +337,13 @@ describe('the cap holds when both things happen at once', () => {
 });
 
 describe('every path that resumes an agent gives it the delta', () => {
+  // THESE ASSERTIONS ARE EXACT ON PURPOSE. When the names map was added they
+  // failed, because they pinned the call signature. They were changed to end
+  // in [,)] so either shape matched, described at the time as pinning "the
+  // arguments that matter while allowing the roster". That was a loosening
+  // dressed as a refinement: with it, dropping agentDisplayNames() from any
+  // call site restores id-only labelling in production and nothing goes red.
+  // The whole point of pinning a call is that its arguments are the rule.
   // THREE PATHS, NOT TWO. Review round 3 found the third: a mid-level parent,
   // a specialist that has its own direct reports, is resumed when its
   // sub-delegate hands back. It was given the sub-delegate's output and
@@ -352,16 +359,16 @@ describe('every path that resumes an agent gives it the delta', () => {
     // originalAgentId would hand a resumed delegate its own history back and
     // hide what it actually missed, and every test that exercises the pure
     // function with hand-picked ids would stay green.
-    assert.match(src, /deltaSince\(loadTranscript\(convoId\) \|\| \[\], targetAgent\.id\)/,
+    assert.match(src, /deltaSince\(loadTranscript\(convoId\) \|\| \[\], targetAgent\.id, undefined, \[\], agentDisplayNames\(\)\)/,
       "the target agent's own id, so the delta is what THAT agent missed");
   });
 
   test('the orchestrator delta excludes the specialist handing back', () => {
-    assert.match(src, /deltaSince\(loadTranscript\(convoId\) \|\| \[\], orchestrator\.id, undefined, \[specialistEntry\.agentId\]\)/);
+    assert.match(src, /deltaSince\(loadTranscript\(convoId\) \|\| \[\], orchestrator\.id, undefined, \[specialistEntry\.agentId\], agentDisplayNames\(\)\)/);
   });
 
   test('the mid-level parent gets one too, and excludes its returning delegate', () => {
-    assert.match(src, /deltaSince\(loadTranscript\(convoId\) \|\| \[\], parentAgentId, undefined, \[delegateEntry\.agentId\]\)/,
+    assert.match(src, /deltaSince\(loadTranscript\(convoId\) \|\| \[\], parentAgentId, undefined, \[delegateEntry\.agentId\], agentDisplayNames\(\)\)/,
       'the third resume path, found only because a reviewer walked all of them');
   });
 
@@ -538,5 +545,236 @@ describe('the separator between turns counts toward the cap', () => {
       assert.ok(out.clipped === 1 || out.truncated > 0,
         'content that did not fit must be accounted for somewhere the caller sees');
     }
+  });
+});
+
+describe('what the cap protects and what it spends', () => {
+  // TWO CHANGES MEASURED ON A REAL CONVERSATION, not guessed. In a live
+  // handoff the delta came to 11,650 of 12,000 characters and dropped two
+  // turns. Of that transcript, the user's own turns were 3.2% and tool-call
+  // summaries were 8.1%, and one of the two dropped turns was tool summary and
+  // nothing else.
+  //
+  // So: pin the user's turns, which carry the intent every later turn exists
+  // to serve and are the OLDEST thing in the window, hence the first thing a
+  // newest-first rule discards. And stop spending budget on a record of how
+  // work was done rather than what it found.
+  const { deltaSince, DELTA_CAP_CHARS } = require(path.join(ROOT, 'lib', 'store', 'transcripts.js'));
+
+  test("the user's original request survives a cap that drops agent turns", () => {
+    const t = [{ agent: 'vox', text: 'my earlier turn' },
+      { role: 'user', text: 'THE-ORIGINAL-REQUEST: write me a thread' }];
+    // Enough agent noise after it to bury the request many times over.
+    for (let i = 0; i < 30; i++) t.push({ agent: `a${i}`, text: 'x'.repeat(900) });
+    const out = deltaSince(t, 'vox');
+    assert.match(out.text, /THE-ORIGINAL-REQUEST/,
+      'the oldest turn is the first a newest-first rule drops, and it is the one '
+      + 'every later turn exists to serve');
+    assert.ok(out.truncated > 0, 'and this case genuinely did drop turns');
+    assert.ok(out.text.length <= DELTA_CAP_CHARS, 'while still respecting the cap');
+  });
+
+  test('several user turns are all kept, not just the first', () => {
+    const t = [{ agent: 'vox', text: 'mine' }];
+    for (let i = 0; i < 5; i++) {
+      t.push({ role: 'user', text: `USER-TURN-${i}` });
+      t.push({ agent: 'a', text: 'y'.repeat(3000) });
+    }
+    const out = deltaSince(t, 'vox');
+    for (let i = 0; i < 5; i++) {
+      assert.match(out.text, new RegExp(`USER-TURN-${i}`),
+        `user turn ${i} was dropped; the thread of intent has a hole in it`);
+    }
+  });
+
+  test('the delta reads in the order the conversation happened', () => {
+    // Pinning must not reorder. Every question first and every answer second
+    // is a different conversation from the one that took place.
+    const t = [{ agent: 'vox', text: 'mine' },
+      { role: 'user', text: 'FIRST-ASK' },
+      { agent: 'a', text: 'FIRST-ANSWER' },
+      { role: 'user', text: 'SECOND-ASK' },
+      { agent: 'b', text: 'SECOND-ANSWER' }];
+    const out = deltaSince(t, 'vox');
+    const order = ['FIRST-ASK', 'FIRST-ANSWER', 'SECOND-ASK', 'SECOND-ANSWER']
+      .map((k) => out.text.indexOf(k));
+    assert.ok(order.every((v) => v > -1), 'all four turns are present');
+    assert.deepStrictEqual(order, [...order].sort((a, b) => a - b),
+      'the delta is out of order, so the agent reads a conversation that did not happen');
+  });
+
+  test('a tool-call summary is not spent on', () => {
+    // THE REAL SHAPE. appendTranscript writes `toolSummary + '\n' + text`, so
+    // the summary is always its own line. The earlier fixture put both on one
+    // line, which no transcript contains, and a strip written to satisfy it
+    // had to match bracket groups character by character: that breaks on a
+    // bracket inside a command, which is ordinary, and glued the remainder of
+    // the summary onto the front of what the agent said.
+    const t = [{ agent: 'vox', text: 'mine' },
+      { agent: 'ren', text: '[ToolSearch] [Read /Users/x/a.md] [WebFetch https://x.com]\nthe finding that matters' }];
+    const out = deltaSince(t, 'vox');
+    assert.match(out.text, /the finding that matters/, 'what it found is kept');
+    assert.ok(!out.text.includes('WebFetch'),
+      'how it was done is not: that is a record for the conversation, not for '
+      + 'an agent being told what it missed');
+    assert.ok(!out.text.includes('ToolSearch'));
+  });
+
+  test('a command containing a bracket does not corrupt what was said', () => {
+    const t = [{ agent: 'vox', text: 'mine' },
+      { agent: 'ren', text: "[Bash grep '[abc]' file.txt]\nthe real finding" }];
+    const out = deltaSince(t, 'vox');
+    assert.strictEqual(out.text, 'REN: the real finding',
+      'the summary matched only as far as the bracket inside the command, and '
+      + "the remainder was glued to the front of the agent's own words");
+  });
+
+  test('a turn that is nothing but tool calls costs nothing', () => {
+    const t = [{ agent: 'vox', text: 'mine' },
+      { agent: 'ren', text: '[Read /a] [Read /b] [Grep c]' },
+      { agent: 'sage', text: 'the real content' }];
+    const out = deltaSince(t, 'vox');
+    assert.match(out.text, /the real content/);
+    assert.ok(!/REN:/.test(out.text),
+      'an entry with nothing left after stripping is not rendered as an empty '
+      + 'speaker line');
+  });
+});
+
+describe('who said what, in a conversation with several agents', () => {
+  // THE POINT OF THE WHOLE FEATURE is that an agent returning to a
+  // conversation can read it like a person who stepped out of the room. That
+  // requires knowing who spoke. Two things were in the way, both visible in a
+  // real delta:
+  //
+  //   RESEARCH-LEAD: Draft written. Now handing to Sage...
+  //   FACT-CHECKER: ...That's the full list, Ren
+  //   DEFAULT: Handing to Vox...
+  //   <!-- RUNDOCK:CONTINUE -->
+  //
+  // The turns are labelled with the ids they are filed under while the agents
+  // address each other by name in their own text, so the reader holds two
+  // naming schemes at once and `DEFAULT` names nobody. And another agent's
+  // handoff markers arrive as if they were something said.
+  const { deltaSince } = require(path.join(ROOT, 'lib', 'store', 'transcripts.js'));
+
+  const NAMES = { 'research-lead': 'Ren', 'fact-checker': 'Sage', default: 'Roo', vox: 'Vox' };
+  const convo = [
+    { agent: 'vox', text: 'my earlier draft' },
+    { role: 'user', text: 'get Ren to check it' },
+    { agent: 'research-lead', text: 'Handing to Sage to verify. <!-- RUNDOCK:CONTINUE -->' },
+    { agent: 'fact-checker', text: "That's the full list, Ren. <!-- RUNDOCK:RETURN -->" },
+    { agent: 'default', text: 'Handing back to Vox.' },
+  ];
+
+  test('each turn is labelled with the name the team uses', () => {
+    const out = deltaSince(convo, 'vox', undefined, [], NAMES);
+    assert.match(out.text, /^REN: /m, 'not RESEARCH-LEAD');
+    assert.match(out.text, /^SAGE: /m, 'not FACT-CHECKER');
+    assert.match(out.text, /^ROO: /m, 'not DEFAULT, which names nobody');
+    assert.match(out.text, /^USER: /m, 'and the person is distinguishable from every agent');
+  });
+
+  test('an id with no name still reads, rather than breaking', () => {
+    const out = deltaSince(convo, 'vox', undefined, [], { default: 'Roo' });
+    assert.match(out.text, /^RESEARCH-LEAD: /m,
+      'a roster that has changed under a running conversation degrades to the '
+      + 'id, which is worse to read and still true');
+  });
+
+  test('no roster at all is still a readable delta', () => {
+    const out = deltaSince(convo, 'vox');
+    assert.match(out.text, /^RESEARCH-LEAD: /m);
+    assert.match(out.text, /^USER: /m);
+  });
+
+  test("another agent's handoff markers are not shown as things it said", () => {
+    const out = deltaSince(convo, 'vox', undefined, [], NAMES);
+    assert.ok(!/RUNDOCK:(RETURN|COMPLETE|CONTINUE)/.test(out.text),
+      'a control signal between the server and one agent is not content for '
+      + 'another, and an agent reading a marker in its own context has been '
+      + 'handed something it may act on');
+    assert.match(out.text, /Handing to Sage to verify/, 'while what was said survives');
+  });
+});
+
+describe('the names come from the real roster', () => {
+  // NOT A HAND-BUILT MAP. Every attribution test above passes its own names
+  // object, which proves deltaSince uses what it is given and says nothing
+  // about what production gives it. agentDisplayNames is the function that
+  // decides, and its fallback chain (displayName, then name, then id) and its
+  // failure path are the parts that determine what a returning agent is
+  // called. Driven here rather than imitated.
+  // It lives with the roster, not with delegation: the engine's export
+  // surface is frozen to its factory and deps, and this is a roster question.
+  const roster = require(path.join(ROOT, 'lib', 'agents', 'discovery.js'));
+
+  test('it never throws, whatever discovery does', () => {
+    // A delta labelled by id still reads. One that throws takes the delegation
+    // with it, so this is the property that matters most.
+    assert.doesNotThrow(() => roster.agentDisplayNames());
+    assert.strictEqual(typeof roster.agentDisplayNames(), 'object');
+  });
+
+  test('a map it produces is usable by the renderer', () => {
+    const names = roster.agentDisplayNames();
+    const out = deltaSince([
+      { agent: 'vox', text: 'mine' },
+      { agent: 'research-lead', text: 'what I found' },
+    ], 'vox', undefined, [], names);
+    // With no workspace the map is empty and the id is the label; with a
+    // roster it is the name. Both must render.
+    assert.match(out.text, /^(REN|RESEARCH-LEAD): what I found/m,
+      'the real map must produce something the renderer can label a turn with');
+  });
+
+  test('the engine passes that function, not a literal', () => {
+    const fs = require('node:fs');
+    const src = fs.readFileSync(path.join(ROOT, 'lib', 'delegation', 'engine.js'), 'utf8');
+    const calls = (src.match(/deltaSince\(loadTranscript\(convoId\)[^;]*agentDisplayNames\(\)\)/g) || []).length;
+    assert.strictEqual(calls, 3,
+      'all three resume paths must build the map from the live roster, or one '
+      + 'of them silently labels turns with internal ids');
+  });
+});
+
+describe('many pinned turns cannot overflow the cap', () => {
+  // FOUND BY THE REVERT CHECK, not by review. Disabling the "no usable room"
+  // guard in clip() reddened nothing, which meant this behaviour had been
+  // verified by hand and never written down.
+  //
+  // Without that guard, once the budget is spent clip() returns just the
+  // ~62-character note, the admission loop sees a truthy value and keeps
+  // going, and every further user turn adds another placeholder. The assembled
+  // text runs past the cap, the final clamp cuts it at an arbitrary byte, and
+  // `truncated` has already counted every placeholder as kept: the same
+  // "nothing was lost" lie, one loop deeper.
+  const { deltaSince, DELTA_CAP_CHARS } = require(path.join(ROOT, 'lib', 'store', 'transcripts.js'));
+
+  function manyUserTurns(n, len) {
+    const t = [{ agent: 'vox', text: 'my earlier turn' }];
+    for (let i = 0; i < n; i++) t.push({ role: 'user', text: `U${i} ${'x'.repeat(len)}` });
+    return t;
+  }
+
+  test('three hundred short user turns still fit the cap', () => {
+    const out = deltaSince(manyUserTurns(300, 100), 'vox');
+    assert.ok(out.text.length <= DELTA_CAP_CHARS,
+      `text was ${out.text.length}, cap is ${DELTA_CAP_CHARS}`);
+  });
+
+  test('and the ones that did not fit are reported, not silently absent', () => {
+    const out = deltaSince(manyUserTurns(300, 100), 'vox');
+    assert.ok(out.truncated > 0,
+      'the turns beyond the cap were dropped while the count said none were');
+    assert.match(out.text, /earlier turns? omitted for length/,
+      'and the agent is told, rather than working from a partial account it '
+      + 'cannot see the edges of');
+  });
+
+  test('the oldest user turns are the ones kept, so the request survives', () => {
+    const out = deltaSince(manyUserTurns(300, 100), 'vox');
+    assert.match(out.text, /U0 /,
+      'the first thing asked is what every later turn exists to serve');
   });
 });

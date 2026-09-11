@@ -4,6 +4,34 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
+## 0.13.3: Everyone In The Room (2026-09-11)
+
+### Fixed
+
+- **An agent coming back knows what happened while it was away:** a specialist brought into a conversation after other agents had worked could not see any of it. It carried its own history and the brief it was handed, and nothing else, so it came back to its own draft as though the intervening work had never happened and rebuilt it from scratch. The orchestrator had it worse: it was started fresh on every handback, so it knew what the last specialist had just said and nothing about what you originally asked for, and briefed the next specialist from that empty picture. A request for a short blog post could come back, two handoffs later, as a request for a LinkedIn post. Every agent resumed into a conversation is now given the turns it missed since its own last turn, attributed by name so it reads as a record of a conversation rather than a list of identifiers. Its own earlier turns are left out, because its session already holds them, and so is the message it is being handed back, because that arrives separately. What you asked for is never dropped to make room: the request is the thing every later turn exists to serve, and it is the oldest, so it would otherwise be the first to go. Four separate paths return an agent to a conversation, and all four carry it.
+
+- **A specialist can say its part is done without ending the work:** an agent that finished its own piece and asked for the rest to be picked up was treated as having finished everything, and the conversation stopped there in silence, with no error and nothing on screen to say the request had been dropped. Finishing your part and finishing the request are now different things, and the second one carries on.
+
+- **A confirmation appears in the conversation that earned it:** creating or deleting an agent or a skill in one conversation announced itself in whichever conversation happened to be on screen, and a failure did the same. Every confirmation now travels with the conversation that asked for it.
+
+- **An agent's activity shows in its own bubble:** while one specialist handed over to another, the incoming agent's file reads and web searches appeared inside the previous agent's bubble, and one agent working alone could show two bubbles, one with its activity and one empty.
+
+- **An approval appears beside the work it interrupted:** approvals raised while an agent was writing landed below the finished response, so a conclusion appeared above the permissions that had been granted before it could have been reached.
+
+- **An agent's own working files no longer ask permission over and over:** an agent that saved a working file outside the workspace was asked to confirm every time it read the file back, with no way to answer once, because an approval for a folder and an approval for a command are different questions. Working files now stay inside the workspace where they belong, and the folder the runtime uses for its own is recognised.
+
+- **An approval for a command says when it reaches outside your workspace:** the question was whether a command could run, which is easy to agree to while reading past the file it opens.
+
+- **A delegation in flight survives the app quitting:** the conversation came back pointing at an agent that was no longer running, so the next message went nowhere useful.
+
+### Added
+
+- **Run a routine now:** a routine can be run on demand rather than only on its schedule, and it asks for your approval only when the plan has changed since you last agreed to it.
+
+### Changed
+
+- **Checks that cannot make their measurement say so:** a check that could not run reported the same result as one that ran and found nothing wrong, so a green result sometimes described a measurement that never happened.
+
 ## 0.13.2: Callouts That Read (2026-09-09)
 
 ### Fixed

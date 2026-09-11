@@ -140,19 +140,32 @@ describe('the spawn env, which is the only thing that makes any of this reach an
       config.setWorkspace(dir);
       claudeRuntime.wireClaudeRuntimeDeps({ getActualPort: () => 0 });
 
-      assert.strictEqual(claudeRuntime.getSpawnEnv().RUNDOCK_EXTRA_DIRS, '',
-        'nothing named is an empty value, never an absent one');
+      // WHAT THE PERSON CHOSE, PLUS WHAT RUNDOCK NAMES FOR THEM. The runtime's
+      // own scratch root is named on every workspace's behalf: an agent that
+      // hardcodes /tmp instead of the redirected temp path would otherwise
+      // raise an approval card on every read of a file it wrote itself, and no
+      // grant can answer a shell crossing. Asserted as a set rather than a
+      // string so this test states the contract it means: the stored folders
+      // all reach the agent, and removals take effect immediately.
+      const dirsIn = () => (claudeRuntime.getSpawnEnv().RUNDOCK_EXTRA_DIRS || '')
+        .split(path.delimiter).filter(Boolean);
+      const builtin = wf.builtinWorkingFolders();
+
+      assert.deepStrictEqual(dirsIn(), builtin,
+        'with nothing stored, an agent is born with exactly what Rundock names');
 
       wf.writeWorkingFolders([a, b]);
-      assert.strictEqual(claudeRuntime.getSpawnEnv().RUNDOCK_EXTRA_DIRS,
-        [a, b].map(p => path.resolve(p)).join(path.delimiter),
-        'the stored folders are what an agent is born with');
+      assert.deepStrictEqual(dirsIn(), [...[a, b].map(p => path.resolve(p)), ...builtin],
+        'the stored folders are what an agent is born with, in order, ahead of '
+        + 'the built-in one');
 
       // The value is read at every spawn, so the very next call reflects the
       // change with nothing reloaded and nothing restarted.
       wf.writeWorkingFolders([a]);
-      assert.strictEqual(claudeRuntime.getSpawnEnv().RUNDOCK_EXTRA_DIRS, path.resolve(a),
+      assert.deepStrictEqual(dirsIn(), [path.resolve(a), ...builtin],
         'a removal reaches the next agent immediately');
+      assert.ok(!dirsIn().includes(path.resolve(b)),
+        'and the removed folder is genuinely gone, not merely reordered');
     } finally {
       config.setWorkspace(original);
       for (const d of [dir, a, b]) fs.rmSync(d, { recursive: true, force: true });

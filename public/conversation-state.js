@@ -258,6 +258,17 @@
     next.latestAgentId = null;
     next.hasStreamingBubble = false;
     effects.push({ type: 'clear-streaming-bubble' });
+    // AND THE OUTGOING AGENT'S THINKING INDICATOR. Control has moved, so that
+    // indicator describes nobody. Left in place it is not merely stale: the
+    // tool-status handlers find it by id and write the INCOMING agent's
+    // activity into it, so a specialist's file reads and web fetches appeared
+    // inside the previous agent's bubble while its own showed a bare
+    // "Thinking". Reported from real use, two levels deep.
+    // Only for the conversation on screen. This reaches into the DOM by id,
+    // and the DOM belongs to whichever conversation is being viewed: ungated,
+    // a handoff in a background conversation would strip the indicator from
+    // the one the person is actually watching.
+    if (ctx.isActive) effects.push({ type: 'remove-thinking-indicator' });
     effects.push({ type: 'render-convo-list' });
     // A return goes back to the orchestrator; anything else is a forward
     // delegation (orchestrator->specialist or specialist->sub-specialist).

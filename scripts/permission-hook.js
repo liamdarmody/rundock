@@ -656,6 +656,94 @@ function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), 
   return found;
 }
 
+// ADVISORY ONLY: what the command APPEARS to reach, for labelling a card.
+//
+// This never decides anything. It cannot allow, deny, or grant. Its single job
+// is to answer "should this card also say the command reaches outside your
+// workspace", and it is deliberately kept away from `crossings`, which is what
+// the server acts on.
+//
+// WHY IT EXISTS. shellCrossings tokenises the command and inspects tokens that
+// look like paths, which is the right basis for a DECISION: it does not guess.
+// A path inside a quoted interpreter argument is not its own token, so the
+// tokeniser does not see it:
+//
+//   cat /Users/me/.ssh/id_rsa                      -> a crossing, carded
+//   python3 -c "print(open('/Users/me/.ssh/id_rsa').read())"  -> not a crossing
+//
+// The second is still carded, by the risk grader, because an interpreter
+// invocation grades above "low". So nothing here is silently allowed. What was
+// wrong is what the card SAID: it asked whether a python command may run,
+// without mentioning that the command reads a file outside the workspace. The
+// facts were on screen in a form that is easy to approve without noticing.
+//
+// Measured across the shapes that evade the tokeniser (python -c, node -e,
+// sh -c, awk getline, command substitution): every one is carded by the risk
+// grader. The gap is a labelling gap, not a bypass, and this closes it by
+// adding information to a card that was already being shown.
+//
+// It scans the raw text, so it over-matches: a path in a comment, in a URL
+// path, or in prose counts. Over-matching is the correct failure direction for
+// a label. It is not the correct failure direction for a decision, which is
+// why this value is kept out of every decision path.
+function advisoryOutsidePaths(command, workspaceRoot, extraDirs = [], home = os.homedir(), foldsCase = hostFoldsCase()) {
+  if (typeof command !== 'string' || !command) return [];
+  // URLs first, whole. Matching starts after the scheme, so `https://host/a/b`
+  // otherwise yields `//host/a/b`, which resolves to a plausible-looking
+  // absolute path and would put "reaches outside your workspace" on every
+  // command that fetches a page. A label that cries wolf is the failure this
+  // is meant to fix.
+  const text = command.replace(/\b[a-z][a-z0-9+.-]*:\/\/\S+/gi, ' ');
+  const out = [];
+  const seen = new Set();
+  // Absolute POSIX paths, ~-rooted paths, and Windows drive paths, wherever
+  // they sit: inside quotes, inside a larger word, adjacent to punctuation.
+  const re = /(?:~|\$HOME)?\/(?:[\w.@+~-]+\/)*[\w.@+~-]+|[A-Za-z]:\\(?:[\w.@+~ -]+\\)*[\w.@+~ -]+/g;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    let t = m[0];
+    if (URL_SCHEME.test(t) || t.startsWith('//')) continue;
+    for (const rx of HOME_PREFIX) {
+      if (rx.test(t)) { t = t.replace(rx, home); break; }
+    }
+    if (!t.startsWith('/') && !WIN_DRIVE.test(t)) continue;
+    let resolved;
+    try {
+      const pmod = flavourFor(t, workspaceRoot);
+      resolved = canonicalize(pmod.resolve(pmod.resolve(workspaceRoot), t), pmod);
+      if (insideWorkspaceRoot(resolved, workspaceRoot, pmod)) continue;
+      if (namedFolderCovers(resolved, extraDirs, pmod, home, foldsCase)) continue;
+    } catch (e) { continue; }
+    // IT MUST NAME SOMETHING REAL. Scanning raw text splits a path at a space,
+    // and workspace paths contain spaces: "/Users/me/Documents/My Notes/site"
+    // yields "/Users/me/Documents/My" plus a fragment,
+    // neither of which exists and both of which resolve outside the workspace.
+    // Unfiltered, this labelled every ordinary command in such a workspace as
+    // reaching outside it: the cry-wolf failure a label exists to avoid, worse
+    // than saying nothing because it teaches the reader to skip the line.
+    //
+    // Existing, or a parent that exists, so a command writing a new file is
+    // still named. A path that matches neither is a fragment, not a target.
+    try {
+      if (!fs.existsSync(resolved)) {
+        // Not there. It is worth naming only if it looks like a file about to
+        // be created: an existing parent AND a final segment with a suffix.
+        // "/Users/me/Documents/My" passes the parent test and is still a
+        // fragment of a folder named "My Notes", so the parent test alone is
+        // not enough in exactly the workspaces where this matters most.
+        const parent = path.dirname(resolved);
+        const leaf = path.basename(resolved);
+        if (!fs.existsSync(parent) || !/\.[A-Za-z0-9]{1,8}$/.test(leaf)) continue;
+      }
+    } catch (e) { continue; }
+    if (seen.has(resolved)) continue;
+    seen.add(resolved);
+    out.push(resolved);
+    if (out.length >= 8) break; // a label, not an inventory
+  }
+  return out;
+}
+
 function classifyShellAccess(toolName, toolInput, workspaceRoot, extraDirs = [], home = os.homedir(), foldsCase = hostFoldsCase()) {
   if (!SHELL_TOOLS.has(toolName)) return null;
   const ti = toolInput || {};
@@ -673,6 +761,7 @@ function classifyShellAccess(toolName, toolInput, workspaceRoot, extraDirs = [],
 
 module.exports = {
   isProtectedClaudeEdit, isRuntimeHomeSurfaceEdit, isMcpReadTool, classifyFileAccess, classifyShellAccess, canonicalize,
+  advisoryOutsidePaths,
   isSecretPath, isPersistenceSurface, SECRET_RELATIVE_PATHS, PERSISTENCE_SURFACE_DIRS, PERSISTENCE_SURFACE_FILES,
   REFUSED_CLAUDE_EDIT_DIRS, READ_ONLY_SHELL_COMMANDS, READ_ONLY_POWERSHELL_COMMANDS, isReadOnlyShellCommand,
 };
@@ -832,11 +921,19 @@ process.stdin.on('end', () => {
       }])
     : [];
 
+  // LABEL, NOT A DECISION. Sent under its own name so it can never be mistaken
+  // for `crossings`, which is what the server acts on. The server must not read
+  // this when deciding; the client reads it when wording the card.
+  const advisory = SHELL_TOOLS.has(data.tool_name)
+    ? advisoryOutsidePaths((data.tool_input || {}).command, wsRoot, extraDirs)
+    : [];
+
   const payload = JSON.stringify({
     tool_name: data.tool_name,
     tool_input: data.tool_input || {},
     session_id: data.session_id,
     conversation_id: convoId,
+    ...(advisory.length ? { advisory_outside_paths: advisory } : {}),
     ...(access && access.where === 'outside'
       ? {
           boundary: true,

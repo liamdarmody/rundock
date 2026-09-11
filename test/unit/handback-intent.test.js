@@ -391,15 +391,45 @@ describe('a handoff marker never survives into text a person or an agent reads',
   const fs = require('node:fs');
   const { MARKER_TEXT } = require(path.join(ROOT, 'lib', 'delegation', 'markers.js'));
 
+  // THREE STRIPPERS, NOT TWO. The delta renderer strips markers too, and it
+  // was added in the same change that consolidated the other two: a fourth
+  // independent copy of the marker names, in a file that cannot import the
+  // resolver without lib/store depending on lib/delegation. Registered here
+  // rather than left to drift, because "we consolidated the marker handling"
+  // and "every place that handles markers is consolidated" are different
+  // claims and only the second is worth anything.
   const STRIPPERS = [
     { file: 'server.js', fn: 'stripRundockMarkers',
       where: 'sanitises specialist output before it enters an orchestrator prompt' },
     { file: 'public/markers.js', fn: 'stripMarkers',
-      where: 'the client mirror, used for rendered text and conversation previews' }
+      where: 'the client mirror, used for rendered text and conversation previews' },
+    { file: 'lib/store/transcripts.js', fn: 'renderDeltaEntryBody',
+      where: "the catch-up delta, so one agent never reads another's control markers",
+      // Driven rather than read. This one strips via a constant the function
+      // references, so a source check on the function body would miss it, and
+      // widening the window until it matched would be tuning the test to the
+      // implementation. Running it proves the thing the guard is for.
+      probe: () => {
+        const { deltaSince } = require(path.join(ROOT, 'lib', 'store', 'transcripts.js'));
+        const out = deltaSince([
+          { agent: 'vox', text: 'mine' },
+          { agent: 'ren', text: `done ${MARKER_TEXT.continue} ${MARKER_TEXT.complete} ${MARKER_TEXT.return}` }
+        ], 'vox');
+        return out.text || '';
+      } }
   ];
 
-  for (const { file, fn, where } of STRIPPERS) {
+  for (const { file, fn, where, probe } of STRIPPERS) {
     test(`${fn} removes every handoff marker (${where})`, () => {
+      if (probe) {
+        const out = probe();
+        for (const [mode, marker] of Object.entries(MARKER_TEXT)) {
+          assert.ok(!out.includes(marker),
+            `${file}: ${fn} left ${mode}'s marker in the text an agent reads`);
+        }
+        assert.match(out, /done/, 'while what was actually said survives');
+        return;
+      }
       const src = fs.readFileSync(path.join(ROOT, file), 'utf8');
       const at = src.indexOf(`function ${fn}`);
       assert.ok(at > -1, `${file}: ${fn} is still here`);
@@ -427,5 +457,47 @@ describe('a handoff marker never survives into text a person or an agent reads',
       assert.ok(!out.includes(marker), `${marker} survived stripping`);
       assert.match(out, /done here/, 'and the real text is kept');
     }
+  });
+});
+
+describe('an agent is told which agents it may call', () => {
+  // WHY THE BLOCK KEPT FIRING. The server refuses a delegation to an agent
+  // that is not the caller's direct report, kills the turn, and resumes the
+  // caller with a correction. That guard works. What made it fire was a gap
+  // in the contract: the orchestrator is told "only delegate to agents listed
+  // in YOUR TEAM below", and a lead with its own support team was told no such
+  // thing. It sees other agents' names in the conversation, has work that
+  // suits one of them, and nothing tells it they are out of reach.
+  //
+  // Observed: a research lead calling a content writer, blocked, the turn
+  // spent, the user shown an error about direct reports they cannot act on.
+  const fs = require('node:fs');
+  const src = fs.readFileSync(path.join(ROOT, 'lib', 'agents', 'prompt.js'), 'utf8');
+
+  function branch(fromMarker, toMarker) {
+    const at = src.indexOf(fromMarker);
+    assert.ok(at > -1, `${fromMarker} is still here`);
+    const end = src.indexOf(toMarker, at);
+    assert.ok(end > at, `${toMarker} still follows it`);
+    return src.slice(at, end);
+  }
+
+  test('a lead is told its support team is the whole list', () => {
+    const lead = branch('You have a support team.', "'YOUR SUPPORT TEAM:',");
+    assert.match(lead, /Only delegate to the team members listed/,
+      'without this the guard is the only thing standing between a lead and a '
+      + 'call it cannot make, and the guard costs a whole turn to say no');
+  });
+
+  test('and told what to do instead, not only what it cannot do', () => {
+    const lead = branch('You have a support team.', "'YOUR SUPPORT TEAM:',");
+    assert.match(lead, /hand back so their leader can route it/,
+      'a rule that only forbids invites a workaround; this names the mechanism '
+      + 'that actually reaches the other agent');
+  });
+
+  test('the orchestrator keeps the equivalent rule it always had', () => {
+    assert.match(src, /Only delegate to agents listed in YOUR TEAM below/,
+      'the rule that was present for one role and missing for the other');
   });
 });
