@@ -83,7 +83,20 @@ const LONG = 600000 + (process.pid % 991);
 
 const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-async function until(predicate, ms = 20000) {
+// A CEILING ON PATIENCE, NOT A HOPE. What this waits for is a real process
+// tree starting: node spawns the gate, the gate reaches its mutation step, the
+// step spawns a harness, and the harness writes its pid. Under the parallel
+// load of the full suite that took 19.1 seconds against a 20 second budget and
+// failed a release twice in a row, on a change that touched only CHANGELOG.md.
+//
+// Raised rather than removed, and deliberately not the same call as the
+// end-to-end flake fixed earlier in this release: there a poll had already
+// established the condition and a second assertion re-checked it, so more time
+// would have hidden a redundancy. Here the wait is the right mechanism and the
+// number was simply smaller than a loaded machine. A gate that genuinely never
+// starts still fails, one minute later instead of twenty seconds later, and
+// that difference costs nothing because it is the failing case.
+async function until(predicate, ms = 60000) {
   const deadline = Date.now() + ms;
   while (Date.now() < deadline) {
     if (predicate()) return true;
