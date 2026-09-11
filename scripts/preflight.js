@@ -235,7 +235,21 @@ function main() {
   for (const c of CHECKS) results.push(run(c.name, 'npm', c.args));
   // One process for all the registry suites: they are small, and the node test
   // runner reports each file's failures without stopping at the first.
-  results.push(run('registries', process.execPath, ['--test', '--test-reporter=spec', ...REGISTRY_SUITES]));
+  // ONE AT A TIME, BECAUSE THIS RUNS INSIDE A TEST RUN TOO.
+  //
+  // preflight.test.js spawns this whole script to prove the phase really
+  // executes the suites it names, and it does so while the outer suite is
+  // running those same suites. Both copies then read the same source tree and
+  // temp roots at once, and the registry suites are the ones that walk files.
+  // Measured: three separate gate runs failed here on a change that touched
+  // only CHANGELOG.md, and every one of those suites passed alone immediately
+  // afterwards.
+  //
+  // Serialising the nested run removes the contention rather than waiting it
+  // out. The suites are small: the step costs a few seconds more and stops
+  // failing for reasons that have nothing to do with the change under test.
+  results.push(run('registries', process.execPath,
+    ['--test', '--test-concurrency=1', '--test-reporter=spec', ...REGISTRY_SUITES]));
 
   // The captures, checked together and reported with the rest.
   const captures = staleCaptures();
