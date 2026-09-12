@@ -152,11 +152,18 @@ describe('the delta reaches the delegate', () => {
     // intercepted Agent call, which got the brief alone and could not see a
     // draft written earlier in the same conversation.
     //
-    // Now: everyone except Codex, whose prompt assembly is separate, and
-    // except the cold spawn already receiving a full transcript, which would
-    // otherwise be sent the same conversation twice.
-    assert.match(src, /const needsCatchUp = !isCodexDelegate && !needsTranscript;/,
+    // Now: everyone except the cold spawn already receiving a full transcript,
+    // which would otherwise be sent the same conversation twice.
+    //
+    // Codex used to be excluded here too, on the stated reasoning that its
+    // prompt assembly is separate. It is not separate for this: both Codex
+    // branches already send contextWithHistory, which is what carries the
+    // catch-up, so the exclusion withheld context from a Codex delegate
+    // arriving cold and nothing else.
+    assert.match(src, /const needsCatchUp = !needsTranscript;/,
       'the catch-up is built for arriving delegates as well as returning ones');
+    assert.doesNotMatch(src, /needsCatchUp = [^;]*isCodexDelegate/,
+      'and is not gated on which runtime the delegate happens to use');
     assert.match(src, /const arriving = !priorSessionId;/,
       'and which of the two it is decides the heading it carries');
     assert.match(src, /buildDelegateContext\(\{ transcript, missed, brief: msg\.context, arriving \}\)/,
@@ -388,7 +395,10 @@ describe('every path that resumes an agent gives it the delta', () => {
   });
 
   test('all three are gated on actually having been resumed', () => {
-    assert.match(src, /const needsCatchUp = !isCodexDelegate && !needsTranscript;/, 'delegate');
+    // The name of this test was always the right rule; the assertion pinned a
+    // line that did not implement it. The delegate's gate read "not Codex",
+    // which is not a statement about having been resumed at all.
+    assert.match(src, /const needsCatchUp = !needsTranscript;/, 'delegate');
     assert.match(src, /orchestratorSession\s*\n?\s*\? deltaSince/, 'orchestrator');
     assert.match(src, /parentSessionId\s*\n?\s*\? deltaSince/, 'mid-level parent');
   });
@@ -824,4 +834,37 @@ test('an arriving agent that has spoken before is still given the whole conversa
   assert.ok(!returning.text.includes('PENN-FIRST-DRAFT'),
     'a returning agent is not re-sent its own turn');
   assert.match(returning.text, /ARLO-RESEARCH/, 'only what it missed');
+});
+
+// THE CAP, FOR AN ARRIVING AGENT SPECIFICALLY.
+//
+// An arriving agent is given the conversation from the beginning rather than a
+// slice from its own last turn, so it is the case where the cap does the most
+// work and the one where exceeding it costs the most. The cap was covered for
+// returning agents and taken on trust here, which is the shape of an untested
+// criterion: the code path most likely to overrun was the one nothing measured.
+test('an arriving agent gets a capped, attributed catch-up, and is told what was left out', () => {
+  // Display names deliberately DIFFERENT from the slugs. Names matching their
+  // slugs would pass whether the map was consulted or ignored, which is the
+  // assertion-that-cannot-fail this suite has already been caught writing once.
+  const names = { roo: 'Rosalind', arlo: 'Arlington', penn: 'Penelope' };
+  const transcript = [
+    { role: 'user', agent: 'user', text: 'start' },
+    { role: 'agent', agent: 'roo', text: 'OLDEST ' + 'x'.repeat(DELTA_CAP_CHARS) },
+    { role: 'agent', agent: 'arlo', text: 'MIDDLE ' + 'y'.repeat(DELTA_CAP_CHARS) },
+    { role: 'agent', agent: 'penn', text: 'NEWEST turn, the one that matters most' },
+  ];
+  const d = deltaSince(transcript, 'penn', undefined, [], names, true);
+
+  assert.ok(d.text.length <= DELTA_CAP_CHARS,
+    `the assembled text stays within the cap (was ${d.text.length} of ${DELTA_CAP_CHARS})`);
+  assert.ok(d.truncated > 0 || d.clipped > 0,
+    'and says something was left out rather than silently shortening the conversation');
+  // Attribution survives the cap: a catch-up that drops the speaker labels
+  // hands the agent a wall of text it cannot tell apart.
+  assert.match(d.text, /PENELOPE:/, 'turns are attributed by the name the team uses');
+  assert.doesNotMatch(d.text, /\bPENN:/, 'and by that name rather than the slug underneath it');
+  // The newest turn is the one an arriving agent most needs; the cap must not
+  // spend its whole budget on the oldest and drop it.
+  assert.match(d.text, /NEWEST/, 'the most recent turn survives the cap');
 });
