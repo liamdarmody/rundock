@@ -448,4 +448,43 @@ describe('codex agent conversation', () => {
     assert.match(prompt, /check these two suppliers/, 'alongside the brief it was sent with');
     h.reapConvo(convoId);
   });
+
+  // THE OTHER DIRECTION, so the derivation is proven to discriminate rather
+  // than proven to produce one answer. A codex delegate with a thread id the
+  // validator ACCEPTS is resuming, holds its own history in that thread, and
+  // must be told only what it missed. A suite that only ever asserts the
+  // arriving case would pass just as happily if everything were called an
+  // arrival, which is the failure this card keeps producing in other forms.
+  test('a codex delegate whose stored thread id is valid is told what it missed, not the whole conversation', async () => {
+    const convoId = h.freshConvoId('cdx-valid-thread');
+    h.internal.convoTranscripts.set(convoId, [
+      { role: 'user', agent: 'user', text: 'find me two suppliers' },
+      { role: 'agent', agent: 'researcher', text: 'IDA-OWN-EARLIER-TURN: I shortlisted three' },
+      { role: 'agent', agent: 'chief-of-staff', text: 'COS-WHILE-AWAY: the budget changed' },
+    ]);
+    h.internal.saveTranscript(convoId);
+    // Accepted by the thread-id check, so the resume genuinely happens.
+    h.internal.writeConversations([{
+      id: convoId, title: 'valid thread', messages: [],
+      sessionIds: [{ agentId: 'researcher', sessionId: '0199f0a1-2b3c-7d4e-8f90-1a2b3c4d5e6f' }],
+    }]);
+    h.internal.chatProcesses.set(convoId, {
+      agentId: 'chief-of-staff', processId: 'p-cdx-parent2', exited: false, toolCalls: [],
+    });
+    const before = h.codexTurnPrompts().length;
+
+    h.internal.handleDelegation({
+      conversationId: convoId, targetAgent: 'researcher',
+      context: 'narrow it to two', _intercepted: true,
+    }, h.internal.chatProcesses);
+
+    await h.waitUntil(() => h.codexTurnPrompts().length > before, 'the codex delegate was prompted');
+    const prompt = h.codexTurnPrompts()[before];
+    assert.match(prompt, /SINCE YOUR LAST TURN/, 'a real resume is told what it missed');
+    assert.doesNotMatch(prompt, /BEFORE YOU JOINED/, 'and is not told it is walking in');
+    assert.match(prompt, /COS-WHILE-AWAY/, 'what happened while it was away is there');
+    assert.doesNotMatch(prompt, /IDA-OWN-EARLIER-TURN/,
+      'and its own earlier turn is not re-sent: the thread it is resuming already holds it');
+    h.reapConvo(convoId);
+  });
 });
