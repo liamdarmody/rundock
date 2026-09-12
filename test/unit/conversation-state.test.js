@@ -593,6 +593,42 @@ test('agent_switch to an unknown agent: no divider, no header, no processing sta
   assert.strictEqual(r.state.activeAgentId, 'ghost');
 });
 
+test('a silent agent_switch draws no divider but still clears the outgoing agent and moves control', () => {
+  // THE REGRESSION THIS PINS. A pipeline-complete handback spawns the
+  // orchestrator only to park, and drawing its arrival showed an agent joining
+  // and then doing nothing, which reads as a hang. That was first fixed by not
+  // sending the switch at all, on the stated reasoning that nothing downstream
+  // depended on it. Four things do: activeAgentId, delegationActive, the
+  // outgoing agent's working indicator, and the chat header. Withholding the
+  // message left the conversation marked delegated with the DEPARTED
+  // specialist still showing as working, which is the same hang moved onto the
+  // other agent, and it went unnoticed because the only test watched for the
+  // divider rather than for any of those.
+  const ctx = { ...SWITCH_CTX, toAgentType: 'orchestrator' };
+  const msg = { ...seq.agentSwitch('dev', 'cos', 'p3'), silent: true };
+  const r = reduce({ ...createState(), activeAgentId: 'dev', delegationActive: true }, msg, ctx);
+
+  assert.strictEqual(r.effects.find(e => e.type === 'show-delegation-divider'), undefined,
+    'nothing is drawn for an agent that will say nothing');
+  assert.ok(r.effects.some(e => e.type === 'clear-outgoing-working' && e.outgoingAgentId === 'dev'),
+    'but the agent that left stops showing as working, which is the whole point');
+  assert.ok(r.effects.some(e => e.type === 'remove-thinking-indicator'),
+    'and its thinking indicator goes, so the next agent\'s activity is not written into it');
+  assert.ok(r.effects.some(e => e.type === 'update-chat-header' && e.toAgentId === 'cos'),
+    'and the header names who actually holds the conversation now');
+  assert.strictEqual(r.state.activeAgentId, 'cos', 'control really moved');
+  assert.strictEqual(r.state.delegationActive, false, 'and the conversation is no longer delegated');
+});
+
+test('a switch that is not silent still draws the divider', () => {
+  // The other direction, so the flag is proven to be what decides rather than
+  // the divider having quietly stopped being emitted at all.
+  const ctx = { ...SWITCH_CTX, toAgentType: 'orchestrator' };
+  const r = reduce(createState(), seq.agentSwitch('dev', 'cos', 'p3'), ctx);
+  assert.ok(r.effects.some(e => e.type === 'show-delegation-divider'),
+    'an ordinary return is still announced in the conversation');
+});
+
 test('agent_switch on an inactive conversation updates state but skips the view effects', () => {
   const r = reduce(createState(), seq.agentSwitch('cos', 'dev', 'p2'), { ...SWITCH_CTX, isActive: false });
   assert.deepStrictEqual(types(r.effects), ['clear-outgoing-working', 'clear-streaming-bubble', 'render-convo-list', 'start-processing']);
