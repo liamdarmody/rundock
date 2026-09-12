@@ -580,3 +580,87 @@ describe('an agent says why it arrived, or does not appear to', () => {
       'the process start is not gated on the handback mode either');
   });
 });
+
+// EVERY RESTORATION PATH, COUNTED.
+//
+// The first fix for the phantom arrival reached one restoration path of four,
+// and nothing failed, because no test knew how many paths there were. Counting
+// them is the point of this test: a fifth path added later without a silence
+// decision fails here rather than shipping an arrival for an agent that will
+// never speak.
+//
+// Source-shaped deliberately, and paired with the behavioural cover in
+// conversation-state.test.js, which proves what the flag DOES. This proves
+// where it is present. Neither alone is enough: the behavioural tests cannot
+// see a path nobody wired, and this cannot see a flag that does nothing.
+describe('every agent_switch either decides silence or is a forward delegation', () => {
+  const fs = require('node:fs');
+  const engineSrc = fs.readFileSync(path.join(ROOT, 'lib', 'delegation', 'engine.js'), 'utf8').split('\n');
+
+  const sends = [];
+  engineSrc.forEach((line, i) => {
+    if (line.includes("subtype: 'agent_switch'")) {
+      sends.push({ line: i + 1, decidesSilence: /silent/.test(engineSrc.slice(i, i + 6).join(' ')) });
+    }
+  });
+
+  test('there are exactly five, and four of them restore an agent', () => {
+    assert.strictEqual(sends.length, 5,
+      `expected 5 agent_switch sends, found ${sends.length} at lines ${sends.map(s => s.line).join(', ')}. `
+      + 'A new one must decide whether the agent it restores will speak, or say why it is a forward delegation.');
+    const deciding = sends.filter((s) => s.decidesSilence);
+    assert.strictEqual(deciding.length, 4,
+      `expected 4 restoration sends to decide silence, found ${deciding.length}`);
+  });
+
+  test('the one that does not decide is the forward delegation, which always draws', () => {
+    // A forward delegation is always worth drawing: the delegate is spawned to
+    // work, so an arrival there is never a phantom.
+    const undecided = sends.filter((s) => !s.decidesSilence);
+    assert.strictEqual(undecided.length, 1, 'exactly one send draws unconditionally');
+    const context = engineSrc.slice(undecided[0].line - 12, undecided[0].line).join('\n');
+    assert.match(context, /Notify client of agent switch|targetAgent/,
+      'and it is the forward delegation in handleDelegation, not a restoration path that forgot');
+  });
+});
+
+// ONE IDENTIFIER, READ TWICE.
+//
+// This is about the SHAPE of the decision rather than its outcome, so a source
+// assertion is the honest instrument: the behavioural tests cannot see the
+// difference between one expression read twice and two expressions that happen
+// to agree today. This fails the moment they are split apart again, which is
+// how the fifth restoration branch drifted: the arrival was drawn from
+// `restoredWillSpeak` while the wake also required the parent's stdin, so an
+// unreachable parent got a divider and no turn.
+describe('drawing an arrival and waking the agent read the same identifier', () => {
+  const fs = require('node:fs');
+  const src = fs.readFileSync(path.join(ROOT, 'lib', 'delegation', 'engine.js'), 'utf8');
+
+  test('the non-intercepted restore decides both from restoredWillSpeak', () => {
+    assert.match(src, /\.\.\.\(restoredWillSpeak \? \{\} : \{ silent: true \}\)/,
+      'the arrival is drawn from it');
+    assert.match(src, /if \(restoredWillSpeak && !bufferedFollowUpTakesOver\(/,
+      'and the parent is woken from the same name, not from a second expression');
+    // The reachability check must be INSIDE the shared name. Left on the wake
+    // guard alone it was a condition the drawing did not share, which is the
+    // defect this criterion exists to prevent.
+    assert.match(src, /const restoredWillSpeak = [\s\S]{0,220}parentReachable;/,
+      'with reachability folded in, so both halves ask the same question');
+    assert.doesNotMatch(src, /if \(restoredWillSpeak && [^)]*orig\.process\.stdin\.writable\)/,
+      'and never re-tested on the wake guard alone');
+  });
+
+  test('the mid-level restore decides both from parentMustAct', () => {
+    assert.match(src, /const parentWillSpeak = parentMustAct;/,
+      'the arrival reads the same flag the branch already uses to decide acting');
+    assert.match(src, /\.\.\.\(parentWillSpeak \? \{\} : \{ silent: true \}\)/);
+  });
+
+  test('the skip-level restore and the scope return decide from the pipeline marker', () => {
+    assert.match(src, /\.\.\.\(isPipelineComplete \? \{ silent: true \} : \{\}\)/,
+      'skip-level: silent exactly when the orchestrator is left idle by the COMPLETE gate');
+    assert.match(src, /\.\.\.\(wasPipelineComplete \? \{ silent: true \} : \{\}\)/,
+      'scope return: the same rule, named as that function names it');
+  });
+});

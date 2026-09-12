@@ -146,8 +146,19 @@ describe('the other paths control can return through', () => {
 
     await client.waitFor(m => m.type === 'system' && m.subtype === 'agent_switch'
       && m._conversationId === convoId && m.toAgent === 'content-analyst', { label: 'down to the analyst' });
-    await client.waitFor(m => m.type === 'system' && m.subtype === 'agent_switch'
-      && m._conversationId === convoId && m.toAgent === 'content-lead', { label: 'back up to the lead' });
+    // MATCHED BY WHERE IT CAME FROM, not only by where it goes. `toAgent ===
+    // 'content-lead'` also matches the FORWARD delegation earlier in this same
+    // scenario, so the original wait could be satisfied by the handoff out
+    // rather than the handback in. It passed either way while it only checked
+    // that control reached the lead; asserting what the message SAYS made the
+    // ambiguity visible immediately.
+    const backUp = (await client.waitFor(m => m.type === 'system' && m.subtype === 'agent_switch'
+      && m._conversationId === convoId && m.fromAgent === 'content-analyst'
+      && m.toAgent === 'content-lead', { label: 'back up to the lead' })).msg;
+    // The analyst finished the delegated pipeline, so the lead is restored to
+    // park rather than to speak. Drawn as nothing, on the mid-level path.
+    assert.strictEqual(backUp.silent, true,
+      'a lead restored only to park is not announced as arriving');
 
     const midChain = storedConversation(convoId);
     assert.ok(midChain, 'the conversation was persisted');
@@ -155,8 +166,13 @@ describe('the other paths control can return through', () => {
       'control reached the lead, not the base agent, so this conversation is still delegated');
 
     // And when the lead finishes too, control does reach the base agent.
-    await client.waitFor(m => m.type === 'system' && m.subtype === 'agent_switch'
-      && m._conversationId === convoId && m.toAgent === 'chief-of-staff', { label: 'home to the orchestrator' });
+    const homeSwitch = (await client.waitFor(m => m.type === 'system' && m.subtype === 'agent_switch'
+      && m._conversationId === convoId && m.toAgent === 'chief-of-staff', { label: 'home to the orchestrator' })).msg;
+    // Same again one level up: the lead also finished, so the orchestrator is
+    // restored to park. Two of the four restoration paths asserted on the real
+    // message in this one scenario.
+    assert.strictEqual(homeSwitch.silent, true,
+      'and neither is the orchestrator, restored to park behind it');
     await client.waitForEvent('system', 'done', convoId);
 
     const home = storedConversation(convoId);
@@ -227,8 +243,17 @@ describe('a delegation whose parent stayed alive', () => {
     client.send({ type: 'delegate', conversationId: convoId, targetAgent: 'content-lead', context: 'live-parent brief' });
     await client.waitFor(m => m.type === 'system' && m.subtype === 'agent_switch'
       && m._conversationId === convoId && m.toAgent === 'content-lead', { label: 'out to the delegate' });
-    await client.waitFor(m => m.type === 'system' && m.subtype === 'agent_switch'
-      && m._conversationId === convoId && m.toAgent === 'chief-of-staff', { label: 'parent restored' });
+    const restored = (await client.waitFor(m => m.type === 'system' && m.subtype === 'agent_switch'
+      && m._conversationId === convoId && m.toAgent === 'chief-of-staff', { label: 'parent restored' })).msg;
+
+    // AND IT IS DRAWN AS NOTHING, because this parent is restored to park.
+    // The delegate emitted COMPLETE and no follow-up arrived, so nothing will
+    // wake it: an arrival drawn here shows an agent joining and doing nothing,
+    // which is the reported hang. Asserted on the message the client actually
+    // received, for this path specifically, because the first fix for that hang
+    // reached one restoration path of four and no test noticed.
+    assert.strictEqual(restored.silent, true,
+      'the restore of a parent that will not speak is silent');
 
     const stored = storedConversation(convoId);
     assert.ok(stored, 'the conversation was persisted');
