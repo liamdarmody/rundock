@@ -501,3 +501,82 @@ describe('an agent is told which agents it may call', () => {
       'the rule that was present for one role and missing for the other');
   });
 });
+
+describe('an agent says why it arrived, or does not appear to', () => {
+  // TWO DEFECTS FROM TESTING THE 0.13.3 CUT, sharing a cause: an agent's
+  // appearance in a conversation carried no information about why it was there.
+  const fs = require('node:fs');
+  const promptSrc = fs.readFileSync(path.join(ROOT, 'lib', 'agents', 'prompt.js'), 'utf8');
+  const engineSrc = fs.readFileSync(path.join(ROOT, 'lib', 'delegation', 'engine.js'), 'utf8');
+
+  function leadContract() {
+    const at = promptSrc.indexOf('You have a support team.');
+    const end = promptSrc.indexOf("'YOUR SUPPORT TEAM:',", at);
+    assert.ok(at > -1 && end > at, 'the lead contract is still here');
+    return promptSrc.slice(at, end);
+  }
+
+  test('a lead is told to announce a handoff, not merely allowed to', () => {
+    // It said a one-sentence handoff "is fine", and the next rule said "Do NOT
+    // narrate the delegation brief in visible chat". Permission followed by an
+    // emphatic prohibition reads as: stay quiet. Observed: a lead delegated to
+    // a fact checker with no visible turn at all.
+    const lead = leadContract();
+    assert.match(lead, /It is not optional/,
+      'permission is not instruction, and the rule beside it forbids speaking');
+  });
+
+  test('and told what the line carries', () => {
+    assert.match(leadContract(), /who you are handing to and why/,
+      'a rule that says "say something" without saying what invites silence or '
+      + 'the narration the next rule forbids');
+  });
+
+  test('while the prohibition on narrating the brief still stands', () => {
+    const lead = leadContract();
+    assert.match(lead, /Do NOT narrate the delegation brief/);
+    assert.match(lead, /who and why belongs in the chat/,
+      'the two rules must be distinguishable, or following one breaks the other');
+  });
+
+  test('the orchestrator keeps the instruction it already had', () => {
+    assert.match(promptSrc, /A brief one-sentence handoff is fine/,
+      'the orchestrator narrates because routing is its job');
+  });
+
+  test('an arrival that will produce nothing is drawn as nothing, but the switch is still sent', () => {
+    // On a COMPLETE handback the orchestrator is spawned only to park, so the
+    // conversation showed it joining and then doing nothing: indistinguishable
+    // from a hang, and reported as one.
+    //
+    // The first fix withheld the switch entirely, on the reasoning that it was
+    // only an announcement. It is not: reduceAgentSwitch sets activeAgentId,
+    // clears delegationActive and emits clear-outgoing-working, so withholding
+    // it left the conversation marked delegated with the DEPARTED specialist
+    // still showing as working. The integration suite caught it
+    // (delegation-handback-record: a sub-delegate returning to its lead) and
+    // this suite did not, because it asserted the shape of the code rather than
+    // what a person would see.
+    //
+    // So the message always goes and the drawing is what is suppressed. The
+    // behaviour is proven in test/unit/conversation-state.test.js ('a silent
+    // agent_switch draws no divider but still clears the outgoing agent and
+    // moves control'); this only pins that the engine still sends it.
+    const at = engineSrc.indexOf('NO ARRIVAL DRAWN FOR AN AGENT THAT WILL SAY NOTHING');
+    assert.ok(at > -1, 'the reasoning is recorded where the decision is made');
+    const region = engineSrc.slice(at, at + 1400);
+    assert.doesNotMatch(region, /if \(!wasPipelineComplete\) \{[\s\S]{0,300}subtype: 'agent_switch'/,
+      'the switch is NOT gated on the handback mode: withholding it is what broke the indicator');
+    assert.match(region, /subtype: 'agent_switch'[\s\S]{0,400}wasPipelineComplete \? \{ silent: true \}/,
+      'it is sent either way, carrying the flag that suppresses only the drawing');
+  });
+
+  test('and the process is still announced either way', () => {
+    // A RETURN or CONTINUE handback drives the orchestrator to act, so the
+    // person should see who picked it up.
+    const at = engineSrc.indexOf('NO ARRIVAL DRAWN FOR AN AGENT THAT WILL SAY NOTHING');
+    const region = engineSrc.slice(at, at + 1600);
+    assert.match(region, /process_started/,
+      'the process start is not gated on the handback mode either');
+  });
+});
