@@ -657,9 +657,25 @@ describe('drawing an arrival and waking the agent read the same identifier', () 
     assert.match(src, /\.\.\.\(parentWillSpeak \? \{\} : \{ silent: true \}\)/);
   });
 
-  test('the skip-level restore and the scope return decide from the pipeline marker', () => {
-    assert.match(src, /\.\.\.\(isPipelineComplete \? \{ silent: true \} : \{\}\)/,
-      'skip-level: silent exactly when the orchestrator is left idle by the COMPLETE gate');
+  test('the skip-level restore decides both from orchestratorWillSpeak', () => {
+    // It used to read isPipelineComplete alone while the wake ALSO required the
+    // orchestrator's stdin, so an unreachable orchestrator got a divider and no
+    // turn. Reachability is part of "will speak", so it is inside the shared
+    // name and the wake guard reads that name rather than re-testing.
+    assert.match(src, /const orchestratorWillSpeak = !isPipelineComplete && orchestratorReachable;/,
+      'one answer, combining the gate and reachability');
+    assert.match(src, /\.\.\.\(orchestratorWillSpeak \? \{\} : \{ silent: true \}\)/,
+      'the arrival is drawn from it');
+    assert.match(src, /\} else if \(orchestratorReachable\) \{/,
+      'and the wake reads the same reachability, not its own copy');
+    assert.doesNotMatch(src, /\.\.\.\(isPipelineComplete \? \{ silent: true \} : \{\}\)/,
+      'never the marker alone, which is the form that let them disagree');
+  });
+
+  test('the scope return decides from the pipeline marker, which is all it has', () => {
+    // handleScopeReturn spawns the orchestrator fresh, so there is no
+    // reachability question: a process just created is writable by
+    // construction. The marker is the whole of the answer there.
     assert.match(src, /\.\.\.\(wasPipelineComplete \? \{ silent: true \} : \{\}\)/,
       'scope return: the same rule, named as that function names it');
   });
