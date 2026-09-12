@@ -392,4 +392,60 @@ describe('codex agent conversation', () => {
     assert.ok(methodEntries('turn/interrupt').length >= 1, 'the superseded turn was interrupted');
     assert.strictEqual(appServerSpawns().length, 0, 'no new process for the superseding turn (singleton already up)');
   });
+
+  // A CODEX DELEGATE WHOSE STORED THREAD WILL NOT RESUME IS ARRIVING.
+  //
+  // The catch-up gate used to exclude Codex by runtime, so a Codex delegate got
+  // no conversation at all. Fixing that exposed a second question: `arriving`
+  // was read from whether an id had been STORED, while Codex validates that id
+  // before resuming. A malformed or expired thread is a non-empty string that
+  // still yields a fresh thread, so the delegate was told "since your last
+  // turn" over a conversation it had never seen.
+  //
+  // Driven rather than pinned to source: the assertion is on the literal prompt
+  // the delegate received, because a source-shaped check on the derivation
+  // passes whether or not the prompt that reaches Codex is built from it.
+  test('a codex delegate whose stored thread id is invalid receives the conversation, headed as an arrival', async () => {
+    const convoId = h.freshConvoId('cdx-invalid-thread');
+    h.internal.convoTranscripts.set(convoId, [
+      { role: 'user', agent: 'user', text: 'find me two suppliers' },
+      { role: 'agent', agent: 'chief-of-staff', text: 'COS-EARLIER-TURN: I looked at the brief' },
+    ]);
+    h.internal.saveTranscript(convoId);
+    // A stored id for this agent that the thread-id check rejects, so the
+    // resume cannot happen and a fresh thread is used instead.
+    h.internal.writeConversations([{
+      id: convoId, title: 'invalid thread', messages: [],
+      // A NON-EMPTY string that fails the thread-id check. The first draft used
+      // 'not-a-valid-thread-id', which reads as invalid and is not: the pattern
+      // is /^[A-Za-z0-9_][A-Za-z0-9_.-]*$/, so hyphens are fine. It has to be
+      // non-empty to be the discriminating case at all, because an empty id is
+      // falsy and the old derivation would have called that arriving anyway.
+      sessionIds: [{ agentId: 'researcher', sessionId: 'expired thread id' }],
+    }]);
+    h.internal.chatProcesses.set(convoId, {
+      agentId: 'chief-of-staff', processId: 'p-cdx-parent', exited: false, toolCalls: [],
+    });
+    // COUNTED, NOT CLEARED. clearPrompts() does not reset the codex capture, so
+    // reading index 0 returns a prompt from an earlier test in this file. The
+    // first draft of this test did exactly that and asserted against a stale
+    // string: the same "passes for the wrong reason" failure it exists to stop.
+    const before = h.codexTurnPrompts().length;
+
+    h.internal.handleDelegation({
+      conversationId: convoId, targetAgent: 'researcher',
+      context: 'check these two suppliers', _intercepted: true,
+    }, h.internal.chatProcesses);
+
+    await h.waitUntil(() => h.codexTurnPrompts().length > before, 'the codex delegate was prompted');
+    const prompt = h.codexTurnPrompts()[before];
+    assert.match(prompt, /BEFORE YOU JOINED/,
+      'a thread that will not resume is an arrival, whatever was stored');
+    assert.doesNotMatch(prompt, /SINCE YOUR LAST TURN/,
+      'and is never told it is returning to a thread it does not have');
+    assert.match(prompt, /COS-EARLIER-TURN/,
+      'and it is given what happened before it, which is the whole point');
+    assert.match(prompt, /check these two suppliers/, 'alongside the brief it was sent with');
+    h.reapConvo(convoId);
+  });
 });
