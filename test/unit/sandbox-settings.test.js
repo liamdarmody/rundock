@@ -175,15 +175,52 @@ describe('sandboxSettings: named working folders', () => {
     for (const f of FOLDERS) assert.ok(s.filesystem.allowWrite.includes(f), `${f} is writable`);
   });
 
-  test('folders go last, so a workspace with none writes exactly what it wrote before', () => {
-    const before = sandboxSettings(WS, 'darwin', HOME, ['/tmp/t']);
-    const withEmpty = sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], []);
-    assert.deepStrictEqual(withEmpty, before, 'an empty folder list changes nothing at all');
-    const withFolders = sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], FOLDERS);
+  // WHAT THE BLOCK LOOKED LIKE BEFORE THIS CHANGE, written out rather than
+  // computed. The first version of the test below compared sandboxSettings to
+  // ITSELF with an empty folder list, which passes however much the block
+  // changes: it proved the folders argument defaults to empty and nothing
+  // whatever about matching what shipped. A reference the code cannot rebuild
+  // is the only thing that can catch a key appearing or a value moving.
+  const SHIPPED_KNOWLEDGE_BLOCK = {
+    enabled: true,
+    autoAllowBashIfSandboxed: true,
+    filesystem: {
+      allowWrite: [
+        WS,
+        `${HOME}/.npm`,
+        `${HOME}/.claude`,
+        `${HOME}/.claude.json`,
+        '/tmp/claude',
+        '/private/tmp/claude',
+        '/tmp/t',
+      ],
+    },
+    network: { allowedDomains: ['*'] },
+  };
+
+  test('a workspace with no folders writes what it wrote before, and the deny is the one intended difference', () => {
+    const s = sandboxSettings(WS, 'darwin', HOME, ['/tmp/t']);
+    // The deny list is a deliberate addition made after the criteria were
+    // frozen, approved on the ledger rather than slipped in: it protects the
+    // file this very block is built from. It is the ONLY difference, and
+    // subtracting it must leave the shipped block exactly.
+    assert.deepStrictEqual(s.filesystem.denyWrite, [`${WS}/.rundock/state.json`],
+      'the intended difference, named');
+    const { denyWrite, ...filesystem } = s.filesystem;
+    assert.deepStrictEqual({ ...s, filesystem }, SHIPPED_KNOWLEDGE_BLOCK,
+      'and with it removed, key for key and value for value, the block that shipped');
+  });
+
+  test('naming folders appends to the write list and changes nothing else', () => {
+    const s = sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], FOLDERS);
+    const { denyWrite, ...filesystem } = s.filesystem;
+    const base = SHIPPED_KNOWLEDGE_BLOCK.filesystem.allowWrite;
+    assert.deepStrictEqual(filesystem.allowWrite, [...base, ...FOLDERS],
+      'the folders go on the end, and the head keeps the positions the recogniser reads');
     assert.deepStrictEqual(
-      withFolders.filesystem.allowWrite.slice(0, before.filesystem.allowWrite.length),
-      before.filesystem.allowWrite,
-      'and folders append rather than displacing the head the recogniser reads');
+      { ...s, filesystem: { allowWrite: base } },
+      SHIPPED_KNOWLEDGE_BLOCK,
+      'every other key is untouched: the enable, the prompting flag and the network stay as they were');
   });
 
   test('Code mode contributes paths and enables nothing', () => {

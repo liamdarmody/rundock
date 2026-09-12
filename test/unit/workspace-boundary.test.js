@@ -358,6 +358,41 @@ describe('the block is driven by mode, and only by mode', () => {
     assert.strictEqual(settings.sandbox.enabled, true, 'moving back to knowledge mode restores the enable');
   });
 
+  test('the reported case, end to end: the named folder is inside for the hook AND writable for the operating system', () => {
+    // THE BUG REPORT, REPRODUCED. A workspace in Code mode with ~/Projects
+    // named, running `cd ~/Projects/<repo> && node scripts/x.mjs`, drew a
+    // permission card on every invocation.
+    //
+    // The hook always agreed that folder was inside; it was the operating
+    // system that refused, and the refusal became a card by a path that no
+    // grant can answer. Proving the fix therefore needs BOTH halves asserted
+    // together: the hook reports no crossing, and the same folder is in the
+    // write list handed to the sandbox. Either alone is what the product had
+    // before, and what it had before was the defect.
+    const ws = tmp('wb-reported-case-');
+    const named = path.join(os.homedir(), 'Projects');
+    const command = `cd ${path.join(named, 'alchemist')} && node scripts/x.mjs`;
+
+    const access = hook.classifyShellAccess('Bash', { command }, ws, [named], os.homedir(), false);
+    assert.strictEqual(access, null,
+      'the hook finds no crossing: the folder the person named is inside, as it always was');
+
+    const block = scaffold.sandboxSettings(ws, 'darwin', os.homedir(), ['/tmp/t'], [named], 'code');
+    assert.ok(block.filesystem.allowWrite.includes(named),
+      'and the operating system is finally told the same thing, which is the half that was missing');
+
+    // THE PATH THAT PRODUCED THE CARD, still ungrantable by design. This is
+    // what the fix avoids reaching, not something it teaches the hook to
+    // forgive: a sandbox refusal the runtime retries carries no path at all,
+    // so no folder grant could ever answer it.
+    const escape = hook.classifyShellAccess('Bash', { command, dangerouslyDisableSandbox: true }, ws, [named], os.homedir(), false);
+    assert.strictEqual(escape.where, 'outside');
+    assert.strictEqual(escape.grantable, false,
+      'naming a folder never silenced this card, which is why the folder had to reach the sandbox instead');
+    assert.deepStrictEqual(escape.crossings, [],
+      'and it names no path, so there was nothing for a grant to cover');
+  });
+
   test('a block carrying a stale folder list is rewritten to the current one, not merely recognised', () => {
     // Recognition is only half of reconciliation: a block can be correctly
     // identified as ours and still be left on disk naming a folder the person
