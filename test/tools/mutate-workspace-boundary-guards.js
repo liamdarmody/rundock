@@ -194,9 +194,14 @@ const MUTATIONS = [
   // rewritten away on the next reconcile. The pairing check itself is a
   // general real-path-spelling test (ends-with), not only the literal
   // /private case, so a non-/private relocation is recognised too.
-  [SCAFFOLD, 'a second tail entry must be a real-path spelling of the first, or it is somebody\'s edit',
-    '  if (tail.length === 2 && !tail[1].endsWith(tail[0])) return false;\n',
-    ''],
+  // The real-path pairing guard is GONE, and its mutation with it. It read a
+  // second tail entry as a temp root only when it ended with the first, which
+  // was how an appended root was told from ours. The list now carries the
+  // folders a person named, so a second entry is as likely to be one of those
+  // as a temp spelling, and no rule separates them. What replaced it is the
+  // head: six entries in fixed positions, rebuilt from the block's own claimed
+  // workspace and home, and mutated by the zero-tail entry below. The cost is
+  // recorded in lib/workspace/scaffold.js beside the check that remains.
   // A corrupt or unreadable settings.local.json must not be silently
   // replaced with {}. Only ENOENT may start empty; drop that distinction and
   // every other read/parse failure quietly overwrites the file instead of
@@ -207,16 +212,16 @@ const MUTATIONS = [
 
   // ===== THE BLOCK IS DRIVEN BY MODE, AND ONLY BY MODE =====
   // Ignore the mode and the switch writes the block for code mode too.
-  [SCAFFOLD, 'the mode switch really withdraws the block in code mode',
-    "  const desired = mode === 'code' ? null : sandboxSettings(dir, platform);",
-    '  const desired = sandboxSettings(dir, platform);'],
+  [SCAFFOLD, 'the mode switch really drops the enable in code mode, rather than writing the enabled shape',
+    "  const desired = sandboxSettings(dir, platform, os.homedir(), tempRoots(), workingFoldersFor(dir), mode);",
+    "  const desired = sandboxSettings(dir, platform, os.homedir(), tempRoots(), workingFoldersFor(dir), 'knowledge');"],
   // Ignore the mode on the NEXT OPEN specifically, not through the switch:
   // scaffoldWorkspace's own reconcile has to read the persisted mode too, or
   // a code-mode workspace has its block silently rewritten the next time it
   // is opened.
   [SCAFFOLD, 'the next open honours the persisted mode, not only the switch',
-    "    const desired = workspaceModeFor(dir) === 'code' ? null : sandboxSettings(dir, platform);",
-    '    const desired = sandboxSettings(dir, platform);'],
+    "    const desired = sandboxSettings(dir, platform, os.homedir(), tempRoots(), workingFoldersFor(dir), workspaceModeFor(dir));",
+    "    const desired = sandboxSettings(dir, platform, os.homedir(), tempRoots(), workingFoldersFor(dir), 'knowledge');"],
   // The mode must be PERSISTED before scaffoldWorkspace runs, because
   // scaffoldWorkspace's own reconcile reads the mode back off disk, not from
   // this function's local variable. Swap the order and a never-before-opened
@@ -388,10 +393,21 @@ const MUTATIONS = [
   [WORKSPACE_HANDLER_UNIT, 'a mode change that creates settings.local.json where none existed removes it again on failure, not just restores bytes when a file was already there',
     "        else if (preRequestReadErrorCode === 'ENOENT' && fs.existsSync(settingsLocalPath)) fs.unlinkSync(settingsLocalPath);\n",
     ''],
-  // The lower length bound is load-bearing too, not only the upper one.
-  [SCAFFOLD, 'a tail of zero entries is rejected by the lower length bound, not only by the upper one',
-    '  if (roots.length < expectedHead.length + 1 || roots.length > expectedHead.length + 2) return false;',
-    '  if (roots.length > expectedHead.length + 2) return false;'],
+  // The lower length bound is the one that survives. The upper bound is gone
+  // with the fixed-length tail: the list now carries the folders the user
+  // named, so its length proves nothing. A block with NO tail at all is still
+  // refused, and that is what stops a block a person trimmed the temp roots
+  // out of being read as ours and regenerated over their edit.
+  [SCAFFOLD, 'a tail of zero entries is rejected, so a block trimmed of its temp roots is not read as ours',
+    '  if (roots.length < expectedHead.length + 1) return false;',
+    ''],
+  // The shape is read from the block, not assumed. Pinned because it is the
+  // branch that lets a workspace which changed mode still recognise what it
+  // wrote before: assume one shape and the other reads as a stranger's block,
+  // which is a block Rundock can never rewrite or withdraw.
+  [SCAFFOLD, 'which shape a block claims is read from the block, not assumed to be the enabled one',
+    "  const claimedMode = 'enabled' in block ? 'knowledge' : 'code';",
+    "  const claimedMode = 'knowledge';"],
 ];
 
 const REPORTER = ['--test-reporter', 'spec'];
