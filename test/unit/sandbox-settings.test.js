@@ -26,7 +26,7 @@ const os = require('node:os');
 const { execFileSync } = require('node:child_process');
 const SCAFFOLD = path.join(__dirname, '..', '..', 'lib', 'workspace', 'scaffold.js');
 
-const { sandboxSettings } = require('../../lib/workspace/scaffold.js');
+const { sandboxSettings, isRundockSandbox } = require('../../lib/workspace/scaffold.js');
 
 const WS = '/tmp/sandbox-ws';
 const HOME = '/Users/someone';
@@ -145,5 +145,97 @@ describe('sandboxSettings', () => {
     // was not RUN here, and every other value in this file was. Linux stays
     // off until someone measures it rather than reads about it.
     assert.strictEqual(sandboxSettings(WS, 'linux', HOME), null);
+  });
+});
+
+// The named working folders, and the layer Rundock does not own.
+//
+// MEASURED against Claude Code 2.1.266 on 2026-09-12, by reading the shipped
+// binary rather than the documentation:
+//
+//   - `sandbox.enabled` resolves as `enabled ?? false`. No block is no sandbox.
+//   - The enable is an OR across EVERY settings layer (managed, flags, user,
+//     project, local): `[...].some((e) => e?.sandbox?.enabled === true)`.
+//     Rundock writes the local layer alone, so a user who enabled the sandbox
+//     in their own ~/.claude/settings.json has enabled it for every workspace
+//     on the machine and nothing Rundock writes can disable it.
+//   - Write allowlists UNION across layers, verified in a live session
+//     carrying a user-level entry and a workspace-level one, both honoured.
+//
+// Together those are why Code mode contributes paths with no enable: deleting
+// the block removed Rundock's enable and left the user's, and the workspace
+// then met an operating system that had never been told which folders the user
+// named. That is the reported defect, and no amount of naming folders in
+// Rundock fixed it, because the folders never reached this file.
+describe('sandboxSettings: named working folders', () => {
+  const FOLDERS = ['/Users/someone/Projects', '/Users/someone/Tools'];
+
+  test('a named folder is writable, which is the whole of the reported defect', () => {
+    const s = sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], FOLDERS);
+    for (const f of FOLDERS) assert.ok(s.filesystem.allowWrite.includes(f), `${f} is writable`);
+  });
+
+  test('folders go last, so a workspace with none writes exactly what it wrote before', () => {
+    const before = sandboxSettings(WS, 'darwin', HOME, ['/tmp/t']);
+    const withEmpty = sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], []);
+    assert.deepStrictEqual(withEmpty, before, 'an empty folder list changes nothing at all');
+    const withFolders = sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], FOLDERS);
+    assert.deepStrictEqual(
+      withFolders.filesystem.allowWrite.slice(0, before.filesystem.allowWrite.length),
+      before.filesystem.allowWrite,
+      'and folders append rather than displacing the head the recogniser reads');
+  });
+
+  test('Code mode contributes paths and enables nothing', () => {
+    const s = sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], FOLDERS, 'code');
+    assert.ok(!('enabled' in s), 'no enable: absence is what keeps the sandbox off for everyone else');
+    assert.ok(!('autoAllowBashIfSandboxed' in s), 'and no prompting claim to go with it');
+    assert.ok(!('network' in s),
+      'and no network key: "*" unioned into a layer would widen a policy the user set deliberately');
+    for (const f of FOLDERS) assert.ok(s.filesystem.allowWrite.includes(f),
+      'but the folders are here, for the case where another layer did the enabling');
+  });
+
+  test('Knowledge mode is unchanged except for the folders', () => {
+    const s = sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], FOLDERS);
+    assert.strictEqual(s.enabled, true);
+    assert.strictEqual(s.autoAllowBashIfSandboxed, true);
+    assert.deepStrictEqual(s.network, { allowedDomains: ['*'] });
+  });
+
+  test('both shapes are recognised as ours, with folders present', () => {
+    for (const mode of ['knowledge', 'code']) {
+      const block = sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], FOLDERS, mode);
+      assert.strictEqual(isRundockSandbox(block, 'darwin'), true, `${mode} block is ours`);
+    }
+  });
+
+  test('a block whose folder list has since changed is still ours, and so still reconciles', () => {
+    // The user added a folder after this block was written. Recognised from the
+    // head, never from a comparison against the current list: a block we cannot
+    // recognise is one we can never rewrite or withdraw, which is how a
+    // workspace gets stranded with an operating system nobody can talk to.
+    const stale = sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], ['/Users/someone/Old']);
+    assert.strictEqual(isRundockSandbox(stale, 'darwin'), true);
+  });
+
+  test('a stranger who happens to list folders is still refused', () => {
+    const stranger = {
+      enabled: true,
+      filesystem: { allowWrite: [WS, path.join(HOME, '.npm'), ...FOLDERS] },
+      network: { allowedDomains: ['*'] },
+    };
+    assert.strictEqual(isRundockSandbox(stranger, 'darwin'), false,
+      'the runtime roots are missing from the head, so it was not written here');
+  });
+
+  test('the Code-mode shape is not mistaken for a Knowledge-mode one, or the reverse', () => {
+    const code = sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], FOLDERS, 'code');
+    const knowledge = sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], FOLDERS);
+    assert.notDeepStrictEqual(code, knowledge, 'the two shapes are actually different');
+    // Each is recognised on its own terms, which is what lets a workspace that
+    // changed mode recognise what it wrote before and converge on the new shape.
+    assert.strictEqual(isRundockSandbox({ ...code, enabled: true }, 'darwin'), false,
+      'a Code-mode block with an enable bolted on is not a shape we ever wrote');
   });
 });

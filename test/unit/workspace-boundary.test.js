@@ -97,36 +97,59 @@ describe('the block names the runtime\'s measured plumbing, and the doc names th
   // inside the still-permitted one-or-two-entry window, and the assertion
   // fails outright, meaning 'anything else is somebody's edit' went
   // unenforced there entirely.
-  test('a user-added extra root is never recognised as ours, for a one-entry or a two-entry tail', () => {
+  // A DELIBERATE NARROWING, RECORDED RATHER THAN DELETED.
+  //
+  // Two tests here used to assert that a root appended to Rundock's own block
+  // proved a person had edited it, so the block was left alone forever. They
+  // were right about the old shape, where the tail was one or two temp roots
+  // and the entry COUNT was itself the evidence.
+  //
+  // The block now also carries the folders the user named in Working Folders.
+  // That list is arbitrary in length and content, so an appended root and a
+  // named folder are the same bytes in the same position, and no rule can
+  // separate them. Keeping the old guarantee would need a record, kept outside
+  // the block, of what Rundock last wrote; a record that can be lost or go
+  // stale, and every way of losing it strands the workspace with a block
+  // Rundock can no longer rewrite or withdraw, which is precisely the failure
+  // this whole change exists to end.
+  //
+  // What is given up: a write root added by hand to settings.local.json is
+  // regenerated away on the next open. It NARROWS rather than widens, since
+  // their extra root is dropped rather than kept, and the supported place to
+  // name a folder now actually reaches the sandbox, which it did not before.
+  //
+  // What still holds is asserted below, and in the two neighbouring tests: the
+  // head's order is contract, and a block with no temp tail at all is still
+  // refused and still left untouched.
+  test('an appended root now reads as a named folder, the cost of the folder list being any length', () => {
     const oneEntryTail = ['/var/folders/zz/one-entry-host/T'];
     const legitOne = scaffold.sandboxSettings('/w/ws', 'darwin', '/Users/me', oneEntryTail);
     assert.strictEqual(scaffold.isRundockSandbox(legitOne), true, 'a lone temp root, on its own, is ours');
+
     const oneEntryPlusExtra = scaffold.sandboxSettings('/w/ws', 'darwin', '/Users/me', oneEntryTail);
     oneEntryPlusExtra.filesystem.allowWrite.push('/Users/me/their-own-root');
-    assert.strictEqual(scaffold.isRundockSandbox(oneEntryPlusExtra), false,
-      'still within the permitted one-or-two-entry tail length, so the length check alone cannot catch this: '
-      + 'the appended root is not a temp-directory spelling, and that is what has to reject it');
+    assert.strictEqual(scaffold.isRundockSandbox(oneEntryPlusExtra), true,
+      'indistinguishable from a block written for a workspace naming that folder, so it is ours and gets regenerated');
 
-    // The two-entry tail is the raw temp-dir name and its own /private real
-    // path (the only shape tempRoots() ever produces): recognised as a
-    // matched pair, an appended THIRD entry is not.
     const twoEntryTail = ['/var/folders/zz/two-entry-host/T', '/private/var/folders/zz/two-entry-host/T'];
     const legitTwo = scaffold.sandboxSettings('/w/ws', 'darwin', '/Users/me', twoEntryTail);
     assert.strictEqual(scaffold.isRundockSandbox(legitTwo), true, 'the raw spelling and its /private pairing are ours');
-    const twoEntryPlusExtra = scaffold.sandboxSettings('/w/ws', 'darwin', '/Users/me', twoEntryTail);
-    twoEntryPlusExtra.filesystem.allowWrite.push('/Users/me/their-own-root');
-    assert.strictEqual(scaffold.isRundockSandbox(twoEntryPlusExtra), false,
-      'a third tail entry pushes length past the permitted window, and it is rejected either way');
   });
 
-  test('a second tail entry that is not the first entry\'s /private pairing is not recognised as ours', () => {
-    // Same length as a legitimate two-entry tail, so only the pairing check
-    // (not the length check) can catch this: a person's folder happens to
-    // land in the second tail slot instead of being visibly appended.
-    const impersonating = scaffold.sandboxSettings('/w/ws', 'darwin', '/Users/me', ['/var/folders/zz/mixed-host/T']);
-    impersonating.filesystem.allowWrite.push('/Users/me/their-own-root');
-    assert.strictEqual(scaffold.isRundockSandbox(impersonating), false,
-      'a root of their own, sitting where the /private pairing would be, is not a temp-directory spelling');
+  test('the head is still what proves authorship, so a stranger\'s block is still refused', () => {
+    // The guarantee that replaces the length check. Six entries in fixed
+    // positions, every one rebuilt from the block's own claimed workspace and
+    // home: a block that does not open with them was not written here,
+    // however its tail looks.
+    const notOurs = scaffold.sandboxSettings('/w/ws', 'darwin', '/Users/me', ['/var/folders/zz/h/T']);
+    notOurs.filesystem.allowWrite[3] = '/Users/me/not-a-runtime-root';
+    assert.strictEqual(scaffold.isRundockSandbox(notOurs), false,
+      'a runtime root replaced in the head, so the head no longer rebuilds and the block is left alone');
+
+    const wrongHome = scaffold.sandboxSettings('/w/ws', 'darwin', '/Users/me', ['/var/folders/zz/h/T']);
+    wrongHome.filesystem.allowWrite[1] = '/Users/someone-else/.npm';
+    assert.strictEqual(scaffold.isRundockSandbox(wrongHome), false,
+      'a cache root under a different home than the runtime roots claim: not a shape Rundock ever writes');
   });
 
   // With an empty tail the pairing check is skipped, so a person who
@@ -164,8 +187,8 @@ describe('the block names the runtime\'s measured plumbing, and the doc names th
     }));
     scaffold.reconcileSandboxForMode(ws, 'code', 'darwin');
     const settings = JSON.parse(fs.readFileSync(path.join(ws, '.claude', 'settings.local.json'), 'utf8'));
-    assert.strictEqual('sandbox' in settings, false,
-      'moving to Code mode withdraws a block carrying this tail, exactly as it does for the /private pairing');
+    assert.strictEqual('enabled' in settings.sandbox, false,
+      'moving to Code mode drops the enable from a block carrying this tail, exactly as it does for the /private pairing');
   });
 });
 
@@ -323,12 +346,16 @@ describe('the block is driven by mode, and only by mode', () => {
     const settingsPath = path.join(ws, '.claude', 'settings.local.json');
     let settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
     assert.ok(settings.sandbox, 'knowledge mode: the block is written');
+    const knowledgeRoots = settings.sandbox.filesystem.allowWrite;
     scaffold.reconcileSandboxForMode(ws, 'code', 'darwin');
     settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
-    assert.strictEqual('sandbox' in settings, false, 'code mode: the block is withdrawn');
+    assert.strictEqual('enabled' in settings.sandbox, false, 'code mode: the enable is dropped');
+    assert.deepStrictEqual(settings.sandbox.filesystem.allowWrite, knowledgeRoots,
+      'and the paths are kept, because another settings layer may have enabled the sandbox '
+      + 'and this is the only place that names the folders the user chose');
     scaffold.reconcileSandboxForMode(ws, 'knowledge', 'darwin');
     settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
-    assert.ok(settings.sandbox, 'moving back to knowledge mode restores the block');
+    assert.strictEqual(settings.sandbox.enabled, true, 'moving back to knowledge mode restores the enable');
   });
 
   test('an unreadable settings file is never overwritten: only a genuinely absent file starts from empty', () => {
@@ -372,8 +399,22 @@ describe('the block is driven by mode, and only by mode', () => {
       fs.writeFileSync(path.join(codeModeWs, '.rundock', 'state.json'), JSON.stringify({ workspaceMode: 'code' }));
       scaffold.scaffoldWorkspace(codeModeWs, { platform: 'darwin' });
       const afterNextOpen = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
-      assert.strictEqual('sandbox' in afterNextOpen, false,
-        'withdrawn on the next open, not left in place as a refresh would leave it');
+      // CHANGED CONTRACT, PINNED RATHER THAN RELAXED. This used to assert the
+      // block was gone. Withdrawing it was never what it appeared to be:
+      // `sandbox.enabled` is an OR across every settings layer and Rundock
+      // writes one of them, so deleting ours disabled nothing for a user who
+      // had enabled the sandbox in their own ~/.claude/settings.json. It only
+      // stopped telling that sandbox which folders they had named, which is
+      // the reported defect. Code mode now contributes paths and claims no
+      // enable, so the assertion is stricter than the one it replaces: the
+      // block must be present AND must enable nothing.
+      assert.ok(afterNextOpen.sandbox, 'a block is written for a code-mode workspace');
+      assert.strictEqual('enabled' in afterNextOpen.sandbox, false,
+        'and it claims no enable, so it switches the sandbox on for nobody');
+      assert.strictEqual('network' in afterNextOpen.sandbox, false,
+        'and names no domains, so it widens no network policy the user set');
+      assert.ok(Array.isArray(afterNextOpen.sandbox.filesystem.allowWrite),
+        'what it does carry is the write list, for the case another layer enabled the sandbox');
 
       const knowledgeModeWs = tmp('wb-scaffold-knowledgemode-');
       scaffold.scaffoldWorkspace(knowledgeModeWs, { platform: 'darwin' });
