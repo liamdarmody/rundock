@@ -358,6 +358,32 @@ describe('the block is driven by mode, and only by mode', () => {
     assert.strictEqual(settings.sandbox.enabled, true, 'moving back to knowledge mode restores the enable');
   });
 
+  test('a block carrying a stale folder list is rewritten to the current one, not merely recognised', () => {
+    // Recognition is only half of reconciliation: a block can be correctly
+    // identified as ours and still be left on disk naming a folder the person
+    // removed weeks ago. This drives the whole path and reads the file back.
+    const ws = tmp('wb-stale-folders-');
+    fs.mkdirSync(path.join(ws, '.claude'), { recursive: true });
+    fs.mkdirSync(path.join(ws, '.rundock'), { recursive: true });
+    const current = tmp('wb-stale-current-');
+    const stale = '/Users/someone/NamedLongAgo';
+    // What the workspace names TODAY.
+    fs.writeFileSync(path.join(ws, '.rundock', 'state.json'),
+      JSON.stringify({ workspaceMode: 'knowledge', workingFolders: [current] }));
+    // What the block on disk still names, written by an earlier run.
+    const old = scaffold.sandboxSettings(ws, 'darwin', os.homedir(), ['/tmp/t'], [stale]);
+    fs.writeFileSync(path.join(ws, '.claude', 'settings.local.json'), JSON.stringify({ sandbox: old }));
+    assert.strictEqual(scaffold.isRundockSandbox(old), true, 'fixture sanity: the stale block is recognised as ours');
+
+    scaffold.reconcileSandboxForMode(ws, 'knowledge', 'darwin');
+
+    const roots = JSON.parse(fs.readFileSync(path.join(ws, '.claude', 'settings.local.json'), 'utf8'))
+      .sandbox.filesystem.allowWrite;
+    assert.ok(roots.includes(current), 'the folder the workspace names now is writable');
+    assert.ok(!roots.includes(stale),
+      'and the one it no longer names is gone, rather than being left in place because the block was ours');
+  });
+
   test('an unreadable settings file is never overwritten: only a genuinely absent file starts from empty', () => {
     // The bug this guards: {} stood in for EVERY read failure, absent or
     // not, so a corrupt settings.local.json (a hand-added comment, a torn

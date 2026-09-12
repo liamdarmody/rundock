@@ -22,9 +22,12 @@ const config = require('../../lib/config.js');
 // end_delegation, flush_buffer) must NEVER appear here: chat is the
 // kill-window chat shim, delegate/end_delegation are delegation glue, and
 // flush_buffer drains safeSend's own reconnect buffer.
-// There is no sandbox switch: set_workspace_mode is the only message that
-// can move the OS write block, proven end to end by
-// test/unit/workspace-boundary.test.js.
+// There is no sandbox switch. Two messages reach the OS write block and no
+// third: set_workspace_mode decides whether Rundock claims the enable, and
+// set_working_folders decides which paths the block names, rewriting it for
+// whatever mode the workspace is already in. Both are proven end to end,
+// the first by test/unit/workspace-boundary.test.js and the second by
+// 'naming a folder reaches the operating system' below.
 const EXPECTED_TYPES = [
   'permission_response', 'cancel',
   'get_workspaces', 'client_render_time', 'list_workspaces', 'set_workspace',
@@ -227,6 +230,32 @@ describe('handler seams (stub ctx, capture ws)', () => {
     fs.mkdirSync(path.join(dir, '.rundock'), { recursive: true });
     return dir;
   }
+
+  test('removing a folder takes it out of the sandbox too, not only adding one puts it in', () => {
+    // The addition direction alone would pass with a block that only ever
+    // grows: a folder removed in the interface but still writable at the
+    // syscall level is a setting that lies in the direction that matters.
+    const table = buildDispatch();
+    const original = config.getWorkspace();
+    const dir = workingFoldersWorkspace();
+    const kept = fs.mkdtempSync(path.join(os.tmpdir(), 'proto-wf-kept-'));
+    const dropped = fs.mkdtempSync(path.join(os.tmpdir(), 'proto-wf-dropped-'));
+    const settingsPath = path.join(dir, '.claude', 'settings.local.json');
+    try {
+      config.setWorkspace(dir);
+      table.set_working_folders({}, captureWs(), { type: 'set_working_folders', folders: [kept, dropped] }, 'darwin');
+      let roots = JSON.parse(fs.readFileSync(settingsPath, 'utf8')).sandbox.filesystem.allowWrite;
+      assert.ok(roots.includes(path.resolve(dropped)), 'fixture sanity: both folders are in the block first');
+
+      table.set_working_folders({}, captureWs(), { type: 'set_working_folders', folders: [kept] }, 'darwin');
+      roots = JSON.parse(fs.readFileSync(settingsPath, 'utf8')).sandbox.filesystem.allowWrite;
+      assert.ok(roots.includes(path.resolve(kept)), 'the folder that stayed is still writable');
+      assert.ok(!roots.includes(path.resolve(dropped)),
+        'and the one removed is no longer writable, without waiting for a mode switch or a restart');
+    } finally {
+      config.setWorkspace(original);
+    }
+  });
 
   test('a folder is still stored when the sandbox write fails, and the failure is not silent to the log', () => {
     // The stored list stands on its own: the folders are in effect for every
