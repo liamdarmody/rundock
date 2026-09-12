@@ -208,8 +208,17 @@ describe('a specialist returning scope on its own', () => {
     client.send({ type: 'save_conversation', conversation: { id: convoId, agentId: 'chief-of-staff', activeAgentId: 'content-lead', title: 'Scope return' } });
     client.send({ type: 'chat', conversationId: convoId, agent: 'content-lead', content: 'not my area' });
 
-    await client.waitFor(m => m.type === 'system' && m.subtype === 'agent_switch'
-      && m._conversationId === convoId && m.toAgent === 'chief-of-staff', { label: 'scope return to the orchestrator' });
+    const scopeReturn = (await client.waitFor(m => m.type === 'system' && m.subtype === 'agent_switch'
+      && m._conversationId === convoId && m.toAgent === 'chief-of-staff', { label: 'scope return to the orchestrator' })).msg;
+
+    // THE FOURTH RESTORATION PATH, and the direction the other three do not
+    // cover. A RETURN drives the orchestrator to act ("I will take it from
+    // here"), so the arrival MUST be drawn: suppressing it here would hide a
+    // real handover. The three silent cases prove nothing is drawn for an agent
+    // that will not speak; this proves something is drawn for one that will,
+    // which is the half a silence-only suite would happily lose.
+    assert.notStrictEqual(scopeReturn.silent, true,
+      'an arrival is announced when the agent restored is about to speak');
 
     const stored = storedConversation(convoId);
     assert.ok(stored, 'the conversation was persisted');
