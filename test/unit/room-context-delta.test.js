@@ -140,15 +140,28 @@ describe('the delta reaches the delegate', () => {
     assert.strictEqual(sent, '[DELEGATION BRIEF]\ngo', 'no empty catch-up heading');
   });
 
-  test('the engine sends that assembled text, and builds the delta only on resume', () => {
+  test('the engine sends that assembled text, and says whether the agent is arriving or returning', () => {
     // The one binding left against source: which VALUES the pure functions are
     // called with. Their behaviour is driven above.
     const fs = require('node:fs');
     const src = fs.readFileSync(path.join(ROOT, 'lib', 'delegation', 'engine.js'), 'utf8');
-    assert.match(src, /\(priorSessionId && !isCodexDelegate\)/,
-      'built only for a delegate being resumed, and never for Codex, whose resumed '
-      + 'thread already carries the history');
-    assert.match(src, /buildDelegateContext\(\{ transcript, missed, brief: msg\.context \}\)/);
+    // THE RULE CHANGED DELIBERATELY. It was "only for a delegate being
+    // resumed", on the reasoning that a first-time delegate had missed
+    // nothing. That held for a delegate spawned from a chat message, which
+    // gets the full transcript, and failed for one brought in by an
+    // intercepted Agent call, which got the brief alone and could not see a
+    // draft written earlier in the same conversation.
+    //
+    // Now: everyone except Codex, whose prompt assembly is separate, and
+    // except the cold spawn already receiving a full transcript, which would
+    // otherwise be sent the same conversation twice.
+    assert.match(src, /const needsCatchUp = !isCodexDelegate && !needsTranscript;/,
+      'the catch-up is built for arriving delegates as well as returning ones');
+    assert.match(src, /const arriving = !priorSessionId;/,
+      'and which of the two it is decides the heading it carries');
+    assert.match(src, /buildDelegateContext\(\{ transcript, missed, brief: msg\.context, arriving \}\)/,
+      'the assembled context carries which case this is, so the heading it '
+      + 'renders is true of the agent reading it');
     assert.match(src, /stdin\.write\(JSON\.stringify\(\{ type: 'user', message: \{ role: 'user', content: contextWithHistory \}/,
       'and that text is what is written to the delegate');
   });
@@ -359,8 +372,10 @@ describe('every path that resumes an agent gives it the delta', () => {
     // originalAgentId would hand a resumed delegate its own history back and
     // hide what it actually missed, and every test that exercises the pure
     // function with hand-picked ids would stay green.
-    assert.match(src, /deltaSince\(loadTranscript\(convoId\) \|\| \[\], targetAgent\.id, undefined, \[\], agentDisplayNames\(\)\)/,
-      "the target agent's own id, so the delta is what THAT agent missed");
+    assert.match(src, /deltaSince\(loadTranscript\(convoId\) \|\| \[\], targetAgent\.id, undefined, \[\], agentDisplayNames\(\), arriving\)/,
+      "the target agent's own id, so the delta is what THAT agent missed, and "
+      + 'the arriving flag, so a newcomer is given the conversation rather than '
+      + 'nothing');
   });
 
   test('the orchestrator delta excludes the specialist handing back', () => {
@@ -373,7 +388,7 @@ describe('every path that resumes an agent gives it the delta', () => {
   });
 
   test('all three are gated on actually having been resumed', () => {
-    assert.match(src, /\(priorSessionId && !isCodexDelegate\)/, 'delegate');
+    assert.match(src, /const needsCatchUp = !isCodexDelegate && !needsTranscript;/, 'delegate');
     assert.match(src, /orchestratorSession\s*\n?\s*\? deltaSince/, 'orchestrator');
     assert.match(src, /parentSessionId\s*\n?\s*\? deltaSince/, 'mid-level parent');
   });
@@ -731,7 +746,7 @@ describe('the names come from the real roster', () => {
   test('the engine passes that function, not a literal', () => {
     const fs = require('node:fs');
     const src = fs.readFileSync(path.join(ROOT, 'lib', 'delegation', 'engine.js'), 'utf8');
-    const calls = (src.match(/deltaSince\(loadTranscript\(convoId\)[^;]*agentDisplayNames\(\)\)/g) || []).length;
+    const calls = (src.match(/deltaSince\(loadTranscript\(convoId\)[^;]*agentDisplayNames\(\)[,)]/g) || []).length;
     assert.strictEqual(calls, 3,
       'all three resume paths must build the map from the live roster, or one '
       + 'of them silently labels turns with internal ids');

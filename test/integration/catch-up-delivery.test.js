@@ -263,3 +263,88 @@ describe('a resumed mid-level parent is told too', () => {
     h.reapConvo(convoId);
   });
 });
+
+describe('an agent arriving is told what it walked into', () => {
+  // THE DEFECT THIS CLOSES, from testing the 0.13.3 cut.
+  //
+  // The orchestrator wrote a post itself, because the writer it delegates to
+  // only covers another channel. A lead was then brought in by an intercepted
+  // Agent call and given the brief alone.
+  // When the user asked for the work to go back for the next iteration of that
+  // post, the lead looked for a draft, could not see one, said so, and
+  // declared the pipeline finished. The orchestrator, which had written the
+  // post and still held it, was resumed under the pipeline-complete prompt and
+  // ordered to stay silent.
+  //
+  // The agent with the context was silenced by an agent without it, and the
+  // user's request was dropped by the mechanism built to stop that happening.
+  //
+  // The brief is written at one moment about one task. The conversation moves
+  // on around it.
+
+  test('a delegate brought in mid-conversation can see what came before', async () => {
+    const convoId = h.freshConvoId('arriving-sees');
+    seedTranscript(convoId, [
+      { role: 'user', text: 'write me a post for a channel Vox does not cover' },
+      { role: 'agent', agent: 'chief-of-staff', text: 'THE-DRAFT-ROO-WROTE: here is the post' },
+      { role: 'user', text: 'now get research on the site' },
+    ]);
+    // No session for this agent: it has never spoken here.
+    h.internal.writeConversations([{ id: convoId, title: 'arriving', messages: [], sessionIds: [] }]);
+    h.internal.chatProcesses.set(convoId, {
+      agentId: 'chief-of-staff', processId: 'p-arr', exited: false, toolCalls: [],
+    });
+    h.clearPrompts();
+    h.internal.handleDelegation({
+      conversationId: convoId, targetAgent: 'content-lead',
+      context: 'research the site', _intercepted: true,
+    }, h.internal.chatProcesses);
+
+    const prompt = await waitForPrompt('content-lead');
+    assert.match(prompt, /THE-DRAFT-ROO-WROTE/,
+      'the work done before it arrived is exactly what it was asked about later '
+      + 'and could not see');
+    assert.match(prompt, /research the site/, 'and the brief still arrives');
+  });
+
+  test('and is told it is arriving, not returning', async () => {
+    const convoId = h.freshConvoId('arriving-heading');
+    seedTranscript(convoId, [
+      { role: 'user', text: 'do the thing' },
+      { role: 'agent', agent: 'chief-of-staff', text: 'some earlier work' },
+    ]);
+    h.internal.writeConversations([{ id: convoId, title: 'heading', messages: [], sessionIds: [] }]);
+    h.internal.chatProcesses.set(convoId, {
+      agentId: 'chief-of-staff', processId: 'p-head', exited: false, toolCalls: [],
+    });
+    h.clearPrompts();
+    h.internal.handleDelegation({
+      conversationId: convoId, targetAgent: 'content-lead',
+      context: 'go', _intercepted: true,
+    }, h.internal.chatProcesses);
+
+    const prompt = await waitForPrompt('content-lead');
+    assert.match(prompt, /BEFORE YOU JOINED/,
+      'an agent told "since your last turn" on its first turn is reasoning from '
+      + 'a false premise about its own history');
+    assert.ok(!prompt.includes('SINCE YOUR LAST TURN'));
+  });
+
+  test('a delegate arriving into an empty conversation gets no catch-up section', async () => {
+    const convoId = h.freshConvoId('arriving-empty');
+    seedTranscript(convoId, []);
+    h.internal.writeConversations([{ id: convoId, title: 'empty', messages: [], sessionIds: [] }]);
+    h.internal.chatProcesses.set(convoId, {
+      agentId: 'chief-of-staff', processId: 'p-empty', exited: false, toolCalls: [],
+    });
+    h.clearPrompts();
+    h.internal.handleDelegation({
+      conversationId: convoId, targetAgent: 'content-lead',
+      context: 'first task', _intercepted: true,
+    }, h.internal.chatProcesses);
+
+    const prompt = await waitForPrompt('content-lead');
+    assert.ok(!prompt.includes('BEFORE YOU JOINED'), 'no empty heading');
+    assert.match(prompt, /first task/);
+  });
+});

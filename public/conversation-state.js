@@ -274,7 +274,20 @@
     // delegation (orchestrator->specialist or specialist->sub-specialist).
     const isReturn = ctx.toAgentType === 'orchestrator';
     if (ctx.isActive) {
-      if (ctx.toAgentExists && ctx.fromAgentExists) {
+      // A SILENT SWITCH STILL SWITCHES, IT JUST DRAWS NOTHING.
+      //
+      // On a pipeline-complete handback the orchestrator is spawned only to
+      // park, so drawing its arrival showed an agent joining and then doing
+      // nothing, which reads as a hang. The divider is the only part of this
+      // reducer that is purely presentation, so it is the only part the flag
+      // skips: activeAgentId, delegationActive, the outgoing agent's working
+      // indicator and the chat header all still update.
+      //
+      // The alternative, withholding the message itself, was tried and was
+      // worse: it left the conversation marked delegated with the departed
+      // specialist still showing as working, turning a phantom arrival into a
+      // spinner that never stopped.
+      if (ctx.toAgentExists && ctx.fromAgentExists && !message.silent) {
         effects.push({
           type: 'show-delegation-divider',
           toAgentId: message.toAgent,

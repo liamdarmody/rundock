@@ -297,7 +297,16 @@ describe('every path that returns control to a parent records the handback', () 
     for (const at of handbacks) {
       // Within the enclosing region rather than a fixed few lines: one of these
       // marks at the top of its function and announces sixty lines later.
-      const before = lines.slice(Math.max(0, at - 70), at).join('\n');
+      //
+      // The number is a proxy for "in the same function", and it has now twice
+      // been the reason a comment was shortened rather than a defect found:
+      // explaining WHY a branch exists pushes the announcement further from the
+      // record, and the test cannot tell that from the record going missing.
+      // Widened so the proxy stops taxing explanation. It still fails on what it
+      // exists to catch, an announcement with no record anywhere near it, and a
+      // record in a different function would be a hundred and twenty lines away
+      // in every one of these cases.
+      const before = lines.slice(Math.max(0, at - 120), at).join('\n');
       assert.match(before, /recordControlReturnedTo\(convoId/,
         `the handback announced at line ${at + 1} records nothing about where control went:\n`
         + `${lines[at].trim()}\n`
