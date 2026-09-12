@@ -793,3 +793,35 @@ describe('many pinned turns cannot overflow the cap', () => {
       'the first thing asked is what every later turn exists to serve');
   });
 });
+
+// AN AGENT DELEGATED TO A SECOND TIME, ARRIVING COLD.
+//
+// The first version of the arriving path decided "has this agent turns of its
+// own" from the transcript, and used that both to skip its own turns and to
+// slice from its last one. That is right for a RESUME, which carries its own
+// history in a session, and exactly wrong for an arrival, which is a new
+// process that has never seen the conversation. An agent delegated to, having
+// spoken, and delegated to again by an intercepted cold spawn therefore got the
+// tail of a conversation whose beginning it had never seen, and specifically
+// lost its OWN earlier turn: the defect this change exists to fix, reappearing
+// the second time an agent is used.
+test('an arriving agent that has spoken before is still given the whole conversation, its own turns included', () => {
+  const transcript = [
+    { role: 'user', agent: 'user', text: 'write me a post' },
+    { role: 'agent', agent: 'penn', text: 'PENN-FIRST-DRAFT: here is a draft' },
+    { role: 'agent', agent: 'cos', text: 'COS-NOTE: asking research for numbers' },
+    { role: 'agent', agent: 'arlo', text: 'ARLO-RESEARCH: the numbers' },
+  ];
+  const arriving = deltaSince(transcript, 'penn', undefined, [], null, true);
+  assert.match(arriving.text, /PENN-FIRST-DRAFT/,
+    'its own earlier turn, which a cold spawn holds nowhere else');
+  assert.match(arriving.text, /ARLO-RESEARCH/, 'and what happened while it was away');
+  assert.match(arriving.text, /write me a post/, 'and the request that started it');
+
+  // The resume path is unchanged and still trims: a session already carries
+  // these, and re-sending them invites the agent to redo work it has done.
+  const returning = deltaSince(transcript, 'penn', undefined, [], null, false);
+  assert.ok(!returning.text.includes('PENN-FIRST-DRAFT'),
+    'a returning agent is not re-sent its own turn');
+  assert.match(returning.text, /ARLO-RESEARCH/, 'only what it missed');
+});

@@ -192,6 +192,14 @@ describe('a resumed delegate is told what it missed', () => {
     assert.ok(!prompt.includes('SINCE YOUR LAST TURN'),
       'told it missed turns it was never present for, a first-time delegate is '
       + 'being lied to about its own history');
+    // AND IT IS ACTUALLY GIVEN THE CONVERSATION. Asserting only the absence of
+    // the returning wording let this pass while the delegate received nothing
+    // at all, which is the defect rather than the fix: the whole point of the
+    // arriving path is that the brief is not the only thing it walks in with.
+    assert.match(prompt, /ANALYST-TURN: checked/,
+      'what happened before it arrived, which is what it was missing');
+    assert.match(prompt, /BEFORE YOU JOINED/,
+      'and said as an arrival, not as a return');
     h.reapConvo(convoId);
   });
 });
