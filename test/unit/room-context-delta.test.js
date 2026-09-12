@@ -140,15 +140,44 @@ describe('the delta reaches the delegate', () => {
     assert.strictEqual(sent, '[DELEGATION BRIEF]\ngo', 'no empty catch-up heading');
   });
 
-  test('the engine sends that assembled text, and builds the delta only on resume', () => {
+  test('the engine sends that assembled text, and says whether the agent is arriving or returning', () => {
     // The one binding left against source: which VALUES the pure functions are
     // called with. Their behaviour is driven above.
     const fs = require('node:fs');
     const src = fs.readFileSync(path.join(ROOT, 'lib', 'delegation', 'engine.js'), 'utf8');
-    assert.match(src, /\(priorSessionId && !isCodexDelegate\)/,
-      'built only for a delegate being resumed, and never for Codex, whose resumed '
-      + 'thread already carries the history');
-    assert.match(src, /buildDelegateContext\(\{ transcript, missed, brief: msg\.context \}\)/);
+    // THE RULE CHANGED DELIBERATELY. It was "only for a delegate being
+    // resumed", on the reasoning that a first-time delegate had missed
+    // nothing. That held for a delegate spawned from a chat message, which
+    // gets the full transcript, and failed for one brought in by an
+    // intercepted Agent call, which got the brief alone and could not see a
+    // draft written earlier in the same conversation.
+    //
+    // Now: everyone except the cold spawn already receiving a full transcript,
+    // which would otherwise be sent the same conversation twice.
+    //
+    // Codex used to be excluded here too, on the stated reasoning that its
+    // prompt assembly is separate. It is not separate for this: both Codex
+    // branches already send contextWithHistory, which is what carries the
+    // catch-up, so the exclusion withheld context from a Codex delegate
+    // arriving cold and nothing else.
+    assert.match(src, /const needsCatchUp = !needsTranscript;/,
+      'the catch-up is built for arriving delegates as well as returning ones');
+    assert.doesNotMatch(src, /needsCatchUp = [^;]*isCodexDelegate/,
+      'and is not gated on which runtime the delegate happens to use');
+    // ARRIVING IS DERIVED FROM WHETHER A RESUME WILL HAPPEN, not from whether
+    // an id was stored. Codex validates the stored thread id, so a malformed
+    // or expired one is a non-empty string that still yields a fresh thread;
+    // reading the raw string told that delegate it was returning and handed it
+    // a slice of a conversation it had never seen.
+    assert.match(src, /const arriving = !willResume;/,
+      'and which of the two it is decides the heading it carries');
+    assert.match(src, /isCodexDelegate\s*\n?\s*\? codexRuntime\.isValidThreadId\(priorSessionId\)/,
+      'with the Codex half asking the same validator the resume itself asks');
+    assert.doesNotMatch(src, /const arriving = !priorSessionId/,
+      'never from the raw presence of a stored id, which is not the same question');
+    assert.match(src, /buildDelegateContext\(\{ transcript, missed, brief: msg\.context, arriving \}\)/,
+      'the assembled context carries which case this is, so the heading it '
+      + 'renders is true of the agent reading it');
     assert.match(src, /stdin\.write\(JSON\.stringify\(\{ type: 'user', message: \{ role: 'user', content: contextWithHistory \}/,
       'and that text is what is written to the delegate');
   });
@@ -359,8 +388,10 @@ describe('every path that resumes an agent gives it the delta', () => {
     // originalAgentId would hand a resumed delegate its own history back and
     // hide what it actually missed, and every test that exercises the pure
     // function with hand-picked ids would stay green.
-    assert.match(src, /deltaSince\(loadTranscript\(convoId\) \|\| \[\], targetAgent\.id, undefined, \[\], agentDisplayNames\(\)\)/,
-      "the target agent's own id, so the delta is what THAT agent missed");
+    assert.match(src, /deltaSince\(loadTranscript\(convoId\) \|\| \[\], targetAgent\.id, undefined, \[\], agentDisplayNames\(\), arriving\)/,
+      "the target agent's own id, so the delta is what THAT agent missed, and "
+      + 'the arriving flag, so a newcomer is given the conversation rather than '
+      + 'nothing');
   });
 
   test('the orchestrator delta excludes the specialist handing back', () => {
@@ -373,7 +404,10 @@ describe('every path that resumes an agent gives it the delta', () => {
   });
 
   test('all three are gated on actually having been resumed', () => {
-    assert.match(src, /\(priorSessionId && !isCodexDelegate\)/, 'delegate');
+    // The name of this test was always the right rule; the assertion pinned a
+    // line that did not implement it. The delegate's gate read "not Codex",
+    // which is not a statement about having been resumed at all.
+    assert.match(src, /const needsCatchUp = !needsTranscript;/, 'delegate');
     assert.match(src, /orchestratorSession\s*\n?\s*\? deltaSince/, 'orchestrator');
     assert.match(src, /parentSessionId\s*\n?\s*\? deltaSince/, 'mid-level parent');
   });
@@ -731,7 +765,7 @@ describe('the names come from the real roster', () => {
   test('the engine passes that function, not a literal', () => {
     const fs = require('node:fs');
     const src = fs.readFileSync(path.join(ROOT, 'lib', 'delegation', 'engine.js'), 'utf8');
-    const calls = (src.match(/deltaSince\(loadTranscript\(convoId\)[^;]*agentDisplayNames\(\)\)/g) || []).length;
+    const calls = (src.match(/deltaSince\(loadTranscript\(convoId\)[^;]*agentDisplayNames\(\)[,)]/g) || []).length;
     assert.strictEqual(calls, 3,
       'all three resume paths must build the map from the live roster, or one '
       + 'of them silently labels turns with internal ids');
@@ -777,4 +811,90 @@ describe('many pinned turns cannot overflow the cap', () => {
     assert.match(out.text, /U0 /,
       'the first thing asked is what every later turn exists to serve');
   });
+});
+
+// AN AGENT DELEGATED TO A SECOND TIME, ARRIVING COLD.
+//
+// The first version of the arriving path decided "has this agent turns of its
+// own" from the transcript, and used that both to skip its own turns and to
+// slice from its last one. That is right for a RESUME, which carries its own
+// history in a session, and exactly wrong for an arrival, which is a new
+// process that has never seen the conversation. An agent delegated to, having
+// spoken, and delegated to again by an intercepted cold spawn therefore got the
+// tail of a conversation whose beginning it had never seen, and specifically
+// lost its OWN earlier turn: the defect this change exists to fix, reappearing
+// the second time an agent is used.
+test('an arriving agent that has spoken before is still given the whole conversation, its own turns included', () => {
+  const transcript = [
+    { role: 'user', agent: 'user', text: 'write me a post' },
+    { role: 'agent', agent: 'penn', text: 'PENN-FIRST-DRAFT: here is a draft' },
+    { role: 'agent', agent: 'cos', text: 'COS-NOTE: asking research for numbers' },
+    { role: 'agent', agent: 'arlo', text: 'ARLO-RESEARCH: the numbers' },
+  ];
+  const arriving = deltaSince(transcript, 'penn', undefined, [], null, true);
+  assert.match(arriving.text, /PENN-FIRST-DRAFT/,
+    'its own earlier turn, which a cold spawn holds nowhere else');
+  assert.match(arriving.text, /ARLO-RESEARCH/, 'and what happened while it was away');
+  assert.match(arriving.text, /write me a post/, 'and the request that started it');
+
+  // The resume path is unchanged and still trims: a session already carries
+  // these, and re-sending them invites the agent to redo work it has done.
+  const returning = deltaSince(transcript, 'penn', undefined, [], null, false);
+  assert.ok(!returning.text.includes('PENN-FIRST-DRAFT'),
+    'a returning agent is not re-sent its own turn');
+  assert.match(returning.text, /ARLO-RESEARCH/, 'only what it missed');
+});
+
+// THE CAP, FOR AN ARRIVING AGENT SPECIFICALLY.
+//
+// An arriving agent is given the conversation from the beginning rather than a
+// slice from its own last turn, so it is the case where the cap does the most
+// work and the one where exceeding it costs the most. The cap was covered for
+// returning agents and taken on trust here, which is the shape of an untested
+// criterion: the code path most likely to overrun was the one nothing measured.
+test('an arriving agent gets a capped, attributed catch-up, and is told what was left out', () => {
+  // Display names deliberately DIFFERENT from the slugs. Names matching their
+  // slugs would pass whether the map was consulted or ignored, which is the
+  // assertion-that-cannot-fail this suite has already been caught writing once.
+  const names = { roo: 'Rosalind', arlo: 'Arlington', penn: 'Penelope' };
+  const transcript = [
+    { role: 'user', agent: 'user', text: 'start' },
+    { role: 'agent', agent: 'roo', text: 'OLDEST ' + 'x'.repeat(DELTA_CAP_CHARS) },
+    { role: 'agent', agent: 'arlo', text: 'MIDDLE ' + 'y'.repeat(DELTA_CAP_CHARS) },
+    { role: 'agent', agent: 'penn', text: 'NEWEST turn, the one that matters most' },
+  ];
+  const d = deltaSince(transcript, 'penn', undefined, [], names, true);
+
+  assert.ok(d.text.length <= DELTA_CAP_CHARS,
+    `the assembled text stays within the cap (was ${d.text.length} of ${DELTA_CAP_CHARS})`);
+  assert.ok(d.truncated > 0 || d.clipped > 0,
+    'and says something was left out rather than silently shortening the conversation');
+  // Attribution survives the cap: a catch-up that drops the speaker labels
+  // hands the agent a wall of text it cannot tell apart.
+  assert.match(d.text, /PENELOPE:/, 'turns are attributed by the name the team uses');
+  assert.doesNotMatch(d.text, /\bPENN:/, 'and by that name rather than the slug underneath it');
+  // The newest turn is the one an arriving agent most needs; the cap must not
+  // spend its whole budget on the oldest and drop it.
+  assert.match(d.text, /NEWEST/, 'the most recent turn survives the cap');
+});
+
+// A STORED ID THAT WILL NOT RESUME IS AN ARRIVAL.
+//
+// Behavioural cover for the derivation pinned above. Codex validates a stored
+// thread id before resuming, so a malformed or expired one yields a fresh
+// thread. Deriving "arriving" from the raw presence of the string told that
+// delegate it was returning and gave it a delta since a turn it had never
+// taken, which is this card's defect reached by the one path that looks like a
+// resume and is not.
+test('a delegate whose stored thread will not resume is treated as arriving, not returning', () => {
+  const { catchUpPrefix } = require(path.join(ROOT, 'lib', 'delegation', 'catch-up.js'));
+  const missed = { text: 'USER: something happened', truncated: 0, clipped: 0 };
+  // The two headings are the user-visible difference, so they are what is
+  // asserted rather than the boolean that chooses them.
+  assert.match(catchUpPrefix(missed, true), /BEFORE YOU JOINED/,
+    'a fresh thread is told it is walking in');
+  assert.match(catchUpPrefix(missed, false), /SINCE YOUR LAST TURN/,
+    'and a genuine resume is told what it missed');
+  assert.notStrictEqual(catchUpPrefix(missed, true), catchUpPrefix(missed, false),
+    'the two cases really do read differently, so getting the flag wrong is visible');
 });
