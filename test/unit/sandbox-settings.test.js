@@ -203,6 +203,35 @@ describe('sandboxSettings: named working folders', () => {
     assert.deepStrictEqual(s.network, { allowedDomains: ['*'] });
   });
 
+  test('the file this block is built from cannot be written by what the block contains', () => {
+    // .rundock/state.json holds the mode and the named folders, and both decide
+    // what this block says. It also sits inside the workspace, so the
+    // permission hook classifies a write to it as inside and never cards it.
+    // Without a deny, an agent could widen the boundary it is standing inside
+    // by editing that file and waiting for the next reconcile.
+    for (const mode of ['knowledge', 'code']) {
+      const s = sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], FOLDERS, mode);
+      assert.deepStrictEqual(s.filesystem.denyWrite, [`${WS}/.rundock/state.json`],
+        `${mode} mode denies writes to the file it is built from`);
+    }
+  });
+
+  test('the deny names that file alone, so agent scratch under .rundock still works', () => {
+    const s = sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], FOLDERS);
+    assert.ok(!s.filesystem.denyWrite.includes(`${WS}/.rundock`),
+      'denying the folder would take away the scratch location agents are told to use');
+  });
+
+  test('a block written before the deny existed is still ours, so it upgrades rather than stranding', () => {
+    // A block its own recogniser refuses is one Rundock can never rewrite OR
+    // withdraw, which would leave every existing workspace stuck with the
+    // shape it already has and no way to move off it.
+    const current = sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], FOLDERS);
+    const before = JSON.parse(JSON.stringify(current));
+    delete before.filesystem.denyWrite;
+    assert.strictEqual(isRundockSandbox(before, 'darwin'), true);
+  });
+
   test('both shapes are recognised as ours, with folders present', () => {
     for (const mode of ['knowledge', 'code']) {
       const block = sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], FOLDERS, mode);
