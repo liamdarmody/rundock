@@ -240,17 +240,28 @@
     // delegate this to Dev") is orphaned when the streaming bubble is reset
     // and the specialist's stream overwrites it. Markers are stripped from
     // the promoted text.
+    let handoffText = '';
     if (state.streamingRawText) {
-      let handoffText = RundockMarkers.stripDelegateTail(state.streamingRawText).trim();
+      handoffText = RundockMarkers.stripDelegateTail(state.streamingRawText).trim();
       handoffText = RundockMarkers.stripMarkers(handoffText).trim();
-      if (handoffText) {
-        effects.push({
-          type: 'promote-handoff-message',
-          text: handoffText,
-          agentId: outgoingAgentId,
-          attribution: attribution(message),
-        });
-      }
+    } else if (typeof message.handoffLine === 'string') {
+      // NOTHING WAS STREAMED, SO THERE IS NOTHING TO PROMOTE.
+      //
+      // This branch is the whole reason a delegating agent could hand over in
+      // silence. Promotion reads the streaming bubble, and an agent that emits
+      // a bare tool_use block never makes one, which is exactly the turn the
+      // handoff line exists for. The server sends the line on this message for
+      // that case and only that case, so the two can never both apply and a
+      // turn cannot render twice.
+      handoffText = RundockMarkers.stripMarkers(message.handoffLine).trim();
+    }
+    if (handoffText) {
+      effects.push({
+        type: 'promote-handoff-message',
+        text: handoffText,
+        agentId: outgoingAgentId,
+        attribution: attribution(message),
+      });
     }
     // Reset streaming state so the new agent gets a fresh bubble.
     next.streamingRawText = '';
