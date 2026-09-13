@@ -17,7 +17,7 @@
 //   - the allow list was only ever fetched when the settings pane opened, so a
 //     reload followed by ordinary work met the card it had already answered.
 //   - the revoke button interpolated the stored key into a JavaScript literal.
-const { test, describe } = require('node:test');
+const { test, describe, before } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -124,6 +124,55 @@ describe('a standing allow reaches the decision that asks the question', () => {
       assert.deepStrictEqual(sent, [],
         'reaching outside the workspace is a separate question from which tool asked');
     });
+  });
+});
+
+describe('the arriving message reaches the live decision, through the real wiring', () => {
+  // THE JOIN ITSELF, which is where both of the inert-feature bugs lived.
+  //
+  // The tests above prove chat.js updates its own set, and the tests below
+  // prove settings.js renders and sends. Neither proves the step between them,
+  // and that step is the one that was broken twice: settings.js calls
+  // setStandingToolAllows as a BARE GLOBAL, which exists only because chat.js's
+  // UMD tail does Object.assign(root, factory()). Wired here the same way, so
+  // a function dropped from either export list fails this test rather than
+  // silently doing nothing.
+  before(() => {
+    Object.assign(global, chat);
+    Object.assign(global, settings);
+  });
+
+  test('a tool_allows payload auto-allows the next matching request', () => {
+    const sent = [];
+    global.ws = { readyState: 1, send: (s) => sent.push(JSON.parse(s)) };
+    global.WebSocket = { OPEN: 1 };
+    document.getElementById('messages').innerHTML = '';
+    global.pendingPermissions.clear();
+    try {
+      // Exactly what app.js does on the 'tool_allows' arm, by the same name.
+      global.toolAllowsArrived({ tools: ['Bash:supabase'] });
+      chat.handlePermissionRequest(
+        { request_id: 'r9', request: { tool_name: 'Bash', input: { command: 'supabase db push' } } }, 'c1');
+      assert.deepStrictEqual(sent, [
+        { type: 'permission_response', requestId: 'r9', conversationId: 'c1', allow: true },
+      ], 'the stored answer arrived, crossed into the view, and answered the card');
+    } finally { global.ws = null; }
+  });
+
+  test('an empty payload puts the card back, so a revoke from elsewhere lands', () => {
+    const sent = [];
+    global.ws = { readyState: 1, send: (s) => sent.push(JSON.parse(s)) };
+    global.WebSocket = { OPEN: 1 };
+    document.getElementById('messages').innerHTML = '';
+    global.pendingPermissions.clear();
+    try {
+      global.toolAllowsArrived({ tools: ['Bash:supabase'] });
+      global.toolAllowsArrived({ tools: [] });
+      chat.handlePermissionRequest(
+        { request_id: 'r10', request: { tool_name: 'Bash', input: { command: 'supabase db push' } } }, 'c1');
+      assert.deepStrictEqual(sent, [],
+        'the same arm that grants has to be the arm that takes it away');
+    } finally { global.ws = null; }
   });
 });
 

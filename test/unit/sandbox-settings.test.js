@@ -271,6 +271,41 @@ describe('sandboxSettings: named working folders', () => {
     assert.strictEqual(isRundockSandbox(before, 'darwin'), true);
   });
 
+  test('every deny list Rundock has ever written is recognised, so no release strands a workspace', () => {
+    // The gap this closes was a real upgrade path, not a hypothetical one:
+    // 0.13.1 and 0.13.2 wrote a deny list of exactly one entry, so every
+    // workspace opened under either carried a shape the recogniser refused.
+    // Refused means never rewritten and never withdrawn.
+    //
+    // Walked from the current list rather than written out, so an entry added
+    // later is covered on the day it is added rather than the day someone
+    // remembers to extend this test.
+    for (const mode of ['knowledge', 'code']) {
+      const current = sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], FOLDERS, mode);
+      const deny = current.filesystem.denyWrite || [];
+      assert.ok(deny.length >= 2, `sanity: the ${mode} block still carries a deny list to narrow`);
+      for (let n = 0; n < deny.length; n++) {
+        const older = JSON.parse(JSON.stringify(current));
+        if (n === 0) delete older.filesystem.denyWrite;
+        else older.filesystem.denyWrite = deny.slice(0, n);
+        assert.strictEqual(isRundockSandbox(older, 'darwin'), true,
+          `a ${mode} block carrying the first ${n} deny entries is one we wrote, and must upgrade`);
+      }
+    }
+  });
+
+  test('a deny list that is not a prefix of ours is somebody else\'s edit', () => {
+    // The other direction, so the walk above cannot be satisfied by accepting
+    // anything at all: a person who added their own path to the deny list has
+    // authored the block, and Rundock must leave it alone rather than
+    // overwrite the entry they added.
+    const current = sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], FOLDERS);
+    const edited = JSON.parse(JSON.stringify(current));
+    edited.filesystem.denyWrite = [...current.filesystem.denyWrite, `${WS}/notes.md`];
+    assert.strictEqual(isRundockSandbox(edited, 'darwin'), false,
+      'an entry we never write means the block is not ours to rewrite');
+  });
+
   test('both shapes are recognised as ours, with folders present', () => {
     for (const mode of ['knowledge', 'code']) {
       const block = sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], FOLDERS, mode);
