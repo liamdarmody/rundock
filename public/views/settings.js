@@ -194,9 +194,18 @@ function renderSettingsSection(section) {
         </div>
       </div>
       ${workingFoldersSectionHtml()}
+      <div class="settings-card">
+        <div class="settings-card-title">Tools allowed without asking</div>
+        <div class="settings-card-hint">Chosen with "Always allow" on a permission card. Revoking one means the card asks again.</div>
+        <div id="tool-allows-block">${toolAllowsBlockHtml()}</div>
+      </div>
       <div class="settings-card" id="runtimes-card">${runtimesCardHtml()}</div>
       <button class="settings-btn" onclick="changeWorkspace()">Change workspace</button>`;
     workingFoldersLoad();
+    // Asked for whenever the pane opens, for the same reason the folders are:
+    // a list rendered from stale state is a list that lies about what is
+    // currently allowed.
+    requestToolAllows();
     // Refresh runtime state whenever the card becomes visible (the user may
     // have just installed or signed in to a CLI).
     if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'get_runtime_status' }));
@@ -383,6 +392,49 @@ function workingFoldersLoad() {
 // client never predicts the result of its own change: what comes back has been
 // normalised and de-duplicated, so a row that collapsed into a parent is gone
 // from the reply rather than lingering until a reload.
+// THE STANDING "ALWAYS ALLOW" ANSWERS, shown where they can be taken back.
+//
+// A grant nobody can see is a grant nobody can revoke, and these now outlive
+// the tab they were given in, so the list and the revoke are part of the same
+// change rather than a later nicety.
+//
+// Two readers, one truth: the permission cards consult the cached set in
+// chat.js and this pane renders the same list, both fed by the server's reply,
+// so a revoke here silences nothing the cards still think is allowed.
+let standingToolAllows = [];
+
+function toolAllowsArrived(msg) {
+  standingToolAllows = Array.isArray(msg.tools) ? msg.tools.filter((k) => typeof k === 'string') : [];
+  if (typeof setStandingToolAllows === 'function') setStandingToolAllows(standingToolAllows);
+  // Redraws its own block only, and only when on screen, for the same reason
+  // the folders block does: re-entering the section renderer here would make
+  // the reply ask again, without end.
+  const container = document.getElementById('tool-allows-block');
+  if (container) container.innerHTML = toolAllowsBlockHtml();
+}
+
+function toolAllowsBlockHtml() {
+  if (!standingToolAllows.length) {
+    return '<div class="settings-empty">No tools are allowed without asking. '
+      + 'Choosing "Always allow" on a permission card adds one here.</div>';
+  }
+  return standingToolAllows.map((k) => (
+    `<div class="settings-row"><code>${esc(k)}</code>`
+    + `<button class="settings-row-remove" onclick="revokeToolAllow('${escAttr(k)}')" `
+    + `title="Ask again for this tool">Revoke</button></div>`
+  )).join('');
+}
+
+function revokeToolAllow(key) {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'remove_tool_allow', key }));
+  }
+}
+
+function requestToolAllows() {
+  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'get_tool_allows' }));
+}
+
 function workingFoldersArrived(msg) {
   workingFolders = Array.isArray(msg.folders) ? msg.folders : [];
   if (typeof msg.home === 'string') workingFoldersHome = msg.home;

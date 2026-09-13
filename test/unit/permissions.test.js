@@ -489,3 +489,41 @@ describe('pending permission store', () => {
     assert.strictEqual(P.clearPendingPermissions(byConvo, 'convo-a'), 0, 'clearing an empty conversation is a no-op');
   });
 });
+
+// WHAT A STANDING ALLOW STILL CANNOT DO.
+//
+// These answers now outlive the tab they were given in, which widens what
+// "always" means from "until you reload" to "until you revoke". The widening is
+// bounded by the two rules below, and those rules are the reason the change is
+// safe rather than merely convenient. They are asserted here against the same
+// decision function the cards use, so a future edit that lets a stored key
+// answer for a destructive command or an outside path fails.
+describe('a standing allow answers only what it was ever allowed to answer', () => {
+  const stored = new Set(['Bash:rm', 'Bash:git', 'Write']);
+
+  test('a high-risk request is carded even when its key is stored', () => {
+    // The allow key is coarse: it is the leading command. A standing allow for
+    // a benign `rm` variant must never carry a destructive one, which is why
+    // high risk is decided ahead of the stored set rather than after it.
+    const d = P.decidePermission('high', 'Bash:rm', stored);
+    assert.strictEqual(d.action, 'card',
+      'destructive commands are asked every time, whatever has been allowed before');
+  });
+
+  test('a medium-risk request with a stored key is allowed, which is the whole point', () => {
+    const d = P.decidePermission('medium', 'Bash:git', stored);
+    assert.strictEqual(d.action, 'allow');
+    assert.strictEqual(d.reason, 'always-allowed');
+  });
+
+  test('a key that was never stored is still carded', () => {
+    assert.strictEqual(P.decidePermission('medium', 'Bash:npm', stored).action, 'card');
+  });
+
+  test('an empty store behaves exactly as the old empty Set did', () => {
+    // The seeded cache starts empty when a workspace has no answers, so the
+    // behaviour for a fresh workspace must be unchanged.
+    assert.strictEqual(P.decidePermission('medium', 'Bash:git', new Set()).action, 'card');
+    assert.strictEqual(P.decidePermission('low', 'Bash:ls', new Set()).action, 'allow');
+  });
+});

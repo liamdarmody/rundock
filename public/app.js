@@ -255,6 +255,10 @@ function handle(d) {
     // client never predicts the result of its own change, because the server
     // normalises what it is sent.
     case 'working_folders': workingFoldersArrived(d); break;
+    // The workspace's standing "always allow" answers. Seeded on connect and
+    // refreshed after every grant or revoke, so the cards and the settings list
+    // are never reading two different truths.
+    case 'tool_allows': toolAllowsArrived(d); break;
     case 'workspace_mode_changed':
       workspaceMode = d.mode;
       // Re-render settings if currently viewing workspace settings

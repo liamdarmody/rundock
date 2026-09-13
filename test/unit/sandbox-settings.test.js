@@ -204,8 +204,9 @@ describe('sandboxSettings: named working folders', () => {
     // frozen, approved on the ledger rather than slipped in: it protects the
     // file this very block is built from. It is the ONLY difference, and
     // subtracting it must leave the shipped block exactly.
-    assert.deepStrictEqual(s.filesystem.denyWrite, [`${WS}/.rundock/state.json`],
-      'the intended difference, named');
+    assert.deepStrictEqual(s.filesystem.denyWrite,
+      [`${WS}/.rundock/state.json`, `${WS}/.rundock/permissions.json`],
+      'the intended difference, named: both files that hold answers to permission questions');
     const { denyWrite, ...filesystem } = s.filesystem;
     assert.deepStrictEqual({ ...s, filesystem }, SHIPPED_KNOWLEDGE_BLOCK,
       'and with it removed, key for key and value for value, the block that shipped');
@@ -248,8 +249,9 @@ describe('sandboxSettings: named working folders', () => {
     // by editing that file and waiting for the next reconcile.
     for (const mode of ['knowledge', 'code']) {
       const s = sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], FOLDERS, mode);
-      assert.deepStrictEqual(s.filesystem.denyWrite, [`${WS}/.rundock/state.json`],
-        `${mode} mode denies writes to the file it is built from`);
+      assert.deepStrictEqual(s.filesystem.denyWrite,
+        [`${WS}/.rundock/state.json`, `${WS}/.rundock/permissions.json`],
+        `${mode} mode denies writes to the files that answer permission questions`);
     }
   });
 

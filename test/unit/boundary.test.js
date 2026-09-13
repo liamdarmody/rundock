@@ -408,3 +408,118 @@ describe('agent scratch files', () => {
     assert.strictEqual(classifyFileAccess('Read', { file_path: outside }, ws, []).where, 'outside');
   });
 });
+
+// THE STORE'S OWN FAILURE BRANCHES.
+//
+// The handlers guard before reaching these, so exercising the store only
+// through them leaves its own refusals untested: the guard could be removed
+// from the handler and nothing would fail. These drive the module directly.
+describe('standing tool allows refuse rather than corrupt', () => {
+  const boundary = require('../../lib/workspace/boundary.js');
+  const config = require('../../lib/config.js');
+
+  function tempWorkspace() {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'allows-store-'));
+    fs.mkdirSync(path.join(dir, '.rundock'), { recursive: true });
+    return dir;
+  }
+
+  test('a blank or non-string key is never stored', () => {
+    const original = config.getWorkspace();
+    const dir = tempWorkspace();
+    try {
+      config.setWorkspace(dir);
+      for (const bad of ['', '   ', null, undefined, 42, {}]) {
+        boundary.addToolAllow(bad);
+      }
+      assert.deepStrictEqual(boundary.readToolAllows(), [],
+        'nothing silences a card on the strength of a key that says nothing');
+    } finally { config.setWorkspace(original); }
+  });
+
+  test('the same key twice is stored once', () => {
+    const original = config.getWorkspace();
+    const dir = tempWorkspace();
+    try {
+      config.setWorkspace(dir);
+      boundary.addToolAllow('Bash:git');
+      boundary.addToolAllow('Bash:git');
+      assert.deepStrictEqual(boundary.readToolAllows(), ['Bash:git']);
+    } finally { config.setWorkspace(original); }
+  });
+
+  test('a store holding something other than a list of strings reads as nothing allowed', () => {
+    // The safe direction again: a file whose shape is wrong must make the card
+    // appear, never let a request through on the strength of it.
+    const original = config.getWorkspace();
+    const dir = tempWorkspace();
+    try {
+      config.setWorkspace(dir);
+      fs.writeFileSync(path.join(dir, '.rundock', 'permissions.json'),
+        JSON.stringify({ allowedTools: ['Bash:git', 7, null, '', { k: 1 }] }));
+      assert.deepStrictEqual(boundary.readToolAllows(), ['Bash:git'],
+        'only the entries that are actually keys survive the read');
+      fs.writeFileSync(path.join(dir, '.rundock', 'permissions.json'),
+        JSON.stringify({ allowedTools: 'Bash:git' }));
+      assert.deepStrictEqual(boundary.readToolAllows(), [],
+        'and a value that is not a list at all allows nothing');
+    } finally { config.setWorkspace(original); }
+  });
+
+  // A STORE THAT CANNOT BE WRITTEN MUST NOT REPORT SUCCESS.
+  //
+  // The catch exists so a disk failure degrades to "the card keeps appearing"
+  // rather than crashing the server mid-permission-decision. What it must never
+  // do is return the key as though it were stored: the interface would show a
+  // standing allow that the next read cannot find, and the person would believe
+  // they had answered once when they had not.
+  function unwritableStore(dir) {
+    // A directory where the file belongs: writeFileSync raises EISDIR, which is
+    // a real failure of the same shape as a permissions or disk error, without
+    // needing to stub the filesystem module.
+    fs.mkdirSync(path.join(dir, '.rundock', 'permissions.json'), { recursive: true });
+  }
+
+  test('a grant that cannot be written is not reported as granted', () => {
+    const original = config.getWorkspace();
+    const dir = tempWorkspace();
+    try {
+      config.setWorkspace(dir);
+      unwritableStore(dir);
+      assert.deepStrictEqual(boundary.addToolAllow('Bash:git'), [],
+        'the caller is told what is actually stored, which is nothing');
+      assert.deepStrictEqual(boundary.readToolAllows(), [],
+        'and the next read agrees, so the card will appear again');
+    } finally { config.setWorkspace(original); }
+  });
+
+  test('a revoke that cannot be written is not reported as revoked', () => {
+    const original = config.getWorkspace();
+    const dir = tempWorkspace();
+    try {
+      config.setWorkspace(dir);
+      boundary.addToolAllow('Bash:git');
+      // Read-only, not replaced: the revoke must be able to READ the grant it
+      // is trying to remove and still fail to write the removal. A store the
+      // read also fails on would exit early and never reach the branch.
+      const file = path.join(dir, '.rundock', 'permissions.json');
+      fs.chmodSync(file, 0o444);
+      assert.deepStrictEqual(boundary.removeToolAllow('Bash:git'), ['Bash:git'],
+        'a revoke that did not land reports the grant as still standing, never as removed');
+      fs.chmodSync(file, 0o644);
+      assert.deepStrictEqual(boundary.readToolAllows(), ['Bash:git'],
+        'and the grant is genuinely still there, which is why the revoke must not have claimed otherwise');
+    } finally { config.setWorkspace(original); }
+  });
+
+  test('with no workspace open, reading is empty and writing is a no-op', () => {
+    const original = config.getWorkspace();
+    try {
+      config.setWorkspace(null);
+      assert.deepStrictEqual(boundary.readToolAllows(), []);
+      assert.deepStrictEqual(boundary.addToolAllow('Bash:git'), [],
+        'there is nowhere to record it, so nothing is recorded');
+      assert.deepStrictEqual(boundary.removeToolAllow('Bash:git'), []);
+    } finally { config.setWorkspace(original); }
+  });
+});
