@@ -637,24 +637,24 @@ describe('drawing an arrival and waking the agent read the same identifier', () 
   const fs = require('node:fs');
   const src = fs.readFileSync(path.join(ROOT, 'lib', 'delegation', 'engine.js'), 'utf8');
 
-  test('the non-intercepted restore shares its parts, and keeps the side effect unconditional', () => {
-    // The arrival is drawn from both parts, because both must hold for a turn
-    // to appear.
-    assert.match(src, /const restoredWillSpeak = parentShouldWake && parentReachable;/,
-      'one name combining what the marker says and whether the parent can be written to');
-    assert.match(src, /\.\.\.switchSilence\(restoredWillSpeak\)/,
-      'and the arrival is drawn from it, through the one helper every path uses');
+  test('the non-intercepted restore asks each question once and shares every answer', () => {
+    // Three inputs decide whether this parent produces a turn, and all three
+    // are named before the switch is sent so the drawing and the waking read
+    // the same answers rather than two expressions that must agree.
+    assert.match(src, /const bufferedTookOver = parentShouldWake\s*\n?\s*&& bufferedFollowUpTakesOver\(/,
+      'the buffered question is asked once, ahead of both decisions');
+    assert.match(src, /const restoredWillSpeak = parentShouldWake && \(bufferedTookOver \|\| parentReachable\);/,
+      'a buffered takeover still produces a turn, so it draws');
+    assert.match(src, /if \(parentShouldWake && !bufferedTookOver && parentReachable\) \{/,
+      'and the wake reads the captured answer rather than asking again');
 
-    // WHAT MUST NOT BE FOLDED IN. bufferedFollowUpTakesOver consumes and
-    // replays a buffered message, so it acts as it answers. A first attempt at
-    // this fix put reachability inside the name the wake guard reads, which
-    // stopped that replay running for an unreachable parent and silently
-    // dropped a message the user had already sent. The guard therefore asks
-    // the marker first, then the buffer, then reachability, in that order.
-    assert.match(src, /if \(parentShouldWake && !bufferedFollowUpTakesOver\([^)]*\) && parentReachable\) \{/,
-      'the buffered replay is consulted whenever the marker says act, reachable or not');
-    assert.doesNotMatch(src, /if \(restoredWillSpeak && !bufferedFollowUpTakesOver\(/,
-      'never gated on reachability, which would drop the replay');
+    // WHAT MUST NOT COME BACK. Gating the buffered question on reachability
+    // left the entry unparked for a message about to be replayed into it, and
+    // an earlier draft did exactly that while looking tidier.
+    assert.doesNotMatch(src, /parentReachable[^;]*&& bufferedFollowUpTakesOver\(/,
+      'the buffered question is never gated on reachability');
+    assert.strictEqual((src.match(/bufferedFollowUpTakesOver\(convoId, orig/g) || []).length, 1,
+      'and it is asked exactly once on this path, because asking twice acts twice');
   });
 
   test('the mid-level restore decides both from parentMustAct', () => {

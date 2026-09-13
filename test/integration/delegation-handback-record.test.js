@@ -304,8 +304,21 @@ describe('control skipping a mid-level parent to reach the orchestrator', () => 
     client.send({ type: 'delegate', conversationId: convoId, targetAgent: 'content-lead', context: 'lead brief' });
     await client.waitFor(m => m.type === 'system' && m.subtype === 'agent_switch'
       && m._conversationId === convoId && m.toAgent === 'content-analyst', { label: 'down to the report' });
-    await client.waitFor(m => m.type === 'system' && m.subtype === 'agent_switch'
-      && m._conversationId === convoId && m.toAgent === 'chief-of-staff', { label: 'straight back to the orchestrator' });
+    const skipLevel = (await client.waitFor(m => m.type === 'system' && m.subtype === 'agent_switch'
+      && m._conversationId === convoId && m.fromAgent === 'content-analyst'
+      && m.toAgent === 'chief-of-staff', { label: 'straight back to the orchestrator' })).msg;
+
+    // THE FOURTH PATH, ASSERTED ON THE MESSAGE. This is the skip-level restore
+    // to a LIVE orchestrator, which is the one shape the other three scenarios
+    // cannot produce: the others either spawn the parent fresh or restore a
+    // parked one. Matched on origin as well as destination, because
+    // `toAgent === 'chief-of-staff'` alone is also satisfied by an earlier
+    // switch in this same scenario.
+    // The analyst emitted COMPLETE, so the COMPLETE gate leaves this
+    // orchestrator idle: it is restored to park and will not speak, so nothing
+    // is drawn for it.
+    assert.strictEqual(skipLevel.silent, true,
+      'an orchestrator restored only to park is not announced as arriving');
 
     const stored = storedConversation(convoId);
     assert.ok(stored, 'the conversation was persisted');
