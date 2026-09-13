@@ -240,11 +240,17 @@
     // delegate this to Dev") is orphaned when the streaming bubble is reset
     // and the specialist's stream overwrites it. Markers are stripped from
     // the promoted text.
+    // STRIPPED FIRST, THEN BRANCHED. Raw truthiness is not prose: streamed text
+    // that is only a delegate marker or only whitespace strips to nothing, and
+    // branching on the raw string took this path anyway, promoted an empty
+    // string, and never reached the carried line. That is the same mistake the
+    // engine makes impossible one layer up, repeated here.
     let handoffText = '';
     if (state.streamingRawText) {
       handoffText = RundockMarkers.stripDelegateTail(state.streamingRawText).trim();
       handoffText = RundockMarkers.stripMarkers(handoffText).trim();
-    } else if (typeof message.handoffLine === 'string') {
+    }
+    if (!handoffText && typeof message.handoffLine === 'string') {
       // NOTHING WAS STREAMED, SO THERE IS NOTHING TO PROMOTE.
       //
       // This branch is the whole reason a delegating agent could hand over in

@@ -38,7 +38,7 @@ function extractExecutor(name) {
   return new Function('convoId', 'ef', body);
 }
 
-let dom, chat, reduce, promote;
+let dom, chat, reduce, createState, promote, divider;
 
 before(() => {
   dom = new JSDOM('<!doctype html><html><body><div id="messages"></div></body></html>');
@@ -54,9 +54,10 @@ before(() => {
   chat = require(path.join(ROOT, 'public', 'views', 'chat.js'));
   Object.assign(global, chat);
   const cs = require(path.join(ROOT, 'public', 'conversation-state.js'));
-  reduce = cs.reduce || cs.reduceMessage || cs;
+  reduce = cs.reduce; createState = cs.createState;
   global.RundockMarkers = require(path.join(ROOT, 'public', 'markers.js'));
   promote = extractExecutor('promote-handoff-message');
+  divider = extractExecutor('show-delegation-divider');
 });
 
 function freshDom() {
@@ -120,5 +121,159 @@ describe('the handoff line is on screen while the handoff happens', () => {
 
     assert.deepStrictEqual(renderedAgentTurns(), [],
       'a handoff in a background conversation must not appear in the open one');
+  });
+});
+
+describe('the whole pipeline puts it on screen, in order, live and on reload', () => {
+  // NOT THE EXECUTOR ALONE. The tests above drive one executor, which proves it
+  // renders but not that the reducer ever asks it to. These run the real
+  // reduce() and then the real executors it names, which is the path a live
+  // agent_switch actually takes.
+  const SWITCH_CTX = { isActive: true, convoAgentId: 'default', toAgentExists: true, toAgentType: 'specialist', fromAgentExists: true };
+
+  function runPipeline(msg, state) {
+    const r = reduce(state, msg, SWITCH_CTX);
+    for (const ef of r.effects) {
+      if (ef.type === 'promote-handoff-message') promote('c1', ef);
+      else if (ef.type === 'show-delegation-divider') divider('c1', ef);
+    }
+    return r;
+  }
+
+  function nodes() {
+    return [...document.getElementById('messages').children].map((el) => ({
+      kind: el.className.includes('msg-delegation') ? 'divider'
+        : el.className.includes('msg-agent') ? 'agent' : 'other',
+      text: (el.textContent || '').replace(/\s+/g, ' ').trim(),
+    }));
+  }
+
+  test('the handoff line is on screen before the arrival, with nothing streamed', () => {
+    freshDom();
+    global.conversations = [{ id: 'c1', agentId: 'default', messages: [] }];
+    global.activeConversation = { id: 'c1', agentId: 'default' };
+    global.getConvoState = () => ({ currentStreamingMsg: null });
+
+    runPipeline({
+      type: 'system', subtype: 'agent_switch', _conversationId: 'c1', _processId: 'p1',
+      fromAgent: 'default', toAgent: 'vox',
+      handoffLine: 'Handing to Vox to write the thread.',
+    }, { ...createState() });
+
+    const seen = nodes();
+    const turn = seen.findIndex((n) => n.kind === 'agent');
+    const arrival = seen.findIndex((n) => n.kind === 'divider');
+    assert.ok(turn > -1, `the delegating agent has a visible turn: ${JSON.stringify(seen)}`);
+    assert.match(seen[turn].text, /Handing to Vox to write the thread\./);
+    if (arrival > -1) {
+      assert.ok(turn < arrival,
+        'it is said before the next agent arrives, not after, which is the order a person reads');
+    }
+  });
+
+  test('what a reload draws for the same turn says the same thing', () => {
+    // LIVE AND REPLAY MUST AGREE. The defect this card fixes passed a replay
+    // assertion and failed a live one, so proving one says nothing about the
+    // other. The transcript carries the tool summary with the line, so the live
+    // message has to carry it too or the two renderings differ.
+    freshDom();
+    global.conversations = [{ id: 'c1', agentId: 'default', messages: [] }];
+    global.activeConversation = { id: 'c1', agentId: 'default' };
+    global.getConvoState = () => ({ currentStreamingMsg: null });
+
+    const stored = '[Agent]\nHanding to Vox to write the thread.';
+    runPipeline({
+      type: 'system', subtype: 'agent_switch', _conversationId: 'c1', _processId: 'p1',
+      fromAgent: 'default', toAgent: 'vox', handoffLine: stored,
+    }, { ...createState() });
+    const liveText = nodes().find((n) => n.kind === 'agent').text;
+
+    freshDom();
+    addAgentMsg(stored, 'default', false);
+    const replayText = nodes().find((n) => n.kind === 'agent').text;
+
+    assert.strictEqual(liveText, replayText,
+      'the same turn reads identically whether it arrived live or was replayed');
+  });
+
+  test('streamed prose still wins, so nothing renders twice', () => {
+    freshDom();
+    global.conversations = [{ id: 'c1', agentId: 'default', messages: [] }];
+    global.activeConversation = { id: 'c1', agentId: 'default' };
+    global.getConvoState = () => ({ currentStreamingMsg: null });
+
+    runPipeline({
+      type: 'system', subtype: 'agent_switch', _conversationId: 'c1', _processId: 'p1',
+      fromAgent: 'default', toAgent: 'vox', handoffLine: 'Carried line.',
+    }, { ...createState(), streamingRawText: 'My own words.' });
+
+    const turns = nodes().filter((n) => n.kind === 'agent');
+    assert.strictEqual(turns.length, 1, 'one turn only');
+    assert.match(turns[0].text, /My own words\./, 'and it is what the agent actually said');
+  });
+});
+
+describe('every turn recorded as a plain agent message also reaches a live client', () => {
+  // THE CLASS, NOT THE INSTANCE. The reported defect was one append site that
+  // wrote a turn nobody was told about. Checking that one site would leave the
+  // next one free to do the same, which is how this release repeatedly fixed an
+  // instance and shipped the class.
+  //
+  // Read BY BRANCH rather than by a window of nearby lines. A fixed window
+  // above each site reaches into the sibling branch, and the first version of
+  // this test was exempted by a neighbouring `if (ownProse)` that had nothing
+  // to do with the site it excused: deleting the real fix left it green.
+  const ENGINE = fs.readFileSync(path.join(ROOT, 'lib', 'delegation', 'engine.js'), 'utf-8');
+  const CALL = "appendTranscript(convoId, 'agent'";
+
+  // The branch a line sits in: walk back to the nearest `if`/`else if` at a
+  // smaller indentation, then forward to where that indentation closes.
+  function enclosingBranch(lines, at) {
+    const indentOf = (l) => l.length - l.trimStart().length;
+    const mine = indentOf(lines[at]);
+    let head = -1;
+    for (let i = at - 1; i >= 0; i--) {
+      const l = lines[i];
+      if (!l.trim()) continue;
+      if (indentOf(l) < mine && /\bif\s*\(|\}\s*else\b/.test(l)) { head = i; break; }
+      if (indentOf(l) < mine) break;
+    }
+    if (head === -1) return { guard: '', body: lines[at] };
+    const headIndent = indentOf(lines[head]);
+    let end = lines.length;
+    for (let i = at + 1; i < lines.length; i++) {
+      const l = lines[i];
+      if (!l.trim()) continue;
+      if (indentOf(l) <= headIndent) { end = i; break; }
+    }
+    return { guard: lines[head], body: lines.slice(head, end).join('\n') };
+  }
+
+  test('each site either requires streamed text or hands the text to the client', () => {
+    const lines = ENGINE.split('\n');
+    const sites = [];
+    lines.forEach((line, i) => {
+      const at = line.indexOf(CALL);
+      if (at === -1) return;
+      // A typed entry (for example 'routing') is bookkeeping, not a turn, and
+      // is deliberately invisible. Looked for AFTER the role argument, because
+      // `'agent'` is itself a quoted word.
+      if (/'[a-z]+'/.test(line.slice(at + CALL.length))) return;
+      sites.push({ line: i + 1, text: line.trim(), ...enclosingBranch(lines, i) });
+    });
+    assert.ok(sites.length >= 5,
+      `sanity: the engine was read and has plain agent append sites, found ${sites.length}`);
+
+    const unexplained = sites.filter((s) => {
+      // Its own guard requires the agent to have produced text, which the
+      // streaming path has already put on screen.
+      if (/responseText|ownProse/.test(s.guard)) return false;
+      // Or its own branch hands the text to the client.
+      if (/liveHandoffText\s*=\s*(?!null)\w/.test(s.body)) return false;
+      return true;
+    });
+    assert.deepStrictEqual(unexplained.map((s) => s.line), [],
+      'a turn written to the transcript with nothing sending it live is invisible until reload: '
+      + JSON.stringify(unexplained.map((s) => ({ line: s.line, guard: s.guard.trim() })), null, 1));
   });
 });
