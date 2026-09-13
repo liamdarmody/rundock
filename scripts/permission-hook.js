@@ -381,7 +381,13 @@ function isWorkspaceAnswerFile(resolvedPath, workspaceRoot, foldsCase = hostFold
   // Windows paths fold case whatever the host says, which is why the flavour
   // travels with the comparison rather than being assumed from the host.
   const folds = foldsCase || pmod === path.win32;
-  const c = foldCase(resolvedPath, folds);
+  // CANONICALISED ON BOTH SIDES. Callers inside this file pass an already
+  // resolved path, but the server's decision point passes a crossing's path
+  // straight off the wire, and on macOS the same file has two absolute names
+  // (/var and /private/var). Comparing one spelling against the other answered
+  // "not an answer file" for the file it was looking at. Canonicalising is
+  // idempotent, so the callers that had already done it are unaffected.
+  const c = foldCase(canonicalize(resolvedPath, pmod), folds);
   return WORKSPACE_ANSWER_FILES.some((f) => (
     c === foldCase(canonicalize(pmod.join(pmod.resolve(workspaceRoot), '.rundock', f), pmod), folds)
   ));
@@ -822,6 +828,7 @@ module.exports = {
   isProtectedClaudeEdit, isRuntimeHomeSurfaceEdit, isMcpReadTool, classifyFileAccess, classifyShellAccess, canonicalize,
   advisoryOutsidePaths,
   isSecretPath, isPersistenceSurface, SECRET_RELATIVE_PATHS, PERSISTENCE_SURFACE_DIRS, PERSISTENCE_SURFACE_FILES,
+  isWorkspaceAnswerFile, WORKSPACE_ANSWER_FILES,
   REFUSED_CLAUDE_EDIT_DIRS, READ_ONLY_SHELL_COMMANDS, READ_ONLY_POWERSHELL_COMMANDS, isReadOnlyShellCommand,
 };
 

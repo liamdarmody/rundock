@@ -421,6 +421,13 @@ describe('agent scratch files', () => {
 // standing allows and silence every later card.
 describe('an agent cannot quietly answer the questions it was asked', () => {
   const os2 = require('node:os');
+  const boundary = require('../../lib/workspace/boundary.js');
+  const config = require('../../lib/config.js');
+  function tempWorkspace() {
+    const d = fs.mkdtempSync(path.join(os2.tmpdir(), 'answer-files-'));
+    fs.mkdirSync(path.join(d, '.rundock'), { recursive: true });
+    return d;
+  }
   const WS = path.join(os2.tmpdir(), 'answer-files-ws');
 
   const write = (target) => classifyFileAccess('Write', { file_path: target }, WS, [], os2.homedir(), false);
@@ -434,6 +441,27 @@ describe('an agent cannot quietly answer the questions it was asked', () => {
       assert.strictEqual(write(target).grantDir, null,
         'and no standing folder grant may be offered that would silence it next time');
     }
+  });
+
+  test('no standing folder grant covers them, however wide it is', () => {
+    // Granting a PARENT of the workspace is an ordinary thing to do, and a
+    // grant covers its whole subtree. Without this the grant would be
+    // answering for the mechanism that records the answers.
+    const original = config.getWorkspace();
+    const dir = tempWorkspace();
+    try {
+      config.setWorkspace(dir);
+      boundary.addBoundaryGrant(path.dirname(dir));
+      assert.strictEqual(boundary.boundaryGrantCovers(path.join(dir, 'notes.md')), true,
+        'sanity: the grant genuinely covers the workspace, so the next assertions mean something');
+      for (const f of ['state.json', 'permissions.json']) {
+        const target = path.join(dir, '.rundock', f);
+        assert.strictEqual(boundary.crossingCovered({ path: target }), false,
+          `a stored grant must never answer for ${f}`);
+      }
+      assert.strictEqual(boundary.crossingCovered({ path: path.join(dir, '.rundock', 'scratch', 'x.md') }), true,
+        'while everything else the grant reaches is still covered by it');
+    } finally { config.setWorkspace(original); }
   });
 
   test('reading them is ordinary workspace work', () => {
