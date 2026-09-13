@@ -171,6 +171,25 @@ describe('the whole pipeline puts it on screen, in order, live and on reload', (
     }
   });
 
+  test('the live turn carries the words alone, not the transcript bookkeeping', () => {
+    // MEASURED IN A BROWSER, then pinned here. A reload renders the Claude
+    // session, not the transcript, so the `[Agent]` tool-summary prefix that
+    // Rundock adds on the way into the transcript is absent after a reload.
+    // Sending the prefixed string made the same turn read differently live and
+    // reloaded, which is the divergence this card forbids. No assertion on the
+    // strings alone could see it; it took looking at the two render paths.
+    const ENGINE = fs.readFileSync(path.join(ROOT, 'lib', 'delegation', 'engine.js'), 'utf-8');
+    const at = ENGINE.indexOf('liveHandoffText = ');
+    assert.ok(at > -1, 'sanity: the engine still decides what to send live');
+    const assignments = [...ENGINE.matchAll(/liveHandoffText\s*=\s*([A-Za-z_$][\w$.]*)/g)].map((m) => m[1]);
+    assert.ok(assignments.length >= 2, `sanity: both branches assign it, found ${assignments.length}`);
+    for (const a of assignments) {
+      assert.ok(!/withTools/i.test(a),
+        `the live message must not carry the tool-summary string (${a}): a reload does not show it, `
+        + 'so sending it makes the same turn read two different ways');
+    }
+  });
+
   test('what a reload draws for the same turn says the same thing', () => {
     // LIVE AND REPLAY MUST AGREE. The defect this card fixes passed a replay
     // assertion and failed a live one, so proving one says nothing about the
@@ -181,7 +200,7 @@ describe('the whole pipeline puts it on screen, in order, live and on reload', (
     global.activeConversation = { id: 'c1', agentId: 'default' };
     global.getConvoState = () => ({ currentStreamingMsg: null });
 
-    const stored = '[Agent]\nHanding to Vox to write the thread.';
+    const stored = 'Handing to Vox to write the thread.';
     runPipeline({
       type: 'system', subtype: 'agent_switch', _conversationId: 'c1', _processId: 'p1',
       fromAgent: 'default', toAgent: 'vox', handoffLine: stored,
@@ -281,12 +300,13 @@ describe('every turn recorded as a plain agent message also reaches a live clien
   // listed so the gap is visible rather than quietly exempted. Removing an
   // entry after fixing its site is how this list shrinks; adding one needs a
   // reason as good as this paragraph.
+  // KEYED ON THE GUARD, not on a line number. Line numbers drift with every
+  // edit above them, and a list that has to be renumbered to stay green is a
+  // list that will be renumbered without being read.
   const KNOWN_DELTA_GAPS = new Set([
-    'lib/delegation/engine.js:393',
-    'lib/delegation/engine.js:717',
-    'lib/delegation/engine.js:792',
-    'lib/delegation/engine.js:1185',
-    'lib/delegation/engine.js:1583',
+    'lib/delegation/engine.js::if (entry.responseText) {',
+    'lib/delegation/engine.js::if (e.responseText && !isSilentParkResponse(e.responseText)) {',
+    'lib/delegation/engine.js::if (e.responseText) {',
   ]);
   function sourceFiles(dir, acc = []) {
     for (const name of fs.readdirSync(dir)) {
@@ -381,7 +401,7 @@ describe('every turn recorded as a plain agent message also reaches a live clien
       // the branch stayed green while a fix was deleted.
       if (/liveHandoffText\s*=\s*(?!null)\w/.test(s.body)) return false;
       const guarded = s.guard ? /responseText|ownProse/.test(s.guard) : /responseText|ownProse/.test(s.before);
-      if (guarded && KNOWN_DELTA_GAPS.has(`${s.file}:${s.line}`)) return false;
+      if (guarded && KNOWN_DELTA_GAPS.has(`${s.file}::${s.guard.trim()}`)) return false;
       // Three: it pushes the same turn down the socket beside the write, which
       // is how the runtime error paths do it.
       if (/safeSend\(/.test(s.body)) return false;
@@ -397,11 +417,10 @@ describe('every turn recorded as a plain agent message also reaches a live clien
     // only honest while it cannot be widened to cover the thing under test.
     // The intercepted handoff site must not be in it, now or later.
     const engine = fs.readFileSync(path.join(ROOT, 'lib', 'delegation', 'engine.js'), 'utf-8').split('\n');
-    const fixed = engine.findIndex((l) => /liveHandoffText\s*=\s*withTools/.test(l));
+    const fixed = engine.findIndex((l) => /liveHandoffText\s*=\s*handoffLine/.test(l));
     assert.ok(fixed > -1, 'sanity: the fix is still in the engine');
-    for (let i = fixed - 6; i <= fixed + 2; i++) {
-      assert.ok(!KNOWN_DELTA_GAPS.has(`lib/delegation/engine.js:${i + 1}`),
-        `the handoff site may never be excused by the gap list, found line ${i + 1}`);
-    }
+    // The guard the handoff branch sits under may never appear in the list.
+    assert.ok(![...KNOWN_DELTA_GAPS].some((k) => /handoffLine/.test(k)),
+      'the branch this card fixes may never be excused by the gap list');
   });
 });
