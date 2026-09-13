@@ -4,9 +4,19 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
-## 0.13.3: Everyone In The Room (2026-09-11)
+## 0.13.3: Everyone In The Room (2026-09-13)
 
 ### Fixed
+
+- **Code mode with Working Folders stops asking about folders you already named:** naming your working folders and switching to Code mode was meant to end the approval cards for those folders, and for some people it did not. Rundock controls one of several places the operating system sandbox is configured, and the sandbox turns on if any one of them asks for it. Turning it off in Rundock's own settings therefore never turned it off; it only stopped telling a sandbox that was still running which folders you had named, so the folders you listed were the very ones it went on refusing. Rundock now leaves that switch alone and states your folders either way, so what you name is what your agents can reach, whichever mode you are in and whatever else on your machine has an opinion about sandboxing.
+
+- **"Always allow" is still allowed after a reload:** answering a permission card with "Always allow" held only until the page was refreshed or the app restarted, and then the same card came back. The answer is now kept with your workspace, so it holds across restarts, and Settings lists what you have allowed with a way to take any of it back. An answer that could not be saved is never reported as saved: if it cannot be written, the card appears again rather than a grant appearing that does not exist. The two files holding your permission answers are now protected from being written by an agent on every platform, not only where the operating system sandbox runs, so nothing your agents do can quietly answer a question on your behalf.
+
+- **An agent handing over says so, in its own words:** a specialist passing work to another could hand over in silence, so the conversation jumped to a new name with nothing explaining why, and the brief it had written for its colleague was never shown to you at all. Handing over now always produces two things: the private brief for the agent taking the work, and a line to you saying what is being passed on and to whom. The agent's own words are used whenever it writes them; the line is the floor, not a replacement for speaking.
+
+- **Agents arriving for the first time are caught up too:** an agent returning to a conversation was given what it had missed, but an agent arriving into one for the first time was not, so it began work without the context the conversation had already built. Both now arrive with the same picture, attributed by name.
+
+- **The conversation stops announcing turns that have nothing to say:** a handover marker could appear for an agent that never spoke, so the transcript showed arrivals that produced nothing, and the working indicator could keep spinning after the agent behind it had already stepped back.
 
 - **Agents remember what happened while they were away:** a specialist brought back into a conversation after other agents had worked could not see any of it, so it repeated work that was already done and briefed the next agent from an out-of-date picture. Every agent returning to a conversation is now given what it missed, attributed by name, so it reads like a record of the conversation rather than a fresh start.
 
