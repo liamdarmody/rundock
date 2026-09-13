@@ -113,4 +113,33 @@ describe('a lead that says nothing still has its handoff shown', () => {
       && m._conversationId === convoId && m.toAgent === 'content-lead', { label: 'still delegated' });
     h.reapConvo(convoId);
   });
+
+  test('whitespace in either place is not content, and the turn is still recorded', async () => {
+    // TWO NEAR-MISSES IN ONE. A stray newline before the tool_use block makes
+    // responseText a non-empty string carrying nothing; an empty or blank
+    // description is a field that exists and says nothing. Either, treated as
+    // content, renders a blank turn, which is worse than the routing entry it
+    // would replace. Both must fall through to the existing behaviour.
+    const convoId = h.freshConvoId('handoff-blank');
+    h.writeScenario([
+      { match: { agent: 'chief-of-staff', promptIncludes: 'fourth task' },
+        turn: [
+          { text: '\n  ' },
+          { agentTool: { subagent_type: 'content-lead', description: '   ', prompt: 'a brief' } },
+        ] },
+      { match: { agent: 'content-lead' }, turn: [{ text: 'Working.' }] },
+    ]);
+
+    client.send({ type: 'save_conversation', conversation: { id: convoId, agentId: 'chief-of-staff', title: 'Handoff blank' } });
+    client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: 'fourth task' });
+    await client.waitFor(m => m.type === 'system' && m.subtype === 'agent_switch'
+      && m._conversationId === convoId && m.toAgent === 'content-lead', { label: 'still delegated' });
+    await h.waitUntil(() => transcriptFor(convoId).some(t => t.agent === 'chief-of-staff'),
+      'the delegating turn was recorded');
+
+    const turn = transcriptFor(convoId).find(t => t.agent === 'chief-of-staff');
+    assert.strictEqual(turn.type, 'routing',
+      'neither blank counts as content, so the turn stays the invisible routing entry it was before');
+    h.reapConvo(convoId);
+  });
 });

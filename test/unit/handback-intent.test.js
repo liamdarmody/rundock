@@ -548,6 +548,8 @@ describe('an agent says why it arrived, or does not appear to', () => {
     // other. They are now separated by WHICH FIELD each belongs in, which is a
     // sharper line than "chat versus tool call": there is no judgement left to
     // make about where a sentence goes.
+    assert.match(lead, /your own words win when you write them/,
+      'a lead is told the same: the field is a floor under the conversation, never a replacement for its own prose');
     assert.match(lead, /Who and why goes in `description`; what to do goes in `prompt`/,
       'each rule names its own field, so obeying one cannot violate the other');
     assert.match(lead, /never shown to the user/,
@@ -566,7 +568,11 @@ describe('an agent says why it arrived, or does not appear to', () => {
       'and no longer the permission wording that produced task labels');
     // Its own prose still wins. The field is a floor under the conversation,
     // never a replacement for an agent that speaks for itself.
-    assert.match(promptSrc, /your own words win when you write them/,
+    // Against the ORCHESTRATOR's own block, not the whole file. Searching
+    // promptSrc passed while only one of the two contracts carried this, which
+    // is how the lead was left without it.
+    const orch = promptSrc.slice(promptSrc.indexOf('DELEGATION (your primary job):'));
+    assert.match(orch.slice(0, orch.indexOf('YOUR TEAM')), /your own words win when you write them/,
       'and it is told the field is the floor rather than the ceiling');
   });
 
