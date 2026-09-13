@@ -194,9 +194,18 @@ function renderSettingsSection(section) {
         </div>
       </div>
       ${workingFoldersSectionHtml()}
+      <div class="settings-card">
+        <div class="settings-card-title">Tools allowed without asking</div>
+        <div class="settings-card-hint">Chosen with "Always allow" on a permission card. Revoking one means the card asks again.</div>
+        <div id="tool-allows-block">${toolAllowsBlockHtml()}</div>
+      </div>
       <div class="settings-card" id="runtimes-card">${runtimesCardHtml()}</div>
       <button class="settings-btn" onclick="changeWorkspace()">Change workspace</button>`;
     workingFoldersLoad();
+    // Asked for whenever the pane opens, for the same reason the folders are:
+    // a list rendered from stale state is a list that lies about what is
+    // currently allowed.
+    requestToolAllows();
     // Refresh runtime state whenever the card becomes visible (the user may
     // have just installed or signed in to a CLI).
     if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'get_runtime_status' }));
@@ -383,6 +392,61 @@ function workingFoldersLoad() {
 // client never predicts the result of its own change: what comes back has been
 // normalised and de-duplicated, so a row that collapsed into a parent is gone
 // from the reply rather than lingering until a reload.
+// THE STANDING "ALWAYS ALLOW" ANSWERS, shown where they can be taken back.
+//
+// A grant nobody can see is a grant nobody can revoke, and these now outlive
+// the tab they were given in, so the list and the revoke are part of the same
+// change rather than a later nicety.
+//
+// Two readers, one truth: the permission cards consult the cached set in
+// chat.js and this pane renders the same list, both fed by the server's reply,
+// so a revoke here silences nothing the cards still think is allowed.
+let standingToolAllows = [];
+
+function toolAllowsArrived(msg) {
+  standingToolAllows = Array.isArray(msg.tools) ? msg.tools.filter((k) => typeof k === 'string') : [];
+  if (typeof setStandingToolAllows === 'function') setStandingToolAllows(standingToolAllows);
+  // Redraws its own block only, and only when on screen, for the same reason
+  // the folders block does: re-entering the section renderer here would make
+  // the reply ask again, without end.
+  const container = document.getElementById('tool-allows-block');
+  if (container) container.innerHTML = toolAllowsBlockHtml();
+}
+
+function toolAllowsBlockHtml() {
+  if (!standingToolAllows.length) {
+    return '<div class="settings-empty">No tools are allowed without asking. '
+      + 'Choosing "Always allow" on a permission card adds one here.</div>';
+  }
+  // BY INDEX, never by value, which is the same rule the working-folders
+  // remove control follows. An allow key is text the server stored on an
+  // agent's behalf, and a key carrying a quote would close the attribute's
+  // string and put the rest of itself in a JavaScript literal position, where
+  // escAttr is the wrong escaper and nothing else is checking. An integer
+  // cannot do that whatever the key says.
+  return standingToolAllows.map((k, index) => (
+    `<div class="settings-row"><code>${esc(k)}</code>`
+    + `<button class="settings-row-remove" onclick="revokeToolAllowAt(${index})" `
+    + `title="Ask again for this tool">Revoke</button></div>`
+  )).join('');
+}
+
+function revokeToolAllowAt(index) {
+  const key = standingToolAllows[index];
+  if (typeof key !== 'string') return;
+  revokeToolAllow(key);
+}
+
+function revokeToolAllow(key) {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'remove_tool_allow', key }));
+  }
+}
+
+function requestToolAllows() {
+  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'get_tool_allows' }));
+}
+
 function workingFoldersArrived(msg) {
   workingFolders = Array.isArray(msg.folders) ? msg.folders : [];
   if (typeof msg.home === 'string') workingFoldersHome = msg.home;
@@ -941,6 +1005,10 @@ return { showSettingsSection, renderSettingsSection, setWorkspaceMode, runtimeRo
   workingFoldersSectionHtml, workingFolderRowHtml, workingFoldersShort, workingFoldersBasename,
   workingFoldersCoveredBy, workingFoldersExpand, workingFoldersInputChanged, workingFoldersAdd,
   workingFoldersRemoveAt, workingFoldersUndoRemove, workingFoldersLoad, workingFoldersArrived,
+  // app.js dispatches 'tool_allows' straight to toolAllowsArrived as a bare
+  // global, the same way it dispatches 'working_folders'. Left off this list
+  // the name does not exist on window, and the message throws on arrival.
+  toolAllowsArrived, requestToolAllows, revokeToolAllow, revokeToolAllowAt,
   workingFoldersInnerHtml,
   workingFoldersWorkspaceChanged };
 }));

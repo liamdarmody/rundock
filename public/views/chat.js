@@ -552,8 +552,27 @@ function renderSessionHistory(d) {
 
 // ===== PERMISSION UI =====
 
-// Session-level "always allow" patterns
+// THE STANDING "ALWAYS ALLOW" ANSWERS, seeded from the workspace.
+//
+// This was a bare Set, so every answer the person gave was thrown away by a
+// page reload, not merely by a restart. A card that offers "always" and means
+// "until you refresh" is a promise the product does not keep, and the cost
+// lands hardest on whoever runs the most agents.
+//
+// It is still a Set, and still the only view-local permission state: the
+// difference is that it is filled from the workspace on connect and every
+// addition is written back. The server remains the record; this is a cache of
+// it, so a reload rebuilds rather than forgets.
 const alwaysAllowedTools = new Set();
+
+// Replace the cached answers wholesale. The server always sends the full list,
+// so there is no merge to get wrong: what the workspace says is what holds.
+function setStandingToolAllows(keys) {
+  alwaysAllowedTools.clear();
+  for (const k of (Array.isArray(keys) ? keys : [])) {
+    if (typeof k === 'string' && k) alwaysAllowedTools.add(k);
+  }
+}
 
 // Permission/trust decision logic lives in permissions.js (unit-tested;
 // loaded before this file). The aliases keep historical call sites readable;
@@ -884,6 +903,11 @@ function respondPermission(requestId, allow, always, allowFolder) {
   // Store always-allow pattern if requested
   if (allow && always) {
     alwaysAllowedTools.add(pending.key);
+    // Written back so the answer outlives this tab. The cache is updated first
+    // so the next card in the same session is silent whether or not the write
+    // lands; if it fails, the server tells the interface and the answer is
+    // asked again next time rather than being silently kept.
+    try { ws.send(JSON.stringify({ type: 'add_tool_allow', key: pending.key })); } catch (e) {}
   }
 
   // Replace the card with a resolved indicator
@@ -974,7 +998,7 @@ return {
   addSystemMsg, buildDelegationDivider, renderAuthErrorCard, copyAuthCmd, agentDisplayName,
   renderCodexQuotaCard, renderCodexGuidanceCard, renderCodexErrorPill,
   createHistoryDivider, renderSessionHistory, classifyRisk,
-  describeToolRequest, toolAllowKey, handlePermissionRequest,
+  describeToolRequest, toolAllowKey, handlePermissionRequest, setStandingToolAllows,
   renderPermissionCard, renderPendingPermissionCards, respondPermission,
   resolvePermissionCard,
   formatToolName, formatToolShort, buildActivitySummary, scrollBottom,

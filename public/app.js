@@ -255,6 +255,10 @@ function handle(d) {
     // client never predicts the result of its own change, because the server
     // normalises what it is sent.
     case 'working_folders': workingFoldersArrived(d); break;
+    // The workspace's standing "always allow" answers. Seeded on connect and
+    // refreshed after every grant or revoke, so the cards and the settings list
+    // are never reading two different truths.
+    case 'tool_allows': toolAllowsArrived(d); break;
     case 'workspace_mode_changed':
       workspaceMode = d.mode;
       // Re-render settings if currently viewing workspace settings
@@ -1531,6 +1535,14 @@ function onWorkspaceReady(dir, analysis, isEmpty, mode, scaffoldError, isSetupCo
   ws.send(JSON.stringify({ type: 'get_conversations' }));
   ws.send(JSON.stringify({ type: 'get_lists' }));
   ws.send(JSON.stringify({ type: 'get_runtime_status' }));
+  // ASKED HERE, not when the settings pane opens. The whole point of a
+  // standing allow is that a reload does not undo it, and the set lives in
+  // this page's memory: if the only thing that fetched it were the settings
+  // pane, then a person who reloaded and went straight back to work would
+  // meet the card they had already answered, which is the defect rather than
+  // the fix. Sent with the rest of the workspace's data so it arrives before
+  // any permission request for this workspace can be decided.
+  ws.send(JSON.stringify({ type: 'get_tool_allows' }));
   skillsLoaded = false;
   currentSkillId = null;
   // A package plan describes one workspace's collision facts and defaults;

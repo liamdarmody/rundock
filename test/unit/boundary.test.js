@@ -408,3 +408,272 @@ describe('agent scratch files', () => {
     assert.strictEqual(classifyFileAccess('Read', { file_path: outside }, ws, []).where, 'outside');
   });
 });
+
+// THE STORE'S OWN FAILURE BRANCHES.
+//
+// The handlers guard before reaching these, so exercising the store only
+// through them leaves its own refusals untested: the guard could be removed
+// from the handler and nothing would fail. These drive the module directly.
+// THE ANSWER FILES ARE PROTECTED ON EVERY PLATFORM, not only where a sandbox
+// runs. The sandbox denyWrite is the stronger protection and exists on macOS
+// alone; these two files hold the person's own permission answers, so on a
+// platform with no sandbox an agent with a shell could otherwise grant itself
+// standing allows and silence every later card.
+describe('an agent cannot quietly answer the questions it was asked', () => {
+  const os2 = require('node:os');
+  const boundary = require('../../lib/workspace/boundary.js');
+  const config = require('../../lib/config.js');
+  function tempWorkspace() {
+    const d = fs.mkdtempSync(path.join(os2.tmpdir(), 'answer-files-'));
+    fs.mkdirSync(path.join(d, '.rundock'), { recursive: true });
+    return d;
+  }
+  const WS = path.join(os2.tmpdir(), 'answer-files-ws');
+
+  const write = (target) => classifyFileAccess('Write', { file_path: target }, WS, [], os2.homedir(), false);
+  const read = (target) => classifyFileAccess('Read', { file_path: target }, WS, [], os2.homedir(), false);
+
+  test('writing either answer file is carded, though it sits inside the workspace', () => {
+    for (const f of ['state.json', 'permissions.json']) {
+      const target = path.join(WS, '.rundock', f);
+      assert.strictEqual(write(target).where, 'outside',
+        `a write to ${f} must reach the person, not be auto-approved as ordinary workspace work`);
+      assert.strictEqual(write(target).grantDir, null,
+        'and no standing folder grant may be offered that would silence it next time');
+    }
+  });
+
+  test('no standing folder grant covers them, however wide it is', () => {
+    // Granting a PARENT of the workspace is an ordinary thing to do, and a
+    // grant covers its whole subtree. Without this the grant would be
+    // answering for the mechanism that records the answers.
+    const original = config.getWorkspace();
+    const dir = tempWorkspace();
+    try {
+      config.setWorkspace(dir);
+      boundary.addBoundaryGrant(path.dirname(dir));
+      assert.strictEqual(boundary.boundaryGrantCovers(path.join(dir, 'notes.md')), true,
+        'sanity: the grant genuinely covers the workspace, so the next assertions mean something');
+      for (const f of ['state.json', 'permissions.json']) {
+        const target = path.join(dir, '.rundock', f);
+        assert.strictEqual(boundary.crossingCovered({ path: target }), false,
+          `a stored grant must never answer for ${f}`);
+      }
+      assert.strictEqual(boundary.crossingCovered({ path: path.join(dir, '.rundock', 'scratch', 'x.md') }), true,
+        'while everything else the grant reaches is still covered by it');
+    } finally { config.setWorkspace(original); }
+  });
+
+  test('reading them is ordinary workspace work', () => {
+    // The protection is about answering questions, not about secrecy. Rundock
+    // itself reads these constantly, and carding reads would make the
+    // workspace unusable without protecting anything.
+    for (const f of ['state.json', 'permissions.json']) {
+      assert.strictEqual(read(path.join(WS, '.rundock', f)).where, 'inside');
+    }
+  });
+
+  test('other files under .rundock stay free, so agent scratch still works', () => {
+    // Agents are told to put scratch under .rundock. Protecting the folder
+    // rather than the two files would take that away.
+    for (const rel of ['scratch/notes.md', 'cache/x.json', 'something.json']) {
+      assert.strictEqual(write(path.join(WS, '.rundock', rel)).where, 'inside',
+        `${rel} is not an answer the person gave, and must not card`);
+    }
+  });
+
+  // EVERY SPELLING, because the one an agent would actually type is the
+  // relative one, and that is the spelling a filter designed for the
+  // "does this reach outside the workspace" question skips by construction.
+  // The first version of this test used the absolute path alone and passed
+  // while `echo x > .rundock/permissions.json` went through untouched.
+  test('a shell command writing one of them is caught however the path is spelled', () => {
+    const spellings = [
+      path.join(WS, '.rundock', 'permissions.json'),   // absolute
+      '.rundock/permissions.json',                      // relative, the ordinary one
+      './.rundock/permissions.json',                    // relative, dot-prefixed
+      '.rundock/../.rundock/permissions.json',          // relative through a traversal
+      path.join(WS, '.rundock', 'state.json'),
+      '.rundock/state.json',
+    ];
+    for (const spelling of spellings) {
+      const found = classifyShellAccess('Bash', { command: `echo '{}' > ${spelling}` }, WS, [], os2.homedir(), false);
+      const paths = (found && found.crossings ? found.crossings : []).map((c) => c.path);
+      assert.ok(paths.some((p) => p.endsWith('.json')),
+        `a shell write spelled "${spelling}" has to be caught, or the lock is only on the door nobody uses`);
+    }
+  });
+
+  test('an ordinary relative write inside the workspace is still free', () => {
+    // The other direction, so the rule above cannot be satisfied by reporting
+    // every relative token: resolving them all is new work, and it must not
+    // turn ordinary workspace writing into a wall of cards.
+    for (const spelling of ['notes.md', './src/app.js', '.rundock/scratch/draft.md']) {
+      const found = classifyShellAccess('Bash', { command: `echo hi > ${spelling}` }, WS, [], os2.homedir(), false);
+      const paths = (found && found.crossings ? found.crossings : []).map((c) => c.path);
+      assert.deepStrictEqual(paths, [],
+        `writing "${spelling}" is ordinary work inside the workspace and must raise nothing`);
+    }
+  });
+
+  test('a shell command merely reading one of them is not', () => {
+    const cmd = `cat ${path.join(WS, '.rundock', 'permissions.json')}`;
+    const found = classifyShellAccess('Bash', { command: cmd }, WS, [], os2.homedir(), false);
+    const paths = (found && found.crossings ? found.crossings : []).map((c) => c.path);
+    assert.deepStrictEqual(paths.filter((found) => found.endsWith('permissions.json')), [],
+      'reading the stored answers is not answering anything');
+  });
+});
+
+describe('standing tool allows refuse rather than corrupt', () => {
+  const boundary = require('../../lib/workspace/boundary.js');
+  const config = require('../../lib/config.js');
+
+  function tempWorkspace() {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'allows-store-'));
+    fs.mkdirSync(path.join(dir, '.rundock'), { recursive: true });
+    return dir;
+  }
+
+  test('a blank or non-string key is never stored', () => {
+    const original = config.getWorkspace();
+    const dir = tempWorkspace();
+    try {
+      config.setWorkspace(dir);
+      for (const bad of ['', '   ', null, undefined, 42, {}]) {
+        boundary.addToolAllow(bad);
+      }
+      assert.deepStrictEqual(boundary.readToolAllows(), [],
+        'nothing silences a card on the strength of a key that says nothing');
+    } finally { config.setWorkspace(original); }
+  });
+
+  test('the same key twice is stored once', () => {
+    const original = config.getWorkspace();
+    const dir = tempWorkspace();
+    try {
+      config.setWorkspace(dir);
+      boundary.addToolAllow('Bash:git');
+      boundary.addToolAllow('Bash:git');
+      assert.deepStrictEqual(boundary.readToolAllows(), ['Bash:git']);
+    } finally { config.setWorkspace(original); }
+  });
+
+  test('a store holding something other than a list of strings reads as nothing allowed', () => {
+    // The safe direction again: a file whose shape is wrong must make the card
+    // appear, never let a request through on the strength of it.
+    const original = config.getWorkspace();
+    const dir = tempWorkspace();
+    try {
+      config.setWorkspace(dir);
+      fs.writeFileSync(path.join(dir, '.rundock', 'permissions.json'),
+        JSON.stringify({ allowedTools: ['Bash:git', 7, null, '', { k: 1 }] }));
+      assert.deepStrictEqual(boundary.readToolAllows(), ['Bash:git'],
+        'only the entries that are actually keys survive the read');
+      fs.writeFileSync(path.join(dir, '.rundock', 'permissions.json'),
+        JSON.stringify({ allowedTools: 'Bash:git' }));
+      assert.deepStrictEqual(boundary.readToolAllows(), [],
+        'and a value that is not a list at all allows nothing');
+    } finally { config.setWorkspace(original); }
+  });
+
+  // A STORE THAT CANNOT BE WRITTEN MUST NOT REPORT SUCCESS.
+  //
+  // The catch exists so a disk failure degrades to "the card keeps appearing"
+  // rather than crashing the server mid-permission-decision. What it must never
+  // do is return the key as though it were stored: the interface would show a
+  // standing allow that the next read cannot find, and the person would believe
+  // they had answered once when they had not.
+  function unwritableStore(dir) {
+    // A directory where the file belongs: writeFileSync raises EISDIR, which is
+    // a real failure of the same shape as a permissions or disk error, without
+    // needing to stub the filesystem module.
+    fs.mkdirSync(path.join(dir, '.rundock', 'permissions.json'), { recursive: true });
+  }
+
+  test('a grant that cannot be written is not reported as granted', () => {
+    const original = config.getWorkspace();
+    const dir = tempWorkspace();
+    try {
+      config.setWorkspace(dir);
+      unwritableStore(dir);
+      assert.deepStrictEqual(boundary.addToolAllow('Bash:git'), [],
+        'the caller is told what is actually stored, which is nothing');
+      assert.deepStrictEqual(boundary.readToolAllows(), [],
+        'and the next read agrees, so the card will appear again');
+    } finally { config.setWorkspace(original); }
+  });
+
+  test('a revoke that cannot be written is not reported as revoked', () => {
+    const original = config.getWorkspace();
+    const dir = tempWorkspace();
+    try {
+      config.setWorkspace(dir);
+      boundary.addToolAllow('Bash:git');
+      // Read-only, not replaced: the revoke must be able to READ the grant it
+      // is trying to remove and still fail to write the removal. A store the
+      // read also fails on would exit early and never reach the branch.
+      const file = path.join(dir, '.rundock', 'permissions.json');
+      fs.chmodSync(file, 0o444);
+      assert.deepStrictEqual(boundary.removeToolAllow('Bash:git'), ['Bash:git'],
+        'a revoke that did not land reports the grant as still standing, never as removed');
+      fs.chmodSync(file, 0o644);
+      assert.deepStrictEqual(boundary.readToolAllows(), ['Bash:git'],
+        'and the grant is genuinely still there, which is why the revoke must not have claimed otherwise');
+    } finally { config.setWorkspace(original); }
+  });
+
+  // ONE FILE, TWO SECTIONS, AND NEITHER WRITER MAY EAT THE OTHER.
+  //
+  // addBoundaryGrant used to compose the whole object as `{ allowedDirs }`,
+  // which was correct for exactly as long as folder grants were the only thing
+  // in the file. Adding tool allows to the same file made it a bug that
+  // destroys data: allowing one folder would have silently deleted every
+  // standing tool allow in that workspace.
+  test('allowing a folder keeps the tool allows, and allowing a tool keeps the folders', () => {
+    const original = config.getWorkspace();
+    const dir = tempWorkspace();
+    try {
+      config.setWorkspace(dir);
+      boundary.addToolAllow('Bash:git');
+      boundary.addBoundaryGrant(dir);
+      assert.deepStrictEqual(boundary.readToolAllows(), ['Bash:git'],
+        'a folder grant must not take the tool allows with it');
+      assert.strictEqual(boundary.readBoundaryGrants().length, 1, 'sanity: the folder was recorded');
+
+      boundary.addToolAllow('Bash:npm');
+      assert.strictEqual(boundary.readBoundaryGrants().length, 1,
+        'and a tool allow must not take the folder grants with it');
+      assert.deepStrictEqual(boundary.readToolAllows(), ['Bash:git', 'Bash:npm']);
+    } finally { config.setWorkspace(original); }
+  });
+
+  test('a section this version has never heard of survives being written around', () => {
+    // The same rule, stated against the future rather than the present: the
+    // merging writer carries through keys it does not know, so a workspace
+    // written by a newer Rundock is not quietly stripped by an older one.
+    const original = config.getWorkspace();
+    const dir = tempWorkspace();
+    try {
+      config.setWorkspace(dir);
+      const file = path.join(dir, '.rundock', 'permissions.json');
+      fs.writeFileSync(file, JSON.stringify({ allowedTools: [], somethingLater: { keep: 'me' } }));
+      boundary.addToolAllow('Bash:git');
+      const after = JSON.parse(fs.readFileSync(file, 'utf8'));
+      assert.deepStrictEqual(after.somethingLater, { keep: 'me' },
+        'a writer that owns one field must leave every other field exactly as it found it');
+      assert.deepStrictEqual(after.allowedTools, ['Bash:git']);
+    } finally { config.setWorkspace(original); }
+  });
+
+  test('with no workspace open, reading is empty and writing is a no-op', () => {
+    const original = config.getWorkspace();
+    try {
+      config.setWorkspace(null);
+      assert.deepStrictEqual(boundary.readToolAllows(), []);
+      assert.deepStrictEqual(boundary.addToolAllow('Bash:git'), [],
+        'there is nowhere to record it, so nothing is recorded');
+      assert.deepStrictEqual(boundary.removeToolAllow('Bash:git'), []);
+    } finally { config.setWorkspace(original); }
+  });
+});

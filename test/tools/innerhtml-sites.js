@@ -225,6 +225,7 @@ const TABLE = {
     ['a', 'appValues', 'the runtimes card: constant labels and a regex-clamped version'],
     ['b', 'attr-escaper', 'the connectors section: server names, targets and credential-key names from the user-authored .mcp.json, text through connectorsEsc(), attributes through connectorsEscAttr()'],
     ['b', 'attr-escaper', 'the working-folders block, redrawn on its own when a list arrives: folder paths chosen by the person using the app and read back from the workspace state, every one through esc() in text and escAttr() in the title attribute. No path reaches a JavaScript position: the remove control carries the row INDEX, a number, because HTML escaping does not survive a second parse as script and a Windows path or an apostrophe would break out of a string literal there'],
+    ['b', 'inline-handler', 'the standing tool-allows block, redrawn on its own when the list arrives: allow keys the person granted through a permission card, stored in the workspace and read back from it. Text through esc(), the revoke handler argument through escAttr(). The keys originate client-side, so they are escaped on the way out rather than trusted on the way in.'],
   ],
   'views/skills.js': [
     ['a', 'escapedText', 'the skills empty state, esc() copy'],

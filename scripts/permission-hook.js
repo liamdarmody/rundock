@@ -355,6 +355,44 @@ function namedFolderCovers(resolvedPath, extraDirs = [], pmod = path, home = os.
 // home instead of monkey-patching os.homedir(), and drive either filesystem
 // kind explicitly instead of inheriting whichever the test host happens to
 // have; production never passes either.
+// THE TWO FILES THAT HOLD THE PERSON'S OWN ANSWERS, protected here because
+// here is the only layer that runs everywhere.
+//
+// state.json carries the workspace mode. permissions.json carries the standing
+// grants: the folders allowed outside the workspace, and the tools allowed
+// without a card. Both are answers a person gave to a permission question, so
+// an agent that can write them can answer those questions on that person's
+// behalf, and the standing allows it wrote would silence every later card for
+// those tools with no further consent.
+//
+// lib/workspace/scaffold.js also names both in the sandbox block's denyWrite,
+// and that is the stronger protection where it exists: it stops the write at
+// the operating system rather than asking. But it exists on macOS alone. On
+// Windows and Linux sandboxSettings returns null, so without this the two
+// files were writable by any agent with a shell, and the second of them is new
+// state that used to live only in a browser tab where nothing could reach it.
+//
+// Carding rather than denying, because a person legitimately edits neither
+// through an agent and would want to be told if something tried.
+const WORKSPACE_ANSWER_FILES = ['state.json', 'permissions.json'];
+function isWorkspaceAnswerFile(resolvedPath, workspaceRoot, foldsCase = hostFoldsCase(), pmod = path) {
+  if (typeof resolvedPath !== 'string' || !resolvedPath) return false;
+  if (typeof workspaceRoot !== 'string' || !workspaceRoot) return false;
+  // Windows paths fold case whatever the host says, which is why the flavour
+  // travels with the comparison rather than being assumed from the host.
+  const folds = foldsCase || pmod === path.win32;
+  // CANONICALISED ON BOTH SIDES. Callers inside this file pass an already
+  // resolved path, but the server's decision point passes a crossing's path
+  // straight off the wire, and on macOS the same file has two absolute names
+  // (/var and /private/var). Comparing one spelling against the other answered
+  // "not an answer file" for the file it was looking at. Canonicalising is
+  // idempotent, so the callers that had already done it are unaffected.
+  const c = foldCase(canonicalize(resolvedPath, pmod), folds);
+  return WORKSPACE_ANSWER_FILES.some((f) => (
+    c === foldCase(canonicalize(pmod.join(pmod.resolve(workspaceRoot), '.rundock', f), pmod), folds)
+  ));
+}
+
 function classifyFileAccess(toolName, toolInput, workspaceRoot, extraDirs = [], home = os.homedir(), foldsCase = hostFoldsCase(), resolvedPathFoldsCase) {
   const field = FILE_TOOL_PATH_FIELD[toolName];
   if (!field) return null;
@@ -371,11 +409,18 @@ function classifyFileAccess(toolName, toolInput, workspaceRoot, extraDirs = [], 
   // so the tags below still get to speak for anything inside it.
   const inside = insideWorkspaceRoot(resolvedPath, workspaceRoot)
     || namedFolderCovers(resolvedPath, extraDirs, path, home, foldsCase);
+  const writing = !READ_FILE_TOOLS.has(toolName);
+  // THE WORKSPACE'S OWN ANSWER FILES, carded on write however far inside the
+  // workspace they sit. See workspaceAnswerFile below for why this cannot be
+  // left to the sandbox.
+  if (inside && writing && isWorkspaceAnswerFile(resolvedPath, workspaceRoot, foldsCase)) {
+    return { where: 'outside', resolvedPath, grantDir: null, answerFile: true };
+  }
   if (inside) return { where: 'inside', resolvedPath };
   // The agent's own folder: free unless the registry names this exact
   // access as a secret (always) or a write to a persistence surface.
   const tags = agentHomeTags(resolvedPath, home, foldsCase);
-  const isWrite = !READ_FILE_TOOLS.has(toolName);
+  const isWrite = writing;
   if (tags.agentHome && !tags.secret && !(isWrite && tags.persistenceSurface)) {
     return { where: 'inside', resolvedPath };
   }
@@ -625,17 +670,37 @@ function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), 
     for (const re of HOME_PREFIX) {
       if (re.test(t)) { t = t.replace(re, os.homedir()); homed = true; break; }
     }
+    if (URL_SCHEME.test(t)) continue;
+    if (isExemptToken(t)) continue;
+    const pmod = flavourFor(t, workspaceRoot);
+    const resolved = canonicalize(pmod.resolve(pmod.resolve(workspaceRoot), t), pmod);
+
+    // THE ANSWER FILES ARE TESTED BEFORE THE CROSSING FILTER, not after it.
+    //
+    // The filter below exists to answer "could this token reach OUTSIDE the
+    // workspace", and a plain relative token cannot, which is why it is
+    // skipped. The answer files are the one thing INSIDE the workspace that
+    // still has to be reported, so testing them after that skip left the
+    // ordinary spelling unguarded while the absolute one was caught:
+    //
+    //   echo '{}' > /abs/ws/.rundock/permissions.json   caught
+    //   echo '{}' > .rundock/permissions.json           skipped entirely
+    //
+    // The second is how anyone would actually write it, and it is the shape a
+    // test using an absolute path never sees.
+    if (!readOnly && isWorkspaceAnswerFile(resolved, workspaceRoot, foldsCase, pmod)) {
+      const akey = pmod === path.win32 ? resolved.toLowerCase() : resolved;
+      if (!seen.has(akey)) { seen.add(akey); found.push({ path: resolved, answerFile: true }); }
+      continue;
+    }
+
     // Skip tokens that could not cross. A relative token resolves against the
     // workspace root and lands inside whatever it looks like, so a URL, a
     // compiler flag and a bare filename all fall out here without needing a
     // rule of their own. What must NOT fall out here is any Windows shape:
     // a drive letter and a backslash traversal both reach outside while
     // containing no leading forward slash and no `/`-delimited `..`.
-    if (URL_SCHEME.test(t)) continue;
-    if (isExemptToken(t)) continue;
     if (!homed && !t.startsWith('/') && !WIN_DRIVE.test(t) && !WIN_UNC.test(t) && !TRAVERSAL.test(t)) continue;
-    const pmod = flavourFor(t, workspaceRoot);
-    const resolved = canonicalize(pmod.resolve(pmod.resolve(workspaceRoot), t), pmod);
     if (insideWorkspaceRoot(resolved, workspaceRoot, pmod)) continue;
     if (namedFolderCovers(resolved, extraDirs, pmod, home, foldsCase)) continue;
     // Tier three (neither secret nor a persistence surface) is free, so it
@@ -763,6 +828,7 @@ module.exports = {
   isProtectedClaudeEdit, isRuntimeHomeSurfaceEdit, isMcpReadTool, classifyFileAccess, classifyShellAccess, canonicalize,
   advisoryOutsidePaths,
   isSecretPath, isPersistenceSurface, SECRET_RELATIVE_PATHS, PERSISTENCE_SURFACE_DIRS, PERSISTENCE_SURFACE_FILES,
+  isWorkspaceAnswerFile, WORKSPACE_ANSWER_FILES,
   REFUSED_CLAUDE_EDIT_DIRS, READ_ONLY_SHELL_COMMANDS, READ_ONLY_POWERSHELL_COMMANDS, isReadOnlyShellCommand,
 };
 

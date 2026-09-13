@@ -17,7 +17,7 @@ const { buildDispatch } = require('../../lib/protocol/handlers/index.js');
 const { _internal: srv } = require('../../server.js');
 const config = require('../../lib/config.js');
 
-// The full routing surface of the dispatch table, frozen: 42 message types
+// The full routing surface of the dispatch table, frozen: 45 message types
 // plus save_agent's two legacy aliases. The four root shims (chat, delegate,
 // end_delegation, flush_buffer) must NEVER appear here: chat is the
 // kill-window chat shim, delegate/end_delegation are delegation glue, and
@@ -36,6 +36,10 @@ const EXPECTED_TYPES = [
   // list, because adding and removing are the same act on the store and a
   // narrower pair would have to agree about normalisation.
   'set_working_folders', 'get_working_folders',
+  // The standing answers to "Always allow" on a permission card. Three verbs
+  // rather than one: listing, granting and revoking have different
+  // consequences, and a single message would have to carry the verb as data.
+  'get_tool_allows', 'add_tool_allow', 'remove_tool_allow',
   'get_agents', 'get_runtime_status', 'get_files', 'get_skills', 'get_run',
   'cancel_routine_run',
   // The row's Run control: a pressed run through the scheduler's own
@@ -1259,5 +1263,183 @@ describe('the serving-workspace notice', () => {
       fs.rmSync(previous, { recursive: true, force: true });
       fs.rmSync(target, { recursive: true, force: true });
     }
+  });
+});
+
+describe('standing tool allows outlive the tab they were given in', () => {
+  const boundary = require('../../lib/workspace/boundary.js');
+
+  function allowsWorkspace() {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'proto-allows-'));
+    fs.mkdirSync(path.join(dir, '.rundock'), { recursive: true });
+    return dir;
+  }
+
+  test('an allow is stored, listed back, and survives a fresh read of the workspace', () => {
+    // The defect: the set lived in the browser tab, so a reload silently
+    // withdrew every answer and the card asked again. Asserted by reading the
+    // store back through a separate call rather than by trusting the reply,
+    // because the reply could be right while nothing was written.
+    const table = buildDispatch();
+    const original = config.getWorkspace();
+    const dir = allowsWorkspace();
+    try {
+      config.setWorkspace(dir);
+      const ws = captureWs();
+      table.add_tool_allow({}, ws, { type: 'add_tool_allow', key: 'Bash:git' });
+      assert.strictEqual(ws.sent[0].type, 'tool_allows');
+      assert.deepStrictEqual(ws.sent[0].tools, ['Bash:git']);
+      assert.deepStrictEqual(boundary.readToolAllows(), ['Bash:git'],
+        'and it is on disk, which is what a reload will read');
+    } finally { config.setWorkspace(original); }
+  });
+
+  // WHAT MAY BECOME A STORED ANSWER, decided at the wire rather than at the
+  // renderer. The client only ever builds bare identifiers (a tool name, or
+  // `Bash:<binary>` with directories already stripped), but the client is not
+  // the only thing that can send this message, and anything stored here is
+  // later rendered into a settings row. The renderer defends itself too; this
+  // is the other half of that pair, and it is the half that keeps the stored
+  // set clean rather than merely survivable.
+  test('a key that is not a tool name is refused, and nothing is stored', () => {
+    const table = buildDispatch();
+    const original = config.getWorkspace();
+    const dir = allowsWorkspace();
+    try {
+      config.setWorkspace(dir);
+      const hostile = [
+        "x'); alert('pwned",      // closes a JavaScript literal
+        '<script>alert(1)</script>',
+        'Bash:git; rm -rf /',     // whitespace and a shell operator
+        'Bash:git\nBash:rm',      // a newline, so one row could become two
+        '../../etc/passwd',
+        'a'.repeat(129),          // longer than any real tool name
+      ];
+      for (const key of hostile) {
+        const ws = captureWs();
+        table.add_tool_allow({}, ws, { type: 'add_tool_allow', key });
+        assert.strictEqual(ws.sent[0].type, 'workspace_error',
+          `refused rather than stored: ${JSON.stringify(key)}`);
+      }
+      assert.deepStrictEqual(boundary.readToolAllows(), [],
+        'not one of them reached the store');
+
+      // The other direction, so the rule cannot be satisfied by refusing
+      // everything: the keys the client actually builds are all accepted.
+      for (const key of ['Bash:git', 'Bash:npm', 'PowerShell:Get-Item', 'WebFetch', 'Bash:docker-compose']) {
+        const ws = captureWs();
+        table.add_tool_allow({}, ws, { type: 'add_tool_allow', key });
+        assert.strictEqual(ws.sent[0].type, 'tool_allows',
+          `a key the permission card can produce must be accepted: ${key}`);
+      }
+      assert.strictEqual(boundary.readToolAllows().length, 5);
+    } finally { config.setWorkspace(original); }
+  });
+
+  test('a grant is scoped to the workspace it was given in', () => {
+    const table = buildDispatch();
+    const original = config.getWorkspace();
+    const a = allowsWorkspace();
+    const b = allowsWorkspace();
+    try {
+      config.setWorkspace(a);
+      table.add_tool_allow({}, captureWs(), { type: 'add_tool_allow', key: 'Bash:npm' });
+      config.setWorkspace(b);
+      const other = captureWs();
+      table.get_tool_allows({}, other, { type: 'get_tool_allows' });
+      assert.deepStrictEqual(other.sent[0].tools, [],
+        'another workspace is unaffected: these are never machine-wide');
+    } finally { config.setWorkspace(original); }
+  });
+
+  test('revoking takes effect immediately, and revoking something absent is not an error', () => {
+    const table = buildDispatch();
+    const original = config.getWorkspace();
+    const dir = allowsWorkspace();
+    try {
+      config.setWorkspace(dir);
+      table.add_tool_allow({}, captureWs(), { type: 'add_tool_allow', key: 'Bash:curl' });
+      const after = captureWs();
+      table.remove_tool_allow({}, after, { type: 'remove_tool_allow', key: 'Bash:curl' });
+      assert.deepStrictEqual(after.sent[0].tools, []);
+      assert.deepStrictEqual(boundary.readToolAllows(), [], 'gone from the store, not just the reply');
+      // Clicking revoke twice is a person being decisive, not an error.
+      const again = captureWs();
+      table.remove_tool_allow({}, again, { type: 'remove_tool_allow', key: 'Bash:curl' });
+      assert.strictEqual(again.sent[0].type, 'tool_allows');
+    } finally { config.setWorkspace(original); }
+  });
+
+  test('an unreadable store means no standing answer, never a silent yes', () => {
+    // THE DIRECTION THAT MATTERS. A corrupt file must make the card appear, not
+    // make a request pass. Anything else turns a damaged file into consent.
+    const original = config.getWorkspace();
+    const dir = allowsWorkspace();
+    try {
+      config.setWorkspace(dir);
+      fs.writeFileSync(path.join(dir, '.rundock', 'permissions.json'), '{ not json');
+      assert.deepStrictEqual(boundary.readToolAllows(), [],
+        'unreadable reads as nothing allowed, so the person is asked again');
+    } finally { config.setWorkspace(original); }
+  });
+
+  test('with no workspace open, reading answers empty and writing is refused', () => {
+    // The same split the working folders take, for the same reason: asking what
+    // is allowed before a workspace is open is a fair question with a true
+    // answer, while GRANTING one has nowhere to be recorded and must say so
+    // rather than appear to succeed.
+    const table = buildDispatch();
+    const original = config.getWorkspace();
+    try {
+      config.setWorkspace(null);
+      const reader = captureWs();
+      table.get_tool_allows({}, reader, { type: 'get_tool_allows' });
+      assert.deepStrictEqual(reader.sent[0], { type: 'tool_allows', tools: [] });
+
+      const writer = captureWs();
+      table.add_tool_allow({}, writer, { type: 'add_tool_allow', key: 'Bash:git' });
+      assert.strictEqual(writer.sent[0].type, 'workspace_error');
+      assert.match(writer.sent[0].message, /Open a workspace/);
+
+      // Revoking without a workspace answers the empty list rather than
+      // erroring: there is nothing to revoke and nothing was promised.
+      const revoker = captureWs();
+      table.remove_tool_allow({}, revoker, { type: 'remove_tool_allow', key: 'Bash:git' });
+      assert.deepStrictEqual(revoker.sent[0], { type: 'tool_allows', tools: [] });
+    } finally { config.setWorkspace(original); }
+  });
+
+  test('an allow with no key named is refused, not recorded as an empty string', () => {
+    const table = buildDispatch();
+    const original = config.getWorkspace();
+    const dir = allowsWorkspace();
+    try {
+      config.setWorkspace(dir);
+      const ws = captureWs();
+      table.add_tool_allow({}, ws, { type: 'add_tool_allow' });
+      assert.strictEqual(ws.sent[0].type, 'workspace_error');
+      assert.match(ws.sent[0].message, /no tool was named/);
+      assert.deepStrictEqual(boundary.readToolAllows(), [],
+        'and nothing was written, so no card is silenced by a blank key');
+    } finally { config.setWorkspace(original); }
+  });
+
+  test('storing a tool allow leaves the folder grants alone', () => {
+    // They share a file. A writer that rebuilt it from its own half would drop
+    // the other, silently withdrawing folder access the person had granted.
+    const original = config.getWorkspace();
+    const dir = allowsWorkspace();
+    try {
+      config.setWorkspace(dir);
+      boundary.addBoundaryGrant(path.join(dir, 'somewhere'));
+      const before = boundary.readBoundaryGrants();
+      assert.strictEqual(before.length, 1, 'fixture sanity: a folder grant exists');
+      boundary.addToolAllow('Bash:git');
+      assert.deepStrictEqual(boundary.readBoundaryGrants(), before,
+        'the folder grant survives a tool allow being written beside it');
+      boundary.removeToolAllow('Bash:git');
+      assert.deepStrictEqual(boundary.readBoundaryGrants(), before,
+        'and survives one being revoked');
+    } finally { config.setWorkspace(original); }
   });
 });
