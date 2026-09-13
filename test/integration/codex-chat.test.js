@@ -533,4 +533,36 @@ describe('codex agent conversation', () => {
       'and is given its own earlier turn, which a fresh thread holds nowhere');
     h.reapConvo(convoId);
   });
+
+  // NO STORED THREAD AT ALL, which is a different branch from a stored one that
+  // cannot resume. `willResume` is false here because there is nothing to
+  // validate, not because validation failed, and only a test with no sessionIds
+  // entry exercises that arm: every other codex test in this file supplies one.
+  test('a codex delegate with no stored thread is an arrival', async () => {
+    const convoId = h.freshConvoId('cdx-no-thread');
+    h.internal.convoTranscripts.set(convoId, [
+      { role: 'user', agent: 'user', text: 'find me two suppliers' },
+      { role: 'agent', agent: 'chief-of-staff', text: 'COS-BEFORE-IDA: the budget is fixed' },
+    ]);
+    h.internal.saveTranscript(convoId);
+    // Deliberately no sessionIds entry for the researcher.
+    h.internal.writeConversations([{ id: convoId, title: 'no thread', messages: [], sessionIds: [] }]);
+    h.internal.chatProcesses.set(convoId, {
+      agentId: 'chief-of-staff', processId: 'p-cdx-parent4', exited: false, toolCalls: [],
+    });
+    h.writeCodexScenario([{ match: {}, turn: [{ text: 'ok' }] }]);
+    const before = h.codexTurnPrompts().length;
+
+    h.internal.handleDelegation({
+      conversationId: convoId, targetAgent: 'researcher',
+      context: 'check these two', _intercepted: true,
+    }, h.internal.chatProcesses);
+
+    await h.waitUntil(() => h.codexTurnPrompts().length > before, 'the codex delegate was prompted');
+    const prompt = h.codexTurnPrompts()[before];
+    assert.match(prompt, /BEFORE YOU JOINED/, 'nothing to resume is an arrival');
+    assert.doesNotMatch(prompt, /SINCE YOUR LAST TURN/, 'and it never claims a turn it did not take');
+    assert.match(prompt, /COS-BEFORE-IDA/, 'with the conversation it walked into');
+    h.reapConvo(convoId);
+  });
 });
