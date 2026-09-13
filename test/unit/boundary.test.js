@@ -454,12 +454,38 @@ describe('an agent cannot quietly answer the questions it was asked', () => {
     }
   });
 
-  test('a shell command writing one of them is reported as a crossing', () => {
-    const cmd = `echo '{}' > ${path.join(WS, '.rundock', 'permissions.json')}`;
-    const found = classifyShellAccess('Bash', { command: cmd }, WS, [], os2.homedir(), false);
-    const paths = (found && found.crossings ? found.crossings : []).map((c) => c.path);
-    assert.ok(paths.some((found) => found.endsWith('permissions.json')),
-      `a shell write has to be caught too, or the file tools are the only door that is locked: ${JSON.stringify(found)}`);
+  // EVERY SPELLING, because the one an agent would actually type is the
+  // relative one, and that is the spelling a filter designed for the
+  // "does this reach outside the workspace" question skips by construction.
+  // The first version of this test used the absolute path alone and passed
+  // while `echo x > .rundock/permissions.json` went through untouched.
+  test('a shell command writing one of them is caught however the path is spelled', () => {
+    const spellings = [
+      path.join(WS, '.rundock', 'permissions.json'),   // absolute
+      '.rundock/permissions.json',                      // relative, the ordinary one
+      './.rundock/permissions.json',                    // relative, dot-prefixed
+      '.rundock/../.rundock/permissions.json',          // relative through a traversal
+      path.join(WS, '.rundock', 'state.json'),
+      '.rundock/state.json',
+    ];
+    for (const spelling of spellings) {
+      const found = classifyShellAccess('Bash', { command: `echo '{}' > ${spelling}` }, WS, [], os2.homedir(), false);
+      const paths = (found && found.crossings ? found.crossings : []).map((c) => c.path);
+      assert.ok(paths.some((p) => p.endsWith('.json')),
+        `a shell write spelled "${spelling}" has to be caught, or the lock is only on the door nobody uses`);
+    }
+  });
+
+  test('an ordinary relative write inside the workspace is still free', () => {
+    // The other direction, so the rule above cannot be satisfied by reporting
+    // every relative token: resolving them all is new work, and it must not
+    // turn ordinary workspace writing into a wall of cards.
+    for (const spelling of ['notes.md', './src/app.js', '.rundock/scratch/draft.md']) {
+      const found = classifyShellAccess('Bash', { command: `echo hi > ${spelling}` }, WS, [], os2.homedir(), false);
+      const paths = (found && found.crossings ? found.crossings : []).map((c) => c.path);
+      assert.deepStrictEqual(paths, [],
+        `writing "${spelling}" is ordinary work inside the workspace and must raise nothing`);
+    }
   });
 
   test('a shell command merely reading one of them is not', () => {

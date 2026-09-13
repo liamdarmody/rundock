@@ -664,28 +664,38 @@ function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), 
     for (const re of HOME_PREFIX) {
       if (re.test(t)) { t = t.replace(re, os.homedir()); homed = true; break; }
     }
+    if (URL_SCHEME.test(t)) continue;
+    if (isExemptToken(t)) continue;
+    const pmod = flavourFor(t, workspaceRoot);
+    const resolved = canonicalize(pmod.resolve(pmod.resolve(workspaceRoot), t), pmod);
+
+    // THE ANSWER FILES ARE TESTED BEFORE THE CROSSING FILTER, not after it.
+    //
+    // The filter below exists to answer "could this token reach OUTSIDE the
+    // workspace", and a plain relative token cannot, which is why it is
+    // skipped. The answer files are the one thing INSIDE the workspace that
+    // still has to be reported, so testing them after that skip left the
+    // ordinary spelling unguarded while the absolute one was caught:
+    //
+    //   echo '{}' > /abs/ws/.rundock/permissions.json   caught
+    //   echo '{}' > .rundock/permissions.json           skipped entirely
+    //
+    // The second is how anyone would actually write it, and it is the shape a
+    // test using an absolute path never sees.
+    if (!readOnly && isWorkspaceAnswerFile(resolved, workspaceRoot, foldsCase, pmod)) {
+      const akey = pmod === path.win32 ? resolved.toLowerCase() : resolved;
+      if (!seen.has(akey)) { seen.add(akey); found.push({ path: resolved, answerFile: true }); }
+      continue;
+    }
+
     // Skip tokens that could not cross. A relative token resolves against the
     // workspace root and lands inside whatever it looks like, so a URL, a
     // compiler flag and a bare filename all fall out here without needing a
     // rule of their own. What must NOT fall out here is any Windows shape:
     // a drive letter and a backslash traversal both reach outside while
     // containing no leading forward slash and no `/`-delimited `..`.
-    if (URL_SCHEME.test(t)) continue;
-    if (isExemptToken(t)) continue;
     if (!homed && !t.startsWith('/') && !WIN_DRIVE.test(t) && !WIN_UNC.test(t) && !TRAVERSAL.test(t)) continue;
-    const pmod = flavourFor(t, workspaceRoot);
-    const resolved = canonicalize(pmod.resolve(pmod.resolve(workspaceRoot), t), pmod);
-    if (insideWorkspaceRoot(resolved, workspaceRoot, pmod)) {
-      // The one thing inside the workspace that is still reported: a write to
-      // the person's own answer files. Read-only commands pass, on the same
-      // reasoning the persistence surfaces use below, because reading the
-      // stored mode or the stored grants is not answering anything.
-      if (!readOnly && isWorkspaceAnswerFile(resolved, workspaceRoot, foldsCase, pmod)) {
-        const key = pmod === path.win32 ? resolved.toLowerCase() : resolved;
-        if (!seen.has(key)) { seen.add(key); found.push({ path: resolved, answerFile: true }); }
-      }
-      continue;
-    }
+    if (insideWorkspaceRoot(resolved, workspaceRoot, pmod)) continue;
     if (namedFolderCovers(resolved, extraDirs, pmod, home, foldsCase)) continue;
     // Tier three (neither secret nor a persistence surface) is free, so it
     // is not reported at all. A command cannot declare which act it

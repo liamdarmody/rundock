@@ -214,6 +214,76 @@ describe('the workspace seeds its standing allows without being asked to', () =>
   });
 });
 
+describe('the two ends of the loop are the real ones, not re-implementations', () => {
+  // Both of these drive a line that every other test in this file steps over.
+  // The dispatch arm could be deleted and the cache tests would still pass
+  // while no stored answer ever arrived; respondPermission could stop sending
+  // and the store tests would still pass while nothing was ever written.
+  const APP_SRC = fs.readFileSync(path.join(__dirname, '../../public/app.js'), 'utf-8');
+
+  test("the app's own dispatch routes tool_allows to the handler", () => {
+    const arm = APP_SRC.match(/case 'tool_allows':([^\n]*)/);
+    assert.ok(arm, "app.js still routes tool_allows; if this fails the wiring was removed");
+    Object.assign(global, chat);
+    Object.assign(global, settings);
+    chat.setStandingToolAllows([]);
+
+    // The real statement, cut out of app.js and run, rather than a call to the
+    // handler it names.
+    // eslint-disable-next-line no-new-func
+    new Function('d', arm[1].replace(/break;\s*$/, ''))({ type: 'tool_allows', tools: ['Bash:supabase'] });
+
+    const sent = [];
+    global.ws = { readyState: 1, send: (x) => sent.push(JSON.parse(x)) };
+    global.WebSocket = { OPEN: 1 };
+    document.getElementById('messages').innerHTML = '';
+    global.pendingPermissions.clear();
+    try {
+      chat.handlePermissionRequest(
+        { request_id: 'r11', request: { tool_name: 'Bash', input: { command: 'supabase db push' } } }, 'c1');
+      assert.strictEqual(sent.length, 1,
+        'the message arrived through the arm the server actually sends to, and answered the card');
+    } finally { global.ws = null; }
+  });
+
+  test('answering "Always allow" sends the key to be stored', () => {
+    // The write half. respondPermission is what the button calls, and the key
+    // it sends has to be the pending request's own key rather than anything
+    // recomputed here, which is why the pending entry is built the way the
+    // card path builds it and the assertion names the exact key.
+    const sent = [];
+    global.ws = { readyState: 1, send: (x) => sent.push(JSON.parse(x)) };
+    global.WebSocket = { OPEN: 1 };
+    document.getElementById('messages').innerHTML = '';
+    global.pendingPermissions.clear();
+    global.pendingPermissions.set('r12', {
+      convoId: 'c1', key: 'Bash:supabase', toolInput: { command: 'supabase db push' }, grantDir: null,
+    });
+    try {
+      chat.respondPermission('r12', true, true, false);
+      const stores = sent.filter((m) => m.type === 'add_tool_allow');
+      assert.deepStrictEqual(stores, [{ type: 'add_tool_allow', key: 'Bash:supabase' }],
+        'the answer is written back, so it outlives the tab that gave it');
+    } finally { global.ws = null; }
+  });
+
+  test('answering once, without "always", stores nothing', () => {
+    const sent = [];
+    global.ws = { readyState: 1, send: (x) => sent.push(JSON.parse(x)) };
+    global.WebSocket = { OPEN: 1 };
+    document.getElementById('messages').innerHTML = '';
+    global.pendingPermissions.clear();
+    global.pendingPermissions.set('r13', {
+      convoId: 'c1', key: 'Bash:supabase', toolInput: {}, grantDir: null,
+    });
+    try {
+      chat.respondPermission('r13', true, false, false);
+      assert.deepStrictEqual(sent.filter((m) => m.type === 'add_tool_allow'), [],
+        'a one-off yes is not a standing answer, and must not be recorded as one');
+    } finally { global.ws = null; }
+  });
+});
+
 describe('the revoke control carries an index, never the key', () => {
   test('a key that would break out of a JavaScript literal cannot', () => {
     {
