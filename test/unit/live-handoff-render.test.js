@@ -274,6 +274,20 @@ describe('every turn recorded as a plain agent message also reaches a live clien
   // Scoping this to engine.js would let the next module repeat it untouched,
   // which is the same instance-shaped thinking the rule exists to stop.
   const CALL_RE = /appendTranscript\(\s*[A-Za-z_$][\w$]*\s*,\s*'agent'/;
+  // SITES THAT SHARE THE DEFECT AND ARE NOT FIXED HERE. Each writes a turn
+  // guarded only by responseText being non-empty, so a turn whose text arrived
+  // without deltas is recorded and never sent. They belong to the
+  // non-intercepted handback paths, which this card does not touch, and are
+  // listed so the gap is visible rather than quietly exempted. Removing an
+  // entry after fixing its site is how this list shrinks; adding one needs a
+  // reason as good as this paragraph.
+  const KNOWN_DELTA_GAPS = new Set([
+    'lib/delegation/engine.js:393',
+    'lib/delegation/engine.js:717',
+    'lib/delegation/engine.js:792',
+    'lib/delegation/engine.js:1185',
+    'lib/delegation/engine.js:1583',
+  ]);
   function sourceFiles(dir, acc = []) {
     for (const name of fs.readdirSync(dir)) {
       if (name === 'node_modules' || name.startsWith('.')) continue;
@@ -353,9 +367,21 @@ describe('every turn recorded as a plain agent message also reaches a live clien
       // and left this test green with the fix deleted, which is the third way
       // this same check has been made toothless. Measured each time by deleting
       // the fix; this is the shape that reddens.
-      if (s.guard ? /responseText|ownProse/.test(s.guard) : /responseText|ownProse/.test(s.before)) return false;
-      // Two: it hands the text to the client itself.
+      // A guard on responseText only explains the site when the code also
+      // knows the text STREAMED. responseText is filled from deltas when they
+      // arrive and from the assistant blocks when they do not, so a site that
+      // reads it without consulting sawTextDelta is claiming the client saw
+      // something it may never have been sent. The intercepted path consults
+      // it; the sites listed below do not, and are recorded rather than
+      // excused, because hiding them is how a class stays open.
+      // THE ASSIGNMENT, INSIDE THE BRANCH. Reading the lines above lets a bare
+      // declaration (`let liveHandoffText = null`, `const streamedToClient =
+      // ...`) stand in for actually sending anything, and both of those sit
+      // above every branch here. Each version of this check that looked above
+      // the branch stayed green while a fix was deleted.
       if (/liveHandoffText\s*=\s*(?!null)\w/.test(s.body)) return false;
+      const guarded = s.guard ? /responseText|ownProse/.test(s.guard) : /responseText|ownProse/.test(s.before);
+      if (guarded && KNOWN_DELTA_GAPS.has(`${s.file}:${s.line}`)) return false;
       // Three: it pushes the same turn down the socket beside the write, which
       // is how the runtime error paths do it.
       if (/safeSend\(/.test(s.body)) return false;
@@ -364,5 +390,18 @@ describe('every turn recorded as a plain agent message also reaches a live clien
     assert.deepStrictEqual(unexplained.map((s) => `${s.file}:${s.line}`), [],
       'a turn written to the transcript with nothing sending it live is invisible until reload: '
       + JSON.stringify(unexplained.map((s) => ({ at: `${s.file}:${s.line}`, guard: s.guard.trim() })), null, 1));
+  });
+
+  test('the list of known gaps cannot hide the site this card fixes', () => {
+    // A recorded exemption is a loaded gun pointed at the next reader: it is
+    // only honest while it cannot be widened to cover the thing under test.
+    // The intercepted handoff site must not be in it, now or later.
+    const engine = fs.readFileSync(path.join(ROOT, 'lib', 'delegation', 'engine.js'), 'utf-8').split('\n');
+    const fixed = engine.findIndex((l) => /liveHandoffText\s*=\s*withTools/.test(l));
+    assert.ok(fixed > -1, 'sanity: the fix is still in the engine');
+    for (let i = fixed - 6; i <= fixed + 2; i++) {
+      assert.ok(!KNOWN_DELTA_GAPS.has(`lib/delegation/engine.js:${i + 1}`),
+        `the handoff site may never be excused by the gap list, found line ${i + 1}`);
+    }
   });
 });
