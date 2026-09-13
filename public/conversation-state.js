@@ -274,7 +274,20 @@
     // delegation (orchestrator->specialist or specialist->sub-specialist).
     const isReturn = ctx.toAgentType === 'orchestrator';
     if (ctx.isActive) {
-      if (ctx.toAgentExists && ctx.fromAgentExists) {
+      // A SILENT SWITCH STILL SWITCHES, IT JUST DRAWS NOTHING.
+      //
+      // On a pipeline-complete handback the orchestrator is spawned only to
+      // park, so drawing its arrival showed an agent joining and then doing
+      // nothing, which reads as a hang. The divider is the only part of this
+      // reducer that is purely presentation, so it is the only part the flag
+      // skips: activeAgentId, delegationActive, the outgoing agent's working
+      // indicator and the chat header all still update.
+      //
+      // The alternative, withholding the message itself, was tried and was
+      // worse: it left the conversation marked delegated with the departed
+      // specialist still showing as working, turning a phantom arrival into a
+      // spinner that never stopped.
+      if (ctx.toAgentExists && ctx.fromAgentExists && !message.silent) {
         effects.push({
           type: 'show-delegation-divider',
           toAgentId: message.toAgent,
@@ -285,8 +298,17 @@
       }
       if (ctx.toAgentExists) effects.push({ type: 'update-chat-header', toAgentId: message.toAgent });
     }
-    // Show the delegate as working AFTER the divider is rendered.
-    if (!isReturn && next.delegationActive) {
+    // Show the delegate as working AFTER the divider is rendered, and NEVER for
+    // a silent switch.
+    //
+    // `isReturn` asks whether the incoming agent is the orchestrator, which is
+    // not the same question as whether this is a restoration. A mid-level lead
+    // restored to park is a specialist, so isReturn is false and this block
+    // started a working indicator for an agent that will never speak: the very
+    // hang the silent flag exists to remove, surviving in the one shape the
+    // flag was added for. The flag says a turn is not coming; nothing after it
+    // may claim otherwise.
+    if (!isReturn && next.delegationActive && !message.silent) {
       applyStartProcessing(next);
       effects.push({ type: 'start-processing', attribution: attribution(message) });
     }

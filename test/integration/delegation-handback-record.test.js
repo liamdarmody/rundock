@@ -146,8 +146,19 @@ describe('the other paths control can return through', () => {
 
     await client.waitFor(m => m.type === 'system' && m.subtype === 'agent_switch'
       && m._conversationId === convoId && m.toAgent === 'content-analyst', { label: 'down to the analyst' });
-    await client.waitFor(m => m.type === 'system' && m.subtype === 'agent_switch'
-      && m._conversationId === convoId && m.toAgent === 'content-lead', { label: 'back up to the lead' });
+    // MATCHED BY WHERE IT CAME FROM, not only by where it goes. `toAgent ===
+    // 'content-lead'` also matches the FORWARD delegation earlier in this same
+    // scenario, so the original wait could be satisfied by the handoff out
+    // rather than the handback in. It passed either way while it only checked
+    // that control reached the lead; asserting what the message SAYS made the
+    // ambiguity visible immediately.
+    const backUp = (await client.waitFor(m => m.type === 'system' && m.subtype === 'agent_switch'
+      && m._conversationId === convoId && m.fromAgent === 'content-analyst'
+      && m.toAgent === 'content-lead', { label: 'back up to the lead' })).msg;
+    // The analyst finished the delegated pipeline, so the lead is restored to
+    // park rather than to speak. Drawn as nothing, on the mid-level path.
+    assert.strictEqual(backUp.silent, true,
+      'a lead restored only to park is not announced as arriving');
 
     const midChain = storedConversation(convoId);
     assert.ok(midChain, 'the conversation was persisted');
@@ -155,8 +166,13 @@ describe('the other paths control can return through', () => {
       'control reached the lead, not the base agent, so this conversation is still delegated');
 
     // And when the lead finishes too, control does reach the base agent.
-    await client.waitFor(m => m.type === 'system' && m.subtype === 'agent_switch'
-      && m._conversationId === convoId && m.toAgent === 'chief-of-staff', { label: 'home to the orchestrator' });
+    const homeSwitch = (await client.waitFor(m => m.type === 'system' && m.subtype === 'agent_switch'
+      && m._conversationId === convoId && m.toAgent === 'chief-of-staff', { label: 'home to the orchestrator' })).msg;
+    // Same again one level up: the lead also finished, so the orchestrator is
+    // restored to park. Two of the four restoration paths asserted on the real
+    // message in this one scenario.
+    assert.strictEqual(homeSwitch.silent, true,
+      'and neither is the orchestrator, restored to park behind it');
     await client.waitForEvent('system', 'done', convoId);
 
     const home = storedConversation(convoId);
@@ -192,8 +208,17 @@ describe('a specialist returning scope on its own', () => {
     client.send({ type: 'save_conversation', conversation: { id: convoId, agentId: 'chief-of-staff', activeAgentId: 'content-lead', title: 'Scope return' } });
     client.send({ type: 'chat', conversationId: convoId, agent: 'content-lead', content: 'not my area' });
 
-    await client.waitFor(m => m.type === 'system' && m.subtype === 'agent_switch'
-      && m._conversationId === convoId && m.toAgent === 'chief-of-staff', { label: 'scope return to the orchestrator' });
+    const scopeReturn = (await client.waitFor(m => m.type === 'system' && m.subtype === 'agent_switch'
+      && m._conversationId === convoId && m.toAgent === 'chief-of-staff', { label: 'scope return to the orchestrator' })).msg;
+
+    // THE FOURTH RESTORATION PATH, and the direction the other three do not
+    // cover. A RETURN drives the orchestrator to act ("I will take it from
+    // here"), so the arrival MUST be drawn: suppressing it here would hide a
+    // real handover. The three silent cases prove nothing is drawn for an agent
+    // that will not speak; this proves something is drawn for one that will,
+    // which is the half a silence-only suite would happily lose.
+    assert.notStrictEqual(scopeReturn.silent, true,
+      'an arrival is announced when the agent restored is about to speak');
 
     const stored = storedConversation(convoId);
     assert.ok(stored, 'the conversation was persisted');
@@ -227,8 +252,17 @@ describe('a delegation whose parent stayed alive', () => {
     client.send({ type: 'delegate', conversationId: convoId, targetAgent: 'content-lead', context: 'live-parent brief' });
     await client.waitFor(m => m.type === 'system' && m.subtype === 'agent_switch'
       && m._conversationId === convoId && m.toAgent === 'content-lead', { label: 'out to the delegate' });
-    await client.waitFor(m => m.type === 'system' && m.subtype === 'agent_switch'
-      && m._conversationId === convoId && m.toAgent === 'chief-of-staff', { label: 'parent restored' });
+    const restored = (await client.waitFor(m => m.type === 'system' && m.subtype === 'agent_switch'
+      && m._conversationId === convoId && m.toAgent === 'chief-of-staff', { label: 'parent restored' })).msg;
+
+    // AND IT IS DRAWN AS NOTHING, because this parent is restored to park.
+    // The delegate emitted COMPLETE and no follow-up arrived, so nothing will
+    // wake it: an arrival drawn here shows an agent joining and doing nothing,
+    // which is the reported hang. Asserted on the message the client actually
+    // received, for this path specifically, because the first fix for that hang
+    // reached one restoration path of four and no test noticed.
+    assert.strictEqual(restored.silent, true,
+      'the restore of a parent that will not speak is silent');
 
     const stored = storedConversation(convoId);
     assert.ok(stored, 'the conversation was persisted');
@@ -270,8 +304,21 @@ describe('control skipping a mid-level parent to reach the orchestrator', () => 
     client.send({ type: 'delegate', conversationId: convoId, targetAgent: 'content-lead', context: 'lead brief' });
     await client.waitFor(m => m.type === 'system' && m.subtype === 'agent_switch'
       && m._conversationId === convoId && m.toAgent === 'content-analyst', { label: 'down to the report' });
-    await client.waitFor(m => m.type === 'system' && m.subtype === 'agent_switch'
-      && m._conversationId === convoId && m.toAgent === 'chief-of-staff', { label: 'straight back to the orchestrator' });
+    const skipLevel = (await client.waitFor(m => m.type === 'system' && m.subtype === 'agent_switch'
+      && m._conversationId === convoId && m.fromAgent === 'content-analyst'
+      && m.toAgent === 'chief-of-staff', { label: 'straight back to the orchestrator' })).msg;
+
+    // THE FOURTH PATH, ASSERTED ON THE MESSAGE. This is the skip-level restore
+    // to a LIVE orchestrator, which is the one shape the other three scenarios
+    // cannot produce: the others either spawn the parent fresh or restore a
+    // parked one. Matched on origin as well as destination, because
+    // `toAgent === 'chief-of-staff'` alone is also satisfied by an earlier
+    // switch in this same scenario.
+    // The analyst emitted COMPLETE, so the COMPLETE gate leaves this
+    // orchestrator idle: it is restored to park and will not speak, so nothing
+    // is drawn for it.
+    assert.strictEqual(skipLevel.silent, true,
+      'an orchestrator restored only to park is not announced as arriving');
 
     const stored = storedConversation(convoId);
     assert.ok(stored, 'the conversation was persisted');

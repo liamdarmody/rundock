@@ -501,3 +501,191 @@ describe('an agent is told which agents it may call', () => {
       'the rule that was present for one role and missing for the other');
   });
 });
+
+describe('an agent says why it arrived, or does not appear to', () => {
+  // TWO DEFECTS FROM TESTING THE 0.13.3 CUT, sharing a cause: an agent's
+  // appearance in a conversation carried no information about why it was there.
+  const fs = require('node:fs');
+  const promptSrc = fs.readFileSync(path.join(ROOT, 'lib', 'agents', 'prompt.js'), 'utf8');
+  const engineSrc = fs.readFileSync(path.join(ROOT, 'lib', 'delegation', 'engine.js'), 'utf8');
+
+  function leadContract() {
+    const at = promptSrc.indexOf('You have a support team.');
+    const end = promptSrc.indexOf("'YOUR SUPPORT TEAM:',", at);
+    assert.ok(at > -1 && end > at, 'the lead contract is still here');
+    return promptSrc.slice(at, end);
+  }
+
+  test('a lead is told to announce a handoff, not merely allowed to', () => {
+    // It said a one-sentence handoff "is fine", and the next rule said "Do NOT
+    // narrate the delegation brief in visible chat". Permission followed by an
+    // emphatic prohibition reads as: stay quiet. Observed: a lead delegated to
+    // a fact checker with no visible turn at all.
+    const lead = leadContract();
+    assert.match(lead, /It is not optional/,
+      'permission is not instruction, and the rule beside it forbids speaking');
+  });
+
+  test('and told what the line carries', () => {
+    assert.match(leadContract(), /who you are handing to and why/,
+      'a rule that says "say something" without saying what invites silence or '
+      + 'the narration the next rule forbids');
+  });
+
+  test('while the prohibition on narrating the brief still stands', () => {
+    const lead = leadContract();
+    assert.match(lead, /Do NOT narrate the delegation brief/);
+    assert.match(lead, /who and why belongs in the chat/,
+      'the two rules must be distinguishable, or following one breaks the other');
+  });
+
+  test('the orchestrator keeps the instruction it already had', () => {
+    assert.match(promptSrc, /A brief one-sentence handoff is fine/,
+      'the orchestrator narrates because routing is its job');
+  });
+
+  test('an arrival that will produce nothing is drawn as nothing, but the switch is still sent', () => {
+    // On a COMPLETE handback the orchestrator is spawned only to park, so the
+    // conversation showed it joining and then doing nothing: indistinguishable
+    // from a hang, and reported as one.
+    //
+    // The first fix withheld the switch entirely, on the reasoning that it was
+    // only an announcement. It is not: reduceAgentSwitch sets activeAgentId,
+    // clears delegationActive and emits clear-outgoing-working, so withholding
+    // it left the conversation marked delegated with the DEPARTED specialist
+    // still showing as working. The integration suite caught it
+    // (delegation-handback-record: a sub-delegate returning to its lead) and
+    // this suite did not, because it asserted the shape of the code rather than
+    // what a person would see.
+    //
+    // So the message always goes and the drawing is what is suppressed. The
+    // behaviour is proven in test/unit/conversation-state.test.js ('a silent
+    // agent_switch draws no divider but still clears the outgoing agent and
+    // moves control'); this only pins that the engine still sends it.
+    const at = engineSrc.indexOf('NO ARRIVAL DRAWN FOR AN AGENT THAT WILL SAY NOTHING');
+    assert.ok(at > -1, 'the reasoning is recorded where the decision is made');
+    const region = engineSrc.slice(at, at + 1400);
+    assert.doesNotMatch(region, /if \(!wasPipelineComplete\) \{[\s\S]{0,300}subtype: 'agent_switch'/,
+      'the switch is NOT gated on the handback mode: withholding it is what broke the indicator');
+    assert.match(region, /subtype: 'agent_switch'[\s\S]{0,400}switchSilence\(!wasPipelineComplete\)/,
+      'it is sent either way, deciding its drawing through the shared helper');
+  });
+
+  test('and the process is still announced either way', () => {
+    // A RETURN or CONTINUE handback drives the orchestrator to act, so the
+    // person should see who picked it up.
+    const at = engineSrc.indexOf('NO ARRIVAL DRAWN FOR AN AGENT THAT WILL SAY NOTHING');
+    const region = engineSrc.slice(at, at + 1600);
+    assert.match(region, /process_started/,
+      'the process start is not gated on the handback mode either');
+  });
+});
+
+// EVERY RESTORATION PATH, COUNTED.
+//
+// The first fix for the phantom arrival reached one restoration path of four,
+// and nothing failed, because no test knew how many paths there were. Counting
+// them is the point of this test: a fifth path added later without a silence
+// decision fails here rather than shipping an arrival for an agent that will
+// never speak.
+//
+// Source-shaped deliberately, and paired with the behavioural cover in
+// conversation-state.test.js, which proves what the flag DOES. This proves
+// where it is present. Neither alone is enough: the behavioural tests cannot
+// see a path nobody wired, and this cannot see a flag that does nothing.
+describe('every agent_switch either decides silence or is a forward delegation', () => {
+  const fs = require('node:fs');
+  const engineSrc = fs.readFileSync(path.join(ROOT, 'lib', 'delegation', 'engine.js'), 'utf8').split('\n');
+
+  const sends = [];
+  engineSrc.forEach((line, i) => {
+    if (line.includes("subtype: 'agent_switch'")) {
+      sends.push({ line: i + 1, decidesSilence: /switchSilence\(/.test(engineSrc.slice(i, i + 6).join(' ')) });
+    }
+  });
+
+  test('there are exactly five, and four of them restore an agent', () => {
+    assert.strictEqual(sends.length, 5,
+      `expected 5 agent_switch sends, found ${sends.length} at lines ${sends.map(s => s.line).join(', ')}. `
+      + 'A new one must decide whether the agent it restores will speak, or say why it is a forward delegation.');
+    const deciding = sends.filter((s) => s.decidesSilence);
+    assert.strictEqual(deciding.length, 4,
+      `expected 4 restoration sends to decide silence, found ${deciding.length}`);
+  });
+
+  test('the one that does not decide is the forward delegation, which always draws', () => {
+    // A forward delegation is always worth drawing: the delegate is spawned to
+    // work, so an arrival there is never a phantom.
+    const undecided = sends.filter((s) => !s.decidesSilence);
+    assert.strictEqual(undecided.length, 1, 'exactly one send draws unconditionally');
+    const context = engineSrc.slice(undecided[0].line - 12, undecided[0].line).join('\n');
+    assert.match(context, /Notify client of agent switch|targetAgent/,
+      'and it is the forward delegation in handleDelegation, not a restoration path that forgot');
+  });
+});
+
+// ONE IDENTIFIER, READ TWICE.
+//
+// This is about the SHAPE of the decision rather than its outcome, so a source
+// assertion is the honest instrument: the behavioural tests cannot see the
+// difference between one expression read twice and two expressions that happen
+// to agree today. This fails the moment they are split apart again, which is
+// how the fifth restoration branch drifted: the arrival was drawn from
+// `restoredWillSpeak` while the wake also required the parent's stdin, so an
+// unreachable parent got a divider and no turn.
+describe('drawing an arrival and waking the agent read the same identifier', () => {
+  const fs = require('node:fs');
+  const src = fs.readFileSync(path.join(ROOT, 'lib', 'delegation', 'engine.js'), 'utf8');
+
+  test('the non-intercepted restore asks each question once and shares every answer', () => {
+    // Three inputs decide whether this parent produces a turn, and all three
+    // are named before the switch is sent so the drawing and the waking read
+    // the same answers rather than two expressions that must agree.
+    assert.match(src, /const bufferedTookOver = parentShouldWake\s*\n?\s*&& bufferedFollowUpTakesOver\(/,
+      'the buffered question is asked once, ahead of both decisions');
+    assert.match(src, /const restoredWillSpeak = parentShouldWake && \(bufferedTookOver \|\| parentReachable\);/,
+      'a buffered takeover still produces a turn, so it draws');
+    assert.match(src, /if \(parentShouldWake && !bufferedTookOver && parentReachable\) \{/,
+      'and the wake reads the captured answer rather than asking again');
+
+    // WHAT MUST NOT COME BACK. Gating the buffered question on reachability
+    // left the entry unparked for a message about to be replayed into it, and
+    // an earlier draft did exactly that while looking tidier.
+    assert.doesNotMatch(src, /parentReachable[^;]*&& bufferedFollowUpTakesOver\(/,
+      'the buffered question is never gated on reachability');
+    assert.strictEqual((src.match(/bufferedFollowUpTakesOver\(convoId, orig/g) || []).length, 1,
+      'and it is asked exactly once on this path, because asking twice acts twice');
+  });
+
+  test('the mid-level restore decides both from parentMustAct', () => {
+    assert.match(src, /const parentWillSpeak = parentMustAct;/,
+      'the arrival reads the same flag the branch already uses to decide acting');
+    assert.match(src, /\.\.\.switchSilence\(parentWillSpeak\)/);
+  });
+
+  test('the skip-level restore asks each question once and shares every answer', () => {
+    // Same shape as the non-intercepted restore, and the third place this
+    // pattern had to be applied rather than the first. A buffered message
+    // drives this orchestrator exactly as an auto-continue would, so it counts
+    // as speaking and therefore draws; reading reachability alone suppressed an
+    // arrival that the replay then justified.
+    assert.match(src, /const orchestratorBufferedTookOver = !isPipelineComplete\s*\n?\s*&& bufferedFollowUpTakesOver\(/,
+      'the buffered question is asked once, ahead of both decisions');
+    assert.match(src, /const orchestratorWillSpeak = !isPipelineComplete\s*\n?\s*&& \(orchestratorBufferedTookOver \|\| orchestratorReachable\);/,
+      'and a takeover counts as speaking');
+    assert.match(src, /\.\.\.switchSilence\(orchestratorWillSpeak\)/,
+      'the arrival is drawn from it, through the one helper every path uses');
+    assert.match(src, /\} else if \(orchestratorBufferedTookOver\) \{/,
+      'and the wake reads the captured answer rather than asking again');
+    assert.strictEqual((src.match(/bufferedFollowUpTakesOver\(convoId, orchestratorEntry/g) || []).length, 1,
+      'asked exactly once on this path, because asking twice acts twice');
+  });
+
+  test('the scope return decides from the pipeline marker, which is all it has', () => {
+    // handleScopeReturn spawns the orchestrator fresh, so there is no
+    // reachability question: a process just created is writable by
+    // construction. The marker is the whole of the answer there.
+    assert.match(src, /\.\.\.switchSilence\(!wasPipelineComplete\)/,
+      'scope return: the same helper, given the one input it has');
+  });
+});

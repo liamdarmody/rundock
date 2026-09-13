@@ -593,6 +593,42 @@ test('agent_switch to an unknown agent: no divider, no header, no processing sta
   assert.strictEqual(r.state.activeAgentId, 'ghost');
 });
 
+test('a silent agent_switch draws no divider but still clears the outgoing agent and moves control', () => {
+  // THE REGRESSION THIS PINS. A pipeline-complete handback spawns the
+  // orchestrator only to park, and drawing its arrival showed an agent joining
+  // and then doing nothing, which reads as a hang. That was first fixed by not
+  // sending the switch at all, on the stated reasoning that nothing downstream
+  // depended on it. Four things do: activeAgentId, delegationActive, the
+  // outgoing agent's working indicator, and the chat header. Withholding the
+  // message left the conversation marked delegated with the DEPARTED
+  // specialist still showing as working, which is the same hang moved onto the
+  // other agent, and it went unnoticed because the only test watched for the
+  // divider rather than for any of those.
+  const ctx = { ...SWITCH_CTX, toAgentType: 'orchestrator' };
+  const msg = { ...seq.agentSwitch('dev', 'cos', 'p3'), silent: true };
+  const r = reduce({ ...createState(), activeAgentId: 'dev', delegationActive: true }, msg, ctx);
+
+  assert.strictEqual(r.effects.find(e => e.type === 'show-delegation-divider'), undefined,
+    'nothing is drawn for an agent that will say nothing');
+  assert.ok(r.effects.some(e => e.type === 'clear-outgoing-working' && e.outgoingAgentId === 'dev'),
+    'but the agent that left stops showing as working, which is the whole point');
+  assert.ok(r.effects.some(e => e.type === 'remove-thinking-indicator'),
+    'and its thinking indicator goes, so the next agent\'s activity is not written into it');
+  assert.ok(r.effects.some(e => e.type === 'update-chat-header' && e.toAgentId === 'cos'),
+    'and the header names who actually holds the conversation now');
+  assert.strictEqual(r.state.activeAgentId, 'cos', 'control really moved');
+  assert.strictEqual(r.state.delegationActive, false, 'and the conversation is no longer delegated');
+});
+
+test('a switch that is not silent still draws the divider', () => {
+  // The other direction, so the flag is proven to be what decides rather than
+  // the divider having quietly stopped being emitted at all.
+  const ctx = { ...SWITCH_CTX, toAgentType: 'orchestrator' };
+  const r = reduce(createState(), seq.agentSwitch('dev', 'cos', 'p3'), ctx);
+  assert.ok(r.effects.some(e => e.type === 'show-delegation-divider'),
+    'an ordinary return is still announced in the conversation');
+});
+
 test('agent_switch on an inactive conversation updates state but skips the view effects', () => {
   const r = reduce(createState(), seq.agentSwitch('cos', 'dev', 'p2'), { ...SWITCH_CTX, isActive: false });
   assert.deepStrictEqual(types(r.effects), ['clear-outgoing-working', 'clear-streaming-bubble', 'render-convo-list', 'start-processing']);
@@ -677,4 +713,26 @@ test('a keepalive from a stale process is dropped without touching the activity 
   const s = { ...createState(), isProcessing: true, activeProcessId: 'p2', lastStreamActivity: 500 };
   const r = reduce(s, { type: 'system', subtype: 'keepalive', _processId: 'p1' }, { now: 99999 });
   assert.strictEqual(r.state.lastStreamActivity, 500, 'stale keepalive must not keep a superseded turn "alive"');
+});
+
+test('a silent switch never starts a working indicator, even for a specialist', () => {
+  // The gate above it asks whether the INCOMING agent is the orchestrator,
+  // which is not the same question as whether this is a restoration. A
+  // mid-level lead restored to park is a specialist, so that gate let a
+  // working indicator through for an agent that will never speak: the hang
+  // the silent flag exists to remove, in the one shape it was added for.
+  const ctx = { ...SWITCH_CTX, toAgentType: 'specialist' };
+  const msg = { ...seq.agentSwitch('ana', 'penn', 'p4'), silent: true };
+  const r = reduce({ ...createState(), activeAgentId: 'ana', delegationActive: true }, msg, ctx);
+
+  assert.strictEqual(r.effects.find(e => e.type === 'start-processing'), undefined,
+    'nothing claims a turn is coming when the switch says one is not');
+  assert.strictEqual(r.state.isProcessing, false, 'and the state does not show it as working');
+
+  // The same switch WITHOUT the flag still starts one, so the flag is proven
+  // to be what decides rather than the indicator having quietly gone away.
+  const loud = reduce({ ...createState(), activeAgentId: 'ana', delegationActive: true },
+    seq.agentSwitch('ana', 'penn', 'p4'), ctx);
+  assert.ok(loud.effects.some(e => e.type === 'start-processing'),
+    'an ordinary delegation still shows the delegate as working');
 });
