@@ -567,8 +567,8 @@ describe('an agent says why it arrived, or does not appear to', () => {
     const region = engineSrc.slice(at, at + 1400);
     assert.doesNotMatch(region, /if \(!wasPipelineComplete\) \{[\s\S]{0,300}subtype: 'agent_switch'/,
       'the switch is NOT gated on the handback mode: withholding it is what broke the indicator');
-    assert.match(region, /subtype: 'agent_switch'[\s\S]{0,400}wasPipelineComplete \? \{ silent: true \}/,
-      'it is sent either way, carrying the flag that suppresses only the drawing');
+    assert.match(region, /subtype: 'agent_switch'[\s\S]{0,400}switchSilence\(!wasPipelineComplete\)/,
+      'it is sent either way, deciding its drawing through the shared helper');
   });
 
   test('and the process is still announced either way', () => {
@@ -600,7 +600,7 @@ describe('every agent_switch either decides silence or is a forward delegation',
   const sends = [];
   engineSrc.forEach((line, i) => {
     if (line.includes("subtype: 'agent_switch'")) {
-      sends.push({ line: i + 1, decidesSilence: /silent/.test(engineSrc.slice(i, i + 6).join(' ')) });
+      sends.push({ line: i + 1, decidesSilence: /switchSilence\(/.test(engineSrc.slice(i, i + 6).join(' ')) });
     }
   });
 
@@ -637,24 +637,30 @@ describe('drawing an arrival and waking the agent read the same identifier', () 
   const fs = require('node:fs');
   const src = fs.readFileSync(path.join(ROOT, 'lib', 'delegation', 'engine.js'), 'utf8');
 
-  test('the non-intercepted restore decides both from restoredWillSpeak', () => {
-    assert.match(src, /\.\.\.\(restoredWillSpeak \? \{\} : \{ silent: true \}\)/,
-      'the arrival is drawn from it');
-    assert.match(src, /if \(restoredWillSpeak && !bufferedFollowUpTakesOver\(/,
-      'and the parent is woken from the same name, not from a second expression');
-    // The reachability check must be INSIDE the shared name. Left on the wake
-    // guard alone it was a condition the drawing did not share, which is the
-    // defect this criterion exists to prevent.
-    assert.match(src, /const restoredWillSpeak = [\s\S]{0,220}parentReachable;/,
-      'with reachability folded in, so both halves ask the same question');
-    assert.doesNotMatch(src, /if \(restoredWillSpeak && [^)]*orig\.process\.stdin\.writable\)/,
-      'and never re-tested on the wake guard alone');
+  test('the non-intercepted restore shares its parts, and keeps the side effect unconditional', () => {
+    // The arrival is drawn from both parts, because both must hold for a turn
+    // to appear.
+    assert.match(src, /const restoredWillSpeak = parentShouldWake && parentReachable;/,
+      'one name combining what the marker says and whether the parent can be written to');
+    assert.match(src, /\.\.\.switchSilence\(restoredWillSpeak\)/,
+      'and the arrival is drawn from it, through the one helper every path uses');
+
+    // WHAT MUST NOT BE FOLDED IN. bufferedFollowUpTakesOver consumes and
+    // replays a buffered message, so it acts as it answers. A first attempt at
+    // this fix put reachability inside the name the wake guard reads, which
+    // stopped that replay running for an unreachable parent and silently
+    // dropped a message the user had already sent. The guard therefore asks
+    // the marker first, then the buffer, then reachability, in that order.
+    assert.match(src, /if \(parentShouldWake && !bufferedFollowUpTakesOver\([^)]*\) && parentReachable\) \{/,
+      'the buffered replay is consulted whenever the marker says act, reachable or not');
+    assert.doesNotMatch(src, /if \(restoredWillSpeak && !bufferedFollowUpTakesOver\(/,
+      'never gated on reachability, which would drop the replay');
   });
 
   test('the mid-level restore decides both from parentMustAct', () => {
     assert.match(src, /const parentWillSpeak = parentMustAct;/,
       'the arrival reads the same flag the branch already uses to decide acting');
-    assert.match(src, /\.\.\.\(parentWillSpeak \? \{\} : \{ silent: true \}\)/);
+    assert.match(src, /\.\.\.switchSilence\(parentWillSpeak\)/);
   });
 
   test('the skip-level restore decides both from orchestratorWillSpeak', () => {
@@ -664,19 +670,21 @@ describe('drawing an arrival and waking the agent read the same identifier', () 
     // name and the wake guard reads that name rather than re-testing.
     assert.match(src, /const orchestratorWillSpeak = !isPipelineComplete && orchestratorReachable;/,
       'one answer, combining the gate and reachability');
-    assert.match(src, /\.\.\.\(orchestratorWillSpeak \? \{\} : \{ silent: true \}\)/,
+    assert.match(src, /\.\.\.switchSilence\(orchestratorWillSpeak\)/,
       'the arrival is drawn from it');
     assert.match(src, /\} else if \(orchestratorReachable\) \{/,
       'and the wake reads the same reachability, not its own copy');
     assert.doesNotMatch(src, /\.\.\.\(isPipelineComplete \? \{ silent: true \} : \{\}\)/,
       'never the marker alone, which is the form that let them disagree');
+    assert.strictEqual((src.match(/switchSilence\(/g) || []).length, 5,
+      'four call sites and one definition: a fifth path decides through the helper or not at all');
   });
 
   test('the scope return decides from the pipeline marker, which is all it has', () => {
     // handleScopeReturn spawns the orchestrator fresh, so there is no
     // reachability question: a process just created is writable by
     // construction. The marker is the whole of the answer there.
-    assert.match(src, /\.\.\.\(wasPipelineComplete \? \{ silent: true \} : \{\}\)/,
-      'scope return: the same rule, named as that function names it');
+    assert.match(src, /\.\.\.switchSilence\(!wasPipelineComplete\)/,
+      'scope return: the same helper, given the one input it has');
   });
 });

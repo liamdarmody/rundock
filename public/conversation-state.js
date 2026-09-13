@@ -298,8 +298,17 @@
       }
       if (ctx.toAgentExists) effects.push({ type: 'update-chat-header', toAgentId: message.toAgent });
     }
-    // Show the delegate as working AFTER the divider is rendered.
-    if (!isReturn && next.delegationActive) {
+    // Show the delegate as working AFTER the divider is rendered, and NEVER for
+    // a silent switch.
+    //
+    // `isReturn` asks whether the incoming agent is the orchestrator, which is
+    // not the same question as whether this is a restoration. A mid-level lead
+    // restored to park is a specialist, so isReturn is false and this block
+    // started a working indicator for an agent that will never speak: the very
+    // hang the silent flag exists to remove, surviving in the one shape the
+    // flag was added for. The flag says a turn is not coming; nothing after it
+    // may claim otherwise.
+    if (!isReturn && next.delegationActive && !message.silent) {
       applyStartProcessing(next);
       effects.push({ type: 'start-processing', attribution: attribution(message) });
     }

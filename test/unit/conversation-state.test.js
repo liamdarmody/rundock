@@ -714,3 +714,25 @@ test('a keepalive from a stale process is dropped without touching the activity 
   const r = reduce(s, { type: 'system', subtype: 'keepalive', _processId: 'p1' }, { now: 99999 });
   assert.strictEqual(r.state.lastStreamActivity, 500, 'stale keepalive must not keep a superseded turn "alive"');
 });
+
+test('a silent switch never starts a working indicator, even for a specialist', () => {
+  // The gate above it asks whether the INCOMING agent is the orchestrator,
+  // which is not the same question as whether this is a restoration. A
+  // mid-level lead restored to park is a specialist, so that gate let a
+  // working indicator through for an agent that will never speak: the hang
+  // the silent flag exists to remove, in the one shape it was added for.
+  const ctx = { ...SWITCH_CTX, toAgentType: 'specialist' };
+  const msg = { ...seq.agentSwitch('ana', 'penn', 'p4'), silent: true };
+  const r = reduce({ ...createState(), activeAgentId: 'ana', delegationActive: true }, msg, ctx);
+
+  assert.strictEqual(r.effects.find(e => e.type === 'start-processing'), undefined,
+    'nothing claims a turn is coming when the switch says one is not');
+  assert.strictEqual(r.state.isProcessing, false, 'and the state does not show it as working');
+
+  // The same switch WITHOUT the flag still starts one, so the flag is proven
+  // to be what decides rather than the indicator having quietly gone away.
+  const loud = reduce({ ...createState(), activeAgentId: 'ana', delegationActive: true },
+    seq.agentSwitch('ana', 'penn', 'p4'), ctx);
+  assert.ok(loud.effects.some(e => e.type === 'start-processing'),
+    'an ordinary delegation still shows the delegate as working');
+});
