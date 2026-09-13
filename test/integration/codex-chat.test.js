@@ -392,4 +392,177 @@ describe('codex agent conversation', () => {
     assert.ok(methodEntries('turn/interrupt').length >= 1, 'the superseded turn was interrupted');
     assert.strictEqual(appServerSpawns().length, 0, 'no new process for the superseding turn (singleton already up)');
   });
+
+  // A CODEX DELEGATE WHOSE STORED THREAD WILL NOT RESUME IS ARRIVING.
+  //
+  // The catch-up gate used to exclude Codex by runtime, so a Codex delegate got
+  // no conversation at all. Fixing that exposed a second question: `arriving`
+  // was read from whether an id had been STORED, while Codex validates that id
+  // before resuming. A malformed or expired thread is a non-empty string that
+  // still yields a fresh thread, so the delegate was told "since your last
+  // turn" over a conversation it had never seen.
+  //
+  // Driven rather than pinned to source: the assertion is on the literal prompt
+  // the delegate received, because a source-shaped check on the derivation
+  // passes whether or not the prompt that reaches Codex is built from it.
+  test('a codex delegate whose stored thread id is invalid receives the conversation, headed as an arrival', async () => {
+    const convoId = h.freshConvoId('cdx-invalid-thread');
+    h.internal.convoTranscripts.set(convoId, [
+      { role: 'user', agent: 'user', text: 'find me two suppliers' },
+      { role: 'agent', agent: 'chief-of-staff', text: 'COS-EARLIER-TURN: I looked at the brief' },
+    ]);
+    h.internal.saveTranscript(convoId);
+    // A stored id for this agent that the thread-id check rejects, so the
+    // resume cannot happen and a fresh thread is used instead.
+    h.internal.writeConversations([{
+      id: convoId, title: 'invalid thread', messages: [],
+      // A NON-EMPTY string that fails the thread-id check. The first draft used
+      // 'not-a-valid-thread-id', which reads as invalid and is not: the pattern
+      // is /^[A-Za-z0-9_][A-Za-z0-9_.-]*$/, so hyphens are fine. It has to be
+      // non-empty to be the discriminating case at all, because an empty id is
+      // falsy and the old derivation would have called that arriving anyway.
+      sessionIds: [{ agentId: 'researcher', sessionId: 'expired thread id' }],
+    }]);
+    h.internal.chatProcesses.set(convoId, {
+      agentId: 'chief-of-staff', processId: 'p-cdx-parent', exited: false, toolCalls: [],
+    });
+    // COUNTED, NOT CLEARED. clearPrompts() does not reset the codex capture, so
+    // reading index 0 returns a prompt from an earlier test in this file. The
+    // first draft of this test did exactly that and asserted against a stale
+    // string: the same "passes for the wrong reason" failure it exists to stop.
+    const before = h.codexTurnPrompts().length;
+
+    h.internal.handleDelegation({
+      conversationId: convoId, targetAgent: 'researcher',
+      context: 'check these two suppliers', _intercepted: true,
+    }, h.internal.chatProcesses);
+
+    await h.waitUntil(() => h.codexTurnPrompts().length > before, 'the codex delegate was prompted');
+    const prompt = h.codexTurnPrompts()[before];
+    assert.match(prompt, /BEFORE YOU JOINED/,
+      'a thread that will not resume is an arrival, whatever was stored');
+    assert.doesNotMatch(prompt, /SINCE YOUR LAST TURN/,
+      'and is never told it is returning to a thread it does not have');
+    assert.match(prompt, /COS-EARLIER-TURN/,
+      'and it is given what happened before it, which is the whole point');
+    assert.match(prompt, /check these two suppliers/, 'alongside the brief it was sent with');
+    h.reapConvo(convoId);
+  });
+
+  // THE OTHER DIRECTION, so the derivation is proven to discriminate rather
+  // than proven to produce one answer. A codex delegate with a thread id the
+  // validator ACCEPTS is resuming, holds its own history in that thread, and
+  // must be told only what it missed. A suite that only ever asserts the
+  // arriving case would pass just as happily if everything were called an
+  // arrival, which is the failure this card keeps producing in other forms.
+  test('a codex delegate whose stored thread id is valid is told what it missed, not the whole conversation', async () => {
+    const convoId = h.freshConvoId('cdx-valid-thread');
+    h.internal.convoTranscripts.set(convoId, [
+      { role: 'user', agent: 'user', text: 'find me two suppliers' },
+      { role: 'agent', agent: 'researcher', text: 'IDA-OWN-EARLIER-TURN: I shortlisted three' },
+      { role: 'agent', agent: 'chief-of-staff', text: 'COS-WHILE-AWAY: the budget changed' },
+    ]);
+    h.internal.saveTranscript(convoId);
+    // Accepted by the thread-id check, so the resume genuinely happens.
+    h.internal.writeConversations([{
+      id: convoId, title: 'valid thread', messages: [],
+      sessionIds: [{ agentId: 'researcher', sessionId: '0199f0a1-2b3c-7d4e-8f90-1a2b3c4d5e6f' }],
+    }]);
+    h.internal.chatProcesses.set(convoId, {
+      agentId: 'chief-of-staff', processId: 'p-cdx-parent2', exited: false, toolCalls: [],
+    });
+    const before = h.codexTurnPrompts().length;
+
+    h.internal.handleDelegation({
+      conversationId: convoId, targetAgent: 'researcher',
+      context: 'narrow it to two', _intercepted: true,
+    }, h.internal.chatProcesses);
+
+    await h.waitUntil(() => h.codexTurnPrompts().length > before, 'the codex delegate was prompted');
+    const prompt = h.codexTurnPrompts()[before];
+    assert.match(prompt, /SINCE YOUR LAST TURN/, 'a real resume is told what it missed');
+    assert.doesNotMatch(prompt, /BEFORE YOU JOINED/, 'and is not told it is walking in');
+    assert.match(prompt, /COS-WHILE-AWAY/, 'what happened while it was away is there');
+    assert.doesNotMatch(prompt, /IDA-OWN-EARLIER-TURN/,
+      'and its own earlier turn is not re-sent: the thread it is resuming already holds it');
+    h.reapConvo(convoId);
+  });
+
+  // AN EXPIRED THREAD LOOKS EXACTLY LIKE A LIVE ONE, until the resume fails.
+  //
+  // isValidThreadId reads the string's shape, so a well-formed but expired id
+  // passes it: the resume is attempted, the app-server refuses, and the runtime
+  // falls back to a fresh thread that holds nothing. The prompt carried into
+  // that fallback must be an arrival's, or the delegate lands on an empty
+  // thread being told what it missed "since its last turn".
+  //
+  // Driven with the stub refusing the resume, so the fallback genuinely runs
+  // and the assertion is on the prompt the delegate actually received.
+  test('the fresh-thread fallback carries an arrival catch-up, not a resume one', async () => {
+    const convoId = h.freshConvoId('cdx-expired-thread');
+    h.internal.convoTranscripts.set(convoId, [
+      { role: 'user', agent: 'user', text: 'find me two suppliers' },
+      { role: 'agent', agent: 'researcher', text: 'IDA-OWN-EARLIER-TURN: I shortlisted three' },
+      { role: 'agent', agent: 'chief-of-staff', text: 'COS-WHILE-AWAY: the budget changed' },
+    ]);
+    h.internal.saveTranscript(convoId);
+    h.internal.writeConversations([{
+      id: convoId, title: 'expired thread', messages: [],
+      sessionIds: [{ agentId: 'researcher', sessionId: '0199f0a1-2b3c-7d4e-8f90-1a2b3c4d5e6f' }],
+    }]);
+    h.internal.chatProcesses.set(convoId, {
+      agentId: 'chief-of-staff', processId: 'p-cdx-parent3', exited: false, toolCalls: [],
+    });
+    // The id is well-formed, so the code attempts a resume; the stub refuses it,
+    // which is exactly the case the shape check cannot see coming.
+    h.writeCodexScenario([{ match: {}, turn: [{ text: 'ok' }] }], { resumeFails: true });
+    const before = h.codexTurnPrompts().length;
+
+    h.internal.handleDelegation({
+      conversationId: convoId, targetAgent: 'researcher',
+      context: 'narrow it to two', _intercepted: true,
+    }, h.internal.chatProcesses);
+
+    await h.waitUntil(() => h.codexTurnPrompts().length > before, 'the delegate was prompted after the fallback');
+    const prompt = h.codexTurnPrompts()[h.codexTurnPrompts().length - 1];
+    assert.match(prompt, /BEFORE YOU JOINED/,
+      'a thread that did not resume is an arrival, whatever the stored id looked like');
+    assert.doesNotMatch(prompt, /SINCE YOUR LAST TURN/,
+      'and is never told it is returning to a thread it does not have');
+    assert.match(prompt, /IDA-OWN-EARLIER-TURN/,
+      'and is given its own earlier turn, which a fresh thread holds nowhere');
+    h.reapConvo(convoId);
+  });
+
+  // NO STORED THREAD AT ALL, which is a different branch from a stored one that
+  // cannot resume. `willResume` is false here because there is nothing to
+  // validate, not because validation failed, and only a test with no sessionIds
+  // entry exercises that arm: every other codex test in this file supplies one.
+  test('a codex delegate with no stored thread is an arrival', async () => {
+    const convoId = h.freshConvoId('cdx-no-thread');
+    h.internal.convoTranscripts.set(convoId, [
+      { role: 'user', agent: 'user', text: 'find me two suppliers' },
+      { role: 'agent', agent: 'chief-of-staff', text: 'COS-BEFORE-IDA: the budget is fixed' },
+    ]);
+    h.internal.saveTranscript(convoId);
+    // Deliberately no sessionIds entry for the researcher.
+    h.internal.writeConversations([{ id: convoId, title: 'no thread', messages: [], sessionIds: [] }]);
+    h.internal.chatProcesses.set(convoId, {
+      agentId: 'chief-of-staff', processId: 'p-cdx-parent4', exited: false, toolCalls: [],
+    });
+    h.writeCodexScenario([{ match: {}, turn: [{ text: 'ok' }] }]);
+    const before = h.codexTurnPrompts().length;
+
+    h.internal.handleDelegation({
+      conversationId: convoId, targetAgent: 'researcher',
+      context: 'check these two', _intercepted: true,
+    }, h.internal.chatProcesses);
+
+    await h.waitUntil(() => h.codexTurnPrompts().length > before, 'the codex delegate was prompted');
+    const prompt = h.codexTurnPrompts()[before];
+    assert.match(prompt, /BEFORE YOU JOINED/, 'nothing to resume is an arrival');
+    assert.doesNotMatch(prompt, /SINCE YOUR LAST TURN/, 'and it never claims a turn it did not take');
+    assert.match(prompt, /COS-BEFORE-IDA/, 'with the conversation it walked into');
+    h.reapConvo(convoId);
+  });
 });
