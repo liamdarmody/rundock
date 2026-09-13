@@ -185,6 +185,41 @@ describe('red-first', () => {
     }
   });
 
+  test('a STAGED tree is refused too, and committing is what lets the run proceed', async () => {
+    // THE ORDER THE GATE DOCUMENTS, PINNED. The gate's usage comment used to
+    // put this tool between `precommit` and `git commit`, which is the one
+    // place it cannot run: the restore goes through
+    // `git checkout <ref> -- <paths>`, and that rewrites the INDEX as well as
+    // the files, so a run permitted on a staged tree would take the staged
+    // change with it and the person would find out by committing an empty
+    // diff. Staged is refused for the same reason unstaged is, and the fix was
+    // to move the step rather than to loosen the guard.
+    const { dir } = repo({
+      source: 'module.exports.a = () => 1;\nmodule.exports.b = () => 2;\n',
+      testFile: "const assert = require('assert');\n"
+        + "module.exports = () => { assert.strictEqual(require('../lib.js').b(), 2); };\n",
+    });
+    const git = (...args) => execFileSync('git', args, { cwd: dir, stdio: 'ignore' });
+    try {
+      fs.writeFileSync(path.join(dir, 'lib.js'), 'module.exports.a = () => 1;\nmodule.exports.b = () => 2;\n// staged\n');
+      git('add', '-A');
+      const staged = await redFirst({ repo: dir, base: 'main', tests: CMD });
+      assert.strictEqual(staged.outcome, 'refused', 'staged is not clean, whatever the working tree looks like');
+      // The staged change survived: that is the whole reason for the refusal.
+      assert.strictEqual(
+        execFileSync('git', ['diff', '--cached', '--name-only'], { cwd: dir, encoding: 'utf8' }).trim(),
+        'lib.js',
+        'and it is still staged, rather than taken by a restore');
+
+      git('commit', '-q', '-m', 'staged work');
+      const committed = await redFirst({ repo: dir, base: 'main', tests: CMD });
+      assert.notStrictEqual(committed.outcome, 'refused',
+        'and once committed the same tree runs, which is why the step moved after the commit');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test('a dirty tree is refused rather than rewritten', async () => {
     const { dir } = repo({
       source: 'module.exports.a = () => 1;\nmodule.exports.b = () => 2;\n',
@@ -195,7 +230,13 @@ describe('red-first', () => {
       fs.writeFileSync(path.join(dir, 'lib.js'), '// edited, not committed\n');
       const r = await redFirst({ repo: dir, base: 'main', tests: CMD });
       assert.strictEqual(r.outcome, 'refused');
-      assert.match(r.reason, /dirty|uncommitted/i);
+      // The refusal names WHAT TO DO, not only what is wrong. Staged changes
+      // count as uncommitted here, which trips anyone following the gate's own
+      // sequence, so the wording has to point at the commit rather than leave
+      // them to guess between committing, stashing and giving up.
+      assert.match(r.reason, /not committed/i, 'it says what is wrong');
+      assert.match(r.reason, /after `git commit`/i, 'and what to do about it');
+      assert.match(r.reason, /index/i, 'and why, so nobody loosens the guard to get past it');
       // And it did not touch the edit.
       assert.match(fs.readFileSync(path.join(dir, 'lib.js'), 'utf8'), /edited, not committed/);
     } finally {
@@ -312,7 +353,7 @@ describe('the record file must not dirty the tree it describes', () => {
 
       const r = await redFirst({ repo: dir, base: 'main', tests: CMD });
       assert.strictEqual(r.outcome, 'refused');
-      assert.match(r.reason, /uncommitted/i);
+      assert.match(r.reason, /not committed/i);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

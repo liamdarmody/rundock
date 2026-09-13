@@ -855,8 +855,16 @@ async function redFirst({ repo, base = null, tests, log = () => {}, runner = nul
     // them back, so it must never run where it cannot tell its own edits from
     // someone else's.
     if (git(repo, ['status', '--porcelain'])) {
-      return result('refused', 'the working tree has uncommitted changes, and this '
-        + 'rewrites tracked files; commit or stash first');
+      // NAMES WHAT TO DO, not only what is wrong. Staged changes count as
+      // uncommitted here, and that trips people following the gate's own
+      // sequence: the restore runs `git checkout <ref> -- <paths>`, which
+      // rewrites the index too, so a run permitted on a staged tree would take
+      // the staged change with it. Run this AFTER the commit; the tree is the
+      // same either side of one, so the record it writes still describes the
+      // content that was committed.
+      return result('refused', 'the working tree has changes that are not committed, staged ones '
+        + 'included, and the restore rewrites the index as well as the files: run this after '
+        + '`git commit`, which leaves the same tree and the same record');
     }
 
     const resolved = resolveBase(repo, base);

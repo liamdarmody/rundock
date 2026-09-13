@@ -26,8 +26,21 @@
  * Usage, and the order matters:
  *   git add -A                 # stage first: the record names the STAGED tree
  *   npm run precommit          # run the checks, write the record
- *   npm run red-first          # fold the discrimination result into the record
  *   git commit                 # the hook refuses unless the record matches
+ *   npm run red-first          # fold the discrimination result into the record
+ *
+ * RED-FIRST RUNS AFTER THE COMMIT, and this order is not a preference. It
+ * reverts and restores through `git checkout <ref> -- <paths>`, which rewrites
+ * the INDEX as well as the working tree, so a run on a staged tree would
+ * discard the staged change when it restored and the person would find out by
+ * committing an empty diff. It therefore refuses any tree that is not clean,
+ * staged changes included, which is the tree the old order asked it to run on.
+ *
+ * Nothing is lost by moving it. Committing does not change the tree, so the
+ * record red-first updates still describes exactly the content the commit
+ * captured, and a reader of that record sees the same evidence either way.
+ * Red-first was never a gate step: it is evidence written beside the gate, not
+ * a check the commit waits on.
  *
  * Running the checks before staging records the tree as it was, which the hook
  * then correctly rejects as stale. That is the guard working rather than
