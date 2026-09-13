@@ -143,3 +143,71 @@ describe('a lead that says nothing still has its handoff shown', () => {
     h.reapConvo(convoId);
   });
 });
+
+describe('an agent with nobody reporting to it is untouched by any of this', () => {
+  // THE CRITERIA CLAIM THIS, AND CODE-PATH INSPECTION IS NOT EVIDENCE FOR IT.
+  //
+  // findDirectReportMatch returns null when an agent has no direct reports, so
+  // the interception in wireProcessHandlers never sets a target and the whole
+  // handoff-line branch is unreachable. That is a true statement about the
+  // source and it is exactly the kind of statement that stops being true when
+  // somebody moves the guard. Des reports to the orchestrator and nobody
+  // reports to Des, so Des is the agent the claim is about; these drive Des
+  // through the real runtime rather than reading prompt.js and agreeing with it.
+  test('its ordinary turn is recorded exactly as it was before', async () => {
+    const convoId = h.freshConvoId('no-reports-plain');
+    h.writeScenario([
+      { match: { agent: 'lead-designer', promptIncludes: 'make the cover' },
+        turn: [{ text: 'Cover drafted, three variants attached.' }] },
+    ]);
+
+    client.send({ type: 'save_conversation', conversation: { id: convoId, agentId: 'lead-designer', title: 'No reports plain' } });
+    client.send({ type: 'chat', conversationId: convoId, agent: 'lead-designer', content: 'make the cover' });
+    await h.waitUntil(() => transcriptFor(convoId).some(t => t.agent === 'lead-designer'),
+      'the specialist turn was recorded');
+
+    const turns = transcriptFor(convoId).filter(t => t.agent === 'lead-designer');
+    assert.strictEqual(turns.length, 1, 'one turn, not a turn plus a handoff line');
+    assert.strictEqual(turns[0].type, undefined,
+      'a visible turn, typed exactly as a specialist turn has always been');
+    assert.match(turns[0].text, /Cover drafted, three variants attached\./,
+      'carrying its own words and nothing added to them');
+    h.reapConvo(convoId);
+  });
+
+  test('even an Agent tool call from it changes nothing, because there is nobody to hand to', async () => {
+    // The interception path itself, driven for an agent with no direct
+    // reports. A description here must not become a visible handoff line,
+    // because there is no delegation for it to describe: the guard that makes
+    // that true is the thing under test.
+    const convoId = h.freshConvoId('no-reports-tool');
+    h.writeScenario([
+      { match: { agent: 'lead-designer', promptIncludes: 'second cover' },
+        turn: [
+          { text: 'Looking at it now.' },
+          { agentTool: {
+            subagent_type: 'content-lead',
+            description: 'THIS-MUST-NOT-BECOME-A-HANDOFF-LINE',
+            prompt: 'a brief nobody asked for',
+          } },
+        ] },
+    ]);
+
+    client.send({ type: 'save_conversation', conversation: { id: convoId, agentId: 'lead-designer', title: 'No reports tool' } });
+    client.send({ type: 'chat', conversationId: convoId, agent: 'lead-designer', content: 'second cover' });
+    await h.waitUntil(() => transcriptFor(convoId).some(t => t.agent === 'lead-designer'),
+      'the specialist turn was recorded');
+
+    const turns = transcriptFor(convoId).filter(t => t.agent === 'lead-designer');
+    for (const t of turns) {
+      assert.doesNotMatch(t.text || '', /THIS-MUST-NOT-BECOME-A-HANDOFF-LINE/,
+        'the description field of an agent that cannot delegate must never reach the conversation');
+    }
+    assert.match(turns.map(t => t.text || '').join('\n'), /Looking at it now\./,
+      'while its own words are recorded exactly as they always were');
+    // And nothing was handed anywhere.
+    assert.deepStrictEqual(transcriptFor(convoId).filter(t => t.agent === 'content-lead'), [],
+      'no delegation happened, so no other agent has a turn in this conversation');
+    h.reapConvo(convoId);
+  });
+});
