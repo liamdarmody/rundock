@@ -124,6 +124,8 @@ const NOT_CHEAP = {
   'test/unit/approve-once.test.js': 'behaviour: drives the permission grant flow, not a bookkeeping check',
   'test/unit/permissions.test.js': 'behaviour: grades real command text against the risk rules',
   'test/unit/working-folders-view.test.js': 'behaviour: boots a document and presses controls',
+  'test/unit/live-handoff-render.test.js': 'behaviour: boots a document and drives the delegation render path',
+  'test/unit/engine-live-delivery.test.js': 'behaviour: drives a real stdout stream through the engine',
   'test/unit/standing-allows-client.test.js': 'behaviour: boots a document and drives the permission decision path',
   'test/unit/package-import-apply.test.js': 'behaviour: writes agent files and reads them back',
   'test/unit/profile-boxes.test.js': 'behaviour: boots a document and renders panels',

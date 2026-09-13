@@ -638,13 +638,22 @@ const EFFECT_EXECUTORS = {
       convo.messages.push({ role: 'agent', content: ef.text, agentId, timestamp: new Date().toISOString() });
     }
     const state = getConvoState(convoId);
-    if (state.currentStreamingMsg && activeConversation?.id === convoId) {
-      const streamEl = state.currentStreamingMsg.querySelector('.streaming-text');
-      if (streamEl) {
-        streamEl.classList.remove('streaming-text');
-        streamEl.innerHTML = formatMd(ef.text);
-      }
+    if (activeConversation?.id !== convoId) return;
+    const streamEl = state.currentStreamingMsg && state.currentStreamingMsg.querySelector('.streaming-text');
+    if (streamEl) {
+      streamEl.classList.remove('streaming-text');
+      streamEl.innerHTML = formatMd(ef.text);
+      return;
     }
+    // NO BUBBLE TO PROMOTE, SO ONE IS MADE.
+    //
+    // This executor's job is that the outgoing agent's words appear as its
+    // turn. It only ever did half of that: promoting a bubble that already
+    // existed, and silently doing nothing to the screen when there was none.
+    // That is the case for an agent that delegates without speaking, and it is
+    // why such a handoff was recorded to the transcript, shown correctly on
+    // reload, and invisible at the moment it happened.
+    addAgentMsg(ef.text, agentId);
   },
   'clear-streaming-bubble': (convoId) => {
     getConvoState(convoId).currentStreamingMsg = null;

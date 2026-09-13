@@ -580,6 +580,39 @@ test('agent_switch with marker-only streamed text promotes nothing', () => {
   assert.strictEqual(r.effects.find(e => e.type === 'promote-handoff-message'), undefined);
 });
 
+// THE TURN THAT STREAMED NOTHING. An agent delegating with a bare tool_use
+// block makes no streaming bubble, so there is nothing to promote and the
+// handoff was silent on screen while being correct in the transcript. The
+// server carries the line on this message for exactly that case.
+test('agent_switch promotes the carried line when nothing was streamed', () => {
+  const s = { ...createState(), streamingRawText: '', hasStreamingBubble: false };
+  const msg = { ...seq.agentSwitch('cos', 'dev', 'p2'), handoffLine: 'Handing to Dev to build the importer.' };
+  const r = reduce(s, msg, SWITCH_CTX);
+  const promote = r.effects.find(e => e.type === 'promote-handoff-message');
+  assert.ok(promote, 'a turn with no streamed text still produces one to render');
+  assert.strictEqual(promote.text, 'Handing to Dev to build the importer.');
+  assert.strictEqual(promote.agentId, 'cos', 'attributed to the agent that is leaving');
+});
+
+test('streamed text wins over the carried line, so a turn never renders twice', () => {
+  // Belt and braces against the server sending both: the agent's own words are
+  // already on screen, and promoting the carried line would replace them.
+  const s = { ...createState(), streamingRawText: 'I will take this to Dev.', hasStreamingBubble: true };
+  const msg = { ...seq.agentSwitch('cos', 'dev', 'p2'), handoffLine: 'Handing to Dev.' };
+  const r = reduce(s, msg, SWITCH_CTX);
+  const promote = r.effects.find(e => e.type === 'promote-handoff-message');
+  assert.strictEqual(promote.text, 'I will take this to Dev.',
+    'what the agent actually said is what appears');
+});
+
+test('a blank carried line promotes nothing', () => {
+  const s = { ...createState(), streamingRawText: '' };
+  const msg = { ...seq.agentSwitch('cos', 'dev', 'p2'), handoffLine: '   ' };
+  const r = reduce(s, msg, SWITCH_CTX);
+  assert.strictEqual(r.effects.find(e => e.type === 'promote-handoff-message'), undefined,
+    'whitespace is not a sentence, and an empty bubble is worse than none');
+});
+
 test('agent_switch to an unknown agent: no divider, no header, no processing start', () => {
   const ctx = { ...SWITCH_CTX, toAgentExists: false, toAgentType: null, fromAgentExists: true };
   const r = reduce(createState(), seq.agentSwitch('cos', 'ghost', 'p2'), ctx);
