@@ -41,7 +41,7 @@ const wire = {
   result: (text) => ({ type: 'result', subtype: 'success', result: text, session_id: 's1' }),
 };
 
-function harness({ agentId = 'default' } = {}) {
+function harness({ agentId = 'default', interception = false } = {}) {
   const sent = [];
   const appended = [];
   const deps = {};
@@ -65,7 +65,7 @@ function harness({ agentId = 'default' } = {}) {
     pendingAgentTools: [], deliveredTurns: [],
   };
   deps.processes.set('c1', entry);
-  engine.wireProcessHandlers(entry, 'c1', null, { enableInterception: false });
+  engine.wireProcessHandlers(entry, 'c1', null, { enableInterception: interception });
 
   const emit = (...objs) => {
     for (const o of objs) proc.stdout.emit('data', Buffer.from(JSON.stringify(o) + '\n'));
@@ -151,3 +151,8 @@ describe('a turn that streamed nothing still reaches the socket', () => {
       'a turn whose envelope never reached the socket is invisible, whatever the transcript holds');
   });
 });
+// The interception itself is NOT driven here. It resolves its target through
+// discoverAgents, which this module imports directly rather than taking as a
+// dep, so matching a direct report needs a real workspace on disk. That is the
+// integration harness's job, and the assertion lives in
+// test/integration/handoff-line.test.js where a real delegation already runs.

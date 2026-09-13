@@ -53,6 +53,18 @@ describe('a lead that says nothing still has its handoff shown', () => {
     await h.waitUntil(() => transcriptFor(convoId).some(t => t.agent === 'chief-of-staff' && t.type !== 'routing'),
       'the delegating turn was recorded as visible');
 
+    // ON THE WIRE, not only in the file. The transcript being right is what
+    // this feature looked like when it was broken: the line was recorded and
+    // sent to nobody, so it appeared only after a reload. The switch is the
+    // one thing that carries it to a client while the handoff happens.
+    const sw = client.messages.find(m => m.type === 'system' && m.subtype === 'agent_switch'
+      && m._conversationId === convoId && m.toAgent === 'content-lead');
+    assert.ok(sw, 'the delegation announced itself to the client');
+    assert.strictEqual(sw.handoffLine, 'Handing to Penn to draft the supplier brief before it goes out.',
+      'and carried the line, because nothing else will: this branch suppresses the envelope and kills the process');
+    assert.ok(!JSON.stringify(sw).includes('PRIVATE-BRIEF'),
+      'while the brief stays off the wire the person can see');
+
     const turn = transcriptFor(convoId).find(t => t.agent === 'chief-of-staff' && t.type !== 'routing');
     assert.ok(turn, 'the delegating agent has a visible turn rather than an invisible routing entry');
     assert.match(turn.text, /Handing to Penn to draft the supplier brief/,

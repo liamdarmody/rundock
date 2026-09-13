@@ -223,6 +223,26 @@
     return { state: next, effects: [{ type: 'finish-processing', attribution: attribution(message) }] };
   }
 
+  function reduceAgentTurn(state, message, ctx) {
+    const text = typeof message.text === 'string' ? message.text.trim() : '';
+    // Nothing to say draws nothing: an empty bubble is worse than none, the
+    // same rule the handoff line follows.
+    if (!text) return { state, effects: [] };
+    // Already on screen if it streamed. The server only sends this when it did
+    // not, and this is the second half of that pair so neither side alone can
+    // produce a duplicate.
+    if (state.streamingRawText) return { state, effects: [] };
+    return {
+      state,
+      effects: ctx.isActive ? [{
+        type: 'promote-handoff-message',
+        text,
+        agentId: message._agent || state.activeAgentId || ctx.convoAgentId || null,
+        attribution: attribution(message),
+      }] : [],
+    };
+  }
+
   function reduceAgentSwitch(state, message, ctx) {
     const next = { ...state };
     const effects = [];
@@ -353,6 +373,13 @@
       case 'cancelled': return reduceCancelled(state, message);
       case 'done': return reduceDone(state, message);
       case 'agent_switch': return reduceAgentSwitch(state, message, ctx);
+      // A turn the server is sending because nothing else will. The branches
+      // that suppress the end-of-message envelope kill the process before any
+      // result arrives, and a result is the only thing that renders text which
+      // did not stream. Reuses the promote effect rather than inventing a
+      // second render: the job is identical, an agent's words appearing as its
+      // own turn.
+      case 'agent_turn': return reduceAgentTurn(state, message, ctx);
       case 'keepalive': return reduceKeepalive(state, message, ctx);
       default: return none(state);
     }
