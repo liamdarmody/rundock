@@ -663,21 +663,22 @@ describe('drawing an arrival and waking the agent read the same identifier', () 
     assert.match(src, /\.\.\.switchSilence\(parentWillSpeak\)/);
   });
 
-  test('the skip-level restore decides both from orchestratorWillSpeak', () => {
-    // It used to read isPipelineComplete alone while the wake ALSO required the
-    // orchestrator's stdin, so an unreachable orchestrator got a divider and no
-    // turn. Reachability is part of "will speak", so it is inside the shared
-    // name and the wake guard reads that name rather than re-testing.
-    assert.match(src, /const orchestratorWillSpeak = !isPipelineComplete && orchestratorReachable;/,
-      'one answer, combining the gate and reachability');
+  test('the skip-level restore asks each question once and shares every answer', () => {
+    // Same shape as the non-intercepted restore, and the third place this
+    // pattern had to be applied rather than the first. A buffered message
+    // drives this orchestrator exactly as an auto-continue would, so it counts
+    // as speaking and therefore draws; reading reachability alone suppressed an
+    // arrival that the replay then justified.
+    assert.match(src, /const orchestratorBufferedTookOver = !isPipelineComplete\s*\n?\s*&& bufferedFollowUpTakesOver\(/,
+      'the buffered question is asked once, ahead of both decisions');
+    assert.match(src, /const orchestratorWillSpeak = !isPipelineComplete\s*\n?\s*&& \(orchestratorBufferedTookOver \|\| orchestratorReachable\);/,
+      'and a takeover counts as speaking');
     assert.match(src, /\.\.\.switchSilence\(orchestratorWillSpeak\)/,
-      'the arrival is drawn from it');
-    assert.match(src, /\} else if \(orchestratorReachable\) \{/,
-      'and the wake reads the same reachability, not its own copy');
-    assert.doesNotMatch(src, /\.\.\.\(isPipelineComplete \? \{ silent: true \} : \{\}\)/,
-      'never the marker alone, which is the form that let them disagree');
-    assert.strictEqual((src.match(/switchSilence\(/g) || []).length, 5,
-      'four call sites and one definition: a fifth path decides through the helper or not at all');
+      'the arrival is drawn from it, through the one helper every path uses');
+    assert.match(src, /\} else if \(orchestratorBufferedTookOver\) \{/,
+      'and the wake reads the captured answer rather than asking again');
+    assert.strictEqual((src.match(/bufferedFollowUpTakesOver\(convoId, orchestratorEntry/g) || []).length, 1,
+      'asked exactly once on this path, because asking twice acts twice');
   });
 
   test('the scope return decides from the pipeline marker, which is all it has', () => {
