@@ -22,9 +22,12 @@ const config = require('../../lib/config.js');
 // end_delegation, flush_buffer) must NEVER appear here: chat is the
 // kill-window chat shim, delegate/end_delegation are delegation glue, and
 // flush_buffer drains safeSend's own reconnect buffer.
-// There is no sandbox switch: set_workspace_mode is the only message that
-// can move the OS write block, proven end to end by
-// test/unit/workspace-boundary.test.js.
+// There is no sandbox switch. Two messages reach the OS write block and no
+// third: set_workspace_mode decides whether Rundock claims the enable, and
+// set_working_folders decides which paths the block names, rewriting it for
+// whatever mode the workspace is already in. Both are proven end to end,
+// the first by test/unit/workspace-boundary.test.js and the second by
+// 'naming a folder reaches the operating system' below.
 const EXPECTED_TYPES = [
   'permission_response', 'cancel',
   'get_workspaces', 'client_render_time', 'list_workspaces', 'set_workspace',
@@ -227,6 +230,92 @@ describe('handler seams (stub ctx, capture ws)', () => {
     fs.mkdirSync(path.join(dir, '.rundock'), { recursive: true });
     return dir;
   }
+
+  test('removing a folder takes it out of the sandbox too, not only adding one puts it in', () => {
+    // The addition direction alone would pass with a block that only ever
+    // grows: a folder removed in the interface but still writable at the
+    // syscall level is a setting that lies in the direction that matters.
+    const table = buildDispatch();
+    const original = config.getWorkspace();
+    const dir = workingFoldersWorkspace();
+    const kept = fs.mkdtempSync(path.join(os.tmpdir(), 'proto-wf-kept-'));
+    const dropped = fs.mkdtempSync(path.join(os.tmpdir(), 'proto-wf-dropped-'));
+    const settingsPath = path.join(dir, '.claude', 'settings.local.json');
+    try {
+      config.setWorkspace(dir);
+      table.set_working_folders({}, captureWs(), { type: 'set_working_folders', folders: [kept, dropped] }, 'darwin');
+      let roots = JSON.parse(fs.readFileSync(settingsPath, 'utf8')).sandbox.filesystem.allowWrite;
+      assert.ok(roots.includes(path.resolve(dropped)), 'fixture sanity: both folders are in the block first');
+
+      table.set_working_folders({}, captureWs(), { type: 'set_working_folders', folders: [kept] }, 'darwin');
+      roots = JSON.parse(fs.readFileSync(settingsPath, 'utf8')).sandbox.filesystem.allowWrite;
+      assert.ok(roots.includes(path.resolve(kept)), 'the folder that stayed is still writable');
+      assert.ok(!roots.includes(path.resolve(dropped)),
+        'and the one removed is no longer writable, without waiting for a mode switch or a restart');
+    } finally {
+      config.setWorkspace(original);
+    }
+  });
+
+  test('a folder is still stored when the sandbox write fails, and the failure is not silent to the log', () => {
+    // The stored list stands on its own: the folders are in effect for every
+    // agent spawned from here, and scaffoldWorkspace reconciles the block
+    // again on the next workspace open. Discarding a list a person just chose
+    // because a settings file could not be written would cost more than the
+    // delay it saves, so this path warns and carries on.
+    const table = buildDispatch();
+    const original = config.getWorkspace();
+    const dir = workingFoldersWorkspace();
+    const named = fs.mkdtempSync(path.join(os.tmpdir(), 'proto-wf-failwrite-'));
+    // Corrupt rather than absent: reconcileSandboxForMode treats ENOENT as an
+    // empty file and every other read failure as a reason to raise, precisely
+    // so a settings file it cannot parse is never overwritten.
+    fs.mkdirSync(path.join(dir, '.claude'), { recursive: true });
+    const settingsPath = path.join(dir, '.claude', 'settings.local.json');
+    const corrupt = '{ this is not json';
+    fs.writeFileSync(settingsPath, corrupt);
+    const warnings = [];
+    const realWarn = console.warn;
+    console.warn = (...a) => warnings.push(a.join(' '));
+    try {
+      config.setWorkspace(dir);
+      const ws = captureWs();
+      table.set_working_folders({}, ws, { type: 'set_working_folders', folders: [named] }, 'darwin');
+      assert.strictEqual(ws.sent[0].type, 'working_folders', 'the caller is answered, not errored');
+      assert.deepStrictEqual(ws.sent[0].folders.map(f => f.path), [path.resolve(named)],
+        'and the folder is stored, because the hook can honour it whatever the settings file says');
+      assert.ok(warnings.some(w => w.includes('the sandbox was not updated')),
+        'the failure reaches the log rather than vanishing');
+      assert.strictEqual(fs.readFileSync(settingsPath, 'utf8'), corrupt,
+        'and the unparsable file is left exactly as it was, never rewritten from empty');
+    } finally {
+      console.warn = realWarn;
+      config.setWorkspace(original);
+    }
+  });
+
+  test('naming a folder reaches the operating system, not only the permission hook', () => {
+    // The hook is handed the folder list at every spawn; the sandbox is told
+    // once, in a file written at scaffold and mode-change time. Without a
+    // rewrite here, a folder named in this setting worked for file tools and
+    // not for the shell, which is the same split between the two instruments
+    // that the working-folder sandbox change exists to close.
+    const table = buildDispatch();
+    const original = config.getWorkspace();
+    const dir = workingFoldersWorkspace();
+    const named = fs.mkdtempSync(path.join(os.tmpdir(), 'proto-wf-sandbox-'));
+    try {
+      config.setWorkspace(dir);
+      // 'darwin' explicitly: no block is written for any other platform, so a
+      // call defaulted to process.platform asserts nothing on a Linux runner.
+      table.set_working_folders({}, captureWs(), { type: 'set_working_folders', folders: [named] }, 'darwin');
+      const settings = JSON.parse(fs.readFileSync(path.join(dir, '.claude', 'settings.local.json'), 'utf8'));
+      assert.ok(settings.sandbox.filesystem.allowWrite.includes(path.resolve(named)),
+        'the folder just named is writable, without waiting for a mode switch or a restart');
+    } finally {
+      config.setWorkspace(original);
+    }
+  });
 
   test('set_working_folders stores the list, answers with it, and reports what it refused', () => {
     const table = buildDispatch();
@@ -780,23 +869,36 @@ describe('the OS write block is driven by mode alone, through the real dispatch'
     } catch (e) { return false; }
   }
 
-  test('on macOS, Knowledge mode carries the block, Code mode withdraws it, and moving back restores it', () => {
+  // WHETHER THE SANDBOX IS SWITCHED ON, which a block's mere presence no
+  // longer answers. Rundock writes one settings layer and `sandbox.enabled` is
+  // an OR across all of them, so Code mode keeps a block (to name the folders
+  // the user chose, for the case another layer did the enabling) and drops the
+  // enable. These tests mean "is it on", so they ask that.
+  function blockEnables(dir) {
+    try {
+      const settings = JSON.parse(fs.readFileSync(path.join(dir, '.claude', 'settings.local.json'), 'utf8'));
+      return !!settings.sandbox && 'enabled' in settings.sandbox;
+    } catch (e) { return false; }
+  }
+
+  test('on macOS, Knowledge mode switches the sandbox on, Code mode drops the enable but keeps the paths, and moving back switches it on again', () => {
     const table = buildDispatch();
     const dir = tempWs();
     withWorkspace(dir, () => {
       const toKnowledge = captureWs();
       table.set_workspace_mode({}, toKnowledge, { mode: 'knowledge' }, 'darwin');
       assert.deepStrictEqual(toKnowledge.sent[0], { type: 'workspace_mode_changed', mode: 'knowledge' });
-      assert.ok(blockPresent(dir), 'Knowledge mode on macOS carries the block');
+      assert.ok(blockEnables(dir), 'Knowledge mode on macOS switches the sandbox on');
 
       const toCode = captureWs();
       table.set_workspace_mode({}, toCode, { mode: 'code' }, 'darwin');
       assert.deepStrictEqual(toCode.sent[0], { type: 'workspace_mode_changed', mode: 'code' });
-      assert.strictEqual(blockPresent(dir), false, 'Code mode withdraws it');
+      assert.strictEqual(blockEnables(dir), false, 'Code mode drops the enable');
+      assert.ok(blockPresent(dir), 'while keeping the block, which is the only place the named folders are written');
 
       const backToKnowledge = captureWs();
       table.set_workspace_mode({}, backToKnowledge, { mode: 'knowledge' }, 'darwin');
-      assert.ok(blockPresent(dir), 'moving back to Knowledge mode restores it');
+      assert.ok(blockEnables(dir), 'moving back to Knowledge mode switches it on again');
     });
     fs.rmSync(dir, { recursive: true, force: true });
   });
@@ -1021,7 +1123,7 @@ describe('the OS write block is driven by mode alone, through the real dispatch'
         assert.strictEqual(socket.sent[0].type, 'workspace_mode_changed', `switching to ${mode} succeeds`);
         const state = JSON.parse(fs.readFileSync(path.join(dir, '.rundock', 'state.json'), 'utf8'));
         assert.strictEqual(state.workspaceMode, mode, `the recorded mode is ${mode} right after this switch`);
-        assert.strictEqual(blockPresent(dir), mode === 'knowledge',
+        assert.strictEqual(blockEnables(dir), mode === 'knowledge',
           `the block on disk agrees with ${mode} right after this switch, not just at the end of the sequence`);
       }
     });

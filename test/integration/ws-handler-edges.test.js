@@ -101,8 +101,14 @@ describe('workspace lifecycle edges', () => {
         const wsSet = (await client.waitFor(m => m.type === 'workspace_set', { since, label: 'first open, code signal' })).msg;
         assert.strictEqual(wsSet.workspaceMode, 'code', 'auto-detected as code from the package.json');
         const settings = JSON.parse(fs.readFileSync(path.join(codeDir, '.claude', 'settings.local.json'), 'utf8'));
-        assert.strictEqual('sandbox' in settings, false,
-          'no block on the first open of a code-signal workspace, not one only withdrawn on the second');
+        // The sandbox is off for a code-signal workspace on its FIRST open,
+        // not only on the second. Asked as "does it enable anything" rather
+        // than "is a block present": Code mode still writes the paths, because
+        // Rundock owns one settings layer and `sandbox.enabled` is an OR across
+        // all of them, so a user who enabled the sandbox in their own settings
+        // needs this block to learn which folders they named.
+        assert.strictEqual('enabled' in (settings.sandbox || {}), false,
+          'nothing is switched on for a code-signal workspace, not switched on and withdrawn on the second open');
       } finally {
         h.internal.setWorkspace(h.workspaceDir);
       }
