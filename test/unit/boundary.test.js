@@ -512,6 +512,49 @@ describe('standing tool allows refuse rather than corrupt', () => {
     } finally { config.setWorkspace(original); }
   });
 
+  // ONE FILE, TWO SECTIONS, AND NEITHER WRITER MAY EAT THE OTHER.
+  //
+  // addBoundaryGrant used to compose the whole object as `{ allowedDirs }`,
+  // which was correct for exactly as long as folder grants were the only thing
+  // in the file. Adding tool allows to the same file made it a bug that
+  // destroys data: allowing one folder would have silently deleted every
+  // standing tool allow in that workspace.
+  test('allowing a folder keeps the tool allows, and allowing a tool keeps the folders', () => {
+    const original = config.getWorkspace();
+    const dir = tempWorkspace();
+    try {
+      config.setWorkspace(dir);
+      boundary.addToolAllow('Bash:git');
+      boundary.addBoundaryGrant(dir);
+      assert.deepStrictEqual(boundary.readToolAllows(), ['Bash:git'],
+        'a folder grant must not take the tool allows with it');
+      assert.strictEqual(boundary.readBoundaryGrants().length, 1, 'sanity: the folder was recorded');
+
+      boundary.addToolAllow('Bash:npm');
+      assert.strictEqual(boundary.readBoundaryGrants().length, 1,
+        'and a tool allow must not take the folder grants with it');
+      assert.deepStrictEqual(boundary.readToolAllows(), ['Bash:git', 'Bash:npm']);
+    } finally { config.setWorkspace(original); }
+  });
+
+  test('a section this version has never heard of survives being written around', () => {
+    // The same rule, stated against the future rather than the present: the
+    // merging writer carries through keys it does not know, so a workspace
+    // written by a newer Rundock is not quietly stripped by an older one.
+    const original = config.getWorkspace();
+    const dir = tempWorkspace();
+    try {
+      config.setWorkspace(dir);
+      const file = path.join(dir, '.rundock', 'permissions.json');
+      fs.writeFileSync(file, JSON.stringify({ allowedTools: [], somethingLater: { keep: 'me' } }));
+      boundary.addToolAllow('Bash:git');
+      const after = JSON.parse(fs.readFileSync(file, 'utf8'));
+      assert.deepStrictEqual(after.somethingLater, { keep: 'me' },
+        'a writer that owns one field must leave every other field exactly as it found it');
+      assert.deepStrictEqual(after.allowedTools, ['Bash:git']);
+    } finally { config.setWorkspace(original); }
+  });
+
   test('with no workspace open, reading is empty and writing is a no-op', () => {
     const original = config.getWorkspace();
     try {

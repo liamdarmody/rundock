@@ -1294,6 +1294,48 @@ describe('standing tool allows outlive the tab they were given in', () => {
     } finally { config.setWorkspace(original); }
   });
 
+  // WHAT MAY BECOME A STORED ANSWER, decided at the wire rather than at the
+  // renderer. The client only ever builds bare identifiers (a tool name, or
+  // `Bash:<binary>` with directories already stripped), but the client is not
+  // the only thing that can send this message, and anything stored here is
+  // later rendered into a settings row. The renderer defends itself too; this
+  // is the other half of that pair, and it is the half that keeps the stored
+  // set clean rather than merely survivable.
+  test('a key that is not a tool name is refused, and nothing is stored', () => {
+    const table = buildDispatch();
+    const original = config.getWorkspace();
+    const dir = allowsWorkspace();
+    try {
+      config.setWorkspace(dir);
+      const hostile = [
+        "x'); alert('pwned",      // closes a JavaScript literal
+        '<script>alert(1)</script>',
+        'Bash:git; rm -rf /',     // whitespace and a shell operator
+        'Bash:git\nBash:rm',      // a newline, so one row could become two
+        '../../etc/passwd',
+        'a'.repeat(129),          // longer than any real tool name
+      ];
+      for (const key of hostile) {
+        const ws = captureWs();
+        table.add_tool_allow({}, ws, { type: 'add_tool_allow', key });
+        assert.strictEqual(ws.sent[0].type, 'workspace_error',
+          `refused rather than stored: ${JSON.stringify(key)}`);
+      }
+      assert.deepStrictEqual(boundary.readToolAllows(), [],
+        'not one of them reached the store');
+
+      // The other direction, so the rule cannot be satisfied by refusing
+      // everything: the keys the client actually builds are all accepted.
+      for (const key of ['Bash:git', 'Bash:npm', 'PowerShell:Get-Item', 'WebFetch', 'Bash:docker-compose']) {
+        const ws = captureWs();
+        table.add_tool_allow({}, ws, { type: 'add_tool_allow', key });
+        assert.strictEqual(ws.sent[0].type, 'tool_allows',
+          `a key the permission card can produce must be accepted: ${key}`);
+      }
+      assert.strictEqual(boundary.readToolAllows().length, 5);
+    } finally { config.setWorkspace(original); }
+  });
+
   test('a grant is scoped to the workspace it was given in', () => {
     const table = buildDispatch();
     const original = config.getWorkspace();

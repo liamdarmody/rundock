@@ -418,11 +418,23 @@ function toolAllowsBlockHtml() {
     return '<div class="settings-empty">No tools are allowed without asking. '
       + 'Choosing "Always allow" on a permission card adds one here.</div>';
   }
-  return standingToolAllows.map((k) => (
+  // BY INDEX, never by value, which is the same rule the working-folders
+  // remove control follows. An allow key is text the server stored on an
+  // agent's behalf, and a key carrying a quote would close the attribute's
+  // string and put the rest of itself in a JavaScript literal position, where
+  // escAttr is the wrong escaper and nothing else is checking. An integer
+  // cannot do that whatever the key says.
+  return standingToolAllows.map((k, index) => (
     `<div class="settings-row"><code>${esc(k)}</code>`
-    + `<button class="settings-row-remove" onclick="revokeToolAllow('${escAttr(k)}')" `
+    + `<button class="settings-row-remove" onclick="revokeToolAllowAt(${index})" `
     + `title="Ask again for this tool">Revoke</button></div>`
   )).join('');
+}
+
+function revokeToolAllowAt(index) {
+  const key = standingToolAllows[index];
+  if (typeof key !== 'string') return;
+  revokeToolAllow(key);
 }
 
 function revokeToolAllow(key) {
@@ -993,6 +1005,10 @@ return { showSettingsSection, renderSettingsSection, setWorkspaceMode, runtimeRo
   workingFoldersSectionHtml, workingFolderRowHtml, workingFoldersShort, workingFoldersBasename,
   workingFoldersCoveredBy, workingFoldersExpand, workingFoldersInputChanged, workingFoldersAdd,
   workingFoldersRemoveAt, workingFoldersUndoRemove, workingFoldersLoad, workingFoldersArrived,
+  // app.js dispatches 'tool_allows' straight to toolAllowsArrived as a bare
+  // global, the same way it dispatches 'working_folders'. Left off this list
+  // the name does not exist on window, and the message throws on arrival.
+  toolAllowsArrived, requestToolAllows, revokeToolAllow, revokeToolAllowAt,
   workingFoldersInnerHtml,
   workingFoldersWorkspaceChanged };
 }));

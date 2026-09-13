@@ -998,7 +998,7 @@ return {
   addSystemMsg, buildDelegationDivider, renderAuthErrorCard, copyAuthCmd, agentDisplayName,
   renderCodexQuotaCard, renderCodexGuidanceCard, renderCodexErrorPill,
   createHistoryDivider, renderSessionHistory, classifyRisk,
-  describeToolRequest, toolAllowKey, handlePermissionRequest,
+  describeToolRequest, toolAllowKey, handlePermissionRequest, setStandingToolAllows,
   renderPermissionCard, renderPendingPermissionCards, respondPermission,
   resolvePermissionCard,
   formatToolName, formatToolShort, buildActivitySummary, scrollBottom,
