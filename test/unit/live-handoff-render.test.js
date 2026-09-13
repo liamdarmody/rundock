@@ -213,6 +213,53 @@ describe('the whole pipeline puts it on screen, in order, live and on reload', (
   });
 });
 
+describe('a turn with nothing to say draws nothing', () => {
+  // LH-5, on the document rather than on an effect list. An effect list can be
+  // empty while something else still paints, and the criterion is about what a
+  // person sees.
+  const SWITCH_CTX = { isActive: true, convoAgentId: 'default', toAgentExists: true, toAgentType: 'specialist', fromAgentExists: true };
+
+  test('neither prose nor a carried line leaves no bubble behind', () => {
+    freshDom();
+    global.conversations = [{ id: 'c1', agentId: 'default', messages: [] }];
+    global.activeConversation = { id: 'c1', agentId: 'default' };
+    global.getConvoState = () => ({ currentStreamingMsg: null });
+
+    const r = reduce({ ...createState() }, {
+      type: 'system', subtype: 'agent_switch', _conversationId: 'c1', _processId: 'p1',
+      fromAgent: 'default', toAgent: 'vox',
+    }, SWITCH_CTX);
+    for (const ef of r.effects) {
+      if (ef.type === 'promote-handoff-message') promote('c1', ef);
+      else if (ef.type === 'show-delegation-divider') divider('c1', ef);
+    }
+
+    const agentTurns = [...document.getElementById('messages').children]
+      .filter((el) => el.className.includes('msg-agent'));
+    assert.deepStrictEqual(agentTurns.map((el) => el.textContent), [],
+      'an empty bubble is worse than no bubble, and the routing entry stays invisible');
+  });
+
+  test('a whitespace-only carried line likewise draws nothing', () => {
+    freshDom();
+    global.conversations = [{ id: 'c1', agentId: 'default', messages: [] }];
+    global.activeConversation = { id: 'c1', agentId: 'default' };
+    global.getConvoState = () => ({ currentStreamingMsg: null });
+
+    const r = reduce({ ...createState() }, {
+      type: 'system', subtype: 'agent_switch', _conversationId: 'c1', _processId: 'p1',
+      fromAgent: 'default', toAgent: 'vox', handoffLine: '   \n  ',
+    }, SWITCH_CTX);
+    for (const ef of r.effects) {
+      if (ef.type === 'promote-handoff-message') promote('c1', ef);
+      else if (ef.type === 'show-delegation-divider') divider('c1', ef);
+    }
+    const agentTurns = [...document.getElementById('messages').children]
+      .filter((el) => el.className.includes('msg-agent'));
+    assert.deepStrictEqual(agentTurns.map((el) => el.textContent), []);
+  });
+});
+
 describe('every turn recorded as a plain agent message also reaches a live client', () => {
   // THE CLASS, NOT THE INSTANCE. The reported defect was one append site that
   // wrote a turn nobody was told about. Checking that one site would leave the
@@ -223,8 +270,21 @@ describe('every turn recorded as a plain agent message also reaches a live clien
   // above each site reaches into the sibling branch, and the first version of
   // this test was exempted by a neighbouring `if (ownProse)` that had nothing
   // to do with the site it excused: deleting the real fix left it green.
-  const ENGINE = fs.readFileSync(path.join(ROOT, 'lib', 'delegation', 'engine.js'), 'utf-8');
-  const CALL = "appendTranscript(convoId, 'agent'";
+  // EVERY FILE THAT CAN WRITE A TURN, not the one the defect was reported in.
+  // Scoping this to engine.js would let the next module repeat it untouched,
+  // which is the same instance-shaped thinking the rule exists to stop.
+  const CALL_RE = /appendTranscript\(\s*[A-Za-z_$][\w$]*\s*,\s*'agent'/;
+  function sourceFiles(dir, acc = []) {
+    for (const name of fs.readdirSync(dir)) {
+      if (name === 'node_modules' || name.startsWith('.')) continue;
+      const full = path.join(dir, name);
+      const st = fs.statSync(full);
+      if (st.isDirectory()) sourceFiles(full, acc);
+      else if (name.endsWith('.js')) acc.push(full);
+    }
+    return acc;
+  }
+  const FILES = [path.join(ROOT, 'server.js'), ...sourceFiles(path.join(ROOT, 'lib'))];
 
   // The branch a line sits in: walk back to the nearest `if`/`else if` at a
   // smaller indentation, then forward to where that indentation closes.
@@ -238,7 +298,11 @@ describe('every turn recorded as a plain agent message also reaches a live clien
       if (indentOf(l) < mine && /\bif\s*\(|\}\s*else\b/.test(l)) { head = i; break; }
       if (indentOf(l) < mine) break;
     }
-    if (head === -1) return { guard: '', body: lines[at] };
+    // No enclosing conditional at all, which is the shape of the runtime error
+    // paths: a bare write inside a try, with the send beside it. The body is
+    // then the immediate vicinity, or the send two lines down falls outside it
+    // and the site reads as unexplained when it is not.
+    if (head === -1) return { guard: '', body: lines.slice(at, at + 8).join('\n') };
     const headIndent = indentOf(lines[head]);
     let end = lines.length;
     for (let i = at + 1; i < lines.length; i++) {
@@ -250,30 +314,55 @@ describe('every turn recorded as a plain agent message also reaches a live clien
   }
 
   test('each site either requires streamed text or hands the text to the client', () => {
-    const lines = ENGINE.split('\n');
     const sites = [];
-    lines.forEach((line, i) => {
-      const at = line.indexOf(CALL);
-      if (at === -1) return;
-      // A typed entry (for example 'routing') is bookkeeping, not a turn, and
-      // is deliberately invisible. Looked for AFTER the role argument, because
-      // `'agent'` is itself a quoted word.
-      if (/'[a-z]+'/.test(line.slice(at + CALL.length))) return;
-      sites.push({ line: i + 1, text: line.trim(), ...enclosingBranch(lines, i) });
-    });
+    let scanned = 0;
+    for (const file of FILES) {
+      const src = fs.readFileSync(file, 'utf-8');
+      if (!CALL_RE.test(src)) continue;
+      scanned++;
+      const lines = src.split('\n');
+      lines.forEach((line, i) => {
+        const m = line.match(CALL_RE);
+        if (!m) return;
+        // A typed entry (for example 'routing') is bookkeeping, not a turn, and
+        // is deliberately invisible. Looked for AFTER the role argument,
+        // because `'agent'` is itself a quoted word.
+        if (/'[a-z]+'/.test(line.slice(line.indexOf(m[0]) + m[0].length))) return;
+        // The definition itself, not a call of it.
+        if (/function appendTranscript/.test(line)) return;
+        sites.push({
+          file: path.relative(ROOT, file), line: i + 1, text: line.trim(),
+          before: lines.slice(Math.max(0, i - 6), i).join('\n'),
+          ...enclosingBranch(lines, i),
+        });
+      });
+    }
+    assert.ok(scanned >= 1, `sanity: at least one source file writes agent turns, scanned ${scanned}`);
     assert.ok(sites.length >= 5,
       `sanity: the engine was read and has plain agent append sites, found ${sites.length}`);
 
+    // THE THREE WAYS A RECORDED TURN LEGITIMATELY REACHES A PERSON. Anything
+    // else is a turn written to a file that nobody is told about.
     const unexplained = sites.filter((s) => {
-      // Its own guard requires the agent to have produced text, which the
-      // streaming path has already put on screen.
-      if (/responseText|ownProse/.test(s.guard)) return false;
-      // Or its own branch hands the text to the client.
+      // One: it only runs when the agent produced text, which means the
+      // streaming path has already drawn it. Read from the lines above as well
+      // as the guard, because indentation in this codebase is not uniform and
+      // a walker keyed on it alone mistook a sibling `} else {` for the guard.
+      // READ FROM THE GUARD ALONE where there is one. Including the lines above
+      // re-exempted the reported site via the sibling branch's `if (ownProse)`
+      // and left this test green with the fix deleted, which is the third way
+      // this same check has been made toothless. Measured each time by deleting
+      // the fix; this is the shape that reddens.
+      if (s.guard ? /responseText|ownProse/.test(s.guard) : /responseText|ownProse/.test(s.before)) return false;
+      // Two: it hands the text to the client itself.
       if (/liveHandoffText\s*=\s*(?!null)\w/.test(s.body)) return false;
+      // Three: it pushes the same turn down the socket beside the write, which
+      // is how the runtime error paths do it.
+      if (/safeSend\(/.test(s.body)) return false;
       return true;
     });
-    assert.deepStrictEqual(unexplained.map((s) => s.line), [],
+    assert.deepStrictEqual(unexplained.map((s) => `${s.file}:${s.line}`), [],
       'a turn written to the transcript with nothing sending it live is invisible until reload: '
-      + JSON.stringify(unexplained.map((s) => ({ line: s.line, guard: s.guard.trim() })), null, 1));
+      + JSON.stringify(unexplained.map((s) => ({ at: `${s.file}:${s.line}`, guard: s.guard.trim() })), null, 1));
   });
 });
