@@ -165,10 +165,12 @@ describe('the whole pipeline puts it on screen, in order, live and on reload', (
     const arrival = seen.findIndex((n) => n.kind === 'divider');
     assert.ok(turn > -1, `the delegating agent has a visible turn: ${JSON.stringify(seen)}`);
     assert.match(seen[turn].text, /Handing to Vox to write the thread\./);
-    if (arrival > -1) {
-      assert.ok(turn < arrival,
-        'it is said before the next agent arrives, not after, which is the order a person reads');
-    }
+    // UNCONDITIONAL. Guarding this on the divider existing made the ordering
+    // assertion skippable: a change that stopped drawing the arrival would
+    // silently take the order check with it and the test would still pass.
+    assert.ok(arrival > -1, `the arrival divider is drawn too: ${JSON.stringify(seen)}`);
+    assert.ok(turn < arrival,
+      'it is said before the next agent arrives, not after, which is the order a person reads');
   });
 
   test('the live turn carries the words alone, not the transcript bookkeeping', () => {
@@ -312,10 +314,17 @@ describe('every turn recorded as a plain agent message also reaches a live clien
   // suppresses it and kills the process so the delegate can take over.
   //
   // So the rule below is not "every append must deliver". It is "every branch
-  // that suppresses the envelope must deliver what it suppressed", and it has
-  // one member. The list is kept empty rather than deleted so a second
-  // suppressing branch has somewhere to be recorded and argued for.
-  const KNOWN_DELTA_GAPS = new Set([]);
+  // that suppresses the envelope must deliver what it suppressed".
+  //
+  // It has TWO members, not one, which an earlier version of this comment got
+  // wrong. The second is the off-roster impersonation guard: it also ends in
+  // `continue`, so an agent that tried to delegate outside its direct reports
+  // has that turn's own words recorded and not sent. It is real, it is rare
+  // (it needs a blocked delegation), and it needs a carrier that branch does
+  // not have, since nothing hands over there. Recorded rather than rushed.
+  const KNOWN_DELTA_GAPS = new Set([
+    "lib/delegation/engine.js::if (entry.responseText) {",
+  ]);
   function sourceFiles(dir, acc = []) {
     for (const name of fs.readdirSync(dir)) {
       if (name === 'node_modules' || name.startsWith('.')) continue;
