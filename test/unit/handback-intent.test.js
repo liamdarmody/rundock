@@ -554,9 +554,20 @@ describe('an agent says why it arrived, or does not appear to', () => {
       'and the brief is stated as private rather than merely discouraged');
   });
 
-  test('the orchestrator keeps the instruction it already had', () => {
-    assert.match(promptSrc, /A brief one-sentence handoff is fine/,
-      'the orchestrator narrates because routing is its job');
+  test('the orchestrator is told the same contract as a lead, because the same code renders both', () => {
+    // The render path fires for ANY intercepted Agent call, the orchestrator's
+    // included. Telling only leads that the description field is user-facing
+    // left the orchestrator writing a 3-5 word label per the schema, which
+    // would then surface as its visible turn. Mechanism and instruction have to
+    // cover the same callers.
+    assert.match(promptSrc, /`description` field IS YOUR HANDOFF LINE[\s\S]{0,400}Handing to Penn to draft the post/,
+      'the orchestrator gets the field rule with an example in its own voice');
+    assert.doesNotMatch(promptSrc, /A brief one-sentence handoff is fine/,
+      'and no longer the permission wording that produced task labels');
+    // Its own prose still wins. The field is a floor under the conversation,
+    // never a replacement for an agent that speaks for itself.
+    assert.match(promptSrc, /your own words win when you write them/,
+      'and it is told the field is the floor rather than the ceiling');
   });
 
   test('an arrival that will produce nothing is drawn as nothing, but the switch is still sent', () => {
