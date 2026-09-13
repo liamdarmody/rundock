@@ -766,9 +766,14 @@ describe('the names come from the real roster', () => {
     const fs = require('node:fs');
     const src = fs.readFileSync(path.join(ROOT, 'lib', 'delegation', 'engine.js'), 'utf8');
     const calls = (src.match(/deltaSince\(loadTranscript\(convoId\)[^;]*agentDisplayNames\(\)[,)]/g) || []).length;
-    assert.strictEqual(calls, 3,
-      'all three resume paths must build the map from the live roster, or one '
-      + 'of them silently labels turns with internal ids');
+    // FOUR NOW, not three. The fourth is the codex fresh-thread fallback: a
+    // stored id that is well-formed but expired passes the shape check, so the
+    // resume is attempted, fails, and the delegate lands on a fresh thread. That
+    // fallback carries its own catch-up built as an arrival, and it must build
+    // its names from the live roster like the other three.
+    assert.strictEqual(calls, 4,
+      'every path that builds a catch-up must take the map from the live roster, '
+      + 'or one of them silently labels turns with internal ids');
   });
 });
 

@@ -487,4 +487,50 @@ describe('codex agent conversation', () => {
       'and its own earlier turn is not re-sent: the thread it is resuming already holds it');
     h.reapConvo(convoId);
   });
+
+  // AN EXPIRED THREAD LOOKS EXACTLY LIKE A LIVE ONE, until the resume fails.
+  //
+  // isValidThreadId reads the string's shape, so a well-formed but expired id
+  // passes it: the resume is attempted, the app-server refuses, and the runtime
+  // falls back to a fresh thread that holds nothing. The prompt carried into
+  // that fallback must be an arrival's, or the delegate lands on an empty
+  // thread being told what it missed "since its last turn".
+  //
+  // Driven with the stub refusing the resume, so the fallback genuinely runs
+  // and the assertion is on the prompt the delegate actually received.
+  test('the fresh-thread fallback carries an arrival catch-up, not a resume one', async () => {
+    const convoId = h.freshConvoId('cdx-expired-thread');
+    h.internal.convoTranscripts.set(convoId, [
+      { role: 'user', agent: 'user', text: 'find me two suppliers' },
+      { role: 'agent', agent: 'researcher', text: 'IDA-OWN-EARLIER-TURN: I shortlisted three' },
+      { role: 'agent', agent: 'chief-of-staff', text: 'COS-WHILE-AWAY: the budget changed' },
+    ]);
+    h.internal.saveTranscript(convoId);
+    h.internal.writeConversations([{
+      id: convoId, title: 'expired thread', messages: [],
+      sessionIds: [{ agentId: 'researcher', sessionId: '0199f0a1-2b3c-7d4e-8f90-1a2b3c4d5e6f' }],
+    }]);
+    h.internal.chatProcesses.set(convoId, {
+      agentId: 'chief-of-staff', processId: 'p-cdx-parent3', exited: false, toolCalls: [],
+    });
+    // The id is well-formed, so the code attempts a resume; the stub refuses it,
+    // which is exactly the case the shape check cannot see coming.
+    h.writeCodexScenario([{ match: {}, turn: [{ text: 'ok' }] }], { resumeFails: true });
+    const before = h.codexTurnPrompts().length;
+
+    h.internal.handleDelegation({
+      conversationId: convoId, targetAgent: 'researcher',
+      context: 'narrow it to two', _intercepted: true,
+    }, h.internal.chatProcesses);
+
+    await h.waitUntil(() => h.codexTurnPrompts().length > before, 'the delegate was prompted after the fallback');
+    const prompt = h.codexTurnPrompts()[h.codexTurnPrompts().length - 1];
+    assert.match(prompt, /BEFORE YOU JOINED/,
+      'a thread that did not resume is an arrival, whatever the stored id looked like');
+    assert.doesNotMatch(prompt, /SINCE YOUR LAST TURN/,
+      'and is never told it is returning to a thread it does not have');
+    assert.match(prompt, /IDA-OWN-EARLIER-TURN/,
+      'and is given its own earlier turn, which a fresh thread holds nowhere');
+    h.reapConvo(convoId);
+  });
 });
