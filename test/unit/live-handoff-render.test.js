@@ -300,14 +300,22 @@ describe('every turn recorded as a plain agent message also reaches a live clien
   // listed so the gap is visible rather than quietly exempted. Removing an
   // entry after fixing its site is how this list shrinks; adding one needs a
   // reason as good as this paragraph.
-  // KEYED ON THE GUARD, not on a line number. Line numbers drift with every
-  // edit above them, and a list that has to be renumbered to stay green is a
-  // list that will be renumbered without being read.
-  const KNOWN_DELTA_GAPS = new Set([
-    'lib/delegation/engine.js::if (entry.responseText) {',
-    'lib/delegation/engine.js::if (e.responseText && !isSilentParkResponse(e.responseText)) {',
-    'lib/delegation/engine.js::if (e.responseText) {',
-  ]);
+  // NO EXCEPTIONS, because there is nothing to except.
+  //
+  // Four rounds of this card argued site by site about which appends deliver
+  // their turn, and kept a list of the ones that could not be settled by
+  // reading. Driving the engine settled it in one run, in
+  // engine-live-delivery.test.js: every runtime line is forwarded to the socket
+  // as it arrives, so a turn is delivered by DEFAULT and no append site has to
+  // arrange it. The only way a turn goes missing is a branch that suppresses
+  // the envelope, and there is exactly one, the Agent-tool interception, which
+  // suppresses it and kills the process so the delegate can take over.
+  //
+  // So the rule below is not "every append must deliver". It is "every branch
+  // that suppresses the envelope must deliver what it suppressed", and it has
+  // one member. The list is kept empty rather than deleted so a second
+  // suppressing branch has somewhere to be recorded and argued for.
+  const KNOWN_DELTA_GAPS = new Set([]);
   function sourceFiles(dir, acc = []) {
     for (const name of fs.readdirSync(dir)) {
       if (name === 'node_modules' || name.startsWith('.')) continue;
@@ -367,6 +375,10 @@ describe('every turn recorded as a plain agent message also reaches a live clien
         sites.push({
           file: path.relative(ROOT, file), line: i + 1, text: line.trim(),
           before: lines.slice(Math.max(0, i - 6), i).join('\n'),
+          // The nearest callback or function header above the site, so the
+          // delivery route that belongs to the whole callback is visible.
+          enclosing: lines.slice(Math.max(0, i - 30), i).reverse()
+            .find((l) => /onResult:\s*\(|onTurnDone:\s*\(|^function |^async function /.test(l)) || '',
           ...enclosingBranch(lines, i),
         });
       });
@@ -400,8 +412,11 @@ describe('every turn recorded as a plain agent message also reaches a live clien
       // above every branch here. Each version of this check that looked above
       // the branch stayed green while a fix was deleted.
       if (/liveHandoffText\s*=\s*(?!null)\w/.test(s.body)) return false;
-      const guarded = s.guard ? /responseText|ownProse/.test(s.guard) : /responseText|ownProse/.test(s.before);
-      if (guarded && KNOWN_DELTA_GAPS.has(`${s.file}::${s.guard.trim()}`)) return false;
+      // Only a branch that suppresses the envelope owes a delivery. Everything
+      // else is carried by the forwarded stream, measured in
+      // engine-live-delivery.test.js rather than argued from the source.
+      if (!/continue;/.test(s.body) || !/suppress/.test(s.body)) return false;
+      if (KNOWN_DELTA_GAPS.has(`${s.file}::${s.guard.trim()}`)) return false;
       // Three: it pushes the same turn down the socket beside the write, which
       // is how the runtime error paths do it.
       if (/safeSend\(/.test(s.body)) return false;
