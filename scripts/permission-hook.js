@@ -355,6 +355,38 @@ function namedFolderCovers(resolvedPath, extraDirs = [], pmod = path, home = os.
 // home instead of monkey-patching os.homedir(), and drive either filesystem
 // kind explicitly instead of inheriting whichever the test host happens to
 // have; production never passes either.
+// THE TWO FILES THAT HOLD THE PERSON'S OWN ANSWERS, protected here because
+// here is the only layer that runs everywhere.
+//
+// state.json carries the workspace mode. permissions.json carries the standing
+// grants: the folders allowed outside the workspace, and the tools allowed
+// without a card. Both are answers a person gave to a permission question, so
+// an agent that can write them can answer those questions on that person's
+// behalf, and the standing allows it wrote would silence every later card for
+// those tools with no further consent.
+//
+// lib/workspace/scaffold.js also names both in the sandbox block's denyWrite,
+// and that is the stronger protection where it exists: it stops the write at
+// the operating system rather than asking. But it exists on macOS alone. On
+// Windows and Linux sandboxSettings returns null, so without this the two
+// files were writable by any agent with a shell, and the second of them is new
+// state that used to live only in a browser tab where nothing could reach it.
+//
+// Carding rather than denying, because a person legitimately edits neither
+// through an agent and would want to be told if something tried.
+const WORKSPACE_ANSWER_FILES = ['state.json', 'permissions.json'];
+function isWorkspaceAnswerFile(resolvedPath, workspaceRoot, foldsCase = hostFoldsCase(), pmod = path) {
+  if (typeof resolvedPath !== 'string' || !resolvedPath) return false;
+  if (typeof workspaceRoot !== 'string' || !workspaceRoot) return false;
+  // Windows paths fold case whatever the host says, which is why the flavour
+  // travels with the comparison rather than being assumed from the host.
+  const folds = foldsCase || pmod === path.win32;
+  const c = foldCase(resolvedPath, folds);
+  return WORKSPACE_ANSWER_FILES.some((f) => (
+    c === foldCase(canonicalize(pmod.join(pmod.resolve(workspaceRoot), '.rundock', f), pmod), folds)
+  ));
+}
+
 function classifyFileAccess(toolName, toolInput, workspaceRoot, extraDirs = [], home = os.homedir(), foldsCase = hostFoldsCase(), resolvedPathFoldsCase) {
   const field = FILE_TOOL_PATH_FIELD[toolName];
   if (!field) return null;
@@ -371,11 +403,18 @@ function classifyFileAccess(toolName, toolInput, workspaceRoot, extraDirs = [], 
   // so the tags below still get to speak for anything inside it.
   const inside = insideWorkspaceRoot(resolvedPath, workspaceRoot)
     || namedFolderCovers(resolvedPath, extraDirs, path, home, foldsCase);
+  const writing = !READ_FILE_TOOLS.has(toolName);
+  // THE WORKSPACE'S OWN ANSWER FILES, carded on write however far inside the
+  // workspace they sit. See workspaceAnswerFile below for why this cannot be
+  // left to the sandbox.
+  if (inside && writing && isWorkspaceAnswerFile(resolvedPath, workspaceRoot, foldsCase)) {
+    return { where: 'outside', resolvedPath, grantDir: null, answerFile: true };
+  }
   if (inside) return { where: 'inside', resolvedPath };
   // The agent's own folder: free unless the registry names this exact
   // access as a secret (always) or a write to a persistence surface.
   const tags = agentHomeTags(resolvedPath, home, foldsCase);
-  const isWrite = !READ_FILE_TOOLS.has(toolName);
+  const isWrite = writing;
   if (tags.agentHome && !tags.secret && !(isWrite && tags.persistenceSurface)) {
     return { where: 'inside', resolvedPath };
   }
@@ -636,7 +675,17 @@ function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), 
     if (!homed && !t.startsWith('/') && !WIN_DRIVE.test(t) && !WIN_UNC.test(t) && !TRAVERSAL.test(t)) continue;
     const pmod = flavourFor(t, workspaceRoot);
     const resolved = canonicalize(pmod.resolve(pmod.resolve(workspaceRoot), t), pmod);
-    if (insideWorkspaceRoot(resolved, workspaceRoot, pmod)) continue;
+    if (insideWorkspaceRoot(resolved, workspaceRoot, pmod)) {
+      // The one thing inside the workspace that is still reported: a write to
+      // the person's own answer files. Read-only commands pass, on the same
+      // reasoning the persistence surfaces use below, because reading the
+      // stored mode or the stored grants is not answering anything.
+      if (!readOnly && isWorkspaceAnswerFile(resolved, workspaceRoot, foldsCase, pmod)) {
+        const key = pmod === path.win32 ? resolved.toLowerCase() : resolved;
+        if (!seen.has(key)) { seen.add(key); found.push({ path: resolved, answerFile: true }); }
+      }
+      continue;
+    }
     if (namedFolderCovers(resolved, extraDirs, pmod, home, foldsCase)) continue;
     // Tier three (neither secret nor a persistence surface) is free, so it
     // is not reported at all. A command cannot declare which act it

@@ -414,6 +414,63 @@ describe('agent scratch files', () => {
 // The handlers guard before reaching these, so exercising the store only
 // through them leaves its own refusals untested: the guard could be removed
 // from the handler and nothing would fail. These drive the module directly.
+// THE ANSWER FILES ARE PROTECTED ON EVERY PLATFORM, not only where a sandbox
+// runs. The sandbox denyWrite is the stronger protection and exists on macOS
+// alone; these two files hold the person's own permission answers, so on a
+// platform with no sandbox an agent with a shell could otherwise grant itself
+// standing allows and silence every later card.
+describe('an agent cannot quietly answer the questions it was asked', () => {
+  const os2 = require('node:os');
+  const WS = path.join(os2.tmpdir(), 'answer-files-ws');
+
+  const write = (target) => classifyFileAccess('Write', { file_path: target }, WS, [], os2.homedir(), false);
+  const read = (target) => classifyFileAccess('Read', { file_path: target }, WS, [], os2.homedir(), false);
+
+  test('writing either answer file is carded, though it sits inside the workspace', () => {
+    for (const f of ['state.json', 'permissions.json']) {
+      const target = path.join(WS, '.rundock', f);
+      assert.strictEqual(write(target).where, 'outside',
+        `a write to ${f} must reach the person, not be auto-approved as ordinary workspace work`);
+      assert.strictEqual(write(target).grantDir, null,
+        'and no standing folder grant may be offered that would silence it next time');
+    }
+  });
+
+  test('reading them is ordinary workspace work', () => {
+    // The protection is about answering questions, not about secrecy. Rundock
+    // itself reads these constantly, and carding reads would make the
+    // workspace unusable without protecting anything.
+    for (const f of ['state.json', 'permissions.json']) {
+      assert.strictEqual(read(path.join(WS, '.rundock', f)).where, 'inside');
+    }
+  });
+
+  test('other files under .rundock stay free, so agent scratch still works', () => {
+    // Agents are told to put scratch under .rundock. Protecting the folder
+    // rather than the two files would take that away.
+    for (const rel of ['scratch/notes.md', 'cache/x.json', 'something.json']) {
+      assert.strictEqual(write(path.join(WS, '.rundock', rel)).where, 'inside',
+        `${rel} is not an answer the person gave, and must not card`);
+    }
+  });
+
+  test('a shell command writing one of them is reported as a crossing', () => {
+    const cmd = `echo '{}' > ${path.join(WS, '.rundock', 'permissions.json')}`;
+    const found = classifyShellAccess('Bash', { command: cmd }, WS, [], os2.homedir(), false);
+    const paths = (found && found.crossings ? found.crossings : []).map((c) => c.path);
+    assert.ok(paths.some((found) => found.endsWith('permissions.json')),
+      `a shell write has to be caught too, or the file tools are the only door that is locked: ${JSON.stringify(found)}`);
+  });
+
+  test('a shell command merely reading one of them is not', () => {
+    const cmd = `cat ${path.join(WS, '.rundock', 'permissions.json')}`;
+    const found = classifyShellAccess('Bash', { command: cmd }, WS, [], os2.homedir(), false);
+    const paths = (found && found.crossings ? found.crossings : []).map((c) => c.path);
+    assert.deepStrictEqual(paths.filter((found) => found.endsWith('permissions.json')), [],
+      'reading the stored answers is not answering anything');
+  });
+});
+
 describe('standing tool allows refuse rather than corrupt', () => {
   const boundary = require('../../lib/workspace/boundary.js');
   const config = require('../../lib/config.js');
