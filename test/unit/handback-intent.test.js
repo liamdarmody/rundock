@@ -516,18 +516,27 @@ describe('an agent says why it arrived, or does not appear to', () => {
     return promptSrc.slice(at, end);
   }
 
-  test('a lead is told to announce a handoff, not merely allowed to', () => {
-    // It said a one-sentence handoff "is fine", and the next rule said "Do NOT
-    // narrate the delegation brief in visible chat". Permission followed by an
-    // emphatic prohibition reads as: stay quiet. Observed: a lead delegated to
-    // a fact checker with no visible turn at all.
+  test('the handoff line is a FIELD of the call, not a second thing to remember', () => {
+    // This started as "a one-sentence handoff is fine", which read as
+    // permission beside a prohibition and produced silence. Making it an
+    // instruction helped and was still a coin flip across three hand tests: a
+    // separate optional act is what models drop under load.
+    //
+    // It is now the `description` field of the call the agent is already
+    // making, which is why it survives. Measured four runs out of four against
+    // the shipped runtime.
     const lead = leadContract();
-    assert.match(lead, /It is not optional/,
-      'permission is not instruction, and the rule beside it forbids speaking');
+    assert.match(lead, /`description` field IS YOUR HANDOFF LINE/,
+      'the line rides in the call rather than beside it');
+    assert.match(lead, /the user sees it in the conversation/,
+      'and the agent is told who reads it, which is what makes it a sentence '
+      + 'rather than a task label');
+    assert.doesNotMatch(lead, /A brief one-sentence handoff is fine/,
+      'never the permission wording this replaced');
   });
 
   test('and told what the line carries', () => {
-    assert.match(leadContract(), /who you are handing to and why/,
+    assert.match(leadContract(), /naming who you are handing to and why/,
       'a rule that says "say something" without saying what invites silence or '
       + 'the narration the next rule forbids');
   });
@@ -535,8 +544,14 @@ describe('an agent says why it arrived, or does not appear to', () => {
   test('while the prohibition on narrating the brief still stands', () => {
     const lead = leadContract();
     assert.match(lead, /Do NOT narrate the delegation brief/);
-    assert.match(lead, /who and why belongs in the chat/,
-      'the two rules must be distinguishable, or following one breaks the other');
+    // The two rules must stay distinguishable, or following one breaks the
+    // other. They are now separated by WHICH FIELD each belongs in, which is a
+    // sharper line than "chat versus tool call": there is no judgement left to
+    // make about where a sentence goes.
+    assert.match(lead, /Who and why goes in `description`; what to do goes in `prompt`/,
+      'each rule names its own field, so obeying one cannot violate the other');
+    assert.match(lead, /never shown to the user/,
+      'and the brief is stated as private rather than merely discouraged');
   });
 
   test('the orchestrator keeps the instruction it already had', () => {
