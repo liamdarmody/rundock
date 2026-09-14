@@ -30,7 +30,7 @@ before(() => {
   dom = new JSDOM('<!doctype html><html><body>'
     + '<div id="messages"></div><div id="chat-status"></div><input id="msg-input">'
     + '<button id="send-btn"></button><span id="chat-agent-label"></span>'
-    + '<span id="chat-agent-avatar"></span></body></html>');
+    + '<span id="chat-agent-avatar"></span><input id="chat-title-input"><div id="chat-title"></div><div id="convo-list"></div><div id="thinking-indicator"></div></body></html>');
   global.window = dom.window;
   global.document = dom.window.document;
   dom.window.Element.prototype.scrollIntoView = function () {};
@@ -41,6 +41,16 @@ before(() => {
   global.renderConvoList = () => {};
   global.tryMessageAnchor = () => {};
   global.persistLastActiveConversation = () => {};
+  global.pendingMessageAnchor = null;
+  global.RundockConvoList = { render: () => {}, preview: () => '' };
+  global.switchNav = () => {};
+  global.unread = { clear() {}, clearConvo() {}, markPermission() {}, ids: () => new Set(), has: () => false };
+  global.activeSidebarPill = null;
+  global.setActiveAgentPill = () => {};
+  global.renderConvoList = () => {};
+  global.updateUnreadBadge = () => {};
+  global.renderPendingPermissionCards = () => {};
+  global.createHistoryDivider = chatMod => null;
   global.agents = [
     { id: 'default', displayName: 'Roo', type: 'orchestrator' },
     { id: 'research-lead', displayName: 'Ren', type: 'specialist' },
@@ -131,6 +141,65 @@ describe('who is announced, on the document, through the real executor', () => {
     const drawn = run({ type: 'system', subtype: 'agent_switch', _conversationId: 'c1', _processId: 'p1',
       fromAgent: 'vox', toAgent: 'default', returning: true, });
     assert.deepStrictEqual(drawn, [], 'the same rule, and one rule rather than two');
+  });
+});
+
+describe('coming back to a conversation draws what a reload draws', () => {
+  // AA-3 ON THE DOCUMENT, through the loop a navigation actually uses.
+  // replayConversationInto is what openConversation calls to rebuild the thread
+  // from the conversation's own messages, which is the path taken when you
+  // click away and click back.
+  const convos = require(path.join(ROOT, 'public', 'views', 'conversations.js'));
+
+  function openWith(messages, historyCount = 0) {
+    document.getElementById('messages').innerHTML = '';
+    const convo = { id: 'c1', agentId: 'default', agent: global.agents[0], messages, _historyCount: historyCount };
+    global.conversations = [convo];
+    global.activeConversation = convo;
+    convos.replayConversationInto(document.getElementById('messages'), convo);
+    return convo;
+  }
+
+  const STORED = CHAIN.map((m) => ({
+    role: m.role === 'user' ? 'user' : 'agent',
+    content: m.content, agentId: m.agentId || 'default', timestamp: m.timestamp,
+  }));
+
+  test('no handover markers appear when the conversation is reopened', () => {
+    openWith(STORED.map((m) => ({ ...m })));
+    const drawn = rows().filter((el) => el.className.includes('msg-delegation'))
+      .map((el) => (el.textContent || '').replace(/\s+/g, ' ').trim());
+    assert.deepStrictEqual(drawn, [],
+      'reopening is re-reading, and re-reading is not the moment anyone arrived');
+  });
+
+  test('and every turn is still drawn, in order, attributed', () => {
+    openWith(STORED.map((m) => ({ ...m })));
+    const drawn = rows().filter((el) => el.className.includes('msg-agent') || el.className.includes('msg-user'));
+    assert.strictEqual(drawn.length, STORED.length,
+      'nothing is lost by dropping the markers, which is the whole basis for dropping them');
+  });
+
+  test('a stored marker left from the old behaviour draws nothing', () => {
+    // Anyone upgrading may still hold divider records in memory. There is no
+    // branch that would draw one, so they cannot reappear on this path and not
+    // on a reload.
+    const withLegacy = [
+      ...STORED.slice(0, 2).map((m) => ({ ...m })),
+      { role: 'divider', agentId: 'vox', fromAgentId: 'default', isReturn: false },
+      ...STORED.slice(2).map((m) => ({ ...m })),
+    ];
+    openWith(withLegacy);
+    assert.deepStrictEqual(rows().filter((el) => el.className.includes('msg-delegation')).map((el) => el.textContent), [],
+      'a record from the old behaviour is not a reason to draw');
+  });
+
+  test('the session boundary still appears here too', () => {
+    // AA-6 on this path as well as the reload one: the two renders agree about
+    // what survives, not just about what does not.
+    openWith(STORED.map((m) => ({ ...m })), 3);
+    const boundary = rows().filter((el) => /previous session/i.test(el.textContent || ''));
+    assert.strictEqual(boundary.length, 1, 'reopening says where the earlier part ends');
   });
 });
 

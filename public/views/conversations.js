@@ -756,6 +756,36 @@ function discardIfEmpty() {
   }
 }
 
+// WHAT A CONVERSATION LOOKS LIKE WHEN YOU COME BACK TO IT.
+//
+// Lifted out of openConversation so it can be driven on its own: the rest of
+// that function is the shell, the header, the pills, the unread state, and a
+// test that had to stand all of it up to ask what the thread renders would be
+// mostly stubs, each one a place the test drifts from the real thing.
+//
+// NO HANDOVER MARKERS. Arrivals are drawn as they happen and are not recorded,
+// so this reproduces the turns and nothing else, exactly as a reload does. The
+// two used to differ: this drew markers from stored records while a reload had
+// none, so the same conversation read two ways depending on how you returned to
+// it. A record left over from the old behaviour draws nothing, because there is
+// no branch that would draw one.
+//
+// The session boundary is not a handover marker and does survive: it says what
+// is being resumed, which is what re-reading is the moment for.
+function replayConversationInto(el, c) {
+  const historyCount = c._historyCount || 0;
+  for (let i = 0; i < c.messages.length; i++) {
+    const m = c.messages[i];
+    if (m.role === 'user') addUserMsg(m.content, false);
+    else if (m.role === 'agent') addAgentMsg(m.content, m.agentId, false, m.timestamp || null);
+    if (m.isHistory) {
+      const last = el.lastElementChild;
+      if (last) last.classList.add('history-msg');
+    }
+    if (historyCount > 0 && i === historyCount - 1) el.appendChild(createHistoryDivider());
+  }
+}
+
 function openConversation(id, withAnchor) {
   const c=conversations.find(x=>x.id===id);
   // Missing target (a search hit whose conversation is absent from the client
@@ -805,26 +835,7 @@ function openConversation(id, withAnchor) {
     c.persisted = false;
     renderConvoList();
   } else {
-    const historyCount = c._historyCount || 0;
-    // NO HANDOVER MARKERS ON REPLAY, by not having any to replay. Arrivals are
-    // drawn as they happen and are not recorded, so this loop reproduces the
-    // turns and nothing else, exactly as a reload does. The two used to differ:
-    // this one drew markers from stored records while a reload had none, so the
-    // same conversation read two ways depending on how you came back to it.
-    for(let i=0; i<c.messages.length; i++) {
-      const m = c.messages[i];
-      if(m.role==='user') addUserMsg(m.content,false);
-      else if(m.role==='agent') {
-        addAgentMsg(m.content,m.agentId,false,m.timestamp || null);
-      }
-      if(m.isHistory) {
-        const last = el.lastElementChild;
-        if(last) last.classList.add('history-msg');
-      }
-      if(historyCount > 0 && i === historyCount - 1) {
-        el.appendChild(createHistoryDivider());
-      }
-    }
+    replayConversationInto(el, c);
   }
   // Restore processing state if this conversation is still working
   const state = getConvoState(id);
@@ -880,6 +891,6 @@ return {
   formatRecency, convoStateDot, setSidebarPill, renderListPills,
   openConvoMenu, convoMenuEsc, closeConvoMenu, openConvoListMenu,
   toggleConvoListMembership, renderConvoList, renderConvoItem,
-  discardIfEmpty, openConversation,
+  discardIfEmpty, openConversation, replayConversationInto,
 };
 }));

@@ -78,6 +78,7 @@ const MANIFEST = {
     "renderConvoItem",
     "renderConvoList",
     "renderListPills",
+    "replayConversationInto",
     "sendPrompt",
     "setSidebarPill",
     "setupChat",
@@ -85,7 +86,7 @@ const MANIFEST = {
     "startSetupConversation",
     "toggleConvoListMembership",
     "toggleConvoStatus",
-    "togglePin",
+    "togglePin"
   ],
   "files.js": [
     "attachArtifactReviewForCurrentFile",
