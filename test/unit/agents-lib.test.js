@@ -95,8 +95,10 @@ describe('lib/agents module seams', () => {
     const rules = prompt.slice(prompt.indexOf('FORMATTING RULES'));
     assert.ok(rules.includes('Write Markdown'),
       'the rule names the syntax this product renders');
-    assert.ok(rules.includes('MediaWiki'),
-      'and names the one an agent actually reached for, since a rule that only says what to do leaves the alternative looking untested');
+    for (const other of ['MediaWiki', 'reStructuredText', 'BBCode', 'Textile']) {
+      assert.ok(rules.includes(other),
+        `the rule names ${other} as a syntax not to reach for; pinned so a later edit cannot quietly narrow the rule to the one case that prompted it`);
+    }
     assert.ok(rules.indexOf('Write Markdown') < rules.indexOf('PLATFORM RULES:'),
       'it sits inside the mandatory block, not in a section of its own');
 

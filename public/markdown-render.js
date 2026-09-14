@@ -387,13 +387,14 @@
         // The run of equals signs the highlight tokenizer ate whole. It is text
         // and renders as text: its own characters, escaped like any other text,
         // and nothing about it is markup.
+        //
+        // RENDERER ONLY, deliberately. This token is manufactured by the
+        // highlight tokenizer above and never matched from source, so a
+        // tokenizer here would be dead code and a `start` would be worse than
+        // dead: it would have marked cut a text run at every `===` on behalf of
+        // a tokenizer that can never match there.
         name: 'eqrun',
         level: 'inline',
-        start(src) {
-          const i = src.indexOf('===');
-          return i === -1 ? undefined : i;
-        },
-        tokenizer() { return undefined; },
         renderer(token) { return escapeHtml(token.text); },
       }, {
         // Obsidian tags: #tag.
