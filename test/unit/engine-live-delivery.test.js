@@ -15,6 +15,7 @@ const { test, describe } = require('node:test');
 const assert = require('node:assert');
 const { EventEmitter } = require('node:events');
 const path = require('node:path');
+const fs = require('node:fs');
 
 const ROOT = path.join(__dirname, '..', '..');
 const engineLib = require(path.join(ROOT, 'lib', 'delegation', 'engine.js'));
@@ -156,3 +157,39 @@ describe('a turn that streamed nothing still reaches the socket', () => {
 // dep, so matching a direct report needs a real workspace on disk. That is the
 // integration harness's job, and the assertion lives in
 // test/integration/handoff-line.test.js where a real delegation already runs.
+
+describe('a delegation that reached nobody is recorded, not swallowed', () => {
+  // The half that matters more than the matcher. Ren believed she had handed
+  // the work on and said so; nothing anywhere contradicted her, and the miss
+  // surfaced to a person hours later looking like a permissions fault. A call
+  // that meant to delegate and reached nobody now leaves a trace.
+  const ENGINE = fs.readFileSync(path.join(ROOT, 'lib', 'delegation', 'engine.js'), 'utf-8');
+
+  test('the miss is reported and counted where the other delegation errors are', () => {
+    const at = ENGINE.indexOf('Agent call named no target the roster matched');
+    assert.ok(at > -1, 'the engine says out loud that no delegation happened');
+    const near = ENGINE.slice(at, at + 400);
+    assert.match(near, /recordEvent\('delegation_error'/,
+      'and records it as a delegation error, so it is countable rather than only greppable');
+    assert.match(near, /no_target_matched/, 'under a reason that says which kind it was');
+  });
+
+  test('a deliberate built-in target is not reported as a miss', () => {
+    // An explicit subagent_type is a choice, not a failed handover. Reporting
+    // it would train a person to ignore the line that matters.
+    const at = ENGINE.indexOf('const unnamed = agentCalls.filter');
+    assert.ok(at > -1, 'the miss is narrowed to calls that named no subagent_type');
+    assert.match(ENGINE.slice(at, at + 200), /!input\.subagent_type/,
+      'only a call with no explicit target counts as ambiguous');
+  });
+
+  test('the turn is not killed for it', () => {
+    // Killing would take a legitimate generic subagent with it, which is worse
+    // than the fault being fixed. The off-roster guard may kill because its
+    // case is unambiguous; this one is not.
+    const at = ENGINE.indexOf('Agent call named no target the roster matched');
+    const block = ENGINE.slice(at - 200, at + 500);
+    assert.ok(!/killProcessTree/.test(block),
+      'a miss is recorded and the turn is left to finish');
+  });
+});
