@@ -284,7 +284,13 @@
     if (!handoffText
       && typeof message.handoffLine === 'string'
       && message.subtype === 'agent_switch'
-      && typeof message.fromAgent === 'string' && message.fromAgent) {
+      // EXCLUSIVE TO THE INTERCEPTION. Only the forward-delegation send carries
+      // a target process id alongside a departing agent; the restoration
+      // switches name no new process. Checking the subtype alone let any switch
+      // carry a line, which is not the same as the server having computed one.
+      && typeof message._processId === 'string' && message._processId
+      && typeof message.fromAgent === 'string' && message.fromAgent
+      && typeof message.toAgent === 'string' && message.toAgent) {
       // NOTHING WAS STREAMED, SO THERE IS NOTHING TO PROMOTE.
       //
       // This branch is the whole reason a delegating agent could hand over in

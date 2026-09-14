@@ -326,6 +326,53 @@ describe('a turn blocked mid-delegation is still shown to the person', () => {
   });
 });
 
+describe('the blocked turn reads the same live and after a reload', () => {
+  // ST-7. The defect this whole area keeps producing is a turn that is right in
+  // one rendering and wrong or absent in the other, so each claim is made twice
+  // and the two are compared rather than each being checked alone.
+  const CTX = { isActive: true, convoAgentId: 'default' };
+
+  test('the same words, whichever way the turn arrived', () => {
+    const words = 'Ana is the right person, let me pull her in.';
+
+    freshDom();
+    global.conversations = [{ id: 'c1', agentId: 'default', messages: [] }];
+    global.activeConversation = { id: 'c1', agentId: 'default' };
+    global.getConvoState = () => ({ currentStreamingMsg: null });
+    const r = reduce({ ...createState() }, {
+      type: 'system', subtype: 'agent_turn', _conversationId: 'c1', _processId: 'p1',
+      _agent: 'default', text: words,
+    }, CTX);
+    for (const ef of r.effects) if (ef.type === 'promote-handoff-message') promote('c1', ef);
+    const live = [...document.getElementById('messages').children]
+      .filter((el) => el.className.includes('msg-agent'))
+      .map((el) => (el.textContent || '').replace(/\s+/g, ' ').trim());
+
+    freshDom();
+    addAgentMsg(words, 'default', false);
+    const replayed = [...document.getElementById('messages').children]
+      .filter((el) => el.className.includes('msg-agent'))
+      .map((el) => (el.textContent || '').replace(/\s+/g, ' ').trim());
+
+    assert.deepStrictEqual(live, replayed,
+      'a blocked turn reads identically whether it arrived live or was replayed');
+    assert.strictEqual(live.length, 1, 'and it is one turn, not none and not two');
+  });
+
+  test('a line arriving on anything but the interception switch is ignored', () => {
+    // The provenance half, on the effects the reducer will act on. A restore
+    // switch names no new process, so a line riding one is not something the
+    // interception computed.
+    const notIntercepted = reduce({ ...createState() }, {
+      type: 'system', subtype: 'agent_switch', _conversationId: 'c1',
+      fromAgent: 'vox', toAgent: 'default', handoffLine: 'SPOOFED',
+    }, { isActive: true, convoAgentId: 'default', toAgentExists: true, toAgentType: 'orchestrator', fromAgentExists: true });
+    const promoted = notIntercepted.effects.filter((e) => e.type === 'promote-handoff-message');
+    assert.deepStrictEqual(promoted, [],
+      'no process id means no forward delegation, so there is no computed line to honour');
+  });
+});
+
 describe('every branch that suppresses the envelope delivers what it suppressed', () => {
   // THE RULE, KEYED ON THE SUPPRESSION ITSELF.
   //
@@ -349,7 +396,12 @@ describe('every branch that suppresses the envelope delivers what it suppressed'
     const indentOf = (l) => l.length - l.trimStart().length;
     const blocks = [];
     lines.forEach((line, i) => {
-      if (!/^\s*continue;\s*$/.test(line)) return;
+      // A TRAILING COMMENT IS STILL A CONTINUE. Requiring end-of-line missed
+      // the interception's own `continue; // suppress ...`, so the rule was
+      // only ever judging one of the two branches, and deleting the handoff
+      // delivery left it green. Found by review, not by the mutation check,
+      // because the mutation check was asking the same half-blind question.
+      if (!/^\s*continue;(\s*\/\/.*)?$/.test(line)) return;
       // The block this continue ends: walk back to the nearest `if` at a
       // smaller indent, and take everything from there to here.
       const mine = indentOf(line);
@@ -366,6 +418,8 @@ describe('every branch that suppresses the envelope delivers what it suppressed'
 
   test('each one sends the turn it kept off the wire', () => {
     const blocks = suppressingBlocks();
+    // FLOORED AT TWO, because two is what there are and a walk that finds one
+    // is the failure this rule has already had once.
     assert.ok(blocks.length >= 2,
       `sanity: the interception still has branches that continue, found ${blocks.length}`);
 
@@ -383,5 +437,16 @@ describe('every branch that suppresses the envelope delivers what it suppressed'
     assert.deepStrictEqual(silent.map((b) => `${b.line}: ${b.guard}`), [],
       'a branch that stops the envelope and kills the process has to send the turn itself, '
       + 'or the words are in the transcript and on nobody\'s screen until a reload');
+
+    // WHAT THIS RULE DOES NOT CATCH, said plainly rather than left to be
+    // discovered. The interception's block holds two deliveries, one for the
+    // handoff line and one for prose that never streamed, so removing either
+    // leaves the other satisfying the check here. Measured: deleting the
+    // handoff assignment keeps this green. That delivery is held instead by
+    // test/integration/handoff-line.test.js, which drives a real delegation and
+    // asserts the line is on the switch, and which does redden when it goes.
+    // Two tests, one per delivery, rather than one test believed to cover both.
+    assert.ok(blocks.some((b) => /liveHandoffText/.test(b.body)),
+      'the interception block still delivers by that name, which is what the integration test pins');
   });
 });
