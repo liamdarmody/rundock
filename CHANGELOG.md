@@ -4,13 +4,15 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
-## 0.13.3: Everyone In The Room (2026-09-13)
+## 0.13.3: Everyone In The Room (2026-09-14)
 
 ### Fixed
 
 - **Code mode with Working Folders stops asking about folders you already named:** naming your working folders and switching to Code mode was meant to end the approval cards for those folders, and for some people it did not. Rundock controls one of several places the operating system sandbox is configured, and the sandbox turns on if any one of them asks for it. Turning it off in Rundock's own settings therefore never turned it off; it only stopped telling a sandbox that was still running which folders you had named, so the folders you listed were the very ones it went on refusing. Rundock now leaves that switch alone and states your folders either way, so what you name is what your agents can reach, whichever mode you are in and whatever else on your machine has an opinion about sandboxing.
 
 - **"Always allow" is still allowed after a reload:** answering a permission card with "Always allow" held only until the page was refreshed or the app restarted, and then the same card came back. The answer is now kept with your workspace, so it holds across restarts, and Settings lists what you have allowed with a way to take any of it back. An answer that could not be saved is never reported as saved: if it cannot be written, the card appears again rather than a grant appearing that does not exist. The two files holding your permission answers are now protected from being written by an agent on every platform, not only where the operating system sandbox runs, so nothing your agents do can quietly answer a question on your behalf.
+
+- **An agent handing over says so while it happens, not after a reload:** a specialist passing work to another produced a line explaining the handover, and that line was written to the conversation's record and never sent to the screen. It was correct when you reloaded and absent at the moment it mattered, which is the only moment anyone was watching. The same was true of an agent's own words when a delegation was blocked because the named agent was not one of its direct reports. Both now appear as they happen, attributed to the agent that wrote them, and read identically whether you watched them arrive or came back to them later.
 
 - **An agent handing over says so, in its own words:** a specialist passing work to another could hand over in silence, so the conversation jumped to a new name with nothing explaining why, and the brief it had written for its colleague was never shown to you at all. Handing over now always produces two things: the private brief for the agent taking the work, and a line to you saying what is being passed on and to whom. The agent's own words are used whenever it writes them; the line is the floor, not a replacement for speaking.
 
