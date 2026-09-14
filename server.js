@@ -1001,25 +1001,6 @@ function appendTranscript(convoId, role, agentId, text, type, meta) {
   if (isPlainAgentMessage) noteSearchConversationActivity(convoId);
 }
 
-function formatTranscript(convoId, { excludeAgent } = {}) {
-  // Load from disk if not in memory
-  const transcript = loadTranscript(convoId);
-  if (!transcript || transcript.length === 0) return null;
-  const allAgents = discoverAgents(); // Call once, not per entry
-  // When excludeAgent is set, filter out that agent's own previous responses
-  // so they don't re-process old requests when re-delegated
-  const filtered = excludeAgent
-    ? transcript.filter(t => t.role === 'user' || t.agent !== excludeAgent)
-    : transcript;
-  if (filtered.length === 0) return null;
-  return filtered.map(t => {
-    if (t.role === 'user') return `USER: ${t.text}`;
-    const agent = allAgents.find(a => a.id === t.agent || a.name === t.agent);
-    const name = agent?.displayName || t.agent;
-    return `${name.toUpperCase()}: ${t.text}`;
-  }).join('\n\n');
-}
-
 function safeSend(data) {
   const payload = typeof data === 'string' ? data : JSON.stringify(data);
   let sent = false;
@@ -1247,7 +1228,6 @@ const delegationEngine = delegationEngineLib.createDelegationEngine({
   processes: chatProcesses,
   safeSend,
   appendTranscript,
-  formatTranscript,
   buildHandbackPayload,
   beginConvoTransition,
   endConvoTransition,
@@ -3224,7 +3204,7 @@ module.exports._internal = {
   // persistence
   readConversations, writeConversations, readState, writeState,
   readLists, writeLists, deleteListEverywhere,
-  loadTranscript, saveTranscript, appendTranscript, formatTranscript,
+  loadTranscript, saveTranscript, appendTranscript,
   transcriptDir, countSessionMessagesSync, countConversationMessages,
   parseSessionHistory, getSessionJsonlPath,
   // spawn plumbing
