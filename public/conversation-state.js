@@ -232,14 +232,21 @@
     // not, and this is the second half of that pair so neither side alone can
     // produce a duplicate.
     if (state.streamingRawText) return { state, effects: [] };
+    // NOT GATED ON isActive. The executor persists the turn into the
+    // conversation's own messages before it touches the document, and it
+    // already declines to draw into a conversation that is not on screen.
+    // Gating the effect instead threw the turn away entirely for a background
+    // conversation: it would be missing from the model as well as the screen,
+    // and a later switch to that conversation would show a gap. This matches
+    // what reduceAgentSwitch does with its own promote.
     return {
       state,
-      effects: ctx.isActive ? [{
+      effects: [{
         type: 'promote-handoff-message',
         text,
         agentId: message._agent || state.activeAgentId || ctx.convoAgentId || null,
         attribution: attribution(message),
-      }] : [],
+      }],
     };
   }
 
@@ -270,7 +277,14 @@
       handoffText = RundockMarkers.stripDelegateTail(state.streamingRawText).trim();
       handoffText = RundockMarkers.stripMarkers(handoffText).trim();
     }
-    if (!handoffText && typeof message.handoffLine === 'string') {
+    // PROVENANCE. The line is honoured only off the switch the server's own
+    // interception sends, and only when that switch names who is leaving. A
+    // field of this name arriving on anything else is not a handoff line the
+    // server computed, and must not reach a render path.
+    if (!handoffText
+      && typeof message.handoffLine === 'string'
+      && message.subtype === 'agent_switch'
+      && typeof message.fromAgent === 'string' && message.fromAgent) {
       // NOTHING WAS STREAMED, SO THERE IS NOTHING TO PROMOTE.
       //
       // This branch is the whole reason a delegating agent could hand over in
