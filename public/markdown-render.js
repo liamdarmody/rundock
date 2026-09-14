@@ -359,19 +359,42 @@
           // Markdown does not have, and got a lopsided highlight rather than
           // the characters they typed.
           //
-          // `(?!=)` after the opener and `(?<!=)` before the closer say the
-          // delimiter must be exactly two, not part of a longer run. The
-          // content must also end in a character that is not `=`, which is what
-          // stops `====` matching with an empty capture and rendering a
-          // highlight of nothing. A single `=` inside the content is untouched:
-          // `==x=y==` still highlights `x=y`.
-          const match = /^==(?!=)(.*?[^=])==(?!=)/.exec(src);
+          // A RUN OF THREE OR MORE IS EATEN WHOLE, and that is not the same as
+          // declining to match it. A tokenizer only ever sees the source from
+          // the lexer's cursor, so it cannot look behind itself. Declining left
+          // the run in place, and marked's inline lexer then consumed one
+          // character as plain text and retried every tokenizer at the next
+          // offset, where the leading `=` was no longer visible: `===x==` came
+          // back as `=` plus a highlight of `x`. Returning the whole run as one
+          // text token leaves nothing inside it to retry.
+          const run = /^={3,}/.exec(src);
+          if (run) return { type: 'eqrun', raw: run[0], text: run[0] };
+
+          // Exactly two, either side. `[^=\n]` on the last content character is
+          // what stops `====` matching with an empty capture, and excludes the
+          // newline because a negated class, unlike `.`, matches one: without
+          // it `==a\n==b==` highlighted across a line break, which this
+          // tokenizer has never done. A single `=` inside content is untouched,
+          // so `==x=y==` still highlights `x=y`.
+          const match = /^==(?!=)(.*?[^=\n])==(?!=)/.exec(src);
           if (!match) return undefined;
           return { type: 'highlight', raw: match[0], tokens: this.lexer.inlineTokens(match[1]) };
         },
         renderer(token) {
           return `<mark>${this.parser.parseInline(token.tokens)}</mark>`;
         },
+      }, {
+        // The run of equals signs the highlight tokenizer ate whole. It is text
+        // and renders as text: its own characters, escaped like any other text,
+        // and nothing about it is markup.
+        name: 'eqrun',
+        level: 'inline',
+        start(src) {
+          const i = src.indexOf('===');
+          return i === -1 ? undefined : i;
+        },
+        tokenizer() { return undefined; },
+        renderer(token) { return escapeHtml(token.text); },
       }, {
         // Obsidian tags: #tag.
         //

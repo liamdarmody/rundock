@@ -513,6 +513,34 @@ describe('renderMarkdown: a longer run of equals signs is literal text', () => {
       'a single equals sign inside a highlight is content, not a delimiter');
   });
 
+  test('a run is eaten whole, so the lexer cannot retry inside it', () => {
+    // A tokenizer sees the source from the lexer's cursor and cannot look
+    // behind itself. Declining to match a run left it in place, and marked then
+    // consumed one character as plain text and retried at the next offset,
+    // where the leading `=` was no longer visible: `===x==` came back as `=`
+    // followed by a highlight of `x`. Forward-looking guards alone cannot close
+    // this, which is why the run is consumed rather than refused.
+    for (const src of ['===x==', 'a===b==c', 'foo===bar===baz', 'x ====y==== z']) {
+      const d = doc(render(src));
+      assert.strictEqual(d.querySelectorAll('mark').length, 0,
+        `no highlight may be recovered from inside a run: ${src}`);
+      assert.strictEqual(d.querySelector('p').textContent, src,
+        'and the characters survive exactly');
+    }
+  });
+
+  test('a highlight never spans a line break', () => {
+    // `.` does not match a newline, but a negated class like `[^=]` does, so
+    // anchoring the content's last character on one opened a highlight across
+    // a line the tokenizer had never crossed before.
+    const d = doc(render('==a\n==b=='));
+    const marks = [...d.querySelectorAll('mark')].map(m => m.textContent);
+    assert.deepStrictEqual(marks, ['b'],
+      'the second line highlights on its own; the first does not reach across the break');
+    assert.strictEqual(doc(render('p ==foo\nbar== q')).querySelectorAll('mark').length, 0,
+      'and content that would have to span the break highlights nothing');
+  });
+
   test('a run inside code is still left alone', () => {
     const code = doc(render('```\n=== rundock.ai ===\n```\n')).querySelector('pre code');
     assert.strictEqual(code.textContent, '=== rundock.ai ===');
