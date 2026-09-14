@@ -212,7 +212,8 @@ describe('a delegation that reached nobody is recorded, not swallowed', () => {
     return [];
   }
 
-  // DT-1's effect is asserted where a delegate can actually be spawned:
+  // A successful delegation's effect is asserted where a delegate can actually
+  // be spawned:
   // test/integration/delegation-target.test.js drives a real handoff against
   // the stub runtime and reads the agent_switch. This harness cannot, because
   // there is no runtime for handleDelegation to start, so asserting the switch
@@ -221,7 +222,7 @@ describe('a delegation that reached nobody is recorded, not swallowed', () => {
   // not.
 
   test('a lead whose call names nobody is recorded as a miss', async () => {
-    // DT-3: the shape that used to pass in silence. Asserted on the event the
+    // The shape that used to pass in silence. Asserted on the event the
     // engine wrote, not only on what it printed.
     const out = withTeam('research-lead', (h, logged, dir) => {
       h.emit(...agentCall({ description: 'Looking into the pricing page.', prompt: 'have a look at this' }));
@@ -244,8 +245,28 @@ describe('a delegation that reached nobody is recorded, not swallowed', () => {
     assert.strictEqual(miss.agent, 'research-lead', 'naming who made the call');
   });
 
+  test('a turn that delegates once and misses once records the miss', async () => {
+    // PER CALL. One call matching a report says nothing about the others: each
+    // is its own handover. Recording only when the whole turn missed would
+    // have hidden every miss that shared a turn with a successful delegation,
+    // which is the likeliest place for one to hide.
+    const out = withTeam('research-lead', (h, logged, dir) => {
+      h.emit(...agentCall({ description: 'Handing to Sage to check the figures.', prompt: 'verify these' }));
+      h.emit(...agentCall({ description: 'Looking into the pricing page.', prompt: 'have a look' }));
+      h.emit(wire.messageStop());
+      return { dir, logged };
+    });
+
+    const events = await eventsWritten(out.dir);
+    const misses = events.filter((e) => (e.d || {}).reason === 'no_target_matched');
+    assert.strictEqual(misses.length, 1,
+      `exactly the one that named nobody: ${JSON.stringify(misses.map((m) => (m.d || {}).asked))}`);
+    assert.ok(String((misses[0].d || {}).asked || '').includes('Looking into the pricing page'),
+      'and it is the call that missed, not the one that found its target');
+  });
+
   test('an agent that leads nobody is not reported at all', () => {
-    // DT-3's scope. Sage has no reports, so her generic subagent is not a
+    // Scope. Sage has no reports, so her generic subagent is not a
     // failed handover and saying so would be noise.
     const out = withTeam('fact-checker', (h, logged) => {
       h.emit(...agentCall({ description: 'Checking a source.', prompt: 'go and read this page' }));
@@ -268,7 +289,7 @@ describe('a delegation that reached nobody is recorded, not swallowed', () => {
   });
 
   test('an explicit built-in target is not reported as a miss either', () => {
-    // DT-2: a deliberate choice, left alone.
+    // A deliberate choice, left alone.
     const out = withTeam('research-lead', (h, logged) => {
       h.emit(...agentCall({ subagent_type: 'general-purpose', description: 'Handing to Sage to fact-check.', prompt: 'check it' }));
       h.emit(wire.messageStop());
