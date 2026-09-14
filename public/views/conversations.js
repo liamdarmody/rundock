@@ -806,17 +806,15 @@ function openConversation(id, withAnchor) {
     renderConvoList();
   } else {
     const historyCount = c._historyCount || 0;
-    let replayLastAgentId = null;
+    // NO HANDOVER MARKERS ON REPLAY, by not having any to replay. Arrivals are
+    // drawn as they happen and are not recorded, so this loop reproduces the
+    // turns and nothing else, exactly as a reload does. The two used to differ:
+    // this one drew markers from stored records while a reload had none, so the
+    // same conversation read two ways depending on how you came back to it.
     for(let i=0; i<c.messages.length; i++) {
       const m = c.messages[i];
       if(m.role==='user') addUserMsg(m.content,false);
-      else if(m.role==='divider') {
-        const msgAgent = agents.find(a => a.id === m.agentId);
-        if (msgAgent) el.appendChild(buildDelegationDivider(msgAgent, m.isReturn));
-        replayLastAgentId = m.agentId;
-      }
       else if(m.role==='agent') {
-        replayLastAgentId = m.agentId || replayLastAgentId;
         addAgentMsg(m.content,m.agentId,false,m.timestamp || null);
       }
       if(m.isHistory) {

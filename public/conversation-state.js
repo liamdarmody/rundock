@@ -348,7 +348,14 @@
       // worse: it left the conversation marked delegated with the departed
       // specialist still showing as working, turning a phantom arrival into a
       // spinner that never stopped.
-      if (ctx.toAgentExists && ctx.fromAgentExists && !message.silent) {
+      // A RETURN DRAWS NOTHING. Somebody walking into the room is worth
+      // announcing; somebody who was already in it speaking again is not. The
+      // bubble beneath carries the avatar and the name, and since this release
+      // the departing agent says where the work is going in its own words, so a
+      // divider saying "Roo resumed" is the third telling of the same fact one
+      // line apart. Only a forward delegation changes who owns the work and who
+      // the person is addressing, which is the change worth marking.
+      if (ctx.toAgentExists && ctx.fromAgentExists && !message.silent && !isReturn) {
         effects.push({
           type: 'show-delegation-divider',
           toAgentId: message.toAgent,
