@@ -127,6 +127,7 @@ const NOT_CHEAP = {
   'test/unit/live-handoff-render.test.js': 'behaviour: boots a document and drives the delegation render path',
   'test/unit/replay-no-dividers.test.js': 'behaviour: boots a document and replays a conversation through the real renderer',
   'test/unit/engine-live-delivery.test.js': 'behaviour: drives a real stdout stream through the engine',
+  'test/unit/delegation-target-match.test.js': 'behaviour: builds a workspace and resolves a roster through the real matcher',
   'test/unit/standing-allows-client.test.js': 'behaviour: boots a document and drives the permission decision path',
   'test/unit/package-import-apply.test.js': 'behaviour: writes agent files and reads them back',
   'test/unit/profile-boxes.test.js': 'behaviour: boots a document and renders panels',

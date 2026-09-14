@@ -15,6 +15,7 @@ const { test, describe } = require('node:test');
 const assert = require('node:assert');
 const { EventEmitter } = require('node:events');
 const path = require('node:path');
+const fs = require('node:fs');
 
 const ROOT = path.join(__dirname, '..', '..');
 const engineLib = require(path.join(ROOT, 'lib', 'delegation', 'engine.js'));
@@ -156,3 +157,154 @@ describe('a turn that streamed nothing still reaches the socket', () => {
 // dep, so matching a direct report needs a real workspace on disk. That is the
 // integration harness's job, and the assertion lives in
 // test/integration/handoff-line.test.js where a real delegation already runs.
+
+describe('a delegation that reached nobody is recorded, not swallowed', () => {
+  // DRIVEN, not read. The engine resolves a target through discoverAgents, so
+  // the harness gets a real workspace on disk first and the interception then
+  // runs for real over a real stdout stream.
+  const { makeWorkspace, agentFile } = require(path.join(ROOT, 'test', 'helpers', 'workspace.js'));
+  const config = require(path.join(ROOT, 'lib', 'config.js'));
+
+  function team() {
+    return {
+      roo: agentFile({ name: 'roo', displayName: 'Roo', role: 'Orchestrator', description: 'routes', type: 'orchestrator', order: 0, body: 'You route.' }),
+      'research-lead': agentFile({ name: 'research-lead', displayName: 'Ren', role: 'Research Lead', description: 'researches', type: 'specialist', order: 1, reportsTo: 'roo', body: 'You research.' }),
+      'fact-checker': agentFile({ name: 'fact-checker', displayName: 'Sage', role: 'Fact Checker', description: 'verifies', type: 'specialist', order: 2, reportsTo: 'research-lead', body: 'You verify.' }),
+    };
+  }
+
+  // An Agent tool call as the runtime streams one.
+  const agentCall = (input) => ([
+    { type: 'stream_event', event: { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', name: 'Agent', id: 't1' } } },
+    { type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: JSON.stringify(input) } } },
+    { type: 'stream_event', event: { type: 'content_block_stop', index: 0 } },
+  ]);
+
+  function withTeam(agentId, fn) {
+    const dir = makeWorkspace({ agents: team(), claudeMd: '# Test\n' });
+    const before = config.getWorkspace();
+    config.setWorkspace(dir);
+    const logged = [];
+    const realLog = console.log;
+    console.log = (...a) => { logged.push(a.join(' ')); };
+    try {
+      const h = harness({ agentId, interception: true });
+      return fn(h, logged, dir);
+    } finally { console.log = realLog; config.setWorkspace(before); }
+  }
+
+  // The events the engine actually wrote, read back off disk. recordEvent
+  // appends to the workspace, so with a real workspace there is no need to
+  // inject a spy and pretend: the effect is a file, and this reads the file.
+  // Written asynchronously, so a short wait beats a race.
+  async function eventsWritten(dir) {
+    const stateDir = path.join(dir, '.rundock', 'state');
+    for (let i = 0; i < 40; i++) {
+      try {
+        const f = fs.readdirSync(stateDir).find((n) => n.startsWith('events-'));
+        if (f) {
+          const lines = fs.readFileSync(path.join(stateDir, f), 'utf-8').split('\n').filter(Boolean);
+          if (lines.length) return lines.map((l) => JSON.parse(l));
+        }
+      } catch (e) { /* not written yet */ }
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    return [];
+  }
+
+  // A successful delegation's effect is asserted where a delegate can actually
+  // be spawned:
+  // test/integration/delegation-target.test.js drives a real handoff against
+  // the stub runtime and reads the agent_switch. This harness cannot, because
+  // there is no runtime for handleDelegation to start, so asserting the switch
+  // here would only ever prove the spawn failed. What it proves instead is the
+  // half it can: which calls are treated as a missed delegation and which are
+  // not.
+
+  test('a lead whose call names nobody is recorded as a miss', async () => {
+    // The shape that used to pass in silence. Asserted on the event the
+    // engine wrote, not only on what it printed.
+    const out = withTeam('research-lead', (h, logged, dir) => {
+      h.emit(...agentCall({ description: 'Looking into the pricing page.', prompt: 'have a look at this' }));
+      h.emit(wire.messageStop());
+      return { logged, dir, sent: h.sent };
+    });
+
+    assert.ok(!out.sent.some((m) => m.subtype === 'agent_switch'),
+      'sanity: nothing was delegated, which is the case under test');
+
+    const events = await eventsWritten(out.dir);
+    const miss = events.find((e) => e.e === 'delegation_error' && (e.d || {}).reason === 'no_target_matched');
+    assert.ok(miss, `the miss is recorded where the other delegation errors are: ${JSON.stringify(events)}`);
+    assert.strictEqual(miss.agent, 'research-lead', 'naming who made the call');
+    // THE WHOLE PAYLOAD, not one key. Asserting a single field says nothing
+    // about what else the event grew: a check that a key is absent cannot fail
+    // while that key has never existed, and a check that one key is present
+    // passes while three more leak in beside it. Pinning the entire object is
+    // what makes this assertion able to fail.
+    assert.deepStrictEqual(miss.d, {
+      reason: 'no_target_matched',
+      asked: 'Looking into the pricing page.',
+    }, 'the record says which handover a person was told about and never got, and nothing more');
+  });
+
+  test('a turn that delegates once and misses once records the miss', async () => {
+    // PER CALL. One call matching a report says nothing about the others: each
+    // is its own handover. Recording only when the whole turn missed would
+    // have hidden every miss that shared a turn with a successful delegation,
+    // which is the likeliest place for one to hide.
+    const out = withTeam('research-lead', (h, logged, dir) => {
+      h.emit(...agentCall({ description: 'Handing to Sage to check the figures.', prompt: 'verify these' }));
+      h.emit(...agentCall({ description: 'Looking into the pricing page.', prompt: 'have a look' }));
+      h.emit(wire.messageStop());
+      return { dir, logged };
+    });
+
+    const events = await eventsWritten(out.dir);
+    const misses = events.filter((e) => (e.d || {}).reason === 'no_target_matched');
+    assert.strictEqual(misses.length, 1,
+      `exactly the one that named nobody: ${JSON.stringify(misses)}`);
+    assert.strictEqual(misses[0].d.asked, 'Looking into the pricing page.',
+      'and it is the call that missed, not the one that found its target');
+    const missLines = out.logged.filter((l) => l.includes('no target the roster matched'));
+    assert.strictEqual(missLines.length, 1, 'and it is reported once, not once per call in the turn');
+    assert.ok(!missLines[0].includes('check the figures'),
+      'the successful handover is nobody\'s miss');
+  });
+
+  test('an agent that leads nobody is not reported at all', () => {
+    // Scope. Sage has no reports, so her generic subagent is not a
+    // failed handover and saying so would be noise.
+    const out = withTeam('fact-checker', (h, logged) => {
+      h.emit(...agentCall({ description: 'Checking a source.', prompt: 'go and read this page' }));
+      h.emit(wire.messageStop());
+      return { logged };
+    });
+    assert.ok(!out.logged.some((l) => /no target the roster matched/.test(l)),
+      'an agent with nobody to delegate to cannot have missed a delegation');
+  });
+
+  test('and nothing is recorded for it either', async () => {
+    const out = withTeam('fact-checker', (h, logged, dir) => {
+      h.emit(...agentCall({ description: 'Checking a source.', prompt: 'go and read this page' }));
+      h.emit(wire.messageStop());
+      return { dir };
+    });
+    const events = await eventsWritten(out.dir);
+    assert.deepStrictEqual(events.filter((e) => (e.d || {}).reason === 'no_target_matched'), [],
+      'the record stays worth reading by only holding real misses');
+  });
+
+  test('an explicit built-in target is not reported as a miss either', () => {
+    // A deliberate choice, left alone.
+    const out = withTeam('research-lead', (h, logged) => {
+      h.emit(...agentCall({ subagent_type: 'general-purpose', description: 'Handing to Sage to fact-check.', prompt: 'check it' }));
+      h.emit(wire.messageStop());
+      return { logged };
+    });
+    assert.ok(!out.logged.some((l) => /no target the roster matched/.test(l)),
+      'the caller asked for a general-purpose subagent and got one');
+    assert.ok(!out.logged.some((l) => /intercepting Agent tool call/.test(l)),
+      'and naming a teammate in the sentence did not hijack it');
+  });
+});
