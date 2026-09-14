@@ -159,37 +159,92 @@ describe('a turn that streamed nothing still reaches the socket', () => {
 // test/integration/handoff-line.test.js where a real delegation already runs.
 
 describe('a delegation that reached nobody is recorded, not swallowed', () => {
-  // The half that matters more than the matcher. Ren believed she had handed
-  // the work on and said so; nothing anywhere contradicted her, and the miss
-  // surfaced to a person hours later looking like a permissions fault. A call
-  // that meant to delegate and reached nobody now leaves a trace.
-  const ENGINE = fs.readFileSync(path.join(ROOT, 'lib', 'delegation', 'engine.js'), 'utf-8');
+  // DRIVEN, not read. The engine resolves a target through discoverAgents, so
+  // the harness gets a real workspace on disk first and the interception then
+  // runs for real over a real stdout stream.
+  const { makeWorkspace, agentFile } = require(path.join(ROOT, 'test', 'helpers', 'workspace.js'));
+  const config = require(path.join(ROOT, 'lib', 'config.js'));
 
-  test('the miss is reported and counted where the other delegation errors are', () => {
-    const at = ENGINE.indexOf('Agent call named no target the roster matched');
-    assert.ok(at > -1, 'the engine says out loud that no delegation happened');
-    const near = ENGINE.slice(at, at + 400);
-    assert.match(near, /recordEvent\('delegation_error'/,
-      'and records it as a delegation error, so it is countable rather than only greppable');
-    assert.match(near, /no_target_matched/, 'under a reason that says which kind it was');
+  function team() {
+    return {
+      roo: agentFile({ name: 'roo', displayName: 'Roo', role: 'Orchestrator', description: 'routes', type: 'orchestrator', order: 0, body: 'You route.' }),
+      'research-lead': agentFile({ name: 'research-lead', displayName: 'Ren', role: 'Research Lead', description: 'researches', type: 'specialist', order: 1, reportsTo: 'roo', body: 'You research.' }),
+      'fact-checker': agentFile({ name: 'fact-checker', displayName: 'Sage', role: 'Fact Checker', description: 'verifies', type: 'specialist', order: 2, reportsTo: 'research-lead', body: 'You verify.' }),
+    };
+  }
+
+  // An Agent tool call as the runtime streams one.
+  const agentCall = (input) => ([
+    { type: 'stream_event', event: { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', name: 'Agent', id: 't1' } } },
+    { type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: JSON.stringify(input) } } },
+    { type: 'stream_event', event: { type: 'content_block_stop', index: 0 } },
+  ]);
+
+  function withTeam(agentId, fn) {
+    const dir = makeWorkspace({ agents: team(), claudeMd: '# Test\n' });
+    const before = config.getWorkspace();
+    config.setWorkspace(dir);
+    const logged = [];
+    const realLog = console.log;
+    console.log = (...a) => { logged.push(a.join(' ')); };
+    try {
+      const h = harness({ agentId, interception: true });
+      return fn(h, logged);
+    } finally { console.log = realLog; config.setWorkspace(before); }
+  }
+
+  test('a lead naming its own report in the handoff line really delegates', () => {
+    // DT-1 driven end to end: the reported shape, with the name only in the
+    // sentence the person reads.
+    const out = withTeam('research-lead', (h, logged) => {
+      h.emit(...agentCall({
+        description: 'Handing to Sage to fact-check the Rundock.ai research.',
+        prompt: 'Verify each claim against the source pages and say which hold up.',
+      }));
+      h.emit(wire.messageStop());
+      return { logged, sent: h.sent };
+    });
+    assert.ok(out.logged.some((l) => /intercepting Agent tool call targeting: fact-checker/.test(l)),
+      `the call was intercepted as a delegation to Sage: ${JSON.stringify(out.logged.slice(-3))}`);
+    assert.ok(!out.logged.some((l) => /no target the roster matched/.test(l)),
+      'and is not reported as a miss, because it is not one');
   });
 
-  test('a deliberate built-in target is not reported as a miss', () => {
-    // An explicit subagent_type is a choice, not a failed handover. Reporting
-    // it would train a person to ignore the line that matters.
-    const at = ENGINE.indexOf('const unnamed = agentCalls.filter');
-    assert.ok(at > -1, 'the miss is narrowed to calls that named no subagent_type');
-    assert.match(ENGINE.slice(at, at + 200), /!input\.subagent_type/,
-      'only a call with no explicit target counts as ambiguous');
+  test('a lead whose call names nobody is reported as a miss', () => {
+    // DT-3: the shape that used to pass in silence.
+    const out = withTeam('research-lead', (h, logged) => {
+      h.emit(...agentCall({ description: 'Looking into the pricing page.', prompt: 'have a look at this' }));
+      h.emit(wire.messageStop());
+      return { logged };
+    });
+    const miss = out.logged.find((l) => /no target the roster matched/.test(l));
+    assert.ok(miss, `the miss is said out loud: ${JSON.stringify(out.logged.slice(-3))}`);
+    assert.match(miss, /Looking into the pricing page/,
+      'and names what the call asked for, so a person can tell which handover never happened');
   });
 
-  test('the turn is not killed for it', () => {
-    // Killing would take a legitimate generic subagent with it, which is worse
-    // than the fault being fixed. The off-roster guard may kill because its
-    // case is unambiguous; this one is not.
-    const at = ENGINE.indexOf('Agent call named no target the roster matched');
-    const block = ENGINE.slice(at - 200, at + 500);
-    assert.ok(!/killProcessTree/.test(block),
-      'a miss is recorded and the turn is left to finish');
+  test('an agent that leads nobody is not reported at all', () => {
+    // DT-3's scope. Sage has no reports, so her generic subagent is not a
+    // failed handover and saying so would be noise.
+    const out = withTeam('fact-checker', (h, logged) => {
+      h.emit(...agentCall({ description: 'Checking a source.', prompt: 'go and read this page' }));
+      h.emit(wire.messageStop());
+      return { logged };
+    });
+    assert.ok(!out.logged.some((l) => /no target the roster matched/.test(l)),
+      'an agent with nobody to delegate to cannot have missed a delegation');
+  });
+
+  test('an explicit built-in target is not reported as a miss either', () => {
+    // DT-2: a deliberate choice, left alone.
+    const out = withTeam('research-lead', (h, logged) => {
+      h.emit(...agentCall({ subagent_type: 'general-purpose', description: 'Handing to Sage to fact-check.', prompt: 'check it' }));
+      h.emit(wire.messageStop());
+      return { logged };
+    });
+    assert.ok(!out.logged.some((l) => /no target the roster matched/.test(l)),
+      'the caller asked for a general-purpose subagent and got one');
+    assert.ok(!out.logged.some((l) => /intercepting Agent tool call/.test(l)),
+      'and naming a teammate in the sentence did not hijack it');
   });
 });
