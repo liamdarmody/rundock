@@ -223,6 +223,37 @@
     return { state: next, effects: [{ type: 'finish-processing', attribution: attribution(message) }] };
   }
 
+  function reduceAgentTurn(state, message, ctx) {
+    // MARKERS STRIPPED, as every other path that renders agent text does. A
+    // blocked turn can carry a handback marker like any other, and showing the
+    // raw comment to the person is the leak this module strips everywhere else.
+    const raw = typeof message.text === 'string' ? message.text : '';
+    const text = (raw ? RundockMarkers.stripMarkers(raw) : '').trim();
+    // Nothing to say draws nothing: an empty bubble is worse than none, the
+    // same rule the handoff line follows.
+    if (!text) return { state, effects: [] };
+    // Already on screen if it streamed. The server only sends this when it did
+    // not, and this is the second half of that pair so neither side alone can
+    // produce a duplicate.
+    if (state.streamingRawText) return { state, effects: [] };
+    // NOT GATED ON isActive. The executor persists the turn into the
+    // conversation's own messages before it touches the document, and it
+    // already declines to draw into a conversation that is not on screen.
+    // Gating the effect instead threw the turn away entirely for a background
+    // conversation: it would be missing from the model as well as the screen,
+    // and a later switch to that conversation would show a gap. This matches
+    // what reduceAgentSwitch does with its own promote.
+    return {
+      state,
+      effects: [{
+        type: 'promote-handoff-message',
+        text,
+        agentId: message._agent || state.activeAgentId || ctx.convoAgentId || null,
+        attribution: attribution(message),
+      }],
+    };
+  }
+
   function reduceAgentSwitch(state, message, ctx) {
     const next = { ...state };
     const effects = [];
@@ -250,7 +281,20 @@
       handoffText = RundockMarkers.stripDelegateTail(state.streamingRawText).trim();
       handoffText = RundockMarkers.stripMarkers(handoffText).trim();
     }
-    if (!handoffText && typeof message.handoffLine === 'string') {
+    // PROVENANCE. The line is honoured only off the switch the server's own
+    // interception sends, and only when that switch names who is leaving. A
+    // field of this name arriving on anything else is not a handoff line the
+    // server computed, and must not reach a render path.
+    if (!handoffText
+      && typeof message.handoffLine === 'string'
+      && message.subtype === 'agent_switch'
+      // EXCLUSIVE TO THE INTERCEPTION. Only the forward-delegation send carries
+      // a target process id alongside a departing agent; the restoration
+      // switches name no new process. Checking the subtype alone let any switch
+      // carry a line, which is not the same as the server having computed one.
+      && typeof message._processId === 'string' && message._processId
+      && typeof message.fromAgent === 'string' && message.fromAgent
+      && typeof message.toAgent === 'string' && message.toAgent) {
       // NOTHING WAS STREAMED, SO THERE IS NOTHING TO PROMOTE.
       //
       // This branch is the whole reason a delegating agent could hand over in
@@ -353,6 +397,13 @@
       case 'cancelled': return reduceCancelled(state, message);
       case 'done': return reduceDone(state, message);
       case 'agent_switch': return reduceAgentSwitch(state, message, ctx);
+      // A turn the server is sending because nothing else will. The branches
+      // that suppress the end-of-message envelope kill the process before any
+      // result arrives, and a result is the only thing that renders text which
+      // did not stream. Reuses the promote effect rather than inventing a
+      // second render: the job is identical, an agent's words appearing as its
+      // own turn.
+      case 'agent_turn': return reduceAgentTurn(state, message, ctx);
       case 'keepalive': return reduceKeepalive(state, message, ctx);
       default: return none(state);
     }

@@ -385,6 +385,18 @@ function handle(d) {
         convoState[convoId] = r.state;
         executeEffects(convoId, r.effects);
       }
+      // A turn the server had to send itself, because the branch that produced
+      // it kills the process before any result could carry it.
+      if (d.subtype === 'agent_turn' && convoId) {
+        const convo = conversations.find(c => c.id === convoId);
+        const r = RundockConversationState.reduce(getConvoState(convoId), d, {
+          isActive: activeConversation?.id === convoId,
+          convoAgentId: convo?.agentId,
+        });
+        convoState[convoId] = r.state;
+        executeEffects(convoId, r.effects);
+        break;
+      }
       // Agent switch: delegation handoff or return
       if(d.subtype==='agent_switch' && convoId) {
         const toAgent = agents.find(a => a.id === d.toAgent);

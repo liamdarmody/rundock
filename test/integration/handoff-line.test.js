@@ -53,6 +53,18 @@ describe('a lead that says nothing still has its handoff shown', () => {
     await h.waitUntil(() => transcriptFor(convoId).some(t => t.agent === 'chief-of-staff' && t.type !== 'routing'),
       'the delegating turn was recorded as visible');
 
+    // ON THE WIRE, not only in the file. The transcript being right is what
+    // this feature looked like when it was broken: the line was recorded and
+    // sent to nobody, so it appeared only after a reload. The switch is the
+    // one thing that carries it to a client while the handoff happens.
+    const sw = client.messages.find(m => m.type === 'system' && m.subtype === 'agent_switch'
+      && m._conversationId === convoId && m.toAgent === 'content-lead');
+    assert.ok(sw, 'the delegation announced itself to the client');
+    assert.strictEqual(sw.handoffLine, 'Handing to Penn to draft the supplier brief before it goes out.',
+      'and carried the line, because nothing else will: this branch suppresses the envelope and kills the process');
+    assert.ok(!JSON.stringify(sw).includes('PRIVATE-BRIEF'),
+      'while the brief stays off the wire the person can see');
+
     const turn = transcriptFor(convoId).find(t => t.agent === 'chief-of-staff' && t.type !== 'routing');
     assert.ok(turn, 'the delegating agent has a visible turn rather than an invisible routing entry');
     assert.match(turn.text, /Handing to Penn to draft the supplier brief/,
@@ -208,6 +220,59 @@ describe('an agent with nobody reporting to it is untouched by any of this', () 
     // And nothing was handed anywhere.
     assert.deepStrictEqual(transcriptFor(convoId).filter(t => t.agent === 'content-lead'), [],
       'no delegation happened, so no other agent has a turn in this conversation');
+    h.reapConvo(convoId);
+  });
+});
+
+describe('a delegation blocked as off-roster does not draw the turn twice', () => {
+  // THE SECOND SUPPRESSING BRANCH, driven end to end. Ana reports to Penn, not
+  // to Cos, so Cos naming her is blocked: that branch kills the process and
+  // continues, so no result arrives for the turn.
+  //
+  // WHAT THIS CAN AND CANNOT REACH. The runtime streams assistant text as
+  // deltas, and the stub does the same, so the agent's words are already on
+  // screen by the time the block fires and the server correctly sends nothing
+  // more. That is the case this asserts, and it is the one that matters in
+  // practice: it is the duplicate-turn guard.
+  //
+  // The case the fix exists for, text arriving with no deltas at all, cannot be
+  // produced through this stub: every text block it emits comes as deltas. It
+  // is covered where it can be, on the reducer and the document, in
+  // test/unit/live-handoff-render.test.js. Saying so here is better than a test
+  // that looks like it covers it and does not.
+  test('words the agent already streamed are not sent again', async () => {
+    const convoId = h.freshConvoId('off-roster');
+    h.writeScenario([
+      { match: { agent: 'chief-of-staff', promptIncludes: 'off roster please' },
+        turn: [
+          { text: 'Ana is the right person for this, let me pull her in.' },
+          { agentTool: { subagent_type: 'content-analyst', description: 'Over to Ana.', prompt: 'brief' } },
+        ] },
+      { match: { agent: 'chief-of-staff', promptIncludes: 'delegation-blocked' },
+        turn: [{ text: 'Understood, I will route through Penn instead.' }] },
+    ]);
+
+    client.send({ type: 'save_conversation', conversation: { id: convoId, agentId: 'chief-of-staff', title: 'Off roster' } });
+    const since = client.messages.length;
+    client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: 'off roster please' });
+
+    await client.waitFor(m => m.type === 'system' && m.subtype === 'info'
+      && m._conversationId === convoId && /Blocked a handoff/.test(m.content || ''),
+    { since, label: 'the block was announced' });
+
+    const turns = client.messages.slice(since).filter(m => m.type === 'system'
+      && m.subtype === 'agent_turn' && m._conversationId === convoId);
+    assert.deepStrictEqual(turns, [],
+      'the words streamed, so they are already drawn; sending them again would show the turn twice');
+
+    // And the words did reach the client, by the route that was always there.
+    // Reassembled from the deltas, because that is how it arrives: no single
+    // message holds the sentence, which is the whole reason it is already drawn.
+    const streamed = client.messages.slice(since)
+      .filter(m => m.type === 'stream_event' && m.event?.delta?.type === 'text_delta')
+      .map(m => m.event.delta.text).join('');
+    assert.match(streamed, /Ana is the right person for this/,
+      'sanity: the turn reached the client by streaming, or this proves nothing');
     h.reapConvo(convoId);
   });
 });

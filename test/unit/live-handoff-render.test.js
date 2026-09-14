@@ -281,170 +281,191 @@ describe('a turn with nothing to say draws nothing', () => {
   });
 });
 
-describe('every turn recorded as a plain agent message also reaches a live client', () => {
-  // THE CLASS, NOT THE INSTANCE. The reported defect was one append site that
-  // wrote a turn nobody was told about. Checking that one site would leave the
-  // next one free to do the same, which is how this release repeatedly fixed an
-  // instance and shipped the class.
-  //
-  // Read BY BRANCH rather than by a window of nearby lines. A fixed window
-  // above each site reaches into the sibling branch, and the first version of
-  // this test was exempted by a neighbouring `if (ownProse)` that had nothing
-  // to do with the site it excused: deleting the real fix left it green.
-  // EVERY FILE THAT CAN WRITE A TURN, not the one the defect was reported in.
-  // Scoping this to engine.js would let the next module repeat it untouched,
-  // which is the same instance-shaped thinking the rule exists to stop.
-  const CALL_RE = /appendTranscript\(\s*[A-Za-z_$][\w$]*\s*,\s*'agent'/;
-  // SITES THAT SHARE THE DEFECT AND ARE NOT FIXED HERE. Each writes a turn
-  // guarded only by responseText being non-empty, so a turn whose text arrived
-  // without deltas is recorded and never sent. They belong to the
-  // non-intercepted handback paths, which this card does not touch, and are
-  // listed so the gap is visible rather than quietly exempted. Removing an
-  // entry after fixing its site is how this list shrinks; adding one needs a
-  // reason as good as this paragraph.
-  // NO EXCEPTIONS, because there is nothing to except.
-  //
-  // Four rounds of this card argued site by site about which appends deliver
-  // their turn, and kept a list of the ones that could not be settled by
-  // reading. Driving the engine settled it in one run, in
-  // engine-live-delivery.test.js: every runtime line is forwarded to the socket
-  // as it arrives, so a turn is delivered by DEFAULT and no append site has to
-  // arrange it. The only way a turn goes missing is a branch that suppresses
-  // the envelope, and there is exactly one, the Agent-tool interception, which
-  // suppresses it and kills the process so the delegate can take over.
-  //
-  // So the rule below is not "every append must deliver". It is "every branch
-  // that suppresses the envelope must deliver what it suppressed".
-  //
-  // It has TWO members, not one, which an earlier version of this comment got
-  // wrong. The second is the off-roster impersonation guard: it also ends in
-  // `continue`, so an agent that tried to delegate outside its direct reports
-  // has that turn's own words recorded and not sent. It is real, it is rare
-  // (it needs a blocked delegation), and it needs a carrier that branch does
-  // not have, since nothing hands over there. Recorded rather than rushed.
-  const KNOWN_DELTA_GAPS = new Set([
-    "lib/delegation/engine.js::if (entry.responseText) {",
-  ]);
-  function sourceFiles(dir, acc = []) {
-    for (const name of fs.readdirSync(dir)) {
-      if (name === 'node_modules' || name.startsWith('.')) continue;
-      const full = path.join(dir, name);
-      const st = fs.statSync(full);
-      if (st.isDirectory()) sourceFiles(full, acc);
-      else if (name.endsWith('.js')) acc.push(full);
-    }
-    return acc;
-  }
-  const FILES = [path.join(ROOT, 'server.js'), ...sourceFiles(path.join(ROOT, 'lib'))];
+describe('a turn blocked mid-delegation is still shown to the person', () => {
+  const CTX = { isActive: true, convoAgentId: 'default' };
 
-  // The branch a line sits in: walk back to the nearest `if`/`else if` at a
-  // smaller indentation, then forward to where that indentation closes.
-  function enclosingBranch(lines, at) {
-    const indentOf = (l) => l.length - l.trimStart().length;
-    const mine = indentOf(lines[at]);
-    let head = -1;
-    for (let i = at - 1; i >= 0; i--) {
-      const l = lines[i];
-      if (!l.trim()) continue;
-      if (indentOf(l) < mine && /\bif\s*\(|\}\s*else\b/.test(l)) { head = i; break; }
-      if (indentOf(l) < mine) break;
-    }
-    // No enclosing conditional at all, which is the shape of the runtime error
-    // paths: a bare write inside a try, with the send beside it. The body is
-    // then the immediate vicinity, or the send two lines down falls outside it
-    // and the site reads as unexplained when it is not.
-    if (head === -1) return { guard: '', body: lines.slice(at, at + 8).join('\n') };
-    const headIndent = indentOf(lines[head]);
-    let end = lines.length;
-    for (let i = at + 1; i < lines.length; i++) {
-      const l = lines[i];
-      if (!l.trim()) continue;
-      if (indentOf(l) <= headIndent) { end = i; break; }
-    }
-    return { guard: lines[head], body: lines.slice(head, end).join('\n') };
+  function runAgentTurn(msg, state) {
+    const r = reduce(state, msg, CTX);
+    for (const ef of r.effects) if (ef.type === 'promote-handoff-message') promote('c1', ef);
+    return r;
   }
 
-  test('each site either requires streamed text or hands the text to the client', () => {
-    const sites = [];
-    let scanned = 0;
-    for (const file of FILES) {
-      const src = fs.readFileSync(file, 'utf-8');
-      if (!CALL_RE.test(src)) continue;
-      scanned++;
-      const lines = src.split('\n');
-      lines.forEach((line, i) => {
-        const m = line.match(CALL_RE);
-        if (!m) return;
-        // A typed entry (for example 'routing') is bookkeeping, not a turn, and
-        // is deliberately invisible. Looked for AFTER the role argument,
-        // because `'agent'` is itself a quoted word.
-        if (/'[a-z]+'/.test(line.slice(line.indexOf(m[0]) + m[0].length))) return;
-        // The definition itself, not a call of it.
-        if (/function appendTranscript/.test(line)) return;
-        sites.push({
-          file: path.relative(ROOT, file), line: i + 1, text: line.trim(),
-          before: lines.slice(Math.max(0, i - 6), i).join('\n'),
-          // The nearest callback or function header above the site, so the
-          // delivery route that belongs to the whole callback is visible.
-          enclosing: lines.slice(Math.max(0, i - 30), i).reverse()
-            .find((l) => /onResult:\s*\(|onTurnDone:\s*\(|^function |^async function /.test(l)) || '',
-          ...enclosingBranch(lines, i),
-        });
-      });
-    }
-    assert.ok(scanned >= 1, `sanity: at least one source file writes agent turns, scanned ${scanned}`);
-    assert.ok(sites.length >= 5,
-      `sanity: the engine was read and has plain agent append sites, found ${sites.length}`);
+  test('the blocked agent\'s own words appear as its turn', () => {
+    freshDom();
+    global.conversations = [{ id: 'c1', agentId: 'default', messages: [] }];
+    global.activeConversation = { id: 'c1', agentId: 'default' };
+    global.getConvoState = () => ({ currentStreamingMsg: null });
 
-    // THE THREE WAYS A RECORDED TURN LEGITIMATELY REACHES A PERSON. Anything
-    // else is a turn written to a file that nobody is told about.
-    const unexplained = sites.filter((s) => {
-      // One: it only runs when the agent produced text, which means the
-      // streaming path has already drawn it. Read from the lines above as well
-      // as the guard, because indentation in this codebase is not uniform and
-      // a walker keyed on it alone mistook a sibling `} else {` for the guard.
-      // READ FROM THE GUARD ALONE where there is one. Including the lines above
-      // re-exempted the reported site via the sibling branch's `if (ownProse)`
-      // and left this test green with the fix deleted, which is the third way
-      // this same check has been made toothless. Measured each time by deleting
-      // the fix; this is the shape that reddens.
-      // A guard on responseText only explains the site when the code also
-      // knows the text STREAMED. responseText is filled from deltas when they
-      // arrive and from the assistant blocks when they do not, so a site that
-      // reads it without consulting sawTextDelta is claiming the client saw
-      // something it may never have been sent. The intercepted path consults
-      // it; the sites listed below do not, and are recorded rather than
-      // excused, because hiding them is how a class stays open.
-      // THE ASSIGNMENT, INSIDE THE BRANCH. Reading the lines above lets a bare
-      // declaration (`let liveHandoffText = null`, `const streamedToClient =
-      // ...`) stand in for actually sending anything, and both of those sit
-      // above every branch here. Each version of this check that looked above
-      // the branch stayed green while a fix was deleted.
-      if (/liveHandoffText\s*=\s*(?!null)\w/.test(s.body)) return false;
-      // Only a branch that suppresses the envelope owes a delivery. Everything
-      // else is carried by the forwarded stream, measured in
-      // engine-live-delivery.test.js rather than argued from the source.
-      if (!/continue;/.test(s.body) || !/suppress/.test(s.body)) return false;
-      if (KNOWN_DELTA_GAPS.has(`${s.file}::${s.guard.trim()}`)) return false;
-      // Three: it pushes the same turn down the socket beside the write, which
-      // is how the runtime error paths do it.
-      if (/safeSend\(/.test(s.body)) return false;
-      return true;
-    });
-    assert.deepStrictEqual(unexplained.map((s) => `${s.file}:${s.line}`), [],
-      'a turn written to the transcript with nothing sending it live is invisible until reload: '
-      + JSON.stringify(unexplained.map((s) => ({ at: `${s.file}:${s.line}`, guard: s.guard.trim() })), null, 1));
+    runAgentTurn({
+      type: 'system', subtype: 'agent_turn', _conversationId: 'c1', _processId: 'p1',
+      _agent: 'default', text: 'I will ask Ren to pick this up instead.',
+    }, { ...createState() });
+
+    const turns = [...document.getElementById('messages').children]
+      .filter((el) => el.className.includes('msg-agent'))
+      .map((el) => (el.textContent || '').replace(/\s+/g, ' ').trim());
+    assert.strictEqual(turns.length, 1, 'exactly one turn on screen');
+    assert.match(turns[0], /I will ask Ren to pick this up instead\./);
   });
 
-  test('the list of known gaps cannot hide the site this card fixes', () => {
-    // A recorded exemption is a loaded gun pointed at the next reader: it is
-    // only honest while it cannot be widened to cover the thing under test.
-    // The intercepted handoff site must not be in it, now or later.
-    const engine = fs.readFileSync(path.join(ROOT, 'lib', 'delegation', 'engine.js'), 'utf-8').split('\n');
-    const fixed = engine.findIndex((l) => /liveHandoffText\s*=\s*handoffLine/.test(l));
-    assert.ok(fixed > -1, 'sanity: the fix is still in the engine');
-    // The guard the handoff branch sits under may never appear in the list.
-    assert.ok(![...KNOWN_DELTA_GAPS].some((k) => /handoffLine/.test(k)),
-      'the branch this card fixes may never be excused by the gap list');
+  test('a turn that already streamed is not drawn again', () => {
+    freshDom();
+    global.conversations = [{ id: 'c1', agentId: 'default', messages: [] }];
+    global.activeConversation = { id: 'c1', agentId: 'default' };
+    global.getConvoState = () => ({ currentStreamingMsg: null });
+
+    runAgentTurn({
+      type: 'system', subtype: 'agent_turn', _conversationId: 'c1', _processId: 'p1',
+      _agent: 'default', text: 'Already on screen.',
+    }, { ...createState(), streamingRawText: 'Already on screen.' });
+
+    const turns = [...document.getElementById('messages').children]
+      .filter((el) => el.className.includes('msg-agent'));
+    assert.deepStrictEqual(turns.map((el) => el.textContent), [],
+      'streamed text is already drawn, and drawing it again is the duplicate this guards');
+  });
+});
+
+describe('the blocked turn reads the same live and after a reload', () => {
+  // ST-7. The defect this whole area keeps producing is a turn that is right in
+  // one rendering and wrong or absent in the other, so each claim is made twice
+  // and the two are compared rather than each being checked alone.
+  const CTX = { isActive: true, convoAgentId: 'default' };
+
+  test('the same words, whichever way the turn arrived', () => {
+    const words = 'Ana is the right person, let me pull her in.';
+
+    freshDom();
+    global.conversations = [{ id: 'c1', agentId: 'default', messages: [] }];
+    global.activeConversation = { id: 'c1', agentId: 'default' };
+    global.getConvoState = () => ({ currentStreamingMsg: null });
+    const r = reduce({ ...createState() }, {
+      type: 'system', subtype: 'agent_turn', _conversationId: 'c1', _processId: 'p1',
+      _agent: 'default', text: words,
+    }, CTX);
+    for (const ef of r.effects) if (ef.type === 'promote-handoff-message') promote('c1', ef);
+    const live = [...document.getElementById('messages').children]
+      .filter((el) => el.className.includes('msg-agent'))
+      .map((el) => (el.textContent || '').replace(/\s+/g, ' ').trim());
+
+    freshDom();
+    addAgentMsg(words, 'default', false);
+    const replayed = [...document.getElementById('messages').children]
+      .filter((el) => el.className.includes('msg-agent'))
+      .map((el) => (el.textContent || '').replace(/\s+/g, ' ').trim());
+
+    assert.deepStrictEqual(live, replayed,
+      'a blocked turn reads identically whether it arrived live or was replayed');
+    assert.strictEqual(live.length, 1, 'and it is one turn, not none and not two');
+  });
+
+  test('a marker in a blocked turn is not shown to the person', () => {
+    freshDom();
+    global.conversations = [{ id: 'c1', agentId: 'default', messages: [] }];
+    global.activeConversation = { id: 'c1', agentId: 'default' };
+    global.getConvoState = () => ({ currentStreamingMsg: null });
+    const r = reduce({ ...createState() }, {
+      type: 'system', subtype: 'agent_turn', _conversationId: 'c1', _processId: 'p1',
+      _agent: 'default', text: 'I will route through Penn. <!-- RUNDOCK:RETURN -->',
+    }, CTX);
+    for (const ef of r.effects) if (ef.type === 'promote-handoff-message') promote('c1', ef);
+    const shown = [...document.getElementById('messages').children]
+      .filter((el) => el.className.includes('msg-agent'))
+      .map((el) => (el.textContent || '').replace(/\s+/g, ' ').trim());
+    assert.strictEqual(shown.length, 1);
+    assert.doesNotMatch(shown[0], /RUNDOCK:/,
+      'a handback marker is plumbing, and every other render path strips it');
+    assert.match(shown[0], /I will route through Penn\./);
+  });
+
+  test('a line arriving on anything but the interception switch is ignored', () => {
+    // The provenance half, on the effects the reducer will act on. A restore
+    // switch names no new process, so a line riding one is not something the
+    // interception computed.
+    const notIntercepted = reduce({ ...createState() }, {
+      type: 'system', subtype: 'agent_switch', _conversationId: 'c1',
+      fromAgent: 'vox', toAgent: 'default', handoffLine: 'SPOOFED',
+    }, { isActive: true, convoAgentId: 'default', toAgentExists: true, toAgentType: 'orchestrator', fromAgentExists: true });
+    const promoted = notIntercepted.effects.filter((e) => e.type === 'promote-handoff-message');
+    assert.deepStrictEqual(promoted, [],
+      'no process id means no forward delegation, so there is no computed line to honour');
+  });
+});
+
+describe('every branch that suppresses the envelope delivers what it suppressed', () => {
+  // THE RULE, KEYED ON THE SUPPRESSION ITSELF.
+  //
+  // Measured in engine-live-delivery.test.js: the engine forwards every runtime
+  // line as it arrives, so a turn is delivered by default. What makes one
+  // invisible is a branch that reaches `continue` in the stdout handler, which
+  // skips the forward at its foot and (in both cases) kills the process, so no
+  // result ever arrives. A forwarded `assistant` line does not save it: the
+  // reducer produces no effects for one.
+  //
+  // Earlier versions of this check keyed on the append sites and on the word
+  // "suppress" in a comment. The first found the innermost `if` rather than the
+  // block that continues; the second was satisfied by the comment that the fix
+  // itself carried, so deleting the fix deleted the evidence. Both stayed green
+  // with a delivery removed. This keys on the `continue` statements, which are
+  // the suppression, and there is nothing else for them to be.
+  const ENGINE = fs.readFileSync(path.join(ROOT, 'lib', 'delegation', 'engine.js'), 'utf-8');
+
+  function suppressingBlocks() {
+    const lines = ENGINE.split('\n');
+    const indentOf = (l) => l.length - l.trimStart().length;
+    const blocks = [];
+    lines.forEach((line, i) => {
+      // A TRAILING COMMENT IS STILL A CONTINUE. Requiring end-of-line missed
+      // the interception's own `continue; // suppress ...`, so the rule was
+      // only ever judging one of the two branches, and deleting the handoff
+      // delivery left it green. Found by review, not by the mutation check,
+      // because the mutation check was asking the same half-blind question.
+      if (!/^\s*continue;(\s*\/\/.*)?$/.test(line)) return;
+      // The block this continue ends: walk back to the nearest `if` at a
+      // smaller indent, and take everything from there to here.
+      const mine = indentOf(line);
+      let head = -1;
+      for (let j = i - 1; j >= 0; j--) {
+        if (!lines[j].trim()) continue;
+        if (indentOf(lines[j]) < mine && /\bif\s*\(/.test(lines[j])) { head = j; break; }
+      }
+      if (head === -1) return;
+      blocks.push({ line: i + 1, guard: lines[head].trim(), body: lines.slice(head, i + 1).join('\n') });
+    });
+    return blocks;
+  }
+
+  test('each one sends the turn it kept off the wire', () => {
+    const blocks = suppressingBlocks();
+    // FLOORED AT TWO, because two is what there are and a walk that finds one
+    // is the failure this rule has already had once.
+    assert.ok(blocks.length >= 2,
+      `sanity: the interception still has branches that continue, found ${blocks.length}`);
+
+    const silent = blocks.filter((b) => {
+      // Only blocks that also end the process can strand a turn: without the
+      // kill, a result still follows and carries it.
+      if (!/killProcessTree/.test(b.body)) return false;
+      // The handoff line rides the switch handleDelegation sends.
+      if (/liveHandoffText\s*=\s*(?!null)\w/.test(b.body)) return false;
+      // Or the turn is sent in its own right before the process dies.
+      if (/subtype:\s*'agent_turn'/.test(b.body)) return false;
+      return true;
+    });
+
+    assert.deepStrictEqual(silent.map((b) => `${b.line}: ${b.guard}`), [],
+      'a branch that stops the envelope and kills the process has to send the turn itself, '
+      + 'or the words are in the transcript and on nobody\'s screen until a reload');
+
+    // WHAT THIS RULE DOES NOT CATCH, said plainly rather than left to be
+    // discovered. The interception's block holds two deliveries, one for the
+    // handoff line and one for prose that never streamed, so removing either
+    // leaves the other satisfying the check here. Measured: deleting the
+    // handoff assignment keeps this green. That delivery is held instead by
+    // test/integration/handoff-line.test.js, which drives a real delegation and
+    // asserts the line is on the switch, and which does redden when it goes.
+    // Two tests, one per delivery, rather than one test believed to cover both.
+    assert.ok(blocks.some((b) => /liveHandoffText/.test(b.body)),
+      'the interception block still delivers by that name, which is what the integration test pins');
   });
 });
