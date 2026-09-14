@@ -81,6 +81,30 @@ describe('lib/agents module seams', () => {
     delete srv.routineState[key];
   });
 
+  test('the mandatory formatting rules say which markup to write, not only which words', () => {
+    // A fact-checking agent wanted sub-headings inside a message and wrote
+    // `=== Heading ===`, which is MediaWiki. Nothing rendered it, because this
+    // product renders Markdown. It was not ignoring an instruction: the
+    // mandatory block governed dashes and spelling and never named a syntax, so
+    // there was nothing to obey. Pinned here because nothing asserted on this
+    // block at all, which is how it stayed incomplete.
+    useWorkspace({ agents: { doc: agentFile({ name: 'doc', type: 'platform', order: 9 }) } });
+    const doc = discovery.discoverAgents().find(a => a.name === 'doc');
+    const prompt = promptLib.buildSystemPrompt(doc);
+
+    const rules = prompt.slice(prompt.indexOf('FORMATTING RULES'));
+    assert.ok(rules.includes('Write Markdown'),
+      'the rule names the syntax this product renders');
+    assert.ok(rules.includes('MediaWiki'),
+      'and names the one an agent actually reached for, since a rule that only says what to do leaves the alternative looking untested');
+    assert.ok(rules.indexOf('Write Markdown') < rules.indexOf('PLATFORM RULES:'),
+      'it sits inside the mandatory block, not in a section of its own');
+
+    // Taking nothing away: the rules that were already mandatory are still here.
+    assert.ok(rules.includes('NEVER use em dashes'), 'the dash rule survives');
+    assert.ok(rules.includes('UK spelling'), 'and so does the spelling rule');
+  });
+
   test('prompt deps are injected: a fake codex detector controls the RUNTIMES section', () => {
     useWorkspace({ agents: { doc: agentFile({ name: 'doc', type: 'platform', order: 9 }) } });
     const doc = discovery.discoverAgents().find(a => a.name === 'doc');

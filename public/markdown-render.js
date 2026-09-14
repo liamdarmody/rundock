@@ -350,7 +350,22 @@
           return i === -1 ? undefined : i;
         },
         tokenizer(src) {
-          const match = /^==(.*?)==/.exec(src);
+          // A DELIMITER INSIDE A LONGER RUN OF EQUALS SIGNS IS NOT A DELIMITER.
+          //
+          // Non-greedy `^==(.*?)==` took `=== rundock.ai ==` out of
+          // `=== rundock.ai ===`, captured `= rundock.ai `, and left the last
+          // `=` as loose text: the leading equals sign inside the highlight and
+          // the trailing one outside it. The author wrote MediaWiki, which
+          // Markdown does not have, and got a lopsided highlight rather than
+          // the characters they typed.
+          //
+          // `(?!=)` after the opener and `(?<!=)` before the closer say the
+          // delimiter must be exactly two, not part of a longer run. The
+          // content must also end in a character that is not `=`, which is what
+          // stops `====` matching with an empty capture and rendering a
+          // highlight of nothing. A single `=` inside the content is untouched:
+          // `==x=y==` still highlights `x=y`.
+          const match = /^==(?!=)(.*?[^=])==(?!=)/.exec(src);
           if (!match) return undefined;
           return { type: 'highlight', raw: match[0], tokens: this.lexer.inlineTokens(match[1]) };
         },
