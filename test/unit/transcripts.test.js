@@ -90,32 +90,3 @@ describe('append/load/save transcript', () => {
   });
 });
 
-describe('formatTranscript', () => {
-  test('formats user and agent turns with display names', () => {
-    srv.appendTranscript('c5', 'user', 'user', 'write me a post');
-    srv.appendTranscript('c5', 'agent', 'content-lead', 'Here is a draft.');
-    const out = srv.formatTranscript('c5');
-    assert.strictEqual(out, 'USER: write me a post\n\nPENN: Here is a draft.');
-  });
-
-  test('unknown agent id falls back to raw id', () => {
-    srv.appendTranscript('c6', 'agent', 'ghost-agent', 'boo');
-    assert.strictEqual(srv.formatTranscript('c6'), 'GHOST-AGENT: boo');
-  });
-
-  test('excludeAgent filters that agent\'s own turns but keeps user turns', () => {
-    srv.appendTranscript('c7', 'user', 'user', 'q1');
-    srv.appendTranscript('c7', 'agent', 'content-lead', 'a1');
-    srv.appendTranscript('c7', 'agent', 'lead-designer', 'a2');
-    const out = srv.formatTranscript('c7', { excludeAgent: 'content-lead' });
-    assert.ok(out.includes('USER: q1'));
-    assert.ok(!out.includes('a1'));
-    assert.ok(out.includes('DES: a2'));
-  });
-
-  test('empty or missing transcript returns null', () => {
-    assert.strictEqual(srv.formatTranscript('missing'), null);
-    srv.appendTranscript('c8', 'agent', 'content-lead', 'only agent');
-    assert.strictEqual(srv.formatTranscript('c8', { excludeAgent: 'content-lead' }), null);
-  });
-});

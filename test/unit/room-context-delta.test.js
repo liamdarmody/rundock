@@ -113,7 +113,7 @@ describe('the delta reaches the delegate', () => {
 
   test('a resumed delegate is sent what the others did while it was away', () => {
     const missed = deltaSince(transcript, 'vox');
-    const sent = buildDelegateContext({ transcript: null, missed, brief: 'now finish it' });
+    const sent = buildDelegateContext({ missed, brief: 'now finish it' });
     assert.match(sent, /I tightened the opening/, "the other agents' work is in the prompt");
     assert.match(sent, /and I checked the facts/);
     assert.match(sent, /\[DELEGATION BRIEF\]\nnow finish it/, 'and the brief still arrives');
@@ -121,22 +121,21 @@ describe('the delta reaches the delegate', () => {
 
   test('and not its own earlier turn, which its session already carries', () => {
     const missed = deltaSince(transcript, 'vox');
-    const sent = buildDelegateContext({ transcript: null, missed, brief: 'now finish it' });
+    const sent = buildDelegateContext({ missed, brief: 'now finish it' });
     assert.ok(!sent.includes('here is the first draft'),
       're-sending an agent its own work is pure cost and invites it to redo the work');
   });
 
-  test('a first-time delegate gets the transcript, and no catch-up section', () => {
-    const sent = buildDelegateContext({
-      transcript: 'USER: write me a short blog post', missed: { text: null }, brief: 'draft it'
-    });
-    assert.match(sent, /CONVERSATION SO FAR:/);
+  test('a first-time delegate gets the conversation as an arrival, capped like any other', () => {
+    const missed = deltaSince(transcript, 'never-been-here', undefined, [], null, true);
+    const sent = buildDelegateContext({ missed, brief: 'draft it', arriving: true });
+    assert.match(sent, /BEFORE YOU JOINED/);
     assert.ok(!sent.includes('SINCE YOUR LAST TURN'),
-      'an agent that has missed nothing must not be told it missed something');
+      'an agent on its first turn must not be told it took an earlier one');
   });
 
   test('a delegate with nothing missed gets the brief alone', () => {
-    const sent = buildDelegateContext({ transcript: null, missed: { text: null }, brief: 'go' });
+    const sent = buildDelegateContext({ missed: { text: null }, brief: 'go' });
     assert.strictEqual(sent, '[DELEGATION BRIEF]\ngo', 'no empty catch-up heading');
   });
 
@@ -152,18 +151,19 @@ describe('the delta reaches the delegate', () => {
     // intercepted Agent call, which got the brief alone and could not see a
     // draft written earlier in the same conversation.
     //
-    // Now: everyone except the cold spawn already receiving a full transcript,
-    // which would otherwise be sent the same conversation twice.
+    // Now: everyone, with no gate at all. The last exclusion was the cold
+    // spawn that had not come through an intercepted Agent call, which was
+    // handed the conversation rendered in full instead of the capped delta.
     //
     // Codex used to be excluded here too, on the stated reasoning that its
     // prompt assembly is separate. It is not separate for this: both Codex
     // branches already send contextWithHistory, which is what carries the
     // catch-up, so the exclusion withheld context from a Codex delegate
     // arriving cold and nothing else.
-    assert.match(src, /const needsCatchUp = !needsTranscript;/,
-      'the catch-up is built for arriving delegates as well as returning ones');
-    assert.doesNotMatch(src, /needsCatchUp = [^;]*isCodexDelegate/,
-      'and is not gated on which runtime the delegate happens to use');
+    assert.match(src, /const missed = deltaSince\(loadTranscript\(convoId\) \|\| \[\], targetAgent\.id/,
+      'the catch-up is built for every delegate, with no condition in front of it');
+    assert.doesNotMatch(src, /const missed = [^;]*\?/,
+      'and is not withheld from any of them');
     // ARRIVING IS DERIVED FROM WHETHER A RESUME WILL HAPPEN, not from whether
     // an id was stored. Codex validates the stored thread id, so a malformed
     // or expired one is a non-empty string that still yields a fresh thread;
@@ -175,7 +175,7 @@ describe('the delta reaches the delegate', () => {
       'with the Codex half asking the same validator the resume itself asks');
     assert.doesNotMatch(src, /const arriving = !priorSessionId/,
       'never from the raw presence of a stored id, which is not the same question');
-    assert.match(src, /buildDelegateContext\(\{ transcript, missed, brief: msg\.context, arriving \}\)/,
+    assert.match(src, /buildDelegateContext\(\{ missed, brief: msg\.context, arriving \}\)/,
       'the assembled context carries which case this is, so the heading it '
       + 'renders is true of the agent reading it');
     assert.match(src, /stdin\.write\(JSON\.stringify\(\{ type: 'user', message: \{ role: 'user', content: contextWithHistory \}/,
@@ -403,13 +403,20 @@ describe('every path that resumes an agent gives it the delta', () => {
       'the third resume path, found only because a reviewer walked all of them');
   });
 
-  test('all three are gated on actually having been resumed', () => {
-    // The name of this test was always the right rule; the assertion pinned a
-    // line that did not implement it. The delegate's gate read "not Codex",
-    // which is not a statement about having been resumed at all.
-    assert.match(src, /const needsCatchUp = !needsTranscript;/, 'delegate');
+  test('the two resume paths are gated on actually having been resumed', () => {
     assert.match(src, /orchestratorSession\s*\n?\s*\? deltaSince/, 'orchestrator');
     assert.match(src, /parentSessionId\s*\n?\s*\? deltaSince/, 'mid-level parent');
+  });
+
+  test('and the delegate is gated on nothing at all', () => {
+    // A delegate does not need a gate, because the arriving flag already
+    // distinguishes the two cases and the cap already bounds both. Every gate
+    // that stood here withheld the conversation from some delegate that needed
+    // it: first the resumed-only rule, then the not-Codex rule, then the
+    // rule that let a marker-driven delegation take a different route
+    // entirely.
+    assert.doesNotMatch(src, /needsCatchUp|needsTranscript/,
+      'no condition decides whether a delegate is told what it walked into');
   });
 
   test('and the mid-level catch-up reaches all three of its prompts', () => {
@@ -902,4 +909,146 @@ test('a delegate whose stored thread will not resume is treated as arriving, not
     'and a genuine resume is told what it missed');
   assert.notStrictEqual(catchUpPrefix(missed, true), catchUpPrefix(missed, false),
     'the two cases really do read differently, so getting the flag wrong is visible');
+});
+
+// ---------------------------------------------------------------------------
+// ONE BOUND, WHATEVER STARTED THE DELEGATION
+// ---------------------------------------------------------------------------
+//
+// A delegation can start two ways: an agent calls the Agent tool and the engine
+// intercepts it, or an agent writes the handoff marker into its own reply and
+// the client asks for the delegation over the socket. The arriving agent needs
+// the same thing either way, and for a long time it did not get it: the second
+// route handed over the whole conversation rendered in full, every tool summary
+// included, with no character bound on it at all. On the longest real
+// three-agent conversation on disk that is 47 million tokens against 89
+// thousand for the capped delta, and nothing in the interface said which of the
+// two a delegation had taken.
+//
+// The route is not the interesting part of that, and asserting the one call
+// site is gone would only say the defect that was found is gone. What these
+// assert is the property underneath it: the stored conversation cannot reach a
+// delegate except through the cap, so a second route added later is bounded
+// before anyone thinks to ask whether it is.
+describe('the stored conversation can only reach a delegate through the cap', () => {
+  const fs = require('node:fs');
+  const { buildDelegateContext } = require(path.join(ROOT, 'lib', 'delegation', 'catch-up.js'));
+  const ENGINE = path.join(ROOT, 'lib', 'delegation', 'engine.js');
+
+  // Every read of the stored transcript in the delegation engine, with the
+  // characters immediately in front of it: what the read is being handed to.
+  function transcriptReads(src) {
+    return [...src.matchAll(/loadTranscript\(/g)]
+      .map(m => ({ index: m.index, preceded: src.slice(Math.max(0, m.index - 'deltaSince('.length), m.index) }));
+  }
+
+  test('the reader fires on a read that dodges the cap, so finding none means none', () => {
+    // A scan that has stopped matching agrees with itself and reports a clean
+    // tree. The specimens are the half that cannot be faked: an uncapped read
+    // is shown to be visible before the engine's own reads are judged.
+    const capped = 'const missed = deltaSince(loadTranscript(convoId) || [], id);';
+    const uncapped = 'const whole = renderEverything(loadTranscript(convoId) || []);';
+    assert.strictEqual(transcriptReads(capped).length, 1, 'the reader sees a capped read');
+    assert.strictEqual(transcriptReads(capped)[0].preceded, 'deltaSince(', 'and reads it as capped');
+    assert.strictEqual(transcriptReads(uncapped).length, 1, 'the reader sees an uncapped read');
+    assert.notStrictEqual(transcriptReads(uncapped)[0].preceded, 'deltaSince(',
+      'and reads it as uncapped, which is the case this guard exists to catch');
+  });
+
+  test('every one of them is handed straight to the capped delta', () => {
+    const reads = transcriptReads(fs.readFileSync(ENGINE, 'utf8'));
+    assert.ok(reads.length >= 4,
+      `only ${reads.length} transcript reads found in the delegation engine; the scan has gone blind`);
+    const uncapped = reads.filter(r => r.preceded !== 'deltaSince(');
+    assert.deepStrictEqual(uncapped.map(r => r.preceded), [],
+      'the delegation engine reads the stored conversation somewhere other than through '
+      + 'deltaSince. Whatever that read feeds, it is not bounded by DELTA_CAP_CHARS, and the '
+      + 'defect this guard exists for was exactly one such read');
+  });
+
+  test('and the one place a delegate context is assembled has nowhere to put anything else', () => {
+    // The builder used to take a rendered transcript as well, and preferred it
+    // when it was given one, so what a delegate received depended on which
+    // caller had built it. A route that wants to hand over more than the cap
+    // allows now has no parameter to hand it over in.
+    const huge = 'X'.repeat(DELTA_CAP_CHARS * 5);
+    const sent = buildDelegateContext({ transcript: huge, missed: { text: null }, brief: 'go' });
+    assert.strictEqual(sent, '[DELEGATION BRIEF]\ngo',
+      'a whole conversation offered to the builder is not sent, because there is no longer '
+      + 'any input it could arrive through');
+  });
+
+  test('every message this engine puts into a runtime, and what each one is made of', () => {
+    // THE ROUTE SET, ENUMERATED RATHER THAN LISTED. The defect was a route
+    // nobody knew behaved differently, so the useful question is not "is the
+    // route that was found gone" but "is there a way into a runtime that
+    // nobody has looked at". Every write is collected and compared whole, so a
+    // new one fails here on the day it is written, before anyone asks what
+    // size the text it carries is.
+    const src = fs.readFileSync(ENGINE, 'utf8');
+    const WRITE = /([\w.]+)\.stdin\.write\(JSON\.stringify\(\{ type: 'user', message: \{ role: 'user', content: ([^}]+?) \} \}\)/g;
+    const writes = [...src.matchAll(WRITE)].map(m => [m[1], m[2]]);
+    assert.deepStrictEqual(writes, [
+      // A permission block, answered on the process that asked.
+      ['blockedEntry.process', 'blockPrompt'],
+      // A resumed agent picking its own conversation back up.
+      ['proc', 'prompt'],
+      // THE ONE THAT STARTS A DELEGATE. Everything a delegation hands over
+      // arrives through this single write.
+      ['delegateProc', 'contextWithHistory'],
+      // An orchestrator taking back control from a sub-delegate.
+      ['orchestratorEntry.process', 'prompt'],
+      // A mid-level parent resumed on each of its three exits, each carrying
+      // the catch-up it is owed.
+      ['resumeProc', 'parentCatchUp + resumePrompt'],
+      ['resumeProc', 'parentCatchUp + completePrompt'],
+      ['resumeProc', 'parentCatchUp + normalPrompt'],
+      // The original agent restored after a delegation ends.
+      ['orig.process', 'prompt'],
+    ], 'the engine writes into a runtime somewhere this list does not know about. Say what the '
+      + 'new write carries and what bounds it, then add it here');
+
+    // And the one that starts a delegate is the builder's output, so matching
+    // the name above is not matching a label.
+    assert.match(src, /const contextWithHistory = buildDelegateContext\(/,
+      "contextWithHistory is the builder's output and nothing else");
+
+    // The Codex half has no per-turn process to write to, so its delegate
+    // takes its first message a different way. Same origin.
+    const codexSends = [...src.matchAll(/wireCodexDelegate\(\w+, \w+, (\w+),/g)].map(m => m[1]);
+    assert.deepStrictEqual(codexSends, ['codexPrompt'],
+      'a Codex delegate is started somewhere this list does not know about');
+    assert.match(src, /const codexFreshPrompt = \[readAgentInstructions\(targetAgent\), fullPrompt, codexArrivingContext\]/,
+      'the fresh-thread prompt carries an arrival context');
+    assert.match(src, /codexArrivingContext = codexResumeId\s*\n?\s*\? buildDelegateContext\(/,
+      'which is the same builder, so the Codex fallback is bounded like everything else');
+  });
+
+  test('whatever the conversation holds, what is assembled stays inside the cap', () => {
+    // Not the two known routes: the shapes that made the uncapped rendering
+    // expensive in the first place, driven through the assembly a delegate's
+    // context actually comes out of.
+    const brief = 'now do the work';
+    const shapes = {
+      'one enormous turn': [{ role: 'agent', agent: 'roo', text: 'A'.repeat(DELTA_CAP_CHARS * 50) }],
+      'many ordinary turns': Array.from({ length: 2000 },
+        (_, i) => ({ role: 'agent', agent: 'roo', text: `turn ${i} ` + 'b'.repeat(400) })),
+      'turns that are all tool summaries': Array.from({ length: 500 },
+        (_, i) => ({ role: 'agent', agent: 'roo', text: `[Read] file-${i}.md ` + 'c'.repeat(900) })),
+      'every turn a pinned user turn': Array.from({ length: 900 },
+        (_, i) => ({ role: 'user', text: `ask ${i} ` + 'd'.repeat(300) })),
+    };
+    for (const [name, convo] of Object.entries(shapes)) {
+      for (const arriving of [true, false]) {
+        const missed = deltaSince(convo, 'penn', undefined, [], null, arriving);
+        const sent = buildDelegateContext({ missed, brief, arriving });
+        // The heading and the brief sit outside the delta, so the bound is the
+        // cap plus those, not the cap alone.
+        const ceiling = DELTA_CAP_CHARS + brief.length + 200;
+        assert.ok(sent.length <= ceiling,
+          `${name} (arriving=${arriving}): the delegate would receive ${sent.length} characters, `
+          + `over the ${ceiling} the cap allows`);
+      }
+    }
+  });
 });

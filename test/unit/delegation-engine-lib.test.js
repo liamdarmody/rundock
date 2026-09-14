@@ -22,7 +22,7 @@ const { _internal: srv } = require(path.join(ROOT, 'server.js'));
 const EXPECTED_DEPS = [
   'MAX_CONSECUTIVE_AGENT_RESUMES', 'RESTORE_DELAY_MS', 'appendTranscript',
   'beginConvoTransition', 'bufferedFollowUpTakesOver', 'buildHandbackPayload',
-  'endConvoTransition', 'formatTranscript', 'getAllowedToolsInteractive',
+  'endConvoTransition', 'getAllowedToolsInteractive',
   'getDisallowedTools', 'getPermissionMode', 'handleChatSpawnError',
   'incrementAutoResume', 'isAuthError', 'isModelError', 'isSilentParkResponse',
   'noteClaudeAuthEvidence', 'processes', 'resetAutoResume', 'safeSend',
