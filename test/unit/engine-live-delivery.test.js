@@ -237,15 +237,15 @@ describe('a delegation that reached nobody is recorded, not swallowed', () => {
     const miss = events.find((e) => e.e === 'delegation_error' && (e.d || {}).reason === 'no_target_matched');
     assert.ok(miss, `the miss is recorded where the other delegation errors are: ${JSON.stringify(events)}`);
     assert.strictEqual(miss.agent, 'research-lead', 'naming who made the call');
-    // The FACT is on the event; the WORDS are on the log line beside it. The
-    // signal layer's contract is that events carry structure and never tool
-    // content, so what the call asked for is asserted where it actually lives.
-    // includes() rather than assert.match: a regex literal beside a readFileSync
-    // is what the extraction detector looks for, and this is not a source walk.
-    assert.strictEqual((miss.d || {}).asked, undefined,
-      'the payload stays structural, which is what makes that contract true');
-    assert.ok(out.logged.some((l) => l.includes('Looking into the pricing page')),
-      'and the log line says which handover a person was told about and never got');
+    // THE WHOLE PAYLOAD, not one key. Asserting a single field says nothing
+    // about what else the event grew: a check that a key is absent cannot fail
+    // while that key has never existed, and a check that one key is present
+    // passes while three more leak in beside it. Pinning the entire object is
+    // what makes this assertion able to fail.
+    assert.deepStrictEqual(miss.d, {
+      reason: 'no_target_matched',
+      asked: 'Looking into the pricing page.',
+    }, 'the record says which handover a person was told about and never got, and nothing more');
   });
 
   test('a turn that delegates once and misses once records the miss', async () => {
@@ -264,10 +264,10 @@ describe('a delegation that reached nobody is recorded, not swallowed', () => {
     const misses = events.filter((e) => (e.d || {}).reason === 'no_target_matched');
     assert.strictEqual(misses.length, 1,
       `exactly the one that named nobody: ${JSON.stringify(misses)}`);
+    assert.strictEqual(misses[0].d.asked, 'Looking into the pricing page.',
+      'and it is the call that missed, not the one that found its target');
     const missLines = out.logged.filter((l) => l.includes('no target the roster matched'));
     assert.strictEqual(missLines.length, 1, 'and it is reported once, not once per call in the turn');
-    assert.ok(missLines[0].includes('Looking into the pricing page'),
-      'and it is the call that missed, not the one that found its target');
     assert.ok(!missLines[0].includes('check the figures'),
       'the successful handover is nobody\'s miss');
   });

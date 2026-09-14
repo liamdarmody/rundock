@@ -125,10 +125,10 @@ describe('a lead hands to its own report by naming them in the handoff line', ()
     const miss = records.find(e => (e.d || {}).reason === 'no_target_matched');
     assert.ok(miss);
     assert.strictEqual(miss.agent, 'content-lead', 'naming who believed it had handed the work on');
-    // The words are deliberately NOT here: the signal layer carries structure,
-    // never tool-call content. They go to the log line beside this event.
-    assert.strictEqual((miss.d || {}).asked, undefined,
-      'the payload stays structural, which is the contract the whole layer rests on');
+    assert.deepStrictEqual(miss.d, {
+      reason: 'no_target_matched',
+      asked: 'Looking into the pricing page.',
+    }, 'and what it asked for, so a person can tell which handover never happened');
 
     h.reapConvo(convoId);
   });
