@@ -34,8 +34,8 @@ function team() {
   };
 }
 
-function matcher() {
-  const dir = makeWorkspace({ agents: team(), claudeMd: '# Test\n' });
+function matcher(agents) {
+  const dir = makeWorkspace({ agents: agents || team(), claudeMd: '# Test\n' });
   const config = require(path.join(ROOT, 'lib', 'config.js'));
   const before = config.getWorkspace();
   config.setWorkspace(dir);
@@ -65,6 +65,26 @@ describe('a lead naming its own report in the handoff line delegates to them', (
     try {
       const m = findDirectReportMatch('research-lead', { description: 'Over to fact-checker for verification.', prompt: 'verify this' });
       assert.strictEqual(m && m.name, 'fact-checker');
+    } finally { restore(); }
+  });
+
+  test('the id works there too, where it differs from both other identifiers', () => {
+    // Three identifiers are accepted, so all three need proving. A roster
+    // where id, name and displayName all agree cannot tell them apart, and
+    // would pass with the id branch deleted.
+    // The id is the file's own name, the name is the frontmatter's, so keying
+    // the file differently is what makes all three identifiers distinct.
+    const distinct = team();
+    delete distinct['fact-checker'];
+    distinct['verifier-7'] = agentFile({
+      name: 'fact-checker', displayName: 'Sage', role: 'Fact Checker',
+      description: 'verifies', type: 'specialist', order: 2, reportsTo: 'research-lead', body: 'You verify.',
+    });
+    const { findDirectReportMatch, restore } = matcher(distinct);
+    try {
+      const m = findDirectReportMatch('research-lead', { description: 'Handing to verifier-7 to check this.', prompt: 'check it' });
+      assert.ok(m, 'an id is one of the three identifiers a caller may use, so it is a handoff');
+      assert.strictEqual(m.name, 'fact-checker');
     } finally { restore(); }
   });
 

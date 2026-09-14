@@ -236,13 +236,16 @@ describe('a delegation that reached nobody is recorded, not swallowed', () => {
     const events = await eventsWritten(out.dir);
     const miss = events.find((e) => e.e === 'delegation_error' && (e.d || {}).reason === 'no_target_matched');
     assert.ok(miss, `the miss is recorded where the other delegation errors are: ${JSON.stringify(events)}`);
-    // includes() rather than assert.match: this file reads a runtime artefact,
-    // the events the engine wrote, and a regex literal beside a readFileSync is
-    // what the extraction detector looks for. The assertion is the same; the
-    // shape stops it being classified as a source walk it is not.
-    assert.ok(String((miss.d || {}).asked || '').includes('Looking into the pricing page'),
-      'and carries what the call asked for, so a person can tell which handover never happened');
     assert.strictEqual(miss.agent, 'research-lead', 'naming who made the call');
+    // The FACT is on the event; the WORDS are on the log line beside it. The
+    // signal layer's contract is that events carry structure and never tool
+    // content, so what the call asked for is asserted where it actually lives.
+    // includes() rather than assert.match: a regex literal beside a readFileSync
+    // is what the extraction detector looks for, and this is not a source walk.
+    assert.strictEqual((miss.d || {}).asked, undefined,
+      'the payload stays structural, which is what makes that contract true');
+    assert.ok(out.logged.some((l) => l.includes('Looking into the pricing page')),
+      'and the log line says which handover a person was told about and never got');
   });
 
   test('a turn that delegates once and misses once records the miss', async () => {
@@ -260,9 +263,13 @@ describe('a delegation that reached nobody is recorded, not swallowed', () => {
     const events = await eventsWritten(out.dir);
     const misses = events.filter((e) => (e.d || {}).reason === 'no_target_matched');
     assert.strictEqual(misses.length, 1,
-      `exactly the one that named nobody: ${JSON.stringify(misses.map((m) => (m.d || {}).asked))}`);
-    assert.ok(String((misses[0].d || {}).asked || '').includes('Looking into the pricing page'),
+      `exactly the one that named nobody: ${JSON.stringify(misses)}`);
+    const missLines = out.logged.filter((l) => l.includes('no target the roster matched'));
+    assert.strictEqual(missLines.length, 1, 'and it is reported once, not once per call in the turn');
+    assert.ok(missLines[0].includes('Looking into the pricing page'),
       'and it is the call that missed, not the one that found its target');
+    assert.ok(!missLines[0].includes('check the figures'),
+      'the successful handover is nobody\'s miss');
   });
 
   test('an agent that leads nobody is not reported at all', () => {

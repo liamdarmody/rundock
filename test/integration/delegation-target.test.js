@@ -26,6 +26,23 @@ let client;
 before(async () => { await h.boot(); client = await h.connect(); });
 after(async () => { await h.shutdown(); });
 
+// The events the signal layer appended, read from the running workspace the
+// same way a person investigating afterwards would reach them.
+function readEvents() {
+  const fs = require('node:fs');
+  const dir = path.join(h.workspaceDir, '.rundock', 'state');
+  let files = [];
+  try { files = fs.readdirSync(dir).filter(f => /^events-\d{4}-\d{2}\.jsonl$/.test(f)); } catch (e) { return []; }
+  const out = [];
+  for (const f of files) {
+    for (const line of fs.readFileSync(path.join(dir, f), 'utf8').split('\n')) {
+      if (!line.trim()) continue;
+      try { out.push(JSON.parse(line)); } catch (e) { /* a partial final line is not a failure */ }
+    }
+  }
+  return out;
+}
+
 describe('a lead hands to its own report by naming them in the handoff line', () => {
   test('the delegation happens, and the line travels with it', async () => {
     // Penn leads Ana. Penn names Ana only in the description, exactly as the
@@ -93,6 +110,25 @@ describe('a lead hands to its own report by naming them in the handoff line', ()
       && m.subtype === 'agent_switch' && m.fromAgent === 'content-lead');
     assert.deepStrictEqual(onwards.map(m => m.toAgent), [],
       'naming nobody on the roster delegates to nobody, which is correct; what was wrong was doing it silently');
+
+    // And the saying, read off disk where a person would find it afterwards.
+    // Asserting only the absence above would pass on the defect this card
+    // exists to fix, which was precisely a miss that happened in silence.
+    // recordEvent appends asynchronously, so this waits for the write rather
+    // than racing it. A read that happened to be early would fail for a reason
+    // that has nothing to do with the behaviour under test.
+    await h.waitUntil(() => readEvents().some(e => e.e === 'delegation_error'
+      && e.conv === convoId && (e.d || {}).reason === 'no_target_matched'),
+    'the miss reached the record, not only the switches', { timeout: 10000 });
+
+    const records = readEvents().filter(e => e.e === 'delegation_error' && e.conv === convoId);
+    const miss = records.find(e => (e.d || {}).reason === 'no_target_matched');
+    assert.ok(miss);
+    assert.strictEqual(miss.agent, 'content-lead', 'naming who believed it had handed the work on');
+    // The words are deliberately NOT here: the signal layer carries structure,
+    // never tool-call content. They go to the log line beside this event.
+    assert.strictEqual((miss.d || {}).asked, undefined,
+      'the payload stays structural, which is the contract the whole layer rests on');
 
     h.reapConvo(convoId);
   });
