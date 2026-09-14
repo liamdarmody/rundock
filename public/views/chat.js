@@ -301,11 +301,11 @@ function addSystemMsg(text) { const m=document.getElementById('messages'),d=docu
 // executor in app.js), in-memory replay in the conversations view, and history
 // replay below. It lived in app.js until the markup came out of it; it is
 // chat thread rendering, so it belongs with the rest of the thread.
-function buildDelegationDivider(agentData, isReturn, opts = {}) {
+function buildDelegationDivider(agentData, opts = {}) {
   const divider = document.createElement('div');
   divider.className = 'msg-delegation' + (opts.historyClass ? ' history-msg' : '');
   if (opts.noAnimation) divider.style.animation = 'none';
-  divider.innerHTML = RundockChatMarkup.delegationDividerHtml(agentData, isReturn);
+  divider.innerHTML = RundockChatMarkup.delegationDividerHtml(agentData);
   return divider;
 }
 

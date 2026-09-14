@@ -173,13 +173,18 @@ test('delegationDividerHtml matches the markup buildDelegationDivider held', () 
   );
 });
 
-test('delegationDividerHtml says resumed on a return leg and joined otherwise', () => {
-  assert.ok(delegationDividerHtml(AGENT, true).includes('Dev resumed'));
-  assert.ok(delegationDividerHtml(AGENT, false).includes('Dev joined'));
+test('delegationDividerHtml announces an arrival, and has no second wording', () => {
+  // ONE CASE, ONE WORD. The divider is only ever built for somebody arriving to
+  // take the work: a return is not drawn at all, because the bubble beneath it
+  // carries that agent's avatar and name and the agent handing back says so
+  // itself. A `resumed` wording would be a word the product cannot show.
+  assert.ok(delegationDividerHtml(AGENT).includes('Dev joined'));
+  assert.ok(!/resumed/.test(delegationDividerHtml(AGENT)),
+    'no second label, and no flag that could select one');
 });
 
 test('delegationDividerHtml falls back the same way the sender line does', () => {
-  const html = delegationDividerHtml(null, false);
+  const html = delegationDividerHtml(null);
   assert.ok(html.includes('color:var(--accent)'));
   assert.ok(html.includes('>?</span>Agent joined'));
 });

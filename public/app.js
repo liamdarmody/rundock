@@ -683,7 +683,7 @@ const EFFECT_EXECUTORS = {
     // work went.
     const toAgent = agents.find(a => a.id === ef.toAgentId);
     const m = document.getElementById('messages');
-    m.appendChild(buildDelegationDivider(toAgent, ef.isReturn));
+    m.appendChild(buildDelegationDivider(toAgent));
     scrollBottom();
   },
   'update-chat-header': (convoId, ef) => {
