@@ -596,7 +596,12 @@ describe('an agent says why it arrived, or does not appear to', () => {
     // moves control'); this only pins that the engine still sends it.
     const at = engineSrc.indexOf('NO ARRIVAL DRAWN FOR AN AGENT THAT WILL SAY NOTHING');
     assert.ok(at > -1, 'the reasoning is recorded where the decision is made');
-    const region = engineSrc.slice(at, at + 1400);
+    // 1500 rather than 1400: the send gained a `returning` field, which said
+    // whether the destination already had the work, and the old window then cut
+    // off mid-token just before switchSilence. A window sized to the exact
+    // current text fails on any honest addition, so it is sized with headroom
+    // rather than to the character.
+    const region = engineSrc.slice(at, at + 1500);
     assert.doesNotMatch(region, /if \(!wasPipelineComplete\) \{[\s\S]{0,300}subtype: 'agent_switch'/,
       'the switch is NOT gated on the handback mode: withholding it is what broke the indicator');
     assert.match(region, /subtype: 'agent_switch'[\s\S]{0,400}switchSilence\(!wasPipelineComplete\)/,

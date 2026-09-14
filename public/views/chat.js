@@ -301,11 +301,11 @@ function addSystemMsg(text) { const m=document.getElementById('messages'),d=docu
 // executor in app.js), in-memory replay in the conversations view, and history
 // replay below. It lived in app.js until the markup came out of it; it is
 // chat thread rendering, so it belongs with the rest of the thread.
-function buildDelegationDivider(agentData, isReturn, opts = {}) {
+function buildDelegationDivider(agentData, opts = {}) {
   const divider = document.createElement('div');
   divider.className = 'msg-delegation' + (opts.historyClass ? ' history-msg' : '');
   if (opts.noAnimation) divider.style.animation = 'none';
-  divider.innerHTML = RundockChatMarkup.delegationDividerHtml(agentData, isReturn);
+  divider.innerHTML = RundockChatMarkup.delegationDividerHtml(agentData);
   return divider;
 }
 
@@ -456,11 +456,18 @@ function renderSessionHistory(d) {
     } else {
       // Use per-message agentId if available (from multi-session merge), fall back to default
       const msgAgent = msg.agentId ? (agents.find(a => a.id === msg.agentId) || defaultAgent) : defaultAgent;
-      // Add delegation divider if agent changed
-      if (msg.agentId && msg.agentId !== lastAgentId && lastAgentId !== null) {
-        const isReturn = msgAgent?.type === 'orchestrator';
-        frag.appendChild(buildDelegationDivider(msgAgent, isReturn, { historyClass: true, noAnimation: true }));
-      }
+      // NO HANDOVER MARKERS ON REPLAY. A divider is a notification, not
+      // content: it tells the person, as it happens, that somebody new has
+      // taken the work. Reading a conversation back is not that moment, and
+      // every bubble already carries the avatar and name of whoever is
+      // speaking, so the thread reads as what it is, several agents and a
+      // person talking.
+      //
+      // This was also the only place that inferred where a handover had been,
+      // by comparing one message's agent to the last. The replay used when a
+      // conversation is opened infers nothing, so the two disagreed and the
+      // markers survived exactly one render. Inferring in neither place is why
+      // that cannot come back.
       lastAgentId = msg.agentId || lastAgentId;
       div.className = 'msg msg-agent history-msg';
       const ht = msg.timestamp ? new Date(msg.timestamp) : null;

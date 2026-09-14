@@ -120,9 +120,12 @@ const SEQUENCE_TABLE = [
       // Specialist result carries RETURN only: normal finalisation.
       '16:finalize-agent-message', '16:remove-thinking-indicator', '16:finalize-stream-bubble',
       '16:finish-processing', '16:render-convo-list',
-      // Switch back to the orchestrator: a return, so no start-processing here.
+      // Switch back to the orchestrator: a return, so no start-processing here
+      // and no divider either. The return is not announced: the bubble that
+      // follows carries the orchestrator's avatar and name, and the specialist
+      // has already said in its own words that it is handing back.
       '17:clear-outgoing-working', '17:clear-streaming-bubble', '17:remove-thinking-indicator', '17:render-convo-list',
-      '17:show-delegation-divider', '17:update-chat-header',
+      '17:update-chat-header',
       // Orchestrator resumes via autoContinue.
       '18:remove-permission-cards', '18:start-processing',
       '20:start-streaming-bubble', '20:render-stream-text',
@@ -222,7 +225,13 @@ test('delegation round trip: session chain tracks both agents, primary stays wit
 test('delegation round trip: divider directions and delegate handoff text', () => {
   const { effects } = replay(seq.delegationRoundTrip);
   const dividers = effects.filter(e => e.type === 'show-delegation-divider');
-  assert.deepStrictEqual(dividers.map(d => [d.toAgentId, d.isReturn]), [['dev', false], ['cos', true]]);
+  // One divider, not two: the delegation out is announced, the return is not.
+  assert.deepStrictEqual(dividers.map(d => [d.toAgentId, d.isReturn]), [['dev', false]]);
+  // And the back leg is a return because the server said so, not because of
+  // what kind of agent it went to.
+  const back = reduce(createState(), seq.agentSwitch('dev', 'cos', 'p9', { returning: true }),
+    { ...SWITCH_CTX, toAgentType: 'orchestrator' });
+  assert.ok(!back.effects.some(e => e.type === 'show-delegation-divider'));
   const finals = effects.filter(e => e.type === 'finalize-agent-message');
   // DELEGATE strips the marker AND everything after it; RETURN strips cleanly.
   assert.deepStrictEqual(finals.map(f => f.text), [
@@ -655,11 +664,28 @@ test('a silent agent_switch draws no divider but still clears the outgoing agent
 
 test('a switch that is not silent still draws the divider', () => {
   // The other direction, so the flag is proven to be what decides rather than
-  // the divider having quietly stopped being emitted at all.
-  const ctx = { ...SWITCH_CTX, toAgentType: 'orchestrator' };
-  const r = reduce(createState(), seq.agentSwitch('dev', 'cos', 'p3'), ctx);
+  // the divider having quietly stopped being emitted at all. A FORWARD
+  // delegation, because a return no longer draws whatever the flag says.
+  const ctx = { ...SWITCH_CTX, toAgentType: 'specialist' };
+  const r = reduce(createState(), seq.agentSwitch('cos', 'dev', 'p3'), ctx);
   assert.ok(r.effects.some(e => e.type === 'show-delegation-divider'),
-    'an ordinary return is still announced in the conversation');
+    'somebody arriving to take the work is still announced');
+});
+
+test('a return draws nothing, because the bubble beneath already says who is speaking', () => {
+  // THE RULE, stated where the old one was. Announcing an arrival is worth a
+  // line: it changes who owns the work and who the person is addressing.
+  // Announcing that somebody already in the conversation is speaking again is
+  // the third telling of the same fact, after the departing agent's own
+  // handoff sentence and the avatar and name on the next bubble.
+  const ctx = { ...SWITCH_CTX, toAgentType: 'orchestrator' };
+  const r = reduce(createState(), seq.agentSwitch('dev', 'cos', 'p3', { returning: true }), ctx);
+  assert.ok(!r.effects.some(e => e.type === 'show-delegation-divider'),
+    'a return is not an arrival');
+  // Everything else about the switch is unchanged: only the drawing goes.
+  assert.strictEqual(r.state.activeAgentId, 'cos', 'control still moved');
+  assert.ok(r.effects.some(e => e.type === 'update-chat-header' && e.toAgentId === 'cos'),
+    'and the header still names who holds the conversation');
 });
 
 test('agent_switch on an inactive conversation updates state but skips the view effects', () => {

@@ -672,15 +672,19 @@ const EFFECT_EXECUTORS = {
   },
   'render-convo-list': () => renderConvoList(),
   'show-delegation-divider': (convoId, ef) => {
+    // DRAWN, AND NOT KEPT. An arrival is a notification: it tells the person,
+    // at the moment it happens, that somebody new has taken the work. It used
+    // to be recorded into the conversation so it survived navigating away and
+    // back, which made re-reading a conversation behave one way after a
+    // navigation and another after a reload, for no reason a person could
+    // predict. Both are the same intent, re-reading, and neither is the moment
+    // the arrival happened. What carries it afterwards is the avatar and name
+    // on every bubble, and the departing agent's own sentence saying where the
+    // work went.
     const toAgent = agents.find(a => a.id === ef.toAgentId);
     const m = document.getElementById('messages');
-    m.appendChild(buildDelegationDivider(toAgent, ef.isReturn));
+    m.appendChild(buildDelegationDivider(toAgent));
     scrollBottom();
-    // Persist divider as explicit marker so it survives navigate-away/back
-    const convo = conversations.find(c => c.id === convoId);
-    if (convo) {
-      convo.messages.push({ role: 'divider', agentId: ef.toAgentId, fromAgentId: ef.fromAgentId, isReturn: ef.isReturn });
-    }
   },
   'update-chat-header': (convoId, ef) => {
     const toAgent = agents.find(a => a.id === ef.toAgentId);

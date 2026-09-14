@@ -276,3 +276,45 @@ describe('a delegation blocked as off-roster does not draw the turn twice', () =
     h.reapConvo(convoId);
   });
 });
+
+describe('the switch says whether the work is coming back', () => {
+  // THE SERVER CONTRACT, read off the wire rather than from the source. The
+  // client decides whether to announce an arrival from this field, and it was
+  // previously guessing from what kind of agent was on the other end, which is
+  // a different question and gets a handback to a mid-level lead wrong.
+  test('a forward delegation does not say returning, and the handback does', async () => {
+    const convoId = h.freshConvoId('returning');
+    h.writeScenario([
+      { match: { agent: 'chief-of-staff', promptIncludes: 'returning please' },
+        turn: [{ agentTool: { subagent_type: 'content-lead', description: 'Over to Penn.', prompt: 'the brief' } }] },
+      { match: { agent: 'content-lead', promptIncludes: 'the brief' },
+        turn: [{ text: `Not mine. <!-- RUNDOCK:RETURN -->` }] },
+      { match: { agent: 'chief-of-staff', promptIncludes: 'outside their scope' },
+        turn: [{ text: 'COS-PICKED-IT-UP' }] },
+    ]);
+
+    client.send({ type: 'save_conversation', conversation: { id: convoId, agentId: 'chief-of-staff', title: 'Returning' } });
+    const since = client.messages.length;
+    client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: 'returning please' });
+
+    await client.waitFor(m => m.type === 'result' && m._conversationId === convoId
+      && m.result === 'COS-PICKED-IT-UP',
+    { since, label: 'control came back and spoke', timeout: 20000 });
+
+    const switches = client.messages.slice(since).filter(m => m.type === 'system'
+      && m.subtype === 'agent_switch' && m._conversationId === convoId);
+    const shape = switches.map(m => `${m.fromAgent}->${m.toAgent}${m.returning ? ' returning' : ''}`);
+
+    const out = switches.find(m => m.fromAgent === 'chief-of-staff' && m.toAgent === 'content-lead');
+    assert.ok(out, `the delegation out happened: ${JSON.stringify(shape)}`);
+    assert.strictEqual(out.returning, undefined,
+      'a forward delegation hands the work to somebody who did not have it, and says nothing about returning');
+
+    const back = switches.find(m => m.fromAgent === 'content-lead' && m.toAgent === 'chief-of-staff');
+    assert.ok(back, `the handback happened: ${JSON.stringify(shape)}`);
+    assert.strictEqual(back.returning, true,
+      'and the handback says so, because the client must not have to guess it from what kind of agent this is');
+
+    h.reapConvo(convoId);
+  });
+});
