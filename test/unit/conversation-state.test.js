@@ -227,6 +227,11 @@ test('delegation round trip: divider directions and delegate handoff text', () =
   const dividers = effects.filter(e => e.type === 'show-delegation-divider');
   // One divider, not two: the delegation out is announced, the return is not.
   assert.deepStrictEqual(dividers.map(d => [d.toAgentId, d.isReturn]), [['dev', false]]);
+  // And the back leg is a return because the server said so, not because of
+  // what kind of agent it went to.
+  const back = reduce(createState(), seq.agentSwitch('dev', 'cos', 'p9', { returning: true }),
+    { ...SWITCH_CTX, toAgentType: 'orchestrator' });
+  assert.ok(!back.effects.some(e => e.type === 'show-delegation-divider'));
   const finals = effects.filter(e => e.type === 'finalize-agent-message');
   // DELEGATE strips the marker AND everything after it; RETURN strips cleanly.
   assert.deepStrictEqual(finals.map(f => f.text), [
@@ -674,7 +679,7 @@ test('a return draws nothing, because the bubble beneath already says who is spe
   // the third telling of the same fact, after the departing agent's own
   // handoff sentence and the avatar and name on the next bubble.
   const ctx = { ...SWITCH_CTX, toAgentType: 'orchestrator' };
-  const r = reduce(createState(), seq.agentSwitch('dev', 'cos', 'p3'), ctx);
+  const r = reduce(createState(), seq.agentSwitch('dev', 'cos', 'p3', { returning: true }), ctx);
   assert.ok(!r.effects.some(e => e.type === 'show-delegation-divider'),
     'a return is not an arrival');
   // Everything else about the switch is unchanged: only the drawing goes.

@@ -80,6 +80,60 @@ function replay(messages, opts = {}) {
 }
 const rows = () => [...document.getElementById('messages').children];
 
+describe('who is announced, on the document, through the real executor', () => {
+  // AA-1 and AA-2 at the surface. The reducer decides and the executor draws,
+  // and only running both says what a person sees.
+  const APP = fs.readFileSync(path.join(ROOT, 'public', 'app.js'), 'utf-8');
+  function executor(name) {
+    const key = `'${name}': (convoId, ef) => {`;
+    const at = APP.indexOf(key);
+    assert.ok(at > -1, `app.js still defines the ${name} executor`);
+    let i = at + key.length - 1, depth = 0;
+    for (; i < APP.length; i++) {
+      if (APP[i] === '{') depth++;
+      else if (APP[i] === '}') { depth--; if (depth === 0) break; }
+    }
+    // eslint-disable-next-line no-new-func
+    return new Function('convoId', 'ef', APP.slice(at + key.length, i));
+  }
+  const CTX = { isActive: true, convoAgentId: 'default', toAgentExists: true, fromAgentExists: true, toAgentType: 'specialist' };
+
+  function run(message) {
+    document.getElementById('messages').innerHTML = '';
+    global.conversations = [{ id: 'c1', agentId: 'default', messages: [] }];
+    global.activeConversation = { id: 'c1', agentId: 'default' };
+    const cs = require(path.join(ROOT, 'public', 'conversation-state.js'));
+    const draw = executor('show-delegation-divider');
+    const r = cs.reduce(cs.createState(), message, CTX);
+    for (const ef of r.effects) if (ef.type === 'show-delegation-divider') draw('c1', ef);
+    return rows().filter((el) => el.className.includes('msg-delegation'))
+      .map((el) => (el.textContent || '').replace(/\s+/g, ' ').trim());
+  }
+
+  test('somebody arriving to take the work is announced by name', () => {
+    const drawn = run({ type: 'system', subtype: 'agent_switch', _conversationId: 'c1', _processId: 'p1',
+      fromAgent: 'default', toAgent: 'vox' });
+    assert.strictEqual(drawn.length, 1, 'one announcement');
+    assert.match(drawn[0], /Vox joined/, 'naming who now has the work');
+  });
+
+  test('a handback to a mid-level lead announces nothing', () => {
+    // THE REPORTED CASE. Ren is a specialist, so a rule keyed on the
+    // destination being the orchestrator called this an arrival and announced
+    // an agent that had the work all along.
+    const drawn = run({ type: 'system', subtype: 'agent_switch', _conversationId: 'c1', _processId: 'p1',
+      fromAgent: 'fact-checker', toAgent: 'research-lead', returning: true });
+    assert.deepStrictEqual(drawn, [],
+      'Ren already had the work; announcing her arrival is announcing something that did not happen');
+  });
+
+  test('a handback to the orchestrator announces nothing either', () => {
+    const drawn = run({ type: 'system', subtype: 'agent_switch', _conversationId: 'c1', _processId: 'p1',
+      fromAgent: 'vox', toAgent: 'default', returning: true, });
+    assert.deepStrictEqual(drawn, [], 'the same rule, and one rule rather than two');
+  });
+});
+
 describe('an arrival is drawn once, as it happens, and is not kept', () => {
   // THE SAME RULE AT THE OTHER END. Navigating to another conversation and back
   // is the same intent as reloading, re-reading, and neither is the moment the

@@ -333,7 +333,12 @@
     effects.push({ type: 'render-convo-list' });
     // A return goes back to the orchestrator; anything else is a forward
     // delegation (orchestrator->specialist or specialist->sub-specialist).
-    const isReturn = ctx.toAgentType === 'orchestrator';
+    // TOLD, NOT GUESSED. The server knows whether this destination already had
+    // the work: every restore and handback says `returning`, and the forward
+    // delegation is the only switch that does not. Deriving it from the
+    // destination being the orchestrator answered a different question, and got
+    // this one wrong whenever a sub-delegate handed back to a mid-level lead.
+    const isReturn = message.returning === true;
     if (ctx.isActive) {
       // A SILENT SWITCH STILL SWITCHES, IT JUST DRAWS NOTHING.
       //
