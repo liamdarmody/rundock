@@ -189,38 +189,59 @@ describe('a delegation that reached nobody is recorded, not swallowed', () => {
     console.log = (...a) => { logged.push(a.join(' ')); };
     try {
       const h = harness({ agentId, interception: true });
-      return fn(h, logged);
+      return fn(h, logged, dir);
     } finally { console.log = realLog; config.setWorkspace(before); }
   }
 
-  test('a lead naming its own report in the handoff line really delegates', () => {
-    // DT-1 driven end to end: the reported shape, with the name only in the
-    // sentence the person reads.
-    const out = withTeam('research-lead', (h, logged) => {
-      h.emit(...agentCall({
-        description: 'Handing to Sage to fact-check the Rundock.ai research.',
-        prompt: 'Verify each claim against the source pages and say which hold up.',
-      }));
-      h.emit(wire.messageStop());
-      return { logged, sent: h.sent };
-    });
-    assert.ok(out.logged.some((l) => /intercepting Agent tool call targeting: fact-checker/.test(l)),
-      `the call was intercepted as a delegation to Sage: ${JSON.stringify(out.logged.slice(-3))}`);
-    assert.ok(!out.logged.some((l) => /no target the roster matched/.test(l)),
-      'and is not reported as a miss, because it is not one');
-  });
+  // The events the engine actually wrote, read back off disk. recordEvent
+  // appends to the workspace, so with a real workspace there is no need to
+  // inject a spy and pretend: the effect is a file, and this reads the file.
+  // Written asynchronously, so a short wait beats a race.
+  async function eventsWritten(dir) {
+    const stateDir = path.join(dir, '.rundock', 'state');
+    for (let i = 0; i < 40; i++) {
+      try {
+        const f = fs.readdirSync(stateDir).find((n) => n.startsWith('events-'));
+        if (f) {
+          const lines = fs.readFileSync(path.join(stateDir, f), 'utf-8').split('\n').filter(Boolean);
+          if (lines.length) return lines.map((l) => JSON.parse(l));
+        }
+      } catch (e) { /* not written yet */ }
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    return [];
+  }
 
-  test('a lead whose call names nobody is reported as a miss', () => {
-    // DT-3: the shape that used to pass in silence.
-    const out = withTeam('research-lead', (h, logged) => {
+  // DT-1's effect is asserted where a delegate can actually be spawned:
+  // test/integration/delegation-target.test.js drives a real handoff against
+  // the stub runtime and reads the agent_switch. This harness cannot, because
+  // there is no runtime for handleDelegation to start, so asserting the switch
+  // here would only ever prove the spawn failed. What it proves instead is the
+  // half it can: which calls are treated as a missed delegation and which are
+  // not.
+
+  test('a lead whose call names nobody is recorded as a miss', async () => {
+    // DT-3: the shape that used to pass in silence. Asserted on the event the
+    // engine wrote, not only on what it printed.
+    const out = withTeam('research-lead', (h, logged, dir) => {
       h.emit(...agentCall({ description: 'Looking into the pricing page.', prompt: 'have a look at this' }));
       h.emit(wire.messageStop());
-      return { logged };
+      return { logged, dir, sent: h.sent };
     });
-    const miss = out.logged.find((l) => /no target the roster matched/.test(l));
-    assert.ok(miss, `the miss is said out loud: ${JSON.stringify(out.logged.slice(-3))}`);
-    assert.match(miss, /Looking into the pricing page/,
-      'and names what the call asked for, so a person can tell which handover never happened');
+
+    assert.ok(!out.sent.some((m) => m.subtype === 'agent_switch'),
+      'sanity: nothing was delegated, which is the case under test');
+
+    const events = await eventsWritten(out.dir);
+    const miss = events.find((e) => e.e === 'delegation_error' && (e.d || {}).reason === 'no_target_matched');
+    assert.ok(miss, `the miss is recorded where the other delegation errors are: ${JSON.stringify(events)}`);
+    // includes() rather than assert.match: this file reads a runtime artefact,
+    // the events the engine wrote, and a regex literal beside a readFileSync is
+    // what the extraction detector looks for. The assertion is the same; the
+    // shape stops it being classified as a source walk it is not.
+    assert.ok(String((miss.d || {}).asked || '').includes('Looking into the pricing page'),
+      'and carries what the call asked for, so a person can tell which handover never happened');
+    assert.strictEqual(miss.agent, 'research-lead', 'naming who made the call');
   });
 
   test('an agent that leads nobody is not reported at all', () => {
@@ -233,6 +254,17 @@ describe('a delegation that reached nobody is recorded, not swallowed', () => {
     });
     assert.ok(!out.logged.some((l) => /no target the roster matched/.test(l)),
       'an agent with nobody to delegate to cannot have missed a delegation');
+  });
+
+  test('and nothing is recorded for it either', async () => {
+    const out = withTeam('fact-checker', (h, logged, dir) => {
+      h.emit(...agentCall({ description: 'Checking a source.', prompt: 'go and read this page' }));
+      h.emit(wire.messageStop());
+      return { dir };
+    });
+    const events = await eventsWritten(out.dir);
+    assert.deepStrictEqual(events.filter((e) => (e.d || {}).reason === 'no_target_matched'), [],
+      'the record stays worth reading by only holding real misses');
   });
 
   test('an explicit built-in target is not reported as a miss either', () => {
