@@ -224,7 +224,11 @@
   }
 
   function reduceAgentTurn(state, message, ctx) {
-    const text = typeof message.text === 'string' ? message.text.trim() : '';
+    // MARKERS STRIPPED, as every other path that renders agent text does. A
+    // blocked turn can carry a handback marker like any other, and showing the
+    // raw comment to the person is the leak this module strips everywhere else.
+    const raw = typeof message.text === 'string' ? message.text : '';
+    const text = (raw ? RundockMarkers.stripMarkers(raw) : '').trim();
     // Nothing to say draws nothing: an empty bubble is worse than none, the
     // same rule the handoff line follows.
     if (!text) return { state, effects: [] };

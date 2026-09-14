@@ -359,6 +359,25 @@ describe('the blocked turn reads the same live and after a reload', () => {
     assert.strictEqual(live.length, 1, 'and it is one turn, not none and not two');
   });
 
+  test('a marker in a blocked turn is not shown to the person', () => {
+    freshDom();
+    global.conversations = [{ id: 'c1', agentId: 'default', messages: [] }];
+    global.activeConversation = { id: 'c1', agentId: 'default' };
+    global.getConvoState = () => ({ currentStreamingMsg: null });
+    const r = reduce({ ...createState() }, {
+      type: 'system', subtype: 'agent_turn', _conversationId: 'c1', _processId: 'p1',
+      _agent: 'default', text: 'I will route through Penn. <!-- RUNDOCK:RETURN -->',
+    }, CTX);
+    for (const ef of r.effects) if (ef.type === 'promote-handoff-message') promote('c1', ef);
+    const shown = [...document.getElementById('messages').children]
+      .filter((el) => el.className.includes('msg-agent'))
+      .map((el) => (el.textContent || '').replace(/\s+/g, ' ').trim());
+    assert.strictEqual(shown.length, 1);
+    assert.doesNotMatch(shown[0], /RUNDOCK:/,
+      'a handback marker is plumbing, and every other render path strips it');
+    assert.match(shown[0], /I will route through Penn\./);
+  });
+
   test('a line arriving on anything but the interception switch is ignored', () => {
     // The provenance half, on the effects the reducer will act on. A restore
     // switch names no new process, so a line riding one is not something the
