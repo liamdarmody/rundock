@@ -3,7 +3,7 @@
 // These functions decide what auto-approves without a card and what the
 // human sees when asked; the trust page's claims rest on them. Every case
 // here is the extraction contract with app.js's historical behaviour.
-const { test, describe } = require('node:test');
+const { test, describe, after } = require('node:test');
 const assert = require('node:assert');
 
 const P = require('../../public/permissions.js');
@@ -14,8 +14,26 @@ describe('classifyRisk Bash', () => {
   const risk = cmd => P.classifyRisk('Bash', { command: cmd });
 
   test('read-only commands are low', () => {
-    for (const cmd of ['ls -la', 'cat notes.md', 'grep -r foo .', 'pwd', 'date']) {
+    for (const cmd of ['ls -la', 'cat notes.md', 'grep -r foo .', 'pwd']) {
       assert.strictEqual(risk(cmd), 'low', cmd);
+    }
+  });
+
+  test('words this grader alone used to trust now ask, until they are judged on their own', () => {
+    // NARROWED ON PURPOSE. This grader kept a read-only list of its own, wider
+    // than the permission hook's and never measured against the boundary
+    // layer. Sharing one definition meant choosing which list both layers
+    // would trust, and the answer has to be the one already trusted to exempt
+    // a crossing under the runtime's own home.
+    //
+    // Two of these are why the wider list could not simply be adopted:
+    // `sort -o FILE` and `uniq INPUT OUTPUT` write a file with no redirection
+    // character on the line at all. The others cannot write, and still ask,
+    // because putting them back is a widening that belongs to whatever change
+    // can show the sessions that want it.
+    for (const cmd of ['date', 'whoami', 'which ls', 'printenv', 'sort notes.txt',
+      'uniq a.txt', 'diff a b', 'pushd /tmp', 'popd', 'true']) {
+      assert.strictEqual(risk(cmd), 'medium', cmd);
     }
   });
 
@@ -62,7 +80,11 @@ describe('classifyRisk Bash', () => {
     // ordinary exploration like Doc running `cd <workspace> && ls; cat ...`.
     assert.strictEqual(risk('cd "/some dir" && ls -la; cat README.md'), 'low', 'cd then reads');
     assert.strictEqual(risk('cd x && ls'), 'low', 'cd then ls');
-    assert.strictEqual(risk('grep foo x | sort | uniq'), 'low', 'read-only pipe');
+    // `sort` and `uniq` left the vocabulary with the rest of this grader's
+    // private list: both can write a file with no redirection character, so a
+    // pipeline ending in one asks rather than auto-approving.
+    assert.strictEqual(risk('grep foo x | sort | uniq'), 'medium', 'a pipe ending in a command that can write asks');
+    assert.strictEqual(risk('grep foo x | head -20'), 'low', 'and an all-reading pipe does not');
     // A non-read-only step after cd is medium (carded), never auto-approved.
     assert.strictEqual(risk('cd x && npm install'), 'medium', 'cd then npm');
   });
@@ -159,25 +181,24 @@ describe('classifyRisk Bash', () => {
     assert.strictEqual(risk(`echo 'safe' & rm -rf /tmp/y`), 'high', 'and a lone & still separates');
   });
 
-  test('the discarding-redirect rule is the same rule in both places that judge command text', () => {
+  test('the discarding-redirect rule is one rule, not a copy in each place that judges command text', () => {
     // THE ROOT CAUSE OF THE CARD THIS FIXES was two places parsing the same
     // command and disagreeing: the boundary classifier had learned that a
-    // discarding redirect writes nothing, and this grader had not. The client
-    // cannot require the hook, which is node-only and packaged separately, so
-    // the rule exists twice on purpose. This binds the copies: a change to one
-    // that is not made to the other fails here rather than surfacing as a card
-    // nobody can explain.
+    // discarding redirect writes nothing, and this grader had not. It was
+    // written out twice and bound by a source comparison here, which kept the
+    // two copies equal without making them one. They are one now, so this
+    // asserts there is nowhere for a second copy to live.
     const fs = require('node:fs');
     const path = require('node:path');
     const read = (rel) => fs.readFileSync(path.join(__dirname, '..', '..', rel), 'utf8');
     const pattern = /DISCARDING_REDIRECT_RE\s*=\s*(\/[^\n]*\/g);/;
 
-    const hook = pattern.exec(read('scripts/permission-hook.js'));
-    const client = pattern.exec(read('public/permissions.js'));
-    assert.ok(hook, 'the hook declares the rule where this test can find it');
-    assert.ok(client, 'and so does the client');
-    assert.strictEqual(client[1], hook[1],
-      'the two copies are the same rule; if one is deliberately changed, change both');
+    const shared = pattern.exec(read('public/read-only-shell.js'));
+    assert.ok(shared, 'the shared module declares the rule');
+    assert.strictEqual(pattern.exec(read('scripts/permission-hook.js')), null,
+      'and the hook keeps no copy of it');
+    assert.strictEqual(pattern.exec(read('public/permissions.js')), null,
+      'and neither does the client grader');
 
     // And they agree in behaviour, not merely in source text, on the shapes
     // that matter: a source match would pass even if one were never applied.
@@ -205,7 +226,7 @@ describe('classifyRisk Bash', () => {
       'ls -la /Users/x/.claude/agents/ /Users/x/.claude/skills/ 2>&1',
       'ls -la /Users/x/.claude/agents/ 2>/dev/null',
       'cat /Users/x/notes.md 2>&1',
-      'grep foo x 2>/dev/null | sort',
+      'grep foo x 2>/dev/null | head',
     ]) {
       assert.strictEqual(risk(cmd), 'low', `discarding output writes nothing, so this stays low: ${cmd}`);
     }
@@ -238,6 +259,337 @@ describe('classifyRisk Bash', () => {
     }
     // Plain find with no run/delete action stays low.
     assert.strictEqual(risk('find . -name "*.md"'), 'low', 'plain find');
+  });
+});
+
+// ── One definition of read-only, read by both graders ───────────────────────
+// Two graders answer "does this command only read": the hook's boundary
+// classifier and this module. They were written separately and never shared
+// the answer, so a command the hook read as harmless was carded anyway by a
+// narrower list kept here. These tests drive the real graders and assert on
+// the DECISION each returns, not on a name appearing in a list.
+
+describe('one definition of read-only, read by both graders', () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const ROOT = path.join(__dirname, '..', '..');
+  const risk = cmd => P.classifyRisk('Bash', { command: cmd });
+
+  // A runtime home with the persistence surfaces the hook grades against, so
+  // the boundary tests below drive the real classifier rather than a stand-in.
+  const scratch = [];
+  after(() => { for (const d of scratch) fs.rmSync(d, { recursive: true, force: true }); });
+  function makeHome() {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ro-home-'));
+    for (const d of ['agents', 'hooks', 'skills']) {
+      fs.mkdirSync(path.join(home, '.claude', d), { recursive: true });
+    }
+    fs.writeFileSync(path.join(home, '.claude', '.credentials.json'), '{}');
+    return home;
+  }
+
+  // MEASURED, from a daily user's session. The working folder `~/Projects` was
+  // named and the card appeared anyway: `npx` was on neither read-only list,
+  // so a line that inspects a deployment and prints forty lines of it graded
+  // medium and asked.
+  const REPORTED = 'cd ~/Projects/alchemist && npx vercel inspect '
+    + 'https://alchemist-9f3c2d1.vercel.app --meta 2>&1 | head -40';
+
+  test('the reported command draws no card, with its working folder named', () => {
+    const decision = P.decidePermission(risk(REPORTED), P.toolAllowKey('Bash', { command: REPORTED }), new Set());
+    assert.deepStrictEqual(decision, { action: 'allow', reason: 'low-risk' },
+      'the command writes nothing, so the grader answers it rather than asking');
+
+    // The other half of the same card. The boundary classifier already raised
+    // no crossing for this line; both halves must stay quiet for the reader to
+    // see nothing.
+    const hook = require('../../scripts/permission-hook.js');
+    const workspace = path.join(ROOT, '.rundock-test-ws');
+    const named = [path.join(os.homedir(), 'Projects')];
+    assert.strictEqual(hook.classifyShellAccess('Bash', { command: REPORTED }, workspace, named), null,
+      'the named folder covers the target, so nothing crosses the boundary either');
+
+    // AND THE BOUNDARY IS EXACTLY WHERE IT WAS. Naming the folder is what
+    // covers the target; nothing here widened it. Without the folder the same
+    // command still crosses, which is what makes the fix a grading fix.
+    const unnamed = hook.classifyShellAccess('Bash', { command: REPORTED }, workspace, []);
+    assert.ok(unnamed && unnamed.where === 'outside',
+      'with no folder named the command still reaches outside the workspace');
+  });
+
+  test('the shared definition ships where the hook actually runs', () => {
+    // A packaged build does not run this from the repository. `scripts/` is
+    // unpacked out of the asar so the runtime can exec the hook as its own
+    // process, and a require reaching out of that directory resolves on disk
+    // rather than inside the archive. A shared module left packed would throw
+    // on every tool call, in the one place no unit test looks.
+    //
+    // The file must be NAMED in asarUnpack rather than covered by a wider
+    // pattern: unpacking the whole client to reach one module is not the
+    // trade, so an exact entry is what this asserts.
+    const hookSrc = fs.readFileSync(path.join(ROOT, 'scripts', 'permission-hook.js'), 'utf8');
+    const reaches = [...hookSrc.matchAll(/require\('\.\.\/(public\/[\w/-]+\.js)'\)/g)].map(m => m[1]);
+    assert.ok(reaches.length > 0, 'sanity: the hook reaches into public/ for the shared definition');
+    const unpacked = require(path.join(ROOT, 'package.json')).build.asarUnpack;
+    for (const rel of reaches) {
+      assert.ok(unpacked.includes(rel),
+        `${rel} is required by the unpacked hook, so it must be unpacked beside it`);
+    }
+  });
+
+  test('the two graders answer from the same function, not from two lists', () => {
+    const hook = require('../../scripts/permission-hook.js');
+    const shared = require('../../public/read-only-shell.js');
+    assert.strictEqual(hook.isReadOnlyShellCommand, shared.isReadOnlyShellCommand,
+      'the hook reads the shared definition rather than keeping one of its own');
+    const clientSrc = fs.readFileSync(path.join(ROOT, 'public', 'permissions.js'), 'utf8');
+    assert.ok(!/READ_ONLY\s*=\s*\//.test(clientSrc),
+      'and this module keeps no second read-only list to drift away from it');
+
+    // Agreement in what they answer, not merely in source: one rule, both graders.
+    for (const cmd of [REPORTED, 'ls x 2>&1', 'cat a.md', 'cd d && ls', 'npx vercel inspect u --meta']) {
+      assert.strictEqual(shared.isReadOnlyShellCommand(cmd), true, `read-only: ${cmd}`);
+      assert.strictEqual(risk(cmd), 'low', `and graded low: ${cmd}`);
+    }
+    for (const cmd of ['npm install', 'node server.js', 'mkdir d']) {
+      assert.strictEqual(shared.isReadOnlyShellCommand(cmd), false, `not read-only: ${cmd}`);
+      assert.notStrictEqual(risk(cmd), 'low', `and not graded low: ${cmd}`);
+    }
+  });
+
+  test('a package runner does not excuse the tool it runs', () => {
+    // The runner is transparent, so what it names is judged. A read-only word
+    // appearing somewhere on the line excuses nothing.
+    for (const cmd of [
+      'npx vercel deploy',
+      'npx rimraf /tmp/x',
+      'npx',
+      'npx vercel',
+      'npx --yes vercel inspect u',
+      'echo "npx vercel inspect" > /tmp/x',
+      'grep inspect vercel.json && npx vercel deploy',
+      'npx cat',
+    ]) {
+      assert.notStrictEqual(risk(cmd), 'low', cmd);
+    }
+    assert.strictEqual(risk('npx vercel inspect u --meta && rm -rf /tmp/y'), 'high',
+      'a removal joined onto a read is still a removal');
+  });
+
+  test('a command that writes still draws its card', () => {
+    assert.strictEqual(risk('cd d && npx vercel inspect u | tee out.txt'), 'medium');
+    assert.strictEqual(risk('npx vercel inspect u > out.txt'), 'medium');
+    assert.strictEqual(risk('cd d && rm -rf build'), 'high');
+  });
+
+  test('a command that takes another command to run is not a read', () => {
+    // `env` prints the environment, and it also runs whatever follows its
+    // assignments. Reading it as a read let a removal ride in on it, and one
+    // definition cannot carry that both ways.
+    assert.notStrictEqual(risk('env FOO=1 rm notes.md'), 'low');
+  });
+
+  test('sort and uniq can write a file with no redirection on the line, so neither is a read', () => {
+    // READ THIS BEFORE PUTTING EITHER WORD BACK. The short vocabulary above is
+    // not short for tidiness, and these two are why it could not simply adopt
+    // the card grader's older, wider list.
+    //
+    // WHAT THE WORDS CAN DO: `sort -o FILE` writes FILE in place of stdout,
+    // and `uniq INPUT OUTPUT` writes its second positional argument. Neither
+    // needs `>`, `>>` or `tee`, which is the only write shape the read test
+    // looks for, so on the page both lines read like an ordinary sort or an
+    // ordinary de-duplication.
+    //
+    // WHAT THAT WOULD COST: this definition is consumed by the boundary layer,
+    // which uses it to exempt a crossing under the runtime's OWN home. Graded
+    // a read, `sort -o ~/.claude/hooks/pretool.sh payload` is exempted from
+    // its crossing, and in Code mode it lands with no card and nothing
+    // reported, having overwritten a hook script that runs in every later
+    // session. Every test in this suite was green over exactly that.
+    //
+    // This test drives the real classifier, so it fails whichever registry
+    // either word is added back to.
+    const hook = require('../../scripts/permission-hook.js');
+    const home = makeHome();
+    const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'ro-ws-'));
+    scratch.push(home, ws);
+    const target = path.join(home, '.claude', 'hooks', 'pretool.sh');
+
+    for (const cmd of [`sort -o ${target} /tmp/payload`, `uniq /tmp/payload ${target}`]) {
+      const crossing = hook.classifyShellAccess('Bash', { command: cmd }, ws, [], home);
+      assert.ok(crossing && crossing.crossings.some(c => c.persistenceSurface),
+        `the boundary reports the write: ${cmd}`);
+      assert.notStrictEqual(risk(cmd), 'low', `and the grader asks: ${cmd}`);
+    }
+  });
+
+  test('a subshell the segmenter cannot see into is not a read, at either grader', () => {
+    // The card grader tested for this and the hook never did, so the same text
+    // was read as hiding nothing by the layer that exempts a crossing and as
+    // hiding something by the layer that only draws a card. It is part of the
+    // shared definition now, which is what makes adding `cd` to the vocabulary
+    // safe: without it, `cd $(...)` reads as a bare `cd`.
+    const hook = require('../../scripts/permission-hook.js');
+    const home = makeHome();
+    const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'ro-ws2-'));
+    scratch.push(home, ws);
+    const agents = path.join(home, '.claude', 'agents');
+
+    const hidden = hook.classifyShellAccess('Bash',
+      { command: `cd ${agents} && ls $(rm -rf ${path.join(agents, 'x')})` }, ws, [], home);
+    assert.ok(hidden && hidden.crossings.some(c => c.persistenceSurface),
+      'a removal hidden in a substitution is still reported against the persistence surface');
+    assert.notStrictEqual(risk(`cd d && ls $(rm -rf ${path.join(agents, 'x')})`), 'low',
+      'and the grader still asks');
+  });
+
+  test('exactly one word is new to the boundary layer, and it reaches no file', () => {
+    // THE WIDENING, STATED AND BOUNDED. Sharing one definition means the hook
+    // now recognises whatever the shared vocabulary names, so the vocabulary
+    // grew by exactly one word: `cd`, without which the reported command's
+    // first segment fails and the whole line cards. This pins that it is the
+    // only one, so a later merge cannot quietly add a second.
+    const hook = require('../../scripts/permission-hook.js');
+    const home = makeHome();
+    const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'ro-ws3-'));
+    scratch.push(home, ws);
+    const agents = path.join(home, '.claude', 'agents');
+
+    assert.strictEqual(hook.classifyShellAccess('Bash', { command: `cd ${agents} && ls ${agents}` }, ws, [], home), null,
+      'cd is new to the boundary layer, and a chain built from it and a read is freed');
+
+    // AND NOTHING ELSE CAME WITH IT. Every other word this grader alone used
+    // to trust still produces a crossing at the boundary layer.
+    for (const word of ['whoami', 'date', 'printenv', 'sort', 'uniq', 'diff', 'true', 'pushd', 'popd']) {
+      const r = hook.classifyShellAccess('Bash', { command: `${word} ${agents}` }, ws, [], home);
+      assert.ok(r && r.crossings.some(c => c.persistenceSurface),
+        `${word} did not join the boundary layer's vocabulary`);
+    }
+
+    // FAIL SAFE IS UNCHANGED BY THE ONE ADDITION. A write still cards, and the
+    // secrets tier is never re-graded whatever the command is built from.
+    const write = hook.classifyShellAccess('Bash',
+      { command: `cd ${agents} && rm -rf ${path.join(agents, 'x')}` }, ws, [], home);
+    assert.ok(write && write.crossings.some(c => c.persistenceSurface),
+      'cd does not shield a removal joined onto it');
+    const secret = hook.classifyShellAccess('Bash',
+      { command: `cd ${agents} && cat ${path.join(home, '.claude', '.credentials.json')}` }, ws, [], home);
+    assert.ok(secret && secret.crossings.some(c => c.secret),
+      'and the secrets tier still cards on any access');
+  });
+
+  test('find is judged by what keeps it a read, so an unknown flag cards', () => {
+    // NAMING THE FLAGS THAT HURT DID NOT WORK. The first attempt named -exec,
+    // -execdir, -ok and -delete, and missed -fprint, -fprint0, -fprintf and
+    // -fls, each of which writes the search results to a path with no
+    // redirection character on the line. The ways `find` can write are not
+    // knowable from memory and differ by implementation: the BSD find on a Mac
+    // has no -fprintf at all, GNU's does, so a denylist written against one
+    // manual is wrong on the other platform this product ships to.
+    //
+    // The question is inverted now. Anything beginning with `-` that is not
+    // known to keep find a read makes it not one, so a flag nobody here
+    // thought of draws a card instead of being waved through.
+    const hook = require('../../scripts/permission-hook.js');
+    const home = makeHome();
+    const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'ro-ws4-'));
+    scratch.push(home, ws);
+    const hooks = path.join(home, '.claude', 'hooks');
+    const out = path.join(hooks, 'pretool.sh');
+
+    // Every way this find can run something or write something, and one flag
+    // that exists nowhere at all. None of them is named in the source: each
+    // fails by not being on the allowlist.
+    for (const cmd of [
+      `find ${hooks} -delete`,
+      `find ${hooks} -exec rm -rf {} \\;`,
+      `find ${hooks} -execdir rm {} +`,
+      `find ${hooks} -ok rm {} \\;`,
+      `find ${hooks} -okdir rm {} \\;`,
+      `find ${hooks} -fprint ${out}`,
+      `find ${hooks} -fprint0 ${out}`,
+      `find ${hooks} -fprintf ${out} "%p"`,
+      `find ${hooks} -fls ${out}`,
+      `find ${hooks} -madeupflag`,
+    ]) {
+      const r = hook.classifyShellAccess('Bash', { command: cmd }, ws, [], home);
+      assert.ok(r && r.crossings.some(c => c.persistenceSurface),
+        `the boundary reports it rather than exempting it: ${cmd}`);
+      assert.notStrictEqual(risk(cmd), 'low', `and the grader asks: ${cmd}`);
+    }
+
+    // A FLAG'S OPERAND IS CONSUMED, NOT JUDGED, which is what makes the
+    // allowlist usable: an ordinary read can carry an operand beginning with
+    // `-`, and would card on a naive reading of every `-` word.
+    for (const cmd of [
+      `find ${hooks} -name "*.sh"`,
+      `find ${hooks} -type f -mtime -1`,
+      `find ${hooks} -type d -maxdepth 2`,
+      `find ${hooks} -size -1M`,
+      `find ${hooks} -perm -644`,
+      `find ${hooks} ! -name x -print0`,
+    ]) {
+      assert.strictEqual(hook.classifyShellAccess('Bash', { command: cmd }, ws, [], home), null,
+        `an ordinary search is still a read: ${cmd}`);
+      assert.strictEqual(risk(cmd), 'low', `and still auto-approves: ${cmd}`);
+    }
+
+    // AND THE OPERAND RULE CANNOT SWALLOW AN ACTION. `-depth` is documented
+    // both with and without an operand, so it is recorded as taking none: read
+    // the other way, these lines would consume the action as its operand.
+    //
+    // DRIVEN AT THE BOUNDARY LAYER ON PURPOSE. The card grader keeps its own
+    // separate test for -exec and -delete, so it answers these correctly even
+    // when the shared definition is wrong, and an assertion against it would
+    // pass while the layer that actually exempts a crossing was broken.
+    for (const cmd of [`find ${hooks} -depth -delete`, `find ${hooks} -depth -fprint ${out}`]) {
+      const r = hook.classifyShellAccess('Bash', { command: cmd }, ws, [], home);
+      assert.ok(r && r.crossings.some(c => c.persistenceSurface),
+        `an ambiguous flag takes no operand, so what follows it is still judged: ${cmd}`);
+    }
+  });
+
+  test('rg running a preprocessor is not a read', () => {
+    // `rg --pre <command>` runs that command over every file it searches, so
+    // the search is a command execution wearing a search's leading word.
+    const hook = require('../../scripts/permission-hook.js');
+    const home = makeHome();
+    const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'ro-ws5-'));
+    scratch.push(home, ws);
+    const hooks = path.join(home, '.claude', 'hooks');
+
+    const r = hook.classifyShellAccess('Bash', { command: `rg --pre /tmp/pre.sh needle ${hooks}` }, ws, [], home);
+    assert.ok(r && r.crossings.some(c => c.persistenceSurface),
+      'a preprocessor run over a persistence surface is reported, not exempted');
+    assert.strictEqual(hook.classifyShellAccess('Bash', { command: `rg needle ${hooks}` }, ws, [], home), null,
+      'and an ordinary search is still a read');
+  });
+
+  test('the browser wiring loads in the order index.html declares', () => {
+    // Every other test here reaches both modules through require. The running
+    // application does not: index.html loads read-only-shell.js as a plain
+    // script and permissions.js reads it off the global. Nothing proved those
+    // two halves meet, so a reordered script tag would have broken the grader
+    // in the browser with a green suite.
+    const src = f => fs.readFileSync(path.join(ROOT, 'public', f), 'utf8');
+    const html = src('index.html');
+    assert.ok(html.indexOf('/read-only-shell.js') < html.indexOf('/permissions.js'),
+      'index.html loads the shared definition before the grader that reads it');
+
+    // Run both files the way a <script> tag does: no module.exports in scope,
+    // one shared root object, in the order the page declares.
+    const root = {};
+    const asScript = (name) => {
+      const fn = new Function('self', 'module', src(name));
+      fn.call(root, root, undefined);
+    };
+    asScript('read-only-shell.js');
+    asScript('permissions.js');
+    assert.ok(root.RundockReadOnlyShell, 'the shared definition attached itself to the global');
+    assert.strictEqual(root.RundockPermissions.classifyRisk('Bash', { command: REPORTED }), 'low',
+      'and the grader built from the global grades the reported command exactly as the required one does');
+    assert.strictEqual(root.RundockPermissions.classifyRisk('Bash', { command: 'npx vercel deploy' }), 'medium');
   });
 });
 

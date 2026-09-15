@@ -19,6 +19,21 @@ const os = require('os');
 const path = require('path');
 const fs = require('fs');
 
+// THE ONE DEFINITION OF READ-ONLY, shared with the client risk grader.
+// It lived here and was answered a second time, differently, in
+// public/permissions.js, and the reader paid for the disagreement: a command
+// this file read as harmless was carded anyway by the narrower list kept
+// there. The module sits under public/ because that is the half that cannot
+// require the other (the browser has no require), and node reaching into
+// public/ is the pattern lib/ already uses for shared client logic.
+//
+// THE REACH OUT OF scripts/ IS NOT FREE. This file is asar-unpacked so Claude
+// Code can exec it as its own process, and a require reaching out of that
+// directory resolves on disk rather than inside the archive. The shared module
+// is named in package.json's asarUnpack for that reason, and a test binds the
+// two so a later shared module cannot be added without it.
+const { isReadOnlyShellCommand } = require('../public/read-only-shell.js');
+
 // One directory, several names. macOS keeps /tmp and /var as symlinks into
 // /private, Dropbox and iCloud vaults are commonly reached through a symlink
 // in ~/Documents, and the default filesystem is case-insensitive while
@@ -88,38 +103,12 @@ const SECRET_RELATIVE_PATHS = ['.credentials.json'];
 // folder root, not a same-named file nested somewhere already free.
 const PERSISTENCE_SURFACE_DIRS = ['agents', 'skills', 'plugins', 'commands', 'hooks'];
 const PERSISTENCE_SURFACE_FILES = ['settings.json'];
-// Shell commands known to only read, never write, when invoked alone. Used
-// ONLY to re-grade a crossing under the runtime's OWN home (see
-// isReadOnlyShellCommand below): a shell command cannot declare which act it
-// performs, so this is the one place that infers a read from the command
-// text rather than from which tool was called. FAIL SAFE: a command not
-// entirely built from this list is never treated as read-only, whatever it
-// is. Outside the runtime's home this registry is never consulted at all;
-// the existing text-heuristic crossing detection is unaffected.
-const READ_ONLY_SHELL_COMMANDS = [
-  'ls', 'cat', 'head', 'tail', 'find', 'grep', 'rg', 'wc', 'file', 'stat',
-  'realpath', 'basename', 'dirname', 'echo', 'pwd', 'tree', 'du',
-];
-// THE SAME REGISTRY FOR THE OTHER SHELL, because Windows is one of the two
-// platforms this product builds for and its agents do not write `ls`. Without
-// these, every Get-ChildItem under the runtime home graded as a WRITE and
-// Windows kept the approval storm this release ended on macOS: measured on a
-// Windows workspace, a plain listing of the global agents and skills folders
-// drew "writing here persists", naming both.
-//
-// Enumerated rather than matched by verb. `Get-*` is read-shaped by
-// PowerShell's own convention, but this list frees a crossing into the
-// runtime's own home, so it names the cmdlets actually seen rather than
-// trusting a naming convention to hold for every cmdlet anyone ever writes.
-// Compared case-insensitively because PowerShell is; the Unix list above is
-// not, because its shells are not.
-const READ_ONLY_POWERSHELL_COMMANDS = [
-  'get-childitem', 'gci', 'dir', 'ls', 'get-content', 'gc', 'cat', 'type',
-  'get-item', 'gi', 'get-location', 'gl', 'pwd', 'test-path', 'resolve-path',
-  'split-path', 'select-string', 'sls', 'measure-object', 'select-object',
-  'sort-object', 'format-table', 'format-list', 'out-string', 'write-output',
-  'write-host', 'echo',
-];
+// The read-only shell registries used to sit here, and were re-exported for
+// nobody. They are now in public/read-only-shell.js, required at the top of
+// this file, because the client risk grader answers the same question about
+// the same text and the two answers must be one. Nothing about how this file
+// USES the answer changed: it re-grades a crossing under the runtime's OWN
+// home and nothing else, and outside that home it is never consulted at all.
 
 // canonicalize only folds case for path components that already exist: an
 // unborn target realpaths its nearest existing ancestor and reattaches the
@@ -588,84 +577,14 @@ function flavourFor(token, workspaceRoot) {
   return path;
 }
 
-// Splits a command into its top-level segments on the separators a shell
-// actually uses to run more than one thing (`;`, `&&`, `||`, a pipe), aware
-// of quoting so a separator character inside a quoted string is not one.
-// Order does not matter here (unlike shellPathTokens): every segment must
-// qualify for the command to be read-only, so which one is checked first
-// changes nothing about the answer.
-function shellSegments(command) {
-  const segments = [];
-  let cur = '';
-  let quote = null;
-  const str = String(command);
-  for (let i = 0; i < str.length; i++) {
-    const ch = str[i];
-    if (quote) {
-      cur += ch;
-      if (ch === quote) quote = null;
-      continue;
-    }
-    if (ch === "'" || ch === '"') { quote = ch; cur += ch; continue; }
-    if ((ch === '&' && str[i + 1] === '&') || (ch === '|' && str[i + 1] === '|')) {
-      segments.push(cur); cur = ''; i++; continue;
-    }
-    // A LONE `&` JOINS TWO COMMANDS TOO. It backgrounds what precedes it and
-    // runs what follows, so `ls x & rm -rf x` is two commands exactly as
-    // `ls x && rm -rf x` is. Passing it through as ordinary text left the whole
-    // line judged by its leading word, so the removal rode in free on the `ls`.
-    // `&&` is consumed above, so any `&` reaching here is the single form; a
-    // trailing one yields an empty segment, which carries nothing to
-    // disqualify and leaves a backgrounded read a read.
-    if (ch === ';' || ch === '|' || ch === '&') { segments.push(cur); cur = ''; continue; }
-    cur += ch;
-  }
-  segments.push(cur);
-  return segments;
-}
-
-// Whether a shell command, taken as a whole, only reads. Used ONLY to
-// re-grade an agent-home crossing that would otherwise card because it
+// `shellSegments` and `isReadOnlyShellCommand` are required from
+// public/read-only-shell.js at the top of this file. They used to be written
+// out here, and written out a second time in public/permissions.js, which is
+// how the two graders came to disagree about the same command text. Used here
+// ONLY to re-grade an agent-home crossing that would otherwise card because it
 // touches a persistence surface (see shellCrossings): the tier itself is
-// unaffected, and a secrets-registry crossing is never re-graded regardless
-// of this answer.
-//
-// FAIL SAFE, both ways at once:
-// - Any write-shaped redirection (`>`, `>>`) or a `tee` invocation anywhere
-//   in the command disqualifies the WHOLE command, because which stream a
-//   redirection targets is not decidable from text alone, and echo alone is
-//   only harmless without one (`echo x > ~/.claude/hooks/y` still writes).
-// - EVERY segment must lead with a word this registry names. One
-//   unrecognised leading word (an env assignment, a subshell, a command not
-//   on the list) fails the whole command, not just that segment: a
-//   compound like `ls ~/.claude/agents && rm -rf ~/.claude/agents/x` must
-//   still card, and it does because `rm` is not in the registry.
-// A redirection that cannot create or modify a file: output thrown away at
-// /dev/null, or a file descriptor duplicated onto another (`2>&1`). Stripped
-// before the write test below because the test reads the whole command string
-// and cannot otherwise tell a discard from a write. MEASURED: a plain
-// `ls ~/.claude/agents 2>/dev/null` was graded a WRITE to a persistence
-// surface on the strength of that one `>`, and carded as "writing here
-// persists" for a command that writes nothing.
-//
-// EXHAUSTIVE BY INTENT. Only these two shapes are exempt, because only these
-// two provably reach no path. Every other target is a real file, including
-// one inside the surface itself, so the fail-safe direction is unchanged.
-const DISCARDING_REDIRECT_RE = /\d*>>?\s*(?:\/dev\/null|&\s*\d+)/g;
-
-function isReadOnlyShellCommand(command) {
-  const str = String(command).replace(DISCARDING_REDIRECT_RE, ' ');
-  if (/>>?|\btee\b/.test(str)) return false;
-  const segments = shellSegments(str);
-  return segments.length > 0 && segments.every(seg => {
-    const trimmed = seg.trim();
-    if (!trimmed) return true; // an empty segment (trailing separator) carries nothing to disqualify it
-    const word = (trimmed.match(/^(\S+)/) || [])[1] || '';
-    const bare = word.includes('/') ? word.slice(word.lastIndexOf('/') + 1) : word;
-    if (READ_ONLY_SHELL_COMMANDS.includes(bare)) return true;
-    return READ_ONLY_POWERSHELL_COMMANDS.includes(bare.toLowerCase());
-  });
-}
+// unaffected, and a secrets-registry crossing is never re-graded regardless of
+// this answer.
 
 // EVERY distinct target in the command that resolves outside, not the first.
 //
@@ -846,7 +765,7 @@ module.exports = {
   advisoryOutsidePaths,
   isSecretPath, isPersistenceSurface, SECRET_RELATIVE_PATHS, PERSISTENCE_SURFACE_DIRS, PERSISTENCE_SURFACE_FILES,
   isWorkspaceAnswerFile, WORKSPACE_ANSWER_FILES, boundaryCrossingsFor,
-  REFUSED_CLAUDE_EDIT_DIRS, READ_ONLY_SHELL_COMMANDS, READ_ONLY_POWERSHELL_COMMANDS, isReadOnlyShellCommand,
+  REFUSED_CLAUDE_EDIT_DIRS, isReadOnlyShellCommand,
 };
 
 if (require.main === module) main();

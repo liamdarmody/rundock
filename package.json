@@ -92,7 +92,8 @@
       "package.json"
     ],
     "asarUnpack": [
-      "scripts/**/*"
+      "scripts/**/*",
+      "public/read-only-shell.js"
     ],
     "icon": "electron/build/icon.icns",
     "afterPack": "scripts/afterPack.js",
