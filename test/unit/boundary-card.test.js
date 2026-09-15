@@ -292,3 +292,34 @@ describe('a crossing into the agent\'s own folder, rendered and answered', () =>
     }
   });
 });
+
+describe('the card for the file that records permission answers', () => {
+  test('shows copy naming what the file governs, through the real card path', () => {
+    // The helper returning the right sentence is not the same as the card
+    // showing it: the wiring between them is a line of its own and was the
+    // only thing carrying it.
+    const html = render({
+      tool_name: 'Write', input: { file_path: '/ws/.claude/settings.local.json' },
+      boundary: true, resolved_path: '/ws/.claude/settings.local.json', grant_dir: null,
+      crossings: [{ path: '/ws/.claude/settings.local.json', grantDir: null, answerFile: true }],
+    });
+    assert.match(html, /what agents may do/, 'the card says what the file governs');
+    assert.match(html, /every time/, 'and that this one keeps asking');
+  });
+
+  test('offers no standing grant, even when another place in the same request would', () => {
+    // A request can reach several places at once. With the ordinary crossing
+    // first, the folder button would still have been offered, and one click
+    // would grant lasting authority over the mechanism that stores the answers.
+    const html = render({
+      tool_name: 'Bash', input: { command: 'touch /etc/probe && echo x > /ws/.claude/settings.local.json' },
+      boundary: true, resolved_path: '/etc/probe', grant_dir: '/etc',
+      crossings: [
+        { path: '/etc/probe', grantDir: '/etc' },
+        { path: '/ws/.claude/settings.local.json', grantDir: null, answerFile: true },
+      ],
+    });
+    assert.doesNotMatch(html, /Always allow this folder/,
+      'no folder button while an answer file is among the places being reached');
+  });
+});

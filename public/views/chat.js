@@ -688,11 +688,18 @@ function renderPermissionCard(d, convoId) {
   // The crossing whose tags decide the card's copy, resolved once rather
   // than re-derived below. A secrets-registry hit wins over an ordinary
   // persistence-surface write when a command reaches both.
-  const flaggedCrossing = crossings.find(c => c && c.secret) || crossings.find(c => c && c.persistenceSurface) || null;
+  const flaggedCrossing = crossings.find(c => c && c.secret) || crossings.find(c => c && c.answerFile) || crossings.find(c => c && c.persistenceSurface) || null;
   // No grant may suppress a secrets-registry crossing's card. The hook
   // never sends a whole-folder grantDir for one, but the card enforces this
   // itself too, rather than trusting that upstream alone.
-  const wholeFolderOffered = grantable && !(flaggedCrossing && flaggedCrossing.secret);
+  // NOR FOR AN ANSWER FILE. A request can reach several places at once, so the
+  // ordinary grantable crossing can be first while a later one is the file that
+  // records permission answers. Offering the folder button then would let one
+  // click grant standing authority over the mechanism that stores the answers,
+  // which is the whole thing this is preventing.
+  const wholeFolderOffered = grantable
+    && !(flaggedCrossing && (flaggedCrossing.secret || flaggedCrossing.answerFile))
+    && !crossings.some(c => c && c.answerFile);
   // A COMMAND THAT REACHES OUTSIDE WITHOUT TRIPPING THE BOUNDARY CHECK.
   //
   // The boundary check inspects tokens that look like paths, which is the

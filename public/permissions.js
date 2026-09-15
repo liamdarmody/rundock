@@ -307,10 +307,18 @@
       + 'so this always asks, on any access, and no grant, mode or setting can silence it.',
     persistenceSurface: 'Writing here persists: it takes effect in every later session and every '
       + 'other workspace, including an unattended routine run.',
+    // The workspace's own answers to permission questions, which includes the
+    // file the permission checks themselves are configured from. Named
+    // because a card that reads like an ordinary config write gets answered
+    // like one, and this is the write that decides what gets asked about.
+    answerFile: 'This file holds your own answers about what agents may do, and the checks '
+      + 'that ask you. An agent can request a change to it, but never keep the '
+      + 'permission: this asks every time, and there is no option to stop being asked.',
   };
   function agentHomeBoundaryCopy(crossing) {
     if (!crossing) return null;
     if (crossing.secret) return AGENT_HOME_COPY.secret;
+    if (crossing.answerFile) return AGENT_HOME_COPY.answerFile;
     if (crossing.persistenceSurface) return AGENT_HOME_COPY.persistenceSurface;
     return null;
   }
