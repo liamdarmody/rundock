@@ -299,7 +299,7 @@ const MUTATIONS = [
     '    if (READ_ONLY_SHELL_COMMANDS.indexOf(first) >= 0) return true;\n'
     + '    if (NO_TARGET_COMMANDS.indexOf(first) >= 0) return true;\n'
     + '    if (READ_ONLY_POWERSHELL_COMMANDS.indexOf(first.toLowerCase()) >= 0) return true;\n'
-    + "    return pairReads(first, words[1] || '');",
+    + '    return false;',
     '    return true;'],
   // A subshell the segmenter cannot see into hides whatever it runs. Drop the
   // test and `cd $(rm -rf ~/.claude/agents/x)` reads as a bare `cd`, and the
@@ -353,17 +353,10 @@ const MUTATIONS = [
   [READ_ONLY, 'a write-shaped redirection disqualifies a command as read-only, whatever its leading words are',
     "    if (/>>?|\\btee\\b/.test(str)) return false;",
     ''],
-  // A package runner executes the tool it names, so the runner's own name must
-  // not be what is judged: put it back and `npx vercel inspect` is graded by
-  // `npx`, which no registry names, and the reported command cards again.
-  [READ_ONLY_CLIENT, 'a package runner is transparent, so the tool it runs is what is judged',
-    "    if (PACKAGE_RUNNERS.indexOf(first) >= 0) return pairReads(bareWord(words[1] || ''), words[2] || '');",
-    ''],
-  // Only the named subcommand is a read: accept any and `npx vercel deploy`
-  // auto-approves on the strength of its tool's name alone.
-  [READ_ONLY_CLIENT, 'only the subcommand the registry names is a read, never the tool it belongs to',
-    '    return READ_ONLY_SUBCOMMANDS[command].indexOf(subcommand) >= 0;',
-    '    return true;'],
+  // The two rows that stood here guarded a package-runner exemption keyed on one
+  // third-party tool's name and subcommand. The exemption is gone, so there is
+  // nothing left to mutate: a runner is not a read, and the row below proves
+  // that by the only thing that can, which is the fall-through answering false.
   // A registry path is recognised however it is spelled, including before it
   // exists: drop the fold on the CANDIDATE side (the fold on the registry's
   // own, already-lowercase names changes nothing, which is why this targets
