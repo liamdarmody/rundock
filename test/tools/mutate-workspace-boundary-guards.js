@@ -41,6 +41,18 @@ const HOOK_INTEGRATION = { src: path.join(ROOT, 'scripts', 'permission-hook.js')
 // workspace-boundary suite drives, so a mutation to either is invisible
 // there and only this suite can notice it.
 const HOOK_REFUSAL = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/permission-agent-guard.test.js' };
+// The read-only definition the hook reads, and the client risk grader with
+// it. It moved out of the hook when the two graders stopped keeping separate
+// answers to the same question; the rows below still drive the hook's suite,
+// because that is where breaking a read-only rule shows up as a crossing that
+// cards or one that stops carding.
+const READ_ONLY = { src: path.join(ROOT, 'public', 'read-only-shell.js'), suite: 'test/unit/workspace-boundary.test.js' };
+// Same file, the other suite. Not every rule in the shared module is proven by
+// the boundary corpus: the package-runner rules, the vocabulary's size, and the
+// subshell guard are all driven from test/unit/permissions.test.js, which is
+// where the tests that drive BOTH graders over one command live. A row here
+// belongs to the suite that actually notices it, not to the file's usual one.
+const READ_ONLY_CLIENT = { src: path.join(ROOT, 'public', 'read-only-shell.js'), suite: 'test/unit/permissions.test.js' };
 // The mode-persisted-before-scaffold ordering guard lives in the protocol
 // handler, not the scaffold layer, and is reachable only through the real
 // workspace-open path (the scaffold-layer tests call scaffoldWorkspace
@@ -266,48 +278,92 @@ const MUTATIONS = [
     '(!tags.persistenceSurface)'],
   // Stop treating a lone `&` as a separator and `ls x & rm -rf x` is judged by
   // its leading word again, freeing the removal against a persistence surface.
-  [HOOK, 'a lone & separates commands, so the second cannot ride the first',
-    "    if (ch === ';' || ch === '|' || ch === '&') { segments.push(cur); cur = ''; continue; }",
-    "    if (ch === ';' || ch === '|') { segments.push(cur); cur = ''; continue; }"],
+  [READ_ONLY, 'a lone & separates commands, so the second cannot ride the first',
+    "      if (ch === ';' || ch === '|' || ch === '&' || ch === '\\n' || ch === '\\r') {",
+    "      if (ch === ';' || ch === '|' || ch === '\\n' || ch === '\\r') {"],
   // Stop stripping the discarding redirects and one `2>/dev/null` appended
   // to `ls` grades the whole command a WRITE again, which is the card a real
   // session was shown for a command that writes nothing.
-  [HOOK, 'a redirection that discards output does not disqualify a read-only command',
-    "  const str = String(command).replace(DISCARDING_REDIRECT_RE, ' ');",
-    '  const str = String(command);'],
+  [READ_ONLY, 'a redirection that discards output does not disqualify a read-only command',
+    "    var str = String(command).replace(DISCARDING_REDIRECT_RE, ' ');",
+    '    var str = String(command);'],
   // Widen the exemption to any redirect target and the fail-safe inverts:
   // `ls x > x/listing.txt` writes into the surface and would read as free.
-  [HOOK, 'only /dev/null and descriptor duplication are exempt, never an arbitrary redirect target',
-    'const DISCARDING_REDIRECT_RE = /\\d*>>?\\s*(?:\\/dev\\/null|&\\s*\\d+)/g;',
-    'const DISCARDING_REDIRECT_RE = /\\d*>>?\\s*\\S+/g;'],
+  [READ_ONLY, 'only /dev/null and descriptor duplication are exempt, never an arbitrary redirect target',
+    'var DISCARDING_REDIRECT_RE = /\\d*>>?\\s*(?:\\/dev\\/null|&\\s*\\d+)/g;',
+    'var DISCARDING_REDIRECT_RE = /\\d*>>?\\s*\\S+/g;'],
   // A command is read-only only if every leading word is actually in the
   // registry: drop the check and any command (a bare `rm`, included) reads
   // as free against a persistence surface.
-  [HOOK, 'a command is read-only only when the registry actually names its leading word',
-    '    if (READ_ONLY_SHELL_COMMANDS.includes(bare)) return true;\n    return READ_ONLY_POWERSHELL_COMMANDS.includes(bare.toLowerCase());',
+  [READ_ONLY, 'a command is read-only only when the registry actually names its leading word',
+    '    if (READ_ONLY_SHELL_COMMANDS.indexOf(first) >= 0) return true;\n'
+    + '    if (NO_TARGET_COMMANDS.indexOf(first) >= 0) return true;\n'
+    + '    if (READ_ONLY_POWERSHELL_COMMANDS.indexOf(first.toLowerCase()) >= 0) return true;\n'
+    + "    return pairReads(first, words[1] || '');",
     '    return true;'],
+  // A subshell the segmenter cannot see into hides whatever it runs. Drop the
+  // test and `cd $(rm -rf ~/.claude/agents/x)` reads as a bare `cd`, and the
+  // removal is exempted from its crossing rather than reported.
+  [READ_ONLY_CLIENT, 'structure the segmenter cannot see into is never a read',
+    '    if (HIDES_SUBCOMMAND.test(str)) return false;',
+    ''],
+  // The vocabulary grew by exactly one word. Put the card grader's old private
+  // list back into it and `sort -o <persistence surface> payload` is graded a
+  // read and exempted from its crossing, which is the write nobody sees.
+  // `find` sat on the read-only registry with its flags unexamined. Drop the
+  // allowlist and `find ~/.claude/hooks -delete` is graded a read again, its
+  // crossing skipped, and in Code mode the hook scripts go with no card.
+  [READ_ONLY_CLIENT, 'find is judged by its flags at all',
+    "    if (first === 'find') return findOnlyReads(words.slice(1));",
+    ''],
+  // THE SHAPE, not the contents. Return true for an unrecognised flag and the
+  // allowlist becomes a denylist of nothing: every write action this file does
+  // not name, on every platform it does not run on, is waved through again.
+  [READ_ONLY_CLIENT, 'a find flag nobody recognised fails closed rather than passing',
+    '      return false;\n    }\n    return true;\n  }',
+    '      continue;\n    }\n    return true;\n  }'],
+  // Consume an operand after a flag that does not take one and an action is
+  // swallowed as data: `find . -depth -delete` reads as a bare search again.
+  [READ_ONLY_CLIENT, 'only a flag that always takes an operand consumes the word after it',
+    '      if (FIND_READ_FLAGS_NO_OPERAND.indexOf(w) >= 0) continue;',
+    '      if (FIND_READ_FLAGS_NO_OPERAND.indexOf(w) >= 0) { i++; continue; }'],
+  [READ_ONLY_CLIENT, 'the shared vocabulary adds only the word the reported command needs',
+    "  var NO_TARGET_COMMANDS = ['cd'];",
+    "  const NO_TARGET_COMMANDS = ['cd', 'pushd', 'popd', 'true', 'date', 'diff',\n"
+    + "    'printenv', 'sort', 'uniq', 'which', 'whoami'];"],
   // Drop the PowerShell half and Windows keeps the storm this release ended
   // on macOS: every Get-ChildItem under the runtime home grades as a write.
-  [HOOK, 'the read-only registry answers for PowerShell as well as the Unix shells',
-    '    return READ_ONLY_POWERSHELL_COMMANDS.includes(bare.toLowerCase());',
-    '    return false;'],
+  [READ_ONLY, 'the read-only registry answers for PowerShell as well as the Unix shells',
+    '    if (READ_ONLY_POWERSHELL_COMMANDS.indexOf(first.toLowerCase()) >= 0) return true;',
+    ''],
   // Compare case-sensitively and half the spellings agents actually write
   // (get-childitem, GCI) stop being reads, because PowerShell is not.
-  [HOOK, 'PowerShell commands are compared case-insensitively, because PowerShell is',
-    'READ_ONLY_POWERSHELL_COMMANDS.includes(bare.toLowerCase())',
-    'READ_ONLY_POWERSHELL_COMMANDS.includes(bare)'],
+  [READ_ONLY, 'PowerShell commands are compared case-insensitively, because PowerShell is',
+    'READ_ONLY_POWERSHELL_COMMANDS.indexOf(first.toLowerCase()) >= 0',
+    'READ_ONLY_POWERSHELL_COMMANDS.indexOf(first) >= 0'],
   // Every segment of a compound command must qualify, not merely one of
   // them: drop `every` for `some` and `ls x && rm -rf x` reads as free
   // because its first segment alone is a read.
-  [HOOK, 'every segment of a compound command must be read-only, not merely one of them',
-    'segments.every(seg => {',
-    'segments.some(seg => {'],
+  [READ_ONLY, 'every segment of a compound command must be read-only, not merely one of them',
+    'segments.every(segmentReads)',
+    'segments.some(segmentReads)'],
   // A write-shaped redirection makes an otherwise read-only leading command
   // write anyway: drop the check and `echo x > ~/.claude/hooks/y` reads as
   // free because `echo` alone is on the registry.
-  [HOOK, 'a write-shaped redirection disqualifies a command as read-only, whatever its leading words are',
-    "  if (/>>?|\\btee\\b/.test(str)) return false;",
+  [READ_ONLY, 'a write-shaped redirection disqualifies a command as read-only, whatever its leading words are',
+    "    if (/>>?|\\btee\\b/.test(str)) return false;",
     ''],
+  // A package runner executes the tool it names, so the runner's own name must
+  // not be what is judged: put it back and `npx vercel inspect` is graded by
+  // `npx`, which no registry names, and the reported command cards again.
+  [READ_ONLY_CLIENT, 'a package runner is transparent, so the tool it runs is what is judged',
+    "    if (PACKAGE_RUNNERS.indexOf(first) >= 0) return pairReads(bareWord(words[1] || ''), words[2] || '');",
+    ''],
+  // Only the named subcommand is a read: accept any and `npx vercel deploy`
+  // auto-approves on the strength of its tool's name alone.
+  [READ_ONLY_CLIENT, 'only the subcommand the registry names is a read, never the tool it belongs to',
+    '    return READ_ONLY_SUBCOMMANDS[command].indexOf(subcommand) >= 0;',
+    '    return true;'],
   // A registry path is recognised however it is spelled, including before it
   // exists: drop the fold on the CANDIDATE side (the fold on the registry's
   // own, already-lowercase names changes nothing, which is why this targets
@@ -446,7 +502,7 @@ function redTests(suite) {
 }
 
 function run() {
-  const targets = [HOOK, SCAFFOLD, BOUNDARY, CHAT_VIEW, HOOK_INTEGRATION, HOOK_REFUSAL, WORKSPACE_HANDLER, WORKSPACE_HANDLER_UNIT];
+  const targets = [HOOK, SCAFFOLD, BOUNDARY, CHAT_VIEW, HOOK_INTEGRATION, HOOK_REFUSAL, WORKSPACE_HANDLER, WORKSPACE_HANDLER_UNIT, READ_ONLY, READ_ONLY_CLIENT];
   const session = beginMutationRun({ files: [...new Set(targets.map((target) => target.src))] });
   const originals = new Map();
   for (const target of targets) originals.set(target, session.original(target.src));
