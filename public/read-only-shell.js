@@ -45,10 +45,10 @@
     'realpath', 'basename', 'dirname', 'echo', 'pwd', 'tree', 'du',
   ];
 
-  // THE ONE ADDITION, and it is the one the reported command cannot do
-  // without: `cd ~/Projects/alchemist && npx vercel inspect ...` fails as a
-  // whole if its first segment does not qualify, however little the line does.
-  // `cd` reaches no file at all, so there is nothing for it to write.
+  // THE ONE ADDITION. A line is judged segment by segment and fails as a whole
+  // if any segment does not qualify, so a leading directory change disqualified
+  // commands that went on to do nothing at all. `cd` reaches no file, so there
+  // is nothing for it to write.
   //
   // The card grader also recognised `date`, `diff`, `printenv`, `pushd`,
   // `popd`, `sort`, `true`, `uniq`, `which` and `whoami`, and those are NOT
@@ -88,26 +88,23 @@
     'write-host', 'echo',
   ];
 
-  // A package runner executes the tool it names, so its own name says nothing
-  // about what runs. `npx vercel inspect` is judged as `vercel inspect`.
+  // NO NAME OF ANY PARTICULAR TOOL LIVES HERE, and a package runner is not a
+  // read whatever follows it.
   //
-  // Only the plain form is recognised. A runner given its own flags
-  // (`npx --yes vercel inspect`) puts a word where the tool is expected, no
-  // pair matches, and the command asks: the fail-safe direction, and the
-  // narrower claim while only the plain form has been seen in a session.
-  var PACKAGE_RUNNERS = ['npx'];
-
-  // Tools whose leading word cannot answer on its own, named as pairs.
-  // `vercel inspect` reports on a deployment; `vercel deploy` creates one.
-  // Only the pair is a read: the bare name is not, and neither is any
-  // subcommand missing from this list.
+  // A runner (`npx` and its kin) resolves a package and RUNS it, fetching it
+  // when it is not already present. Whether the program then reads or writes
+  // files is a second question; executing it is the first, and answering that
+  // with "no card" is a thing this product has never done. It was briefly done
+  // here for one reported command, keyed on that tool's name and subcommand,
+  // which also put knowledge of a third party's semantics inside the
+  // permission rules: a claim that rots silently the moment that tool adds a
+  // writing option, and one that frees the command somebody reported while the
+  // next person's equally harmless command still asks.
   //
-  // KEPT AS SHORT AS THE EVIDENCE. Every entry frees a command from asking,
-  // so one is added when a real session shows it asking for nothing, never
-  // because a subcommand sounds read-shaped.
-  var READ_ONLY_SUBCOMMANDS = {
-    vercel: ['inspect'],
-  };
+  // Inferring the answer from the subcommand's wording was considered and is
+  // worse. The MCP read verbs elsewhere work because those names come from a
+  // structured namespace a server declares; `npx <package> <word>` is
+  // unconstrained, and a package can be published whose `list` deletes.
 
   // A redirection that cannot create or modify a file: output thrown away at
   // /dev/null, or a file descriptor duplicated onto another (`2>&1`). Stripped
@@ -171,11 +168,6 @@
   // `/usr/bin/ls` and `ls` are one name.
   function bareWord(word) {
     return word.indexOf('/') >= 0 ? word.slice(word.lastIndexOf('/') + 1) : word;
-  }
-
-  function pairReads(command, subcommand) {
-    if (!Object.prototype.hasOwnProperty.call(READ_ONLY_SUBCOMMANDS, command)) return false;
-    return READ_ONLY_SUBCOMMANDS[command].indexOf(subcommand) >= 0;
   }
 
   // ── find is judged by an ALLOWLIST, and everything else fails closed ─────
@@ -255,11 +247,10 @@
     if (first === 'find') return findOnlyReads(words.slice(1));
     if (Object.prototype.hasOwnProperty.call(EXECUTING_FLAGS, first)
       && EXECUTING_FLAGS[first].test(segment)) return false;
-    if (PACKAGE_RUNNERS.indexOf(first) >= 0) return pairReads(bareWord(words[1] || ''), words[2] || '');
     if (READ_ONLY_SHELL_COMMANDS.indexOf(first) >= 0) return true;
     if (NO_TARGET_COMMANDS.indexOf(first) >= 0) return true;
     if (READ_ONLY_POWERSHELL_COMMANDS.indexOf(first.toLowerCase()) >= 0) return true;
-    return pairReads(first, words[1] || '');
+    return false;
   }
 
   // Structure this module cannot see into. `$(...)`, a backtick, and process

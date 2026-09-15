@@ -289,21 +289,31 @@ describe('one definition of read-only, read by both graders', () => {
     return home;
   }
 
-  // MEASURED, from a daily user's session. The working folder `~/Projects` was
-  // named and the card appeared anyway: `npx` was on neither read-only list,
-  // so a line that inspects a deployment and prints forty lines of it graded
-  // medium and asked.
-  const REPORTED = 'cd ~/Projects/alchemist && npx vercel inspect '
-    + 'https://alchemist-9f3c2d1.vercel.app --meta 2>&1 | head -40';
+  // MEASURED, from a daily user's session, and kept as the shape that drove
+  // this work even though it now asks. The line runs a package runner, which
+  // resolves a package and EXECUTES it, so the answer is a card: what the
+  // program then does to files is a second question and executing it is the
+  // first. The friction it reported is real and is answered by remembering an
+  // answer, not by inferring what a tool does from the words after its name.
+  const REPORTED = 'cd ~/Projects/alchemist && npx some-tool inspect '
+    + 'https://example.invalid/deployment --meta 2>&1 | head -40';
 
-  test('the reported command draws no card, with its working folder named', () => {
+  test('the reported command asks, because a package runner runs a program', () => {
+    // INVERTED DELIBERATELY. This assertion used to say the opposite, and the
+    // exemption that made it true keyed on one third-party tool's name and
+    // subcommand. It was withdrawn: a runner resolves a package and executes
+    // it, and answering that with "no card" is a thing this product does not
+    // do. The friction in the original report is real and is answered by
+    // remembering an answer, not by guessing what a program does.
     const decision = P.decidePermission(risk(REPORTED), P.toolAllowKey('Bash', { command: REPORTED }), new Set());
-    assert.deepStrictEqual(decision, { action: 'allow', reason: 'low-risk' },
-      'the command writes nothing, so the grader answers it rather than asking');
+    assert.notDeepStrictEqual(decision, { action: 'allow', reason: 'low-risk' },
+      'running a fetched program is asked about, whatever the words after its name');
+    assert.strictEqual(require('../../public/read-only-shell.js').isReadOnlyShellCommand(REPORTED), false,
+      'and the shared definition says the same, so the two graders stay in step');
 
-    // The other half of the same card. The boundary classifier already raised
-    // no crossing for this line; both halves must stay quiet for the reader to
-    // see nothing.
+    // The boundary half is unchanged and still quiet: naming the folder covers
+    // the target, and withdrawing a grading exemption does not touch that. The
+    // card the reader now sees is about running a program, not about a path.
     const hook = require('../../scripts/permission-hook.js');
     const workspace = path.join(ROOT, '.rundock-test-ws');
     const named = [path.join(os.homedir(), 'Projects')];
@@ -348,13 +358,30 @@ describe('one definition of read-only, read by both graders', () => {
       'and this module keeps no second read-only list to drift away from it');
 
     // Agreement in what they answer, not merely in source: one rule, both graders.
-    for (const cmd of [REPORTED, 'ls x 2>&1', 'cat a.md', 'cd d && ls', 'npx vercel inspect u --meta']) {
+    for (const cmd of ['ls x 2>&1', 'cat a.md', 'cd d && ls', 'find . -name "*.md"']) {
       assert.strictEqual(shared.isReadOnlyShellCommand(cmd), true, `read-only: ${cmd}`);
       assert.strictEqual(risk(cmd), 'low', `and graded low: ${cmd}`);
     }
-    for (const cmd of ['npm install', 'node server.js', 'mkdir d']) {
+    for (const cmd of ['npm install', 'node server.js', 'mkdir d', REPORTED]) {
       assert.strictEqual(shared.isReadOnlyShellCommand(cmd), false, `not read-only: ${cmd}`);
       assert.notStrictEqual(risk(cmd), 'low', `and not graded low: ${cmd}`);
+    }
+  });
+
+  test('the exemption that was withdrawn is gone, named so its removal is provable', () => {
+    // THE ONE PLACE A PARTICULAR TOOL IS NAMED, and it is here rather than in
+    // the rules on purpose. The withdrawn exemption was keyed on exactly this
+    // tool and this subcommand, so a test that avoids the name cannot tell the
+    // two versions apart: every other command in this file cards under both.
+    // Naming it is what makes the removal provable, and the rules themselves
+    // stay free of it, which is the property the card is about.
+    for (const cmd of [
+      'npx vercel inspect https://example.invalid/d --meta',
+      'cd ~/Projects/x && npx vercel inspect https://example.invalid/d --meta 2>&1 | head -40',
+    ]) {
+      assert.strictEqual(require('../../public/read-only-shell.js').isReadOnlyShellCommand(cmd), false,
+        `a runner is not a read, whatever it runs: ${cmd}`);
+      assert.notStrictEqual(risk(cmd), 'low', `and it is not graded low either: ${cmd}`);
     }
   });
 
@@ -362,24 +389,27 @@ describe('one definition of read-only, read by both graders', () => {
     // The runner is transparent, so what it names is judged. A read-only word
     // appearing somewhere on the line excuses nothing.
     for (const cmd of [
-      'npx vercel deploy',
+      'npx some-tool deploy',
       'npx rimraf /tmp/x',
       'npx',
-      'npx vercel',
-      'npx --yes vercel inspect u',
-      'echo "npx vercel inspect" > /tmp/x',
-      'grep inspect vercel.json && npx vercel deploy',
+      'npx some-tool',
+      'npx --yes some-tool inspect u',
+      'echo "npx some-tool inspect" > /tmp/x',
+      'grep inspect config.json && npx some-tool deploy',
       'npx cat',
+      'npx some-tool inspect u --meta',
+      'pnpm dlx some-tool inspect u',
+      'bunx some-tool inspect u',
     ]) {
       assert.notStrictEqual(risk(cmd), 'low', cmd);
     }
-    assert.strictEqual(risk('npx vercel inspect u --meta && rm -rf /tmp/y'), 'high',
+    assert.strictEqual(risk('npx some-tool inspect u --meta && rm -rf /tmp/y'), 'high',
       'a removal joined onto a read is still a removal');
   });
 
   test('a command that writes still draws its card', () => {
-    assert.strictEqual(risk('cd d && npx vercel inspect u | tee out.txt'), 'medium');
-    assert.strictEqual(risk('npx vercel inspect u > out.txt'), 'medium');
+    assert.strictEqual(risk('cd d && npx some-tool inspect u | tee out.txt'), 'medium');
+    assert.strictEqual(risk('npx some-tool inspect u > out.txt'), 'medium');
     assert.strictEqual(risk('cd d && rm -rf build'), 'high');
   });
 
@@ -420,6 +450,37 @@ describe('one definition of read-only, read by both graders', () => {
       const crossing = hook.classifyShellAccess('Bash', { command: cmd }, ws, [], home);
       assert.ok(crossing && crossing.crossings.some(c => c.persistenceSurface),
         `the boundary reports the write: ${cmd}`);
+      assert.notStrictEqual(risk(cmd), 'low', `and the grader asks: ${cmd}`);
+    }
+  });
+
+  test('a package runner reaching a persistence surface is reported, not exempted', () => {
+    // THE HALF THAT MATTERS, and the reason the exemption was withdrawn rather
+    // than made generic. The shared definition is consumed by the boundary
+    // layer, which uses it to exempt a crossing under the runtime's OWN home.
+    // While a runner counted as a read, a line naming a hook script was
+    // exempted from its crossing: no card, and nothing reported, for a command
+    // that first fetches and executes a program.
+    //
+    // Driven against a real persistence surface rather than a named working
+    // folder, because those are different questions: a working folder tests
+    // whether a path is inside, and this tests whether a write to the thing
+    // that runs in every later session is still seen.
+    const hook = require('../../scripts/permission-hook.js');
+    const home = makeHome();
+    const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'ro-runner-ws-'));
+    scratch.push(home, ws);
+    const target = path.join(home, '.claude', 'hooks', 'pretool.sh');
+
+    for (const cmd of [
+      `npx some-tool inspect ${target}`,
+      `npx vercel inspect ${target}`,
+      `pnpm dlx some-tool inspect ${target}`,
+      `cd /tmp && npx some-tool inspect ${target} 2>&1 | head -5`,
+    ]) {
+      const crossing = hook.classifyShellAccess('Bash', { command: cmd }, ws, [], home);
+      assert.ok(crossing && crossing.crossings.some(c => c.persistenceSurface),
+        `the boundary still reports the reach: ${cmd}`);
       assert.notStrictEqual(risk(cmd), 'low', `and the grader asks: ${cmd}`);
     }
   });
@@ -587,9 +648,14 @@ describe('one definition of read-only, read by both graders', () => {
     asScript('read-only-shell.js');
     asScript('permissions.js');
     assert.ok(root.RundockReadOnlyShell, 'the shared definition attached itself to the global');
-    assert.strictEqual(root.RundockPermissions.classifyRisk('Bash', { command: REPORTED }), 'low',
-      'and the grader built from the global grades the reported command exactly as the required one does');
-    assert.strictEqual(root.RundockPermissions.classifyRisk('Bash', { command: 'npx vercel deploy' }), 'medium');
+    // AGREEMENT, not a pinned grade. What this test exists to prove is that the
+    // grader built from the script-tag global answers as the required one does.
+    // Pinning a literal made it fail when a grading decision changed, which is
+    // a different question and one other tests already ask.
+    for (const cmd of [REPORTED, 'cd d && ls', 'npx some-tool deploy', 'find . -name "*.md"']) {
+      assert.strictEqual(root.RundockPermissions.classifyRisk('Bash', { command: cmd }), risk(cmd),
+        `the global-wired grader agrees with the required one: ${cmd}`);
+    }
   });
 });
 
