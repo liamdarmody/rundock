@@ -374,7 +374,20 @@ function namedFolderCovers(resolvedPath, extraDirs = [], pmod = path, home = os.
 //
 // Carding rather than denying, because a person legitimately edits neither
 // through an agent and would want to be told if something tried.
-const WORKSPACE_ANSWER_FILES = ['state.json', 'permissions.json'];
+// WORKSPACE-RELATIVE PATHS, not bare names, because these no longer all live
+// in one folder. `.claude/settings.local.json` holds the workspace's standing
+// permission grants and is where the runtime loads the permission hooks from,
+// so an agent able to write it could decide what an agent needs permission for.
+// It sits inside the workspace, so without naming it here a write to it passed
+// as ordinary inside-workspace work. An agent may always ASK for a permission;
+// it must never be able to GRANT one, which is also why the crossing below
+// carries no grantDir: a standing "Always Allow" on this file would hand an
+// agent lasting authority over the thing that decides what needs authority.
+const WORKSPACE_ANSWER_FILES = [
+  '.rundock/state.json',
+  '.rundock/permissions.json',
+  '.claude/settings.local.json',
+];
 function isWorkspaceAnswerFile(resolvedPath, workspaceRoot, foldsCase = hostFoldsCase(), pmod = path) {
   if (typeof resolvedPath !== 'string' || !resolvedPath) return false;
   if (typeof workspaceRoot !== 'string' || !workspaceRoot) return false;
@@ -388,8 +401,10 @@ function isWorkspaceAnswerFile(resolvedPath, workspaceRoot, foldsCase = hostFold
   // "not an answer file" for the file it was looking at. Canonicalising is
   // idempotent, so the callers that had already done it are unaffected.
   const c = foldCase(canonicalize(resolvedPath, pmod), folds);
+  // The registry spells its paths with forward slashes, so the segments are
+  // split and rejoined in the flavour being compared rather than pasted in.
   return WORKSPACE_ANSWER_FILES.some((f) => (
-    c === foldCase(canonicalize(pmod.join(pmod.resolve(workspaceRoot), '.rundock', f), pmod), folds)
+    c === foldCase(canonicalize(pmod.join(pmod.resolve(workspaceRoot), ...f.split('/')), pmod), folds)
   ));
 }
 

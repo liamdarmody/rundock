@@ -1210,3 +1210,99 @@ describe('a named working folder covers what is beneath it, and stops at the run
     assert.strictEqual(hook.classifyFileAccess('Read', { file_path: path.join(ws, 'x.md') }, ws, [], home).where, 'inside');
   });
 });
+
+// ---------------------------------------------------------------------------
+// AN AGENT MAY ASK FOR A PERMISSION. IT MUST NEVER GRANT ONE.
+//
+// The workspace's own `.claude/settings.local.json` holds its standing
+// permission grants, and the runtime loads the permission hooks themselves
+// from it. It sits inside the workspace, so a write to it classified as
+// ordinary inside-workspace work: no card, no friction, no record. An agent
+// could edit the file that decides what an agent needs permission for,
+// including the hook configuration that produces the cards at all.
+//
+// A standing grant is the wrong answer for this file in particular: one click
+// would hand an agent lasting authority over the thing that decides what needs
+// authority. So it cards, and the card carries no folder to grant.
+// ---------------------------------------------------------------------------
+describe('the workspace permission file is not an agent\'s to write', () => {
+  const home = os.homedir();
+  const settingsIn = (ws) => path.join(ws, '.claude', 'settings.local.json');
+
+  test('a write to it cards instead of passing as ordinary inside work', () => {
+    const ws = tmp('wb-selfgrant-');
+    const access = hook.classifyFileAccess('Write', { file_path: settingsIn(ws) }, ws, [], home);
+    assert.strictEqual(access.where, 'outside',
+      'the file that governs permissions is not ordinary inside-workspace work');
+  });
+
+  test('and the card carries nothing that could answer it a second time', () => {
+    // grantDir is what a standing grant is recorded from. Null means the
+    // question can be answered for this write and never pre-answered.
+    const ws = tmp('wb-selfgrant-grant-');
+    const access = hook.classifyFileAccess('Write', { file_path: settingsIn(ws) }, ws, [], home);
+    assert.strictEqual(access.grantDir, null,
+      'no folder travels with it, so no Always Allow can be built from it');
+  });
+
+  test('editing it is a write too, and reading it is not', () => {
+    const ws = tmp('wb-selfgrant-edit-');
+    assert.strictEqual(hook.classifyFileAccess('Edit', { file_path: settingsIn(ws) }, ws, [], home).where, 'outside',
+      'a tool that changes the file is a write whatever it is called');
+    assert.strictEqual(hook.classifyFileAccess('Read', { file_path: settingsIn(ws) }, ws, [], home).where, 'inside',
+      'reading it tells an agent what it may already do, which is not the act being stopped');
+  });
+
+  test('a shell command reaching it crosses too, not only a file tool', () => {
+    // The command grader and the path grader are separate. A rule only one of
+    // them knows is not a rule: an agent with a shell would walk around it.
+    const ws = tmp('wb-selfgrant-shell-');
+    const access = hook.classifyShellAccess('Bash', { command: `echo '{}' > ${settingsIn(ws)}` }, ws, [], home, false);
+    assert.ok(access && access.where === 'outside',
+      'redirecting into the file is the same act as writing it');
+  });
+
+  test('the operating system is told as well, where it can be told', () => {
+    // One registry, two enforcement points: the hook cards on every platform,
+    // the sandbox denies outright where a sandbox runs. A file protected by
+    // one and not the other is protected on some machines and not others.
+    const ws = tmp('wb-selfgrant-sandbox-');
+    const block = scaffold.sandboxSettings(ws, 'darwin', home, ['/tmp/t'], [], 'knowledge');
+    assert.ok(block.filesystem.denyWrite.some(p => p.endsWith('.claude/settings.local.json')),
+      'the sandbox denies the write outright, rather than leaving the card as the only line');
+  });
+
+  test('the files this rule already covered still behave exactly as they did', () => {
+    const ws = tmp('wb-selfgrant-regress-');
+    assert.strictEqual(hook.classifyFileAccess('Write', { file_path: path.join(ws, '.rundock', 'state.json') }, ws, [], home).where, 'outside',
+      'the answer files keep their protection');
+    assert.strictEqual(hook.classifyFileAccess('Write', { file_path: path.join(ws, 'notes', 'a.md') }, ws, [], home).where, 'inside',
+      'and ordinary work in the workspace is still ordinary work');
+  });
+});
+
+describe('a workspace written before the permission file was protected', () => {
+  const home = os.homedir();
+
+  test('is still recognised as ours, so it gets the new protection rather than being left alone', () => {
+    // The recogniser derives its prior shapes by narrowing the CURRENT deny
+    // list, so every PROPER PREFIX of it is a shape this once wrote. That makes
+    // the order of the registry load-bearing: a new entry appended last leaves
+    // the old list as a prefix and every existing workspace is recognised and
+    // rewritten, while the same entry inserted first would strand all of them
+    // as user-authored and they would never be protected at all.
+    const ws = tmp('wb-selfgrant-upgrade-');
+    const current = scaffold.sandboxSettings(ws, 'darwin', home, ['/tmp/t'], [], 'knowledge');
+    const deny = current.filesystem.denyWrite;
+    assert.ok(deny.length >= 2, 'there is an earlier shape to be an upgrade from');
+    assert.ok(deny[deny.length - 1].endsWith('.claude/settings.local.json'),
+      'the newest entry is last, which is what keeps every older list a prefix');
+
+    const asItWasWritten = {
+      ...current,
+      filesystem: { ...current.filesystem, denyWrite: deny.slice(0, deny.length - 1) },
+    };
+    assert.strictEqual(scaffold.isRundockSandbox(asItWasWritten, 'darwin'), true,
+      'a block written before this change is ours, not the person\'s, so it is safe to rewrite');
+  });
+});
