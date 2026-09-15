@@ -340,18 +340,24 @@ const MUTATIONS = [
     '  const noGrant = tags.secret || (tags.agentHome && grantDir === agentHomeRoot(home));',
     '  const noGrant = tags.secret;'],
   // The one production site carrying classifyFileAccess's tags onto the emitted request.
+  // Moved into boundaryCrossingsFor when that was extracted as a seam, so the
+  // payload's own shape could be asserted rather than the classifier's return.
+  // The guard follows the code: drop the tags and the request carries none.
   [HOOK_INTEGRATION, 'a file crossing\'s tags reach the request the hook actually emits',
-    '        path: access.resolvedPath, grantDir: access.grantDir,\n'
-    + '        agentHome: access.agentHome, secret: access.secret, persistenceSurface: access.persistenceSurface,\n'
-    + '      }])',
-    '        path: access.resolvedPath, grantDir: access.grantDir,\n'
-    + '      }])'],
+    '    path: access.resolvedPath, grantDir: access.grantDir,\n'
+    + '    agentHome: access.agentHome, secret: access.secret,\n'
+    + '    persistenceSurface: access.persistenceSurface, answerFile: access.answerFile,\n'
+    + '  }];',
+    '    path: access.resolvedPath, grantDir: access.grantDir,\n'
+    + '  }];'],
   // Drop the registry check and a broad grant silences the credential file inside it.
   [BOUNDARY, 'a secrets-registry crossing is covered by no stored grant, however broad',
     '  if (isSecretPath(crossing.path, home)) return false;',
     '  if (false) return false;'],
-  [CHAT_VIEW, 'the whole-folder button is never offered for a secrets-tier crossing',
-    '  const wholeFolderOffered = grantable && !(flaggedCrossing && flaggedCrossing.secret);',
+  [CHAT_VIEW, 'the whole-folder button is never offered for a secrets-tier crossing, nor where an answer file is among the places reached',
+    '  const wholeFolderOffered = grantable\n'
+    + '    && !(flaggedCrossing && (flaggedCrossing.secret || flaggedCrossing.answerFile))\n'
+    + '    && !crossings.some(c => c && c.answerFile);',
     '  const wholeFolderOffered = grantable;'],
   [CHAT_VIEW, 'the agent-home copy is applied to the card\'s context',
     '    if (homeCopy) context = crossings.length > 1 ? `${context} ${homeCopy}` : homeCopy;',

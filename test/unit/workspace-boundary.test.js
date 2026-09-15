@@ -1306,3 +1306,94 @@ describe('a workspace written before the permission file was protected', () => {
       'a block written before this change is ours, not the person\'s, so it is safe to rewrite');
   });
 });
+
+describe('the card for the permission file says what the file is', () => {
+  const home = os.homedir();
+
+  test('its copy names what the file governs and that the asking cannot be switched off', () => {
+    // A card that reads like an ordinary config write gets answered like one,
+    // and this is the write that decides what gets asked about at all.
+    const copy = permissions.agentHomeBoundaryCopy({ answerFile: true });
+    assert.ok(copy, 'an answer-file crossing gets copy of its own');
+    assert.ok(copy.includes('what agents may do'), 'it says what the file governs');
+    assert.ok(copy.includes('every time'), 'and that this one keeps asking');
+    assert.strictEqual(permissions.agentHomeBoundaryCopy({ secret: true, answerFile: true }),
+      permissions.agentHomeBoundaryCopy({ secret: true }),
+      'a credential still outranks it when a crossing is somehow both');
+    assert.strictEqual(permissions.agentHomeBoundaryCopy({}), null,
+      'and an ordinary crossing still renders the card unchanged');
+  });
+
+  test('the flag reaches the card whichever grader caught the write', () => {
+    // The shell path tagged its crossings and the file-tool path dropped the
+    // flag, so the same file could be described one way when a command wrote
+    // it and another when a tool did. The tool route is the direct one.
+    const ws = tmp('wb-selfgrant-flag-');
+    const target = path.join(ws, '.claude', 'settings.local.json');
+    const viaTool = hook.classifyFileAccess('Write', { file_path: target }, ws, [], home);
+    // THE PAYLOAD, not the classifier's return. Those are different objects,
+    // and the flag was being set on the first and dropped building the second.
+    const [crossing] = hook.boundaryCrossingsFor(viaTool);
+    assert.strictEqual(crossing.answerFile, true,
+      'the crossing the server acts on carries the tag the card is worded from');
+    assert.strictEqual(crossing.grantDir, null,
+      'and still nothing a standing grant could be built from');
+
+    const viaShell = hook.classifyShellAccess('Bash', { command: `echo '{}' > ${target}` }, ws, [], home, false);
+    assert.ok(hook.boundaryCrossingsFor(viaShell).some(c => c.answerFile),
+      'and the shell route says the same thing about the same file');
+  });
+});
+
+describe('an existing workspace is actually upgraded, not merely recognised', () => {
+  test('reconciling a block written before this change rewrites it to include the new deny', () => {
+    // Recognition is half the job. A block can be correctly identified as ours
+    // and still be left on disk missing the protection, which would mean every
+    // workspace that already exists never gets it.
+    const ws = tmp('wb-selfgrant-reconcile-');
+    const home = os.homedir();
+    const current = scaffold.sandboxSettings(ws, 'darwin', home, ['/tmp/t'], [], 'knowledge');
+    const deny = current.filesystem.denyWrite;
+    const older = { ...current, filesystem: { ...current.filesystem, denyWrite: deny.slice(0, deny.length - 1) } };
+
+    fs.mkdirSync(path.join(ws, '.claude'), { recursive: true });
+    const settingsPath = path.join(ws, '.claude', 'settings.local.json');
+    fs.writeFileSync(settingsPath, JSON.stringify({ sandbox: older }, null, 2));
+
+    scaffold.reconcileSandboxForMode(ws, 'knowledge', 'darwin');
+
+    const after = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+    const denyAfter = (after.sandbox && after.sandbox.filesystem && after.sandbox.filesystem.denyWrite) || [];
+    assert.ok(denyAfter.some(p => p.endsWith('.claude/settings.local.json')),
+      'the workspace that already existed now has the protection too, on disk');
+  });
+});
+
+describe('no grant already stored can answer for the permission file', () => {
+  test('a standing grant over a parent of the workspace does not cover it', () => {
+    // SUPPRESSING THE OFFER IS NOT ENOUGH ON ITS OWN. A card that offers no
+    // folder stops a NEW grant being made; it says nothing about a grant made
+    // earlier for an unrelated reason. Granting a parent of one's workspace is
+    // an ordinary thing to do, and a stored grant covers its whole subtree, so
+    // without this the earlier grant would answer for the mechanism that
+    // records the answers.
+    //
+    // The coverage check recomputes this from the registry and the current
+    // workspace rather than trusting a flag off the wire, so naming the file in
+    // the registry extended the check as well. Pinned here because that is a
+    // property of the design, not an accident, and nothing else asserts it.
+    const ws = tmp('wb-selfgrant-covered-');
+    const original = config.getWorkspace();
+    try {
+      config.setWorkspace(ws);
+      const target = path.join(ws, '.claude', 'settings.local.json');
+      boundary.addBoundaryGrant(path.dirname(ws));
+      assert.strictEqual(boundary.boundaryGrantCovers(target), true,
+        'sanity: a grant over the parent does cover this path by the ordinary prefix rule');
+      assert.strictEqual(boundary.crossingCovered({ path: target }), false,
+        'and the decision that matters still refuses to treat it as answered');
+    } finally {
+      config.setWorkspace(original);
+    }
+  });
+});

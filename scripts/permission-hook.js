@@ -355,20 +355,22 @@ function namedFolderCovers(resolvedPath, extraDirs = [], pmod = path, home = os.
 // home instead of monkey-patching os.homedir(), and drive either filesystem
 // kind explicitly instead of inheriting whichever the test host happens to
 // have; production never passes either.
-// THE TWO FILES THAT HOLD THE PERSON'S OWN ANSWERS, protected here because
-// here is the only layer that runs everywhere.
+// THE FILES THAT HOLD THE PERSON'S OWN ANSWERS, protected here because here is
+// the only layer that runs everywhere.
 //
 // state.json carries the workspace mode. permissions.json carries the standing
 // grants: the folders allowed outside the workspace, and the tools allowed
-// without a card. Both are answers a person gave to a permission question, so
-// an agent that can write them can answer those questions on that person's
-// behalf, and the standing allows it wrote would silence every later card for
-// those tools with no further consent.
+// without a card. settings.local.json carries the workspace's permission
+// configuration, including the hooks that produce the cards at all. Each is an
+// answer a person gave to a permission question, so an agent that can write
+// one can answer those questions on that person's behalf, and the standing
+// allows it wrote would silence every later card for those tools with no
+// further consent.
 //
-// lib/workspace/scaffold.js also names both in the sandbox block's denyWrite,
+// lib/workspace/scaffold.js also names them in the sandbox block's denyWrite,
 // and that is the stronger protection where it exists: it stops the write at
 // the operating system rather than asking. But it exists on macOS alone. On
-// Windows and Linux sandboxSettings returns null, so without this the two
+// Windows and Linux sandboxSettings returns null, so without this these
 // files were writable by any agent with a shell, and the second of them is new
 // state that used to live only in a browser tab where nothing could reach it.
 //
@@ -843,11 +845,36 @@ module.exports = {
   isProtectedClaudeEdit, isRuntimeHomeSurfaceEdit, isMcpReadTool, classifyFileAccess, classifyShellAccess, canonicalize,
   advisoryOutsidePaths,
   isSecretPath, isPersistenceSurface, SECRET_RELATIVE_PATHS, PERSISTENCE_SURFACE_DIRS, PERSISTENCE_SURFACE_FILES,
-  isWorkspaceAnswerFile, WORKSPACE_ANSWER_FILES,
+  isWorkspaceAnswerFile, WORKSPACE_ANSWER_FILES, boundaryCrossingsFor,
   REFUSED_CLAUDE_EDIT_DIRS, READ_ONLY_SHELL_COMMANDS, READ_ONLY_POWERSHELL_COMMANDS, isReadOnlyShellCommand,
 };
 
 if (require.main === module) main();
+// The crossings the server acts on, built from one classification.
+//
+// A SEAM, extracted so the payload's own shape can be asserted rather than the
+// classifier's return value. Those are different things, and a test on the
+// second passes while the first silently drops a tag.
+//
+// Every crossing is already tagged by classifyFileAccess/shellCrossings at the
+// point each was classified: nothing here re-derives those answers. A
+// secrets-registry crossing already carries no grantDir (stripped at
+// classification), so the request emitted for one is never grantable.
+//
+// THE SAME TAGS WHICHEVER GRADER CAUGHT IT. The shell path tags its own
+// answer-file crossings, and this one dropped the flag, so a card for the
+// identical file could be worded one way when a command wrote it and another
+// when a tool did. The tool route is the direct one.
+function boundaryCrossingsFor(access) {
+  if (!access || access.where !== 'outside') return [];
+  if (access.crossings) return access.crossings;
+  return [{
+    path: access.resolvedPath, grantDir: access.grantDir,
+    agentHome: access.agentHome, secret: access.secret,
+    persistenceSurface: access.persistenceSurface, answerFile: access.answerFile,
+  }];
+}
+
 function main() {
 let input = '';
 process.stdin.on('data', chunk => { input += chunk; });
@@ -995,12 +1022,7 @@ process.stdin.on('end', () => {
   // the point each was classified: nothing here re-derives those answers. A
   // secrets-registry crossing already carries no grantDir (stripped at
   // classification), so the request emitted for one is never grantable.
-  const boundaryCrossings = (access && access.where === 'outside')
-    ? (access.crossings || [{
-        path: access.resolvedPath, grantDir: access.grantDir,
-        agentHome: access.agentHome, secret: access.secret, persistenceSurface: access.persistenceSurface,
-      }])
-    : [];
+  const boundaryCrossings = boundaryCrossingsFor(access);
 
   // LABEL, NOT A DECISION. Sent under its own name so it can never be mistaken
   // for `crossings`, which is what the server acts on. The server must not read
