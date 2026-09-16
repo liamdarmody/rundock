@@ -49,10 +49,14 @@ function shell(folders = [], opts = {}) {
   return { w, doc: w.document };
 }
 
-// The block is rendered as part of the Workspace pane, never on its own, so
-// every test reaches it the way the product does.
+// The block is rendered as part of a settings pane, never on its own, so every
+// test reaches it the way the product does.
+//
+// MOVED TO PERMISSIONS. Working folders sat under Workspace until the three
+// permission controls were gathered into their own section; this follows the
+// block rather than pinning it to a pane it no longer lives in.
 function render(w) {
-  w.renderSettingsSection('workspace');
+  w.renderSettingsSection('permissions');
   return w.document.getElementById('settings-content');
 }
 
@@ -74,6 +78,12 @@ function press(doc, selector) {
 const sentOf = (w, type) => w.sent.filter(m => m.type === type);
 
 describe('what the block says about what naming a folder does', () => {
+  // THE COPY WAS CUT FROM 114 WORDS TO 83 AND THESE ASSERTIONS MOVED WITH IT.
+  // Each of the three facts below was proposed for deletion on brevity grounds
+  // and kept because this file said why it was there: that the refusal comes
+  // BACK as a card, that a parent is worth naming because it covers projects
+  // that do not exist yet, and that the workspace itself counts. The wording is
+  // shorter; the facts are the same, and these still fail if one goes.
   test('it says what naming a folder does NOT do, including the limit in the default mode', () => {
     // The copy must never claim a named folder is covered the way the workspace
     // is. The workspace sits on the macOS Knowledge-mode operating-system write
@@ -88,11 +98,11 @@ describe('what the block says about what naming a folder does', () => {
     const el = render(shell([{ path: PROJECTS, missing: false }]).w);
     const prose = [...el.querySelectorAll('.wf-prose, .wf-note')].map(n => n.textContent).join(' ');
     assert.match(prose, /Knowledge mode on macOS/i, 'the mode where the limit applies is named');
-    assert.match(prose, /refused by the operating system/i, 'and what still refuses, in the reader\'s terms');
+    assert.match(prose, /operating system still refuses/i, 'and what still refuses, in the reader\'s terms');
     assert.match(prose, /still raises a card/i,
       'and that the refusal comes BACK as a card, which is the part a reader actually meets');
-    assert.match(prose, /Code mode is where they end/i, 'and what to do about it');
-    assert.match(prose, /Codex are not affected/i,
+    assert.match(prose, /Code mode ends both/i, 'and what to do about it');
+    assert.match(prose, /Codex agents are unaffected/i,
       'and the runtime this setting never reaches, which no reader could otherwise know');
     // REMOVING IS NOT INSTANT, and a permissions control whose remove does not
     // remove is the surprise that costs a reader their trust in the whole
@@ -100,12 +110,12 @@ describe('what the block says about what naming a folder does', () => {
     // a conversation already running keeps what it was born with. Found by
     // using the product: a folder was removed and an open conversation carried
     // on writing there while a new one correctly asked.
-    assert.match(prose, /Removing a folder applies to conversations you start afterwards/i,
+    assert.match(prose, /Removing a folder applies to new conversations/i,
       'when a removal takes effect is stated, rather than left to be discovered');
     assert.match(prose, /already running keeps the folders it started with/i,
       'and what happens to the conversation that is open right now');
     assert.match(prose, /~\/\.claude/, 'the excluded folder is named, not described vaguely');
-    assert.match(prose, /credentials still ask/i, 'and the guarantee that survives whatever is named');
+    assert.match(prose, /credentials always ask/i, 'and the guarantee that survives whatever is named');
     assert.doesNotMatch(prose, /covered the same way this workspace/i,
       'no parity claim: the operating-system block breaks it in the default mode');
     assert.doesNotMatch(prose, /full access|complete access|trusted? with everything/i);
@@ -114,7 +124,7 @@ describe('what the block says about what naming a folder does', () => {
   test('it nudges toward a parent, because naming one is the difference between configuring this once and forever', () => {
     const el = render(shell().w);
     const prose = [...el.querySelectorAll('.wf-prose, .wf-note')].map(n => n.textContent).join(' ');
-    assert.match(prose, /parent folder/i);
+    assert.match(prose, /Name a parent/i);
     assert.match(prose, /including projects you start later/i,
       'the reason a parent is worth naming is stated, not just the instruction');
   });
@@ -125,7 +135,7 @@ describe('what the block says about what naming a folder does', () => {
     // cannot tell whether it counts.
     const { w } = shell([{ path: PROJECTS, missing: false }]);
     const el = render(w);
-    assert.match(el.textContent, /workspace's own folder is already included/i);
+    assert.match(el.textContent, /This workspace is already included/i);
     for (const row of rows(el)) {
       assert.doesNotMatch(row.textContent, /build-team/, 'the workspace itself is not listed');
     }

@@ -123,6 +123,7 @@ const NOT_CHEAP = {
   // phase into a second full suite, which is the thing the phase must not become.
   'test/unit/approve-once.test.js': 'behaviour: drives the permission grant flow, not a bookkeeping check',
   'test/unit/permissions.test.js': 'behaviour: grades real command text against the risk rules',
+  'test/unit/permissions-view.test.js': 'behaviour: boots a document and renders the settings pane, then presses what it drew. It walks the stylesheets to prove no class is left unstyled, which is why the inventory names it, but the walk is in service of a rendered check rather than a bookkeeping one',
   'test/unit/working-folders-view.test.js': 'behaviour: boots a document and presses controls',
   'test/unit/live-handoff-render.test.js': 'behaviour: boots a document and drives the delegation render path',
   'test/unit/replay-no-dividers.test.js': 'behaviour: boots a document and replays a conversation through the real renderer',

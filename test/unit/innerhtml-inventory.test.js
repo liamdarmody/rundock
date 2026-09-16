@@ -44,12 +44,13 @@ describe('the innerHTML inventory', () => {
 
   test('the counts the audit quotes are the counts the tree has', () => {
     const t = totals(classify().rows);
-    // 115 since the standing tool-allows block was added: one more group (b)
-    // site, redrawn on its own when the list arrives, with the allow keys
-    // escaped through esc() and the revoke handler argument through escAttr().
-    assert.strictEqual(t.total, 115, 'first-party assignments under public/');
+    // 116 since the permissions section was added: one more group (b) site,
+    // the section's own render. Its copy is constant; the two lists it draws
+    // are built by workingFoldersSectionHtml() and toolAllowsBlockHtml(), which
+    // carry their own rows, so no user-authored text is interpolated here.
+    assert.strictEqual(t.total, 116, 'first-party assignments under public/');
     assert.strictEqual(t.byGroup.a, 80, 'group (a): closed with a stated reason');
-    assert.strictEqual(t.byGroup.b, 35, 'group (b): fixed');
+    assert.strictEqual(t.byGroup.b, 36, 'group (b): fixed');
     assert.strictEqual(t.byGroup.a + t.byGroup.b, t.total, 'every site is in exactly one group');
   });
 

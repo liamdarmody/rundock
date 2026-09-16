@@ -52,6 +52,11 @@
      the stylesheets when this token was added. This is the one. */
   --danger: #E85A5A;
   --heading: 22px; --title: 18px; --body: 14px; --caption: 12px; --label: 11px;
+  /* The monospace stack, named rather than repeated. It was hardcoded in four
+     places before this, and the design system already names it. A rule written
+     against var(--font-mono) with no token behind it resolves to nothing and
+     silently inherits, which is the same failure as a class with no rule. */
+  --font-mono: 'SF Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
   --org-name: 20px; --org-role: 15px;
 
   /* Corner radius. The scale absorbed 101 of the 130 radius declarations in the
