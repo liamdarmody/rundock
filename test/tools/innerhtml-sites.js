@@ -219,6 +219,7 @@ const TABLE = {
   'views/settings.js': [
     ['b', 'attr-escaper', 'the packages section: model copy and outcomes through esc(), the field value through escAttr()'],
     ['b', 'attr-escaper', 'the workspace card'],
+    ['b', 'attr-escaper', 'the permissions section: the mode description and the section\u2019s own copy are constants, and the two lists it draws are built by workingFoldersSectionHtml() and toolAllowsBlockHtml(), which carry their own rows in this table. Nothing user-authored is interpolated here directly; the permission KEYS reach the page through toolAllowsBlockHtml(), not this assignment'],
     ['a', 'staticMarkup', 'the appearance card'],
     ['a', 'staticMarkup', 'the connectors section, waiting state: a constant template with no interpolation'],
     ['a', 'appValues', 'the about card: the app version from package.json'],

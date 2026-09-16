@@ -261,8 +261,15 @@ function handle(d) {
     case 'tool_allows': toolAllowsArrived(d); break;
     case 'workspace_mode_changed':
       workspaceMode = d.mode;
-      // Re-render settings if currently viewing workspace settings
-      if (currentView === 'settings') renderSettingsSection('workspace');
+      // REDRAW WHICHEVER SECTION IS OPEN, read from the sidebar rather than
+      // assumed. This named 'workspace' because that is where the mode control
+      // used to live, so changing mode from anywhere else threw the reader back
+      // to a pane they had not asked for. The control moved to Permissions and
+      // this did not follow it.
+      if (currentView === 'settings') {
+        const open = document.querySelector('.settings-nav-item.active')?.getAttribute('data-settings');
+        if (open) renderSettingsSection(open);
+      }
       break;
     // Takes the chrome down as well as showing the screen. This arrives when
     // the server has no workspace, which can happen after it had one, so the
