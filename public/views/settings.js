@@ -183,9 +183,24 @@ function renderSettingsSection(section) {
           <span class="settings-value">${skillCount}</span>
         </div>
       </div>
+      <div class="settings-card" id="runtimes-card">${runtimesCardHtml()}</div>
+      <button class="settings-btn" onclick="changeWorkspace()">Change workspace</button>`;
+    // Refresh runtime state whenever the card becomes visible (the user may
+    // have just installed or signed in to a CLI).
+    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'get_runtime_status' }));
+  } else if (section === 'permissions') {
+    // THE MECHANISM IS EXPLAINED ONCE, at the top, rather than once per block.
+    // Three controls that were each added to the Workspace panel with their own
+    // paragraph, so a reader met the same idea three times in three wordings.
+    const isCode = workspaceMode === 'code';
+    const modeDesc = isCode
+      ? 'Agents can write any file type and run commands without approval. On macOS the operating-system write block is off here, because tools that launch their own processes can fail under it.'
+      : 'Agents work with documents only. Terminal commands need approval, and on macOS the operating system enforces that too.';
+    el.innerHTML = `<div class="settings-section-title">Permissions</div>
+      <div class="settings-lead">What agents can do, and what they can reach outside your workspace.</div>
+      <div class="settings-block-heading"><span class="settings-label">Mode</span></div>
       <div class="settings-card">
         <div class="settings-row" style="flex-direction:column;align-items:stretch;gap:12px">
-          <span class="settings-label">Mode</span>
           <div class="mode-toggle">
             <button class="mode-toggle-btn${isCode ? '' : ' active'}" data-mode="knowledge" onclick="setWorkspaceMode('knowledge')">Knowledge mode</button>
             <button class="mode-toggle-btn${isCode ? ' active' : ''}" data-mode="code" onclick="setWorkspaceMode('code')">Code mode</button>
@@ -194,21 +209,14 @@ function renderSettingsSection(section) {
         </div>
       </div>
       ${workingFoldersSectionHtml()}
-      <div class="settings-card">
-        <div class="settings-card-title">Tools allowed without asking</div>
-        <div class="settings-card-hint">Chosen with "Always allow" on a permission card. Revoking one means the card asks again.</div>
-        <div id="tool-allows-block">${toolAllowsBlockHtml()}</div>
-      </div>
-      <div class="settings-card" id="runtimes-card">${runtimesCardHtml()}</div>
-      <button class="settings-btn" onclick="changeWorkspace()">Change workspace</button>`;
+      <div class="settings-caption">A folder you allowed by answering "Always allow" on a path card is not listed here yet.</div>
+      <div class="settings-block-heading"><span class="settings-label">Tools allowed without asking</span></div>
+      <div class="settings-caption settings-caption-card">Choosing "Always allow" on a permission card adds one here. Removing it means the card asks again.</div>
+      <div class="settings-card" id="tool-allows-block">${toolAllowsBlockHtml()}</div>`;
     workingFoldersLoad();
-    // Asked for whenever the pane opens, for the same reason the folders are:
-    // a list rendered from stale state is a list that lies about what is
-    // currently allowed.
+    // Asked for whenever the pane opens: a list rendered from stale state is a
+    // list that lies about what is currently allowed.
     requestToolAllows();
-    // Refresh runtime state whenever the card becomes visible (the user may
-    // have just installed or signed in to a CLI).
-    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'get_runtime_status' }));
   } else if (section === 'appearance') {
     const isLight = document.body.classList.contains('light');
     el.innerHTML = `<div class="settings-section-title">Appearance</div>
@@ -323,17 +331,24 @@ function workingFoldersInnerHtml() {
     ? `<div class="wf-undo">Removed ${esc(workingFoldersShort(workingFoldersUndo))}.
          <button class="wf-undo-btn" onclick="workingFoldersUndoRemove()">Undo</button></div>`
     : '';
+  // CUT FROM 114 WORDS TO 49. Five blocks became two, each sentence judged by
+  // whether a person needs it at the moment they are naming a folder.
+  //
+  // Dropped: that this workspace's own folder is already included, which the
+  // first line already says by saying "outside this workspace". The tip about
+  // naming a parent, which the input's own placeholder now carries, where it is
+  // read at the moment it applies. And that Claude Code's own folder is never
+  // included: true, but it changes nothing about what anyone types here.
   return `<div class="settings-label wf-heading">Working folders</div>
-    <div class="settings-prose wf-prose">Folders your agents work in outside this workspace. Naming one stops the approval cards that check paths, for everything beneath it.</div>
-    <div class="settings-caption wf-note">This workspace's own folder is already included and isn't listed below.</div>
-    <div class="settings-prose wf-prose">In Knowledge mode on macOS a terminal write out here is still refused by the operating system, and the retry that follows still raises a card, so naming a folder does not end those: Code mode is where they end. Claude Code's own folder (<code>~/.claude</code>) is never included either, so your credentials still ask every time. Agents running on Codex are not affected by this setting at all.</div>
-    <div class="settings-caption wf-note">Removing a folder applies to conversations you start afterwards. One that is already running keeps the folders it started with, because the list reaches an agent when it starts.</div>
-    <div class="settings-caption wf-note">Tip: name a parent folder, such as <code>~/Projects</code>, to cover everything beneath it, including projects you start later.</div>
+    <div class="settings-prose wf-prose">Folders outside this workspace your agents can reach without a path card asking each time. This workspace is already included. Name a parent such as <code>~/Projects</code> to cover everything beneath it, including projects you start later.</div>
+    <div class="settings-caption wf-note">In Knowledge mode on macOS the operating system still refuses the write and the retry still raises a card; Code mode ends both.</div>
+    <div class="settings-caption wf-note">Codex agents are unaffected, and <code>~/.claude</code> is never included, so your credentials always ask.</div>
+    <div class="settings-caption wf-note">Removing a folder applies to new conversations; one already running keeps the folders it started with.</div>
     ${undo}
     <div class="settings-card wf-list">
       ${rows}
       <div class="settings-row wf-add">
-        <input class="packages-input wf-input" id="wf-input" placeholder="Add a folder, such as ~/Projects"
+        <input class="packages-input wf-input" id="wf-input" placeholder="Add a folder, such as ~/Projects, to cover everything beneath it"
                oninput="workingFoldersInputChanged()" onkeydown="if(event.key==='Enter')workingFoldersAdd()">
         <button class="settings-btn" onclick="workingFoldersAdd()">Add</button>
       </div>
@@ -413,10 +428,25 @@ function toolAllowsArrived(msg) {
   if (container) container.innerHTML = toolAllowsBlockHtml();
 }
 
+// A permission key is `Tool(scope)`: the tool is what runs, the scope is what it
+// is allowed to run against. Split so the eye can find the tool first, by WEIGHT
+// alone rather than colour or grouping, because grouping these is a later card
+// and a colour would imply a category that does not exist yet.
+function toolAllowKeyHtml(key) {
+  const open = key.indexOf('(');
+  if (open <= 0 || !key.endsWith(')')) return `<span class="tool-allow-name">${esc(key)}</span>`;
+  return `<span class="tool-allow-name">${esc(key.slice(0, open))}</span>`
+    + `<span class="tool-allow-scope">${esc(key.slice(open))}</span>`;
+}
+
 function toolAllowsBlockHtml() {
   if (!standingToolAllows.length) {
-    return '<div class="settings-empty">No tools are allowed without asking. '
-      + 'Choosing "Always allow" on a permission card adds one here.</div>';
+    // The empty state Connectors already uses: prose in a column row, no
+    // bespoke component. It says the mechanism ONCE, because the heading above
+    // it names the thing and a second telling was what made this block read as
+    // an apology rather than a state.
+    return '<div class="settings-row" style="flex-direction:column;align-items:stretch;gap:4px">'
+      + '<span class="settings-prose">Nothing yet.</span></div>';
   }
   // BY INDEX, never by value, which is the same rule the working-folders
   // remove control follows. An allow key is text the server stored on an
@@ -424,11 +454,24 @@ function toolAllowsBlockHtml() {
   // string and put the rest of itself in a JavaScript literal position, where
   // escAttr is the wrong escaper and nothing else is checking. An integer
   // cannot do that whatever the key says.
-  return standingToolAllows.map((k, index) => (
-    `<div class="settings-row"><code>${esc(k)}</code>`
+  // NOT TRUNCATED, which is where this diverges from .settings-value and does
+  // so deliberately. That class clips to one line with an ellipsis, right for a
+  // path that would push a row wide. A permission key is read in full before
+  // deciding to revoke it, and the hidden half is exactly the part that might
+  // make it dangerous, so this wraps instead.
+  //
+  // BY INDEX, never by value, which is the same rule the working-folders remove
+  // control follows. An allow key is text the server stored on an agent's
+  // behalf, and a key carrying a quote would close the attribute's string and
+  // put the rest of itself in a JavaScript literal position, where escAttr is
+  // the wrong escaper and nothing else is checking. An integer cannot.
+  const rows = standingToolAllows.map((k, index) => (
+    `<div class="settings-row tool-allow-row">`
+    + `<span class="tool-allow-key">${toolAllowKeyHtml(k)}</span>`
     + `<button class="settings-row-remove" onclick="revokeToolAllowAt(${index})" `
-    + `title="Ask again for this tool">Revoke</button></div>`
+    + `title="Ask again for this tool" aria-label="Ask again for ${escAttr(k)}">&times;</button></div>`
   )).join('');
+  return `<div class="tool-allow-list">${rows}</div>`;
 }
 
 function revokeToolAllowAt(index) {

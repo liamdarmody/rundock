@@ -105,3 +105,51 @@
    to ignore, where a confirmation dialog costs one click every single time. */
 .wf-undo { font-size: var(--caption); color: var(--text-2); background: var(--elevated); border-radius: var(--radius-md); padding: 8px 12px; margin-bottom: 10px; display: flex; align-items: center; gap: 8px; }
 .wf-undo-btn { background: none; border: none; color: var(--accent); font-size: var(--caption); font-weight: 600; cursor: pointer; padding: 0; text-decoration: underline; text-underline-offset: 2px; }
+
+/* ── Permissions ──────────────────────────────────────────────────────────
+   Mode, working folders and standing tool allows each arrived on the Workspace
+   panel with a block and a paragraph of its own, so a reader met the same idea
+   three times in three wordings. They live here now and the mechanism is
+   explained once, at the top of the view. */
+
+/* A label above a card, generalising what .wf-heading already did for working
+   folders. Introduced rather than reusing that name because it also has to sit
+   above Tools allowed. */
+.settings-block-heading { display: flex; align-items: center; gap: 8px; margin: 24px 0 8px; }
+.settings-block-heading .settings-label { margin: 0; }
+
+/* A caption that LEADS INTO a card needs the room Working folders' own last
+   caption already has. Scoped rather than added to .settings-caption itself:
+   four other call sites use the bare class for a caption that ENDS a block,
+   and each already pairs it with a scoped class of its own when it needs
+   spacing. Changing the shared one would move all of them to fix one. */
+.settings-caption-card { margin-bottom: 10px; }
+
+/* Bounded growth: a deliberate card whether it holds three rows or three
+   hundred, rather than pushing the rest of the view down the page. */
+.tool-allow-list { max-height: 320px; overflow-y: auto; }
+.tool-allow-row { align-items: flex-start; }
+
+/* A PERMISSION KEY IS NOT A VALUE YOU GLANCE AT. .settings-value clips to one
+   line with an ellipsis, which is right for a path that would push a row wide
+   and wrong here: the hidden half is exactly the part that might make a grant
+   dangerous, and this is the string someone reads before deciding to revoke it.
+   So it wraps, on its own class, rather than bending .settings-value into two
+   contradictory behaviours.
+
+   Colour is --text-1 rather than .settings-value's --text-2, and the background
+   is set explicitly: 10.82:1 dark and 14.90:1 light against --card, clearing
+   WCAG AA's 4.5:1 rather than only this file's 3:1 UI baseline. Stated because
+   the first draft inherited a chip from elsewhere and measured 1.17:1. */
+.tool-allow-key { font-family: var(--font-mono); font-size: var(--caption); line-height: 1.6; white-space: normal; overflow-wrap: anywhere; padding-right: 12px; background: transparent; color: var(--text-1); }
+
+/* Tool apart from scope by WEIGHT alone. Colour would imply a category, and
+   grouping these is a later card. */
+.tool-allow-name { font-weight: 600; }
+.tool-allow-scope { font-weight: 400; }
+
+/* The revoke control, matching .wf-remove so removing a folder and removing a
+   tool allow read as the same act. This class was in the markup with no rule
+   behind it, which is why the button it styles had never been seen. */
+.settings-row-remove { flex-shrink: 0; background: none; border: none; color: var(--text-3); font-size: 16px; line-height: 1; cursor: pointer; padding: 3px 7px; border-radius: var(--radius-sm); transition: color var(--duration-base) ease, background var(--duration-base) ease; }
+.settings-row-remove:hover { color: var(--danger); background: var(--elevated); }
