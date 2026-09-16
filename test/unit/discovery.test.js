@@ -170,6 +170,12 @@ describe('discoverAgents', () => {
     const doc = agents.find(a => a.id === 'rundock-guide');
     assert.strictEqual(doc.type, 'platform');
     assert.strictEqual(doc.displayName, 'Doc');
+    // Issue #307: the fallback Doc is the other agent synthesised with
+    // fileName: null. It is also the first agent a new user talks to, so a
+    // hardcoded model here is the difference between a workspace that works on
+    // a gateway-only machine and one that fails on the first message.
+    assert.strictEqual(doc.model, 'inherit');
+    assert.strictEqual(doc.fileName, null, 'the reason it must inherit: nothing to edit');
     for (const a of agents) {
       if (a.id !== 'rundock-guide') assert.strictEqual(a.status, 'onTeam');
     }
@@ -229,19 +235,36 @@ describe('discoverAgents', () => {
     const def = agents.find(a => a.isDefault);
     assert.ok(def);
     assert.strictEqual(def.displayName, 'Dex');
-    assert.strictEqual(def.model, 'sonnet');
+    // Issue #307: this agent is synthesised in code with fileName: null, so
+    // there is no frontmatter a user could edit to name their own model. It
+    // inherits, which is the only value that works on a machine whose models
+    // arrive through a gateway Rundock cannot enumerate. Agents that DO have a
+    // file still default to sonnet: see the next test.
+    assert.strictEqual(def.model, 'inherit');
+    assert.strictEqual(def.fileName, null, 'the reason it must inherit: nothing to edit');
   });
 
-  test('model falls back to sonnet; explicit model respected', () => {
+  // Was "model falls back to sonnet". Rundock no longer chooses a model for an
+  // agent that names none: a substituted default cannot be served at all on a
+  // machine whose models arrive through a gateway, and everywhere else it
+  // overrode a user who had picked one with `/model`. An explicit model is
+  // still respected exactly as before, which is the half that must not move.
+  test('an explicit model is respected; naming none means none', () => {
     useWorkspace({
       agents: {
         fast: agentFile({ name: 'fast', type: 'specialist', order: 1, model: 'haiku' }),
         plain: agentFile({ name: 'plain', type: 'specialist', order: 2 }),
+        said: agentFile({ name: 'said', type: 'specialist', order: 3, model: 'inherit' }),
+        gate: agentFile({ name: 'gate', type: 'specialist', order: 4, model: 'my-gateway/claude-model-id' }),
       },
     });
     const agents = srv.discoverAgents();
-    assert.strictEqual(agents.find(a => a.id === 'fast').model, 'haiku');
-    assert.strictEqual(agents.find(a => a.id === 'plain').model, 'sonnet');
+    const model = id => agents.find(a => a.id === id).model;
+    assert.strictEqual(model('fast'), 'haiku');
+    assert.strictEqual(model('gate'), 'my-gateway/claude-model-id', 'an identifier we cannot name survives');
+    assert.strictEqual(model('plain'), model('said'),
+      'naming nothing and naming inherit are the same statement');
+    assert.notStrictEqual(model('plain'), 'sonnet', 'and neither is answered with a substitute');
   });
 
   test('CRLF agent file on disk parses correctly (readNormalisedFile at the boundary)', () => {
@@ -698,7 +721,18 @@ describe('agent runtime field', () => {
     const agents = srv.discoverAgents();
     assert.strictEqual(agents.find(a => a.id === 'boss').runtime, 'claude', 'orchestrator forced to claude');
     assert.strictEqual(agents.find(a => a.id === 'guide').runtime, 'claude', 'platform agent forced to claude');
-    assert.strictEqual(agents.find(a => a.id === 'boss').model, 'sonnet', 'forced-claude orchestrator gets the Claude default model, never null');
+    // This assertion used to read `model === 'sonnet'`, which pinned a real
+    // trap: an author who followed the documented advice for Codex agents
+    // (omit the model field) and marked their orchestrator `runtime: codex`
+    // had it forced onto Claude Code AND given a model they never chose. On a
+    // machine whose models come through a gateway that agent could not start,
+    // with no `model:` line in the file to explain why. The guard the
+    // assertion actually carried, that a Claude-runtime agent must never wear
+    // Codex's null-means-omit spelling, is kept.
+    const boss = agents.find(a => a.id === 'boss');
+    assert.strictEqual(boss.model, 'inherit', 'no model, spelled the way the Claude runtime spells it');
+    assert.notStrictEqual(boss.model, null, 'null is the Codex spelling and must not cross runtimes');
+    assert.strictEqual(agents.find(a => a.id === 'guide').model, 'inherit');
     assert.strictEqual(agents.find(a => a.id === 'spec').runtime, 'codex', 'specialists keep their declared runtime');
   });
 
@@ -746,7 +780,8 @@ describe('agent runtime field', () => {
     srv.invalidateAgentCache();
     const a = srv.discoverAgents().find(x => x.id === 'writer');
     assert.strictEqual(a.runtime, 'claude');
-    assert.strictEqual(a.model, 'sonnet');
+    // The file names no model, so neither does Rundock. Was 'sonnet'.
+    assert.strictEqual(a.model, 'inherit');
   });
 
   test('unknown runtime values fall back to claude (a typo never strands an agent)', () => {
@@ -756,6 +791,147 @@ describe('agent runtime field', () => {
     srv.invalidateAgentCache();
     const a = srv.discoverAgents().find(x => x.id === 'writer');
     assert.strictEqual(a.runtime, 'claude');
-    assert.strictEqual(a.model, 'sonnet');
+    assert.strictEqual(a.model, 'inherit');
+  });
+});
+
+// Issue #307. The model error card is the one thing a user sees when their
+// model is rejected, and the old copy told them to "set its model to opus,
+// sonnet, or haiku": three Claude aliases presented as the only valid answers,
+// which is wrong advice for anyone whose models come through a gateway. These
+// assert on the message actually delivered to a client, not on the lookup that
+// feeds it, because the previous version of this fix looked correct at the
+// lookup and produced the wrong card for the workspace orchestrator.
+describe('the model error card', () => {
+  function captureCard(entry) {
+    const sent = [];
+    const fake = { readyState: 1, send: (p) => sent.push(JSON.parse(p)) };
+    srv.connectedClients.add(fake);
+    try {
+      srv.sendModelError(entry, 'convo-1');
+    } finally {
+      srv.connectedClients.delete(fake);
+    }
+    return sent.find(m => m.type === 'error');
+  }
+
+  test('names the agent file to edit, and offers inherit instead of three aliases', () => {
+    useWorkspace({ agents: { 'content-lead': agentFile({ name: 'content-lead', displayName: 'Penn', type: 'specialist', order: 2, reportsTo: 'chief-of-staff' }) } });
+    const card = captureCard({ agentId: 'content-lead', processId: 'p1', runtime: 'claude' });
+    assert.ok(card, 'a card is sent');
+    assert.match(card.content, /content-lead\.md/, 'names the file the user has to open');
+    assert.match(card.content, /inherit/, 'offers the value that works on any runtime');
+    assert.doesNotMatch(card.content, /opus, sonnet, or haiku/,
+      'the three-alias list is the wrong advice this card exists to remove');
+  });
+
+  test('the workspace orchestrator gets its file named too', () => {
+    // discoverAgents rewrites the order-0 agent's id to 'default' while the file
+    // keeps its own slug, so an id-only lookup silently loses the file for the
+    // agent most users talk to first. entry.agentId carries the slug here,
+    // which is what the spawn paths pass through.
+    useWorkspace({ agents: { 'chief-of-staff': agentFile({ name: 'chief-of-staff', displayName: 'Cos', type: 'orchestrator', order: 0 }) } });
+    const card = captureCard({ agentId: 'chief-of-staff', processId: 'p2', runtime: 'claude' });
+    assert.match(card.content, /chief-of-staff\.md/,
+      'the orchestrator has a real file on disk and the card must name it');
+  });
+
+  // The two runtimes need OPPOSITE advice, and one template served both.
+  // Codex takes the model field verbatim, so `inherit` there is just another
+  // model it does not recognise: a Codex user following that advice would
+  // trade one rejected model for another.
+  test('a Codex agent is told to remove the field, never to set inherit', () => {
+    useWorkspace({ agents: { 'frost': agentFile({ name: 'frost', displayName: 'Frost', type: 'specialist', order: 3, reportsTo: 'chief-of-staff', runtime: 'codex', model: 'gpt-nope' }) } });
+    const card = captureCard({ agentId: 'frost', processId: 'p4', runtime: 'codex' });
+    assert.match(card.content, /^Codex rejected/, 'names the runtime that actually refused');
+    assert.match(card.content, /Remove the `model:` field/, "Codex's escape hatch is omission");
+    assert.doesNotMatch(card.content, /inherit/,
+      'inherit is a Claude Code value and would fail again on Codex');
+  });
+
+  test('a Claude Code agent is offered inherit', () => {
+    useWorkspace({ agents: { 'content-lead': agentFile({ name: 'content-lead', displayName: 'Penn', type: 'specialist', order: 2, reportsTo: 'chief-of-staff' }) } });
+    const card = captureCard({ agentId: 'content-lead', processId: 'p5', runtime: 'claude' });
+    assert.match(card.content, /^Claude Code rejected/);
+    assert.match(card.content, /`inherit`/, 'where inherit is the value that works');
+  });
+
+  // Both synthesised agents now inherit, so a model error on one means the
+  // RUNTIME's own default was refused. Telling the user to set a model on an
+  // agent with no file is advice they cannot follow, and offering `inherit` is
+  // advice they are already taking.
+  test('an agent with no file is told the problem is outside the workspace', () => {
+    useWorkspace({ claudeMd: '# Dex - Your Chief of Staff\n\nHello.' });
+    const card = captureCard({ agentId: 'default', processId: 'p3', runtime: 'claude' });
+    assert.doesNotMatch(card.content, /\.md/, 'there is no file to name, so it must not invent one');
+    assert.doesNotMatch(card.content, /Set `model:`/, 'there is no frontmatter to set it in');
+    assert.match(card.content, /nothing to change in the workspace/,
+      'the fix is the runtime configuration, and the card must say so');
+  });
+
+  // Doc is rewritten from source on every workspace open, so an edit there does
+  // not survive. Naming it would send the user to do work that is undone.
+  test('a Rundock-managed agent is not offered as a file to edit', () => {
+    useWorkspace({ agents: standardTeam() });
+    const doc = srv.discoverAgents().find(a => a.id === 'rundock-guide');
+    assert.ok(doc, 'precondition: Doc is present');
+    const card = captureCard({ agentId: 'rundock-guide', processId: 'p6', runtime: 'claude' });
+    assert.doesNotMatch(card.content, /Set `model:`/,
+      'an edit to a managed file is overwritten on the next workspace open');
+    assert.match(card.content, /managed by Rundock|nothing to change in the workspace/);
+  });
+});
+
+// Issue #307, found by a strategic re-review rather than by a test. `inherit`
+// means "pass no --model", which is a Claude Code concept. Codex takes the
+// model field verbatim (lib/runtime/codex-glue.js openCodexThread), so the word
+// would reach it as a literal model name and the agent could never start. Three
+// separate prose files were relied on to prevent that; this makes it true in
+// code, where it cannot drift.
+describe('inherit across runtimes', () => {
+  // MR-3: the two files must be indistinguishable, so the comparison IS the
+  // assertion. Asserting each separately against a remembered `null` would
+  // still pass if one drifted and the expectation drifted with it.
+  test('on Codex, naming no model and naming inherit resolve identically', () => {
+    useWorkspace({ agents: {
+      silent: agentFile({ name: 'silent', displayName: 'Silent', type: 'specialist', order: 3,
+        reportsTo: 'chief-of-staff', runtime: 'codex' }),
+      spoken: agentFile({ name: 'spoken', displayName: 'Spoken', type: 'specialist', order: 4,
+        reportsTo: 'chief-of-staff', runtime: 'codex', model: 'inherit' }),
+    } });
+    const agents = srv.discoverAgents();
+    const silent = agents.find(x => x.id === 'silent');
+    const spoken = agents.find(x => x.id === 'spoken');
+    assert.strictEqual(silent.runtime, 'codex');
+    assert.strictEqual(spoken.runtime, 'codex');
+    assert.strictEqual(spoken.model, silent.model,
+      'saying nothing and saying inherit are the same statement on Codex too');
+    assert.ok(!String(spoken.model || '').toLowerCase().includes('inherit'),
+      'and the literal word never survives to be sent as a model name');
+  });
+
+  test('the same normalisation survives case and whitespace', () => {
+    useWorkspace({ agents: {
+      frost: agentFile({ name: 'frost', displayName: 'Frost', type: 'specialist', order: 3,
+        reportsTo: 'chief-of-staff', runtime: 'codex', model: ' Inherit ' }),
+    } });
+    assert.strictEqual(srv.discoverAgents().find(x => x.id === 'frost').model, null);
+  });
+
+  test('a Codex agent naming a real model still keeps it', () => {
+    useWorkspace({ agents: {
+      frost: agentFile({ name: 'frost', displayName: 'Frost', type: 'specialist', order: 3,
+        reportsTo: 'chief-of-staff', runtime: 'codex', model: 'gpt-5-codex' }),
+    } });
+    assert.strictEqual(srv.discoverAgents().find(x => x.id === 'frost').model, 'gpt-5-codex',
+      'normalising inherit must not swallow a model the user deliberately named');
+  });
+
+  test('a Claude Code agent keeps inherit, which is where it means something', () => {
+    useWorkspace({ agents: {
+      vale: agentFile({ name: 'vale', displayName: 'Vale', type: 'specialist', order: 4,
+        reportsTo: 'chief-of-staff', model: 'inherit' }),
+    } });
+    assert.strictEqual(srv.discoverAgents().find(x => x.id === 'vale').model, 'inherit');
   });
 });

@@ -120,6 +120,63 @@ describe('lib/agents module seams', () => {
     }
   });
 
+  // Issue #307. The prompt told every platform agent "Never recommend a runtime
+  // or model that is not listed here", which forbade a capability the code had
+  // always allowed: modelArgs never validated a model, so a gateway identifier
+  // worked while Doc refused to write one. Enumerating the consumers, as the
+  // card required, showed this sentence only ever reached users with Codex
+  // installed AND authenticated, because it lives inside that branch. Both
+  // states are asserted so that narrower blast radius is pinned, not assumed.
+  test('the prompt permits any model the runtime serves, and forbids only unlisted runtimes', () => {
+    useWorkspace({ agents: { doc: agentFile({ name: 'doc', type: 'platform', order: 9 }) } });
+    const doc = discovery.discoverAgents().find(a => a.name === 'doc');
+    const prev = promptLib.wirePromptDeps({ detectCodexCached: () => ({ installed: true, authenticated: true, version: '1.0.0' }) });
+    try {
+      const withCodex = promptLib.buildSystemPrompt(doc);
+      assert.doesNotMatch(withCodex, /Never recommend a runtime or model that is not listed here/,
+        'the blanket prohibition covered models, which the code accepts from any source');
+      assert.match(withCodex, /Never recommend a runtime that is not listed here/,
+        'the runtime half of the rule is real and stays: Codex either exists on this machine or does not');
+      assert.match(withCodex, /any identifier the configured runtime serves/,
+        'the prompt states the capability the code has always had');
+      assert.match(withCodex, /model: inherit/, 'and names the value to use when the user names nothing');
+
+      // The two runtimes need OPPOSITE instructions for the same situation,
+      // and one paragraph covering both read as self-contradictory. A Codex
+      // agent written with `model: inherit` gets that string passed to Codex
+      // verbatim (lib/runtime/codex-glue.js openCodexThread), which answers
+      // with a model-not-available card: Doc would build an agent that cannot
+      // start. So the inherit instruction must be scoped to Claude Code, and
+      // the Codex instruction must say omit.
+      const codexSentence = withCodex.split('\n').find(l => /Codex agent/.test(l) && /OMIT|omit/.test(l));
+      assert.ok(codexSentence, 'the prompt must tell Doc to omit the model field for a Codex agent');
+      // It must NOT claim that `inherit` breaks a Codex agent. It used to, and
+      // that stopped being true when the resolution layer started normalising
+      // `inherit` to omission for Codex: a prompt that warns of a consequence
+      // the code prevents is teaching Doc something false.
+      assert.doesNotMatch(withCodex, /cannot start/,
+        'the code tolerates inherit on Codex, so the prompt must not say otherwise');
+      assert.doesNotMatch(withCodex, /For a Codex agent write `model: inherit`/,
+        'omission is still the instruction for Codex, tolerated or not');
+
+      promptLib.wirePromptDeps({ detectCodexCached: () => ({ installed: false, authenticated: false, version: null }) });
+      const noCodex = promptLib.buildSystemPrompt(doc);
+      assert.doesNotMatch(noCodex, /Never recommend a runtime/,
+        'runtime advice is machine-specific and stays behind the Codex check');
+      assert.doesNotMatch(noCodex, /RUNTIMES:/, 'as does the section it lives in');
+      // The point of separating them: model advice is NOT machine-specific, and
+      // the users who most need it (a gateway, no Codex installed) were the
+      // exact users the old structure gave nothing to.
+      assert.match(noCodex, /MODELS:/, 'model guidance reaches a machine with no Codex');
+      assert.match(noCodex, /any identifier the configured runtime serves/);
+      assert.match(noCodex, /model: inherit/, 'including the value to use when the user names nothing');
+      assert.doesNotMatch(noCodex, /Codex agent/,
+        'and says nothing about a runtime this machine does not have');
+    } finally {
+      promptLib.wirePromptDeps(prev);
+    }
+  });
+
   test('prompt deps are injected: rosters read skills through the injected discoverSkills', () => {
     useWorkspace({ agents: standardTeam() });
     const prev = promptLib.wirePromptDeps({

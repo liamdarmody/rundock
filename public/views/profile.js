@@ -155,12 +155,15 @@ function showProfile(agentId) {
   // if the owner says otherwise.
   {
     const row = (label, value) => `<div class="profile-card-item" style="display:flex;align-items:center;justify-content:space-between">${label}${value}</div>`;
-    const modelLabels = {opus:'Opus (most capable)',sonnet:'Sonnet (fast, efficient)',haiku:'Haiku (lightweight)'};
+    // `inherit` is the one value here that names no model, so a bare token
+    // would leave the reader asking "inherit from what?". The others follow
+    // Name (explanation); this does too, and answers that question in place.
+    const modelLabels = {opus:'Opus (most capable)',sonnet:'Sonnet (fast, efficient)',haiku:'Haiku (lightweight)',inherit:'Inherit (your runtime\'s default)'};
     h+=`<div class="profile-card"><div class="profile-card-section"><div class="profile-section-label">Configuration</div>`;
     if(hasConnectors) {
       h+=a.capabilities.connectors.split(',').map(cn=>row(esc(cn.trim()), '<span style="color:var(--success);font-size:var(--caption)">Connected</span>')).join('');
     }
-    if(a.model) h+=row('Model', `<span style="color:var(--text-2)">${esc(modelLabels[a.model]||a.model)}</span>`);
+    if(a.model) h+=row('Model', `<span style="color:var(--text-2)">${esc(Object.prototype.hasOwnProperty.call(modelLabels,a.model)?modelLabels[a.model]:a.model)}</span>`);
     // Runtime is stated for every agent, not just Codex ones, so it reads as
     // a fact about the agent rather than a special mark.
     h+=row('Runtime', `<span style="color:var(--text-2)">${a.runtime === 'codex' ? 'Codex' : 'Claude Code'}</span>`);

@@ -120,4 +120,26 @@ describe('lib/workspace module seams', () => {
     assert.ok(launcher.includes(path.join('scripts', 'permission-hook.js')),
       'the hook launcher references scripts/permission-hook.js resolved from the repo root');
   });
+
+  // Issue #307. Doc is a Rundock-managed file, so a user on a gateway cannot
+  // fix it by editing: the sync overwrites their edit on the next open. That
+  // cuts the other way too, and is why this fix reaches workspaces that already
+  // exist rather than new ones only. The test stands a workspace up with the
+  // OLD Doc already deployed, which is the state every existing user is in.
+  test('an existing workspace holding the old pinned Doc is updated to inherit', () => {
+    const dir = makeWorkspace({});
+    const guidePath = path.join(dir, '.claude', 'agents', 'rundock-guide.md');
+    fs.mkdirSync(path.dirname(guidePath), { recursive: true });
+    fs.writeFileSync(guidePath,
+      '---\nname: rundock-guide\ndisplayName: Doc\nmodel: sonnet\n---\nold instructions\n', 'utf-8');
+
+    scaffold.scaffoldWorkspace(dir);
+
+    const deployed = fs.readFileSync(guidePath, 'utf-8');
+    const frontmatter = deployed.split('---')[1] || '';
+    assert.match(frontmatter, /^model: inherit$/m,
+      'the deployed Doc inherits, so a gateway-only machine can run the first agent it meets');
+    assert.doesNotMatch(frontmatter, /^model: sonnet$/m,
+      'the old pinned model must be gone from the deployed file, not merely joined by a new line');
+  });
 });

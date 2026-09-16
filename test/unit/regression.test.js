@@ -167,7 +167,10 @@ describe('P1 regressions', () => {
     // ReferenceError on every legacy message. The lookup is now hoisted.
     const src = fs.readFileSync(path.join(__dirname, '../../server.js'), 'utf-8');
     const legacyStart = src.indexOf('LEGACY MODE (--print');
-    const declPos = src.indexOf('const agentData = legacyAgentList.find', legacyStart);
+    // The lookup became a shared helper (findAgentBySlug) when a fourth copy of
+    // it was written with only the id half; the ordering this test guards is
+    // unchanged, so the pin follows the declaration rather than being dropped.
+    const declPos = src.indexOf('const agentData = findAgentBySlug(legacyAgentList', legacyStart);
     const usePos = src.indexOf('...modelArgs(agentData), \'--print\'', legacyStart);
     assert.ok(declPos > 0 && usePos > 0, 'both the declaration and use exist in the legacy branch');
     assert.ok(declPos < usePos, 'agentData must be declared before modelArgs(agentData) uses it');

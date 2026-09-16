@@ -44,3 +44,29 @@ describe('lib/config workspace root', () => {
     ], 'assign the workspace root via setWorkspaceRoot(), never directly');
   });
 });
+
+// The one place that decides what "no model" means in a user's frontmatter.
+// It lives here because both the resolution layer (lib/agents/discovery.js) and
+// the spawn layer (lib/runtime/claude.js) ask the question, and two copies
+// would drift on exactly the edge cases the rule exists for.
+describe('namesNoModel', () => {
+  const { namesNoModel } = require('../../lib/config.js');
+
+  test('an empty field and the word inherit are the same statement', () => {
+    for (const v of [undefined, null, '', '   ', 'inherit']) {
+      assert.strictEqual(namesNoModel(v), true, `${JSON.stringify(v)} names no model`);
+    }
+  });
+
+  test('matched the way runtime already is: case and whitespace', () => {
+    for (const v of ['Inherit', 'INHERIT', ' inherit ', '\tInHeRiT\n']) {
+      assert.strictEqual(namesNoModel(v), true, `${JSON.stringify(v)} must not strand an agent`);
+    }
+  });
+
+  test('a named model is a named model, including one we cannot recognise', () => {
+    for (const v of ['opus', 'sonnet', 'haiku', 'my-gateway/claude-model-id', 'inheritance', 'not-inherit']) {
+      assert.strictEqual(namesNoModel(v), false, `${JSON.stringify(v)} names a model`);
+    }
+  });
+});

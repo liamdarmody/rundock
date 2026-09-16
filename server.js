@@ -242,11 +242,6 @@ const DISALLOWED_TOOLS = DISALLOWED_TOOLS_KNOWLEDGE;
 const ALLOWED_TOOLS_INTERACTIVE_BASE = 'Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,ToolSearch,Agent,Skill';
 const ALLOWED_TOOLS_LEGACY_BASE = 'Bash,WebFetch,WebSearch';
 
-// DEFAULT_MODEL lives in lib/config.js (shared with lib/agents and
-// lib/runtime/claude.js, where modelArgs and spawnClaude apply it); the
-// root re-reads it only for the _internal export.
-const { DEFAULT_MODEL } = config;
-
 // readMcpServerNames lives in lib/workspace/analysis.js (used only by the
 // workspace analysis).
 
@@ -602,7 +597,7 @@ workspaceScaffold.wireScaffoldDeps({ invalidateAgentCache, rebaselineAgentsWatch
 // everything else the module needs is lib-owned or read at use time.
 const claudeRuntime = require('./lib/runtime/claude.js');
 const {
-  modelArgs, getBareArgs, getSpawnEnv,
+  modelArgs, modelForLog, logFlags, getBareArgs, getSpawnEnv,
   resolveClaudeBin, killProcessTree, spawnClaude,
   registerChildPid, unregisterChildPid, pruneScratch,
   loadPidFile, savePidFile, pidOf, pidRecordAlive,
@@ -1174,10 +1169,46 @@ function isAuthError(text) {
   return typeof text === 'string' && AUTH_ERROR_RE.test(text);
 }
 
-// Detects an invalid or unknown model error (e.g. a typo in an agent's `model`
-// field). Rare now that Rundock always passes an explicit valid --model, but it
-// surfaces a clear message instead of a cryptic one if it ever happens.
-const MODEL_ERROR_RE = /issue with the selected model|invalid model|unknown model|model[^a-z]*(?:not found|not available|not recognised|not recognized|is not valid|does not exist)/i;
+// Detects a rejected model, so the recovery card appears instead of a raw error.
+//
+// This used to assume the model was always one of three known words, so the
+// pattern allowed nothing between "model" and the complaint. A runtime that
+// serves the user's own identifiers puts the NAME in that gap, and the single
+// most likely message a gateway user sees, "The model `my-gateway/x` does not
+// exist", fell straight through: they got an error blob and never saw the card
+// telling them what to change. The card is the whole recovery path, so a card
+// that does not appear is the same as a card that is wrong.
+//
+// Allowing a name in the gap is also where over-matching starts: "the model
+// responded but the file was not found" must not raise a model card. So the gap
+// accepts only something shaped like an identifier (optionally quoted, no
+// spaces) and the complaint must follow it directly. The negative cases in
+// test/unit/model-error-detection.test.js are the real specification here.
+const MODEL_ERROR_RE = new RegExp([
+  'issue with the selected model',
+  'invalid model',
+  'unknown model',
+  // `model_not_found`, the machine-readable code most OpenAI-compatible
+  // proxies return alongside their prose.
+  'model[ _]not[ _]found',
+  // "model `x` does not exist", "model: claude-foo is not valid". The name is
+  // optional, so plain "model does not exist" still matches.
+  'model[\\s:=]*["\'`]?[\\w./:-]{0,64}["\'`]?[\\s,]*'
+    // "is" is optional so both "model x not found" and "model x is not
+    // supported" match. The latter is the wording Codex's own classifier uses.
+    + '(?:is[ _])?(?:'
+    + 'not[ _](?:found|available|recognised|recognized|valid|supported)'
+    + '|does[ _]not[ _]exist)',
+  // Anthropic-shaped: the type names the failure and the payload names a model,
+  // in that order, so the pattern above (which needs "model" first) misses it.
+  // "model" must appear as a KEY here, not as a passing mention: a not-found
+  // payload about something else that happens to say the word within the window
+  // would otherwise send the user off to change a model that was never at fault.
+  'not_found_error[\\s\\S]{0,160}?["\']?model["\']?\\s*[:=]',
+  // LiteLLM when the identifier carries no provider prefix. Caused by the model
+  // field, so the card naming that field is the right advice.
+  'llm provider not provided',
+].join('|'), 'i');
 function isModelError(text) {
   return typeof text === 'string' && MODEL_ERROR_RE.test(text);
 }
@@ -1195,14 +1226,70 @@ function sendAuthError(entry, convoId) {
   }));
 }
 
-// Surfaces a clear, one-time message when the selected model is invalid.
+// Agent files Rundock rewrites from source on every workspace open. Read from
+// the scaffold list rather than restated here, so a file added there cannot
+// leave this set stale and have the error card recommend a doomed edit.
+const MANAGED_AGENT_FILES = new Set(
+  workspaceScaffold.RUNDOCK_MANAGED_FILES
+    .filter(e => e.target.startsWith('.claude/agents/'))
+    .map(e => e.target.split('/').pop())
+);
+
+// Resolves a requested agent slug against discovery output.
+//
+// Two steps, not one, and the second is not optional: discoverAgents rewrites
+// the order-0 agent's id to 'default' while its file keeps its own slug, so an
+// id match alone misses the workspace orchestrator, which is the agent most
+// users talk to first. This was three copies of the same expression at the
+// spawn sites; a fourth was written with only the id half and lost the file for
+// exactly that agent.
+function findAgentBySlug(agentList, slug) {
+  return agentList.find(a => a.id === slug)
+    || agentList.find(a => a.fileName && a.fileName.replace('.md', '') === slug);
+}
+
+// Surfaces a clear, one-time message when the runtime rejects the model.
+// Names the file to edit, because the previous message listed three Claude
+// aliases as if they were the only valid answers. They are not: any identifier
+// the configured runtime serves is valid, including a gateway's. And two agents
+// (the CLAUDE.md default agent and the fallback Doc) are synthesised in code
+// with no file at all, so "open the agent's profile" was advice they could not
+// follow.
 function sendModelError(entry, convoId) {
   if (entry.modelErrorSent) return;
   entry.modelErrorSent = true;
   recordEvent('runtime_error', { conv: convoId, agent: entry.agentId, runtime: entry.runtime || 'claude', d: { class: 'model' } });
+  let fileName = null;
+  try {
+    fileName = (findAgentBySlug(discoverAgents(), entry.agentId) || {}).fileName || null;
+  } catch { /* naming the file is a nicety; never let it cost the error message */ }
+  // The two runtimes need OPPOSITE advice here, and giving both the same line
+  // was a real defect: `inherit` is a Claude Code value. Codex receives the
+  // model field verbatim (lib/runtime/codex-glue.js openCodexThread), so
+  // telling a Codex user to set `inherit` trades one rejected model for
+  // another. Codex's own escape hatch is to omit the field.
+  const isCodex = entry.runtime === 'codex';
+  let fix;
+  if (!fileName) {
+    // The CLAUDE.md default agent and the fallback Doc are synthesised in code
+    // with fileName: null, so there is no frontmatter to change and telling the
+    // user to set one is advice they cannot follow. Both of these now inherit,
+    // so a model error on them means the runtime's OWN default is the thing
+    // being refused, and the fix is outside Rundock.
+    fix = 'This agent uses whatever model your runtime defaults to, and that is the model being refused, so there is nothing to change in the workspace. Check the model your runtime is configured to use.';
+  } else if (MANAGED_AGENT_FILES.has(fileName)) {
+    // Rundock rewrites its own managed files from source whenever they differ,
+    // on every workspace open. Naming one here would send the user to make an
+    // edit that does not survive.
+    fix = `${fileName} is managed by Rundock and uses whatever model your runtime defaults to, so an edit there would be overwritten. Check the model your runtime is configured to use.`;
+  } else if (isCodex) {
+    fix = `Remove the \`model:\` field in ${fileName} to use your ChatGPT account's default, or set it to a model your plan includes.`;
+  } else {
+    fix = `Set \`model:\` in ${fileName} to a model your runtime serves, or to \`inherit\` to use whatever model your runtime already defaults to.`;
+  }
   safeSend(JSON.stringify({
     type: 'error',
-    content: "The model set for this agent isn't valid. Open the agent's profile and set its model to opus, sonnet, or haiku. Rundock uses sonnet by default when no model is set.",
+    content: `${isCodex ? 'Codex' : 'Claude Code'} rejected the model set for this agent. ${fix}`,
     _agent: entry.agentId, _conversationId: convoId, _processId: entry.processId
   }));
 }
@@ -1352,8 +1439,7 @@ wss.on('connection', (ws) => {
         {
           const requestedAgent = msg.agent || 'default';
           const agentList = discoverAgents();
-          const routedAgent = agentList.find(a => a.id === requestedAgent)
-            || agentList.find(a => a.fileName && a.fileName.replace('.md', '') === requestedAgent);
+          const routedAgent = findAgentBySlug(agentList, requestedAgent);
           if (routedAgent && routedAgent.runtime === 'codex') {
             startCodexTurn(convoId, msg, routedAgent);
             return;
@@ -1441,8 +1527,7 @@ wss.on('connection', (ws) => {
             // Look up agent data first so we can build a dynamic system prompt
             const agentList = discoverAgents();
             const requestedAgent = msg.agent || 'default';
-            const agentData = agentList.find(a => a.id === requestedAgent)
-              || agentList.find(a => a.fileName && a.fileName.replace('.md', '') === requestedAgent);
+            const agentData = findAgentBySlug(agentList, requestedAgent);
 
             const systemPrompt = buildSystemPrompt(agentData);
             const chatDisallowed = getDisallowedTools();
@@ -1464,7 +1549,7 @@ wss.on('connection', (ws) => {
               args.push('--agent', agentData.name);
             }
 
-            console.log(`[Chat] convo=${convoId} proc=${processId} agent=${msg.agent} sessionId=${msg.sessionId||'new'} mode=interactive model=${args[args.indexOf('--model')+1]||'(default)'} args=${args.filter(a=>a.startsWith('--')).join(' ')}`);
+            console.log(`[Chat] convo=${convoId} proc=${processId} agent=${msg.agent} sessionId=${msg.sessionId||'new'} mode=interactive model=${modelForLog(args)} args=${logFlags(args)}`);
 
             const proc = spawnClaude(args, {
               cwd: WORKSPACE,
@@ -1594,8 +1679,7 @@ wss.on('connection', (ws) => {
           // RUNDOCK_LEGACY_SPAWN=1).
           const legacyAgentList = discoverAgents();
           const legacyRequestedAgent = msg.agent || 'default';
-          const agentData = legacyAgentList.find(a => a.id === legacyRequestedAgent)
-            || legacyAgentList.find(a => a.fileName && a.fileName.replace('.md', '') === legacyRequestedAgent);
+          const agentData = findAgentBySlug(legacyAgentList, legacyRequestedAgent);
 
           const legacyDisallowed = getDisallowedTools();
           const legacyPermMode = getPermissionMode();
@@ -1615,7 +1699,7 @@ wss.on('connection', (ws) => {
             }
           }
 
-          console.log(`[Chat] convo=${convoId} proc=${processId} agent=${msg.agent} sessionId=${msg.sessionId||'new'} mode=legacy model=${args[args.indexOf('--model')+1]||'(default)'} args=${args.filter(a=>a.startsWith('--')).join(' ')}`);
+          console.log(`[Chat] convo=${convoId} proc=${processId} agent=${msg.agent} sessionId=${msg.sessionId||'new'} mode=legacy model=${modelForLog(args)} args=${logFlags(args)}`);
 
           const proc = spawnClaude(args, {
             cwd: WORKSPACE,
@@ -3211,7 +3295,8 @@ module.exports._internal = {
   wireProcessHandlers, handleDelegation, handleScopeReturn,
   handleChatSpawnError, resolveClaudeBin, spawnClaude, killProcessTree,
   getBareArgs, getSpawnEnv, getDisallowedTools, getPermissionMode,
-  getAllowedToolsInteractive, getAllowedToolsLegacy, modelArgs,
+  getAllowedToolsInteractive, getAllowedToolsLegacy, modelArgs, modelForLog, logFlags,
+  sendModelError, findAgentBySlug,
   killAllChildren, cleanOrphanedProcesses, loadPidFile, savePidFile, pidRecordAlive,
   processCommand, readProcCmdline, parseProcCmdline, psCommand,
   commandLineCapability, COMMAND_LINE_SOURCES,
@@ -3238,6 +3323,6 @@ module.exports._internal = {
   // server objects (integration test lifecycle)
   server, wss,
   // constants
-  MAX_CONSECUTIVE_AGENT_RESUMES, DEFAULT_MODEL, PERMISSION_TIMEOUT_MS,
+  MAX_CONSECUTIVE_AGENT_RESUMES, PERMISSION_TIMEOUT_MS,
   DISALLOWED_TOOLS_KNOWLEDGE, SPECIALIST_OUTPUT_MAX_CHARS,
 };
