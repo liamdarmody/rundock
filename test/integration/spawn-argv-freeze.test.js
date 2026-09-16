@@ -37,12 +37,38 @@ before(async () => {
         reportsTo: 'chief-of-staff', runtime: 'codex',
         body: 'You are Frost.',
       }),
+      // Issue #307: a model only the user can name. The reporter's own example.
+      'gateway-freeze': agentFile({
+        name: 'gateway-freeze', displayName: 'Gate', role: 'Gatewayed',
+        description: 'Pins a model Rundock cannot recognise', type: 'specialist', order: 11,
+        reportsTo: 'chief-of-staff', model: 'my-gateway/claude-model-id',
+        body: 'You are Gate.',
+      }),
+      // Issue #307: an agent whose model the runtime resolves for itself.
+      'inherit-freeze': agentFile({
+        name: 'inherit-freeze', displayName: 'Vale', role: 'Inherited',
+        description: 'Pins the inheriting spawn', type: 'specialist', order: 10,
+        reportsTo: 'chief-of-staff', model: 'inherit',
+        body: 'You are Vale.',
+      }),
     },
   });
   client = await h.connect();
 });
 after(async () => h.shutdown());
 
+// Rundock passes through the model the user named and names none otherwise, so
+// whether --model appears is decided by the agent file and both cases are
+// frozen here deliberately.
+//
+// Most agents below name no model ('lead-designer', 'content-lead', the routine
+// agent) or say `inherit` outright ('inherit-freeze'), which is the same
+// statement: their argv carries no --model, and that ABSENCE is part of the
+// contract rather than an omission from the list. Do not "restore" a --model to
+// those: a pin expecting one would assert that Rundock substitutes a model
+// nobody chose. 'gateway-freeze' is the other half, pinning that an identifier
+// Rundock cannot recognise reaches argv verbatim and in the same position.
+//
 // Flags whose values are dynamic by design. The flag's presence and position
 // stay frozen; only the value is masked.
 const DYNAMIC_VALUE_FLAGS = new Set([
@@ -88,7 +114,6 @@ describe('spawn argv freeze', () => {
     assert.deepStrictEqual(maskArgv(inv[0].argv), [
       '--add-dir', '<add-dir>',
       '--settings', '<settings>',
-      '--model', 'sonnet',
       '--output-format', 'stream-json',
       '--input-format', 'stream-json',
       '--verbose',
@@ -103,6 +128,74 @@ describe('spawn argv freeze', () => {
     assert.strictEqual(inv[0].env.RUNDOCK, '1');
     assert.strictEqual(inv[0].env.RUNDOCK_CONVO_ID, convoId);
     assert.ok(inv[0].env.RUNDOCK_PORT, 'RUNDOCK_PORT set');
+  });
+
+  // Issue #307. modelArgs returning [] is an intermediate; the artefact that
+  // decides whether a gateway user's agent runs is the argv actually handed to
+  // the runtime. This freezes it: the same spawn as the interactive case above,
+  // with --model and its value absent and nothing shifted out of place.
+  test('interactive chat spawn, inheriting agent: full argv frozen with no --model', async () => {
+    const convoId = h.freshConvoId('frz');
+    h.clearInvocations();
+    h.writeScenario([{ match: { agent: 'inherit-freeze' }, turn: [{ text: 'inherited.' }] }]);
+
+    client.send({ type: 'chat', conversationId: convoId, agent: 'inherit-freeze', content: 'freeze inherit path' });
+    await client.waitForEvent('system', 'done', convoId);
+
+    const inv = h.readInvocations();
+    assert.strictEqual(inv.length, 1, 'exactly one spawn');
+    assert.deepStrictEqual(maskArgv(inv[0].argv), [
+      '--add-dir', '<add-dir>',
+      '--settings', '<settings>',
+      '--output-format', 'stream-json',
+      '--input-format', 'stream-json',
+      '--verbose',
+      '--include-partial-messages',
+      '--permission-mode', 'acceptEdits',
+      '--allowed-tools', ALLOWED_TOOLS_INTERACTIVE,
+      '--disallowed-tools', DISALLOWED_TOOLS_KNOWLEDGE,
+      '--append-system-prompt', '<append-system-prompt>',
+      '--agent', 'inherit-freeze',
+    ]);
+    // Stated separately from the deepStrictEqual so the failure message says
+    // which half broke: the flag is gone, and so is the word, rather than
+    // `--model inherit` reaching a runtime that would reject it.
+    assert.ok(!inv[0].argv.includes('--model'), 'no --model flag');
+    assert.ok(!inv[0].argv.includes('inherit'), 'and `inherit` is never passed as a value');
+  });
+
+  // MR-1: the criterion names the artefact deliberately. A gateway identifier
+  // surviving `modelArgs` proves nothing about what the child process receives,
+  // and this card has twice been defeated one layer below the function under
+  // test. So the evidence is the spawned argv, character for character.
+  test('interactive chat spawn, gateway model: the identifier reaches argv verbatim', async () => {
+    const convoId = h.freshConvoId('frz');
+    h.clearInvocations();
+    h.writeScenario([{ match: { agent: 'gateway-freeze' }, turn: [{ text: 'gatewayed.' }] }]);
+
+    client.send({ type: 'chat', conversationId: convoId, agent: 'gateway-freeze', content: 'freeze gateway path' });
+    await client.waitForEvent('system', 'done', convoId);
+
+    const inv = h.readInvocations();
+    assert.strictEqual(inv.length, 1, 'exactly one spawn');
+    const i = inv[0].argv.indexOf('--model');
+    assert.notStrictEqual(i, -1, 'a named model is passed as a flag');
+    assert.strictEqual(inv[0].argv[i + 1], 'my-gateway/claude-model-id',
+      'the identifier reaches the runtime unchanged: no validation, no translation');
+    assert.deepStrictEqual(maskArgv(inv[0].argv), [
+      '--add-dir', '<add-dir>',
+      '--settings', '<settings>',
+      '--model', 'my-gateway/claude-model-id',
+      '--output-format', 'stream-json',
+      '--input-format', 'stream-json',
+      '--verbose',
+      '--include-partial-messages',
+      '--permission-mode', 'acceptEdits',
+      '--allowed-tools', ALLOWED_TOOLS_INTERACTIVE,
+      '--disallowed-tools', DISALLOWED_TOOLS_KNOWLEDGE,
+      '--append-system-prompt', '<append-system-prompt>',
+      '--agent', 'gateway-freeze',
+    ], 'and sits exactly where a recognised model would, shifting nothing');
   });
 
   test('delegation delegate spawn: full argv frozen', async () => {
@@ -128,7 +221,6 @@ describe('spawn argv freeze', () => {
     assert.deepStrictEqual(maskArgv(delegateInv.argv), [
       '--add-dir', '<add-dir>',
       '--settings', '<settings>',
-      '--model', 'sonnet',
       '--output-format', 'stream-json',
       '--input-format', 'stream-json',
       '--verbose',
@@ -162,7 +254,6 @@ describe('spawn argv freeze', () => {
     assert.deepStrictEqual(maskArgv(inv[0].argv), [
       '--add-dir', '<add-dir>',
       '--settings', '<settings>',
-      '--model', 'sonnet',
       '--print',
       '--output-format', 'stream-json',
       '--verbose',

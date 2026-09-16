@@ -222,3 +222,111 @@ test('pruning a workspace that has no scratch directory is a quiet no-op', () =>
     assert.doesNotThrow(() => rt.pruneScratch());
   });
 });
+
+// --- Model resolution (issue #307) -----------------------------------------
+// Rundock never validated model names, and must not start: a user whose models
+// arrive through a gateway has identifiers we cannot enumerate. These pin the
+// pass-through, the `inherit` escape hatch, and the log line that reports it.
+
+// MR-2/MR-3: naming nothing and naming `inherit` are the same statement. The
+// comparison is the assertion, so neither can drift from the other while both
+// still match a remembered expectation.
+test('an agent that names no model is indistinguishable from one that says inherit', () => {
+  const rt = freshClaudeRuntime();
+  const inherit = rt.modelArgs({ model: 'inherit' });
+  assert.deepStrictEqual(rt.modelArgs({}), inherit, 'an absent field says nothing');
+  assert.deepStrictEqual(rt.modelArgs(null), inherit, 'and so does no agent at all');
+  assert.deepStrictEqual(rt.modelArgs({ model: '   ' }), inherit, 'as does a blank one');
+  assert.ok(!inherit.includes('--model'), 'none of them requests a model');
+  assert.ok(!inherit.includes('sonnet'), 'and none of them is given one');
+});
+
+test('a gateway model identifier reaches argv verbatim', () => {
+  const rt = freshClaudeRuntime();
+  // The reporter's own example in issue #307. Slashes, vendor prefix and all.
+  assert.deepStrictEqual(
+    rt.modelArgs({ model: 'my-gateway/claude-model-id' }),
+    ['--model', 'my-gateway/claude-model-id'],
+    'a model Rundock cannot name must survive unchanged');
+});
+
+test('inherit asks for no model, and never passes the word to the CLI', () => {
+  const rt = freshClaudeRuntime();
+  const args = rt.modelArgs({ model: 'inherit' });
+  assert.ok(!args.includes('--model'), 'no model flag is requested');
+  assert.ok(!args.includes('inherit'), '`--model inherit` is what the runtime rejects');
+  assert.deepStrictEqual(args, [rt.INHERIT_MARKER],
+    'inheritance is stated explicitly, not signalled by an empty array');
+});
+
+// A model name is untrusted by design: this module passes any frontmatter value
+// through so a gateway's naming works. That makes a STRING marker typeable, and
+// a typed one would be stripped as the value of --model, leaving the flag
+// dangling and every following flag paired with the wrong value.
+test('the inherit marker cannot be forged from an agent file', () => {
+  const rt = freshClaudeRuntime();
+  assert.notStrictEqual(typeof rt.INHERIT_MARKER, 'string',
+    'a string marker is authorable in YAML; this one must not be');
+  // The shape a user would have to write to attempt it, and the old string
+  // value that would have collided.
+  for (const attempt of ['--rundock-inherit-model', '[object Object]', 'rundock:inherit-model']) {
+    const args = rt.modelArgs({ model: attempt });
+    assert.deepStrictEqual(args, ['--model', attempt],
+      `${attempt} is just a model name, passed through like any other`);
+    assert.ok(!args.includes(rt.INHERIT_MARKER), 'and is never mistaken for the marker');
+  }
+});
+
+test('the log flag list survives the marker without throwing or leaking it', () => {
+  const rt = freshClaudeRuntime();
+  const args = ['--add-dir', '/ws', ...rt.modelArgs({ model: 'inherit' }), '--verbose', 'positional'];
+  // Red-first anchor: the call sites used args.filter(a => a.startsWith('--')),
+  // which throws on a non-string marker and printed a string one verbatim.
+  const flags = rt.logFlags(args);
+  assert.strictEqual(flags, '--add-dir --verbose', 'only real flags, in order');
+  assert.ok(!flags.includes('rundock'), 'the internal marker never reaches a log a user reads');
+});
+
+test('inherit is matched the way runtime already is: case and whitespace', () => {
+  const rt = freshClaudeRuntime();
+  for (const v of ['Inherit', 'INHERIT', ' inherit ', '\tInHeRiT\n']) {
+    assert.deepStrictEqual(rt.modelArgs({ model: v }), [rt.INHERIT_MARKER],
+      `frontmatter ${JSON.stringify(v)} must inherit, not strand the agent`);
+  }
+});
+
+// The bug this marker exists to prevent is a boundary bug: spawnClaude puts
+// --model back when argv has none, which silently turned this whole feature
+// into a no-op while every assertion on modelArgs still passed. It is therefore
+// deliberately NOT pinned here, one layer above the defect. The proof lives in
+// test/integration/spawn-argv-freeze.test.js ('interactive chat spawn,
+// inheriting agent'), which asserts the argv a real spawn hands the runtime.
+
+test('the spawn log reports an inherited model instead of the first argument', () => {
+  const rt = freshClaudeRuntime();
+  assert.strictEqual(rt.modelForLog(['--verbose', '--model', 'opus', '--print']), 'opus');
+  // Red-first anchor: the previous expression was
+  //   args[args.indexOf('--model') + 1] || '(default)'
+  // With no --model, indexOf returns -1, so it read args[0] and reported
+  // '--add-dir' as the model. Assert on the reported value, and specifically
+  // that it is not the first argument, so the old expression cannot pass.
+  const inherited = ['--add-dir', '/tmp/ws', '--print'];
+  assert.strictEqual(rt.modelForLog(inherited), '(inherited)');
+  assert.notStrictEqual(rt.modelForLog(inherited), inherited[0],
+    'absence of --model must never be reported as the first argument');
+});
+
+// The branch above is the FALLBACK, and no real caller reaches it: modelArgs
+// always contributes either --model or the marker. The log runs before
+// spawnClaude strips the marker, so this is the branch every inheriting spawn
+// actually takes, and it was the one with no test. A mistyped or stale marker
+// check here would have shipped green.
+test('the log reports inheritance from the marker a real spawn carries', () => {
+  const rt = freshClaudeRuntime();
+  const real = ['--add-dir', '/ws', ...rt.modelArgs({ model: 'inherit' }), '--verbose'];
+  assert.ok(real.includes(rt.INHERIT_MARKER), 'precondition: this is the argv a real spawn logs');
+  assert.strictEqual(rt.modelForLog(real), '(inherited)');
+  // And it must be the marker doing the work, not the absence of --model:
+  // a spawn carrying both reports the marker's answer.
+  assert.strictEqual(rt.modelForLog([rt.INHERIT_MARKER, '--model', 'sonnet']), '(inherited)');
+});

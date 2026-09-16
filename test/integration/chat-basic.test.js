@@ -58,7 +58,9 @@ describe('interactive chat', () => {
     const invocations = h.readInvocations();
     assert.strictEqual(invocations.length, 1, 'exactly one spawn for two turns');
     assert.strictEqual(invocations[0].agent, 'lead-designer');
-    assert.strictEqual(invocations[0].model, 'sonnet');
+    // Des names no model, so Rundock names none and Claude Code resolves its
+    // own. Was 'sonnet', the substituted default that has been removed.
+    assert.strictEqual(invocations[0].model, null, 'no --model is passed');
     assert.strictEqual(invocations[0].env.RUNDOCK, '1');
     assert.strictEqual(invocations[0].env.RUNDOCK_CONVO_ID, convoId);
     assert.ok(!invocations[0].print, 'interactive mode: no --print');
