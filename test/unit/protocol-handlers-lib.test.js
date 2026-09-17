@@ -873,19 +873,24 @@ describe('the OS write block is driven by mode alone, through the real dispatch'
     } catch (e) { return false; }
   }
 
-  // WHETHER THE SANDBOX IS SWITCHED ON, which a block's mere presence no
-  // longer answers. Rundock writes one settings layer and `sandbox.enabled` is
-  // an OR across all of them, so Code mode keeps a block (to name the folders
-  // the user chose, for the case another layer did the enabling) and drops the
-  // enable. These tests mean "is it on", so they ask that.
+  // WHETHER THE SANDBOX IS SWITCHED ON, which a block's mere presence does not
+  // answer. Rundock writes one settings layer and `sandbox.enabled` is an OR
+  // across all of them, so Code mode keeps a block (to name the folders the
+  // user chose, and so they survive the trip back to Knowledge mode) while
+  // setting the enable to false.
+  //
+  // THE VALUE, NOT THE KEY. This asked `'enabled' in settings.sandbox`, which
+  // was the same conflation the production code carried: it read a Code mode
+  // block that says `false` as one that switches the sandbox ON. The comment
+  // above already said these tests mean "is it on", so now they ask it.
   function blockEnables(dir) {
     try {
       const settings = JSON.parse(fs.readFileSync(path.join(dir, '.claude', 'settings.local.json'), 'utf8'));
-      return !!settings.sandbox && 'enabled' in settings.sandbox;
+      return !!settings.sandbox && settings.sandbox.enabled === true;
     } catch (e) { return false; }
   }
 
-  test('on macOS, Knowledge mode switches the sandbox on, Code mode drops the enable but keeps the paths, and moving back switches it on again', () => {
+  test('on macOS, Knowledge mode switches the sandbox on, Code mode switches it off but keeps the paths, and moving back switches it on again', () => {
     const table = buildDispatch();
     const dir = tempWs();
     withWorkspace(dir, () => {
@@ -897,7 +902,7 @@ describe('the OS write block is driven by mode alone, through the real dispatch'
       const toCode = captureWs();
       table.set_workspace_mode({}, toCode, { mode: 'code' }, 'darwin');
       assert.deepStrictEqual(toCode.sent[0], { type: 'workspace_mode_changed', mode: 'code' });
-      assert.strictEqual(blockEnables(dir), false, 'Code mode drops the enable');
+      assert.strictEqual(blockEnables(dir), false, 'Code mode switches the sandbox off');
       assert.ok(blockPresent(dir), 'while keeping the block, which is the only place the named folders are written');
 
       const backToKnowledge = captureWs();

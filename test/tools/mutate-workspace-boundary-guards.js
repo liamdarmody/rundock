@@ -168,8 +168,8 @@ const MUTATIONS = [
   [HOOK, 'the runtime-home root in the stop is canonicalised, like the folders it is compared against',
     'function agentHomeRoot(home = os.homedir()) {\n  return canonicalize(path.join(home, \'.claude\'));',
     'function agentHomeRoot(home = os.homedir()) {\n  return path.join(home, \'.claude\');'],
-  [HOOK, 'a named folder stops at the runtime home, so the tiers still decide there',
-    '  if (isUnder(foldCase(resolvedPath, foldsCase), foldCase(agentHomeRoot(home), foldsCase), pmod)) return false;',
+  [HOOK, 'a named folder stops at EITHER runtime home, so the tiers still decide there',
+    '  if (homeFor(resolvedPath, home, foldsCase)) return false;',
     '  if (false) return false;'],
   // A grant stored under one spelling must cover the other, both directions.
   [BOUNDARY, 'grants are canonicalised on write and on read',
@@ -372,9 +372,9 @@ const MUTATIONS = [
   // The registry is fail-loud in the code direction: a literal folder name
   // hardcoded alongside the registry's own, rather than reasoned from it,
   // must make an unregistered neighbour classify as governed.
-  [HOOK, 'no folder is a persistence surface unless PERSISTENCE_SURFACE_DIRS says so',
-    '  return PERSISTENCE_SURFACE_DIRS.some(d => {',
-    '  return [...PERSISTENCE_SURFACE_DIRS, \'projects\'].some(d => {'],
+  [HOOK, 'no folder is a persistence surface unless its own home\'s registry says so',
+    '  return h.dirs.some(d => {',
+    '  return [...h.dirs, \'projects\'].some(d => {'],
   // The registry is fail-loud in the doc direction too: a name removed from
   // the registry while the boundary passage still cites it must be caught,
   // not just the reverse.
@@ -385,9 +385,9 @@ const MUTATIONS = [
   // its card is the runtime home root itself: drop the exclusion and
   // approving that card's "Always allow this folder" would silence every
   // later write to agents/, skills/, plugins/, commands/ and hooks/ too.
-  [HOOK, 'no standing folder grant is offered when the grant directory would be the runtime home root itself',
-    '  const noGrant = tags.secret || (tags.agentHome && grantDir === agentHomeRoot(home));',
-    '  const noGrant = tags.secret;'],
+  [HOOK, 'no standing folder grant is offered when the grant directory would be the root of EITHER runtime home',
+    '    || (tags.agentHome && runtimeHomes(home).some(h => grantDir === h.root));',
+    '    || false;'],
   // The one production site carrying classifyFileAccess's tags onto the emitted request.
   // Moved into boundaryCrossingsFor when that was extracted as a seam, so the
   // payload's own shape could be asserted rather than the classifier's return.
@@ -409,15 +409,15 @@ const MUTATIONS = [
     + '    && !crossings.some(c => c && c.answerFile);',
     '  const wholeFolderOffered = grantable;'],
   [CHAT_VIEW, 'the agent-home copy is applied to the card\'s context',
-    '    if (homeCopy) context = crossings.length > 1 ? `${context} ${homeCopy}` : homeCopy;',
-    '    if (false) context = crossings.length > 1 ? `${context} ${homeCopy}` : homeCopy;'],
+    '    if (stakesCopy) context = crossings.length > 1 ? `${context} ${stakesCopy}` : stakesCopy;',
+    '    if (false) context = crossings.length > 1 ? `${context} ${stakesCopy}` : stakesCopy;'],
   // The multi-crossing warning is COMPOSED with the stakes copy, not
   // replaced by it: dropping the ternary back to a plain overwrite is the
   // exact regression an earlier version shipped, where approving a command
   // that reached several places was no longer told it was approving all of them.
   [CHAT_VIEW, 'the multi-crossing warning survives alongside the agent-home stakes copy, rather than being overwritten by it',
-    'crossings.length > 1 ? `${context} ${homeCopy}` : homeCopy;',
-    'homeCopy;'],
+    'crossings.length > 1 ? `${context} ${stakesCopy}` : stakesCopy;',
+    'stakesCopy;'],
 
   // ===== A MODE CHANGE IS ALL OR NOTHING, IN EVERY FAILURE, IN BOTH DIRECTIONS =====
   [WORKSPACE_HANDLER_UNIT, 'the block is reconciled before the mode is persisted, not after',
@@ -461,7 +461,7 @@ const MUTATIONS = [
   // wrote before: assume one shape and the other reads as a stranger's block,
   // which is a block Rundock can never rewrite or withdraw.
   [SCAFFOLD, 'which shape a block claims is read from the block, not assumed to be the enabled one',
-    "  const claimedMode = 'enabled' in block ? 'knowledge' : 'code';",
+    "  const claimedMode = block.enabled === true ? 'knowledge' : 'code';",
     "  const claimedMode = 'knowledge';"],
 ];
 

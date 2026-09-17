@@ -39,6 +39,7 @@
   var DISCARDING_REDIRECT_RE = RundockReadOnlyShell.DISCARDING_REDIRECT_RE;
   var shellSegments = RundockReadOnlyShell.shellSegments;
   var isReadOnlyShellCommand = RundockReadOnlyShell.isReadOnlyShellCommand;
+  var isDestructiveShellCommand = RundockReadOnlyShell.isDestructiveShellCommand;
 
   const BASH_DESCRIPTIONS = {
     ls: 'List directory contents', cat: 'Read file contents', head: 'Read start of file',
@@ -95,18 +96,12 @@
     // string and cannot otherwise tell a discard from a write.
     var cmd = raw.replace(DISCARDING_REDIRECT_RE, ' ').trim();
     if (!cmd) return 'low';
-    if (/--force|--hard|-rf\b/.test(cmd)) return 'high';
-    if (/git\s+(push|reset|clean|checkout\s+\.)/.test(cmd)) return 'high';
-    if (/\b(curl|wget)\b[\s\S]*\|\s*(sh|bash|zsh|dash)\b/.test(cmd)) return 'high';
-    // find is read-only until it runs a command or deletes: -exec/-execdir/-ok
-    // spawn an arbitrary command per match and -delete removes files, so a bare
-    // find leading segment must not shield these.
-    if (/\bfind\b[\s\S]*-(exec(dir)?|delete|ok(dir)?)\b/.test(cmd)) return 'high';
-    var DESTRUCTIVE = /^(rm|sudo|chmod|chown|kill|mkfs|dd)/;
-    var segments = shellSegments(cmd);
-    for (var i = 0; i < segments.length; i++) {
-      if (DESTRUCTIVE.test(segments[i])) return 'high';
-    }
+    // Asked of the shared definition rather than of a copy kept here, for the
+    // same reason the read-only question below is. This list used to live in
+    // this file alone, which meant the hook's Code mode branch could approve a
+    // command with no card at all while this grader stood ready to paint the
+    // card it never drew as high risk.
+    if (isDestructiveShellCommand(raw)) return 'high';
     // Command/process substitution used to be tested here and nowhere else,
     // which meant the hook exempted a crossing for text this grader would not
     // auto-allow. It is part of the shared definition of a read now.
@@ -253,7 +248,11 @@
   // free everywhere except the secrets tier, and a secret always cards
   // regardless of the act. Only a write to a persistence surface, or any
   // access at all to a secrets-registry path, needs its stakes named.
-  const AGENT_HOME_COPY = {
+  // The answer-file sentence is shared: the same stake whether the file is the
+  // agent's own (~/.claude) or the workspace's. It is reached through
+  // answerFileCopy() as well, so a workspace card does not have to go through a
+  // name asserting it lives in the agent's home.
+  const ALWAYS_ASK_COPY = {
     secret: 'This is the credential file for your Claude account. A leak here cannot be undone, '
       + 'so this always asks, on any access, and no grant, mode or setting can silence it.',
     persistenceSurface: 'Writing here persists: it takes effect in every later session and every '
@@ -266,11 +265,15 @@
       + 'that ask you. An agent can request a change to it, but never keep the '
       + 'permission: this asks every time, and there is no option to stop being asked.',
   };
-  function agentHomeBoundaryCopy(crossing) {
+  // Named for what it decides, not for where the file happens to live. It was
+  // agentHomeBoundaryCopy, written when every caller was a ~/.claude crossing;
+  // pointing workspace files at it is how a card about a file inside the
+  // workspace came to announce that the workspace had been left.
+  function alwaysAskCopy(crossing) {
     if (!crossing) return null;
-    if (crossing.secret) return AGENT_HOME_COPY.secret;
-    if (crossing.answerFile) return AGENT_HOME_COPY.answerFile;
-    if (crossing.persistenceSurface) return AGENT_HOME_COPY.persistenceSurface;
+    if (crossing.secret) return ALWAYS_ASK_COPY.secret;
+    if (crossing.answerFile) return ALWAYS_ASK_COPY.answerFile;
+    if (crossing.persistenceSurface) return ALWAYS_ASK_COPY.persistenceSurface;
     return null;
   }
 
@@ -333,6 +336,11 @@
     return m.size;
   }
 
-  return { BASH_DESCRIPTIONS, bashBin, classifyRisk, describeToolRequest, toolAllowKey, decidePermission, offersAlwaysAllow, agentHomeBoundaryCopy,
+  function answerFileCopy() { return ALWAYS_ASK_COPY.answerFile; }
+  // Retained so a caller outside this change keeps working; both names
+  // reach the same table, and new callers should use alwaysAskCopy.
+  const agentHomeBoundaryCopy = alwaysAskCopy;
+
+  return { BASH_DESCRIPTIONS, bashBin, classifyRisk, describeToolRequest, toolAllowKey, decidePermission, offersAlwaysAllow, alwaysAskCopy, answerFileCopy,
     routePermissionRequest, queuePendingPermission, pendingPermissionsFor, removePendingPermission, clearPendingPermissions };
 }));

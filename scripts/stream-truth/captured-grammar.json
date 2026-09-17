@@ -1,6 +1,6 @@
 {
-  "runtimeVersion": "2.1.273",
-  "capturedAt": "2026-09-15T21:16:36.786Z",
+  "runtimeVersion": "2.1.274",
+  "capturedAt": "2026-09-17T12:21:14.981Z",
   "scenarios": {
     "text-turn": {
       "invariants": [

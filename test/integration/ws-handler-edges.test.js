@@ -102,13 +102,18 @@ describe('workspace lifecycle edges', () => {
         assert.strictEqual(wsSet.workspaceMode, 'code', 'auto-detected as code from the package.json');
         const settings = JSON.parse(fs.readFileSync(path.join(codeDir, '.claude', 'settings.local.json'), 'utf8'));
         // The sandbox is off for a code-signal workspace on its FIRST open,
-        // not only on the second. Asked as "does it enable anything" rather
-        // than "is a block present": Code mode still writes the paths, because
-        // Rundock owns one settings layer and `sandbox.enabled` is an OR across
-        // all of them, so a user who enabled the sandbox in their own settings
-        // needs this block to learn which folders they named.
-        assert.strictEqual('enabled' in (settings.sandbox || {}), false,
-          'nothing is switched on for a code-signal workspace, not switched on and withdrawn on the second open');
+        // not only on the second. Asked as "is it switched on" rather than "is
+        // a block present": Code mode still writes the paths, so the folders a
+        // user named survive the trip to Knowledge mode and back.
+        //
+        // And off means `false`, not absent. Rundock owns one settings layer
+        // and `sandbox.enabled` is an OR across all of them, so omitting the
+        // key leaves the sandbox on for anyone whose own ~/.claude/settings.json
+        // enables it. A first open that lands a developer in Code mode must
+        // actually switch it off, or a headless browser cannot launch and every
+        // render raises a card that cannot be remembered away.
+        assert.strictEqual((settings.sandbox || {}).enabled, false,
+          'switched off for a code-signal workspace on the first open, stated rather than left silent');
       } finally {
         h.internal.setWorkspace(h.workspaceDir);
       }
