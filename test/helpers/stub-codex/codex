@@ -17,6 +17,9 @@
 //       "overload": {"method": "thread/start", "times": 2},  // first N get -32001
 //       "resumeFails": true,              // thread/resume -> -32600 "no rollout found"
 //       "resumeTransientFails": 2,        // first N thread/resume PER THREAD fail with
+//                                         // (combine with resumeFails to get N transient
+//                                         // failures and then a permanent one, which is
+//                                         // the runtime's transient-turned-permanent path)
 //                                         // the live "rollout at ... is empty" wording
 //                                         // (Windows Finding 6 Mode 1), then succeed
 //       "dropInterrupt": true,            // turn/interrupt ends the turn server-side but
@@ -302,15 +305,18 @@ function runAppServer() {
       }
       case 'thread/resume': {
         const threadId = params && params.threadId;
-        // Session-expiry simulation ("resumeFails": true in the appServer
-        // config): the real CLI answers thread/resume for a valid-shaped but
-        // unknown id with -32600 "no rollout found for thread id ..."
-        // (verified live against codex-cli 0.144.3). Config is re-read per
-        // message, so tests can fail one turn's resume and let the next pass.
-        if (cfg.resumeFails) {
-          send(asfx.errorResponse(id, -32600, `no rollout found for thread id ${threadId}`));
-          return;
-        }
+        // TRANSIENT IS ANSWERED BEFORE PERMANENT, so the two knobs COMPOSE
+        // rather than one hiding the other.
+        //
+        // Permanent used to be answered first, which made
+        // `{ resumeTransientFails: 1, resumeFails: true }` mean simply
+        // "permanent" and left the runtime's transient-turned-permanent
+        // recovery with no way to be driven at all. That branch was reached
+        // only by accident in some environments, so the coverage floor over
+        // codex-glue encoded an accident and failed on a machine where the
+        // accident did not happen. Ordered this way, the same pair reads as
+        // what it looks like: fail transiently N times, then permanently.
+        //
         // Transient read-race simulation (Windows Finding 6 Mode 1): an
         // interrupted thread's rollout file can still be empty when the
         // resume arrives (codex flushes it moments later). Wording captured
@@ -325,6 +331,15 @@ function runAppServer() {
               `failed to read thread: thread-store internal error: failed to read session metadata /home/u/.codex/sessions/2026/07/16/rollout-2026-07-16T10-00-00-${threadId}.jsonl: rollout at /home/u/.codex/sessions/2026/07/16/rollout-2026-07-16T10-00-00-${threadId}.jsonl is empty`));
             return;
           }
+        }
+        // Session-expiry simulation ("resumeFails": true in the appServer
+        // config): the real CLI answers thread/resume for a valid-shaped but
+        // unknown id with -32600 "no rollout found for thread id ..."
+        // (verified live against codex-cli 0.144.3). Config is re-read per
+        // message, so tests can fail one turn's resume and let the next pass.
+        if (cfg.resumeFails) {
+          send(asfx.errorResponse(id, -32600, `no rollout found for thread id ${threadId}`));
+          return;
         }
         send(asfx.response(id, asfx.threadStartResult(threadId, params || {})));
         return;
