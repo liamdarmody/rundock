@@ -25,7 +25,7 @@ const {
   changelogReady,
   GATE_FILE_NAME,
 } = require('../../scripts/release-gate.js');
-const { requireGatePass, publishRelease, ghApiArgs, hasPublishConfirmation } = require('../../scripts/release.js');
+const { requireGatePass, publishRelease, ghApiArgs, hasPublishConfirmation, requireNotesMatchBuild } = require('../../scripts/release.js');
 
 let root;
 beforeEach(() => {
@@ -238,6 +238,12 @@ describe('publish binds the tag before flipping the draft flag', () => {
     return api;
   }
 
+  // These tests drive the API sequencing: which call happens before which,
+  // and which release is touched. The notes-match-build guard that now runs
+  // first is a separate concern with its own tests below, and reaching for
+  // real git here would make every one of them depend on a tag existing.
+  const noNotesCheck = () => {};
+
   const DRAFT_ON_JUNK_TAG = {
     id: 42, draft: true, name: '0.11.7: Foundations', tag_name: 'untagged-9f2a',
   };
@@ -247,7 +253,7 @@ describe('publish binds the tag before flipping the draft flag', () => {
 
   test('the 0.11.6 quirk, mechanised away: tag_name is patched and verified BEFORE draft=false', () => {
     const api = fakeApi({ releases: [OLD_PUBLISHED, DRAFT_ON_JUNK_TAG] });
-    const result = publishRelease('0.11.7', { api });
+    const result = publishRelease('0.11.7', { api, checkNotes: noNotesCheck });
 
     const tagPatch = api.calls.findIndex(c => c.method === 'PATCH' && c.body && c.body.tag_name === 'v0.11.7');
     const draftFlip = api.calls.findIndex(c => c.method === 'PATCH' && c.body && c.body.draft === false);
@@ -260,7 +266,7 @@ describe('publish binds the tag before flipping the draft flag', () => {
 
   test('if the tag does not stick, the draft flag is never flipped', () => {
     const api = fakeApi({ releases: [DRAFT_ON_JUNK_TAG], patchTagResponds: 'untagged-9f2a' });
-    assert.throws(() => publishRelease('0.11.7', { api }), /tag/i);
+    assert.throws(() => publishRelease('0.11.7', { api, checkNotes: noNotesCheck }), /tag/i);
     assert.ok(
       !api.calls.some(c => c.method === 'PATCH' && c.body && c.body.draft === false),
       'no draft flip after a failed tag bind'
@@ -269,19 +275,19 @@ describe('publish binds the tag before flipping the draft flag', () => {
 
   test('the right draft is found even when its tag_name is junk (matched by name)', () => {
     const api = fakeApi({ releases: [OLD_PUBLISHED, DRAFT_ON_JUNK_TAG] });
-    publishRelease('0.11.7', { api });
+    publishRelease('0.11.7', { api, checkNotes: noNotesCheck });
     const tagPatch = api.calls.find(c => c.method === 'PATCH' && c.body && c.body.tag_name);
     assert.ok(tagPatch.path.includes('/releases/42'));
   });
 
   test('no matching draft is an error naming the version', () => {
     const api = fakeApi({ releases: [OLD_PUBLISHED] });
-    assert.throws(() => publishRelease('0.11.7', { api }), /0\.11\.7/);
+    assert.throws(() => publishRelease('0.11.7', { api, checkNotes: noNotesCheck }), /0\.11\.7/);
   });
 
   test('a draft already on the right tag still publishes (idempotent bind)', () => {
     const api = fakeApi({ releases: [{ id: 42, draft: true, name: '0.11.7: Foundations', tag_name: 'v0.11.7' }] });
-    const result = publishRelease('0.11.7', { api });
+    const result = publishRelease('0.11.7', { api, checkNotes: noNotesCheck });
     assert.strictEqual(result.tag, 'v0.11.7');
     assert.ok(api.calls.some(c => c.method === 'PATCH' && c.body && c.body.draft === false));
   });
@@ -348,5 +354,93 @@ describe('the gh transport encodes values by type', () => {
     const joined = args.join(' ');
     assert.match(joined, /-f tag_name=v1\.2\.3/);
     assert.match(joined, /-F draft=false/);
+  });
+});
+
+// THE NOTES AND THE BUILD MUST DESCRIBE THE SAME WORK.
+//
+// 0.13.3 was tagged, a desktop build was made from it, and then seven pull
+// requests merged. The tag still existed, the draft still existed, main CI was
+// green, the version was right and the changelog on main was accurate. Running
+// publish at that point would have shipped a two-day-old binary under notes
+// describing every fix it did not contain, which is worse than shipping nothing:
+// the notes read as a lie rather than an oversight. It was caught by looking,
+// not by any check, and nothing in publish would have stopped it.
+describe('publish refuses when the notes and the build have drifted apart', () => {
+  const NOTES_V1 = '# Changelog\n\n## 0.9.9: First Cut\n\n### Fixed\n\n- **One thing:** it was fixed.\n\n## 0.9.8: Before\n\n- old\n';
+  const NOTES_V2 = '# Changelog\n\n## 0.9.9: First Cut\n\n### Fixed\n\n- **One thing:** it was fixed.\n- **Another thing:** fixed after the tag was cut.\n\n## 0.9.8: Before\n\n- old\n';
+
+  function gitReturning({ atTag, atMain, tagSha = 'aaaaaaaaa', mainSha = 'bbbbbbbbb', ahead = '7' }) {
+    return (args) => {
+      const a = args.join(' ');
+      if (a.startsWith('fetch')) return '';
+      if (a === 'show v0.9.9:CHANGELOG.md') {
+        if (atTag === null) { const e = new Error('unknown revision'); throw e; }
+        return atTag;
+      }
+      if (a === 'show origin/main:CHANGELOG.md') return atMain;
+      if (a.startsWith('rev-parse v0.9.9')) return tagSha + '\n';
+      if (a === 'rev-parse origin/main') return mainSha + '\n';
+      if (a.startsWith('rev-list --count')) return ahead + '\n';
+      return '';
+    };
+  }
+
+  test('identical notes pass, which is the healthy release', () => {
+    let said = null;
+    requireNotesMatchBuild('0.9.9', { git: gitReturning({ atTag: NOTES_V1, atMain: NOTES_V1 }), log: (s, m) => { said = m; } });
+    assert.match(said, /match/i, 'it says so rather than passing in silence');
+  });
+
+  test('notes changed after the tag was cut is refused', () => {
+    assert.throws(
+      () => requireNotesMatchBuild('0.9.9', { git: gitReturning({ atTag: NOTES_V1, atMain: NOTES_V2 }), log: () => {} }),
+      /differ/i,
+      'this is the 0.13.3 shape: the build predates work the notes describe');
+  });
+
+  test('the refusal names both commits and how far apart they are', () => {
+    // An error that says only "something is wrong" sends a person to read the
+    // script. This one has to be actionable at 3pm on a release day.
+    try {
+      requireNotesMatchBuild('0.9.9', {
+        git: gitReturning({ atTag: NOTES_V1, atMain: NOTES_V2, tagSha: 'de15cd4e0', mainSha: '4ab416fe5', ahead: '7' }),
+        log: () => {},
+      });
+      assert.fail('should have refused');
+    } catch (err) {
+      assert.match(err.message, /de15cd4e0/, 'the commit the build came from');
+      assert.match(err.message, /4ab416fe5/, 'and what main is at');
+      assert.match(err.message, /7 commit/, 'and the distance between them');
+      assert.match(err.message, /delete the tag/i, 'and how to recover, which is what someone will need next');
+    }
+  });
+
+  test('a tag cut before the changelog was promoted is refused, with that reason', () => {
+    const noSection = '# Changelog\n\n## Unreleased\n\n- something\n';
+    assert.throws(
+      () => requireNotesMatchBuild('0.9.9', { git: gitReturning({ atTag: noSection, atMain: NOTES_V1 }), log: () => {} }),
+      /no "## 0\.9\.9:" section/,
+      'the build carries no notes at all, which is a different fault and says so');
+  });
+
+  test('a tag that does not exist is refused, rather than read as a match', () => {
+    assert.throws(
+      () => requireNotesMatchBuild('0.9.9', { git: gitReturning({ atTag: null, atMain: NOTES_V1 }), log: () => {} }),
+      /Does the tag exist/,
+      'a missing tag must not fall through to a comparison of nothing with nothing');
+  });
+
+  test('NOTHING is published when the check refuses', () => {
+    // The load-bearing one. A publish is not reversible, so the guard has to run
+    // before the first API call, not merely before the draft flip.
+    const calls = [];
+    const api = (method, apiPath, body) => { calls.push({ method, apiPath, body }); return {}; };
+    assert.throws(() => publishRelease('0.9.9', {
+      api,
+      log: () => {},
+      checkNotes: () => { throw new Error('notes differ'); },
+    }), /notes differ/);
+    assert.deepStrictEqual(calls, [], 'not one API call was made: no release was read, bound, or flipped');
   });
 });
