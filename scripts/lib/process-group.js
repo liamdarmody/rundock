@@ -65,6 +65,26 @@ function pause(ms) {
  * defect below this line. See groupRunning.
  */
 function exists(target) {
+  // ZERO IS NOT A TARGET, and is the one number this cannot answer honestly.
+  // `process.kill(0, 0)` signals the CALLER'S OWN process group, so it always
+  // succeeds and always answers yes, whoever asked and about whatever. Every
+  // caller here means a specific process or a specific group, so a 0 arriving
+  // is a bug upstream rather than a question.
+  //
+  // MEASURED, and this is why it is worth a line. `readMutationRun` seeds its
+  // reduce with `{ pid: 0, files: [] }`, an empty records directory returns
+  // that seed unchanged, and the gate then treated the phantom as a live
+  // mutation run. Every clean `npm run precommit` therefore warned that a
+  // mutation run was holding source files rewritten, which is the exact wording
+  // that matters when it is true and which three cards in the backlog describe
+  // genuinely happening.
+  //
+  // NEGATIVE NUMBERS ARE DELIBERATELY LEFT ALONE. They ask about a whole
+  // process group, which is the documented contract above and what
+  // `groupRunning` depends on. Widening this to reject every non-positive
+  // target is the obvious next edit and it would stop the gate noticing real
+  // survivors, silently. A test pins that.
+  if (target === 0) return false;
   try { process.kill(target, 0); return true; } catch (e) { return e.code === 'EPERM'; }
 }
 
