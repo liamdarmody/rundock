@@ -114,7 +114,7 @@ describe('what the settings pane then says', () => {
   }
 
   const OS_PROMISE = /operating-system write block is off/;
-  const NOTICE = /set up outside Rundock, so switching modes does not change it/;
+  const NOTICE = /does not control the operating-system sandbox, which is set up outside Rundock/;
 
   test('Code mode, Rundock-managed: the promise is made, because it is kept', () => {
     const html = paneHtml('code', true);
@@ -144,6 +144,16 @@ describe('what the settings pane then says', () => {
     const html = paneHtml('code', false);
     assert.match(html, /setWorkspaceMode\('knowledge'\)/);
     assert.match(html, /setWorkspaceMode\('code'\)/);
+  });
+
+  test('it says what mode still governs, not only what it does not', () => {
+    // The first version said only that switching modes "does not change it",
+    // and a reader concluded the control was inert. Three of mode's four
+    // behaviours still work here; naming them is the difference between a
+    // useful notice and one that makes the whole pane look broken.
+    const html = paneHtml('code', false);
+    assert.match(html, /Mode still controls file types and command approval here/,
+      'the reader is told what the switch does do, so it does not read as dead');
   });
 
   test('what a person sees is one sentence, not a contradiction', () => {

@@ -107,6 +107,42 @@ describe('lib/agents module seams', () => {
     assert.ok(rules.includes('UK spelling'), 'and so does the spelling rule');
   });
 
+  test('the shell rules never declare a class of command unsupported', () => {
+    // A LINE HERE TOLD AGENTS THAT DESTRUCTIVE COMMANDS WOULD NOT REACH THE
+    // USER, and they repeated it to people as fact.
+    //
+    // It contradicted the two rules above it, which say to attempt the command
+    // and let the user decide, and warn that a refusal invented before trying
+    // states as fact something the agent has not checked. Agents substituted
+    // `rm` and `rmdir` for `rm -rf` rather than attempting it, and then told
+    // the user that Rundock does not stop destructive commands: from inside a
+    // turn, an approved card is indistinguishable from no card at all, so an
+    // agent cannot honestly report on the permission system and must not try.
+    //
+    // Then 0.13.3 made those commands reach the user, and the sentence became
+    // false as well, carrying Rundock's authority behind something untrue about
+    // a person's own permission system.
+    //
+    // Pinned as a rule about the SHAPE of these instructions rather than about
+    // one sentence, because the next version of this mistake will use different
+    // words: the prompt may tell an agent what to attempt, never what the
+    // permission layer will decide.
+    useWorkspace({ agents: { doc: agentFile({ name: 'doc', type: 'platform', order: 9 }) } });
+    const doc = discovery.discoverAgents().find(a => a.name === 'doc');
+    const prompt = promptLib.buildSystemPrompt(doc);
+
+    assert.match(prompt, /always attempt the command and let the user decide/i,
+      'sanity: the shell rules are in this prompt, or the assertions below prove nothing');
+    assert.doesNotMatch(prompt, /not supported and will not reach the user/i,
+      'the sentence agents were quoting at people is gone');
+    assert.doesNotMatch(prompt, /will not reach the user for approval/i,
+      'and no rephrasing of it: the prompt does not predict what the permission layer does');
+    for (const cmd of ['rm with force flags', 'curl|sh', 'wget|sh']) {
+      assert.ok(!prompt.includes(cmd),
+        `the prompt names no command class as unsupported (${cmd}); what reaches the user is decided at the permission layer, not described here`);
+    }
+  });
+
   test('prompt deps are injected: a fake codex detector controls the RUNTIMES section', () => {
     useWorkspace({ agents: { doc: agentFile({ name: 'doc', type: 'platform', order: 9 }) } });
     const doc = discovery.discoverAgents().find(a => a.name === 'doc');

@@ -217,8 +217,21 @@ function renderSettingsSection(section) {
       : isCode
         ? ' On macOS the operating-system write block is off here, because tools that launch their own processes can fail under it.'
         : ' On macOS the operating system enforces that too.';
+    // SAYS WHAT MODE STILL DOES, not only what it does not.
+    //
+    // The first version said switching modes "does not change it", which was
+    // accurate about the sandbox and misleading about everything else: a reader
+    // reasonably concluded the control was inert here. It is not. Mode governs
+    // four things and only the sandbox is out of Rundock's hands; the file-type
+    // restriction, the command-approval behaviour and the agent's platform
+    // rules all still follow this switch.
+    //
+    // Reported as "my workspace is technically in Knowledge mode but Rundock
+    // shows Code mode". It genuinely is in Code mode, for three behaviours out
+    // of four. The word promises a bundle and here the bundle came apart, so
+    // the notice names the seam rather than implying the whole control is dead.
     const foreignSandboxNote = sandboxIsOurs ? '' :
-      `<div class="settings-caption mode-foreign-sandbox">This workspace's sandbox is set up outside Rundock, so switching modes does not change it.</div>`;
+      `<div class="settings-caption mode-foreign-sandbox">Mode still controls file types and command approval here. It does not control the operating-system sandbox, which is set up outside Rundock and keeps whatever it is set to.</div>`;
     el.innerHTML = `<div class="settings-section-title">Permissions</div>
       <div class="settings-lead">What agents can do, and what they can reach outside your workspace.</div>
       <div class="settings-block-heading"><span class="settings-label">Mode</span></div>
