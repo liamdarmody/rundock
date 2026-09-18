@@ -41,6 +41,12 @@ const HOOK_INTEGRATION = { src: path.join(ROOT, 'scripts', 'permission-hook.js')
 // workspace-boundary suite drives, so a mutation to either is invisible
 // there and only this suite can notice it.
 const HOOK_REFUSAL = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/permission-agent-guard.test.js' };
+// The classifier's own suite. The hook is paired with several suites because
+// different guards in it are driven from different places, and a mutation is
+// only proved by the suite that actually exercises it: pointing a row at the
+// wrong one reports that nothing broke, which reads exactly like a guard
+// nothing tests. That is how the credential-folder rows first came back empty.
+const HOOK_CLASSIFIER = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/boundary.test.js' };
 // The read-only definition the hook reads, and the client risk grader with
 // it. It moved out of the hook when the two graders stopped keeping separate
 // answers to the same question; the rows below still drive the hook's suite,
@@ -386,8 +392,17 @@ const MUTATIONS = [
   // approving that card's "Always allow this folder" would silence every
   // later write to agents/, skills/, plugins/, commands/ and hooks/ too.
   [HOOK, 'no standing folder grant is offered when the grant directory would be the root of EITHER runtime home',
-    '    || (tags.agentHome && runtimeHomes(home).some(h => grantDir === h.root));',
+    '    || (tags.agentHome && runtimeHomes(home).some(h => grantDir === h.root))',
+    '    || false'],
+  // The credential-folder rule, mutated on its own so it is guarded by a test
+  // rather than by the one beside it. Breaking it would put the one-click
+  // blanket grant back on ~/.ssh and its kin, which is the whole point of it.
+  [HOOK_CLASSIFIER, 'a hidden folder under home is never offered as a standing grant, on either card',
+    '    || underHiddenHomeDir(grantDir, home);',
     '    || false;'],
+  [HOOK_CLASSIFIER, 'and the shell card refuses it too, so the two cards cannot disagree',
+    '  if (underHiddenHomeDir(dir, home)) return null;',
+    '  if (false) return null;'],
   // The one production site carrying classifyFileAccess's tags onto the emitted request.
   // Moved into boundaryCrossingsFor when that was extracted as a seam, so the
   // payload's own shape could be asserted rather than the classifier's return.
@@ -495,7 +510,7 @@ function redTests(suite) {
 }
 
 function run() {
-  const targets = [HOOK, SCAFFOLD, BOUNDARY, CHAT_VIEW, HOOK_INTEGRATION, HOOK_REFUSAL, WORKSPACE_HANDLER, WORKSPACE_HANDLER_UNIT, READ_ONLY, READ_ONLY_CLIENT];
+  const targets = [HOOK, SCAFFOLD, BOUNDARY, CHAT_VIEW, HOOK_INTEGRATION, HOOK_REFUSAL, HOOK_CLASSIFIER, WORKSPACE_HANDLER, WORKSPACE_HANDLER_UNIT, READ_ONLY, READ_ONLY_CLIENT];
   const session = beginMutationRun({ files: [...new Set(targets.map((target) => target.src))] });
   const originals = new Map();
   for (const target of targets) originals.set(target, session.original(target.src));

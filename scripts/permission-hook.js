@@ -32,7 +32,7 @@ const fs = require('fs');
 // directory resolves on disk rather than inside the archive. The shared module
 // is named in package.json's asarUnpack for that reason, and a test binds the
 // two so a later shared module cannot be added without it.
-const { isReadOnlyShellCommand, isDestructiveShellCommand } = require('../public/read-only-shell.js');
+const { isReadOnlyShellCommand, isDestructiveShellCommand, shellSegments } = require('../public/read-only-shell.js');
 
 // One directory, several names. macOS keeps /tmp and /var as symlinks into
 // /private, Dropbox and iCloud vaults are commonly reached through a symlink
@@ -554,7 +554,10 @@ function classifyFileAccess(toolName, toolInput, workspaceRoot, extraDirs = [], 
   // offered for the runtime home root itself, exactly as the secrets tier
   // already refuses one for any folder.
   const noGrant = tags.secret
-    || (tags.agentHome && runtimeHomes(home).some(h => grantDir === h.root));
+    || (tags.agentHome && runtimeHomes(home).some(h => grantDir === h.root))
+    // Same rule for file tools as for commands, so the two cards cannot disagree
+    // about whether a credential folder may be handed over in one click.
+    || underHiddenHomeDir(grantDir, home);
   return { where: 'outside', resolvedPath, grantDir: noGrant ? null : grantDir, ...tags };
 }
 
@@ -602,13 +605,63 @@ const SHELL_TOOLS = new Set(['Bash', 'PowerShell']);
 // target, so collecting all the quoted segments first made a command whose
 // second target happened to be quoted report that one as the first place it
 // reaches.
+// A SEARCH PATTERN IS NOT A PATH, and one that begins with a slash was being
+// read as one.
+//
+// `ls | grep '/$'` produced a crossing at `/$`, and `grep -E '/$|No such'` one
+// at `/$|No such`. Reported from the field twice in one session. The card is
+// noise on its own, but the damage is larger than noise: a phantom crossing
+// shares no sensible folder with a real one, so the card stops offering "always
+// allow this folder" for the folder the command genuinely reaches. A regex
+// anywhere in a command therefore disabled the one control that ends repeated
+// asking, which is the storm this release set out to stop, returning by another
+// door.
+//
+// POSITIONAL, NOT BY VALUE. Skipping any token that looks like a pattern would
+// mean `grep '/etc/passwd' /etc/passwd` skipping both occurrences: the pattern
+// AND the file being read. So each segment is judged on its own, and only the
+// argument sitting in the pattern position is dropped. Everything after it is
+// still a file argument and still scanned.
+//
+// `-e` carries the pattern when it is used, so the positional argument is then
+// a file and must be kept. `-f` names a file to READ patterns from, which is a
+// real path and is never dropped. Getting those two the wrong way round is the
+// only way this could hide a genuine target, so they are named explicitly
+// rather than lumped in with other flags.
+const PATTERN_FIRST_ARG = new Set(['grep', 'egrep', 'fgrep', 'rg', 'ag', 'ack', 'sed', 'awk']);
+function patternArgsIn(segment) {
+  const words = String(segment).match(/'([^']*)'|"([^"]*)"|[^\s]+/g) || [];
+  const bare = w => (w[0] === "'" || w[0] === '"') ? w.slice(1, -1) : w;
+  const lead = bare(words[0] || '').split('/').pop();
+  if (!PATTERN_FIRST_ARG.has(lead)) return [];
+  const patterns = [];
+  let sawE = false;
+  for (let i = 1; i < words.length; i++) {
+    const w = words[i];
+    if (w === '-e' || w === '--regexp') { if (words[i + 1]) { patterns.push(bare(words[i + 1])); sawE = true; i++; } continue; }
+    if (w === '-f' || w === '--file') { i++; continue; }   // a real path: never dropped
+    if (w[0] === '-' && w.length > 1) continue;            // any other flag
+    if (!sawE) patterns.push(bare(w));                     // the positional pattern
+    break;                                                 // everything after it is a file
+  }
+  return patterns;
+}
+
 function shellPathTokens(command) {
   const out = [];
+  // Every argument sitting in a pattern position, counted per segment so the
+  // same text appearing later as a real file is still seen.
+  const skip = [];
+  for (const seg of shellSegments(String(command))) skip.push(...patternArgsIn(seg));
   const re = /'([^']*)'|"([^"]*)"|[^\s;|&<>()`'"]+/g;
   let m;
   while ((m = re.exec(String(command))) !== null) {
     const t = m[1] !== undefined ? m[1] : (m[2] !== undefined ? m[2] : m[0]);
     if (!t) continue;
+    // Dropped once per pattern occurrence, not everywhere the text appears, so
+    // `grep '/etc/passwd' /etc/passwd` still reports the file it reads.
+    const at = skip.indexOf(t);
+    if (at !== -1) { skip.splice(at, 1); continue; }
     out.push(t);
     // Also the value after the first `=`. Flag values (`--output=/etc/x`) and
     // shell assignments (`OUT=$HOME/x`) are the two commonest places a target
@@ -927,6 +980,47 @@ function advisoryOutsidePaths(command, workspaceRoot, extraDirs = [], home = os.
 // A crossing the secrets registry names is never grantable at all, so its
 // presence refuses the whole offer rather than being quietly skipped: a command
 // that touches a credential must not be the occasion for naming its folder.
+// A HIDDEN FOLDER UNDER HOME IS NEVER OFFERED AS A STANDING GRANT.
+//
+// `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.kube`: by convention these hold keys and
+// credentials, and the folder is where the danger lives rather than the one file
+// a card happens to be about. Asking an agent about `~/.ssh/config` produced a
+// card offering to allow the whole folder, private keys included, in one click
+// beside the ordinary Allow, worded as though it were the same size of yes.
+//
+// WHAT THIS DOES NOT COST, measured before deciding: nothing that uses SSH needs
+// it. `ssh host`, `scp`, `rsync` and `git push` raise no card at all, because the
+// ssh binary reads the keys as a subprocess and no path for them appears in the
+// command. So the grant buys no quiet that anyone actually wants; it only removes
+// the asking from the one folder where the asking is the point.
+//
+// Allow still works. What goes is the one-click blanket, not the access: a person
+// who genuinely wants agents editing their SSH config names the folder in
+// Settings, deliberately, which is the right weight for that decision.
+//
+// A RULE RATHER THAN A LIST OF NAMES, because the next credential store will have
+// a name nobody here guessed. Dot-directories directly under home are config and
+// secret stores by convention; the workspace, named working folders and ordinary
+// project directories are unaffected.
+function underHiddenHomeDir(dir, home = os.homedir()) {
+  if (typeof dir !== 'string' || !dir) return false;
+  const h = canonicalize(home);
+  const rel = path.relative(h, canonicalize(dir));
+  // Outside home, or home itself: not this rule's business.
+  if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return false;
+  if (!rel.split(path.sep)[0].startsWith('.')) return false;
+  // EXCEPT THE RUNTIME HOMES, which are hidden directories under home but are
+  // already governed by something finer than this. Their roots are refused a
+  // grant, their credential files are secrets and are refused one on any access,
+  // and everything else in them is scratch the agent owns. A folder-shaped
+  // persistence surface like `.claude/hooks` is deliberately grantable, scoped
+  // to itself, and a blanket rule here would take that away for no gain: hooks
+  // are not credentials, and the credentials beside them are already protected.
+  // Caught by the test that pins exactly that, rather than by reading.
+  const under = canonicalize(dir);
+  return !runtimeHomes(home).some(r => under === r.root || isUnder(under, r.root));
+}
+
 const NEVER_OFFERED = new Set(['/', '/Users', '/home', '/tmp', '/var', '/etc', '/usr',
   '/bin', '/sbin', '/opt', '/private', '/System', '/Library', '/Applications', '/Volumes']);
 function shellGrantDir(crossings, home = os.homedir()) {
@@ -974,6 +1068,7 @@ function shellGrantDir(crossings, home = os.homedir()) {
   // and the shell path, being new, did not; a test that already existed for the
   // file tools caught it.
   if (runtimeHomes(home).some(r => dir === r.root)) return null;
+  if (underHiddenHomeDir(dir, home)) return null;
   return dir;
 }
 
