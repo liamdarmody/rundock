@@ -109,6 +109,58 @@ describe('mode 1: transient resume failure (rollout not flushed yet)', () => {
     assert.deepStrictEqual(infoPills(since, convoId), [], 'the stored session id is never cleared');
   });
 
+  test('transient that turns PERMANENT on the retry: the thread really is gone, so recover onto a fresh one and still answer', async () => {
+    // THE THIRD OUTCOME OF A TRANSIENT RESUME, and the one nothing drove.
+    //
+    // A resume can fail transiently, be retried, and fail PERMANENTLY the
+    // second time: the rollout was not merely unflushed, the thread is gone.
+    // The runtime reclassifies and falls through to fresh-thread recovery so
+    // the message is still answered instead of the conversation bricking.
+    //
+    // CI found this, not a person. The coverage floor over codex-glue was
+    // being met partly by those lines executing incidentally on some machines
+    // and not others, so the floor encoded an accident and a run on a host
+    // where the accident did not happen failed with every test passing. A
+    // branch reached by luck is a branch nothing is asserting about.
+    //
+    // Driven by composing the two stub knobs: one transient failure, then the
+    // permanent one. They compose only because transient is answered first,
+    // which is what that ordering is for.
+    const convoId = h.freshConvoId('ccf');
+    const threadId = await establishThread(convoId, 'establish three', 'Established.');
+
+    h.clearInvocations();
+    h.writeCodexScenario(
+      [{ match: { promptIncludes: 'gone for good' }, text: 'Answered on a fresh thread.' }],
+      { resumeTransientFails: 1, resumeFails: true }
+    );
+
+    const since = client.messages.length;
+    client.send({ type: 'chat', conversationId: convoId, agent: 'researcher', content: 'gone for good please', sessionId: threadId });
+
+    // The stale-session copy, not the busy notice: this is a direct chat, so
+    // 'info' is correct and the stored session id SHOULD be cleared here.
+    const { msg: expired } = await client.waitFor(
+      m => m.type === 'system' && m.subtype === 'info' && m._conversationId === convoId
+        && /Previous session expired/.test(m.content || ''),
+      { since, timeout: 12000, label: 'stale-session notice' });
+    assert.strictEqual(expired.content, 'Previous session expired. Starting fresh.');
+
+    const { msg: result } = await client.waitFor(
+      m => m.type === 'result' && m._conversationId === convoId,
+      { since, timeout: 12000, label: 'answered on the fresh thread' });
+    assert.strictEqual(result.result, 'Answered on a fresh thread.',
+      'the message is still answered: recovery happens in the same pass, not on the next attempt');
+    await client.waitForEvent('system', 'done', convoId, { since });
+
+    const resumes = methodEntries('thread/resume').filter(r => r.params.threadId === threadId);
+    assert.strictEqual(resumes.length, 2, 'the transient failure is retried exactly once before being believed');
+    assert.strictEqual(methodEntries('thread/start').length, 1,
+      'and THEN a fresh thread is started, which is the difference from a purely transient failure');
+    assert.deepStrictEqual(errorCards(since, convoId), [],
+      'no error card: this is a recovery, and it succeeded');
+  });
+
   test('persistent transient failure: retry once, then the resend notice + a normal done, session PRESERVED and usable once the rollout flushes', async () => {
     const convoId = h.freshConvoId('ccf');
     const threadId = await establishThread(convoId, 'establish two', 'Established.');
