@@ -75,6 +75,335 @@ describe('classifyShellAccess (hook-side)', () => {
   const ws = '/tmp/boundary-ws';
   const home = os.homedir();
 
+  // A LEADING `cd` MOVES WHERE THE RELATIVE PATHS START FROM.
+  //
+  // Reported from the field, and the card was wrong in the way that is worst:
+  // it named a file that does not exist. An agent asked "what can you do in
+  // this workspace" ran
+  //
+  //   cd <ws>/.claude && ... ; cat ../.mcp.json
+  //
+  // which reads <ws>/.mcp.json, inside the workspace. Every relative token was
+  // resolved against the workspace ROOT instead, so `../.mcp.json` was reported
+  // as <ws>/../.mcp.json: one level too high, outside the workspace, and on
+  // that machine not a file at all. The agent was reading its own workspace's
+  // configuration to answer the question it was asked.
+  //
+  // The direction of the error matters. Resolving against too shallow a base
+  // turns paths that climb back INTO the workspace into false crossings, so
+  // this cost cards rather than containment. The fix must not buy them back by
+  // spending containment, which is what the masking tests below are for.
+  describe('a leading cd is where the relative paths start from', () => {
+    test('the reported command: a file inside the workspace is not a crossing', () => {
+      const r = classifyShellAccess('Bash', {
+        command: `cd ${ws}/.claude && for f in agents/roo.md; do cat "$f"; done; cat ../.mcp.json`,
+      }, ws, []);
+      assert.strictEqual(r, null,
+        'every path this command touches is inside the workspace, so there is no card to raise');
+    });
+
+    test('a relative cd counts too, and so does a semicolon', () => {
+      assert.strictEqual(classifyShellAccess('Bash', { command: 'cd .claude && cat ../.mcp.json' }, ws, []), null);
+      assert.strictEqual(classifyShellAccess('Bash', { command: 'cd .claude; cat ../.mcp.json' }, ws, []), null);
+    });
+
+    test('climbing PAST the workspace is still a crossing, from wherever it starts', () => {
+      // The masking case. A deeper base must not let a token climb out unseen.
+      const r = classifyShellAccess('Bash', { command: `cd ${ws}/.claude && cat ../../secret` }, ws, []);
+      assert.ok(r && r.where === 'outside', 'two levels up from .claude is outside, and must still card');
+      assert.ok(r.crossings.some(c => c.path.endsWith('/secret')), 'and it names the file it would actually read');
+      assert.ok(!r.crossings.some(c => c.path.includes('.claude')),
+        'the resolved path is the real one, not one measured from the wrong floor');
+    });
+
+    test('a cd OUT of the workspace is itself the crossing, and is not trusted as a base', () => {
+      const r = classifyShellAccess('Bash', { command: 'cd /etc && cat hosts' }, ws, []);
+      assert.ok(r && r.where === 'outside', 'leaving the workspace is the whole thing this card is for');
+    });
+
+    test('a cd it cannot read literally is not guessed at', () => {
+      // A variable, a substitution or a glob means the base is unknown at
+      // classification time. Unknown falls back to the workspace root, which
+      // over-reports rather than under-reports: the safe direction.
+      for (const cmd of ['cd $DIR && cat ../../x', 'cd "$(pwd)/sub" && cat ../../x', 'cd s*b && cat ../../x']) {
+        const r = classifyShellAccess('Bash', { command: cmd }, ws, []);
+        assert.ok(r && r.where === 'outside', `an unreadable cd must not soften the check: ${cmd}`);
+      }
+    });
+
+    test('a later cd is not a base for what came before it', () => {
+      // Only a LEADING cd is honoured. Anything more needs an interpreter, and
+      // a half-interpreted shell is the kind of guess that masks a crossing.
+      const r = classifyShellAccess('Bash', { command: `cat ../../secret && cd ${ws}/.claude` }, ws, []);
+      assert.ok(r && r.where === 'outside', 'the cat runs at the workspace root, and reaches outside from there');
+    });
+  });
+
+  // A SHELL CARD MAY NAME THE FOLDER IT IS ABOUT.
+  //
+  // It could not, and that made the offer nearly unreachable: measured across 91
+  // real sessions against one workspace, 68% of boundary cards came from shell
+  // commands, because an agent asked to read a file reaches for `cat` far more
+  // often than for the file tool. People were told to go and name a folder in
+  // Settings while standing in front of the card that knew exactly which folder
+  // they meant.
+  //
+  // `grantable` stays FALSE and that is not what changed. A stored grant still
+  // never answers a command, because everything in a command runs, not only the
+  // part that touches the named folder. What the card now carries is what the
+  // BUTTON would name, which is a different question from what a stored grant
+  // may answer, and conflating the two is why nothing was offered.
+  describe('the folder a shell card offers to name', () => {
+    const home = os.homedir();
+
+    test('a command reaching one folder offers that folder', () => {
+      // A REAL DIRECTORY, because "is this a folder or a file" is answered by
+      // asking the filesystem. A path that does not exist is judged by its
+      // parent, which is the right guess for an unborn file and the wrong one
+      // for an unborn directory; using a real folder keeps this test about the
+      // offer rather than about that guess.
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'offer-one-'));
+      try {
+        const r = classifyShellAccess('Bash', { command: `ls -la ${dir}` }, ws, []);
+        assert.strictEqual(r.grantDir, canonicalize(dir));
+        assert.strictEqual(r.grantable, false,
+          'and it is still not answerable from a stored grant: the button names a folder, it does not approve this command');
+      } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+    });
+
+    test('a file names the folder holding it, not the file', () => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'offer-file-'));
+      try {
+        fs.writeFileSync(path.join(dir, 'notes.md'), 'x');
+        const r = classifyShellAccess('Bash', { command: `cat ${path.join(dir, 'notes.md')}` }, ws, []);
+        assert.strictEqual(r.grantDir, canonicalize(dir));
+      } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+    });
+
+    test('several paths under one folder offer that folder', () => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'offer-many-'));
+      try {
+        fs.writeFileSync(path.join(dir, 'a.md'), 'x');
+        fs.writeFileSync(path.join(dir, 'b.md'), 'y');
+        const r = classifyShellAccess('Bash', {
+          command: `cat ${path.join(dir, 'a.md')} ${path.join(dir, 'b.md')}`,
+        }, ws, []);
+        assert.strictEqual(r.grantDir, canonicalize(dir));
+      } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+    });
+
+    test('paths with nothing in common offer nothing, rather than their ancestor', () => {
+      // The failure this guard exists for: two unrelated paths meet at the
+      // filesystem root, and offering that would let one click hand over the
+      // machine.
+      const r = classifyShellAccess('Bash', { command: `cat /etc/hosts && ls ${home}/Documents/x` }, ws, []);
+      assert.strictEqual(r.grantDir, null);
+    });
+
+    test('the home directory and the shallow system folders are never offered', () => {
+      for (const cmd of [`ls ${home}`, 'ls /etc', 'ls /tmp', 'ls /private/etc', 'ls /usr', 'ls /Users']) {
+        const r = classifyShellAccess('Bash', { command: cmd }, ws, []);
+        assert.ok(!r || r.grantDir === null, `${cmd} must offer no folder`);
+      }
+    });
+
+    test('a system folder reached through its real name is refused too', () => {
+      // Every crossing arrives canonicalised, and on macOS /etc IS /private/etc,
+      // so a literal match against the refusal list let the real spelling walk
+      // past it. Found by running the list, not by reading it.
+      assert.strictEqual(classifyShellAccess('Bash', { command: 'ls /etc' }, ws, []).grantDir, null,
+        '/etc canonicalises to /private/etc, and both spellings must be refused');
+    });
+
+    test('a command touching a credential offers nothing at all', () => {
+      // Not merely skipped for that one path: a command that reads a credential
+      // must not become the occasion for naming the folder holding it.
+      const r = classifyShellAccess('Bash', {
+        command: `cat ${home}/.claude/.credentials.json && ls ${home}/Documents/Somewhere`,
+      }, ws, []);
+      assert.strictEqual(r.grantDir, null);
+    });
+
+    test('once the folder is named, there is no card to offer anything on', () => {
+      // The end state, and the whole point: a named folder is not a crossing, so
+      // the question stops being asked rather than being asked more politely.
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'offer-named-'));
+      try {
+        assert.strictEqual(classifyShellAccess('Bash', { command: `ls -la ${dir}/Notes` }, ws, [dir]), null);
+      } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+    });
+  });
+
+  // A SEARCH PATTERN IS NOT A PATH.
+  //
+  // `ls | grep '/$'` reported a crossing at `/$`, and `grep -E '/$|No such'` one
+  // at `/$|No such`. Reported twice in one session by someone testing something
+  // else entirely.
+  //
+  // THE COST WAS NOT THE EXTRA CARD. A phantom crossing shares no sensible
+  // folder with a real one, so the card stopped offering "always allow this
+  // folder" for the folder the command genuinely reached: a regex anywhere in a
+  // command disabled the control that ends repeated asking. That is the storm
+  // this release exists to stop, returning by another door.
+  describe('an argument in a pattern position is not read as a path', () => {
+    const home = os.homedir();
+
+    test('a pattern that looks like an absolute path raises nothing', () => {
+      assert.strictEqual(classifyShellAccess('Bash', { command: "ls | grep '/$'" }, ws, []), null);
+      assert.strictEqual(classifyShellAccess('Bash', { command: "ls | grep -E '/$|No such'" }, ws, []), null);
+      assert.strictEqual(classifyShellAccess('Bash', { command: "cat x | sed 's|/etc/|/tmp/|'" }, ws, []), null);
+    });
+
+    test('the real folder in the same command is still reported, and still offerable', () => {
+      // The reported command. Before this, the phantom crossing suppressed the
+      // folder button for the folder actually being read.
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pattern-real-'));
+      try {
+        const r = classifyShellAccess('Bash', { command: `ls -1ap ${dir} | grep -E '/$|No such'` }, ws, []);
+        assert.ok(r, 'the genuine crossing is still a crossing');
+        assert.deepStrictEqual(r.crossings.map(c => c.path), [canonicalize(dir)],
+          'and it is the ONLY crossing: the pattern is gone from the list');
+        assert.strictEqual(r.grantDir, canonicalize(dir),
+          'so the card can offer the folder again, which the phantom crossing had prevented');
+      } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+    });
+
+    test('a file argument after the pattern is still scanned', () => {
+      const r = classifyShellAccess('Bash', { command: 'grep foo /etc/hosts' }, ws, []);
+      assert.ok(r && r.crossings.some(c => /etc\/hosts$/.test(c.path)),
+        'only the pattern position is dropped; everything after it is a file');
+    });
+
+    test('the same text as pattern AND as file reports the file', () => {
+      // Why this is positional rather than by value. Dropping every token that
+      // matches a pattern would drop the file being read as well, which is the
+      // one thing this must never do.
+      const r = classifyShellAccess('Bash', { command: "grep '/etc/passwd' /etc/passwd" }, ws, []);
+      assert.ok(r && r.crossings.some(c => /etc\/passwd$/.test(c.path)),
+        'the file is read and must be reported, even though the identical text is also the pattern');
+    });
+
+    test('-f names a real file to read patterns from, and is never dropped', () => {
+      // The one flag that would hide a genuine target if it were confused with
+      // -e. Named explicitly in the code for that reason, and pinned here.
+      const r = classifyShellAccess('Bash', { command: 'grep -f /etc/patterns.txt notes.md' }, ws, []);
+      assert.ok(r && r.crossings.some(c => /patterns\.txt$/.test(c.path)),
+        '-f reads that path; dropping it would hide a real read behind a flag');
+    });
+
+    test('-e carries the pattern, so the positional argument is a file and is kept', () => {
+      const r = classifyShellAccess('Bash', { command: 'grep -e foo /etc/hosts' }, ws, []);
+      assert.ok(r && r.crossings.some(c => /etc\/hosts$/.test(c.path)),
+        'with -e there is no positional pattern, so the next argument is a file');
+    });
+
+    test('only pattern-taking commands are treated this way', () => {
+      // `cat /etc/hosts` has a first argument too, and it is a file.
+      const r = classifyShellAccess('Bash', { command: 'cat /etc/hosts' }, ws, []);
+      assert.ok(r && r.crossings.some(c => /etc\/hosts$/.test(c.path)),
+        'the rule is scoped to commands whose first argument is a pattern, and cat is not one');
+    });
+
+    test('a pattern in one segment does not silence the same text in another', () => {
+      // Counted per occurrence, not per command: the pattern is dropped once,
+      // and a later segment reading that path is still seen.
+      const r = classifyShellAccess('Bash', { command: "grep '/etc/hosts' notes.md; cat /etc/hosts" }, ws, []);
+      assert.ok(r && r.crossings.some(c => /etc\/hosts$/.test(c.path)),
+        'the cat in the second segment reads the file and must still be reported');
+    });
+  });
+
+  // A HIDDEN FOLDER UNDER HOME IS NEVER OFFERED AS A STANDING GRANT.
+  //
+  // Asking an agent about `~/.ssh/config` produced a card offering to allow the
+  // whole of `~/.ssh` in one click, private keys included, sitting beside the
+  // ordinary Allow and worded as though it were the same size of yes. The
+  // question was about one config file; the button was about the folder.
+  //
+  // MEASURED BEFORE DECIDING, and it is why this costs nothing: `ssh host`,
+  // `scp`, `rsync` and `git push` raise no card at all, because the ssh binary
+  // reads the keys as a subprocess and no path for them appears in the command.
+  // The grant bought no quiet anyone was actually missing, and removed the
+  // asking from the one folder where the asking is the point.
+  describe('a credential folder is not offered as a standing grant', () => {
+    const home = os.homedir();
+
+    test('the reported case: the card still asks, and offers no folder', () => {
+      const r = classifyShellAccess('Bash', { command: 'grep github ~/.ssh/config' }, ws, []);
+      assert.ok(r && r.where === 'outside', 'access is unchanged: it still asks');
+      assert.strictEqual(r.grantDir, null, 'what goes is the one-click blanket, not the access');
+    });
+
+    test('the same for file tools, so the two cards cannot disagree', () => {
+      for (const f of ['.ssh/config', '.ssh/id_rsa', '.aws/credentials', '.gnupg/secring.gpg']) {
+        const r = classifyFileAccess('Read', { file_path: path.join(home, f) }, ws, []);
+        assert.ok(r && r.where === 'outside', `${f} still asks`);
+        assert.strictEqual(r.grantDir, null, `${f} offers no folder to remember`);
+      }
+    });
+
+    test('a rule about hidden directories, not a list of names', () => {
+      // The next credential store will have a name nobody here guessed.
+      for (const f of ['.kube/config', '.docker/config.json', '.some-future-tool/token']) {
+        const r = classifyFileAccess('Read', { file_path: path.join(home, f) }, ws, []);
+        assert.strictEqual(r.grantDir, null, `${f} is a hidden home directory and is covered without being named`);
+      }
+    });
+
+    test('it reaches deeper than the first level', () => {
+      const r = classifyFileAccess('Read', { file_path: path.join(home, '.ssh', 'keys', 'prod', 'id_rsa') }, ws, []);
+      assert.strictEqual(r.grantDir, null, 'a folder nested inside a hidden home directory is still inside it');
+    });
+
+    test('ordinary folders are untouched, including hidden ones elsewhere', () => {
+      // The rule is about hidden directories under HOME. A dot-directory inside
+      // a project is ordinary working material and must still be grantable, or
+      // this would quietly take the button away from real work.
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ordinary-'));
+      try {
+        const nested = path.join(dir, '.github', 'workflows');
+        fs.mkdirSync(nested, { recursive: true });
+        const r = classifyShellAccess('Bash', { command: `cat ${path.join(nested, 'ci.yml')}` }, ws, []);
+        assert.strictEqual(r.grantDir, canonicalize(nested),
+          'a hidden folder inside a project is ordinary work and is still offerable');
+      } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+    });
+
+    test('the runtime homes keep their own finer rules, which this must not flatten', () => {
+      // `~/.claude` is a hidden directory under home and would fall to the rule
+      // above, but it is already governed by something more precise: its root is
+      // refused a grant, its credential file is a secret refused on any access,
+      // and everything else is scratch the agent owns. A folder-shaped
+      // persistence surface is deliberately grantable, scoped to itself.
+      //
+      // Taking that away would cost a real affordance for no gain, since hooks
+      // are not credentials and the credentials beside them are already
+      // protected. The first version of this guard did exactly that, and the
+      // test pinning the grantable surface is what caught it.
+      const home = os.homedir();
+      assert.strictEqual(
+        classifyFileAccess('Write', { file_path: path.join(home, '.claude', 'hooks', 'pre.sh') }, ws, []).grantDir,
+        canonicalize(path.join(home, '.claude', 'hooks')),
+        'a folder-shaped persistence surface is still offerable, scoped to its own folder');
+      assert.strictEqual(
+        classifyFileAccess('Write', { file_path: path.join(home, '.claude', 'settings.json') }, ws, []).grantDir,
+        null,
+        'while the runtime home ROOT is still refused, so approving settings.json cannot silence hooks/');
+      assert.strictEqual(
+        classifyFileAccess('Read', { file_path: path.join(home, '.claude', '.credentials.json') }, ws, []).grantDir,
+        null,
+        'and the credential file is still a secret, refused a grant on any access');
+    });
+
+    test('and SSH itself never needed the grant, which is why this costs nothing', () => {
+      // If any of these carded, removing the button would have a real cost.
+      for (const cmd of ['ssh liam@vps uptime', 'scp report.md liam@vps:/srv/', 'rsync -az ./dist/ liam@vps:/srv/', 'git push origin main']) {
+        assert.strictEqual(classifyShellAccess('Bash', { command: cmd }, ws, []), null,
+          `${cmd} raises no card, so no grant was ever needed for it`);
+      }
+    });
+  });
+
   test('non-shell tools are not classified here', () => {
     assert.strictEqual(classifyShellAccess('Write', { file_path: '/etc/hosts' }, ws, []), null);
     assert.strictEqual(classifyShellAccess('WebFetch', { url: 'https://x' }, ws, []), null);
@@ -180,17 +509,25 @@ describe('classifyShellAccess (hook-side)', () => {
     assert.strictEqual(classifyShellAccess('Bash', { command: 'cat /dev/fd/../../etc/passwd' }, ws, []).crossings[0].path, canonicalize('/etc/passwd'));
   });
 
-  test('a shell crossing never carries a folder to remember, and says so', () => {
+  test('a stored grant still never answers a shell command, whatever folder the card names', () => {
     // A folder grant answers "may an agent touch this folder"; approving a
     // shell request answers "may this command run". The second cannot be
-    // inferred from the first, so the classifier refuses to supply the folder
-    // that would let the server answer one with the other.
+    // inferred from the first, because everything in the command runs, not only
+    // the part that touches the folder.
+    //
+    // THAT RULE IS `grantable`, AND IT HAS NOT MOVED. What changed is that the
+    // card may now NAME a folder, which is a different question: the person
+    // approves this command explicitly either way, and the button adds "and
+    // work here from now on". Refusing to name one left the offer unreachable
+    // on 68% of real boundary cards, which is how people ended up being told to
+    // go to Settings by the very card that knew which folder they meant.
     const home = os.homedir();
     const r = classifyShellAccess('Bash', { command: `cp a ${path.join(home, 'Exports', 'a')}` }, ws, []);
     assert.strictEqual(r.where, 'outside');
-    assert.strictEqual(r.grantDir, null, 'no folder is offered');
-    assert.strictEqual(r.grantable, false, 'and the server is told a grant must not answer this');
-    assert.ok(r.crossings.every(c => c.grantDir === undefined), 'nor is one smuggled in per crossing');
+    assert.strictEqual(r.grantable, false,
+      'the server is told a stored grant must not answer this, which is the control that matters');
+    assert.ok(r.crossings.every(c => c.grantDir === undefined),
+      'and no per-crossing folder is smuggled in, which is what the server reads when deciding coverage');
   });
 
   test('EVERY distinct crossing is reported, not just the first', () => {
@@ -406,5 +743,277 @@ describe('agent scratch files', () => {
     const ws = makeWorkspace({});
     const outside = path.join(os.tmpdir(), 'some_project_scratch', 'render.html');
     assert.strictEqual(classifyFileAccess('Read', { file_path: outside }, ws, []).where, 'outside');
+  });
+});
+
+// THE STORE'S OWN FAILURE BRANCHES.
+//
+// The handlers guard before reaching these, so exercising the store only
+// through them leaves its own refusals untested: the guard could be removed
+// from the handler and nothing would fail. These drive the module directly.
+// THE ANSWER FILES ARE PROTECTED ON EVERY PLATFORM, not only where a sandbox
+// runs. The sandbox denyWrite is the stronger protection and exists on macOS
+// alone; these two files hold the person's own permission answers, so on a
+// platform with no sandbox an agent with a shell could otherwise grant itself
+// standing allows and silence every later card.
+describe('an agent cannot quietly answer the questions it was asked', () => {
+  const os2 = require('node:os');
+  const boundary = require('../../lib/workspace/boundary.js');
+  const config = require('../../lib/config.js');
+  function tempWorkspace() {
+    const d = fs.mkdtempSync(path.join(os2.tmpdir(), 'answer-files-'));
+    fs.mkdirSync(path.join(d, '.rundock'), { recursive: true });
+    return d;
+  }
+  const WS = path.join(os2.tmpdir(), 'answer-files-ws');
+
+  const write = (target) => classifyFileAccess('Write', { file_path: target }, WS, [], os2.homedir(), false);
+  const read = (target) => classifyFileAccess('Read', { file_path: target }, WS, [], os2.homedir(), false);
+
+  test('writing either answer file is carded, though it sits inside the workspace', () => {
+    for (const f of ['state.json', 'permissions.json']) {
+      const target = path.join(WS, '.rundock', f);
+      // Was `where === 'outside'`. The card is unchanged; what moved is that it
+      // no longer claims a crossing to get it, which put a false heading on a
+      // path plainly inside the workspace. The test name already said as much.
+      assert.strictEqual(write(target).answerFile, true,
+        `a write to ${f} must reach the person, not be auto-approved as ordinary workspace work`);
+      assert.strictEqual(write(target).grantDir, null,
+        'and no standing folder grant may be offered that would silence it next time');
+    }
+  });
+
+  test('no standing folder grant covers them, however wide it is', () => {
+    // Granting a PARENT of the workspace is an ordinary thing to do, and a
+    // grant covers its whole subtree. Without this the grant would be
+    // answering for the mechanism that records the answers.
+    const original = config.getWorkspace();
+    const dir = tempWorkspace();
+    try {
+      config.setWorkspace(dir);
+      boundary.addBoundaryGrant(path.dirname(dir));
+      assert.strictEqual(boundary.boundaryGrantCovers(path.join(dir, 'notes.md')), true,
+        'sanity: the grant genuinely covers the workspace, so the next assertions mean something');
+      for (const f of ['state.json', 'permissions.json']) {
+        const target = path.join(dir, '.rundock', f);
+        assert.strictEqual(boundary.crossingCovered({ path: target }), false,
+          `a stored grant must never answer for ${f}`);
+      }
+      assert.strictEqual(boundary.crossingCovered({ path: path.join(dir, '.rundock', 'scratch', 'x.md') }), true,
+        'while everything else the grant reaches is still covered by it');
+    } finally { config.setWorkspace(original); }
+  });
+
+  test('reading them is ordinary workspace work', () => {
+    // The protection is about answering questions, not about secrecy. Rundock
+    // itself reads these constantly, and carding reads would make the
+    // workspace unusable without protecting anything.
+    for (const f of ['state.json', 'permissions.json']) {
+      assert.strictEqual(read(path.join(WS, '.rundock', f)).where, 'inside');
+    }
+  });
+
+  test('other files under .rundock stay free, so agent scratch still works', () => {
+    // Agents are told to put scratch under .rundock. Protecting the folder
+    // rather than the two files would take that away.
+    for (const rel of ['scratch/notes.md', 'cache/x.json', 'something.json']) {
+      assert.strictEqual(write(path.join(WS, '.rundock', rel)).where, 'inside',
+        `${rel} is not an answer the person gave, and must not card`);
+    }
+  });
+
+  // EVERY SPELLING, because the one an agent would actually type is the
+  // relative one, and that is the spelling a filter designed for the
+  // "does this reach outside the workspace" question skips by construction.
+  // The first version of this test used the absolute path alone and passed
+  // while `echo x > .rundock/permissions.json` went through untouched.
+  test('a shell command writing one of them is caught however the path is spelled', () => {
+    const spellings = [
+      path.join(WS, '.rundock', 'permissions.json'),   // absolute
+      '.rundock/permissions.json',                      // relative, the ordinary one
+      './.rundock/permissions.json',                    // relative, dot-prefixed
+      '.rundock/../.rundock/permissions.json',          // relative through a traversal
+      path.join(WS, '.rundock', 'state.json'),
+      '.rundock/state.json',
+    ];
+    for (const spelling of spellings) {
+      const found = classifyShellAccess('Bash', { command: `echo '{}' > ${spelling}` }, WS, [], os2.homedir(), false);
+      const paths = (found && found.crossings ? found.crossings : []).map((c) => c.path);
+      assert.ok(paths.some((p) => p.endsWith('.json')),
+        `a shell write spelled "${spelling}" has to be caught, or the lock is only on the door nobody uses`);
+    }
+  });
+
+  test('an ordinary relative write inside the workspace is still free', () => {
+    // The other direction, so the rule above cannot be satisfied by reporting
+    // every relative token: resolving them all is new work, and it must not
+    // turn ordinary workspace writing into a wall of cards.
+    for (const spelling of ['notes.md', './src/app.js', '.rundock/scratch/draft.md']) {
+      const found = classifyShellAccess('Bash', { command: `echo hi > ${spelling}` }, WS, [], os2.homedir(), false);
+      const paths = (found && found.crossings ? found.crossings : []).map((c) => c.path);
+      assert.deepStrictEqual(paths, [],
+        `writing "${spelling}" is ordinary work inside the workspace and must raise nothing`);
+    }
+  });
+
+  test('a shell command merely reading one of them is not', () => {
+    const cmd = `cat ${path.join(WS, '.rundock', 'permissions.json')}`;
+    const found = classifyShellAccess('Bash', { command: cmd }, WS, [], os2.homedir(), false);
+    const paths = (found && found.crossings ? found.crossings : []).map((c) => c.path);
+    assert.deepStrictEqual(paths.filter((found) => found.endsWith('permissions.json')), [],
+      'reading the stored answers is not answering anything');
+  });
+});
+
+describe('standing tool allows refuse rather than corrupt', () => {
+  const boundary = require('../../lib/workspace/boundary.js');
+  const config = require('../../lib/config.js');
+
+  function tempWorkspace() {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'allows-store-'));
+    fs.mkdirSync(path.join(dir, '.rundock'), { recursive: true });
+    return dir;
+  }
+
+  test('a blank or non-string key is never stored', () => {
+    const original = config.getWorkspace();
+    const dir = tempWorkspace();
+    try {
+      config.setWorkspace(dir);
+      for (const bad of ['', '   ', null, undefined, 42, {}]) {
+        boundary.addToolAllow(bad);
+      }
+      assert.deepStrictEqual(boundary.readToolAllows(), [],
+        'nothing silences a card on the strength of a key that says nothing');
+    } finally { config.setWorkspace(original); }
+  });
+
+  test('the same key twice is stored once', () => {
+    const original = config.getWorkspace();
+    const dir = tempWorkspace();
+    try {
+      config.setWorkspace(dir);
+      boundary.addToolAllow('Bash:git');
+      boundary.addToolAllow('Bash:git');
+      assert.deepStrictEqual(boundary.readToolAllows(), ['Bash:git']);
+    } finally { config.setWorkspace(original); }
+  });
+
+  test('a store holding something other than a list of strings reads as nothing allowed', () => {
+    // The safe direction again: a file whose shape is wrong must make the card
+    // appear, never let a request through on the strength of it.
+    const original = config.getWorkspace();
+    const dir = tempWorkspace();
+    try {
+      config.setWorkspace(dir);
+      fs.writeFileSync(path.join(dir, '.rundock', 'permissions.json'),
+        JSON.stringify({ allowedTools: ['Bash:git', 7, null, '', { k: 1 }] }));
+      assert.deepStrictEqual(boundary.readToolAllows(), ['Bash:git'],
+        'only the entries that are actually keys survive the read');
+      fs.writeFileSync(path.join(dir, '.rundock', 'permissions.json'),
+        JSON.stringify({ allowedTools: 'Bash:git' }));
+      assert.deepStrictEqual(boundary.readToolAllows(), [],
+        'and a value that is not a list at all allows nothing');
+    } finally { config.setWorkspace(original); }
+  });
+
+  // A STORE THAT CANNOT BE WRITTEN MUST NOT REPORT SUCCESS.
+  //
+  // The catch exists so a disk failure degrades to "the card keeps appearing"
+  // rather than crashing the server mid-permission-decision. What it must never
+  // do is return the key as though it were stored: the interface would show a
+  // standing allow that the next read cannot find, and the person would believe
+  // they had answered once when they had not.
+  function unwritableStore(dir) {
+    // A directory where the file belongs: writeFileSync raises EISDIR, which is
+    // a real failure of the same shape as a permissions or disk error, without
+    // needing to stub the filesystem module.
+    fs.mkdirSync(path.join(dir, '.rundock', 'permissions.json'), { recursive: true });
+  }
+
+  test('a grant that cannot be written is not reported as granted', () => {
+    const original = config.getWorkspace();
+    const dir = tempWorkspace();
+    try {
+      config.setWorkspace(dir);
+      unwritableStore(dir);
+      assert.deepStrictEqual(boundary.addToolAllow('Bash:git'), [],
+        'the caller is told what is actually stored, which is nothing');
+      assert.deepStrictEqual(boundary.readToolAllows(), [],
+        'and the next read agrees, so the card will appear again');
+    } finally { config.setWorkspace(original); }
+  });
+
+  test('a revoke that cannot be written is not reported as revoked', () => {
+    const original = config.getWorkspace();
+    const dir = tempWorkspace();
+    try {
+      config.setWorkspace(dir);
+      boundary.addToolAllow('Bash:git');
+      // Read-only, not replaced: the revoke must be able to READ the grant it
+      // is trying to remove and still fail to write the removal. A store the
+      // read also fails on would exit early and never reach the branch.
+      const file = path.join(dir, '.rundock', 'permissions.json');
+      fs.chmodSync(file, 0o444);
+      assert.deepStrictEqual(boundary.removeToolAllow('Bash:git'), ['Bash:git'],
+        'a revoke that did not land reports the grant as still standing, never as removed');
+      fs.chmodSync(file, 0o644);
+      assert.deepStrictEqual(boundary.readToolAllows(), ['Bash:git'],
+        'and the grant is genuinely still there, which is why the revoke must not have claimed otherwise');
+    } finally { config.setWorkspace(original); }
+  });
+
+  // ONE FILE, TWO SECTIONS, AND NEITHER WRITER MAY EAT THE OTHER.
+  //
+  // addBoundaryGrant used to compose the whole object as `{ allowedDirs }`,
+  // which was correct for exactly as long as folder grants were the only thing
+  // in the file. Adding tool allows to the same file made it a bug that
+  // destroys data: allowing one folder would have silently deleted every
+  // standing tool allow in that workspace.
+  test('allowing a folder keeps the tool allows, and allowing a tool keeps the folders', () => {
+    const original = config.getWorkspace();
+    const dir = tempWorkspace();
+    try {
+      config.setWorkspace(dir);
+      boundary.addToolAllow('Bash:git');
+      boundary.addBoundaryGrant(dir);
+      assert.deepStrictEqual(boundary.readToolAllows(), ['Bash:git'],
+        'a folder grant must not take the tool allows with it');
+      assert.strictEqual(boundary.readBoundaryGrants().length, 1, 'sanity: the folder was recorded');
+
+      boundary.addToolAllow('Bash:npm');
+      assert.strictEqual(boundary.readBoundaryGrants().length, 1,
+        'and a tool allow must not take the folder grants with it');
+      assert.deepStrictEqual(boundary.readToolAllows(), ['Bash:git', 'Bash:npm']);
+    } finally { config.setWorkspace(original); }
+  });
+
+  test('a section this version has never heard of survives being written around', () => {
+    // The same rule, stated against the future rather than the present: the
+    // merging writer carries through keys it does not know, so a workspace
+    // written by a newer Rundock is not quietly stripped by an older one.
+    const original = config.getWorkspace();
+    const dir = tempWorkspace();
+    try {
+      config.setWorkspace(dir);
+      const file = path.join(dir, '.rundock', 'permissions.json');
+      fs.writeFileSync(file, JSON.stringify({ allowedTools: [], somethingLater: { keep: 'me' } }));
+      boundary.addToolAllow('Bash:git');
+      const after = JSON.parse(fs.readFileSync(file, 'utf8'));
+      assert.deepStrictEqual(after.somethingLater, { keep: 'me' },
+        'a writer that owns one field must leave every other field exactly as it found it');
+      assert.deepStrictEqual(after.allowedTools, ['Bash:git']);
+    } finally { config.setWorkspace(original); }
+  });
+
+  test('with no workspace open, reading is empty and writing is a no-op', () => {
+    const original = config.getWorkspace();
+    try {
+      config.setWorkspace(null);
+      assert.deepStrictEqual(boundary.readToolAllows(), []);
+      assert.deepStrictEqual(boundary.addToolAllow('Bash:git'), [],
+        'there is nowhere to record it, so nothing is recorded');
+      assert.deepStrictEqual(boundary.removeToolAllow('Bash:git'), []);
+    } finally { config.setWorkspace(original); }
   });
 });

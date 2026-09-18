@@ -222,7 +222,11 @@ describe('Proposal-First smoke plan (T1-T12)', () => {
     const resume = invs.find(i => i.agent === 'chief-of-staff' && i.resume);
     for (const [label, inv] of [['initial', initial], ['delegate', delegate], ['resume', resume]]) {
       assert.ok(inv, `${label} spawn recorded`);
-      assert.strictEqual(inv.model, 'sonnet', `${label} carries --model`);
+      // These agents name no model, so no --model is passed at any of the three
+      // spawn sites. Asserted as absence rather than dropped, because the point
+      // of T10 is that all three sites agree, and they must agree on this too.
+      assert.strictEqual(inv.model, null, `${label} passes no --model`);
+      assert.ok(!inv.argv.includes('--model'), `${label} argv carries no model flag`);
       assert.ok(inv.argv.includes('--append-system-prompt'), `${label} carries system prompt`);
     }
     assert.ok(delegate.argv.includes('--agent'), 'delegate cold-spawn passes --agent');

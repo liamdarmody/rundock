@@ -120,9 +120,22 @@ jobs:
   # instead of transcribed. Not part of `npm test`: it runs that suite once per
   # guard, which is too slow to pay on every run and cheap to pay once per push.
   mutation:
-    name: Renderer guards and fixture provenance
+    # Renamed when this job went from the renderer's guards to every harness.
+    # Checked before renaming: this context is NOT among the required status
+    # checks on main (those are the two Test jobs, E2E, Coverage floors,
+    # Typecheck and Hygiene), so no branch-protection setting names this string
+    # and no pull request can be left waiting on a context that stopped
+    # reporting. If it is ever made required, the setting and this line have to
+    # change together, and neither order is safe on its own.
+    name: Mutation guards and fixture provenance
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # This job runs the SCOPED set, the same selection the local gate makes, so
+    # it costs minutes rather than tens of minutes. Thirty is far above a scoped
+    # run and still bounds a hang, which is the failure a ceiling exists for.
+    #
+    # The complete set is not run here. It runs nightly, in
+    # mutation-nightly.yml, for the reason written up in that file.
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -143,13 +156,26 @@ jobs:
       - name: Install test-only DOM dependency
         run: npm install --no-save --ignore-scripts jsdom@29.1.1
 
-      - name: Remove each renderer guard and require a red test
-        run: node test/tools/mutate-render-guards.js --markdown
+      # THE SCOPED SET, THE SAME SELECTION THE LOCAL GATE MAKES. This job is the
+      # backstop for a commit that never ran the gate, so it repeats the gate's
+      # own choice rather than widening it.
+      #
+      # Measured before this was settled: the complete set costs 1204s on these
+      # runners and 1628s on a developer machine, and two of the eighteen
+      # harnesses account for 63% of that. Running all of them on every push put
+      # twenty minutes in front of every review in order to re-check harnesses
+      # that no change on the branch could reach. The complete set still runs,
+      # nightly, where nothing is waiting on it.
+      - name: Remove each guard a change can reach, and require a red test
+        run: npm run mutate:guards
 
-      # The file is restored by the tool, including when a run throws. If a
-      # failure ever leaves it modified, that is itself worth seeing.
-      - name: Fail if the tool left the renderer modified
-        run: git diff --exit-code -- public/markdown-render.js
+      # The tools restore what they mutate, including when a run throws. A
+      # failure that leaves any of them modified is itself worth seeing, and
+      # says so about the whole tree rather than one file.
+      - name: Fail if any tool left a file modified
+        run: git diff --exit-code
+
+
 
       # The frozen "before" fixture is the only record of how ordinary markdown
       # rendered before this work, and every claim that it is unchanged is taken

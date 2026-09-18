@@ -177,13 +177,82 @@ function ghApi(method, apiPath, body) {
   return out ? JSON.parse(out) : {};
 }
 
+// THE NOTES AND THE BUILD MUST DESCRIBE THE SAME WORK.
+//
+// Publishing binds a tag to a draft and flips a flag. Nothing in it asked
+// whether the draft was built from anything current, so a tag cut days earlier,
+// with a build to match, published happily under release notes written from a
+// main that had moved a long way past it. That is the worst shape a release
+// failure takes: every check green, the notes accurate about the work, and the
+// binary missing all of it, so the notes read as a lie rather than an oversight.
+// Caught once by hand, two days and seven merges after the tag was cut.
+//
+// COMPARED BY CHANGELOG SECTION, NOT BY COMMIT. A tag is legitimately behind
+// main by the time anyone publishes, because main moves on, so "the tag must be
+// main" or "no more than N commits behind" would refuse healthy releases and
+// teach people to pass a force flag. What must NOT differ is this version's
+// changelog section: the flow promotes it, merges, tags, builds, publishes, and
+// nothing in that order rewrites the section after the tag. If it differs, one
+// of the two is stale, and which one hardly matters: either the notes promise
+// what the build lacks, or the build carries what the notes do not mention.
+//
+// Read through git rather than the API because publish is always run from a
+// clone, and a local read cannot be fooled by a stale API cache. Injected for
+// tests, like every other seam in this file.
+function requireNotesMatchBuild(version, { root = ROOT, git = gitIn(root), log = logStep } = {}) {
+  const tag = `v${version}`;
+  try {
+    git(['fetch', 'origin', 'main', '--tags'], { stdio: 'pipe' });
+  } catch (err) {
+    throw new Error(`Could not fetch origin before publishing: ${err.message}`);
+  }
+
+  let atTag;
+  try {
+    atTag = git(['show', `${tag}:CHANGELOG.md`]);
+  } catch (err) {
+    throw new Error(`Could not read CHANGELOG.md at ${tag}: ${err.message}. Does the tag exist?`);
+  }
+  const atMain = git(['show', 'origin/main:CHANGELOG.md']);
+
+  const tagged = extractChangelogEntry(version, atTag);
+  const current = extractChangelogEntry(version, atMain);
+  if (!tagged) {
+    throw new Error(
+      `CHANGELOG.md at ${tag} has no "## ${version}:" section, so the build carries no notes for this release. ` +
+      `The tag was cut before the changelog was promoted.`
+    );
+  }
+  if (!current) {
+    throw new Error(`CHANGELOG.md at origin/main has no "## ${version}:" section, so there are no notes to publish.`);
+  }
+
+  if (tagged.title !== current.title || tagged.body !== current.body) {
+    const taggedSha = git(['rev-parse', `${tag}^{commit}`]).trim().slice(0, 9);
+    const mainSha = git(['rev-parse', 'origin/main']).trim().slice(0, 9);
+    const behind = git(['rev-list', '--count', `${tag}..origin/main`]).trim();
+    throw new Error(
+      `The notes for ${version} differ between ${tag} (${taggedSha}) and origin/main (${mainSha}), ` +
+      `which is ${behind} commit(s) ahead of the tag.\n` +
+      `The build was made from the tag and the notes are published from it, so publishing now would ` +
+      `describe work the build may not contain.\n` +
+      `Recut deliberately: delete the draft release, delete the tag locally and on the remote, then ` +
+      `"npm run release -- tag ${version}" to tag and rebuild from current main.`
+    );
+  }
+  log('publish', `Notes at ${tag} match origin/main, so the build and its notes describe the same work`);
+}
+
 // Publish the draft release for `version`, binding the tag BEFORE flipping
 // the draft flag. The 0.11.6 lesson mechanised: after a recut deletes a tag,
 // the draft's tag_name falls back to `untagged-*`, and publishing in that
 // state binds the release to the junk tag permanently. Order is the fix:
 // PATCH tag_name, VERIFY it stuck, only then PATCH draft=false.
-function publishRelease(version, { api = ghApi, log = (msg) => console.log(`[release:publish] ${msg}`) } = {}) {
+function publishRelease(version, { api = ghApi, log = (msg) => console.log(`[release:publish] ${msg}`), checkNotes = requireNotesMatchBuild } = {}) {
   const tag = `v${version}`;
+  // Before anything is bound or flipped: the draft has to have been built from
+  // the work these notes describe. Nothing downstream can undo a publish.
+  checkNotes(version);
   const releases = api('GET', `repos/${REPO}/releases`);
   const draft = (releases || []).find(r => r.draft && (
     r.tag_name === tag || (r.name && r.name.startsWith(`${version}:`))
@@ -590,6 +659,7 @@ if (require.main === module) {
 
 module.exports = {
   extractChangelogEntry,
+  requireNotesMatchBuild,
   promoteUnreleasedChangelog,
   preflight,
   requireGatePass,

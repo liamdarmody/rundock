@@ -84,8 +84,8 @@ const AREA_DEFS = [
   ['lib/workspace/boundary.js', 'Workspace boundary grants', /^function boundaryPermissionsPath\(/, /^module\.exports/],
   // Slice 1 migrations: these two areas moved to lib/store/ and keep their
   // floors under the same labels; the interim root area covers what the move
-  // left behind (signal layer + the appendTranscript/formatTranscript
-  // composition) until the signals slice gives it a permanent home.
+  // left behind (signal layer + the appendTranscript composition) until the
+  // signals slice gives it a permanent home.
   ['lib/store/transcripts.js', 'Transcripts + persistence helpers', /^function transcriptDir\(/, /^module\.exports/],
   ['lib/store/persistence.js', 'Conversation / state persistence', /^function rundockDir\(/, /^module\.exports/],
   ['lib/signals.js', 'Signal layer (events, retention, skill usage, docs-gap)', /^const EVENTS_RETENTION_MONTHS/, /^module\.exports/],

@@ -32,7 +32,7 @@ Suggest and confirm:
 - **colour:** Hex colour for avatar. Must be visually distinct from existing agents.
 - **order:** 0 for orchestrator, sequential integers for specialists. Use decimals for sub-agents (e.g. 1.1, 1.2 under a lead at order 1). Check existing agents to avoid collisions.
 - **reportsTo:** The `name` slug of the agent this one reports to. Every specialist should have this set. Direct reports of the orchestrator use the orchestrator's slug. Sub-agents use their lead's slug.
-- **model:** depends on the runtime. Claude Code agents: `opus` for the orchestrator, `sonnet` for most specialists, `haiku` for simple lookups. Codex agents: OMIT the model field unless the user names a specific Codex model; Codex applies the account's default, and Claude model names are invalid on Codex.
+- **model:** `inherit` unless the user names something specific, which runs the agent on whatever model their runtime resolves. Leaving the field out does the same thing; write `inherit` anyway, so the file states its intent rather than leaving the next reader to infer it. Name a model only when the user asks for one, and then use what they give you verbatim: any identifier their runtime serves is valid, including a gateway's own naming such as `my-gateway/claude-model-id`. On a standard Claude Code setup that includes `opus`, `sonnet` and `haiku`. Codex agents: OMIT the model field unless the user names a specific Codex model; Codex applies the account's default. Claude model names are not valid on Codex.
 - **runtime:** omit for Claude Code (the default). `runtime: codex` (lowercase) runs the agent on the user's ChatGPT plan via the official Codex CLI. Only offer this when the RUNTIMES section of your own instructions confirms Codex is available on this machine; the workspace orchestrator always runs on Claude Code. Codex agents use Codex's built-in sandbox rather than Rundock's permission prompts.
 
 ### 3. Write instructions
@@ -70,7 +70,7 @@ order: {number}
 reportsTo: {parent-agent-slug}
 icon: {unicode}
 colour: {hex}
-model: {opus|sonnet|haiku}  # Claude Code agents only; OMIT for runtime: codex
+model: inherit  # or any model the user's runtime serves; OMIT for runtime: codex
 # runtime: codex            # optional, lowercase: runs this agent on the user's ChatGPT plan
 description: >
   {What the agent does}
@@ -83,9 +83,11 @@ prompts:
 ```
 <!-- /RUNDOCK:SAVE_AGENT -->
 
-**Always set `model`, matched to the agent's work:**
+**Leave `model: inherit` unless the user names a model.** Inherit runs the agent on whatever model their runtime already resolves, which is the only setting that works on every machine: a user whose models arrive through a gateway has identifiers you cannot guess, and naming one they cannot serve produces an agent that never starts.
+
+**When the user does name a model, write it verbatim.** Any identifier their runtime serves is valid, a gateway's included (`my-gateway/claude-model-id`). Rundock does not check the value. On a standard Claude Code setup you can also suggest, matched to the agent's work:
 - `opus`: complex reasoning, deep analysis, and multi-step problem-solving (e.g. research, strategy, engineering leads).
-- `sonnet`: balanced, general-purpose work and orchestration or routing. Use this if you are unsure.
+- `sonnet`: balanced, general-purpose work and orchestration or routing.
 - `haiku`: fast, simple, high-volume tasks (e.g. quick lookups, formatting, light routing).
 
 After saving, tell the user the agent will appear on the org chart and suggest a first conversation prompt.
@@ -129,7 +131,7 @@ Review all agents for quality and consistency.
 
 ### Per-agent checks
 - [ ] All frontmatter fields present (name, description, displayName, role, type, order, reportsTo, icon, colour, model, prompts)
-- [ ] Runtime/model pairing valid: `runtime: codex` is lowercase and carries NO Claude model name (omit model for the account default); Claude agents use opus/sonnet/haiku
+- [ ] Runtime/model pairing valid: `runtime: codex` is lowercase and carries no Claude model name (omit the field for the account default). A Claude Code agent may carry `inherit` or any identifier the user's runtime serves: never rewrite a model you do not recognise, it is probably their gateway's
 - [ ] Identity statement in instructions
 - [ ] Specific responsibilities with skill slug references
 - [ ] Routing boundaries for specialists

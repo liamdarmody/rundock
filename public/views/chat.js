@@ -22,7 +22,10 @@
 // way: esc, formatMd, formatTimeAgo, stripRundockMarkers, getConvoState,
 // persistConversation, renderConvoList, updateUnreadBadge, updateWorkingBadge,
 // tryMessageAnchor, and the classic-script globals RundockPermissions,
-// RundockConversationState and RundockChatMarkup.
+// RundockConversationState and RundockChatMarkup. Also serverPlatform and
+// workspaceMode, which nameTheFolderHint reads: whether the sentence about the
+// operating system applies is a fact about the host and the mode, and both
+// live in app.js beside the rest of the workspace's state.
 //
 // buildDelegationDivider moved the other way, from app.js into this module,
 // once the markup came out of it: it renders a thread element, and both of its
@@ -143,6 +146,13 @@ function startProcessing(convoId) {
     // Use the active delegate agent during delegation, otherwise the conversation agent
     const activeId = state.activeAgentId || convo?.agentId;
     const a = (activeId && agents.find(x => x.id === activeId)) || convo?.agent || agents[0];
+    // ONE INDICATOR, BECAUSE AN ID MEANS ONE. A second element carrying this
+    // id can exist: the tool-status path re-creates the indicator below a
+    // streaming message, and a handoff then brings the next agent here to make
+    // another. getElementById returns the FIRST match, so the newer agent's
+    // tool activity was written into the previous agent's bubble while its own
+    // showed a bare "Thinking": Ren fetching pages inside Roo's speech bubble.
+    const stale = document.getElementById('thinking-indicator'); if (stale) stale.remove();
     const m=document.getElementById('messages'),d=document.createElement('div'); d.className='msg msg-agent'; d.id='thinking-indicator';
     d.innerHTML=RundockChatMarkup.thinkingIndicatorHtml(a);
     m.appendChild(d); scrollBottom();
@@ -294,11 +304,11 @@ function addSystemMsg(text) { const m=document.getElementById('messages'),d=docu
 // executor in app.js), in-memory replay in the conversations view, and history
 // replay below. It lived in app.js until the markup came out of it; it is
 // chat thread rendering, so it belongs with the rest of the thread.
-function buildDelegationDivider(agentData, isReturn, opts = {}) {
+function buildDelegationDivider(agentData, opts = {}) {
   const divider = document.createElement('div');
   divider.className = 'msg-delegation' + (opts.historyClass ? ' history-msg' : '');
   if (opts.noAnimation) divider.style.animation = 'none';
-  divider.innerHTML = RundockChatMarkup.delegationDividerHtml(agentData, isReturn);
+  divider.innerHTML = RundockChatMarkup.delegationDividerHtml(agentData);
   return divider;
 }
 
@@ -449,11 +459,18 @@ function renderSessionHistory(d) {
     } else {
       // Use per-message agentId if available (from multi-session merge), fall back to default
       const msgAgent = msg.agentId ? (agents.find(a => a.id === msg.agentId) || defaultAgent) : defaultAgent;
-      // Add delegation divider if agent changed
-      if (msg.agentId && msg.agentId !== lastAgentId && lastAgentId !== null) {
-        const isReturn = msgAgent?.type === 'orchestrator';
-        frag.appendChild(buildDelegationDivider(msgAgent, isReturn, { historyClass: true, noAnimation: true }));
-      }
+      // NO HANDOVER MARKERS ON REPLAY. A divider is a notification, not
+      // content: it tells the person, as it happens, that somebody new has
+      // taken the work. Reading a conversation back is not that moment, and
+      // every bubble already carries the avatar and name of whoever is
+      // speaking, so the thread reads as what it is, several agents and a
+      // person talking.
+      //
+      // This was also the only place that inferred where a handover had been,
+      // by comparing one message's agent to the last. The replay used when a
+      // conversation is opened infers nothing, so the two disagreed and the
+      // markers survived exactly one render. Inferring in neither place is why
+      // that cannot come back.
       lastAgentId = msg.agentId || lastAgentId;
       div.className = 'msg msg-agent history-msg';
       const ht = msg.timestamp ? new Date(msg.timestamp) : null;
@@ -509,9 +526,22 @@ function renderSessionHistory(d) {
   // a live process, handleActiveProcesses already set the correct activeAgentId
   // and activeProcessId; overriding it here would desync the header/placeholder
   // from actual message routing.
+  // THE SAME RULE THE SERVER APPLIES, and it has to be the same or either one
+  // alone reproduces the bug. A missing process means the delegate is not
+  // running; after a relaunch it does not mean the delegate FINISHED, because
+  // the process map died with the server. Only an observed handback says that,
+  // and `delegationReturned` is written at the moment one is seen.
+  //
+  // BOTH DIRECTIONS ARE WRITTEN, which the first version of this got wrong. It
+  // narrowed the reset and stopped there, so for the restored case nothing ever
+  // seeded this runtime state at all. `state` is a per-session object that does
+  // not inherit convo.activeAgentId on its own, and dispatchMessage resolves
+  // `state.activeAgentId || convo.agentId`, so a message after a relaunch still
+  // went to the orchestrator: the reported bug, unfixed, behind a server-side
+  // fix that looked right.
   const state = getConvoState(convo.id);
   if (!state.activeProcessId) {
-    state.activeAgentId = convo.agentId;
+    state.activeAgentId = restoredActiveAgentId(convo);
   }
   if (activeConversation?.id === convo.id) {
     const displayId = state.activeAgentId || convo.agentId;
@@ -532,8 +562,27 @@ function renderSessionHistory(d) {
 
 // ===== PERMISSION UI =====
 
-// Session-level "always allow" patterns
+// THE STANDING "ALWAYS ALLOW" ANSWERS, seeded from the workspace.
+//
+// This was a bare Set, so every answer the person gave was thrown away by a
+// page reload, not merely by a restart. A card that offers "always" and means
+// "until you refresh" is a promise the product does not keep, and the cost
+// lands hardest on whoever runs the most agents.
+//
+// It is still a Set, and still the only view-local permission state: the
+// difference is that it is filled from the workspace on connect and every
+// addition is written back. The server remains the record; this is a cache of
+// it, so a reload rebuilds rather than forgets.
 const alwaysAllowedTools = new Set();
+
+// Replace the cached answers wholesale. The server always sends the full list,
+// so there is no merge to get wrong: what the workspace says is what holds.
+function setStandingToolAllows(keys) {
+  alwaysAllowedTools.clear();
+  for (const k of (Array.isArray(keys) ? keys : [])) {
+    if (typeof k === 'string' && k) alwaysAllowedTools.add(k);
+  }
+}
 
 // Permission/trust decision logic lives in permissions.js (unit-tested;
 // loaded before this file). The aliases keep historical call sites readable;
@@ -564,7 +613,14 @@ function handlePermissionRequest(d, convoId) {
   // folder grants are evaluated by the server before the card is sent, so a
   // boundary request arriving here means no grant covers it and a human
   // must decide.
-  const decision = req.boundary ? { action: 'card' } : RundockPermissions.decidePermission(risk, key, alwaysAllowedTools);
+  // An answer-file write is carded like a boundary request, and for the same
+  // reason: the question must reach a person every time. Routed here as well as
+  // suppressed at the button, because a key stored from an UNRELATED Write or
+  // Edit approval would otherwise answer this one from the session's set, and
+  // the user would never see that it had happened.
+  const decision = (req.boundary || req.answer_file === true)
+    ? { action: 'card' }
+    : RundockPermissions.decidePermission(risk, key, alwaysAllowedTools);
   const isActive = activeConversation?.id === convoId;
   const route = RundockPermissions.routePermissionRequest(decision, isActive);
   if (route === 'respond-allow') {
@@ -589,6 +645,42 @@ function handlePermissionRequest(d, convoId) {
 // Render one approval card into the active conversation's message list.
 // Extracted verbatim from handlePermissionRequest so queued background
 // requests render through the exact same path when their conversation opens.
+// Named once, used on every outside-workspace card. A folder a team works in
+// every day is a fact about the team, not thirty separate approvals, and this
+// is the only place in the product where a person is standing in front of that
+// problem while it happens.
+// THE SECOND SENTENCE IS FOR KNOWLEDGE MODE ON macOS, AND NOWHERE ELSE.
+//
+// It was shown on every one of these cards, which meant a reader in Code mode
+// was told "Code mode is where those end" while standing in Code mode holding a
+// card. The sentence is true and it is about a DIFFERENT card (the operating
+// system's refusal, which Code mode does end), but nothing on the card said so,
+// and a person reading it concludes the mode switch is broken rather than that
+// they are looking at the other kind of card.
+//
+// In Code mode this card IS the whole boundary: the sandbox is off, so nothing
+// underneath is going to catch this, and naming the folder is not merely the
+// better remedy, it is the only one. Saying less is saying it accurately.
+//
+// Gated exactly as workingFoldersSandboxNote in settings.js is, deliberately:
+// the two sentences describe one behaviour and must appear under one condition,
+// or the product contradicts itself across two surfaces.
+function nameTheFolderHint() {
+  const base = 'If your agents work here often, name the folder in Settings under Workspace and this check stops asking about it.';
+  const isMac = typeof serverPlatform === 'string' && serverPlatform === 'darwin';
+  const isKnowledge = workspaceMode !== 'code';
+  if (!isMac || !isKnowledge) return base;
+  return base + ' In Knowledge mode on macOS a terminal write out here can still be refused by the operating system and come back as a card; Code mode is where those end.';
+}
+
+// The card the reported user meets in the DEFAULT mode on macOS. The crossing
+// was established by the operating system, not by a path this product read,
+// so there is nothing here for a named folder to match and naming one changes
+// nothing about it. Saying so is the difference between a reader concluding
+// the setting is broken and a reader knowing which switch actually ends this.
+const SANDBOX_RETRY_HINT = 'This one is the operating system refusing a write outside your workspace, which Knowledge mode switches on. '
+  + 'Naming a working folder does not change it. Code mode is where these end.';
+
 function renderPermissionCard(d, convoId) {
   const req = d.request || {};
   const requestId = d.request_id || '';
@@ -600,10 +692,29 @@ function renderPermissionCard(d, convoId) {
   const input = req.input || {};
   const risk = classifyRisk(toolName, input);
   let { summary, context, detail } = describeToolRequest(toolName, input);
+  // The command, kept beside a crossing path rather than replaced by it.
+  let commandDetail = '';
   const key = toolAllowKey(toolName, input);
   // Workspace-boundary requests get their own copy: the point is WHERE the
   // access lands, not which tool wants it.
   const boundary = req.boundary === true;
+  // A write to the workspace's own answer files asks for a different reason,
+  // and it is INSIDE the workspace. It used to be classified as a crossing
+  // because that was the only thing that forced a card and refused a standing
+  // grant, so this card announced that the workspace had been left, above a
+  // path plainly within it. Checked before `boundary` so the reason a card
+  // states is the reason it exists.
+  //
+  // A shell redirect into the same file arrives by the other road: the command
+  // grader still reports it as a crossing, because a command cannot say which
+  // act it performs and that classifier is not worth destabilising for copy.
+  // So the heading is decided here instead, and only when EVERY place reached
+  // is an answer file. A command that touches one of these AND somewhere
+  // genuinely outside has left the workspace, and that is the more urgent fact
+  // to lead with.
+  const crossingList = Array.isArray(req.crossings) ? req.crossings : [];
+  const answerFile = req.answer_file === true
+    || (crossingList.length > 0 && crossingList.every(c => c && c.answerFile));
   // A standing folder grant is only on offer when the crossing HAS a folder.
   // A shell command denied by the runtime sandbox and retried with the sandbox
   // turned off is a crossing established by the operating system, not by a
@@ -627,12 +738,53 @@ function renderPermissionCard(d, convoId) {
   // The crossing whose tags decide the card's copy, resolved once rather
   // than re-derived below. A secrets-registry hit wins over an ordinary
   // persistence-surface write when a command reaches both.
-  const flaggedCrossing = crossings.find(c => c && c.secret) || crossings.find(c => c && c.persistenceSurface) || null;
+  const flaggedCrossing = crossings.find(c => c && c.secret) || crossings.find(c => c && c.answerFile) || crossings.find(c => c && c.persistenceSurface) || null;
   // No grant may suppress a secrets-registry crossing's card. The hook
   // never sends a whole-folder grantDir for one, but the card enforces this
   // itself too, rather than trusting that upstream alone.
-  const wholeFolderOffered = grantable && !(flaggedCrossing && flaggedCrossing.secret);
-  if (boundary) {
+  // NOR FOR AN ANSWER FILE. A request can reach several places at once, so the
+  // ordinary grantable crossing can be first while a later one is the file that
+  // records permission answers. Offering the folder button then would let one
+  // click grant standing authority over the mechanism that stores the answers,
+  // which is the whole thing this is preventing.
+  const wholeFolderOffered = grantable
+    && !(flaggedCrossing && (flaggedCrossing.secret || flaggedCrossing.answerFile))
+    && !crossings.some(c => c && c.answerFile);
+  // A COMMAND THAT REACHES OUTSIDE WITHOUT TRIPPING THE BOUNDARY CHECK.
+  //
+  // The boundary check inspects tokens that look like paths, which is the
+  // right basis for a decision: it does not guess. A path inside a quoted
+  // interpreter argument is not its own token, so `python3 -c
+  // "open('/Users/me/.ssh/id_rsa')"` reaches outside without being classified
+  // as a crossing. It is still carded, by the risk grader, because invoking an
+  // interpreter grades above the read-only commands that auto-approve. So the
+  // fact was already on the screen: the command text says exactly what it
+  // opens.
+  //
+  // What failed was the question being asked. The card said "may this command
+  // run", which is easy to approve while reading past the path inside it. Said
+  // out loud, it becomes "may this command run, knowing it reaches outside
+  // your workspace", which is the sentence that makes someone stop.
+  //
+  // This changes no decision. It adds a line to a card that was already being
+  // shown, and the scan behind it is deliberately kept out of every decision
+  // path, because it over-matches by design.
+  // READ OFF THE REQUEST, where every other field from the hook lives. Read
+  // off the top-level message it was always undefined, so the line this exists
+  // to add never appeared: the scan ran, the value travelled, and the card was
+  // worded as though it had not. `d` is kept as a fallback so a future
+  // transport that hoists the field does not silently lose it again.
+  const advisoryPaths = Array.isArray(req.advisory_outside_paths) ? req.advisory_outside_paths
+    : (Array.isArray(d.advisory_outside_paths) ? d.advisory_outside_paths : []);
+  const advisoryOnly = !boundary && advisoryPaths.length > 0;
+
+  if (answerFile) {
+    // What is at stake, said plainly. Not which tool, not where the file sits:
+    // this request would change the rules that decide what agents may do.
+    summary = 'Wants to change what agents are allowed to do';
+    detail = req.resolved_path || detail;
+    context = RundockPermissions.answerFileCopy();
+  } else if (boundary) {
     const reads = toolName === 'Read' || toolName === 'Glob' || toolName === 'Grep';
     // A shell crossing does not say which act it is. The command may read,
     // write, or reach a host, and the request carries no direction, so naming
@@ -646,9 +798,26 @@ function renderPermissionCard(d, convoId) {
       // behind the "Show command" toggle would hide the very thing the copy
       // says is listed, and an inline code element renders the separators as
       // spaces so the paths run together.
+      // Same reasoning as the single-crossing branch below: for a command, the
+      // list of places answers "where", and only the command answers "what".
+      // The first version of this fix covered one branch and not this one, so a
+      // multi-path card still hid the command that built the paths.
+      if (toolName === 'Bash' && detail) commandDetail = detail;
       detail = crossings.map(c => c.path).join('\n');
       context = 'This reaches more than one place outside your workspace. All of them are listed, and approving allows the whole request.';
     } else {
+      // THE COMMAND IS KEPT, not replaced by the path it reached.
+      //
+      // This branch used to overwrite `detail` with the resolved path, and for
+      // a Bash request `detail` WAS the command, so the card asked a person to
+      // approve a shell command while showing them only a folder. The owner met
+      // exactly that: a card naming the folder above his workspace, for a
+      // command he could not see, with no way to tell whether it made sense. It
+      // did not, and answering took a transcript and twenty minutes.
+      //
+      // A path answers "where is this going". For a command, the only thing
+      // that makes that judgeable is "what is it doing". Both are shown.
+      if (toolName === 'Bash' && detail) commandDetail = detail;
       detail = req.resolved_path || detail;
       context = grantable
         ? 'Outside-workspace access needs your approval. "Always allow this folder" remembers it for this workspace only.'
@@ -661,8 +830,31 @@ function renderPermissionCard(d, convoId) {
     // replacing the other: dropping the multi-crossing sentence here would
     // leave every place still listed in the detail block while no longer
     // telling the reader that approving allows all of them at once.
-    const homeCopy = RundockPermissions.agentHomeBoundaryCopy(flaggedCrossing);
-    if (homeCopy) context = crossings.length > 1 ? `${context} ${homeCopy}` : homeCopy;
+    const stakesCopy = RundockPermissions.alwaysAskCopy(flaggedCrossing);
+    if (stakesCopy) context = crossings.length > 1 ? `${context} ${stakesCopy}` : stakesCopy;
+    // THE CARD AND THE SETTING AGREE, or the setting is undiscoverable at the
+    // one moment it would help. This card is where being outside the workspace
+    // is actually felt, and the answer to meeting it thirty times in one build
+    // is not to approve faster: it is to say where this team works. So the card
+    // names the setting, and names it ONLY where naming a folder would in fact
+    // change the outcome.
+    //
+    // Deliberately not shown for a runtime-home crossing, which is what the
+    // branch above covers: naming a folder does not move the secrets tier or
+    // the persistence surfaces, and offering it there would be advice that
+    // quietly does nothing.
+    // ONLY WHERE A PATH WAS ACTUALLY RECOGNISED. The sandbox-retry card carries
+    // no path at all: the operating system established the crossing, not a
+    // target the hook could read. Naming a folder cannot answer that card, and
+    // in Knowledge mode on macOS it cannot answer it even in principle, because
+    // the OS write block is unchanged by naming. So a reader who HAS named the
+    // folder would meet a card telling them to name it, which is the same
+    // mistake the runtime-home branch above exists to avoid.
+    else if (crossings.length > 0 || req.resolved_path) context = `${context} ${nameTheFolderHint()}`;
+    // No path at all: the sandbox retry. It gets the honest explanation rather
+    // than silence, because a card with nothing to say about why it appeared is
+    // what sends someone to the setting that cannot help.
+    else context = `${context} ${SANDBOX_RETRY_HINT}`;
   }
 
   // Store callback data for safe event handling (no inline onclick injection).
@@ -679,6 +871,16 @@ function renderPermissionCard(d, convoId) {
   const card = document.createElement('div');
   card.className = 'msg msg-permission';
   card.id = 'perm-' + requestId;
+  if (advisoryOnly) {
+    const list = advisoryPaths.join(', ');
+    context = context
+      ? `${context} This command names a location outside your workspace: ${list}`
+      : `This command names a location outside your workspace: ${list}`;
+  }
+  // Shown at the weight of the question being asked. A command carrying an
+  // outside path is not automatically dangerous, and grading it as though it
+  // were would put a red card in front of ordinary work until the colour meant
+  // nothing.
   const renderRisk = boundary ? 'high' : risk;
   // Every value below is model-chosen: the tool name, the command text, the
   // file paths, up to 1500 characters of the content an agent wants to write.
@@ -702,11 +904,14 @@ function renderPermissionCard(d, convoId) {
         : (toolName === 'Bash' && input.description && detail.length > 60)
           ? `<details class="permission-detail-collapse"><summary>Show command</summary><code class="permission-detail">${esc(detail)}</code></details>`
           : `<code class="permission-detail">${esc(detail)}</code>`}
+      ${commandDetail
+        ? `<details class="permission-detail-collapse"><summary>Show command</summary><code class="permission-detail">${esc(commandDetail)}</code></details>`
+        : ''}
       <div class="permission-actions">
         <button class="btn-perm btn-allow" data-perm-id="${escAttr(requestId)}" data-perm-action="allow">Allow</button>
         ${wholeFolderOffered
           ? `<button class="btn-perm btn-always" data-perm-id="${escAttr(requestId)}" data-perm-action="allow-folder">Always allow this folder</button>`
-          : (!boundary && RundockPermissions.offersAlwaysAllow(risk) ? `<button class="btn-perm btn-always" data-perm-id="${escAttr(requestId)}" data-perm-action="always">Always allow</button>` : '')}
+          : (!boundary && !answerFile && RundockPermissions.offersAlwaysAllow(risk) ? `<button class="btn-perm btn-always" data-perm-id="${escAttr(requestId)}" data-perm-action="always">Always allow</button>` : '')}
         <button class="btn-perm btn-deny" data-perm-id="${escAttr(requestId)}" data-perm-action="deny">Deny</button>
       </div>
     </div>
@@ -725,7 +930,32 @@ function renderPermissionCard(d, convoId) {
   const t = document.getElementById('thinking-indicator');
   if (t) t.style.display = 'none';
 
-  m.appendChild(card);
+  // ABOVE THE RESPONSE BEING WRITTEN, not after it.
+  //
+  // A streaming bubble takes its place in the list when the agent STARTS
+  // speaking, and the final text is rendered back into that same element when
+  // the turn ends. Appending cards meanwhile put them below a response that
+  // had not been written yet, so a reader saw an agent's conclusion followed
+  // by approvals it had already been given before reaching it. Reported from
+  // real use: several approvals sitting under a message that could only have
+  // come after them.
+  //
+  // Inserting above the live bubble reads correctly and, unlike moving the
+  // finished message to the end, does not shift the text a person is midway
+  // through reading. A card belongs next to the work it interrupted.
+  // Positioning must never be able to stop a card rendering. getConvoState is
+  // an injected global, so a context that does not provide it (or a
+  // conversation with no live bubble) falls back to appending, which is the
+  // behaviour this replaced. A card in the wrong place is a reading annoyance;
+  // a card that throws is a decision the person never gets to make.
+  let live = null;
+  try {
+    live = (convoId && typeof getConvoState === 'function')
+      ? (getConvoState(convoId) || {}).currentStreamingMsg || null
+      : null;
+  } catch (e) { live = null; }
+  if (live && live.parentNode === m) m.insertBefore(card, live);
+  else m.appendChild(card);
   scrollBottom();
 }
 
@@ -763,6 +993,11 @@ function respondPermission(requestId, allow, always, allowFolder) {
   // Store always-allow pattern if requested
   if (allow && always) {
     alwaysAllowedTools.add(pending.key);
+    // Written back so the answer outlives this tab. The cache is updated first
+    // so the next card in the same session is silent whether or not the write
+    // lands; if it fails, the server tells the interface and the answer is
+    // asked again next time rather than being silently kept.
+    try { ws.send(JSON.stringify({ type: 'add_tool_allow', key: pending.key })); } catch (e) {}
   }
 
   // Replace the card with a resolved indicator
@@ -853,7 +1088,7 @@ return {
   addSystemMsg, buildDelegationDivider, renderAuthErrorCard, copyAuthCmd, agentDisplayName,
   renderCodexQuotaCard, renderCodexGuidanceCard, renderCodexErrorPill,
   createHistoryDivider, renderSessionHistory, classifyRisk,
-  describeToolRequest, toolAllowKey, handlePermissionRequest,
+  describeToolRequest, toolAllowKey, handlePermissionRequest, setStandingToolAllows,
   renderPermissionCard, renderPendingPermissionCards, respondPermission,
   resolvePermissionCard,
   formatToolName, formatToolShort, buildActivitySummary, scrollBottom,

@@ -201,12 +201,18 @@
   }
 
   // The rule between two agents in a thread: a hairline either side of a badge
-  // naming who took over. `joined` on a handoff, `resumed` when an orchestrator
-  // takes the thread back.
-  /** @param {AgentLike} agent @param {boolean} [isReturn] */
-  function delegationDividerHtml(agent, isReturn) {
+  // naming who just took the work.
+  //
+  // ONE WORD, because there is one case. This used to say `resumed` when the
+  // thread came back to an agent that already had it, and returns no longer
+  // draw anything: the bubble beneath carries that agent's avatar and name, and
+  // the one handing back says so in its own words. A second label for a divider
+  // that is never built would be a word the product cannot show, sitting in the
+  // source telling the next reader it can.
+  /** @param {AgentLike} agent */
+  function delegationDividerHtml(agent) {
     const { colour, icon, name } = identity(agent);
-    return `<div class="delegation-line"></div><div class="delegation-badge" style="color:${colour}"><span class="avatar xs" style="background:${colour}">${icon}</span>${name} ${isReturn ? 'resumed' : 'joined'}</div><div class="delegation-line"></div>`;
+    return `<div class="delegation-line"></div><div class="delegation-badge" style="color:${colour}"><span class="avatar xs" style="background:${colour}">${icon}</span>${name} joined</div><div class="delegation-line"></div>`;
   }
 
   // What a permission card becomes once it has been answered, whether the user

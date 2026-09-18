@@ -56,7 +56,7 @@ const persist = (() => {
 const sunIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>`;
 const moonIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>`;
 
-let ws=null, agents=[], conversations=[], activeConversation=null, currentView='home', currentFilePath=null, skills=[], skillsLoaded=false, currentWorkspacePath=null, servingWorkspacePath, rosterWorkspacePath, workspaceAnalysis=null, workspaceIsEmpty=false, workspaceMode='knowledge', setupComplete=true, conversationsLoaded=false, activeSidebarPill='all', convoLists=[];
+let ws=null, agents=[], conversations=[], activeConversation=null, currentView='home', currentFilePath=null, skills=[], skillsLoaded=false, currentWorkspacePath=null, servingWorkspacePath, rosterWorkspacePath, workspaceAnalysis=null, workspaceIsEmpty=false, workspaceMode='knowledge', sandboxManaged=true, setupComplete=true, conversationsLoaded=false, activeSidebarPill='all', convoLists=[];
 let runtimeStatus = null; // { defaultRuntime, claude: {installed, authenticated, version}, codex: {...} }
 const agentLastActivity = {}; // { agentId: { time: Date, label: string } }
 // Per-conversation state: { convoId: { isProcessing, currentStreamingMsg, latestText } }
@@ -213,6 +213,13 @@ function setConn(s) { const b=document.getElementById('connection-bar'); b.class
 // ===== 4. MESSAGE HANDLING =====
 
 function handle(d) {
+  // TWO FIELDS, AND THEY ARE NOT INTERCHANGEABLE. `_conversationId` tags a
+  // message emitted by a running agent process, so it is what the streaming
+  // cases route by. `conversationId` is echoed back by the synchronous
+  // save/delete replies, carrying the id the request was sent with. A new
+  // reply type must pick the one matching how it is produced: reaching for
+  // the wrong one is silent, because both are usually the conversation on
+  // screen and only diverge when a second conversation is running.
   const convoId = d._conversationId;
   switch(d.type) {
     case 'package_import_plan': case 'package_import_result': case 'package_import_error': packagesReplyArrived(d); break;
@@ -222,7 +229,7 @@ function handle(d) {
       // server times its own phases; without this the client is the one part
       // of a slow startup nobody can see.
       workspaceOpenStartedAt = Date.now();
-      onWorkspaceReady(d.path, d.analysis, d.isEmpty, d.workspaceMode, d.scaffoldError, d.setupComplete);
+      onWorkspaceReady(d.path, d.analysis, d.isEmpty, d.workspaceMode, d.scaffoldError, d.setupComplete, d.sandboxManaged);
       break;
     // WHICH WORKSPACE THE SCHEDULER IS SERVING, which is not the same question
     // as which workspace this window opened. There is one scheduler on this
@@ -244,10 +251,25 @@ function handle(d) {
       if (errEl) { errEl.textContent = d.message; errEl.style.display = 'block'; }
       break;
     }
+    // The list the settings surface renders, and the only source of it: the
+    // client never predicts the result of its own change, because the server
+    // normalises what it is sent.
+    case 'working_folders': workingFoldersArrived(d); break;
+    // The workspace's standing "always allow" answers. Seeded on connect and
+    // refreshed after every grant or revoke, so the cards and the settings list
+    // are never reading two different truths.
+    case 'tool_allows': toolAllowsArrived(d); break;
     case 'workspace_mode_changed':
       workspaceMode = d.mode;
-      // Re-render settings if currently viewing workspace settings
-      if (currentView === 'settings') renderSettingsSection('workspace');
+      // REDRAW WHICHEVER SECTION IS OPEN, read from the sidebar rather than
+      // assumed. This named 'workspace' because that is where the mode control
+      // used to live, so changing mode from anywhere else threw the reader back
+      // to a pane they had not asked for. The control moved to Permissions and
+      // this did not follow it.
+      if (currentView === 'settings') {
+        const open = document.querySelector('.settings-nav-item.active')?.getAttribute('data-settings');
+        if (open) renderSettingsSection(open);
+      }
       break;
     // Takes the chrome down as well as showing the screen. This arrives when
     // the server has no workspace, which can happen after it had one, so the
@@ -379,6 +401,18 @@ function handle(d) {
         convoState[convoId] = r.state;
         executeEffects(convoId, r.effects);
       }
+      // A turn the server had to send itself, because the branch that produced
+      // it kills the process before any result could carry it.
+      if (d.subtype === 'agent_turn' && convoId) {
+        const convo = conversations.find(c => c.id === convoId);
+        const r = RundockConversationState.reduce(getConvoState(convoId), d, {
+          isActive: activeConversation?.id === convoId,
+          convoAgentId: convo?.agentId,
+        });
+        convoState[convoId] = r.state;
+        executeEffects(convoId, r.effects);
+        break;
+      }
       // Agent switch: delegation handoff or return
       if(d.subtype==='agent_switch' && convoId) {
         const toAgent = agents.find(a => a.id === d.toAgent);
@@ -448,23 +482,23 @@ function handle(d) {
     case 'agent_saved':
       if (!d.updated) setupComplete = true;
       // Non-default runtimes are worth calling out on the confirmation pill.
-      addSystemMsg('Agent "' + (d.agentId || '') + '" ' + (d.updated ? 'updated' : 'created') + (d.runtime === 'codex' ? ' · runs on Codex' : ''));
+      addSystemMsgToConvo('Agent "' + (d.agentId || '') + '" ' + (d.updated ? 'updated' : 'created') + (d.runtime === 'codex' ? ' · runs on Codex' : ''), d.conversationId, false);
       break;
     case 'runtime_status':
       runtimeStatus = d;
       renderRuntimesCard();
       break;
     case 'agent_error':
-      addSystemMsg(d.message || 'Agent operation failed');
+      addSystemMsgToConvo(d.message || 'Agent operation failed', d.conversationId, false);
       break;
     case 'agent_deleted':
-      addSystemMsg('Agent "' + (d.agentId || '') + '" removed');
+      addSystemMsgToConvo('Agent "' + (d.agentId || '') + '" removed', d.conversationId, false);
       break;
     case 'skill_saved':
-      addSystemMsg('Skill "' + (d.skillId || '') + '" ' + (d.updated ? 'updated' : 'created'));
+      addSystemMsgToConvo('Skill "' + (d.skillId || '') + '" ' + (d.updated ? 'updated' : 'created'), d.conversationId, false);
       break;
     case 'skill_error':
-      addSystemMsg(d.message || 'Skill operation failed');
+      addSystemMsgToConvo(d.message || 'Skill operation failed', d.conversationId, false);
       break;
     // A routine write is the one save in this client the user waits on: the
     // editor stays on screen until the server answers, so a refusal has
@@ -514,7 +548,7 @@ function handle(d) {
       // second answer to a question the list already answers.
       break;
     case 'skill_deleted':
-      addSystemMsg('Skill "' + (d.skillId || '') + '" removed');
+      addSystemMsgToConvo('Skill "' + (d.skillId || '') + '" removed', d.conversationId, false);
       break;
     case 'active_processes':
       // Defer until workspace is ready and conversations are loaded
@@ -633,28 +667,41 @@ const EFFECT_EXECUTORS = {
       convo.messages.push({ role: 'agent', content: ef.text, agentId, timestamp: new Date().toISOString() });
     }
     const state = getConvoState(convoId);
-    if (state.currentStreamingMsg && activeConversation?.id === convoId) {
-      const streamEl = state.currentStreamingMsg.querySelector('.streaming-text');
-      if (streamEl) {
-        streamEl.classList.remove('streaming-text');
-        streamEl.innerHTML = formatMd(ef.text);
-      }
+    if (activeConversation?.id !== convoId) return;
+    const streamEl = state.currentStreamingMsg && state.currentStreamingMsg.querySelector('.streaming-text');
+    if (streamEl) {
+      streamEl.classList.remove('streaming-text');
+      streamEl.innerHTML = formatMd(ef.text);
+      return;
     }
+    // NO BUBBLE TO PROMOTE, SO ONE IS MADE.
+    //
+    // This executor's job is that the outgoing agent's words appear as its
+    // turn. It only ever did half of that: promoting a bubble that already
+    // existed, and silently doing nothing to the screen when there was none.
+    // That is the case for an agent that delegates without speaking, and it is
+    // why such a handoff was recorded to the transcript, shown correctly on
+    // reload, and invisible at the moment it happened.
+    addAgentMsg(ef.text, agentId);
   },
   'clear-streaming-bubble': (convoId) => {
     getConvoState(convoId).currentStreamingMsg = null;
   },
   'render-convo-list': () => renderConvoList(),
   'show-delegation-divider': (convoId, ef) => {
+    // DRAWN, AND NOT KEPT. An arrival is a notification: it tells the person,
+    // at the moment it happens, that somebody new has taken the work. It used
+    // to be recorded into the conversation so it survived navigating away and
+    // back, which made re-reading a conversation behave one way after a
+    // navigation and another after a reload, for no reason a person could
+    // predict. Both are the same intent, re-reading, and neither is the moment
+    // the arrival happened. What carries it afterwards is the avatar and name
+    // on every bubble, and the departing agent's own sentence saying where the
+    // work went.
     const toAgent = agents.find(a => a.id === ef.toAgentId);
     const m = document.getElementById('messages');
-    m.appendChild(buildDelegationDivider(toAgent, ef.isReturn));
+    m.appendChild(buildDelegationDivider(toAgent));
     scrollBottom();
-    // Persist divider as explicit marker so it survives navigate-away/back
-    const convo = conversations.find(c => c.id === convoId);
-    if (convo) {
-      convo.messages.push({ role: 'divider', agentId: ef.toAgentId, fromAgentId: ef.fromAgentId, isReturn: ef.isReturn });
-    }
   },
   'update-chat-header': (convoId, ef) => {
     const toAgent = agents.find(a => a.id === ef.toAgentId);
@@ -688,6 +735,9 @@ const EFFECT_EXECUTORS = {
     if (!status) {
       // Thinking indicator was removed when streaming started; re-add it below the streaming message
       const a = agents.find(x => x.id === ef.agentId) || activeConversation?.agent || agents[0];
+      // Same rule as the other creation site: never leave two elements holding
+      // this id, or the older one silently receives the newer agent's activity.
+      const stale = document.getElementById('thinking-indicator'); if (stale) stale.remove();
       const m = document.getElementById('messages'), el = document.createElement('div');
       el.className = 'msg msg-agent'; el.id = 'thinking-indicator';
       el.innerHTML = RundockChatMarkup.thinkingIndicatorHtml(a);
@@ -812,7 +862,11 @@ function handleResult(d, convoId) {
       delete_agent: a => ({ type: 'delete_agent', agentId: a.name }),
     };
     for (const action of scan.actions) {
-      ws.send(JSON.stringify(MARKER_SENDS[action.kind](action)));
+      // THE CONVERSATION THAT PRODUCED THE MARKER, SENT WITH IT. Without this
+      // the reply has nothing to route by, and its confirmation pill lands in
+      // whichever conversation happens to be on screen: a skill created in one
+      // thread announcing itself in another.
+      ws.send(JSON.stringify({ ...MARKER_SENDS[action.kind](action), conversationId: convoId }));
       filesCreated++;
       console.log('[Marker]', action.kind + ':', action.name);
     }
@@ -835,7 +889,7 @@ function handleResult(d, convoId) {
     // wrapper. Only when the marker scan produced no save/delete actions.
     if(filesCreated === 0) {
       for (const fm of RundockMarkers.extractFrontmatterAgents(textToScan)) {
-        ws.send(JSON.stringify({ type: 'save_agent', name: fm.name, content: fm.content }));
+        ws.send(JSON.stringify({ type: 'save_agent', name: fm.name, content: fm.content, conversationId: convoId }));
         filesCreated++;
         console.log('[Agent] Fallback extraction:', fm.name);
       }
@@ -1346,7 +1400,7 @@ function handleWorkspaces(d) {
     // This path never sends set_workspace, so start the render clock here or
     // the client's share of startup goes unmeasured for these instances.
     workspaceOpenStartedAt = Date.now();
-    onWorkspaceReady(d.current, d.analysis, d.isEmpty, d.workspaceMode, d.scaffoldError, d.setupComplete);
+    onWorkspaceReady(d.current, d.analysis, d.isEmpty, d.workspaceMode, d.scaffoldError, d.setupComplete, d.sandboxManaged);
     return;
   }
   // No workspace set, show picker
@@ -1523,7 +1577,7 @@ function setRosterWorkspace(path) {
   setServingWorkspace(path);
 }
 
-function onWorkspaceReady(dir, analysis, isEmpty, mode, scaffoldError, isSetupComplete) {
+function onWorkspaceReady(dir, analysis, isEmpty, mode, scaffoldError, isSetupComplete, sandboxIsManaged) {
   const isSameWorkspace = (currentWorkspacePath === dir);
   currentWorkspacePath = dir;
   // The server confirmed this path out of its own root, so it is the serving
@@ -1533,6 +1587,12 @@ function onWorkspaceReady(dir, analysis, isEmpty, mode, scaffoldError, isSetupCo
   workspaceAnalysis = analysis || null;
   workspaceIsEmpty = !!isEmpty;
   workspaceMode = mode || 'knowledge';
+  // WHETHER THE MODE MEANS WHAT THE PANE SAYS IT MEANS. Rundock never rewrites
+  // a sandbox block someone else wrote, so in that workspace the mode switch
+  // moves nothing, and the settings pane must stop promising it does. Defaulted
+  // to true when a server has not sent it, so an older server produces the copy
+  // it always produced rather than a warning nobody can act on.
+  sandboxManaged = sandboxIsManaged !== undefined ? !!sandboxIsManaged : true;
   setupComplete = isSetupComplete !== undefined ? !!isSetupComplete : true;
 
   // Handle scaffold error for new workspaces
@@ -1548,11 +1608,19 @@ function onWorkspaceReady(dir, analysis, isEmpty, mode, scaffoldError, isSetupCo
   ws.send(JSON.stringify({ type: 'get_conversations' }));
   ws.send(JSON.stringify({ type: 'get_lists' }));
   ws.send(JSON.stringify({ type: 'get_runtime_status' }));
+  // ASKED HERE, not when the settings pane opens. The whole point of a
+  // standing allow is that a reload does not undo it, and the set lives in
+  // this page's memory: if the only thing that fetched it were the settings
+  // pane, then a person who reloaded and went straight back to work would
+  // meet the card they had already answered, which is the defect rather than
+  // the fix. Sent with the rest of the workspace's data so it arrives before
+  // any permission request for this workspace can be decided.
+  ws.send(JSON.stringify({ type: 'get_tool_allows' }));
   skillsLoaded = false;
   currentSkillId = null;
   // A package plan describes one workspace's collision facts and defaults;
   // a different workspace returns the install flow to idle.
-  if (!isSameWorkspace) { packagesWorkspaceChanged(); connectorsWorkspaceChanged(); }
+  if (!isSameWorkspace) { packagesWorkspaceChanged(); connectorsWorkspaceChanged(); workingFoldersWorkspaceChanged(); }
 
   if (isSameWorkspace && currentView !== 'workspace') {
     // Reconnect to same workspace: keep in-memory conversations and active view intact.

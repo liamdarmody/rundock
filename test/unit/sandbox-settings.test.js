@@ -26,7 +26,7 @@ const os = require('node:os');
 const { execFileSync } = require('node:child_process');
 const SCAFFOLD = path.join(__dirname, '..', '..', 'lib', 'workspace', 'scaffold.js');
 
-const { sandboxSettings } = require('../../lib/workspace/scaffold.js');
+const { sandboxSettings, isRundockSandbox } = require('../../lib/workspace/scaffold.js');
 
 const WS = '/tmp/sandbox-ws';
 const HOME = '/Users/someone';
@@ -145,5 +145,242 @@ describe('sandboxSettings', () => {
     // was not RUN here, and every other value in this file was. Linux stays
     // off until someone measures it rather than reads about it.
     assert.strictEqual(sandboxSettings(WS, 'linux', HOME), null);
+  });
+});
+
+// The named working folders, and the layer Rundock does not own.
+//
+// MEASURED against Claude Code 2.1.266 on 2026-09-12, by reading the shipped
+// binary rather than the documentation:
+//
+//   - `sandbox.enabled` resolves as `enabled ?? false`. No block is no sandbox.
+//   - The enable is an OR across EVERY settings layer (managed, flags, user,
+//     project, local): `[...].some((e) => e?.sandbox?.enabled === true)`.
+//     Rundock writes the local layer alone, so a user who enabled the sandbox
+//     in their own ~/.claude/settings.json has enabled it for every workspace
+//     on the machine and nothing Rundock writes can disable it.
+//   - Write allowlists UNION across layers, verified in a live session
+//     carrying a user-level entry and a workspace-level one, both honoured.
+//
+// Together those are why Code mode contributes paths with no enable: deleting
+// the block removed Rundock's enable and left the user's, and the workspace
+// then met an operating system that had never been told which folders the user
+// named. That is the reported defect, and no amount of naming folders in
+// Rundock fixed it, because the folders never reached this file.
+describe('sandboxSettings: named working folders', () => {
+  const FOLDERS = ['/Users/someone/Projects', '/Users/someone/Tools'];
+
+  test('a named folder is writable, which is the whole of the reported defect', () => {
+    const s = sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], FOLDERS);
+    for (const f of FOLDERS) assert.ok(s.filesystem.allowWrite.includes(f), `${f} is writable`);
+  });
+
+  // WHAT THE BLOCK LOOKED LIKE BEFORE THIS CHANGE, written out rather than
+  // computed. The first version of the test below compared sandboxSettings to
+  // ITSELF with an empty folder list, which passes however much the block
+  // changes: it proved the folders argument defaults to empty and nothing
+  // whatever about matching what shipped. A reference the code cannot rebuild
+  // is the only thing that can catch a key appearing or a value moving.
+  const SHIPPED_KNOWLEDGE_BLOCK = {
+    enabled: true,
+    autoAllowBashIfSandboxed: true,
+    filesystem: {
+      allowWrite: [
+        WS,
+        `${HOME}/.npm`,
+        `${HOME}/.claude`,
+        `${HOME}/.claude.json`,
+        '/tmp/claude',
+        '/private/tmp/claude',
+        '/tmp/t',
+      ],
+    },
+    network: { allowedDomains: ['*'] },
+  };
+
+  test('a workspace with no folders writes what it wrote before, and the deny is the one intended difference', () => {
+    const s = sandboxSettings(WS, 'darwin', HOME, ['/tmp/t']);
+    // The deny list is a deliberate addition made after the criteria were
+    // frozen, approved on the ledger rather than slipped in: it protects the
+    // file this very block is built from. It is the ONLY difference, and
+    // subtracting it must leave the shipped block exactly.
+    assert.deepStrictEqual(s.filesystem.denyWrite,
+      [`${WS}/.rundock/state.json`, `${WS}/.rundock/permissions.json`, `${WS}/.claude/settings.local.json`],
+      'the intended difference, named: every file that holds answers to permission questions, the workspace\'s own permission configuration included');
+    const { denyWrite, ...filesystem } = s.filesystem;
+    assert.deepStrictEqual({ ...s, filesystem }, SHIPPED_KNOWLEDGE_BLOCK,
+      'and with it removed, key for key and value for value, the block that shipped');
+  });
+
+  test('naming folders appends to the write list and changes nothing else', () => {
+    const s = sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], FOLDERS);
+    const { denyWrite, ...filesystem } = s.filesystem;
+    const base = SHIPPED_KNOWLEDGE_BLOCK.filesystem.allowWrite;
+    assert.deepStrictEqual(filesystem.allowWrite, [...base, ...FOLDERS],
+      'the folders go on the end, and the head keeps the positions the recogniser reads');
+    assert.deepStrictEqual(
+      { ...s, filesystem: { allowWrite: base } },
+      SHIPPED_KNOWLEDGE_BLOCK,
+      'every other key is untouched: the enable, the prompting flag and the network stay as they were');
+  });
+
+  test('Code mode turns the sandbox off, rather than declining to turn it on', () => {
+    const s = sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], FOLDERS, 'code');
+    // Saying false, not saying nothing. Absence loses to any layer that enables:
+    // the user's own ~/.claude/settings.json, or the runtime's default once any
+    // sandbox key exists. Code mode is documented as having the write block off,
+    // and a headless browser cannot launch under Seatbelt whatever the allowWrite
+    // list says, so silence here meant an unsilenceable card on every render.
+    assert.strictEqual(s.enabled, false, 'off, stated, so no other layer can enable it back');
+    assert.ok(!('autoAllowBashIfSandboxed' in s), 'and no prompting claim to go with it');
+    assert.ok(!('network' in s),
+      'and no network key: "*" unioned into a layer would widen a policy the user set deliberately');
+    for (const f of FOLDERS) assert.ok(s.filesystem.allowWrite.includes(f),
+      'but the folders are here, for the case where another layer did the enabling');
+  });
+
+  test('Knowledge mode is unchanged except for the folders', () => {
+    const s = sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], FOLDERS);
+    assert.strictEqual(s.enabled, true);
+    assert.strictEqual(s.autoAllowBashIfSandboxed, true);
+    assert.deepStrictEqual(s.network, { allowedDomains: ['*'] });
+  });
+
+  test('the file this block is built from cannot be written by what the block contains', () => {
+    // .rundock/state.json holds the mode and the named folders, and both decide
+    // what this block says. It also sits inside the workspace, so the
+    // permission hook classifies a write to it as inside and never cards it.
+    // Without a deny, an agent could widen the boundary it is standing inside
+    // by editing that file and waiting for the next reconcile.
+    for (const mode of ['knowledge', 'code']) {
+      const s = sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], FOLDERS, mode);
+      assert.deepStrictEqual(s.filesystem.denyWrite,
+        [`${WS}/.rundock/state.json`, `${WS}/.rundock/permissions.json`, `${WS}/.claude/settings.local.json`],
+        `${mode} mode denies writes to the files that answer permission questions`);
+    }
+  });
+
+  test('the deny names that file alone, so agent scratch under .rundock still works', () => {
+    const s = sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], FOLDERS);
+    assert.ok(!s.filesystem.denyWrite.includes(`${WS}/.rundock`),
+      'denying the folder would take away the scratch location agents are told to use');
+  });
+
+  test('a block written before the deny existed is still ours, so it upgrades rather than stranding', () => {
+    // A block its own recogniser refuses is one Rundock can never rewrite OR
+    // withdraw, which would leave every existing workspace stuck with the
+    // shape it already has and no way to move off it.
+    const current = sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], FOLDERS);
+    const before = JSON.parse(JSON.stringify(current));
+    delete before.filesystem.denyWrite;
+    assert.strictEqual(isRundockSandbox(before, 'darwin'), true);
+  });
+
+  test('the Code mode block written before `enabled` was set is still ours, so it upgrades', () => {
+    // The other axis that has moved. Every workspace opened in Code mode before
+    // this change carries `{ filesystem }` with no `enabled` key. The recogniser
+    // rebuilds the CURRENT shape and compares text, so without this that block
+    // reads as a person's hand edit: never reconciled, never withdrawn, and it
+    // keeps the very sandbox Code mode was changed to switch off.
+    const current = sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], FOLDERS, 'code');
+    assert.strictEqual(current.enabled, false, 'sanity: the current block states it');
+    const older = JSON.parse(JSON.stringify(current));
+    delete older.enabled;
+    assert.strictEqual(isRundockSandbox(older, 'darwin'), true,
+      'the key-less Code mode block is one we wrote, and must be rewritten rather than preserved');
+
+    // And both axes at once, because a workspace can be behind on both: opened
+    // in Code mode under 0.13.1, it has neither the key nor the full deny list.
+    const deny = older.filesystem.denyWrite || [];
+    assert.ok(deny.length >= 2, 'sanity: there is still a deny list to narrow');
+    for (let n = 0; n < deny.length; n++) {
+      const behindOnBoth = JSON.parse(JSON.stringify(older));
+      if (n === 0) delete behindOnBoth.filesystem.denyWrite;
+      else behindOnBoth.filesystem.denyWrite = deny.slice(0, n);
+      assert.strictEqual(isRundockSandbox(behindOnBoth, 'darwin'), true,
+        `no key and the first ${n} deny entries is a shape we wrote, and must upgrade`);
+    }
+  });
+
+  test('a person\'s own enabled:true is still theirs, and Code mode does not seize it', () => {
+    // The limit of the above. Recognising the key-less shape must not slide into
+    // recognising any block with the right paths: a user who deliberately turned
+    // the sandbox ON in a Code mode workspace has authored something Rundock
+    // never wrote, and it stays theirs.
+    const current = sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], FOLDERS, 'code');
+    const theirs = { ...current, enabled: true };
+    assert.strictEqual(isRundockSandbox(theirs, 'darwin'), false,
+      'enabled:true in Code mode is a person\'s edit, not a shape Rundock ever wrote');
+  });
+
+  test('every deny list Rundock has ever written is recognised, so no release strands a workspace', () => {
+    // The gap this closes was a real upgrade path, not a hypothetical one:
+    // 0.13.1 and 0.13.2 wrote a deny list of exactly one entry, so every
+    // workspace opened under either carried a shape the recogniser refused.
+    // Refused means never rewritten and never withdrawn.
+    //
+    // Walked from the current list rather than written out, so an entry added
+    // later is covered on the day it is added rather than the day someone
+    // remembers to extend this test.
+    for (const mode of ['knowledge', 'code']) {
+      const current = sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], FOLDERS, mode);
+      const deny = current.filesystem.denyWrite || [];
+      assert.ok(deny.length >= 2, `sanity: the ${mode} block still carries a deny list to narrow`);
+      for (let n = 0; n < deny.length; n++) {
+        const older = JSON.parse(JSON.stringify(current));
+        if (n === 0) delete older.filesystem.denyWrite;
+        else older.filesystem.denyWrite = deny.slice(0, n);
+        assert.strictEqual(isRundockSandbox(older, 'darwin'), true,
+          `a ${mode} block carrying the first ${n} deny entries is one we wrote, and must upgrade`);
+      }
+    }
+  });
+
+  test('a deny list that is not a prefix of ours is somebody else\'s edit', () => {
+    // The other direction, so the walk above cannot be satisfied by accepting
+    // anything at all: a person who added their own path to the deny list has
+    // authored the block, and Rundock must leave it alone rather than
+    // overwrite the entry they added.
+    const current = sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], FOLDERS);
+    const edited = JSON.parse(JSON.stringify(current));
+    edited.filesystem.denyWrite = [...current.filesystem.denyWrite, `${WS}/notes.md`];
+    assert.strictEqual(isRundockSandbox(edited, 'darwin'), false,
+      'an entry we never write means the block is not ours to rewrite');
+  });
+
+  test('both shapes are recognised as ours, with folders present', () => {
+    for (const mode of ['knowledge', 'code']) {
+      const block = sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], FOLDERS, mode);
+      assert.strictEqual(isRundockSandbox(block, 'darwin'), true, `${mode} block is ours`);
+    }
+  });
+
+  test('a block whose folder list has since changed is still ours, and so still reconciles', () => {
+    // The user added a folder after this block was written. Recognised from the
+    // head, never from a comparison against the current list: a block we cannot
+    // recognise is one we can never rewrite or withdraw, which is how a
+    // workspace gets stranded with an operating system nobody can talk to.
+    const stale = sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], ['/Users/someone/Old']);
+    assert.strictEqual(isRundockSandbox(stale, 'darwin'), true);
+  });
+
+  test('a stranger who happens to list folders is still refused', () => {
+    const stranger = {
+      enabled: true,
+      filesystem: { allowWrite: [WS, path.join(HOME, '.npm'), ...FOLDERS] },
+      network: { allowedDomains: ['*'] },
+    };
+    assert.strictEqual(isRundockSandbox(stranger, 'darwin'), false,
+      'the runtime roots are missing from the head, so it was not written here');
+  });
+
+  test('the Code-mode shape is not mistaken for a Knowledge-mode one, or the reverse', () => {
+    const code = sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], FOLDERS, 'code');
+    const knowledge = sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], FOLDERS);
+    assert.notDeepStrictEqual(code, knowledge, 'the two shapes are actually different');
+    // Each is recognised on its own terms, which is what lets a workspace that
+    // changed mode recognise what it wrote before and converge on the new shape.
+    assert.strictEqual(isRundockSandbox({ ...code, enabled: true }, 'darwin'), false,
+      'a Code-mode block with an enable bolted on is not a shape we ever wrote');
   });
 });

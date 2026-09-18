@@ -1,11 +1,12 @@
 {
   "name": "rundock",
-  "version": "0.13.0",
+  "version": "0.13.3",
   "description": "A visual workspace for your AI agent team. Built for people running their own businesses. Works with your Claude or ChatGPT subscription.",
   "main": "electron/main.js",
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",
+    "look": "node scripts/look.js",
     "test": "node --test \"test/**/*.test.js\"",
     "test:coverage": "node --test --experimental-test-coverage --test-coverage-include=server.js --test-coverage-include=lib/**/*.js --test-coverage-include=search.js --test-coverage-include=codex.js --test-coverage-include=codex-appserver.js --test-coverage-include=public/routine-editor-model.js --test-coverage-include=public/routines-model.js --test-coverage-include=public/run-detail-model.js --test-coverage-include=public/markers.js --test-coverage-include=public/conversation-state.js --test-coverage-include=public/permissions.js --test-coverage-include=public/conversation-list.js --test-coverage-include=public/palette-model.js --test-coverage-include=public/code-language.js --test-coverage-include=public/unread-state.js --test-coverage-include=public/chat-markup.js --test-coverage-include=public/markdown-render.js --test-coverage-include=public/file-tree-diff.js --test-coverage-include=permission-routing.js --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage.lcov \"test/**/*.test.js\" && node test/tools/coverage-areas.js coverage.lcov",
     "update": "git pull origin main && npm install && echo '\\n  Rundock updated. Run: npm start'",
@@ -15,11 +16,12 @@
     "release:gate": "node scripts/release-gate.js",
     "release": "node scripts/release.js",
     "test:e2e": "playwright test",
+    "preflight": "node scripts/preflight.js",
     "check:refs": "node scripts/check-internal-refs.js",
     "precommit": "node scripts/precommit-gate.js",
     "red-first": "node scripts/red-first.js",
     "mutate:guards": "node scripts/mutation-scope.js",
-    "mutate:guards:all": "node test/tools/mutate-render-guards.js --markdown && node test/tools/mutate-routine-editor-guards.js --markdown && node test/tools/mutate-routines-guards.js --markdown && node test/tools/mutate-run-detail-guards.js --markdown && node test/tools/mutate-nav-guards.js --markdown && node test/tools/mutate-workspace-rollback-guards.js --markdown && node test/tools/mutate-fence-guards.js --markdown && node test/tools/mutate-atomic-write-guards.js --markdown && node test/tools/mutate-import-apply-guards.js --markdown && node test/tools/mutate-import-plan-guards.js --markdown && node test/tools/mutate-import-protocol-guards.js --markdown && node test/tools/mutate-install-flow-guards.js --markdown && node test/tools/mutate-routines-truth-guards.js --markdown && node test/tools/mutate-sdlc-gate-guards.js --markdown && node test/tools/mutate-map-foothold-guards.js --markdown && node test/tools/mutate-approve-once-guards.js --markdown && node test/tools/mutate-extension-host-guards.js --markdown && node test/tools/mutate-workspace-boundary-guards.js --markdown && node test/tools/mutate-pins-guards.js --markdown && node test/tools/mutate-map-view-guards.js --markdown",
+    "mutate:guards:all": "node test/tools/mutate-render-guards.js --markdown && node test/tools/mutate-routine-editor-guards.js --markdown && node test/tools/mutate-routines-guards.js --markdown && node test/tools/mutate-run-detail-guards.js --markdown && node test/tools/mutate-nav-guards.js --markdown && node test/tools/mutate-workspace-rollback-guards.js --markdown && node test/tools/mutate-fence-guards.js --markdown && node test/tools/mutate-atomic-write-guards.js --markdown && node test/tools/mutate-import-apply-guards.js --markdown && node test/tools/mutate-import-plan-guards.js --markdown && node test/tools/mutate-import-protocol-guards.js --markdown && node test/tools/mutate-install-flow-guards.js --markdown && node test/tools/mutate-routines-truth-guards.js --markdown && node test/tools/mutate-sdlc-gate-guards.js --markdown && node test/tools/mutate-map-foothold-guards.js --markdown && node test/tools/mutate-approve-once-guards.js --markdown && node test/tools/mutate-extension-host-guards.js --markdown && node test/tools/mutate-workspace-boundary-guards.js --markdown && node test/tools/mutate-run-now-guards.js --markdown && node test/tools/mutate-pins-guards.js --markdown && node test/tools/mutate-map-view-guards.js --markdown",
     "check:fixture": "node test/tools/regenerate-benign-before.js --check",
     "lint:styles": "node test/tools/style-drift.js",
     "typecheck": "tsc -p tsconfig.server.json && tsc -p tsconfig.client.json",
@@ -27,7 +29,8 @@
     "smoke": "node scripts/smoke/run.mjs",
     "smoke:personas": "node scripts/smoke/personas.mjs",
     "stream:truth": "node scripts/stream-truth/run.mjs",
-    "transcript:truth": "node scripts/transcript-truth/run.mjs"
+    "transcript:truth": "node scripts/transcript-truth/run.mjs",
+    "precommit:detached": "sh -c 'mkdir -p .rundock && nohup node scripts/precommit-gate.js > .rundock/gate.log 2>&1 < /dev/null & echo \"gate detached (pid $!). Follow it: tail -f .rundock/gate.log\"'"
   },
   "dependencies": {
     "electron-updater": "^6.8.9",
@@ -90,7 +93,8 @@
       "package.json"
     ],
     "asarUnpack": [
-      "scripts/**/*"
+      "scripts/**/*",
+      "public/read-only-shell.js"
     ],
     "icon": "electron/build/icon.icns",
     "afterPack": "scripts/afterPack.js",

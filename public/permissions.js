@@ -7,8 +7,19 @@
 //
 // The permission decision path spans THREE layers (see ARCHITECTURE.md):
 // the PreToolUse hook script, the server bridge, and THIS module in the
-// browser. The auto-allow policy for low-risk read-only commands lives
-// here, client-side, and nowhere else.
+// browser. The auto-allow POLICY for low-risk read-only commands lives here,
+// client-side, and nowhere else; what counts as read-only FOR A BASH COMMAND
+// is a separate question, answered once in public/read-only-shell.js and read
+// by the hook as well, because a command the hook read as harmless used to be
+// carded here anyway by a narrower list kept alongside the policy.
+//
+// SCOPED TO BASH, DELIBERATELY. classifyRisk's PowerShell branch below still
+// judges read-only-ness with a wider heuristic of its own (any `Get-*`,
+// `Where-Object`) that the shared module does not know about, so the hook and
+// this file can still disagree about the same PowerShell text in exactly the
+// shape the Bash path no longer can. That is a known gap carried on its own
+// card; this comment states where the single answer stops rather than
+// implying the whole file has one.
 //
 // What this module decides (pinned by test/unit/permissions.test.js):
 //   classifyRisk()        low / medium / high per tool request
@@ -17,9 +28,18 @@
 //   decidePermission()    auto-allow (always-allowed or low-risk) vs card
 //   offersAlwaysAllow()   high-risk requests never get a standing allow
 (function (root, factory) {
-  if (typeof module === 'object' && module.exports) module.exports = factory();
-  else root.RundockPermissions = factory();
-}(typeof self !== 'undefined' ? self : this, function () {
+  if (typeof module === 'object' && module.exports) module.exports = factory(require('./read-only-shell.js'));
+  else root.RundockPermissions = factory(root.RundockReadOnlyShell);
+}(typeof self !== 'undefined' ? self : this, function (RundockReadOnlyShell) {
+
+  // The one definition of read-only, shared with the permission hook. This
+  // module used to keep a second, narrower one, and the two disagreed: a
+  // command the hook read as harmless was carded here anyway. See
+  // public/read-only-shell.js.
+  var DISCARDING_REDIRECT_RE = RundockReadOnlyShell.DISCARDING_REDIRECT_RE;
+  var shellSegments = RundockReadOnlyShell.shellSegments;
+  var isReadOnlyShellCommand = RundockReadOnlyShell.isReadOnlyShellCommand;
+  var isDestructiveShellCommand = RundockReadOnlyShell.isDestructiveShellCommand;
 
   const BASH_DESCRIPTIONS = {
     ls: 'List directory contents', cat: 'Read file contents', head: 'Read start of file',
@@ -33,73 +53,6 @@
   };
 
   function bashBin(cmd) { return cmd.split(/\s+/)[0].replace(/^.*\//, ''); }
-
-  // Risk of a shell command, judged across EVERY segment of a compound command
-  // (split on &&, ||, ;, |, &, and newlines), not just the first token. This
-  // stops a read-only prefix from smuggling a destructive command past the gate
-  // ("ls && rm x" is high, not low) and stops a harmless leading cd from
-  // forcing an all-read-only chain to look risky ("cd dir && ls" is low, so
-  // ordinary exploration is not carded). A destructive flag, a
-  // download-piped-to-a-shell, or a find that runs/deletes anywhere in the
-  // command is high regardless of segmenting. Structure the segmenter cannot
-  // see into (command/process substitution, backticks) never earns the low
-  // auto-allow verdict, so a destructive command hidden inside it still cards.
-  // Naive splitting can over-flag an operator inside a quoted string, which
-  // only ever errs toward showing a card (safe for a gate).
-  // A redirection that cannot create or modify a file: output thrown away at
-  // /dev/null, or a file descriptor duplicated onto another (`2>&1`). Stripped
-  // before this grader segments the command, for two reasons. It writes
-  // nothing, so it must not change what a command is graded as. And this
-  // grader splits on `&`, which cuts `2>&1` into `2>` and a bare `1` that
-  // matches no read-only pattern, so an ordinary listing graded medium and
-  // carded: measured on a real session, on the build that had already taught
-  // the boundary classifier this exact rule.
-  //
-  // KEPT IDENTICAL TO THE COPY IN scripts/permission-hook.js, and bound to it
-  // by a test. Two places deciding the same question about the same text is
-  // how they came to disagree; the client cannot require the hook (it is
-  // node-only and packaged apart), so the rule is duplicated deliberately and
-  // pinned rather than left to drift.
-  var DISCARDING_REDIRECT_RE = /\d*>>?\s*(?:\/dev\/null|&\s*\d+)/g;
-
-  // SPLIT ON OPERATORS, BUT NOT ON TEXT THAT LOOKS LIKE ONE. A regular
-  // expression is full of shell operator characters, and quoting is what tells
-  // them apart: `grep -oE '"(app|window_title)": ...' f | head` runs two
-  // commands, not four. A plain split cut the pattern in half, left a fragment
-  // starting with no command this grader knows, and carded a read: measured on
-  // a real session.
-  //
-  // Newlines separate too, because a shell runs each line, and a read-only
-  // first line must not shield a destructive one below it. Quote state is
-  // carried across them for the same reason it is carried anywhere else.
-  //
-  // The same shape as shellSegments in scripts/permission-hook.js, and bound to
-  // it by a test: the client cannot require that module, so the parser exists
-  // twice deliberately rather than by accident.
-  function shellSegments(command) {
-    var segments = [];
-    var cur = '';
-    var quote = null;
-    var str = String(command);
-    for (var i = 0; i < str.length; i++) {
-      var ch = str[i];
-      if (quote) {
-        cur += ch;
-        if (ch === quote) quote = null;
-        continue;
-      }
-      if (ch === "'" || ch === '"') { quote = ch; cur += ch; continue; }
-      if ((ch === '&' && str[i + 1] === '&') || (ch === '|' && str[i + 1] === '|')) {
-        segments.push(cur); cur = ''; i++; continue;
-      }
-      if (ch === ';' || ch === '|' || ch === '&' || ch === '\n' || ch === '\r') {
-        segments.push(cur); cur = ''; continue;
-      }
-      cur += ch;
-    }
-    segments.push(cur);
-    return segments.map(function (seg) { return seg.trim(); }).filter(Boolean);
-  }
 
   // ON WINDOWS, -Force IS HOW YOU SEE A HIDDEN FILE AT ALL. Get-ChildItem
   // -Force lists dot-folders; it overwrites nothing. Treating the switch as
@@ -127,39 +80,32 @@
     return false;
   }
 
+  // Risk of a shell command. The destructive tests run FIRST and read the
+  // whole command text, quotes included, so a read that also deletes can never
+  // grade low. Only after those does the read-only question get asked, and it
+  // is asked of the shared definition rather than of a list kept here: two
+  // places answering it about the same text is exactly how a command the hook
+  // read as harmless came to be carded anyway.
+  //
+  // Naive splitting can over-flag an operator inside a quoted string, which
+  // only ever errs toward showing a card (safe for a gate).
   function classifyBashRisk(rawCmd) {
-    var cmd = String(rawCmd || '').replace(DISCARDING_REDIRECT_RE, ' ').trim();
+    var raw = String(rawCmd || '').trim();
+    // A redirection that discards output writes nothing, so it must not change
+    // what a command is graded as; the destructive tests below read the whole
+    // string and cannot otherwise tell a discard from a write.
+    var cmd = raw.replace(DISCARDING_REDIRECT_RE, ' ').trim();
     if (!cmd) return 'low';
-    if (/--force|--hard|-rf\b/.test(cmd)) return 'high';
-    if (/git\s+(push|reset|clean|checkout\s+\.)/.test(cmd)) return 'high';
-    if (/\b(curl|wget)\b[\s\S]*\|\s*(sh|bash|zsh|dash)\b/.test(cmd)) return 'high';
-    // find is read-only until it runs a command or deletes: -exec/-execdir/-ok
-    // spawn an arbitrary command per match and -delete removes files, so a bare
-    // find leading segment must not shield these.
-    if (/\bfind\b[\s\S]*-(exec(dir)?|delete|ok(dir)?)\b/.test(cmd)) return 'high';
-    const DESTRUCTIVE = /^(rm|sudo|chmod|chown|kill|mkfs|dd)/;
-    // Note: `node -e`/`python -c` are deliberately NOT here. They are arbitrary
-    // code execution, not reads (a fs.rmSync or fetch payload would auto-run with
-    // no card), so they fall through to a permission card like `node script.js`.
-    const READ_ONLY = /^(ls|cat|head|tail|echo|pwd|whoami|which|grep|rg|find|wc|sort|uniq|diff|file|stat|date|env|printenv)/;
-    const NEUTRAL = /^(cd|pushd|popd|true)(\s|$)/;
-    // Command/process substitution and backticks run an inner command the
-    // segmenter cannot see (`ls $(rm x)`), so their presence disqualifies the
-    // low (auto-allow) verdict: the command falls to at least a card.
-    const HIDES_SUBCOMMAND = /\$\(|`|<\(|>\(/;
-    // Split on newlines as well as shell operators: bash runs each newline as a
-    // separate command, so a read-only first line must not shield a destructive
-    // one below it.
-    const segments = shellSegments(cmd);
-    var anyHigh = false, allSafe = true;
-    for (var i = 0; i < segments.length; i++) {
-      var seg = segments[i];
-      if (DESTRUCTIVE.test(seg)) anyHigh = true;
-      else if (READ_ONLY.test(seg) || NEUTRAL.test(seg)) continue;
-      else allSafe = false;
-    }
-    if (anyHigh) return 'high';
-    if (allSafe && !HIDES_SUBCOMMAND.test(cmd)) return 'low';
+    // Asked of the shared definition rather than of a copy kept here, for the
+    // same reason the read-only question below is. This list used to live in
+    // this file alone, which meant the hook's Code mode branch could approve a
+    // command with no card at all while this grader stood ready to paint the
+    // card it never drew as high risk.
+    if (isDestructiveShellCommand(raw)) return 'high';
+    // Command/process substitution used to be tested here and nowhere else,
+    // which meant the hook exempted a crossing for text this grader would not
+    // auto-allow. It is part of the shared definition of a read now.
+    if (isReadOnlyShellCommand(raw)) return 'low';
     return 'medium';
   }
 
@@ -302,16 +248,32 @@
   // free everywhere except the secrets tier, and a secret always cards
   // regardless of the act. Only a write to a persistence surface, or any
   // access at all to a secrets-registry path, needs its stakes named.
-  const AGENT_HOME_COPY = {
+  // The answer-file sentence is shared: the same stake whether the file is the
+  // agent's own (~/.claude) or the workspace's. It is reached through
+  // answerFileCopy() as well, so a workspace card does not have to go through a
+  // name asserting it lives in the agent's home.
+  const ALWAYS_ASK_COPY = {
     secret: 'This is the credential file for your Claude account. A leak here cannot be undone, '
       + 'so this always asks, on any access, and no grant, mode or setting can silence it.',
     persistenceSurface: 'Writing here persists: it takes effect in every later session and every '
       + 'other workspace, including an unattended routine run.',
+    // The workspace's own answers to permission questions, which includes the
+    // file the permission checks themselves are configured from. Named
+    // because a card that reads like an ordinary config write gets answered
+    // like one, and this is the write that decides what gets asked about.
+    answerFile: 'This file holds your own answers about what agents may do, and the checks '
+      + 'that ask you. An agent can request a change to it, but never keep the '
+      + 'permission: this asks every time, and there is no option to stop being asked.',
   };
-  function agentHomeBoundaryCopy(crossing) {
+  // Named for what it decides, not for where the file happens to live. It was
+  // agentHomeBoundaryCopy, written when every caller was a ~/.claude crossing;
+  // pointing workspace files at it is how a card about a file inside the
+  // workspace came to announce that the workspace had been left.
+  function alwaysAskCopy(crossing) {
     if (!crossing) return null;
-    if (crossing.secret) return AGENT_HOME_COPY.secret;
-    if (crossing.persistenceSurface) return AGENT_HOME_COPY.persistenceSurface;
+    if (crossing.secret) return ALWAYS_ASK_COPY.secret;
+    if (crossing.answerFile) return ALWAYS_ASK_COPY.answerFile;
+    if (crossing.persistenceSurface) return ALWAYS_ASK_COPY.persistenceSurface;
     return null;
   }
 
@@ -374,6 +336,11 @@
     return m.size;
   }
 
-  return { BASH_DESCRIPTIONS, bashBin, classifyRisk, describeToolRequest, toolAllowKey, decidePermission, offersAlwaysAllow, agentHomeBoundaryCopy,
+  function answerFileCopy() { return ALWAYS_ASK_COPY.answerFile; }
+  // Retained so a caller outside this change keeps working; both names
+  // reach the same table, and new callers should use alwaysAskCopy.
+  const agentHomeBoundaryCopy = alwaysAskCopy;
+
+  return { BASH_DESCRIPTIONS, bashBin, classifyRisk, describeToolRequest, toolAllowKey, decidePermission, offersAlwaysAllow, alwaysAskCopy, answerFileCopy,
     routePermissionRequest, queuePendingPermission, pendingPermissionsFor, removePendingPermission, clearPendingPermissions };
 }));

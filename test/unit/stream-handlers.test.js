@@ -137,17 +137,35 @@ describe('response text accumulation', () => {
     // produces. This is the link between the two.
     const entry = makeEntry();
     srv.wireProcessHandlers(entry, 'convo-1', null, {});
+    //
+    // THE SHAPE IS THE CAPTURED ONE NOW. This fixture used bare text deltas
+    // with no block start, which the runtime never produces: the captured
+    // grammar shows every text stretch arriving as
+    // content_block_start(text) -> content_block_delta(text_delta), and a
+    // stretch after a tool call arriving in a NEW message with its own block
+    // start. Modelled without those, the separator logic could never fire here
+    // and this test went on asserting the run-together string as correct. It
+    // was the fixture reality no longer produces, which its own comment warns
+    // about.
     push(entry, [
-      fx.textDelta('Let me gather the clutter first.'),
+      fx.contentBlockStartText(0),
+      fx.textDelta('Let me gather the clutter first.', 0),
+      fx.contentBlockStop(0),
       ...fx.toolUseFlow('Read', { file_path: 'a.md' }),
-      fx.textDelta('Now checking the settings file.'),
+      fx.contentBlockStartText(0),
+      fx.textDelta('Now checking the settings file.', 0),
+      fx.contentBlockStop(0),
       ...fx.toolUseFlow('Edit', { file_path: 'b.md' }),
-      fx.textDelta('Here is the summary worth keeping.'),
+      fx.contentBlockStartText(0),
+      fx.textDelta('Here is the summary worth keeping.', 0),
+      fx.contentBlockStop(0),
     ]);
     assert.strictEqual(
       entry.responseText,
-      'Let me gather the clutter first.Now checking the settings file.Here is the summary worth keeping.',
-      'stretches are concatenated with no separator, and tool calls contribute nothing',
+      'Let me gather the clutter first.'
+      + '\n\nNow checking the settings file.'
+      + '\n\nHere is the summary worth keeping.',
+      'every stretch survives in order, each keeping the boundary the agent wrote, and tool calls contribute nothing',
     );
   });
 
@@ -206,8 +224,16 @@ describe('response text accumulation', () => {
     push(entry, [fx.textDelta('turn one'), fx.result({ text: 'turn one' })]);
     entry.responseText = '';
     // Second turn: assistant message only, two blocks, no deltas.
-    push(entry, [fx.assistantMessage('alpha ', [{ type: 'text', text: 'beta' }])]);
-    assert.strictEqual(entry.responseText, 'alpha beta', 'no-delta turn falls back to the assistant blocks');
+    //
+    // CHANGED DELIBERATELY. This asserted 'alpha beta' from the blocks 'alpha '
+    // and 'beta', and it read correctly only because the first block carried a
+    // trailing space. Two content blocks are two pieces of text the agent wrote
+    // apart, and joining them with nothing produced "above the hero.Now handing
+    // to Sage" on a real turn whose blocks did not happen to end in whitespace.
+    // The fixture loses its trailing space so the boundary is what is asserted
+    // rather than an accident of the test data.
+    push(entry, [fx.assistantMessage('alpha', [{ type: 'text', text: 'beta' }])]);
+    assert.strictEqual(entry.responseText, 'alpha\n\nbeta', 'no-delta turn falls back to the assistant blocks, keeping their boundary');
   });
 });
 
@@ -351,5 +377,127 @@ describe('safeSend buffering', () => {
     assert.strictEqual(srv.disconnectBuffer.length, 500, 'cap held at 500');
     assert.ok(srv.disconnectBuffer.some(p => p.includes('"type":"result"')), 'terminal signal retained when buffer full');
     assert.ok(!srv.disconnectBuffer.includes('old-0'), 'oldest message evicted');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A TURN'S TEXT KEEPS THE BREAKS THE AGENT WROTE.
+//
+// Measured in a real conversation. An agent wrote two paragraphs in one turn
+// with a tool call between them. The view shows them apart, as written; the
+// stored transcript held "above the hero.Now handing to Sage", because the
+// accumulator joins content blocks with no separator on both paths that fill
+// it. The session keeps the blocks apart and Rundock's own copy did not, so the
+// two disagreed about the same turn.
+//
+// That copy is not decoration: history.js rebuilds a conversation from it, and
+// deltaSince hands it to every arriving agent as their catch-up.
+//
+// NOTE ON FIXTURES. Every block below ends WITHOUT trailing whitespace. The
+// tests that existed used 'alpha ' and 'First block ... ', and those trailing
+// spaces are the reason a missing separator read correctly for so long.
+// ---------------------------------------------------------------------------
+describe('text blocks in one turn keep their boundary', () => {
+  test('two blocks streamed as deltas are stored with the break between them', () => {
+    const entry = makeEntry();
+    srv.wireProcessHandlers(entry, 'convo-1', null, {});
+    push(entry, [
+      fx.contentBlockStartText(0),
+      fx.textDelta("Now let's check the nav bar section, above the hero.", 0),
+      fx.contentBlockStop(0),
+      fx.contentBlockStartText(1),
+      fx.textDelta('Now handing to Sage to verify the product claims.', 1),
+      fx.contentBlockStop(1),
+    ]);
+    assert.strictEqual(entry.responseText,
+      "Now let's check the nav bar section, above the hero."
+      + '\n\nNow handing to Sage to verify the product claims.',
+      'the boundary the agent wrote survives into the stored text');
+  });
+
+  test('the boundary survives into the STORED transcript, which is what is read back', () => {
+    // THE PROOF POINT, and not the accumulator field. responseText is an
+    // intermediate: history.js rebuilds a conversation from the stored entry
+    // and deltaSince hands the stored entry to an arriving agent. Asserting on
+    // the field in memory would prove the fix reached a variable, which is a
+    // smaller claim than the one this card makes.
+    srv.setWorkspace(makeWorkspace({ agents: standardTeam() }));
+    const entry = makeEntry();
+    srv.wireProcessHandlers(entry, 'convo-1', null, {});
+    push(entry, [
+      fx.contentBlockStartText(0),
+      fx.textDelta("Now let's check the nav bar section, above the hero.", 0),
+      fx.contentBlockStop(0),
+      ...fx.toolUseFlow('Read', { file_path: 'a.md' }),
+      fx.contentBlockStartText(0),
+      fx.textDelta('Now handing to Sage to verify the product claims.', 0),
+      fx.contentBlockStop(0),
+    ]);
+
+    const convoId = 'boundary-roundtrip-1';
+    srv.appendTranscript(convoId, 'agent', 'research-lead', entry.responseText);
+    const stored = srv.loadTranscript(convoId).pop();
+
+    assert.strictEqual(stored.text,
+      "Now let's check the nav bar section, above the hero."
+      + '\n\nNow handing to Sage to verify the product claims.',
+      'what is read back carries the break, so a rebuilt view and a catch-up read as the agent wrote it');
+    assert.ok(!stored.text.includes('hero.Now handing'),
+      'and specifically not the run-together shape that was measured in the field');
+  });
+
+  test('one block arriving in many fragments gains nothing between them', () => {
+    // The common case. A block is streamed as chunks and is one piece of text:
+    // inserting anything between its fragments would break every ordinary turn.
+    const entry = makeEntry();
+    srv.wireProcessHandlers(entry, 'convo-1', null, {});
+    push(entry, [
+      fx.contentBlockStartText(0),
+      fx.textDelta('One sentence ', 0),
+      fx.textDelta('split across ', 0),
+      fx.textDelta('three deltas.', 0),
+      fx.contentBlockStop(0),
+    ]);
+    assert.strictEqual(entry.responseText, 'One sentence split across three deltas.');
+  });
+
+  test('no break is added before the first block, nor where the text already ends in one', () => {
+    const first = makeEntry();
+    srv.wireProcessHandlers(first, 'convo-1', null, {});
+    push(first, [fx.contentBlockStartText(0), fx.textDelta('Alone.', 0), fx.contentBlockStop(0)]);
+    assert.strictEqual(first.responseText, 'Alone.', 'nothing is prepended to a turn');
+
+    // THREE BLOCKS, so this discriminates in BOTH directions. With only the
+    // first two, a block whose own text ends in a break produces the same
+    // string whether the boundary rule runs or not, because raw concatenation
+    // and a skipped guard agree: the test could not fail on a revert. The third
+    // block does not end in a break, so its boundary has to be supplied.
+    //
+    // Reverting the fix loses the gap before 'And another.'; removing the
+    // guards doubles the gap before 'The next one.'. One assertion, both faults.
+    const already = makeEntry();
+    srv.wireProcessHandlers(already, 'convo-1', null, {});
+    push(already, [
+      fx.contentBlockStartText(0),
+      fx.textDelta('A paragraph that ends in its own break.\n\n', 0),
+      fx.contentBlockStop(0),
+      fx.contentBlockStartText(1),
+      fx.textDelta('The next one.', 1),
+      fx.contentBlockStop(1),
+      fx.contentBlockStartText(2),
+      fx.textDelta('And another.', 2),
+      fx.contentBlockStop(2),
+    ]);
+    assert.strictEqual(already.responseText,
+      'A paragraph that ends in its own break.\n\nThe next one.\n\nAnd another.',
+      'the break the agent wrote is not doubled, and the one they did not write is supplied');
+  });
+
+  test('the no-delta fallback stores the same text the delta path would', () => {
+    const viaBlocks = makeEntry();
+    srv.wireProcessHandlers(viaBlocks, 'convo-1', null, {});
+    push(viaBlocks, [fx.assistantMessage('First part.', [{ type: 'text', text: 'Second part.' }])]);
+    assert.strictEqual(viaBlocks.responseText, 'First part.\n\nSecond part.',
+      'the two ways of filling the same field agree about the same turn');
   });
 });

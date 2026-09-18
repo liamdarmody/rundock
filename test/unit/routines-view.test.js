@@ -1964,8 +1964,14 @@ describe('a routine the upgrade held back', () => {
   });
 });
 
-describe('the Approve control is a real press that reaches the handler', () => {
-  test('a routine whose plan awaits approval draws the control, and pressing it sends the exact message', () => {
+describe('the review-and-resume control is a real press that reaches the handler', () => {
+  // REVERSED DELIBERATELY. This test used to look for an "Approve plan" link
+  // on a row that read "Waiting for your approval". Approval is consent to a
+  // CHANGED plan now, and a routine whose consent was withdrawn renders as
+  // paused, ringed in the attention tone, with the sentence that says what
+  // changed and one action: review and resume. The message that action
+  // sends is unchanged, which is what this test is really about.
+  test('a routine whose plan changed draws the control, and pressing it sends the exact message', () => {
     // A namesake is present so the occurrence carried by the message is
     // load-bearing rather than incidentally zero: the routine pressed is the
     // SECOND "Compile the ops summary", occurrence 1.
@@ -1977,8 +1983,10 @@ describe('the Approve control is a real press that reaches the handler', () => {
 
     const rowEls = rows(doc);
     const approvalRow = rowEls.find(r => r.querySelector('[data-routines-action="approve"]'));
-    assert.ok(approvalRow, 'the row whose plan awaits approval draws the Approve control');
-    assert.match(text(approvalRow), /Approve plan/, 'and it carries the model\'s label');
+    assert.ok(approvalRow, 'the row whose plan changed draws the review-and-resume control');
+    assert.match(text(approvalRow), /Review and resume/, 'and it carries the model\'s label');
+    assert.match(text(approvalRow), /Paused: what this runs has changed/, 'under the sentence that says why the row is paused');
+    assert.ok(approvalRow.classList.contains('paused-consent'), 'in the consent-paused dress, not the self-paused one');
     // The first namesake, whose plan is not awaiting approval, draws none.
     assert.strictEqual(rowEls[0].querySelector('[data-routines-action="approve"]'), null,
       'a row not awaiting approval draws no control');

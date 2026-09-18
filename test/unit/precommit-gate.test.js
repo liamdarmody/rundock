@@ -10,6 +10,10 @@
 // and "it failed" cannot tell those apart. That distinction is the whole
 // difference between a control and a tripwire nobody trusts.
 
+// A record describes a run, and a run took time. buildRecord refuses one
+// without durations, because a tolerant default there let the real call site
+// stop passing them with every test still green.
+const FIXTURE_TIMINGS = [{ step: 'preflight', ms: 1200 }, { step: 'test:coverage', ms: 88000 }];
 const { test, describe } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -106,7 +110,7 @@ describe('the record and the tree hash, against a real repository', () => {
     const { dir } = tempRepo();
     const file = path.join(dir, '.precommit-gate.json');
     try {
-      const written = buildRecord({ tree: currentTree(dir), branch: 'fix/card', at: '2026-08-20T00:00:00.000Z' });
+      const written = buildRecord({ tree: currentTree(dir), branch: 'fix/card', at: '2026-08-20T00:00:00.000Z', timings: FIXTURE_TIMINGS });
       writeRecord(written, file);
       assert.deepStrictEqual(readRecord(file), written);
       // Named explicitly: these are the fields refusal() compares, and a
@@ -122,7 +126,7 @@ describe('the record and the tree hash, against a real repository', () => {
     const { dir, run } = tempRepo();
     try {
       const before = currentTree(dir);
-      const record = buildRecord({ tree: before, branch: 'fix/card', at: '2026-08-20T00:00:00.000Z' });
+      const record = buildRecord({ tree: before, branch: 'fix/card', at: '2026-08-20T00:00:00.000Z', timings: FIXTURE_TIMINGS });
       // The same tree, unchanged: the gate admits it.
       assert.strictEqual(
         refusal({ record, tree: currentTree(dir), branch: 'fix/card', mainBranch: 'main' }),
@@ -217,6 +221,73 @@ describe('the entry points, against a throwaway repository', () => {
       assert.ok(record, 'a record is written');
       assert.strictEqual(record.branch, 'fix/card');
       assert.strictEqual(record.tree, currentTree(dir), 'and it names the tree that was checked');
+      // THE TIMINGS COME FROM THE RUN THAT JUST HAPPENED, which is what makes
+      // them evidence rather than decoration. Asserting only that the array is
+      // non-empty would pass for a hard-coded literal, or for the durations of
+      // some other loop; these must be this gate's own steps, in order, each
+      // with a real duration.
+      assert.deepStrictEqual(record.timings.map(t => t.step), STEPS.map(st => st.name),
+        'every step the gate ran is timed, in the order it ran');
+      for (const t of record.timings) {
+        assert.strictEqual(typeof t.ms, 'number', `${t.step} carries a number`);
+        assert.ok(t.ms >= 0 && t.ms < 600000, `${t.step} carries a plausible duration, got ${t.ms}`);
+      }
+      assert.strictEqual(record.totalMs, record.timings.reduce((sum, t) => sum + t.ms, 0),
+        'and the total is the sum of them, so two runs can be compared');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a failing run reports what it spent, on the path the measurement is FOR', () => {
+    // The saving this ordering was built for lands on FAILING runs: a cheap
+    // failure surfaced in seconds rather than after the suite. So the failing
+    // path is where the measurement has to survive, and nothing asserted on it:
+    // a bad reduce or an undefined field there would throw, be swallowed by the
+    // top-level catch, exit 1 with a different message, and pass every test
+    // while the number the card exists to produce quietly vanished.
+    //
+    // The failure is deliberately NOT the first step, so at least one earlier
+    // duration has to appear in the summary.
+    const failAt = STEPS[2].name;
+    const { dir } = repoWithScripts(oneStepFails(failAt));
+    try {
+      const { code, out } = spawnGate([], dir);
+      assert.notStrictEqual(code, 0);
+      assert.match(out, new RegExp(`${failAt.replace(':', ':')} failed after \\d+\\.\\ds`),
+        'the failing step is named with how long it took');
+      assert.match(out, /Spent so far: /, 'and what had already been spent is reported');
+      for (const earlier of STEPS.slice(0, 3).map(st => st.name)) {
+        assert.ok(out.includes(`${earlier} `), `${earlier} appears in the spend list`);
+      }
+      assert.match(out, /\(\d+\.\ds total\)/, 'with a total');
+      assert.match(out, /No record written/, 'and the reason nothing may vouch for this tree');
+      // A throw inside the summary would land here instead, exit 1 all the same,
+      // and look like an ordinary failure.
+      assert.doesNotMatch(out, /the gate could not run/,
+        'the summary itself must not throw and masquerade as the intended failure');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a failing cheap phase is printed WHOLE, not tailed to its last lines', () => {
+    // GO-2 as a developer actually meets it. The previous guard matched a
+    // ternary in the source, which proves a ternary exists. This runs the real
+    // gate against a first step that prints far more than the tail the other
+    // steps are cut to, and requires the EARLIEST line to survive: that is the
+    // one a tail would have eaten, and losing it is what turns an all-at-once
+    // report back into one discovery per run.
+    const noisy = 'node -e "for (let i = 1; i <= 60; i++) console.log(\'LINE_\' + i); process.exit(1)"';
+    const { dir } = repoWithScripts({ ...allStepsPass(), [STEPS[0].name]: noisy });
+    try {
+      const { code, out } = spawnGate([], dir);
+      assert.notStrictEqual(code, 0, 'the phase failed, so the gate fails');
+      assert.match(out, /LINE_1\b/,
+        'the first line of the report survives; a 25-line tail would have cut it');
+      assert.match(out, /LINE_60\b/, 'and the last line is there too');
+      assert.doesNotMatch(out, /test:coverage\.\.\. ok/,
+        'and nothing expensive ran after the cheap phase failed');
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

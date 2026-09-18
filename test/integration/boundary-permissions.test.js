@@ -233,10 +233,79 @@ describe('workspace file-access boundary', () => {
     const cmdCard = await client.waitFor(m => m.type === 'control_request',
       { since, label: 'the command is still shown despite the grant' });
     assert.strictEqual(cmdCard.msg.request.tool_name, 'Bash');
-    assert.strictEqual(cmdCard.msg.request.grant_dir, null,
-      'and no folder grant is offered on it, because remembering a folder would not answer this question');
+    // NO GRANT IS OFFERED, and it is now absent rather than explicitly null.
+    //
+    // Approving a folder also names it as a working folder, so a command whose
+    // only outside path is inside it is no longer a boundary crossing at all,
+    // and the request carries no boundary fields to be null. Asserted as "not
+    // offered" rather than as one of its two spellings, because what this line
+    // protects is that the reader is never given a button which would remember
+    // a folder as the answer to a question about a command.
+    assert.ok(cmdCard.msg.request.grant_dir == null,
+      'no folder grant is offered on a command card, because remembering a folder would not answer this question');
     client.send({ type: 'permission_response', requestId: cmdCard.msg.request_id, conversationId: 'boundary-test', allow: false });
     assert.strictEqual(decisionOf(await pendingCmd), 'deny');
+  });
+
+  test('a stored grant still answers file access on its own, with no working folder behind it', async () => {
+    // THE BRANCH THIS PROTECTS STOPPED BEING REACHED, and the test that used to
+    // reach it kept passing.
+    //
+    // Approving a folder now also names it as a working folder, so in the test
+    // above the follow-up write is not a crossing at all. It raises no card,
+    // which is what that test asserts, so it stayed green while the standing
+    // grant it was written to exercise was no longer being consulted. Coverage
+    // is what noticed: the allow-from-grant branch in http-router.js went from
+    // covered to dead.
+    //
+    // The branch still has to work. A grant stored by an earlier version is on
+    // disk with no working folder beside it, and so is one whose folder the
+    // working-folder normaliser refuses. So the grant is stored DIRECTLY here,
+    // the way those arrive, rather than through a card that would also name it.
+    const { addBoundaryGrant } = require('../../lib/workspace/boundary.js');
+    const granted = fs.mkdtempSync(path.join(os.tmpdir(), 'grant-only-'));
+    addBoundaryGrant(granted);
+
+    const since = client.messages.length;
+    const out = await runHook('Write', { file_path: path.join(granted, 'note.md'), content: 'x' });
+    assert.strictEqual(decisionOf(out), 'allow', 'the stored grant answers this without anyone being asked');
+    await h.delay(300);
+    assert.strictEqual(client.messages.slice(since).filter(m => m.type === 'control_request').length, 0,
+      'and it answers it silently, which is the whole value of a standing grant');
+  });
+
+  test('and in CODE MODE, where a working folder does silence commands, a destructive one still asks', async () => {
+    // WHAT CHANGED AND WHAT DID NOT. "Always allow this folder" now names the
+    // folder as a working folder, which is what makes the button mean anything
+    // for shell commands: in Code mode an ordinary command touching only that
+    // folder is auto-approved, deliberately, because that is what naming a
+    // folder is for.
+    //
+    // The control that had to survive that is the one above, restated for the
+    // mode where it can actually be lost: `rm -rf` inside a named folder must
+    // still reach a person. It did not before this release, in any folder
+    // including the workspace itself, which is the hole this closes rather than
+    // opens. A repository is recoverable; a deleted folder outside git is not.
+    const named = fs.mkdtempSync(path.join(os.tmpdir(), 'boundary-codemode-'));
+    let since = client.messages.length;
+
+    // Ordinary work in a named folder: silent, which is the point of naming it.
+    const ordinary = await runHook('Bash', { command: `ls -la ${named}` },
+      { RUNDOCK_CODE_MODE: '1', RUNDOCK_EXTRA_DIRS: named });
+    assert.strictEqual(decisionOf(ordinary), 'allow');
+    await h.delay(300);
+    assert.strictEqual(client.messages.slice(since).filter(m => m.type === 'control_request').length, 0,
+      'naming a folder is what stops the routine asking; if this cards, the setting does nothing');
+
+    // The same folder, an irreversible command: still shown.
+    since = client.messages.length;
+    const pendingRm = runHook('Bash', { command: `rm -rf ${path.join(named, '*')}` },
+      { RUNDOCK_CODE_MODE: '1', RUNDOCK_EXTRA_DIRS: named });
+    const rmCard = await client.waitFor(m => m.type === 'control_request',
+      { since, label: 'a destructive command in a named folder still reaches a person' });
+    assert.strictEqual(rmCard.msg.request.tool_name, 'Bash');
+    client.send({ type: 'permission_response', requestId: rmCard.msg.request_id, conversationId: 'boundary-test', allow: false });
+    assert.strictEqual(decisionOf(await pendingRm), 'deny');
   });
 
   // The reason text is asserted for BOTH refused folders, not inferred from one.
@@ -329,6 +398,90 @@ describe('workspace file-access boundary', () => {
     // over the folder.
     const out = await runHook('Write', { file_path: path.join(home, '.claude', 'agents', 'dev.md'), content: 'x' }, inWorkspace);
     assert.strictEqual(decisionOf(out), 'deny', 'the runtime home above the workspace is still refused');
+  });
+
+  test('naming a working folder that contains the runtime home does not hand over the runtime home', async () => {
+    // The counterpart to the test above, and the direction that protects a
+    // tier rather than a capability. Opening a workspace under the runtime home
+    // is a deliberate act on a folder someone chose knowing what is in it.
+    // Naming a working folder is the opposite: its whole value is covering
+    // folders nobody enumerated, including ones that do not exist yet, so it
+    // must never read as consent to the folders inside it that carry their own
+    // rules. Driven through the real hook with the environment an agent would
+    // actually be spawned with, because the escape this prevents lives in the
+    // ORDER of two checks that are each correct alone.
+    const home = os.homedir();
+    fs.mkdirSync(path.join(home, '.claude', 'agents'), { recursive: true });
+    const named = { RUNDOCK_EXTRA_DIRS: home };
+
+    // ASSERTED ON THE REASON, NOT THE DECISION, and the difference is the whole
+    // point. A deterministic refusal and a card the reader happens to deny both
+    // come out as 'deny', so a decision-only assertion cannot tell them apart:
+    // measured, a build that lost this rule still answered 'deny' here, by
+    // raising a card instead of refusing, and the test stayed green. What is
+    // guaranteed is that nothing is ASKED, because a card carries an implicit
+    // promise that approving it would work, and here it would not.
+    const refused = await runHook('Write', { file_path: path.join(home, '.claude', 'agents', 'sneaked.md'), content: 'x' }, named);
+    assert.strictEqual(decisionOf(refused), 'deny',
+      'naming the home folder does not exempt the agents-and-skills refusal');
+    assert.match(reasonOf(refused) || '', /agents and skills inside the open workspace/,
+      'and it is the refusal answering, not a card that was denied');
+
+    const surface = await runHook('Write', { file_path: path.join(home, '.claude', 'settings.json'), content: '{}' }, named);
+    assert.strictEqual(decisionOf(surface), 'deny',
+      'naming the home folder does not exempt the runtime-home surface refusal either');
+    assert.match(reasonOf(surface) || '', /protects its own configuration folder/,
+      'again the refusal, not an answered card');
+
+    // And the setting still does the job it exists for, in the same run, so a
+    // green result here cannot mean the folder was simply ignored. The probe
+    // must sit BENEATH the named folder, which is the real home directory, so
+    // it is made unique and removed whether or not the assertion passes: a test
+    // that proves a boundary must not leave anything behind on the far side of
+    // it.
+    const project = fs.mkdtempSync(path.join(home, 'rundock-named-folder-probe-'));
+    try {
+      const allowed = await runHook('Write', { file_path: path.join(project, 'notes.md'), content: 'x' }, named);
+      assert.strictEqual(decisionOf(allowed), 'allow',
+        'an ordinary file beneath the named folder is written without a card');
+    } finally {
+      fs.rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  test('the environment value this product writes is the one the hook reads, with more than one folder in it', async () => {
+    // THE JOIN AND THE SPLIT, PROVEN ACROSS THE PROCESS BOUNDARY. A unit test
+    // that splits the string itself and passes the array to an exported
+    // function proves only that the test agrees with itself: a hook splitting
+    // on a literal ':' would pass it unchanged, and would be wrong on Windows
+    // where the delimiter is ';'. So the value is built by the real renderer,
+    // handed to the real hook process through the real variable, and TWO
+    // folders are named, because a single-entry value cannot tell a working
+    // split from no split at all.
+    const { workingFoldersEnv } = require('../../lib/workspace/working-folders.js');
+    const first = fs.mkdtempSync(path.join(os.tmpdir(), 'wf-env-one-'));
+    const second = fs.mkdtempSync(path.join(os.tmpdir(), 'wf-env-two-'));
+    const sibling = fs.mkdtempSync(path.join(os.tmpdir(), 'wf-env-unnamed-'));
+    const value = workingFoldersEnv([first, second]);
+    const named = { RUNDOCK_EXTRA_DIRS: value };
+    try {
+      for (const dir of [first, second]) {
+        const out = await runHook('Write', { file_path: path.join(dir, 'a.md'), content: 'x' }, named);
+        assert.strictEqual(decisionOf(out), 'allow',
+          `${dir} arrived from the environment value as a folder the hook honours`);
+      }
+      // The SECOND entry is the one that proves the split happened: without it
+      // the whole string would be one unusable path and this would card.
+      const since = client.messages.length;
+      const pending = runHook('Write', { file_path: path.join(sibling, 'a.md'), content: 'x' }, named);
+      const { msg } = await client.waitFor(m => m.type === 'control_request'
+        && m.request && m.request.boundary === true, { since, label: 'unnamed sibling still cards' });
+      client.send({ type: 'permission_response', requestId: msg.request_id, conversationId: 'boundary-test', allow: false });
+      assert.strictEqual(decisionOf(await pending), 'deny',
+        'and a folder that was not named is still outside, so the value did not widen past what it says');
+    } finally {
+      for (const d of [first, second, sibling]) fs.rmSync(d, { recursive: true, force: true });
+    }
   });
 
   test('the two tool families split at one persistence-surface path, and the refusal names what to do instead', async () => {
@@ -616,5 +769,68 @@ describe('workspace file-access boundary', () => {
         assert.strictEqual(decisionOf(await pending), 'deny', `${label}: the request is not silently allowed`);
       }
     }
+  });
+});
+
+// THE FLAG MUST SURVIVE THE PROCESS BOUNDARY, which unit tests cannot show.
+//
+// The hook computes the reason, POSTs it, and the router rebuilds the message
+// for the browser FROM A WHITELIST. A field the hook sends is dropped unless it
+// is named there, and a card worded from that field silently reverts to an
+// ordinary tool card: the same defect the advisory list hit once already, whose
+// warning is written above that very object.
+//
+// Every unit test for this card feeds the client a hand-built request carrying
+// `answer_file: true`, which proves the client renders it and nothing about
+// whether the server ever sends it. This drives the real hook against the real
+// server and asserts on the message that actually reaches the browser.
+describe('the answer-file reason reaches the browser', () => {
+  // Uses Rundock's OWN permission store, not the runtime's settings file. The
+  // settings file is now refused outright (the runtime guards it, measured), so
+  // it never reaches a card at all; the case below covers that. These two files
+  // are the ones whose card IS the protection.
+  test("a write to Rundock's permission store arrives worded as an answer file, not a crossing", async () => {
+    const target = path.join(h.workspaceDir, '.rundock', 'permissions.json');
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    const since = client.messages.length;
+    const pending = runHook('Write', { file_path: target, content: '{}' });
+    const { msg } = await client.waitFor(m => m.type === 'control_request'
+      && m.request && m.request.answer_file === true, { since, label: 'answer-file card' });
+
+    assert.strictEqual(msg.request.tool_name, 'Write');
+    assert.notStrictEqual(msg.request.boundary, true,
+      'this file is inside the workspace and the card must not claim a crossing');
+    assert.strictEqual(msg.request.resolved_path, canonicalize(target),
+      'the card names the file, so the reader knows which one');
+    assert.strictEqual(msg.request.grant_dir, null,
+      'and carries nothing a standing grant could be built from');
+
+    client.send({ type: 'permission_response', requestId: msg.request_id, conversationId: 'boundary-test', allow: false });
+    const out = await pending;
+    assert.strictEqual(decisionOf(out), 'deny', 'denying still blocks the write');
+  });
+
+  // The runtime refuses every write to the settings file it was launched with,
+  // so Rundock says so rather than offering an Allow it cannot honour. Asserted
+  // end to end because the owner met the opposite: a card, an approval, and a
+  // write that failed anyway.
+  test('a write to the runtime settings file is refused with a reason, never carded', async () => {
+    const target = path.join(h.workspaceDir, '.claude', 'settings.local.json');
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    const out = await runHook('Write', { file_path: target, content: '{}' });
+    assert.strictEqual(decisionOf(out), 'deny',
+      'an Allow here could never take effect, so it is not offered');
+    const reason = JSON.stringify(out);
+    assert.match(reason, /refuses every write|permission rules themselves/,
+      'and the refusal explains itself, because silence would read as permission');
+  });
+
+  test('reading the same file needs no card at all', async () => {
+    const target = path.join(h.workspaceDir, '.claude', 'settings.local.json');
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, '{}');
+    const out = await runHook('Read', { file_path: target });
+    assert.strictEqual(decisionOf(out), 'allow',
+      'reads were always free and this change must not start carding them');
   });
 });

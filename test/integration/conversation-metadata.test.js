@@ -47,18 +47,37 @@ describe('get_conversations: load pipeline', () => {
     fs.writeFileSync(convosFile, JSON.stringify([
       // Never got a sessionId and is older than the 5-minute grace: dropped.
       { id: 'stale-empty', agentId: 'chief-of-staff', title: 'Abandoned', lastActiveAt: oldStamp },
-      // Points at a delegatee with no live process: reset to the owner.
-      { id: 'reconcile-1', agentId: 'chief-of-staff', activeAgentId: 'penn', sessionId: 's-r1', title: 'Reconciled', lastActiveAt: oldStamp },
+      // Points at a delegatee that HANDED BACK: reset to the owner.
+      //
+      // This case used to carry no handback record and still expected the reset,
+      // because the rule was "no live process means the delegation finished".
+      // That inference is sound after a page reload, where the delegate is
+      // parked and reported idle, and unsound after a RELAUNCH, where the
+      // process map died with the server and absence means nothing. Reported by
+      // a daily user: every in-flight delegation came back marked finished, and
+      // the orchestrator re-asked for work already delivered.
+      //
+      // So the two cases the old fixture conflated are now separate, and both
+      // are checked below.
+      { id: 'reconcile-1', agentId: 'chief-of-staff', activeAgentId: 'penn', sessionId: 's-r1', title: 'Reconciled', lastActiveAt: oldStamp, delegationReturned: true },
+      // In flight when the app quit: no handback was ever seen, so the pointer
+      // stands. This is the case the user reported.
+      { id: 'in-flight', agentId: 'chief-of-staff', activeAgentId: 'penn', sessionId: 's-if', title: 'Still working', lastActiveAt: oldStamp },
     ]));
 
     const res = await getConversations();
     assert.ok(!res.conversations.some(c => c.id === 'stale-empty'), 'stale empty conversation dropped');
     const reconciled = res.conversations.find(c => c.id === 'reconcile-1');
-    assert.strictEqual(reconciled.activeAgentId, 'chief-of-staff', 'stale delegatee pointer reset to the owner');
+    assert.strictEqual(reconciled.activeAgentId, 'chief-of-staff', 'a delegatee that handed back is reset to the owner');
+    const inFlight = res.conversations.find(c => c.id === 'in-flight');
+    assert.strictEqual(inFlight.activeAgentId, 'penn',
+      'a delegation with no observed handback keeps its specialist across a restart');
 
     const persisted = JSON.parse(fs.readFileSync(convosFile, 'utf-8'));
     assert.ok(!persisted.some(c => c.id === 'stale-empty'), 'cleanup persisted to disk');
     assert.strictEqual(persisted.find(c => c.id === 'reconcile-1').activeAgentId, 'chief-of-staff');
+    assert.strictEqual(persisted.find(c => c.id === 'in-flight').activeAgentId, 'penn',
+      'and the in-flight pointer is not rewritten on disk either');
   });
 
   test('enriches each conversation with messageCount and a stripped last-message preview', async () => {

@@ -41,6 +41,24 @@ const HOOK_INTEGRATION = { src: path.join(ROOT, 'scripts', 'permission-hook.js')
 // workspace-boundary suite drives, so a mutation to either is invisible
 // there and only this suite can notice it.
 const HOOK_REFUSAL = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/permission-agent-guard.test.js' };
+// The classifier's own suite. The hook is paired with several suites because
+// different guards in it are driven from different places, and a mutation is
+// only proved by the suite that actually exercises it: pointing a row at the
+// wrong one reports that nothing broke, which reads exactly like a guard
+// nothing tests. That is how the credential-folder rows first came back empty.
+const HOOK_CLASSIFIER = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/boundary.test.js' };
+// The read-only definition the hook reads, and the client risk grader with
+// it. It moved out of the hook when the two graders stopped keeping separate
+// answers to the same question; the rows below still drive the hook's suite,
+// because that is where breaking a read-only rule shows up as a crossing that
+// cards or one that stops carding.
+const READ_ONLY = { src: path.join(ROOT, 'public', 'read-only-shell.js'), suite: 'test/unit/workspace-boundary.test.js' };
+// Same file, the other suite. Not every rule in the shared module is proven by
+// the boundary corpus: the package-runner rules, the vocabulary's size, and the
+// subshell guard are all driven from test/unit/permissions.test.js, which is
+// where the tests that drive BOTH graders over one command live. A row here
+// belongs to the suite that actually notices it, not to the file's usual one.
+const READ_ONLY_CLIENT = { src: path.join(ROOT, 'public', 'read-only-shell.js'), suite: 'test/unit/permissions.test.js' };
 // The mode-persisted-before-scaffold ordering guard lives in the protocol
 // handler, not the scaffold layer, and is reachable only through the real
 // workspace-open path (the scaffold-layer tests call scaffoldWorkspace
@@ -92,8 +110,24 @@ const MUTATIONS = [
   // and no way past.
   [HOOK_INTEGRATION, 'a target inside the open workspace is never refused, even under the runtime home',
     '  const targetInsideWorkspace = refusalTarget !== null\n'
-    + '    && buildRoots(wsRoot, extraDirs).some(r => isUnder(refusalTarget, r));',
+    + '    && insideWorkspaceRoot(refusalTarget, wsRoot);',
     '  const targetInsideWorkspace = false;'],
+  // THE OTHER DIRECTION OF THE SAME LINE, and the one that protects a tier
+  // rather than a capability. Widen the exemption back to the named folders
+  // and someone who names `~` has both refusals stop looking at the runtime
+  // home entirely: a write to the global agents folder is allowed, lands where
+  // the app never reads, and reports success, which is the silent failure the
+  // refusals exist to prevent.
+  // The mutation deliberately bypasses namedFolderCovers rather than calling
+  // it. Calling it proves NOTHING, measured: that function stops at the runtime
+  // home itself, so a refusal target under `~/.claude` is false either way and
+  // the mutated build behaves identically. The two rules are defence in depth
+  // over the same paths, which is worth having and makes each harder to test
+  // alone. So this row widens the exemption the way a careless edit actually
+  // would, by comparing against the named folders raw.
+  [HOOK_INTEGRATION, 'a named working folder never exempts the refusals, only the open workspace does',
+    '    && insideWorkspaceRoot(refusalTarget, wsRoot);',
+    '    && (insideWorkspaceRoot(refusalTarget, wsRoot) || extraDirs.some(d => isUnder(refusalTarget, canonicalize(d))));'],
   // Only the surface refusal is mutated for this rule, and deliberately so.
   // `agents/` and `skills/` are persistence surfaces as well, so gating the
   // agents-and-skills refusal alone changes no verdict: the surface refusal
@@ -105,9 +139,44 @@ const MUTATIONS = [
   [HOOK_INTEGRATION, 'Code mode cannot answer the runtime-home surface refusal',
     '  if (!targetInsideWorkspace && isRuntimeHomeSurfaceEdit(data.tool_name, data.tool_input)) {',
     "  if (process.env.RUNDOCK_CODE_MODE !== '1' && !targetInsideWorkspace && isRuntimeHomeSurfaceEdit(data.tool_name, data.tool_input)) {"],
-  [HOOK, 'the roots are canonicalised too, or a symlink-opened workspace denies its own files',
-    '  return [canonicalize(workspaceRoot, pmod), ...extraDirs.map(d => canonicalize(d, pmod))];',
-    '  return [pmod.resolve(workspaceRoot), ...extraDirs.map(d => pmod.resolve(d))];'],
+  [HOOK, 'the workspace root is canonicalised, or a symlink-opened workspace denies its own files',
+    '  return isUnder(resolvedPath, canonicalize(workspaceRoot, pmod), pmod);',
+    '  return isUnder(resolvedPath, pmod.resolve(workspaceRoot), pmod);'],
+  // The same rule for a named folder, which reaches the boundary by a
+  // different route and so needs its own row: a folder named through a symlink
+  // (a Dropbox or iCloud path, routinely) would otherwise cover nothing at all,
+  // and the storm this card exists to end would carry on with the setting
+  // apparently configured.
+  [HOOK, 'a named folder is canonicalised too, or naming a symlinked folder covers nothing',
+    '  return extraDirs.some(d => isUnder(resolvedPath, canonicalize(d, pmod), pmod));',
+    '  return extraDirs.some(d => isUnder(resolvedPath, pmod.resolve(d), pmod));'],
+  // THE LOAD-BEARING ROW OF THIS CARD. Remove the runtime-home stop and a
+  // single named ancestor, `~` above all, makes `.credentials.json` compare as
+  // inside and be allowed outright: not carded, not graded, the secrets tier
+  // never consulted. One folder named for an unrelated reason would switch off
+  // the tier protecting the one thing most worth protecting.
+  // THE THIRD THING THE CRITERIA NAME, and the four rows above did not cover it:
+  // a named folder must not reach an UNNAMED sibling. Widened to always true, a
+  // named folder covers the whole machine; widened to a bare string prefix,
+  // `/Projects-old` falls inside `/Projects` because the separator stops being
+  // part of the comparison. Both are the classic way this check goes wrong and
+  // neither was proven to turn anything red.
+  [HOOK, 'a named folder covers only what it names, never an unnamed sibling',
+    '  return extraDirs.some(d => isUnder(resolvedPath, canonicalize(d, pmod), pmod));',
+    '  return true;'],
+  [HOOK, 'the separator is part of the comparison, or a lookalike sibling reads as inside',
+    '  return extraDirs.some(d => isUnder(resolvedPath, canonicalize(d, pmod), pmod));',
+    '  return extraDirs.some(d => resolvedPath.startsWith(canonicalize(d, pmod)));'],
+  // The stop compares BOTH SIDES resolved. Drop the canonicalisation of the home
+  // root and a runtime home whose .claude is a link elsewhere stops being
+  // recognised as the runtime home at all, so a named ancestor of its real
+  // target reaches the secrets tier through the back door.
+  [HOOK, 'the runtime-home root in the stop is canonicalised, like the folders it is compared against',
+    'function agentHomeRoot(home = os.homedir()) {\n  return canonicalize(path.join(home, \'.claude\'));',
+    'function agentHomeRoot(home = os.homedir()) {\n  return path.join(home, \'.claude\');'],
+  [HOOK, 'a named folder stops at EITHER runtime home, so the tiers still decide there',
+    '  if (homeFor(resolvedPath, home, foldsCase)) return false;',
+    '  if (false) return false;'],
   // A grant stored under one spelling must cover the other, both directions.
   [BOUNDARY, 'grants are canonicalised on write and on read',
     '  const t = canonicalize(targetPath);',
@@ -143,9 +212,14 @@ const MUTATIONS = [
   // rewritten away on the next reconcile. The pairing check itself is a
   // general real-path-spelling test (ends-with), not only the literal
   // /private case, so a non-/private relocation is recognised too.
-  [SCAFFOLD, 'a second tail entry must be a real-path spelling of the first, or it is somebody\'s edit',
-    '  if (tail.length === 2 && !tail[1].endsWith(tail[0])) return false;\n',
-    ''],
+  // The real-path pairing guard is GONE, and its mutation with it. It read a
+  // second tail entry as a temp root only when it ended with the first, which
+  // was how an appended root was told from ours. The list now carries the
+  // folders a person named, so a second entry is as likely to be one of those
+  // as a temp spelling, and no rule separates them. What replaced it is the
+  // head: six entries in fixed positions, rebuilt from the block's own claimed
+  // workspace and home, and mutated by the zero-tail entry below. The cost is
+  // recorded in lib/workspace/scaffold.js beside the check that remains.
   // A corrupt or unreadable settings.local.json must not be silently
   // replaced with {}. Only ENOENT may start empty; drop that distinction and
   // every other read/parse failure quietly overwrites the file instead of
@@ -156,16 +230,16 @@ const MUTATIONS = [
 
   // ===== THE BLOCK IS DRIVEN BY MODE, AND ONLY BY MODE =====
   // Ignore the mode and the switch writes the block for code mode too.
-  [SCAFFOLD, 'the mode switch really withdraws the block in code mode',
-    "  const desired = mode === 'code' ? null : sandboxSettings(dir, platform);",
-    '  const desired = sandboxSettings(dir, platform);'],
+  [SCAFFOLD, 'the mode switch really drops the enable in code mode, rather than writing the enabled shape',
+    "  const desired = sandboxSettings(dir, platform, os.homedir(), tempRoots(), workingFoldersFor(dir), mode);",
+    "  const desired = sandboxSettings(dir, platform, os.homedir(), tempRoots(), workingFoldersFor(dir), 'knowledge');"],
   // Ignore the mode on the NEXT OPEN specifically, not through the switch:
   // scaffoldWorkspace's own reconcile has to read the persisted mode too, or
   // a code-mode workspace has its block silently rewritten the next time it
   // is opened.
   [SCAFFOLD, 'the next open honours the persisted mode, not only the switch',
-    "    const desired = workspaceModeFor(dir) === 'code' ? null : sandboxSettings(dir, platform);",
-    '    const desired = sandboxSettings(dir, platform);'],
+    "    const desired = sandboxSettings(dir, platform, os.homedir(), tempRoots(), workingFoldersFor(dir), workspaceModeFor(dir));",
+    "    const desired = sandboxSettings(dir, platform, os.homedir(), tempRoots(), workingFoldersFor(dir), 'knowledge');"],
   // The mode must be PERSISTED before scaffoldWorkspace runs, because
   // scaffoldWorkspace's own reconcile reads the mode back off disk, not from
   // this function's local variable. Swap the order and a never-before-opened
@@ -210,48 +284,85 @@ const MUTATIONS = [
     '(!tags.persistenceSurface)'],
   // Stop treating a lone `&` as a separator and `ls x & rm -rf x` is judged by
   // its leading word again, freeing the removal against a persistence surface.
-  [HOOK, 'a lone & separates commands, so the second cannot ride the first',
-    "    if (ch === ';' || ch === '|' || ch === '&') { segments.push(cur); cur = ''; continue; }",
-    "    if (ch === ';' || ch === '|') { segments.push(cur); cur = ''; continue; }"],
+  [READ_ONLY, 'a lone & separates commands, so the second cannot ride the first',
+    "      if (ch === ';' || ch === '|' || ch === '&' || ch === '\\n' || ch === '\\r') {",
+    "      if (ch === ';' || ch === '|' || ch === '\\n' || ch === '\\r') {"],
   // Stop stripping the discarding redirects and one `2>/dev/null` appended
   // to `ls` grades the whole command a WRITE again, which is the card a real
   // session was shown for a command that writes nothing.
-  [HOOK, 'a redirection that discards output does not disqualify a read-only command',
-    "  const str = String(command).replace(DISCARDING_REDIRECT_RE, ' ');",
-    '  const str = String(command);'],
+  [READ_ONLY, 'a redirection that discards output does not disqualify a read-only command',
+    "    var str = String(command).replace(DISCARDING_REDIRECT_RE, ' ');",
+    '    var str = String(command);'],
   // Widen the exemption to any redirect target and the fail-safe inverts:
   // `ls x > x/listing.txt` writes into the surface and would read as free.
-  [HOOK, 'only /dev/null and descriptor duplication are exempt, never an arbitrary redirect target',
-    'const DISCARDING_REDIRECT_RE = /\\d*>>?\\s*(?:\\/dev\\/null|&\\s*\\d+)/g;',
-    'const DISCARDING_REDIRECT_RE = /\\d*>>?\\s*\\S+/g;'],
+  [READ_ONLY, 'only /dev/null and descriptor duplication are exempt, never an arbitrary redirect target',
+    'var DISCARDING_REDIRECT_RE = /\\d*>>?\\s*(?:\\/dev\\/null|&\\s*\\d+)/g;',
+    'var DISCARDING_REDIRECT_RE = /\\d*>>?\\s*\\S+/g;'],
   // A command is read-only only if every leading word is actually in the
   // registry: drop the check and any command (a bare `rm`, included) reads
   // as free against a persistence surface.
-  [HOOK, 'a command is read-only only when the registry actually names its leading word',
-    '    if (READ_ONLY_SHELL_COMMANDS.includes(bare)) return true;\n    return READ_ONLY_POWERSHELL_COMMANDS.includes(bare.toLowerCase());',
+  [READ_ONLY, 'a command is read-only only when the registry actually names its leading word',
+    '    if (READ_ONLY_SHELL_COMMANDS.indexOf(first) >= 0) return true;\n'
+    + '    if (NO_TARGET_COMMANDS.indexOf(first) >= 0) return true;\n'
+    + '    if (READ_ONLY_POWERSHELL_COMMANDS.indexOf(first.toLowerCase()) >= 0) return true;\n'
+    + '    return false;',
     '    return true;'],
+  // A subshell the segmenter cannot see into hides whatever it runs. Drop the
+  // test and `cd $(rm -rf ~/.claude/agents/x)` reads as a bare `cd`, and the
+  // removal is exempted from its crossing rather than reported.
+  [READ_ONLY_CLIENT, 'structure the segmenter cannot see into is never a read',
+    '    if (HIDES_SUBCOMMAND.test(str)) return false;',
+    ''],
+  // The vocabulary grew by exactly one word. Put the card grader's old private
+  // list back into it and `sort -o <persistence surface> payload` is graded a
+  // read and exempted from its crossing, which is the write nobody sees.
+  // `find` sat on the read-only registry with its flags unexamined. Drop the
+  // allowlist and `find ~/.claude/hooks -delete` is graded a read again, its
+  // crossing skipped, and in Code mode the hook scripts go with no card.
+  [READ_ONLY_CLIENT, 'find is judged by its flags at all',
+    "    if (first === 'find') return findOnlyReads(words.slice(1));",
+    ''],
+  // THE SHAPE, not the contents. Return true for an unrecognised flag and the
+  // allowlist becomes a denylist of nothing: every write action this file does
+  // not name, on every platform it does not run on, is waved through again.
+  [READ_ONLY_CLIENT, 'a find flag nobody recognised fails closed rather than passing',
+    '      return false;\n    }\n    return true;\n  }',
+    '      continue;\n    }\n    return true;\n  }'],
+  // Consume an operand after a flag that does not take one and an action is
+  // swallowed as data: `find . -depth -delete` reads as a bare search again.
+  [READ_ONLY_CLIENT, 'only a flag that always takes an operand consumes the word after it',
+    '      if (FIND_READ_FLAGS_NO_OPERAND.indexOf(w) >= 0) continue;',
+    '      if (FIND_READ_FLAGS_NO_OPERAND.indexOf(w) >= 0) { i++; continue; }'],
+  [READ_ONLY_CLIENT, 'the shared vocabulary adds only the word the reported command needs',
+    "  var NO_TARGET_COMMANDS = ['cd'];",
+    "  const NO_TARGET_COMMANDS = ['cd', 'pushd', 'popd', 'true', 'date', 'diff',\n"
+    + "    'printenv', 'sort', 'uniq', 'which', 'whoami'];"],
   // Drop the PowerShell half and Windows keeps the storm this release ended
   // on macOS: every Get-ChildItem under the runtime home grades as a write.
-  [HOOK, 'the read-only registry answers for PowerShell as well as the Unix shells',
-    '    return READ_ONLY_POWERSHELL_COMMANDS.includes(bare.toLowerCase());',
-    '    return false;'],
+  [READ_ONLY, 'the read-only registry answers for PowerShell as well as the Unix shells',
+    '    if (READ_ONLY_POWERSHELL_COMMANDS.indexOf(first.toLowerCase()) >= 0) return true;',
+    ''],
   // Compare case-sensitively and half the spellings agents actually write
   // (get-childitem, GCI) stop being reads, because PowerShell is not.
-  [HOOK, 'PowerShell commands are compared case-insensitively, because PowerShell is',
-    'READ_ONLY_POWERSHELL_COMMANDS.includes(bare.toLowerCase())',
-    'READ_ONLY_POWERSHELL_COMMANDS.includes(bare)'],
+  [READ_ONLY, 'PowerShell commands are compared case-insensitively, because PowerShell is',
+    'READ_ONLY_POWERSHELL_COMMANDS.indexOf(first.toLowerCase()) >= 0',
+    'READ_ONLY_POWERSHELL_COMMANDS.indexOf(first) >= 0'],
   // Every segment of a compound command must qualify, not merely one of
   // them: drop `every` for `some` and `ls x && rm -rf x` reads as free
   // because its first segment alone is a read.
-  [HOOK, 'every segment of a compound command must be read-only, not merely one of them',
-    'segments.every(seg => {',
-    'segments.some(seg => {'],
+  [READ_ONLY, 'every segment of a compound command must be read-only, not merely one of them',
+    'segments.every(segmentReads)',
+    'segments.some(segmentReads)'],
   // A write-shaped redirection makes an otherwise read-only leading command
   // write anyway: drop the check and `echo x > ~/.claude/hooks/y` reads as
   // free because `echo` alone is on the registry.
-  [HOOK, 'a write-shaped redirection disqualifies a command as read-only, whatever its leading words are',
-    "  if (/>>?|\\btee\\b/.test(str)) return false;",
+  [READ_ONLY, 'a write-shaped redirection disqualifies a command as read-only, whatever its leading words are',
+    "    if (/>>?|\\btee\\b/.test(str)) return false;",
     ''],
+  // The two rows that stood here guarded a package-runner exemption keyed on one
+  // third-party tool's name and subcommand. The exemption is gone, so there is
+  // nothing left to mutate: a runner is not a read, and the row below proves
+  // that by the only thing that can, which is the fall-through answering false.
   // A registry path is recognised however it is spelled, including before it
   // exists: drop the fold on the CANDIDATE side (the fold on the registry's
   // own, already-lowercase names changes nothing, which is why this targets
@@ -267,9 +378,9 @@ const MUTATIONS = [
   // The registry is fail-loud in the code direction: a literal folder name
   // hardcoded alongside the registry's own, rather than reasoned from it,
   // must make an unregistered neighbour classify as governed.
-  [HOOK, 'no folder is a persistence surface unless PERSISTENCE_SURFACE_DIRS says so',
-    '  return PERSISTENCE_SURFACE_DIRS.some(d => {',
-    '  return [...PERSISTENCE_SURFACE_DIRS, \'projects\'].some(d => {'],
+  [HOOK, 'no folder is a persistence surface unless its own home\'s registry says so',
+    '  return h.dirs.some(d => {',
+    '  return [...h.dirs, \'projects\'].some(d => {'],
   // The registry is fail-loud in the doc direction too: a name removed from
   // the registry while the boundary passage still cites it must be caught,
   // not just the reverse.
@@ -280,33 +391,48 @@ const MUTATIONS = [
   // its card is the runtime home root itself: drop the exclusion and
   // approving that card's "Always allow this folder" would silence every
   // later write to agents/, skills/, plugins/, commands/ and hooks/ too.
-  [HOOK, 'no standing folder grant is offered when the grant directory would be the runtime home root itself',
-    '  const noGrant = tags.secret || (tags.agentHome && grantDir === agentHomeRoot(home));',
-    '  const noGrant = tags.secret;'],
+  [HOOK, 'no standing folder grant is offered when the grant directory would be the root of EITHER runtime home',
+    '    || (tags.agentHome && runtimeHomes(home).some(h => grantDir === h.root))',
+    '    || false'],
+  // The credential-folder rule, mutated on its own so it is guarded by a test
+  // rather than by the one beside it. Breaking it would put the one-click
+  // blanket grant back on ~/.ssh and its kin, which is the whole point of it.
+  [HOOK_CLASSIFIER, 'a hidden folder under home is never offered as a standing grant, on either card',
+    '    || underHiddenHomeDir(grantDir, home);',
+    '    || false;'],
+  [HOOK_CLASSIFIER, 'and the shell card refuses it too, so the two cards cannot disagree',
+    '  if (underHiddenHomeDir(dir, home)) return null;',
+    '  if (false) return null;'],
   // The one production site carrying classifyFileAccess's tags onto the emitted request.
+  // Moved into boundaryCrossingsFor when that was extracted as a seam, so the
+  // payload's own shape could be asserted rather than the classifier's return.
+  // The guard follows the code: drop the tags and the request carries none.
   [HOOK_INTEGRATION, 'a file crossing\'s tags reach the request the hook actually emits',
-    '        path: access.resolvedPath, grantDir: access.grantDir,\n'
-    + '        agentHome: access.agentHome, secret: access.secret, persistenceSurface: access.persistenceSurface,\n'
-    + '      }])',
-    '        path: access.resolvedPath, grantDir: access.grantDir,\n'
-    + '      }])'],
+    '    path: access.resolvedPath, grantDir: access.grantDir,\n'
+    + '    agentHome: access.agentHome, secret: access.secret,\n'
+    + '    persistenceSurface: access.persistenceSurface, answerFile: access.answerFile,\n'
+    + '  }];',
+    '    path: access.resolvedPath, grantDir: access.grantDir,\n'
+    + '  }];'],
   // Drop the registry check and a broad grant silences the credential file inside it.
   [BOUNDARY, 'a secrets-registry crossing is covered by no stored grant, however broad',
     '  if (isSecretPath(crossing.path, home)) return false;',
     '  if (false) return false;'],
-  [CHAT_VIEW, 'the whole-folder button is never offered for a secrets-tier crossing',
-    '  const wholeFolderOffered = grantable && !(flaggedCrossing && flaggedCrossing.secret);',
+  [CHAT_VIEW, 'the whole-folder button is never offered for a secrets-tier crossing, nor where an answer file is among the places reached',
+    '  const wholeFolderOffered = grantable\n'
+    + '    && !(flaggedCrossing && (flaggedCrossing.secret || flaggedCrossing.answerFile))\n'
+    + '    && !crossings.some(c => c && c.answerFile);',
     '  const wholeFolderOffered = grantable;'],
   [CHAT_VIEW, 'the agent-home copy is applied to the card\'s context',
-    '    if (homeCopy) context = crossings.length > 1 ? `${context} ${homeCopy}` : homeCopy;',
-    '    if (false) context = crossings.length > 1 ? `${context} ${homeCopy}` : homeCopy;'],
+    '    if (stakesCopy) context = crossings.length > 1 ? `${context} ${stakesCopy}` : stakesCopy;',
+    '    if (false) context = crossings.length > 1 ? `${context} ${stakesCopy}` : stakesCopy;'],
   // The multi-crossing warning is COMPOSED with the stakes copy, not
   // replaced by it: dropping the ternary back to a plain overwrite is the
   // exact regression an earlier version shipped, where approving a command
   // that reached several places was no longer told it was approving all of them.
   [CHAT_VIEW, 'the multi-crossing warning survives alongside the agent-home stakes copy, rather than being overwritten by it',
-    'crossings.length > 1 ? `${context} ${homeCopy}` : homeCopy;',
-    'homeCopy;'],
+    'crossings.length > 1 ? `${context} ${stakesCopy}` : stakesCopy;',
+    'stakesCopy;'],
 
   // ===== A MODE CHANGE IS ALL OR NOTHING, IN EVERY FAILURE, IN BOTH DIRECTIONS =====
   [WORKSPACE_HANDLER_UNIT, 'the block is reconciled before the mode is persisted, not after',
@@ -337,10 +463,21 @@ const MUTATIONS = [
   [WORKSPACE_HANDLER_UNIT, 'a mode change that creates settings.local.json where none existed removes it again on failure, not just restores bytes when a file was already there',
     "        else if (preRequestReadErrorCode === 'ENOENT' && fs.existsSync(settingsLocalPath)) fs.unlinkSync(settingsLocalPath);\n",
     ''],
-  // The lower length bound is load-bearing too, not only the upper one.
-  [SCAFFOLD, 'a tail of zero entries is rejected by the lower length bound, not only by the upper one',
-    '  if (roots.length < expectedHead.length + 1 || roots.length > expectedHead.length + 2) return false;',
-    '  if (roots.length > expectedHead.length + 2) return false;'],
+  // The lower length bound is the one that survives. The upper bound is gone
+  // with the fixed-length tail: the list now carries the folders the user
+  // named, so its length proves nothing. A block with NO tail at all is still
+  // refused, and that is what stops a block a person trimmed the temp roots
+  // out of being read as ours and regenerated over their edit.
+  [SCAFFOLD, 'a tail of zero entries is rejected, so a block trimmed of its temp roots is not read as ours',
+    '  if (roots.length < expectedHead.length + 1) return false;',
+    ''],
+  // The shape is read from the block, not assumed. Pinned because it is the
+  // branch that lets a workspace which changed mode still recognise what it
+  // wrote before: assume one shape and the other reads as a stranger's block,
+  // which is a block Rundock can never rewrite or withdraw.
+  [SCAFFOLD, 'which shape a block claims is read from the block, not assumed to be the enabled one',
+    "  const claimedMode = block.enabled === true ? 'knowledge' : 'code';",
+    "  const claimedMode = 'knowledge';"],
 ];
 
 const REPORTER = ['--test-reporter', 'spec'];
@@ -373,7 +510,7 @@ function redTests(suite) {
 }
 
 function run() {
-  const targets = [HOOK, SCAFFOLD, BOUNDARY, CHAT_VIEW, HOOK_INTEGRATION, HOOK_REFUSAL, WORKSPACE_HANDLER, WORKSPACE_HANDLER_UNIT];
+  const targets = [HOOK, SCAFFOLD, BOUNDARY, CHAT_VIEW, HOOK_INTEGRATION, HOOK_REFUSAL, HOOK_CLASSIFIER, WORKSPACE_HANDLER, WORKSPACE_HANDLER_UNIT, READ_ONLY, READ_ONLY_CLIENT];
   const session = beginMutationRun({ files: [...new Set(targets.map((target) => target.src))] });
   const originals = new Map();
   for (const target of targets) originals.set(target, session.original(target.src));

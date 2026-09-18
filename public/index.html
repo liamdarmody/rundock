@@ -27,6 +27,8 @@
 <script src="/empty-list.js"></script>
 <script src="/unread-state.js"></script>
 <script src="/markers.js"></script>
+<!-- read-only-shell.js before permissions.js: the risk grader reads the shared read-only definition off the root object at load time. -->
+<script src="/read-only-shell.js"></script>
 <script src="/permissions.js"></script>
 <script src="/conversation-list.js"></script>
 <script src="/palette-model.js"></script>
@@ -36,6 +38,7 @@
 <script src="/conversation-state.js"></script>
 <script src="/agent-colour.js"></script>
 <script src="/chat-markup.js"></script>
+<script src="/delegation-restore.js"></script>
 <script src="/markdown-render.js"></script>
 <script src="/file-tree-diff.js"></script>
 <script src="/routine-editor-model.js"></script>
@@ -226,6 +229,13 @@
         <div class="settings-nav-item" data-settings="packages" style="display:none" onclick="showSettingsSection('packages')">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
           Packages
+        </div>
+        <!-- Between Workspace and Connectors on purpose: the sidebar reads by
+             narrowing scope. Which folder, then what agents may do inside it,
+             then what they can reach beyond it. -->
+        <div class="settings-nav-item" data-settings="permissions" onclick="showSettingsSection('permissions')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l8 4v6c0 5-3.4 8.4-8 10-4.6-1.6-8-5-8-10V6z"/></svg>
+          Permissions
         </div>
         <div class="settings-nav-item" data-settings="connectors" onclick="showSettingsSection('connectors')">
           <!-- A plug, drawn symmetrically. The previous one carried its cord

@@ -96,6 +96,12 @@ const TABLE = {
     ['a', 'cleared', 'the callout title bar, emptied before rebuild'],
     ['a', 'iconConst', 'the edit button glyph'],
     ['a', 'cleared', 'the callout title bar, emptied on the plain path'],
+    ['b', 'attr-escaper', 'a run of callout body lines, rendered through the document\'s own markdown '
+      + 'pipeline (renderMarkdown), which is the same entry point ordinary body text uses and escapes '
+      + 'the same way. The source is the callout body, which is a person\'s own document text'],
+    ['b', 'attr-escaper', 'a callout title, rendered through the same pipeline'],
+    ['a', 'cleared', 'the title\'s block wrapper unwrapped: markup this file just produced, re-read '
+      + 'from the element it was put in, never new input'],
   ],
   'editor/nodes/source-markers.js': [
     ['a', 'closedWithReason', 'the fenced-block newline trim, a read-modify-write of markup'],
@@ -226,11 +232,14 @@ const TABLE = {
   'views/settings.js': [
     ['b', 'attr-escaper', 'the packages section: model copy and outcomes through esc(), the field value through escAttr()'],
     ['b', 'attr-escaper', 'the workspace card'],
+    ['b', 'attr-escaper', 'the permissions section: the mode description and the section\u2019s own copy are constants, and the two lists it draws are built by workingFoldersSectionHtml() and toolAllowsBlockHtml(), which carry their own rows in this table. Nothing user-authored is interpolated here directly; the permission KEYS reach the page through toolAllowsBlockHtml(), not this assignment'],
     ['a', 'staticMarkup', 'the appearance card'],
     ['a', 'staticMarkup', 'the connectors section, waiting state: a constant template with no interpolation'],
     ['a', 'appValues', 'the about card: the app version from package.json'],
     ['a', 'appValues', 'the runtimes card: constant labels and a regex-clamped version'],
     ['b', 'attr-escaper', 'the connectors section: server names, targets and credential-key names from the user-authored .mcp.json, text through connectorsEsc(), attributes through connectorsEscAttr()'],
+    ['b', 'attr-escaper', 'the working-folders block, redrawn on its own when a list arrives: folder paths chosen by the person using the app and read back from the workspace state, every one through esc() in text and escAttr() in the title attribute. No path reaches a JavaScript position: the remove control carries the row INDEX, a number, because HTML escaping does not survive a second parse as script and a Windows path or an apostrophe would break out of a string literal there'],
+    ['b', 'inline-handler', 'the standing tool-allows block, redrawn on its own when the list arrives: allow keys the person granted through a permission card, stored in the workspace and read back from it. Text through esc(), the revoke handler argument through escAttr(). The keys originate client-side, so they are escaped on the way out rather than trusted on the way in.'],
   ],
   'views/skills.js': [
     ['a', 'escapedText', 'the skills empty state, esc() copy'],

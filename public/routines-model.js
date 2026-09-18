@@ -1037,32 +1037,76 @@
    * @param {{enabled?: boolean}} [input]
    */
   /**
-   * The one-tap approval, on the row of a routine whose plan awaits it.
+   * The sentence and label for a row whose consent has lapsed, or nothing.
+   * Answers both pausedState (the consent-paused state) and nextRunLabel
+   * (no next run is promised on such a row).
    *
-   * SHOWN ONLY ON THE PUBLISHED WORD. The scheduler is the party that decides
-   * whether a plan is approved (the hash comparison lives beside the tick),
-   * and the row consumes its published refusal rather than growing a second
-   * copy of the rule. A roster without the field draws no approval line,
-   * which is the honest reading of a server that predates the feature:
-   * nothing on it can be unapproved.
-   *
-   * THE SENTENCE NAMES THE PLAN, because approving is consenting to what
-   * will happen: which skill or instruction, and where it runs. It does not
-   * promise a files list; what a run touched is recorded after the fact on
-   * the run record, and promising a prediction this release cannot make
-   * would be the garbled-card class again.
+   * SHOWN ONLY ON THE PUBLISHED WORD. The scheduler decides whether a plan is
+   * approved (the hash comparison lives beside the tick), and the row
+   * consumes its published refusal rather than growing a second copy of the
+   * rule. A roster without the field draws no consent line, the honest
+   * reading of a server that predates the feature. The sentence names that
+   * what the routine runs has changed; the plan itself is the row's first
+   * line, so it is not repeated here.
    */
   function approvalOffer(input) {
     if (!input || input.refusal !== 'approval') return null;
-    const what = input.skill
-      ? `run the skill "${input.skill}"`
-      : (typeof input.prompt === 'string' && input.prompt.trim()
-        ? `run: "${input.prompt.trim().length > 80 ? input.prompt.trim().slice(0, 77) + '...' : input.prompt.trim()}"`
-        : 'run this routine');
-    return {
-      text: `Waiting for your approval. This routine will ${what}, on this computer, unattended.`,
-      label: 'Approve plan',
-    };
+    // CHANGED DELIBERATELY. This read "Waiting for your approval ..." beside
+    // an Approve link, next to a pause control implying the routine was live.
+    // Now the row reads as PAUSED, one sentence and one action, and says WHY:
+    // a plan change rendered like a self-applied pause gets resumed
+    // reflexively, which is what the mechanism exists to prevent.
+    return { text: PAUSED_WORDS.consent, label: PAUSED_WORDS.consentAction };
+  }
+
+  // The two ways a row can be paused, in words that differ as the tones do.
+  const PAUSED_WORDS = {
+    self: 'Paused',
+    selfAction: 'Resume',
+    consent: 'Paused: what this runs has changed since you last approved it.',
+    consentAction: 'Review and resume',
+  };
+
+  /**
+   * Which of the two paused states this row is in, or nothing. The consent
+   * state is READ OFF THE PUBLISHED REFUSAL, never a second copy of the
+   * rule; both paused and unapproved reports the pause, the owner's latest
+   * act. `action` names the message the line's one control sends.
+   */
+  function pausedState(input) {
+    if (!input) return null;
+    if (input.paused) {
+      return { kind: 'self', text: PAUSED_WORDS.self, label: PAUSED_WORDS.selfAction, action: 'set_routine_paused' };
+    }
+    const consent = approvalOffer(input);
+    if (consent) return { kind: 'consent', text: consent.text, label: consent.label, action: 'approve_routine_plan' };
+    return null;
+  }
+
+  // What a run in flight says, by who started it.
+  const RUNNING_WORDS = { scheduled: 'Still going', manual: 'Running now (started manually)' };
+
+  /**
+   * The run going right now, in words, or nothing. Read off the roster's
+   * in-flight fact; the state slot's 'running' is the second reading, for a
+   * roster that predates the fact, and can only describe a tick's run.
+   */
+  function liveRun(input) {
+    if (!input) return null;
+    if (input.running) return { text: input.running.trigger === 'manual' ? RUNNING_WORDS.manual : RUNNING_WORDS.scheduled };
+    if (input.lastRunStatus === 'running') return { text: RUNNING_WORDS.scheduled };
+    return null;
+  }
+
+  /**
+   * The Run control: on every row, disabled exactly while a run is in
+   * flight. IT READS THE IN-FLIGHT FACT AND DERIVES NOTHING: the state slot
+   * ignores a pressed run, and the refusal would withhold it from exactly
+   * the routine a person most wants to press Run on.
+   */
+  function runControl(input) {
+    const running = !!(input && input.running);
+    return { label: running ? 'Run in progress' : 'Run now', disabled: running };
   }
 
   function enableOffer(input) {
@@ -1111,6 +1155,9 @@
    */
   function nextRunLabel(input) {
     if (input && input.paused) return { text: 'Paused', className: 'next-run paused-label' };
+    // A routine whose consent was withdrawn is paused too, and promises no
+    // next run: the consent line takes this line's place.
+    if (approvalOffer(input)) return null;
     // A ROUTINE NOBODY HAS TURNED ON PROMISES NOTHING, and the guard is here
     // rather than at the caller because the instant is real. The server works
     // a next run out from the schedule alone, so a routine the upgrade held
@@ -1219,10 +1266,11 @@
       // every other row, so the view draws nothing where there is nothing to
       // offer.
       offer: enableOffer(input),
-      // The row state for a plan awaiting its one tap. Its own field rather
-      // than a reworded enable offer, because the two consents are different
-      // acts on different questions and a row can owe both.
-      approval: approvalOffer(input),
+      // Which paused state the row is in, if either; the run in flight, if
+      // one is; and the one-shot control with its disabled state.
+      pausedState: pausedState(input),
+      live: liveRun(input),
+      run: runControl(input),
       // The one thing on a row that is neither history nor a promise: a fault
       // in the routine itself, which only the person who wrote the file can fix.
       scheduleProblem: scheduleProblem(input),
@@ -1266,7 +1314,7 @@
     actionProblem, emptyState, header,
     dayWords, clockWords, zoneWords, timeWords, workspaceWords, workspaceNames,
     scheduleWords, routineSentence, sentenceParts,
-    RUN_STATUS_WORDS, REFUSALS_UNDERSTOOD,
-    outcomeOf, lastCompletedRunFailed, anyFailure, runStatus, nextRunLabel, enableOffer, approvalOffer, scheduleProblem, promptProblem, isServed, workspaceNote, somethingElseStopsIt, orderByNextRun, row, deleteConfirmation,
+    RUN_STATUS_WORDS, REFUSALS_UNDERSTOOD, PAUSED_WORDS, RUNNING_WORDS,
+    outcomeOf, lastCompletedRunFailed, anyFailure, runStatus, nextRunLabel, enableOffer, approvalOffer, pausedState, liveRun, runControl, scheduleProblem, promptProblem, isServed, workspaceNote, somethingElseStopsIt, orderByNextRun, row, deleteConfirmation,
   };
 }));

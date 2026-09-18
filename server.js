@@ -17,7 +17,7 @@ const codexRuntime = require('./codex.js');
 const PKG_VERSION = require('./package.json').version;
 const searchLib = require('./search.js');
 const { resolvePermissionConvoId } = require('./permission-routing.js');
-const { resolveMarkers } = require('./lib/delegation/markers.js');
+const { resolveMarkers, noteHandoffMarker, HANDOFF_MODES } = require('./lib/delegation/markers.js');
 const { createHandbackBuilder } = require('./lib/delegation/handback.js');
 const { createDelegationRecord, attachDelegationRecord } = require('./lib/delegation/state.js');
 const config = require('./lib/config.js');
@@ -242,11 +242,6 @@ const DISALLOWED_TOOLS = DISALLOWED_TOOLS_KNOWLEDGE;
 const ALLOWED_TOOLS_INTERACTIVE_BASE = 'Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,ToolSearch,Agent,Skill';
 const ALLOWED_TOOLS_LEGACY_BASE = 'Bash,WebFetch,WebSearch';
 
-// DEFAULT_MODEL lives in lib/config.js (shared with lib/agents and
-// lib/runtime/claude.js, where modelArgs and spawnClaude apply it); the
-// root re-reads it only for the _internal export.
-const { DEFAULT_MODEL } = config;
-
 // readMcpServerNames lives in lib/workspace/analysis.js (used only by the
 // workspace analysis).
 
@@ -333,6 +328,7 @@ function stripRundockMarkers(t) {
     .replace(/<!-- RUNDOCK:DELEGATE agent=[\w-]+ -->\n?[\s\S]*/g, '')
     .replace(/<!-- RUNDOCK:RETURN -->/g, '')
     .replace(/<!-- RUNDOCK:COMPLETE -->/g, '')
+    .replace(/<!-- RUNDOCK:CONTINUE -->/g, '')
     .replace(/<!-- RUNDOCK:DOCS_GAP[^>]*-->/g, '')
     .replace(/<!-- RUNDOCK:(?:SAVE|CREATE)_AGENT name=[\w-]+ -->[\s\S]*?<!-- \/RUNDOCK:(?:SAVE|CREATE)_AGENT -->/g, '')
     .replace(/<!-- RUNDOCK:SAVE_SKILL name=[\w-]+ -->[\s\S]*?<!-- \/RUNDOCK:SAVE_SKILL -->/g, '')
@@ -601,7 +597,7 @@ workspaceScaffold.wireScaffoldDeps({ invalidateAgentCache, rebaselineAgentsWatch
 // everything else the module needs is lib-owned or read at use time.
 const claudeRuntime = require('./lib/runtime/claude.js');
 const {
-  modelArgs, getBareArgs, getSpawnEnv,
+  modelArgs, modelForLog, logFlags, getBareArgs, getSpawnEnv,
   resolveClaudeBin, killProcessTree, spawnClaude,
   registerChildPid, unregisterChildPid, pruneScratch,
   loadPidFile, savePidFile, pidOf, pidRecordAlive,
@@ -974,10 +970,11 @@ function appendTranscript(convoId, role, agentId, text, type, meta) {
   // event can carry tool and skill STRUCTURE (counts and slugs, never
   // arguments); callers without one still produce a valid skinny event.
   if (role === 'agent') {
+    // Listed by hand, this counted two markers and could not see a third, so
+    // the telemetry would have reported a conversation with no handoffs while
+    // CONTINUE handbacks were happening in it.
     const resolved = resolveMarkers(text || '');
-    const markers = [];
-    if (resolved.hasReturn) markers.push('return');
-    if (resolved.hasComplete) markers.push('complete');
+    const markers = HANDOFF_MODES.filter((m) => resolved[`has${m[0].toUpperCase()}${m.slice(1)}`]);
     const toolCalls = (meta && meta.toolCalls) || [];
     recordEvent('turn', {
       conv: convoId, agent: agentId,
@@ -998,25 +995,6 @@ function appendTranscript(convoId, role, agentId, text, type, meta) {
   // the new messages findable immediately. Fire-and-forget; failures are
   // caught inside and reconcile-on-search covers any gap.
   if (isPlainAgentMessage) noteSearchConversationActivity(convoId);
-}
-
-function formatTranscript(convoId, { excludeAgent } = {}) {
-  // Load from disk if not in memory
-  const transcript = loadTranscript(convoId);
-  if (!transcript || transcript.length === 0) return null;
-  const allAgents = discoverAgents(); // Call once, not per entry
-  // When excludeAgent is set, filter out that agent's own previous responses
-  // so they don't re-process old requests when re-delegated
-  const filtered = excludeAgent
-    ? transcript.filter(t => t.role === 'user' || t.agent !== excludeAgent)
-    : transcript;
-  if (filtered.length === 0) return null;
-  return filtered.map(t => {
-    if (t.role === 'user') return `USER: ${t.text}`;
-    const agent = allAgents.find(a => a.id === t.agent || a.name === t.agent);
-    const name = agent?.displayName || t.agent;
-    return `${name.toUpperCase()}: ${t.text}`;
-  }).join('\n\n');
 }
 
 function safeSend(data) {
@@ -1192,10 +1170,46 @@ function isAuthError(text) {
   return typeof text === 'string' && AUTH_ERROR_RE.test(text);
 }
 
-// Detects an invalid or unknown model error (e.g. a typo in an agent's `model`
-// field). Rare now that Rundock always passes an explicit valid --model, but it
-// surfaces a clear message instead of a cryptic one if it ever happens.
-const MODEL_ERROR_RE = /issue with the selected model|invalid model|unknown model|model[^a-z]*(?:not found|not available|not recognised|not recognized|is not valid|does not exist)/i;
+// Detects a rejected model, so the recovery card appears instead of a raw error.
+//
+// This used to assume the model was always one of three known words, so the
+// pattern allowed nothing between "model" and the complaint. A runtime that
+// serves the user's own identifiers puts the NAME in that gap, and the single
+// most likely message a gateway user sees, "The model `my-gateway/x` does not
+// exist", fell straight through: they got an error blob and never saw the card
+// telling them what to change. The card is the whole recovery path, so a card
+// that does not appear is the same as a card that is wrong.
+//
+// Allowing a name in the gap is also where over-matching starts: "the model
+// responded but the file was not found" must not raise a model card. So the gap
+// accepts only something shaped like an identifier (optionally quoted, no
+// spaces) and the complaint must follow it directly. The negative cases in
+// test/unit/model-error-detection.test.js are the real specification here.
+const MODEL_ERROR_RE = new RegExp([
+  'issue with the selected model',
+  'invalid model',
+  'unknown model',
+  // `model_not_found`, the machine-readable code most OpenAI-compatible
+  // proxies return alongside their prose.
+  'model[ _]not[ _]found',
+  // "model `x` does not exist", "model: claude-foo is not valid". The name is
+  // optional, so plain "model does not exist" still matches.
+  'model[\\s:=]*["\'`]?[\\w./:-]{0,64}["\'`]?[\\s,]*'
+    // "is" is optional so both "model x not found" and "model x is not
+    // supported" match. The latter is the wording Codex's own classifier uses.
+    + '(?:is[ _])?(?:'
+    + 'not[ _](?:found|available|recognised|recognized|valid|supported)'
+    + '|does[ _]not[ _]exist)',
+  // Anthropic-shaped: the type names the failure and the payload names a model,
+  // in that order, so the pattern above (which needs "model" first) misses it.
+  // "model" must appear as a KEY here, not as a passing mention: a not-found
+  // payload about something else that happens to say the word within the window
+  // would otherwise send the user off to change a model that was never at fault.
+  'not_found_error[\\s\\S]{0,160}?["\']?model["\']?\\s*[:=]',
+  // LiteLLM when the identifier carries no provider prefix. Caused by the model
+  // field, so the card naming that field is the right advice.
+  'llm provider not provided',
+].join('|'), 'i');
 function isModelError(text) {
   return typeof text === 'string' && MODEL_ERROR_RE.test(text);
 }
@@ -1213,14 +1227,70 @@ function sendAuthError(entry, convoId) {
   }));
 }
 
-// Surfaces a clear, one-time message when the selected model is invalid.
+// Agent files Rundock rewrites from source on every workspace open. Read from
+// the scaffold list rather than restated here, so a file added there cannot
+// leave this set stale and have the error card recommend a doomed edit.
+const MANAGED_AGENT_FILES = new Set(
+  workspaceScaffold.RUNDOCK_MANAGED_FILES
+    .filter(e => e.target.startsWith('.claude/agents/'))
+    .map(e => e.target.split('/').pop())
+);
+
+// Resolves a requested agent slug against discovery output.
+//
+// Two steps, not one, and the second is not optional: discoverAgents rewrites
+// the order-0 agent's id to 'default' while its file keeps its own slug, so an
+// id match alone misses the workspace orchestrator, which is the agent most
+// users talk to first. This was three copies of the same expression at the
+// spawn sites; a fourth was written with only the id half and lost the file for
+// exactly that agent.
+function findAgentBySlug(agentList, slug) {
+  return agentList.find(a => a.id === slug)
+    || agentList.find(a => a.fileName && a.fileName.replace('.md', '') === slug);
+}
+
+// Surfaces a clear, one-time message when the runtime rejects the model.
+// Names the file to edit, because the previous message listed three Claude
+// aliases as if they were the only valid answers. They are not: any identifier
+// the configured runtime serves is valid, including a gateway's. And two agents
+// (the CLAUDE.md default agent and the fallback Doc) are synthesised in code
+// with no file at all, so "open the agent's profile" was advice they could not
+// follow.
 function sendModelError(entry, convoId) {
   if (entry.modelErrorSent) return;
   entry.modelErrorSent = true;
   recordEvent('runtime_error', { conv: convoId, agent: entry.agentId, runtime: entry.runtime || 'claude', d: { class: 'model' } });
+  let fileName = null;
+  try {
+    fileName = (findAgentBySlug(discoverAgents(), entry.agentId) || {}).fileName || null;
+  } catch { /* naming the file is a nicety; never let it cost the error message */ }
+  // The two runtimes need OPPOSITE advice here, and giving both the same line
+  // was a real defect: `inherit` is a Claude Code value. Codex receives the
+  // model field verbatim (lib/runtime/codex-glue.js openCodexThread), so
+  // telling a Codex user to set `inherit` trades one rejected model for
+  // another. Codex's own escape hatch is to omit the field.
+  const isCodex = entry.runtime === 'codex';
+  let fix;
+  if (!fileName) {
+    // The CLAUDE.md default agent and the fallback Doc are synthesised in code
+    // with fileName: null, so there is no frontmatter to change and telling the
+    // user to set one is advice they cannot follow. Both of these now inherit,
+    // so a model error on them means the runtime's OWN default is the thing
+    // being refused, and the fix is outside Rundock.
+    fix = 'This agent uses whatever model your runtime defaults to, and that is the model being refused, so there is nothing to change in the workspace. Check the model your runtime is configured to use.';
+  } else if (MANAGED_AGENT_FILES.has(fileName)) {
+    // Rundock rewrites its own managed files from source whenever they differ,
+    // on every workspace open. Naming one here would send the user to make an
+    // edit that does not survive.
+    fix = `${fileName} is managed by Rundock and uses whatever model your runtime defaults to, so an edit there would be overwritten. Check the model your runtime is configured to use.`;
+  } else if (isCodex) {
+    fix = `Remove the \`model:\` field in ${fileName} to use your ChatGPT account's default, or set it to a model your plan includes.`;
+  } else {
+    fix = `Set \`model:\` in ${fileName} to a model your runtime serves, or to \`inherit\` to use whatever model your runtime already defaults to.`;
+  }
   safeSend(JSON.stringify({
     type: 'error',
-    content: "The model set for this agent isn't valid. Open the agent's profile and set its model to opus, sonnet, or haiku. Rundock uses sonnet by default when no model is set.",
+    content: `${isCodex ? 'Codex' : 'Claude Code'} rejected the model set for this agent. ${fix}`,
     _agent: entry.agentId, _conversationId: convoId, _processId: entry.processId
   }));
 }
@@ -1246,7 +1316,6 @@ const delegationEngine = delegationEngineLib.createDelegationEngine({
   processes: chatProcesses,
   safeSend,
   appendTranscript,
-  formatTranscript,
   buildHandbackPayload,
   beginConvoTransition,
   endConvoTransition,
@@ -1332,7 +1401,12 @@ wss.on('connection', (ws) => {
         subtype: 'can_use_tool',
         tool_name: pending.toolName,
         input: pending.toolInput || {},
-        ...(pending.boundary ? { boundary: true, resolved_path: pending.resolvedPath, grant_dir: pending.grantDir, crossings: pending.crossings || [] } : {})
+        ...(pending.boundary ? { boundary: true, resolved_path: pending.resolvedPath, grant_dir: pending.grantDir, crossings: pending.crossings || [] } : {}),
+        // Same whitelist, same trap: a queued request replayed when its
+        // conversation comes back on screen is rebuilt HERE, so a field not
+        // named here is lost on that path even though the first delivery
+        // carried it.
+        ...(pending.answerFile && !pending.boundary ? { answer_file: true, resolved_path: pending.resolvedPath, grant_dir: null } : {})
       },
       _conversationId: pending.conversationId
     }));
@@ -1371,8 +1445,7 @@ wss.on('connection', (ws) => {
         {
           const requestedAgent = msg.agent || 'default';
           const agentList = discoverAgents();
-          const routedAgent = agentList.find(a => a.id === requestedAgent)
-            || agentList.find(a => a.fileName && a.fileName.replace('.md', '') === requestedAgent);
+          const routedAgent = findAgentBySlug(agentList, requestedAgent);
           if (routedAgent && routedAgent.runtime === 'codex') {
             startCodexTurn(convoId, msg, routedAgent);
             return;
@@ -1460,8 +1533,7 @@ wss.on('connection', (ws) => {
             // Look up agent data first so we can build a dynamic system prompt
             const agentList = discoverAgents();
             const requestedAgent = msg.agent || 'default';
-            const agentData = agentList.find(a => a.id === requestedAgent)
-              || agentList.find(a => a.fileName && a.fileName.replace('.md', '') === requestedAgent);
+            const agentData = findAgentBySlug(agentList, requestedAgent);
 
             const systemPrompt = buildSystemPrompt(agentData);
             const chatDisallowed = getDisallowedTools();
@@ -1483,7 +1555,7 @@ wss.on('connection', (ws) => {
               args.push('--agent', agentData.name);
             }
 
-            console.log(`[Chat] convo=${convoId} proc=${processId} agent=${msg.agent} sessionId=${msg.sessionId||'new'} mode=interactive model=${args[args.indexOf('--model')+1]||'(default)'} args=${args.filter(a=>a.startsWith('--')).join(' ')}`);
+            console.log(`[Chat] convo=${convoId} proc=${processId} agent=${msg.agent} sessionId=${msg.sessionId||'new'} mode=interactive model=${modelForLog(args)} args=${logFlags(args)}`);
 
             const proc = spawnClaude(args, {
               cwd: WORKSPACE,
@@ -1516,17 +1588,14 @@ wss.on('connection', (ws) => {
                 // Detect scope return on a directly-started specialist. Either marker
                 // triggers a handoff to the orchestrator; scopeReturnMode selects the
                 // downstream behaviour (routing request vs silent exit).
-                const markers = resolveMarkers(e.responseText);
-                if (markers.mode && !e.delegation) {
-                  e.scopeReturn = true;
-                  // mode already applies COMPLETE-beats-RETURN precedence. This
-                  // is the site that once shipped with the precedence inverted,
-                  // which is why the rule now has exactly one implementation.
-                  e.scopeReturnMode = markers.mode;
-                  console.log(`[ScopeReturn] convo=${convoId} agent=${e.agentId} ${e.scopeReturnMode} marker on non-delegated process`);
+                // This is the site that once shipped with the precedence
+                // inverted, which is why the rule has exactly one
+                // implementation and every consumer calls it.
+                noteHandoffMarker(e, e.responseText, (mode) => {
+                  console.log(`[ScopeReturn] convo=${convoId} agent=${e.agentId} ${mode} marker on non-delegated process`);
                   // Follow-up in-window cancels the auto-return; post-kill messages buffer.
                   scheduleScopeReturnKill(e, convoId);
-                }
+                });
                 // Preserve the specialist output for handleScopeReturn:
                 // mirror the delegate path so a direct RETURN injects the real
                 // output into the orchestrator prompt, not an empty block.
@@ -1552,9 +1621,12 @@ wss.on('connection', (ws) => {
               // Pass wasPipelineComplete=true only when the specialist explicitly
               // signalled pipeline completion; out-of-scope returns get the routing prompt.
               if (entry.scopeReturn) {
-                const wasComplete = entry.scopeReturnMode === 'complete';
-                console.log(`[ScopeReturn] convo=${convoId} specialist ${entry.agentId} exited (${entry.scopeReturnMode}), spawning orchestrator (pipelineComplete=${wasComplete})`);
-                handleScopeReturn(entry, convoId, wasComplete);
+                // The MODE, not a boolean. Collapsing three markers into
+                // "complete or not" turned a CONTINUE from a directly started
+                // specialist into an out-of-scope return, which is the opposite
+                // of what it said.
+                console.log(`[ScopeReturn] convo=${convoId} specialist ${entry.agentId} exited (${entry.scopeReturnMode}), spawning orchestrator (mode=${entry.scopeReturnMode})`);
+                handleScopeReturn(entry, convoId, entry.scopeReturnMode);
                 return;
               }
 
@@ -1613,8 +1685,7 @@ wss.on('connection', (ws) => {
           // RUNDOCK_LEGACY_SPAWN=1).
           const legacyAgentList = discoverAgents();
           const legacyRequestedAgent = msg.agent || 'default';
-          const agentData = legacyAgentList.find(a => a.id === legacyRequestedAgent)
-            || legacyAgentList.find(a => a.fileName && a.fileName.replace('.md', '') === legacyRequestedAgent);
+          const agentData = findAgentBySlug(legacyAgentList, legacyRequestedAgent);
 
           const legacyDisallowed = getDisallowedTools();
           const legacyPermMode = getPermissionMode();
@@ -1634,7 +1705,7 @@ wss.on('connection', (ws) => {
             }
           }
 
-          console.log(`[Chat] convo=${convoId} proc=${processId} agent=${msg.agent} sessionId=${msg.sessionId||'new'} mode=legacy model=${args[args.indexOf('--model')+1]||'(default)'} args=${args.filter(a=>a.startsWith('--')).join(' ')}`);
+          console.log(`[Chat] convo=${convoId} proc=${processId} agent=${msg.agent} sessionId=${msg.sessionId||'new'} mode=legacy model=${modelForLog(args)} args=${logFlags(args)}`);
 
           const proc = spawnClaude(args, {
             cwd: WORKSPACE,
@@ -3223,14 +3294,15 @@ module.exports._internal = {
   // persistence
   readConversations, writeConversations, readState, writeState,
   readLists, writeLists, deleteListEverywhere,
-  loadTranscript, saveTranscript, appendTranscript, formatTranscript,
+  loadTranscript, saveTranscript, appendTranscript,
   transcriptDir, countSessionMessagesSync, countConversationMessages,
   parseSessionHistory, getSessionJsonlPath,
   // spawn plumbing
   wireProcessHandlers, handleDelegation, handleScopeReturn,
   handleChatSpawnError, resolveClaudeBin, spawnClaude, killProcessTree,
   getBareArgs, getSpawnEnv, getDisallowedTools, getPermissionMode,
-  getAllowedToolsInteractive, getAllowedToolsLegacy, modelArgs,
+  getAllowedToolsInteractive, getAllowedToolsLegacy, modelArgs, modelForLog, logFlags,
+  sendModelError, findAgentBySlug,
   killAllChildren, cleanOrphanedProcesses, loadPidFile, savePidFile, pidRecordAlive,
   processCommand, readProcCmdline, parseProcCmdline, psCommand,
   commandLineCapability, COMMAND_LINE_SOURCES,
@@ -3257,6 +3329,6 @@ module.exports._internal = {
   // server objects (integration test lifecycle)
   server, wss,
   // constants
-  MAX_CONSECUTIVE_AGENT_RESUMES, DEFAULT_MODEL, PERMISSION_TIMEOUT_MS,
+  MAX_CONSECUTIVE_AGENT_RESUMES, PERMISSION_TIMEOUT_MS,
   DISALLOWED_TOOLS_KNOWLEDGE, SPECIALIST_OUTPUT_MAX_CHARS,
 };

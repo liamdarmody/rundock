@@ -44,9 +44,21 @@ describe('the innerHTML inventory', () => {
 
   test('the counts the audit quotes are the counts the tree has', () => {
     const t = totals(classify().rows);
-    assert.strictEqual(t.total, 118, 'first-party assignments under public/');
-    assert.strictEqual(t.byGroup.a, 87, 'group (a): closed with a stated reason');
-    assert.strictEqual(t.byGroup.b, 31, 'group (b): fixed');
+    // 124 after the 0.14 rail met the permissions work. Both sides of that
+    // merge added sites and each quoted a total that was true of its own
+    // branch and of no tree that ever shipped: 118 on the rail, 116 on main.
+    // The number below is measured against the merged tree rather than chosen
+    // from either side, which is the only version of this assertion that means
+    // anything.
+    //
+    // The permissions section contributed one group (b) site, its own render:
+    // its copy is constant, and the two lists it draws are built by
+    // workingFoldersSectionHtml() and toolAllowsBlockHtml(), which carry their
+    // own rows, so no user-authored text is interpolated there. The rail
+    // contributed the pins and map views.
+    assert.strictEqual(t.total, 124, 'first-party assignments under public/');
+    assert.strictEqual(t.byGroup.a, 88, 'group (a): closed with a stated reason');
+    assert.strictEqual(t.byGroup.b, 36, 'group (b): fixed');
     assert.strictEqual(t.byGroup.a + t.byGroup.b, t.total, 'every site is in exactly one group');
   });
 

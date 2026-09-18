@@ -126,6 +126,7 @@ not tokens of their own.
 | `--label` | 11px | Small caps labels, badges |
 | `--org-name` | 20px | An agent's name on an org chart node |
 | `--org-role` | 15px | An agent's role under their name on the same node |
+| `--font-mono` | SF Mono, Fira Code, Cascadia Code, Consolas | Text the machine matched on: a path, a command, a permission key |
 
 The last two belong to the org chart, which sizes itself against node geometry
 rather than the page scale. They are named for where they are used so nobody

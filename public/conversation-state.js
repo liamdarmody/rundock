@@ -223,6 +223,37 @@
     return { state: next, effects: [{ type: 'finish-processing', attribution: attribution(message) }] };
   }
 
+  function reduceAgentTurn(state, message, ctx) {
+    // MARKERS STRIPPED, as every other path that renders agent text does. A
+    // blocked turn can carry a handback marker like any other, and showing the
+    // raw comment to the person is the leak this module strips everywhere else.
+    const raw = typeof message.text === 'string' ? message.text : '';
+    const text = (raw ? RundockMarkers.stripMarkers(raw) : '').trim();
+    // Nothing to say draws nothing: an empty bubble is worse than none, the
+    // same rule the handoff line follows.
+    if (!text) return { state, effects: [] };
+    // Already on screen if it streamed. The server only sends this when it did
+    // not, and this is the second half of that pair so neither side alone can
+    // produce a duplicate.
+    if (state.streamingRawText) return { state, effects: [] };
+    // NOT GATED ON isActive. The executor persists the turn into the
+    // conversation's own messages before it touches the document, and it
+    // already declines to draw into a conversation that is not on screen.
+    // Gating the effect instead threw the turn away entirely for a background
+    // conversation: it would be missing from the model as well as the screen,
+    // and a later switch to that conversation would show a gap. This matches
+    // what reduceAgentSwitch does with its own promote.
+    return {
+      state,
+      effects: [{
+        type: 'promote-handoff-message',
+        text,
+        agentId: message._agent || state.activeAgentId || ctx.convoAgentId || null,
+        attribution: attribution(message),
+      }],
+    };
+  }
+
   function reduceAgentSwitch(state, message, ctx) {
     const next = { ...state };
     const effects = [];
@@ -240,17 +271,47 @@
     // delegate this to Dev") is orphaned when the streaming bubble is reset
     // and the specialist's stream overwrites it. Markers are stripped from
     // the promoted text.
+    // STRIPPED FIRST, THEN BRANCHED. Raw truthiness is not prose: streamed text
+    // that is only a delegate marker or only whitespace strips to nothing, and
+    // branching on the raw string took this path anyway, promoted an empty
+    // string, and never reached the carried line. That is the same mistake the
+    // engine makes impossible one layer up, repeated here.
+    let handoffText = '';
     if (state.streamingRawText) {
-      let handoffText = RundockMarkers.stripDelegateTail(state.streamingRawText).trim();
+      handoffText = RundockMarkers.stripDelegateTail(state.streamingRawText).trim();
       handoffText = RundockMarkers.stripMarkers(handoffText).trim();
-      if (handoffText) {
-        effects.push({
-          type: 'promote-handoff-message',
-          text: handoffText,
-          agentId: outgoingAgentId,
-          attribution: attribution(message),
-        });
-      }
+    }
+    // PROVENANCE. The line is honoured only off the switch the server's own
+    // interception sends, and only when that switch names who is leaving. A
+    // field of this name arriving on anything else is not a handoff line the
+    // server computed, and must not reach a render path.
+    if (!handoffText
+      && typeof message.handoffLine === 'string'
+      && message.subtype === 'agent_switch'
+      // EXCLUSIVE TO THE INTERCEPTION. Only the forward-delegation send carries
+      // a target process id alongside a departing agent; the restoration
+      // switches name no new process. Checking the subtype alone let any switch
+      // carry a line, which is not the same as the server having computed one.
+      && typeof message._processId === 'string' && message._processId
+      && typeof message.fromAgent === 'string' && message.fromAgent
+      && typeof message.toAgent === 'string' && message.toAgent) {
+      // NOTHING WAS STREAMED, SO THERE IS NOTHING TO PROMOTE.
+      //
+      // This branch is the whole reason a delegating agent could hand over in
+      // silence. Promotion reads the streaming bubble, and an agent that emits
+      // a bare tool_use block never makes one, which is exactly the turn the
+      // handoff line exists for. The server sends the line on this message for
+      // that case and only that case, so the two can never both apply and a
+      // turn cannot render twice.
+      handoffText = RundockMarkers.stripMarkers(message.handoffLine).trim();
+    }
+    if (handoffText) {
+      effects.push({
+        type: 'promote-handoff-message',
+        text: handoffText,
+        agentId: outgoingAgentId,
+        attribution: attribution(message),
+      });
     }
     // Reset streaming state so the new agent gets a fresh bubble.
     next.streamingRawText = '';
@@ -258,12 +319,48 @@
     next.latestAgentId = null;
     next.hasStreamingBubble = false;
     effects.push({ type: 'clear-streaming-bubble' });
+    // AND THE OUTGOING AGENT'S THINKING INDICATOR. Control has moved, so that
+    // indicator describes nobody. Left in place it is not merely stale: the
+    // tool-status handlers find it by id and write the INCOMING agent's
+    // activity into it, so a specialist's file reads and web fetches appeared
+    // inside the previous agent's bubble while its own showed a bare
+    // "Thinking". Reported from real use, two levels deep.
+    // Only for the conversation on screen. This reaches into the DOM by id,
+    // and the DOM belongs to whichever conversation is being viewed: ungated,
+    // a handoff in a background conversation would strip the indicator from
+    // the one the person is actually watching.
+    if (ctx.isActive) effects.push({ type: 'remove-thinking-indicator' });
     effects.push({ type: 'render-convo-list' });
     // A return goes back to the orchestrator; anything else is a forward
     // delegation (orchestrator->specialist or specialist->sub-specialist).
-    const isReturn = ctx.toAgentType === 'orchestrator';
+    // TOLD, NOT GUESSED. The server knows whether this destination already had
+    // the work: every restore and handback says `returning`, and the forward
+    // delegation is the only switch that does not. Deriving it from the
+    // destination being the orchestrator answered a different question, and got
+    // this one wrong whenever a sub-delegate handed back to a mid-level lead.
+    const isReturn = message.returning === true;
     if (ctx.isActive) {
-      if (ctx.toAgentExists && ctx.fromAgentExists) {
+      // A SILENT SWITCH STILL SWITCHES, IT JUST DRAWS NOTHING.
+      //
+      // On a pipeline-complete handback the orchestrator is spawned only to
+      // park, so drawing its arrival showed an agent joining and then doing
+      // nothing, which reads as a hang. The divider is the only part of this
+      // reducer that is purely presentation, so it is the only part the flag
+      // skips: activeAgentId, delegationActive, the outgoing agent's working
+      // indicator and the chat header all still update.
+      //
+      // The alternative, withholding the message itself, was tried and was
+      // worse: it left the conversation marked delegated with the departed
+      // specialist still showing as working, turning a phantom arrival into a
+      // spinner that never stopped.
+      // A RETURN DRAWS NOTHING. Somebody walking into the room is worth
+      // announcing; somebody who was already in it speaking again is not. The
+      // bubble beneath carries the avatar and the name, and since this release
+      // the departing agent says where the work is going in its own words, so a
+      // divider saying "Roo resumed" is the third telling of the same fact one
+      // line apart. Only a forward delegation changes who owns the work and who
+      // the person is addressing, which is the change worth marking.
+      if (ctx.toAgentExists && ctx.fromAgentExists && !message.silent && !isReturn) {
         effects.push({
           type: 'show-delegation-divider',
           toAgentId: message.toAgent,
@@ -274,8 +371,17 @@
       }
       if (ctx.toAgentExists) effects.push({ type: 'update-chat-header', toAgentId: message.toAgent });
     }
-    // Show the delegate as working AFTER the divider is rendered.
-    if (!isReturn && next.delegationActive) {
+    // Show the delegate as working AFTER the divider is rendered, and NEVER for
+    // a silent switch.
+    //
+    // `isReturn` asks whether the incoming agent is the orchestrator, which is
+    // not the same question as whether this is a restoration. A mid-level lead
+    // restored to park is a specialist, so isReturn is false and this block
+    // started a working indicator for an agent that will never speak: the very
+    // hang the silent flag exists to remove, surviving in the one shape the
+    // flag was added for. The flag says a turn is not coming; nothing after it
+    // may claim otherwise.
+    if (!isReturn && next.delegationActive && !message.silent) {
       applyStartProcessing(next);
       effects.push({ type: 'start-processing', attribution: attribution(message) });
     }
@@ -303,6 +409,13 @@
       case 'cancelled': return reduceCancelled(state, message);
       case 'done': return reduceDone(state, message);
       case 'agent_switch': return reduceAgentSwitch(state, message, ctx);
+      // A turn the server is sending because nothing else will. The branches
+      // that suppress the end-of-message envelope kill the process before any
+      // result arrives, and a result is the only thing that renders text which
+      // did not stream. Reuses the promote effect rather than inventing a
+      // second render: the job is identical, an agent's words appearing as its
+      // own turn.
+      case 'agent_turn': return reduceAgentTurn(state, message, ctx);
       case 'keepalive': return reduceKeepalive(state, message, ctx);
       default: return none(state);
     }

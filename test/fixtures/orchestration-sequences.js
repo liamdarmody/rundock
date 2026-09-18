@@ -41,8 +41,15 @@ function done(agent, processId, code = 0) {
   return { type: 'system', subtype: 'done', code, _agent: agent, _conversationId: CONVO_ID, _processId: processId };
 }
 
-function agentSwitch(fromAgent, toAgent, processId) {
-  return { type: 'system', subtype: 'agent_switch', _conversationId: CONVO_ID, _processId: processId, fromAgent, toAgent };
+// `returning` is what the server says when the destination already had the
+// work: every restore and handback carries it, and the forward delegation is
+// the only switch that does not. The fixture takes it so a sequence can model
+// both legs truthfully rather than leaving the reducer to guess.
+function agentSwitch(fromAgent, toAgent, processId, { returning = false } = {}) {
+  return {
+    type: 'system', subtype: 'agent_switch', _conversationId: CONVO_ID, _processId: processId,
+    fromAgent, toAgent, ...(returning ? { returning: true } : {}),
+  };
 }
 
 function cancelled(agent, processId, { toolCalls = [], turnStartTime = null } = {}) {
@@ -85,7 +92,7 @@ const delegationRoundTrip = [
   processStarted(SPECIALIST, 'p2'),
   initMsg('sess-dev', SPECIALIST, 'p2'),
   ...streamedTurn(SPECIALIST_TEXT, SPECIALIST, 'p2'),
-  agentSwitch(SPECIALIST, ORCHESTRATOR, 'p3'),
+  agentSwitch(SPECIALIST, ORCHESTRATOR, 'p3', { returning: true }),
   processStarted(ORCHESTRATOR, 'p3', { autoContinue: true }),
   ...streamedTurn(RESUME_TEXT, ORCHESTRATOR, 'p3'),
   done(ORCHESTRATOR, 'p3'),

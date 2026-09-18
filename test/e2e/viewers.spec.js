@@ -487,9 +487,62 @@ test('clicking a callout does not show the inline formatting toolbar', async ({ 
   await expect(callout).toBeVisible();
   // Clicking a callout selects the atom node; the inline toolbar cannot format
   // it, so it must stay hidden (editing is via the callout's own editor).
-  await callout.locator('.callout-line').first().click();
+  // The body, whatever shape it takes. A non-blank body renders through the
+  // document's markdown pipeline into `.callout-md`; `.callout-line` survives
+  // only for blank lines and the no-pipeline fallback, so selecting it here
+  // would tie this test to a shape the renderer no longer produces.
+  await callout.locator('.callout-body').first().click();
   await page.waitForTimeout(200);
   await expect(page.locator('#tiptap-toolbar')).not.toHaveClass(/\bvisible\b/);
+});
+
+test('a callout renders its markdown in a real browser, not as source', async ({ page }) => {
+  // THE PROOF THAT WAS MISSING. An earlier attempt at this fix was rejected for
+  // having jsdom evidence only: what a reader actually sees is the rendered
+  // surface in a browser, and that is where the defect was reported from.
+  await boot(page);
+  await openFromTree(page, 'briefing.md');
+  const callout = page.locator('.callout.callout-abstract').first();
+  await expect(callout).toBeVisible();
+  const body = callout.locator('.callout-body');
+  // Formatting is rendered as elements rather than shown as punctuation.
+  await expect(body.locator('strong').first()).toBeVisible();
+  await expect(body).not.toContainText('**');
+  // And the title, which the earlier attempt left as plain text.
+  await expect(callout.locator('.callout-title')).toBeVisible();
+});
+
+test('a click on a wikilink inside a callout reaches the document', async ({ page }) => {
+  // FOUND BY USING THE PRODUCT, after the rendering half had shipped: the links
+  // rendered correctly and went nowhere. A callout sits inside the editor's
+  // editable area, and the node view deferred to ProseMirror except while
+  // editing, so at rest ProseMirror claimed every click to select the node and
+  // nothing that acts on a link ever saw the event.
+  //
+  // WHAT IS ASSERTED IS EVENT DELIVERY, which is exactly what the fix changes.
+  // Where the app goes next is openWikilink's business, shared with every other
+  // surface and covered on its own. Three earlier versions of this test tried to
+  // assert the destination and each guessed wrong about page structure rather
+  // than finding a defect, which is a good reason to assert the seam a change
+  // actually moves rather than the outcome several layers away from it.
+  await boot(page);
+  await openFromTree(page, 'briefing.md');
+  const link = page.locator('.callout a.wikilink').first();
+  await expect(link).toBeVisible();
+  await expect(link).toHaveAttribute('data-wikilink', /.+/);
+  const reached = await page.evaluate(() => new Promise((resolve) => {
+    const anchor = document.querySelector('.callout a.wikilink');
+    const onDoc = (e) => {
+      if (e.target && e.target.closest && e.target.closest('a.wikilink[data-wikilink]')) {
+        document.removeEventListener('click', onDoc, true);
+        resolve(true);
+      }
+    };
+    document.addEventListener('click', onDoc, true);
+    anchor.click();
+    setTimeout(() => resolve(false), 1000);
+  }));
+  expect(reached).toBe(true);
 });
 
 test('a callout edits in place and saves byte-honestly', async ({ page }) => {

@@ -78,6 +78,21 @@ export async function bootEditorEnv() {
       // at module-evaluation time.
       const mod = await import('../../public/editor/index.js');
       const pipeline = await import('../../public/editor/markdown/pipeline.js');
+      // THE DOCUMENT'S OWN RENDERER, loaded into the same globals the browser
+      // gives it. A callout renders its body through this rather than through a
+      // renderer of its own, so a harness without it would exercise the
+      // fallback and prove nothing about what a reader actually sees.
+      const markdown = await import('../../public/markdown-render.js');
+      // The renderer wants the marked NAMESPACE (it constructs marked.Marked),
+      // which is what the browser's global `marked` is, not the parse function.
+      const markedNs = await import('marked');
+      // UMD module: under ESM import the CommonJS exports arrive as `default`.
+      const factory = markdown.createMarkdownRenderer || markdown.default.createMarkdownRenderer;
+      const renderer = factory({ marked: markedNs.default || markedNs });
+      window.RundockRenderer = renderer;
+      window.renderMarkdown = (t, o) => renderer.renderMarkdown(t, o);
+      globalThis.RundockRenderer = renderer;
+      globalThis.renderMarkdown = window.renderMarkdown;
       return { ...mod, pipeline, window };
     })();
   }

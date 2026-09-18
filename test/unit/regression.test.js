@@ -167,7 +167,10 @@ describe('P1 regressions', () => {
     // ReferenceError on every legacy message. The lookup is now hoisted.
     const src = fs.readFileSync(path.join(__dirname, '../../server.js'), 'utf-8');
     const legacyStart = src.indexOf('LEGACY MODE (--print');
-    const declPos = src.indexOf('const agentData = legacyAgentList.find', legacyStart);
+    // The lookup became a shared helper (findAgentBySlug) when a fourth copy of
+    // it was written with only the id half; the ordering this test guards is
+    // unchanged, so the pin follows the declaration rather than being dropped.
+    const declPos = src.indexOf('const agentData = findAgentBySlug(legacyAgentList', legacyStart);
     const usePos = src.indexOf('...modelArgs(agentData), \'--print\'', legacyStart);
     assert.ok(declPos > 0 && usePos > 0, 'both the declaration and use exist in the legacy branch');
     assert.ok(declPos < usePos, 'agentData must be declared before modelArgs(agentData) uses it');
@@ -291,8 +294,16 @@ describe('P2/P3 regressions', () => {
       'get_conversations must persist at most once per load');
     assert.match(block, /if \(convosChanged\) writeConversations\(cleaned\)/,
       'the single write must be conditional on a change');
-    assert.match(block, /!ctx\.processes\.has\(c\.id\)/,
-      'reconciliation must skip conversations with a live process');
+    // The property, not one spelling of it. This pinned `!ctx.processes.has(...)`
+    // as an inline condition, which broke when the loop was rewritten to skip
+    // early and delegate the decision to the shared restore rule, even though
+    // the guarantee never changed. Behaviour for both directions is covered by
+    // test/unit/delegation-relaunch.test.js; what stays pinned here is that the
+    // live-process check is still present at all.
+    assert.match(block, /ctx\.processes\.has\(c\.id\)/,
+      'reconciliation must still consult the live process map');
+    assert.match(block, /restoredActiveAgentId\(c\)/,
+      'and must decide through the one shared restore rule, not a second copy of it');
   });
 
   test('the exited guard is per-line so post-kill chunk lines are dropped', () => {
@@ -343,10 +354,23 @@ describe('P2/P3 regressions', () => {
     const src = fs.readFileSync(path.join(__dirname, '../../server.js'), 'utf-8');
     const anchor = src.indexOf('marker on non-delegated process');
     const region = src.slice(anchor - 800, anchor);
-    assert.match(region, /e\.scopeReturnMode = markers\.mode/,
+    // The assignment moved into noteHandoffMarker when the marker consumers
+    // were consolidated: four of them had each rebuilt this decision by hand,
+    // and two silently ignored a marker added later. The invariant this pin
+    // protects is unchanged and now holds by construction rather than by
+    // repetition, so it asserts the path goes through that one door.
+    // handback-intent.test.js additionally forbids assigning scopeReturnMode
+    // anywhere else, which is the stronger form of the same rule.
+    assert.match(region, /noteHandoffMarker\(/,
       'direct-start path must take its mode from the single resolver');
-    assert.match(region, /resolveMarkers\(e\.responseText\)/,
+    // The scan moved into the helper with the assignment: noteHandoffMarker
+    // calls resolveMarkers itself, so requiring the literal call here would
+    // force the duplication this consolidation removed.
+    assert.match(region, /noteHandoffMarker\(e, e\.responseText/,
       'direct-start path must scan via the single resolver');
+    const markersSrc = fs.readFileSync(path.join(__dirname, '../../lib/delegation/markers.js'), 'utf-8');
+    assert.match(markersSrc, /function noteHandoffMarker[\s\S]{0,400}resolveMarkers\(text\)/,
+      'and that helper is what scans, so there is still exactly one scanner');
   });
 
   test('isResumeFailure guards against cancelled turns', () => {

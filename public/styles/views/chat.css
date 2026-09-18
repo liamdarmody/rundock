@@ -73,7 +73,12 @@
 .activity-tool { color: var(--text-1); font-weight: 500; opacity: 0.7; }
 /* Permission prompt cards */
 .msg-permission { align-self: flex-start; max-width: 85%; animation: fadeIn var(--duration-slow) ease; }
-.permission-card { background: var(--card); border-radius: var(--radius-xl); padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
+/* THE TEXT COLUMN, declared once. The header is a 16px icon plus an 8px gap,
+   so everything below the heading lines up at 24px. It was written out at two
+   of the four places that needed it, which is why the path and the Show
+   command disclosure sat flush left while the sentence above them and the
+   buttons below them were indented. */
+.permission-card { background: var(--card); border-radius: var(--radius-xl); padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; --permission-text-column: 24px; }
 .permission-card.risk-low { border: 1px solid var(--border); }
 .permission-card.risk-medium { border: 1px solid var(--border); }
 .permission-card.risk-high { border: 1px solid var(--attention); }
@@ -85,13 +90,24 @@
 .risk-low .permission-icon { color: var(--text-2); }
 .risk-medium .permission-icon { color: var(--text-1); }
 .risk-high .permission-icon { color: var(--attention); }
-.permission-context { font-size: var(--caption); color: var(--text-2); margin-top: -4px; padding-left: 24px; }
+.permission-context { font-size: var(--caption); color: var(--text-2); margin-top: -4px; padding-left: var(--permission-text-column); }
 .permission-detail { display: block; background: var(--elevated); padding: 8px 12px; border-radius: var(--radius-md); font-size: 13px; font-family: 'SF Mono','Fira Code','Consolas',monospace; color: var(--text-2); word-break: break-all; line-height: 1.4; overflow: hidden; max-height: 80px; }
 .permission-detail-collapse { font-size: var(--caption); color: var(--text-3); }
+/* Margin rather than padding: the detail box is tinted, so padding would leave
+   its background starting at the card edge with only the text indented.
+   Scoped to the card's own children, because .permission-resolved reuses the
+   disclosure outside the card and is laid out on its own terms. */
+.permission-card > .permission-detail,
+.permission-card > .permission-detail-collapse { margin-left: var(--permission-text-column); }
 .permission-detail-collapse summary { cursor: pointer; padding: 4px 0; color: var(--text-2); opacity: 0.8; }
 .permission-detail-collapse summary:hover { opacity: 1; }
 .permission-detail-collapse .permission-detail { max-height: none; margin-top: 6px; }
-.permission-actions { display: flex; gap: 8px; align-items: center; }
+/* Indented to 24px so the buttons share the text column with the header text,
+   the context line and the detail block, all of which already hang past the
+   icon. Before this the card had two left edges 24px apart: everything read as
+   one column except the controls, which sat alone against the card padding. The
+   icon now gutters the whole card rather than only its title row. */
+.permission-actions { display: flex; gap: 8px; align-items: center; padding-left: var(--permission-text-column); flex-wrap: wrap; row-gap: 8px; }
 .btn-perm { padding: 6px 16px; border-radius: var(--radius-lg); font-size: var(--caption); font-weight: 500; cursor: pointer; border: 1px solid var(--border); transition: all var(--duration-base) ease; }
 /* #1a1a1a is dark text on a BRIGHT status fill, and is correct in both
    themes for that reason. It is not a hardcoded copy of the dark theme's

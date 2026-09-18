@@ -250,7 +250,7 @@ test('a run leaves one record, open while it runs and closed when it ends', asyn
   // because the closing write rewrites the whole file from the handle and
   // repairs any omission before anything looks.
   assert.deepStrictEqual(Object.keys(open[0]).sort(),
-    ['agent', 'durationMs', 'endedAt', 'error', 'files', 'filesReason', 'filesStatus', 'id', 'routine', 'sessionId', 'startedAt', 'status'],
+    ['agent', 'durationMs', 'endedAt', 'error', 'files', 'filesReason', 'filesStatus', 'id', 'routine', 'sessionId', 'startedAt', 'status', 'trigger'],
     'an open record carries every field a closed one does');
   assert.strictEqual(open[0].agent, 'keeper', 'including the agent it belongs to');
   assert.strictEqual(open[0].routine, 'briefing', 'and the routine it belongs to');
@@ -869,7 +869,7 @@ test('the reader returns what the writer wrote, from disk, keeping every field',
   assert.deepStrictEqual(rec, onDisk,
     'and the reader hands back exactly what is on disk, dropping no field the writer wrote');
   assert.deepStrictEqual(Object.keys(onDisk).sort(),
-    ['agent', 'durationMs', 'endedAt', 'error', 'files', 'filesReason', 'filesStatus', 'id', 'routine', 'sessionId', 'startedAt', 'status'],
+    ['agent', 'durationMs', 'endedAt', 'error', 'files', 'filesReason', 'filesStatus', 'id', 'routine', 'sessionId', 'startedAt', 'status', 'trigger'],
     'which is the whole record: identity, ownership, the session it ran under, both instants, the outcome, how long, any reason, and what it changed');
 });
 

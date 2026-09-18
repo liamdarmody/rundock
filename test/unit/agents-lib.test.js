@@ -81,6 +81,68 @@ describe('lib/agents module seams', () => {
     delete srv.routineState[key];
   });
 
+  test('the mandatory formatting rules say which markup to write, not only which words', () => {
+    // A fact-checking agent wanted sub-headings inside a message and wrote
+    // `=== Heading ===`, which is MediaWiki. Nothing rendered it, because this
+    // product renders Markdown. It was not ignoring an instruction: the
+    // mandatory block governed dashes and spelling and never named a syntax, so
+    // there was nothing to obey. Pinned here because nothing asserted on this
+    // block at all, which is how it stayed incomplete.
+    useWorkspace({ agents: { doc: agentFile({ name: 'doc', type: 'platform', order: 9 }) } });
+    const doc = discovery.discoverAgents().find(a => a.name === 'doc');
+    const prompt = promptLib.buildSystemPrompt(doc);
+
+    const rules = prompt.slice(prompt.indexOf('FORMATTING RULES'));
+    assert.ok(rules.includes('Write Markdown'),
+      'the rule names the syntax this product renders');
+    for (const other of ['MediaWiki', 'reStructuredText', 'BBCode', 'Textile']) {
+      assert.ok(rules.includes(other),
+        `the rule names ${other} as a syntax not to reach for; pinned so a later edit cannot quietly narrow the rule to the one case that prompted it`);
+    }
+    assert.ok(rules.indexOf('Write Markdown') < rules.indexOf('PLATFORM RULES:'),
+      'it sits inside the mandatory block, not in a section of its own');
+
+    // Taking nothing away: the rules that were already mandatory are still here.
+    assert.ok(rules.includes('NEVER use em dashes'), 'the dash rule survives');
+    assert.ok(rules.includes('UK spelling'), 'and so does the spelling rule');
+  });
+
+  test('the shell rules never declare a class of command unsupported', () => {
+    // A LINE HERE TOLD AGENTS THAT DESTRUCTIVE COMMANDS WOULD NOT REACH THE
+    // USER, and they repeated it to people as fact.
+    //
+    // It contradicted the two rules above it, which say to attempt the command
+    // and let the user decide, and warn that a refusal invented before trying
+    // states as fact something the agent has not checked. Agents substituted
+    // `rm` and `rmdir` for `rm -rf` rather than attempting it, and then told
+    // the user that Rundock does not stop destructive commands: from inside a
+    // turn, an approved card is indistinguishable from no card at all, so an
+    // agent cannot honestly report on the permission system and must not try.
+    //
+    // Then 0.13.3 made those commands reach the user, and the sentence became
+    // false as well, carrying Rundock's authority behind something untrue about
+    // a person's own permission system.
+    //
+    // Pinned as a rule about the SHAPE of these instructions rather than about
+    // one sentence, because the next version of this mistake will use different
+    // words: the prompt may tell an agent what to attempt, never what the
+    // permission layer will decide.
+    useWorkspace({ agents: { doc: agentFile({ name: 'doc', type: 'platform', order: 9 }) } });
+    const doc = discovery.discoverAgents().find(a => a.name === 'doc');
+    const prompt = promptLib.buildSystemPrompt(doc);
+
+    assert.match(prompt, /always attempt the command and let the user decide/i,
+      'sanity: the shell rules are in this prompt, or the assertions below prove nothing');
+    assert.doesNotMatch(prompt, /not supported and will not reach the user/i,
+      'the sentence agents were quoting at people is gone');
+    assert.doesNotMatch(prompt, /will not reach the user for approval/i,
+      'and no rephrasing of it: the prompt does not predict what the permission layer does');
+    for (const cmd of ['rm with force flags', 'curl|sh', 'wget|sh']) {
+      assert.ok(!prompt.includes(cmd),
+        `the prompt names no command class as unsupported (${cmd}); what reaches the user is decided at the permission layer, not described here`);
+    }
+  });
+
   test('prompt deps are injected: a fake codex detector controls the RUNTIMES section', () => {
     useWorkspace({ agents: { doc: agentFile({ name: 'doc', type: 'platform', order: 9 }) } });
     const doc = discovery.discoverAgents().find(a => a.name === 'doc');
@@ -89,6 +151,63 @@ describe('lib/agents module seams', () => {
       assert.match(promptLib.buildSystemPrompt(doc), /RUNTIMES:/, 'available codex surfaces the runtime section');
       promptLib.wirePromptDeps({ detectCodexCached: () => ({ installed: false, authenticated: false, version: null }) });
       assert.doesNotMatch(promptLib.buildSystemPrompt(doc), /RUNTIMES:/, 'absent codex omits the section entirely');
+    } finally {
+      promptLib.wirePromptDeps(prev);
+    }
+  });
+
+  // Issue #307. The prompt told every platform agent "Never recommend a runtime
+  // or model that is not listed here", which forbade a capability the code had
+  // always allowed: modelArgs never validated a model, so a gateway identifier
+  // worked while Doc refused to write one. Enumerating the consumers, as the
+  // card required, showed this sentence only ever reached users with Codex
+  // installed AND authenticated, because it lives inside that branch. Both
+  // states are asserted so that narrower blast radius is pinned, not assumed.
+  test('the prompt permits any model the runtime serves, and forbids only unlisted runtimes', () => {
+    useWorkspace({ agents: { doc: agentFile({ name: 'doc', type: 'platform', order: 9 }) } });
+    const doc = discovery.discoverAgents().find(a => a.name === 'doc');
+    const prev = promptLib.wirePromptDeps({ detectCodexCached: () => ({ installed: true, authenticated: true, version: '1.0.0' }) });
+    try {
+      const withCodex = promptLib.buildSystemPrompt(doc);
+      assert.doesNotMatch(withCodex, /Never recommend a runtime or model that is not listed here/,
+        'the blanket prohibition covered models, which the code accepts from any source');
+      assert.match(withCodex, /Never recommend a runtime that is not listed here/,
+        'the runtime half of the rule is real and stays: Codex either exists on this machine or does not');
+      assert.match(withCodex, /any identifier the configured runtime serves/,
+        'the prompt states the capability the code has always had');
+      assert.match(withCodex, /model: inherit/, 'and names the value to use when the user names nothing');
+
+      // The two runtimes need OPPOSITE instructions for the same situation,
+      // and one paragraph covering both read as self-contradictory. A Codex
+      // agent written with `model: inherit` gets that string passed to Codex
+      // verbatim (lib/runtime/codex-glue.js openCodexThread), which answers
+      // with a model-not-available card: Doc would build an agent that cannot
+      // start. So the inherit instruction must be scoped to Claude Code, and
+      // the Codex instruction must say omit.
+      const codexSentence = withCodex.split('\n').find(l => /Codex agent/.test(l) && /OMIT|omit/.test(l));
+      assert.ok(codexSentence, 'the prompt must tell Doc to omit the model field for a Codex agent');
+      // It must NOT claim that `inherit` breaks a Codex agent. It used to, and
+      // that stopped being true when the resolution layer started normalising
+      // `inherit` to omission for Codex: a prompt that warns of a consequence
+      // the code prevents is teaching Doc something false.
+      assert.doesNotMatch(withCodex, /cannot start/,
+        'the code tolerates inherit on Codex, so the prompt must not say otherwise');
+      assert.doesNotMatch(withCodex, /For a Codex agent write `model: inherit`/,
+        'omission is still the instruction for Codex, tolerated or not');
+
+      promptLib.wirePromptDeps({ detectCodexCached: () => ({ installed: false, authenticated: false, version: null }) });
+      const noCodex = promptLib.buildSystemPrompt(doc);
+      assert.doesNotMatch(noCodex, /Never recommend a runtime/,
+        'runtime advice is machine-specific and stays behind the Codex check');
+      assert.doesNotMatch(noCodex, /RUNTIMES:/, 'as does the section it lives in');
+      // The point of separating them: model advice is NOT machine-specific, and
+      // the users who most need it (a gateway, no Codex installed) were the
+      // exact users the old structure gave nothing to.
+      assert.match(noCodex, /MODELS:/, 'model guidance reaches a machine with no Codex');
+      assert.match(noCodex, /any identifier the configured runtime serves/);
+      assert.match(noCodex, /model: inherit/, 'including the value to use when the user names nothing');
+      assert.doesNotMatch(noCodex, /Codex agent/,
+        'and says nothing about a runtime this machine does not have');
     } finally {
       promptLib.wirePromptDeps(prev);
     }

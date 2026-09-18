@@ -17,20 +17,42 @@ const { buildDispatch } = require('../../lib/protocol/handlers/index.js');
 const { _internal: srv } = require('../../server.js');
 const config = require('../../lib/config.js');
 
-// The full routing surface of the dispatch table, frozen: 44 message types
-// plus save_agent's two legacy aliases. The four root shims (chat, delegate,
+// The full routing surface of the dispatch table, frozen: 55 message types
+// plus save_agent's two legacy aliases, 57 keys in all.
+//
+// THE NUMBER WAS COUNTED, NOT CARRIED OVER. Both sides of the 0.14 rail merge
+// quoted a figure here, 44 on the rail and 45 on main, and the list each sat
+// above already held far more than either claimed: the count had been stale
+// for a long time on both, because the assertion below compares the LIST
+// against the table and never reads this sentence. A comment that states a
+// number nothing checks is the same defect this release found four times in
+// shipped copy, in a file whose whole purpose is to freeze a surface. The four root shims (chat, delegate,
 // end_delegation, flush_buffer) must NEVER appear here: chat is the
 // kill-window chat shim, delegate/end_delegation are delegation glue, and
 // flush_buffer drains safeSend's own reconnect buffer.
-// There is no sandbox switch: set_workspace_mode is the only message that
-// can move the OS write block, proven end to end by
-// test/unit/workspace-boundary.test.js.
+// There is no sandbox switch. Two messages reach the OS write block and no
+// third: set_workspace_mode decides whether Rundock claims the enable, and
+// set_working_folders decides which paths the block names, rewriting it for
+// whatever mode the workspace is already in. Both are proven end to end,
+// the first by test/unit/workspace-boundary.test.js and the second by
+// 'naming a folder reaches the operating system' below.
 const EXPECTED_TYPES = [
   'permission_response', 'cancel',
   'get_workspaces', 'client_render_time', 'list_workspaces', 'set_workspace',
   'pick_folder', 'create_workspace', 'set_workspace_mode',
+  // The folders a workspace names besides itself. One message sets the whole
+  // list, because adding and removing are the same act on the store and a
+  // narrower pair would have to agree about normalisation.
+  'set_working_folders', 'get_working_folders',
+  // The standing answers to "Always allow" on a permission card. Three verbs
+  // rather than one: listing, granting and revoking have different
+  // consequences, and a single message would have to carry the verb as data.
+  'get_tool_allows', 'add_tool_allow', 'remove_tool_allow',
   'get_agents', 'get_runtime_status', 'get_files', 'get_skills', 'get_run',
   'cancel_routine_run',
+  // The row's Run control: a pressed run through the scheduler's own
+  // single-flight entry, refused only for what cannot produce a run.
+  'run_routine_now',
   'plan_package_import', 'apply_package_import',
   // The extension mount reads: the installed roster, and one renderer's
   // payload. Driven through the dispatch table in the handler-seam tests
@@ -209,6 +231,210 @@ describe('handler seams (stub ctx, capture ws)', () => {
       const ws2 = captureWs();
       table.set_workspace_mode({}, ws2, { type: 'set_workspace_mode', mode: 'sideways' });
       assert.strictEqual(ws2.sent[0].type, 'workspace_error', 'invalid modes are refused');
+    } finally {
+      config.setWorkspace(original);
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // THE WORKING FOLDERS HANDLERS, driven against a real temporary workspace so
+  // what is stored and what is answered are both the real thing. The refusals
+  // are exercised rather than assumed, because each one exists to keep a bad
+  // list off disk and an untested refusal is a refusal nobody has seen work.
+  function workingFoldersWorkspace() {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'proto-wf-'));
+    fs.mkdirSync(path.join(dir, '.rundock'), { recursive: true });
+    return dir;
+  }
+
+  test('removing a folder takes it out of the sandbox too, not only adding one puts it in', () => {
+    // The addition direction alone would pass with a block that only ever
+    // grows: a folder removed in the interface but still writable at the
+    // syscall level is a setting that lies in the direction that matters.
+    const table = buildDispatch();
+    const original = config.getWorkspace();
+    const dir = workingFoldersWorkspace();
+    const kept = fs.mkdtempSync(path.join(os.tmpdir(), 'proto-wf-kept-'));
+    const dropped = fs.mkdtempSync(path.join(os.tmpdir(), 'proto-wf-dropped-'));
+    const settingsPath = path.join(dir, '.claude', 'settings.local.json');
+    try {
+      config.setWorkspace(dir);
+      table.set_working_folders({}, captureWs(), { type: 'set_working_folders', folders: [kept, dropped] }, 'darwin');
+      let roots = JSON.parse(fs.readFileSync(settingsPath, 'utf8')).sandbox.filesystem.allowWrite;
+      assert.ok(roots.includes(path.resolve(dropped)), 'fixture sanity: both folders are in the block first');
+
+      table.set_working_folders({}, captureWs(), { type: 'set_working_folders', folders: [kept] }, 'darwin');
+      roots = JSON.parse(fs.readFileSync(settingsPath, 'utf8')).sandbox.filesystem.allowWrite;
+      assert.ok(roots.includes(path.resolve(kept)), 'the folder that stayed is still writable');
+      assert.ok(!roots.includes(path.resolve(dropped)),
+        'and the one removed is no longer writable, without waiting for a mode switch or a restart');
+    } finally {
+      config.setWorkspace(original);
+    }
+  });
+
+  test('a folder is still stored when the sandbox write fails, and the failure is not silent to the log', () => {
+    // The stored list stands on its own: the folders are in effect for every
+    // agent spawned from here, and scaffoldWorkspace reconciles the block
+    // again on the next workspace open. Discarding a list a person just chose
+    // because a settings file could not be written would cost more than the
+    // delay it saves, so this path warns and carries on.
+    const table = buildDispatch();
+    const original = config.getWorkspace();
+    const dir = workingFoldersWorkspace();
+    const named = fs.mkdtempSync(path.join(os.tmpdir(), 'proto-wf-failwrite-'));
+    // Corrupt rather than absent: reconcileSandboxForMode treats ENOENT as an
+    // empty file and every other read failure as a reason to raise, precisely
+    // so a settings file it cannot parse is never overwritten.
+    fs.mkdirSync(path.join(dir, '.claude'), { recursive: true });
+    const settingsPath = path.join(dir, '.claude', 'settings.local.json');
+    const corrupt = '{ this is not json';
+    fs.writeFileSync(settingsPath, corrupt);
+    const warnings = [];
+    const realWarn = console.warn;
+    console.warn = (...a) => warnings.push(a.join(' '));
+    try {
+      config.setWorkspace(dir);
+      const ws = captureWs();
+      table.set_working_folders({}, ws, { type: 'set_working_folders', folders: [named] }, 'darwin');
+      assert.strictEqual(ws.sent[0].type, 'working_folders', 'the caller is answered, not errored');
+      assert.deepStrictEqual(ws.sent[0].folders.map(f => f.path), [path.resolve(named)],
+        'and the folder is stored, because the hook can honour it whatever the settings file says');
+      assert.ok(warnings.some(w => w.includes('the sandbox was not updated')),
+        'the failure reaches the log rather than vanishing');
+      assert.strictEqual(fs.readFileSync(settingsPath, 'utf8'), corrupt,
+        'and the unparsable file is left exactly as it was, never rewritten from empty');
+    } finally {
+      console.warn = realWarn;
+      config.setWorkspace(original);
+    }
+  });
+
+  test('naming a folder reaches the operating system, not only the permission hook', () => {
+    // The hook is handed the folder list at every spawn; the sandbox is told
+    // once, in a file written at scaffold and mode-change time. Without a
+    // rewrite here, a folder named in this setting worked for file tools and
+    // not for the shell, which is the same split between the two instruments
+    // that the working-folder sandbox change exists to close.
+    const table = buildDispatch();
+    const original = config.getWorkspace();
+    const dir = workingFoldersWorkspace();
+    const named = fs.mkdtempSync(path.join(os.tmpdir(), 'proto-wf-sandbox-'));
+    try {
+      config.setWorkspace(dir);
+      // 'darwin' explicitly: no block is written for any other platform, so a
+      // call defaulted to process.platform asserts nothing on a Linux runner.
+      table.set_working_folders({}, captureWs(), { type: 'set_working_folders', folders: [named] }, 'darwin');
+      const settings = JSON.parse(fs.readFileSync(path.join(dir, '.claude', 'settings.local.json'), 'utf8'));
+      assert.ok(settings.sandbox.filesystem.allowWrite.includes(path.resolve(named)),
+        'the folder just named is writable, without waiting for a mode switch or a restart');
+    } finally {
+      config.setWorkspace(original);
+    }
+  });
+
+  test('set_working_folders stores the list, answers with it, and reports what it refused', () => {
+    const table = buildDispatch();
+    const original = config.getWorkspace();
+    const dir = workingFoldersWorkspace();
+    const named = fs.mkdtempSync(path.join(os.tmpdir(), 'proto-wf-named-'));
+    try {
+      config.setWorkspace(dir);
+      const ws = captureWs();
+      // One storable folder, one that can never be stored. The refusal is
+      // NAMED in the reply: a row that vanishes with no reason given is how a
+      // person stops trusting a setting.
+      table.set_working_folders({}, ws, { type: 'set_working_folders', folders: [named, 'not-absolute'] });
+      assert.strictEqual(ws.sent[0].type, 'working_folders');
+      // STORED AS TYPED, resolved but not followed through symlinks. The store
+      // decides nothing about permissions and the hook canonicalises every
+      // entry itself at comparison time, so resolving links here would only
+      // show a person a path they never typed. On macOS this is the difference
+      // between /tmp and /private/tmp for the same folder.
+      const stored = path.resolve(named);
+      assert.deepStrictEqual(ws.sent[0].folders.map(f => f.path), [stored]);
+      assert.deepStrictEqual(ws.sent[0].rejected, ['not-absolute'], 'the refused entry is named back');
+      assert.strictEqual(typeof ws.sent[0].home, 'string', 'the home folder travels with the list');
+
+      const state = JSON.parse(fs.readFileSync(path.join(dir, '.rundock', 'state.json'), 'utf-8'));
+      assert.deepStrictEqual(state.workingFolders, [stored], 'and only the storable one persisted');
+
+      // Read back through the other handler, which resolves existence at read
+      // time rather than trusting what was written earlier.
+      const reader = captureWs();
+      table.get_working_folders({}, reader, { type: 'get_working_folders' });
+      assert.deepStrictEqual(reader.sent[0].folders, [{ path: stored, missing: false }]);
+
+      // A folder that has gone is reported as missing, never dropped.
+      fs.rmSync(named, { recursive: true, force: true });
+      const after = captureWs();
+      table.get_working_folders({}, after, { type: 'get_working_folders' });
+      assert.deepStrictEqual(after.sent[0].folders, [{ path: stored, missing: true }],
+        'the row survives its folder');
+    } finally {
+      config.setWorkspace(original);
+      fs.rmSync(dir, { recursive: true, force: true });
+      fs.rmSync(named, { recursive: true, force: true });
+    }
+  });
+
+  test('the working folders handlers refuse rather than guess when there is nothing to write to', () => {
+    const table = buildDispatch();
+    const original = config.getWorkspace();
+    try {
+      config.setWorkspace(null);
+      const noWorkspace = captureWs();
+      table.set_working_folders({}, noWorkspace, { type: 'set_working_folders', folders: ['/tmp'] });
+      assert.strictEqual(noWorkspace.sent[0].type, 'workspace_error');
+      assert.match(noWorkspace.sent[0].message, /Open a workspace/);
+
+      // The READ answers an empty list rather than an error: a client asking
+      // what is named before a workspace is open has asked a fair question.
+      const reader = captureWs();
+      table.get_working_folders({}, reader, { type: 'get_working_folders' });
+      assert.deepStrictEqual(reader.sent[0].folders, []);
+      assert.strictEqual(reader.sent[0].type, 'working_folders');
+    } finally {
+      config.setWorkspace(original);
+    }
+  });
+
+  test('a message carrying no list is refused, rather than read as "name nothing"', () => {
+    // The dangerous misreading: treating a malformed message as an empty list
+    // would silently clear every folder a person had named.
+    const table = buildDispatch();
+    const original = config.getWorkspace();
+    const dir = workingFoldersWorkspace();
+    try {
+      config.setWorkspace(dir);
+      for (const folders of [undefined, null, 'a string', 7]) {
+        const ws = captureWs();
+        table.set_working_folders({}, ws, { type: 'set_working_folders', folders });
+        assert.strictEqual(ws.sent[0].type, 'workspace_error', `${String(folders)} is refused`);
+        assert.match(ws.sent[0].message, /no list was sent/);
+      }
+      assert.strictEqual(fs.existsSync(path.join(dir, '.rundock', 'state.json')), false,
+        'and nothing was written by any of them');
+    } finally {
+      config.setWorkspace(original);
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a write that fails is reported, not swallowed into a success', () => {
+    const table = buildDispatch();
+    const original = config.getWorkspace();
+    const dir = workingFoldersWorkspace();
+    try {
+      config.setWorkspace(dir);
+      // .rundock as a FILE makes the state write throw, which is the shape a
+      // real failure takes here (a permissions problem, a full disk).
+      fs.rmSync(path.join(dir, '.rundock'), { recursive: true, force: true });
+      fs.writeFileSync(path.join(dir, '.rundock'), 'not a directory');
+      const ws = captureWs();
+      table.set_working_folders({}, ws, { type: 'set_working_folders', folders: [os.tmpdir()] });
+      assert.strictEqual(ws.sent[0].type, 'workspace_error');
+      assert.match(ws.sent[0].message, /Could not save the working folders/);
     } finally {
       config.setWorkspace(original);
       fs.rmSync(dir, { recursive: true, force: true });
@@ -659,23 +885,41 @@ describe('the OS write block is driven by mode alone, through the real dispatch'
     } catch (e) { return false; }
   }
 
-  test('on macOS, Knowledge mode carries the block, Code mode withdraws it, and moving back restores it', () => {
+  // WHETHER THE SANDBOX IS SWITCHED ON, which a block's mere presence does not
+  // answer. Rundock writes one settings layer and `sandbox.enabled` is an OR
+  // across all of them, so Code mode keeps a block (to name the folders the
+  // user chose, and so they survive the trip back to Knowledge mode) while
+  // setting the enable to false.
+  //
+  // THE VALUE, NOT THE KEY. This asked `'enabled' in settings.sandbox`, which
+  // was the same conflation the production code carried: it read a Code mode
+  // block that says `false` as one that switches the sandbox ON. The comment
+  // above already said these tests mean "is it on", so now they ask it.
+  function blockEnables(dir) {
+    try {
+      const settings = JSON.parse(fs.readFileSync(path.join(dir, '.claude', 'settings.local.json'), 'utf8'));
+      return !!settings.sandbox && settings.sandbox.enabled === true;
+    } catch (e) { return false; }
+  }
+
+  test('on macOS, Knowledge mode switches the sandbox on, Code mode switches it off but keeps the paths, and moving back switches it on again', () => {
     const table = buildDispatch();
     const dir = tempWs();
     withWorkspace(dir, () => {
       const toKnowledge = captureWs();
       table.set_workspace_mode({}, toKnowledge, { mode: 'knowledge' }, 'darwin');
       assert.deepStrictEqual(toKnowledge.sent[0], { type: 'workspace_mode_changed', mode: 'knowledge' });
-      assert.ok(blockPresent(dir), 'Knowledge mode on macOS carries the block');
+      assert.ok(blockEnables(dir), 'Knowledge mode on macOS switches the sandbox on');
 
       const toCode = captureWs();
       table.set_workspace_mode({}, toCode, { mode: 'code' }, 'darwin');
       assert.deepStrictEqual(toCode.sent[0], { type: 'workspace_mode_changed', mode: 'code' });
-      assert.strictEqual(blockPresent(dir), false, 'Code mode withdraws it');
+      assert.strictEqual(blockEnables(dir), false, 'Code mode switches the sandbox off');
+      assert.ok(blockPresent(dir), 'while keeping the block, which is the only place the named folders are written');
 
       const backToKnowledge = captureWs();
       table.set_workspace_mode({}, backToKnowledge, { mode: 'knowledge' }, 'darwin');
-      assert.ok(blockPresent(dir), 'moving back to Knowledge mode restores it');
+      assert.ok(blockEnables(dir), 'moving back to Knowledge mode switches it on again');
     });
     fs.rmSync(dir, { recursive: true, force: true });
   });
@@ -900,7 +1144,7 @@ describe('the OS write block is driven by mode alone, through the real dispatch'
         assert.strictEqual(socket.sent[0].type, 'workspace_mode_changed', `switching to ${mode} succeeds`);
         const state = JSON.parse(fs.readFileSync(path.join(dir, '.rundock', 'state.json'), 'utf8'));
         assert.strictEqual(state.workspaceMode, mode, `the recorded mode is ${mode} right after this switch`);
-        assert.strictEqual(blockPresent(dir), mode === 'knowledge',
+        assert.strictEqual(blockEnables(dir), mode === 'knowledge',
           `the block on disk agrees with ${mode} right after this switch, not just at the end of the sequence`);
       }
     });
@@ -1036,5 +1280,183 @@ describe('the serving-workspace notice', () => {
       fs.rmSync(previous, { recursive: true, force: true });
       fs.rmSync(target, { recursive: true, force: true });
     }
+  });
+});
+
+describe('standing tool allows outlive the tab they were given in', () => {
+  const boundary = require('../../lib/workspace/boundary.js');
+
+  function allowsWorkspace() {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'proto-allows-'));
+    fs.mkdirSync(path.join(dir, '.rundock'), { recursive: true });
+    return dir;
+  }
+
+  test('an allow is stored, listed back, and survives a fresh read of the workspace', () => {
+    // The defect: the set lived in the browser tab, so a reload silently
+    // withdrew every answer and the card asked again. Asserted by reading the
+    // store back through a separate call rather than by trusting the reply,
+    // because the reply could be right while nothing was written.
+    const table = buildDispatch();
+    const original = config.getWorkspace();
+    const dir = allowsWorkspace();
+    try {
+      config.setWorkspace(dir);
+      const ws = captureWs();
+      table.add_tool_allow({}, ws, { type: 'add_tool_allow', key: 'Bash:git' });
+      assert.strictEqual(ws.sent[0].type, 'tool_allows');
+      assert.deepStrictEqual(ws.sent[0].tools, ['Bash:git']);
+      assert.deepStrictEqual(boundary.readToolAllows(), ['Bash:git'],
+        'and it is on disk, which is what a reload will read');
+    } finally { config.setWorkspace(original); }
+  });
+
+  // WHAT MAY BECOME A STORED ANSWER, decided at the wire rather than at the
+  // renderer. The client only ever builds bare identifiers (a tool name, or
+  // `Bash:<binary>` with directories already stripped), but the client is not
+  // the only thing that can send this message, and anything stored here is
+  // later rendered into a settings row. The renderer defends itself too; this
+  // is the other half of that pair, and it is the half that keeps the stored
+  // set clean rather than merely survivable.
+  test('a key that is not a tool name is refused, and nothing is stored', () => {
+    const table = buildDispatch();
+    const original = config.getWorkspace();
+    const dir = allowsWorkspace();
+    try {
+      config.setWorkspace(dir);
+      const hostile = [
+        "x'); alert('pwned",      // closes a JavaScript literal
+        '<script>alert(1)</script>',
+        'Bash:git; rm -rf /',     // whitespace and a shell operator
+        'Bash:git\nBash:rm',      // a newline, so one row could become two
+        '../../etc/passwd',
+        'a'.repeat(129),          // longer than any real tool name
+      ];
+      for (const key of hostile) {
+        const ws = captureWs();
+        table.add_tool_allow({}, ws, { type: 'add_tool_allow', key });
+        assert.strictEqual(ws.sent[0].type, 'workspace_error',
+          `refused rather than stored: ${JSON.stringify(key)}`);
+      }
+      assert.deepStrictEqual(boundary.readToolAllows(), [],
+        'not one of them reached the store');
+
+      // The other direction, so the rule cannot be satisfied by refusing
+      // everything: the keys the client actually builds are all accepted.
+      for (const key of ['Bash:git', 'Bash:npm', 'PowerShell:Get-Item', 'WebFetch', 'Bash:docker-compose']) {
+        const ws = captureWs();
+        table.add_tool_allow({}, ws, { type: 'add_tool_allow', key });
+        assert.strictEqual(ws.sent[0].type, 'tool_allows',
+          `a key the permission card can produce must be accepted: ${key}`);
+      }
+      assert.strictEqual(boundary.readToolAllows().length, 5);
+    } finally { config.setWorkspace(original); }
+  });
+
+  test('a grant is scoped to the workspace it was given in', () => {
+    const table = buildDispatch();
+    const original = config.getWorkspace();
+    const a = allowsWorkspace();
+    const b = allowsWorkspace();
+    try {
+      config.setWorkspace(a);
+      table.add_tool_allow({}, captureWs(), { type: 'add_tool_allow', key: 'Bash:npm' });
+      config.setWorkspace(b);
+      const other = captureWs();
+      table.get_tool_allows({}, other, { type: 'get_tool_allows' });
+      assert.deepStrictEqual(other.sent[0].tools, [],
+        'another workspace is unaffected: these are never machine-wide');
+    } finally { config.setWorkspace(original); }
+  });
+
+  test('revoking takes effect immediately, and revoking something absent is not an error', () => {
+    const table = buildDispatch();
+    const original = config.getWorkspace();
+    const dir = allowsWorkspace();
+    try {
+      config.setWorkspace(dir);
+      table.add_tool_allow({}, captureWs(), { type: 'add_tool_allow', key: 'Bash:curl' });
+      const after = captureWs();
+      table.remove_tool_allow({}, after, { type: 'remove_tool_allow', key: 'Bash:curl' });
+      assert.deepStrictEqual(after.sent[0].tools, []);
+      assert.deepStrictEqual(boundary.readToolAllows(), [], 'gone from the store, not just the reply');
+      // Clicking revoke twice is a person being decisive, not an error.
+      const again = captureWs();
+      table.remove_tool_allow({}, again, { type: 'remove_tool_allow', key: 'Bash:curl' });
+      assert.strictEqual(again.sent[0].type, 'tool_allows');
+    } finally { config.setWorkspace(original); }
+  });
+
+  test('an unreadable store means no standing answer, never a silent yes', () => {
+    // THE DIRECTION THAT MATTERS. A corrupt file must make the card appear, not
+    // make a request pass. Anything else turns a damaged file into consent.
+    const original = config.getWorkspace();
+    const dir = allowsWorkspace();
+    try {
+      config.setWorkspace(dir);
+      fs.writeFileSync(path.join(dir, '.rundock', 'permissions.json'), '{ not json');
+      assert.deepStrictEqual(boundary.readToolAllows(), [],
+        'unreadable reads as nothing allowed, so the person is asked again');
+    } finally { config.setWorkspace(original); }
+  });
+
+  test('with no workspace open, reading answers empty and writing is refused', () => {
+    // The same split the working folders take, for the same reason: asking what
+    // is allowed before a workspace is open is a fair question with a true
+    // answer, while GRANTING one has nowhere to be recorded and must say so
+    // rather than appear to succeed.
+    const table = buildDispatch();
+    const original = config.getWorkspace();
+    try {
+      config.setWorkspace(null);
+      const reader = captureWs();
+      table.get_tool_allows({}, reader, { type: 'get_tool_allows' });
+      assert.deepStrictEqual(reader.sent[0], { type: 'tool_allows', tools: [] });
+
+      const writer = captureWs();
+      table.add_tool_allow({}, writer, { type: 'add_tool_allow', key: 'Bash:git' });
+      assert.strictEqual(writer.sent[0].type, 'workspace_error');
+      assert.match(writer.sent[0].message, /Open a workspace/);
+
+      // Revoking without a workspace answers the empty list rather than
+      // erroring: there is nothing to revoke and nothing was promised.
+      const revoker = captureWs();
+      table.remove_tool_allow({}, revoker, { type: 'remove_tool_allow', key: 'Bash:git' });
+      assert.deepStrictEqual(revoker.sent[0], { type: 'tool_allows', tools: [] });
+    } finally { config.setWorkspace(original); }
+  });
+
+  test('an allow with no key named is refused, not recorded as an empty string', () => {
+    const table = buildDispatch();
+    const original = config.getWorkspace();
+    const dir = allowsWorkspace();
+    try {
+      config.setWorkspace(dir);
+      const ws = captureWs();
+      table.add_tool_allow({}, ws, { type: 'add_tool_allow' });
+      assert.strictEqual(ws.sent[0].type, 'workspace_error');
+      assert.match(ws.sent[0].message, /no tool was named/);
+      assert.deepStrictEqual(boundary.readToolAllows(), [],
+        'and nothing was written, so no card is silenced by a blank key');
+    } finally { config.setWorkspace(original); }
+  });
+
+  test('storing a tool allow leaves the folder grants alone', () => {
+    // They share a file. A writer that rebuilt it from its own half would drop
+    // the other, silently withdrawing folder access the person had granted.
+    const original = config.getWorkspace();
+    const dir = allowsWorkspace();
+    try {
+      config.setWorkspace(dir);
+      boundary.addBoundaryGrant(path.join(dir, 'somewhere'));
+      const before = boundary.readBoundaryGrants();
+      assert.strictEqual(before.length, 1, 'fixture sanity: a folder grant exists');
+      boundary.addToolAllow('Bash:git');
+      assert.deepStrictEqual(boundary.readBoundaryGrants(), before,
+        'the folder grant survives a tool allow being written beside it');
+      boundary.removeToolAllow('Bash:git');
+      assert.deepStrictEqual(boundary.readBoundaryGrants(), before,
+        'and survives one being revoked');
+    } finally { config.setWorkspace(original); }
   });
 });

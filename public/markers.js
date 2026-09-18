@@ -139,8 +139,16 @@
   // SAVE_AGENT/SAVE_SKILL blocks, and DELETE lines.
   /** @param {string} t */
   function stripMarkers(t) {
+    // EVERY HANDOFF MARKER, not the one that came first. A marker left in the
+    // text reaches two places it should not: the handback payload an
+    // orchestrator is given as the specialist's "final message", and the
+    // preview line a person reads in the conversation list. COMPLETE was
+    // already missing here before CONTINUE was added, which is how a list of
+    // literals drifts from the list the resolver actually recognises.
     return t
       .replace(/<!-- RUNDOCK:RETURN -->/g, '')
+      .replace(/<!-- RUNDOCK:COMPLETE -->/g, '')
+      .replace(/<!-- RUNDOCK:CONTINUE -->/g, '')
       .replace(/<!-- RUNDOCK:(?:SAVE|CREATE)_AGENT name=[\w-]+ -->[\s\S]*?<!-- \/RUNDOCK:(?:SAVE|CREATE)_AGENT -->/g, '')
       .replace(/<!-- RUNDOCK:SAVE_SKILL name=[\w-]+ -->[\s\S]*?<!-- \/RUNDOCK:SAVE_SKILL -->/g, '')
       .replace(/<!-- RUNDOCK:DELETE_(?:SKILL|AGENT) name=[\w-]+ -->/g, '');

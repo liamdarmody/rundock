@@ -185,10 +185,16 @@ describe('isAuthError / isModelError', () => {
     assert.strictEqual(srv.isModelError('the model is not valid'), true);
   });
 
-  test('pinned as-is: lowercase text between "model" and the failure phrase defeats the match', () => {
-    // The regex only allows non-lowercase chars between "model" and e.g.
-    // "not found", so a quoted model name breaks the signature.
-    assert.strictEqual(srv.isModelError('model "foo" not found'), false);
+  // Was pinned as-is, asserting FALSE, with a note that the regex allowed no
+  // lowercase text between "model" and the failure phrase so a quoted model
+  // name broke the signature. The gap was known and accepted; what nobody
+  // connected was who lands in it. A runtime serving the user's own
+  // identifiers always puts the name in that gap, so the single likeliest
+  // message a gateway user sees was the one case guaranteed not to raise the
+  // recovery card. Issue #307.
+  test('a quoted model name between "model" and the failure phrase still matches', () => {
+    assert.strictEqual(srv.isModelError('model "foo" not found'), true);
+    assert.strictEqual(srv.isModelError('The model `my-gateway/claude-model-id` does not exist'), true);
   });
 
   test('generic errors are not model errors', () => {
@@ -229,11 +235,17 @@ describe('titleCase', () => {
 });
 
 describe('modelArgs / allowed tools', () => {
-  test('modelArgs uses agent model or default sonnet', () => {
+  test('modelArgs passes a named model through and names none otherwise', () => {
     assert.deepStrictEqual(srv.modelArgs({ model: 'opus' }), ['--model', 'opus']);
-    assert.deepStrictEqual(srv.modelArgs({}), ['--model', 'sonnet']);
-    assert.deepStrictEqual(srv.modelArgs(null), ['--model', 'sonnet']);
-    assert.strictEqual(srv.DEFAULT_MODEL, 'sonnet');
+    // Rundock no longer substitutes a model nobody named. Both of these say
+    // nothing, so both resolve to the marker spawnClaude strips.
+    assert.deepStrictEqual(srv.modelArgs({}), srv.modelArgs({ model: 'inherit' }));
+    assert.deepStrictEqual(srv.modelArgs(null), srv.modelArgs({ model: 'inherit' }));
+    for (const args of [srv.modelArgs({}), srv.modelArgs(null)]) {
+      assert.ok(!args.includes('--model'), 'no model is requested');
+      assert.ok(!args.includes('sonnet'), 'and none is substituted');
+    }
+    assert.strictEqual(srv.DEFAULT_MODEL, undefined, 'the default is deleted, not hidden');
   });
 
   test('interactive allow-list has no Bash and no MCP scopes; legacy has Bash', () => {

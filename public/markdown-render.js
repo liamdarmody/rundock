@@ -350,13 +350,52 @@
           return i === -1 ? undefined : i;
         },
         tokenizer(src) {
-          const match = /^==(.*?)==/.exec(src);
+          // A DELIMITER INSIDE A LONGER RUN OF EQUALS SIGNS IS NOT A DELIMITER.
+          //
+          // Non-greedy `^==(.*?)==` took `=== rundock.ai ==` out of
+          // `=== rundock.ai ===`, captured `= rundock.ai `, and left the last
+          // `=` as loose text: the leading equals sign inside the highlight and
+          // the trailing one outside it. The author wrote MediaWiki, which
+          // Markdown does not have, and got a lopsided highlight rather than
+          // the characters they typed.
+          //
+          // A RUN OF THREE OR MORE IS EATEN WHOLE, and that is not the same as
+          // declining to match it. A tokenizer only ever sees the source from
+          // the lexer's cursor, so it cannot look behind itself. Declining left
+          // the run in place, and marked's inline lexer then consumed one
+          // character as plain text and retried every tokenizer at the next
+          // offset, where the leading `=` was no longer visible: `===x==` came
+          // back as `=` plus a highlight of `x`. Returning the whole run as one
+          // text token leaves nothing inside it to retry.
+          const run = /^={3,}/.exec(src);
+          if (run) return { type: 'eqrun', raw: run[0], text: run[0] };
+
+          // Exactly two, either side. `[^=\n]` on the last content character is
+          // what stops `====` matching with an empty capture, and excludes the
+          // newline because a negated class, unlike `.`, matches one: without
+          // it `==a\n==b==` highlighted across a line break, which this
+          // tokenizer has never done. A single `=` inside content is untouched,
+          // so `==x=y==` still highlights `x=y`.
+          const match = /^==(?!=)(.*?[^=\n])==(?!=)/.exec(src);
           if (!match) return undefined;
           return { type: 'highlight', raw: match[0], tokens: this.lexer.inlineTokens(match[1]) };
         },
         renderer(token) {
           return `<mark>${this.parser.parseInline(token.tokens)}</mark>`;
         },
+      }, {
+        // The run of equals signs the highlight tokenizer ate whole. It is text
+        // and renders as text: its own characters, escaped like any other text,
+        // and nothing about it is markup.
+        //
+        // RENDERER ONLY, deliberately. This token is manufactured by the
+        // highlight tokenizer above and never matched from source, so a
+        // tokenizer here would be dead code and a `start` would be worse than
+        // dead: it would have marked cut a text run at every `===` on behalf of
+        // a tokenizer that can never match there.
+        name: 'eqrun',
+        level: 'inline',
+        renderer(token) { return escapeHtml(token.text); },
       }, {
         // Obsidian tags: #tag.
         //

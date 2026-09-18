@@ -290,3 +290,33 @@ describe('a routine row carries the destination the routes file presses', () => 
     dom.window.close();
   });
 });
+
+// Issue #307. `inherit` is the only model value that names no model, so the
+// profile is where a non-technical user meets a word with no referent. Every
+// other value renders as Name (explanation); this asserts the rendered page,
+// not the lookup table, because a bare token reaching the screen is precisely
+// the class of defect this release kept shipping.
+describe('the model a profile shows', () => {
+  function profileFor(model) {
+    const { w, doc } = shell();
+    w.agents[0].model = model;
+    w.showProfile('piper');
+    return profileText(doc);
+  }
+
+  test('inherit says what it inherits from', () => {
+    const text = profileFor('inherit');
+    assert.match(text, /Inherit \(your runtime's default\)/,
+      'a reader must not be left asking "inherit from what?"');
+    assert.doesNotMatch(text, /Model inherit\b/, 'the bare token must not reach the page');
+  });
+
+  test('a named model still reads as itself', () => {
+    assert.match(profileFor('sonnet'), /Sonnet \(fast, efficient\)/);
+  });
+
+  test("a model Rundock cannot name falls through to the user's own identifier", () => {
+    // A gateway's naming is not ours to relabel: show exactly what they wrote.
+    assert.match(profileFor('my-gateway/claude-model-id'), /my-gateway\/claude-model-id/);
+  });
+});

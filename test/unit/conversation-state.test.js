@@ -108,8 +108,10 @@ const SEQUENCE_TABLE = [
       '4:render-stream-text',
       // Orchestrator result carries DELEGATE: no finish-processing.
       '7:finalize-agent-message', '7:remove-thinking-indicator', '7:finalize-stream-bubble', '7:render-convo-list',
-      // Switch out to the specialist.
-      '8:clear-outgoing-working', '8:clear-streaming-bubble', '8:render-convo-list',
+      // Switch out to the specialist. The outgoing agent's thinking indicator
+      // goes with the switch: left behind, the tool-status handlers find it by
+      // id and write the specialist's activity into the orchestrator's bubble.
+      '8:clear-outgoing-working', '8:clear-streaming-bubble', '8:remove-thinking-indicator', '8:render-convo-list',
       '8:show-delegation-divider', '8:update-chat-header', '8:start-processing',
       '9:remove-permission-cards',
       '10:set-session',
@@ -118,9 +120,12 @@ const SEQUENCE_TABLE = [
       // Specialist result carries RETURN only: normal finalisation.
       '16:finalize-agent-message', '16:remove-thinking-indicator', '16:finalize-stream-bubble',
       '16:finish-processing', '16:render-convo-list',
-      // Switch back to the orchestrator: a return, so no start-processing here.
-      '17:clear-outgoing-working', '17:clear-streaming-bubble', '17:render-convo-list',
-      '17:show-delegation-divider', '17:update-chat-header',
+      // Switch back to the orchestrator: a return, so no start-processing here
+      // and no divider either. The return is not announced: the bubble that
+      // follows carries the orchestrator's avatar and name, and the specialist
+      // has already said in its own words that it is handing back.
+      '17:clear-outgoing-working', '17:clear-streaming-bubble', '17:remove-thinking-indicator', '17:render-convo-list',
+      '17:update-chat-header',
       // Orchestrator resumes via autoContinue.
       '18:remove-permission-cards', '18:start-processing',
       '20:start-streaming-bubble', '20:render-stream-text',
@@ -220,7 +225,13 @@ test('delegation round trip: session chain tracks both agents, primary stays wit
 test('delegation round trip: divider directions and delegate handoff text', () => {
   const { effects } = replay(seq.delegationRoundTrip);
   const dividers = effects.filter(e => e.type === 'show-delegation-divider');
-  assert.deepStrictEqual(dividers.map(d => [d.toAgentId, d.isReturn]), [['dev', false], ['cos', true]]);
+  // One divider, not two: the delegation out is announced, the return is not.
+  assert.deepStrictEqual(dividers.map(d => [d.toAgentId, d.isReturn]), [['dev', false]]);
+  // And the back leg is a return because the server said so, not because of
+  // what kind of agent it went to.
+  const back = reduce(createState(), seq.agentSwitch('dev', 'cos', 'p9', { returning: true }),
+    { ...SWITCH_CTX, toAgentType: 'orchestrator' });
+  assert.ok(!back.effects.some(e => e.type === 'show-delegation-divider'));
   const finals = effects.filter(e => e.type === 'finalize-agent-message');
   // DELEGATE strips the marker AND everything after it; RETURN strips cleanly.
   assert.deepStrictEqual(finals.map(f => f.text), [
@@ -578,12 +589,103 @@ test('agent_switch with marker-only streamed text promotes nothing', () => {
   assert.strictEqual(r.effects.find(e => e.type === 'promote-handoff-message'), undefined);
 });
 
+// THE TURN THAT STREAMED NOTHING. An agent delegating with a bare tool_use
+// block makes no streaming bubble, so there is nothing to promote and the
+// handoff was silent on screen while being correct in the transcript. The
+// server carries the line on this message for exactly that case.
+test('agent_switch promotes the carried line when nothing was streamed', () => {
+  const s = { ...createState(), streamingRawText: '', hasStreamingBubble: false };
+  const msg = { ...seq.agentSwitch('cos', 'dev', 'p2'), handoffLine: 'Handing to Dev to build the importer.' };
+  const r = reduce(s, msg, SWITCH_CTX);
+  const promote = r.effects.find(e => e.type === 'promote-handoff-message');
+  assert.ok(promote, 'a turn with no streamed text still produces one to render');
+  assert.strictEqual(promote.text, 'Handing to Dev to build the importer.');
+  assert.strictEqual(promote.agentId, 'cos', 'attributed to the agent that is leaving');
+});
+
+test('streamed text wins over the carried line, so a turn never renders twice', () => {
+  // Belt and braces against the server sending both: the agent's own words are
+  // already on screen, and promoting the carried line would replace them.
+  const s = { ...createState(), streamingRawText: 'I will take this to Dev.', hasStreamingBubble: true };
+  const msg = { ...seq.agentSwitch('cos', 'dev', 'p2'), handoffLine: 'Handing to Dev.' };
+  const r = reduce(s, msg, SWITCH_CTX);
+  const promote = r.effects.find(e => e.type === 'promote-handoff-message');
+  assert.strictEqual(promote.text, 'I will take this to Dev.',
+    'what the agent actually said is what appears');
+});
+
+test('a blank carried line promotes nothing', () => {
+  const s = { ...createState(), streamingRawText: '' };
+  const msg = { ...seq.agentSwitch('cos', 'dev', 'p2'), handoffLine: '   ' };
+  const r = reduce(s, msg, SWITCH_CTX);
+  assert.strictEqual(r.effects.find(e => e.type === 'promote-handoff-message'), undefined,
+    'whitespace is not a sentence, and an empty bubble is worse than none');
+});
+
 test('agent_switch to an unknown agent: no divider, no header, no processing start', () => {
   const ctx = { ...SWITCH_CTX, toAgentExists: false, toAgentType: null, fromAgentExists: true };
   const r = reduce(createState(), seq.agentSwitch('cos', 'ghost', 'p2'), ctx);
-  assert.deepStrictEqual(types(r.effects), ['clear-outgoing-working', 'clear-streaming-bubble', 'render-convo-list']);
+  // remove-thinking-indicator joins the stream here: control has moved, so the
+  // outgoing agent's indicator describes nobody. Left in place, the tool-status
+  // handlers find it by id and write the INCOMING agent's activity into it,
+  // which put a specialist's file reads and web fetches inside the previous
+  // agent's bubble.
+  assert.deepStrictEqual(types(r.effects), ['clear-outgoing-working', 'clear-streaming-bubble', 'remove-thinking-indicator', 'render-convo-list']);
   assert.strictEqual(r.state.delegationActive, false);
   assert.strictEqual(r.state.activeAgentId, 'ghost');
+});
+
+test('a silent agent_switch draws no divider but still clears the outgoing agent and moves control', () => {
+  // THE REGRESSION THIS PINS. A pipeline-complete handback spawns the
+  // orchestrator only to park, and drawing its arrival showed an agent joining
+  // and then doing nothing, which reads as a hang. That was first fixed by not
+  // sending the switch at all, on the stated reasoning that nothing downstream
+  // depended on it. Four things do: activeAgentId, delegationActive, the
+  // outgoing agent's working indicator, and the chat header. Withholding the
+  // message left the conversation marked delegated with the DEPARTED
+  // specialist still showing as working, which is the same hang moved onto the
+  // other agent, and it went unnoticed because the only test watched for the
+  // divider rather than for any of those.
+  const ctx = { ...SWITCH_CTX, toAgentType: 'orchestrator' };
+  const msg = { ...seq.agentSwitch('dev', 'cos', 'p3'), silent: true };
+  const r = reduce({ ...createState(), activeAgentId: 'dev', delegationActive: true }, msg, ctx);
+
+  assert.strictEqual(r.effects.find(e => e.type === 'show-delegation-divider'), undefined,
+    'nothing is drawn for an agent that will say nothing');
+  assert.ok(r.effects.some(e => e.type === 'clear-outgoing-working' && e.outgoingAgentId === 'dev'),
+    'but the agent that left stops showing as working, which is the whole point');
+  assert.ok(r.effects.some(e => e.type === 'remove-thinking-indicator'),
+    'and its thinking indicator goes, so the next agent\'s activity is not written into it');
+  assert.ok(r.effects.some(e => e.type === 'update-chat-header' && e.toAgentId === 'cos'),
+    'and the header names who actually holds the conversation now');
+  assert.strictEqual(r.state.activeAgentId, 'cos', 'control really moved');
+  assert.strictEqual(r.state.delegationActive, false, 'and the conversation is no longer delegated');
+});
+
+test('a switch that is not silent still draws the divider', () => {
+  // The other direction, so the flag is proven to be what decides rather than
+  // the divider having quietly stopped being emitted at all. A FORWARD
+  // delegation, because a return no longer draws whatever the flag says.
+  const ctx = { ...SWITCH_CTX, toAgentType: 'specialist' };
+  const r = reduce(createState(), seq.agentSwitch('cos', 'dev', 'p3'), ctx);
+  assert.ok(r.effects.some(e => e.type === 'show-delegation-divider'),
+    'somebody arriving to take the work is still announced');
+});
+
+test('a return draws nothing, because the bubble beneath already says who is speaking', () => {
+  // THE RULE, stated where the old one was. Announcing an arrival is worth a
+  // line: it changes who owns the work and who the person is addressing.
+  // Announcing that somebody already in the conversation is speaking again is
+  // the third telling of the same fact, after the departing agent's own
+  // handoff sentence and the avatar and name on the next bubble.
+  const ctx = { ...SWITCH_CTX, toAgentType: 'orchestrator' };
+  const r = reduce(createState(), seq.agentSwitch('dev', 'cos', 'p3', { returning: true }), ctx);
+  assert.ok(!r.effects.some(e => e.type === 'show-delegation-divider'),
+    'a return is not an arrival');
+  // Everything else about the switch is unchanged: only the drawing goes.
+  assert.strictEqual(r.state.activeAgentId, 'cos', 'control still moved');
+  assert.ok(r.effects.some(e => e.type === 'update-chat-header' && e.toAgentId === 'cos'),
+    'and the header still names who holds the conversation');
 });
 
 test('agent_switch on an inactive conversation updates state but skips the view effects', () => {
@@ -670,4 +772,26 @@ test('a keepalive from a stale process is dropped without touching the activity 
   const s = { ...createState(), isProcessing: true, activeProcessId: 'p2', lastStreamActivity: 500 };
   const r = reduce(s, { type: 'system', subtype: 'keepalive', _processId: 'p1' }, { now: 99999 });
   assert.strictEqual(r.state.lastStreamActivity, 500, 'stale keepalive must not keep a superseded turn "alive"');
+});
+
+test('a silent switch never starts a working indicator, even for a specialist', () => {
+  // The gate above it asks whether the INCOMING agent is the orchestrator,
+  // which is not the same question as whether this is a restoration. A
+  // mid-level lead restored to park is a specialist, so that gate let a
+  // working indicator through for an agent that will never speak: the hang
+  // the silent flag exists to remove, in the one shape it was added for.
+  const ctx = { ...SWITCH_CTX, toAgentType: 'specialist' };
+  const msg = { ...seq.agentSwitch('ana', 'penn', 'p4'), silent: true };
+  const r = reduce({ ...createState(), activeAgentId: 'ana', delegationActive: true }, msg, ctx);
+
+  assert.strictEqual(r.effects.find(e => e.type === 'start-processing'), undefined,
+    'nothing claims a turn is coming when the switch says one is not');
+  assert.strictEqual(r.state.isProcessing, false, 'and the state does not show it as working');
+
+  // The same switch WITHOUT the flag still starts one, so the flag is proven
+  // to be what decides rather than the indicator having quietly gone away.
+  const loud = reduce({ ...createState(), activeAgentId: 'ana', delegationActive: true },
+    seq.agentSwitch('ana', 'penn', 'p4'), ctx);
+  assert.ok(loud.effects.some(e => e.type === 'start-processing'),
+    'an ordinary delegation still shows the delegate as working');
 });
