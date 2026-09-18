@@ -48,6 +48,9 @@ const ROOT = path.join(__dirname, '..');
 const REGISTRY_SUITES = [
   // Every source-walking extraction is registered with a fail-loud property.
   'test/unit/sdlc-gate-hardening.test.js',
+  // No test may POST a permission card to a live Rundock: the hook defaults to
+  // port 3000, so an unpinned test storms whoever is running the app.
+  'test/unit/no-live-server-in-tests.test.js',
   // Every innerHTML assignment is classified, and the totals beside it.
   'test/unit/innerhtml-inventory.test.js',
   // Documents that state the code's own numbers, names and lists.

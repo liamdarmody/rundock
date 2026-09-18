@@ -1400,7 +1400,12 @@ wss.on('connection', (ws) => {
         subtype: 'can_use_tool',
         tool_name: pending.toolName,
         input: pending.toolInput || {},
-        ...(pending.boundary ? { boundary: true, resolved_path: pending.resolvedPath, grant_dir: pending.grantDir, crossings: pending.crossings || [] } : {})
+        ...(pending.boundary ? { boundary: true, resolved_path: pending.resolvedPath, grant_dir: pending.grantDir, crossings: pending.crossings || [] } : {}),
+        // Same whitelist, same trap: a queued request replayed when its
+        // conversation comes back on screen is rebuilt HERE, so a field not
+        // named here is lost on that path even though the first delivery
+        // carried it.
+        ...(pending.answerFile && !pending.boundary ? { answer_file: true, resolved_path: pending.resolvedPath, grant_dir: null } : {})
       },
       _conversationId: pending.conversationId
     }));

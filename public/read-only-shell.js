@@ -61,6 +61,20 @@
   // judged on its own evidence rather than ride in on a change about sharing.
   var NO_TARGET_COMMANDS = ['cd'];
 
+  // Keywords a REAL COMMAND follows. Stripped, then the rest is judged on its
+  // own merits, so nothing rides in behind one. `if` and `elif` and `while` and
+  // `until` each take a command as their condition; `do`, `then` and `else`
+  // introduce a body. Getting this list wrong in the other direction (treating
+  // one of these as reaching no file) would exempt whatever follows it, which
+  // is why they are not in the list below.
+  var KEYWORD_PREFIXES = ['do', 'then', 'else', 'if', 'elif', 'while', 'until', '{', '}', '!'];
+
+  // Keywords whose remainder is NOT a command: a variable and a word list, or a
+  // pattern. They reach no file themselves. Any path among those words is still
+  // scanned for boundary crossings by the caller; this function only answers
+  // whether the segment WRITES.
+  var NON_COMMAND_KEYWORDS = ['for', 'case', 'select', 'esac', 'done', 'fi'];
+
   // `env` IS DELIBERATELY ABSENT, though it prints the environment and looks
   // like a read. It also runs whatever follows its assignments, so
   // `env FOO=1 rm notes.md` is a removal wearing a read's leading word, and a
@@ -243,7 +257,28 @@
   function segmentReads(segment) {
     var words = String(segment).split(/\s+/).filter(Boolean);
     if (!words.length) return true;
+    // SHELL KEYWORDS ARE NOT COMMANDS, and the two kinds are not interchangeable.
+    //
+    // The segmenter splits on `;` and `&&`, so a loop arrives as `for f in a b`,
+    // `do cat "$f"`, `done`. None of those first words is a command name, so
+    // every loop graded as a write, however harmless its body. Reported from the
+    // field twice: an agent surveying a workspace loops over its agent and skill
+    // files, and a loop that only `cat`s them was carded as wanting to CHANGE
+    // the file it was reading.
+    //
+    // The distinction below is the whole safety of this. A PREFIX keyword is
+    // followed by a real command, so it is stripped and what follows is judged:
+    // `do cat "$f"` reads, `do rm -rf x` does not, and `then rm y` must never
+    // qualify just because `then` is harmless. A keyword whose remainder is NOT
+    // a command (`for f in ...`, `case $x in`) reaches no file itself, so the
+    // segment qualifies; any path in its word list is still scanned for
+    // crossings by the caller, which is a separate question from this one.
+    var stripped = 0;
+    while (words.length && KEYWORD_PREFIXES.indexOf(bareWord(words[0])) >= 0) { words.shift(); stripped++; }
+    // `done`, `fi`, `esac`, or a bare `do`: nothing left to reach a file with.
+    if (!words.length) return stripped > 0;
     var first = bareWord(words[0]);
+    if (NON_COMMAND_KEYWORDS.indexOf(first) >= 0) return true;
     if (first === 'find') return findOnlyReads(words.slice(1));
     if (Object.prototype.hasOwnProperty.call(EXECUTING_FLAGS, first)
       && EXECUTING_FLAGS[first].test(segment)) return false;
@@ -273,8 +308,48 @@
     return segments.length > 0 && segments.every(segmentReads);
   }
 
+  // ── The other end of the same question ────────────────────────────────
+  // A command that destroys, escalates, or fetches-and-executes. This lived
+  // only in the card grader, where its single job was to colour a card red.
+  //
+  // WHY IT HAD TO MOVE. Code mode auto-approves anything that is not outside
+  // the workspace and not an answer file, and that branch never consulted this
+  // test, because this test was in the browser and the branch is in the hook.
+  // So `rm -rf <anywhere inside>` was approved in Code mode with no card drawn
+  // and no record of a decision, while the same text in Knowledge mode drew a
+  // card the grader had painted high-risk. The grader was describing a card
+  // that the decider had already chosen not to raise.
+  //
+  // It is the shared definition for exactly the reason the read-only test above
+  // is: two places answering one question about the same text is how they come
+  // to disagree, and the reader pays for the disagreement.
+  //
+  // ERRING TOWARD ASKING IS CORRECT HERE. Naive splitting can over-flag an
+  // operator inside a quoted string; the cost of that is one card, and the cost
+  // of the other direction is an unasked question about an irreversible act.
+  var DESTRUCTIVE_LEADING = /^(rm|sudo|chmod|chown|kill|mkfs|dd)/;
+  function isDestructiveShellCommand(command) {
+    var raw = String(command == null ? '' : command).trim();
+    // A redirection that discards output writes nothing, so it must not make a
+    // command read as destructive.
+    var cmd = raw.replace(DISCARDING_REDIRECT_RE, ' ').trim();
+    if (!cmd) return false;
+    if (/--force|--hard|-rf\b/.test(cmd)) return true;
+    if (/git\s+(push|reset|clean|checkout\s+\.)/.test(cmd)) return true;
+    if (/\b(curl|wget)\b[\s\S]*\|\s*(sh|bash|zsh|dash)\b/.test(cmd)) return true;
+    // `find` reads until it runs something or deletes: -exec/-execdir/-ok spawn
+    // an arbitrary command per match and -delete removes files, so a bare find
+    // leading segment must not shield these.
+    if (/\bfind\b[\s\S]*-(exec(dir)?|delete|ok(dir)?)\b/.test(cmd)) return true;
+    var segments = shellSegments(cmd);
+    for (var i = 0; i < segments.length; i++) {
+      if (DESTRUCTIVE_LEADING.test(segments[i].trim())) return true;
+    }
+    return false;
+  }
+
   // Only what a caller actually uses. The registries stay private: exporting
   // them invites a second place to reason about membership, which is the
   // shape this module exists to remove.
-  return { DISCARDING_REDIRECT_RE, shellSegments, isReadOnlyShellCommand };
+  return { DISCARDING_REDIRECT_RE, shellSegments, isReadOnlyShellCommand, isDestructiveShellCommand };
 }));

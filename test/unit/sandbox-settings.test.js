@@ -224,9 +224,14 @@ describe('sandboxSettings: named working folders', () => {
       'every other key is untouched: the enable, the prompting flag and the network stay as they were');
   });
 
-  test('Code mode contributes paths and enables nothing', () => {
+  test('Code mode turns the sandbox off, rather than declining to turn it on', () => {
     const s = sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], FOLDERS, 'code');
-    assert.ok(!('enabled' in s), 'no enable: absence is what keeps the sandbox off for everyone else');
+    // Saying false, not saying nothing. Absence loses to any layer that enables:
+    // the user's own ~/.claude/settings.json, or the runtime's default once any
+    // sandbox key exists. Code mode is documented as having the write block off,
+    // and a headless browser cannot launch under Seatbelt whatever the allowWrite
+    // list says, so silence here meant an unsilenceable card on every render.
+    assert.strictEqual(s.enabled, false, 'off, stated, so no other layer can enable it back');
     assert.ok(!('autoAllowBashIfSandboxed' in s), 'and no prompting claim to go with it');
     assert.ok(!('network' in s),
       'and no network key: "*" unioned into a layer would widen a policy the user set deliberately');
@@ -269,6 +274,43 @@ describe('sandboxSettings: named working folders', () => {
     const before = JSON.parse(JSON.stringify(current));
     delete before.filesystem.denyWrite;
     assert.strictEqual(isRundockSandbox(before, 'darwin'), true);
+  });
+
+  test('the Code mode block written before `enabled` was set is still ours, so it upgrades', () => {
+    // The other axis that has moved. Every workspace opened in Code mode before
+    // this change carries `{ filesystem }` with no `enabled` key. The recogniser
+    // rebuilds the CURRENT shape and compares text, so without this that block
+    // reads as a person's hand edit: never reconciled, never withdrawn, and it
+    // keeps the very sandbox Code mode was changed to switch off.
+    const current = sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], FOLDERS, 'code');
+    assert.strictEqual(current.enabled, false, 'sanity: the current block states it');
+    const older = JSON.parse(JSON.stringify(current));
+    delete older.enabled;
+    assert.strictEqual(isRundockSandbox(older, 'darwin'), true,
+      'the key-less Code mode block is one we wrote, and must be rewritten rather than preserved');
+
+    // And both axes at once, because a workspace can be behind on both: opened
+    // in Code mode under 0.13.1, it has neither the key nor the full deny list.
+    const deny = older.filesystem.denyWrite || [];
+    assert.ok(deny.length >= 2, 'sanity: there is still a deny list to narrow');
+    for (let n = 0; n < deny.length; n++) {
+      const behindOnBoth = JSON.parse(JSON.stringify(older));
+      if (n === 0) delete behindOnBoth.filesystem.denyWrite;
+      else behindOnBoth.filesystem.denyWrite = deny.slice(0, n);
+      assert.strictEqual(isRundockSandbox(behindOnBoth, 'darwin'), true,
+        `no key and the first ${n} deny entries is a shape we wrote, and must upgrade`);
+    }
+  });
+
+  test('a person\'s own enabled:true is still theirs, and Code mode does not seize it', () => {
+    // The limit of the above. Recognising the key-less shape must not slide into
+    // recognising any block with the right paths: a user who deliberately turned
+    // the sandbox ON in a Code mode workspace has authored something Rundock
+    // never wrote, and it stays theirs.
+    const current = sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], FOLDERS, 'code');
+    const theirs = { ...current, enabled: true };
+    assert.strictEqual(isRundockSandbox(theirs, 'darwin'), false,
+      'enabled:true in Code mode is a person\'s edit, not a shape Rundock ever wrote');
   });
 
   test('every deny list Rundock has ever written is recognised, so no release strands a workspace', () => {

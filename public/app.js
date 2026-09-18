@@ -56,7 +56,7 @@ const persist = (() => {
 const sunIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>`;
 const moonIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>`;
 
-let ws=null, agents=[], conversations=[], activeConversation=null, currentView='home', currentFilePath=null, skills=[], skillsLoaded=false, currentWorkspacePath=null, servingWorkspacePath, rosterWorkspacePath, workspaceAnalysis=null, workspaceIsEmpty=false, workspaceMode='knowledge', setupComplete=true, conversationsLoaded=false, activeSidebarPill='all', convoLists=[];
+let ws=null, agents=[], conversations=[], activeConversation=null, currentView='home', currentFilePath=null, skills=[], skillsLoaded=false, currentWorkspacePath=null, servingWorkspacePath, rosterWorkspacePath, workspaceAnalysis=null, workspaceIsEmpty=false, workspaceMode='knowledge', sandboxManaged=true, setupComplete=true, conversationsLoaded=false, activeSidebarPill='all', convoLists=[];
 let runtimeStatus = null; // { defaultRuntime, claude: {installed, authenticated, version}, codex: {...} }
 const agentLastActivity = {}; // { agentId: { time: Date, label: string } }
 // Per-conversation state: { convoId: { isProcessing, currentStreamingMsg, latestText } }
@@ -229,7 +229,7 @@ function handle(d) {
       // server times its own phases; without this the client is the one part
       // of a slow startup nobody can see.
       workspaceOpenStartedAt = Date.now();
-      onWorkspaceReady(d.path, d.analysis, d.isEmpty, d.workspaceMode, d.scaffoldError, d.setupComplete);
+      onWorkspaceReady(d.path, d.analysis, d.isEmpty, d.workspaceMode, d.scaffoldError, d.setupComplete, d.sandboxManaged);
       break;
     // WHICH WORKSPACE THE SCHEDULER IS SERVING, which is not the same question
     // as which workspace this window opened. There is one scheduler on this
@@ -1366,7 +1366,7 @@ function handleWorkspaces(d) {
     // This path never sends set_workspace, so start the render clock here or
     // the client's share of startup goes unmeasured for these instances.
     workspaceOpenStartedAt = Date.now();
-    onWorkspaceReady(d.current, d.analysis, d.isEmpty, d.workspaceMode, d.scaffoldError, d.setupComplete);
+    onWorkspaceReady(d.current, d.analysis, d.isEmpty, d.workspaceMode, d.scaffoldError, d.setupComplete, d.sandboxManaged);
     return;
   }
   // No workspace set, show picker
@@ -1543,7 +1543,7 @@ function setRosterWorkspace(path) {
   setServingWorkspace(path);
 }
 
-function onWorkspaceReady(dir, analysis, isEmpty, mode, scaffoldError, isSetupComplete) {
+function onWorkspaceReady(dir, analysis, isEmpty, mode, scaffoldError, isSetupComplete, sandboxIsManaged) {
   const isSameWorkspace = (currentWorkspacePath === dir);
   currentWorkspacePath = dir;
   // The server confirmed this path out of its own root, so it is the serving
@@ -1553,6 +1553,12 @@ function onWorkspaceReady(dir, analysis, isEmpty, mode, scaffoldError, isSetupCo
   workspaceAnalysis = analysis || null;
   workspaceIsEmpty = !!isEmpty;
   workspaceMode = mode || 'knowledge';
+  // WHETHER THE MODE MEANS WHAT THE PANE SAYS IT MEANS. Rundock never rewrites
+  // a sandbox block someone else wrote, so in that workspace the mode switch
+  // moves nothing, and the settings pane must stop promising it does. Defaulted
+  // to true when a server has not sent it, so an older server produces the copy
+  // it always produced rather than a warning nobody can act on.
+  sandboxManaged = sandboxIsManaged !== undefined ? !!sandboxIsManaged : true;
   setupComplete = isSetupComplete !== undefined ? !!isSetupComplete : true;
 
   // Handle scaffold error for new workspaces

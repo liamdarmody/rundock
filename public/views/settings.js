@@ -193,9 +193,32 @@ function renderSettingsSection(section) {
     // Three controls that were each added to the Workspace panel with their own
     // paragraph, so a reader met the same idea three times in three wordings.
     const isCode = workspaceMode === 'code';
+    // WHAT THE MODE DOES, AND THEN WHAT THE OPERATING SYSTEM DOES ABOUT IT.
+    //
+    // The second half is only true when Rundock wrote the sandbox block. It
+    // never rewrites one somebody else wrote, so in a workspace with a
+    // hand-authored block the switch moves nothing, and the sentence promising
+    // the write block is off, or on, was simply false with no way to tell from
+    // here. Reported after a headless render failed in a workspace sitting in
+    // Code mode: the render needs the write block off, Code mode says it is
+    // off, and it was on the whole time.
+    //
+    // So the operating-system clause is attached only where Rundock is the one
+    // deciding, and where it is not, the pane says that instead of guessing.
     const modeDesc = isCode
-      ? 'Agents can write any file type and run commands without approval. On macOS the operating-system write block is off here, because tools that launch their own processes can fail under it.'
-      : 'Agents work with documents only. Terminal commands need approval, and on macOS the operating system enforces that too.';
+      ? 'Agents can write any file type and run commands without approval.'
+      : 'Agents work with documents only. Terminal commands need approval.';
+    // ONLY AN EXPLICIT false WITHDRAWS THE PROMISE. Absent information is not
+    // evidence of a foreign sandbox: a server too old to send the field, or any
+    // context that has not set it, must produce the copy this pane always
+    // produced rather than a warning nobody can act on.
+    const sandboxIsOurs = (typeof sandboxManaged === 'undefined') || sandboxManaged !== false;
+    const osClause = !sandboxIsOurs ? ''
+      : isCode
+        ? ' On macOS the operating-system write block is off here, because tools that launch their own processes can fail under it.'
+        : ' On macOS the operating system enforces that too.';
+    const foreignSandboxNote = sandboxIsOurs ? '' :
+      `<div class="settings-caption mode-foreign-sandbox">This workspace's sandbox is set up outside Rundock, so switching modes does not change it.</div>`;
     el.innerHTML = `<div class="settings-section-title">Permissions</div>
       <div class="settings-lead">What agents can do, and what they can reach outside your workspace.</div>
       <div class="settings-block-heading"><span class="settings-label">Mode</span></div>
@@ -205,11 +228,12 @@ function renderSettingsSection(section) {
             <button class="mode-toggle-btn${isCode ? '' : ' active'}" data-mode="knowledge" onclick="setWorkspaceMode('knowledge')">Knowledge mode</button>
             <button class="mode-toggle-btn${isCode ? ' active' : ''}" data-mode="code" onclick="setWorkspaceMode('code')">Code mode</button>
           </div>
-          <div class="mode-description" id="mode-description">${modeDesc}</div>
+          <div class="mode-description" id="mode-description">${modeDesc}${osClause}</div>
+          ${foreignSandboxNote}
         </div>
       </div>
       ${workingFoldersSectionHtml()}
-      <div class="settings-caption">A folder you allowed by answering "Always allow" on a path card is not listed here yet.</div>
+      <div class="settings-caption">A folder you approve on a path card is named in the list above.</div>
       <div class="settings-block-heading"><span class="settings-label">Tools allowed without asking</span></div>
       <div class="settings-caption settings-caption-card">Choosing "Always allow" on a permission card adds one here. Removing it means the card asks again.</div>
       <div class="settings-card" id="tool-allows-block">${toolAllowsBlockHtml()}</div>`;
@@ -325,6 +349,36 @@ function workingFoldersSectionHtml() {
 
 // The block's own contents, separated from its container so an arriving list
 // redraws THIS and nothing else.
+// THE CAVEAT THAT ONLY APPLIES SOMETIMES, SHOWN ONLY THEN.
+//
+// Three notes used to sit here permanently, 53 words above one input. Each was
+// true and each was displaced: this one is FALSE for anyone in Code mode, the
+// Codex line mattered only to workspaces that have Codex agents, and the
+// removal line described a moment that had not happened. The comment on the
+// prose below already states the test they failed, "each sentence judged by
+// whether a person needs it at the moment they are naming a folder"; it was
+// applied to the prose and stopped before the notes.
+//
+// ONLY THIS ONE IS CONDITIONAL, DELIBERATELY. The other two notes stay put for
+// now. They are candidates to move to where they fire (credentials onto the
+// card that asks about credentials, removal behaviour onto the undo row that
+// already appears at exactly that moment), but neither destination exists yet,
+// and working-folders-view.test.js records that all three facts were "proposed
+// for deletion on brevity grounds and kept because this file said why it was
+// there". Relocating a fact is a move; removing it before the destination is
+// built is a deletion wearing a plan's clothes.
+//
+// A conditional caveat that stops appearing because its condition is
+// miscomputed disappears silently, which is the failure this whole surface has
+// been producing. test/unit/working-folders-view.test.js pins it to appear in
+// this case and in no other.
+function workingFoldersSandboxNote() {
+  const isMac = typeof serverPlatform === 'string' && serverPlatform === 'darwin';
+  const isKnowledge = workspaceMode !== 'code';
+  if (!isMac || !isKnowledge) return '';
+  return '<div class="settings-caption wf-note">In Knowledge mode on macOS the operating system still refuses the write and the retry still raises a card; Code mode ends both.</div>';
+}
+
 function workingFoldersInnerHtml() {
   const rows = workingFolders.map(workingFolderRowHtml).join('');
   const undo = workingFoldersUndo
@@ -335,20 +389,27 @@ function workingFoldersInnerHtml() {
   // whether a person needs it at the moment they are naming a folder.
   //
   // Dropped: that this workspace's own folder is already included, which the
-  // first line already says by saying "outside this workspace". The tip about
-  // naming a parent, which the input's own placeholder now carries, where it is
-  // read at the moment it applies. And that Claude Code's own folder is never
-  // included: true, but it changes nothing about what anyone types here.
+  // first line already says by saying "outside this workspace". And that Claude
+  // Code's own folder is never included: true, but it changes nothing about
+  // what anyone types here.
+  //
+  // THE PLACEHOLDER SHOWS A SHAPE, IT DOES NOT EXPLAIN. It read "Add a folder,
+  // such as ~/Projects, to cover everything beneath it", which is a sentence the
+  // prose above already carries word for word, and at the panel's real width the
+  // copy in the input was cut off mid-word. A placeholder cannot be scrolled,
+  // hovered or selected, so text that does not fit is not shortened, it is gone,
+  // and how much of it survives depends on how wide the window happens to be.
+  // Anything a person must actually read belongs in the prose, which wraps.
   return `<div class="settings-label wf-heading">Working folders</div>
     <div class="settings-prose wf-prose">Folders outside this workspace your agents can reach without a path card asking each time. This workspace is already included. Name a parent such as <code>~/Projects</code> to cover everything beneath it, including projects you start later.</div>
-    <div class="settings-caption wf-note">In Knowledge mode on macOS the operating system still refuses the write and the retry still raises a card; Code mode ends both.</div>
+    ${workingFoldersSandboxNote()}
     <div class="settings-caption wf-note">Codex agents are unaffected, and <code>~/.claude</code> is never included, so your credentials always ask.</div>
     <div class="settings-caption wf-note">Removing a folder applies to new conversations; one already running keeps the folders it started with.</div>
     ${undo}
     <div class="settings-card wf-list">
       ${rows}
       <div class="settings-row wf-add">
-        <input class="packages-input wf-input" id="wf-input" placeholder="Add a folder, such as ~/Projects, to cover everything beneath it"
+        <input class="packages-input wf-input" id="wf-input" placeholder="Add a folder, such as ~/Projects"
                oninput="workingFoldersInputChanged()" onkeydown="if(event.key==='Enter')workingFoldersAdd()">
         <button class="settings-btn" onclick="workingFoldersAdd()">Add</button>
       </div>

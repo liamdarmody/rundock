@@ -75,6 +75,165 @@ describe('classifyShellAccess (hook-side)', () => {
   const ws = '/tmp/boundary-ws';
   const home = os.homedir();
 
+  // A LEADING `cd` MOVES WHERE THE RELATIVE PATHS START FROM.
+  //
+  // Reported from the field, and the card was wrong in the way that is worst:
+  // it named a file that does not exist. An agent asked "what can you do in
+  // this workspace" ran
+  //
+  //   cd <ws>/.claude && ... ; cat ../.mcp.json
+  //
+  // which reads <ws>/.mcp.json, inside the workspace. Every relative token was
+  // resolved against the workspace ROOT instead, so `../.mcp.json` was reported
+  // as <ws>/../.mcp.json: one level too high, outside the workspace, and on
+  // that machine not a file at all. The agent was reading its own workspace's
+  // configuration to answer the question it was asked.
+  //
+  // The direction of the error matters. Resolving against too shallow a base
+  // turns paths that climb back INTO the workspace into false crossings, so
+  // this cost cards rather than containment. The fix must not buy them back by
+  // spending containment, which is what the masking tests below are for.
+  describe('a leading cd is where the relative paths start from', () => {
+    test('the reported command: a file inside the workspace is not a crossing', () => {
+      const r = classifyShellAccess('Bash', {
+        command: `cd ${ws}/.claude && for f in agents/roo.md; do cat "$f"; done; cat ../.mcp.json`,
+      }, ws, []);
+      assert.strictEqual(r, null,
+        'every path this command touches is inside the workspace, so there is no card to raise');
+    });
+
+    test('a relative cd counts too, and so does a semicolon', () => {
+      assert.strictEqual(classifyShellAccess('Bash', { command: 'cd .claude && cat ../.mcp.json' }, ws, []), null);
+      assert.strictEqual(classifyShellAccess('Bash', { command: 'cd .claude; cat ../.mcp.json' }, ws, []), null);
+    });
+
+    test('climbing PAST the workspace is still a crossing, from wherever it starts', () => {
+      // The masking case. A deeper base must not let a token climb out unseen.
+      const r = classifyShellAccess('Bash', { command: `cd ${ws}/.claude && cat ../../secret` }, ws, []);
+      assert.ok(r && r.where === 'outside', 'two levels up from .claude is outside, and must still card');
+      assert.ok(r.crossings.some(c => c.path.endsWith('/secret')), 'and it names the file it would actually read');
+      assert.ok(!r.crossings.some(c => c.path.includes('.claude')),
+        'the resolved path is the real one, not one measured from the wrong floor');
+    });
+
+    test('a cd OUT of the workspace is itself the crossing, and is not trusted as a base', () => {
+      const r = classifyShellAccess('Bash', { command: 'cd /etc && cat hosts' }, ws, []);
+      assert.ok(r && r.where === 'outside', 'leaving the workspace is the whole thing this card is for');
+    });
+
+    test('a cd it cannot read literally is not guessed at', () => {
+      // A variable, a substitution or a glob means the base is unknown at
+      // classification time. Unknown falls back to the workspace root, which
+      // over-reports rather than under-reports: the safe direction.
+      for (const cmd of ['cd $DIR && cat ../../x', 'cd "$(pwd)/sub" && cat ../../x', 'cd s*b && cat ../../x']) {
+        const r = classifyShellAccess('Bash', { command: cmd }, ws, []);
+        assert.ok(r && r.where === 'outside', `an unreadable cd must not soften the check: ${cmd}`);
+      }
+    });
+
+    test('a later cd is not a base for what came before it', () => {
+      // Only a LEADING cd is honoured. Anything more needs an interpreter, and
+      // a half-interpreted shell is the kind of guess that masks a crossing.
+      const r = classifyShellAccess('Bash', { command: `cat ../../secret && cd ${ws}/.claude` }, ws, []);
+      assert.ok(r && r.where === 'outside', 'the cat runs at the workspace root, and reaches outside from there');
+    });
+  });
+
+  // A SHELL CARD MAY NAME THE FOLDER IT IS ABOUT.
+  //
+  // It could not, and that made the offer nearly unreachable: measured across 91
+  // real sessions against one workspace, 68% of boundary cards came from shell
+  // commands, because an agent asked to read a file reaches for `cat` far more
+  // often than for the file tool. People were told to go and name a folder in
+  // Settings while standing in front of the card that knew exactly which folder
+  // they meant.
+  //
+  // `grantable` stays FALSE and that is not what changed. A stored grant still
+  // never answers a command, because everything in a command runs, not only the
+  // part that touches the named folder. What the card now carries is what the
+  // BUTTON would name, which is a different question from what a stored grant
+  // may answer, and conflating the two is why nothing was offered.
+  describe('the folder a shell card offers to name', () => {
+    const home = os.homedir();
+
+    test('a command reaching one folder offers that folder', () => {
+      // A REAL DIRECTORY, because "is this a folder or a file" is answered by
+      // asking the filesystem. A path that does not exist is judged by its
+      // parent, which is the right guess for an unborn file and the wrong one
+      // for an unborn directory; using a real folder keeps this test about the
+      // offer rather than about that guess.
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'offer-one-'));
+      try {
+        const r = classifyShellAccess('Bash', { command: `ls -la ${dir}` }, ws, []);
+        assert.strictEqual(r.grantDir, canonicalize(dir));
+        assert.strictEqual(r.grantable, false,
+          'and it is still not answerable from a stored grant: the button names a folder, it does not approve this command');
+      } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+    });
+
+    test('a file names the folder holding it, not the file', () => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'offer-file-'));
+      try {
+        fs.writeFileSync(path.join(dir, 'notes.md'), 'x');
+        const r = classifyShellAccess('Bash', { command: `cat ${path.join(dir, 'notes.md')}` }, ws, []);
+        assert.strictEqual(r.grantDir, canonicalize(dir));
+      } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+    });
+
+    test('several paths under one folder offer that folder', () => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'offer-many-'));
+      try {
+        fs.writeFileSync(path.join(dir, 'a.md'), 'x');
+        fs.writeFileSync(path.join(dir, 'b.md'), 'y');
+        const r = classifyShellAccess('Bash', {
+          command: `cat ${path.join(dir, 'a.md')} ${path.join(dir, 'b.md')}`,
+        }, ws, []);
+        assert.strictEqual(r.grantDir, canonicalize(dir));
+      } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+    });
+
+    test('paths with nothing in common offer nothing, rather than their ancestor', () => {
+      // The failure this guard exists for: two unrelated paths meet at the
+      // filesystem root, and offering that would let one click hand over the
+      // machine.
+      const r = classifyShellAccess('Bash', { command: `cat /etc/hosts && ls ${home}/Documents/x` }, ws, []);
+      assert.strictEqual(r.grantDir, null);
+    });
+
+    test('the home directory and the shallow system folders are never offered', () => {
+      for (const cmd of [`ls ${home}`, 'ls /etc', 'ls /tmp', 'ls /private/etc', 'ls /usr', 'ls /Users']) {
+        const r = classifyShellAccess('Bash', { command: cmd }, ws, []);
+        assert.ok(!r || r.grantDir === null, `${cmd} must offer no folder`);
+      }
+    });
+
+    test('a system folder reached through its real name is refused too', () => {
+      // Every crossing arrives canonicalised, and on macOS /etc IS /private/etc,
+      // so a literal match against the refusal list let the real spelling walk
+      // past it. Found by running the list, not by reading it.
+      assert.strictEqual(classifyShellAccess('Bash', { command: 'ls /etc' }, ws, []).grantDir, null,
+        '/etc canonicalises to /private/etc, and both spellings must be refused');
+    });
+
+    test('a command touching a credential offers nothing at all', () => {
+      // Not merely skipped for that one path: a command that reads a credential
+      // must not become the occasion for naming the folder holding it.
+      const r = classifyShellAccess('Bash', {
+        command: `cat ${home}/.claude/.credentials.json && ls ${home}/Documents/Somewhere`,
+      }, ws, []);
+      assert.strictEqual(r.grantDir, null);
+    });
+
+    test('once the folder is named, there is no card to offer anything on', () => {
+      // The end state, and the whole point: a named folder is not a crossing, so
+      // the question stops being asked rather than being asked more politely.
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'offer-named-'));
+      try {
+        assert.strictEqual(classifyShellAccess('Bash', { command: `ls -la ${dir}/Notes` }, ws, [dir]), null);
+      } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+    });
+  });
+
   test('non-shell tools are not classified here', () => {
     assert.strictEqual(classifyShellAccess('Write', { file_path: '/etc/hosts' }, ws, []), null);
     assert.strictEqual(classifyShellAccess('WebFetch', { url: 'https://x' }, ws, []), null);
@@ -180,17 +339,25 @@ describe('classifyShellAccess (hook-side)', () => {
     assert.strictEqual(classifyShellAccess('Bash', { command: 'cat /dev/fd/../../etc/passwd' }, ws, []).crossings[0].path, canonicalize('/etc/passwd'));
   });
 
-  test('a shell crossing never carries a folder to remember, and says so', () => {
+  test('a stored grant still never answers a shell command, whatever folder the card names', () => {
     // A folder grant answers "may an agent touch this folder"; approving a
     // shell request answers "may this command run". The second cannot be
-    // inferred from the first, so the classifier refuses to supply the folder
-    // that would let the server answer one with the other.
+    // inferred from the first, because everything in the command runs, not only
+    // the part that touches the folder.
+    //
+    // THAT RULE IS `grantable`, AND IT HAS NOT MOVED. What changed is that the
+    // card may now NAME a folder, which is a different question: the person
+    // approves this command explicitly either way, and the button adds "and
+    // work here from now on". Refusing to name one left the offer unreachable
+    // on 68% of real boundary cards, which is how people ended up being told to
+    // go to Settings by the very card that knew which folder they meant.
     const home = os.homedir();
     const r = classifyShellAccess('Bash', { command: `cp a ${path.join(home, 'Exports', 'a')}` }, ws, []);
     assert.strictEqual(r.where, 'outside');
-    assert.strictEqual(r.grantDir, null, 'no folder is offered');
-    assert.strictEqual(r.grantable, false, 'and the server is told a grant must not answer this');
-    assert.ok(r.crossings.every(c => c.grantDir === undefined), 'nor is one smuggled in per crossing');
+    assert.strictEqual(r.grantable, false,
+      'the server is told a stored grant must not answer this, which is the control that matters');
+    assert.ok(r.crossings.every(c => c.grantDir === undefined),
+      'and no per-crossing folder is smuggled in, which is what the server reads when deciding coverage');
   });
 
   test('EVERY distinct crossing is reported, not just the first', () => {
@@ -436,7 +603,10 @@ describe('an agent cannot quietly answer the questions it was asked', () => {
   test('writing either answer file is carded, though it sits inside the workspace', () => {
     for (const f of ['state.json', 'permissions.json']) {
       const target = path.join(WS, '.rundock', f);
-      assert.strictEqual(write(target).where, 'outside',
+      // Was `where === 'outside'`. The card is unchanged; what moved is that it
+      // no longer claims a crossing to get it, which put a false heading on a
+      // path plainly inside the workspace. The test name already said as much.
+      assert.strictEqual(write(target).answerFile, true,
         `a write to ${f} must reach the person, not be auto-approved as ordinary workspace work`);
       assert.strictEqual(write(target).grantDir, null,
         'and no standing folder grant may be offered that would silence it next time');

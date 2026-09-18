@@ -34,6 +34,11 @@ function shell(folders = [], opts = {}) {
   w.escAttr = (t) => String(t).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   w.eval(VIEW_SRC);
   w.sent = [];
+  // The sandbox caveat is conditional on both, so the harness states them
+  // rather than inheriting whatever the host happens to be. Defaults are the
+  // case the caveat describes; the tests that care set them explicitly.
+  w.serverPlatform = opts.platform === undefined ? 'darwin' : opts.platform;
+  w.workspaceMode = opts.mode === undefined ? 'knowledge' : opts.mode;
   w.ws = { readyState: 1, send: (m) => w.sent.push(JSON.parse(m)) };
   w.WebSocket = { OPEN: 1 };
   w.currentView = 'settings';
@@ -347,5 +352,53 @@ describe('switching workspace', () => {
     assert.strictEqual(rows(w.document.getElementById('settings-content')).length, 1);
     w.workingFoldersWorkspaceChanged();
     assert.strictEqual(rows(render(w)).length, 0);
+  });
+});
+
+// A CONDITIONAL CAVEAT THAT STOPS APPEARING IS INDISTINGUISHABLE FROM ONE THAT
+// WAS NEVER TRUE, so the condition is pinned in both directions.
+//
+// This note used to be permanent, which made it FALSE for every reader in Code
+// mode: it describes a limit that only exists in Knowledge mode on macOS. Now
+// it renders only in the case it describes. The risk that replaces the old one
+// is silence: if the condition is miscomputed the caveat vanishes and the
+// product goes back to not admitting the limit at all, which is the failure
+// this whole surface kept producing. Hence a test for each cell rather than one
+// for the happy case.
+describe('the sandbox caveat appears exactly where it applies', () => {
+  function noteText(opts) {
+    const el = render(shell([{ path: PROJECTS, missing: false }], opts).w);
+    return [...el.querySelectorAll('.wf-note')].map(n => n.textContent).join(' ');
+  }
+
+  test('macOS in Knowledge mode: the limit is stated', () => {
+    assert.match(noteText({ platform: 'darwin', mode: 'knowledge' }), /Knowledge mode on macOS/i,
+      'this is the one case where a named folder still has its write refused');
+  });
+
+  test('macOS in Code mode: not stated, because it is not true there', () => {
+    assert.doesNotMatch(noteText({ platform: 'darwin', mode: 'code' }), /Knowledge mode on macOS/i,
+      'Code mode ends the limit, so telling a Code-mode reader about it is false');
+  });
+
+  test('Windows and Linux: not stated, in either mode', () => {
+    for (const platform of ['win32', 'linux']) {
+      for (const mode of ['knowledge', 'code']) {
+        assert.doesNotMatch(noteText({ platform, mode }), /Knowledge mode on macOS/i,
+          `${platform}/${mode} has no macOS write block to warn about`);
+      }
+    }
+  });
+
+  test('the two facts that are always true are always shown', () => {
+    // Neither of these depends on platform or mode, and both were kept once
+    // already when proposed for deletion. They move only when the places they
+    // would move to exist.
+    for (const opts of [{ platform: 'darwin', mode: 'code' }, { platform: 'win32', mode: 'knowledge' }]) {
+      const t = noteText(opts);
+      assert.match(t, /credentials always ask/i, 'the guarantee that survives whatever is named');
+      assert.match(t, /already running keeps the folders it started with/i,
+        'and when a removal actually takes effect');
+    }
   });
 });
