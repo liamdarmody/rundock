@@ -234,6 +234,176 @@ describe('classifyShellAccess (hook-side)', () => {
     });
   });
 
+  // A SEARCH PATTERN IS NOT A PATH.
+  //
+  // `ls | grep '/$'` reported a crossing at `/$`, and `grep -E '/$|No such'` one
+  // at `/$|No such`. Reported twice in one session by someone testing something
+  // else entirely.
+  //
+  // THE COST WAS NOT THE EXTRA CARD. A phantom crossing shares no sensible
+  // folder with a real one, so the card stopped offering "always allow this
+  // folder" for the folder the command genuinely reached: a regex anywhere in a
+  // command disabled the control that ends repeated asking. That is the storm
+  // this release exists to stop, returning by another door.
+  describe('an argument in a pattern position is not read as a path', () => {
+    const home = os.homedir();
+
+    test('a pattern that looks like an absolute path raises nothing', () => {
+      assert.strictEqual(classifyShellAccess('Bash', { command: "ls | grep '/$'" }, ws, []), null);
+      assert.strictEqual(classifyShellAccess('Bash', { command: "ls | grep -E '/$|No such'" }, ws, []), null);
+      assert.strictEqual(classifyShellAccess('Bash', { command: "cat x | sed 's|/etc/|/tmp/|'" }, ws, []), null);
+    });
+
+    test('the real folder in the same command is still reported, and still offerable', () => {
+      // The reported command. Before this, the phantom crossing suppressed the
+      // folder button for the folder actually being read.
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pattern-real-'));
+      try {
+        const r = classifyShellAccess('Bash', { command: `ls -1ap ${dir} | grep -E '/$|No such'` }, ws, []);
+        assert.ok(r, 'the genuine crossing is still a crossing');
+        assert.deepStrictEqual(r.crossings.map(c => c.path), [canonicalize(dir)],
+          'and it is the ONLY crossing: the pattern is gone from the list');
+        assert.strictEqual(r.grantDir, canonicalize(dir),
+          'so the card can offer the folder again, which the phantom crossing had prevented');
+      } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+    });
+
+    test('a file argument after the pattern is still scanned', () => {
+      const r = classifyShellAccess('Bash', { command: 'grep foo /etc/hosts' }, ws, []);
+      assert.ok(r && r.crossings.some(c => /etc\/hosts$/.test(c.path)),
+        'only the pattern position is dropped; everything after it is a file');
+    });
+
+    test('the same text as pattern AND as file reports the file', () => {
+      // Why this is positional rather than by value. Dropping every token that
+      // matches a pattern would drop the file being read as well, which is the
+      // one thing this must never do.
+      const r = classifyShellAccess('Bash', { command: "grep '/etc/passwd' /etc/passwd" }, ws, []);
+      assert.ok(r && r.crossings.some(c => /etc\/passwd$/.test(c.path)),
+        'the file is read and must be reported, even though the identical text is also the pattern');
+    });
+
+    test('-f names a real file to read patterns from, and is never dropped', () => {
+      // The one flag that would hide a genuine target if it were confused with
+      // -e. Named explicitly in the code for that reason, and pinned here.
+      const r = classifyShellAccess('Bash', { command: 'grep -f /etc/patterns.txt notes.md' }, ws, []);
+      assert.ok(r && r.crossings.some(c => /patterns\.txt$/.test(c.path)),
+        '-f reads that path; dropping it would hide a real read behind a flag');
+    });
+
+    test('-e carries the pattern, so the positional argument is a file and is kept', () => {
+      const r = classifyShellAccess('Bash', { command: 'grep -e foo /etc/hosts' }, ws, []);
+      assert.ok(r && r.crossings.some(c => /etc\/hosts$/.test(c.path)),
+        'with -e there is no positional pattern, so the next argument is a file');
+    });
+
+    test('only pattern-taking commands are treated this way', () => {
+      // `cat /etc/hosts` has a first argument too, and it is a file.
+      const r = classifyShellAccess('Bash', { command: 'cat /etc/hosts' }, ws, []);
+      assert.ok(r && r.crossings.some(c => /etc\/hosts$/.test(c.path)),
+        'the rule is scoped to commands whose first argument is a pattern, and cat is not one');
+    });
+
+    test('a pattern in one segment does not silence the same text in another', () => {
+      // Counted per occurrence, not per command: the pattern is dropped once,
+      // and a later segment reading that path is still seen.
+      const r = classifyShellAccess('Bash', { command: "grep '/etc/hosts' notes.md; cat /etc/hosts" }, ws, []);
+      assert.ok(r && r.crossings.some(c => /etc\/hosts$/.test(c.path)),
+        'the cat in the second segment reads the file and must still be reported');
+    });
+  });
+
+  // A HIDDEN FOLDER UNDER HOME IS NEVER OFFERED AS A STANDING GRANT.
+  //
+  // Asking an agent about `~/.ssh/config` produced a card offering to allow the
+  // whole of `~/.ssh` in one click, private keys included, sitting beside the
+  // ordinary Allow and worded as though it were the same size of yes. The
+  // question was about one config file; the button was about the folder.
+  //
+  // MEASURED BEFORE DECIDING, and it is why this costs nothing: `ssh host`,
+  // `scp`, `rsync` and `git push` raise no card at all, because the ssh binary
+  // reads the keys as a subprocess and no path for them appears in the command.
+  // The grant bought no quiet anyone was actually missing, and removed the
+  // asking from the one folder where the asking is the point.
+  describe('a credential folder is not offered as a standing grant', () => {
+    const home = os.homedir();
+
+    test('the reported case: the card still asks, and offers no folder', () => {
+      const r = classifyShellAccess('Bash', { command: 'grep github ~/.ssh/config' }, ws, []);
+      assert.ok(r && r.where === 'outside', 'access is unchanged: it still asks');
+      assert.strictEqual(r.grantDir, null, 'what goes is the one-click blanket, not the access');
+    });
+
+    test('the same for file tools, so the two cards cannot disagree', () => {
+      for (const f of ['.ssh/config', '.ssh/id_rsa', '.aws/credentials', '.gnupg/secring.gpg']) {
+        const r = classifyFileAccess('Read', { file_path: path.join(home, f) }, ws, []);
+        assert.ok(r && r.where === 'outside', `${f} still asks`);
+        assert.strictEqual(r.grantDir, null, `${f} offers no folder to remember`);
+      }
+    });
+
+    test('a rule about hidden directories, not a list of names', () => {
+      // The next credential store will have a name nobody here guessed.
+      for (const f of ['.kube/config', '.docker/config.json', '.some-future-tool/token']) {
+        const r = classifyFileAccess('Read', { file_path: path.join(home, f) }, ws, []);
+        assert.strictEqual(r.grantDir, null, `${f} is a hidden home directory and is covered without being named`);
+      }
+    });
+
+    test('it reaches deeper than the first level', () => {
+      const r = classifyFileAccess('Read', { file_path: path.join(home, '.ssh', 'keys', 'prod', 'id_rsa') }, ws, []);
+      assert.strictEqual(r.grantDir, null, 'a folder nested inside a hidden home directory is still inside it');
+    });
+
+    test('ordinary folders are untouched, including hidden ones elsewhere', () => {
+      // The rule is about hidden directories under HOME. A dot-directory inside
+      // a project is ordinary working material and must still be grantable, or
+      // this would quietly take the button away from real work.
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ordinary-'));
+      try {
+        const nested = path.join(dir, '.github', 'workflows');
+        fs.mkdirSync(nested, { recursive: true });
+        const r = classifyShellAccess('Bash', { command: `cat ${path.join(nested, 'ci.yml')}` }, ws, []);
+        assert.strictEqual(r.grantDir, canonicalize(nested),
+          'a hidden folder inside a project is ordinary work and is still offerable');
+      } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+    });
+
+    test('the runtime homes keep their own finer rules, which this must not flatten', () => {
+      // `~/.claude` is a hidden directory under home and would fall to the rule
+      // above, but it is already governed by something more precise: its root is
+      // refused a grant, its credential file is a secret refused on any access,
+      // and everything else is scratch the agent owns. A folder-shaped
+      // persistence surface is deliberately grantable, scoped to itself.
+      //
+      // Taking that away would cost a real affordance for no gain, since hooks
+      // are not credentials and the credentials beside them are already
+      // protected. The first version of this guard did exactly that, and the
+      // test pinning the grantable surface is what caught it.
+      const home = os.homedir();
+      assert.strictEqual(
+        classifyFileAccess('Write', { file_path: path.join(home, '.claude', 'hooks', 'pre.sh') }, ws, []).grantDir,
+        canonicalize(path.join(home, '.claude', 'hooks')),
+        'a folder-shaped persistence surface is still offerable, scoped to its own folder');
+      assert.strictEqual(
+        classifyFileAccess('Write', { file_path: path.join(home, '.claude', 'settings.json') }, ws, []).grantDir,
+        null,
+        'while the runtime home ROOT is still refused, so approving settings.json cannot silence hooks/');
+      assert.strictEqual(
+        classifyFileAccess('Read', { file_path: path.join(home, '.claude', '.credentials.json') }, ws, []).grantDir,
+        null,
+        'and the credential file is still a secret, refused a grant on any access');
+    });
+
+    test('and SSH itself never needed the grant, which is why this costs nothing', () => {
+      // If any of these carded, removing the button would have a real cost.
+      for (const cmd of ['ssh liam@vps uptime', 'scp report.md liam@vps:/srv/', 'rsync -az ./dist/ liam@vps:/srv/', 'git push origin main']) {
+        assert.strictEqual(classifyShellAccess('Bash', { command: cmd }, ws, []), null,
+          `${cmd} raises no card, so no grant was ever needed for it`);
+      }
+    });
+  });
+
   test('non-shell tools are not classified here', () => {
     assert.strictEqual(classifyShellAccess('Write', { file_path: '/etc/hosts' }, ws, []), null);
     assert.strictEqual(classifyShellAccess('WebFetch', { url: 'https://x' }, ws, []), null);
