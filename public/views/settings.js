@@ -193,9 +193,32 @@ function renderSettingsSection(section) {
     // Three controls that were each added to the Workspace panel with their own
     // paragraph, so a reader met the same idea three times in three wordings.
     const isCode = workspaceMode === 'code';
+    // WHAT THE MODE DOES, AND THEN WHAT THE OPERATING SYSTEM DOES ABOUT IT.
+    //
+    // The second half is only true when Rundock wrote the sandbox block. It
+    // never rewrites one somebody else wrote, so in a workspace with a
+    // hand-authored block the switch moves nothing, and the sentence promising
+    // the write block is off, or on, was simply false with no way to tell from
+    // here. Reported after a headless render failed in a workspace sitting in
+    // Code mode: the render needs the write block off, Code mode says it is
+    // off, and it was on the whole time.
+    //
+    // So the operating-system clause is attached only where Rundock is the one
+    // deciding, and where it is not, the pane says that instead of guessing.
     const modeDesc = isCode
-      ? 'Agents can write any file type and run commands without approval. On macOS the operating-system write block is off here, because tools that launch their own processes can fail under it.'
-      : 'Agents work with documents only. Terminal commands need approval, and on macOS the operating system enforces that too.';
+      ? 'Agents can write any file type and run commands without approval.'
+      : 'Agents work with documents only. Terminal commands need approval.';
+    // ONLY AN EXPLICIT false WITHDRAWS THE PROMISE. Absent information is not
+    // evidence of a foreign sandbox: a server too old to send the field, or any
+    // context that has not set it, must produce the copy this pane always
+    // produced rather than a warning nobody can act on.
+    const sandboxIsOurs = (typeof sandboxManaged === 'undefined') || sandboxManaged !== false;
+    const osClause = !sandboxIsOurs ? ''
+      : isCode
+        ? ' On macOS the operating-system write block is off here, because tools that launch their own processes can fail under it.'
+        : ' On macOS the operating system enforces that too.';
+    const foreignSandboxNote = sandboxIsOurs ? '' :
+      `<div class="settings-caption mode-foreign-sandbox">This workspace's sandbox is set up outside Rundock, so switching modes does not change it.</div>`;
     el.innerHTML = `<div class="settings-section-title">Permissions</div>
       <div class="settings-lead">What agents can do, and what they can reach outside your workspace.</div>
       <div class="settings-block-heading"><span class="settings-label">Mode</span></div>
@@ -205,11 +228,12 @@ function renderSettingsSection(section) {
             <button class="mode-toggle-btn${isCode ? '' : ' active'}" data-mode="knowledge" onclick="setWorkspaceMode('knowledge')">Knowledge mode</button>
             <button class="mode-toggle-btn${isCode ? ' active' : ''}" data-mode="code" onclick="setWorkspaceMode('code')">Code mode</button>
           </div>
-          <div class="mode-description" id="mode-description">${modeDesc}</div>
+          <div class="mode-description" id="mode-description">${modeDesc}${osClause}</div>
+          ${foreignSandboxNote}
         </div>
       </div>
       ${workingFoldersSectionHtml()}
-      <div class="settings-caption">A folder you allowed by answering "Always allow" on a path card is not listed here yet.</div>
+      <div class="settings-caption">A folder you approve on a path card is named in the list above.</div>
       <div class="settings-block-heading"><span class="settings-label">Tools allowed without asking</span></div>
       <div class="settings-caption settings-caption-card">Choosing "Always allow" on a permission card adds one here. Removing it means the card asks again.</div>
       <div class="settings-card" id="tool-allows-block">${toolAllowsBlockHtml()}</div>`;

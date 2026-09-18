@@ -147,11 +147,18 @@ describe('the Permissions section holds what it should, and only there', () => {
     assert.ok(ws.querySelector('.settings-value'), 'and Workspace still renders what it kept');
   });
 
-  test('it says plainly that folder grants are not listed yet', () => {
+  test('it says where a folder approved on a card ends up, now that it ends up somewhere', () => {
     // A permissions view that silently omits a kind of permission is worse than
-    // a panel that never claimed to be one.
+    // a panel that never claimed to be one. This used to read "not listed here
+    // yet", which was true and is not any more: approving a folder on a path
+    // card now names it as a working folder, so it appears in the list above.
+    // The disclaimer became the omission it was written to prevent.
     const { w } = shell([]);
-    assert.match(render(w).textContent, /not listed here yet/i);
+    const text = render(w).textContent;
+    assert.match(text, /approve on a path card is named in the list above/i,
+      'the reader is told where the folder they approved went');
+    assert.doesNotMatch(text, /not listed here yet/i,
+      'and is not still told it went nowhere');
   });
 });
 

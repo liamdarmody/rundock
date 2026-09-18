@@ -56,6 +56,11 @@
 .mode-toggle-btn:hover:not(.active) { color: var(--text-1); background: var(--elevated); }
 .mode-toggle-btn.active { background: var(--card); color: var(--text-1); border-color: var(--border); box-shadow: 0 1px 3px rgba(0,0,0,0.18); }
 .mode-description { font-size: var(--caption); color: var(--text-2); line-height: 1.5; padding: 8px 0 4px; }
+/* The notice shown when Rundock did not author this workspace's sandbox, so
+   the mode switch moves nothing. Styled as a caption beside the mode copy it
+   replaces half of, rather than as a warning: nothing is wrong, Rundock is
+   simply not the one deciding here. */
+.mode-foreign-sandbox { margin-top: 2px; }
 
 
 /* ---- The Packages install flow (PL4 states on the PL2 section) ---- */
