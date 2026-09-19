@@ -79,16 +79,36 @@
 
   // Every message this view shows is built from nodes, so there is no
   // escaping to get right and nothing here appears in the innerHTML inventory.
+  // SPIKE: the map's empty states now read like the other rail entries'.
+  //
+  // Files, Pins and the map were each answering "there is nothing here yet" in
+  // their own type: Files and Pins with an icon above a heading, the map with a
+  // bare heading a size larger and body copy at a hardcoded 13px. Three rail
+  // destinations, three answers to one situation. The icon is the map's own
+  // rail glyph, so the empty state names the place the reader is standing in.
+  const MAP_GLYPH = '<circle cx="12" cy="5" r="2.4"/><circle cx="5" cy="17" r="2.4"/><circle cx="19" cy="17" r="2.4"/><line x1="10.7" y1="7" x2="6.3" y2="14.9"/><line x1="13.3" y1="7" x2="17.7" y2="14.9"/><line x1="7.4" y1="17" x2="16.6" y2="17"/>';
   function setMessage(title, body) {
     const host = document.getElementById(IDS.body);
     if (!host) return;
     const wrap = document.createElement('div');
     wrap.className = 'graph-empty';
-    const h = document.createElement('h4');
+    const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    icon.setAttribute('viewBox', '0 0 24 24');
+    icon.setAttribute('width', '32');
+    icon.setAttribute('height', '32');
+    icon.setAttribute('fill', 'none');
+    icon.setAttribute('stroke', 'currentColor');
+    icon.setAttribute('stroke-width', '1.2');
+    icon.setAttribute('stroke-linecap', 'round');
+    icon.setAttribute('stroke-linejoin', 'round');
+    icon.setAttribute('class', 'empty-icon');
+    icon.innerHTML = MAP_GLYPH;
+    const h = document.createElement('div');
+    h.className = 'empty-title';
     h.textContent = title;
     const p = document.createElement('p');
     p.textContent = body;
-    wrap.append(h, p);
+    wrap.append(icon, h, p);
     host.replaceChildren(wrap);
   }
 
@@ -120,7 +140,7 @@
     const starts = model.startPositions(placed.anchors);
     const N = graph.nodes.map((n, i) => {
       const a = placed.anchors[i];
-      return { i, x: starts[i].x, y: starts[i].y, ax: a.ax, ay: a.ay, degree: n.degree, kind: a.kind };
+      return { i, x: starts[i].x, y: starts[i].y, ax: a.ax, ay: a.ay, degree: n.degree, kind: a.kind, rimAt: a.rimAt };
     });
     const steps = model.recencyRanks(graph.nodes).map(model.recencyStep);
 
@@ -350,7 +370,11 @@
         .distance((l) => model.linkDistance(l.source, l.target)))
       .force('x', d3.forceX((n) => n.ax).strength((n) => (n.kind === 'rim' ? 0 : model.anchorStrength(n.kind))))
       .force('y', d3.forceY((n) => n.ay).strength((n) => (n.kind === 'rim' ? 0 : model.anchorStrength(n.kind))))
-      .force('rim', d3.forceRadial(placed.rimRadius, 0, 0).strength((n) => (n.kind === 'rim' ? model.anchorStrength('rim') : 0)))
+      // SPIKE (1): the radial force reads each node's own rim radius, so the
+      // band the anchors describe survives. Pulling every unlinked file to one
+      // exact radius is what drew seventeen hundred of them as a wire circle,
+      // and it silently overrode the anchors that said otherwise.
+      .force('rim', d3.forceRadial((n) => (n.rimAt || placed.rimRadius), 0, 0).strength((n) => (n.kind === 'rim' ? model.anchorStrength('rim') : 0)))
       .force('collide', d3.forceCollide().radius((n) => model.collideRadius(n)).iterations(1))
       .alphaDecay(model.alphaDecay(N.length))
       .on('tick.map', () => {

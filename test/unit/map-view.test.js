@@ -465,7 +465,17 @@ describe('labels on hover only, through the one visibility predicate', () => {
       s.mouse('mousemove', hub.x, hub.y);
       s.flushFrames();
       const written = s.ctx.calls.filter(c => c.name === 'fillText').map(c => c.args[0]);
-      assert.deepStrictEqual(written, ['Hub.md']);
+      // MP-7 is "the hovered node plus its VISIBLE neighbours, and nothing
+      // else", so the expectation is read from the predicate rather than
+      // written as a list. It used to be hard-coded to ['Hub.md'], which was
+      // true only while the disclosure fraction happened to hide every leaf in
+      // a four-node fixture: a constant this test does not own decided whether
+      // it passed, and raising that constant turned it red without anything
+      // about labelling having changed.
+      const onScreen = (p) => !!(view.mapNodeScreenPosition(p) || {}).visible;
+      const expected = ['Hub.md', ...['A.md', 'B.md', 'C.md'].filter(onScreen)];
+      assert.deepStrictEqual(written.slice().sort(), expected.slice().sort());
+      assert.ok(!written.includes('Lone.md'), 'an unlinked file is never named by a hover on the hub');
       assert.match(s.readout(), /^Hub\.md · 3 connections$/);
       // Zoomed in, the neighbours are visible and named with it.
       for (let i = 0; i < 12; i++) view.mapZoomIn();

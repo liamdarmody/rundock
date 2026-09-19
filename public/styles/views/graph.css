@@ -56,15 +56,13 @@ body.light .graph-recency-3 { color: color-mix(in srgb, var(--accent) 15%, var(-
   text-align: center;
   padding: 40px;
 }
-.graph-empty h4 {
-  margin: 0;
-  font-size: var(--title);
-  font-weight: 700;
-  color: var(--text-1);
-}
+/* The heading is .empty-title, shared with Files and Pins, so the three rail
+   destinations answer an empty view in one voice rather than three. The body
+   is var(--body) for the same reason: it was 13px, a literal that made the
+   map's copy a size smaller than the same sentence in the Pins pane. */
 .graph-empty p {
   margin: 0;
-  font-size: 13px;
+  font-size: var(--body);
   color: var(--text-2);
   max-width: 420px;
   line-height: 1.65;

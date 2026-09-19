@@ -156,8 +156,36 @@
   // group belongs; repulsion, collision and links decide what it looks like
   // once it gets there.
   const GOLDEN = Math.PI * (3 - Math.sqrt(5));
-  const CORE_RADIUS_PER_SQRT_NODE = 62;
-  const RIM_RADIUS_RATIO = 1.3;
+  // SPIKE (6): 62 drew the map at a scale where its own nodes disappeared.
+  //
+  // MEASURED, on a 4,984-file workspace. At 62 the fit zoom is k=0.083, and a
+  // node's drawn radius is baseRadius * k^0.55, so an unlinked file came out at
+  // 0.90px, which is RADIUS_MIN: it was not small, it was CLAMPED, and the
+  // encoding had bottomed out exactly where the whole map is being looked at.
+  // The rim read as pinpricks. At 28 the fit is k=0.175 and the same file draws
+  // at 1.30px against 4.04px for a median visible linked node, so the rim is
+  // still plainly the smaller thing and is no longer a speck.
+  //
+  // IT DOES NOT CLOSE THE EMPTY RING, and it was tried for that first. Core and
+  // rim scale together, so the fill is unchanged across the whole range: 42% of
+  // the rim radius at the median at 62, and 42% at 28. What changes is how big
+  // everything is drawn, because the radius exponent is below one.
+  const CORE_RADIUS_PER_SQRT_NODE = 28;
+  // SPIKE (5): the rim comes in.
+  //
+  // It was 1.3. The anchors only ever reach coreRadius, so at 1.3 the outermost
+  // community sat at 77% of the rim radius and the last quarter of the picture
+  // could not be occupied by anything except unlinked files, however the forces
+  // were tuned. Measured: with everything else fixed, dropping to 1.18 moves
+  // the drawn p90 of visible linked files from 54% of the rim radius to 62%.
+  //
+  // IT CANNOT GO BELOW 1.148. Small components are anchored in a band from 1.02
+  // to 1.148 of coreRadius, so a tighter rim would leave satellites outside the
+  // unlinked files that are meant to be the outer edge of the map. A test pins
+  // that the rim sits beyond every linked anchor.
+  const RIM_RADIUS_RATIO = 1.18;
+  // SPIKE (1): how wide the rim band is, as a fraction of the rim radius.
+  const RIM_BAND = 0.16;
   function assignAnchors(nodes, edges, opts) {
     const seed = (opts && typeof opts.seed === 'number') ? opts.seed : COMMUNITY_SEED;
     const degrees = nodes.map((n) => n.degree);
@@ -184,13 +212,50 @@
     const rankOf = new Map();
     ranked.forEach((l, r) => rankOf.set(l, r));
 
+
     const coreRadius = CORE_RADIUS_PER_SQRT_NODE * Math.sqrt(Math.max(connected, 1));
     const rimRadius = coreRadius * RIM_RADIUS_RATIO;
+    // SPIKE (2): place a community by how many NODES sit inside it, not by its
+    // position in the ranking.
+    //
+    // WHAT WAS MEASURED, on a 4,984-file workspace. Ranking by index and
+    // spreading with sqrt((rank + 0.5) / K) reads as an even fan, and is not
+    // one, because community sizes are nothing like even: 552 communities, the
+    // largest holding 183 nodes and the tail holding two or three each. The
+    // five biggest clusters all landed between 19% and 24% of coreRadius while
+    // ranks 100 to 552, almost all of them pairs, were handed the outer 70%.
+    // So the node mass piled into the inner quarter and the rest of the disc
+    // was allotted to things too small to see. That is the dense centre and the
+    // empty ring, and no amount of anchor strength fixes it: the anchors
+    // themselves were in the wrong place.
+    //
+    // Placing by cumulative node share instead makes equal AREA hold equal
+    // numbers of files, which is what an even-looking map means.
+    const radiusOfLabel = new Map();
+    let cumulative = 0;
+    for (const l of ranked) {
+      const s = size.get(l);
+      const mid = cumulative + s / 2;
+      radiusOfLabel.set(l, coreRadius * (0.16 + 0.84 * Math.sqrt(mid / Math.max(connected, 1))));
+      cumulative += s;
+    }
     const anchors = [];
     for (let q = 0; q < nodes.length; q++) {
       if (!degrees[q]) {
         const a0 = (q * GOLDEN) % (Math.PI * 2);
-        anchors.push({ ax: Math.cos(a0) * rimRadius, ay: Math.sin(a0) * rimRadius, kind: 'rim' });
+        // SPIKE (1): the rim is a BAND, not a wire.
+        //
+        // Measured on a 4,984-file workspace: all 1,774 unlinked files landed
+        // between screen radius 335 and 343. Eight pixels for seventeen hundred
+        // files reads as a drawn circle with the files stuck to it, rather than
+        // as the outer scatter of a map.
+        //
+        // The jitter is deterministic, from the node's own index, because the
+        // layout has to be the same picture on every open: a Math.random() here
+        // would redraw the workspace differently every time it was looked at.
+        const j = ((Math.sin(q * 12.9898) * 43758.5453) % 1 + 1) % 1;
+        const r = rimRadius * (1 - RIM_BAND / 2 + RIM_BAND * j);
+        anchors.push({ ax: Math.cos(a0) * r, ay: Math.sin(a0) * r, kind: 'rim', rimAt: r });
         continue;
       }
       if (comp.rootOf[q] !== giant) {
@@ -201,7 +266,7 @@
         continue;
       }
       const rr = rankOf.get(lab[q]);
-      const rad = coreRadius * (0.16 + 0.84 * Math.sqrt((rr + 0.5) / K));
+      const rad = radiusOfLabel.get(lab[q]);
       const ang = rr * GOLDEN;
       anchors.push({
         ax: Math.cos(ang) * rad, ay: Math.sin(ang) * rad, kind: 'cluster',
@@ -238,7 +303,21 @@
   // rather than only making things bigger, and the whole-map view stays a
   // readable shape instead of a solid mass. Degrees are sorted once so the
   // threshold for "top n%" is a lookup rather than a scan per frame.
-  const REST_FRACTION = 0.08;
+  // SPIKE (4): show far more of the map at rest.
+  //
+  // WHAT WAS MEASURED. At 0.08 the fit view drew 268 of 3,211 linked files:
+  // 92% of everything with a link in it was withheld until you zoomed. The
+  // 1,774 unlinked files were all drawn, on the rim, so the picture was a
+  // small knot of hubs, a wide band of nothing, and a ring. The band was not
+  // empty because the layout put nothing there; it was empty because almost
+  // everything there was hidden.
+  //
+  // At 0.35 the same view draws 1,403 of them, and their p90 anchor radius
+  // runs out to 91% of coreRadius instead of 79%, which is the band filling
+  // in. Disclosure still works exactly as before: the threshold falls as the
+  // zoom rises, and zooming still reveals the rest. It starts from a fuller
+  // picture rather than an empty one.
+  const REST_FRACTION = 0.35;
   const DISCLOSURE_EXPONENT = 1.7;
   function sortedDegrees(nodes) {
     return nodes.filter((n) => n.degree > 0).map((n) => n.degree).sort((a, b) => b - a);
@@ -299,7 +378,10 @@
   const RADIUS_BASE = 3.4;
   const RADIUS_PER_SQRT_DEGREE = 3.2;
   const ZOOM_EXPONENT = 0.55;
-  const RADIUS_MIN = 0.9;
+  // Raised with the core scale above: a floor of 0.9 is a dot a reader cannot
+  // see, so a node resting on it is encoding nothing. 1.2 keeps the smallest
+  // node visible on a workspace large enough to reach the floor anyway.
+  const RADIUS_MIN = 1.2;
   const RADIUS_MAX = 26;
   function baseRadius(degree) { return RADIUS_BASE + Math.sqrt(Math.max(0, degree)) * RADIUS_PER_SQRT_DEGREE; }
   function radius(degree, k) {
@@ -401,7 +483,23 @@
     };
   }
   const FIT_PADDING = 44;
-  const FIT_MAX_ZOOM = 1.5;
+  // SPIKE (7): the fit may zoom in far enough for a small workspace to fill
+  // the frame.
+  //
+  // MEASURED, on synthetic workspaces at 1280x800. The cap only ever bites
+  // below about sixty files, which is why a large vault looks right and a small
+  // one looks abandoned: a twelve-file workspace wants zoom 3.04 and was given
+  // 1.50, so its map filled 49% of the height and the rest was empty canvas
+  // outside the rim. A thirty-file workspace wanted 1.98, was given 1.50, and
+  // filled 76%. At 3.5 every size from twelve files up gets the zoom it asks
+  // for, and nothing above sixty files is affected at all because none of them
+  // reach the cap.
+  //
+  // A cap is still wanted, for the workspace with three files in it where the
+  // wanted zoom runs away. It does not have to carry the whole job of keeping
+  // nodes a sane size, because RADIUS_MAX already bounds that independently:
+  // at this cap an unlinked file draws about 7px and a hub clamps at 26.
+  const FIT_MAX_ZOOM = 3.5;
   function fitTransform(b, W, H) {
     if (!Number.isFinite(b.minX) || !Number.isFinite(b.maxX) || !Number.isFinite(b.minY) || !Number.isFinite(b.maxY)) return null;
     const bw = Math.max(b.maxX - b.minX, 1), bh = Math.max(b.maxY - b.minY, 1);
@@ -499,8 +597,21 @@
   // hardest so unlinked files stay out of the middle: the rim's job is
   // silhouette, not sediment. The rim is held by a radial force at the rim
   // radius, applied to unlinked nodes only.
+  // SPIKE (3): hold the clusters where their anchors put them.
+  //
+  // THE MEASUREMENT THIS CHANGES. Cluster anchors are already spread across the
+  // core, from 0.16 to 1.0 of coreRadius by community rank. At strength 0.06
+  // they lost to the link forces and every community collapsed toward the
+  // middle: on a 4,984-file workspace the drawn core had a median radius of 51
+  // screen pixels and a p75 of 75, inside a rim at 339. Three quarters of the
+  // linked files were in five per cent of the circle's area, and the ring
+  // between them and the rim was empty.
+  //
+  // The rim was being held OUT harder (0.10) than the core was being held OPEN
+  // (0.06), which is the wrong way round: the rim's job is silhouette, and the
+  // core's job is to show the shape of the workspace.
   function anchorStrength(kind) {
-    return kind === 'rim' ? 0.10 : kind === 'satellite' ? 0.14 : 0.06;
+    return kind === 'rim' ? 0.10 : kind === 'satellite' ? 0.30 : 0.55;
   }
   const CENTER_FORCE = null;
 
@@ -512,7 +623,7 @@
     baseRadius, radius, ZOOM_EXPONENT, RADIUS_MIN, RADIUS_MAX,
     recencyRanks, recencyStep, RECENCY_STEPS,
     labelList, hitTest, HIT_SLOP,
-    bounds, fitTransform, FIT_PADDING, FIT_MAX_ZOOM,
+    bounds, fitTransform, FIT_PADDING, FIT_MAX_ZOOM, RIM_BAND,
     zoomAt, wheelZoomFactor, ZOOM_MIN, ZOOM_MAX, dragIsClick, CLICK_SLOP,
     edgeComposite,
     readout, WARMING, NO_INDEX, NOTHING_LINKED,

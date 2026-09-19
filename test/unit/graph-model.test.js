@@ -129,7 +129,13 @@ describe('assignAnchors: communities placed, small components in the band, the u
     assert.strictEqual(rim.length, 2);
     assert.ok(rim.every(rr => rr > Math.max(...linked)),
       `the rim (${rim.map(x => x.toFixed(1))}) sits beyond the furthest linked anchor (${Math.max(...linked).toFixed(1)})`);
-    assert.ok(rim.every(rr => Math.abs(rr - a.rimRadius) < 1e-6), 'and at the stated rim radius');
+    // SPIKE (1): a BAND around the stated rim radius, not a single circle.
+    // Seventeen hundred files at one exact radius drew as a wire circle with
+    // the files stuck to it. Still deterministic, and still entirely outside
+    // the furthest linked anchor, which is what the assertion above pins.
+    const half = a.rimRadius * m.RIM_BAND / 2;
+    assert.ok(rim.every(rr => Math.abs(rr - a.rimRadius) <= half + 1e-6),
+      `the rim (${rim.map(x => x.toFixed(1))}) should sit within ${half.toFixed(1)} of ${a.rimRadius.toFixed(1)}`);
   });
 
   test('anchors are typed: cluster, satellite or rim, and community ranks are recorded on cluster members', () => {

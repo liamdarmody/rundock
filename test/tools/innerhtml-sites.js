@@ -203,6 +203,13 @@ const TABLE = {
     ['a', 'renderer', 'the file preview'],
     ['a', 'iconConst', 'a folder glyph, opened'],
   ],
+  'views/graph.js': [
+    // The map's empty states (no index, still warming, nothing linked) draw the
+    // rail's own map glyph above the line, so the three rail destinations answer
+    // an empty view the same way. A module constant, assigned to an svg element
+    // the function built itself; no value from the workspace reaches it.
+    ['a', 'iconConst', "the map empty state's icon: the rail's map glyph, a module constant"],
+  ],
   'views/find.js': [
     ['a', 'escapedText', 'the find overlay: file bytes through escapeOverlay, element content only'],
   ],
