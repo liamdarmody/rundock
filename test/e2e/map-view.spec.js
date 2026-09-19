@@ -59,3 +59,40 @@ test('Map from the rail: canvas at the pane, a keyword finds Roadmap-2026, its n
   await expect(page.locator('#editor-filename')).toHaveText('Roadmap-2026.md');
   await expect(page.locator('#view-map canvas')).toHaveCount(0);
 });
+
+test('the content corner beside the rail is rounded on the map as it is everywhere else', async ({ page }) => {
+  // WHAT WAS REPORTED. Every view gets its rounded top-left from the sidebar,
+  // which is --surface against the --chrome behind it, so the curve shows
+  // because the two colours differ. The map has no sidebar, so .main is the
+  // element at the frame's edge and it was square.
+  //
+  // .graph-stage already asked for the radius and could not show it: same
+  // --elevated, same x and y as .main, so it rounded against an identical
+  // colour and what a reader saw was the square corner underneath. A rule that
+  // is present and inert is worse than a missing one, because reading the
+  // stylesheet says the corner is handled.
+  //
+  // Asserted against the Files view rather than against 12px, so the claim is
+  // "the same as everywhere else" rather than a number that can drift apart
+  // from the token in one place.
+  await boot(page);
+
+  await page.locator('.nav-item[data-nav="files"]').click();
+  const withSidebar = await page.locator('.sidebar').evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    return { radius: getComputedStyle(el).borderTopLeftRadius, x: Math.round(r.x), y: Math.round(r.y) };
+  });
+  expect(withSidebar.radius).not.toBe('0px');
+
+  await page.locator('.nav-item[data-nav="map"]').click();
+  await expect(page.locator('#view-map')).toBeVisible();
+  await expect(page.locator('.sidebar')).toBeHidden();
+  const onMap = await page.locator('.main').evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    return { radius: getComputedStyle(el).borderTopLeftRadius, x: Math.round(r.x), y: Math.round(r.y) };
+  });
+
+  expect(onMap.radius, 'the map corner should match the sidebar corner').toBe(withSidebar.radius);
+  expect(onMap.x, 'and sit at the same place beside the rail').toBe(withSidebar.x);
+  expect(onMap.y).toBe(withSidebar.y);
+});

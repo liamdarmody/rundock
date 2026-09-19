@@ -13,6 +13,20 @@
    router reveals the (empty) map panel like any other; while it is the
    visible one, the aside itself comes off. */
 .sidebar:has(> #sidebar-map:not(.hidden)) { display: none !important; }
+/* AND THE CORNER MOVES TO .main WITH IT. Every other view gets its rounded
+   top-left from the sidebar, which is --surface against the --chrome behind it,
+   so the curve is visible because the two colours differ. With the sidebar off,
+   .main is the element at the frame's edge, and it is --elevated on a square
+   corner. .graph-stage already asks for the radius and cannot show it: it is
+   the same --elevated, sitting at the same x and y, so it rounds against an
+   identical colour and the corner underneath is what a reader sees. A rule that
+   is present and inert is worse than a missing one, because reading the
+   stylesheet says the corner is handled.
+
+   Conditioned on the same selector that removes the sidebar, so the two cannot
+   drift apart: whenever the aside is gone, the corner it was carrying is
+   carried here. */
+.app-body:has(#sidebar-map:not(.hidden)) .main { border-top-left-radius: var(--content-radius); }
 
 .graph-stage {
   flex: 1;
