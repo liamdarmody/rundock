@@ -4,6 +4,24 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
+## Unreleased
+
+**Name:** Map & Pins
+
+Two new places in the rail: one for the handful of files you keep coming back to, and one that shows you the shape of the whole workspace.
+
+### Added
+
+- **Pin the files you live in:** a Pins entry sits in the rail directly below Files. Pin the file you have open using the pin at the top right, or right-click any file in the sidebar and choose Pin. The Pins list shows your pinned files flat, in the order you pinned them, each with its folder underneath and an unpin control that appears when you hover the row. Pins are kept with the workspace, in `.rundock/pins.json`, so they travel with it: open the same workspace on another machine and your pins are there, and move or rename the folder and they follow. That directory is ignored by git, so a shared repository does not carry one person's list to everyone else. They survive restarting Rundock. A pinned file that has since been deleted or renamed stays in the list, struck through with the reason and an explicit Remove, because silently losing a pin would read as Rundock forgetting it. Opening a file from Pins keeps Pins lit; arriving at Pins with pins present opens the first one. With nothing pinned, the sidebar says so in a line and the pane says what pinning is for and names both ways to do it.
+
+- **Map: see your workspace as a graph:** a Map entry sits last in the rail, a lens over what the other entries contain. It draws every file as a node and every resolved link between files as an edge, on one canvas filling the pane, with the sidebar out of the way. Files that link to each other cluster together, and the clusters are spread by how many files they hold, so a dense group takes the room it needs rather than crowding the centre. Files nothing links to sit in a band around the outside rather than being hidden or scattered through the middle. Recency is shown as light: five steps from warm, for a file changed recently, to dim, for one untouched in a long while. A node's size grows with how many links it has, and more of the workspace comes into view as you zoom in. Type a keyword to narrow the readout to matching files, hover a node for its name, and click one to open it: it lands in the editor on the same file a link inside a document would open. Pan by dragging or two-finger scroll; zoom with a pinch or Ctrl and the wheel, anchored on the cursor. The map follows the theme, and a small workspace fills the frame rather than sitting as a speck in the middle of it. In the first moments after opening a workspace the link index is still filling, and the map says so rather than drawing a half-truth, then rebuilds itself once the index is ready.
+
+### Fixed
+
+- **The connections list no longer says "None" while links are still being indexed:** in the moments after opening a workspace the index is still filling, and an empty answer then is not a fact about the file. The list now says the links are still being indexed and redraws itself the moment the index is ready.
+
+- **A rail label is no longer drawn behind the view it sits over:** hovering a rail entry names it, and on a view whose own content sat at the same depth the name was painted underneath that content instead of over it. The rail and its labels now sit above the view in every case, while menus, the command palette and the find bar still sit above the rail.
+
 ## 0.13.3: Everyone In The Room (2026-09-15)
 
 ### Fixed
