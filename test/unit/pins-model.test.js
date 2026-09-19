@@ -141,25 +141,41 @@ describe('the words the empty state ships', () => {
   // thing is for, what to do next, and an optional aside. The next step has
   // to name BOTH ways to pin, because the header control is the one a
   // non-technical reader will find and right-click is the one they will not.
-  test('the state line says what is true', () => {
-    assert.strictEqual(m.EMPTY.lead, 'Nothing pinned yet.');
+  test('the state line says what is true, in the words the Files view already uses', () => {
+    // "No files yet" is what an empty Files sidebar says, and an empty Pins
+    // sidebar saying the same thing in the same shape is one less pattern for
+    // a reader to learn. Short on purpose: this line is the WHOLE sidebar
+    // empty state now, and the teaching lives in the pane.
+    assert.strictEqual(m.EMPTY.lead, 'No pins yet');
   });
 
-  test('the next step names the header control and the right-click row', () => {
-    assert.match(m.EMPTY.nextStep, /header/);
+  test('the prompt for a list with nothing open points at the sidebar', () => {
+    // The Files precedent again: with files present and none chosen, the pane
+    // says where to choose one rather than going blank.
+    assert.match(m.SELECT_PROMPT, /sidebar/);
+    assert.match(m.SELECT_PROMPT, /pinned/i);
+  });
+
+  test('the next step names both ways to pin', () => {
+    // PN-10 requires both ways named. It used to be checked by matching the
+    // word "header", which is the name of the element rather than anything a
+    // reader sees: the copy now says where the control IS, which discharges
+    // the criterion in the words the criterion is actually about.
+    assert.match(m.EMPTY.nextStep, /top right/);
     assert.match(m.EMPTY.nextStep, /right-click/);
   });
 
-  test('the empty state is mechanism then next step, with an aside about where pins live', () => {
+  test('the empty state is one paragraph: the mechanism then the next step', () => {
+    // One paragraph, no caption-type third line. Small print in an empty state
+    // is the line a reader skips exactly when they are being taught something.
     const state = m.emptyState();
     assert.strictEqual(state.lead, m.EMPTY.lead);
     assert.strictEqual(state.body, `${m.EMPTY.mechanism} ${m.EMPTY.nextStep}`);
-    assert.strictEqual(state.aside, m.EMPTY.aside);
-    assert.match(state.aside, /this machine/);
+    assert.ok(!('aside' in state), 'the empty state should carry no third slot');
   });
 
   test('no dash of either width reaches any shipped string', () => {
-    for (const s of [m.EMPTY.lead, m.EMPTY.mechanism, m.EMPTY.nextStep, m.EMPTY.aside, m.MISSING_NOTE, m.ALL_MISSING]) {
+    for (const s of [m.EMPTY.lead, m.EMPTY.mechanism, m.EMPTY.nextStep, m.MISSING_NOTE, m.ALL_MISSING, m.SELECT_PROMPT]) {
       assert.doesNotMatch(s, /[\u2013\u2014]/, `${s}: an en or em dash`);
     }
   });

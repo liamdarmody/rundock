@@ -6,7 +6,19 @@
    9px top and bottom matches the 9px the 42px icons already sit in
    horizontally, so each icon occupies a square 60x60 cell on the same module
    as the bar above. */
-.nav-rail { width: var(--nav-rail-width); background: var(--chrome); display: flex; flex-direction: column; align-items: center; padding: 9px 0; flex-shrink: 0; z-index: 2; }
+/* THE RAIL SITS ABOVE THE VIEW IT SWITCHES, and the number matters more than
+   it looks. z-index applies to a flex item even with static position, and
+   applying it CREATES A STACKING CONTEXT: at 2, the hover label below was
+   sealed inside a context capped at 2, so its own z-index of 100 could never
+   lift it over a later sibling on the same layer. The map's filter field is
+   z-index 2 in the main pane, which comes after the rail in the document, so
+   it won and the label for Conversations was drawn underneath it.
+
+   10 clears every view-level layer (2 to 5) and stays well under the floating
+   toolbar (50), the find bar and topbar (100 to 120), and the menus and
+   overlays (200 to 1000), so nothing that should cover the rail stops doing
+   so. Chrome that names where you are belongs above the content it names. */
+.nav-rail { width: var(--nav-rail-width); background: var(--chrome); display: flex; flex-direction: column; align-items: center; padding: 9px 0; flex-shrink: 0; z-index: 10; }
 /* padding-top 0, not 4: the rail's own 9px IS the grid inset, and 4 more
    would quietly make it 13. */
 .nav-main { display: flex; flex-direction: column; gap: 4px; flex: 1; align-items: center; }

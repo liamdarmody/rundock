@@ -305,7 +305,7 @@ model: opus
 Notes on this routine:
 
 - The schedule uses the daily form, two-digit zero-padded. The scheduler matches it on the first tick that follows 05:00 each day.
-- The prompt is short. It assumes the agent's system prompt knows what "the morning briefing" means and how to produce it. The actual session-start logic lives in `System/Context/session-start-protocol.md`, loaded by the orchestrator's body.
+- The prompt is short. It assumes the agent's system prompt knows what "the morning briefing" means and how to produce it, so the routine names the job and the agent's own instructions carry the detail. A prompt that had to restate the whole procedure would be a prompt the agent file should have held.
 - The description appears on Cos's profile under the Routines card. It does not affect the scheduler.
 
 ## Common patterns

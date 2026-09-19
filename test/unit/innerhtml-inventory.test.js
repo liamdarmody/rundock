@@ -44,20 +44,26 @@ describe('the innerHTML inventory', () => {
 
   test('the counts the audit quotes are the counts the tree has', () => {
     const t = totals(classify().rows);
-    // 124 after the 0.14 rail met the permissions work. Both sides of that
-    // merge added sites and each quoted a total that was true of its own
-    // branch and of no tree that ever shipped: 118 on the rail, 116 on main.
-    // The number below is measured against the merged tree rather than chosen
-    // from either side, which is the only version of this assertion that means
-    // anything.
+    // 123, and every one of these numbers is measured against the tree in
+    // front of it rather than carried over from somewhere.
     //
-    // The permissions section contributed one group (b) site, its own render:
-    // its copy is constant, and the two lists it draws are built by
-    // workingFoldersSectionHtml() and toolAllowsBlockHtml(), which carry their
-    // own rows, so no user-authored text is interpolated there. The rail
-    // contributed the pins and map views.
-    assert.strictEqual(t.total, 124, 'first-party assignments under public/');
-    assert.strictEqual(t.byGroup.a, 88, 'group (a): closed with a stated reason');
+    // It was 124 when the 0.14 rail met the permissions work. Both sides of
+    // that merge had added sites, and each quoted a total that was true of its
+    // own branch and of no tree that ever shipped: 118 on the rail, 116 on
+    // main. Choosing either would have been choosing a number that was already
+    // wrong.
+    //
+    // It is 123 because the Pins sidebar then gave one up. Its empty state is a
+    // single fixed line now, set with textContent, after the same paragraph was
+    // found rendering in the sidebar and the pane at once.
+    //
+    // What each side contributed: the permissions section one group (b) site,
+    // its own render, whose copy is constant and whose two lists are built by
+    // workingFoldersSectionHtml() and toolAllowsBlockHtml() carrying their own
+    // rows, so no user-authored text is interpolated there; the rail, the pins
+    // and map views.
+    assert.strictEqual(t.total, 123, 'first-party assignments under public/');
+    assert.strictEqual(t.byGroup.a, 87, 'group (a): closed with a stated reason');
     assert.strictEqual(t.byGroup.b, 36, 'group (b): fixed');
     assert.strictEqual(t.byGroup.a + t.byGroup.b, t.total, 'every site is in exactly one group');
   });

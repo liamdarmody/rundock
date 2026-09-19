@@ -59,24 +59,27 @@ const MUTATIONS = [
     '        missing: false,'],
 
   // ===== WHERE PINS LIVE =====
-  // Write a copy under the workspace root and a synced folder starts sharing
-  // one person's pins: the byte-identical snapshot is what notices.
-  [STORE, 'the store writes nothing under the workspace root',
-    '  writeAll(all);\n  return next;',
-    "  writeAll(all);\n  fs.writeFileSync(path.join(root, '.rundock-pins.json'), '[]');\n  return next;"],
-  // Keep every key and a workspace moved to a new path leaves its old entry
-  // behind forever, which is not what the stated rule says happens.
-  [STORE, 'an entry whose workspace path no longer exists is pruned on load',
-    '    if (fs.existsSync(key)) valid[key] = list;\n    else pruned = true;',
-    '    valid[key] = list;'],
-  // Key by the path as typed and a symlinked workspace is two workspaces.
-  [STORE, 'the key is the realpath of the workspace root',
-    '  try { return fs.realpathSync(root); } catch (e) { return path.resolve(root); }',
-    '  return path.resolve(root);'],
+  //
+  // THREE ROWS BECAME ONE WHEN THE FILE MOVED INTO THE WORKSPACE. The store
+  // used to be a single file in the home directory holding every workspace's
+  // pins under a key, so it needed a rule about which key (the realpath), a
+  // rule about keys whose workspace had gone (prune them), and a rule that
+  // nothing was ever written under the workspace root. A file that lives
+  // inside the workspace it describes needs none of those: it moves when the
+  // workspace moves, and it is gone when the workspace is gone. The rows for
+  // rules that no longer exist are deleted rather than repointed, because a
+  // mutation row aimed at absent code reports that nothing broke, which reads
+  // exactly like a guard nothing tests.
+  //
+  // Write outside `.rundock/` and a pin starts touching files the reader
+  // wrote: the byte-identical snapshot is what notices.
+  [STORE, 'the store writes inside .rundock and nowhere else in the workspace',
+    "  fs.writeFileSync(pinsFile(root), JSON.stringify(next, null, 2));",
+    "  fs.writeFileSync(path.join(root, 'pins.json'), JSON.stringify(next, null, 2));"],
 
   // ===== THE WIRE =====
   // Drop the boundary guard and a pin_file for a path outside the workspace
-  // is written to the home file.
+  // is written to the pins file.
   [HANDLER, 'a pin outside the workspace is refused before any write',
     '  if (!rel || !ctx.workspace.isInsideWorkspace(full) || !isFile()) {',
     '  if (!rel || !isFile()) {'],

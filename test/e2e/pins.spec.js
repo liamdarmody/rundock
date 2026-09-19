@@ -59,8 +59,25 @@ async function setTheme(page, light) {
 async function settledColours(page) {
   const read = () => page.evaluate(() => {
     const body = getComputedStyle(document.body);
-    const pane = getComputedStyle(document.querySelector('#view-pins .pins-empty'));
-    const lead = getComputedStyle(document.querySelector('#view-pins .pins-empty-lead'));
+    // The card the pane used to be painted on is gone: the empty state now
+    // matches the Files view's, which sits directly on the view's own ground.
+    // So the ground is read from the panel rather than from a box that no
+    // longer exists, and the two text colours from the title and the body.
+    const pane = getComputedStyle(document.querySelector('#view-pins .pins-empty-body'));
+    const lead = getComputedStyle(document.querySelector('#view-pins .empty-title'));
+    // PN-11 asks that the ground resolves from the theme. With the card gone
+    // the pane paints none of its own, so the ground is whichever ancestor
+    // actually paints one: walking up is the honest way to ask "what colour is
+    // behind this text", and it keeps the claim true wherever that ground is
+    // declared.
+    const painted = (el) => {
+      for (let n = el; n; n = n.parentElement) {
+        const bg = getComputedStyle(n).backgroundColor;
+        if (bg && bg !== 'rgba(0, 0, 0, 0)' && bg !== 'transparent') return bg;
+      }
+      return '';
+    };
+    const ground = painted(document.querySelector('#view-pins .pins-empty-body'));
     const rgb = (name) => {
       const m = /^#([0-9a-f]{6})$/i.exec(body.getPropertyValue(name).trim());
       if (!m) return null;
@@ -68,8 +85,8 @@ async function settledColours(page) {
       return `rgb(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255})`;
     };
     return {
-      text: pane.color, lead: lead.color, ground: pane.backgroundColor,
-      settled: pane.color === rgb('--text-2') && pane.backgroundColor === rgb('--surface') && lead.color === rgb('--text-1'),
+      text: pane.color, lead: lead.color, ground,
+      settled: pane.color === rgb('--text-2') && lead.color === rgb('--text-1'),
     };
   });
   await expect.poll(async () => (await read()).settled, { message: 'the pane must settle on --text-2 over --surface, lead in --text-1' }).toBe(true);
@@ -139,18 +156,19 @@ test('pin from the header, pin from the tree, open from the rail, unpin: the DOM
   await remaining.locator('.pin-unpin').click();
   await expect.poll(() => replies.at(-1)).toEqual([]);
   expect(await pinRows(page)).toEqual([]);
-  await expect(page.locator('#pin-list .sidebar-quiet')).toContainText('Nothing pinned yet.');
+  await expect(page.locator('#pin-list .sidebar-quiet')).toContainText('No pins yet');
 });
 
 test('with zero pins the rail entry opens onto the empty state, whose colours come from the theme', async ({ page }) => {
   await boot(page);
   await page.locator('.nav-item[data-nav="pins"]').click();
   expect(await lit(page)).toEqual(['pins']);
-  const pane = page.locator('#view-pins .pins-empty');
+  const pane = page.locator('#view-pins .pins-pane');
   await expect(pane).toBeVisible();
-  await expect(pane).toContainText('Nothing pinned yet.');
-  await expect(pane).toContainText('header');
+  await expect(pane).toContainText('No pins yet');
+  await expect(pane).toContainText('top right');
   await expect(pane).toContainText('right-click');
+  await expect(page.locator('#view-pins .empty-icon')).toBeVisible();
 
   await setTheme(page, false);
   const dark = await settledColours(page);

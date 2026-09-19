@@ -51,18 +51,35 @@
   }
 
   /**
-   * The empty state, in the four slots of the empty-states pattern: what is
-   * true, what the thing is for, what to do next, and an aside. The next step
-   * names BOTH ways to pin, because the header control is the one a
-   * non-technical reader will find and right-click is the one they will not.
+   * The empty state: what is true, what the list is for, and the two ways to
+   * fill it. The next step names BOTH, because the pin on an open file is the
+   * one a reader will find and right-click is the one they will not.
+   *
+   * THE LEAD IS THE WHOLE SIDEBAR EMPTY STATE and the rest belongs to the pane,
+   * which is beside it on the same screen. Both surfaces used to render the
+   * mechanism and the next step, putting the same fifty-five words on screen
+   * twice: once in a 280px column and once in a centred card. Each surface was
+   * individually correct and the screen carrying both was not. The Files view
+   * had already settled the shape, and the reason to match it is that a reader
+   * should not learn two patterns for one situation: a short line repeated
+   * across the two is a title, a paragraph repeated is a defect.
+   *
+   * ONE PARAGRAPH, NOT THREE. There was a third, set in caption type, saying
+   * pins were kept per machine and a shared workspace did not share them.
+   * Small print in an empty state is the line a reader skips at exactly the
+   * moment they are being taught something. The claim has since stopped being
+   * true in any case: pins live in the workspace's own `.rundock/` now, so
+   * they travel with it.
+   *
+   * THE LOCATION IS NAMED IN PLAIN WORDS rather than as "the header control".
+   * Someone who has never pinned anything is looking for a place on the screen,
+   * not for the name a developer gave the element.
    */
   const EMPTY = {
-    lead: 'Nothing pinned yet.',
-    mechanism: 'Pin the files you come back to daily, a backlog, a roadmap, a dashboard, '
-      + 'and they show up here, one click away.',
-    nextStep: 'Pin the file you are reading from the pin control in its header, '
-      + 'or right-click any file in the tree and choose Pin.',
-    aside: 'Pins are kept on this machine, for you: a shared workspace does not share them.',
+    lead: 'No pins yet',
+    mechanism: 'Pin the files you come back to daily and they show up here.',
+    nextStep: 'Use the pin at the top right of an open file, '
+      + 'or right-click any file in the sidebar.',
   };
 
   /** The line under a pin whose file the tree no longer carries. */
@@ -70,6 +87,15 @@
 
   /** The pane when every pin is missing, so the rail entry still opens onto something. */
   const ALL_MISSING = 'None of your pins could be found. Remove them from the list, or pin the files at their new paths.';
+
+  /** The pane with pins present and none of them open.
+   *
+   * The arrival rule opens the first openable pin, so this is a fallback
+   * rather than the common path: it is here because the alternative is a blank
+   * pane, which reads as a view that failed to load rather than as a list
+   * waiting to be chosen from. The Files view answers the same situation with
+   * the same sentence shape. */
+  const SELECT_PROMPT = 'Select a pinned file from the sidebar';
 
   /**
    * A list of paths out of whatever arrived: strings only, no empties, no
@@ -172,8 +198,8 @@
 
   /** The empty pane: mechanism then next step, always both, in that order. */
   function emptyState() {
-    return { lead: EMPTY.lead, body: `${EMPTY.mechanism} ${EMPTY.nextStep}`, aside: EMPTY.aside };
+    return { lead: EMPTY.lead, body: `${EMPTY.mechanism} ${EMPTY.nextStep}` };
   }
 
-  return { GLYPH, glyphSvg, EMPTY, MISSING_NOTE, ALL_MISSING, normalize, has, add, remove, reconcile, firstOpenable, emptyState };
+  return { GLYPH, glyphSvg, EMPTY, MISSING_NOTE, ALL_MISSING, SELECT_PROMPT, normalize, has, add, remove, reconcile, firstOpenable, emptyState };
 }));

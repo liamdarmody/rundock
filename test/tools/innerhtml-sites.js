@@ -180,12 +180,11 @@ const TABLE = {
   // are a table lookup by kind with a fallback, or the model's own glyph.
   'views/pins.js': [
     ['a', 'cleared', 'the pin list, emptied before rebuild'],
-    ['a', 'escapedText', 'the sidebar quiet copy: the model\'s empty-state constants, esc()'],
     ['a', 'escapedText', 'a pin row: a tree icon from the kind table, then the file name and its folder or the missing note, esc()'],
     ['a', 'iconConst', 'the hover unpin control: the model\'s pin glyph, filled'],
-    ['a', 'escapedText', 'the empty pane: the model\'s lead, body and aside, esc()'],
-    ['a', 'escapedText', 'the all-missing pane: the model\'s one line, esc()'],
-    ['a', 'cleared', 'the pane, emptied when a pin can be opened'],
+    ['a', 'escapedText', 'the empty pane: the pin glyph, then the model\'s lead and its one paragraph, esc()'],
+    ['a', 'escapedText', 'the all-missing pane: the pin glyph and the model\'s one line, esc()'],
+    ['a', 'escapedText', 'the choose-one pane: the pin glyph and the model\'s select prompt, esc()'],
     ['a', 'iconConst', 'the header pin control: the model\'s pin glyph, outline or filled'],
   ],
   'views/files.js': [

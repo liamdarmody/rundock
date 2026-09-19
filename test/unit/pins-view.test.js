@@ -315,19 +315,55 @@ describe('with nothing pinned, the pane says what pinning is for', () => {
       assert.ok(pane.includes(PinsModel.EMPTY.lead));
       assert.ok(pane.includes(PinsModel.EMPTY.mechanism));
       assert.ok(pane.includes(PinsModel.EMPTY.nextStep));
-      assert.ok(pane.includes(PinsModel.EMPTY.aside));
-      assert.match(pane, /header/, 'the pane does not point at the header control');
+      assert.match(pane, /top right/, 'the pane does not say where the pin control is');
       assert.match(pane, /right-click/, 'the pane does not point at the right-click row');
       assert.strictEqual(rows(doc).length, 0);
-      // The sidebar teaches the same thing in fewer words, from the same copy.
+    } finally { cleanup(); }
+  });
+
+  test('the sidebar says the short line and nothing the pane already says', () => {
+    // THE DEFECT THIS PINS. Both surfaces used to render the mechanism and the
+    // next step, so the same fifty-five words appeared twice on one screen,
+    // once in a 280px column and once in a centred card. Each surface passed
+    // its own assertion; nothing asked what the screen looked like with both
+    // on it. The Files view had already answered this: an empty sidebar says
+    // "No files yet" and the pane carries the icon and the elaboration. A
+    // short line repeated is a title; a paragraph repeated is a bug.
+    const { doc, cleanup } = shell({ pins: [] });
+    try {
       const quiet = text(doc.querySelector('#pin-list .sidebar-quiet'));
-      assert.ok(quiet.includes(PinsModel.EMPTY.lead) && quiet.includes(PinsModel.EMPTY.nextStep));
+      assert.ok(quiet.includes(PinsModel.EMPTY.lead), 'the sidebar still says what is true');
+      for (const [name, copy] of [['mechanism', PinsModel.EMPTY.mechanism],
+                                  ['next step', PinsModel.EMPTY.nextStep],
+                                  ]) {
+        assert.ok(!quiet.includes(copy), `the sidebar repeats the pane's ${name}`);
+      }
+    } finally { cleanup(); }
+  });
+
+  test('the pane carries the icon the Files empty state uses', () => {
+    const { doc, cleanup } = shell({ pins: [] });
+    try {
+      assert.ok(doc.querySelector('#pins-content .empty-icon'), 'no icon above the line');
+      assert.ok(doc.querySelector('#pins-content .empty-title'), 'the lead is not the pane title');
+    } finally { cleanup(); }
+  });
+
+  test('with pins present and none open, the pane says where to choose one', () => {
+    // The Files precedent for its second empty state. Reachable when the pane
+    // is shown without a pin opening: the arrival rule opens the first
+    // openable pin, so this is the fallback rather than the common path, and
+    // a blank pane would read as a view that failed to load.
+    const { doc, cleanup } = shell({ pins: ['Roadmap.md'] });
+    try {
+      const pane = text(doc.getElementById('pins-content'));
+      assert.ok(pane.includes(PinsModel.SELECT_PROMPT), `pane said: "${pane}"`);
     } finally { cleanup(); }
   });
 
   test('no banned word reaches the copy', () => {
     const BANNED = ['leverage', 'streamline', 'empower', 'utilize', 'robust', 'seamless', 'dive into', 'intuitive', 'effortless'];
-    for (const s of [PinsModel.EMPTY.lead, PinsModel.EMPTY.mechanism, PinsModel.EMPTY.nextStep, PinsModel.EMPTY.aside, PinsModel.MISSING_NOTE, PinsModel.ALL_MISSING]) {
+    for (const s of [PinsModel.EMPTY.lead, PinsModel.EMPTY.mechanism, PinsModel.EMPTY.nextStep, PinsModel.MISSING_NOTE, PinsModel.ALL_MISSING]) {
       for (const word of BANNED) assert.ok(!new RegExp(`\\b${word}\\b`, 'i').test(s), `"${word}" in "${s}"`);
     }
   });

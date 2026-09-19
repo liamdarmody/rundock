@@ -39,7 +39,7 @@ Then drive the real interface at that URL. Not the classifier, not the HTTP payl
 
 ## What to cover
 
-Derived from where defects actually came from, not from a guess. The defect ledger records a surface for each one, so this list is maintained from evidence.
+Derived from where defects actually came from, not from a guess. Each one is recorded with the surface it was found at, so this list is maintained from evidence rather than from taste.
 
 1. **The change itself**, driven as a user would drive it, including the path that is awkward rather than the one that is convenient.
 2. **The first screen**, before opening anything. Two escapes lived here: a recent-workspaces list with eight of ten slots filled by test fixtures, and a caption describing a list it no longer matched.
@@ -51,7 +51,7 @@ Derived from where defects actually came from, not from a guess. The defect ledg
 
 Both of these cost real time on the first pass, and both produce a finding that looks solid until it is checked.
 
-**The environment the server runs in is not the environment a user's server runs in.** Pinning a file appeared to be completely broken: the control did nothing, the list stayed empty, and `pin_file` returned no reply at all while `get_pins` answered normally. The cause was the automation sandbox refusing the write to `~/.rundock-pins.json`, which is exactly where the design says pins go. With a writable home it works and persists. Before reporting anything the product "cannot" do, read the server log: the EPERM was sitting in it the whole time. A finding that the product is broken is worth ten minutes of checking that the harness is not.
+**The environment the server runs in is not the environment a user's server runs in.** Pinning a file appeared to be completely broken: the control did nothing, the list stayed empty, and `pin_file` returned no reply at all while `get_pins` answered normally. The cause was the automation sandbox refusing the write to the file the design puts pins in, which at the time was under the home directory. With a writable home it works and persists. Before reporting anything the product "cannot" do, read the server log: the EPERM was sitting in it the whole time. A finding that the product is broken is worth ten minutes of checking that the harness is not.
 
 **An automated tab is usually backgrounded, and Chrome throttles `requestAnimationFrame` to nothing there.** Anything the view redraws on a frame is therefore frozen: canvas contents, and any readout written during the draw. A filter applied through the console changed nothing on screen, which reads exactly like a missing feature and was not. Check `document.visibilityState` before believing any of it. **Frame-timing criteria cannot be discharged this way at all** and need a real foreground window, so a performance criterion is recorded as not covered by the pass rather than quietly skipped.
 
@@ -59,14 +59,8 @@ The general form: when the screen disagrees with the criteria, establish whether
 
 ## Recording what it finds
 
-Every defect gets a row when it is found, whether the machine or a person found it:
+Every defect gets recorded when it is found, with three things: what it was, which surface it was found at, and **who found it**. The last is the one that matters. A defect found by a person using the product escaped; a defect found by the machine did not.
 
-```bash
-python3 System/Automations/sdlc-metrics.py defect \
-  --title "..." --found-by machine --surface browser --release 0.14.0
-python3 System/Automations/sdlc-metrics.py verified --id dN
-```
-
-`found_by owner` or `found_by user` means it escaped. That number is the point. A pass that finds nothing and records nothing is indistinguishable from a pass nobody ran, and the escape rate is what tells the two apart over a release rather than on the day.
+That number is the point. A pass that finds nothing and records nothing is indistinguishable from a pass nobody ran, and the escape rate is what tells the two apart over a release rather than on the day.
 
 **Baseline to beat, from 0.13.3:** escape rate 0.57, median report-to-verifiable-fix 16.5 minutes.

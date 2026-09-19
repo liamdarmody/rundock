@@ -103,12 +103,29 @@ const RULES = [
   { label: 'review-round label (e.g. round-2 regressions)', re: /\bround-?[0-9] regress/i },
   { label: 'internal plan/run codename (e.g. HARDEN1, KAN2)', re: /\b(HARDEN[0-9]*|KAN[0-9])\b/ },
   { label: 'vault / private workspace path', re: /02_Areas|01_Projects|Liam-Agent-Workspace|Obsidian Vaults?/ },
+  // Private workspace TOOLING paths, which the rule above does not reach: it
+  // lists vault folders, and these sit under System/ alongside a folder that
+  // is a genuine product feature.
+  //
+  // `System/Playbooks/` is deliberately NOT here. Rundock discovers skills from
+  // it in any workspace, it is documented in ARCHITECTURE.md and SKILLS.md, and
+  // server.js scans it: naming it would fail the build on the product's own
+  // behaviour. Every other System/ folder named below is workspace furniture
+  // that no external reader can act on.
+  //
+  // Added after `docs/browser-pass.md` shipped to the public repo telling
+  // readers to run `python3 System/Automations/sdlc-metrics.py`, a file that
+  // does not exist in this repository. It passed every check, because the path
+  // rule looked for vault FOLDER names and this was none of them.
+  { label: 'private workspace tooling path', re: /System\/(Automations|Memory|Context|MCP|Rules|Voice|Formats|dashboards)\b|\bsdlc-metrics\b/ },
   // The path rule above only catches vault PATHS. These catch references to
   // private workspace CONTENT, which reads as internal to any external
   // contributor even though no path appears. Deliberately narrow: a bare
   // "vault" is a legitimate product term (Obsidian vault support), and a bare
   // 13-digit number is a legitimate millisecond timestamp in protocol traces.
-  { label: 'private workspace content reference', re: /\b(vault|private workspace) (conversation|transcript|note|entry)\b/i },
+  // The noun list is the whole rule, so it grows when a new one leaks. `ledger`
+  // arrived from a pull request body reading "recorded on the vault ledger".
+  { label: 'private workspace content reference', re: /\b(vault|private workspace) (conversation|transcript|note|entry|ledger|backlog|card|criteria|roadmap)\b/i },
   { label: 'workspace conversation id', re: /\bconversation 1[0-9]{12}\b/i },
   { label: 'internal process phrase', re: /adversarial (sweep|review round)|handoff file per run|completion report per run/i },
   // Board vocabulary (priority/size markers) is planning language, not public

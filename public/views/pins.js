@@ -112,10 +112,16 @@ function renderPinsSidebar(rows) {
   const model = pinsModel();
   list.innerHTML = '';
   if (!rows.length) {
-    // The sidebar teaches in fewer words than the pane, from the same copy.
+    // THE SHORT LINE AND NOTHING ELSE. The teaching belongs to the pane, which
+    // is beside this column on the same screen: rendering the mechanism and
+    // the next step here too put the same fifty-five words on screen twice.
+    // This is what an empty Files sidebar does, and the reason to match it is
+    // that a reader should not have to learn a second pattern for the same
+    // situation. textContent rather than innerHTML because a fixed line needs
+    // no markup, and a site that cannot interpolate cannot interpolate wrongly.
     const quiet = document.createElement('div');
     quiet.className = 'sidebar-quiet pins-quiet';
-    quiet.innerHTML = `<b>${esc(model.EMPTY.lead)}</b> ${esc(model.EMPTY.mechanism)}<br><br>${esc(model.EMPTY.nextStep)}`;
+    quiet.textContent = model.EMPTY.lead;
     list.appendChild(quiet);
     return;
   }
@@ -152,26 +158,44 @@ function renderPinsSidebar(rows) {
   }
 }
 
+// The pin, at the size and weight the Files empty state draws its folder, from
+// the model's one glyph rather than a second copy of the shape.
+function emptyIcon(model) {
+  return `<svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor"`
+    + ` stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" class="empty-icon">`
+    + `${model.GLYPH}</svg>`;
+}
+
 // The pane is on screen only when there is no pin to open, so it carries the
-// empty state, or the one line for a list whose every file has gone.
+// empty state, the one line for a list whose every file has gone, or the
+// prompt to choose from a list that has openable pins.
 function renderPinsPane(rows) {
   const pane = document.getElementById('pins-content');
   if (!pane) return;
   const model = pinsModel();
   if (!rows.length) {
+    // The Files empty state's shape, so the two rail entries answer the same
+    // situation the same way: the icon, the short line as the title, then what
+    // to do about it. No call to action button, because there is no one to ask:
+    // pinning is something the reader does, not something an agent does for
+    // them, which is what Files uses its Talk to Doc button for.
     const state = model.emptyState();
-    pane.innerHTML = `<div class="pins-empty">
-      <p class="pins-empty-lead">${esc(state.lead)}</p>
-      <p class="pins-empty-body">${esc(state.body)}</p>
-      <p class="pins-empty-aside">${esc(state.aside)}</p>
-    </div>`;
+    pane.innerHTML = `${emptyIcon(model)}
+      <div class="empty-title">${esc(state.lead)}</div>
+      <p class="pins-empty-body">${esc(state.body)}</p>`;
     return;
   }
   if (!model.firstOpenable(rows)) {
-    pane.innerHTML = `<div class="pins-empty"><p class="pins-empty-lead">${esc(model.ALL_MISSING)}</p></div>`;
+    pane.innerHTML = `${emptyIcon(model)}
+      <div class="empty-title">${esc(model.ALL_MISSING)}</div>`;
     return;
   }
-  pane.innerHTML = '';
+  // Pins present, none open. The arrival rule opens the first openable pin, so
+  // this is a fallback rather than the common path. It says where to choose
+  // from rather than going blank, because a blank pane reads as a view that
+  // failed to load rather than as a list waiting.
+  pane.innerHTML = `${emptyIcon(model)}
+    <span class="pins-empty-select">${esc(model.SELECT_PROMPT)}</span>`;
 }
 
 function highlightPinRow(filePath) {

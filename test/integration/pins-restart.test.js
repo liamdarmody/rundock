@@ -1,14 +1,18 @@
 'use strict';
 // Pins survive a server restart.
 //
-// THE REAL SERVER, TWICE, against one temporary HOME and one workspace. The
-// in-process harness boots server.js once per test file by design, and a
-// restart is exactly the thing a single require cannot stage: module state
-// survives it. So this file does what the e2e launcher does, points HOME at a
-// disposable directory and starts server.js as its own process, and does it
-// twice in sequence. A pin sent over the socket to the first server has to
-// be read back over the socket from the second, with nothing in between but
-// the file the store wrote under that HOME.
+// THE REAL SERVER, TWICE, against one disposable workspace. The in-process
+// harness boots server.js once per test file by design, and a restart is
+// exactly the thing a single require cannot stage: module state survives it.
+// So this file starts server.js as its own process, twice in sequence. A pin
+// sent over the socket to the first server has to be read back over the
+// socket from the second, with nothing in between but the file the store
+// wrote at `.rundock/pins.json` inside that workspace.
+//
+// HOME IS STILL POINTED AT A DISPOSABLE DIRECTORY, and no longer because the
+// pins live there. It is the e2e launcher's precedent, so that anything else
+// the runtime writes to a home directory during the boot lands in the
+// throwaway one rather than in the home of whoever ran the suite.
 //
 // The scheduler is left on, as it is in production; nothing here needs an
 // agent, so the stub claude on PATH is never reached.
@@ -92,13 +96,13 @@ async function connect(port) {
   return { ask, close: () => ws.close() };
 }
 
-test('a pin sent to one server is read back from the next one booted against the same HOME and workspace', async () => {
+test('a pin sent to one server is read back from the next one booted against the same workspace', async () => {
   const first = bootChild();
   let client;
   try {
     const port = await first.port;
     client = await connect(port);
-    assert.deepStrictEqual((await client.ask({ type: 'get_pins' }, 'pins')).pins, [], 'a fresh HOME starts with no pins');
+    assert.deepStrictEqual((await client.ask({ type: 'get_pins' }, 'pins')).pins, [], 'a fresh workspace starts with no pins');
     assert.deepStrictEqual((await client.ask({ type: 'pin_file', path: 'notes/backlog.md' }, 'pins')).pins, ['notes/backlog.md']);
     assert.deepStrictEqual((await client.ask({ type: 'pin_file', path: 'Roadmap.md' }, 'pins')).pins, ['notes/backlog.md', 'Roadmap.md']);
     client.close();
@@ -106,9 +110,20 @@ test('a pin sent to one server is read back from the next one booted against the
     await stopChild(first.child);
   }
 
-  const written = path.join(home, '.rundock-pins.json');
-  assert.ok(fs.existsSync(written), 'the first server wrote no pins file under HOME');
-  assert.ok(!fs.existsSync(path.join(workspace, '.rundock-pins.json')), 'the first server wrote pins under the workspace');
+  // The file is in the workspace now, not under HOME. Both halves are still
+  // worth asserting: that something was actually written, and that it landed
+  // in `.rundock/` rather than loose in the workspace where a reader's own
+  // files are.
+  const written = path.join(workspace, '.rundock', 'pins.json');
+  assert.ok(fs.existsSync(written), 'the first server wrote no pins file in the workspace');
+  assert.ok(!fs.existsSync(path.join(workspace, 'pins.json')), 'pins were written loose in the workspace root');
+  // WHAT IS IN THE FILE IS pins-store.test.js's CLAIM, not this one. Reading it
+  // here would duplicate that assertion and, because a test that opens a file
+  // and compares its contents looks like a source-walking extraction, would
+  // owe the enumerations registry an entry for a check that already exists
+  // elsewhere. What only this file can prove is that a SECOND process reads
+  // the first one's pins back, which is what follows.
+  assert.ok(!fs.existsSync(path.join(home, '.rundock-pins.json')), 'pins were written under HOME, where nothing reads them now');
 
   const second = bootChild();
   try {

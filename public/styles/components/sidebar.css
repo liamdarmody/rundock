@@ -226,7 +226,11 @@
 .pin-missing-note { color: var(--danger); white-space: normal; }
 .pin-remove-btn { font-size: var(--caption); font-weight: 600; color: var(--danger); background: transparent; border: none; cursor: pointer; white-space: nowrap; flex-shrink: 0; padding: 4px 8px; border-radius: var(--radius-sm); }
 .pin-remove-btn:hover { background: var(--elevated); }
-.pins-quiet b { color: var(--text-2); font-weight: 600; }
+/* The empty Pins sidebar is one short line now, the way an empty Files
+   sidebar is: the teaching moved to the pane beside it rather than being
+   printed in both places. No bold run to style, because there is no longer
+   a sentence for it to lead. */
+.pins-quiet { color: var(--text-3); }
 .file-item-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Add button */
