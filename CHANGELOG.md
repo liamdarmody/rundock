@@ -4,9 +4,7 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
-## Unreleased
-
-**Name:** Map & Pins
+## 0.14.0: Map & Pins (2026-09-19)
 
 Two new places in the rail: one for the handful of files you keep coming back to, and one that shows you the shape of the whole workspace.
 
