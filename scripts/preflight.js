@@ -128,6 +128,8 @@ const NOT_CHEAP = {
   'test/unit/permissions.test.js': 'behaviour: grades real command text against the risk rules',
   'test/unit/permissions-view.test.js': 'behaviour: boots a document and renders the settings pane, then presses what it drew. It walks the stylesheets to prove no class is left unstyled, which is why the inventory names it, but the walk is in service of a rendered check rather than a bookkeeping one',
   'test/unit/working-folders-view.test.js': 'behaviour: boots a document and presses controls',
+  'test/unit/pins-view.test.js': 'behaviour: boots a document and drives the shipped pins view, pressing the header control and the row affordance and asserting what was sent. It counts the panes it cuts out of index.html, which is why the inventory names it, but the count is in service of a rendered check rather than a bookkeeping one',
+  'test/unit/map-view.test.js': 'behaviour: boots a document, stands a recording canvas context in place of the one jsdom lacks, and drives the map through it. It counts the script tags and rail entries it cuts out of index.html, which is why the inventory names it, but the count serves a rendered check',
   'test/unit/live-handoff-render.test.js': 'behaviour: boots a document and drives the delegation render path',
   'test/unit/replay-no-dividers.test.js': 'behaviour: boots a document and replays a conversation through the real renderer',
   'test/unit/engine-live-delivery.test.js': 'behaviour: drives a real stdout stream through the engine',

@@ -44,12 +44,29 @@ describe('the innerHTML inventory', () => {
 
   test('the counts the audit quotes are the counts the tree has', () => {
     const t = totals(classify().rows);
-    // 116 since the permissions section was added: one more group (b) site,
-    // the section's own render. Its copy is constant; the two lists it draws
-    // are built by workingFoldersSectionHtml() and toolAllowsBlockHtml(), which
-    // carry their own rows, so no user-authored text is interpolated here.
-    assert.strictEqual(t.total, 116, 'first-party assignments under public/');
-    assert.strictEqual(t.byGroup.a, 80, 'group (a): closed with a stated reason');
+    // 124, and every number here is measured against the tree in front of it
+    // rather than carried over from somewhere. It has been 124 twice for
+    // unrelated reasons, which is the sort of coincidence that makes a
+    // hand-maintained count look right while being wrong.
+    //
+    // 124 when the 0.14 rail met the permissions work. Both sides of that merge
+    // had added sites and each quoted a total true of its own branch and of no
+    // tree that ever shipped: 118 on the rail, 116 on main. Choosing either
+    // would have been choosing a number that was already wrong. The permissions
+    // section contributed one group (b) site, its own render, whose copy is
+    // constant and whose two lists are built by workingFoldersSectionHtml() and
+    // toolAllowsBlockHtml() carrying their own rows, so no user-authored text is
+    // interpolated there. The rail contributed the pins and map views.
+    //
+    // 123 when the Pins sidebar gave one up: its empty state is a single fixed
+    // line now, set with textContent, after the same paragraph was found
+    // rendering in the sidebar and the pane at once.
+    //
+    // 124 again when the map's empty state took one, drawing the rail's map
+    // glyph above its line so the three rail destinations answer an empty view
+    // alike.
+    assert.strictEqual(t.total, 124, 'first-party assignments under public/');
+    assert.strictEqual(t.byGroup.a, 88, 'group (a): closed with a stated reason');
     assert.strictEqual(t.byGroup.b, 36, 'group (b): fixed');
     assert.strictEqual(t.byGroup.a + t.byGroup.b, t.total, 'every site is in exactly one group');
   });

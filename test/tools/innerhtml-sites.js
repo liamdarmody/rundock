@@ -175,6 +175,18 @@ const TABLE = {
     ['b', 'agent-identity', 'the reconnect bubble, mid-stream'],
     ['b', 'agent-identity', 'the reconnect thinking indicator'],
   ],
+  // The Pins list. Every external value here is a path or a name off the
+  // file tree, and each reaches element content through esc(); the icons
+  // are a table lookup by kind with a fallback, or the model's own glyph.
+  'views/pins.js': [
+    ['a', 'cleared', 'the pin list, emptied before rebuild'],
+    ['a', 'escapedText', 'a pin row: a tree icon from the kind table, then the file name and its folder or the missing note, esc()'],
+    ['a', 'iconConst', 'the hover unpin control: the model\'s pin glyph, filled'],
+    ['a', 'escapedText', 'the empty pane: the pin glyph, then the model\'s lead and its one paragraph, esc()'],
+    ['a', 'escapedText', 'the all-missing pane: the pin glyph and the model\'s one line, esc()'],
+    ['a', 'escapedText', 'the choose-one pane: the pin glyph and the model\'s select prompt, esc()'],
+    ['a', 'iconConst', 'the header pin control: the model\'s pin glyph, outline or filled'],
+  ],
   'views/files.js': [
     ['a', 'cleared', 'the editor host, emptied'],
     ['a', 'staticMarkup', 'the changed-on-disk banner'],
@@ -190,6 +202,13 @@ const TABLE = {
     ['a', 'cleared', 'the menu, emptied'],
     ['a', 'renderer', 'the file preview'],
     ['a', 'iconConst', 'a folder glyph, opened'],
+  ],
+  'views/graph.js': [
+    // The map's empty states (no index, still warming, nothing linked) draw the
+    // rail's own map glyph above the line, so the three rail destinations answer
+    // an empty view the same way. A module constant, assigned to an svg element
+    // the function built itself; no value from the workspace reaches it.
+    ['a', 'iconConst', "the map empty state's icon: the rail's map glyph, a module constant"],
   ],
   'views/find.js': [
     ['a', 'escapedText', 'the find overlay: file bytes through escapeOverlay, element content only'],

@@ -634,6 +634,7 @@ httpRouter.wireHttpRouterDeps({
   pendingPermissionRequests: () => pendingPermissionRequests,
   isInsideWorkspace, safeSend, getFileTreeCached,
   getSearchEngine: () => searchEngine,
+  fileIndexInProgress,
   getPermissionTimeoutMs: () => PERMISSION_TIMEOUT_MS,
 });
 

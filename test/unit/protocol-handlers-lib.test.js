@@ -17,8 +17,16 @@ const { buildDispatch } = require('../../lib/protocol/handlers/index.js');
 const { _internal: srv } = require('../../server.js');
 const config = require('../../lib/config.js');
 
-// The full routing surface of the dispatch table, frozen: 45 message types
-// plus save_agent's two legacy aliases. The four root shims (chat, delegate,
+// The full routing surface of the dispatch table, frozen: 55 message types
+// plus save_agent's two legacy aliases, 57 keys in all.
+//
+// THE NUMBER WAS COUNTED, NOT CARRIED OVER. Both sides of the 0.14 rail merge
+// quoted a figure here, 44 on the rail and 45 on main, and the list each sat
+// above already held far more than either claimed: the count had been stale
+// for a long time on both, because the assertion below compares the LIST
+// against the table and never reads this sentence. A comment that states a
+// number nothing checks is the same defect this release found four times in
+// shipped copy, in a file whose whole purpose is to freeze a surface. The four root shims (chat, delegate,
 // end_delegation, flush_buffer) must NEVER appear here: chat is the
 // kill-window chat shim, delegate/end_delegation are delegation glue, and
 // flush_buffer drains safeSend's own reconnect buffer.
@@ -63,6 +71,10 @@ const EXPECTED_TYPES = [
   'set_routine_enabled', 'set_routine_schedule', 'approve_routine_plan',
   'search_conversations', 'search_universal', 'get_session_history',
   'save_file', 'create_path', 'reveal_in_finder',
+  // File pins: the list a person keeps on this machine, keyed by workspace.
+  // Each answers `pins` with the whole list; a pin outside the workspace is
+  // refused with no write (test/unit/pins-store.test.js).
+  'get_pins', 'pin_file', 'unpin_file',
 ];
 
 function captureWs() {

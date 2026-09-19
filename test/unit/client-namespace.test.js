@@ -1,7 +1,7 @@
 'use strict';
 // The client's global namespace, guarded.
 //
-// The nine modules under public/views/ republish every function they export
+// The ten modules under public/views/ republish every function they export
 // onto the root object, because index.html's inline handlers, generated
 // onclick attributes and cross-module calls all resolve these names as bare
 // window properties. That is deliberate and load-bearing, and it has one sharp
@@ -88,6 +88,15 @@ const MANIFEST = {
     "toggleConvoStatus",
     "togglePin"
   ],
+  "graph.js": [
+    "mapIndexReady",
+    "mapNodeScreenPosition",
+    "mapSetFilter",
+    "mapZoomFit",
+    "mapZoomIn",
+    "mapZoomOut",
+    "showMapView"
+  ],
   "files.js": [
     "attachArtifactReviewForCurrentFile",
     "buildFloatingMenu",
@@ -104,6 +113,7 @@ const MANIFEST = {
     "drawFileConnectionsLoading",
     "editorGoBack",
     "fileConnections",
+    "fileConnectionsIndexReady",
     "findFileInTree",
     "flushBoardSave",
     "getFileContentForSave",
@@ -291,6 +301,22 @@ const MANIFEST = {
     "workingFoldersShort",
     "workingFoldersUndoRemove",
     "workingFoldersWorkspaceChanged"
+  ],
+  "pins.js": [
+    "handlePinsReply",
+    "highlightPinRow",
+    "isPinned",
+    "noteTreeForPins",
+    "openPinnedFile",
+    "openPinsSection",
+    "pinMenuRow",
+    "pinRows",
+    "renderEditorPinControl",
+    "renderPins",
+    "requestPins",
+    "sendPinToggle",
+    "toggleCurrentFilePin",
+    "unpinPath",
   ],
   "skills.js": [
     "renderSkills",
