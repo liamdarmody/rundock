@@ -4,9 +4,7 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
-## Unreleased
-
-**Name:** Build On Rundock
+## 0.15.0: Build On Rundock (2026-09-26)
 
 You can now add agents, skills and extensions to your workspace from a GitHub link, and build and publish your own. A package brings new teammates and the skills they use, and an extension opens a kind of file in its own view, so a note or a CSV file can become a dashboard or a table that looks and works like the rest of Rundock. Updates keep your edits, and keeping agents inside your workspace is now a switch of its own.
 
