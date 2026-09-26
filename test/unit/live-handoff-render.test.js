@@ -235,7 +235,7 @@ describe('the whole pipeline puts it on screen, in order, live and on reload', (
 });
 
 describe('a turn with nothing to say draws nothing', () => {
-  // LH-5, on the document rather than on an effect list. An effect list can be
+  // On the document rather than on an effect list. An effect list can be
   // empty while something else still paints, and the criterion is about what a
   // person sees.
   const SWITCH_CTX = { isActive: true, convoAgentId: 'default', toAgentExists: true, toAgentType: 'specialist', fromAgentExists: true };
@@ -327,13 +327,13 @@ describe('a turn blocked mid-delegation is still shown to the person', () => {
 });
 
 describe('the blocked turn reads the same live and after a reload', () => {
-  // ST-7. The defect this whole area keeps producing is a turn that is right in
+  // The defect this whole area keeps producing is a turn that is right in
   // one rendering and wrong or absent in the other, so each claim is made twice
   // and the two are compared rather than each being checked alone.
   const CTX = { isActive: true, convoAgentId: 'default' };
 
   test('the same words, whichever way the turn arrived', () => {
-    const words = 'Ana is the right person, let me pull her in.';
+    const words = 'Rea is the right person, let me pull her in.';
 
     freshDom();
     global.conversations = [{ id: 'c1', agentId: 'default', messages: [] }];
@@ -366,7 +366,7 @@ describe('the blocked turn reads the same live and after a reload', () => {
     global.getConvoState = () => ({ currentStreamingMsg: null });
     const r = reduce({ ...createState() }, {
       type: 'system', subtype: 'agent_turn', _conversationId: 'c1', _processId: 'p1',
-      _agent: 'default', text: 'I will route through Penn. <!-- RUNDOCK:RETURN -->',
+      _agent: 'default', text: 'I will route through Wren. <!-- RUNDOCK:RETURN -->',
     }, CTX);
     for (const ef of r.effects) if (ef.type === 'promote-handoff-message') promote('c1', ef);
     const shown = [...document.getElementById('messages').children]
@@ -375,7 +375,7 @@ describe('the blocked turn reads the same live and after a reload', () => {
     assert.strictEqual(shown.length, 1);
     assert.doesNotMatch(shown[0], /RUNDOCK:/,
       'a handback marker is plumbing, and every other render path strips it');
-    assert.match(shown[0], /I will route through Penn\./);
+    assert.match(shown[0], /I will route through Wren\./);
   });
 
   test('a line arriving on anything but the interception switch is ignored', () => {

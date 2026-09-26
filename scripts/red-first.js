@@ -1014,7 +1014,7 @@ function recordOutcome(repo, outcome) {
     // checked at all: the record that carried the false PROVEN named counts and
     // test names, and every one of them was true of a different branch's work.
     base: outcome.base,
-    // AC-6 names test counts. File counts are a different quantity and were
+    // The report names test counts. File counts are a different quantity and were
     // written here first, which is the proxy-for-the-property fault this whole
     // check exists to catch, committed inside the check itself.
     testsPassedWithChange: outcome.testsPassedWithChange,

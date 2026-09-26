@@ -41,6 +41,22 @@ const END_GRACE_MS = 500;
 // How often the cheap question below is asked, and how rarely the expensive one
 // is. See psGroupMembers for why the second needs a rein on it.
 const POLL_MS = 25;
+
+/* How long a group gets to leave the process table AFTER it has been SIGKILLed,
+   before the ending is called a survivor.
+
+   Separate from END_GRACE_MS, which is the courtesy before the kill: that one
+   is a process's chance to tidy up and end itself, and it is short because a
+   step that wants longer should not be relying on it. This one is not a
+   courtesy at all. The group has already been killed and the outcome is not in
+   doubt; this is only the time the kernel needs to finish the job and drop the
+   entries, which on a loaded machine is thousands of times longer than the poll
+   interval that used to stand in for it.
+
+   Generous on purpose. Being slow to warn about a genuinely stuck group costs
+   seconds on the rarest path there is; warning wrongly costs a reader their
+   trust in every warning the gate prints. */
+const REAP_GRACE_MS = 10000;
 const TABLE_POLL_MS = 150;
 
 // A pause that blocks rather than yields.
@@ -112,9 +128,32 @@ const EXITED_STATE = 'Z';
  * across platforms: on an ordinary ending this runs once, and never more than
  * four times, against a grace of half a second.
  */
+// The read is given room and one second chance, because the cost of not
+// getting an answer is paid by somebody reading a wrong one.
+//
+// Listing the whole table is not free, and on a machine running a full
+// mutation set beside a coverage run it did exceed a two second timeout. A
+// timed-out read answers null, "this machine will not say", and every caller
+// that forgets to handle null reads that as "the group is gone". On
+// 2026-09-21 one such caller reported that a refusal had killed a live run,
+// twice, and the resulting backlog card blamed timing and sent the next
+// reader looking in the wrong place.
+//
+// So: a ceiling high enough to survive a loaded machine, and one retry,
+// because the failure observed is transient contention rather than a missing
+// `ps`. The ceiling still exists to stop an indefinite hang, which is its
+// only job; it is not a performance budget. On a healthy machine this returns
+// in milliseconds and neither number is reached.
+const PS_TIMEOUT_MS = 15000;
+
+function readPsTable() {
+  return spawnSync('ps', ['-e', '-o', 'pgid=,pid=,stat='],
+    { encoding: 'utf8', timeout: PS_TIMEOUT_MS, stdio: ['ignore', 'pipe', 'ignore'] });
+}
+
 function psGroupMembers(pgid) {
-  const out = spawnSync('ps', ['-e', '-o', 'pgid=,pid=,stat='],
-    { encoding: 'utf8', timeout: 2000, stdio: ['ignore', 'pipe', 'ignore'] });
+  let out = readPsTable();
+  if (out.error || typeof out.stdout !== 'string') out = readPsTable();
   if (out.error || typeof out.stdout !== 'string') return null;
   if (out.status !== 0 && !out.stdout.trim()) return null;
   const members = [];
@@ -152,10 +191,10 @@ function psGroupMembers(pgid) {
  * including one whose sandbox blocks spawning, rather than only where corpses
  * happen to appear.
  */
-function groupRunning(pgid, readMembers = psGroupMembers) {
+function groupRunning(pgid, readMembers = psGroupMembers, groupExists = exists) {
   // Cheap first, and it is the only question asked once the group is really
   // gone, which is the common case at the end of a run.
-  if (!exists(-pgid)) return false;
+  if (!groupExists(-pgid)) return false;
   const members = readMembers(pgid);
   if (members === null) return null;
   return members.some(m => !String(m.state).startsWith(EXITED_STATE));
@@ -192,7 +231,29 @@ function groupRunning(pgid, readMembers = psGroupMembers) {
  * SIGTERM is the only case where anything but the escalation keeps a subtree
  * from outliving its caller, and the criterion it answers to is unconditional.
  */
-function endGroup(pgid, { graceMs = END_GRACE_MS, readMembers = psGroupMembers } = {}) {
+function endGroup(pgid, {
+  graceMs = END_GRACE_MS,
+  // Symmetric with graceMs, and for the same reason it is a parameter: the
+  // window the production gate wants is ten seconds of mostly idle waiting,
+  // which is right on the rarest path there is and wrong inside a suite that
+  // would then idle for it twice on every run. The value that ships is pinned
+  // by its own test rather than by these spending it.
+  reapMs = REAP_GRACE_MS,
+  readMembers = psGroupMembers,
+  // The same argument that made readMembers a parameter, carried to the other
+  // two things this function does to the world. Without them the verdicts here
+  // cannot be driven at all: groupRunning answers `false` the moment the group
+  // id stops existing, so a test using a made-up pgid never reaches the table
+  // reader and passes while proving nothing, and one using a real child cannot
+  // hold the group in existence long enough to exercise 'running' at all.
+  //
+  // sendSignal matters more than it looks. A test that needs a group id which
+  // keeps existing has to use one it did not start, and signalling that would
+  // reach a stranger's processes: exactly what the note above about ending
+  // groups BY NUMBER exists to prevent. Stubbed, the test sends nothing.
+  groupExists = exists,
+  sendSignal = (target, signal) => process.kill(target, signal),
+} = {}) {
   // THE TABLE READ IS REINED, THE DECISION IS NOT. What a group's members
   // mean is groupRunning's question and exists in this file exactly once;
   // this wrapper only decides how often the expensive table read is made,
@@ -207,26 +268,46 @@ function endGroup(pgid, { graceMs = END_GRACE_MS, readMembers = psGroupMembers }
     lastMembers = readMembers(asked);
     return lastMembers;
   };
-  const state = () => groupRunning(pgid, reined);
+  const state = () => groupRunning(pgid, reined, groupExists);
 
   if (state() === false) return 'gone';
-  try { process.kill(-pgid, 'SIGTERM'); } catch (e) { /* gone since the check */ }
+  try { sendSignal(-pgid, 'SIGTERM'); } catch (e) { /* gone since the check */ }
   const deadline = Date.now() + graceMs;
   while (Date.now() < deadline) {
     if (state() === false) return 'gone';
     pause(POLL_MS);
   }
-  try { process.kill(-pgid, 'SIGKILL'); } catch (e) { /* gone since the check */ }
-  pause(POLL_MS);
-  // The verdict read is never served from the cache: what is reported after
-  // the escalation has to describe the table as it is now.
-  lastReadAt = -Infinity;
-  const after = state();
-  if (after === false) return 'gone';
-  return after === null ? 'unknown' : 'running';
+  try { sendSignal(-pgid, 'SIGKILL'); } catch (e) { /* gone since the check */ }
+
+  // DYING IS NOT INSTANT, AND THE VERDICT USED TO ASSUME IT WAS.
+  //
+  // This paused once for POLL_MS, read the table once, and called whatever it
+  // saw the answer. SIGKILL cannot be caught, blocked or ignored, so a group
+  // that has been sent one WILL go; the only question is when the scheduler
+  // gets to it. Twenty-five milliseconds is long enough on an idle machine and
+  // nowhere near it on a busy one, so the gate reported a survivor that was
+  // already dying and told a reader to go and inspect `git diff` over nothing.
+  // On a machine at load 32 it fired every time.
+  //
+  // So the group is given a bounded window to actually leave the table. The
+  // verdict keeps its exact meaning and gets stricter rather than weaker:
+  // 'running' now means still there after it was killed AND given a fair
+  // chance to die, which is the only reading under which the warning is worth
+  // printing. A group genuinely stuck, in uninterruptible sleep or beyond this
+  // process's permission, still reaches the deadline and is still reported.
+  const reaped = Date.now() + reapMs;
+  for (;;) {
+    // Never served from the cache: what is reported after the escalation has
+    // to describe the table as it is now.
+    lastReadAt = -Infinity;
+    const after = state();
+    if (after === false) return 'gone';
+    if (Date.now() >= reaped) return after === null ? 'unknown' : 'running';
+    pause(POLL_MS);
+  }
 }
 
 module.exports = {
   pause, exists, psGroupMembers, groupRunning, endGroup,
-  END_GRACE_MS, POLL_MS, TABLE_POLL_MS, EXITED_STATE,
+  END_GRACE_MS, POLL_MS, TABLE_POLL_MS, REAP_GRACE_MS, EXITED_STATE,
 };

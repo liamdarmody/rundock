@@ -59,11 +59,11 @@ describe('Proposal-First smoke plan (T1-T12)', () => {
   // save_agent WS message actually writes the file (the "approve" action).
   test('T2: approval executes the agent write (save_agent WS path)', async () => {
     const since = client.messages.length;
-    client.send({ type: 'save_agent', name: 'sales-coach', content: '---\nname: sales-coach\ndisplayName: Sollo\nrole: Sales Coach\ndescription: prep\n---\nYou are Sollo.\n' });
+    client.send({ type: 'save_agent', name: 'sales-coach', content: '---\nname: sales-coach\ndisplayName: Rex\nrole: Sales Coach\ndescription: prep\n---\nYou are Rex.\n' });
     await client.waitFor(m => m.type === 'agent_saved' && m.agentId === 'sales-coach', { since, label: 'saved' });
     const file = path.join(h.workspaceDir, '.claude', 'agents', 'sales-coach.md');
     assert.ok(fs.existsSync(file), 'file written to disk');
-    assert.match(fs.readFileSync(file, 'utf-8'), /displayName: Sollo/);
+    assert.match(fs.readFileSync(file, 'utf-8'), /displayName: Rex/);
     // sidebar refresh broadcast
     await client.waitFor(m => m.type === 'agents', { since, label: 'roster refresh' });
     // cleanup for T3
@@ -110,7 +110,7 @@ describe('Proposal-First smoke plan (T1-T12)', () => {
   // T5: Multi-specialist RETURN pipelines still auto-continue. Mechanic: an
   // intercepted RETURN auto-continues the orchestrator, which routes onward to
   // a second specialist, and the final COMPLETE halts cleanly.
-  test('T5: RETURN pipeline auto-continues Penn -> Des, final COMPLETE halts', async () => {
+  test('T5: RETURN pipeline auto-continues Wren -> Des, final COMPLETE halts', async () => {
     const convoId = h.freshConvoId('t5');
     h.writeScenario([
       { match: { agent: 'chief-of-staff', promptIncludes: 't5 go' },
@@ -127,7 +127,7 @@ describe('Proposal-First smoke plan (T1-T12)', () => {
     await client.waitFor(m => m.type === 'result' && m._conversationId === convoId && m._agent === 'lead-designer', { label: 'des result', timeout: 12000 });
     const hops = client.messages.filter(m => m.subtype === 'agent_switch' && m._conversationId === convoId).map(m => `${m.fromAgent}>${m.toAgent}`);
     assert.deepStrictEqual(hops.slice(0, 3), ['chief-of-staff>content-lead', 'content-lead>chief-of-staff', 'chief-of-staff>lead-designer'],
-      'Penn returned, orchestrator auto-continued, Des picked up');
+      'Wren returned, orchestrator auto-continued, Des picked up');
     h.reapConvo(convoId);
   });
 
@@ -165,15 +165,15 @@ describe('Proposal-First smoke plan (T1-T12)', () => {
     const convoId = h.freshConvoId('t8');
     h.writeScenario([
       { match: { agent: 'chief-of-staff', promptIncludes: 't8 route' },
-        turn: [{ text: 'Handing to Penn.' }, { agentTool: { subagent_type: 'content-lead', prompt: 't8 brief' } }] },
-      { match: { agent: 'content-lead', promptIncludes: 't8 brief' }, turn: [{ text: 'Penn delivered.' }] },
+        turn: [{ text: 'Handing to Wren.' }, { agentTool: { subagent_type: 'content-lead', prompt: 't8 brief' } }] },
+      { match: { agent: 'content-lead', promptIncludes: 't8 brief' }, turn: [{ text: 'Wren delivered.' }] },
     ]);
     client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: 't8 route' });
-    await client.waitFor(m => m.type === 'result' && m._conversationId === convoId && m._agent === 'content-lead', { label: 'penn result' });
+    await client.waitFor(m => m.type === 'result' && m._conversationId === convoId && m._agent === 'content-lead', { label: 'wren result' });
     const cos = transcript(convoId).find(e => e.agent === 'chief-of-staff');
-    assert.ok(cos.text.includes('Handing to Penn.'), 'orchestrator prose preserved');
+    assert.ok(cos.text.includes('Handing to Wren.'), 'orchestrator prose preserved');
     // server-side marker stripper leaves the visible prose clean
-    assert.strictEqual(h.internal.stripRundockMarkers(`Handing to Penn. ${MARKERS.COMPLETE}`).trim(), 'Handing to Penn.');
+    assert.strictEqual(h.internal.stripRundockMarkers(`Handing to Wren. ${MARKERS.COMPLETE}`).trim(), 'Handing to Wren.');
     h.reapConvo(convoId);
   });
 
@@ -183,13 +183,13 @@ describe('Proposal-First smoke plan (T1-T12)', () => {
   test('T9: after a clean COMPLETE the orchestrator emits no narrated turn (<silent> filtered)', async () => {
     const convoId = h.freshConvoId('t9');
     h.writeScenario([
-      { match: { agent: 'chief-of-staff', promptIncludes: 't9 sollo prompt' },
+      { match: { agent: 'chief-of-staff', promptIncludes: 't9 solo prompt' },
         turn: [{ agentTool: { subagent_type: 'content-lead', prompt: 't9 recommendation brief' } }] },
       { match: { agent: 'content-lead', promptIncludes: 't9 recommendation brief' },
         turn: [{ text: `Here is the recommendation. ${MARKERS.COMPLETE}` }] },
       { match: { agent: 'chief-of-staff', promptIncludes: '[SYSTEM: pipeline-complete]' }, turn: [{ text: '<silent>' }] },
     ]);
-    client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: 't9 sollo prompt' });
+    client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: 't9 solo prompt' });
     await client.waitFor(m => m.type === 'result' && m._conversationId === convoId && m._agent === 'chief-of-staff', { label: 'parked result' });
     await h.delay(200);
     const t = transcript(convoId);
@@ -247,8 +247,8 @@ describe('Proposal-First smoke plan (T1-T12)', () => {
     const inv = h.readInvocations()[0];
     assert.ok(!inv.argv.includes('--disallowed-tools'), 'code mode lifts file-type restrictions');
     assert.strictEqual(inv.env.RUNDOCK_CODE_MODE, '1');
-    client.send({ type: 'set_workspace_mode', mode: 'knowledge' });
-    await client.waitFor(m => m.type === 'workspace_mode_changed' && m.mode === 'knowledge', { label: 'knowledge back' });
+    client.send({ type: 'set_workspace_mode', mode: 'notes' });
+    await client.waitFor(m => m.type === 'workspace_mode_changed' && m.mode === 'notes', { label: 'notes back' });
   });
 
   // T12: Existing shell-permission hook still works. Mechanic: a Bash tool

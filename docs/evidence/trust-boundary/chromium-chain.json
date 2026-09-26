@@ -1,0 +1,48 @@
+{
+ "results": {
+  "degraded": [],
+  "saved": [],
+  "sourceSaves": [],
+  "asked": [],
+  "opened": [
+   "notes/next.md"
+  ],
+  "externals": [],
+  "updates": 0
+ },
+ "bars": [
+  {
+   "kind": "confirm",
+   "text": "Open chained-now.md?",
+   "aboveFrame": true
+  }
+ ],
+ "refused": [
+  {
+   "type": "refused",
+   "of": "openExternal",
+   "reason": "Rundock is already asking you about another request"
+  },
+  {
+   "type": "refused",
+   "of": "ask",
+   "reason": "Rundock is already asking you about another request"
+  },
+  {
+   "type": "refused",
+   "of": "open",
+   "reason": "Rundock is already asking you about another request"
+  },
+  {
+   "type": "refused",
+   "of": "openExternal",
+   "reason": "Rundock is already asking you about another request"
+  },
+  {
+   "type": "refused",
+   "of": "ask",
+   "reason": "Rundock is already asking you about another request"
+  }
+ ],
+ "hits": []
+}

@@ -396,7 +396,7 @@ in the changelog rather than left inside a navigation inventory.
   true of the site it is stated for: the alternative was to write a
   justification for a state that is wrong.
 
-Whether either belongs in this change or in one of its own is the owner's call.
+Whether either belongs in this change or in one of its own is left as an open scoping question.
 The point of this section is that neither is silent.
 
 ## What this change does not do

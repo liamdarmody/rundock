@@ -525,7 +525,7 @@
     if (payload.indexed === false) { setMessage(model.NO_INDEX.title, model.NO_INDEX.body); return; }
     if (payload.warming) { setMessage(model.WARMING.title, model.WARMING.body); return; }
     const graph = model.buildGraph(payload);
-    if (!graph.stats.edges) { setMessage(model.NOTHING_LINKED.title, model.NOTHING_LINKED.body(graph.stats.files)); return; }
+    if (!graph.stats.files) { setMessage(model.NO_FILES.title, model.NO_FILES.body()); return; }
     current = build(stage, payload);
   }
 

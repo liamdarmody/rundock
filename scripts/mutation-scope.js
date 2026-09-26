@@ -22,14 +22,26 @@
  *   - A change to the gate, to the shared mutation machinery, to test helpers,
  *     or to any harness file runs EVERYTHING, because those can change what any
  *     harness proves.
+ *   - The changed set is measured against the LAST TREE A PASSING GATE
+ *     CERTIFIED, not against the merge base with main. A gate record certifies
+ *     a tree, so a harness that passed against an earlier tree, whose files
+ *     have not changed since that tree, proves nothing by running again. The
+ *     merge base remains the fallback whenever the record cannot be trusted,
+ *     and the output names which base was used, because the two look identical
+ *     from the harness list alone.
  *   - What was skipped is named, with its reason, in this tool's own output and
  *     in the record the gate writes.
  *
- * PARALLELISM IS DELIBERATELY NOT HERE. All eighteen share one
- * `.mutation-run.json` crash marker at the repository root, and two running at
- * once destroy each other's record. That record is what recovers a mutation
- * left behind by a killed run, and it did so twice during the session this was
- * written in. Concurrency waits until the marker is per-run.
+ * PARALLELISM IS STILL NOT HERE, FOR A DIFFERENT REASON THAN IT FIRST WAS.
+ * The crash marker that made concurrency impossible is per-run now (one record
+ * per process under `.mutation-runs/`, see test/tools/mutation-run.js), so two
+ * runs can no longer destroy each other's recovery record, and a run that
+ * would hold a file another run holds is refused by name. What keeps this list
+ * sequential is what the harnesses touch: several rewrite the same source files
+ * (app.js, files.js, the packages modules), so running those together would
+ * only trade one wait for a refusal, and each harness already runs a suite per
+ * row, which is the machine's whole capacity on the laptops this gate runs on.
+ * Running disjoint harnesses together is the open change, not a blocked one.
  *
  *   node scripts/mutation-scope.js              # scoped to the branch's changes
  *   node scripts/mutation-scope.js --all        # every harness, no selection
@@ -154,24 +166,127 @@ function selectHarnesses(changed, harnesses) {
   return { run, skipped, reason: 'scoped to the files this change touches' };
 }
 
+// A git runner bound to one repository, with stderr dropped: every caller
+// below treats a failed command as "fall back", so the error text has nowhere
+// useful to go.
+function gitAt(root) {
+  return (args) => execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+}
+
+// The record the pre-commit gate writes after every step passes. Its format
+// belongs to scripts/precommit-gate.js; this tool only reads the `tree` field,
+// which names the hash `git write-tree` produced for the index the checks ran
+// against.
+const GATE_RECORD = '.precommit-gate.json';
+
 /**
- * The branch's changes against the trunk it will merge to, not the working tree
- * against itself: the gate certifies a tree for merging, and main was gated
- * when it merged. A base that cannot be resolved returns null, which the
- * selection above turns into running everything.
+ * The tree the last passing gate certified, when this branch can still lean on
+ * it. Returns { tree } when it can, or { fallback } naming why it cannot.
+ *
+ * WHY THE GATE RECORD AND NOT THE MERGE BASE. The base used to be
+ * `merge-base HEAD origin/main`, which is the right question on a short-lived
+ * branch and the wrong one on a long branch: everything since the divergence
+ * stays in the changed set forever, and once that set contains `package.json`,
+ * which any integration branch's does, the narrowing degrades to no narrowing
+ * at all. Measured on the branch that surfaced this: sixteen gate runs, 3.4
+ * hours of mutation testing, and every one of them reported the same honest,
+ * useless reason, because the reason read like a fact about the change rather
+ * than an artifact of the branch being long. A gate record certifies a TREE.
+ * If a harness passed against an earlier tree and the files it watches have
+ * not changed since that tree, running it again proves nothing, so the last
+ * gated tree is the base that matches what the record actually claims.
+ *
+ * EVERY UNCERTAIN ANSWER IS A FALLBACK, never a guess. A record that is
+ * missing, that cannot be parsed, that names no tree, whose tree this
+ * repository cannot resolve, or whose tree no commit reachable from HEAD ever
+ * captured, all mean the merge base serves instead and every harness runs,
+ * exactly as before this base existed. A narrowing that guesses is worse than
+ * one that does not narrow, because the whole value of this tool is that a
+ * skipped harness was genuinely unaffected.
+ *
+ * THE ANCESTRY CHECK IS ON TREES, NOT COMMITS, because the record names a
+ * write-tree hash rather than a commit: the tree qualifies when some commit
+ * reachable from HEAD captured exactly it, which is what following the gate's
+ * own usage produces, since the commit made right after a pass has precisely
+ * the tree the record names. A record from another branch, or from a pass
+ * whose tree was never committed, fails this test and correctly falls back:
+ * a certificate for a tree that is not in this branch's history says nothing
+ * about what this branch has changed.
+ */
+function lastGatedTree(root = ROOT, git = gitAt(root)) {
+  let raw;
+  try {
+    raw = fs.readFileSync(path.join(root, GATE_RECORD), 'utf8');
+  } catch (e) {
+    return { fallback: 'no gate record has been written' };
+  }
+  let record;
+  try {
+    record = JSON.parse(raw);
+  } catch (e) {
+    return { fallback: 'the gate record could not be parsed' };
+  }
+  // A hash and nothing else reaches git. The record is a local, writable file,
+  // and a string that is not a hash has no business becoming an argument.
+  const tree = record && typeof record.tree === 'string' && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(record.tree)
+    ? record.tree
+    : null;
+  if (!tree) return { fallback: 'the gate record names no tree' };
+  try {
+    if (git(['cat-file', '-t', tree]).trim() !== 'tree') {
+      return { fallback: `the recorded object ${tree.slice(0, 12)} is not a tree` };
+    }
+  } catch (e) {
+    return { fallback: `the recorded tree ${tree.slice(0, 12)} cannot be resolved here` };
+  }
+  try {
+    const trees = git(['log', '--format=%T', 'HEAD']).split('\n').map(s => s.trim());
+    if (!trees.includes(tree)) {
+      return { fallback: `the recorded tree ${tree.slice(0, 12)} is not an ancestor of HEAD` };
+    }
+  } catch (e) {
+    return { fallback: 'the recorded tree\'s ancestry could not be established' };
+  }
+  return { tree };
+}
+
+/**
+ * The files changed since the last tree a passing gate certified, or since the
+ * merge base with the trunk when no such certificate can be used.
+ *
+ * Returns { files, base }: `files` is the changed set, or null when no base
+ * could be resolved at all, which the selection above turns into running
+ * everything. `base` is a sentence naming which comparison was actually made,
+ * and it travels into this tool's printed reason and into the scope record,
+ * because the defect this base replaced was diagnosable only through the
+ * output staying honest: a reader has to be able to tell "narrowed against
+ * the last gated tree" from "ran everything because there was no record"
+ * without re-deriving either.
  */
 function changedFiles(root = ROOT) {
-  const git = (args) => execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  const git = gitAt(root);
+  const gated = lastGatedTree(root, git);
   let base;
-  try {
-    base = git(['merge-base', 'HEAD', 'origin/main']).trim();
-  } catch (e) {
-    return null;
+  let described;
+  if (gated.tree) {
+    base = gated.tree;
+    described = `against the last gated tree ${gated.tree.slice(0, 12)}`;
+  } else {
+    try {
+      base = git(['merge-base', 'HEAD', 'origin/main']).trim();
+    } catch (e) {
+      base = '';
+    }
+    described = `against the merge base with origin/main, because ${gated.fallback}`;
+    if (!base) return { files: null, base: `no base could be resolved: ${gated.fallback}, and the merge base with origin/main could not be found either` };
   }
-  if (!base) return null;
   try {
     const staged = git(['diff', '--name-only', '--cached']).split('\n');
-    const branch = git(['diff', '--name-only', `${base}...HEAD`]).split('\n');
+    // Both bases are tree-ish, so one diff form serves them. For the merge
+    // base commit this names the same files the old `base...HEAD` form did,
+    // because the base IS the merge base already; for the gated tree, which is
+    // a tree and not a commit, the symmetric form would not resolve at all.
+    const committed = git(['diff', '--name-only', base, 'HEAD']).split('\n');
     const unstaged = git(['diff', '--name-only']).split('\n');
     // UNTRACKED FILES COUNT. A new source file, and more to the point a NEW
     // HARNESS, appears in no diff at all, so leaving them out meant a change
@@ -179,10 +294,10 @@ function changedFiles(root = ROOT) {
     // safe, by running everything, but it also switched this tool off for the
     // exact change most likely to add a harness whose targets nobody has read.
     const untracked = git(['ls-files', '--others', '--exclude-standard']).split('\n');
-    const seen = [...staged, ...branch, ...unstaged, ...untracked].map(s => s.trim()).filter(Boolean);
-    return [...new Set(seen)];
+    const seen = [...staged, ...committed, ...unstaged, ...untracked].map(s => s.trim()).filter(Boolean);
+    return { files: [...new Set(seen)], base: described };
   } catch (e) {
-    return null;
+    return { files: null, base: described };
   }
 }
 
@@ -196,10 +311,17 @@ function main() {
     targets: harnessTargets(fs.readFileSync(path.join(TOOLS, tool), 'utf8')),
   }));
 
-  const changed = forceAll ? [] : changedFiles();
+  const changed = forceAll ? null : changedFiles();
   const plan = forceAll
     ? { run: harnesses.map(h => h.tool), skipped: [], reason: '--all was given' }
-    : selectHarnesses(changed || [], harnesses);
+    : selectHarnesses((changed && changed.files) || [], harnesses);
+  // THE BASE IS PART OF THE REASON. "package.json can change what any harness
+  // proves" is true against any base, and against the wrong base it is true
+  // forever: that sentence, honest every single time, is how a long branch
+  // paid for a full run sixteen times without anyone noticing the base was the
+  // problem. Naming the base is what lets a reader tell a fact about the
+  // change from an artifact of what it was compared to.
+  if (changed && changed.base) plan.reason = `${plan.reason} (${changed.base})`;
 
   console.log(`[mutation-scope] ${plan.run.length} of ${harnesses.length} harnesses: ${plan.reason}`);
   // NAMED, NOT COUNTED. A reader has to be able to see that a harness did not
@@ -212,7 +334,17 @@ function main() {
   // this tool must not create.
   try {
     fs.writeFileSync(path.join(ROOT, '.mutation-scope.json'),
-      `${JSON.stringify({ at: new Date().toISOString(), reason: plan.reason, ran: plan.run, skipped: plan.skipped }, null, 2)}\n`);
+      `${JSON.stringify({
+        at: new Date().toISOString(),
+        reason: plan.reason,
+        // The comparison base, as its own field as well as inside the reason,
+        // so the record the gate folds this into can be queried for it without
+        // parsing a sentence. Null when --all was given, because a forced full
+        // run compared nothing to anything.
+        base: (changed && changed.base) || null,
+        ran: plan.run,
+        skipped: plan.skipped,
+      }, null, 2)}\n`);
   } catch (e) {
     // A record that cannot be written must not silently become a run with no
     // scope recorded: refuse, rather than proceed unrecorded.
@@ -232,6 +364,6 @@ function main() {
   return 0;
 }
 
-module.exports = { harnessTargets, selectHarnesses, harnessFiles, changedFiles, isOwnHarnessFile, RUN_EVERYTHING_WHEN_TOUCHED };
+module.exports = { harnessTargets, selectHarnesses, harnessFiles, changedFiles, lastGatedTree, isOwnHarnessFile, RUN_EVERYTHING_WHEN_TOUCHED };
 
 if (require.main === module) process.exit(main());

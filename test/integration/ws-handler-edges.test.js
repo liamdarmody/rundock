@@ -80,16 +80,15 @@ describe('workspace lifecycle edges', () => {
     }
   });
 
-  // openWorkspace persists the auto-detected mode BEFORE calling
+  // openWorkspace records a new workspace's mode AND its switch BEFORE calling
   // scaffoldWorkspace, because scaffoldWorkspace's own reconcile reads the
-  // mode back off disk (workspaceModeFor), not from the caller's in-memory
-  // state. A never-before-opened directory has no state.json yet, so if the
-  // persist ever moved back to AFTER the scaffold call, workspaceModeFor
-  // would read the file's absence, default to knowledge, and write the
-  // block into a code-signal workspace on its very first open, catching up
-  // only on the NEXT one. Driven through the real dispatch path (set_workspace),
-  // not scaffoldWorkspace directly, so the ordering itself is what is proven.
-  test('a never-before-opened workspace gets the right block on its FIRST open, mode auto-detected: none for a code signal, one without', async () => {
+  // switch back off disk (sandboxShapeFor), not from the caller's in-memory
+  // state. If the record ever moved to AFTER the scaffold call, the reconcile
+  // would read the file's absence and fall back to what the mode implies,
+  // writing a code-signal workspace's first block OFF and catching up only on
+  // the NEXT open. Driven through the real dispatch path (set_workspace), not
+  // scaffoldWorkspace directly, so the ordering itself is what is proven.
+  test('a never-before-opened workspace gets the right block on its FIRST open, in either detected mode: on', async () => {
     const realPlatform = process.platform;
     Object.defineProperty(process, 'platform', { value: 'darwin' });
     try {
@@ -101,19 +100,13 @@ describe('workspace lifecycle edges', () => {
         const wsSet = (await client.waitFor(m => m.type === 'workspace_set', { since, label: 'first open, code signal' })).msg;
         assert.strictEqual(wsSet.workspaceMode, 'code', 'auto-detected as code from the package.json');
         const settings = JSON.parse(fs.readFileSync(path.join(codeDir, '.claude', 'settings.local.json'), 'utf8'));
-        // The sandbox is off for a code-signal workspace on its FIRST open,
-        // not only on the second. Asked as "is it switched on" rather than "is
-        // a block present": Code mode still writes the paths, so the folders a
-        // user named survive the trip to Knowledge mode and back.
-        //
-        // And off means `false`, not absent. Rundock owns one settings layer
-        // and `sandbox.enabled` is an OR across all of them, so omitting the
-        // key leaves the sandbox on for anyone whose own ~/.claude/settings.json
-        // enables it. A first open that lands a developer in Code mode must
-        // actually switch it off, or a headless browser cannot launch and every
-        // render raises a card that cannot be remembered away.
-        assert.strictEqual((settings.sandbox || {}).enabled, false,
-          'switched off for a code-signal workspace on the first open, stated rather than left silent');
+        // A workspace new to Rundock starts with agents kept inside it, in
+        // Code mode as in Notes: the switch is its own setting and the mode
+        // detected on first open does not decide it.
+        assert.strictEqual((settings.sandbox || {}).enabled, true,
+          'switched on for a code-signal workspace on its very first open');
+        assert.strictEqual(JSON.parse(fs.readFileSync(path.join(codeDir, '.rundock', 'state.json'), 'utf8')).sandboxSwitch, 'on',
+          'and the switch is recorded, so a later mode change cannot move it');
       } finally {
         h.internal.setWorkspace(h.workspaceDir);
       }
@@ -124,9 +117,9 @@ describe('workspace lifecycle edges', () => {
         const since = client.messages.length;
         client.send({ type: 'set_workspace', path: knowledgeDir });
         const wsSet = (await client.waitFor(m => m.type === 'workspace_set', { since, label: 'first open, no code signal' })).msg;
-        assert.strictEqual(wsSet.workspaceMode, 'knowledge', 'auto-detected as knowledge: nothing code-shaped here');
+        assert.strictEqual(wsSet.workspaceMode, 'notes', 'auto-detected as notes: nothing code-shaped here');
         const settings = JSON.parse(fs.readFileSync(path.join(knowledgeDir, '.claude', 'settings.local.json'), 'utf8'));
-        assert.ok(settings.sandbox, 'the block is present on the first open of a knowledge-mode workspace');
+        assert.strictEqual((settings.sandbox || {}).enabled, true, 'on for a notes workspace on its first open too');
       } finally {
         h.internal.setWorkspace(h.workspaceDir);
       }

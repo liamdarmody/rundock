@@ -164,7 +164,7 @@ describe('spawn argv freeze', () => {
     assert.ok(!inv[0].argv.includes('inherit'), 'and `inherit` is never passed as a value');
   });
 
-  // MR-1: the criterion names the artefact deliberately. A gateway identifier
+  // The criterion names the artefact deliberately. A gateway identifier
   // surviving `modelArgs` proves nothing about what the child process receives,
   // and this card has twice been defeated one layer below the function under
   // test. So the evidence is the spawned argv, character for character.

@@ -38,7 +38,7 @@ function deepTree(depth) {
  * The narrowest sidebar the app actually allows, found by dragging the resize
  * handle as far left as it will go and reading back what the app settled on.
  *
- * Deliberately not a constant copied from app.js. AC-1 is about every width
+ * Deliberately not a constant copied from app.js. The check is about every width
  * the app allows, so the test has to ask the app rather than restate one of
  * its numbers: a duplicated literal would keep passing against a stale figure
  * if the real clamp ever moved, which is the same way a measurement quoted in
@@ -151,13 +151,13 @@ test('the filename truncates instead, and stays readable in full', async ({ page
     };
   });
 
-  // AC-2: the name is the thing that gives way, and says so visibly.
+  // The name is the thing that gives way, and says so visibly.
   expect(m.overflowing).toBe(true);
   expect(m.textOverflow).toBe('ellipsis');
   expect(m.overflow).not.toBe('visible');
   expect(m.whiteSpace).toBe('nowrap');
 
-  // AC-3: truncating is a visual effect only. The text is all still there.
+  // Truncating is a visual effect only. The text is all still there.
   expect(m.text).toBe(LONG);
 });
 

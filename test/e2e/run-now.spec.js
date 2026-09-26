@@ -51,17 +51,17 @@ test('pressing Run disables the control while the stub runtime runs, and the row
     send({ type: 'get_workspaces' });
     const set = await waitFor(m => m.type === 'workspaces' && m.current);
     fs.writeFileSync(path.join(set.current, 'stub-scenario.json'), JSON.stringify({
-      rules: [{ match: { agent: 'penn', promptIncludes: PROMPT }, delayMs: 3000, turn: [{ text: 'pressed run ran' }] }],
+      rules: [{ match: { agent: 'wren', promptIncludes: PROMPT }, delayMs: 3000, turn: [{ text: 'pressed run ran' }] }],
     }));
-    send({ type: 'save_routine', agentId: 'penn', routine: { name: ROUTINE, schedule: SCHEDULE, prompt: PROMPT, runOn: 'local' } });
+    send({ type: 'save_routine', agentId: 'wren', routine: { name: ROUTINE, schedule: SCHEDULE, prompt: PROMPT, runOn: 'local' } });
     await waitFor(m => m.type === 'routine_saved' && m.name === ROUTINE);
     const roster = await waitFor(m => m.type === 'agents' && m.agents.some(a => (a.routines || []).some(r => r.name === ROUTINE)));
-    const row = roster.agents.find(a => a.id === 'penn').routines.find(r => r.name === ROUTINE);
+    const row = roster.agents.find(a => a.id === 'wren').routines.find(r => r.name === ROUTINE);
     return { workspace: set.current, version, nextRun: row.nextRun };
   });
   expect(version, 'the server must resolve the stub runtime, or nothing may be pressed').toBe(STUB_VERSION);
   expect(new Date(nextRun).getTime(), 'the server must not be able to bring this routine due during the spec').toBeGreaterThan(Date.now() + 60 * 60 * 1000);
-  expect(fs.existsSync(path.join(workspace, '.claude', 'agents', 'penn.md'))).toBe(true);
+  expect(fs.existsSync(path.join(workspace, '.claude', 'agents', 'wren.md'))).toBe(true);
   await page.goto('/');
   await page.click('.nav-item[data-nav="routines"]');
   const row = page.locator('.routine-row', { hasText: ROUTINE });

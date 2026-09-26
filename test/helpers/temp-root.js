@@ -17,9 +17,9 @@
 // THE SHAPE OF THE FIX
 //
 // One root per test process, named with the pid that owns it, and every
-// fixture nested inside that root. The owner removes the whole root on its way
+// fixture nested inside that root. The owning process removes the whole root on its way
 // out, so the tidying belongs to whatever created the directory. The pid in
-// the name is what lets a LATER run finish the job when the owner never got
+// the name is what lets a LATER run finish the job when the owning process never got
 // the chance, which is the only cover that exists for a process that is killed
 // outright.
 

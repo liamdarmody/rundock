@@ -17,6 +17,7 @@ const codexRuntime = require('./codex.js');
 const PKG_VERSION = require('./package.json').version;
 const searchLib = require('./search.js');
 const { resolvePermissionConvoId } = require('./permission-routing.js');
+const { normalizeWorkspaceMode } = require('./lib/workspace/mode.js');
 const { resolveMarkers, noteHandoffMarker, HANDOFF_MODES } = require('./lib/delegation/markers.js');
 const { createHandbackBuilder } = require('./lib/delegation/handback.js');
 const { createDelegationRecord, attachDelegationRecord } = require('./lib/delegation/state.js');
@@ -35,8 +36,10 @@ const {
 const workspaceBoundary = require('./lib/workspace/boundary.js');
 const { readBoundaryGrants, addBoundaryGrant, boundaryGrantCovers } = workspaceBoundary;
 const workspaceAnalysis = require('./lib/workspace/analysis.js');
+const extensionRegistry = require('./lib/packages/extension-registry.js');
 const { analyzeWorkspace, readMcpServerNames } = workspaceAnalysis;
 const workspaceScaffold = require('./lib/workspace/scaffold.js');
+const { extensionFileRefusal } = require('./lib/workspace/extension-file.js');
 const {
   muteHooks, isEmptyWorkspace, detectWorkspaceMode, scaffoldDefaults, scaffoldWorkspace,
 } = workspaceScaffold;
@@ -90,6 +93,7 @@ let ACTUAL_PORT = PORT; // Updated after server.listen() with the real listening
 // this file's remaining read sites use the local variable, while extracted
 // lib/ modules read config.getWorkspace() at use time. EVERY assignment must
 // go through setWorkspaceRoot so the two can never drift.
+const { recoverPendingWrites } = require('./lib/workspace/atomic-write.js');
 let WORKSPACE = config.getWorkspace();
 function setWorkspaceRoot(dir) {
   WORKSPACE = dir;
@@ -100,6 +104,14 @@ function setWorkspaceRoot(dir) {
   // accumulate with nothing ever clearing it. Housekeeping must never be able
   // to break a switch, hence the guard.
   try { pruneScratch(); } catch (e) { /* not worth failing a switch over */ }
+  // A package install or update the process died in the middle of is healed
+  // here, before the scheduler, the roster or the extension records read the
+  // workspace, rather than on whatever install happens next. A journal that
+  // cannot be trusted is left for the next install to refuse by name: it must
+  // never stop a workspace opening.
+  if (dir) {
+    try { recoverPendingWrites(dir); } catch (e) { console.warn(`[packages] an interrupted install could not be recovered: ${e.message}`); }
+  }
   // THE SCHEDULER'S LIFECYCLE, AND IT LIVES HERE FOR A REASON.
   //
   // It used to live at exactly one place, the boot path, inside `if
@@ -256,12 +268,13 @@ function getAllowedToolsLegacy() {
 
 // Returns the disallowed-tools string based on workspace mode.
 // Code mode: no file type restrictions (empty string).
-// Knowledge mode: block executable file writes.
+// Notes mode (anything but code, through the one normalizer): block
+// executable file writes.
 function getDisallowedTools() {
   try {
     const state = readState();
-    if (state.workspaceMode === 'code') return '';
-  } catch (e) { /* default to knowledge mode restrictions */ }
+    if (normalizeWorkspaceMode(state.workspaceMode) === 'code') return '';
+  } catch (e) { /* default to the Notes restrictions */ }
   return DISALLOWED_TOOLS_KNOWLEDGE;
 }
 
@@ -636,6 +649,7 @@ httpRouter.wireHttpRouterDeps({
   getSearchEngine: () => searchEngine,
   fileIndexInProgress,
   getPermissionTimeoutMs: () => PERMISSION_TIMEOUT_MS,
+  routineRunForSession: (sessionId) => schedulerLib.runForSession(sessionId),
 });
 
 // ===== AGENT HELPERS =====
@@ -871,7 +885,7 @@ function watchOpenFile(ws, relPath, fullPath) {
     lastStat = { mtimeMs: st.mtimeMs, size: st.size };
     if (content === lastPushed) return; // no real change (or our own save)
     lastPushed = content;
-    ws.send(JSON.stringify({ type: 'file_changed', path: relPath, content }));
+    ws.send(JSON.stringify({ type: 'file_changed', path: relPath, content, extensionRefusal: extensionFileRefusal(WORKSPACE, relPath) }));
   };
   const timer = setInterval(tick, OPEN_FILE_POLL_MS);
   if (timer.unref) timer.unref(); // never hold shutdown open for a view refresh
@@ -1368,7 +1382,7 @@ const wsHandlerContext = {
   workspace: {
     setWorkspaceRoot, healWorkspaceIfMoved, saveRecentWorkspace, loadRecentWorkspaces,
     discoverWorkspaces, isInsideWorkspace, isSafeCreatePath, getFileTreeCached,
-    invalidateFileListCache, invalidateFileTreeCache, watchOpenFile,
+    invalidateFileListCache, invalidateFileTreeCache, noteExtensionRecordsChanged, watchOpenFile,
     fileTreeForSend, broadcastFileTree, armFileTreeWatcher,
   },
   runtime: { getRuntimeStatus, killAllChildren, cleanOrphanedProcesses },
@@ -1408,9 +1422,16 @@ wss.on('connection', (ws) => {
         // carried it.
         ...(pending.answerFile && !pending.boundary ? { answer_file: true, resolved_path: pending.resolvedPath, grant_dir: null } : {})
       },
-      _conversationId: pending.conversationId
+      _conversationId: pending.conversationId,
+      ...(pending.run ? { _run: pending.run } : {})
     }));
   }
+  // WHAT IS STILL WAITING, said once after the replay. A window that was away
+  // missed every timeout and answer sent while it was gone, so it may still be
+  // holding cards for requests that ended. This list is how it tells the two
+  // apart: anything it holds that is not named here is over, and is shown as
+  // over rather than left accepting a click nothing will receive.
+  ws.send(JSON.stringify({ type: 'pending_permissions', requestIds: [...pendingPermissionRequests.keys()] }));
 
   // Alias for handlers that still reference local `processes`
   const processes = chatProcesses;
@@ -1772,6 +1793,10 @@ wss.on('connection', (ws) => {
             try {
               const parsed = JSON.parse(m);
               if (parsed.type === 'stream_event' || parsed.type === 'assistant') continue;
+              // A request buffered while no window was open, that has since
+              // timed out or been answered, is not delivered: its card would
+              // arrive after the news that it was over, and accept a click.
+              if (parsed.type === 'control_request' && !pendingPermissionRequests.has(parsed.request_id)) continue;
             } catch (e) {}
             if (ws.readyState === 1) ws.send(m);
           }
@@ -1807,6 +1832,7 @@ wss.on('connection', (ws) => {
     console.log('Client disconnected');
     connectedClients.delete(ws);
     closeOpenFileWatcher(ws); // stop watching this client's open file
+    require('./lib/protocol/handlers/sources.js').closeSourcesWatch(ws); // and its mount's sources
     // Don't kill processes: they survive reconnects.
     // If no clients remain, safeSend will buffer output until the next connection.
   });
@@ -1943,6 +1969,23 @@ function parseSkillFile(content, slug) {
 // config files stay hidden from the tree, as before.
 const VIEWABLE_FILE_RE = /\.(md|txt|json|html?|svg|png|jpe?g|gif|webp|pdf)$/i;
 
+// THE TREE ALSO LISTS WHAT AN INSTALLED EXTENSION RENDERS. A file whose
+// extension an enabled record on the roster claims is openable (the host
+// mounts the extension's view for it), so it is listed beside the built-in
+// kinds, and stops being listed when the record is disabled or removed. Read
+// through the roster reader at tree-build time, never added to the static
+// regex above, so the tree and the renderer registry cannot disagree about
+// which files an extension is for. A roster that cannot be read claims
+// nothing: the tree shows the built-in kinds and the roster error is the
+// client's to report.
+function claimedExtensionsPattern(workspace) {
+  let roster = [];
+  try { roster = extensionRegistry.listExtensions(workspace); } catch (e) { return null; }
+  const exts = extensionRegistry.claimedExtensions(roster);
+  if (exts.length === 0) return null;
+  return new RegExp(`\\.(${exts.join('|')})$`, 'i');
+}
+
 // The /workspace-file allowlist: binary types only. Everything else either
 // rides the WS text path or is not served at all; this endpoint must never
 // become a generic file server for the workspace.
@@ -2009,7 +2052,15 @@ function fileKindCached(fullPath, name) {
   return kind;
 }
 
-function getFileTree(dir, prefix = '') {
+// The tree of a workspace root: the pattern of extensions enabled records
+// claim is read once here, then carried down the walk as an ordinary
+// argument, so a nested step never re-reads the roster and the root step
+// is the only one that does.
+function getFileTree(dir) {
+  return walkFileTree(dir, '', claimedExtensionsPattern(dir));
+}
+
+function walkFileTree(dir, prefix, claimed) {
   const entries = [];
   try {
     const items = fs.readdirSync(dir, { withFileTypes: true })
@@ -2022,8 +2073,8 @@ function getFileTree(dir, prefix = '') {
     for (const item of items) {
       const relativePath = prefix ? `${prefix}/${item.name}` : item.name;
       if (item.isDirectory()) {
-        entries.push({ type: 'folder', name: item.name, path: relativePath, children: getFileTree(path.join(dir, item.name), relativePath) });
-      } else if (VIEWABLE_FILE_RE.test(item.name)) {
+        entries.push({ type: 'folder', name: item.name, path: relativePath, children: walkFileTree(path.join(dir, item.name), relativePath, claimed) });
+      } else if (VIEWABLE_FILE_RE.test(item.name) || (claimed && claimed.test(item.name))) {
         entries.push({ type: 'file', name: item.name, path: relativePath, kind: fileKindCached(path.join(dir, item.name), item.name) });
       }
     }
@@ -2048,9 +2099,23 @@ function getFileTree(dir, prefix = '') {
 // frontmatter, so adding kanban-plugin frontmatter changes a node's kind
 // without changing any directory mtime. Saves made through Rundock invalidate
 // explicitly, which covers the path a user actually takes to do that.
-let _treeCache = null; // { tree, dirs: Map<absolutePath, mtimeMs> }
+let _treeCache = null; // { tree, dirs: Map<absolutePath, mtimeMs>, records: mtimeMs }
 
 function invalidateFileTreeCache() { _treeCache = null; }
+
+// An extension record changed (installed, updated, enabled, disabled,
+// removed): the set of files the tree lists changed with it, and no
+// directory mtime says so, because the records file lives under a dot
+// directory the tree never walks. The install and manage flows call this
+// after any record write so the next tree read rebuilds at once; the
+// freshness pass below also stats the records file itself, so a change that
+// arrives without the call is caught on the next read or the next poll tick.
+function noteExtensionRecordsChanged() { invalidateFileTreeCache(); }
+
+function extensionRecordsMtime() {
+  if (!WORKSPACE) return 0;
+  try { return fs.statSync(path.join(WORKSPACE, ...extensionRegistry.RECORDS_PATH.split('/'))).mtimeMs; } catch (e) { return 0; }
+}
 
 // Directory list is derived from the tree we just built rather than by walking
 // again: the folder nodes are already there, so this costs one stat per
@@ -2067,6 +2132,7 @@ function treeDirMtimes(nodes, out = new Map()) {
 
 function treeCacheIsFresh() {
   if (!_treeCache || !WORKSPACE) return false;
+  if (_treeCache.records !== extensionRecordsMtime()) return false;
   for (const [dir, mtimeMs] of _treeCache.dirs) {
     let st;
     try { st = fs.statSync(dir); } catch (e) { return false; } // deleted or renamed
@@ -2078,12 +2144,16 @@ function treeCacheIsFresh() {
 function getFileTreeCached() {
   if (!WORKSPACE) return [];
   if (treeCacheIsFresh()) return _treeCache.tree;
+  // The records stamp is taken BEFORE the build reads the roster: a records
+  // write landing during the build then reads as stale on the next check,
+  // rather than being recorded as the state the tree was built from.
+  const records = extensionRecordsMtime();
   const tree = getFileTree(WORKSPACE);
   const dirs = treeDirMtimes(tree);
   // The root is not a node in its own tree, but a file created directly in it
   // bumps only the root's mtime, so it has to be tracked explicitly.
   try { dirs.set(WORKSPACE, fs.statSync(WORKSPACE).mtimeMs); } catch (e) {}
-  _treeCache = { tree, dirs };
+  _treeCache = { tree, dirs, records };
   return tree;
 }
 
@@ -3268,7 +3338,7 @@ module.exports._internal = {
   setWorkspace(dir) { setWorkspaceRoot(dir); invalidateAgentCache(); armAgentsDirWatcher(); armFileTreeWatcher(); },
   getWorkspace() { return WORKSPACE; },
   // file tree external-change poll
-  armFileTreeWatcher, fileTreeForSend, broadcastFileTree,
+  armFileTreeWatcher, fileTreeForSend, broadcastFileTree, noteExtensionRecordsChanged,
   flatFileListCached, invalidateFileListCache,
   // scheduler
   getNextRun, executeRoutine, routineState, startScheduler, stopScheduler, schedulerRunning,

@@ -1,6 +1,6 @@
 # The browser pass
 
-**A change to anything a person can see is not done until the machine has driven it in a browser.** Sent the prompts a user would send, read what came back, and looked at the screen. The owner's testing confirms rather than discovers.
+**A change to anything a person can see is not done until the machine has driven it in a browser.** Sent the prompts a user would send, read what came back, and looked at the screen. Manual testing confirms rather than discovers.
 
 ## Why this exists
 

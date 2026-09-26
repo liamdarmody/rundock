@@ -335,7 +335,7 @@ describe('a schedule the scheduler cannot read', () => {
             // Written by somebody moving over from cron, exactly as their
             // crontab said it.
             { name: 'Cron briefing', schedule: CRON, prompt: 'p', enabled: true },
-            // The contrast, and the whole of AC-8: a routine that is simply
+            // The contrast, and the whole of a routine that is simply
             // not due yet. Both are enabled, both are unpaused, neither has
             // ever run. The only difference is whether Rundock can read the
             // schedule.

@@ -45,12 +45,12 @@ function readEvents() {
 
 describe('a lead hands to its own report by naming them in the handoff line', () => {
   test('the delegation happens, and the line travels with it', async () => {
-    // Penn leads Ana. Penn names Ana only in the description, exactly as the
+    // Wren leads Ana. Wren names Ana only in the description, exactly as the
     // reported call did, and the prompt is a brief that never says her name.
     const convoId = h.freshConvoId('target');
     h.writeScenario([
       { match: { agent: 'chief-of-staff', promptIncludes: 'target please' },
-        turn: [{ agentTool: { subagent_type: 'content-lead', description: 'Over to Penn.', prompt: 'the brief' } }] },
+        turn: [{ agentTool: { subagent_type: 'content-lead', description: 'Over to Wren.', prompt: 'the brief' } }] },
       { match: { agent: 'content-lead', promptIncludes: 'the brief' },
         turn: [{ agentTool: {
           description: 'Handing to Ana to check the numbers before this goes back.',
@@ -86,11 +86,11 @@ describe('a lead hands to its own report by naming them in the handoff line', ()
     const convoId = h.freshConvoId('target-miss');
     h.writeScenario([
       { match: { agent: 'chief-of-staff', promptIncludes: 'miss please' },
-        turn: [{ agentTool: { subagent_type: 'content-lead', description: 'Over to Penn.', prompt: 'the brief' } }] },
+        turn: [{ agentTool: { subagent_type: 'content-lead', description: 'Over to Wren.', prompt: 'the brief' } }] },
       { match: { agent: 'content-lead', promptIncludes: 'the brief' },
         turn: [
           { agentTool: { description: 'Looking into the pricing page.', prompt: 'have a look at this' } },
-          { text: 'PENN-CARRIED-ON' },
+          { text: 'WREN-CARRIED-ON' },
         ] },
     ]);
 

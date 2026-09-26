@@ -1,0 +1,27 @@
+{
+ "asked": [
+  {
+   "agent": "analyst",
+   "message": "Summarise the risk dneS panel"
+  }
+ ],
+ "frameRecord": [
+  {
+   "type": "init",
+   "path": "dash.md",
+   "content": "---\nportfolio-dashboard: true\nsources:\n  - notes/holdings.csv\n  - \"[[notes/limits.csv]]\"\n  - notes/sub.md\n  - .env\n  - ../outside/secret.txt\n  - notes/*.csv\n  - notes/link-out.csv\n  - notes/link-hidden.csv\n  - notes/hard.csv\n  - DASH.md\n---\n# Dashboard\n",
+   "theme": "dark",
+   "sources": []
+  },
+  {
+   "type": "refused",
+   "of": "ask",
+   "reason": "Rundock stopped this because it did not come from your click"
+  },
+  {
+   "type": "refused",
+   "of": "ask",
+   "reason": "Rundock stopped this because it did not come from your click"
+  }
+ ]
+}

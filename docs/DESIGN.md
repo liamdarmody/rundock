@@ -79,15 +79,57 @@ including the worst case of `--elevated`. If you need something fainter than
 | `--accent` | Rundock's colour. Primary actions, focus, selection |
 | `--accent-hover` | The accent, lifted, on hover only |
 | `--accent-glow` | The accent at low alpha, for tinted backgrounds |
+| `--accent-action` | The fill of a filled control: a primary button, the checkbox and slider fill, the toggle track when on, each with white text, tick or thumb. `#C15729` in both themes, where white clears 4.5:1; white on `--accent` measures 2.85:1 |
+| `--accent-control` | The fill of a control shape that carries no text or icon: the checked checkbox, the toggle when on, the slider's fill and thumb, a selected radio dot, a meter's fill. Needs 3:1 against its surface, not 4.5:1. The brand itself in dark (4.43:1 on `--card`), `#DB5933` in light (3.28 to 3.83:1). The white tick and thumb drawn on it measure 2.85:1 in dark, an accepted exception because the state is carried by shape and position |
+| `--accent-control-hover` | That fill on hover: the brand's hover in dark, `#DD6440` in light |
+| `--accent-text` | The brand hue as text, light theme only: `#BF401B`, 4.54 to 5.30:1 on the light surfaces, where `--accent` as text measured 2.44 to 2.85:1. In dark it is the brand value itself, so dark is unchanged. Used by `.linkbtn.accent` |
+| `--accent-action-hover` | That fill, darker, on hover only, so the contrast grows rather than shrinks. `#B45126` |
 | `--success` | Something succeeded or is allowed |
 | `--attention` | Something needs the user, and is not an error |
 | `--working` | Something is running |
 | `--idle` | Something is present but not doing anything |
-| `--danger` | Destructive actions and errors |
+| `--danger` | Destructive actions and errors, as a fill or an edge: `background`, `border-color`, `box-shadow`, and the `color-mix()` tints feeding those. `#D42C2A` in both themes |
+| `--danger-text` | Destructive actions and errors, as text: any `color` declaration. `#F0706E` in dark, `#D42C2A` in light |
 
 Use these for what they mean, never for what colour they happen to be. If you
 want a red border and nothing has gone wrong, `--danger` is the wrong token and
 the design is probably the thing to revisit.
+
+`--danger` and `--danger-text` are one meaning at two jobs, and the property
+decides which you reach for. A fill or an edge takes `--danger`; a `color`
+declaration takes `--danger-text`. The fill is the same in both themes: it was
+chosen so that white text on it clears 4.5:1, and so that it sits apart from
+`--accent` in lightness rather than only in hue, which is the axis a
+colour-blind reader keeps. That value fails as text on a dark card, so the text
+token is theme-aware: lifted in the dark theme, the fill value itself in light,
+where it reads on every surface. A `color` declaration that references
+`--danger` fails `test/unit/danger-token.test.js`, which also recomputes the
+contrast of every pairing from the token values on each run. A resting
+destructive action is not filled at all: it is red text on a red outline, over
+`--elevated`, so it reads as destructive before it is touched, and the fill
+appears only at a confirmation where confirming and cancelling carry equal
+weight. Danger differs from a primary action by form as well as colour
+because `--accent-action` and `--danger` sit only 1.11:1 apart in luminance.
+
+`--accent` itself is the brand: the app icon, the website, links, focus rings,
+active borders, tints and chips. It is never written as a fill: a fill that
+carries text or an icon is `--accent-action`, and a bare control shape is
+`--accent-control`.
+
+One exception is recorded rather than hidden: the editor's injected
+stylesheet, `public/editor/styles.js`, still colours text with `--danger` in
+places. It sits outside the paths of the lane that made the split and the
+focused test walks only `public/styles/`, so the guard does not reach it; it
+is carded to be sorted the same way, text onto `--danger-text`, fills and
+edges kept on `--danger`. Until then the claim above is true of the
+stylesheets under `public/styles/` and of nothing else.
+
+Proposed for the Rundock Design System: the same split in
+`colors_and_type.css`, `--danger` kept as the fill and edge value in both
+themes and a new `--danger-text` token, theme-aware, for every `color`
+declaration that means danger. The values and the contrast they were chosen
+against are the ones recorded here; the design system is the place they are
+meant to live, and this file is the proposal until its owner takes them.
 
 The status set had no red until 0.11.7, so every destructive surface reached for
 a hex of its own and they drifted. Three near-identical reds were in the
@@ -114,6 +156,38 @@ CSS, the tokens above already say what you mean. The map's five recency steps
 are colour mixes of `--accent` and `--text-2`, declared on probe elements in
 `public/styles/views/graph.css` per theme and read back resolved, so they are
 not tokens of their own.
+
+### Categorical
+
+| Token | Purpose |
+|---|---|
+| `--chart-1` | The first series in a chart, and the brand hue, so a single-series chart is drawn in Rundock's own colour |
+| `--chart-2` | The second series. The hue furthest from the first, because two series is the commonest case and the one that must separate best |
+| `--chart-3` | The third series, furthest from the first two |
+| `--chart-4` | The fourth series |
+| `--chart-5` | The fifth, and the last. A chart needing a sixth series needs a different chart |
+| `--on-chart` | Text or a line printed ON one of those fills, so it answers to the fill and not to the page. The one colour in the system that is right to leave un-themed |
+
+These are deliberately separate from the status colours despite being the same
+five hues. `--success` on a slice says the slice succeeded; a chart series
+means nothing beyond "not the previous one", so it gets tokens whose whole
+meaning is being distinguishable, and the status colours keep meaning what they
+mean.
+
+`--on-chart` is the exception to theming and the reason is worth keeping. The
+fills are identical in both themes, because a category does not change colour
+when the lights do. Anything sitting on one therefore must not change either:
+themed, it would flip to near-white on a mid-tone slice in dark mode, which is
+the one place `--text-1` is the wrong answer. It is also what separates two
+adjacent slices, which is the same problem seen edge-on: a separator between
+two fills is not a border against the page, and a token that inverts with the
+theme measures barely 1:1 against these colours.
+
+The absence of this set was a real defect rather than a gap noticed in the
+abstract. Asked to draw a pie with no categorical scale to read, mermaid
+derived its slices from `--card` by shifting lightness, and a dark card shifted
+is another dark card: three slices arrived as one grey mass, in a diagram that
+reported no failure at all.
 
 ## Type
 

@@ -1,0 +1,152 @@
+/* Regions: a fenced block in a document, drawn by an extension.
+
+   A component rather than an editor rule for the same reason the extension
+   frame is one: the region pass in views/files.js owns these elements, not
+   the editor, and they key on that pass's own classes wherever a rendered
+   document happens to be shown.
+
+   Every colour is a token, so both themes apply without a second selector.
+   Nothing here paints a drawing: the SVG carries its own fills, and the host
+   deliberately does not restyle third-party output beyond placing it. */
+
+/* A FIGURE, NOT A WIDGET. The spacing is the whole of that distinction: a
+   paragraph gap says "more of the same", and a drawing is a different kind of
+   thing from the prose around it. Wider gaps than any paragraph takes, so the
+   eye reads it as an object the text refers to rather than as a panel bolted
+   into the document. */
+.region { display: block; margin: 24px 0; position: relative; }
+
+/* Waiting. A shape rather than a spinner, because a diagram is about to take
+   this space and a placeholder the size of nothing makes the prose jump when
+   the drawing lands.
+
+   No border, and that is deliberate. A bordered grey box is what a broken
+   image looks like, and the half second before a diagram arrives should not
+   read as a failure. A soft surface breathing quietly reads as "coming". */
+.region-skeleton {
+  display: block; min-height: 120px; border-radius: var(--radius-lg);
+  background: var(--surface);
+  animation: region-waiting 2s ease-in-out infinite;
+}
+/* Longer than --duration-slow, which tokens.css says needs its own stated
+   reason: this is not a transition, it is a breath held for as long as the
+   wait lasts, and it is 2s to match the working dots in the sidebar and the
+   org chart. One waiting rhythm across the product, not a second one. */
+@keyframes region-waiting { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+
+/* The drawing. It arrives rather than appearing: a diagram that pops into
+   place mid-paragraph is the clearest tell that something was bolted on.
+
+   base.css's own fadeIn, not a keyframe of this component's. It is already
+   what a message, a tool row and an error card arrive with, and a second
+   arrival animation three pixels different from the product's would be
+   exactly the kind of near-miss that makes a feature feel imported. */
+.region-drawn { display: block; overflow-x: auto; animation: fadeIn var(--duration-slow) ease both; }
+
+/* CENTRED, AND AT ITS OWN SIZE. A drawing is sized from its viewBox by
+   region-mount (see sizeToNatural), so most are narrower than the column: left
+   -aligned they read as having failed to fill it. Centring is what every
+   document tool does with a figure, and it is what makes a small diagram look
+   deliberate rather than broken.
+
+   margin-inline rather than text-align, because text-align inherits and would
+   reach any HTML a diagram carries inside a foreignObject. max-width keeps a
+   drawing wider than the column inside it, at which point the auto margins are
+   zero and it simply fills. */
+.region-drawn svg { max-width: 100%; height: auto; display: block; margin-inline: auto; }
+
+/* Motion is the polish, never the mechanism: everything here still arrives,
+   still caps, still marks itself, with every frame of it removed. */
+@media (prefers-reduced-motion: reduce) {
+  .region-skeleton, .region-drawn { animation: none; }
+}
+
+/* A drawing taller than the reader (Decide 26). Capped with a fade so it is
+   visibly cut rather than mysteriously ending, and the control to see it
+   whole sits inside the fade where the cut is. */
+.region-capped { max-height: 150vh; overflow: hidden; }
+.region-capped::after {
+  content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 96px;
+  background: linear-gradient(to bottom, transparent, var(--base));
+  pointer-events: none;
+}
+/* The control sits ON the drawing, so it is built to float rather than to sit
+   in a row: a pill, translucent, blurring what is behind it. That is what
+   makes it read as hovering over the content it is cutting, instead of as a
+   button somebody left on top of a picture. */
+.region-expand {
+  position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%);
+  background: color-mix(in srgb, var(--card) 80%, transparent);
+  -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
+  color: var(--text-1); border: 1px solid var(--border);
+  border-radius: var(--radius-pill); padding: 5px 14px;
+  font-size: var(--caption); font-weight: 500; cursor: pointer;
+  transition: background var(--duration-base) ease, border-color var(--duration-base) ease;
+}
+.region-expand:hover { background: var(--card); border-color: var(--text-3); }
+
+/* Provenance, not permission (Decide 27). Invisible until the reader asks,
+   because a document with three diagrams would otherwise carry three
+   permanent badges, which is the noise that ruling exists to avoid. */
+.region-mark {
+  position: absolute; right: 6px; bottom: 6px;
+  font-size: var(--label); color: var(--text-3);
+  background: color-mix(in srgb, var(--surface) 76%, transparent);
+  -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+  padding: 2px 8px; border-radius: var(--radius-pill);
+  opacity: 0; transition: opacity var(--duration-base) ease;
+  pointer-events: none;
+}
+.region:hover .region-mark { opacity: 1; }
+
+/* A link inside a drawing (Decide 28). The host attached the handler, so the
+   affordance is the host's to show: underlined on hover the way a wikilink
+   is, rather than painted into the diagram where it would fight the
+   extension's own colours. */
+.region-link { cursor: pointer; }
+.region-link:hover text,
+text.region-link:hover { text-decoration: underline; }
+.region-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* A region that could not be drawn. Stated where the drawing would have
+   been, with the way back to what the document actually contains.
+
+   NO COLOURED EDGE. A card with one accent border down its left side is the
+   house style of software nobody designed: it is reached for because it is
+   the fastest way to make a box look like it means something, and it is
+   everywhere, so it now reads as filler rather than as attention.
+
+   It is also the wrong claim. This is not a warning. Nothing is at risk and
+   the reader has done nothing wrong: one block in the document is not drawn,
+   and the document is otherwise fine. So it is a quiet placeholder standing
+   in the space the drawing would have taken, in the product's ordinary card,
+   saying what happened and offering the one thing that might help. */
+.region-failed {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 16px 18px; background: var(--surface);
+  /* The room a drawing would have taken, so a failure does not make the
+     document jump upward as it lands. */
+  min-height: 96px;
+  display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 12px;
+}
+/* The message is the content of this card, not an aside about it, so it reads
+   at the document's own weight rather than in the muted tier. */
+.region-failed-reason { margin: 0; color: var(--text-1); font-size: var(--body); line-height: 1.5; }
+.region-failed-action {
+  background: var(--card); color: var(--text-1); border: 1px solid var(--border);
+  border-radius: var(--radius-md); padding: 5px 14px;
+  font-size: var(--caption); font-weight: 500; font-family: inherit; cursor: pointer;
+  transition: background var(--duration-base) ease, border-color var(--duration-base) ease;
+}
+.region-failed-action + .region-failed-action { margin-left: 8px; }
+.region-failed-action:hover { background: var(--elevated); border-color: var(--text-3); }
+
+/* Regions inside the editor. The block is not removed and not emptied: it is
+   hidden by a class while its drawing stands in front of it, and shown again
+   the moment the caret goes inside. That is the whole of click-to-source, and
+   it costs the document nothing, which is the point of doing this with
+   decorations rather than by changing what the document contains. */
+.region-source-hidden { display: none; }
+.region-source-open { display: block; }
+.editor-region { margin: 24px 0; }

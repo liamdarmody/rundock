@@ -19,5 +19,5 @@
 .ws-picker-submit { padding: 10px 20px; background: var(--accent); color: white; font-size: var(--body); font-weight: 600; border-radius: var(--radius-lg); transition: background var(--duration-base) ease; flex-shrink: 0; cursor: pointer; }
 .ws-picker-submit:hover { background: var(--accent-hover); }
 .ws-picker-hint { font-size: var(--caption); color: var(--text-2); margin-top: 6px; text-align: left; }
-.ws-picker-error { font-size: var(--caption); color: var(--danger); margin-top: 4px; display: none; }
+.ws-picker-error { font-size: var(--caption); color: var(--danger-text); margin-top: 4px; display: none; }
 

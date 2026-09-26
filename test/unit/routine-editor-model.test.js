@@ -64,7 +64,7 @@ describe('routine editor: choosing a skill', () => {
     assert.strictEqual(choice.createSkill, false);
   });
 
-  // AC-1: the agent-agnostic list has to say who runs each skill, since the
+  // The agent-agnostic list has to say who runs each skill, since the
   // reader has not picked one and the name is the only thing that answers it.
   test('with no agent selected each row names the agent that runs it', () => {
     const choice = model.skillChoices({ skills: skillFixture(), agentId: null });
@@ -83,7 +83,7 @@ describe('routine editor: choosing a skill', () => {
     );
   });
 
-  // AC-2: scoped rows carry no agent name, because there is only one agent and
+  // Scoped rows carry no agent name, because there is only one agent and
   // repeating it on every row is noise.
   test('a scoped row does not repeat the agent it was scoped to', () => {
     const choice = model.skillChoices({ skills: skillFixture(), agentId: 'piper' });
@@ -112,7 +112,7 @@ describe('routine editor: choosing a skill', () => {
     assert.ok(choice.createSkillLabel && choice.createSkillLabel.trim(), 'the offer has words on it');
   });
 
-  // AC-4: the same offer has to appear when an agent is selected and that
+  // The same offer has to appear when an agent is selected and that
   // agent has nothing, which is the likelier way to meet it.
   test('an agent with no skills of its own offers the same path', () => {
     const choice = model.skillChoices({ skills: skillFixture(), agentId: 'nobody' });
@@ -129,7 +129,7 @@ describe('routine editor: choosing a skill', () => {
     assert.strictEqual(model.stepLead(), 'Step 1 of 2. Pick a skill any of your agents already has.');
   });
 
-  // AC-17 is the owner's to sign off, and this is the part of it a diff can
+  // The zero-skills copy is judged by hand, and this is the part of it a diff can
   // carry: the zero-skills copy offers something rather than reporting a fault.
   test('the zero-skills copy names no error', () => {
     const choice = model.skillChoices({ skills: [], agentId: null });
@@ -193,7 +193,7 @@ describe('routine editor: the schedule is built, not typed', () => {
     );
   });
 
-  // AC-3: the point of a sentence builder is that an expression cannot be
+  // The point of a sentence builder is that an expression cannot be
   // reached through it. Each of these is a real thing someone would type.
   test('an expression typed into either field builds nothing', () => {
     for (const attempt of [

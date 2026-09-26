@@ -51,7 +51,9 @@ const path = require('node:path');
 const { execFileSync, spawn, spawnSync } = require('node:child_process');
 
 const { STEPS, STEP_END_GRACE_MS } = require('../../scripts/precommit-gate.js');
-const { END_GRACE_MS } = require('../../scripts/lib/process-group.js');
+const {
+  END_GRACE_MS, REAP_GRACE_MS, POLL_MS, EXITED_STATE, endGroup,
+} = require('../../scripts/lib/process-group.js');
 
 const GATE = path.join(__dirname, '..', '..', 'scripts', 'precommit-gate.js');
 const MUTATION_RUN = path.join(__dirname, '..', 'tools', 'mutation-run.js');
@@ -540,5 +542,76 @@ describe('a gate cut short leaves no mutated source and no stale marker', () => 
       reap(pidsIn(c.file));
       cleanup(c.dir, [c.file]);
     }
+  });
+});
+
+describe('a group that has been killed is given time to actually die', () => {
+  // THE FALSE ALARM THIS EXISTS TO PREVENT. The verdict used to be one pause of
+  // POLL_MS and one table read: send SIGKILL, wait 25ms, and call whatever was
+  // still listed a survivor. SIGKILL cannot be caught, blocked or ignored, so
+  // such a group is not surviving, it is dying; 25ms is simply less time than a
+  // loaded kernel needs to finish the job and drop the entries.
+  //
+  // The cost was not a slow test. It was the gate printing "process group N
+  // survived being ended" and telling a reader to inspect `git diff` over a
+  // group that was already gone, on every run of a busy machine. A warning that
+  // fires when nothing is wrong is one nobody reads when something is.
+  //
+  // DRIVEN ENTIRELY THROUGH THE SEAMS, sending no signal and starting no
+  // process, so these say the same thing on an idle laptop and a machine at
+  // load 32. Reproducing the original failure by loading the machine is not a
+  // test, it is a coincidence. The first draft of these used a made-up pgid and
+  // a stub table: groupRunning answers `false` as soon as the group id stops
+  // existing, so two of the three never reached the table reader at all and
+  // passed while proving nothing.
+  const HELD = { pid: 4242, state: 'R' };
+  // A short window here, because what these prove is that the verdict WAITS
+  // and re-reads rather than deciding on one read. How long it waits in
+  // production is a separate claim, pinned below against the shipped constant,
+  // and spending ten real seconds twice to restate it would only make the
+  // suite slower on every run.
+  const alive = { groupExists: () => true, sendSignal: () => {}, graceMs: 0, reapMs: 500 };
+
+  // A table that lists the group as running for `reads` reads, then as an
+  // exited entry, which is what a collected group looks like on both platforms.
+  const diesAfter = (reads) => {
+    let seen = 0;
+    return () => [{ ...HELD, state: seen++ < reads ? 'R' : EXITED_STATE }];
+  };
+
+  test('a slow reap is not a survivor', () => {
+    // Ten reads: comfortably more than the ONE the old verdict allowed, which
+    // is the whole distinction being drawn, and comfortably fewer than the
+    // twenty the 500ms window above affords at a 25ms poll. With the old code
+    // this is 'running'.
+    const outcome = endGroup(HELD.pid, { ...alive, readMembers: diesAfter(10) });
+    assert.strictEqual(outcome, 'gone',
+      'a group that left the table while it was being waited for was dying, not surviving');
+  });
+
+  test('a group still there at the deadline is still reported', () => {
+    // The half that must not be lost. Weakening the verdict to silence the
+    // false alarm would remove the only warning that a mutation harness is
+    // still holding a source file rewritten, which is the thing the gate exists
+    // to tell somebody about.
+    const outcome = endGroup(HELD.pid, { ...alive, readMembers: () => [HELD] });
+    assert.strictEqual(outcome, 'running',
+      'a group that never leaves the table is a survivor and has to be named as one');
+  });
+
+  test('a machine that will not say is still not called a survivor', () => {
+    const outcome = endGroup(HELD.pid, { ...alive, readMembers: () => null });
+    assert.strictEqual(outcome, 'unknown',
+      'an unreadable table is ignorance, and reporting it as an alarm is how every interrupt cries wolf');
+  });
+
+  test('the window is long enough to be worth having', () => {
+    // A constant that drifted back down to a few poll intervals would restore
+    // the original defect silently, because every test above would still pass.
+    assert.ok(REAP_GRACE_MS >= 40 * POLL_MS,
+      `a killed group gets ${REAP_GRACE_MS}ms to leave the table, which is not `
+      + `meaningfully longer than the ${POLL_MS}ms poll that used to stand in for it`);
+    assert.ok(REAP_GRACE_MS > END_GRACE_MS,
+      'finishing a kill takes longer than the courtesy that preceded it, not less');
   });
 });

@@ -25,7 +25,7 @@ Universal fields work with any tool that supports the Claude agent format. Rundo
 | `model` | string | Universal | No | The model for this agent, passed to the runtime unchanged. Rundock does not validate it: any identifier the configured runtime serves is valid, including one routed through a gateway or router (`my-gateway/claude-model-id`). On standard Claude Code that includes `opus`, `sonnet` and `haiku`. **Omitting the field and setting `inherit` are the same statement:** Rundock names no model and the runtime applies its own default. `inherit` simply says so out loud. Codex agents: leave the field out, and the ChatGPT account's default applies. Claude model names are invalid on Codex, and a model the account does not offer produces a guidance card. | `model: inherit` |
 | `runtime` | enum | Rundock-only | No | `codex` runs this agent on the official Codex CLI under a ChatGPT plan; any other value (or omitting the field) means Claude Code. Case-insensitive. Orchestrators and platform agents always run on Claude Code regardless of this field: delegation works through Claude Code's Agent tool, which Codex does not have. Codex agents use Codex's built-in sandbox rather than Rundock's permission prompts. | `runtime: codex` |
 | `tools` | array of strings | Universal | No | Allowed tools for this agent. Read by Claude Code from the agent file when it spawns the subprocess; Rundock does not forward this field. Not surfaced in the Rundock UI. | `tools: [Read, Write, Bash]` |
-| `displayName` | string | Rundock-only | No | Human-readable name shown in the org chart, sidebar, and conversation header. If omitted, Rundock title-cases the slug. Recommended: short, memorable, character-style names (Cos, Penn, Lea, Ted). Not functional labels. | `displayName: Cos` |
+| `displayName` | string | Rundock-only | No | Human-readable name shown in the org chart, sidebar, and conversation header. If omitted, Rundock title-cases the slug. Recommended: short, memorable, character-style names (Cos, Wren, Ivy, Ted). Not functional labels. | `displayName: Cos` |
 | `role` | string | Rundock-only | No | Short role title shown beneath the displayName on the org chart card. 2 to 4 words. If omitted, the title-cased slug is used. | `role: Chief of Staff` |
 | `type` | enum | Rundock-only | No | One of `orchestrator`, `specialist`, or `platform`. Determines org chart position. There should be exactly one orchestrator per workspace. Platform agents (like Doc) appear below a divider in the team list and are managed by Rundock, not by the user. | `type: orchestrator` |
 | `order` | number | Rundock-only | No | Numeric position on the org chart among siblings. Lower numbers appear first. Specialists are `1`, `2`, `3`, etc. Decimals (e.g. `1.1`, `1.2`) group sub-agents under a parent specialist. **`order: 0` does more than sort**: it marks the agent as the workspace default, which rewrites its id to `default` and lets `CLAUDE.md` fill in as its instructions when the file has no body of its own. Omitting `order` decides the agent's status, and that depends on `type` as well: see below. | `order: 2` |
@@ -74,9 +74,9 @@ Either form parses. The flow style is tried first, the block form is the fallbac
 
 ```yaml
 skills:
-  - linkedin-hook-generator
-  - voice-editor
-  - readwise-highlights
+  - draft-post
+  - edit-for-voice
+  - search-highlights
 ```
 
 Each entry is a skill slug as it appears in `.claude/skills/<slug>/` or `System/Playbooks/<slug>/`. Slugs are case-insensitive on the match, but write them lowercase to match the directory names. See [SKILLS.md](SKILLS.md) for the full skill assignment model.
@@ -99,10 +99,10 @@ Each entry is a complete sentence written as the user would phrase it, not as a 
 
 The markdown body, everything after the closing `---` of the frontmatter, is the agent's system prompt. Claude Code loads this verbatim when it spawns the agent.
 
-Write the body in the second person, addressing the agent as "you". This is what Claude Code's spawn loader expects, and it is what every working agent in this workspace uses. Examples:
+Write the body in the second person, addressing the agent as "you". This is what Claude Code's spawn loader expects, and it is what every working agent uses. Examples:
 
 ```markdown
-You are Cos, Liam's AI Chief of Staff. An operator who protects Liam's
+You are Cos, the team's Chief of Staff. An operator who protects the user's
 time, routes work to specialists, and keeps priorities visible.
 ```
 
@@ -126,16 +126,24 @@ Rundock injects several blocks of context at spawn time, so you should not dupli
 
 Focus the body on the agent's identity, voice, and unique instructions. Leave the team-shape and platform mechanics to Rundock.
 
-## Workspace modes: Knowledge vs Code
+### Where a handback goes in a multi-level team
+
+When a lead specialist delegates to one of its own reports, the report's handback goes to the agent that asked for the work:
+
+- **Finished (`COMPLETE`):** the lead takes the conversation back and waits for the next message, with the report's output in front of it.
+- **My part is done, more remains (`CONTINUE`):** the lead takes the conversation back and carries on its own pipeline, for example by delegating the next step to another of its reports.
+- **Out of scope (`RETURN`):** the request needs somebody outside the lead's team, so it goes straight to the orchestrator, which routes it.
+
+## Workspace modes: Notes vs Code
 
 Rundock has two workspace modes that change agent behaviour at the platform level. The mode is set per workspace, not per agent.
 
 | Mode | What it changes |
 |---|---|
-| **Knowledge mode** (default) | Restricts file writes and edits for executable file types (`.js`, `.py`, `.sh`, etc) so agents cannot accidentally write or modify code in a knowledge-work workspace. Tool permission cards are shown for most operations. |
-| **Code mode** | Removes the executable-file write restriction. Auto-approves common build and dev tools so agents can iterate on code without permission card interruptions. Used for software project workspaces. |
+| **Notes** (default) | Restricts file writes and edits for executable file types (`.js`, `.py`, `.sh`, etc) so agents cannot accidentally write or modify code in a knowledge-work workspace. Tool permission cards are shown for most operations. |
+| **Code** | Removes the executable-file write restriction. Auto-approves common build and dev tools so agents can iterate on code without permission card interruptions. Used for software project workspaces. |
 
-Mode is set in the workspace settings drawer in the browser, or by editing `.rundock/state.json` directly:
+Mode is set in Settings under Permissions, where it is the question "What are you working on?", or by editing `.rundock/state.json` directly. The stored values are `notes` and `code`; a workspace an earlier release stored as `knowledge` is read as Notes:
 
 ```json
 {
@@ -147,14 +155,16 @@ When a workspace is first opened, Rundock auto-detects the likely mode by lookin
 
 The mode affects every agent in the workspace, not just one. There is no per-agent override.
 
+Mode does not decide whether agents are kept inside the workspace. On macOS that is its own switch in the same pane, "Keep agents inside this workspace", and changing mode never moves it.
+
 ## Complete example
 
-Here is `lead-developer.md`, the engineering lead in this workspace, with rich frontmatter and a full body. Every field has been verified against the live agent file.
+Here is an example `lead-developer.md`, an engineering lead, with rich frontmatter and a full body.
 
 ```markdown
 ---
 name: lead-developer
-displayName: Dev
+displayName: Tess
 role: Lead Developer
 type: specialist
 order: 4
@@ -163,8 +173,8 @@ icon: ⌘
 colour: "#2ECC71"
 model: opus
 description: >
-  Lead Developer responsible for all software projects, Personal OS automations,
-  and vault infrastructure tooling. Spec-first, incremental, quality-gated engineering.
+  Lead Developer responsible for all software projects, workspace automations,
+  and internal tooling. Spec-first, incremental, quality-gated engineering.
 prompts:
   - "Build the feature described in this spec..."
   - "Review this code before I merge it"
@@ -172,11 +182,10 @@ prompts:
   - "Write a spec for..."
 ---
 
-# Dev: Lead Developer
+# Tess: Lead Developer
 
-You are Dev, Liam's Lead Developer. You own all engineering work: Rundock
-application code, Personal OS automation scripts, and vault infrastructure
-tooling.
+You are Tess, the team's Lead Developer. You own all engineering work:
+application code, automation scripts, and internal tooling.
 
 You report to Cos (chief-of-staff). You do not handle content creation,
 research, strategy, or product decisions. If a request falls outside
@@ -191,8 +200,8 @@ project registry, and communication style)
 Notes on this example:
 
 - `name: lead-developer` matches the filename `lead-developer.md`.
-- `order: 4` places Dev fourth on the chart, after the orchestrator (0) and three earlier specialists.
-- `reportsTo: chief-of-staff` puts Dev on the orchestrator's direct line.
+- `order: 4` places Tess fourth on the chart, after the orchestrator (0) and three earlier specialists.
+- `reportsTo: chief-of-staff` puts Tess on the orchestrator's direct line.
 - `colour` uses the UK spelling. The hex value is quoted here by preference, not necessity: the parser is a line regex, so the unquoted form works too and is what the shipped scaffold uses.
 - `description` uses YAML's folded-scalar syntax (`>`) so the description can span lines while parsing as a single string.
 - `prompts` are written as the user would phrase them, not as commands. Each one is a complete sentence the user can click to send.

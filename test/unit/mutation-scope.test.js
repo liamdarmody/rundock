@@ -6,13 +6,16 @@
 // time. NOT running one that was needed produces a green gate that never
 // looked, which is worse than the twenty minutes it saves and is exactly the
 // class of failure the session that motivated this spent hours chasing.
-const { test, describe } = require('node:test');
+const { test, describe, after } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
+const { execFileSync } = require('node:child_process');
 
 const {
-  harnessTargets, selectHarnesses, harnessFiles, RUN_EVERYTHING_WHEN_TOUCHED,
+  harnessTargets, selectHarnesses, harnessFiles, changedFiles, lastGatedTree,
+  RUN_EVERYTHING_WHEN_TOUCHED,
 } = require('../../scripts/mutation-scope.js');
 
 const H = (tool, targets) => ({ tool, targets });
@@ -158,14 +161,26 @@ describe('selection is conservative in every direction that is not proven safe',
       }
     }
     const shared = new Set();
+    // A HARNESS IS FULL OF SOURCE TEXT THAT IS NOT ITS OWN SOURCE. Every
+    // mutation a harness applies is a string holding the code it substitutes
+    // in, and those strings contain require() calls belonging to the file
+    // under mutation. Scanning a harness for require() therefore finds
+    // dependencies it does not have: mutate-host-wiring-guards.js names
+    // `./extension-record.js` inside two replacement snippets, and the real
+    // module is lib/packages/extension-record.js, which is not under
+    // test/tools at all. Requiring the path to resolve to a file is what
+    // separates a dependency from a quotation, and it costs nothing, because
+    // a shared module that does not exist cannot be shared.
+    const addIfReal = (rel) => {
+      const file = rel.endsWith('.js') ? rel : `${rel}.js`;
+      if (fs.existsSync(path.join(root, file))) shared.add(file);
+    };
     for (const src of sources) {
       for (const m of src.matchAll(/require\(\s*['"]([^'"]*tools\/[^'"]+)['"]\s*\)/g)) {
-        const rel = m[1].replace(/^.*?tools\//, 'test/tools/');
-        shared.add(rel.endsWith('.js') ? rel : `${rel}.js`);
+        addIfReal(m[1].replace(/^.*?tools\//, 'test/tools/'));
       }
       for (const m of src.matchAll(/require\(\s*['"]\.\/([^'"]+)['"]\s*\)/g)) {
-        const rel = `test/tools/${m[1]}`;
-        shared.add(rel.endsWith('.js') ? rel : `${rel}.js`);
+        addIfReal(`test/tools/${m[1]}`);
       }
     }
     assert.ok(sources.length > harnessFiles(tools).length,
@@ -200,7 +215,7 @@ describe('selection is conservative in every direction that is not proven safe',
 
 describe('the scoped run and the full run agree', () => {
   test('a change touching a real harness target selects that harness and no other by accident', () => {
-    // GS-4 in the small: the selection is checked against the real harnesses
+    // In the small: the selection is checked against the real harnesses
     // rather than fixtures, so a harness whose targets move is caught here
     // rather than by a green gate that skipped it.
     const tools = path.join(__dirname, '..', 'tools');
@@ -227,5 +242,183 @@ describe('the scoped run and the full run agree', () => {
     const plan = selectHarnesses(['CHANGELOG.md'], harnesses);
     assert.strictEqual(plan.run.length, 0, 'a changelog edit mutates no source');
     assert.strictEqual(plan.skipped.length, harnesses.length);
+  });
+});
+
+describe('the comparison base is the last tree a passing gate certified', () => {
+  // THE DEFECT THIS BLOCK PINS: the base used to be the merge base with
+  // origin/main, which on a long branch means everything since the divergence,
+  // forever, and that set contains package.json, a run-everything trigger.
+  // Sixteen gate runs and 3.4 hours of mutation testing on one branch, almost
+  // all of it re-proving what an earlier pass had already certified, because a
+  // three-file slice was measured against the whole branch. A gate record
+  // certifies a tree, so the changed set is measured against that tree when it
+  // is in this branch's history, and against the merge base in every case
+  // where the record cannot be trusted.
+  //
+  // A REAL REPOSITORY, NOT A STUB. The decision under test is "which git
+  // question gets asked", and a stubbed git can only prove the code asked the
+  // question the test expected, which is the defect restated. The fixture is a
+  // branch several commits deep past its origin/main, touching package.json on
+  // the way, which is exactly the shape the merge base got wrong.
+
+  const roots = [];
+  after(() => { for (const dir of roots) fs.rmSync(dir, { recursive: true, force: true }); });
+
+  function fixtureRepo() {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mutation-scope-base-'));
+    roots.push(dir);
+    const git = (args) => execFileSync('git', args, { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+    const write = (rel, content) => {
+      fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+      fs.writeFileSync(path.join(dir, rel), content);
+    };
+    git(['init', '--initial-branch=main']);
+    git(['config', 'user.email', 'scope-test@example.com']);
+    git(['config', 'user.name', 'Scope Test']);
+    git(['config', 'commit.gpgsign', 'false']);
+    // Ignored in the fixture as it is in the real repository: the record is a
+    // local certificate, never content, and a base that counted it as a
+    // changed file would invalidate itself by existing.
+    write('.gitignore', '.precommit-gate.json\n.mutation-scope.json\n');
+    write('package.json', '{ "name": "fixture" }\n');
+    write('scripts/permission-hook.js', 'hook v0\n');
+    write('lib/other.js', 'other v0\n');
+    git(['add', '-A']);
+    git(['commit', '-m', 'initial']);
+    // The trunk this branch diverged from, pinned where merge-base looks for
+    // it, so the fallback path is the real fallback path and not a git error.
+    git(['update-ref', 'refs/remotes/origin/main', git(['rev-parse', 'HEAD'])]);
+    git(['checkout', '-b', 'integration']);
+    // Several commits deep, one of them touching package.json: the branch
+    // shape on which the old base ran everything for every slice.
+    for (let i = 1; i <= 4; i += 1) {
+      write('lib/other.js', `other v${i}\n`);
+      if (i === 2) write('package.json', `{ "name": "fixture", "v": ${i} }\n`);
+      git(['add', '-A']);
+      git(['commit', '-m', `integration work ${i}`]);
+    }
+    return { dir, git, write };
+  }
+
+  function realHarnesses() {
+    const tools = path.join(__dirname, '..', 'tools');
+    return harnessFiles(tools).map(tool => ({
+      tool, targets: harnessTargets(fs.readFileSync(path.join(tools, tool), 'utf8')),
+    }));
+  }
+
+  test('a slice on a deep branch runs its one harness, not all of them', () => {
+    // The acceptance case, end to end against the REAL harnesses: the gate
+    // passed four commits deep, then two more commits and a staged edit
+    // touched only the file the boundary harness names. Against the merge
+    // base this change would contain package.json and run all of them;
+    // against the gated tree it contains one file and runs one.
+    const { dir, git, write } = fixtureRepo();
+    fs.writeFileSync(path.join(dir, '.precommit-gate.json'),
+      `${JSON.stringify({ tree: git(['rev-parse', 'HEAD^{tree}']), branch: 'integration' }, null, 2)}\n`);
+    for (let i = 1; i <= 2; i += 1) {
+      write('scripts/permission-hook.js', `hook v${i}\n`);
+      git(['add', '-A']);
+      git(['commit', '-m', `hook work ${i}`]);
+    }
+    write('scripts/permission-hook.js', 'hook v3\n');
+    git(['add', 'scripts/permission-hook.js']);
+
+    const changed = changedFiles(dir);
+    assert.deepStrictEqual(changed.files, ['scripts/permission-hook.js'],
+      'only what moved since the gated tree is in the changed set');
+    assert.match(changed.base, /last gated tree [0-9a-f]{12}/,
+      'the base is named, so a reader can tell narrowing from a fallback');
+
+    const harnesses = realHarnesses();
+    const plan = selectHarnesses(changed.files, harnesses);
+    assert.deepStrictEqual(plan.run, ['mutate-workspace-boundary-guards.js'],
+      'the one harness that names the file runs, and no other');
+    assert.strictEqual(plan.skipped.length, harnesses.length - 1,
+      'every other harness is skipped, each with its reason, none dropped');
+  });
+
+  test('a change reverted since the gated tree is not a change', () => {
+    // The base is a tree comparison, not a union of per-commit diffs: a file
+    // edited and put back holds exactly the content the gate certified, so a
+    // harness watching it has nothing new to prove.
+    const { dir, git, write } = fixtureRepo();
+    fs.writeFileSync(path.join(dir, '.precommit-gate.json'),
+      `${JSON.stringify({ tree: git(['rev-parse', 'HEAD^{tree}']), branch: 'integration' }, null, 2)}\n`);
+    write('lib/other.js', 'other edited\n');
+    git(['add', '-A']);
+    git(['commit', '-m', 'edit other']);
+    write('lib/other.js', 'other v4\n');
+    git(['add', '-A']);
+    git(['commit', '-m', 'put other back']);
+    const changed = changedFiles(dir);
+    assert.deepStrictEqual(changed.files, [],
+      'content identical to the certified tree is not in the changed set');
+  });
+
+  test('no record means the merge base, every harness, and the reason says so', () => {
+    // The fallback half of the acceptance: the branch is deep and touched
+    // package.json, so against the merge base everything runs, exactly as the
+    // tool behaved before this base existed. What is new is that the output
+    // now says WHICH base produced that verdict, because "package.json can
+    // change what any harness proves" was honest and useless for sixteen runs
+    // straight when nothing said what it was being compared to.
+    const { dir } = fixtureRepo();
+    const changed = changedFiles(dir);
+    assert.match(changed.base, /merge base with origin\/main/);
+    assert.match(changed.base, /no gate record has been written/);
+    assert.ok(changed.files.includes('package.json'),
+      'the whole branch is the changed set when there is no certificate');
+    const harnesses = realHarnesses();
+    const plan = selectHarnesses(changed.files, harnesses);
+    assert.deepStrictEqual(plan.run.sort(), harnesses.map(h => h.tool).sort(),
+      'with no record, every harness runs');
+    assert.deepStrictEqual(plan.skipped, []);
+    assert.match(plan.reason, /package\.json can change what any harness proves/);
+  });
+
+  test('a record whose tree is not in this branch\'s history falls back', () => {
+    // A certificate for a tree HEAD never carried says nothing about what this
+    // branch has changed: a record from another branch, or from a pass whose
+    // tree was never committed, must not narrow anything here.
+    const { dir, git, write } = fixtureRepo();
+    git(['checkout', '-b', 'side', 'main']);
+    write('lib/other.js', 'side work\n');
+    git(['add', '-A']);
+    git(['commit', '-m', 'side work']);
+    const foreignTree = git(['rev-parse', 'HEAD^{tree}']);
+    git(['checkout', 'integration']);
+    fs.writeFileSync(path.join(dir, '.precommit-gate.json'),
+      `${JSON.stringify({ tree: foreignTree, branch: 'side' }, null, 2)}\n`);
+    assert.match(lastGatedTree(dir).fallback, /not an ancestor of HEAD/);
+    const changed = changedFiles(dir);
+    assert.match(changed.base, /merge base with origin\/main/);
+    assert.ok(changed.files.includes('package.json'), 'the fallback set is the whole branch');
+  });
+
+  test('a record that cannot be parsed, names no tree, or names nothing resolvable falls back', () => {
+    // Each corrupt shape separately, because each is a different way for the
+    // certificate to be untrustworthy and each must land on the same side:
+    // compare against the merge base and run everything, never guess.
+    const { dir } = fixtureRepo();
+    const record = path.join(dir, '.precommit-gate.json');
+
+    fs.writeFileSync(record, 'not json at all\n');
+    assert.match(lastGatedTree(dir).fallback, /could not be parsed/);
+
+    fs.writeFileSync(record, `${JSON.stringify({ branch: 'integration' })}\n`);
+    assert.match(lastGatedTree(dir).fallback, /names no tree/);
+
+    fs.writeFileSync(record, `${JSON.stringify({ tree: '$(rm -rf /)' })}\n`);
+    assert.match(lastGatedTree(dir).fallback, /names no tree/,
+      'a string that is not a hash never reaches git');
+
+    fs.writeFileSync(record, `${JSON.stringify({ tree: 'deadbeef'.repeat(5) })}\n`);
+    assert.match(lastGatedTree(dir).fallback, /cannot be resolved/);
+
+    const changed = changedFiles(dir);
+    assert.match(changed.base, /merge base with origin\/main/,
+      'a corrupt record narrows nothing');
   });
 });

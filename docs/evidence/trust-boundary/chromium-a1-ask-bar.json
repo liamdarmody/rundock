@@ -1,0 +1,10 @@
+{
+ "afterOneClick": [
+  "burst 0"
+ ],
+ "earlyPressAfterBarMs": 69,
+ "afterArmedPress": [
+  "burst 0",
+  "burst 1"
+ ]
+}

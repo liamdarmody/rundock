@@ -29,7 +29,7 @@ describe('recordEvent', () => {
   test('writes the skinny schema to the monthly file', async () => {
     const dir = makeWorkspace({ agents: [] });
     srv.setWorkspace(dir);
-    srv.recordEvent('handback', { conv: 'c1', agent: 'sollo', runtime: 'claude', d: { kind: 'return', to: 'cos' } });
+    srv.recordEvent('handback', { conv: 'c1', agent: 'solo', runtime: 'claude', d: { kind: 'return', to: 'cos' } });
     const file = path.join(dir, '.rundock', 'state', `events-${monthStamp()}.jsonl`);
     // Wait for the EVENT, not the file: appendFile makes the file visible at
     // open, momentarily empty, before the write lands.
@@ -38,7 +38,7 @@ describe('recordEvent', () => {
     assert.ok(await waitFor(() => readEvts().some(e => e.e === 'handback')), 'event recorded in the monthly file');
     const ev = readEvts().find(e => e.e === 'handback');
     assert.strictEqual(ev.conv, 'c1');
-    assert.strictEqual(ev.agent, 'sollo');
+    assert.strictEqual(ev.agent, 'solo');
     assert.strictEqual(ev.runtime, 'claude');
     assert.deepStrictEqual(ev.d, { kind: 'return', to: 'cos' });
     assert.ok(!Number.isNaN(Date.parse(ev.ts)), 'ts parses as a date');

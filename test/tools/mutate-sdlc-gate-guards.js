@@ -3,7 +3,7 @@
 // Break each of the gate-hardening guards in turn and report which tests
 // notice.
 //
-// The rules this lane leaves behind are rules about the instruments
+// The rules this change leaves behind are rules about the instruments
 // themselves: a documented destructive step must carry its caution, a
 // source-walking extraction must be registered with a fail-loud property, an
 // unparsable mutation result must refuse rather than crash, and the
@@ -55,6 +55,17 @@ const ROLLBACK_HARNESS = { src: path.join(ROOT, 'test', 'tools', 'mutate-workspa
 // A registered enumeration whose guard the registry claims: deleting the
 // guard must redden the registry's anchor check, or the inventory is prose.
 const DOC_LINKS = { src: path.join(ROOT, 'test', 'unit', 'doc-links.test.js'), suite: 'test/unit/sdlc-gate-hardening.test.js' };
+// Personal data: the rules, the scanner's use of them, the capture scrubber
+// and both capture scripts, each watched by the suite that drives them with
+// specimens.
+const PERSONAL = { src: path.join(ROOT, 'scripts', 'personal-data.js'), suite: 'test/unit/personal-data.test.js' };
+const SCANNER_PD = { src: path.join(ROOT, 'scripts', 'check-internal-refs.js'), suite: 'test/unit/personal-data.test.js' };
+const SCRUB = { src: path.join(ROOT, 'scripts', 'capture-scrub.js'), suite: 'test/unit/personal-data.test.js' };
+const STREAM_CAPTURE = { src: path.join(ROOT, 'scripts', 'stream-truth', 'run.mjs'), suite: 'test/unit/personal-data.test.js' };
+const TRANSCRIPT_CAPTURE = { src: path.join(ROOT, 'scripts', 'transcript-truth', 'run.mjs'), suite: 'test/unit/personal-data.test.js' };
+// The pre-commit gate's record of each tree it passed, watched by the suite
+// that runs the real gate against a throwaway repository.
+const GATE = { src: path.join(ROOT, 'scripts', 'precommit-gate.js'), suite: 'test/unit/precommit-gate.test.js' };
 
 const MUTATIONS = [
   // ===== A DESTRUCTIVE STEP WITHOUT ITS CAUTION =====
@@ -111,6 +122,119 @@ const MUTATIONS = [
   [SCANNER, 'the amnesty is consulted before the rule fires',
     '      if (rule.amnesty && rule.amnesty.has(label)) continue;',
     '      if (rule.amnesty && false) continue;'],
+  // ===== NO PERSONAL DATA IN THE PUBLIC REPOSITORY =====
+  [PERSONAL, "an email address is a finding",
+    "  { label: 'email address (use a reserved example domain)', re: EMAIL, allowed: emailAllowed },\n",
+    ""],
+  [PERSONAL, "only reserved example domains pass as addresses",
+    "const RESERVED_DOMAIN = /(^|\\.)(example\\.(com|net|org)|example|test|invalid|localhost)$/i;",
+    "const RESERVED_DOMAIN = /./;"],
+  [PERSONAL, "only the exact upstream addresses pass by value",
+    "  return UPSTREAM.has(address.toLowerCase());",
+    "  return true;"],
+  [PERSONAL, "a home directory with a name in it is a finding",
+    "  { label: 'home directory with a name in it (use a placeholder)', re: HOME, allowed: (m, g1) => PLACEHOLDER_NAMES.has(g1) },\n",
+    ""],
+  [PERSONAL, "a real name is not a placeholder",
+    "  { label: 'home directory with a name in it (use a placeholder)', re: HOME, allowed: (m, g1) => PLACEHOLDER_NAMES.has(g1) },",
+    "  { label: 'home directory with a name in it (use a placeholder)', re: HOME, allowed: (m, g1) => g1.length < 6 },"],
+  [PERSONAL, "a project directory named after a real path is a finding",
+    "  { label: 'Claude Code project directory for a real path', re: PROJECTS, allowed: (m, name) => name !== undefined && PLACEHOLDER_NAMES.has(name) },\n",
+    ""],
+  [PERSONAL, "a per-user temporary directory is a finding",
+    "  { label: 'per-user temporary directory', re: MAC_TEMP },\n",
+    ""],
+  [PERSONAL, "an account or organisation identifier is a finding",
+    "  { label: 'account or organisation identifier', re: ID_KEY, allowed: (m, uuid) => ZERO_UUID.test(uuid) },\n",
+    ""],
+  [PERSONAL, "an identifier is caught inside a JSON string too",
+    "const QUOTE = `(?:\\\\\\\\?[\"'])?`;",
+    "const QUOTE = `[\"']?`;"],
+  [PERSONAL, "a token-shaped string is a finding",
+    "  { label: 'token-shaped secret', re: TOKEN },\n",
+    ""],
+  [PERSONAL, "a private key block is a token",
+    "  `-----BEGIN [A-Z ]*${'PRIVATE'} KEY-----`,\n",
+    ""],
+  [PERSONAL, "a session link is a finding",
+    "  { label: 'Claude Code session link', re: SESSION_LINK },\n",
+    ""],
+  [PERSONAL, "a finding never prints what it found",
+    "match: mask(m[0]),",
+    "match: m[0],"],
+  [SCANNER_PD, "every tracked file is checked for personal data, whatever the planning rules skip",
+    "    findings.push(...scanPersonal(file, text));\n",
+    "    if (!SKIP.some((re) => re.test(file))) findings.push(...scanPersonal(file, text));\n"],
+  [SCANNER_PD, "a commit message is checked for personal data",
+    "  findings.push(...scanPersonal('commit message', text, { skipHashComments: true }));\n",
+    ""],
+  [SCRUB, "a capture is scrubbed of emails",
+    "    (m) => (emailAllowed(m) ? m : PLACEHOLDERS.email));",
+    "    (m) => m);"],
+  [SCRUB, "a capture is scrubbed of the home directory",
+    "  if (values.home) out = replaceAll(replaceAll(out, values.home, PLACEHOLDERS.home), encodePath(values.home), ENCODED.home);\n",
+    ""],
+  [SCRUB, "a capture is scrubbed of the temporary directory",
+    "  for (const t of tmps) out = replaceAll(replaceAll(out, t, PLACEHOLDERS.tmp), encodePath(t), ENCODED.tmp);\n",
+    ""],
+  [SCRUB, "a capture is scrubbed of the username",
+    "    out = out.replace(new RegExp(escape(values.user), 'g'), PLACEHOLDERS.user);\n",
+    ""],
+  [SCRUB, "a capture is scrubbed of account identifiers",
+    "    (m, key) => `${key}${PLACEHOLDERS.uuid}`,",
+    "    (m) => m,"],
+  [SCRUB, "a capture is scrubbed of its session id",
+    "  for (const id of values.sessionIds || []) out = replaceAll(out, id, PLACEHOLDERS.session);\n",
+    ""],
+  [SCRUB, "a capture is scrubbed of the account email block",
+    "  out = out.replace(/The user's email address is [^\\n\\\\\"]*?unless the user explicitly asks\\./g, PLACEHOLDERS.emailBlock);\n",
+    ""],
+  [STREAM_CAPTURE, "the stream capture is scrubbed before it is written",
+    "  fs.writeFileSync(CAPTURE_FILE, scrubCapture(JSON.stringify(captured, null, 2) + '\\n'));",
+    "  fs.writeFileSync(CAPTURE_FILE, (JSON.stringify(captured, null, 2) + '\\n'));"],
+  [TRANSCRIPT_CAPTURE, "the transcript capture is scrubbed before it is written",
+    "  fs.writeFileSync(CAPTURE_FILE, scrubCapture(JSON.stringify({",
+    "  fs.writeFileSync(CAPTURE_FILE, (JSON.stringify({"],
+
+  // ===== NO CONNECTED SERVICE IN A CAPTURE =====
+  [PERSONAL, "a connected service named in a capture is a finding",
+    "  { label: 'connected service named in a capture (scrub it)', re: MCP_NAME, appliesTo: CAPTURE_FILE, allowed: (m) => MCP_PLACEHOLDER.test(m) },\n",
+    ""],
+  [PERSONAL, "a connected service's display name in a capture is a finding",
+    "  { label: 'connected service named in a capture (scrub it)', re: CONNECTOR_DISPLAY, appliesTo: CAPTURE_FILE },\n",
+    ""],
+  [PERSONAL, "only the scrubber's placeholder form passes in a capture",
+    "allowed: (m) => MCP_PLACEHOLDER.test(m) },",
+    "allowed: () => true },"],
+  [PERSONAL, "the connected-service rule applies only to captures",
+    "      if (rule.appliesTo && !rule.appliesTo.test(label)) continue;\n",
+    ""],
+  [SCRUB, "a capture is scrubbed of connected services",
+    "  return scrubConnectors(out);",
+    "  return out;"],
+  [SCRUB, "a connected service's instructions are removed from a capture",
+    "      s = s.split(b).join(`## ${name}\\n${REMOVED_INSTRUCTIONS}`);\n",
+    ""],
+  [SCRUB, "installed skills are scrubbed from a capture",
+    "      s = s.replace(new RegExp(`(^|\\\\n)- ${escape(n)}:[^\\\\n]*`, 'g'), `$1- ${k}: ${REMOVED_SKILL}`);\n",
+    ""],
+
+  // ===== EVERY GATED TREE KEEPS ITS OWN RECORD =====
+  [GATE, "a pass keeps its record under its tree's name too",
+    "      writeTreeRecord(record);\n",
+    ""],
+  [GATE, "the oldest kept records beyond the limit are removed",
+    "  for (const old of kept.slice(keep)) fs.rmSync(path.join(dir, old.name), { force: true });\n",
+    ""],
+  [GATE, "a kept record needs a full tree hash for its name",
+    "  if (!record || !/^[0-9a-f]{40}$/.test(String(record.tree))) {",
+    "  if (!record) {"],
+  [GATE, "pruning touches only files named for a tree",
+    "    .filter((name) => TREE_RECORD_NAME.test(name))",
+    "    .filter(() => true)"],
+  [GATE, "fifty records are kept",
+    "const TREE_RECORDS_KEPT = 50;",
+    "const TREE_RECORDS_KEPT = 5;"],
 ];
 
 const REPORTER = ['--test-reporter', 'spec'];
@@ -145,7 +269,8 @@ function redTests(suite) {
 }
 
 function run() {
-  const targets = [EVIDENCE, ENVELOPE, FOCUSED, TRUTH_HARNESS, SCANNER, ROLLBACK_HARNESS, DOC_LINKS];
+  const targets = [EVIDENCE, ENVELOPE, FOCUSED, TRUTH_HARNESS, SCANNER, ROLLBACK_HARNESS, DOC_LINKS,
+    PERSONAL, SCANNER_PD, SCRUB, STREAM_CAPTURE, TRANSCRIPT_CAPTURE, GATE];
   const session = beginMutationRun({ files: [...new Set(targets.map((target) => target.src))] });
   const originals = new Map();
   for (const target of targets) originals.set(target, session.original(target.src));

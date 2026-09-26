@@ -552,3 +552,261 @@ describe('a fault at any write boundary leaves the pre-apply workspace after rec
     });
   }
 });
+
+// ---- Item fingerprints on the receipt ----
+//
+// Each receipt entry that is in the workspace after the apply carries the
+// canonical digest of the bytes as written, so a later package update can
+// tell "the author changed it" from "the person edited it". Recomputed here
+// FROM DISK, never from the approval, so a fingerprint that described what
+// was approved rather than what landed would fail.
+const { routineFingerprints } = require('../../lib/packages/import-apply.js');
+
+const ROUTINE_AGENT = '---\nname: keeper\nroutines:\n  - name: Morning tidy\n    schedule: every day at 08:00\n    prompt: Tidy the notes.\n    enabled: true\n---\n\nKeep things.\n';
+
+function receiptOf(workspace, result) {
+  return JSON.parse(fs.readFileSync(path.join(workspace, result.receipt), 'utf8'));
+}
+
+describe('receipt fingerprints', () => {
+  test('written and unchanged entries of every kind carry the digest of what is on disk after the apply', () => {
+    const { workspace, sourceRoot, approval } = fixture();
+    // An identical skill already present lands as unchanged.
+    write(sourceRoot, '.claude/skills/same/SKILL.md', 'same');
+    write(workspace, '.claude/skills/same/SKILL.md', 'same');
+    const withSame = buildApproval(workspace, sourceRoot, {
+      'agent:scribe': 'add', 'skill:writer': 'overwrite', 'skill:parked': 'skip', 'skill:same': 'overwrite',
+    });
+    const result = applyImport(workspace, sourceRoot, withSame, { receipt: { now: '2026-09-23T10:00:00.000Z', run: 'fp1' } });
+    assert.strictEqual(result.status, 'ready');
+    const byId = new Map(receiptOf(workspace, result).items.map((i) => [i.id, i]));
+    for (const id of ['agent:scribe', 'skill:writer', 'skill:same']) {
+      const entry = byId.get(id);
+      assert.strictEqual(entry.fingerprint, digestPath(path.join(workspace, entry.destination)),
+        `${id} records the digest of the bytes it left on disk`);
+    }
+    assert.strictEqual(byId.get('skill:same').outcome, 'unchanged');
+    assert.ok(!('fingerprint' in byId.get('skill:parked')), 'a skipped entry wrote nothing, so it records no fingerprint');
+    assert.ok(approval, 'fixture approval built');
+  });
+
+  test("an agent's fingerprint covers its transformed bytes, provenance included, not the author's source", () => {
+    const { workspace, sourceRoot } = fixture();
+    const result = applyImport(workspace, sourceRoot, buildApproval(workspace, sourceRoot, { 'agent:scribe': 'add' }),
+      { receipt: { now: '2026-09-23T10:00:00.000Z', run: 'fp2' } });
+    const [entry] = receiptOf(workspace, result).items;
+    assert.notStrictEqual(entry.fingerprint, digestFile(Buffer.from(AGENT_TEXT)), 'the source bytes are not what landed');
+    assert.strictEqual(entry.fingerprint, digestFile(fs.readFileSync(path.join(workspace, '.claude/agents/scribe.md'))));
+  });
+
+  test('a blocked entry records no fingerprint', () => {
+    const workspace = makeTempDir('fp-blocked-ws-');
+    const sourceRoot = makeTempDir('fp-blocked-src-');
+    write(workspace, '.claude/agents/alpha.md', DEFAULT_AGENT_A);
+    write(sourceRoot, '.claude/agents/beta.md', DEFAULT_AGENT_B);
+    write(sourceRoot, '.claude/agents/scribe.md', AGENT_TEXT);
+    const result = applyImport(workspace, sourceRoot,
+      buildApproval(workspace, sourceRoot, { 'agent:beta': 'add', 'agent:scribe': 'add' }),
+      { receipt: { now: '2026-09-23T10:00:00.000Z', run: 'fp3' } });
+    const byId = new Map(receiptOf(workspace, result).items.map((i) => [i.id, i]));
+    assert.strictEqual(byId.get('agent:beta').outcome, 'blocked');
+    assert.ok(!('fingerprint' in byId.get('agent:beta')));
+    assert.ok(byId.get('agent:scribe').fingerprint);
+  });
+
+  test('each routine on an agent entry carries its own fingerprint', () => {
+    const workspace = makeTempDir('fp-routine-ws-');
+    const sourceRoot = makeTempDir('fp-routine-src-');
+    write(sourceRoot, '.claude/agents/keeper.md', ROUTINE_AGENT);
+    const result = applyImport(workspace, sourceRoot, buildApproval(workspace, sourceRoot, { 'agent:keeper': 'add' }),
+      { receipt: { now: '2026-09-23T10:00:00.000Z', run: 'fp4' } });
+    const [entry] = receiptOf(workspace, result).items;
+    assert.strictEqual(entry.routines.length, 1);
+    assert.match(entry.routines[0].fingerprint, /^sha256:[a-f0-9]{64}$/);
+    assert.strictEqual(entry.routines[0].name, 'Morning tidy', 'the disclosed fields are unchanged beside it');
+  });
+});
+
+describe('routineFingerprints', () => {
+  const block = (schedule) => `---\nname: keeper\nroutines:\n  - name: Morning tidy\n    schedule: ${schedule}\n    prompt: Tidy the notes.\n---\n`;
+  test("changes when the routine's schedule changes", () => {
+    assert.notStrictEqual(routineFingerprints(block('every day at 08:00'))[0], routineFingerprints(block('every day at 09:00'))[0]);
+  });
+  test("does not change when only the agent's body changes", () => {
+    assert.strictEqual(routineFingerprints(`${block('every day at 08:00')}\nOne body.\n`)[0],
+      routineFingerprints(`${block('every day at 08:00')}\nA different body.\n`)[0]);
+  });
+  test('never equals a file digest of the same text', () => {
+    const text = block('every day at 08:00');
+    assert.notStrictEqual(routineFingerprints(text)[0], digestFile(Buffer.from(text)));
+  });
+});
+
+// ---- What a later update needs from the receipt ----
+//
+// The authored fingerprint (routine state Rundock writes left out), the
+// transform an agent's bytes were written with, and the commit a link
+// install fetched. Recomputed from disk, never from the approval.
+const { withAdoption, withReportsTo } = require('../../lib/packages/import-apply.js');
+const { authoredDigest } = require('../../lib/packages/package-fingerprint.js');
+
+function approvalWithAgentTransform(workspace, sourceRoot, slug, field, leader) {
+  const approval = buildApproval(workspace, sourceRoot, { [`agent:${slug}`]: 'add' });
+  const item = approval.items[0];
+  const source = fs.readFileSync(path.join(sourceRoot, item.destination), 'utf8');
+  const shaped = field === 'adoptUnder' ? withAdoption(source, leader) : withReportsTo(source, leader);
+  item.approvedDigest = digestFile(Buffer.from(withProvenance(shaped, SOURCE_ID), 'utf8'));
+  item.agent = { plannedDefault: false, approvedDefault: false, [field]: leader };
+  return approval;
+}
+
+describe('receipt fields an update reads', () => {
+  test('written and unchanged entries carry the authored fingerprint of what is on disk; skipped ones carry none', () => {
+    const { workspace, sourceRoot } = fixture();
+    write(sourceRoot, '.claude/agents/keeper.md', ROUTINE_AGENT);
+    const approval = buildApproval(workspace, sourceRoot, {
+      'agent:keeper': 'add', 'agent:scribe': 'add', 'skill:writer': 'overwrite', 'skill:parked': 'skip',
+    });
+    const result = applyImport(workspace, sourceRoot, approval, { receipt: { now: '2026-09-24T10:00:00.000Z', run: 'au1' } });
+    const byId = new Map(receiptOf(workspace, result).items.map((i) => [i.id, i]));
+    for (const id of ['agent:keeper', 'agent:scribe']) {
+      const onDisk = fs.readFileSync(path.join(workspace, byId.get(id).destination));
+      assert.strictEqual(byId.get(id).authored, authoredDigest('agent', onDisk), `${id} records the authored digest of its bytes`);
+      assert.notStrictEqual(byId.get(id).authored, byId.get(id).fingerprint, 'authored is its own digest, not the file digest');
+    }
+    assert.strictEqual(byId.get('skill:writer').authored, byId.get('skill:writer').fingerprint);
+    assert.ok(!('authored' in byId.get('skill:parked')));
+  });
+
+  test('an agent already at its approved bytes records the authored digest of those bytes', () => {
+    const { workspace, sourceRoot } = fixture();
+    write(sourceRoot, '.claude/agents/keeper.md', ROUTINE_AGENT);
+    write(workspace, '.claude/agents/keeper.md', withProvenance(ROUTINE_AGENT, SOURCE_ID));
+    const approval = buildApproval(workspace, sourceRoot, { 'agent:keeper': 'overwrite', 'skill:writer': 'overwrite' });
+    const result = applyImport(workspace, sourceRoot, approval, { receipt: { now: '2026-09-24T10:00:00.000Z', run: 'au2' } });
+    const entry = receiptOf(workspace, result).items.find((i) => i.id === 'agent:keeper');
+    assert.strictEqual(entry.outcome, 'unchanged');
+    assert.strictEqual(entry.authored, authoredDigest('agent', fs.readFileSync(path.join(workspace, entry.destination))));
+    assert.notStrictEqual(entry.authored, entry.fingerprint);
+  });
+
+  test('an adopted or re-pointed agent records the transform its bytes were written with', () => {
+    for (const [field, text] of [
+      ['adoptUnder', '---\nname: chief\ntype: orchestrator\norder: 0\n---\n\nLead.\n'],
+      ['attachTo', '---\nname: helper\nreportsTo: chief\n---\n\nHelp.\n'],
+    ]) {
+      const workspace = makeTempDir('tr-ws-');
+      const sourceRoot = makeTempDir('tr-src-');
+      write(sourceRoot, '.claude/agents/pkg.md', text);
+      const approval = approvalWithAgentTransform(workspace, sourceRoot, 'pkg', field, 'boss');
+      const result = applyImport(workspace, sourceRoot, approval, { receipt: { now: '2026-09-24T10:00:00.000Z', run: `tr-${field}` } });
+      assert.strictEqual(result.status, 'ready');
+      const [entry] = receiptOf(workspace, result).items;
+      assert.deepStrictEqual(entry.transform, { [field]: 'boss' });
+    }
+  });
+
+  test('a plain add records no transform', () => {
+    const { workspace, sourceRoot } = fixture();
+    const result = applyImport(workspace, sourceRoot, buildApproval(workspace, sourceRoot, { 'agent:scribe': 'add' }),
+      { receipt: { now: '2026-09-24T10:00:00.000Z', run: 'tr0' } });
+    assert.ok(!('transform' in receiptOf(workspace, result).items[0]));
+  });
+
+  test('the commit an install fetched is recorded on the receipt source, and only a full commit id', () => {
+    const commit = 'a'.repeat(40);
+    for (const [given, expected] of [[commit, commit], ['abc', undefined], [undefined, undefined]]) {
+      const { workspace, sourceRoot } = fixture();
+      const result = applyImport(workspace, sourceRoot, buildApproval(workspace, sourceRoot, { 'agent:scribe': 'add' }),
+        { receipt: { now: '2026-09-24T10:00:00.000Z', run: 'cm', commit: given } });
+      const { source } = receiptOf(workspace, result);
+      assert.strictEqual(source.commit, expected);
+      assert.strictEqual(source.id, SOURCE_ID);
+    }
+  });
+});
+
+// ---- Routine switches carried onto an updated agent ----
+const { withRoutineState } = require('../../lib/packages/routine-carry.js');
+
+describe('an update carries the person\'s routine switches onto the author\'s bytes', () => {
+  const STATE = [{ name: 'Morning tidy', occurrence: 0, fields: { enabled: 'false', runOn: 'this-computer' } }];
+
+  function carriedApproval(workspace, sourceRoot) {
+    const approval = buildApproval(workspace, sourceRoot, { 'agent:keeper': 'add' });
+    const item = approval.items[0];
+    const shaped = withRoutineState(withProvenance(ROUTINE_AGENT, SOURCE_ID), STATE);
+    item.approvedDigest = digestFile(Buffer.from(shaped, 'utf8'));
+    item.agent = { ...item.agent, routineState: STATE };
+    return { approval, shaped };
+  }
+
+  test('the bytes written carry the switches and hash to the approved digest', () => {
+    const workspace = makeTempDir('carry-ws-');
+    const sourceRoot = makeTempDir('carry-src-');
+    write(sourceRoot, '.claude/agents/keeper.md', ROUTINE_AGENT);
+    const { approval, shaped } = carriedApproval(workspace, sourceRoot);
+    const result = applyImport(workspace, sourceRoot, approval);
+    assert.strictEqual(result.status, 'ready');
+    assert.strictEqual(fs.readFileSync(path.join(workspace, '.claude/agents/keeper.md'), 'utf8'), shaped);
+    assert.match(shaped, /enabled: false/);
+  });
+
+  test('bytes that would not carry the switches are never written', () => {
+    const workspace = makeTempDir('carry-ws-');
+    const sourceRoot = makeTempDir('carry-src-');
+    write(sourceRoot, '.claude/agents/keeper.md', ROUTINE_AGENT);
+    const { approval } = carriedApproval(workspace, sourceRoot);
+    approval.items[0].agent.routineState = [];
+    assert.throws(() => applyImport(workspace, sourceRoot, approval), /do not match the approved digest/);
+    assert.strictEqual(fs.existsSync(path.join(workspace, '.claude/agents/keeper.md')), false);
+  });
+});
+
+// ---- An update lands everything in one transaction ----
+//
+// What a package update adds beside the approved items (the extension's
+// files and record, the review copies, the backups) is handed to applyImport
+// as `extra`, computed from the evaluation, and written in the same
+// transaction as the items and the receipt.
+describe('extra writes ride the one transaction', () => {
+  const extra = (workspace) => (evaluation) => ({
+    writes: [{ path: path.join(workspace, '.rundock', 'package-updates', 'note.txt'), content: Buffer.from(`${evaluation.writes.length} written`) }],
+    replaceDirs: [{ path: path.join(workspace, '.rundock', 'extensions', 'view'), files: [{ rel: 'index.html', content: Buffer.from('<main>v2</main>') }] }],
+  });
+
+  test('they land beside the items, and the receipt records the update', () => {
+    const { workspace, sourceRoot, approval } = fixture();
+    const result = applyImport(workspace, sourceRoot, approval, {
+      extra: extra(workspace), receipt: { now: '2026-09-24T10:00:00.000Z', run: 'up1', update: { from: 'v1.0.0', to: 'v2.0.0' } },
+    });
+    assert.strictEqual(result.status, 'ready');
+    assert.strictEqual(read(workspace, '.rundock/package-updates/note.txt'), '2 written');
+    assert.strictEqual(read(workspace, '.rundock/extensions/view/index.html'), '<main>v2</main>');
+    assert.deepStrictEqual(receiptOf(workspace, result).update, { from: 'v1.0.0', to: 'v2.0.0' });
+  });
+
+  test('a fault at any step leaves the items and the extras as they were', () => {
+    const probe = fixture();
+    let steps = 0;
+    applyImport(probe.workspace, probe.sourceRoot, probe.approval, { extra: extra(probe.workspace), afterStep: () => { steps += 1; } });
+    for (let boundary = 1; boundary <= steps; boundary++) {
+      const { workspace, sourceRoot, approval, before } = fixture();
+      let completed = 0;
+      assert.throws(() => applyImport(workspace, sourceRoot, approval, {
+        extra: extra(workspace),
+        afterStep: () => { completed += 1; if (completed === boundary) throw new Error('injected fault'); },
+      }), /injected fault/);
+      assert.deepStrictEqual(tree(workspace), before, `after step ${boundary} of ${steps}`);
+    }
+  });
+
+  test('a refused evaluation asks for no extras and writes none', () => {
+    const { workspace, sourceRoot, approval } = fixture();
+    write(workspace, '.claude/skills/writer/SKILL.md', 'changed since review');
+    let asked = 0;
+    const result = applyImport(workspace, sourceRoot, approval, { extra: () => { asked += 1; return { writes: [], replaceDirs: [] }; } });
+    assert.strictEqual(result.status, 'stale');
+    assert.strictEqual(asked, 0);
+  });
+});

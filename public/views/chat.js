@@ -22,10 +22,7 @@
 // way: esc, formatMd, formatTimeAgo, stripRundockMarkers, getConvoState,
 // persistConversation, renderConvoList, updateUnreadBadge, updateWorkingBadge,
 // tryMessageAnchor, and the classic-script globals RundockPermissions,
-// RundockConversationState and RundockChatMarkup. Also serverPlatform and
-// workspaceMode, which nameTheFolderHint reads: whether the sentence about the
-// operating system applies is a fact about the host and the mode, and both
-// live in app.js beside the rest of the workspace's state.
+// RundockConversationState and RundockChatMarkup.
 //
 // buildDelegationDivider moved the other way, from app.js into this module,
 // once the markup came out of it: it renders a thread element, and both of its
@@ -575,6 +572,15 @@ function renderSessionHistory(d) {
 // it, so a reload rebuilds rather than forgets.
 const alwaysAllowedTools = new Set();
 
+// Requests that have ended, by id, and the queued copies of background
+// requests that ended before their conversation was opened. View-local for
+// the reason alwaysAllowedTools is: nothing outside the cards reads them.
+// The first is what makes a late copy of a card render as over instead of
+// answerable; the second is what lets a card that timed out off screen be
+// seen as timed out when its conversation is opened, rather than vanishing.
+const endedPermissions = new Map();
+const endedQueuedPermissions = new Map();
+
 // Replace the cached answers wholesale. The server always sends the full list,
 // so there is no merge to get wrong: what the workspace says is what holds.
 function setStandingToolAllows(keys) {
@@ -597,6 +603,13 @@ function toolAllowKey(toolName, input) { return RundockPermissions.toolAllowKey(
 function handlePermissionRequest(d, convoId) {
   const req = d.request || {};
   const requestId = d.request_id || '';
+  // A copy of a request that has already ended (a replay, or a buffered copy
+  // delivered after the news that it was over) is never queued or answered.
+  // On screen it renders as ended, so the conversation still shows it asked.
+  if (RundockPermissions.permissionEnded(endedPermissions, requestId)) {
+    if (activeConversation?.id === convoId) renderPermissionCard(d, convoId);
+    return;
+  }
   const toolName = req.tool_name || 'Unknown';
   const input = req.input || {};
   const risk = classifyRisk(toolName, input);
@@ -649,39 +662,24 @@ function handlePermissionRequest(d, convoId) {
 // every day is a fact about the team, not thirty separate approvals, and this
 // is the only place in the product where a person is standing in front of that
 // problem while it happens.
-// THE SECOND SENTENCE IS FOR KNOWLEDGE MODE ON macOS, AND NOWHERE ELSE.
+// ONE SENTENCE, ON EVERY PLATFORM AND IN EVERY MODE.
 //
-// It was shown on every one of these cards, which meant a reader in Code mode
-// was told "Code mode is where those end" while standing in Code mode holding a
-// card. The sentence is true and it is about a DIFFERENT card (the operating
-// system's refusal, which Code mode does end), but nothing on the card said so,
-// and a person reading it concludes the mode switch is broken rather than that
-// they are looking at the other kind of card.
-//
-// In Code mode this card IS the whole boundary: the sandbox is off, so nothing
-// underneath is going to catch this, and naming the folder is not merely the
-// better remedy, it is the only one. Saying less is saying it accurately.
-//
-// Gated exactly as workingFoldersSandboxNote in settings.js is, deliberately:
-// the two sentences describe one behaviour and must appear under one condition,
-// or the product contradicts itself across two surfaces.
+// A second sentence used to follow on macOS, saying the operating system could
+// still refuse a terminal write here and that switching mode ended it. Both
+// halves stopped being true: a folder named here now reaches the sandbox's
+// write list as well as this check, and the sandbox is its own switch rather
+// than a side effect of mode. The remedy below is the whole answer.
 function nameTheFolderHint() {
-  const base = 'If your agents work here often, name the folder in Settings under Workspace and this check stops asking about it.';
-  const isMac = typeof serverPlatform === 'string' && serverPlatform === 'darwin';
-  const isKnowledge = workspaceMode !== 'code';
-  if (!isMac || !isKnowledge) return base;
-  return base + ' In Knowledge mode on macOS a terminal write out here can still be refused by the operating system and come back as a card; Code mode is where those end.';
+  return 'If your agents work here often, name the folder in Settings under Permissions and this check stops asking about it.';
 }
 
-// The card the reported user meets in the DEFAULT mode on macOS. The crossing
-// was established by the operating system, not by a path this product read,
-// so there is nothing here for a named folder to match and naming one changes
-// nothing about it. Saying so is the difference between a reader concluding
-// the setting is broken and a reader knowing which switch actually ends this.
-const SANDBOX_RETRY_HINT = 'This one is the operating system refusing a write outside your workspace, which Knowledge mode switches on. '
-  + 'Naming a working folder does not change it. Code mode is where these end.';
+// The card a person meets when the operating system, not a path this product
+// read, refused a write. There is no folder here to name, so the card says
+// which switch is refusing it and where that switch lives.
+const SANDBOX_RETRY_HINT = 'This one is the operating system refusing a write outside your workspace, '
+  + 'because Keep agents inside this workspace is on in Settings under Permissions.';
 
-function renderPermissionCard(d, convoId) {
+function renderPermissionCard(d, convoId, host) {
   const req = d.request || {};
   const requestId = d.request_id || '';
   // A WS reconnect re-sends control_request for every pending request, but the
@@ -692,6 +690,22 @@ function renderPermissionCard(d, convoId) {
   const input = req.input || {};
   const risk = classifyRisk(toolName, input);
   let { summary, context, detail } = describeToolRequest(toolName, input);
+  // ENDED BEFORE IT WAS SHOWN. Every road to a card passes through here: a
+  // live request, one queued for a background conversation, one replayed on
+  // reconnect. A request that timed out, was answered, or lost its asker is
+  // drawn settled, saying why, with nothing to click.
+  const ended = RundockPermissions.permissionEnded(endedPermissions, requestId);
+  if (ended) {
+    const copy = RundockPermissions.endedPermissionCopy(ended.reason, ended.allow);
+    const m0 = host || document.getElementById('messages');
+    if (!m0) return;
+    const done = document.createElement('div');
+    done.className = 'msg msg-permission';
+    done.id = 'perm-' + requestId;
+    m0.appendChild(done);
+    resolvePermissionCard(requestId, copy.allowed, copy.label, false, [summary, copy.why].filter(Boolean).join('. '));
+    return;
+  }
   // The command, kept beside a crossing path rather than replaced by it.
   let commandDetail = '';
   const key = toolAllowKey(toolName, input);
@@ -810,15 +824,23 @@ function renderPermissionCard(d, convoId) {
       //
       // This branch used to overwrite `detail` with the resolved path, and for
       // a Bash request `detail` WAS the command, so the card asked a person to
-      // approve a shell command while showing them only a folder. The owner met
-      // exactly that: a card naming the folder above his workspace, for a
-      // command he could not see, with no way to tell whether it made sense. It
+      // approve a shell command while showing them only a folder. A user met
+      // exactly that: a card naming the folder above their workspace, for a
+      // command they could not see, with no way to tell whether it made sense. It
       // did not, and answering took a transcript and twenty minutes.
       //
       // A path answers "where is this going". For a command, the only thing
       // that makes that judgeable is "what is it doing". Both are shown.
-      if (toolName === 'Bash' && detail) commandDetail = detail;
-      detail = req.resolved_path || detail;
+      //
+      // ONLY WHEN A PATH TAKES THE COMMAND'S PLACE. A sandbox retry carries no
+      // path, so the command stays the detail, and keeping a second copy
+      // beside it drew the same command twice on one card. That read as two
+      // requests folded into one, with nothing saying which one an answer
+      // would settle.
+      if (req.resolved_path) {
+        if (toolName === 'Bash' && detail) commandDetail = detail;
+        detail = req.resolved_path;
+      }
       context = grantable
         ? 'Outside-workspace access needs your approval. "Always allow this folder" remembers it for this workspace only.'
         : 'Outside-workspace access needs your approval. This one is not remembered: approving it approves this request only.';
@@ -845,9 +867,8 @@ function renderPermissionCard(d, convoId) {
     // quietly does nothing.
     // ONLY WHERE A PATH WAS ACTUALLY RECOGNISED. The sandbox-retry card carries
     // no path at all: the operating system established the crossing, not a
-    // target the hook could read. Naming a folder cannot answer that card, and
-    // in Knowledge mode on macOS it cannot answer it even in principle, because
-    // the OS write block is unchanged by naming. So a reader who HAS named the
+    // target the hook could read. Naming a folder cannot answer that card,
+    // because there is no one folder it is about. So a reader who HAS named the
     // folder would meet a card telling them to name it, which is the same
     // mistake the runtime-home branch above exists to avoid.
     else if (crossings.length > 0 || req.resolved_path) context = `${context} ${nameTheFolderHint()}`;
@@ -867,7 +888,8 @@ function renderPermissionCard(d, convoId) {
     high: '<svg class="permission-icon" width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 1L1 4.5V8c0 3.5 3 6.5 7 7.5 4-1 7-4 7-7.5V4.5L8 1z" stroke="currentColor" stroke-width="1.5" fill="none"/><path d="M8 5v3.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="8" cy="10.75" r="0.75" fill="currentColor"/></svg>'
   };
 
-  const m = document.getElementById('messages');
+  const m = host || document.getElementById('messages');
+  if (!m) return;
   const card = document.createElement('div');
   card.className = 'msg msg-permission';
   card.id = 'perm-' + requestId;
@@ -892,8 +914,19 @@ function renderPermissionCard(d, convoId) {
   // for rather than a live hole being closed. It is written that way because
   // the next person to change where an id comes from should not also have to
   // notice that the escaper here was chosen for a value that no longer arrives.
+  // WHO IS ASKING, for a card that is not inside the conversation that
+  // asked. A routine's card names the routine and the agent that raised it;
+  // a card nothing could be matched to says so, rather than implying it
+  // belongs anywhere.
+  const owner = RundockPermissions.permissionOwner(d);
+  const originHtml = owner.kind === 'routine'
+    ? `<div class="permission-origin"><span>${esc(owner.run.routine || 'A routine')}, run by ${esc(agentDisplayName(owner.run.agent))}</span></div>`
+    : (owner.kind === 'unattributed'
+      ? `<div class="permission-origin unattributed"><span>Unattributed: no conversation or routine could be matched to this request</span></div>`
+      : '');
   card.innerHTML = `
     <div class="permission-card risk-${renderRisk}">
+      ${originHtml}
       <div class="permission-header">
         ${icons[renderRisk]}
         <span class="permission-summary">${esc(summary)}</span>
@@ -925,6 +958,13 @@ function renderPermissionCard(d, convoId) {
       respondPermission(id, action !== 'deny', action === 'always', action === 'allow-folder');
     });
   });
+
+  // A card outside the thread (the approvals dock) has no thread position to
+  // take and no thinking indicator to pause.
+  if (host) {
+    host.appendChild(card);
+    return;
+  }
 
   // Pause the thinking indicator while waiting for user decision
   const t = document.getElementById('thinking-indicator');
@@ -967,15 +1007,114 @@ function renderPermissionCard(d, convoId) {
 function renderPendingPermissionCards(convoId) {
   if (activeConversation?.id !== convoId) return;
   if (!document.getElementById('messages')) return;
+  // Requests that ended while this conversation was in the background are
+  // shown once, as ended, so the thread says it asked and why nothing came of
+  // it. Once drawn they are dropped, the way an answered card is not redrawn
+  // when a conversation is reopened.
+  const ended = endedQueuedPermissions.get(convoId);
+  if (ended) {
+    endedQueuedPermissions.delete(convoId);
+    for (const d of ended.values()) renderPermissionCard(d, convoId);
+  }
   for (const d of RundockPermissions.pendingPermissionsFor(pendingPermissionsByConvo, convoId)) {
     if (document.getElementById('perm-' + (d.request_id || ''))) continue;
     renderPermissionCard(d, convoId);
   }
 }
 
+// ── The approvals dock ─────────────────────────────────────────────────────
+// PROVISIONAL SURFACE. Requests that belong to no conversation (a routine's,
+// or one nothing could be matched to) are shown here, over whatever screen is
+// open, and never inside a chat. The dock is the place those cards live and
+// the notice that reaches a person wherever they are. It is one container, so
+// moving these cards somewhere else later is a change of host, not of card.
+function approvalsDock() {
+  return document.getElementById('approvals-dock');
+}
+function approvalsDockList() {
+  const dock = approvalsDock();
+  return dock ? dock.querySelector('.approvals-dock-list') : null;
+}
+// Shown while it holds anything, with a count of what still waits.
+function updateApprovalsDock() {
+  const dock = approvalsDock();
+  const list = approvalsDockList();
+  if (!dock || !list) return;
+  const waiting = list.querySelectorAll('[data-perm-action="allow"]').length;
+  dock.hidden = list.children.length === 0;
+  const count = dock.querySelector('.approvals-dock-count');
+  if (count) count.textContent = waiting === 1 ? '1 waiting' : `${waiting} waiting`;
+}
+
+// A request that names no conversation. Never placed in the conversation on
+// screen: that fallback is the misattribution this replaces.
+function handleOwnerlessPermissionRequest(d) {
+  const req = d.request || {};
+  const requestId = d.request_id || '';
+  const list = approvalsDockList();
+  if (RundockPermissions.permissionEnded(endedPermissions, requestId)) return;
+  const toolName = req.tool_name || 'Unknown';
+  const input = req.input || {};
+  const decision = (req.boundary || req.answer_file === true)
+    ? { action: 'card' }
+    : RundockPermissions.decidePermission(classifyRisk(toolName, input), toolAllowKey(toolName, input), alwaysAllowedTools);
+  if (decision && decision.action === 'allow') {
+    if (ws) ws.send(JSON.stringify({ type: 'permission_response', requestId, conversationId: '', allow: true }));
+    return;
+  }
+  if (!list) return;
+  renderPermissionCard(d, '', list);
+  updateApprovalsDock();
+}
+
+// A request is over: it timed out, was answered here or in another window,
+// its conversation was stopped, or the process that asked went away. Every
+// copy of its card settles, whichever road it arrived by, and a copy still
+// queued for a background conversation is kept to be shown as ended.
+function endPermissionRequest(requestId, reason, allow) {
+  if (!requestId) return;
+  // Already known to be over: nothing new to say. The one exception is a
+  // click the server says came too late, which the card must then admit.
+  if (RundockPermissions.permissionEnded(endedPermissions, requestId) && reason !== 'not-pending') return;
+  const queued = RundockPermissions.findPendingPermission(pendingPermissionsByConvo, requestId);
+  // Answered in THIS window: the card already says what was chosen, and the
+  // broadcast that follows every answer must not relabel it as another
+  // window's. It is still recorded as ended, so a late copy cannot revive it.
+  const answeredHere = reason === 'answered' && !pendingPermissions.has(requestId) && !queued;
+  RundockPermissions.markPermissionEnded(endedPermissions, requestId, reason, allow);
+  const copy = RundockPermissions.endedPermissionCopy(reason, allow);
+  if (!answeredHere) resolvePermissionCard(requestId, copy.allowed, copy.label, false);
+  pendingPermissions.delete(requestId);
+  const convoId = RundockPermissions.removePendingPermission(pendingPermissionsByConvo, requestId);
+  if (queued && convoId) {
+    let m = endedQueuedPermissions.get(convoId);
+    if (!m) { m = new Map(); endedQueuedPermissions.set(convoId, m); }
+    m.set(requestId, queued.payload);
+  }
+  // L4: a background card that ended must clear its own contribution to the
+  // unread badge. Only once the conversation has no other pending card, and
+  // only the permission reason so a co-occurring unread message survives.
+  if (convoId && RundockPermissions.pendingPermissionsFor(pendingPermissionsByConvo, convoId).length === 0) {
+    unread.resolvePermission(convoId);
+    updateUnreadBadge();
+    renderConvoList();
+  }
+  const t = document.getElementById('thinking-indicator');
+  if (t) t.style.display = '';
+}
+
+// After a reconnect the server names every request still pending. Anything
+// this window holds that is not named ended while it was away.
+function reconcilePendingPermissions(pendingIds) {
+  const held = [...pendingPermissions.keys()];
+  for (const entry of pendingPermissionsByConvo) held.push(...entry[1].keys());
+  for (const id of RundockPermissions.staleRequestIds(held, pendingIds)) endPermissionRequest(id, 'ended');
+}
+
 function respondPermission(requestId, allow, always, allowFolder) {
   const pending = pendingPermissions.get(requestId);
   if (!pending || !ws) return;
+  if (RundockPermissions.permissionEnded(endedPermissions, requestId)) return;
   pendingPermissions.delete(requestId);
   // Answered: the queued copy (if this card was rendered from the
   // background store) must never render again.
@@ -1016,11 +1155,22 @@ function respondPermission(requestId, allow, always, allowFolder) {
 // keepSummary decides whether the card's own summary text is carried into the
 // resolved state. The user-answered path keeps it so the thread still reads as
 // a record of what was approved; the timeout path never showed it.
-function resolvePermissionCard(requestId, allowed, label, keepSummary) {
+function resolvePermissionCard(requestId, allowed, label, keepSummary, text) {
   const card = document.getElementById('perm-' + requestId);
   if (!card) return;
-  const summary = keepSummary ? (card.querySelector('.permission-summary')?.textContent || '') : '';
+  // A card in the approvals dock keeps its summary whichever way it settled:
+  // there is no thread around it to say what it was about. `text`, when
+  // given, is what the settled card says instead: a card drawn already over
+  // has no live summary to read back, so it is told what it was.
+  const inDock = !!card.closest('#approvals-dock');
+  const summary = typeof text === 'string' ? text
+    : ((keepSummary || inDock) ? (card.querySelector('.permission-summary')?.textContent || '') : '');
   card.innerHTML = RundockChatMarkup.permissionResolvedHtml(allowed, label, summary ? esc(summary) : '');
+  if (inDock) {
+    // Settled cards leave the dock after a moment, long enough to read.
+    setTimeout(() => { card.remove(); updateApprovalsDock(); }, 4000);
+    updateApprovalsDock();
+  }
 }
 
 function formatToolName(name) {
@@ -1090,7 +1240,8 @@ return {
   createHistoryDivider, renderSessionHistory, classifyRisk,
   describeToolRequest, toolAllowKey, handlePermissionRequest, setStandingToolAllows,
   renderPermissionCard, renderPendingPermissionCards, respondPermission,
-  resolvePermissionCard,
+  resolvePermissionCard, handleOwnerlessPermissionRequest, endPermissionRequest,
+  reconcilePendingPermissions,
   formatToolName, formatToolShort, buildActivitySummary, scrollBottom,
 };
 }));

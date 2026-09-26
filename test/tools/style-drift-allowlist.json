@@ -97,21 +97,21 @@
     }
   },
   "public/styles/views/chat.css": {
-    "why": "Permission and status cards. Every red became --danger or a color-mix tint of it, the bubble radius became a named token, and the pills and the error card joined the scale. What remains is accent, success, working and attention tints, one shadow black, one dark-on-bright-fill text colour, and one transition duration. The dark text colour sits on a BRIGHT status fill and is correct in both themes; tokenising it would make it light-on-light in light mode. Tints are a token re-typed as raw channels, waiting on a decision about how a tint of a token is written, since color-mix and relative colour both change the computed value.",
+    "why": "Permission and status cards. Every red became --danger or a color-mix tint of it, the bubble radius became a named token, and the pills and the error card joined the scale. What remains is accent, success, working and attention tints, one shadow black, one dark-on-bright-fill text colour, and one transition duration. The dark text colour sits on a BRIGHT status fill and is correct in both themes; tokenising it would make it light-on-light in light mode. Tints are a token re-typed as raw channels, waiting on a decision about how a tint of a token is written, since color-mix and relative colour both change the computed value. The light permission card's own colour (#E8E3DB) is a one-surface value from the Rundock UI design review (BUILD-SPEC 3.5): darker than the white code block inside it (1.28:1 of separation) and not a surface anywhere else, so it is not a token. The send button's glow is --accent-action's channels, the same tint pattern as the rest of this file.",
     "allow": {
       "#1a1a1a": 1,
-      "rgba(107,198,126,0.12)": 3,
+      "rgba(107,198,126,0.12)": 2,
       "rgba(107,198,126,0.22)": 1,
       "rgba(0,0,0,0.06)": 1,
       "rgba(232,122,90,0.15)": 1,
       "rgba(232,168,76,0.08)": 1,
       "rgba(122,162,232,0.07)": 1,
       "rgba(122,162,232,0.35)": 1,
-      "rgba(232,122,90,0.12)": 1,
       "rgba(107,198,126,0.06)": 1,
-      "rgba(232,122,90,0.3)": 1,
-      "rgba(232,122,90,0.4)": 1,
-      "0.25s": 1
+      "0.25s": 1,
+      "#E8E3DB": 1,
+      "rgba(193,87,41,0.3)": 1,
+      "rgba(193,87,41,0.4)": 1
     }
   },
   "public/styles/views/editor.css": {
@@ -156,12 +156,14 @@
     }
   },
   "public/styles/views/settings.css": {
-    "why": "Three literals predate this entry: the mode-toggle's 10px outer radius is the outer half of a concentric pair (inner token radius plus padding, documented in-file), and the two black alpha shadows rgba(0,0,0,0.08) and rgba(0,0,0,0.18) are one-off elevation tints with no shadow token yet. New with the Packages section: the install spinner's 0.8s revolution period, a continuous rotation rather than a UI transition, sitting above the transition duration scale.",
+    "why": "Three literals predate this entry: the mode-toggle's 10px outer radius is the outer half of a concentric pair (inner token radius plus padding, documented in-file), and the two black alpha shadows rgba(0,0,0,0.08) and rgba(0,0,0,0.18) are one-off elevation tints with no shadow token yet. New with the Packages section: the install spinner's 0.8s revolution period, a continuous rotation rather than a UI transition, sitting above the transition duration scale. Also new with the Packages section: the still-reading delay, a 0s animation held back 4.5s, which is the rule that a classify running past four to five seconds says \"still reading\"; a wait threshold, not a UI transition, so it sits outside the duration scale like the spinner does.",
     "allow": {
       "rgba(0,0,0,0.08)": 1,
       "rgba(0,0,0,0.18)": 1,
       "10px": 1,
-      "0.8s": 1
+      "0.8s": 1,
+      "0s": 1,
+      "4.5s": 1
     }
   },
   "public/styles/views/routine-editor.css": {
@@ -176,6 +178,26 @@
       "#000": 1,
       "rgba(232,168,76,0.30)": 1,
       "rgba(232,122,90,0.55)": 1
+    }
+  },
+  "public/styles/components/region.css": {
+    "why": "One ambient loop duration. tokens.css names --duration-fast, -base and -slow for transitions and states that anything longer is an animation with its own reason, stated where it is written. This is that: the skeleton's breath lasts as long as the wait does, so it is not a transition and no transition token fits. 2s is not a new figure either, it is the rhythm orgPulse already beats in the sidebar and the org chart, so the product waits at one tempo rather than two.",
+    "allow": {
+      "2s": 1
+    }
+  },
+  "public/styles/rundock-ui.css": {
+    "why": "Rundock UI's components (docs/RUNDOCK-UI.md), copied from the app's own rules and held to them by test/unit/rundock-ui-parity.test.js. What remains is what those originals write: the shadow blacks of the mode toggle's selected segment (0.18), the files menu (0.25) and the slider thumb (0.3, 0.4 while dragged); the mode toggle's 10px radius, off the scale for the concentric rule tokens.css states (ten minus the four-pixel padding is --radius-md); and the product's one 2s waiting rhythm from region.css, which is an animation with its own reason rather than a transition. The send icon button copies the chat composer's send button: its glow is --accent-action's channels and its transition is that rule's own quarter second, both held to the original by the parity test.",
+    "allow": {
+      "rgba(0,0,0,0.3)": 2,
+      "rgba(0,0,0,0.4)": 1,
+      "rgba(0,0,0,0.18)": 2,
+      "rgba(0,0,0,0.25)": 1,
+      "10px": 2,
+      "2s": 3,
+      "rgba(193,87,41,0.3)": 1,
+      "rgba(193,87,41,0.4)": 1,
+      "0.25s": 1
     }
   }
 }

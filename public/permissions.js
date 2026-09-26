@@ -336,11 +336,75 @@
     return m.size;
   }
 
+  // ── Who a request belongs to ─────────────────────────────────────────────
+  // A request is shown where its owner is, and only there. A conversation's
+  // request goes to that conversation. A routine's request carries the run
+  // the server matched it to, and goes to the approvals dock under the
+  // routine's name. A request the server could match to nothing is shown as
+  // exactly that. None of them ever borrows the conversation on screen: that
+  // fallback is how a routine's request to change a person's email was once
+  // shown inside an unrelated chat, one click from being approved there.
+  function permissionOwner(d) {
+    const convoId = d && d._conversationId;
+    if (convoId) return { kind: 'conversation', convoId };
+    const run = d && d._run;
+    if (run && run.id) return { kind: 'routine', run };
+    return { kind: 'unattributed' };
+  }
+
+  // ── Requests that have ended ─────────────────────────────────────────────
+  // A request ends by timing out, by being answered (here or in another
+  // window), by its conversation being stopped, or by the process that asked
+  // going away. Once ended, no card for it may offer an answer, however the
+  // card is reached: live, from the background queue, or replayed after a
+  // reconnect. The record is kept by request id and bounded, because the
+  // copy that arrives late is the case it exists for.
+  const ENDED_LIMIT = 500;
+  const ENDED_COPY = {
+    timeout: { label: '✕ Timed out', why: 'Nobody answered in time, so it was denied.' },
+    cancelled: { label: '✕ Stopped', why: 'The agent was stopped before this was answered.' },
+    ended: { label: '✕ No longer waiting', why: 'The agent that asked has finished, so there is nothing left to answer.' },
+    'not-pending': { label: '✕ Too late', why: 'This request had already ended, so nothing was approved.' },
+  };
+  function markPermissionEnded(ended, requestId, reason, allow) {
+    if (!requestId) return;
+    ended.delete(requestId);
+    ended.set(requestId, { reason: reason || 'ended', allow: allow === true });
+    while (ended.size > ENDED_LIMIT) ended.delete(ended.keys().next().value);
+  }
+  function permissionEnded(ended, requestId) {
+    return (requestId && ended.get(requestId)) || null;
+  }
+  // What an ended card says: a short label, whether it reads as allowed, and
+  // one sentence of why. An answer given in another window keeps its answer.
+  function endedPermissionCopy(reason, allow) {
+    if (reason === 'answered') {
+      return { allowed: allow === true, label: allow === true ? '✓ Answered in another window' : '✕ Answered in another window', why: '' };
+    }
+    const c = ENDED_COPY[reason] || ENDED_COPY.ended;
+    return { allowed: false, label: c.label, why: c.why };
+  }
+  // The held request ids a window must treat as over, given what the server
+  // says is still pending after a reconnect.
+  function staleRequestIds(heldIds, pendingIds) {
+    const live = new Set(pendingIds || []);
+    return (heldIds || []).filter(id => id && !live.has(id));
+  }
+  // The payload queued for a request, wherever it is queued, or null.
+  function findPendingPermission(byConvo, requestId) {
+    for (const entry of byConvo) {
+      const payload = entry[1].get(requestId);
+      if (payload) return { convoId: entry[0], payload };
+    }
+    return null;
+  }
+
   function answerFileCopy() { return ALWAYS_ASK_COPY.answerFile; }
   // Retained so a caller outside this change keeps working; both names
   // reach the same table, and new callers should use alwaysAskCopy.
   const agentHomeBoundaryCopy = alwaysAskCopy;
 
   return { BASH_DESCRIPTIONS, bashBin, classifyRisk, describeToolRequest, toolAllowKey, decidePermission, offersAlwaysAllow, alwaysAskCopy, answerFileCopy,
-    routePermissionRequest, queuePendingPermission, pendingPermissionsFor, removePendingPermission, clearPendingPermissions };
+    routePermissionRequest, queuePendingPermission, pendingPermissionsFor, removePendingPermission, clearPendingPermissions,
+    permissionOwner, markPermissionEnded, permissionEnded, endedPermissionCopy, staleRequestIds, findPendingPermission };
 }));

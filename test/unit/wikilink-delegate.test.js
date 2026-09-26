@@ -67,3 +67,23 @@ describe('the wikilink delegate serves both spellings', () => {
     assert.deepStrictEqual(seen, []);
   });
 });
+
+// A relative link to a workspace file in the rich editor opens that file in
+// Rundock, exactly as read-only rendering does, by the same resolver.
+describe('a relative link to a workspace file opens in Rundock', () => {
+  test('the editor dispatches what the shared resolver names, and nothing else', async () => {
+    const md = (await import('../../public/markdown-render.js')).default || (await import('../../public/markdown-render.js'));
+    const { el, dom, seen } = host('<a id="f" href="notes/plan.md">p</a><a id="w" href="https://example.org/a.md">w</a>'
+      + '<a id="u" href="../outside.md">u</a><a id="h" href="#top">h</a>');
+    dom.window.RundockMarkdown = md;
+    globalThis.window = dom.window;
+    try {
+      for (const id of ['f', 'w', 'u', 'h']) el.querySelector(`#${id}`).click();
+    } finally { delete globalThis.window; }
+    assert.deepStrictEqual(seen, [{ target: 'notes/plan.md', alias: null }]);
+    for (const href of ['notes/plan.md', 'https://example.org/a.md', '../outside.md', '#top']) {
+      const expected = md.workspaceFileTarget(href);
+      assert.strictEqual(seen.some((s) => s.target === href), expected !== null, `editor and resolver agree on ${href}`);
+    }
+  });
+});

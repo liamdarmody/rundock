@@ -1,7 +1,7 @@
 # Codex CLI app-server protocol research
 
 **Researched:** 2026-07-17
-**CLI tested:** `codex-cli 0.144.3` (arm64 Mach-O at `/Users/liamdarmody/.local/bin/codex`)
+**CLI tested:** `codex-cli 0.144.3` (arm64 Mach-O at `/Users/me/.local/bin/codex`)
 **Method:** live protocol probes over stdio (handshake, thread/list, thread/start, thread/resume of an exec-created thread, one tiny turn round-trip, error probes) plus the CLI's own generated protocol schema (`codex app-server generate-json-schema` and `generate-ts`), the openai/codex repo README (`codex-rs/app-server/README.md`), and the official docs (developers.openai.com/codex/app-server, which now 308-redirects to learn.chatgpt.com/docs/app-server).
 
 Generated schema artefacts staged at `/tmp/codex-appserver-research/json-schema/` (per-message JSON Schemas, plus full bundles `codex_app_server_protocol.schemas.json` and `codex_app_server_protocol.v2.schemas.json`) and `/tmp/codex-appserver-research/ts-bindings/` (89 TypeScript files, `ClientRequest.ts` is the full method-to-params map). Probe scripts: `probe.py`, `probe_turn.py`, `probe_list.py` in the same directory.
@@ -58,7 +58,7 @@ Response (verbatim from live probe):
 ```json
 {"id":1,"result":{
   "userAgent":"rundock-probe/0.144.3 (Mac OS 26.4.1; arm64) Apple_Terminal/470 (rundock-probe; 0.0.1)",
-  "codexHome":"/Users/liamdarmody/.codex",
+  "codexHome":"/Users/me/.codex",
   "platformFamily":"unix",
   "platformOs":"macos"
 }}
@@ -90,7 +90,7 @@ Response contains the effective settings and the thread object:
 ```json
 {"id":3,"result":{
   "thread":{"id":"019f6d31-12cf-7fe3-b5e3-5bb0382e64cb","sessionId":"019f6d31-...","status":{"type":"idle"},
-            "path":"/Users/liamdarmody/.codex/sessions/2026/07/17/rollout-2026-07-17T00-09-20-019f6d31-....jsonl",
+            "path":"/Users/me/.codex/sessions/2026/07/17/rollout-2026-07-17T00-09-20-019f6d31-....jsonl",
             "cwd":"/tmp/x","cliVersion":"0.144.3","source":"vscode","turns":[], "...":"..."},
   "model":"gpt-5.6-sol","modelProvider":"openai","cwd":"/tmp/x",
   "runtimeWorkspaceRoots":["/tmp/x"],
@@ -144,7 +144,7 @@ item/started                 {"item":{"type":"agentMessage","id":"msg_0714...","
 item/agentMessage/delta      {"threadId":T,"turnId":U,"itemId":"msg_0714...","delta":"pong"}
 item/completed               {"item":{"type":"agentMessage","id":"msg_0714...","text":"pong","phase":"final_answer",...},"threadId":T,"turnId":U,"completedAtMs":...}
 thread/tokenUsage/updated    {"threadId":T,"turnId":U,"tokenUsage":{"total":{"totalTokens":13192,"inputTokens":13187,"cachedInputTokens":9984,"outputTokens":5,"reasoningOutputTokens":0},"last":{...same...},"modelContextWindow":258400}}
-account/rateLimits/updated   {"rateLimits":{"limitId":"codex","primary":{"usedPercent":0,"windowDurationMins":10080,"resetsAt":...},"credits":{...},"planType":"plus",...}}
+account/rateLimits/updated   {"rateLimits":{"limitId":"codex","primary":{"usedPercent":0,"windowDurationMins":10080,"resetsAt":...},"credits":{...},"planType":"<plan>",...}}
 thread/status/changed        {"threadId":T,"status":{"type":"idle"}}
 turn/completed               {"threadId":T,"turn":{"id":U,"items":[],"itemsView":"notLoaded","status":"completed","error":null,"startedAt":1784243453,"completedAt":1784243457,"durationMs":3581}}
 ```
@@ -251,7 +251,7 @@ Heed `willRetry`: when true the server is retrying internally; do not fail the t
 - objects: `{httpConnectionFailed:{httpStatusCode}}`, `{responseStreamConnectionFailed:{httpStatusCode}}`, `{responseStreamDisconnected:{...}}`, `{responseTooManyFailedAttempts:{...}}`, `{activeTurnNotSteerable:{...}}`
 
 Mapping to your three cases:
-- **Signed out / auth failure:** `codexErrorInfo:"unauthorized"` on the turn. Check proactively before turns with `account/read` (params `{}`) which returns `{"account":{"type":"chatgpt","planType":"plus","email":...}|{"type":"apiKey"}|null,"requiresOpenaiAuth":bool}`; `account: null` with `requiresOpenaiAuth: true` means signed out. (Legacy `getAuthStatus` also still exists.) Login flow: `account/login/start`, completion via `account/login/completed` notification. Auth state presence check: `~/.codex/auth.json` exists on this machine.
+- **Signed out / auth failure:** `codexErrorInfo:"unauthorized"` on the turn. Check proactively before turns with `account/read` (params `{}`) which returns `{"account":{"type":"chatgpt","planType":"<plan>","email":...}|{"type":"apiKey"}|null,"requiresOpenaiAuth":bool}`; `account: null` with `requiresOpenaiAuth: true` means signed out. (Legacy `getAuthStatus` also still exists.) Login flow: `account/login/start`, completion via `account/login/completed` notification. Auth state presence check: `~/.codex/auth.json` exists on this machine.
 - **Model not available:** `turn/start` with a bogus model either fails the request or fails the turn with `badRequest`; also watch `model/rerouted` notifications (server silently rerouting to another model) and validate upfront with `model/list` (returns available models).
 - **Quota exhaustion:** `usageLimitExceeded` (plan limit) or `sessionBudgetExceeded`; `account/rateLimits/updated` gives you `usedPercent` continuously so you can warn before hitting it.
 

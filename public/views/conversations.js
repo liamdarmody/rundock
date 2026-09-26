@@ -205,6 +205,34 @@ function startConversation(agentId) {
   maybeShowCodexFirstRun(agent);
 }
 
+// A VIEW ASKED AN AGENT. The extension host has already checked the click,
+// one request per click, and that the manifest declared this agent; what is decided
+// here is the app's: the agent must be on the team (and not a platform
+// agent), checked BEFORE createConversation, whose fallback to the first
+// agent for an unknown id must never be reachable from a view.
+//
+// A NEW conversation with that agent, the message in its composer, unsent:
+// the person sends it, changes it, or leaves it, and a conversation nobody
+// sends is never saved (conversations persist on first send). The line above
+// the composer says who drafted it; it is page text, never part of the
+// message. Nothing here answers the view except a reason it was refused.
+function askFromView({ agentId, message, extension, path }) {
+  const agent = agents.find(a => a.id === agentId && a.status === 'onTeam' && a.type !== 'platform');
+  if (!agent) return `there is no agent called ${agentId} on this team`;
+  startConversation(agent.id);
+  const input = document.getElementById('msg-input');
+  input.value = String(message);
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  const sendBtn = document.getElementById('send-btn');
+  if (sendBtn) sendBtn.classList.toggle('active', !!input.value.trim());
+  const note = document.createElement('div');
+  note.className = 'msg-system ask-provenance';
+  note.textContent = `Drafted by the ${extension} extension from ${path}. Nothing has been sent.`;
+  document.getElementById('messages').appendChild(note);
+  return null;
+}
+if (typeof window !== 'undefined') window.rundockAskFromView = askFromView;
+
 // Start a Doc conversation with workspace analysis pre-loaded
 function startSetupConversation() {
   const guide = agents.find(a => a.type === 'platform');
@@ -318,6 +346,22 @@ function newConversation() {
   // Team agents, no orchestrator: show agent picker
   showView('convo-empty');
 }
+// EACH CONVERSATION KEEPS ITS OWN UNSENT TEXT. The composer is one field
+// shared by every conversation, so switching used to carry whatever was typed
+// into the next conversation, and anything that set the field (an extension's
+// ask) replaced it. Now the text leaves with the conversation it was typed in
+// and comes back when the person returns; a conversation opened for the first
+// time starts empty. In memory for the session, like the rest of the thread.
+const composerDrafts = new Map();
+let composerOwner = null;
+function switchComposerTo(convoId, input) {
+  if (composerOwner === convoId) return;
+  if (composerOwner !== null) composerDrafts.set(composerOwner, input.value);
+  input.value = composerDrafts.get(convoId) || '';
+  composerDrafts.delete(convoId);
+  composerOwner = convoId;
+}
+
 function setupChat(convo) {
   const state = getConvoState(convo.id);
   const activeId = state?.activeAgentId;
@@ -327,6 +371,7 @@ function setupChat(convo) {
   document.getElementById('chat-agent-avatar').style.background=agent.colour;
   document.getElementById('chat-agent-avatar').textContent=agent.icon;
   const msgInput = document.getElementById('msg-input');
+  switchComposerTo(convo.id, msgInput);
   msgInput.placeholder=`Message ${agent.displayName}...`;
   msgInput.style.height = 'auto';
   msgInput.style.height = '44px';
@@ -891,6 +936,6 @@ return {
   formatRecency, convoStateDot, setSidebarPill, renderListPills,
   openConvoMenu, convoMenuEsc, closeConvoMenu, openConvoListMenu,
   toggleConvoListMembership, renderConvoList, renderConvoItem,
-  discardIfEmpty, openConversation, replayConversationInto,
+  discardIfEmpty, openConversation, replayConversationInto, askFromView,
 };
 }));

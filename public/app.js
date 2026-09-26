@@ -56,7 +56,7 @@ const persist = (() => {
 const sunIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>`;
 const moonIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>`;
 
-let ws=null, agents=[], conversations=[], activeConversation=null, currentView='home', currentFilePath=null, skills=[], skillsLoaded=false, currentWorkspacePath=null, servingWorkspacePath, rosterWorkspacePath, workspaceAnalysis=null, workspaceIsEmpty=false, workspaceMode='knowledge', sandboxManaged=true, setupComplete=true, conversationsLoaded=false, activeSidebarPill='all', convoLists=[];
+let ws=null, agents=[], conversations=[], activeConversation=null, currentView='home', currentFilePath=null, skills=[], skillsLoaded=false, currentWorkspacePath=null, servingWorkspacePath, rosterWorkspacePath, workspaceAnalysis=null, workspaceIsEmpty=false, workspaceMode='notes', sandboxManaged=true, setupComplete=true, conversationsLoaded=false, activeSidebarPill='all', convoLists=[];
 let runtimeStatus = null; // { defaultRuntime, claude: {installed, authenticated, version}, codex: {...} }
 const agentLastActivity = {}; // { agentId: { time: Date, label: string } }
 // Per-conversation state: { convoId: { isProcessing, currentStreamingMsg, latestText } }
@@ -67,7 +67,10 @@ let pendingActiveProcesses = null; // Deferred until conversations are loaded
 let activeTiptapEditor = null;
 let _tiptapEditorModule = null;
 let _tiptapEditorModuleResolved = null;
-let _tiptapSaveTimer = null;
+// THE ONE DEBOUNCED SAVE for whatever file is open: the text editor, the
+// rich editor, the board and any writable viewer after them announce a
+// change and this decides when to write. See public/save-scheduler.js.
+const fileSaves = RundockSaveScheduler.create();
 // The server's OS, learned from the server_info handshake. Gates OS-specific
 // affordances (e.g. Reveal in Finder) so a dead row never shows off macOS.
 let serverPlatform = null;
@@ -205,12 +208,209 @@ function connect() {
   ws = new WebSocket(`${p}//${location.host}`);
   ws.onopen = () => { setConn('connected'); ws.send(JSON.stringify({type:'get_workspaces'})); };
   ws.onmessage = e => handle(JSON.parse(e.data));
-  ws.onclose = () => { setConn('disconnected'); packagesConnectionLost(); setTimeout(connect, 2000); };
+  ws.onclose = () => { setConn('disconnected'); packagesConnectionLost(); extensionFetchesConnectionLost(); setTimeout(connect, 2000); };
   ws.onerror = () => {}; // Prevent unhandled error; onclose fires next
 }
 function setConn(s) { const b=document.getElementById('connection-bar'); b.className=`connection-bar ${s}`; b.textContent=s==='connected'?'Connected':s==='disconnected'?'Disconnected. Reconnecting...':'Connecting...'; if(s==='connected')setTimeout(()=>b.style.display='none',2000); else b.style.display='block'; }
 
+// ===== 3b. EXTENSION HOST WIRING =====
+//
+// The three joins between the sandboxed extension host and the running
+// client: the roster hydrates the renderer registry the file view's seam
+// reads, a transport fetches a renderer's payload over the socket, and every
+// roster arrival reconciles the live mount (reconcileExtensionMount, in the
+// file view, which owns the mount). The seam reads two globals,
+// window.rundockRendererRegistry and window.rundockExtensionUiFetcher, and
+// this section is the only product code that assigns them.
+
+// How long a payload fetch waits for its reply before the seam is told to
+// draw the plain surface instead. The seam holds the pane blank until the
+// fetch settles, so a reply that never comes must still settle it.
+const EXTENSION_UI_TIMEOUT_MS = 15000;
+
+// Each roster arrival takes the next number; the registry it builds is
+// installed only if no later roster has arrived since, because the registry
+// module loads asynchronously and two rosters in flight can resolve out of
+// order. The last roster is the truth, whatever order the promises settle.
+let extensionRosterSeq = 0;
+
+// Fetches waiting on a reply, keyed by extension id plus renderer id, so
+// two fetches in flight each get the reply that names them.
+const extensionUiWaiters = new Map();
+
+// The registry module is an ES module the classic client script reaches by
+// dynamic import. Overridable so the wiring can be driven in a test without
+// a real import against a URL.
+function loadRendererRegistryModule() {
+  const loader = window.rundockRendererRegistryLoader;
+  if (typeof loader === 'function') return Promise.resolve(loader());
+  return import('/renderer-registry.js');
+}
+
+// The desktop app calls this when it has stopped an extension frame from
+// leaving (electron/extension-frame-guards.js). The navigation never
+// happened, so no frame saw a second load: the page ends every live view and
+// region service here, so the person sees the view stop with its reason
+// rather than a misbehaving extension carrying on quietly. Published on
+// window because it is called from the main process by name.
+if (typeof window !== 'undefined') {
+  window.rundockExtensionFrameLeft = function () {
+    const loader = window.rundockExtensionHostLoader;
+    Promise.resolve(typeof loader === 'function' ? loader() : import('/extension-host.js'))
+      .then((host) => { if (host && typeof host.endViewsForLeaving === 'function') host.endViewsForLeaving(); })
+      .catch(() => {});
+    const service = window.RundockRegionService;
+    if (service && typeof service.endAllForLeaving === 'function') service.endAllForLeaving();
+  };
+}
+
+// Build a registry with the module's own constructor and install it on the
+// global, unless a later roster has arrived meanwhile. Resolves with the
+// registry installed, or null when superseded.
+function installRendererRegistry(build) {
+  const seq = ++extensionRosterSeq;
+  return loadRendererRegistryModule().then((mod) => {
+    if (seq !== extensionRosterSeq) return null;
+    const registry = build(mod);
+    window.rundockRendererRegistry = registry;
+    // The hidden-path rule, published beside the registry that enforces it,
+    // for the one caller that must check it without a claim to ask about:
+    // the save an extension view can cause (views/files.js).
+    if (typeof mod.isHiddenPath === 'function') window.rundockIsHiddenPath = mod.isHiddenPath;
+    return registry;
+  });
+}
+
+// A roster: the new workspace's registry REPLACES the previous one rather
+// than merging into it, and the live mount is reconciled against the roster
+// once the registry stands, so a mounted extension that the roster no longer
+// names, or names disabled, is torn down. The caller hands in the roster
+// array itself, from whichever reply it knows carries one; a reply carrying
+// no roster array is nothing to reconcile, never a roster of none, so it
+// neither replaces the registry nor tears a live mount down.
+function extensionRosterArrived(roster) {
+  if (!Array.isArray(roster)) return Promise.resolve(null);
+  return installRendererRegistry((mod) => {
+    const registry = mod.createRendererRegistry();
+    registry.registerFromRoster(roster);
+    return registry;
+  }).then((registry) => {
+    if (registry) reconcileExtensionMount(roster);
+    if (registry && typeof reconcileRegionServices === 'function') reconcileRegionServices(roster);
+    if (registry && typeof reconcileEmbedMounts === 'function') reconcileEmbedMounts(roster);
+    // The roster is the first moment anything knows whether this workspace
+    // has an extension that draws. Warming is idle-only and silent, so a
+    // person with none installed, or one who never opens a diagram, pays
+    // nothing for this line; see warmRegionServices.
+    if (registry && typeof warmRegionServices === 'function') warmRegionServices();
+    if (registry && typeof watchThemeForRegions === 'function') watchThemeForRegions();
+    return registry;
+  });
+}
+
+// A roster error: an EMPTY registry carrying the reason, never the previous
+// workspace's registry, so every lookup answers "unregistered, because the
+// roster could not be read". The live mount is left alone: an unreadable
+// records file says nothing about the extension already on screen, and
+// tearing it down with a reason about its absence would state a falsehood.
+function extensionRosterFailed(d) {
+  const reason = d && typeof d.reason === 'string' && d.reason
+    ? d.reason : 'the extension roster could not be read';
+  return installRendererRegistry((mod) => mod.createRendererRegistry({ unavailable: reason }));
+}
+
+function extensionUiKey(extensionId, rendererId) {
+  return `${extensionId} ${rendererId}`;
+}
+
+// The transport the seam calls: send get_extension_ui, resolve with the
+// server's reply object forwarded as is. An extension_ui reply carries its
+// entry string, which is what the seam mounts; an extension_ui_error carries
+// a reason, which the seam shows beside the plain rendering. A reply that
+// never arrives, because the socket closed or the clock ran out, resolves
+// with a reason too, so the seam always settles.
+function requestExtensionUi(extensionId, rendererId, timeoutMs = EXTENSION_UI_TIMEOUT_MS) {
+  return new Promise((resolve) => {
+    const key = extensionUiKey(extensionId, rendererId);
+    const waiter = { settle: null, timer: null };
+    waiter.settle = (reply) => {
+      clearTimeout(waiter.timer);
+      const list = extensionUiWaiters.get(key);
+      if (list) {
+        const at = list.indexOf(waiter);
+        if (at >= 0) list.splice(at, 1);
+        if (list.length === 0) extensionUiWaiters.delete(key);
+      }
+      resolve(reply);
+    };
+    if (!extensionUiWaiters.has(key)) extensionUiWaiters.set(key, []);
+    extensionUiWaiters.get(key).push(waiter);
+    waiter.timer = setTimeout(() => {
+      waiter.settle({ extensionId, rendererId, reason: `no renderer payload arrived within ${timeoutMs}ms` });
+    }, timeoutMs);
+    try {
+      ws.send(JSON.stringify({ type: 'get_extension_ui', extensionId, rendererId }));
+    } catch (e) {
+      waiter.settle({ extensionId, rendererId, reason: `the renderer payload could not be requested: ${String(e && e.message || e)}` });
+    }
+  });
+}
+
+// An extension_ui or extension_ui_error reply: settle every fetch waiting
+// under the ids it names, and only those. A reply nothing waits for (a fetch
+// that already timed out) changes nothing.
+function extensionUiReplyArrived(d) {
+  const list = extensionUiWaiters.get(extensionUiKey(d.extensionId, d.rendererId));
+  if (!list) return;
+  for (const waiter of list.slice()) waiter.settle(d);
+}
+
+// The socket closed: no reply in flight is coming, so every waiting fetch is
+// settled with the reason now rather than left to the clock.
+function extensionFetchesConnectionLost() {
+  for (const list of [...extensionUiWaiters.values()]) {
+    for (const waiter of list.slice()) {
+      waiter.settle({ reason: 'the connection closed before the renderer payload arrived' });
+    }
+  }
+  extensionUiWaiters.clear();
+}
+
+window.rundockExtensionUiFetcher = requestExtensionUi;
+
+// A package import that landed files changed what Team, Skills and Routines
+// show: agents arrive under .claude/agents, skills under .claude/skills,
+// and a routine rides inside its agent's frontmatter, so the schedule the
+// trust card just disclosed belongs on the Routines page the moment the
+// card says the install happened. The server invalidated its caches when
+// the apply landed but broadcasts nothing, so the client asks again, the
+// way a saved agent does in the chat path. The re-request is scoped to what
+// actually landed rather than reloading everything: an agent landing
+// re-requests the roster (whose reply redraws Team and Routines) and the
+// skills (an arriving agent can claim skills, exactly as save_agent
+// re-sends both), and forgets that skills were loaded so the Skills rail
+// asks again on its next open; a skill-only landing re-requests the skills
+// alone, because no agent file moved and the roster is still true. The
+// second-step content result after an extension install arrives on this
+// same envelope. A result that wrote nothing (every item skipped, unchanged
+// or blocked), and a projection, which shares the envelope and writes
+// nothing by definition, ask for nothing.
+function packagesImportLanded(d) {
+  if (d.type !== 'package_import_result' || d.operation !== 'apply') return;
+  const writes = Array.isArray(d.writes) ? d.writes : [];
+  if (writes.length === 0) return;
+  if (!(ws && ws.readyState === WebSocket.OPEN)) return;
+  if (writes.some((w) => w.kind === 'agent')) ws.send(JSON.stringify({ type: 'get_agents' }));
+  skillsLoaded = false;
+  ws.send(JSON.stringify({ type: 'get_skills' }));
+}
+
 // ===== 4. MESSAGE HANDLING =====
+
+// Every reply that changes the installed-extensions state the Packages and
+// Extensions pages share.
+const EXTENSIONS_PAGE_REPLIES = new Set(['packages_page', 'packages_page_error', 'extension_state', 'package_uninstall_result',
+  'extension_install_result', 'extensions', 'package_install_error', 'package_update_status', 'package_update_result']);
 
 function handle(d) {
   // TWO FIELDS, AND THEY ARE NOT INTERCHANGEABLE. `_conversationId` tags a
@@ -221,8 +421,40 @@ function handle(d) {
   // the wrong one is silent, because both are usually the conversation on
   // screen and only diverge when a second conversation is running.
   const convoId = d._conversationId;
+  // The Extensions settings page draws from the manage state these replies
+  // update, alongside Packages, so it is redrawn once the reply has been
+  // handled rather than from inside each arm below.
+  if (EXTENSIONS_PAGE_REPLIES.has(d.type) && typeof extensionsRenderIfVisible === 'function') queueMicrotask(extensionsRenderIfVisible);
   switch(d.type) {
-    case 'package_import_plan': case 'package_import_result': case 'package_import_error': packagesReplyArrived(d); break;
+    case 'package_import_plan': case 'package_import_result': case 'package_import_error':
+    case 'extension_install_plan': case 'package_install_declined': case 'package_install_error':
+    case 'package_update_status': case 'package_update_checked': case 'package_update_plan':
+      packagesReplyArrived(d); packagesImportLanded(d); break;
+    // A landed package update carries the roster when it moved an extension,
+    // so a view of it open anywhere is swapped from this very reply; and it
+    // changed agents and skills like an import does.
+    case 'package_update_result': if (Array.isArray(d.extensions)) extensionRosterArrived(d.extensions); packagesReplyArrived(d); packagesImportLanded({ ...d, type: 'package_import_result', operation: 'apply' }); break;
+    // Uninstalling a package: the question's answer reaches the page, and the
+    // result carries the roster (its extension left) and changes the team.
+    case 'package_uninstall_plan': packagesReplyArrived(d); break;
+    case 'package_uninstall_result': if (Array.isArray(d.extensions)) extensionRosterArrived(d.extensions); packagesReplyArrived(d); packagesImportLanded({ type: 'package_import_result', operation: 'apply', writes: (d.removed || []).map((r) => ({ kind: r.kind })) }); break;
+    // The replies that carry a fresh roster: the page read, an enablement
+    // change, an uninstall, and a completed install or update. Each hydrates
+    // the registry and reconciles the live mount exactly as a roster reply
+    // does, then reaches the page, so a record that changed under an open
+    // view is answered in the same place whichever surface changed it, and
+    // an updated extension's live mount swaps from the reply that updated it.
+    case 'packages_page': case 'extension_state': case 'extension_install_result':
+      extensionRosterArrived(d.extensions); packagesReplyArrived(d); break;
+    case 'packages_page_error': packagesReplyArrived(d); break;
+    // The extension host's joins: a roster hydrates the renderer registry,
+    // a payload reply settles the fetch that asked for it.
+    // Also the roster every other window is sent when a record changes, so
+    // the manage page follows it as well as the host.
+    case 'extensions': extensionRosterArrived(d.extensions); if (typeof packagesReplyArrived === 'function') packagesReplyArrived(d); break;
+    case 'extensions_error': extensionRosterFailed(d); break;
+    case 'extension_ui': extensionUiReplyArrived(d); break;
+    case 'extension_ui_error': extensionUiReplyArrived(d); break;
     case 'workspaces': handleWorkspaces(d); break;
     case 'workspace_set':
       // Start the clock on the renderer's share of opening a workspace. The
@@ -259,6 +491,9 @@ function handle(d) {
     // refreshed after every grant or revoke, so the cards and the settings list
     // are never reading two different truths.
     case 'tool_allows': toolAllowsArrived(d); break;
+    // What keeps agents inside the workspace, read back from disk after every
+    // change the Permissions row asks for.
+    case 'sandbox_status': sandboxStatusArrived(d); break;
     case 'workspace_mode_changed':
       workspaceMode = d.mode;
       // REDRAW WHICHEVER SECTION IS OPEN, read from the sidebar rather than
@@ -467,9 +702,29 @@ function handle(d) {
       break;
     }
     case 'pins': handlePinsReply(d.pins); break;
-    case 'file_content': loadFileContent(d.path, d.content); break;
-    case 'file_changed': handleExternalFileChange(d.path, d.content); break;
-    case 'file_saved': document.getElementById('editor-status').textContent='Saved'; break;
+    case 'file_content': noteExtensionRefusal(d.path, d.extensionRefusal); loadFileContent(d.path, d.content); break;
+    case 'file_changed': noteExtensionRefusal(d.path, d.extensionRefusal); handleExternalFileChange(d.path, d.content); break;
+    case 'sources_resolved': case 'sources_changed': sourcesReplyArrived(d); break;
+    case 'view_state': case 'view_state_refused': viewStateReplyArrived(d); break;
+    case 'source_saved': { const st = document.getElementById('editor-status'); if (st) { st.style.color = 'var(--success)'; st.textContent = 'Saved'; } break; }
+    case 'source_save_refused': {
+      const status = document.getElementById('editor-status');
+      if (status) { status.style.color = 'var(--attention)'; status.textContent = `Not saved: ${d.reason}`; }
+      break;
+    }
+    case 'file_save_refused': {
+      // The server refused a save an extension caused: say so, with its rule.
+      const status = document.getElementById('editor-status');
+      if (status) { status.style.color = 'var(--attention)'; status.textContent = `Not saved: ${d.reason}`; }
+      break;
+    }
+    case 'file_saved':
+      document.getElementById('editor-status').textContent = 'Saved';
+      // A write to the open file has landed: the file may no longer claim the
+      // extension drawing it (a view that wrote its own marker out), and the
+      // reason it stood down is said after "Saved", not under it.
+      if (d.path === currentFilePath) recheckExtensionClaim();
+      break;
     case 'path_created':
       // The tree was refreshed by the preceding file_tree push; open a new
       // note/board in the editor and reveal it. A new folder just appears.
@@ -558,30 +813,21 @@ function handle(d) {
       if (d.version) window._rundockVersion = d.version;
       if (d.platform) serverPlatform = d.platform;
       break;
-    case 'control_request': {
-      const targetConvo = convoId || activeConversation?.id;
-      if(targetConvo) handlePermissionRequest(d, targetConvo);
+    case 'control_request':
+      // NEVER THE CONVERSATION ON SCREEN. A request with no conversation of
+      // its own (a routine's, or one nothing could be matched to) used to fall
+      // back to whichever conversation was open, which put a routine's request
+      // to change email inside an unrelated chat, one click from approval.
+      // The server stopped guessing; this is the other end of the same wire.
+      if (convoId) handlePermissionRequest(d, convoId);
+      else handleOwnerlessPermissionRequest(d);
       break;
-    }
-    case 'permission_timeout': {
-      resolvePermissionCard(d.requestId, false, '✕ Timed out', false);
-      pendingPermissions.delete(d.requestId);
-      // Expired: a copy queued for a background conversation must never be
-      // rendered (and answered) after the server has auto-denied it.
-      const timedOutConvo = RundockPermissions.removePendingPermission(pendingPermissionsByConvo, d.requestId);
-      // L4: a timed-out background card must clear its own contribution to the
-      // unread badge. Only once the conversation has no other pending card, and
-      // only the permission reason so a co-occurring unread message survives.
-      if (timedOutConvo
-          && RundockPermissions.pendingPermissionsFor(pendingPermissionsByConvo, timedOutConvo).length === 0) {
-        unread.resolvePermission(timedOutConvo);
-        updateUnreadBadge();
-        renderConvoList();
-      }
-      const t = document.getElementById('thinking-indicator');
-      if (t) t.style.display = '';
-      break;
-    }
+    // A request ended: the server's timeout, an answer (from any window), a
+    // stopped conversation, or the asker going away. Expired copies queued for
+    // a background conversation must never be answered after this.
+    case 'permission_timeout': endPermissionRequest(d.requestId, 'timeout'); break;
+    case 'permission_ended': endPermissionRequest(d.requestId, d.reason, d.allow); break;
+    case 'pending_permissions': reconcilePendingPermissions(d.requestIds || []); break;
     case 'session_history':
       renderSessionHistory(d);
       break;
@@ -1556,6 +1802,10 @@ function resetSidebarForWorkspace() {
  */
 function setServingWorkspace(path) {
   servingWorkspacePath = typeof path === 'string' && path ? path : null;
+  // The install flow's offer described the workspace this window opened; a
+  // switch announced from elsewhere returns it to its start. Guarded because
+  // the shell can be assembled without the settings view loaded.
+  if (typeof packagesServingWorkspaceChanged === 'function') packagesServingWorkspaceChanged(servingWorkspacePath);
 }
 
 /**
@@ -1586,7 +1836,7 @@ function onWorkspaceReady(dir, analysis, isEmpty, mode, scaffoldError, isSetupCo
   setServingWorkspace(dir);
   workspaceAnalysis = analysis || null;
   workspaceIsEmpty = !!isEmpty;
-  workspaceMode = mode || 'knowledge';
+  workspaceMode = mode || 'notes';
   // WHETHER THE MODE MEANS WHAT THE PANE SAYS IT MEANS. Rundock never rewrites
   // a sandbox block someone else wrote, so in that workspace the mode switch
   // moves nothing, and the settings pane must stop promising it does. Defaulted
@@ -1603,6 +1853,10 @@ function onWorkspaceReady(dir, analysis, isEmpty, mode, scaffoldError, isSetupCo
   // Load workspace data
   ws.send(JSON.stringify({ type: 'get_agents' }));
   ws.send(JSON.stringify({ type: 'get_files' }));
+  // The installed-extension roster rides the same batch: a file opened from
+  // the tree consults the registry the roster builds, so the two must arrive
+  // together or the first open of a claimed file renders plain.
+  ws.send(JSON.stringify({ type: 'list_extensions' }));
   requestPins(); // keyed by workspace, so the list is asked for with the tree
   ws.send(JSON.stringify({ type: 'get_skills' }));
   ws.send(JSON.stringify({ type: 'get_conversations' }));
@@ -1680,8 +1934,7 @@ function onWorkspaceReady(dir, analysis, isEmpty, mode, scaffoldError, isSetupCo
 // ===== 16. EVENT LISTENERS & INIT =====
 
 // Editor save
-let saveTimer=null;
-document.addEventListener('input',e=>{if((e.target.id==='editor-content'||e.target.id==='editor-textarea')&&currentFilePath&&editorMode==='edit'){editorDirty=true;document.getElementById('editor-status').textContent='Unsaved';document.getElementById('editor-status').style.color='var(--attention)';clearTimeout(saveTimer);saveTimer=setTimeout(()=>{saveFileGuarded(currentFilePath,getFileContentForSave());},1500);}});
+document.addEventListener('input',e=>{if((e.target.id==='editor-content'||e.target.id==='editor-textarea')&&currentFilePath&&editorMode==='edit'){editorDirty=true;document.getElementById('editor-status').textContent='Unsaved';document.getElementById('editor-status').style.color='var(--attention)';const path=currentFilePath;fileSaves.schedule(path,()=>{saveFileGuarded(path,getFileContentForSave());},1500);}});
 const msgInput = document.getElementById('msg-input');
 msgInput.addEventListener('keydown',e=>{
   if(e.key==='Enter'&&!e.shiftKey){
@@ -1712,7 +1965,7 @@ document.addEventListener('keydown', e => {
 document.addEventListener('keydown', e => {
   if ((e.metaKey || e.ctrlKey) && e.key === 's' && activeTiptapEditor) {
     e.preventDefault();
-    clearTimeout(_tiptapSaveTimer);
+    fileSaves.cancel();
     saveTiptapFile();
   }
 });

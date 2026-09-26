@@ -332,7 +332,7 @@ describe('P2/P3 regressions', () => {
     srv.setWorkspace(dir);
     const match = srv.findDirectReportMatch('chief-of-staff', {
       subagent_type: 'general-purpose',
-      prompt: "Search the vault for Penn's content stats",
+      prompt: "Search the vault for Wren's content stats",
     });
     // Desired: an explicit general-purpose target is NOT hijacked to a teammate.
     assert.strictEqual(match, null, 'explicit general-purpose call must not be hijacked');

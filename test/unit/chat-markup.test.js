@@ -274,7 +274,7 @@ test('no chat message markup is written outside chat-markup.js', () => {
   }
   assert.deepStrictEqual(offenders, [], 'chat markup belongs in chat-markup.js only');
 
-  // And the owner really does hold all three, so the assertion above cannot
+  // And the owning view really does hold all three, so the assertion above cannot
   // pass by the tokens having been renamed out of existence.
   const ownerSrc = fs.readFileSync(owner, 'utf-8');
   for (const token of TOKENS) {

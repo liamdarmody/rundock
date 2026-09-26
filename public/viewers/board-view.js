@@ -157,7 +157,7 @@ export function reorderTargetIndex(fromLane, fromIndex, toLane, toIndex) {
   return target;
 }
 
-export function mountBoardView({ paneElement, content, onWikilink }, Kanban) {
+export function mountBoardView({ paneElement, content, onWikilink, onChange: announce }, Kanban) {
   const doc = paneElement.ownerDocument;
   ensureStyles(doc);
   paneElement.innerHTML = '';
@@ -173,7 +173,9 @@ export function mountBoardView({ paneElement, content, onWikilink }, Kanban) {
   // dropped anywhere over another card (or the empty area) and it lands at the
   // nearest gap, with a visible accent line at that gap.
   let dropTarget = null;
-  let onChange = () => {};
+  // The mount contract's onChange: the board announces that it changed and
+  // nothing more. When to write, and how long to wait, is the caller's.
+  const onChange = typeof announce === 'function' ? () => announce() : () => {};
 
   function clearDropMarkers() {
     scroll.querySelectorAll('.board-card.insert-before, .board-card.insert-after')
@@ -308,6 +310,9 @@ export function mountBoardView({ paneElement, content, onWikilink }, Kanban) {
     text.addEventListener('click', (e) => {
       const wl = e.target.closest && e.target.closest('a.board-wikilink');
       if (wl) { if (typeof onWikilink === 'function') onWikilink(wl.getAttribute('data-target') || ''); return; }
+      // A link on the card opens (the page's one rule takes a web link
+      // outside the app); it does not also put the card into editing.
+      if (e.target.closest && e.target.closest('a[href]')) return;
       enterCardEdit(card, laneIndex, itemIndex);
     });
     row.appendChild(check);
@@ -690,7 +695,6 @@ export function mountBoardView({ paneElement, content, onWikilink }, Kanban) {
     getContentForSave: (board.dropped && board.dropped.length)
       ? null
       : () => Kanban.serialize(board),
-    setOnChange(cb) { onChange = typeof cb === 'function' ? cb : (() => {}); },
     destroy() {
       closeLaneMenu();
       doc.removeEventListener('rundock:closemenus', closeLaneMenu);

@@ -318,7 +318,7 @@ The orchestrator only sees its direct reports (Kit, Jules). Kit only sees their 
 - A specific thing to ask that agent (based on the workspace's actual capabilities)
 - How to find their agents (they appear in the sidebar and org chart)
 
-Example: "Your team is ready. Try starting a conversation with Dex and asking 'What's on my plate today?' You'll see all agents in the sidebar."
+Example: "Your team is ready. Try starting a conversation with Juno and asking 'What's on my plate today?' You'll see all agents in the sidebar."
 
 ## Skills
 
@@ -353,7 +353,7 @@ A Rundock-ready workspace has:
 
 When proposing agents, follow these conventions:
 
-**Naming:** Use short, memorable character-style displayNames, not functional labels. Good: "Dex", "Intel", "Strat", "Kit". Bad: "Meetings Agent", "Projects", "Career Coach". The displayName should feel like a team member's name, not a job description. The `role` field carries the functional title.
+**Naming:** Use short, memorable character-style displayNames, not functional labels. Good: "Juno", "Intel", "Strat", "Kit". Bad: "Meetings Agent", "Projects", "Career Coach". The displayName should feel like a team member's name, not a job description. The `role` field carries the functional title.
 
 **Skill assignment:** Skills in `.claude/skills/` are assigned to an agent when the agent's instruction body mentions the skill's directory slug. When creating agents:
 1. Read all skills in `.claude/skills/` to understand what's available

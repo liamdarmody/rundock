@@ -314,10 +314,10 @@ describe('every path that returns control to a parent consults the marker', () =
   // ACT on one, which is a different list, and three separate reviews found a
   // different member of it each time:
   //
-  //   handleScopeReturn ................ fixed round 1
-  //   skip-level to a live orchestrator  fixed round 2
-  //   mid-level parent restart ......... fixed round 2
-  //   non-intercepted parent restore ... fixed round 3
+  //   handleScopeReturn ................ fixed first
+  //   skip-level to a live orchestrator  fixed second
+  //   mid-level parent restart ......... fixed second
+  //   non-intercepted parent restore ... fixed third
   //   spawn-error restore .............. correctly marker-free, the delegate
   //                                      never ran, so there is no marker
   //
@@ -562,7 +562,7 @@ describe('an agent says why it arrived, or does not appear to', () => {
     // left the orchestrator writing a 3-5 word label per the schema, which
     // would then surface as its visible turn. Mechanism and instruction have to
     // cover the same callers.
-    assert.match(promptSrc, /`description` field IS YOUR HANDOFF LINE[\s\S]{0,400}Handing to Penn to draft the post/,
+    assert.match(promptSrc, /`description` field IS YOUR HANDOFF LINE[\s\S]{0,400}Handing to Wren to draft the post/,
       'the orchestrator gets the field rule with an example in its own voice');
     assert.doesNotMatch(promptSrc, /A brief one-sentence handoff is fine/,
       'and no longer the permission wording that produced task labels');
@@ -706,13 +706,16 @@ describe('drawing an arrival and waking the agent read the same identifier', () 
     // drives this orchestrator exactly as an auto-continue would, so it counts
     // as speaking and therefore draws; reading reachability alone suppressed an
     // arrival that the replay then justified.
-    assert.match(src, /const orchestratorBufferedTookOver = !isPipelineComplete\s*\n?\s*&& bufferedFollowUpTakesOver\(/,
+    // Only an out-of-scope RETURN takes this path now (work handed back goes
+    // to the lead that delegated it), so there is no pipeline-complete gate
+    // left to fold into either answer.
+    assert.match(src, /const orchestratorBufferedTookOver = bufferedFollowUpTakesOver\(/,
       'the buffered question is asked once, ahead of both decisions');
-    assert.match(src, /const orchestratorWillSpeak = !isPipelineComplete\s*\n?\s*&& \(orchestratorBufferedTookOver \|\| orchestratorReachable\);/,
+    assert.match(src, /const orchestratorWillSpeak = orchestratorBufferedTookOver \|\| orchestratorReachable;/,
       'and a takeover counts as speaking');
     assert.match(src, /\.\.\.switchSilence\(orchestratorWillSpeak\)/,
       'the arrival is drawn from it, through the one helper every path uses');
-    assert.match(src, /\} else if \(orchestratorBufferedTookOver\) \{/,
+    assert.match(src, /\n\s*if \(orchestratorBufferedTookOver\) \{/,
       'and the wake reads the captured answer rather than asking again');
     assert.strictEqual((src.match(/bufferedFollowUpTakesOver\(convoId, orchestratorEntry/g) || []).length, 1,
       'asked exactly once on this path, because asking twice acts twice');

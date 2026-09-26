@@ -1,0 +1,268 @@
+{
+ "engine": "chromium (Playwright)",
+ "stats": {
+  "expected": 43,
+  "unexpected": 0,
+  "flaky": 0
+ },
+ "tests": [
+  {
+   "file": "confinement-workflows.spec.js",
+   "suite": "what the confinement leaves working",
+   "title": "a web link in a conversation opens outside the app",
+   "status": "passed"
+  },
+  {
+   "file": "confinement-workflows.spec.js",
+   "suite": "what the confinement leaves working",
+   "title": "a web link in a note opens outside the app",
+   "status": "passed"
+  },
+  {
+   "file": "confinement-workflows.spec.js",
+   "suite": "a writing extension claiming a type never reaches its hidden files",
+   "title": "an agent file and .mcp.json are never mounted, never handed over, and a save to either changes no byte",
+   "status": "passed"
+  },
+  {
+   "file": "extension-confinement.spec.js",
+   "suite": "a view cannot leave its frame",
+   "title": "with the app page's frame policy, a view that leaves with the file reaches nothing, and the view ends",
+   "status": "passed"
+  },
+  {
+   "file": "extension-confinement.spec.js",
+   "suite": "a view cannot leave its frame",
+   "title": "without the page policy the same view does leak, which proves the instrument sees a leak",
+   "status": "passed"
+  },
+  {
+   "file": "extension-confinement.spec.js",
+   "suite": "the region renderer cannot leave its frame",
+   "title": "a region frame that leaves with a diagram's source reaches nothing, and the service is stopped",
+   "status": "passed"
+  },
+  {
+   "file": "extension-confinement.spec.js",
+   "suite": "a view cannot choose its file or open the web unasked",
+   "title": "open with no click opens nothing; the same open after a click is honoured",
+   "status": "passed"
+  },
+  {
+   "file": "extension-confinement.spec.js",
+   "suite": "a view cannot choose its file or open the web unasked",
+   "title": "openExternal after a click is handed to the host's opener, never navigated in the frame",
+   "status": "passed"
+  },
+  {
+   "file": "extension-confinement.spec.js",
+   "suite": "one click inside a view is one request",
+   "title": "a burst of opens and web addresses on one click honours exactly one",
+   "status": "passed"
+  },
+  {
+   "file": "extension-confinement.spec.js",
+   "suite": "one click inside a view is one request",
+   "title": "without the rule the same click lets the whole burst through",
+   "status": "passed"
+  },
+  {
+   "file": "extension-confinement.spec.js",
+   "suite": "the click that opened a view is not a click inside it",
+   "title": "a view mounted by a click in the tree cannot use that click, even if it grabs focus",
+   "status": "passed"
+  },
+  {
+   "file": "extension-confinement.spec.js",
+   "suite": "nothing outside extension frames changes",
+   "title": "a web link in an HTML file preview opens outside the pane, and the preview stays put",
+   "status": "passed"
+  },
+  {
+   "file": "extension-confinement.spec.js",
+   "suite": "what the browser-mode card admits is true",
+   "title": "a peer connection is not blocked in browser mode, which is what the card says",
+   "status": "passed"
+  },
+  {
+   "file": "extension-host-wiring.spec.js",
+   "suite": "",
+   "title": "an installed extension renders the opened file inside its frame, and its open message opens a sibling",
+   "status": "passed"
+  },
+  {
+   "file": "extension-host-wiring.spec.js",
+   "suite": "",
+   "title": "with the record disabled, the same file renders the plain surface after re-hydration",
+   "status": "passed"
+  },
+  {
+   "file": "extension-host-wiring.spec.js",
+   "suite": "",
+   "title": "a linked or hard-linked file opened from the tree is not mounted: the plain surface names the rule, and no canary reaches a frame",
+   "status": "passed"
+  },
+  {
+   "file": "extension-host-wiring.spec.js",
+   "suite": "",
+   "title": "without the rule, the same linked file is mounted and its target reaches the frame",
+   "status": "passed"
+  },
+  {
+   "file": "trust-boundary-app.spec.js",
+   "suite": "named sources in the app",
+   "title": "the view is handed the listed files; a changed one, a removed name and a new unnamed file each behave",
+   "status": "passed"
+  },
+  {
+   "file": "trust-boundary-app.spec.js",
+   "suite": "named sources in the app",
+   "title": "the open file still refreshes from disk while its sources are watched",
+   "status": "passed"
+  },
+  {
+   "file": "trust-boundary-app.spec.js",
+   "suite": "named sources in the app",
+   "title": "a source edited on disk after mount raises the reload-theirs or keep-mine choice instead of being overwritten",
+   "status": "passed"
+  },
+  {
+   "file": "trust-boundary-app.spec.js",
+   "suite": "named sources in the app",
+   "title": "an extension that did not declare sources, on a marked note that lists files, is handed an empty list",
+   "status": "passed"
+  },
+  {
+   "file": "trust-boundary-app.spec.js",
+   "suite": "asking an agent in the app",
+   "title": "a click drafts to a NEW conversation with Wren, unsent, cleaned, named; nothing goes back",
+   "status": "passed"
+  },
+  {
+   "file": "trust-boundary-app.spec.js",
+   "suite": "asking an agent in the app",
+   "title": "an ask never discards what the person typed in another conversation and has not sent",
+   "status": "passed"
+  },
+  {
+   "file": "trust-boundary-app.spec.js",
+   "suite": "asking an agent in the app",
+   "title": "a draft the person never sends leaves no saved conversation behind",
+   "status": "passed"
+  },
+  {
+   "file": "trust-boundary.spec.js",
+   "suite": "named sources",
+   "title": "the view is handed exactly the named files that resolve; nothing else is learned or written",
+   "status": "passed"
+  },
+  {
+   "file": "trust-boundary.spec.js",
+   "suite": "named sources",
+   "title": "no message reads, lists or finds a file; each is refused as an unknown type",
+   "status": "passed"
+  },
+  {
+   "file": "trust-boundary.spec.js",
+   "suite": "named sources",
+   "title": "without writes every source write is refused and nothing on disk changes",
+   "status": "passed"
+  },
+  {
+   "file": "trust-boundary.spec.js",
+   "suite": "named sources",
+   "title": "a view cannot widen its note's list by save or change, or a source note's by saveSource; a body edit is allowed",
+   "status": "passed"
+  },
+  {
+   "file": "trust-boundary.spec.js",
+   "suite": "named sources",
+   "title": "control: without the host's list rule, the widened note is handed to the write",
+   "status": "passed"
+  },
+  {
+   "file": "trust-boundary.spec.js",
+   "suite": "named sources",
+   "title": "control: with the host's list check removed, the server alone refuses every unlisted write, with nothing changed",
+   "status": "passed"
+  },
+  {
+   "file": "trust-boundary.spec.js",
+   "suite": "named sources",
+   "title": "a changed source reaches the view; a new unnamed file never does; the person removes a name",
+   "status": "passed"
+  },
+  {
+   "file": "trust-boundary.spec.js",
+   "suite": "named sources",
+   "title": "a view whose claim was not by marker is handed an empty list, whatever the note lists",
+   "status": "passed"
+  },
+  {
+   "file": "trust-boundary.spec.js",
+   "suite": "ask an agent",
+   "title": "no click is refused; a click drafts one, cleaned, and nothing comes back",
+   "status": "passed"
+  },
+  {
+   "file": "trust-boundary.spec.js",
+   "suite": "ask an agent",
+   "title": "control: without the click gate, a script-sent ask drafts",
+   "status": "passed"
+  },
+  {
+   "file": "trust-boundary.spec.js",
+   "suite": "ask an agent",
+   "title": "a view mounted by a click on the page cannot use that click, even if it grabs focus",
+   "status": "passed"
+  },
+  {
+   "file": "trust-boundary.spec.js",
+   "suite": "ask an agent",
+   "title": "one click is one ask: a burst of six drafts one",
+   "status": "passed"
+  },
+  {
+   "file": "trust-boundary.spec.js",
+   "suite": "ask an agent",
+   "title": "a malformed first ask still uses the click, so a valid one after it drafts nothing",
+   "status": "passed"
+  },
+  {
+   "file": "trust-boundary.spec.js",
+   "suite": "ask an agent",
+   "title": "control: without one ask per click, the same click drafts six",
+   "status": "passed"
+  },
+  {
+   "file": "trust-boundary.spec.js",
+   "suite": "ask an agent",
+   "title": "a click that asks ghost is refused with its reason, and drafts nothing",
+   "status": "passed"
+  },
+  {
+   "file": "trust-boundary.spec.js",
+   "suite": "ask an agent",
+   "title": "a click that asks undeclared is refused with its reason, and drafts nothing",
+   "status": "passed"
+  },
+  {
+   "file": "trust-boundary.spec.js",
+   "suite": "ask an agent",
+   "title": "a click that asks proto is refused with its reason, and drafts nothing",
+   "status": "passed"
+  },
+  {
+   "file": "trust-boundary.spec.js",
+   "suite": "ask an agent",
+   "title": "control: without the declared list, an undeclared team agent is drafted to",
+   "status": "passed"
+  },
+  {
+   "file": "trust-boundary.spec.js",
+   "suite": "ask an agent",
+   "title": "a malformed ask is refused by shape, even after a click",
+   "status": "passed"
+  }
+ ]
+}

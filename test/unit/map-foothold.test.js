@@ -510,7 +510,7 @@ describe('the connections list rides the real open path', () => {
       cachedFileTree: TREE,
       currentFilePath: null, editorReturnView: 'editor', fileHistory: [],
       rawFileContent: '', fileFrontmatter: '', fileBody: '', editorMode: 'preview',
-      editorDirty: false, saveTimer: null, boardSaveTimer: null, boardPendingSave: null,
+      editorDirty: false,
       diskBaselines: new Map(),
       workspaceAnalysis: null, agents: [], currentWorkspacePath: null,
       TREE_ICONS: new Proxy({}, { get: () => '<svg></svg>' }),
@@ -520,7 +520,7 @@ describe('the connections list rides the real open path', () => {
       switchNav: () => {}, showView: () => {}, highlightFileInSidebar: () => {},
       closeFindBar: () => {}, findState: { open: false }, syncTiptapFindStateFromPlugin: () => {},
       paletteOpenFile: () => {},
-      activeTiptapEditor: null, _tiptapSaveTimer: null,
+      activeTiptapEditor: null, fileSaves: { schedule() {}, flush() {}, cancel() {}, pendingPath: () => null },
       // The registry double: classification by extension, which is all the
       // dispatch reads. Pre-seeded so loadViewersModule never imports.
       _viewersModuleResolved: null, _viewersModule: null,

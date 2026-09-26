@@ -458,7 +458,9 @@ describe('the readout', () => {
   test('the warming and no-index statements are the model\'s words', () => {
     assert.match(m.WARMING.title, /still being indexed/i);
     assert.match(m.NO_INDEX.title + ' ' + m.NO_INDEX.body, /search index/i);
-    assert.match(m.NOTHING_LINKED.title, /Nothing is linked yet/);
+    assert.match(m.NO_FILES.title, /No files yet/);
+    assert.doesNotMatch(m.NO_FILES.title + ' ' + m.NO_FILES.body(), /link/i,
+      'the only thing the map cannot draw is an empty workspace, so its words do not mention links');
   });
 });
 

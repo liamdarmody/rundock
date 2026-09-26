@@ -7,8 +7,7 @@
 // public/index.html.
 //
 // Rebuild only when versions in package.json change. See package.json for the
-// procedure and the spec at 02_Areas/Rundock/Specs/Tiptap-Editor-Implementation.md
-// for the rationale.
+// procedure.
 
 export { Editor, Node, Mark, Extension, mergeAttributes, InputRule } from '@tiptap/core';
 export { default as StarterKit } from '@tiptap/starter-kit';

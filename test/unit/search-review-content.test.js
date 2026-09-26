@@ -27,10 +27,10 @@ describe('normaliseReviewContent', () => {
   });
 
   test('endmatter is dropped entirely', () => {
-    const src = 'Body text here.\n\n---\ncomments:\n  c1:\n    by: penn\n    at: "2026-07-12T10:00:00.000Z"\nsuggestions:\n  s1:\n    by: penn\n';
+    const src = 'Body text here.\n\n---\ncomments:\n  c1:\n    by: wren\n    at: "2026-07-12T10:00:00.000Z"\nsuggestions:\n  s1:\n    by: wren\n';
     const out = normaliseReviewContent(src);
     assert.ok(out.includes('Body text here.'));
-    assert.ok(!out.includes('penn'), 'metadata is not content');
+    assert.ok(!out.includes('wren'), 'metadata is not content');
     assert.ok(!out.includes('comments:'));
   });
 

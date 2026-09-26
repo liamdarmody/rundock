@@ -3,7 +3,7 @@
 // Break each of the approval and connectors guards in turn and report which
 // tests notice.
 //
-// The rules this lane leaves behind are consent rules: a plan runs unattended
+// The rules this change leaves behind are consent rules: a plan runs unattended
 // only after its one tap, the tap covers exactly what the routine DOES, an
 // upgrade never stops work already consented to, and the connectors tab
 // never silently replaces a connector somebody configured. Every one of them

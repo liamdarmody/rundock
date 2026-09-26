@@ -1,0 +1,16 @@
+{
+ "asked": [
+  {
+   "agent": "analyst",
+   "message": "burst 0"
+  }
+ ],
+ "toFrame": [
+  {
+   "type": "refused",
+   "of": "ask",
+   "reason": "you dismissed this in Rundock"
+  }
+ ],
+ "bar": 0
+}

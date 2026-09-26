@@ -91,7 +91,7 @@ function replay(messages, opts = {}) {
 const rows = () => [...document.getElementById('messages').children];
 
 describe('who is announced, on the document, through the real executor', () => {
-  // AA-1 and AA-2 at the surface. The reducer decides and the executor draws,
+  // At the surface. The reducer decides and the executor draws,
   // and only running both says what a person sees.
   const APP = fs.readFileSync(path.join(ROOT, 'public', 'app.js'), 'utf-8');
   function executor(name) {
@@ -145,7 +145,7 @@ describe('who is announced, on the document, through the real executor', () => {
 });
 
 describe('coming back to a conversation draws what a reload draws', () => {
-  // AA-3 ON THE DOCUMENT, through the loop a navigation actually uses.
+  // ON THE DOCUMENT, through the loop a navigation actually uses.
   // replayConversationInto is what openConversation calls to rebuild the thread
   // from the conversation's own messages, which is the path taken when you
   // click away and click back.
@@ -195,7 +195,7 @@ describe('coming back to a conversation draws what a reload draws', () => {
   });
 
   test('the session boundary still appears here too', () => {
-    // AA-6 on this path as well as the reload one: the two renders agree about
+    // On this path as well as the reload one: the two renders agree about
     // what survives, not just about what does not.
     openWith(STORED.map((m) => ({ ...m })), 3);
     const boundary = rows().filter((el) => /previous session/i.test(el.textContent || ''));

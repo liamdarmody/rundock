@@ -134,6 +134,19 @@ describe('writeAsUnit', () => {
     assert.deepStrictEqual(tree(root), ['notes/one.md:' + Buffer.from('after').toString('base64')]);
   });
 
+  test('a destination under .rundock beside the import root lands, with no residue', () => {
+    // The install store and the receipts live in .rundock/, beside the
+    // transaction's own state at .rundock/import/. Only the import root is
+    // fenced off, so Rundock's own files there are ordinary destinations.
+    const root = workspace();
+    const records = path.join(root, '.rundock', 'extensions.json');
+    const result = writeAsUnit(root, [{ path: records, content: '{}' }]);
+    assert.deepStrictEqual(result, { written: [records] });
+    assert.strictEqual(read(records), '{}');
+    assert.strictEqual(fs.existsSync(journalPath(root)), false);
+    assert.strictEqual(fs.existsSync(path.join(root, IMPORT_SUBDIR)), false);
+  });
+
   test('an empty transaction creates no state', () => {
     const root = workspace();
     assert.deepStrictEqual(writeAsUnit(root, []), { written: [] });
@@ -156,7 +169,6 @@ describe('boundary validation rejects the whole plan with the tree untouched', (
     ['a destination inside the transaction state', (root) => ({ writes: [{ path: path.join(root, IMPORT_SUBDIR, 'x.md'), content: 'x' }] }), /transaction state/],
     ['the transaction-state directory itself as a destination', (root) => ({ replaceDirs: [{ path: path.join(root, IMPORT_SUBDIR), files: [] }] }), /transaction state/],
     ['an ancestor of the transaction state as a destination', (root) => ({ writes: [{ path: path.join(root, '.rundock'), content: 'x' }] }), /transaction state/],
-    ['a destination beside the import root but under the state root', (root) => ({ writes: [{ path: path.join(root, '.rundock', 'other.md'), content: 'x' }] }), /transaction state/],
     ['a case-variant of the transaction state as a destination', (root) => ({ writes: [{ path: path.join(root, '.RUNDOCK', 'import', 'run', 'backup', '0'), content: 'x' }] }), /transaction state/],
     ['case-variant duplicate destinations', (root) => ({ writes: [{ path: path.join(root, 'A.md'), content: 'x' }, { path: path.join(root, 'a.md'), content: 'y' }] }), /duplicate destination/],
     ['replaceDirs that is not an array', () => ({ replaceDirs: 'nope' }), /replaceDirs must be an array/],
@@ -589,4 +601,115 @@ test('recoverPendingWrites is a no-op without a journal', () => {
   fs.writeFileSync(path.join(root, 'kept.md'), 'kept');
   assert.deepStrictEqual(recoverPendingWrites(root), { recovered: 0 });
   assert.deepStrictEqual(tree(root), ['kept.md:' + Buffer.from('kept').toString('base64')]);
+});
+
+// ---- A removal is a destination too ----
+//
+// A package uninstall takes files and folders away, and must take them away
+// with everything else it changes or not at all. A removal is backed up in
+// preparation like any replaced destination, removed at commit, and put back
+// by the same undo, whether the failure is live or found by recovery.
+describe('removals ride the same transaction', () => {
+  function fixture() {
+    const root = workspace();
+    write(root, '.claude/agents/gone.md', 'gone');
+    write(root, '.claude/skills/gone/SKILL.md', 'skill');
+    write(root, '.claude/skills/gone/refs/a.md', 'ref');
+    write(root, 'keep.md', 'keep');
+    return root;
+  }
+  const plan = (root) => ({
+    writes: [{ path: path.join(root, '.rundock', 'extensions.json'), content: '{}' }],
+    removes: [path.join(root, '.claude', 'agents', 'gone.md'), path.join(root, '.claude', 'skills', 'gone')],
+  });
+
+  test('a file and a folder are removed beside a write, with no residue', () => {
+    const root = fixture();
+    const { writes, removes } = plan(root);
+    writeAsUnit(root, writes, { removes });
+    assert.strictEqual(fs.existsSync(path.join(root, '.claude', 'agents', 'gone.md')), false);
+    assert.strictEqual(fs.existsSync(path.join(root, '.claude', 'skills', 'gone')), false);
+    assert.strictEqual(read(path.join(root, '.rundock', 'extensions.json')), '{}');
+    assert.strictEqual(read(path.join(root, 'keep.md')), 'keep');
+    assert.strictEqual(fs.existsSync(journalPath(root)), false);
+    assert.strictEqual(fs.existsSync(path.join(root, IMPORT_SUBDIR)), false);
+  });
+
+  test('a fault at any step puts every removal and every write back', () => {
+    const probe = fixture();
+    let steps = 0;
+    writeAsUnit(probe, plan(probe).writes, { removes: plan(probe).removes, afterStep: () => { steps += 1; } });
+    assert.ok(steps >= 6);
+    for (let boundary = 1; boundary <= steps; boundary++) {
+      const root = fixture();
+      const before = tree(root);
+      let completed = 0;
+      assert.throws(() => writeAsUnit(root, plan(root).writes, {
+        removes: plan(root).removes,
+        afterStep: () => { completed += 1; if (completed === boundary) throw new Error('injected fault'); },
+      }), /injected fault/);
+      assert.deepStrictEqual(tree(root), before, `after step ${boundary} of ${steps}`);
+    }
+  });
+
+  test('a removal found mid-commit by recovery is put back', () => {
+    const root = fixture();
+    const before = tree(root);
+    let journal = null;
+    assert.throws(() => writeAsUnit(root, [], {
+      removes: [path.join(root, '.claude', 'skills', 'gone')],
+      afterStep: (s) => {
+        if (s.phase === 'commit' && s.action === 'remove') {
+          journal = fs.readFileSync(journalPath(root), 'utf8');
+          const backups = path.join(root, IMPORT_SUBDIR, 'run', 'backup');
+          const saved = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'aw-backup-'));
+          fs.cpSync(backups, saved, { recursive: true });
+          journal = { text: journal, saved };
+          throw new Error('stop');
+        }
+      },
+    }), /stop/);
+    // Replay the state a killed process leaves: the removal done, the
+    // journal committing, the backup in place.
+    fs.rmSync(path.join(root, '.claude', 'skills', 'gone'), { recursive: true, force: true });
+    fs.mkdirSync(path.join(root, IMPORT_SUBDIR, 'run'), { recursive: true });
+    fs.cpSync(journal.saved, path.join(root, IMPORT_SUBDIR, 'run', 'backup'), { recursive: true });
+    fs.writeFileSync(journalPath(root), journal.text);
+    recoverPendingWrites(root);
+    assert.deepStrictEqual(tree(root), before);
+  });
+
+  test('a removal that is absent already is nothing to do; one through a symlink, or outside, is refused with the tree untouched', () => {
+    const root = fixture();
+    writeAsUnit(root, [{ path: path.join(root, 'a.md'), content: 'a' }], { removes: [path.join(root, 'never-there.md')] });
+    assert.strictEqual(read(path.join(root, 'a.md')), 'a');
+    const outside = workspace();
+    write(outside, 'precious.md', 'mine');
+    const before = tree(root);
+    fs.symlinkSync(outside, path.join(root, 'linked'));
+    assert.throws(() => writeAsUnit(root, [], { removes: [path.join(root, 'linked', 'precious.md')] }), /symlink/);
+    assert.throws(() => writeAsUnit(root, [], { removes: [path.join(outside, 'precious.md')] }), /inside the workspace/);
+    assert.throws(() => writeAsUnit(root, [], { removes: ['relative.md'] }), /absolute path/);
+    fs.unlinkSync(path.join(root, 'linked'));
+    assert.deepStrictEqual(tree(root), before);
+    assert.strictEqual(read(path.join(outside, 'precious.md')), 'mine');
+  });
+
+  test('a journal recording a removal of nothing is not trusted', () => {
+    const root = fixture();
+    fs.mkdirSync(path.dirname(journalPath(root)), { recursive: true });
+    fs.writeFileSync(journalPath(root), JSON.stringify({
+      version: JOURNAL_VERSION, runId: 'x', phase: 'committing', createdState: [], createdDirs: [],
+      entries: [{ slot: 0, type: 'remove', priorType: 'absent', destination: 'keep.md' }],
+    }));
+    assert.throws(() => recoverPendingWrites(root), (e) => e.code === 'ERR_ATOMIC_JOURNAL');
+    assert.strictEqual(read(path.join(root, 'keep.md')), 'keep');
+  });
+
+  test('a path cannot be both written and removed, nor removed inside another destination', () => {
+    const root = fixture();
+    const file = path.join(root, 'keep.md');
+    assert.throws(() => writeAsUnit(root, [{ path: file, content: 'x' }], { removes: [file] }), /duplicate destination/);
+    assert.throws(() => writeAsUnit(root, [], { removes: [path.join(root, '.claude'), path.join(root, '.claude', 'agents', 'gone.md')] }), /contain another/);
+  });
 });

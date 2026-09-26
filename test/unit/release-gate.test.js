@@ -23,6 +23,7 @@ const {
   readGateRecord,
   versionSanity,
   changelogReady,
+  buildSteps,
   GATE_FILE_NAME,
 } = require('../../scripts/release-gate.js');
 const { requireGatePass, publishRelease, ghApiArgs, hasPublishConfirmation, requireNotesMatchBuild } = require('../../scripts/release.js');
@@ -139,6 +140,14 @@ describe('release gate: the run', () => {
     assert.match(joined, /stream:truth/, 'stream-truth check runs (stub vs captured runtime)');
     assert.match(joined, /typecheck/, 'both tsc configs run');
     assert.match(joined, /smoke-packaged/, 'packaging runs (unsigned unpacked build + boot check)');
+  });
+
+  test('the desktop profile override is proven on the shipped entrypoint, beside the parity run', () => {
+    const names = buildSteps(false).map((s) => s.cmd[1].join(' '));
+    const parity = names.findIndex((n) => /test:settings:electron/.test(n));
+    const override = names.findIndex((n) => /test:user-data:electron/.test(n));
+    assert.ok(parity > -1, 'the parity run is a step');
+    assert.strictEqual(override, parity + 1, 'the override run follows the parity run');
   });
 
   test('a dirty tree refuses to gate: the record must describe a reproducible SHA', async () => {

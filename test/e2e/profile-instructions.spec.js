@@ -10,8 +10,8 @@ test('the agent instructions panel expands fully, with no inner scroll cap', asy
   await page.goto('/');
   await expect(page.locator('.convo-item').first()).toBeVisible();
 
-  // Open a specialist's profile (Penn has instructions) and expand the panel.
-  await page.evaluate(() => showProfile('penn'));
+  // Open a specialist's profile (Wren has instructions) and expand the panel.
+  await page.evaluate(() => showProfile('wren'));
   await page.evaluate(() => document.getElementById('agent-instructions').classList.remove('hidden'));
 
   const inner = page.locator('#agent-instructions > div');
@@ -32,7 +32,7 @@ test('the agent instructions panel expands fully, with no inner scroll cap', asy
 test('agent instructions render in full past brackets, HTML, wikilinks, and code fences', async ({ page }) => {
   await page.goto('/');
   await expect(page.locator('.convo-item').first()).toBeVisible();
-  await page.evaluate(() => showProfile('penn'));
+  await page.evaluate(() => showProfile('wren'));
   await page.evaluate(() => document.getElementById('agent-instructions').classList.remove('hidden'));
 
   const text = await page.locator('#agent-instructions > div').textContent();

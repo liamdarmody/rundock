@@ -258,7 +258,7 @@ test('a routine whose runOn is not supported does not fire', async (t) => {
   await settleControl();
 });
 
-// AC-1, at the tick. A routine whose file never said `enabled` is one somebody
+// At the tick. A routine whose file never said `enabled` is one somebody
 // wrote by hand before this product could run it, against a cron job that is
 // still doing the work. It is refused by the same gate and named by the same
 // field, so the log line a support question is answered from is the one that

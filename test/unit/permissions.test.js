@@ -701,8 +701,8 @@ describe('classifyRisk other tools', () => {
   });
 
   test('destructive MCP actions are high, other MCP writes medium', () => {
-    assert.strictEqual(P.classifyRisk('mcp__todoist__delete-object', {}), 'high');
-    assert.strictEqual(P.classifyRisk('mcp__notion__API-move-page', {}), 'medium');
+    assert.strictEqual(P.classifyRisk('mcp__example_tasks__delete-object', {}), 'high');
+    assert.strictEqual(P.classifyRisk('mcp__example_notes__API-move-page', {}), 'medium');
   });
 
   test('unknown tools are medium', () => {
@@ -773,8 +773,8 @@ describe('describeToolRequest', () => {
   });
 
   test('MCP tools describe as server: action', () => {
-    const { summary } = P.describeToolRequest('mcp__claude_ai_Gmail__create_draft', {});
-    assert.strictEqual(summary, 'Gmail: create draft');
+    const { summary } = P.describeToolRequest('mcp__claude_ai_Example__create_draft', {});
+    assert.strictEqual(summary, 'Example: create draft');
   });
 
   test('unknown tools fall back to Use <tool> with JSON detail', () => {

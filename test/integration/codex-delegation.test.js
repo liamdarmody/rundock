@@ -221,7 +221,7 @@ describe('delegation to a codex specialist', () => {
     // The observed live failure: a specialist names a codex agent outside its
     // direct reports. Pre-fix, Claude Code spawned a Claude subagent wearing
     // the codex agent's name, silently bypassing the user's runtime choice.
-    // Ida (researcher, runtime: codex) reports to chief-of-staff, not Penn.
+    // Ida (researcher, runtime: codex) reports to chief-of-staff, not Wren.
     const convoId = h.freshConvoId('cdel');
     h.clearInvocations();
     h.writeScenario([

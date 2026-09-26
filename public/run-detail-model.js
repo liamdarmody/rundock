@@ -150,6 +150,19 @@
   // a newer Rundock, or by a record somebody hand-edited. Described rather
   // than printed, because printing it is the thing this file forbids and an
   // unrecognised word is the case where the temptation is strongest.
+  // A FAILURE THE AGENT DECLARED. The process exited cleanly and the agent's
+  // final line said `RUN STATUS: failed: <reason>` (the contract in
+  // docs/ROUTINES.md). Recorded as failed, and shown apart from a run whose
+  // process failed, because they send the reader to different places: this
+  // one did what it could and said what stopped it.
+  const DECLARED_FAILED_STATE = {
+    filesLabel: 'partial',
+    tone: 'bad',
+    chip: 'Reported failed',
+    headline: 'The agent reported that this run failed.',
+    guidance: null,
+  };
+
   const UNRECOGNISED_STATE = {
     tone: 'unwitnessed',
     chip: 'Not recognised',
@@ -421,7 +434,9 @@
     // a string.
     const state = !found
       ? NO_RECORD_STATE
-      : (Object.prototype.hasOwnProperty.call(RUN_STATES, record.status) ? RUN_STATES[record.status] : UNRECOGNISED_STATE);
+      : (record.status === 'failed' && record.declared === true
+        ? DECLARED_FAILED_STATE
+        : (Object.prototype.hasOwnProperty.call(RUN_STATES, record.status) ? RUN_STATES[record.status] : UNRECOGNISED_STATE));
     // WHICH HEADING THE FILE LIST TAKES, carried by the state rather than
     // derived from a boolean. A boolean could only say "did it reach the end",
     // which lumps a run that stopped partway together with one whose ending
@@ -463,13 +478,13 @@
    * message is the whole of what anybody has to go on.
    */
   function guidanceFor(state, record) {
-    if (state !== RUN_STATES.failed) return state.guidance;
+    if (state !== RUN_STATES.failed && state !== DECLARED_FAILED_STATE) return state.guidance;
     const reason = record && typeof record.error === 'string' && record.error.trim() ? record.error.trim() : null;
     return reason ? `The reason it gave: ${reason}` : NO_REASON_GIVEN;
   }
 
   return {
-    RUN_STATES, UNRECOGNISED_STATE, NO_RECORD_STATE, FILES_UNKNOWN_WORDS, FILES_UNKNOWN_FALLBACK,
+    RUN_STATES, DECLARED_FAILED_STATE, UNRECOGNISED_STATE, NO_RECORD_STATE, FILES_UNKNOWN_WORDS, FILES_UNKNOWN_FALLBACK,
     CHANGE_LABELS, CHANGE_FALLBACK, FILES_LABELS, NO_FILES_CHANGED, UNKNOWN_FILES_LEAD, NO_REASON_GIVEN,
     changedFiles, unknownWords, durationWords, describeRun, baseName, startedWords, triggerOf, STARTED_MANUALLY,
   };

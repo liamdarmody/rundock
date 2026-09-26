@@ -1,0 +1,119 @@
+/* The floor every extension stands on.
+
+   WHY THIS EXISTS. An extension runs in an opaque-origin frame with
+   `default-src 'none'`: it cannot fetch anything, including from Rundock. So
+   the host injects its design tokens into that frame, and an extension CAN be
+   drawn in Rundock's palette. Tokens alone make that an achievement, though:
+   somebody has to read them and map them, and an author who does not think
+   about it writes a white panel that lands in a dark document and reads as
+   broken rather than as somebody else's styling.
+
+   This makes it the default instead. An extension that writes ordinary HTML
+   looks like Rundock without doing anything, and has to work to look wrong.
+
+   ELEMENT SELECTORS ONLY, AND THAT IS THE WHOLE DESIGN. No classes, no
+   components, nothing named. A class here would collide with an extension's
+   own styling and turn a floor into a fight; element rules cannot, because an
+   extension's classes always win on specificity. It also keeps the promise
+   small, and a small promise is one that can be kept: this sheet is a public
+   contract the moment a second extension relies on it, and every rule in it
+   is something that can never simply be removed.
+
+   WHERE IT SITS. Inlined by the host between the token block and the
+   extension's own declared styles. Tokens first so these rules can read them,
+   the extension last so it can override any of this deliberately.
+
+   A COMPONENT LIBRARY IS NOT THIS. Cards, columns, draggable things and the
+   rest are Rundock UI (styles/rundock-ui.css and public/rundock-ui.js,
+   docs/RUNDOCK-UI.md): a versioned API with a support cost, injected after
+   this floor, all classes, so this sheet stays elements only. */
+
+/* The surface an extension is drawn on, and where its content starts.
+
+   --elevated, the editor pane's own colour, in both themes: the frame spans
+   the pane edge to edge (the pane has no padding while an extension holds
+   it), so any other colour draws a box around the view. And the note's own
+   24px 32px, on body, so the view's first line starts exactly where a
+   note's first line of text does. An extension should not add an outer
+   padding of its own.
+
+   Two variations, each a class on body. An embedded view (rundock-embedded,
+   set by the host) sits inside a panel that already pads it, so it paints
+   the panel's --surface and adds no padding. A view that wants an
+   edge-to-edge canvas adds rundock-full-bleed to body itself, or sets its
+   own body padding in its stylesheet, which comes after this one. */
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--elevated);
+  color: var(--text-1);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  font-size: 13px;
+  line-height: 1.5;
+}
+body { padding: 24px 32px; }
+body.rundock-full-bleed { padding: 0; }
+html:has(> body.rundock-embedded), body.rundock-embedded { background: var(--surface); }
+body.rundock-embedded { padding: 0; }
+
+/* Text. Sized down from the browser's defaults, which are calibrated for a
+   document on the open web rather than a panel inside an application. */
+h1, h2, h3, h4 { color: var(--text-1); font-weight: 600; margin: 0 0 8px; line-height: 1.3; }
+h1 { font-size: 18px; }
+h2 { font-size: 16px; }
+h3 { font-size: 14px; }
+h4 { font-size: 13px; }
+p { margin: 0 0 8px; }
+small { color: var(--text-2); font-size: 11px; }
+strong { font-weight: 600; }
+hr { border: 0; border-top: 1px solid var(--border); margin: 12px 0; }
+
+/* Tables, which is what most extensions that show anything end up writing. */
+table { border-collapse: collapse; width: 100%; font-size: 12px; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+/* --text-1, not --text-2 (3.91 to 4.26:1 on --card, under 4.5:1): the header
+   stays quieter than the body through size, weight and case instead. */
+th { color: var(--text-1); font-weight: 700; font-size: 10px; text-transform: uppercase; letter-spacing: 0.03em; white-space: nowrap; }
+tr:last-child td { border-bottom: 0; }
+caption { color: var(--text-2); font-size: 11px; text-align: left; padding: 6px 8px; }
+
+/* Code, in the product's own mono stack rather than the browser's. */
+code, pre, kbd, samp { font-family: var(--font-mono); font-size: 12px; }
+pre {
+  background: var(--elevated); border: 1px solid var(--border);
+  border-radius: var(--radius-md); padding: 8px; overflow-x: auto; margin: 0 0 8px;
+}
+code { background: var(--elevated); border-radius: var(--radius-sm); padding: 1px 4px; }
+pre code { background: none; padding: 0; }
+
+/* Lists. */
+ul, ol { margin: 0 0 8px; padding-left: 20px; }
+li { margin: 2px 0; }
+
+/* Links. An extension cannot navigate anything itself: the host does that,
+   through the one message the contract names. This is what one looks like. */
+a { color: var(--accent); text-decoration: none; cursor: pointer; }
+a:hover { text-decoration: underline; }
+
+/* Controls. Enough that a button an extension writes is recognisably one of
+   Rundock's, without pretending to be the app's own button component. */
+button {
+  background: var(--card); color: var(--text-1);
+  border: 1px solid var(--border); border-radius: var(--radius-md);
+  padding: 4px 12px; font-size: 12px; font-family: inherit; cursor: pointer;
+}
+button:hover { background: var(--elevated); }
+button:disabled { opacity: 0.5; cursor: default; }
+/* A control's outline is how a person finds it at all, so it takes --text-3
+   (3:1 on every surface, per tokens.css) rather than the decorative --border,
+   which measured 1.24 to 1.48:1. */
+input, select, textarea {
+  background: var(--surface); color: var(--text-1);
+  border: 1px solid var(--text-3); border-radius: var(--radius-md);
+  padding: 4px 8px; font-size: 12px; font-family: inherit;
+}
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* An image an extension inlines as a data URI: kept inside the frame rather
+   than allowed to set the frame's own width. */
+img, svg { max-width: 100%; height: auto; }

@@ -265,14 +265,15 @@ describe('the gate runs it first', () => {
     const { STEPS } = require('../../scripts/precommit-gate.js');
     const names = STEPS.map(s => s.name);
     assert.strictEqual(names[0], 'preflight', 'the cheap phase leads');
-    for (const slow of ['test:coverage', 'mutate:guards']) {
+    // The suite left the local gate on purpose (CI runs it on two Node
+    // versions and owns the coverage floors), so the one expensive step
+    // left is the mutation guards.
+    for (const slow of ['mutate:guards']) {
       assert.ok(names.indexOf(slow) > 0, `${slow} is in the list`);
       assert.ok(names.indexOf(slow) > names.indexOf('preflight'),
         `${slow} must run after the cheap phase, or nothing was gained`);
     }
-    // And the expensive pair are still last, in cost order.
-    assert.ok(names.indexOf('mutate:guards') > names.indexOf('test:coverage'),
-      'the slowest step runs last');
+    assert.ok(!names.includes('test:coverage'), 'the suite is CI\'s to run, not the local gate\'s');
   });
 
   test('reordering removed no step: the whole set is pinned, not just the order', () => {
@@ -283,7 +284,7 @@ describe('the gate runs it first', () => {
     const { STEPS } = require('../../scripts/precommit-gate.js');
     assert.deepStrictEqual(STEPS.map(s2 => s2.name), [
       'preflight', 'typecheck', 'lint:styles', 'check:refs',
-      'test:coverage', 'mutate:guards', 'check:fixture',
+      'mutate:guards', 'check:fixture',
     ], 'every check that ran before still runs; changing this set is a deliberate edit');
   });
 

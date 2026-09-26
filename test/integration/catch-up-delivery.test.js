@@ -30,12 +30,12 @@ function seedTranscript(convoId, entries) {
 describe('the orchestrator is told what happened while it was away', () => {
   test('a resumed orchestrator receives the turns it missed', async () => {
     const convoId = h.freshConvoId('catchup-orch');
-    // Cos delegated, two specialists worked, and Penn is handing back.
+    // Cos delegated, two specialists worked, and Wren is handing back.
     seedTranscript(convoId, [
       { role: 'user', text: 'write me a short blog post' },
-      { role: 'agent', agent: 'chief-of-staff', text: 'Handing this to Penn.' },
+      { role: 'agent', agent: 'chief-of-staff', text: 'Handing this to Wren.' },
       { role: 'agent', agent: 'content-analyst', text: 'ANALYST-INTERVENING-TURN: the numbers check out' },
-      { role: 'agent', agent: 'content-lead', text: 'PENN-HANDBACK: the post is written' }
+      { role: 'agent', agent: 'content-lead', text: 'WREN-HANDBACK: the post is written' }
     ]);
     // The orchestrator has a session on record, so it is resumed rather than
     // cold-spawned. That gating is the whole point: told "since your last
@@ -47,7 +47,7 @@ describe('the orchestrator is told what happened while it was away', () => {
 
     const entry = {
       agentId: 'content-lead', processId: 'p-catchup', lastUserMessage: 'write me a short blog post',
-      toolCalls: [], finalResponseText: 'PENN-HANDBACK: the post is written'
+      toolCalls: [], finalResponseText: 'WREN-HANDBACK: the post is written'
     };
     h.internal.chatProcesses.set(convoId, entry);
     h.clearPrompts();
@@ -66,7 +66,7 @@ describe('the orchestrator is told what happened while it was away', () => {
     const convoId = h.freshConvoId('catchup-dup');
     seedTranscript(convoId, [
       { role: 'user', text: 'write me a short blog post' },
-      { role: 'agent', agent: 'chief-of-staff', text: 'Handing this to Penn.' },
+      { role: 'agent', agent: 'chief-of-staff', text: 'Handing this to Wren.' },
       { role: 'agent', agent: 'content-analyst', text: 'ANALYST-TURN: checked' },
       { role: 'agent', agent: 'content-lead', text: 'UNIQUE-HANDBACK-MARKER-42' }
     ]);
@@ -94,7 +94,7 @@ describe('the orchestrator is told what happened while it was away', () => {
     const convoId = h.freshConvoId('catchup-cold');
     seedTranscript(convoId, [
       { role: 'user', text: 'write me a short blog post' },
-      { role: 'agent', agent: 'chief-of-staff', text: 'Handing this to Penn.' },
+      { role: 'agent', agent: 'chief-of-staff', text: 'Handing this to Wren.' },
       { role: 'agent', agent: 'content-analyst', text: 'ANALYST-TURN: checked' },
       { role: 'agent', agent: 'content-lead', text: 'done' }
     ]);
@@ -140,14 +140,14 @@ describe('a resumed delegate is told what it missed', () => {
     const convoId = h.freshConvoId('catchup-delegate');
     seedTranscript(convoId, [
       { role: 'user', text: 'write me a short blog post' },
-      { role: 'agent', agent: 'chief-of-staff', text: 'Handing this to Penn.' },
-      { role: 'agent', agent: 'content-lead', text: 'PENN-OWN-FIRST-DRAFT: here is the draft' },
+      { role: 'agent', agent: 'chief-of-staff', text: 'Handing this to Wren.' },
+      { role: 'agent', agent: 'content-lead', text: 'WREN-OWN-FIRST-DRAFT: here is the draft' },
       { role: 'agent', agent: 'content-analyst', text: 'ANALYST-INTERVENING: the numbers check out' }
     ]);
-    // Penn has a session on record, so she is resumed rather than cold-spawned.
+    // Wren has a session on record, so she is resumed rather than cold-spawned.
     h.internal.writeConversations([{
       id: convoId, title: 'delegate catch-up', messages: [],
-      sessionIds: [{ agentId: 'content-lead', sessionId: 'sess-penn-1' }]
+      sessionIds: [{ agentId: 'content-lead', sessionId: 'sess-wren-1' }]
     }]);
     // A live parent to delegate from, as the non-intercepted path requires.
     h.internal.chatProcesses.set(convoId, {
@@ -162,7 +162,7 @@ describe('a resumed delegate is told what it missed', () => {
     const prompt = await waitForPrompt('content-lead');
     assert.match(prompt, /ANALYST-INTERVENING/,
       'what the other agent did while she was away, which is the whole point');
-    assert.ok(!prompt.includes('PENN-OWN-FIRST-DRAFT'),
+    assert.ok(!prompt.includes('WREN-OWN-FIRST-DRAFT'),
       'her own earlier turn is already in her session; re-sending it is pure '
       + 'cost and invites her to redo work she has already done');
     assert.match(prompt, /now tighten the opening/, 'and the brief still arrives');
@@ -173,10 +173,10 @@ describe('a resumed delegate is told what it missed', () => {
     const convoId = h.freshConvoId('catchup-firsttime');
     seedTranscript(convoId, [
       { role: 'user', text: 'write me a short blog post' },
-      { role: 'agent', agent: 'chief-of-staff', text: 'Handing this to Penn.' },
+      { role: 'agent', agent: 'chief-of-staff', text: 'Handing this to Wren.' },
       { role: 'agent', agent: 'content-analyst', text: 'ANALYST-TURN: checked' }
     ]);
-    // No session for Penn: she has never spoken here, so she has missed
+    // No session for Wren: she has never spoken here, so she has missed
     // nothing, and the cold-spawn path gives her the history instead.
     h.internal.writeConversations([{ id: convoId, title: 'first', messages: [], sessionIds: [] }]);
     h.internal.chatProcesses.set(convoId, {

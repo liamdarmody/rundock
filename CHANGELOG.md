@@ -4,6 +4,42 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
+## Unreleased
+
+**Name:** Build On Rundock
+
+You can now add agents, skills and extensions to your workspace from a GitHub link, and build and publish your own. A package brings new teammates and the skills they use, and an extension opens a kind of file in its own view, so a note or a CSV file can become a dashboard or a table that looks and works like the rest of Rundock. Updates keep your edits, and keeping agents inside your workspace is now a switch of its own.
+
+### Added
+
+- **Install a package from a link:** paste a GitHub link into Settings, Packages. Before anything is written, Rundock shows what the package contains: its agents and skills, each routine and its schedule, and any hooks or MCP servers that act on their own. Where a package item shares a name with one of yours, you choose which to keep, item by item, and a package's own orchestrator can join your team as a specialist under yours. It appears in Team and Skills straight away. Investment Partner is an example to try: a portfolio dashboard, a risk control panel, a decision board and three agents that stress-test positions against your limits. Originating design proposal for packages and extensions (#199), and Investment Partner's first design and build, from @dougseven.
+
+- **Open files in an extension's view:** an extension claims a kind of file, such as every `.csv` file or the notes carrying a frontmatter key it names, and opens it in its own view. Extensions can also draw a code block inside a note as a diagram, turn a line of embedded files into a dashboard, and draft a message to one of your agents for you to send. Each runs in a sandboxed frame and opens a file, a link or a draft only after you click in its view, or after you confirm Rundock's "Open …?" prompt. Settings, Extensions lists each one with an On/Off switch. Pause all extensions stops every one at once, and when you resume, each goes back to its own setting.
+
+- **Extension views look and work like Rundock:** extension views use the buttons, tables, cards, menus and other controls Rundock itself uses, matched to both themes. Tables can be edited in place, with the extension accepting or refusing each change, and their columns size themselves, with the main column taking any spare room, can be resized, and keep the widths you set for each note. An extension can remember other choices the same way, such as a chosen tab, kept in Rundock's own folder, never in your note.
+
+- **Update or uninstall a package, and keep your edits:** the Packages page shows each installed package as a card with its version and what it brought. It checks for updates when you open it or press Check for updates, and offers one when the author tags a newer release. The review says what will change before anything does. Your own edits stay, with the author's version saved alongside, and a copyable prompt asks an agent to merge the two for you. Uninstall lists what goes and what stays, and anything you edited stays. Starter files, the files a package brings for its agents to work on, are never replaced by an update or removed by an uninstall; when the author changes one, the new template arrives beside yours, such as `Portfolio (v1.3.0).md`.
+
+- **Build and publish your own package:** a package is a GitHub repository with a `rundock.json`. Its `displayName` is shown on the install screen, its card and the Extensions page, and people are offered an update when you tag a newer version. The manifest says which files its extension opens (`declares`, `draws`), which files a note hands it (`sources`), which agents it can draft to (`asks`), whether it saves (`writes`), and which starter files it brings (`starter/`). A view declares `"rundockUi": "1.0"` to use Rundock's components, each shown at `/rundock-ui/gallery` on a running Rundock. `Rundock.viewState` keeps a view's per-note preferences, and a table with a `stateKey` remembers its column widths through it. A view that lists `handles: ['theme']` in its ready message is restyled in place when the theme changes, keeping unsaved edits.
+
+- **Routine approvals and failures:** a permission card raised by a routine appears in an approvals dock over whatever screen you have open, named for the routine and its agent. A routine that could not do its job can end with `RUN STATUS: failed: <reason>`, and the run is recorded as failed with that reason.
+
+### Changed
+
+- **Mode and keeping agents inside the workspace are separate settings:** the mode control was Knowledge or Code, and is now Notes or Code; a Knowledge workspace carries on as Notes. Mode sets which file types agents can touch and whether everyday commands need your approval. Keeping agents inside the workspace used to follow the mode, so choosing Code turned it off. It is now its own switch in Settings, Permissions. On macOS it uses the system sandbox, starts on for new workspaces, and shows what is actually in force. Existing workspaces keep their setting. Working folders sit under the switch as "Folders agents can also change", and custom sandbox rules can be brought across after Rundock shows what will carry over.
+
+- **Web links open in your browser:** some links opened inside the Rundock window. A web link anywhere in the app now opens in your browser, or a new tab in browser mode. A relative link to a workspace file opens that file in Rundock.
+
+- **Buttons are easier to read:** filled buttons use a darker orange that white text reads clearly on, in both themes. A button that starts something destructive, such as Uninstall, is a red outline, and the button that finally does it is solid red.
+
+### Fixed
+
+- **Finished work goes back to the lead that asked for it:** in a team with a lead between the orchestrator and a specialist, a specialist's handback went to the orchestrator and cut the lead's work off midway. Finished work, and work with more to do, now returns to the lead. Co-authored with @dougseven.
+
+- **Changing theme keeps unsaved work in an extension view:** a theme change, including your system switching at dusk, rebuilt every extension view and lost unsaved edits. Extension views that support it are now restyled in place and keep them.
+
+- **Smaller fixes:** unsent text stays with the conversation you typed it in. A permission card whose request has ended says so. The map draws a workspace with no links. Copying from a code block copies only the code. Open folder says when it fails. A link on a board card opens the link, and a link in the HTML preview opens once.
+
 ## 0.14.0: Map & Pins (2026-09-19)
 
 Two new places in the rail: one for the handful of files you keep coming back to, and one that shows you the shape of the whole workspace.
@@ -163,7 +199,7 @@ You can now schedule a skill to run on a cadence through a form, and change that
 - **Your agents can no longer touch files outside your workspace without asking:** file access has a real boundary now. Anything inside your workspace stays as frictionless as before; anything outside produces a permission card naming the exact path, with three choices: allow once, deny, or "Always allow this folder", which remembers that folder for this workspace only, never your whole machine. Standing folder grants are stored in the workspace itself, so they travel with it and keep working even with no browser open. Until now, agents could silently write anywhere your account could.
 - **Your workspace now keeps a private log of how your team behaves:** delegations, handbacks, permission decisions, routine outcomes, and skill use are recorded as small structured events in `.rundock/state/` inside your workspace, alongside a per-skill usage count. The log holds structure only, never message content or tool arguments, rotates monthly, prunes itself after six months, and never leaves your machine. Nothing reads it yet; it is the evidence base future team-health features will rest on, accruing from today so they arrive with history instead of amnesia.
 - **Doc can tune up your team's instructions:** ask Doc for an instruction tuneup and it audits every agent and skill against guidance for the current model generation, then proposes precise deletions, rewrites, and judgement calls for you to approve item by item in chat. Instructions that made older models behave (forced double-checking, "keep it simple" rules, retired model names) quietly degrade current ones; now they are found and fixed without you learning prompt engineering. Nothing changes without your approval, and the criteria ship with the app so the audit is repeatable.
-- **Agents tell you the truth about unreachable connectors:** when a connector like Granola or Google Drive drops its authorisation, its tools silently vanish from the agent's session, and agents used to guess at why, sometimes inventing Rundock settings that do not exist. Every agent now knows the honest cause and the terminal-free fix: reconnect the connector at claude.ai under Settings, then Connectors, and a fresh conversation picks it up.
+- **Agents tell you the truth about unreachable connectors:** when a connector like a meeting-notes or file-storage service drops its authorisation, its tools silently vanish from the agent's session, and agents used to guess at why, sometimes inventing Rundock settings that do not exist. Every agent now knows the honest cause and the terminal-free fix: reconnect the connector at claude.ai under Settings, then Connectors, and a fresh conversation picks it up.
 
 ### Changed
 
@@ -401,7 +437,7 @@ One palette searches everything you have, files agents produce can be reviewed w
 
 ### Fixed
 
-- **MCP tools are auto-approved again on Claude Code v2.1.166 and later.** Rundock previously passed a blanket `mcp__*` allow rule for MCP tools. Claude Code v2.1.166 tightened wildcard validation: allow rules must name each server scope (e.g. `mcp__todoist__*`) rather than a global `mcp__*` wildcard, which it now rejects with an error before every response. Rundock now reads the active workspace's `.mcp.json` at each session start and expands the registered server names into per-server allow rules, so MCP tools run without a permission prompt on every invocation. Workspaces with no MCP servers are unaffected.
+- **MCP tools are auto-approved again on Claude Code v2.1.166 and later.** Rundock previously passed a blanket `mcp__*` allow rule for MCP tools. Claude Code v2.1.166 tightened wildcard validation: allow rules must name each server scope (e.g. `mcp__my-server__*`) rather than a global `mcp__*` wildcard, which it now rejects with an error before every response. Rundock now reads the active workspace's `.mcp.json` at each session start and expands the registered server names into per-server allow rules, so MCP tools run without a permission prompt on every invocation. Workspaces with no MCP servers are unaffected.
 - **Agent profile cards render Reads from and Writes to consistently.** The Writes to section displayed its paths as a single comma-joined line while Reads from showed each entry separately. Both now list each entry on its own line, every entry is HTML-escaped, and the split preserves entries that contain commas inside parentheses (e.g. a list of subreddits) instead of breaking them apart.
 
 ## 0.8.11: Rich Markdown Editor & Find (2026-05-28)
@@ -696,7 +732,7 @@ Pinned conversations persist across refresh and sort to top of the active list. 
 - **Pinned conversations:** Pin conversations to keep them across refresh. Pinned conversations sort to the top of the active list by most recent activity. Unpin to return to default behaviour.
 - **File wikilink navigation:** Clicking a wikilink opens the file in the in-app viewer with a back history stack. Agents are instructed to use wikilink syntax for file references. Markdown relative file links are intercepted as in-app wikilinks.
 - **Specialist scope return:** When a specialist (started directly, not via delegation) recognises work is outside their domain, they emit a RETURN marker. The platform kills the specialist process, spawns the orchestrator, passes the conversation transcript and pending request, and the orchestrator routes to the correct specialist. Includes loop prevention to stop the orchestrator delegating back to the agent that just returned.
-- **Platform timezone:** Every agent's system prompt now includes the server's IANA timezone (auto-detected via `Intl.DateTimeFormat`). Applies to all workspaces and all MCP tools (Google Calendar, Todoist, etc.).
+- **Platform timezone:** Every agent's system prompt now includes the server's IANA timezone (auto-detected via `Intl.DateTimeFormat`). Applies to all workspaces and all MCP tools (calendars, task managers, and so on).
 - **Scope boundary prompt:** All non-orchestrator agents receive instructions to return when asked to do work outside their domain. Applies regardless of how the conversation started.
 
 ### Changed

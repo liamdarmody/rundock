@@ -1,0 +1,10 @@
+{
+ "earlyPressAfterBarMs": 93,
+ "earlyOpened": [
+  "notes/next.md"
+ ],
+ "afterArming": [
+  "notes/next.md",
+  "notes/chained-now.md"
+ ]
+}

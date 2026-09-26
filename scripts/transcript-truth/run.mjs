@@ -55,6 +55,9 @@ const { readSessionTranscript, findTranscript, sidechainTranscripts } =
   require(path.join(ROOT, 'lib', 'runtime', 'session-transcript.js'));
 
 const CAPTURE_FILE = path.join(HERE, 'captured-transcript.json');
+// A capture is committed to a public repository, so it is scrubbed of the
+// person who took it before it is written (scripts/capture-scrub.js).
+const { scrubCapture, machineValues } = require('../capture-scrub.js');
 const CAPTURE = process.argv.includes('--capture');
 
 function fail(msg) {
@@ -210,7 +213,7 @@ async function capture() {
     fail(`real CLI ${version} no longer matches what the reader assumes:\n  - ${problems.join('\n  - ')}\n` +
       `The transcript format has CHANGED. Fix the reader before committing this capture.\nThe run that failed is at ${rejected}`);
   }
-  fs.writeFileSync(CAPTURE_FILE, JSON.stringify({
+  fs.writeFileSync(CAPTURE_FILE, scrubCapture(JSON.stringify({
     runtimeVersion: version,
     capturedAt: new Date().toISOString(),
     sessionId,
@@ -231,7 +234,7 @@ async function capture() {
     // The subagent's own transcript, kept beside the session's because the
     // whole point is that they are different files with different shapes.
     subagents,
-  }, null, 2) + '\n');
+  }, null, 2) + '\n', { ...machineValues(), sessionIds: [sessionId] }));
   fs.rmSync(dir, { recursive: true, force: true });
   console.log(`[transcript-truth] permission hook under skipped permissions: ${hook.fired ? `FIRED (${hook.calls} calls, tools: ${hook.tools.join(', ')})` : 'DID NOT FIRE'}`);
   console.log(`[transcript-truth] delegation: ${subagents.length} subagent transcript(s), filed under the session's own directory`);

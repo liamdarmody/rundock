@@ -1,0 +1,824 @@
+{
+ "electron": "42.9.3",
+ "checks": [
+  {
+   "name": "a view leaving with the file reaches nothing on desktop",
+   "ok": true,
+   "detail": {
+    "hits": [],
+    "log": [
+     "blocked an extension frame navigating to http://127.0.0.1:53735/leak?d=CANARY-FILE-CONTENT%0A"
+    ]
+   }
+  },
+  {
+   "name": "the view ends and says why",
+   "ok": true,
+   "detail": {
+    "degraded": [
+     "the extension tried to leave its view and was stopped"
+    ],
+    "opened": [],
+    "externals": [],
+    "saved": [],
+    "unusable": [],
+    "rendered": [],
+    "windowOpened": [],
+    "ui": [
+     {
+      "type": "rundock-ui-probe",
+      "version": "1.0",
+      "factories": 23,
+      "made": 23,
+      "primaryFill": "rgb(193, 87, 41)",
+      "bodyClass": ""
+     }
+    ],
+    "frameMessages": [
+     "rundock-ui-probe",
+     "ready"
+    ]
+   }
+  },
+  {
+   "name": "that view ran in a frame carrying Rundock UI",
+   "ok": true,
+   "detail": [
+    {
+     "type": "rundock-ui-probe",
+     "version": "1.0",
+     "factories": 23,
+     "made": 23,
+     "primaryFill": "rgb(193, 87, 41)",
+     "bodyClass": ""
+    }
+   ]
+  },
+  {
+   "name": "a region frame leaving with a diagram source reaches nothing on desktop",
+   "ok": true,
+   "detail": {
+    "hits": [],
+    "log": [
+     "blocked an extension frame navigating to http://127.0.0.1:53735/leak?d=CANARY-FILE-CONTENT%0A"
+    ]
+   }
+  },
+  {
+   "name": "the region frame carries Rundock UI too",
+   "ok": true,
+   "detail": [
+    {
+     "type": "rundock-ui-probe",
+     "version": "1.0",
+     "factories": 23,
+     "made": 23,
+     "primaryFill": "rgb(193, 87, 41)",
+     "bodyClass": ""
+    }
+   ]
+  },
+  {
+   "name": "a peer connection sends nothing on desktop",
+   "ok": true,
+   "detail": {
+    "packets": 0
+   }
+  },
+  {
+   "name": "control: without the desktop guards the same view does leak",
+   "ok": true,
+   "detail": {
+    "hits": [
+     "/leak?d=CANARY-FILE-CONTENT%0A"
+    ]
+   }
+  },
+  {
+   "name": "a same-origin frame navigating is not blocked by the desktop guards",
+   "ok": true,
+   "detail": {
+    "hits": [
+     "/preview-link"
+    ],
+    "log": []
+   }
+  },
+  {
+   "name": "a view that uses Rundock UI and then leaves with the file reaches nothing on desktop, and ends",
+   "ok": true,
+   "detail": {
+    "hits": [],
+    "results": {
+     "degraded": [
+      "the extension tried to leave its view and was stopped"
+     ],
+     "opened": [],
+     "externals": [],
+     "saved": [],
+     "unusable": [],
+     "rendered": [],
+     "windowOpened": [],
+     "ui": [
+      {
+       "type": "rundock-ui-probe",
+       "version": "1.0",
+       "factories": 23,
+       "made": 23,
+       "primaryFill": "rgb(193, 87, 41)",
+       "bodyClass": ""
+      }
+     ],
+     "frameMessages": [
+      "rundock-ui-probe",
+      "ready"
+     ]
+    },
+    "log": [
+     "blocked an extension frame navigating to http://127.0.0.1:53735/leak?d=CANARY-FILE-CONTENT%0A"
+    ]
+   }
+  },
+  {
+   "name": "a frame working every Rundock UI component sends nothing but ready, and reaches nothing",
+   "ok": true,
+   "detail": {
+    "results": {
+     "degraded": [],
+     "opened": [],
+     "externals": [],
+     "saved": [],
+     "unusable": [],
+     "rendered": [],
+     "windowOpened": [],
+     "ui": [],
+     "frameMessages": [
+      "ready"
+     ]
+    },
+    "hits": []
+   }
+  },
+  {
+   "name": "an embedded view is built with Rundock UI before its entry runs, and told it is embedded",
+   "ok": true,
+   "detail": {
+    "degraded": [
+     "the extension tried to leave its view and was stopped"
+    ],
+    "opened": [],
+    "externals": [],
+    "saved": [],
+    "unusable": [],
+    "rendered": [],
+    "windowOpened": [],
+    "ui": [
+     {
+      "type": "rundock-ui-probe",
+      "version": "1.0",
+      "factories": 23,
+      "made": 23,
+      "primaryFill": "rgb(193, 87, 41)",
+      "bodyClass": "rundock-embedded"
+     }
+    ],
+    "frameMessages": [
+     "rundock-ui-probe",
+     "ready"
+    ]
+   }
+  },
+  {
+   "name": "a view that misuses a component ends in the plain view with the library's reason",
+   "ok": true,
+   "detail": {
+    "degraded": [
+     "the extension reported a failure: Uncaught TypeError: Rundock.ui.button: variant must be one of primary, secondary, danger, danger-confirm"
+    ],
+    "opened": [],
+    "externals": [],
+    "saved": [],
+    "unusable": [],
+    "rendered": [],
+    "windowOpened": [],
+    "ui": [
+     {
+      "type": "rundock-ui-probe",
+      "version": "1.0",
+      "factories": 23,
+      "made": 23,
+      "primaryFill": "rgb(193, 87, 41)",
+      "bodyClass": ""
+     }
+    ],
+    "frameMessages": [
+     "rundock-ui-probe",
+     "ready",
+     "error"
+    ]
+   }
+  },
+  {
+   "name": "a library that fails as it installs ends the view with the reason named, and the entry never runs",
+   "ok": true,
+   "detail": {
+    "degraded": [
+     "the extension reported a failure: Uncaught Error: Rundock UI failed to install (harness control)"
+    ],
+    "opened": [],
+    "externals": [],
+    "saved": [],
+    "unusable": [],
+    "rendered": [],
+    "windowOpened": [],
+    "ui": [],
+    "frameMessages": [
+     "error"
+    ]
+   }
+  },
+  {
+   "name": "handed exactly the named files that resolve, on desktop",
+   "ok": true,
+   "detail": [
+    "notes/holdings.csv",
+    "notes/limits.csv",
+    "notes/sub.md"
+   ]
+  },
+  {
+   "name": "no canary and no real path reached the frame on desktop",
+   "ok": true,
+   "detail": "[{\"type\":\"init\",\"path\":\"dash.md\",\"content\":\"---\\nportfolio-dashboard: true\\nsources:\\n  - notes/holdings.csv\\n  - \\\"[[notes/limits.csv]]\\\"\\n  - notes/sub.md\\n  - .env\\n  - ../outside/secret.txt\\n  - notes/*.csv\\n  - notes/link-out.csv\\n  - notes/link-hidden.csv\\n  - notes/hard.csv\\n  - DASH.md\\n---\\"
+  },
+  {
+   "name": "every hostile source write refused and no other file changed a byte, on desktop",
+   "ok": true,
+   "detail": {
+    "refused": 16
+   }
+  },
+  {
+   "name": "widening the note by save or change is refused, a body edit is not, on desktop",
+   "ok": true,
+   "detail": {
+    "saved": 1
+   }
+  },
+  {
+   "name": "read, readSource, listSources and sources are unknown types, on desktop",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "name": "a change on disk reaches the view as a sources message, on desktop",
+   "ok": true,
+   "detail": 2
+  },
+  {
+   "name": "a new unnamed file never reaches the view, on desktop",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "name": "control: with the host list check removed, the server alone refuses every unlisted write, on desktop",
+   "ok": true,
+   "detail": [
+    [
+     "notes/unnamed.csv",
+     false
+    ],
+    [
+     ".env",
+     false
+    ],
+    [
+     ".mcp.json",
+     false
+    ],
+    [
+     ".claude/agents/decoy.md",
+     false
+    ],
+    [
+     "../outside/secret.txt",
+     false
+    ],
+    [
+     "notes/link-out.csv",
+     false
+    ],
+    [
+     "notes/*.csv",
+     false
+    ],
+    [
+     "notes/link-hidden.csv",
+     false
+    ],
+    [
+     "notes/hard.csv",
+     false
+    ],
+    [
+     "DASH.md",
+     false
+    ],
+    [
+     "dash.md",
+     false
+    ],
+    [
+     "/etc/hosts",
+     false
+    ],
+    [
+     "notes/holdings.csv/../unnamed.csv",
+     false
+    ],
+    [
+     "notes/./holdings.csv",
+     false
+    ],
+    [
+     "NOTES/HOLDINGS.CSV",
+     false
+    ],
+    [
+     "notes/holdings.csv",
+     true
+    ]
+   ]
+  },
+  {
+   "name": "control: without the list rule the widened note is handed to the write, on desktop",
+   "ok": true,
+   "detail": 3
+  },
+  {
+   "name": "script-sent asks are refused and draft nothing, on desktop",
+   "ok": true,
+   "detail": []
+  },
+  {
+   "name": "a real click drafts one ask, with bidirectional and zero-width characters removed, on desktop",
+   "ok": true,
+   "detail": [
+    {
+     "agent": "analyst",
+     "message": "Summarise the risk dneS panel"
+    }
+   ]
+  },
+  {
+   "name": "nothing is posted back on success, on desktop",
+   "ok": true,
+   "detail": []
+  },
+  {
+   "name": "one real click is one ask, a burst of six drafts one, on desktop",
+   "ok": true,
+   "detail": 2
+  },
+  {
+   "name": "a declared agent not on the team is refused with a reason, on desktop",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "name": "a prototype name is simply undeclared, on desktop",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "name": "a malformed ask is refused by shape even after a click, on desktop",
+   "ok": true,
+   "detail": 2
+  },
+  {
+   "name": "a malformed first ask uses the click, so a valid one after it drafts nothing, on desktop",
+   "ok": true,
+   "detail": [
+    {
+     "agent": "analyst",
+     "message": "Summarise the risk dneS panel"
+    },
+    {
+     "agent": "analyst",
+     "message": "burst 0"
+    }
+   ]
+  },
+  {
+   "name": "one click, one request: a burst of opens and web addresses honours exactly one, on desktop",
+   "ok": true,
+   "detail": {
+    "opened": [
+     "notes/burst-0.md"
+    ],
+    "externals": []
+   }
+  },
+  {
+   "name": "(instrument) the page click mounted the view, on desktop",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "name": "a view mounted by a page click cannot use it, even grabbing focus, on desktop",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "name": "(instrument) the bar appeared after the chain, on desktop",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "name": "a real press on Open before the bar is armed does nothing and leaves the request waiting, on desktop",
+   "ok": true,
+   "detail": {
+    "afterBarMs": 49.8999999910593,
+    "opened": [
+     "notes/next.md"
+    ],
+    "bar": true
+   }
+  },
+  {
+   "name": "a real press on Open after the bar is armed performs the request, on desktop",
+   "ok": true,
+   "detail": [
+    "notes/next.md",
+    "notes/chained-now.md"
+   ]
+  },
+  {
+   "name": "a script-sent ask with no user action is refused and shows the refusal line, never the bar, on desktop",
+   "ok": true,
+   "detail": {
+    "asked": [],
+    "kinds": [
+     "refused"
+    ]
+   }
+  },
+  {
+   "name": "control: with a no-activation request routed to the person, the bar goes up instead, on desktop",
+   "ok": true,
+   "detail": [
+    "confirm"
+   ]
+  },
+  {
+   "name": "one user action drafts one ask, and a press on the ask bar before it arms drafts nothing, on desktop",
+   "ok": true,
+   "detail": {
+    "early": [
+     "burst 0"
+    ],
+    "afterBarMs": 83.1000000089407
+   }
+  },
+  {
+   "name": "the person's press on the armed ask bar drafts the waiting ask, and nothing else drafts, on desktop",
+   "ok": true,
+   "detail": [
+    "burst 0",
+    "burst 1"
+   ]
+  },
+  {
+   "name": "control: with the bar armed from the moment it appears, the same early real press drafts the waiting ask, on desktop",
+   "ok": true,
+   "detail": {
+    "msgs": [
+     "burst 0",
+     "burst 1"
+    ],
+    "afterBarMs": 100
+   }
+  },
+  {
+   "name": "Dismiss on the ask bar drafts nothing and tells the view only that it was refused, on desktop",
+   "ok": true,
+   "detail": {
+    "msgs": [
+     "burst 0"
+    ],
+    "toFrame": [
+     {
+      "type": "refused",
+      "of": "ask",
+      "reason": "you dismissed this in Rundock"
+     }
+    ]
+   }
+  },
+  {
+   "name": "the armed Open drafts exactly the waiting ask, agent and message, and tells the view nothing, on desktop",
+   "ok": true,
+   "detail": {
+    "asked": [
+     {
+      "agent": "analyst",
+      "message": "burst 0"
+     },
+     {
+      "agent": "analyst",
+      "message": "burst 1"
+     }
+    ],
+    "toFrame": []
+   }
+  },
+  {
+   "name": "control: with the bar's Open handler removed, an armed press drafts nothing, on desktop",
+   "ok": true,
+   "detail": [
+    "burst 0"
+   ]
+  },
+  {
+   "name": "control: with the ask wired to the wrong payload, the armed press drafts the wrong ask, on desktop",
+   "ok": true,
+   "detail": [
+    "burst 0",
+    "burst 0"
+   ]
+  },
+  {
+   "name": "control: with Dismiss wired to perform the request, Dismiss drafts the waiting ask and tells the view nothing, on desktop",
+   "ok": true,
+   "detail": {
+    "msgs": [
+     "burst 0",
+     "burst 1"
+    ],
+    "toFrame": []
+   }
+  },
+  {
+   "name": "the script-sent ask is refused, and a real key press inside the view grants one ask, on desktop",
+   "ok": true,
+   "detail": {
+    "before": 0,
+    "asked": [
+     "by key"
+    ]
+   }
+  },
+  {
+   "name": "control: without the click gate, the keyboard view's script-sent ask drafts on its own, on desktop",
+   "ok": true,
+   "detail": [
+    "script-sent"
+   ]
+  },
+  {
+   "name": "one view's burst on one click honours 1 with both guards, on desktop",
+   "ok": true,
+   "detail": 1
+  },
+  {
+   "name": "one view's burst on one click honours 12 with only the spent-activation guard removed, on desktop",
+   "ok": true,
+   "detail": 12
+  },
+  {
+   "name": "one view's burst on one click honours 1 with only the inherited-activation guard removed, on desktop",
+   "ok": true,
+   "detail": 1
+  },
+  {
+   "name": "a frame rebuilt during a live click opens nothing with both guards, on desktop",
+   "ok": true,
+   "detail": {
+    "rebuilt": true,
+    "opened": []
+   }
+  },
+  {
+   "name": "a frame rebuilt during a live click opens a file with only the inherited-activation guard removed, on desktop",
+   "ok": true,
+   "detail": {
+    "rebuilt": true,
+    "opened": [
+     "notes/rebuilt.md"
+    ]
+   }
+  },
+  {
+   "name": "a frame rebuilt during a live click opens nothing with only the spent-activation guard removed, on desktop",
+   "ok": true,
+   "detail": {
+    "rebuilt": true,
+    "opened": []
+   }
+  },
+  {
+   "name": "the chain: a view opened by another view's click opens, fetches and drafts nothing without a click of its own, on desktop",
+   "ok": true,
+   "detail": {
+    "opened": [
+     "notes/next.md"
+    ],
+    "externals": [],
+    "asked": [],
+    "chainedHits": []
+   }
+  },
+  {
+   "name": "the chain: the person is asked about the first request, in the page above the view, on desktop",
+   "ok": true,
+   "detail": [
+    [
+     "confirm",
+     "Open chained-now.md?"
+    ]
+   ]
+  },
+  {
+   "name": "control: with the spend and inherit rule removed, the chain opens, fetches and drafts, on desktop",
+   "ok": true,
+   "detail": {
+    "opened": [
+     "notes/next.md",
+     "notes/chained-now.md",
+     "notes/chained-later.md"
+    ],
+    "externals": 2,
+    "asked": 2
+   }
+  },
+  {
+   "name": "control: without one ask per click, one real click drafts six, on desktop",
+   "ok": true,
+   "detail": {
+    "asked": [
+     {
+      "agent": "analyst",
+      "message": "burst 0"
+     },
+     {
+      "agent": "analyst",
+      "message": "burst 1"
+     },
+     {
+      "agent": "analyst",
+      "message": "burst 2"
+     },
+     {
+      "agent": "analyst",
+      "message": "burst 3"
+     },
+     {
+      "agent": "analyst",
+      "message": "burst 4"
+     },
+     {
+      "agent": "analyst",
+      "message": "burst 5"
+     }
+    ],
+    "opened": []
+   }
+  },
+  {
+   "name": "control: without the click gate, a script-sent ask drafts, on desktop",
+   "ok": true,
+   "detail": {
+    "asked": [
+     {
+      "agent": "analyst",
+      "message": "script-sent"
+     },
+     {
+      "agent": "analyst",
+      "message": "script-sent later"
+     }
+    ],
+    "opened": []
+   }
+  },
+  {
+   "name": "control: without the declared list, an undeclared agent is drafted to, on desktop",
+   "ok": true,
+   "detail": {
+    "asked": [
+     {
+      "agent": "cos",
+      "message": "hi"
+     }
+    ],
+    "opened": []
+   }
+  },
+  {
+   "name": "control: without one request per click, one real click opens the whole burst, on desktop",
+   "ok": true,
+   "detail": {
+    "asked": [],
+    "opened": [
+     "notes/burst-0.md",
+     "notes/burst-1.md",
+     "notes/burst-2.md",
+     "notes/burst-3.md",
+     "notes/burst-4.md",
+     "notes/burst-5.md"
+    ]
+   }
+  },
+  {
+   "name": "with the real request filter, an app-page request reaches its host, on desktop",
+   "ok": true,
+   "detail": [
+    "/app-request"
+   ]
+  },
+  {
+   "name": "with the real request filter, an extension-frame request is cancelled, on desktop",
+   "ok": true,
+   "detail": [
+    "/app-request"
+   ]
+  },
+  {
+   "name": "control: without the filter the same frame request reaches its host, on desktop",
+   "ok": true,
+   "detail": [
+    "/app-request",
+    "/frame-request"
+   ]
+  },
+  {
+   "name": "control: with the filter widened to the whole session, the app-page request no longer reaches its host, so the check above would fail",
+   "ok": true,
+   "detail": []
+  },
+  {
+   "name": "the update check reaches its host while the desktop guards are installed",
+   "ok": true,
+   "detail": [
+    "/updates/latest-mac.yml?noCache=1k39pkfbq"
+   ]
+  },
+  {
+   "name": "an agent's WebFetch in a real Rundock turn reaches its host with the desktop guards installed",
+   "ok": true,
+   "detail": {
+    "result": "WEBFETCH-STATUS 200",
+    "hits": [
+     "/webfetch-turn"
+    ]
+   }
+  },
+  {
+   "name": "(instrument) Rundock itself spawned the runtime for that turn",
+   "ok": true,
+   "detail": 1
+  },
+  {
+   "name": "the main window does not navigate to an external address; it is handed to the system browser",
+   "ok": true,
+   "detail": {
+    "handed": [
+     "http://127.0.0.1:53735/navigate"
+    ],
+    "url": "http://127.0.0.1:54471/",
+    "hits": []
+   }
+  },
+  {
+   "name": "a new window for an external address is denied and handed to the system browser",
+   "ok": true,
+   "detail": {
+    "handed": [
+     "http://127.0.0.1:53735/window-open"
+    ],
+    "url": "http://127.0.0.1:54471/",
+    "hits": []
+   }
+  },
+  {
+   "name": "a navigation to any other scheme is stopped and handed to nothing",
+   "ok": true,
+   "detail": {
+    "handed": [],
+    "url": "http://127.0.0.1:54471/",
+    "hits": []
+   }
+  },
+  {
+   "name": "a real click on a web link in the app opens it in the system browser, and the window stays",
+   "ok": true,
+   "detail": {
+    "handed": [
+     "http://127.0.0.1:53735/clicked"
+    ],
+    "url": "http://127.0.0.1:54471/"
+   }
+  }
+ ],
+ "ok": true
+}

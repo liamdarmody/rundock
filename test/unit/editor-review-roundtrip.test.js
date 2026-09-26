@@ -24,17 +24,17 @@ The intro {~~is vague~>needs a tighter claim~~}{#s3}.
 ---
 comments:
   c1:
-    by: liam
+    by: sam
     at: "2026-07-12T10:00:00.000Z"
 suggestions:
   s1:
-    by: penn
+    by: wren
     at: "2026-07-12T10:05:00.000Z"
   s2:
-    by: penn
+    by: wren
     at: "2026-07-12T10:06:00.000Z"
   s3:
-    by: penn
+    by: wren
     at: "2026-07-12T10:07:00.000Z"
 `;
 

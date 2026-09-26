@@ -17,8 +17,8 @@ const { buildDispatch } = require('../../lib/protocol/handlers/index.js');
 const { _internal: srv } = require('../../server.js');
 const config = require('../../lib/config.js');
 
-// The full routing surface of the dispatch table, frozen: 55 message types
-// plus save_agent's two legacy aliases, 57 keys in all.
+// The full routing surface of the dispatch table, frozen: 65 message types
+// plus save_agent's two legacy aliases, 67 keys in all.
 //
 // THE NUMBER WAS COUNTED, NOT CARRIED OVER. Both sides of the 0.14 rail merge
 // quoted a figure here, 44 on the rail and 45 on main, and the list each sat
@@ -26,7 +26,11 @@ const config = require('../../lib/config.js');
 // for a long time on both, because the assertion below compares the LIST
 // against the table and never reads this sentence. A comment that states a
 // number nothing checks is the same defect this release found four times in
-// shipped copy, in a file whose whole purpose is to freeze a surface. The four root shims (chat, delegate,
+// shipped copy, in a file whose whole purpose is to freeze a surface.
+//
+// RECOUNTED AGAIN at the 0.15 packages merge, for the same reason: the
+// packages branch carried 58 and main 57, sharing 48, so the union is 67
+// rather than either figure or their sum. Counted from the list below. The four root shims (chat, delegate,
 // end_delegation, flush_buffer) must NEVER appear here: chat is the
 // kill-window chat shim, delegate/end_delegation are delegation glue, and
 // flush_buffer drains safeSend's own reconnect buffer.
@@ -40,6 +44,12 @@ const EXPECTED_TYPES = [
   'permission_response', 'cancel',
   'get_workspaces', 'client_render_time', 'list_workspaces', 'set_workspace',
   'pick_folder', 'create_workspace', 'set_workspace_mode',
+  // Keep agents inside this workspace: its status, its own switch, and the
+  // one-time notice. Pressed by test/unit/sandbox-status.test.js.
+  'get_sandbox_status', 'set_workspace_sandbox', 'dismiss_sandbox_notice',
+  // Bringing a person's own sandbox rules in: review, then import. Pressed by
+  // test/unit/sandbox-import.test.js.
+  'review_sandbox_import', 'import_sandbox_rules',
   // The folders a workspace names besides itself. One message sets the whole
   // list, because adding and removing are the same act on the store and a
   // narrower pair would have to agree about normalisation.
@@ -53,11 +63,26 @@ const EXPECTED_TYPES = [
   // The row's Run control: a pressed run through the scheduler's own
   // single-flight entry, refused only for what cannot produce a run.
   'run_routine_now',
-  'plan_package_import', 'apply_package_import',
+  // The package review's projection message: the submitted decisions are
+  // evaluated without writing, driven in test/unit/collision-decisions.test.js.
+  'plan_package_import', 'evaluate_package_decisions', 'apply_package_import',
   // The extension mount reads: the installed roster, and one renderer's
   // payload. Driven through the dispatch table in the handler-seam tests
   // below, against a real temporary workspace.
   'list_extensions', 'get_extension_ui',
+  // The extension install flow: acquire-and-offer, one answer either way.
+  // Updates and removal are the package's (below). Pressed by test/unit/extension-install.test.js.
+  'plan_package_install', 'confirm_extension_install',
+  'confirm_package_install', 'decline_package_install',
+  // The manage page: enablement written onto the record, and the page's
+  // one read of the roster with the receipts. Pressed by
+  // test/unit/packages-manage.test.js.
+  'set_extension_enabled', 'set_extensions_all_off', 'get_packages_page',
+  // A package's update check: only when asked, answered asynchronously.
+  // Pressed by test/unit/package-update-check.test.js.
+  'check_package_update', 'plan_package_update', 'confirm_package_update', 'clear_package_updates',
+  // Uninstalling a package: pressed by test/unit/package-uninstall.test.js.
+  'plan_package_uninstall', 'confirm_package_uninstall',
   'get_conversations', 'set_last_active_conversation', 'save_conversation',
   'get_lists', 'create_list', 'delete_list', 'delete_conversation',
   'read_file', 'add_to_team',
@@ -71,6 +96,12 @@ const EXPECTED_TYPES = [
   'set_routine_enabled', 'set_routine_schedule', 'approve_routine_plan',
   'search_conversations', 'search_universal', 'get_session_history',
   'save_file', 'create_path', 'reveal_in_finder',
+  // Named sources for an extension view, pressed by
+  // test/unit/named-sources-transport.test.js.
+  'get_sources', 'unwatch_sources', 'save_source',
+  // An extension view's own state, named by the page from its mount
+  // (test/unit/view-state-handler.test.js).
+  'get_view_state', 'set_view_state',
   // File pins: the list a person keeps on this machine, keyed by workspace.
   // Each answers `pins` with the whole list; a pin outside the workspace is
   // refused with no write (test/unit/pins-store.test.js).
@@ -453,18 +484,165 @@ describe('handler seams (stub ctx, capture ws)', () => {
     }
     return dir;
   }
-  const EXT_MANIFEST = JSON.stringify({
-    schemaVersion: 1, id: 'charts', name: 'Charts', version: '1.0.0',
-    renderers: [{ id: 'chart', target: '.chart', entry: 'ui/index.js' }],
-    resources: [{ id: 'data', maximumBytes: 1024 }],
+  // THE INSTALL STORE, AS THE INSTALL FLOW WRITES IT: the records file and
+  // the extensions root come from the writer's own exported layout, never
+  // from a literal spelled here, so a store the writer moves is a store this
+  // suite reads from the new place and the reader is held to it.
+  const store = require('../../lib/packages/extension-record.js');
+  const RECORDS_FILE = store.RECORDS_PATH;
+  const EXT_DIR = `${store.EXTENSIONS_ROOT}/csv-echo`;
+  const record = (extra = {}) => ({
+    name: 'csv-echo', version: '1.2.0', entry: 'index.js', match: '*.csv',
+    source: { url: 'https://github.com/example/csv-echo', reference: 'v1.2.0' },
+    installedAt: '2026-09-07T00:00:00.000Z', root: EXT_DIR, ...extra,
+  });
+  const records = (...list) => JSON.stringify({ schema: store.RECORDS_SCHEMA, extensions: list });
+  const manifest = (extension) => JSON.stringify({ name: 'csv-echo', version: '1.2.0', extension });
+
+  function roster(fixture) {
+    const table = buildDispatch();
+    const original = config.getWorkspace();
+    const dir = extensionWorkspace(fixture);
+    try {
+      config.setWorkspace(dir);
+      const ws = captureWs();
+      table.list_extensions({}, ws, { type: 'list_extensions' });
+      assert.strictEqual(ws.sent.length, 1, 'one reply per request');
+      return ws.sent[0];
+    } finally {
+      config.setWorkspace(original);
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  test('the reader and the writer agree: a real install is what the roster and the payload read, through the layout the writer exports', () => {
+    const registry = require('../../lib/packages/extension-registry.js');
+    for (const key of ['RECORDS_PATH', 'RECORDS_SCHEMA', 'EXTENSIONS_ROOT']) {
+      assert.strictEqual(registry[key], store[key], `${key} is one declaration, the writer's`);
+    }
+    assert.match(fs.readFileSync(path.join(__dirname, '..', '..', 'lib', 'packages', 'extension-registry.js'), 'utf8'),
+      /const \{ RECORDS_PATH, RECORDS_SCHEMA, EXTENSIONS_ROOT(, [A-Za-z]+)* \} = require\('\.\/extension-record\.js'\);/,
+      'the reader imports the layout rather than re-spelling it');
+    const { planExtensionInstall, installExtension } = require('../../lib/packages/extension-install.js');
+    const table = buildDispatch();
+    const original = config.getWorkspace();
+    const dir = extensionWorkspace({});
+    const snapshot = extensionWorkspace({
+      'rundock.json': JSON.stringify({ name: 'csv-echo', version: '1.2.0', extension: { entry: 'view/index.html', match: '*.csv' } }),
+      'view/index.html': '<main>drawn</main>',
+    });
+    try {
+      config.setWorkspace(dir);
+      // The writer: the install transaction, over a snapshot shaped as an
+      // extension ships. It materialises the entry's own top-level path and
+      // leaves the manifest behind, so what the reader reads here is the
+      // record's own copy of the declaration, the path real installs take.
+      const written = installExtension(dir, snapshot, planExtensionInstall(dir, snapshot, { url: 'https://github.com/example/csv-echo', reference: 'v1.2.0' }));
+      assert.strictEqual(written.root, EXT_DIR, 'the writer installs under the exported root');
+      assert.strictEqual(fs.existsSync(path.join(dir, EXT_DIR, 'rundock.json')), false, 'sanity: no manifest is materialised');
+      const ws = captureWs();
+      table.list_extensions({}, ws, { type: 'list_extensions' });
+      assert.strictEqual(ws.sent[0].type, 'extensions');
+      const [entry] = ws.sent[0].extensions;
+      assert.deepStrictEqual([entry.id, entry.version, entry.enabled, entry.renderers, entry.source],
+        ['csv-echo', '1.2.0', true, [{ id: 'view', target: '.csv' }], { url: 'https://github.com/example/csv-echo', reference: 'v1.2.0' }],
+        'the roster claims the renderer the record declares');
+      const ui = captureWs();
+      table.get_extension_ui({}, ui, { type: 'get_extension_ui', extensionId: 'csv-echo', rendererId: 'view' });
+      assert.strictEqual(ui.sent[0].type, 'extension_ui');
+      assert.strictEqual(ui.sent[0].entry, '<main>drawn</main>', 'the payload serves the entry the writer materialised');
+    } finally {
+      config.setWorkspace(original);
+      fs.rmSync(dir, { recursive: true, force: true });
+      fs.rmSync(snapshot, { recursive: true, force: true });
+    }
   });
 
-  test('list_extensions answers the roster, and refuses with one reply when no workspace is open', () => {
+  test('an installed directory with the entry but no manifest is read from the record: the roster claims it and the payload serves it', () => {
     const table = buildDispatch();
     const original = config.getWorkspace();
     const dir = extensionWorkspace({
-      '.rundock/plugins/charts/manifest.json': EXT_MANIFEST,
-      '.rundock/plugin-state.json': JSON.stringify({ plugins: { charts: { enabled: true } } }),
+      [RECORDS_FILE]: records(record({ entry: 'view/index.html', match: '*.csv' })),
+      [`${EXT_DIR}/view/index.html`]: '<main>from the record</main>',
+    });
+    try {
+      config.setWorkspace(dir);
+      const ws = captureWs();
+      table.list_extensions({}, ws, { type: 'list_extensions' });
+      assert.deepStrictEqual(ws.sent[0].extensions[0].renderers, [{ id: 'view', target: '.csv' }], 'built from the record, no manifest present');
+      assert.deepStrictEqual(ws.sent[0].extensions[0].refusals, []);
+      const ui = captureWs();
+      table.get_extension_ui({}, ui, { type: 'get_extension_ui', extensionId: 'csv-echo', rendererId: 'view' });
+      assert.strictEqual(ui.sent[0].type, 'extension_ui');
+      assert.strictEqual(ui.sent[0].entry, '<main>from the record</main>');
+    } finally {
+      config.setWorkspace(original);
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('an unparsable records file makes the payload a refusal naming the reason, one reply, and the roster the same', () => {
+    const table = buildDispatch();
+    const original = config.getWorkspace();
+    const dir = extensionWorkspace({ [RECORDS_FILE]: '{ not json', [`${EXT_DIR}/index.js`]: 'draw();' });
+    try {
+      config.setWorkspace(dir);
+      const ui = captureWs();
+      table.get_extension_ui({}, ui, { type: 'get_extension_ui', extensionId: 'csv-echo', rendererId: 'view' });
+      assert.strictEqual(ui.sent.length, 1, 'exactly one reply');
+      assert.deepStrictEqual([ui.sent[0].type, ui.sent[0].extensionId, ui.sent[0].rendererId], ['extension_ui_error', 'csv-echo', 'view'],
+        'the refusal names the ids the client correlates on');
+      assert.match(ui.sent[0].reason, /records unreadable/);
+      const { uiPayload } = require('../../lib/packages/extension-registry.js');
+      assert.match(uiPayload(dir, 'csv-echo', 'view').reason, /records unreadable/, 'the reader itself refuses rather than throwing');
+      const ws = captureWs();
+      table.list_extensions({}, ws, { type: 'list_extensions' });
+      assert.strictEqual(ws.sent[0].type, 'extensions_error');
+    } finally {
+      config.setWorkspace(original);
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('every reply the client reads a roster from carries it as `extensions`, an array, in the shape the handler actually sends', () => {
+    const table = buildDispatch();
+    const original = config.getWorkspace();
+    const dir = extensionWorkspace({
+      [RECORDS_FILE]: records(record()),
+      [`${EXT_DIR}/rundock.json`]: manifest({ entry: 'index.js', match: '*.csv' }),
+      [`${EXT_DIR}/index.js`]: 'draw();',
+    });
+    const ctx = { workspace: { noteExtensionRecordsChanged() {} }, agents: { invalidateAgentCache() {}, flagRosterRefresh() {} } };
+    try {
+      config.setWorkspace(dir);
+      const page = captureWs();
+      table.get_packages_page(ctx, page, { type: 'get_packages_page' });
+      const state = captureWs();
+      table.set_extension_enabled(ctx, state, { type: 'set_extension_enabled', name: 'csv-echo', enabled: false });
+      const asked = captureWs();
+      const source = 'https://github.com/example/csv-echo';
+      table.plan_package_uninstall(ctx, asked, { type: 'plan_package_uninstall', source });
+      const gone = captureWs();
+      table.confirm_package_uninstall(ctx, gone, { type: 'confirm_package_uninstall', source, key: asked.sent[0].key });
+      for (const [label, sock, type] of [['page', page, 'packages_page'], ['state', state, 'extension_state'], ['uninstall', gone, 'package_uninstall_result']]) {
+        assert.strictEqual(sock.sent[0].type, type, label);
+        assert.ok(Array.isArray(sock.sent[0].extensions), `${label}: the roster rides as an array under extensions`);
+      }
+      assert.strictEqual(state.sent[0].extensions[0].enabled, false, 'the state reply carries the roster after the change');
+      assert.deepStrictEqual(gone.sent[0].extensions, [], 'the uninstall reply carries the roster after the removal');
+    } finally {
+      config.setWorkspace(original);
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('list_extensions answers the roster from the install store, and refuses with one reply when no workspace is open', () => {
+    const table = buildDispatch();
+    const original = config.getWorkspace();
+    const dir = extensionWorkspace({
+      [RECORDS_FILE]: records(record()),
+      [`${EXT_DIR}/rundock.json`]: manifest({ entry: 'index.js', match: '*.csv' }),
+      [`${EXT_DIR}/index.js`]: 'draw();',
     });
     try {
       config.setWorkspace(dir);
@@ -472,54 +650,394 @@ describe('handler seams (stub ctx, capture ws)', () => {
       table.list_extensions({}, ws, { type: 'list_extensions' });
       assert.strictEqual(ws.sent.length, 1);
       assert.strictEqual(ws.sent[0].type, 'extensions');
-      assert.strictEqual(ws.sent[0].extensions[0].id, 'charts');
+      assert.deepStrictEqual(ws.sent[0].extensions, [{
+        id: 'csv-echo', name: 'csv-echo', version: '1.2.0', enabled: true,
+        renderers: [{ id: 'view', target: '.csv' }], refusals: [], resources: [],
+        source: { url: 'https://github.com/example/csv-echo', reference: 'v1.2.0' },
+        installedAt: '2026-09-07T00:00:00.000Z',
+      }], 'one roster entry per record, its renderer built from the declared entry and match rule, its source and install date carried for the manage page');
 
       config.setWorkspace(null);
       const ws2 = captureWs();
       table.list_extensions({}, ws2, { type: 'list_extensions' });
-      assert.deepStrictEqual(ws2.sent, [{ type: 'extensions_error', reason: 'no workspace is open' }]);
+      assert.deepStrictEqual(ws2.sent, [{ type: 'extensions_error', reason: 'No workspace is open.' }]);
     } finally {
       config.setWorkspace(original);
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  test('get_extension_ui answers the payload, and refuses cleanly on every bad input', () => {
+  test('a match of the form *.<ext> becomes the registry target .<ext>; any other rule is a named refusal, not a claim', () => {
+    // One case per match shape. The registry grammar is one dot-prefixed
+    // segment, so that is the only rule the roster may turn into a claim;
+    // everything else stays on the roster as a refusal the manage surface
+    // can show, because a silently dropped rule reads as a broken extension.
+    const cases = [
+      ['*.csv', { target: '.csv' }],
+      ['*.CSV', { target: '.csv' }],
+      ['*.tsv', { target: '.tsv' }],
+      ['**/*.csv', { refused: true }],
+      ['data/*.csv', { refused: true }],
+      ['*.tar.gz', { refused: true }],
+      ['csv', { refused: true }],
+      ['*', { refused: true }],
+    ];
+    for (const [match, expected] of cases) {
+      const reply = roster({
+        [RECORDS_FILE]: records(record({ match })),
+        [`${EXT_DIR}/rundock.json`]: manifest({ entry: 'index.js', match }),
+        [`${EXT_DIR}/index.js`]: 'draw();',
+      });
+      assert.strictEqual(reply.type, 'extensions', `${match}: the roster answers`);
+      const [ext] = reply.extensions;
+      if (expected.target) {
+        assert.deepStrictEqual(ext.renderers, [{ id: 'view', target: expected.target }], `${match}: mapped to ${expected.target}`);
+        assert.deepStrictEqual(ext.refusals, [], `${match}: nothing refused`);
+      } else {
+        assert.deepStrictEqual(ext.renderers, [], `${match}: never a claim`);
+        assert.strictEqual(ext.refusals.length, 1, `${match}: one named refusal`);
+        assert.strictEqual(ext.refusals[0].match, match, `${match}: the refusal names the rule`);
+        assert.match(ext.refusals[0].reason, /\*\.<ext>/, `${match}: the reason states the accepted form`);
+      }
+    }
+  });
+
+  test('a declares marker rides the roster renderer, from the manifest or the record\'s copy, and its absence keeps the old shape', () => {
+    const fromManifest = roster({
+      [RECORDS_FILE]: records(record()),
+      [`${EXT_DIR}/rundock.json`]: manifest({ entry: 'index.js', match: '*.md', declares: 'standup-plugin' }),
+      [`${EXT_DIR}/index.js`]: 'draw();',
+    });
+    assert.deepStrictEqual(fromManifest.extensions[0].renderers,
+      [{ id: 'view', target: '.md', declares: 'standup-plugin' }],
+      'the shipped manifest\'s marker is the claim');
+    const fromRecord = roster({
+      [RECORDS_FILE]: records(record({ match: '*.md', declares: 'standup-plugin' })),
+      [`${EXT_DIR}/index.js`]: 'draw();',
+    });
+    assert.deepStrictEqual(fromRecord.extensions[0].renderers,
+      [{ id: 'view', target: '.md', declares: 'standup-plugin' }],
+      'no installed manifest: the record\'s copy stands in, the path real installs take');
+    const bare = roster({
+      [RECORDS_FILE]: records(record()),
+      [`${EXT_DIR}/rundock.json`]: manifest({ entry: 'index.js', match: '*.csv' }),
+      [`${EXT_DIR}/index.js`]: 'draw();',
+    });
+    assert.ok(!('declares' in bare.extensions[0].renderers[0]),
+      'no marker, no field: every existing consumer reads the shape it always did');
+  });
+
+  test('a declares outside the key grammar is a named refusal on the roster, never a claim and never a silent widening', () => {
+    const reply = roster({
+      [RECORDS_FILE]: records(record({ match: '*.md', declares: 'Not A Key!' })),
+      [`${EXT_DIR}/index.js`]: 'draw();',
+    });
+    const [ext] = reply.extensions;
+    assert.deepStrictEqual(ext.renderers, [],
+      'an unreadable marker never falls back to claiming the whole container');
+    assert.strictEqual(ext.refusals.length, 1);
+    assert.match(ext.refusals[0].reason, /frontmatter key/, 'the reason states the grammar');
+    assert.strictEqual(ext.refusals[0].declares, 'Not A Key!', 'and names the marker it refused');
+  });
+
+  test('the core marker is refused on the roster: kanban stays Rundock\'s, and the reason reaches the managed row\'s entry', () => {
+    const reply = roster({
+      [RECORDS_FILE]: records(record({ match: '*.md', declares: 'kanban-plugin' })),
+      [`${EXT_DIR}/index.js`]: 'draw();',
+    });
+    const [ext] = reply.extensions;
+    assert.deepStrictEqual(ext.renderers, [], 'the claim the registry would refuse is not listed as working');
+    assert.strictEqual(ext.refusals.length, 1);
+    assert.match(ext.refusals[0].reason, /kanban-plugin/);
+    assert.match(ext.refusals[0].reason, /Rundock/, 'the reason says whose the marker is');
+  });
+
+  test('two records declaring one marker: the first in roster order keeps it, the loser carries the refusal naming the holder', () => {
+    const second = { ...record({ match: '*.md', declares: 'standup-plugin' }), name: 'z-standup', root: `${store.EXTENSIONS_ROOT}/z-standup` };
+    const first = { ...record({ match: '*.md', declares: 'standup-plugin' }), name: 'a-standup', root: `${store.EXTENSIONS_ROOT}/a-standup` };
+    const reply = roster({
+      [RECORDS_FILE]: records(first, second),
+      [`${store.EXTENSIONS_ROOT}/a-standup/index.js`]: 'draw();',
+      [`${store.EXTENSIONS_ROOT}/z-standup/index.js`]: 'draw();',
+    });
+    const [winner, loser] = reply.extensions;
+    assert.strictEqual(winner.id, 'a-standup');
+    assert.deepStrictEqual(winner.renderers, [{ id: 'view', target: '.md', declares: 'standup-plugin' }]);
+    assert.deepStrictEqual(loser.renderers, [], 'first claim wins, in the order the client registers in');
+    assert.strictEqual(loser.refusals.length, 1);
+    assert.match(loser.refusals[0].reason, /already rendered by a-standup/,
+      'the refusal names the holder, so a silent renderer is explicable');
+  });
+
+  test('a disabled extension contests no marker: the enabled one keeps the claim, exactly as it keeps registration', () => {
+    const off = { ...record({ match: '*.md', declares: 'standup-plugin', enabled: false }), name: 'a-standup', root: `${store.EXTENSIONS_ROOT}/a-standup` };
+    const on = { ...record({ match: '*.md', declares: 'standup-plugin' }), name: 'z-standup', root: `${store.EXTENSIONS_ROOT}/z-standup` };
+    const reply = roster({
+      [RECORDS_FILE]: records(off, on),
+      [`${store.EXTENSIONS_ROOT}/a-standup/index.js`]: 'draw();',
+      [`${store.EXTENSIONS_ROOT}/z-standup/index.js`]: 'draw();',
+    });
+    const enabled = reply.extensions.find((e) => e.id === 'z-standup');
+    assert.deepStrictEqual(enabled.renderers, [{ id: 'view', target: '.md', declares: 'standup-plugin' }]);
+    assert.deepStrictEqual(enabled.refusals, [], 'nothing refused: the disabled entry registers nothing to lose to');
+  });
+
+  test('the record\'s enabled field is what the roster carries, and absent means enabled', () => {
+    const shapes = [
+      [{}, true],
+      [{ enabled: true }, true],
+      [{ enabled: false }, false],
+    ];
+    for (const [extra, enabled] of shapes) {
+      const reply = roster({
+        [RECORDS_FILE]: records(record(extra)),
+        [`${EXT_DIR}/rundock.json`]: manifest({ entry: 'index.js', match: '*.csv' }),
+        [`${EXT_DIR}/index.js`]: 'draw();',
+      });
+      assert.strictEqual(reply.extensions[0].enabled, enabled, `enabled ${JSON.stringify(extra)} carries ${enabled}`);
+      assert.deepStrictEqual(reply.extensions[0].renderers, [{ id: 'view', target: '.csv' }],
+        'the roster still names the renderer of a disabled extension; the client registry is what skips it');
+    }
+  });
+
+  test('a record without entry and match is read from the extension\'s own rundock.json, and a manifest in the directory wins when both are present', () => {
+    const fromManifest = roster({
+      [RECORDS_FILE]: records({ name: 'csv-echo', version: '1.2.0', source: { url: 'u', reference: 'v1.2.0' } }),
+      [`${EXT_DIR}/rundock.json`]: manifest({ entry: 'index.js', match: '*.csv' }),
+      [`${EXT_DIR}/index.js`]: 'draw();',
+    });
+    assert.deepStrictEqual(fromManifest.extensions[0].renderers, [{ id: 'view', target: '.csv' }]);
+    const both = roster({
+      [RECORDS_FILE]: records(record({ match: '*.csv' })),
+      [`${EXT_DIR}/rundock.json`]: manifest({ entry: 'index.js', match: '*.tsv' }),
+      [`${EXT_DIR}/index.js`]: 'draw();',
+    });
+    assert.deepStrictEqual(both.extensions[0].renderers, [{ id: 'view', target: '.tsv' }],
+      'the manifest the extension ships is the declaration; the record is the copy the install took of it');
+    const neither = roster({
+      [RECORDS_FILE]: records({ name: 'csv-echo', version: '1.2.0', source: { url: 'u', reference: 'v1.2.0' } }),
+    });
+    assert.strictEqual(neither.extensions[0].broken, true, 'no declaration anywhere is a broken record, reported rather than skipped');
+    assert.strictEqual(neither.extensions[0].enabled, false);
+  });
+
+  test('an unreadable records file is a roster error carrying the reason, never an empty roster', () => {
+    const reply = roster({ [RECORDS_FILE]: 'not json at all' });
+    assert.strictEqual(reply.type, 'extensions_error');
+    assert.match(reply.reason, /records unreadable/);
+    const wrongSchema = roster({ [RECORDS_FILE]: JSON.stringify({ schema: 'something-else', extensions: [] }) });
+    assert.strictEqual(wrongSchema.type, 'extensions_error');
+  });
+
+  test('the retired per-directory layout is read by nothing: it lists nothing and serves nothing', () => {
     const table = buildDispatch();
     const original = config.getWorkspace();
     const dir = extensionWorkspace({
-      '.rundock/plugins/charts/manifest.json': EXT_MANIFEST,
-      '.rundock/plugins/charts/ui/index.js': 'draw();',
-      '.rundock/plugins/thief/manifest.json': JSON.stringify({
-        schemaVersion: 1, id: 'thief',
-        renderers: [{ id: 'r', target: '.x', entry: '../../../secrets.txt' }],
+      '.rundock/plugins/charts/manifest.json': JSON.stringify({
+        schemaVersion: 1, id: 'charts', renderers: [{ id: 'chart', target: '.chart', entry: 'ui/index.js' }],
       }),
+      '.rundock/plugins/charts/ui/index.js': 'draw();',
+      '.rundock/plugin-state.json': JSON.stringify({ plugins: { charts: { enabled: true } } }),
+    });
+    try {
+      config.setWorkspace(dir);
+      const ws = captureWs();
+      table.list_extensions({}, ws, { type: 'list_extensions' });
+      assert.deepStrictEqual(ws.sent, [{ type: 'extensions', extensions: [] }]);
+      const ui = captureWs();
+      table.get_extension_ui({}, ui, { type: 'get_extension_ui', extensionId: 'charts', rendererId: 'chart' });
+      assert.strictEqual(ui.sent[0].type, 'extension_ui_error');
+    } finally {
+      config.setWorkspace(original);
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('the file tree lists a file whose extension an enabled record claims, and stops when the record is disabled or removed', () => {
+    const files = {
+      'notes.md': '# notes',
+      'sales.csv': 'a,b\n1,2\n',
+      'data/more.csv': 'c,d\n',
+      'data/readme.txt': 'plain',
+      'script.py': 'print(1)',
+    };
+    const names = (tree) => tree.flatMap((n) => (n.type === 'folder' ? names(n.children) : [n.path])).sort();
+    const build = (store) => {
+      const dir = extensionWorkspace({ ...files, ...store });
+      try { return names(srv.getFileTree(dir)); } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+    };
+    const withStore = (rec) => ({
+      [RECORDS_FILE]: records(rec),
+      [`${EXT_DIR}/rundock.json`]: manifest({ entry: 'index.js', match: '*.csv' }),
+      [`${EXT_DIR}/index.js`]: 'draw();',
+    });
+    assert.deepStrictEqual(build({}), ['data/readme.txt', 'notes.md'],
+      'with no record the built-in kinds alone are listed: never csv, never code');
+    assert.deepStrictEqual(build(withStore(record())), ['data/more.csv', 'data/readme.txt', 'notes.md', 'sales.csv'],
+      'an enabled record claiming *.csv lists every csv, at any depth');
+    assert.deepStrictEqual(build(withStore(record({ enabled: false }))), ['data/readme.txt', 'notes.md'],
+      'a disabled record claims nothing for the tree');
+    assert.deepStrictEqual(build({ [RECORDS_FILE]: records() }), ['data/readme.txt', 'notes.md'],
+      'a removed record claims nothing for the tree');
+    assert.deepStrictEqual(build({ [RECORDS_FILE]: 'not json' }), ['data/readme.txt', 'notes.md'],
+      'an unreadable roster claims nothing; the tree still stands');
+    assert.strictEqual(typeof srv.noteExtensionRecordsChanged, 'function', 'the invalidation the install and manage flows call');
+    assert.strictEqual(typeof srv.wsHandlerContext.workspace.noteExtensionRecordsChanged, 'function',
+      'reachable through ctx.workspace, the way handlers reach every root file cache');
+  });
+
+  test('a records change alone makes the cached tree stale, and the invalidation call covers a change the stat cannot see', () => {
+    // The records file lives under a dot directory the tree never walks, so
+    // no directory mtime says it changed. The freshness pass stats the file
+    // itself; the install and manage flows call noteExtensionRecordsChanged
+    // as well, which is what catches a rewrite that lands on the same mtime.
+    const original = config.getWorkspace();
+    const dir = extensionWorkspace({
+      'sales.csv': 'a,b\n',
+      'notes.md': '# notes',
+      [RECORDS_FILE]: records(record()),
+      [`${EXT_DIR}/rundock.json`]: manifest({ entry: 'index.js', match: '*.csv' }),
+      [`${EXT_DIR}/index.js`]: 'draw();',
+    });
+    const recordsFile = path.join(dir, RECORDS_FILE);
+    const names = (tree) => tree.map((n) => n.path).sort();
+    const cached = () => srv.wsHandlerContext.workspace.getFileTreeCached();
+    try {
+      srv.setWorkspace(dir);
+      assert.deepStrictEqual(names(cached()), ['notes.md', 'sales.csv']);
+      assert.strictEqual(cached(), cached(), 'an unchanged store is a cache hit by identity');
+      // Disable the record; the file's mtime moves and nothing else does.
+      fs.writeFileSync(recordsFile, records(record({ enabled: false })));
+      const later = new Date(fs.statSync(recordsFile).mtimeMs + 5000);
+      fs.utimesSync(recordsFile, later, later);
+      assert.deepStrictEqual(names(cached()), ['notes.md'],
+        'the next read rebuilt from the records file alone, with no directory change and no call');
+      // Re-enable, but pin the mtime to the value the cache recorded (a whole
+      // millisecond, so the pin is exact) so the stat cannot see it: only the
+      // explicit call can.
+      fs.writeFileSync(recordsFile, records(record()));
+      fs.utimesSync(recordsFile, later, later);
+      assert.deepStrictEqual(names(cached()), ['notes.md'], 'same mtime reads as fresh');
+      srv.noteExtensionRecordsChanged();
+      assert.deepStrictEqual(names(cached()), ['notes.md', 'sales.csv'],
+        'the call the install and manage flows make rebuilds at once');
+    } finally {
+      srv.setWorkspace(null);
+      config.setWorkspace(original);
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('get_extension_ui serves the entry from the install store, and refuses cleanly on every bad input', () => {
+    const table = buildDispatch();
+    const original = config.getWorkspace();
+    const dir = extensionWorkspace({
+      [RECORDS_FILE]: records(
+        record(),
+        record({ name: 'thief', entry: '../../../secrets.txt', root: '.rundock/extensions/thief' }),
+      ),
+      [`${EXT_DIR}/rundock.json`]: manifest({ entry: 'index.js', match: '*.csv' }),
+      [`${EXT_DIR}/index.js`]: 'draw();',
       'secrets.txt': 'not yours',
     });
     try {
       config.setWorkspace(dir);
       const ok = captureWs();
-      table.get_extension_ui({}, ok, { type: 'get_extension_ui', extensionId: 'charts', rendererId: 'chart' });
+      table.get_extension_ui({}, ok, { type: 'get_extension_ui', extensionId: 'csv-echo', rendererId: 'view' });
       assert.strictEqual(ok.sent.length, 1);
       assert.strictEqual(ok.sent[0].type, 'extension_ui');
       assert.strictEqual(ok.sent[0].entry, 'draw();');
+      assert.deepStrictEqual(ok.sent[0].styles, []);
 
       const unknown = captureWs();
-      table.get_extension_ui({}, unknown, { type: 'get_extension_ui', extensionId: 'charts', rendererId: 'nope' });
+      table.get_extension_ui({}, unknown, { type: 'get_extension_ui', extensionId: 'csv-echo', rendererId: 'nope' });
       assert.strictEqual(unknown.sent[0].type, 'extension_ui_error');
       assert.match(unknown.sent[0].reason, /declares no renderer/);
 
+      const missing = captureWs();
+      table.get_extension_ui({}, missing, { type: 'get_extension_ui', extensionId: 'nobody', rendererId: 'view' });
+      assert.strictEqual(missing.sent[0].type, 'extension_ui_error');
+      assert.match(missing.sent[0].reason, /no installed extension named "nobody"/);
+
+      // OMITTING THE RENDERER IS NOT A WILDCARD. A region extension asks
+      // without naming one, because it declares no renderer at all: it draws a
+      // fenced language instead. That made the id optional, and optional is
+      // one step from ignored. This extension renders files and does have a
+      // renderer, so asking without naming it is a caller that has not said
+      // what it wants, and being handed the entry anyway would make the id
+      // decorative for every extension that has one.
+      const unnamed = captureWs();
+      table.get_extension_ui({}, unnamed, { type: 'get_extension_ui', extensionId: 'csv-echo' });
+      assert.strictEqual(unnamed.sent[0].type, 'extension_ui_error');
+      assert.match(unnamed.sent[0].reason, /renders files, so a renderer must be named/);
+      assert.strictEqual(unnamed.sent[0].entry, undefined,
+        'refused means nothing is served, not that a reason rides alongside the entry');
+
       const escaping = captureWs();
-      table.get_extension_ui({}, escaping, { type: 'get_extension_ui', extensionId: 'thief', rendererId: 'r' });
+      table.get_extension_ui({}, escaping, { type: 'get_extension_ui', extensionId: 'thief', rendererId: 'view' });
       assert.strictEqual(escaping.sent[0].type, 'extension_ui_error');
       assert.match(escaping.sent[0].reason, /inside the extension's own directory/);
 
+      const pathy = captureWs();
+      table.get_extension_ui({}, pathy, { type: 'get_extension_ui', extensionId: '../csv-echo', rendererId: 'view' });
+      assert.strictEqual(pathy.sent[0].type, 'extension_ui_error');
+      assert.match(pathy.sent[0].reason, /not an installed extension name/);
+
       config.setWorkspace(null);
       const noWs = captureWs();
-      table.get_extension_ui({}, noWs, { type: 'get_extension_ui', extensionId: 'charts', rendererId: 'chart' });
+      table.get_extension_ui({}, noWs, { type: 'get_extension_ui', extensionId: 'csv-echo', rendererId: 'view' });
       assert.strictEqual(noWs.sent.length, 1);
       assert.strictEqual(noWs.sent[0].type, 'extension_ui_error');
-      assert.match(noWs.sent[0].reason, /no workspace is open/);
+      assert.strictEqual(noWs.sent[0].reason, 'No workspace is open.');
+    } finally {
+      config.setWorkspace(original);
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('get_extension_ui carries the declared stylesheets to the client, guarded like the entry', () => {
+    const table = buildDispatch();
+    const original = config.getWorkspace();
+    const dir = extensionWorkspace({
+      [RECORDS_FILE]: records(
+        record(),
+        record({ name: 'bare-record', root: `${store.EXTENSIONS_ROOT}/bare-record`, styles: ['table.css'] }),
+        record({ name: 'style-thief', root: `${store.EXTENSIONS_ROOT}/style-thief` }),
+      ),
+      [`${EXT_DIR}/rundock.json`]: manifest({ entry: 'index.js', match: '*.csv', styles: ['table.css'] }),
+      [`${EXT_DIR}/index.js`]: 'draw();',
+      [`${EXT_DIR}/table.css`]: 'th{background:var(--elevated)}',
+      [`${store.EXTENSIONS_ROOT}/bare-record/index.js`]: 'draw();',
+      [`${store.EXTENSIONS_ROOT}/bare-record/table.css`]: 'td{color:var(--text-1)}',
+      [`${store.EXTENSIONS_ROOT}/style-thief/rundock.json`]: JSON.stringify({
+        name: 'style-thief', version: '1.2.0',
+        extension: { entry: 'index.js', match: '*.csv', styles: ['../../../secret.css'] },
+      }),
+      [`${store.EXTENSIONS_ROOT}/style-thief/index.js`]: 'draw();',
+      'secret.css': 'the workspace\'s own file',
+    });
+    try {
+      config.setWorkspace(dir);
+      const ws = captureWs();
+      table.get_extension_ui({}, ws, { type: 'get_extension_ui', extensionId: 'csv-echo', rendererId: 'view' });
+      assert.strictEqual(ws.sent.length, 1);
+      assert.strictEqual(ws.sent[0].type, 'extension_ui');
+      assert.deepStrictEqual(ws.sent[0].styles, ['th{background:var(--elevated)}'],
+        'the reply forwards the stylesheet bytes the registry read, so the mount receives what the manifest declared');
+
+      // The record's copy serves when the installed directory carries no
+      // manifest, exactly as it does for the entry.
+      const bare = captureWs();
+      table.get_extension_ui({}, bare, { type: 'get_extension_ui', extensionId: 'bare-record', rendererId: 'view' });
+      assert.strictEqual(bare.sent[0].type, 'extension_ui');
+      assert.deepStrictEqual(bare.sent[0].styles, ['td{color:var(--text-1)}']);
+
+      // A declared stylesheet that escapes the extension's directory
+      // refuses the whole payload; the workspace's own file never travels.
+      const escaping = captureWs();
+      table.get_extension_ui({}, escaping, { type: 'get_extension_ui', extensionId: 'style-thief', rendererId: 'view' });
+      assert.strictEqual(escaping.sent[0].type, 'extension_ui_error');
+      assert.match(escaping.sent[0].reason, /inside the extension's own directory/);
     } finally {
       config.setWorkspace(original);
       fs.rmSync(dir, { recursive: true, force: true });
@@ -804,6 +1322,54 @@ describe('handler seams (stub ctx, capture ws)', () => {
   });
 });
 
+// A package import writes agent files, so it must tell the same cache
+// cascade every other agent write tells: without that, the roster the
+// server serves can predate the install until the cache expires or the
+// person reloads, which makes a working install look like a failed one.
+// Driven with the composition root's own context, so what is proven is the
+// wired product: the real dispatch, the real handler, the real root
+// cascade, and the real discovery cache the roster is read from.
+describe('a package import invalidates the roster cache the way every other agent write does', () => {
+  test('the roster read through the server right after an apply carries the imported agent, on a still-warm cache', () => {
+    const { buildPlan, decide } = require('../../lib/packages/import-plan.js');
+    const table = buildDispatch();
+    const original = config.getWorkspace();
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'proto-pkg-roster-'));
+    const sourceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'proto-pkg-src-'));
+    try {
+      fs.mkdirSync(path.join(workspace, '.claude', 'agents'), { recursive: true });
+      fs.writeFileSync(path.join(workspace, '.claude', 'agents', 'resident.md'), '---\nname: resident\n---\n\nAlready here.\n');
+      fs.mkdirSync(path.join(sourceRoot, '.claude', 'agents'), { recursive: true });
+      fs.writeFileSync(path.join(sourceRoot, '.claude', 'agents', 'scribe.md'), '---\nname: scribe\n---\n\nWrite things.\n');
+      config.setWorkspace(workspace);
+      srv.invalidateAgentCache();
+      // Warm the cache the way any client request does, so the read after
+      // the apply is answered from cache unless the import invalidates it.
+      // The platform guide rides on every roster, so membership is asserted
+      // rather than the exact list.
+      const before = srv.discoverAgents().map((a) => a.id);
+      assert.ok(before.includes('resident') && !before.includes('scribe'),
+        'fixture sanity: the roster is warm and the imported agent is not on it yet');
+      const approval = decide(
+        buildPlan(workspace, sourceRoot, { id: 'github.com/example/pack', reference: 'v1.0.0' }),
+        { 'agent:scribe': 'add' },
+      );
+      const ws = captureWs();
+      table.apply_package_import(srv.wsHandlerContext, ws,
+        { type: 'apply_package_import', sourcePath: sourceRoot, approval });
+      assert.strictEqual(ws.sent[0].type, 'package_import_result');
+      assert.strictEqual(ws.sent[0].status, 'ready');
+      assert.ok(srv.discoverAgents().map((a) => a.id).includes('scribe'),
+        'the roster the server serves carries the imported agent immediately, with no reload and no cache expiry');
+    } finally {
+      config.setWorkspace(original);
+      srv.invalidateAgentCache();
+      fs.rmSync(workspace, { recursive: true, force: true });
+      fs.rmSync(sourceRoot, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('cancel seams (stub ctx)', () => {
   test('cancel with no active or an idle process is a silent no-op', () => {
     const table = buildDispatch();
@@ -811,7 +1377,7 @@ describe('cancel seams (stub ctx)', () => {
     const ctx = { processes: new Map(), pendingPermissions: new Map(), broadcast: (m) => sent.push(m) };
     table.cancel(ctx, captureWs(), { type: 'cancel', conversationId: 'nope' });
     assert.deepStrictEqual(sent, [], 'nothing to cancel, nothing broadcast');
-    const idle = { idle: true, exited: false, processId: 'p1', agentId: 'penn' };
+    const idle = { idle: true, exited: false, processId: 'p1', agentId: 'wren' };
     ctx.processes.set('c-idle', idle);
     table.cancel(ctx, captureWs(), { type: 'cancel', conversationId: 'c-idle' });
     assert.deepStrictEqual(sent, [], 'an idle process is not cancelled');
@@ -860,11 +1426,12 @@ describe('cancel seams (stub ctx)', () => {
 // after the announce and the rollback puts the old root back without saying
 // so. Here the rollback IS a call to this function, so the retraction cannot
 // be forgotten.
-// The OS write block is driven by workspace mode and by nothing else.
-// There is no sandbox switch any more; set_workspace_mode is the single
-// rewiring point, and these tests drive it through the real dispatch table
-// so the wiring proven is the wiring a client message actually reaches.
-describe('the OS write block is driven by mode alone, through the real dispatch', () => {
+// The OS write block is NOT driven by workspace mode. It used to be, which is
+// how choosing Code also turned off keeping agents inside the workspace; the
+// switch is its own setting now (test/unit/sandbox-switch.test.js). These
+// drive set_workspace_mode through the real dispatch table and prove it leaves
+// the block alone on every platform.
+describe('the OS write block is not driven by mode, through the real dispatch', () => {
   const workspace = require('../../lib/protocol/handlers/workspace.js');
   const scaffold = require('../../lib/workspace/scaffold.js');
 
@@ -878,95 +1445,57 @@ describe('the OS write block is driven by mode alone, through the real dispatch'
     fs.mkdirSync(path.join(d, '.claude'), { recursive: true });
     return d;
   }
-  function blockPresent(dir) {
-    try {
-      const settings = JSON.parse(fs.readFileSync(path.join(dir, '.claude', 'settings.local.json'), 'utf8'));
-      return 'sandbox' in settings;
-    } catch (e) { return false; }
-  }
+  const settingsBytes = (dir) => {
+    try { return fs.readFileSync(path.join(dir, '.claude', 'settings.local.json'), 'utf8'); } catch (e) { return null; }
+  };
 
-  // WHETHER THE SANDBOX IS SWITCHED ON, which a block's mere presence does not
-  // answer. Rundock writes one settings layer and `sandbox.enabled` is an OR
-  // across all of them, so Code mode keeps a block (to name the folders the
-  // user chose, and so they survive the trip back to Knowledge mode) while
-  // setting the enable to false.
-  //
-  // THE VALUE, NOT THE KEY. This asked `'enabled' in settings.sandbox`, which
-  // was the same conflation the production code carried: it read a Code mode
-  // block that says `false` as one that switches the sandbox ON. The comment
-  // above already said these tests mean "is it on", so now they ask it.
-  function blockEnables(dir) {
-    try {
-      const settings = JSON.parse(fs.readFileSync(path.join(dir, '.claude', 'settings.local.json'), 'utf8'));
-      return !!settings.sandbox && settings.sandbox.enabled === true;
-    } catch (e) { return false; }
-  }
+  test('on macOS, switching mode back and forth never writes the settings file, with a block present or absent', () => {
+    const table = buildDispatch();
+    for (const seeded of [true, false]) {
+      const dir = tempWs();
+      if (seeded) {
+        fs.writeFileSync(path.join(dir, '.claude', 'settings.local.json'),
+          JSON.stringify({ sandbox: scaffold.sandboxSettings(dir, 'darwin') }, null, 2));
+      }
+      const before = settingsBytes(dir);
+      withWorkspace(dir, () => {
+        for (const mode of ['notes', 'code', 'code', 'notes', 'code']) {
+          const socket = captureWs();
+          table.set_workspace_mode({}, socket, { mode }, 'darwin');
+          assert.deepStrictEqual(socket.sent[0], { type: 'workspace_mode_changed', mode });
+          assert.strictEqual(JSON.parse(fs.readFileSync(path.join(dir, '.rundock', 'state.json'), 'utf8')).workspaceMode, mode);
+          assert.strictEqual(settingsBytes(dir), before, `${seeded ? 'with' : 'without'} a block, after ${mode}`);
+        }
+      });
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 
-  test('on macOS, Knowledge mode switches the sandbox on, Code mode switches it off but keeps the paths, and moving back switches it on again', () => {
+  test('on a platform with no OS sandbox, mode persists and no block is ever written', () => {
     const table = buildDispatch();
     const dir = tempWs();
     withWorkspace(dir, () => {
-      const toKnowledge = captureWs();
-      table.set_workspace_mode({}, toKnowledge, { mode: 'knowledge' }, 'darwin');
-      assert.deepStrictEqual(toKnowledge.sent[0], { type: 'workspace_mode_changed', mode: 'knowledge' });
-      assert.ok(blockEnables(dir), 'Knowledge mode on macOS switches the sandbox on');
-
-      const toCode = captureWs();
-      table.set_workspace_mode({}, toCode, { mode: 'code' }, 'darwin');
-      assert.deepStrictEqual(toCode.sent[0], { type: 'workspace_mode_changed', mode: 'code' });
-      assert.strictEqual(blockEnables(dir), false, 'Code mode switches the sandbox off');
-      assert.ok(blockPresent(dir), 'while keeping the block, which is the only place the named folders are written');
-
-      const backToKnowledge = captureWs();
-      table.set_workspace_mode({}, backToKnowledge, { mode: 'knowledge' }, 'darwin');
-      assert.ok(blockEnables(dir), 'moving back to Knowledge mode switches it on again');
+      for (const mode of ['notes', 'code']) {
+        table.set_workspace_mode({}, captureWs(), { mode }, 'linux');
+        assert.strictEqual(settingsBytes(dir), null, `${mode} on Linux`);
+      }
     });
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  test('on a platform with no OS sandbox, mode still persists but no block is ever written, in either mode', () => {
+  // THE OLD STANDALONE MESSAGES STAY GONE. set_sandbox_mode and
+  // get_sandbox_mode were removed when mode briefly owned the block; the switch
+  // that replaced them has its own names, so a client (or a prompt-injected
+  // instruction) sending the old ones still reaches no handler at all.
+  test('the removed sandbox messages are still not messages the protocol recognises', () => {
     const table = buildDispatch();
-    const dir = tempWs();
-    withWorkspace(dir, () => {
-      const toKnowledge = captureWs();
-      table.set_workspace_mode({}, toKnowledge, { mode: 'knowledge' }, 'linux');
-      assert.strictEqual(toKnowledge.sent[0].type, 'workspace_mode_changed');
-      assert.strictEqual(blockPresent(dir), false, 'Linux never gets an OS block, even in Knowledge mode');
-
-      const toCode = captureWs();
-      table.set_workspace_mode({}, toCode, { mode: 'code' }, 'linux');
-      assert.strictEqual(blockPresent(dir), false);
-    });
-    fs.rmSync(dir, { recursive: true, force: true });
+    assert.strictEqual('set_sandbox_mode' in table, false);
+    assert.strictEqual('get_sandbox_mode' in table, false);
   });
 
-  // THE ABSENCE OF ANY OTHER ROUTE. There is no set_sandbox_mode or
-  // get_sandbox_mode message any more: the dispatch table carries no entry
-  // for either name, so a client (or a prompt-injected instruction) that
-  // sends one reaches no handler at all, exactly as any other unrecognised
-  // message type would, and the block is untouched by it.
-  test('a direct attempt to set the block is not a message the protocol recognises', () => {
-    const table = buildDispatch();
-    assert.strictEqual('set_sandbox_mode' in table, false, 'no handler exists to set the block directly');
-    assert.strictEqual('get_sandbox_mode' in table, false, 'no handler exists to read a standalone switch either');
-    const dir = tempWs();
-    withWorkspace(dir, () => {
-      // First put the block in place, in Knowledge mode, then attempt the
-      // removed message: an unrecognised type dispatches to nothing
-      // (server.js: `if (dispatchHandler) dispatchHandler(...)`), so the
-      // block bystanding this must be exactly what mode left it as.
-      table.set_workspace_mode({}, captureWs(), { mode: 'knowledge' }, 'darwin');
-      assert.ok(blockPresent(dir), 'sanity: the block is present before the attempt');
-      const dispatchHandler = table['set_sandbox_mode'];
-      assert.strictEqual(dispatchHandler, undefined, 'there is nothing to call');
-      assert.ok(blockPresent(dir), 'and the block is unchanged: nothing else could have touched it');
-    });
-    fs.rmSync(dir, { recursive: true, force: true });
-  });
-
-  test('a write the workspace refuses becomes a named error, never silence', () => {
-    // .rundock exists as a FILE, so the state write inside cannot happen and
-    // the failure surfaces as a workspace_error carrying the cause.
+  test('a write the workspace refuses becomes a named error, never silence, and commits no mode', () => {
+    // .rundock exists as a FILE, so the state write cannot happen and the
+    // failure surfaces as a workspace_error carrying the cause.
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'proto-mode-bad-'));
     fs.writeFileSync(path.join(dir, '.rundock'), 'not a directory');
     withWorkspace(dir, () => {
@@ -974,179 +1503,7 @@ describe('the OS write block is driven by mode alone, through the real dispatch'
       workspace.handleSetWorkspaceMode({}, set, { mode: 'code' }, 'darwin');
       assert.strictEqual(set.sent[0].type, 'workspace_error');
       assert.match(set.sent[0].message, /Could not update workspace mode/);
-    });
-    fs.rmSync(dir, { recursive: true, force: true });
-  });
-
-  test('an unreadable settings.local.json is named in the error, not silently replaced', () => {
-    // The bug this guards: a corrupt or unreadable settings file made the
-    // reconcile start from {}, write over the file, and still report
-    // workspace_mode_changed. This drives the real protocol path
-    // (handleSetWorkspaceMode, not reconcileSandboxForMode directly) so the
-    // wiring between the two is what is proven, not just the function in
-    // isolation.
-    const dir = tempWs();
-    const settingsPath = path.join(dir, '.claude', 'settings.local.json');
-    const corrupt = '{ not json';
-    fs.writeFileSync(settingsPath, corrupt);
-    withWorkspace(dir, () => {
-      const set = captureWs();
-      workspace.handleSetWorkspaceMode({}, set, { mode: 'knowledge' }, 'darwin');
-      assert.strictEqual(set.sent[0].type, 'workspace_error', 'never workspace_mode_changed for this failure');
-      assert.match(set.sent[0].message, /settings\.local\.json/, 'the settings file is named');
-      assert.strictEqual(fs.readFileSync(settingsPath, 'utf8'), corrupt, 'and its bytes are untouched');
-    });
-    fs.rmSync(dir, { recursive: true, force: true });
-  });
-
-  // handleSetWorkspaceMode used to persist the new mode to state.json BEFORE
-  // reconciling, so a settings-read failure left the mode committed while
-  // the block stayed untouched. Proven by reading state.json back, not by
-  // inspecting the error text alone (covered above).
-  test('a failed mode change never commits the new mode; state.json still names the one before the attempt', () => {
-    const dir = tempWs();
-    const statePath = path.join(dir, '.rundock', 'state.json');
-    withWorkspace(dir, () => {
-      const first = captureWs();
-      workspace.handleSetWorkspaceMode({}, first, { mode: 'knowledge' }, 'darwin');
-      assert.strictEqual(first.sent[0].type, 'workspace_mode_changed');
-      assert.strictEqual(JSON.parse(fs.readFileSync(statePath, 'utf8')).workspaceMode, 'knowledge',
-        'fixture sanity: the successful switch did persist');
-
-      // Corrupt the settings file so the reconcile to code mode throws.
-      const settingsPath = path.join(dir, '.claude', 'settings.local.json');
-      fs.writeFileSync(settingsPath, '{ not json');
-
-      const second = captureWs();
-      workspace.handleSetWorkspaceMode({}, second, { mode: 'code' }, 'darwin');
-      assert.strictEqual(second.sent[0].type, 'workspace_error', 'the failure is named, not silently accepted');
-
-      assert.strictEqual(JSON.parse(fs.readFileSync(statePath, 'utf8')).workspaceMode, 'knowledge',
-        'the mode was never committed: reconcile ran and threw before writeState had a chance to persist code');
-    });
-    fs.rmSync(dir, { recursive: true, force: true });
-  });
-
-  // A MODE CHANGE IS ALL OR NOTHING, in both directions, including a failure
-  // that happens AFTER a successful reconcile. Reconcile-before-persist alone
-  // only narrows the window where the settings file and the persisted mode
-  // can disagree; a state-write failure after the reconcile has already
-  // rewritten settings.local.json still leaves the two describing different
-  // modes unless the settings file is restored. Each fixture starts from a
-  // settings file the reconcile GENUINELY changes (a real Rundock block
-  // present, or genuinely absent), then breaks the state write by making
-  // `.rundock` a file instead of a directory, and reads the settings file
-  // back afterwards rather than trusting the error message alone.
-  test('a failed mode change restores the settings file to its exact pre-request bytes: Knowledge to Code, after the block was genuinely removed', () => {
-    const dir = tempWs();
-    const settingsPath = path.join(dir, '.claude', 'settings.local.json');
-    const original = JSON.stringify({ sandbox: scaffold.sandboxSettings(dir, 'darwin') }, null, 2);
-    fs.writeFileSync(settingsPath, original);
-    fs.writeFileSync(path.join(dir, '.rundock'), 'not a directory');
-    withWorkspace(dir, () => {
-      const set = captureWs();
-      workspace.handleSetWorkspaceMode({}, set, { mode: 'code' }, 'darwin');
-      assert.strictEqual(set.sent[0].type, 'workspace_error', 'the failure is named');
-      assert.strictEqual(fs.readFileSync(settingsPath, 'utf8'), original,
-        'the reconcile genuinely removed the block, but the failed state write restores it byte for byte');
-    });
-    fs.rmSync(dir, { recursive: true, force: true });
-  });
-
-  test('a failed mode change restores the settings file to its exact pre-request bytes: Code to Knowledge, after the block was genuinely added', () => {
-    const dir = tempWs();
-    const settingsPath = path.join(dir, '.claude', 'settings.local.json');
-    const original = JSON.stringify({ hooks: {} }, null, 2);
-    fs.writeFileSync(settingsPath, original);
-    fs.writeFileSync(path.join(dir, '.rundock'), 'not a directory');
-    withWorkspace(dir, () => {
-      const set = captureWs();
-      workspace.handleSetWorkspaceMode({}, set, { mode: 'knowledge' }, 'darwin');
-      assert.strictEqual(set.sent[0].type, 'workspace_error', 'the failure is named');
-      assert.strictEqual(fs.readFileSync(settingsPath, 'utf8'), original,
-        'the reconcile genuinely added a block, but the failed state write restores the file to carrying none');
-    });
-    fs.rmSync(dir, { recursive: true, force: true });
-  });
-
-  // WHEN THE UNDO ITSELF CANNOT RUN. Restoring the file's pre-request bytes
-  // is the answer to a failed switch, but that restore is a write too, and a
-  // permissions problem that stopped the first write will stop it as well.
-  // The person must still be told the switch failed: swallowing the restore
-  // error and reporting success would leave them believing a mode change
-  // happened, which is the one outcome worse than the failure itself.
-  test('a switch that fails, and whose restore also fails, still names the failure rather than reporting a change', () => {
-    const dir = tempWs();
-    const settingsPath = path.join(dir, '.claude', 'settings.local.json');
-    const original = JSON.stringify({ hooks: {} }, null, 2);
-    fs.writeFileSync(settingsPath, original);
-    fs.chmodSync(settingsPath, 0o444);
-    try {
-      withWorkspace(dir, () => {
-        const set = captureWs();
-        workspace.handleSetWorkspaceMode({}, set, { mode: 'knowledge' }, 'darwin');
-        assert.strictEqual(set.sent[0].type, 'workspace_error',
-          'the switch is reported as failed even though the file could not be put back');
-        assert.strictEqual(fs.readFileSync(settingsPath, 'utf8'), original,
-          'and the file is unchanged, because the write that would have changed it is the one that failed');
-      });
-    } finally {
-      fs.chmodSync(settingsPath, 0o600);
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  // Denying read on a genuinely-existing file reproduces a non-ENOENT capture failure.
-  test('a pre-request read that fails for a reason other than the file being absent leaves the file untouched', () => {
-    const dir = tempWs();
-    const settingsPath = path.join(dir, '.claude', 'settings.local.json');
-    const original = JSON.stringify({ hooks: { some: 'entry' } }, null, 2);
-    fs.writeFileSync(settingsPath, original);
-    fs.chmodSync(settingsPath, 0o000);
-    try {
-      withWorkspace(dir, () => {
-        const set = captureWs();
-        workspace.handleSetWorkspaceMode({}, set, { mode: 'knowledge' }, 'darwin');
-        assert.strictEqual(set.sent[0].type, 'workspace_error', 'the failure is named');
-      });
-    } finally { fs.chmodSync(settingsPath, 0o600); }
-    assert.strictEqual(fs.readFileSync(settingsPath, 'utf8'), original, 'never deleted');
-    fs.rmSync(dir, { recursive: true, force: true });
-  });
-
-  // Every other atomicity test starts from a settings file that already exists; this starts from none.
-  test('a failed state write, when no settings.local.json existed before the request, removes the file the reconcile created and commits no mode', () => {
-    const dir = tempWs();
-    const settingsPath = path.join(dir, '.claude', 'settings.local.json');
-    fs.writeFileSync(path.join(dir, '.rundock'), 'not a directory');
-    withWorkspace(dir, () => {
-      const set = captureWs();
-      workspace.handleSetWorkspaceMode({}, set, { mode: 'knowledge' }, 'darwin');
-      assert.strictEqual(set.sent[0].type, 'workspace_error', 'the failure is named');
-      assert.strictEqual(fs.existsSync(settingsPath), false, 'the file the reconcile created is removed again');
-      assert.strictEqual(fs.existsSync(path.join(dir, '.rundock', 'state.json')), false, 'no mode was ever persisted');
-    });
-    fs.rmSync(dir, { recursive: true, force: true });
-  });
-
-  // REPEATED SWITCHING CONVERGES. Not only the final state after a run of
-  // switches: the block on disk and the recorded mode must agree after
-  // EVERY switch in the sequence, including two switches to the same mode
-  // in a row, which is what testing back and forth quickly actually does.
-  test('switching between Knowledge and Code repeatedly converges after every switch, not only at the end', () => {
-    const table = buildDispatch();
-    const dir = tempWs();
-    withWorkspace(dir, () => {
-      const sequence = ['knowledge', 'code', 'knowledge', 'code', 'code', 'knowledge', 'knowledge', 'code'];
-      for (const mode of sequence) {
-        const socket = captureWs();
-        table.set_workspace_mode({}, socket, { mode }, 'darwin');
-        assert.strictEqual(socket.sent[0].type, 'workspace_mode_changed', `switching to ${mode} succeeds`);
-        const state = JSON.parse(fs.readFileSync(path.join(dir, '.rundock', 'state.json'), 'utf8'));
-        assert.strictEqual(state.workspaceMode, mode, `the recorded mode is ${mode} right after this switch`);
-        assert.strictEqual(blockEnables(dir), mode === 'knowledge',
-          `the block on disk agrees with ${mode} right after this switch, not just at the end of the sequence`);
-      }
+      assert.strictEqual(fs.readFileSync(path.join(dir, '.rundock'), 'utf8'), 'not a directory');
     });
     fs.rmSync(dir, { recursive: true, force: true });
   });

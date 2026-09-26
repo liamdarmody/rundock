@@ -91,6 +91,14 @@ const ROOT = process.env.PRECOMMIT_GATE_ROOT
   ? path.resolve(process.env.PRECOMMIT_GATE_ROOT)
   : path.resolve(__dirname, '..');
 const RECORD = path.join(ROOT, '.precommit-gate.json');
+// ONE RECORD PER TREE, KEPT. The record above names the last tree the gate
+// passed, and the next run overwrites it, so a review of an earlier tree could
+// not be given the record for that tree. Every pass also writes the same
+// record under the tree's own name here, gitignored and never committed, and
+// the oldest beyond TREE_RECORDS_KEPT are removed. `.precommit-gate.json` is
+// unchanged: the hook and the review harness read it.
+const TREE_RECORDS = path.join(ROOT, '.precommit-gate');
+const TREE_RECORDS_KEPT = 50;
 
 // The checks that belong on a commit: fast, deterministic, and the ones whose
 // absence has actually cost a red pipeline. The browser suite and the live
@@ -128,7 +136,28 @@ const STEPS = [
   { name: 'typecheck', args: ['run', 'typecheck'] },
   { name: 'lint:styles', args: ['run', 'lint:styles'] },
   { name: 'check:refs', args: ['run', 'check:refs'] },
-  { name: 'test:coverage', args: ['run', 'test:coverage'] },
+  // THE SUITE IS NOT RUN HERE, AND THAT IS DELIBERATE. Decided 2026-09-18,
+  // done 2026-09-22.
+  //
+  // It was the largest single cost in this gate and the only step that was a
+  // second copy of a check something else already owns. `.github/workflows/
+  // ci.yml` runs `npm test` on Node 22 AND 24 on a clean machine, and runs
+  // `test:coverage` with the floors in its own job. CI is also the only copy
+  // that can block a merge, so the local run was buying a slower answer to a
+  // question already answered better: one machine, one Node version, a dirty
+  // working tree, and whatever else that machine was doing at the time.
+  //
+  // Measured on the run that prompted this: 816s of a 40 minute gate, and on
+  // the three runs before it 1160s, 934s and 317s. Two of those runs failed
+  // on timing tests that pass in isolation, so the local copy was not merely
+  // slow, it was the step that turned machine load into a false red and cost
+  // a full re-run each time.
+  //
+  // WHAT IS KEPT HERE IS WHAT CI CANNOT DO CHEAPLY: the fast checks, and the
+  // mutation guards, which need the working tree they are about to rewrite.
+  // If a suite failure ever reaches main that a local run would have caught
+  // first, this is the line to reconsider, and the companion rule applies:
+  // expect to add something back, or the cut was not deep enough.
   // Removes each of the renderer's escaping guards in turn and requires a test
   // to go red for it. Slower than the rest because it runs a suite per guard,
   // and worth it here: two of these guards were removable with nothing going
@@ -174,9 +203,23 @@ const STEP_END_GRACE_MS = 5000;
 // The number is per step rather than for the run, because the run's length is
 // not the signal: a suite that normally takes four minutes and is still going
 // at twenty is stuck whatever the other steps have done.
+//
+// RAISED FOR mutate:guards ON 2026-09-21, by owner decision, because the
+// ceiling had fallen below the work rather than the work having gone wrong.
+// The full set ran 1707s, 2237s and 2693s that day and then was ended at the
+// 45 minute cap, and it grows with every harness row added. A ceiling under
+// the honest duration of the step does not catch a hang, it manufactures one,
+// and it did: with the fallback already running every harness, no change on
+// the branch could be committed at all.
+//
+// 90 minutes is still far under anything that reads as stuck for this step,
+// and the number is expected to be revisited by making the step cheaper
+// rather than by raising this again: the scoped run is a handful of harnesses
+// and seconds, and the full set is only reached when the scope narrowing
+// falls back, which is its own card.
 const STEP_CEILING_MS = {
   'test:coverage': 20 * 60 * 1000,
-  'mutate:guards': 45 * 60 * 1000, // every harness, when the change touches the machinery
+  'mutate:guards': 90 * 60 * 1000, // every harness, when the change touches the machinery
 };
 const DEFAULT_STEP_CEILING_MS = 10 * 60 * 1000;
 const ceilingFor = (name) => STEP_CEILING_MS[name] || DEFAULT_STEP_CEILING_MS;
@@ -469,6 +512,25 @@ function writeRecord(record, file = RECORD) {
   fs.writeFileSync(file, JSON.stringify(record, null, 2) + '\n');
 }
 
+/**
+ * The same record, kept under its tree's name, and the oldest beyond `keep`
+ * removed. Only files named for a tree are ever touched, so nothing else a
+ * person puts in the folder is pruned.
+ */
+const TREE_RECORD_NAME = /^[0-9a-f]{40}\.json$/;
+function writeTreeRecord(record, dir = TREE_RECORDS, keep = TREE_RECORDS_KEPT) {
+  if (!record || !/^[0-9a-f]{40}$/.test(String(record.tree))) {
+    throw new Error('writeTreeRecord: a record is kept only under a full tree hash');
+  }
+  fs.mkdirSync(dir, { recursive: true });
+  writeRecord(record, path.join(dir, `${record.tree}.json`));
+  const kept = fs.readdirSync(dir)
+    .filter((name) => TREE_RECORD_NAME.test(name))
+    .map((name) => ({ name, at: fs.statSync(path.join(dir, name)).mtimeMs }))
+    .sort((a, b) => b.at - a.at);
+  for (const old of kept.slice(keep)) fs.rmSync(path.join(dir, old.name), { force: true });
+}
+
 /** The record `run()` would write for this tree and branch. */
 function buildRecord({ tree, branch, at, timings }) {
   // REFUSED WITHOUT MEASUREMENTS, rather than defaulted to none. A tolerant
@@ -665,6 +727,13 @@ async function run() {
     // result being read. There is no separate "did you look at it" step to skip.
     const record = buildRecord({ tree: currentTree(), branch, at: new Date().toISOString(), timings });
     writeRecord(record);
+    // Kept under its tree's name as well. A failure here cannot unmake the
+    // pass the record above states, so it is reported rather than thrown.
+    try {
+      writeTreeRecord(record);
+    } catch (e) {
+      console.error(`[precommit] the record could not also be kept under its tree's name: ${e.message}`);
+    }
     console.log(`[precommit] PASS. Record written for tree ${record.tree.slice(0, 12)} on ${branch}.`);
   } finally {
     endLiveGroup();
@@ -698,4 +767,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { refusal, runSteps, buildRecord, writeRecord, readRecord, currentTree, defaultBranch, workingTreeDrift, stagedPaths, isReleaseCommit, RELEASE_FOOTPRINT, RECORD, STEPS, STEP_END_GRACE_MS, STEP_CEILING_MS, DEFAULT_STEP_CEILING_MS, ceilingFor };
+module.exports = { refusal, runSteps, buildRecord, writeRecord, writeTreeRecord, TREE_RECORDS, TREE_RECORDS_KEPT, readRecord, currentTree, defaultBranch, workingTreeDrift, stagedPaths, isReleaseCommit, RELEASE_FOOTPRINT, RECORD, STEPS, STEP_END_GRACE_MS, STEP_CEILING_MS, DEFAULT_STEP_CEILING_MS, ceilingFor };

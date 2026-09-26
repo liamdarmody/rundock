@@ -139,13 +139,13 @@ describe('Agent-tool interception', () => {
       {
         match: { agent: 'chief-of-staff', promptIncludes: 'intercept-basic please' },
         turn: [
-          { text: 'Handing to Penn.' },
+          { text: 'Handing to Wren.' },
           { agentTool: { subagent_type: 'content-lead', prompt: 'intercept-basic hooks brief' } },
         ],
       },
       {
         match: { agent: 'content-lead', promptIncludes: 'intercept-basic hooks brief' },
-        turn: [{ text: 'Penn took over and delivered.' }],
+        turn: [{ text: 'Wren took over and delivered.' }],
       },
     ]);
 
@@ -156,7 +156,7 @@ describe('Agent-tool interception', () => {
     assert.strictEqual(sw.toAgent, 'content-lead');
 
     const { msg: result } = await client.waitFor(m => m.type === 'result' && m._conversationId === convoId && m._agent === 'content-lead', { label: 'delegate result' });
-    assert.strictEqual(result.result, 'Penn took over and delivered.');
+    assert.strictEqual(result.result, 'Wren took over and delivered.');
 
     // delegate got the DELEGATION BRIEF (intercepted cold spawn: brief only, no transcript dump)
     const pennInv = h.readInvocations().find(i => i.agent === 'content-lead');
@@ -165,7 +165,7 @@ describe('Agent-tool interception', () => {
     // orchestrator's prose survived into the transcript before the SIGKILL
     const t = transcript(convoId);
     const cosEntry = t.find(e => e.agent === 'chief-of-staff');
-    assert.ok(cosEntry.text.includes('Handing to Penn.'));
+    assert.ok(cosEntry.text.includes('Handing to Wren.'));
 
     // orchestrator got its done AFTER the switch (client bubble promotion order)
     const doneIdx = client.messages.findIndex(m => m.type === 'system' && m.subtype === 'done' && m._conversationId === convoId && m._agent === 'chief-of-staff');
@@ -179,10 +179,10 @@ describe('Agent-tool interception', () => {
   });
 
   test('off-roster Agent tool target is soft-blocked: no impersonation, caller resumed with a corrective message', async () => {
-    // The impersonation gap: Penn (content-lead) explicitly names Des
-    // (lead-designer), who reports to chief-of-staff, not to Penn. Pre-fix
+    // The impersonation gap: Wren (content-lead) explicitly names Des
+    // (lead-designer), who reports to chief-of-staff, not to Wren. Pre-fix
     // this fell through to Claude Code, which spawned a generic subagent
-    // wearing Des's name. Post-fix the call is blocked and Penn is resumed
+    // wearing Des's name. Post-fix the call is blocked and Wren is resumed
     // with a corrective system message.
     const convoId = h.freshConvoId('int');
     h.clearInvocations();
@@ -222,11 +222,11 @@ describe('Agent-tool interception', () => {
     assert.ok(resumed, 'caller resumed via --resume');
     assert.ok(resumed.resume.includes('stub-content-lead'), 'resumed the caller session');
 
-    // No agent_switch ever fired: the conversation never left Penn
+    // No agent_switch ever fired: the conversation never left Wren
     const switches = client.messages.filter(m => m.type === 'system' && m.subtype === 'agent_switch' && m._conversationId === convoId);
     assert.deepStrictEqual(switches, []);
 
-    // Penn's pre-block prose survived into the transcript
+    // Wren's pre-block prose survived into the transcript
     const t = transcript(convoId);
     assert.ok(t.find(e => e.agent === 'content-lead' && e.text.includes('Handing to Des.')));
 
@@ -310,7 +310,7 @@ describe('Agent-tool interception', () => {
     h.writeScenario([
       {
         match: { agent: 'chief-of-staff', promptIncludes: 'return-path please' },
-        turn: [{ agentTool: { subagent_type: 'content-lead', prompt: 'return-path brief for penn' } }],
+        turn: [{ agentTool: { subagent_type: 'content-lead', prompt: 'return-path brief for wren' } }],
       },
       {
         match: { agent: 'content-lead', promptIncludes: 'return-path brief' },
@@ -318,7 +318,7 @@ describe('Agent-tool interception', () => {
       },
       {
         // resumed parent gets the routing request naming the returning agent
-        match: { agent: 'chief-of-staff', promptIncludes: ['content-lead returned because the request was outside their scope', 'return-path brief for penn'] },
+        match: { agent: 'chief-of-staff', promptIncludes: ['content-lead returned because the request was outside their scope', 'return-path brief for wren'] },
         turn: [
           { text: 'Routing to Des instead.' },
           { agentTool: { subagent_type: 'lead-designer', prompt: 'return-path design brief' } },
@@ -332,8 +332,8 @@ describe('Agent-tool interception', () => {
 
     client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: 'return-path please' });
 
-    // penn returns; parent auto-continues NON-silently
-    await client.waitFor(m => m.type === 'result' && m._conversationId === convoId && m._agent === 'content-lead', { label: 'penn result' });
+    // wren returns; parent auto-continues NON-silently
+    await client.waitFor(m => m.type === 'result' && m._conversationId === convoId && m._agent === 'content-lead', { label: 'wren result' });
     const { msg: restart } = await client.waitFor(m => m.type === 'system' && m.subtype === 'process_started' && m._conversationId === convoId && m._agent === 'chief-of-staff' && m.autoContinue, { label: 'parent auto-continue' });
     assert.notStrictEqual(restart.silent, true, 'RETURN restart is a visible auto-continue');
 
@@ -379,7 +379,7 @@ describe('Agent-tool interception', () => {
       m => m.type === 'assistant' && m._conversationId === convoId && typeof m.message?.content === 'string' && m.message.content.includes('has already completed this task'),
       { since, label: 'loop-guard notice', timeout: 12000 }
     );
-    assert.ok(notice.message.content.includes('Penn'), 'notice names the specialist');
+    assert.ok(notice.message.content.includes('Wren'), 'notice names the specialist');
 
     // The loop guard now respawns the orchestrator (interception had
     // SIGKILLed it), so a LIVE process remains for the user to continue with.
@@ -668,10 +668,10 @@ describe('resumed-parent scope return injects real output', () => {
     const convoId = h.freshConvoId('c5');
     h.clearInvocations();
     h.writeScenario([
-      // 1. Orchestrator delegates to Penn via an intercepted Agent tool call.
+      // 1. Orchestrator delegates to Wren via an intercepted Agent tool call.
       { match: { agent: 'chief-of-staff', promptIncludes: 'c5-parent please' },
         turn: [{ agentTool: { subagent_type: 'content-lead', prompt: 'c5 delegate brief' } }] },
-      // 2. Penn returns out-of-scope, so the orchestrator is resumed with the
+      // 2. Wren returns out-of-scope, so the orchestrator is resumed with the
       //    routing prompt (the resumeEntry path in handleDelegation).
       { match: { agent: 'content-lead', promptIncludes: 'c5 delegate brief' },
         turn: [{ text: `Not my lane. ${MARKERS.RETURN}` }] },
@@ -818,11 +818,11 @@ describe('real-stream interception (0.11.6 regression)', () => {
       { match: { agent: 'chief-of-staff', promptIncludes: 'realstream delegation please' },
         realStream: true,
         turn: [
-          { text: 'Handing to Penn.' },
-          { agentTool: { subagent_type: 'content-lead', prompt: 'realstream brief for penn' } },
+          { text: 'Handing to Wren.' },
+          { agentTool: { subagent_type: 'content-lead', prompt: 'realstream brief for wren' } },
         ] },
-      { match: { agent: 'content-lead', promptIncludes: 'realstream brief for penn' },
-        turn: [{ text: `Penn did the work. ${MARKERS.COMPLETE}` }] },
+      { match: { agent: 'content-lead', promptIncludes: 'realstream brief for wren' },
+        turn: [{ text: `Wren did the work. ${MARKERS.COMPLETE}` }] },
     ]);
     const since = client.messages.length;
     client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: 'realstream delegation please' });
@@ -831,8 +831,8 @@ describe('real-stream interception (0.11.6 regression)', () => {
         && m._conversationId === convoId && m.toAgent === 'content-lead',
         { since, label: 'interception fires without an assistant envelope' });
       const { msg } = await client.waitFor(m => m.type === 'result' && m._conversationId === convoId
-        && m._agent === 'content-lead', { since, label: 'Penn result' });
-      assert.ok(msg.result.includes('Penn did the work'), 'the delegate actually ran');
+        && m._agent === 'content-lead', { since, label: 'Wren result' });
+      assert.ok(msg.result.includes('Wren did the work'), 'the delegate actually ran');
     } finally {
       h.reapConvo(convoId);
     }
@@ -847,24 +847,24 @@ describe('real-stream interception (0.11.6 regression)', () => {
     // decide on. This test replays that sequence verbatim via raw events.
     const convoId = h.freshConvoId('midmsg-envelope');
     h.clearInvocations();
-    const input = JSON.stringify({ subagent_type: 'content-lead', prompt: 'midmsg brief for penn' });
+    const input = JSON.stringify({ subagent_type: 'content-lead', prompt: 'midmsg brief for wren' });
     const mid = Math.floor(input.length / 2);
     const fx = require('../fixtures/stream-json.js');
     h.writeScenario([
       { match: { agent: 'chief-of-staff', promptIncludes: 'midmsg delegation please' },
         realStream: true,
         turn: [
-          { text: 'Handing to Penn.' },
+          { text: 'Handing to Wren.' },
           { raw: fx.toolUseStart('Agent', 2) },
           { raw: fx.inputJsonDelta(input.slice(0, mid), 2) },
           { raw: fx.inputJsonDelta(input.slice(mid), 2) },
           // The mid-message consolidated envelope, exactly where the real
           // stream puts it: before the block's stop event.
-          { raw: fx.assistantMessage('Handing to Penn.') },
+          { raw: fx.assistantMessage('Handing to Wren.') },
           { raw: fx.contentBlockStop(2) },
         ] },
-      { match: { agent: 'content-lead', promptIncludes: 'midmsg brief for penn' },
-        turn: [{ text: `Penn on it. ${MARKERS.COMPLETE}` }] },
+      { match: { agent: 'content-lead', promptIncludes: 'midmsg brief for wren' },
+        turn: [{ text: `Wren on it. ${MARKERS.COMPLETE}` }] },
     ]);
     const since = client.messages.length;
     client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: 'midmsg delegation please' });
@@ -886,12 +886,12 @@ describe('handback payload integrity', () => {
     // Substance lands in Ana's FIRST turn. Her second turn is only a sign-off
     // plus the RETURN marker, mirroring the real incident exactly.
     const SUBSTANCE = 'CADENCE-SUBSTANCE-T1: Thursday baseline is 287 median engagement, 1.0x, neutral. No fatigue signal across two back-to-back pairs.';
-    const SIGNOFF = 'Passing this back to Penn now with the full cadence analysis.';
+    const SIGNOFF = 'Passing this back to Wren now with the full cadence analysis.';
 
     h.writeScenario([
       { match: { agent: 'chief-of-staff', promptIncludes: 'multiturn-handback please' },
-        turn: [{ agentTool: { subagent_type: 'content-lead', prompt: 'multiturn brief for penn' } }] },
-      { match: { agent: 'content-lead', promptIncludes: 'multiturn brief for penn' },
+        turn: [{ agentTool: { subagent_type: 'content-lead', prompt: 'multiturn brief for wren' } }] },
+      { match: { agent: 'content-lead', promptIncludes: 'multiturn brief for wren' },
         turn: [{ agentTool: { subagent_type: 'content-analyst', prompt: 'multiturn brief for ana' } }] },
       // Ana turn 1: the real deliverable. No marker, so she stays in the conversation.
       { match: { agent: 'content-analyst', promptIncludes: 'multiturn brief for ana' },
@@ -899,7 +899,7 @@ describe('handback payload integrity', () => {
       // Ana turn 2: user tells her to hand back. Sign-off only.
       { match: { agent: 'content-analyst', promptIncludes: 'pass your findings back' },
         turn: [{ text: `${SIGNOFF} ${MARKERS.RETURN}` }] },
-      // Penn resumed with the handback prompt.
+      // Wren resumed with the handback prompt.
       { match: { agent: 'content-lead', promptIncludes: '[SYSTEM:' },
         turn: [{ text: 'Folding Ana findings into the batch foundation.' }] },
     ]);
@@ -907,30 +907,30 @@ describe('handback payload integrity', () => {
     const since = client.messages.length;
     client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: 'multiturn-handback please' });
 
-    // Cos -> Penn -> Ana, then Ana's first turn completes.
+    // Cos -> Wren -> Ana, then Ana's first turn completes.
     await client.waitFor(m => m.type === 'system' && m.subtype === 'agent_switch'
-      && m._conversationId === convoId && m.toAgent === 'content-lead', { since, label: 'switch to Penn' });
+      && m._conversationId === convoId && m.toAgent === 'content-lead', { since, label: 'switch to Wren' });
     await client.waitFor(m => m.type === 'system' && m.subtype === 'agent_switch'
       && m._conversationId === convoId && m.toAgent === 'content-analyst', { since, label: 'switch to Ana' });
     const { index: anaTurn1 } = await client.waitFor(m => m.type === 'result'
       && m._conversationId === convoId && m._agent === 'content-analyst', { since, label: 'Ana turn 1 result' });
 
     // The user addresses Ana directly, exactly as in the incident.
-    client.send({ type: 'chat', conversationId: convoId, agent: 'content-analyst', content: 'pass your findings back to Penn to continue this work' });
+    client.send({ type: 'chat', conversationId: convoId, agent: 'content-analyst', content: 'pass your findings back to Wren to continue this work' });
     await client.waitFor(m => m.type === 'result' && m._conversationId === convoId
       && m._agent === 'content-analyst', { since: anaTurn1 + 1, label: 'Ana turn 2 (sign-off) result' });
 
-    // RETURN -> 500ms auto-return kill -> Penn resumed with the handback prompt.
-    // Sequence off Penn's RESULT, not the agent_switch: the switch is emitted
+    // RETURN -> 500ms auto-return kill -> Wren resumed with the handback prompt.
+    // Sequence off Wren's RESULT, not the agent_switch: the switch is emitted
     // before the resume prompt is written to stdin, and the prompt log is
     // appended by the stub child, so asserting on the switch races the write.
     try {
       await client.waitFor(m => m.type === 'result' && m._conversationId === convoId
-        && m._agent === 'content-lead', { since: anaTurn1 + 1, label: 'Penn resumed result' });
+        && m._agent === 'content-lead', { since: anaTurn1 + 1, label: 'Wren resumed result' });
 
       const pennPrompts = h.promptsFor('content-lead');
       const handback = pennPrompts.find(p => p.includes('[SYSTEM:'));
-      assert.ok(handback, `Penn never received a handback prompt. Prompts seen:\n${JSON.stringify(pennPrompts, null, 2)}`);
+      assert.ok(handback, `Wren never received a handback prompt. Prompts seen:\n${JSON.stringify(pennPrompts, null, 2)}`);
 
       // The defect: only the sign-off arrives.
       assert.ok(handback.includes(SUBSTANCE),
@@ -948,14 +948,14 @@ describe('handback payload integrity', () => {
     const convoId = h.freshConvoId('handback-multitarget');
     h.clearInvocations();
 
-    // Penn emits TWO Agent tool calls in one turn. entry.pendingAgentTool is a
+    // Wren emits TWO Agent tool calls in one turn. entry.pendingAgentTool is a
     // single slot, so the first block to reach content_block_stop SIGKILLs the
     // process and blocks 2..N die with it: no log, no event, no signal anywhere.
     // Sequential-only is the correct behaviour; SILENT truncation is not.
     h.writeScenario([
       { match: { agent: 'chief-of-staff', promptIncludes: 'multitarget please' },
-        turn: [{ agentTool: { subagent_type: 'content-lead', prompt: 'multitarget brief for penn' } }] },
-      { match: { agent: 'content-lead', promptIncludes: 'multitarget brief for penn' },
+        turn: [{ agentTool: { subagent_type: 'content-lead', prompt: 'multitarget brief for wren' } }] },
+      { match: { agent: 'content-lead', promptIncludes: 'multitarget brief for wren' },
         turn: [
           { text: 'Getting Ana and Des on this.' },
           { agentTool: { subagent_type: 'content-analyst', prompt: 'multitarget leg one' } },
@@ -977,7 +977,7 @@ describe('handback payload integrity', () => {
 
     try {
       await client.waitFor(m => m.type === 'result' && m._conversationId === convoId
-        && m._agent === 'content-lead', { since: anaDone + 1, label: 'Penn resumed result' });
+        && m._agent === 'content-lead', { since: anaDone + 1, label: 'Wren resumed result' });
 
       // Des must never be spawned: concurrent execution is NOT the expectation here.
       assert.strictEqual(h.readInvocations().find(i => i.agent === 'lead-designer'), undefined,
@@ -988,7 +988,7 @@ describe('handback payload integrity', () => {
       // dropped target is surfaced rather than swallowed.
       const pennPrompts = h.promptsFor('content-lead');
       const handback = pennPrompts.find(p => p.includes('[SYSTEM:'));
-      assert.ok(handback, `Penn never received a handback prompt. Prompts seen:\n${JSON.stringify(pennPrompts, null, 2)}`);
+      assert.ok(handback, `Wren never received a handback prompt. Prompts seen:\n${JSON.stringify(pennPrompts, null, 2)}`);
       assert.ok(/lead-designer|Des/.test(handback),
         'the un-run second target must be named back to the caller so it can sequence it, '
         + `not silently dropped.\n  actual handback prompt:\n${handback}`);

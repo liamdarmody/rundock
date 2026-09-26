@@ -17,7 +17,7 @@
 //
 // The pre-turn cancel window and the delivered-not-requested rule are pinned
 // in test/unit/scheduler-lib.test.js beside the functions they describe; the
-// lane's gate runs both files together.
+// gate runs both files together.
 //
 // Dates are built from local components and read back through local getters,
 // for the reason routines-model.test.js states at length: an ISO string names
@@ -62,7 +62,7 @@ function startedRun(status) {
   };
 }
 
-describe('RT-1: the scheduler vocabulary and the routines list are one list', () => {
+describe('the scheduler vocabulary and the routines list are one list', () => {
   // The divergence check itself. The scheduler declares every word its two
   // stores can carry, in the same comment block that reasons about the
   // vocabulary; the list's model declares a mapping for every word it
@@ -153,7 +153,7 @@ describe('RT-1: the scheduler vocabulary and the routines list are one list', ()
   });
 });
 
-describe('RT-4: the row\'s promise and the scheduler\'s refusals are one list', () => {
+describe('the row\'s promise and the scheduler\'s refusals are one list', () => {
   // Every word routineRefusal can answer, read from its own source. Driving
   // crafted routines through it can only elicit branches this test already
   // knows about; reading the returns finds the branch somebody adds next.
@@ -265,7 +265,7 @@ describe('RT-4: the row\'s promise and the scheduler\'s refusals are one list', 
   });
 });
 
-describe('RT-4: the published refusal reaches the row on the live path', () => {
+describe('the published refusal reaches the row on the live path', () => {
   // The two lines that make the lists one, each proven where it lives: the
   // roster enrichment in lib/agents/discovery.js, and the pass-through in
   // public/views/routines.js. Without these, the model quietly falls back to
@@ -346,7 +346,7 @@ describe('RT-4: the published refusal reaches the row on the live path', () => {
   });
 });
 
-describe('RT-5: scheduling an ambiguous skill keeps the skill', () => {
+describe('scheduling an ambiguous skill keeps the skill', () => {
   const AMBIGUOUS = {
     id: 'ops-summary', slug: 'ops-summary', name: 'Compile the ops summary',
     assignedAgents: [{ id: 'piper', name: 'Piper' }, { id: 'doc', name: 'Doc' }],

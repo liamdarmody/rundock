@@ -316,7 +316,7 @@
   // the workspace and not an answer file, and that branch never consulted this
   // test, because this test was in the browser and the branch is in the hook.
   // So `rm -rf <anywhere inside>` was approved in Code mode with no card drawn
-  // and no record of a decision, while the same text in Knowledge mode drew a
+  // and no record of a decision, while the same text in Notes mode drew a
   // card the grader had painted high-risk. The grader was describing a card
   // that the decider had already chosen not to raise.
   //

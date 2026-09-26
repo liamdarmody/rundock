@@ -257,7 +257,7 @@ describe('every caller of the scheduler lifecycle is enumerated', () => {
 });
 
 describe('no path can set a workspace without starting the scheduler', () => {
-  // AC-8, and the reason the lifecycle lives where it does. Every product path
+  // The reason the lifecycle lives where it does. Every product path
   // that sets a workspace is listed, and the two checks after this one make
   // listing enough: they cannot reach the root except through the function
   // that runs the lifecycle, and that function runs it.

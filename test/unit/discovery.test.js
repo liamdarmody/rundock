@@ -20,9 +20,9 @@ function useWorkspace(opts) {
 
 describe('parseAgentFrontmatter', () => {
   test('parses scalar keys and strips quotes', () => {
-    const meta = srv.parseAgentFrontmatter('---\nname: penn\ndisplayName: "Penn"\nrole: \'Content Lead\'\norder: 2\n---\nbody');
-    assert.strictEqual(meta.name, 'penn');
-    assert.strictEqual(meta.displayName, 'Penn');
+    const meta = srv.parseAgentFrontmatter('---\nname: wren\ndisplayName: "Wren"\nrole: \'Content Lead\'\norder: 2\n---\nbody');
+    assert.strictEqual(meta.name, 'wren');
+    assert.strictEqual(meta.displayName, 'Wren');
     assert.strictEqual(meta.role, 'Content Lead');
     assert.strictEqual(meta.order, '2');
   });
@@ -59,10 +59,10 @@ describe('parseAgentFrontmatter', () => {
 
 describe('nested frontmatter block parsers', () => {
   const fm = [
-    'name: penn',
+    'name: wren',
     'capabilities:',
     '  does: Writes hooks and drafts',
-    '  connectors: Notion, AuthoredUp',
+    '  connectors: Linear, Slack',
     'routines:',
     '  - name: morning-digest',
     '    schedule: every day at 08:00',
@@ -81,7 +81,7 @@ describe('nested frontmatter block parsers', () => {
   test('parseCapabilities extracts the key/value block', () => {
     assert.deepStrictEqual(srv.parseCapabilities(fm), {
       does: 'Writes hooks and drafts',
-      connectors: 'Notion, AuthoredUp',
+      connectors: 'Linear, Slack',
     });
     assert.strictEqual(srv.parseCapabilities('name: x'), null);
   });
@@ -230,11 +230,11 @@ describe('discoverAgents', () => {
   });
 
   test('no agent files: default agent synthesised from CLAUDE.md heading', () => {
-    useWorkspace({ claudeMd: '# Dex - Your Chief of Staff\n\nHello.' });
+    useWorkspace({ claudeMd: '# Juno - Your Chief of Staff\n\nHello.' });
     const agents = srv.discoverAgents();
     const def = agents.find(a => a.isDefault);
     assert.ok(def);
-    assert.strictEqual(def.displayName, 'Dex');
+    assert.strictEqual(def.displayName, 'Juno');
     // Issue #307: this agent is synthesised in code with fileName: null, so
     // there is no frontmatter a user could edit to name their own model. It
     // inherits, which is the only value that works on a machine whose models
@@ -325,9 +325,9 @@ describe('parseSkillFile / discoverSkills', () => {
     useWorkspace({
       agents: {
         'content-lead': agentFile({
-          name: 'content-lead', displayName: 'Penn', type: 'specialist', order: 1,
+          name: 'content-lead', displayName: 'Wren', type: 'specialist', order: 1,
           skills: ['hook-generator'],
-          body: 'You are Penn. Use the content-linter before publishing.',
+          body: 'You are Wren. Use the content-linter before publishing.',
         }),
         'lead-designer': agentFile({
           name: 'lead-designer', displayName: 'Des', type: 'specialist', order: 2,
@@ -358,8 +358,8 @@ describe('parseSkillFile / discoverSkills', () => {
     useWorkspace({
       agents: {
         'content-lead': agentFile({
-          name: 'content-lead', displayName: 'Penn', type: 'specialist', order: 1,
-          body: 'Penn reaches for content-linter when a draft needs checking.',
+          name: 'content-lead', displayName: 'Wren', type: 'specialist', order: 1,
+          body: 'Wren reaches for content-linter when a draft needs checking.',
         }).replace(/\n/g, '\r\n'),
       },
       skills: {
@@ -375,8 +375,8 @@ describe('parseSkillFile / discoverSkills', () => {
     useWorkspace({
       agents: {
         'content-lead': agentFile({
-          name: 'content-lead', displayName: 'Penn', type: 'specialist', order: 1,
-          body: 'Penn mentions rundock-agents and hook-generator in the body.',
+          name: 'content-lead', displayName: 'Wren', type: 'specialist', order: 1,
+          body: 'Wren mentions rundock-agents and hook-generator in the body.',
         }),
         'rundock-guide': agentFile({
           name: 'rundock-guide', displayName: 'Doc', type: 'platform', order: 99,
@@ -417,9 +417,9 @@ describe('rosters and system prompt', () => {
   test('buildTeamRoster: orchestrator sees direct reports, not grand-reports', () => {
     useWorkspace({ agents: standardTeam() });
     const roster = srv.buildTeamRoster('chief-of-staff', true);
-    assert.ok(roster.includes('Penn (content-lead)'));
+    assert.ok(roster.includes('Wren (content-lead)'));
     assert.ok(roster.includes('Des (lead-designer)'));
-    assert.ok(!roster.includes('Ana'), 'Ana reports to Penn, not Cos');
+    assert.ok(!roster.includes('Ana'), 'Ana reports to Wren, not Cos');
   });
 
   test('buildTeamRoster: lead sees own direct report; agent with none gets null', () => {
@@ -431,8 +431,8 @@ describe('rosters and system prompt', () => {
   test('buildPeerRoster: lists every other onTeam agent with self-description', () => {
     useWorkspace({ agents: standardTeam() });
     const roster = srv.buildPeerRoster('lead-designer');
-    assert.ok(roster.includes('Penn (content-lead)'));
-    assert.ok(roster.includes('You are Penn, the content lead.'));
+    assert.ok(roster.includes('Wren (content-lead)'));
+    assert.ok(roster.includes('You are Wren, the content lead.'));
     assert.ok(!roster.includes('Des (lead-designer)'), 'self excluded');
   });
 
@@ -552,7 +552,7 @@ describe('rosters and system prompt', () => {
   });
 
   test('buildSystemPrompt: a lead with direct reports gets the sequential-delegation rule, same as the orchestrator', () => {
-    // Bug A1 (handback integrity spec): the 0.8.5 sequential rule was added
+    // The 0.8.5 sequential rule was added
     // inside the orchestrator branch only. An agent with direct reports takes
     // the hasDirectReports branch, was never told, and promised the user
     // parallel execution the engine cannot deliver ("I'll get Ana on the
@@ -571,10 +571,10 @@ describe('rosters and system prompt', () => {
     // GPT-5 (it wrote its ROLE). The concrete handle is now injected.
     useWorkspace({ agents: standardTeam() });
     const agents = srv.discoverAgents();
-    const penn = srv.buildSystemPrompt(agents.find(a => a.id === 'content-lead'));
-    assert.ok(penn.includes('Your review-annotation handle is: penn'), 'concrete handle stated');
-    assert.ok(penn.includes('by: penn'), 'metadata example uses the concrete handle');
-    assert.ok(!penn.includes('<your agent name'), 'derivation placeholder removed');
+    const wren = srv.buildSystemPrompt(agents.find(a => a.id === 'content-lead'));
+    assert.ok(wren.includes('Your review-annotation handle is: wren'), 'concrete handle stated');
+    assert.ok(wren.includes('by: wren'), 'metadata example uses the concrete handle');
+    assert.ok(!wren.includes('<your agent name'), 'derivation placeholder removed');
     // displayName lowercased is the handle convention Claude agents settled on
     const des = srv.buildSystemPrompt(agents.find(a => a.id === 'lead-designer'));
     assert.ok(des.includes('Your review-annotation handle is: des'));
@@ -601,16 +601,16 @@ describe('findDirectReportMatch', () => {
 
   test('prompt word-boundary match on name and displayName', () => {
     useWorkspace({ agents: standardTeam() });
-    assert.strictEqual(srv.findDirectReportMatch('chief-of-staff', { prompt: 'Ask Penn for hooks' }).id, 'content-lead');
+    assert.strictEqual(srv.findDirectReportMatch('chief-of-staff', { prompt: 'Ask Wren for hooks' }).id, 'content-lead');
     assert.strictEqual(srv.findDirectReportMatch('chief-of-staff', { prompt: 'ask content-lead for hooks' }).id, 'content-lead');
-    // word boundary: "Penny" must not match "Penn"... but \b treats the regex
-    // as penn\b so "Penny" fails, pinned:
-    assert.strictEqual(srv.findDirectReportMatch('chief-of-staff', { prompt: 'ask Penny the pig' }), null);
+    // word boundary: "Wrenny" must not match "Wren"... but \b treats the regex
+    // as wren\b so "Wrenny" fails, pinned:
+    assert.strictEqual(srv.findDirectReportMatch('chief-of-staff', { prompt: 'ask Wrenny the pig' }), null);
   });
 
   test('no direct reports or no match returns null', () => {
     useWorkspace({ agents: standardTeam() });
-    assert.strictEqual(srv.findDirectReportMatch('lead-designer', { prompt: 'ask Penn' }), null, 'Des has no reports');
+    assert.strictEqual(srv.findDirectReportMatch('lead-designer', { prompt: 'ask Wren' }), null, 'Des has no reports');
     assert.strictEqual(srv.findDirectReportMatch('chief-of-staff', { prompt: 'search the web' }), null);
   });
 
@@ -632,7 +632,7 @@ describe('findDirectReportMatch', () => {
     useWorkspace({ agents: standardTeam() });
     const match = srv.findDirectReportMatch('chief-of-staff', {
       subagent_type: 'general-purpose',
-      prompt: "Search the vault for Penn's content stats",
+      prompt: "Search the vault for Wren's content stats",
     });
     assert.strictEqual(match, null, 'explicit general-purpose call must not be hijacked');
   });
@@ -643,11 +643,11 @@ describe('findDirectReportMatch', () => {
   });
 
   test('subagent_type given as displayName matches the teammate', () => {
-    // "Penn" is content-lead's displayName. Pre-fix, subagent_type was matched
+    // "Wren" is content-lead's displayName. Pre-fix, subagent_type was matched
     // only against name/id case-sensitively, so a displayName address returned
     // null and the delegation degraded to a generic Task.
     useWorkspace({ agents: standardTeam() });
-    const match = srv.findDirectReportMatch('chief-of-staff', { subagent_type: 'Penn', prompt: 'write hooks' });
+    const match = srv.findDirectReportMatch('chief-of-staff', { subagent_type: 'Wren', prompt: 'write hooks' });
     assert.ok(match, 'displayName address must resolve to a teammate');
     assert.strictEqual(match.id, 'content-lead');
   });
@@ -657,13 +657,13 @@ describe('findDirectReportMatch', () => {
     // strict `dr.name === subagent_type` returned null.
     useWorkspace({ agents: standardTeam() });
     assert.strictEqual(srv.findDirectReportMatch('chief-of-staff', { subagent_type: 'Content-Lead', prompt: 'x' }).id, 'content-lead');
-    assert.strictEqual(srv.findDirectReportMatch('chief-of-staff', { subagent_type: 'PENN', prompt: 'x' }).id, 'content-lead');
+    assert.strictEqual(srv.findDirectReportMatch('chief-of-staff', { subagent_type: 'WREN', prompt: 'x' }).id, 'content-lead');
   });
 
   test('general-purpose / unknown subagent_type still returns null', () => {
     useWorkspace({ agents: standardTeam() });
-    assert.strictEqual(srv.findDirectReportMatch('chief-of-staff', { subagent_type: 'general-purpose', prompt: 'ask Penn' }), null);
-    assert.strictEqual(srv.findDirectReportMatch('chief-of-staff', { subagent_type: 'no-such-agent', prompt: 'ask Penn' }), null);
+    assert.strictEqual(srv.findDirectReportMatch('chief-of-staff', { subagent_type: 'general-purpose', prompt: 'ask Wren' }), null);
+    assert.strictEqual(srv.findDirectReportMatch('chief-of-staff', { subagent_type: 'no-such-agent', prompt: 'ask Wren' }), null);
   });
 });
 
@@ -674,7 +674,7 @@ describe('findOffRosterWorkspaceMatch', () => {
   // For runtime: codex agents this silently bypassed the runtime choice.
   test('explicit subagent_type naming an off-roster workspace agent matches', () => {
     useWorkspace({ agents: standardTeam() });
-    // Des reports to chief-of-staff, not to Penn.
+    // Des reports to chief-of-staff, not to Wren.
     const byName = srv.findOffRosterWorkspaceMatch('content-lead', { subagent_type: 'lead-designer', prompt: 'design this' });
     assert.strictEqual(byName.id, 'lead-designer');
     const byDisplay = srv.findOffRosterWorkspaceMatch('content-lead', { subagent_type: 'Des', prompt: 'design this' });
@@ -702,7 +702,7 @@ describe('findOffRosterWorkspaceMatch', () => {
   test('the caller itself never matches', () => {
     useWorkspace({ agents: standardTeam() });
     assert.strictEqual(srv.findOffRosterWorkspaceMatch('content-lead', { subagent_type: 'content-lead', prompt: 'x' }), null);
-    assert.strictEqual(srv.findOffRosterWorkspaceMatch('content-lead', { subagent_type: 'Penn', prompt: 'x' }), null);
+    assert.strictEqual(srv.findOffRosterWorkspaceMatch('content-lead', { subagent_type: 'Wren', prompt: 'x' }), null);
   });
 });
 
@@ -816,7 +816,7 @@ describe('the model error card', () => {
   }
 
   test('names the agent file to edit, and offers inherit instead of three aliases', () => {
-    useWorkspace({ agents: { 'content-lead': agentFile({ name: 'content-lead', displayName: 'Penn', type: 'specialist', order: 2, reportsTo: 'chief-of-staff' }) } });
+    useWorkspace({ agents: { 'content-lead': agentFile({ name: 'content-lead', displayName: 'Wren', type: 'specialist', order: 2, reportsTo: 'chief-of-staff' }) } });
     const card = captureCard({ agentId: 'content-lead', processId: 'p1', runtime: 'claude' });
     assert.ok(card, 'a card is sent');
     assert.match(card.content, /content-lead\.md/, 'names the file the user has to open');
@@ -850,7 +850,7 @@ describe('the model error card', () => {
   });
 
   test('a Claude Code agent is offered inherit', () => {
-    useWorkspace({ agents: { 'content-lead': agentFile({ name: 'content-lead', displayName: 'Penn', type: 'specialist', order: 2, reportsTo: 'chief-of-staff' }) } });
+    useWorkspace({ agents: { 'content-lead': agentFile({ name: 'content-lead', displayName: 'Wren', type: 'specialist', order: 2, reportsTo: 'chief-of-staff' }) } });
     const card = captureCard({ agentId: 'content-lead', processId: 'p5', runtime: 'claude' });
     assert.match(card.content, /^Claude Code rejected/);
     assert.match(card.content, /`inherit`/, 'where inherit is the value that works');
@@ -861,7 +861,7 @@ describe('the model error card', () => {
   // agent with no file is advice they cannot follow, and offering `inherit` is
   // advice they are already taking.
   test('an agent with no file is told the problem is outside the workspace', () => {
-    useWorkspace({ claudeMd: '# Dex - Your Chief of Staff\n\nHello.' });
+    useWorkspace({ claudeMd: '# Juno - Your Chief of Staff\n\nHello.' });
     const card = captureCard({ agentId: 'default', processId: 'p3', runtime: 'claude' });
     assert.doesNotMatch(card.content, /\.md/, 'there is no file to name, so it must not invent one');
     assert.doesNotMatch(card.content, /Set `model:`/, 'there is no frontmatter to set it in');
@@ -889,7 +889,7 @@ describe('the model error card', () => {
 // separate prose files were relied on to prevent that; this makes it true in
 // code, where it cannot drift.
 describe('inherit across runtimes', () => {
-  // MR-3: the two files must be indistinguishable, so the comparison IS the
+  // The two files must be indistinguishable, so the comparison IS the
   // assertion. Asserting each separately against a remembered `null` would
   // still pass if one drifted and the expectation drifted with it.
   test('on Codex, naming no model and naming inherit resolve identically', () => {

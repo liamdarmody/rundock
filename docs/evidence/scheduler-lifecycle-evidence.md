@@ -124,7 +124,7 @@ them.** The tick reads the workspace root at use time, through
 roster of the workspace just ENTERED. It could never fire a routine belonging
 to the one that was left, whether it was stopped, left running, or never armed
 at all. An absence guaranteed by the scheduler's use-time read is not evidence
-about the lifecycle. Round 1 of review rejected it on exactly that, and it was
+about the lifecycle. The first review rejected it on exactly that, and it was
 right to.
 
 So the absences stay, because they are what the criterion asks for in so many
@@ -207,7 +207,7 @@ a second spawn would have appeared.
 
 ### The ordering the lifecycle depends on
 
-Not one of the twelve criteria, and found in review of round 2. The root
+Not one of the twelve criteria, and found in the second review. The root
 changes before the lifecycle runs, so a tick armed before `loadRoutineState()`
 is armed into a window where `getWorkspace()` names the workspace being entered
 while `routineState` and the slot records still describe the one being left. A
@@ -247,7 +247,7 @@ row for the boot caller names. It has to reach `startServer` with nothing
 already armed, which the obvious harness boot does not do: pointing the server
 at the fixture through `internal.setWorkspace` goes through `setWorkspaceRoot`,
 which now arms the tick, so `startServer` would meet a live handle, decline,
-and the test would stay green with the boot call deleted. Round 1 of review
+and the test would stay green with the boot call deleted. The first review
 caught that; the first version of this test proved nothing.
 
 The harness gained a `presetWorkspace` option, documented beside the `workspace`
@@ -298,7 +298,7 @@ blast radius is nine tests out of 2361.
 
 ## Every proof, and the mutation that names it
 
-Round 1 of review found two proofs that no mutation named. The answer to that is
+The first review found two proofs that no mutation named. The answer to that is
 not to fix the two, it is to ask the question of all of them, so this table
 covers every test in the three files this change adds. A proof with no mutation
 naming it is a proof that cannot fail.
@@ -328,7 +328,7 @@ through M16, exist only because this table was built: the proofs they name had
 no mutation before it, and two of them, the AC-10 proof and the boot proof, were
 passing regardless of the change.
 
-M18 arrived the other way round, from review of round 2 rather than from the
+M18 arrived the other way round, from the second review rather than from the
 table: the ordering it mutates was a defect first and a proof second. The rule
 held anyway, because the proof written for it was required to have a mutation
 that names it before it counted as a proof at all.
@@ -441,7 +441,7 @@ npm run red-first                  # folds the discrimination result into that r
 change and pass with it, and the result is in the below-the-line record for the
 measured tree rather than only in this file.
 
-Round 1 of review flagged that those two records disagreed, because red-first
+The first review flagged that those two records disagreed, because red-first
 had been run by hand against an earlier tree and the gate was then re-run for a
 later one, which cleared the field. The order above is what stops that: the
 gate record and this file now describe the same tree.

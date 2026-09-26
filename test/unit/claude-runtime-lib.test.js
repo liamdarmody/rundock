@@ -228,7 +228,7 @@ test('pruning a workspace that has no scratch directory is a quiet no-op', () =>
 // arrive through a gateway has identifiers we cannot enumerate. These pin the
 // pass-through, the `inherit` escape hatch, and the log line that reports it.
 
-// MR-2/MR-3: naming nothing and naming `inherit` are the same statement. The
+// Naming nothing and naming `inherit` are the same statement. The
 // comparison is the assertion, so neither can drift from the other while both
 // still match a remembered expectation.
 test('an agent that names no model is indistinguishable from one that says inherit', () => {

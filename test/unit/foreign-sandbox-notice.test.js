@@ -82,88 +82,32 @@ describe('who owns a workspace sandbox, as the server reports it', () => {
   });
 });
 
-// Rendered the way the product renders it: the pane is drawn whole and read
-// back, rather than a copy's worth of markup asserted in isolation. Mirrors the
-// harness in working-folders-view.test.js, which presses the same pane.
-describe('what the settings pane then says', () => {
+// WHAT THE PANE SAYS about a block Rundock did not write is now the switch
+// row's job: the effective state, a lock, and where it was set up
+// (test/unit/sandbox-row-model.test.js and test/unit/permissions-pane.test.js).
+// The mode card no longer describes the sandbox at all, so it has no promise
+// about the operating system to withdraw.
+describe('the mode card makes no promise about the sandbox', () => {
   const ROOT = path.join(__dirname, '..', '..');
-  const read = (...parts) => fs.readFileSync(path.join(ROOT, ...parts), 'utf-8');
-  const VIEW_SRC = read('public', 'views', 'settings.js');
+  const VIEW_SRC = fs.readFileSync(path.join(ROOT, 'public', 'views', 'settings.js'), 'utf-8');
 
-  function paneHtml(mode, managed) {
-    const dom = new JSDOM('<!doctype html><html><body><div id="settings-content"></div></body></html>',
-      { runScripts: 'dangerously' });
+  function modeCard(mode) {
+    const dom = new JSDOM('<!doctype html><html><body><div id="settings-content"></div></body></html>', { runScripts: 'dangerously' });
     const w = dom.window;
     w.esc = (t) => String(t == null ? '' : t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    w.escAttr = (t) => String(t).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    w.escAttr = (t) => String(t).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
     w.eval(VIEW_SRC);
-    w.serverPlatform = 'darwin';
-    w.workspaceMode = mode;
-    // The fact under test: whether Rundock authored this workspace's sandbox.
-    w.sandboxManaged = managed;
-    w.currentView = 'settings';
-    w.agents = []; w.skills = []; w.runtimeStatus = null;
-    w.currentWorkspacePath = '/Users/someone/Workspaces/team';
-    w.ws = { readyState: 1, send: () => {} };
-    w.WebSocket = { OPEN: 1 };
-    w.workingFoldersArrived({ folders: [], home: '/Users/someone', rejected: [] });
+    Object.assign(w, { serverPlatform: 'darwin', workspaceMode: mode, currentView: 'settings', agents: [], skills: [],
+      runtimeStatus: null, currentWorkspacePath: '/w', ws: { readyState: 1, send() {} }, WebSocket: { OPEN: 1 } });
     w.renderSettingsSection('permissions');
-    const html = w.document.getElementById('settings-content').innerHTML;
+    const text = w.document.getElementById('mode-description').textContent;
     dom.window.close();
-    return html;
+    return text;
   }
 
-  const OS_PROMISE = /operating-system write block is off/;
-  const NOTICE = /does not control the operating-system sandbox, which is set up outside Rundock/;
-
-  test('Code mode, Rundock-managed: the promise is made, because it is kept', () => {
-    const html = paneHtml('code', true);
-    assert.match(html, OS_PROMISE, 'here Rundock does switch the block off, so it may say so');
-    assert.doesNotMatch(html, NOTICE);
-  });
-
-  test('Code mode, someone else\'s sandbox: the promise is withdrawn and the reason given', () => {
-    const html = paneHtml('code', false);
-    assert.doesNotMatch(html, OS_PROMISE,
-      'this is the sentence that was false for two evenings, and it must not be printed here');
-    assert.match(html, NOTICE, 'and the reader is told why the switch will not help them');
-  });
-
-  test('Knowledge mode is treated the same way, in both directions', () => {
-    assert.match(paneHtml('knowledge', true), /operating system enforces that too/);
-    const foreign = paneHtml('knowledge', false);
-    assert.doesNotMatch(foreign, /operating system enforces that too/,
-      'Rundock cannot claim enforcement it is not the author of');
-    assert.match(foreign, NOTICE);
-  });
-
-  test('the mode buttons still work, because the notice explains rather than disables', () => {
-    // Deliberately NOT disabled. Mode still governs what Rundock itself asks
-    // about, which is most of what mode means; only the operating-system half
-    // is out of its hands. Disabling the switch would overstate the problem.
-    const html = paneHtml('code', false);
-    assert.match(html, /setWorkspaceMode\('knowledge'\)/);
-    assert.match(html, /setWorkspaceMode\('code'\)/);
-  });
-
-  test('it says what mode still governs, not only what it does not', () => {
-    // The first version said only that switching modes "does not change it",
-    // and a reader concluded the control was inert. Three of mode's four
-    // behaviours still work here; naming them is the difference between a
-    // useful notice and one that makes the whole pane look broken.
-    const html = paneHtml('code', false);
-    assert.match(html, /Mode still controls file types and command approval here/,
-      'the reader is told what the switch does do, so it does not read as dead');
-  });
-
-  test('what a person sees is one sentence, not a contradiction', () => {
-    // The failure this whole notice exists to end: a pane that says the write
-    // block is off while it is on. Whatever else changes, these two must never
-    // appear together.
-    for (const mode of ['code', 'knowledge']) {
-      const html = paneHtml(mode, false);
-      assert.ok(!(OS_PROMISE.test(html) && NOTICE.test(html)),
-        'a promise about the sandbox and a notice that Rundock does not control it cannot both be true');
-    }
+  test('each mode says how agents work, in the mock\'s words, and nothing about the operating system', () => {
+    assert.strictEqual(modeCard('notes'), 'Notes, documents and other files. Agents ask before running commands.');
+    assert.strictEqual(modeCard('code'), 'Websites and software. Agents can edit code and run everyday commands without asking.');
+    for (const mode of ['notes', 'code']) assert.doesNotMatch(modeCard(mode), /operating.system|sandbox|write block/i);
   });
 });

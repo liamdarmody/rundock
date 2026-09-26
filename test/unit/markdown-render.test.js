@@ -60,8 +60,13 @@ function outline(html) {
     .filter((node) => node.nodeType === 3)
     .map((node) => node.data)
     .join('');
+  // A web link now opens outside the app, which adds exactly these
+  // two attributes to an <a> whose href is http or https, and nothing else;
+  // the test that it does is 'a web link opens outside the app' below.
+  const addedToWebLink = (el, a) => el.tagName === 'A' && /^(?:https?:|\/\/)/i.test(el.getAttribute('href') || '')
+    && ((a.name === 'target' && a.value === '_blank') || (a.name === 'rel' && a.value === 'noopener noreferrer'));
   const attributes = (el) => Array.from(el.attributes)
-    .filter((a) => !MIGRATED_ATTRIBUTES.has(a.name))
+    .filter((a) => !MIGRATED_ATTRIBUTES.has(a.name) && !addedToWebLink(el, a))
     .map((a) => `${a.name}=${a.value}`)
     .sort();
   const walk = (el) => Array.from(el.children).map((child) => ({
@@ -987,5 +992,61 @@ describe('renderMarkdown: a raw block is not a way out of escaping', () => {
     // survive as the one character it names.
     assert.strictEqual(render('a &amp; b'), '<p>a &amp; b</p>\n');
     assert.strictEqual(render('5 &lt; 6 and "quoted"'), '<p>5 &lt; 6 and &quot;quoted&quot;</p>\n');
+  });
+});
+
+// A web link in rendered markdown (a conversation, a preview) opens OUTSIDE
+// the app: a new tab in browser mode, the system browser in the desktop app
+// through its window-open handler. Without this a click navigated the whole
+// app page away in browser mode.
+describe('renderMarkdown: a web link opens outside the app, anything else does not', () => {
+  const linkIn = (src) => new JSDOM(render(src)).window.document.querySelector('a');
+  test('http and https links carry target=_blank with noopener and noreferrer', () => {
+    for (const href of ['https://example.org/a', 'http://127.0.0.1:9/b']) {
+      const a = linkIn(`[x](${href})`);
+      assert.strictEqual(a.getAttribute('target'), '_blank', href);
+      assert.strictEqual(a.getAttribute('rel'), 'noopener noreferrer', href);
+    }
+  });
+  test('a protocol-relative link is a web link: it opens outside, and is never read as a workspace file', () => {
+    for (const href of ['//example.com/path', '//example.com/notes.md']) {
+      const a = linkIn(`[x](${href})`);
+      assert.strictEqual(a.getAttribute('href'), href, href);
+      assert.strictEqual(a.getAttribute('target'), '_blank', href);
+      assert.ok(!a.classList.contains('wikilink'), href);
+    }
+  });
+  test('an in-page anchor, a relative link, a mail link and a workspace file link are left as they are', () => {
+    for (const src of ['[x](#section)', '[x](mailto:a@example.org)', '[x](notes/plan.md)']) {
+      const a = linkIn(src);
+      assert.ok(a, src);
+      assert.strictEqual(a.getAttribute('target'), null, src);
+    }
+  });
+});
+
+// ONE RESOLVER FOR A LINK TO A WORKSPACE FILE, shared by read-only rendering
+// and the rich editor, so the two cannot disagree about what opens in-app.
+describe('workspaceFileTarget: which hrefs name a file in the workspace', () => {
+  const { workspaceFileTarget } = require('../../public/markdown-render.js');
+  test('a relative link to a workspace file is its target, as written', () => {
+    for (const href of ['notes/plan.md', 'Plan.md', 'data/x.json', 'a/b/c.yaml', 'notes/My Plan.md', './notes/plan.md', 'notes/../plan.md']) {
+      assert.strictEqual(workspaceFileTarget(href), href, href);
+    }
+  });
+  test('the web, a protocol-relative link, mail, other schemes, anchors and other file types are not', () => {
+    for (const href of ['https://example.org/a.md', '//example.org/a.md', 'mailto:a@example.org', 'obsidian://open?file=a.md', '#section', 'notes/plan.pdf', '', 'javascript:x.md']) {
+      assert.strictEqual(workspaceFileTarget(href), null, href);
+    }
+  });
+  test('a path that climbs out of the workspace is not a workspace file', () => {
+    for (const href of ['../outside.md', 'notes/../../outside.md', '/etc/x.md']) assert.strictEqual(workspaceFileTarget(href), null, href);
+  });
+  test('read-only rendering uses it: a workspace file is an in-app link, one that climbs out is only text', () => {
+    const ok = new JSDOM(render('[p](notes/plan.md)')).window.document.querySelector('a');
+    assert.strictEqual(ok.getAttribute('data-wikilink'), 'notes/plan.md');
+    const out = new JSDOM(`<div>${render('[p](../outside.md)')}</div>`).window.document;
+    assert.strictEqual(out.querySelector('a'), null);
+    assert.match(out.body.textContent, /p/);
   });
 });

@@ -60,8 +60,8 @@ test('the host zone is pinned, so a zone differing from it is a real difference'
 // containing only that field would not be.
 const FIXTURE = [
   '---',
-  'name: penn',
-  'displayName: Penn',
+  'name: wren',
+  'displayName: Wren',
   'aKeyThisCardNeverHeardOf: keep me exactly',
   'routines:',
   '  - name: morning-digest',
@@ -74,7 +74,7 @@ const FIXTURE = [
   'trailingKey: still here',
   '---',
   '',
-  '# Penn',
+  '# Wren',
   '',
   'Body text the writer knows nothing about.',
   '',
@@ -86,7 +86,7 @@ function frontmatterOf(content) {
 
 function readRoutine(content, name) {
   return parseRoutineBlocks(frontmatterOf(content))
-    .map(raw => normalizeRoutine(raw, { owner: 'penn' }))
+    .map(raw => normalizeRoutine(raw, { owner: 'wren' }))
     .find(r => r.name === name);
 }
 
@@ -295,7 +295,7 @@ describe('the road every edit takes', () => {
 describe('whether a timezone invalidates a plan approval', () => {
   const plan = (fields) => computePlanHash(normalizeRoutine({
     name: 'morning-digest', prompt: 'Run the digest', skill: 'content-linter', ...fields,
-  }, { owner: 'penn' }));
+  }, { owner: 'wren' }));
 
   // THE DECISION THIS CARD CANNOT AVOID, pinned so it cannot be reversed by
   // omission. A plan approval covers what a routine does. A timezone changes
@@ -321,9 +321,9 @@ describe('whether a timezone invalidates a plan approval', () => {
     // land on the hash it would have had without one, or every existing
     // approval breaks the first time the field is written next to it.
     const withZone = normalizeRoutine(
-      { name: 'r', prompt: 'Run the digest', timezone: SET_ZONE }, { owner: 'penn' });
+      { name: 'r', prompt: 'Run the digest', timezone: SET_ZONE }, { owner: 'wren' });
     const without = normalizeRoutine(
-      { name: 'r', prompt: 'Run the digest' }, { owner: 'penn' });
+      { name: 'r', prompt: 'Run the digest' }, { owner: 'wren' });
     assert.strictEqual(computePlanHash(withZone), computePlanHash(without));
   });
 });
@@ -332,8 +332,8 @@ describe('whether a timezone invalidates a plan approval', () => {
 
 const LEGACY = [
   '---',
-  'name: penn',
-  'displayName: Penn',
+  'name: wren',
+  'displayName: Wren',
   'aKeyThisCardNeverHeardOf: keep me exactly',
   'routines:',
   '  - name: morning-digest',
@@ -341,7 +341,7 @@ const LEGACY = [
   '    prompt: Run the digest',
   '---',
   '',
-  '# Penn',
+  '# Wren',
   '',
   'Body text the migration is not allowed to touch.',
   '',
@@ -351,7 +351,7 @@ const LEGACY = [
 // Nothing here reads the home directory or the real workspace.
 function withFile(content, fn) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'routine-timezone-'));
-  const file = path.join(dir, 'penn.md');
+  const file = path.join(dir, 'wren.md');
   fs.writeFileSync(file, content);
   try {
     return fn(file);
@@ -371,7 +371,7 @@ function capturingLogs(fn) {
 }
 
 function migrate(file) {
-  return migrateAgentRoutines(file, fs.readFileSync(file, 'utf-8'), { owner: 'penn' });
+  return migrateAgentRoutines(file, fs.readFileSync(file, 'utf-8'), { owner: 'wren' });
 }
 
 describe('migrating a routine that predates the field', () => {
@@ -518,9 +518,9 @@ describe('nothing this card stores reaches double-fire suppression', () => {
     try {
       const withZone = normalizeRoutine(
         { name: 'r', schedule: 'every day at 08:00', prompt: 'p', timezone: SET_ZONE },
-        { owner: 'penn' });
+        { owner: 'wren' });
       const without = normalizeRoutine(
-        { name: 'r', schedule: 'every day at 08:00', prompt: 'p' }, { owner: 'penn' });
+        { name: 'r', schedule: 'every day at 08:00', prompt: 'p' }, { owner: 'wren' });
       assert.strictEqual(withZone.timezone, SET_ZONE, 'the zone did not survive to the comparison');
 
       // Nothing to suppress: the same slot, whatever the routine declares.

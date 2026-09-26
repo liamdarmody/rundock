@@ -35,9 +35,9 @@ The minimal valid skill frontmatter is just `name` and `description`. Both can b
 
 The body is everything after the closing `---` of the frontmatter. It is the skill's instruction set, written for the agent that will run it. There is no implicit context injection at skill load: Rundock does not prepend or append anything. What you write is what the agent sees.
 
-Write the body in the second person, addressing the agent. Match the voice of the calling agent: a research skill called by Penn reads in Penn's tone, a code review skill called by Dev reads in Dev's tone. Skills are leaf instructions, not standalone personalities, so do not introduce a new identity in the skill body.
+Write the body in the second person, addressing the agent. Match the voice of the calling agent: a research skill called by a writing agent reads in that agent's tone, a code review skill called by an engineering agent reads in its tone. Skills are leaf instructions, not standalone personalities, so do not introduce a new identity in the skill body.
 
-Length discipline. Skills should be short and self-contained. The live skills in this workspace cluster around 100 to 200 lines of body text. If a skill is growing past 300 lines, it is doing too much. Split it into two skills, or move the bulk into reference files in a sibling folder and link to them from the body.
+Length discipline. Skills should be short and self-contained. Well-scoped skills tend to cluster around 100 to 200 lines of body text. If a skill is growing past 300 lines, it is doing too much. Split it into two skills, or move the bulk into reference files in a sibling folder and link to them from the body.
 
 Reference files. A skill can keep supporting documents next to it: examples, templates, sub-routines, schemas. Put them in a `references/` folder under the skill, and link from the body with relative paths. Rundock does not parse these files; they are loaded by the agent only when the body text instructs it.
 
@@ -55,7 +55,7 @@ Rundock matches skills to agents in two passes, in this order.
 
 **Pass 2: implicit assignment via body-text scan.** For every agent not matched in Pass 1, Rundock reads the agent's body (everything after the frontmatter, lower-cased) and tests whether the skill's slug appears as a distinct word-boundary token. The match uses a regex with negative lookbehind and lookahead so partial slugs do not match. Mentioning `task-breakdown` in prose attaches the skill; mentioning it as part of a larger token does not.
 
-In the UI, an assigned skill displays a "Used by" row on its profile page listing every agent it is attached to, with each agent's display name, role, icon, and colour. Multiple agents on the same skill is normal: `git-workflow` is owned by Dev but other specialists may reference it.
+In the UI, an assigned skill displays a "Used by" row on its profile page listing every agent it is attached to, with each agent's display name, role, icon, and colour. Multiple agents on the same skill is normal: `git-workflow` is owned by the engineering lead but other specialists may reference it.
 
 Unassigned skills are still discovered and displayed. If `discoverSkills` finds a skill that no agent owns by either pass, it is registered with `status: 'unassigned'` and appears in the Skills view without an owner. **It is not offered to any agent**, because a skill reaches an agent only through that agent's own slug list. An unassigned skill is inert until something assigns it.
 
@@ -70,15 +70,15 @@ Neither case warns. The skill simply does not attach. The split keeps Rundock's 
 
 ## Workspace mode
 
-Skills inherit the workspace mode of the agent that invokes them. If the workspace is in Knowledge mode, write restrictions on executable file types apply to anything the skill instructs the agent to do. If the workspace is in Code mode, the standard Code-mode tool auto-approvals apply.
+Skills inherit the workspace mode of the agent that invokes them. If the workspace is in Notes mode, write restrictions on executable file types apply to anything the skill instructs the agent to do. If the workspace is in Code mode, the standard Code-mode tool auto-approvals apply.
 
-There is no per-skill mode override. A skill cannot relax workspace restrictions. If a skill needs to write code in a Knowledge-mode workspace, the user has to switch the workspace to Code mode before running it.
+There is no per-skill mode override. A skill cannot relax workspace restrictions. If a skill needs to write code in a Notes workspace, the user has to switch the workspace to Code mode before running it.
 
-For the full Knowledge vs Code mode table, see [AGENTS.md](AGENTS.md#workspace-modes-knowledge-vs-code).
+For the full Notes vs Code table, see [AGENTS.md](AGENTS.md#workspace-modes-notes-vs-code).
 
 ## Complete example
 
-Here is `skill-discovery`, a skill currently in the workspace. Frontmatter is minimal (the parser-recognised set), the body is structured around six predictable sections (When to use, Inputs, Steps, Output format, Edge cases, Boundaries, Formatting rules), and every step is concrete enough that the agent can follow without asking clarifying questions.
+Here is `skill-discovery`, an example skill. Frontmatter is minimal (the parser-recognised set), the body is structured around six predictable sections (When to use, Inputs, Steps, Output format, Edge cases, Boundaries, Formatting rules), and every step is concrete enough that the agent can follow without asking clarifying questions.
 
 ```markdown
 ---
@@ -86,7 +86,7 @@ name: Skill Discovery
 description: Scan recent work surfaces for repeated manual patterns and propose new skills or playbooks to build, ranked by leverage.
 ---
 
-Scan Liam's work surfaces for repeated manual patterns and produce a ranked
+Scan the user's work surfaces for repeated manual patterns and produce a ranked
 list of candidate skills or playbooks to build. The skill is cadence-agnostic:
 it accepts a scan window argument and runs on demand.
 
@@ -118,7 +118,7 @@ when invoked by a scheduled routine.
 ## Edge cases
 
 - **No daily note for some days in window:** Skip silently.
-- **Granola folder missing or empty:** Skip the Granola surfaces. Note in footer.
+- **Meeting notes folder missing or empty:** Skip the meeting-notes surfaces. Note in footer.
 ... (further specific cases)
 
 ## Boundaries
@@ -146,7 +146,7 @@ Notes on this example:
 
 Agents declare the skills they have via the `skills:` array in their frontmatter, OR Rundock auto-attaches based on body-text scanning. The explicit declaration takes precedence: a skill named in the array is registered to that agent in Pass 1, and the body-text scan does not run for that agent and skill combination. Body-text mentions only attach a skill when the agent did not declare it.
 
-Use explicit assignment when the relationship is permanent and load-bearing (Dev owns `git-workflow`; Penn owns `linkedin-hook-generator`). Let body-text fallback handle weaker references where a skill is occasionally cited in an agent's body but not central to its identity.
+Use explicit assignment when the relationship is permanent and load-bearing (`lead-developer` owns `git-workflow`; `content-lead` owns `post-drafting`). Let body-text fallback handle weaker references where a skill is occasionally cited in an agent's body but not central to its identity.
 
 For the agent frontmatter reference, including the `skills:` array format, see [AGENTS.md](AGENTS.md).
 

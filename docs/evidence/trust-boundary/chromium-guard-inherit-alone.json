@@ -1,0 +1,19 @@
+{
+ "guarded": {
+  "opened": [],
+  "rebuilt": 1,
+  "bars": 1
+ },
+ "withoutInherit": {
+  "opened": [
+   "notes/rebuilt.md"
+  ],
+  "rebuilt": 1,
+  "bars": 0
+ },
+ "withoutSpent": {
+  "opened": [],
+  "rebuilt": 1,
+  "bars": 1
+ }
+}

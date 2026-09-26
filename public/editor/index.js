@@ -31,6 +31,20 @@ const _editorHandles = new WeakMap();
 export function wireWikilinkClicks(hostElement, onWikilinkClick) {
   if (!hostElement || typeof onWikilinkClick !== 'function') return () => {};
   const handler = (event) => {
+    // A RELATIVE LINK TO A WORKSPACE FILE opens it inside Rundock, as it does
+    // in read-only rendering, decided by the one resolver both use
+    // (RundockMarkdown.workspaceFileTarget in public/markdown-render.js). A web
+    // link is the page's rule's (public/external-links.js); anything else is
+    // left alone.
+    const linked = event.target && event.target.closest && event.target.closest('a[href]');
+    const resolver = typeof window !== 'undefined' && window.RundockMarkdown && window.RundockMarkdown.workspaceFileTarget;
+    const fileTarget = linked && typeof resolver === 'function' ? resolver(linked.getAttribute('href')) : null;
+    if (fileTarget) {
+      event.preventDefault();
+      event.stopPropagation();
+      onWikilinkClick(fileTarget, null);
+      return;
+    }
     const anchor = event.target && event.target.closest && event.target.closest('a.wikilink');
     if (!anchor) return;
     event.preventDefault();

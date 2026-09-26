@@ -1,0 +1,68 @@
+{
+ "reached": [
+  {
+   "source": "notes/unnamed.csv",
+   "ok": false
+  },
+  {
+   "source": ".env",
+   "ok": false
+  },
+  {
+   "source": ".mcp.json",
+   "ok": false
+  },
+  {
+   "source": ".claude/agents/decoy.md",
+   "ok": false
+  },
+  {
+   "source": "notes/link-out.csv",
+   "ok": false
+  },
+  {
+   "source": "notes/link-hidden.csv",
+   "ok": false
+  },
+  {
+   "source": "notes/hard.csv",
+   "ok": false
+  },
+  {
+   "source": "DASH.md",
+   "ok": false
+  },
+  {
+   "source": "../outside/secret.txt",
+   "ok": false
+  },
+  {
+   "source": "dash.md",
+   "ok": false
+  },
+  {
+   "source": "/etc/hosts",
+   "ok": false
+  },
+  {
+   "source": "notes/holdings.csv/../unnamed.csv",
+   "ok": false
+  },
+  {
+   "source": "notes/./holdings.csv",
+   "ok": false
+  },
+  {
+   "source": "NOTES/HOLDINGS.CSV",
+   "ok": false
+  },
+  {
+   "source": "notes/*.csv",
+   "ok": false
+  },
+  {
+   "source": "notes/holdings.csv",
+   "ok": true
+  }
+ ]
+}

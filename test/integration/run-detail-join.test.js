@@ -16,7 +16,7 @@
 //
 // AND THE TWO IDENTIFIERS REALLY DO DIVERGE IN THE FIELD. An agent at order 0
 // is the orchestrator, and discovery gives it the id `default` whatever its
-// file is called. The owner's own workspace is one of these: the file is
+// file is called. A real workspace is one of these: the file is
 // team-lead.md and the roster id is `default`. So the fixture below is an
 // agent whose filename and roster id differ, the run is driven through the
 // real scheduler against the real spawn harness, and the record is the one the

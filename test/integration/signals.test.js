@@ -100,8 +100,8 @@ describe('signal layer', () => {
     h.clearInvocations();
     h.writeScenario([
       { match: { agent: 'chief-of-stafF'.toLowerCase(), promptIncludes: 'signal delegation please' },
-        turn: [{ agentTool: { subagent_type: 'content-lead', prompt: 'signal brief for penn' } }] },
-      { match: { agent: 'content-lead', promptIncludes: 'signal brief for penn' },
+        turn: [{ agentTool: { subagent_type: 'content-lead', prompt: 'signal brief for wren' } }] },
+      { match: { agent: 'content-lead', promptIncludes: 'signal brief for wren' },
         turn: [{ text: `Not my lane. ${'<!-- RUNDOCK:RETURN -->'}` }] },
       { match: { agent: 'chief-of-staff', promptIncludes: '[SYSTEM' },
         turn: [{ text: 'Routing onward.' }] },
@@ -109,9 +109,9 @@ describe('signal layer', () => {
     const since = client.messages.length;
     client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: 'signal delegation please' });
     await client.waitFor(m => m.type === 'system' && m.subtype === 'agent_switch'
-      && m._conversationId === convoId && m.toAgent === 'content-lead', { since, label: 'switch to Penn' });
+      && m._conversationId === convoId && m.toAgent === 'content-lead', { since, label: 'switch to Wren' });
     await client.waitFor(m => m.type === 'result' && m._conversationId === convoId
-      && m._agent === 'content-lead', { since, label: 'Penn result' });
+      && m._agent === 'content-lead', { since, label: 'Wren result' });
 
     try {
       const start = await waitForEvent(e => e.e === 'delegation_start' && e.conv === convoId, 'delegation_start');
@@ -126,7 +126,7 @@ describe('signal layer', () => {
       assert.strictEqual(handback.d.kind, 'return');
       assert.strictEqual(handback.agent, 'content-lead', 'the returning agent');
 
-      const pennTurn = await waitForEvent(e => e.e === 'turn' && e.conv === convoId && e.agent === 'content-lead', 'Penn turn event');
+      const pennTurn = await waitForEvent(e => e.e === 'turn' && e.conv === convoId && e.agent === 'content-lead', 'Wren turn event');
       assert.deepStrictEqual(pennTurn.d.markers, ['return'], 'the marker the turn carried, by name only');
     } finally {
       h.reapConvo(convoId);

@@ -24,6 +24,9 @@ import { mathExtensions } from './nodes/math.js';
 import { FindExtension } from './plugins/find.js';
 import { TabGuardExtension } from './plugins/tab-guard.js';
 import { CodeCopyExtension } from './plugins/code-copy.js';
+import { CodeBlockCopyExtension } from './plugins/code-block-copy.js';
+import { RegionsExtension } from './plugins/regions.js';
+import { EmbedsExtension } from './plugins/embeds.js';
 
 export function createEditorInstance({ element, initialBody, onUpdate, onSelectionChange }) {
   if (!element) throw new Error('createEditorInstance: element is required');
@@ -61,15 +64,14 @@ export function createEditorInstance({ element, initialBody, onUpdate, onSelecti
         // example close it on the next read.
         codeBlock: false,
         link: {
-          // Plain click opens. Matches always-editable consumer apps like
-          // Notion and Apple Notes; wikilinks already open on plain click via
-          // the editor module's click delegate, so this keeps the two link
-          // types consistent. target=_blank ensures we don't navigate away
-          // from the editor; Electron's will-navigate handler in main.js
-          // intercepts non-localhost URLs and routes them through
-          // shell.openExternal, so the new-tab path also works in the
-          // packaged app.
-          openOnClick: true,
+          // A plain click on a web link opens it, in a new tab in a browser
+          // and the system browser on desktop, through the page's one rule
+          // for external links (public/external-links.js) and the desktop
+          // window-open handler (electron/external-links.js).
+          // Opening is the page's one rule for external links
+          // (public/external-links.js), in the capture phase ahead of the
+          // editor, so the editor does not open the link a second time.
+          openOnClick: false,
           HTMLAttributes: { rel: 'noopener noreferrer', target: '_blank' },
         },
       }),
@@ -100,6 +102,10 @@ export function createEditorInstance({ element, initialBody, onUpdate, onSelecti
       ...mathExtensions,
       FindExtension,
       CodeCopyExtension,
+      // Copy from inside a code block gives the code, not a fenced block.
+      CodeBlockCopyExtension,
+      RegionsExtension,
+      EmbedsExtension,
       // Last, and deliberately lowest priority. See tab-guard.js.
       TabGuardExtension,
       Markdown.configure({

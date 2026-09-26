@@ -157,7 +157,7 @@ describe('the words the empty state ships', () => {
   });
 
   test('the next step names both ways to pin', () => {
-    // PN-10 requires both ways named. It used to be checked by matching the
+    // Both ways must be named. It used to be checked by matching the
     // word "header", which is the name of the element rather than anything a
     // reader sees: the copy now says where the control IS, which discharges
     // the criterion in the words the criterion is actually about.

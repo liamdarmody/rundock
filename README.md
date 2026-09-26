@@ -93,7 +93,7 @@ To pull updates later, run `npm run update` in the install directory.
 
 ## Tech docs
 
-- [ARCHITECTURE.md](ARCHITECTURE.md): the process model, workspace directory, and codebase structure.
+- [ARCHITECTURE.md](ARCHITECTURE.md): the process model, the desktop app and its advanced settings, the workspace directory, and codebase structure.
 - [CLIENT-ARCHITECTURE.md](docs/CLIENT-ARCHITECTURE.md): how `public/` works. No build step, classic scripts, why modules publish onto the global object, and which settings are load-bearing.
 - [AGENTS.md](docs/AGENTS.md): the agent file format reference. Frontmatter fields, the markdown body, workspace modes, and a complete example.
 - [SKILLS.md](docs/SKILLS.md): the skill file format, discovery, and the assignment model.
@@ -119,7 +119,7 @@ Early access. Bugs and ideas welcome at [github.com/liamdarmody/rundock/issues](
 ================================================================================
 OPTIONAL: WALKTHROUGHS SECTION TEMPLATE
 ================================================================================
-If Liam records three short Loom walkthroughs (60-90 seconds each) covering
+If three short Loom walkthroughs are recorded (60-90 seconds each) covering
 (a) opening Rundock and seeing the org chart, (b) starting a conversation and
 watching delegation happen, (c) adding or editing a skill, paste the section
 below directly after the hero screenshot and above the Principles section.

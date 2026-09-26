@@ -397,7 +397,7 @@ describe('classifyShellAccess (hook-side)', () => {
 
     test('and SSH itself never needed the grant, which is why this costs nothing', () => {
       // If any of these carded, removing the button would have a real cost.
-      for (const cmd of ['ssh liam@vps uptime', 'scp report.md liam@vps:/srv/', 'rsync -az ./dist/ liam@vps:/srv/', 'git push origin main']) {
+      for (const cmd of ['ssh user@vps uptime', 'scp report.md user@vps:/srv/', 'rsync -az ./dist/ user@vps:/srv/', 'git push origin main']) {
         assert.strictEqual(classifyShellAccess('Bash', { command: cmd }, ws, []), null,
           `${cmd} raises no card, so no grant was ever needed for it`);
       }
@@ -694,7 +694,7 @@ describe('agent scratch files', () => {
   });
 
   test('scratch is excluded from version control without outside help', () => {
-    // AC-3 asserted rather than reasoned. The scaffold does add the parent
+    // Asserted rather than reasoned. The scaffold does add the parent
     // directory to the workspace's .gitignore, but only when it runs, so a
     // workspace created earlier, or one whose .gitignore has since been
     // edited, would start committing working files. The directory excluding

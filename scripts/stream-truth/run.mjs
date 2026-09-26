@@ -30,6 +30,9 @@ const ROOT = path.resolve(HERE, '..', '..');
 const { reduceToGrammar, normalize, stableGrammar, checkStreamInvariants, diffGrammars } = require('./grammar.js');
 
 const { SCENARIOS } = require('./scenarios.js');
+// A capture is committed to a public repository, so it is scrubbed of the
+// person who took it before it is written (scripts/capture-scrub.js).
+const { scrubCapture } = require('../capture-scrub.js');
 
 const CAPTURE_FILE = path.join(HERE, 'captured-grammar.json');
 const STUB = path.join(ROOT, 'test', 'helpers', 'stub-claude', 'claude');
@@ -99,7 +102,7 @@ async function capture() {
     captured.scenarios[scenario.name] = { invariants: stableGrammar(grammar), normalized: normalize(grammar) };
     console.log(`[stream-truth] ${scenario.name}: captured ${grammar.length} grammar tokens, invariants hold`);
   }
-  fs.writeFileSync(CAPTURE_FILE, JSON.stringify(captured, null, 2) + '\n');
+  fs.writeFileSync(CAPTURE_FILE, scrubCapture(JSON.stringify(captured, null, 2) + '\n'));
   console.log(`[stream-truth] capture written: ${path.relative(ROOT, CAPTURE_FILE)} (commit it)`);
   return captured;
 }

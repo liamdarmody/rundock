@@ -94,7 +94,7 @@ messages.
 | `test/integration/search-warmup.test.js` all three tests | Blocked a card's gate five times; 6,000-file index against an 8s default | **fixed** |
 | `test/unit/red-first.test.js` "an interrupt during the reverted run does not leave the tree reverted" | Signal fired after a guessed 150ms | **fixed** |
 | `test/unit/red-first.test.js` "a test command that traps SIGINT does not hold the tree hostage" | Same shape at 300ms; recorded as a flake in `docs/evidence/scheduler-lifecycle-evidence.md` | **fixed** |
-| `test/unit/red-first-orphans.test.js` "AC-5, AC-6: a second start is refused..." | Failed once on CI Node 24 under load; `sleep 25` is a budget for the test's own duration | **fixed** |
+| `test/unit/red-first-orphans.test.js` "a second start is refused..." | Failed once on CI Node 24 under load; `sleep 25` is a budget for the test's own duration | **fixed** |
 | Playwright browser suite | 2026-08-14, traced to contention | **isolate** (see below) |
 | `test/integration/delegation.test.js` "agent CRUD while an orchestrator is live flags it..." | Spawn count 1, saw 2, twice during gate runs; `docs/evidence/scheduler-lifecycle-evidence.md` | **not fixed**, see below |
 | `test/integration/process-lifecycle.test.js` | Failed once in setup; `docs/evidence/navigation-inventory-evidence.md` | **not fixed**, see below |

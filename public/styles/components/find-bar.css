@@ -9,7 +9,7 @@
 .find-bar input { background: transparent; border: none; outline: none; color: var(--text-1); font-size: var(--body); min-width: 180px; padding: 4px 6px; font-family: inherit; }
 .find-bar input::placeholder { color: var(--text-3); }
 .find-count { font-size: var(--caption); color: var(--text-2); font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace; min-width: 56px; text-align: right; padding: 0 4px; }
-.find-count.no-results { color: var(--danger); }
+.find-count.no-results { color: var(--danger-text); }
 .find-count:empty { display: none; }
 .find-btn { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; background: transparent; color: var(--text-2); border: none; border-radius: var(--radius-sm); cursor: pointer; transition: background var(--duration-base) ease, color var(--duration-base) ease; }
 .find-btn:hover { background: var(--accent-glow); color: var(--accent); }

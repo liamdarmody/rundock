@@ -19,11 +19,11 @@ Review {==this==}{>>needs a source<<}{#c1}.
 ---
 comments:
   c1:
-    by: liam
+    by: sam
     at: "2026-07-12T10:00:00.000Z"
 suggestions:
   s1:
-    by: penn
+    by: wren
     at: "2026-07-12T10:05:00.000Z"`;
 
 describe('extractEndmatter', () => {
@@ -31,8 +31,8 @@ describe('extractEndmatter', () => {
     const { body, raw, data } = extractEndmatter(DOC);
     assert.equal(body, '# Draft\n\nReview {==this==}{>>needs a source<<}{#c1}.\n\n');
     assert.ok(raw.startsWith('---\ncomments:'));
-    assert.equal(data.comments.c1.by, 'liam');
-    assert.equal(data.suggestions.s1.by, 'penn');
+    assert.equal(data.comments.c1.by, 'sam');
+    assert.equal(data.suggestions.s1.by, 'wren');
   });
 
   test('body + raw reassemble to the exact original', () => {
@@ -66,7 +66,7 @@ describe('extractEndmatter', () => {
 describe('buildEndmatter', () => {
   test('serializes review data as a --- introduced YAML block', () => {
     const data = {
-      comments: { c1: { body: 'needs a source', by: 'liam', at: '2026-07-12T10:00:00.000Z' } },
+      comments: { c1: { body: 'needs a source', by: 'sam', at: '2026-07-12T10:00:00.000Z' } },
     };
     const raw = buildEndmatter(data);
     assert.ok(raw.startsWith('---\n'));
@@ -76,7 +76,7 @@ describe('buildEndmatter', () => {
 
   test('round-trips bodies with tricky YAML characters', () => {
     const data = {
-      comments: { c1: { body: 'colons: quotes " and\nnewlines', by: 'liam', at: 'x' } },
+      comments: { c1: { body: 'colons: quotes " and\nnewlines', by: 'sam', at: 'x' } },
     };
     const back = extractEndmatter('B.\n\n' + buildEndmatter(data));
     assert.equal(back.data.comments.c1.body, 'colons: quotes " and\nnewlines');

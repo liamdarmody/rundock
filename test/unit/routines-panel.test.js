@@ -117,7 +117,7 @@ const activeScope = (doc) => {
   return el ? el.getAttribute('data-scope') : null;
 };
 
-// ===== AC-1: THE PANEL IS NOT THE TEAM PANEL =====
+// ===== THE PANEL IS NOT THE TEAM PANEL =====
 
 describe('the routines rail entry reveals a panel of its own', () => {
   // THE DECISION THIS REVERSES, asserted against the page rather than against
@@ -158,7 +158,7 @@ describe('the routines rail entry reveals a panel of its own', () => {
 
 });
 
-// ===== AC-2, AC-4, AC-5: WHAT THE PANEL DRAWS =====
+// ===== WHAT THE PANEL DRAWS =====
 
 describe('the scope list', () => {
   test('All routines is drawn, and drawn first, wherever there are owners', () => {
@@ -242,7 +242,7 @@ describe('the scope list', () => {
   });
 });
 
-// ===== AC-3: THE SEQUENCE, DRIVEN =====
+// ===== THE SEQUENCE, DRIVEN =====
 
 describe('scope order', () => {
   // AC-3, and the reason it is a criterion. A row that appears at the bottom
@@ -286,7 +286,7 @@ describe('scope order', () => {
   });
 });
 
-// ===== AC-6: THE FALLBACK, DRIVEN =====
+// ===== THE FALLBACK, DRIVEN =====
 
 describe('a scope whose agent stops owning routines', () => {
   // AC-6. The sequence, driven rather than described: scope to Doc, delete his
@@ -345,7 +345,7 @@ describe('a scope whose agent stops owning routines', () => {
   });
 });
 
-// ===== AC-7: THE SCOPE DOES NOT SURVIVE A VISIT =====
+// ===== THE SCOPE DOES NOT SURVIVE A VISIT =====
 
 describe('arriving from the rail', () => {
   // AC-7, and it reads smaller than it is. A filter that survives a session is
@@ -370,7 +370,7 @@ describe('arriving from the rail', () => {
   });
 });
 
-// ===== AC-8: THE PLUS INHERITS THE SCOPE =====
+// ===== THE PLUS INHERITS THE SCOPE =====
 
 describe('the header control', () => {
   test('pressing it on All opens the editor with no agent chosen', () => {
@@ -414,7 +414,7 @@ describe('the header control', () => {
   });
 });
 
-// ===== AC-9: THE SAME NOTHING, SAID ONCE =====
+// ===== THE SAME NOTHING, SAID ONCE =====
 
 describe('the panel and the pane do not say the same thing twice', () => {
   // AC-9, with both strings side by side rather than one of them described.

@@ -273,7 +273,7 @@ function readBefore(file) {
 }
 
 describe('no suite outlives the tool', () => {
-  test('AC-1, AC-4, AC-7: a normal exit leaves no suite running, including the runner\'s own child', async (t) => {
+  test('a normal exit leaves no suite running, including the runner\'s own child', async (t) => {
     const dir = repo();
     const file = scratch('normal');
     const before = scratch('normal-before');
@@ -311,7 +311,7 @@ describe('no suite outlives the tool', () => {
     }
   });
 
-  test('AC-1: a suite that ignores SIGTERM is ended anyway, which is what the escalation is for', async (t) => {
+  test('a suite that ignores SIGTERM is ended anyway, which is what the escalation is for', async (t) => {
     // The only case where the escalation from SIGTERM to SIGKILL is what keeps
     // a suite from outliving the tool. Every other stand-in in this file dies
     // on the first signal, so without this one the escalation could be deleted
@@ -344,7 +344,7 @@ describe('no suite outlives the tool', () => {
     }
   });
 
-  test('AC-2: an error raised while a suite is in flight leaves no suite running', async (t) => {
+  test('an error raised while a suite is in flight leaves no suite running', async (t) => {
     // The error exit that matters, and the one the first version of this test
     // missed. Destroying the repository after the run had closed produced an
     // error, but by then the ending after the run had already cleared the
@@ -390,7 +390,7 @@ describe('no suite outlives the tool', () => {
     }
   });
 
-  test('AC-2: an error out of the run itself also leaves no suite running', async (t) => {
+  test('an error out of the run itself also leaves no suite running', async (t) => {
     // The other shape of error exit: the runner destroys the repository's git
     // directory once it has started its background child, so the restore that
     // follows throws.
@@ -430,7 +430,7 @@ describe('no suite outlives the tool', () => {
     }
   });
 
-  test('AC-3: a signal during the FIRST run leaves no suite running', async (t) => {
+  test('a signal during the FIRST run leaves no suite running', async (t) => {
     // The first run is the longest window the tool has and it was the one with
     // no handler at all: the listeners went on after it, so a signal arriving
     // while the first suite ran took Node's default handling, which terminates
@@ -472,7 +472,7 @@ describe('no suite outlives the tool', () => {
     }
   });
 
-  test('AC-1: an exit taken while a suite is running leaves nothing behind either', async (t) => {
+  test('an exit taken while a suite is running leaves nothing behind either', async (t) => {
     // The exit that does not unwind.
     //
     // Every other normal-exit path here leaves through the function's own
@@ -561,7 +561,7 @@ describe('telling a process that has exited from one that is still running', () 
 });
 
 describe('a refusal describes what it found, not what the record carries', () => {
-  test('AC-6: a record naming a finished group reports the live run, not that group', async (t) => {
+  test('a record naming a finished group reports the live run, not that group', async (t) => {
     // A record names the group of the suite most recently started, and is not
     // rewritten when that suite ends. So between the two suites the record
     // carries a group id that has gone while its tool is still going.
@@ -594,7 +594,7 @@ describe('a refusal describes what it found, not what the record carries', () =>
     }
   });
 
-  test('AC-5: a record that cannot be read is refused and left alone, not cleared', async (t) => {
+  test('a record that cannot be read is refused and left alone, not cleared', async (t) => {
     // The safe direction for a record this run cannot understand. Treating it
     // as stale and deleting it is how the tool would end up running beside
     // whoever wrote it; refusing costs a message and names the file.
@@ -660,7 +660,7 @@ describe('a machine that will not describe its own process table', () => {
     }
   });
 
-  test('AC-5: a suite it cannot describe is treated as live, so a start is refused', async (t) => {
+  test('a suite it cannot describe is treated as live, so a start is refused', async (t) => {
     // The other half of the same ignorance. runIsLive is asked about a record
     // whose owning run has gone and whose group this machine will not describe;
     // the safe answer is that the run is live, because refusing costs a message
@@ -700,7 +700,7 @@ describe('a machine that will not describe its own process table', () => {
 });
 
 describe('one checkout reached by two names', () => {
-  test('AC-5: is one run record, so a second start through a symbolic link is refused', async (t) => {
+  test('is one run record, so a second start through a symbolic link is refused', async (t) => {
     // path.resolve does not follow symbolic links, so the same working tree
     // reached as /tmp/x and /private/tmp/x, or through a symlinked worktree,
     // hashed to two different records. Neither refused the other and both would
@@ -743,7 +743,7 @@ describe('one checkout reached by two names', () => {
 });
 
 describe('starting on top of a run that is still going', () => {
-  test('AC-5, AC-6: a second start is refused, and the refusal names the run it found', async (t) => {
+  test('a second start is refused, and the refusal names the run it found', async (t) => {
     // Driven end to end against a real first run rather than a hand-written
     // record, because a hand-written one only proves the reader can read the
     // test's idea of a record.
@@ -787,7 +787,7 @@ describe('starting on top of a run that is still going', () => {
       assert.notStrictEqual(second.status, 0, 'a second start must not exit 0');
       assert.match(second.stdout, /REFUSED/, second.stdout);
 
-      // AC-6: named, not merely refused. A refusal that says "something is
+      // Named, not merely refused. A refusal that says "something is
       // running" leaves the reader with the same pkill they would have reached
       // for anyway, which is the second defect this card exists to avoid.
       assert.match(second.stdout, new RegExp(`\\b${written.group}\\b`),
@@ -809,8 +809,15 @@ describe('starting on top of a run that is still going', () => {
       // timing, so it passed alone and failed under a loaded gate, which is the
       // worst way for a test to be wrong: it reads as a flake and invites a
       // re-run rather than a diagnosis.
-      assert.strictEqual(groupRunning(written.group), true,
-        'the refusal must not end the run it found');
+      // Through the helper, not the raw comparison. groupRunning answers null
+      // when the process table cannot be read, and under a loaded gate `ps -e`
+      // does exceed its own timeout, so this line compared null against true
+      // and reported that the refusal had killed a run that was alive and
+      // well. That is the exact defect assertGroupRunning was written for, and
+      // this call site was missed when it arrived: the docstring above it says
+      // the mistake cost seven gate runs and a backlog card blaming timing,
+      // and on 2026-09-21 it cost another two and the same wrong diagnosis.
+      assertGroupRunning(written.group, 'the refusal must not end the run it found');
 
       first.kill('SIGTERM');
       await firstExited;
@@ -829,7 +836,7 @@ describe('starting on top of a run that is still going', () => {
     }
   });
 
-  test('AC-5: a run that has not spawned its suite yet is live too', async (t) => {
+  test('a run that has not spawned its suite yet is live too', async (t) => {
     // The gap between a run starting and its first suite existing. A start made
     // in that gap has no group to find, and letting it through would put two
     // reverters on one working tree, each checking files out from under the
@@ -876,7 +883,7 @@ describe('starting on top of a run that is still going', () => {
 });
 
 describe('a suite the tool could not end', () => {
-  test('AC-5: the run record is kept naming it, so the next start has something to refuse on', async (t) => {
+  test('the run record is kept naming it, so the next start has something to refuse on', async (t) => {
     // The one exit where the tool KNOWS it left a suite behind was also the one
     // that erased the record the next start would need in order to refuse. That
     // is the AC-5 scenario arriving by the only route the tool can see coming,
@@ -971,7 +978,7 @@ ${r.stdout}`);
 });
 
 describe('a record left behind by a run that has ended', () => {
-  test('AC-5: is cleared when its suite has gone, and refused while its suite is alive', async (t) => {
+  test('is cleared when its suite has gone, and refused while its suite is alive', async (t) => {
     // BOTH DIRECTIONS OF THE SAME DECISION, because each is a defect on its own.
     //
     // Refusing on a record whose run has ended turns the guard against piling on
@@ -1049,7 +1056,7 @@ describe('a record left behind by a run that has ended', () => {
 });
 
 describe('two starts at once against one repository', () => {
-  test('AC-5: exactly one runs and the other is refused, however close together they are', async (t) => {
+  test('exactly one runs and the other is refused, however close together they are', async (t) => {
     // The window the first version of the refusal left open. It read the record
     // at the top of the run and did not write one until three git commands
     // later, so two starts a few milliseconds apart both saw an empty machine
@@ -1103,7 +1110,7 @@ describe('two starts against a repository whose record is stale', () => {
   // winner's fresh claim and free the name for a third. Both contenders
   // start here at once against a record that is already stale on disk, and
   // exactly one of them may end up running.
-  test('AC-5: a stale record is retired by exactly one of two simultaneous starts', async (t) => {
+  test('a stale record is retired by exactly one of two simultaneous starts', async (t) => {
     const dir = repo();
     const fileA = scratch('staleRaceA');
     const fileB = scratch('staleRaceB');
@@ -1240,7 +1247,7 @@ describe('retiring a stale record, driven at the decision rather than by timing'
 });
 
 describe('cleanup reaches what this tool started, and stops there', () => {
-  test('AC-8: a suite this tool did not start is left alone, and is still working afterwards', async (t) => {
+  test('a suite this tool did not start is left alone, and is still working afterwards', async (t) => {
     // The remedy that suggests itself for the leak above is a pattern kill
     // across the machine. That is how a neighbour's mutation harness was ended
     // mid-rewrite, and a harness killed that way skips the restore in its

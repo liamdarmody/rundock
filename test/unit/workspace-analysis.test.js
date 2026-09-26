@@ -19,12 +19,12 @@ describe('analyzeWorkspace: Seven Signals', () => {
   test('Signal 1 identity: README heading + tagline win over CLAUDE.md and package.json', () => {
     const { analysis } = analyze({
       files: {
-        'README.md': '# Dex by Dave: Your AI Chief of Staff\n\nA personal operating system.\n',
+        'README.md': '# Juno by Example: Your AI Chief of Staff\n\nA personal operating system.\n',
         'CLAUDE.md': '# Something\n\nYou are Alfred, a butler.\n',
-        'package.json': '{"name":"dex-app","description":"the app"}',
+        'package.json': '{"name":"juno-app","description":"the app"}',
       },
     });
-    assert.strictEqual(analysis.identity.suggestedName, 'Dex');
+    assert.strictEqual(analysis.identity.suggestedName, 'Juno');
     assert.strictEqual(analysis.identity.suggestedTagline, 'Your AI Chief of Staff');
     assert.strictEqual(analysis.identity.sources.length, 3);
   });
@@ -40,7 +40,7 @@ describe('analyzeWorkspace: Seven Signals', () => {
     const { analysis } = analyze({
       skills: {
         'linkedin-hook-generator': '---\nname: Hook Generator\ndescription: Writes content hooks and post drafts\n---\nx',
-        'granola-meeting-prep': '---\nname: Meeting Prep\ndescription: Prepares meeting agendas from attendee notes\n---\nx',
+        'meeting-notes-prep': '---\nname: Meeting Prep\ndescription: Prepares meeting agendas from attendee notes\n---\nx',
         'mystery-widget': '---\nname: Mystery\ndescription: does an unrelated thing\n---\nx',
       },
     });
@@ -54,15 +54,15 @@ describe('analyzeWorkspace: Seven Signals', () => {
   test('Signal 3 integrations: named MCP references, configured servers, known tool mentions', () => {
     const { analysis } = analyze({
       files: {
-        'CLAUDE.md': '# W\n\nPull notes from the Granola MCP and check the Notion MCP. We use Todoist and Readwise too.\n',
-        '.mcp.json': '{"mcpServers":{"notion":{},"todoist":{}}}',
+        'CLAUDE.md': '# W\n\nPull notes from the Meetings MCP and check the Docs MCP. We use Linear and Slack too.\n',
+        '.mcp.json': '{"mcpServers":{"docs":{},"tasks":{}}}',
       },
     });
-    assert.ok(analysis.integrations.mcpReferences.some(m => m.name === 'Granola MCP'));
-    assert.ok(analysis.integrations.mcpReferences.some(m => m.name === 'Notion MCP'));
-    assert.deepStrictEqual(analysis.integrations.configuredServers.sort(), ['notion', 'todoist']);
-    assert.ok(analysis.integrations.mentionedTools.includes('Todoist'));
-    assert.ok(analysis.integrations.mentionedTools.includes('Readwise'));
+    assert.ok(analysis.integrations.mcpReferences.some(m => m.name === 'Meetings MCP'));
+    assert.ok(analysis.integrations.mcpReferences.some(m => m.name === 'Docs MCP'));
+    assert.deepStrictEqual(analysis.integrations.configuredServers.sort(), ['docs', 'tasks']);
+    assert.ok(analysis.integrations.mentionedTools.includes('Linear'));
+    assert.ok(analysis.integrations.mentionedTools.includes('Slack'));
   });
 
   test('Signal 4 structure: PARA + numbered pattern and key path detection', () => {
@@ -85,7 +85,7 @@ describe('analyzeWorkspace: Seven Signals', () => {
 
   test('Signal 5 user profile: detects and reports populated fields', () => {
     const { analysis } = analyze({
-      files: { 'user-profile.yaml': 'name: Alex\nrole: Product Leader\ncompany: Rundock\nemail: a@x.com\n' },
+      files: { 'user-profile.yaml': 'name: Alex\nrole: Product Leader\ncompany: Rundock\nemail: a@example.com\n' },
     });
     assert.strictEqual(analysis.userProfile.exists, true);
     assert.strictEqual(analysis.userProfile.populated, true);

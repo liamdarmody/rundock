@@ -476,7 +476,7 @@ describe('agent + skill CRUD over WS', () => {
     h.internal.discoverAgents();
 
     const since = client.messages.length;
-    client.send({ type: 'save_agent', name: 'sales-coach', content: '---\nname: sales-coach\ndisplayName: Sollo\nrole: Sales Coach\ndescription: Sales prep\n---\nYou are Sollo.\n' });
+    client.send({ type: 'save_agent', name: 'sales-coach', content: '---\nname: sales-coach\ndisplayName: Rex\nrole: Sales Coach\ndescription: Sales prep\n---\nYou are Rex.\n' });
     const { msg: saved } = await client.waitFor(m => m.type === 'agent_saved', { since, label: 'agent_saved' });
     assert.strictEqual(saved.agentId, 'sales-coach');
     assert.strictEqual(saved.updated, false);
@@ -558,15 +558,15 @@ describe('agent + skill CRUD over WS', () => {
     // property the removed add form carried and the one that matters most:
     // getting it wrong drops every server somebody already had.
     since = client.messages.length;
-    client.send({ type: 'save_connector', name: 'granola', content: '{"url":"https://mcp.granola.ai/mcp"}' });
+    client.send({ type: 'save_connector', name: 'calendar', content: '{"url":"https://mcp.example.com/mcp"}' });
     await client.waitFor(m => m.type === 'connector_saved', { since, label: 'second connector' });
     const both = JSON.parse(fs.readFileSync(mcp, 'utf-8')).mcpServers;
-    assert.deepStrictEqual(Object.keys(both).sort(), ['granola', 'notion']);
+    assert.deepStrictEqual(Object.keys(both).sort(), ['calendar', 'notion']);
 
     since = client.messages.length;
     client.send({ type: 'delete_connector', name: 'notion' });
     await client.waitFor(m => m.type === 'connector_saved' && m.action === 'removed', { since, label: 'connector removed' });
-    assert.deepStrictEqual(Object.keys(JSON.parse(fs.readFileSync(mcp, 'utf-8')).mcpServers), ['granola'],
+    assert.deepStrictEqual(Object.keys(JSON.parse(fs.readFileSync(mcp, 'utf-8')).mcpServers), ['calendar'],
       'the named one goes and the other stays');
 
     // Removing what is not there SAYS SO. Reporting success for a name that

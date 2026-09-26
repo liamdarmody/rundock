@@ -180,7 +180,7 @@ describe('the card names the setting that would stop it asking', () => {
       tool_name: 'Bash', input: { command: 'npm run build' },
       boundary: true, resolved_path: '/home/u/Projects/alchemist', grant_dir: null,
     });
-    assert.match(html, /name the folder in Settings under Workspace/,
+    assert.match(html, /name the folder in Settings under Permissions/,
       'the answer to meeting this repeatedly is named where it is met');
   });
 
@@ -189,74 +189,38 @@ describe('the card names the setting that would stop it asking', () => {
       tool_name: 'Write', input: { file_path: '/home/u/Projects/x/a.js' },
       boundary: true, resolved_path: '/home/u/Projects/x/a.js', grant_dir: '/home/u/Projects/x',
     });
-    assert.match(fileCard, /name the folder in Settings under Workspace/);
+    assert.match(fileCard, /name the folder in Settings under Permissions/);
     const multi = render({
       tool_name: 'Bash', input: { command: 'cp a b' },
       boundary: true, resolved_path: null, grant_dir: null,
       crossings: [{ path: '/home/u/Projects/a' }, { path: '/home/u/Projects/b' }],
     });
     assert.match(multi, /reaches more than one place/, 'the existing warning survives');
-    assert.match(multi, /name the folder in Settings under Workspace/, 'and the hint is composed with it');
+    assert.match(multi, /name the folder in Settings under Permissions/, 'and the hint is composed with it');
   });
 
-  // THE OPERATING-SYSTEM SENTENCE IS ABOUT A DIFFERENT CARD, and a reader who
-  // does not know that concludes the mode switch is broken.
-  //
-  // Reported from the field: in Code mode, a card for `cat ../.mcp.json` (a
-  // genuine crossing, one level above the workspace) carried the sentence
-  // "Code mode is where those end" while the reader was sitting in Code mode
-  // holding the card. The decision was right and the copy made it look wrong.
-  //
-  // In Code mode the sandbox is off, so this card IS the whole boundary and
-  // naming the folder is the only remedy there is. Pinned to appear in one
-  // combination and no other, because a conditional caveat that stops
-  // appearing when its condition is miscomputed disappears in silence.
-  describe('the operating-system sentence appears only where it is true', () => {
+  // ONE SENTENCE WHEREVER A PATH WAS RECOGNISED. A second sentence used to
+  // follow on macOS in the default mode, saying the operating system could still
+  // refuse the write and that a mode switch ended it. A named folder now reaches
+  // the sandbox's write list, and the sandbox is its own switch, so neither half
+  // held. Asserted across every host and mode so the old sentence cannot return
+  // for one combination.
+  test('the remedy is the whole hint, on every host and in every mode', () => {
     const crossing = {
       tool_name: 'Bash', input: { command: 'cat ../.mcp.json' },
       boundary: true, resolved_path: '/home/u/Rundock/.mcp.json', grant_dir: null,
     };
-    const OS_SENTENCE = /Code mode is where those end/;
-    const BASE = /name the folder in Settings under Workspace/;
-
-    function withEnv(platform, mode, fn) {
-      const p = global.serverPlatform, m = global.workspaceMode;
-      global.serverPlatform = platform; global.workspaceMode = mode;
-      try { return fn(); } finally { global.serverPlatform = p; global.workspaceMode = m; }
-    }
-
-    test('Knowledge mode on macOS: the sentence is shown, because there it is the missing half', () => {
-      const html = withEnv('darwin', 'knowledge', () => render(crossing));
-      assert.match(html, BASE, 'the remedy is always named');
-      assert.match(html, OS_SENTENCE, 'and so is the card the reader has not met yet');
-    });
-
-    test('Code mode on macOS: the remedy stays, the sentence goes', () => {
-      const html = withEnv('darwin', 'code', () => render(crossing));
-      assert.match(html, BASE, 'naming the folder is still the answer, and in Code mode it is the ONLY answer');
-      assert.doesNotMatch(html, OS_SENTENCE,
-        'telling a reader in Code mode that Code mode ends this, on a card Code mode did not end, reads as a broken switch');
-    });
-
-    test('off macOS the sentence never appears, in either mode', () => {
-      for (const mode of ['knowledge', 'code']) {
-        for (const platform of ['win32', 'linux']) {
-          const html = withEnv(platform, mode, () => render(crossing));
-          assert.match(html, BASE, `the remedy still applies on ${platform} in ${mode} mode`);
-          assert.doesNotMatch(html, OS_SENTENCE,
-            `there is no sandbox on ${platform}, so there is no such card to warn about`);
+    const p = global.serverPlatform, m = global.workspaceMode;
+    try {
+      for (const platform of ['darwin', 'win32', 'linux', null]) {
+        for (const mode of ['knowledge', 'code']) {
+          global.serverPlatform = platform; global.workspaceMode = mode;
+          const html = render(crossing);
+          assert.match(html, /name the folder in Settings under Permissions/, `${platform}/${mode}: the remedy`);
+          assert.doesNotMatch(html, /mode is where th/i, `${platform}/${mode}: no mode is named as the way out`);
         }
       }
-    });
-
-    test('an unknown platform says less rather than guessing', () => {
-      // serverPlatform is null until the server says otherwise, and a card can
-      // render in that window. Claiming the macOS behaviour before knowing the
-      // host would be a guess shown as a fact.
-      const html = withEnv(null, 'knowledge', () => render(crossing));
-      assert.match(html, BASE);
-      assert.doesNotMatch(html, OS_SENTENCE, 'not yet known is not the same as darwin');
-    });
+    } finally { global.serverPlatform = p; global.workspaceMode = m; }
   });
 
   test('it is NOT offered on a sandbox-retry card, which carries no path to name', () => {
@@ -270,14 +234,14 @@ describe('the card names the setting that would stop it asking', () => {
       tool_name: 'Bash', input: { command: 'make install', dangerouslyDisableSandbox: true },
       boundary: true, resolved_path: null, grant_dir: null,
     });
-    assert.doesNotMatch(html, /name the folder in Settings under Workspace/);
+    assert.doesNotMatch(html, /name the folder in Settings under Permissions/);
     // AND IT SAYS WHAT IS ACTUALLY HAPPENING. Silence here is what sends a
     // reader to the setting that cannot help them: the operating system refused
-    // this write, not a path check, so the card names the refusal and the one
-    // switch that ends it.
+    // this write, not a path check, so the card names the refusal and the
+    // switch that causes it, by the name the Permissions pane gives it.
     assert.match(html, /operating system refusing a write outside your workspace/i);
-    assert.match(html, /Naming a working folder does not change it/i);
-    assert.match(html, /Code mode is where these end/i);
+    assert.match(html, /because Keep agents inside this workspace is on in Settings under Permissions/);
+    assert.doesNotMatch(html, /Code mode/, 'mode no longer decides this, so the card does not send the reader to it');
   });
 
   test('it is NOT offered for a runtime-home crossing, where naming a folder changes nothing', () => {
@@ -291,7 +255,7 @@ describe('the card names the setting that would stop it asking', () => {
       boundary: true, resolved_path: crossingPath, grant_dir: null,
       crossings: [{ path: crossingPath, secret: true, agentHome: true }],
     });
-    assert.doesNotMatch(html, /name the folder in Settings under Workspace/);
+    assert.doesNotMatch(html, /name the folder in Settings under Permissions/);
   });
 });
 
@@ -470,7 +434,7 @@ describe('the answer-file card', () => {
       'a real crossing in the same command is the headline');
   });
 
-  // AF-3 at the decision path, not at the button. A key stored from an
+  // At the decision path, not at the button. A key stored from an
   // unrelated Write or Edit approval lives in the session's always-allowed set,
   // and decidePermission would have answered this request from it without a
   // card ever rendering. Suppressing the button alone would have left that door
@@ -522,7 +486,7 @@ describe('the answer-file card', () => {
 //
 // The single-crossing branch used to overwrite `detail` with the resolved path,
 // and for a Bash request `detail` WAS the command. So the card asked for
-// approval of a shell command while showing only a folder. Found by the owner
+// approval of a shell command while showing only a folder. Found in manual testing
 // meeting one: a card naming the folder above his workspace, for a command he
 // could not see, which he correctly judged made no sense and could not verify.
 describe('a boundary card for a command', () => {

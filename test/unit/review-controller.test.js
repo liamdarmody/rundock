@@ -24,17 +24,17 @@ The intro {~~is vague~>needs a tighter claim~~}{#s3}.
 ---
 comments:
   c1:
-    by: liam
+    by: sam
     at: "2026-07-12T10:00:00.000Z"
 suggestions:
   s1:
-    by: penn
+    by: wren
     at: "2026-07-12T10:05:00.000Z"
   s2:
-    by: penn
+    by: wren
     at: "2026-07-12T10:06:00.000Z"
   s3:
-    by: penn
+    by: wren
     at: "2026-07-12T10:07:00.000Z"
 `;
 
@@ -50,7 +50,7 @@ async function withReview(rawMarkdown, fn) {
   const review = createReviewController({
     editor,
     endmatter: parts.endmatter,
-    author: 'liam',
+    author: 'sam',
     now: () => NOW,
   });
   const save = () => {
@@ -74,7 +74,7 @@ describe('listItems', () => {
       const c1 = items[0];
       assert.equal(c1.text, 'Needs a source');
       assert.equal(c1.anchor, 'this sentence');
-      assert.equal(c1.meta.by, 'liam');
+      assert.equal(c1.meta.by, 'sam');
     });
   });
 });
@@ -86,7 +86,7 @@ describe('suggestion verdicts', () => {
       const out = save();
       assert.ok(out.includes('Add one concrete example and drop'), out);
       assert.ok(!out.includes('{++'), 'insert construct should be gone');
-      assert.match(out, /s1:\n {4}by: penn\n {4}at: "[^"]+"\n {4}verdict: accepted\n {4}decidedAt: "2026-07-12T12:00:00\.000Z"/);
+      assert.match(out, /s1:\n {4}by: wren\n {4}at: "[^"]+"\n {4}verdict: accepted\n {4}decidedAt: "2026-07-12T12:00:00\.000Z"/);
     });
   });
 
@@ -127,7 +127,7 @@ describe('comment lifecycle', () => {
       assert.ok(out.includes('Review this sentence before publishing.'), out);
       assert.ok(!out.includes('{=='), 'highlight should be released');
       assert.ok(!out.includes('{>>'), 'comment construct should be gone');
-      assert.match(out, /c1:\n {4}by: liam\n {4}at: "[^"]+"\n {4}body: "?Needs a source"?\n {4}resolved: true/);
+      assert.match(out, /c1:\n {4}by: sam\n {4}at: "[^"]+"\n {4}body: "?Needs a source"?\n {4}resolved: true/);
     });
   });
 
@@ -135,7 +135,7 @@ describe('comment lifecycle', () => {
     await withReview(DOC, ({ review, save }) => {
       review.reply('c1', 'Added the 2025 survey link.');
       const out = save();
-      assert.match(out, /c2:\n {4}body: "?Added the 2025 survey link\."?\n {4}re: c1\n {4}by: liam\n {4}at: "2026-07-12T12:00:00\.000Z"/);
+      assert.match(out, /c2:\n {4}body: "?Added the 2025 survey link\."?\n {4}re: c1\n {4}by: sam\n {4}at: "2026-07-12T12:00:00\.000Z"/);
       assert.ok(out.includes('{>>Needs a source<<}{#c1}'), 'root comment stays inline');
     });
   });
@@ -152,7 +152,7 @@ describe('authoring', () => {
       review.addComment('Tighten this.');
       const out = save();
       assert.ok(out.includes('The {==pricing section==}{>>Tighten this.<<}{#c1} needs work.'), out);
-      assert.match(out, /---\ncomments:\n {2}c1:\n {4}by: liam\n {4}at: "2026-07-12T12:00:00\.000Z"/);
+      assert.match(out, /---\ncomments:\n {2}c1:\n {4}by: sam\n {4}at: "2026-07-12T12:00:00\.000Z"/);
     });
   });
 
@@ -165,7 +165,7 @@ describe('authoring', () => {
       review.suggestReplace('needs a claim');
       const out = save();
       assert.ok(out.includes('The intro {~~is vague~>needs a claim~~}{#s1} today.'), out);
-      assert.match(out, /---\nsuggestions:\n {2}s1:\n {4}by: liam/);
+      assert.match(out, /---\nsuggestions:\n {2}s1:\n {4}by: sam/);
     });
   });
 

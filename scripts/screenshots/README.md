@@ -32,7 +32,7 @@ not expect a clean git diff to tell you whether a GIF actually changed.
    shots), for banned tokens, and aborts before any capture if a real name or
    private term slips in. Binary files (images, PDFs) are trusted, not scanned.
    The gate warns if no project-specific token source is configured (see
-   Configuration); the built-in defaults only cover the owner's own markers.
+   Configuration); the built-in defaults only cover a default set of markers.
 3. **Boot** the real `server.js` against that workspace on a dedicated port.
 4. **Capture** the full still shot list in light and dark at deviceScaleFactor 2
    (2880x1800 @2x masters), plus element-scoped crops.

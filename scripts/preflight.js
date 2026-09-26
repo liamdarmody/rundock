@@ -69,6 +69,12 @@ const REGISTRY_SUITES = [
   // The client's global namespace and its stylesheet manifest.
   'test/unit/client-namespace.test.js',
   'test/unit/client-styles.test.js',
+  // The danger token's split: which declarations may take the fill and which
+  // must take the text token, and the contrast ratios recomputed from the
+  // declared values rather than quoted from a report. It boots no document
+  // and writes nothing: it reads the stylesheets and does arithmetic, which
+  // is the membership rule for this phase exactly.
+  'test/unit/danger-token.test.js',
   // Manifest equality over discovered call sites and doors. Each of these fails
   // when something is ADDED and not written down, which is the membership rule,
   // and each was previously reported only after the suite had run under coverage.
@@ -102,6 +108,8 @@ const REGISTRY_SUITES = [
   'test/unit/markdown-render.test.js',
   // Pure, and it decides what the expensive step is allowed to skip.
   'test/unit/mutation-scope.test.js',
+  // The hostile fixtures name no real destination and read no real workspace.
+  'test/unit/confinement-fixtures.test.js',
 ];
 
 /**
@@ -125,6 +133,10 @@ const NOT_CHEAP = {
   // that rule however fast it happens to be, and admitting them would grow this
   // phase into a second full suite, which is the thing the phase must not become.
   'test/unit/approve-once.test.js': 'behaviour: drives the permission grant flow, not a bookkeeping check',
+  'test/unit/collision-decisions.test.js': 'behaviour: drives the import review flow through correlated protocol messages and presses the decisions. It walks the review card\'s stylesheet section to hold the danger tone to one surface, which is why the inventory names it, but the walk serves a driven check rather than a bookkeeping one',
+  'test/unit/extension-install.test.js': 'behaviour: builds repositories on disk and installs from them, writing files and reading the result back',
+  'test/unit/host-wiring.test.js': 'behaviour: boots documents, mounts extension frames and dispatches real message events through the seam',
+  'test/unit/packages-manage.test.js': 'behaviour: boots a document, renders the Packages section through the shipped settings view and presses its controls. It counts the settings nav entries it cuts out of index.html, which is why the inventory names it, but the count serves a rendered check',
   'test/unit/permissions.test.js': 'behaviour: grades real command text against the risk rules',
   'test/unit/permissions-view.test.js': 'behaviour: boots a document and renders the settings pane, then presses what it drew. It walks the stylesheets to prove no class is left unstyled, which is why the inventory names it, but the walk is in service of a rendered check rather than a bookkeeping one',
   'test/unit/working-folders-view.test.js': 'behaviour: boots a document and presses controls',

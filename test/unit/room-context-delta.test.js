@@ -839,22 +839,22 @@ describe('many pinned turns cannot overflow the cap', () => {
 test('an arriving agent that has spoken before is still given the whole conversation, its own turns included', () => {
   const transcript = [
     { role: 'user', agent: 'user', text: 'write me a post' },
-    { role: 'agent', agent: 'penn', text: 'PENN-FIRST-DRAFT: here is a draft' },
+    { role: 'agent', agent: 'wren', text: 'WREN-FIRST-DRAFT: here is a draft' },
     { role: 'agent', agent: 'cos', text: 'COS-NOTE: asking research for numbers' },
-    { role: 'agent', agent: 'arlo', text: 'ARLO-RESEARCH: the numbers' },
+    { role: 'agent', agent: 'reese', text: 'REESE-RESEARCH: the numbers' },
   ];
-  const arriving = deltaSince(transcript, 'penn', undefined, [], null, true);
-  assert.match(arriving.text, /PENN-FIRST-DRAFT/,
+  const arriving = deltaSince(transcript, 'wren', undefined, [], null, true);
+  assert.match(arriving.text, /WREN-FIRST-DRAFT/,
     'its own earlier turn, which a cold spawn holds nowhere else');
-  assert.match(arriving.text, /ARLO-RESEARCH/, 'and what happened while it was away');
+  assert.match(arriving.text, /REESE-RESEARCH/, 'and what happened while it was away');
   assert.match(arriving.text, /write me a post/, 'and the request that started it');
 
   // The resume path is unchanged and still trims: a session already carries
   // these, and re-sending them invites the agent to redo work it has done.
-  const returning = deltaSince(transcript, 'penn', undefined, [], null, false);
-  assert.ok(!returning.text.includes('PENN-FIRST-DRAFT'),
+  const returning = deltaSince(transcript, 'wren', undefined, [], null, false);
+  assert.ok(!returning.text.includes('WREN-FIRST-DRAFT'),
     'a returning agent is not re-sent its own turn');
-  assert.match(returning.text, /ARLO-RESEARCH/, 'only what it missed');
+  assert.match(returning.text, /REESE-RESEARCH/, 'only what it missed');
 });
 
 // THE CAP, FOR AN ARRIVING AGENT SPECIFICALLY.
@@ -868,14 +868,14 @@ test('an arriving agent gets a capped, attributed catch-up, and is told what was
   // Display names deliberately DIFFERENT from the slugs. Names matching their
   // slugs would pass whether the map was consulted or ignored, which is the
   // assertion-that-cannot-fail this suite has already been caught writing once.
-  const names = { roo: 'Rosalind', arlo: 'Arlington', penn: 'Penelope' };
+  const names = { roo: 'Rosalind', reese: 'Arlington', wren: 'Penelope' };
   const transcript = [
     { role: 'user', agent: 'user', text: 'start' },
     { role: 'agent', agent: 'roo', text: 'OLDEST ' + 'x'.repeat(DELTA_CAP_CHARS) },
-    { role: 'agent', agent: 'arlo', text: 'MIDDLE ' + 'y'.repeat(DELTA_CAP_CHARS) },
-    { role: 'agent', agent: 'penn', text: 'NEWEST turn, the one that matters most' },
+    { role: 'agent', agent: 'reese', text: 'MIDDLE ' + 'y'.repeat(DELTA_CAP_CHARS) },
+    { role: 'agent', agent: 'wren', text: 'NEWEST turn, the one that matters most' },
   ];
-  const d = deltaSince(transcript, 'penn', undefined, [], names, true);
+  const d = deltaSince(transcript, 'wren', undefined, [], names, true);
 
   assert.ok(d.text.length <= DELTA_CAP_CHARS,
     `the assembled text stays within the cap (was ${d.text.length} of ${DELTA_CAP_CHARS})`);
@@ -1040,7 +1040,7 @@ describe('the stored conversation can only reach a delegate through the cap', ()
     };
     for (const [name, convo] of Object.entries(shapes)) {
       for (const arriving of [true, false]) {
-        const missed = deltaSince(convo, 'penn', undefined, [], null, arriving);
+        const missed = deltaSince(convo, 'wren', undefined, [], null, arriving);
         const sent = buildDelegateContext({ missed, brief, arriving });
         // The heading and the brief sit outside the delta, so the bound is the
         // cap plus those, not the cap alone.

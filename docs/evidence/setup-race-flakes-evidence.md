@@ -3,12 +3,12 @@
 Everything below was run on branch `fix/setup-race-flakes` against `origin/main` at
 `ea14682`, on Node v24.12.0, macOS.
 
-**Round 1** review (`91b534570b67` / diff `9c7a457bdb4c`) rejected on AC-3, AC-4 and
+**The first review** (`91b534570b67` / diff `9c7a457bdb4c`) rejected on AC-3, AC-4 and
 AC-5 for having no file in the diff, and separately flagged that the idle-reap test
 wrote production's own fields without checking production still sets them. Both were
 addressed and are recorded below.
 
-**Round 2** review (diff `90a08dd640d7`) rejected again, on six blocking findings, and
+**The second review** (diff `90a08dd640d7`) rejected again, on six blocking findings, and
 was right on all six:
 
 1. The AC-3 discharge (then: 30 solo-under-load runs) was measured in a different
@@ -20,7 +20,7 @@ was right on all six:
    empty marker under load, and the exit handler's `Number('')` (`0`) made
    `process.kill(0, 0)` always succeed, masking the real check behind a misleading
    `pid 0` failure. This is a plausible cause of the one uncaptured full-suite failure
-   from round 1's evidence. Fixed: see "The marker race" below.
+   from the first review's evidence. Fixed: see "The marker race" below.
 3. AC-5 break 2 was proven against an uncommitted copy of the idle-reap test's body,
    not the committed file. Fixed: re-run against the committed file directly, recorded
    below with the hang it still produces and how that was handled.
@@ -28,7 +28,7 @@ was right on all six:
    the committed test, and that profile would also have denied the test's own fixture
    creation. Addressed below by stating plainly what could and could not be shown.
 
-**Round 3** review (diff `3279b9153796`) rejected on three findings and was right on
+**The third review** (diff `3279b9153796`) rejected on three findings and was right on
 all three:
 
 1. AC-5 break 2's committed-file run went red in 155ms, which is shorter than
@@ -47,14 +47,14 @@ all three:
    has a positive, discriminating proof against the committed test, not a stated
    absence.
 
-This file now carries all three rounds' measurements rather than only the latest, so
+This file now carries all three reviews' measurements rather than only the latest, so
 a reader can see what changed and why.
 
-## AC-5: both behaviours broken in turn, and the test that went red
+## both behaviours broken in turn, and the test that went red
 
-### The marker race, found by round 2 review, fixed before re-running break 1
+### The marker race, found by the second review, fixed before re-running break 1
 
-Round 2 found a real defect inside round 1's own fix, not in the evidence: the
+The second review found a real defect inside the first review's own fix, not in the evidence: the
 trapping child wrote its pid with a plain `writeFileSync(marker, String(pid))`, which
 creates the file at `open()` before the pid bytes land. Under load the child can be
 descheduled between those two syscalls, so a poll on `fs.existsSync(marker)` could
@@ -64,7 +64,7 @@ have the exit handler read an empty file. `Number('')` is `0`, and
 always succeeds, so the liveness loop never went false and the test failed with a
 misleading `pid 0` message, a scheduling-speed dependence of exactly the class this
 card exists to remove, and a real candidate for the one uncaptured full-suite failure
-in round 1's evidence.
+in the first review's evidence.
 
 Fixed by writing the pid to a temporary name and renaming it into place (atomic on the
 same filesystem, so the marker's existence now implies complete content), and by
@@ -79,7 +79,7 @@ child's process group on interrupt. Changed to an immediate `return`:
 
 ```
   const endChild = () => {
-    // AC-5 PROOF (setup-race-flakes, round 3): deliberately disabled, must not be committed.
+    // AC-5 PROOF (setup-race-flakes, third review): deliberately disabled, must not be committed.
     return;
   };
 ```
@@ -112,14 +112,14 @@ including this test at 424ms.
 
 ```
 function reapIdleAgents(now = Date.now()) {
-  // AC-5 PROOF (setup-race-flakes, round 3): deliberately disabled, must not be committed.
+  // AC-5 PROOF (setup-race-flakes, third review): deliberately disabled, must not be committed.
   return 0;
   let reaped = 0, processes = 0;
   ...
 ```
 
-**Round 2 correctly rejected the first version of this proof** (an uncommitted
-throwaway copy) **and round 3 correctly rejected the second** (the committed file's
+**The second review correctly rejected the first version of this proof** (an uncommitted
+throwaway copy) **and the third review correctly rejected the second** (the committed file's
 own `✖` line, but at 155ms, too fast to be the behavioural assertion: `REAP_MS` is
 300ms and reaching `liveEntries().length < CONVOS` after a broken sweep requires four
 completed turns plus `h.waitUntil` timing out, on the order of eight seconds, as the
@@ -174,11 +174,11 @@ the copies.) Re-ran `node --test test/integration/process-lifecycle.test.js` (th
 file, unrestricted, no `.only`): **6 pass, 0 fail**, no hang, including the target
 test at ~1000ms.
 
-## AC-4: the committed test, discriminated by a real sandbox
+## the committed test, discriminated by a real sandbox
 
-**Round 2 correctly rejected round 1's proof** (two `node -e` one-liners under a
-hand-written profile, not the committed test) **and round 3 correctly rejected round
-2's conclusion that no discriminating profile exists.** That conclusion rested on a
+**The second review correctly rejected the first review's proof** (two `node -e` one-liners under a
+hand-written profile, not the committed test) **and the third review correctly rejected the
+second review's conclusion that no discriminating profile exists.** That conclusion rested on a
 regex, `(allow file-write* (regex #"/red-first-[^/]+/.+$"))`, chosen too loosely: it
 required a path segment after the `red-first-` prefix, which also excludes the bare
 mkdtemp directory's own creation, so it looked as if directory-creation and
@@ -264,15 +264,15 @@ from the count.
 
 The code comment in `test/unit/red-first.test.js` explaining the marker's location
 now states this finding in its own words rather than deferring to this file, and no
-longer claims the discriminating sandbox is unconstructible, which round 3 correctly
+longer claims the discriminating sandbox is unconstructible, which the third review correctly
 identified as false.
 
-## AC-3: repeated runs under load
+## repeated runs under load
 
-**Round 2 correctly declined to treat a solo-under-load discharge as satisfying this
+**The second review correctly declined to treat a solo-under-load discharge as satisfying this
 criterion.** AC-3 names full-suite parallelism, and the only recorded failure of the
 SIGINT test happened in exactly that mode (Run A, iteration 4, below); the 30-run
-discharge offered in round 1's evidence ran the test file alone under external load, a
+discharge offered in the first review's evidence ran the test file alone under external load, a
 different contention profile that does not include the sibling test files' own side
 effects sharing the runner (this diff's own comment on `waitForCondition` notes that
 `test/helpers/workspace.js` sweeps the temp root at require time, a side effect only
@@ -325,7 +325,7 @@ uncaptured failure the marker-race fix targets**, and its absence from the fresh
 below is evidence for, not proof of, that fix addressing it.
 
 **Run E: full suite, 15 further iterations, complete output captured for every
-iteration, taken AFTER the marker-race fix** (round 3, this diff). Command, log
+iteration, taken AFTER the marker-race fix** (the third review, this diff). Command, log
 location, and per-iteration result all machine-generated from
 `.rundock/ac3-fullsuite-r3/progress.log` (gitignored scratch inside the worktree, not
 committed) rather than transcribed by hand:
@@ -360,9 +360,9 @@ predates the marker-race fix and was never reproduced afterward, including acros
 15 of Run E's iterations, each with full output saved specifically so a recurrence
 could be read rather than merely counted. This is stated as the discharge basis
 precisely because the mode matches what the criterion names, not because the count is
-larger than round 1's.
+larger than the first review's.
 
-### Supporting data only, not the discharge (kept from round 1)
+### Supporting data only, not the discharge (kept from the first review)
 
 **Run C: targeted, 10 iterations**, `node --test test/unit/red-first.test.js
 test/integration/process-lifecycle.test.js` (just the two files, run back to back, a

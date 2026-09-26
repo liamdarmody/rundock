@@ -39,7 +39,7 @@ const SECTIONED = [
   '---',
   'comments:',
   '  c1:',
-  '    by: liam',
+  '    by: sam',
   '    at: "2026-08-18T10:00:00Z"',
   'review:',
   '  status: in-review',
@@ -60,7 +60,7 @@ describe('a sectioned document under review', () => {
 
     // The endmatter is the review block at the end, not a body thematic break.
     assert.ok(parts.endmatter.raw.startsWith('---\ncomments:'));
-    assert.equal(parts.endmatter.data.comments.c1.by, 'liam');
+    assert.equal(parts.endmatter.data.comments.c1.by, 'sam');
 
     // Both body thematic breaks stay in the body. The document authors three
     // `---` lines after the frontmatter; the last one opens the endmatter, and

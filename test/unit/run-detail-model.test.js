@@ -546,3 +546,31 @@ describe('what the run did', () => {
     assert.strictEqual(model.describeRun(livingRecord(), { now: NOW }).found, true);
   });
 });
+
+// ===== A FAILURE THE AGENT DECLARED =====
+// Both are recorded as failed; only the first carries `declared: true`,
+// written by the scheduler when the agent's final line is
+// `RUN STATUS: failed: <reason>` (docs/ROUTINES.md).
+const declaredModel = require('../../public/run-detail-model.js');
+
+
+const base = { id: 'r1', agent: 'ada', routine: 'Morning Briefing', startedAt: '2026-09-22T20:54:04.607Z', endedAt: '2026-09-22T21:02:26.770Z', durationMs: 502163, files: [], filesStatus: 'known', filesReason: null, trigger: 'scheduled' };
+
+test('a declared failure reads as reported by the agent, with its reason', () => {
+  const view = declaredModel.describeRun({ ...base, status: 'failed', declared: true, error: 'labels could not be applied' });
+  assert.strictEqual(view.state.chip, 'Reported failed');
+  assert.strictEqual(view.state.headline, 'The agent reported that this run failed.');
+  assert.strictEqual(view.state.guidance, 'The reason it gave: labels could not be applied');
+  assert.strictEqual(view.state.tone, 'bad');
+});
+
+test('a process failure still reads as stopped early, and a success is untouched', () => {
+  const failed = declaredModel.describeRun({ ...base, status: 'failed', error: 'exit 1' });
+  assert.strictEqual(failed.state.chip, declaredModel.RUN_STATES.failed.chip);
+  assert.notStrictEqual(failed.state.chip, 'Reported failed');
+  const ok = declaredModel.describeRun({ ...base, status: 'succeeded', error: null });
+  assert.strictEqual(ok.state.chip, declaredModel.RUN_STATES.succeeded.chip);
+  // `declared` means nothing on any status but failed.
+  const odd = declaredModel.describeRun({ ...base, status: 'succeeded', declared: true, error: null });
+  assert.strictEqual(odd.state.chip, declaredModel.RUN_STATES.succeeded.chip);
+});

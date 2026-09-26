@@ -1,6 +1,6 @@
 # Map view performance, measured
 
-MP-16 asks for performance to be **recorded, not asserted**: the draw pass at
+The map criteria ask for performance to be **recorded, not asserted**: the draw pass at
 rest under 16 ms per frame as the median of 60 frames, and the layout ticking
 on its timer without blocking input.
 
@@ -25,7 +25,7 @@ The readout at the foot of the canvas carries the numbers. `PERF_FRAMES` in
 ## Measured 2026-09-19
 
 Apple Silicon Mac, Chrome, foreground window, a real 4,987-file workspace,
-which is larger than the 4,000-file workspace MP-16 names. Two consecutive
+which is larger than the 4,000-file workspace the criteria name. Two consecutive
 reloads:
 
 | | run 1 | run 2 |
@@ -39,10 +39,10 @@ reloads:
 
 **The input clause passes in practice, and the arithmetic alone would say
 otherwise.** A 23.7 ms tick overruns a 16.7 ms frame, so on paper the settling
-period drops frames. It does not read that way, for a reason the owner
+period drops frames. It does not read that way, for a reason manual testing
 observed and the numbers then explain: the picture reaches its final shape
 long before alpha decays to rest, so the great majority of those 572 ticks
-move nodes imperceptibly. Verified by the owner in a foreground window: no
+move nodes imperceptibly. Verified by hand in a foreground window: no
 stickiness on open.
 
 The 573-tick settle is deliberate. `alphaDecay` is lowered for large graphs on

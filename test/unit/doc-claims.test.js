@@ -151,7 +151,7 @@ describe('the workspace boundary says what it enforces, per platform', () => {
   });
 
   test('the copy does not claim the command check sees every visible target', () => {
-    // Four review rounds failed the same criterion, each on a different
+    // Four reviews failed the same criterion, each on a different
     // spelling written plainly in the command and not carded. The
     // implementation improved every round and the claim kept failing, because
     // reading a shell command without running it has no complete answer. What
@@ -830,5 +830,71 @@ describe('ROUTINES.md: running a routine now, and consent as change-consent', ()
     assert.match(section, /prompt/, 'the page names the prompt');
     assert.match(section, /skill/, 'the skill');
     assert.match(section, /where it runs/, 'and the run target as what lapses it');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// docs/PACKAGES.md: what a receipt records
+// ---------------------------------------------------------------------------
+
+describe('PACKAGES.md: the receipt and its fingerprints', () => {
+  // The page names where receipts live and says written and unchanged entries
+  // carry a fingerprint of the bytes as written. Both halves are read from
+  // the code that writes them: the directory from the writer's own constant,
+  // and the fingerprint from a real apply, recomputed from disk.
+  const doc = fs.readFileSync(path.join(ROOT, 'docs', 'PACKAGES.md'), 'utf8');
+  const apply = require('../../lib/packages/import-apply.js');
+
+  test('the receipts directory the page names is the one the writer uses', () => {
+    assert.ok(doc.includes(`\`${apply.RECEIPTS_DIR}/<date>-<run>.json\``), 'the page names the writer\'s directory');
+  });
+
+  test('a written entry carries the fingerprint of what landed, and a skipped one carries none', () => {
+    assert.match(doc, /\(`written` or `unchanged`\) also records `fingerprint`/);
+    assert.match(doc, /A skipped or blocked entry has none/);
+    const workspace = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'doc-fp-ws-'));
+    const source = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'doc-fp-src-'));
+    try {
+      fs.mkdirSync(path.join(source, '.claude', 'skills', 'notes'), { recursive: true });
+      fs.writeFileSync(path.join(source, '.claude', 'skills', 'notes', 'SKILL.md'), 'Take notes.\n');
+      fs.mkdirSync(path.join(source, '.claude', 'skills', 'kept'), { recursive: true });
+      fs.writeFileSync(path.join(source, '.claude', 'skills', 'kept', 'SKILL.md'), 'New.\n');
+      fs.mkdirSync(path.join(workspace, '.claude', 'skills', 'kept'), { recursive: true });
+      fs.writeFileSync(path.join(workspace, '.claude', 'skills', 'kept', 'SKILL.md'), 'Mine.\n');
+      const { buildPlan, decide } = require('../../lib/packages/import-plan.js');
+      const plan = buildPlan(workspace, source, { id: 'github.com/example/doc', reference: 'v1.0.0' });
+      const result = apply.applyImport(workspace, source, decide(plan, { 'skill:notes': 'add', 'skill:kept': 'skip' }), { receipt: {} });
+      const receipt = JSON.parse(fs.readFileSync(path.join(workspace, result.receipt), 'utf8'));
+      const byId = Object.fromEntries(receipt.items.map((i) => [i.id, i]));
+      assert.strictEqual(byId['skill:notes'].fingerprint, apply.digestDirectory(path.join(workspace, '.claude', 'skills', 'notes')));
+      assert.ok(!('fingerprint' in byId['skill:kept']));
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+      fs.rmSync(source, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('PACKAGES.md: the starter file consent wording is the offer\'s own', () => {
+  // The page quotes what the offer says about starter files. Both quotes are
+  // produced here by the install model from a real plan, so a change to the
+  // wording on screen without the page (or the reverse) fails.
+  const doc = fs.readFileSync(path.join(ROOT, 'docs', 'PACKAGES.md'), 'utf8');
+  const model = require('../../public/packages-install-model.js');
+  const quoted = (line) => doc.includes(`> ${line}`);
+
+  test('both quoted sentences are what the offer says', () => {
+    const offerFor = (starters) => model.offerCopy({ agents: 1, skills: 0, routines: [], starters, plan: { items: [] } }).body;
+    const arriving = offerFor([{ path: 'Investments/Portfolio.md', kept: false }, { path: 'Investments/Watchlist.md', kept: false }]);
+    const kept = offerFor([{ path: 'Investments/Portfolio.md', kept: true }]);
+    const first = arriving.slice(arriving.indexOf('Starter files:'));
+    const second = kept.slice(kept.indexOf('Already in your workspace'));
+    assert.ok(quoted(first), `the page quotes the offer: ${first}`);
+    assert.ok(quoted(second), `the page quotes the kept line: ${second}`);
+  });
+
+  test('the folder the page names is the one discovery reads', () => {
+    const { STARTER_DIR } = require('../../lib/packages/import-apply.js');
+    assert.ok(doc.includes(`\`${STARTER_DIR}/<path>\``));
   });
 });

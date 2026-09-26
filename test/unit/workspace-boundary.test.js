@@ -1539,7 +1539,7 @@ describe('code mode and the answer files', () => {
 // runtime with. The runtime refuses every write to it: under acceptEdits,
 // through a file tool and through a shell redirect, and no permission rule
 // inside that file unlocks it, not even `Edit(**)`. So an Allow there cannot be
-// honoured, and the owner met exactly that: card shown, approval recorded,
+// honoured, and a user met exactly that: card shown, approval recorded,
 // write refused, agent reporting "not approved".
 //
 // The two `.rundock/` files have no such floor. An agent edits them freely and

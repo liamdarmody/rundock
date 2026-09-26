@@ -30,9 +30,12 @@
 //                  "crashTail": "...",  // final stdout fragment, no newline,
 //                                       // left in the server's line buffer
 //                  "turn": [ { "text": "..." },
-//                            { "agentTool": { "subagent_type": "penn", "prompt": "..." } },
+//                            { "agentTool": { "subagent_type": "wren", "prompt": "..." } },
 //                            { "tool": { "name": "Read", "input": {...} } },
-//                            { "raw": { ...literal envelope... } } ] } ] }
+//                            { "raw": { ...literal envelope... } } ],
+//                  "webFetch": "http://..." } ] }  // a real HTTP request from this
+//                                                  // process first, reported as a
+//                                                  // WebFetch call and its status
 // First matching rule wins; rules are re-read from disk on every message so
 // tests can rewrite the script mid-scenario. The stub also appends every
 // invocation to `stub-invocations.jsonl` (cwd) for spawn-arg assertions.
@@ -375,6 +378,17 @@ function handleUserMessage(content) {
     };
     if (rule.delayMs) setTimeout(die, rule.delayMs);
     else die();
+    return;
+  }
+  // `webFetch: <url>`: the model asked for WebFetch, and the tool ran. The
+  // real CLI runs its tools in its own process, so this stub does exactly
+  // that: a real HTTP request from this process, reported in the stream as a
+  // WebFetch tool call and a line naming the status it got back.
+  if (rule.webFetch) {
+    const url = String(rule.webFetch);
+    fetch(url).then((r) => `WEBFETCH-STATUS ${r.status}`, (e) => `WEBFETCH-ERROR ${e.message}`).then((line) => {
+      emitTurn({ ...rule, turn: [{ tool: { name: 'WebFetch', input: { url, prompt: 'read it' } } }, { text: line }, ...(rule.turn || [])] }, content);
+    });
     return;
   }
   const delay = rule.delayMs || 0;

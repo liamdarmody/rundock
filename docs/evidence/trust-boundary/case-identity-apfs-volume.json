@@ -1,0 +1,23 @@
+{
+ "platform": "darwin",
+ "surface": "a case-insensitive APFS volume created for this run",
+ "checks": [
+  {
+   "name": "(instrument) the surface is case-insensitive",
+   "ok": true
+  },
+  {
+   "name": "(instrument) both case variants of the note exist as the note",
+   "ok": true
+  },
+  {
+   "name": "every case variant of the note is refused as the note itself, never handed",
+   "ok": true
+  },
+  {
+   "name": "an ordinary listed file beside them is still handed",
+   "ok": true
+  }
+ ],
+ "ok": true
+}

@@ -30,6 +30,8 @@ scripts/screenshots/.banned-tokens.json
 
 # Local pre-commit gate record: names the tree the checks passed on.
 .precommit-gate.json
+# The same record kept per tree, so any gated tree's record can be found later.
+.precommit-gate/
 
 # Written while a mutation harness holds a source file broken, and removed when
 # it puts the file back. It survives only a run that was killed outright, which
@@ -48,3 +50,7 @@ scripts/screenshots/.banned-tokens.json
 .rundock/
 .mutation-scope.json
 .mutation-runs/
+
+# Release walk output: screenshots and the report attached to the release PR.
+# Rebuilt on every run, local to the machine that walked.
+.walk/

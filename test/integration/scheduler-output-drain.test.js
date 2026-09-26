@@ -220,7 +220,7 @@ test('a routine whose output floods the pipe completes, records its outcome, and
   assert.ok(quietOut[0].stderrBytes < FINISHED_WHEN_PIPED,
     `and ${quietOut[0].stderrBytes} on stderr, for the same reason`);
 
-  // AC-1 and AC-2: it finished, and the outcome reached both stores in their
+  // It finished, and the outcome reached both stores in their
   // own vocabularies.
   assert.strictEqual(h.internal.routineState[LOUD].status, 'completed',
     'the routine state recorded a completed run');

@@ -469,8 +469,8 @@ describe('a routine reaching a file through save_agent meets the step, not the g
 describe('the connectors tab edits the file the runtime reads', () => {
   const MCP = JSON.stringify({
     mcpServers: {
-      notion: { command: 'npx', args: ['-y', '@notionhq/notion-mcp-server'], env: { NOTION_TOKEN: 'x' } },
-      granola: { url: 'https://mcp.granola.ai/mcp' },
+      notes: { command: 'npx', args: ['-y', '@example/notes-mcp-server'], env: { NOTES_TOKEN: 'x' } },
+      calendar: { url: 'https://mcp.example.com/mcp' },
     },
   }, null, 2);
 
@@ -478,13 +478,13 @@ describe('the connectors tab edits the file the runtime reads', () => {
     const state = settings.connectorsParse(MCP);
     assert.strictEqual(state.servers.length, 2);
     const byName = Object.fromEntries(state.servers.map(srv => [srv.name, srv]));
-    assert.strictEqual(byName.notion.transport, 'command');
-    assert.match(byName.notion.target, /npx -y @notionhq\/notion-mcp-server/);
-    assert.deepStrictEqual(byName.notion.envKeys, ['NOTION_TOKEN'], 'keys are named');
-    assert.strictEqual(byName.granola.transport, 'url');
+    assert.strictEqual(byName.notes.transport, 'command');
+    assert.match(byName.notes.target, /npx -y @example\/notes-mcp-server/);
+    assert.deepStrictEqual(byName.notes.envKeys, ['NOTES_TOKEN'], 'keys are named');
+    assert.strictEqual(byName.calendar.transport, 'url');
     const html = settings.connectorsSectionHtml(state);
-    assert.doesNotMatch(html, /NOTION_TOKEN.*x|"x"/, 'and values never reach the page');
-    assert.match(html, /NOTION_TOKEN/, 'while the key itself is stated');
+    assert.doesNotMatch(html, /NOTES_TOKEN.*x|"x"/, 'and values never reach the page');
+    assert.match(html, /NOTES_TOKEN/, 'while the key itself is stated');
     assert.match(html, /travels with this folder/, 'scope is a meaning, not a badge');
   });
 
@@ -679,28 +679,28 @@ describe('the connectors tab edits the file the runtime reads', () => {
       'name = "playwright-trace"',
       'enabled = false',
       '',
-      '[mcp_servers.notion]',
+      '[mcp_servers.notes]',
       'command = "npx"',
-      'args = ["-y", "@notionhq/notion-mcp-server"]',
+      'args = ["-y", "@example/notes-mcp-server"]',
       'env_vars = ["OPENAPI_MCP_HEADERS"]',
       'enabled = false',
       '',
-      '[mcp_servers.mailerlite]',
-      'url = "https://mcp.mailerlite.com/mcp"',
+      '[mcp_servers.newsletter]',
+      'url = "https://mcp.example.com/mcp"',
       'enabled = true',
       '',
-      '[projects."/Users/liam/vault"]',
+      '[projects."/Users/me/vault"]',
       'trust_level = "trusted"',
     ].join('\n');
     const parsed = settings.connectorsParseToml(toml);
     assert.strictEqual(parsed.servers.length, 2, 'the skills table and the projects table are not connectors');
     const byName = Object.fromEntries(parsed.servers.map((s) => [s.name, s]));
-    assert.strictEqual(byName.notion.transport, 'command');
-    assert.match(byName.notion.target, /npx -y @notionhq\/notion-mcp-server/);
-    assert.deepStrictEqual(byName.notion.envKeys, ['OPENAPI_MCP_HEADERS'],
+    assert.strictEqual(byName.notes.transport, 'command');
+    assert.match(byName.notes.target, /npx -y @example\/notes-mcp-server/);
+    assert.deepStrictEqual(byName.notes.envKeys, ['OPENAPI_MCP_HEADERS'],
       'env_vars names the credential Codex copies in, and is read as a key name, not a value');
-    assert.strictEqual(byName.mailerlite.transport, 'url');
-    assert.strictEqual(byName.mailerlite.target, 'https://mcp.mailerlite.com/mcp');
+    assert.strictEqual(byName.newsletter.transport, 'url');
+    assert.strictEqual(byName.newsletter.target, 'https://mcp.example.com/mcp');
   });
 
   test('a missing Codex config is an offer; a config that reads but names nothing is neither an error', () => {
@@ -714,10 +714,10 @@ describe('the connectors tab edits the file the runtime reads', () => {
 
   test('~/.claude.json is read the same shape as .mcp.json, but names itself when it is broken', () => {
     const parsed = settings.connectorsParseUserGlobalJson(JSON.stringify({
-      mcpServers: { goldfish: { command: '/Applications/Goldfish.app/Contents/MacOS/goldfish-mcp', args: [], type: 'stdio' } },
+      mcpServers: { memory: { command: '/Applications/Memory.app/Contents/MacOS/memory-mcp', args: [], type: 'stdio' } },
     }));
     assert.strictEqual(parsed.servers.length, 1);
-    assert.strictEqual(parsed.servers[0].name, 'goldfish');
+    assert.strictEqual(parsed.servers[0].name, 'memory');
     assert.strictEqual(parsed.servers[0].transport, 'command');
     const broken = settings.connectorsParseUserGlobalJson('{ not json');
     assert.match(broken.error, /~\/\.claude\.json/, 'the broken file names itself, not the unrelated workspace .mcp.json');
@@ -726,46 +726,46 @@ describe('the connectors tab edits the file the runtime reads', () => {
   describe('one row per connector name, merged across every source that defines it', () => {
     const claudeWorkspace = settings.connectorsParse(JSON.stringify({
       mcpServers: {
-        notion: { command: '/abs/run-with-vault-env.sh', args: ['OPENAPI_MCP_HEADERS', 'node', 'cli.mjs'] },
-        getlogos: { command: 'npx', args: ['-y', 'getlogos@0.1.2', '--mcp'] },
+        notes: { command: '/abs/run-with-vault-env.sh', args: ['OPENAPI_MCP_HEADERS', 'node', 'cli.mjs'] },
+        logos: { command: 'npx', args: ['-y', 'logos-tool@0.1.2', '--mcp'] },
       },
     }));
     const codexWorkspace = settings.connectorsParseToml([
-      '[mcp_servers.notion]',
+      '[mcp_servers.notes]',
       'command = "npx"',
-      'args = ["-y", "@notionhq/notion-mcp-server"]',
+      'args = ["-y", "@example/notes-mcp-server"]',
       'env_vars = ["OPENAPI_MCP_HEADERS"]',
       '',
-      '[mcp_servers.mailerlite]',
-      'url = "https://mcp.mailerlite.com/mcp"',
+      '[mcp_servers.newsletter]',
+      'url = "https://mcp.example.com/mcp"',
     ].join('\n'));
     const claudeUserGlobal = settings.connectorsParseUserGlobalJson(JSON.stringify({
-      mcpServers: { goldfish: { command: '/Applications/Goldfish.app/Contents/MacOS/goldfish-mcp', args: [] } },
+      mcpServers: { memory: { command: '/Applications/Memory.app/Contents/MacOS/memory-mcp', args: [] } },
     }));
     const codexUserGlobal = settings.connectorsParseToml(null);
     const sources = { claudeWorkspace, codexWorkspace, claudeUserGlobal, codexUserGlobal };
 
     test('four names across four sources produce four rows, each naming every runtime that reaches it', () => {
       const rows = settings.connectorsBuildRows(sources);
-      assert.strictEqual(rows.length, 4, 'notion, getlogos, mailerlite, goldfish: one row per name, not one per file');
+      assert.strictEqual(rows.length, 4, 'notes, logos, newsletter, memory: one row per name, not one per file');
       const byName = Object.fromEntries(rows.map((r) => [r.name, r]));
-      assert.deepStrictEqual(byName.notion.runtimes.slice().sort(), ['claude', 'codex'],
-        'notion is defined by both runtimes and reached by both');
-      assert.deepStrictEqual(byName.getlogos.runtimes, ['claude'], 'defined only in the workspace Claude Code source');
-      assert.deepStrictEqual(byName.mailerlite.runtimes, ['codex']);
-      assert.deepStrictEqual(byName.goldfish.scopes, ['user-global'],
+      assert.deepStrictEqual(byName.notes.runtimes.slice().sort(), ['claude', 'codex'],
+        'notes is defined by both runtimes and reached by both');
+      assert.deepStrictEqual(byName.logos.runtimes, ['claude'], 'defined only in the workspace Claude Code source');
+      assert.deepStrictEqual(byName.newsletter.runtimes, ['codex']);
+      assert.deepStrictEqual(byName.memory.scopes, ['user-global'],
         'the user-global connector is scoped to this machine, not the workspace');
     });
 
     test('a row carries a badge for every runtime that reaches it, and no badge for one that does not', () => {
       const rows = settings.connectorsBuildRows(sources);
       const byName = Object.fromEntries(rows.map((r) => [r.name, r]));
-      const notionHtml = settings.connectorsRowHtml(byName.notion);
-      assert.match(notionHtml, /Claude Code/, 'notion is reached by Claude Code');
-      assert.match(notionHtml, /Codex/, 'and by Codex');
-      const goldfishHtml = settings.connectorsRowHtml(byName.goldfish);
-      assert.match(goldfishHtml, /Claude Code/);
-      assert.doesNotMatch(goldfishHtml, /Codex/, 'no Codex source names goldfish, so it carries no Codex badge');
+      const notesHtml = settings.connectorsRowHtml(byName.notes);
+      assert.match(notesHtml, /Claude Code/, 'notes is reached by Claude Code');
+      assert.match(notesHtml, /Codex/, 'and by Codex');
+      const memoryHtml = settings.connectorsRowHtml(byName.memory);
+      assert.match(memoryHtml, /Claude Code/);
+      assert.doesNotMatch(memoryHtml, /Codex/, 'no Codex source names memory, so it carries no Codex badge');
     });
 
     test('the tab still shows what it read even when one of the four sources could not be', () => {
@@ -775,7 +775,7 @@ describe('the connectors tab edits the file the runtime reads', () => {
       });
       const html = settings.connectorsSectionHtml(withOneBroken);
       assert.match(html, /Could not read ~\/\.codex\/config\.toml/, 'the broken source is named');
-      assert.match(html, /notion/, 'and the sources that DID read still render their rows');
+      assert.match(html, /notes/, 'and the sources that DID read still render their rows');
       assert.doesNotMatch(html, /No connectors configured/, 'never dressed as an empty workspace over data three sources actually returned');
     });
   });
@@ -783,27 +783,27 @@ describe('the connectors tab edits the file the runtime reads', () => {
   describe('drift: the same name, defined differently by the two runtimes', () => {
     test('a connector whose shape differs between runtimes is flagged, with both definitions shown', () => {
       const claudeWorkspace = settings.connectorsParse(JSON.stringify({
-        mcpServers: { notion: { command: '/abs/run-with-vault-env.sh', args: ['OPENAPI_MCP_HEADERS', 'node', 'cli.mjs'] } },
+        mcpServers: { notes: { command: '/abs/run-with-vault-env.sh', args: ['OPENAPI_MCP_HEADERS', 'node', 'cli.mjs'] } },
       }));
-      const codexWorkspace = settings.connectorsParseToml('[mcp_servers.notion]\ncommand = "npx"\nargs = ["-y", "@notionhq/notion-mcp-server"]\n');
+      const codexWorkspace = settings.connectorsParseToml('[mcp_servers.notes]\ncommand = "npx"\nargs = ["-y", "@example/notes-mcp-server"]\n');
       const empty = { servers: [], missing: true, error: null };
       const rows = settings.connectorsBuildRows({ claudeWorkspace, codexWorkspace, claudeUserGlobal: empty, codexUserGlobal: empty });
       assert.strictEqual(rows.length, 1);
       const [row] = rows;
       assert.ok(row.drift, 'nothing else in the product would ever have said these two disagree');
-      assert.strictEqual(row.drift.claude.target, byTarget(claudeWorkspace, 'notion'));
-      assert.strictEqual(row.drift.codex.target, byTarget(codexWorkspace, 'notion'));
+      assert.strictEqual(row.drift.claude.target, byTarget(claudeWorkspace, 'notes'));
+      assert.strictEqual(row.drift.codex.target, byTarget(codexWorkspace, 'notes'));
       const html = settings.connectorsRowHtml(row);
       assert.match(html, /do not agree/i);
       assert.match(html, /run-with-vault-env\.sh/, 'the Claude Code definition is shown');
-      assert.match(html, /npx -y @notionhq\/notion-mcp-server/, 'and the Codex definition is shown beside it');
+      assert.match(html, /npx -y @example\/notes-mcp-server/, 'and the Codex definition is shown beside it');
     });
 
     test('two runtimes that agree on shape draw no drift note', () => {
       const claudeWorkspace = settings.connectorsParse(JSON.stringify({
-        mcpServers: { getlogos: { command: 'npx', args: ['-y', 'getlogos@0.1.2', '--mcp'] } },
+        mcpServers: { logos: { command: 'npx', args: ['-y', 'logos-tool@0.1.2', '--mcp'] } },
       }));
-      const codexWorkspace = settings.connectorsParseToml('[mcp_servers.getlogos]\ncommand = "npx"\nargs = ["-y", "getlogos@0.1.2", "--mcp"]\n');
+      const codexWorkspace = settings.connectorsParseToml('[mcp_servers.logos]\ncommand = "npx"\nargs = ["-y", "logos-tool@0.1.2", "--mcp"]\n');
       const empty = { servers: [], missing: true, error: null };
       const rows = settings.connectorsBuildRows({ claudeWorkspace, codexWorkspace, claudeUserGlobal: empty, codexUserGlobal: empty });
       assert.strictEqual(rows[0].drift, null);
@@ -820,15 +820,18 @@ describe('the connectors tab edits the file the runtime reads', () => {
   // ~/.claude.json is the one named explicitly because it can hold OAuth
   // material, not just key names.
   test('a value in ~/.claude.json never reaches the page, only its credential key name', () => {
+    // Token-shaped, and assembled at run time so this file never carries the
+    // shape the repository's personal-data check refuses.
+    const token = ['sk', 'test-not-a-real-key-9f2a'].join('-');
     const claudeUserGlobal = settings.connectorsParseUserGlobalJson(JSON.stringify({
-      mcpServers: { goldfish: { command: 'goldfish-mcp', args: [], env: { GOLDFISH_TOKEN: 'sk-live-do-not-print-this-9f2a' } } },
+      mcpServers: { memory: { command: 'memory-mcp', args: [], env: { MEMORY_TOKEN: token } } },
     }));
-    assert.deepStrictEqual(claudeUserGlobal.servers[0].envKeys, ['GOLDFISH_TOKEN']);
+    assert.deepStrictEqual(claudeUserGlobal.servers[0].envKeys, ['MEMORY_TOKEN']);
     const empty = { servers: [], missing: true, error: null };
     const state = settings.connectorsBuildState({ claudeWorkspace: empty, codexWorkspace: empty, claudeUserGlobal, codexUserGlobal: empty });
     const html = settings.connectorsSectionHtml(state);
-    assert.match(html, /GOLDFISH_TOKEN/, 'the key is named');
-    assert.doesNotMatch(html, /sk-live-do-not-print-this-9f2a/, 'and its value never reaches the page');
+    assert.match(html, /MEMORY_TOKEN/, 'the key is named');
+    assert.ok(!html.includes(token), 'and its value never reaches the page');
   });
 
   test('the account tier is named with a real link, and no status is claimed for it', () => {

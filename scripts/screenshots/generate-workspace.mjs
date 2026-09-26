@@ -46,9 +46,9 @@ export const ROSTER = [
   { id: 'cleo',  displayName: 'Cleo',  role: 'Content Lead',        type: 'specialist',   order: 1, reportsTo: 'cos',  colour: '#6B9EF0', icon: '✎',
     description: 'Cleo owns the content pipeline from idea to publish-ready draft.' },
   { id: 'dev',   displayName: 'Dev',   role: 'Engineering Lead',    type: 'specialist',   order: 2, reportsTo: 'cos',  colour: '#6BC67E', icon: '◎',
-    description: 'Dev owns delivery: specs, implementation, and shipping working software in small, reviewed slices.' },
+    description: 'Dev leads delivery: specs, implementation, and shipping working software in small, reviewed slices.' },
   { id: 'des',   displayName: 'Des',   role: 'Design Lead',         type: 'specialist',   order: 3, reportsTo: 'cos',  colour: '#E8A84C', icon: '◇',
-    description: 'Des owns visual execution across the product surface, from layouts to finished assets.' },
+    description: 'Des leads visual execution across the product surface, from layouts to finished assets.' },
   { id: 'reese', displayName: 'Reese', role: 'Research Lead',       type: 'specialist',   order: 4, reportsTo: 'cos',  colour: '#A07AE8', icon: '✦',
     description: 'Reese tracks the market and the competitive landscape and turns signal into briefs.' },
   { id: 'glen',  displayName: 'Glen',  role: 'Growth Lead',         type: 'specialist',   order: 5, reportsTo: 'cos',  colour: '#E87AAC', icon: '⬡',
@@ -94,7 +94,7 @@ export const SKILLS = [
 ];
 
 // Which skills each agent carries. Every lead owns two or three; a report never
-// carries more than its lead (Dev owns three, Cody two). Sharing is realistic:
+// carries more than its lead (Dev carries three, Cody two). Sharing is realistic:
 // content-planner sits with both Cleo and Ana, competitor-scan with Reese and
 // Glen, the engineering skills with both Dev and Cody.
 const AGENT_SKILLS = {
@@ -263,7 +263,7 @@ export function markdownReviewNoteContent() {
 export const DEFAULT_BANNED_TOKENS = [
   'liamdarmody', 'darmody', 'liam darmody',
   'obsidian vault', 'obsidian vaults',
-  'agent-workspace', 'agent workspace', 'liam-agent-workspace',
+  'agent-workspace', 'agent workspace',
   'personal os',
 ];
 
@@ -271,7 +271,7 @@ export const DEFAULT_BANNED_TOKENS = [
 export const LOCAL_BANNED_TOKENS_FILE = path.join(__dirname, '.banned-tokens.json');
 
 // True when a project-specific token source (env or local file) is configured.
-// The defaults alone catch the owner's own markers; private team names, client
+// The defaults alone catch a default set of markers; private team names, client
 // names, and connected-tool names are expected to come from one of these.
 export function hasProjectBannedTokens() {
   return Boolean(process.env.RUNDOCK_BANNED_TOKENS) || fs.existsSync(LOCAL_BANNED_TOKENS_FILE);

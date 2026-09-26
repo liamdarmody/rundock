@@ -6,7 +6,7 @@
 //   review folder at the repo root.
 //
 // Nothing is written into the README/docs/, Rundock Site, or rundock-docs.
-// Liam reviews screenshots-out/ and cherry-picks; wiring the target repos
+// A person reviews screenshots-out/ and cherry-picks; wiring the target repos
 // comes later.
 
 import fs from 'node:fs';

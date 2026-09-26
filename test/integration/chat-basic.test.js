@@ -127,7 +127,7 @@ describe('interactive chat', () => {
     h.clearInvocations();
     h.writeScenario([
       { match: { agent: 'lead-designer' }, turn: [{ text: 'Des here.' }] },
-      { match: { agent: 'content-lead' }, turn: [{ text: 'Penn here.' }] },
+      { match: { agent: 'content-lead' }, turn: [{ text: 'Wren here.' }] },
     ]);
     client.send({ type: 'chat', conversationId: convoId, agent: 'lead-designer', content: 'hi des' });
     await client.waitForEvent('system', 'done', convoId);
@@ -135,7 +135,7 @@ describe('interactive chat', () => {
     // stdin is writable, so the server pushes the follow-up to the SAME
     // process (agent pinning is by conversation, not by msg.agent). Pinned:
     const sinceIdx = client.messages.length;
-    client.send({ type: 'chat', conversationId: convoId, agent: 'content-lead', content: 'now penn please' });
+    client.send({ type: 'chat', conversationId: convoId, agent: 'content-lead', content: 'now wren please' });
     await client.waitFor(m => m.type === 'result' && m._conversationId === convoId, { since: sinceIdx, label: 'second result' });
     assert.strictEqual(h.readInvocations().length, 1, 'pinned as-is: follow-up reuses the existing process even when msg.agent changes');
   });
@@ -192,7 +192,7 @@ describe('workspace + roster messages', () => {
     await client.waitFor(m => m.type === 'workspace_error', { since, label: 'mode error' });
 
     client.send({ type: 'set_workspace_mode', mode: 'knowledge' });
-    await client.waitFor(m => m.type === 'workspace_mode_changed' && m.mode === 'knowledge', { since, label: 'mode back' });
+    await client.waitFor(m => m.type === 'workspace_mode_changed' && m.mode === 'notes', { since, label: 'mode back, stored as notes' });
   });
 
   test('code mode spawn: no --disallowed-tools, RUNDOCK_CODE_MODE=1 in env', async () => {
@@ -206,7 +206,7 @@ describe('workspace + roster messages', () => {
     const inv = h.readInvocations()[0];
     assert.ok(!inv.argv.includes('--disallowed-tools'), 'code mode lifts file-type restrictions');
     assert.strictEqual(inv.env.RUNDOCK_CODE_MODE, '1');
-    client.send({ type: 'set_workspace_mode', mode: 'knowledge' });
-    await client.waitFor(m => m.type === 'workspace_mode_changed' && m.mode === 'knowledge', { label: 'back to knowledge' });
+    client.send({ type: 'set_workspace_mode', mode: 'notes' });
+    await client.waitFor(m => m.type === 'workspace_mode_changed' && m.mode === 'notes', { label: 'back to notes' });
   });
 });

@@ -90,3 +90,33 @@ test('file reads resolve the workspace at USE time: a switch redirects the next 
     fs.rmSync(wsB, { recursive: true, force: true });
   }
 });
+
+// The app page confines every frame on it to its own origin. That header is
+// what stops an extension frame navigating itself away with a file in browser
+// mode, measured in the confinement e2e; this pins that the page is actually
+// served with it, on every spelling of the page's URL.
+test('the app page is served with the frame policy that confines extension frames', () => {
+  const router = freshRouter();
+  for (const url of ['/', '/index.html', '/?x=1', '/index.html?x=1']) {
+    const res = fakeRes();
+    router.handleHttpRequest({ url, method: 'GET' }, res);
+    assert.strictEqual(res.calls.writeHead[0][1]['Content-Security-Policy'], router.PAGE_FRAME_POLICY, url);
+  }
+  assert.strictEqual(router.PAGE_FRAME_POLICY, "frame-src 'self'",
+    'one directive: frames may load only from this origin');
+});
+
+// Rundock UI's gallery page frames extension documents too, so it is served
+// under the same frame policy as the app page, and it is the page the docs
+// link to.
+test('the Rundock UI gallery is served, under the same frame policy', () => {
+  const router = freshRouter();
+  const res = fakeRes();
+  router.handleHttpRequest({ url: '/rundock-ui/gallery', method: 'GET' }, res);
+  assert.strictEqual(res.calls.writeHead[0][0], 200);
+  assert.strictEqual(res.calls.writeHead[0][1]['Content-Type'], 'text/html');
+  assert.strictEqual(res.calls.writeHead[0][1]['Content-Security-Policy'], router.PAGE_FRAME_POLICY);
+  const page = String(res.calls.end[0]);
+  assert.ok(page.includes('<script type="module" src="/rundock-ui-gallery.js"></script>'), 'the page loads the gallery');
+  assert.ok(page.includes('data-rundock-ui'), 'the page links the Rundock UI stylesheet the host reads');
+});

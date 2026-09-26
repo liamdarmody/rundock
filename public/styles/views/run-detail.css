@@ -67,7 +67,7 @@
 .rd-chip.ok { color: var(--success); font-weight: 600; }
 /* A run that started and did not get through. Full weight, danger, because
    something is wrong and a user has a decision to make. */
-.rd-chip.bad { color: var(--danger); font-weight: 600; }
+.rd-chip.bad { color: var(--danger-text); font-weight: 600; }
 /* A run still going. Its own colour, because "not settled yet" is not an
    outcome and must not borrow one. */
 .rd-chip.live { color: var(--working); font-weight: 500; }

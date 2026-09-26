@@ -24,7 +24,7 @@
 // it is CLICKED as markup cut out of index.html. Calling openRunDetail
 // directly would prove the function works and prove nothing about whether any
 // reader can reach it, which is the exact habit that cost two cards five
-// review rounds each.
+// reviews each.
 process.env.TZ = 'Europe/London';
 
 const { test, describe } = require('node:test');

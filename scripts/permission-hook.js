@@ -1289,7 +1289,7 @@ process.stdin.on('end', () => {
   // The runtime refuses every write to the settings file it was launched with:
   // under acceptEdits, through a file tool and through a shell redirect, and no
   // permission rule inside that file unlocks it, not even a blanket one. So a
-  // card here offers an Allow that cannot be honoured. The owner met exactly
+  // card here offers an Allow that cannot be honoured. A user met exactly
   // that: the card appeared, the approval was recorded, the write was refused
   // anyway, and the agent reported it as "not approved". A prompt whose answer
   // cannot take effect is worse than no prompt, because it teaches that

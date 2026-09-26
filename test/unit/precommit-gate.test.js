@@ -21,7 +21,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const {
-  refusal, buildRecord, writeRecord, readRecord, currentTree, defaultBranch,
+  refusal, buildRecord, writeRecord, writeTreeRecord, readRecord, currentTree, defaultBranch,
   isReleaseCommit, RELEASE_FOOTPRINT, stagedPaths, STEPS,
 } = require('../../scripts/precommit-gate.js');
 
@@ -212,6 +212,21 @@ describe('the entry points, against a throwaway repository', () => {
     }
   });
 
+  test('a pass keeps the same record under the tree it passed, beside the main record', () => {
+    const { dir } = repoWithScripts(allStepsPass());
+    try {
+      const { code, out } = spawnGate([], dir);
+      assert.strictEqual(code, 0, out);
+      const main = fs.readFileSync(path.join(dir, '.precommit-gate.json'), 'utf8');
+      const tree = currentTree(dir);
+      assert.strictEqual(JSON.parse(main).tree, tree);
+      assert.strictEqual(fs.readFileSync(path.join(dir, '.precommit-gate', `${tree}.json`), 'utf8'), main,
+        'the kept record is the main record, byte for byte');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test('all steps passing writes a record for this tree and branch', () => {
     const { dir } = repoWithScripts(allStepsPass());
     try {
@@ -272,7 +287,7 @@ describe('the entry points, against a throwaway repository', () => {
   });
 
   test('a failing cheap phase is printed WHOLE, not tailed to its last lines', () => {
-    // GO-2 as a developer actually meets it. The previous guard matched a
+    // The gate as a developer actually meets it. The previous guard matched a
     // ternary in the source, which proves a ternary exists. This runs the real
     // gate against a first step that prints far more than the tail the other
     // steps are cut to, and requires the EARLIEST line to survive: that is the
@@ -341,11 +356,34 @@ describe('what the gate checks', () => {
   // Read through package.json rather than by matching a step's NAME, because
   // the name is the part that can be renamed while the gate quietly stops
   // measuring anything.
-  test('coverage floors are enforced by one of the steps', () => {
+  // THE RULE MOVED RATHER THAN RELAXED (2026-09-22). The floors used to be
+  // enforced here, and the guard above was right to insist somebody enforced
+  // them. What changed is who: the suite is now CI's, on Node 22 and 24 on a
+  // clean machine, with its own coverage job, and CI is the only copy that can
+  // block a merge. Running it locally as well was the largest single cost in
+  // this gate and answered a question CI answers better.
+  //
+  // So the guard is inverted and paired. The local gate must NOT run the
+  // enforcer, and CI MUST. Deleting the test with the step would have left the
+  // floors unowned by anything, which is the failure the original guard
+  // existed to prevent and would have looked identical from here.
+  test('the local gate does not run the suite, because CI owns it', () => {
     const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'package.json'), 'utf8'));
     const enforcing = STEPS.filter(step => (pkg.scripts[step.name] || '').includes('coverage-areas.js'));
-    assert.strictEqual(enforcing.length, 1,
-      'exactly one gate step runs the coverage floor enforcer: none means the floors are unmeasured, two means the suite runs twice');
+    assert.deepStrictEqual(enforcing.map(s => s.name), [],
+      'a gate step runs the coverage floor enforcer again: the suite is CI\'s, and running it here '
+      + 'is the duplicate that made this gate the slowest thing a change has to pass');
+  });
+
+  test('CI runs the suite and enforces the floors, so nothing has become unmeasured', () => {
+    // The other half, and the one that keeps the deletion honest. Read as text
+    // rather than parsed as YAML: this asserts the workflow still calls the
+    // script, and a parser would add a dependency to prove less.
+    const ci = fs.readFileSync(path.join(__dirname, '..', '..', '.github', 'workflows', 'ci.yml'), 'utf8');
+    assert.match(ci, /npm run test:coverage/,
+      'CI no longer runs test:coverage, so the coverage floors are now enforced by nothing at all');
+    assert.match(ci, /node: \['22', '24'\]/,
+      'CI no longer runs the suite across the Node matrix, which is the reason the local copy was dropped');
   });
 
   test('every step is a script this package really has', () => {
@@ -653,5 +691,55 @@ describe('the release commit, through the real entry point on real git', () => {
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('every gated tree keeps its own record', () => {
+  const tree = (n) => n.toString(16).padStart(40, '0');
+  const recordFor = (t) => buildRecord({ tree: t, branch: 'fix/card', at: '2026-09-24T00:00:00.000Z', timings: FIXTURE_TIMINGS });
+
+  test('the record is kept under its tree\'s name, byte for byte what the main record holds', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gate-trees-'));
+    try {
+      const main = path.join(dir, '.precommit-gate.json');
+      const kept = path.join(dir, '.precommit-gate');
+      const record = recordFor(tree(1));
+      writeRecord(record, main);
+      writeTreeRecord(record, kept);
+      assert.strictEqual(fs.readFileSync(path.join(kept, `${tree(1)}.json`), 'utf8'), fs.readFileSync(main, 'utf8'));
+      writeTreeRecord(recordFor(tree(2)), kept);
+      assert.deepStrictEqual(fs.readdirSync(kept).sort(), [`${tree(1)}.json`, `${tree(2)}.json`], 'a second tree is kept beside the first');
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test('only the most recent are kept, and nothing not named for a tree is ever removed', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gate-trees-'));
+    try {
+      fs.writeFileSync(path.join(dir, 'notes.txt'), 'mine');
+      const base = Date.now() / 1000 - 1000;
+      for (let i = 1; i <= 7; i += 1) {
+        writeTreeRecord(recordFor(tree(i)), dir, 5);
+        fs.utimesSync(path.join(dir, `${tree(i)}.json`), base + i, base + i);
+      }
+      writeTreeRecord(recordFor(tree(8)), dir, 5);
+      const left = fs.readdirSync(dir).sort();
+      assert.deepStrictEqual(left, ['notes.txt', ...[4, 5, 6, 7, 8].map((i) => `${tree(i)}.json`)].sort(), 'the five newest trees, and the unrelated file');
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test('a record without a full tree hash is refused, so no name can escape the folder', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gate-trees-'));
+    try {
+      for (const bad of ['abc', '../x', `${tree(1)}/..`, '']) {
+        assert.throws(() => writeTreeRecord({ ...recordFor(tree(1)), tree: bad }, dir), /full tree hash/, JSON.stringify(bad));
+      }
+      assert.deepStrictEqual(fs.readdirSync(dir), []);
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test('the gate keeps fifty', async () => {
+    const { TREE_RECORDS_KEPT, TREE_RECORDS } = require('../../scripts/precommit-gate.js');
+    assert.strictEqual(TREE_RECORDS_KEPT, 50);
+    assert.strictEqual(path.basename(TREE_RECORDS), '.precommit-gate');
   });
 });

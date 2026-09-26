@@ -19,9 +19,9 @@ function useWorkspace(opts) {
 }
 
 describe('detectWorkspaceMode', () => {
-  test('markdown-only workspace is knowledge', () => {
+  test('markdown-only workspace is notes', () => {
     const dir = makeWorkspace({ files: { 'notes.md': '# hi', 'Projects/idea.md': 'x' } });
-    assert.strictEqual(srv.detectWorkspaceMode(dir), 'knowledge');
+    assert.strictEqual(srv.detectWorkspaceMode(dir), 'notes');
   });
 
   test('top-level code extension flips to code', () => {
@@ -45,16 +45,16 @@ describe('detectWorkspaceMode', () => {
       'node_modules/pkg/index.js': 'x',
       'notes.md': 'x',
     } });
-    assert.strictEqual(srv.detectWorkspaceMode(dir), 'knowledge');
+    assert.strictEqual(srv.detectWorkspaceMode(dir), 'notes');
   });
 
   test('pinned as-is: code file TWO levels deep is not seen (scan is one level deep)', () => {
     const dir = makeWorkspace({ files: { 'a/b/deep.py': 'x' } });
-    assert.strictEqual(srv.detectWorkspaceMode(dir), 'knowledge');
+    assert.strictEqual(srv.detectWorkspaceMode(dir), 'notes');
   });
 
-  test('unreadable directory returns knowledge', () => {
-    assert.strictEqual(srv.detectWorkspaceMode('/nonexistent/nowhere'), 'knowledge');
+  test('unreadable directory returns notes', () => {
+    assert.strictEqual(srv.detectWorkspaceMode('/nonexistent/nowhere'), 'notes');
   });
 });
 
@@ -72,7 +72,7 @@ describe('isEmptyWorkspace', () => {
   test('user agents make it non-empty; platform/rundock-guide agents do not', () => {
     const dir = makeWorkspace({});
     assert.strictEqual(srv.isEmptyWorkspace(dir, [{ id: 'rundock-guide', type: 'platform' }]), true);
-    assert.strictEqual(srv.isEmptyWorkspace(dir, [{ id: 'penn', type: 'specialist' }]), false);
+    assert.strictEqual(srv.isEmptyWorkspace(dir, [{ id: 'wren', type: 'specialist' }]), false);
   });
 
   test('user skills make it non-empty; rundock-* skills do not', () => {
@@ -82,7 +82,7 @@ describe('isEmptyWorkspace', () => {
     assert.strictEqual(srv.isEmptyWorkspace(withUserSkill, []), false);
   });
 
-  // The Lucas Simonian incident (2026-04-30): an existing, well-organised
+  // Reported by a beta tester (2026-04-30): an existing, well-organised
   // Obsidian vault with no CLAUDE.md passed as "empty" and had the default
   // folder scaffold written into it. A workspace with real user structure
   // is not empty, whatever its CLAUDE.md status.

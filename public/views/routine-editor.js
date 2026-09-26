@@ -285,7 +285,7 @@
     // read as one more thing to click through rather than as punctuation. The
     // preview directly below it, and the confirmation line on the next step,
     // both still end in one: those ARE finished sentences, read once and not
-    // interacted with, which is where the owner's own reading of a full stop
+    // interacted with, which is where the house reading of a full stop
     // applies.
     h += '</select></span></div>';
 

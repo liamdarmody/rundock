@@ -1,9 +1,12 @@
 const { app, BrowserWindow, Menu, nativeImage, dialog, ipcMain, shell } = require('electron');
+const { installExtensionFrameGuards } = require('./extension-frame-guards');
+const { installExternalLinkGuards } = require('./external-links');
 const path = require('path');
 const fs = require('fs');
 const { execSync } = require('child_process');
 const buildContextMenuTemplate = require('./context-menu-template.js');
 const { resolveUpdateFeed } = require('./update-feed.js');
+const { resolveUserData } = require('./user-data.js');
 const { decideUpdateUi } = require('./update-state.js');
 const { reconcileOnLaunch, recordDownloaded } = require('./update-launches.js');
 
@@ -18,16 +21,25 @@ try {
 let mainWindow = null;
 let serverPort = null;
 
-// ===== SMOKE MODE ISOLATION =====
+// ===== PROFILE ISOLATION =====
 
-// The packaged-boot check (scripts/smoke-packaged.mjs) must not contend with
-// a real running Rundock: the single-instance lock is keyed on userData, so
-// without this a smoke run on a machine where Rundock is open loses the lock
-// and exits 0 silently, before any boot code runs. A disposable userData,
-// set BEFORE the lock is requested, gives smoke runs their own lock scope
-// and keeps them from ever touching the user's real state.
-if (process.env.RUNDOCK_SMOKE_TEST === '1') {
-  app.setPath('userData', path.join(require('os').tmpdir(), 'rundock-smoke-userdata'));
+// A run that must not contend with a real running Rundock gets a profile of
+// its own: the packaged-boot check (scripts/smoke-packaged.mjs) and any run
+// started with RUNDOCK_USER_DATA_DIR (electron/user-data.js). The
+// single-instance lock is keyed on userData, so without this such a run on a
+// machine where Rundock is open loses the lock and exits 0 silently, before
+// any boot code runs. The profile is set BEFORE the lock is requested, which
+// gives the run its own lock scope and keeps it from ever touching the
+// person's real state. A value that cannot be used stops the app rather than
+// falling back to the real profile.
+const userData = resolveUserData(process.env, require('os').tmpdir());
+if (userData.kind === 'invalid') {
+  console.error(`[Electron] ${userData.reason}. Not starting.`);
+  process.exit(1);
+}
+if (userData.kind === 'path') {
+  try { fs.mkdirSync(userData.path, { recursive: true }); } catch { /* setPath reports it */ }
+  app.setPath('userData', userData.path);
 }
 
 // ===== SINGLE INSTANCE =====
@@ -742,18 +754,24 @@ function createMainWindow(port) {
     console.log('[Electron] Page loaded successfully');
   });
 
-  // Prevent in-app navigation to external URLs; open them in the default browser
-  mainWindow.webContents.on('will-navigate', (event, url) => {
-    if (!url.startsWith(`http://localhost:${port}`)) {
-      event.preventDefault();
-      shell.openExternal(url);
-    }
+  // Frames running an extension's code may not leave, open peer connections,
+  // or make requests. Keyed to those frames only: see the module.
+  installExtensionFrameGuards(mainWindow.webContents, {
+    log: (m) => console.log(`[Electron] ${m}`),
+    // The frame never navigated, so tell the page, which ends the view and
+    // says why (window.rundockExtensionFrameLeft in public/views/files.js).
+    onBlocked: () => {
+      if (!mainWindow || mainWindow.isDestroyed()) return;
+      mainWindow.webContents.executeJavaScript('window.rundockExtensionFrameLeft && window.rundockExtensionFrameLeft()').catch(() => {});
+    },
   });
 
-  // Prevent target="_blank" links from opening a new Electron window
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url);
-    return { action: 'deny' };
+  // Every external link opens in the system browser, and the window never
+  // leaves the app's own page: see electron/external-links.js.
+  installExternalLinkGuards(mainWindow.webContents, {
+    appOrigin: `http://localhost:${port}`,
+    openExternal: (url) => shell.openExternal(url),
+    log: (m) => console.log(`[Electron] ${m}`),
   });
 
   mainWindow.on('closed', () => {

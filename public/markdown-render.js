@@ -89,6 +89,26 @@
   if (typeof module === 'object' && module.exports) module.exports = factory();
   else root.RundockMarkdown = factory();
 }(typeof self !== 'undefined' ? self : this, function () {
+  // THE ONE RULE FOR A LINK TO A FILE IN THE WORKSPACE, shared by read-only
+  // rendering and the rich editor's click handling so the two cannot
+  // disagree about what opens inside Rundock. A relative href (no scheme, not
+  // protocol-relative, not absolute, not an anchor) ending in a file type the
+  // workspace opens, that does not climb above the workspace root, is its
+  // own target, as written. Anything else is not a workspace file.
+  const FILE_LIKE_HREF = /\.(?:md|yaml|yml|json|txt)$/;
+  function workspaceFileTarget(href) {
+    const value = String(href == null ? '' : href);
+    if (!value || /^[a-z][a-z0-9+.-]*:/i.test(value) || value.startsWith('/') || value.startsWith('#')) return null;
+    if (!FILE_LIKE_HREF.test(value)) return null;
+    let depth = 0;
+    for (const segment of value.split('/')) {
+      if (segment === '..') depth -= 1;
+      else if (segment && segment !== '.') depth += 1;
+      if (depth < 0) return null;
+    }
+    return value;
+  }
+
 
   // Escape for HTML TEXT position: the three characters that can start markup
   // or an entity. app.js does this with textContent/innerHTML round-tripping,
@@ -154,9 +174,6 @@
 
     const instance = new markedNs.Marked({ gfm: true, breaks: true });
 
-    // Hrefs that name a file in the workspace rather than a place on the web.
-    // Same extensions and same exclusions the post-processing regex used.
-    const WORKSPACE_FILE_HREF = /^(?!https?:\/\/|mailto:|obsidian:\/\/).*\.(?:md|yaml|yml|json|txt)$/;
 
     // Character references a destination may be written with.
     //
@@ -527,11 +544,27 @@
           const href = decodeCharacterReferences(token.href);
           const text = this.parser.parseInline(token.tokens);
           if (!isNavigableHref(href)) return text;
-          if (WORKSPACE_FILE_HREF.test(href)) {
-            return `<a class="wikilink" data-wikilink="${escapeAttr(href)}">${text}</a>`;
+          // A web address, and a protocol-relative one (`//host/path`, which
+          // the browser loads as the web at the page's own scheme) is one:
+          // it opens outside the app and is never read as a workspace file.
+          const web = /^https?:/i.test(href) || /^\/\//.test(href);
+          // A link to a file in the workspace opens it inside Rundock, by
+          // the one resolver the rich editor uses too. One shaped like a
+          // file but climbing out of the workspace, or written as an
+          // absolute path, is shown as text: it names nothing Rundock opens,
+          // and as a bare link it would navigate the app page.
+          if (!web && FILE_LIKE_HREF.test(href)) {
+            const target = workspaceFileTarget(href);
+            return target ? `<a class="wikilink" data-wikilink="${escapeAttr(target)}">${text}</a>` : text;
           }
           const title = token.title ? ` title="${escapeAttr(token.title)}"` : '';
-          return `<a href="${escapeAttr(href)}"${title}>${text}</a>`;
+          // A web address opens OUTSIDE the app: a new tab in browser mode,
+          // the system browser in the desktop app through its window-open
+          // handler. Left bare, a click navigated the whole app page away in
+          // browser mode. Only the web: an anchor, a relative link or a mail
+          // link keeps its ordinary behaviour.
+          const outside = web ? ' target="_blank" rel="noopener noreferrer"' : '';
+          return `<a href="${escapeAttr(href)}"${title}${outside}>${text}</a>`;
         },
         // An image destination is a URL the page fetches, so it is the same
         // question as a link destination and gets the same answer.
@@ -707,5 +740,5 @@
   // Only what has a caller. The client's namespace test treats a module's
   // public surface as a deliberate manifest, and an export nobody reads is a
   // wider surface for nothing.
-  return { createMarkdownRenderer, attachWikilinkHandler, attachCodeCopyHandler };
+  return { createMarkdownRenderer, attachWikilinkHandler, attachCodeCopyHandler, workspaceFileTarget };
 }));

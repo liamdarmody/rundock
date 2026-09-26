@@ -272,15 +272,11 @@ describe('a delegation whose parent stayed alive', () => {
 });
 
 describe('control skipping a mid-level parent to reach the orchestrator', () => {
-  test('a report handing back past its lead records reaching the base agent', async () => {
-    // THE FOURTH CALL SITE, and the one an earlier claim of completeness had
-    // wrong. It needs a shape none of the tests above build: a non-intercepted
-    // `delegate` to a lead, so the ORCHESTRATOR's process is parked alive and
-    // the lead carries a live originalEntry; then the lead intercepts an
-    // Agent-tool call to one of its own reports; then that report finishes.
-    // Control skips the lead and goes straight back to the parked orchestrator,
-    // which is its own branch.
-    const convoId = h.freshConvoId('skiplevel');
+  // A non-intercepted `delegate` to a lead, so the ORCHESTRATOR's process is
+  // parked alive and the lead carries a live originalEntry; then the lead
+  // intercepts an Agent-tool call to one of its own reports; then that report
+  // hands back. Where control goes depends on what the report said.
+  function scenario(convoId, analystText) {
     h.clearInvocations();
     h.writeScenario([
       { match: { agent: 'chief-of-staff', promptIncludes: 'open it' }, turn: [{ text: 'ready' }] },
@@ -288,41 +284,55 @@ describe('control skipping a mid-level parent to reach the orchestrator', () => 
         match: { agent: 'content-lead', promptIncludes: 'lead brief' },
         turn: [{ agentTool: { subagent_type: 'content-analyst', prompt: 'analyst brief' } }],
       },
-      {
-        match: { agent: 'content-analyst', promptIncludes: 'analyst brief' },
-        turn: [{ text: 'ANALYST-DONE. <!-- RUNDOCK:COMPLETE -->' }],
-      },
-      { match: { agent: 'chief-of-staff' }, turn: [{ text: '<silent>' }] },
+      { match: { agent: 'content-analyst', promptIncludes: 'analyst brief' }, turn: [{ text: analystText }] },
+      { match: { agent: 'chief-of-staff' }, turn: [{ text: 'Routing it.' }] },
       { match: { agent: 'content-lead' }, turn: [{ text: '<silent>' }] },
     ]);
-
-    client.send({ type: 'save_conversation', conversation: { id: convoId, agentId: 'chief-of-staff', title: 'Skip level' } });
+  }
+  async function openAndDelegate(convoId, title) {
+    client.send({ type: 'save_conversation', conversation: { id: convoId, agentId: 'chief-of-staff', title } });
     // A live orchestrator to park, which is what makes this path different.
     client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: 'open it' });
     await client.waitFor(m => m.type === 'result' && m._conversationId === convoId, { label: 'orchestrator is live' });
-
     client.send({ type: 'delegate', conversationId: convoId, targetAgent: 'content-lead', context: 'lead brief' });
     await client.waitFor(m => m.type === 'system' && m.subtype === 'agent_switch'
       && m._conversationId === convoId && m.toAgent === 'content-analyst', { label: 'down to the report' });
+  }
+
+  test('a report handing back out of scope skips its lead and records reaching the base agent', async () => {
+    // THE FOURTH CALL SITE: the skip-level restore to a LIVE orchestrator,
+    // which only an out-of-scope RETURN takes. Matched on origin as well as
+    // destination, because `toAgent === 'chief-of-staff'` alone is also
+    // satisfied by an earlier switch in this same scenario.
+    const convoId = h.freshConvoId('skiplevel');
+    scenario(convoId, 'Not mine. <!-- RUNDOCK:RETURN -->');
+    await openAndDelegate(convoId, 'Skip level');
     const skipLevel = (await client.waitFor(m => m.type === 'system' && m.subtype === 'agent_switch'
       && m._conversationId === convoId && m.fromAgent === 'content-analyst'
       && m.toAgent === 'chief-of-staff', { label: 'straight back to the orchestrator' })).msg;
-
-    // THE FOURTH PATH, ASSERTED ON THE MESSAGE. This is the skip-level restore
-    // to a LIVE orchestrator, which is the one shape the other three scenarios
-    // cannot produce: the others either spawn the parent fresh or restore a
-    // parked one. Matched on origin as well as destination, because
-    // `toAgent === 'chief-of-staff'` alone is also satisfied by an earlier
-    // switch in this same scenario.
-    // The analyst emitted COMPLETE, so the COMPLETE gate leaves this
-    // orchestrator idle: it is restored to park and will not speak, so nothing
-    // is drawn for it.
-    assert.strictEqual(skipLevel.silent, true,
-      'an orchestrator restored only to park is not announced as arriving');
+    // The orchestrator is woken to route the request, so its arrival is drawn.
+    assert.notStrictEqual(skipLevel.silent, true,
+      'an orchestrator restored to route a request is announced as arriving');
 
     const stored = storedConversation(convoId);
     assert.ok(stored, 'the conversation was persisted');
     assert.strictEqual(stored.delegationReturned, true,
       'control skipped the lead and reached the base agent, so the record says so');
+    h.reapConvo(convoId);
+  });
+
+  test('a report handing back finished work returns to its lead, and the record says still delegated', async () => {
+    const convoId = h.freshConvoId('toLead');
+    scenario(convoId, 'ANALYST-DONE. <!-- RUNDOCK:COMPLETE -->');
+    await openAndDelegate(convoId, 'To lead');
+    await client.waitFor(m => m.type === 'system' && m.subtype === 'agent_switch'
+      && m._conversationId === convoId && m.fromAgent === 'content-analyst'
+      && m.toAgent === 'content-lead', { label: 'back to the lead' });
+
+    const stored = storedConversation(convoId);
+    assert.ok(stored, 'the conversation was persisted');
+    assert.notStrictEqual(stored.delegationReturned, true,
+      'control is with the lead, not the base agent, so the conversation is still delegated');
+    h.reapConvo(convoId);
   });
 });

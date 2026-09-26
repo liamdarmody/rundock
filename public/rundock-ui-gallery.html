@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Rundock UI gallery</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<!-- The same three sheets the app loads for extensions: the tokens, the
+     floor (inert here, read by the host), and Rundock UI. The host builds
+     each theme's frame from them exactly as it builds an extension's. -->
+<link rel="stylesheet" href="/styles/tokens.css">
+<link rel="stylesheet" href="/styles/fonts.css">
+<link rel="stylesheet" href="/styles/extension-base.css" media="not all" data-extension-base>
+<link rel="stylesheet" href="/styles/rundock-ui.css" data-rundock-ui>
+<style>
+  html, body { margin: 0; }
+  body { background: var(--chrome); color: var(--text-1); font-family: 'Inter', system-ui, -apple-system, sans-serif; }
+  .head { max-width: 1480px; margin: 0 auto; padding: 32px 28px 8px; }
+  .head h1 { font-size: var(--heading); margin: 0 0 8px; }
+  .head p { font-size: var(--body); color: var(--text-2); max-width: 820px; line-height: 1.6; margin: 0 0 8px; }
+  #panes { max-width: 1480px; margin: 0 auto; padding: 16px 28px 64px; display: grid; grid-template-columns: 1fr 1fr; gap: 24px; align-items: start; }
+  @media (max-width: 1100px) { #panes { grid-template-columns: 1fr; } }
+  .gallery-frame { display: block; width: 100%; height: 4000px; border: 0; border-radius: var(--radius-xl); }
+</style>
+</head>
+<body>
+  <div class="head">
+    <h1>Rundock UI</h1>
+    <p>Every component and every state, in both themes. Each theme is a real extension frame built by Rundock's extension host, so this is exactly what an extension is given. Reference: docs/RUNDOCK-UI.md.</p>
+  </div>
+  <div id="panes"></div>
+  <script type="module" src="/rundock-ui-gallery.js"></script>
+</body>
+</html>

@@ -89,24 +89,13 @@ describe('what the block says about what naming a folder does', () => {
   // BACK as a card, that a parent is worth naming because it covers projects
   // that do not exist yet, and that the workspace itself counts. The wording is
   // shorter; the facts are the same, and these still fail if one goes.
-  test('it says what naming a folder does NOT do, including the limit in the default mode', () => {
-    // The copy must never claim a named folder is covered the way the workspace
-    // is. The workspace sits on the macOS Knowledge-mode operating-system write
-    // allowlist and a named folder does not, so for terminal writes in the
-    // default mode the cards stop and the write still fails. Claiming parity
-    // there is the trust-it-with-everything promise this copy exists to avoid.
-    //
+  test('it says what naming a folder does NOT do', () => {
     // The excluded folder is the RUNTIME's own home, ~/.claude, and it has to be
     // named. Calling it "Rundock's own configuration folder" points a reader at
     // .rundock inside the workspace, which is covered, so it says the opposite
     // of what it means.
     const el = render(shell([{ path: PROJECTS, missing: false }]).w);
-    const prose = [...el.querySelectorAll('.wf-prose, .wf-note')].map(n => n.textContent).join(' ');
-    assert.match(prose, /Knowledge mode on macOS/i, 'the mode where the limit applies is named');
-    assert.match(prose, /operating system still refuses/i, 'and what still refuses, in the reader\'s terms');
-    assert.match(prose, /still raises a card/i,
-      'and that the refusal comes BACK as a card, which is the part a reader actually meets');
-    assert.match(prose, /Code mode ends both/i, 'and what to do about it');
+    const prose = [...el.querySelectorAll('.wf-note')].map(n => n.textContent).join(' ');
     assert.match(prose, /Codex agents are unaffected/i,
       'and the runtime this setting never reaches, which no reader could otherwise know');
     // REMOVING IS NOT INSTANT, and a permissions control whose remove does not
@@ -121,26 +110,28 @@ describe('what the block says about what naming a folder does', () => {
       'and what happens to the conversation that is open right now');
     assert.match(prose, /~\/\.claude/, 'the excluded folder is named, not described vaguely');
     assert.match(prose, /credentials always ask/i, 'and the guarantee that survives whatever is named');
-    assert.doesNotMatch(prose, /covered the same way this workspace/i,
-      'no parity claim: the operating-system block breaks it in the default mode');
     assert.doesNotMatch(prose, /full access|complete access|trusted? with everything/i);
   });
 
   test('it nudges toward a parent, because naming one is the difference between configuring this once and forever', () => {
-    const el = render(shell().w);
-    const prose = [...el.querySelectorAll('.wf-prose, .wf-note')].map(n => n.textContent).join(' ');
-    assert.match(prose, /Name a parent/i);
-    assert.match(prose, /including projects you start later/i,
-      'the reason a parent is worth naming is stated, not just the instruction');
+    // In both states: nothing named yet, and a list with a folder in it.
+    for (const folders of [[], [{ path: PROJECTS, missing: false }]]) {
+      const el = render(shell(folders).w);
+      const prose = [...el.querySelectorAll('.wf-note')].map(n => n.textContent).join(' ');
+      assert.match(prose, /Naming a parent, such as ~\/Projects, covers everything inside it\./,
+        'the reason a parent is worth naming is stated, not just the instruction');
+    }
   });
 
   test('the workspace root is named as already included, and never appears as a row', () => {
     // What is in force must be legible where it is felt. The root is implicit
     // rather than a fixed first row, so the prose has to say so or a reader
     // cannot tell whether it counts.
+    // "Also" is what says it: the heading names these folders as additions to
+    // the workspace, and the workspace is never a row.
     const { w } = shell([{ path: PROJECTS, missing: false }]);
     const el = render(w);
-    assert.match(el.textContent, /This workspace is already included/i);
+    assert.strictEqual(el.querySelector('.wf-section-head').textContent, 'Folders agents can also change');
     for (const row of rows(el)) {
       assert.doesNotMatch(row.textContent, /build-team/, 'the workspace itself is not listed');
     }
@@ -205,7 +196,7 @@ describe('adding, removing, and changing your mind', () => {
     const nasty = [
       { path: 'C:\\Users\\tom\\Projects', missing: false },
       { path: 'C:\\Users\\xavier\\build', missing: false },
-      { path: "/home/liam/Liam's Projects", missing: false },
+      { path: "/home/me/Someone's Projects", missing: false },
     ];
     for (let i = 0; i < nasty.length; i += 1) {
       const { w, doc } = shell(nasty);
@@ -358,34 +349,24 @@ describe('switching workspace', () => {
 // A CONDITIONAL CAVEAT THAT STOPS APPEARING IS INDISTINGUISHABLE FROM ONE THAT
 // WAS NEVER TRUE, so the condition is pinned in both directions.
 //
-// This note used to be permanent, which made it FALSE for every reader in Code
-// mode: it describes a limit that only exists in Knowledge mode on macOS. Now
-// it renders only in the case it describes. The risk that replaces the old one
-// is silence: if the condition is miscomputed the caveat vanishes and the
-// product goes back to not admitting the limit at all, which is the failure
-// this whole surface kept producing. Hence a test for each cell rather than one
-// for the happy case.
-describe('the sandbox caveat appears exactly where it applies', () => {
+// THE OPERATING-SYSTEM CAVEAT IS GONE, because what it described stopped being
+// true. It said a named folder's terminal writes were still refused on macOS,
+// which held while the write list carried the workspace alone. Named folders
+// now reach that list, so the caveat would warn about a refusal that no longer
+// happens. The fact it rests on is asserted here, beside its removal.
+describe('the operating-system caveat no longer applies', () => {
   function noteText(opts) {
     const el = render(shell([{ path: PROJECTS, missing: false }], opts).w);
     return [...el.querySelectorAll('.wf-note')].map(n => n.textContent).join(' ');
   }
 
-  test('macOS in Knowledge mode: the limit is stated', () => {
-    assert.match(noteText({ platform: 'darwin', mode: 'knowledge' }), /Knowledge mode on macOS/i,
-      'this is the one case where a named folder still has its write refused');
-  });
-
-  test('macOS in Code mode: not stated, because it is not true there', () => {
-    assert.doesNotMatch(noteText({ platform: 'darwin', mode: 'code' }), /Knowledge mode on macOS/i,
-      'Code mode ends the limit, so telling a Code-mode reader about it is false');
-  });
-
-  test('Windows and Linux: not stated, in either mode', () => {
-    for (const platform of ['win32', 'linux']) {
+  test('a named folder is on the operating system\'s write list, so no platform or mode warns otherwise', () => {
+    const { sandboxSettings } = require('../../lib/workspace/scaffold.js');
+    const block = sandboxSettings('/Users/someone/team', 'darwin', '/Users/someone', ['/tmp'], [PROJECTS]);
+    assert.ok(block.filesystem.allowWrite.includes(PROJECTS), 'the folder a person names is writable at the operating system');
+    for (const platform of ['darwin', 'win32', 'linux']) {
       for (const mode of ['knowledge', 'code']) {
-        assert.doesNotMatch(noteText({ platform, mode }), /Knowledge mode on macOS/i,
-          `${platform}/${mode} has no macOS write block to warn about`);
+        assert.doesNotMatch(noteText({ platform, mode }), /operating system still refuses/i, `${platform}/${mode}`);
       }
     }
   });

@@ -88,7 +88,7 @@ describe('get_session_history: multi-session merge', () => {
     writeTranscript(convoId, [
       { role: 'user', text: 'Hello there team', timestamp: '2026-08-11T10:00:00Z' },
       { role: 'agent', agent: 'chief-of-staff', text: 'Routing you to the specialist for this request', timestamp: '2026-08-11T10:00:05Z' },
-      { role: 'agent', agent: 'penn', text: 'Here is the draft you asked for, complete with the long', timestamp: '2026-08-11T10:01:00Z' },
+      { role: 'agent', agent: 'wren', text: 'Here is the draft you asked for, complete with the long', timestamp: '2026-08-11T10:01:00Z' },
     ]);
 
     const res = await getHistory({
@@ -101,7 +101,7 @@ describe('get_session_history: multi-session merge', () => {
     assert.deepStrictEqual(res.messages.map(m => [m.role, m.agentId]), [
       ['user', null],
       ['assistant', 'chief-of-staff'],
-      ['assistant', 'penn'],
+      ['assistant', 'wren'],
     ]);
     // Full JSONL content won over the transcript's truncated prefix.
     assert.strictEqual(res.messages[2].content, fullReply);
@@ -113,7 +113,7 @@ describe('get_session_history: multi-session merge', () => {
     writeTranscript(convoId, [
       { role: 'user', text: 'Route this please' },
       { role: 'agent', agent: 'chief-of-staff', text: '', type: 'routing', timestamp: '2026-08-11T11:00:00Z' },
-      { role: 'agent', agent: 'penn', text: 'Specialist reporting in' },
+      { role: 'agent', agent: 'wren', text: 'Specialist reporting in' },
     ]);
 
     const res = await getHistory({ conversationId: convoId, sessionIds: [{ sessionId: 'sess-routing-1' }] });
@@ -278,7 +278,7 @@ describe('get_session_history: multi-session merge', () => {
     writeTranscript(convoId, [
       { role: 'user', text: 'Both of you report back', timestamp: '2026-08-13T11:00:00Z' },
       { role: 'agent', agent: 'cos', text: `${shared} That was the first agent talking.`, timestamp: '2026-08-13T11:00:05Z' },
-      { role: 'agent', agent: 'penn', text: shared, timestamp: '2026-08-13T11:00:10Z' },
+      { role: 'agent', agent: 'wren', text: shared, timestamp: '2026-08-13T11:00:10Z' },
     ]);
 
     const res = await getHistory({
@@ -287,7 +287,7 @@ describe('get_session_history: multi-session merge', () => {
     });
 
     assert.strictEqual(res.messages.length, 3, 'the echoed reply is its own turn');
-    assert.deepStrictEqual(res.messages.map(m => m.agentId), [null, 'cos', 'penn']);
+    assert.deepStrictEqual(res.messages.map(m => m.agentId), [null, 'cos', 'wren']);
     assert.strictEqual(res.messages[1].content, `${shared} That was the first agent talking.`,
       "the first agent's bubble is exactly its own turn, with nothing absorbed");
     assert.strictEqual(res.messages[2].content, shared);
@@ -313,7 +313,7 @@ describe('get_session_history: multi-session merge', () => {
     writeTranscript(convoId, [
       { role: 'user', text: 'Both of you weigh in', timestamp: '2026-08-13T12:00:00Z' },
       { role: 'agent', agent: 'cos', text: firstTurn, timestamp: '2026-08-13T12:00:05Z' },
-      { role: 'agent', agent: 'penn', text: echoed, timestamp: '2026-08-13T12:00:10Z' },
+      { role: 'agent', agent: 'wren', text: echoed, timestamp: '2026-08-13T12:00:10Z' },
     ]);
 
     const res = await getHistory({
@@ -322,7 +322,7 @@ describe('get_session_history: multi-session merge', () => {
     });
 
     assert.strictEqual(res.messages.length, 3);
-    assert.deepStrictEqual(res.messages.map(m => m.agentId), [null, 'cos', 'penn']);
+    assert.deepStrictEqual(res.messages.map(m => m.agentId), [null, 'cos', 'wren']);
     assert.strictEqual(res.messages[1].content, firstTurn, 'nothing absorbed into the first turn');
     assert.strictEqual(res.messages[2].content, echoed);
     // Present once as its own turn, not duplicated into the bubble before it.
@@ -344,7 +344,7 @@ describe('get_session_history: multi-session merge', () => {
     writeTranscript(convoId, [
       { role: 'user', text: 'Who can help', timestamp: '2026-08-13T10:00:00Z' },
       { role: 'agent', agent: 'cos', text: 'Routing you to the specialist now', timestamp: '2026-08-13T10:00:05Z' },
-      { role: 'agent', agent: 'penn', text: 'Specialist here, this is my own separate answer', timestamp: '2026-08-13T10:00:10Z' },
+      { role: 'agent', agent: 'wren', text: 'Specialist here, this is my own separate answer', timestamp: '2026-08-13T10:00:10Z' },
     ]);
 
     const res = await getHistory({
@@ -353,7 +353,7 @@ describe('get_session_history: multi-session merge', () => {
     });
 
     assert.strictEqual(res.messages.length, 3, 'the two agent turns stay separate');
-    assert.deepStrictEqual(res.messages.map(m => m.agentId), [null, 'cos', 'penn']);
+    assert.deepStrictEqual(res.messages.map(m => m.agentId), [null, 'cos', 'wren']);
     assert.ok(!res.messages[1].content.includes('Specialist here'),
       "the first agent's bubble did not absorb the second agent's reply");
   });

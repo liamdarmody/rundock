@@ -107,8 +107,8 @@ export function attachReviewPanel({ paneElement, editor = null, surface = null, 
 
   // Attribution rendering. The wire format keeps real handles; the UI maps
   // the workspace user to "Me", known agents to their roster display name,
-  // and everything else to the title-cased handle (by: penn renders as
-  // Penn even when penn is not in this workspace's roster). Absent
+  // and everything else to the title-cased handle (by: wren renders as
+  // Wren even when wren is not in this workspace's roster). Absent
   // metadata renders as "Unattributed": never a guessed name. One visual
   // treatment for every author: identity is information, not decoration.
   function titleCaseHandle(handle) {

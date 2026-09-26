@@ -23,6 +23,7 @@ const { makeTempDir } = require('../helpers/workspace.js');
 
 let client;
 let controlFile;
+let stderrFile;
 
 before(async () => {
   // Fake osascript, injected ahead of everything else on PATH. The harness
@@ -31,12 +32,23 @@ before(async () => {
   // boot()'s stub-resolution safety gate still holds.
   const fakeBin = makeTempDir('rundock-test-osascript-');
   controlFile = path.join(fakeBin, 'picked-folder.txt');
+  // The stub can now fail in the two DIFFERENT ways osascript really fails,
+  // because the handler has to tell them apart. A cancel is error -128 on
+  // stderr and means the person chose not to pick; anything else is the
+  // dialog not working, which they need told about. When the stderr control
+  // file exists its contents are written to stderr, so a test can hand the
+  // handler either shape; with neither file present the stub still exits
+  // non-zero silently, which is the shape the earlier tests used.
+  stderrFile = path.join(fakeBin, 'osascript-stderr.txt');
   const script = path.join(fakeBin, 'osascript');
   fs.writeFileSync(script, [
     '#!/usr/bin/env node',
     `const fs = require('fs');`,
     `try { process.stdout.write(fs.readFileSync(${JSON.stringify(controlFile)}, 'utf-8')); }`,
-    'catch (e) { process.exit(1); }',
+    'catch (e) {',
+    `  try { process.stderr.write(fs.readFileSync(${JSON.stringify(stderrFile)}, 'utf-8')); } catch (e2) {}`,
+    '  process.exit(1);',
+    '}',
   ].join('\n'));
   fs.chmodSync(script, 0o755);
 
@@ -97,10 +109,41 @@ describe('pick_folder', () => {
     assert.strictEqual(res.path, '/tmp/rundock-picked-folder');
   });
 
-  test('cancelling the dialog answers null instead of erroring', async () => {
+  // THIS TEST USED TO ASSERT THE DEFECT. It was called "cancelling the
+  // dialog" but what it staged was a non-zero exit with nothing on stderr,
+  // and a real cancel is never silent: osascript raises -128 and says so.
+  // The handler answered both with a bare null, so the test passed while
+  // describing something that cannot happen, and the case it actually
+  // covered, the dialog failing, was the one going unreported. The cancel it
+  // meant to test is the -128 test below; this one now pins what a silent
+  // failure is treated as, which is a failure.
+  test('a non-zero exit saying nothing is a failure, not an assumed cancel', async () => {
     fs.rmSync(controlFile, { force: true });
-    const res = await request({ type: 'pick_folder' }, m => m.type === 'folder_picked', 'folder_picked cancel');
-    assert.strictEqual(res.path, null);
+    fs.rmSync(stderrFile, { force: true });
+    const res = await request({ type: 'pick_folder' }, m => m.type === 'workspace_error', 'folder_picked silent failure');
+    assert.match(res.message, /folder chooser/i, 'an unexplained failure is still reported');
+  });
+
+  // A CANCEL AND A BROKEN DIALOG ARE NOT THE SAME EVENT, and the interface
+  // has no way to say so if the handler answers both with a bare null. The
+  // picker button then looks simply dead: nothing opens, nothing is said,
+  // and there is no way to tell a deliberate cancel from a dialog that could
+  // not be raised at all. Found by driving the shipped product in a browser,
+  // where the server could not raise the dialog and the button did nothing.
+  test('a real cancel, error -128, stays silent: the person chose this', async () => {
+    fs.rmSync(controlFile, { force: true });
+    fs.writeFileSync(stderrFile, '0:17: execution error: User cancelled. (-128)\n');
+    const res = await request({ type: 'pick_folder' }, m => m.type === 'folder_picked', 'folder_picked -128');
+    assert.strictEqual(res.path, null, 'a cancel still answers null');
+    assert.ok(!res.message, 'and says nothing, because the person cancelled on purpose');
+  });
+
+  test('a dialog that could not be raised is reported, not swallowed as a cancel', async () => {
+    fs.rmSync(controlFile, { force: true });
+    fs.writeFileSync(stderrFile, "0:12: execution error: Application isn't running. (-600)\n");
+    const res = await request({ type: 'pick_folder' }, m => m.type === 'workspace_error', 'pick_folder failure');
+    assert.match(res.message, /folder/i, 'the message names what failed');
+    assert.ok(res.message.length > 12, 'and says something a reader can act on rather than a bare code');
   });
 
   test('empty dialog output also answers null', async () => {

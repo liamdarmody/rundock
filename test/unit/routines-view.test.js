@@ -333,7 +333,7 @@ describe('the rail is a map of places, always the same size', () => {
     }
   });
 
-  // The condition the owner attached to permanence, and it is checked BY
+  // The condition attached to permanence, and it is checked BY
   // OPENING THE ENTRY rather than by calling what the entry draws.
   //
   // WHY THAT DISTINCTION IS THE WHOLE TEST. Calling renderSkills proves the
@@ -1995,6 +1995,20 @@ describe('the review-and-resume control is a real press that reaches the handler
     assert.deepStrictEqual(w.sent, [{
       type: 'approve_routine_plan', agentId: 'piper', name: 'Compile the ops summary', occurrence: 1, approve: true,
     }], 'the press reaches the handler with the routine it pointed at, occurrence and all');
+    dom.window.close();
+  });
+
+  test('a routine never approved says it is waiting for its first run, not that it changed', () => {
+    const { doc, w, dom } = shell([
+      routine('Compile the ops summary', { refusal: 'approval', approvedBefore: false, skill: 'ops-summary' }),
+    ]);
+    w.renderRoutines();
+    const row = rowNamed(doc, 'Compile the ops summary');
+    assert.match(text(row), /Waiting for your approval before its first run\./);
+    assert.doesNotMatch(text(row), /changed/);
+    assert.match(text(row), /Review and resume/);
+    press(row, '[data-routines-action="approve"]');
+    assert.strictEqual(w.sent[0].type, 'approve_routine_plan');
     dom.window.close();
   });
 });

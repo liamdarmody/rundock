@@ -486,7 +486,7 @@ describe('the handlers behind the row', () => {
 
   // ===== TURNING ON A ROUTINE THE UPGRADE HELD BACK =====
   //
-  // AC-5's server half. A routine whose file never carried `enabled` reads as
+  // The server half. A routine whose file never carried `enabled` reads as
   // not enabled, and this is the one path that changes that answer. It is a
   // separate field from `paused` on purpose: pausing is a decision the reader
   // already took, and enabling is the answer to a question nobody had asked

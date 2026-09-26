@@ -812,7 +812,7 @@ describe('the answer-file reason reaches the browser', () => {
 
   // The runtime refuses every write to the settings file it was launched with,
   // so Rundock says so rather than offering an Allow it cannot honour. Asserted
-  // end to end because the owner met the opposite: a card, an approval, and a
+  // end to end because a user met the opposite: a card, an approval, and a
   // write that failed anyway.
   test('a write to the runtime settings file is refused with a reason, never carded', async () => {
     const target = path.join(h.workspaceDir, '.claude', 'settings.local.json');

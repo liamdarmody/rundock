@@ -38,11 +38,14 @@ const MANIFEST = {
     "createHistoryDivider",
     "describeToolRequest",
     "dispatchMessage",
+    "endPermissionRequest",
     "finishProcessing",
     "formatToolName",
     "formatToolShort",
     "handleActiveProcesses",
+    "handleOwnerlessPermissionRequest",
     "handlePermissionRequest",
+    "reconcilePendingPermissions",
     "renderAuthErrorCard",
     "renderCodexErrorPill",
     "renderCodexGuidanceCard",
@@ -60,6 +63,7 @@ const MANIFEST = {
   ],
   "conversations.js": [
     "archiveConversation",
+    "askFromView",
     "closeConvoMenu",
     "convoMenuEsc",
     "convoStateDot",
@@ -86,7 +90,7 @@ const MANIFEST = {
     "startSetupConversation",
     "toggleConvoListMembership",
     "toggleConvoStatus",
-    "togglePin"
+    "togglePin",
   ],
   "graph.js": [
     "mapIndexReady",
@@ -125,6 +129,10 @@ const MANIFEST = {
     "loadTiptapEditorModule",
     "loadViewersModule",
     "menuIconSvg",
+    "mountEmbeds",
+    "mountPreviewEmbeds",
+    "mountedExtension",
+    "noteExtensionRefusal",
     "onTiptapEditorUpdate",
     "openBinaryOrUnsupportedFile",
     "openBoardFile",
@@ -137,6 +145,10 @@ const MANIFEST = {
     "openWorkspaceFilePath",
     "paletteFileIcon",
     "promptCreate",
+    "recheckExtensionClaim",
+    "reconcileEmbedMounts",
+    "reconcileExtensionMount",
+    "reconcileRegionServices",
     "removeFileConnections",
     "renderEditorContent",
     "renderFileConnections",
@@ -145,8 +157,10 @@ const MANIFEST = {
     "saveTiptapFile",
     "setEditorMode",
     "showExternalEditConflict",
+    "sourcesReplyArrived",
     "treeIconSvg",
     "updateEditorBackButton",
+    "viewStateReplyArrived",
     "wikilinkSearchName",
   ],
   "find.js": [
@@ -270,12 +284,41 @@ const MANIFEST = {
     "connectorsScopeText",
     "connectorsSectionHtml",
     "connectorsWorkspaceChanged",
+    "extensionsOpenPackages",
+    "extensionsRenderIfVisible",
+    "extensionsSetPaused",
+    "extensionsToggle",
+    "modeToggleKeydown",
+    "packagesAskUninstall",
     "packagesCancel",
+    "packagesCancelUninstallPackage",
+    "packagesCancelUpdate",
+    "packagesCardAction",
+    "packagesCardHtml",
+    "packagesCheckOne",
+    "packagesClearUpdatesFolder",
     "packagesConfirm",
+    "packagesConfirmUninstallPackage",
+    "packagesConfirmUpdate",
     "packagesConnectionLost",
+    "packagesCopyUpdatePrompt",
+    "packagesDecline",
+    "packagesDismissUpdate",
+    "packagesKeepUpdatesFolder",
+    "packagesManageHtml",
+    "packagesOpenReceiptItem",
     "packagesReplyArrived",
     "packagesRetry",
+    "packagesReviewCardHtml",
+    "packagesReviewRowHtml",
+    "packagesReviewUpdate",
+    "packagesServingWorkspaceChanged",
+    "packagesSetDecision",
+    "packagesStaleCardHtml",
     "packagesSubmit",
+    "packagesUninstallHtml",
+    "packagesUpdateDoneHtml",
+    "packagesUpdateReviewHtml",
     "packagesWorkspaceChanged",
     "renderRuntimesCard",
     "renderSettingsSection",
@@ -284,6 +327,15 @@ const MANIFEST = {
     "revokeToolAllowAt",
     "runtimeRowHtml",
     "runtimesCardHtml",
+    "sandboxCancelImport",
+    "sandboxConfirmImport",
+    "sandboxDismissNotice",
+    "sandboxKeepOn",
+    "sandboxPanelKeydown",
+    "sandboxReviewImport",
+    "sandboxStatusArrived",
+    "sandboxSwitchClicked",
+    "sandboxTurnOff",
     "setWorkspaceMode",
     "showSettingsSection",
     "toolAllowsArrived",
@@ -300,7 +352,7 @@ const MANIFEST = {
     "workingFoldersSectionHtml",
     "workingFoldersShort",
     "workingFoldersUndoRemove",
-    "workingFoldersWorkspaceChanged"
+    "workingFoldersWorkspaceChanged",
   ],
   "pins.js": [
     "handlePinsReply",
@@ -449,4 +501,36 @@ test('every republished name is used somewhere by its bare name', () => {
     if (!used) unused.push(`${name} (${file})`);
   }
   assert.deepStrictEqual(unused.sort(), [], 'republished but never called by its bare name: delete it, or stop exporting it');
+});
+
+test('every view-module function app.js calls by its bare name is republished', () => {
+  // The other direction. A function a view module declares but does not
+  // return is private to its factory, so a bare call to it from app.js is a
+  // ReferenceError at the moment it runs: inside the message switch, that
+  // drops the reply silently and whoever was waiting for it times out.
+  const src = stripComments(fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf-8'));
+  const appTop = new Set();
+  for (const line of src.split('\n')) {
+    const m = /^(?:async )?function (\w+)|^(?:const|let|var) (\w+)/.exec(line);
+    if (m) appTop.add(m[1] || m[2]);
+  }
+  const exported = new Set();
+  for (const file of viewModules()) for (const name of exportsOf(file)) exported.add(name);
+  // Known and not yet decided: app.js calls these only behind a
+  // `typeof name === 'function'` guard, so today they are skipped rather than
+  // thrown. Whether they should run is a separate change; this list is the
+  // record of it, and shrinks when they are republished or the calls go.
+  const KNOWN = new Set(['warmRegionServices', 'watchThemeForRegions']);
+  const missing = [];
+  for (const file of viewModules()) {
+    const lines = stripComments(fs.readFileSync(path.join(VIEWS, file), 'utf-8')).split('\n');
+    for (const line of lines) {
+      const m = /^(?:async )?function (\w+)/.exec(line);
+      if (!m) continue;
+      const name = m[1];
+      if (exported.has(name) || appTop.has(name) || KNOWN.has(name)) continue;
+      if (new RegExp('(?<![.\\w$])' + name + '\\s*\\(').test(src)) missing.push(`${name} (${file})`);
+    }
+  }
+  assert.deepStrictEqual(missing.sort(), [], 'app.js calls a view-module function its module never republishes');
 });

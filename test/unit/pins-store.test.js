@@ -79,7 +79,7 @@ afterEach(() => {
 
 describe('the store writes inside .rundock/ and nothing else in the workspace', () => {
   test('a pin lands in .rundock/pins.json and no other file in the workspace changes', () => {
-    // PN-2 said the store writes nothing under the workspace root at all,
+    // The rule said the store writes nothing under the workspace root at all,
     // because the file lived in the home directory. It lives in the workspace
     // now, so the claim it can still make is the one that matters to a reader:
     // pinning touches `.rundock/`, which is gitignored, and touches nothing

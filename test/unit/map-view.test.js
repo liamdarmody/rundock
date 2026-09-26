@@ -413,12 +413,31 @@ describe('arrival: one fetch, one canvas, no sidebar', () => {
     } finally { await s.cleanup(); }
   });
 
-  test('a workspace with no links says so rather than drawing an empty picture', async () => {
-    const s = mapShell({ payload: { indexed: true, warming: false, nodes: [{ path: 'a.md', name: 'a.md', modified: 1 }], links: [] } });
+  // A workspace whose files are not linked to each other is still a
+  // workspace with files in it, and the map draws them. It used to refuse,
+  // which made one wikilink the difference between seeing the place and
+  // reading a sentence about it, while the same view drew unlinked files
+  // happily as soon as any link existed anywhere.
+  test('files with no links between them are still drawn', async () => {
+    const s = mapShell({ payload: { indexed: true, warming: false, links: [],
+      nodes: [{ path: 'a.md', name: 'a.md', modified: 1 }, { path: 'b.md', name: 'b.md', modified: 2 }] } });
     try {
       view.showMapView();
       await s.settle();
-      assert.match(s.doc.getElementById('graph-body').textContent, /Nothing is linked yet/);
+      assert.doesNotMatch(s.doc.getElementById('graph-body').textContent, /No files yet/,
+        'two files are two files, whether or not anything joins them');
+      assert.ok(s.doc.querySelector('#view-map canvas'), 'the picture is drawn rather than replaced by a statement');
+    } finally { await s.cleanup(); }
+  });
+
+  test('a workspace with no files at all says that, and says nothing about links', async () => {
+    const s = mapShell({ payload: { indexed: true, warming: false, nodes: [], links: [] } });
+    try {
+      view.showMapView();
+      await s.settle();
+      const said = s.doc.getElementById('graph-body').textContent;
+      assert.match(said, /No files yet/);
+      assert.doesNotMatch(said, /link/i, 'the absence of files is not explained by the absence of links');
       assert.strictEqual(s.doc.querySelector('#view-map canvas'), null);
     } finally { await s.cleanup(); }
   });
@@ -465,7 +484,7 @@ describe('labels on hover only, through the one visibility predicate', () => {
       s.mouse('mousemove', hub.x, hub.y);
       s.flushFrames();
       const written = s.ctx.calls.filter(c => c.name === 'fillText').map(c => c.args[0]);
-      // MP-7 is "the hovered node plus its VISIBLE neighbours, and nothing
+      // Hover highlight is "the hovered node plus its VISIBLE neighbours, and nothing
       // else", so the expectation is read from the predicate rather than
       // written as a list. It used to be hard-coded to ['Hub.md'], which was
       // true only while the disclosure fraction happened to hide every leaf in
@@ -752,7 +771,7 @@ describe('leaving the map', () => {
 
 // ===== ONE RESOLVER, TWO ROUTES =====
 //
-// The stop rule of this lane: the map and a document click must agree about
+// The stop rule of this change: the map and a document click must agree about
 // which file a link opens. A tree with a decoy of the same basename, and
 // both routes driven: a wikilink clicked in a document resolves on the
 // client; the map's edge comes from the endpoint, which resolves on the

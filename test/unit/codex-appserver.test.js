@@ -547,7 +547,11 @@ test('zombie interrupt (Windows Finding 7): the released turn\'s late events are
     appServer: {
       zombieInterrupt: { resumeDelayMs: 700 },
       rules: [
-        { match: { promptIncludes: 'count slowly' }, deltas: ['one ', 'two '], text: ZOMBIE_TEXT },
+        // holdForInterrupt: the interrupt below must reach a turn that is still
+        // running, and without it this turn is over roughly four milliseconds
+        // after the delta the test waits for.
+        { match: { promptIncludes: 'count slowly' }, deltas: ['one ', 'two '],
+          text: ZOMBIE_TEXT, holdForInterrupt: true },
         // delayMs holds the new turn open past the zombie's resume, so the
         // zombie's flood arrives MID new turn, the observed live shape.
         { match: { promptIncludes: 'real question' }, deltas: ['The real '], text: 'The real answer.', delayMs: 1400 },

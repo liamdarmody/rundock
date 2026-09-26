@@ -1,0 +1,18 @@
+{
+ "opened": [
+  "notes/next.md",
+  "notes/chained-now.md",
+  "notes/chained-later.md"
+ ],
+ "externals": 2,
+ "asked": [
+  {
+   "agent": "analyst",
+   "message": "chained now"
+  },
+  {
+   "agent": "analyst",
+   "message": "chained later"
+  }
+ ]
+}

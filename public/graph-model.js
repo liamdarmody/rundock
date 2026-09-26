@@ -566,10 +566,19 @@
     title: 'The map needs the search index',
     body: 'This runtime does not have it, so links are not indexed and there is nothing to draw.',
   };
-  const NOTHING_LINKED = {
-    title: 'Nothing is linked yet',
-    body: (files) => 'This workspace has ' + files + (files === 1 ? ' file' : ' files')
-      + ' and no links between them. Link a file with a wikilink and it appears here.',
+  // The map draws files, and links between the ones that have them. So the
+  // only thing it cannot draw is a workspace with no files.
+  //
+  // It used to refuse whenever nothing was LINKED, and say so, which made one
+  // wikilink the difference between seeing your workspace and reading a
+  // sentence about it. The same view already draws unlinked files, out in the
+  // rim, the moment a single link exists anywhere: the layout never needed a
+  // linked core to arrange things around, and was measured handling 1, 12 and
+  // 300 wholly unlinked files with every position finite and distinct. So the
+  // refusal was never about what could be drawn. Found by dogfooding.
+  const NO_FILES = {
+    title: 'No files yet',
+    body: () => 'This workspace has no files. Create one and it appears here.',
   };
 
   // ===== LAYOUT PARAMETERS =====
@@ -626,7 +635,7 @@
     bounds, fitTransform, FIT_PADDING, FIT_MAX_ZOOM, RIM_BAND,
     zoomAt, wheelZoomFactor, ZOOM_MIN, ZOOM_MAX, dragIsClick, CLICK_SLOP,
     edgeComposite,
-    readout, WARMING, NO_INDEX, NOTHING_LINKED,
+    readout, WARMING, NO_INDEX, NO_FILES,
     CHARGE_DISTANCE_MAX, CHARGE_THETA, chargeStrength, linkDistance, collideRadius, alphaDecay, anchorStrength, CENTER_FORCE,
   };
 }));

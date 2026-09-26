@@ -13,7 +13,7 @@ const index = { text: DOC };
 const fixedNow = () => '2026-07-16T12:00:00Z';
 
 function fresh(content = null, opts = {}) {
-  return createSidecarController({ path: 'proposal.html', content, index, author: 'liam', now: fixedNow, ...opts });
+  return createSidecarController({ path: 'proposal.html', content, index, author: 'sam', now: fixedNow, ...opts });
 }
 
 describe('sidecar naming', () => {
@@ -64,7 +64,7 @@ describe('comments: add, reply, resolve', () => {
     assert.equal(items.length, 2);
     assert.equal(items[0].anchor, 'Quarterly Proposal', 'sorted by located position, not insertion order');
     assert.equal(items[1].text, 'tighten this');
-    assert.equal(items[0].meta.by, 'liam');
+    assert.equal(items[0].meta.by, 'sam');
     assert.equal(items[0].orphaned, false);
   });
 
@@ -115,8 +115,8 @@ describe('orphans', () => {
     const stored = JSON.stringify({
       format: SIDECAR_FORMAT, path: 'proposal.html',
       comments: {
-        c1: { quote: 'PASSAGE THE AGENT DELETED', prefix: '', suffix: '', body: 'still matters', by: 'penn', at: '2026-07-15T09:00:00Z' },
-        c2: { quote: 'Three workstreams', prefix: '', suffix: '', body: 'live one', by: 'liam', at: '2026-07-15T09:01:00Z' },
+        c1: { quote: 'PASSAGE THE AGENT DELETED', prefix: '', suffix: '', body: 'still matters', by: 'wren', at: '2026-07-15T09:00:00Z' },
+        c2: { quote: 'Three workstreams', prefix: '', suffix: '', body: 'live one', by: 'sam', at: '2026-07-15T09:01:00Z' },
       },
       suggestions: {}, review: {},
     });

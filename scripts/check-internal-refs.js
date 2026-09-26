@@ -23,11 +23,14 @@
 
 const { execSync } = require('node:child_process');
 const fs = require('node:fs');
+// Personal data (emails, home paths, account identifiers, tokens) is checked
+// by its own rules, over EVERY tracked text file with no path exemption and
+// no line marker: see scripts/personal-data.js.
+const { scanPersonal } = require('./personal-data.js');
 
 // Paths never scanned: generated bundles, dependency locks, coverage, build
 // output, and this checker itself (its pattern list would self-match).
 const SKIP = [
-  /^public\/vendor\//,
   /^node_modules\//,
   /(^|\/)package-lock\.json$/,
   /(^|\/)coverage\.lcov$/,
@@ -47,22 +50,16 @@ const SKIP = [
 // file that carried the shape on the day the rule was written, listed by
 // exact path so the list can only shrink. See the rule for the reasoning.
 const AC_LABEL_AMNESTY = new Set([
-  'test/e2e/file-tree-icons.spec.js',
-  'test/e2e/theme.spec.js',
-  'test/integration/scheduler-gating.test.js',
   'test/integration/scheduler-output-drain.test.js',
   'test/integration/scheduler-predating-routines.test.js',
   'test/integration/scheduler-run-observation.test.js',
   'test/integration/scheduler-run-records.test.js',
   'test/integration/scheduler-workspace-lifecycle.test.js',
   'test/tools/mutate-routines-guards.js',
-  'test/tools/mutate-run-detail-guards.js',
-  'test/unit/boundary.test.js',
   'test/unit/guide-name.test.js',
   'test/unit/profile-boxes.test.js',
   'test/unit/red-first-orphans.test.js',
   'test/unit/red-first.test.js',
-  'test/unit/routine-actions.test.js',
   'test/unit/routine-editor-contract.test.js',
   'test/unit/routine-editor-doors.test.js',
   'test/unit/routine-editor-model.test.js',
@@ -76,13 +73,9 @@ const AC_LABEL_AMNESTY = new Set([
   'test/unit/routines-view-doors.test.js',
   'test/unit/routines-view.test.js',
   'test/unit/scheduler-lib.test.js',
-  'test/unit/scheduler-lifecycle-doors.test.js',
   'test/unit/session-transcript-capture.test.js',
   'test/unit/session-transcript.test.js',
-  'test/unit/team-sidebar.test.js',
-  'scripts/red-first.js',
   'docs/TEST-TIMING.md',
-  'docs/evidence/red-first-orphans-evidence.md',
   'docs/evidence/scheduler-lifecycle-evidence.md',
   'docs/evidence/setup-race-flakes-evidence.md',
 ]);
@@ -102,7 +95,11 @@ const RULES = [
   { label: 'review-round + priority label (e.g. R2 P3-1)', re: /\bR[0-9] P[0-9](-[0-9])?\b/ },
   { label: 'review-round label (e.g. round-2 regressions)', re: /\bround-?[0-9] regress/i },
   { label: 'internal plan/run codename (e.g. HARDEN1, KAN2)', re: /\b(HARDEN[0-9]*|KAN[0-9])\b/ },
-  { label: 'vault / private workspace path', re: /02_Areas|01_Projects|Liam-Agent-Workspace|Obsidian Vaults?/ },
+  // Generic folder shapes only. The names of a real workspace are private
+  // terms, so they live in the private denylist the pre-push scan reads
+  // (scripts/private-denylist.js), never in this public file.
+  { label: 'vault / private workspace path', re: /02_Areas|01_Projects|_Daily Notes\b/ },
+  { label: 'personal workspace system name', re: /\bPersonal OS\b/ },
   // Private workspace TOOLING paths, which the rule above does not reach: it
   // lists vault folders, and these sit under System/ alongside a folder that
   // is a genuine product feature.
@@ -113,11 +110,9 @@ const RULES = [
   // behaviour. Every other System/ folder named below is workspace furniture
   // that no external reader can act on.
   //
-  // Added after `docs/browser-pass.md` shipped to the public repo telling
-  // readers to run `python3 System/Automations/sdlc-metrics.py`, a file that
-  // does not exist in this repository. It passed every check, because the path
-  // rule looked for vault FOLDER names and this was none of them.
-  { label: 'private workspace tooling path', re: /System\/(Automations|Memory|Context|MCP|Rules|Voice|Formats|dashboards)\b|\bsdlc-metrics\b/ },
+  // Added after a doc shipped telling readers to run a script under one of
+  // these folders, a file that does not exist in this repository.
+  { label: 'private workspace tooling path', re: /System\/(Automations|Memory|Context|MCP|Rules|Voice|Formats|dashboards)\b/ },
   // The path rule above only catches vault PATHS. These catch references to
   // private workspace CONTENT, which reads as internal to any external
   // contributor even though no path appears. Deliberately narrow: a bare
@@ -163,15 +158,23 @@ const RULES = [
     re: /\bAC-[A-Z]?[0-9]+\b/,
     amnesty: AC_LABEL_AMNESTY,
   },
-  // Owner-attributed decisions. The name itself is legitimate here: it is in
-  // the LICENSE, the README byline, and the example agent files. What does not
-  // belong is who authorised something, which describes how work was approved
-  // rather than what the software does. An earlier version matched only the
-  // parenthesised and dated forms, and "Liam authorised proceeding" walked
-  // straight through it into a tracked file.
+  // Criteria ids from a review document a contributor cannot open, in the
+  // two-letter shape (NS-3, AA-16, RU-31). AC-n has its own ratcheted rule
+  // above. Name the behaviour, not the criterion.
+  { label: 'criteria id (e.g. NS-3, AA-16)', re: /\b(?!AC-)[A-Z]{2}-[0-9]{1,3}[a-z]?\b/ },
+  // How the work was organised: a lane of parallel work, a review round.
+  // Narrow for lane, because a board's lane is a product term.
   {
-    label: 'owner-attributed decision note',
-    re: /\(Liam[ ,]|Liam 20[0-9]{2}|decision,? Liam|\bLiam (authoris|approv|decid|direct|instruct|confirm|request|sign)\w*\b|\bper Liam\b|\bLiam's (call|decision|instruction|approval)\b/i,
+    label: 'process lane',
+    re: /\b(?:this|that|own|confinement|review|parallel|another|each) lane(?:'s)?\b(?! (?:menu|title|index|popup|object|items?|header|count|width))/i,
+  },
+  { label: 'review round (e.g. review round 2, Round 1)', re: /\breview rounds?\b(?!-)|\bRound [0-9]+\b|\bround [0-9]+'s\b|\bof round [0-9]+\b|\bby round [0-9]+\b/ },
+  // Who decided, rather than what the software does. Generic: the person is
+  // never named here, and names themselves are private terms.
+  { label: 'owner-attributed note (e.g. the owner decided)', re: /\bthe owner\b(?![/-])/i },
+  {
+    label: "named person's setup or decision (use a neutral example)",
+    re: /\bYou are [A-Z][a-z]+, [A-Z][a-z]+'s\b|\b(?!Rundock|Claude|Codex|GitHub|Obsidian)[A-Z][a-z]+'s (?:setup|time|gist|work surfaces|Lead Developer|(?:AI )?Chief of Staff|call|decision|instruction|approval)\b/,
   },
   // Planning arithmetic about how the work is MANAGED: budgets and their
   // revisions. Deliberately narrow. A factual count like "3 of 3 rounds" is
@@ -185,12 +188,13 @@ const RULES = [
   // Style rule: no em or en dashes anywhere. Use a colon, comma, full stop, or
   // restructure. Genuinely intentional dashes (a splitter char class, the
   // prompt that defines the rule) carry an inline internal-refs-allow marker.
-  { label: 'em or en dash (use a colon, comma, or full stop)', re: /[—–]/ },
+  // Third-party bundles are not our prose.
+  { label: 'em or en dash (use a colon, comma, or full stop)', re: /[—–]/, skip: /^public\/vendor\/(?!build-entry\.js$|collect-licenses\.js$)/ },
 ];
 
-function trackedFiles() {
+function allTrackedFiles() {
   const out = execSync('git ls-files', { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
-  return out.split('\n').filter(Boolean).filter((f) => !SKIP.some((re) => re.test(f)));
+  return out.split('\n').filter(Boolean);
 }
 
 function isProbablyBinary(buf) {
@@ -209,6 +213,7 @@ function scanLines(label, text, { skipHashComments = false } = {}) {
     if (skipHashComments && line.startsWith('#')) return;
     for (const rule of RULES) {
       if (rule.amnesty && rule.amnesty.has(label)) continue;
+      if (rule.skip && rule.skip.test(label)) continue;
       const m = line.match(rule.re);
       if (m) out.push({ file: label, line: i + 1, label: rule.label, match: m[0], text: line.trim().slice(0, 120) });
     }
@@ -216,37 +221,51 @@ function scanLines(label, text, { skipHashComments = false } = {}) {
   return out;
 }
 
-const msgFlag = process.argv.indexOf('--message');
-const MESSAGE_FILE = msgFlag >= 0 ? process.argv[msgFlag + 1] : null;
+// Required as a module (the pre-push leak scan), it exports its rules and
+// runs nothing; run as a script, it checks as it always has.
+module.exports = { RULES, SKIP, scanLines };
+if (require.main === module) {
+  const msgFlag = process.argv.indexOf('--message');
+  const MESSAGE_FILE = msgFlag >= 0 ? process.argv[msgFlag + 1] : null;
+  // Only the personal-data rules: what the every-branch push workflow runs, so a
+  // work-in-progress branch is held to them from its first push without being
+  // held yet to the planning-language rules a merge enforces.
+  const PERSONAL_ONLY = process.argv.includes('--personal-only');
 
-const findings = [];
-if (MESSAGE_FILE) {
-  // Commit-message mode: scan only the message.
-  let text = '';
-  try { text = fs.readFileSync(MESSAGE_FILE, 'utf8'); } catch {
-    console.error(`check-internal-refs: could not read message file ${MESSAGE_FILE}`);
-    process.exit(1);
+  const findings = [];
+  if (MESSAGE_FILE) {
+    // Commit-message mode: scan only the message.
+    let text = '';
+    try { text = fs.readFileSync(MESSAGE_FILE, 'utf8'); } catch {
+      console.error(`check-internal-refs: could not read message file ${MESSAGE_FILE}`);
+      process.exit(1);
+    }
+    if (!PERSONAL_ONLY) findings.push(...scanLines('commit message', text, { skipHashComments: true }));
+    findings.push(...scanPersonal('commit message', text, { skipHashComments: true }));
+  } else {
+    for (const file of allTrackedFiles()) {
+      let buf;
+      try { buf = fs.readFileSync(file); } catch { continue; }
+      if (isProbablyBinary(buf)) continue;
+      const text = buf.toString('utf8');
+      // The planning-reference rules skip generated and captured artefacts;
+      // the personal-data rules skip nothing.
+      if (!PERSONAL_ONLY && !SKIP.some((re) => re.test(file))) findings.push(...scanLines(file, text));
+      findings.push(...scanPersonal(file, text));
+    }
   }
-  findings.push(...scanLines('commit message', text, { skipHashComments: true }));
-} else {
-  for (const file of trackedFiles()) {
-    let buf;
-    try { buf = fs.readFileSync(file); } catch { continue; }
-    if (isProbablyBinary(buf)) continue;
-    findings.push(...scanLines(file, buf.toString('utf8')));
+
+  const scope = MESSAGE_FILE ? 'commit message' : 'tracked files';
+  if (findings.length === 0) {
+    console.log(`check-internal-refs: clean (no internal references in ${scope}).`);
+    process.exit(0);
   }
-}
 
-const scope = MESSAGE_FILE ? 'commit message' : 'tracked files';
-if (findings.length === 0) {
-  console.log(`check-internal-refs: clean (no internal references in ${scope}).`);
-  process.exit(0);
+  console.error(`check-internal-refs: found ${findings.length} internal reference(s) that must not ship in the public repo.\n`);
+  for (const f of findings) {
+    console.error(`  ${f.file}:${f.line}  [${f.label}]  matched "${f.match}"`);
+    console.error(`    ${f.text}`);
+  }
+  console.error(`\nReword these in plain descriptive language${MESSAGE_FILE ? ', then commit again.' : ', then re-run: npm run check:refs'}`);
+  process.exit(1);
 }
-
-console.error(`check-internal-refs: found ${findings.length} internal reference(s) that must not ship in the public repo.\n`);
-for (const f of findings) {
-  console.error(`  ${f.file}:${f.line}  [${f.label}]  matched "${f.match}"`);
-  console.error(`    ${f.text}`);
-}
-console.error(`\nReword these in plain descriptive language${MESSAGE_FILE ? ', then commit again.' : ', then re-run: npm run check:refs'}`);
-process.exit(1);

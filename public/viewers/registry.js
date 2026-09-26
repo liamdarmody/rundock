@@ -9,9 +9,12 @@
 // and markdown/text become entries here (see the SEAM comment in app.js).
 //
 // Viewer mount contract (mirrors the editor module's boundary):
-//   mount({ paneElement, path, content }) -> { getContentForSave|null, destroy() }
+//   mount({ paneElement, path, content, onChange }) -> { getContentForSave|null, destroy() }
 // A null getContentForSave marks the viewer read-only: it never participates
-// in autosave or Cmd+S.
+// in autosave or Cmd+S. A writable viewer calls onChange() when its content
+// changes and does nothing else about saving: the caller owns the one
+// debounce (public/save-scheduler.js) and asks getContentForSave when the
+// pause is over, so no viewer reimplements a save timer.
 
 // ---------- classification (pure; unit-tested without a DOM) ----------
 
@@ -207,6 +210,28 @@ export function mountArtifactPreview({ paneElement, content }) {
   iframe.setAttribute('sandbox', 'allow-same-origin');
   iframe.setAttribute('title', 'Artifact preview');
   iframe.srcdoc = buildSrcdoc(content);
+  // A WEB LINK IN THE PREVIEW OPENS OUTSIDE IT. The app page confines every
+  // frame on it to its own origin (`frame-src 'self'`, lib/http-router.js),
+  // which is what stops an extension frame leaving with a file, and it would
+  // equally refuse this preview following an off-site link. Before that
+  // policy such a link loaded the whole site squashed inside the pane, which
+  // was never useful. So the click is taken here, where the preview's
+  // document is reachable (same origin, no scripts of its own), and the
+  // address goes out the way a link in a note does: the system browser on
+  // desktop, a new tab in a browser. In-page anchors are left to the preview.
+  iframe.addEventListener('load', () => {
+    const inner = iframe.contentDocument;
+    if (!inner) return;
+    inner.addEventListener('click', (event) => {
+      const link = event.target && event.target.closest ? event.target.closest('a[href]') : null;
+      if (!link || (link.getAttribute('href') || '').startsWith('#')) return;
+      let url;
+      try { url = new URL(link.href); } catch (e) { return; }
+      if (url.protocol !== 'http:' && url.protocol !== 'https:') return;
+      event.preventDefault();
+      doc.defaultView.open(url.href, '_blank', 'noopener,noreferrer');
+    }, true);
+  });
   paneElement.appendChild(iframe);
   const handle = makeHandle(paneElement);
   handle.iframe = iframe; // the review loop attaches to the loaded frame

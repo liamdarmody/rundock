@@ -5,6 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Rundock</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<!-- First, so the page's own clicks are recorded before anything can mount an extension view: see the file. -->
+<script src="/host-gestures.js"></script>
+<script src="/external-links.js"></script>
 <script src="/marked.min.js"></script>
 <!-- d3-hierarchy: vendored locally (public/vendor/d3-hierarchy/) so the org chart works offline. -->
 <script src="/vendor/d3-hierarchy/d3-hierarchy.min.js"></script>
@@ -26,6 +29,8 @@
 <script src="/update-strip-view.js"></script>
 <script src="/empty-list.js"></script>
 <script src="/unread-state.js"></script>
+<script src="/save-scheduler.js"></script>
+<script src="/embed-model.js"></script>
 <script src="/markers.js"></script>
 <!-- read-only-shell.js before permissions.js: the risk grader reads the shared read-only definition off the root object at load time. -->
 <script src="/read-only-shell.js"></script>
@@ -40,13 +45,24 @@
 <script src="/chat-markup.js"></script>
 <script src="/delegation-restore.js"></script>
 <script src="/markdown-render.js"></script>
+  <!-- Region mount: an extension draws a fenced block inside a document.
+       Loaded before views/files.js, which runs the pass over a rendered
+       preview, and after markdown-render.js, whose output that pass reads. -->
+  <script src="/region-markup.js"></script>
+  <script src="/region-service.js"></script>
+  <script src="/region-mount.js"></script>
 <script src="/file-tree-diff.js"></script>
 <script src="/routine-editor-model.js"></script>
 <script src="/run-detail-model.js"></script>
 <script src="/skills-model.js"></script>
 <script src="/routines-model.js"></script>
+<script src="/named-sources-model.js"></script>
 <script src="/packages-decide.js"></script>
 <script src="/packages-install-model.js"></script>
+<script src="/packages-update-model.js"></script>
+<script src="/packages-manage-model.js"></script>
+<script src="/sandbox-row-model.js"></script>
+<script src="/extensions-view-model.js"></script>
 <script src="/routines-scope-model.js"></script>
 <script src="/graph-model.js"></script>
 <script src="/guide-copy.js"></script>
@@ -62,7 +78,26 @@
 <link rel="stylesheet" href="/styles/components/find-bar.css">
 <link rel="stylesheet" href="/styles/components/message-content.css">
 <link rel="stylesheet" href="/styles/components/connection-bar.css">
+<link rel="stylesheet" href="/styles/components/approvals-dock.css">
+<link rel="stylesheet" href="/styles/components/embed.css">
 <link rel="stylesheet" href="/styles/components/palette.css">
+<link rel="stylesheet" href="/styles/components/extension-frame.css">
+<link rel="stylesheet" href="/styles/components/extension-request.css">
+  <link rel="stylesheet" href="/styles/components/region.css">
+  <!-- The floor every extension frame stands on. Loaded with media="not all"
+       DELIBERATELY: the browser fetches and parses it, so its rules are
+       readable from document.styleSheets the same way the design tokens are,
+       and it applies to nothing in this page. Linking it normally would style
+       Rundock itself with rules meant for somebody else's frame. It stays a
+       real stylesheet rather than a string in JavaScript so the style linter
+       holds it to the same token discipline as every other sheet. -->
+  <link rel="stylesheet" href="/styles/extension-base.css" media="not all" data-extension-base>
+  <!-- Rundock UI's components (docs/RUNDOCK-UI.md). Loaded normally, unlike
+       the floor above: its rules are classes prefixed rui- and style nothing
+       else, so the page can draw from it too, and the host reads it back out
+       of this sheet to inline into every extension frame. One stylesheet for
+       both. -->
+  <link rel="stylesheet" href="/styles/rundock-ui.css" data-rundock-ui>
 <link rel="stylesheet" href="/styles/views/org-chart.css">
 <link rel="stylesheet" href="/styles/views/profile.css">
 <link rel="stylesheet" href="/styles/views/chat.css">
@@ -211,25 +246,6 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
           Workspace
         </div>
-        <!-- The Packages door is held shut until the room behind it is
-             finished. The import half is real: a package colliding with
-             nothing plans, confirms, applies and leaves a receipt. A package
-             colliding with anything disables confirm and tells the person
-             each item needs its own decision, and the surface that takes
-             those decisions is not built yet. A door opening onto an
-             instruction the product cannot carry out is worse than no door.
-             HIDDEN, NOT DELETED, and the distinction is load-bearing:
-             packagesSectionVisible() reads dataset.settings off the active
-             nav item, so deleting this element makes that guard permanently
-             false, packagesRenderIfVisible() stops firing, and the flow never
-             redraws past its first paint. The e2e suite reaches the section
-             through showSettingsSection() rather than through this rail, so
-             the foundation keeps being proven while it is out of reach.
-             Remove the style attribute in the Packages release. -->
-        <div class="settings-nav-item" data-settings="packages" style="display:none" onclick="showSettingsSection('packages')">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
-          Packages
-        </div>
         <!-- Between Workspace and Connectors on purpose: the sidebar reads by
              narrowing scope. Which folder, then what agents may do inside it,
              then what they can reach beyond it. -->
@@ -244,6 +260,24 @@
                straight down: the shape people already know. -->
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="9" y1="2" x2="9" y2="8"/><line x1="15" y1="2" x2="15" y2="8"/><path d="M7 8h10v3a5 5 0 0 1-10 0z"/><line x1="12" y1="16" x2="12" y2="22"/></svg>
           Connectors
+        </div>
+        <!-- Packages sits between Connectors and Appearance, per the approved
+             page design: the sections you configure come first, then what you
+             have brought in, then preference and meta. HIDDEN IS NEVER AN
+             OPTION FOR THIS ELEMENT: packagesSectionVisible() reads
+             dataset.settings off the active nav item, so removing it makes
+             that guard permanently false and the section stops redrawing. -->
+        <div class="settings-nav-item" data-settings="packages" onclick="showSettingsSection('packages')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m7.5 4.27 9 5.15"/><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="M3.29 7 12 12l8.71-5"/><line x1="12" y1="22" x2="12" y2="12"/></svg>
+          Packages
+        </div>
+        <!-- Extensions sits below Packages: Packages is where things arrive,
+             Extensions is where an installed one is switched, paused or
+             removed. Lucide Puzzle, so it reads apart from the Packages cube.
+             Reachable from the keyboard like the controls on its page. -->
+        <div class="settings-nav-item" data-settings="extensions" tabindex="0" role="button" onclick="showSettingsSection('extensions')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();showSettingsSection('extensions')}">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M15.39 4.39a1 1 0 0 0 1.68-.474 2.5 2.5 0 1 1 3.014 3.015 1 1 0 0 0-.474 1.68l1.683 1.682a2.414 2.414 0 0 1 0 3.414L19.61 15.39a1 1 0 0 1-1.68-.474 2.5 2.5 0 1 0-3.014 3.015 1 1 0 0 1 .474 1.68l-1.683 1.682a2.414 2.414 0 0 1-3.414 0L8.61 19.61a1 1 0 0 0-1.68.474 2.5 2.5 0 1 1-3.014-3.015 1 1 0 0 0 .474-1.68l-1.683-1.682a2.414 2.414 0 0 1 0-3.414L4.39 8.61a1 1 0 0 1 1.68.474 2.5 2.5 0 1 0 3.014-3.015 1 1 0 0 1-.474-1.68l1.683-1.682a2.414 2.414 0 0 1 3.414 0z"/></svg>
+          Extensions
         </div>
         <div class="settings-nav-item" data-settings="appearance" onclick="showSettingsSection('appearance')">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
@@ -266,6 +300,10 @@
 
   <main class="main">
     <div class="connection-bar connecting" id="connection-bar">Connecting...</div>
+    <aside class="approvals-dock" id="approvals-dock" hidden aria-live="polite" aria-label="Approvals waiting">
+      <div class="approvals-dock-head"><span class="approvals-dock-title">Needs your approval</span><span class="approvals-dock-count"></span></div>
+      <div class="approvals-dock-list"></div>
+    </aside>
     <!-- In-view find bar. Cmd+F (Ctrl+F) opens it for whichever view is
          active: conversation, markdown editor, or legacy file preview.
          Positioned absolutely in the top-right of the main panel area. -->

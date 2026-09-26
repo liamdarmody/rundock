@@ -311,6 +311,9 @@ function rowHtml(entry, index, withActions) {
     // for the same reason: the row's offer promises what the tick would do,
     // and the tick's own answer is the only copy of that which cannot drift.
     refusal: r.refusal,
+    // Whether anybody ever approved it, published beside the refusal, so an
+    // approval refusal says "waiting" or "changed" truthfully.
+    approvedBefore: r.approvedBefore,
     // Whether a run of it is going, stamped beside the refusal and passed
     // through for the same reason: the row derives it from nothing else.
     running: r.running,

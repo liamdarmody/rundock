@@ -79,6 +79,11 @@
    command disclosure sat flush left while the sentence above them and the
    buttons below them were indented. */
 .permission-card { background: var(--card); border-radius: var(--radius-xl); padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; --permission-text-column: 24px; }
+/* A colour of its own in light, darker than the code block inside it (which
+   stays --elevated, pure white) rather than sharing that white and merging
+   with it: 1.28:1 of separation, where --elevated gave 1.00:1. Dark is the
+   plain --card. */
+body.light .permission-card { background: #E8E3DB; }
 .permission-card.risk-low { border: 1px solid var(--border); }
 .permission-card.risk-medium { border: 1px solid var(--border); }
 .permission-card.risk-high { border: 1px solid var(--attention); }
@@ -86,12 +91,21 @@
 .risk-low .permission-header { color: var(--text-1); }
 .risk-medium .permission-header { color: var(--text-1); }
 .risk-high .permission-header { color: var(--attention); }
+/* Amber text on the light card measured 1.77:1, and darkening it enough to
+   hold 4.5:1 turns it brown. So in light the title is plain --text-1 (13.6:1)
+   and the icon and the border keep the amber at full strength: they are
+   what carries "this needs attention". Dark keeps the amber title, 6.10:1. */
+body.light .risk-high .permission-header { color: var(--text-1); }
 .permission-icon { flex-shrink: 0; }
 .risk-low .permission-icon { color: var(--text-2); }
 .risk-medium .permission-icon { color: var(--text-1); }
 .risk-high .permission-icon { color: var(--attention); }
 .permission-context { font-size: var(--caption); color: var(--text-2); margin-top: -4px; padding-left: var(--permission-text-column); }
-.permission-detail { display: block; background: var(--elevated); padding: 8px 12px; border-radius: var(--radius-md); font-size: 13px; font-family: 'SF Mono','Fira Code','Consolas',monospace; color: var(--text-2); word-break: break-all; line-height: 1.4; overflow: hidden; max-height: 80px; }
+.permission-detail { display: block; background: var(--base); padding: 8px 12px; border-radius: var(--radius-md); font-size: 13px; font-family: 'SF Mono','Fira Code','Consolas',monospace; color: var(--text-2); word-break: break-all; line-height: 1.4; overflow: hidden; max-height: 80px; }
+/* The code block is one step darker than the card in dark (--base, 1.38:1
+   of separation, up from 1.18:1) and the lightest surface in the card in
+   light, where the card has its own colour above. */
+body.light .permission-detail { background: var(--elevated); }
 .permission-detail-collapse { font-size: var(--caption); color: var(--text-3); }
 /* Margin rather than padding: the detail box is tinted, so padding would leave
    its background starting at the card edge with only the text indented.
@@ -124,8 +138,10 @@
 .permission-resolved { font-size: var(--caption); padding: 6px 12px; border-radius: var(--radius-lg); display: flex; align-items: flex-start; gap: 6px; flex-wrap: wrap; }
 .permission-resolved-detail { color: var(--text-3); }
 .permission-resolved .permission-detail-collapse { width: 100%; margin-top: 2px; }
-.permission-resolved.allowed { background: rgba(107,198,126,0.12); color: var(--success); }
-.permission-resolved.denied { background: rgba(232,122,90,0.12); color: var(--accent); }
+/* Solid fills with --on-chart text, not tone text on its own tint: the tint
+   measured as low as 1.66:1 in light. */
+.permission-resolved.allowed { background: var(--success); color: var(--on-chart); }
+.permission-resolved.denied { background: var(--accent); color: var(--on-chart); }
 .permission-resolved.auto-allowed { background: rgba(107,198,126,0.06); color: var(--text-2); font-style: italic; }
 .chat-input { padding: 16px 24px; border-top: 1px solid var(--border); display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
 .chat-input textarea { flex: 1; padding: 12px 16px; background: var(--card); border-radius: var(--radius-lg); font-size: var(--body); border: 1px solid transparent; transition: all var(--duration-slow) ease; resize: none; overflow-y: auto; min-height: 44px; max-height: 200px; line-height: 1.5; font-family: inherit; color: var(--text-1); outline: none; }
@@ -149,12 +165,13 @@
 .chat-input textarea::placeholder { color: var(--text-2); }
 .chat-input textarea:disabled { opacity: 0.5; }
 .send-btn { width: 42px; height: 42px; background: var(--card); color: var(--text-2); border-radius: var(--radius-circle); display: flex; align-items: center; justify-content: center; transition: all 0.25s ease; flex-shrink: 0; }
-.send-btn.active { background: var(--accent); color: white; box-shadow: 0 2px 8px rgba(232,122,90,0.3); }
-.send-btn.active:hover { background: var(--accent-hover); transform: translateY(-1px); box-shadow: 0 4px 12px rgba(232,122,90,0.4); }
+/* Filled, so --accent-action with white: see tokens.css. */
+.send-btn.active { background: var(--accent-action); color: white; box-shadow: 0 2px 8px rgba(193,87,41,0.3); }
+.send-btn.active:hover { background: var(--accent-action-hover); transform: translateY(-1px); box-shadow: 0 4px 12px rgba(193,87,41,0.4); }
 .send-btn:disabled { opacity: 0.3; cursor: not-allowed; }
-.send-btn.cancel { background: color-mix(in srgb, var(--danger) 15%, transparent); color: var(--danger); cursor: pointer; opacity: 1; }
+.send-btn.cancel { background: color-mix(in srgb, var(--danger) 15%, transparent); color: var(--danger-text); cursor: pointer; opacity: 1; }
 .send-btn.cancel:hover { background: color-mix(in srgb, var(--danger) 25%, transparent); }
-.cancelled-badge { display: inline-block; font-size: var(--label); color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent); padding: 2px 8px; border-radius: var(--radius-sm); margin-top: 8px; }
+.cancelled-badge { display: inline-block; font-size: var(--label); color: var(--danger-text); background: color-mix(in srgb, var(--danger) 12%, transparent); padding: 2px 8px; border-radius: var(--radius-sm); margin-top: 8px; }
 .send-btn svg { width: 18px; height: 18px; }
 
 /* Chat prompts */

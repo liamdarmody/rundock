@@ -1,0 +1,427 @@
+/* Rundock UI: the stylesheet behind Rundock.ui (public/rundock-ui.js).
+
+   ONE SOURCE. This sheet is loaded by the page like any other, so Rundock's
+   own screens can draw from it, and the host reads it back out of the page
+   and inlines it into every extension frame (public/rundock-ui-frame.js), so
+   an extension always has exactly the stylesheet this Rundock ships. Nothing
+   here is a parallel design system: every value is a token from tokens.css,
+   and where a component copies a rule the app already has (the settings
+   button and input, the mode toggle, the empty state, the region pass, the
+   files menu) test/unit/rundock-ui-parity.test.js holds the copy to the
+   original, so the two cannot drift apart.
+
+   CLASSES ONLY, ALL PREFIXED `rui-`. A frame also carries the element floor
+   (extension-base.css), and each rule here sets every property the floor
+   sets on the same element, so a component looks the same whatever the
+   floor says. An extension's own classes never collide with these.
+
+   STATE CLASSES. `rui-force-hover`, `rui-force-focus` and `rui-force-active`
+   draw a state without the pointer or the keyboard, for a gallery or a
+   screenshot; they are not a way to set state. The real states come from the
+   pseudo-classes beside them.
+
+   THE ORANGE RULE. A solid orange fill that carries text or an icon (a
+   button, the accent chip, the send button) is --accent-action, tuned for
+   white text at 4.5:1. A bare shape with neither (the checked checkbox, the
+   toggle when on, the slider's fill and thumb, the selected radio dot, the
+   meter's fill) is --accent-control, tuned for the 3:1 a control needs
+   against its surface. The brand --accent is never written as a fill: it
+   is for outlines, focus rings, hover and drag highlights and links (and
+   --chart-1 in a chart's palette). test/unit/rundock-ui-contrast.test.js
+   holds every fill to its side of the rule.
+
+   Design decisions and the contrast behind every colour: docs/RUNDOCK-UI.md,
+   and the design review's BUILD-SPEC. */
+
+.rui-visually-hidden {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; border: 0;
+}
+
+/* ---- button: views/settings.css .settings-btn / .settings-btn-primary ----
+   Filled controls use --accent-action with white text, never --accent: white
+   on the brand colour measures 2.85:1. Danger is secondary by FORM as well as
+   colour (red text on an outline); only a destructive dialog's own confirm is
+   solid red. */
+.rui-btn { font-family: inherit; font-size: var(--caption); font-weight: 600; line-height: normal; padding: 6px 14px; border-radius: var(--radius-md); cursor: pointer; border: 1px solid transparent; transition: background var(--duration-base) ease, border-color var(--duration-base) ease, color var(--duration-base) ease, opacity var(--duration-base) ease; }
+.rui-btn:focus-visible, .rui-btn.rui-force-focus { outline: 2px solid var(--accent); outline-offset: 2px; }
+.rui-btn:disabled { opacity: 0.45; cursor: default; }
+.rui-btn-primary { background: var(--accent-action); color: white; }
+.rui-btn-primary:hover:not(:disabled), .rui-btn-primary.rui-force-hover { background: var(--accent-action-hover); }
+.rui-btn-primary:active:not(:disabled), .rui-btn-primary.rui-force-active { background: var(--accent-action-hover); filter: brightness(0.94); }
+.rui-btn-secondary { background: var(--card); color: var(--text-1); border-color: var(--border); }
+.rui-btn-secondary:hover:not(:disabled), .rui-btn-secondary.rui-force-hover { border-color: var(--accent); color: var(--accent); }
+.rui-btn-secondary:active:not(:disabled), .rui-btn-secondary.rui-force-active { border-color: var(--accent); color: var(--accent); background: var(--elevated); }
+.rui-btn-danger { background: var(--elevated); color: var(--danger-text); border: 1px solid var(--danger); }
+/* The hover and active tints stay light enough that the red label keeps
+   4.5:1 on them in light: 5% measures 4.63:1 and 6% 4.56:1, where 8% fell
+   to 4.44:1. Active stays the stronger of the two. */
+.rui-btn-danger:hover:not(:disabled), .rui-btn-danger.rui-force-hover { background: color-mix(in srgb, var(--danger) 5%, var(--elevated)); }
+.rui-btn-danger:active:not(:disabled), .rui-btn-danger.rui-force-active { background: color-mix(in srgb, var(--danger) 6%, var(--elevated)); }
+.rui-btn-danger-confirm { background: var(--danger); color: white; border: 1px solid var(--danger); }
+.rui-btn-danger-confirm:hover:not(:disabled), .rui-btn-danger-confirm.rui-force-hover { opacity: 0.9; }
+.rui-btn-danger-confirm:active:not(:disabled), .rui-btn-danger-confirm.rui-force-active { filter: brightness(0.92); }
+
+/* ---- iconButton: views/routines.css .icon-btn, and views/chat.css .send-btn ----
+   The default is the app's 32px icon button. The send variant is the chat
+   composer's send button property for property: --card at rest, action
+   orange with a lift when there is something to send (it carries the arrow,
+   so action orange, not control orange), and a quiet danger tint while it
+   is a stop button. */
+.rui-icon-btn { width: 32px; height: 32px; padding: 0; margin: 0; border-radius: var(--radius-md); display: flex; align-items: center; justify-content: center; color: var(--text-2); background: transparent; border: 1px solid transparent; cursor: pointer; font-family: inherit; }
+.rui-icon-btn:hover:not(:disabled), .rui-icon-btn.rui-force-hover { color: var(--text-1); background: var(--elevated); border-color: var(--border); }
+.rui-icon-btn:focus-visible, .rui-icon-btn.rui-force-focus { outline: 2px solid var(--accent); outline-offset: 2px; }
+.rui-icon-btn:disabled { opacity: 0.35; cursor: default; }
+.rui-icon-btn > svg { width: 16px; height: 16px; }
+.rui-icon-btn-send { width: 42px; height: 42px; background: var(--card); color: var(--text-2); border-radius: var(--radius-circle); border: none; transition: all 0.25s ease; flex-shrink: 0; }
+.rui-icon-btn-send:hover:not(:disabled), .rui-icon-btn-send.rui-force-hover { background: var(--card); color: var(--text-2); border-color: transparent; }
+.rui-icon-btn-send.rui-active { background: var(--accent-action); color: white; box-shadow: 0 2px 8px rgba(193,87,41,0.3); }
+.rui-icon-btn-send.rui-active:hover:not(:disabled), .rui-icon-btn-send.rui-active.rui-force-hover { background: var(--accent-action-hover); color: white; transform: translateY(-1px); box-shadow: 0 4px 12px rgba(193,87,41,0.4); }
+.rui-icon-btn-send:disabled { opacity: 0.3; cursor: not-allowed; }
+.rui-icon-btn-send.rui-cancel { background: color-mix(in srgb, var(--danger) 15%, transparent); color: var(--danger-text); cursor: pointer; opacity: 1; }
+.rui-icon-btn-send.rui-cancel:hover:not(:disabled), .rui-icon-btn-send.rui-cancel.rui-force-hover { background: color-mix(in srgb, var(--danger) 25%, transparent); color: var(--danger-text); }
+.rui-icon-btn-send > svg { width: 18px; height: 18px; }
+
+/* ---- card ---- */
+.rui-card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 16px; transition: border-color var(--duration-base) ease; }
+.rui-card-interactive { cursor: pointer; }
+.rui-card-interactive:hover, .rui-card.rui-force-hover { border-color: var(--text-3); }
+.rui-card-interactive:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.rui-card-title { font-size: var(--body); font-weight: 700; margin: 0 0 4px; color: var(--text-1); }
+.rui-card-sub { font-size: var(--caption); color: var(--text-2); margin: 0; line-height: 1.5; }
+/* The header (title, subtitle) stands 16px clear of the card's content,
+   so content never sits against the line above it; a header on its own
+   adds nothing below. */
+.rui-card > .rui-card-sub:not(:last-child), .rui-card > .rui-card-title:not(:last-child):not(:has(+ .rui-card-sub)) { margin-bottom: 16px; }
+/* A header row: the title, and the card's actions at its end, centred on
+   the title. It spaces like a title on its own: 4px above a subtitle, 16px
+   above content. */
+.rui-card-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; margin: 0 0 4px; }
+.rui-card-head > .rui-card-title { margin: 0; min-width: 0; }
+.rui-card-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-left: auto; }
+.rui-card > .rui-card-head:last-child { margin-bottom: 0; }
+.rui-card > .rui-card-head:not(:last-child):not(:has(+ .rui-card-sub)) { margin-bottom: 16px; }
+
+/* ---- field ---- */
+.rui-field { display: flex; flex-direction: column; gap: 6px; }
+.rui-field-label { font-size: var(--caption); font-weight: 600; color: var(--text-1); }
+.rui-field-help { font-size: var(--label); color: var(--text-3); }
+.rui-field-error-text { font-size: var(--label); color: var(--danger-text); }
+.rui-field-error-text[hidden], .rui-field-help[hidden] { display: none; }
+
+/* ---- input: views/settings.css .settings-input ----
+   Border --text-3, not --border: a control's outline is how a person finds it
+   at all, which is what WCAG 1.4.11 asks 3:1 for. */
+.rui-input { width: 100%; box-sizing: border-box; background: var(--elevated); border: 1px solid var(--text-3); border-radius: var(--radius-md); padding: 9px 12px; font-size: var(--body); line-height: normal; color: var(--text-1); font-family: inherit; outline: none; transition: border-color var(--duration-base) ease; }
+.rui-input::placeholder { color: var(--text-3); }
+.rui-input:hover:not(:disabled):not(:read-only), .rui-input.rui-force-hover { border-color: var(--text-1); }
+.rui-input:focus-visible, .rui-input.rui-force-focus { outline: 2px solid var(--accent); outline-offset: 1px; border-color: var(--accent); }
+.rui-input:disabled { opacity: 0.6; }
+/* Read-only stays focusable and readable, so it keeps full opacity; the
+   dashed edge says it will not take typing. */
+.rui-input:read-only:not(:disabled) { background: var(--surface); border-style: dashed; }
+.rui-input[aria-invalid="true"] { border-color: var(--danger); }
+.rui-input-numeric { font-variant-numeric: tabular-nums; }
+.rui-input-right { text-align: right; }
+
+/* ---- select: a native select, its arrow drawn by the wrapper ---- */
+.rui-select-wrap { position: relative; color: var(--text-2); }
+.rui-select-wrap > svg { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); width: 14px; height: 14px; pointer-events: none; transition: color var(--duration-base) ease; }
+.rui-select-wrap:hover:not(.rui-disabled) > svg, .rui-select-wrap.rui-force-hover > svg { color: var(--text-1); }
+.rui-select { appearance: none; -webkit-appearance: none; width: 100%; box-sizing: border-box; background: var(--elevated); border: 1px solid var(--text-3); border-radius: var(--radius-md); padding: 9px 32px 9px 12px; font-size: var(--body); line-height: normal; color: var(--text-1); font-family: inherit; cursor: pointer; transition: border-color var(--duration-base) ease; }
+.rui-select:hover:not(:disabled), .rui-select.rui-force-hover { border-color: var(--text-1); }
+.rui-select:focus-visible, .rui-select.rui-force-focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+.rui-select:disabled { opacity: 0.6; cursor: default; }
+
+/* ---- checkbox ----
+   The tick is a centred background image, so it sits in the middle of the
+   box at any zoom. The label's 4px padding (cancelled by a -4px margin) makes
+   the native click target 24 by 24. */
+.rui-check-row { display: flex; align-items: center; gap: 8px; font-size: var(--caption); color: var(--text-1); padding: 4px; margin: -4px; cursor: pointer; width: fit-content; }
+.rui-check-row.rui-disabled { cursor: default; }
+.rui-checkbox { appearance: none; -webkit-appearance: none; margin: 0; padding: 0; width: 16px; height: 16px; border-radius: var(--radius-sm); border: 1px solid var(--text-3); background: var(--surface); cursor: pointer; position: relative; flex-shrink: 0; vertical-align: middle; transition: background var(--duration-base) ease, border-color var(--duration-base) ease; }
+.rui-checkbox:hover:not(:disabled), .rui-checkbox.rui-force-hover { border-color: var(--text-1); }
+.rui-checkbox:checked, .rui-checkbox:indeterminate { background-color: var(--accent-control); border-color: var(--accent-control); background-position: center; background-size: 12px 12px; background-repeat: no-repeat; }
+.rui-checkbox:checked { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 6.2l2.3 2.3 4.7-5' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"); }
+.rui-checkbox:indeterminate { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M3 6h6' fill='none' stroke='white' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E"); }
+.rui-checkbox:active:not(:disabled), .rui-checkbox.rui-force-active { border-color: var(--accent-control-hover); }
+.rui-checkbox:checked:active:not(:disabled), .rui-checkbox:checked.rui-force-active { background-color: var(--accent-control-hover); border-color: var(--accent-control-hover); }
+.rui-checkbox:focus-visible, .rui-checkbox.rui-force-focus { outline: 2px solid var(--accent); outline-offset: 2px; }
+.rui-checkbox:disabled { opacity: 0.5; cursor: default; }
+
+/* ---- toggle: a checkbox with the switch role (views/routines.js) ---- */
+.rui-toggle-row { display: flex; align-items: center; gap: 8px; font-size: var(--caption); color: var(--text-1); padding: 2px 0; cursor: pointer; width: fit-content; }
+.rui-toggle-row.rui-disabled { cursor: default; }
+.rui-toggle { appearance: none; -webkit-appearance: none; margin: 0; padding: 0; box-sizing: border-box; width: 36px; height: 20px; border-radius: var(--radius-pill); background: var(--surface); border: 1px solid var(--text-3); position: relative; cursor: pointer; flex-shrink: 0; vertical-align: middle; transition: background var(--duration-base) ease, border-color var(--duration-base) ease; }
+.rui-toggle::after { content: ''; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: var(--radius-circle); background: var(--text-2); transition: transform var(--duration-base) ease, background var(--duration-base) ease; }
+.rui-toggle:hover:not(:disabled), .rui-toggle.rui-force-hover { border-color: var(--text-1); }
+.rui-toggle:checked { background: var(--accent-control); border-color: var(--accent-control); }
+.rui-toggle:checked::after { transform: translateX(16px); background: white; }
+.rui-toggle:checked:hover:not(:disabled), .rui-toggle:checked.rui-force-hover { background: var(--accent-control-hover); border-color: var(--accent-control-hover); }
+.rui-toggle:focus-visible, .rui-toggle.rui-force-focus { outline: 2px solid var(--accent); outline-offset: 2px; }
+.rui-toggle:disabled { opacity: 0.5; cursor: default; }
+
+/* ---- slider ----
+   The input is 16px tall and transparent; the 4px line lives on the runnable
+   track, and the thumb's margin-top of -6px centres a 16px thumb on it:
+   (4 - 16) / 2 = -6. --rui-fill is set by the factory on every input. */
+.rui-slider-value { display: flex; justify-content: space-between; gap: 8px; font-size: var(--caption); color: var(--text-2); margin-bottom: 2px; }
+.rui-slider-value b { color: var(--text-1); font-weight: 600; font-variant-numeric: tabular-nums; }
+.rui-slider { -webkit-appearance: none; appearance: none; display: block; width: 100%; height: 16px; padding: 0; border: 0; border-radius: 0; background: transparent; cursor: pointer; outline: none; margin: 2px 0; }
+.rui-slider::-webkit-slider-runnable-track { height: 4px; border-radius: var(--radius-pill); background: linear-gradient(to right, var(--accent-control) 0%, var(--accent-control) var(--rui-fill, 50%), var(--text-3) var(--rui-fill, 50%), var(--text-3) 100%); }
+.rui-slider::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; border-radius: var(--radius-circle); background: var(--accent-control); border: 2px solid var(--elevated); box-shadow: 0 1px 3px rgba(0,0,0,0.3); cursor: pointer; margin-top: -6px; }
+.rui-slider::-moz-range-track { height: 4px; border-radius: var(--radius-pill); background: var(--text-3); }
+.rui-slider::-moz-range-progress { height: 4px; border-radius: var(--radius-pill); background: var(--accent-control); }
+.rui-slider::-moz-range-thumb { width: 16px; height: 16px; border-radius: var(--radius-circle); background: var(--accent-control); border: 2px solid var(--elevated); box-shadow: 0 1px 3px rgba(0,0,0,0.3); cursor: pointer; }
+.rui-slider:hover:not(:disabled)::-webkit-slider-thumb, .rui-slider.rui-force-hover::-webkit-slider-thumb { background: var(--accent-control-hover); }
+.rui-slider:active:not(:disabled)::-webkit-slider-thumb, .rui-slider.rui-force-active::-webkit-slider-thumb { background: var(--accent-control-hover); box-shadow: 0 1px 4px rgba(0,0,0,0.4); }
+.rui-slider:focus-visible, .rui-slider.rui-force-focus { outline: 2px solid var(--accent); outline-offset: 3px; }
+.rui-slider:disabled { opacity: 0.4; cursor: default; }
+.rui-slider:disabled::-webkit-slider-thumb { background: var(--text-3); cursor: default; }
+
+/* ---- tabs: views/settings.css .mode-toggle ----
+   10px, not a scale step, for the same concentric reason as the original:
+   10 minus the 4px padding is the --radius-md of the segment inside. */
+.rui-tabs { display: inline-flex; background: var(--base); border: 1px solid var(--border); border-radius: 10px; padding: 4px; gap: 0; }
+.rui-tabs-vertical { flex-direction: column; }
+.rui-tab { padding: 9px 16px; font-size: var(--caption); font-weight: 600; line-height: normal; border-radius: var(--radius-md); border: 1px solid transparent; background: transparent; color: var(--text-2); cursor: pointer; font-family: inherit; text-align: center; transition: background var(--duration-base) ease, color var(--duration-base) ease, box-shadow var(--duration-base) ease; }
+.rui-tab:hover:not(.rui-selected), .rui-tab.rui-force-hover { color: var(--text-1); background: var(--elevated); }
+.rui-tab.rui-selected { background: var(--card); color: var(--text-1); border-color: var(--border); box-shadow: 0 1px 3px rgba(0,0,0,0.18); }
+.rui-tab:focus-visible, .rui-tab.rui-force-focus { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ---- option list: the tabs' visual language, stacked ---- */
+.rui-option-list { display: flex; flex-direction: column; gap: 4px; background: var(--base); border: 1px solid var(--border); border-radius: 10px; padding: 4px; }
+.rui-option { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: var(--radius-md); border: 1px solid transparent; background: transparent; color: var(--text-2); cursor: pointer; font-family: inherit; font-size: var(--caption); font-weight: 600; line-height: normal; text-align: left; }
+.rui-option:hover:not(.rui-selected), .rui-option.rui-force-hover { color: var(--text-1); background: var(--elevated); }
+.rui-option.rui-selected { background: var(--card); color: var(--text-1); border-color: var(--border); box-shadow: 0 1px 3px rgba(0,0,0,0.18); }
+.rui-option:focus-visible, .rui-option.rui-force-focus { outline: 2px solid var(--accent); outline-offset: 2px; }
+.rui-option-dot { width: 14px; height: 14px; box-sizing: border-box; border-radius: var(--radius-circle); border: 1px solid var(--text-3); flex-shrink: 0; position: relative; }
+.rui-option.rui-selected .rui-option-dot { border-color: var(--accent-control); }
+.rui-option.rui-selected .rui-option-dot::after { content: ''; position: absolute; inset: 3px; border-radius: var(--radius-circle); background: var(--accent-control); }
+
+/* ---- table ----
+   The header is --text-1 at a smaller, bolder, uppercase size: --text-2 on
+   --card measured under 4.5:1 in both themes. */
+.rui-table-wrap { border: 1px solid var(--border); border-radius: var(--radius-lg); overflow-x: auto; overflow-y: hidden; width: 100%; box-sizing: border-box; position: relative; }
+.rui-table { width: 100%; border-collapse: collapse; font-size: var(--caption); background: var(--card); }
+.rui-table th { text-align: left; color: var(--text-1); font-weight: 700; padding: 9px 12px; border-bottom: 1px solid var(--border); background: var(--elevated); font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; white-space: nowrap; }
+.rui-table td { padding: 9px 12px; border-bottom: 1px solid var(--border); color: var(--text-1); }
+.rui-table tr:last-child td { border-bottom: none; }
+.rui-table tbody tr:hover td, .rui-table tr.rui-force-hover td { background: var(--elevated); }
+/* In light a hovered row is quieter than the white active cell. */
+body.light .rui-table tbody tr:hover td, body.light .rui-table tr.rui-force-hover td { background: var(--base); }
+.rui-table .numeric { text-align: right; font-variant-numeric: tabular-nums; }
+/* The wrapper is positioned so that what a table positions absolutely (a
+   visually hidden label, an editor) stays inside its scroller: an escaped
+   box would scroll the page sideways. */
+/* A table with column widths holds them: a fixed layout, and overlong text
+   ends in an ellipsis instead of widening its column. A cell holding a row
+   menu is not clipped: in a narrow column its trigger reaches into the
+   padding, and clipping there drew an ellipsis beside it, a second set of
+   dots. (The open list is placed against the viewport, so it is never
+   clipped either way.) */
+.rui-table-fixed { table-layout: fixed; }
+/* While a table measures its natural widths: its columns as wide as their
+   content on one line, for the moment it takes to read them. */
+.rui-table.rui-table-measuring { table-layout: auto; width: auto; }
+/* A column resize handle: a strip on the header's right edge that shows a
+   line when hovered, dragged or focused from the keyboard: a bare shape, so
+   --accent-control (the orange rule). */
+.rui-table th.rui-th-resizable { position: relative; }
+.rui-col-resize { position: absolute; top: 0; right: 0; bottom: 0; width: 8px; cursor: col-resize; touch-action: none; }
+.rui-col-resize::after { content: ''; position: absolute; top: 6px; bottom: 6px; right: 3px; width: 2px; background: transparent; }
+.rui-col-resize:hover::after, .rui-col-resize.rui-dragging::after, .rui-col-resize:focus-visible::after { background: var(--accent-control); }
+.rui-col-resize:focus-visible { outline: none; }
+/* The filler column holds the room no real column takes: nothing in it. */
+.rui-table th.rui-table-filler, .rui-table td.rui-table-filler { padding: 0; }
+.rui-table.rui-table-measuring th, .rui-table.rui-table-measuring td { white-space: nowrap; }
+.rui-table-fixed th, .rui-table-fixed td { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rui-table-fixed td:has(> .rui-menu) { overflow: visible; }
+/* Rows are square: a hovered row fills its cells edge to edge, and only the
+   wrapper's own corners are round. */
+.rui-table th, .rui-table td { border-radius: 0; }
+
+/* ---- table: editable cells, the mechanism ----
+   Fixed whatever the look. The cell keeps its button in the flow while the
+   editor is open (hidden, still holding its size), and the editor is laid
+   exactly over that button, centred in the cell as the button is, so
+   opening one can move no column and change no row height. The editor takes the column's alignment, padding, font, figures
+   and line height from the cell, so the text does not move when it opens.
+   A refusal takes a line of its own under its row, spanning the table: it
+   moves the rows below only while it shows, since a refusal interrupts.
+   "Saving..." sits inside the cell, out of the flow, so a save moves
+   nothing. */
+.rui-table td.rui-td-edit { padding: 0; position: relative; }
+.rui-cell { display: block; width: 100%; box-sizing: border-box; margin: 0; padding: 9px 12px; border: 0; border-radius: 0; background: transparent; color: inherit; font: inherit; letter-spacing: inherit; text-align: inherit; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rui-td-edit.rui-editing > .rui-cell { visibility: hidden; }
+.rui-table .rui-cell-editor { position: absolute; top: 50%; left: 0; right: 0; transform: translateY(-50%); width: auto; height: auto; margin: 0; }
+.rui-table input.rui-cell-editor, .rui-table .rui-cell-editor > .rui-select { box-sizing: border-box; height: auto; margin: 0; padding: 9px 12px; border: 0; border-radius: 0; background: transparent; box-shadow: none; outline: none; color: inherit; font: inherit; letter-spacing: inherit; text-align: inherit; }
+.rui-table .rui-cell-editor > .rui-select { padding-right: 32px; }
+.rui-table input.rui-cell-editor:read-only:not(:disabled) { background: transparent; }
+.rui-table .rui-table-message-row td { padding: 6px 12px 8px; white-space: normal; overflow: visible; text-overflow: clip; text-align: left; font-variant-numeric: normal; }
+.rui-table tbody tr.rui-table-message-row td, body.light .rui-table tbody tr.rui-table-message-row td { background: var(--card); }
+.rui-cell-saving { position: absolute; top: 50%; left: 12px; transform: translateY(-50%); pointer-events: none; white-space: nowrap; }
+.rui-table td.rui-td-edit:not(.numeric) .rui-cell-saving { left: auto; right: 12px; }
+.rui-cell-saving:empty { display: none; }
+
+/* ---- table: editable cells, the look (treatment A) ----
+   Square, and inside the cell: every state is an inset ring on the cell's
+   own edge, so nothing is drawn outside it and nothing has a radius. The
+   hovered row takes the row tint and a hovered editable cell a tint of its
+   own; the cell being edited, or holding keyboard focus, keeps the raised
+   surface after the pointer leaves the row. There is no pencil: the tint
+   is the cue. All from existing tokens. The active fill is --border in
+   dark, lighter than the table's --card so the cell reads as raised, and
+   white (--elevated) in light. Rings: 1px --text-2 for keyboard focus, 2px
+   --accent-text while editing (in light, --accent-control measured 2.91:1
+   against the row separator; --accent-text clears 3:1 against it, and is
+   the same colour in dark), 2px --danger-text while refused. Every ring
+   clears 3:1 against the active fill and the separator, computed by
+   rundock-ui-contrast.test.js. */
+.rui-cell { cursor: text; }
+.rui-cell:hover, .rui-cell.rui-force-hover { background: var(--surface); }
+.rui-cell:focus-visible, .rui-cell.rui-force-focus { outline: none; }
+.rui-table td.rui-td-edit:has(> .rui-cell:focus-visible), .rui-table td.rui-td-edit:has(> .rui-cell.rui-force-focus) { background: var(--border); box-shadow: inset 0 0 0 1px var(--text-2); }
+.rui-table td.rui-td-edit.rui-editing { background: var(--border); box-shadow: inset 0 0 0 2px var(--accent-text); }
+body.light .rui-table td.rui-td-edit.rui-editing, body.light .rui-table td.rui-td-edit:has(> .rui-cell:focus-visible), body.light .rui-table td.rui-td-edit:has(> .rui-cell.rui-force-focus) { background: var(--elevated); }
+.rui-table td.rui-td-edit.rui-editing:has([aria-invalid="true"]) { box-shadow: inset 0 0 0 2px var(--danger-text); }
+.rui-cell-message { padding-left: 10px; box-shadow: inset 2px 0 0 var(--danger-text); color: var(--text-1); font-size: var(--caption); line-height: 1.4; }
+.rui-cell-saving { color: var(--text-1); font-size: var(--label); }
+
+/* ---- chip: a solid fill, never a tint ----
+   The label is centred on its ink, not on the font's reserved box: with
+   line-height 1 a capitals-only label sits high, because caps use the
+   ascent and not the descent. text-box trims the label's box to cap height
+   and baseline where the engine has it (on the label, the chip's one flex
+   item, since text-box acts on a block container and not on the flex
+   container around it). The fallback is the label's own line-height of 1,
+   declared on the label so it is the one rule an engine without text-box
+   uses; the @supports block replaces it where the trim applies.
+   Tone text on its own tint measured as low as 1.66:1 in light. The accent
+   chip is an orange fill, so --accent-action with white, like every other. */
+.rui-chip { display: inline-flex; align-items: center; box-sizing: border-box; height: 20px; padding: 0 9px; border-radius: var(--radius-pill); font-size: var(--label); font-weight: 600; white-space: nowrap; }
+.rui-chip-neutral { background: var(--elevated); color: var(--text-2); border: 1px solid var(--border); }
+.rui-chip-accent { background: var(--accent-action); color: white; }
+.rui-chip-attention { background: var(--attention); color: var(--on-chart); }
+.rui-chip-success { background: var(--success); color: var(--on-chart); }
+.rui-chip-danger { background: var(--danger); color: white; }
+.rui-chip-label { line-height: 1; }
+@supports (text-box: trim-both cap alphabetic) {
+  .rui-chip-label { line-height: normal; text-box: trim-both cap alphabetic; }
+}
+
+/* ---- empty state: base.css .empty-title / .empty-subtitle ---- */
+.rui-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 40px 24px; text-align: center; background: var(--elevated); border-radius: var(--radius-lg); }
+.rui-empty-icon { width: 32px; height: 32px; color: var(--text-2); opacity: 0.4; }
+.rui-empty-title { font-size: var(--heading); font-weight: 700; color: var(--text-1); }
+.rui-empty-subtitle { font-size: var(--body); font-weight: 400; color: var(--text-2); max-width: 260px; line-height: 1.5; }
+
+/* ---- loading and canvas: components/region.css ----
+   One waiting rhythm across the product (2s, the sidebar's working dots),
+   and still under reduced motion. */
+.rui-loading { display: block; min-height: 84px; border-radius: var(--radius-lg); background: var(--surface); animation: rui-waiting 2s ease-in-out infinite; }
+@keyframes rui-waiting { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+.rui-canvas { display: block; position: relative; }
+.rui-canvas-skeleton { display: block; min-height: 120px; border-radius: var(--radius-lg); background: var(--surface); animation: rui-waiting 2s ease-in-out infinite; }
+.rui-canvas-drawn { display: block; overflow-x: auto; }
+.rui-canvas-failed { border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 16px 18px; background: var(--surface); min-height: 96px; display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 12px; }
+.rui-canvas-failed-reason { margin: 0; color: var(--text-1); font-size: var(--body); line-height: 1.5; }
+
+/* ---- board ---- */
+.rui-board { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(168px, 1fr); gap: 12px; overflow-x: auto; padding-bottom: 4px; }
+.rui-board-col { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 10px; display: flex; flex-direction: column; gap: 8px; transition: border-color var(--duration-base) ease; }
+.rui-board-col.rui-drop { border-color: var(--accent); }
+.rui-board-cards { display: flex; flex-direction: column; gap: 8px; min-height: 24px; }
+.rui-board-col-title { font-size: 10px; font-weight: 700; color: var(--text-2); text-transform: uppercase; letter-spacing: 0.04em; padding: 2px 2px 4px; }
+.rui-board-card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 10px; cursor: grab; transition: border-color var(--duration-base) ease, box-shadow var(--duration-base) ease; }
+.rui-board-card:hover, .rui-board-card.rui-force-hover { border-color: var(--text-3); }
+.rui-board-card.rui-dragging, .rui-board-card.rui-force-active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); cursor: grabbing; }
+.rui-board-card-title { font-weight: 600; font-size: var(--caption); color: var(--text-1); margin: 0 0 4px; display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.rui-board-card-meta { font-size: var(--label); color: var(--text-2); }
+
+/* ---- menu: the files menu's surface (components/sidebar.css) ---- */
+.rui-menu { position: relative; display: inline-block; }
+.rui-menu-btn { width: 20px; height: 20px; padding: 0; margin: 0; border-radius: var(--radius-sm); background: transparent; border: none; color: var(--text-3); display: flex; align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0; transition: background var(--duration-base) ease, color var(--duration-base) ease; }
+.rui-menu-btn:hover, .rui-menu-btn.rui-force-hover, .rui-menu-btn[aria-expanded="true"] { background: var(--elevated); color: var(--text-1); }
+.rui-menu-btn:focus-visible, .rui-menu-btn.rui-force-focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+.rui-menu-btn > svg { width: 13px; height: 13px; }
+.rui-menu-list { position: absolute; top: calc(100% + 4px); right: 0; min-width: 160px; background: var(--elevated); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: 0 4px 16px rgba(0,0,0,0.25); padding: 4px; z-index: 5; display: none; flex-direction: column; }
+.rui-menu-list.rui-open { display: flex; }
+.rui-menu-item { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; padding: 7px 10px; border-radius: var(--radius-md); font-size: var(--caption); line-height: normal; color: var(--text-1); background: none; border: none; text-align: left; cursor: pointer; font-family: inherit; white-space: nowrap; }
+.rui-menu-item:hover, .rui-menu-item.rui-force-hover { background: var(--card); }
+/* The current item is --text-1 with a check mark: --accent as text measured
+   2.85:1 on light --elevated. The mark is decorative; aria-checked says it. */
+/* A rule between groups of items, the width of the list. */
+.rui-menu-separator { height: 1px; margin: 4px -4px; background: var(--border); flex-shrink: 0; }
+.rui-menu-item.rui-current { color: var(--text-1); font-weight: 600; }
+.rui-menu-item.rui-current::after { content: '\2713'; flex-shrink: 0; }
+.rui-menu-item[aria-disabled="true"] { opacity: 0.5; cursor: default; }
+.rui-menu-item:focus-visible, .rui-menu-item.rui-force-focus { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+/* ---- meter ---- */
+.rui-meter { margin-bottom: 4px; }
+.rui-meter-label { display: flex; justify-content: space-between; font-size: var(--caption); margin-bottom: 5px; gap: 8px; }
+.rui-meter-name { color: var(--text-1); }
+.rui-meter-value { color: var(--text-2); font-variant-numeric: tabular-nums; flex-shrink: 0; }
+.rui-meter-value.rui-over { color: var(--danger-text); font-weight: 600; }
+.rui-meter-track { position: relative; height: 6px; border-radius: var(--radius-pill); background: var(--elevated); overflow: visible; }
+.rui-meter-fill { height: 100%; max-width: 100%; border-radius: var(--radius-pill); background: var(--accent-control); }
+.rui-meter-fill.rui-over { background: var(--danger); }
+.rui-meter-marker { position: absolute; top: -3px; bottom: -3px; width: 2px; margin-left: -1px; background: var(--text-1); border-radius: var(--radius-xs); }
+
+/* ---- alert: the tone on the edge and the icon, never a tinted body ----
+   The icon is decorative (WCAG 1.4.11): the message always states its tone
+   in words, so nothing depends on seeing the icon's colour. An alert that
+   ever carried only an icon would need a 3:1 icon of its own. */
+.rui-alert { display: flex; align-items: flex-start; gap: 10px; padding: 12px 16px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--card); color: var(--text-1); font-size: var(--caption); line-height: 1.5; }
+.rui-alert > svg { flex-shrink: 0; width: 16px; height: 16px; margin-top: 1px; }
+.rui-alert-message { flex: 1; min-width: 0; }
+.rui-alert-attention { border-color: var(--attention); }
+.rui-alert-attention > svg { color: var(--attention); }
+.rui-alert-danger { border-color: var(--danger); }
+.rui-alert-danger > svg { color: var(--danger-text); }
+.rui-alert-success { border-color: var(--success); }
+.rui-alert-success > svg { color: var(--success); }
+.rui-alert-action { margin-left: auto; flex-shrink: 0; }
+/* With an action, the message and the action share their first baseline: the
+   message's first line and the button's label are the same font at the same
+   size, so their text boxes share a centre whatever the font (measured equal
+   in both themes). One line reads centred on the buttons; a block of text keeps
+   its action beside its first line. The icon joins the same baseline and is
+   lifted by half its height less the text's own centre above the baseline, so
+   it sits on that line too. An alert with no action is laid out as before. */
+.rui-alert:has(> .rui-alert-action) { align-items: baseline; }
+.rui-alert:has(> .rui-alert-action) > svg { align-self: baseline; position: relative; top: calc(8px - 0.36em); margin-top: 0; }
+
+/* ---- stat ---- */
+.rui-stat { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 16px 18px; min-width: 160px; }
+.rui-stat-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-3); margin-bottom: 9px; }
+.rui-stat-value { font-size: 25px; font-weight: 700; color: var(--text-1); font-variant-numeric: tabular-nums; }
+.rui-stat-value.rui-negative { color: var(--danger-text); }
+/* The delta reads in --text-1 whatever its direction: --success as text
+   measured 1.80:1 on light --card and --danger-text 4.29:1. The arrow and the
+   words carry the direction; the coloured dot is decorative. The dot, and
+   the space it takes, exist only with a trend: a plain secondary line sits
+   flush with the label above it. */
+.rui-stat-delta { font-size: var(--label); color: var(--text-1); margin-top: 4px; display: inline-flex; align-items: center; gap: 5px; }
+.rui-stat-delta.rui-up::before, .rui-stat-delta.rui-down::before { content: ''; width: 6px; height: 6px; border-radius: var(--radius-circle); flex-shrink: 0; }
+.rui-stat-delta.rui-up::before { background: var(--success); }
+.rui-stat-delta.rui-down::before { background: var(--danger-text); }
+
+/* ---- relative time ----
+   Stale is amber in dark. In light, amber text cannot reach 3:1 on any light
+   surface without drifting to brown, so the words take --text-1 and the dot
+   carries the amber, the same trade the permission card makes. */
+.rui-time { font-size: var(--label); color: var(--text-3); }
+.rui-time.rui-stale { color: var(--attention); }
+.rui-time.rui-stale::before { content: ''; display: inline-block; width: 6px; height: 6px; margin-right: 5px; border-radius: var(--radius-circle); background: var(--attention); vertical-align: 1px; }
+body.light .rui-time.rui-stale { color: var(--text-1); }
+
+/* ---- live chip: the product's 2s pulse ---- */
+.rui-live { display: inline-flex; align-items: center; gap: 6px; box-sizing: border-box; height: 20px; padding: 0 9px 0 7px; border-radius: var(--radius-pill); background: var(--elevated); border: 1px solid var(--border); font-size: var(--label); font-weight: 600; color: var(--text-1); }
+.rui-live-dot { width: 6px; height: 6px; border-radius: var(--radius-circle); background: var(--success); animation: rui-live-pulse 2s ease-in-out infinite; }
+@keyframes rui-live-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .rui-loading, .rui-canvas-skeleton, .rui-live-dot { animation: none; }
+}

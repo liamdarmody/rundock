@@ -9,7 +9,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { resolve, declarations, diff } = require('../tools/style-resolve-diff.js');
+const { resolve, declarations, diff, tokensAt } = require('../tools/style-resolve-diff.js');
 const { surfaces } = require('../tools/style-drift.js');
 const ROOT = path.join(__dirname, '..', '..');
 
@@ -119,25 +119,35 @@ describe('the eight removed --danger fallbacks still resolve', () => {
   // injected stylesheet, which is the part a static check cannot see. This
   // covers all eight, including a :hover rule and two files the e2e test never
   // touches, which is the part e2e cannot reach without driving every state.
+  //
+  // Since the danger token split into a fill and a text colour, each row
+  // names which of the two it takes, and the value is read from tokens.css
+  // rather than written here: a pinned literal was what made the split fail
+  // this test for the right change, and a pin is not the property. The
+  // stylesheet rows that colour text take --danger-text; the editor's
+  // injected stylesheet is not a stylesheet file and still takes the fill.
   const FORMERLY_FALLBACK = [
-    ['public/editor/styles.js', '.tiptap-editor .critic-delete', 'color'],
-    ['public/editor/styles.js', '.tiptap-editor .critic-substitution .critic-sub-from', 'color'],
-    ['public/editor/styles.js', '.review-sub-from', 'color'],
-    ['public/editor/styles.js', '.review-btn.reject:hover', 'color'],
-    ['public/editor/styles.js', '.review-btn.reject:hover', 'border-color'],
-    ['public/styles/views/editor.css', '.tiptap-editor .ProseMirror .callout-edit.callout-edit-invalid', 'border-color'],
-    ['public/styles/components/sidebar.css', '.convo-delete:hover', 'color'],
-    ['public/styles/components/sidebar.css', '.files-menu-item.danger:hover', 'color'],
+    ['public/editor/styles.js', '.tiptap-editor .critic-delete', 'color', '--danger'],
+    ['public/editor/styles.js', '.tiptap-editor .critic-substitution .critic-sub-from', 'color', '--danger'],
+    ['public/editor/styles.js', '.review-sub-from', 'color', '--danger'],
+    ['public/editor/styles.js', '.review-btn.reject:hover', 'color', '--danger'],
+    ['public/editor/styles.js', '.review-btn.reject:hover', 'border-color', '--danger'],
+    ['public/styles/views/editor.css', '.tiptap-editor .ProseMirror .callout-edit.callout-edit-invalid', 'border-color', '--danger'],
+    ['public/styles/components/sidebar.css', '.convo-delete:hover', 'color', '--danger-text'],
+    ['public/styles/components/sidebar.css', '.files-menu-item.danger:hover', 'color', '--danger-text'],
   ];
 
-  test('all eight resolve to the danger token, with none left unresolved', () => {
+  test('all eight resolve to the danger token each takes, with none left unresolved', () => {
     const d = declarations('WORKTREE');
+    const tokens = tokensAt('WORKTREE');
     assert.strictEqual(FORMERLY_FALLBACK.length, 8, 'the count in the comment must match the list');
-    for (const [file, sel, prop] of FORMERLY_FALLBACK) {
+    for (const [file, sel, prop, token] of FORMERLY_FALLBACK) {
       const key = `${file}|${sel}|${prop}`;
       const value = d.get(key);
       assert.ok(value !== undefined, `${key} is gone: if the rule moved, move this entry with it`);
-      assert.match(value, /#E85A5A/i, `${key} resolves to ${value}, not the danger token`);
+      const want = tokens.get(token);
+      assert.match(want || '', /^#[0-9a-f]{6}$/i, `${token} is not declared as a six-digit hex in tokens.css`);
+      assert.ok(value.toLowerCase().includes(want.toLowerCase()), `${key} resolves to ${value}, not ${token} (${want})`);
       assert.ok(!value.includes('<<UNRESOLVED>>'), `${key} resolves to nothing`);
     }
   });

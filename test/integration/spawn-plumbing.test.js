@@ -60,16 +60,16 @@ function fakeWinShell(lines) {
 describe('resolveClaudeBin on Windows', () => {
   test('prefers the .exe among where.exe candidates', () => {
     const dir = fakeWinShell([
-      'C:\\Users\\liam\\claude',
-      'C:\\Users\\liam\\claude.cmd',
-      'C:\\Users\\liam\\claude.exe',
+      'C:\\Users\\user\\claude',
+      'C:\\Users\\user\\claude.cmd',
+      'C:\\Users\\user\\claude.exe',
     ]);
-    assert.strictEqual(probeResolve({ pathPrefix: dir }), 'C:\\Users\\liam\\claude.exe');
+    assert.strictEqual(probeResolve({ pathPrefix: dir }), 'C:\\Users\\user\\claude.exe');
   });
 
   test('falls back to the .cmd shim when no .exe is listed', () => {
-    const dir = fakeWinShell(['C:\\Users\\liam\\claude', 'C:\\Users\\liam\\claude.cmd']);
-    assert.strictEqual(probeResolve({ pathPrefix: dir }), 'C:\\Users\\liam\\claude.cmd');
+    const dir = fakeWinShell(['C:\\Users\\user\\claude', 'C:\\Users\\user\\claude.cmd']);
+    assert.strictEqual(probeResolve({ pathPrefix: dir }), 'C:\\Users\\user\\claude.cmd');
   });
 
   test('empty lookup output resolves to the bare command', () => {

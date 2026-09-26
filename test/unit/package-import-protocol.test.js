@@ -9,11 +9,12 @@ const { buildDispatch } = require('../../lib/protocol/handlers/index.js');
 const { decide, buildPlan } = require('../../lib/packages/import-plan.js');
 const { journalPath } = require('../../lib/workspace/atomic-write.js');
 const { digestFile } = require('../../lib/packages/import-apply.js');
+const { authoredDigest } = require('../../lib/packages/package-fingerprint.js');
 const config = require('../../lib/config.js');
 const { makeTempDir } = require('../helpers/workspace.js');
 
 const SOURCE = { id: 'github.com/example/pack', reference: 'v1.0.0' };
-const RECEIPTS = '.claude/rundock/receipts';
+const RECEIPTS = '.rundock/receipts';
 
 function write(root, relative, content) {
   const absolute = path.join(root, relative);
@@ -46,11 +47,15 @@ function captureWs() {
 }
 
 // Every request travels the real dispatch table as JSON, exactly as a client
-// would send it, and every reply is read back from the wire capture.
-function dispatchJson(type, payload) {
+// would send it, and every reply is read back from the wire capture. The
+// context carries the one root capability the apply path reaches for, the
+// roster cache cascade, inert here; the invalidation test below hands in a
+// counting one, and the composition-root wiring is proven in
+// test/unit/protocol-handlers-lib.test.js against the real cascade.
+function dispatchJson(type, payload, ctx = { agents: { invalidateAgentCache() {}, flagRosterRefresh() {} } }) {
   const dispatch = buildDispatch();
   const ws = captureWs();
-  dispatch[type]({}, ws, JSON.parse(JSON.stringify({ type, ...payload })));
+  dispatch[type](ctx, ws, JSON.parse(JSON.stringify({ type, ...payload })));
   assert.strictEqual(ws.sent.length, 1);
   return ws.sent[0];
 }
@@ -166,6 +171,15 @@ describe('the protocol boundary', () => {
     });
   }
 
+  test('evaluate_package_decisions refuses with one stamped reply when no workspace is open, echoing the requestId', () => {
+    config.setWorkspace(null);
+    const reply = dispatchJson('evaluate_package_decisions', { requestId: 'r3', sourcePath: '/nowhere', approval: {} });
+    // The echoed id is what lets the model's identity check match this
+    // refusal to the request that asked, rather than drop it as foreign.
+    assert.deepStrictEqual([reply.type, reply.operation, reply.requestId], ['package_import_error', 'evaluate', 'r3']);
+    assert.strictEqual(reply.message, 'No workspace is open.');
+  });
+
   test('a replayed identical approval performs zero writes and writes no second receipt', () => {
     const { workspace, sourceRoot } = fixture();
     const approval = decide(planVia(sourceRoot), { 'agent:scribe': 'add', 'skill:writer': 'overwrite' });
@@ -177,6 +191,103 @@ describe('the protocol boundary', () => {
     assert.strictEqual(replay.receipt, null);
     assert.deepStrictEqual(tree(workspace), after);
     assert.strictEqual(fs.readdirSync(path.join(workspace, RECEIPTS)).length, 1);
+  });
+
+  test('an apply that lands writes tells the roster cache cascade once; a replay and an all-skip apply tell it nothing', () => {
+    // The cascade is how the roster the server serves learns an agent file
+    // changed, so an apply that landed writes must tell it exactly as
+    // save_agent does. The other direction matters as much: a replay and an
+    // all-skip apply move no agent or skill, and tearing the caches down for
+    // them would make every import a refresh whether it changed anything or
+    // not.
+    // The roster flag rides the same rule, for a different reader. The cascade
+    // serves the next request; the flag serves a conversation that is already
+    // underway, whose orchestrator was given its team in a system prompt built
+    // before the package existed. Flagging does not wake anything: it sets a
+    // bit that is spent when a follow-up next arrives in that conversation,
+    // which respawns it over --resume with the roster it should have had.
+    // Without it an imported agent is visible in Team and undelegatable in the
+    // conversation the person is sitting in.
+    const counting = () => {
+      const ctx = {
+        calls: 0,
+        flags: 0,
+        agents: {
+          invalidateAgentCache() { ctx.calls += 1; },
+          flagRosterRefresh() { ctx.flags += 1; },
+        },
+      };
+      return ctx;
+    };
+    const { sourceRoot } = fixture();
+    const approval = decide(planVia(sourceRoot), { 'agent:scribe': 'add', 'skill:writer': 'overwrite' });
+    const landing = counting();
+    assert.strictEqual(dispatchJson('apply_package_import', { sourcePath: sourceRoot, approval }, landing).status, 'ready');
+    assert.strictEqual(landing.calls, 1, 'a landed import is an agent write, so the cascade is told exactly once');
+    assert.strictEqual(landing.flags, 1, 'a landed import changed the team, so live orchestrators are flagged exactly once');
+    const replaying = counting();
+    const replay = dispatchJson('apply_package_import', { sourcePath: sourceRoot, approval }, replaying);
+    assert.deepStrictEqual([replay.status, replay.written], ['ready', []]);
+    assert.strictEqual(replaying.calls, 0, 'a replay writes nothing, so no cache is torn down for it');
+    assert.strictEqual(replaying.flags, 0, 'a replay changed no team, so no conversation is respawned for it');
+    const second = fixture();
+    const skipAll = decide(planVia(second.sourceRoot), { 'agent:scribe': 'skip', 'skill:writer': 'skip' });
+    const skipping = counting();
+    assert.strictEqual(dispatchJson('apply_package_import', { sourcePath: second.sourceRoot, approval: skipAll }, skipping).status, 'ready');
+    assert.strictEqual(skipping.calls, 0, 'an all-skip apply lands no agent or skill, so nothing needs refreshing');
+    assert.strictEqual(skipping.flags, 0, 'an all-skip apply changed no team, so nothing is flagged');
+  });
+
+  test('an all-skip apply writes a receipt recording every decision', () => {
+    // The zero-write shortcut governs destination files, never the decision
+    // record: a person who skipped everything still confirmed decisions, and
+    // that is what a receipt records. Only a pure replay, every item already
+    // at its approved bytes, writes none: the replay test above holds that.
+    const { workspace, sourceRoot } = fixture();
+    const approval = decide(planVia(sourceRoot), { 'agent:scribe': 'skip', 'skill:writer': 'skip' });
+    const before = tree(workspace);
+    const reply = dispatchJson('apply_package_import', { sourcePath: sourceRoot, approval });
+    assert.strictEqual(reply.status, 'ready');
+    assert.deepStrictEqual(reply.writes, []);
+    assert.ok(reply.receipt, 'the decision record is written even though nothing reached a destination');
+    const receipt = JSON.parse(fs.readFileSync(path.join(workspace, reply.receipt), 'utf8'));
+    assert.deepStrictEqual(receipt.items.map((i) => [i.id, i.decision, i.outcome]),
+      [['agent:scribe', 'skip', 'skipped'], ['skill:writer', 'skip', 'skipped']]);
+    const added = tree(workspace).filter((line) => !before.includes(line));
+    assert.deepStrictEqual(added.map((line) => line.split(':')[0]), [reply.receipt],
+      'the receipt is the transaction\'s one write');
+  });
+
+  test('an evaluate_package_decisions dispatch leaves the complete tree byte-identical, receipts included', () => {
+    const { workspace, sourceRoot } = fixture();
+    // An apply first, so there is a receipts directory to be left alone, and
+    // an interrupted-transaction recovery would have something to do if the
+    // evaluate path ever ran one.
+    dispatchJson('apply_package_import', {
+      sourcePath: sourceRoot, approval: decide(planVia(sourceRoot), { 'agent:scribe': 'skip', 'skill:writer': 'skip' }),
+    });
+    assert.strictEqual(fs.readdirSync(path.join(workspace, RECEIPTS)).length, 1);
+    const approval = decide(planVia(sourceRoot), { 'agent:scribe': 'add', 'skill:writer': 'overwrite' });
+    const before = tree(workspace);
+    const reply = dispatchJson('evaluate_package_decisions', { requestId: 'r1', sourcePath: sourceRoot, approval });
+    assert.strictEqual(reply.type, 'package_import_result');
+    assert.deepStrictEqual([reply.operation, reply.requestId, reply.status], ['evaluate', 'r1', 'ready']);
+    assert.strictEqual(reply.writes.length, 2, 'the evaluation has writes to make, and makes none of them');
+    assert.strictEqual('written' in reply, false);
+    assert.deepStrictEqual(tree(workspace), before);
+  });
+
+  test('the evaluate handler and applyImport reach the evaluator through one function, and agree', () => {
+    const { workspace, sourceRoot } = fixture();
+    const { evaluateApproval, applyImport } = require('../../lib/packages/import-apply.js');
+    const approval = decide(planVia(sourceRoot), { 'agent:scribe': 'add', 'skill:writer': 'overwrite' });
+    const buckets = (r) => JSON.parse(JSON.stringify(
+      { status: r.status, writes: r.writes, unchanged: r.unchanged, skipped: r.skipped, blocked: r.blocked, stale: r.stale }));
+    const direct = buckets(evaluateApproval(workspace, sourceRoot, approval));
+    assert.strictEqual(direct.writes.length, 2);
+    const viaHandler = dispatchJson('evaluate_package_decisions', { requestId: 'r2', sourcePath: sourceRoot, approval });
+    assert.deepStrictEqual(buckets(viaHandler), direct);
+    assert.deepStrictEqual(buckets(applyImport(workspace, sourceRoot, approval, { receipt: {} })), direct);
   });
 
   test('the receipt is the complete record of a mixed-outcome apply', () => {
@@ -194,11 +305,23 @@ describe('the protocol boundary', () => {
     const reply = dispatchJson('apply_package_import', { sourcePath: sourceRoot, approval });
     assert.strictEqual(reply.status, 'ready');
     const receipt = JSON.parse(fs.readFileSync(path.join(workspace, reply.receipt), 'utf8'));
+    // Each entry also records the decision that governed it, so a later
+    // import can say what was decided last time rather than guessing.
+    const decisionOf = Object.fromEntries(approval.items.map((i) => [i.id, i.decision]));
+    const entry = (outcome) => (o) => ({ id: o.id, kind: o.kind, destination: o.destination, decision: decisionOf[o.id], outcome });
+    // An entry that is in the workspace afterwards also records the digest of
+    // its bytes as written, which for a verified apply is the approved digest.
+    const approvedOf = Object.fromEntries(approval.items.map((i) => [i.id, i.approvedDigest]));
+    // And the authored digest an update compares: for an agent its bytes
+    // with Rundock's own routine fields left out, for a skill the same digest.
+    const authoredOf = (o) => (o.kind === 'agent'
+      ? authoredDigest('agent', fs.readFileSync(path.join(workspace, o.destination))) : approvedOf[o.id]);
+    const landed = (outcome) => (o) => ({ ...entry(outcome)(o), fingerprint: approvedOf[o.id], authored: authoredOf(o) });
     const expected = [
-      ...reply.writes.map((o) => ({ id: o.id, kind: o.kind, destination: o.destination, outcome: 'written' })),
-      ...reply.unchanged.map((o) => ({ id: o.id, kind: o.kind, destination: o.destination, outcome: 'unchanged' })),
-      ...reply.skipped.map((o) => ({ id: o.id, kind: o.kind, destination: o.destination, outcome: 'skipped' })),
-      ...reply.blocked.map((o) => ({ id: o.id, kind: o.kind, destination: o.destination, outcome: 'blocked' })),
+      ...reply.writes.map(landed('written')),
+      ...reply.unchanged.map(landed('unchanged')),
+      ...reply.skipped.map(entry('skipped')),
+      ...reply.blocked.map(entry('blocked')),
     ].sort((a, b) => (a.id < b.id ? -1 : 1));
     assert.deepStrictEqual(receipt.items, expected);
     assert.deepStrictEqual(receipt.items.map((i) => [i.id, i.outcome]),
@@ -298,6 +421,61 @@ describe('the protocol boundary', () => {
     const ids = ['writes', 'unchanged', 'skipped', 'blocked', 'stale'].flatMap((k) => reply[k].map((o) => o.id));
     assert.strictEqual(ids.includes('skill:uninvited'), false);
     assert.strictEqual(fs.existsSync(path.join(workspace, '.claude/skills/uninvited')), false);
+  });
+});
+
+// A confirmed update moves the package to its new release even when no item
+// is written: the receipt is what names the installed release, so an update
+// that left none would keep offering itself. A replayed install, which names
+// no release, still writes nothing (the replay test above holds that).
+describe('a confirmed update always leaves a receipt naming the new release', () => {
+  const original = config.getWorkspace();
+  test.after(() => config.setWorkspace(original));
+  const { applyImport } = require('../../lib/packages/import-apply.js');
+  const UPDATE = { from: 'v1.0.0', to: 'v2.0.0' };
+
+  function installed() {
+    const { workspace, sourceRoot } = fixture();
+    const approval = decide(planVia(sourceRoot), { 'agent:scribe': 'add', 'skill:writer': 'overwrite' });
+    applyImport(workspace, sourceRoot, approval, { receipt: { now: '2026-09-24T09:00:00.000Z', run: 'install' } });
+    return { workspace, sourceRoot, approval };
+  }
+
+  test('an update where every item already matches writes a receipt naming the new release', () => {
+    const { workspace, sourceRoot, approval } = installed();
+    const result = applyImport(workspace, sourceRoot, approval, {
+      receipt: { now: '2026-09-25T09:00:00.000Z', run: 'same', update: UPDATE },
+    });
+    assert.strictEqual(result.status, 'ready');
+    assert.deepStrictEqual(result.writes, []);
+    assert.strictEqual(result.receipt, `${RECEIPTS}/2026-09-25-same.json`);
+    const receipt = JSON.parse(fs.readFileSync(path.join(workspace, result.receipt), 'utf8'));
+    assert.deepStrictEqual(receipt.update, UPDATE);
+    assert.deepStrictEqual(receipt.items.map((i) => [i.id, i.outcome]),
+      [['agent:scribe', 'unchanged'], ['skill:writer', 'unchanged']]);
+  });
+
+  test('an update whose only change is items leaving writes a receipt naming the new release', () => {
+    const { workspace, sourceRoot, approval } = installed();
+    const retired = [{ id: 'skill:old', kind: 'skill', destination: '.claude/skills/old' }];
+    const result = applyImport(workspace, sourceRoot, approval, {
+      receipt: { now: '2026-09-25T09:00:00.000Z', run: 'leaving', update: { ...UPDATE, retired } },
+    });
+    assert.strictEqual(result.status, 'ready');
+    assert.deepStrictEqual(result.writes, []);
+    assert.ok(result.receipt, 'the update is recorded although nothing reached a destination');
+    const receipt = JSON.parse(fs.readFileSync(path.join(workspace, result.receipt), 'utf8'));
+    assert.deepStrictEqual(receipt.update, UPDATE);
+    assert.deepStrictEqual(receipt.items.find((i) => i.id === 'skill:old'),
+      { id: 'skill:old', kind: 'skill', destination: '.claude/skills/old', outcome: 'kept', inPackage: false });
+  });
+
+  test('an unnamed update is a replay and still writes nothing', () => {
+    const { workspace, sourceRoot, approval } = installed();
+    const after = tree(workspace);
+    const result = applyImport(workspace, sourceRoot, approval, { receipt: { update: { from: 'v1.0.0' } } });
+    assert.strictEqual(result.receipt, null);
+    assert.deepStrictEqual(tree(workspace), after);
   });
 });
 

@@ -524,3 +524,29 @@ test('write outcomes expose only approved adapter fields', () => {
     destination: item.destination, approvedDigest: item.approvedDigest,
     sourceDigest: item.sourceDigest }]);
 });
+
+// ---- Routine switches carried by a package update ----
+
+const STATE = [{ name: 'Morning briefing', occurrence: 0, fields: { enabled: 'true', runOn: 'this-computer' } }];
+
+test('a carried routine state rides on the write outcome, for the adapter to recompute the bytes', () => {
+  const item = agent('scout', { agent: { plannedDefault: false, approvedDefault: false, routineState: STATE } });
+  const result = evaluateImport(approval([item]), currentFor([item]));
+  assert.deepEqual(result.writes[0].routineState, STATE);
+});
+
+test('a carried routine state is refused unless every entry is a single-line name, an occurrence and known switches', () => {
+  for (const [bad, why] of [
+    [{}, 'not an array'],
+    [[{ name: 'a\nb', occurrence: 0, fields: {} }], 'a name with a line break'],
+    [[{ name: 'a', occurrence: -1, fields: {} }], 'a negative occurrence'],
+    [[{ name: 'a', occurrence: 0.5, fields: {} }], 'a fractional occurrence'],
+    [[{ name: 'a', occurrence: 0, fields: { prompt: 'x' } }], 'a field that is not a switch'],
+    [[{ name: 'a', occurrence: 0, fields: { enabled: 'true\nprompt: x' } }], 'a value with a line break'],
+    [[{ name: 'a', occurrence: 0, fields: { enabled: true } }], 'a value that is not text'],
+    [[{ name: 'a', occurrence: 0, fields: {}, extra: 1 }], 'an unknown field'],
+  ]) {
+    const item = agent('scout', { agent: { plannedDefault: false, approvedDefault: false, routineState: bad } });
+    assert.throws(() => evaluateImport(approval([item]), currentFor([item])), /routineState/, why);
+  }
+});

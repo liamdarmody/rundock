@@ -257,9 +257,9 @@ describe('the team panel shows the agent roster and nothing else', () => {
     dom.window.close();
   });
 
-  // AC-A2, and it is a check on what was NOT built as much as what was
+  // This is a check on what was NOT built as much as what was
   // removed. The locked mock replaced the listing with a per-agent count pill;
-  // the owner overruled that, so an agent row carries a name and a working
+  // a design decision overruled that, so an agent row carries a name and a working
   // state and no number at all.
   test('no agent row carries a routine count', () => {
     const { w, doc, dom } = shell();
@@ -267,7 +267,7 @@ describe('the team panel shows the agent roster and nothing else', () => {
     for (const row of doc.querySelectorAll('#agent-list .agent-status-item')) {
       const text = row.textContent.replace(/\s+/g, ' ').trim();
       assert.ok(!/\d/.test(text),
-        `an agent row reads "${text}", and a number on a row is the count pill the owner overruled`);
+        `an agent row reads "${text}", and a number on a row is the count pill a design decision overruled`);
       assert.strictEqual(row.querySelector('.rcount'), null, 'an agent row carries a count pill');
     }
     dom.window.close();

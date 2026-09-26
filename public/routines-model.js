@@ -103,7 +103,7 @@
    *
    * AND WHY THE SENTENCE SAYS WHAT IT SAYS. The reader arriving here already
    * has the job running somewhere else: a beta user with routines already
-   * running on her own machine, and the owner's own VPS, are both this exact
+   * running on her own machine, and a user's own VPS, are both this exact
    * case, discovered outside cron specifically as well as inside it. "Turn
    * on" alone reads as tidying a switch, and the thing they have to know
    * before pressing it is that Rundock will begin running the routine
@@ -330,7 +330,7 @@
 
   const EMPTY = {
     lead: 'No routines yet.',
-    // Locked copy. Four options went to the owner and this is the one picked.
+    // Locked copy. Four options were considered and this is the one picked.
     body: 'Pick a tested skill and give it a schedule. Your agents take it from there.',
     // Agent-agnostic on purpose: this way in belongs to no agent, and the
     // picker it opens spans every agent's skills and names which runs each.
@@ -1056,6 +1056,11 @@
     // Now the row reads as PAUSED, one sentence and one action, and says WHY:
     // a plan change rendered like a self-applied pause gets resumed
     // reflexively, which is what the mechanism exists to prevent.
+    // A routine nobody has ever approved has not changed since anything: it
+    // is waiting for its first approval, as every routine a package brings
+    // in switched off is. Only an explicit false says so; a roster without
+    // the field keeps the changed wording it always had.
+    if (input.approvedBefore === false) return { text: PAUSED_WORDS.firstApproval, label: PAUSED_WORDS.consentAction };
     return { text: PAUSED_WORDS.consent, label: PAUSED_WORDS.consentAction };
   }
 
@@ -1064,13 +1069,14 @@
     self: 'Paused',
     selfAction: 'Resume',
     consent: 'Paused: what this runs has changed since you last approved it.',
+    firstApproval: 'Waiting for your approval before its first run.',
     consentAction: 'Review and resume',
   };
 
   /**
    * Which of the two paused states this row is in, or nothing. The consent
    * state is READ OFF THE PUBLISHED REFUSAL, never a second copy of the
-   * rule; both paused and unapproved reports the pause, the owner's latest
+   * rule; both paused and unapproved reports the pause, the person's latest
    * act. `action` names the message the line's one control sends.
    */
   function pausedState(input) {

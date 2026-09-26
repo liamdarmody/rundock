@@ -101,7 +101,7 @@ test('nav state: every result type from every origin view lands consistently', a
   const destinations = [
     { query: 'discount structure', type: 'conversation', nav: 'conversations', view: 'chat' },
     { query: 'pricing', type: 'file', nav: 'files', view: 'editor' },
-    { query: 'penn', type: 'agent', nav: 'team', view: 'profile' },
+    { query: 'wren', type: 'agent', nav: 'team', view: 'profile' },
     { query: 'workspace management', type: 'skill', nav: 'skills', view: 'skills' },
   ];
   for (const origin of origins) {

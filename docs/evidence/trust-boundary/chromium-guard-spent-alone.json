@@ -1,0 +1,11 @@
+{
+ "guarded": {
+  "honoured": 1
+ },
+ "withoutSpent": {
+  "honoured": 12
+ },
+ "withoutInherit": {
+  "honoured": 1
+ }
+}

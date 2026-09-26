@@ -1,0 +1,26 @@
+/* Embeds: a line of `![[file]]` embeds shown as panels where it sits.
+
+   PROVISIONAL. Up to three panels side by side, each a file rendered by
+   whatever claims it, read-only. The line itself stays in the document and
+   on screen, quieter while the panels stand in for it, so the note still
+   reads as the text it is in any other editor. Every colour is a token, so
+   both themes apply without a second selector. */
+.embed-holder { display: flex; flex-direction: column; gap: 12px; margin: 8px 0 20px; }
+.embed-row { display: grid; grid-template-columns: repeat(var(--embed-count, 1), minmax(0, 1fr)); gap: 12px; }
+.embed-panel { display: flex; flex-direction: column; min-width: 0; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); overflow: hidden; }
+.embed-head { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--border); font-size: var(--label); color: var(--text-2); min-width: 0; }
+.embed-head .embed-name { font-weight: 600; color: var(--text-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.embed-head .embed-status { color: var(--text-3); white-space: nowrap; }
+.embed-head .embed-open { margin-left: auto; color: var(--accent); background: none; border: 0; padding: 0; font-size: var(--label); cursor: pointer; }
+.embed-head .embed-open:hover { color: var(--accent-hover); }
+.embed-body { position: relative; padding: 10px; overflow: auto; font-size: var(--caption); color: var(--text-1); }
+.embed-body > pre { margin: 0; white-space: pre-wrap; font-family: var(--font-mono); color: var(--text-2); }
+/* An embedded view paints the panel's surface, as its document does
+   (body.rundock-embedded in extension-base.css), so it is not a box inside
+   the panel. */
+.embed-body > .extension-frame { width: 100%; background: var(--surface); }
+.embed-body .embed-link { color: var(--accent); background: none; border: 0; padding: 0; font-size: var(--caption); cursor: pointer; }
+.embed-body .embed-note { color: var(--text-3); font-size: var(--label); margin-top: 6px; }
+/* The source line while its panels stand in for it: present, but quiet. */
+.embed-source-hidden { color: var(--text-3); font-size: var(--caption); }
+@media (max-width: 720px) { .embed-row { grid-template-columns: minmax(0, 1fr); } }

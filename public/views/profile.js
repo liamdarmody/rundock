@@ -152,7 +152,7 @@ function showProfile(agentId) {
   }
   // Configuration box. Model and runtime by the direction; connectors sits
   // with them because it is configuration by the same reading, and moves only
-  // if the owner says otherwise.
+  // if a later design decision says otherwise.
   {
     const row = (label, value) => `<div class="profile-card-item" style="display:flex;align-items:center;justify-content:space-between">${label}${value}</div>`;
     // `inherit` is the one value here that names no model, so a bare token

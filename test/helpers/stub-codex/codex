@@ -47,6 +47,10 @@
 //                      "afterDecision": {"accept":{"text":"..."}, "decline":{"text":"..."}}},
 //         "error": {"codexErrorInfo":"usageLimitExceeded", "message":"...", "willRetry":false},
 //         "delayMs": 0,                      // pause before the agent output
+//         "holdForInterrupt": true,          // after the first delta, stay running
+//                                            // until turn/interrupt arrives, so a test
+//                                            // cannot lose the race to a turn that is
+//                                            // only alive for a few milliseconds
 //         "noise": true,                     // malformed line + unknown notification + ghost delta
 //         "crashMidTurn": true,              // exit(1) after the deltas
 //         "hangAfterDeltas": true            // never complete (interrupt tests)
@@ -224,11 +228,29 @@ function runAppServer() {
 
     const agentItemId = `msg_${shortId}`;
     send(asfx.itemStartedAgentMessage(threadId, turnId, agentItemId));
+    let streamed = 0;
     for (const d of rule.deltas || []) {
       await tick();
       await zombieGate();
       if (t.finished) return;
       send(asfx.agentMessageDelta(threadId, turnId, agentItemId, d));
+      streamed += 1;
+      // HOLD THE TURN OPEN UNTIL THE INTERRUPT LANDS, for a rule that asks.
+      //
+      // Without this a scripted turn is alive for about four milliseconds
+      // after its first delta: two deltas at the 2ms default tick, then it
+      // completes. A test that must interrupt inside that window is not
+      // testing an interrupt, it is testing how busy the machine is, and the
+      // stub's zombie path is guarded on the turn still running so a late
+      // interrupt silently does nothing and the turn reports 'completed'.
+      //
+      // The cap exists so a test that never interrupts still ends, and is
+      // long enough that reaching it means the test is wrong rather than
+      // slow.
+      if (rule.holdForInterrupt && streamed === 1) {
+        const until = Date.now() + 30000;
+        while (!t.interrupted && !t.finished && Date.now() < until) await tick(5);
+      }
     }
 
     if (rule.crashMidTurn) process.exit(1);
@@ -372,6 +394,10 @@ function runAppServer() {
         // the same thread succeeds); the zombie's remaining output arrives
         // later, after its scripted resume delay. A retried interrupt for
         // the already-evicted turn gets the same benign empty response.
+        // Recorded before any simulation branches, so a turn parked by
+        // holdForInterrupt is released by ANY interrupt rather than only by
+        // the one shape this config happens to be reproducing.
+        if (t) t.interrupted = true;
         if (cfg.zombieInterrupt) {
           send(asfx.response(id, {}));
           if (t && !t.finished && (!params.turnId || params.turnId === t.turnId)) {

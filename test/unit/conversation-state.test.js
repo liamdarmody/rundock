@@ -781,7 +781,7 @@ test('a silent switch never starts a working indicator, even for a specialist', 
   // working indicator through for an agent that will never speak: the hang
   // the silent flag exists to remove, in the one shape it was added for.
   const ctx = { ...SWITCH_CTX, toAgentType: 'specialist' };
-  const msg = { ...seq.agentSwitch('ana', 'penn', 'p4'), silent: true };
+  const msg = { ...seq.agentSwitch('ana', 'wren', 'p4'), silent: true };
   const r = reduce({ ...createState(), activeAgentId: 'ana', delegationActive: true }, msg, ctx);
 
   assert.strictEqual(r.effects.find(e => e.type === 'start-processing'), undefined,
@@ -791,7 +791,7 @@ test('a silent switch never starts a working indicator, even for a specialist', 
   // The same switch WITHOUT the flag still starts one, so the flag is proven
   // to be what decides rather than the indicator having quietly gone away.
   const loud = reduce({ ...createState(), activeAgentId: 'ana', delegationActive: true },
-    seq.agentSwitch('ana', 'penn', 'p4'), ctx);
+    seq.agentSwitch('ana', 'wren', 'p4'), ctx);
   assert.ok(loud.effects.some(e => e.type === 'start-processing'),
     'an ordinary delegation still shows the delegate as working');
 });

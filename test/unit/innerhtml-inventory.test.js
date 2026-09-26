@@ -65,9 +65,20 @@ describe('the innerHTML inventory', () => {
     // 124 again when the map's empty state took one, drawing the rail's map
     // glyph above its line so the three rail destinations answer an empty view
     // alike.
-    assert.strictEqual(t.total, 124, 'first-party assignments under public/');
-    assert.strictEqual(t.byGroup.a, 88, 'group (a): closed with a stated reason');
-    assert.strictEqual(t.byGroup.b, 36, 'group (b): fixed');
+    //
+    // 125 when an embedded note took one: it is drawn by the same markdown
+    // renderer the preview uses, which is the boundary #192 built and tests.
+    //
+    // 127 when the Permissions pane's Keep agents inside this workspace row took
+    // two: the row itself (b: a review lists folder paths from the person's own
+    // settings file, through esc()) and the one-time notice above the mode (a: a
+    // constant sentence).
+    //
+    // 128 when Extensions became a settings page of its own (b: extension and
+    // package names from their authors, through esc()).
+    assert.strictEqual(t.total, 128, 'first-party assignments under public/');
+    assert.strictEqual(t.byGroup.a, 90, 'group (a): closed with a stated reason');
+    assert.strictEqual(t.byGroup.b, 38, 'group (b): fixed');
     assert.strictEqual(t.byGroup.a + t.byGroup.b, t.total, 'every site is in exactly one group');
   });
 

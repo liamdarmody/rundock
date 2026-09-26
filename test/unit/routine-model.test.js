@@ -24,8 +24,8 @@ const {
 
 const FIXTURE = [
   '---',
-  'name: penn',
-  'displayName: Penn',
+  'name: wren',
+  'displayName: Wren',
   'aKeyThisCardNeverHeardOf: keep me exactly',
   'routines:',
   '  - name: morning-digest',
@@ -38,7 +38,7 @@ const FIXTURE = [
   'trailingKey: still here',
   '---',
   '',
-  '# Penn',
+  '# Wren',
   '',
   'Body text the writer knows nothing about.',
   '',
@@ -57,7 +57,7 @@ describe('routine write path', () => {
   const written = {
     runOn: 'local',
     skill: 'content-linter',
-    owner: 'penn',
+    owner: 'wren',
     enabled: true,
     paused: false,
     planHash: 'f00dcafe',
@@ -66,7 +66,7 @@ describe('routine write path', () => {
 
   test('every field survives a write-then-read cycle with its value and its type', () => {
     const updated = updateRoutineBlock(FIXTURE, 'morning-digest', written);
-    const routines = parseRoutines(extractFrontmatterText(updated), { owner: 'penn' });
+    const routines = parseRoutines(extractFrontmatterText(updated), { owner: 'wren' });
     const r = routines.find(x => x.name === 'morning-digest');
 
     // Values, field by field, named so a failure says which one moved.
@@ -75,7 +75,7 @@ describe('routine write path', () => {
     assert.strictEqual(r.prompt, 'Run the digest');
     assert.strictEqual(r.runOn, 'local');
     assert.strictEqual(r.skill, 'content-linter');
-    assert.strictEqual(r.owner, 'penn');
+    assert.strictEqual(r.owner, 'wren');
     assert.strictEqual(r.enabled, true);
     assert.strictEqual(r.paused, false);
     assert.strictEqual(r.planHash, 'f00dcafe');
@@ -104,7 +104,7 @@ describe('routine write path', () => {
       paused: true,
       owner: 'executive-assistant',
     });
-    const r = parseRoutines(extractFrontmatterText(updated), { owner: 'penn' })
+    const r = parseRoutines(extractFrontmatterText(updated), { owner: 'wren' })
       .find(x => x.name === 'morning-digest');
 
     assert.strictEqual(r.runOn, 'agent-computer');
@@ -171,7 +171,7 @@ describe('routine representation', () => {
   });
 
   test('an explicit owner is parsed and beats the declaring agent', () => {
-    assert.strictEqual(normalizeRoutine({ name: 'r', owner: 'lea' }, { owner: 'penn' }).owner, 'lea');
+    assert.strictEqual(normalizeRoutine({ name: 'r', owner: 'lea' }, { owner: 'wren' }).owner, 'lea');
   });
 
   test('enabled and paused are booleans, not the strings the old parser produced', () => {
@@ -227,7 +227,7 @@ describe('ownership', () => {
     const dir = makeWorkspace({
       agents: {
         'content-lead': agentFile({
-          name: 'content-lead', displayName: 'Penn', role: 'Content Lead',
+          name: 'content-lead', displayName: 'Wren', role: 'Content Lead',
           type: 'specialist', order: 2,
           routines: [
             { name: 'morning-digest', schedule: 'every day at 08:00', prompt: 'Run the digest' },
@@ -237,16 +237,16 @@ describe('ownership', () => {
       },
     });
     srv.setWorkspace(dir);
-    const penn = srv.discoverAgents().find(a => a.id === 'content-lead');
-    assert.strictEqual(penn.routines[0].owner, 'content-lead');
-    assert.strictEqual(penn.routines[1].owner, 'executive-assistant');
+    const wren = srv.discoverAgents().find(a => a.id === 'content-lead');
+    assert.strictEqual(wren.routines[0].owner, 'content-lead');
+    assert.strictEqual(wren.routines[1].owner, 'executive-assistant');
   });
 });
 
 describe('plan hash', () => {
   const plan = (fields) => computePlanHash(normalizeRoutine({
     name: 'morning-digest', prompt: 'Run the digest', skill: 'content-linter', ...fields,
-  }, { owner: 'penn' }));
+  }, { owner: 'wren' }));
 
   // The unchanged cases are the ones that matter. A hash that moved when the
   // schedule moved would invalidate an approval every time someone shifted a
@@ -287,8 +287,8 @@ describe('plan hash', () => {
     // accident. Owner is a field in its own right, so an approval flow can
     // compare it directly rather than through the hash.
     assert.strictEqual(
-      computePlanHash(normalizeRoutine({ ...raw, owner: 'executive-assistant' }, { owner: 'penn' })),
-      computePlanHash(normalizeRoutine(raw, { owner: 'penn' })));
+      computePlanHash(normalizeRoutine({ ...raw, owner: 'executive-assistant' }, { owner: 'wren' })),
+      computePlanHash(normalizeRoutine(raw, { owner: 'wren' })));
   });
 
   test('the hash does not depend on the order the fields appear in the file', () => {
@@ -308,21 +308,21 @@ describe('plan hash', () => {
       '    prompt: Run the digest',
       '    schedule: every day at 08:00',
     ].join('\n');
-    const hashOf = (fm) => computePlanHash(parseRoutines(fm, { owner: 'penn' })[0]);
+    const hashOf = (fm) => computePlanHash(parseRoutines(fm, { owner: 'wren' })[0]);
     // Two hashes of nothing are also equal, so prove both files parsed first.
-    assert.strictEqual(parseRoutines(shuffled, { owner: 'penn' })[0].skill, 'content-linter');
-    assert.strictEqual(parseRoutines(ordered, { owner: 'penn' })[0].skill, 'content-linter');
+    assert.strictEqual(parseRoutines(shuffled, { owner: 'wren' })[0].skill, 'content-linter');
+    assert.strictEqual(parseRoutines(ordered, { owner: 'wren' })[0].skill, 'content-linter');
     assert.strictEqual(hashOf(shuffled), hashOf(ordered));
   });
 
   test('the hash is stable across a write-then-read cycle', () => {
-    const source = parseRoutines(extractFrontmatterText(FIXTURE), { owner: 'penn' })
+    const source = parseRoutines(extractFrontmatterText(FIXTURE), { owner: 'wren' })
       .find(r => r.name === 'morning-digest');
     const before = computePlanHash(source);
     const updated = updateRoutineBlock(FIXTURE, 'morning-digest', {
       planHash: before, planApprovedAt: '2026-08-21T09:00:00.000Z',
     });
-    const readBack = parseRoutines(extractFrontmatterText(updated), { owner: 'penn' })
+    const readBack = parseRoutines(extractFrontmatterText(updated), { owner: 'wren' })
       .find(r => r.name === 'morning-digest');
     // Both halves: the stored value survives, and recomputing from what came
     // back off disk lands on the same hash.
@@ -339,10 +339,10 @@ describe('migration of existing routines', () => {
     const dir = makeWorkspace({
       agents: {
         [AGENT]: agentFile({
-          name: AGENT, displayName: 'Penn', role: 'Content Lead',
+          name: AGENT, displayName: 'Wren', role: 'Content Lead',
           type: 'specialist', order: 2,
           routines: [{ name: 'morning-digest', schedule: 'every day at 08:00', prompt: 'Run the digest' }],
-          body: 'You are Penn.\n\nA body the migration is not allowed to touch.',
+          body: 'You are Wren.\n\nA body the migration is not allowed to touch.',
         }),
       },
     });
@@ -448,7 +448,7 @@ describe('migration of existing routines', () => {
     const dir = makeWorkspace({
       agents: {
         [AGENT]: agentFile({
-          name: AGENT, displayName: 'Penn', role: 'Content Lead',
+          name: AGENT, displayName: 'Wren', role: 'Content Lead',
           type: 'specialist', order: 2,
           routines: [
             { name: 'morning-digest', schedule: 'every day at 08:00', prompt: 'Run the digest' },
@@ -488,7 +488,7 @@ describe('migration of existing routines', () => {
     const dir = makeWorkspace({
       agents: {
         [AGENT]: agentFile({
-          name: AGENT, displayName: 'Penn', role: 'Content Lead',
+          name: AGENT, displayName: 'Wren', role: 'Content Lead',
           type: 'specialist', order: 2,
           routines: [
             {
@@ -560,7 +560,7 @@ describe('the writer at its edges', () => {
   });
 
   test('a block with nothing but a name gets its keys at the indent the marker implies', () => {
-    const bare = ['---', 'name: penn', 'routines:', '  - name: solo', '---', '', 'body', ''].join('\n');
+    const bare = ['---', 'name: wren', 'routines:', '  - name: solo', '---', '', 'body', ''].join('\n');
     const written = updateRoutineBlock(bare, 'solo', { runOn: 'local' });
     assert.ok(written.includes('  - name: solo\n    runOn: local\n'), written);
   });
@@ -568,8 +568,8 @@ describe('the writer at its edges', () => {
   test('a routine named in no block leaves the file alone', () => {
     assert.strictEqual(updateRoutineBlock(FIXTURE, 'not-a-routine', { runOn: 'local' }), FIXTURE);
     assert.strictEqual(updateRoutineBlock('no frontmatter here', 'solo', { runOn: 'local' }), 'no frontmatter here');
-    assert.strictEqual(updateRoutineBlock('---\nname: penn\n---\nbody', 'solo', { runOn: 'local' }),
-      '---\nname: penn\n---\nbody');
+    assert.strictEqual(updateRoutineBlock('---\nname: wren\n---\nbody', 'solo', { runOn: 'local' }),
+      '---\nname: wren\n---\nbody');
   });
 
   test('a value carrying a line break is refused rather than written', () => {
@@ -588,13 +588,13 @@ describe('writing a whole routine back', () => {
   // as text puts the four letters n-u-l-l in the file, and the next read hands
   // back a string that is not null, is truthy, and hashes differently.
   test('a routine with no skill round-trips unchanged, nulls and all', () => {
-    const parsed = parseRoutines(extractFrontmatterText(FIXTURE), { owner: 'penn' })
+    const parsed = parseRoutines(extractFrontmatterText(FIXTURE), { owner: 'wren' })
       .find(r => r.name === 'morning-digest');
     assert.strictEqual(parsed.skill, null, 'the fixture routine is supposed to declare no skill');
     const before = computePlanHash(parsed);
 
     const updated = updateRoutineBlock(FIXTURE, 'morning-digest', parsed);
-    const readBack = parseRoutines(extractFrontmatterText(updated), { owner: 'penn' })
+    const readBack = parseRoutines(extractFrontmatterText(updated), { owner: 'wren' })
       .find(r => r.name === 'morning-digest');
 
     assert.strictEqual(readBack.skill, null);
@@ -615,7 +615,7 @@ describe('caller-supplied text is data, not pattern', () => {
   test('a value full of dollar sequences replaces an existing key byte for byte', () => {
     const value = "Budget is $1 per run, $& of $$100, $` and $' too";
     const updated = updateRoutineBlock(FIXTURE, 'morning-digest', { prompt: value });
-    const r = parseRoutines(extractFrontmatterText(updated), { owner: 'penn' })
+    const r = parseRoutines(extractFrontmatterText(updated), { owner: 'wren' })
       .find(x => x.name === 'morning-digest');
     assert.strictEqual(r.prompt, value);
     assert.ok(updated.includes(`    prompt: ${value}`), 'the line was rewritten as something else');
@@ -624,7 +624,7 @@ describe('caller-supplied text is data, not pattern', () => {
   test('the same sequences survive on a key that has to be appended', () => {
     const value = '$1$&$$';
     const updated = updateRoutineBlock(FIXTURE, 'morning-digest', { skill: value });
-    const r = parseRoutines(extractFrontmatterText(updated), { owner: 'penn' })
+    const r = parseRoutines(extractFrontmatterText(updated), { owner: 'wren' })
       .find(x => x.name === 'morning-digest');
     assert.strictEqual(r.skill, value);
   });
@@ -636,7 +636,7 @@ describe('caller-supplied text is data, not pattern', () => {
   // string that would grow a regex under a later refactor.
   const NAMES = [
     '---',
-    'name: penn',
+    'name: wren',
     'routines:',
     '  - name: axb',
     '    prompt: the wrong one',
@@ -650,7 +650,7 @@ describe('caller-supplied text is data, not pattern', () => {
 
   test('a routine name carrying regex metacharacters matches only itself', () => {
     const updated = updateRoutineBlock(NAMES, 'a.b', { skill: 'content-linter' });
-    const routines = parseRoutines(extractFrontmatterText(updated), { owner: 'penn' });
+    const routines = parseRoutines(extractFrontmatterText(updated), { owner: 'wren' });
     assert.strictEqual(routines.find(r => r.name === 'a.b').skill, 'content-linter');
     assert.strictEqual(routines.find(r => r.name === 'axb').skill, null,
       'a dot in the name matched a different routine');
@@ -689,7 +689,7 @@ describe('a routine that predates the scheduler', () => {
     const dir = makeWorkspace({
       agents: {
         [AGENT]: agentFile({
-          name: AGENT, displayName: 'Penn', role: 'Content Lead',
+          name: AGENT, displayName: 'Wren', role: 'Content Lead',
           type: 'specialist', order: 2, routines,
         }),
       },

@@ -181,22 +181,22 @@ function standardTeam() {
       body: 'You are Cos, the orchestrator.\n\nRoute work to specialists.',
     }),
     'content-lead': agentFile({
-      name: 'content-lead', displayName: 'Penn', role: 'Content Lead',
+      name: 'content-lead', displayName: 'Wren', role: 'Content Lead',
       description: 'Owns the content pipeline', type: 'specialist', order: 2,
       reportsTo: 'chief-of-staff',
-      body: 'You are Penn, the content lead.\n\nYou own hooks, drafts and audits.',
+      body: 'You are Wren, the content lead.\n\nYou own hooks, drafts and audits.',
     }),
     'content-analyst': agentFile({
       name: 'content-analyst', displayName: 'Ana', role: 'Content Analyst',
       description: 'Analyses content performance', type: 'specialist', order: 3,
       reportsTo: 'content-lead',
-      body: 'You are Ana, the content analyst.\n\nYou analyse performance data.',
+      body: 'You are Ana.\n\nYou analyse performance data.',
     }),
     'lead-designer': agentFile({
       name: 'lead-designer', displayName: 'Des', role: 'Lead Designer',
       description: 'Visual design', type: 'specialist', order: 4,
       reportsTo: 'chief-of-staff',
-      body: 'You are Des, the lead designer.\n\nYou make visuals.',
+      body: 'You are Des.\n\nYou make visuals.',
     }),
   };
 }

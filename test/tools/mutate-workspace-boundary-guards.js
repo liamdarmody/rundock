@@ -4,7 +4,7 @@
 //
 // Every rule here is a rule about a card that fires or stays quiet, and both
 // failure directions are quiet ones: a guard deleted leaves inside paths
-// carding (the storm this lane exists to end) or outside paths sliding by.
+// carding (the storm this change exists to end) or outside paths sliding by.
 // A green suite proves nothing about either until each rule is broken on
 // purpose and a test goes red for it.
 //
@@ -68,6 +68,36 @@ const WORKSPACE_HANDLER = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 
 // atomicity guards are proven by protocol-handlers-lib.test.js's own
 // read-back, not anything ws-handler-edges.test.js asserts.
 const WORKSPACE_HANDLER_UNIT = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'workspace.js'), suite: 'test/unit/protocol-handlers-lib.test.js' };
+// The switch that keeps agents inside the workspace: where it is read from, the
+// new-workspace default, and the open-path reconcile that honours it.
+const SCAFFOLD_SWITCH = { src: path.join(ROOT, 'lib', 'workspace', 'scaffold.js'), suite: 'test/unit/sandbox-switch.test.js' };
+const WORKSPACE_HANDLER_SWITCH = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'workspace.js'), suite: 'test/unit/sandbox-switch.test.js' };
+// What the Permissions row reports as in force, and the switch's own writes.
+const SANDBOX_STATUS = { src: path.join(ROOT, 'lib', 'workspace', 'sandbox-status.js'), suite: 'test/unit/sandbox-status.test.js' };
+// Bringing a person's own rules in: the review, the digest, the import.
+const SANDBOX_IMPORT = { src: path.join(ROOT, 'lib', 'workspace', 'sandbox-status.js'), suite: 'test/unit/sandbox-import.test.js' };
+// The one normalizer every reader of the stored mode goes through.
+const MODE = { src: path.join(ROOT, 'lib', 'workspace', 'mode.js'), suite: 'test/unit/workspace-mode-values.test.js' };
+// The Permissions pane: the label, the turn-off question, and the row model.
+const NOTES_LABEL = { src: path.join(ROOT, 'public', 'views', 'settings.js'), suite: 'test/unit/notes-mode-label.test.js' };
+const PERMISSIONS_PANE = { src: path.join(ROOT, 'public', 'views', 'settings.js'), suite: 'test/unit/permissions-pane.test.js' };
+const SANDBOX_ROW = { src: path.join(ROOT, 'public', 'sandbox-row-model.js'), suite: 'test/unit/sandbox-row-model.test.js' };
+// A block a person wrote is never rewritten by any path but bringing it in.
+// Every class the panes render has a rule behind it.
+const SETTINGS_SURFACE = { src: path.join(ROOT, 'public', 'styles', 'views', 'settings.css'), suite: 'test/unit/settings-surface.test.js' };
+const SCAFFOLD_FOREIGN = { src: path.join(ROOT, 'lib', 'workspace', 'scaffold.js'), suite: 'test/unit/foreign-sandbox-notice.test.js' };
+// The desktop app's own wiring, watched by the run that launches the shipped
+// entrypoint beside the browser and compares the Permissions row. A
+// suite under test/electron/ is that run: its JSON report names each
+// expectation that failed (see redTests).
+const DESKTOP = { src: path.join(ROOT, 'electron', 'main.js'), suite: 'test/electron/settings-parity.cjs' };
+// The profile the desktop run starts on, and the entrypoint's use of it.
+const USER_DATA = { src: path.join(ROOT, 'electron', 'user-data.js'), suite: 'test/unit/user-data.test.js' };
+const DESKTOP_PROFILE = { src: path.join(ROOT, 'electron', 'main.js'), suite: 'test/unit/user-data.test.js' };
+// The same entrypoint, watched by the run that launches it with an absolute
+// and then a relative RUNDOCK_USER_DATA_DIR and reads what the running app
+// reports and leaves on disk.
+const DESKTOP_PROFILE_RUN = { src: path.join(ROOT, 'electron', 'main.js'), suite: 'test/electron/user-data-entrypoint.cjs' };
 
 const MUTATIONS = [
   // ===== ONE DIRECTORY UNDER TWO NAMES IS ONE IDENTITY =====
@@ -233,35 +263,177 @@ const MUTATIONS = [
   [SCAFFOLD, 'the mode switch really drops the enable in code mode, rather than writing the enabled shape',
     "  const desired = sandboxSettings(dir, platform, os.homedir(), tempRoots(), workingFoldersFor(dir), mode);",
     "  const desired = sandboxSettings(dir, platform, os.homedir(), tempRoots(), workingFoldersFor(dir), 'knowledge');"],
-  // Ignore the mode on the NEXT OPEN specifically, not through the switch:
-  // scaffoldWorkspace's own reconcile has to read the persisted mode too, or
-  // a code-mode workspace has its block silently rewritten the next time it
-  // is opened.
-  [SCAFFOLD, 'the next open honours the persisted mode, not only the switch',
-    "    const desired = sandboxSettings(dir, platform, os.homedir(), tempRoots(), workingFoldersFor(dir), workspaceModeFor(dir));",
-    "    const desired = sandboxSettings(dir, platform, os.homedir(), tempRoots(), workingFoldersFor(dir), 'knowledge');"],
-  // The mode must be PERSISTED before scaffoldWorkspace runs, because
-  // scaffoldWorkspace's own reconcile reads the mode back off disk, not from
-  // this function's local variable. Swap the order and a never-before-opened
-  // code-signal workspace gets the block written on its first open anyway,
-  // catching up only on the next one.
-  [WORKSPACE_HANDLER, 'the mode is persisted before scaffoldWorkspace runs, not after',
-    "  const state = readState();\n"
-    + "  if (!state.workspaceMode) {\n"
-    + "    state.workspaceMode = detectWorkspaceMode(dir);\n"
-    + "    writeState(state);\n"
-    + "    console.log(`  Workspace mode auto-detected: ${state.workspaceMode}`);\n"
-    + "  }\n"
-    + "\n"
-    + "  try { scaffoldWorkspace(dir); } catch (e) { console.warn('Scaffold warning:', e.message); }",
-    "  try { scaffoldWorkspace(dir); } catch (e) { console.warn('Scaffold warning:', e.message); }\n"
-    + "\n"
-    + "  const state = readState();\n"
-    + "  if (!state.workspaceMode) {\n"
-    + "    state.workspaceMode = detectWorkspaceMode(dir);\n"
-    + "    writeState(state);\n"
-    + "    console.log(`  Workspace mode auto-detected: ${state.workspaceMode}`);\n"
-    + "  }"],
+  // ===== THE SWITCH IS STORED, AND THE MODE DOES NOT DECIDE IT =====
+  // The next open must write the stored switch. Hard-wire the on shape and a
+  // workspace whose switch is off has it turned back on every time it opens.
+  [SCAFFOLD_SWITCH, 'the next open writes the stored switch, not a fixed shape',
+    "    const desired = sandboxSettings(dir, platform, os.homedir(), tempRoots(), workingFoldersFor(dir), sandboxShapeFor(dir));",
+    "    const desired = sandboxSettings(dir, platform, os.homedir(), tempRoots(), workingFoldersFor(dir), 'on');"],
+  // A stored switch wins over the mode. Drop the stored branch and every
+  // workspace falls back to what its mode implies, which is the coupling this
+  // switch exists to end.
+  [SCAFFOLD_SWITCH, 'a stored switch wins over what the mode implies',
+    "  if (st.sandboxSwitch === 'on' || st.sandboxSwitch === 'off') return { on: st.sandboxSwitch === 'on', stored: true };\n",
+    ''],
+  // Absent, the switch is what the mode always implied. Read it as always on
+  // and every Code-mode workspace that predates the switch has its block
+  // rewritten on the next open.
+  [SCAFFOLD_SWITCH, 'an absent switch reads as what the mode implied, so no existing block is rewritten',
+    "  return { on: normalizeWorkspaceMode(st.workspaceMode) !== 'code', stored: false };",
+    "  return { on: true, stored: false };"],
+  // The new-workspace default is on, in one named place.
+  [SCAFFOLD_SWITCH, 'a workspace new to Rundock starts with the switch on',
+    "const NEW_WORKSPACE_SANDBOX_SWITCH = 'on';",
+    "const NEW_WORKSPACE_SANDBOX_SWITCH = 'off';"],
+  // A first open must record the switch, not only the mode, or a later mode
+  // change is free to move it.
+  [WORKSPACE_HANDLER, 'a first open records the switch before scaffolding, not only the mode',
+    "  const state = recordFirstOpen(dir);\n\n  try { scaffoldWorkspace(dir); }",
+    "  const state = readState();\n\n  try { scaffoldWorkspace(dir); }"],
+
+  // ===== THE ROW SAYS WHAT IS IN FORCE =====
+  // Read the stored preference instead of the disk and a switch that says on
+  // beside a block that says off is reported On.
+  [SANDBOX_STATUS, 'the effective state is read from the files on disk, not the stored switch',
+    '    on: available && effective,',
+    '    on: available && sandboxSwitchFor(dir).on,'],
+  // The shipped runtime ORs the enable across layers: count only Rundock's
+  // block and a sandbox the user's own settings turn on is reported Off.
+  [SANDBOX_STATUS, 'any layer that turns the sandbox on keeps the row On',
+    '  const effective = blockOn || managedOn || enabledElsewhere.length > 0;',
+    '  const effective = blockOn;'],
+  // Managed settings that turn it on are shown as the organisation's.
+  [SANDBOX_STATUS, 'managed settings that turn it on are named as the organisation\'s',
+    "  const setBy = managedOn ? 'managed' :",
+    "  const setBy = false ? 'managed' :"],
+  // Drop the restore and a failed flip leaves the stored switch and the block
+  // disagreeing.
+  [SANDBOX_STATUS, 'a failed switch write restores both files',
+    "    reconcileSandboxForMode(dir, on ? 'on' : 'off', platform);\n  } catch (e) {\n    restore(snaps);\n    throw e;",
+    "    reconcileSandboxForMode(dir, on ? 'on' : 'off', platform);\n  } catch (e) {\n    throw e;"],
+  // Drop the ownership refusal and the switch writes over a block a person wrote.
+  [SANDBOX_STATUS, 'the switch refuses a hand-authored block',
+    "  if (!status.managed) throw new Error('this workspace\\'s sandbox was set up outside Rundock.');\n",
+    ''],
+  // A hand-authored block never gets the notice: mode never moved it.
+  [SANDBOX_STATUS, 'no one-time notice for a hand-authored block',
+    '    notice: available && present && managed && !stored ?',
+    '    notice: available && present && !stored ?'],
+
+  // ===== A PERSON'S OWN RULES COME IN ONLY AS REVIEWED =====
+  // Drop the digest check and a file edited after the review is brought in
+  // unseen.
+  [SANDBOX_IMPORT, 'only the file the person reviewed is brought in',
+    "  if (digest !== review.digest) throw new Error('your settings file has changed since you reviewed it. Review it again.');\n",
+    ''],
+  // Drop the restore and a failed import leaves the folders added and the
+  // person's block in place, or the block replaced and no folders.
+  [SANDBOX_IMPORT, 'a failed import restores both files',
+    '    fs.writeFileSync(settingsFile(dir), JSON.stringify(settings, null, 2));\n  } catch (e) {\n    restore(snaps);\n    throw e;',
+    '    fs.writeFileSync(settingsFile(dir), JSON.stringify(settings, null, 2));\n  } catch (e) {\n    throw e;'],
+  // Drop the folder write and the folders the review promised are lost.
+  [SANDBOX_IMPORT, 'the folders the review listed become working folders',
+    '    writeWorkingFolders([...readWorkingFolders(), ...review.folders]);\n',
+    ''],
+  // Write the on shape regardless and an off block is switched on by the import.
+  [SANDBOX_IMPORT, 'bringing rules in keeps what was in force',
+    "    settings.sandbox = sandboxSettings(dir, platform, os.homedir(), tempRoots(), workingFoldersFor(dir), review.on ? 'on' : 'off');",
+    "    settings.sandbox = sandboxSettings(dir, platform, os.homedir(), tempRoots(), workingFoldersFor(dir), 'on');"],
+  // A rule Rundock cannot represent must be named, not silently skipped.
+  [SANDBOX_IMPORT, 'every rule that cannot come is named in the review',
+    "    if (key !== 'filesystem' || !value || typeof value !== 'object') { drop(key, value); continue; }",
+    "    if (key !== 'filesystem' || !value || typeof value !== 'object') { continue; }"],
+
+  // ===== THE STORED MODE IS READ ONE WAY =====
+  // Let an unrecognised value lift the restriction and a garbled or future
+  // value reaches every reader as Code. Red only if the readers really go
+  // through the normalizer.
+  [MODE, 'anything but code reads as the restrictive mode, at every reader',
+    "  return raw === 'code' ? 'code' : 'notes';",
+    "  return raw === 'notes' || raw === 'knowledge' || raw == null ? 'notes' : 'code';"],
+  // A third writable value would be read by v0.9.0 to v0.14.0 as Notes
+  // without anyone deciding it.
+  [MODE, 'this build can write only notes and code',
+    "const WRITABLE_MODES = Object.freeze(['notes', 'code']);",
+    "const WRITABLE_MODES = Object.freeze(['notes', 'code', 'knowledge']);"],
+
+  // ===== THE PERMISSIONS PANE =====
+  // Let the reconcile overwrite a block it did not write and a person's own
+  // rules are replaced without their acting.
+  [SCAFFOLD_FOREIGN, 'the reconcile never rewrites a block a person wrote',
+    '  if (ours && desired && !sameSandbox(settingsLocal.sandbox, desired)) {',
+    '  if (desired && !sameSandbox(settingsLocal.sandbox, desired)) {'],
+  // Delete a rule a rendered class needs and the element is left to inherit.
+  [SETTINGS_SURFACE, 'every class the Permissions pane renders has a rule',
+    '.sandbox-caption { margin-top: 4px; }',
+    '.sandbox-captions { margin-top: 4px; }'],
+  // ===== THE DESKTOP APP SHOWS THE SAME ROW =====
+  // The shipped wiring the desktop run depends on, broken in electron/main.js
+  // itself. Lose the main window's preload and the page is a browser page in
+  // a desktop frame; unregister the storage handler and the preload's
+  // snapshot never comes back.
+  [DESKTOP, "the desktop main window loads the app's preload",
+    "    ...chromeWindowOptions(),\n    webPreferences: {\n      preload: path.join(__dirname, 'preload.js'),",
+    "    ...chromeWindowOptions(),\n    webPreferences: {\n      preload: path.join(__dirname, 'preload-missing.js'),"],
+  [DESKTOP, "the desktop main process answers the preload's storage snapshot",
+    "ipcMain.on('rundock-storage-snapshot', (event) => {",
+    "ipcMain.on('rundock-storage-snapshot-unregistered', (event) => {"],
+  // The desktop run's own profile: a value that cannot be used is refused,
+  // and the refusal stops the app, rather than either falling back to the
+  // person's real profile.
+  [USER_DATA, 'a relative RUNDOCK_USER_DATA_DIR is refused, never read against the working directory',
+    "  if (!path.isAbsolute(raw)) return { kind: 'invalid',",
+    "  if (false) return { kind: 'invalid',"],
+  [DESKTOP_PROFILE, 'a refused RUNDOCK_USER_DATA_DIR stops the app before it starts',
+    "  process.exit(1);\n}\nif (userData.kind === 'path') {",
+    "}\nif (userData.kind === 'path') {"],
+  // The same two rules, proved on the running app rather than its source. The
+  // resolved folder never applied leaves the app on the default profile;
+  // the refusal printed but not acted on lets the app carry on to a window
+  // and a profile of its own.
+  [DESKTOP_PROFILE_RUN, 'the desktop app runs on the RUNDOCK_USER_DATA_DIR folder it resolved',
+    "  app.setPath('userData', userData.path);",
+    "  void userData.path;"],
+  [DESKTOP_PROFILE_RUN, 'a relative RUNDOCK_USER_DATA_DIR stops the running app before a window, the server or any profile state',
+    "Not starting.`);\n  process.exit(1);",
+    "Not starting.`);"],
+  // The mode is called Notes wherever a person reads it.
+  [NOTES_LABEL, 'the Notes tab never reads Knowledge mode again',
+    ">Notes</button>",
+    ">Knowledge mode</button>"],
+  // Turning off asks first. Skip the question and a click sends the write.
+  [PERMISSIONS_PANE, 'turning the switch off asks before anything is sent',
+    '  if (sandboxStatus && sandboxStatus.on) {\n    sandboxUi.confirming = true;',
+    '  if (false) {\n    sandboxUi.confirming = true;'],
+  // Escape answers the question the safe way.
+  [PERMISSIONS_PANE, 'Escape keeps the switch on',
+    "  if (event.key !== 'Escape') return;\n  event.preventDefault();\n  if (panel === 'confirm') sandboxKeepOn();",
+    "  if (event.key !== 'Escape') return;\n  event.preventDefault();\n  if (panel === 'confirm') return;"],
+  // A block a person wrote is read-only: nothing switch-shaped.
+  [SANDBOX_ROW, 'a hand-authored block renders as a read-only status, not a switch',
+    "      return row(state, 'lock', {\n        captions,\n        ownership: [{ text: 'Set up outside Rundock, in ' }",
+    "      return row(state, 'switch', {\n        captions,\n        ownership: [{ text: 'Set up outside Rundock, in ' }"],
+  // Windows has no sandbox to switch.
+  [SANDBOX_ROW, 'Windows shows Unavailable with nothing to press',
+    "  if (host === 'win32') return row('unavailable', 'none',",
+    "  if (host === 'win32') return row('unavailable', 'switch',"],
+  // A sentence about what Codex does only where Rundock detected it.
+  [SANDBOX_ROW, 'the Codex sentence appears only where the config was read',
+    "    const captions = cx.windowsSandbox === false ?",
+    "    const captions = true ?"],
+  // The folders' sentence must name the mode's real behaviour: Code mode only
+  // asks about a command it can see reaching outside.
+  [SANDBOX_ROW, 'the folders sentence for Code with the switch off says what Code mode really asks',
+    "      return mode === 'code'\n",
+    "      return false\n"],
+  // Another file turning it on locks the row: Rundock's switch cannot turn it off.
+  [SANDBOX_ROW, 'a sandbox another file turns on is read-only, not a switch',
+    "      return row(state, 'lock', { captions, ownership, folders });",
+    "      return row(state, 'switch', { captions, ownership, folders });"],
+  // A workspace using both runtimes shows both rows.
+  [SANDBOX_ROW, 'a Codex row joins the Claude Code row when both runtimes are in use',
+    "    if (hasCodex) rows.push(",
+    "    if (hasCodex && !hasClaude) rows.push("],
 
   // ===== THE AGENT'S OWN FOLDER: THREE TIERS, ONE REGISTRY =====
   // Drop the write gate and a persistence-surface write becomes free, the storm this tiering exists to end.
@@ -434,35 +606,18 @@ const MUTATIONS = [
     'crossings.length > 1 ? `${context} ${stakesCopy}` : stakesCopy;',
     'stakesCopy;'],
 
-  // ===== A MODE CHANGE IS ALL OR NOTHING, IN EVERY FAILURE, IN BOTH DIRECTIONS =====
-  [WORKSPACE_HANDLER_UNIT, 'the block is reconciled before the mode is persisted, not after',
-    '    if (dir) reconcileSandboxForMode(dir, mode, platform);\n'
-    + '    const state = readState();\n'
-    + '    state.workspaceMode = mode;\n'
-    + '    writeState(state);',
-    '    const state = readState();\n'
-    + '    state.workspaceMode = mode;\n'
-    + '    writeState(state);\n'
-    + '    if (dir) reconcileSandboxForMode(dir, mode, platform);'],
-  // A failed mode change restores the settings file to its exact pre-request
-  // bytes, not just refuses to commit the new mode. Drop the restore write
-  // and a reconcile that genuinely changed the file leaves that change in
-  // place even though the state write after it failed.
-  [WORKSPACE_HANDLER_UNIT, 'a failed mode change restores the settings file\'s pre-request bytes, not just leaves the mode uncommitted',
-    '      try {\n'
-    + '        if (existedBefore) fs.writeFileSync(settingsLocalPath, preRequestBytes);\n'
-    + "        else if (preRequestReadErrorCode === 'ENOENT' && fs.existsSync(settingsLocalPath)) fs.unlinkSync(settingsLocalPath);\n"
-    + '      } catch (restoreErr) {',
-    '      try {\n'
-    + '      } catch (restoreErr) {'],
-  // Delete only when the capture proved the file absent (ENOENT).
-  [WORKSPACE_HANDLER_UNIT, 'the rollback may only delete the settings file when the capture proved it absent, not for any other read failure',
-    "        else if (preRequestReadErrorCode === 'ENOENT' && fs.existsSync(settingsLocalPath)) fs.unlinkSync(settingsLocalPath);",
-    '        else if (fs.existsSync(settingsLocalPath)) fs.unlinkSync(settingsLocalPath);'],
-  // The delete branch alone, not paired with the restore write above.
-  [WORKSPACE_HANDLER_UNIT, 'a mode change that creates settings.local.json where none existed removes it again on failure, not just restores bytes when a file was already there',
-    "        else if (preRequestReadErrorCode === 'ENOENT' && fs.existsSync(settingsLocalPath)) fs.unlinkSync(settingsLocalPath);\n",
+  // ===== MODE NEVER REACHES THE BLOCK =====
+  // Re-couple the block to mode inside the mode handler and a mode change
+  // rewrites the settings file, which is the coupling the switch ends.
+  [WORKSPACE_HANDLER_UNIT, 'a mode change never rewrites the sandbox block',
+    '    state.workspaceMode = mode;\n    writeState(state);\n',
+    "    state.workspaceMode = mode;\n    writeState(state);\n    if (getWorkspace()) reconcileSandboxForMode(getWorkspace(), mode, platform);\n"],
+  // Drop the pin and a workspace with no switch stored has it moved by the
+  // mode on the next open.
+  [WORKSPACE_HANDLER_SWITCH, 'the first mode change pins the switch the old mode implied',
+    "    if (!current.stored) state.sandboxSwitch = current.on ? 'on' : 'off';\n",
     ''],
+
   // The lower length bound is the one that survives. The upper bound is gone
   // with the fixed-length tail: the list now carries the folders the user
   // named, so its length proves nothing. A block with NO tail at all is still
@@ -485,6 +640,22 @@ const REPORTER = ['--test-reporter', 'spec'];
 function redTests(suite) {
   let out = '';
   let failed = false;
+  // A suite under test/electron/ is a run of the shipped desktop app, not a
+  // node:test file: it prints one JSON report whose `failures` names every
+  // expectation that did not hold, and exits 1 when there are any.
+  if (String(suite || '').startsWith('test/electron/')) {
+    try {
+      out = execFileSync('node', [suite], { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 240000 });
+    } catch (e) {
+      failed = true;
+      out = e.stdout || '';
+    }
+    try {
+      const report = JSON.parse(out.slice(out.indexOf('{\n'), out.lastIndexOf('}') + 1));
+      if (Array.isArray(report.failures) && (report.failures.length > 0) === failed) return report.failures;
+    } catch (e) { /* no report: no verdict */ }
+    return { unparsable: true };
+  }
   try {
     out = execFileSync('node', ['--test', ...REPORTER, suite],
       { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
@@ -510,7 +681,7 @@ function redTests(suite) {
 }
 
 function run() {
-  const targets = [HOOK, SCAFFOLD, BOUNDARY, CHAT_VIEW, HOOK_INTEGRATION, HOOK_REFUSAL, HOOK_CLASSIFIER, WORKSPACE_HANDLER, WORKSPACE_HANDLER_UNIT, READ_ONLY, READ_ONLY_CLIENT];
+  const targets = [HOOK, SCAFFOLD, BOUNDARY, CHAT_VIEW, HOOK_INTEGRATION, HOOK_REFUSAL, HOOK_CLASSIFIER, WORKSPACE_HANDLER, WORKSPACE_HANDLER_UNIT, SCAFFOLD_SWITCH, WORKSPACE_HANDLER_SWITCH, SANDBOX_STATUS, SANDBOX_IMPORT, MODE, NOTES_LABEL, PERMISSIONS_PANE, SANDBOX_ROW, SCAFFOLD_FOREIGN, SETTINGS_SURFACE, READ_ONLY, READ_ONLY_CLIENT, DESKTOP, USER_DATA, DESKTOP_PROFILE, DESKTOP_PROFILE_RUN];
   const session = beginMutationRun({ files: [...new Set(targets.map((target) => target.src))] });
   const originals = new Map();
   for (const target of targets) originals.set(target, session.original(target.src));

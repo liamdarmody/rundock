@@ -130,7 +130,7 @@ A press is refused only when nothing could run: the routine names a run target t
 
 A routine made through the editor is approved from the moment it exists: making it is the consent, and nothing is asked of you. What is asked is a **change** to what the routine runs. Editing the prompt, the skill it runs or where it runs lapses the approval, because an agent can edit a routine and a person who does not know an edit happened has nothing to pause. Editing when it runs, its timezone, pausing it, turning it on or off, and editing the skill's own file leave the approval standing: those change when or whether, not what.
 
-A routine whose approval has lapsed shows as **paused**, and it does not look like a pause you applied yourself. The row keeps its full weight, takes the attention colour, and says that what this runs has changed since you last approved it, with one action: **Review and resume**, which approves the plan as it stands on disk at that moment. A pause you applied is quieter: the row dims, the word is simply **Paused**, and the way back is **Resume**. The two are told apart by words as well as colour on purpose, because a changed routine that looked like an ordinary pause would be resumed without a glance, which is the outcome the approval exists to prevent. Pausing is a switch on the row, off beside Run and on beside the word Paused, and it is the only control that sets or clears `paused`; the play glyph belongs to Run alone.
+A routine whose approval has lapsed shows as **paused**, and it does not look like a pause you applied yourself. The row keeps its full weight, takes the attention colour, and says that what this runs has changed since you last approved it, with one action: **Review and resume**, which approves the plan as it stands on disk at that moment. A routine nobody has approved yet, such as one a package brought in switched off, says instead that it is waiting for your approval before its first run, with the same **Review and resume**. A pause you applied is quieter: the row dims, the word is simply **Paused**, and the way back is **Resume**. The two are told apart by words as well as colour on purpose, because a changed routine that looked like an ordinary pause would be resumed without a glance, which is the outcome the approval exists to prevent. Pausing is a switch on the row, off beside Run and on beside the word Paused, and it is the only control that sets or clears `paused`; the play glyph belongs to Run alone.
 
 ### Routines run for the workspace that is open
 
@@ -154,7 +154,7 @@ The constraint is real, though narrower than it looks. Rundock's scheduler runs 
 
 Keep Rundock running on a small cloud server (Hetzner, DigitalOcean, Hostinger, etc) and reach it from any device through a browser. The scheduler ticks 24/7, routines fire on cadence regardless of whether your laptop is open, and the workspace stays in sync via Obsidian Sync.
 
-For a working setup guide, see Liam's gist: [How to Build a 24/7 Personal AI Agent with Claude Code](https://gist.github.com/liamdarmody/4aba083c26ccb1b3b0f1068ec185ef66). It walks through Ubuntu 24.04 on a VPS, Claude Code installation and authentication, server hardening (ufw, fail2ban, unattended-upgrades), Obsidian Sync, and a systemd service so Rundock comes back up after a reboot. It is opinionated and worked end-to-end at the time of writing. The general pattern (VPS plus authenticated Claude Code plus Rundock as a service) is durable; the specific provider, hardening commands, and pricing will drift. Treat the gist as a starting point and verify each step against current docs before running it on a fresh server.
+A working setup has four parts: a small Linux server (for example Ubuntu 24.04), Claude Code installed and authenticated on it, basic server hardening (a firewall, fail2ban, unattended upgrades), a sync tool for the workspace, and a systemd service so Rundock comes back up after a reboot. The general pattern (VPS plus authenticated Claude Code plus Rundock as a service) is durable; the specific provider, hardening commands, and pricing will drift, so verify each step against current docs before running it on a fresh server.
 
 **A second Rundock left running on the same workspace runs every routine a second time.** A routine records what it does and when, and nothing about where it was made, and there is no coordination between two copies of one workspace. If you keep Rundock open on the VPS and on your laptop with the workspace synced between them, both schedulers tick and both fire, so the routine runs twice. Four machines, four runs.
 
@@ -175,7 +175,7 @@ What this gives you:
 What it costs:
 
 - A small monthly VPS fee. Around £5 to £10 per month at the cheapest reliable tiers.
-- One-time setup time. The first run through the gist is a couple of hours if you are comfortable with a Linux terminal, longer if you are not.
+- One-time setup time. The first setup is a couple of hours if you are comfortable with a Linux terminal, longer if you are not.
 - Ongoing maintenance. OS updates, the occasional service restart, and keeping Claude Code authenticated.
 
 ### Option 2: Anthropic Claude Code Routines
@@ -192,9 +192,9 @@ How it relates to Rundock's routines: complementary, not a replacement. Rundock 
 
 The split that tends to make sense in practice: keep workspace-bound work (morning briefings that read the daily note, end-of-day syncs that write to your vault, anything that depends on local files or a Rundock agent's system prompt) on Rundock's local routines (and host Rundock on a VPS if you need 24/7 firing). Move repo-bound work (PR triage, scheduled code review, release notes) to Anthropic's Routines, which is built for that shape.
 
-### Liam's setup
+### An example setup
 
-For reference, Liam runs Rundock on a VPS and schedules context-heavy routines outside working hours, so they do not consume tokens during interactive sessions. The morning briefing, end-of-day sync, and the two weekly research digests all fire on the VPS while the laptop is closed. By the time the day starts, the daily note has been written and the inbox has been triaged.
+One pattern that works: run Rundock on a VPS and schedule context-heavy routines outside working hours, so they do not consume tokens during interactive sessions. The morning briefing, end-of-day sync, and weekly research digests all fire on the VPS while the laptop is closed. By the time the day starts, the daily note has been written and the inbox has been triaged.
 
 ### When not to bother
 
@@ -213,11 +213,32 @@ This page used to say the pipes were open but unread, and described that as a de
 What Rundock does record:
 
 - The routine's `lastRun` timestamp.
-- The routine's `status` (`running`, `completed`, `failed`, `cancelled`, or `interrupted`). `completed` and `failed` normally follow the subprocess exit code. `cancelled` is written when the run was stopped from outside it, which is a different fact from a run that failed and is recorded as one. `interrupted` is written when a run left marked `running` is loaded back and nothing in the running process answers for it, so a routine killed mid-run is distinguishable from one that failed. A run that is still going in the process doing the loading is left alone: **switching workspace no longer reports a run in flight as cut short**, because the process knows which runs it started and has not yet ended, and that run goes on reporting `running` until it really ends.
+- The routine's `status` (`running`, `completed`, `failed`, `cancelled`, or `interrupted`). `completed` and `failed` normally follow the subprocess exit code, with one exception: a run whose agent declares that it failed is recorded as `failed` (see [A run can say it failed](#a-run-can-say-it-failed)). `cancelled` is written when the run was stopped from outside it, which is a different fact from a run that failed and is recorded as one. `interrupted` is written when a run left marked `running` is loaded back and nothing in the running process answers for it, so a routine killed mid-run is distinguishable from one that failed. A run that is still going in the process doing the loading is left alone: **switching workspace no longer reports a run in flight as cut short**, because the process knows which runs it started and has not yet ended, and that run goes on reporting `running` until it really ends.
 - The routine's `duration` in seconds.
 - An `error` string, written only when a start never produced a subprocess at all. A routine whose spawn throws is recorded as `failed` with the reason the failure gave, and with a `duration` of zero, because nothing ran. Its `lastRun` is the instant the start was attempted, so the ordinary guard holds it for the rest of its period rather than retrying it every 60 seconds; the next period attempts it again. One routine failing this way does not stop any other routine on the same tick.
 
 These fields update in the Routines panel and on the agent profile in real time over the WebSocket, except after a failed start, which the next update carries.
+
+### A run can say it failed
+
+An agent that runs into trouble usually says so in its final message and then exits cleanly, and a clean exit on its own would be recorded as a success. Rundock does not read intent from prose, so a routine that wants a failure recorded says it in one fixed form: **the last line of the agent's final message is**
+
+```
+RUN STATUS: failed: <reason>
+```
+
+The run is then recorded as `failed`, with `<reason>` as its `error`, and the routine's own status reads `failed` too. The run's record also carries `declared: true`, and the run screen shows it as **Reported failed** with the reason, apart from a run whose process failed, which reads **Stopped early**. The reason is optional: `RUN STATUS: failed` on its own records the failure with a sentence saying no reason was given.
+
+The rules, stated exactly because a skill author depends on them:
+
+- Only the **last non-empty line** of the **final** message counts. A declaration followed by more text, or a run that ends on a tool call rather than a message, declares nothing.
+- `RUN STATUS` is matched without regard to case, and markdown emphasis or a code span around the line is ignored, because a model adds them unasked. Any other wording is not a declaration.
+- `RUN STATUS: succeeded` is accepted and changes nothing.
+- A run that declares nothing is recorded exactly as it was before this existed: a clean exit is `completed`, and its record has no `declared` field. No existing routine changes state because of this.
+- A run that was stopped from outside stays `cancelled`, whatever it declared.
+- It is read from the run's session transcript, so it applies to Claude runs. A Codex run leaves no transcript and cannot declare a failure this way yet.
+
+A skill that runs as a routine should end with the line whenever it could not do its job, for example: `RUN STATUS: failed: labels could not be applied (the keychain was unavailable)`.
 
 ### What a run can say it changed
 
@@ -247,13 +268,15 @@ This was established by running it rather than by reading, and it is re-run ever
 npm run transcript:truth -- --capture
 ```
 
-On Claude Code 2.1.274 the hook was consulted 11 times, about `Edit`, `NotebookEdit`, `Read` and `Write`, including the write that then failed. Each payload named the tool about to run and the path of the run's own transcript. (These numbers are read out of the capture by `test/unit/doc-claims.test.js` and asserted against this sentence, so a re-capture that moves them fails rather than leaving the prose stale.) The recorded answer, the matchers, the spawn shape and the tools it was consulted about all live in `scripts/transcript-truth/captured-transcript.json` under `permissionHook`, and `test/unit/session-transcript-capture.test.js` asserts them.
+On Claude Code 2.1.283 the hook was consulted 9 times, about `Edit`, `NotebookEdit`, `Read` and `Write`, including the write that then failed. Each payload named the tool about to run and the path of the run's own transcript. (These numbers are read out of the capture by `test/unit/doc-claims.test.js` and asserted against this sentence, so a re-capture that moves them fails rather than leaving the prose stale.) The recorded answer, the matchers, the spawn shape and the tools it was consulted about all live in `scripts/transcript-truth/captured-transcript.json` under `permissionHook`, and `test/unit/session-transcript-capture.test.js` asserts them.
 
 Why it matters beyond the curiosity: a hook is the only thing that runs *before* a write, so it is the only place that can copy a file's bytes before they are overwritten. Reading a transcript afterwards can say what changed but never what it used to be. Any future feature that needs to undo a routine's work depends on the answer above being yes.
 
-The practical implication: any routine that needs to leave a trace should write that trace itself, through the agent's tools. A morning briefing that creates a file in the daily note, a research digest that writes a markdown report to a folder, an end-of-day sync that updates Todoist via MCP: all of these work because the agent's system prompt instructs the agent to write its output to a known location. A routine that simply asks the model to think out loud will produce output that nobody ever reads.
+The practical implication: any routine that needs to leave a trace should write that trace itself, through the agent's tools. A morning briefing that creates a file in the daily note, a research digest that writes a markdown report to a folder, an end-of-day sync that updates a task manager via MCP: all of these work because the agent's system prompt instructs the agent to write its output to a known location. A routine that simply asks the model to think out loud will produce output that nobody ever reads.
 
-There is no built-in notification when a routine completes. The user notices a routine ran by either seeing the timestamp update in the Routines panel, or seeing the file the agent wrote, or seeing the Todoist tasks the agent created.
+**Where a routine's permission card appears.** A routine has no conversation, so a card its agent raises is attributed to its run by the session the run was started with, and is shown in the **approvals dock**, over whatever screen is open, under the routine's name and the agent's ("Morning Briefing, run by Ada"). It never appears inside a conversation. A request nothing can be matched to is shown in the same dock as unattributed. An unanswered card is denied at the usual timeout, the same as a conversation's, and once a request has timed out, been answered in any window, or lost the process that asked, its card says so and can no longer be answered.
+
+There is no built-in notification when a routine completes. The user notices a routine ran by either seeing the timestamp update in the Routines panel, or seeing the file the agent wrote, or seeing the tasks the agent created.
 
 ## The Routines panel
 
@@ -273,7 +296,7 @@ The agent profile page shows a richer Routines card for each agent that owns rou
 
 ## Complete example
 
-This is the live `chief-of-staff.md` agent in the workspace. It owns one routine: the morning briefing. Every field is present in the actual file.
+This is an example `chief-of-staff.md` agent. It owns one routine: the morning briefing. Every field is one Rundock reads.
 
 ```yaml
 ---
@@ -285,13 +308,13 @@ order: 0
 icon: ★
 colour: "#E87A5A"
 description: >
-  Chief orchestrator. Protects Liam's time, routes work to specialists,
+  Chief orchestrator. Protects the user's time, routes work to specialists,
   manages priorities, and runs daily briefings.
 capabilities:
   does: Routes work to specialists, manages priorities, daily briefings, session starts, challenges low-leverage tasks
-  reads: Entire workspace, Todoist tasks, Google Calendar, Notion, Granola meeting notes, Readwise highlights
+  reads: Entire workspace, task list, calendar, meeting notes, reading highlights
   writes: Daily briefings, meeting notes, knowledge graph updates, task management
-  connectors: Todoist, Google Calendar, Notion, Granola, Readwise
+  connectors: Tasks, Calendar, Meeting notes
 routines:
   - name: Morning briefing
     schedule: every day at 05:00
@@ -323,15 +346,15 @@ routines:
     description: Triage today's tasks, calendar, and content pipeline at 5am.
 ```
 
-**End-of-day sync on the executive assistant.** Fires at 9pm, pulls the day's meetings from Granola, writes meeting notes, creates Todoist action items, updates the people graph.
+**End-of-day sync on the executive assistant.** Fires at 9pm, pulls the day's meetings from the meeting-notes connector, writes meeting notes, creates action items in the task manager, updates the people graph.
 
 ```yaml
 routines:
-  - name: Granola EOD sync
+  - name: End-of-day sync
     schedule: every day at 21:00
     enabled: true
-    prompt: Run the Granola end-of-day sync
-    description: Pull today's meetings from Granola and write notes, tasks, and people updates.
+    prompt: Run the end-of-day sync
+    description: Pull today's meetings and write notes, tasks, and people updates.
 ```
 
 **Weekly research digest on a research-focused agent.** Fires once a week before the user is awake. The agent runs a long pipeline (LinkedIn analysis, competitor scan, trending research) and writes a digest to a known folder.
@@ -382,7 +405,7 @@ A few specific things that go wrong silently.
 
 **Rundock is closed for a whole day when the schedule comes due.** The scheduler is in-process, so a routine can only fire while Rundock is running. If Rundock is shut at 05:00 but opened later the same day, the morning briefing fires when you open it: that is the catch-up window described above. What is lost is a day Rundock is never opened at all, because the window is the calendar day and it does not carry over. Routines are best suited to cadences you keep Rundock running through; for one that must never miss a slot, schedule it when Rundock is reliably open.
 
-**Routines that need their output read.** Rundock discards the routine's stdout. If the agent does not write its output somewhere durable through tools (file system, Todoist, Notion, etc), the run produces nothing the user can find later. Always design routines so the agent writes a trace.
+**Routines that need their output read.** Rundock discards the routine's stdout. If the agent does not write its output somewhere durable through tools (file system, a task manager, a notes app, etc), the run produces nothing the user can find later. Always design routines so the agent writes a trace.
 
 **Two routines on the same agent fire in the same minute.** Both routines spawn Claude Code subprocesses concurrently. They do not share context, conversation history, or file locks. Stagger the schedules unless the routines are genuinely independent and idempotent.
 

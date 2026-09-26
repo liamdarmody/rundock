@@ -37,7 +37,7 @@ const SERVER = { src: path.join(ROOT, 'server.js'), suite: 'test/integration/map
 const MUTATIONS = [
   // ===== EXACT PATH FIRST, ACROSS THE WHOLE TREE =====
   // Blind the exact-path branch and a fully qualified link falls back to the
-  // basename rule, which is the wrong-file defect this lane removes.
+  // basename rule, which is the wrong-file defect this change removes.
   [FILES, 'an exact path match beats every basename match',
     "        if (searchIsQualified && item.path.toLowerCase() === searchLower) {",
     "        if (false && searchIsQualified && item.path.toLowerCase() === searchLower) {"],

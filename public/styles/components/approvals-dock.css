@@ -1,0 +1,18 @@
+/* The approvals dock: permission cards that belong to no conversation.
+
+   PROVISIONAL. A routine's request, or one nothing could be matched to, is
+   shown here, over whatever screen is open, and never inside a chat. It is
+   both the place those cards live and the notice that reaches a person
+   wherever they are. The cards inside are the same cards the chat draws,
+   with one line above the header naming who is asking. */
+.approvals-dock { position: absolute; right: 16px; bottom: 16px; z-index: 90; width: min(440px, calc(100% - 32px)); max-height: min(70vh, 640px); display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-xl); overflow: hidden; animation: fadeIn var(--duration-slow) ease; }
+.approvals-dock[hidden] { display: none; }
+.approvals-dock-head { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--border); font-size: var(--caption); font-weight: 600; color: var(--text-1); }
+.approvals-dock-head::before { content: ''; width: 7px; height: 7px; border-radius: var(--radius-circle); background: var(--attention); flex-shrink: 0; }
+.approvals-dock-count { margin-left: auto; font-weight: 500; color: var(--text-2); font-variant-numeric: tabular-nums; }
+.approvals-dock-list { display: flex; flex-direction: column; gap: 8px; padding: 10px; overflow-y: auto; }
+.approvals-dock-list > .msg-permission { max-width: 100%; align-self: stretch; }
+/* Who is asking, above the card's own header. */
+.permission-origin { display: flex; align-items: center; gap: 8px; font-size: var(--label); font-weight: 600; letter-spacing: 0.02em; color: var(--text-2); padding-left: var(--permission-text-column); }
+.permission-origin.unattributed { color: var(--attention); }
+@media (prefers-reduced-motion: reduce) { .approvals-dock { animation: none; } }

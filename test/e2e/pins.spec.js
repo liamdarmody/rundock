@@ -65,7 +65,7 @@ async function settledColours(page) {
     // longer exists, and the two text colours from the title and the body.
     const pane = getComputedStyle(document.querySelector('#view-pins .pins-empty-body'));
     const lead = getComputedStyle(document.querySelector('#view-pins .empty-title'));
-    // PN-11 asks that the ground resolves from the theme. With the card gone
+    // The pins criteria ask that the ground resolves from the theme. With the card gone
     // the pane paints none of its own, so the ground is whichever ancestor
     // actually paints one: walking up is the honest way to ask "what colour is
     // behind this text", and it keeps the claim true wherever that ground is

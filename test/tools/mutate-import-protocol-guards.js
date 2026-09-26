@@ -41,13 +41,25 @@ const MUTATIONS = [
   [APPLY, 'the receipt is a member of the one transaction, not a separate write',
     '    writes.push({\n'
     + '      path: toAbsolute(workspace, receipt),\n'
-    + "      content: `${JSON.stringify(buildReceipt(approval, evaluation, appliedAt), null, 2)}\\n`,\n"
+    + "      content: `${JSON.stringify(buildReceipt(approval, evaluation, appliedAt, routinesById, fingerprintsById, authoredById, options.receipt.commit, options.receipt.update, options.receipt.displayName), null, 2)}\\n`,\n"
     + '    });',
     "    fs.mkdirSync(path.dirname(toAbsolute(workspace, receipt)), { recursive: true });\n"
-    + "    fs.writeFileSync(toAbsolute(workspace, receipt), `${JSON.stringify(buildReceipt(approval, evaluation, appliedAt), null, 2)}\\n`);"],
+    + "    fs.writeFileSync(toAbsolute(workspace, receipt), `${JSON.stringify(buildReceipt(approval, evaluation, appliedAt, routinesById, fingerprintsById, authoredById, options.receipt.commit, options.receipt.update, options.receipt.displayName), null, 2)}\\n`);"],
+  // The receipt records decisions, so any apply that decided something (a
+  // write, a skip, or a confirmed update) leaves one; only a pure replay,
+  // every item already at its approved bytes, writes none. One row per part
+  // of that rule.
   [APPLY, 'a zero-write apply writes no receipt',
-    '  if (options.receipt && evaluation.writes.length > 0) {',
+    '  if (options.receipt && (evaluation.writes.length > 0 || evaluation.skipped.length > 0 || namesRelease(options.receipt.update))) {',
     '  if (options.receipt) {'],
+  [APPLY, 'an all-skip apply writes a receipt',
+    '  if (options.receipt && (evaluation.writes.length > 0 || evaluation.skipped.length > 0 || namesRelease(options.receipt.update))) {',
+    "  if (options.receipt && (evaluation.writes.length > 0 || namesRelease(options.receipt.update))) {"],
+  // A confirmed update is a decision even when no item is written: its
+  // receipt names the new release, or the card keeps offering the update.
+  [APPLY, 'a confirmed update that writes nothing still writes a receipt naming the new release',
+    '  if (options.receipt && (evaluation.writes.length > 0 || evaluation.skipped.length > 0 || namesRelease(options.receipt.update))) {',
+    '  if (options.receipt && (evaluation.writes.length > 0 || evaluation.skipped.length > 0)) {'],
   [HANDLERS, 'the approval is used exactly as submitted, never repaired',
     '    const result = applyImport(workspace, sourcePathOf(msg), msg.approval, { receipt: {} });',
     "    const result = applyImport(workspace, sourcePathOf(msg), { ...msg.approval, schema: 'rundock.package-import-approval/v1' }, { receipt: {} });"],

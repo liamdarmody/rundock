@@ -54,7 +54,7 @@ describe('a callout renders its own content', () => {
   test('a list inside a callout is a list, which is why lines render as runs', async () => {
     // Markdown is a block language: a list only parses when its lines are handed
     // over together. Rendering line by line was why hyphens showed.
-    const doc = await paintedCallout('> [!note] Team\n> - **Penn:** drafting\n> - **Des:** mocks');
+    const doc = await paintedCallout('> [!note] Team\n> - **Wren:** drafting\n> - **Des:** mocks');
     const items = doc.querySelectorAll('.callout-body li');
     assert.equal(items.length, 2, 'both lines became list items');
     assert.ok(items[0].querySelector('strong'), 'and inline markup inside them renders too');

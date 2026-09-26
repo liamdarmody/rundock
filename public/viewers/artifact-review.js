@@ -237,10 +237,18 @@ export function attachArtifactReview({
     // routes external URLs through shell.openExternal.
     const anchor = event.target && event.target.closest && event.target.closest('a[href]');
     if (anchor) {
+      // A web link in the preview is opened once, by the preview's own
+      // capture-phase handler (viewers/registry.js), which has already taken
+      // it; opening it again here opened it twice.
+      if (event.defaultPrevented) return;
       const link = resolveArtifactLink(anchor.getAttribute('href'), path);
       if (link) {
         event.preventDefault();
-        if (link.kind === 'external') { try { window.open(link.value, '_blank', 'noopener'); } catch { /* ignore */ } }
+        // Only the web and mail leave the app. Any other scheme an artifact
+        // names (javascript:, file:, a custom protocol) opens nothing.
+        if (link.kind === 'external' && /^(?:https?:|mailto:|\/\/)/i.test(link.value)) {
+          try { window.open(link.value, '_blank', 'noopener'); } catch { /* ignore */ }
+        }
         else if (typeof onOpenInternalLink === 'function') onOpenInternalLink(link);
         return;
       }

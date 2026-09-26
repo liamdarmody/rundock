@@ -136,9 +136,9 @@ describe('applyLink', () => {
 
   test('leaves an explicit protocol untouched', () => {
     const ed = mockEditor();
-    applyLink(ed, 'mailto:hi@rundock.ai');
+    applyLink(ed, 'mailto:hi@example.com');
     const setCall = ed.calls.find((c) => c.startsWith('setLink('));
-    assert.match(setCall, /mailto:hi@rundock\.ai/);
+    assert.match(setCall, /mailto:hi@example\.com/);
   });
 
   test('an empty or whitespace URL unsets the link', () => {

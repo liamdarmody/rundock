@@ -996,7 +996,7 @@ describe('a routine nobody has turned on yet', () => {
   // here most likely already has this job running somewhere else (cron, a
   // script, a scheduled task), and "Rundock will begin running it" on its own
   // does not say that pressing Turn on can produce two copies of the same
-  // routine. Confirmed against a real report: a beta user, and the owner's
+  // routine. Confirmed against a real report: a beta user, and another user's
   // own VPS, both had routines running outside Rundock by exactly this
   // mechanism before either noticed.
   test('the offer names the mechanism and the risk directly, rather than implying it', () => {

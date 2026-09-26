@@ -1,0 +1,9 @@
+#!/bin/sh
+# Blocks a push whose outgoing commits carry personal data, planning language
+# or a private term, in a message or an added line. Private terms come from a
+# denylist kept outside the repository: see scripts/private-denylist.js.
+# Installed with the other hooks: git config core.hooksPath scripts/hooks
+node scripts/leak-scan.js --pre-push "$1" || {
+  echo "push blocked: remove the findings above from the unpushed commits (reword or amend), then push again." >&2
+  exit 1
+}

@@ -268,7 +268,7 @@
     }
     // Finalise any in-progress orchestrator text before resetting streaming
     // state. Without this, the orchestrator's handoff message (e.g. "I'll
-    // delegate this to Dev") is orphaned when the streaming bubble is reset
+    // delegate this to Tess") is orphaned when the streaming bubble is reset
     // and the specialist's stream overwrites it. Markers are stripped from
     // the promoted text.
     // STRIPPED FIRST, THEN BRANCHED. Raw truthiness is not prose: streamed text

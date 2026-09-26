@@ -1,0 +1,48 @@
+name: Personal data
+
+# Every push to every branch, not only main and pull requests: a branch pushed
+# to this public repository is public from that moment, whether or not it ever
+# becomes a pull request. Only the personal-data rules run here (emails, home
+# paths, account identifiers, tokens: scripts/personal-data.js), over every
+# tracked text file and the pushed commit messages, with no path exempt. CI's
+# hygiene job runs them again with the planning rules on main and on every pull
+# request, and checks the pull request body.
+
+on:
+  push:
+    branches: ['**']
+    tags: ['**']
+
+permissions:
+  contents: read
+
+jobs:
+  personal-data:
+    name: No personal data in files or commit messages
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Check every tracked file
+        run: node scripts/check-internal-refs.js --personal-only
+      # The messages this push adds. A new branch has no "before", so its
+      # commits are those not already on main.
+      - name: Check the pushed commit messages
+        env:
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+        run: |
+          if [ "$BEFORE" = "0000000000000000000000000000000000000000" ] || ! git cat-file -e "$BEFORE" 2>/dev/null; then
+            RANGE="origin/main..$AFTER"
+          else
+            RANGE="$BEFORE..$AFTER"
+          fi
+          status=0
+          for c in $(git rev-list "$RANGE"); do
+            git log -1 --format=%B "$c" > "$RUNNER_TEMP/msg.txt"
+            node scripts/check-internal-refs.js --personal-only --message "$RUNNER_TEMP/msg.txt" || { echo "in commit $c"; status=1; }
+          done
+          exit $status

@@ -93,3 +93,26 @@ test('the control survives an edit, and still does not leak', async ({ page }) =
   expect(wouldSave).toContain(' edited');
   expect(wouldSave).toContain('```js\nconst total = 4471;');
 });
+
+// Keyboard copy from inside a code block gives the code, not a fenced block;
+// a selection reaching outside the block keeps its fences.
+test('copying text inside a code block with the keyboard puts the code alone on the clipboard', async ({ page }) => {
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+  await openCodeNote(page);
+  const select = (inside) => page.evaluate((whole) => {
+    const ed = activeTiptapEditor;
+    let block = null; let prose = null;
+    ed.state.doc.descendants((node, pos) => {
+      if (!block && node.type.name === 'codeBlock') block = { from: pos + 1, to: pos + 1 + node.content.size };
+      if (prose === null && node.isText && node.text.startsWith('A labelled fence')) prose = pos;
+    });
+    ed.commands.focus();
+    ed.commands.setTextSelection(whole ? { from: block.from, to: block.to } : { from: prose, to: block.to });
+  }, inside);
+  await select(true);
+  await page.keyboard.press('ControlOrMeta+c');
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe('const total = 4471;\nconsole.log(total);');
+  await select(false);
+  await page.keyboard.press('ControlOrMeta+c');
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toContain('```js');
+});

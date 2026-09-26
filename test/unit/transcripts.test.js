@@ -113,7 +113,7 @@ describe('append/load/save transcript', () => {
 // shared by every test below. A shortened stand-in is not the evidence: with a
 // tidied summary the old regex leaves little enough garbage that the real words
 // still fit the matcher's 100-character window, so the test passes either way.
-const REPORTED_SUMMARY = "[ToolSearch] [WebFetch https://rundock.ai] [Bash curl -sL -A \"Mozilla/5.0\" https://rundock.ai -o \"$TMPDIR/run] [Bash grep -o '<title>[^<]*</title>' \"$TMPDIR/rundock_home.html\"; ] [Bash grep -io '.\\{80\\}chatbot gives you a team.\\{80\\}' \"$TMPDIR/r] [Grep /Users/liamdarmody/Documents/Rundock/Test/.rundock/scratch/rundock_home.html] [Read /Users/liamdarmody/Documents/Rundock/Test/.rundock/scratch/rundock_home.html] [Bash rm -f \"$TMPDIR/rundock_home.html\"] [Agent]";
+const REPORTED_SUMMARY = "[ToolSearch] [WebFetch https://rundock.ai] [Bash curl -sL -A \"Mozilla/5.0\" https://rundock.ai -o \"$TMPDIR/run] [Bash grep -o '<title>[^<]*</title>' \"$TMPDIR/rundock_home.html\"; ] [Bash grep -io '.\\{80\\}chatbot gives you a team.\\{80\\}' \"$TMPDIR/r] [Grep /Users/me/Documents/Rundock/Test/.rundock/scratch/rundock_home.html] [Read /Users/me/Documents/Rundock/Test/.rundock/scratch/rundock_home.html] [Bash rm -f \"$TMPDIR/rundock_home.html\"] [Agent]";
 const WORDS = "Now let's check the nav bar section, above the hero.";
 
 describe('a tool summary is dropped whatever its commands contain', () => {

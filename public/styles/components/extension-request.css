@@ -1,0 +1,8 @@
+/* The host's own line above an extension view: a request put to the person,
+   or a request Rundock stopped (showRequestBar and showRefusalLine in
+   public/extension-host.js). Drawn from Rundock UI's alert and buttons; this
+   sheet only places it. It sits in the extension pane's column above the
+   frame, inset to the note's own padding so it lines up with the view's
+   first line, and never grows: the frame keeps the rest of the pane. */
+.editor-content.extension-pane > .extension-request { flex: 0 0 auto; margin: 12px 32px 0; }
+.extension-request-actions { display: inline-flex; align-items: center; gap: 8px; }

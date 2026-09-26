@@ -1,0 +1,50 @@
+{
+ "handed": [
+  "notes/holdings.csv",
+  "notes/limits.csv",
+  "notes/sub.md"
+ ],
+ "init": [
+  {
+   "path": "notes/holdings.csv",
+   "content": "ticker,qty\nAAA,10\n"
+  },
+  {
+   "path": "notes/limits.csv",
+   "content": "limit,value\nmax,0.2\n"
+  },
+  {
+   "path": "notes/sub.md",
+   "content": "---\nsources:\n  - notes/limits.csv\n---\nsub\n"
+  },
+  {
+   "path": ".env",
+   "refused": "a hidden file, or a file in a hidden folder, is never handed to an extension"
+  },
+  {
+   "path": "../outside/secret.txt",
+   "refused": "a source path may not step out of or around a folder"
+  },
+  {
+   "path": "notes/*.csv",
+   "refused": "a source names one file; patterns are not resolved"
+  },
+  {
+   "path": "notes/link-out.csv",
+   "refused": "a linked file, or a file in a linked folder, is never handed to an extension"
+  },
+  {
+   "path": "notes/link-hidden.csv",
+   "refused": "a linked file, or a file in a linked folder, is never handed to an extension"
+  },
+  {
+   "path": "notes/hard.csv",
+   "refused": "a file with a second name elsewhere (a hard link) is never handed to an extension"
+  },
+  {
+   "path": "DASH.md",
+   "refused": "a note cannot list itself as a source"
+  }
+ ],
+ "refusedSaves": 16
+}

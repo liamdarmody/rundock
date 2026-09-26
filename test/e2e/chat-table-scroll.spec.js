@@ -18,8 +18,8 @@ test('a wide markdown table in a chat message is wrapped and scrolls inside the 
   const wideTable = [
     '| Candidate | Hook | Body copy | Status | Source | Notes |',
     '|---|---|---|---|---|---|',
-    '| One | A very long hook line that keeps going on and on | The full body copy available at https://example.com/very/long/unbreakable/path/segment/for/testing/overflow | Confirmed | AuthoredUp direct pull | Additional notes that add still more width |',
-    '| Two | Another long hook that also runs very wide | More long-form body copy that stretches the table well beyond a bubble | Confirmed | AuthoredUp direct pull | Further notes making the row wider still |',
+    '| One | A very long hook line that keeps going on and on | The full body copy available at https://example.com/very/long/unbreakable/path/segment/for/testing/overflow | Confirmed | Direct export pull | Additional notes that add still more width |',
+    '| Two | Another long hook that also runs very wide | More long-form body copy that stretches the table well beyond a bubble | Confirmed | Direct export pull | Further notes making the row wider still |',
   ].join('\n');
 
   // Render the table through the real markdown path into a real bubble in the

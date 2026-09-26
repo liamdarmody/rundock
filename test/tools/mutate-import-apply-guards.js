@@ -38,7 +38,7 @@ const MUTATIONS = [
     "  if (evaluation.status !== 'ready') return { ...evaluation, written: [], receipt: null };",
     "  if (evaluation.status === 'ready') return { ...evaluation, written: [], receipt: null };"],
   [ADAPTER, 'bytes that do not hash to the approved digest are never written',
-    '    if (digestFile(transformed) !== write.approvedDigest) {\n'
+    '    if (digestFile(landed) !== write.approvedDigest) {\n'
     + '      throw new Error(`bytes for ${write.id} do not match the approved digest; refusing to write`);\n'
     + '    }\n',
     ''],
@@ -62,8 +62,8 @@ const MUTATIONS = [
     "    if (e.code === 'ENOENT' || e.code === 'ENOTDIR') return ABSENT_DIGEST;\n    throw e;",
     '    return ABSENT_DIGEST;'],
   [ADAPTER, 'recovery runs before the snapshot, not merely at some point',
-    '  recoverPendingWrites(workspace);\n  const current = snapshotCurrent(workspace, sourceRoot, approval);',
-    '  const current = snapshotCurrent(workspace, sourceRoot, approval);\n  recoverPendingWrites(workspace);'],
+    '  recoverPendingWrites(workspace);\n  const evaluation = evaluateApproval(workspace, sourceRoot, approval);',
+    '  const evaluation = evaluateApproval(workspace, sourceRoot, approval);\n  recoverPendingWrites(workspace);'],
 ];
 
 // Guards deliberately NOT mutated, each with the reason.

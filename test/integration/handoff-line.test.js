@@ -40,7 +40,7 @@ describe('a lead that says nothing still has its handoff shown', () => {
       { match: { agent: 'chief-of-staff', promptIncludes: 'research the suppliers' },
         turn: [{ agentTool: {
           subagent_type: 'content-lead',
-          description: 'Handing to Penn to draft the supplier brief before it goes out.',
+          description: 'Handing to Wren to draft the supplier brief before it goes out.',
           prompt: 'PRIVATE-BRIEF: twelve claims to check, none of which the user should see here',
         } }] },
       { match: { agent: 'content-lead' }, turn: [{ text: 'On it.' }] },
@@ -60,14 +60,14 @@ describe('a lead that says nothing still has its handoff shown', () => {
     const sw = client.messages.find(m => m.type === 'system' && m.subtype === 'agent_switch'
       && m._conversationId === convoId && m.toAgent === 'content-lead');
     assert.ok(sw, 'the delegation announced itself to the client');
-    assert.strictEqual(sw.handoffLine, 'Handing to Penn to draft the supplier brief before it goes out.',
+    assert.strictEqual(sw.handoffLine, 'Handing to Wren to draft the supplier brief before it goes out.',
       'and carried the line, because nothing else will: this branch suppresses the envelope and kills the process');
     assert.ok(!JSON.stringify(sw).includes('PRIVATE-BRIEF'),
       'while the brief stays off the wire the person can see');
 
     const turn = transcriptFor(convoId).find(t => t.agent === 'chief-of-staff' && t.type !== 'routing');
     assert.ok(turn, 'the delegating agent has a visible turn rather than an invisible routing entry');
-    assert.match(turn.text, /Handing to Penn to draft the supplier brief/,
+    assert.match(turn.text, /Handing to Wren to draft the supplier brief/,
       'and it carries the line the agent wrote, word for word');
     // THE BRIEF STAYS PRIVATE. The whole reason the line is a separate field is
     // that the brief must not reach the conversation.
@@ -84,7 +84,7 @@ describe('a lead that says nothing still has its handoff shown', () => {
     h.writeScenario([
       { match: { agent: 'chief-of-staff', promptIncludes: 'second task' },
         turn: [
-          { text: 'PROSE-THE-AGENT-WROTE: this needs Penn, here is why.' },
+          { text: 'PROSE-THE-AGENT-WROTE: this needs Wren, here is why.' },
           { agentTool: {
             subagent_type: 'content-lead',
             description: 'FIELD-LINE-THAT-MUST-NOT-WIN',
@@ -164,7 +164,7 @@ describe('an agent with nobody reporting to it is untouched by any of this', () 
   // handoff-line branch is unreachable. That is a true statement about the
   // source and it is exactly the kind of statement that stops being true when
   // somebody moves the guard. Des reports to the orchestrator and nobody
-  // reports to Des, so Des is the agent the claim is about; these drive Des
+  // reports to Des, so the claim is about Des; these drive Des
   // through the real runtime rather than reading prompt.js and agreeing with it.
   test('its ordinary turn is recorded exactly as it was before', async () => {
     const convoId = h.freshConvoId('no-reports-plain');
@@ -225,7 +225,7 @@ describe('an agent with nobody reporting to it is untouched by any of this', () 
 });
 
 describe('a delegation blocked as off-roster does not draw the turn twice', () => {
-  // THE SECOND SUPPRESSING BRANCH, driven end to end. Ana reports to Penn, not
+  // THE SECOND SUPPRESSING BRANCH, driven end to end. Ana reports to Wren, not
   // to Cos, so Cos naming her is blocked: that branch kills the process and
   // continues, so no result arrives for the turn.
   //
@@ -245,11 +245,11 @@ describe('a delegation blocked as off-roster does not draw the turn twice', () =
     h.writeScenario([
       { match: { agent: 'chief-of-staff', promptIncludes: 'off roster please' },
         turn: [
-          { text: 'Ana is the right person for this, let me pull her in.' },
+          { text: 'Ana can take this one, let me pull her in.' },
           { agentTool: { subagent_type: 'content-analyst', description: 'Over to Ana.', prompt: 'brief' } },
         ] },
       { match: { agent: 'chief-of-staff', promptIncludes: 'delegation-blocked' },
-        turn: [{ text: 'Understood, I will route through Penn instead.' }] },
+        turn: [{ text: 'Understood, I will route through Wren instead.' }] },
     ]);
 
     client.send({ type: 'save_conversation', conversation: { id: convoId, agentId: 'chief-of-staff', title: 'Off roster' } });
@@ -271,7 +271,7 @@ describe('a delegation blocked as off-roster does not draw the turn twice', () =
     const streamed = client.messages.slice(since)
       .filter(m => m.type === 'stream_event' && m.event?.delta?.type === 'text_delta')
       .map(m => m.event.delta.text).join('');
-    assert.match(streamed, /Ana is the right person for this/,
+    assert.match(streamed, /Ana can take this one/,
       'sanity: the turn reached the client by streaming, or this proves nothing');
     h.reapConvo(convoId);
   });
@@ -286,7 +286,7 @@ describe('the switch says whether the work is coming back', () => {
     const convoId = h.freshConvoId('returning');
     h.writeScenario([
       { match: { agent: 'chief-of-staff', promptIncludes: 'returning please' },
-        turn: [{ agentTool: { subagent_type: 'content-lead', description: 'Over to Penn.', prompt: 'the brief' } }] },
+        turn: [{ agentTool: { subagent_type: 'content-lead', description: 'Over to Wren.', prompt: 'the brief' } }] },
       { match: { agent: 'content-lead', promptIncludes: 'the brief' },
         turn: [{ text: `Not mine. <!-- RUNDOCK:RETURN -->` }] },
       { match: { agent: 'chief-of-staff', promptIncludes: 'outside their scope' },

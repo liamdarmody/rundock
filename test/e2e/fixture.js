@@ -121,10 +121,10 @@ function reviewedReplies() {
     '---',
     'comments:',
     '  c1:',
-    '    by: liam',
+    '    by: sam',
     '    at: "2026-08-20T10:00:00Z"',
     '  c2:',
-    '    by: liam',
+    '    by: sam',
     '    at: "2026-08-20T10:05:00Z"',
     '    re: c1',
     '    body: "' + LONG_REPLY_URL + '"',
@@ -173,20 +173,20 @@ function reviewedFormatting() {
     '---',
     'suggestions:',
     '  s1:',
-    '    by: liam',
+    '    by: sam',
     '    at: "2026-08-20T10:00:00Z"',
     '  s2:',
-    '    by: liam',
+    '    by: sam',
     '    at: "2026-08-20T10:00:00Z"',
     '  s3:',
-    '    by: liam',
+    '    by: sam',
     '    at: "2026-08-20T10:00:00Z"',
     '  s4:',
-    '    by: liam',
+    '    by: sam',
     '    at: "2026-08-20T10:00:00Z"',
     'comments:',
     '  c1:',
-    '    by: liam',
+    '    by: sam',
     '    at: "2026-08-20T10:00:00Z"',
     'review:',
     '  status: in-review',
@@ -239,12 +239,12 @@ function buildFixture() {
   fs.mkdirSync(path.join(workspace, '.claude', 'agents'), { recursive: true });
   fs.writeFileSync(path.join(workspace, '.claude', 'agents', 'chief-of-staff.md'),
     '---\nname: chief-of-staff\ndisplayName: Cos\nrole: Chief of Staff\ntype: orchestrator\norder: 0\n---\nYou are Cos.\n');
-  // Penn's body carries the exact characters the profile-clipping bug feared
+  // Wren's body carries the exact characters the profile-clipping bug feared
   // (square brackets, HTML, a wikilink, a code fence) so the regression test can
   // prove the instructions render in full past every one of them.
-  fs.writeFileSync(path.join(workspace, '.claude', 'agents', 'penn.md'),
-    '---\nname: penn\ndisplayName: Penn\nrole: Content Lead\ntype: specialist\norder: 1\nreportsTo: chief-of-staff\n---\n'
-    + 'You are Penn.\n\nCore Ideas [Key]: SENTINEL_AFTER_BRACKET comes right after the bracket. Also <tag>, [[Roadmap-2026]], and a code fence below.\n\n```\nconst x = 1;\n```\n\nFINAL_SENTINEL_END.\n');
+  fs.writeFileSync(path.join(workspace, '.claude', 'agents', 'wren.md'),
+    '---\nname: wren\ndisplayName: Wren\nrole: Content Lead\ntype: specialist\norder: 1\nreportsTo: chief-of-staff\n---\n'
+    + 'You are Wren.\n\nCore Ideas [Key]: SENTINEL_AFTER_BRACKET comes right after the bracket. Also <tag>, [[Roadmap-2026]], and a code fence below.\n\n```\nconst x = 1;\n```\n\nFINAL_SENTINEL_END.\n');
   fs.writeFileSync(path.join(workspace, 'CLAUDE.md'), '# E2E Workspace\n');
 
   // Files, including frontmatter tags for the files corpus.
@@ -304,7 +304,7 @@ function buildFixture() {
     '---',
     'comments:',
     '  c1:',
-    '    by: liam',
+    '    by: sam',
     '    at: "2026-08-18T10:00:00Z"',
     'review:',
     '  status: in-review',
@@ -467,8 +467,8 @@ function buildFixture() {
   fs.mkdirSync(path.join(workspace, '.rundock'), { recursive: true });
   fs.writeFileSync(path.join(workspace, '.rundock', 'conversations.json'), JSON.stringify([
     { id: 'c4', agentId: 'rundock-guide', sessionId: 's4', sessionIds: [], title: 'Doc created an agent', status: 'active', createdAt: '2026-07-03T08:59:00.000Z', lastActiveAt: '2026-07-03T10:00:00.000Z' },
-    { id: 'c3', agentId: 'penn', sessionId: 's3', sessionIds: [], title: 'Export handoff', status: 'active', createdAt: '2026-06-20T08:59:00.000Z', lastActiveAt: '2026-06-20T10:00:00.000Z' },
-    { id: 'c2', agentId: 'penn', sessionId: 's2', sessionIds: [], title: 'July content calendar', status: 'active', createdAt: '2026-07-02T08:59:00.000Z', lastActiveAt: '2026-07-10T10:00:00.000Z' },
+    { id: 'c3', agentId: 'wren', sessionId: 's3', sessionIds: [], title: 'Export handoff', status: 'active', createdAt: '2026-06-20T08:59:00.000Z', lastActiveAt: '2026-06-20T10:00:00.000Z' },
+    { id: 'c2', agentId: 'wren', sessionId: 's2', sessionIds: [], title: 'July content calendar', status: 'active', createdAt: '2026-07-02T08:59:00.000Z', lastActiveAt: '2026-07-10T10:00:00.000Z' },
     { id: 'c1', agentId: 'default', sessionId: 's1', sessionIds: [], title: 'Board prep planning', status: 'active', pinned: true, pinnedAt: '2026-07-05T09:00:00.000Z', createdAt: '2026-07-01T09:59:00.000Z', lastActiveAt: '2026-07-08T10:00:00.000Z' },
   ], null, 2));
 

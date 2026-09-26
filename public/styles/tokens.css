@@ -46,11 +46,69 @@
      failing quietly is exactly what already happened. */
   --text-3: #767169;
   --accent: #E87A5A; --accent-hover: #F09070; --accent-glow: rgba(232,122,90,0.12);
+  /* Filled controls only: button fills, the toggle track when on, the
+     checkbox fill, the slider fill, each with white text, thumb or icon.
+     White on --accent measures 2.85:1, so a filled control on the brand
+     colour fails both the 4.5:1 text bar and the 3:1 control bar. White on
+     this reaches 4.50:1, the closest of three passing shades to the brand
+     hue (4.6 degrees from it) and 17.5 degrees of hue from --danger; the
+     first candidate, #CF451D, sat 13 degrees and 1.08:1 from --danger and
+     read as its twin. The margin over 4.5:1 is thin by design; #BD5A28 or
+     #B95D27 trade closeness to the brand for headroom if that is ever wanted.
+
+     --accent ITSELF IS UNCHANGED and stays the brand everywhere else: the
+     logo, the website, links, focus rings, active borders, tints, chips.
+
+     The hover is DARKER, unlike --accent-hover: lightening would erode the
+     margin, and darker measures 5.07:1. Theme-constant, like --accent, since
+     it sits on a fill rather than on the page.
+
+     Against --danger it is 17.5 degrees of hue apart but only 1.11:1 in
+     luminance, so colour alone cannot tell a primary button from a
+     destructive one: the destructive one differs by FORM (an outline, see
+     .settings-btn.danger). Every ratio here is recomputed from these values
+     by test/unit/rundock-ui-contrast.test.js. */
+  --accent-action: #C15729; --accent-action-hover: #B45126;
+  /* Control orange: a bare shape with no text or icon on it, the checked
+     checkbox, the toggle when on, the slider's fill and thumb, the selected
+     radio dot, the meter's fill. These need 3:1 against the surface they sit
+     on (SC 1.4.11), not the 4.5:1 text needs, and --accent-action, tuned for
+     white text, measured only 2.81:1 against dark --card. Dark reuses the
+     brand exactly (4.43:1 against --card, the tightest surface); light needs
+     its own value (see body.light), because the brand measures 2.44 to
+     2.85:1 on the light surfaces.
+
+     ONE REASONED EXCEPTION, accepted: the white tick and thumb drawn ON this
+     fill in dark measure 2.85:1 against it. State is carried by shape and
+     position (a filled box against an empty one, a thumb at one end or the
+     other) and the control stands at 4.43:1 against its card; a dark glyph
+     would pass and is the look this design moved away from. Light has no
+     such gap: white on the light value is 3.83:1. */
+  --accent-control: var(--accent); --accent-control-hover: var(--accent-hover);
+  /* The brand hue as TEXT. In dark it IS the brand, unchanged; only light
+     overrides it (see body.light), following --danger-text. */
+  --accent-text: #E87A5A;
   --success: #6BC67E; --attention: #E8A84C; --working: #7AA2E8; --idle: #7A756E;
   /* The status set had no red, so every destructive and error surface reached
      for a hex of its own and they drifted: three near-identical reds were in
-     the stylesheets when this token was added. This is the one. */
-  --danger: #E85A5A;
+     the stylesheets when this token was added. This is the one, and it is TWO
+     tokens, one meaning at two jobs.
+
+     --danger is the FILL and the EDGE: backgrounds, borders, shadows, and the
+     tints color-mix() makes of it. The same in both themes. It sits apart from
+     --accent by lightness rather than by hue: the two hues are thirteen
+     degrees apart, which is exactly the distinction protanopes and
+     deuteranopes lose, and the previous value read as another orange button.
+     White text on this fill clears 4.5:1.
+
+     --danger-text is for TEXT, and it is theme-aware because the fill fails
+     as text on a dark card (2.52:1). Lifted in the dark theme, where it reads
+     at 4.36 on --card and 6.01 on --base; the fill value itself in light,
+     where that reads on every surface (4.29 on --card at worst). A `color:`
+     declaration that reaches for the fill fails test/unit/danger-token.test.js,
+     which also recomputes every ratio above from these values. */
+  --danger: #D42C2A;
+  --danger-text: #F0706E;
 
   /* Map canvas. A canvas resolves no CSS variables: every fill and stroke is
      a literal read out of the computed style at paint time, so a value the
@@ -68,6 +126,36 @@
      getComputedStyle, which is what keeps it following a palette change for
      free. Two tokens, not a graph palette living outside the system. */
   --graph-edge: rgba(154,149,144,0.22); --graph-dim: 0.18;
+
+  /* Categorical colour, for a chart that has to tell one series from another.
+     The app had none, and the absence showed the moment an extension drew a
+     pie: mermaid derives its slice colours from primaryColor by shifting
+     lightness, and shifting the lightness of a dark card produces several
+     dark cards. Three slices, one grey, legible only by the lines between
+     them. Nothing was misconfigured, there was simply no scale to read.
+
+     SEPARATE FROM THE STATUS COLOURS ON PURPOSE, even though these are the
+     same five hues. --success on a slice would say the slice succeeded.
+     A chart series means nothing beyond "not the previous one", so it gets
+     tokens whose whole meaning is being distinguishable, and the status
+     colours keep meaning what they mean.
+
+     Five, and in this order: the brand leads, then the two hues furthest from
+     it, then the two nearest. Adjacent members stay far apart in hue, so the
+     common case of two or three series is the case that separates best.
+
+     Not redefined for light, matching --accent and the status colours: these
+     sit on a fill rather than on the page, so the hue holds in both themes
+     and it is the separator between slices that has to change. That is
+     --base, which is already theme-aware. */
+  --chart-1: #E87A5A; --chart-2: #7AA2E8; --chart-3: #6BC67E;
+  --chart-4: #E8A84C; --chart-5: #9A85C9;
+
+  /* Text printed ON a chart fill, so it answers to the fill and not to the
+     page. The fills are the same in both themes, so this is too: theming it
+     would flip it to near-white on a mid-tone slice in dark mode, which is
+     the one place the page's own text colour is the wrong answer. */
+  --on-chart: #1A1A1A;
 
   --heading: 22px; --title: 18px; --body: 14px; --caption: 12px; --label: 11px;
   /* The monospace stack, named rather than repeated. It was hardcoded in four
@@ -147,9 +235,18 @@ body.light {
   --card: #F0EDE8; --border: #E5E0D8;
   --text-1: #1A1A1A; --text-2: #7A756E; --text-3: #8C867E;
   --accent-glow: rgba(232,122,90,0.08);
-  /* Both values move in light, and not in the same direction: the edge needs
-     a HIGHER alpha to read against a near-white ground, and a dimmed node
-     needs a higher one too before it disappears entirely. */
+  /* Danger text in light is the fill value itself, which reads on every light
+     surface. The dark theme's lifted value would wash out here. */
+  --danger-text: #D42C2A;
+  /* The brand hue as TEXT, light theme only, following --danger-text: plain
+     --accent as text measured 2.44 to 2.85:1 on the light surfaces. This
+     clears 4.5:1 on all four (--elevated 5.30, --surface 5.00, --base 4.74,
+     --card 4.54). Dark declares it as the brand value itself, so dark is
+     unchanged. --accent itself, the brand, does not move. */
+  --accent-text: #BF401B;
+  /* Control orange in light: clears 3:1 on all four light surfaces
+     (elevated 3.83, surface 3.61, base 3.43, card 3.28). */
+  --accent-control: #DB5933; --accent-control-hover: #DD6440;
   --graph-edge: rgba(122,117,110,0.30); --graph-dim: 0.22;
 }
 

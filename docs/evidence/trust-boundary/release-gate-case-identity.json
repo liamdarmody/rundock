@@ -1,0 +1,24 @@
+{
+  "what": "The case-insensitive disk steps of scripts/release-gate.js, run by their own definitions. Not a release gate pass.",
+  "commit": "6d53af0d38e39f99689c072f8bfd5eca9ab9161a",
+  "tree": "86e77fc9bb2f624887de582dd7118c93ac86e01c",
+  "ranAt": "2026-09-23T23:44:01.614Z",
+  "platform": "darwin arm64",
+  "steps": [
+    {
+      "name": "named sources (case-insensitive disk)",
+      "command": "npm run test:case-identity:disk",
+      "passed": true,
+      "seconds": 0.2,
+      "output": "   \"name\": \"an ordinary listed file beside them is still handed\",\n   \"ok\": true\n  }\n ],\n \"ok\": true\n}"
+    },
+    {
+      "name": "named sources (case-insensitive volume)",
+      "command": "npm run test:case-identity:volume",
+      "passed": true,
+      "seconds": 12,
+      "output": "   \"name\": \"an ordinary listed file beside them is still handed\",\n   \"ok\": true\n  }\n ],\n \"ok\": true\n}"
+    }
+  ],
+  "passed": true
+}

@@ -102,6 +102,27 @@ function buildSteps(live) {
     { name: 'typecheck', cmd: ['npm', ['run', 'typecheck']] },
     { name: 'suite+coverage', cmd: ['npm', ['run', 'test:coverage']] },
     { name: 'e2e', cmd: ['npm', ['run', 'test:e2e']] },
+    // Extension confinement in the shipped Electron with the desktop app's
+    // real guards: the proof behind the desktop trust card's network
+    // sentence. Here rather than in CI because CI runs no Electron; the
+    // Chromium half of the proof is in the e2e step above.
+    { name: 'confinement (electron)', cmd: ['npm', ['run', 'test:confinement:electron']] },
+    // The Permissions row reads the same in the desktop app and the browser
+    // for one workspace: the shipped desktop app launched through its own
+    // entrypoint (electron/main.js, its preload, handlers and server), beside
+    // the browser-mode server in Chromium. Here for the same reason as the
+    // step above: CI runs no Electron.
+    { name: 'settings parity (electron and browser)', cmd: ['npm', ['run', 'test:settings:electron']] },
+    // The profile that run starts on, proven on the same shipped entrypoint:
+    // an absolute RUNDOCK_USER_DATA_DIR is the exact profile the app uses,
+    // lock and storage included, and a relative one stops the app before a
+    // window, the server or any profile state.
+    { name: 'desktop profile override (electron)', cmd: ['npm', ['run', 'test:user-data:electron']] },
+    // On a real case-insensitive disk: a note's case variant is refused
+    // as the note itself. Once where the default disk is, once on an APFS
+    // volume made for it; fails, never skips, where neither can run.
+    { name: 'named sources (case-insensitive disk)', cmd: ['npm', ['run', 'test:case-identity:disk']] },
+    { name: 'named sources (case-insensitive volume)', cmd: ['npm', ['run', 'test:case-identity:volume']] },
     { name: 'smoke (stub)', cmd: ['npm', ['run', 'smoke']] },
     // User-shaped journeys with disk-verified evals: the onboarding road a
     // new user actually walks, and the structured vault that must never be

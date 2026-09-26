@@ -6,8 +6,20 @@
 .settings-nav-item:hover { background: var(--elevated); }
 .settings-nav-item.active { background: var(--elevated); }
 .settings-nav-item svg { width: 16px; height: 16px; color: var(--text-2); flex-shrink: 0; }
-.settings-content { max-width: 560px; padding: 32px; }
-.settings-section-title { font-size: var(--title); font-weight: 700; margin-bottom: 20px; }
+.settings-content {
+  max-width: 560px; padding: 32px;
+  /* SMALL TEXT THAT STILL READS. --text-2 and --text-3 were chosen against
+     3:1, and on a card they measure 4.26 and 2.61 in dark, 3.91 and 3.09 in
+     light. Settings text a person decides from is held to 4.5:1 in both
+     themes, so these step each tone toward --text-1 just far enough, from the
+     tokens rather than as new literals. Measured by
+     test/unit/settings-contrast.test.js on every run. */
+  --settings-quiet-text: color-mix(in srgb, var(--text-2) 75%, var(--text-1));
+  --settings-danger-text: color-mix(in srgb, var(--danger-text) 85%, var(--text-1));
+  --settings-link-text: color-mix(in srgb, var(--accent-text) 85%, var(--text-1));
+  --settings-attention-text: color-mix(in srgb, var(--attention) 50%, var(--text-1));
+}
+.settings-section-title { font-size: var(--title); font-weight: 700; margin-bottom: 20px; color: var(--text-1); }
 .settings-card { background: var(--card); border-radius: var(--radius-xl); padding: 4px 0; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
 .settings-row { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px; }
 .settings-row + .settings-row { border-top: 1px solid var(--border); }
@@ -33,17 +45,36 @@
 .connector-drift { color: var(--attention); }
 .settings-btn { padding: 6px 14px; font-size: var(--caption); font-weight: 600; border-radius: var(--radius-md); background: var(--card); color: var(--text-1); border: 1px solid var(--border); transition: all var(--duration-base) ease; cursor: pointer; }
 .settings-btn:hover { border-color: var(--accent); color: var(--accent); }
-.settings-btn-primary { padding: 6px 14px; font-size: var(--caption); font-weight: 600; border-radius: var(--radius-md); background: var(--accent); color: white; border: none; transition: all var(--duration-base) ease; cursor: pointer; }
-.settings-btn-primary:hover { background: var(--accent-hover); }
-/* The danger fill, for a fork where confirming and cancelling are equal
-   weight rather than a primary path with an escape hatch. */
+/* DANGER BY FORM AS WELL AS COLOUR. A button that starts a destructive
+   action reads as destructive before it is touched: red text on a red
+   outline, never a fill. --accent-action and --danger sit close enough in
+   hue that colour alone cannot carry the difference (WCAG 1.4.1), so the
+   form carries it too. The background is --elevated rather than the
+   secondary button's --card: --danger-text on --card measured 4.36:1 dark
+   and 4.29:1 light, both narrowly under 4.5:1; on --elevated it is 5.16:1
+   and 5.01:1. The hover is a 5% tint of the fill behind the same text,
+   light enough to keep the label at 4.63:1 in light (8% fell to 4.44:1). */
+.settings-btn.danger { background: var(--elevated); color: var(--danger-text); border: 1px solid var(--danger); }
+.settings-btn.danger:hover { background: color-mix(in srgb, var(--danger) 5%, var(--elevated)); border-color: var(--danger); color: var(--danger-text); }
+/* Filled, so --accent-action with white text: white on the brand --accent
+   measured 2.85:1. See tokens.css. */
+.settings-btn-primary { padding: 6px 14px; font-size: var(--caption); font-weight: 600; border-radius: var(--radius-md); background: var(--accent-action); color: white; border: none; transition: all var(--duration-base) ease; cursor: pointer; }
+.settings-btn-primary:hover { background: var(--accent-action-hover); }
+/* The danger fill, and the one place solid red belongs: the button that is
+   itself a destructive confirmation (a fork where confirming and cancelling
+   are equal weight). White on --danger measures 5.01:1. Everything that
+   merely starts a destructive action is the outline above.
+   .settings-btn-danger-confirm is the name the design gives it; the older
+   name stays so the confirmations already written with it keep working. */
 .settings-btn-danger { padding: 6px 14px; font-size: var(--caption); font-weight: 600; border-radius: var(--radius-md); background: var(--danger); color: white; border: none; transition: all var(--duration-base) ease; cursor: pointer; }
 .settings-btn-danger:hover { opacity: 0.9; }
+.settings-btn-danger-confirm { padding: 6px 14px; font-size: var(--caption); font-weight: 600; border-radius: var(--radius-md); background: var(--danger); color: white; border: 1px solid var(--danger); transition: all var(--duration-base) ease; cursor: pointer; }
+.settings-btn-danger-confirm:hover { opacity: 0.9; }
 /* The prose primitives a settings-shaped page needs: a lead paragraph, a
    quiet caption beneath a card, a row of actions inside one, and the padded
    variant of a card that holds prose rather than rows. */
 .settings-lead { color: var(--text-2); font-size: var(--body); line-height: 1.6; margin: 0 0 20px; }
-.settings-caption { font-size: var(--caption); color: var(--text-3); line-height: 1.6; margin-top: 10px; }
+.settings-caption { font-size: var(--caption); color: var(--settings-quiet-text); line-height: 1.6; margin-top: 10px; }
 .settings-card.flow { padding: 24px; }
 .card-actions { margin-top: 2px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 /* 10px is NOT off-scale drift. It is the outer half of a concentric pair:
@@ -55,61 +86,260 @@
 .mode-toggle-btn { flex: 1; padding: 9px 16px; font-size: var(--caption); font-weight: 600; border-radius: var(--radius-md); border: 1px solid transparent; background: transparent; color: var(--text-2); transition: background var(--duration-base) ease, color var(--duration-base) ease, box-shadow var(--duration-base) ease; cursor: pointer; text-align: center; }
 .mode-toggle-btn:hover:not(.active) { color: var(--text-1); background: var(--elevated); }
 .mode-toggle-btn.active { background: var(--card); color: var(--text-1); border-color: var(--border); box-shadow: 0 1px 3px rgba(0,0,0,0.18); }
-.mode-description { font-size: var(--caption); color: var(--text-2); line-height: 1.5; padding: 8px 0 4px; }
-/* The notice shown when Rundock did not author this workspace's sandbox, so
-   the mode switch moves nothing. Styled as a caption beside the mode copy it
-   replaces half of, rather than as a warning: nothing is wrong, Rundock is
-   simply not the one deciding here. */
-.mode-foreign-sandbox { margin-top: 2px; }
+.mode-description { font-size: var(--caption); color: var(--settings-quiet-text); line-height: 1.5; padding: 8px 0 4px; }
 
+/* ---- Keep agents inside this workspace ----
+   One row: the effective state in words beside the control, the consequence
+   and who controls it beneath the label. A switch only where Rundock can
+   change it; a lock, or nothing, everywhere else. */
+.wall-row { align-items: flex-start; gap: 16px; }
+.wall-row .settings-row-main { min-width: 0; padding-right: 8px; }
+.settings-label.is-quiet { color: var(--settings-quiet-text); }
+.sandbox-caption { margin-top: 4px; }
+.ownership-note { font-size: var(--caption); color: var(--settings-quiet-text); margin-top: 6px; line-height: 1.5; }
+.ownership-note code, .wall-review-warn code { font-family: var(--font-mono); font-size: var(--label); background: var(--elevated); padding: 1px 5px; border-radius: var(--radius-sm); }
+.row-onoff { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.onoff-label { font-size: var(--caption); font-weight: 600; color: var(--text-1); min-width: 24px; text-align: right; }
+.readonly-lock { width: 14px; height: 14px; color: var(--settings-quiet-text); flex-shrink: 0; }
+/* The 36 by 20 switch keeps its size inside a target of at least 24 by 24. */
+.toggle-hit { display: inline-flex; align-items: center; justify-content: center; min-width: 44px; min-height: 32px; cursor: pointer; }
+/* The resting edge measured 2.61:1 against a dark card; the quiet tone clears 3:1. */
+.toggle-hit .rui-toggle { border-color: var(--settings-quiet-text); }
+.toggle-hit .rui-toggle:checked { border-color: var(--accent-control); }
+.wall-confirm, .wall-review { margin: 0 16px 14px; background: var(--elevated); border-radius: var(--radius-md); padding: 14px; }
+.wall-confirm p, .wall-review p { margin: 0 0 10px; font-size: var(--caption); color: var(--text-1); line-height: 1.55; }
+.wall-review-title { font-size: var(--body); font-weight: 600; color: var(--text-1); margin-bottom: 8px; }
+.wall-review-list { margin: 0 0 10px; padding-left: 18px; font-size: var(--caption); color: var(--text-1); line-height: 1.7; font-family: var(--font-mono); }
+.wall-review .wall-review-warn { color: var(--settings-attention-text); }
+.wall-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.sandbox-bring-in { justify-content: flex-start; border-top: 1px solid var(--border); }
+.sandbox-error { margin: 0 16px 14px; font-size: var(--caption); line-height: 1.5; color: var(--settings-danger-text); }
+.migration-notice { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 10px 12px; margin: 0 0 16px; font-size: var(--caption); color: var(--text-1); line-height: 1.5; }
+.migration-notice-dismiss { width: 28px; height: 28px; flex-shrink: 0; font-size: 16px; line-height: 1; color: var(--settings-quiet-text); border-radius: var(--radius-md); }
+.migration-notice-dismiss:hover { color: var(--text-1); background: var(--elevated); }
+/* Every control on these panes shows where the keyboard is, the app's accent
+   ring, rather than leaving it to whatever the engine draws. */
+.settings-btn:focus-visible, .settings-btn-primary:focus-visible, .settings-btn-danger:focus-visible,
+.mode-toggle-btn:focus-visible, .migration-notice-dismiss:focus-visible, .wf-remove:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px;
+}
 
 /* ---- The Packages install flow (PL4 states on the PL2 section) ---- */
 /* The confirm-card stays PLAIN by decision: amber is reserved for the one
    state that runs third-party code, and a content-only import is not it. */
-.packages-field-label { font-size: var(--caption); font-weight: 600; color: var(--text-2); margin-bottom: 8px; }
-.packages-field-row { display: flex; gap: 8px; }
+/* The add card, per the PL2 mock: the shared input and accent-primary
+   button, one row, and the quiet teaching line beneath. The card wears the
+   mock's own flow padding through .pkg-add rather than by moving the shared
+   .settings-card.flow, which the routines and skills empty cards already
+   wear at 24px: the mock binds this card, not those. */
+.settings-card.flow.pkg-add { padding: 18px 18px 16px; }
+.settings-input { width: 100%; background: var(--elevated); border: 1px solid var(--text-3); border-radius: var(--radius-md); padding: 9px 12px; font-size: var(--body); color: var(--text-1); font-family: inherit; outline: none; }
+.settings-input::placeholder { color: var(--text-3); }
+.settings-input:disabled { opacity: 0.6; }
+/* Focus is the app's own convention, the accent outline on focus-visible,
+   rather than the mock's border-and-glow: one focus treatment across the
+   app beats a second one this card alone would carry. */
+.settings-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.pkg-field-row { display: flex; gap: 8px; margin-bottom: 10px; }
+.pkg-field-row .settings-input { flex: 1; }
+.pkg-teach { font-size: var(--caption); color: var(--text-3); line-height: 1.6; margin: 0; }
 .packages-input { flex: 1; padding: 8px 12px; font-size: var(--body); border-radius: var(--radius-md); border: 1px solid var(--border); background: var(--base); color: var(--text-1); }
 .packages-input:disabled { opacity: 0.6; }
-.packages-field-error { font-size: var(--caption); color: var(--danger); margin-top: 8px; }
+.packages-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.packages-field-hint { font-size: var(--caption); color: var(--text-3); margin-top: 8px; line-height: 1.5; }
+.packages-where { font-family: var(--mono, monospace); }
+/* The reassurance line for a long read appears on its own after a few
+   seconds, by a delayed keyframe rather than a timer the view would have to
+   own: a fast classify never shows it, a slow one does. */
+.packages-still-reading { opacity: 0; animation: packages-appear 0s 4.5s forwards; }
+@keyframes packages-appear { to { opacity: 1; } }
+/* The trust step is the one state that runs third-party code, and it wears
+   the amber high-risk chrome the permission card uses; the plain offer never
+   does. */
+.extension-trust-card { border: 1px solid var(--attention); }
+.extension-half-heading { margin-top: 6px; }
+.extension-facts-files, .extension-host-claims { margin: 0; padding-left: 20px; font-size: var(--caption); color: color-mix(in srgb, var(--text-2) 75%, var(--text-1)); line-height: 1.6; }
+.extension-facts-files { font-family: var(--mono, monospace); }
+.packages-field-error { font-size: var(--caption); color: var(--danger-text); margin-top: 8px; }
 .packages-state, .packages-confirm-card, .packages-success-card { display: flex; flex-direction: column; gap: 10px; padding: 20px; }
 .packages-headline { font-size: var(--body); font-weight: 600; color: var(--text-1); }
-.packages-body, .packages-collision-note, .packages-blocked-line { font-size: var(--caption); color: var(--text-2); line-height: 1.6; }
-.packages-collision-note { color: var(--text-1); }
-.packages-failed .packages-headline { color: var(--danger); }
+.packages-body, .packages-blocked-line { font-size: var(--caption); color: var(--text-2); line-height: 1.6; }
+.packages-failed .packages-headline { color: var(--danger-text); }
 .packages-actions { display: flex; gap: 8px; margin-top: 6px; }
-.packages-confirm:disabled { opacity: 0.5; cursor: default; }
 .packages-part { display: flex; justify-content: space-between; gap: 12px; font-size: var(--caption); }
 .packages-part-label { font-weight: 600; color: var(--text-1); }
 .packages-part-dest { color: var(--text-3); font-family: var(--mono, monospace); }
 .packages-spinner { width: 16px; height: 16px; border: 2px solid var(--border); border-top-color: var(--text-2); border-radius: 50%; animation: packages-spin 0.8s linear infinite; }
+
+/* ---- The Packages page: installed packages ---- */
+/* Every colour is a token and every tint a color-mix over one. The danger
+   family follows the split: --danger-text for words, --danger for the one
+   filled button, which lives inside a confirmation and never rests. */
+.settings-section-label { font-size: var(--label); font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--text-3); margin: 0 0 8px 2px; }
+.ext-notice { font-size: var(--caption); color: var(--text-2); line-height: 1.55; margin: -8px 2px 16px; }
+.ext-notice.danger { color: var(--danger-text); }
+
+/* The quiet link-style action. Rests in the secondary text colour; the
+   destructive one turns danger text on hover, colour only, no fill. */
+.linkbtn { background: none; border: 0; padding: 0; font-family: inherit; font-size: var(--caption); font-weight: 600; color: var(--text-2); cursor: pointer; white-space: nowrap; transition: color var(--duration-base) ease; }
+.linkbtn.quiet:hover { color: var(--accent); }
+/* --accent-text is the brand in dark and a darker shade in light, where the
+   brand as text measured 2.44 to 2.85:1 (see tokens.css). The fallback keeps
+   the brand if the token is ever missing. */
+.linkbtn.accent { color: var(--accent-text, var(--accent)); font-weight: 700; }
+.linkbtn.danger:hover { color: var(--danger-text); }
+.linkbtn:disabled { opacity: 0.5; cursor: default; }
+.linkbtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-xs); }
+
+/* Installed packages, to the approved page design: one card per package,
+   the same row padding, dividers and single right-hand action column as the
+   Extensions page, and the same contrast tokens. The update review and the
+   uninstall question open inside the card they belong to. */
+.pkg-list { padding: 0; overflow: hidden; }
+.pkg-card-row { padding: 16px; }
+.pkg-card-row + .pkg-card-row { border-top: 1px solid var(--border); }
+.pkg-card-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+.pkg-card-id { min-width: 0; flex: 1; }
+.pkg-card-name-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.pkg-card-name { font-size: var(--body); font-weight: 600; color: var(--text-1); overflow-wrap: anywhere; }
+.pkg-card-ver { font-size: var(--label); color: var(--settings-quiet-text); font-family: var(--font-mono, monospace); }
+.pkg-card-chip { display: inline-flex; align-items: center; height: 20px; padding: 0 9px; border-radius: var(--radius-pill); font-size: var(--label); font-weight: 600; white-space: nowrap; background: var(--danger); color: white; }
+.pkg-card-repo { font-size: var(--caption); margin-top: 4px; overflow-wrap: anywhere; color: var(--settings-quiet-text); }
+.pkg-card-repo .linkbtn { color: var(--settings-link-text); font-weight: 600; text-decoration: none; white-space: normal; }
+.pkg-card-repo .linkbtn:hover { text-decoration: underline; text-underline-offset: 2px; }
+.pkg-card-status { font-size: var(--caption); color: var(--settings-quiet-text); margin-top: 6px; line-height: 1.5; }
+.pkg-card-status.is-update { color: var(--settings-link-text); font-weight: 600; }
+.pkg-card-status.is-danger { color: var(--settings-danger-text); }
+.pkg-card-counts { font-size: var(--caption); color: var(--settings-quiet-text); margin-top: 8px; }
+.pkg-card-items { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 4px; }
+.pkg-card-items .linkbtn { font-weight: 500; color: var(--settings-link-text); }
+.pkg-card-items .linkbtn:hover { text-decoration: underline; text-underline-offset: 2px; }
+.pkg-card-items .kind { color: var(--settings-quiet-text); font-weight: 400; margin-left: 3px; }
+.pkg-card-gone { font-size: var(--caption); font-weight: 500; color: var(--text-2); white-space: nowrap; }
+.pkg-card-controls { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; flex-shrink: 0; }
+.pkg-card-controls .linkbtn { min-height: 24px; padding: 2px 0; }
+.pkg-card-controls .linkbtn.accent { color: var(--settings-link-text); }
+.pkg-card-uninstall { color: var(--settings-danger-text); }
+.pkg-card-uninstall:hover { text-decoration: underline; text-underline-offset: 2px; }
+.pkg-card-confirm, .pkg-card-review { margin-top: 12px; background: var(--elevated); border-radius: var(--radius-md); padding: 12px; }
+.pkg-review-title { font-size: var(--body); font-weight: 600; color: var(--text-1); margin-bottom: 10px; }
+.pkg-review-group { margin-bottom: 12px; }
+.pkg-review-group-label { font-size: var(--caption); font-weight: 700; color: var(--text-1); margin-bottom: 2px; }
+.pkg-review-group-sub { font-size: var(--caption); color: var(--settings-quiet-text); margin-bottom: 6px; line-height: 1.5; }
+.pkg-review-item { padding: 5px 0; font-size: var(--caption); color: var(--text-2); overflow-wrap: anywhere; }
+.pkg-review-disclosure { font-size: var(--caption); color: var(--text-2); line-height: 1.5; padding: 0 0 5px 12px; }
+.pkg-review-note { font-size: var(--caption); color: var(--settings-quiet-text); line-height: 1.5; margin: 10px 0; }
+.pkg-review-prompt { font-family: var(--font-mono, monospace); font-size: var(--caption); color: var(--text-1); background: var(--card); border-radius: var(--radius-md); padding: 10px 12px; margin: 8px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.pkg-card-actions { display: flex; gap: 8px; margin-top: 10px; }
+.pkg-empty { padding: 32px 16px; text-align: center; font-size: var(--caption); color: var(--settings-quiet-text); line-height: 1.6; }
+.pkg-empty.is-danger { color: var(--settings-danger-text); }
+.pkg-updates-folder { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 16px; margin-top: 12px; background: var(--card); border-radius: var(--radius-xl); font-size: var(--caption); color: var(--settings-quiet-text); line-height: 1.5; }
+/* ---- end of the Packages page block ---- */
+
+/* The collision review card. Same confirm-card family as the offer: no amber
+   chrome anywhere on the card itself, because nothing on this surface
+   executes anything. Attention is spent only on the blocked notice, and
+   danger only on the review-void state, which the tone walk in the model's
+   suite holds to exactly one class. */
+.packages-review-card { display: flex; flex-direction: column; gap: 10px; padding: 20px; }
+.packages-review-sub { font-size: var(--caption); color: var(--text-3); font-family: var(--mono, monospace); word-break: break-all; }
+.packages-item-list { border-top: 1px solid var(--border); }
+.packages-item-row { padding: 11px 0; border-bottom: 1px solid var(--border); }
+.packages-item-top { display: flex; align-items: center; gap: 8px; }
+.packages-item-name { font-size: var(--body); font-weight: 600; color: var(--text-1); }
+.packages-kind-tag { font-size: 9px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--text-3); background: var(--elevated); padding: 2px 6px; border-radius: var(--radius-xs); }
+.packages-ready-mark { margin-left: auto; font-size: var(--caption); font-weight: 600; color: var(--success); }
+.packages-skip-mark { margin-left: auto; font-size: var(--caption); font-weight: 600; color: var(--text-2); }
+.packages-row-btn { padding: 3px 10px; }
+/* The routine disclosure a review row carries: quiet, but on the row, so a
+   colliding install still names what would start running. */
+.packages-routine-note { font-size: var(--caption); color: var(--text-2); line-height: 1.5; margin-top: 5px; }
+.packages-compare { display: flex; gap: 8px; margin: 9px 0 10px; }
+.packages-compare-side { flex: 1; background: var(--elevated); border-radius: var(--radius-md); padding: 8px 10px; min-width: 0; }
+.packages-compare-label { font-size: 9px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--text-3); margin-bottom: 4px; }
+.packages-compare-side p { margin: 0; font-size: var(--caption); color: var(--text-1); line-height: 1.5; }
+.packages-decision-toggle { display: flex; gap: 6px; }
+.packages-dt-btn { flex: 1; padding: 6px 10px; font-size: var(--caption); font-weight: 600; border-radius: var(--radius-md); border: 1px solid var(--border); background: var(--elevated); color: var(--text-2); cursor: pointer; }
+.packages-dt-selected { border-color: var(--text-2); color: var(--text-1); font-weight: 700; }
+.packages-dt-selected.packages-dt-overwrite { border-color: var(--accent); color: var(--accent); background: var(--accent-glow); }
+.packages-dt-blocked { opacity: 0.4; cursor: not-allowed; text-decoration: line-through; }
+.packages-blocked-block { border-radius: var(--radius-md); padding: 10px 12px; margin-top: 9px; background: color-mix(in srgb, var(--attention) 9%, transparent); }
+.packages-blocked-note { font-size: var(--caption); color: var(--attention); line-height: 1.55; }
+.packages-blocked-resolve { margin-top: 8px; }
+/* Where a skipped default's team went, on the chosen attach state: a quiet
+   fact line, same weight as the routine disclosure. */
+.packages-attach-note, .packages-adopt-note, .packages-kept-note { font-size: var(--caption); color: var(--text-2); line-height: 1.5; margin-top: 5px; }
+.packages-review-confirm { display: flex; flex-direction: column; gap: 9px; padding-top: 12px; border-top: 1px solid var(--border); }
+.packages-review-note { font-size: var(--caption); color: var(--text-3); line-height: 1.5; }
+.packages-review-warn { color: var(--attention); }
+
+/* The review-void state: the one danger-toned class on this surface. */
+.packages-stale-card { display: flex; flex-direction: column; gap: 10px; padding: 20px; border: 1px solid var(--danger); }
+.packages-stale-headline { font-size: var(--body); font-weight: 700; color: var(--text-1); }
+.packages-stale-body { font-size: var(--caption); color: var(--danger-text); line-height: 1.55; }
 @keyframes packages-spin { to { transform: rotate(360deg); } }
 
-/* ── Working folders ── */
-/* The rows deliberately reuse the settings-card shell so the list reads as one
-   object with the add row at its foot, rather than a stack of separate cards
-   that would each look independently removable. */
-.wf-heading { display: block; margin: 24px 0 8px; }
-.wf-prose { margin-bottom: 6px; }
-.wf-note { margin-top: 0; margin-bottom: 10px; }
-.wf-list { margin-top: 12px; }
-.wf-row { align-items: flex-start; gap: 12px; }
+/* ── The Extensions page ──
+   Its own rules, outside the Packages block, so the two pages can change
+   apart. One right-hand control column per row: the switch with On or Off,
+   Uninstall beneath it, both on the column's right edge. No row is ever
+   dimmed; off is the word and the switch, paused is the banner. */
+.settings-nav-item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.ext-page-list { padding: 0; overflow: hidden; }
+.ext-page-row { padding: 16px; }
+.ext-page-row + .ext-page-row { border-top: 1px solid var(--border); }
+.ext-page-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+.ext-page-id { min-width: 0; flex: 1; }
+.ext-page-name-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ext-page-name { font-size: var(--body); font-weight: 600; color: var(--text-1); overflow-wrap: anywhere; }
+.ext-page-ver { font-size: var(--label); color: var(--settings-quiet-text); font-family: var(--font-mono); }
+.ext-page-chip { display: inline-flex; align-items: center; height: 20px; padding: 0 9px; border-radius: var(--radius-pill); font-size: var(--label); font-weight: 600; white-space: nowrap; background: var(--danger); color: white; }
+.ext-page-added { font-size: var(--caption); color: var(--settings-quiet-text); margin-top: 4px; }
+.ext-page-from, .ext-page-update { font-size: var(--caption); color: var(--settings-quiet-text); margin-top: 6px; line-height: 1.6; }
+.ext-page-line { font-size: var(--caption); color: var(--settings-quiet-text); margin-top: 6px; line-height: 1.5; }
+.ext-page-line.is-danger, .ext-page-empty.is-danger, .ext-page-notice.is-danger { color: var(--settings-danger-text); }
+.ext-page-row .linkbtn.accent, .ext-page-empty .linkbtn.accent { color: var(--settings-link-text); font-weight: 600; }
+.ext-page-controls { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; flex-shrink: 0; }
+/* Inline in the couldn't-load sentence, so it takes the sentence's size and
+   line; an inline link in running text is exempt from the 24px target. */
+.ext-page-failed .ext-page-to-package { display: inline; font-size: inherit; line-height: inherit; color: var(--settings-link-text); padding: 0; white-space: normal; text-align: left; }
+.ext-page-to-package:hover { text-decoration: underline; text-underline-offset: 2px; }
+.ext-paused-banner { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 16px; margin-bottom: 10px; background: var(--card); border: 1px solid var(--attention); border-radius: var(--radius-xl); }
+.ext-paused-banner p { margin: 0; font-size: var(--caption); font-weight: 600; color: var(--text-1); line-height: 1.5; }
+.ext-pause { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 16px; margin-top: 28px; background: var(--card); border-radius: var(--radius-xl); }
+.ext-pause p { margin: 0; font-size: var(--caption); color: var(--settings-quiet-text); line-height: 1.5; }
+.ext-pause .settings-btn, .ext-paused-banner .settings-btn-primary { white-space: nowrap; flex-shrink: 0; }
+.ext-page-empty { padding: 32px 16px; text-align: center; font-size: var(--caption); color: var(--settings-quiet-text); line-height: 1.6; }
+.ext-page-notice { font-size: var(--caption); color: var(--settings-quiet-text); line-height: 1.55; margin: -8px 2px 16px; }
+
+/* ── Working folders: the switch's exceptions, inside its card ── */
+/* One section under the switch row, the list and its add field together, so
+   the exceptions read as part of the switch they qualify. Never muted: the
+   permission hook reads the list whether the switch is on or off. */
+.wf-section { border-top: 1px solid var(--border); padding: 14px 16px; }
+.wf-section-head { font-size: var(--caption); font-weight: 700; color: var(--text-1); }
+.wf-section-sub { font-size: var(--caption); color: var(--settings-quiet-text); line-height: 1.5; margin: 2px 0 10px; }
+.wf-section-inner { margin-top: 4px; }
+.wf-note { margin-top: 6px; margin-bottom: 0; }
+.wf-list { display: flex; flex-direction: column; }
+.wf-row { align-items: flex-start; gap: 12px; padding: 8px 0; }
 .wf-main { min-width: 0; flex: 1; }
 .wf-name { font-size: var(--body); font-weight: 500; color: var(--text-1); display: flex; align-items: center; gap: 8px; }
-.wf-path { max-width: 100%; display: block; margin-top: 2px; }
+.wf-path { max-width: 100%; display: block; margin-top: 2px; color: var(--settings-quiet-text); }
 /* Amber, not red: the folder is absent, which is not the same as broken, and a
    drive that is not mounted comes back. */
 .wf-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--attention); flex-shrink: 0; }
-.wf-missing { font-size: var(--caption); color: var(--text-2); line-height: 1.5; margin-top: 4px; }
-.wf-remove { background: none; border: none; color: var(--text-3); font-size: 18px; line-height: 1; cursor: pointer; padding: 0 4px; flex-shrink: 0; }
-.wf-remove:hover { color: var(--danger); }
-.wf-add { gap: 8px; }
+.wf-missing { font-size: var(--caption); color: var(--settings-quiet-text); line-height: 1.5; margin-top: 4px; }
+.wf-remove { background: none; border: none; color: var(--settings-quiet-text); font-size: 18px; line-height: 1; cursor: pointer; min-width: 28px; min-height: 28px; padding: 0 4px; flex-shrink: 0; border-radius: var(--radius-md); }
+.wf-remove:hover { color: var(--danger-text); }
+.wf-add { display: flex; align-items: center; gap: 8px; padding-top: 8px; }
 .wf-input { flex: 1; min-width: 0; }
-.wf-hint { font-size: var(--caption); color: var(--text-2); line-height: 1.5; padding: 0 16px 12px; }
+.wf-hint { font-size: var(--caption); color: var(--settings-quiet-text); line-height: 1.5; padding: 6px 0 0; }
 .wf-hint:empty { display: none; }
 /* Removal is reversible rather than confirmed: an undo strip costs one click
    to ignore, where a confirmation dialog costs one click every single time. */
-.wf-undo { font-size: var(--caption); color: var(--text-2); background: var(--elevated); border-radius: var(--radius-md); padding: 8px 12px; margin-bottom: 10px; display: flex; align-items: center; gap: 8px; }
-.wf-undo-btn { background: none; border: none; color: var(--accent); font-size: var(--caption); font-weight: 600; cursor: pointer; padding: 0; text-decoration: underline; text-underline-offset: 2px; }
+.wf-undo { font-size: var(--caption); color: var(--text-1); background: var(--elevated); border-radius: var(--radius-md); padding: 8px 12px; margin-bottom: 10px; display: flex; align-items: center; gap: 8px; }
+.wf-undo-btn { background: none; border: none; color: var(--settings-link-text); font-size: var(--caption); font-weight: 600; cursor: pointer; padding: 0; text-decoration: underline; text-underline-offset: 2px; }
 
 /* ── Permissions ──────────────────────────────────────────────────────────
    Mode, working folders and standing tool allows each arrived on the Workspace
@@ -157,4 +387,4 @@
    tool allow read as the same act. This class was in the markup with no rule
    behind it, which is why the button it styles had never been seen. */
 .settings-row-remove { flex-shrink: 0; background: none; border: none; color: var(--text-3); font-size: 16px; line-height: 1; cursor: pointer; padding: 3px 7px; border-radius: var(--radius-sm); transition: color var(--duration-base) ease, background var(--duration-base) ease; }
-.settings-row-remove:hover { color: var(--danger); background: var(--elevated); }
+.settings-row-remove:hover { color: var(--danger-text); background: var(--elevated); }

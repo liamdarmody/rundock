@@ -301,7 +301,11 @@ describe('finding 7: interrupt accepted but ignored (the cancelled turn runs to 
     const ZOMBIE_TEXT = 'one two three four five six seven eight nine ten eleven twelve';
     h.writeCodexScenario(
       [
-        { match: { promptIncludes: 'count for ages' }, deltas: ['one ', 'two '], text: ZOMBIE_TEXT },
+        // holdForInterrupt: the cancel below must reach a turn that is still
+        // running. See the stub's note; this is the same race as the unit
+        // test's, and the two took turns failing depending on load.
+        { match: { promptIncludes: 'count for ages' }, deltas: ['one ', 'two '],
+          text: ZOMBIE_TEXT, holdForInterrupt: true },
         // The scripted delay holds the follow-up turn open past the
         // zombie's resume, so the zombie completes MID new turn.
         { match: { promptIncludes: 'real follow-up' }, deltas: ['The real '], text: 'The real answer.', delayMs: 1600 },

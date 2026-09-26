@@ -186,6 +186,14 @@ const ROUTES = [
     what: "a routine row in the Routines box on an agent's profile",
     pressedBy: 'a routine row on a profile opens this list scoped to that agent',
   },
+  // The Packages page's install receipt links each routine that arrived with
+  // a package, beside the agents and skills, and pressing it lands the
+  // reader here. Enumerated the moment it arrived, because the exclusion
+  // below went red when it did.
+  {
+    what: 'a routine link on a package install receipt',
+    pressedBy: 'a routine link on a package card lands on the routines section',
+  },
 ];
 
 // Every call the client makes into this view TO LAND A READER ON IT. Separate
@@ -311,14 +319,15 @@ describe('every way this list gets drawn is enumerated', () => {
       const src = fs.readFileSync(path.join(ROOT, rel), 'utf-8');
       for (const m of src.matchAll(NAV_CALL)) {
         if (m[2] !== 'routines') continue;
-        // Three files may, and each is listed in ROUTES above with the test
+        // Four files may, and each is listed in ROUTES above with the test
         // that presses it: the editor, which leaves for this list after a
         // save; this view itself, which names its own section on the one
-        // destination function every route runs through; and the run detail
-        // screen, whose back control returns here. Widened deliberately rather
-        // than loosened, so a fourth file navigating here still fails until
-        // somebody names it.
-        assert.ok(/routine-editor\.js$|views\/routines\.js$|views\/run-detail\.js$/.test(rel),
+        // destination function every route runs through; the run detail
+        // screen, whose back control returns here; and the settings view,
+        // whose Packages receipt links each routine that arrived with an
+        // install. Widened deliberately rather than loosened, so a fifth
+        // file navigating here still fails until somebody names it.
+        assert.ok(/routine-editor\.js$|views\/routines\.js$|views\/run-detail\.js$|views\/settings\.js$/.test(rel),
           `${rel} navigates to the routines section and is not a listed route`);
       }
     }
@@ -580,6 +589,65 @@ describe('the ways this list gets drawn, pressed', () => {
     listed = doc.getElementById('routines-content').textContent;
     assert.match(listed, /Reconcile the delivery log/,
       'the rail entry inherited the last profile\'s scope, so the list has lost rows');
+    dom.window.close();
+  });
+
+  // Arrive by the route a reader takes: the receipt row the Packages page
+  // draws for an install that carried a routine, with its routine link
+  // pressed as markup. The row model and the row markup are the product's
+  // own, required rather than restated, so a renamed handler, a dropped
+  // link, or a receipt that stops carrying routines turns this red.
+  test('a routine link on a package card lands on the routines section', () => {
+    const { w, doc, dom } = shell();
+    const settings = require('../../public/views/settings.js');
+    const update = require('../../public/packages-update-model.js');
+    const [card] = update.cardRows(update.initial(), {
+      extensions: [],
+      packages: [{
+        id: 'https://github.com/someone/pack', name: 'pack', title: 'Pack', repo: 'someone/pack', updatable: true,
+        reference: 'v1.0.0', commit: null, extension: null, counts: { agent: 1, skill: 0, routine: 1, starter: 0, extension: 0 },
+        items: [{ id: 'agent:piper', kind: 'agent', label: 'piper', open: 'agent', target: 'piper', state: 'as-installed', routines: ['Compile the ops summary'] }],
+      }],
+    });
+    // The settings view escapes through the page's own helpers, supplied
+    // here the way the shell supplies them to every other view.
+    global.esc = w.esc;
+    global.escAttr = (s) => String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    let rowHtml;
+    try {
+      rowHtml = settings.packagesCardHtml(card);
+    } finally {
+      delete global.esc;
+      delete global.escAttr;
+    }
+    doc.body.insertAdjacentHTML('beforeend', rowHtml);
+    // The handler the markup names, cut out of the settings view and run in
+    // this shell the way app.js pieces are, beside the shipped router.
+    const settingsSrc = read('public', 'views', 'settings.js');
+    const handler = /function packagesOpenReceiptItem\([\s\S]*?\n\}/.exec(settingsSrc);
+    assert.ok(handler, 'settings.js no longer carries packagesOpenReceiptItem');
+    w.eval(handler[0]);
+    w.eval([
+      /const NAV_FOR_VIEW = \{[\s\S]*?\n\};/.exec(APP_SRC)[0],
+      `function setNavState(nav) {${appPiece(/function setNavState\(nav\) \{([\s\S]*?)\n\}/, 'setNavState')}\n}`,
+      `function showView(v) {${appPiece(/^function showView\(v\) \{(.*)\}\s*$/m, 'showView')}}`,
+    ].join('\n'));
+    w.closeFindBar = () => {};
+    w.switchNav = (nav) => {
+      assert.strictEqual(nav, 'routines', 'the receipt link asks for another section');
+      w.eval(`(function () {${appPiece(/else if\(nav==='routines'\)\s*\{([\s\S]*?)\}/, "switchNav's routines arm")}\n})()`);
+    };
+    const link = [...doc.querySelectorAll('.pkg-card-row .pkg-card-items .linkbtn')]
+      .find((b) => b.textContent.includes('Compile the ops summary'));
+    assert.ok(link, 'the package card carries no routine link');
+    link.click();
+    assert.ok(!doc.getElementById('view-routines').classList.contains('hidden'),
+      'the receipt link does not show this view');
+    assert.strictEqual(doc.querySelectorAll('.routine-row').length, 1,
+      'the receipt link shows the view without drawing anything into it');
+    assert.match(doc.getElementById('routines-content').textContent, /Compile the ops summary/,
+      'the list drawn does not carry the routine the receipt named');
     dom.window.close();
   });
 

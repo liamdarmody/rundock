@@ -418,7 +418,7 @@ function commentsStripped(src) {
     .replace(/(^|[^:'"`\\])\/\/.*$/gm, '$1');
 }
 
-// Every inline handler attribute in the page, as {file, owner, text}. The owner
+// Every inline handler attribute in the page, as {file, owner, text}. Its `owner` field
 // names the element the way a reader would find it: its id or data-nav if it
 // has one, otherwise its tag.
 function inlineHandlers() {

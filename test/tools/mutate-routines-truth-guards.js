@@ -3,7 +3,7 @@
 // Break each of the truth-telling guards in turn and report which tests
 // notice.
 //
-// The five rules this lane leaves behind are all rules about HONESTY: a
+// The five rules this change leaves behind are all rules about HONESTY: a
 // stopped run rendered in its own tone, a cancel honoured before the turn at
 // both of its checkpoints, cancelled meaning a stop was DELIVERED, the row's
 // offer consuming the scheduler's published refusal, and the ambiguous-skill

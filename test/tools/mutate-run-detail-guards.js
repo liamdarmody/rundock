@@ -134,7 +134,7 @@ const MUTATIONS = [
   // ===== THE JOIN BETWEEN TWO WRITERS =====
   // A record names its agent with the id the ROSTER hands out, not with the
   // name in the agent's frontmatter and not with its filename. Those differ on
-  // every orchestrator, including the owner's own workspace, where the file is
+  // every orchestrator, including a real workspace, where the file is
   // team-lead.md and the roster id is 'default'.
   [WRITER, 'a record names its agent with the id the roster hands out',
     '    agent: agent.id,',
@@ -154,8 +154,13 @@ const MUTATIONS = [
 
   // ===== NO RAW STATUS WORD =====
   [MODEL, 'the state is looked up, never taken from the record',
-    "      : (Object.prototype.hasOwnProperty.call(RUN_STATES, record.status) ? RUN_STATES[record.status] : UNRECOGNISED_STATE);",
-    '      : (RUN_STATES[record.status] || { tone: \'bad\', chip: record.status, headline: `This run is ${record.status}.`, guidance: null });'],
+    "        : (Object.prototype.hasOwnProperty.call(RUN_STATES, record.status) ? RUN_STATES[record.status] : UNRECOGNISED_STATE));",
+    '        : (RUN_STATES[record.status] || { tone: \'bad\', chip: record.status, headline: `This run is ${record.status}.`, guidance: null }));'],
+  // A failure the agent declared, read as a failure its process had. The two
+  // send a reader to different places, so the chip and headline must differ.
+  [MODEL, 'a failure the agent declared is told apart from one its process had',
+    "      : (record.status === 'failed' && record.declared === true\n        ? DECLARED_FAILED_STATE",
+    "      : (false\n        ? DECLARED_FAILED_STATE"],
   // A run whose ending never ran, given the words written for one that failed.
   // Nobody witnessed the outcome, and this is the reading that costs a user
   // work they did not need to revert.
@@ -168,7 +173,7 @@ const MUTATIONS = [
   // The same ruling where a reader actually resolves it.
   [STYLES, 'a run whose ending never ran is not painted as a failure',
     '.rd-chip.unwitnessed { color: var(--idle); font-weight: 500; }',
-    '.rd-chip.unwitnessed { color: var(--danger); font-weight: 600; }'],
+    '.rd-chip.unwitnessed { color: var(--danger-text); font-weight: 600; }'],
   // A run with no record on file is a third absence, and it has its own
   // sentence: blaming a reason code nobody can read describes a record that
   // does not exist.
@@ -180,7 +185,7 @@ const MUTATIONS = [
     '`<span class="rd-chip" data-run-detail="chip">`'],
 
   // ===== WHAT THE RUN CHANGED =====
-  // AC-8 REACHES THE FILE LIST'S HEADING TOO. An interrupted run can carry a
+  // THE RULE REACHES THE FILE LIST'S HEADING TOO. An interrupted run can carry a
   // known list, and the failure heading says the run stopped partway, which
   // nothing did: the process died before anything recorded where it got to.
   [MODEL, 'a run whose ending never ran heads its list with its own words',

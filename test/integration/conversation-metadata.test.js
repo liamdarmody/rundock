@@ -47,7 +47,7 @@ describe('get_conversations: load pipeline', () => {
     fs.writeFileSync(convosFile, JSON.stringify([
       // Never got a sessionId and is older than the 5-minute grace: dropped.
       { id: 'stale-empty', agentId: 'chief-of-staff', title: 'Abandoned', lastActiveAt: oldStamp },
-      // Points at a delegatee that HANDED BACK: reset to the owner.
+      // Points at a delegatee that HANDED BACK: reset to the owning agent.
       //
       // This case used to carry no handback record and still expected the reset,
       // because the rule was "no live process means the delegation finished".
@@ -59,24 +59,24 @@ describe('get_conversations: load pipeline', () => {
       //
       // So the two cases the old fixture conflated are now separate, and both
       // are checked below.
-      { id: 'reconcile-1', agentId: 'chief-of-staff', activeAgentId: 'penn', sessionId: 's-r1', title: 'Reconciled', lastActiveAt: oldStamp, delegationReturned: true },
+      { id: 'reconcile-1', agentId: 'chief-of-staff', activeAgentId: 'wren', sessionId: 's-r1', title: 'Reconciled', lastActiveAt: oldStamp, delegationReturned: true },
       // In flight when the app quit: no handback was ever seen, so the pointer
       // stands. This is the case the user reported.
-      { id: 'in-flight', agentId: 'chief-of-staff', activeAgentId: 'penn', sessionId: 's-if', title: 'Still working', lastActiveAt: oldStamp },
+      { id: 'in-flight', agentId: 'chief-of-staff', activeAgentId: 'wren', sessionId: 's-if', title: 'Still working', lastActiveAt: oldStamp },
     ]));
 
     const res = await getConversations();
     assert.ok(!res.conversations.some(c => c.id === 'stale-empty'), 'stale empty conversation dropped');
     const reconciled = res.conversations.find(c => c.id === 'reconcile-1');
-    assert.strictEqual(reconciled.activeAgentId, 'chief-of-staff', 'a delegatee that handed back is reset to the owner');
+    assert.strictEqual(reconciled.activeAgentId, 'chief-of-staff', 'a delegatee that handed back is reset to the owning agent');
     const inFlight = res.conversations.find(c => c.id === 'in-flight');
-    assert.strictEqual(inFlight.activeAgentId, 'penn',
+    assert.strictEqual(inFlight.activeAgentId, 'wren',
       'a delegation with no observed handback keeps its specialist across a restart');
 
     const persisted = JSON.parse(fs.readFileSync(convosFile, 'utf-8'));
     assert.ok(!persisted.some(c => c.id === 'stale-empty'), 'cleanup persisted to disk');
     assert.strictEqual(persisted.find(c => c.id === 'reconcile-1').activeAgentId, 'chief-of-staff');
-    assert.strictEqual(persisted.find(c => c.id === 'in-flight').activeAgentId, 'penn',
+    assert.strictEqual(persisted.find(c => c.id === 'in-flight').activeAgentId, 'wren',
       'and the in-flight pointer is not rewritten on disk either');
   });
 
@@ -100,7 +100,7 @@ describe('get_conversations: load pipeline', () => {
     fs.writeFileSync(path.join(dir, `${convoId}.json`), JSON.stringify([
       { role: 'user', text: 'Real question' },
       {
-        role: 'agent', agent: 'penn',
+        role: 'agent', agent: 'wren',
         text: '<!-- RUNDOCK:SAVE_AGENT name=doc -->\nhidden payload\n<!-- /RUNDOCK:SAVE_AGENT -->[Read: notes.md] **Bold** update with a [link](https://example.com) and [[Page|alias]] inside',
       },
     ]));
@@ -109,7 +109,7 @@ describe('get_conversations: load pipeline', () => {
     const convo = res.conversations.find(c => c.id === convoId);
     assert.ok(convo, 'saved conversation listed');
     assert.strictEqual(convo.messageCount, 2, 'only user-visible bubbles counted');
-    assert.strictEqual(convo.lastAgentId, 'penn');
+    assert.strictEqual(convo.lastAgentId, 'wren');
     assert.strictEqual(convo.lastMessagePreview, 'Bold update with a link and alias inside');
   });
 });

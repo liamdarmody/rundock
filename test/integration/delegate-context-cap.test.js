@@ -178,13 +178,13 @@ describe('an agent that has been here before still resumes', () => {
     const convoId = h.freshConvoId('cap-resume');
     seed(convoId, [
       { role: 'user', text: 'write me a short blog post' },
-      { role: 'agent', agent: 'chief-of-staff', text: 'Handing this to Penn.' },
-      { role: 'agent', agent: 'content-lead', text: 'PENN-OWN-FIRST-DRAFT: here is the draft' },
+      { role: 'agent', agent: 'chief-of-staff', text: 'Handing this to Wren.' },
+      { role: 'agent', agent: 'content-lead', text: 'WREN-OWN-FIRST-DRAFT: here is the draft' },
       { role: 'agent', agent: 'content-analyst', text: 'ANALYST-INTERVENING: the numbers check out' },
     ]);
     h.internal.writeConversations([{
       id: convoId, title: 'resume', messages: [],
-      sessionIds: [{ agentId: 'content-lead', sessionId: 'sess-penn-cap' }],
+      sessionIds: [{ agentId: 'content-lead', sessionId: 'sess-wren-cap' }],
     }]);
     parkParent(convoId, 'p-resume');
     h.clearInvocations();
@@ -195,13 +195,13 @@ describe('an agent that has been here before still resumes', () => {
     assert.match(prompt, /SINCE YOUR LAST TURN/,
       'a returning agent is told what it missed, not walked through the room again');
     assert.match(prompt, /ANALYST-INTERVENING/, 'and that is what happened while it was away');
-    assert.ok(!prompt.includes('PENN-OWN-FIRST-DRAFT'),
+    assert.ok(!prompt.includes('WREN-OWN-FIRST-DRAFT'),
       'its own earlier turn is already in its thread; re-sending it is pure cost and invites '
       + 'it to redo work it has already done');
 
     const spawned = h.readInvocations().filter(i => i.agent === 'content-lead');
     assert.ok(spawned.length >= 1, 'the delegate was spawned');
-    assert.strictEqual(spawned[spawned.length - 1].resume, 'sess-penn-cap',
+    assert.strictEqual(spawned[spawned.length - 1].resume, 'sess-wren-cap',
       'and the thread was actually resumed, so this is a resume rather than an arrival '
       + 'wearing a resume heading');
     h.reapConvo(convoId);

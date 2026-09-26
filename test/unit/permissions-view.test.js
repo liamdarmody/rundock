@@ -153,9 +153,9 @@ describe('the Permissions section holds what it should, and only there', () => {
     // yet", which was true and is not any more: approving a folder on a path
     // card now names it as a working folder, so it appears in the list above.
     // The disclaimer became the omission it was written to prevent.
-    const { w } = shell([]);
+    const { w } = shell([], { folders: [{ path: `${HOME}/Projects`, missing: false }] });
     const text = render(w).textContent;
-    assert.match(text, /approve on a path card is named in the list above/i,
+    assert.match(text, /A permission card's "Always allow this folder" adds to this same list\./,
       'the reader is told where the folder they approved went');
     assert.doesNotMatch(text, /not listed here yet/i,
       'and is not still told it went nowhere');
@@ -262,7 +262,7 @@ describe('changing the mode leaves you where you were', () => {
 
 describe('mode still does what it did', () => {
   test('each mode renders as selected and describes itself', () => {
-    for (const [mode, other] of [['knowledge', 'code'], ['code', 'knowledge']]) {
+    for (const [mode, other] of [['notes', 'code'], ['code', 'notes']]) {
       const { w, doc } = shell([], { mode });
       render(w);
       const active = doc.querySelector('.mode-toggle-btn.active');

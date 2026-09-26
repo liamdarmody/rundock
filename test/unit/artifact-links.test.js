@@ -6,7 +6,7 @@ describe('resolveArtifactLink', () => {
   const from = 'Artifacts/Launch Page.html';
 
   test('external URLs open in the browser', () => {
-    for (const href of ['https://example.com', 'http://x.io/a', 'mailto:a@b.com', 'ftp://h/f']) {
+    for (const href of ['https://example.com', 'http://x.io/a', 'mailto:a@example.com', 'ftp://h/f']) {
       assert.deepEqual(resolveArtifactLink(href, from), { kind: 'external', value: href });
     }
   });

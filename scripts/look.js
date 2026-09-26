@@ -2,7 +2,7 @@
 // Serve the branch in this worktree so a person can look at it NOW.
 //
 // WHY THIS EXISTS. Measured across 0.13.3: the elapsed time from a fix
-// existing to the owner being able to see it was 40 to 60 minutes for most of
+// existing to a person being able to see it was 40 to 60 minutes for most of
 // a day, and about 90 seconds for the last third. Same machine, same people,
 // same work. The only difference was that the last third served the branch on
 // a port and looked at it, and the rest waited for a gate, CI and a merge
