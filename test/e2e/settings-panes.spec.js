@@ -475,7 +475,7 @@ test('Permissions: the switch has a 24px target and every control a focus ring; 
   }
   if (await sw.count() && state === 'On') {
     await sw.click();
-    await expect(page.locator('.wall-confirm p')).toHaveText('Turn off? Agents will be able to change or delete files outside this workspace wherever your account allows. Your approval settings still apply.');
+    await expect(page.locator('.wall-confirm p')).toHaveText('Turn off? Agents will be able to change or delete files outside this workspace wherever your account allows. Rundock will still ask before each change there, unless a folder is added below.');
     const keep = page.locator('#sandbox-keep-on');
     const ring = await focusRing(page, keep);
     expect(ring.visible && ring.outline !== 'none').toBe(true);

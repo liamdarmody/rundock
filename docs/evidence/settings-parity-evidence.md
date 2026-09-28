@@ -2,6 +2,8 @@
 
 Evidence for the Keep agents inside this workspace row: that the desktop app and the browser show the same row, with the same effective state, for the same workspace, and that reverting the change turns tests red.
 
+> **Needs re-capturing.** The switch captions changed after this run (the On and Off wording, a variant without the folder clause on locked rows that do not carry Rundock's block, and the turn-off confirmation). The captions quoted in the captured report below are the earlier wording. Re-run `npm run test:settings:electron` and replace the report rather than editing it by hand.
+
 ## Browser and desktop show the same row
 
 Run: `npm run test:settings:electron` (test/electron/settings-parity.cjs), 2026-09-25, on darwin, Electron 42.9.3, Chromium 149.0.7827.55. Exit 0.

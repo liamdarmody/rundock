@@ -713,6 +713,15 @@ class CodexAppServer extends EventEmitter {
   _onServerRequest(msg) {
     const { id, method } = msg;
     const params = msg.params || {};
+    if (method === 'item/permissions/requestApproval') {
+      // DECLINED AT ONCE, NEVER GRANTED. The agent asking to widen its own
+      // permission profile gets an empty grant straight away, so a turn never
+      // waits on it; the turn is told, so the person can be.
+      this._writeLine({ jsonrpc: '2.0', id, result: permissionsRefusal() });
+      const st = this._activeTurns.get(params.threadId);
+      if (st) this._emitTurnEvent(st, { type: 'permissionsRefused', params });
+      return;
+    }
     const kind = method === 'item/commandExecution/requestApproval' ? 'command'
       : method === 'item/fileChange/requestApproval' ? 'fileChange'
         : null;
@@ -755,8 +764,20 @@ class CodexAppServer extends EventEmitter {
   }
 }
 
+// THE ANSWER TO item/permissions/requestApproval, the agent asking to widen
+// its own permission profile: always a refusal. The live schema (codex-cli
+// 0.156.1, PermissionsRequestApprovalResponse) has no decision field; the
+// answer IS the profile granted, so a refusal is an empty grant for this turn.
+// Measured: under approvalPolicy on-request, which is how Rundock starts
+// threads, Codex does not send this request at all (it asks for a command
+// approval instead), and the granular policy that would enable it requires the
+// experimental API, which Rundock never opts into. So nothing here grants.
+function permissionsRefusal() {
+  return { permissions: {}, scope: 'turn' };
+}
+
 function createCodexAppServer(opts = {}) {
   return new CodexAppServer(opts);
 }
 
-module.exports = { createCodexAppServer, normalizeErrorKind, parseUserAgentVersion };
+module.exports = { createCodexAppServer, normalizeErrorKind, parseUserAgentVersion, permissionsRefusal };

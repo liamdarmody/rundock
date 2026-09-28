@@ -321,6 +321,8 @@
 .wf-section-sub { font-size: var(--caption); color: var(--settings-quiet-text); line-height: 1.5; margin: 2px 0 10px; }
 .wf-section-inner { margin-top: 4px; }
 .wf-note { margin-top: 6px; margin-bottom: 0; }
+/* Under the folder list's caption, where the sandbox block is the person's own. */
+.wf-own-sandbox { margin: 0 0 10px; }
 .wf-list { display: flex; flex-direction: column; }
 .wf-row { align-items: flex-start; gap: 12px; padding: 8px 0; }
 .wf-main { min-width: 0; flex: 1; }

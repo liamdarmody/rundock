@@ -6,6 +6,10 @@
   <title>Rundock Setup</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
+    /* The content column widens with the window: 140px of side room in
+       total, never narrower than 280px. A wider window shortens wrapped hint
+       lines instead of only adding empty space at the sides. */
+    :root { --content-max: max(280px, calc(100vw - 140px)); }
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Inter', sans-serif;
       background: #1A1A1A;
@@ -13,38 +17,70 @@
       display: flex;
       flex-direction: column;
       align-items: center;
-      justify-content: center;
       height: 100vh;
-      padding: 40px;
+      overflow: hidden;
       -webkit-app-region: drag;
       -webkit-font-smoothing: antialiased;
+      /* Center the header and body as one block when they fit. `safe` falls
+         back to top alignment when they do not, so the heading never moves
+         off the top of the window. Plain `center` comes first for any engine
+         that cannot parse `safe center`. */
+      justify-content: center;
+      justify-content: safe center;
+    }
+    /* Heading and subtitle: never shrinks and never scrolls, so the heading
+       always stays visible. */
+    .wizard-header {
+      flex: 0 0 auto;
+      width: 100%;
+      max-width: var(--content-max, 380px);
+      padding: 28px 40px 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    /* Steps and buttons: sized to their content (no forced growth, so the
+       centering above has room to work) and scrolls only when the display is
+       too small to show everything. `min-height: 0` lets a flex child shrink
+       below its content so `overflow-y` can take effect; `no-drag` lets the
+       region receive wheel and click events inside the drag region. */
+    .wizard-body {
+      flex: 0 1 auto;
+      min-height: 0;
+      width: 100%;
+      overflow-y: auto;
+      -webkit-app-region: no-drag;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 16px 40px 28px;
     }
     h1 {
       font-size: 24px;
       font-weight: 700;
-      margin-bottom: 8px;
+      margin-bottom: 6px;
       letter-spacing: -0.02em;
     }
     .subtitle {
       color: #9A9590;
       font-size: 14px;
-      margin-bottom: 32px;
+      margin-bottom: 20px;
       text-align: center;
       line-height: 1.5;
     }
     .status {
       display: flex;
       flex-direction: column;
-      gap: 16px;
+      gap: 12px;
       width: 100%;
-      max-width: 380px;
-      margin-bottom: 32px;
+      max-width: var(--content-max, 380px);
+      margin-bottom: 20px;
     }
     .step {
       display: flex;
       align-items: center;
       gap: 12px;
-      padding: 14px 16px;
+      padding: 12px 16px;
       background: #212121;
       border: 1px solid #3D3D3D;
       border-radius: 8px;
@@ -133,40 +169,44 @@
   </style>
 </head>
 <body>
-  <h1>Rundock Setup</h1>
-  <p class="subtitle" id="subtitle">Rundock needs Claude Code to power your agent team.</p>
-
-  <div class="status">
-    <div class="step" id="step-install">
-      <div class="step-icon pending" id="icon-install">1</div>
-      <div class="step-text">
-        <div>Install Claude Code</div>
-        <div class="hint" id="install-hint"><a href="https://docs.anthropic.com/en/docs/claude-code/overview" target="_blank">Installation guide</a></div>
-      </div>
-    </div>
-    <div class="step" id="step-auth">
-      <div class="step-icon pending" id="icon-auth">2</div>
-      <div class="step-text">
-        <div>Sign in to Claude</div>
-        <div class="hint" id="auth-hint">Click <strong>Sign in to Claude</strong> below. A terminal opens to complete the sign-in.</div>
-      </div>
-    </div>
-    <!-- Rendered only when the Codex CLI is detected on this machine; Claude-only
-         machines see the wizard exactly as before. -->
-    <div class="step" id="step-codex" style="display:none">
-      <div class="step-icon pending" id="icon-codex">3</div>
-      <div class="step-text">
-        <div>Sign in to Codex</div>
-        <div class="hint" id="codex-hint">Optional. Specialists can run on your ChatGPT plan via the official Codex CLI.</div>
-      </div>
-    </div>
+  <div class="wizard-header">
+    <h1>Rundock Setup</h1>
+    <p class="subtitle" id="subtitle">Rundock needs Claude Code to power your agent team.</p>
   </div>
 
-  <button class="btn" id="btn-signin" style="display:none" onclick="signIn()">Sign in to Claude</button>
-  <button class="btn" id="btn-codex-signin" style="display:none" onclick="signInCodex()">Sign in to Codex</button>
-  <button class="btn" id="btn-check" onclick="checkNow()">Check again</button>
-  <button class="btn-secondary" id="btn-codex-skip" style="display:none" onclick="skipCodex()">Skip for now</button>
-  <button class="btn-secondary" id="btn-skip" onclick="skipAndQuit()">Quit</button>
+  <div class="wizard-body" id="wizard-body">
+    <div class="status">
+      <div class="step" id="step-install">
+        <div class="step-icon pending" id="icon-install">1</div>
+        <div class="step-text">
+          <div>Install Claude Code</div>
+          <div class="hint" id="install-hint"><a href="https://docs.anthropic.com/en/docs/claude-code/overview" target="_blank">Installation guide</a></div>
+        </div>
+      </div>
+      <div class="step" id="step-auth">
+        <div class="step-icon pending" id="icon-auth">2</div>
+        <div class="step-text">
+          <div>Sign in to Claude</div>
+          <div class="hint" id="auth-hint">Click <strong>Sign in to Claude</strong> below. A terminal opens to complete the sign-in.</div>
+        </div>
+      </div>
+      <!-- Rendered only when the Codex CLI is detected on this machine; Claude-only
+           machines see the wizard exactly as before. -->
+      <div class="step" id="step-codex" style="display:none">
+        <div class="step-icon pending" id="icon-codex">3</div>
+        <div class="step-text">
+          <div>Sign in to Codex</div>
+          <div class="hint" id="codex-hint">Optional. Specialists can run on your ChatGPT plan via the official Codex CLI.</div>
+        </div>
+      </div>
+    </div>
+
+    <button class="btn" id="btn-signin" style="display:none" onclick="signIn()">Sign in to Claude</button>
+    <button class="btn" id="btn-codex-signin" style="display:none" onclick="signInCodex()">Sign in to Codex</button>
+    <button class="btn" id="btn-check" onclick="checkNow()">Check again</button>
+    <button class="btn-secondary" id="btn-codex-skip" style="display:none" onclick="skipCodex()">Skip for now</button>
+    <button class="btn-secondary" id="btn-skip" onclick="skipAndQuit()">Quit</button>
+  </div>
 
   <script>
     let polling = null;
@@ -198,6 +238,13 @@
       const icon = document.getElementById('icon-' + id);
       step.className = 'step ' + state;
       icon.className = 'step-icon ' + state;
+      // Once Claude Code is installed its install instructions are spent:
+      // hide them so every later screen is shorter. They come back if the
+      // step ever returns to needing action.
+      if (id === 'install') {
+        const installHint = document.getElementById('install-hint');
+        if (installHint) installHint.style.display = state === 'done' ? 'none' : '';
+      }
       if (state === 'done') {
         icon.innerHTML = '&#10003;';
       } else if (state === 'active') {

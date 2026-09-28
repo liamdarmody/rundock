@@ -90,6 +90,9 @@ including the worst case of `--elevated`. If you need something fainter than
 | `--idle` | Something is present but not doing anything |
 | `--danger` | Destructive actions and errors, as a fill or an edge: `background`, `border-color`, `box-shadow`, and the `color-mix()` tints feeding those. `#D42C2A` in both themes |
 | `--danger-text` | Destructive actions and errors, as text: any `color` declaration. `#F0706E` in dark, `#D42C2A` in light |
+| `--success-text` | The success hue as text and as an outline button's edge (Always allow, Allow once on the permission card): the fill itself in dark, `#266A36` in light, 5.14:1 on the light permission card where `--success` as text measures 1.64:1 |
+| `--border-strong` | A quiet control's edge that must still read as a control (the permission card's Deny): 3.20:1 on the dark card, 3.58:1 on the light one |
+| `--text-2-strong` | Secondary text on a control (the permission card's Deny label): 4.70:1 on the dark card, 4.59:1 on the light one |
 
 Use these for what they mean, never for what colour they happen to be. If you
 want a red border and nothing has gone wrong, `--danger` is the wrong token and

@@ -648,7 +648,7 @@ function renderSettingsSection(section) {
     // the switch below, which a mode change never moves, so this sentence no
     // longer carries a clause about the sandbox that could come untrue.
     const modeDesc = isCode
-      ? 'Websites and software. Agents can edit code and run everyday commands without asking.'
+      ? "Websites and software. Agents can edit code and run everyday development commands without asking. Commands that can't be undone still ask every time."
       : 'Notes, documents and other files. Agents ask before running commands.';
     el.innerHTML = `<div class="settings-section-title">Permissions</div>
       <div class="settings-lead">Choose how agents work and where they can change files.</div>
@@ -818,11 +818,14 @@ function workingFoldersInnerHtml() {
   const m = typeof sandboxModel === 'function' ? sandboxModel() : null;
   const caption = m ? m.foldersCaption(workingFoldersState(), workspaceMode === 'code' ? 'code' : 'notes') : null;
   const lead = caption ? `<div class="wf-section-sub">${esc(caption)}</div>` : '';
+  const own = m && typeof m.ownSandboxFoldersNote === 'function' ? m.ownSandboxFoldersNote(sandboxStatus) : null;
+  const ownNote = own ? `<div class="settings-caption wf-own-sandbox">${esc(own)}</div>` : '';
   const hint = workingFolders.length
     ? 'Naming a parent, such as <code>~/Projects</code>, covers everything inside it. A permission card\'s "Always allow this folder" adds to this same list.'
     : 'No extra folders added yet. Naming a parent, such as <code>~/Projects</code>, covers everything inside it.';
   return `<div class="wf-section-head">Folders agents can also change</div>
     ${lead}
+    ${ownNote}
     ${undo}
     <div class="wf-section-inner">
       <div class="wf-list">${rows}</div>
@@ -915,6 +918,10 @@ function toolAllowsArrived(msg) {
 // alone rather than colour or grouping, because grouping these is a later card
 // and a colour would imply a category that does not exist yet.
 function toolAllowKeyHtml(key) {
+  // A Code-mode rule key is listed in words ("Pushes to the default branch"),
+  // with the same revoke control as any other standing allow.
+  const rule = (typeof RundockPermissions !== 'undefined' && RundockPermissions.ruleKeyLabel) ? RundockPermissions.ruleKeyLabel(key) : null;
+  if (rule) return `<span class="tool-allow-name">${esc(rule)}</span>`;
   const open = key.indexOf('(');
   if (open <= 0 || !key.endsWith(')')) return `<span class="tool-allow-name">${esc(key)}</span>`;
   return `<span class="tool-allow-name">${esc(key.slice(0, open))}</span>`

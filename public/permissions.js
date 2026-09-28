@@ -126,10 +126,12 @@
       return 'medium';
     }
     if (toolName === 'WriteFile') {
-      // Codex write-request cards. Always high: every write gets its own
-      // card and "Always allow" is never offered. A standing allow here
-      // would let a prompt-injected agent write files ungated.
-      return 'high';
+      // Codex write-request cards. High, with no "Always allow": a standing
+      // allow keyed on the tool would let a prompt-injected agent write files
+      // ungated. The one exception is a file change the server has already
+      // graded as an ordinary outside write: that card is the boundary card,
+      // graded medium, and what it can remember is a folder, never the tool.
+      return (input && input.graded === 'boundary') ? 'medium' : 'high';
     }
     if (toolName.startsWith('mcp__')) {
       // MCP reads auto-approve in the permission hook, so by the time a request
@@ -228,7 +230,21 @@
   //   { action: 'allow', reason: 'always-allowed' }  user granted a standing allow
   //   { action: 'allow', reason: 'low-risk' }        read-only auto-approve policy
   //   { action: 'card' }                             ask the human
-  function decidePermission(risk, key, alwaysAllowedSet) {
+  function decidePermission(risk, key, alwaysAllowedSet, verdict) {
+    // IN CODE MODE THE HOOK'S VERDICT DECIDES, whatever this grader would have
+    // painted. Always asks is carded ahead of every standing allow; Asks once
+    // is answered only by a standing allow under its own rule key, never by a
+    // legacy binary key such as Bash:git; Runs is allowed. With no verdict,
+    // which is every Notes-mode request, nothing below changes.
+    if (verdict && verdict.verdict) {
+      if (verdict.verdict === 'always-asks') return { action: 'card' };
+      if (verdict.verdict === 'asks-once') {
+        const ruleKey = verdictAllowKey(verdict);
+        return (ruleKey && alwaysAllowedSet && alwaysAllowedSet.has(ruleKey))
+          ? { action: 'allow', reason: 'always-allowed' } : { action: 'card' };
+      }
+      if (verdict.verdict === 'runs') return { action: 'allow', reason: 'code-mode' };
+    }
     // A high-risk (destructive) command is always carded, ahead of any standing
     // allow. The allow-key is coarse (the leading command), so a standing allow
     // granted for a benign command must never auto-approve a destructive one
@@ -240,8 +256,109 @@
     return { action: 'card' };
   }
 
-  // High-risk requests never offer a standing "Always allow".
-  function offersAlwaysAllow(risk) { return risk !== 'high'; }
+  // High-risk requests never offer a standing "Always allow". In Code mode only
+  // an Asks-once verdict offers one, remembered under its rule.
+  function offersAlwaysAllow(risk, verdict) {
+    if (verdict && verdict.verdict) return verdict.verdict === 'asks-once';
+    return risk !== 'high';
+  }
+
+  // ── The Code-mode verdict's card ─────────────────────────────────────────
+  // The rule keys an Asks-once verdict is remembered under, and the words
+  // Settings lists them in. A key here answers only its own rule.
+  const RULE_COPY = {
+    'Bash:git-push:default-branch': {
+      sentence: v => `This can be undone, but other people see it first: it pushes to ${v.branch || 'main'}, the branch this repository treats as its default.`,
+      always: v => `Always allow pushes to ${v.branch || 'main'}`,
+      label: 'Pushes to the default branch',
+    },
+    'Bash:git-push:tags': {
+      sentence: () => 'This can be undone, but a pushed tag often starts a release.',
+      always: () => 'Always allow pushing tags',
+      label: 'Pushing tags',
+    },
+    'Bash:git-push:delete-remote-ref': {
+      sentence: v => `This removes ${v.ref || 'a branch'} from ${v.remote || 'the remote'}. Your copy stays, but others lose it.`,
+      always: () => 'Always allow deleting remote branches',
+      label: 'Deleting remote branches and tags',
+    },
+    'PowerShell:execution-policy:change': {
+      sentence: () => 'This changes which scripts Windows will run for your account.',
+      always: () => 'Always allow execution policy changes',
+      label: 'Changing the PowerShell execution policy',
+    },
+  };
+  function namesOf(v) {
+    const files = Array.isArray(v.files) ? v.files : [];
+    const more = Number(v.more) || 0;
+    if (!files.length) return '';
+    if (more > 0) return `${files.join(', ')} and ${more} more`;
+    if (files.length === 1) return files[0];
+    return `${files.slice(0, -1).join(', ')} and ${files[files.length - 1]}`;
+  }
+  const REASON_COPY = {
+    'unsaved-work': v => (namesOf(v)
+      ? `This deletes files git has never saved: ${namesOf(v)} would be lost for good.`
+      : 'This deletes files git has never saved, and they would be lost for good.'),
+    'unsaved-discard': v => (namesOf(v)
+      ? `This throws away changes git has never saved: ${namesOf(v)} would be lost for good.`
+      : 'This throws away changes git has never saved, and they would be lost for good.'),
+    'git-unchecked': () => 'Rundock couldn\'t check with git what this would lose, so it can\'t tell whether it can be undone.',
+    'outside-repository': () => 'This deletes a folder that isn\'t in a git repository, so nothing can bring it back.',
+    'repository': () => 'This deletes the repository\'s history, which is what lets every other change be undone.',
+    'git-internals': () => 'This changes git\'s own files, which are what let every other change be undone.',
+    'find-from-top': () => 'Starting at the top of the repository, this can delete git\'s own files as well as yours.',
+    'unknown-targets': () => 'This deletes files whose names are only worked out when it runs, so Rundock can\'t check what they are.',
+    'unreadable-command': () => 'Rundock can\'t tell what this command will do until it runs, so it asks first.',
+    'force-push': v => `This replaces the history of ${v.remoteBranch || 'a remote branch'}. Commits that are only on the remote will be lost.`,
+    'force-push-default': v => `This rewrites ${v.branch || 'main'}, the branch everyone else builds on.`,
+    'delete-default': v => `This deletes ${v.branch || 'main'} from the remote, the branch everyone else builds on.`,
+    'remote-refs': () => 'This can delete branches and tags on the remote that this machine doesn\'t have, and nothing here can bring them back.',
+    'stash-or-reflog': () => 'This deletes git\'s only saved copy of those changes.',
+    'history-rewrite': () => 'This rewrites every commit in the repository\'s history.',
+    'worktree-force': () => 'This deletes a working tree even if it holds changes git has never saved.',
+    'elevation': () => 'This runs as an administrator, beyond anything Rundock can see or check.',
+    'fetched-code': () => 'This runs a script from the internet without showing it to anyone first.',
+    'volumes': () => 'This deletes the Docker volumes for this project, including any database data in them.',
+    'disk': () => 'This writes directly to a disk or erases one.',
+    'wsl-unregister': () => 'This deletes the Linux distribution and everything stored in it.',
+    'publish': () => 'This publishes a package version that can never be replaced.',
+    'every-process': () => 'This stops every program you have open, Rundock included.',
+  };
+  const ALWAYS_ASKS_CLOSING = 'Rundock asks about commands like this every time, even in Code mode, so there is no Always allow.';
+
+  // The standing-allow key an Asks-once verdict is remembered under.
+  function verdictAllowKey(verdict) {
+    return verdict && verdict.verdict === 'asks-once' && typeof verdict.rule === 'string' ? verdict.rule : null;
+  }
+  // The words on the card a verdict raises.
+  function verdictCardCopy(verdict) {
+    if (!verdict || !verdict.verdict || verdict.verdict === 'runs') return null;
+    if (verdict.verdict === 'asks-once') {
+      const r = RULE_COPY[verdict.rule];
+      return {
+        sentence: r ? r.sentence(verdict) : 'This can be undone, but other people see it first.',
+        closing: null, allowLabel: 'Allow',
+        alwaysLabel: r ? r.always(verdict) : 'Always allow',
+      };
+    }
+    const f = REASON_COPY[verdict.reason];
+    return {
+      sentence: f ? f(verdict) : 'This can\'t be undone.',
+      closing: ALWAYS_ASKS_CLOSING, allowLabel: 'Allow once', alwaysLabel: null,
+    };
+  }
+  // Which Allow a card draws. "Allow once" on a card that always asks (high
+  // risk, never remembered) is the outline button; the everyday Allow and the
+  // answer-file card's Allow stay the solid one.
+  function allowButtonClass(allowLabel, answerFile) {
+    return allowLabel === 'Allow once' && !answerFile ? 'btn-allow-once' : 'btn-allow';
+  }
+
+  // A stored rule key in words, for Settings; null for any other key.
+  function ruleKeyLabel(key) {
+    return RULE_COPY[key] ? RULE_COPY[key].label : null;
+  }
 
   // The copy for a crossing into the agent's own folder, table-driven so the
   // card and its tests read one source. A read never reaches this: it is
@@ -261,6 +378,9 @@
     // file the permission checks themselves are configured from. Named
     // because a card that reads like an ordinary config write gets answered
     // like one, and this is the write that decides what gets asked about.
+    instructionFile: 'This file is loaded as instructions by every later session in every workspace, including routines that run unattended. '
+      + 'An agent can ask to change it, but Rundock asks every time and can\'t remember the answer.',
+    unremembered: 'This changes a file outside your workspace and working folders, somewhere Rundock can\'t offer to remember, so it asks every time.',
     answerFile: 'This file holds your own answers about what agents may do, and the checks '
       + 'that ask you. An agent can request a change to it, but never keep the '
       + 'permission: this asks every time, and there is no option to stop being asked.',
@@ -273,8 +393,26 @@
     if (!crossing) return null;
     if (crossing.secret) return ALWAYS_ASK_COPY.secret;
     if (crossing.answerFile) return ALWAYS_ASK_COPY.answerFile;
+    if (crossing.instructionFile) return ALWAYS_ASK_COPY.instructionFile;
+    if (crossing.hiddenHome) return hiddenHomeCopy(crossing.hiddenHome, crossing.write === true);
     if (crossing.persistenceSurface) return ALWAYS_ASK_COPY.persistenceSurface;
+    if (crossing.unremembered) return ALWAYS_ASK_COPY.unremembered;
     return null;
+  }
+  // A hidden folder directly under home: ~/.ssh first, and every other one by
+  // rule. Never remembered, and the card says why and what to do instead.
+  function hiddenHomeCopy(name, write) {
+    const folder = `~/${String(name).replace(/^~\//, '')}`;
+    const act = write ? 'changes' : 'reads';
+    if (folder === '~/.ssh') {
+      return `This ${act} inside ~/.ssh, where your SSH keys are kept. `
+        + 'Rundock asks every time for this folder and can\'t offer to remember it: one "always" here would hand over your private keys along with it. '
+        + 'Connecting over SSH and pushing with git don\'t need this, and never ask. '
+        + 'If you do want agents working in this folder, name ~/.ssh yourself under Settings, Permissions, Folders agents can also change.';
+    }
+    return `This ${act} inside ${folder}, a folder where tools usually keep credentials. `
+      + 'Rundock asks every time for this folder and can\'t offer to remember it: one "always" here would hand over everything in it along with it. '
+      + `If you do want agents working in this folder, name ${folder} yourself under Settings, Permissions, Folders agents can also change.`;
   }
 
   // ── Pending permission requests for background conversations ────────────
@@ -405,6 +543,7 @@
   const agentHomeBoundaryCopy = alwaysAskCopy;
 
   return { BASH_DESCRIPTIONS, bashBin, classifyRisk, describeToolRequest, toolAllowKey, decidePermission, offersAlwaysAllow, alwaysAskCopy, answerFileCopy,
+    verdictAllowKey, verdictCardCopy, ruleKeyLabel, ALWAYS_ASKS_CLOSING, allowButtonClass,
     routePermissionRequest, queuePendingPermission, pendingPermissionsFor, removePendingPermission, clearPendingPermissions,
     permissionOwner, markPermissionEnded, permissionEnded, endedPermissionCopy, staleRequestIds, findPendingPermission };
 }));

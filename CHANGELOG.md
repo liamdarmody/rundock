@@ -4,6 +4,36 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
+## Unreleased
+
+**Name:** Fewer Cards In Code Mode
+
+Code mode now asks for permission far less during development work. Everyday commands such as git, installs, test runs, builds and reads now run without a card in your workspace and working folders, and what still asks is what can't be undone, plus a short list of things other people see first. In a replay of a real development session from 0.15.0, cards went from 38 to 9 with Claude Code, and from an estimated 37 to 7 with Codex.
+
+### Changed
+
+- **Inside your workspace and working folders, Code mode asks only about what can't be undone:** in 0.15.0, pushing a branch, rebasing, installing packages or deleting build output raised a card, most of them with no Always allow. Commands you could get back with tools you already have, such as git, a rebuild or a reinstall, now run without asking. Commands that lose something for good, such as a force push, deleting files git has never saved, `sudo` or publishing a package, ask every time, with a card saying why and an Allow once button. A few that other people see first, such as pushing to the default branch or deleting a remote branch, ask once and can be remembered, and each one you remember is listed in words under Settings, Permissions, where you can revoke it. Rundock checks the commands agents type; it does not read inside your project's own scripts.
+
+- **Working folders work the way you'd expect:** a relative path was read from the workspace rather than from where the command ran, so `ls ..` or `cat ../other/README.md` inside a repository in a working folder asked. Relative paths are now read from where the command runs, and working folders are passed to Claude Code as additional directories, so a `cd` into one carries over to the next command. In Code mode the system temp folder, package caches (npm, pip, Yarn, pnpm, Cargo) and reads of your git settings no longer ask either. `~/.ssh` and the other hidden folders in your home folder still ask every time, and the card says why.
+
+- **Codex follows the same rules:** in 0.15.0 every Codex file change that reached Rundock asked, with no Always allow, including every change in a working folder; changes in a working folder now don't ask, in either mode. A Codex agent's commands are judged by the same rules as Claude Code's in Code mode. If a Codex agent changes the workspace's own permission files, Rundock puts them back straight away and asks whether to keep the change, and if Codex asks to widen its sandbox for the rest of a turn, Rundock refuses and says so in the conversation. Codex still runs deletes inside the workspace itself, and reads anywhere, without asking; both are known gaps.
+
+- **Your global instruction files ask every time:** a change to `~/.claude/CLAUDE.md`, `rules/` or `output-styles/`, or to Codex's `~/.codex/AGENTS.md` or `rules/`, was treated like any other file outside your workspace, so an allowed folder could cover it. These files are loaded by every later session, including routines that run unattended, so a change to one now asks every time, in both modes, and can't be remembered. Reading them doesn't ask.
+
+- **Permission cards are easier to read:** Deny, Always allow and Allow once were faint in one theme or the other, and now read clearly in both. On a card that always asks, Allow once is an outline rather than the usual solid Allow, and every card button shows a focus ring when you reach it with the keyboard.
+
+- **Settings say what Code mode and the sandbox switch do:** the Code mode description now reads "Agents can edit code and run everyday development commands without asking. Commands that can't be undone still ask every time." The "Keep agents inside this workspace" switch says what turning it on or off changes. Turning it off removes the wall macOS enforces, but Rundock still asks before each change outside your workspace. If you use Code mode for projects outside your workspace, name the folder, for example `~/Projects`, under Settings, Permissions, "Folders agents can also change", or click "Always allow this folder" on a card once.
+
+### Fixed
+
+- **The setup window fits its contents:** the window that walks you through installing and signing in to Claude Code and Codex was too small for its own text, so the heading could sit out of view and the steps needed scrolling. It is now larger, fits itself to your screen, and shows every step without scrolling. Once Claude Code is installed, its install command is no longer shown.
+
+- **A card never offers your home folder, or a folder that doesn't exist:** a read of a file directly in your home folder offered to allow the whole home folder, and a relative path could offer a folder beside the workspace that isn't there. Allowing your home folder also covered `~/.ssh` and the other hidden folders in it; it no longer does. Name a hidden folder yourself if you want agents working in it.
+
+- **Agents can't grant themselves permissions:** when a working folder held other Rundock workspaces, an agent in one could change another's saved permission answers, or its agents and skills, without asking. Those now ask, and so does this workspace's own `.claude/settings.json`. Rundock also puts back any change to this workspace's own permission files that it didn't make, however it was written, and asks whether to keep it. A change you make to its Claude Code settings outside Rundock is left alone.
+
+- **Fewer phantom places on the outside-the-workspace card:** a `/` used as a separator (`tr`, `cut -d`, `awk -F`), a word printed by `echo` or `printf`, an escape sequence, or a top-level path that doesn't exist, named by a command that only reads, was listed as a place the command reached. These produced a card listing `/` with no Always allow. The card now offers the folder the command really reaches.
+
 ## 0.15.0: Build On Rundock (2026-09-26)
 
 You can now add agents, skills and extensions to your workspace from a GitHub link, and build and publish your own. A package brings new teammates and the skills they use, and an extension opens a kind of file in its own view, so a note or a CSV file can become a dashboard or a table that looks and works like the rest of Rundock. Updates keep your edits, and keeping agents inside your workspace is now a switch of its own.

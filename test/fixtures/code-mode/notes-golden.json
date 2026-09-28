@@ -1,0 +1,2945 @@
+{
+  "recordedFrom": "v0.15.0",
+  "mode": "notes",
+  "rows": [
+    {
+      "key": "G1 | Bash | git status | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "G1 | Bash | git diff | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "G1 | Bash | git log | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "G2 | Bash | git switch -c feat/new | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "G2 | Bash | git checkout -b feat/new | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "G3 | Bash | git add -A && git commit -m \"Add signup\" | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "G4 | Bash | git commit --amend | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "G5 | Bash | git push -u origin feat/x | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "deny"
+      }
+    },
+    {
+      "key": "G5 | Bash | git push | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "deny"
+      }
+    },
+    {
+      "key": "G6 | Bash | git push origin main | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "deny"
+      }
+    },
+    {
+      "key": "G6 | Bash | git push | app | on-main",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "deny"
+      }
+    },
+    {
+      "key": "G7 | Bash | git push --force-with-lease | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "deny"
+      }
+    },
+    {
+      "key": "G8 | Bash | git push --force | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "deny"
+      }
+    },
+    {
+      "key": "G8 | Bash | git push -f | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "deny"
+      }
+    },
+    {
+      "key": "G8 | Bash | git push origin +feat/x | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "deny"
+      }
+    },
+    {
+      "key": "G9 | Bash | git push --force-with-lease origin main | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "deny"
+      }
+    },
+    {
+      "key": "G10 | Bash | git push --tags | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "deny"
+      }
+    },
+    {
+      "key": "G10 | Bash | git push origin v1.2.0 | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "deny"
+      }
+    },
+    {
+      "key": "G11 | Bash | git push origin --delete feat/x | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "deny"
+      }
+    },
+    {
+      "key": "G11 | Bash | git push origin :feat/x | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "deny"
+      }
+    },
+    {
+      "key": "G12 | Bash | git push origin --delete main | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "deny"
+      }
+    },
+    {
+      "key": "G12 | Bash | git push --mirror | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "deny"
+      }
+    },
+    {
+      "key": "G12 | Bash | git push --prune | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "deny"
+      }
+    },
+    {
+      "key": "G13 | Bash | git pull | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "G13 | Bash | git pull --rebase | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "G14 | Bash | git fetch | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "G14 | Bash | git fetch --prune | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "G15 | Bash | git rebase main | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "G15 | Bash | git merge main | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "G16 | Bash | git reset --soft HEAD~1 | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "deny"
+      }
+    },
+    {
+      "key": "G16 | Bash | git reset HEAD~1 | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "deny"
+      }
+    },
+    {
+      "key": "G17 | Bash | git reset --hard origin/feat/x | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "deny"
+      }
+    },
+    {
+      "key": "G18 | Bash | git reset --hard | app | tracked-change",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "deny"
+      }
+    },
+    {
+      "key": "G19 | Bash | git checkout . | app | tracked-change",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "deny"
+      }
+    },
+    {
+      "key": "G19 | Bash | git restore . | app | tracked-change",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "G19 | Bash | git restore src/ | app | tracked-change",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "G19 | Bash | git checkout . | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "deny"
+      }
+    },
+    {
+      "key": "G19 | Bash | git restore src/ | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "G20 | Bash | git restore src/app.js | app | tracked-change",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "G20 | Bash | git checkout -- src/app.js | app | tracked-change",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "G21 | Bash | git restore --staged . | app | tracked-change",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "G22 | Bash | git clean -fd | app | untracked-file",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "deny"
+      }
+    },
+    {
+      "key": "G22 | Bash | git clean -fd | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "deny"
+      }
+    },
+    {
+      "key": "G23 | Bash | git clean -fdX | app | no-env",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "deny"
+      }
+    },
+    {
+      "key": "G23 | Bash | git clean -fdX | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "deny"
+      }
+    },
+    {
+      "key": "G24 | Bash | git stash | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "G24 | Bash | git stash pop | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "G25 | Bash | git stash drop | app | has-stash",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "G25 | Bash | git stash clear | app | has-stash",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "G26 | Bash | git branch -d feat/x | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "G26 | Bash | git branch -D feat/x | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "G27 | Bash | git tag -d v1.2.0 | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "G28 | Bash | git reflog expire --expire=now --all | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "G28 | Bash | git gc --prune=now | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "G29 | Bash | git filter-repo --path src | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "G29 | Bash | git filter-branch --tree-filter true HEAD | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "G30 | Bash | git worktree remove --force ../wt | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": true,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [
+          "<HOME>/wt"
+        ],
+        "unanswered": "deny"
+      }
+    },
+    {
+      "key": "D1 | Bash | rm notes.txt | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "deny"
+      }
+    },
+    {
+      "key": "D1 | Bash | rm -f a.log b.log | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "deny"
+      }
+    },
+    {
+      "key": "D1 | PowerShell | Remove-Item notes.txt | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "D1 | PowerShell | del notes.txt | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "D1 | Bash | cmd /c \"del notes.txt\" | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": true,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [
+          "/c"
+        ],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "D2 | Bash | rm -rf node_modules | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "deny"
+      }
+    },
+    {
+      "key": "D2 | PowerShell | Remove-Item -Recurse -Force node_modules | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "D2 | Bash | cmd /c \"rd /s /q node_modules\" | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": true,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [
+          "/c"
+        ],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "D3 | Bash | rm -rf dist build .next | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "deny"
+      }
+    },
+    {
+      "key": "D3 | PowerShell | Remove-Item -Recurse -Force dist, build | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "D4 | Bash | rm -rf src/legacy | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "deny"
+      }
+    },
+    {
+      "key": "D5 | Bash | rm -rf src/legacy | app | legacy-unsaved",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "deny"
+      }
+    },
+    {
+      "key": "D6 | Bash | rm -rf <PROJECTS>/sketch | ws | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "deny"
+      }
+    },
+    {
+      "key": "D6 | Bash | rm -rf <PROJECTS>/sketch/drafts | ws | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "deny"
+      }
+    },
+    {
+      "key": "D7 | Bash | rm -rf <PROJECTS>/app | ws | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "deny"
+      }
+    },
+    {
+      "key": "D7 | Bash | rm -rf . | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "deny"
+      }
+    },
+    {
+      "key": "D7 | Bash | rm -rf * | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "deny"
+      }
+    },
+    {
+      "key": "D7 | PowerShell | Remove-Item -Recurse -Force . | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "D8 | Bash | rm -rf .git | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "deny"
+      }
+    },
+    {
+      "key": "D8 | PowerShell | Remove-Item -Recurse -Force .git | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "D9 | Bash | rm -rf \"$OUT_DIR\" | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "deny"
+      }
+    },
+    {
+      "key": "D9 | Bash | rm -rf $(cat list) | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "deny"
+      }
+    },
+    {
+      "key": "D9 | PowerShell | Remove-Item -Recurse $dir | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "D10 | Bash | rm -rf .rundock/scratch/run-42 | ws | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "deny"
+      }
+    },
+    {
+      "key": "D11 | Bash | find src -name '*.pyc' -delete | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "deny"
+      }
+    },
+    {
+      "key": "D11 | PowerShell | Get-ChildItem src -Recurse -Filter *.pyc | Remove-Item | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "D12 | Bash | find . -name '*.orig' -delete | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "deny"
+      }
+    },
+    {
+      "key": "D12 | PowerShell | Get-ChildItem . -Recurse -Filter *.orig | Remove-Item | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "D13 | Bash | cat stale.txt | xargs rm -rf | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "deny"
+      }
+    },
+    {
+      "key": "D13 | PowerShell | Get-Content stale.txt | Remove-Item -Recurse | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "D14 | Bash | rmdir empty-dir | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "deny"
+      }
+    },
+    {
+      "key": "D14 | Bash | cmd /c \"rd empty-dir\" | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": true,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [
+          "/c"
+        ],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "D15 | Bash | mv draft.md notes/ | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "D15 | Bash | cp -r template app | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "D15 | Bash | mkdir -p src/components | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "D15 | PowerShell | Move-Item draft.md notes | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "D15 | PowerShell | Copy-Item -Recurse template app | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "D15 | PowerShell | New-Item -ItemType Directory src/components | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "D16 | Bash | sh -c 'rm -rf dist' | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "deny"
+      }
+    },
+    {
+      "key": "D16 | PowerShell | pwsh -Command \"Remove-Item -Recurse dist\" | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "D16 | PowerShell | cmd /c \"rd /s /q dist\" | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": true,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [
+          "/c"
+        ],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "D16 | Bash | cmd /c \"rd /s /q dist\" | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": true,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [
+          "/c"
+        ],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "D17 | Bash | eval \"$CLEANUP\" | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "D17 | Bash | sh -c \"$CMD\" | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "D17 | PowerShell | Invoke-Expression $cmd | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "D17 | PowerShell | iex $cmd | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "P1 | Bash | npm install | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "P1 | Bash | npm i zod | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "P2 | Bash | npm ci | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "P3 | Bash | npm install --force | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "deny"
+      }
+    },
+    {
+      "key": "P4 | Bash | pip install -r requirements.txt | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "P4 | PowerShell | py -m pip install -r requirements.txt | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "P5 | Bash | brew install jq | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "P5 | PowerShell | winget install jqlang.jq | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "P6 | Bash | npm install -g typescript | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "P7 | Bash | npm publish | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "P8 | Bash | sudo npm install -g typescript | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "deny"
+      }
+    },
+    {
+      "key": "K1 | Bash | kill 4242 | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "deny"
+      }
+    },
+    {
+      "key": "K1 | Bash | kill -9 4242 | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "deny"
+      }
+    },
+    {
+      "key": "K1 | PowerShell | Stop-Process -Id 4242 -Force | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "K1 | PowerShell | taskkill /PID 4242 /F | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": true,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [
+          "/PID",
+          "/F"
+        ],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "K2 | Bash | pkill -f vite | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "K2 | Bash | killall node | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "deny"
+      }
+    },
+    {
+      "key": "K2 | PowerShell | Stop-Process -Name node | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "K2 | PowerShell | taskkill /IM node.exe /F | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": true,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [
+          "/IM",
+          "/F"
+        ],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "K3 | Bash | lsof -ti :3000 | xargs kill -9 | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "K3 | PowerShell | Get-NetTCPConnection -LocalPort 3000 | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force } | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "K4 | Bash | kill -9 -1 | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "deny"
+      }
+    },
+    {
+      "key": "K4 | PowerShell | taskkill /F /FI \"USERNAME eq %USERNAME%\" | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": true,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [
+          "/F",
+          "/FI"
+        ],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "K5 | Bash | shutdown -r now | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "K5 | Bash | reboot | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "K5 | PowerShell | Restart-Computer | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "K5 | PowerShell | shutdown /r /t 0 | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": true,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [
+          "/r",
+          "/t"
+        ],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "C1 | Bash | chmod +x scripts/dev.sh | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "deny"
+      }
+    },
+    {
+      "key": "C2 | Bash | chmod -R 755 bin | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "deny"
+      }
+    },
+    {
+      "key": "C2 | Bash | chmod 777 . | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "deny"
+      }
+    },
+    {
+      "key": "C2 | PowerShell | icacls . /grant Users:F /T | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": true,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [
+          "/grant",
+          "/T"
+        ],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "C3 | Bash | chown -R me:staff . | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "deny"
+      }
+    },
+    {
+      "key": "C4 | Bash | sudo true | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "deny"
+      }
+    },
+    {
+      "key": "C4 | Bash | doas true | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "C4 | PowerShell | Start-Process pwsh -Verb RunAs | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "C4 | PowerShell | runas /user:Administrator cmd | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": true,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [
+          "/user:Administrator"
+        ],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "C4 | PowerShell | sudo whoami | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "deny"
+      }
+    },
+    {
+      "key": "C4 | PowerShell | gsudo whoami | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "C5 | PowerShell | Set-ExecutionPolicy RemoteSigned -Scope CurrentUser | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "N1 | Bash | curl -fsSL -o vendor/x.tgz https://example.invalid/x.tgz | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "N1 | Bash | wget https://example.invalid/x.tgz | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "N2 | Bash | curl -fsSL https://example.invalid/x.sh | sh | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "deny"
+      }
+    },
+    {
+      "key": "N2 | Bash | bash <(curl -fsSL https://example.invalid/x.sh) | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "N2 | PowerShell | irm https://example.invalid/x.ps1 | iex | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "N3 | Bash | docker compose down | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "N4 | Bash | docker compose down -v | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "N4 | Bash | docker volume rm db | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "N4 | Bash | docker system prune --volumes | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "N5 | Bash | docker rm -f web | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "N6 | Bash | ssh -T git@example.invalid | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "X1 | Bash | dd if=image.iso of=/dev/disk4 | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": true,
+        "answerFile": false,
+        "grantDir": "/dev",
+        "crossings": [
+          "/dev/disk4"
+        ],
+        "unanswered": "deny"
+      }
+    },
+    {
+      "key": "X2 | Bash | mkfs.ext4 /dev/sdb1 | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": true,
+        "answerFile": false,
+        "grantDir": "/dev",
+        "crossings": [
+          "/dev/sdb1"
+        ],
+        "unanswered": "deny"
+      }
+    },
+    {
+      "key": "X2 | Bash | diskutil eraseDisk APFS Blank disk4 | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "X2 | PowerShell | Format-Volume -DriveLetter D | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "X2 | PowerShell | format D: | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "X2 | PowerShell | Clear-Disk -Number 1 | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "X2 | PowerShell | diskpart | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "X3 | PowerShell | wsl --unregister Ubuntu | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "S1 | Bash | npm run clean | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "S1 | Bash | make clean | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "S1 | Bash | node scripts/reset.js | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "S1 | Bash | npm run build | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "S1 | Bash | npm test | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "R1 | Bash | ls .. | app | clean",
+      "risk": "low",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": true,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [
+          "<HOME>"
+        ],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "R1 | PowerShell | Get-ChildItem .. | app | clean",
+      "risk": "low",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": true,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [
+          "<HOME>"
+        ],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "R2 | Bash | cat ../other/README.md | app | clean",
+      "risk": "low",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": true,
+        "answerFile": false,
+        "grantDir": "<HOME>/other",
+        "crossings": [
+          "<HOME>/other/README.md"
+        ],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "R3 | Bash | git -C ../other status | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": true,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [
+          "<HOME>/other"
+        ],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "R4 | Bash | cd <PROJECTS>/app && rm -rf dist | ws | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "deny"
+      }
+    },
+    {
+      "key": "R5 | Bash | rm -rf dist | ws | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "deny"
+      }
+    },
+    {
+      "key": "R5 | PowerShell | Remove-Item -Recurse dist | ws | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "R6 | Bash | cat ../../elsewhere/x.txt | app | clean",
+      "risk": "low",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": true,
+        "answerFile": false,
+        "grantDir": "<ROOT>/elsewhere",
+        "crossings": [
+          "<ROOT>/elsewhere/x.txt"
+        ],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "R7 | Read | Read {\"file_path\":\"<PROJECTS>/other/README.md\"} | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": false,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "R7 | Write | Write {\"file_path\":\"<APP>/src/new/deep/file.js\",\"content\":\"// x\\n\"} | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": false,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "O1 | Bash | npm run build > /tmp/build.log 2>&1 | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": true,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [
+          "/private/tmp/build.log"
+        ],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "O2 | Bash | cat /tmp/build.log | app | clean",
+      "risk": "low",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": true,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [
+          "/private/tmp/build.log"
+        ],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "O3 | Bash | mkdir -p /tmp/app-build && cp -r dist /tmp/app-build/ | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": true,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [
+          "/private/tmp/app-build"
+        ],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "O4 | Bash | rm -rf /tmp/app-build | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": true,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [
+          "/private/tmp/app-build"
+        ],
+        "unanswered": "deny"
+      }
+    },
+    {
+      "key": "O5 | Bash | ls ~/.npm/_cacache | app | clean",
+      "risk": "low",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": true,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [
+          "<HOME>/.npm/_cacache"
+        ],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "O5 | Bash | npm install --cache ~/.npm | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": true,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [
+          "<HOME>/.npm"
+        ],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "O6 | Bash | rm -rf ~/.npm/_cacache | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": true,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [
+          "<HOME>/.npm/_cacache"
+        ],
+        "unanswered": "deny"
+      }
+    },
+    {
+      "key": "O7 | Bash | rm -rf ~/Library/Caches/pip | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": true,
+        "answerFile": false,
+        "grantDir": "<HOME>/Library/Caches/pip",
+        "crossings": [
+          "<HOME>/Library/Caches/pip"
+        ],
+        "unanswered": "deny"
+      }
+    },
+    {
+      "key": "O7 | Bash | rm -rf ~/.cargo/registry/cache | app | clean",
+      "risk": "high",
+      "offersAlwaysAllow": false,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": true,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [
+          "<HOME>/.cargo/registry/cache"
+        ],
+        "unanswered": "deny"
+      }
+    },
+    {
+      "key": "O8 | Bash | cat ~/.gitconfig | app | clean",
+      "risk": "low",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": true,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [
+          "<HOME>/.gitconfig"
+        ],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "O8 | Read | Read {\"file_path\":\"<HOME>/.gitconfig\"} | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": true,
+        "answerFile": false,
+        "grantDir": "<HOME>",
+        "crossings": [
+          "<HOME>/.gitconfig"
+        ],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "O9 | Edit | Edit {\"file_path\":\"<HOME>/.gitconfig\",\"old_string\":\"Test\",\"new_string\":\"Other\"} | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": true,
+        "answerFile": false,
+        "grantDir": "<HOME>",
+        "crossings": [
+          "<HOME>/.gitconfig"
+        ],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "O9 | Bash | echo \"[alias]\" >> ~/.gitconfig | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": true,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [
+          "<HOME>/.gitconfig"
+        ],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "O10 | Bash | cat ~/.ssh/config | app | clean",
+      "risk": "low",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": true,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [
+          "<HOME>/.ssh/config"
+        ],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "O10 | Bash | ls ~/.ssh | app | clean",
+      "risk": "low",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": true,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [
+          "<HOME>/.ssh"
+        ],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "O10 | Read | Read {\"file_path\":\"<HOME>/.ssh/config\"} | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": true,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [
+          "<HOME>/.ssh/config"
+        ],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "O11 | Bash | cat ~/.aws/credentials | app | clean",
+      "risk": "low",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": true,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [
+          "<HOME>/.aws/credentials"
+        ],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "O11 | Bash | ls ~/.kube | app | clean",
+      "risk": "low",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": true,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [
+          "<HOME>/.kube"
+        ],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "O12 | Read | Read {\"file_path\":\"<HOME>/Documents/brief.md\"} | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": true,
+        "answerFile": false,
+        "grantDir": "<HOME>/Documents",
+        "crossings": [
+          "<HOME>/Documents/brief.md"
+        ],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "O13 | Read | Read {\"file_path\":\"<HOME>/notes.txt\"} | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": true,
+        "answerFile": false,
+        "grantDir": "<HOME>",
+        "crossings": [
+          "<HOME>/notes.txt"
+        ],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "I1 | Read | Read {\"file_path\":\"<HOME>/.claude/CLAUDE.md\"} | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": false,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "I1 | Bash | cat ~/.claude/settings.json | app | clean",
+      "risk": "low",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "I2 | Write | Write {\"file_path\":\"<HOME>/.claude/CLAUDE.md\",\"content\":\"# global\\n\"} | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": false,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "I2 | Bash | echo \"x\" >> ~/.claude/CLAUDE.md | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": true,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "I3 | Write | Write {\"file_path\":\"<HOME>/.codex/AGENTS.md\",\"content\":\"# global\\n\"} | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": false,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "I4 | Edit | Edit {\"file_path\":\"<HOME>/.claude/settings.json\",\"old_string\":\"{}\",\"new_string\":\"{\\\"x\\\":1}\"} | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "deny",
+        "asked": false,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "deny"
+      }
+    },
+    {
+      "key": "I5 | Edit | Edit {\"file_path\":\"<APP>/CLAUDE.md\",\"old_string\":\"a\",\"new_string\":\"b\"} | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": false,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    },
+    {
+      "key": "I5 | Edit | Edit {\"file_path\":\"<WS>/CLAUDE.md\",\"old_string\":\"a\",\"new_string\":\"b\"} | app | clean",
+      "risk": "medium",
+      "offersAlwaysAllow": true,
+      "hook": {
+        "decision": "allow",
+        "asked": false,
+        "boundary": false,
+        "answerFile": false,
+        "grantDir": null,
+        "crossings": [],
+        "unanswered": "allow"
+      }
+    }
+  ]
+}

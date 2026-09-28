@@ -380,17 +380,21 @@ describe('classifyShellAccess (hook-side)', () => {
       // are not credentials and the credentials beside them are already
       // protected. The first version of this guard did exactly that, and the
       // test pinning the grantable surface is what caught it.
-      const home = os.homedir();
+      // A fixture home with a real hooks folder: an offer names only a folder
+      // that exists, so the machine's own home cannot stand in for it.
+      const home = fs.mkdtempSync(path.join(os.tmpdir(), 'runtime-home-'));
+      process.once('exit', () => fs.rmSync(home, { recursive: true, force: true }));
+      fs.mkdirSync(path.join(home, '.claude', 'hooks'), { recursive: true });
       assert.strictEqual(
-        classifyFileAccess('Write', { file_path: path.join(home, '.claude', 'hooks', 'pre.sh') }, ws, []).grantDir,
+        classifyFileAccess('Write', { file_path: path.join(home, '.claude', 'hooks', 'pre.sh') }, ws, [], home).grantDir,
         canonicalize(path.join(home, '.claude', 'hooks')),
         'a folder-shaped persistence surface is still offerable, scoped to its own folder');
       assert.strictEqual(
-        classifyFileAccess('Write', { file_path: path.join(home, '.claude', 'settings.json') }, ws, []).grantDir,
+        classifyFileAccess('Write', { file_path: path.join(home, '.claude', 'settings.json') }, ws, [], home).grantDir,
         null,
         'while the runtime home ROOT is still refused, so approving settings.json cannot silence hooks/');
       assert.strictEqual(
-        classifyFileAccess('Read', { file_path: path.join(home, '.claude', '.credentials.json') }, ws, []).grantDir,
+        classifyFileAccess('Read', { file_path: path.join(home, '.claude', '.credentials.json') }, ws, [], home).grantDir,
         null,
         'and the credential file is still a secret, refused a grant on any access');
     });

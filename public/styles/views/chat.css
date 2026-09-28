@@ -131,10 +131,15 @@ body.light .permission-detail { background: var(--elevated); }
    two occurrences, both worth explaining where they are read. */
 .btn-allow { background: var(--success); color: #1a1a1a; border-color: var(--success); }
 .btn-allow:hover { filter: brightness(1.1); }
-.btn-always { background: transparent; color: var(--success); border-color: var(--success); }
-.btn-always:hover { background: rgba(107,198,126,0.12); }
-.btn-deny { background: transparent; color: var(--text-2); }
+.btn-always { background: transparent; color: var(--success-text); border-color: var(--success-text); }
+/* "Allow once" on a card that always asks is an outline, not the solid fill:
+   the solid Allow says "the usual yes", and this card has no usual yes. It
+   shares Always allow's hover tint, so the tint is written once. */
+.btn-allow-once { background: transparent; color: var(--success-text); border-color: var(--success-text); }
+.btn-always:hover, .btn-allow-once:hover { background: rgba(107,198,126,0.12); }
+.btn-deny { background: transparent; color: var(--text-2-strong); border-color: var(--border-strong); }
 .btn-deny:hover { background: var(--elevated); color: var(--text-1); }
+.btn-perm:focus-visible { outline: 2px solid var(--accent-control); outline-offset: 2px; }
 .permission-resolved { font-size: var(--caption); padding: 6px 12px; border-radius: var(--radius-lg); display: flex; align-items: flex-start; gap: 6px; flex-wrap: wrap; }
 .permission-resolved-detail { color: var(--text-3); }
 .permission-resolved .permission-detail-collapse { width: 100%; margin-top: 2px; }

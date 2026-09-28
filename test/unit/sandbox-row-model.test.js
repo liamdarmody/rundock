@@ -96,12 +96,61 @@ describe('what the working folders do, in each state and mode', () => {
     assert.strictEqual(M.foldersCaption('on', 'notes'), on);
     assert.strictEqual(M.foldersCaption('on', 'code'), on);
     assert.strictEqual(M.foldersCaption('off', 'notes'), 'Agents can edit files in these folders without asking. Anywhere else, changes need your approval.');
-    assert.strictEqual(M.foldersCaption('off', 'code'), 'Agents can change files in these folders without asking. Anywhere else, Rundock asks before a file edit, and before a command it can see reaching outside.');
+    assert.strictEqual(M.foldersCaption('off', 'code'), 'Agents can change files in these folders without asking. Anywhere else, Rundock still asks before a file edit, and before a command it can see reaching outside.');
     assert.strictEqual(M.foldersCaption('plain', 'notes'), null);
   });
 
   test('Windows and Linux run no sandbox, so their folders read as off', () => {
     assert.strictEqual(M.sandboxRow(null, 'win32', null).folders, 'off');
     assert.strictEqual(M.sandboxRow(null, 'linux', null).folders, 'off');
+  });
+});
+
+describe('the switch captions say what is true of the row they are on', () => {
+  const ON = 'Keeps agents inside a wall macOS enforces: they can change files in this workspace, the folders below, and the temporary folders they need. Everything else is blocked.';
+  const OFF = 'Removes the wall macOS enforces: agents can then change or delete files outside this workspace wherever your account allows. Rundock still asks before each change there, until you add a folder below.';
+  const ON_NO_FOLDERS = 'Keeps agents inside a wall macOS enforces: they can change files in this workspace and the temporary folders they need. Everything else is blocked.';
+  const OFF_NO_FOLDERS = 'Removes the wall macOS enforces: agents can then change or delete files outside this workspace wherever your account allows. Rundock still asks before each change there.';
+
+  test('the four captions, word for word', () => {
+    assert.deepStrictEqual([M.ON_CAPTION, M.OFF_CAPTION, M.ON_CAPTION_NO_FOLDERS, M.OFF_CAPTION_NO_FOLDERS], [ON, OFF, ON_NO_FOLDERS, OFF_NO_FOLDERS]);
+  });
+
+  test('Rundock\'s own switch row names the folders, on and off', () => {
+    assert.strictEqual(M.sandboxRow(status(), 'darwin', null).captions[0], ON);
+    assert.strictEqual(M.sandboxRow(status({ on: false, blockOn: false }), 'darwin', null).captions[0], OFF);
+    assert.strictEqual(M.sandboxRow(status({ present: false, on: false, blockOn: false }), 'darwin', null).captions[0], OFF, 'no block yet: adding a folder writes Rundock\'s');
+  });
+
+  test('a locked row with Rundock\'s block in the file names the folders too', () => {
+    const org = M.sandboxRow(status({ on: true, setBy: 'managed' }), 'darwin', null);
+    assert.strictEqual(org.control, 'lock');
+    assert.strictEqual(org.captions[0], ON);
+    const elsewhere = M.sandboxRow(status({ on: true, setBy: 'elsewhere', enabledElsewhere: ['~/.claude/settings.json'] }), 'darwin', null);
+    assert.strictEqual(elsewhere.captions[0], ON);
+  });
+
+  test('a locked row without Rundock\'s block does not promise folders it cannot keep', () => {
+    for (const on of [true, false]) {
+      const own = M.sandboxRow(status({ managed: false, on, blockOn: on }), 'darwin', null);
+      assert.strictEqual(own.captions[0], on ? ON_NO_FOLDERS : OFF_NO_FOLDERS, `the person\'s own block, ${on ? 'on' : 'off'}`);
+    }
+    const elsewhere = M.sandboxRow(status({ present: false, on: true, blockOn: false, setBy: 'elsewhere', enabledElsewhere: ['~/.claude/settings.json'] }), 'darwin', null);
+    assert.strictEqual(elsewhere.captions[0], ON_NO_FOLDERS, 'turned on by another file, with no block of Rundock\'s');
+    const org = M.sandboxRow(status({ present: false, on: true, blockOn: false, setBy: 'managed' }), 'darwin', null);
+    assert.strictEqual(org.captions[0], ON_NO_FOLDERS);
+  });
+
+  test('Windows and Linux keep their own line', () => {
+    assert.deepStrictEqual(M.sandboxRow(status({ platform: 'win32' }), 'win32', null).captions, ['Not available on Windows. Your approval settings still apply.']);
+  });
+});
+
+describe('the working folders note for a sandbox block a person wrote', () => {
+  test('shown only when the block in the file is the person\'s own', () => {
+    assert.strictEqual(M.ownSandboxFoldersNote(status({ managed: false })), "Because this workspace's sandbox settings are your own, Rundock doesn't add working folders to them. Add each working folder to them yourself so agents can write there and a cd into it carries over.");
+    assert.strictEqual(M.ownSandboxFoldersNote(status()), null);
+    assert.strictEqual(M.ownSandboxFoldersNote(status({ present: false, managed: true })), null);
+    assert.strictEqual(M.ownSandboxFoldersNote(null), null);
   });
 });

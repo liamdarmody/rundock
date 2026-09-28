@@ -33,6 +33,11 @@ const fs = require('fs');
 // is named in package.json's asarUnpack for that reason, and a test binds the
 // two so a later shared module cannot be added without it.
 const { isReadOnlyShellCommand, isDestructiveShellCommand, shellSegments } = require('../public/read-only-shell.js');
+// The Code-mode verdict and the development paths live beside this file, in
+// scripts/, so they are unpacked with it (package.json asarUnpack scripts/**).
+const { codeModeVerdict } = require('./code-mode-verdict.js');
+const { lexSegments } = require('./code-mode-parse.js');
+const devPaths = require('./dev-paths.js');
 
 // One directory, several names. macOS keeps /tmp and /var as symlinks into
 // /private, Dropbox and iCloud vaults are commonly reached through a symlink
@@ -101,8 +106,8 @@ function canonicalizeCaseSimulated(resolved, foldsCase) {
 const SECRET_RELATIVE_PATHS = ['.credentials.json'];
 // Directories match their whole subtree; the file matches only at the
 // folder root, not a same-named file nested somewhere already free.
-const PERSISTENCE_SURFACE_DIRS = ['agents', 'skills', 'plugins', 'commands', 'hooks'];
-const PERSISTENCE_SURFACE_FILES = ['settings.json'];
+const PERSISTENCE_SURFACE_DIRS = ['agents', 'skills', 'plugins', 'commands', 'hooks', 'rules', 'output-styles'];
+const PERSISTENCE_SURFACE_FILES = ['settings.json', 'CLAUDE.md'];
 
 // ── The OTHER runtime's home, on the same three tiers ──────────────────
 // Rundock spawns Codex as well as Claude, and `~/.codex` is that runtime's
@@ -125,8 +130,16 @@ const CODEX_SECRET_RELATIVE_PATHS = ['auth.json'];
 // `config.toml` is Codex's `settings.json`: free to read, asks on write. The
 // databases, caches, logs and session files beside it are scratch and stay
 // free both ways, the same judgement already made for `~/.claude`.
-const CODEX_PERSISTENCE_SURFACE_DIRS = ['prompts'];
-const CODEX_PERSISTENCE_SURFACE_FILES = ['config.toml'];
+const CODEX_PERSISTENCE_SURFACE_DIRS = ['prompts', 'rules'];
+const CODEX_PERSISTENCE_SURFACE_FILES = ['config.toml', 'AGENTS.md'];
+// THE GLOBAL INSTRUCTION FILES, a subset of the surfaces above named on their
+// own because their card says something different: a write to one plants
+// instructions every later session loads, in every workspace, including
+// routines that run unattended. Reading them stays free, like every surface.
+// Protected in both modes. Each name is the runtime's own documented location
+// for user-level instructions (Claude Code: CLAUDE.md, rules/, output-styles/
+// under ~/.claude; Codex: AGENTS.md and rules/ under ~/.codex).
+const INSTRUCTION_SURFACES = { claude: ['CLAUDE.md', 'rules', 'output-styles'], codex: ['AGENTS.md', 'rules'] };
 // The read-only shell registries used to sit here, and were re-exported for
 // nobody. They are now in public/read-only-shell.js, required at the top of
 // this file, because the client risk grader answers the same question about
@@ -223,9 +236,18 @@ function agentHomeTags(resolvedPath, home = os.homedir(), foldsCase = hostFoldsC
   // product spawns two runtimes. Judged through homeFor so the tiers below are
   // read from the registry belonging to the home the path is actually in.
   const agentHome = !!homeFor(resolvedPath, home, foldsCase);
-  return agentHome
-    ? { agentHome: true, secret: isSecretPath(resolvedPath, home, foldsCase), persistenceSurface: isPersistenceSurface(resolvedPath, home, foldsCase) }
-    : { agentHome: false, secret: false, persistenceSurface: false };
+  if (!agentHome) return { agentHome: false, secret: false, persistenceSurface: false };
+  const tags = { agentHome: true, secret: isSecretPath(resolvedPath, home, foldsCase), persistenceSurface: isPersistenceSurface(resolvedPath, home, foldsCase) };
+  if (isInstructionSurface(resolvedPath, home, foldsCase)) tags.instructionFile = true;
+  return tags;
+}
+function isInstructionSurface(candidate, home = os.homedir(), foldsCase = hostFoldsCase()) {
+  if (typeof candidate !== 'string' || !candidate) return false;
+  const c = foldCase(canonicalize(candidate), foldsCase);
+  return [[agentHomeRoot(home), INSTRUCTION_SURFACES.claude], [codexHomeRoot(home), INSTRUCTION_SURFACES.codex]].some(([root, names]) => names.some((n) => {
+    const e = foldCase(canonicalize(path.join(root, n)), foldsCase);
+    return c === e || c.startsWith(e + path.sep);
+  }));
 }
 
 // MCP read/write classification. Read-style MCP tools auto-approve; writes,
@@ -404,7 +426,31 @@ function namedFolderCovers(resolvedPath, extraDirs = [], pmod = path, home = os.
   // ~/.codex as a working folder would exempt the credentials inside it, which
   // is the grant-away hole the secrets tier exists to refuse.
   if (homeFor(resolvedPath, home, foldsCase)) return false;
-  return extraDirs.some(d => isUnder(resolvedPath, canonicalize(d, pmod), pmod));
+  // NOR INTO A HIDDEN FOLDER DIRECTLY UNDER HOME, unless that hidden folder, or
+  // a folder inside it, is itself named. Naming `~` (deliberately, or before
+  // this rule from a card that offered it) must not hand over `~/.ssh`: the
+  // grant was given for the folders a person works in, and the dot folders
+  // are where tools keep keys and credentials.
+  const hidden = pmod === path ? hiddenHomeRootOf(resolvedPath, home) : null;
+  return extraDirs.some((d) => {
+    const named = canonicalize(d, pmod);
+    if (!isUnder(resolvedPath, named, pmod)) return false;
+    return !hidden || isUnder(named, hidden, pmod);
+  });
+}
+
+// The hidden folder directly under home that holds `p` (`~/.ssh`), or null.
+// The runtime homes are not this rule's business: their own tiers decide.
+function hiddenHomeRootOf(p, home = os.homedir()) {
+  if (typeof p !== 'string' || !p) return null;
+  const h = canonicalize(home);
+  const rel = path.relative(h, canonicalize(p));
+  if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return null;
+  const first = rel.split(path.sep)[0];
+  if (!first.startsWith('.')) return null;
+  const root = path.join(h, first);
+  if (runtimeHomes(home).some(r => root === r.root)) return null;
+  return root;
 }
 // `home` and `foldsCase` are defaulted seams so a test can pass a fixture
 // home instead of monkey-patching os.homedir(), and drive either filesystem
@@ -458,6 +504,12 @@ function namedFolderCovers(resolvedPath, extraDirs = [], pmod = path, home = os.
 // THE CARD ON THESE IS THE ONLY PROTECTION THEY HAVE. Do not "simplify" it.
 const RUNTIME_GUARDED_ANSWER_FILES = ['.claude/settings.local.json'];
 const RUNDOCK_ANSWER_FILES = ['.rundock/state.json', '.rundock/permissions.json'];
+// The workspace's project settings (`.claude/settings.json`) are answer files
+// too: Claude Code loads them for every agent Rundock spawns here, and they can
+// carry hooks and permission allow rules. They are matched, for this workspace
+// and every other Rundock workspace alike, by isRundockWorkspaceSettingsFile
+// below, and carded rather than refused: the runtime is only measured to refuse
+// the settings file it is launched with.
 const WORKSPACE_ANSWER_FILES = [...RUNDOCK_ANSWER_FILES, ...RUNTIME_GUARDED_ANSWER_FILES];
 function matchesAnswerFileSet(set, resolvedPath, workspaceRoot, foldsCase = hostFoldsCase(), pmod = path) {
   if (typeof resolvedPath !== 'string' || !resolvedPath) return false;
@@ -479,6 +531,66 @@ function matchesAnswerFileSet(set, resolvedPath, workspaceRoot, foldsCase = host
   ));
 }
 
+// ANOTHER WORKSPACE'S ANSWERS ARE ANSWERS TOO. A folder named as a working
+// folder can hold other Rundock workspaces (a parent of several is the obvious
+// case), and a write into one of them is a grant of permissions nobody issued,
+// used the next time that workspace runs: self-permission by proxy. The
+// `.rundock` files carry names only Rundock uses, so they are matched by name
+// wherever they sit. `.claude/settings*.json` are ordinary files in any Claude
+// project, so they are matched for the current workspace only (above).
+function isRundockAnswerFileAnywhere(resolvedPath, pmod = path) {
+  if (typeof resolvedPath !== 'string' || !resolvedPath) return false;
+  const parts = resolvedPath.split(/[\\/]+/);
+  const n = parts.length;
+  const fold = v => (pmod === path.win32 || hostFoldsCase() ? v.toLowerCase() : v);
+  return n >= 2 && fold(parts[n - 2]) === '.rundock' && RUNDOCK_ANSWER_FILES.some(f => fold(f.split('/')[1]) === fold(parts[n - 1]));
+}
+
+// A Claude settings file of a Rundock workspace: `.claude/settings.json` or
+// `.claude/settings.local.json` directly under a folder holding
+// `.rundock/state.json`. Only inside a Rundock workspace: in a code project the
+// same names are that project's own settings, and editing them is ordinary work.
+const WORKSPACE_SETTINGS_NAMES = ['settings.json', 'settings.local.json'];
+function isRundockWorkspaceSettingsFile(resolvedPath) {
+  if (typeof resolvedPath !== 'string' || !resolvedPath) return false;
+  const claudeDir = path.dirname(resolvedPath);
+  if (path.basename(claudeDir) !== '.claude' || !WORKSPACE_SETTINGS_NAMES.includes(path.basename(resolvedPath))) return false;
+  return fs.existsSync(path.join(path.dirname(claudeDir), '.rundock', 'state.json'));
+}
+// An answer file of ANY Rundock workspace: its `.rundock` files by name, and
+// its Claude settings files.
+function isAnswerFileOfAnyWorkspace(resolvedPath, pmod = path) {
+  return isRundockAnswerFileAnywhere(resolvedPath, pmod) || (pmod === path && isRundockWorkspaceSettingsFile(resolvedPath));
+}
+
+// The Rundock workspace, other than the current one, that holds `p`: the
+// nearest ancestor with a `.rundock/state.json`. Null when there is none, or
+// when it is the current workspace.
+function otherWorkspaceRootOf(p, workspaceRoot) {
+  if (typeof p !== 'string' || !p) return null;
+  const current = canonicalize(workspaceRoot);
+  let cur = path.dirname(canonicalize(p));
+  for (;;) {
+    if (fs.existsSync(path.join(cur, '.rundock', 'state.json'))) return cur === current ? null : cur;
+    const up = path.dirname(cur);
+    if (up === cur) return null;
+    cur = up;
+  }
+}
+// ANOTHER WORKSPACE'S AGENTS AND SKILLS ARE PERSISTENCE SURFACES. Rundock
+// spawns every agent with `--agent <name>` from that workspace's own
+// `.claude/agents/`, and Claude Code acts on keys in agent and skill
+// frontmatter that never reach a card (`hooks`, `permissionMode`,
+// `allowed-tools`, `mcpServers`; see UNASKED_KEYS in
+// lib/packages/import-plan.js). A write into another workspace's agents or
+// skills therefore sets up how a different team runs, with no one there asked.
+function isOtherWorkspaceAgentSurface(p, workspaceRoot) {
+  const other = otherWorkspaceRootOf(p, workspaceRoot);
+  if (!other) return false;
+  const c = canonicalize(p);
+  return ['agents', 'skills'].some(d => isUnder(c, path.join(other, '.claude', d)));
+}
+
 // The two predicates below differ ONLY in which set they match, so they share
 // the matcher: the canonicalisation and case-folding rules above were each
 // arrived at by a defect, and a second copy would not inherit them.
@@ -491,7 +603,7 @@ function isRuntimeGuardedAnswerFile(resolvedPath, workspaceRoot, foldsCase = hos
   return matchesAnswerFileSet(RUNTIME_GUARDED_ANSWER_FILES, resolvedPath, workspaceRoot, foldsCase, pmod);
 }
 
-function classifyFileAccess(toolName, toolInput, workspaceRoot, extraDirs = [], home = os.homedir(), foldsCase = hostFoldsCase(), resolvedPathFoldsCase) {
+function classifyFileAccess(toolName, toolInput, workspaceRoot, extraDirs = [], home = os.homedir(), foldsCase = hostFoldsCase(), resolvedPathFoldsCase, opts = {}) {
   const field = FILE_TOOL_PATH_FIELD[toolName];
   if (!field) return null;
   const ti = toolInput || {};
@@ -518,6 +630,16 @@ function classifyFileAccess(toolName, toolInput, workspaceRoot, extraDirs = [], 
   if (inside && writing && isRuntimeGuardedAnswerFile(resolvedPath, workspaceRoot, foldsCase)) {
     return { where: 'inside', resolvedPath, grantDir: null, answerFile: true, enforcedDeny: 'runtime-settings' };
   }
+  if (writing && !isWorkspaceAnswerFile(resolvedPath, workspaceRoot, foldsCase) && isAnswerFileOfAnyWorkspace(resolvedPath)) {
+    // Another workspace's answer file, inside a named folder or not: carded
+    // like this workspace's own, never offered as a folder to remember.
+    return { where: inside ? 'inside' : 'outside', resolvedPath, grantDir: null, answerFile: true };
+  }
+  if (writing && isOtherWorkspaceAgentSurface(resolvedPath, workspaceRoot)) {
+    // Outside THIS workspace, whatever folder names cover it: carded every
+    // time, never remembered.
+    return { where: 'outside', resolvedPath, grantDir: null, agentHome: false, secret: false, persistenceSurface: true, otherWorkspace: true, write: true };
+  }
   if (inside && writing && isWorkspaceAnswerFile(resolvedPath, workspaceRoot, foldsCase)) {
     // `where` says where the file IS, and this one is inside. It used to say
     // 'outside' because that was the only classification that both forced a
@@ -534,6 +656,11 @@ function classifyFileAccess(toolName, toolInput, workspaceRoot, extraDirs = [], 
     return { where: 'inside', resolvedPath, grantDir: null, answerFile: true };
   }
   if (inside) return { where: 'inside', resolvedPath };
+  // CODE MODE'S DEVELOPMENT PATHS: the temp folders and package caches are
+  // working folders there, and git's own settings are free to read. Notes mode
+  // is unchanged. See scripts/dev-paths.js.
+  if (opts.codeMode && devPaths.isDevPath(resolvedPath, { home, canonical: canonicalize })) return { where: 'inside', resolvedPath };
+  if (opts.codeMode && !writing && devPaths.isGitConfigFile(resolvedPath, { home: canonicalize(home) })) return { where: 'inside', resolvedPath };
   // The agent's own folder: free unless the registry names this exact
   // access as a secret (always) or a write to a persistence surface.
   const tags = agentHomeTags(resolvedPath, home, foldsCase);
@@ -557,8 +684,16 @@ function classifyFileAccess(toolName, toolInput, workspaceRoot, extraDirs = [], 
     || (tags.agentHome && runtimeHomes(home).some(h => grantDir === h.root))
     // Same rule for file tools as for commands, so the two cards cannot disagree
     // about whether a credential folder may be handed over in one click.
-    || underHiddenHomeDir(grantDir, home);
-  return { where: 'outside', resolvedPath, grantDir: noGrant ? null : grantDir, ...tags };
+    || underHiddenHomeDir(grantDir, home)
+    // NEVER THE HOME DIRECTORY, or anything above it, which the shell card
+    // already refused. Without this a read of any file directly in home offered
+    // home, and one click silenced every later card for the machine's files.
+    || isHomeOrAbove(grantDir, home)
+    // NEVER A FOLDER THAT DOES NOT EXIST, and not its nearest existing ancestor
+    // in its place either: climbing widens the grant.
+    || !fs.existsSync(grantDir);
+  const hidden = hiddenHomeRootOf(resolvedPath, home);
+  return { where: 'outside', resolvedPath, grantDir: noGrant ? null : grantDir, ...tags, ...(hidden ? { hiddenHome: path.basename(hidden) } : {}), ...(writing ? { write: true } : {}) };
 }
 
 // The shell-command half of the same boundary.
@@ -647,12 +782,69 @@ function patternArgsIn(segment) {
   return patterns;
 }
 
+// A SEPARATOR IS NOT A PATH. `tr -d '/'`, `cut -d'/'`, `awk -F/` and
+// `IFS=/` hand a command a lone `/` as a field or character separator, and it
+// was read as the filesystem root: listed on the card, and it collapsed the
+// folder the card could offer to `/`, so no "Always allow this folder" was
+// drawn. Only a bare `/` in one of these positions is dropped; a `/` anywhere
+// else (`grep -r x /`, `find / -name id_rsa`, `du -sh /`) is still a crossing.
+const DELIMITER_FLAGS = { cut: ['-d', '--delimiter'], awk: ['-F'], gawk: ['-F'], mawk: ['-F'], sort: ['-t', '--field-separator'], paste: ['-d', '--delimiters'], column: ['-s', '--separator'] };
+function delimiterArgsIn(segment) {
+  const words = String(segment).match(/'([^']*)'|"([^"]*)"|[^\s]+/g) || [];
+  const bare = w => w.replace(/^['"]|['"]$/g, '').replace(/'([^']*)'|"([^"]*)"/g, (m, a, b) => (a !== undefined ? a : b));
+  const found = [];
+  let i = 0;
+  // Assignments before the command, IFS=/ among them.
+  while (i < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i])) {
+    if (/^IFS=/.test(words[i]) && bare(words[i].slice(4)) === '/') found.push('/');
+    i++;
+  }
+  const lead = bare(words[i] || '').split('/').pop();
+  const rest = words.slice(i + 1);
+  if (lead === 'tr') {
+    for (const w of rest) if (bare(w) === '/') found.push('/');
+    return found;
+  }
+  const flags = DELIMITER_FLAGS[lead];
+  if (!flags) return found;
+  for (let k = 0; k < rest.length; k++) {
+    const w = rest[k];
+    for (const f of flags) {
+      if (w === f) { if (bare(rest[k + 1] || '') === '/') found.push('/'); }
+      else if (w.startsWith(f.startsWith('--') ? f + '=' : f) && bare(w.slice(f.length + (f.startsWith('--') ? 1 : 0))) === '/') found.push('/');
+    }
+  }
+  return found;
+}
+
+// AN ECHOED WORD IS NOT A FILE ACCESS. `echo /X` and `printf '%s' /X` print
+// text; nothing is opened. Their operands are skipped only when the output
+// goes nowhere else: no redirection in the command, and not piped on, since
+// `echo ~/.ssh/id_rsa | xargs cat` hands the path to something that reads it.
+// A substitution (`cat $(echo /X)`) belongs to the outer command and is kept.
+function echoedArgsIn(command) {
+  const out = [];
+  const segs = lexSegments(String(command), 'bash');
+  for (let i = 0; i < segs.length; i++) {
+    const text = segs[i].text;
+    const words = text.match(/'([^']*)'|"([^"]*)"|[^\s]+/g) || [];
+    const lead = (words[0] || '').replace(/^['"]|['"]$/g, '').split('/').pop();
+    if (lead !== 'echo' && lead !== 'printf') continue;
+    if (/[<>]/.test(text) || text.includes('$(') || text.includes('`')) continue;
+    if (segs[i + 1] && segs[i + 1].op === '|') continue;
+    for (const w of words.slice(1)) out.push(w.replace(/^['"]|['"]$/g, ''));
+  }
+  return out;
+}
+
 function shellPathTokens(command) {
   const out = [];
   // Every argument sitting in a pattern position, counted per segment so the
-  // same text appearing later as a real file is still seen.
+  // same text appearing later as a real file is still seen; and the same for
+  // a separator and an echoed word.
   const skip = [];
-  for (const seg of shellSegments(String(command))) skip.push(...patternArgsIn(seg));
+  for (const seg of shellSegments(String(command))) skip.push(...patternArgsIn(seg), ...delimiterArgsIn(seg));
+  skip.push(...echoedArgsIn(command));
   const re = /'([^']*)'|"([^"]*)"|[^\s;|&<>()`'"]+/g;
   let m;
   while ((m = re.exec(String(command))) !== null) {
@@ -669,7 +861,12 @@ function shellPathTokens(command) {
     // so nothing that used to be seen stops being seen; a value that is not
     // path-shaped falls out at the same filter everything else does.
     const eq = t.indexOf('=');
-    if (eq > 0 && eq < t.length - 1) out.push(t.slice(eq + 1));
+    if (eq > 0 && eq < t.length - 1) {
+      const value = t.slice(eq + 1);
+      // An IFS=/ separator is dropped here, where its value is split off.
+      const vat = /^IFS=/.test(t) ? skip.indexOf(value) : -1;
+      if (vat !== -1) skip.splice(vat, 1); else out.push(value);
+    }
   }
   return out;
 }
@@ -788,8 +985,18 @@ function flavourFor(token, workspaceRoot) {
 const CD_PREFIX = /^\s*cd\s+("[^"]*"|'[^']*'|[^\s;&|]+)\s*(?:&&|;)/;
 const CD_ANYWHERE = /(?:^|[;&|]|\s)cd\s/g;
 const CD_NOT_LITERAL = /[$`*?[\](){}<>!~]/;
-function commandBaseDir(command, workspaceRoot, pmod) {
-  const root = pmod.resolve(workspaceRoot);
+// THE BASE IS WHERE THE COMMAND RUNS. The hook input's `cwd` follows the agent
+// (Claude Code documents it: it is the new directory after a `cd`, and the
+// working directory carries over inside the project and its additional
+// directories); a Codex approval carries its own. Only when neither is known
+// is the workspace root the base. The base says where a relative path starts,
+// never what counts as inside.
+//
+// A leading literal `cd` still narrows it, and may now land in a working
+// folder as well as the workspace: `cd ~/Projects/app && rm -rf dist`, run
+// from the workspace, is judged in `app`.
+function commandBaseDir(command, workspaceRoot, pmod, cwd, extraDirs = [], home = os.homedir()) {
+  const root = cwd ? canonicalize(pmod.resolve(cwd), pmod) : pmod.resolve(workspaceRoot);
   const m = CD_PREFIX.exec(command);
   if (!m) return root;
   // A second `cd` means the base stops being true partway through the command.
@@ -798,16 +1005,29 @@ function commandBaseDir(command, workspaceRoot, pmod) {
   let target = m[1];
   const quoted = (target.startsWith('"') && target.endsWith('"')) || (target.startsWith("'") && target.endsWith("'"));
   if (quoted) target = target.slice(1, -1);
+  for (const re of HOME_PREFIX) {
+    if (re.test(target)) { target = target.replace(re, home); break; }
+  }
   if (!target || CD_NOT_LITERAL.test(target)) return root;
   const base = canonicalize(pmod.resolve(root, target), pmod);
-  // Leaving the workspace is not a base this trusts. The `cd` token is scanned
-  // like any other and reports the crossing on its own.
-  return insideWorkspaceRoot(base, workspaceRoot, pmod) ? base : root;
+  // Leaving the workspace and every working folder is not a base this trusts.
+  // The `cd` token is scanned like any other and reports the crossing on its own.
+  return (insideWorkspaceRoot(base, workspaceRoot, pmod) || namedFolderCovers(base, extraDirs, pmod, home)) ? base : root;
 }
 
-function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), foldsCase = hostFoldsCase()) {
+// `$env:TEMP\x` and `%LOCALAPPDATA%\x` in the forms each shell writes them, for
+// the development paths; `$env:USERPROFILE` and `%USERPROFILE%` are home and are
+// handled with the other home shorthands.
+const BASH_ESCAPE = /^\\(?:[abefnrtv0\\'"?]|x[0-9a-fA-F]{1,2}|[0-7]{1,3}|u[0-9a-fA-F]{4})$/;
+const WIN_SWITCH = /^\/[A-Za-z?]{1,8}(:[^\\/\s]*)?$/;
+const ENV_PREFIX = [/^\$\{?env:([A-Za-z_][A-Za-z0-9_]*)\}?(?=[\\/]|$)/i, /^%([A-Za-z_][A-Za-z0-9_]*)%(?=[\\/]|$)/];
+
+function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), foldsCase = hostFoldsCase(), opts = {}) {
   const found = [];
   const seen = new Set();
+  const codeMode = !!opts.codeMode;
+  const winWorld = opts.platform === 'win32';
+  const devOpts = { home, env: opts.env || process.env, platform: winWorld ? 'win32' : process.platform, canonical: winWorld ? (x => x) : canonicalize };
   // Computed once for the whole command, not per token: whether it may read
   // a persistence surface under the runtime's OWN home free is a property of
   // the command as a whole (see isReadOnlyShellCommand), never of one target
@@ -817,16 +1037,35 @@ function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), 
     let t = raw;
     let homed = false;
     for (const re of HOME_PREFIX) {
-      if (re.test(t)) { t = t.replace(re, os.homedir()); homed = true; break; }
+      if (re.test(t)) { t = t.replace(re, home); homed = true; break; }
+    }
+    if (!homed) {
+      for (const re of ENV_PREFIX) {
+        const m = re.exec(t);
+        const val = m && devPaths.envValue(opts.env || process.env, m[1]);
+        if (val) { t = val + t.slice(m[0].length); homed = true; break; }
+      }
     }
     if (URL_SCHEME.test(t)) continue;
     if (isExemptToken(t)) continue;
-    const pmod = flavourFor(t, workspaceRoot);
+    // A WINDOWS SWITCH IS NOT A PATH. `taskkill /PID 4242 /F`, `icacls . /grant`
+    // and `cmd /c` read as absolute POSIX paths, and in Code mode an outside
+    // write with nothing to offer asks every time. Only in Code mode (Notes
+    // mode is unchanged), only in a Windows command, and only for a short word
+    // naming nothing on this machine.
+    if (codeMode && opts.windowsSwitches && WIN_SWITCH.test(raw) && !fs.existsSync(raw)) continue;
+    // A BACKSLASH ESCAPE IS NOT A PATH. `tr '/' '\n'`, `printf '%s\t'` and
+    // `sed 's/ /\n/'` hand the command an escape sequence, and a backslash reads
+    // as a Windows separator, so `\n` was judged as a relative path and listed
+    // as a place outside the workspace. Only for the Bash tool: in PowerShell a
+    // backslash really is a separator.
+    if (opts.shellTool !== 'PowerShell' && BASH_ESCAPE.test(raw)) continue;
+    const pmod = winWorld ? path.win32 : flavourFor(t, workspaceRoot);
     // Resolved against where the command actually runs, not against the
     // workspace root regardless. Everything BELOW still judges against the
     // workspace root: the base says where a relative path starts, never what
     // counts as inside.
-    const resolved = canonicalize(pmod.resolve(commandBaseDir(command, workspaceRoot, pmod), t), pmod);
+    const resolved = canonicalize(pmod.resolve(commandBaseDir(command, workspaceRoot, pmod, opts.cwd, extraDirs, home), t), pmod);
 
     // THE ANSWER FILES ARE TESTED BEFORE THE CROSSING FILTER, not after it.
     //
@@ -841,7 +1080,7 @@ function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), 
     //
     // The second is how anyone would actually write it, and it is the shape a
     // test using an absolute path never sees.
-    if (!readOnly && isWorkspaceAnswerFile(resolved, workspaceRoot, foldsCase, pmod)) {
+    if (!readOnly && (isWorkspaceAnswerFile(resolved, workspaceRoot, foldsCase, pmod) || isAnswerFileOfAnyWorkspace(resolved, pmod))) {
       const akey = pmod === path.win32 ? resolved.toLowerCase() : resolved;
       if (!seen.has(akey)) { seen.add(akey); found.push({ path: resolved, answerFile: true }); }
       continue;
@@ -853,9 +1092,26 @@ function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), 
     // rule of their own. What must NOT fall out here is any Windows shape:
     // a drive letter and a backslash traversal both reach outside while
     // containing no leading forward slash and no `/`-delimited `..`.
-    if (!homed && !t.startsWith('/') && !WIN_DRIVE.test(t) && !WIN_UNC.test(t) && !TRAVERSAL.test(t)) continue;
+    // A bare word (`dist`, `install`, `-rf`) is never a crossing, however the
+    // base falls; a relative path with a separator is judged by where it
+    // resolves from the base, like any other.
+    if (!homed && !t.startsWith('/') && !WIN_DRIVE.test(t) && !WIN_UNC.test(t) && !TRAVERSAL.test(t) && !/[\\/]/.test(t)) continue;
     if (insideWorkspaceRoot(resolved, workspaceRoot, pmod)) continue;
+    // A TOP-LEVEL PATH THAT DOES NOT EXIST, READ BY A COMMAND THAT ONLY READS,
+    // reaches nothing: `--exclude-dir=/Build` and `git log -- /Docs` name a
+    // pattern, not a place. A command that writes keeps the crossing, however
+    // unlikely a write at the root is.
+    if (readOnly && !homed && pmod === path && /^\/[^/\\]+\/?$/.test(t) && !fs.existsSync(resolved)) continue;
+    if (!readOnly && pmod === path && isOtherWorkspaceAgentSurface(resolved, workspaceRoot)) {
+      const okey = resolved;
+      if (!seen.has(okey)) { seen.add(okey); found.push({ path: resolved, agentHome: false, secret: false, persistenceSurface: true, otherWorkspace: true, write: true }); }
+      continue;
+    }
     if (namedFolderCovers(resolved, extraDirs, pmod, home, foldsCase)) continue;
+    // Code mode's development paths, and git's own settings read by a command
+    // that only reads.
+    if (codeMode && devPaths.isDevPath(resolved, devOpts)) continue;
+    if (codeMode && readOnly && devPaths.isGitConfigFile(resolved, { ...devOpts, home: winWorld ? home : canonicalize(home) })) continue;
     // Tier three (neither secret nor a persistence surface) is free, so it
     // is not reported at all. A command cannot declare which act it
     // performs, so a persistence surface is conservatively treated as a
@@ -869,9 +1125,19 @@ function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), 
     const key = pmod === path.win32 ? resolved.toLowerCase() : resolved;
     if (seen.has(key)) continue;
     seen.add(key);
-    found.push({ path: resolved, ...tags });
+    const hidden = winWorld ? hiddenWinRootOf(resolved, home) : hiddenHomeRootOf(resolved, home);
+    found.push({ path: resolved, ...tags, ...(hidden ? { hiddenHome: path.basename(hidden.replace(/\\/g, '/')) } : {}), ...(readOnly ? {} : { write: true }) });
   }
   return found;
+}
+
+// hiddenHomeRootOf for a Windows-shaped world judged on another host.
+function hiddenWinRootOf(p, home) {
+  const rel = path.win32.relative(home, p);
+  if (!rel || rel.startsWith('..') || path.win32.isAbsolute(rel)) return null;
+  const first = rel.split('\\')[0];
+  if (!first.startsWith('.') || /^\.(claude|codex)$/i.test(first)) return null;
+  return path.win32.join(home, first);
 }
 
 // ADVISORY ONLY: what the command APPEARS to reach, for labelling a card.
@@ -1002,6 +1268,13 @@ function advisoryOutsidePaths(command, workspaceRoot, extraDirs = [], home = os.
 // a name nobody here guessed. Dot-directories directly under home are config and
 // secret stores by convention; the workspace, named working folders and ordinary
 // project directories are unaffected.
+function isHomeOrAbove(dir, home = os.homedir()) {
+  if (typeof dir !== 'string' || !dir) return false;
+  const h = canonicalize(home);
+  const d = canonicalize(dir);
+  return d === h || isUnder(h, d);
+}
+
 function underHiddenHomeDir(dir, home = os.homedir()) {
   if (typeof dir !== 'string' || !dir) return false;
   const h = canonicalize(home);
@@ -1025,7 +1298,7 @@ const NEVER_OFFERED = new Set(['/', '/Users', '/home', '/tmp', '/var', '/etc', '
   '/bin', '/sbin', '/opt', '/private', '/System', '/Library', '/Applications', '/Volumes']);
 function shellGrantDir(crossings, home = os.homedir()) {
   if (!crossings.length) return null;
-  if (crossings.some(c => c.secret || c.answerFile)) return null;
+  if (crossings.some(c => c.secret || c.answerFile || c.otherWorkspace)) return null;
   // Each crossing as the folder it implies: a directory is itself, a file is
   // the folder holding it. An unborn path is judged by its parent either way.
   const dirs = crossings.map((c) => {
@@ -1069,10 +1342,15 @@ function shellGrantDir(crossings, home = os.homedir()) {
   // file tools caught it.
   if (runtimeHomes(home).some(r => dir === r.root)) return null;
   if (underHiddenHomeDir(dir, home)) return null;
+  // NEVER A FOLDER THAT DOES NOT EXIST. A `..` measured from the wrong base
+  // once offered a phantom folder beside the workspace; with the base fixed,
+  // an offer must still name something real, and climbing to the nearest
+  // existing ancestor instead would widen the grant.
+  if (!fs.existsSync(dir)) return null;
   return dir;
 }
 
-function classifyShellAccess(toolName, toolInput, workspaceRoot, extraDirs = [], home = os.homedir(), foldsCase = hostFoldsCase()) {
+function classifyShellAccess(toolName, toolInput, workspaceRoot, extraDirs = [], home = os.homedir(), foldsCase = hostFoldsCase(), opts = {}) {
   if (!SHELL_TOOLS.has(toolName)) return null;
   const ti = toolInput || {};
   // Signal 1. No grant folder is offered: a sandbox escape is not about one
@@ -1082,7 +1360,8 @@ function classifyShellAccess(toolName, toolInput, workspaceRoot, extraDirs = [],
   }
   // Signal 2.
   if (typeof ti.command !== 'string' || !ti.command) return null;
-  const crossings = shellCrossings(ti.command, workspaceRoot, extraDirs, home, foldsCase);
+  const windowsSwitches = toolName === 'PowerShell' || /\bcmd(\.exe)?\s+\/[ck]\b/i.test(ti.command);
+  const crossings = shellCrossings(ti.command, workspaceRoot, extraDirs, home, foldsCase, { ...opts, windowsSwitches, shellTool: toolName });
   if (!crossings.length) return null;
   // `grantDir` AND `grantable` ARE DIFFERENT QUESTIONS, and conflating them is
   // why this offered nothing.
@@ -1103,7 +1382,7 @@ function classifyShellAccess(toolName, toolInput, workspaceRoot, extraDirs = [],
   return {
     where: 'outside',
     resolvedPath: crossings[0].path,
-    grantDir: shellGrantDir(crossings, home),
+    grantDir: opts.platform === 'win32' ? null : shellGrantDir(crossings, home),
     grantable: false,
     crossings,
   };
@@ -1118,7 +1397,8 @@ module.exports = {
   isWorkspaceAnswerFile, isRuntimeGuardedAnswerFile,
   WORKSPACE_ANSWER_FILES, RUNDOCK_ANSWER_FILES, RUNTIME_GUARDED_ANSWER_FILES,
   boundaryCrossingsFor,
-  REFUSED_CLAUDE_EDIT_DIRS, isReadOnlyShellCommand,
+  REFUSED_CLAUDE_EDIT_DIRS, isReadOnlyShellCommand, isRundockAnswerFileAnywhere, isRundockWorkspaceSettingsFile, isAnswerFileOfAnyWorkspace, otherWorkspaceRootOf, isOtherWorkspaceAgentSurface,
+  INSTRUCTION_SURFACES, isInstructionSurface, hiddenHomeRootOf, alwaysAsksCrossing, SHELL_TOOLS,
 };
 
 if (require.main === module) main();
@@ -1144,7 +1424,26 @@ function boundaryCrossingsFor(access) {
     path: access.resolvedPath, grantDir: access.grantDir,
     agentHome: access.agentHome, secret: access.secret,
     persistenceSurface: access.persistenceSurface, answerFile: access.answerFile,
+    ...(access.instructionFile ? { instructionFile: true } : {}),
+    ...(access.hiddenHome ? { hiddenHome: access.hiddenHome } : {}),
+    ...(access.write ? { write: true } : {}),
   }];
+}
+
+// IN CODE MODE, A CROSSING THAT CAN NEVER BE REMEMBERED IS ALWAYS ASKS: it is
+// carded every time and refused when nobody can be asked, rather than let
+// through because a local server was down. That is any access to a hidden
+// folder directly under home (~/.ssh first), a write to a global instruction
+// file or another persistence surface, and a write that no folder offer could
+// ever answer (a file directly in home, say). Ordinary outside access keeps
+// the boundary card and its old behaviour when unanswered.
+function alwaysAsksCrossing(access) {
+  if (!access || access.where !== 'outside') return false;
+  const crossings = boundaryCrossingsFor(access);
+  if (crossings.some(c => c && (c.hiddenHome || c.instructionFile || (c.persistenceSurface && c.write)))) return true;
+  const writing = crossings.some(c => c && c.write);
+  const offered = (crossings[0] && crossings[0].grantDir) || access.grantDir;
+  return writing && !offered;
 }
 
 function main() {
@@ -1279,9 +1578,12 @@ process.stdin.on('end', () => {
   // instant-allow branch below stays reachable only by file tools.
   // No refusal reaches here: both exit above, so this guard is the tool-name
   // check alone rather than restating them.
+  // Where the command runs: the hook input's cwd follows the agent.
+  const codeMode = process.env.RUNDOCK_CODE_MODE === '1';
+  const cwd = (typeof data.cwd === 'string' && data.cwd) ? data.cwd : undefined;
   const access = (typeof data.tool_name === 'string')
-    ? classifyFileAccess(data.tool_name, data.tool_input, wsRoot, extraDirs)
-      || classifyShellAccess(data.tool_name, data.tool_input, wsRoot, extraDirs)
+    ? classifyFileAccess(data.tool_name, data.tool_input, wsRoot, extraDirs, undefined, undefined, undefined, { codeMode })
+      || classifyShellAccess(data.tool_name, data.tool_input, wsRoot, extraDirs, undefined, undefined, { cwd, codeMode })
     : null;
   // THE SAME PRINCIPLE THE BRANCH ABOVE APPLIES TO ~/.claude, applied to the
   // workspace's own settings file, because the measurement is the same one.
@@ -1325,37 +1627,26 @@ process.stdin.on('end', () => {
     process.exit(0);
   }
 
-  // Code mode: auto-approve commands (no permission card). Out-of-workspace
-  // file access still cards above/below regardless of mode, and so does a write
-  // to the workspace's own answer files: that file decides what gets asked
-  // about, so an agent that could rewrite it unprompted could grant itself
-  // everything for this session and every later one. Code mode says the user
+  // CODE MODE: ordinary work runs with no card. Out-of-workspace access still
+  // cards (classified above, before this branch, on purpose), and so does a
+  // write to the workspace's own answer files: Code mode says the person
   // trusts agents with their code, not that they have stopped deciding what
   // agents may do.
   //
-  // AND IT DOES NOT COVER A DESTRUCTIVE COMMAND. This branch approved anything
-  // inside the boundary, so `rm -rf` inside the workspace, or inside any named
-  // working folder, ran with no card drawn and no decision recorded. Meanwhile
-  // the card grader in public/permissions.js graded that exact text high risk,
-  // ready to paint a card this branch had already decided not to raise: the
-  // product looked careful about a class of command it was in fact waving
-  // through.
-  //
-  // The line Code mode draws is trust with your CODE, and a repository is
-  // recoverable in a way a deleted folder outside git is not. Asking before an
-  // irreversible act is not the same as asking before every act, and it is the
-  // one question a person would want back if it were taken away.
-  //
-  // Measured through the shared definition, so the grader and the decider agree
-  // about the same text rather than each keeping a list.
-  const destructive = (function () {
-    const ti = (data && data.tool_input) || {};
-    return SHELL_TOOLS.has(data && data.tool_name)
-      && typeof ti.command === 'string' && isDestructiveShellCommand(ti.command);
-  }());
-  if (process.env.RUNDOCK_CODE_MODE === '1'
-      && !destructive
-      && !(access && (access.where === 'outside' || access.answerFile))) {
+  // For a shell command the class is the VERDICT (scripts/code-mode-verdict.js):
+  // it runs when what it changes can be got back with tools already to hand,
+  // asks every time when it cannot, and asks once for the few acts other
+  // people see first. It is computed for every Code-mode shell request, a
+  // boundary card included, so the card's class is always the verdict. It is
+  // never computed outside Code mode, where the grader is unchanged.
+  const shellCommand = SHELL_TOOLS.has(data && data.tool_name)
+    && typeof ((data.tool_input || {}).command) === 'string' ? data.tool_input.command : null;
+  const verdict = (codeMode && shellCommand !== null)
+    ? codeModeVerdict({ toolName: data.tool_name, command: shellCommand, cwd, workspaceRoot: wsRoot, extraDirs })
+    : null;
+  if (codeMode
+      && !(access && (access.where === 'outside' || access.answerFile))
+      && (!verdict || verdict.verdict === 'runs')) {
     process.stdout.write(JSON.stringify({
       hookSpecificOutput: {
         hookEventName: 'PreToolUse',
@@ -1365,6 +1656,8 @@ process.stdin.on('end', () => {
     }));
     process.exit(0);
   }
+  // Notes mode keeps its own definition of an irreversible command, unchanged.
+  const destructive = !codeMode && shellCommand !== null && isDestructiveShellCommand(shellCommand);
 
   // MCP tools are routed through the hook (not pre-approved via --allowed-tools).
   // Read-style MCP calls auto-approve here, server-side, so they work even when no
@@ -1403,6 +1696,10 @@ process.stdin.on('end', () => {
     session_id: data.session_id,
     conversation_id: convoId,
     ...(advisory.length ? { advisory_outside_paths: advisory } : {}),
+    // THE VERDICT, under its own name, Code mode only. The server relays it by
+    // name and the browser draws the card from it; without it the browser
+    // grades as it always has, which is every Notes-mode request.
+    ...(verdict ? { code_mode_verdict: verdict } : {}),
     // An answer-file write asks without claiming a crossing: it carries its own
     // reason, and the client keys its heading off this rather than off boundary.
     ...(access && access.answerFile && access.where !== 'outside'
@@ -1479,28 +1776,33 @@ process.stdin.on('end', () => {
   //
   // A denial is safe to repeat: nothing is lost but the attempt, and the agent
   // is told plainly why.
-  // AND A DESTRUCTIVE COMMAND, for the same reason and by the same test.
+  // AND ANYTHING WORTH ASKING ABOUT IN CODE MODE, for the same reason.
   //
-  // Code mode switches the OS sandbox off, so for `rm -rf` inside the boundary
-  // the card is the only thing standing between the command and the disk, just
-  // as it is for the answer files. Having decided this act is worth asking
-  // about, proceeding with it because nobody could be asked is the one outcome
-  // that cannot be taken back. Ordinary access keeps failing open: it still has
-  // the sandbox and the runtime's guards beneath it, and a person whose work
-  // stops because a local web server died has been failed by a safety feature
-  // that protected nothing.
-  const failClosed = !!(access && access.answerFile) || destructive;
+  // An irreversible command (Always asks), a remembered-once act nobody has
+  // remembered yet (Asks once), and a crossing that can never be remembered
+  // (see alwaysAsksCrossing) have been judged worth a person's decision. When
+  // the sandbox switch is off there is nothing under the command but the card,
+  // and proceeding because nobody could be asked is the one outcome that
+  // cannot be taken back. Notes mode keeps its destructive-command rule.
+  // Ordinary access keeps failing open: a person whose work stops because a
+  // local web server died has been failed by a safety feature that protected
+  // nothing.
+  const asksOnce = !!(verdict && verdict.verdict === 'asks-once');
+  const alwaysAsks = !!(verdict && verdict.verdict === 'always-asks');
+  const crossingAlwaysAsks = codeMode && alwaysAsksCrossing(access);
+  const answerFile = !!(access && (access.answerFile || boundaryCrossingsFor(access).some(c => c && c.answerFile)));
+  const failClosed = answerFile || destructive || asksOnce || alwaysAsks || crossingAlwaysAsks;
   function unanswered(reason) {
+    let why;
+    if (answerFile) why = 'This file records your own permission answers, and it is never changed without asking, so it was refused rather than approved on your behalf.';
+    else if (alwaysAsks || destructive) why = 'This command cannot be undone, and it is never run without asking, so it was refused rather than approved on your behalf.';
+    else if (asksOnce) why = 'This command was held for your approval and Rundock could not ask, so it was refused rather than approved on your behalf.';
+    else if (crossingAlwaysAsks) why = 'This reaches a place Rundock asks about every time, and it is never done without asking, so it was refused rather than approved on your behalf.';
     process.stdout.write(JSON.stringify({
       hookSpecificOutput: {
         hookEventName: 'PreToolUse',
         permissionDecision: failClosed ? 'deny' : 'allow',
-        permissionDecisionReason: failClosed
-          ? `${reason} ${access && access.answerFile
-              ? 'This file records your own permission answers, and it is never changed without asking,'
-              : 'This command cannot be undone, and it is never run without asking,'} `
-            + 'so it was refused rather than approved on your behalf.'
-          : reason,
+        permissionDecisionReason: failClosed ? `${reason} ${why}` : reason,
       }
     }));
     process.exit(0);

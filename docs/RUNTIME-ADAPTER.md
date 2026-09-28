@@ -52,10 +52,54 @@ BEFORE it happens, routed through the server's permission-card bridge
 sandbox holds, workspace-scoped actions may run silently and only
 escalations surface. The human decides; the runtime never self-approves.
 
-- Claude Code: the PreToolUse permission hook (all platforms).
+- Claude Code: the PreToolUse permission hook (all platforms). Named
+  working folders are passed to it as `permissions.additionalDirectories` in
+  the settings file it is launched with, never as `--add-dir` (which would
+  also load skills, commands and subagents from them). Measured on Claude
+  Code 2.1.283 on 2026-09-28: a `cd` into a working folder listed only there
+  is still in effect on the next Bash call, with no reset, so the hook's
+  input `cwd` follows the agent into it. A working folder can hold other
+  Rundock workspaces (a parent of several is common), so another
+  workspace's `.rundock/permissions.json` and `.rundock/state.json` are
+  answer files wherever they sit, and its `.claude/agents/` and
+  `.claude/skills/` always ask: Rundock spawns agents with `--agent`, and
+  Claude Code acts on agent and skill frontmatter (`hooks`,
+  `permissionMode`, `allowed-tools`, `mcpServers`) without a card. Another
+  workspace's `CLAUDE.md`, `AGENTS.md` and `.claude/rules/` are ordinary
+  instruction files: they carry no such keys. The current workspace's
+  `.claude/settings.json` is an answer file too, since it can carry hooks
+  and permission rules. The hook reads the command a tool call carries, not
+  what a script does once it runs, so a write made inside `node -e` or a
+  script never meets it; the workspace's own permission files are therefore
+  also watched during every Claude turn, direct chats, delegates and
+  routines alike (`lib/runtime/claude-turn-guard.js`): a change Rundock did
+  not make is put back at once and offered on the answer-file card. The
+  comparison is against a baseline kept for as long as Rundock runs, so a
+  change made while no turn is running (a job an agent left behind, or an
+  edit by hand) is put back, and asked about, when the next turn starts.
 - Codex: OS sandbox (Seatbelt/Landlock, or the Windows sandbox when
   configured) + protocol approval requests for escalations; on Windows
-  without the sandbox, everything escalates.
+  without the sandbox, everything escalates. Escalations are graded in
+  process (`lib/runtime/codex-approval.js`) by the rules Claude Code agents
+  meet: in Code mode a command the verdict says runs is answered `accept`
+  with no card (never `acceptForSession`), and in both modes a file change
+  inside the workspace or a working folder is accepted with no card. An
+  escalation that touches the workspace's own permission files is always
+  the answer-file card, and because such a write inside the workspace
+  never escalates at all (measured, and no thread option stops it), those
+  files are watched during every Codex turn, against the same baseline: a
+  change Rundock did not make is put back at once and offered on the
+  answer-file card (`lib/workspace/answer-file-guard.js`). A request to widen Codex's own
+  permission profile (`item/permissions/requestApproval`) is always
+  refused at once with an empty grant for the turn, and the conversation is
+  told. Measured against codex-cli 0.156.1: under `on-request` Codex never
+  sends it (it asks for an ordinary command approval instead), and the
+  granular approval policy that would enable it is rejected unless the
+  client opts into the experimental API, which Rundock never does. Working folders are deliberately not writable
+  roots, so writes there keep escalating and keep being graded. Two gaps
+  remain and are stated plainly: a delete inside the workspace itself runs
+  inside Codex's sandbox without escalating, and reads anywhere never
+  escalate, so a read of `~/.ssh` under Codex raises no card.
 
 ### 4. Status detection
 

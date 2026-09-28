@@ -149,9 +149,14 @@ describe('an approved folder is in effect for the agent already running', () => 
   // and was measuring the mode, not the folder list.
   const WENT_TO_A_CARD = (out) => !/Auto-approved: workspace is in Code mode/.test(out);
 
-  test('the next command after the approval is not asked about again', () => {
+  // The target sits outside every temp folder where one is available: in Code
+  // mode the temp folders are development paths, so a target there reaches
+  // nothing outside and the "before" half would prove nothing.
+  const outside = require('../helpers/code-mode-fixture.js').outsideTempRoot();
+  after(() => { if (outside.dir) fs.rmSync(outside.dir, { recursive: true, force: true }); });
+  test('the next command after the approval is not asked about again', { skip: outside.skip || false }, () => {
     const ws = freshWorkspace();
-    const target = fs.mkdtempSync(path.join(os.tmpdir(), 'granted-live-'));
+    const target = fs.mkdtempSync(path.join(outside.dir, 'granted-live-'));
     made.push(target);
     const bornWith = [];
 

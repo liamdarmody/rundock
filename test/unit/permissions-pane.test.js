@@ -46,7 +46,7 @@ describe('Rundock\'s own block on macOS', () => {
     assert.strictEqual(sw.getAttribute('aria-label'), 'Keep agents inside this workspace');
     assert.strictEqual(sw.checked, true);
     assert.strictEqual(row().querySelector('#sandbox-state').textContent, 'On');
-    assert.match(row().textContent, /Changes elsewhere are blocked\./);
+    assert.match(row().textContent, /Keeps agents inside a wall macOS enforces: they can change files in this workspace, the folders below, and the temporary folders they need\. Everything else is blocked\./);
     assert.match(row().textContent, /Uses macOS's built-in sandbox\./);
   });
 
@@ -55,7 +55,7 @@ describe('Rundock\'s own block on macOS', () => {
     click('#sandbox-switch');
     assert.deepStrictEqual(sent, [], 'the click alone sends nothing');
     assert.strictEqual(row().querySelector('#sandbox-switch').checked, true, 'and the switch has not moved');
-    assert.match(row().textContent, /Turn off\? Agents will be able to change or delete files outside this workspace wherever your account allows\. Your approval settings still apply\./);
+    assert.match(row().textContent, /Turn off\? Agents will be able to change or delete files outside this workspace wherever your account allows\. Rundock will still ask before each change there, unless a folder is added below\./);
     assert.strictEqual(doc.activeElement.id, 'sandbox-keep-on', 'focus lands on the safe answer');
     click('#sandbox-keep-on');
     assert.deepStrictEqual(sent, [], 'Keep it on sends nothing');
@@ -79,7 +79,7 @@ describe('Rundock\'s own block on macOS', () => {
     assert.deepStrictEqual(sent, [{ type: 'set_workspace_sandbox', on: false }]);
     w.sandboxStatusArrived(status({ on: false, blockOn: false }));
     assert.strictEqual(row().querySelector('#sandbox-state').textContent, 'Off');
-    assert.match(row().textContent, /Your approval settings still apply\./);
+    assert.match(row().textContent, /Removes the wall macOS enforces: agents can then change or delete files outside this workspace wherever your account allows\. Rundock still asks before each change there, until you add a folder below\./);
   });
 
   test('turning on is immediate', () => {
@@ -195,7 +195,7 @@ describe('the folders agents can also change', () => {
   test('with it off the list is in force, never muted, says so per mode, and is still added to and removed from', () => {
     for (const [mode, sentence] of [
       ['notes', 'Agents can edit files in these folders without asking. Anywhere else, changes need your approval.'],
-      ['code', 'Agents can change files in these folders without asking. Anywhere else, Rundock asks before a file edit, and before a command it can see reaching outside.'],
+      ['code', 'Agents can change files in these folders without asking. Anywhere else, Rundock still asks before a file edit, and before a command it can see reaching outside.'],
     ]) {
       const p = pane({ st: null });
       p.w.workspaceMode = mode;
@@ -214,6 +214,17 @@ describe('the folders agents can also change', () => {
   test('a block a person wrote says nothing about what the folders do, because Rundock cannot', () => {
     const { doc } = pane({ st: status({ managed: false }) });
     assert.strictEqual(doc.querySelector('.wf-section-sub'), null);
+  });
+
+  test('a block a person wrote: the folder list says Rundock does not add the folders to it', () => {
+    const { doc } = pane({ st: status({ managed: false }) });
+    const note = doc.querySelector('#working-folders-block .wf-own-sandbox');
+    assert.ok(note, 'the note sits in the working folders section');
+    assert.strictEqual(note.textContent, "Because this workspace's sandbox settings are your own, Rundock doesn't add working folders to them. Add each working folder to them yourself so agents can write there and a cd into it carries over.");
+    for (const st of [status(), status({ on: false, blockOn: false }), status({ setBy: 'managed', blockOn: false })]) {
+      const p = pane({ st });
+      assert.strictEqual(p.doc.querySelector('.wf-own-sandbox'), null, 'not where the block is Rundock\'s, or set elsewhere');
+    }
   });
 
   test('a workspace with Codex agents too gets a Codex row beneath the switch', () => {

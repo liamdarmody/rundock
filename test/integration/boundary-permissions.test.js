@@ -161,7 +161,9 @@ describe('workspace file-access boundary', () => {
     // and the card leads with the first. A single reported target was how a
     // second one used to ride along unseen.
     const CODE = { RUNDOCK_CODE_MODE: '1' };
-    const first = path.join(os.tmpdir(), 'boundary-two', 'export.md');
+    // Both in home: in Code mode the temp folders are development paths, so a
+    // target there is no longer a crossing at all.
+    const first = path.join(os.homedir(), 'boundary-two', 'export.md');
     const second = path.join(os.homedir(), '.ssh-not-really', 'key');
 
     const since = client.messages.length;

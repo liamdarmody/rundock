@@ -99,6 +99,34 @@ const DESKTOP_PROFILE = { src: path.join(ROOT, 'electron', 'main.js'), suite: 't
 // reports and leaves on disk.
 const DESKTOP_PROFILE_RUN = { src: path.join(ROOT, 'electron', 'main.js'), suite: 'test/electron/user-data-entrypoint.cjs' };
 
+// ===== CODE MODE KEEPS ITS PROMISE FOR DEVELOPMENT WORK =====
+// The verdict, the boundary corrections, the development paths, the card and
+// Codex grading. Each row names the rule it breaks; together they prove both
+// sides of the line are load-bearing.
+const VERDICT = { src: path.join(ROOT, 'scripts', 'code-mode-verdict.js'), suite: 'test/unit/code-mode-verdict.test.js' };
+const VERDICT_HOOK = { src: path.join(ROOT, 'scripts', 'code-mode-verdict.js'), suite: 'test/unit/code-mode-hook.test.js' };
+const CM_HOOK = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/code-mode-hook.test.js' };
+const CM_BOUNDARY = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/code-mode-boundary.test.js' };
+const CM_DEV = { src: path.join(ROOT, 'scripts', 'dev-paths.js'), suite: 'test/unit/code-mode-hook.test.js' };
+const CM_CLIENT = { src: path.join(ROOT, 'public', 'permissions.js'), suite: 'test/unit/code-mode-card.test.js' };
+const CM_CODEX = { src: path.join(ROOT, 'lib', 'runtime', 'codex-approval.js'), suite: 'test/unit/codex-escalation-grading.test.js' };
+const CM_GLUE = { src: path.join(ROOT, 'lib', 'runtime', 'codex-glue.js'), suite: 'test/unit/codex-escalation-grading.test.js' };
+const CM_CODEX_BOUNDARY = { src: path.join(ROOT, 'lib', 'runtime', 'codex-approval.js'), suite: 'test/unit/code-mode-boundary.test.js' };
+const CARD_CSS = { src: path.join(ROOT, 'public', 'styles', 'views', 'chat.css'), suite: 'test/unit/permission-card-contrast.test.js' };
+const CARD_TOKENS = { src: path.join(ROOT, 'public', 'styles', 'tokens.css'), suite: 'test/unit/permission-card-contrast.test.js' };
+const CM_APPSERVER = { src: path.join(ROOT, 'codex-appserver.js'), suite: 'test/unit/codex-escalation-grading.test.js' };
+const CM_ANSWER_GUARD = { src: path.join(ROOT, 'lib', 'workspace', 'answer-file-guard.js'), suite: 'test/unit/codex-answer-file-guard.test.js' };
+const CM_ANSWER_GUARD_GLUE = { src: path.join(ROOT, 'lib', 'runtime', 'codex-glue.js'), suite: 'test/unit/codex-answer-file-guard.test.js' };
+// A word only known when the line runs, through each route that grades it.
+const VERDICT_CODEX = { src: path.join(ROOT, 'scripts', 'code-mode-verdict.js'), suite: 'test/unit/codex-escalation-grading.test.js' };
+// The answer-file guard around Claude turns, and the spawn point that starts it.
+const CLAUDE_TURN_GUARD = { src: path.join(ROOT, 'lib', 'runtime', 'claude-turn-guard.js'), suite: 'test/unit/claude-answer-file-guard.test.js' };
+const CLAUDE_SPAWN = { src: path.join(ROOT, 'lib', 'runtime', 'claude.js'), suite: 'test/unit/claude-answer-file-guard.test.js' };
+const DEV_HOME = { src: path.join(ROOT, 'scripts', 'dev-paths.js'), suite: 'test/unit/code-mode-home-in-temp.test.js' };
+const SCAFFOLD_CM = { src: path.join(ROOT, 'lib', 'workspace', 'scaffold.js'), suite: 'test/unit/code-mode-boundary.test.js' };
+const CM_PARSE = { src: path.join(ROOT, 'scripts', 'code-mode-parse.js'), suite: 'test/unit/code-mode-verdict.test.js' };
+const CM_FIXTURE = { src: path.join(ROOT, 'test', 'helpers', 'code-mode-fixture.js'), suite: 'test/unit/code-mode-fixture-root.test.js' };
+
 const MUTATIONS = [
   // ===== ONE DIRECTORY UNDER TWO NAMES IS ONE IDENTITY =====
   // Compare unresolved again and every symlink, alias and case spelling of
@@ -178,8 +206,8 @@ const MUTATIONS = [
   // and the storm this card exists to end would carry on with the setting
   // apparently configured.
   [HOOK, 'a named folder is canonicalised too, or naming a symlinked folder covers nothing',
-    '  return extraDirs.some(d => isUnder(resolvedPath, canonicalize(d, pmod), pmod));',
-    '  return extraDirs.some(d => isUnder(resolvedPath, pmod.resolve(d), pmod));'],
+    "    const named = canonicalize(d, pmod);\n    if (!isUnder(resolvedPath, named, pmod)) return false;",
+    "    const named = pmod.resolve(d);\n    if (!isUnder(resolvedPath, named, pmod)) return false;"],
   // THE LOAD-BEARING ROW OF THIS CARD. Remove the runtime-home stop and a
   // single named ancestor, `~` above all, makes `.credentials.json` compare as
   // inside and be allowed outright: not carded, not graded, the secrets tier
@@ -192,11 +220,11 @@ const MUTATIONS = [
   // part of the comparison. Both are the classic way this check goes wrong and
   // neither was proven to turn anything red.
   [HOOK, 'a named folder covers only what it names, never an unnamed sibling',
-    '  return extraDirs.some(d => isUnder(resolvedPath, canonicalize(d, pmod), pmod));',
-    '  return true;'],
+    "    if (!isUnder(resolvedPath, named, pmod)) return false;",
+    "    if (false) return false;"],
   [HOOK, 'the separator is part of the comparison, or a lookalike sibling reads as inside',
-    '  return extraDirs.some(d => isUnder(resolvedPath, canonicalize(d, pmod), pmod));',
-    '  return extraDirs.some(d => resolvedPath.startsWith(canonicalize(d, pmod)));'],
+    "    if (!isUnder(resolvedPath, named, pmod)) return false;",
+    "    if (!resolvedPath.startsWith(named)) return false;"],
   // The stop compares BOTH SIDES resolved. Drop the canonicalisation of the home
   // root and a runtime home whose .claude is a link elsewhere stops being
   // recognised as the runtime home at all, so a named ancestor of its real
@@ -329,8 +357,8 @@ const MUTATIONS = [
   // Drop the restore and a failed import leaves the folders added and the
   // person's block in place, or the block replaced and no folders.
   [SANDBOX_IMPORT, 'a failed import restores both files',
-    '    fs.writeFileSync(settingsFile(dir), JSON.stringify(settings, null, 2));\n  } catch (e) {\n    restore(snaps);\n    throw e;',
-    '    fs.writeFileSync(settingsFile(dir), JSON.stringify(settings, null, 2));\n  } catch (e) {\n    throw e;'],
+    "    noteOwnWrite(settingsFile(dir), body);\n  } catch (e) {\n    restore(snaps);\n    throw e;",
+    "    noteOwnWrite(settingsFile(dir), body);\n  } catch (e) {\n    throw e;"],
   // Drop the folder write and the folders the review promised are lost.
   [SANDBOX_IMPORT, 'the folders the review listed become working folders',
     '    writeWorkingFolders([...readWorkingFolders(), ...review.folders]);\n',
@@ -411,8 +439,8 @@ const MUTATIONS = [
     "  if (event.key !== 'Escape') return;\n  event.preventDefault();\n  if (panel === 'confirm') return;"],
   // A block a person wrote is read-only: nothing switch-shaped.
   [SANDBOX_ROW, 'a hand-authored block renders as a read-only status, not a switch',
-    "      return row(state, 'lock', {\n        captions,\n        ownership: [{ text: 'Set up outside Rundock, in ' }",
-    "      return row(state, 'switch', {\n        captions,\n        ownership: [{ text: 'Set up outside Rundock, in ' }"],
+    "      return row(state, 'lock', {\n        captions: lockedCaptions,\n        ownership: [{ text: 'Set up outside Rundock, in ' }",
+    "      return row(state, 'switch', {\n        captions: lockedCaptions,\n        ownership: [{ text: 'Set up outside Rundock, in ' }"],
   // Windows has no sandbox to switch.
   [SANDBOX_ROW, 'Windows shows Unavailable with nothing to press',
     "  if (host === 'win32') return row('unavailable', 'none',",
@@ -428,8 +456,8 @@ const MUTATIONS = [
     "      return false\n"],
   // Another file turning it on locks the row: Rundock's switch cannot turn it off.
   [SANDBOX_ROW, 'a sandbox another file turns on is read-only, not a switch',
-    "      return row(state, 'lock', { captions, ownership, folders });",
-    "      return row(state, 'switch', { captions, ownership, folders });"],
+    "      return row(state, 'lock', { captions: lockedCaptions, ownership, folders });",
+    "      return row(state, 'switch', { captions: lockedCaptions, ownership, folders });"],
   // A workspace using both runtimes shows both rows.
   [SANDBOX_ROW, 'a Codex row joins the Claude Code row when both runtimes are in use',
     "    if (hasCodex) rows.push(",
@@ -442,8 +470,8 @@ const MUTATIONS = [
     '  if (tags.agentHome && !tags.secret) {'],
   // Both tags must come from the registry, not a hardcoded literal.
   [HOOK, 'a crossing\'s secret and persistence-surface tags come from the registry, not a hardcoded false',
-    '    ? { agentHome: true, secret: isSecretPath(resolvedPath, home, foldsCase), persistenceSurface: isPersistenceSurface(resolvedPath, home, foldsCase) }',
-    '    ? { agentHome: true, secret: false, persistenceSurface: false }'],
+    "  const tags = { agentHome: true, secret: isSecretPath(resolvedPath, home, foldsCase), persistenceSurface: isPersistenceSurface(resolvedPath, home, foldsCase) };",
+    "  const tags = { agentHome: true, secret: false, persistenceSurface: false };"],
   // Drop tier three's exemption and a shell command merely touching scratch is reported as a crossing.
   [HOOK, 'a shell crossing into tier three (neither secret nor a persistence surface) is not reported at all',
     '    if (tags.agentHome && !tags.secret && (!tags.persistenceSurface || readOnly)) continue;',
@@ -557,8 +585,8 @@ const MUTATIONS = [
   // the registry while the boundary passage still cites it must be caught,
   // not just the reverse.
   [HOOK, 'every persistence-surface directory the registry declares is bound to the architecture doc',
-    'const PERSISTENCE_SURFACE_DIRS = [\'agents\', \'skills\', \'plugins\', \'commands\', \'hooks\'];',
-    'const PERSISTENCE_SURFACE_DIRS = [\'agents\', \'skills\', \'commands\', \'hooks\'];'],
+    "const PERSISTENCE_SURFACE_DIRS = ['agents', 'skills', 'plugins', 'commands', 'hooks', 'rules', 'output-styles'];",
+    "const PERSISTENCE_SURFACE_DIRS = ['agents', 'skills', 'commands', 'hooks', 'rules', 'output-styles'];"],
   // settings.json is the one persistence-surface FILE, so the folder beside
   // its card is the runtime home root itself: drop the exclusion and
   // approving that card's "Always allow this folder" would silence every
@@ -570,8 +598,8 @@ const MUTATIONS = [
   // rather than by the one beside it. Breaking it would put the one-click
   // blanket grant back on ~/.ssh and its kin, which is the whole point of it.
   [HOOK_CLASSIFIER, 'a hidden folder under home is never offered as a standing grant, on either card',
-    '    || underHiddenHomeDir(grantDir, home);',
-    '    || false;'],
+    "    || underHiddenHomeDir(grantDir, home)\n    // NEVER THE HOME DIRECTORY",
+    "    || false\n    // NEVER THE HOME DIRECTORY"],
   [HOOK_CLASSIFIER, 'and the shell card refuses it too, so the two cards cannot disagree',
     '  if (underHiddenHomeDir(dir, home)) return null;',
     '  if (false) return null;'],
@@ -580,12 +608,8 @@ const MUTATIONS = [
   // payload's own shape could be asserted rather than the classifier's return.
   // The guard follows the code: drop the tags and the request carries none.
   [HOOK_INTEGRATION, 'a file crossing\'s tags reach the request the hook actually emits',
-    '    path: access.resolvedPath, grantDir: access.grantDir,\n'
-    + '    agentHome: access.agentHome, secret: access.secret,\n'
-    + '    persistenceSurface: access.persistenceSurface, answerFile: access.answerFile,\n'
-    + '  }];',
-    '    path: access.resolvedPath, grantDir: access.grantDir,\n'
-    + '  }];'],
+    "    path: access.resolvedPath, grantDir: access.grantDir,\n    agentHome: access.agentHome, secret: access.secret,\n    persistenceSurface: access.persistenceSurface, answerFile: access.answerFile,\n",
+    "    path: access.resolvedPath, grantDir: access.grantDir,\n"],
   // Drop the registry check and a broad grant silences the credential file inside it.
   [BOUNDARY, 'a secrets-registry crossing is covered by no stored grant, however broad',
     '  if (isSecretPath(crossing.path, home)) return false;',
@@ -633,6 +657,338 @@ const MUTATIONS = [
   [SCAFFOLD, 'which shape a block claims is read from the block, not assumed to be the enabled one',
     "  const claimedMode = block.enabled === true ? 'knowledge' : 'code';",
     "  const claimedMode = 'knowledge';"],
+  // ===== CODE MODE: THE VERDICT, THE BOUNDARY CORRECTIONS AND CODEX =====
+  [VERDICT, "M1: \"inside a git working tree\" always true",
+    "    const top = ctx.seam.gitTop(scope);",
+    "    const top = ctx.seam.gitTop(scope) || scope;"],
+  [VERDICT, "M2: \"inside a git working tree\" always false",
+    "    const top = ctx.seam.gitTop(scope);",
+    "    const top = null;"],
+  [VERDICT, "M3a: the unsaved-work check on a delete always reports clean",
+    "    const lost = [...(st.tracked || []), ...(st.untracked || []), ...(st.ignoredEnv || [])];",
+    "    const lost = [];"],
+  [VERDICT, "M3b: the unsaved-work check on a discard always reports clean",
+    "  return lost.length ? unsaved(reason, lost) : RUNS;",
+    "  return RUNS;"],
+  [VERDICT, "M4: the unsaved-work check always reports unsaved",
+    "    if (lost.length) return unsaved('unsaved-work', lost);",
+    "    return unsaved('unsaved-work', lost.length ? lost : ['x']);"],
+  [VERDICT_HOOK, "M5: a git failure is treated as clean",
+    "    const st = ctx.seam.gitStatus(top, specs, { env: true });\n    if (!st || !st.ok) return always('git-unchecked');",
+    "    const st = ctx.seam.gitStatus(top, specs, { env: true });\n    if (!st || !st.ok) continue;"],
+  [VERDICT, "M6: the top-of-repository and .git exclusions are removed",
+    "    if ((!t.glob && (scope === topC || under(topC, scope, ctx))) || bareAtTop) return always('repository');",
+    ""],
+  [VERDICT, "M7: the force-push rule is removed",
+    "  if (force || dests.some(r => r.plus)) {",
+    "  if (false) {"],
+  [VERDICT, "M8: the default branch is never detected",
+    "  const isDefault = b => !b || defaults.includes(b);",
+    "  const isDefault = b => false;"],
+  [VERDICT, "M9: the default branch is always detected",
+    "  const isDefault = b => !b || defaults.includes(b);",
+    "  const isDefault = b => true;"],
+  [VERDICT, "M10: the strictest segment is replaced by the first",
+    "    result = stricter(result, judgeCommand(u, ctx, { piped, prev }));",
+    "    if (seg === segments[0]) result = judgeCommand(u, ctx, { piped, prev });"],
+  [VERDICT, "M11: wrapper stripping is removed",
+    "    if (ctx.dialect === 'bash' && BASH_WRAPPERS.has(verb)) {",
+    "    if (false) {"],
+  [VERDICT, "M12a: the command after xargs is not read",
+    "  if (v === 'xargs') return judgeXargs(a, ctx);",
+    "  if (v === 'xargs') return RUNS;"],
+  [VERDICT, "M12b: the command after sh -c is not read",
+    "    if (i >= 0) return inner(a[i + 1], ctx, 'bash');",
+    "    if (i >= 0) return RUNS;"],
+  [VERDICT, "M13: the PowerShell and cmd delete verbs are removed",
+    "  if (ctx.dialect === 'ps' && PS_REMOVE.has(v)) return judgePsRemove(a, ctx, piped, prev);",
+    ""],
+  [CM_HOOK, "M14: the verdict is sent in Notes mode",
+    "  const verdict = (codeMode && shellCommand !== null)",
+    "  const verdict = (shellCommand !== null)"],
+  [CM_CLIENT, "M15: the client offers Always allow on Always asks",
+    "    if (verdict && verdict.verdict) return verdict.verdict === 'asks-once';",
+    "    if (verdict && verdict.verdict) return verdict.verdict !== 'runs';"],
+  [CM_CLIENT, "M16: the Asks-once key collapses to the binary key",
+    "verdict.verdict === 'asks-once' && typeof verdict.rule === 'string' ? verdict.rule : null;",
+    "verdict.verdict === 'asks-once' && typeof verdict.rule === 'string' ? 'Bash:git' : null;"],
+  [CM_HOOK, "M17: Asks once fails open when nobody can be asked",
+    "  const failClosed = answerFile || destructive || asksOnce || alwaysAsks || crossingAlwaysAsks;",
+    "  const failClosed = answerFile || destructive || alwaysAsks || crossingAlwaysAsks;"],
+  [CM_HOOK, "M18: the Code-mode branch answers before the boundary classification",
+    "      && !(access && (access.where === 'outside' || access.answerFile))\n      && (!verdict || verdict.verdict === 'runs')) {",
+    "      && (!verdict || verdict.verdict === 'runs')) {"],
+  [CM_HOOK, "M19: the hook input's cwd is ignored",
+    "  const cwd = (typeof data.cwd === 'string' && data.cwd) ? data.cwd : undefined;",
+    "  const cwd = undefined;"],
+  [VERDICT_HOOK, "M20: a leading cd into a working folder is not accepted",
+    "      const resolved = cds === 0 && target && !shape.keyword ? expandPath(target, ctx) : null;",
+    "      const resolved = null;"],
+  [CM_BOUNDARY, "M21a: a shell card offers a folder without checking it exists",
+    "  if (!fs.existsSync(dir)) return null;\n  return dir;\n}",
+    "  return dir;\n}"],
+  [CM_BOUNDARY, "M21b: a file-tool card offers a folder without checking it exists",
+    "    || isHomeOrAbove(grantDir, home)\n    // NEVER A FOLDER THAT DOES NOT EXIST, and not its nearest existing ancestor\n    // in its place either: climbing widens the grant.\n    || !fs.existsSync(grantDir);",
+    "    || isHomeOrAbove(grantDir, home);"],
+  [CM_BOUNDARY, "M22: a file-tool card may offer the home directory",
+    "    || isHomeOrAbove(grantDir, home)\n    // NEVER A FOLDER THAT DOES NOT EXIST",
+    "    // NEVER A FOLDER THAT DOES NOT EXIST"],
+  [CM_BOUNDARY, "M23: a named parent covers the hidden folders under home",
+    "    return !hidden || isUnder(named, hidden, pmod);",
+    "    return true;"],
+  [CM_BOUNDARY, "M24: the global instruction files are removed from the surfaces",
+    "const PERSISTENCE_SURFACE_FILES = ['settings.json', 'CLAUDE.md'];",
+    "const PERSISTENCE_SURFACE_FILES = ['settings.json'];"],
+  [CM_DEV, "M25: the temp folders are not development paths",
+    "  return tempRoots(opts).some(r => under(p, r) && !(inHome && homes.some(h => under(h, r))));",
+    "  return false;"],
+  [CM_DEV, "M26: the package caches are not development paths",
+    "  if (cacheRoots(opts).some(r => under(p, r))) return true;",
+    ""],
+  [CM_CODEX, "M27: a Codex command escalation is not graded (always carded)",
+    "  if (codeMode && !access && verdict.verdict === 'runs') return { decision: 'accept' };",
+    ""],
+  [CM_CODEX, "M28: a Codex file change inside a working folder is carded",
+    "  if (under(g, hook.canonicalize(workspaceRoot)) || extraDirs.some(d => under(g, hook.canonicalize(d)))) return { decision: 'accept' };",
+    ""],
+  [CM_GLUE, "M29: Codex Runs is answered acceptForSession",
+    "    try { ev.respond('accept'); } catch (e) { /* approval already resolved */ }\n    return;",
+    "    try { ev.respond('acceptForSession'); } catch (e) { /* approval already resolved */ }\n    return;"],
+  [CM_CODEX, "Codex self-permission: a file change at an answer file is graded like any other",
+    "  if (touchesAnswerFile(g, workspaceRoot)) {",
+    "  if (false) {"],
+  [CM_ANSWER_GUARD, "Codex self-permission: a change to an answer file during a turn is never detected",
+    "    if (same(now, was)) continue;",
+    "    continue;"],
+  [CM_ANSWER_GUARD, "Codex self-permission: Rundock's own writes are no longer told apart from an agent's",
+    "    if (ownBytes && modeKept) { g.snapshot.set(f, now); continue; }",
+    ""],
+  [CM_ANSWER_GUARD_GLUE, "Codex self-permission: a Codex turn starts without the answer-file guard",
+    "  guardCodexTurn(entry, convoId);\n  const timer = setInterval(() => {",
+    "  const timer = setInterval(() => {"],
+  [CM_APPSERVER, "Codex permissions request: granted what was asked instead of refused",
+    "  return { permissions: {}, scope: 'turn' };",
+    "  return { permissions: { fileSystem: { entries: [] }, network: { enabled: true } }, scope: 'turn' };"],
+  [CM_APPSERVER, "Codex permissions request: refused for the session instead of the turn",
+    "  return { permissions: {}, scope: 'turn' };",
+    "  return { permissions: {}, scope: 'session' };"],
+  [CM_APPSERVER, "Codex permissions request: the refusal is not passed to the turn",
+    "      if (st) this._emitTurnEvent(st, { type: 'permissionsRefused', params });",
+    ""],
+  [CARD_CSS, "Permission card: the Deny button loses its edge",
+    ".btn-deny { background: transparent; color: var(--text-2-strong); border-color: var(--border-strong); }",
+    ".btn-deny { background: transparent; color: var(--text-2-strong); }"],
+  [CARD_TOKENS, "Permission card: light success text falls back to the fill",
+    "  --success-text: #266A36;\n",
+    ""],
+  [CM_BOUNDARY, "A backslash escape in a Bash command is read as a path again",
+    "    if (opts.shellTool !== 'PowerShell' && BASH_ESCAPE.test(raw)) continue;",
+    ""],
+  [CM_BOUNDARY, "Card A: a lone / in a separator position is read as the root again",
+    "skip.push(...patternArgsIn(seg), ...delimiterArgsIn(seg));",
+    "skip.push(...patternArgsIn(seg));"],
+  [CM_BOUNDARY, "Card A: a missing top-level path in a read-only command is a place again",
+    "    if (readOnly && !homed && pmod === path && /^\\/[^/\\\\]+\\/?$/.test(t) && !fs.existsSync(resolved)) continue;\n",
+    ""],
+  [CM_BOUNDARY, "Card A: echoed words are read as paths again",
+    "  skip.push(...echoedArgsIn(command));\n",
+    ""],
+  [CM_BOUNDARY, "Proxy: another workspace's answer file, by file tool, matched for the current workspace only",
+    "  if (writing && !isWorkspaceAnswerFile(resolvedPath, workspaceRoot, foldsCase) && isAnswerFileOfAnyWorkspace(resolvedPath)) {",
+    "  if (false) {"],
+  [CM_BOUNDARY, "Proxy: another workspace's answer file, by shell, matched for the current workspace only",
+    " || isAnswerFileOfAnyWorkspace(resolved, pmod)",
+    ""],
+  [CM_CODEX_BOUNDARY, "Proxy: Codex grades another workspace's answer file as ordinary work",
+    "  if (hook.isAnswerFileOfAnyWorkspace(g)) return true;\n  if (path.basename(g) === '.rundock') return true;",
+    "  return false;"],
+  [CM_BOUNDARY, "Another workspace's agents and skills are ordinary files again",
+    "  if (writing && isOtherWorkspaceAgentSurface(resolvedPath, workspaceRoot)) {",
+    "  if (false) {"],
+  [CM_BOUNDARY, "Proxy: a code project's Claude settings are taken for a workspace's",
+    "  return fs.existsSync(path.join(path.dirname(claudeDir), '.rundock', 'state.json'));",
+    "  return true;"],
+  [CM_BOUNDARY, "Proxy: a sibling workspace's Claude settings are not recognised",
+    "  return fs.existsSync(path.join(path.dirname(claudeDir), '.rundock', 'state.json'));",
+    "  return false;"],
+  // ===== A WORD ONLY KNOWN WHEN THE LINE RUNS =====
+  [VERDICT, "Expansion: a program named by a variable or a substitution is read as a literal",
+    "    if (!verbUnderstood(ws[0], ctx)) return UNREADABLE;",
+    ""],
+  [VERDICT_HOOK, "Expansion (hook): a program named by a variable or a substitution is read as a literal",
+    "    if (!verbUnderstood(ws[0], ctx)) return UNREADABLE;",
+    ""],
+  [VERDICT_CODEX, "Expansion (Codex): a program named by a variable or a substitution is read as a literal",
+    "    if (!verbUnderstood(ws[0], ctx)) return UNREADABLE;",
+    ""],
+  [VERDICT, "Expansion: a substitution's own command is not judged",
+    "    result = stricter(result, judgeSubstitutions(seg.text, ctx, depth, false));",
+    ""],
+  [VERDICT, "Expansion: an argument only known at run time is read as a literal",
+    "  if (argsUnknown(v, a, ctx)) return always('unreadable-command');",
+    ""],
+  [VERDICT, "Expansion: git arguments only known at run time are read as literals",
+    "GIT_GRADED.has(sub) && (elsewhere || unknown || rest.some(w => expands(w, ctx)))",
+    "GIT_GRADED.has(sub) && (elsewhere || unknown)"],
+  [VERDICT, "Expansion: everyday expansion in an npm command is carded",
+    "  if (['npm', 'yarn', 'pnpm', 'pwsh', 'powershell', 'cmd'].includes(v)) return lead();",
+    "  if (['npm', 'yarn', 'pnpm', 'pwsh', 'powershell', 'cmd'].includes(v)) return a.some(exp);"],
+  [VERDICT, "Expansion: here-document bodies are read as commands",
+    "  const h = stripHeredocs(text, ctx.dialect);",
+    "  const h = { text, bodies: [], ok: true };"],
+  [VERDICT, "Expansion: a shell reading a here-document is not judged",
+    "  if (shellReadsHeredoc) for (const b of h.bodies) result = stricter(result, judgeLine(b.body, ctx, depth + 1));",
+    ""],
+  [VERDICT, "Expansion: an unquoted here-document's substitutions are not judged",
+    "  for (const b of h.bodies) if (b.expands) result = stricter(result, judgeSubstitutions(b.body, ctx, depth, true));",
+    ""],
+  [VERDICT, "Git pointed at another repository by --git-dir, --work-tree or GIT_DIR is graded against this one",
+    "GIT_GRADED.has(sub) && (elsewhere || unknown ||",
+    "GIT_GRADED.has(sub) && (unknown ||"],
+  // ===== THE ANSWER-FILE GUARD: LINKS, AND CLAUDE TURNS =====
+  [CM_ANSWER_GUARD, "Answer-file guard: an answer file is read through a link",
+    "  try { st = fs.lstatSync(file); } catch (e) { return null; }",
+    "  try { st = fs.statSync(file); } catch (e) { return null; }"],
+  [CM_ANSWER_GUARD, "Answer-file guard: a restore writes through whatever stands at the path",
+    "  if (st) fs.rmSync(file, { force: true, recursive: st.isDirectory() });\n  if (bytes === null) return;\n  fs.mkdirSync(path.dirname(file), { recursive: true });\n  fs.writeFileSync(file, bytes, { flag: 'wx' });",
+    "  if (bytes === null) { if (st) fs.rmSync(file, { force: true, recursive: st.isDirectory() }); return; }\n  fs.mkdirSync(path.dirname(file), { recursive: true });\n  fs.writeFileSync(file, bytes);"],
+  [CM_ANSWER_GUARD_GLUE, "Answer-file guard: an approved change is written through a link",
+    "        writePlain(change.file, change.agentContent, change.mode);",
+    "        require('fs').writeFileSync(change.file, change.agentContent);"],
+  [CLAUDE_TURN_GUARD, "Claude turns: a turn is never guarded",
+    "  const start = () => { if (!guard) guard = acquire(workspace, onChange); };",
+    "  const start = () => {};"],
+  [CLAUDE_TURN_GUARD, "Claude turns: a turn never ends, so an idle process second-guesses the person",
+    "      if (RESULT_LINE.test(text)) { end(); tail = ''; return; }",
+    "      if (RESULT_LINE.test(text)) { tail = ''; return; }"],
+  [CLAUDE_SPAWN, "Claude turns: spawnClaude does not hand the process to the guard",
+    "  deps.onClaudeSpawn(proc, {",
+    "  (() => {})(proc, {"],
+  // ===== HOME INSIDE A TEMP FOLDER IS STILL HOME =====
+  [DEV_HOME, "Development paths: the temp rule covers a home folder inside a temp folder",
+    "  return tempRoots(opts).some(r => under(p, r) && !(inHome && homes.some(h => under(h, r))));",
+    "  return tempRoots(opts).some(r => under(p, r));"],
+  [DEV_HOME, "Development paths: home is recognised only by the name it was given",
+    "  const homes = [home, canon(home)];",
+    "  const homes = [home];"],
+  // ===== FREEING A PORT =====
+  [VERDICT, "Kill: a process-id lookup is carded like any other expansion",
+    "  if (['kill', 'taskkill'].includes(v)) return a.some(w => exp(w) && !pidLookup(w, ctx));",
+    "  if (['kill', 'taskkill'].includes(v)) return a.some(exp);"],
+  [VERDICT, "Kill: any program with lsof's options counts as a process-id lookup",
+    "  if (verb !== 'lsof') return false;",
+    ""],
+  [VERDICT, "Kill: lsof without a port counts as a process-id lookup",
+    "  return terse && port;",
+    "  return terse;"],
+  [VERDICT, "Kill: pidof with any options counts as a process-id lookup",
+    "  if (verb === 'pidof') return args.length > 0 && args.every(x => PLAIN_NAME.test(x));",
+    "  if (verb === 'pidof') return true;"],
+  // ===== ONLY SHAPES THE VERDICT FULLY UNDERSTANDS CAN RUN =====
+  [VERDICT, "Shapes: a function defined as name() is read as a command",
+    "  if (/^[^\\s\"'=(){}<>|&;]+\\s*\\(\\s*\\)/.test(t)) return { kind: 'unreadable' }; // name () { ... }",
+    ""],
+  [VERDICT, "Shapes: a function defined with the function keyword is read as a command",
+    "  if (/^(function\\s|case\\s|select\\s|coproc(\\s|$))/.test(t)) return { kind: 'unreadable' };",
+    "  if (/^(case\\s|select\\s|coproc(\\s|$))/.test(t)) return { kind: 'unreadable' };"],
+  [VERDICT, "Shapes: a keyword is read as the program name",
+    "  for (let m = KEYWORD.exec(t); m; m = KEYWORD.exec(t)) { t = t.slice(m[0].length).trim(); keyword = true; }",
+    ""],
+  [VERDICT, "Shapes: a subshell's contents are not judged",
+    "    return { kind: 'subshell', inner: t.slice(1, j) };",
+    "    return { kind: 'skip' };"],
+  [VERDICT, "Shapes: a group's contents are not judged",
+    "    return { kind: 'group', inner: t.slice(1, j) };",
+    "    return { kind: 'skip' };"],
+  [VERDICT, "Shapes: a cd behind a keyword is followed as if it always happens",
+    "      const resolved = cds === 0 && target && !shape.keyword ? expandPath(target, ctx) : null;",
+    "      const resolved = cds === 0 && target ? expandPath(target, ctx) : null;"],
+  [VERDICT, "Shapes: a cd inside a group does not move where the rest runs",
+    "      if (shape.kind === 'group') { ctx = { ...ctx, base: null }; cds++; }",
+    ""],
+  [VERDICT, "Shapes: an env option not modelled is skipped",
+    "      if (/^-/.test(f)) return null; // -S, --split-string, -C, -P and anything else",
+    "      if (/^-/.test(f)) { w.shift(); continue; }"],
+  [VERDICT, "Shapes: a wrapper not modelled is read as the program",
+    "    if (ctx.dialect === 'bash' && UNMODELLED_WRAPPERS.has(verb) && ws.length > 1) return UNREADABLE;",
+    ""],
+  [VERDICT, "Shapes: an xargs option not modelled is skipped",
+    "    if (!XARGS_FLAG.test(f)) return always('unreadable-command');",
+    ""],
+  [VERDICT, "Shapes: brace expansion or a glob in the program name is read as a name",
+    "  if (!PLAIN_NAME.test(name)) return false;",
+    ""],
+  [VERDICT, "Shapes: a git variable set through export or env is not recognised",
+    "    if (setter) for (const w of words.slice(i + 1)) if (/^GIT_/.test(w.text) || assigning(w)) return true;",
+    ""],
+  [VERDICT, "Shapes: git environment variables are not looked for at all",
+    "  if (gitEnvironmentIn(text, ctx)) ctx = { ...ctx, gitRedirected: true };",
+    ""],
+  // ===== A SETTINGS FILE RUNDOCK DOES NOT OWN =====
+  [SCAFFOLD_CM, "Foreign settings: an open writes additional directories into a person's settings",
+    "    if (ownsSettings && reconcileAdditionalDirectories(settingsLocal, additionalDirectoriesFor(dir))) dirtySandbox = true;",
+    "    if (reconcileAdditionalDirectories(settingsLocal, additionalDirectoriesFor(dir))) dirtySandbox = true;"],
+  [SCAFFOLD_CM, "Foreign settings: a mode switch writes additional directories into a person's settings",
+    "  if (ownsSettings && reconcileAdditionalDirectories(settingsLocal, additionalDirectoriesFor(dir))) dirty = true;",
+    "  if (reconcileAdditionalDirectories(settingsLocal, additionalDirectoriesFor(dir))) dirty = true;"],
+  // ===== THE BASELINE OUTLIVES EVERY TURN =====
+  [CM_ANSWER_GUARD, "Answer-file guard: the baseline is thrown away when the last turn ends",
+    "      if (!g.listeners.size && g.timer) { clearInterval(g.timer); g.timer = null; }",
+    "      if (!g.listeners.size) { clearInterval(g.timer); guards.delete(k); }"],
+  [CM_ANSWER_GUARD, "Answer-file guard: a change made while no turn ran is not looked for when a turn starts",
+    "    check(k, { outsideTurn: true });",
+    ""],
+  [CM_ANSWER_GUARD, "Answer-file guard: a file's mode is not compared",
+    "  if (isPlain(a) || isPlain(b)) return isPlain(a) && isPlain(b) && a.mode === b.mode && a.bytes.equals(b.bytes);",
+    "  if (isPlain(a) || isPlain(b)) return isPlain(a) && isPlain(b) && a.bytes.equals(b.bytes);"],
+  [CM_ANSWER_GUARD_GLUE, "Answer-file guard: a change made while no turn ran is worded as an agent's",
+    "  if (outsideTurn) {",
+    "  if (false) {"],
+  // ===== TRAPS AND HERE-STRINGS =====
+  [VERDICT, "Trap: a trap's command is read as a plain argument",
+    "  if (ctx.dialect === 'bash' && v === 'trap') {",
+    "  if (false) {"],
+  [VERDICT_HOOK, "Trap (hook): a trap's command is read as a plain argument",
+    "  if (ctx.dialect === 'bash' && v === 'trap') {",
+    "  if (false) {"],
+  [VERDICT_CODEX, "Trap (Codex): a trap's command is read as a plain argument",
+    "  if (ctx.dialect === 'bash' && v === 'trap') {",
+    "  if (false) {"],
+  [VERDICT, "Trap: clearing or listing traps asks",
+    "    if (!a.length || texts[0] === '-l' || texts[0] === '-p' || texts[0] === '-') return RUNS;",
+    ""],
+  [CM_PARSE, "Here-string: <<< is read as a here-document",
+    "    if (ch === '<' && s[i + 1] === '<' && s[i + 2] === '<') { out += '<<<'; i += 2; continue; }",
+    ""],
+  [VERDICT, "Here-string: a shell reading a here-string is not judged",
+    "      if (ctx.dialect === 'bash' && SHELLS.has(u.verb)) result = stricter(result, inner(u.args[hs + 1], ctx, 'bash'));",
+    ""],
+  // ===== OUTSIDE CHANGES TO THE CLAUDE CODE SETTINGS, AND THE APPROVED COPY =====
+  [CM_ANSWER_GUARD, "Answer-file guard: a settings change made outside Rundock between turns is reported",
+    "SHARED_FILES.has(relative)) { g.snapshot.set(f, now); continue; }",
+    "SHARED_FILES.has(relative)) { g.snapshot.set(f, now); const l = [...g.listeners].pop(); if (l) l({ file: f, relative, agentContent: null, restored: false, outsideTurn: true }); continue; }"],
+  [CM_ANSWER_GUARD, "Answer-file guard: a Claude Code settings change between turns is put back like Rundock's own files",
+    "    if (outsideTurn && SHARED_FILES.has(relative)) {",
+    "    if (false) {"],
+  [CM_ANSWER_GUARD, "Answer-file guard: Rundock's own files changed between turns are kept like the settings",
+    "const SHARED_FILES = new Set(['.claude/settings.local.json', '.claude/settings.json']);",
+    "const SHARED_FILES = new Set(['.claude/settings.local.json', '.claude/settings.json', '.rundock/permissions.json', '.rundock/state.json']);"],
+  [CM_ANSWER_GUARD, "Answer-file guard: a restored plain file loses its mode",
+    "  if (isPlain(was)) return writePlain(file, was.bytes, was.mode);",
+    "  if (isPlain(was)) return writePlain(file, was.bytes);"],
+  [CM_CLIENT, "Card: the unreadable-command sentence is the old one",
+    "    'unreadable-command': () => 'Rundock can\\'t tell what this command will do until it runs, so it asks first.',",
+    "    'unreadable-command': () => 'This runs a command Rundock can\\'t read before it runs.',"],
+  [SANDBOX_ROW, "Settings: the own-sandbox folders note shows where the block is Rundock's",
+    "    return status && status.present && status.managed === false ? OWN_SANDBOX_FOLDERS_NOTE : null;",
+    "    return status && status.present ? OWN_SANDBOX_FOLDERS_NOTE : null;"],
+  [PERMISSIONS_PANE, "Settings: the own-sandbox folders note is not drawn",
+    "    ${ownNote}",
+    ""],
+  // ===== THE CODE-MODE FIXTURE UNDER CI =====
+  [CM_FIXTURE, "Fixture: under CI a missing fixture folder skips again",
+    "  if (runningInCi(env)) throw new Error(",
+    "  if (false) throw new Error("],
 ];
 
 const REPORTER = ['--test-reporter', 'spec'];
@@ -680,8 +1036,26 @@ function redTests(suite) {
   return names;
 }
 
+// THE TARGETS ARE THE ONES THE ROWS NAME, derived rather than listed. A hand
+// list beside the rows went stale: rows were added naming targets the list did
+// not load, so the harness crashed at the first of them, and none of those
+// rows had ever run. Every row must name a target object with a source file
+// that exists and a suite; anything else is refused before a file is touched.
+function targetsFor(mutations) {
+  const targets = [];
+  for (const row of mutations) {
+    const [target, label] = row;
+    if (!target || typeof target !== 'object' || typeof target.src !== 'string' || typeof target.suite !== 'string') {
+      throw new Error(`mutation row "${label}" names no target with a src and a suite; define the target before the row`);
+    }
+    if (!fs.existsSync(target.src)) throw new Error(`mutation row "${label}" names ${target.src}, which does not exist`);
+    if (!targets.includes(target)) targets.push(target);
+  }
+  return targets;
+}
+
 function run() {
-  const targets = [HOOK, SCAFFOLD, BOUNDARY, CHAT_VIEW, HOOK_INTEGRATION, HOOK_REFUSAL, HOOK_CLASSIFIER, WORKSPACE_HANDLER, WORKSPACE_HANDLER_UNIT, SCAFFOLD_SWITCH, WORKSPACE_HANDLER_SWITCH, SANDBOX_STATUS, SANDBOX_IMPORT, MODE, NOTES_LABEL, PERMISSIONS_PANE, SANDBOX_ROW, SCAFFOLD_FOREIGN, SETTINGS_SURFACE, READ_ONLY, READ_ONLY_CLIENT, DESKTOP, USER_DATA, DESKTOP_PROFILE, DESKTOP_PROFILE_RUN];
+  const targets = targetsFor(MUTATIONS);
   const session = beginMutationRun({ files: [...new Set(targets.map((target) => target.src))] });
   const originals = new Map();
   for (const target of targets) originals.set(target, session.original(target.src));
@@ -780,4 +1154,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { MUTATIONS, run };
+module.exports = { MUTATIONS, run, targetsFor };

@@ -110,6 +110,19 @@
   --danger: #D42C2A;
   --danger-text: #F0706E;
 
+  /* The permission card's quieter buttons, which must still read as buttons.
+     --border-strong is a control EDGE (the Deny outline), held to 3:1;
+     --text-2-strong is secondary TEXT on a control (Deny's label), held to
+     4.5:1. Measured on the dark card (--card, #333333): border 3.20:1, text
+     4.70:1. --success-text is the success hue as TEXT and as an outline
+     button's edge (Always allow, Allow once): the fill value itself in dark,
+     where it already reads, and darker in light (see body.light). Pinned by
+     test/unit/permission-card-contrast.test.js, which recomputes every ratio
+     here from these values. */
+  --border-strong: #808080;
+  --text-2-strong: #A29D97;
+  --success-text: var(--success);
+
   /* Map canvas. A canvas resolves no CSS variables: every fill and stroke is
      a literal read out of the computed style at paint time, so a value the
      map needs has to exist as a token or it becomes a literal sitting in a
@@ -244,6 +257,15 @@ body.light {
      --card 4.54). Dark declares it as the brand value itself, so dark is
      unchanged. --accent itself, the brand, does not move. */
   --accent-text: #BF401B;
+  /* The permission card's quieter buttons in light, following the dark note:
+     measured on the light permission card (#E8E3DB), --border-strong 3.58:1
+     as the Deny outline, --text-2-strong 4.59:1 as Deny's label, and
+     --success-text 5.14:1 as Always allow's and Allow once's label and edge
+     (4.84:1 on their hover tint). Plain --success as text measures 1.64:1
+     there, which is why it has a text value of its own. */
+  --border-strong: #7A756E;
+  --text-2-strong: #69645D;
+  --success-text: #266A36;
   /* Control orange in light: clears 3:1 on all four light surfaces
      (elevated 3.83, surface 3.61, base 3.43, card 3.28). */
   --accent-control: #DB5933; --accent-control-hover: #DD6440;

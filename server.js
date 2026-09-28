@@ -617,8 +617,16 @@ const {
   processCommand, readProcCmdline, parseProcCmdline, psCommand,
   commandLineCapability, COMMAND_LINE_SOURCES,
 } = claudeRuntime;
-claudeRuntime.wireClaudeRuntimeDeps({ getActualPort: () => ACTUAL_PORT });
 const codexGlue = require('./lib/runtime/codex-glue.js');
+const { watchClaudeTurns } = require('./lib/runtime/claude-turn-guard.js');
+claudeRuntime.wireClaudeRuntimeDeps({
+  getActualPort: () => ACTUAL_PORT,
+  // Every Claude turn runs under the same answer-file guard as a Codex turn.
+  onClaudeSpawn: (proc, { convoId, agentId }) => watchClaudeTurns(proc, {
+    workspace: config.getWorkspace(),
+    onChange: (change) => codexGlue.surfaceAnswerFileChange({ agentId, processId: null }, convoId, change, 'claude'),
+  }),
+});
 const {
   shutdownCodexAppServer,
   readAgentInstructions, wireCodexDelegate, startCodexTurn,
@@ -2511,7 +2519,12 @@ function getRuntimeStatus() {
 // Raise a permission card for a server-originated request (no hook HTTP
 // response to hold: the decision arrives via onDecision(allow, reason)).
 // Same card UI, same timeout, same cancel sweep as hook-originated requests.
-function requestServerPermission({ convoId, toolName, toolInput, onDecision }) {
+// `grading` carries what an in-process grader decided about the request (the
+// Code-mode verdict, a boundary crossing, an answer file), in the same fields a
+// hook request carries, so the card is drawn the same way whichever runtime
+// asked. Only those fields pass.
+const SERVER_REQUEST_FIELDS = ['code_mode_verdict', 'boundary', 'resolved_path', 'grant_dir', 'crossings', 'answer_file'];
+function requestServerPermission({ convoId, toolName, toolInput, onDecision, grading }) {
   const requestId = 'perm-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
   pendingPermissionRequests.set(requestId, {
     onDecision,
@@ -2531,7 +2544,10 @@ function requestServerPermission({ convoId, toolName, toolInput, onDecision }) {
   safeSend(JSON.stringify({
     type: 'control_request',
     request_id: requestId,
-    request: { subtype: 'can_use_tool', tool_name: toolName, input: toolInput || {} },
+    request: {
+      subtype: 'can_use_tool', tool_name: toolName, input: toolInput || {},
+      ...Object.fromEntries(SERVER_REQUEST_FIELDS.filter(k => grading && grading[k] !== undefined).map(k => [k, grading[k]])),
+    },
     _conversationId: convoId,
   }));
   console.log(`[Permission] Server request: ${toolName} convo=${convoId} requestId=${requestId}`);

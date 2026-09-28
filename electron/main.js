@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, nativeImage, dialog, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, Menu, nativeImage, dialog, ipcMain, shell, screen } = require('electron');
 const { installExtensionFrameGuards } = require('./extension-frame-guards');
 const { installExternalLinkGuards } = require('./external-links');
 const path = require('path');
@@ -9,6 +9,7 @@ const { resolveUpdateFeed } = require('./update-feed.js');
 const { resolveUserData } = require('./user-data.js');
 const { decideUpdateUi } = require('./update-state.js');
 const { reconcileOnLaunch, recordDownloaded } = require('./update-launches.js');
+const { wizardSize } = require('./wizard-size.js');
 
 let autoUpdater;
 try {
@@ -227,9 +228,12 @@ function launchClaudeSignIn() {
 
 function showWizard() {
   return new Promise((resolve) => {
+    // Electron does not fit a window to the display by itself, so the size is
+    // capped to the primary display's usable area here.
+    const size = wizardSize(screen.getPrimaryDisplay().workAreaSize);
     const wizard = new BrowserWindow({
-      width: 520,
-      height: 520,
+      width: size.width,
+      height: size.height,
       useContentSize: true,
       resizable: false,
       minimizable: false,

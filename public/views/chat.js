@@ -613,7 +613,10 @@ function handlePermissionRequest(d, convoId) {
   const toolName = req.tool_name || 'Unknown';
   const input = req.input || {};
   const risk = classifyRisk(toolName, input);
-  const key = toolAllowKey(toolName, input);
+  // In Code mode the hook's verdict decides, and an Asks-once rule is
+  // remembered under its own key rather than the command's binary.
+  const verdict = req.code_mode_verdict || undefined;
+  const key = RundockPermissions.verdictAllowKey(verdict) || toolAllowKey(toolName, input);
 
   // The auto-allow decision path is a named, unit-tested function in
   // permissions.js: standing "Always allow" grants and the low-risk
@@ -633,7 +636,7 @@ function handlePermissionRequest(d, convoId) {
   // the user would never see that it had happened.
   const decision = (req.boundary || req.answer_file === true)
     ? { action: 'card' }
-    : RundockPermissions.decidePermission(risk, key, alwaysAllowedTools);
+    : RundockPermissions.decidePermission(risk, key, alwaysAllowedTools, verdict);
   const isActive = activeConversation?.id === convoId;
   const route = RundockPermissions.routePermissionRequest(decision, isActive);
   if (route === 'respond-allow') {
@@ -708,7 +711,9 @@ function renderPermissionCard(d, convoId, host) {
   }
   // The command, kept beside a crossing path rather than replaced by it.
   let commandDetail = '';
-  const key = toolAllowKey(toolName, input);
+  const verdict = req.code_mode_verdict || undefined;
+  const verdictCopy = RundockPermissions.verdictCardCopy(verdict);
+  const key = RundockPermissions.verdictAllowKey(verdict) || toolAllowKey(toolName, input);
   // Workspace-boundary requests get their own copy: the point is WHERE the
   // access lands, not which tool wants it.
   const boundary = req.boundary === true;
@@ -752,7 +757,13 @@ function renderPermissionCard(d, convoId, host) {
   // The crossing whose tags decide the card's copy, resolved once rather
   // than re-derived below. A secrets-registry hit wins over an ordinary
   // persistence-surface write when a command reaches both.
-  const flaggedCrossing = crossings.find(c => c && c.secret) || crossings.find(c => c && c.answerFile) || crossings.find(c => c && c.persistenceSurface) || null;
+  const flaggedCrossing = crossings.find(c => c && c.secret) || crossings.find(c => c && c.answerFile)
+    || crossings.find(c => c && c.instructionFile) || crossings.find(c => c && c.hiddenHome)
+    || crossings.find(c => c && c.persistenceSurface)
+    // A write outside that no folder offer could ever answer.
+    || (!req.grant_dir && crossings.find(c => c && c.write) ? { unremembered: true } : null);
+  // A crossing that can never be remembered asks every time: "Allow once".
+  const crossingAlwaysAsks = !!(flaggedCrossing && (flaggedCrossing.instructionFile || flaggedCrossing.hiddenHome || flaggedCrossing.unremembered));
   // No grant may suppress a secrets-registry crossing's card. The hook
   // never sends a whole-folder grantDir for one, but the card enforces this
   // itself too, rather than trusting that upstream alone.
@@ -878,6 +889,14 @@ function renderPermissionCard(d, convoId, host) {
     else context = `${context} ${SANDBOX_RETRY_HINT}`;
   }
 
+  // THE CODE-MODE VERDICT'S WORDS. On its own card the reason is the context;
+  // on a boundary card (a command both outside and irreversible) the reason
+  // and the closing sentence follow the boundary text.
+  if (verdictCopy && !answerFile) {
+    const said = [verdictCopy.sentence, verdictCopy.closing].filter(Boolean).join(' ');
+    context = boundary && context ? `${context} ${said}` : said;
+  }
+
   // Store callback data for safe event handling (no inline onclick injection).
   // toolInput is echoed back in control_response (required by Claude Code).
   pendingPermissions.set(requestId, { convoId, key, toolInput: input, grantDir: wholeFolderOffered ? req.grant_dir : null });
@@ -903,7 +922,11 @@ function renderPermissionCard(d, convoId, host) {
   // outside path is not automatically dangerous, and grading it as though it
   // were would put a red card in front of ordinary work until the colour meant
   // nothing.
-  const renderRisk = boundary ? 'high' : risk;
+  const renderRisk = boundary ? 'high'
+    : (verdict && verdict.verdict === 'always-asks') ? 'high'
+      : (verdict && verdict.verdict === 'asks-once') ? 'medium' : risk;
+  const allowLabel = (verdictCopy && verdictCopy.allowLabel === 'Allow once') || crossingAlwaysAsks ? 'Allow once' : 'Allow';
+  const alwaysLabel = verdictCopy && verdictCopy.alwaysLabel ? verdictCopy.alwaysLabel : 'Always allow';
   // Every value below is model-chosen: the tool name, the command text, the
   // file paths, up to 1500 characters of the content an agent wants to write.
   // All of them land in TEXT position and are esc()'d, which is the right
@@ -941,10 +964,10 @@ function renderPermissionCard(d, convoId, host) {
         ? `<details class="permission-detail-collapse"><summary>Show command</summary><code class="permission-detail">${esc(commandDetail)}</code></details>`
         : ''}
       <div class="permission-actions">
-        <button class="btn-perm btn-allow" data-perm-id="${escAttr(requestId)}" data-perm-action="allow">Allow</button>
+        <button class="btn-perm ${RundockPermissions.allowButtonClass(allowLabel, answerFile)}" data-perm-id="${escAttr(requestId)}" data-perm-action="allow">${esc(allowLabel)}</button>
         ${wholeFolderOffered
           ? `<button class="btn-perm btn-always" data-perm-id="${escAttr(requestId)}" data-perm-action="allow-folder">Always allow this folder</button>`
-          : (!boundary && !answerFile && RundockPermissions.offersAlwaysAllow(risk) ? `<button class="btn-perm btn-always" data-perm-id="${escAttr(requestId)}" data-perm-action="always">Always allow</button>` : '')}
+          : (!boundary && !answerFile && RundockPermissions.offersAlwaysAllow(risk, verdict) ? `<button class="btn-perm btn-always" data-perm-id="${escAttr(requestId)}" data-perm-action="always">${esc(alwaysLabel)}</button>` : '')}
         <button class="btn-perm btn-deny" data-perm-id="${escAttr(requestId)}" data-perm-action="deny">Deny</button>
       </div>
     </div>
@@ -1057,7 +1080,8 @@ function handleOwnerlessPermissionRequest(d) {
   const input = req.input || {};
   const decision = (req.boundary || req.answer_file === true)
     ? { action: 'card' }
-    : RundockPermissions.decidePermission(classifyRisk(toolName, input), toolAllowKey(toolName, input), alwaysAllowedTools);
+    : RundockPermissions.decidePermission(classifyRisk(toolName, input),
+      RundockPermissions.verdictAllowKey(req.code_mode_verdict) || toolAllowKey(toolName, input), alwaysAllowedTools, req.code_mode_verdict || undefined);
   if (decision && decision.action === 'allow') {
     if (ws) ws.send(JSON.stringify({ type: 'permission_response', requestId, conversationId: '', allow: true }));
     return;

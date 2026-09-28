@@ -107,7 +107,7 @@ describe('the mode card makes no promise about the sandbox', () => {
 
   test('each mode says how agents work, in the mock\'s words, and nothing about the operating system', () => {
     assert.strictEqual(modeCard('notes'), 'Notes, documents and other files. Agents ask before running commands.');
-    assert.strictEqual(modeCard('code'), 'Websites and software. Agents can edit code and run everyday commands without asking.');
+    assert.strictEqual(modeCard('code'), "Websites and software. Agents can edit code and run everyday development commands without asking. Commands that can't be undone still ask every time.");
     for (const mode of ['notes', 'code']) assert.doesNotMatch(modeCard(mode), /operating.system|sandbox|write block/i);
   });
 });
