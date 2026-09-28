@@ -49,6 +49,16 @@ function placeholders(p) {
   }
   return p;
 }
+// The golden was recorded on macOS, where /tmp is a link to /private/tmp and
+// the hook reports the real path. On Linux /tmp is itself real. The system
+// temp folder is the same place either way, so both spellings compare as one.
+function tmpNorm(p) {
+  if (typeof p !== 'string') return p;
+  return p.replace(/^\/private\/tmp(?=\/|$)/, '<TMP>').replace(/^\/tmp(?=\/|$)/, '<TMP>');
+}
+function tmpNormHook(h) {
+  return { ...h, grantDir: tmpNorm(h.grantDir), crossings: (h.crossings || []).map(tmpNorm) };
+}
 function unplace(p) {
   return p.replace('<APP>', world.app).replace('<WS>', world.ws).replace('<PROJECTS>', world.projects).replace('<HOME>', world.home).replace('<ROOT>', world.root);
 }
@@ -107,10 +117,10 @@ describe('Notes mode equals v0.15.0, command for command', { skip: SKIP }, () =>
         };
         if (correction) {
           assert.strictEqual(now.grantDir, null, `${correction}: the offer is withdrawn`);
-          assert.deepStrictEqual({ ...now, grantDir: null }, { ...recorded.hook, grantDir: null }, 'and nothing else moved');
+          assert.deepStrictEqual({ ...tmpNormHook(now), grantDir: null }, { ...tmpNormHook(recorded.hook), grantDir: null }, 'and nothing else moved');
           return;
         }
-        assert.deepStrictEqual(now, recorded.hook);
+        assert.deepStrictEqual(tmpNormHook(now), tmpNormHook(recorded.hook));
       });
     }
   }
