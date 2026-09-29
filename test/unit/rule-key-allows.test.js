@@ -77,6 +77,24 @@ describe('a rule key goes through the real handler', () => {
     assert.strictEqual(ws.sent[0].key, 'Bash:git-push:unknown-rule');
   }));
 
+  test('a save that cannot be written is reported, not claimed', () => inWorkspace((table) => {
+    // The key is valid, but the workspace's permission folder cannot be written
+    // to, so nothing is stored. The reply must say so rather than list the
+    // allows as if the new one had been added.
+    const dir = path.join(config.getWorkspace(), '.rundock');
+    fs.chmodSync(dir, 0o555);
+    let ws;
+    try {
+      ws = captureWs();
+      table.add_tool_allow({}, ws, { type: 'add_tool_allow', key: 'Bash:git-push:tags' });
+    } finally { fs.chmodSync(dir, 0o755); }
+    assert.strictEqual(ws.sent.length, 1);
+    assert.strictEqual(ws.sent[0].type, 'tool_allow_failed');
+    assert.strictEqual(ws.sent[0].key, 'Bash:git-push:tags');
+    assert.match(ws.sent[0].message, /could not be written/);
+    assert.deepStrictEqual(boundary.readToolAllows(), [], 'and nothing is stored');
+  }));
+
   test('anything else shaped like a rule key is still refused', () => inWorkspace((table) => {
     for (const key of ['Bash:git-push:default-branch:extra', 'Bash:git-push:unknown-rule', 'Bash:git:push', 'PowerShell:execution-policy:reset',
       'bash:git-push:default-branch', ' Bash:git-push:tags:', 'Bash:git-push:tags\nBash:rm']) {
