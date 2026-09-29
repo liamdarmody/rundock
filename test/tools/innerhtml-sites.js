@@ -154,6 +154,8 @@ const TABLE = {
     ['a', 'escapedText', 'a replayed user message, esc()'],
     ['b', 'agent-identity', 'a replayed agent message'],
     ['a', 'escapedText', 'the permission card: every model-chosen value esc() into element content'],
+    ['a', 'escapedText', 'the put-back card: the file path and every diff line esc(), the rest fixed copy and a constant icon'],
+    ['a', 'cleared', 'the reply bubble below a put-back card, emptied before the reply streams in'],
     ['a', 'escapedText', 'the resolved permission card, read back as textContent and re-escaped'],
     ['a', 'escapedText', 'an activity row: elapsed time and esc() of a tool name'],
   ],

@@ -156,6 +156,17 @@ and the assertion fails for a reason unrelated to what it tests. It now uses
 `LONG`, the duration the rest of that file already uses for a suite that must
 not end on its own.
 
+**`test/unit/style-drift.test.js`** wrote its fixture to one fixed path,
+`public/styles/__drift-fixture.css`, for the length of each test, because the
+lint reads files relative to the repository root. Two runs at once in the same
+checkout (a gate in one window, a card's own run in another) could write, read
+and delete each other's file, and any suite that walks the stylesheets could
+meet a half-written fixture full of deliberately wrong colours. The fixture is
+now named for the writing process (`__drift-fixture-<pid>.css`, from
+`test/helpers/drift-fixture.js`), and the lint's own scan and every suite that
+walks the stylesheets pass over any file of that shape. A test writes a second
+process's fixture beside its own and proves each run reads only its own.
+
 ### The remaining duration budgets in `red-first-orphans.test.js`
 
 Four stand-in suites in that file still carry a foreground duration, and they

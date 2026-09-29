@@ -125,6 +125,17 @@ const CLAUDE_SPAWN = { src: path.join(ROOT, 'lib', 'runtime', 'claude.js'), suit
 const DEV_HOME = { src: path.join(ROOT, 'scripts', 'dev-paths.js'), suite: 'test/unit/code-mode-home-in-temp.test.js' };
 const SCAFFOLD_CM = { src: path.join(ROOT, 'lib', 'workspace', 'scaffold.js'), suite: 'test/unit/code-mode-boundary.test.js' };
 const CM_PARSE = { src: path.join(ROOT, 'scripts', 'code-mode-parse.js'), suite: 'test/unit/code-mode-verdict.test.js' };
+// Telling the agent in the same step: the PostToolUse half, end to end.
+const PUTBACK_HOOK = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/putback-same-step.test.js' };
+const PUTBACK_ROUTER = { src: path.join(ROOT, 'lib', 'http-router.js'), suite: 'test/unit/putback-same-step.test.js' };
+const PUTBACK_GUARD = { src: path.join(ROOT, 'lib', 'workspace', 'answer-file-guard.js'), suite: 'test/unit/putback-same-step.test.js' };
+const PUTBACK_SCAFFOLD = { src: path.join(ROOT, 'lib', 'workspace', 'scaffold.js'), suite: 'test/unit/putback-same-step.test.js' };
+// The put-back card: what the glue sends, the field the server passes on, the
+// card the view draws, and its copy.
+const PUTBACK_GLUE = { src: path.join(ROOT, 'lib', 'runtime', 'codex-glue.js'), suite: 'test/unit/codex-answer-file-guard.test.js' };
+const PUTBACK_SERVER = { src: path.join(ROOT, 'server.js'), suite: 'test/unit/putback-card.test.js' };
+const PUTBACK_VIEW = { src: path.join(ROOT, 'public', 'views', 'chat.js'), suite: 'test/unit/putback-card.test.js' };
+const PUTBACK_COPY = { src: path.join(ROOT, 'public', 'permissions.js'), suite: 'test/unit/putback-card.test.js' };
 const CM_FIXTURE = { src: path.join(ROOT, 'test', 'helpers', 'code-mode-fixture.js'), suite: 'test/unit/code-mode-fixture-root.test.js' };
 // The handler that stores "Always allow" answers, driven through the real dispatch table.
 const ALLOW_KEY_HANDLER = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'workspace.js'), suite: 'test/unit/rule-key-allows.test.js' };
@@ -789,8 +800,8 @@ const MUTATIONS = [
     "      if (st) this._emitTurnEvent(st, { type: 'permissionsRefused', params });",
     ""],
   [CARD_CSS, "Permission card: the Deny button loses its edge",
-    ".btn-deny { background: transparent; color: var(--text-2-strong); border-color: var(--border-strong); }",
-    ".btn-deny { background: transparent; color: var(--text-2-strong); }"],
+    ".btn-deny, .btn-keep-change { background: transparent; color: var(--text-2-strong); border-color: var(--border-strong); }",
+    ".btn-deny, .btn-keep-change { background: transparent; color: var(--text-2-strong); }"],
   [CARD_TOKENS, "Permission card: light success text falls back to the fill",
     "  --success-text: #266A36;\n",
     ""],
@@ -955,8 +966,8 @@ const MUTATIONS = [
     "  if (isPlain(a) || isPlain(b)) return isPlain(a) && isPlain(b) && a.mode === b.mode && a.bytes.equals(b.bytes);",
     "  if (isPlain(a) || isPlain(b)) return isPlain(a) && isPlain(b) && a.bytes.equals(b.bytes);"],
   [CM_ANSWER_GUARD_GLUE, "Answer-file guard: a change made while no turn ran is worded as an agent's",
-    "  if (outsideTurn) {",
-    "  if (false) {"],
+    "        outsideTurn: !!change.outsideTurn,",
+    "        outsideTurn: false,"],
   // ===== TRAPS AND HERE-STRINGS =====
   [VERDICT, "Trap: a trap's command is read as a plain argument",
     "  if (ctx.dialect === 'bash' && v === 'trap') {",
@@ -1043,6 +1054,41 @@ const MUTATIONS = [
   [AGENT_NOTICE_STORE, "Agent notice: a line is handed over more than once",
     "  waiting.delete(id);",
     ""],
+  // ===== THE AGENT IS TOLD IN THE SAME STEP =====
+  [PUTBACK_HOOK, "Same step: the finished tool call does not ask for a check",
+    "+ (check ? '&check=1' : '')",
+    ""],
+  [PUTBACK_ROUTER, "Same step: the server does not check before handing out the line",
+    "    if (checkFirst) require('./workspace/answer-file-guard.js').checkAnswerFilesNow(getWorkspace());",
+    ""],
+  [PUTBACK_GUARD, "Same step: a check on demand checks nothing",
+    "  if (!g || !g.listeners.size) return [];",
+    "  return [];"],
+  [PUTBACK_SCAFFOLD, "Same step: the PostToolUse hook is never registered",
+    "    if (ownsSettings) {\n      const POST_MATCHER",
+    "    if (false) {\n      const POST_MATCHER"],
+  [PUTBACK_SCAFFOLD, "Same step: the PostToolUse hook is written into a person's own settings",
+    "    if (ownsSettings) {\n      const POST_MATCHER",
+    "    if (true) {\n      const POST_MATCHER"],
+  // ===== THE PUT-BACK CARD =====
+  [PUTBACK_GLUE, "Put-back card: sent as an ordinary answer-file card",
+    "      put_back: {\n        runtime:",
+    "      unused_put_back: {\n        runtime:"],
+  [PUTBACK_SERVER, "Put-back card: the server drops its details on the way to the browser",
+    ", 'answer_file', 'put_back'];",
+    ", 'answer_file'];"],
+  [PUTBACK_VIEW, "Put-back card: drawn as an ordinary card",
+    "  if (req.put_back && !RundockPermissions.permissionEnded(endedPermissions, requestId)) { renderPutBackCard(d, convoId, host); return; }",
+    ""],
+  [PUTBACK_VIEW, "Put-back card: Leave it restored keeps the change",
+    "data-perm-action=\"deny\">${esc(copy.leave)}",
+    "data-perm-action=\"allow\">${esc(copy.leave)}"],
+  [PUTBACK_VIEW, "Put-back card: the reply is not moved below the card",
+    "    state.currentStreamingMsg = next;",
+    ""],
+  [PUTBACK_COPY, "Put-back card: a whitespace-only change is invisible",
+    "    return m ? line.slice(0, m.index) + m[0].replace(/./g, '\u00b7') : line;",
+    "    return line;"],
 ];
 
 const REPORTER = ['--test-reporter', 'spec'];

@@ -33,6 +33,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { isDriftFixture } = require('../helpers/drift-fixture.js');
 
 const ROOT = path.join(__dirname, '..', '..');
 const ALLOWLIST = path.join(__dirname, 'style-drift-allowlist.json');
@@ -45,7 +46,8 @@ function surfaces() {
     for (const e of fs.readdirSync(path.join(ROOT, dir), { withFileTypes: true })) {
       const rel = `${dir}/${e.name}`;
       if (e.isDirectory()) walk(rel);
-      else if (e.name.endsWith('.css') && e.name !== 'tokens.css') out.push(rel);
+      // A lint test's fixture, from this run or another, is not the app's.
+      else if (e.name.endsWith('.css') && e.name !== 'tokens.css' && !isDriftFixture(e.name)) out.push(rel);
     }
   };
   walk('public/styles');

@@ -1465,7 +1465,7 @@ function alwaysAsksCrossing(access) {
 // with the server unreachable, slow or saying anything unexpected, there is
 // simply no line, and the decision is unaffected.
 const AGENT_NOTICE_ID = /^[A-Za-z0-9_-][A-Za-z0-9_.-]{0,127}$/;
-function fetchAgentNotice(done) {
+function fetchAgentNotice(done, { check = false } = {}) {
   const id = process.env.RUNDOCK_CONVO_ID || '';
   if (!process.env.RUNDOCK || !AGENT_NOTICE_ID.test(id)) { done(null); return; }
   let finished = false;
@@ -1476,7 +1476,7 @@ function fetchAgentNotice(done) {
   };
   const req = http.request({
     hostname: '127.0.0.1', port: process.env.RUNDOCK_PORT || 3000,
-    path: '/api/agent-notice?conversation=' + encodeURIComponent(id), method: 'GET', timeout: 250,
+    path: '/api/agent-notice?conversation=' + encodeURIComponent(id) + (check ? '&check=1' : ''), method: 'GET', timeout: check ? 1000 : 250,
   }, (res) => {
     let body = '';
     res.on('data', (c) => { body += c; if (body.length > 8192) { req.destroy(); finish(null); } });
@@ -1490,7 +1490,21 @@ function fetchAgentNotice(done) {
 function main() {
 let input = '';
 process.stdin.on('data', chunk => { input += chunk; });
-process.stdin.on('end', () => fetchAgentNotice((agentNotice) => {
+process.stdin.on('end', () => {
+// A FINISHED TOOL CALL (PostToolUse). Nothing is decided here: the server is
+// asked to check the permission files now, and any line about a change it put
+// back goes to the agent in this same step. The line PreToolUse would have
+// carried is the same one, handed over once, whichever asks first.
+let hookEvent = '';
+try { hookEvent = JSON.parse(input).hook_event_name || ''; } catch (e) { /* judged below */ }
+if (hookEvent === 'PostToolUse') {
+  fetchAgentNotice((note) => {
+    process.stdout.write(JSON.stringify(note ? { hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: note } } : {}));
+    process.exit(0);
+  }, { check: true });
+  return;
+}
+fetchAgentNotice((agentNotice) => {
   // Not running in Rundock: pass through (no decision, Claude Code handles normally)
   if (!process.env.RUNDOCK) {
     process.stdout.write(JSON.stringify({}));
@@ -1916,5 +1930,6 @@ process.stdin.on('end', () => fetchAgentNotice((agentNotice) => {
 
   req.write(payload);
   req.end();
-}));
+});
+});
 }

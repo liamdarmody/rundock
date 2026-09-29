@@ -76,8 +76,13 @@ describe('the innerHTML inventory', () => {
     //
     // 128 when Extensions became a settings page of its own (b: extension and
     // package names from their authors, through esc()).
-    assert.strictEqual(t.total, 128, 'first-party assignments under public/');
-    assert.strictEqual(t.byGroup.a, 90, 'group (a): closed with a stated reason');
+    //
+    // 130 when the put-back card took two, both group (a): the card itself (the
+    // file path and every diff line through esc(), the rest fixed copy and a
+    // constant icon), and the reply bubble below it, emptied before the reply
+    // streams in.
+    assert.strictEqual(t.total, 130, 'first-party assignments under public/');
+    assert.strictEqual(t.byGroup.a, 92, 'group (a): closed with a stated reason');
     assert.strictEqual(t.byGroup.b, 38, 'group (b): fixed');
     assert.strictEqual(t.byGroup.a + t.byGroup.b, t.total, 'every site is in exactly one group');
   });

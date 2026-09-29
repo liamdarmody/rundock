@@ -7,6 +7,8 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 const { JSDOM } = require('jsdom');
+// A style-drift fixture, from this run or a concurrent one, is not the app's.
+const { isDriftFixture } = require('../helpers/drift-fixture.js');
 
 const ROOT = path.join(__dirname, '..', '..');
 const read = (...p) => fs.readFileSync(path.join(ROOT, ...p), 'utf-8');
@@ -16,7 +18,7 @@ const ALL_CSS = (() => {
     for (const e of fs.readdirSync(d, { withFileTypes: true })) {
       const full = path.join(d, e.name);
       if (e.isDirectory()) walk(full);
-      else if (e.name.endsWith('.css')) out.push(fs.readFileSync(full, 'utf-8'));
+      else if (e.name.endsWith('.css') && !isDriftFixture(e.name)) out.push(fs.readFileSync(full, 'utf-8'));
     }
   };
   walk(path.join(ROOT, 'public', 'styles'));

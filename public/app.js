@@ -971,11 +971,15 @@ const EFFECT_EXECUTORS = {
     el.innerHTML = RundockChatMarkup.agentStreamingMessageHtml(a, '', RundockChatMarkup.msgTimeHtml(new Date()));
     m.appendChild(el);
     state.currentStreamingMsg = el;
+    state.streamPrefix = '';
+    state.streamedText = '';
   },
   'render-stream-text': (convoId, ef) => {
     const state = getConvoState(convoId);
     const streamEl = state.currentStreamingMsg ? state.currentStreamingMsg.querySelector('.streaming-text') : null;
-    if (streamEl) streamEl.innerHTML = formatMd(ef.text);
+    // A put-back card may have cut the reply; this bubble shows what follows it.
+    state.streamedText = ef.text;
+    if (streamEl) streamEl.innerHTML = formatMd(streamTextAfterCut(state, ef.text));
     scrollBottom();
   },
   'ensure-tool-status': (convoId, ef) => {
@@ -1032,7 +1036,7 @@ const EFFECT_EXECUTORS = {
     const state = getConvoState(convoId);
     if (!state.currentStreamingMsg) return;
     const streamEl = state.currentStreamingMsg.querySelector('.streaming-text');
-    if (streamEl && ef.text) streamEl.innerHTML = formatMd(ef.text);
+    if (streamEl && ef.text) streamEl.innerHTML = formatMd(streamTextAfterCut(state, ef.text));
     const actSummary = buildActivitySummary(ef.toolCalls, ef.turnStartTime);
     if (actSummary) state.currentStreamingMsg.appendChild(actSummary);
   },

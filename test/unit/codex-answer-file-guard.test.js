@@ -73,16 +73,17 @@ describe('during a Codex turn, an out-of-band change to an answer file is put ba
       for (const f of FILES) {
         assert.strictEqual(read(f), before[f], `${f} is back to the bytes it had when the turn started`);
       }
-      assert.strictEqual(d.notices.length, 3, 'the person is told about each file');
-      for (const n of d.notices) {
-        assert.match(n.content, /^A Codex agent changed \.(rundock|claude)\/[a-z.]+\.json, which holds your own answers about what agents may do\. Rundock put it back as it was, and is asking you whether to keep the change\.$/);
-        assert.strictEqual(n._conversationId, 'convo-1');
-      }
-      assert.strictEqual(d.asked.length, 3, 'and asked, on the answer-file card, whether to keep each change');
+      assert.strictEqual(d.notices.length, 0, 'no separate notice: the card says it all');
+      assert.strictEqual(d.asked.length, 3, 'one put-back card for each change');
       for (const req of d.asked) {
+        assert.strictEqual(req.convoId, 'convo-1');
         assert.strictEqual(req.grading.answer_file, true);
         assert.strictEqual(req.grading.grant_dir, null, 'never remembered');
-        assert.match(req.toolInput.content, /planted$/, 'the card carries what the agent wrote');
+        assert.strictEqual(req.grading.put_back.runtime, 'codex');
+        assert.strictEqual(req.grading.put_back.outsideTurn, false);
+        assert.match(req.grading.put_back.relative, /^\.(rundock|claude)\/[a-z.]+\.json$/);
+        assert.match(req.grading.put_back.after, /planted$/, 'the card carries what the agent wrote');
+        assert.doesNotMatch(req.grading.put_back.before, /planted/, 'and what it was put back to');
       }
     });
   }
@@ -97,7 +98,7 @@ describe('during a Codex turn, an out-of-band change to an answer file is put ba
       asFileEdit(f, '{"allowedTools":["Bash:rm"]}');
       await new Promise(r => setTimeout(r, guardLib.CHECK_INTERVAL_MS * 3));
       assert.strictEqual(read(f), before, 'a planted standing allow does not survive the interval');
-      assert.strictEqual(d.notices.length, 1);
+      assert.strictEqual(d.asked.length, 1);
     } finally { glue.releaseCodexTurnGuard(entry); d.restore(); }
   });
 
@@ -171,7 +172,7 @@ describe('an answer file swapped for a link, or for anything but a plain file, i
       entry._answerGuard.check();
       assert.strictEqual(read(f), before);
     } finally { glue.releaseCodexTurnGuard(entry); d.restore(); }
-    assert.strictEqual(d.notices.length, 1, 'the person is told, like any other restore');
+    assert.strictEqual(d.asked.length, 1, 'the person is asked, like any other restore');
     assert.strictEqual(d.asked.length, 1, 'and asked on the answer-file card');
     assert.strictEqual(d.asked[0].grading.answer_file, true);
   });
@@ -229,7 +230,7 @@ describe('an answer file swapped for a link, or for anything but a plain file, i
     assert.strictEqual(fs.lstatSync(abs).isSymbolicLink(), true, 'their own link stays');
     assert.strictEqual(fs.readlinkSync(abs), target);
     assert.strictEqual(fs.readFileSync(target, 'utf-8'), '{"theirs":true}\n', 'with its content as it was');
-    assert.strictEqual(d.notices.length, 1);
+    assert.strictEqual(d.asked.length, 1);
   });
 
   test('approving the card writes a plain file, even if a link was put back in the meantime', () => {
@@ -253,8 +254,6 @@ describe('an answer file swapped for a link, or for anything but a plain file, i
   });
 });
 
-const OUTSIDE_NOTICE = (rel) => `${rel}, which holds your own answers about what agents may do, changed while no agent turn was running. `
-  + 'Rundock put it back as it was, and is asking you whether to keep the change.';
 
 describe('a change made between turns is caught when the next turn starts', () => {
   test('a write after a turn ended (a background job finishing late) is restored and carded at the next turn, worded as outside a turn', () => {
@@ -271,9 +270,9 @@ describe('a change made between turns is caught when the next turn starts', () =
       entry._answerGuard.check();
       assert.strictEqual(read(f), before, 'and never adopted as the new baseline');
     } finally { glue.releaseCodexTurnGuard(entry); d.restore(); }
-    assert.strictEqual(d.notices.length, 1);
-    assert.strictEqual(d.notices[0].content, OUTSIDE_NOTICE('.rundock/permissions.json'));
-    assert.strictEqual(d.notices[0]._conversationId, 'convo-2');
+    assert.strictEqual(d.notices.length, 0);
+    assert.strictEqual(d.asked[0].grading.put_back.outsideTurn, true, 'the card says no agent was running');
+    assert.strictEqual(d.asked[0].convoId, 'convo-2');
     assert.strictEqual(d.asked.length, 1);
     assert.strictEqual(d.asked[0].grading.answer_file, true);
     assert.match(d.asked[0].toolInput.content, /Bash:\*/);
@@ -340,7 +339,7 @@ describe('a Claude Code settings file changed outside Rundock between turns is l
     } finally { glue.releaseCodexTurnGuard(entry); d.restore(); }
     assert.strictEqual(read(f), before);
     assert.strictEqual(d.asked.length, 1);
-    assert.strictEqual(d.notices.length, 1);
+    assert.strictEqual(d.asked.length, 1);
   });
 
   test('during a turn, the settings files are still put back and carded', () => {
@@ -374,7 +373,7 @@ describe('an answer file made read-only is a change', () => {
       entry._answerGuard.check();
     } finally { glue.releaseCodexTurnGuard(entry); d.restore(); }
     assert.strictEqual(fs.statSync(abs).mode & 0o777, mode, 'writable again, as it was');
-    assert.strictEqual(d.notices.length, 1);
+    assert.strictEqual(d.asked.length, 1);
     assert.doesNotThrow(() => boundary.addToolAllow('Bash:npm'), 'and Rundock can write its answers again');
   });
 });

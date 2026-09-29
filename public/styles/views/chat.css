@@ -116,6 +116,12 @@ body.light .permission-detail { background: var(--elevated); }
 .permission-detail-collapse summary { cursor: pointer; padding: 4px 0; color: var(--text-2); opacity: 0.8; }
 .permission-detail-collapse summary:hover { opacity: 1; }
 .permission-detail-collapse .permission-detail { max-height: none; margin-top: 6px; }
+/* The put-back card's change, line by line: removed lines tinted with the
+   danger hue, added lines with the success hue, unchanged lines quiet. */
+.permission-diff .diff-line { display: block; white-space: pre-wrap; }
+.permission-diff .diff-add { background: color-mix(in srgb, var(--success) 18%, transparent); color: var(--text-1); border-radius: var(--radius-sm); }
+.permission-diff .diff-del { background: color-mix(in srgb, var(--danger) 16%, transparent); color: var(--text-1); border-radius: var(--radius-sm); }
+.permission-diff .diff-ctx, .permission-diff .diff-gap { color: var(--text-3); }
 /* Indented to 24px so the buttons share the text column with the header text,
    the context line and the detail block, all of which already hang past the
    icon. Before this the card had two left edges 24px apart: everything read as
@@ -129,16 +135,18 @@ body.light .permission-detail { background: var(--elevated); }
    This note is deliberately repeated at the other site of the same decision
    (the other of chat.css .btn-allow and find-bar.css .find-match.current):
    two occurrences, both worth explaining where they are read. */
-.btn-allow { background: var(--success); color: #1a1a1a; border-color: var(--success); }
-.btn-allow:hover { filter: brightness(1.1); }
+/* The put-back card's two buttons share these: "Leave it restored" is the
+   solid default, "Keep the change" the neutral outline. */
+.btn-allow, .btn-leave-restored { background: var(--success); color: #1a1a1a; border-color: var(--success); }
+.btn-allow:hover, .btn-leave-restored:hover { filter: brightness(1.1); }
 .btn-always { background: transparent; color: var(--success-text); border-color: var(--success-text); }
 /* "Allow once" on a card that always asks is an outline, not the solid fill:
    the solid Allow says "the usual yes", and this card has no usual yes. It
    shares Always allow's hover tint, so the tint is written once. */
 .btn-allow-once { background: transparent; color: var(--success-text); border-color: var(--success-text); }
 .btn-always:hover, .btn-allow-once:hover { background: rgba(107,198,126,0.12); }
-.btn-deny { background: transparent; color: var(--text-2-strong); border-color: var(--border-strong); }
-.btn-deny:hover { background: var(--elevated); color: var(--text-1); }
+.btn-deny, .btn-keep-change { background: transparent; color: var(--text-2-strong); border-color: var(--border-strong); }
+.btn-deny:hover, .btn-keep-change:hover { background: var(--elevated); color: var(--text-1); }
 .btn-perm:focus-visible { outline: 2px solid var(--accent-control); outline-offset: 2px; }
 .permission-resolved { font-size: var(--caption); padding: 6px 12px; border-radius: var(--radius-lg); display: flex; align-items: flex-start; gap: 6px; flex-wrap: wrap; }
 .permission-resolved-detail { color: var(--text-3); }

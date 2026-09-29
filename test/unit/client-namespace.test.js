@@ -59,6 +59,7 @@ const MANIFEST = {
     "sendMessage",
     "setStandingToolAllows",
     "startProcessing",
+    "streamTextAfterCut",
     "toolAllowFailed",
     "toolAllowKey",
   ],

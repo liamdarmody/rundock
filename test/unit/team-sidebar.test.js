@@ -26,6 +26,8 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 const { JSDOM } = require('jsdom');
+// A style-drift fixture, from this run or a concurrent one, is not the app's.
+const { isDriftFixture } = require('../helpers/drift-fixture.js');
 
 const ROOT = path.join(__dirname, '..', '..');
 const read = (...parts) => fs.readFileSync(path.join(ROOT, ...parts), 'utf-8');
@@ -96,7 +98,7 @@ function filesUnder(dir, keep, skip) {
       if (skip && skip.has(rel + '/' + entry.name)) continue;
       const next = `${rel}/${entry.name}`;
       if (entry.isDirectory()) walk(next);
-      else if (keep(entry.name)) out.push(next);
+      else if (keep(entry.name) && !isDriftFixture(entry.name)) out.push(next);
     }
   };
   walk(dir);

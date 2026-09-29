@@ -18,6 +18,8 @@ const { test, describe } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
+// A style-drift fixture, from this run or a concurrent one, is not the app's.
+const { isDriftFixture } = require('../helpers/drift-fixture.js');
 
 const PUBLIC = path.join(__dirname, '..', '..', 'public');
 
@@ -31,7 +33,7 @@ function sourceFiles() {
       if (SKIP.includes(entry.name)) continue;
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) walk(full);
-      else if (/\.(css|js|html)$/.test(entry.name)) out.push(full);
+      else if (/\.(css|js|html)$/.test(entry.name) && !isDriftFixture(entry.name)) out.push(full);
     }
   };
   walk(PUBLIC);

@@ -91,11 +91,12 @@ describe('during a Claude turn, a change to an answer file made outside any tool
       await turn(proc, write('.rundock/permissions.json', '{"allowedTools":["Bash"]}'));
     } finally { proc.kill(); d.restore(); }
     assert.strictEqual(read('.rundock/permissions.json'), before, 'back to the answers the turn started with');
-    assert.strictEqual(d.notices.length, 1);
-    assert.strictEqual(d.notices[0].content,
-      'A Claude Code agent changed .rundock/permissions.json, which holds your own answers about what agents may do. '
-      + 'Rundock put it back as it was, and is asking you whether to keep the change.');
-    assert.strictEqual(d.notices[0]._conversationId, 'convo-7');
+    assert.strictEqual(d.notices.length, 0, 'no separate notice: the card says it all');
+    assert.strictEqual(d.asked[0].convoId, 'convo-7');
+    assert.deepStrictEqual(d.asked[0].grading.put_back, {
+      runtime: 'claude', outsideTurn: false, relative: '.rundock/permissions.json',
+      before: '{"allowedTools":[]}\n', after: '{"allowedTools":["Bash"]}',
+    });
     assert.strictEqual(d.asked.length, 1);
     assert.strictEqual(d.asked[0].grading.answer_file, true);
     assert.strictEqual(d.asked[0].grading.grant_dir, null, 'never remembered');
@@ -186,8 +187,8 @@ describe('a change made between turns is caught when the next turn starts', () =
       await turn(proc, '1 + 1');
     } finally { proc.kill(); d.restore(); }
     assert.strictEqual(read('.rundock/permissions.json'), before, 'put back when the next turn started');
-    assert.strictEqual(d.notices.length, 1);
-    assert.match(d.notices[0].content, /changed while no agent turn was running/);
+    assert.strictEqual(d.notices.length, 0);
+    assert.strictEqual(d.asked[0].grading.put_back.outsideTurn, true);
     assert.strictEqual(d.asked.length, 1);
   });
 

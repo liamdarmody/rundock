@@ -16,8 +16,11 @@ const ROOT = path.join(__dirname, '..', '..');
 const ALLOW = JSON.parse(fs.readFileSync(path.join(ROOT, 'test/tools/style-drift-allowlist.json'), 'utf-8'));
 
 // findings() reads relative to the repo root, so a fixture has to live in it.
+// Named for this process (test/helpers/drift-fixture.js), so concurrent runs
+// never share one.
+const { driftFixtureName, isDriftFixture } = require('../helpers/drift-fixture.js');
 function withFixture(contents, fn) {
-  const rel = `public/styles/__drift-fixture.css`;
+  const rel = `public/styles/${driftFixtureName()}`;
   const abs = path.join(ROOT, rel);
   fs.writeFileSync(abs, contents);
   try { return fn(rel); } finally { fs.unlinkSync(abs); }
@@ -161,5 +164,25 @@ describe('a literal written in a comment is not drift', () => {
     // The // stripper must not eat the rest of a line containing https://.
     const found = withFixture('.a { background: url(https://x/y.png); border-radius: 7px; }', findings);
     assert.deepStrictEqual(found.map(f => f.literal), ['7px']);
+  });
+});
+
+describe('the fixture never meets another run\'s', () => {
+  test('two processes write two different files, and every reader passes over both', () => {
+    const mine = driftFixtureName();
+    const theirs = driftFixtureName(process.pid + 1);
+    assert.notStrictEqual(mine, theirs);
+    for (const name of [mine, theirs, '__drift-fixture.css']) assert.ok(isDriftFixture(name), name);
+    for (const name of ['chat.css', 'drift-fixture.css', '__drift-fixture-x.css', 'tokens.css']) assert.ok(!isDriftFixture(name), name);
+    const other = path.join(ROOT, 'public', 'styles', theirs);
+    fs.writeFileSync(other, '.a { color: #BADA55; }');
+    try {
+      withFixture('.b { color: #C0FFEE; }', (rel) => {
+        assert.ok(fs.existsSync(other), 'the other run\'s file is left alone');
+        assert.ok(!surfaces().some(isDriftFixture), 'the lint scans neither');
+        assert.deepStrictEqual(findings(rel).map(f => f.literal), ['#C0FFEE'], 'and reads only its own when asked');
+      });
+      assert.ok(fs.existsSync(other), 'and is still there after this one is removed');
+    } finally { fs.unlinkSync(other); }
   });
 });

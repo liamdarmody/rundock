@@ -21,6 +21,8 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 const { JSDOM } = require('jsdom');
+// A style-drift fixture, from this run or a concurrent one, is not the app's.
+const { isDriftFixture } = require('../helpers/drift-fixture.js');
 
 const ROOT = path.join(__dirname, '..', '..');
 const read = (...parts) => fs.readFileSync(path.join(ROOT, ...parts), 'utf-8');
@@ -47,7 +49,7 @@ const ALL_CSS = (() => {
       // the .tool-allow-key comment names .settings-value to explain why it
       // diverges from it. Left in, a class mentioned only in a comment counts as
       // styled, and the guard passes over the exact thing it exists to catch.
-      else if (e.name.endsWith('.css')) {
+      else if (e.name.endsWith('.css') && !isDriftFixture(e.name)) {
         files.push(fs.readFileSync(full, 'utf-8').replace(/\/\*[\s\S]*?\*\//g, ''));
       }
     }

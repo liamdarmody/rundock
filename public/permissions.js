@@ -538,11 +538,101 @@
   }
 
   function answerFileCopy() { return ALWAYS_ASK_COPY.answerFile; }
+
+  // ── The put-back card ────────────────────────────────────────────────────
+  // Rundock has already put back a change to one of the workspace's permission
+  // files; the card says so, in the past tense, and asks whether to keep the
+  // change instead. `putBack` is { runtime: 'claude' | 'codex', outsideTurn,
+  // relative }. Approved copy, word for word.
+  const PUT_BACK_RUNTIME = { claude: 'Claude Code', codex: 'Codex' };
+  function putBackCardCopy(putBack) {
+    const p = putBack || {};
+    const file = p.relative || 'a permission file';
+    const who = PUT_BACK_RUNTIME[p.runtime] || PUT_BACK_RUNTIME.claude;
+    return p.outsideTurn ? {
+      origin: 'No agent was running when this happened',
+      unattributed: true,
+      heading: 'Rundock put back a change to your permission answers',
+      body: `${file} changed while no agent was running. Rundock restored it straight away. Keep that change instead?`,
+      disclosure: 'Show change', leave: 'Leave it restored', keep: 'Keep the change',
+    } : {
+      origin: `${who}, running in this conversation`,
+      unattributed: false,
+      heading: 'Rundock put back a change to your permission answers',
+      body: `${who} ran a command that changed ${file}, the file that holds your own answers about what agents may do. `
+        + 'Rundock restored it straight away. Keep the agent\'s change instead?',
+      disclosure: 'Show change', leave: 'Leave it restored', keep: 'Keep the change',
+    };
+  }
+
+  // The change, line by line: [{ kind: 'ctx' | 'del' | 'add' | 'gap', text }].
+  // Unchanged stretches are folded to two lines either side of a change, and
+  // trailing spaces on a changed line are shown as `·`, so a change that is
+  // only whitespace is still visible. `before` or `after` null means the file
+  // did not exist, or was removed.
+  const DIFF_MAX_LINES = 400;
+  const DIFF_CONTEXT = 2;
+  function diffLinesOf(text) {
+    if (text === null || text === undefined) return [];
+    const lines = String(text).split('\n');
+    if (lines.length && lines[lines.length - 1] === '') lines.pop();
+    return lines;
+  }
+  function showTrailing(line) {
+    const m = /[ \t]+$/.exec(line);
+    return m ? line.slice(0, m.index) + m[0].replace(/./g, '·') : line;
+  }
+  function putBackDiffLines(before, after) {
+    const a = diffLinesOf(before);
+    const b = diffLinesOf(after);
+    let ops;
+    if (a.length > DIFF_MAX_LINES || b.length > DIFF_MAX_LINES) {
+      ops = [...a.map(t => ({ kind: 'del', text: t })), ...b.map(t => ({ kind: 'add', text: t }))];
+    } else {
+      // Longest common subsequence of lines, then walked in order.
+      const n = a.length;
+      const m = b.length;
+      const lcs = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
+      for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) {
+        lcs[i][j] = a[i] === b[j] ? lcs[i + 1][j + 1] + 1 : Math.max(lcs[i + 1][j], lcs[i][j + 1]);
+      }
+      ops = [];
+      let i = 0;
+      let j = 0;
+      while (i < n || j < m) {
+        if (i < n && j < m && a[i] === b[j]) { ops.push({ kind: 'ctx', text: a[i] }); i++; j++; }
+        else if (j < m && (i >= n || lcs[i][j + 1] >= lcs[i + 1][j])) { ops.push({ kind: 'add', text: b[j] }); j++; }
+        else { ops.push({ kind: 'del', text: a[i] }); i++; }
+      }
+      // Removals before additions within a changed stretch, as a reader expects.
+      for (let k = 0; k < ops.length; k++) {
+        if (ops[k].kind === 'ctx') continue;
+        let e = k;
+        while (e < ops.length && ops[e].kind !== 'ctx') e++;
+        const run = ops.slice(k, e);
+        ops.splice(k, run.length, ...run.filter(o => o.kind === 'del'), ...run.filter(o => o.kind === 'add'));
+        k = e - 1;
+      }
+    }
+    const near = ops.map(() => false);
+    ops.forEach((o, k) => {
+      if (o.kind === 'ctx') return;
+      for (let d = -DIFF_CONTEXT; d <= DIFF_CONTEXT; d++) if (ops[k + d]) near[k + d] = true;
+    });
+    const out = [];
+    ops.forEach((o, k) => {
+      if (o.kind !== 'ctx') { out.push({ kind: o.kind, text: showTrailing(o.text) }); return; }
+      if (near[k]) { out.push(o); return; }
+      if (!out.length || out[out.length - 1].kind !== 'gap') out.push({ kind: 'gap', text: '…' });
+    });
+    return out;
+  }
   // Retained so a caller outside this change keeps working; both names
   // reach the same table, and new callers should use alwaysAskCopy.
   const agentHomeBoundaryCopy = alwaysAskCopy;
 
   return { BASH_DESCRIPTIONS, bashBin, classifyRisk, describeToolRequest, toolAllowKey, decidePermission, offersAlwaysAllow, alwaysAskCopy, answerFileCopy,
+    putBackCardCopy, putBackDiffLines,
     verdictAllowKey, verdictCardCopy, ruleKeyLabel, ALWAYS_ASKS_CLOSING, allowButtonClass,
     routePermissionRequest, queuePendingPermission, pendingPermissionsFor, removePendingPermission, clearPendingPermissions,
     permissionOwner, markPermissionEnded, permissionEnded, endedPermissionCopy, staleRequestIds, findPendingPermission };

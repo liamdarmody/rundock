@@ -47,9 +47,14 @@ jobs:
   mutation-sweep:
     name: Every guard, no selection
     runs-on: ubuntu-latest
-    # Measured at 1204s for the complete set. Seventy-five leaves generous room
-    # for a slower runner without letting a hang burn an hour.
-    timeout-minutes: 75
+    # First measured at 1204s for the complete set, when seventy-five minutes
+    # left generous room. The set has grown since (the Code-mode guards alone
+    # added close to a hundred rows) and a sweep now runs past that ceiling and
+    # is cut off with rows unrun, which reads as a failure of the guards rather
+    # than of the clock. A hundred and twenty minutes covers the current set
+    # with room for a slower runner. Splitting the sweep into parallel jobs is
+    # the lasting fix, planned separately; this ceiling holds until then.
+    timeout-minutes: 120
     steps:
       - name: Checkout
         uses: actions/checkout@v5

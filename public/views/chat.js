@@ -698,6 +698,9 @@ function renderPermissionCard(d, convoId, host) {
   // DOM (and any existing card) survive the reconnect, so guard against a
   // duplicate card, exactly as renderPendingPermissionCards does.
   if (requestId && document.getElementById('perm-' + requestId)) return;
+  // A change Rundock has already put back has a card of its own, unless the
+  // request has ended, which is drawn settled like any other.
+  if (req.put_back && !RundockPermissions.permissionEnded(endedPermissions, requestId)) { renderPutBackCard(d, convoId, host); return; }
   const toolName = req.tool_name || 'Unknown';
   const input = req.input || {};
   const risk = classifyRisk(toolName, input);
@@ -1031,6 +1034,86 @@ function renderPermissionCard(d, convoId, host) {
   scrollBottom();
 }
 
+// THE PUT-BACK CARD. Rundock has already put back a change to one of the
+// workspace's permission files, so the card says what happened, in the past
+// tense, and asks whether to keep the change instead. "Leave it restored" is
+// the default and answers no (the restore stands); "Keep the change" answers
+// yes. Neither is remembered.
+//
+// AFTER THE COMMAND, BEFORE THE REPLY. An ordinary card waits on something not
+// yet done, so it goes above the reply being written. This one reports
+// something already done, so it goes after what the agent has said so far,
+// and whatever the agent says next starts a new bubble below it
+// (streamTextAfterCut keeps the two apart).
+const PUT_BACK_ICON = '<svg class="permission-icon" width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M4 4.5V8h3.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M4.6 8.4a5 5 0 1 0 1.3-4.6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>';
+function renderPutBackCard(d, convoId, host) {
+  const req = d.request || {};
+  const requestId = d.request_id || '';
+  const pb = req.put_back || {};
+  const copy = RundockPermissions.putBackCardCopy(pb);
+  const input = req.input || {};
+  pendingPermissions.set(requestId, { convoId, key: null, toolInput: input, grantDir: null });
+  const diff = RundockPermissions.putBackDiffLines(pb.before === undefined ? null : pb.before, pb.after === undefined ? null : pb.after);
+  const sign = { ctx: ' ', del: '-', add: '+' };
+  const diffHtml = diff.map(l => (l.kind === 'gap'
+    ? '<span class="diff-line diff-gap">…</span>'
+    : `<span class="diff-line diff-${l.kind}">${esc(`${sign[l.kind]} ${l.text}`)}</span>`)).join('');
+  const card = document.createElement('div');
+  card.className = 'msg msg-permission';
+  card.id = 'perm-' + requestId;
+  card.innerHTML = `
+    <div class="permission-card risk-medium">
+      <div class="permission-origin${copy.unattributed ? ' unattributed' : ''}"><span>${esc(copy.origin)}</span></div>
+      <div class="permission-header">
+        ${PUT_BACK_ICON}
+        <span class="permission-summary">${esc(copy.heading)}</span>
+      </div>
+      <div class="permission-context">${esc(copy.body)}</div>
+      <code class="permission-detail">${esc(pb.relative || '')}</code>
+      ${diff.length ? `<details class="permission-detail-collapse"><summary>${esc(copy.disclosure)}</summary><div class="permission-detail permission-diff">${diffHtml}</div></details>` : ''}
+      <div class="permission-actions">
+        <button class="btn-perm btn-leave-restored" data-perm-id="${escAttr(requestId)}" data-perm-action="deny">${esc(copy.leave)}</button>
+        <button class="btn-perm btn-keep-change" data-perm-id="${escAttr(requestId)}" data-perm-action="allow">${esc(copy.keep)}</button>
+      </div>
+    </div>
+  `;
+  card.querySelectorAll('[data-perm-action]').forEach(btn => {
+    btn.addEventListener('click', () => respondPermission(btn.dataset.permId, btn.dataset.permAction !== 'deny', false, false));
+  });
+  if (host) { host.appendChild(card); return; }
+  const m = document.getElementById('messages');
+  if (!m) return;
+  const t = document.getElementById('thinking-indicator');
+  if (t) t.style.display = 'none';
+  let state = null;
+  try { state = (convoId && typeof getConvoState === 'function') ? getConvoState(convoId) : null; } catch (e) { state = null; }
+  const live = state && state.currentStreamingMsg && state.currentStreamingMsg.parentNode === m ? state.currentStreamingMsg : null;
+  if (live) {
+    // What the agent has said so far stays above; a new bubble below the card
+    // takes the rest of the reply.
+    live.after(card);
+    const next = live.cloneNode(true);
+    const text = next.querySelector('.streaming-text');
+    if (text) text.innerHTML = '';
+    next.querySelectorAll('.activity-summary').forEach(el => el.remove());
+    card.after(next);
+    state.streamPrefix = typeof state.streamedText === 'string' ? state.streamedText : '';
+    state.currentStreamingMsg = next;
+  } else {
+    m.appendChild(card);
+  }
+  scrollBottom();
+}
+
+// The part of a turn's streamed text that belongs in the current bubble: all
+// of it, unless a put-back card cut the reply, in which case what was already
+// shown above the card is left out.
+function streamTextAfterCut(state, text) {
+  const t = typeof text === 'string' ? text : '';
+  const prefix = state && typeof state.streamPrefix === 'string' ? state.streamPrefix : '';
+  return prefix && t.startsWith(prefix) ? t.slice(prefix.length) : t;
+}
+
 // Append cards for any approval requests that arrived while this
 // conversation was in the background. Idempotent: a card already in the DOM
 // is skipped, and entries stay queued until answered or timed out, so
@@ -1268,7 +1351,7 @@ function scrollBottom(force) {
 return {
   dispatchMessage, sendMessage, startProcessing, finishProcessing,
   cancelProcessing, handleActiveProcesses, addAgentMsg, addUserMsg,
-  addSystemMsg, toolAllowFailed, buildDelegationDivider, renderAuthErrorCard, copyAuthCmd, agentDisplayName,
+  addSystemMsg, toolAllowFailed, streamTextAfterCut, buildDelegationDivider, renderAuthErrorCard, copyAuthCmd, agentDisplayName,
   renderCodexQuotaCard, renderCodexGuidanceCard, renderCodexErrorPill,
   createHistoryDivider, renderSessionHistory, classifyRisk,
   describeToolRequest, toolAllowKey, handlePermissionRequest, setStandingToolAllows,
