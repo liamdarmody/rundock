@@ -379,6 +379,32 @@ describe('an answer file made read-only is a change', () => {
   });
 });
 
+describe('the Codex agent is told when its change is put back', () => {
+  const LINE = 'Rundock put back your change to .rundock/permissions.json because it holds the person\'s permission answers. '
+    + 'They are being asked whether to keep it; don\'t try the change another way.';
+  test('the line starts the conversation\'s next turn input, once', () => {
+    const entry = { agentId: 'builder', processId: 'p1' };
+    const d = drivenGlue();
+    try {
+      glue.guardCodexTurn(entry, 'convo-9');
+      asFileEdit('.rundock/permissions.json', 'planted');
+      glue.releaseCodexTurnGuard(entry);
+    } finally { d.restore(); }
+    assert.strictEqual(glue.withAgentNotice('convo-9', 'next message'), `${LINE}\n\nnext message`);
+    assert.strictEqual(glue.withAgentNotice('convo-9', 'the one after'), 'the one after', 'once');
+    assert.strictEqual(glue.withAgentNotice('another', 'x'), 'x', 'only its own conversation');
+  });
+
+  test('both turn paths pass their input through it', () => {
+    const src = fs.readFileSync(path.join(__dirname, '..', '..', 'lib', 'runtime', 'codex-glue.js'), 'utf8');
+    const CALL = 'server.startTurn(threadId, ';
+    const inputs = [];
+    for (let i = src.indexOf(CALL); i >= 0; i = src.indexOf(CALL, i + 1)) inputs.push(src.slice(i + CALL.length, i + CALL.length + 40));
+    assert.strictEqual(inputs.length, 2, 'both turn paths are found, so a call that is renamed fails rather than passing on none');
+    for (const input of inputs) assert.ok(input.startsWith('withAgentNotice(convoId, '), input);
+  });
+});
+
 describe('Rundock\'s own writes during a Codex turn stand', () => {
   test('a standing allow stored through the product is not reverted', () => {
     const entry = { agentId: 'builder', processId: 'p1' };

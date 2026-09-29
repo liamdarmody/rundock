@@ -334,6 +334,23 @@ describe('classifyShellAccess (hook-side)', () => {
       assert.strictEqual(r.grantDir, null, 'what goes is the one-click blanket, not the access');
     });
 
+    // THE FOLDER EXISTS HERE BY CONSTRUCTION. A card never offers a folder that
+    // does not exist, so on a machine with no ~/.ssh (a fresh CI runner) the
+    // test above passes whether or not the hidden-folder rule is there at all.
+    // A home built with its credential folders in place isolates that rule.
+    test('with the credential folders present, the shell card still offers none of them', () => {
+      const fixtureHome = fs.mkdtempSync(path.join(os.tmpdir(), 'hidden-home-'));
+      try {
+        for (const f of ['.ssh/config', '.aws/credentials', '.gnupg/secring.gpg', '.kube/config']) {
+          fs.mkdirSync(path.dirname(path.join(fixtureHome, f)), { recursive: true });
+          fs.writeFileSync(path.join(fixtureHome, f), 'x\n');
+          const r = classifyShellAccess('Bash', { command: `grep x ${path.join(fixtureHome, f)}` }, ws, [], fixtureHome);
+          assert.ok(r && r.where === 'outside', `${f} still asks`);
+          assert.strictEqual(r.grantDir, null, `${f}: its folder exists and is still not offered`);
+        }
+      } finally { fs.rmSync(fixtureHome, { recursive: true, force: true }); }
+    });
+
     test('the same for file tools, so the two cards cannot disagree', () => {
       for (const f of ['.ssh/config', '.ssh/id_rsa', '.aws/credentials', '.gnupg/secring.gpg']) {
         const r = classifyFileAccess('Read', { file_path: path.join(home, f) }, ws, []);

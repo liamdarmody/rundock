@@ -126,6 +126,19 @@ const DEV_HOME = { src: path.join(ROOT, 'scripts', 'dev-paths.js'), suite: 'test
 const SCAFFOLD_CM = { src: path.join(ROOT, 'lib', 'workspace', 'scaffold.js'), suite: 'test/unit/code-mode-boundary.test.js' };
 const CM_PARSE = { src: path.join(ROOT, 'scripts', 'code-mode-parse.js'), suite: 'test/unit/code-mode-verdict.test.js' };
 const CM_FIXTURE = { src: path.join(ROOT, 'test', 'helpers', 'code-mode-fixture.js'), suite: 'test/unit/code-mode-fixture-root.test.js' };
+// The handler that stores "Always allow" answers, driven through the real dispatch table.
+const ALLOW_KEY_HANDLER = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'workspace.js'), suite: 'test/unit/rule-key-allows.test.js' };
+// Telling the agent its change was put back: the hook that hands the line over,
+// and the glue that leaves it, each driven by the suite that notices it.
+const AGENT_NOTICE_HOOK = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/agent-restore-notice.test.js' };
+const AGENT_NOTICE_CLAUDE = { src: path.join(ROOT, 'lib', 'runtime', 'codex-glue.js'), suite: 'test/unit/claude-answer-file-guard.test.js' };
+const AGENT_NOTICE_ROUTER = { src: path.join(ROOT, 'lib', 'http-router.js'), suite: 'test/unit/agent-restore-notice.test.js' };
+const AGENT_NOTICE_STORE = { src: path.join(ROOT, 'lib', 'runtime', 'agent-notices.js'), suite: 'test/unit/agent-restore-notice.test.js' };
+// Reading a permission file is not a change to it.
+const ANSWER_READS_HOOK = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/answer-file-reads.test.js' };
+const ANSWER_READS_VOCAB = { src: path.join(ROOT, 'public', 'read-only-shell.js'), suite: 'test/unit/answer-file-reads.test.js' };
+// A refused "Always allow" is shown, and dropped from the view's cache.
+const ALLOW_FAIL_VIEW = { src: path.join(ROOT, 'public', 'views', 'chat.js'), suite: 'test/unit/standing-allows-client.test.js' };
 
 const MUTATIONS = [
   // ===== ONE DIRECTORY UNDER TWO NAMES IS ONE IDENTITY =====
@@ -989,6 +1002,47 @@ const MUTATIONS = [
   [CM_FIXTURE, "Fixture: under CI a missing fixture folder skips again",
     "  if (runningInCi(env)) throw new Error(",
     "  if (false) throw new Error("],
+  // ===== AN ASKS-ONCE ANSWER IS SAVED UNDER ITS RULE KEY =====
+  [ALLOW_KEY_HANDLER, "Allow keys: the handler refuses the Code-mode rule keys",
+    "(ALLOW_KEY.test(key) || RULE_KEYS.has(key))",
+    "ALLOW_KEY.test(key)"],
+  // ===== THE AGENT IS TOLD, READS ARE READS, AND A FAILED SAVE IS SHOWN =====
+  [AGENT_NOTICE_HOOK, "Agent notice: the hook never hands over a waiting line",
+    "    const note = agentNotice;",
+    "    const note = null;"],
+  [AGENT_NOTICE_CLAUDE, "Agent notice: a Claude agent is not told its change was put back",
+    "  if (runtime === 'claude') { leaveAgentNotice(convoId, line); return; }",
+    "  if (runtime === 'claude') return;"],
+  [AGENT_NOTICE_CLAUDE, "Agent notice: a change caught between turns is put down to the agent",
+    "  if (!convoId || change.outsideTurn) return;",
+    "  if (!convoId) return;"],
+  [CM_ANSWER_GUARD_GLUE, "Agent notice: a Codex agent's next turn is not told",
+    "  return [...waiting, input].filter(Boolean).join('\\n\\n');",
+    "  return input;"],
+  [ANSWER_READS_HOOK, "Answer-file reads: a command that only reads a permission file is taken as changing it",
+    "    if (writingWords.has(raw) && (isWorkspaceAnswerFile(",
+    "    if (!readOnly && (isWorkspaceAnswerFile("],
+  [ANSWER_READS_HOOK, "Answer-file reads: a segment that writes a permission file is taken as a read",
+    "      if (!isReadOnlyShellCommand(seg)) for (const w of shellPathTokens(seg)) writingWords.add(w);",
+    "      if (false) for (const w of shellPathTokens(seg)) writingWords.add(w);"],
+  [ANSWER_READS_VOCAB, "Answer-file reads: od is not a read",
+    "    'od', 'hexdump',",
+    "    'hexdump',"],
+  [ALLOW_KEY_HANDLER, "Allow keys: a refused save is not reported",
+    "    refuseToolAllow(ws, msg.key, 'Could not record that allow: that is not a tool name.');",
+    "    sendToolAllows(ws);"],
+  [ALLOW_FAIL_VIEW, "Allow keys: the view keeps an allow the server refused",
+    "  if (key) alwaysAllowedTools.delete(key);",
+    ""],
+  [AGENT_NOTICE_ROUTER, "Agent notice: the server hands out no line",
+    "    const text = require('./runtime/agent-notices.js').takeAgentNotice(id);",
+    "    const text = null;"],
+  [AGENT_NOTICE_STORE, "Agent notice: any conversation id is accepted",
+    "  return PLAIN_ID.test(id) && id !== '.' && id !== '..' ? id : null;",
+    "  return id || null;"],
+  [AGENT_NOTICE_STORE, "Agent notice: a line is handed over more than once",
+    "  waiting.delete(id);",
+    ""],
 ];
 
 const REPORTER = ['--test-reporter', 'spec'];

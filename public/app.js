@@ -491,6 +491,8 @@ function handle(d) {
     // refreshed after every grant or revoke, so the cards and the settings list
     // are never reading two different truths.
     case 'tool_allows': toolAllowsArrived(d); break;
+    // "Always allow" that the server did not save: the view drops it and says so.
+    case 'tool_allow_failed': toolAllowFailed(d); break;
     // What keeps agents inside the workspace, read back from disk after every
     // change the Permissions row asks for.
     case 'sandbox_status': sandboxStatusArrived(d); break;

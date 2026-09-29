@@ -77,6 +77,11 @@ escalations surface. The human decides; the runtime never self-approves.
   comparison is against a baseline kept for as long as Rundock runs, so a
   change made while no turn is running (a job an agent left behind, or an
   edit by hand) is put back, and asked about, when the next turn starts.
+  The agent whose change was put back during its turn is told as well: the
+  server keeps the line in memory and the hook asks for it on the agent's
+  next tool call, handing it over as `additionalContext`
+  (`lib/runtime/agent-notices.js`). Nothing is written to the workspace, so
+  an agent cannot leave a line of its own.
 - Codex: OS sandbox (Seatbelt/Landlock, or the Windows sandbox when
   configured) + protocol approval requests for escalations; on Windows
   without the sandbox, everything escalates. Escalations are graded in

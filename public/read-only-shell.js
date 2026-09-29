@@ -43,6 +43,10 @@
   var READ_ONLY_SHELL_COMMANDS = [
     'ls', 'cat', 'head', 'tail', 'find', 'grep', 'rg', 'wc', 'file', 'stat',
     'realpath', 'basename', 'dirname', 'echo', 'pwd', 'tree', 'du',
+    // Byte dumps, added so an agent inspecting a permission file with them is
+    // not carded as changing it. Neither has any option that writes a file.
+    // `xxd` is left out: `xxd -r IN OUT` writes OUT with no redirection.
+    'od', 'hexdump',
   ];
 
   // THE ONE ADDITION. A line is judged segment by segment and fails as a whole

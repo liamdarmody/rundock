@@ -590,6 +590,15 @@ function setStandingToolAllows(keys) {
   }
 }
 
+// The server did not save an "Always allow". The answer this tab was already
+// holding is dropped, so the next request asks rather than being answered by
+// something that is not stored, and the person is told why it will ask again.
+function toolAllowFailed(msg) {
+  const key = msg && typeof msg.key === 'string' ? msg.key.trim() : '';
+  if (key) alwaysAllowedTools.delete(key);
+  addSystemMsg('Rundock couldn\'t save "Always allow" for this, so it will ask again next time.');
+}
+
 // Permission/trust decision logic lives in permissions.js (unit-tested;
 // loaded before this file). The aliases keep historical call sites readable;
 // describeToolRequest injects the app's agent-name resolver for WriteFile
@@ -1259,7 +1268,7 @@ function scrollBottom(force) {
 return {
   dispatchMessage, sendMessage, startProcessing, finishProcessing,
   cancelProcessing, handleActiveProcesses, addAgentMsg, addUserMsg,
-  addSystemMsg, buildDelegationDivider, renderAuthErrorCard, copyAuthCmd, agentDisplayName,
+  addSystemMsg, toolAllowFailed, buildDelegationDivider, renderAuthErrorCard, copyAuthCmd, agentDisplayName,
   renderCodexQuotaCard, renderCodexGuidanceCard, renderCodexErrorPill,
   createHistoryDivider, renderSessionHistory, classifyRisk,
   describeToolRequest, toolAllowKey, handlePermissionRequest, setStandingToolAllows,

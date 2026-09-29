@@ -1692,7 +1692,7 @@ describe('standing tool allows outlive the tab they were given in', () => {
       for (const key of hostile) {
         const ws = captureWs();
         table.add_tool_allow({}, ws, { type: 'add_tool_allow', key });
-        assert.strictEqual(ws.sent[0].type, 'workspace_error',
+        assert.strictEqual(ws.sent[0].type, 'tool_allow_failed',
           `refused rather than stored: ${JSON.stringify(key)}`);
       }
       assert.deepStrictEqual(boundary.readToolAllows(), [],
@@ -1772,7 +1772,7 @@ describe('standing tool allows outlive the tab they were given in', () => {
 
       const writer = captureWs();
       table.add_tool_allow({}, writer, { type: 'add_tool_allow', key: 'Bash:git' });
-      assert.strictEqual(writer.sent[0].type, 'workspace_error');
+      assert.strictEqual(writer.sent[0].type, 'tool_allow_failed');
       assert.match(writer.sent[0].message, /Open a workspace/);
 
       // Revoking without a workspace answers the empty list rather than
@@ -1791,7 +1791,7 @@ describe('standing tool allows outlive the tab they were given in', () => {
       config.setWorkspace(dir);
       const ws = captureWs();
       table.add_tool_allow({}, ws, { type: 'add_tool_allow' });
-      assert.strictEqual(ws.sent[0].type, 'workspace_error');
+      assert.strictEqual(ws.sent[0].type, 'tool_allow_failed');
       assert.match(ws.sent[0].message, /no tool was named/);
       assert.deepStrictEqual(boundary.readToolAllows(), [],
         'and nothing was written, so no card is silenced by a blank key');

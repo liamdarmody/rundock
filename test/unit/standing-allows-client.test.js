@@ -284,6 +284,32 @@ describe('the two ends of the loop are the real ones, not re-implementations', (
   });
 });
 
+describe('a save the server refuses is shown, and not kept', () => {
+  test('the person is told, and the next identical request asks again', () => {
+    const sent = [];
+    global.ws = { readyState: 1, send: (x) => sent.push(JSON.parse(x)) };
+    global.WebSocket = { OPEN: 1 };
+    document.getElementById('messages').innerHTML = '';
+    global.pendingPermissions.clear();
+    try {
+      chat.setStandingToolAllows([]);
+      global.pendingPermissions.set('r20', { convoId: 'c1', key: 'Bash:supabase', toolInput: { command: 'supabase db push' }, grantDir: null });
+      chat.respondPermission('r20', true, true, false);
+      chat.toolAllowFailed({ type: 'tool_allow_failed', key: 'Bash:supabase' });
+      const notes = [...document.querySelectorAll('#messages .msg-system')].map((n) => n.textContent);
+      assert.ok(notes.includes('Rundock couldn\'t save "Always allow" for this, so it will ask again next time.'), JSON.stringify(notes));
+      sent.length = 0;
+      chat.handlePermissionRequest({ request_id: 'r21', request: { tool_name: 'Bash', input: { command: 'supabase db push' } } }, 'c1');
+      assert.deepStrictEqual(sent, [], 'not answered from an allow that was never saved');
+    } finally { global.ws = null; }
+  });
+
+  test('the message reaches the view', () => {
+    const app = fs.readFileSync(path.join(__dirname, '..', '..', 'public', 'app.js'), 'utf-8');
+    assert.match(app, /case 'tool_allow_failed': toolAllowFailed\(d\); break;/);
+  });
+});
+
 describe('the revoke control carries an index, never the key', () => {
   test('a key that would break out of a JavaScript literal cannot', () => {
     {

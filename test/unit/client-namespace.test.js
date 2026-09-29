@@ -59,6 +59,7 @@ const MANIFEST = {
     "sendMessage",
     "setStandingToolAllows",
     "startProcessing",
+    "toolAllowFailed",
     "toolAllowKey",
   ],
   "conversations.js": [

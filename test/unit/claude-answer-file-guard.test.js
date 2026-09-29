@@ -127,6 +127,35 @@ describe('during a Claude turn, a change to an answer file made outside any tool
   });
 });
 
+describe('the agent is told when its change is put back', () => {
+  const notices = require('../../lib/runtime/agent-notices.js');
+  test('a change put back during a turn leaves the agent a line for its next tool call', async () => {
+    notices.takeAgentNotice('convo-7'); // lines left by earlier tests in this file
+    const d = drivenGlue();
+    const proc = standIn();
+    try {
+      guarded(proc, 'convo-7');
+      await turn(proc, write('.rundock/permissions.json', '{"allowedTools":["Bash"]}'));
+    } finally { proc.kill(); d.restore(); }
+    assert.strictEqual(notices.takeAgentNotice('convo-7'),
+      'Rundock put back your change to .rundock/permissions.json because it holds the person\'s permission answers. '
+      + 'They are being asked whether to keep it; don\'t try the change another way.');
+  });
+
+  test('a change caught between turns leaves no line: no agent is known to have made it', async () => {
+    notices.takeAgentNotice('convo-7'); // lines left by earlier tests in this file
+    const d = drivenGlue();
+    const proc = standIn();
+    try {
+      guarded(proc, 'convo-7');
+      await turn(proc, '1 + 1');
+      fs.writeFileSync(path.join(ws, '.rundock', 'permissions.json'), '{"allowedTools":["Bash"]}\n');
+      await turn(proc, '1 + 1');
+    } finally { proc.kill(); d.restore(); }
+    assert.strictEqual(notices.takeAgentNotice('convo-7'), null);
+  });
+});
+
 describe('Rundock\'s own writes during a Claude turn stand', () => {
   test('a standing allow stored through the product mid-turn is not reverted', async () => {
     const d = drivenGlue();

@@ -15,17 +15,30 @@ const os = require('node:os');
 const path = require('node:path');
 
 const hook = require('../../scripts/permission-hook.js');
+const fx = require('../helpers/code-mode-fixture.js');
 const devPaths = require('../../scripts/dev-paths.js');
 const { codeModeVerdict } = require('../../scripts/code-mode-verdict.js');
 const { gradeCodexApproval } = require('../../lib/runtime/codex-approval.js');
 
-let root, home, ws;
+// The link needs a folder outside every temp folder: the fixture root.
+const OUTSIDE = fx.outsideTempRoot();
+const SKIP = OUTSIDE.skip || false;
+let root, outside, link, home, ws;
 before(() => {
-  // Not resolved: home is reached by the temp folder's own name, which is often
-  // a link to its real one.
+  if (SKIP) return;
+  // HOME IS GIVEN BY A NAME OUTSIDE EVERY TEMP FOLDER, AND REALLY LIVES INSIDE
+  // ONE: a link, built here rather than borrowed from the machine. On macOS the
+  // temp folder is itself a link (/tmp is /private/tmp), so home's given name
+  // and its real name differ for free; on Linux they do not, and a check that
+  // only ever compared home's given name would pass there unseen. With the
+  // link outside the temp folder, only home's real name shows that it is in
+  // one, on every platform.
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'home-in-temp-'));
-  home = path.join(root, 'home');
-  ws = path.join(root, 'ws');
+  outside = OUTSIDE.dir;
+  link = path.join(outside, 'home-link');
+  fs.symlinkSync(root, link);
+  home = path.join(link, 'home');
+  ws = path.join(link, 'ws');
   for (const [f, s] of [
     ['.ssh/config', 'Host x\n'], ['.claude/.credentials.json', '{}\n'], ['.claude/CLAUDE.md', '# global\n'],
     ['.aws/credentials', '[default]\n'], ['notes.txt', 'notes\n'], ['.npm/_cacache/entry', 'cache\n'],
@@ -33,12 +46,16 @@ before(() => {
   fs.mkdirSync(path.join(ws, '.rundock'), { recursive: true });
   fs.writeFileSync(path.join(ws, '.rundock', 'state.json'), '{"workspaceMode":"code"}\n');
 });
-after(() => fs.rmSync(root, { recursive: true, force: true }));
+after(() => {
+  if (link) { try { fs.unlinkSync(link); } catch (e) { /* already gone */ } }
+  if (OUTSIDE.dir) fs.rmSync(OUTSIDE.dir, { recursive: true, force: true });
+  if (root) fs.rmSync(root, { recursive: true, force: true });
+});
 
 const file = (tool, rel, extra = {}) => hook.classifyFileAccess(tool, { file_path: path.join(home, rel), ...extra }, ws, [], home, true, undefined, { codeMode: true });
 const shell = (command) => hook.classifyShellAccess('Bash', { command }, ws, [], home, true, { cwd: ws, codeMode: true });
 
-describe('the temp rule never covers a home folder inside a temp folder', () => {
+describe('the temp rule never covers a home folder inside a temp folder', { skip: SKIP }, () => {
   test('the development-path test itself', () => {
     const tmpdir = path.dirname(root);
     assert.strictEqual(devPaths.isDevPath(path.join(home, 'notes.txt'), { home, tmpdir }), false, 'a file in home');

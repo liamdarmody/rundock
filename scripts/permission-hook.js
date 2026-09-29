@@ -1033,6 +1033,18 @@ function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), 
   // the command as a whole (see isReadOnlyShellCommand), never of one target
   // in isolation.
   const readOnly = isReadOnlyShellCommand(command);
+  // AN ANSWER FILE IS CHANGED ONLY BY A SEGMENT THAT DOES MORE THAN READ.
+  // `tail .rundock/permissions.json; echo done > build.log` reads the file and
+  // writes somewhere else; judged as a whole it was a change to the answer
+  // file. So the words of the segments that do not only read are collected,
+  // and an answer file is reported when one of them names it. A redirect, tee,
+  // sed -i, cp or mv onto it is such a segment.
+  const writingWords = new Set();
+  if (!readOnly) {
+    for (const seg of shellSegments(String(command))) {
+      if (!isReadOnlyShellCommand(seg)) for (const w of shellPathTokens(seg)) writingWords.add(w);
+    }
+  }
   for (const raw of shellPathTokens(command)) {
     let t = raw;
     let homed = false;
@@ -1080,7 +1092,7 @@ function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), 
     //
     // The second is how anyone would actually write it, and it is the shape a
     // test using an absolute path never sees.
-    if (!readOnly && (isWorkspaceAnswerFile(resolved, workspaceRoot, foldsCase, pmod) || isAnswerFileOfAnyWorkspace(resolved, pmod))) {
+    if (writingWords.has(raw) && (isWorkspaceAnswerFile(resolved, workspaceRoot, foldsCase, pmod) || isAnswerFileOfAnyWorkspace(resolved, pmod))) {
       const akey = pmod === path.win32 ? resolved.toLowerCase() : resolved;
       if (!seen.has(akey)) { seen.add(akey); found.push({ path: resolved, answerFile: true }); }
       continue;
@@ -1446,10 +1458,39 @@ function alwaysAsksCrossing(access) {
   return writing && !offered;
 }
 
+// THE LINE RUNDOCK LEFT FOR THIS CONVERSATION'S AGENT, if any, asked for from
+// the server that keeps it (lib/runtime/agent-notices.js) before this hook
+// decides anything, so every answer below can carry it. Only the server can
+// have left it: nothing is read from the workspace. Brief and best-effort:
+// with the server unreachable, slow or saying anything unexpected, there is
+// simply no line, and the decision is unaffected.
+const AGENT_NOTICE_ID = /^[A-Za-z0-9_-][A-Za-z0-9_.-]{0,127}$/;
+function fetchAgentNotice(done) {
+  const id = process.env.RUNDOCK_CONVO_ID || '';
+  if (!process.env.RUNDOCK || !AGENT_NOTICE_ID.test(id)) { done(null); return; }
+  let finished = false;
+  const finish = (text) => {
+    if (finished) return;
+    finished = true;
+    done(typeof text === 'string' && text.trim() ? text.trim().slice(0, 2000) : null);
+  };
+  const req = http.request({
+    hostname: '127.0.0.1', port: process.env.RUNDOCK_PORT || 3000,
+    path: '/api/agent-notice?conversation=' + encodeURIComponent(id), method: 'GET', timeout: 250,
+  }, (res) => {
+    let body = '';
+    res.on('data', (c) => { body += c; if (body.length > 8192) { req.destroy(); finish(null); } });
+    res.on('end', () => { let text = null; try { text = JSON.parse(body).text; } catch (e) { /* no line */ } finish(text); });
+  });
+  req.on('error', () => finish(null));
+  req.on('timeout', () => { req.destroy(); finish(null); });
+  req.end();
+}
+
 function main() {
 let input = '';
 process.stdin.on('data', chunk => { input += chunk; });
-process.stdin.on('end', () => {
+process.stdin.on('end', () => fetchAgentNotice((agentNotice) => {
   // Not running in Rundock: pass through (no decision, Claude Code handles normally)
   if (!process.env.RUNDOCK) {
     process.stdout.write(JSON.stringify({}));
@@ -1466,6 +1507,17 @@ process.stdin.on('end', () => {
   }
 
   const wsRoot = process.env.RUNDOCK_WORKSPACE || process.cwd();
+  // Every answer this hook gives from here on also hands over any line
+  // Rundock left for this conversation's agent, as additionalContext, which
+  // the runtime adds to the model's context. The line was fetched from the
+  // server before deciding (agentNotice, below); it is never read from a file.
+  const writeDecision = (answer) => {
+    const note = agentNotice;
+    if (!note) { process.stdout.write(JSON.stringify(answer)); return; }
+    const own = answer.hookSpecificOutput || { hookEventName: 'PreToolUse' };
+    const context = [own.additionalContext, note].filter(Boolean).join('\n');
+    process.stdout.write(JSON.stringify({ ...answer, hookSpecificOutput: { ...own, additionalContext: context } }));
+  };
   // THE FOLDERS AS THEY ARE NOW, not only as they were when this agent started.
   //
   // The env carries the list the agent was BORN with, and lib/runtime/claude.js
@@ -1542,7 +1594,7 @@ process.stdin.on('end', () => {
   // file, and the profile panel, never changed. This is enforcement, not a
   // prompt: the wrong path can no longer look like a success.
   if (!targetInsideWorkspace && isProtectedClaudeEdit(data.tool_name, data.tool_input)) {
-    process.stdout.write(JSON.stringify({
+    writeDecision(({
       hookSpecificOutput: {
         hookEventName: 'PreToolUse',
         permissionDecision: 'deny',
@@ -1559,7 +1611,7 @@ process.stdin.on('end', () => {
   // cannot approve past it, so a card saying "Approve always" for such a write
   // is a promise the product cannot keep.
   if (!targetInsideWorkspace && isRuntimeHomeSurfaceEdit(data.tool_name, data.tool_input)) {
-    process.stdout.write(JSON.stringify({
+    writeDecision(({
       hookSpecificOutput: {
         hookEventName: 'PreToolUse',
         permissionDecision: 'deny',
@@ -1599,7 +1651,7 @@ process.stdin.on('end', () => {
   //
   // Named rather than silent: silence would read as Rundock having allowed it.
   if (access && access.enforcedDeny === 'runtime-settings') {
-    process.stdout.write(JSON.stringify({
+    writeDecision(({
       hookSpecificOutput: {
         hookEventName: 'PreToolUse',
         permissionDecision: 'deny',
@@ -1617,7 +1669,7 @@ process.stdin.on('end', () => {
   // `where` describes where the file sits and must stay honest; `answerFile`
   // decides whether it is ordinary inside work, and it never is.
   if (access && access.where === 'inside' && !access.answerFile) {
-    process.stdout.write(JSON.stringify({
+    writeDecision(({
       hookSpecificOutput: {
         hookEventName: 'PreToolUse',
         permissionDecision: 'allow',
@@ -1647,7 +1699,7 @@ process.stdin.on('end', () => {
   if (codeMode
       && !(access && (access.where === 'outside' || access.answerFile))
       && (!verdict || verdict.verdict === 'runs')) {
-    process.stdout.write(JSON.stringify({
+    writeDecision(({
       hookSpecificOutput: {
         hookEventName: 'PreToolUse',
         permissionDecision: 'allow',
@@ -1664,7 +1716,7 @@ process.stdin.on('end', () => {
   // browser tab is actively connected and never block on the card timeout.
   // Write/destructive/unrecognised MCP calls fall through to the permission card.
   if (typeof data.tool_name === 'string' && data.tool_name.startsWith('mcp__') && isMcpReadTool(data.tool_name)) {
-    process.stdout.write(JSON.stringify({
+    writeDecision(({
       hookSpecificOutput: {
         hookEventName: 'PreToolUse',
         permissionDecision: 'allow',
@@ -1798,7 +1850,7 @@ process.stdin.on('end', () => {
     else if (alwaysAsks || destructive) why = 'This command cannot be undone, and it is never run without asking, so it was refused rather than approved on your behalf.';
     else if (asksOnce) why = 'This command was held for your approval and Rundock could not ask, so it was refused rather than approved on your behalf.';
     else if (crossingAlwaysAsks) why = 'This reaches a place Rundock asks about every time, and it is never done without asking, so it was refused rather than approved on your behalf.';
-    process.stdout.write(JSON.stringify({
+    writeDecision(({
       hookSpecificOutput: {
         hookEventName: 'PreToolUse',
         permissionDecision: failClosed ? 'deny' : 'allow',
@@ -1830,7 +1882,7 @@ process.stdin.on('end', () => {
             ? 'The permission request was not completed within the time limit. Try the command again if it is still needed.'
             : 'This command was not approved. Acknowledge and move on.';
         }
-        process.stdout.write(JSON.stringify({
+        writeDecision(({
           hookSpecificOutput: {
             hookEventName: 'PreToolUse',
             permissionDecision: result.allow ? 'allow' : 'deny',
@@ -1852,7 +1904,7 @@ process.stdin.on('end', () => {
     req.destroy();
     // Already a denial before this change, and it stays one for everything: an
     // unanswered card means the person never saw it or never chose.
-    process.stdout.write(JSON.stringify({
+    writeDecision(({
       hookSpecificOutput: {
         hookEventName: 'PreToolUse',
         permissionDecision: 'deny',
@@ -1864,5 +1916,5 @@ process.stdin.on('end', () => {
 
   req.write(payload);
   req.end();
-});
+}));
 }
