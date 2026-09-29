@@ -4,9 +4,7 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
-## Unreleased
-
-**Name:** Fewer Cards In Code Mode
+## 0.15.1: Fewer Cards In Code Mode (2026-09-29)
 
 Code mode now asks for permission far less during development work. Everyday commands such as git, installs, test runs, builds and reads now run without a card in your workspace and working folders, and what still asks is what can't be undone, plus a short list of things other people see first. In a replay of a real development session from 0.15.0, cards went from 38 to 9 with Claude Code, and from an estimated 37 to 7 with Codex.
 
