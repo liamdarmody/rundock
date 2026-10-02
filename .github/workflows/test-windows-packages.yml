@@ -1,0 +1,47 @@
+name: Test Windows package removal
+
+# Fetches a package with the real acquireWithGit under the repository's pinned
+# Electron on a Windows runner, and checks the downloaded folder is removed
+# completely. Git writes its pack files read-only, and that runtime on Windows
+# did not clear the read-only attribute before deleting, so every package
+# install failed with EPERM. The defect was the runtime's, which is why this
+# runs under Electron rather than plain Node, and on Windows rather than in the
+# Linux suite.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'lib/packages/**'
+      - 'test/electron/package-remove-windows.cjs'
+      - '.github/workflows/test-windows-packages.yml'
+      - 'package.json'
+      - 'package-lock.json'
+  pull_request:
+    paths:
+      - 'lib/packages/**'
+      - 'test/electron/package-remove-windows.cjs'
+      - '.github/workflows/test-windows-packages.yml'
+      - 'package.json'
+      - 'package-lock.json'
+
+jobs:
+  package-remove:
+    runs-on: windows-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v5
+
+      - name: Set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install dependencies, Electron included
+        run: npm ci
+
+      - name: Fetch and remove a package under Electron
+        run: node test/electron/package-remove-windows.cjs
