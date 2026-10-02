@@ -113,12 +113,20 @@ async function check() {
   }
   const captured = JSON.parse(fs.readFileSync(CAPTURE_FILE, 'utf8'));
 
-  // A runtime version change invalidates the capture: reality may have moved.
+  // A NEWER RUNTIME IS A WARNING, NOT A FAILURE. This used to fail, and the
+  // runtime ships most days: in one week it blocked several releases, and every
+  // time the re-capture came back with the same grammar. The version number is
+  // not the behaviour. What this check proves is that the stub still matches
+  // the committed capture, which needs no runtime and is checked below. Whether
+  // the runtime's behaviour has moved is answered by re-capturing (live spend),
+  // which belongs on a schedule of its own, not in the middle of a release:
+  // people run whatever runtime they have, whichever version a release was cut
+  // against.
   let installed = null;
   try { installed = cliVersion('claude'); } catch { /* no real CLI on this machine (CI) */ }
   if (installed && installed !== captured.runtimeVersion) {
-    fail(`installed CLI is ${installed} but the capture is from ${captured.runtimeVersion}. ` +
-      'Re-capture against the new runtime: npm run stream:truth -- --capture');
+    console.warn(`[stream-truth] WARNING: installed CLI is ${installed} but the capture is from ${captured.runtimeVersion}. ` +
+      'The check below still holds the stub to the capture. To see whether the runtime moved: npm run stream:truth -- --capture');
   }
   if (!installed) {
     console.log(`[stream-truth] no real CLI on this machine; checking stub against capture from ${captured.runtimeVersion}`);

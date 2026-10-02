@@ -194,6 +194,10 @@ const CHECKS = [
  * blocked it again on the SECOND stale capture for the same reason. Twice in two
  * days, same cause, discovered serially. Reported together here, before anything
  * expensive starts.
+ *
+ * NOW A WARNING. The runtime kept shipping most days and every re-capture came
+ * back unchanged, so a mismatch is reported here and never fails the phase.
+ * Whether the runtime's behaviour moved is a scheduled question, not a commit's.
  */
 const PINNED_RUNTIMES = [
   { name: 'stream grammar', capture: 'scripts/stream-truth/captured-grammar.json', recapture: 'npm run stream:truth -- --capture' },
@@ -279,14 +283,12 @@ function main() {
   if (captures.skipped) {
     process.stdout.write(`[preflight] runtime captures... skipped (${captures.skipped})\n`);
   } else if (captures.stale.length) {
-    process.stdout.write(`[preflight] runtime captures... FAILED (0.0s)\n`);
-    results.push({
-      label: 'runtime captures',
-      ok: false,
-      ms: 0,
-      output: captures.stale.map(c => `${c.name}: captured from ${c.recorded}, installed is ${c.installed}\n`
-        + `  re-take it with: ${c.recapture}`).join('\n'),
-    });
+    // A WARNING, NOT A FAILURE: a newer runtime is not a changed one. See
+    // scripts/stream-truth/run.mjs. The harnesses still hold the stub and the
+    // reader to the committed captures, which is what a commit can break.
+    process.stdout.write('[preflight] runtime captures... warning (0.0s)\n'
+      + captures.stale.map(c => `  ${c.name}: captured from ${c.recorded}, installed is ${c.installed}; `
+        + `to see whether it moved: ${c.recapture}`).join('\n') + '\n');
   } else {
     process.stdout.write('[preflight] runtime captures... ok (0.0s)\n');
   }
