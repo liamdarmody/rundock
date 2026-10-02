@@ -513,7 +513,17 @@ function redTests(suite) {
 }
 
 function run() {
-  const targets = [SOURCE, MANIFEST, RECORD, RECORD_FOR_UNINSTALL, INSTALL, HANDLERS, MODEL, SETTINGS_VIEW];
+  // THE TARGETS ARE THE ONES THE ROWS NAME, so a new row's target is loaded
+  // without a second list to keep in step. A hand-kept list here once missed
+  // two targets, and the harness crashed on the first row that named one
+  // instead of proving it. A row naming something that is not a target, or a
+  // target without a source and a suite, fails here, before anything changes.
+  const targets = [...new Set(MUTATIONS.map(([target]) => target))];
+  for (const [target, label] of MUTATIONS) {
+    if (!target || typeof target.src !== 'string' || typeof target.suite !== 'string') {
+      throw new Error(`mutation row "${label}" names a target with no source file or suite`);
+    }
+  }
   const session = beginMutationRun({ files: [...new Set(targets.map((target) => target.src))] });
   const originals = new Map();
   for (const target of targets) originals.set(target, session.original(target.src));
