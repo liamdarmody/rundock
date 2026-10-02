@@ -20,6 +20,7 @@
     "test:confinement:electron": "electron test/electron/confinement.cjs",
     "test:settings:electron": "node test/electron/settings-parity.cjs",
     "test:user-data:electron": "node test/electron/user-data-entrypoint.cjs",
+    "test:package-remove:electron": "node test/electron/package-remove-windows.cjs",
     "test:case-identity:disk": "node test/tools/case-insensitive-identity.js",
     "test:case-identity:volume": "RUNDOCK_CASE_IDENTITY_VOLUME=1 node test/tools/case-insensitive-identity.js",
     "preflight": "node scripts/preflight.js",

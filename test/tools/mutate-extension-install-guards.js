@@ -42,6 +42,10 @@ const INSTALL = { src: path.join(ROOT, 'lib', 'packages', 'extension-install.js'
 const HANDLERS = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'packages.js'), suite: 'test/unit/extension-install.test.js' };
 const MODEL = { src: path.join(ROOT, 'public', 'packages-install-model.js'), suite: 'test/unit/extension-install.test.js' };
 const SETTINGS_VIEW = { src: path.join(ROOT, 'public', 'views', 'settings.js'), suite: 'test/unit/extension-install.test.js' };
+// Removing a downloaded package folder: the Windows-safe removal itself, and
+// the acquirer's use of it.
+const REMOVE_FOLDER = { src: path.join(ROOT, 'lib', 'packages', 'remove-folder.js'), suite: 'test/unit/package-folder-remove.test.js' };
+const SOURCE_REMOVE = { src: path.join(ROOT, 'lib', 'packages', 'extension-source.js'), suite: 'test/unit/package-folder-remove.test.js' };
 
 const MUTATIONS = [
   // ===== WHAT IS INSTALLED, WHO IT IS, AND WHAT IT CLAIMS (0.15.0 review) =====
@@ -459,6 +463,22 @@ const MUTATIONS = [
   [SETTINGS_VIEW, 'a change of workspace empties the typed link',
     "  if (field) field.value = '';\n",
     ''],
+  // ===== A DOWNLOADED PACKAGE FOLDER IS REMOVED ON EVERY PLATFORM =====
+  [REMOVE_FOLDER, "Package folder removal: files and folders are not made writable",
+    "  try { fs.chmodSync(dir, st.isDirectory() ? 0o700 : 0o600); } catch (e) { /* the remove will say */ }",
+    "  /* not made writable */"],
+  [REMOVE_FOLDER, "Package folder removal: a briefly held file is not retried",
+    "      if (attempt >= attempts || !HELD.has(e && e.code)) throw e;",
+    "      throw e;"],
+  [SOURCE_REMOVE, "Package clean-up: a failed removal throws over the real error",
+    "      console.warn(`[Packages] Could not remove the downloaded package folder ${dir}: ${e && e.message ? e.message : e}`);",
+    "      throw e;"],
+  [SOURCE_REMOVE, "Package clean-up: the fetched .git is removed without the Windows-safe removal",
+    "    removeAcquired(path.join(dir, '.git'));",
+    "    fs.rmSync(path.join(dir, '.git'), { recursive: true, force: true });"],
+  [SOURCE_REMOVE, "Package clean-up: discarding a snapshot bypasses the Windows-safe removal",
+    "let removeAcquired = (dir) => removeDownloadedFolder(dir);",
+    "let removeAcquired = (dir) => fs.rmSync(dir, { recursive: true, force: true });"],
 ];
 
 const REPORTER = ['--test-reporter', 'spec'];
