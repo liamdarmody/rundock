@@ -6,6 +6,8 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 ## Unreleased
 
+**Name:** Packages On Windows
+
 ### Fixed
 
 - **Packages install on Windows:** adding a package from a GitHub link failed every time on Windows with a raw permission error (`EPERM`). Git marks some of the files it downloads as read-only, and Windows wouldn't let Rundock delete them when it tidied up after the download; the clean-up after that failed the same way and hid the real reason the install stopped. Rundock now makes the downloaded files writable before removing them and tries again if one is briefly in use. If a clean-up still fails, Rundock notes it and carries on, so an install that worked is never failed by it, and when a download really fails you see why.
