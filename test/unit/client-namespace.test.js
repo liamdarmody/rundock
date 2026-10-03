@@ -383,6 +383,7 @@ const MANIFEST = {
     "addToTeam",
     "getWorkingAgentIds",
     "orgCardHtml",
+    "orgToggleOrientation",
     "orgZoom",
     "renderAgentList",
     "renderConvoEmptyAgents",

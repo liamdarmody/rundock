@@ -4,6 +4,20 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
+## Unreleased
+
+**Name:** Team Chart On Its Side
+
+The team chart can now be laid out from left to right as well as from the top down, and Rundock remembers which you chose.
+
+### Added
+
+- **Turn the team chart on its side:** a "Switch layout" button under the zoom controls puts the orchestrator on the left and each level of reports in a column to its right, which suits a deep team or a tall window, and the same button switches back. Its icon shows the layout you will switch to. Switching fits the whole team to the window again and clears any zoom. The choice is kept between sessions, the Rundock Agents row stays below the chart, and the button is only shown when there is a team. Contributed by @dougseven.
+
+### Changed
+
+- **More room beside the orchestrator:** on a team of more than ten specialists, an agent whose manager isn't on the team sits on the same row as the orchestrator, and the orchestrator's larger card came close enough to touch it. That row is now spaced a little wider so the two cards sit apart.
+
 ## 0.15.2: Packages On Windows (2026-10-02)
 
 ### Fixed

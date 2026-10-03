@@ -7,8 +7,12 @@
 .org-zoom button { width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; color: var(--text-2); font-size: var(--title); font-weight: 500; line-height: 1; }
 .org-zoom button:hover { color: var(--text-1); background: var(--surface); }
 .org-zoom .org-zoom-divider { height: 1px; background: var(--border); }
+.org-zoom button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 /* org-chart-title removed: redundant label */
 .org-tree { display: flex; flex-direction: column; align-items: center; transform-origin: top center; position: relative; }
+/* A short fade when the layout is switched, reusing the shared fadeIn. */
+.org-tree.org-tree-switched { animation: fadeIn var(--duration-base) ease both; }
+@media (prefers-reduced-motion: reduce) { .org-tree.org-tree-switched { animation: none; } }
 .org-card { position: relative; background: var(--card); border-radius: var(--radius-xl); padding: 24px 30px; display: flex; align-items: center; gap: 16px; cursor: pointer; transition: all var(--duration-slow) ease; border: 1px solid transparent; box-shadow: 0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.08); max-width: 320px; }
 .org-card:hover { box-shadow: 0 4px 16px rgba(0,0,0,0.2), 0 0 0 1px var(--accent); }
 .org-card-name { font-size: var(--org-name); font-weight: 700; color: var(--text-1); }

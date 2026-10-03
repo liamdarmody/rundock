@@ -7,17 +7,19 @@
 // dispatch (renderAgentList, renderOrgChart), routing
 // (renderOrgChart on the team nav), message handling (getWorkingAgentIds),
 // and the generated onclick handlers (showProfile, addToTeam, orgZoom,
-// startConversation, startSetupConversation).
+// orgToggleOrientation, startConversation, startSetupConversation).
 //
 // Shared state stays in app.js and is reached through the global lexical
 // environment at call time: agents, conversations, convoState,
 // agentLastActivity, workspaceAnalysis, currentWorkspacePath, ws, and
 // orgZoomOffset (read by renderOrgChart, written by orgZoom, and reset by
 // the debounced resize listener that stays in app.js as top-level window
-// wiring). ORG_PRESETS moved here as view-local state: no external
-// touchpoints. d3 is the CDN-loaded d3-hierarchy global, resolved on window
-// at call time. Helpers reached the same way: getTeamAgents,
-// getPlatformAgents, formatTimeAgo, esc, getGuide. Every sentence that names
+// wiring), and orgOrientation with its storage key and the persist helper
+// (read by renderOrgChart, written by orgToggleOrientation). ORG_PRESETS
+// moved here as view-local state: no external touchpoints. d3 is the
+// CDN-loaded d3-hierarchy global, resolved on window at call time. Helpers
+// reached the same way: getTeamAgents, getPlatformAgents, formatTimeAgo, esc,
+// getGuide. Every sentence that names
 // the guide comes from RundockGuideCopy, reached the same way, so no view
 // carries a guide's name and no copy check has to read four files.
 // Load order (views before app.js) is safe because nothing here touches
@@ -188,12 +190,33 @@ function addToTeam(agentId) {
 }
 
 
+// The chart's layout, reached off the global at call time like every other
+// shared value. Anything but 'horizontal' reads as vertical.
+function orgOrientationNow() {
+  return orgOrientation === 'horizontal' ? 'horizontal' : 'vertical';
+}
+
 // Card dimension presets at 1:1 scale (before scaling)
 const ORG_PRESETS = {
   leader:  { w: 280, h: 108, padV: 30, padH: 44, gap: 16, avatar: 64, icon: 28, name: 28, role: 15 },
   normal:  { w: 220, h: 86,  padV: 16, padH: 20, gap: 12, avatar: 40, icon: 18, name: 15, role: 13 },
   compact: { w: 170, h: 67,  padV: 10, padH: 14, gap: 10, avatar: 28, icon: 12, name: 14, role: 12 },
 };
+
+// The platform section's vertical metrics at 1:1 scale. The section is drawn
+// from these and the horizontal fit reserves its height from the same values,
+// so the two cannot drift apart. labelLine is the browser's default line box
+// for 12px type, so the reserve is an estimate that errs a pixel or two high.
+const ORG_PLATFORM = { top: 24, topNoTeam: 32, dividerH: 1, dividerGap: 24, labelSize: 12, labelLine: 15, labelGap: 16 };
+const orgPlatformHeight = () => ORG_PLATFORM.top + ORG_PLATFORM.dividerH + ORG_PLATFORM.dividerGap
+  + ORG_PLATFORM.labelLine + ORG_PLATFORM.labelGap + ORG_PRESETS.normal.h;
+
+// The layout toggle shows the layout it switches TO: a small tree drawn top
+// down (one card over two, joined by right-angled lines) or the same tree
+// drawn left to right. Same 24-unit grid and 1.8 stroke as the app's icons.
+const ORG_ICON_SVG = (d) => `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${d}"/></svg>`;
+const ORG_ICON_VERTICAL = ORG_ICON_SVG('M9 3h6v5H9zM3 16h6v5H3zM15 16h6v5h-6zM12 8v4M6 12h12M6 12v4M18 12v4');
+const ORG_ICON_HORIZONTAL = ORG_ICON_SVG('M3 9v6h5V9zM16 3v6h5V3zM16 15v6h5v-6zM8 12h4M12 6v12M12 6h4M12 18h4');
 
 // Render a single org card with all dimensions scaled by factor `s`
 function orgCardHtml(agent, preset, s, posStyle) {
@@ -276,47 +299,102 @@ function renderOrgChart() {
     const nodeW = isCompact ? 220 : 280;
     const nodeH = isCompact ? 160 : 190;
     const hierarchy = d3.hierarchy(treeRoot);
+    const horizontal = orgOrientationNow() === 'horizontal';
+
+    // A column is one level of the tree. When several agents have no resolvable
+    // parent the hierarchy gets a virtual root above them, which is not drawn,
+    // so the first drawn level is one deeper than the root.
+    const levelOf = (n) => n.depth - (treeRoot === rootData ? 1 : 0);
+    const levelSize = {};
+    hierarchy.each(n => {
+      if (n.data.id !== '__root__') levelSize[levelOf(n)] = (levelSize[levelOf(n)] || 0) + 1;
+    });
+
+    // Horizontal rows are one card height plus a gap. The taller leader card
+    // only sets the pitch when it shares a column with other cards.
+    const leaderShares = hierarchy.descendants().some(n => n.data.type === 'orchestrator' && levelSize[levelOf(n)] > 1);
+    const rowGap = isCompact ? 22 : 30;
+    const colGap = isCompact ? 90 : 110;
+    const rowStep = (leaderShares ? P.leader.h : P[preset].h) + rowGap;
+
     // Uniform separation so a lead with one report takes the same width as a
     // childless lead (it centres over its single report); a lead only widens
     // when it has two or more reports, spanning them exactly as the top row
     // spreads its own children. The d3 default (2x between different-parent
     // nodes) doubled the gap between two adjacent leads that each had a report.
-    d3.tree().nodeSize([nodeW, nodeH]).separation(() => 1)(hierarchy);
+    // In horizontal the breadth axis (n.x) runs down the page, one row apart.
+    // In vertical, a leader that shares its level with other cards needs room
+    // for its wider card beside a compact one, or the two overlap.
+    const colStep = leaderShares ? Math.max(nodeW, (P.leader.w + P[preset].w) / 2 + 12) : nodeW;
+    d3.tree().nodeSize(horizontal ? [rowStep, 1] : [colStep, nodeH]).separation(() => 1)(hierarchy);
 
     const cardW = (n) => Math.min(n.data.type === 'orchestrator' ? P.leader.w : P[preset].w, 320);
     const cardH = (n) => n.data.type === 'orchestrator' ? P.leader.h : P[preset].h;
 
     // Get bounds of d3 node centres
     let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    let maxLevel = 0;
     hierarchy.each(n => {
       if (n.data.id === '__root__') return;
       minX = Math.min(minX, n.x); maxX = Math.max(maxX, n.x);
       minY = Math.min(minY, n.y); maxY = Math.max(maxY, n.y);
+      maxLevel = Math.max(maxLevel, levelOf(n));
     });
 
     // Full-scale tree dimensions (centre-to-edge + padding)
     const pad = 20;
     const halfMaxCard = Math.max(P.leader.w, P[preset].w) / 2;
-    const fullW = (maxX - minX) + halfMaxCard * 2 + pad * 2;
-    const fullH = (maxY - minY) + P.leader.h + P[preset].h + pad * 2;
+    let fullW, fullH;
+    // Horizontal columns: each is as wide as its widest card, with a gap wide
+    // enough for the connector stubs. colCentre[level] is in full-scale units.
+    const colCentre = [];
+    let halfMaxH = 0;
+    if (horizontal) {
+      const colW = [];
+      hierarchy.each(n => {
+        if (n.data.id === '__root__') return;
+        colW[levelOf(n)] = Math.max(colW[levelOf(n)] || 0, cardW(n));
+        halfMaxH = Math.max(halfMaxH, cardH(n) / 2);
+      });
+      let left = pad;
+      for (let k = 0; k <= maxLevel; k++) {
+        colCentre[k] = left + colW[k] / 2;
+        left += colW[k] + colGap;
+      }
+      fullW = left - colGap + pad;
+      fullH = (maxX - minX) + halfMaxH * 2 + pad * 2;
+    } else {
+      fullW = (maxX - minX) + halfMaxCard * 2 + pad * 2;
+      fullH = (maxY - minY) + P.leader.h + P[preset].h + pad * 2;
+    }
 
-    // Compute scale: auto-fit viewport, then apply user zoom offset
+    // Compute scale: auto-fit viewport, then apply user zoom offset. A tall
+    // horizontal chart would otherwise fit the viewport and push the platform
+    // row below the fold, so its height is reserved in the fit.
+    const platformReserve = horizontal && platformAgents.length ? orgPlatformHeight() : 0;
     const chartW = chart.clientWidth - 64;
     const chartH = chart.clientHeight - 64;
-    const fitScale = Math.min(chartW / fullW, chartH / fullH, 1);
+    const fitScale = Math.min(chartW / fullW, chartH / (fullH + platformReserve), 1);
     s = Math.max(0.15, Math.min(2, fitScale + orgZoomOffset));
 
     // Scaled coordinate helpers
     const r = (v) => Math.round(v * s);
     const sx = (x) => Math.round((x - minX + halfMaxCard + pad) * s);
     const sy = (y) => Math.round((y - minY + pad) * s);
+    // Horizontal: the card's centre column, and its centre row.
+    const colX = (n) => Math.round(colCentre[levelOf(n)] * s);
+    const rowY = (n) => Math.round((n.x - minX + halfMaxH + pad) * s);
     const totalW = r(fullW);
     const totalH = r(fullH);
 
     h += `<div class="org-layout" style="width:${totalW}px;height:${totalH}px">`;
     h += `<svg class="org-connectors" width="${totalW}" height="${totalH}"><g>`;
 
-    // Build parent-children groups for connectors
+    // Right-angled trunk-bar-drop connectors, one group per parent. Vertical:
+    // a trunk down from the parent's bottom edge, a bar across its reports,
+    // and a drop into each report's top edge. Horizontal mirrors it: a stub out
+    // of the parent's right edge, a bar down its reports, and a stub into each
+    // report's left edge. The links from the virtual root are not drawn.
     const parentGroups = new Map();
     hierarchy.each(n => {
       if (n.data.id === '__root__' || !n.parent || n.parent.data.id === '__root__') return;
@@ -324,31 +402,36 @@ function renderOrgChart() {
       if (!parentGroups.has(pid)) parentGroups.set(pid, { parent: n.parent, children: [] });
       parentGroups.get(pid).children.push(n);
     });
-    hierarchy.each(n => {
-      if (n.parent && n.parent.data.id !== '__root__') return;
-      if (!n.children || n.data.id === '__root__') return;
-      const pid = n.data.id;
-      if (!parentGroups.has(pid)) parentGroups.set(pid, { parent: n, children: [] });
-      n.children.forEach(c => {
-        if (c.data.id !== '__root__') parentGroups.get(pid).children.push(c);
-      });
-    });
 
     parentGroups.forEach(({ parent: p, children: kids }) => {
       if (kids.length === 0) return;
-      const px = sx(p.x);
-      const srcBottom = sy(p.y) + r(cardH(p));
-      const ty = sy(kids[0].y);
-      const midY = srcBottom + Math.round((ty - srcBottom) / 2);
-
-      h += `<path d="M${px},${srcBottom} L${px},${midY}"/>`;
-      const childXs = kids.map(c => sx(c.x));
-      if (kids.length > 1) {
-        h += `<path d="M${Math.min(...childXs)},${midY} L${Math.max(...childXs)},${midY}"/>`;
+      if (horizontal) {
+        const srcRight = colX(p) + Math.round(r(cardW(p)) / 2);
+        const py = rowY(p);
+        const tx = Math.min(...kids.map(c => colX(c) - Math.round(r(cardW(c)) / 2)));
+        const midX = srcRight + Math.round((tx - srcRight) / 2);
+        h += `<path d="M${srcRight},${py} L${midX},${py}"/>`;
+        const childYs = kids.map(c => rowY(c));
+        if (kids.length > 1) {
+          h += `<path d="M${midX},${Math.min(...childYs)} L${midX},${Math.max(...childYs)}"/>`;
+        }
+        kids.forEach(c => {
+          h += `<path d="M${midX},${rowY(c)} L${colX(c) - Math.round(r(cardW(c)) / 2)},${rowY(c)}"/>`;
+        });
+      } else {
+        const px = sx(p.x);
+        const srcBottom = sy(p.y) + r(cardH(p));
+        const ty = sy(kids[0].y);
+        const midY = srcBottom + Math.round((ty - srcBottom) / 2);
+        h += `<path d="M${px},${srcBottom} L${px},${midY}"/>`;
+        const childXs = kids.map(c => sx(c.x));
+        if (kids.length > 1) {
+          h += `<path d="M${Math.min(...childXs)},${midY} L${Math.max(...childXs)},${midY}"/>`;
+        }
+        kids.forEach(c => {
+          h += `<path d="M${sx(c.x)},${midY} L${sx(c.x)},${sy(c.y)}"/>`;
+        });
       }
-      kids.forEach(c => {
-        h += `<path d="M${sx(c.x)},${midY} L${sx(c.x)},${sy(c.y)}"/>`;
-      });
     });
 
     h += '</g></svg>';
@@ -358,7 +441,10 @@ function renderOrgChart() {
       if (n.data.id === '__root__') return;
       const isLeader = n.data.type === 'orchestrator';
       const p = isLeader ? 'leader' : preset;
-      h += orgCardHtml(n.data, p, s, `left:${sx(n.x)}px;top:${sy(n.y)}px;`);
+      const pos = horizontal
+        ? `left:${colX(n)}px;top:${Math.round(rowY(n) - r(cardH(n)) / 2)}px;`
+        : `left:${sx(n.x)}px;top:${sy(n.y)}px;`;
+      h += orgCardHtml(n.data, p, s, pos);
     });
 
     h += '</div>'; // close .org-layout
@@ -366,7 +452,7 @@ function renderOrgChart() {
     // Set scroll/centering after DOM update
     requestAnimationFrame(() => {
       const overflowX = fullW * s > chartW;
-      const overflowY = fullH * s > chartH;
+      const overflowY = (fullH + platformReserve) * s > chartH;
       chart.style.overflowX = overflowX ? 'auto' : 'hidden';
       chart.style.overflowY = overflowY ? 'auto' : 'hidden';
       chart.style.justifyContent = overflowY ? 'flex-start' : 'center';
@@ -422,9 +508,9 @@ function renderOrgChart() {
   // Platform section: scaled to match specialist cards
   if (platformAgents.length) {
     const r = (v) => Math.round(v * s);
-    h += `<div class="org-platform-section" style="margin-top:${r(hasTeam ? 24 : 32)}px">`;
-    h += `<div class="org-platform-divider" style="max-width:${r(200)}px;margin-bottom:${r(24)}px"></div>`;
-    h += `<div class="org-platform-label" style="font-size:${r(12)}px;margin-bottom:${r(16)}px">Rundock Agents</div>`;
+    h += `<div class="org-platform-section" style="margin-top:${r(hasTeam ? ORG_PLATFORM.top : ORG_PLATFORM.topNoTeam)}px">`;
+    h += `<div class="org-platform-divider" style="max-width:${r(200)}px;margin-bottom:${r(ORG_PLATFORM.dividerGap)}px"></div>`;
+    h += `<div class="org-platform-label" style="font-size:${r(ORG_PLATFORM.labelSize)}px;margin-bottom:${r(ORG_PLATFORM.labelGap)}px">Rundock Agents</div>`;
     h += `<div style="display:flex;justify-content:center;gap:${r(12)}px">`;
     for (const a of platformAgents) {
       h += orgCardHtml(a, 'normal', s, '');
@@ -440,6 +526,13 @@ function renderOrgChart() {
     h += '<button onclick="orgZoom(1)" title="Zoom in">+</button>';
     h += '<div class="org-zoom-divider"></div>';
     h += '<button onclick="orgZoom(-1)" title="Zoom out">&minus;</button>';
+    // No pressed state: the button shows the layout it switches to. The
+    // tooltip stays "Switch layout"; the accessible name names the target and
+    // changes with the layout.
+    const isHorizontal = orgOrientationNow() === 'horizontal';
+    const orientLabel = isHorizontal ? 'Switch to top-down layout' : 'Switch to left-to-right layout';
+    h += '<div class="org-zoom-divider"></div>';
+    h += `<button class="org-orient" onclick="orgToggleOrientation()" aria-label="${orientLabel}" title="Switch layout">${isHorizontal ? ORG_ICON_VERTICAL : ORG_ICON_HORIZONTAL}</button>`;
     h += '</div>';
   }
 
@@ -451,5 +544,20 @@ function orgZoom(dir) {
   renderOrgChart();
 }
 
-return { getWorkingAgentIds, renderAgentList, renderConvoEmptyAgents, addToTeam, orgCardHtml, renderOrgChart, orgZoom };
+// Pivot the chart 90 degrees. The fit is recomputed for the new shape, so any
+// zoom applied to the old one is dropped. The chart is redrawn from scratch,
+// which discards the focused button, so focus goes back to it for keyboard use.
+// The new layout fades in briefly; zoom and other redraws do not.
+function orgToggleOrientation() {
+  orgOrientation = orgOrientationNow() === 'horizontal' ? 'vertical' : 'horizontal';
+  persist.set(ORG_ORIENTATION_KEY, orgOrientation);
+  orgZoomOffset = 0;
+  renderOrgChart();
+  const tree = document.querySelector('#org-chart .org-tree');
+  if (tree) tree.classList.add('org-tree-switched');
+  const btn = document.querySelector('.org-zoom .org-orient');
+  if (btn) btn.focus();
+}
+
+return { getWorkingAgentIds, renderAgentList, renderConvoEmptyAgents, addToTeam, orgCardHtml, renderOrgChart, orgZoom, orgToggleOrientation };
 }));

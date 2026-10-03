@@ -86,6 +86,7 @@ function shell({ guideName = 'Wren', guide = true } = {}) {
   w.workspaceAnalysis = null;
   w.currentWorkspacePath = null;
   w.orgZoomOffset = 0;
+  w.orgOrientation = 'vertical';
   w.esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   w.formatTimeAgo = () => 'a while ago';
   w.getTeamAgents = () => w.agents.filter(a => a.status === 'onTeam' && a.type !== 'platform');

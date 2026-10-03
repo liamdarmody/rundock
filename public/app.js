@@ -135,6 +135,11 @@ function pickDefaultConversation() {
   });
 }
 let orgZoomOffset = 0; // User zoom adjustment: +/- steps of 0.1 on top of auto-fit scale
+// Org chart layout: 'vertical' (top-down, the default) or 'horizontal'
+// (left-to-right). A viewing preference, so one global setting; anything
+// stored other than 'horizontal' reads as vertical.
+const ORG_ORIENTATION_KEY = 'rundock.orgOrientation';
+let orgOrientation = persist.get(ORG_ORIENTATION_KEY) === 'horizontal' ? 'horizontal' : 'vertical';
 // Unread-signal bookkeeping by reason (message vs pending permission) lives in
 // unread-state.js (unit-tested), so a permission card timing out clears its own
 // contribution without wiping a co-occurring unread message.
@@ -1202,10 +1207,11 @@ function addSystemMsgToConvo(text, convoId, isError = true) {
 
 // ===== 6. ORG CHART =====
 // Moved to public/views/team.js alongside the agent list: ORG_PRESETS,
-// orgCardHtml, renderOrgChart, orgZoom. The debounced resize listener
-// below stays here: it is top-level window wiring (the same call the
-// workspace picker's delegated listeners made), and orgZoomOffset stays
-// in section 1 because this listener resets it.
+// orgCardHtml, renderOrgChart, orgZoom, orgToggleOrientation. The debounced
+// resize listener below stays here: it is top-level window wiring (the same
+// call the workspace picker's delegated listeners made), and orgZoomOffset
+// and orgOrientation stay in section 1 because this listener and the
+// persisted preference need them before the view module runs.
 
 // Debounced resize: reset zoom and re-render
 let _orgResizeTimer;
