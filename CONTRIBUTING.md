@@ -118,6 +118,7 @@ Rundock has a substantial automated suite, and PRs are expected to keep it green
 - **`npm test`**: the full Node suite (500+ tests): unit tests for the pure modules, integration tests that drive the real server against stub runtime binaries, and an editor round-trip suite that boots the real editor under jsdom.
 - **`npx playwright test`**: the browser-driven E2E suite. Blocking in CI; run it for any client-facing change.
 - **`npm run test:coverage`**: server-side line coverage with a per-area breakdown.
+- **`npx playwright test --config scripts/screenshots/look-view.config.mjs`**: one screenshot of one view of this checkout, against a sanitized demo workspace, so you (or a coding agent) can check a visible change without starting the app by hand. Options and examples are in [Look at one view](docs/browser-pass.md#look-at-one-view).
 
 Expectations for a PR: the full suite green on Node 22 and 24 (CI checks both), new behaviour covered by tests (bug fixes include a regression test that fails before the fix), and byte-for-byte guarantees respected if you touch the editor. Then test by hand against a real workspace with agents: verify your change across the team, conversations, skills, and files views as relevant.
 

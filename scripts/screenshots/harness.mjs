@@ -50,14 +50,17 @@ export const MOTION_CSS = `
 // Creates a deterministic context. `motion:true` keeps animations and can
 // record video to `recordVideoDir`. `theme` boots the app already in light or
 // dark (the client reads localStorage on load), so a clip never flips theme
-// mid-recording.
-export async function newContext(browser, { motion = false, recordVideoDir = null, theme = 'dark' } = {}) {
+// mid-recording. `viewport` and `deviceScaleFactor` default to the locked
+// marketing geometry; look-view passes its own.
+export async function newContext(browser, {
+  motion = false, recordVideoDir = null, theme = 'dark', viewport = VIEWPORT, deviceScaleFactor = DEVICE_SCALE,
+} = {}) {
   const ctx = await browser.newContext({
-    viewport: VIEWPORT,
-    deviceScaleFactor: DEVICE_SCALE,
+    viewport,
+    deviceScaleFactor,
     timezoneId: TIMEZONE,
     reducedMotion: motion ? 'no-preference' : 'reduce',
-    ...(recordVideoDir ? { recordVideo: { dir: recordVideoDir, size: VIEWPORT } } : {}),
+    ...(recordVideoDir ? { recordVideo: { dir: recordVideoDir, size: viewport } } : {}),
   });
   await ctx.addInitScript(clockScript, FIXED_EPOCH);
   await ctx.addInitScript((t) => { try { localStorage.setItem('rundock-theme', t); } catch { /* ignore */ } }, theme);
