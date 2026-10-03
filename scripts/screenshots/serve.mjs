@@ -35,7 +35,7 @@ async function waitForReady(url, { timeoutMs = 20000, intervalMs = 150 } = {}) {
 
 // One boot attempt on a specific port. Throws if the port is taken or the
 // server does not come up.
-async function spawnAttempt({ workspace, home, port, quiet }) {
+async function spawnAttempt({ workspace, home, port, quiet, env = {} }) {
   const bootScript = `require(${JSON.stringify(SERVER)}).startServer({ port: ${port} })`;
   const child = spawn(process.execPath, ['-e', bootScript], {
     cwd: REPO_ROOT,
@@ -53,6 +53,7 @@ async function spawnAttempt({ workspace, home, port, quiet }) {
       // actually fire one against fake data and overwrite the seeded state.
       // See server.js's SCHEDULER_DISABLED for the other half of this.
       RUNDOCK_DISABLE_SCHEDULER: '1',
+      ...env,
     },
     stdio: quiet ? ['ignore', 'ignore', 'pipe'] : 'inherit',
   });
@@ -96,13 +97,14 @@ async function spawnAttempt({ workspace, home, port, quiet }) {
 
 // Boots the server, retrying on nearby ports if the preferred one is busy (a
 // stray process or a concurrent run should not fail the whole pipeline).
-// `workspace` and `home` come from the generator.
-export async function startRundock({ workspace, home, port = CAPTURE_PORT, quiet = true } = {}) {
+// `workspace` and `home` come from the generator. `env` adds to the child's
+// environment (look-view puts the stub runtime first on PATH with it).
+export async function startRundock({ workspace, home, port = CAPTURE_PORT, quiet = true, env = {} } = {}) {
   const candidates = [port, port + 1, port + 2, port + 5, port + 11];
   let lastErr;
   for (const p of candidates) {
     try {
-      return await spawnAttempt({ workspace, home, port: p, quiet });
+      return await spawnAttempt({ workspace, home, port: p, quiet, env });
     } catch (err) {
       lastErr = err;
       // Retry only on a bind/startup failure; rethrow anything unexpected.

@@ -35,7 +35,62 @@ Nothing gates this and nothing needs to. Run the gate and CI alongside, not in f
 npm run precommit:detached
 ```
 
-Then drive the real interface at that URL. Not the classifier, not the HTTP payload, not a unit test standing in for the screen: **the surface whose wording the claim names.** A proxy one layer in is the failure mode this project has paid for five times in one release.
+Then drive the real interface at that URL. For a single screen, a screenshot is often enough: see [Look at one view](#look-at-one-view) below. Not the classifier, not the HTTP payload, not a unit test standing in for the screen: **the surface whose wording the claim names.** A proxy one layer in is the failure mode this project has paid for five times in one release.
+
+## Look at one view
+
+One command takes one screenshot of one view of this checkout, so a coding agent (or a person) can check a visible change without starting the app by hand. It builds the sanitized demo workspace from `scripts/screenshots/`, serves this checkout's code against it with a fake home directory and the stub runtime first on `PATH` (no real agent, no routine that runs for real), takes the picture, prints its path, and stops everything it started. It is contributor tooling and is not part of the desktop build.
+
+Run it from the checkout root:
+
+```bash
+npx playwright test --config scripts/screenshots/look-view.config.mjs
+```
+
+It reads its options from `.rundock/look-view.json` in the checkout (gitignored). With no file it takes the team chart, dark, at 1440 by 900. Every option is optional:
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `view` | `team` | `team`, `conversations`, `files`, `routines`, `settings`, `skills`, `map` or `pins` |
+| `file` | `Welcome.md` | files view: the file to open, relative to the demo workspace |
+| `conversation` | none | conversations view: a conversation to open, by title or id |
+| `section` | `workspace` | settings view: `workspace`, `permissions`, `connectors`, `packages`, `extensions`, `appearance` or `about` |
+| `skill` | none | skills view: a skill to open, by name or id |
+| `theme` | `dark` | `dark` or `light` |
+| `width`, `height` | `1440`, `900` | the viewport, in CSS pixels |
+| `scale` | `1` | device pixel ratio, 1 to 3 |
+| `element` | none | a CSS selector: photograph only that element |
+| `actions` | none | steps to take after the view opens, in order (below) |
+| `out` | `.rundock/scratch/look-view.png` | where the PNG goes, relative to the checkout or absolute |
+
+Each action is one of `{"click": T}`, `{"fill": T, "value": "text"}`, `{"press": "Escape"}` or `{"waitForText": "Saved"}`, where `T` names an element as a CSS selector string, `{"role": "button", "name": "Save"}`, `{"text": "Plan the week"}`, `{"label": "Name"}` or `{"selector": "#x"}`.
+
+For example, the permissions settings in light at a narrow width:
+
+```json
+{
+  "view": "settings",
+  "section": "permissions",
+  "theme": "light",
+  "width": 420,
+  "height": 900,
+  "out": ".rundock/scratch/permissions-narrow.png"
+}
+```
+
+Or a board with its new-card field open:
+
+```json
+{
+  "view": "files",
+  "file": "Backlog.md",
+  "actions": [{ "click": { "text": "+ Add a card" } }]
+}
+```
+
+A mistake fails with one plain sentence naming it: an unknown view, option, file, conversation, settings section or skill lists what exists, and an element an action cannot find is named with the action's position. When an action fails, the screen at that moment is saved beside the output as `<name>.failed.png`.
+
+**In a sandboxed agent shell, run the command bare.** Change into the checkout in its own step first, then run `npx playwright test --config scripts/screenshots/look-view.config.mjs` on its own, with no `cd … &&`, pipe, redirect or `VAR=` prefix. A compound command may fall outside the sandbox's allowances, and the browser then fails to start. Write the options file with your file tool rather than an `echo` redirect, for the same reason.
 
 ## What to cover
 
