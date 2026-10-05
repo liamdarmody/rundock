@@ -4,9 +4,7 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
-## Unreleased
-
-**Name:** Team Chart On Its Side
+## 0.15.3: Team Chart On Its Side (2026-10-05)
 
 The team chart can now be laid out from left to right as well as from the top down, and Rundock remembers which you chose.
 
