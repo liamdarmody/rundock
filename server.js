@@ -94,6 +94,7 @@ let ACTUAL_PORT = PORT; // Updated after server.listen() with the real listening
 // lib/ modules read config.getWorkspace() at use time. EVERY assignment must
 // go through setWorkspaceRoot so the two can never drift.
 const { recoverPendingWrites } = require('./lib/workspace/atomic-write.js');
+const localOrigin = require('./lib/local-origin.js');
 let WORKSPACE = config.getWorkspace();
 function setWorkspaceRoot(dir) {
   WORKSPACE = dir;
@@ -915,23 +916,26 @@ function watchOpenFile(ws, relPath, fullPath) {
 
 // ===== HTTP SERVER =====
 
-const server = http.createServer(httpRouter.handleHttpRequest);
+// Every request first proves it comes from this machine's own page or process
+// (lib/local-origin.js): a loopback Host for the listening port, and no
+// foreign Origin on a write. Anything else is refused before any route runs.
+const server = http.createServer((req, res) => {
+  const refused = localOrigin.refusal(req, server.address().port);
+  if (refused) {
+    res.writeHead(403, { 'Content-Type': 'text/plain' });
+    res.end('Forbidden');
+    return;
+  }
+  httpRouter.handleHttpRequest(req, res);
+});
 
 // ===== WEBSOCKET SERVER =====
 
 const wss = new WebSocketServer({
   server,
-  verifyClient: ({ origin, req }) => {
-    // Allow connections from the same host (localhost or configured host)
-    if (!origin) return true; // Non-browser clients (e.g. CLI tools)
-    // Check against both the configured PORT and the actual listening port
-    const actualPort = server.address()?.port || PORT;
-    const allowed = [
-      `http://localhost:${PORT}`, `http://127.0.0.1:${PORT}`,
-      `http://localhost:${actualPort}`, `http://127.0.0.1:${actualPort}`,
-    ];
-    return allowed.includes(origin);
-  }
+  // The same check as every HTTP request, held to the Origin rule because a
+  // page can open a WebSocket to any address. No Origin is a local tool.
+  verifyClient: ({ req }) => !localOrigin.refusal(req, server.address().port, { upgrade: true }),
 });
 
 // Module-level process tracking: survives WebSocket reconnects

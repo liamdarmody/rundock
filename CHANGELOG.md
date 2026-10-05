@@ -18,6 +18,10 @@ The team chart can now be laid out from left to right as well as from the top do
 
 - **More room beside the orchestrator:** on a team of more than ten specialists, an agent whose manager isn't on the team sits on the same row as the orchestrator, and the orchestrator's larger card came close enough to touch it. That row is now spaced a little wider so the two cards sit apart.
 
+### Fixed
+
+- **Websites can no longer reach Rundock's local server:** Rundock's server only accepted connections from your own computer, but a web page open in your browser could still send it requests. It now answers only Rundock's own window and the tools it runs itself, and refuses requests from any other site. Nothing changes in how you open or use Rundock.
+
 ## 0.15.2: Packages On Windows (2026-10-02)
 
 ### Fixed
