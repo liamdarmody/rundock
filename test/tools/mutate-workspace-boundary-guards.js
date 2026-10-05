@@ -151,6 +151,13 @@ const ANSWER_READS_VOCAB = { src: path.join(ROOT, 'public', 'read-only-shell.js'
 // A refused "Always allow" is shown, and dropped from the view's cache.
 const ALLOW_FAIL_VIEW = { src: path.join(ROOT, 'public', 'views', 'chat.js'), suite: 'test/unit/standing-allows-client.test.js' };
 
+// The door in front of every card: a request reaches the permission bridge
+// only from this machine's own page or process (lib/local-origin.js), wired
+// into the HTTP server and the WebSocket upgrade in server.js. Both watched by
+// the suite that sends foreign Hosts and Origins at a booted server.
+const LOCAL_ORIGIN = { src: path.join(ROOT, 'lib', 'local-origin.js'), suite: 'test/integration/local-origin.test.js' };
+const LOCAL_ORIGIN_DOOR = { src: path.join(ROOT, 'server.js'), suite: 'test/integration/local-origin.test.js' };
+
 const MUTATIONS = [
   // ===== ONE DIRECTORY UNDER TWO NAMES IS ONE IDENTITY =====
   // Compare unresolved again and every symlink, alias and case spelling of
@@ -1089,6 +1096,28 @@ const MUTATIONS = [
   [PUTBACK_COPY, "Put-back card: a whitespace-only change is invisible",
     "    return m ? line.slice(0, m.index) + m[0].replace(/./g, '\u00b7') : line;",
     "    return line;"],
+  // ===== ONLY THIS MACHINE'S OWN PAGE REACHES THE SERVER =====
+  [LOCAL_ORIGIN, 'Local origin: a foreign Host is refused',
+    "  if (!isLoopbackHost(headers.host, port)) return 'host';\n",
+    ''],
+  [LOCAL_ORIGIN, 'Local origin: the Host must carry the listening port',
+    '  return LOOPBACK_NAMES.some((name) => value === `${name}:${port}`);',
+    '  return LOOPBACK_NAMES.some((name) => value.startsWith(name));'],
+  [LOCAL_ORIGIN, 'Local origin: a write with a foreign Origin is refused',
+    "  if (writes && origin !== undefined && !isAppOrigin(origin, port)) return 'origin';\n",
+    ''],
+  [LOCAL_ORIGIN, 'Local origin: a WebSocket upgrade is held to the Origin rule',
+    "  const writes = upgrade || !READ_METHODS.includes(String(req.method || 'GET').toUpperCase());",
+    "  const writes = !READ_METHODS.includes(String(req.method || 'GET').toUpperCase());"],
+  [LOCAL_ORIGIN, 'Local origin: every loopback name for the port is the app',
+    "const LOOPBACK_NAMES = ['localhost', '127.0.0.1', '[::1]'];",
+    "const LOOPBACK_NAMES = ['localhost'];"],
+  [LOCAL_ORIGIN_DOOR, 'Local origin: every HTTP request passes the check',
+    '  const refused = localOrigin.refusal(req, server.address().port);',
+    '  const refused = null;'],
+  [LOCAL_ORIGIN_DOOR, 'Local origin: every WebSocket upgrade passes the check',
+    '  verifyClient: ({ req }) => !localOrigin.refusal(req, server.address().port, { upgrade: true }),',
+    '  verifyClient: () => true,'],
 ];
 
 const REPORTER = ['--test-reporter', 'spec'];
