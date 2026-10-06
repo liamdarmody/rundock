@@ -66,6 +66,13 @@ const TRANSCRIPT_CAPTURE = { src: path.join(ROOT, 'scripts', 'transcript-truth',
 // The pre-commit gate's record of each tree it passed, watched by the suite
 // that runs the real gate against a throwaway repository.
 const GATE = { src: path.join(ROOT, 'scripts', 'precommit-gate.js'), suite: 'test/unit/precommit-gate.test.js' };
+// The release gate's refusals: CI's verdict on the exact tree, the candidate's
+// version, the smoke ports, and the tag's tree-keyed record, each watched by
+// the suite that drives it.
+const RELEASE_CI = { src: path.join(ROOT, 'scripts', 'release-ci.js'), suite: 'test/unit/release-ci.test.js' };
+const RELEASE_GATE = { src: path.join(ROOT, 'scripts', 'release-gate.js'), suite: 'test/unit/release-gate.test.js' };
+const RELEASE_RECORD = { src: path.join(ROOT, 'scripts', 'release.js'), suite: 'test/unit/release-gate.test.js' };
+const RELEASE_TAG = { src: path.join(ROOT, 'scripts', 'release.js'), suite: 'test/unit/release-tag.test.js' };
 
 const MUTATIONS = [
   // ===== A DESTRUCTIVE STEP WITHOUT ITS CAUTION =====
@@ -235,6 +242,50 @@ const MUTATIONS = [
   [GATE, "fifty records are kept",
     "const TREE_RECORDS_KEPT = 50;",
     "const TREE_RECORDS_KEPT = 5;"],
+
+  // ===== THE RELEASE GATE TAKES THE SUITE FROM CI, FOR THIS TREE ONLY =====
+  [RELEASE_CI, "a required check CI has not passed refuses the gate",
+    "  if (missing.length) {",
+    "  if (false) {"],
+  [RELEASE_CI, "a run of another tree does not count",
+    "  if (!run.head_commit || run.head_commit.tree_id !== tree) return { exact: false };",
+    "  if (!run.head_commit) return { exact: false };"],
+  [RELEASE_CI, "a pull request run counts only when its branch contains main",
+    "  const based = (run.pull_requests || []).some((pr) => pr && pr.base && pr.base.sha && isAncestor(pr.base.sha, run.head_sha));",
+    "  const based = true;"],
+  [RELEASE_CI, "only a completed, successful job counts",
+    "      if (job.status === 'completed' && job.conclusion === 'success') {",
+    "      if (job.status === 'completed') {"],
+  [RELEASE_CI, "GitHub unreachable is a refusal",
+    "    return { ok: false, error: `Could not read CI's results from GitHub: ${err.message}` };",
+    "    runs = [];"],
+  [RELEASE_GATE, "the gate stops when CI has not passed this tree",
+    "    if (!verdict.ok) return finish(false, verdict.error);",
+    ""],
+  [RELEASE_GATE, "the candidate is exactly one release past the latest tag",
+    "  if (!allowed.includes(pkgVersion)) {",
+    "  if (false) {"],
+  [RELEASE_GATE, "the changelog's top heading names the candidate's version",
+    "  if (top === -1 || !lines[top].startsWith(`## ${pkgVersion}:`)) {",
+    "  if (top === -1) {"],
+  [RELEASE_GATE, "a held smoke port refuses before any step",
+    "  if (held.length) {",
+    "  if (false) {"],
+  [RELEASE_GATE, "a dirty tree refuses",
+    "    if (dirty) {",
+    "    if (false) {"],
+  [RELEASE_RECORD, "the record must name the tree being tagged",
+    "  if (record.tree !== headTree) {",
+    "  if (false) {"],
+  [RELEASE_RECORD, "a record without live smoke is refused",
+    "  if (!record.live) {",
+    "  if (false) {"],
+  [RELEASE_RECORD, "a record that did not read CI is refused",
+    "  if (!record.ci || record.ci.skipped || !record.ci.checks) {",
+    "  if (false) {"],
+  [RELEASE_TAG, "the tag checks the gate record against the merged tree",
+    "  requireGatePass(git(['rev-parse', `${merged}^{tree}`]).trim(), { root });\n",
+    ""],
 ];
 
 const REPORTER = ['--test-reporter', 'spec'];
@@ -269,8 +320,9 @@ function redTests(suite) {
 }
 
 function run() {
-  const targets = [EVIDENCE, ENVELOPE, FOCUSED, TRUTH_HARNESS, SCANNER, ROLLBACK_HARNESS, DOC_LINKS,
-    PERSONAL, SCANNER_PD, SCRUB, STREAM_CAPTURE, TRANSCRIPT_CAPTURE, GATE];
+  // Derived from the rows, so a row naming a new target cannot crash the run
+  // on a target nobody listed.
+  const targets = [...new Set(MUTATIONS.map(([target]) => target))];
   const session = beginMutationRun({ files: [...new Set(targets.map((target) => target.src))] });
   const originals = new Map();
   for (const target of targets) originals.set(target, session.original(target.src));
