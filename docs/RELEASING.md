@@ -1,24 +1,64 @@
 # Releasing
 
-A release is the gate, the walk, then the three release commands. The
-commands and the reasons they are separate are documented at the top of
-`scripts/release.js`; this page adds the stage that sits between the gate and
-the first of them.
+A release is one pull request and three commands. The candidate carries its
+own version bump and promoted changelog, CI runs the required checks on it, the
+release gate runs what CI cannot on the same tree, and the merged commit is
+tagged. The commands and the reasons they are separate are documented at the
+top of `scripts/release.js`.
 
 ```
-npm run release:gate                    # the full gauntlet on the candidate
+npm run release -- bump <version>       # version + promoted changelog, committed with the candidate
+...push the candidate and open its pull request; wait for CI to finish on it...
 npm run walk                            # the release walk: use the product
-npm run release -- prepare <version>    # bump, promote the changelog, open the PR
-...review and merge that pull request...
+npm run release:gate                    # what CI cannot do, on the candidate's exact tree
+...merge the pull request...
 npm run release -- tag <version>        # tag the merged commit, which starts the build
-npm run release -- publish <version>    # publish the reviewed draft
+npm run release -- publish <version> --confirm <version>   # publish the reviewed draft
 ```
+
+## Which checks come from CI
+
+CI runs the suite on Node 22 and 24, coverage with its floors, the browser
+suite (E2E), typecheck and hygiene as required checks on the pull request. The
+release gate does not run them again. It asks GitHub for CI's results on the
+exact tree it gates and refuses, naming the check, unless each of those jobs
+passed there. A push or dispatched run counts for the tree of its commit; a
+pull request run counts only when the branch already contains main, because CI
+tests the merge, and that merge has the branch's tree only then. A job that
+passed on a re-run counts, and so does a green job inside a run that was
+cancelled overall.
+
+The gate runs what CI cannot: the runtime truth captures (they need the real
+CLI), the Electron steps (CI runs no Electron), the case-insensitive disk and
+volume checks, smoke and personas against the stub and the live runtime, and
+the packaged build's boot. Before any of them it names any process already
+holding a port the smoke steps need.
+
+## The version and the gate record
+
+The candidate's `package.json` is exactly one release past the latest tag (the
+next patch, minor or major), and the top heading of `CHANGELOG.md` names that
+version: `npm run release -- bump <version>` writes both from the
+`## Unreleased` section. The gate refuses any other version.
+
+`.release-gate.json` records the tree the gate passed on. `release -- tag`
+accepts it when the merged commit has that tree, so a merge that makes a new
+commit with the same content needs no second gate, and any difference is
+refused. If main moved under the pull request, the merged tree differs: run the
+gate again on main once CI has finished there.
+
+## A recut
+
+To recut an unpublished draft: delete the draft release, delete the tag here
+and on the remote (`git tag -d v<version>`, `git push origin :refs/tags/v<version>`),
+merge the fix with its note under the release's changelog heading, run the gate
+on main once CI is green there, and tag again. With the tag gone, the version on
+main is one release past the latest tag again, which is all the gate asks.
 
 ## The release walk
 
 `npm run walk` is a scripted session that uses the release candidate the way
-a person does, after `npm run release:gate` has passed and before
-`npm run release -- prepare`. It boots `server.js` from source on a fresh
+a person does, before the release gate and the merge. It boots `server.js` from source on a fresh
 scratch workspace with a scratch `HOME` and the stub runtime first on `PATH`,
 drives the real page through Playwright over the real socket and HTTP
 surfaces, and reads the disk the server wrote. Every step records PASS or
@@ -43,9 +83,9 @@ in CI, and the release gate's own step list does not include it.
 `.walk/report.md` and `.walk/report.json` (the directory is ignored by git),
 naming the server commit, the tags installed, and for each step its verdict,
 its screenshot path and, on failure, the reason. Attach `report.md` to the
-pull request `npm run release -- prepare` opens, with the screenshots for any
-step that failed and was judged acceptable. A walk with a failed step is a
-reason not to prepare the release until the failure is understood.
+release pull request, with the screenshots for any step that failed and was
+judged acceptable. A walk with a failed step is a reason not to merge the
+release until the failure is understood.
 
 The runner lives under `scripts/walk/`: `runner.js` is the step engine
 (pinned by `test/unit/release-walk.test.js`), `steps.js` the walked steps,
