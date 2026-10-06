@@ -16,7 +16,7 @@ Built by [Liam Darmody](https://www.linkedin.com/in/liamdarmody/). Learn more at
 
 > **Star this repo** if Rundock is useful to you. It is the simplest way to support the project and helps other people running their own businesses find it. [Add a star ->](https://github.com/liamdarmody/rundock)
 
-![Rundock showing an example agent team as an org chart: a Chief of Staff at the top with the team reporting in below, a Rundock Guide agent, live team status in the sidebar, and scheduled routines](docs/rundock-hero-org-chart.png)
+![Rundock showing an example agent team as an org chart: a Chief of Staff at the top with the team reporting in below, a Rundock Guide agent, and live team status in the sidebar](docs/rundock-hero-org-chart.png)
 
 The org chart is the product. Show someone yours.
 
@@ -66,7 +66,7 @@ You do not need to write code. You need a subscription that can run agents (Clau
 
 ## Runtimes
 
-Agents run on **Claude Code** by default. Any specialist can instead run on **Codex**, the official OpenAI CLI, using a ChatGPT plan: add `runtime: codex` to that agent's file (or ask Doc to do it) and leave the model field out so your account's default model applies. Codex agents converse, resume threads, take delegated work from your orchestrator, and review files like any other teammate; they use Codex's built-in sandbox rather than Rundock's permission prompts. The workspace orchestrator always runs on Claude Code.
+Agents run on **Claude Code** by default. Any specialist can instead run on **Codex**, the official OpenAI CLI, using a ChatGPT plan: add `runtime: codex` to that agent's file (or ask Doc to do it) and leave the model field out so your account's default model applies. Codex agents converse, resume threads, take delegated work from your orchestrator, and review files like any other teammate; they run inside Codex's built-in sandbox, and in Code mode Rundock judges their commands by the same rules as Claude Code's. The workspace orchestrator always runs on Claude Code.
 
 Codex setup is currently manual (two commands in a terminal): `npm install -g @openai/codex`, then `codex login`. Rundock's Settings show each runtime's status. On Windows, one config line gives Codex agents direct sandboxed file writes; without it, their writes arrive as approval cards. Details at [docs.rundock.ai/concepts/runtimes](https://docs.rundock.ai/concepts/runtimes).
 
@@ -105,7 +105,7 @@ To pull updates later, run `npm run update` in the install directory.
 
 ## Security
 
-The entire stack runs on your machine. Rundock never sends your files, your agents, or your conversations anywhere. The only external connections are made by the runtimes themselves: Claude Code talks to Anthropic's API, and Codex (if you use it) talks to OpenAI's: in each case only the active conversation, processed under your own subscription. Rundock itself makes zero outbound network calls. There is no cloud service, no account to create, no server-side database, no telemetry. Sign-in and keys are managed by each runtime's CLI; Rundock detects sign-in state by checking that a credentials file exists and never reads its contents.
+The entire stack runs on your machine. Rundock never sends your files, your agents, or your conversations anywhere. Rundock itself contacts only GitHub: the desktop app checks there for its own updates, and Rundock fetches a package from there when you add it, check it for updates or update it. None of your files, agents or conversations go with those requests. Everything else is your runtime and the connectors you choose: Claude Code talks to Anthropic's API, Codex (if you use it) talks to OpenAI's, and any connector you add reaches its own service. The runtime sends only the active conversation, processed under your own subscription. There is no cloud service, no account to create, no server-side database, no telemetry. Sign-in and keys are managed by each runtime's CLI, and Rundock never reads their contents: it learns that Claude Code is signed in from how its turns go, and that Codex is signed in from whether its credentials file exists.
 
 ## Licence
 
