@@ -105,7 +105,7 @@ To pull updates later, run `npm run update` in the install directory.
 
 ## Security
 
-The entire stack runs on your machine. Rundock never sends your files, your agents, or your conversations anywhere. The only external connections are made by the runtimes themselves: Claude Code talks to Anthropic's API, and Codex (if you use it) talks to OpenAI's: in each case only the active conversation, processed under your own subscription. Rundock itself makes zero outbound network calls. There is no cloud service, no account to create, no server-side database, no telemetry. Sign-in and keys are managed by each runtime's CLI; Rundock detects sign-in state by checking that a credentials file exists and never reads its contents.
+The entire stack runs on your machine. Rundock never sends your files, your agents, or your conversations anywhere. Rundock itself contacts only GitHub: the desktop app checks there for its own updates, and Rundock fetches a package from there when you add it, check it for updates or update it. None of your files, agents or conversations go with those requests. Everything else is your runtime and the connectors you choose: Claude Code talks to Anthropic's API, Codex (if you use it) talks to OpenAI's, and any connector you add reaches its own service. The runtime sends only the active conversation, processed under your own subscription. There is no cloud service, no account to create, no server-side database, no telemetry. Sign-in and keys are managed by each runtime's CLI; Rundock detects sign-in state by checking that a credentials file exists and never reads its contents.
 
 ## Licence
 
