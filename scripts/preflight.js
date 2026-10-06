@@ -110,6 +110,8 @@ const REGISTRY_SUITES = [
   'test/unit/mutation-scope.test.js',
   // The hostile fixtures name no real destination and read no real workspace.
   'test/unit/confinement-fixtures.test.js',
+  // Reads the CI workflow's job names; GitHub is a fake, so nothing leaves the machine.
+  'test/unit/release-ci.test.js',
 ];
 
 /**

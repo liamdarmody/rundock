@@ -4,13 +4,14 @@
 //
 // Why this exists: 0.11.6 took SIX cuts because candidate testing happened
 // after tagging; the draft build was the convenient test vehicle, so
-// cut-test-recut became the loop. The gate inverts the train: the full
-// gauntlet runs against HEAD, records the SHA it passed on, and
-// scripts/release.js refuses to tag any other SHA. The publish subcommand
-// additionally mechanises the 0.11.6 publish quirk: a draft can sit on an
-// `untagged-*` tag_name after a recut, and flipping draft=false in that state
-// binds the release to the junk tag forever. Publishing must bind tag_name
-// FIRST, verify it stuck, and only then flip the draft flag.
+// cut-test-recut became the loop. The gate inverts the train: it proves the
+// candidate's tree, records that tree, and scripts/release.js refuses to tag
+// any other. It runs only what CI cannot, and takes the suite, coverage and
+// browser results from CI for the same tree (see release-ci.test.js). The
+// publish subcommand additionally mechanises the 0.11.6 publish quirk: a draft
+// can sit on an `untagged-*` tag_name after a recut, and flipping draft=false
+// in that state binds the release to the junk tag forever. Publishing must
+// bind tag_name FIRST, verify it stuck, and only then flip the draft flag.
 
 const { test, describe, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert');
@@ -21,11 +22,14 @@ const path = require('node:path');
 const {
   runGate,
   readGateRecord,
-  versionSanity,
-  changelogReady,
+  nextVersions,
+  candidateVersion,
+  smokePorts,
+  requireSmokePortsFree,
   buildSteps,
   GATE_FILE_NAME,
 } = require('../../scripts/release-gate.js');
+const { REQUIRED_CI_CHECKS } = require('../../scripts/release-ci.js');
 const { requireGatePass, publishRelease, ghApiArgs, hasPublishConfirmation, requireNotesMatchBuild } = require('../../scripts/release.js');
 
 let root;
@@ -35,6 +39,8 @@ beforeEach(() => {
 afterEach(() => {
   fs.rmSync(root, { recursive: true, force: true });
 });
+
+const TREE = 'e'.repeat(40);
 
 // A fake exec that records every invocation and serves canned results.
 // Commands are matched on their joined form; unmatched commands succeed
@@ -56,11 +62,35 @@ function fakeExec(canned = {}) {
   return exec;
 }
 
+// GitHub as the gate sees it: one push run of TREE with every required job
+// green, unless told otherwise. Never the network.
+function fakeGh({ tree = TREE, conclusion = 'success' } = {}) {
+  const gh = (args) => {
+    const url = args.find((a) => a.startsWith('repos/'));
+    if (/workflows\/ci\.yml\/runs/.test(url)) {
+      return JSON.stringify({ workflow_runs: [{ id: 1, event: 'push', head_sha: 'f'.repeat(40), head_commit: { tree_id: tree }, pull_requests: [] }] });
+    }
+    return JSON.stringify({ jobs: REQUIRED_CI_CHECKS.map((name) => ({ name, status: 'completed', conclusion })) });
+  };
+  return gh;
+}
+
+const portsFree = async () => false;
+
+// The canned git a clean candidate answers with.
+const CANDIDATE = {
+  'rev-parse HEAD^{tree}': `${TREE}\n`,
+  'rev-parse HEAD': 'abc123def\n',
+  'describe --tags': 'v0.11.6\n',
+};
+
+function gate(opts = {}) {
+  return runGate({ root, live: true, gh: fakeGh(), busy: portsFree, exec: fakeExec(CANDIDATE), log: () => {}, ...opts });
+}
+
 const GOOD_CHANGELOG = `# Changelog
 
-## Unreleased
-
-**Name:** Foundations
+## 0.11.7: Foundations (2026-08-12)
 
 ### Changed
 
@@ -71,49 +101,89 @@ const GOOD_CHANGELOG = `# Changelog
 - Older notes.
 `;
 
-function seedWorkspace({ version = '0.11.6', changelog = GOOD_CHANGELOG } = {}) {
+function seedWorkspace({ version = '0.11.7', changelog = GOOD_CHANGELOG } = {}) {
   fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ version }, null, 2));
   fs.writeFileSync(path.join(root, 'CHANGELOG.md'), changelog);
 }
 
-describe('release gate: preconditions', () => {
-  test('version sanity: package.json must match the latest tag (no half-done bump)', () => {
-    assert.doesNotThrow(() => versionSanity('0.11.6', 'v0.11.6'));
-    assert.throws(() => versionSanity('0.11.7', 'v0.11.6'), /0\.11\.7[\s\S]*v0\.11\.6/);
-    assert.throws(() => versionSanity('not-semver', 'v0.11.6'), /semver/i);
+describe('release gate: the candidate carries its own version', () => {
+  test('the next versions are the next patch, minor and major', () => {
+    assert.deepStrictEqual(nextVersions('v0.15.3'), ['0.15.4', '0.16.0', '1.0.0']);
   });
 
-  test('changelog readiness: an Unreleased section with a Name line and real content', () => {
-    assert.doesNotThrow(() => changelogReady(GOOD_CHANGELOG));
-    assert.throws(
-      () => changelogReady('# Changelog\n\n## 0.11.6: Team Integrity (2026-08-11)\n\n- Old.\n'),
-      /Unreleased/
+  test('one step past the latest tag, named by the top heading, is accepted', () => {
+    assert.doesNotThrow(() => candidateVersion('0.11.7', 'v0.11.6', GOOD_CHANGELOG));
+    const minor = GOOD_CHANGELOG.replace('## 0.11.7:', '## 0.12.0:');
+    assert.doesNotThrow(() => candidateVersion('0.12.0', 'v0.11.6', minor));
+  });
+
+  test('the version already tagged is refused, with the recut hint', () => {
+    assert.throws(() => candidateVersion('0.11.6', 'v0.11.6', GOOD_CHANGELOG), /0\.11\.7[\s\S]*git tag -d v0\.11\.6/);
+  });
+
+  test('a version that skips a release is refused', () => {
+    assert.throws(() => candidateVersion('0.11.8', 'v0.11.6', GOOD_CHANGELOG.replace('## 0.11.7:', '## 0.11.8:')), /0\.11\.8[\s\S]*v0\.11\.6/);
+    assert.throws(() => candidateVersion('0.12.1', 'v0.11.6', GOOD_CHANGELOG.replace('## 0.11.7:', '## 0.12.1:')), /0\.12\.1/);
+  });
+
+  test('a version that is not semver is refused', () => {
+    assert.throws(() => candidateVersion('not-semver', 'v0.11.6', GOOD_CHANGELOG), /semver/i);
+  });
+
+  test('a top heading naming another version, or still Unreleased, is refused', () => {
+    assert.throws(() => candidateVersion('0.11.7', 'v0.11.6', '# Changelog\n\n## Unreleased\n\n- A thing.\n\n## 0.11.7: X (d)\n\n- y\n'), /top heading[\s\S]*Unreleased/);
+    assert.throws(() => candidateVersion('0.11.7', 'v0.11.6', '# Changelog\n\n## 0.11.6: Team Integrity (2026-08-11)\n\n- Old.\n'), /top heading/);
+  });
+
+  test('an empty section under the heading is refused', () => {
+    assert.throws(() => candidateVersion('0.11.7', 'v0.11.6', '# Changelog\n\n## 0.11.7: X (d)\n\n## 0.11.6: Y (d)\n\n- old\n'), /empty/i);
+  });
+});
+
+describe('release gate: the smoke ports', () => {
+  test('the ports are the smoke server and the three persona servers', () => {
+    assert.deepStrictEqual(smokePorts({}), [3641, 3651, 3652, 3653]);
+  });
+
+  test('a held port refuses before any step, naming the process', async () => {
+    const exec = fakeExec({ 'lsof -nP -iTCP:3651': 'p4242\ncnode\n' });
+    await assert.rejects(
+      requireSmokePortsFree({ ports: [3641, 3651], busy: async (p) => p === 3651, exec }),
+      (err) => /3651 is held by pid 4242 \(node\)/.test(err.message) && !/3641/.test(err.message)
     );
-    assert.throws(
-      () => changelogReady('# Changelog\n\n## Unreleased\n\n### Changed\n\n- A thing.\n\n## 0.11.6: X (2026-08-11)\n'),
-      /Name/
+  });
+
+  test('a held port lsof cannot name still refuses', async () => {
+    await assert.rejects(
+      requireSmokePortsFree({ ports: [3641], busy: async () => true, exec: fakeExec({ lsof: new Error('exit 1') }) }),
+      /3641 is held/
     );
-    assert.throws(
-      () => changelogReady('# Changelog\n\n## Unreleased\n\n**Name:** Foundations\n\n## 0.11.6: X (2026-08-11)\n'),
-      /empty|content/i
-    );
+  });
+
+  test('the gate stops at a held port and runs no step', async () => {
+    seedWorkspace();
+    const exec = fakeExec(CANDIDATE);
+    const result = await gate({ exec, busy: async () => true });
+    assert.strictEqual(result.ok, false);
+    assert.match(result.error, /3641/);
+    assert.ok(!exec.calls.some((c) => /smoke|electron/.test(c)), 'no step ran');
+    assert.strictEqual(readGateRecord(root), null);
   });
 });
 
 describe('release gate: the run', () => {
-  test('a green run writes the record: SHA, wall clock, per-step timings, live flag', async () => {
+  test('a green run writes the record: tree, SHA, version, CI, wall clock, per-step timings, live flag', async () => {
     seedWorkspace();
-    const exec = fakeExec({
-      'rev-parse HEAD': 'abc123def\n',
-      'describe --tags': 'v0.11.6\n',
-    });
-    const result = await runGate({ root, live: true, exec });
-    assert.strictEqual(result.ok, true);
+    const result = await gate();
+    assert.strictEqual(result.ok, true, result.error);
 
     const record = readGateRecord(root);
     assert.ok(record, 'gate record written');
+    assert.strictEqual(record.tree, TREE);
     assert.strictEqual(record.sha, 'abc123def');
+    assert.strictEqual(record.version, '0.11.7');
     assert.strictEqual(record.live, true);
+    assert.ok(record.ci && record.ci.checks && record.ci.checks.E2E, 'CI results recorded');
     assert.strictEqual(typeof record.wallClockSeconds, 'number');
     assert.ok(Array.isArray(record.steps) && record.steps.length > 0, 'steps recorded');
     for (const step of record.steps) {
@@ -123,23 +193,23 @@ describe('release gate: the run', () => {
     assert.ok(!Number.isNaN(Date.parse(record.passedAt)), 'passedAt is a real timestamp');
   });
 
-  test('the gauntlet is complete: suite+coverage, e2e, smoke stub, smoke live, hygiene, packaging', async () => {
+  test('the gate runs what CI cannot, and not what CI already ran', async () => {
     seedWorkspace();
-    const exec = fakeExec({
-      'rev-parse HEAD': 'abc123def\n',
-      'describe --tags': 'v0.11.6\n',
-    });
-    await runGate({ root, live: true, exec });
+    const exec = fakeExec(CANDIDATE);
+    await gate({ exec });
     const joined = exec.calls.join('\n');
-    assert.match(joined, /test:coverage/, 'suite runs WITH coverage');
-    assert.match(joined, /test:e2e/, 'e2e runs');
-    assert.match(joined, /smoke/, 'stub smoke runs');
+    assert.match(joined, /stream:truth/, 'stream-truth check runs (stub vs captured runtime)');
+    assert.match(joined, /transcript:truth/);
+    assert.match(joined, /electron/, 'the Electron steps run');
+    assert.match(joined, /case-identity:disk/);
+    assert.match(joined, /case-identity:volume/);
+    assert.match(joined, /run smoke$/m, 'stub smoke runs');
     assert.match(joined, /smoke:personas/, 'persona journeys run');
     assert.match(joined, /--live/, 'live smoke runs');
-    assert.match(joined, /check:refs/, 'hygiene gate runs');
-    assert.match(joined, /stream:truth/, 'stream-truth check runs (stub vs captured runtime)');
-    assert.match(joined, /typecheck/, 'both tsc configs run');
     assert.match(joined, /smoke-packaged/, 'packaging runs (unsigned unpacked build + boot check)');
+    for (const fromCi of ['test:coverage', 'test:e2e', 'typecheck', 'check:refs', 'lint:styles']) {
+      assert.ok(!joined.includes(fromCi), `${fromCi} comes from CI and is not run again`);
+    }
   });
 
   test('the desktop profile override is proven on the shipped entrypoint, beside the parity run', () => {
@@ -150,14 +220,37 @@ describe('release gate: the run', () => {
     assert.strictEqual(override, parity + 1, 'the override run follows the parity run');
   });
 
-  test('a dirty tree refuses to gate: the record must describe a reproducible SHA', async () => {
+  test('CI not green on this tree refuses before any step, naming the check', async () => {
     seedWorkspace();
-    const exec = fakeExec({
-      'status --porcelain': ' M server.js\n',
-      'rev-parse HEAD': 'abc123def\n',
-      'describe --tags': 'v0.11.6\n',
-    });
-    const result = await runGate({ root, live: true, exec });
+    const exec = fakeExec(CANDIDATE);
+    const result = await gate({ exec, gh: fakeGh({ conclusion: 'failure' }) });
+    assert.strictEqual(result.ok, false);
+    assert.match(result.error, /"Test \(Node 22\)"/);
+    assert.match(result.error, /"Coverage floors"/);
+    assert.match(result.error, /"E2E"/);
+    assert.ok(!exec.calls.some((c) => /smoke|electron|truth/.test(c)), 'no step ran');
+    assert.strictEqual(readGateRecord(root), null);
+  });
+
+  test('CI green on a different tree refuses', async () => {
+    seedWorkspace();
+    const result = await gate({ gh: fakeGh({ tree: 'f'.repeat(40) }) });
+    assert.strictEqual(result.ok, false);
+    assert.match(result.error, /no CI run tested this tree/);
+  });
+
+  test('a version that is not the next one refuses before CI is asked', async () => {
+    seedWorkspace({ version: '0.11.6' });
+    let asked = false;
+    const result = await gate({ gh: () => { asked = true; return '{}'; } });
+    assert.strictEqual(result.ok, false);
+    assert.match(result.error, /0\.11\.6/);
+    assert.strictEqual(asked, false, 'GitHub is not asked about a candidate that cannot be released');
+  });
+
+  test('a dirty tree refuses to gate: the record must describe a reproducible tree', async () => {
+    seedWorkspace();
+    const result = await gate({ exec: fakeExec({ ...CANDIDATE, 'status --porcelain': ' M server.js\n' }) });
     assert.strictEqual(result.ok, false);
     assert.match(result.error, /clean|dirty|uncommitted/i);
     assert.strictEqual(readGateRecord(root), null, 'no record for an ungateable state');
@@ -165,66 +258,63 @@ describe('release gate: the run', () => {
 
   test('a failing step means no record', async () => {
     seedWorkspace();
-    const exec = fakeExec({
-      'rev-parse HEAD': 'abc123def\n',
-      'describe --tags': 'v0.11.6\n',
-      'test:coverage': new Error('suite failed'),
-    });
-    const result = await runGate({ root, live: true, exec });
+    const result = await gate({ exec: fakeExec({ ...CANDIDATE, 'smoke:personas': new Error('persona failed') }) });
     assert.strictEqual(result.ok, false);
+    assert.match(result.error, /personas/);
     assert.strictEqual(readGateRecord(root), null);
   });
 
   test('--no-live is recorded honestly so the release step can refuse it', async () => {
     seedWorkspace();
-    const exec = fakeExec({
-      'rev-parse HEAD': 'abc123def\n',
-      'describe --tags': 'v0.11.6\n',
-    });
-    await runGate({ root, live: false, exec });
+    const exec = fakeExec(CANDIDATE);
+    await gate({ exec, live: false });
     const record = readGateRecord(root);
     assert.strictEqual(record.live, false);
     assert.ok(!exec.calls.join('\n').includes('--live'), 'live smoke not run');
   });
+
+  test('--no-ci is recorded honestly so the release step can refuse it', async () => {
+    seedWorkspace();
+    let asked = false;
+    await gate({ ci: false, gh: () => { asked = true; return '{}'; } });
+    const record = readGateRecord(root);
+    assert.deepStrictEqual(record.ci, { skipped: true });
+    assert.strictEqual(asked, false);
+  });
 });
 
-describe('release refuses to tag without a gate pass on HEAD', () => {
+describe('release refuses to tag without a gate pass on the tree being tagged', () => {
+  const write = (record) => fs.writeFileSync(path.join(root, GATE_FILE_NAME), JSON.stringify({
+    tree: TREE, sha: 'abc123def', live: true, ci: { checks: { E2E: { run: 1 } } }, passedAt: '2026-08-11T09:00:00Z', wallClockSeconds: 300, steps: [], ...record,
+  }));
+
   test('no gate record: fails naming the command to run', () => {
-    seedWorkspace();
-    assert.throws(
-      () => requireGatePass('abc123def', { root }),
-      /release:gate/
-    );
+    assert.throws(() => requireGatePass(TREE, { root }), /release:gate/);
   });
 
-  test('gate passed on a different SHA: fails naming both SHAs', () => {
-    seedWorkspace();
-    fs.writeFileSync(path.join(root, GATE_FILE_NAME), JSON.stringify({
-      sha: 'oldsha111', live: true, passedAt: '2026-08-11T09:00:00Z', wallClockSeconds: 900, steps: [],
-    }));
-    assert.throws(
-      () => requireGatePass('newsha222', { root }),
-      /oldsha111[\s\S]*newsha222|newsha222[\s\S]*oldsha111/
-    );
+  test('gate passed on a different tree: fails naming both trees', () => {
+    write({ tree: '1'.repeat(40) });
+    assert.throws(() => requireGatePass(TREE, { root }), /111111111111[\s\S]*eeeeeeeeeeee|eeeeeeeeeeee[\s\S]*111111111111/);
+  });
+
+  test('a record from the older gate, naming only a commit, is refused', () => {
+    write({ tree: undefined });
+    assert.throws(() => requireGatePass(TREE, { root }), /tree/i);
   });
 
   test('gate passed without live smoke: refused', () => {
-    seedWorkspace();
-    fs.writeFileSync(path.join(root, GATE_FILE_NAME), JSON.stringify({
-      sha: 'abc123def', live: false, passedAt: '2026-08-11T09:00:00Z', wallClockSeconds: 900, steps: [],
-    }));
-    assert.throws(
-      () => requireGatePass('abc123def', { root }),
-      /live/i
-    );
+    write({ live: false });
+    assert.throws(() => requireGatePass(TREE, { root }), /live/i);
   });
 
-  test('gate passed on HEAD with live smoke: proceeds', () => {
-    seedWorkspace();
-    fs.writeFileSync(path.join(root, GATE_FILE_NAME), JSON.stringify({
-      sha: 'abc123def', live: true, passedAt: '2026-08-11T09:00:00Z', wallClockSeconds: 900, steps: [],
-    }));
-    assert.doesNotThrow(() => requireGatePass('abc123def', { root }));
+  test('gate passed without reading CI: refused', () => {
+    write({ ci: { skipped: true } });
+    assert.throws(() => requireGatePass(TREE, { root }), /CI/);
+  });
+
+  test('gate passed on this tree with live smoke and CI: proceeds', () => {
+    write({});
+    assert.doesNotThrow(() => requireGatePass(TREE, { root }));
   });
 });
 

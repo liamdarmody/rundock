@@ -2,30 +2,50 @@
 'use strict';
 
 /**
- * Release gate: one command validates the release candidate against HEAD.
+ * Release gate: what CI cannot do, on the exact tree being released.
  *
- * Why: 0.11.6 took six cuts because candidate testing happened AFTER tagging.
- * The gate inverts the train. It runs the full gauntlet (suite with coverage,
- * e2e, smoke stub + live, hygiene, packaging, changelog readiness, version
- * sanity) and, only if everything passes on a clean tree, writes
- * `.release-gate.json` recording the SHA it passed on, the wall clock, and
- * per-step timings. `scripts/release.js` refuses to tag unless that record
- * exists for the exact current HEAD with live smoke included.
+ * Why it exists: 0.11.6 took six cuts because candidate testing happened
+ * AFTER tagging. The gate inverts the train: the candidate is proven first, and
+ * `scripts/release.js` refuses to tag a tree the gate has not passed.
  *
- * The release commit that follows (version bump + changelog promotion) is the
- * only thing allowed on top of a gated SHA, by construction: release.js
- * checks the gate BEFORE creating it, and that commit touches only
- * package.json and CHANGELOG.md.
+ * WHAT COMES FROM CI. The suite on Node 22 and 24, coverage with its floors,
+ * the browser suite, typecheck and hygiene are required checks in
+ * `.github/workflows/ci.yml`. The gate does not run them again: it asks GitHub
+ * for CI's results on the exact tree it gates and refuses, naming the check,
+ * unless each passed there (see scripts/release-ci.js). Re-running them here
+ * took most of the gate's time and failed on a loaded laptop for reasons
+ * unrelated to the change.
+ *
+ * WHAT RUNS HERE is what CI cannot: the runtime truth captures (they need the
+ * real CLI and a sign-in), the Electron steps (CI runs no Electron), the
+ * case-insensitive disk and volume checks (macOS disks), smoke and personas
+ * against the stub and the live runtime, and the packaged build's boot.
+ *
+ * THE RECORD NAMES A TREE. `.release-gate.json` records the tree the gate
+ * passed on, so a merge that makes a new commit with the same content needs no
+ * second gate, and `release -- tag` accepts the record exactly when the merged
+ * commit's tree is that tree.
+ *
+ * THE CANDIDATE CARRIES ITS OWN VERSION. package.json is exactly one release
+ * past the latest tag (the next patch, minor or major) and CHANGELOG.md's top
+ * heading names that version. A recut (delete the unpublished draft and tag,
+ * fix, re-tag) needs nothing special: once the tag is deleted the candidate is
+ * one step past the tag before it again.
  *
  * Usage:
- *   npm run release:gate              # full gauntlet including live smoke
- *   npm run release:gate -- --no-live # development of the gate itself only;
- *                                     # release.js refuses a no-live record
+ *   npm run release:gate              # the gate a release needs
+ *   npm run release:gate -- --no-live # development of the gate only: no live
+ *                                     # smoke, and release.js refuses the record
+ *   npm run release:gate -- --no-ci   # development of the gate only: CI is not
+ *                                     # asked, and release.js refuses the record
  */
 
 const { execFileSync } = require('child_process');
 const fs = require('fs');
+const net = require('net');
 const path = require('path');
+
+const { ciVerdict } = require('./release-ci.js');
 
 const ROOT = path.join(__dirname, '..');
 const GATE_FILE_NAME = '.release-gate.json';
@@ -34,48 +54,108 @@ const GATE_FILE_NAME = '.release-gate.json';
 // Preconditions (pure, unit-tested)
 // ---------------------------------------------------------------------------
 
-// package.json must be valid semver AND match the latest tag: a version that
-// is already ahead of the tags means a half-done bump is sitting in the tree.
-function versionSanity(pkgVersion, latestTag) {
-  if (!/^\d+\.\d+\.\d+$/.test(pkgVersion || '')) {
-    throw new Error(`package.json version "${pkgVersion}" is not plain semver MAJOR.MINOR.PATCH.`);
-  }
-  const tagVersion = String(latestTag || '').replace(/^v/, '').trim();
-  if (pkgVersion !== tagVersion) {
-    throw new Error(
-      `package.json version ${pkgVersion} does not match the latest tag ${latestTag}. ` +
-      `The bump belongs to scripts/release.js; a mismatch means a half-done release is in the tree.`
-    );
-  }
+const SEMVER = /^(\d+)\.(\d+)\.(\d+)$/;
+
+// The versions one release past `latestTag`: the next patch, minor and major.
+function nextVersions(latestTag) {
+  const m = SEMVER.exec(String(latestTag || '').replace(/^v/, '').trim());
+  if (!m) throw new Error(`The latest tag "${latestTag}" is not vMAJOR.MINOR.PATCH.`);
+  const [maj, min, pat] = m.slice(1).map(Number);
+  return [`${maj}.${min}.${pat + 1}`, `${maj}.${min + 1}.0`, `${maj + 1}.0.0`];
 }
 
-// CHANGELOG.md must carry a real `## Unreleased` section: present, named, and
-// with content beyond the name line. A release with no notes is not a release.
-function changelogReady(changelogText) {
-  const lines = String(changelogText).split('\n');
-  let start = -1;
-  for (let i = 0; i < lines.length; i++) {
-    if (/^## Unreleased\s*$/.test(lines[i])) { start = i; break; }
+// The candidate carries its own bump: package.json is one release past the
+// latest tag, and the changelog's top heading names it, with notes under it.
+function candidateVersion(pkgVersion, latestTag, changelogText) {
+  if (!SEMVER.test(pkgVersion || '')) {
+    throw new Error(`package.json version "${pkgVersion}" is not plain semver MAJOR.MINOR.PATCH.`);
   }
-  if (start === -1) {
-    throw new Error('CHANGELOG.md has no "## Unreleased" section. Add release notes before gating.');
+  const allowed = nextVersions(latestTag);
+  if (!allowed.includes(pkgVersion)) {
+    const tagged = String(latestTag).replace(/^v/, '').trim();
+    throw new Error(
+      `package.json is ${pkgVersion} but the latest tag is ${latestTag}: a release candidate carries the next version, ` +
+      `one of ${allowed.join(', ')}. Run "npm run release -- bump <version>" and commit it with the candidate.` +
+      (pkgVersion === tagged ? ` If this is a recut of an unpublished ${latestTag}, delete that tag here too ("git tag -d ${latestTag}").` : '')
+    );
+  }
+  const lines = String(changelogText).split('\n');
+  const top = lines.findIndex((l) => l.startsWith('## '));
+  if (top === -1 || !lines[top].startsWith(`## ${pkgVersion}:`)) {
+    throw new Error(
+      `CHANGELOG.md's top heading is "${top === -1 ? 'none' : lines[top]}", not "## ${pkgVersion}: <Name> (<date>)". ` +
+      `Promote the notes with "npm run release -- bump ${pkgVersion}".`
+    );
   }
   let end = lines.length;
-  for (let i = start + 1; i < lines.length; i++) {
+  for (let i = top + 1; i < lines.length; i++) {
     if (lines[i].startsWith('## ')) { end = i; break; }
   }
-  const body = lines.slice(start + 1, end).join('\n');
-  if (!/^\s*\*\*Name:\*\*\s*.+$/m.test(body)) {
-    throw new Error('The Unreleased section has no "**Name:**" line. Every release is named.');
-  }
-  const withoutName = body.replace(/^\s*\*\*Name:\*\*\s*.+$/m, '').trim();
-  if (!withoutName) {
-    throw new Error('The Unreleased section is empty beyond its name. Release notes are content, not a heading.');
+  if (!lines.slice(top + 1, end).join('\n').trim()) {
+    throw new Error(`The ${pkgVersion} section of CHANGELOG.md is empty. Release notes are content, not a heading.`);
   }
 }
 
 // ---------------------------------------------------------------------------
-// The gauntlet
+// The smoke ports
+// ---------------------------------------------------------------------------
+
+// The ports the smoke and persona steps bind, read the way those scripts read
+// them (scripts/smoke/run.mjs, scripts/smoke/personas.mjs: three servers).
+function smokePorts(env = process.env) {
+  const smoke = Number(env.SMOKE_PORT || 3641);
+  const personas = Number(env.SMOKE_PORT || 3651);
+  return [...new Set([smoke, personas, personas + 1, personas + 2])];
+}
+
+// Resolves true when nothing can be bound on 127.0.0.1:port, which is where
+// the server under test listens.
+function portBusy(port) {
+  return new Promise((resolve) => {
+    const server = net.createServer();
+    server.once('error', () => resolve(true));
+    server.once('listening', () => server.close(() => resolve(false)));
+    server.listen(port, '127.0.0.1');
+  });
+}
+
+// "pid 123 (node)" for each process listening on `port`, from lsof.
+function portHolders(port, exec) {
+  let out = '';
+  try {
+    out = String(exec('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-Fpc']));
+  } catch {
+    return [];
+  }
+  const holders = [];
+  let pid = null;
+  for (const line of out.split('\n')) {
+    if (line.startsWith('p')) pid = line.slice(1);
+    else if (line.startsWith('c') && pid) holders.push(`pid ${pid} (${line.slice(1)})`);
+  }
+  return holders;
+}
+
+// Before any step: a port the smoke steps need that is already held fails the
+// gate now, naming who holds it, instead of as EADDRINUSE minutes later.
+async function requireSmokePortsFree({ ports = smokePorts(), busy = portBusy, exec } = {}) {
+  const held = [];
+  for (const port of ports) {
+    if (await busy(port)) {
+      const who = portHolders(port, exec);
+      held.push(`${port} is held by ${who.length ? who.join(', ') : 'a process lsof cannot name (another user?)'}`);
+    }
+  }
+  if (held.length) {
+    throw new Error(
+      `The smoke steps need ports that are already in use:\n  ${held.join('\n  ')}\n` +
+      '  Stop those processes (or set SMOKE_PORT to a free range) and run the gate again.'
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// The steps
 // ---------------------------------------------------------------------------
 
 function defaultExec(cmd, args = []) {
@@ -89,29 +169,20 @@ function defaultExec(cmd, args = []) {
 
 function buildSteps(live) {
   const steps = [
-    { name: 'hygiene', cmd: ['npm', ['run', 'check:refs']] },
-    // Cheap and file-only, so it sits beside hygiene rather than in the
-    // expensive half: a release that reintroduces a hardcoded colour fails
-    // before anything is built.
-    { name: 'style drift', cmd: ['npm', ['run', 'lint:styles']] },
     // Fails fast if the installed runtime has moved past the committed
     // stream capture, or the stub has drifted from it: no candidate gets
-    // validated against a stale model of the stream.
+    // validated against a stale model of the stream. Needs the real CLI.
     { name: 'stream truth', cmd: ['npm', ['run', 'stream:truth']] },
     { name: 'transcript truth', cmd: ['npm', ['run', 'transcript:truth']] },
-    { name: 'typecheck', cmd: ['npm', ['run', 'typecheck']] },
-    { name: 'suite+coverage', cmd: ['npm', ['run', 'test:coverage']] },
-    { name: 'e2e', cmd: ['npm', ['run', 'test:e2e']] },
     // Extension confinement in the shipped Electron with the desktop app's
     // real guards: the proof behind the desktop trust card's network
-    // sentence. Here rather than in CI because CI runs no Electron; the
-    // Chromium half of the proof is in the e2e step above.
+    // sentence. Here because CI runs no Electron; the Chromium half of the
+    // proof is in CI's E2E job.
     { name: 'confinement (electron)', cmd: ['npm', ['run', 'test:confinement:electron']] },
     // The Permissions row reads the same in the desktop app and the browser
     // for one workspace: the shipped desktop app launched through its own
     // entrypoint (electron/main.js, its preload, handlers and server), beside
-    // the browser-mode server in Chromium. Here for the same reason as the
-    // step above: CI runs no Electron.
+    // the browser-mode server in Chromium.
     { name: 'settings parity (electron and browser)', cmd: ['npm', ['run', 'test:settings:electron']] },
     // The profile that run starts on, proven on the same shipped entrypoint:
     // an absolute RUNDOCK_USER_DATA_DIR is the exact profile the app uses,
@@ -135,8 +206,7 @@ function buildSteps(live) {
   }
   // Unsigned unpacked build + real boot check: exercises electron-builder
   // config, the afterPack require-guard, and the packaged binary actually
-  // starting. Signing stays the publish jobs' concern (and local codesign
-  // fails on xattr detritus anyway; proven 2026-08-11).
+  // starting. Signing stays the publish jobs' concern.
   steps.push({ name: 'packaging (unpacked+boot)', cmd: ['node', ['scripts/smoke-packaged.mjs']] });
   return steps;
 }
@@ -151,31 +221,55 @@ function readGateRecord(root = ROOT) {
   }
 }
 
-async function runGate({ root = ROOT, live = true, exec = defaultExec, log = console.log } = {}) {
+async function runGate({
+  root = ROOT, live = true, ci = true, exec = defaultExec, gh, busy, ports, log = console.log,
+} = {}) {
   const startedAt = Date.now();
   const finish = (ok, error) => {
     if (!ok) log(`[gate] FAIL: ${error}`);
     return { ok, error };
   };
 
-  // A gate pass must describe a reproducible SHA: refuse dirty trees.
+  // A gate pass must describe a reproducible tree: refuse dirty trees.
   let sha;
+  let tree;
   try {
     const dirty = String(exec('git', ['status', '--porcelain'])).trim();
     if (dirty) {
-      return finish(false, `working tree is not clean; a gate pass must describe a committed SHA:\n${dirty}`);
+      return finish(false, `working tree is not clean; a gate pass must describe a committed tree:\n${dirty}`);
     }
     sha = String(exec('git', ['rev-parse', 'HEAD'])).trim();
+    tree = String(exec('git', ['rev-parse', 'HEAD^{tree}'])).trim();
   } catch (err) {
     return finish(false, `git preflight failed: ${err.message}`);
   }
 
   // Preconditions before any expensive step.
+  let version;
   try {
-    const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+    version = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version;
     const latestTag = String(exec('git', ['describe', '--tags', '--abbrev=0'])).trim();
-    versionSanity(pkg.version, latestTag);
-    changelogReady(fs.readFileSync(path.join(root, 'CHANGELOG.md'), 'utf8'));
+    candidateVersion(version, latestTag, fs.readFileSync(path.join(root, 'CHANGELOG.md'), 'utf8'));
+  } catch (err) {
+    return finish(false, err.message);
+  }
+
+  let ciRecord = { skipped: true };
+  if (ci) {
+    log(`[gate] reading CI's results for tree ${tree.slice(0, 12)}...`);
+    const isAncestor = (a, b) => {
+      try { exec('git', ['merge-base', '--is-ancestor', a, b]); return true; } catch { return false; }
+    };
+    const verdict = ciVerdict({ tree, isAncestor, ...(gh ? { gh } : {}) });
+    if (!verdict.ok) return finish(false, verdict.error);
+    ciRecord = { checks: verdict.checks };
+    log(`[gate] CI passed ${Object.keys(verdict.checks).join(', ')} on this tree`);
+  } else {
+    log('[gate] NOT reading CI (--no-ci): release will refuse this record');
+  }
+
+  try {
+    await requireSmokePortsFree({ exec, ...(busy ? { busy } : {}), ...(ports ? { ports } : {}) });
   } catch (err) {
     return finish(false, err.message);
   }
@@ -199,14 +293,19 @@ async function runGate({ root = ROOT, live = true, exec = defaultExec, log = con
   }
 
   const record = {
+    tree,
     sha,
+    version,
     live,
+    ci: ciRecord,
     passedAt: new Date().toISOString(),
     wallClockSeconds: Math.round((Date.now() - startedAt) / 100) / 10,
     steps: timings,
   };
   fs.writeFileSync(path.join(root, GATE_FILE_NAME), JSON.stringify(record, null, 2) + '\n');
-  log(`[gate] PASS on ${sha.slice(0, 9)} in ${record.wallClockSeconds}s${live ? '' : ' (NO LIVE SMOKE: release will refuse this record)'}`);
+  const caveats = [!live && 'NO LIVE SMOKE', !ci && 'CI NOT READ'].filter(Boolean);
+  log(`[gate] PASS on tree ${tree.slice(0, 12)} (${version}) in ${record.wallClockSeconds}s` +
+    (caveats.length ? ` (${caveats.join(', ')}: release will refuse this record)` : ''));
   return { ok: true, record };
 }
 
@@ -216,9 +315,13 @@ async function runGate({ root = ROOT, live = true, exec = defaultExec, log = con
 
 if (require.main === module) {
   const live = !process.argv.includes('--no-live');
-  runGate({ live }).then(result => {
+  const ci = !process.argv.includes('--no-ci');
+  runGate({ live, ci }).then(result => {
     process.exit(result.ok ? 0 : 1);
   });
 }
 
-module.exports = { GATE_FILE_NAME, versionSanity, changelogReady, buildSteps, readGateRecord, runGate };
+module.exports = {
+  GATE_FILE_NAME, nextVersions, candidateVersion, smokePorts, portHolders, requireSmokePortsFree,
+  buildSteps, readGateRecord, runGate,
+};
