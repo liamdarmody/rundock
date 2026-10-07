@@ -588,6 +588,16 @@ test('renaming a routine leaves the records it already wrote untouched', async (
   try {
     fs.writeFileSync(keeperAgentFile, original.replace('name: briefing', 'name: briefing-renamed'));
     h.internal.invalidateAgentCache();
+    // A renamed routine is a different routine to this install's record of
+    // approvals (lib/agents/approval-store.js), so it is approved again here,
+    // as the approve step in Routines would.
+    {
+      const store = require('../../lib/agents/approval-store.js');
+      const { discoverAgents } = require('../../lib/agents/discovery.js');
+      const renamed = discoverAgents().flatMap((a) => a.routines || []).find((r) => r.name === 'briefing-renamed');
+      store.recordApproval(h.workspaceDir, store.identityOf(renamed), require('../../lib/agents/routines.js').computePlanHash(renamed), null);
+      h.internal.invalidateAgentCache();
+    }
 
     advance(7, [RENAMED]);
     driveTicks(t);

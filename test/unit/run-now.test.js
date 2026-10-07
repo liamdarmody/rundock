@@ -54,6 +54,7 @@ function withRun(fn, opts = {}) {
     name: AGENT, displayName: 'Piper', type: 'specialist', order: 1,
     routines: opts.routines || [opts.routine || approvedRoutine()],
   }));
+  require('../helpers/approvals.js').seenHere(ws);
   invalidateAgentCache();
   const realSpawn = claude.spawnClaude;
   const prevClaudeDeps = claude.wireClaudeRuntimeDeps({ getActualPort: () => 0 });

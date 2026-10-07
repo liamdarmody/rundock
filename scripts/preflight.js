@@ -135,6 +135,8 @@ const NOT_CHEAP = {
   // that rule however fast it happens to be, and admitting them would grow this
   // phase into a second full suite, which is the thing the phase must not become.
   'test/unit/approve-once.test.js': 'behaviour: drives the permission grant flow, not a bookkeeping check',
+  'test/unit/approval-store.test.js': 'behaviour: builds workspaces on disk, decides and moves their approval records, and draws the held-routines strip in a document. It evaluates the routines view to draw it, which is why the inventory names it, but the evaluation serves a rendered check',
+  'test/unit/launcher-code.test.js': 'behaviour: starts the server as a child process with a launcher code and reads what it prints and answers. It cuts the generated launcher out of the Windows installer, which is why the inventory names it, but the cut serves text checks on that launcher rather than a bookkeeping one',
   'test/unit/collision-decisions.test.js': 'behaviour: drives the import review flow through correlated protocol messages and presses the decisions. It walks the review card\'s stylesheet section to hold the danger tone to one surface, which is why the inventory names it, but the walk serves a driven check rather than a bookkeeping one',
   'test/unit/extension-install.test.js': 'behaviour: builds repositories on disk and installs from them, writing files and reading the result back',
   'test/unit/host-wiring.test.js': 'behaviour: boots documents, mounts extension frames and dispatches real message events through the seam',

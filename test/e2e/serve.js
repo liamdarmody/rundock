@@ -29,4 +29,31 @@ process.env.GIT_CONFIG_VALUE_0 = 'https://github.com/e2e-fixture/';
 if (!process.env.RUNDOCK_PERMISSION_TIMEOUT_MS) process.env.RUNDOCK_PERMISSION_TIMEOUT_MS = '6000';
 
 const PORT = Number(process.env.E2E_PORT || 34517);
-require('../../server.js').startServer({ port: PORT });
+const { startServer } = require('../../server.js');
+
+// Let the test browser in as opening the printed link would, BEFORE the
+// server listens, so the storage state exists by the time Playwright sees the
+// port open: the session token in the page's own storage, and the cookie for
+// pictures and PDFs. See test/e2e/credentials.js.
+//
+// The run's own session store, in its temporary folder: never the checkout's
+// real one, which a developer's own browser depends on.
+const fs = require('node:fs');
+const auth = require('../../lib/auth/index.js');
+const credentials = require('./credentials.js');
+fs.mkdirSync(credentials.DIR, { recursive: true, mode: 0o700 });
+auth.configureSessionStore(require('node:path').join(credentials.DIR, 'sessions.json'));
+auth.setLinkPrinter(() => {});
+const { token, mediaCookie } = auth.exchangeCode(auth.codeOf(auth.signInLink(PORT)), PORT);
+const [mediaName, mediaValue] = mediaCookie.split('=');
+const expires = Math.floor(Date.now() / 1000) + 24 * 60 * 60;
+fs.writeFileSync(credentials.STORAGE_STATE, JSON.stringify({
+  cookies: ['localhost', '127.0.0.1'].map((domain) => ({ name: mediaName, value: mediaValue, domain, path: '/workspace-file', expires, httpOnly: true, secure: false, sameSite: 'Strict' })),
+  origins: [`http://localhost:${PORT}`, `http://127.0.0.1:${PORT}`].map((origin) => ({ origin, localStorage: [{ name: 'rundock-session', value: token }] })),
+}), { mode: 0o600 });
+fs.writeFileSync(credentials.SESSION_FILE, token, { mode: 0o600 });
+fs.writeFileSync(credentials.HOOK_TOKENS, JSON.stringify(Object.fromEntries(
+  credentials.HOOK_SCOPES.map((scope) => [scope == null ? '' : scope, auth.issueHookToken(scope)]),
+)), { mode: 0o600 });
+
+startServer({ port: PORT });

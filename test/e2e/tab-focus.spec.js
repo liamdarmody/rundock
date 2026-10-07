@@ -23,6 +23,7 @@
 // a synthesised event would not reproduce the defect at all.
 const fs = require('node:fs');
 const path = require('node:path');
+const { sessionGet } = require('./credentials.js');
 const { test, expect } = require('@playwright/test');
 const { tabSites } = require('./fixture.js');
 
@@ -86,7 +87,7 @@ async function caretAt(page, needle) {
 // asks the serialiser whether it still agrees with itself, which it would even
 // if saving were broken.
 async function fileBytes(page, file) {
-  return (await page.request.get(`/api/file?path=${file}`)).text();
+  return (await sessionGet(page, `/api/file?path=${file}`)).text();
 }
 
 async function afterKey(page) {

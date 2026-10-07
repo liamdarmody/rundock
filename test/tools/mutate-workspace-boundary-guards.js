@@ -157,6 +157,38 @@ const ALLOW_FAIL_VIEW = { src: path.join(ROOT, 'public', 'views', 'chat.js'), su
 // the suite that sends foreign Hosts and Origins at a booted server.
 const LOCAL_ORIGIN = { src: path.join(ROOT, 'lib', 'local-origin.js'), suite: 'test/integration/local-origin.test.js' };
 const LOCAL_ORIGIN_DOOR = { src: path.join(ROOT, 'server.js'), suite: 'test/integration/local-origin.test.js' };
+// Only Rundock's own window drives the server (lib/auth): the one question,
+// the door in server.js that asks it, the routes that need no key, the hook's
+// own tokens, writes that never leave through a link, the key kept out of the
+// agent's environment, and the desktop window's header. Each watched by the
+// attack suite that makes the request any other process would make, or by the
+// unit suite for the pieces it cannot reach.
+const ATTACK = 'test/integration/attack/control-connection.test.js';
+const AUTH = { src: path.join(ROOT, 'lib', 'auth', 'index.js'), suite: ATTACK };
+const AUTH_UNIT = { src: path.join(ROOT, 'lib', 'auth', 'index.js'), suite: 'test/unit/control-auth.test.js' };
+const AUTH_DOOR = { src: path.join(ROOT, 'server.js'), suite: ATTACK };
+const AUTH_ROUTER = { src: path.join(ROOT, 'lib', 'http-router.js'), suite: ATTACK };
+const AUTH_ROUTES = { src: path.join(ROOT, 'lib', 'http-router.js'), suite: 'test/unit/control-auth.test.js' };
+const AUTH_FILES = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'files.js'), suite: ATTACK };
+const AUTH_LINK = { src: path.join(ROOT, 'lib', 'workspace', 'link-safe-write.js'), suite: 'test/unit/control-auth.test.js' };
+const AUTH_SPAWN = { src: path.join(ROOT, 'lib', 'runtime', 'claude.js'), suite: ATTACK };
+const AUTH_HOOK = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/integration/boundary-permissions.test.js' };
+const AUTH_WINDOW = { src: path.join(ROOT, 'electron', 'window-key.js'), suite: 'test/unit/control-auth.test.js' };
+const AUTH_SIGNIN = { src: path.join(ROOT, 'public', 'sign-in-model.js'), suite: 'test/unit/control-auth.test.js' };
+// The key the Windows launcher makes and hands over, consumed and never echoed.
+const LAUNCHER = { src: path.join(ROOT, 'lib', 'auth', 'index.js'), suite: 'test/unit/launcher-code.test.js' };
+const LAUNCHER_BANNER = { src: path.join(ROOT, 'server.js'), suite: 'test/unit/launcher-code.test.js' };
+// What a browser holds: one-time codes, session tokens sent as a header, the
+// media cookie, and the desktop app accepting none of them.
+const BROWSER_ATTACK = { src: path.join(ROOT, 'lib', 'auth', 'index.js'), suite: 'test/integration/attack/browser-session.test.js' };
+const DESKTOP_AUTH = { src: path.join(ROOT, 'lib', 'auth', 'index.js'), suite: 'test/unit/desktop-auth.test.js' };
+// A link only when the person asks; the launcher's own status; the page's
+// policy; and the suite keeping its fixtures out of the checkout's stores.
+const LINK_ON_REQUEST = { src: path.join(ROOT, 'lib', 'auth', 'index.js'), suite: 'test/unit/link-on-request.test.js' };
+const PAGE_POLICY = { src: path.join(ROOT, 'lib', 'http-router.js'), suite: 'test/integration/page-policy.test.js' };
+const STORE_ISOLATION = { src: path.join(ROOT, 'test', 'helpers', 'approvals.js'), suite: 'test/unit/test-store-isolation.test.js' };
+const BROWSER_DOOR = { src: path.join(ROOT, 'server.js'), suite: 'test/integration/attack/browser-session.test.js' };
+const MEDIA_ROUTER = { src: path.join(ROOT, 'lib', 'http-router.js'), suite: 'test/integration/attack/browser-session.test.js' };
 
 const MUTATIONS = [
   // ===== ONE DIRECTORY UNDER TWO NAMES IS ONE IDENTITY =====
@@ -431,6 +463,11 @@ const MUTATIONS = [
   // itself. Lose the main window's preload and the page is a browser page in
   // a desktop frame; unregister the storage handler and the preload's
   // snapshot never comes back.
+  // Without the key its main process adds, the shipped window is refused by
+  // its own server and shows only the line pointing to a link.
+  [DESKTOP, "the desktop main window carries the key to its own server",
+    '  installWindowKey(mainWindow.webContents.session, { port, key: auth.launchKey(), header: auth.KEY_HEADER });\n',
+    ''],
   [DESKTOP, "the desktop main window loads the app's preload",
     "    ...chromeWindowOptions(),\n    webPreferences: {\n      preload: path.join(__dirname, 'preload.js'),",
     "    ...chromeWindowOptions(),\n    webPreferences: {\n      preload: path.join(__dirname, 'preload-missing.js'),"],
@@ -1053,7 +1090,7 @@ const MUTATIONS = [
     "  if (key) alwaysAllowedTools.delete(key);",
     ""],
   [AGENT_NOTICE_ROUTER, "Agent notice: the server hands out no line",
-    "    const text = require('./runtime/agent-notices.js').takeAgentNotice(id);",
+    "    const text = id ? require('./runtime/agent-notices.js').takeAgentNotice(id) : null;",
     "    const text = null;"],
   [AGENT_NOTICE_STORE, "Agent notice: any conversation id is accepted",
     "  return PLAIN_ID.test(id) && id !== '.' && id !== '..' ? id : null;",
@@ -1113,11 +1150,147 @@ const MUTATIONS = [
     "const LOOPBACK_NAMES = ['localhost', '127.0.0.1', '[::1]'];",
     "const LOOPBACK_NAMES = ['localhost'];"],
   [LOCAL_ORIGIN_DOOR, 'Local origin: every HTTP request passes the check',
-    '  const refused = localOrigin.refusal(req, server.address().port);',
+    '  const refused = localOrigin.refusal(req, port);',
     '  const refused = null;'],
   [LOCAL_ORIGIN_DOOR, 'Local origin: every WebSocket upgrade passes the check',
-    '  verifyClient: ({ req }) => !localOrigin.refusal(req, server.address().port, { upgrade: true }),',
-    '  verifyClient: () => true,'],
+    '  verifyClient: ({ req }) => !localOrigin.refusal(req, server.address().port, { upgrade: true })\n',
+    '  verifyClient: ({ req }) => true\n'],
+  // ===== ONLY RUNDOCK'S OWN WINDOW DRIVES THE SERVER =====
+  [AUTH_UNIT, 'Auth: an unknown hook token belongs to no conversation',
+    '  return hookScopes.has(token) ? hookScopes.get(token) : undefined;',
+    '  return hookScopes.has(token) ? hookScopes.get(token) : null;'],
+  [AUTH_DOOR, 'Auth: every WebSocket upgrade asks for the key',
+    '    && auth.authenticate(req, server.address().port),',
+    '    && true,'],
+  [AUTH_ROUTES, 'Auth: a route not named as open is closed',
+    "    if (url === '/api/auth/status') return true;",
+    "    if (url.startsWith('/api/')) return true;"],
+  [AUTH_ROUTER, 'Auth: the card route takes only a hook token',
+    "  } else if (req.method === 'POST' && req.url === '/api/permission-request') {\n    const scope = auth.hookScopeOf(req);\n    if (scope === undefined) {",
+    "  } else if (req.method === 'POST' && req.url === '/api/permission-request') {\n    const scope = auth.hookScopeOf(req);\n    if (false) {"],
+  [AUTH_ROUTER, 'Auth: a card is filed into the token\'s conversation, not the one named',
+    "        const convoId = scope || '';",
+    "        const convoId = data.conversation_id || scope || '';"],
+  [AUTH_ROUTER, 'Auth: the notice route takes only a hook token',
+    "  } else if (req.method === 'GET' && req.url.startsWith('/api/agent-notice?')) {\n    const scope = auth.hookScopeOf(req);\n    if (scope === undefined) {",
+    "  } else if (req.method === 'GET' && req.url.startsWith('/api/agent-notice?')) {\n    const scope = auth.hookScopeOf(req);\n    if (false) {"],
+  [AUTH_ROUTER, 'Auth: a notice goes only to the token\'s own conversation',
+    "    const id = scope || '';",
+    "    const id = new URL(req.url, 'http://127.0.0.1').searchParams.get('conversation') || scope || '';"],
+  [AUTH_ROUTER, 'Links: a review sidecar is never written through a link',
+    '        writeFileNoFollow(fullPath, data.content);',
+    "        fs.writeFileSync(fullPath, data.content, 'utf-8');"],
+  [AUTH_FILES, 'Links: a save that would land outside through a link is refused',
+    '      if (!ctx.workspace.isWritableInWorkspace(fullPath)) {\n        ws.send(',
+    '      if (false) {\n        ws.send('],
+  [AUTH_LINK, 'Links: a write is judged where it really lands',
+    '    if (real) return path.join(real, ...rest.reverse());',
+    '    if (real) return path.resolve(target);'],
+  [AUTH_LINK, 'Links: the last step never follows a link',
+    '(fs.constants.O_NOFOLLOW || 0);\n  const fd',
+    '0;\n  const fd'],
+  [AUTH_SPAWN, 'Auth: an agent is started with its conversation\'s hook token',
+    "  env.RUNDOCK_HOOK_TOKEN = require('../auth/index.js').issueHookToken(convoId || null);\n",
+    ''],
+  [AUTH_HOOK, 'Auth: the hook sends its token with a card request',
+    "      'Content-Length': Buffer.byteLength(payload),\n      ...hookTokenHeader(),",
+    "      'Content-Length': Buffer.byteLength(payload),"],
+  [AUTH_WINDOW, 'Auth: the window\'s key never goes from an extension frame',
+    '  return !isExtensionFrame(details.frame);',
+    '  return true;'],
+  [AUTH_WINDOW, 'Auth: the window\'s key goes only to this server\'s port',
+    '  if (String(url.port) !== String(port)) return false;\n',
+    ''],
+  [AUTH_WINDOW, 'Auth: a debugging switch is recognised with its value',
+    "    const name = String(arg).split('=')[0];",
+    '    const name = String(arg);'],
+  [AUTH_SIGNIN, 'Sign-in: a tab that was connected says Rundock restarted',
+    '    return everConnected ? RESTARTED : NEVER_SIGNED_IN;',
+    '    return NEVER_SIGNED_IN;'],
+  [AUTH, 'Auth: the key in the header is compared, not merely present',
+    "  if (sameSecret(headers[KEY_HEADER], LAUNCH_KEY)) return 'key';",
+    "  if (headers[KEY_HEADER]) return 'key';"],
+  [AUTH_UNIT, 'Auth: a session counts only if its fingerprint is on file',
+    "    && now - Number(s.at) <= SESSION_MAX_AGE_S * 1000 && sameSecret(s.fp, fp));",
+    "    || true);"],
+  [AUTH_UNIT, 'Auth: only a fingerprint of a browser token is kept',
+    "    { fp: fingerprint(token), kind: 'session', port: String(port), at },",
+    "    { fp: fingerprint(token), token, kind: 'session', port: String(port), at },"],
+  [AUTH_UNIT, 'Auth: the media cookie stays out of the page\'s reach and off every other path',
+    "    'Set-Cookie': `${result.mediaCookie}; HttpOnly; SameSite=Strict; Path=/workspace-file; Max-Age=${SESSION_MAX_AGE_S}`,",
+    "    'Set-Cookie': `${result.mediaCookie}; SameSite=Strict; Path=/; Max-Age=${SESSION_MAX_AGE_S}`,"],
+  [AUTH_UNIT, 'Auth: the media cookie opens pictures and PDFs only',
+    "  if (isMediaRequest(req) && knownSession(readCookie(req, mediaCookieName(port)), port, 'media')) return 'media';",
+    "  if (knownSession(readCookie(req, mediaCookieName(port)), port, 'media')) return 'media';"],
+  [AUTH_UNIT, 'Auth: a session token is not good on another port',
+    "  return readSessions().some(s => s.kind === kind && String(s.port) === String(port)\n",
+    "  return readSessions().some(s => s.kind === kind\n"],
+  [BROWSER_ATTACK, 'Auth: a session expires on the server',
+    "    && now - Number(s.at) <= SESSION_MAX_AGE_S * 1000 && sameSecret(s.fp, fp));",
+    "    && sameSecret(s.fp, fp));"],
+  [BROWSER_ATTACK, 'Auth: the launch key is never a code',
+    "  if (desktopOnly || typeof code !== 'string' || !liveCode(code)) return null;",
+    "  if (desktopOnly || typeof code !== 'string' || (!liveCode(code) && code !== LAUNCH_KEY)) return null;"],
+  [BROWSER_ATTACK, 'Auth: a code works once',
+    "  codes.delete(code);\n  const token = newSecret();",
+    "  const token = newSecret();"],
+  [BROWSER_ATTACK, 'Auth: a code is good for a few minutes only',
+    "  if (Date.now() > until) { codes.delete(code); return false; }",
+    "  if (false) { codes.delete(code); return false; }"],
+  [DESKTOP_AUTH, 'Auth: the desktop accepts its window\'s key and nothing a browser holds',
+    "  if (desktopOnly) return null;\n",
+    ""],
+  [AUTH_DOOR, 'Auth: every HTTP route but the open ones asks for the key',
+    "  if (!httpRouter.isOpenRoute(req) && !req.rundockAuthorisedBy) {",
+    "  if (false) {"],
+  [BROWSER_DOOR, 'Auth: the socket never chooses the subprotocol carrying the token',
+    "  handleProtocols: (protocols) => (protocols.has(auth.WS_PROTOCOL) ? auth.WS_PROTOCOL : false),",
+    "  handleProtocols: (protocols) => [...protocols].pop() || false,"],
+  [LAUNCHER, 'Launcher code: taken out of the environment before anything inherits it',
+    'delete process.env.RUNDOCK_LAUNCH_CODE;\n',
+    ''],
+  [LAUNCHER, 'Launcher code: only a value shaped like a code is used',
+    "const FROM_LAUNCHER = !process.versions.electron && typeof HANDED_CODE === 'string' && TOKEN_SHAPE.test(HANDED_CODE);",
+    "const FROM_LAUNCHER = !process.versions.electron && typeof HANDED_CODE === 'string' && HANDED_CODE.length > 0;"],
+  [LAUNCHER_BANNER, 'Launcher code: the startup line holds no link when the launcher holds it',
+    '      else if (auth.codeFromLauncher()) console.log(',
+    '      else if (false) console.log('],
+  [AUTH_SIGNIN, 'Sign-in: only a code-shaped value in the fragment is read',
+    "    const match = /^#(?:.*&)?c=([A-Za-z0-9_-]{16,128})(?:&|$)/.exec(String(hash || ''));",
+    "    const match = /[ck]=([^&]+)/.exec(String(hash || ''));"],
+  [AUTH_SIGNIN, 'Sign-in: the token goes only to this page\'s own server',
+    "      if (!token || !same) return fetchImpl(input, init);",
+    "      if (!token) return fetchImpl(input, init);"],
+  [MEDIA_ROUTER, 'Links: a picture let in by the media cookie is read only where it really is',
+    "    const inside = req.rundockAuthorisedBy === 'media' ? deps.isWritableInWorkspace(fullPath) : deps.isInsideWorkspace(fullPath);",
+    "    const inside = deps.isInsideWorkspace(fullPath);"],
+  [AUTH_WINDOW, 'Auth: the window\'s key never goes with another origin',
+    "  if (origin !== undefined && !LOOPBACK.some((h) => String(headers[origin]).toLowerCase() === `http://${h}:${port}`)) return false;\n",
+    ""],
+  [LINK_ON_REQUEST, 'Links: a link asked for at the terminal is answered at most once a second',
+    '    if (Date.now() - lastPrintAt < 1000) return;\n',
+    ''],
+  [LINK_ON_REQUEST, 'Links: asking for a new link retires the last one',
+    '    if (printedCode) codes.delete(printedCode);\n',
+    ''],
+  [LINK_ON_REQUEST, 'Links: the desktop app prints no link',
+    '  if (FROM_LAUNCHER || desktopOnly) return;\n  lastPrintAt = Date.now();',
+    '  if (FROM_LAUNCHER) return;\n  lastPrintAt = Date.now();'],
+  [LAUNCHER, 'Launcher: only a server the launcher started says whether it is idle',
+    '  if (FROM_LAUNCHER) { body.launcher = true; body.idle = !!idleProbe(); }\n',
+    ''],
+  [AUTH_SIGNIN, 'Sign-in: a launcher install points to its icon, not a terminal',
+    '    if (fromLauncher) return FROM_LAUNCHER;\n',
+    ''],
+  [AUTH_SIGNIN, 'Sign-in: the exchange is tried again until the server itself answers',
+    '    return status === 200 || status === 401;',
+    '    return true;'],
+  [PAGE_POLICY, 'Page policy: the page connects only to its own server',
+    "const PAGE_FRAME_POLICY = \"frame-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'\";",
+    "const PAGE_FRAME_POLICY = \"frame-src 'self'\";"],
+  [STORE_ISOLATION, 'Tests: fixtures never write into the checkout\'s stores',
+    'function seenHere(dir) {\n  isolateStores();',
+    'function seenHere(dir) {'],
 ];
 
 const REPORTER = ['--test-reporter', 'spec'];

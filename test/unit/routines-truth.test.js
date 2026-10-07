@@ -39,7 +39,8 @@ const { computePlanHash } = require('../../lib/agents/routines.js');
 // stopped by something other than the approval step. Built from the plan
 // fields the hash actually reads, so these fixtures stay honest when the
 // hash's inputs change.
-const approved = (routine) => ({ ...routine, planApprovedHash: computePlanHash(routine) });
+// Approved in the open workspace, as the scheduler now asks (lib/agents/approval-store.js).
+const approved = (routine) => require('../helpers/approvals.js').approvedHere(routine);
 
 after(cleanup);
 

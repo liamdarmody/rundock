@@ -122,11 +122,11 @@ async function main() {
     // Preflight: fail fast (naming the missing symbol) if this Rundock build has
     // moved any global, function, or effect executor the clips/shots depend on,
     // rather than quietly capturing broken assets.
-    await assertAppContract(browser, server.url, log);
+    await assertAppContract(browser, server.signInUrl, log);
 
     // 3. Capture flat @2x masters + crops, both themes.
     log('[3/6] Capturing stills (light + dark, @2x)...');
-    const shots = await captureStills({ browser, url: server.url, stagingDir: staging, log });
+    const shots = await captureStills({ browser, url: server.signInUrl, stagingDir: staging, log });
 
     // A shot that fails is caught and logged inside captureStills so one bad
     // selector cannot lose the whole run. That is right, but on its own it is
@@ -196,7 +196,7 @@ async function main() {
     // 5. Motion.
     log('[5/6] Recording motion and converting to GIFs...');
     if (ffmpegAvailable()) {
-      const clips = await captureMotion({ browser, url: server.url, workspace: built.workspace, outDir: dirs.motion, log });
+      const clips = await captureMotion({ browser, url: server.signInUrl, workspace: built.workspace, outDir: dirs.motion, log });
       // A clip that throws is logged and omitted rather than failing the run, so
       // assert the full set landed; a short count means a clip broke (e.g. an
       // app rename slipped past the contract) and needs a look before publishing.

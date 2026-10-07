@@ -16,6 +16,7 @@ const { test, expect } = require('@playwright/test');
 const fs = require('node:fs');
 const path = require('node:path');
 const WebSocket = require('ws');
+const credentials = require('./credentials.js');
 
 // What the stub answers `--version` with, as the server's probe reads it.
 const STUB_VERSION = '0.0.0-stub';
@@ -29,7 +30,7 @@ const PROMPT = 'pressed e2e body';
 // launcher seeded and writes the routine through the real save road.
 function overWs(fn) {
   return new Promise((resolve, reject) => {
-    const ws = new WebSocket(`ws://localhost:${PORT}`);
+    const ws = new WebSocket(`ws://localhost:${PORT}`, { headers: credentials.sessionHeaders() });
     const messages = [];
     const waitFor = (pred) => new Promise((ok, no) => {
       const timer = setTimeout(() => no(new Error('timed out waiting over the socket')), 10000);

@@ -105,6 +105,11 @@
     ],
     "icon": "electron/build/icon.icns",
     "afterPack": "scripts/afterPack.js",
+    "electronFuses": {
+      "runAsNode": true,
+      "enableNodeOptionsEnvironmentVariable": false,
+      "enableNodeCliInspectArguments": false
+    },
     "mac": {
       "category": "public.app-category.productivity",
       "icon": "electron/build/icon.icns",

@@ -36,7 +36,9 @@ async function waitForReady(url, { timeoutMs = 20000, intervalMs = 150 } = {}) {
 // One boot attempt on a specific port. Throws if the port is taken or the
 // server does not come up.
 async function spawnAttempt({ workspace, home, port, quiet, env = {} }) {
-  const bootScript = `require(${JSON.stringify(SERVER)}).startServer({ port: ${port} })`;
+  // The child's stdin stands in for the terminal, where Enter asks for
+  // another link (lib/auth): each browser context needs its own.
+  const bootScript = `require(${JSON.stringify(SERVER)}).startServer({ port: ${port}, linkRequests: process.stdin })`;
   const child = spawn(process.execPath, ['-e', bootScript], {
     cwd: REPO_ROOT,
     env: {
@@ -55,11 +57,29 @@ async function spawnAttempt({ workspace, home, port, quiet, env = {} }) {
       RUNDOCK_DISABLE_SCHEDULER: '1',
       ...env,
     },
-    stdio: quiet ? ['ignore', 'ignore', 'pipe'] : 'inherit',
+    // stdout is always read: the sign-in link the server prints is how this
+    // process learns the key, exactly as a person running from source does.
+    stdio: ['pipe', 'pipe', quiet ? 'pipe' : 'inherit'],
   });
 
   let stderr = '';
   if (quiet && child.stderr) child.stderr.on('data', (d) => { stderr += d.toString(); });
+  // The links, held in this process only. Each carries a one-time code, and
+  // the server prints another only when asked at its stdin, so every browser
+  // context asks for one it has not been given before (takeSignInUrl). Echoed
+  // output has the code cut out, so it never lands in a terminal log or a
+  // capture record.
+  let signInUrl = null;
+  let out = '';
+  const links = [];
+  const given = new Set();
+  child.stdout.on('data', (d) => {
+    const text = d.toString();
+    out += text;
+    for (const m of text.matchAll(/Rundock is running: (http:\/\/localhost:\d+\/#c=[A-Za-z0-9_-]+)/g)) links.push(m[1]);
+    if (!signInUrl && links.length) signInUrl = links[0];
+    if (!quiet) process.stdout.write(text.replace(/#c=[A-Za-z0-9_-]+/g, '#c=…'));
+  });
 
   const url = `http://localhost:${port}`;
   const exited = new Promise((_, reject) => {
@@ -68,6 +88,10 @@ async function spawnAttempt({ workspace, home, port, quiet, env = {} }) {
 
   try {
     await Promise.race([waitForReady(url), exited]);
+    // The banner can trail the port opening by a moment.
+    const deadline = Date.now() + 10000;
+    while (!signInUrl && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
+    if (!signInUrl) throw new Error('Rundock server did not print its sign-in link');
   } catch (err) {
     try { child.kill('SIGKILL'); } catch { /* ignore */ }
     throw err;
@@ -79,8 +103,32 @@ async function spawnAttempt({ workspace, home, port, quiet, env = {} }) {
   // against a dead server, with its own clear error.
   exited.catch(() => { /* handled */ });
 
+  let askedAt = 0;
+  async function takeSignInUrl() {
+    const until = Date.now() + 15000;
+    let asked = false;
+    for (;;) {
+      const fresh = links.find((l) => !given.has(l));
+      if (fresh) { given.add(fresh); return fresh; }
+      if (!asked) {
+        // At most one request a second is answered.
+        const gap = 1100 - (Date.now() - askedAt);
+        if (gap > 0) await new Promise((r) => setTimeout(r, gap));
+        child.stdin.write('\n');
+        askedAt = Date.now();
+        asked = true;
+      }
+      if (Date.now() > until) throw new Error('Rundock printed no fresh link for the next browser');
+      await new Promise((r) => setTimeout(r, 50));
+    }
+  }
+
   return {
     url,
+    // Open one of these, not `url`, in each new browser context: it lets the
+    // context in (lib/auth). A function, because each link is good once.
+    // Never log what it returns.
+    signInUrl: takeSignInUrl,
     port,
     stop() {
       return new Promise((resolve) => {

@@ -89,8 +89,10 @@ export async function newContext(browser, {
 export const MAC_CHROME_INSET_LEFT = 88;   // computeChromeInsets MAC_TRAFFIC_LIGHTS
 export const TOPBAR_HEIGHT = 60;           // electron/main.js TOPBAR_HEIGHT
 
+// `url` may be a function that yields a fresh link per call (serve.mjs).
 export async function gotoWorkspace(page, url) {
-  await page.goto(url, { waitUntil: 'domcontentloaded' });
+  const target = typeof url === 'function' ? await url() : url;
+  await page.goto(target, { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('.nav-item[data-nav="team"]', { state: 'visible', timeout: 20000 });
   await page.evaluate(({ inset, lightY }) => {
     document.documentElement.style.setProperty('--chrome-inset-left', inset + 'px');

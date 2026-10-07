@@ -15,6 +15,7 @@
 // time, and only saving mangled them.
 const fs = require('node:fs');
 const path = require('node:path');
+const { sessionGet } = require('./credentials.js');
 const { test, expect } = require('@playwright/test');
 const { reviewedFormatting } = require('./fixture.js');
 
@@ -55,7 +56,7 @@ async function actOnCard(page, needle, label) {
 }
 
 async function savedBody(page) {
-  const text = await (await page.request.get(`/api/file?path=${NOTE}`)).text();
+  const text = await (await sessionGet(page, `/api/file?path=${NOTE}`)).text();
   // Body only: the endmatter records verdicts and is expected to change.
   //
   // Split on the endmatter's opening delimiter followed by ANY review key,

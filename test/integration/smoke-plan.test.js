@@ -136,7 +136,7 @@ describe('Proposal-First smoke plan (T1-T12)', () => {
   test('T6: a tool request renders a consent card with approve/reject controls', async () => {
     const since = client.messages.length;
     const pending = fetch(`http://127.0.0.1:${h.port}/api/permission-request`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...h.hookHeaders('t6') },
       body: JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'echo hi' }, conversation_id: 't6' }),
     }).then(r => r.json());
     const { msg: card } = await client.waitFor(m => m.type === 'control_request', { since, label: 'consent card' });
@@ -256,7 +256,7 @@ describe('Proposal-First smoke plan (T1-T12)', () => {
   test('T12: shell-permission hook round-trips (deny honoured)', async () => {
     const since = client.messages.length;
     const pending = fetch(`http://127.0.0.1:${h.port}/api/permission-request`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...h.hookHeaders('t12') },
       body: JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'rm -rf x' }, conversation_id: 't12' }),
     }).then(r => r.json());
     const { msg: card } = await client.waitFor(m => m.type === 'control_request' && m._conversationId === 't12', { since, label: 'shell card' });

@@ -42,7 +42,7 @@ const records = () => (fs.existsSync(runsDir()) ? fs.readdirSync(runsDir()) : []
 
 function postJson(body) {
   return fetch(`http://127.0.0.1:${h.port}/api/permission-request`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    method: 'POST', headers: { 'Content-Type': 'application/json', ...h.hookHeaders(body.conversation_id || null) }, body: JSON.stringify(body),
   }).then(async res => JSON.parse(await res.text()));
 }
 
@@ -105,7 +105,7 @@ test('an answer to a request nothing is waiting on is told it was too late', asy
 
 test('a request whose asker goes away ends at once, for every window', async () => {
   const since = client.messages.length;
-  const req = http.request({ host: '127.0.0.1', port: h.port, path: '/api/permission-request', method: 'POST', headers: { 'Content-Type': 'application/json' } });
+  const req = http.request({ host: '127.0.0.1', port: h.port, path: '/api/permission-request', method: 'POST', headers: { 'Content-Type': 'application/json', ...h.hookHeaders('convo-asker') } });
   req.on('error', () => {});
   req.end(JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'sh asker-leaves.sh' }, conversation_id: 'convo-asker' }));
   const { msg: card } = await client.waitFor(m => m.type === 'control_request' && m._conversationId === 'convo-asker', { since, label: 'the card' });

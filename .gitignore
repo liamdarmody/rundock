@@ -3,6 +3,8 @@ node_modules/
 .DS_Store
 *.log
 .recent-workspaces.json
+.browser-sessions.json
+.routine-approvals.json
 .vscode/
 .idea/
 *.swp
@@ -54,3 +56,4 @@ scripts/screenshots/.banned-tokens.json
 # Release walk output: screenshots and the report attached to the release PR.
 # Rebuilt on every run, local to the machine that walked.
 .walk/
+.rundock-launcher.pid

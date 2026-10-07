@@ -91,8 +91,9 @@ describe('a foreign Host is refused', () => {
   });
 
   test('a WebSocket upgrade with a foreign Host is refused, with or without an Origin', async () => {
-    assert.notStrictEqual(await upgrade({ Host: `attacker.example:${h.port}` }), 'open');
-    assert.notStrictEqual(await upgrade({ Host: `attacker.example:${h.port}`, Origin: `http://attacker.example:${h.port}` }), 'open');
+    // With the window's key, so the refusal can only be the Host's.
+    assert.notStrictEqual(await upgrade({ Host: `attacker.example:${h.port}`, ...h.authHeaders() }), 'open');
+    assert.notStrictEqual(await upgrade({ Host: `attacker.example:${h.port}`, Origin: `http://attacker.example:${h.port}`, ...h.authHeaders() }), 'open');
   });
 });
 
@@ -127,18 +128,19 @@ describe('a foreign Origin cannot change anything', () => {
   });
 
   test('a WebSocket upgrade with a foreign or null Origin is refused', async () => {
-    assert.notStrictEqual(await upgrade({ Origin: 'https://attacker.example' }), 'open');
-    assert.notStrictEqual(await upgrade({ Origin: 'null' }), 'open');
+    // With the window's key, so the refusal can only be the Origin's.
+    assert.notStrictEqual(await upgrade({ Origin: 'https://attacker.example', ...h.authHeaders() }), 'open');
+    assert.notStrictEqual(await upgrade({ Origin: 'null', ...h.authHeaders() }), 'open');
   });
 });
 
 describe('the app, the desktop window and the hook keep working', () => {
   test('every loopback Host for this port reads the API', async () => {
     for (const Host of loopbackHosts()) {
-      const res = await request({ path: '/api/agents', headers: { Host } });
+      const res = await request({ path: '/api/agents', headers: { Host, ...h.authHeaders() } });
       assert.strictEqual(res.status, 200, `Host ${Host}`);
     }
-    const upper = await request({ path: '/api/agents', headers: { Host: `LOCALHOST:${h.port}` } });
+    const upper = await request({ path: '/api/agents', headers: { Host: `LOCALHOST:${h.port}`, ...h.authHeaders() } });
     assert.strictEqual(upper.status, 200, 'host names are case-insensitive');
   });
 
@@ -147,7 +149,7 @@ describe('the app, the desktop window and the hook keep working', () => {
     for (const [Host, Origin] of pairs) {
       const convo = `convo-app-${Host.split(':')[0]}`;
       const since = client.messages.length;
-      const pending = request({ method: 'POST', path: '/api/permission-request', headers: { Host, Origin, 'Content-Type': 'application/json' }, body: cardBody(convo) });
+      const pending = request({ method: 'POST', path: '/api/permission-request', headers: { Host, Origin, 'Content-Type': 'application/json', ...h.hookHeaders(convo) }, body: cardBody(convo) });
       const { msg: card } = await client.waitFor((m) => m.type === 'control_request' && m._conversationId === convo, { since, label: `card via ${Origin}` });
       client.send({ type: 'permission_response', requestId: card.request_id, allow: true, conversationId: convo });
       assert.strictEqual((await pending).status, 200);
@@ -157,7 +159,7 @@ describe('the app, the desktop window and the hook keep working', () => {
   test('the hook\'s request, with no Origin, raises the card', async () => {
     const convo = 'convo-hook-no-origin';
     const since = client.messages.length;
-    const pending = request({ method: 'POST', path: '/api/permission-request', headers: { 'Content-Type': 'application/json' }, body: cardBody(convo) });
+    const pending = request({ method: 'POST', path: '/api/permission-request', headers: { 'Content-Type': 'application/json', ...h.hookHeaders(convo) }, body: cardBody(convo) });
     const { msg: card } = await client.waitFor((m) => m.type === 'control_request' && m._conversationId === convo, { since, label: 'hook card' });
     client.send({ type: 'permission_response', requestId: card.request_id, allow: false, conversationId: convo });
     assert.strictEqual((await pending).status, 200);
@@ -165,9 +167,9 @@ describe('the app, the desktop window and the hook keep working', () => {
 
   test('a WebSocket from each app origin, and from a local tool with no Origin, opens', async () => {
     for (const Origin of appOrigins()) {
-      assert.strictEqual(await upgrade({ Origin }), 'open', `Origin ${Origin}`);
+      assert.strictEqual(await upgrade({ Origin, ...h.authHeaders() }), 'open', `Origin ${Origin}`);
     }
-    assert.strictEqual(await upgrade({ Host: `localhost:${h.port}`, Origin: `http://localhost:${h.port}` }), 'open', 'the desktop window');
-    assert.strictEqual(await upgrade({}), 'open', 'no Origin');
+    assert.strictEqual(await upgrade({ Host: `localhost:${h.port}`, Origin: `http://localhost:${h.port}`, ...h.authHeaders() }), 'open', 'the desktop window');
+    assert.strictEqual(await upgrade({ ...h.authHeaders() }), 'open', 'no Origin, with the key');
   });
 });

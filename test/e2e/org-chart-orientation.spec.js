@@ -882,7 +882,7 @@ for (const theme of ['dark', 'light']) {
 test('connector colour differs between the dark and light themes', async ({ browser }) => {
   const seen = {};
   for (const theme of ['dark', 'light']) {
-    const context = await browser.newContext();
+    const context = await browser.newContext({ storageState: require('./credentials.js').STORAGE_STATE });
     const page = await context.newPage();
     await page.addInitScript((t) => {
       try { localStorage.setItem('rundock-theme', t); } catch { /* private mode */ }

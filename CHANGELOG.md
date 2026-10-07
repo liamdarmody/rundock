@@ -4,6 +4,22 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
+## Unreleased
+
+**Name:** Safer, With Less Friction
+
+Only Rundock's own window can now drive Rundock: answer your permission cards, change your settings, or read and write your files through it. The desktop app looks and works exactly as before. Running from source, you open Rundock once per browser from the link it prints in the terminal.
+
+### Changed
+
+- **Running from source, open Rundock from the link in the terminal:** starting Rundock from source now prints `Rundock is running: http://localhost:3000/#c=…`. Each browser needs the link once: after that, new tabs, server restarts and browser restarts all open Rundock as before. Each link works once and for fifteen minutes; press Enter in the terminal for a new one for another browser. A tab left open from before this version shows "Disconnected" until you reload it. The Windows launcher installed from source opens the link for you, waits for a slow first start, and, opened again while Rundock has nothing running, restarts it to hand that browser a fresh link. A browser that has never had the link shows one line, "Open Rundock from the link in your terminal", and a tab left open across a restart that needs the link again says "Rundock restarted. Open it from the link in your terminal", then carries on by itself once the link is opened. Rundock never opens a tab by itself.
+
+### Fixed
+
+- **A routine runs only where you approved it:** a routine's approval used to be written into its agent file, so it travelled with the file: a copied folder, a cloned repository or a template could arrive with its routines approved, and anything overdue ran as soon as the workspace opened. Rundock now keeps its own record of where you approved each routine, and only that counts. A workspace you have already opened on this computer carries on exactly as before. A workspace this computer has never opened arrives with its routines held, and one line at the top names the ones that were switched on, with **Allow** and **Review**; an allowed routine runs at its next scheduled time, never on the click. A moved workspace keeps its approvals; a copy does not.
+- **Other programs on your computer can no longer act as you in Rundock:** Rundock's local server used to accept any program running on your computer, including an agent, as if it were you. It now refuses anything that does not come from Rundock's own window: answering a permission card, adding an always-allow or a working folder, switching to Code mode or turning the sandbox off, reading or writing workspace files, starting a chat, approving a routine and confirming a package install. An agent's own permission requests still reach you as cards, and only in its own conversation.
+- **Rundock never writes through a link that leads out of your workspace:** a save to a file that is a link (symlink) to somewhere outside the workspace, or that sits inside a linked folder outside it, is now refused with a message, and nothing is written there. Opening such a file to read it works as before.
+
 ## 0.15.3: Team Chart On Its Side (2026-10-05)
 
 The team chart can now be laid out from left to right as well as from the top down, and Rundock remembers which you chose.

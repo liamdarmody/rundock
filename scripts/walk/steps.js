@@ -98,7 +98,9 @@ function buildSteps() {
       run: async (ctx, check) => {
         const up = await waitFor(async () => (await fetch(`http://127.0.0.1:${ctx.port}/`)).ok, 30000);
         check(!!up, `the server did not answer on port ${ctx.port}`);
-        await ctx.page.goto(`http://127.0.0.1:${ctx.port}/`);
+        const signInUrl = await ctx.signInUrl();
+        check(!!signInUrl, 'the server printed no sign-in link');
+        await ctx.page.goto(signInUrl);
         // The tree the server pushes over the socket is the page's proof of
         // life; it holds for a workspace with no default agent, which the
         // seed deliberately is.

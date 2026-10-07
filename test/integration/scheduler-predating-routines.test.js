@@ -251,7 +251,10 @@ test('a routine in a workspace that cannot be written to does not fire either', 
     'a routine nobody can record a decision about fired anyway');
   assert.ok(!logs.some(l => l.includes('Running routine') && l.includes('frozen-check')),
     'the routine in the unwritable workspace was announced as running');
-  assert.ok(logs.some(l => l.includes('frozen-check') && l.includes('enabled is false')),
+  // Approval is what decides now: a routine that arrives after this install
+  // opened the workspace is approved here or not at all, whatever its file
+  // can or cannot record (lib/agents/approval-store.js).
+  assert.ok(logs.some(l => l.includes('frozen-check') && l.includes('plan not approved')),
     'the refusal did not name the field that decided');
   assertControlFiredOnThisTick(logs);
 
@@ -297,7 +300,7 @@ test('a workspace whose agents directory cannot be written to does not fire eith
 
   assert.strictEqual(h.internal.routineState['sealed:sealed-check'], undefined,
     'a routine in a sealed workspace fired anyway');
-  assert.ok(logs.some(l => l.includes('sealed-check') && l.includes('enabled is false')),
+  assert.ok(logs.some(l => l.includes('sealed-check') && l.includes('plan not approved')),
     'the refusal did not name the field that decided');
   assertControlFiredOnThisTick(logs);
 

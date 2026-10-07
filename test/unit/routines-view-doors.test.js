@@ -152,6 +152,14 @@ const REPLIES = [
     surface: 'a routine turned on, which retires the last refusal',
     pressedBy: 'a change that goes through retires the last refusal',
   },
+  // The routines a workspace arrived with: the strip above every view names
+  // them, and the server's answer to Allow or Close redraws it (empty).
+  {
+    call: 'renderHeldStrip',
+    on: "case 'held_routines':",
+    surface: 'the strip naming the routines a workspace arrived with',
+    pressedBy: 'the held routines arriving from the server draw the strip, and an empty list hides it',
+  },
   {
     call: 'routinesActionCleared',
     on: "case 'routine_paused':",
@@ -1326,4 +1334,18 @@ describe('the shell can actually show what it navigates to', () => {
     assert.match(APP_SRC, /showView\(v\) \{[\s\S]*?'routines'/, 'showView does not list the routines panel');
     dom.window.close();
   });
+});
+
+test('the held routines arriving from the server draw the strip, and an empty list hides it', () => {
+  const { JSDOM } = require('jsdom');
+  const dom = new JSDOM('<!doctype html><body><div id="held-strip" hidden></div></body>', { runScripts: 'outside-only' });
+  const w = dom.window;
+  w.RundockHeldRoutines = require(path.join(ROOT, 'public', 'held-routines-model.js'));
+  w.eval(fs.readFileSync(path.join(ROOT, 'public', 'views', 'routines.js'), 'utf-8'));
+  w.renderHeldStrip([{ name: 'Daily brief', agent: 'Juno' }]);
+  const el = w.document.getElementById('held-strip');
+  assert.strictEqual(el.hidden, false);
+  assert.match(el.textContent, /Daily brief \(Juno\)/);
+  w.renderHeldStrip([]);
+  assert.strictEqual(el.hidden, true);
 });

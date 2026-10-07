@@ -146,7 +146,7 @@ export async function captureView(browser, o, { log = () => {} } = {}) {
   let ctx = null;
   let page = null;
   try {
-    const { workspace, home } = buildWorkspace({ root: path.join(scratch, 'demo') });
+    const { workspace, home } = buildWorkspace({ root: path.join(scratch, 'demo'), seenBefore: !o.arrived });
     server = await startRundock({
       workspace: fs.realpathSync(workspace),
       home,
@@ -157,7 +157,7 @@ export async function captureView(browser, o, { log = () => {} } = {}) {
 
     ctx = await newContext(browser, { theme: o.theme, viewport: { width: o.width, height: o.height }, deviceScaleFactor: o.scale });
     page = await ctx.newPage();
-    await gotoWorkspace(page, server.url);
+    await gotoWorkspace(page, server.signInUrl);
     await setTheme(page, o.theme);
     await openView(page, o, fs.realpathSync(workspace));
     for (let i = 0; i < o.actions.length; i += 1) await runAction(page, o.actions[i], i);
