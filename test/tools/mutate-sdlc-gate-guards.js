@@ -75,6 +75,9 @@ const RELEASE_CI = { src: path.join(ROOT, 'scripts', 'release-ci.js'), suite: 't
 const RELEASE_GATE = { src: path.join(ROOT, 'scripts', 'release-gate.js'), suite: 'test/unit/release-gate.test.js' };
 const RELEASE_RECORD = { src: path.join(ROOT, 'scripts', 'release.js'), suite: 'test/unit/release-gate.test.js' };
 const RELEASE_TAG = { src: path.join(ROOT, 'scripts', 'release.js'), suite: 'test/unit/release-tag.test.js' };
+// The mutation scope and the CI retry classifier, each watched by its suite.
+const SCOPE = { src: path.join(ROOT, 'scripts', 'mutation-scope.js'), suite: 'test/unit/mutation-scope.test.js' };
+const CI_VERDICT = { src: path.join(ROOT, 'scripts', 'ci-verdict.js'), suite: 'test/unit/ci-verdict.test.js' };
 
 const MUTATIONS = [
   // ===== A DESTRUCTIVE STEP WITHOUT ITS CAUTION =====
@@ -289,6 +292,41 @@ const MUTATIONS = [
     "  requireGatePass(git(['rev-parse', `${merged}^{tree}`]).trim(), { root });\n",
     ""],
 
+  // ===== THE MUTATION SCOPE: WHAT A CHANGE CAN REACH =====
+  // Comparing against HEAD instead of the merge base is the defect that made
+  // every push to main run everything and every merge of main re-test main.
+  [SCOPE, "the merge base is the base, not HEAD",
+    "      const mb = git(['merge-base', head, trunk]);",
+    "      const mb = git(['rev-parse', head]);"],
+  [SCOPE, "an empty diff from a resolved base runs nothing",
+    "    return { run: [], skipped: harnesses.map((h) => ({ tool: h.tool, reason: 'nothing changed' })), reason: 'nothing changed against the base' };",
+    "    return all('no changed files could be determined, so nothing was narrowed');"],
+  [SCOPE, "an unresolved base runs everything",
+    "  if (changed === null) return all('no comparison base could be resolved, so nothing was narrowed');",
+    "  if (changed === null) changed = [];"],
+  [SCOPE, "a file a guarded file reads selects that harness",
+    "      if (reader) { read = `${reader} reads ${f}`; break; }",
+    "      if (false && reader) { read = `${reader} reads ${f}`; break; }"],
+  [SCOPE, "a dependency change runs everything",
+    "  if (dependencyChange) return all(`${dependencyChange} can change what any suite does`);\n",
+    ""],
+  [SCOPE, "a harness ended by a signal is no verdict, not a pass",
+    "  if (signal) return { outcome: NO_VERDICT, cause: `ended by signal ${signal}` };",
+    "  if (signal) return { outcome: PASS };"],
+  [SCOPE, "a shard with no verdict file is no verdict",
+    "    if (!v) {\n      outcomes.push(NO_VERDICT);",
+    "    if (!v) {\n      outcomes.push(PASS);"],
+
+  // ===== THE CI RETRY: ONCE, AND ONLY FOR A LOST RUNNER =====
+  [CI_VERDICT, "a runner shutdown is retried",
+    "  /runner has received a shutdown signal/i,\n",
+    ""],
+  [CI_VERDICT, "a second attempt is never retried",
+    "  if (Number(run.run_attempt) !== 1) return none(`attempt ${run.run_attempt} is never re-run, so a retry cannot loop`);\n",
+    ""],
+  [CI_VERDICT, "a superseded run is not retried",
+    "  if (newerRun || notOk.some((j) => j.kind === 'superseded')) return none('superseded: a newer run is the one that counts');\n",
+    ""],
 ];
 
 const REPORTER = ['--test-reporter', 'spec'];
