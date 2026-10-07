@@ -10,6 +10,19 @@ const { resolveUserData } = require('./user-data.js');
 const { decideUpdateUi } = require('./update-state.js');
 const { reconcileOnLaunch, recordDownloaded } = require('./update-launches.js');
 const { wizardSize } = require('./wizard-size.js');
+const { installWindowKey, debugSwitchIn } = require('./window-key.js');
+
+// A shipped build never starts with a debugging port open: whatever connected
+// to it could drive this process and read the key its window is given
+// (electron/window-key.js). The Node switches are also off at build time
+// (package.json build.electronFuses).
+if (app.isPackaged) {
+  const debugSwitch = debugSwitchIn(process.argv);
+  if (debugSwitch || app.commandLine.hasSwitch('remote-debugging-port') || app.commandLine.hasSwitch('remote-debugging-pipe')) {
+    console.error(`[Electron] Not starting with ${debugSwitch || 'a remote debugging switch'}.`);
+    app.exit(1);
+  }
+}
 
 let autoUpdater;
 try {
@@ -744,6 +757,11 @@ function createMainWindow(port) {
   mainWindow.on('enter-full-screen', () => sendFullScreen(true));
   mainWindow.on('leave-full-screen', () => sendFullScreen(false));
 
+  // Every request this window makes to the server carries the launch key,
+  // added here and never handed to the page (electron/window-key.js).
+  const auth = require('../lib/auth/index.js');
+  installWindowKey(mainWindow.webContents.session, { port, key: auth.launchKey(), header: auth.KEY_HEADER });
+
   const url = `http://localhost:${port}`;
   console.log(`[Electron] Loading ${url}`);
   mainWindow.loadURL(url);
@@ -841,6 +859,9 @@ app.whenReady().then(async () => {
   // Start the embedded server on an OS-assigned port
   console.log('[Electron] Starting server...');
   process.env.RUNDOCK_ELECTRON = '1';
+  // The window proves itself with the key this process adds to its requests,
+  // and nothing else is accepted: it never holds a browser's token or cookie.
+  require('../lib/auth/index.js').setDesktopOnly(true);
   const { startServer } = require('../server.js');
   serverPort = await startServer({ port: 0 });
   console.log('[Electron] Server running on port:', serverPort);

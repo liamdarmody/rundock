@@ -1,0 +1,12 @@
+/* The one-line strip naming the routines a workspace arrived with
+   (public/held-routines-model.js). The calm notice style of the sandbox
+   notice: it informs, blocks nothing, and sits above the main view. */
+
+.held-strip { display: flex; align-items: center; gap: 12px; margin: 12px 24px 0; padding: 10px 12px; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius-lg); font-size: var(--caption); color: var(--text-1); line-height: 1.5; }
+.held-strip[hidden] { display: none; }
+.held-strip-text { flex: 1; min-width: 0; }
+.held-strip-btn { flex-shrink: 0; padding: 4px 10px; border-radius: var(--radius-md); border: 1px solid var(--border); color: var(--text-1); background: transparent; font-size: var(--caption); }
+.held-strip-btn:hover { background: var(--elevated); }
+.held-strip-btn:focus-visible, .held-strip-close:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.held-strip-close { width: 28px; height: 28px; flex-shrink: 0; font-size: 16px; line-height: 1; color: var(--text-2); border-radius: var(--radius-md); background: transparent; }
+.held-strip-close:hover { color: var(--text-1); background: var(--elevated); }

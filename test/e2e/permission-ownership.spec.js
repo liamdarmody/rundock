@@ -19,6 +19,7 @@ const { test, expect } = require('@playwright/test');
 const fs = require('node:fs');
 const path = require('node:path');
 const WebSocket = require('ws');
+const credentials = require('./credentials.js');
 
 const STUB_VERSION = '0.0.0-stub';
 const PORT = Number(process.env.E2E_PORT || 34517);
@@ -29,7 +30,7 @@ const PROMPT = 'held approvals e2e body';
 
 function overWs(fn) {
   return new Promise((resolve, reject) => {
-    const ws = new WebSocket(`ws://localhost:${PORT}`);
+    const ws = new WebSocket(`ws://localhost:${PORT}`, { headers: credentials.sessionHeaders() });
     const messages = [];
     const waitFor = (pred) => new Promise((ok, no) => {
       const timer = setTimeout(() => no(new Error('timed out waiting over the socket')), 10000);
@@ -46,7 +47,7 @@ function overWs(fn) {
 // is what is under test, and the server answers the hook on its own clock.
 function raise(body) {
   fetch(`http://localhost:${PORT}/api/permission-request`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Rundock-Hook-Token': credentials.hookToken(body.conversation_id || null) }, body: JSON.stringify(body),
   }).catch(() => {});
 }
 

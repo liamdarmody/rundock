@@ -87,15 +87,20 @@ function freePort() {
 }
 
 // The browser-mode server: the same server.js, as `node server.js` runs it.
+// Resolves its port and the link it prints, which is how a browser is let
+// in (lib/auth): opened once, the browser then has the cookie for the rest
+// of the run. The link is held here and never written to the report.
 async function startBrowserServer() {
   const port = await freePort();
+  const { signInLink } = require('../../scripts/sign-in-link.js');
   const child = spawn(process.execPath, [path.join(ROOT, 'server.js')], { cwd: ROOT, env: { ...env, PORT: String(port) }, stdio: ['ignore', 'pipe', 'pipe'] });
   handles.push(() => { child.kill(); });
-  await bounded(new Promise((resolve, reject) => {
-    child.stdout.on('data', (d) => { if (/running at/.test(String(d))) resolve(); });
+  let out = '';
+  const link = await bounded(new Promise((resolve, reject) => {
+    child.stdout.on('data', (d) => { out += String(d); const found = signInLink(out); if (found) resolve(found); });
     child.on('exit', (code) => reject(new Error(`the browser-mode server exited (${code})`)));
-  }), 'the browser-mode server');
-  return port;
+  }), 'the browser-mode server printing its link');
+  return { port, link };
 }
 
 // The app's main window: the one on its own embedded server. A window on
@@ -152,17 +157,27 @@ async function main() {
   if (!bridge.storage) report.failures.push('desktop: the preload\'s storage snapshot comes back from the main process');
   if (report.failures.length) return;
 
-  const port = await startBrowserServer();
+  const { port, link } = await startBrowserServer();
   const browser = await chromium.launch();
   handles.unshift(() => browser.close());
   report.chromium = browser.version();
   const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
 
+  // Both windows must be ones the server answers. A window it refuses shows
+  // only the line pointing to the link, and every row read through it would
+  // be missing for a reason this run is not about, so that is named first.
+  const letIn = (p) => bounded(p.evaluate(() => { const so = document.getElementById('signed-out'); return !so || so.hidden; }), 'reading whether the page was let in').catch(() => false);
+  let opened = false;
   for (const c of parity.cases()) {
     c.apply(fixture);
     log(`case: ${c.name}`);
     const desktop = await readRow(win, () => win.reload()).catch((e) => { log(`desktop: ${e.message}`); return null; });
-    const browserRow = await readRow(page, () => page.goto(`http://127.0.0.1:${port}/`)).catch((e) => { log(`browser: ${e.message}`); return null; });
+    // The first load opens the printed link; after that the browser has the
+    // cookie, and the plain address reloads the page as a person's tab would.
+    const browserRow = await readRow(page, () => page.goto(opened ? `http://localhost:${port}/` : link)).catch((e) => { log(`browser: ${e.message}`); return null; });
+    opened = true;
+    if (!(await letIn(win))) report.failures.push('desktop: the server answers the app\'s own window (its main process adds the key)');
+    if (!(await letIn(page))) report.failures.push('browser: the server answers a browser opened from the link it printed');
     const differences = parity.compare(desktop, browserRow);
     if (differences.length) report.failures.push(`parity: ${c.name}`);
     report.cases.push({ case: c.name, match: differences.length === 0, differences, desktop, browser: browserRow });

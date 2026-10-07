@@ -1465,6 +1465,13 @@ function alwaysAsksCrossing(access) {
 // with the server unreachable, slow or saying anything unexpected, there is
 // simply no line, and the decision is unaffected.
 const AGENT_NOTICE_ID = /^[A-Za-z0-9_-][A-Za-z0-9_.-]{0,127}$/;
+// The token Rundock started this agent with, bound to its conversation. The
+// server's two hook routes accept nothing else, and act only for the
+// conversation it names (lib/auth).
+function hookTokenHeader() {
+  const token = process.env.RUNDOCK_HOOK_TOKEN || '';
+  return token ? { 'X-Rundock-Hook-Token': token } : {};
+}
 function fetchAgentNotice(done, { check = false } = {}) {
   const id = process.env.RUNDOCK_CONVO_ID || '';
   if (!process.env.RUNDOCK || !AGENT_NOTICE_ID.test(id)) { done(null); return; }
@@ -1477,6 +1484,7 @@ function fetchAgentNotice(done, { check = false } = {}) {
   const req = http.request({
     hostname: '127.0.0.1', port: process.env.RUNDOCK_PORT || 3000,
     path: '/api/agent-notice?conversation=' + encodeURIComponent(id) + (check ? '&check=1' : ''), method: 'GET', timeout: check ? 1000 : 250,
+    headers: hookTokenHeader(),
   }, (res) => {
     let body = '';
     res.on('data', (c) => { body += c; if (body.length > 8192) { req.destroy(); finish(null); } });
@@ -1881,7 +1889,8 @@ fetchAgentNotice((agentNotice) => {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'Content-Length': Buffer.byteLength(payload)
+      'Content-Length': Buffer.byteLength(payload),
+      ...hookTokenHeader(),
     },
     timeout: 300000 // 5 min: server-side timeout (120s) handles the real cutoff
   }, res => {

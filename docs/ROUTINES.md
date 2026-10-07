@@ -132,6 +132,16 @@ A routine made through the editor is approved from the moment it exists: making 
 
 A routine whose approval has lapsed shows as **paused**, and it does not look like a pause you applied yourself. The row keeps its full weight, takes the attention colour, and says that what this runs has changed since you last approved it, with one action: **Review and resume**, which approves the plan as it stands on disk at that moment. A routine nobody has approved yet, such as one a package brought in switched off, says instead that it is waiting for your approval before its first run, with the same **Review and resume**. A pause you applied is quieter: the row dims, the word is simply **Paused**, and the way back is **Resume**. The two are told apart by words as well as colour on purpose, because a changed routine that looked like an ordinary pause would be resumed without a glance, which is the outcome the approval exists to prevent. Pausing is a switch on the row, off beside Run and on beside the word Paused, and it is the only control that sets or clears `paused`; the play glyph belongs to Run alone.
 
+### An approval counts only where it was given
+
+Rundock keeps its own record of which routines you approved, in which workspace, outside every workspace. The `planApprovedHash` field in an agent file is a readable copy of that approval, kept for older versions; on its own it approves nothing. So a routine runs unattended only on the computer and in the workspace where it was approved: by making it, by **Review and resume**, by agreeing to a package's install card, or by allowing it from the strip below. A copied folder, a cloned repository, a template, or an agent file edited to carry an approval arrives with its routines waiting.
+
+**A workspace this computer has opened before keeps everything.** The first time this version opens a workspace you have used on this computer, at the same place, its approved routines, and those written before approvals existed, carry on exactly as before, and nothing is asked.
+
+**A workspace this computer has never opened** arrives with its routines held. If any of them were switched on and would otherwise have run, one line at the top of the window names them: "This workspace came with 2 routines switched on: Inbox sweep (Wren) and Weekly digest (Reese). They won't run on this computer until you allow them." **Allow both** approves them here; each then runs at its next scheduled time, never on the click. **Review** opens Routines, where each has its approve step. Closing the line leaves them held, and it does not come back for that workspace. Nothing else is blocked while it shows. A workspace synced to a second computer is held there the same way, which is also what stops it running every routine twice.
+
+**A moved workspace keeps its approvals; a copy does not.** If the place a workspace was last opened from no longer exists, it was moved, and its approvals follow it. If it still exists, the new folder is a copy. Close a workspace before moving it, so nothing recreates the old folder in the meantime. Renaming a routine by editing its file makes it a different routine to this record, so it asks for approval again.
+
 ### Routines run for the workspace that is open
 
 There is one scheduler and it serves one workspace. Each tick re-discovers the agents of whichever workspace is currently open, and runs each routine with that workspace as its working directory. A workspace you are not in has no scheduler of its own.
@@ -177,6 +187,28 @@ What it costs:
 - A small monthly VPS fee. Around £5 to £10 per month at the cheapest reliable tiers.
 - One-time setup time. The first setup is a couple of hours if you are comfortable with a Linux terminal, longer if you are not.
 - Ongoing maintenance. OS updates, the occasional service restart, and keeping Claude Code authenticated.
+
+#### Reaching a Rundock on a server
+
+Rundock listens on the server itself only (`127.0.0.1`), so nothing on the internet can reach it directly. Reach it from your own computer through an SSH tunnel, which carries the connection over SSH and lets your browser use `localhost` exactly as if Rundock were running on your computer:
+
+```bash
+ssh -N -L 3000:localhost:3000 you@your-server
+```
+
+Leave that running, and open Rundock in your browser at `localhost:3000`. Keep the browser on `localhost`: Rundock answers only requests addressed to `localhost:<port>` or `127.0.0.1:<port>`, so the address of the server itself, or any other name for it, is refused. If port 3000 is already taken on your computer, change the first number (`-L 3100:localhost:3000`) and the port in the link to match.
+
+**The link Rundock prints when it starts.** Each browser needs it once; after that, new tabs and restarts open Rundock as before. When Rundock runs as a systemd service, its output goes to the service's journal, so that is where the link is:
+
+```bash
+journalctl -u <service> | grep "Rundock is running"
+```
+
+Use the most recent line, and use it soon: each link works once, and only for fifteen minutes. A service prints one each time it starts, and only then, so for another browser, or once fifteen minutes have passed, restart the service (`systemctl restart <service>`) and take the new line. Open it in your browser as `localhost:3000/#c=…` through the tunnel (if you changed the local port above, change it in the link too). Without it, the page shows only "Open Rundock from the link in your terminal". Started by hand in a terminal instead, Rundock prints another link whenever you press Enter there.
+
+**What another program on the server can still do.** The journal keeps every line it is given, so it holds each link until it is used or its fifteen minutes run out, and any program running as the same user, or in a group that may read the journal, can read it in that time and let itself in. Run Rundock on an account no other program uses, and open the link straight after the service starts.
+
+**Web proxies are refused.** A reverse proxy or tunnelling service that passes its own host name on to Rundock (for example `rundock.example.com`) is refused by the same check that keeps other web pages out. An SSH tunnel is the supported way in for now. Proper remote access, with encryption between your device and the server, is planned.
 
 ### Option 2: Anthropic Claude Code Routines
 

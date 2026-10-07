@@ -2365,6 +2365,9 @@ function writeRoutineAgent(ws, routines) {
   fs.writeFileSync(path.join(dir, 'nightly.md'), agentFile({
     name: 'nightly', type: 'specialist', order: 1, routines,
   }));
+  // A workspace this install opened before, so the fixture's routines count
+  // as approved here (lib/agents/approval-store.js).
+  require('../helpers/approvals.js').seenHere(ws);
   invalidateAgentCache();
 }
 

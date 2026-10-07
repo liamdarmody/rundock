@@ -102,8 +102,8 @@ test('the app page is served with the frame policy that confines extension frame
     router.handleHttpRequest({ url, method: 'GET' }, res);
     assert.strictEqual(res.calls.writeHead[0][1]['Content-Security-Policy'], router.PAGE_FRAME_POLICY, url);
   }
-  assert.strictEqual(router.PAGE_FRAME_POLICY, "frame-src 'self'",
-    'one directive: frames may load only from this origin');
+  assert.match(router.PAGE_FRAME_POLICY, /(^|; )frame-src 'self'(;|$)/,
+    'frames may load only from this origin');
 });
 
 // Rundock UI's gallery page frames extension documents too, so it is served

@@ -39,7 +39,7 @@ before(async () => {
 after(async () => h.shutdown());
 
 function getRaw(urlPath) {
-  return fetch(`http://127.0.0.1:${h.port}${urlPath}`).then(async res => ({
+  return fetch(`http://127.0.0.1:${h.port}${urlPath}`, { headers: h.authHeaders() }).then(async res => ({
     status: res.status,
     bytes: Buffer.from(await res.arrayBuffer()),
     headers: res.headers,
@@ -124,7 +124,7 @@ describe('/workspace-file binary endpoint', () => {
 describe('/api/review-sidecar', () => {
   function post(body) {
     return fetch(`http://127.0.0.1:${h.port}/api/review-sidecar`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...h.authHeaders() }, body: JSON.stringify(body),
     });
   }
 
@@ -150,7 +150,7 @@ describe('/api/review-sidecar', () => {
   });
 
   test('malformed body is 400', async () => {
-    const res = await fetch(`http://127.0.0.1:${h.port}/api/review-sidecar`, { method: 'POST', body: 'not json' });
+    const res = await fetch(`http://127.0.0.1:${h.port}/api/review-sidecar`, { method: 'POST', headers: h.authHeaders(), body: 'not json' });
     assert.strictEqual(res.status, 400);
     const noContent = await post({ path: '.rundock/reviews/a.json' });
     assert.strictEqual(noContent.status, 400);
