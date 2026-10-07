@@ -1,6 +1,6 @@
 {
   "name": "rundock",
-  "version": "0.15.3",
+  "version": "0.15.4",
   "description": "A visual workspace for your AI agent team. Built for people running their own businesses. Works with your Claude or ChatGPT subscription.",
   "main": "electron/main.js",
   "scripts": {
@@ -105,6 +105,11 @@
     ],
     "icon": "electron/build/icon.icns",
     "afterPack": "scripts/afterPack.js",
+    "electronFuses": {
+      "runAsNode": true,
+      "enableNodeOptionsEnvironmentVariable": false,
+      "enableNodeCliInspectArguments": false
+    },
     "mac": {
       "category": "public.app-category.productivity",
       "icon": "electron/build/icon.icns",

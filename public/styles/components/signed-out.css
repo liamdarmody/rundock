@@ -1,0 +1,6 @@
+/* The one line a tab shows when this browser is not signed in to Rundock
+   (public/sign-in-model.js). It covers the whole window, because nothing
+   behind it can work until the printed link is opened. */
+
+.signed-out { position: fixed; inset: 0; z-index: 10000; display: flex; align-items: center; justify-content: center; padding: 24px; background: var(--base); color: var(--text-2); font-size: var(--body); text-align: center; }
+.signed-out[hidden] { display: none; }

@@ -526,7 +526,12 @@ async function agentTurnAndLinkChecks(check, listener) {
   const appUrl = `http://127.0.0.1:${h.port}`;
   const handed = [];
   const win = new BrowserWindow({ show: false, width: 1100, height: 800, webPreferences: { session: session.fromPartition(`app-${Date.now()}`) } });
-  // The main window's wiring, as electron/main.js does it.
+  // The main window's wiring, as electron/main.js does it. The window key
+  // first: without it the server answers only Rundock's own window, so the
+  // page shows the one line that covers it, and a real click lands on that
+  // line instead of the link (electron/window-key.js, lib/auth).
+  const auth = require('../../lib/auth/index.js');
+  require('../../electron/window-key.js').installWindowKey(win.webContents.session, { port: h.port, key: auth.launchKey(), header: auth.KEY_HEADER });
   installExtensionFrameGuards(win.webContents, { log: () => {}, onBlocked: () => {} });
   installExternalLinkGuards(win.webContents, { appOrigin: appUrl, openExternal: (u) => handed.push(u) });
   await win.loadURL(appUrl);
@@ -578,6 +583,10 @@ async function agentTurnAndLinkChecks(check, listener) {
       const r = a.querySelector('a').getBoundingClientRect();
       return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) };
     })()`);
+    // The page the click lands on is the app itself, not the line shown to a
+    // window the server refuses.
+    check('(instrument) the window is Rundock\'s own: the server answers it and nothing covers the page',
+      await win.webContents.executeJavaScript(`(() => { const so = document.getElementById('signed-out'); return !so || so.hidden; })()`), null);
     await realClick(win, rect.x, rect.y);
     await wait(800);
     check('a real click on a web link in the app opens it in the system browser, and the window stays',

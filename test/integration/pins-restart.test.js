@@ -42,7 +42,9 @@ before(() => {
 });
 after(() => { fs.rmSync(home, { recursive: true, force: true }); });
 
-// Boot server.js as a child and resolve with its port, read from the banner.
+// Boot server.js as a child and resolve with its port and the link it
+// prints, which carries a one-time code: the only way in for anything
+// outside its process, traded below for a session token as a page would.
 function bootChild() {
   const child = spawn(process.execPath, [SERVER], {
     env: {
@@ -57,8 +59,8 @@ function bootChild() {
     const timer = setTimeout(() => reject(new Error(`no banner within ${BANNER_TIMEOUT_MS}ms:\n${out}`)), BANNER_TIMEOUT_MS);
     child.stdout.on('data', (chunk) => {
       out += chunk.toString();
-      const m = /running at http:\/\/localhost:(\d+)/.exec(out);
-      if (m) { clearTimeout(timer); resolve(Number(m[1])); }
+      const m = /Rundock is running: (http:\/\/localhost:(\d+)\/#c=[A-Za-z0-9_-]+)/.exec(out);
+      if (m) { clearTimeout(timer); resolve({ port: Number(m[2]), link: m[1] }); }
     });
     child.stderr.on('data', (chunk) => { out += chunk.toString(); });
     child.once('error', (err) => { clearTimeout(timer); reject(err); });
@@ -77,9 +79,10 @@ function stopChild(child) {
 
 // A socket client that answers one question: what did the server reply to
 // this message, of this type.
-async function connect(port) {
+async function connect({ port, link }) {
   const WebSocket = require('ws');
-  const ws = new WebSocket(`ws://127.0.0.1:${port}`);
+  const headers = await require('../../scripts/sign-in-link.js').exchangeForSession(link);
+  const ws = new WebSocket(`ws://127.0.0.1:${port}`, { headers });
   await new Promise((resolve, reject) => { ws.on('open', resolve); ws.on('error', reject); });
   const ask = (msg, type) => new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(`no ${type} reply to ${msg.type}`)), 8000);

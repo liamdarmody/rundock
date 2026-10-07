@@ -20,7 +20,7 @@ npm install
 npm start
 ```
 
-This starts the server at `http://localhost:3000`. There is no build step. Changes to source files take effect on the next server restart (or page reload for frontend changes).
+This starts the server and prints a link, `Rundock is running: http://localhost:3000/#c=…`; each browser needs it once, and pressing Enter in that terminal prints a new one. There is no build step. Changes to source files take effect on the next server restart (or page reload for frontend changes).
 
 **Working in a git worktree.** A fresh worktree shares the repository's history but not its `node_modules`, so nothing runs in it until dependencies exist. Either run `npm install` in the worktree, or borrow the main checkout's install with a symlink, which is faster and gives both trees identical dependency versions:
 
@@ -123,6 +123,14 @@ Rundock has a substantial automated suite, and PRs are expected to keep it green
 Expectations for a PR: the full suite green on Node 22 and 24 (CI checks both), new behaviour covered by tests (bug fixes include a regression test that fails before the fix), and byte-for-byte guarantees respected if you touch the editor. Then test by hand against a real workspace with agents: verify your change across the team, conversations, skills, and files views as relevant.
 
 **If a test fails and then passes on a re-run, read [docs/TEST-TIMING.md](docs/TEST-TIMING.md) before re-running again.** It carries the inventory of every assertion in the suite that depends on timing or on how two things interleave, says which are known to be load-sensitive and which are correct as written, and gives the rule for adding a wait: poll for a condition that must be reached, sleep only to prove something never happens. A test not listed there is a new instance of that class and should be classified rather than re-run until green.
+
+### Tests and the launch key
+
+Only Rundock's own window may drive the server: every route except the page's static files, the two routes a browser uses to trade the printed link's code for a session token, and the permission hook's two routes asks for the launch key or a session token (`lib/auth/index.js`). Tests cannot set or read the key through the environment. The one variable the server accepts, `RUNDOCK_LAUNCH_CODE`, exists for the Windows launcher, which starts the server hidden and opens the link itself: it is a one-time code, never the key, removed from the environment at once. A test gets in the way the product does:
+
+- **In-process** (the integration harness, the E2E launcher): read `launchKey()` from `lib/auth`, as the desktop app's main process does. `test/helpers/harness.js` gives `authHeaders()` for requests made as the window and `hookHeaders(conversationId)` for requests made as the permission hook.
+- **A server started as a child process:** read the link it prints and trade its code for a session token (`exchangeForSession` in `scripts/sign-in-link.js`), as a page would; each link works once, so take the newest for each browser. `test/integration/pins-restart.test.js` and `test/e2e/browser-sign-in.spec.js` do this.
+- **Playwright specs:** every spec's browser starts with the session token (in the page's storage) and media cookie the printed link would give it, from `test/e2e/credentials.js`, which `test/e2e/serve.js` writes, with its own session store, before the server listens.
 
 ### Proving a test would have failed
 

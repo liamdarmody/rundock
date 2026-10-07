@@ -48,7 +48,7 @@ On the review, a kept starter file has its own row saying so, with nothing to pr
 
 Nothing is written until the person confirms, and nothing they already have is replaced unless they switch that item to overwrite themselves. An item that already exists starts decided skip. A routine an agent carries is named on the offer, with its schedule, before the person agrees.
 
-**Approvals never travel with a package.** Rundock ignores any `planApprovedHash` or `planApprovedAt` a package ships, on install and on update, and records its own. A routine the offer says will run itself (switched on, with a schedule) is approved when the person agrees to that offer; any other routine waits for its first approval in Routines. Writing an approval into a package's agent file has no effect, so leave it out.
+**Approvals never travel with a package.** Rundock ignores any `planApprovedHash` or `planApprovedAt` a package ships, on install and on update, and records its own. A routine the offer says will run itself (switched on, with a schedule) is approved when the person agrees to that offer, in that workspace only, and runs from its next scheduled time; any other routine waits for its first approval in Routines. A copy of that workspace holds it again (see [Routines](ROUTINES.md#an-approval-counts-only-where-it-was-given)). Writing an approval into a package's agent file has no effect, so leave it out.
 
 A package that ships an extension is installed only from a tag or an exact commit, never from a branch; see [Where an extension is installed from](EXTENSION-HOST.md#where-an-extension-is-installed-from).
 

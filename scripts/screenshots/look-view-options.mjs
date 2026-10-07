@@ -30,7 +30,7 @@ export const DEFAULTS = Object.freeze({
   out: DEFAULT_OUT,
 });
 
-const KNOWN = new Set(['view', 'theme', 'width', 'height', 'scale', 'out', 'file', 'conversation', 'section', 'skill', 'element', 'actions']);
+const KNOWN = new Set(['view', 'theme', 'width', 'height', 'scale', 'out', 'file', 'conversation', 'section', 'skill', 'element', 'actions', 'arrived']);
 const TARGET_KEYS = ['selector', 'role', 'text', 'label'];
 
 function fail(message) {
@@ -118,10 +118,15 @@ export function normalizeOptions(raw, { root }) {
   }
 
   if (raw.actions !== undefined && !Array.isArray(raw.actions)) throw fail('"actions" must be a list.');
+  if (raw.arrived !== undefined && typeof raw.arrived !== 'boolean') throw fail(`"arrived" must be true or false, got ${JSON.stringify(raw.arrived)}.`);
 
   return {
     view,
     theme,
+    // The demo workspace as one that arrived from elsewhere (copied, cloned)
+    // rather than one this computer opened before: its routines are held
+    // and the strip naming them shows.
+    arrived: raw.arrived === true,
     width: raw.width === undefined ? DEFAULTS.width : intIn('width', raw.width, 320, 3840),
     height: raw.height === undefined ? DEFAULTS.height : intIn('height', raw.height, 320, 2400),
     scale: raw.scale === undefined ? DEFAULTS.scale : intIn('scale', raw.scale, 1, 3),

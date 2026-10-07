@@ -95,7 +95,7 @@ npm install
 npm start
 ```
 
-Open [http://localhost:3000](http://localhost:3000) in your browser. To open a specific workspace directly:
+Open Rundock from the link it prints in the terminal (`Rundock is running: http://localhost:3000/#c=…`). Each browser needs the link once: after that, new tabs and restarts open Rundock as before. To open a specific workspace directly:
 
 ```bash
 WORKSPACE=/path/to/your/folder npm start

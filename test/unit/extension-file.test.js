@@ -104,6 +104,7 @@ describe('the server states the rule with every read, and holds it on every exte
     return {
       workspace: {
         isInsideWorkspace: (p) => path.resolve(p).startsWith(path.resolve(workspace) + path.sep),
+        isWritableInWorkspace: (p) => require('../../lib/workspace/link-safe-write.js').writeLandsInside(p, [workspace]),
         watchOpenFile() {}, invalidateFileListCache() {}, invalidateFileTreeCache() {},
       },
       store: { ensureSearchEngine: () => null },

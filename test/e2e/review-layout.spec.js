@@ -12,6 +12,7 @@
 // would pass against the broken stylesheet.
 const fs = require('node:fs');
 const path = require('node:path');
+const { sessionGet } = require('./credentials.js');
 const { test, expect } = require('@playwright/test');
 const {
   unreviewedSections,
@@ -151,7 +152,7 @@ test('adding the first comment does not change the rendered order', async ({ pag
     unreviewedSections(sectionedBodyLines()));
 
   // The bytes as authored, before the interface touches the file.
-  const onDiskBefore = await (await page.request.get(`/api/file?path=${UNREVIEWED}`)).text();
+  const onDiskBefore = await (await sessionGet(page, `/api/file?path=${UNREVIEWED}`)).text();
 
   await openNote(page, 'unreviewed-sections.md');
   const before = await layout(page);
@@ -187,10 +188,10 @@ test('adding the first comment does not change the rendered order', async ({ pag
   // assertion here.
   await expect(page.locator('#editor-status')).toHaveText('Saved', { timeout: 10000 });
   await expect
-    .poll(async () => (await (await page.request.get(`/api/file?path=${UNREVIEWED}`)).text()))
+    .poll(async () => (await (await sessionGet(page, `/api/file?path=${UNREVIEWED}`)).text()))
     .toContain('\n---\ncomments:');
 
-  const onDiskAfter = await (await page.request.get(`/api/file?path=${UNREVIEWED}`)).text();
+  const onDiskAfter = await (await sessionGet(page, `/api/file?path=${UNREVIEWED}`)).text();
   const endmatterAt = onDiskAfter.indexOf('\n---\ncomments:');
   expect(endmatterAt).toBeGreaterThan(0);
 

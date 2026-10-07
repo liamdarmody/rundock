@@ -208,12 +208,56 @@ function getGuide() { return agents.find(a => a.type === 'platform'); }
 
 // ===== 3. WEBSOCKET =====
 
+// LET IN, OR ONE LINE (public/sign-in-model.js, lib/auth). The desktop
+// window is let in by its own main process and never sees any of this. A
+// browser opened from the printed link trades the one-time code in the
+// fragment for a session token, kept in this page's storage and sent as a
+// header, and the code leaves the address bar. A tab the server refuses
+// shows one line pointing to the terminal (or, on a Windows launcher
+// install, to its icon), and keeps trying, so opening the link in this
+// browser brings it back by itself.
+let everConnected = false;
+const pageStorage = (() => { try { return window.localStorage; } catch (e) { return null; } })();
+window.fetch = RundockSignIn.withSessionHeader(window.fetch.bind(window), () => RundockSignIn.readToken(pageStorage), location.origin);
+async function signInFromLink() {
+  const code = RundockSignIn.codeFromHash(location.hash);
+  if (!code) return;
+  // Out of the address bar and this history entry before anything else; the
+  // code is dead after the exchange below in any case.
+  history.replaceState(null, '', location.pathname + location.search);
+  // Held in memory and tried until the server itself answers: a server
+  // still starting (a slow first start under the Windows launcher) is
+  // waited for rather than losing the code.
+  for (let attempt = 0; attempt < 45; attempt++) {
+    try {
+      const res = await fetch('/api/auth/session', { method: 'POST', headers: { 'X-Rundock-Code': code }, credentials: 'same-origin', cache: 'no-store' });
+      if (res.ok) { RundockSignIn.keepToken(pageStorage, (await res.json()).token); return; }
+      if (RundockSignIn.exchangeFinal(res.status)) return;
+    } catch (e) { /* not up yet */ }
+    await new Promise((r) => setTimeout(r, 2000));
+  }
+}
+async function showIfSignedOut() {
+  let signedIn = null;
+  let fromLauncher = false;
+  try {
+    const status = await (await fetch('/api/auth/status', { cache: 'no-store', credentials: 'same-origin' })).json();
+    signedIn = !!status.signedIn;
+    fromLauncher = !!status.launcher;
+  } catch (e) { return; } // server down: the bar says so
+  const el = document.getElementById('signed-out');
+  if (!el) return;
+  if (signedIn) { el.hidden = true; return; }
+  el.textContent = RundockSignIn.signedOutLine(everConnected, fromLauncher);
+  el.hidden = false;
+}
+
 function connect() {
   const p = location.protocol==='https:'?'wss:':'ws:';
-  ws = new WebSocket(`${p}//${location.host}`);
-  ws.onopen = () => { setConn('connected'); ws.send(JSON.stringify({type:'get_workspaces'})); };
+  ws = new WebSocket(`${p}//${location.host}`, RundockSignIn.socketProtocols(RundockSignIn.readToken(pageStorage)));
+  ws.onopen = () => { everConnected = true; const so = document.getElementById('signed-out'); if (so) so.hidden = true; setConn('connected'); ws.send(JSON.stringify({type:'get_workspaces'})); };
   ws.onmessage = e => handle(JSON.parse(e.data));
-  ws.onclose = () => { setConn('disconnected'); packagesConnectionLost(); extensionFetchesConnectionLost(); setTimeout(connect, 2000); };
+  ws.onclose = () => { setConn('disconnected'); packagesConnectionLost(); extensionFetchesConnectionLost(); showIfSignedOut(); setTimeout(connect, 2000); };
   ws.onerror = () => {}; // Prevent unhandled error; onclose fires next
 }
 function setConn(s) { const b=document.getElementById('connection-bar'); b.className=`connection-bar ${s}`; b.textContent=s==='connected'?'Connected':s==='disconnected'?'Disconnected. Reconnecting...':'Connecting...'; if(s==='connected')setTimeout(()=>b.style.display='none',2000); else b.style.display='block'; }
@@ -819,6 +863,9 @@ function handle(d) {
     case 'server_info':
       if (d.version) window._rundockVersion = d.version;
       if (d.platform) serverPlatform = d.platform;
+      break;
+    case 'held_routines':
+      renderHeldStrip(d.routines);
       break;
     case 'control_request':
       // NEVER THE CONVERSATION ON SCREEN. A request with no conversation of
@@ -2217,4 +2264,4 @@ document.getElementById('palette-input')?.addEventListener('keydown', (e) => {
   else if (e.key === 'Enter') { e.preventDefault(); openPaletteResult(paletteSel); }
 });
 
-connect();
+signInFromLink().finally(connect);

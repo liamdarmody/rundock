@@ -33,6 +33,21 @@ const ROOT = path.join(__dirname, '..', '..');
 const ROUTINES = { src: path.join(ROOT, 'lib', 'agents', 'routines.js'), suite: 'test/unit/approve-once.test.js' };
 // The scheduler, whose refusal is the gate the row consumes.
 const SCHEDULER = { src: path.join(ROOT, 'lib', 'scheduler.js'), suite: 'test/unit/approve-once.test.js' };
+// Where an approval counts (lib/agents/approval-store.js and its workspace
+// side), each guard paired with the suite that notices it.
+const LOCALITY_ATTACK_SUITE = 'test/integration/attack/routine-approvals.test.js';
+const SCHEDULER_ATTACK = { src: path.join(ROOT, 'lib', 'scheduler.js'), suite: LOCALITY_ATTACK_SUITE };
+const STORE = { src: path.join(ROOT, 'lib', 'agents', 'approval-store.js'), suite: 'test/unit/approval-store.test.js' };
+const LOCALITY = { src: path.join(ROOT, 'lib', 'agents', 'approval-locality.js'), suite: 'test/unit/approval-store.test.js' };
+const LOCALITY_ATTACK = { src: path.join(ROOT, 'lib', 'agents', 'approval-locality.js'), suite: LOCALITY_ATTACK_SUITE };
+const MIGRATION_ATTACK = { src: path.join(ROOT, 'lib', 'agents', 'routines.js'), suite: LOCALITY_ATTACK_SUITE };
+const TEAM_ATTACK = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'team.js'), suite: LOCALITY_ATTACK_SUITE };
+const TEAM_SAVE = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'team.js'), suite: 'test/integration/run-now.test.js' };
+const IMPORT_ATTACK = { src: path.join(ROOT, 'lib', 'packages', 'import-apply.js'), suite: LOCALITY_ATTACK_SUITE };
+const HELD_ATTACK = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'held-routines.js'), suite: LOCALITY_ATTACK_SUITE };
+const HEAL_ATTACK = { src: path.join(ROOT, 'server.js'), suite: LOCALITY_ATTACK_SUITE };
+const HELD_MODEL = { src: path.join(ROOT, 'public', 'held-routines-model.js'), suite: 'test/unit/approval-store.test.js' };
+const HELD_VIEW = { src: path.join(ROOT, 'public', 'views', 'routines.js'), suite: 'test/unit/approval-store.test.js' };
 // The routines model, where the approval line is decided.
 const MODEL = { src: path.join(ROOT, 'public', 'routines-model.js'), suite: 'test/unit/approve-once.test.js' };
 // The settings view's pure half, where the connectors file is parsed and merged.
@@ -60,8 +75,75 @@ const MUTATIONS = [
   // ===== THE GATE, AND ITS PLACE IN THE ORDER =====
   // Delete the refusal and an unapproved plan runs unattended.
   [SCHEDULER, 'an unapproved plan is refused by the tick',
-    "  if (!planApproved(routine)) return 'approval';\n",
+    "  if (!approvalStore.approvedHere(getWorkspace(), routine, computePlanHash(routine))) return 'approval';\n",
     ''],
+
+  // ===== AN APPROVAL COUNTS ONLY WHERE IT WAS GIVEN =====
+  // Each breaks one part of the install's own record of approvals, and the
+  // suite that notices it is the one named on its target.
+  [SCHEDULER_ATTACK, 'allowing never runs a routine on the click: an earlier slot is not owed',
+    '        if (nextRun && consentAt && nextRun < consentAt) continue;\n',
+    ''],
+  [STORE, 'an approval covers the plan it was given over, not any plan',
+    '  return !!record && typeof currentHash === \'string\' && record.hash === currentHash;',
+    '  return !!record;'],
+  [STORE, 'a workspace is kept under its real path',
+    '    try { return path.join(fs.realpathSync.native(current), ...rest.reverse()); } catch (e) { /* not there */ }',
+    '    return path.resolve(dir);'],
+  [STORE, 'the moment of an approval is kept',
+    '  entry.approvals.push({ file, name, occurrence, hash, at: at || null });',
+    '  entry.approvals.push({ file, name, occurrence, hash, at: null });'],
+  [LOCALITY, 'only a workspace opened at this path before is adopted',
+    '    seenHere: previousPath === dir && store.wasRecentBeforeStore(dir),',
+    '    seenHere: store.wasRecentBeforeStore(dir),'],
+  [LOCALITY_ATTACK, 'a state file the workspace carries cannot adopt it on its own',
+    '    seenHere: previousPath === dir && store.wasRecentBeforeStore(dir),',
+    '    seenHere: previousPath === dir,'],
+  [STORE, 'the recent-workspaces history is taken only when the record is first made',
+    '  if (storeFile && !fs.existsSync(storeFile)) {',
+    '  if (storeFile) {'],
+  [LOCALITY_ATTACK, 'Allow approves the plan the strip named, never one changed since',
+    "    if (!e || typeof h.hash !== 'string' || computePlanHash(e.routine) !== h.hash) continue;",
+    '    if (!e) continue;'],
+  [LOCALITY_ATTACK, 'a package update records only what its card said runs itself',
+    '    if (!granted.some((g) => g.name === e.name && g.occurrence === e.occurrence)) continue;\n',
+    ''],
+  [LOCALITY, 'a copy is not a move: the old path must be gone',
+    "  if (previousPath && previousPath !== dir && !fs.existsSync(previousPath) && store.moveWorkspace(previousPath, dir)) {",
+    "  if (previousPath && previousPath !== dir && store.moveWorkspace(previousPath, dir)) {"],
+  [LOCALITY, 'the strip names only routines that would have run',
+    '  return routine.enabled === true && !routine.paused && !!unquote(routine.schedule)',
+    '  return !!unquote(routine.schedule)'],
+  [LOCALITY, 'a package install records only approvals that match the plan',
+    '    if (e.file !== relFile || !planApproved(e.routine)) continue;',
+    '    if (e.file !== relFile) continue;'],
+  [MIGRATION_ATTACK, 'a workspace never seen here is never grandfathered',
+    "\n    || require('./approval-store.js').workspaceState(workspace) !== 'adopted';",
+    ';'],
+  [TEAM_ATTACK, 'the approve tap records the approval here',
+    '    written: () => recordApproval(getWorkspace(), {',
+    '    written: () => ({}) || recordApproval(getWorkspace(), {'],
+  [TEAM_SAVE, 'a routine made here is approved here',
+    '  if (blocks.length) {\n    recordApproval(',
+    '  if (false) {\n    recordApproval('],
+  [IMPORT_ATTACK, 'agreeing to an install card approves its routines here',
+    '    if (write.kind !== \'agent\') continue;',
+    '    continue;'],
+  [HELD_ATTACK, 'Allow approves what the strip names',
+    "  locality.allowHeld(dir, require('../../scheduler.js').schedulerNow().toISOString());",
+    '  store.closeStrip(dir);'],
+  [HELD_ATTACK, 'closing the strip keeps it closed',
+    '  store.closeStrip(dir);\n  announce(ctx);\n}\n\nmodule.exports',
+    '  announce(ctx);\n}\n\nmodule.exports'],
+  [HEAL_ATTACK, 'every workspace opened is decided before its routines are read',
+    '  try { approvalLocality.noteWorkspaceOpened(dir, previous); }',
+    '  try { (() => {})(dir, previous); }'],
+  [HELD_VIEW, 'a routine\'s name on the strip is text, never markup',
+    '  text.textContent = view.text;',
+    '  text.innerHTML = view.text;'],
+  [HELD_MODEL, 'the strip\'s button fits the count',
+    "    const allowLabel = one ? 'Allow it' : held.length === 2 ? 'Allow both' : 'Allow all';",
+    "    const allowLabel = 'Allow both';"],
 
   // ===== THE GRANDFATHER LINE =====
   // Stamp migrated routines pending instead and the upgrade re-questions
@@ -165,7 +247,15 @@ function redTests(suite) {
 }
 
 function run() {
-  const targets = [ROUTINES, SCHEDULER, MODEL, SETTINGS, SETTINGS_WIRING];
+  // Derived from the rows, never kept by hand: a hand-kept list went stale three
+  // times (the boundary, extension-install and this harness), crashing on the
+  // first row that named a target it didn't hold.
+  const targets = [...new Set(MUTATIONS.map(([target]) => target))];
+  for (const [target, label] of MUTATIONS) {
+    if (!target || typeof target.src !== 'string' || typeof target.suite !== 'string') {
+      throw new Error(`mutation row "${label}" names a target with no source file or suite`);
+    }
+  }
   const session = beginMutationRun({ files: [...new Set(targets.map((target) => target.src))] });
   const originals = new Map();
   for (const target of targets) originals.set(target, session.original(target.src));

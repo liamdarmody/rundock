@@ -16,6 +16,24 @@ In scope: Rundock itself. The desktop app, the Node.js server, the WebSocket pro
 
 Out of scope: vulnerabilities in third-party tools that Rundock invokes (Claude Code and Anthropic's API, the Codex CLI and OpenAI's API, Node.js, Electron). Report those upstream.
 
+## What protects what
+
+Cards guard against ordinary agent behaviour; the sandbox guards against a determined one.
+
+Only Rundock's own window can drive Rundock's local server. The desktop app's window carries a key made in memory at each launch, added to its requests by the app itself and never handed to the page; the desktop app accepts nothing else. Running from source, the link Rundock prints when it starts carries a one-time code, never that key: the code works once and only for fifteen minutes, so a copy left in a browser's history is useless. Rundock prints a link only when it starts, and when you press Enter in the terminal it is running in; nothing a program sends to it makes one appear. The page trades the code for a session token, keeps it in storage that belongs to its own address and port, and sends it with each request; it is never a cookie, because a browser sends a localhost cookie to every program listening on localhost. Pictures and PDFs, which a browser loads without the page's help, use a separate cookie that opens those files inside the workspace and nothing else. Rundock keeps only fingerprints of tokens, each expiring after a year; delete `.browser-sessions.json` beside Rundock to make every browser open the link again. An agent Rundock starts holds a token that lets its permission requests reach you as cards in its own conversation, and nothing else.
+
+A routine runs unattended only where you approved it. Rundock keeps that record in its own folder, outside every workspace. On the Mac in the default mode, agents cannot write there. On Windows, and in Code mode, a program running as you can, so there the record, like the cards, guards against ordinary agent behaviour rather than a determined program.
+
+How strong that is depends on how you run Rundock, because a program running as you can do what your operating system lets it:
+
+| How you run Rundock | Strength | What a determined program running as you could still do |
+|---|---|---|
+| Mac desktop app | Strong. The key lives only in the app's memory; macOS's hardened runtime blocks debuggers and code injection; debugging switches are off in shipped builds. | Act through macOS accessibility controls, if you have granted them to something it can drive. |
+| Windows desktop app | A much higher bar. | Read the key from the app's memory, which Windows allows a program running as you to do. |
+| From source, in a browser | A much higher bar. | Read the session token from the browser's own files on disk, where the page's storage is kept unencrypted, or change Rundock's own code, which is yours to edit. Whoever can read the terminal can use the latest link it printed before a browser does. With the Windows launcher, a program watching new processes could read the link from the browser's command line in the moment before the page uses it. |
+| From source, on a server you reach through a tunnel | A much higher bar. | As above, and also: a link printed when the service starts stays usable for fifteen minutes or until a browser uses it, and the service's journal keeps it. Any program running as the same user, or as a member of a group allowed to read the journal (on many Linux systems the first user is), can read that link in that time and let itself in. Open the link soon after the service starts, and keep other programs off the server's account. |
+| Code mode, any of the above | As above, without the sandbox. | Anything you can do. Code mode trusts the agent more, by design. |
+
 ## Accepted dependency advisories
 
 Advisories in shipped (production) dependencies that are knowingly carried, with the reason. Reviewed whenever `npm audit --omit=dev` reports something new. Anything not listed here is expected to be fixed rather than accepted.

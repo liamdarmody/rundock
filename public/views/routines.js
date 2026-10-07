@@ -943,10 +943,44 @@ function routinesEditSchedule(index) {
   editRoutineSchedule(entry.agent.id, entry.routine.name, entry.occurrence);
 }
 
+// THE ROUTINES A WORKSPACE ARRIVED WITH (public/held-routines-model.js). The
+// server holds them until they are allowed on this computer; this strip names
+// them once, above whatever view is open, and blocks nothing. Built from
+// elements and text, so no routine or agent name is ever read as markup.
+function renderHeldStrip(routines) {
+  const el = document.getElementById('held-strip');
+  if (!el) return;
+  const view = RundockHeldRoutines.heldStrip(routines);
+  el.replaceChildren();
+  if (!view) { el.hidden = true; return; }
+  const send = (type) => { if (typeof ws !== 'undefined' && ws && ws.readyState === 1) ws.send(JSON.stringify({ type })); };
+  const text = document.createElement('span');
+  text.className = 'held-strip-text';
+  text.textContent = view.text;
+  const button = (cls, label, onclick) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = cls;
+    b.textContent = label;
+    b.onclick = onclick;
+    return b;
+  };
+  const close = button('held-strip-close', '\u00d7', () => send('dismiss_held_routines'));
+  close.setAttribute('aria-label', view.closeLabel);
+  el.append(
+    text,
+    button('held-strip-btn', view.allowLabel, () => send('allow_held_routines')),
+    button('held-strip-btn', view.reviewLabel, () => switchNav('routines')),
+    close,
+  );
+  el.hidden = false;
+}
+
 return {
-  renderRoutines, showRoutinesForAgent,
+  renderRoutines, showRoutinesForAgent, renderHeldStrip,
   routinesAskDelete, routinesCancelDelete, routinesConfirmDelete, routinesSetPaused, routinesSetEnabled,
   routinesApprovePlan, routinesRunNow, routinesOpenSkill, routinesEditSchedule,
   routinesActionFailed, routinesActionCleared, routinesViewLastRun,
 };
 }));
+

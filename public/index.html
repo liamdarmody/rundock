@@ -66,6 +66,8 @@
 <script src="/routines-scope-model.js"></script>
 <script src="/graph-model.js"></script>
 <script src="/guide-copy.js"></script>
+<script src="/sign-in-model.js"></script>
+<script src="/held-routines-model.js"></script>
 <!-- Tokens first: everything below resolves var(--x) against this file. -->
 <link rel="stylesheet" href="/styles/tokens.css">
 <link rel="stylesheet" href="/styles/fonts.css">
@@ -78,6 +80,8 @@
 <link rel="stylesheet" href="/styles/components/find-bar.css">
 <link rel="stylesheet" href="/styles/components/message-content.css">
 <link rel="stylesheet" href="/styles/components/connection-bar.css">
+<link rel="stylesheet" href="/styles/components/signed-out.css">
+<link rel="stylesheet" href="/styles/components/held-routines.css">
 <link rel="stylesheet" href="/styles/components/approvals-dock.css">
 <link rel="stylesheet" href="/styles/components/embed.css">
 <link rel="stylesheet" href="/styles/components/palette.css">
@@ -300,6 +304,10 @@
 
   <main class="main">
     <div class="connection-bar connecting" id="connection-bar">Connecting...</div>
+    <!-- Shown only when this browser is not signed in (sign-in-model.js). -->
+    <div class="signed-out" id="signed-out" role="status" hidden></div>
+    <!-- The routines a workspace arrived with (held-routines-model.js). -->
+    <div class="held-strip" id="held-strip" role="status" hidden></div>
     <aside class="approvals-dock" id="approvals-dock" hidden aria-live="polite" aria-label="Approvals waiting">
       <div class="approvals-dock-head"><span class="approvals-dock-title">Needs your approval</span><span class="approvals-dock-count"></span></div>
       <div class="approvals-dock-list"></div>

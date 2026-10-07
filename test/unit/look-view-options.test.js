@@ -29,6 +29,12 @@ describe('look-view options', () => {
     assert.deepEqual(o.actions, []);
   });
 
+  test('the demo workspace is one opened here before unless it "arrived" from elsewhere', () => {
+    assert.equal(norm({}).arrived, false);
+    assert.equal(norm({ arrived: true }).arrived, true);
+    rejects({ arrived: 'yes' }, /"arrived" must be true or false/);
+  });
+
   test('a relative out resolves against the checkout, an absolute one is kept', () => {
     assert.equal(norm({ out: 'shots/a.png' }).out, path.join(ROOT, 'shots', 'a.png'));
     const abs = path.join(path.sep, 'elsewhere', 'b.png');

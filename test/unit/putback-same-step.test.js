@@ -75,7 +75,7 @@ describe('a change put back during a command is told to the agent in that same s
     fs.rmSync(ws, { recursive: true, force: true });
   });
 
-  const env = () => ({ ...process.env, RUNDOCK: '1', RUNDOCK_PORT: String(port), RUNDOCK_WORKSPACE: ws, RUNDOCK_CONVO_ID: 'convo-post' });
+  const env = () => ({ ...process.env, RUNDOCK: '1', RUNDOCK_PORT: String(port), RUNDOCK_WORKSPACE: ws, RUNDOCK_CONVO_ID: 'convo-post', RUNDOCK_HOOK_TOKEN: require('../../lib/auth/index.js').issueHookToken('convo-post') });
   const post = (command) => runHook(env(), {
     session_id: 's1', hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command }, tool_response: { stdout: '', stderr: '' },
   });
