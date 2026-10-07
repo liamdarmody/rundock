@@ -76,8 +76,10 @@ jobs:
       - name: Install test-only DOM dependency
         run: npm install --no-save --ignore-scripts jsdom@29.1.1
 
+      # Every harness the selector discovers in test/tools/, so a new harness
+      # is in the sweep the day it lands, with no list to update.
       - name: Remove every guard in turn and require a red test
-        run: npm run mutate:guards:all
+        run: node scripts/mutation-scope.js --all
 
       # The tools restore what they mutate, including when a run throws. A
       # failure that leaves any file modified is itself worth seeing.

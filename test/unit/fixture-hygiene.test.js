@@ -308,8 +308,10 @@ describe('a mutation harness refuses to start on a machine that would misreport'
       // this still goes red.
       const run = spawnSync(process.execPath, [rel, '--preflight-only'],
         { cwd: REPO, env: childEnv(tmpRoot), encoding: 'utf8', timeout: 30000 });
-      assert.equal(run.status, 2,
-        `${rel} should refuse with exit 2, got ${run.status}. Output:\n${run.stdout}\n${run.stderr}`);
+      // Exit 3 is no verdict: a harness that refused its temp root proved
+      // nothing either way, which is not the same as a guard that failed.
+      assert.equal(run.status, 3,
+        `${rel} should refuse with exit 3 (no verdict), got ${run.status}. Output:\n${run.stdout}\n${run.stderr}`);
       assert.match(run.stderr, /Refusing to start/, `${rel} refused without saying why`);
     });
   }

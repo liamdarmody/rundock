@@ -29,10 +29,10 @@ Every one of those categories produced defects in 0.13.3. Adding e2e specs would
 npm run look                 # serves this branch on the first free port, prints the URL
 ```
 
-Nothing gates this and nothing needs to. Run the gate and CI alongside, not in front:
+Nothing gates this and nothing needs to. The local gate takes seconds and CI does the rest, so run them alongside, not in front:
 
 ```bash
-npm run precommit:detached
+npm run precommit
 ```
 
 Then drive the real interface at that URL. For a single screen, a screenshot is often enough: see [Look at one view](#look-at-one-view) below. Not the classifier, not the HTTP payload, not a unit test standing in for the screen: **the surface whose wording the claim names.** A proxy one layer in is the failure mode this project has paid for five times in one release.

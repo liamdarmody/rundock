@@ -46,42 +46,17 @@
  * started is ever signalled, so a suite or a mutation harness belonging to
  * somebody else is never touched however alike the command lines look.
  *
- * It matters here more than it would in most tools because of what one step is.
- * `mutate:guards` breaks a real source file on purpose, runs a suite, and puts
- * the file back. The gate used to send it nothing and wait for nothing, so the
- * gate died and `npm`, its shell and the harness inside carried on rewriting
- * `public/` with nobody watching. A mutated source file is an ordinary
- * working-tree modification, `git add -A` stages it without comment, and
- * staging everything before running this is exactly what the usage above asks
- * for.
- *
- * ENDING THE GROUP IS NOT ENOUGH ON ITS OWN, and this was measured rather than
- * assumed. Each harness registers a SIGTERM handler that puts its files back,
- * and that handler is correct, but it can never run while the harness is
- * working: the harness's whole body is a synchronous loop of `execFileSync`
- * calls, and Node dispatches a JavaScript signal handler from the event loop,
- * which does not turn until that body has finished. A real harness sent SIGTERM
- * directly absorbed it for thirty seconds without restoring anything and then
- * died to SIGKILL with the file still mutated.
- *
- * So the gate puts the files back itself when the harness could not. It reads
- * the record the run writes while it holds files rewritten, and restores those
- * paths FROM THE INDEX. That is safe for the one reason that makes it possible
- * at all: a mutation run refuses to start when a file it is about to rewrite
- * has unstaged changes, so at the moment the harness read its originals the
- * working tree and the index agreed on those paths. Restoring from the index
- * therefore puts back exactly the bytes the harness read, and there is nothing
- * unstaged on those paths for it to discard.
- *
- * The one way out that is not covered is SIGKILL of the gate itself, which the
- * kernel delivers to nothing. What catches a harness abandoned that way is the
- * record it writes while it holds files mutated: see test/tools/mutation-run.js.
+ * WHAT IT NO LONGER RUNS. Mutation testing, the type check, the style and
+ * reference linters, the fixture check and the suite are CI's, and each is
+ * named in the record with the CI job that owns it (`ownedByCi`). The local
+ * gate keeps the fast checks that decide in seconds whether a tree is worth
+ * pushing at all: preflight, and red-first beside it.
  */
 
 const { execFileSync, spawn } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
-const { endGroup, exists, pause, POLL_MS } = require('./lib/process-group.js');
+const { endGroup } = require('./lib/process-group.js');
 
 // The repository this acts on. Overridable ONLY so the entry points can be
 // exercised against a throwaway repository: without it, run() and verify()
@@ -100,88 +75,48 @@ const RECORD = path.join(ROOT, '.precommit-gate.json');
 const TREE_RECORDS = path.join(ROOT, '.precommit-gate');
 const TREE_RECORDS_KEPT = 50;
 
-// The checks that belong on a commit: fast, deterministic, and the ones whose
-// absence has actually cost a red pipeline. The browser suite and the live
-// smoke stay in the release gate, where their cost is affordable.
+// The checks that belong on a commit: the ones that decide in seconds whether
+// a tree is worth pushing at all.
 //
-// COVERAGE RUNS HERE RATHER THAN BESIDE THE GATE, and it replaces the plain
-// test run rather than joining it. `test:coverage` drives the same suite over
-// the same glob and then enforces the committed floors, so the suite is still
-// run once. What changes is where the number comes from: a floor measured by
-// hand and quoted in a report is a claim about a tree nobody can identify,
-// and it fails on the next run. Measured inside the gate, the floors are
-// enforced against the exact tree this record names.
+// `preflight` is the registry, count and document bindings plus the two fast
+// linters, all of them run even when one fails, so a person fixes everything
+// in one pass. PRINTED WHOLE WHEN IT FAILS: its entire contract is that every
+// failure is on the screen at once, and tailing it would deliver exactly the
+// one-per-run experience it was built to remove.
 //
-// ORDERED BY WHAT THEY COST, CHEAPEST FIRST, and that ordering is load-bearing
-// rather than tidy. Measured on one release: about a dozen runs, no product
-// defect found by any of them, and three failures that were the gate's own
-// bookkeeping. Each of those three was decidable in under a second and each cost
-// a full run, because the slowest step used to run first and the registry checks
-// live inside the test suite behind it.
-//
-// `preflight` is that half, lifted to the front: the registry, count and
-// document bindings plus the two fast linters, all of them run even when one
-// fails, so a person fixes everything in one pass. `check:refs` and
-// `lint:styles` therefore appear twice, once cheaply here and once in their own
-// step, which is deliberate: the step list is the record's contract and
-// removing entries from it would change what a pass means.
+// EVERYTHING ELSE MOVED TO CI, and the record says where (OWNED_BY_CI below).
+// The type check, the linters, the fixture check and the mutation harnesses
+// each have a CI job on a clean machine, and CI is the only copy that can
+// block a merge. Running them here as well bought a slower answer to a
+// question CI already answers better, and the mutation step in particular
+// rewrote source files in a developer's working tree for up to ninety
+// minutes per commit.
 const STEPS = [
-  // PRINTED WHOLE WHEN IT FAILS, unlike every other step. The tail-25 rule below
-  // is right for a suite, whose last lines carry the failure summary, and wrong
-  // for this one: its entire contract is that every failure is on the screen at
-  // once, and truncating it delivers exactly the one-per-run experience it was
-  // built to remove. A component can be correct and still be defeated by the
-  // host it joins.
   { name: 'preflight', args: ['run', 'preflight'], fullOutput: true },
-  { name: 'typecheck', args: ['run', 'typecheck'] },
-  { name: 'lint:styles', args: ['run', 'lint:styles'] },
-  { name: 'check:refs', args: ['run', 'check:refs'] },
-  // THE SUITE IS NOT RUN HERE, AND THAT IS DELIBERATE. Decided 2026-09-18,
-  // done 2026-09-22.
-  //
-  // It was the largest single cost in this gate and the only step that was a
-  // second copy of a check something else already owns. `.github/workflows/
-  // ci.yml` runs `npm test` on Node 22 AND 24 on a clean machine, and runs
-  // `test:coverage` with the floors in its own job. CI is also the only copy
-  // that can block a merge, so the local run was buying a slower answer to a
-  // question already answered better: one machine, one Node version, a dirty
-  // working tree, and whatever else that machine was doing at the time.
-  //
-  // Measured on the run that prompted this: 816s of a 40 minute gate, and on
-  // the three runs before it 1160s, 934s and 317s. Two of those runs failed
-  // on timing tests that pass in isolation, so the local copy was not merely
-  // slow, it was the step that turned machine load into a false red and cost
-  // a full re-run each time.
-  //
-  // WHAT IS KEPT HERE IS WHAT CI CANNOT DO CHEAPLY: the fast checks, and the
-  // mutation guards, which need the working tree they are about to rewrite.
-  // If a suite failure ever reaches main that a local run would have caught
-  // first, this is the line to reconsider, and the companion rule applies:
-  // expect to add something back, or the cut was not deep enough.
-  // Removes each of the renderer's escaping guards in turn and requires a test
-  // to go red for it. Slower than the rest because it runs a suite per guard,
-  // and worth it here: two of these guards were removable with nothing going
-  // red when the check was first written, which no other step in this list
-  // would ever have reported.
-  { name: 'mutate:guards', args: ['run', 'mutate:guards'] },
-  // Reproduces the frozen "before" fixture from the pre-change renderer read
-  // out of git history. Needs history, so it lives here and in CI rather than
-  // in the unit suite, which runs against a depth-1 checkout.
-  { name: 'check:fixture', args: ['run', 'check:fixture'] },
+];
+
+// WHO OWNS EACH CHECK THIS GATE DOES NOT RUN, by the exact CI job name. Folded
+// into every record, so a pass here never reads as a claim that the tree was
+// type-checked or mutation-tested. A test reads .github/workflows/ci.yml and
+// fails when a job named here does not exist, so a renamed job cannot leave
+// a check owned by nothing.
+const OWNED_BY_CI = [
+  { check: 'typecheck', jobs: ['Typecheck (JSDoc + checkJs)'] },
+  { check: 'lint:styles', jobs: ['Hygiene (internal references, style drift)'] },
+  { check: 'check:refs', jobs: ['Hygiene (internal references, style drift)'] },
+  { check: 'test', jobs: ['Test (Node 22)', 'Test (Node 24)'] },
+  { check: 'test:coverage', jobs: ['Coverage floors'] },
+  { check: 'test:e2e', jobs: ['E2E'] },
+  { check: 'mutate:guards', jobs: ['Mutation guards'] },
+  { check: 'check:fixture', jobs: ['Mutation guards'] },
 ];
 
 // How long a step's process group gets to end on its own before it is ended
 // outright.
 //
-// LONGER THAN THE REVERTING CHECK ASKS FOR, and the difference is the point.
-// That tool spawns a test command, and nothing it spawns has a restore step to
-// skip, so it can afford half a second of politeness. This one spawns a
-// mutation harness that has a real source file rewritten on disk and puts it
-// back from its SIGTERM handler, and that handler cannot run until the suite
-// the harness is blocked on has itself gone. Escalating to SIGKILL before it
-// has finished would turn the tidiest available exit into the exact mess this
-// whole area exists to prevent: a mutated file left in the working tree,
-// indistinguishable from an edit.
+// LONGER THAN THE REVERTING CHECK ASKS FOR. A suite under a step removes its
+// fixtures from SIGTERM handlers, and escalating to SIGKILL before those have
+// run leaves the temp root holding directories the next run has to sweep.
 //
 // Paid in full only in two cases, neither of them the ordinary one: a group
 // that ignores SIGTERM, and a machine whose process table cannot be read, where
@@ -204,23 +139,7 @@ const STEP_END_GRACE_MS = 5000;
 // not the signal: a suite that normally takes four minutes and is still going
 // at twenty is stuck whatever the other steps have done.
 //
-// RAISED FOR mutate:guards ON 2026-09-21, by owner decision, because the
-// ceiling had fallen below the work rather than the work having gone wrong.
-// The full set ran 1707s, 2237s and 2693s that day and then was ended at the
-// 45 minute cap, and it grows with every harness row added. A ceiling under
-// the honest duration of the step does not catch a hang, it manufactures one,
-// and it did: with the fallback already running every harness, no change on
-// the branch could be committed at all.
-//
-// 90 minutes is still far under anything that reads as stuck for this step,
-// and the number is expected to be revisited by making the step cheaper
-// rather than by raising this again: the scoped run is a handful of harnesses
-// and seconds, and the full set is only reached when the scope narrowing
-// falls back, which is its own card.
-const STEP_CEILING_MS = {
-  'test:coverage': 20 * 60 * 1000,
-  'mutate:guards': 90 * 60 * 1000, // every harness, when the change touches the machinery
-};
+const STEP_CEILING_MS = {};
 const DEFAULT_STEP_CEILING_MS = 10 * 60 * 1000;
 const ceilingFor = (name) => STEP_CEILING_MS[name] || DEFAULT_STEP_CEILING_MS;
 
@@ -279,98 +198,10 @@ function endLiveGroup() {
   if (liveGroup === null) return;
   const pgid = liveGroup;
   liveGroup = null;
-  // Read BEFORE the ending, and act afterwards only on this same record. A
-  // record whose pid is ALREADY dead here belongs to some earlier run that was
-  // abandoned, and it is doing its job by being there: the next mutation run
-  // reads it, refuses, and names the files a person should look at. Repairing
-  // that quietly would remove the one trace of a run nobody watched end.
-  const held = readMutationRun();
-  const ours = held && exists(held.pid) ? held : null;
-
   const outcome = endGroup(pgid, { graceMs: STEP_END_GRACE_MS });
-  if (ours) reclaim(ours);
   if (outcome !== 'running') return;
   console.error(`[precommit] WARNING: process group ${pgid} survived being ended and is `
-    + 'still running. Nothing further here can reach it, and a mutation harness inside it '
-    + 'may still be holding a source file rewritten; read `git diff` before committing.');
-}
-
-// The record a mutation run writes while it holds files rewritten. The name is
-// fixed by test/tools/mutation-run.js, which owns the format.
-// A DIRECTORY OF RECORDS, one per run, so concurrent harnesses no longer
-// overwrite each other's. The gate cleans up after runs it started.
-const MUTATION_MARKER = '.mutation-runs';
-
-// How long a pid from an ended group gets to leave the process table before the
-// recovery below gives up on it and says so.
-const SETTLE_MS = 1000;
-
-function readMutationRun(root = ROOT) {
-  try {
-    const dir = path.join(root, MUTATION_MARKER);
-    const files = fs.readdirSync(dir).filter((n) => n.endsWith('.json'));
-    const held = files
-      .map((n) => { try { return JSON.parse(fs.readFileSync(path.join(dir, n), 'utf8')); } catch { return null; } })
-      .filter(Boolean)
-      .reduce((acc, r) => ({ pid: r.pid, files: [...acc.files, ...(r.files || [])] }), { pid: 0, files: [] });
-    return held && typeof held.pid === 'number' && Array.isArray(held.files) ? held : null;
-  } catch { return null; }
-}
-
-/**
- * Put back what a mutation run was holding when this gate ended it.
- *
- * Called only with a record that named a LIVE pid a moment ago, so the run it
- * describes is one this gate has just ended rather than somebody else's.
- *
- * RESTORED FROM THE INDEX, and the distinction is the whole safety argument. A
- * mutation run refuses to start when a file it is about to rewrite has unstaged
- * changes, so on those paths the working tree and the index agreed when the
- * originals were read: the index holds exactly the bytes the harness would have
- * written back. Restoring from HEAD instead would reach past staged work and
- * throw it away, which is the failure this repository has already paid for
- * elsewhere.
- *
- * Every path is named on the way out. A tool that silently rewrites files in
- * the working tree, even correctly, is one nobody can check afterwards.
- */
-function reclaim(held, root = ROOT, settleMs = SETTLE_MS) {
-  // The group has been ended, so this pid should be gone. A brief window where
-  // it is still listed is ordinary rather than a survivor: a process is cleared
-  // from the table by whoever adopts it, not the instant it dies. Waiting for
-  // it matters because the alternative is returning quietly and leaving the
-  // file mutated, which is the outcome this whole function exists to prevent.
-  const deadline = Date.now() + settleMs;
-  while (exists(held.pid) && Date.now() < deadline) pause(POLL_MS);
-  if (exists(held.pid)) {
-    console.error(`[precommit] a mutation run (pid ${held.pid}) is still there after its group `
-      + 'was ended, so its files have been left alone rather than written over. Read '
-      + '`git diff` before committing.');
-    return;
-  }
-  const current = readMutationRun(root);
-  // Gone means the harness got to run its own restore after all, which is the
-  // better outcome and leaves nothing to do. A different record means another
-  // run started in the meantime and this is no longer anybody's business here.
-  if (!current || current.pid !== held.pid) return;
-
-  const restored = [];
-  for (const file of held.files) {
-    try {
-      // Only a path that really differs from the index, so the recovery never
-      // runs a checkout it had no reason to run.
-      if (!git(['diff', '--name-only', '--', file], root)) continue;
-      execFileSync('git', ['checkout', '--', file], { cwd: root, stdio: 'ignore' });
-      restored.push(file);
-    } catch (err) {
-      console.error(`[precommit] could not put ${file} back: ${(err && err.message) || err}`);
-    }
-  }
-  try { fs.rmSync(path.join(root, MUTATION_MARKER), { recursive: true, force: true }); } catch { /* leaving anyway */ }
-  if (!restored.length) return;
-  console.error(`[precommit] a mutation harness was ended mid-run holding ${restored.length} `
-    + 'file(s) rewritten, and its own restore could not run. Put back from the index:');
-  for (const file of restored) console.error(`             ${file}`);
+    + 'still running. Nothing further here can reach it; check for stray processes.');
 }
 
 /**
@@ -539,23 +370,12 @@ function buildRecord({ tree, branch, at, timings }) {
   // record carried an empty array and a zero total, which is precisely the
   // silent hole the measurement exists to close. There is one caller, it always
   // has them, and a record without them is not a record of a run.
-  // THE SCOPE THE MUTATION STEP RAN UNDER travels with the record. That step
-  // no longer runs every harness: it runs the ones the change can affect and
-  // names the rest. A record saying the step passed, without saying what it
-  // covered, would be a pass taken on trust, so the scope is carried here and
-  // its absence is recorded as plainly as its contents.
-  let mutationScope = null;
-  try {
-    mutationScope = JSON.parse(fs.readFileSync(path.join(ROOT, '.mutation-scope.json'), 'utf-8'));
-  } catch (e) {
-    mutationScope = { unavailable: 'the mutation step recorded no scope' };
-  }
   if (!Array.isArray(timings) || !timings.length) {
     throw new Error('buildRecord: a record must carry the timings of the run it describes. '
       + 'Pass the timings runSteps returned; a record without them cannot be compared to another.');
   }
   const totalMs = timings.reduce((sum, t) => sum + t.ms, 0);
-  return { tree, branch, at, steps: STEPS.map(s => s.name), mutationScope, timings, totalMs };
+  return { tree, branch, at, steps: STEPS.map(s => s.name), ownedByCi: OWNED_BY_CI, timings, totalMs };
 }
 
 // The release commit's footprint.
@@ -767,4 +587,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { refusal, runSteps, buildRecord, writeRecord, writeTreeRecord, TREE_RECORDS, TREE_RECORDS_KEPT, readRecord, currentTree, defaultBranch, workingTreeDrift, stagedPaths, isReleaseCommit, RELEASE_FOOTPRINT, RECORD, STEPS, STEP_END_GRACE_MS, STEP_CEILING_MS, DEFAULT_STEP_CEILING_MS, ceilingFor };
+module.exports = { refusal, runSteps, buildRecord, writeRecord, writeTreeRecord, TREE_RECORDS, TREE_RECORDS_KEPT, readRecord, currentTree, defaultBranch, workingTreeDrift, stagedPaths, isReleaseCommit, RELEASE_FOOTPRINT, RECORD, STEPS, OWNED_BY_CI, STEP_END_GRACE_MS, STEP_CEILING_MS, DEFAULT_STEP_CEILING_MS, ceilingFor };

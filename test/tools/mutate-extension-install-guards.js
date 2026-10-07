@@ -26,12 +26,13 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const os = require('node:os');
 const { preflight } = require('../helpers/temp-root.js');
-const { beginMutationRun } = require('./mutation-run.js');
+const {
+  beginMutationRun, targetsFromRows, rowsForShard, exitCodeFor, NO_VERDICT,
+} = require('./mutation-run.js');
 
 const ROOT = path.join(__dirname, '..', '..');
-// Every row names its suite as a string literal beside its target: the
-// scoped gate (scripts/mutation-scope.js) reads both statically, and a suite
-// reached through a constant is a suite the selector cannot see.
+// Every row names its target and its suite: the scope (scripts/mutation-scope.js)
+// reads both from the rows to decide which changes reach this harness.
 const SOURCE = { src: path.join(ROOT, 'lib', 'packages', 'extension-source.js'), suite: 'test/unit/extension-install.test.js' };
 const MANIFEST = { src: path.join(ROOT, 'lib', 'packages', 'extension-manifest.js'), suite: 'test/unit/extension-install.test.js' };
 const RECORD = { src: path.join(ROOT, 'lib', 'packages', 'extension-record.js'), suite: 'test/unit/extension-install.test.js' };
@@ -518,18 +519,13 @@ function run() {
   // two targets, and the harness crashed on the first row that named one
   // instead of proving it. A row naming something that is not a target, or a
   // target without a source and a suite, fails here, before anything changes.
-  const targets = [...new Set(MUTATIONS.map(([target]) => target))];
-  for (const [target, label] of MUTATIONS) {
-    if (!target || typeof target.src !== 'string' || typeof target.suite !== 'string') {
-      throw new Error(`mutation row "${label}" names a target with no source file or suite`);
-    }
-  }
+  const targets = targetsFromRows(MUTATIONS);
   const session = beginMutationRun({ files: [...new Set(targets.map((target) => target.src))] });
   const originals = new Map();
   for (const target of targets) originals.set(target, session.original(target.src));
   const results = [];
   try {
-    for (const [target, label, guard, without] of MUTATIONS) {
+    for (const [target, label, guard, without] of rowsForShard(MUTATIONS)) {
       const original = originals.get(target);
       const matches = original.split(guard).length - 1;
       if (matches === 0) {
@@ -603,17 +599,18 @@ function requireSaneTempRoot() {
   const verdict = preflight(os.tmpdir());
   if (verdict.ok) return;
   console.error(verdict.message);
-  process.exit(2);
+  process.exit(NO_VERDICT);
 }
 
 if (require.main === module) {
   requireSaneTempRoot();
   if (process.argv.includes('--preflight-only')) process.exit(0);
-  const failed = report(run(), process.argv.includes('--markdown'));
+  const results = run();
+  const failed = report(results, process.argv.includes('--markdown'));
   if (failed) {
     console.error(`\n${failed} mutation(s) proved nothing. A guard no test notices is not guarded,`
       + ' and a mutation that could break more than one place proves nothing about either.');
-    process.exit(1);
+    process.exit(exitCodeFor(failed, results));
   }
 }
 

@@ -1,0 +1,75 @@
+{
+  "source": "recorded from a real CI run of this repository; a coverage floor failed beside a mutation job that timed out",
+  "run": {
+    "conclusion": "failure",
+    "event": "pull_request",
+    "head_branch": "fix/security-0.15.4",
+    "id": 37582025749,
+    "run_attempt": 1
+  },
+  "jobs": [
+    {
+      "conclusion": "failure",
+      "id": 112663642128,
+      "name": "Coverage floors",
+      "status": "completed"
+    },
+    {
+      "conclusion": "cancelled",
+      "id": 112663642437,
+      "name": "Mutation guards and fixture provenance",
+      "status": "completed"
+    },
+    {
+      "conclusion": "success",
+      "id": 112663642444,
+      "name": "Hygiene (internal references, style drift)",
+      "status": "completed"
+    },
+    {
+      "conclusion": "success",
+      "id": 112663642459,
+      "name": "Typecheck (JSDoc + checkJs)",
+      "status": "completed"
+    },
+    {
+      "conclusion": "success",
+      "id": 112663642472,
+      "name": "Test (Node 24)",
+      "status": "completed"
+    },
+    {
+      "conclusion": "success",
+      "id": 112663642563,
+      "name": "Test (Node 22)",
+      "status": "completed"
+    },
+    {
+      "conclusion": "success",
+      "id": 112663642676,
+      "name": "E2E",
+      "status": "completed"
+    }
+  ],
+  "annotations": {
+    "112663642128": [
+      {
+        "annotation_level": "failure",
+        "message": "Process completed with exit code 1.",
+        "title": ""
+      }
+    ],
+    "112663642437": [
+      {
+        "annotation_level": "failure",
+        "message": "The job has exceeded the maximum execution time of 30m0s",
+        "title": ""
+      },
+      {
+        "annotation_level": "failure",
+        "message": "The operation was canceled.",
+        "title": ""
+      }
+    ]
+  }
+}

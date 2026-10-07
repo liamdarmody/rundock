@@ -1,0 +1,57 @@
+{
+  "source": "recorded from a real CI run of this repository; a re-run (attempt 2) that failed",
+  "run": {
+    "conclusion": "failure",
+    "event": "pull_request",
+    "head_branch": "fix/windows-package-remove",
+    "id": 36986362524,
+    "run_attempt": 2
+  },
+  "jobs": [
+    {
+      "conclusion": "success",
+      "id": 110779659576,
+      "name": "E2E",
+      "status": "completed"
+    },
+    {
+      "conclusion": "success",
+      "id": 110779661295,
+      "name": "Test (Node 22)",
+      "status": "completed"
+    },
+    {
+      "conclusion": "failure",
+      "id": 110779661576,
+      "name": "Mutation guards and fixture provenance",
+      "status": "completed"
+    },
+    {
+      "conclusion": "success",
+      "id": 110779661809,
+      "name": "Hygiene (internal references, style drift)",
+      "status": "completed"
+    },
+    {
+      "conclusion": "success",
+      "id": 110779662101,
+      "name": "Test (Node 24)",
+      "status": "completed"
+    },
+    {
+      "conclusion": "success",
+      "id": 110779696436,
+      "name": "Coverage floors",
+      "status": "completed"
+    },
+    {
+      "conclusion": "success",
+      "id": 110779701821,
+      "name": "Typecheck (JSDoc + checkJs)",
+      "status": "completed"
+    }
+  ],
+  "annotations": {
+    "110779661576": []
+  }
+}

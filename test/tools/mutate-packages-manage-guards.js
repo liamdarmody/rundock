@@ -19,7 +19,9 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const os = require('node:os');
 const { preflight } = require('../helpers/temp-root.js');
-const { beginMutationRun } = require('./mutation-run.js');
+const {
+  beginMutationRun, targetsFromRows, rowsForShard, exitCodeFor, NO_VERDICT,
+} = require('./mutation-run.js');
 
 const ROOT = path.join(__dirname, '..', '..');
 // Each row names its suite as a literal beside its target: the scoped gate reads both statically.
@@ -211,13 +213,13 @@ function redTests(suite) {
 }
 
 function run() {
-  const targets = [MODEL, INSTALL_MODEL, MANAGE, REGISTRY, HANDLERS, SETTINGS_VIEW, APP, INDEX, SHEET, EXT_MODEL, EXT_VIEW, REASONS_ROSTER, REASONS_VIEW, REASONS_CARDS, REASONS_PACKAGES];
+  const targets = targetsFromRows(MUTATIONS);
   const session = beginMutationRun({ files: [...new Set(targets.map((target) => target.src))] });
   const originals = new Map();
   for (const target of targets) originals.set(target, session.original(target.src));
   const results = [];
   try {
-    for (const [target, label, guard, without] of MUTATIONS) {
+    for (const [target, label, guard, without] of rowsForShard(MUTATIONS)) {
       const original = originals.get(target);
       const matches = original.split(guard).length - 1;
       if (matches === 0) {
@@ -290,17 +292,18 @@ function requireSaneTempRoot() {
   const verdict = preflight(os.tmpdir());
   if (verdict.ok) return;
   console.error(verdict.message);
-  process.exit(2);
+  process.exit(NO_VERDICT);
 }
 
 if (require.main === module) {
   requireSaneTempRoot();
   if (process.argv.includes('--preflight-only')) process.exit(0);
-  const failed = report(run(), process.argv.includes('--markdown'));
+  const results = run();
+  const failed = report(results, process.argv.includes('--markdown'));
   if (failed) {
     console.error(`\n${failed} mutation(s) proved nothing. A guard no test notices is not guarded,`
       + ' and a guard whose text was not found was not tested.');
-    process.exit(1);
+    process.exit(exitCodeFor(failed, results));
   }
 }
 

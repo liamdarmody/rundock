@@ -12,7 +12,9 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const os = require('node:os');
 const { preflight } = require('../helpers/temp-root.js');
-const { beginMutationRun } = require('./mutation-run.js');
+const {
+  beginMutationRun, targetsFromRows, rowsForShard, exitCodeFor, NO_VERDICT,
+} = require('./mutation-run.js');
 
 const ROOT = path.join(__dirname, '..', '..');
 const SUITE = 'test/unit/run-now.test.js';
@@ -101,12 +103,12 @@ function redTests(suite) {
 }
 
 function run() {
-  const targets = [SCHEDULER, DISCOVERY, MODEL, VIEW, HANDLER];
+  const targets = targetsFromRows(MUTATIONS);
   const session = beginMutationRun({ files: targets.map((t) => t.src) });
   const originals = new Map(targets.map((t) => [t, session.original(t.src)]));
   const results = [];
   try {
-    for (const [target, label, guard, without] of MUTATIONS) {
+    for (const [target, label, guard, without] of rowsForShard(MUTATIONS)) {
       const original = originals.get(target);
       const matches = original.split(guard).length - 1;
       if (matches !== 1) { results.push({ label, applied: false, ambiguous: matches > 1 ? matches : 0, red: [] }); continue; }
@@ -148,12 +150,13 @@ function report(results, markdown) {
 }
 if (require.main === module) {
   const verdict = preflight(os.tmpdir());
-  if (!verdict.ok) { console.error(verdict.message); process.exit(2); }
+  if (!verdict.ok) { console.error(verdict.message); process.exit(NO_VERDICT); }
   if (process.argv.includes('--preflight-only')) process.exit(0);
-  const failed = report(run(), process.argv.includes('--markdown'));
+  const results = run();
+  const failed = report(results, process.argv.includes('--markdown'));
   if (failed) {
     console.error(`\n${failed} mutation(s) proved nothing. A guard no test notices is not guarded.`);
-    process.exit(1);
+    process.exit(exitCodeFor(failed, results));
   }
 }
 

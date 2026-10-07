@@ -23,7 +23,9 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const os = require('node:os');
 const { preflight } = require('../helpers/temp-root.js');
-const { beginMutationRun } = require('./mutation-run.js');
+const {
+  beginMutationRun, targetsFromRows, rowsForShard, exitCodeFor, NO_VERDICT,
+} = require('./mutation-run.js');
 
 const ROOT = path.join(__dirname, '..', '..');
 
@@ -1344,16 +1346,7 @@ function redTests(suite) {
 // rows had ever run. Every row must name a target object with a source file
 // that exists and a suite; anything else is refused before a file is touched.
 function targetsFor(mutations) {
-  const targets = [];
-  for (const row of mutations) {
-    const [target, label] = row;
-    if (!target || typeof target !== 'object' || typeof target.src !== 'string' || typeof target.suite !== 'string') {
-      throw new Error(`mutation row "${label}" names no target with a src and a suite; define the target before the row`);
-    }
-    if (!fs.existsSync(target.src)) throw new Error(`mutation row "${label}" names ${target.src}, which does not exist`);
-    if (!targets.includes(target)) targets.push(target);
-  }
-  return targets;
+  return targetsFromRows(mutations);
 }
 
 function run() {
@@ -1363,7 +1356,7 @@ function run() {
   for (const target of targets) originals.set(target, session.original(target.src));
   const results = [];
   try {
-    for (const [target, label, guard, without] of MUTATIONS) {
+    for (const [target, label, guard, without] of rowsForShard(MUTATIONS)) {
       const original = originals.get(target);
       const matches = original.split(guard).length - 1;
       if (matches === 0) {
@@ -1442,17 +1435,18 @@ function requireSaneTempRoot() {
   const verdict = preflight(os.tmpdir());
   if (verdict.ok) return;
   console.error(verdict.message);
-  process.exit(2);
+  process.exit(NO_VERDICT);
 }
 
 if (require.main === module) {
   requireSaneTempRoot();
   if (process.argv.includes('--preflight-only')) process.exit(0);
-  const failed = report(run(), process.argv.includes('--markdown'));
+  const results = run();
+  const failed = report(results, process.argv.includes('--markdown'));
   if (failed) {
     console.error(`\n${failed} mutation(s) proved nothing. A guard no test notices is not guarded,`
       + ' and a mutation that could break more than one place proves nothing about either.');
-    process.exit(1);
+    process.exit(exitCodeFor(failed, results));
   }
 }
 

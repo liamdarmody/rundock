@@ -1,0 +1,46 @@
+# Re-run a CI run once when the only thing wrong with it was a runner that went
+# away.
+#
+# A job whose runner shuts down or loses contact with GitHub ends red, and that
+# red says nothing about the change: the work never finished. scripts/ci-verdict.js
+# reads each job that did not succeed and decides: a lost runner (or the
+# mutation check's no verdict from a shard ended by a signal) is re-run once;
+# a run superseded by a newer one, a job at its time cap, and a real failure
+# are left alone. A second attempt is never re-run, so this cannot loop.
+#
+# SECURITY. workflow_run runs with the base repository's token, whatever
+# triggered the run. So this checks out the default branch only (never the
+# triggering run's head), installs nothing, and executes nothing from a pull
+# request: it reads the run through the API and asks GitHub to re-run it.
+name: CI retry
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+
+permissions:
+  actions: write
+  checks: read
+  contents: read
+
+jobs:
+  retry:
+    name: Re-run a run its runner lost
+    if: >-
+      github.event.workflow_run.run_attempt == 1
+      && github.event.workflow_run.conclusion != 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout the default branch
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Classify the run, and re-run it once if a runner was lost
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          REPO: ${{ github.repository }}
+        run: node scripts/ci-verdict.js --run "$RUN_ID" --repo "$REPO"

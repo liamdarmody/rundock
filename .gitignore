@@ -51,6 +51,8 @@ scripts/screenshots/.banned-tokens.json
 # meeting.
 .rundock/
 .mutation-scope.json
+.mutation-plan.json
+.mutation-verdict.json
 .mutation-runs/
 
 # Release walk output: screenshots and the report attached to the release PR.

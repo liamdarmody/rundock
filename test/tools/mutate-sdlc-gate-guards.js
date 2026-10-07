@@ -30,7 +30,9 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const os = require('node:os');
 const { preflight } = require('../helpers/temp-root.js');
-const { beginMutationRun } = require('./mutation-run.js');
+const {
+  beginMutationRun, targetsFromRows, rowsForShard, exitCodeFor, NO_VERDICT,
+} = require('./mutation-run.js');
 
 const ROOT = path.join(__dirname, '..', '..');
 
@@ -73,6 +75,9 @@ const RELEASE_CI = { src: path.join(ROOT, 'scripts', 'release-ci.js'), suite: 't
 const RELEASE_GATE = { src: path.join(ROOT, 'scripts', 'release-gate.js'), suite: 'test/unit/release-gate.test.js' };
 const RELEASE_RECORD = { src: path.join(ROOT, 'scripts', 'release.js'), suite: 'test/unit/release-gate.test.js' };
 const RELEASE_TAG = { src: path.join(ROOT, 'scripts', 'release.js'), suite: 'test/unit/release-tag.test.js' };
+// The mutation scope and the CI retry classifier, each watched by its suite.
+const SCOPE = { src: path.join(ROOT, 'scripts', 'mutation-scope.js'), suite: 'test/unit/mutation-scope.test.js' };
+const CI_VERDICT = { src: path.join(ROOT, 'scripts', 'ci-verdict.js'), suite: 'test/unit/ci-verdict.test.js' };
 
 const MUTATIONS = [
   // ===== A DESTRUCTIVE STEP WITHOUT ITS CAUTION =====
@@ -286,6 +291,42 @@ const MUTATIONS = [
   [RELEASE_TAG, "the tag checks the gate record against the merged tree",
     "  requireGatePass(git(['rev-parse', `${merged}^{tree}`]).trim(), { root });\n",
     ""],
+
+  // ===== THE MUTATION SCOPE: WHAT A CHANGE CAN REACH =====
+  // Comparing against HEAD instead of the merge base is the defect that made
+  // every push to main run everything and every merge of main re-test main.
+  [SCOPE, "the merge base is the base, not HEAD",
+    "      const mb = git(['merge-base', head, trunk]);",
+    "      const mb = git(['rev-parse', head]);"],
+  [SCOPE, "an empty diff from a resolved base runs nothing",
+    "    return { run: [], skipped: harnesses.map((h) => ({ tool: h.tool, reason: 'nothing changed' })), reason: 'nothing changed against the base' };",
+    "    return all('no changed files could be determined, so nothing was narrowed');"],
+  [SCOPE, "an unresolved base runs everything",
+    "  if (changed === null) return all('no comparison base could be resolved, so nothing was narrowed');",
+    "  if (changed === null) changed = [];"],
+  [SCOPE, "a file a guarded file reads selects that harness",
+    "      if (reader) { read = `${reader} reads ${f}`; break; }",
+    "      if (false && reader) { read = `${reader} reads ${f}`; break; }"],
+  [SCOPE, "a dependency change runs everything",
+    "  if (dependencyChange) return all(`${dependencyChange} can change what any suite does`);\n",
+    ""],
+  [SCOPE, "a harness ended by a signal is no verdict, not a pass",
+    "  if (signal) return { outcome: NO_VERDICT, cause: `ended by signal ${signal}` };",
+    "  if (signal) return { outcome: PASS };"],
+  [SCOPE, "a shard with no verdict file is no verdict",
+    "    if (!v) {\n      outcomes.push(NO_VERDICT);",
+    "    if (!v) {\n      outcomes.push(PASS);"],
+
+  // ===== THE CI RETRY: ONCE, AND ONLY FOR A LOST RUNNER =====
+  [CI_VERDICT, "a runner shutdown is retried",
+    "  /runner has received a shutdown signal/i,\n",
+    ""],
+  [CI_VERDICT, "a second attempt is never retried",
+    "  if (Number(run.run_attempt) !== 1) return none(`attempt ${run.run_attempt} is never re-run, so a retry cannot loop`);\n",
+    ""],
+  [CI_VERDICT, "a superseded run is not retried",
+    "  if (newerRun || notOk.some((j) => j.kind === 'superseded')) return none('superseded: a newer run is the one that counts');\n",
+    ""],
 ];
 
 const REPORTER = ['--test-reporter', 'spec'];
@@ -322,13 +363,13 @@ function redTests(suite) {
 function run() {
   // Derived from the rows, so a row naming a new target cannot crash the run
   // on a target nobody listed.
-  const targets = [...new Set(MUTATIONS.map(([target]) => target))];
+  const targets = targetsFromRows(MUTATIONS);
   const session = beginMutationRun({ files: [...new Set(targets.map((target) => target.src))] });
   const originals = new Map();
   for (const target of targets) originals.set(target, session.original(target.src));
   const results = [];
   try {
-    for (const [target, label, guard, without] of MUTATIONS) {
+    for (const [target, label, guard, without] of rowsForShard(MUTATIONS)) {
       const original = originals.get(target);
       const matches = original.split(guard).length - 1;
       if (matches === 0) {
@@ -407,17 +448,18 @@ function requireSaneTempRoot() {
   const verdict = preflight(os.tmpdir());
   if (verdict.ok) return;
   console.error(verdict.message);
-  process.exit(2);
+  process.exit(NO_VERDICT);
 }
 
 if (require.main === module) {
   requireSaneTempRoot();
   if (process.argv.includes('--preflight-only')) process.exit(0);
-  const failed = report(run(), process.argv.includes('--markdown'));
+  const results = run();
+  const failed = report(results, process.argv.includes('--markdown'));
   if (failed) {
     console.error(`\n${failed} mutation(s) proved nothing. A guard no test notices is not guarded,`
       + ' and a mutation that could break more than one place proves nothing about either.');
-    process.exit(1);
+    process.exit(exitCodeFor(failed, results));
   }
 }
 

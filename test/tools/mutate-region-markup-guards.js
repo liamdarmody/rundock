@@ -28,7 +28,9 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const os = require('node:os');
 const { preflight } = require('../helpers/temp-root.js');
-const { beginMutationRun } = require('./mutation-run.js');
+const {
+  beginMutationRun, targetsFromRows, rowsForShard, exitCodeFor, NO_VERDICT,
+} = require('./mutation-run.js');
 
 const ROOT = path.join(__dirname, '..', '..');
 
@@ -124,11 +126,11 @@ function redTests(suite) {
 }
 
 function run() {
-  const session = beginMutationRun({ files: [MARKUP.src] });
+  const session = beginMutationRun({ files: targetsFromRows(MUTATIONS).map((t) => t.src) });
   const original = session.original(MARKUP.src);
   const results = [];
   try {
-    for (const [, label, guard, without] of MUTATIONS) {
+    for (const [, label, guard, without] of rowsForShard(MUTATIONS)) {
       const matches = original.split(guard).length - 1;
       if (matches !== 1) {
         results.push({ label, applied: false, ambiguous: matches > 1 ? matches : 0, red: [] });
@@ -193,17 +195,18 @@ function requireSaneTempRoot() {
   const verdict = preflight(os.tmpdir());
   if (verdict.ok) return;
   console.error(verdict.message);
-  process.exit(2);
+  process.exit(NO_VERDICT);
 }
 
 if (require.main === module) {
   requireSaneTempRoot();
   if (process.argv.includes('--preflight-only')) process.exit(0);
-  const failed = report(run(), process.argv.includes('--markdown'));
+  const results = run();
+  const failed = report(results, process.argv.includes('--markdown'));
   if (failed) {
     console.error(`\n${failed} widening(s) proved nothing. An allowlist nobody checks is a list, not a guard,`
       + ' and this one is the whole reason a region extension may write to the page at all.');
-    process.exit(1);
+    process.exit(exitCodeFor(failed, results));
   }
 }
 

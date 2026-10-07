@@ -427,4 +427,98 @@ function beginMutationRun({ root = ROOT, files: declared = [] } = {}) {
   return session;
 }
 
-module.exports = { beginMutationRun, inspect, markerPath, markerDir, readMarkers, recoverAbandoned, MARKER, MARKER_DIR, ROOT };
+// THREE OUTCOMES, NOT TWO. A harness exits 0 when every guard it broke turned
+// a test red, 1 when one did not (or a row was ambiguous or its text was
+// missing), and NO_VERDICT when it could not find out: a suite whose output
+// could not be read, or a temp root it refused to run on. Folding the third
+// into the second would send a reader looking for an unguarded guard that may
+// not exist; folding it into the first would be a pass nothing earned.
+const NO_VERDICT = 3;
+
+// A suite may name one test inside it after a '#' (a real-engine row runs one
+// named browser test). The file is everything before it.
+function suiteFile(suite) {
+  return String(suite).split('#')[0];
+}
+
+/**
+ * The targets a harness's rows name, each once, checked BEFORE anything is
+ * mutated.
+ *
+ * THE ROWS ARE THE SOURCE OF TRUTH for what a harness touches. A list kept by
+ * hand beside them drifted: rows were added naming targets the list did not
+ * load, and the harness crashed at the first of them with none of those rows
+ * ever run. The scope reads the same rows to decide which harnesses a change
+ * can reach, so the list a run arms over and the list a selection is made
+ * from are one list.
+ *
+ * A row is `[target, label, ...]` with `target = { src, suite }`, `src` an
+ * absolute path and `suite` repository-relative. A harness whose rows all
+ * break one file may leave the target off and pass it as `fallback`.
+ *
+ * Returns the target objects themselves (identity kept, so a harness can key
+ * its originals by them). Throws, naming the row, when a target is missing,
+ * malformed, or names a file or suite that does not exist: a run must fail
+ * before it has written anything, not partway through.
+ */
+function targetsFromRows(rows, { fallback = null, root = ROOT } = {}) {
+  if (!Array.isArray(rows) || !rows.length) throw new Error('a harness with no rows has nothing to run');
+  const targets = [];
+  for (const row of rows) {
+    const named = Array.isArray(row) && row[0] && typeof row[0] === 'object' ? row[0] : null;
+    const target = named || fallback;
+    const label = Array.isArray(row) ? row.find((v) => typeof v === 'string') : String(row);
+    if (!target || typeof target !== 'object' || typeof target.src !== 'string' || typeof target.suite !== 'string') {
+      throw new Error(`mutation row "${label}" names no target with a src and a suite; define the target before the row`);
+    }
+    if (!fs.existsSync(target.src)) throw new Error(`mutation row "${label}" names ${target.src}, which does not exist`);
+    if (!fs.existsSync(path.resolve(root, suiteFile(target.suite)))) {
+      throw new Error(`mutation row "${label}" names the suite ${suiteFile(target.suite)}, which does not exist`);
+    }
+    if (!targets.includes(target)) targets.push(target);
+  }
+  return targets;
+}
+
+/**
+ * The rows this invocation runs: all of them, or the slice `--rows a:b` names
+ * (a inclusive, b exclusive, by index into the harness's own row list).
+ *
+ * This is how CI splits a large harness across shards without the harness
+ * knowing anything about shards. A slice that falls outside the rows, or does
+ * not parse, throws rather than quietly running nothing: an empty slice would
+ * report a pass for rows nobody ran.
+ */
+function rowsForShard(rows, argv = process.argv) {
+  const at = argv.indexOf('--rows');
+  if (at === -1) return rows;
+  const given = String(argv[at + 1] || '');
+  const parts = given.split(':');
+  const digits = (v) => v !== '' && [...v].every((c) => c >= '0' && c <= '9');
+  if (parts.length !== 2 || !digits(parts[0]) || !digits(parts[1])) {
+    throw new Error(`--rows takes start:end, got "${given}"`);
+  }
+  const start = Number(parts[0]);
+  const end = Number(parts[1]);
+  if (!(start < end) || end > rows.length) {
+    throw new Error(`--rows ${start}:${end} is not a slice of this harness's ${rows.length} rows`);
+  }
+  return rows.slice(start, end);
+}
+
+/**
+ * The exit code for a finished run: 0 pass, 1 fail, NO_VERDICT when every
+ * failing row is one whose suite could not be read. `failed` is the count the
+ * harness's own report returned, which already counts an unreadable row as a
+ * failure; this only decides which kind of not-a-pass it was.
+ */
+function exitCodeFor(failed, results) {
+  if (!failed) return 0;
+  const unreadable = (results || []).filter((r) => r && r.unparsable).length;
+  return unreadable >= failed ? NO_VERDICT : 1;
+}
+
+module.exports = {
+  beginMutationRun, inspect, markerPath, markerDir, readMarkers, recoverAbandoned, MARKER, MARKER_DIR, ROOT,
+  targetsFromRows, rowsForShard, exitCodeFor, suiteFile, NO_VERDICT,
+};

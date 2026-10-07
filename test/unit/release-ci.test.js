@@ -97,10 +97,10 @@ describe('the gate reads CI for the exact tree it gates', () => {
   });
 
   test('a run cancelled overall still counts for the jobs that finished green', () => {
-    // CI's mutation job hits its time limit on large changes and the run reads
-    // "cancelled". The required jobs inside it still passed, which is what the
-    // gate asks about.
-    const jobs = [...passingJobs(), { name: 'Mutation guards and fixture provenance', status: 'completed', conclusion: 'cancelled' }];
+    // A job that is not required (here one mutation shard) can be cancelled
+    // and the run reads "cancelled". The required jobs inside it still
+    // passed, which is what the gate asks about.
+    const jobs = [...passingJobs(), { name: 'Mutation shard 3', status: 'completed', conclusion: 'cancelled' }];
     const verdict = ciVerdict({ tree: TREE, gh: fakeGh([run(1, { jobs })]), isAncestor: noAncestor });
     assert.strictEqual(verdict.ok, true, verdict.error);
   });
@@ -162,6 +162,7 @@ describe('the required check names are the ones CI actually runs', () => {
     const matrix = /node: \[([^\]]+)\]/.exec(yml);
     const nodes = matrix ? matrix[1].split(',').map((s) => s.trim().replace(/'/g, '')) : [];
     const expanded = names.flatMap((n) => (/\$\{\{ matrix\.node \}\}/.test(n) ? nodes.map((v) => n.replace(/\$\{\{ matrix\.node \}\}/, v)) : [n]));
+    assert.ok(REQUIRED_CI_CHECKS.includes('Mutation guards'), 'the release demands the mutation check main demands');
     assert.ok(expanded.length >= 7 && nodes.length >= 2, `sanity: the workflow's job names were read (found ${expanded.length})`);
     for (const name of REQUIRED_CI_CHECKS) assert.ok(expanded.includes(name), `${name} is a CI job (found: ${expanded.join(', ')})`);
   });

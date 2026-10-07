@@ -1,0 +1,63 @@
+{
+  "source": "constructed: the runner-shutdown case on its second attempt",
+  "run": {
+    "conclusion": "failure",
+    "event": "push",
+    "head_branch": "main",
+    "id": 37658144812,
+    "run_attempt": 2
+  },
+  "jobs": [
+    {
+      "conclusion": "success",
+      "id": 112918477777,
+      "name": "Coverage floors",
+      "status": "completed"
+    },
+    {
+      "conclusion": "success",
+      "id": 112918478008,
+      "name": "Typecheck (JSDoc + checkJs)",
+      "status": "completed"
+    },
+    {
+      "conclusion": "success",
+      "id": 112918478065,
+      "name": "Hygiene (internal references, style drift)",
+      "status": "completed"
+    },
+    {
+      "conclusion": "success",
+      "id": 112918478086,
+      "name": "E2E",
+      "status": "completed"
+    },
+    {
+      "conclusion": "success",
+      "id": 112918478100,
+      "name": "Test (Node 24)",
+      "status": "completed"
+    },
+    {
+      "conclusion": "success",
+      "id": 112918478274,
+      "name": "Mutation guards and fixture provenance",
+      "status": "completed"
+    },
+    {
+      "conclusion": "failure",
+      "id": 112918478361,
+      "name": "Test (Node 22)",
+      "status": "completed"
+    }
+  ],
+  "annotations": {
+    "112918478361": [
+      {
+        "annotation_level": "failure",
+        "title": "",
+        "message": "The runner has received a shutdown signal. This can happen when the runner service is stopped, or a manually started runner is canceled."
+      }
+    ]
+  }
+}

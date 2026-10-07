@@ -1,424 +1,390 @@
 'use strict';
-// The gate runs the harnesses a change can affect, and says which it did not.
+// Which mutation harnesses a change can reach, how they are split across CI
+// shards, and how their results become one of three outcomes.
 //
-// EVERY TEST HERE IS ABOUT THE FAIL-SAFE DIRECTION, because that is the only
-// failure this tool can introduce. Running a harness that was not needed costs
-// time. NOT running one that was needed produces a green gate that never
-// looked, which is worse than the twenty minutes it saves and is exactly the
-// class of failure the session that motivated this spent hours chasing.
+// EVERY SELECTION TEST HERE IS ABOUT THE FAIL-SAFE DIRECTION, because that is
+// the only failure this tool can introduce. Running a harness that was not
+// needed costs minutes. NOT running one that was needed produces a green check
+// that never looked.
 const { test, describe, after } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
+const { execFileSync, spawnSync } = require('node:child_process');
 
 const {
-  harnessTargets, selectHarnesses, harnessFiles, changedFiles, lastGatedTree,
-  RUN_EVERYTHING_WHEN_TOUCHED,
+  harnessFiles, loadHarnesses, pathReferences, makeReaderIndex, selectHarnesses, resolveBase,
+  changedFiles, dependencyChangeIn, planShards, outcomeOf, combine, aggregate, decide, buildPlan,
+  RUN_EVERYTHING_WHEN_TOUCHED, SECONDS_PER_SHARD, MAX_SHARDS, readCosts, PASS, FAIL, NO_VERDICT,
 } = require('../../scripts/mutation-scope.js');
 
-const H = (tool, targets) => ({ tool, targets });
+const REPO = path.join(__dirname, '..', '..');
 
-describe('what a harness touches, read without running it', () => {
-  test('targets come out of the source text, and every real harness yields some', () => {
-    // READ, NEVER REQUIRED. Loading a harness module executes at least one of
-    // them: measured, when an attempt to introspect them by require ran a
-    // mutation run. So this reads the file as text, and the whole tool depends
-    // on that staying true.
-    const tools = path.join(__dirname, '..', 'tools');
-    const found = harnessFiles(tools);
-    assert.ok(found.length >= 15, `expected the real harnesses, found ${found.length}`);
-    for (const tool of found) {
-      const targets = harnessTargets(fs.readFileSync(path.join(tools, tool), 'utf8'));
-      assert.ok(targets && targets.length,
-        `${tool}: no targets could be read, so it would be run every time rather than skipped in error`);
-      for (const t of targets) {
-        assert.doesNotMatch(t, /^\//, `${tool}: ${t} should be repository-relative`);
+const dirs = [];
+after(() => { for (const d of dirs) fs.rmSync(d, { recursive: true, force: true }); });
+
+function tempDir(prefix) {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  dirs.push(d);
+  return d;
+}
+
+function write(root, rel, content) {
+  fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
+  fs.writeFileSync(path.join(root, rel), content);
+}
+
+// A harness as the real ones are shaped: rows of [target, label, guard, without],
+// exported, and run only under require.main.
+function harnessSource(targets, { exitCode = 0, signal = null } = {}) {
+  const defs = targets.map(([name, src, suite]) =>
+    `const ${name} = { src: path.join(__dirname, '..', '..', ${JSON.stringify(src)}), suite: ${JSON.stringify(suite)} };`).join('\n');
+  const rows = targets.map(([name]) => `[${name}, 'breaks ${name}', 'x', 'y']`).join(',\n  ');
+  const end = signal ? `process.kill(process.pid, ${JSON.stringify(signal)});` : `process.exit(${exitCode});`;
+  return `'use strict';
+const path = require('node:path');
+${defs}
+const MUTATIONS = [
+  ${rows},
+];
+if (require.main === module) { ${end} }
+module.exports = { MUTATIONS };
+`;
+}
+
+// A throwaway repository holding two harnesses: A guards lib/a.js through a
+// suite that reads a capture by path, B guards lib/b.js through a suite that
+// reads nothing.
+function fixtureRoot() {
+  const root = tempDir('mutation-scope-');
+  write(root, 'lib/a.js', 'a\n');
+  write(root, 'lib/b.js', 'b\n');
+  write(root, 'test/fixtures/capture.json', '{}\n');
+  write(root, 'test/helpers/shared.js', 'module.exports = 1;\n');
+  write(root, 'test/unit/a.test.js',
+    "const path = require('node:path');\nconst capture = path.join(__dirname, '..', 'fixtures', 'capture.json');\nrequire('../helpers/shared.js');\n");
+  write(root, 'test/unit/b.test.js', "require('node:assert');\n");
+  write(root, 'test/tools/mutate-a-guards.js', harnessSource([['A', 'lib/a.js', 'test/unit/a.test.js']]));
+  write(root, 'test/tools/mutate-b-guards.js', harnessSource([['B', 'lib/b.js', 'test/unit/b.test.js']]));
+  write(root, 'package.json', `${JSON.stringify({ name: 'fixture', version: '1.0.0', scripts: { t: 'x' }, dependencies: { ws: '1.0.0' } }, null, 2)}\n`);
+  write(root, 'CHANGELOG.md', '# log\n');
+  return root;
+}
+
+function fixtureRepo() {
+  const root = fixtureRoot();
+  const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  git('init', '-q', '--initial-branch=main');
+  git('config', 'user.email', 'scope-test@example.com');
+  git('config', 'user.name', 'Scope Test');
+  git('config', 'commit.gpgsign', 'false');
+  git('add', '-A');
+  git('commit', '-q', '-m', 'initial');
+  return { root, git, commit: (msg) => { git('add', '-A'); git('commit', '-q', '-m', msg); return git('rev-parse', 'HEAD'); } };
+}
+
+const tools = (root) => path.join(root, 'test', 'tools');
+const explain = (root, argv) => decide(argv, { root, toolsDir: tools(root) });
+
+describe('what a harness guards comes from its rows', () => {
+  test('every real harness loads, and names the files it mutates and the suites it reads', () => {
+    const hs = loadHarnesses({ toolsDir: path.join(REPO, 'test', 'tools'), root: REPO });
+    assert.ok(hs.length >= 14, `expected the real harnesses, found ${hs.length}`);
+    for (const h of hs) {
+      assert.strictEqual(h.error, undefined, `${h.tool} could not be read: ${h.error}`);
+      assert.ok(h.rows > 0 && h.sources.length && h.suites.length, `${h.tool} names nothing`);
+      for (const f of [...h.sources, ...h.suites]) {
+        assert.doesNotMatch(f, /^\/|^\.\./, `${h.tool}: ${f} should be repository-relative`);
+        assert.ok(fs.existsSync(path.join(REPO, f)), `${h.tool}: ${f} does not exist`);
       }
+      assert.ok(h.guarded.includes(`test/tools/${h.tool}`), `${h.tool} guards its own file`);
     }
   });
 
-  test('a source that names no target yields null, which is not an empty list', () => {
-    // The distinction the whole tool rests on. An empty list would mean
-    // "touches nothing, safe to skip"; null means "could not be determined,
-    // so run it". Conflating them is how a needed harness gets skipped.
-    assert.strictEqual(harnessTargets('const X = somethingElse();'), null);
-    assert.strictEqual(harnessTargets(''), null);
-    assert.strictEqual(harnessTargets(null), null);
-    assert.deepStrictEqual(harnessTargets("const A = { src: path.join(ROOT, 'lib', 'a.js') };"), ['lib/a.js']);
+  test('adding a harness touches only the harness: a planted one is in every full plan', () => {
+    const root = fixtureRoot();
+    write(root, 'lib/planted.js', 'p\n');
+    write(root, 'test/unit/planted.test.js', '\n');
+    write(root, 'test/tools/mutate-planted-guards.js', harnessSource([['P', 'lib/planted.js', 'test/unit/planted.test.js']]));
+    assert.ok(harnessFiles(tools(root)).includes('mutate-planted-guards.js'));
+    const plan = buildPlan(explain(root, ['--all']));
+    assert.ok(plan.run.includes('mutate-planted-guards.js'), 'the planted harness is in --all --plan');
+    assert.ok(plan.shards.some((s) => s.units.some((u) => u.tool === 'mutate-planted-guards.js')), 'and in a shard');
+  });
+
+  test('a harness whose rows cannot be read runs, never skips', () => {
+    const root = fixtureRoot();
+    write(root, 'test/tools/mutate-broken-guards.js', "module.exports = { MUTATIONS: 'not rows' };\n");
+    const hs = loadHarnesses({ toolsDir: tools(root), root });
+    const broken = hs.find((h) => h.tool === 'mutate-broken-guards.js');
+    assert.ok(broken.error, 'the unreadable harness is marked');
+    const plan = selectHarnesses(['CHANGELOG.md'], hs);
+    assert.ok(plan.run.includes('mutate-broken-guards.js'));
   });
 });
 
-describe('selection is conservative in every direction that is not proven safe', () => {
-  const HARNESSES = [
-    H('mutate-a-guards.js', ['lib/a.js']),
-    H('mutate-b-guards.js', ['lib/b.js', 'public/b.js']),
-    H('mutate-unknown-guards.js', null),
-  ];
+describe('selection', () => {
+  const root = fixtureRoot();
+  const hs = loadHarnesses({ toolsDir: tools(root), root });
+  const readerOf = makeReaderIndex(root);
+  const pick = (changed, opts = {}) => selectHarnesses(changed, hs, { readerOf, ...opts });
 
-  test('a harness runs when any file it names is touched', () => {
-    const plan = selectHarnesses(['public/b.js'], HARNESSES);
-    assert.ok(plan.run.includes('mutate-b-guards.js'), 'the harness that names the file runs');
-    assert.ok(plan.skipped.some(s => s.tool === 'mutate-a-guards.js'), 'the one that does not is skipped');
+  test('a guarded source selects its harness and no other, with the reason', () => {
+    const plan = pick(['lib/a.js']);
+    assert.deepStrictEqual(plan.run, ['mutate-a-guards.js']);
+    assert.match(plan.why['mutate-a-guards.js'], /guards lib\/a\.js/);
+    assert.ok(plan.skipped.some((s) => s.tool === 'mutate-b-guards.js'));
   });
 
-  test('a harness whose targets cannot be read ALWAYS runs', () => {
-    // The single most important row here. A harness this tool cannot read is
-    // one it knows nothing about, and the only safe thing to do with a harness
-    // you know nothing about is run it.
-    const plan = selectHarnesses(['docs/README.md'], HARNESSES);
-    assert.ok(plan.run.includes('mutate-unknown-guards.js'),
-      'unreadable targets mean run, never skip');
-    assert.ok(!plan.skipped.some(s => s.tool === 'mutate-unknown-guards.js'));
+  test('a harness\'s own file selects that harness only', () => {
+    assert.deepStrictEqual(pick(['test/tools/mutate-b-guards.js']).run, ['mutate-b-guards.js']);
   });
 
-  test('no changed files means no basis for a decision, so everything runs', () => {
-    const plan = selectHarnesses([], HARNESSES);
-    assert.deepStrictEqual(plan.run.sort(), HARNESSES.map(h => h.tool).sort());
-    assert.deepStrictEqual(plan.skipped, []);
-    assert.match(plan.reason, /no changed files/);
+  test('a data file selects only the harnesses whose guarded files read it', () => {
+    // The capture is read by a's suite through path.join, so a runs and b,
+    // which reads nothing, is skipped.
+    const plan = pick(['test/fixtures/capture.json']);
+    assert.deepStrictEqual(plan.run, ['mutate-a-guards.js']);
+    assert.match(plan.why['mutate-a-guards.js'], /test\/unit\/a\.test\.js reads test\/fixtures\/capture\.json/);
   });
 
-  test('touching the machinery runs everything, one case per trigger', () => {
-    // Stated as its own case per trigger rather than one summary assertion,
-    // because each is a different reason: the gate decides what runs, the
-    // shared mutation module decides how a run recovers, a test helper decides
-    // what a suite proves, package.json holds the full chain, and a harness
-    // file decides what that harness proves at all.
-    // A HARNESS FILE IS NO LONGER IN THIS LIST, deliberately. It used to be, on
-    // the reasoning that it decides what that harness proves; it does, and that
-    // is an argument for running THAT harness, which the case above now covers.
-    // Running the other seventeen for it was the reason the selection almost
-    // never applied to real work, because every card that adds a guard edits a
-    // harness.
-    for (const trigger of ['package.json', 'scripts/precommit-gate.js', 'test/tools/mutation-run.js',
-      'test/helpers/harness.js', 'scripts/mutation-scope.js']) {
-      const plan = selectHarnesses([trigger], HARNESSES);
-      assert.deepStrictEqual(plan.run.sort(), HARNESSES.map(h => h.tool).sort(),
-        `${trigger} must run every harness`);
-      assert.deepStrictEqual(plan.skipped, [], `${trigger} must skip nothing`);
+  test('a shared helper reaches its readers, through a require specifier', () => {
+    assert.deepStrictEqual(pick(['test/helpers/shared.js']).run, ['mutate-a-guards.js']);
+  });
+
+  test('a documentation-only change runs nothing', () => {
+    const plan = pick(['CHANGELOG.md']);
+    assert.deepStrictEqual(plan.run, []);
+    assert.strictEqual(plan.skipped.length, hs.length, 'every harness is accounted for as a skip');
+  });
+
+  test('the machinery runs everything, one case per trigger', () => {
+    assert.deepStrictEqual(RUN_EVERYTHING_WHEN_TOUCHED.slice().sort(),
+      ['.github/workflows/ci.yml', 'scripts/mutation-scope.js', 'test/tools/mutation-run.js']);
+    for (const trigger of RUN_EVERYTHING_WHEN_TOUCHED) {
+      const plan = pick([trigger]);
+      assert.deepStrictEqual(plan.run.slice().sort(), hs.map((h) => h.tool).sort(), `${trigger} runs everything`);
       assert.match(plan.reason, /can change what any harness proves/);
     }
   });
 
-  test('touching ONE harness runs that harness, and says nothing about the others', () => {
-    // The rule this replaced ran all eighteen whenever anything under
-    // test/tools/ changed, on the reasoning that a harness file decides what
-    // that harness proves. True, and it does not follow that it decides what
-    // the other seventeen prove: editing the boundary harness cannot change
-    // what the renderer harness asserts. Every card that adds a guard edits a
-    // harness, so in practice the selection almost never applied to real work.
-    const plan = selectHarnesses(['test/tools/mutate-a-guards.js'], HARNESSES);
-    assert.ok(plan.run.includes('mutate-a-guards.js'), 'its own file is a reason to run it');
-    assert.ok(plan.skipped.some(s => s.tool === 'mutate-b-guards.js'),
-      'and an unrelated harness is still skipped, with its reason');
-    // The unreadable one still runs, because that rule is untouched.
-    assert.ok(plan.run.includes('mutate-unknown-guards.js'));
+  test('a dependency change runs everything; a scripts-only manifest edit runs nothing', () => {
+    assert.strictEqual(pick(['package.json'], { dependencyChange: 'package.json' }).run.length, hs.length);
+    assert.deepStrictEqual(pick(['package.json']).run, []);
   });
 
-  test('the shared machinery still runs everything, which is the half that must not move', () => {
-    // The fail-safe direction. A harness file is narrow; the crash marker, the
-    // selector, the gate and the helpers are not, because they can change what
-    // ANY harness proves.
-    for (const trigger of ['test/tools/mutation-run.js', 'scripts/mutation-scope.js',
-      'scripts/precommit-gate.js', 'test/helpers/harness.js', 'package.json']) {
-      const plan = selectHarnesses([trigger], HARNESSES);
-      assert.deepStrictEqual(plan.run.sort(), HARNESSES.map(h => h.tool).sort(),
-        `${trigger} must still run every harness`);
-      assert.deepStrictEqual(plan.skipped, [], `${trigger} must skip nothing`);
-    }
+  test('an unresolved base runs everything; an empty diff from a resolved base runs nothing', () => {
+    const none = pick(null);
+    assert.strictEqual(none.run.length, hs.length);
+    assert.match(none.reason, /no comparison base could be resolved/);
+    const empty = pick([]);
+    assert.deepStrictEqual(empty.run, []);
+    assert.match(empty.reason, /nothing changed/);
   });
 
-  test('every shared module the real harnesses depend on is still a run-everything trigger', () => {
-    // THE FALSE GREEN THIS CHANGE COULD HAVE CREATED, made checkable instead of
-    // asserted. Removing the directory-wide trigger means a file under
-    // test/tools/ that is neither a harness nor named in the machinery list now
-    // selects NOTHING. That is correct only while no harness depends on such a
-    // file, which is true today and is exactly the kind of thing that stops
-    // being true when somebody adds a helper.
-    //
-    // So this reads the real harnesses rather than a fixture, and requires every
-    // shared module they pull in to be covered. A new helper under test/tools/
-    // fails here, on the day it is added, with a message saying what to do.
-    // THE SUITES COUNT TOO, and missing them was the narrower claim this guard
-    // used to make. A harness's verdict comes from the suite it drives, so a
-    // helper required by that SUITE is a shared dependency of the harness just
-    // as much as one required by the harness file, and the directory-wide
-    // trigger used to cover both. Quotes of either kind, and an omitted
-    // extension, because a require that does not match the pattern is a
-    // dependency this guard silently stops seeing.
-    const root = path.join(__dirname, '..', '..');
-    const tools = path.join(root, 'test', 'tools');
-    const readable = (f) => { try { return fs.readFileSync(f, 'utf8'); } catch (e) { return null; } };
-    const sources = [];
-    for (const tool of harnessFiles(tools)) {
-      const src = readable(path.join(tools, tool));
-      if (src) sources.push(src);
-      for (const m of src.matchAll(/suite:\s*'([^']+)'/g)) {
-        const suite = readable(path.join(root, m[1]));
-        if (suite) sources.push(suite);
-      }
-    }
-    const shared = new Set();
-    // A HARNESS IS FULL OF SOURCE TEXT THAT IS NOT ITS OWN SOURCE. Every
-    // mutation a harness applies is a string holding the code it substitutes
-    // in, and those strings contain require() calls belonging to the file
-    // under mutation. Scanning a harness for require() therefore finds
-    // dependencies it does not have: mutate-host-wiring-guards.js names
-    // `./extension-record.js` inside two replacement snippets, and the real
-    // module is lib/packages/extension-record.js, which is not under
-    // test/tools at all. Requiring the path to resolve to a file is what
-    // separates a dependency from a quotation, and it costs nothing, because
-    // a shared module that does not exist cannot be shared.
-    const addIfReal = (rel) => {
-      const file = rel.endsWith('.js') ? rel : `${rel}.js`;
-      if (fs.existsSync(path.join(root, file))) shared.add(file);
-    };
-    for (const src of sources) {
-      for (const m of src.matchAll(/require\(\s*['"]([^'"]*tools\/[^'"]+)['"]\s*\)/g)) {
-        addIfReal(m[1].replace(/^.*?tools\//, 'test/tools/'));
-      }
-      for (const m of src.matchAll(/require\(\s*['"]\.\/([^'"]+)['"]\s*\)/g)) {
-        addIfReal(`test/tools/${m[1]}`);
-      }
-    }
-    assert.ok(sources.length > harnessFiles(tools).length,
-      'sanity: the suites were read as well as the harnesses, or this checks half of what it says');
-    assert.ok(shared.size >= 1, 'sanity: the harnesses were read and they do share something');
-    for (const dep of shared) {
-      const covered = RUN_EVERYTHING_WHEN_TOUCHED.some(t => (t.endsWith('/') ? dep.startsWith(t) : dep === t));
-      assert.ok(covered,
-        `${dep} is shared by a harness but changing it would select no harness at all. `
-        + 'Add it to RUN_EVERYTHING_WHEN_TOUCHED, because a change to something every harness '
-        + 'requires can change what any of them proves.');
-    }
-  });
-
-  test('the machinery list is not empty, or every guard above passes vacuously', () => {
-    assert.ok(RUN_EVERYTHING_WHEN_TOUCHED.length >= 5);
-    assert.ok(RUN_EVERYTHING_WHEN_TOUCHED.includes('test/tools/mutation-run.js'),
-      'the shared crash-marker module is the one whose change invalidates every restore');
-  });
-
-  test('a skip is always accompanied by the reason it was safe', () => {
-    // A record that says a harness did not run, without saying why, asks a
-    // reader to re-derive the decision. The point of writing it down is that
-    // they do not have to.
-    const plan = selectHarnesses(['lib/a.js'], HARNESSES);
-    assert.ok(plan.skipped.length);
-    for (const s of plan.skipped) {
-      assert.match(s.reason, /touches none of: .+/, `${s.tool} names what it would have needed`);
-    }
+  test('path references are read statically, in each form a suite names a file', () => {
+    const refs = pathReferences(
+      "require('../helpers/shared.js'); const c = path.join(__dirname, '..', 'fixtures', 'capture.json'); const d = 'lib/b.js';",
+      'test/unit/x.test.js', root);
+    assert.ok(refs.has('test/helpers/shared.js'), 'a require specifier');
+    assert.ok(refs.has('test/fixtures/capture.json'), 'a path.join of literals');
+    assert.ok(refs.has('lib/b.js'), 'a repository-relative literal');
   });
 });
 
-describe('the scoped run and the full run agree', () => {
-  test('a change touching a real harness target selects that harness and no other by accident', () => {
-    // In the small: the selection is checked against the real harnesses
-    // rather than fixtures, so a harness whose targets move is caught here
-    // rather than by a green gate that skipped it.
-    const tools = path.join(__dirname, '..', 'tools');
-    const harnesses = harnessFiles(tools).map(tool => ({
-      tool, targets: harnessTargets(fs.readFileSync(path.join(tools, tool), 'utf8')),
-    }));
-    const boundary = harnesses.find(h => h.tool === 'mutate-workspace-boundary-guards.js');
-    assert.ok(boundary && boundary.targets.includes('scripts/permission-hook.js'),
-      'the boundary harness names the hook it mutates');
-
-    const plan = selectHarnesses(['scripts/permission-hook.js'], harnesses);
-    assert.ok(plan.run.includes('mutate-workspace-boundary-guards.js'));
-    // And every harness that does NOT name that file is accounted for as a
-    // skip: nothing may fall out of both lists.
-    assert.strictEqual(plan.run.length + plan.skipped.length, harnesses.length,
-      'every harness is either run or skipped with a reason, never silently dropped');
+describe('the base is the merge base, and a merge of main re-tests only the branch', () => {
+  test('branch edits A, main edits guarded B, branch merges main: only A\'s harness runs', () => {
+    // The defect this pins: measured against the branch's pre-merge tree, the
+    // diff holds everything main brought in, and a merge of main re-tested
+    // main. Against the merge base it holds only the branch's own work.
+    const { root, git, commit } = fixtureRepo();
+    git('checkout', '-q', '-b', 'feature');
+    write(root, 'lib/a.js', 'a on the branch\n');
+    commit('branch edits a');
+    git('checkout', '-q', 'main');
+    write(root, 'lib/b.js', 'b on main\n');
+    write(root, 'package.json', `${JSON.stringify({ name: 'fixture', version: '1.0.1', scripts: { t: 'y' }, dependencies: { ws: '1.0.0' } }, null, 2)}\n`);
+    commit('main edits b');
+    git('checkout', '-q', 'feature');
+    git('merge', '-q', '--no-edit', 'main');
+    const d = explain(root, []);
+    assert.deepStrictEqual(d.selection.run, ['mutate-a-guards.js']);
+    assert.match(d.selection.reason, /merge base with main/);
+    assert.ok(!d.changed.includes('lib/b.js'), 'main\'s change is not the branch\'s');
   });
 
-  test('a documentation-only change runs nothing, which is the whole point', () => {
-    const tools = path.join(__dirname, '..', 'tools');
-    const harnesses = harnessFiles(tools).map(tool => ({
-      tool, targets: harnessTargets(fs.readFileSync(path.join(tools, tool), 'utf8')),
-    }));
-    const plan = selectHarnesses(['CHANGELOG.md'], harnesses);
-    assert.strictEqual(plan.run.length, 0, 'a changelog edit mutates no source');
-    assert.strictEqual(plan.skipped.length, harnesses.length);
+  test('a push to main is measured from the commit it moved from, given as --base', () => {
+    const { root, git, commit } = fixtureRepo();
+    const before = git('rev-parse', 'HEAD');
+    write(root, 'lib/b.js', 'b pushed\n');
+    const pushed = commit('push b');
+    const d = explain(root, ['--base', before, '--head', pushed]);
+    assert.deepStrictEqual(d.selection.run, ['mutate-b-guards.js']);
+    // Without the base, a commit on main is its own merge base: nothing changed.
+    const bare = explain(root, []);
+    assert.deepStrictEqual(bare.selection.run, []);
+    assert.match(bare.selection.reason, /nothing changed/);
+  });
+
+  test('a base that does not resolve runs everything, and says so', () => {
+    const { root } = fixtureRepo();
+    const d = explain(root, ['--base', 'no-such-ref']);
+    assert.strictEqual(d.selection.run.length, 2);
+    assert.match(d.selection.reason, /no-such-ref could not be resolved/);
+  });
+
+  test('the newer of origin/main and a local main is the base', () => {
+    const { root, git, commit } = fixtureRepo();
+    git('update-ref', 'refs/remotes/origin/main', git('rev-parse', 'HEAD'));
+    write(root, 'lib/b.js', 'local main moved\n');
+    commit('local main moves');
+    git('checkout', '-q', '-b', 'feature');
+    git('merge', '-q', 'main');
+    write(root, 'lib/a.js', 'feature\n');
+    commit('feature');
+    const r = resolveBase({ root });
+    assert.strictEqual(r.base, git('rev-parse', 'main'));
+    assert.match(r.described, /merge base with main/);
+  });
+
+  test('a dependency entry that moved runs everything; a version bump in the lockfile does not', () => {
+    const { root, git, commit } = fixtureRepo();
+    write(root, 'package-lock.json', `${JSON.stringify({ name: 'fixture', version: '1.0.0', packages: { '': { name: 'fixture', version: '1.0.0' }, 'node_modules/ws': { version: '1.0.0' } } }, null, 2)}\n`);
+    const base = commit('lockfile');
+    write(root, 'package-lock.json', `${JSON.stringify({ name: 'fixture', version: '1.0.1', packages: { '': { name: 'fixture', version: '1.0.1' }, 'node_modules/ws': { version: '1.0.0' } } }, null, 2)}\n`);
+    write(root, 'package.json', `${JSON.stringify({ name: 'fixture', version: '1.0.1', scripts: { t: 'z' }, dependencies: { ws: '1.0.0' } }, null, 2)}\n`);
+    const bump = commit('bump');
+    const changed = changedFiles({ root, base, head: bump });
+    assert.strictEqual(dependencyChangeIn(changed, { root, base, head: bump }), null);
+    assert.deepStrictEqual(explain(root, ['--base', base, '--head', bump]).selection.run, []);
+    write(root, 'package.json', `${JSON.stringify({ name: 'fixture', version: '1.0.1', scripts: { t: 'z' }, dependencies: { ws: '2.0.0' } }, null, 2)}\n`);
+    const dep = commit('dep');
+    assert.strictEqual(dependencyChangeIn(changedFiles({ root, base, head: dep }), { root, base, head: dep }), 'package.json');
+    assert.strictEqual(explain(root, ['--base', base, '--head', dep]).selection.run.length, 2);
   });
 });
 
-describe('the comparison base is the last tree a passing gate certified', () => {
-  // THE DEFECT THIS BLOCK PINS: the base used to be the merge base with
-  // origin/main, which on a long branch means everything since the divergence,
-  // forever, and that set contains package.json, a run-everything trigger.
-  // Sixteen gate runs and 3.4 hours of mutation testing on one branch, almost
-  // all of it re-proving what an earlier pass had already certified, because a
-  // three-file slice was measured against the whole branch. A gate record
-  // certifies a tree, so the changed set is measured against that tree when it
-  // is in this branch's history, and against the merge base in every case
-  // where the record cannot be trusted.
-  //
-  // A REAL REPOSITORY, NOT A STUB. The decision under test is "which git
-  // question gets asked", and a stubbed git can only prove the code asked the
-  // question the test expected, which is the defect restated. The fixture is a
-  // branch several commits deep past its origin/main, touching package.json on
-  // the way, which is exactly the shape the merge base got wrong.
+describe('shards are planned by time, not rows', () => {
+  const h = (tool, rows) => ({ tool, rows });
+  const costs = { perRow: { slow: 10, fast: 0.5 }, fallback: 5 };
 
-  const roots = [];
-  after(() => { for (const dir of roots) fs.rmSync(dir, { recursive: true, force: true }); });
+  test('a single scoped harness within the target is one shard', () => {
+    const { shards } = planShards([h('fast', 58)], { costs });
+    assert.strictEqual(shards.length, 1);
+    assert.deepStrictEqual(shards[0].units, [{ tool: 'fast', rows: 58, seconds: 29 }]);
+  });
 
-  function fixtureRepo() {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mutation-scope-base-'));
-    roots.push(dir);
-    const git = (args) => execFileSync('git', args, { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
-    const write = (rel, content) => {
-      fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
-      fs.writeFileSync(path.join(dir, rel), content);
-    };
-    git(['init', '--initial-branch=main']);
-    git(['config', 'user.email', 'scope-test@example.com']);
-    git(['config', 'user.name', 'Scope Test']);
-    git(['config', 'commit.gpgsign', 'false']);
-    // Ignored in the fixture as it is in the real repository: the record is a
-    // local certificate, never content, and a base that counted it as a
-    // changed file would invalidate itself by existing.
-    write('.gitignore', '.precommit-gate.json\n.mutation-scope.json\n');
-    write('package.json', '{ "name": "fixture" }\n');
-    write('scripts/permission-hook.js', 'hook v0\n');
-    write('lib/other.js', 'other v0\n');
-    git(['add', '-A']);
-    git(['commit', '-m', 'initial']);
-    // The trunk this branch diverged from, pinned where merge-base looks for
-    // it, so the fallback path is the real fallback path and not a git error.
-    git(['update-ref', 'refs/remotes/origin/main', git(['rev-parse', 'HEAD'])]);
-    git(['checkout', '-b', 'integration']);
-    // Several commits deep, one of them touching package.json: the branch
-    // shape on which the old base ran everything for every slice.
-    for (let i = 1; i <= 4; i += 1) {
-      write('lib/other.js', `other v${i}\n`);
-      if (i === 2) write('package.json', `{ "name": "fixture", "v": ${i} }\n`);
-      git(['add', '-A']);
-      git(['commit', '-m', `integration work ${i}`]);
+  test('a slow harness is split by its time, and equal rows are not equal shards', () => {
+    // 120 slow rows are twenty minutes; 120 fast rows are one. By rows they
+    // would share evenly and the slow half would sit at its job's limit.
+    const { shards, seconds } = planShards([h('slow', 120), h('fast', 120)], { costs });
+    assert.strictEqual(seconds, 1260);
+    assert.strictEqual(shards.length, Math.ceil(1260 / SECONDS_PER_SHARD));
+    assert.ok(shards.filter((s) => s.units.some((u) => u.tool === 'slow')).length >= 2, 'the slow harness is split');
+    for (const s of shards) assert.ok(s.seconds <= SECONDS_PER_SHARD * 1.1, `shard ${s.index} is planned at ${s.seconds}s`);
+  });
+
+  test('every row lands in exactly one shard', () => {
+    const hs = [h('slow', 271), h('fast', 262), h('unmeasured', 217), h('a', 127), h('b', 95), h('c', 58)];
+    const { shards } = planShards(hs, { costs });
+    for (const t of hs) {
+      const covered = [];
+      for (const s of shards) for (const u of s.units) if (u.tool === t.tool) {
+        for (let i = u.start || 0; i < (u.end === undefined ? t.rows : u.end); i++) covered.push(i);
+      }
+      assert.deepStrictEqual(covered.sort((x, y) => x - y), [...Array(t.rows).keys()], `${t.tool} rows covered once`);
     }
-    return { dir, git, write };
-  }
+  });
 
-  function realHarnesses() {
-    const tools = path.join(__dirname, '..', 'tools');
-    return harnessFiles(tools).map(tool => ({
-      tool, targets: harnessTargets(fs.readFileSync(path.join(tools, tool), 'utf8')),
-    }));
-  }
+  test('the shard count is capped, and the plan is the same every time', () => {
+    const many = Array.from({ length: 30 }, (_, i) => h(`t${i}`, 150));
+    const a = planShards(many, { costs });
+    assert.strictEqual(a.shards.length, MAX_SHARDS);
+    assert.deepStrictEqual(planShards(many, { costs }), a);
+  });
 
-  test('a slice on a deep branch runs its one harness, not all of them', () => {
-    // The acceptance case, end to end against the REAL harnesses: the gate
-    // passed four commits deep, then two more commits and a staged edit
-    // touched only the file the boundary harness names. Against the merge
-    // base this change would contain package.json and run all of them;
-    // against the gated tree it contains one file and runs one.
-    const { dir, git, write } = fixtureRepo();
-    fs.writeFileSync(path.join(dir, '.precommit-gate.json'),
-      `${JSON.stringify({ tree: git(['rev-parse', 'HEAD^{tree}']), branch: 'integration' }, null, 2)}\n`);
-    for (let i = 1; i <= 2; i += 1) {
-      write('scripts/permission-hook.js', `hook v${i}\n`);
-      git(['add', '-A']);
-      git(['commit', '-m', `hook work ${i}`]);
+  test('the committed cost table is well formed, and names only harnesses that exist', () => {
+    // A harness missing from the table is planned at the default, so adding a
+    // harness still touches only the harness; a stale entry is flagged here.
+    const tools = path.join(REPO, 'test', 'tools');
+    const c = readCosts(tools);
+    assert.ok(c.fallback > 0);
+    const names = Object.keys(c.perRow);
+    assert.ok(names.length >= 14, `sanity: the table was read (${names.length} entries)`);
+    for (const [tool, rate] of Object.entries(c.perRow)) {
+      assert.ok(harnessFiles(tools).includes(tool), `${tool} is in the cost table but not on disk`);
+      assert.ok(Number(rate) > 0, `${tool} has no positive cost`);
     }
-    write('scripts/permission-hook.js', 'hook v3\n');
-    git(['add', 'scripts/permission-hook.js']);
-
-    const changed = changedFiles(dir);
-    assert.deepStrictEqual(changed.files, ['scripts/permission-hook.js'],
-      'only what moved since the gated tree is in the changed set');
-    assert.match(changed.base, /last gated tree [0-9a-f]{12}/,
-      'the base is named, so a reader can tell narrowing from a fallback');
-
-    const harnesses = realHarnesses();
-    const plan = selectHarnesses(changed.files, harnesses);
-    assert.deepStrictEqual(plan.run, ['mutate-workspace-boundary-guards.js'],
-      'the one harness that names the file runs, and no other');
-    assert.strictEqual(plan.skipped.length, harnesses.length - 1,
-      'every other harness is skipped, each with its reason, none dropped');
   });
 
-  test('a change reverted since the gated tree is not a change', () => {
-    // The base is a tree comparison, not a union of per-commit diffs: a file
-    // edited and put back holds exactly the content the gate certified, so a
-    // harness watching it has nothing new to prove.
-    const { dir, git, write } = fixtureRepo();
-    fs.writeFileSync(path.join(dir, '.precommit-gate.json'),
-      `${JSON.stringify({ tree: git(['rev-parse', 'HEAD^{tree}']), branch: 'integration' }, null, 2)}\n`);
-    write('lib/other.js', 'other edited\n');
-    git(['add', '-A']);
-    git(['commit', '-m', 'edit other']);
-    write('lib/other.js', 'other v4\n');
-    git(['add', '-A']);
-    git(['commit', '-m', 'put other back']);
-    const changed = changedFiles(dir);
-    assert.deepStrictEqual(changed.files, [],
-      'content identical to the certified tree is not in the changed set');
+  test('the full set, planned with the real costs, keeps every shard well under its limit', () => {
+    const tools = path.join(REPO, 'test', 'tools');
+    const plan = buildPlan(decide(['--all'], { root: REPO, toolsDir: tools }), { toolsDir: tools });
+    for (const s of plan.shards) assert.ok(s.seconds <= 15 * 60, `shard ${s.index} is planned at ${s.seconds}s`);
+  });
+});
+
+describe('three outcomes: pass, fail, no verdict', () => {
+  test('a harness\'s exit code and signal map to its outcome', () => {
+    assert.strictEqual(outcomeOf(0, null).outcome, PASS);
+    assert.strictEqual(outcomeOf(1, null).outcome, FAIL);
+    assert.strictEqual(outcomeOf(3, null).outcome, NO_VERDICT);
+    // Killed by a signal is no verdict, never a pass and never a failure.
+    assert.strictEqual(outcomeOf(null, 'SIGTERM').outcome, NO_VERDICT);
+    assert.match(outcomeOf(null, 'SIGKILL').cause, /signal SIGKILL/);
   });
 
-  test('no record means the merge base, every harness, and the reason says so', () => {
-    // The fallback half of the acceptance: the branch is deep and touched
-    // package.json, so against the merge base everything runs, exactly as the
-    // tool behaved before this base existed. What is new is that the output
-    // now says WHICH base produced that verdict, because "package.json can
-    // change what any harness proves" was honest and useless for sixteen runs
-    // straight when nothing said what it was being compared to.
-    const { dir } = fixtureRepo();
-    const changed = changedFiles(dir);
-    assert.match(changed.base, /merge base with origin\/main/);
-    assert.match(changed.base, /no gate record has been written/);
-    assert.ok(changed.files.includes('package.json'),
-      'the whole branch is the changed set when there is no certificate');
-    const harnesses = realHarnesses();
-    const plan = selectHarnesses(changed.files, harnesses);
-    assert.deepStrictEqual(plan.run.sort(), harnesses.map(h => h.tool).sort(),
-      'with no record, every harness runs');
-    assert.deepStrictEqual(plan.skipped, []);
-    assert.match(plan.reason, /package\.json can change what any harness proves/);
+  test('any fail is fail; otherwise any no verdict is no verdict', () => {
+    assert.strictEqual(combine([PASS, NO_VERDICT, FAIL]), FAIL);
+    assert.strictEqual(combine([PASS, NO_VERDICT]), NO_VERDICT);
+    assert.strictEqual(combine([PASS, PASS]), PASS);
   });
 
-  test('a record whose tree is not in this branch\'s history falls back', () => {
-    // A certificate for a tree HEAD never carried says nothing about what this
-    // branch has changed: a record from another branch, or from a pass whose
-    // tree was never committed, must not narrow anything here.
-    const { dir, git, write } = fixtureRepo();
-    git(['checkout', '-b', 'side', 'main']);
-    write('lib/other.js', 'side work\n');
-    git(['add', '-A']);
-    git(['commit', '-m', 'side work']);
-    const foreignTree = git(['rev-parse', 'HEAD^{tree}']);
-    git(['checkout', 'integration']);
-    fs.writeFileSync(path.join(dir, '.precommit-gate.json'),
-      `${JSON.stringify({ tree: foreignTree, branch: 'side' }, null, 2)}\n`);
-    assert.match(lastGatedTree(dir).fallback, /not an ancestor of HEAD/);
-    const changed = changedFiles(dir);
-    assert.match(changed.base, /merge base with origin\/main/);
-    assert.ok(changed.files.includes('package.json'), 'the fallback set is the whole branch');
+  test('the aggregator reads a missing verdict file as no verdict for that shard', () => {
+    const plan = { id: 'p1', shards: [{ index: 1 }, { index: 2 }] };
+    const one = [{ plan: 'p1', shard: 1, outcome: PASS, results: [] }];
+    const r = aggregate(plan, one);
+    assert.strictEqual(r.outcome, NO_VERDICT);
+    assert.match(r.causes[0], /shard 2 wrote no verdict/);
+    assert.strictEqual(aggregate(plan, [...one, { plan: 'p1', shard: 2, outcome: PASS }]).outcome, PASS);
+    assert.strictEqual(aggregate(plan, [...one, { plan: 'other', shard: 2, outcome: PASS }]).outcome, NO_VERDICT);
+    assert.strictEqual(aggregate(plan, [...one, { plan: 'p1', shard: 2, outcome: FAIL }]).outcome, FAIL);
   });
 
-  test('a record that cannot be parsed, names no tree, or names nothing resolvable falls back', () => {
-    // Each corrupt shape separately, because each is a different way for the
-    // certificate to be untrustworthy and each must land on the same side:
-    // compare against the merge base and run everything, never guess.
-    const { dir } = fixtureRepo();
-    const record = path.join(dir, '.precommit-gate.json');
+  test('a failed plan job is a failure; a cancelled one is no verdict', () => {
+    assert.strictEqual(aggregate(null, [], { planResult: 'failure' }).outcome, FAIL);
+    assert.strictEqual(aggregate(null, [], { planResult: 'cancelled' }).outcome, NO_VERDICT);
+    assert.strictEqual(aggregate({ id: 'x', shards: [] }, []).outcome, PASS, 'an empty plan has nothing to fail');
+  });
 
-    fs.writeFileSync(record, 'not json at all\n');
-    assert.match(lastGatedTree(dir).fallback, /could not be parsed/);
+  test('a harness exiting 3, or killed, is no verdict from the run and from the aggregator', () => {
+    const root = fixtureRoot();
+    write(root, 'test/tools/mutate-a-guards.js', harnessSource([['A', 'lib/a.js', 'test/unit/a.test.js']], { exitCode: 3 }));
+    write(root, 'test/tools/mutate-b-guards.js', harnessSource([['B', 'lib/b.js', 'test/unit/b.test.js']], { signal: 'SIGTERM' }));
+    const runOne = (tool) => spawnSync(process.execPath, [path.join('test', 'tools', tool), '--markdown'], { cwd: root });
+    const a = runOne('mutate-a-guards.js');
+    const b = runOne('mutate-b-guards.js');
+    const outcomes = [outcomeOf(a.status, a.signal), outcomeOf(b.status, b.signal)];
+    assert.deepStrictEqual(outcomes.map((o) => o.outcome), [NO_VERDICT, NO_VERDICT]);
+    const plan = { id: 'p', shards: [{ index: 1 }, { index: 2 }] };
+    const verdicts = outcomes.map((o, i) => ({ plan: 'p', shard: i + 1, outcome: combine([o.outcome]), results: [{ unit: 'u', ...o }] }));
+    const r = aggregate(plan, verdicts);
+    assert.strictEqual(r.outcome, NO_VERDICT);
+    assert.ok(r.causes.some((c) => /signal SIGTERM/.test(c)), 'the cause names the signal');
+  });
 
-    fs.writeFileSync(record, `${JSON.stringify({ branch: 'integration' })}\n`);
-    assert.match(lastGatedTree(dir).fallback, /names no tree/);
-
-    fs.writeFileSync(record, `${JSON.stringify({ tree: '$(rm -rf /)' })}\n`);
-    assert.match(lastGatedTree(dir).fallback, /names no tree/,
-      'a string that is not a hash never reaches git');
-
-    fs.writeFileSync(record, `${JSON.stringify({ tree: 'deadbeef'.repeat(5) })}\n`);
-    assert.match(lastGatedTree(dir).fallback, /cannot be resolved/);
-
-    const changed = changedFiles(dir);
-    assert.match(changed.base, /merge base with origin\/main/,
-      'a corrupt record narrows nothing');
+  test('the command line exits 3 for no verdict and writes the verdict file', () => {
+    const dir = tempDir('mutation-verdicts-');
+    fs.writeFileSync(path.join(dir, 'plan.json'), JSON.stringify({ id: 'p', shards: [{ index: 1 }, { index: 2 }] }));
+    fs.writeFileSync(path.join(dir, 'verdict-1.json'), JSON.stringify({ plan: 'p', shard: 1, outcome: PASS, results: [] }));
+    const env = { ...process.env };
+    delete env.GITHUB_ACTIONS;
+    delete env.GITHUB_STEP_SUMMARY;
+    const r = spawnSync(process.execPath, [path.join(REPO, 'scripts', 'mutation-scope.js'), '--aggregate',
+      '--plan-file', path.join(dir, 'plan.json'), '--verdicts', dir], { encoding: 'utf8', env });
+    assert.strictEqual(r.status, 3, r.stdout + r.stderr);
+    assert.match(r.stdout, /No verdict: shard 2 wrote no verdict/);
+    assert.doesNotMatch(r.stdout, /failed/i, 'no verdict is never titled a failure');
   });
 });
