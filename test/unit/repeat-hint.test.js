@@ -255,6 +255,44 @@ describe('shown once, dismissible, again only at 6 then 12', () => {
   });
 });
 
+describe('the link opens Settings at the control and changes nothing', () => {
+  function threeThenClick(make) {
+    const a = app();
+    for (let i = 0; i < 3; i++) a.ask(make(i));
+    a.hints()[0].querySelector('.hint-link').click();
+    return a;
+  }
+
+  test('Working folder: the list ringed, the path filled in, nothing added', () => {
+    const { w, doc, changes } = threeThenClick((i) => folderWrite(`f${i}.js`));
+    assert.strictEqual(w.currentView, 'settings');
+    assert.ok(doc.getElementById('working-folders-block').classList.contains('settings-ring'));
+    assert.strictEqual(doc.getElementById('wf-input').value, '~/Projects/acme-invoicing');
+    assert.strictEqual(doc.activeElement.id, 'wf-input');
+    assert.strictEqual(doc.querySelectorAll('.wf-row').length, 0, 'the folder is not in the list');
+    assert.deepStrictEqual(changes(), [], 'nothing was sent that changes a setting');
+    assert.strictEqual(doc.querySelectorAll('.settings-ring').length, 1, 'one control ringed');
+  });
+
+  test('Code mode: the mode control ringed, still in Notes', () => {
+    const { w, doc, changes } = threeThenClick((i) => command(`npm install p${i}`));
+    assert.ok(doc.querySelector('.mode-toggle').classList.contains('settings-ring'));
+    assert.strictEqual(w.workspaceMode, 'notes');
+    assert.strictEqual(doc.querySelector('.mode-toggle-btn.active').dataset.mode, 'notes');
+    assert.deepStrictEqual(changes(), []);
+  });
+
+  test('Keep agents inside this workspace: the switch ringed, still on, no question asked yet', () => {
+    const { w, doc, changes } = threeThenClick((i) => sandboxRetry(`make t${i}`));
+    w.sandboxStatusArrived({ type: 'sandbox_status', platform: 'darwin', available: true, present: true, managed: true, on: true, setBy: 'workspace', enabledElsewhere: [] });
+    const row = doc.getElementById('sandbox-row');
+    assert.ok(row.classList.contains('settings-ring'), 'the ring survives the row being redrawn');
+    assert.strictEqual(row.querySelector('#sandbox-switch').checked, true);
+    assert.strictEqual(row.querySelector('.wall-confirm'), null);
+    assert.deepStrictEqual(changes(), []);
+  });
+});
+
 describe('the model', () => {
   test('cards no setting would stop are never counted', () => {
     const boundary = (c) => ({ tool_name: 'Write', input: { file_path: c.path }, boundary: true, resolved_path: c.path, grant_dir: `${HOME}/.ssh`, crossings: [c] });

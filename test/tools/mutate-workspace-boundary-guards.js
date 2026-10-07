@@ -195,6 +195,7 @@ const MEDIA_ROUTER = { src: path.join(ROOT, 'lib', 'http-router.js'), suite: 'te
 // The hint under repeated permission cards: what counts, when it shows, and
 // the Settings link that must never change a setting itself.
 const REPEAT_HINT = { src: path.join(ROOT, 'public', 'repeat-hint-model.js'), suite: 'test/unit/repeat-hint.test.js' };
+const REPEAT_HINT_LINK = { src: path.join(ROOT, 'public', 'views', 'settings.js'), suite: 'test/unit/repeat-hint.test.js' };
 
 const MUTATIONS = [
   // ===== ONE DIRECTORY UNDER TWO NAMES IS ONE IDENTITY =====
@@ -1316,6 +1317,15 @@ const MUTATIONS = [
   [REPEAT_HINT, 'Repeat hint: Code mode is offered from Notes mode only',
     "    if (SHELL.has(tool) && mode !== 'code') return { kind: 'code' };",
     "    if (SHELL.has(tool)) return { kind: 'code' };"],
+  [REPEAT_HINT_LINK, 'Repeat hint link: never adds the Working folder itself',
+    '      field.focus();\n    }\n  }\n  if (typeof ring.scrollIntoView',
+    '      field.focus();\n      workingFoldersAdd();\n    }\n  }\n  if (typeof ring.scrollIntoView'],
+  [REPEAT_HINT_LINK, 'Repeat hint link: never switches to Code mode itself',
+    "  ring.classList.add('settings-ring');\n",
+    "  ring.classList.add('settings-ring');\n  if (target === 'code') setWorkspaceMode('code');\n"],
+  [REPEAT_HINT_LINK, 'Repeat hint link: never turns the switch off itself',
+    "  const ring = find();\n",
+    "  const ring = find();\n  if (target === 'sandbox') sandboxTurnOff();\n"],
 ];
 const REPORTER = ['--test-reporter', 'spec'];
 
