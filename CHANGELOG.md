@@ -4,6 +4,12 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
+## Unreleased
+
+### Added
+
+- **Rundock names the setting that would stop repeated cards:** on the third permission card in a conversation within ten minutes that a setting could have saved you, a one-line hint under the card says which one: add the folder as a Working folder, switch to Code mode (from Notes mode, for everyday commands), or turn off Keep agents inside this workspace, with what that costs in the same sentence. Its link opens Settings, Permissions with that control ringed and, for a folder, the path filled in; nothing changes until you press Add, choose Code or confirm turning the switch off yourself. You can dismiss it, and it comes back only at the sixth and twelfth card. Cards for commands that can't be undone never count and never get the hint.
+
 ## 0.15.4: Safer, With Less Friction (2026-10-07)
 
 Only Rundock's own window can now drive Rundock: answer your permission cards, change your settings, or read and write your files through it. The desktop app looks and works exactly as before. Running from source, you open Rundock once per browser from the link it prints in the terminal.
