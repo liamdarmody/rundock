@@ -648,6 +648,9 @@ function handlePermissionRequest(d, convoId) {
     : RundockPermissions.decidePermission(risk, key, alwaysAllowedTools, verdict);
   const isActive = activeConversation?.id === convoId;
   const route = RundockPermissions.routePermissionRequest(decision, isActive);
+  // A card that will be shown, here or when its conversation opens, is
+  // counted toward the hint naming the setting that would stop it.
+  if (route !== 'respond-allow') countRepeatCard(d, convoId);
   if (route === 'respond-allow') {
     if (ws) {
       ws.send(JSON.stringify({ type: 'permission_response', requestId, conversationId: convoId, allow: true }));
@@ -1031,7 +1034,77 @@ function renderPermissionCard(d, convoId, host) {
   } catch (e) { live = null; }
   if (live && live.parentNode === m) m.insertBefore(card, live);
   else m.appendChild(card);
+  drawRepeatHint(card, convoId, requestId);
   scrollBottom();
+}
+
+// ── The setting that would stop repeated cards ────────────────────────────
+// What counts, when the hint shows and what it says are decided in
+// repeat-hint-model.js; this draws it under the card, outside it, and opens
+// Settings at the control it names. The link never changes a setting.
+let repeatHintTracker = null;
+function repeatHintModel() {
+  if (typeof RundockRepeatHint !== 'undefined') return RundockRepeatHint;
+  return (typeof module === 'object' && module.exports) ? require('../repeat-hint-model.js') : null;
+}
+function countRepeatCard(d, convoId) {
+  const model = repeatHintModel();
+  if (!model || !convoId) return;
+  if (!repeatHintTracker) repeatHintTracker = model.createTracker();
+  const fix = model.fixFor(d.request || {}, typeof workspaceMode === 'string' ? workspaceMode : 'notes');
+  model.recordCard(repeatHintTracker, convoId, d.request_id || '', fix, Date.now());
+}
+// The agent that asked: a delegate when one is working, else the conversation's.
+function repeatHintAgent(convoId) {
+  let id = null;
+  try { id = (typeof getConvoState === 'function' && (getConvoState(convoId) || {}).activeAgentId) || null; } catch (e) { id = null; }
+  const convo = (typeof conversations !== 'undefined' && Array.isArray(conversations)) ? conversations.find(c => c.id === convoId) : null;
+  const who = id || (convo && convo.agentId) || '';
+  return who ? agentDisplayName(who) : '';
+}
+const REPEAT_HINT_ICON = [['circle', { cx: '12', cy: '12', r: '9' }], ['polyline', { points: '12 7 12 12 15.5 14' }]];
+function drawRepeatHint(card, convoId, requestId) {
+  const model = repeatHintModel();
+  const hint = model && repeatHintTracker && model.hintFor(repeatHintTracker, convoId, requestId);
+  if (!hint) return;
+  // One hint at a time: a later one replaces an earlier one still on screen.
+  document.querySelectorAll('.repeat-hint').forEach(el => el.remove());
+  const folderLabel = hint.fix.folder && typeof workingFoldersShort === 'function' ? workingFoldersShort(hint.fix.folder) : '';
+  const copy = model.hintCopy(hint, { agent: repeatHintAgent(convoId), folderLabel });
+  const el = document.createElement('div');
+  el.className = 'repeat-hint' + (copy.caution ? ' caution' : '');
+  el.dataset.fix = copy.kind;
+  const NS = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(NS, 'svg');
+  for (const [k, v] of Object.entries({ viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.8', 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' })) svg.setAttribute(k, v);
+  for (const [tag, attrs] of REPEAT_HINT_ICON) {
+    const s = document.createElementNS(NS, tag);
+    for (const [k, v] of Object.entries(attrs)) s.setAttribute(k, v);
+    svg.appendChild(s);
+  }
+  const body = document.createElement('div');
+  for (const p of copy.parts) {
+    if (p.strong !== undefined) { const b = document.createElement('b'); b.textContent = p.strong; body.appendChild(b); }
+    else if (p.link !== undefined) {
+      const a = document.createElement('a');
+      a.className = 'hint-link';
+      a.href = '#';
+      a.textContent = p.link;
+      a.addEventListener('click', (e) => {
+        e.preventDefault();
+        if (typeof openPermissionsAt === 'function') openPermissionsAt(copy.kind, hint.fix.folder || null);
+      });
+      body.appendChild(a);
+    } else body.appendChild(document.createTextNode(p.text));
+  }
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.className = 'repeat-hint-x';
+  close.setAttribute('aria-label', 'Dismiss');
+  close.textContent = '×';
+  close.addEventListener('click', () => { model.dismiss(repeatHintTracker, convoId); el.remove(); });
+  el.append(svg, body, close);
+  card.after(el);
 }
 
 // THE PUT-BACK CARD. Rundock has already put back a change to one of the
