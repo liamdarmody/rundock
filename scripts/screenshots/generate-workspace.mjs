@@ -27,6 +27,9 @@ import zlib from 'node:zlib';
 import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
+import { writeDemoNotes, applyFileAges, ROADMAP_BOARD, PINS, PACKAGES_PINS } from './demo-content.mjs';
+import { writeSettingsState, writeConnectors } from './demo-settings.mjs';
+import { setUpPackages, serverGitEnv, PACKAGE_URLS } from './demo-packages.mjs';
 
 const require = createRequire(import.meta.url);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -122,6 +125,10 @@ const ROUTINES = {
   reese: [{ name: 'Weekly digest',         schedule: 'every monday at 09:00', prompt: 'Run the weekly market scan and save a short brief.', enabled: true }],
   ana:   [{ name: 'Publish check',         schedule: 'every friday at 16:00', prompt: 'Reconcile what published this week against the plan.', enabled: true }],
   dev:   [{ name: 'Nightly build check',   schedule: 'every day at 23:00',    prompt: 'Confirm last night’s scheduled build completed and flag anything that failed.', enabled: true }],
+  // The fifth row: the routines shot shows it as a run still going, which the
+  // capture seeds in the page (a run cannot be left in flight on disk: the
+  // scheduler reads a stored 'running' as interrupted on boot).
+  glen:  [{ name: 'Funnel report',         schedule: 'every day at 11:30',    prompt: 'Pull yesterday’s sign-ups by source and flag any channel that dropped.', enabled: true }],
 };
 
 // Fixed run history for the routines panel (a populated .rundock/routine-state.json).
@@ -153,6 +160,8 @@ const ROUTINE_STATE = {
   // row reads as an established routine that missed one night rather than one
   // that has never run.
   'dev:Nightly build check': { lastRun: '2026-07-16T22:02:30.000Z', status: 'completed', duration: 30 },
+  // Yesterday's run, finished; today's is the one shown still going.
+  'glen:Funnel report':      { lastRun: '2026-07-17T10:31:40.000Z', status: 'completed', duration: 100 },
 };
 
 // Seeds one recorded miss for dev's Nightly build check: last night's 23:00
@@ -266,6 +275,10 @@ export const DEFAULT_BANNED_TOKENS = [
   'agent-workspace', 'agent workspace',
   'personal os',
 ];
+
+// Text the gate lets through: the vendored packages' repository links, with
+// and without the scheme (the Packages page shows the short form).
+export const GATE_ALLOWED_PHRASES = PACKAGE_URLS.flatMap((u) => [u, u.replace(/^https:\/\//, '')]);
 
 // Path to the gitignored, project-specific override list.
 export const LOCAL_BANNED_TOKENS_FILE = path.join(__dirname, '.banned-tokens.json');
@@ -412,9 +425,23 @@ function skillFile(s) {
 // ===========================================================================
 // Main builder
 // ===========================================================================
+// Workspace variants. Shots that need a state the main workspace cannot hold
+// at the same time (packages installed, which add agents to the team chart)
+// run against their own build and server; see VARIANT in capture.mjs.
+export const VARIANTS = ['main', 'packages'];
+
+// The demo workspace's folder name. Invented, and distinct from the demo's
+// client names (Northwind, Harbour and Co, Fieldstone Labs).
+export const DEMO_WORKSPACE_NAME = 'Fernhill Studio';
+
 export function buildWorkspace(opts = {}) {
-  const root = opts.root || path.join(os.tmpdir(), 'rundock-marketing');
-  const workspace = path.join(root, 'workspace');
+  const variant = opts.variant || 'main';
+  if (!VARIANTS.includes(variant)) throw new Error(`unknown workspace variant: ${variant}`);
+  const root = opts.root || path.join(os.tmpdir(), variant === 'main' ? 'rundock-marketing' : `rundock-marketing-${variant}`);
+  // Named like a real folder: the app says the workspace's folder name in
+  // places (Routines: "These are the routines in <name>"), and "workspace"
+  // read as a sentence error. Both variants share it; their roots differ.
+  const workspace = path.join(root, DEMO_WORKSPACE_NAME);
   const home = path.join(root, 'home');
 
   // Fully re-runnable: wipe and rebuild so every run is byte-identical.
@@ -458,18 +485,9 @@ export function buildWorkspace(opts = {}) {
     'See also: [[Roadmap]] and [[Notes/Weekly Plan]].', '',
   ].join('\n'));
 
-  // Roadmap is a second Kanban board (Now / Next / Later). It lives in the tree
-  // for realism; the Backlog board is the one opened in captures.
-  write('Roadmap.md', [
-    '---', '', 'kanban-plugin: board', '', '---', '',
-    '## Now', '',
-    '- [ ] Ship the launch page #launch 2026-08-05', '- [ ] Tidy the onboarding flow #product', '',
-    '## Next', '',
-    '- [ ] Gather early feedback', '- [ ] Plan the follow-up release', '',
-    '## Later', '',
-    '- [ ] Explore a mobile companion', '',
-    '%% kanban:settings', '```', '{"kanban-plugin":"board"}', '```', '%%', '',
-  ].join('\n'));
+  // Roadmap is a second Kanban board (Now / Next / Done), the one the
+  // Pins shot opens; the Backlog board is the one the board shots open.
+  write('Roadmap.md', ROADMAP_BOARD);
 
   // A briefing-style note with foldable and nested callouts plus frontmatter
   // wikilinks (one live, one deliberately dead so the dead-link state shows).
@@ -483,7 +501,8 @@ export function buildWorkspace(opts = {}) {
 
   write('Notes/Weekly Plan.md', [
     '---', 'title: Weekly Plan', 'tags: [planning]', 'date: 2026-07-18', '---', '',
-    '# Weekly Plan', '', 'Focus for the week is the launch page. Actions live on the [[Backlog]].', '',
+    '# Weekly Plan', '', 'Focus for the week is the launch page. Actions live on the [[Backlog]],',
+    'and the order of play is in the [[Notes/Launch Plan]]. Each morning starts from the [[Briefing]].', '',
     '> [!todo] Follow-up', '> Confirm the launch date before Friday.', '',
   ].join('\n'));
 
@@ -638,28 +657,57 @@ export function buildWorkspace(opts = {}) {
     + jsonlAssistant('Good idea. A shorter hook reads faster above the fold.', '2026-07-18T11:00:30.000Z'));
 
   // Conversation metadata. One pinned + others, ordered so pinned-first
-  // grouping is visible. A couple carry a listId so the Lists pills populate.
+  // grouping is visible. Lists are many-to-many (IMG-19): Launch holds three,
+  // Ops three, Hiring none, and Plan the week is in both Launch and Ops so its
+  // menu shows two ticks.
   fs.mkdirSync(path.join(workspace, '.rundock'), { recursive: true });
   fs.writeFileSync(path.join(workspace, '.rundock', 'conversations.json'), JSON.stringify([
-    { id: DEMO_IDS.convos.planWeek, agentId: 'default', sessionId: 's1', sessionIds: [], title: 'Plan the week', status: 'active', pinned: true, pinnedAt: '2026-07-18T09:05:00.000Z', listIds: ['launch'], createdAt: '2026-07-18T08:59:00.000Z', lastActiveAt: '2026-07-18T09:30:00.000Z' },
+    { id: DEMO_IDS.convos.planWeek, agentId: 'default', sessionId: 's1', sessionIds: [], title: 'Plan the week', status: 'active', pinned: true, pinnedAt: '2026-07-18T09:05:00.000Z', listIds: ['launch', 'ops'], createdAt: '2026-07-18T08:59:00.000Z', lastActiveAt: '2026-07-18T09:30:00.000Z' },
     { id: DEMO_IDS.convos.reworkHook, agentId: 'cleo', sessionId: 's5', sessionIds: [], title: 'Rework the landing hook', status: 'active', listIds: ['launch'], createdAt: '2026-07-18T10:59:00.000Z', lastActiveAt: '2026-07-18T11:01:00.000Z' },
     { id: DEMO_IDS.convos.draftNote, agentId: 'cleo', sessionId: 's2', sessionIds: [], title: 'Draft the launch note', status: 'active', listIds: ['launch'], createdAt: '2026-07-17T13:59:00.000Z', lastActiveAt: '2026-07-17T14:06:00.000Z' },
-    { id: DEMO_IDS.convos.exportHandoff, agentId: 'dev', sessionId: 's3', sessionIds: [], title: 'Export handoff', status: 'active', createdAt: '2026-07-16T10:59:00.000Z', lastActiveAt: '2026-07-16T11:01:00.000Z' },
-    { id: DEMO_IDS.convos.marketScan, agentId: 'reese', sessionId: 's4', sessionIds: [], title: 'Weekly market scan', status: 'active', createdAt: '2026-07-13T09:04:00.000Z', lastActiveAt: '2026-07-13T09:06:00.000Z' },
+    { id: DEMO_IDS.convos.exportHandoff, agentId: 'dev', sessionId: 's3', sessionIds: [], title: 'Export handoff', status: 'active', listIds: ['ops'], createdAt: '2026-07-16T10:59:00.000Z', lastActiveAt: '2026-07-16T11:01:00.000Z' },
+    { id: DEMO_IDS.convos.marketScan, agentId: 'reese', sessionId: 's4', sessionIds: [], title: 'Weekly market scan', status: 'active', listIds: ['ops'], createdAt: '2026-07-13T09:04:00.000Z', lastActiveAt: '2026-07-13T09:06:00.000Z' },
   ], null, 2));
 
-  // Named lists so the Lists pills render beside All and Unread.
+  // Named lists, drawn as pills beside All and Unread in this order.
   fs.writeFileSync(path.join(workspace, '.rundock', 'lists.json'), JSON.stringify([
     { id: 'launch', name: 'Launch', createdAt: '2026-07-17T09:00:00.000Z' },
+    { id: 'hiring', name: 'Hiring', createdAt: '2026-07-15T10:00:00.000Z' },
+    { id: 'ops', name: 'Ops', createdAt: '2026-07-15T16:30:00.000Z' },
   ], null, 2));
 
-  return { root, workspace, home, projectHash };
+  // --- Linked notes, pins, settings state and connectors -------------------
+  writeDemoNotes(write, variant === 'packages' ? PACKAGES_PINS : PINS);
+  writeSettingsState(workspace, home, { mode: 'code' });
+  writeConnectors(workspace, home);
+
+  // --- Packages: served from local repositories in every variant, so the
+  // install review and the update check work; installed per variant. The main
+  // workspace carries only the tutorial's extension (no agents, so the team
+  // chart is unchanged) and its starter note.
+  if (variant === 'packages') {
+    setUpPackages(root, workspace, [
+      { key: 'leanAgentTeam', tag: 'v1.2.0', at: '2026-07-02T09:14:00.000Z', run: 'demo01' },
+      { key: 'investmentPartner', tag: 'v1.0.0', at: '2026-07-10T15:22:00.000Z', run: 'demo02' },
+      { key: 'csvViewer', tag: 'v1.0.4', at: '2026-07-14T11:05:00.000Z', run: 'demo03', enabled: false },
+    ]);
+  } else {
+    setUpPackages(root, workspace, [
+      { key: 'myTracker', tag: 'v0.1.0', at: '2026-07-15T10:00:00.000Z', run: 'demo04', extensionOnly: true },
+    ]);
+    fs.copyFileSync(path.join(__dirname, 'packages', 'my-tracker', 'starter', 'Tracker.md'), path.join(workspace, 'Tracker.md'));
+  }
+
+  // Last, once every file is written.
+  applyFileAges(workspace);
+
+  return { root, workspace, home, projectHash, variant, serverEnv: serverGitEnv(root) };
 }
 
 // ===========================================================================
 // Sanitization gate
 // ===========================================================================
-// Scans a whole build root (which holds BOTH `workspace/` and `home/`, so the
+// Scans a whole build root (which holds BOTH the workspace and `home/`, so the
 // fake Claude Code transcripts under home, whose text is rendered into the
 // conversation stills and streaming clip, are covered too). Binaries are
 // trusted, not scanned. Returns { ok, hits }.
@@ -683,6 +731,11 @@ export function checkSanitization(root) {
       if (/\.(png|jpe?g|gif|webp|pdf)$/i.test(entry.name)) continue;
       let text;
       try { text = fs.readFileSync(full, 'utf8'); } catch { continue; }
+      // The vendored packages' own repository links are shown on purpose
+      // (the package cards and the install review name where a package came
+      // from), so exactly those URLs are taken out before matching. Any other
+      // use of the same words is still a hit.
+      for (const allowed of GATE_ALLOWED_PHRASES) text = text.split(allowed).join('');
       for (const { token, re } of patterns) {
         if (re.test(text)) hits.push({ file: path.relative(root, full), token });
       }
@@ -692,10 +745,10 @@ export function checkSanitization(root) {
   return { ok: hits.length === 0, hits };
 }
 
-// Allow standalone use: `node generate-workspace.mjs [root]` builds the tree
-// and runs the gate, printing where it landed.
+// Allow standalone use: `node generate-workspace.mjs [root] [variant]` builds
+// the tree and runs the gate, printing where it landed.
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const built = buildWorkspace({ root: process.argv[2] });
+  const built = buildWorkspace({ root: process.argv[2] || undefined, variant: process.argv[3] });
   const gate = checkSanitization(built.root);
   console.log('Workspace built at:', built.workspace);
   console.log('Home built at:', built.home);

@@ -12,10 +12,12 @@
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { FIXED_EPOCH, TIMEZONE } from './harness.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
 const SERVER = path.join(REPO_ROOT, 'server.js');
+const SCHEDULER = path.join(REPO_ROOT, 'lib', 'scheduler.js');
 
 // Dedicated capture port, deliberately distinct from the e2e port (34517) so
 // captures and the e2e suite can run at the same time.
@@ -36,7 +38,18 @@ async function waitForReady(url, { timeoutMs = 20000, intervalMs = 150 } = {}) {
 // One boot attempt on a specific port. Throws if the port is taken or the
 // server does not come up.
 async function spawnAttempt({ workspace, home, port, quiet, env = {} }) {
-  const bootScript = `require(${JSON.stringify(SERVER)}).startServer({ port: ${port} })`;
+  // The server reads the time too: the scheduler computes every routine's
+  // next run (and its first-seen stamp) from its own clock, and the client
+  // only formats the instant it is sent. Left on wall-clock time, the
+  // Routines shot showed the capture day's dates beside a page frozen at
+  // FIXED_EPOCH. The scheduler's own clock seam (wireSchedulerDeps' `now`) is
+  // set to the same instant before server.js loads; server.js wires only the
+  // client set, so the clock survives its wiring. The tick stays disabled
+  // (below), so a frozen clock can never fire a routine.
+  const bootScript = [
+    `require(${JSON.stringify(SCHEDULER)}).wireSchedulerDeps({ now: () => new Date(${FIXED_EPOCH}) });`,
+    `require(${JSON.stringify(SERVER)}).startServer({ port: ${port} });`,
+  ].join('\n');
   const child = spawn(process.execPath, ['-e', bootScript], {
     cwd: REPO_ROOT,
     env: {
@@ -53,6 +66,9 @@ async function spawnAttempt({ workspace, home, port, quiet, env = {} }) {
       // actually fire one against fake data and overwrite the seeded state.
       // See server.js's SCHEDULER_DISABLED for the other half of this.
       RUNDOCK_DISABLE_SCHEDULER: '1',
+      // The browser's zone (harness.mjs TIMEZONE), so a schedule is read and
+      // its next run shown in the same zone.
+      TZ: TIMEZONE,
       ...env,
     },
     stdio: quiet ? ['ignore', 'ignore', 'pipe'] : 'inherit',

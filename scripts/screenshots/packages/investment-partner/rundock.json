@@ -1,0 +1,15 @@
+{
+  "name": "investment-partner",
+  "displayName": "Investment Partner",
+  "version": "1.0.0",
+  "extension": {
+    "entry": "ui/index.js",
+    "styles": ["ui/investment.css"],
+    "match": "*.md",
+    "declares": "investment-partner",
+    "writes": true,
+    "sources": true,
+    "asks": ["lead-partner"],
+    "rundockUi": "1.0"
+  }
+}

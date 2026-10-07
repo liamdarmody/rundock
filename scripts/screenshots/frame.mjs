@@ -81,3 +81,23 @@ export function toWebp(srcPath, outPath) {
     return fs.existsSync(outPath) ? outPath : null;
   } catch { return null; }
 }
+
+// A 1200x630 social card cut from a master: the master scaled to the card's
+// width and cropped to its height about the centre, drawn in a page at
+// deviceScaleFactor 1 so the file is exactly the size the networks ask for.
+export async function socialCard(browser, { masterPath, outPath, width = 1200, height = 630 }) {
+  const ctx = await browser.newContext({ viewport: { width, height }, deviceScaleFactor: 1 });
+  try {
+    const page = await ctx.newPage();
+    const dataUri = 'data:image/png;base64,' + fs.readFileSync(masterPath).toString('base64');
+    await page.setContent(`<html><body style="margin:0;background:#000">
+      <img id="shot" src="${dataUri}" style="display:block;width:${width}px;height:${height}px;object-fit:cover;object-position:center">
+      </body></html>`);
+    await page.waitForFunction(() => document.getElementById('shot').complete);
+    fs.mkdirSync(path.dirname(outPath), { recursive: true });
+    await page.screenshot({ path: outPath });
+    return outPath;
+  } finally {
+    await ctx.close();
+  }
+}

@@ -16,11 +16,12 @@ import { chromium } from '@playwright/test';
 import { fileURLToPath } from 'node:url';
 
 import { buildWorkspace, checkSanitization, hasProjectBannedTokens } from './generate-workspace.mjs';
-import { startRundock } from './serve.mjs';
-import { assertAppContract } from './harness.mjs';
-import { captureStills, SHOTS, THEMES } from './capture.mjs';
-import { frameImage, FRAME_HTML_URL, resizeTo, toWebp, pngDims } from './frame.mjs';
-import { captureMotion, ffmpegAvailable, CLIPS, MOTION_THEMES } from './motion.mjs';
+import { startRundock, CAPTURE_PORT } from './serve.mjs';
+import { assertAppContract, BROWSER_ARGS } from './harness.mjs';
+import { captureStills, selectedShots, variantsNeeded, THEMES } from './capture.mjs';
+import { frameImage, FRAME_HTML_URL, resizeTo, toWebp, socialCard } from './frame.mjs';
+import { captureMotion, ffmpegAvailable, selectedClips, MOTION_THEMES } from './motion.mjs';
+import { TARGETS, HERO_PLACEMENTS, SOCIAL_CARDS } from './placements.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
@@ -28,41 +29,6 @@ const OUT = path.join(REPO_ROOT, 'screenshots-out');
 
 // README-friendly derived width (GitHub's content column is ~1000px, crisp at @2x).
 const README_WIDTH = 2200;
-
-// Per-shot destination hints, originally grounded in the content/copy gap
-// analysis (see that file's stated release before trusting its reasoning). Each
-// entry drives the MANIFEST rows. `hero` placements are added separately.
-const TARGETS = {
-  'org-chart':        { repo: 'Rundock Site',  path: 'index.html (hero) + images/rundock-app-hero.png',       note: 'Flagship "one operator, whole team" image; replaces the stale April hero.' },
-  'agent-profile':    { repo: 'rundock-docs',  path: 'concepts/agents.mdx',                                    note: 'Shows an agent profile with role, skills, and routines.' },
-  'skills':           { repo: 'Rundock Site',  path: 'index.html Skills section + rundock-docs/concepts/skills.mdx', note: 'Skills list plus a skill detail; refreshes the April skills-detail.png.' },
-  'conversations':    { repo: 'rundock-docs',  path: 'images/conversation-flow.png + introduction.mdx',        note: 'Conversation list plus an open thread; product-in-use hero candidate.' },
-  'streaming':        { repo: 'Rundock Site + rundock-docs', path: 'index.html Conversations section + docs images/conversation-handoff.gif (quickstart.mdx, concepts/how-rundock-works.mdx)', note: 'A reply streaming in; supports the live, working-team story. NOTE the docs publish this clip under the name conversation-handoff, which is what it shows rather than how it is produced. That mismatch let a stale copy survive a full estate refresh, so check both destinations.' },
-  'files':            { repo: 'Rundock Site',  path: 'index.html Files section + rundock-docs/concepts/files.mdx', note: 'File tree with per-type icons; replaces the materially wrong April file-browser.png.' },
-  'markdown-note':    { repo: 'rundock-docs',  path: 'concepts/files.mdx (the editor + properties)',           note: 'Frontmatter properties panel, callouts, and clickable wikilinks.' },
-  'callouts':         { repo: 'rundock-docs',  path: 'concepts/files.mdx (callouts)',                          note: 'Nested Obsidian callouts rendered in place.' },
-  'kanban-board':     { repo: 'Rundock Site',  path: 'index.html new Boards section + rundock-docs/concepts/files.mdx', note: 'Kanban board with columns and rich cards; new capability, no current imagery.' },
-  'artifact-review':  { repo: 'Rundock Site',  path: 'index.html new Review section + rundock-docs/concepts/files.mdx', note: 'Anchored review comments on a rendered artifact; the strongest differentiator.' },
-  'markdown-review':  { repo: 'rundock-docs',  path: 'concepts/files.mdx (review, markdown case)',              note: 'The markdown counterpart to artifact-review: select a passage, comment, accept an agent\'s suggestion. Review was previously shown only on an HTML artifact; markdown notes are the more common case.' },
-  'image-viewer':     { repo: 'rundock-docs',  path: 'concepts/files.mdx (any file type)',                     note: 'Image viewer for a real decoded image.' },
-  'pdf-viewer':       { repo: 'rundock-docs',  path: 'concepts/files.mdx (any file type)',                     note: 'PDF opens inline alongside notes and boards.' },
-  'search':           { repo: 'Rundock Site',  path: 'index.html new Search section + rundock-docs/concepts/search.mdx', note: 'Cmd+K universal search; headline 0.10.0 feature, absent everywhere today.' },
-  'find':             { repo: 'rundock-docs',  path: 'concepts/search.mdx (Cmd+F)',                            note: 'In-view find inside the editor.' },
-  'routines':         { repo: 'Rundock Site + Rundock', path: 'index.html new Routines section (after Boards) + README.md "A look inside" (after Boards)', note: 'The routines list showing all three run-status tones plus Failed (2026-08-22 design brief); 0.12.0\'s reliability story.' },
-  'routine-editor':   { repo: 'rundock-docs',  path: 'concepts/routines.mdx + guides/set-up-a-routine.mdx',    note: 'The 2-step form: pick a skill, say when, confirm; 0.12.0\'s headline feature, replacing the hand-frontmatter-only story those pages currently tell.' },
-  // 'settings' was listed here with a home in concepts/runtimes.mdx, but no
-  // such shot has ever been defined in capture.mjs, so the manifest described a
-  // destination for an asset that does not exist. Removed rather than left
-  // promising: add it back alongside a real capture definition.
-};
-
-// The three chrome-framed hero placements (spec: Site hero, README hero, docs
-// intro hero). Each is fed by a hero-designated master.
-const HERO_PLACEMENTS = {
-  'org-chart':     { repo: 'Rundock Site',  path: 'index.html hero (near full-bleed) + Rundock repo README hero', note: 'The flagship org-chart hero, chrome-framed.' },
-  'conversations': { repo: 'rundock-docs',  path: 'introduction.mdx hero',                                        note: 'Product-in-use hero for the docs introduction.' },
-  'files':         { repo: 'Rundock',       path: 'README.md secondary / docs/ hero',                             note: 'Spare chrome-framed hero showing the file workspace.' },
-};
 
 function rel(p) { return path.relative(OUT, p); }
 function mb(bytes) { return (bytes / 1e6).toFixed(2) + ' MB'; }
@@ -79,38 +45,66 @@ async function main() {
     flat: path.join(OUT, 'stills', 'flat'),
     framed: path.join(OUT, 'stills', 'framed'),
     motion: path.join(OUT, 'motion'),
+    social: path.join(OUT, 'social'),
   };
   Object.values(dirs).forEach((d) => fs.mkdirSync(d, { recursive: true }));
 
   // 1. Generate + sanitize (hard gate). The gate scans the whole build root, so
   // the fake $HOME Claude Code transcripts (whose text is rendered into the
-  // conversation shots and the streaming clip) are covered too, not just the
-  // vault tree.
-  log('\n[1/6] Generating sanitized demo workspace...');
-  const built = buildWorkspace();
+  // conversation shots and the handover clip) are covered too, not just the
+  // vault tree. One build per workspace variant the selected shots use (the
+  // motion clips all run against the main one), each through the same gate.
+  const clipsWanted = selectedClips();
+  const variants = variantsNeeded();
+  if (clipsWanted.length && !variants.includes('main')) variants.unshift('main');
+  log(`\n[1/6] Generating sanitized demo workspaces (${variants.join(', ')})...`);
   if (!hasProjectBannedTokens()) {
     log('      ! no project-specific banned tokens configured (RUNDOCK_BANNED_TOKENS or');
     log('        scripts/screenshots/.banned-tokens.json); gate is on built-in defaults only.');
   }
-  const gate = checkSanitization(built.root);
-  if (!gate.ok) {
-    console.error('SANITIZATION FAILED. Aborting before any capture:');
-    for (const h of gate.hits) console.error(`  ${h.file}: "${h.token}"`);
-    process.exit(1);
+  const builds = {};
+  const gate = { ok: true, hits: [] };
+  for (const variant of variants) {
+    const built = buildWorkspace({ variant });
+    const result = checkSanitization(built.root);
+    if (!result.ok) {
+      console.error(`SANITIZATION FAILED (${variant}). Aborting before any capture:`);
+      for (const h of result.hits) console.error(`  ${h.file}: "${h.token}"`);
+      process.exit(1);
+    }
+    builds[variant] = built;
+    log(`      ${variant}: ${built.workspace}`);
   }
-  log(`      workspace: ${built.workspace}`);
-  log('      sanitization gate: PASS (workspace + fake $HOME scanned)');
+  log('      sanitization gate: PASS (every workspace + fake $HOME scanned)');
+  const built = builds.main || builds[variants[0]];
 
-  // 2. Boot the real server against it.
-  log('[2/6] Booting Rundock server...');
-  const server = await startRundock({ workspace: built.workspace, home: built.home });
-  log(`      ${server.url}`);
+  // 2. Boot the real server against each, with git pointed at the local
+  // package repositories so the install review and update check need no
+  // network.
+  log('[2/6] Booting Rundock servers...');
+  const servers = {};
+  const urls = {};
+  for (const variant of variants) {
+    const b = builds[variant];
+    // Ports spaced apart, so one server's fallback ports never meet the next's.
+    const port = CAPTURE_PORT + variants.indexOf(variant) * 20;
+    servers[variant] = await startRundock({ workspace: b.workspace, home: b.home, env: b.serverEnv, port });
+    urls[variant] = servers[variant].url;
+    log(`      ${variant}: ${urls[variant]}`);
+  }
+  const server = servers[variants[0]];
 
   // Prefer system Chrome (bundles PDFium, so the PDF viewer renders); fall back
-  // to the bundled Chromium where Chrome is not installed.
+  // to the bundled Chromium where Chrome is not installed. A browser that will
+  // not start must not leave the servers above running with nobody to stop
+  // them.
+  const stopServers = async () => { for (const s of Object.values(servers)) await s.stop(); };
   let browser, browserChannel = 'chrome (system)';
-  try { browser = await chromium.launch({ channel: 'chrome' }); }
-  catch { browser = await chromium.launch(); browserChannel = 'chromium (bundled)'; }
+  try { browser = await chromium.launch({ channel: 'chrome', args: BROWSER_ARGS }); }
+  catch {
+    try { browser = await chromium.launch({ args: BROWSER_ARGS }); browserChannel = 'chromium (bundled)'; }
+    catch (err) { await stopServers(); throw err; }
+  }
   log(`      browser: ${browserChannel}`);
   if (browserChannel.startsWith('chromium')) {
     log('      ! system Chrome not found; the pdf-viewer shot may render blank (bundled Chromium lacks PDFium).');
@@ -124,9 +118,9 @@ async function main() {
     // rather than quietly capturing broken assets.
     await assertAppContract(browser, server.url, log);
 
-    // 3. Capture flat @2x masters + crops, both themes.
-    log('[3/6] Capturing stills (light + dark, @2x)...');
-    const shots = await captureStills({ browser, url: server.url, stagingDir: staging, log });
+    // 3. Capture flat @2x masters + crops, in each capture theme.
+    log(`[3/6] Capturing stills (${THEMES.join(' + ')}, @2x)...`);
+    const shots = await captureStills({ browser, urls, stagingDir: staging, log });
 
     // A shot that fails is caught and logged inside captureStills so one bad
     // selector cannot lose the whole run. That is right, but on its own it is
@@ -135,7 +129,7 @@ async function main() {
     // absent. Motion already gates on its expected count; stills did not, so a
     // renamed selector could silently ship a set with the search shots missing.
     const missingShots = [];
-    for (const shot of SHOTS) {
+    for (const shot of selectedShots()) {
       for (const theme of THEMES) {
         if (!shots.some(p => p.name === shot.name && p.theme === theme && p.kind === 'flat')) {
           missingShots.push(`${shot.name}.${theme}`);
@@ -143,7 +137,7 @@ async function main() {
       }
     }
     if (missingShots.length) {
-      log(`      ! STILLS INCOMPLETE: expected ${SHOTS.length * THEMES.length} flat masters, got ${shots.filter(p => p.kind === 'flat').length}. Missing: ${missingShots.join(', ')}`);
+      log(`      ! STILLS INCOMPLETE: expected ${selectedShots().length * THEMES.length} flat masters, got ${shots.filter(p => p.kind === 'flat').length}. Missing: ${missingShots.join(', ')}`);
     }
 
     // 4. Frame + derive per target.
@@ -193,18 +187,27 @@ async function main() {
     }
     await frameCtx.close();
 
+    // Social cards, cut from their master in each theme captured.
+    for (const asset of shots.filter((a) => a.name === SOCIAL_CARDS.from && a.kind === 'flat')) {
+      for (const file of SOCIAL_CARDS.files) {
+        const out = path.join(dirs.social, file.replace(/\.png$/, `.${asset.theme}.png`));
+        await socialCard(browser, { masterPath: asset.file, outPath: out });
+        manifest.push({ file: rel(out), repo: 'Rundock Site', path: file, feature: asset.feature, theme: asset.theme, variant: 'social card 1200x630', note: SOCIAL_CARDS.note });
+      }
+    }
+
     // 5. Motion.
     log('[5/6] Recording motion and converting to GIFs...');
     if (ffmpegAvailable()) {
-      const clips = await captureMotion({ browser, url: server.url, workspace: built.workspace, outDir: dirs.motion, log });
+      const clips = await captureMotion({ browser, url: urls.main, workspace: builds.main.workspace, outDir: dirs.motion, log });
       // A clip that throws is logged and omitted rather than failing the run, so
       // assert the full set landed; a short count means a clip broke (e.g. an
       // app rename slipped past the contract) and needs a look before publishing.
-      const expectedGifs = CLIPS.length * MOTION_THEMES.length;
+      const expectedGifs = clipsWanted.length * MOTION_THEMES.length;
       if (clips.length < expectedGifs) {
         const got = new Set(clips.map((c) => `${c.name}.${c.theme}`));
         const missing = [];
-        for (const cl of CLIPS) for (const th of MOTION_THEMES) if (!got.has(`${cl.name}.${th}`)) missing.push(`${cl.name}.${th}`);
+        for (const cl of clipsWanted) for (const th of MOTION_THEMES) if (!got.has(`${cl.name}.${th}`)) missing.push(`${cl.name}.${th}`);
         log(`      ! MOTION INCOMPLETE: expected ${expectedGifs} GIFs, got ${clips.length}. Missing: ${missing.join(', ')}`);
       }
       for (const c of clips) {
@@ -233,7 +236,7 @@ async function main() {
     log('Review screenshots-out/ and cherry-pick. Nothing was written to the target repos.');
   } finally {
     await browser.close();
-    await server.stop();
+    await stopServers();
   }
 }
 
@@ -254,17 +257,19 @@ function writeManifest(rows, { built, gate, webpOk }) {
     '## Standards',
     '',
     '- **Master:** 1440x900 logical at deviceScaleFactor 2, so every flat master is 2880x1800 @2x. Per-target sizes are derived down from the master, never upscaled.',
-    '- **Themes:** every still and every GIF captured in both light and dark.',
+    `- **Themes:** captured in ${THEMES.join(' and ')} (RUNDOCK_CAPTURE_THEMES; dark only unless set).`,
+    '- **Names:** a shot from the current shot list is named by its id (IMG-01 to IMG-18); the other names are recaptures of existing scenes. See `scripts/screenshots/placements.mjs`.',
     '- **Determinism:** fixed data and a frozen clock (2026-07-18, UTC), animations disabled for stills, scrollbars and caret hidden, the connection toast suppressed, web fonts awaited before capture.',
     '- **Framing:** transparent-background PNGs, so one framed image drops onto any page background (light or dark). The macOS window controls are drawn into the app\'s own top bar during capture, so every shot that includes that bar carries them and element-scoped crops do not. Hero images take wider padding; feature shots ship as a flat clean master (for destinations that CSS-frame) plus a self-framed variant (rounded corners, soft drop shadow, and a neutral hairline ring that holds the edge on dark backgrounds). Tight padding.',
     '- **Motion:** palette-optimized looping GIFs, ~1280px wide, 15fps. Length follows what the interaction needs to read clearly rather than a fixed target: a single gesture (a drag, a search) is a quick 4-6s loop; a multi-step flow (the routine editor\'s 3 screens) is paced for reading and runs longer, currently up to ~10s.',
     '',
     '## Folder layout',
     '',
-    '- `hero/` the three chrome-framed hero images (full plus a README-width derivation), light and dark.',
+    '- `hero/` the chrome-framed hero images (full plus a README-width derivation).',
     '- `stills/flat/` flat clean @2x masters and element-scoped crops (`-tile`), for the Site and Docs to frame in their own containers.',
     '- `stills/framed/` self-framed variants (and README-width derivations) for plain-markdown placements.',
-    `- \`motion/\` the ${CLIPS.length} looping GIFs, light and dark.`,
+    `- \`motion/\` the looping GIFs (${MOTION_THEMES.join(' and ')}).`,
+    '- `social/` 1200x630 social cards cropped from the IMG-01 master.',
     '- The content and copy gap analysis is not included: it was written against an earlier release and would read as current. See `scripts/screenshots/content-and-copy-gaps.md`, and check its stated release before relying on it.',
     '',
     '## Sanitization',

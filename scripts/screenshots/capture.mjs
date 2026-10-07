@@ -10,28 +10,16 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {
   newContext, gotoWorkspace, setTheme, settle, openFile,
-  seedWorking, seedLastActive, fitOrgChart,
-  ORG_WORKING, ORG_LAST_ACTIVE,
+  CAPTURE_THEMES, selectedForCapture,
 } from './harness.mjs';
+import { REFRESH_SHOTS } from './scenes.mjs';
 
-export const THEMES = ['light', 'dark'];
+export const THEMES = CAPTURE_THEMES;
 
 // Shot definitions. `hero:true` marks a master that also gets the browser-chrome
 // hero treatment in framing. `crop` is an optional element selector for a tight
 // feature tile. `target` defaults to the viewport.
 export const SHOTS = [
-  {
-    name: 'org-chart', hero: true, feature: 'Team / org chart',
-    crop: '#org-chart',
-    async setup(page) {
-      await page.evaluate(() => switchNav('team'));
-      await page.waitForSelector('.org-card', { timeout: 10000 });
-      await seedWorking(page, ORG_WORKING);
-      await seedLastActive(page, ORG_LAST_ACTIVE);
-      await fitOrgChart(page);
-      await page.waitForTimeout(200);
-    },
-  },
   {
     name: 'agent-profile', feature: 'Agent profile',
     async setup(page) {
@@ -159,51 +147,64 @@ export const SHOTS = [
       await page.waitForTimeout(500);
     },
   },
-  {
-    // The demo workspace's four routines are seeded (generate-workspace.mjs
-    // ROUTINE_STATE / ROUTINE_SLOTS) to land on the four run-status tones from
-    // the approved 2026-08-22 design brief (Ran on time / Caught up / Missed /
-    // Failed), so this shot shows the reliability story the 0.12.0 release is
-    // actually about, not just an empty scheduling form.
-    name: 'routines', feature: 'Routines: schedule a skill, see what a run did',
-    crop: '#routines-content',
-    async setup(page) {
-      await page.evaluate(() => switchNav('routines'));
-      await page.waitForSelector('#routines-content .routine-row', { timeout: 10000 });
-      await page.waitForTimeout(300);
-    },
-  },
+  // The team chart and the routines list are scenes in scenes.mjs
+  // (IMG-01, IMG-13), which replaced the shots that were here.
+  ...REFRESH_SHOTS,
 ];
 
-// Captures every shot in both themes to `stagingDir`. Returns a list of
-// produced assets: { name, theme, kind: 'flat'|'crop', feature, hero, file }.
-export async function captureStills({ browser, url, stagingDir, log = () => {} }) {
+// The shots a run captures: all of them, or those RUNDOCK_CAPTURE_ONLY names.
+export function selectedShots() {
+  return SHOTS.filter(selectedForCapture);
+}
+
+// The workspace variants the selected shots need, so a run boots only the
+// servers it uses.
+export function variantsNeeded(shots = selectedShots()) {
+  return [...new Set(shots.map((s) => s.variant || 'main'))];
+}
+
+// Captures every selected shot in every capture theme to `stagingDir`.
+// `urls` maps a workspace variant to its server. Returns a list of produced
+// assets: { name, id, theme, kind: 'flat'|'crop', feature, hero, file }.
+export async function captureStills({ browser, urls, stagingDir, log = () => {} }) {
   fs.mkdirSync(stagingDir, { recursive: true });
   const produced = [];
+  const shots = selectedShots();
 
   for (const theme of THEMES) {
     const ctx = await newContext(browser, { motion: false, theme });
-    for (const shot of SHOTS) {
+    for (const shot of shots) {
       const page = await ctx.newPage();
+      const base = urls[shot.variant || 'main'];
+      const record = (kind, name, file) => produced.push({ name, id: shot.id || null, theme, kind, feature: shot.feature, hero: kind === 'flat' && !!shot.hero, file });
       try {
-        await gotoWorkspace(page, url);
-        await setTheme(page, theme);
+        if (!base) throw new Error(`no server for workspace variant "${shot.variant}"`);
+        if (shot.page) {
+          // A page of its own (the component gallery), not the workspace.
+          await page.goto(base + shot.page, { waitUntil: 'domcontentloaded' });
+        } else {
+          await gotoWorkspace(page, base);
+          await setTheme(page, theme);
+        }
         await shot.setup(page);
         await settle(page);
 
         const flat = path.join(stagingDir, `${shot.name}.${theme}.png`);
         await page.screenshot({ path: flat, animations: 'disabled' });
-        produced.push({ name: shot.name, theme, kind: 'flat', feature: shot.feature, hero: !!shot.hero, file: flat });
+        record('flat', shot.name, flat);
         log(`  captured ${shot.name}.${theme} (flat)`);
 
-        if (shot.crop) {
+        const crop = path.join(stagingDir, `${shot.name}-tile.${theme}.png`);
+        if (shot.tile) {
+          if (await shot.tile(page, crop)) { record('crop', `${shot.name}-tile`, crop); log(`  captured ${shot.name}-tile.${theme} (tile)`); }
+          else log(`  ! tile for ${shot.name} found nothing to capture, skipped`);
+        } else if (shot.crop) {
           const el = await page.$(shot.crop);
           if (el) {
             const box = await el.boundingBox();
             if (box && box.width > 8 && box.height > 8) {
-              const crop = path.join(stagingDir, `${shot.name}-tile.${theme}.png`);
               await el.screenshot({ path: crop, animations: 'disabled' });
-              produced.push({ name: `${shot.name}-tile`, theme, kind: 'crop', feature: shot.feature, hero: false, file: crop });
+              record('crop', `${shot.name}-tile`, crop);
               log(`  captured ${shot.name}-tile.${theme} (crop)`);
             } else { log(`  ! crop ${shot.name} has no usable box, skipped`); }
           } else { log(`  ! crop selector ${shot.crop} not found for ${shot.name}, skipped`); }

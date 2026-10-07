@@ -1,5 +1,5 @@
 // Shared Playwright harness helpers for the screenshot pipeline: deterministic
-// context setup (fixed clock, UTC timezone, retina viewport), theme control,
+// context setup (fixed clock, fixed timezone, retina viewport), theme control,
 // workspace navigation, and client-state seeding. Both capture.mjs (stills) and
 // motion.mjs (GIF clips) build on these so the two stay consistent.
 
@@ -10,11 +10,30 @@ import { CURSORS } from './cursors.mjs';
 export const VIEWPORT = { width: 1440, height: 900 };
 export const DEVICE_SCALE = 2;
 
+// An extension view is a sandboxed, opaque-origin frame, which Chromium
+// isolates into a renderer process of its own. The context's emulated
+// deviceScaleFactor does not reach that process, so the frame rasterised at
+// 1x and was upscaled into the 2x master: the extension's text read visibly
+// softer than the app chrome around it (IMG-08), which the desktop app on a
+// retina display does not do. Keeping sandboxed frames in-process, and
+// telling every renderer the screen is 2x, draws the frame at the master's
+// own resolution. Neither touches the frame's sandbox or its opaque origin.
+export const BROWSER_ARGS = [
+  '--disable-features=IsolateSandboxedIframes',
+  `--force-device-scale-factor=${DEVICE_SCALE}`,
+];
+
 // Fixed "now" for the whole run, so relative labels ("2h ago", "Yesterday",
-// "09:30") never shimmer between runs. Paired with a UTC timezone so the local
+// "09:30") never shimmer between runs. Paired with a fixed zone so the local
 // time formatters resolve identically on any machine.
 export const FIXED_EPOCH = Date.UTC(2026, 6, 18, 12, 0, 0); // 2026-07-18T12:00:00Z
-export const TIMEZONE = 'UTC';
+// One zone for the browser AND the server (serve.mjs sets the server's TZ to
+// it). The scheduler reads a schedule's "8:00am" in the server's zone and the
+// page shows the next run in the browser's, so with the browser on UTC and
+// the server on the capture machine's zone every row read an hour off its own
+// schedule. Europe/London because the seeded run history is written against
+// it (08:00 BST is 07:00Z).
+export const TIMEZONE = 'Europe/London';
 
 // Injected before any page script runs: freezes Date.now()/new Date() to
 // FIXED_EPOCH while leaving explicit-argument parsing and timers intact.
@@ -225,7 +244,7 @@ export async function openFile(page, relPath) {
 // starts depending on a new global function or effect executor.
 export const APP_CONTRACT = {
   functions: [
-    'switchNav', 'openConversation', 'addUserMsg', 'executeEffects', 'openPalette',
+    'switchNav', 'openConversation', 'createConversation', 'addUserMsg', 'executeEffects', 'openPalette',
     'renderOrgChart', 'renderAgentList', 'highlightFileInSidebar', 'showProfile', 'getConvoState',
   ],
   globals: ['ws', 'convoState'],
@@ -317,4 +336,109 @@ export async function cursorKind(page, kind) {
 export async function settle(page, ms = 300) {
   await page.evaluate(() => document.fonts && document.fonts.ready).catch(() => {});
   await page.waitForTimeout(ms);
+}
+
+// Which themes a run captures. Dark only by default: every placement the
+// current shot list feeds is dark. RUNDOCK_CAPTURE_THEMES=light,dark brings
+// the light set back without a code change.
+export const CAPTURE_THEMES = (process.env.RUNDOCK_CAPTURE_THEMES || 'dark')
+  .split(',').map((t) => t.trim()).filter((t) => t === 'light' || t === 'dark');
+
+// RUNDOCK_CAPTURE_ONLY narrows a run to the named shots and clips, by name or
+// by shot-list id (e.g. "IMG-03,IMG-04,files"), so one scene can be checked
+// without capturing the whole set. Unset, everything runs.
+export function selectedForCapture(item) {
+  const raw = process.env.RUNDOCK_CAPTURE_ONLY;
+  if (!raw) return true;
+  const wanted = raw.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+  return wanted.some((w) => w === String(item.name).toLowerCase() || (item.id && w === item.id.toLowerCase()));
+}
+
+// Opens Settings at a section through the rail and the section list, the way
+// a person reaches it.
+export async function openSettings(page, section) {
+  await page.click('.nav-item[data-nav="settings"]');
+  await page.click(`.settings-nav-item[data-settings="${section}"]`);
+  await page.waitForTimeout(300);
+}
+
+// The Map's layout is seeded, so it ends in the same place every run, but it
+// arrives over a second or two on d3's timer. Waits until a node has stopped
+// moving across several reads.
+export async function waitForMapSettled(page, nodePath, { timeoutMs = 20000 } = {}) {
+  await page.waitForSelector('#view-map canvas', { state: 'visible', timeout: timeoutMs });
+  const deadline = Date.now() + timeoutMs;
+  let last = null;
+  let still = 0;
+  while (Date.now() < deadline) {
+    const at = await page.evaluate((p) => (typeof mapNodeScreenPosition === 'function' ? mapNodeScreenPosition(p) : null), nodePath);
+    const key = at ? `${at.x.toFixed(1)},${at.y.toFixed(1)}` : null;
+    still = key && key === last ? still + 1 : 0;
+    if (still >= 4) return at;
+    last = key;
+    await page.waitForTimeout(250);
+  }
+  throw new Error(`the map did not settle within ${timeoutMs / 1000}s`);
+}
+
+// Redraws Settings at `section` as the desktop app would draw it. A few
+// strings depend on whether the page is inside the desktop app
+// (window.electronAPI), and a browser capture is not. The flag is present
+// only for the one synchronous redraw and removed straight after, so no other
+// code path ever sees it.
+export async function redrawSettingsAsDesktopApp(page, section) {
+  await page.evaluate((s) => {
+    const had = Object.prototype.hasOwnProperty.call(window, 'electronAPI');
+    if (!had) window.electronAPI = {};
+    try { showSettingsSection(s); } finally { if (!had) delete window.electronAPI; }
+  }, section);
+}
+
+// Runs `fn` with the viewport temporarily taller, for a tile whose subject is
+// longer than one screen, then puts the locked geometry back.
+export async function withTallViewport(page, height, fn) {
+  await page.setViewportSize({ width: VIEWPORT.width, height });
+  await page.waitForTimeout(250);
+  try { return await fn(); } finally { await page.setViewportSize(VIEWPORT); }
+}
+
+// Centres the Map on the given notes. The app's fit frames every node, the
+// unlinked ring included, and that ring's few far-flung dots set the bounds,
+// so the clusters, which are the picture, sat right of centre with the left
+// half of the pane empty. This pans the way a person does, a drag on the
+// canvas, until the middle of the given notes' bounding box is the middle of
+// the pane. A drag of that length is a pan to the app, never a click, so no
+// file opens. Call after waitForMapSettled; afterwards the pointer is parked
+// off the canvas (and off the rail, whose tooltip would otherwise show), so
+// nothing reads as hovered.
+export async function centreMapOn(page, paths) {
+  const target = await page.evaluate((list) => {
+    const canvas = document.querySelector('#view-map canvas');
+    if (!canvas || typeof mapNodeScreenPosition !== 'function') return null;
+    const at = list.map((p) => mapNodeScreenPosition(p)).filter(Boolean);
+    if (!at.length) return null;
+    const xs = at.map((a) => a.x), ys = at.map((a) => a.y);
+    const r = canvas.getBoundingClientRect();
+    return {
+      from: { x: r.left + r.width / 2, y: r.top + r.height / 2 },
+      dx: r.left + r.width / 2 - (Math.min(...xs) + Math.max(...xs)) / 2,
+      dy: r.top + r.height / 2 - (Math.min(...ys) + Math.max(...ys)) / 2,
+    };
+  }, paths);
+  if (!target) throw new Error('the map has none of the notes to centre on');
+  if (Math.abs(target.dx) + Math.abs(target.dy) > 4) {
+    await page.mouse.move(target.from.x, target.from.y);
+    await page.mouse.down();
+    await page.mouse.move(target.from.x + target.dx, target.from.y + target.dy, { steps: 12 });
+    await page.mouse.up();
+  }
+  await parkPointer(page);
+  await page.waitForTimeout(200);
+}
+
+// Moves the pointer to an empty stretch of the top bar, right of the search
+// field, where it hovers nothing: no tooltip, no hovered node, no lit row.
+export async function parkPointer(page) {
+  const vp = page.viewportSize();
+  await page.mouse.move(vp.width - 120, TOPBAR_HEIGHT / 2);
 }
