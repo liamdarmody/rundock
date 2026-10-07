@@ -16,7 +16,7 @@ Built by [Liam Darmody](https://www.linkedin.com/in/liamdarmody/). Learn more at
 
 > **Star this repo** if Rundock is useful to you. It is the simplest way to support the project and helps other people running their own businesses find it. [Add a star ->](https://github.com/liamdarmody/rundock)
 
-![Rundock showing an example agent team as an org chart: a Chief of Staff at the top with the team reporting in below, a Rundock Guide agent, and live team status in the sidebar](docs/rundock-hero-org-chart.png)
+![Rundock showing an example agent team as an org chart: a Chief of Staff at the top with the team reporting in below, Doc the Rundock Guide beneath a divider, and live team status in the sidebar](docs/rundock-hero-org-chart.png)
 
 The org chart is the product. Show someone yours.
 
@@ -26,7 +26,7 @@ The org chart is the product. Show someone yours.
 
 ![Rundock review panel: a rendered HTML page with anchored review comment threads beside it and reply and resolve controls](docs/rundock-review.png)
 
-**Find anything with one shortcut.** Press Cmd+K to search file contents, conversation messages, and agent and skill names at once, then open the result at the right place.
+**Find anything with one shortcut.** Press Cmd+K to search file contents, conversation messages, and agent and skill names at once, then open the result at the right place. Lists group your conversations by project or area of focus.
 
 ![Rundock universal search palette showing grouped, highlighted results across files and conversations, each file row carrying its type and a matching icon](docs/rundock-search.png)
 
@@ -34,9 +34,21 @@ The org chart is the product. Show someone yours.
 
 ![Rundock Kanban board with columns and rich cards, Obsidian-compatible](docs/rundock-boards.png)
 
-**Schedule a skill to a cadence, through a form, and it runs without you watching.** Pick an agent, a skill, and how often, and Rundock runs it on its own server: a morning briefing, an end-of-day sync, a weekly digest. See what a run actually did from its own screen, or stop one that's misbehaving.
+**Pin the files you live in.** Pin a file from its view or the sidebar and it sits in your Pins list, one click away, with its folder underneath. Pins are kept with the workspace, so they follow it to another machine when the folder syncs; they stay out of git, so a shared repository keeps each person's own list.
 
-![Rundock routines list showing four routines across different agents, each in a different one of the four run states: ran on time, caught up after a missed slot, missed, and failed](docs/rundock-routines.png)
+![Rundock Pins: four pinned files in the sidebar, the Roadmap board open beside them in columns](docs/rundock-pins.png)
+
+**See how your workspace connects.** Map draws every file as a node and every link between files as a line. Notes that link to each other cluster together, recently changed files glow warmer, and clicking a node opens the file.
+
+![Rundock Map: the workspace drawn as a graph, linked notes gathered into clusters, unlinked files scattered around the edge, recent files brighter](docs/rundock-map.png)
+
+**Schedule a skill to a cadence, through a form, and it runs without you watching.** Pick an agent, a skill, and how often, and Rundock runs it on its own server: a morning briefing, an end-of-day sync, a weekly digest. See what a run actually did from its own screen, run one now to try it, or stop one that's misbehaving.
+
+![Rundock routines list showing five routines across different agents: one still going, and the others ran on time, caught up after a missed slot, missed, and failed, each row with Run now, pause, edit and delete controls](docs/rundock-routines.png)
+
+**Add a team or a new view from one link.** Paste a GitHub link into Settings, Packages and Rundock shows what the package holds before anything is written: its agents, skills, routines and any extension. An extension opens a kind of file in its own view, built from Rundock's own components and run in a sandbox. Browse what is available in the [Directory](https://rundock.ai/directory).
+
+![Rundock opening a note in an extension's view: a portfolio dashboard drawn with Rundock's own tables and cards](docs/rundock-extension-view.png)
 
 ## How Rundock fits
 
@@ -98,6 +110,9 @@ To pull updates later, run `npm run update` in the install directory.
 - [AGENTS.md](docs/AGENTS.md): the agent file format reference. Frontmatter fields, the markdown body, workspace modes, and a complete example.
 - [SKILLS.md](docs/SKILLS.md): the skill file format, discovery, and the assignment model.
 - [ROUTINES.md](docs/ROUTINES.md): the schedule format, scheduler behaviour, and where output goes.
+- [PACKAGES.md](docs/PACKAGES.md): what a package carries, what the install offer says about it, and the receipt an install leaves.
+- [EXTENSION-HOST.md](docs/EXTENSION-HOST.md): the extension host contract. What a mounted extension can reach, what it cannot, and how each line is enforced.
+- [RUNDOCK-UI.md](docs/RUNDOCK-UI.md): the component library Rundock puts into every extension view.
 - [DESIGN.md](docs/DESIGN.md): the design standard. Every token with its purpose and usage rule, the two rules that decide a radius, and what is deliberately left untokenised.
 - [CONTRIBUTING.md](CONTRIBUTING.md): dev setup, code structure, conventions, changelog standards.
 - [CHANGELOG.md](CHANGELOG.md): release history.
@@ -106,6 +121,8 @@ To pull updates later, run `npm run update` in the install directory.
 ## Security
 
 The entire stack runs on your machine. Rundock never sends your files, your agents, or your conversations anywhere. Rundock itself contacts only GitHub: the desktop app checks there for its own updates, and Rundock fetches a package from there when you add it, check it for updates or update it. None of your files, agents or conversations go with those requests. Everything else is your runtime and the connectors you choose: Claude Code talks to Anthropic's API, Codex (if you use it) talks to OpenAI's, and any connector you add reaches its own service. The runtime sends only the active conversation, processed under your own subscription. There is no cloud service, no account to create, no server-side database, no telemetry. Sign-in and keys are managed by each runtime's CLI, and Rundock never reads their contents: it learns that Claude Code is signed in from how its turns go, and that Codex is signed in from whether its credentials file exists.
+
+Inside the app, every action that matters asks first. An agent that wants to run a command or change a file outside its permissions raises a card you allow once, always allow, or deny. Settings, Permissions lists everything you have always allowed, and takes any of it back. Notes mode suits a workspace of documents; Code mode lets agents run everyday development commands without asking, while commands that can't be undone still ask every time. Details at [docs.rundock.ai/concepts/permissions](https://docs.rundock.ai/concepts/permissions).
 
 ## Licence
 
