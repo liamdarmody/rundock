@@ -56,7 +56,6 @@ const {
 } = require('../../scripts/lib/process-group.js');
 
 const GATE = path.join(__dirname, '..', '..', 'scripts', 'precommit-gate.js');
-const MUTATION_RUN = path.join(__dirname, '..', 'tools', 'mutation-run.js');
 
 // The gate's own alarm for a group it could not end. Asserted against on every
 // path that ends a live subtree, because a warning nobody looks at is how a
@@ -64,18 +63,14 @@ const MUTATION_RUN = path.join(__dirname, '..', 'tools', 'mutation-run.js');
 // with it.
 const SURVIVOR_WARNING = /survived being ended/;
 
-// What the gate says when it has had to put a harness's files back itself,
-// because the harness could not dispatch the signal that would have done it.
-const GATE_RESTORED = /a mutation harness was ended mid-run holding \d+ file\(s\) rewritten/;
-
 function noWarning(out, where) {
   assert.doesNotMatch(String(out), SURVIVOR_WARNING,
     `${where}: the gate reported a survivor when everything it started was ended\n${out}`);
 }
 
-// The step this card is about. Named once so the tests below read as being
-// about the gate's slowest, file-rewriting step rather than about a string.
-const MUTATE = 'mutate:guards';
+// The step the stand-ins below replace. The gate runs one step now, so this is
+// it; the group-ending these tests prove applies to whatever the step is.
+const MUTATE = 'preflight';
 
 // How long the stand-in children below sleep for. Deliberately an odd number of
 // seconds rather than a round one: reproducing a measurement by hand means
@@ -229,15 +224,13 @@ function runGate(dir) {
 }
 
 describe('what the gate gives a step on the way out', () => {
-  test('a step gets longer than the shared default, because its group may hold a file mutated', () => {
+  test('a step gets longer than the shared default, because its suites tidy up on SIGTERM', () => {
     // Pinned, because the two numbers exist for different reasons and the
     // reason is not visible from either one alone. The shared default is short
     // on purpose: the tool it was written for spawns a test command with
-    // nothing to skip on the way out. This gate's group is a mutation harness
-    // holding a real source file rewritten on disk, whose restore runs from its
-    // SIGTERM handler, and escalating to SIGKILL before that handler has run
-    // leaves the file mutated. Taking the override away would pass every
-    // process assertion in this file and lose the thing the card is about.
+    // nothing to skip on the way out. A suite under this gate's step removes
+    // its fixtures from a SIGTERM handler, and escalating to SIGKILL before
+    // that handler has run leaves them behind.
     assert.ok(STEP_END_GRACE_MS > END_GRACE_MS,
       `a step's group is given ${STEP_END_GRACE_MS}ms, which is not more than the `
       + `${END_GRACE_MS}ms default it is meant to override`);
@@ -336,7 +329,7 @@ describe('no process outlives the pre-commit gate', () => {
 });
 
 /**
- * Start the gate, wait until its `mutate:guards` step has recorded that it is
+ * Start the gate, wait until its step has recorded that it is
  * under way, then send ONE signal to the gate's own pid and let it go.
  *
  * The signal goes to the gate ALONE, not to a process group, and that is the
@@ -361,7 +354,7 @@ async function gateInterruptedBy(signal, dir, file, expected = 2) {
   return { out, ...end };
 }
 
-describe('the gate cannot exit while its mutate:guards subtree is alive', () => {
+describe('the gate cannot exit while its step\'s subtree is alive', () => {
   for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) {
     test(`${signal} to the gate alone leaves no part of the step running`, async (t) => {
       const file = scratch(`signal-${signal}`);
@@ -409,138 +402,6 @@ describe('the gate cannot exit while its mutate:guards subtree is alive', () => 
     } finally {
       reap(pidsIn(file));
       cleanup(dir, [file]);
-    }
-  });
-});
-
-/**
- * A mutation harness, cut down to the part that matters here: it runs inside
- * the real envelope from test/tools/mutation-run.js, rewrites a tracked source
- * file, says so, and then waits. Nothing about the restore is reimplemented,
- * because the point is which of the two puts the file back.
- *
- * `yields` decides that, and it is the difference the card turned on.
- *
- * A harness that YIELDS is idle in the event loop, so the SIGTERM listener the
- * envelope registered is dispatched, the harness restores its own file and
- * re-raises the signal. Which of the two did the restoring is readable from the
- * gate's own output rather than from a breadcrumb here, because the gate says
- * so when it has had to step in.
- *
- * A harness that does NOT yield is the real shape. Every one under test/tools/
- * is a synchronous loop of `execFileSync` calls from top to bottom, and Node
- * dispatches a JavaScript signal handler from the event loop, which does not
- * turn until that loop has finished. Measured on the real thing: a
- * `mutate-render-guards.js` sent SIGTERM directly absorbed it for thirty
- * seconds, restored nothing, and died to SIGKILL with the file still mutated.
- * `Atomics.wait` on the main thread reproduces that exactly, and it is why
- * ending the group cannot be the whole fix.
- */
-function harnessSource(pidFile, { yields = false } = {}) {
-  const park = yields
-    ? 'setInterval(() => {}, 1000);'
-    : 'Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 600000);';
-  return `'use strict';
-const fs = require('node:fs');
-const path = require('node:path');
-const { beginMutationRun } = require(${JSON.stringify(MUTATION_RUN)});
-const root = __dirname;
-const target = path.join(root, 'src.js');
-beginMutationRun({ root, files: [target] });
-fs.writeFileSync(target, '// MUTATED BY THE HARNESS\\n');
-fs.appendFileSync(${JSON.stringify(pidFile)}, process.pid + '\\n');
-${park}
-`;
-}
-
-describe('a gate cut short leaves no mutated source and no stale marker', () => {
-  // The criterion this card was written for, end to end, and it is two cases
-  // rather than one because the harness's own restore is reachable in only one
-  // of them. Both must come out the same way: file back, record cleared,
-  // nothing running.
-
-  /** Run the gate against a stand-in harness, interrupt it mid-mutation. */
-  async function cutShort(t, opts) {
-    const file = scratch(opts.yields ? 'mutating-yields' : 'mutating-blocks');
-    const original = 'module.exports = () => 1;\n';
-    const { dir } = repoWithScripts(
-      { ...allStepsPass(), [MUTATE]: 'node harness.js' },
-      { 'harness.js': harnessSource(file, opts), 'src.js': original },
-    );
-    // Wait for the harness's own pid, which it writes only AFTER the file is
-    // mutated, so the interrupt cannot land before the window it is about.
-    const r = await gateInterruptedBy('SIGTERM', dir, file, 1);
-    t.diagnostic(`harness pid(s) once the gate had gone:\n${table(pidsIn(file))}`);
-    return {
-      out: r.out,
-      dir,
-      file,
-      original,
-      target: path.join(dir, 'src.js'),
-      marker: path.join(dir, '.mutation-run.json'),
-    };
-  }
-
-  function assertPutBack(c) {
-    // THE FILE FIRST, because it is what the card is about and because the
-    // order decides what a failure says. Asserting the process first reports a
-    // survivor, which is true and is the cause rather than the cost; the cost
-    // is a source file nobody edited quietly saying something else.
-    assert.strictEqual(fs.readFileSync(c.target, 'utf8'), c.original,
-      'the gate exited leaving a source file holding a mutation');
-    assert.strictEqual(fs.existsSync(c.marker), false,
-      `a record of a run that is over was left at ${c.marker}`);
-    assert.deepStrictEqual(pidsIn(c.file).filter(running), [],
-      'the harness outlived the gate');
-    noWarning(c.out, 'gate cut short mid-mutation');
-  }
-
-  test('a harness that can dispatch the signal restores its own file, and the gate waits for it', async (t) => {
-    // The polite path, and what the grace period buys. This harness is idle in
-    // the event loop, so the listener the envelope registered is dispatched and
-    // it puts the file back itself. A gate that SIGKILLed the group straight
-    // away would satisfy every process assertion in this file and leave the
-    // tree mutated, which is why the gate's own recovery message is asserted
-    // ABSENT here: the file being back has to be the harness's doing rather
-    // than the recovery below having quietly covered for a grace that is too
-    // short to be worth having.
-    const c = await cutShort(t, { yields: true });
-    try {
-      assertPutBack(c);
-      assert.doesNotMatch(c.out, GATE_RESTORED,
-        'the gate had to put the file back, so the harness never got to run its own '
-        + `handler and the grace bought nothing\n${c.out}`);
-    } finally {
-      reap(pidsIn(c.file));
-      cleanup(c.dir, [c.file]);
-    }
-  });
-
-  test('a harness that never yields, which is every real one, is put back by the gate', async (t) => {
-    // The real shape, and the reason ending the group is not the whole fix. A
-    // mutation harness is a synchronous loop from top to bottom, so the SIGTERM
-    // it is sent is recorded and never dispatched: measured on the real
-    // mutate-render-guards.js, which absorbed one for thirty seconds, restored
-    // nothing, and died to SIGKILL holding the file.
-    //
-    // The gate reads the record the run wrote and restores those paths from the
-    // INDEX, which is safe because a mutation run refuses to start where a file
-    // it will rewrite has unstaged changes. Without that recovery this test
-    // fails on its first assertion with the file still mutated, which is
-    // exactly what the real gate did before it existed.
-    const c = await cutShort(t, { yields: false });
-    try {
-      assertPutBack(c);
-      // Named, not merely tolerated. A tool that rewrites a file in the working
-      // tree and says nothing is one nobody can check afterwards, and this is
-      // also what tells the two cases apart: silence here would mean the
-      // stand-in had yielded after all and was not standing in for a real one.
-      assert.match(c.out, GATE_RESTORED,
-        `the gate put a file back without saying so\n${c.out}`);
-      assert.match(c.out, /\bsrc\.js\b/, `and without naming it\n${c.out}`);
-    } finally {
-      reap(pidsIn(c.file));
-      cleanup(c.dir, [c.file]);
     }
   });
 });

@@ -101,7 +101,7 @@ async function main() {
   console.log(`  Workspace:   ${workspace || '(the server default)'}`);
   console.log('');
   console.log('  This is not gated and does not need to be. Run the gate and CI');
-  console.log('  alongside, not in front: npm run precommit:detached');
+  console.log('  alongside, not in front: npm run precommit');
   console.log('');
 
   const child = spawn(process.execPath, [path.join(ROOT, 'server.js')], {

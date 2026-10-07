@@ -22,7 +22,7 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const {
   refusal, buildRecord, writeRecord, writeTreeRecord, readRecord, currentTree, defaultBranch,
-  isReleaseCommit, RELEASE_FOOTPRINT, stagedPaths, STEPS,
+  isReleaseCommit, RELEASE_FOOTPRINT, stagedPaths, STEPS, OWNED_BY_CI,
 } = require('../../scripts/precommit-gate.js');
 
 const TREE = 'a'.repeat(40);
@@ -262,9 +262,9 @@ describe('the entry points, against a throwaway repository', () => {
     // top-level catch, exit 1 with a different message, and pass every test
     // while the number the card exists to produce quietly vanished.
     //
-    // The failure is deliberately NOT the first step, so at least one earlier
-    // duration has to appear in the summary.
-    const failAt = STEPS[2].name;
+    // The failure is the LAST step, so every step before it has to appear in
+    // the summary with its duration (with one step, the list is that step).
+    const failAt = STEPS[STEPS.length - 1].name;
     const { dir } = repoWithScripts(oneStepFails(failAt));
     try {
       const { code, out } = spawnGate([], dir);
@@ -272,7 +272,7 @@ describe('the entry points, against a throwaway repository', () => {
       assert.match(out, new RegExp(`${failAt.replace(':', ':')} failed after \\d+\\.\\ds`),
         'the failing step is named with how long it took');
       assert.match(out, /Spent so far: /, 'and what had already been spent is reported');
-      for (const earlier of STEPS.slice(0, 3).map(st => st.name)) {
+      for (const earlier of STEPS.map(st => st.name)) {
         assert.ok(out.includes(`${earlier} `), `${earlier} appears in the spend list`);
       }
       assert.match(out, /\(\d+\.\ds total\)/, 'with a total');
@@ -384,6 +384,34 @@ describe('what the gate checks', () => {
       'CI no longer runs test:coverage, so the coverage floors are now enforced by nothing at all');
     assert.match(ci, /node: \['22', '24'\]/,
       'CI no longer runs the suite across the Node matrix, which is the reason the local copy was dropped');
+  });
+
+  test('every check the gate no longer runs names a CI job that exists', () => {
+    // The record's `ownedByCi` says who runs what this gate does not. A job
+    // renamed in the workflow would leave that sentence pointing at nothing,
+    // so the names are read from ci.yml itself, matrix expanded.
+    const yml = fs.readFileSync(path.join(__dirname, '..', '..', '.github', 'workflows', 'ci.yml'), 'utf8');
+    const raw = [...yml.matchAll(/^ {4}name: (.+)$/gm)].map((m) => m[1].trim());
+    const matrix = /node: \[([^\]]+)\]/.exec(yml);
+    const nodes = matrix ? matrix[1].split(',').map((v) => v.trim().replace(/'/g, '')) : [];
+    const jobs = raw.flatMap((n) => (/\$\{\{ matrix\.node \}\}/.test(n)
+      ? nodes.map((v) => n.replace(/\$\{\{ matrix\.node \}\}/, v)) : [n]));
+    assert.ok(jobs.length >= 7, `sanity: the workflow's job names were read (found ${jobs.length})`);
+    assert.ok(OWNED_BY_CI.length >= 8, 'sanity: the ownership list is populated');
+    for (const { check, jobs: owners } of OWNED_BY_CI) {
+      assert.ok(owners.length, `${check} names no owner`);
+      for (const job of owners) {
+        assert.ok(jobs.includes(job), `${check} is owned by "${job}", which is not a job in ci.yml (found: ${jobs.join(', ')})`);
+      }
+    }
+  });
+
+  test('the record names the CI owner of every check it did not run', () => {
+    const record = buildRecord({ tree: 'deadbeef', branch: 'x', at: 'now', timings: [{ step: 'preflight', ms: 1 }] });
+    assert.deepStrictEqual(record.ownedByCi, OWNED_BY_CI);
+    for (const step of STEPS) {
+      assert.ok(!record.ownedByCi.some((o) => o.check === step.name), `${step.name} runs here and is not CI's`);
+    }
   });
 
   test('every step is a script this package really has', () => {

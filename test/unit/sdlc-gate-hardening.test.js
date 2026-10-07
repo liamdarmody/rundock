@@ -118,25 +118,14 @@ describe('documented steps and uncommitted work', () => {
       assert.ok(Number.isFinite(ms) && ms > 0, `${step.name} has no ceiling, so it can hang forever`);
       assert.ok(ms <= 90 * 60 * 1000, `${step.name}'s ceiling is longer than any step should ever take`);
     }
-    // The two long steps are named explicitly rather than inheriting the
-    // default, because both legitimately exceed it and a default that had to
-    // cover them would be too loose to bound anything else.
-    assert.strictEqual(gate.ceilingFor('test:coverage'), 20 * 60 * 1000,
-      'the suite gets what CI gives the same suite');
-    assert.strictEqual(gate.ceilingFor('typecheck'), gate.DEFAULT_STEP_CEILING_MS,
-      'an ordinary step takes the default rather than a bespoke number nobody maintains');
-    // Pinned rather than left under the blanket, so raising it again is a
-    // deliberate edit here and not a quiet drift. 45 minutes was chosen when
-    // the full set was smaller; on 2026-09-21 that set ran 1707s, 2237s and
-    // 2693s and was then ended at the cap, which blocked every commit on the
-    // branch. A ceiling below the honest duration of a step does not catch a
-    // hang, it manufactures one. Raised to 90 by owner decision.
-    //
-    // The number is expected to come DOWN, by making the step cheaper rather
-    // than by raising this: the full set is only reached when the scope
-    // narrowing falls back to it, which is its own card.
-    assert.strictEqual(gate.ceilingFor('mutate:guards'), 90 * 60 * 1000,
-      'the mutation set gets a ceiling above its honest duration, and a named one');
+    // The long steps left the gate for CI, so nothing here needs more than
+    // the default, and the ninety-minute mutation ceiling went with its step.
+    for (const step of gate.STEPS) {
+      assert.strictEqual(gate.ceilingFor(step.name), gate.DEFAULT_STEP_CEILING_MS,
+        `${step.name} takes the default rather than a bespoke number nobody maintains`);
+    }
+    assert.ok(!gate.STEPS.some((s) => s.name === 'mutate:guards'),
+      'mutation testing is CI\'s, scoped and sharded there');
   });
 
   test('the destructive-command pattern bites every covered shape and no neighbour', () => {
@@ -265,6 +254,7 @@ const ENUMERATIONS = [
   { file: 'test/unit/preflight.test.js', extraction: "the extraction registry's own rows, read out of sdlc-gate-hardening.test.js to check the cheap phase covers every pinned-count suite", failLoudBy: 'count', where: 'the row count is floored before the rows are used, so a read that stops matching fails rather than proving every suite covered by finding none', anchor: "sanity: the inventory was read and has rows" },
   { file: 'test/unit/mutation-scope.test.js', extraction: "the shared modules each mutation harness requires, read out of the harness sources", failLoudBy: 'count', where: 'the collected set is floored before it is used, so a read that stops matching fails rather than proving every dependency covered by finding none', anchor: "the harnesses were read and they do share something" },
   { file: 'test/unit/release-ci.test.js', extraction: "the job names out of .github/workflows/ci.yml, with the Node matrix expanded", failLoudBy: 'count', where: 'the expanded names and the matrix are floored before each required check is looked up, so a read that stops matching fails rather than reporting every check missing from an empty list', anchor: "sanity: the workflow's job names were read" },
+  { file: 'test/unit/precommit-gate.test.js', extraction: "the job names out of .github/workflows/ci.yml, with the Node matrix expanded, to check every CI owner the gate record names", failLoudBy: 'count', where: 'the expanded names and the ownership list are floored before any owner is looked up, so a read that stops matching fails rather than reporting every owner missing from an empty list', anchor: "sanity: the workflow's job names were read" },
   { file: 'test/unit/doc-links.test.js', extraction: 'relative markdown links across the docs', failLoudBy: 'count', where: 'checked-links floor beside the scan', anchor: 'checked >=' },
   { file: 'test/unit/navigation-doors.test.js', extraction: 'inline handlers and call sites out of index.html and the client', failLoudBy: 'count', where: 'manifest equality over the collected sites', anchor: 'DESTINATIONS.map(d => d.site).sort()' },
   { file: 'test/unit/collision-decisions.test.js', extraction: "reason literals out of import-evaluate.js and its blocked-array construction, the classes reviewRowClass returns out of packages-install-model.js, and the review card's rules out of settings.css", failLoudBy: 'count', where: 'each parse is floored (reasons >= 4, rules > 10) or held to exact set equality (the blocked-array reasons, the returned classes, the danger selectors), and every slice is asserted non-empty before it is read, so a pattern or marker that stops matching fails naming itself rather than agreeing with an empty list', anchor: 'an empty read here is a broken instrument' },

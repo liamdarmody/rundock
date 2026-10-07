@@ -163,6 +163,7 @@ const NOT_CHEAP = {
   'test/unit/style-resolve-diff.test.js': 'deliberately not wired into the gate at all, so the cheap phase '
     + 'is not where it starts running',
   'test/unit/guide-name.test.js': 'behaviour: resolves the workspace guide by type against real agent files',
+  'test/unit/precommit-gate.test.js': 'behaviour: runs the real gate against throwaway repositories. It reads the CI job names to check the owners its record names, which is why the inventory names it, but the read serves that one check',
   // THE PHASE CANNOT CHECK ITSELF FROM INSIDE ITSELF. This suite reads the
   // inventory to prove the list below is complete; running it inside the very
   // phase it audits would mean a failure there reported by the thing it is

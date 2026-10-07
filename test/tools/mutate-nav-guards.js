@@ -280,8 +280,15 @@ function report(results, markdown) {
   return failed;
 }
 
-const failed = report(run(), process.argv.includes('--markdown'));
-if (failed) {
-  console.error(`\n${failed} mutation${failed === 1 ? '' : 's'} turned nothing red, or could not be applied.`);
-  process.exit(1);
+// ONLY WHEN RUN, NEVER WHEN LOADED. The scope reads every harness's rows by
+// requiring it, so a harness that ran on require would start mutating source
+// inside a tool that only asked what it touches.
+if (require.main === module) {
+  const failed = report(run(), process.argv.includes('--markdown'));
+  if (failed) {
+    console.error(`\n${failed} mutation${failed === 1 ? '' : 's'} turned nothing red, or could not be applied.`);
+    process.exit(1);
+  }
 }
+
+module.exports = { MUTATIONS, run };

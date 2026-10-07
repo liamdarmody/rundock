@@ -259,33 +259,32 @@ describe('the registry suites actually run, and a broken one is reported', () =>
 });
 
 describe('the gate runs it first', () => {
-  test('preflight is the first step, ahead of every expensive one', () => {
+  test('preflight is the first step, and the only one: everything slower is CI\'s', () => {
     // The ordering is the point. A cheap phase that ran after the suite would
-    // report the same things at the same cost as before.
+    // report the same things at the same cost as before. The suite, the type
+    // check, the linters and the mutation harnesses all left the local gate:
+    // CI runs each on a clean machine and is the only copy that can block a
+    // merge, and the record names which CI job owns each one.
     const { STEPS } = require('../../scripts/precommit-gate.js');
     const names = STEPS.map(s => s.name);
     assert.strictEqual(names[0], 'preflight', 'the cheap phase leads');
-    // The suite left the local gate on purpose (CI runs it on two Node
-    // versions and owns the coverage floors), so the one expensive step
-    // left is the mutation guards.
-    for (const slow of ['mutate:guards']) {
-      assert.ok(names.indexOf(slow) > 0, `${slow} is in the list`);
-      assert.ok(names.indexOf(slow) > names.indexOf('preflight'),
-        `${slow} must run after the cheap phase, or nothing was gained`);
+    for (const gone of ['test:coverage', 'mutate:guards', 'typecheck', 'check:fixture']) {
+      assert.ok(!names.includes(gone), `${gone} is CI's to run, not the local gate's`);
     }
-    assert.ok(!names.includes('test:coverage'), 'the suite is CI\'s to run, not the local gate\'s');
   });
 
-  test('reordering removed no step: the whole set is pinned, not just the order', () => {
-    // The ordering assertions above name three steps, so deleting any of the
-    // others would have passed every one of them. What this change was allowed
-    // to do is change WHEN checks run; removing one is a different act entirely
-    // and it must not be possible to do it by accident here.
-    const { STEPS } = require('../../scripts/precommit-gate.js');
-    assert.deepStrictEqual(STEPS.map(s2 => s2.name), [
-      'preflight', 'typecheck', 'lint:styles', 'check:refs',
-      'mutate:guards', 'check:fixture',
-    ], 'every check that ran before still runs; changing this set is a deliberate edit');
+  test('the step set is pinned, and every check that left it has a named CI owner', () => {
+    // Removing a step is a different act from reordering one, and it must not
+    // be possible to do it by accident: the set is pinned, and a check that
+    // left it is accounted for in OWNED_BY_CI rather than simply gone.
+    const { STEPS, OWNED_BY_CI } = require('../../scripts/precommit-gate.js');
+    assert.deepStrictEqual(STEPS.map(s2 => s2.name), ['preflight'],
+      'changing this set is a deliberate edit');
+    const owned = OWNED_BY_CI.map(o => o.check);
+    for (const left of ['typecheck', 'lint:styles', 'check:refs', 'mutate:guards', 'check:fixture',
+      'test', 'test:coverage', 'test:e2e']) {
+      assert.ok(owned.includes(left), `${left} left the gate and names no CI job that owns it`);
+    }
   });
 
   test('the real loop times each step and hands those timings to the record', async () => {
@@ -316,7 +315,7 @@ describe('the gate runs it first', () => {
     // being lost. The merge that brought the ceilings in did not carry this
     // through, and a textual merge would not have noticed.
     const { runSteps, ceilingFor, DEFAULT_STEP_CEILING_MS } = require('../../scripts/precommit-gate.js');
-    assert.strictEqual(typeof ceilingFor('typecheck'), 'number', 'every step has a ceiling');
+    assert.strictEqual(typeof ceilingFor('preflight'), 'number', 'every step has a ceiling');
     assert.strictEqual(ceilingFor('a step nobody declared'), DEFAULT_STEP_CEILING_MS,
       'and an undeclared one inherits the default rather than running unbounded');
     const outcome = await runSteps({
@@ -352,9 +351,9 @@ describe('the gate runs it first', () => {
     const { buildRecord } = require('../../scripts/precommit-gate.js');
     const record = buildRecord({
       tree: 'deadbeef', branch: 'main', at: new Date().toISOString(),
-      timings: [{ step: 'preflight', ms: 2400 }, { step: 'mutate:guards', ms: 1500000 }],
+      timings: [{ step: 'preflight', ms: 2400 }, { step: 'red-first', ms: 1500000 }],
     });
-    assert.deepStrictEqual(record.timings.map(t => t.step), ['preflight', 'mutate:guards']);
+    assert.deepStrictEqual(record.timings.map(t => t.step), ['preflight', 'red-first']);
     assert.strictEqual(record.totalMs, 1502400, 'and the total, so two runs can be compared directly');
   });
 
