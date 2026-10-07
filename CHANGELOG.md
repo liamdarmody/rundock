@@ -4,6 +4,12 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
+## Unreleased
+
+### Fixed
+
+- **An agent stops and asks after a refusal:** when you denied a permission card, left one unanswered, or the sandbox blocked a command, the agent often tried another way round it, raising another card or hitting another block each time, and each attempt used your credits. An unanswered card even told it to try again. Now the agent is told in that same step that the refusal was deliberate, and to stop and ask you what to do. This applies to Claude Code agents, and to Codex agents refused at a card; an older Codex that can't be told mid-turn hears it at the start of its next turn.
+
 ## 0.15.4: Safer, With Less Friction (2026-10-07)
 
 Only Rundock's own window can now drive Rundock: answer your permission cards, change your settings, or read and write your files through it. The desktop app looks and works exactly as before. Running from source, you open Rundock once per browser from the link it prints in the terminal.
