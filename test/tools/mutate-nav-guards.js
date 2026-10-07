@@ -37,7 +37,9 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
-const { beginMutationRun } = require('./mutation-run.js');
+const {
+  beginMutationRun, targetsFromRows, rowsForShard, exitCodeFor,
+} = require('./mutation-run.js');
 
 const ROOT = path.join(__dirname, '..', '..');
 
@@ -203,13 +205,13 @@ function redTests(suite) {
 }
 
 function run() {
-  const targets = [APP, INDEX, ROUTINE_EDITOR, SKILLS, FILES, RUN_DETAIL];
+  const targets = targetsFromRows(MUTATIONS);
   const session = beginMutationRun({ files: targets.map((target) => target.src) });
   const originals = new Map();
   for (const target of targets) originals.set(target, session.original(target.src));
   const results = [];
   try {
-    for (const [target, label, guard, without] of MUTATIONS) {
+    for (const [target, label, guard, without] of rowsForShard(MUTATIONS)) {
       const original = originals.get(target);
       const matches = original.split(guard).length - 1;
       if (matches === 0) {
@@ -284,10 +286,11 @@ function report(results, markdown) {
 // requiring it, so a harness that ran on require would start mutating source
 // inside a tool that only asked what it touches.
 if (require.main === module) {
-  const failed = report(run(), process.argv.includes('--markdown'));
+  const results = run();
+  const failed = report(results, process.argv.includes('--markdown'));
   if (failed) {
     console.error(`\n${failed} mutation${failed === 1 ? '' : 's'} turned nothing red, or could not be applied.`);
-    process.exit(1);
+    process.exit(exitCodeFor(failed, results));
   }
 }
 

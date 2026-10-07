@@ -30,11 +30,15 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const os = require('node:os');
 const { preflight } = require('../helpers/temp-root.js');
-const { beginMutationRun } = require('./mutation-run.js');
+const {
+  beginMutationRun, targetsFromRows, rowsForShard, exitCodeFor, NO_VERDICT,
+} = require('./mutation-run.js');
 
 const ROOT = path.join(__dirname, '..', '..');
 const SRC = path.join(ROOT, 'public', 'markdown-render.js');
 const SUITE = 'test/unit/markdown-render.test.js';
+// The one target every row breaks, named for the scope that reads the rows.
+const TARGET = { src: SRC, suite: SUITE };
 
 // [label, the guard as it is written, what it becomes without it]
 const MUTATIONS = [
@@ -128,11 +132,11 @@ function redTests() {
 }
 
 function run() {
-  const session = beginMutationRun({ files: [SRC] });
+  const session = beginMutationRun({ files: targetsFromRows(MUTATIONS, { fallback: TARGET }).map((t) => t.src) });
   const original = session.original(SRC);
   const results = [];
   try {
-    for (const [label, guard, without] of MUTATIONS) {
+    for (const [label, guard, without] of rowsForShard(MUTATIONS)) {
       if (!original.includes(guard)) {
         results.push({ label, applied: false, red: [] });
         continue;
@@ -204,7 +208,7 @@ function requireSaneTempRoot() {
   const verdict = preflight(os.tmpdir());
   if (verdict.ok) return;
   console.error(verdict.message);
-  process.exit(2);
+  process.exit(NO_VERDICT);
 }
 
 if (require.main === module) {
@@ -216,11 +220,12 @@ if (require.main === module) {
   // source file mutated on every red run. The flag is read after the check, so
   // deleting the check still fails that test rather than passing it.
   if (process.argv.includes('--preflight-only')) process.exit(0);
-  const failed = report(run(), process.argv.includes('--markdown'));
+  const results = run();
+  const failed = report(results, process.argv.includes('--markdown'));
   if (failed) {
     console.error(`\n${failed} mutation(s) proved nothing. A guard no test notices is not guarded.`);
-    process.exit(1);
+    process.exit(exitCodeFor(failed, results));
   }
 }
 
-module.exports = { MUTATIONS, run };
+module.exports = { MUTATIONS, TARGET, run };

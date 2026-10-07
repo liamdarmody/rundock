@@ -92,9 +92,7 @@ test('every row names a suite that exists, and a real-engine row names a test th
   }
 });
 
-test('the harness is wired into the chain the gate runs, and the gate\'s selector sees it', () => {
-  const chain = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).scripts['mutate:guards:all'];
-  assert.ok(chain.includes(`node ${HARNESS}`), 'mutate:guards:all does not run the Rundock UI harness');
+test('the gate\'s selector sees the harness, which is what puts it in every full sweep', () => {
   const { harnessFiles } = require(path.join(ROOT, 'scripts', 'mutation-scope.js'));
   assert.ok(harnessFiles(path.join(ROOT, 'test', 'tools')).includes(path.basename(HARNESS)), 'the gate\'s harness selector does not discover it');
 });

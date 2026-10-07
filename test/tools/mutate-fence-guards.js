@@ -54,7 +54,9 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const os = require('node:os');
 const { preflight } = require('../helpers/temp-root.js');
-const { beginMutationRun } = require('./mutation-run.js');
+const {
+  beginMutationRun, targetsFromRows, rowsForShard, exitCodeFor, NO_VERDICT,
+} = require('./mutation-run.js');
 
 const ROOT = path.join(__dirname, '..', '..');
 
@@ -164,13 +166,13 @@ function redTests(suite) {
 }
 
 function run() {
-  const targets = [...new Set(MUTATIONS.map(([target]) => target.src))];
+  const targets = [...new Set(targetsFromRows(MUTATIONS).map((target) => target.src))];
   const session = beginMutationRun({ files: targets });
   const originals = new Map();
   for (const src of targets) originals.set(src, session.original(src));
   const results = [];
   try {
-    for (const [target, label, guard, without] of MUTATIONS) {
+    for (const [target, label, guard, without] of rowsForShard(MUTATIONS)) {
       const original = originals.get(target.src);
       const matches = original.split(guard).length - 1;
       if (matches === 0) {
@@ -259,14 +261,15 @@ function requireSaneTempRoot() {
   const verdict = preflight(os.tmpdir());
   if (verdict.ok) return;
   console.error(verdict.message);
-  process.exit(2);
+  process.exit(NO_VERDICT);
 }
 
 if (require.main === module) {
   requireSaneTempRoot();
   const markdown = process.argv.includes('--markdown');
-  const failed = report(run(), markdown);
-  process.exit(failed ? 1 : 0);
+  const results = run();
+  const failed = report(results, markdown);
+  process.exit(exitCodeFor(failed, results));
 }
 
 module.exports = { MUTATIONS, NOT_MUTATED, run, report };

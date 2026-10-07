@@ -430,15 +430,14 @@ const HARNESSES = fs.readdirSync(path.join(ROOT, 'test', 'tools'))
   .map(f => `test/tools/${f}`)
   .sort();
 
-// The harness scripts the gate actually runs, parsed out of the chain that
-// runs them. This is the second source the discovered set is judged against.
-// The full chain moved to `mutate:guards:all` when the gate's own step became
-// a SELECTOR rather than the chain itself: the gate now runs the harnesses a
-// change can affect and names the rest. The chain is still the roll of every
-// harness there is, so it is still what disk is bound against, and the selector
-// is bound to the same set below: a harness missing from any of the three is a
-// harness that never runs and nothing says so.
-const CHAIN_HARNESSES = (JSON.parse(read('package.json')).scripts['mutate:guards:all'].match(/test\/tools\/[\w-]+\.js/g) || []).sort();
+// THE ROLL IS THE DIRECTORY. A hand-kept chain of every harness used to sit in
+// package.json beside this list, so adding a harness meant editing two places
+// and forgetting one meant a harness that never ran. The selector, CI and the
+// nightly sweep (`mutation-scope.js --all`) all discover harnesses from
+// test/tools/ now, so what is bound below is that the selector sees exactly
+// what is on disk, and that nothing runs a list of its own instead.
+const DISCOVERED_HARNESSES = require('../../scripts/mutation-scope.js')
+  .harnessFiles(path.join(ROOT, 'test', 'tools')).map(f => `test/tools/${f}`).sort();
 
 // EVERY claim below is generated per harness, so a short or empty list would
 // register fewer tests and pass having proven nothing, which is the exact
@@ -449,10 +448,9 @@ const CHAIN_HARNESSES = (JSON.parse(read('package.json')).scripts['mutate:guards
 // harness.
 assert.ok(HARNESSES.length >= 14,
   `only ${HARNESSES.length} mutation harnesses discovered; the pattern or the directory walk has gone blind`);
-assert.deepStrictEqual(HARNESSES, CHAIN_HARNESSES,
-  'the harnesses on disk and the harnesses the mutate:guards chain runs must be the same set, in both '
-  + 'directions: one on disk but unwired never runs, and one wired but undiscovered here escapes every '
-  + 'uniformity proof below');
+assert.deepStrictEqual(HARNESSES, DISCOVERED_HARNESSES,
+  'the harnesses on disk and the harnesses the selector discovers must be the same set: one on disk '
+  + 'but undiscovered never runs, and every uniformity proof below is generated from this list');
 
 // The redTests copy in each harness, cut out and built with its dependencies
 // stubbed, so the parser can be fed output it cannot read without running a
@@ -545,25 +543,26 @@ describe('a mutation result that cannot be parsed is a refusal, not a crash', ()
     });
   }
 
-  test('the scoped selector discovers every harness the chain runs, both ways', () => {
-    // THE THIRD SIDE OF THE BINDING, added when the gate stopped running the
-    // chain directly. Disk and the chain agreeing is no longer enough: the
-    // gate's mutation step now asks a selector which harnesses a change needs,
-    // so a harness the selector cannot see is one that never runs locally, and
-    // CI runs only one harness, so nothing else would notice.
-    const { harnessFiles } = require('../../scripts/mutation-scope.js');
-    const discovered = harnessFiles(path.join(__dirname, '..', 'tools'))
-      .map(n => `test/tools/${n}`).sort();
-    assert.deepStrictEqual(discovered, CHAIN_HARNESSES,
-      'the selector sees exactly the harnesses the chain runs, in both directions');
+  test('the scoped selector discovers every harness on disk, both ways', () => {
+    assert.deepStrictEqual(DISCOVERED_HARNESSES, HARNESSES,
+      'the selector sees exactly the harnesses on disk, in both directions');
+    assert.ok(HARNESSES.length >= 14, 'the harness floor moved without this file learning why');
   });
 
-  test('the discovered harnesses and the mutate:guards chain are one set, both ways', () => {
-    // Restated as a test for the reader; the load-time assertion above is
-    // what guarantees the per-harness tests cannot silently number zero.
-    assert.deepStrictEqual(HARNESSES, CHAIN_HARNESSES,
-      'a harness on disk but unwired never runs; one wired but undiscovered escapes the uniformity proofs');
-    assert.ok(HARNESSES.length >= 14, 'the harness floor moved without this file learning why');
+  test('no second roll of harnesses exists to drift from the directory', () => {
+    // Adding a harness touches only the harness. The old chain in
+    // package.json is gone, and the nightly sweep asks the selector for
+    // every harness rather than naming them.
+    const pkg = JSON.parse(read('package.json'));
+    assert.strictEqual(pkg.scripts['mutate:guards:all'], undefined,
+      'a hand-kept chain of harnesses is back in package.json');
+    for (const [name, cmd] of Object.entries(pkg.scripts)) {
+      assert.doesNotMatch(cmd, /test\/tools\/mutate-[\w-]+-guards\.js/,
+        `package.json script ${name} names a harness by hand`);
+    }
+    const nightly = read('.github', 'workflows', 'mutation-nightly.yml');
+    assert.match(nightly, /node scripts\/mutation-scope\.js --all/,
+      'the nightly sweep no longer asks the selector for every harness');
   });
 });
 
