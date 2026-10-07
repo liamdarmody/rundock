@@ -1,0 +1,193 @@
+{
+  "source": "recorded from a real CI run of this repository; a mutation shard's runner was shut down mid-step, the job ended failure, and its only failure annotation is the bare cancellation (the shutdown line is in its log, recorded beside this as runner-lost-canceled-only.txt)",
+  "run": {
+    "conclusion": "failure",
+    "event": "pull_request",
+    "head_branch": "fix/stop-and-ask",
+    "id": 37700068117,
+    "run_attempt": 1
+  },
+  "jobs": [
+    {
+      "conclusion": "success",
+      "id": 113061127923,
+      "name": "Hygiene (internal references, style drift)",
+      "status": "completed"
+    },
+    {
+      "conclusion": "success",
+      "id": 113061128130,
+      "name": "Coverage floors",
+      "status": "completed"
+    },
+    {
+      "conclusion": "success",
+      "id": 113061128182,
+      "name": "Typecheck (JSDoc + checkJs)",
+      "status": "completed"
+    },
+    {
+      "conclusion": "success",
+      "id": 113061128228,
+      "name": "Test (Node 22)",
+      "status": "completed"
+    },
+    {
+      "conclusion": "success",
+      "id": 113061128232,
+      "name": "Mutation plan",
+      "status": "completed"
+    },
+    {
+      "conclusion": "success",
+      "id": 113061128235,
+      "name": "E2E",
+      "status": "completed"
+    },
+    {
+      "conclusion": "success",
+      "id": 113061128338,
+      "name": "Test (Node 24)",
+      "status": "completed"
+    },
+    {
+      "conclusion": "success",
+      "id": 113061245615,
+      "name": "Mutation shard 3",
+      "status": "completed"
+    },
+    {
+      "conclusion": "success",
+      "id": 113061245646,
+      "name": "Mutation shard 1",
+      "status": "completed"
+    },
+    {
+      "conclusion": "failure",
+      "id": 113061245770,
+      "name": "Mutation shard 2",
+      "status": "completed",
+      "steps": [
+        {
+          "name": "Set up job",
+          "conclusion": "success"
+        },
+        {
+          "name": "Checkout",
+          "conclusion": "success"
+        },
+        {
+          "name": "Set up Node 24",
+          "conclusion": "success"
+        },
+        {
+          "name": "Install runtime dependencies",
+          "conclusion": "success"
+        },
+        {
+          "name": "Install test-only DOM dependency",
+          "conclusion": "success"
+        },
+        {
+          "name": "Fetch the plan",
+          "conclusion": "success"
+        },
+        {
+          "name": "Remove each guard in this shard, and require a red test",
+          "conclusion": "cancelled"
+        },
+        {
+          "name": "Fail if any tool left a file modified",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Keep this shard's verdict, whether it passed or not",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Post Set up Node 24",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Post Checkout",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Complete job",
+          "conclusion": "success"
+        }
+      ]
+    },
+    {
+      "conclusion": "failure",
+      "id": 113064824761,
+      "name": "Mutation guards",
+      "status": "completed",
+      "steps": [
+        {
+          "name": "Set up job",
+          "conclusion": "success"
+        },
+        {
+          "name": "Checkout",
+          "conclusion": "success"
+        },
+        {
+          "name": "Set up Node 24",
+          "conclusion": "success"
+        },
+        {
+          "name": "Fetch the plan and every verdict",
+          "conclusion": "success"
+        },
+        {
+          "name": "One outcome from every shard",
+          "conclusion": "failure"
+        },
+        {
+          "name": "Post Set up Node 24",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Post Checkout",
+          "conclusion": "success"
+        },
+        {
+          "name": "Complete job",
+          "conclusion": "success"
+        }
+      ]
+    }
+  ],
+  "annotations": {
+    "113061245770": [
+      {
+        "annotation_level": "failure",
+        "title": "",
+        "message": "The operation was canceled."
+      },
+      {
+        "annotation_level": "notice",
+        "title": "",
+        "message": "\"The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748\""
+      }
+    ],
+    "113064824761": [
+      {
+        "annotation_level": "failure",
+        "title": "",
+        "message": "Process completed with exit code 3."
+      },
+      {
+        "annotation_level": "failure",
+        "title": "No verdict: shard 2 wrote no verdict (it died, was cancelled or timed out)",
+        "message": "shard 2 wrote no verdict (it died, was cancelled or timed out)"
+      },
+      {
+        "annotation_level": "notice",
+        "title": "",
+        "message": "\"The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748\""
+      }
+    ]
+  }
+}
