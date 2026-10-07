@@ -16,7 +16,7 @@ const { execFileSync, spawnSync } = require('node:child_process');
 const {
   harnessFiles, loadHarnesses, pathReferences, makeReaderIndex, selectHarnesses, resolveBase,
   changedFiles, dependencyChangeIn, planShards, outcomeOf, combine, aggregate, decide, buildPlan,
-  RUN_EVERYTHING_WHEN_TOUCHED, ROWS_PER_SHARD, MAX_SHARDS, PASS, FAIL, NO_VERDICT,
+  RUN_EVERYTHING_WHEN_TOUCHED, SECONDS_PER_SHARD, MAX_SHARDS, readCosts, PASS, FAIL, NO_VERDICT,
 } = require('../../scripts/mutation-scope.js');
 
 const REPO = path.join(__dirname, '..', '..');
@@ -265,20 +265,29 @@ describe('the base is the merge base, and a merge of main re-tests only the bran
   });
 });
 
-describe('shards', () => {
+describe('shards are planned by time, not rows', () => {
   const h = (tool, rows) => ({ tool, rows });
+  const costs = { perRow: { slow: 10, fast: 0.5 }, fallback: 5 };
 
-  test('a single scoped harness within budget is one shard', () => {
-    const { shards } = planShards([h('mutate-x-guards.js', 58)]);
+  test('a single scoped harness within the target is one shard', () => {
+    const { shards } = planShards([h('fast', 58)], { costs });
     assert.strictEqual(shards.length, 1);
-    assert.deepStrictEqual(shards[0].units, [{ tool: 'mutate-x-guards.js', rows: 58 }]);
+    assert.deepStrictEqual(shards[0].units, [{ tool: 'fast', rows: 58, seconds: 29 }]);
   });
 
-  test('every row lands in exactly one shard, and no shard is far over budget', () => {
-    const hs = [h('a', 271), h('b', 262), h('c', 217), h('d', 127), h('e', 95), h('f', 81), h('g', 66),
-      h('h', 58), h('i', 57), h('j', 42), h('k', 41), h('l', 34), h('m', 30), h('n', 23)];
-    const { shards, total } = planShards(hs);
-    assert.strictEqual(shards.length, Math.ceil(total / ROWS_PER_SHARD));
+  test('a slow harness is split by its time, and equal rows are not equal shards', () => {
+    // 120 slow rows are twenty minutes; 120 fast rows are one. By rows they
+    // would share evenly and the slow half would sit at its job's limit.
+    const { shards, seconds } = planShards([h('slow', 120), h('fast', 120)], { costs });
+    assert.strictEqual(seconds, 1260);
+    assert.strictEqual(shards.length, Math.ceil(1260 / SECONDS_PER_SHARD));
+    assert.ok(shards.filter((s) => s.units.some((u) => u.tool === 'slow')).length >= 2, 'the slow harness is split');
+    for (const s of shards) assert.ok(s.seconds <= SECONDS_PER_SHARD * 1.1, `shard ${s.index} is planned at ${s.seconds}s`);
+  });
+
+  test('every row lands in exactly one shard', () => {
+    const hs = [h('slow', 271), h('fast', 262), h('unmeasured', 217), h('a', 127), h('b', 95), h('c', 58)];
+    const { shards } = planShards(hs, { costs });
     for (const t of hs) {
       const covered = [];
       for (const s of shards) for (const u of s.units) if (u.tool === t.tool) {
@@ -286,14 +295,33 @@ describe('shards', () => {
       }
       assert.deepStrictEqual(covered.sort((x, y) => x - y), [...Array(t.rows).keys()], `${t.tool} rows covered once`);
     }
-    for (const s of shards) assert.ok(s.rows <= ROWS_PER_SHARD * 1.25, `shard ${s.index} carries ${s.rows} rows`);
   });
 
   test('the shard count is capped, and the plan is the same every time', () => {
     const many = Array.from({ length: 30 }, (_, i) => h(`t${i}`, 150));
-    const a = planShards(many);
+    const a = planShards(many, { costs });
     assert.strictEqual(a.shards.length, MAX_SHARDS);
-    assert.deepStrictEqual(planShards(many), a);
+    assert.deepStrictEqual(planShards(many, { costs }), a);
+  });
+
+  test('the committed cost table is well formed, and names only harnesses that exist', () => {
+    // A harness missing from the table is planned at the default, so adding a
+    // harness still touches only the harness; a stale entry is flagged here.
+    const tools = path.join(REPO, 'test', 'tools');
+    const c = readCosts(tools);
+    assert.ok(c.fallback > 0);
+    const names = Object.keys(c.perRow);
+    assert.ok(names.length >= 14, `sanity: the table was read (${names.length} entries)`);
+    for (const [tool, rate] of Object.entries(c.perRow)) {
+      assert.ok(harnessFiles(tools).includes(tool), `${tool} is in the cost table but not on disk`);
+      assert.ok(Number(rate) > 0, `${tool} has no positive cost`);
+    }
+  });
+
+  test('the full set, planned with the real costs, keeps every shard well under its limit', () => {
+    const tools = path.join(REPO, 'test', 'tools');
+    const plan = buildPlan(decide(['--all'], { root: REPO, toolsDir: tools }), { toolsDir: tools });
+    for (const s of plan.shards) assert.ok(s.seconds <= 15 * 60, `shard ${s.index} is planned at ${s.seconds}s`);
   });
 });
 

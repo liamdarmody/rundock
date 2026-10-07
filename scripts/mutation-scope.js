@@ -71,10 +71,28 @@ const RUN_EVERYTHING_WHEN_TOUCHED = [
 const DEPENDENCY_MANIFESTS = ['package.json', 'package-lock.json'];
 const DEPENDENCY_KEYS = ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies'];
 
-// Shards: rows per shard and the most shards a run may use. At roughly three
-// seconds a row, 200 rows is about ten minutes, a third of a shard's cap.
-const ROWS_PER_SHARD = 200;
+// Shards are planned by TIME, not rows. Harnesses differ by more than ten
+// times in seconds per row (a row that boots a document and mounts frames is
+// not a row that grades a string), so equal row counts put one shard at its
+// thirty-minute limit while others finished in four. Each harness is weighted
+// by its measured seconds per row (test/tools/mutation-costs.json), and a
+// shard is planned at ten minutes, so a slice whose rows run slower than its
+// harness's average still lands well under fifteen.
+const SECONDS_PER_SHARD = 600;
 const MAX_SHARDS = 10;
+const COSTS_FILE = 'mutation-costs.json';
+const FALLBACK_SECONDS_PER_ROW = 5;
+
+/** Seconds per row for each harness, and the default for one not measured. */
+function readCosts(toolsDir = TOOLS) {
+  try {
+    const doc = JSON.parse(fs.readFileSync(path.join(toolsDir, COSTS_FILE), 'utf8'));
+    const fallback = Number(doc.defaultSecondsPerRow) > 0 ? Number(doc.defaultSecondsPerRow) : FALLBACK_SECONDS_PER_ROW;
+    return { perRow: doc.secondsPerRow || {}, fallback };
+  } catch {
+    return { perRow: {}, fallback: FALLBACK_SECONDS_PER_ROW };
+  }
+}
 
 const rel = (root, abs) => path.relative(root, abs).split(path.sep).join('/');
 const suiteFile = (suite) => String(suite).split('#')[0];
@@ -359,38 +377,48 @@ function dependencyChangeIn(changed, { root = ROOT, base, head = null, git = git
 // ---------------------------------------------------------------------------
 
 /**
- * Pack the selected harnesses into shards.
+ * Pack the selected harnesses into shards, by estimated time.
  *
- * The unit of work is a harness, or a slice of rows within a harness too big
- * for one shard. The shard count is the row total over the budget, capped;
- * units are placed largest first onto the least-loaded shard. Deterministic,
- * so a shard can be recomputed anywhere from the same selection.
+ * Each harness costs its rows times its measured seconds per row. The unit of
+ * work is a harness, or a slice of rows within a harness too slow for one
+ * shard. The shard count is the estimated total over the per-shard target,
+ * capped; units are placed slowest first onto the least-loaded shard.
+ * Deterministic, so a shard can be recomputed anywhere from the same
+ * selection and cost table.
  */
-function planShards(harnesses, { budget = ROWS_PER_SHARD, maxShards = MAX_SHARDS } = {}) {
-  const items = harnesses.map((h) => ({ tool: h.tool, rows: h.rows }));
-  const total = items.reduce((n, h) => n + (h.rows || 0), 0);
-  if (!items.length) return { shards: [], total: 0 };
-  const count = Math.max(1, Math.min(maxShards, Math.ceil(total / budget)));
-  const cap = Math.max(budget, Math.ceil(total / count));
+function planShards(harnesses, { costs = { perRow: {}, fallback: FALLBACK_SECONDS_PER_ROW }, target = SECONDS_PER_SHARD, maxShards = MAX_SHARDS } = {}) {
+  const rate = (tool) => {
+    const r = Number(costs.perRow && costs.perRow[tool]);
+    return r > 0 ? r : costs.fallback;
+  };
+  const items = harnesses.map((h) => ({ tool: h.tool, rows: h.rows || 0, perRow: rate(h.tool) }));
+  const total = items.reduce((n, h) => n + h.rows, 0);
+  const seconds = items.reduce((n, h) => n + h.rows * h.perRow, 0);
+  if (!items.length) return { shards: [], total: 0, seconds: 0 };
+  const count = Math.max(1, Math.min(maxShards, Math.ceil(seconds / target)));
+  const cap = Math.max(target, seconds / count);
+  const round = (n) => Math.round(n);
   const units = [];
   for (const h of items) {
-    if (!h.rows || h.rows <= cap) { units.push({ tool: h.tool, rows: h.rows || 0 }); continue; }
-    const pieces = Math.ceil(h.rows / cap);
+    const est = h.rows * h.perRow;
+    if (!h.rows || est <= cap) { units.push({ tool: h.tool, rows: h.rows, seconds: round(est) }); continue; }
+    const pieces = Math.ceil(est / cap);
     const size = Math.ceil(h.rows / pieces);
     for (let start = 0; start < h.rows; start += size) {
       const end = Math.min(h.rows, start + size);
-      units.push({ tool: h.tool, start, end, rows: end - start });
+      units.push({ tool: h.tool, start, end, rows: end - start, seconds: round((end - start) * h.perRow) });
     }
   }
-  units.sort((a, b) => b.rows - a.rows || a.tool.localeCompare(b.tool) || (a.start || 0) - (b.start || 0));
-  const shards = Array.from({ length: count }, (_, i) => ({ index: i + 1, rows: 0, units: [] }));
+  units.sort((a, b) => b.seconds - a.seconds || a.tool.localeCompare(b.tool) || (a.start || 0) - (b.start || 0));
+  const shards = Array.from({ length: count }, (_, i) => ({ index: i + 1, rows: 0, seconds: 0, units: [] }));
   for (const u of units) {
-    const target = shards.reduce((lo, s) => (s.rows < lo.rows ? s : lo), shards[0]);
-    target.units.push(u);
-    target.rows += u.rows;
+    const lightest = shards.reduce((lo, s) => (s.seconds < lo.seconds ? s : lo), shards[0]);
+    lightest.units.push(u);
+    lightest.rows += u.rows;
+    lightest.seconds += u.seconds;
   }
   const used = shards.filter((s) => s.units.length).map((s, i) => ({ ...s, index: i + 1 }));
-  return { shards: used, total };
+  return { shards: used, total, seconds: round(seconds) };
 }
 
 function planId(shards) {
@@ -493,9 +521,9 @@ function decide(argv, { root = ROOT, toolsDir = TOOLS } = {}) {
   return { harnesses, selection, base: resolved.base, changed };
 }
 
-function buildPlan(decision) {
+function buildPlan(decision, { toolsDir = TOOLS } = {}) {
   const chosen = decision.harnesses.filter((h) => decision.selection.run.includes(h.tool));
-  const { shards, total } = planShards(chosen);
+  const { shards, total } = planShards(chosen, { costs: readCosts(toolsDir) });
   return {
     id: planId(shards),
     base: decision.base,
@@ -508,11 +536,15 @@ function buildPlan(decision) {
   };
 }
 
+function minutes(seconds) {
+  return `${(Number(seconds || 0) / 60).toFixed(1)} min`;
+}
+
 function explain(plan, harnessCount) {
   const lines = [`[mutation-scope] ${plan.run.length} of ${harnessCount} harnesses, ${plan.rows} rows, ${plan.shards.length} shard(s): ${plan.reason}`];
   for (const tool of plan.run) lines.push(`[mutation-scope] run ${tool}${plan.why[tool] ? `: ${plan.why[tool]}` : ''}`);
   for (const s of plan.skipped) lines.push(`[mutation-scope] skipped ${s.tool}: ${s.reason}`);
-  for (const s of plan.shards) lines.push(`[mutation-scope] shard ${s.index}: ${s.rows} rows: ${s.units.map(unitLabel).join(', ')}`);
+  for (const s of plan.shards) lines.push(`[mutation-scope] shard ${s.index}: ${s.rows} rows, about ${minutes(s.seconds)}: ${s.units.map(unitLabel).join(', ')}`);
   return lines.join('\n');
 }
 
@@ -523,7 +555,7 @@ function summaryMarkdown(plan) {
     for (const tool of plan.run) out.push(`| ${tool} | ${plan.why[tool] || plan.reason} |`);
     out.push('');
   }
-  for (const s of plan.shards) out.push(`- Shard ${s.index}: ${s.rows} rows: ${s.units.map(unitLabel).join(', ')}`);
+  for (const s of plan.shards) out.push(`- Shard ${s.index}: ${s.rows} rows, about ${minutes(s.seconds)}: ${s.units.map(unitLabel).join(', ')}`);
   return `${out.join('\n')}\n`;
 }
 
@@ -616,14 +648,21 @@ function main(argv = process.argv.slice(2)) {
   }
   const ran = runUnits(units);
   writeVerdict(argValue(argv, '--verdict'), { plan: plan.id, shard: shardIndex, ...ran });
-  console.log(`\n[mutation-scope] ${ran.outcome}: ${units.length} unit(s)${shardIndex ? ` in shard ${shardIndex}` : ''}`);
+  // NAMED, NOT COUNTED. "fail: 4 unit(s)" read as four failures when one of
+  // four had failed; the line says how many did not pass, and which.
+  const notPassed = ran.results.filter((r) => r.outcome !== PASS);
+  const where = shardIndex ? ` in shard ${shardIndex}` : '';
+  console.log(notPassed.length
+    ? `\n[mutation-scope] ${ran.outcome}: ${notPassed.length} of ${units.length} unit(s)${where} did not pass: `
+      + notPassed.map((r) => `${r.unit} (${r.outcome})`).join(', ')
+    : `\n[mutation-scope] pass: all ${units.length} unit(s)${where} passed`);
   return EXIT[ran.outcome];
 }
 
 module.exports = {
   harnessFiles, loadHarnesses, pathReferences, makeReaderIndex, selectHarnesses,
   resolveBase, changedFiles, dependencyChangeIn, planShards, outcomeOf, combine, aggregate,
-  decide, buildPlan, main, escapeProperty, RUN_EVERYTHING_WHEN_TOUCHED, ROWS_PER_SHARD, MAX_SHARDS,
+  decide, buildPlan, main, escapeProperty, RUN_EVERYTHING_WHEN_TOUCHED, SECONDS_PER_SHARD, MAX_SHARDS, readCosts,
   PASS, FAIL, NO_VERDICT, EXIT,
 };
 

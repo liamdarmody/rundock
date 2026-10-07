@@ -14,6 +14,9 @@ const path = require('node:path');
 
 const ROOT = path.join(__dirname, '..', '..');
 const CHECKOUT_STORES = ['.routine-approvals.json', '.browser-sessions.json'].map((f) => path.join(ROOT, f));
+// Any record at all: a non-empty list, or an object with keys, below the top.
+const holdsRecords = (value) => Object.values(value || {}).some((v) =>
+  (Array.isArray(v) ? v.length > 0 : (v && typeof v === 'object' ? Object.keys(v).length > 0 : false)));
 const snapshot = () => CHECKOUT_STORES.map((f) => { try { const s = fs.statSync(f); return `${s.size}:${s.mtimeMs}`; } catch (e) { return 'absent'; } });
 
 test('loading the server and making fixtures leaves the checkout\'s stores untouched', () => {
@@ -32,11 +35,19 @@ test('loading the server and making fixtures leaves the checkout\'s stores untou
   require('../helpers/approvals.js').isolateStores();
   auth.exchangeCode(auth.codeOf(auth.signInLink(4500)), 4500);
   const after = snapshot();
-  // Requiring the server may create a store that did not exist (its first
-  // record); it must never grow one with fixtures.
+  // Requiring the server may create a store that did not exist, empty; it
+  // must never put a fixture's record in one. BOTH CASES ARE CHECKED: a clean
+  // checkout (CI's) has no store before the run, and skipping that case left
+  // this test unable to fail anywhere but on a machine that already had one.
   CHECKOUT_STORES.forEach((file, i) => {
-    if (before[i] === 'absent') return;
-    assert.strictEqual(after[i], before[i], `${path.basename(file)} was written by the suite`);
+    if (before[i] !== 'absent') {
+      assert.strictEqual(after[i], before[i], `${path.basename(file)} was written by the suite`);
+      return;
+    }
+    if (after[i] === 'absent') return;
+    let held;
+    try { held = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { held = { unreadable: [String(e.message)] }; }
+    assert.ok(!holdsRecords(held), `${path.basename(file)} was created holding records the suite made`);
   });
   const store = require('../../lib/agents/approval-store.js');
   assert.ok(store.storePath() === null || store.storePath().startsWith(fs.realpathSync(os.tmpdir())) || store.storePath().startsWith(os.tmpdir()),
