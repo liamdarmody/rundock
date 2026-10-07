@@ -1,0 +1,68 @@
+{
+  "source": "recorded from a real CI run of this repository; the mutation job reached its 30 minute cap on a push to main",
+  "run": {
+    "conclusion": "cancelled",
+    "event": "push",
+    "head_branch": "main",
+    "id": 37658144812,
+    "run_attempt": 1
+  },
+  "jobs": [
+    {
+      "conclusion": "success",
+      "id": 112918477777,
+      "name": "Coverage floors",
+      "status": "completed"
+    },
+    {
+      "conclusion": "success",
+      "id": 112918478008,
+      "name": "Typecheck (JSDoc + checkJs)",
+      "status": "completed"
+    },
+    {
+      "conclusion": "success",
+      "id": 112918478065,
+      "name": "Hygiene (internal references, style drift)",
+      "status": "completed"
+    },
+    {
+      "conclusion": "success",
+      "id": 112918478086,
+      "name": "E2E",
+      "status": "completed"
+    },
+    {
+      "conclusion": "success",
+      "id": 112918478100,
+      "name": "Test (Node 24)",
+      "status": "completed"
+    },
+    {
+      "conclusion": "cancelled",
+      "id": 112918478274,
+      "name": "Mutation guards and fixture provenance",
+      "status": "completed"
+    },
+    {
+      "conclusion": "success",
+      "id": 112918478361,
+      "name": "Test (Node 22)",
+      "status": "completed"
+    }
+  ],
+  "annotations": {
+    "112918478274": [
+      {
+        "annotation_level": "failure",
+        "message": "The job has exceeded the maximum execution time of 30m0s",
+        "title": ""
+      },
+      {
+        "annotation_level": "failure",
+        "message": "The operation was canceled.",
+        "title": ""
+      }
+    ]
+  }
+}

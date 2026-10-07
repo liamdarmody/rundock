@@ -1,0 +1,87 @@
+{
+  "source": "recorded from a real CI run of this repository; three jobs cancelled by the concurrency group for a newer run of the same pull request",
+  "run": {
+    "conclusion": "cancelled",
+    "event": "pull_request",
+    "head_branch": "fix/windows-package-remove",
+    "id": 36985958434,
+    "run_attempt": 1
+  },
+  "jobs": [
+    {
+      "conclusion": "cancelled",
+      "id": 110770911592,
+      "name": "Mutation guards and fixture provenance",
+      "status": "completed"
+    },
+    {
+      "conclusion": "cancelled",
+      "id": 110770911831,
+      "name": "E2E",
+      "status": "completed"
+    },
+    {
+      "conclusion": "success",
+      "id": 110770911928,
+      "name": "Hygiene (internal references, style drift)",
+      "status": "completed"
+    },
+    {
+      "conclusion": "success",
+      "id": 110770911936,
+      "name": "Typecheck (JSDoc + checkJs)",
+      "status": "completed"
+    },
+    {
+      "conclusion": "success",
+      "id": 110770911946,
+      "name": "Test (Node 24)",
+      "status": "completed"
+    },
+    {
+      "conclusion": "success",
+      "id": 110770912036,
+      "name": "Test (Node 22)",
+      "status": "completed"
+    },
+    {
+      "conclusion": "cancelled",
+      "id": 110770912263,
+      "name": "Coverage floors",
+      "status": "completed"
+    }
+  ],
+  "annotations": {
+    "110770911592": [
+      {
+        "annotation_level": "failure",
+        "message": "Canceling since a higher priority waiting request for ci-refs/pull/344/merge exists",
+        "title": ""
+      },
+      {
+        "annotation_level": "failure",
+        "message": "The operation was canceled.",
+        "title": ""
+      }
+    ],
+    "110770911831": [
+      {
+        "annotation_level": "failure",
+        "message": "Canceling since a higher priority waiting request for ci-refs/pull/344/merge exists",
+        "title": ""
+      },
+      {
+        "annotation_level": "failure",
+        "message": "The operation was canceled.",
+        "title": ""
+      }
+    ],
+    "110770912263": [
+      {
+        "annotation_level": "failure",
+        "message": "Canceling since a higher priority waiting request for ci-refs/pull/344/merge exists",
+        "title": ""
+      }
+    ]
+  }
+}

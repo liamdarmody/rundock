@@ -40,6 +40,9 @@ const REQUIRED_CI_CHECKS = [
   'E2E',
   'Typecheck (JSDoc + checkJs)',
   'Hygiene (internal references, style drift)',
+  // The one mutation check: it reads every shard's verdict, so a release
+  // demands what main demands.
+  'Mutation guards',
 ];
 
 function ghCli(args) {

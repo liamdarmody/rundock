@@ -131,34 +131,31 @@ jobs:
       - name: Run both type-check configs
         run: npm run typecheck
 
-  # Guard mutation: each of the renderer's escaping guards is removed in turn and
-  # the renderer's suite must go red for it. A guard no test notices is not
-  # guarded, and two of these were exactly that when the check was first run, so
-  # this holds the evidence table in docs/evidence/ to something machine-checked
-  # instead of transcribed. Not part of `npm test`: it runs that suite once per
-  # guard, which is too slow to pay on every run and cheap to pay once per push.
-  mutation:
-    # Renamed when this job went from the renderer's guards to every harness.
-    # Checked before renaming: this context is NOT among the required status
-    # checks on main (those are the two Test jobs, E2E, Coverage floors,
-    # Typecheck and Hygiene), so no branch-protection setting names this string
-    # and no pull request can be left waiting on a context that stopped
-    # reporting. If it is ever made required, the setting and this line have to
-    # change together, and neither order is safe on its own.
-    name: Mutation guards and fixture provenance
+  # Guard mutation: each harness under test/tools/ breaks a guard on purpose and
+  # requires a test to go red for it. A guard no test notices is not guarded.
+  #
+  # THREE JOBS, ONE REQUIRED CHECK. The plan decides which harnesses this
+  # change can reach (scripts/mutation-scope.js, against the merge base), the
+  # shards run them in parallel, and `Mutation guards` reads every shard's
+  # verdict and reports one outcome. Only `Mutation guards` is meant to be a
+  # required check: its name does not change with the shard count, and
+  # `always()` keeps it from being skipped, which a required check would
+  # otherwise count as passing.
+  #
+  # The complete set runs nightly, in mutation-nightly.yml, as the backstop for
+  # what a scoped run cannot reach.
+  mutation-plan:
+    name: Mutation plan
     runs-on: ubuntu-latest
-    # This job runs the SCOPED set, the same selection the local gate makes, so
-    # it costs minutes rather than tens of minutes. Thirty is far above a scoped
-    # run and still bounds a hang, which is the failure a ceiling exists for.
-    #
-    # The complete set is not run here. It runs nightly, in
-    # mutation-nightly.yml, for the reason written up in that file.
-    timeout-minutes: 30
+    timeout-minutes: 10
+    outputs:
+      count: ${{ steps.plan.outputs.count }}
+      matrix: ${{ steps.plan.outputs.matrix }}
     steps:
       - name: Checkout
         uses: actions/checkout@v5
-        # Full history: the fixture check below reads the pre-change renderer
-        # out of it. The default depth-1 checkout does not contain that commit.
+        # Full history: the base is a commit before this one, and the fixture
+        # check reads the pre-change renderer out of history.
         with:
           fetch-depth: 0
 
@@ -174,26 +171,48 @@ jobs:
       - name: Install test-only DOM dependency
         run: npm install --no-save --ignore-scripts jsdom@29.1.1
 
-      # THE SCOPED SET, THE SAME SELECTION THE LOCAL GATE MAKES. This job is the
-      # backstop for a commit that never ran the gate, so it repeats the gate's
-      # own choice rather than widening it.
-      #
-      # Measured before this was settled: the complete set costs 1204s on these
-      # runners and 1628s on a developer machine, and two of the eighteen
-      # harnesses account for 63% of that. Running all of them on every push put
-      # twenty minutes in front of every review in order to re-check harnesses
-      # that no change on the branch could reach. The complete set still runs,
-      # nightly, where nothing is waiting on it.
-      - name: Remove each guard a change can reach, and require a red test
-        run: npm run mutate:guards
+      # THE BASE IS THE MERGE BASE. A pull request is checked out as GitHub's
+      # merge commit, whose first parent is current main, so HEAD^1 is exactly
+      # what the branch is compared against. A push to main is compared with
+      # the commit it moved from; an all-zero or unreachable `before` (a new
+      # branch, a force push) falls back to the first parent. A dispatched run
+      # leaves the base to the script, which uses the merge base with main.
+      - name: Choose the comparison base
+        id: base
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          base=''
+          if [ "$EVENT" = "pull_request" ]; then
+            base='HEAD^1'
+          elif [ "$EVENT" = "push" ]; then
+            if [ -n "$BEFORE" ] && ! printf '%s' "$BEFORE" | grep -qE '^0+$' \
+              && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+              base="$BEFORE"
+            else
+              base='HEAD^1'
+            fi
+          fi
+          echo "base=$base" >> "$GITHUB_OUTPUT"
 
-      # The tools restore what they mutate, including when a run throws. A
-      # failure that leaves any of them modified is itself worth seeing, and
-      # says so about the whole tree rather than one file.
-      - name: Fail if any tool left a file modified
-        run: git diff --exit-code
+      - name: Decide which harnesses this change can reach, and shard them
+        id: plan
+        env:
+          BASE: ${{ steps.base.outputs.base }}
+        run: |
+          if [ -n "$BASE" ]; then
+            node scripts/mutation-scope.js --plan --out mutation-plan.json --base "$BASE"
+          else
+            node scripts/mutation-scope.js --plan --out mutation-plan.json
+          fi
 
-
+      - name: Keep the plan for the shards and the verdict
+        uses: actions/upload-artifact@v7
+        with:
+          name: mutation-plan
+          path: mutation-plan.json
+          retention-days: 7
 
       # The frozen "before" fixture is the only record of how ordinary markdown
       # rendered before this work, and every claim that it is unchanged is taken
@@ -201,6 +220,99 @@ jobs:
       # if the committed bytes are not what that code produces.
       - name: Check the before fixture against the pre-change renderer
         run: npm run check:fixture
+
+  mutation-shard:
+    name: Mutation shard ${{ matrix.shard }}
+    needs: mutation-plan
+    if: needs.mutation-plan.outputs.count != '0'
+    runs-on: ubuntu-latest
+    # A shard is planned at about 200 rows, roughly ten minutes. Thirty bounds
+    # a hang; a shard cut off here writes no verdict, which reads as no
+    # verdict, never as a pass.
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.mutation-plan.outputs.matrix) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Node 24
+        uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install runtime dependencies
+        run: npm ci --omit=dev
+
+      - name: Install test-only DOM dependency
+        run: npm install --no-save --ignore-scripts jsdom@29.1.1
+
+      - name: Fetch the plan
+        uses: actions/download-artifact@v8
+        with:
+          name: mutation-plan
+
+      - name: Remove each guard in this shard, and require a red test
+        env:
+          SHARD: ${{ matrix.shard }}
+          SHARDS: ${{ needs.mutation-plan.outputs.count }}
+        run: >-
+          node scripts/mutation-scope.js --shard "$SHARD/$SHARDS"
+          --plan-file mutation-plan.json --verdict "verdict-$SHARD.json"
+
+      # The tools restore what they mutate, including when a run throws. A
+      # shard that leaves any file modified is itself worth seeing.
+      - name: Fail if any tool left a file modified
+        run: git diff --exit-code
+
+      - name: Keep this shard's verdict, whether it passed or not
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: mutation-verdict-${{ matrix.shard }}
+          path: verdict-${{ matrix.shard }}.json
+          retention-days: 7
+          if-no-files-found: ignore
+
+  mutation-guards:
+    # The one mutation check to require on main. Do not rename it without
+    # changing the branch protection setting and REQUIRED_CI_CHECKS in
+    # scripts/release-ci.js in the same change.
+    name: Mutation guards
+    needs: [mutation-plan, mutation-shard]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Node 24
+        uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+
+      - name: Fetch the plan and every verdict
+        if: needs.mutation-plan.result == 'success'
+        uses: actions/download-artifact@v8
+        with:
+          pattern: mutation-*
+          path: mutation
+          merge-multiple: true
+
+      # Pass, fail, or no verdict. A shard that wrote no verdict (it died, was
+      # cancelled or timed out) is no verdict for that shard. No verdict ends
+      # this job non-green, titled "No verdict", so the merge stays blocked
+      # without anyone being sent to look for a guard that failed.
+      - name: One outcome from every shard
+        env:
+          PLAN_RESULT: ${{ needs.mutation-plan.result }}
+        run: >-
+          node scripts/mutation-scope.js --aggregate
+          --plan-file mutation/mutation-plan.json --verdicts mutation
+          --plan-result "$PLAN_RESULT"
 
   # Coverage floors: the suite runs WITH coverage and the per-area floors in
   # test/tools/coverage-floors.json are enforced. Deleting a covered test, or

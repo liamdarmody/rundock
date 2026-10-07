@@ -107,8 +107,8 @@ const OWNED_BY_CI = [
   { check: 'test', jobs: ['Test (Node 22)', 'Test (Node 24)'] },
   { check: 'test:coverage', jobs: ['Coverage floors'] },
   { check: 'test:e2e', jobs: ['E2E'] },
-  { check: 'mutate:guards', jobs: ['Mutation guards and fixture provenance'] },
-  { check: 'check:fixture', jobs: ['Mutation guards and fixture provenance'] },
+  { check: 'mutate:guards', jobs: ['Mutation guards'] },
+  { check: 'check:fixture', jobs: ['Mutation guards'] },
 ];
 
 // How long a step's process group gets to end on its own before it is ended

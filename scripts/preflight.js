@@ -112,6 +112,8 @@ const REGISTRY_SUITES = [
   'test/unit/confinement-fixtures.test.js',
   // Reads the CI workflow's job names; GitHub is a fake, so nothing leaves the machine.
   'test/unit/release-ci.test.js',
+  // Reads the retry workflow and recorded run fixtures; nothing leaves the machine.
+  'test/unit/ci-verdict.test.js',
 ];
 
 /**
