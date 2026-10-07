@@ -15,7 +15,7 @@ import { createRequire } from 'node:module';
 import {
   newContext, gotoWorkspace, openFile,
   seedWorking, seedLastActive, fitOrgChart, installCursor, cursorTo, cursorKind,
-  ORG_WORKING, ORG_LAST_ACTIVE,
+  ORG_WORKING, ORG_LAST_ACTIVE, CAPTURE_THEMES, selectedForCapture,
 } from './harness.mjs';
 import {
   DEMO_IDS, ARTIFACT_REVIEW_REL, artifactSidecarContent, sidecarNameFor,
@@ -52,14 +52,22 @@ export function ffmpegAvailable() {
 
 // Two-pass palette conversion: webm -> optimized looping GIF. `ss` trims the
 // pre-roll (navigation and settling) so the GIF opens on the feature itself.
-export function gifFromWebm(webmPath, gifPath, { fps = 15, width = 1280, ss = 0 } = {}) {
+//
+// `maxColors` (default 256) narrows the palette, and `rectangleDiff` encodes
+// each frame as only the rectangle that changed since the last one. Both are
+// opt-in per clip, for the long flat-UI clips that would otherwise run past
+// the ~2 MB web budget, so the clips already approved keep their encoding.
+export function gifFromWebm(webmPath, gifPath, {
+  fps = 15, width = 1280, ss = 0, maxColors = 256, rectangleDiff = false,
+} = {}) {
   const ffmpeg = resolveFfmpeg();
   const palette = path.join(os.tmpdir(), `pal-${path.basename(gifPath, '.gif')}-${width}.png`);
   const filters = `fps=${fps},scale=${width}:-1:flags=lanczos`;
   const seek = ss > 0.05 ? ['-ss', ss.toFixed(2)] : [];
-  execFileSync(ffmpeg, ['-y', ...seek, '-i', webmPath, '-vf', `${filters},palettegen=stats_mode=diff`, palette], { stdio: 'ignore' });
+  execFileSync(ffmpeg, ['-y', ...seek, '-i', webmPath, '-vf', `${filters},palettegen=max_colors=${maxColors}:stats_mode=diff`, palette], { stdio: 'ignore' });
+  const diff = rectangleDiff ? ':diff_mode=rectangle' : '';
   execFileSync(ffmpeg, ['-y', ...seek, '-i', webmPath, '-i', palette,
-    '-lavfi', `${filters} [x]; [x][1:v] paletteuse=dither=bayer:bayer_scale=3`,
+    '-lavfi', `${filters} [x]; [x][1:v] paletteuse=dither=bayer:bayer_scale=3${diff}`,
     '-loop', '0', gifPath], { stdio: 'ignore' });
   try { fs.unlinkSync(palette); } catch { /* ignore */ }
   return gifPath;
@@ -285,12 +293,14 @@ async function clipSearch(page, { mark }) {
   await page.waitForSelector('#palette-input', { state: 'visible', timeout: 8000 });
   await page.waitForTimeout(400);
   await page.type('#palette-input', 'launch', { delay: 150 });
-  await page.waitForTimeout(1300);
+  await page.waitForTimeout(1000);
   // Open the top result (the Launch Page file) to show how a search lands you
   // straight on the thing you were looking for.
   await page.keyboard.press('Enter');
   await page.waitForSelector('iframe.viewer-frame, .editor-surface, #editor', { timeout: 6000 }).catch(() => {});
-  await page.waitForTimeout(2000);
+  // Long enough to read where the result landed; shorter than it was, for
+  // the size budget (see the registry entry).
+  await page.waitForTimeout(1300);
 }
 
 // Orchestrator answers, then routes the task to a specialist who streams the
@@ -300,22 +310,33 @@ async function clipSearch(page, { mark }) {
 async function clipStreamingHandoff(page, { mark }) {
   // Ids come from the shared DEMO_IDS source so this clip cannot drift from the
   // generated fixtures. Threaded into each evaluate rather than inlined.
-  const CONVO = DEMO_IDS.convos.planWeek;
-  const COS = DEMO_IDS.agents.cos;
   const CLEO = DEMO_IDS.agents.cleo;
-  await page.evaluate(() => switchNav('conversations'));
-  await page.evaluate((id) => openConversation(id), CONVO);
-  await page.waitForTimeout(500);
-  await page.evaluate(() => addUserMsg('Can you make the landing hook shorter and punchier?'));
+  // A conversation of its own with the orchestrator, titled for the task, so
+  // the clip shows this handover and nothing else (it used to borrow the
+  // "Plan the week" thread, whose history then filled the frame). Started
+  // through the app's own createConversation, which keeps it in memory until a
+  // first send, so no other shot's conversation list changes. Its id comes
+  // from the frozen clock, so it is the same every run. The orchestrator is
+  // looked up by role because the server aliases its id.
+  const { CONVO, COS } = await page.evaluate(() => {
+    const lead = agents.find((a) => a.isDefault || a.type === 'orchestrator');
+    if (!lead) throw new Error('the demo team has no orchestrator');
+    return { CONVO: createConversation(lead.id, 'Shorten the landing hook').id, COS: lead.id };
+  });
   await page.waitForTimeout(600);
   mark();
+  await page.waitForTimeout(500);
+  await page.evaluate(() => addUserMsg('Can you make the landing hook shorter and punchier?'));
+  await page.waitForTimeout(700);
   // 1) Orchestrator (Cos) acknowledges and routes.
   await page.evaluate(({ id, cos }) => executeEffects(id, [{ type: 'start-streaming-bubble', agentId: cos }]), { id: CONVO, cos: COS });
   let cosText = '';
-  for (const c of ['That is Cleo’s wheelhouse. ', 'Handing it to her with the brief now.']) {
+  // The handover as an agent writes it since 0.13.3: what it is passing on,
+  // and to whom, in its own words.
+  for (const c of ['Passing this to Cleo: ', 'shorten the landing hook to one line, ', 'keep the one-place angle, and show two options.']) {
     cosText += c;
     await page.evaluate(({ id, t }) => executeEffects(id, [{ type: 'render-stream-text', text: t }]), { id: CONVO, t: cosText });
-    await page.waitForTimeout(520);
+    await page.waitForTimeout(600);
   }
   await page.waitForTimeout(450);
   await page.evaluate(({ id, cos, t }) => executeEffects(id, [
@@ -333,12 +354,13 @@ async function clipStreamingHandoff(page, { mark }) {
   let cleoText = '';
   for (const c of ['On it. ', 'Shorter is better here: ', 'lead with the reader, ',
     'name the outcome in six words, ', 'then let the proof carry the rest. ',
-    'Drafting two options and marking my pick.']) {
+    'Two options: **Run your studio from one place.** ', 'Or: **One place for your whole team.** ',
+    'My pick is the first.']) {
     cleoText += c;
     await page.evaluate(({ id, t }) => executeEffects(id, [{ type: 'render-stream-text', text: t }]), { id: CONVO, t: cleoText });
-    await page.waitForTimeout(430);
+    await page.waitForTimeout(470);
   }
-  await page.waitForTimeout(1100);
+  await page.waitForTimeout(1500);
 }
 
 async function clipOrgStatus(page, { mark }) {
@@ -496,15 +518,23 @@ export const CLIPS = [
       path.join(workspace, MARKDOWN_REVIEW_NOTE_REL), markdownReviewNoteContent(),
     ),
   },
-  { name: 'search', feature: 'Cmd+K universal search, then opening the result', run: clipSearch },
+  // Search ran 3.6 MB at the defaults: the type-in, the result list and the
+  // opened file are three full repaints. Fewer frames, a narrower palette and
+  // changed-rectangle frames bring it under the ~2 MB budget without
+  // shortening what it shows.
+  { name: 'search', feature: 'Cmd+K universal search, then opening the result', run: clipSearch, gif: { fps: 10, width: 1152, maxColors: 128, rectangleDiff: true } },
   // Streaming plus a handoff has continuous type-in over a longer clip (high
   // entropy); trim width and fps to stay inside the size budget.
-  { name: 'streaming', feature: 'Orchestrator routes to a specialist, whose reply streams in', run: clipStreamingHandoff, gif: { fps: 12, width: 1080 } },
+  // IMG-15: the 0.13.3 handover, the departing agent saying what it passes on
+  // and to whom. Published as the docs' conversation-handoff.gif and the
+  // Site's rundock-streaming.gif.
+  { id: 'IMG-15', name: 'IMG-15-handover', feature: 'Orchestrator hands the work to a specialist, in its own words, and the reply streams in', run: clipStreamingHandoff, gif: { fps: 12, width: 1080 } },
   // ssBuffer:0 keeps the pre-mark navigation frames out of the trimmed clip.
   { name: 'org-chart-status', feature: 'Org chart live status', run: clipOrgStatus, ssBuffer: 0 },
   {
     name: 'routine-editor', feature: 'Schedule a skill to a cadence, through a form',
-    run: clipRoutineEditor, gif: { width: 1152 },
+    // 2.65 MB at 15 fps across three screens; same budget treatment as search.
+    run: clipRoutineEditor, gif: { fps: 10, width: 1152, maxColors: 128, rectangleDiff: true },
     // Saving is a real write to the demo workspace's agent file (see
     // clipRoutineEditor's own comment), and both theme runs share one
     // workspace: without this, the dark run would find the routine the light
@@ -519,7 +549,12 @@ export const CLIPS = [
   },
 ];
 
-export const MOTION_THEMES = ['light', 'dark'];
+export const MOTION_THEMES = CAPTURE_THEMES;
+
+// The clips a run records: all of them, or those RUNDOCK_CAPTURE_ONLY names.
+export function selectedClips() {
+  return CLIPS.filter(selectedForCapture);
+}
 
 // Records every clip in both themes and converts each to an optimized GIF in
 // `outDir`. Returns produced assets: { name, theme, feature, file, bytes }.
@@ -528,7 +563,7 @@ export async function captureMotion({ browser, url, workspace, outDir, log = () 
   const videoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rundock-motion-'));
   const produced = [];
 
-  for (const clip of CLIPS) {
+  for (const clip of selectedClips()) {
     for (const theme of MOTION_THEMES) {
       let ctx;
       try {
@@ -554,7 +589,10 @@ export async function captureMotion({ browser, url, workspace, outDir, log = () 
         const buffer = clip.ssBuffer ?? 0.4;
         const ss = actionAt ? Math.max(0, (actionAt - recStart) / 1000 - buffer) : 0;
         const gif = path.join(outDir, `${clip.name}.${theme}.gif`);
-        gifFromWebm(webm, gif, { fps: clip.gif?.fps ?? 15, width: clip.gif?.width ?? 1280, ss });
+        gifFromWebm(webm, gif, {
+          fps: clip.gif?.fps ?? 15, width: clip.gif?.width ?? 1280, ss,
+          maxColors: clip.gif?.maxColors ?? 256, rectangleDiff: !!clip.gif?.rectangleDiff,
+        });
         const bytes = fs.statSync(gif).size;
         produced.push({ name: clip.name, theme, feature: clip.feature, file: gif, bytes });
         log(`  motion ${clip.name}.${theme} -> ${(bytes / 1e6).toFixed(2)} MB`);

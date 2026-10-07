@@ -1,9 +1,9 @@
 # Marketing screenshot pipeline
 
 Generates marketing-grade visuals of every current Rundock feature: framed
-light and dark stills at retina resolution, plus short looping GIFs, all from a
-realistic but fully sanitized demo workspace driven through the real app with
-Playwright. Everything lands in a single local review folder with a manifest;
+stills at retina resolution (dark by default, light on request), plus short
+looping GIFs and social cards, all from a realistic but fully sanitized demo
+workspace driven through the real app with Playwright. Everything lands in a single local review folder with a manifest;
 nothing is written into the README, `docs/`, the Rundock Site, or the docs site.
 
 Spec: the marketing screenshot pipeline spec, kept in the private workspace (not shipped here).
@@ -15,6 +15,14 @@ npm run screenshots
 ```
 
 Output lands in the gitignored `screenshots-out/` folder at the repo root.
+
+To capture part of the set, name the shots or clips, by name or by shot-list
+id; to capture light as well as dark, name both themes:
+
+```bash
+RUNDOCK_CAPTURE_ONLY=IMG-03,IMG-04 npm run screenshots
+RUNDOCK_CAPTURE_THEMES=light,dark npm run screenshots
+```
 Re-runnable: the folder is rebuilt from scratch each time. Stills are
 deterministic (fixed clock, seeded data, animations disabled), so re-running
 reproduces them byte for byte. GIFs are re-encoded from fresh Playwright video
@@ -25,27 +33,36 @@ not expect a clean git diff to tell you whether a GIF actually changed.
 ## What it does
 
 1. **Generate** a sanitized demo workspace (invented nine-agent team, ~14 skills,
-   conversations, routines, and a rich file tree) plus a fake `$HOME` of Claude
-   Code transcripts, all with fixed dates.
+   conversations, routines, pins, a linked set of notes for the Map, settings
+   state and connectors, and a rich file tree) plus a fake `$HOME` of Claude
+   Code transcripts, all with fixed dates and file ages. Shots that need the
+   example packages installed run against a second build, the `packages`
+   variant, so the main team chart is unchanged. The packages are installed
+   through Rundock's own install code from the copies in `packages/`, and each
+   is served from a local git repository so the install review and the update
+   check need no network.
 2. **Sanitization gate** greps the whole build root, both the demo workspace and
    the fake `$HOME` transcripts (whose text is rendered into the conversation
    shots), for banned tokens, and aborts before any capture if a real name or
    private term slips in. Binary files (images, PDFs) are trusted, not scanned.
    The gate warns if no project-specific token source is configured (see
    Configuration); the built-in defaults only cover a default set of markers.
-3. **Boot** the real `server.js` against that workspace on a dedicated port.
-4. **Capture** the full still shot list in light and dark at deviceScaleFactor 2
-   (2880x1800 @2x masters), plus element-scoped crops.
+3. **Boot** the real `server.js` against each workspace on a dedicated port.
+4. **Capture** the still shot list at deviceScaleFactor 2 (2880x1800 @2x
+   masters), plus element-scoped tiles. Shots from the current shot list are
+   named by id (`IMG-01-org-chart`, ...); the rest are recaptures of existing
+   scenes.
 5. **Frame** every shot as a flat clean master plus a self-framed variant, and
    the three hero shots additionally with wider padding, and derive
    README-width sizes. The macOS window controls are NOT added here: they are
    drawn into the app's own top bar during capture (step 4), because the app
    integrates them into that bar rather than sitting below a separate title
    bar. Framing only rounds, shadows and pads.
-6. **Motion**: record five scripted interactions and convert each to an optimized,
-   palette-based looping GIF.
-7. Write **`MANIFEST.md`** mapping every asset to its intended target repo, path,
-   feature, theme, and rationale.
+6. **Motion**: record the scripted interactions and convert each to an
+   optimized, palette-based looping GIF.
+7. **Social cards**: 1200x630 crops of the team chart for the Site's og images.
+8. Write **`MANIFEST.md`** mapping every asset to its intended target repo, path,
+   feature, theme, and rationale, from `placements.mjs`.
 
 ## Prerequisites
 
@@ -62,7 +79,10 @@ not expect a clean git diff to tell you whether a GIF actually changed.
 
 - `FFMPEG_PATH` overrides which ffmpeg binary is used.
 - `RUNDOCK_CAPTURE_PORT` overrides the dedicated capture port (default 34519,
-  deliberately distinct from the e2e port 34517).
+  deliberately distinct from the e2e port 34517). The `packages` variant's
+  server takes the port 20 above it.
+- `RUNDOCK_CAPTURE_THEMES` (comma-separated `light`, `dark`; default `dark`).
+- `RUNDOCK_CAPTURE_ONLY` (comma-separated shot or clip names or ids).
 - `RUNDOCK_BANNED_TOKENS` (comma-separated) and a gitignored
   `scripts/screenshots/.banned-tokens.json` (a JSON array of strings) add
   project-specific tokens to the sanitization gate, so private names never live
@@ -71,11 +91,19 @@ not expect a clean git diff to tell you whether a GIF actually changed.
 ## Files
 
 - `generate-workspace.mjs` the sanitized demo workspace v2 plus the gate.
+- `demo-content.mjs` the linked notes, roadmap board, pins and file ages.
+- `demo-settings.mjs` the mode, sandbox switch, working folder, remembered
+  answers and connectors.
+- `demo-packages.mjs` installs the packages in `packages/` and serves them from
+  local repositories.
+- `packages/` release copies of the example packages, with their provenance.
+- `scenes.mjs` the current shot list, one scene per id.
+- `placements.mjs` where each asset goes; the MANIFEST's source.
 - `serve.mjs` boots the real server in an isolated child process.
 - `harness.mjs` shared Playwright helpers: fixed clock, themes, seeding.
 - `capture.mjs` the still shot list and capture loop.
 - `frame.mjs` + `frame.html` the framing wrapper and per-target derivations.
-- `motion.mjs` the five clips and ffmpeg conversion.
+- `motion.mjs` the clips and ffmpeg conversion.
 - `run.mjs` the orchestrator behind `npm run screenshots`.
 - `content-and-copy-gaps.md` the release content and copy gap analysis. Written
   against an earlier release and NOT copied into the output folder: check the

@@ -1,0 +1,16 @@
+/* Layout only. Every colour, radius and control comes from Rundock: the
+   tokens and Rundock UI are in the frame before this file, and anything
+   here may override them deliberately. */
+/* No outer padding: Rundock's frame carries the note's own padding, so the
+   view's first line starts where a note's text does. */
+.tracker { display: flex; flex-direction: column; gap: 16px; }
+.tracker h1 { margin: 0; }
+.tracker > .rui-tabs { align-self: flex-start; }
+.tracker-stats { display: flex; flex-wrap: wrap; gap: 12px; }
+.tracker-add { display: grid; grid-template-columns: minmax(180px, 1fr) 160px auto; gap: 10px; align-items: start; }
+/* Line the select and the button up with the input, below the field's label. */
+.tracker-add > .rui-select-wrap, .tracker-add > .rui-btn { margin-top: 24px; }
+.tracker-add > .rui-btn { padding-top: 10px; padding-bottom: 10px; }
+/* The line that says an item was removed, with its Undo, takes no room
+   until there is something to say. */
+.tracker-notice:empty { display: none; }

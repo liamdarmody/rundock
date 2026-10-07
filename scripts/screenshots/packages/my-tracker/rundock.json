@@ -1,0 +1,15 @@
+{
+  "name": "my-tracker",
+  "displayName": "My Tracker",
+  "version": "0.1.0",
+  "extension": {
+    "entry": "view/main.js",
+    "match": "*.md",
+    "declares": "my-tracker",
+    "writes": true,
+    "rundockUi": "1.0",
+    "styles": [
+      "view/style.css"
+    ]
+  }
+}
