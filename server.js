@@ -73,10 +73,11 @@ const SCHEDULER_DISABLED = process.env.RUNDOCK_DISABLE_SCHEDULER === '1';
 // Loopback is a DECISION about the default, not a statement about capability.
 // Everything behind this socket is the product itself: it spawns agent
 // subprocesses, reads and writes the workspace the user chose, carries the
-// permission bridge, and holds the WebSocket that drives the interface. None
-// of it sits behind authentication, because until now nothing but this machine
-// could reach it. Passing a port with no host binds every interface, which put
-// all of that in front of anyone on the same wifi.
+// permission bridge, and holds the WebSocket that drives the interface. On
+// this machine, all of it answers only Rundock's own window (lib/auth), but
+// that key was designed for a loopback socket, not for a network. Passing a
+// port with no host binds every interface, which put all of that in front of
+// anyone on the same wifi.
 //
 // TO WHOEVER IMPLEMENTS REMOTE ACCESS, which the roadmap wants: this is the
 // line you change, and changing it is not the feature. Widening the bind on
@@ -95,6 +96,9 @@ let ACTUAL_PORT = PORT; // Updated after server.listen() with the real listening
 // go through setWorkspaceRoot so the two can never drift.
 const { recoverPendingWrites } = require('./lib/workspace/atomic-write.js');
 const localOrigin = require('./lib/local-origin.js');
+const auth = require('./lib/auth/index.js');
+const { writeLandsInside } = require('./lib/workspace/link-safe-write.js');
+const approvalLocality = require('./lib/agents/approval-locality.js');
 let WORKSPACE = config.getWorkspace();
 function setWorkspaceRoot(dir) {
   WORKSPACE = dir;
@@ -230,6 +234,17 @@ function isInsideWorkspace(targetPath) {
   return resolved === root || resolved.startsWith(root + path.sep);
 }
 
+// The stricter test every server-side WRITE into the workspace passes: inside
+// by path, and inside by real path too, links followed, against the workspace
+// and the working folders it names. A read still follows a link (the person's
+// own window shows a note linked in from elsewhere); a write through a link
+// that leads outside is refused. See lib/workspace/link-safe-write.js.
+function isWritableInWorkspace(targetPath) {
+  if (!isInsideWorkspace(targetPath)) return false;
+  const { readWorkingFolders } = require('./lib/workspace/working-folders.js');
+  return writeLandsInside(targetPath, [WORKSPACE, ...readWorkingFolders()]);
+}
+
 // Is a workspace-relative path safe for the Files sidebar to create? Rejects
 // any path with a dot-leading component: a leading-dot basename is filtered
 // out of the file tree (so the new file would be invisible), and '.'/'..'
@@ -304,6 +319,22 @@ const PERMISSION_TIMEOUT_MS = parseInt(process.env.RUNDOCK_PERMISSION_TIMEOUT_MS
 const RECENT_FILE = process.env.RUNDOCK_ELECTRON
   ? path.join(require('os').homedir(), '.rundock-recent-workspaces.json')
   : path.join(__dirname, '.recent-workspaces.json');
+// Fingerprints of the browsers signed in from the printed link (lib/auth),
+// beside the recent-workspaces file: this install's own folder, outside every
+// workspace. Never the tokens themselves.
+// Where routine approvals count (lib/agents/approval-store.js): this
+// install's own record, beside the recent-workspaces file, outside every
+// workspace.
+require('./lib/agents/approval-store.js').configureApprovalStore(process.env.RUNDOCK_ELECTRON
+  ? path.join(require('os').homedir(), '.rundock-routine-approvals.json')
+  : path.join(__dirname, '.routine-approvals.json'), {
+  // Read once, only when the record is first made: the workspaces this
+  // install had opened before it kept approvals itself.
+  recentPaths: () => { try { return JSON.parse(fs.readFileSync(RECENT_FILE, 'utf-8')).map((r) => r && r.path); } catch (e) { return []; } },
+});
+auth.configureSessionStore(process.env.RUNDOCK_ELECTRON
+  ? path.join(require('os').homedir(), '.rundock-browser-sessions.json')
+  : path.join(__dirname, '.browser-sessions.json'));
 function loadRecentWorkspaces() {
   let recent;
   try { recent = JSON.parse(fs.readFileSync(RECENT_FILE, 'utf-8')); } catch (e) { return []; }
@@ -654,7 +685,7 @@ httpRouter.wireHttpRouterDeps({
   // Live state BY IDENTITY: the accessors return the root's own maps.
   chatProcesses: () => chatProcesses,
   pendingPermissionRequests: () => pendingPermissionRequests,
-  isInsideWorkspace, safeSend, getFileTreeCached,
+  isInsideWorkspace, isWritableInWorkspace, safeSend, getFileTreeCached,
   getSearchEngine: () => searchEngine,
   fileIndexInProgress,
   getPermissionTimeoutMs: () => PERMISSION_TIMEOUT_MS,
@@ -918,12 +949,24 @@ function watchOpenFile(ws, relPath, fullPath) {
 
 // Every request first proves it comes from this machine's own page or process
 // (lib/local-origin.js): a loopback Host for the listening port, and no
-// foreign Origin on a write. Anything else is refused before any route runs.
+// foreign Origin on a write. Then, unless it asks for the page's own static
+// files, the sign-in routes or the permission hook's two routes (which check
+// a token of their own), it must come from Rundock's own window (lib/auth).
+// Anything else is refused before any route runs.
 const server = http.createServer((req, res) => {
-  const refused = localOrigin.refusal(req, server.address().port);
+  const port = server.address().port;
+  const refused = localOrigin.refusal(req, port);
   if (refused) {
     res.writeHead(403, { 'Content-Type': 'text/plain' });
     res.end('Forbidden');
+    return;
+  }
+  // What let it in travels with it: a picture or PDF let in by the media
+  // cookie is held to the stricter real-path rule (lib/http-router.js).
+  req.rundockAuthorisedBy = auth.authorisedBy(req, port);
+  if (!httpRouter.isOpenRoute(req) && !req.rundockAuthorisedBy) {
+    res.writeHead(401, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' });
+    res.end('Open Rundock from the link in your terminal');
     return;
   }
   httpRouter.handleHttpRequest(req, res);
@@ -933,13 +976,24 @@ const server = http.createServer((req, res) => {
 
 const wss = new WebSocketServer({
   server,
-  // The same check as every HTTP request, held to the Origin rule because a
-  // page can open a WebSocket to any address. No Origin is a local tool.
-  verifyClient: ({ req }) => !localOrigin.refusal(req, server.address().port, { upgrade: true }),
+  // The same checks as every HTTP request, held to the Origin rule because a
+  // page can open a WebSocket to any address, and then to the key: only
+  // Rundock's own window is accepted. A refused client is answered before the
+  // connection exists, so it is sent nothing at all, not even the cards
+  // waiting for an answer.
+  verifyClient: ({ req }) => !localOrigin.refusal(req, server.address().port, { upgrade: true })
+    && auth.authenticate(req, server.address().port),
+  // The page offers `rundock` beside the subprotocol carrying its session
+  // token (lib/auth); the token is never chosen, so it is never echoed back.
+  handleProtocols: (protocols) => (protocols.has(auth.WS_PROTOCOL) ? auth.WS_PROTOCOL : false),
 });
 
 // Module-level process tracking: survives WebSocket reconnects
-const chatProcesses = new Map(); // conversationId -> { process, buffer, processId, agentId, responseText }
+const chatProcesses = new Map();
+// Whether nothing is running: no conversation's agent and no routine. Read
+// only by a server the Windows launcher started, which restarts an idle one
+// to hand a new browser a fresh code (lib/auth setIdleProbe).
+auth.setIdleProbe(() => chatProcesses.size === 0 && schedulerLib.runningRuns().length === 0); // conversationId -> { process, buffer, processId, agentId, responseText }
 
 // Circuit breaker: consecutive agent auto-resume events with no user message.
 // Prevents infinite delegation loops (e.g. orchestrator -> specialist -> orchestrator -> specialist ...).
@@ -1393,7 +1447,7 @@ const wsHandlerContext = {
   // Workspace lifecycle, boundary guards, and file caches.
   workspace: {
     setWorkspaceRoot, healWorkspaceIfMoved, saveRecentWorkspace, loadRecentWorkspaces,
-    discoverWorkspaces, isInsideWorkspace, isSafeCreatePath, getFileTreeCached,
+    discoverWorkspaces, isInsideWorkspace, isWritableInWorkspace, isSafeCreatePath, getFileTreeCached,
     invalidateFileListCache, invalidateFileTreeCache, noteExtensionRecordsChanged, watchOpenFile,
     fileTreeForSend, broadcastFileTree, armFileTreeWatcher,
   },
@@ -1417,6 +1471,9 @@ wss.on('connection', (ws) => {
   }
   ws.send(JSON.stringify({ type: 'active_processes', processes: active }));
   ws.send(JSON.stringify({ type: 'server_info', version: PKG_VERSION, platform: process.platform }));
+  // The routines this workspace came with, if this install has not yet been
+  // told whether to run them (lib/protocol/handlers/held-routines.js).
+  ws.send(JSON.stringify(require('./lib/protocol/handlers/held-routines.js').heldRoutinesMessage(WORKSPACE)));
 
   // Re-send pending permission requests so permission cards reappear after reconnect
   for (const [requestId, pending] of pendingPermissionRequests) {
@@ -2845,6 +2902,13 @@ function healWorkspaceIfMoved(dir) {
   const state = readState();
   const previous = state.workspacePath || null;
   const moved = !!previous && previous !== dir;
+  // WHERE ROUTINE APPROVALS COUNT, decided before the path below is
+  // overwritten, because the path this machine last opened the workspace at
+  // is what tells "opened here before" from a copy, a clone or a move
+  // (lib/agents/approval-locality.js). Best effort, like the rest of healing:
+  // a failure leaves the workspace undecided, and an undecided workspace
+  // approves nothing.
+  try { approvalLocality.noteWorkspaceOpened(dir, previous); } catch (e) { console.warn('[Routines] approval record:', e.message); }
 
   if (moved) {
     console.log('[Workspace] state was written for a different path; clearing what assumed the old location');
@@ -3311,7 +3375,23 @@ function startServer(options = {}) {
       // agent process and its tool servers, and they used to live for the
       // whole session.
       startIdleReaper();
-      console.log(`\n  Rundock running at http://localhost:${actualPort}`);
+      // From source, the address is a link carrying a one-time code in the
+      // fragment, which a browser never sends anywhere; the page trades it
+      // once for a session token (lib/auth). Another link is printed only
+      // when the person presses Enter in this terminal. The desktop app's
+      // window is given the key by its own main process instead, so the
+      // desktop log carries neither key nor link.
+      if (process.versions.electron) console.log(`\n  Rundock running at http://localhost:${actualPort}`);
+      // A server whose launcher made the code, and opened the link with it,
+      // prints the address only: its output goes to a log file.
+      else if (auth.codeFromLauncher()) console.log(`\n  Rundock is running: http://localhost:${actualPort}`);
+      else {
+        console.log('');
+        auth.announceLink(actualPort);
+        if (options.linkRequests && auth.listenForLinkRequests(options.linkRequests, actualPort) && options.linkRequests.isTTY) {
+          console.log('  For another browser, press Enter here for a new link.');
+        }
+      }
       // Say who can reach it, not only where it is. Someone who used to open
       // Rundock from another device now meets a bare connection refusal, and
       // this is the only line they read.
@@ -3341,9 +3421,10 @@ function startServer(options = {}) {
   });
 }
 
-// Run directly via `node server.js` (git-clone path)
+// Run directly via `node server.js` (git-clone path). Only then does the
+// terminal it was started from get to ask for another link (lib/auth).
 if (require.main === module) {
-  startServer();
+  startServer({ linkRequests: process.stdin });
 }
 
 module.exports = { startServer };
@@ -3380,7 +3461,7 @@ module.exports._internal = {
   // workspace analysis / scaffolding
   detectWorkspaceMode, isEmptyWorkspace, analyzeWorkspace,
   scaffoldDefaults, scaffoldWorkspace, muteHooks, discoverWorkspaces, maybeCompleteSetup,
-  readMcpServerNames, getFileTree, fileKind, validateAgentSlug, isInsideWorkspace, isSafeCreatePath,
+  readMcpServerNames, getFileTree, fileKind, validateAgentSlug, isInsideWorkspace, isWritableInWorkspace, isSafeCreatePath,
   // persistence
   readConversations, writeConversations, readState, writeState,
   readLists, writeLists, deleteListEverywhere,

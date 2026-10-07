@@ -61,6 +61,7 @@ It reads its options from `.rundock/look-view.json` in the checkout (gitignored)
 | `scale` | `1` | device pixel ratio, 1 to 3 |
 | `element` | none | a CSS selector: photograph only that element |
 | `actions` | none | steps to take after the view opens, in order (below) |
+| `arrived` | `false` | `true` opens the demo workspace as one copied in from elsewhere, so its routines are held and the strip naming them shows |
 | `out` | `.rundock/scratch/look-view.png` | where the PNG goes, relative to the checkout or absolute |
 
 Each action is one of `{"click": T}`, `{"fill": T, "value": "text"}`, `{"press": "Escape"}` or `{"waitForText": "Saved"}`, where `T` names an element as a CSS selector string, `{"role": "button", "name": "Save"}`, `{"text": "Plan the week"}`, `{"label": "Name"}` or `{"selector": "#x"}`.

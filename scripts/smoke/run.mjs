@@ -21,7 +21,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, fork } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { waitFor } from './wait-for.mjs';
@@ -105,7 +105,11 @@ if (!LIVE) writeScenario(workspace);
 const stubPath = LIVE ? '' : `${path.join(ROOT, 'test', 'helpers', 'stub-claude')}${path.delimiter}${path.join(ROOT, 'test', 'helpers', 'stub-codex')}${path.delimiter}`;
 const env = { ...process.env, WORKSPACE: workspace, PORT: String(PORT), PATH: `${stubPath}${process.env.PATH}` };
 if (!LIVE) env.HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'rundock-smoke-home-'));
-const server = spawn(process.execPath, [path.join(ROOT, 'server.js')], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+if (!LIVE) env.RUNDOCK_ELECTRON = '1'; // Rundock's own records go in that temporary home, never the checkout
+// Forked through a wrapper that runs server.js unchanged and can hand this
+// process the permission hook's token (scripts/smoke/boot-server.js).
+const server = fork(path.join(ROOT, 'scripts', 'smoke', 'boot-server.js'), [], { env, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
+const { waitForSignInLink, withoutKey, askHookToken } = require('../sign-in-link.js');
 let serverLog = '';
 server.stdout.on('data', d => { serverLog += d; });
 server.stderr.on('data', d => { serverLog += d; });
@@ -114,12 +118,17 @@ const up = await waitFor(async () => {
   try { const r = await fetch(`http://127.0.0.1:${PORT}/`); return r.ok; } catch { return false; }
 }, 15000);
 record('S0 server boots from source', !!up);
-if (!up) { console.log(serverLog.slice(-2000)); process.exit(1); }
+if (!up) { console.log(withoutKey(serverLog.slice(-2000))); process.exit(1); }
+const signInUrl = await waitForSignInLink(() => serverLog);
+record('S0 server prints its sign-in link', !!signInUrl);
+if (!signInUrl) { console.log(withoutKey(serverLog.slice(-2000))); process.exit(1); }
+// What an agent's hook started for no conversation would carry.
+const routineHookToken = await askHookToken(server, null);
 
 const { chromium } = require('@playwright/test');
 const browser = await chromium.launch();
 const page = await browser.newPage();
-await page.goto(`http://127.0.0.1:${PORT}/`);
+await page.goto(signInUrl);
 await page.waitForTimeout(1500);
 
 async function sendInNewConversation(text) {
@@ -171,14 +180,14 @@ record('S4 specialist scope return hands back (handback event, kind return)', !!
 // (permissions.js): no card, silent allow. High-risk commands must card and
 // wait for a click. Both behaviours are product contract; both are checked.
 const lowP = fetch(`http://127.0.0.1:${PORT}/api/permission-request`, {
-  method: 'POST', headers: { 'content-type': 'application/json' },
+  method: 'POST', headers: { 'content-type': 'application/json', 'x-rundock-hook-token': routineHookToken },
   body: JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'echo smoke' }, conversation_id: '', session_id: '' }),
 }).then(r => r.json()).catch(() => null);
 const lowResult = await Promise.race([lowP, new Promise(r => setTimeout(() => r(null), 15000))]);
 record('S5 low-risk command auto-approves without a card', !!(lowResult && lowResult.allow === true));
 
 const highP = fetch(`http://127.0.0.1:${PORT}/api/permission-request`, {
-  method: 'POST', headers: { 'content-type': 'application/json' },
+  method: 'POST', headers: { 'content-type': 'application/json', 'x-rundock-hook-token': routineHookToken },
   body: JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'rm -rf build && git push --force' }, conversation_id: '', session_id: '' }),
 }).then(r => r.json()).catch(() => null);
 const allowBtn = await waitFor(() => page.locator('.permission-card .btn-allow').first().isVisible().catch(() => false), 15000);
@@ -203,7 +212,7 @@ record('S5 permission event recorded', s5ev);
 // folder the boundary frees reads of and refuses writes to.
 const HOME_DIR = os.homedir();
 const askPermission = (command) => fetch(`http://127.0.0.1:${PORT}/api/permission-request`, {
-  method: 'POST', headers: { 'content-type': 'application/json' },
+  method: 'POST', headers: { 'content-type': 'application/json', 'x-rundock-hook-token': routineHookToken },
   body: JSON.stringify({ tool_name: 'Bash', tool_input: { command }, conversation_id: '', session_id: '' }),
 }).then(r => r.json()).catch(() => null);
 
@@ -240,11 +249,12 @@ record('S5b a destructive command after a lone & does not auto-approve', !(s6c &
 {
   const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'smoke-outside-'));
   const activeConvo = await page.evaluate(() => (window.activeConversation && window.activeConversation.id) || '');
+  const activeHookToken = await askHookToken(server, activeConvo || null);
   const hookPath = path.join(ROOT, 'scripts', 'permission-hook.js');
   const runHook = (toolInput) => new Promise((resolve) => {
     const proc = spawn(process.execPath, [hookPath], {
       cwd: workspace,
-      env: { ...env, RUNDOCK: '1', RUNDOCK_PORT: String(PORT), RUNDOCK_CONVO_ID: activeConvo, RUNDOCK_WORKSPACE: workspace },
+      env: { ...env, RUNDOCK: '1', RUNDOCK_PORT: String(PORT), RUNDOCK_CONVO_ID: activeConvo, RUNDOCK_HOOK_TOKEN: activeHookToken, RUNDOCK_WORKSPACE: workspace },
       stdio: ['pipe', 'pipe', 'ignore'],
     });
     let out = '';
@@ -299,4 +309,4 @@ await browser.close();
 server.kill();
 const failed = results.filter(r => !r.ok);
 console.log(`\n${results.length - failed.length}/${results.length} checks passed${LIVE ? ' (live mode)' : ''}`);
-if (failed.length) { console.log('Server log tail:\n' + serverLog.slice(-1500)); process.exit(1); }
+if (failed.length) { console.log('Server log tail:\n' + withoutKey(serverLog.slice(-1500))); process.exit(1); }

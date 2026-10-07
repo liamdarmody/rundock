@@ -30,6 +30,9 @@ const clients = [];
  *   run starts in, where the folder is chosen afterwards through the interface.
  *   The fixture is still built and h.workspaceDir still names it, so a test can
  *   choose it over the wire; the server just has not been told about it.
+ * @param {boolean} [opts.seenBefore=true] - treat the fixture as a workspace
+ *   this install opened before, so its routines' approvals carry over. False
+ *   models a copied or cloned folder this install has never seen.
  * @param {boolean} [opts.presetWorkspace=false] - hand the server its workspace
  *   the way a REMEMBERED one arrives: in process.env.WORKSPACE, before
  *   server.js is required, so lib/config seeds the root at require time and the
@@ -59,6 +62,12 @@ async function boot(opts = {}) {
 
   srv = require('../../server.js');
   internal = srv._internal;
+  // THE FIXTURE IS A WORKSPACE THIS INSTALL HAS OPENED BEFORE, unless a test
+  // says otherwise: routines in it count as approved exactly as they did
+  // before approvals were kept per install, which is what every scheduler
+  // suite here was written against. A suite about a workspace arriving from
+  // elsewhere passes `seenBefore: false` (lib/agents/approval-locality.js).
+  if (opts.seenBefore !== false) require('./approvals.js').seenHere(workspaceDir);
   if (opts.workspace !== false && !opts.presetWorkspace) internal.setWorkspace(workspaceDir);
   // Read between require and listen, which is a window no test can otherwise
   // reach: boot() owns both halves. It is the only place the question "was
@@ -199,10 +208,38 @@ function clearPrompts() {
   try { fs.unlinkSync(path.join(workspaceDir, 'stub-prompts.jsonl')); } catch (e) {}
 }
 
-// WebSocket test client that records every message.
-async function connect() {
+// THE LAUNCH KEY, read from the server's own module. The integration server
+// runs in this process, so this is the same in-memory value the desktop app's
+// main process holds; nothing is read from the environment or from disk.
+// Absent only on code from before the key existed, which is what lets an
+// attack test run red there rather than crash on a missing module.
+function authModule() {
+  try { return require('../../lib/auth/index.js'); } catch (e) {
+    if (e && e.code === 'MODULE_NOT_FOUND' && /lib[\\/]auth/.test(String(e.message))) return null;
+    throw e;
+  }
+}
+/** The header Rundock's own window sends, or none where no key exists. */
+function authHeaders() {
+  const auth = authModule();
+  return auth ? { [auth.KEY_HEADER]: auth.launchKey() } : {};
+}
+/** A permission hook's token for one conversation (null: a routine run). */
+function hookToken(conversationId = null) {
+  const auth = authModule();
+  return auth ? auth.issueHookToken(conversationId) : '';
+}
+/** The header the permission hook sends its token in, with a token for `conversationId`. */
+function hookHeaders(conversationId = null) {
+  const auth = authModule();
+  return auth ? { [auth.HOOK_HEADER]: auth.issueHookToken(conversationId) } : {};
+}
+
+// WebSocket test client that records every message. Signed in as Rundock's
+// own window unless `auth: false`; `headers` are added on top.
+async function connect({ auth = true, headers = {} } = {}) {
   const WebSocket = require('ws');
-  const ws = new WebSocket(`ws://127.0.0.1:${port}`);
+  const ws = new WebSocket(`ws://127.0.0.1:${port}`, { headers: { ...(auth ? authHeaders() : {}), ...headers } });
   const client = {
     ws,
     messages: [],
@@ -337,6 +374,7 @@ module.exports = {
   readGrandchildren, readStubOutputs, pidAlive, waitForPidExit,
   readPrompts, promptsFor, unmatchedPrompts, assertAllPromptsMatched, clearPrompts,
   delay, waitUntil, freshConvoId, reapConvo,
+  authHeaders, hookToken, hookHeaders,
   get internal() { return internal; },
   get port() { return port; },
   get workspaceDir() { return workspaceDir; },

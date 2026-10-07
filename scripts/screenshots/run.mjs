@@ -83,14 +83,13 @@ async function main() {
   // network.
   log('[2/6] Booting Rundock servers...');
   const servers = {};
-  const urls = {};
   for (const variant of variants) {
     const b = builds[variant];
     // Ports spaced apart, so one server's fallback ports never meet the next's.
     const port = CAPTURE_PORT + variants.indexOf(variant) * 20;
     servers[variant] = await startRundock({ workspace: b.workspace, home: b.home, env: b.serverEnv, port });
-    urls[variant] = servers[variant].url;
-    log(`      ${variant}: ${urls[variant]}`);
+    // The bare address only: a sign-in link carries a code and is never logged.
+    log(`      ${variant}: ${servers[variant].url}`);
   }
   const server = servers[variants[0]];
 
@@ -116,11 +115,12 @@ async function main() {
     // Preflight: fail fast (naming the missing symbol) if this Rundock build has
     // moved any global, function, or effect executor the clips/shots depend on,
     // rather than quietly capturing broken assets.
-    await assertAppContract(browser, server.url, log);
+    await assertAppContract(browser, server.signInUrl, log);
 
-    // 3. Capture flat @2x masters + crops, in each capture theme.
+    // 3. Capture flat @2x masters + crops, in each capture theme. Each shot
+    // signs in to its own variant's server.
     log(`[3/6] Capturing stills (${THEMES.join(' + ')}, @2x)...`);
-    const shots = await captureStills({ browser, urls, stagingDir: staging, log });
+    const shots = await captureStills({ browser, servers, stagingDir: staging, log });
 
     // A shot that fails is caught and logged inside captureStills so one bad
     // selector cannot lose the whole run. That is right, but on its own it is
@@ -199,7 +199,7 @@ async function main() {
     // 5. Motion.
     log('[5/6] Recording motion and converting to GIFs...');
     if (ffmpegAvailable()) {
-      const clips = await captureMotion({ browser, url: urls.main, workspace: builds.main.workspace, outDir: dirs.motion, log });
+      const clips = await captureMotion({ browser, url: servers.main.signInUrl, workspace: builds.main.workspace, outDir: dirs.motion, log });
       // A clip that throws is logged and omitted rather than failing the run, so
       // assert the full set landed; a short count means a clip broke (e.g. an
       // app rename slipped past the contract) and needs a look before publishing.

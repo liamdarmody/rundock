@@ -27,6 +27,22 @@ after(cleanup);
 const RUNNABLE = { name: 'digest', schedule: 'every day at 07:00', prompt: 'go', runOn: 'local', enabled: true };
 const approve = (routine) => ({ ...routine, planApprovedHash: computePlanHash(routine) });
 
+// WHERE AN APPROVAL COUNTS (lib/agents/approval-store.js): the scheduler asks
+// this install's record for the open workspace, never the file. These open a
+// throwaway workspace, give a routine the identity discovery gives it, and
+// record an approval there the way the approve tap does.
+const config = require('../../lib/config.js');
+const store = require('../../lib/agents/approval-store.js');
+function openWorkspace() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'approve-here-'));
+  config.setWorkspace(dir);
+  return dir;
+}
+const here = (routine, occurrence = 0) => ({ ...routine, source: { file: '.claude/agents/piper.md', occurrence } });
+function approveHere(dir, routine) {
+  store.recordApproval(dir, store.identityOf(routine), computePlanHash(routine), null);
+}
+
 describe('what approval covers is read from the hash inputs, not restated', () => {
   // The exported field list is the single source. Which edits invalidate an
   // approval is derived from it here, so the claim "an edited skill
@@ -87,11 +103,16 @@ describe('what approval covers is read from the hash inputs, not restated', () =
 });
 
 describe('the scheduler refuses an unapproved plan, visibly', () => {
-  test('an unapproved routine is refused with its own word, and approval clears it', () => {
-    assert.strictEqual(scheduler.routineRefusal({ ...RUNNABLE }), 'approval',
+  test('an unapproved routine is refused with its own word, and approval here clears it', () => {
+    const dir = openWorkspace();
+    const routine = here(RUNNABLE);
+    assert.strictEqual(scheduler.routineRefusal(routine), 'approval',
     'an unapproved plan does not run unattended, and the refusal names why');
-    assert.strictEqual(scheduler.routineRefusal(approve(RUNNABLE)), null,
-      'the one tap is the whole of what was missing');
+    assert.strictEqual(scheduler.routineRefusal(approve(routine)), 'approval',
+      'an approval written into the file grants nothing on its own: anyone can compute one');
+    approveHere(dir, routine);
+    assert.strictEqual(scheduler.routineRefusal(routine), null,
+      'the one tap, recorded here, is the whole of what was missing');
   });
 
   test('the switch never shadows the approval, and the approval never shadows a deeper fault', () => {
@@ -152,14 +173,17 @@ describe('approval persists in the file, which is what a restart reads', () => {
     const rereadBlock = readRoutineBlock(content, 'digest', 0);
     const reread = normalizeRoutine(rereadBlock);
     assert.strictEqual(planApproved(reread), true, 'the approval is in the bytes, so a restart still has it');
-    assert.strictEqual(scheduler.routineRefusal(reread), null, 'and the tick runs it without asking again');
+    const dir = openWorkspace();
+    assert.strictEqual(scheduler.routineRefusal(here(reread)), 'approval', 'but the bytes alone do not run it: the copy that counts is this install\'s');
+    approveHere(dir, here(reread));
+    assert.strictEqual(scheduler.routineRefusal(here(reread)), null, 'and the tick runs it without asking again');
 
     // Then the plan changes, and the standing approval lapses by mismatch,
     // with nothing having to remember to revoke anything.
     const edited = updateRoutineBlock(content, 'digest', { prompt: 'do something else' }, 0);
     const editedRoutine = normalizeRoutine(readRoutineBlock(edited, 'digest', 0));
     assert.strictEqual(planApproved(editedRoutine), false, 'an edited plan is a new question');
-    assert.strictEqual(scheduler.routineRefusal(editedRoutine), 'approval', 'and the tick asks it');
+    assert.strictEqual(scheduler.routineRefusal(here(editedRoutine)), 'approval', 'and the tick asks it');
   });
 
   test('a newly created routine is born approved: making it is the consent', () => {
@@ -180,14 +204,17 @@ describe('approval persists in the file, which is what a restart reads', () => {
     assert.strictEqual(routine.planApprovedHash, routine.planHash,
       'the file records consent to the plan it was created with');
     assert.strictEqual(planApproved(routine), true);
-    assert.strictEqual(scheduler.routineRefusal(routine), null,
+    // The save handler records that consent here as it writes the block.
+    const dir = openWorkspace();
+    approveHere(dir, here(routine));
+    assert.strictEqual(scheduler.routineRefusal(here(routine)), null,
       'so it is scheduled from the moment it exists, with nothing else asked of the reader');
 
     // And an edit still asks, which is the whole reason the mechanism stays.
     const edited = normalizeRoutine(readRoutineBlock(
       updateRoutineBlock(next, 'fresh', { prompt: 'do something else entirely' }, 0), 'fresh', 0));
     assert.strictEqual(planApproved(edited), false, 'a changed plan is a new question');
-    assert.strictEqual(scheduler.routineRefusal(edited), 'approval', 'and the tick asks it');
+    assert.strictEqual(scheduler.routineRefusal(here(edited)), 'approval', 'and the tick asks it');
   });
 });
 
@@ -210,9 +237,12 @@ describe('the grandfather line: an upgrade never stops work you already run', ()
       '---', '',
     ].join('\n'));
     try {
+      // A workspace this install opened at this path before the upgrade.
+      require('../helpers/approvals.js').seenHere(dir);
+      config.setWorkspace(dir);
       const migrated = migrateAgentRoutines(file, fs.readFileSync(file, 'utf-8'));
       const running = normalizeRoutine(readRoutineBlock(migrated, 'running', 0));
-      const dormant = normalizeRoutine(readRoutineBlock(migrated, 'dormant', 0));
+      const dormant = { ...normalizeRoutine(readRoutineBlock(migrated, 'dormant', 0)), source: { file: '.claude/agents/piper.md', occurrence: 0 } };
       assert.strictEqual(planApproved(running), true,
         'a routine already running carries its consent over: stopping it to ask again would be the upgrade halting work you asked for');
       assert.ok(running.planApprovedAt == null,

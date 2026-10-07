@@ -35,6 +35,7 @@ import { createRequire } from 'node:module';
 import { waitFor } from './wait-for.mjs';
 
 const require = createRequire(import.meta.url);
+const { waitForSignInLink, withoutKey } = require('../sign-in-link.js');
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const LIVE = process.argv.includes('--live');
 const BASE_PORT = Number(process.env.SMOKE_PORT || 3651);
@@ -69,6 +70,7 @@ async function withApp(workspace, scenario, fn) {
   const stubPath = LIVE ? '' : `${path.join(ROOT, 'test', 'helpers', 'stub-claude')}${path.delimiter}${path.join(ROOT, 'test', 'helpers', 'stub-codex')}${path.delimiter}`;
   const env = { ...process.env, WORKSPACE: workspace, PORT: String(port), PATH: `${stubPath}${process.env.PATH}` };
   if (!LIVE) env.HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'personas-home-'));
+  if (!LIVE) env.RUNDOCK_ELECTRON = '1'; // Rundock's own records go in that temporary home, never the checkout
   const server = spawn(process.execPath, [path.join(ROOT, 'server.js')], { env, stdio: ['ignore', 'pipe', 'pipe'] });
   let serverLog = '';
   server.stdout.on('data', d => { serverLog += d; });
@@ -79,7 +81,7 @@ async function withApp(workspace, scenario, fn) {
   }, 15000);
   if (!up) {
     record(`${path.basename(workspace)} server boots`, false);
-    console.log(serverLog.slice(-2000));
+    console.log(withoutKey(serverLog.slice(-2000)));
     server.kill();
     return;
   }
@@ -87,10 +89,12 @@ async function withApp(workspace, scenario, fn) {
   const { chromium } = require('@playwright/test');
   const browser = await chromium.launch();
   const page = await browser.newPage();
-  await page.goto(`http://127.0.0.1:${port}/`);
+  const signInUrl = await waitForSignInLink(() => serverLog);
+  if (!signInUrl) throw new Error('the server printed no sign-in link');
+  await page.goto(signInUrl);
   await page.waitForTimeout(1500);
   try {
-    await fn({ page, port, serverLogTail: () => serverLog.slice(-1500) });
+    await fn({ page, port, serverLogTail: () => withoutKey(serverLog.slice(-1500)) });
   } catch (err) {
     record('persona journey aborted', false, err.message);
   } finally {

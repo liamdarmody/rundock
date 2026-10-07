@@ -82,6 +82,7 @@ function withWorkspace(fn, opts = {}) {
     name: 'piper', displayName: 'Piper', type: 'specialist', order: 1,
     routines: [routine],
   }));
+  require('../helpers/approvals.js').seenHere(ws);
   invalidateAgentCache();
   try {
     return fn(freshScheduler(), ws);

@@ -51,7 +51,8 @@ async function main() {
   const browser = await chromium.launch();
   const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
   page.setDefaultTimeout(15000);
-  const ctx = { page, workspace, home, port: PORT, scratch: path.join(root, 'repos'), seed: SEED };
+  const { waitForSignInLink, withoutKey } = require('../sign-in-link.js');
+  const ctx = { page, workspace, home, port: PORT, scratch: path.join(root, 'repos'), seed: SEED, signInUrl: () => waitForSignInLink(() => serverLog, 30000) };
 
   console.log(`walk: server ${serverCommit}${dirty ? ' (dirty)' : ''}, workspace ${workspace}`);
   const outcome = await runWalk(buildSteps(), ctx, {
@@ -70,10 +71,10 @@ async function main() {
     tags: { [LEAN_TEAM.repo]: LEAN_TEAM.tag, [CSV_EXTENSION.repo]: CSV_EXTENSION.tag },
   });
   const file = writeReport(fs, OUT, report);
-  fs.writeFileSync(path.join(OUT, 'server.log'), serverLog);
+  fs.writeFileSync(path.join(OUT, 'server.log'), withoutKey(serverLog));
   console.log(`\n${outcome.results.length - outcome.failed.length}/${outcome.results.length} steps passed; report at ${path.relative(ROOT, file)}`);
   // A failed walk keeps its workspace, so the disk can be read after the fact.
-  if (outcome.failed.length) console.log(`Workspace kept at ${workspace}\nServer log tail:\n` + serverLog.slice(-1500));
+  if (outcome.failed.length) console.log(`Workspace kept at ${workspace}\nServer log tail:\n` + withoutKey(serverLog.slice(-1500)));
   else fs.rmSync(root, { recursive: true, force: true });
   process.exit(outcome.exitCode);
 }

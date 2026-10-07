@@ -94,6 +94,7 @@ const EXPECTED_TYPES = [
   'save_connector', 'delete_connector',
   'save_routine', 'delete_routine', 'set_routine_paused',
   'set_routine_enabled', 'set_routine_schedule', 'approve_routine_plan',
+  'allow_held_routines', 'dismiss_held_routines',
   'search_conversations', 'search_universal', 'get_session_history',
   'save_file', 'create_path', 'reveal_in_finder',
   // Named sources for an extension view, pressed by
@@ -1175,6 +1176,7 @@ describe('handler seams (stub ctx, capture ws)', () => {
       const asked = [];
       const ctx = { workspace: {
         isInsideWorkspace: () => true,
+        isWritableInWorkspace: () => true,
         isSafeCreatePath: (rel) => { asked.push(rel); return false; },
       } };
       const ws = captureWs();
@@ -1260,6 +1262,7 @@ describe('handler seams (stub ctx, capture ws)', () => {
           // here, but the rule it applies can be. isSafeCreatePath is pure and
           // is used as it ships.
           isInsideWorkspace: (p) => path.resolve(p).startsWith(path.resolve(dir) + path.sep),
+          isWritableInWorkspace: (p) => path.resolve(p).startsWith(path.resolve(dir) + path.sep),
           isSafeCreatePath: srv.isSafeCreatePath,
           invalidateFileListCache: () => {},
           invalidateFileTreeCache: () => {},

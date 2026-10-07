@@ -164,9 +164,11 @@ export function variantsNeeded(shots = selectedShots()) {
 }
 
 // Captures every selected shot in every capture theme to `stagingDir`.
-// `urls` maps a workspace variant to its server. Returns a list of produced
+// `servers` maps a workspace variant to its server handle (serve.mjs): `url`
+// for a page of its own, `signInUrl` (a fresh one-time link per call, never
+// logged) for the workspace. Returns a list of produced
 // assets: { name, id, theme, kind: 'flat'|'crop', feature, hero, file }.
-export async function captureStills({ browser, urls, stagingDir, log = () => {} }) {
+export async function captureStills({ browser, servers, stagingDir, log = () => {} }) {
   fs.mkdirSync(stagingDir, { recursive: true });
   const produced = [];
   const shots = selectedShots();
@@ -175,15 +177,15 @@ export async function captureStills({ browser, urls, stagingDir, log = () => {} 
     const ctx = await newContext(browser, { motion: false, theme });
     for (const shot of shots) {
       const page = await ctx.newPage();
-      const base = urls[shot.variant || 'main'];
+      const server = servers[shot.variant || 'main'];
       const record = (kind, name, file) => produced.push({ name, id: shot.id || null, theme, kind, feature: shot.feature, hero: kind === 'flat' && !!shot.hero, file });
       try {
-        if (!base) throw new Error(`no server for workspace variant "${shot.variant}"`);
+        if (!server) throw new Error(`no server for workspace variant "${shot.variant}"`);
         if (shot.page) {
           // A page of its own (the component gallery), not the workspace.
-          await page.goto(base + shot.page, { waitUntil: 'domcontentloaded' });
+          await page.goto(server.url + shot.page, { waitUntil: 'domcontentloaded' });
         } else {
-          await gotoWorkspace(page, base);
+          await gotoWorkspace(page, server.signInUrl);
           await setTheme(page, theme);
         }
         await shot.setup(page);

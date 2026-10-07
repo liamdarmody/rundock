@@ -250,6 +250,7 @@ const MANIFEST = {
     "setRoutinesScope",
   ],
   "routines.js": [
+    "renderHeldStrip",
     "renderRoutines",
     "routinesActionCleared",
     "routinesActionFailed",

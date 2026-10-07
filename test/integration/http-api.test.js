@@ -22,15 +22,19 @@ before(async () => {
 });
 after(async () => h.shutdown());
 
+// Requests made as Rundock's own window, with its key. The hook's route is
+// asked as the hook asks: with the token of the conversation it names.
 function get(urlPath) {
-  return fetch(`http://127.0.0.1:${h.port}${urlPath}`).then(async res => ({
+  return fetch(`http://127.0.0.1:${h.port}${urlPath}`, { headers: h.authHeaders() }).then(async res => ({
     status: res.status, body: await res.text(), headers: res.headers,
   }));
 }
 
 function postJson(urlPath, body) {
   return fetch(`http://127.0.0.1:${h.port}${urlPath}`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...h.authHeaders(), ...(urlPath === '/api/permission-request' ? h.hookHeaders(body.conversation_id || null) : {}) },
+    body: JSON.stringify(body),
   }).then(async res => ({ status: res.status, body: await res.text() }));
 }
 
@@ -310,7 +314,7 @@ describe('path traversal guards', () => {
       + '<div id="settings-content"></div></body></html>', { runScripts: 'dangerously' });
     const w = dom.window;
     // fetch is the running product's fetch, pointed at the booted server.
-    w.fetch = (u, opts) => fetch(`http://127.0.0.1:${h.port}${u}`, opts);
+    w.fetch = (u, opts = {}) => fetch(`http://127.0.0.1:${h.port}${u}`, { ...opts, headers: { ...(opts.headers || {}), ...h.authHeaders() } });
     w.WebSocket = { OPEN: 1 };
     w.ws = { readyState: 1, send: (str) => client.send(JSON.parse(str)) };
     w.eval(SETTINGS_SRC);
@@ -435,7 +439,7 @@ describe('permission bridge', () => {
   });
 
   test('malformed body returns 400', async () => {
-    const res = await fetch(`http://127.0.0.1:${h.port}/api/permission-request`, { method: 'POST', body: 'not json' });
+    const res = await fetch(`http://127.0.0.1:${h.port}/api/permission-request`, { method: 'POST', headers: h.hookHeaders('convo-malformed'), body: 'not json' });
     assert.strictEqual(res.status, 400);
   });
 

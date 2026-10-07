@@ -241,15 +241,15 @@ describe('server binding', () => {
           + `an incomplete banner rather than a complete one that said too little. Output so far:\n${out}`)), BANNER_TIMEOUT_MS);
         child.stdout.on('data', (chunk) => {
           out += chunk.toString();
-          if (/Rundock running at http:\/\/localhost:\d+/.test(out) && /No workspace set/.test(out)) {
+          if (/Rundock is running: http:\/\/localhost:\d+\/#c=/.test(out) && /No workspace set/.test(out)) {
             clearTimeout(timer);
             resolve(out);
           }
         });
         child.once('error', (err) => { clearTimeout(timer); reject(err); });
       });
-      assert.match(banner, /running at http:\/\/localhost:\d+/,
-        'sanity: the line this test reads is the one the server prints at startup');
+      assert.match(banner, /Rundock is running: http:\/\/localhost:\d+\/#c=[A-Za-z0-9_-]+/,
+        'sanity: the line this test reads is the link the server prints at startup');
       assert.match(banner, /this machine only/i,
         'the banner names an address and stops there, so it reads as an invitation to anyone who can reach it. '
         + 'It has to say who can, because binding loopback is now what makes another device fail, and the user '

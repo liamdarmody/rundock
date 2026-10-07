@@ -36,6 +36,9 @@ module.exports = defineConfig({
   reporter: process.env.CI ? [['list'], ['github']] : [['list']],
   use: {
     baseURL: `http://localhost:${PORT}`,
+    // Every spec's browser starts signed in, as one that opened the printed
+    // link once would be. Written by test/e2e/serve.js before it listens.
+    storageState: require('./test/e2e/credentials.js').STORAGE_STATE,
     browserName: 'chromium',
     trace: 'retain-on-failure',
   },

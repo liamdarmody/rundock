@@ -38,7 +38,7 @@ test('the booted server serves the graph for a workspace it indexed itself',
     // poll briefly rather than assuming ordering between the two messages.
     let body = null;
     for (let attempt = 0; attempt < 40; attempt += 1) {
-      const res = await fetch(`http://127.0.0.1:${h.port}/api/graph`);
+      const res = await fetch(`http://127.0.0.1:${h.port}/api/graph`, { headers: h.authHeaders() });
       assert.ok(res.status === 200 || res.status === 500, `unexpected status ${res.status}`);
       if (res.status === 200) {
         body = await res.json();

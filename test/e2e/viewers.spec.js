@@ -7,6 +7,7 @@
 // decoded bytes), the PDF frame, and the cannot-preview fallback.
 // Screenshots land in test-results/viewers/ as run evidence.
 const base = require('@playwright/test');
+const { sessionGet } = require('./credentials.js');
 const { appendRawCoverage, writeLcov, isClientEntry } = require('./coverage.js');
 
 const test = base.test.extend({
@@ -158,7 +159,7 @@ test('PDF opens in a frame over the binary endpoint', async ({ page }) => {
   // reading width (navpanes=0).
   await expect(frame).toHaveAttribute('src', '/workspace-file?path=report.pdf#navpanes=0');
   // The endpoint really serves the bytes with the pinned content type.
-  const res = await page.request.get('/workspace-file?path=report.pdf');
+  const res = await sessionGet(page, '/workspace-file?path=report.pdf');
   expect(res.status()).toBe(200);
   expect(res.headers()['content-type']).toBe('application/pdf');
   expect((await res.body()).subarray(0, 5).toString()).toBe('%PDF-');
@@ -269,7 +270,7 @@ test('comment on an artifact: select, comment, sidecar written, reload re-anchor
   // The sidecar is on disk, openly stored, discoverable by path.
   const { sidecarPathFor } = await import('../../public/viewers/sidecar-controller.js');
   const sidecarPath = sidecarPathFor('proposal.html');
-  const res = await page.request.get('/api/file?path=' + encodeURIComponent(sidecarPath));
+  const res = await sessionGet(page, '/api/file?path=' + encodeURIComponent(sidecarPath));
   expect(res.status()).toBe(200);
   const sidecar = JSON.parse(await res.text());
   expect(sidecar.path).toBe('proposal.html');
@@ -287,7 +288,7 @@ test('comment on an artifact: select, comment, sidecar written, reload re-anchor
   await page.locator('.review-card .review-btn.resolve').click();
   await expect(page.locator('.review-card.comment')).toHaveCount(0);
   await expect.poll(async () => {
-    const r = await page.request.get('/api/file?path=' + encodeURIComponent(sidecarPath));
+    const r = await sessionGet(page, '/api/file?path=' + encodeURIComponent(sidecarPath));
     return JSON.parse(await r.text()).comments.c1.resolved;
   }).toBe(true);
 });
@@ -359,7 +360,7 @@ test('a comment re-anchors when a live external change keeps the quoted passage'
   const { sidecarPathFor } = await import('../../public/viewers/sidecar-controller.js');
   const sidecarPath = sidecarPathFor(artifactPath);
   await expect.poll(async () => {
-    const response = await page.request.get('/api/file?path=' + encodeURIComponent(sidecarPath));
+    const response = await sessionGet(page, '/api/file?path=' + encodeURIComponent(sidecarPath));
     if (!response.ok()) return null;
     return JSON.parse(await response.text()).comments.c1?.body || null;
   }).toBe('live note');
@@ -570,7 +571,7 @@ test('a callout edits in place and saves byte-honestly', async ({ page }) => {
   await expect(callout).not.toContainText('Two meetings');
   // The edit persists to the file as callout markdown (byte-honest).
   await expect.poll(async () =>
-    (await (await page.request.get('/api/file?path=briefing.md')).text())
+    (await (await sessionGet(page, '/api/file?path=briefing.md')).text())
   ).toContain('> Three meetings now.');
 });
 
@@ -581,7 +582,7 @@ test('opening and blurring a callout without an edit does not change the documen
   await expect(callout).toBeVisible();
   // Content-agnostic: capture whatever the file and callout currently hold, so
   // this test does not depend on other tests that edit the shared fixture.
-  const before = await (await page.request.get('/api/file?path=briefing.md')).text();
+  const before = await (await sessionGet(page, '/api/file?path=briefing.md')).text();
   const calloutTextBefore = await callout.textContent();
   // Open the in-place editor, then blur without typing (a no-op commit).
   await callout.locator('.callout-edit-btn').click();
@@ -599,7 +600,7 @@ test('opening and blurring a callout without an edit does not change the documen
   await expect(callout).toHaveText(calloutTextBefore);
   // No no-op write: the file is byte-identical.
   await page.waitForTimeout(300);
-  const after = await (await page.request.get('/api/file?path=briefing.md')).text();
+  const after = await (await sessionGet(page, '/api/file?path=briefing.md')).text();
   expect(after).toBe(before);
 });
 
@@ -762,10 +763,10 @@ test('editing a frontmatter property persists byte-honestly to the file', async 
   await expect(page.locator('.prop-row[data-prop-key="title"]')).toContainText('Evening Briefing');
   // The file on disk: only the title line changed; quotes preserved.
   await expect.poll(async () => {
-    const res = await page.request.get('/api/file?path=briefing.md');
+    const res = await sessionGet(page, '/api/file?path=briefing.md');
     return await res.text();
   }).toContain('title: "Evening Briefing"');
-  const after = await (await page.request.get('/api/file?path=briefing.md')).text();
+  const after = await (await sessionGet(page, '/api/file?path=briefing.md')).text();
   expect(after).toContain('  - "[[Roadmap-2026]]"'); // untouched neighbour bytes
   expect(after).toContain('> [!abstract]+ Today at a glance'); // body untouched
   await page.screenshot({ path: `${SHOTS}/property-edit.png` });
@@ -797,7 +798,7 @@ test('an external edit while typing produces reload-theirs/keep-mine, never a si
   await expect(page.locator('#tiptap-editor-pane')).toContainText('Edited elsewhere while Rundock was open.');
 
   // And the disk was never clobbered by the local edit.
-  const disk = await (await page.request.get('/api/file?path=Roadmap-2026.md')).text();
+  const disk = await (await sessionGet(page, '/api/file?path=Roadmap-2026.md')).text();
   expect(disk).not.toContain('My local addition');
 });
 
@@ -891,11 +892,11 @@ test('a kanban board file opens as a column board and renders rich cards', async
 
 test('opening a board changes zero bytes; adding a card persists canonical markdown', async ({ page }) => {
   await boot(page);
-  const before = await (await page.request.get('/api/file?path=board.md')).text();
+  const before = await (await sessionGet(page, '/api/file?path=board.md')).text();
   await openFromTree(page, 'board.md');
   await expect(page.locator('.board-lane')).toHaveCount(3);
   // Merely opening a board must not rewrite it.
-  const afterOpen = await (await page.request.get('/api/file?path=board.md')).text();
+  const afterOpen = await (await sessionGet(page, '/api/file?path=board.md')).text();
   expect(afterOpen).toBe(before);
   // Add a card to the first lane through the composer.
   await page.locator('.board-lane').first().locator('.board-add-open').click();
@@ -903,9 +904,9 @@ test('opening a board changes zero bytes; adding a card persists canonical markd
   await page.locator('.board-lane').first().locator('.board-add textarea').press('Enter');
   await expect(page.locator('.board-card-text', { hasText: 'A brand new card' })).toBeVisible();
   // The new card persists as a canonical markdown line in the To do lane.
-  await expect.poll(async () => (await (await page.request.get('/api/file?path=board.md')).text()))
+  await expect.poll(async () => (await (await sessionGet(page, '/api/file?path=board.md')).text()))
     .toContain('- [ ] A brand new card');
-  const saved = await (await page.request.get('/api/file?path=board.md')).text();
+  const saved = await (await sessionGet(page, '/api/file?path=board.md')).text();
   expect(saved).toContain('## To do\n\n- [ ] Draft the outline\n- [ ] **Review** the brief\n- [ ] A brand new card');
   expect(saved.endsWith('%%')).toBe(true); // no trailing newline: still canonical
 });
@@ -944,7 +945,7 @@ test('cards reorder within a column by dragging onto another card', async ({ pag
   expect(texts.map(t => t.trim())).toEqual(['Card B', 'Card C', 'Card A']);
   // ...and persisted in that order in the file.
   await expect.poll(async () => {
-    const md = await (await page.request.get('/api/file?path=dnd-board.md')).text();
+    const md = await (await sessionGet(page, '/api/file?path=dnd-board.md')).text();
     return md.indexOf('Card B') < md.indexOf('Card C') && md.indexOf('Card C') < md.indexOf('Card A');
   }).toBe(true);
 });
@@ -995,7 +996,7 @@ test('a card the rich editor cannot round-trip falls back to the plain editor, b
   await expect(page.locator('.board-card-editor')).toHaveCount(0);
   await page.locator('textarea.board-card-edit').press('Enter'); // commit, no change
   // The file stays byte-identical: no corruption from merely opening the card.
-  await expect.poll(async () => (await (await page.request.get('/api/file?path=nested-board.md')).text())).toBe(board);
+  await expect.poll(async () => (await (await sessionGet(page, '/api/file?path=nested-board.md')).text())).toBe(board);
   // A simple inline card still gets the rich editor.
   await page.locator('.board-card-text', { hasText: 'Simple inline card' }).click();
   await expect(page.locator('.board-card-editor .ProseMirror')).toBeVisible();
@@ -1041,9 +1042,9 @@ test('a board card edits in place and persists byte-honest markdown', async ({ p
   await page.keyboard.press('Enter'); // Enter saves
   await expect(page.locator('.board-card-text strong', { hasText: 'full' })).toBeVisible();
   // Only that card's line changed; the file stays canonical.
-  await expect.poll(async () => (await (await page.request.get('/api/file?path=board.md')).text()))
+  await expect.poll(async () => (await (await sessionGet(page, '/api/file?path=board.md')).text()))
     .toContain('- [ ] Draft the **full** outline');
-  const saved = await (await page.request.get('/api/file?path=board.md')).text();
+  const saved = await (await sessionGet(page, '/api/file?path=board.md')).text();
   expect(saved.endsWith('%%')).toBe(true);
 });
 
@@ -1055,12 +1056,12 @@ test('deleting a board card is undoable in-session', async ({ page }) => {
   await target.locator('.board-card-ctl').click();
   await expect(page.locator('.board-card', { hasText: 'Ship it' })).toHaveCount(0);
   // Persisted removal...
-  await expect.poll(async () => (await (await page.request.get('/api/file?path=board.md')).text()))
+  await expect.poll(async () => (await (await sessionGet(page, '/api/file?path=board.md')).text()))
     .not.toContain('Ship it');
   // ...but recoverable via the undo toast.
   await page.locator('.board-undo-btn').click();
   await expect(page.locator('.board-card', { hasText: 'Ship it' })).toHaveCount(1);
-  await expect.poll(async () => (await (await page.request.get('/api/file?path=board.md')).text()))
+  await expect.poll(async () => (await (await sessionGet(page, '/api/file?path=board.md')).text()))
     .toContain('- [ ] Ship it');
 });
 
@@ -1090,7 +1091,7 @@ test('block-style frontmatter on a board survives a save', async ({ page }) => {
   await expect(page.locator('.board-lane')).toHaveCount(2);
   // Toggle a checkbox (forces a save) and confirm the block tag list is intact.
   await page.locator('.board-card-check').first().check();
-  await expect.poll(async () => (await (await page.request.get('/api/file?path=tagged-board.md')).text()))
+  await expect.poll(async () => (await (await sessionGet(page, '/api/file?path=tagged-board.md')).text()))
     .toContain('tags:\n  - project\n  - kanban');
 });
 
@@ -1102,7 +1103,7 @@ test('a column collapses to a rail and the state persists to the board file', as
   await firstLane.locator('.board-lane-collapse').click();
   await expect(firstLane).toHaveClass(/collapsed/);
   // Persisted into list-collapse (first lane true).
-  await expect.poll(async () => (await (await page.request.get('/api/file?path=tagged-board.md')).text()))
+  await expect.poll(async () => (await (await sessionGet(page, '/api/file?path=tagged-board.md')).text()))
     .toContain('"list-collapse":[true,false]');
   // Clicking the collapsed rail expands it again.
   await firstLane.click();
@@ -1125,7 +1126,7 @@ test('the lane menu renames, inserts, and deletes lists with undo', async ({ pag
   await rename.fill('Icebox');
   await rename.press('Enter');
   await expect(page.locator('.board-lane-title', { hasText: 'Icebox' })).toBeVisible();
-  await expect.poll(async () => (await (await page.request.get('/api/file?path=board.md')).text()))
+  await expect.poll(async () => (await (await sessionGet(page, '/api/file?path=board.md')).text()))
     .toContain('## Icebox');
 
   // Insert a list after the first, then delete it with undo.
@@ -1151,7 +1152,7 @@ test('the lane menu moves a column right, reordering it in the file', async ({ p
   await expect(titles().nth(0)).toHaveText(second);
   await expect(titles().nth(1)).toHaveText(first);
   await expect.poll(async () => {
-    const md = await (await page.request.get('/api/file?path=reorder-board.md')).text();
+    const md = await (await sessionGet(page, '/api/file?path=reorder-board.md')).text();
     return md.indexOf('## ' + second) < md.indexOf('## ' + first);
   }).toBe(true);
 });

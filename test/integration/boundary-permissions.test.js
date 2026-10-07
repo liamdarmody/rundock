@@ -40,6 +40,7 @@ function runHook(toolName, toolInput, extraEnv = {}) {
         RUNDOCK_PORT: String(h.port),
         RUNDOCK_WORKSPACE: h.workspaceDir,
         RUNDOCK_CONVO_ID: 'boundary-test',
+        RUNDOCK_HOOK_TOKEN: h.hookToken('boundary-test'),
         ...extraEnv,
       },
       stdio: ['pipe', 'pipe', 'pipe'],

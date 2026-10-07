@@ -126,6 +126,10 @@ function makeWorkspace(opts = {}) {
       fs.writeFileSync(full, content);
     }
   }
+  // A fixture is a workspace this install has opened before unless a test
+  // says otherwise (`seenBefore: false`): the routine approvals its files
+  // carry count, as they did before approvals were kept per install.
+  if (opts.seenBefore !== false) require('./approvals.js').seenHere(dir);
   return dir;
 }
 

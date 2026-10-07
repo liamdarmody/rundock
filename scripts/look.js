@@ -94,7 +94,9 @@ async function main() {
   // only thing the reader wants and the server's own boot output is long
   // enough to push it off a short terminal.
   console.log('');
-  console.log(`  Look at it:  http://localhost:${port}`);
+  // The address alone opens a page that asks for the link, so name where the
+  // link is instead: the server prints it below, once it is listening.
+  console.log(`  Look at it:  open the "Rundock is running" link printed below (port ${port})`);
   if (branch) console.log(`  Branch:      ${branch}`);
   console.log(`  Workspace:   ${workspace || '(the server default)'}`);
   console.log('');

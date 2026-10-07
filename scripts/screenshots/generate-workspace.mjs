@@ -602,6 +602,14 @@ export function buildWorkspace(opts = {}) {
   write(MARKDOWN_REVIEW_NOTE_REL, markdownReviewNoteContent());
 
   // --- Routine run state ------------------------------------------------
+  // A workspace this computer has opened here before, so its routines count
+  // as approved and read as they do for anyone who has used Rundock
+  // (lib/agents/approval-locality.js). Without it the demo arrives as a
+  // folder from elsewhere and its routines are held; look-view asks for that
+  // with "arrived": true.
+  if (opts.seenBefore !== false) {
+    write(path.join('.rundock', 'state.json'), JSON.stringify({ workspacePath: fs.realpathSync(workspace) }, null, 2));
+  }
   write(path.join('.rundock', 'routine-state.json'), JSON.stringify(ROUTINE_STATE, null, 2));
   write(path.join('.rundock', 'routine-slots.json'), JSON.stringify(ROUTINE_SLOTS, null, 2));
 

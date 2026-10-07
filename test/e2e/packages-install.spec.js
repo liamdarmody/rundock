@@ -13,6 +13,7 @@
 const base = require('@playwright/test');
 const fs = require('node:fs');
 const path = require('node:path');
+const { sessionGet } = require('./credentials.js');
 const { execFileSync } = require('node:child_process');
 const { appendRawCoverage, writeLcov, isClientEntry } = require('./coverage.js');
 
@@ -96,7 +97,7 @@ async function readLink(page, link) {
 }
 
 async function fileExists(page, rel) {
-  const response = await page.request.get('/api/file?path=' + encodeURIComponent(rel));
+  const response = await sessionGet(page, '/api/file?path=' + encodeURIComponent(rel));
   return response.ok();
 }
 
@@ -124,7 +125,7 @@ test('plan, confirm and apply land the package with its receipt', async ({ page 
   const receipt = await page.locator('.packages-success-card').getAttribute('data-receipt');
   expect(receipt).toMatch(/^\.rundock\/receipts\//);
   expect(await fileExists(page, receipt)).toBe(true);
-  const written = JSON.parse(await (await page.request.get('/api/file?path=' + encodeURIComponent(receipt))).text());
+  const written = JSON.parse(await (await sessionGet(page, '/api/file?path=' + encodeURIComponent(receipt))).text());
   expect(written.source).toEqual({ id: 'https://github.com/e2e-fixture/pkg-happy', reference: 'v1.0.0', commit: expect.stringMatching(/^[0-9a-f]{40}$/) },
     'the receipt names the link, the pin it was read at, and the exact commit fetched');
 });
@@ -276,7 +277,7 @@ test('a collision opens the review with skip preselected, in both themes, and sk
   // Confirming an untouched review keeps what the person already has.
   await card.locator('.packages-confirm').click();
   await expect(page.locator('.packages-success-card .packages-headline')).toHaveText('Nothing was added');
-  const kept = await page.request.get('/api/file?path=' + encodeURIComponent('.claude/skills/collide-writer/SKILL.md'));
+  const kept = await sessionGet(page, '/api/file?path=' + encodeURIComponent('.claude/skills/collide-writer/SKILL.md'));
   expect(await kept.text()).toContain('existing');
 });
 
@@ -295,7 +296,7 @@ test('overwrite is a deliberate switch, and the confirm label follows it', async
   await expect(confirm).toHaveText('Overwrite 1');
   await confirm.click();
   await expect(page.locator('.packages-success-card .packages-headline')).toHaveText('Added to your team');
-  const replaced = await page.request.get('/api/file?path=' + encodeURIComponent('.claude/skills/switch-writer/SKILL.md'));
+  const replaced = await sessionGet(page, '/api/file?path=' + encodeURIComponent('.claude/skills/switch-writer/SKILL.md'));
   expect(await replaced.text()).toContain('incoming');
 });
 
@@ -394,7 +395,7 @@ test('skip one colliding item and overwrite another: the workspace holds both ou
   await expect(card.locator('.packages-confirm')).toHaveText('Overwrite 1, skip 1');
   await card.locator('.packages-confirm').click();
   await expect(page.locator('.packages-success-card .packages-headline')).toHaveText('Added to your team');
-  const read = async (rel) => (await page.request.get('/api/file?path=' + encodeURIComponent(rel))).text();
+  const read = async (rel) => (await sessionGet(page, '/api/file?path=' + encodeURIComponent(rel))).text();
   expect(await read('.claude/skills/decide-writer/SKILL.md')).toContain('incoming');
   expect(await read('.claude/agents/decide-keeper.md')).toContain('Mine.');
   const receiptPath = await page.locator('.packages-success-card').getAttribute('data-receipt');
