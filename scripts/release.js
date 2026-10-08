@@ -9,6 +9,8 @@
  *   npm run release -- bump <version>       # version + promoted changelog, committed with the candidate
  *   ...push the candidate, open its pull request, let CI finish on it...
  *   npm run release:gate                    # what CI cannot do, on the candidate's exact tree
+ *   ...start Rundock from the candidate and try the test list in the browser...
+ *   npm run release -- signoff <version> --confirm <version>   # record that check for this tree, yourself
  *   ...merge that pull request...
  *   npm run release -- tag <version>        # tag the merged commit, which starts the build
  *   ...watch the build, review the draft it publishes...
@@ -170,6 +172,104 @@ function requireGatePass(headTree, { root = ROOT } = {}) {
 }
 
 // ---------------------------------------------------------------------------
+// Sign-off subcommand: the hands-on check from source, recorded by tree
+// ---------------------------------------------------------------------------
+
+// Before the cut, the release engineer starts Rundock from the release branch
+// and tries a short test list in the browser. That is the step that found
+// both blockers of the first 0.15.1 cut, which every gate had passed because
+// their tests reached the store and not the handler. `signoff` records that
+// it happened, against the tree that was tried, and `tag` refuses any other.
+//
+// The record lives in git's common directory, so a sign-off made in a
+// worktree on the release branch is seen by the checkout that tags main, and
+// it can never be committed. It holds the tree, the version, the time and an
+// optional note, and nothing else.
+//
+// IT IS A HUMAN ACT. Three things stand between an agent and a sign-off:
+// --confirm must name the version (as publish's does); the command refuses
+// inside an agent session (Claude Code sets CLAUDECODE for every command it
+// runs); and the note is read from the controlling terminal, not from stdin
+// or argv, so nothing can be piped into it and a shell without a terminal,
+// which is what an agent's tool runs in, is refused. Copying a printed
+// command satisfies none of these. Writing the file by hand is forgery, and
+// is the one thing this cannot stop: like the gate record, it is a friction
+// boundary, not a security one.
+const SIGNOFF_FILE_NAME = 'rundock-release-signoff.json';
+
+function signoffPath({ root = ROOT, git = gitIn(root) } = {}) {
+  return path.resolve(root, git(['rev-parse', '--git-common-dir']).trim(), SIGNOFF_FILE_NAME);
+}
+
+function readSignoff(opts = {}) {
+  try { return JSON.parse(fs.readFileSync(signoffPath(opts), 'utf8')); } catch { return null; }
+}
+
+// One line read from the controlling terminal, synchronously. Throws when
+// there is none (ENXIO), which is the case for every agent's shell.
+function askAtTerminal(prompt, { open = () => fs.openSync('/dev/tty', 'r+') } = {}) {
+  const fd = open();
+  try {
+    fs.writeSync(fd, prompt);
+    const buf = Buffer.alloc(1);
+    const bytes = [];
+    while (fs.readSync(fd, buf, 0, 1, null) === 1 && buf[0] !== 10) bytes.push(buf[0]);
+    return Buffer.from(bytes).toString('utf8').trim();
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+function signoffRelease(version, {
+  root = ROOT, git = gitIn(root), argv = process.argv, env = process.env, ask = askAtTerminal, now = () => new Date(), log = logStep,
+} = {}) {
+  const command = `npm run release -- signoff ${version} --confirm ${version}`;
+  if (!hasConfirmation(argv, version)) {
+    throw new Error(`A sign-off needs --confirm naming the version you tried from source:\n    ${command}`);
+  }
+  if (env.CLAUDECODE) {
+    throw new Error('This is running inside an agent session. The hands-on check is yours: run the sign-off yourself, at a terminal.');
+  }
+  if (git(['status', '--porcelain']).trim()) {
+    throw new Error('The working tree is not clean, so what you tried is not a committed tree. Commit or stash, try it again, then sign off.');
+  }
+  const pkg = JSON.parse(git(['show', 'HEAD:package.json']));
+  if (pkg.version !== version) {
+    throw new Error(`This checkout is ${pkg.version}, not ${version}. Sign off on the release candidate, which carries the bump.`);
+  }
+  const tree = git(['rev-parse', 'HEAD^{tree}']).trim();
+  let note;
+  try {
+    note = ask(`Tried ${version} from source on tree ${tree.slice(0, 12)}. Note (optional, Enter to record): `);
+  } catch (err) {
+    throw new Error(`A sign-off is typed at a terminal, and this has none (${err.code || err.message}). Run it yourself, at a terminal.`);
+  }
+  const record = { tree, version, signedAt: now().toISOString(), ...(note ? { note } : {}) };
+  fs.writeFileSync(signoffPath({ root, git }), JSON.stringify(record, null, 2) + '\n');
+  log('signoff', `Recorded the hands-on check of ${version} on tree ${tree.slice(0, 12)}`);
+  return record;
+}
+
+// The tag refuses without a sign-off for exactly the tree it tags. A fix
+// after the check changes the tree, so it needs the check again.
+function requireSignoff(headTree, version, opts = {}) {
+  const signoff = readSignoff(opts);
+  const command = `npm run release -- signoff ${version} --confirm ${version}`;
+  if (!signoff) {
+    throw new Error(
+      `No hands-on sign-off found. Start Rundock from the release branch, try the test list in the browser, ` +
+      `then record it yourself, at a terminal: ${command}`
+    );
+  }
+  if (signoff.tree !== headTree) {
+    throw new Error(
+      `The hands-on check was signed off on tree ${String(signoff.tree).slice(0, 12)} but the commit being tagged has tree ${headTree.slice(0, 12)}. ` +
+      `Something changed after the check: try this tree from source and sign off again (${command}).`
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Publish subcommand
 // ---------------------------------------------------------------------------
 
@@ -315,10 +415,11 @@ function publishRelease(version, { api = ghApi, log = (msg) => console.log(`[rel
 // convention stopped an agent running it unprompted mid-task. A stale
 // confirmation for a different version does not satisfy this, so an old
 // command cannot be reused for a new release by habit.
-function hasPublishConfirmation(argv, version) {
+function hasConfirmation(argv, version) {
   const i = argv.indexOf('--confirm');
   return i !== -1 && argv[i + 1] === version;
 }
+const hasPublishConfirmation = hasConfirmation;
 
 function setVersion(version, { root = ROOT, log = logStep } = {}) {
   const pkgPath = path.join(root, 'package.json');
@@ -485,7 +586,9 @@ function tagRelease(version, { root = ROOT, git = gitIn(root), log = logStep } =
     );
   }
 
-  requireGatePass(git(['rev-parse', `${merged}^{tree}`]).trim(), { root });
+  const mergedTree = git(['rev-parse', `${merged}^{tree}`]).trim();
+  requireGatePass(mergedTree, { root });
+  requireSignoff(mergedTree, version, { root, git });
 
   if (git(['ls-remote', '--tags', 'origin', `refs/tags/${tag}`]).trim()) {
     throw new Error(`Tag ${tag} already exists on the remote. Choose a new version, or recut deliberately by deleting it first.`);
@@ -517,7 +620,8 @@ function tagRelease(version, { root = ROOT, git = gitIn(root), log = logStep } =
 const USAGE = [
   'Usage:',
   '  npm run release -- bump <version>                       write the version and promote the changelog, to commit with the candidate',
-  '  npm run release -- tag <version>                        after the gated release pull request merges, tag the merged commit',
+  '  npm run release -- signoff <version> --confirm <version>   after trying the candidate from source yourself, record it for its tree',
+  '  npm run release -- tag <version>                        after the gated, signed-off release pull request merges, tag the merged commit',
   '  npm run release -- publish <version> --confirm <version>   publish the draft release CI built for that tag, only after you have tested it yourself',
 ].join('\n');
 
@@ -550,6 +654,13 @@ if (require.main === module) {
     console.log('');
     logStep('done', `package.json is ${version} and CHANGELOG.md's top heading is "${result.heading.replace(/^##\s*/, '')}".`);
     logStep('done', 'Commit both with the candidate, push it and open its pull request. Once CI is green on it: npm run release:gate');
+  } else if (subcommand === 'signoff') {
+    const version = versionFor('signoff');
+    try {
+      signoffRelease(version);
+    } catch (err) {
+      fail('signoff', err.message);
+    }
   } else if (subcommand === 'tag') {
     const version = versionFor('tag');
     try {
@@ -601,6 +712,11 @@ module.exports = {
   promoteUnreleasedChangelog,
   preflight,
   requireGatePass,
+  signoffRelease,
+  requireSignoff,
+  readSignoff,
+  askAtTerminal,
+  SIGNOFF_FILE_NAME,
   bumpRelease,
   tagRelease,
   publishRelease,

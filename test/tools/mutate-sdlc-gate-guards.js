@@ -75,6 +75,7 @@ const RELEASE_CI = { src: path.join(ROOT, 'scripts', 'release-ci.js'), suite: 't
 const RELEASE_GATE = { src: path.join(ROOT, 'scripts', 'release-gate.js'), suite: 'test/unit/release-gate.test.js' };
 const RELEASE_RECORD = { src: path.join(ROOT, 'scripts', 'release.js'), suite: 'test/unit/release-gate.test.js' };
 const RELEASE_TAG = { src: path.join(ROOT, 'scripts', 'release.js'), suite: 'test/unit/release-tag.test.js' };
+const RELEASE_SIGNOFF = { src: path.join(ROOT, 'scripts', 'release.js'), suite: 'test/unit/release-signoff.test.js' };
 // The mutation scope and the CI retry classifier, each watched by its suite.
 const SCOPE = { src: path.join(ROOT, 'scripts', 'mutation-scope.js'), suite: 'test/unit/mutation-scope.test.js' };
 const CI_VERDICT = { src: path.join(ROOT, 'scripts', 'ci-verdict.js'), suite: 'test/unit/ci-verdict.test.js' };
@@ -279,6 +280,9 @@ const MUTATIONS = [
   [RELEASE_GATE, "a dirty tree refuses",
     "    if (dirty) {",
     "    if (false) {"],
+  [RELEASE_GATE, "the gate runs the release walk",
+    "    { name: 'release walk', cmd: ['npm', ['run', 'walk']] },\n",
+    ""],
   [RELEASE_RECORD, "the record must name the tree being tagged",
     "  if (record.tree !== headTree) {",
     "  if (false) {"],
@@ -289,8 +293,26 @@ const MUTATIONS = [
     "  if (!record.ci || record.ci.skipped || !record.ci.checks) {",
     "  if (false) {"],
   [RELEASE_TAG, "the tag checks the gate record against the merged tree",
-    "  requireGatePass(git(['rev-parse', `${merged}^{tree}`]).trim(), { root });\n",
+    "  requireGatePass(mergedTree, { root });\n",
     ""],
+  // The hands-on check from source, recorded by tree: the tag needs one, it
+  // must be for the tree being tagged, and recording it needs a --confirm
+  // naming the version, outside an agent session, typed at a terminal.
+  [RELEASE_TAG, "the tag refuses without a hands-on sign-off",
+    "  requireSignoff(mergedTree, version, { root, git });\n",
+    ""],
+  [RELEASE_SIGNOFF, "a sign-off for another tree does not count",
+    "  if (signoff.tree !== headTree) {",
+    "  if (false) {"],
+  [RELEASE_SIGNOFF, "--confirm must name the version being signed off",
+    "  if (!hasConfirmation(argv, version)) {",
+    "  if (false) {"],
+  [RELEASE_SIGNOFF, "a sign-off is refused inside an agent session",
+    "  if (env.CLAUDECODE) {",
+    "  if (false) {"],
+  [RELEASE_SIGNOFF, "a sign-off with no terminal to type it at is refused",
+    "    throw new Error(`A sign-off is typed at a terminal, and this has none",
+    "    note = ''; if (0) throw new Error(`A sign-off is typed at a terminal, and this has none"],
 
   // ===== THE MUTATION SCOPE: WHAT A CHANGE CAN REACH =====
   // Comparing against HEAD instead of the merge base is the defect that made
