@@ -45,6 +45,15 @@ function agentColour(value, fallback) {
     ? RundockAgentColour.safeColour(value, safe) : safe;
 }
 
+// The "Details" control under a failure's plain sentence: the raw words of a
+// system error (public/readable-error.js), or nothing when there are none.
+// Read at call time off the global, or required under Node.
+function errorDetailsHtml(detail) {
+  const readableError = (typeof RundockReadableError !== 'undefined') ? RundockReadableError
+    : (typeof require === 'function' ? require('../readable-error.js') : null);
+  return readableError ? readableError.detailsHtml(detail) : '';
+}
+
 // What the reader asked to see, and what came back.
 //
 // `record` is deliberately three-valued. `undefined` is "the answer has not
@@ -201,6 +210,7 @@ function detailHtml(view, title, agent) {
     + `<p class="rd-headline" data-run-detail="headline">${escText(view.state.headline)}</p>`
     + (view.state.guidance
       ? `<p class="rd-guidance" data-run-detail="guidance">${escText(view.state.guidance)}</p>`
+        + errorDetailsHtml(view.state.guidanceDetail)
       : '')
     + meta
     + stopHtml(view)

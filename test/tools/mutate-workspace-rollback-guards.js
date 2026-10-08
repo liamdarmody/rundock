@@ -69,7 +69,7 @@ const MUTATIONS = [
   // A failure that is swallowed leaves the client with no reply at all, which
   // is the state this whole guard was written to end.
   [HANDLER, 'a switch that could not complete says so',
-    "    ws.send(JSON.stringify({ type: 'workspace_error', message: 'Could not open workspace: ' + e.message }));\n",
+    "    ws.send(JSON.stringify({ type: 'workspace_error', ...readable(e, { action: 'open this workspace', fallback: 'Could not open workspace: ' + e.message }) }));\n",
     ''],
 ];
 

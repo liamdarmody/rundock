@@ -329,6 +329,21 @@ describe('the run message, driven through the real dispatch', () => {
       assert.strictEqual(refused(sent)[0].reason, undefined, 'and carries no refusal word, because nothing refused it');
     });
   });
+  test('a start the system refuses is said plainly, with its raw words for Details', () => {
+    withDispatch(({ press, sent }) => {
+      const shared = require(SCHEDULER_KEY);
+      const real = shared.runRoutineNow;
+      const runsDir = 'C:\\Users\\example\\Workspace\\.rundock\\runs';
+      shared.runRoutineNow = () => {
+        throw Object.assign(new Error(`EBUSY: resource busy or locked, open '${runsDir}\\r1.json'`), { code: 'EBUSY', syscall: 'open' });
+      };
+      try { press(); } finally { shared.runRoutineNow = real; }
+      const [answer] = refused(sent);
+      assert.strictEqual(answer.message, "Rundock couldn't start the routine because another program is using a file. Close the program that has it open, then try again.");
+      assert.ok(answer.detail.includes(runsDir), 'the path is in the detail');
+      assert.strictEqual(answer.reason, undefined);
+    });
+  });
   test('a press on the second of two namesakes runs that one', () => {
     withDispatch(({ press, children }) => {
       press({ occurrence: 1 });

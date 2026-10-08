@@ -2990,3 +2990,54 @@ describe('a redraw while the person types keeps the typed link', () => {
     });
   });
 });
+
+// A SYSTEM ERROR READS AS A SENTENCE, WITH ITS RAW WORDS BEHIND DETAILS.
+// The shape 0.15.2 showed on Windows: a recursive remove refused, the code and
+// a long path and nothing a person could act on (public/readable-error.js).
+describe('an install the system refuses, through the real handler and the real settings view', () => {
+  test('the failure card says what Rundock was doing and what to try, and the path is only in Details', () => {
+    withWorkspace(() => {
+      const shell = settingsShell();
+      const raw = 'EPERM, Permission denied: \\\\?\\C:\\Users\\example\\AppData\\Local\\Temp\\rundock-acquire\\.git\\objects\\pack\\p.idx';
+      const previousDeps = handlers.wireExtensionDeps({ acquire: () => { throw Object.assign(new Error(raw), { code: 'EPERM' }); } });
+      try {
+        const sock = captureWs();
+        shell.submit('someone/test-ext@v1.0.0');
+        handlers.handlePlanPackageInstall(ctx(), sock, shell.sent[0]);
+        const [reply] = sock.sent;
+        assert.strictEqual(reply.type, 'package_install_error');
+        assert.strictEqual(reply.code, 'EPERM', 'the machine-readable code is unchanged');
+        assert.match(reply.message, /^Rundock couldn't read the package because your computer didn't allow a change to a file\. /);
+        assert.strictEqual(reply.detail, raw);
+        shell.dispatch(reply);
+        const card = shell.content().querySelector('.packages-failed');
+        assert.ok(card, 'the failure card');
+        const body = card.querySelector('.packages-body').textContent;
+        assert.match(body, /didn't allow a change to a file/);
+        assert.ok(!body.includes('AppData') && !body.includes('EPERM'), `no path or code in the sentence: ${body}`);
+        const details = card.querySelector('details.error-details');
+        assert.ok(details, 'a Details control');
+        assert.strictEqual(details.querySelector('summary').textContent, 'Details');
+        assert.strictEqual(details.querySelector('code').textContent, raw);
+        assert.strictEqual(details.open, false, 'closed until asked for');
+      } finally {
+        handlers.wireExtensionDeps(previousDeps);
+        shell.release();
+      }
+    });
+  });
+
+  test('a refusal that is not the system\'s keeps its own words and has no Details', () => {
+    withWorkspace(() => {
+      const shell = settingsShell();
+      try {
+        const sock = captureWs();
+        handlers.handleConfirmExtensionInstall(ctx(), sock, { type: 'confirm_extension_install', token: 'pkg-never-issued' });
+        assert.match(sock.sent[0].message, /^nothing is awaiting this confirmation/);
+        assert.strictEqual(sock.sent[0].detail, null);
+      } finally {
+        shell.release();
+      }
+    });
+  });
+});

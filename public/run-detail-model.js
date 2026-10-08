@@ -47,10 +47,10 @@
 // THE CLOCK IS A PARAMETER. Everything here takes `now` from its caller, so
 // these words are the same at 23:59 as at noon and the same in London as in
 // Auckland.
-(/** @param {any} root @param {() => object} factory */ function (root, factory) {
-  if (typeof module === 'object' && module.exports) module.exports = factory();
-  else root.RundockRunDetailModel = factory();
-}(typeof self !== 'undefined' ? self : this, function () {
+(/** @param {any} root @param {(readableError: any) => object} factory */ function (root, factory) {
+  if (typeof module === 'object' && module.exports) module.exports = factory(require('./readable-error.js'));
+  else root.RundockRunDetailModel = factory(root.RundockReadableError);
+}(typeof self !== 'undefined' ? self : this, function (RundockReadableError) {
 
   /**
    * A lookup table with NO PROTOTYPE.
@@ -463,6 +463,7 @@
         chip: state.chip,
         headline: state.headline,
         guidance: guidanceFor(state, found ? record : null),
+        ...guidanceDetailFor(state, found ? record : null),
         stoppable: !!state.stoppable,
       },
       duration: found ? durationWords(record.durationMs) : null,
@@ -479,8 +480,24 @@
    */
   function guidanceFor(state, record) {
     if (state !== RUN_STATES.failed && state !== DECLARED_FAILED_STATE) return state.guidance;
-    const reason = record && typeof record.error === 'string' && record.error.trim() ? record.error.trim() : null;
-    return reason ? `The reason it gave: ${reason}` : NO_REASON_GIVEN;
+    const reason = failureReason(record);
+    if (!reason) return NO_REASON_GIVEN;
+    // A system error (a program that could not be started, a locked file) is
+    // said in plain words; its raw text goes behind Details.
+    const described = RundockReadableError && RundockReadableError.describe(reason, { action: 'run the routine' });
+    return described ? described.message : `The reason it gave: ${reason}`;
+  }
+
+  function failureReason(record) {
+    return record && typeof record.error === 'string' && record.error.trim() ? record.error.trim() : null;
+  }
+
+  // The raw words behind a described failure, as `guidanceDetail`, or nothing.
+  function guidanceDetailFor(state, record) {
+    if (state !== RUN_STATES.failed && state !== DECLARED_FAILED_STATE) return {};
+    const reason = failureReason(record);
+    const described = reason && RundockReadableError ? RundockReadableError.describe(reason) : null;
+    return described ? { guidanceDetail: described.detail } : {};
   }
 
   return {
