@@ -205,6 +205,7 @@ describe('release gate: the run', () => {
     assert.match(joined, /case-identity:volume/);
     assert.match(joined, /run smoke$/m, 'stub smoke runs');
     assert.match(joined, /smoke:personas/, 'persona journeys run');
+    assert.match(joined, /run walk$/m, 'the release walk runs, so it cannot rot unseen');
     assert.match(joined, /--live/, 'live smoke runs');
     assert.match(joined, /smoke-packaged/, 'packaging runs (unsigned unpacked build + boot check)');
     for (const fromCi of ['test:coverage', 'test:e2e', 'typecheck', 'check:refs', 'lint:styles']) {
