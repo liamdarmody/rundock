@@ -147,6 +147,14 @@ const AGENT_NOTICE_HOOK = { src: path.join(ROOT, 'scripts', 'permission-hook.js'
 const AGENT_NOTICE_CLAUDE = { src: path.join(ROOT, 'lib', 'runtime', 'codex-glue.js'), suite: 'test/unit/claude-answer-file-guard.test.js' };
 const AGENT_NOTICE_ROUTER = { src: path.join(ROOT, 'lib', 'http-router.js'), suite: 'test/unit/agent-restore-notice.test.js' };
 const AGENT_NOTICE_STORE = { src: path.join(ROOT, 'lib', 'runtime', 'agent-notices.js'), suite: 'test/unit/agent-restore-notice.test.js' };
+// After a refusal, the agent is told in the same step to stop and ask: the
+// hook that answers, the line and what counts as a sandbox block, the hook's
+// registration, and the Codex glue and client that steer it into a turn.
+const STOP_ASK_HOOK = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/stop-and-ask.test.js' };
+const STOP_ASK_LINE = { src: path.join(ROOT, 'scripts', 'refusal-notice.js'), suite: 'test/unit/stop-and-ask.test.js' };
+const STOP_ASK_SCAFFOLD = { src: path.join(ROOT, 'lib', 'workspace', 'scaffold.js'), suite: 'test/unit/stop-and-ask.test.js' };
+const STOP_ASK_GLUE = { src: path.join(ROOT, 'lib', 'runtime', 'codex-glue.js'), suite: 'test/integration/codex-stop-and-ask.test.js' };
+const STOP_ASK_CLIENT = { src: path.join(ROOT, 'codex-appserver.js'), suite: 'test/integration/codex-stop-and-ask.test.js' };
 // Reading a permission file is not a change to it.
 const ANSWER_READS_HOOK = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/answer-file-reads.test.js' };
 const ANSWER_READS_VOCAB = { src: path.join(ROOT, 'public', 'read-only-shell.js'), suite: 'test/unit/answer-file-reads.test.js' };
@@ -1326,6 +1334,52 @@ const MUTATIONS = [
   [REPEAT_HINT_LINK, 'Repeat hint link: never turns the switch off itself',
     "  const ring = find();\n",
     "  const ring = find();\n  if (target === 'sandbox') sandboxTurnOff();\n"],
+  // ===== STOP AND ASK AFTER A REFUSAL =====
+  [STOP_ASK_HOOK, "Stop and ask: a denied card goes back to inviting another route",
+    ": refusalNotice(result.reason === 'timeout' ? 'timeout' : 'denied', data.tool_name);",
+    ": 'This command was not approved. Acknowledge and move on.';"],
+  [STOP_ASK_HOOK, "Stop and ask: a timed-out card is told as a denial",
+    "refusalNotice(result.reason === 'timeout' ? 'timeout' : 'denied', data.tool_name)",
+    "refusalNotice('denied', data.tool_name)"],
+  [STOP_ASK_HOOK, "Stop and ask: a failed call never reaches the after-call branch",
+    "if (hookEvent === 'PostToolUse' || hookEvent === 'PostToolUseFailure') {",
+    "if (hookEvent === 'PostToolUse') {"],
+  [STOP_ASK_HOOK, "Stop and ask: a sandbox block is never told",
+    "blocked ? refusalNotice('sandbox', finished.tool_name) : null",
+    "null"],
+  [STOP_ASK_HOOK, "Stop and ask: told outside Rundock too",
+    "const blocked = !!process.env.RUNDOCK && sandboxBlocked(",
+    "const blocked = sandboxBlocked("],
+  [STOP_ASK_LINE, "Stop and ask: any tool's output can count as a sandbox block",
+    "  if (toolName !== 'Bash') return false;\n  const out",
+    "  const out"],
+  [STOP_ASK_LINE, "Stop and ask: the runtime's own sandbox mark is not decisive",
+    "  if (out.includes(SANDBOX_TAG)) return true;\n",
+    "\n"],
+  [STOP_ASK_LINE, "Stop and ask: Operation not permitted counts in Code mode and off macOS",
+    "  if (codeMode || platform !== 'darwin') return false;\n",
+    "\n"],
+  [STOP_ASK_LINE, "Stop and ask: a command run outside the sandbox is blamed on it",
+    "return !sandboxOff && NOT_PERMITTED.test(out);",
+    "return NOT_PERMITTED.test(out);"],
+  [STOP_ASK_LINE, "Stop and ask: a kind that is no refusal still gets a line",
+    "const what = Object.prototype.hasOwnProperty.call(WHAT, kind) ? WHAT[kind] : null;",
+    "const what = WHAT[kind] || null;"],
+  [STOP_ASK_SCAFFOLD, "Stop and ask: the failure hook is never registered",
+    "for (const event of ['PostToolUse', 'PostToolUseFailure']) {",
+    "for (const event of ['PostToolUse']) {"],
+  [STOP_ASK_GLUE, "Stop and ask: a declined Codex approval is never told",
+    "else if (ev.respond('decline') !== false) tellCodexRefusal(convoId, ev, reason === 'timeout' ? 'timeout' : 'denied', toolName);",
+    "else ev.respond('decline');"],
+  [STOP_ASK_GLUE, "Stop and ask: a Codex timeout is told as a denial",
+    "tellCodexRefusal(convoId, ev, reason === 'timeout' ? 'timeout' : 'denied', toolName)",
+    "tellCodexRefusal(convoId, ev, 'denied', toolName)"],
+  [STOP_ASK_GLUE, "Stop and ask: a Codex without turn/steer is never told",
+    "Promise.resolve().then(() => ev.steer(line)).catch(later);",
+    "Promise.resolve().then(() => ev.steer(line)).catch(() => {});"],
+  [STOP_ASK_CLIENT, "Stop and ask: the approval event carries no way to steer",
+    "{ type: 'approval', kind, requestId: id, params, respond, steer }",
+    "{ type: 'approval', kind, requestId: id, params, respond }"],
 ];
 const REPORTER = ['--test-reporter', 'spec'];
 

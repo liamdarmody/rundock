@@ -493,6 +493,18 @@ class CodexAppServer extends EventEmitter {
     return sub;
   }
 
+  // Add text to the running turn without interrupting it (turn/steer), the
+  // protocol's one way to give the model a line mid-turn. Rejects when the
+  // turn has ended or the server cannot take it (an older Codex has no such
+  // method), so the caller can say it another way.
+  steerTurn(threadId, text) {
+    const state = this._activeTurns.get(threadId);
+    if (!state || state.finished || state.turnId == null) {
+      return Promise.reject(new Error(`no active turn to steer on thread ${threadId}`));
+    }
+    return this.request('turn/steer', { threadId, expectedTurnId: state.turnId, input: [{ type: 'text', text: String(text) }] });
+  }
+
   // Interrupt a turn. turnId is tracked internally from the turn/start
   // response; passing it explicitly is optional.
   async interruptTurn(threadId, turnId) {
@@ -760,7 +772,10 @@ class CodexAppServer extends EventEmitter {
       return;
     }
     state.approvals.set(id, { timer, respond });
-    this._emitTurnEvent(state, { type: 'approval', kind, requestId: id, params, respond });
+    // steer() adds a line to this same turn after the decision, for the agent
+    // to read before it carries on (see steerTurn).
+    const steer = (text) => this.steerTurn(state.threadId, text);
+    this._emitTurnEvent(state, { type: 'approval', kind, requestId: id, params, respond, steer });
   }
 }
 

@@ -206,6 +206,16 @@ function runAppServer() {
       if (key === 'cancel') { finishTurn(t, 'interrupted'); return; }
       const after = (a.afterDecision || {})[key] || {};
       if (after.text != null) text = after.text;
+      // A model reads a line steered into its turn before it carries on. A
+      // rule can wait for one after a decline (bounded) and answer with
+      // `afterDecision.steered` when it came, as a model told to stop would.
+      if (key === 'decline' && a.awaitSteerMs > 0) {
+        const until = Date.now() + a.awaitSteerMs;
+        while (!t.steered && !t.finished && Date.now() < until) await tick(5);
+        if (t.finished) return;
+        const steered = (a.afterDecision || {}).steered;
+        if (t.steered && steered && steered.text != null) text = steered.text;
+      }
     }
 
     if (rule.error) {
@@ -383,6 +393,18 @@ function runAppServer() {
         activeTurns.set(threadId, t);
         send(asfx.response(id, asfx.turnStartResult(turnId)));
         runTurn(t, prompt, rule).catch(() => {});
+        return;
+      }
+      case 'turn/steer': {
+        // An older Codex has no turn/steer: a scenario can say so.
+        if (cfg.noSteer) { send(asfx.unknownMethodError(id, method)); return; }
+        const t = activeTurns.get(params && params.threadId);
+        if (!t || t.finished || params.expectedTurnId !== t.turnId) {
+          send(asfx.errorResponse(id, -32600, 'no active turn to steer'));
+          return;
+        }
+        t.steered = ((params && params.input) || []).filter(p => p && p.type === 'text').map(p => p.text).join('\n');
+        send(asfx.response(id, { turnId: t.turnId }));
         return;
       }
       case 'turn/interrupt': {

@@ -38,6 +38,7 @@ const { isReadOnlyShellCommand, isDestructiveShellCommand, shellSegments } = req
 const { codeModeVerdict } = require('./code-mode-verdict.js');
 const { lexSegments } = require('./code-mode-parse.js');
 const devPaths = require('./dev-paths.js');
+const { refusalNotice, sandboxBlocked } = require('./refusal-notice.js');
 
 // One directory, several names. macOS keeps /tmp and /var as symlinks into
 // /private, Dropbox and iCloud vaults are commonly reached through a symlink
@@ -1499,15 +1500,25 @@ function main() {
 let input = '';
 process.stdin.on('data', chunk => { input += chunk; });
 process.stdin.on('end', () => {
-// A FINISHED TOOL CALL (PostToolUse). Nothing is decided here: the server is
-// asked to check the permission files now, and any line about a change it put
-// back goes to the agent in this same step. The line PreToolUse would have
-// carried is the same one, handed over once, whichever asks first.
+// A FINISHED TOOL CALL (PostToolUse), or one that failed (PostToolUseFailure).
+// Nothing is decided here: the server is asked to check the permission files
+// now, and any line about a change it put back goes to the agent in this same
+// step. The line PreToolUse would have carried is the same one, handed over
+// once, whichever asks first.
+//
+// A command the sandbox refused is told in the same step too, by the same
+// route: the agent is to stop and ask, not look for another way round.
 let hookEvent = '';
-try { hookEvent = JSON.parse(input).hook_event_name || ''; } catch (e) { /* judged below */ }
-if (hookEvent === 'PostToolUse') {
+let finished = null;
+try { finished = JSON.parse(input); hookEvent = finished.hook_event_name || ''; } catch (e) { /* judged below */ }
+if (hookEvent === 'PostToolUse' || hookEvent === 'PostToolUseFailure') {
+  const said = hookEvent === 'PostToolUseFailure'
+    ? finished.error
+    : (finished.tool_response && finished.tool_response.stderr);
+  const blocked = !!process.env.RUNDOCK && sandboxBlocked(finished.tool_name, finished.tool_input, said, { codeMode: process.env.RUNDOCK_CODE_MODE === '1' });
   fetchAgentNotice((note) => {
-    process.stdout.write(JSON.stringify(note ? { hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: note } } : {}));
+    const context = [note, blocked ? refusalNotice('sandbox', finished.tool_name) : null].filter(Boolean).join('\n');
+    process.stdout.write(JSON.stringify(context ? { hookSpecificOutput: { hookEventName: hookEvent, additionalContext: context } } : {}));
     process.exit(0);
   }, { check: true });
   return;
@@ -1899,12 +1910,11 @@ fetchAgentNotice((agentNotice) => {
     res.on('end', () => {
       try {
         const result = JSON.parse(body);
-        let reason = 'Approved in Rundock';
-        if (!result.allow) {
-          reason = result.reason === 'timeout'
-            ? 'The permission request was not completed within the time limit. Try the command again if it is still needed.'
-            : 'This command was not approved. Acknowledge and move on.';
-        }
+        // A refusal tells the agent, in this same answer, that it was on
+        // purpose and to stop and ask (scripts/refusal-notice.js). The old
+        // wording for a timeout invited the retry this exists to prevent.
+        const reason = result.allow ? 'Approved in Rundock'
+          : refusalNotice(result.reason === 'timeout' ? 'timeout' : 'denied', data.tool_name);
         writeDecision(({
           hookSpecificOutput: {
             hookEventName: 'PreToolUse',
@@ -1931,7 +1941,7 @@ fetchAgentNotice((agentNotice) => {
       hookSpecificOutput: {
         hookEventName: 'PreToolUse',
         permissionDecision: 'deny',
-        permissionDecisionReason: 'The permission request was not completed within the time limit. Try the command again if it is still needed.'
+        permissionDecisionReason: refusalNotice('timeout', data.tool_name)
       }
     }));
     process.exit(0);
