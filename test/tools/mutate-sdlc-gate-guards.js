@@ -327,6 +327,20 @@ const MUTATIONS = [
   [CI_VERDICT, "a superseded run is not retried",
     "  if (newerRun || notOk.some((j) => j.kind === 'superseded')) return none('superseded: a newer run is the one that counts');\n",
     ""],
+  // A runner shut down with only the bare cancellation in its annotations,
+  // and the shutdown line only in its log.
+  [CI_VERDICT, "a failed job cancelled mid-step with only the bare cancellation is a lost runner",
+    "  if (failures.length && failures.every((a) => OPERATION_CANCELED.test((a.message || '').trim()) && !a.title)) {\n",
+    "  if (false) {\n"],
+  [CI_VERDICT, "the runner's shutdown line in a job log is a lost runner",
+    "  if (typeof log === 'string' && LOG_SHUTDOWN.test(log) && !LOG_EXIT_CODE.test(log)) {\n",
+    "  if (false) {\n"],
+  [CI_VERDICT, "a step that failed for its own reason keeps an interrupted job a failure",
+    "  if (job.steps.some((s) => s.conclusion === 'failure')) return null;\n",
+    ""],
+  [CI_VERDICT, "an exit code in the log keeps a printed shutdown line a failure",
+    " && !LOG_EXIT_CODE.test(log)) {\n",
+    ") {\n"],
 ];
 
 const REPORTER = ['--test-reporter', 'spec'];

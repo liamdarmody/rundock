@@ -6,6 +6,10 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 ## Unreleased
 
+### Added
+
+- **Rundock names the setting that would stop repeated cards:** on the third permission card in a conversation within ten minutes that a setting could have saved you, a one-line hint under the card says which one: add the folder as a Working folder, switch to Code mode (from Notes mode, for everyday commands), or turn off Keep agents inside this workspace, with what that costs in the same sentence. Its link opens Settings, Permissions with that control ringed and, for a folder, the path filled in; nothing changes until you press Add, choose Code or confirm turning the switch off yourself. You can dismiss it, and it comes back only at the sixth and twelfth card. Cards for commands that can't be undone never count and never get the hint.
+
 ### Fixed
 
 - **An agent stops and asks after a refusal:** when you denied a permission card, left one unanswered, or the sandbox blocked a command, the agent often tried another way round it, raising another card or hitting another block each time, and each attempt used your credits. An unanswered card even told it to try again. Now the agent is told in that same step that the refusal was deliberate, and to stop and ask you what to do. This applies to Claude Code agents, and to Codex agents refused at a card; an older Codex that can't be told mid-turn hears it at the start of its next turn.

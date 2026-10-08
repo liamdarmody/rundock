@@ -710,6 +710,35 @@ function renderSettingsSection(section) {
   }
 }
 
+// ── Opened from the hint under repeated permission cards ──
+// Settings, Permissions, with the one control the hint named ringed, and for a
+// Working folder the path typed into the field. NOTHING IS CHANGED HERE: no
+// message that sets anything is sent. The person presses Add, chooses Code,
+// or confirms turning the switch off, themselves.
+const PERMISSIONS_RING_TARGETS = {
+  folder: () => document.getElementById('working-folders-block'),
+  code: () => document.querySelector('#settings-content .mode-toggle'),
+  sandbox: () => document.getElementById('sandbox-row'),
+};
+function openPermissionsAt(target, folder) {
+  const find = PERMISSIONS_RING_TARGETS[target];
+  if (!find) return;
+  if (typeof showView === 'function') showView('settings');
+  showSettingsSection('permissions');
+  const ring = find();
+  if (!ring) return;
+  ring.classList.add('settings-ring');
+  if (target === 'folder' && typeof folder === 'string' && folder) {
+    const field = document.getElementById('wf-input');
+    if (field) {
+      field.value = workingFoldersShort(folder);
+      workingFoldersInputChanged();
+      field.focus();
+    }
+  }
+  if (typeof ring.scrollIntoView === 'function') ring.scrollIntoView({ block: 'center' });
+}
+
 // ── Working folders (settings › workspace) ──
 // The folders this workspace's agents work in besides the workspace itself.
 //
@@ -1868,7 +1897,7 @@ function connectorsWorkspaceChanged() {
 // resets are published because the generated markup and the app.js dispatch
 // cases resolve them against the module's exported surface, not against
 // private closure variables.
-return { showSettingsSection, renderSettingsSection, setWorkspaceMode, modeToggleKeydown, runtimeRowHtml, runtimesCardHtml, renderRuntimesCard, changeWorkspace,
+return { showSettingsSection, renderSettingsSection, openPermissionsAt, setWorkspaceMode, modeToggleKeydown, runtimeRowHtml, runtimesCardHtml, renderRuntimesCard, changeWorkspace,
   packagesSubmit, packagesCancel, packagesDecline, packagesConfirm, packagesRetry, packagesSetDecision,
   packagesReviewRowHtml, packagesReviewCardHtml, packagesStaleCardHtml,
   packagesReplyArrived, packagesWorkspaceChanged, packagesServingWorkspaceChanged, packagesConnectionLost,

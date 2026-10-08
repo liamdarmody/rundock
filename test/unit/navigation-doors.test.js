@@ -278,6 +278,13 @@ const DESTINATIONS = [
     pressedBy: 'the routine editor is a routines surface and the rail says so',
   },
   {
+    site: "views/settings.js: function openPermissionsAt(target, folder) -> showView('settings')",
+    view: 'settings',
+    section: 'settings',
+    surface: 'the link in the hint under repeated permission cards, opening Settings, Permissions',
+    pressedBy: 'every view the shell can show lands the rail on the section its own table names',
+  },
+  {
     site: "views/skills.js: function selectSkill(id) -> showView('skills')",
     view: 'skills',
     section: 'skills',

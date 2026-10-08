@@ -117,6 +117,9 @@
 .migration-notice { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 10px 12px; margin: 0 0 16px; font-size: var(--caption); color: var(--text-1); line-height: 1.5; }
 .migration-notice-dismiss { width: 28px; height: 28px; flex-shrink: 0; font-size: 16px; line-height: 1; color: var(--settings-quiet-text); border-radius: var(--radius-md); }
 .migration-notice-dismiss:hover { color: var(--text-1); background: var(--elevated); }
+/* The control a permission-card hint pointed at, ringed until the pane is
+   next drawn. Static: nothing moves. */
+.settings-ring { border-radius: var(--radius-lg); box-shadow: 0 0 0 2px var(--accent), 0 0 0 6px var(--accent-glow); }
 /* Every control on these panes shows where the keyboard is, the app's accent
    ring, rather than leaving it to whatever the engine draws. */
 .settings-btn:focus-visible, .settings-btn-primary:focus-visible, .settings-btn-danger:focus-visible,
