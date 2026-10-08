@@ -1,0 +1,11 @@
+2026-10-07T23:04:48.0224257Z [mutation-scope] shard 1: 110 rows, about 7.6 min: mutate-workspace-boundary-guards.js rows 0:96, mutate-routines-truth-guards.js
+2026-10-07T23:04:48.0225149Z [mutation-scope] shard 2: 96 rows, about 7.3 min: mutate-workspace-boundary-guards.js rows 96:192
+2026-10-07T23:04:48.0226065Z [mutation-scope] shard 3: 162 rows, about 7.7 min: mutate-workspace-boundary-guards.js rows 192:286, mutate-sdlc-gate-guards.js
+2026-10-07T23:04:48.0226575Z
+2026-10-07T23:04:48.0226847Z [mutation-scope] mutate-workspace-boundary-guards.js rows 96:192
+2026-10-07T23:10:06.8334957Z ##[error]The runner has received a shutdown signal. This can happen when the runner service is stopped, or a manually started runner is canceled.
+2026-10-07T23:10:11.8469919Z ##[error]The operation was canceled.
+2026-10-07T23:10:11.8595331Z Cleaning up orphan processes
+2026-10-07T23:10:11.8909599Z Terminate orphan process: pid (2417) (MainThread)
+2026-10-07T23:10:11.9061224Z Terminate orphan process: pid (49445) (MainThread)
+2026-10-07T23:10:11.9108592Z Terminate orphan process: pid (49451) (MainThread)
