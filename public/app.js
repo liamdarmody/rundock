@@ -2281,3 +2281,8 @@ document.getElementById('palette-input')?.addEventListener('keydown', (e) => {
 });
 
 signInFromLink().finally(connect);
+// A link pasted into a tab that is already open on Rundock changes only the
+// fragment, which does not reload the page, so the code would never be read.
+// Read it here too. Once the token is kept, the reconnect that keeps trying
+// on a refused tab picks it up and lets the tab in.
+window.addEventListener('hashchange', () => { signInFromLink(); });
