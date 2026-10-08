@@ -48,12 +48,38 @@ describe('saving a file', () => {
     });
   });
 
-  test('a write that fails for any other reason is not swallowed', () => {
+  // Not swallowed, and not thrown into the dispatcher either, where it was
+  // logged and the editor was left saying it was saving: answered, in a
+  // plain sentence, with the raw words for Details.
+  test('a write that fails for any other reason is answered in plain words', () => {
     withWorkspace((dir) => {
       fs.mkdirSync(path.join(dir, 'a-folder'));
       const { sent, ws } = recorder();
-      assert.throws(() => files.handleSaveFile(insideCtx, ws, { path: 'a-folder', content: 'x' }));
-      assert.deepStrictEqual(sent, []);
+      files.handleSaveFile(insideCtx, ws, { path: 'a-folder', content: 'x' });
+      assert.strictEqual(sent.length, 1);
+      assert.strictEqual(sent[0].type, 'file_save_failed');
+      assert.strictEqual(sent[0].path, 'a-folder');
+      assert.strictEqual(sent[0].message, "Rundock couldn't save this file because there is a folder where a file should be. Rename or move that folder, or choose a different name, then try again.");
+      assert.match(sent[0].detail, /^EISDIR/);
+      assert.ok(sent[0].detail.includes(dir), 'the path is in the detail');
+    });
+  });
+
+  test('a save an extension caused that the system refuses is answered too', () => {
+    withWorkspace((dir) => {
+      fs.writeFileSync(path.join(dir, 'board.md'), 'x\n');
+      const fsMod = require('fs');
+      const original = fsMod.writeSync;
+      fsMod.writeSync = () => { throw Object.assign(new Error(`EBUSY: resource busy or locked, write '${path.join(dir, 'board.md')}'`), { code: 'EBUSY', syscall: 'write' }); };
+      const { sent, ws } = recorder();
+      try {
+        files.handleSaveFile(insideCtx, ws, { path: 'board.md', content: 'x\n', origin: 'extension' });
+      } finally { fsMod.writeSync = original; }
+      assert.strictEqual(sent.length, 1);
+      assert.strictEqual(sent[0].type, 'file_save_failed');
+      assert.match(sent[0].message, /^Rundock couldn't save this file because another program is using a file\. Close the program/);
+      assert.ok(!sent[0].message.includes(dir));
+      assert.ok(sent[0].detail.includes('EBUSY'));
     });
   });
 });

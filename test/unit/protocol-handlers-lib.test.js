@@ -466,7 +466,10 @@ describe('handler seams (stub ctx, capture ws)', () => {
       const ws = captureWs();
       table.set_working_folders({}, ws, { type: 'set_working_folders', folders: [os.tmpdir()] });
       assert.strictEqual(ws.sent[0].type, 'workspace_error');
-      assert.match(ws.sent[0].message, /Could not save the working folders/);
+      // A system error, said plainly, with its raw words for Details.
+      assert.match(ws.sent[0].message, /^Rundock couldn't (save the working folders|create a folder) because /);
+      assert.ok(!ws.sent[0].message.includes(dir), 'no path in the sentence');
+      assert.match(ws.sent[0].detail, /^E[A-Z]+/);
     } finally {
       config.setWorkspace(original);
       fs.rmSync(dir, { recursive: true, force: true });
@@ -1277,8 +1280,12 @@ describe('handler seams (stub ctx, capture ws)', () => {
       const [answer] = ws.sent;
       assert.strictEqual(answer.type, 'create_error');
       assert.strictEqual(answer.path, 'notes/x.md');
-      // The errno text, which no guard branch can produce.
-      assert.match(answer.reason, /^EEXIST:/, `the catch reported the real failure, got ${answer.reason}`);
+      // The real failure, said plainly (no guard branch can produce it), with
+      // the errno text, path and all, kept for Details and out of the sentence.
+      assert.match(answer.reason, /^Rundock couldn't create a folder because something with that name already exists\./, `the catch reported the real failure, got ${answer.reason}`);
+      assert.ok(!answer.reason.includes(dir), 'no path in the sentence');
+      assert.match(answer.detail, /^EEXIST:/, 'the errno text is the detail');
+      assert.ok(answer.detail.includes(path.join(dir, 'notes')), 'and the path is in the detail');
       assert.strictEqual(broadcasts, 0, 'a failed create broadcasts no tree');
       assert.ok(!fs.existsSync(path.join(dir, 'notes', 'x.md')), 'nothing was created');
       assert.ok(fs.statSync(path.join(dir, 'notes')).isFile(), 'the obstruction is untouched');

@@ -120,12 +120,13 @@ describe('a workspace switch that fails leaves the poll watching the workspace t
     const { msg } = await client.waitFor(m => m.type === 'workspace_error', {
       since, timeout: 15000, label: 'workspace_error for the switch that could not complete',
     });
-    // The message carries the underlying error rather than a synthesised one,
+    // The reply carries the underlying error rather than a synthesised one,
     // which is what says the failure came from the filesystem and not from a
-    // branch written to make this test pass.
-    assert.match(msg.message, /^Could not open workspace: /);
-    assert.match(msg.message, /EISDIR|illegal operation on a directory/i,
-      `the open must have failed on the real filesystem error; got: ${msg.message}`);
+    // branch written to make this test pass: said plainly, with the raw
+    // words as the detail behind Details.
+    assert.match(msg.message, /^Rundock couldn't open this workspace because there is a folder where a file should be\./);
+    assert.match(msg.detail, /EISDIR|illegal operation on a directory/i,
+      `the open must have failed on the real filesystem error; got: ${msg.detail}`);
 
     assert.strictEqual(h.internal.getWorkspace(), h.workspaceDir,
       'the root must be the workspace that survived, not the one that could not be opened');

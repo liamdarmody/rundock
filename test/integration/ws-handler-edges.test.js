@@ -158,7 +158,10 @@ describe('workspace lifecycle edges', () => {
     try {
       const res = await request({ type: 'create_workspace', name: 'EdgeFail' },
         m => m.type === 'workspace_error', 'workspace_error create');
-      assert.match(res.message, /^Could not create workspace: /);
+      // A system error, said plainly; the raw words, path and all, are Details.
+      assert.match(res.message, /^Rundock couldn't (create this workspace|create a folder) because /);
+      assert.ok(!res.message.includes(process.env.HOME), 'no path in the sentence');
+      assert.match(res.detail, /^E[A-Z]+/);
       assert.strictEqual(h.internal.getWorkspace(), before, 'no switch on failure');
     } finally {
       fs.rmSync(docs, { force: true });
