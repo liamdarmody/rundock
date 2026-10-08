@@ -320,6 +320,9 @@ async function runGate({
 // ---------------------------------------------------------------------------
 
 if (require.main === module) {
+  // Sandboxed, the gate's Electron, browser and live steps fail an hour in and
+  // look like product failures. Refuse in the first second instead.
+  require('./lib/sandbox.js').refuseIfSandboxed('The release gate', 'npm run release:gate');
   const live = !process.argv.includes('--no-live');
   const ci = !process.argv.includes('--no-ci');
   runGate({ live, ci }).then(result => {
