@@ -91,7 +91,7 @@ Or a board with its new-card field open:
 
 A mistake fails with one plain sentence naming it: an unknown view, option, file, conversation, settings section or skill lists what exists, and an element an action cannot find is named with the action's position. When an action fails, the screen at that moment is saved beside the output as `<name>.failed.png`.
 
-**In a sandboxed agent shell, run the command bare.** Change into the checkout in its own step first, then run `npx playwright test --config scripts/screenshots/look-view.config.mjs` on its own, with no `cd … &&`, pipe, redirect or `VAR=` prefix. A compound command may fall outside the sandbox's allowances, and the browser then fails to start. Write the options file with your file tool rather than an `echo` redirect, for the same reason.
+**In a sandboxed agent shell, run the command bare.** Change into the checkout in its own step first, then run `npx playwright test --config scripts/screenshots/look-view.config.mjs` on its own, with no `cd … &&`, pipe, redirect or `VAR=` prefix. A compound command may fall outside the sandbox's allowances, and the browser then fails to start. Write the options file with your file tool rather than an `echo` redirect, for the same reason. Where the shell's working directory resets between calls, write `{"cwd": "<checkout>", "argv": ["npx", "playwright", "test", "--config", "scripts/screenshots/look-view.config.mjs"]}` to a file and run `node <checkout>/scripts/exempt-run.js <file>` bare instead; it runs only commands the sandbox exclusions already name. `scripts/command-shape.js`, installed as a `PreToolUse` hook on Bash, refuses the wrapped shapes before they run and prints both forms.
 
 ## What to cover
 
