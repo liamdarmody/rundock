@@ -37,6 +37,8 @@ const { scrubCapture } = require('../capture-scrub.js');
 const CAPTURE_FILE = path.join(HERE, 'captured-grammar.json');
 const STUB = path.join(ROOT, 'test', 'helpers', 'stub-claude', 'claude');
 const CAPTURE = process.argv.includes('--capture');
+// A capture needs the real CLI and its sign-in, which the sandbox withholds.
+if (CAPTURE) require('../lib/sandbox.js').refuseIfSandboxed('The stream capture', 'npm run stream:truth -- --capture');
 
 function fail(msg) {
   console.error(`[stream-truth] FAIL: ${msg}`);

@@ -19,7 +19,8 @@
  * WHAT RUNS HERE is what CI cannot: the runtime truth captures (they need the
  * real CLI and a sign-in), the Electron steps (CI runs no Electron), the
  * case-insensitive disk and volume checks (macOS disks), smoke and personas
- * against the stub and the live runtime, and the packaged build's boot.
+ * against the stub and the live runtime, the release walk (a real browser and
+ * GitHub), and the packaged build's boot.
  *
  * THE RECORD NAMES A TREE. `.release-gate.json` records the tree the gate
  * passed on, so a merge that makes a new commit with the same content needs no
@@ -199,6 +200,11 @@ function buildSteps(live) {
     // new user actually walks, and the structured vault that must never be
     // scaffolded over. Persona failures block the cut like any other step.
     { name: 'personas (stub)', cmd: ['npm', ['run', 'smoke:personas']] },
+    // The release walk: the product used from source in a real browser, with
+    // the two example packages installed from their GitHub tags. A step here
+    // so it fails a release when it rots instead of being skipped quietly,
+    // which is how four of its steps stayed red across two releases.
+    { name: 'release walk', cmd: ['npm', ['run', 'walk']] },
   ];
   if (live) {
     steps.push({ name: 'smoke (live)', cmd: ['npm', ['run', 'smoke', '--', '--live']] });
@@ -314,6 +320,9 @@ async function runGate({
 // ---------------------------------------------------------------------------
 
 if (require.main === module) {
+  // Sandboxed, the gate's Electron, browser and live steps fail an hour in and
+  // look like product failures. Refuse in the first second instead.
+  require('./lib/sandbox.js').refuseIfSandboxed('The release gate', 'npm run release:gate');
   const live = !process.argv.includes('--no-live');
   const ci = !process.argv.includes('--no-ci');
   runGate({ live, ci }).then(result => {

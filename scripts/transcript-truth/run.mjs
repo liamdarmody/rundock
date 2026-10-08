@@ -56,6 +56,8 @@ const CAPTURE_FILE = path.join(HERE, 'captured-transcript.json');
 // person who took it before it is written (scripts/capture-scrub.js).
 const { scrubCapture, machineValues } = require('../capture-scrub.js');
 const CAPTURE = process.argv.includes('--capture');
+// A capture needs the real CLI and its sign-in, which the sandbox withholds.
+if (CAPTURE) require('../lib/sandbox.js').refuseIfSandboxed('The transcript capture', 'npm run transcript:truth -- --capture');
 
 function fail(msg) {
   console.error(`[transcript-truth] FAIL: ${msg}`);

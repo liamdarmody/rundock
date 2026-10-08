@@ -20,7 +20,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 
-const { bumpRelease, tagRelease } = require('../../scripts/release.js');
+const { bumpRelease, tagRelease, SIGNOFF_FILE_NAME } = require('../../scripts/release.js');
 const { GATE_FILE_NAME, runGate } = require('../../scripts/release-gate.js');
 const { REQUIRED_CI_CHECKS } = require('../../scripts/release-ci.js');
 
@@ -61,6 +61,12 @@ function writeGateRecord(tree, { live = true, ci = { checks: { E2E: { run: 1 } }
   fs.writeFileSync(path.join(work, GATE_FILE_NAME), JSON.stringify({
     tree, sha: 'not-what-is-checked', live, ci, passedAt: '2026-08-26T09:00:00Z', wallClockSeconds: 300, steps: [],
   }));
+}
+
+// What `release -- signoff` leaves behind: the hands-on check from source,
+// recorded for one tree in git's common directory.
+function writeSignoff(tree) {
+  fs.writeFileSync(path.join(work, '.git', SIGNOFF_FILE_NAME), JSON.stringify({ tree, version: '0.12.0', signedAt: '2026-08-26T10:00:00Z' }));
 }
 
 beforeEach(() => {
@@ -123,11 +129,12 @@ describe('release:bump writes the candidate\'s version and notes, and nothing el
 
 describe('release:tag tags what actually merged, and only a gated tree', () => {
   // The candidate: a release branch carrying the bump, gated on its tree.
-  function candidate(version = '0.12.0', { gate = true } = {}) {
+  function candidate(version = '0.12.0', { gate = true, signoff = true } = {}) {
     inWork(['checkout', '-b', `release/${version}`]);
     bumpRelease(version, { root: work, log: () => {} });
     inWork(['commit', '-am', `Release ${version}`]);
     if (gate) writeGateRecord(treeOf('HEAD'));
+    if (signoff) writeSignoff(treeOf('HEAD'));
   }
 
   // What a merged pull request leaves behind: a new commit on main, pushed,
@@ -194,6 +201,24 @@ describe('release:tag tags what actually merged, and only a gated tree', () => {
     candidate('0.12.0', { gate: false });
     merge();
     assert.throws(() => tagRelease('0.12.0', { root: work, log: () => {} }), /release:gate/);
+    assert.strictEqual(inOrigin(['tag', '-l']), '', 'nothing tagged');
+  });
+
+  test('no hands-on sign-off: refuses, naming the command that records it', () => {
+    candidate('0.12.0', { signoff: false });
+    merge();
+    assert.throws(() => tagRelease('0.12.0', { root: work, log: () => {} }), /npm run release -- signoff 0\.12\.0 --confirm 0\.12\.0/);
+    assert.strictEqual(inOrigin(['tag', '-l']), '', 'nothing tagged');
+  });
+
+  test('a sign-off for a different tree is refused, naming both trees', () => {
+    candidate();
+    const tried = treeOf('HEAD');
+    fs.writeFileSync(path.join(work, 'README.md'), 'Rundock, fixed after the check\n');
+    inWork(['commit', '-am', 'a fix after the hands-on check']);
+    writeGateRecord(treeOf('HEAD'));
+    merge();
+    assert.throws(() => tagRelease('0.12.0', { root: work, log: () => {} }), new RegExp(`signed off on tree ${tried.slice(0, 12)}[\\s\\S]*${treeOf('HEAD').slice(0, 12)}`));
     assert.strictEqual(inOrigin(['tag', '-l']), '', 'nothing tagged');
   });
 
@@ -274,6 +299,7 @@ describe('a recut of an unpublished draft needs no hand-run step', () => {
     inWork(['commit', '-am', 'Release 0.12.0']);
     const first = await gateHere(treeOf('HEAD'));
     assert.strictEqual(first.ok, true, first.error);
+    writeSignoff(treeOf('HEAD'));
     inWork(['checkout', 'main']);
     inWork(['merge', '--no-ff', '-m', 'Release 0.12.0 (#42)', 'release/0.12.0']);
     inWork(['push', 'origin', 'main']);
@@ -292,6 +318,9 @@ describe('a recut of an unpublished draft needs no hand-run step', () => {
 
     const second = await gateHere(treeOf('HEAD'));
     assert.strictEqual(second.ok, true, second.error);
+    // The fix changed the tree, so the hands-on check is owed again.
+    assert.throws(() => tagRelease('0.12.0', { root: work, log: () => {} }), /signed off on tree/);
+    writeSignoff(treeOf('HEAD'));
     const result = tagRelease('0.12.0', { root: work, log: () => {} });
     assert.strictEqual(inOrigin(['rev-list', '-n', '1', 'v0.12.0']), inWork(['rev-parse', 'HEAD']), 'the new tag is on the fix');
     assert.strictEqual(result.tag, 'v0.12.0');
@@ -327,6 +356,7 @@ describe('the command line', () => {
     assert.strictEqual(code, 1);
     assert.match(out, /bump <version>/);
     assert.match(out, /tag <version>/);
+    assert.match(out, /signoff <version> --confirm <version>/);
     assert.match(out, /publish <version>/);
   });
 
@@ -337,7 +367,7 @@ describe('the command line', () => {
   });
 
   test('each subcommand requires a semver version', () => {
-    for (const subcommand of ['bump', 'tag', 'publish']) {
+    for (const subcommand of ['bump', 'signoff', 'tag', 'publish']) {
       const missing = releaseCli([subcommand]);
       assert.strictEqual(missing.code, 1, `${subcommand} with no version`);
       assert.match(missing.out, new RegExp(subcommand));
