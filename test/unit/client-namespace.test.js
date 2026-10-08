@@ -292,6 +292,7 @@ const MANIFEST = {
     "extensionsSetPaused",
     "extensionsToggle",
     "modeToggleKeydown",
+    "openPermissionsAt",
     "packagesAskUninstall",
     "packagesCancel",
     "packagesCancelUninstallPackage",

@@ -156,6 +156,17 @@ body.light .permission-detail { background: var(--elevated); }
 .permission-resolved.allowed { background: var(--success); color: var(--on-chart); }
 .permission-resolved.denied { background: var(--accent); color: var(--on-chart); }
 .permission-resolved.auto-allowed { background: rgba(107,198,126,0.06); color: var(--text-2); font-style: italic; }
+/* The hint under repeated permission cards: outside the card, at the quiet
+   weight of the migration notice, so the card stays the thing that needs a
+   decision and the setting that would stop it reads as a calmer aside. */
+.repeat-hint { align-self: flex-start; max-width: 85%; margin-top: -4px; display: flex; align-items: flex-start; gap: 8px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 10px 12px; font-size: var(--caption); color: var(--text-2); line-height: 1.55; }
+.repeat-hint svg { width: 14px; height: 14px; flex-shrink: 0; margin-top: 1px; color: var(--text-2); }
+.repeat-hint b { color: var(--text-1); font-weight: 600; }
+.repeat-hint .hint-link { color: var(--accent-text); font-weight: 600; text-decoration: underline; text-underline-offset: 2px; white-space: nowrap; }
+.repeat-hint .hint-link:focus-visible, .repeat-hint-x:focus-visible { outline: 2px solid var(--accent-control); outline-offset: 2px; }
+.repeat-hint-x { margin-left: auto; flex-shrink: 0; width: 22px; height: 22px; border-radius: var(--radius-sm); color: var(--text-3); display: flex; align-items: center; justify-content: center; font-size: 14px; line-height: 1; }
+.repeat-hint-x:hover { color: var(--text-1); background: var(--elevated); }
+.repeat-hint.caution { border-color: color-mix(in srgb, var(--attention) 40%, transparent); }
 .chat-input { padding: 16px 24px; border-top: 1px solid var(--border); display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
 .chat-input textarea { flex: 1; padding: 12px 16px; background: var(--card); border-radius: var(--radius-lg); font-size: var(--body); border: 1px solid transparent; transition: all var(--duration-slow) ease; resize: none; overflow-y: auto; min-height: 44px; max-height: 200px; line-height: 1.5; font-family: inherit; color: var(--text-1); outline: none; }
 .chat-input textarea::-webkit-scrollbar { display: none; }

@@ -192,6 +192,11 @@ const STORE_ISOLATION = { src: path.join(ROOT, 'test', 'helpers', 'approvals.js'
 const BROWSER_DOOR = { src: path.join(ROOT, 'server.js'), suite: 'test/integration/attack/browser-session.test.js' };
 const MEDIA_ROUTER = { src: path.join(ROOT, 'lib', 'http-router.js'), suite: 'test/integration/attack/browser-session.test.js' };
 
+// The hint under repeated permission cards: what counts, when it shows, and
+// the Settings link that must never change a setting itself.
+const REPEAT_HINT = { src: path.join(ROOT, 'public', 'repeat-hint-model.js'), suite: 'test/unit/repeat-hint.test.js' };
+const REPEAT_HINT_LINK = { src: path.join(ROOT, 'public', 'views', 'settings.js'), suite: 'test/unit/repeat-hint.test.js' };
+
 const MUTATIONS = [
   // ===== ONE DIRECTORY UNDER TWO NAMES IS ONE IDENTITY =====
   // Compare unresolved again and every symlink, alias and case spelling of
@@ -1293,8 +1298,35 @@ const MUTATIONS = [
   [STORE_ISOLATION, 'Tests: fixtures never write into the checkout\'s stores',
     'function seenHere(dir) {\n  isolateStores();',
     'function seenHere(dir) {'],
+  // ===== THE HINT UNDER REPEATED CARDS =====
+  [REPEAT_HINT, 'Repeat hint: a command that can\'t be undone never counts',
+    "    if (RundockPermissions.classifyRisk(tool, input) === 'high') return null;\n",
+    ''],
+  [REPEAT_HINT, 'Repeat hint: shown on the third card, not sooner',
+    'const THRESHOLDS = [3, 6, 12];',
+    'const THRESHOLDS = [2, 6, 12];'],
+  [REPEAT_HINT, 'Repeat hint: counted over a rolling ten minutes',
+    '    s.cards = s.cards.filter(c => now - c.at < WINDOW_MS);\n',
+    ''],
+  [REPEAT_HINT, 'Repeat hint: shown again only at the next threshold',
+    '    if (s.next >= THRESHOLDS.length || count < THRESHOLDS[s.next]) return null;',
+    '    if (count < THRESHOLDS[0]) return null;'],
+  [REPEAT_HINT, 'Repeat hint: a re-sent card is not counted twice',
+    '    if (s.seen.has(requestId)) return null;\n',
+    ''],
+  [REPEAT_HINT, 'Repeat hint: Code mode is offered from Notes mode only',
+    "    if (SHELL.has(tool) && mode !== 'code') return { kind: 'code' };",
+    "    if (SHELL.has(tool)) return { kind: 'code' };"],
+  [REPEAT_HINT_LINK, 'Repeat hint link: never adds the Working folder itself',
+    '      field.focus();\n    }\n  }\n  if (typeof ring.scrollIntoView',
+    '      field.focus();\n      workingFoldersAdd();\n    }\n  }\n  if (typeof ring.scrollIntoView'],
+  [REPEAT_HINT_LINK, 'Repeat hint link: never switches to Code mode itself',
+    "  ring.classList.add('settings-ring');\n",
+    "  ring.classList.add('settings-ring');\n  if (target === 'code') setWorkspaceMode('code');\n"],
+  [REPEAT_HINT_LINK, 'Repeat hint link: never turns the switch off itself',
+    "  const ring = find();\n",
+    "  const ring = find();\n  if (target === 'sandbox') sandboxTurnOff();\n"],
 ];
-
 const REPORTER = ['--test-reporter', 'spec'];
 
 function redTests(suite) {
