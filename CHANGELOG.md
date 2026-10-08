@@ -4,7 +4,9 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
-## Unreleased
+## 0.15.5: Fewer Dead Ends (2026-10-08)
+
+When Rundock stops you, or stops an agent, it now says why and what to do next: the setting that would stop repeated cards, a clear instruction to the agent to ask you after a refusal, and errors from your computer in plain words.
 
 ### Added
 
@@ -14,6 +16,7 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 - **Errors from your computer are said in plain words:** when Windows or macOS refused something Rundock was doing, such as removing a file another program had open, you saw the raw error, for example `EPERM, Permission denied:` followed by a long path. Rundock now says what it was doing, why it failed and what to try next, for example "Rundock couldn't remove a file because another program is using it. Close the program that has it open, then try again." The original error, with its code and path, is under **Details** beneath the sentence. This covers installing, updating and removing packages and extensions, the Packages and Extensions pages, saving a file in the editor or from an extension view, opening or creating a workspace, saving working folders, starting a routine with Run, and a run that failed. Creating a file or folder shows the sentence on its own. A save the system refused used to leave the editor saying Unsaved with no reason; it now says why.
 - **An agent stops and asks after a refusal:** when you denied a permission card, left one unanswered, or the sandbox blocked a command, the agent often tried another way round it, raising another card or hitting another block each time, and each attempt used your credits. An unanswered card even told it to try again. Now the agent is told in that same step that the refusal was deliberate, and to stop and ask you what to do. This applies to Claude Code agents, and to Codex agents refused at a card; an older Codex that can't be told mid-turn hears it at the start of its next turn.
+- **Pasting the link into a tab that's already open now lets you in:** running from source, a browser tab already showing "Open Rundock from the link in your terminal" ignored a new link pasted into it, because only the part after `#` changed and the page didn't reload. It now reads the new link straight away.
 
 ## 0.15.4: Safer, With Less Friction (2026-10-07)
 
