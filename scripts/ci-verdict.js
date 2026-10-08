@@ -10,12 +10,23 @@
  * alone, it blocks a merge until somebody notices, reads the annotation and
  * presses re-run. This does that one press, and only for that cause.
  *
- * Each job that did not succeed is classified from its conclusion and its
- * annotations:
+ * Each job that did not succeed is classified from its conclusion, its steps,
+ * its annotations and, when those leave it a failure, its log:
  *
  *   runner-lost   the runner shut down or lost contact, or the mutation check
  *                 reported no verdict because a shard was ended by a signal.
  *                 No verdict; the run is re-run once.
+ *
+ *                 A runner that is shut down does not always say so in an
+ *                 annotation. Its job can end "failure" with one annotation,
+ *                 "The operation was canceled.", and the shutdown line only in
+ *                 its log. So a failed job is also runner-lost when no step of
+ *                 it failed, a step was cancelled, and either its only failure
+ *                 annotations are that cancellation or its log carries the
+ *                 runner's shutdown line. A step that failed for its own reason
+ *                 (a failed step, an exit-code annotation or log line) keeps it
+ *                 a failure, whatever else it printed: a test that prints the
+ *                 shutdown text cannot buy a re-run with it.
  *   superseded    the concurrency group cancelled it for a newer run. Nothing
  *                 to do: the newer run is the one that counts.
  *   timed-out     the job reached its time cap. No verdict, and no re-run,
@@ -42,11 +53,35 @@ const RUNNER_LOST = [
 const SUPERSEDED = /Canceling since a higher priority waiting request/i;
 const TIMED_OUT = /has exceeded the maximum execution time/i;
 const NO_VERDICT_TITLE = /^No verdict:/;
+const OPERATION_CANCELED = /^The operation was canceled\.$/;
+// The runner's own line in a job log: start of line, after the timestamp.
+const LOG_SHUTDOWN = /^(?:\S+ )?##\[error\]The runner has received a shutdown signal/m;
+const LOG_EXIT_CODE = /^(?:\S+ )?##\[error\]Process completed with exit code/m;
 
 const OK_CONCLUSIONS = new Set(['success', 'skipped', 'neutral']);
 
-/** One job's classification, from its conclusion and annotations. */
-function classifyJob(job, annotations = []) {
+/**
+ * True when a failed job was interrupted rather than failing: no step failed,
+ * at least one was cancelled, and either every failure annotation is the bare
+ * cancellation or the log (when read) holds the runner's shutdown line and no
+ * step's exit code.
+ */
+function interruptedWithoutCause(job, annotations, log) {
+  if (job.conclusion !== 'failure' || !Array.isArray(job.steps)) return null;
+  if (job.steps.some((s) => s.conclusion === 'failure')) return null;
+  if (!job.steps.some((s) => s.conclusion === 'cancelled')) return null;
+  const failures = annotations.filter((a) => a.annotation_level === 'failure');
+  if (failures.length && failures.every((a) => OPERATION_CANCELED.test((a.message || '').trim()) && !a.title)) {
+    return 'it was cancelled mid-step with no step failing, the mark of a runner shut down';
+  }
+  if (typeof log === 'string' && LOG_SHUTDOWN.test(log) && !LOG_EXIT_CODE.test(log)) {
+    return 'its log says its runner received a shutdown signal';
+  }
+  return null;
+}
+
+/** One job's classification, from its conclusion, steps, annotations and log. */
+function classifyJob(job, annotations = [], log = null) {
   if (OK_CONCLUSIONS.has(job.conclusion)) return { kind: 'ok' };
   const texts = annotations.map((a) => `${a.title || ''}\n${a.message || ''}`);
   if (texts.some((t) => RUNNER_LOST.some((re) => re.test(t)))) {
@@ -61,6 +96,8 @@ function classifyJob(job, annotations = []) {
       : { kind: 'no-verdict', why: noVerdict.title };
   }
   if (job.conclusion === 'cancelled') return { kind: 'superseded', why: 'it was cancelled' };
+  const interrupted = interruptedWithoutCause(job, annotations, log);
+  if (interrupted) return { kind: 'runner-lost', why: interrupted };
   return { kind: 'failure', why: `it ended ${job.conclusion || 'without a conclusion'}` };
 }
 
@@ -72,8 +109,8 @@ function classifyJob(job, annotations = []) {
  * verdict a lost runner causes. A real failure anywhere means the run stays
  * red as it is: re-running it would only spend a runner to say so twice.
  */
-function decide({ run, jobs, annotationsFor = () => [], newerRun = false }) {
-  const classified = jobs.map((job) => ({ name: job.name, ...classifyJob(job, annotationsFor(job)) }));
+function decide({ run, jobs, annotationsFor = () => [], logFor = () => null, newerRun = false }) {
+  const classified = jobs.map((job) => ({ name: job.name, ...classifyJob(job, annotationsFor(job), logFor(job)) }));
   const notOk = classified.filter((j) => j.kind !== 'ok');
   const none = (reason) => ({ action: 'none', reason, jobs: classified });
   if (run.conclusion === 'success') return none('the run succeeded');
@@ -120,6 +157,13 @@ function main(argv = process.argv.slice(2)) {
     if (OK_CONCLUSIONS.has(job.conclusion)) continue;
     try { annotations.set(job.id, api(`repos/${repo}/check-runs/${job.id}/annotations`)); } catch { annotations.set(job.id, []); }
   }
+  // A log is read only for a job its annotations leave a failure, and an
+  // unreadable log is no log: the job stays as the annotations classed it.
+  const logs = new Map();
+  for (const job of jobs) {
+    if (classifyJob(job, annotations.get(job.id) || []).kind !== 'failure') continue;
+    try { logs.set(job.id, gh(['api', `repos/${repo}/actions/jobs/${job.id}/logs`])); } catch { /* no log */ }
+  }
   let newerRun = false;
   try {
     const branch = encodeURIComponent(run.head_branch || '');
@@ -127,7 +171,7 @@ function main(argv = process.argv.slice(2)) {
     newerRun = (later.workflow_runs || []).some((r) => r.id !== run.id && r.created_at > run.created_at);
   } catch { /* unknown is not newer: the classification still decides */ }
 
-  const verdict = decide({ run, jobs, annotationsFor: (job) => annotations.get(job.id) || [], newerRun });
+  const verdict = decide({ run, jobs, annotationsFor: (job) => annotations.get(job.id) || [], logFor: (job) => logs.get(job.id) ?? null, newerRun });
   const lines = [`CI run ${id}, attempt ${run.run_attempt}: ${verdict.action === 'rerun' ? 're-running the failed jobs once' : 'left as it is'}`,
     `Reason: ${verdict.reason}`];
   for (const j of verdict.jobs.filter((x) => x.kind !== 'ok')) lines.push(`- ${j.name}: ${j.kind} (${j.why})`);
