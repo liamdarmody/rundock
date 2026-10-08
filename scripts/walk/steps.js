@@ -86,6 +86,17 @@ async function cardText(page, selector, timeout) {
 
 const openByPath = (page, rel) => page.evaluate((p) => openWorkspaceFilePath(p), rel);
 const currentFile = (page) => page.evaluate(() => currentFilePath);
+// WHERE THE PRODUCT KEEPS THINGS, in one place, so a move in the product is
+// one edit here and a unit test (test/unit/release-walk-checks.test.js) holds
+// each against the product's own code. A package's card on the Packages page
+// is keyed by its source link, the repository's, never by the extension's
+// name inside it. Pins live in the workspace, at .rundock/pins.json.
+const packageCard = (spec) => `.pkg-card-row[data-package="${spec.url}"]`;
+const storedPins = (workspace) => {
+  try { const list = JSON.parse(fs.readFileSync(path.join(workspace, '.rundock', 'pins.json'), 'utf8')); return Array.isArray(list) ? list : []; }
+  catch { return []; }
+};
+
 const extensionRecord = (ctx) => {
   const raw = readIf(inWorkspace(ctx, '.rundock/extensions.json'));
   return raw ? (JSON.parse(raw).extensions || []).find((r) => r.name === CSV_EXTENSION.name) || null : null;
@@ -171,7 +182,7 @@ function buildSteps() {
     { id: 'pack-receipt', name: 'the package has its own card under Installed packages', needs: ['pack-confirm'],
       precondition: async (ctx) => { await openPackages(ctx.page); return surface('.pkg-card-row', 'the Installed packages list')(ctx); },
       run: async ({ page }, check) => {
-        const card = page.locator('.pkg-card-row[data-package$="/lean-agent-team"]');
+        const card = page.locator(packageCard(LEAN_TEAM));
         check((await card.count()) === 1, 'no card for lean-agent-team');
         check(/agent/.test(await card.locator('.pkg-card-counts').textContent()), 'the card does not count its agents');
       } },
@@ -202,8 +213,8 @@ function buildSteps() {
     { id: 'ext-listed', name: 'Installed packages has a card for it, at its version', needs: ['ext-install'],
       precondition: async (ctx) => { await openPackages(ctx.page); return surface('.pkg-card-row', 'the Installed packages list')(ctx); },
       run: async ({ page }, check) => {
-        const card = page.locator(`.pkg-card-row[data-package$="/${CSV_EXTENSION.name}"]`);
-        check((await card.count()) > 0, 'no card for csv-table');
+        const card = page.locator(packageCard(CSV_EXTENSION));
+        check((await card.count()) > 0, `no card for ${CSV_EXTENSION.repo}`);
         check(/1\.0\.1/.test(await card.first().locator('.pkg-card-ver').textContent()), 'the card does not show version v1.0.1');
       } },
     { id: 'ext-render', name: 'opening a csv shows a table with a header row inside the extension frame', needs: ['ext-install'],
@@ -231,10 +242,10 @@ function buildSteps() {
         check((await count(page, '#editor-content iframe.extension-frame')) === 0, 'a frame is still mounted');
       } },
     { id: 'ext-uninstall', name: 'uninstalling its package removes it from the list and from disk, and the file shows plain', needs: ['ext-disable'],
-      precondition: async (ctx) => { await openPackages(ctx.page); return surface(`.pkg-card-row[data-package$="/${CSV_EXTENSION.name}"] [data-action="uninstall"]`, 'the Uninstall action')(ctx); },
+      precondition: async (ctx) => { await openPackages(ctx.page); return surface(`${packageCard(CSV_EXTENSION)} [data-action="uninstall"]`, 'the Uninstall action')(ctx); },
       run: async (ctx, check) => {
         const { page } = ctx;
-        await page.locator(`.pkg-card-row[data-package$="/${CSV_EXTENSION.name}"] [data-action="uninstall"]`).first().click();
+        await page.locator(`${packageCard(CSV_EXTENSION)} [data-action="uninstall"]`).first().click();
         // The filled danger button lives only inside the confirmation step,
         // which lists what goes and what stays.
         const confirm = page.locator('#packages-uninstall-confirm .settings-btn-danger');
@@ -244,7 +255,7 @@ function buildSteps() {
         check(!!gone, 'the record or the extension directory is still on disk');
         // The disk changes first and the reply that redraws the list follows
         // it over the socket, so the row is waited for, not read once.
-        const unlisted = await waitFor(async () => (await page.locator(`.pkg-card-row[data-package$="/${CSV_EXTENSION.name}"]`).count()) === 0, 15000);
+        const unlisted = await waitFor(async () => (await page.locator(packageCard(CSV_EXTENSION)).count()) === 0, 15000);
         check(!!unlisted, 'the row is still listed');
         await openByPath(page, seed(ctx).csv);
         await page.locator('#editor-content .viewer-unsupported').waitFor({ timeout: 15000 });
@@ -259,8 +270,7 @@ function buildSteps() {
         const pressed = await waitFor(async () => (await page.locator('#editor-pin').getAttribute('aria-pressed')) === 'true', 10000);
         check(!!pressed, 'the header control did not report pinned');
         check((await count(page, `#pin-list .pin-item[data-path="${seed(ctx).target}"]`)) > 0, 'the Pins rail does not list the file');
-        const stored = readIf(path.join(ctx.home, '.rundock-pins.json')) || '';
-        check(stored.includes(seed(ctx).target), 'the pin is not in the home directory store');
+        check(storedPins(ctx.workspace).includes(seed(ctx).target), 'the pin is not in the workspace store (.rundock/pins.json)');
       } },
     { id: 'pin-open', name: 'opening it from the rail lands on that file with its content shown', needs: ['pin'],
       run: async (ctx, check) => {
@@ -335,4 +345,4 @@ function buildSteps() {
   ];
 }
 
-module.exports = { buildSteps, waitFor };
+module.exports = { buildSteps, waitFor, packageCard, storedPins };
