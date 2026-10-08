@@ -33,6 +33,10 @@ const ROOT = path.join(__dirname, '..', '..');
 const SHAPE = { src: path.join(ROOT, 'scripts', 'command-shape.js'), suite: 'test/unit/command-shape.test.js' };
 const SANDBOX = { src: path.join(ROOT, 'scripts', 'lib', 'sandbox.js'), suite: 'test/unit/command-shape.test.js' };
 const RUNNER = { src: path.join(ROOT, 'scripts', 'exempt-run.js'), suite: 'test/unit/exempt-run.test.js' };
+// The release gate's own refusal. Broken, the gate starts for real, and stops
+// at its first check because the mutation itself leaves the tree dirty.
+const GATE = { src: path.join(ROOT, 'scripts', 'release-gate.js'), suite: 'test/unit/sandbox-refusal.test.js' };
+const CAPABILITY = { src: path.join(ROOT, 'scripts', 'capability-preflight.js'), suite: 'test/unit/sandbox-refusal.test.js' };
 
 const MUTATIONS = [
   // ===== THE WRAPPERS AN EXCLUSION CANNOT MATCH =====
@@ -94,6 +98,22 @@ const MUTATIONS = [
   [RUNNER, 'an unknown key in the arguments file is refused',
     "  for (const key of Object.keys(spec)) if (!known.has(key)) throw new Refusal(",
     "  for (const key of Object.keys(spec)) if (false) throw new Refusal("],
+  // ===== A LONG STEP REFUSES AT ONCE INSIDE THE SANDBOX =====
+  [GATE, 'the release gate refuses in its first second when sandboxed',
+    "  require('./lib/sandbox.js').refuseIfSandboxed('The release gate', 'npm run release:gate');\n",
+    ""],
+  [CAPABILITY, 'the capability preflight tries nothing inside the sandbox',
+    "  if (isSandboxed(env)) {\n    return {",
+    "  if (false) {\n    return {"],
+  [CAPABILITY, 'the push check is a dry run',
+    "['push', '--dry-run', '--porcelain', 'origin',",
+    "['push', '--porcelain', 'origin',"],
+  [CAPABILITY, 'a push that cannot authenticate is named as such',
+    "      return { ok: false, cause: 'git could not authenticate to origin.', fix: 'gh auth setup-git (after gh auth login, at a terminal)' };",
+    "      return { ok: false, cause: 'push failed', fix: 'retry' };"],
+  [CAPABILITY, 'a missing browser is named, with its install command',
+    "      return { ok: false, cause: 'Playwright has no Chromium installed for this checkout.', fix: 'npx playwright install chromium' };",
+    "      return { ok: false, cause: 'Chromium failed', fix: 'retry' };"],
 ];
 
 const REPORTER = ['--test-reporter', 'spec'];
