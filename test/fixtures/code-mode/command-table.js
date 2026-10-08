@@ -61,7 +61,7 @@ const ROWS = [
     S('git checkout .', { state: 'clean', cls: 'runs', note: 'nothing changed in scope' }),
     S('git restore src/', { state: 'clean', cls: 'runs', note: 'nothing changed in scope' }),
   ] },
-  { id: 'G20', section: 'Git', cls: 'runs', spellings: [S('git restore src/app.js', { state: 'tracked-change' }), S('git checkout -- src/app.js', { state: 'tracked-change' })] },
+  { id: 'G20', section: 'Git', cls: 'always-asks', edge: 'ran without asking through 0.15.5', spellings: [S('git restore src/app.js', { state: 'tracked-change' }), S('git checkout -- src/app.js', { state: 'tracked-change' })] },
   { id: 'G21', section: 'Git', cls: 'runs', spellings: [S('git restore --staged .', { state: 'tracked-change' })] },
   { id: 'G22', section: 'Git', cls: 'always-asks', spellings: [
     S('git clean -fd', { state: 'untracked-file' }),

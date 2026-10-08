@@ -64,11 +64,11 @@ const VERDICT_SECTIONS = new Set(['Git', 'Deleting', 'Packages', 'Processes', 'P
 const VERDICT_EXTRA_ROWS = new Set(['R4', 'R5', 'O4', 'O6', 'O7']);
 
 describe('the table\'s totals are computed from the rows, not typed', () => {
-  test('100 rows: Runs 59, Asks once 4, Always asks 33, Boundary 3, Refused 1', () => {
+  test('100 rows: Runs 58, Asks once 4, Always asks 34, Boundary 3, Refused 1', () => {
     const counts = {};
     for (const r of ROWS) counts[r.cls] = (counts[r.cls] || 0) + 1;
     assert.strictEqual(ROWS.length, 100);
-    assert.deepStrictEqual(counts, { runs: 59, 'asks-once': 4, 'always-asks': 33, boundary: 3, refused: 1 });
+    assert.deepStrictEqual(counts, { runs: 58, 'asks-once': 4, 'always-asks': 34, boundary: 3, refused: 1 });
     assert.strictEqual(new Set(ROWS.map(r => r.id)).size, 100, 'every row id once');
   });
 });
@@ -157,6 +157,64 @@ describe('the reasons and rule keys the cards are worded from', { skip: SKIP }, 
     assert.strictEqual(keys.size, 4, 'four rules, four keys');
     assert.strictEqual(verdictFor('git push --all').verdict, 'asks-once', 'git push --all falls under rule 4');
     assert.strictEqual(verdictFor('gh pr merge 12').verdict, 'asks-once', 'and so does gh pr merge');
+  });
+});
+
+// A restore or checkout of one named file throws away that file's unsaved
+// changes, and nothing can bring them back. The hook cannot tell the agent's
+// edits from the person's (the person may have edited the same file, and an
+// agent can edit through the shell), so any unsaved change to a named file
+// asks, exactly as it does for `git restore .`. A clean file still runs.
+describe('a restore of one named file asks when git holds unsaved changes to it', { skip: SKIP }, () => {
+  const DISCARDS = [
+    'git restore src/app.js',
+    'git checkout -- src/app.js',
+    'git checkout src/app.js',
+    'git restore -- src/app.js',
+    'git restore --worktree src/app.js',
+    'git restore --staged --worktree src/app.js',
+    'git restore --source=HEAD src/app.js',
+    'git checkout HEAD -- src/app.js',
+    'git restore src/app.js README.md',
+  ];
+  for (const command of DISCARDS) {
+    test(`${command} asks, naming the file, when it has unsaved changes`, () => {
+      const v = fx.withState(world, 'tracked-change', () => verdictFor(command));
+      assert.strictEqual(v.verdict, 'always-asks', `${command}: ${JSON.stringify(v)}`);
+      assert.strictEqual(v.reason, 'unsaved-discard');
+      assert.deepStrictEqual(v.files, ['src/app.js']);
+    });
+    test(`${command} runs when the file has nothing unsaved`, () => {
+      assert.strictEqual(verdictFor(command).verdict, 'runs');
+    });
+  }
+
+  test('the file is found from a subfolder and named from the repository top', () => {
+    const v = fx.withState(world, 'tracked-change', () => verdictFor('git restore app.js', { at: 'app/src' }));
+    assert.strictEqual(v.verdict, 'always-asks');
+    assert.deepStrictEqual(v.files, ['src/app.js']);
+  });
+
+  test('git restore . still asks, and still runs with nothing unsaved', () => {
+    assert.strictEqual(fx.withState(world, 'tracked-change', () => verdictFor('git restore .')).verdict, 'always-asks');
+    assert.strictEqual(verdictFor('git restore .').verdict, 'runs');
+  });
+
+  test('what loses nothing still runs while another file has unsaved changes', () => {
+    for (const command of [
+      'git restore README.md',
+      'git checkout -- README.md',
+      'git restore --staged src/app.js',
+      'git restore -S src/app.js',
+      'git checkout -b feat/new',
+      'git checkout main',
+      'git restore src/new-parser.ts',
+    ]) {
+      const v = fx.withState(world, 'tracked-change', () => verdictFor(command));
+      assert.strictEqual(v.verdict, 'runs', `${command}: ${JSON.stringify(v)}`);
+    }
+    const untracked = fx.withState(world, 'untracked-file', () => verdictFor('git checkout -- src/new-parser.ts'));
+    assert.strictEqual(untracked.verdict, 'runs', 'a file git has never seen is not touched by a checkout');
   });
 });
 

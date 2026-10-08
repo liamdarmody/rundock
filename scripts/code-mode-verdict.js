@@ -841,18 +841,13 @@ function judgeCheckout(sub, rest, ctx, top) {
     const p = expandPath(w, ctx);
     if (!p) return always('unknown-targets');
     if (insideDotGit(p, ctx)) return always(dotGitReason(p, ctx));
-    // One named file: the same act as the agent editing it.
-    if (!w.glob && w.text !== '.' && ctx.seam.exists(p) && !isDirectory(p, ctx)) continue;
-    scopes.push(w.glob ? p : p);
+    // A named file is checked like a folder: a discard throws away its
+    // unsaved changes for good, and whose they are (the agent's or the
+    // person's) cannot be told from here, so any unsaved change asks.
+    scopes.push(p);
   }
-  if (!scopes.length) return RUNS;
   if (!top) return always('git-unchecked');
   return discard(top, scopes.map(p => relSpec(p, top, ctx)), { tracked: true }, 'unsaved-discard', ctx);
-}
-
-function isDirectory(p, ctx) {
-  if (ctx.seam.isDirectory) return ctx.seam.isDirectory(p);
-  try { return require('fs').statSync(p).isDirectory(); } catch (e) { return false; }
 }
 
 function judgeClean(rest, ctx, top) {
