@@ -36,6 +36,7 @@ const RUNNER = { src: path.join(ROOT, 'scripts', 'exempt-run.js'), suite: 'test/
 // The release gate's own refusal. Broken, the gate starts for real, and stops
 // at its first check because the mutation itself leaves the tree dirty.
 const GATE = { src: path.join(ROOT, 'scripts', 'release-gate.js'), suite: 'test/unit/sandbox-refusal.test.js' };
+const STOCK = { src: path.join(ROOT, 'scripts', 'stock-take.js'), suite: 'test/unit/stock-take.test.js' };
 const CAPABILITY = { src: path.join(ROOT, 'scripts', 'capability-preflight.js'), suite: 'test/unit/sandbox-refusal.test.js' };
 
 const MUTATIONS = [
@@ -98,6 +99,28 @@ const MUTATIONS = [
   [RUNNER, 'an unknown key in the arguments file is refused',
     "  for (const key of Object.keys(spec)) if (!known.has(key)) throw new Refusal(",
     "  for (const key of Object.keys(spec)) if (false) throw new Refusal("],
+  // ===== THE STOCK-TAKE'S COMMAND FOR A PERSON =====
+  [STOCK, 'a section whose branch no longer exists is listed for removal',
+    "    .filter((name) => !existing.has(name) || removing.has(name))",
+    "    .filter((name) => removing.has(name))"],
+  [STOCK, 'a section whose branch still stays is never removed',
+    "    .filter((name) => !existing.has(name) || removing.has(name))",
+    "    .filter((name) => true)"],
+  [STOCK, 'a dotted branch name is kept whole',
+    "    const name = key.slice('branch.'.length, key.lastIndexOf('.'));",
+    "    const name = key.slice('branch.'.length, key.indexOf('.', 'branch.'.length));"],
+  [STOCK, 'removing the last linked worktree recreates .git/worktrees',
+    "  if (removesLastWorktree) parts.push(",
+    "  if (false) parts.push("],
+  [STOCK, 'a worktree with uncommitted work is never removable',
+    "(w.missing || (w.dirty === 0 && w.unpushed === 0))",
+    "(w.missing || w.unpushed === 0)"],
+  [STOCK, 'a branch with commits on no remote is never removable',
+    "  const removableBranches = branches.filter((b) => b.unpushed === 0 && ",
+    "  const removableBranches = branches.filter((b) => true && "],
+  [STOCK, 'a name typed into a terminal is quoted',
+    "  return /^[A-Za-z0-9_./:@%+=,-]+$/.test(s) ? s :",
+    "  return true ? s :"],
   // ===== A LONG STEP REFUSES AT ONCE INSIDE THE SANDBOX =====
   [GATE, 'the release gate refuses in its first second when sandboxed',
     "  require('./lib/sandbox.js').refuseIfSandboxed('The release gate', 'npm run release:gate');\n",
