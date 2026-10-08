@@ -212,6 +212,12 @@
     return msg.type === 'package_install_error' || msg.type === 'package_import_error';
   }
 
+  // The raw words of a system error, which the server sends beside its plain
+  // sentence (public/readable-error.js) for the failure card's Details.
+  function detailOf(msg) {
+    return msg && typeof msg.detail === 'string' && msg.detail ? msg.detail : null;
+  }
+
   // The offer, from whichever step produced the plan: the first read of a
   // repository holding agents and skills, or the second step after an
   // extension from the same repository was installed. NOTHING IS SILENTLY
@@ -293,7 +299,7 @@
       if (msg.code === 'unpinned-reference' || msg.code === 'no-tags' || msg.code === 'unorderable-tags') {
         return { state: { ...initial(), ...carry, fieldError: msg.message } };
       }
-      return { state: { phase: 'failed', ...carry, message: msg.message || 'The package could not be read.' } };
+      return { state: { phase: 'failed', ...carry, message: msg.message || 'The package could not be read.', detail: detailOf(msg) } };
     }
     if (msg.type === 'extension_install_plan') {
       // Provenance is the server's: the canonical url and the reference it
@@ -400,7 +406,7 @@
     if (state.phase !== 'offer') return { state };
     const carry = carried(state);
     if (isError(msg)) {
-      return { state: { phase: 'failed', ...carry, message: msg.message || 'The review could not be checked.', canReplan: true } };
+      return { state: { phase: 'failed', ...carry, message: msg.message || 'The review could not be checked.', detail: detailOf(msg), canReplan: true } };
     }
     if (msg.type !== 'package_import_result') return { state };
     if (msg.status === 'stale') {
@@ -841,7 +847,7 @@
     if (state.phase !== 'applying') return { state };
     const carry = carried(state);
     if (isError(msg)) {
-      return { state: { phase: 'failed', ...carry, message: msg.message || 'The import could not be applied.' } };
+      return { state: { phase: 'failed', ...carry, message: msg.message || 'The import could not be applied.', detail: detailOf(msg) } };
     }
     if (msg.status === 'stale') {
       return {
@@ -879,7 +885,7 @@
     if (isError(msg)) {
       return {
         state: {
-          phase: 'failed', ...carry, message: msg.message || 'The extension could not be installed.',
+          phase: 'failed', ...carry, message: msg.message || 'The extension could not be installed.', detail: detailOf(msg),
           manifest: state.manifest || null,
         },
       };

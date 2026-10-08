@@ -27,6 +27,7 @@ const ROOT = path.join(__dirname, '..', '..');
 const read = (...parts) => fs.readFileSync(path.join(ROOT, ...parts), 'utf-8');
 const INDEX_SRC = read('public', 'index.html');
 const MODEL_SRC = read('public', 'run-detail-model.js');
+const READABLE_SRC = read('public', 'readable-error.js');
 const VIEW_SRC = read('public', 'views', 'run-detail.js');
 const CSS_SRC = read('public', 'styles', 'views', 'run-detail.css');
 
@@ -79,6 +80,8 @@ function shellMarkup() {
 function shell() {
   const dom = new JSDOM(shellMarkup(), { runScripts: 'dangerously' });
   const w = dom.window;
+  // In the page's order: the error mapper loads before the model reads it.
+  w.eval(READABLE_SRC);
   w.eval(MODEL_SRC);
   w.eval(VIEW_SRC);
   w.agents = [{ id: 'default', displayName: 'Piper', colour: '#E87A5A', icon: 'P' }];
@@ -107,6 +110,25 @@ function pageText(doc) {
 }
 
 describe('the record on screen', () => {
+  test('a run that failed on a system error says so plainly, with the raw words behind Details', () => {
+    const { doc, dom } = draw(record({ status: 'failed', files: [], error: 'spawn claude ENOENT' }));
+    const guidance = doc.querySelector('[data-run-detail="guidance"]');
+    assert.strictEqual(guidance.textContent,
+      "Rundock couldn't start a program because it isn't installed or couldn't be found. Check that it's installed, then try again.");
+    const details = guidance.nextElementSibling;
+    assert.ok(details && details.matches('details.error-details'), 'a Details control follows the sentence');
+    assert.strictEqual(details.querySelector('summary').textContent, 'Details');
+    assert.strictEqual(details.querySelector('code').textContent, 'spawn claude ENOENT');
+    dom.window.close();
+  });
+
+  test('a run that failed with its own words keeps them and has no Details', () => {
+    const { doc, dom } = draw(record({ status: 'failed', files: [], error: 'labels could not be applied' }));
+    assert.strictEqual(doc.querySelector('[data-run-detail="guidance"]').textContent, 'The reason it gave: labels could not be applied');
+    assert.strictEqual(doc.querySelector('details.error-details'), null);
+    dom.window.close();
+  });
+
   test('a finished run shows what it did, from its own record', () => {
     const { doc, dom } = draw(record());
     const text = pageText(doc);

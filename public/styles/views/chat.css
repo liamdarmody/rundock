@@ -116,6 +116,12 @@ body.light .permission-detail { background: var(--elevated); }
 .permission-detail-collapse summary { cursor: pointer; padding: 4px 0; color: var(--text-2); opacity: 0.8; }
 .permission-detail-collapse summary:hover { opacity: 1; }
 .permission-detail-collapse .permission-detail { max-height: none; margin-top: 6px; }
+/* The same disclosure under a plain error sentence (public/readable-error.js)
+   wherever the error is said: Settings, Routines, a run, the editor's status,
+   the workspace picker. It holds a system error's raw code, message and path,
+   kept whole rather than clipped, and a long Windows path wraps. */
+.error-details { margin-top: 4px; text-align: left; }
+.error-details .permission-detail { white-space: pre-wrap; }
 /* The put-back card's change, line by line: removed lines tinted with the
    danger hue, added lines with the success hue, unchanged lines quiet. */
 .permission-diff .diff-line { display: block; white-space: pre-wrap; }

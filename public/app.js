@@ -528,8 +528,9 @@ function handle(d) {
     case 'serving_workspace': setServingWorkspace(d.path); renderRoutines(); break;
     case 'folder_picked': if (d.path) selectWorkspace(d.path); break;
     case 'workspace_error': {
+      // The plain sentence, and a system error's raw words behind Details.
       const errEl = document.getElementById('workspace-error');
-      if (errEl) { errEl.textContent = d.message; errEl.style.display = 'block'; }
+      if (errEl) { RundockReadableError.showIn(errEl, d.message, d.detail); errEl.style.display = 'block'; }
       break;
     }
     // The list the settings surface renders, and the only source of it: the
@@ -760,7 +761,19 @@ function handle(d) {
     case 'source_saved': { const st = document.getElementById('editor-status'); if (st) { st.style.color = 'var(--success)'; st.textContent = 'Saved'; } break; }
     case 'source_save_refused': {
       const status = document.getElementById('editor-status');
-      if (status) { status.style.color = 'var(--attention)'; status.textContent = `Not saved: ${d.reason}`; }
+      if (status) {
+        status.style.color = 'var(--attention)';
+        if (d.detail) RundockReadableError.showIn(status, d.reason, d.detail);
+        else status.textContent = `Not saved: ${d.reason}`;
+      }
+      break;
+    }
+    case 'file_save_failed': {
+      // The system refused the write (a locked or read-only file, a full
+      // drive): the sentence says so and what to try, the raw words are Details.
+      fileSaveFailed(d.path);
+      const status = document.getElementById('editor-status');
+      if (status) { status.style.color = 'var(--attention)'; RundockReadableError.showIn(status, d.message, d.detail); }
       break;
     }
     case 'file_save_refused': {
@@ -783,7 +796,10 @@ function handle(d) {
       setTimeout(() => highlightFileInSidebar(d.path), 0);
       break;
     case 'create_error':
-      alert('Could not create "' + d.path + '": ' + d.reason);
+      // A system error is its plain sentence alone (a dialog has no Details,
+      // and a path never goes in the sentence); a guard's refusal keeps its
+      // own short words with the name the person typed.
+      alert(d.detail ? d.reason : 'Could not create "' + d.path + '": ' + d.reason);
       break;
     case 'agent_saved':
       if (!d.updated) setupComplete = true;

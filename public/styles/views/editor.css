@@ -5,6 +5,10 @@
 .editor-header { padding: 16px 24px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 12px; }
 .editor-filename { font-size: var(--body); font-weight: 600; flex: 1; }
 .editor-status { font-size: var(--caption); color: var(--success); }
+/* A save the system refused says why in a sentence, so the status can be
+   long: it wraps beside the file name rather than pushing the controls off,
+   and its Details opens beneath it. */
+.editor-status:has(.error-details) { flex: 0 1 50%; line-height: 1.4; }
 .editor-toggle { padding: 4px 12px; font-size: var(--caption); font-weight: 600; border-radius: var(--radius-md); background: var(--card); color: var(--text-2); transition: all var(--duration-base) ease; }
 .editor-toggle:hover { color: var(--text-1); }
 .editor-toggle.active { background: var(--accent-glow); color: var(--accent); }

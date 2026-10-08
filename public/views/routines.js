@@ -71,6 +71,18 @@ let pendingDelete = null;
 // this list and the only reply appeared somewhere else. An answer belongs to
 // the surface the question was asked on.
 let pendingProblem = null;
+// The raw words of a system error behind that refusal, for its Details, or
+// null. Shown only beside pendingProblem, so it never outlives it.
+let pendingProblemDetail = null;
+
+// The "Details" control under a failure's plain sentence: the raw words of a
+// system error (public/readable-error.js), or nothing when there are none.
+// Read at call time off the global, or required under Node.
+function errorDetailsHtml(detail) {
+  const readableError = (typeof RundockReadableError !== 'undefined') ? RundockReadableError
+    : (typeof require === 'function' ? require('../readable-error.js') : null);
+  return readableError ? readableError.detailsHtml(detail) : '';
+}
 
 // THE SCOPE IS NOT HELD HERE. It belongs to the panel that draws the scope
 // rows, because that panel decides which agents are offered at all and drops a
@@ -561,6 +573,7 @@ function headerHtml(subtitle, workspace) {
   // refusal is on the page whichever state the list is in when it arrives.
   if (pendingProblem) {
     h += `<p class="routines-problem" role="alert" data-routines-problem>${esc(pendingProblem)}</p>`;
+    h += errorDetailsHtml(pendingProblemDetail);
   }
   return h;
 }
@@ -753,6 +766,7 @@ function showRoutinesForAgent(agentId) {
  */
 function routinesActionFailed(reply) {
   pendingProblem = routinesModel().actionProblem(reply);
+  pendingProblemDetail = reply && typeof reply.detail === 'string' && reply.detail ? reply.detail : null;
   renderRoutines();
 }
 

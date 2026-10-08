@@ -22,6 +22,7 @@ const { JSDOM } = require('jsdom');
 const ROOT = path.join(__dirname, '..', '..');
 const read = (...parts) => fs.readFileSync(path.join(ROOT, ...parts), 'utf-8');
 const EDITOR_MODEL_SRC = read('public', 'routine-editor-model.js');
+const READABLE_SRC = read('public', 'readable-error.js');
 const MODEL_SRC = read('public', 'routines-model.js');
 const VIEW_SRC = read('public', 'views', 'routines.js');
 const INDEX_SRC = read('public', 'index.html');
@@ -106,6 +107,7 @@ function shell(routines = FOUR_ROWS, opts = {}) {
   const dom = new JSDOM('<!doctype html><html><head><style>' + ROUTINES_CSS + '</style></head><body>'
     + pageParts() + '</body></html>', { runScripts: 'dangerously' });
   const w = dom.window;
+  w.eval(READABLE_SRC);
   w.eval(EDITOR_MODEL_SRC);
   w.eval(SKILLS_MODEL_SRC);
   w.eval(MODEL_SRC);
@@ -1799,6 +1801,22 @@ describe('the header is the skills view\'s header', () => {
     const action = doc.querySelector('[data-routines-action="build-skill"]');
     assert.ok(action, 'the action is not on the page');
     assert.strictEqual(action.querySelectorAll('svg').length, 0);
+    dom.window.close();
+  });
+
+  test('a refusal from a system error shows its sentence, with the raw words behind Details', () => {
+    const { doc, w, dom } = shell();
+    w.renderRoutines();
+    const raw = "EBUSY: resource busy or locked, open 'C:\\Users\\example\\Workspace\\.rundock\\runs\\r1.json'";
+    w.routinesActionFailed({ message: "Rundock couldn't start the routine because another program is using a file. Close the program that has it open, then try again.", detail: raw });
+    const problem = doc.querySelector('[data-routines-problem]');
+    assert.ok(!text(problem).includes('Users'), 'no path in the sentence');
+    const details = problem.nextElementSibling;
+    assert.ok(details && details.matches('details.error-details'), 'Details follows the sentence');
+    assert.strictEqual(details.querySelector('code').textContent, raw);
+    // A plain refusal afterwards carries no stale Details.
+    w.routinesActionFailed({ message: 'Routine could not be paused.' });
+    assert.strictEqual(doc.querySelector('details.error-details'), null);
     dom.window.close();
   });
 

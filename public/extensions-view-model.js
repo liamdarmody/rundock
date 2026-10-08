@@ -133,7 +133,7 @@
         updateAvailable: !!(status && status.outcome === 'newer-available'),
         claims: marked ? `Renders ${marked.target} files marked "${marked.declares}" in their frontmatter.` : null,
         problem: !failed && refused ? sentence(refused.reason || `The match rule "${refused.match}" is not honoured.`) : null,
-        note: note ? { text: sentence(note.text), tone: note.tone } : null,
+        note: note ? { text: sentence(note.text), tone: note.tone, ...(note.detail ? { detail: note.detail } : {}) } : null,
         switching: !!(busy && busy.operation === 'set-enabled' && busy.name === name),
         // Paused, the switch shows its own setting but cannot change it.
         disabled: paused || !!busy,

@@ -32,7 +32,7 @@
   const KIND_WORDS = { agent: 'agent', skill: 'skill', starter: 'starter file' };
 
   function initial() {
-    return { statuses: {}, errors: {}, checking: false, checkingIds: {}, review: null, busy: null, done: null, uninstall: null, notice: null };
+    return { statuses: {}, errors: {}, errorDetails: {}, checking: false, checkingIds: {}, review: null, busy: null, done: null, uninstall: null, notice: null };
   }
 
   const nameOf = (id) => String(id || '').replace(/^https:\/\/github\.com\//, '').split('/').pop() || id;
@@ -122,7 +122,7 @@
     }
     if (msg.type === 'package_install_error' && /^package-uninstall/.test(msg.operation || '')) {
       const id = msg.id || (state.uninstall && state.uninstall.id);
-      return { state: { ...state, uninstall: null, errors: id ? { ...state.errors, [id]: msg.message || 'That didn\'t work.' } : state.errors } };
+      return { state: { ...state, uninstall: null, errors: id ? { ...state.errors, [id]: msg.message || 'That didn\'t work.' } : state.errors, errorDetails: withDetail(state, id, msg) } };
     }
     if (msg.type === 'package_update_plan') {
       return { state: { ...state, busy: null, review: { ...msg, name: nameOf(msg.id) } } };
@@ -135,7 +135,7 @@
     }
     if (msg.type === 'package_install_error' && /^package-update/.test(msg.operation || '')) {
       const id = msg.id || (state.busy && state.busy.id) || (state.review && state.review.id);
-      return { state: { ...state, busy: null, checkingIds: id ? without(state.checkingIds, id) : state.checkingIds, review: msg.operation === 'package-update' ? null : state.review, errors: id ? { ...state.errors, [id]: msg.message || 'That didn\'t work.' } : state.errors } };
+      return { state: { ...state, busy: null, checkingIds: id ? without(state.checkingIds, id) : state.checkingIds, review: msg.operation === 'package-update' ? null : state.review, errors: id ? { ...state.errors, [id]: msg.message || 'That didn\'t work.' } : state.errors, errorDetails: withDetail(state, id, msg) } };
     }
     return { state };
   }
@@ -146,8 +146,19 @@
 
   // The status line under a package's name, and its tone: what the check
   // said, or why there is nothing to check.
+  // The raw words of a system error beside a row's error, for its Details
+  // (public/readable-error.js). Read only while that row's error stands.
+  function withDetail(state, id, msg) {
+    const details = state.errorDetails || {};
+    if (!id) return details;
+    return { ...details, [id]: msg && typeof msg.detail === 'string' && msg.detail ? msg.detail : null };
+  }
+
   function statusFor(state, card, broken) {
-    if (state.errors[card.id]) return { text: install.sentence(state.errors[card.id]), tone: 'danger' };
+    if (state.errors[card.id]) {
+      const detail = state.errorDetails && state.errorDetails[card.id];
+      return { text: install.sentence(state.errors[card.id]), tone: 'danger', ...(detail ? { detail } : {}) };
+    }
     if (broken) return { text: 'Rundock couldn\'t load this package\'s extension.', tone: 'danger' };
     if (!card.updatable) return { text: 'Added from a folder, so it can\'t be checked for updates.', tone: 'neutral' };
     if (!SEMVER.test(card.reference || '')) return { text: 'Installed from a commit. Paste the link again to get the latest.', tone: 'neutral' };

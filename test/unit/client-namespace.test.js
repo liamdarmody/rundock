@@ -120,6 +120,7 @@ const MANIFEST = {
     "editorGoBack",
     "fileConnections",
     "fileConnectionsIndexReady",
+    "fileSaveFailed",
     "findFileInTree",
     "flushBoardSave",
     "getFileContentForSave",

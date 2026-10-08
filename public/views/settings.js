@@ -29,6 +29,15 @@
 // the trust step or the plain offer, and this file draws whichever arrived.
 let packagesInstall = (typeof RundockPackagesInstallModel !== 'undefined') ? RundockPackagesInstallModel.initial() : null;
 
+// The "Details" control under a failure's plain sentence: the raw words of a
+// system error (public/readable-error.js), or nothing when there are none.
+// Read at call time off the global, or required under Node.
+function errorDetailsHtml(detail) {
+  const readableError = (typeof RundockReadableError !== 'undefined') ? RundockReadableError
+    : (typeof require === 'function' ? require('../readable-error.js') : null);
+  return readableError ? readableError.detailsHtml(detail) : '';
+}
+
 // One guard for every packages render path: markup goes into the settings
 // pane only when the pane is showing and Packages is the displayed section;
 // otherwise the model state updates silently and the section is right the
@@ -310,7 +319,7 @@ function packagesUninstallHtml(copy) {
 // One card per installed package, to the approved page design.
 function packagesCardHtml(c) {
   const actions = c.actions.map((a) => `<button class="linkbtn${a.accent ? ' accent' : ''}${a.danger ? ' pkg-card-uninstall' : ''}" data-action="${escAttr(a.action)}" ${a.disabled ? 'disabled' : ''} onclick="packagesCardAction('${escAttr(a.action)}', '${escAttr(c.id)}')">${esc(a.label)}</button>`).join('');
-  const status = c.status ? `<div class="pkg-card-status${c.status.tone === 'update' ? ' is-update' : c.status.tone === 'danger' ? ' is-danger' : ''}">${esc(c.status.text)}</div>` : '';
+  const status = c.status ? `<div class="pkg-card-status${c.status.tone === 'update' ? ' is-update' : c.status.tone === 'danger' ? ' is-danger' : ''}">${esc(c.status.text)}${errorDetailsHtml(c.status.detail)}</div>` : '';
   // An item still in the workspace is a link to it; one that is gone is
   // plain text marked removed, with nothing in it to press.
   const itemHtml = (i) => {
@@ -339,14 +348,14 @@ function packagesManageHtml() {
   const m = manageModel();
   const st = packagesManage;
   let list;
-  if (st.error) list = `<div class="pkg-empty is-danger">${esc(RundockPackagesInstallModel.sentence(st.error))}</div>`;
+  if (st.error) list = `<div class="pkg-empty is-danger">${esc(RundockPackagesInstallModel.sentence(st.error))}${errorDetailsHtml(st.errorDetail)}</div>`;
   else if (!st.loaded) list = '<div class="pkg-empty">Reading what you\'ve installed…</div>';
   else {
     const cards = updateModel().cardRows(packagesUpdate, st);
     list = cards.length ? cards.map(packagesCardHtml).join('') : '<div class="pkg-empty">No packages installed yet. Paste a package link above to get started.</div>';
   }
   const notices = [st.notice, packagesUpdate && packagesUpdate.notice].filter(Boolean)
-    .map((n) => `<div class="ext-notice ${escAttr(n.tone)}">${esc(RundockPackagesInstallModel.sentence(n.text))}</div>`).join('');
+    .map((n) => `<div class="ext-notice ${escAttr(n.tone)}">${esc(RundockPackagesInstallModel.sentence(n.text))}${errorDetailsHtml(n.detail)}</div>`).join('');
   const folder = m.folderLabel(st);
   const folderRow = folder ? `<div class="pkg-updates-folder" id="packages-updates-folder">
       <span>${esc(packagesClearAsked ? 'Clear every saved author version and backup? Your workspace files aren\'t touched.' : folder)}</span>
@@ -575,6 +584,7 @@ function packagesSectionHtml() {
     stateHtml = `<div class="settings-card packages-state packages-failed">
         <div class="packages-headline">That didn't work</div>
         <div class="packages-body">${esc(m.sentence(st.message))}</div>
+        ${errorDetailsHtml(st.detail)}
         <div class="packages-actions">
           ${st.canReplan ? `<button class="settings-btn" onclick="packagesRetry()">Try again</button>` : ''}
           <button class="settings-btn" onclick="packagesCancel()">Back</button>
@@ -1386,7 +1396,7 @@ function extensionRowHtml(r, i) {
     r.claims ? `<div class="ext-page-line">${esc(r.claims)}</div>` : '',
     r.problem ? `<div class="ext-page-line is-danger">${esc(r.problem)}</div>` : '',
     r.failedText ? `<div class="ext-page-line is-danger ext-page-failed">${esc(r.failedText)} ${extensionFailedWayHtml(r, i)}</div>` : '',
-    r.note ? `<div class="ext-page-line${r.note.tone === 'danger' ? ' is-danger' : ''}">${esc(r.note.text)}</div>` : '',
+    r.note ? `<div class="ext-page-line${r.note.tone === 'danger' ? ' is-danger' : ''}">${esc(r.note.text)}${errorDetailsHtml(r.note.detail)}</div>` : '',
   ].join('');
   const control = r.failed ? '' : `<div class="row-onoff"><span class="onoff-label">${esc(r.onLabel)}</span><label class="toggle-hit"><input type="checkbox" role="switch" class="rui-toggle" id="ext-switch-${i}" aria-label="${escAttr(r.switchLabel)}" ${r.on ? 'checked' : ''} ${r.disabled ? 'disabled' : ''} onclick="extensionsToggle(event, ${i})"></label></div>`;
   return `<div class="ext-page-row" data-extension="${escAttr(r.id)}">
@@ -1412,11 +1422,11 @@ function extensionsSectionHtml() {
   const banner = rows.length && pause.paused
     ? `<div class="ext-paused-banner"><p>${esc(pause.banner)}</p><button class="settings-btn-primary" id="ext-resume" onclick="extensionsSetPaused(false)" ${pause.disabled ? 'disabled' : ''}>${esc(pause.label)}</button></div>` : '';
   let list;
-  if (st.error) list = `<div class="ext-page-empty is-danger">${esc(v.sentence(st.error))}</div>`;
+  if (st.error) list = `<div class="ext-page-empty is-danger">${esc(v.sentence(st.error))}${errorDetailsHtml(st.errorDetail)}</div>`;
   else if (!st.loaded) list = `<div class="ext-page-empty">Reading what is installed…</div>`;
   else if (!rows.length) list = `<div class="ext-page-empty">${esc(v.EMPTY)} <button class="linkbtn accent" onclick="extensionsOpenPackages()">Go to Packages</button></div>`;
   else list = rows.map(extensionRowHtml).join('');
-  const notice = st.notice ? `<div class="ext-page-notice${st.notice.tone === 'danger' ? ' is-danger' : ''}" role="status">${esc(v.sentence(st.notice.text))}</div>` : '';
+  const notice = st.notice ? `<div class="ext-page-notice${st.notice.tone === 'danger' ? ' is-danger' : ''}" role="status">${esc(v.sentence(st.notice.text))}${errorDetailsHtml(st.notice.detail)}</div>` : '';
   const below = !rows.length ? ''
     : pause.paused ? ''
       : `<div class="ext-pause"><p>${esc(pause.text)}</p><button class="settings-btn" id="ext-pause" onclick="extensionsSetPaused(true)" ${pause.disabled ? 'disabled' : ''}>${esc(pause.label)}</button></div>`;

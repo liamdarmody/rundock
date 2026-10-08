@@ -58,7 +58,7 @@
       return { state: { ...state, loaded: true, error: null, busy: freed('page'), extensions: Array.isArray(msg.extensions) ? msg.extensions : [], receipts: Array.isArray(msg.receipts) ? msg.receipts : [], packages: Array.isArray(msg.packages) ? msg.packages : [], allOff: msg.allOff === true, updatesFolder: msg.updatesFolder && typeof msg.updatesFolder.bytes === 'number' ? msg.updatesFolder : { bytes: 0, files: 0 } } };
     }
     if (msg.type === 'packages_page_error') {
-      return { state: { ...state, loaded: true, error: msg.reason || 'The Packages page couldn\'t be read.', extensions: [], receipts: [], packages: [], busy: null } };
+      return { state: { ...state, loaded: true, error: msg.reason || 'The Packages page couldn\'t be read.', errorDetail: msg.detail || null, extensions: [], receipts: [], packages: [], busy: null } };
     }
     // A package's check answered: an extension that package installed learns
     // whether a newer release exists, so the Extensions page can say so. The
@@ -92,15 +92,21 @@
     // flow's to render, not a note on a row.
     if (msg.type === 'package_install_error' && state.busy && state.busy.name && msg.operation === state.busy.operation
       && (msg.name === undefined || msg.name === state.busy.name)) {
-      const notes = { ...state.notes, [state.busy.name]: { text: msg.message || 'That did not work.', tone: 'danger' } };
+      const notes = { ...state.notes, [state.busy.name]: { text: msg.message || 'That did not work.', tone: 'danger', ...detailOf(msg) } };
       return { state: { ...state, busy: null, notes } };
     }
     // The switch is asked for by no name, so its refusal names none either:
     // it frees the wait and is said beneath the list.
     if (msg.type === 'package_install_error' && state.busy && state.busy.operation === 'set-all-off' && msg.operation === 'set-all-off') {
-      return { state: { ...state, busy: null, notice: { text: msg.message || 'That did not work.', tone: 'danger' } } };
+      return { state: { ...state, busy: null, notice: { text: msg.message || 'That did not work.', tone: 'danger', ...detailOf(msg) } } };
     }
     return { state };
+  }
+
+  // The raw words of a system error, kept beside the sentence for Details
+  // (public/readable-error.js); nothing is added when there are none.
+  function detailOf(msg) {
+    return msg && typeof msg.detail === 'string' && msg.detail ? { detail: msg.detail } : {};
   }
 
   function ask(state, operation, name, send) {

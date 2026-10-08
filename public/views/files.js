@@ -200,6 +200,15 @@ function saveTiptapFile() {
 // conflict either.
 const diskBaselines = new Map();
 
+// The server could not write a save (file_save_failed): the bytes on disk are
+// still the old ones, so the baseline set optimistically when it was sent is
+// dropped, or the next save would read the unchanged disk as someone else's
+// edit and offer a conflict. The open file is unsaved again.
+function fileSaveFailed(path) {
+  diskBaselines.delete(path);
+  if (path === currentFilePath) editorDirty = true;
+}
+
 // `origin: 'extension'` marks a save an extension caused, which the server
 // holds to the extension file rule again at write time.
 async function saveFileGuarded(path, content, opts = {}) {
@@ -2349,7 +2358,7 @@ return {
   loadTiptapEditorModule, loadViewersModule,
   destroyActiveFileViewer, destroyActiveArtifactReview,
   attachArtifactReviewForCurrentFile, initTiptapEditor, onTiptapEditorUpdate,
-  saveTiptapFile, saveFileGuarded, hideExternalEditConflict,
+  saveTiptapFile, saveFileGuarded, fileSaveFailed, hideExternalEditConflict,
   showExternalEditConflict, currentLiveContent, handleExternalFileChange,
   destroyTiptapEditorIfActive, closeOpenFile,
   renderFileTree, treeIconSvg, paletteFileIcon, buildTree, contentForKind,
