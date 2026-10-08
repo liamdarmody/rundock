@@ -180,6 +180,24 @@ test.describe.serial('browser mode: the printed link', () => {
     await context.close();
   });
 
+  test('a link pasted into a tab already showing the line lets it in', async ({ browser }) => {
+    const context = await fresh(browser);
+    const page = await context.newPage();
+    await page.goto(BASE);
+    await expect(signedOutLine(page)).toHaveText(NEVER);
+    await expect(signedOutLine(page)).toBeVisible();
+    // The same tab, given the printed link: only the fragment changes, so the
+    // page is not reloaded.
+    let reloaded = false;
+    page.on('load', () => { reloaded = true; });
+    await page.goto(await server.take());
+    await expect(signedOutLine(page)).toBeHidden({ timeout: 15000 });
+    await expect.poll(() => connected(page), { timeout: 15000 }).toBe(true);
+    expect(reloaded).toBe(false);
+    expect(page.url()).toBe(`${BASE}/`);
+    await context.close();
+  });
+
   test('a wrong key in the link signs nothing in', async ({ browser }) => {
     const context = await fresh(browser);
     const page = await context.newPage();
