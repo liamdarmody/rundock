@@ -9,7 +9,7 @@ top of `scripts/release.js`.
 ```
 npm run release -- bump <version>       # version + promoted changelog, committed with the candidate
 ...push the candidate and open its pull request; wait for CI to finish on it...
-npm run walk                            # the release walk: use the product
+npm run walk                            # the release walk: use the product (the gate runs it too)
 npm run release:gate                    # what CI cannot do, on the candidate's exact tree
 ...start Rundock from the candidate and try the test list in the browser...
 npm run release -- signoff <version> --confirm <version>   # record that check for this tree, yourself
@@ -117,7 +117,11 @@ editor and run by hand.
 
 **It needs network access to GitHub**, because the installs clone the real
 tagged repositories. It runs locally on the release engineer's machine, not
-in CI, and the release gate's own step list does not include it.
+in CI, and it is a step of the release gate, so a walk that has rotted fails
+the gate instead of being skipped. Its checks of where the product keeps
+things (a package card's key, the pins file) are held to the product's own
+code by `test/unit/release-walk-checks.test.js`, so a move in the product
+turns a unit test red before it turns the walk red.
 
 **The report is attached to the release pull request.** The walk writes
 `.walk/report.md` and `.walk/report.json` (the directory is ignored by git),
