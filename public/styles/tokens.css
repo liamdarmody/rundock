@@ -89,6 +89,14 @@
      overrides it (see body.light), following --danger-text. */
   --accent-text: #E87A5A;
   --success: #6BC67E; --attention: #E8A84C; --working: #7AA2E8; --idle: #7A756E;
+  /* The attention hue as a quiet fill, for a notice that asks to be read
+     before continuing and is not an error. */
+  --attention-glow: rgba(232,168,76,0.10);
+  /* The attention hue as TEXT and as an icon, following --accent-text: the
+     hue itself in dark (8.40:1 on --base), darker in light (see body.light),
+     where --attention as text measured about 2:1. Borders and glows stay on
+     --attention. Pinned by test/unit/attention-token.test.js. */
+  --attention-text: #E8A84C;
   /* The status set had no red, so every destructive and error surface reached
      for a hex of its own and they drifted: three near-identical reds were in
      the stylesheets when this token was added. This is the one, and it is TWO
@@ -248,6 +256,9 @@ body.light {
   --card: #F0EDE8; --border: #E5E0D8;
   --text-1: #1A1A1A; --text-2: #7A756E; --text-3: #8C867E;
   --accent-glow: rgba(232,122,90,0.08);
+  --attention-glow: rgba(232,168,76,0.14);
+  /* 4.78:1 on --base, 5.03 on --surface, 5.33 on --elevated, 4.57 on --card. */
+  --attention-text: #94600C;
   /* Danger text in light is the fill value itself, which reads on every light
      surface. The dark theme's lifted value would wash out here. */
   --danger-text: #D42C2A;

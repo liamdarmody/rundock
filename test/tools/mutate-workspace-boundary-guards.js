@@ -70,7 +70,10 @@ const WORKSPACE_HANDLER = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 
 // atomicity guards are proven by protocol-handlers-lib.test.js's own
 // read-back, not anything ws-handler-edges.test.js asserts.
 const WORKSPACE_HANDLER_UNIT = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'workspace.js'), suite: 'test/unit/protocol-handlers-lib.test.js' };
-// The scaffold never writes over a CLAUDE.md.
+// Creating a workspace never touches a folder that is already there, and the
+// scaffold never writes over a CLAUDE.md: each proven by the suite that drives
+// it, the create handler through the real server.
+const CREATE_HANDLER = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'workspace.js'), suite: 'test/integration/workspace-picker.test.js' };
 const SCAFFOLD_KEEP = { src: path.join(ROOT, 'lib', 'workspace', 'scaffold.js'), suite: 'test/unit/workspace-modes.test.js' };
 // The switch that keeps agents inside the workspace: where it is read from, the
 // new-workspace default, and the open-path reconcile that honours it.
@@ -399,6 +402,22 @@ const MUTATIONS = [
     "  const state = recordFirstOpen(dir);\n\n  try { scaffoldWorkspace(dir); }",
     "  const state = readState();\n\n  try { scaffoldWorkspace(dir); }"],
   // ===== CREATE NEVER OVERWRITES =====
+  // Without the check, a taken name typed with a character to strip is answered
+  // with the rename notice, and a second press would scaffold over it.
+  [CREATE_HANDLER, 'a workspace name that already exists is refused before anything is written',
+    '    if (fs.existsSync(dir)) { sendNameTaken(ws, rawName, dir); return; }\n',
+    ''],
+  [CREATE_HANDLER, 'a name that lost characters is said before the folder is made',
+    '    if (removed) {',
+    '    if (false) {'],
+  // The check and the mkdir are two steps: a recursive mkdir would reuse a
+  // folder made between them and scaffold over it.
+  [CREATE_HANDLER, 'the workspace folder is made without recursion, so one that appeared is refused',
+    '      try { fs.mkdirSync(dir); } catch (e) {',
+    '      try { fs.mkdirSync(dir, { recursive: true }); } catch (e) {'],
+  [CREATE_HANDLER, 'the folder offered to open is the real one on disk',
+    'openPath = fs.realpathSync.native(dir);',
+    'openPath = dir;'],
   [SCAFFOLD_KEEP, 'the default scaffold never writes over an existing CLAUDE.md',
     '  if (fs.existsSync(claudeMdPath)) {',
     '  if (false) {'],
