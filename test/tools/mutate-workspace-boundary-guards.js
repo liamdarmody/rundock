@@ -392,6 +392,36 @@ const MUTATIONS = [
   [SCAFFOLD, 'a block carrying an earlier, shorter deny list is still recognised as ours',
     '  for (let n = 1; n < deny.length; n++) shapes.push(withDenyWrite(block, deny.slice(0, n)));\n',
     ''],
+  // ===== THE USER-LEVEL STATE FILE IS A SECRET AT BOTH LAYERS =====
+  // Drop the home-level files from the block and ~/.claude.json is writable
+  // by sandboxed commands again, its user-scope MCP servers with it.
+  [SCAFFOLD, 'the block denies the user-level state file and its backup',
+    '    ...HOME_SECRET_FILES.map(f => path.posix.join(home, f)),\n',
+    ''],
+  // Stop matching home-level secrets and a read of ~/.claude.json is ordinary
+  // outside access again, with a folder offered to remember.
+  [HOOK, 'a home-level secret is recognised by the secrets check',
+    '  if (!h) return isHomeSecretFile(candidate, home, foldsCase);\n',
+    '  if (!h) return false;\n'],
+  // The shell and file-tool graders read the tags, not isSecretPath, outside
+  // the runtime homes: drop the tag and the card loses its secret wording and
+  // its refusal to remember.
+  [HOOK, 'outside the runtime homes the tags still carry a home-level secret',
+    '  if (!agentHome) return { agentHome: false, secret: isHomeSecretFile(resolvedPath, home, foldsCase), persistenceSurface: false };\n',
+    '  if (!agentHome) return { agentHome: false, secret: false, persistenceSurface: false };\n'],
+  // The backup carries the same contents as the file itself.
+  [HOOK, 'the backup of the user-level state file is a secret too',
+    "const HOME_SECRET_FILES = ['.claude.json', '.claude.json.backup'];",
+    "const HOME_SECRET_FILES = ['.claude.json'];"],
+  // The runtime reads ~/.claude/.config.json in place of ~/.claude.json, so
+  // dropping it reopens the same escape under another name.
+  [HOOK, 'the file the runtime reads in place of ~/.claude.json is a secret',
+    "const SECRET_RELATIVE_PATHS = ['.credentials.json', '.config.json'];",
+    "const SECRET_RELATIVE_PATHS = ['.credentials.json'];"],
+  // Match by name anywhere and a namesake in a project is carded as a secret.
+  [HOOK, 'a home-level secret matches at the home folder root only',
+    '  return HOME_SECRET_FILES.some(f => c === foldCase(canonicalize(path.join(home, f)), foldsCase));\n',
+    '  return HOME_SECRET_FILES.some(f => c.endsWith(path.sep + foldCase(f, foldsCase)));\n'],
 
   // ===== THE BLOCK IS DRIVEN BY MODE, AND ONLY BY MODE =====
   // Ignore the mode and the switch writes the block for code mode too.
