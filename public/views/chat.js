@@ -1315,6 +1315,9 @@ function respondPermission(requestId, allow, always, allowFolder) {
     conversationId: pending.convoId,
     ...(allowFolder && pending.grantDir ? { grantDir: pending.grantDir } : {}),
     allow: allow,
+    // Answered on a card a person saw, so the agent can be told it was
+    // approved. The auto-allow paths above never send it.
+    card: true,
     toolInput: pending.toolInput || {}
   }));
 
