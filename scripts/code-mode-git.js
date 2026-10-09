@@ -2,11 +2,11 @@
 // The facts the Code-mode verdict reads from the disk and from git, behind one
 // seam so a Windows-shaped world can be judged on any host.
 //
-// Only four questions are ever asked: does a path exist, which working tree is
-// it in, what does git hold unsaved under some paths, and which branch does a
-// push land on. Every git call has a short limit and any failure is reported
-// as a failure, never as "nothing unsaved": the caller asks when it cannot
-// check.
+// Only four questions are ever asked: does a path exist (and is it a
+// symlink), which working tree is it in, what does git hold unsaved under
+// some paths, and which branch does a push land on. Every git call has a
+// short limit and any failure is reported as a failure, never as "nothing
+// unsaved": the caller asks when it cannot check.
 const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
@@ -107,8 +107,12 @@ function isTag(top, name) {
   try { git(['-C', top, 'show-ref', '--verify', '--quiet', `refs/tags/${name}`], top); return true; } catch (e) { return false; }
 }
 
-function defaultContext() {
-  return { exists: p => fs.existsSync(p), canonical: realNearest, gitTop, gitStatus, currentBranch, defaultBranches, isTag };
+function isSymlink(p) {
+  try { return fs.lstatSync(p).isSymbolicLink(); } catch (e) { return false; }
 }
 
-module.exports = { defaultContext, realNearest, gitTop, gitStatus, currentBranch, defaultBranches, isTag, GIT_LIMIT_MS };
+function defaultContext() {
+  return { exists: p => fs.existsSync(p), canonical: realNearest, gitTop, gitStatus, currentBranch, defaultBranches, isTag, isSymlink };
+}
+
+module.exports = { defaultContext, realNearest, gitTop, gitStatus, currentBranch, defaultBranches, isTag, isSymlink, GIT_LIMIT_MS };

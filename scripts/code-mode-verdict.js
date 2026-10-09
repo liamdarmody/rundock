@@ -72,6 +72,7 @@ function codeModeVerdict(opts) {
       currentBranch: ctxSeam.currentBranch || (() => null),
       defaultBranches: ctxSeam.defaultBranches || (() => ['main', 'master']),
       isTag: ctxSeam.isTag || (() => false),
+      isSymlink: ctxSeam.isSymlink || (() => false),
     },
     canonical,
     tmpdir: opts.tmpdir,
@@ -531,8 +532,9 @@ function judgeDocker(v, t) {
 
 // ── Paths ───────────────────────────────────────────────────────────────────
 
-// The absolute path a word names, or null when it is only known at run time.
-function expandPath(word, ctx) {
+// The absolute path a word names, or null when it is only known at run time;
+// `raw` leaves symlinks in it unresolved.
+function expandPath(word, ctx, raw = false) {
   let t = word.text;
   const pmod = ctx.pmod;
   if (ctx.dialect === 'bash') {
@@ -558,13 +560,28 @@ function expandPath(word, ctx) {
   }
   if (ctx.dialect !== 'bash' && pmod !== path.win32) t = t.replace(/\\/g, '/');
   if (!t) return null;
-  if (pmod.isAbsolute(t)) return ctx.canonical(pmod.resolve(t));
-  if (!ctx.base) return null;
-  return ctx.canonical(pmod.resolve(ctx.base, t));
+  const abs = pmod.isAbsolute(t) ? pmod.resolve(t) : (ctx.base ? pmod.resolve(ctx.base, t) : null);
+  if (!abs) return null;
+  return raw ? abs : ctx.canonical(abs);
 }
 
 function target(word, ctx) {
-  return { path: expandPath(word, ctx), glob: !!word.glob && !word.quoted };
+  const glob = !!word.glob && !word.quoted;
+  const p = expandPath(word, ctx);
+  return { path: p, glob, link: glob || !p ? null : linkPath(word, p, ctx) };
+}
+
+// A named delete removes a symlink, never what it points to, so the path
+// judged is the link itself (its folder resolved, its own name kept) whenever
+// the word names one. A trailing slash follows the link, as rm does.
+function linkPath(word, resolved, ctx) {
+  if (/[\\/]$/.test(word.text)) return null;
+  const abs = expandPath(word, ctx, true);
+  if (!abs) return null;
+  const dir = ctx.pmod.dirname(abs);
+  if (dir === abs) return null;
+  const p = ctx.pmod.join(ctx.canonical(dir), ctx.pmod.basename(abs));
+  return p !== resolved && ctx.seam.isSymlink(p) ? p : null;
 }
 
 function under(p, root, ctx) {
@@ -605,17 +622,19 @@ function judgeDelete(targets, { bulk, piped, kind = 'delete' }, ctx) {
   // outside any repository), and only a file git holds unchanged runs.
   const named = !bulk;
   if (named) {
-    const dotGit = targets.find(t => insideDotGit(t.path, ctx));
+    const dotGit = targets.find(t => insideDotGit(t.link || t.path, ctx));
     if (dotGit) return always(dotGitReason(dotGit.path, ctx));
   }
   const byTop = new Map();
   const outside = [];
   for (const t of targets) {
-    const scope = t.glob ? globScope(t.path, ctx) : t.path;
-    if (!ctx.seam.exists(scope)) continue; // deletes nothing
-    if (insideDotGit(t.path, ctx)) return always(dotGitReason(t.path, ctx));
+    const link = named ? t.link : null;
+    const scope = link || (t.glob ? globScope(t.path, ctx) : t.path);
+    if (!link && !ctx.seam.exists(scope)) continue; // deletes nothing
+    if (insideDotGit(link || t.path, ctx)) return always(dotGitReason(link || t.path, ctx));
     if (isDisposable(scope, ctx)) continue;
-    const top = ctx.seam.gitTop(scope);
+    // A link's repository is its folder's: where it points is not deleted.
+    const top = ctx.seam.gitTop(link ? ctx.pmod.dirname(link) : scope);
     if (!top && named) { outside.push(ctx.pmod.basename(scope)); continue; }
     if (!top) return always('outside-repository');
     const topC = ctx.canonical(top);
@@ -632,14 +651,27 @@ function judgeDelete(targets, { bulk, piped, kind = 'delete' }, ctx) {
     const st = ctx.seam.gitStatus(top, specs, { env: true });
     if (!st || !st.ok) return always('git-unchecked');
     const lost = [...(st.tracked || []), ...(st.untracked || []), ...(st.ignoredEnv || [])];
-    if (lost.length) return unsaved('unsaved-work', lost);
+    if (lost.length) return unsaved('unsaved-work', lost, { named, changed: st.tracked || [] });
   }
   return RUNS;
 }
 
-function unsaved(reason, files) {
+function unsaved(reason, files, kinds) {
   const uniq = [...new Set(files)];
-  return always(reason, { files: uniq.slice(0, 3), more: Math.max(0, uniq.length - 3) });
+  const v = always(reason, nameSome(uniq));
+  if (!kinds) return v;
+  // A delete loses one of two things, and the card says which: changes to a
+  // file git holds, or a file git has never saved. `named` says whether the
+  // files were named one by one or reached through a folder or a pattern.
+  const changed = new Set(kinds.changed);
+  return {
+    ...v, named: !!kinds.named,
+    changed: nameSome(uniq.filter(f => changed.has(f))),
+    fresh: nameSome(uniq.filter(f => !changed.has(f))),
+  };
+}
+function nameSome(list) {
+  return { files: list.slice(0, 3), more: Math.max(0, list.length - 3) };
 }
 
 // The folder a globbed target can reach: its path up to the first glob.
@@ -842,6 +874,10 @@ function judgeCheckout(sub, rest, ctx, top) {
     });
     if (sub === 'restore') candidates = rest.filter(w => !/^-/.test(w.text));
   }
+  // Pathspec magic (`:(top)`, `:/`, `:!` and the rest) changes which files
+  // a spec reaches, from where, so a word starting with `:` is not read here.
+  const operands = dd >= 0 ? rest.slice(dd + 1) : rest.filter(w => !/^-/.test(w.text));
+  if (operands.some(w => w.text.startsWith(':'))) return always('unreadable-command');
   if (!candidates.length) return RUNS;
   const scopes = [];
   for (const w of candidates) {

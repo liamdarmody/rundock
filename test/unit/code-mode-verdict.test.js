@@ -37,6 +37,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const fx = require('../helpers/code-mode-fixture.js');
+const RP = require('../../public/permissions.js');
 const { ROWS, spellingsOf } = require('../fixtures/code-mode/command-table.js');
 
 const MODULE = '../../scripts/code-mode-verdict.js';
@@ -216,6 +217,27 @@ describe('a restore of one named file asks when git holds unsaved changes to it'
     const untracked = fx.withState(world, 'untracked-file', () => verdictFor('git checkout -- src/new-parser.ts'));
     assert.strictEqual(untracked.verdict, 'runs', 'a file git has never seen is not touched by a checkout');
   });
+
+  // Pathspec magic changes which files a spec reaches and from where: from a
+  // subfolder, ':(top)src/app.js' is src/app.js at the top, not a path under
+  // the subfolder. Such a spec is not read here, so it asks.
+  test('pathspec magic asks: :(top), :/ and :!', () => {
+    for (const [command, at] of [
+      ["git restore ':(top)src/app.js'", 'app/src'],
+      ["git checkout -- ':(top)src/app.js'", 'app/src'],
+      ["git checkout ':(top)src/app.js'", 'app/src'],
+      ["git restore ':/src/app.js'", 'app/src'],
+      ["git restore -- ':/'", 'app/src'],
+      ["git restore ':!README.md'", 'app'],
+      ["git checkout -- . ':!README.md'", 'app'],
+    ]) {
+      const v = fx.withState(world, 'tracked-change', () => verdictFor(command, { at }));
+      assert.strictEqual(v.verdict, 'always-asks', `${command}: ${JSON.stringify(v)}`);
+      assert.strictEqual(v.reason, 'unreadable-command', command);
+    }
+    assert.strictEqual(verdictFor("git restore ':(top)README.md'", { at: 'app/src' }).verdict, 'always-asks', 'asks with nothing unsaved too');
+    assert.strictEqual(verdictFor("git restore --staged ':(top)src/app.js'", { at: 'app/src' }).verdict, 'runs', 'unstaging loses nothing');
+  });
 });
 
 // Deleting one named file follows the same line as a folder: what git can
@@ -238,12 +260,14 @@ describe('a delete of one named file asks when git cannot bring it back', { skip
       assert.strictEqual(v.verdict, 'always-asks', JSON.stringify(v));
       assert.strictEqual(v.reason, 'unsaved-work');
       assert.deepStrictEqual(v.files, ['src/app.js']);
+      assert.strictEqual(RP.verdictCardCopy(v).sentence, 'This deletes src/app.js, which has changes git has never saved.');
     });
     test(`${tag} of a file git has never saved asks, naming it`, () => {
       const v = fx.withState(world, 'untracked-file', () => verdictFor(`${verb} src/new-parser.ts`, { toolName }));
       assert.strictEqual(v.verdict, 'always-asks', JSON.stringify(v));
       assert.strictEqual(v.reason, 'unsaved-work');
       assert.deepStrictEqual(v.files, ['src/new-parser.ts']);
+      assert.strictEqual(RP.verdictCardCopy(v).sentence, 'This deletes src/new-parser.ts, which git has never saved.');
     });
     test(`${tag} of a file outside any repository asks, naming it`, () => {
       const v = verdictFor(`${verb} ${path.join(world.sketch, 'idea.md')}`, { toolName, at: 'ws' });
@@ -269,6 +293,56 @@ describe('a delete of one named file asks when git cannot bring it back', { skip
     const ps = fx.withState(world, 'untracked-file', () => verdictFor('Remove-Item README.md, src/new-parser.ts', { toolName: 'PowerShell' }));
     assert.deepStrictEqual(ps.files, ['src/new-parser.ts']);
     assert.strictEqual(verdictFor('rm README.md src/app.js src/index.js').verdict, 'runs', 'all clean, all restorable');
+  });
+
+  test('the card says what each file loses: changes git has never saved, or the whole file', () => {
+    const both = fx.withState(world, 'tracked-change', () => fx.withState(world, 'untracked-file', () => verdictFor('rm src/app.js src/new-parser.ts README.md')));
+    assert.deepStrictEqual([both.named, both.changed.files, both.fresh.files], [true, ['src/app.js'], ['src/new-parser.ts']]);
+    assert.strictEqual(RP.verdictCardCopy(both).sentence, 'This deletes src/app.js, which has changes git has never saved, and src/new-parser.ts, which git has never saved.');
+    const env = verdictFor('rm .env config/.env');
+    assert.strictEqual(RP.verdictCardCopy(env).sentence, 'This deletes .env and config/.env, which git has never saved.');
+    const folder = fx.withState(world, 'legacy-unsaved', () => verdictFor('rm -rf src/legacy'));
+    assert.strictEqual(folder.named, false);
+    assert.strictEqual(RP.verdictCardCopy(folder).sentence, 'This deletes files and changes git has never saved: src/legacy/parser.js and src/legacy/new-parser.ts would be lost for good.');
+    const changedFolder = fx.withState(world, 'tracked-change', () => verdictFor('rm -r src'));
+    assert.strictEqual(RP.verdictCardCopy(changedFolder).sentence, 'This deletes changes git has never saved: src/app.js would be lost for good.');
+  });
+
+  // rm removes a symlink, never what it points to, so the link itself is
+  // judged: by the repository its folder is in, and by whether git holds it.
+  test('a symlink is judged as the link, not as what it points to', () => {
+    const intoOutside = path.join(world.app, 'link-out.md');
+    const fromOutside = path.join(world.sketch, 'to-app.js');
+    fs.symlinkSync(path.join(world.sketch, 'idea.md'), intoOutside);
+    fs.symlinkSync(path.join(world.app, 'src/app.js'), fromOutside);
+    try {
+      const v = verdictFor('rm link-out.md');
+      assert.strictEqual(v.reason, 'unsaved-work', JSON.stringify(v));
+      assert.deepStrictEqual(v.files, ['link-out.md']);
+      assert.strictEqual(RP.verdictCardCopy(v).sentence, 'This deletes link-out.md, which git has never saved.');
+      const out = verdictFor(`rm ${fromOutside}`, { at: 'ws' });
+      assert.strictEqual(out.reason, 'outside-repository', JSON.stringify(out));
+      assert.deepStrictEqual(out.files, ['to-app.js']);
+      assert.strictEqual(verdictFor(`unlink ${fromOutside}`, { at: 'ws' }).reason, 'outside-repository');
+    } finally { fs.rmSync(intoOutside, { force: true }); fs.rmSync(fromOutside, { force: true }); }
+  });
+
+  test('a symlink git holds unchanged runs, wherever it points and whatever its target holds', () => {
+    const repo = path.join(world.root, 'links');
+    fx.write(path.join(repo, 'a.md'), 'a\n');
+    fs.symlinkSync(path.join(world.sketch, 'idea.md'), path.join(repo, 'out.md'));
+    fs.symlinkSync('a.md', path.join(repo, 'in.md'));
+    try {
+      fx.git(repo, 'init', '-q', '-b', 'main');
+      fx.git(repo, 'add', '-A');
+      fx.git(repo, 'commit', '-q', '-m', 'links');
+      fs.appendFileSync(path.join(repo, 'a.md'), 'changed\n');
+      for (const name of ['out.md', 'in.md']) {
+        const v = verdictFor(`rm ${path.join(repo, name)}`, { at: 'ws' });
+        assert.strictEqual(v.verdict, 'runs', `${name}: ${JSON.stringify(v)}`);
+      }
+      assert.strictEqual(verdictFor(`rm ${path.join(repo, 'a.md')}`, { at: 'ws' }).reason, 'unsaved-work', 'the changed target itself still asks');
+    } finally { fs.rmSync(repo, { recursive: true, force: true }); }
   });
 
   test('several files outside any repository are named together, and a mix with a clean repository file still asks', () => {
