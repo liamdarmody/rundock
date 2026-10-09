@@ -304,7 +304,15 @@
       ? `This throws away changes git has never saved: ${namesOf(v)} would be lost for good.`
       : 'This throws away changes git has never saved, and they would be lost for good.'),
     'git-unchecked': () => 'Rundock couldn\'t check with git what this would lose, so it can\'t tell whether it can be undone.',
-    'outside-repository': () => 'This deletes a folder that isn\'t in a git repository, so nothing can bring it back.',
+    'outside-repository': v => {
+      // A folder is unnamed; named files are named, as the unsaved-work card does.
+      const names = namesOf(v);
+      if (!names) return 'This deletes a folder that isn\'t in a git repository, so nothing can bring it back.';
+      const one = v.files.length === 1 && !(Number(v.more) > 0);
+      return one
+        ? `This deletes ${names}, which isn't in a git repository, so nothing can bring it back.`
+        : `This deletes ${names}, which aren't in a git repository, so nothing can bring them back.`;
+    },
     'repository': () => 'This deletes the repository\'s history, which is what lets every other change be undone.',
     'git-internals': () => 'This changes git\'s own files, which are what let every other change be undone.',
     'find-from-top': () => 'Starting at the top of the repository, this can delete git\'s own files as well as yours.',

@@ -9,6 +9,7 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 ### Fixed
 
 - **Restoring a file asks before throwing away your changes:** in Code mode, an agent restoring one named file from git (with `restore`, or `checkout` and a file name) ran without a card even when the file had changes git had never saved, so it could discard edits you had made by hand. It now asks, naming the file, as restoring a whole folder already did. Restoring a file with nothing unsaved still runs.
+- **Deleting a file asks when git can't bring it back:** in Code mode, deleting one named file (`rm`, `unlink`, `Remove-Item`, `del`) never asked, even for a file git had never saved or a file outside any repository. It now asks, naming the file, when the file has unsaved changes, git has never saved it, it is an ignored `.env` file, or it isn't in a repository. A file git holds unchanged still deletes without a card, as do files in temp folders, package caches and Rundock's scratch folder.
 
 ## 0.15.5: Fewer Dead Ends (2026-10-08)
 

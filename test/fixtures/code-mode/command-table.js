@@ -82,7 +82,7 @@ const ROWS = [
   { id: 'G30', section: 'Git', cls: 'always-asks', spellings: ['git worktree remove --force ../wt'] },
 
   // ── Deleting ───────────────────────────────────────────────────────────
-  { id: 'D1', section: 'Deleting', cls: 'runs', spellings: ['rm notes.txt', 'rm -f a.log b.log', P('Remove-Item notes.txt'), P('del notes.txt'), C('del notes.txt')] },
+  { id: 'D1', section: 'Deleting', cls: 'runs', edge: 'only while git holds the file unchanged; through 0.15.5 any named file ran', spellings: ['rm notes.txt', 'rm -f a.log b.log', P('Remove-Item notes.txt'), P('del notes.txt'), C('del notes.txt')] },
   { id: 'D2', section: 'Deleting', cls: 'runs', spellings: ['rm -rf node_modules', P('Remove-Item -Recurse -Force node_modules'), C('rd /s /q node_modules')] },
   { id: 'D3', section: 'Deleting', cls: 'runs', spellings: ['rm -rf dist build .next', P('Remove-Item -Recurse -Force dist, build')] },
   { id: 'D4', section: 'Deleting', cls: 'runs', spellings: [S('rm -rf src/legacy', { state: 'clean', note: 'everything in it committed' }), P('Remove-Item -Recurse src\\legacy', { state: 'clean', win: true })] },

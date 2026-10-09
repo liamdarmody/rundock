@@ -10,7 +10,7 @@
 //
 // The context read, and no more: where the command runs, whether each target
 // is inside a git working tree, whether git holds unsaved work under the
-// targets (only for bulk deletes and discards), and which branch a push lands
+// targets (for deletes and discards), and which branch a push lands
 // on. It does not read file contents, scripts, or what an `npm run` target
 // does: Rundock checks the commands agents type, not the inside of a
 // project's own scripts.
@@ -600,17 +600,23 @@ function judgeDelete(targets, { bulk, piped, kind = 'delete' }, ctx) {
   if (!targets.length) return RUNS;
   if (targets.some(t => !t.path)) return always('unknown-targets');
   if (targets.some(t => t.glob)) bulk = true;
-  if (!bulk) {
-    // One named file (or several): the same act as the agent overwriting it.
-    return targets.some(t => insideDotGit(t.path, ctx)) ? always(dotGitReason(targets.find(t => insideDotGit(t.path, ctx)).path, ctx)) : RUNS;
+  // A named file is checked like a folder: deleting it loses whatever git
+  // cannot bring back (unsaved changes, a file git has never saved, a file
+  // outside any repository), and only a file git holds unchanged runs.
+  const named = !bulk;
+  if (named) {
+    const dotGit = targets.find(t => insideDotGit(t.path, ctx));
+    if (dotGit) return always(dotGitReason(dotGit.path, ctx));
   }
   const byTop = new Map();
+  const outside = [];
   for (const t of targets) {
     const scope = t.glob ? globScope(t.path, ctx) : t.path;
     if (!ctx.seam.exists(scope)) continue; // deletes nothing
     if (insideDotGit(t.path, ctx)) return always(dotGitReason(t.path, ctx));
     if (isDisposable(scope, ctx)) continue;
     const top = ctx.seam.gitTop(scope);
+    if (!top && named) { outside.push(ctx.pmod.basename(scope)); continue; }
     if (!top) return always('outside-repository');
     const topC = ctx.canonical(top);
     // From the top, a find can reach git's own files as well as the person's.
@@ -621,6 +627,7 @@ function judgeDelete(targets, { bulk, piped, kind = 'delete' }, ctx) {
     if (!byTop.has(topC)) byTop.set(topC, []);
     byTop.get(topC).push(rel);
   }
+  if (outside.length) return unsaved('outside-repository', outside);
   for (const [top, specs] of byTop) {
     const st = ctx.seam.gitStatus(top, specs, { env: true });
     if (!st || !st.ok) return always('git-unchecked');

@@ -61,6 +61,8 @@ describe('the Always-asks card copy is exact', () => {
     [V.unsaved, 'This deletes files git has never saved: src/legacy/new-parser.ts, src/legacy/notes.md and 3 more would be lost for good.'],
     [{ verdict: 'always-asks', reason: 'unsaved-discard', files: ['src/app.js'], more: 0 }, 'This throws away changes git has never saved: src/app.js would be lost for good.'],
     [{ verdict: 'always-asks', reason: 'outside-repository' }, 'This deletes a folder that isn\'t in a git repository, so nothing can bring it back.'],
+    [{ verdict: 'always-asks', reason: 'outside-repository', files: ['c.md'], more: 0 }, 'This deletes c.md, which isn\'t in a git repository, so nothing can bring it back.'],
+    [{ verdict: 'always-asks', reason: 'outside-repository', files: ['a.md', 'b.md'], more: 0 }, 'This deletes a.md and b.md, which aren\'t in a git repository, so nothing can bring them back.'],
     [{ verdict: 'always-asks', reason: 'repository' }, 'This deletes the repository\'s history, which is what lets every other change be undone.'],
     [{ verdict: 'always-asks', reason: 'git-internals' }, 'This changes git\'s own files, which are what let every other change be undone.'],
     [{ verdict: 'always-asks', reason: 'find-from-top' }, 'Starting at the top of the repository, this can delete git\'s own files as well as yours.'],
