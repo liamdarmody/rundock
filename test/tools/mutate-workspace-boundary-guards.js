@@ -364,6 +364,35 @@ const MUTATIONS = [
     "    if (e.code !== 'ENOENT') throw new Error(`could not read ${settingsLocalPath}: ${e.message}`);\n",
     ''],
 
+  // ===== THE BLOCK DENIES WHAT THE SECRETS TIER CARDS =====
+  // Drop the credential entries and the OS layer permits a write the card
+  // layer always asks about: the two layers disagree about the same file again.
+  [SCAFFOLD, 'the block denies the runtimes\' credential files',
+    '    ...credentialDenyFor(home),\n',
+    ''],
+  // Join a registry onto the wrong home and the deny names a file that is not
+  // the credential, while the real one stays writable. The tie test reads the
+  // hook's own runtimeHomes, so it must notice.
+  [SCAFFOLD, 'the credential deny is joined onto each registry\'s own runtime home',
+    "    ...CODEX_SECRET_RELATIVE_PATHS.map(f => path.posix.join(home, '.codex', f)),",
+    "    ...CODEX_SECRET_RELATIVE_PATHS.map(f => path.posix.join(home, '.claude', f)),"],
+  // A credential named in the block and not in the registry is the other
+  // direction of drift: the tie test is bound both ways.
+  [SCAFFOLD, 'the credential deny names nothing the secrets registry does not',
+    "    ...SECRET_RELATIVE_PATHS.map(f => path.posix.join(home, '.claude', f)),",
+    "    ...[...SECRET_RELATIVE_PATHS, 'extra.json'].map(f => path.posix.join(home, '.claude', f)),"],
+  // Insert the credentials ahead of the workspace files and no earlier block
+  // is a prefix of the new list: every existing workspace reads as a person's
+  // edit and is never upgraded.
+  [SCAFFOLD, 'the credential deny is appended, so earlier blocks stay recognisable and upgrade',
+    '    ...[...RUNDOCK_ANSWER_FILES, ...RUNTIME_GUARDED_ANSWER_FILES].map(f => path.posix.join(workspaceDir, f)),\n    ...credentialDenyFor(home),\n',
+    '    ...credentialDenyFor(home),\n    ...[...RUNDOCK_ANSWER_FILES, ...RUNTIME_GUARDED_ANSWER_FILES].map(f => path.posix.join(workspaceDir, f)),\n'],
+  // Stop recognising the narrower deny lists and the block an earlier release
+  // wrote is a stranger's edit: never rewritten, never given the new deny.
+  [SCAFFOLD, 'a block carrying an earlier, shorter deny list is still recognised as ours',
+    '  for (let n = 1; n < deny.length; n++) shapes.push(withDenyWrite(block, deny.slice(0, n)));\n',
+    ''],
+
   // ===== THE BLOCK IS DRIVEN BY MODE, AND ONLY BY MODE =====
   // Ignore the mode and the switch writes the block for code mode too.
   [SCAFFOLD, 'the mode switch really drops the enable in code mode, rather than writing the enabled shape',
