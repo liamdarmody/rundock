@@ -11,9 +11,10 @@
 // The context read, and no more: where the command runs, whether each target
 // is inside a git working tree, whether git holds unsaved work under the
 // targets (for deletes and discards), and which branch a push lands
-// on. It does not read file contents, scripts, or what an `npm run` target
-// does: Rundock checks the commands agents type, not the inside of a
-// project's own scripts.
+// on. The one file it reads is a path list a git command is told to take its
+// paths from. It does not read other file contents, scripts, or what an
+// `npm run` target does: Rundock checks the commands agents type, not the
+// inside of a project's own scripts.
 //
 // Every command in a line is judged and the strictest wins. Wrappers are
 // removed before the verb is read; commands carried inside another command are
@@ -73,6 +74,7 @@ function codeModeVerdict(opts) {
       defaultBranches: ctxSeam.defaultBranches || (() => ['main', 'master']),
       isTag: ctxSeam.isTag || (() => false),
       isSymlink: ctxSeam.isSymlink || (() => false),
+      readList: ctxSeam.readList || (() => null),
     },
     canonical,
     tmpdir: opts.tmpdir,
@@ -443,6 +445,7 @@ function judgeCommand(u, ctx, { piped, prev } = {}) {
 
   // Deletes.
   if (ctx.dialect === 'bash' && v === 'rm') return judgeRm(a, ctx, piped);
+  if (ctx.dialect === 'bash' && v === 'shred') return judgeShred(a, ctx, piped);
   if (ctx.dialect === 'bash' && v === 'unlink') return judgeDelete(a.map(w => target(w, ctx)), { bulk: false, piped }, ctx);
   if (ctx.dialect === 'ps' && PS_REMOVE.has(v)) return judgePsRemove(a, ctx, piped, prev);
   if (ctx.dialect === 'cmd' && (v === 'rd' || v === 'rmdir')) return judgeCmdRd(a, ctx);
@@ -695,6 +698,23 @@ function judgeRm(args, ctx, piped) {
   return judgeDelete(targets, { bulk: recursive, piped }, ctx);
 }
 
+// shred overwrites a file's contents for good, and with -u deletes it: the
+// same loss as deleting it. It overwrites through a symlink, so the file a
+// link points to is the one judged.
+function judgeShred(args, ctx, piped) {
+  const targets = [];
+  let flags = true;
+  for (let i = 0; i < args.length; i++) {
+    const w = args[i];
+    if (flags && w.text === '--') { flags = false; continue; }
+    if (flags && /^--(iterations|size|random-source)$/.test(w.text)) { i++; continue; }
+    if (flags && /^--/.test(w.text)) continue;
+    if (flags && /^-[a-zA-Z0-9]+$/.test(w.text)) { if (/[ns]$/.test(w.text)) i++; continue; }
+    targets.push({ ...target(w, ctx), link: null });
+  }
+  return judgeDelete(targets, { bulk: false, piped }, ctx);
+}
+
 // The find primaries that take a value: an expanding word there is a value,
 // never an action like -delete.
 const FIND_VALUE = /^-(i?name|i?path|i?wholename|i?l?name|i?regex|regextype|x?type|newer[a-zA-Z]*|[amcB](time|min|newer)|size|user|group|uid|gid|perm|maxdepth|mindepth|links|inum|samefile|fstype|context|used|printf|fprintf?|fprint0|fls)$/;
@@ -826,6 +846,8 @@ function judgeGit(args, ctx) {
       if (!t.includes('--hard')) return RUNS;
       return discard(top, ['.'], { tracked: true }, 'unsaved-discard', ctx);
     case 'checkout': case 'restore': return judgeCheckout(sub, rest, gctx, top);
+    case 'switch': return judgeSwitch(rest, gctx, top, elsewhere || unknown || rest.some(w => expands(w, ctx)));
+    case 'rm': return judgeGitRm(rest, gctx, top, elsewhere || unknown || rest.some(w => expands(w, ctx)));
     case 'clean': return judgeClean(rest, gctx, top);
     case 'stash': return (t[0] === 'drop' || t[0] === 'clear') ? always('stash-or-reflog') : RUNS;
     case 'reflog': return (t[0] === 'expire' || t[0] === 'delete') ? always('stash-or-reflog') : RUNS;
@@ -859,16 +881,45 @@ function relSpec(p, top, ctx) {
   return r || '.';
 }
 
+// A flag given alone or inside a bundle of short flags (`-f`, `-qf`).
+function hasFlag(t, short, long) {
+  return t.some(x => long.includes(x) || (/^-[a-zA-Z]+$/.test(x) && x.includes(short)));
+}
+
+// The paths a --pathspec-from-file list names, as words: undefined when there
+// is no list, null when it cannot be read and judged here (standard input, a
+// quoted entry, a file that cannot be read).
+function listedSpecs(rest, ctx) {
+  const i = rest.findIndex(w => /^--pathspec-from-file(=|$)/.test(w.text));
+  if (i < 0) return undefined;
+  const eq = rest[i].text.indexOf('=');
+  const word = eq >= 0 ? { ...rest[i], text: rest[i].text.slice(eq + 1) } : rest[i + 1];
+  if (!word || word.text === '-') return null;
+  const file = expandPath(word, ctx);
+  const text = file ? ctx.seam.readList(file) : null;
+  if (typeof text !== 'string') return null;
+  const nul = rest.some(w => w.text === '--pathspec-file-nul');
+  const entries = text.split(nul ? '\0' : /\r?\n/).filter(Boolean);
+  if (!nul && entries.some(e => e.startsWith('"'))) return null;
+  return entries.map(e => ({ text: e, quoted: true, glob: /[*?[]/.test(e), expands: false }));
+}
+
 function judgeCheckout(sub, rest, ctx, top) {
   const t = rest.map(w => w.text);
   if (sub === 'restore' && (t.includes('--staged') || t.includes('-S')) && !(t.includes('--worktree') || t.includes('-W'))) return RUNS;
+  // A forced checkout throws away every unsaved change to a tracked file.
+  const force = sub === 'checkout' && hasFlag(t, 'f', ['--force']);
+  const listed = listedSpecs(rest, ctx);
+  if (listed === null) return always('unreadable-command');
   const dd = t.indexOf('--');
   let candidates;
-  if (dd >= 0) candidates = rest.slice(dd + 1);
+  if (listed) candidates = listed;
+  else if (dd >= 0) candidates = rest.slice(dd + 1);
   else {
-    if (sub === 'checkout' && t.some(x => ['-b', '-B', '--orphan', '-c', '--detach'].includes(x))) return RUNS;
+    if (!force && sub === 'checkout' && t.some(x => ['-b', '-B', '--orphan', '-c', '--detach'].includes(x))) return RUNS;
     candidates = rest.filter(w => !/^-/.test(w.text)).filter(w => {
-      if (w.text === '.' || w.glob) return true;
+      // A branch name never holds *, ? or [, so a quoted pattern is a path.
+      if (w.text === '.' || w.glob || /[*?[]/.test(w.text)) return true;
       const p = expandPath(w, ctx);
       return !!p && ctx.seam.exists(p);
     });
@@ -876,9 +927,9 @@ function judgeCheckout(sub, rest, ctx, top) {
   }
   // Pathspec magic (`:(top)`, `:/`, `:!` and the rest) changes which files
   // a spec reaches, from where, so a word starting with `:` is not read here.
-  const operands = dd >= 0 ? rest.slice(dd + 1) : rest.filter(w => !/^-/.test(w.text));
+  const operands = [...(listed || []), ...(dd >= 0 ? rest.slice(dd + 1) : rest.filter(w => !/^-/.test(w.text)))];
   if (operands.some(w => w.text.startsWith(':'))) return always('unreadable-command');
-  if (!candidates.length) return RUNS;
+  if (!candidates.length) return force ? discard(top, ['.'], { tracked: true }, 'unsaved-discard', ctx) : RUNS;
   const scopes = [];
   for (const w of candidates) {
     const p = expandPath(w, ctx);
@@ -891,6 +942,43 @@ function judgeCheckout(sub, rest, ctx, top) {
   }
   if (!top) return always('git-unchecked');
   return discard(top, scopes.map(p => relSpec(p, top, ctx)), { tracked: true }, 'unsaved-discard', ctx);
+}
+
+// A switch that discards (--discard-changes, or forced) throws away every
+// unsaved change to a tracked file; any other switch keeps them or refuses.
+function judgeSwitch(rest, ctx, top, opaque) {
+  const t = rest.map(w => w.text);
+  if (!hasFlag(t, 'f', ['--force', '--discard-changes'])) return RUNS;
+  if (opaque) return always('unreadable-command');
+  return discard(top, ['.'], { tracked: true }, 'unsaved-discard', ctx);
+}
+
+// Removing files from git deletes them from the disk too. Without force git
+// refuses a file with unsaved changes itself, and --cached keeps the file, so
+// only a forced removal can lose what git cannot bring back.
+function judgeGitRm(rest, ctx, top, opaque) {
+  const t = rest.map(w => w.text);
+  if (!hasFlag(t, 'f', ['--force']) || hasFlag(t, 'n', ['--dry-run']) || t.includes('--cached')) return RUNS;
+  if (opaque) return always('unreadable-command');
+  const listed = listedSpecs(rest, ctx);
+  if (listed === null) return always('unreadable-command');
+  const dd = t.indexOf('--');
+  const words = listed || (dd >= 0 ? rest.slice(dd + 1) : rest.filter(w => !/^-/.test(w.text)));
+  if (words.some(w => w.text.startsWith(':'))) return always('unreadable-command');
+  if (!words.length) return RUNS;
+  const specs = [];
+  for (const w of words) {
+    const p = expandPath(w, ctx);
+    if (!p) return always('unknown-targets');
+    specs.push(p);
+  }
+  if (!top) return always('git-unchecked');
+  const st = ctx.seam.gitStatus(ctx.canonical(top), specs.map(p => relSpec(p, top, ctx)), {});
+  if (!st || !st.ok) return always('git-unchecked');
+  const lost = st.tracked || [];
+  const named = !hasFlag(t, 'r', []) && !words.some(w => /[*?[]/.test(w.text));
+  if (lost.length) return unsaved('unsaved-work', lost, { named, changed: lost });
+  return RUNS;
 }
 
 function judgeClean(rest, ctx, top) {

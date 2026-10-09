@@ -4,7 +4,8 @@
 //
 // Only four questions are ever asked: does a path exist (and is it a
 // symlink), which working tree is it in, what does git hold unsaved under
-// some paths, and which branch does a push land on. Every git call has a
+// some paths, and which branch does a push land on. The one file read is a
+// path list a git command was told to read its paths from. Every git call has a
 // short limit and any failure is reported as a failure, never as "nothing
 // unsaved": the caller asks when it cannot check.
 const fs = require('fs');
@@ -107,12 +108,21 @@ function isTag(top, name) {
   try { git(['-C', top, 'show-ref', '--verify', '--quiet', `refs/tags/${name}`], top); return true; } catch (e) { return false; }
 }
 
+// The text of a small file a command reads its path list from, or null.
+function readList(p) {
+  try {
+    if (fs.statSync(p).size > LIST_LIMIT_BYTES) return null;
+    return fs.readFileSync(p, 'utf-8');
+  } catch (e) { return null; }
+}
+const LIST_LIMIT_BYTES = 1024 * 1024;
+
 function isSymlink(p) {
   try { return fs.lstatSync(p).isSymbolicLink(); } catch (e) { return false; }
 }
 
 function defaultContext() {
-  return { exists: p => fs.existsSync(p), canonical: realNearest, gitTop, gitStatus, currentBranch, defaultBranches, isTag, isSymlink };
+  return { exists: p => fs.existsSync(p), canonical: realNearest, gitTop, gitStatus, currentBranch, defaultBranches, isTag, isSymlink, readList };
 }
 
-module.exports = { defaultContext, realNearest, gitTop, gitStatus, currentBranch, defaultBranches, isTag, isSymlink, GIT_LIMIT_MS };
+module.exports = { defaultContext, realNearest, gitTop, gitStatus, currentBranch, defaultBranches, isTag, isSymlink, readList, GIT_LIMIT_MS };

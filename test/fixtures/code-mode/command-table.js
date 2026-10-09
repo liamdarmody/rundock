@@ -39,7 +39,7 @@ const F = (tool, input, extra) => ({ tool, input, ...(extra || {}) });
 const ROWS = [
   // ── Git ────────────────────────────────────────────────────────────────
   { id: 'G1', section: 'Git', cls: 'runs', spellings: ['git status', 'git diff', 'git log'] },
-  { id: 'G2', section: 'Git', cls: 'runs', spellings: ['git switch -c feat/new', 'git checkout -b feat/new'] },
+  { id: 'G2', section: 'Git', cls: 'runs', edge: 'a forced or discarding switch asks when it would lose unsaved changes', spellings: ['git switch -c feat/new', 'git checkout -b feat/new'] },
   { id: 'G3', section: 'Git', cls: 'runs', spellings: ['git add -A && git commit -m "Add signup"'] },
   { id: 'G4', section: 'Git', cls: 'runs', spellings: ['git commit --amend'] },
   { id: 'G5', section: 'Git', cls: 'runs', spellings: ['git push -u origin feat/x', S('git push', { note: 'on a feature branch' })] },
@@ -56,7 +56,7 @@ const ROWS = [
   { id: 'G16', section: 'Git', cls: 'runs', edge: 'git reset --soft cards on 0.15.0', spellings: ['git reset --soft HEAD~1', 'git reset HEAD~1'] },
   { id: 'G17', section: 'Git', cls: 'runs', spellings: [S('git reset --hard origin/feat/x', { state: 'clean' })] },
   { id: 'G18', section: 'Git', cls: 'always-asks', spellings: [S('git reset --hard', { state: 'tracked-change' })] },
-  { id: 'G19', section: 'Git', cls: 'always-asks', spellings: [
+  { id: 'G19', section: 'Git', cls: 'always-asks', edge: 'a quoted pattern, a path list file and a forced checkout are judged the same way since 0.15.6', spellings: [
     S('git checkout .', { state: 'tracked-change' }), S('git restore .', { state: 'tracked-change' }), S('git restore src/', { state: 'tracked-change' }),
     S('git checkout .', { state: 'clean', cls: 'runs', note: 'nothing changed in scope' }),
     S('git restore src/', { state: 'clean', cls: 'runs', note: 'nothing changed in scope' }),
@@ -82,7 +82,7 @@ const ROWS = [
   { id: 'G30', section: 'Git', cls: 'always-asks', spellings: ['git worktree remove --force ../wt'] },
 
   // ── Deleting ───────────────────────────────────────────────────────────
-  { id: 'D1', section: 'Deleting', cls: 'runs', edge: 'only while git holds the file unchanged; through 0.15.5 any named file ran', spellings: ['rm notes.txt', 'rm -f a.log b.log', P('Remove-Item notes.txt'), P('del notes.txt'), C('del notes.txt')] },
+  { id: 'D1', section: 'Deleting', cls: 'runs', edge: 'only while git holds the file unchanged, a symlink judged as the link; through 0.15.5 any named file ran, and a forced removal from git and shred follow the same line', spellings: ['rm notes.txt', 'rm -f a.log b.log', P('Remove-Item notes.txt'), P('del notes.txt'), C('del notes.txt')] },
   { id: 'D2', section: 'Deleting', cls: 'runs', spellings: ['rm -rf node_modules', P('Remove-Item -Recurse -Force node_modules'), C('rd /s /q node_modules')] },
   { id: 'D3', section: 'Deleting', cls: 'runs', spellings: ['rm -rf dist build .next', P('Remove-Item -Recurse -Force dist, build')] },
   { id: 'D4', section: 'Deleting', cls: 'runs', spellings: [S('rm -rf src/legacy', { state: 'clean', note: 'everything in it committed' }), P('Remove-Item -Recurse src\\legacy', { state: 'clean', win: true })] },

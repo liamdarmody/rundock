@@ -386,6 +386,111 @@ describe('a delete of one named file asks when git cannot bring it back', { skip
   });
 });
 
+// The other ways a discard or a delete reaches what git cannot bring back:
+// paths read from a list file, a quoted pattern, a forced checkout or switch,
+// a forced removal from git, and shred. Each asks when unsaved work is at
+// stake, naming it, and runs when nothing is.
+describe('every discard and delete that loses unsaved work asks', { skip: SKIP }, () => {
+  const asksDiscard = (command, opts) => {
+    const v = fx.withState(world, 'tracked-change', () => verdictFor(command, opts));
+    assert.strictEqual(v.verdict, 'always-asks', `${command}: ${JSON.stringify(v)}`);
+    assert.strictEqual(v.reason, 'unsaved-discard', command);
+    assert.deepStrictEqual(v.files, ['src/app.js'], command);
+    assert.strictEqual(verdictFor(command, opts).verdict, 'runs', `${command} with nothing unsaved`);
+  };
+  const asksReason = (command, reason, opts) => {
+    const v = verdictFor(command, opts);
+    assert.strictEqual(v.verdict, 'always-asks', `${command}: ${JSON.stringify(v)}`);
+    assert.strictEqual(v.reason, reason, command);
+  };
+
+  test('a path list read from a file is judged path by path', () => {
+    const list = path.join(world.root, 'list.txt');
+    const nul = path.join(world.root, 'list0.txt');
+    const sub = path.join(world.root, 'list-sub.txt');
+    fx.write(list, 'src/app.js\n');
+    fx.write(nul, 'src/app.js\0');
+    fx.write(sub, 'app.js\n');
+    try {
+      for (const command of [
+        `git restore --pathspec-from-file=${list}`,
+        `git restore --pathspec-from-file ${list}`,
+        `git checkout --pathspec-from-file=${list}`,
+        `git restore --pathspec-file-nul --pathspec-from-file=${nul}`,
+      ]) asksDiscard(command);
+      asksDiscard(`git restore --pathspec-from-file=${sub}`, { at: 'app/src' });
+    } finally { for (const f of [list, nul, sub]) fs.rmSync(f, { force: true }); }
+  });
+
+  test('a path list that cannot be read and judged asks', () => {
+    const quoted = path.join(world.root, 'quoted.txt');
+    const magic = path.join(world.root, 'magic.txt');
+    fx.write(quoted, '"src/app.js"\n');
+    fx.write(magic, ':(top)src/app.js\n');
+    try {
+      for (const command of [
+        'git restore --pathspec-from-file=-',
+        'git checkout --pathspec-from-file -',
+        `git restore --pathspec-from-file=${path.join(world.root, 'missing.txt')}`,
+        `git restore --pathspec-from-file=${quoted}`,
+        `git restore --pathspec-from-file=${magic}`,
+        'git rm -f --pathspec-from-file=-',
+      ]) asksReason(command, 'unreadable-command');
+    } finally { fs.rmSync(quoted, { force: true }); fs.rmSync(magic, { force: true }); }
+  });
+
+  test('a quoted pattern after checkout is judged as a pattern', () => {
+    for (const command of ["git checkout '*.js'", 'git checkout "src/*.js"', "git checkout 'src/app.j?'"]) asksDiscard(command);
+  });
+
+  test('a forced checkout asks when a tracked file has unsaved changes', () => {
+    for (const command of ['git checkout -f main', 'git checkout --force main', 'git checkout -qf main', 'git checkout -f', 'git checkout -f -b feat/y']) asksDiscard(command);
+    assert.strictEqual(fx.withState(world, 'tracked-change', () => verdictFor('git checkout main')).verdict, 'runs', 'an unforced checkout keeps the changes or refuses');
+  });
+
+  test('a switch that discards asks when a tracked file has unsaved changes', () => {
+    for (const command of ['git switch --discard-changes main', 'git switch -f main', 'git switch --force main', 'git switch -f -c feat/y']) asksDiscard(command);
+    for (const command of ['git switch main', 'git switch -c feat/y']) {
+      assert.strictEqual(fx.withState(world, 'tracked-change', () => verdictFor(command)).verdict, 'runs', command);
+    }
+    asksReason('git switch -f $BRANCH', 'unreadable-command');
+  });
+
+  test('a forced removal from git asks when the file has unsaved changes, naming it', () => {
+    for (const command of ['git rm -f src/app.js', 'git rm --force src/app.js', 'git rm -f -- src/app.js', 'git rm -qf src/app.js']) {
+      const v = fx.withState(world, 'tracked-change', () => verdictFor(command));
+      assert.strictEqual(v.reason, 'unsaved-work', `${command}: ${JSON.stringify(v)}`);
+      assert.strictEqual(RP.verdictCardCopy(v).sentence, 'This deletes src/app.js, which has changes git has never saved.', command);
+      assert.strictEqual(verdictFor(command).verdict, 'runs', `${command} with nothing unsaved`);
+    }
+    const folder = fx.withState(world, 'tracked-change', () => verdictFor('git rm -rf src'));
+    assert.strictEqual(RP.verdictCardCopy(folder).sentence, 'This deletes changes git has never saved: src/app.js would be lost for good.');
+    for (const command of ['git rm src/app.js', 'git rm --cached -f src/app.js', 'git rm -n -f src/app.js', 'git rm -f src/index.js']) {
+      assert.strictEqual(fx.withState(world, 'tracked-change', () => verdictFor(command)).verdict, 'runs', command);
+    }
+    asksReason("git rm -f ':(top)src/app.js'", 'unreadable-command', { at: 'app/src' });
+  });
+
+  test('shred is judged as deleting the file, with or without -u', () => {
+    for (const command of ['shred -u src/app.js', 'shred src/app.js', 'shred -n 3 -u src/app.js', 'shred --iterations 3 -zu src/app.js', 'shred -un 3 src/app.js']) {
+      const v = fx.withState(world, 'tracked-change', () => verdictFor(command));
+      assert.strictEqual(v.reason, 'unsaved-work', `${command}: ${JSON.stringify(v)}`);
+      assert.deepStrictEqual(v.files, ['src/app.js'], command);
+      assert.strictEqual(verdictFor(command).verdict, 'runs', `${command} with nothing unsaved`);
+    }
+    const fresh = fx.withState(world, 'untracked-file', () => verdictFor('shred -u src/new-parser.ts'));
+    assert.strictEqual(RP.verdictCardCopy(fresh).sentence, 'This deletes src/new-parser.ts, which git has never saved.');
+    const out = verdictFor(`shred ${path.join(world.sketch, 'idea.md')}`, { at: 'ws' });
+    assert.deepStrictEqual([out.reason, out.files], ['outside-repository', ['idea.md']]);
+    const link = path.join(world.app, 'shred-link.md');
+    fs.symlinkSync(path.join(world.sketch, 'idea.md'), link);
+    try {
+      const v = verdictFor('shred -u shred-link.md');
+      assert.deepStrictEqual([v.reason, v.files], ['outside-repository', ['idea.md']], 'shred overwrites what a link points to');
+    } finally { fs.rmSync(link, { force: true }); }
+  });
+});
+
 describe('how a line is read', { skip: SKIP }, () => {
   test('the strictest segment decides the line', () => {
     assert.strictEqual(verdictFor(`ls && rm -rf ${world.sketch}`).verdict, 'always-asks');
