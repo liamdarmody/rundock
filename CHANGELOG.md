@@ -4,6 +4,12 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
+## Unreleased
+
+### Fixed
+
+- **Restoring a file asks before throwing away your changes:** in Code mode, an agent restoring one named file from git (with `restore`, or `checkout` and a file name) ran without a card even when the file had changes git had never saved, so it could discard edits you had made by hand. It now asks, naming the file, as restoring a whole folder already did. Restoring a file with nothing unsaved still runs.
+
 ## 0.15.5: Fewer Dead Ends (2026-10-08)
 
 When Rundock stops you, or stops an agent, it now says why and what to do next: the setting that would stop repeated cards, a clear instruction to the agent to ask you after a refusal, and errors from your computer in plain words.
