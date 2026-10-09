@@ -276,10 +276,12 @@ describe('working folders reach Claude Code as additional directories', () => {
 });
 
 describe('the OS sandbox block is unchanged', () => {
-  test('the Code-mode block for fixed inputs is byte-identical to v0.15.0', () => {
+  test('the Code-mode block for fixed inputs is byte-identical to v0.15.0, plus the credential deny', () => {
     const scaffold = require('../../lib/workspace/scaffold.js');
     const block = scaffold.sandboxSettings('/w/ws', 'darwin', '/Users/someone', ['/var/folders/zz/T', '/private/var/folders/zz/T'], ['/Users/someone/Projects'], 'code');
-    // Recorded from v0.15.0 with these exact inputs.
+    // Recorded from v0.15.0 with these exact inputs. The one change since is
+    // two entries APPENDED to denyWrite: the runtimes' credential files, which
+    // narrows what the block permits and widens nothing.
     assert.deepStrictEqual(block, {
       enabled: false,
       filesystem: {
@@ -287,7 +289,10 @@ describe('the OS sandbox block is unchanged', () => {
           '/w/ws', '/Users/someone/.npm', '/Users/someone/.claude', '/Users/someone/.claude.json',
           '/tmp/claude', '/private/tmp/claude', '/var/folders/zz/T', '/private/var/folders/zz/T', '/Users/someone/Projects',
         ],
-        denyWrite: ['/w/ws/.rundock/state.json', '/w/ws/.rundock/permissions.json', '/w/ws/.claude/settings.local.json'],
+        denyWrite: [
+          '/w/ws/.rundock/state.json', '/w/ws/.rundock/permissions.json', '/w/ws/.claude/settings.local.json',
+          '/Users/someone/.claude/.credentials.json', '/Users/someone/.codex/auth.json',
+        ],
       },
     }, 'the development paths are a card rule, not a widening of what the operating system allows');
   });

@@ -205,8 +205,9 @@ describe('sandboxSettings: named working folders', () => {
     // file this very block is built from. It is the ONLY difference, and
     // subtracting it must leave the shipped block exactly.
     assert.deepStrictEqual(s.filesystem.denyWrite,
-      [`${WS}/.rundock/state.json`, `${WS}/.rundock/permissions.json`, `${WS}/.claude/settings.local.json`],
-      'the intended difference, named: every file that holds answers to permission questions, the workspace\'s own permission configuration included');
+      [`${WS}/.rundock/state.json`, `${WS}/.rundock/permissions.json`, `${WS}/.claude/settings.local.json`,
+        `${HOME}/.claude/.credentials.json`, `${HOME}/.codex/auth.json`],
+      'the intended difference, named: every file that holds answers to permission questions, the workspace\'s own permission configuration included, then the runtimes\' credential files');
     const { denyWrite, ...filesystem } = s.filesystem;
     assert.deepStrictEqual({ ...s, filesystem }, SHIPPED_KNOWLEDGE_BLOCK,
       'and with it removed, key for key and value for value, the block that shipped');
@@ -254,7 +255,7 @@ describe('sandboxSettings: named working folders', () => {
     // by editing that file and waiting for the next reconcile.
     for (const mode of ['knowledge', 'code']) {
       const s = sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], FOLDERS, mode);
-      assert.deepStrictEqual(s.filesystem.denyWrite,
+      assert.deepStrictEqual(s.filesystem.denyWrite.slice(0, 3),
         [`${WS}/.rundock/state.json`, `${WS}/.rundock/permissions.json`, `${WS}/.claude/settings.local.json`],
         `${mode} mode denies writes to the files that answer permission questions`);
     }
