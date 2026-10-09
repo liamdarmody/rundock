@@ -70,6 +70,8 @@ const WORKSPACE_HANDLER = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 
 // atomicity guards are proven by protocol-handlers-lib.test.js's own
 // read-back, not anything ws-handler-edges.test.js asserts.
 const WORKSPACE_HANDLER_UNIT = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'workspace.js'), suite: 'test/unit/protocol-handlers-lib.test.js' };
+// The scaffold never writes over a CLAUDE.md.
+const SCAFFOLD_KEEP = { src: path.join(ROOT, 'lib', 'workspace', 'scaffold.js'), suite: 'test/unit/workspace-modes.test.js' };
 // The switch that keeps agents inside the workspace: where it is read from, the
 // new-workspace default, and the open-path reconcile that honours it.
 const SCAFFOLD_SWITCH = { src: path.join(ROOT, 'lib', 'workspace', 'scaffold.js'), suite: 'test/unit/sandbox-switch.test.js' };
@@ -396,6 +398,13 @@ const MUTATIONS = [
   [WORKSPACE_HANDLER, 'a first open records the switch before scaffolding, not only the mode',
     "  const state = recordFirstOpen(dir);\n\n  try { scaffoldWorkspace(dir); }",
     "  const state = readState();\n\n  try { scaffoldWorkspace(dir); }"],
+  // ===== CREATE NEVER OVERWRITES =====
+  [SCAFFOLD_KEEP, 'the default scaffold never writes over an existing CLAUDE.md',
+    '  if (fs.existsSync(claudeMdPath)) {',
+    '  if (false) {'],
+  [SCAFFOLD_KEEP, 'a CLAUDE.md that appears after the check is kept, not reported as a failure',
+    "    if (e.code === 'EEXIST') return { success: true, kept: true };\n",
+    ''],
 
   // ===== THE ROW SAYS WHAT IS IN FORCE =====
   // Read the stored preference instead of the disk and a switch that says on
