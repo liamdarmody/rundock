@@ -206,7 +206,7 @@ describe('sandboxSettings: named working folders', () => {
     // subtracting it must leave the shipped block exactly.
     assert.deepStrictEqual(s.filesystem.denyWrite,
       [`${WS}/.rundock/state.json`, `${WS}/.rundock/permissions.json`, `${WS}/.claude/settings.local.json`,
-        `${HOME}/.claude/.credentials.json`, `${HOME}/.codex/auth.json`],
+        `${HOME}/.claude/.credentials.json`, `${HOME}/.claude/.config.json`, `${HOME}/.codex/auth.json`, `${HOME}/.claude.json`, `${HOME}/.claude.json.backup`],
       'the intended difference, named: every file that holds answers to permission questions, the workspace\'s own permission configuration included, then the runtimes\' credential files');
     const { denyWrite, ...filesystem } = s.filesystem;
     assert.deepStrictEqual({ ...s, filesystem }, SHIPPED_KNOWLEDGE_BLOCK,

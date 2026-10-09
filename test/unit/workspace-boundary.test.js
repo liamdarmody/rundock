@@ -564,6 +564,7 @@ describe('the agent\'s own folder: three tiers, one registry', () => {
     const registryNames = [
       ...hook.SECRET_RELATIVE_PATHS, ...hook.PERSISTENCE_SURFACE_DIRS, ...hook.PERSISTENCE_SURFACE_FILES,
       ...hook.CODEX_SECRET_RELATIVE_PATHS, ...hook.CODEX_PERSISTENCE_SURFACE_DIRS, ...hook.CODEX_PERSISTENCE_SURFACE_FILES,
+      ...hook.HOME_SECRET_FILES,
     ];
     for (const name of registryNames) {
       assert.ok(passage.includes(name), `the boundary passage names ${name}, which the registry enforces`);
@@ -1066,13 +1067,15 @@ describe('every credential the secrets tier names is denied by the OS block as w
   // copy kept here. POSIX separators, because the block is written for macOS
   // whatever host runs this suite.
   function registryPaths(home) {
-    return hook.runtimeHomes(home).flatMap((h) => h.secrets.map((rel) => path.posix.join(h.root.split(path.sep).join('/'), rel)));
+    return hook.secretsRegistry(home).map((p) => p.split(path.sep).join('/'));
   }
 
   test('every secrets-registry path is in denyWrite, in both shapes the block takes', () => {
     const secrets = registryPaths(HOME);
     assert.ok(secrets.includes(`${HOME}/.claude/.credentials.json`), 'sanity: the Claude credential file is in the registry');
     assert.ok(secrets.includes(`${HOME}/.codex/auth.json`), 'sanity: the Codex credential file is in the registry');
+    assert.ok(secrets.includes(`${HOME}/.claude.json`), 'sanity: the user-level state file is in the registry');
+    assert.ok(secrets.includes(`${HOME}/.claude/.config.json`), 'sanity: the file the runtime reads in its place is in the registry');
     for (const mode of ['on', 'off']) {
       const deny = scaffold.sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], [], mode).filesystem.denyWrite;
       for (const secret of secrets) {
@@ -1110,13 +1113,60 @@ describe('every credential the secrets tier names is denied by the OS block as w
   });
 });
 
+// THE USER-LEVEL STATE FILE IS A SECRET AT THE CARD LAYER TOO. It sits in the
+// home folder rather than under a runtime home, so it is matched at the home
+// folder's root and nowhere else.
+describe('~/.claude.json asks on every access, and offers nothing to remember', () => {
+  test('a read and a write by file tool card as a secret with no grant', () => {
+    const home = tmp('wb-cj-home-');
+    const ws = tmp('wb-cj-ws-');
+    const target = path.join(home, '.claude.json');
+    fs.writeFileSync(target, '{}');
+    for (const tool of ['Read', 'Write']) {
+      const access = hook.classifyFileAccess(tool, { file_path: target }, ws, [], home);
+      assert.strictEqual(access.where, 'outside', `${tool} crosses`);
+      assert.strictEqual(access.secret, true, `${tool} is tagged a secret`);
+      assert.strictEqual(access.grantDir, null, `${tool} offers no folder to remember`);
+    }
+    assert.strictEqual(hook.isSecretPath(path.join(home, '.claude.json.backup'), home), true, 'the backup beside it too');
+    // The runtime reads ~/.claude/.config.json in place of ~/.claude.json when
+    // it exists, so creating it is the same escape by another name.
+    const alternate = path.join(home, '.claude', '.config.json');
+    for (const tool of ['Read', 'Write']) {
+      const access = hook.classifyFileAccess(tool, { file_path: alternate }, ws, [], home);
+      assert.strictEqual(access.secret, true, `${tool} of the alternate file is a secret`);
+      assert.strictEqual(access.grantDir, null, `${tool} of the alternate file offers nothing to remember`);
+    }
+    assert.ok(scaffold.sandboxSettings(ws, 'darwin', home, ['/tmp/t'], []).filesystem.denyWrite.includes(path.posix.join(home, '.claude', '.config.json')),
+      'and the block denies creating it');
+  });
+
+  test('a shell read carries the secret tag, and naming the home folder does not cover it', () => {
+    const home = tmp('wb-cj-home-');
+    const ws = tmp('wb-cj-ws-');
+    const target = path.join(home, '.claude.json');
+    fs.writeFileSync(target, '{}');
+    const shell = hook.classifyShellAccess('Bash', { command: `cat ${target}` }, ws, [home], home);
+    assert.ok(shell && shell.crossings.some((c) => c.secret), 'a read through the shell is a secret crossing, even with home named');
+    assert.strictEqual(hook.classifyFileAccess('Read', { file_path: target }, ws, [home], home).where, 'outside',
+      'a named home folder does not make it inside');
+  });
+
+  test('only the file at the home root matches, not a namesake elsewhere', () => {
+    const home = tmp('wb-cj-home-');
+    for (const p of [path.join(home, 'Documents', '.claude.json'), path.join(home, '.claude.json.bak'), path.join(home, '.claude', '.claude.json')]) {
+      assert.strictEqual(hook.isSecretPath(p, home), false, `${p} is not the registry's entry`);
+    }
+  });
+});
+
 // AN EXISTING WORKSPACE GAINS THE CREDENTIAL DENY ON ITS NEXT OPEN, and a block
 // a person wrote does not. Driven through scaffoldWorkspace, the on-open path,
 // against a real settings file, because recognition alone proves nothing about
 // what lands on disk.
 describe('opening a workspace upgrades Rundock\'s own block to deny the credential files, and nothing else', () => {
   const home = os.homedir();
-  const credentials = () => [path.posix.join(home, '.claude', '.credentials.json'), path.posix.join(home, '.codex', 'auth.json')];
+  const credentials = () => hook.secretsRegistry(home).map((p) => p.split(path.sep).join('/'));
   function open(ws) {
     const prev = scaffold.wireScaffoldDeps({ invalidateAgentCache: () => {}, rebaselineAgentsWatcher: () => {} });
     try { scaffold.scaffoldWorkspace(ws, { platform: 'darwin' }); } finally { scaffold.wireScaffoldDeps(prev); }

@@ -280,8 +280,9 @@ describe('the OS sandbox block is unchanged', () => {
     const scaffold = require('../../lib/workspace/scaffold.js');
     const block = scaffold.sandboxSettings('/w/ws', 'darwin', '/Users/someone', ['/var/folders/zz/T', '/private/var/folders/zz/T'], ['/Users/someone/Projects'], 'code');
     // Recorded from v0.15.0 with these exact inputs. The one change since is
-    // two entries APPENDED to denyWrite: the runtimes' credential files, which
-    // narrows what the block permits and widens nothing.
+    // entries APPENDED to denyWrite: the runtimes' credential files and the
+    // user-level state file, which narrows what the block permits and widens
+    // nothing.
     assert.deepStrictEqual(block, {
       enabled: false,
       filesystem: {
@@ -291,7 +292,8 @@ describe('the OS sandbox block is unchanged', () => {
         ],
         denyWrite: [
           '/w/ws/.rundock/state.json', '/w/ws/.rundock/permissions.json', '/w/ws/.claude/settings.local.json',
-          '/Users/someone/.claude/.credentials.json', '/Users/someone/.codex/auth.json',
+          '/Users/someone/.claude/.credentials.json', '/Users/someone/.claude/.config.json', '/Users/someone/.codex/auth.json',
+          '/Users/someone/.claude.json', '/Users/someone/.claude.json.backup',
         ],
       },
     }, 'the development paths are a card rule, not a widening of what the operating system allows');
