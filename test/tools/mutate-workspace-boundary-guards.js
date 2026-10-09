@@ -107,6 +107,8 @@ const DESKTOP_PROFILE_RUN = { src: path.join(ROOT, 'electron', 'main.js'), suite
 // sides of the line are load-bearing.
 const VERDICT = { src: path.join(ROOT, 'scripts', 'code-mode-verdict.js'), suite: 'test/unit/code-mode-verdict.test.js' };
 const VERDICT_HOOK = { src: path.join(ROOT, 'scripts', 'code-mode-verdict.js'), suite: 'test/unit/code-mode-hook.test.js' };
+// The verdict's disk and git seam, driven through the verdict's own suite.
+const VERDICT_GIT = { src: path.join(ROOT, 'scripts', 'code-mode-git.js'), suite: 'test/unit/code-mode-verdict.test.js' };
 const CM_HOOK = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/code-mode-hook.test.js' };
 const CM_BOUNDARY = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/code-mode-boundary.test.js' };
 const CM_DEV = { src: path.join(ROOT, 'scripts', 'dev-paths.js'), suite: 'test/unit/code-mode-hook.test.js' };
@@ -828,6 +830,9 @@ const MUTATIONS = [
   [VERDICT, "M13n: shred is not judged as a delete",
     "  if (ctx.dialect === 'bash' && v === 'shred') return judgeShred(a, ctx, piped);\n",
     ""],
+  [VERDICT_GIT, "M13o: a path list is read whatever kind of file it is",
+    "    if (!st.isFile() || st.size > LIST_LIMIT_BYTES) return null;",
+    "    if (st.size > LIST_LIMIT_BYTES) return null;"],
   [CM_HOOK, "M14: the verdict is sent in Notes mode",
     "  const verdict = (codeMode && shellCommand !== null)",
     "  const verdict = (shellCommand !== null)"],

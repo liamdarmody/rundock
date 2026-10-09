@@ -109,11 +109,31 @@ function isTag(top, name) {
 }
 
 // The text of a small file a command reads its path list from, or null.
+// Only a regular file is read, judged on the descriptor that was opened (so a
+// swap between a check and the open cannot slip in a fifo or a device), and
+// never more than the limit: a fifo, /dev/zero or a huge file would otherwise
+// hold the verdict, and the server that runs it, for good. The open does not
+// block on a fifo with no writer.
 function readList(p) {
+  let fd = null;
   try {
-    if (fs.statSync(p).size > LIST_LIMIT_BYTES) return null;
-    return fs.readFileSync(p, 'utf-8');
-  } catch (e) { return null; }
+    fd = fs.openSync(p, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK || 0));
+    const st = fs.fstatSync(fd);
+    if (!st.isFile() || st.size > LIST_LIMIT_BYTES) return null;
+    const buf = Buffer.alloc(LIST_LIMIT_BYTES + 1);
+    let n = 0;
+    for (;;) {
+      const r = fs.readSync(fd, buf, n, buf.length - n, null);
+      if (r <= 0) break;
+      n += r;
+      if (n > LIST_LIMIT_BYTES) return null;
+    }
+    return buf.toString('utf-8', 0, n);
+  } catch (e) {
+    return null;
+  } finally {
+    if (fd !== null) { try { fs.closeSync(fd); } catch (e) { /* already gone */ } }
+  }
 }
 const LIST_LIMIT_BYTES = 1024 * 1024;
 

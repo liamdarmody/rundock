@@ -439,6 +439,26 @@ describe('every discard and delete that loses unsaved work asks', { skip: SKIP }
     } finally { fs.rmSync(quoted, { force: true }); fs.rmSync(magic, { force: true }); }
   });
 
+  // A list that is not a regular file (a fifo, a device) or is too large is
+  // never read: reading it could hold the verdict, and the server, for good.
+  test('a path list that is a fifo, a device or too large asks, and quickly', () => {
+    const big = path.join(world.root, 'big-list.txt');
+    fx.write(big, 'src/app.js\n'.repeat(100 * 1024));
+    const fifo = path.join(world.root, 'list.fifo');
+    const lists = [big];
+    if (process.platform !== 'win32') {
+      require('node:child_process').execFileSync('mkfifo', [fifo]);
+      lists.push(fifo, '/dev/zero');
+    }
+    try {
+      for (const list of lists) {
+        const started = Date.now();
+        asksReason(`git restore --pathspec-from-file=${list}`, 'unreadable-command');
+        assert.ok(Date.now() - started < 2000, `${list} took ${Date.now() - started}ms`);
+      }
+    } finally { fs.rmSync(big, { force: true }); fs.rmSync(fifo, { force: true }); }
+  });
+
   test('a quoted pattern after checkout is judged as a pattern', () => {
     for (const command of ["git checkout '*.js'", 'git checkout "src/*.js"', "git checkout 'src/app.j?'"]) asksDiscard(command);
   });
