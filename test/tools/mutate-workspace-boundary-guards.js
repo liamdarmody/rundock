@@ -162,6 +162,15 @@ const STOP_ASK_LINE = { src: path.join(ROOT, 'scripts', 'refusal-notice.js'), su
 const STOP_ASK_SCAFFOLD = { src: path.join(ROOT, 'lib', 'workspace', 'scaffold.js'), suite: 'test/unit/stop-and-ask.test.js' };
 const STOP_ASK_GLUE = { src: path.join(ROOT, 'lib', 'runtime', 'codex-glue.js'), suite: 'test/integration/codex-stop-and-ask.test.js' };
 const STOP_ASK_CLIENT = { src: path.join(ROOT, 'codex-appserver.js'), suite: 'test/integration/codex-stop-and-ask.test.js' };
+// After a person approves a card, the agent is told in the same step: the
+// hook's added context, the handler that says a card was answered, the click
+// that says so, the line itself, and the Codex steer.
+const APPROVED_HOOK = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/approval-notice.test.js' };
+const APPROVED_LINE = { src: path.join(ROOT, 'scripts', 'refusal-notice.js'), suite: 'test/unit/approval-notice.test.js' };
+const APPROVED_HANDLER = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'process-control.js'), suite: 'test/unit/approval-notice.test.js' };
+const APPROVED_CLICK = { src: path.join(ROOT, 'public', 'views', 'chat.js'), suite: 'test/unit/approval-notice.test.js' };
+const APPROVED_GLUE = { src: path.join(ROOT, 'lib', 'runtime', 'codex-glue.js'), suite: 'test/integration/codex-approval-notice.test.js' };
+const APPROVED_HANDLER_CODEX = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'process-control.js'), suite: 'test/integration/codex-approval-notice.test.js' };
 // Reading a permission file is not a change to it.
 const ANSWER_READS_HOOK = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/answer-file-reads.test.js' };
 const ANSWER_READS_VOCAB = { src: path.join(ROOT, 'public', 'read-only-shell.js'), suite: 'test/unit/answer-file-reads.test.js' };
@@ -1455,6 +1464,45 @@ const MUTATIONS = [
   [STOP_ASK_CLIENT, "Stop and ask: the approval event carries no way to steer",
     "{ type: 'approval', kind, requestId: id, params, respond, steer }",
     "{ type: 'approval', kind, requestId: id, params, respond }"],
+  [APPROVED_HOOK, "Approved: an approval on a card is never told to the agent",
+    "            ...(approved ? { additionalContext: approved } : {}),\n",
+    ""],
+  [APPROVED_HOOK, "Approved: an allow that asked nobody is told as a card",
+    "result.allow === true && result.card === true ? approvalNotice(data.tool_name) : null",
+    "result.allow === true ? approvalNotice(data.tool_name) : null"],
+  [APPROVED_HOOK, "Approved: the approval line pushes a waiting put-back line out",
+    "const context = [own.additionalContext, note].filter(Boolean).join('\\n');",
+    "const context = own.additionalContext || note;"],
+  [APPROVED_LINE, "Approved: the line names any tool it is handed",
+    "return `The person approved ${subjectFor(toolName)} in Rundock after a permission card.`;",
+    "return `The person approved this ${toolName} in Rundock after a permission card.`;"],
+  [APPROVED_HANDLER, "Approved: the handler drops that a card was answered",
+    "pending.res.end(JSON.stringify(card ? { allow: true, card: true } : { allow: msg.allow }));",
+    "pending.res.end(JSON.stringify({ allow: msg.allow }));"],
+  [APPROVED_HANDLER, "Approved: a card flag on a denial counts as an approval",
+    "const card = msg.allow === true && msg.card === true;",
+    "const card = msg.card === true;"],
+  [APPROVED_CLICK, "Approved: a click on a card does not say it was a card",
+    "    card: true,\n    toolInput: pending.toolInput || {}",
+    "    toolInput: pending.toolInput || {}"],
+  [APPROVED_HANDLER_CODEX, "Approved: a Codex decision never hears that a card was answered",
+    "pending.onDecision(msg.allow === true, 'user', { card });",
+    "pending.onDecision(msg.allow === true, 'user');"],
+  [APPROVED_GLUE, "Approved: a Codex approval on a card is never told",
+    "if (ev.respond('accept') !== false && how && how.card) tellCodexApproval(convoId, ev, toolName);",
+    "ev.respond('accept');"],
+  [APPROVED_GLUE, "Approved: a Codex allow with no card is told as a card",
+    "if (ev.respond('accept') !== false && how && how.card) tellCodexApproval(convoId, ev, toolName);",
+    "if (ev.respond('accept') !== false) tellCodexApproval(convoId, ev, toolName);"],
+  // Removing the guard alone changes nothing a test can see: a missing steer
+  // throws inside the promise and the catch absorbs it. Taking the guard's
+  // branch every time is what it stands between, and that is caught.
+  [APPROVED_GLUE, "Approved: the steer guard skips a Codex that can steer",
+    "  if (typeof ev.steer !== 'function') return;\n  Promise.resolve().then(() => ev.steer(approvalNotice(toolName)))",
+    "  if (typeof ev.steer !== 'function' || true) return;\n  Promise.resolve().then(() => ev.steer(approvalNotice(toolName)))"],
+  [APPROVED_GLUE, "Approved: a Codex without turn/steer is told in a later turn",
+    "  Promise.resolve().then(() => ev.steer(approvalNotice(toolName))).catch(() => {});",
+    "  Promise.resolve().then(() => ev.steer(approvalNotice(toolName))).catch(() => queueCodexNotice(convoId, approvalNotice(toolName)));"],
 ];
 const REPORTER = ['--test-reporter', 'spec'];
 
