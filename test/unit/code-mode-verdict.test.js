@@ -20,7 +20,7 @@
 //     context,         // defaulted seam: the filesystem and git facts, for a
 //                      // Windows-shaped world on a host that has none:
 //                      //   exists(p), gitTop(p), gitStatus(top, specs, { env }) ->
-//                      //   { ok, tracked, untracked, ignoredEnv } (relative paths),
+//                      //   { ok, tracked, untracked, ignoredEnv, deleted? } (relative paths),
 //                      //   currentBranch(top), defaultBranches(top, remote) -> [names],
 //                      //   isTag(top, name), canonical(p)
 //   }) -> { verdict: 'runs' | 'asks-once' | 'always-asks',
@@ -237,6 +237,73 @@ describe('a restore of one named file asks when git holds unsaved changes to it'
     }
     assert.strictEqual(verdictFor("git restore ':(top)README.md'", { at: 'app/src' }).verdict, 'always-asks', 'asks with nothing unsaved too');
     assert.strictEqual(verdictFor("git restore --staged ':(top)src/app.js'", { at: 'app/src' }).verdict, 'runs', 'unstaging loses nothing');
+  });
+});
+
+// A file missing from the disk loses nothing when a restore, a checkout or a
+// discarding switch writes it back: git holds every byte of it. So a path
+// whose only unsaved state is a deletion in the working tree does not ask.
+// Anything else at stake still asks, and only that is named: a modified file,
+// a file replaced by a symlink, staged content a --staged restore overwrites,
+// or something new at the deleted path.
+describe('a restore of a file deleted from the disk loses nothing', { skip: SKIP }, () => {
+  const idx = () => path.join(world.app, 'src/index.js');
+  const withDeleted = (fn, extra = () => {}) => {
+    fs.rmSync(idx(), { force: true });
+    try { extra(); return fn(); } finally {
+      fs.rmSync(idx(), { recursive: true, force: true });
+      fx.git(world.app, 'reset', '-q');
+      fx.git(world.app, 'checkout', '--', '.');
+    }
+  };
+  const asks = (command, files, extra) => {
+    const v = withDeleted(() => verdictFor(command), extra);
+    assert.strictEqual(v.verdict, 'always-asks', `${command}: ${JSON.stringify(v)}`);
+    assert.strictEqual(v.reason, 'unsaved-discard', command);
+    assert.deepStrictEqual(v.files, files, command);
+  };
+  const stageThenDelete = () => {
+    fs.writeFileSync(idx(), 'staged\n');
+    fx.git(world.app, 'add', 'src/index.js');
+    fs.rmSync(idx());
+  };
+
+  test('a clean tracked file deleted with rm is restored without asking', () => {
+    for (const command of [
+      'git restore src/index.js', 'git checkout -- src/index.js', 'git checkout src/index.js',
+      'git restore --worktree src/index.js', 'git restore --staged --worktree src/index.js',
+      'git restore --source=HEAD src/index.js', 'git checkout HEAD -- src/index.js',
+      'git restore src', 'git restore .', 'git checkout -- .',
+      'git checkout -f', 'git checkout -f main', 'git switch -f main', 'git switch --discard-changes main',
+    ]) {
+      const v = withDeleted(() => verdictFor(command));
+      assert.strictEqual(v.verdict, 'runs', `${command}: ${JSON.stringify(v)}`);
+    }
+  });
+
+  test('a deleted file beside a modified one asks, naming only the modified one', () => {
+    const modify = () => fs.appendFileSync(path.join(world.app, 'src/app.js'), '// changed\n');
+    for (const command of ['git restore src/index.js src/app.js', 'git checkout -- src', 'git restore .', 'git switch -f main', 'git checkout -f main']) {
+      asks(command, ['src/app.js'], modify);
+    }
+  });
+
+  test('staged content a --staged restore would overwrite still asks', () => {
+    asks('git restore --staged --worktree src/index.js', ['src/index.js'], stageThenDelete);
+    asks('git restore --source=HEAD --staged --worktree src', ['src/index.js'], stageThenDelete);
+    asks('git restore --staged --worktree src/index.js README.md', ['README.md'], () => {
+      fs.appendFileSync(path.join(world.app, 'README.md'), 'staged\n');
+      fx.git(world.app, 'add', 'README.md');
+    });
+  });
+
+  test('something new at the deleted path, or a symlink in its place, still asks', () => {
+    asks('git restore src/index.js', ['src/index.js'], () => fx.write(path.join(idx(), 'keep.md'), 'new\n'));
+    asks('git restore src', ['src/index.js'], () => fs.symlinkSync('app.js', idx()));
+  });
+
+  test('a delete of the deleted file is judged as before', () => {
+    assert.strictEqual(withDeleted(() => verdictFor('rm src/index.js')).verdict, 'runs', 'deletes nothing');
   });
 });
 
