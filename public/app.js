@@ -533,6 +533,9 @@ function handle(d) {
       if (errEl) { RundockReadableError.showIn(errEl, d.message, d.detail); errEl.style.display = 'block'; }
       break;
     }
+    // The name is taken, or lost characters: said on the form, nothing made.
+    case 'workspace_name_taken': RundockCreateNotice.showNameTaken(document, d); break;
+    case 'workspace_name_notice': RundockCreateNotice.showNameNotice(document, d); break;
     // The list the settings surface renders, and the only source of it: the
     // client never predicts the result of its own change, because the server
     // normalises what it is sent.
@@ -1776,9 +1779,15 @@ function showWorkspacePicker(recent, discovered) {
   }
 }
 
+function openExistingWorkspace() {
+  const dir = RundockCreateNotice.openPath(document);
+  if (dir) selectWorkspace(dir);
+}
+
 function selectWorkspace(dir) {
   const errEl = document.getElementById('workspace-error');
   if (errEl) errEl.style.display = 'none';
+  RundockCreateNotice.clear(document);
   ws.send(JSON.stringify({ type: 'set_workspace', path: dir }));
 }
 
@@ -1810,6 +1819,7 @@ function createWorkspace() {
     if (errEl) { errEl.textContent = 'Not connected. Reconnecting...'; errEl.style.display = 'block'; }
     return;
   }
+  RundockCreateNotice.clear(document);
   ws.send(JSON.stringify({ type: 'create_workspace', name }));
 }
 

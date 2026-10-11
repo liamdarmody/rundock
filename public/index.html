@@ -55,6 +55,7 @@
 <script src="/file-tree-diff.js"></script>
 <script src="/routine-editor-model.js"></script>
 <script src="/readable-error.js"></script>
+<script src="/workspace-create-notice.js"></script>
 <script src="/run-detail-model.js"></script>
 <script src="/skills-model.js"></script>
 <script src="/routines-model.js"></script>
@@ -348,7 +349,14 @@
               <input id="create-workspace-name" class="ws-picker-input" type="text" placeholder="Workspace name...">
               <button class="ws-picker-submit" onclick="createWorkspace()">Create</button>
             </div>
-            <div class="ws-picker-hint">Creates ~/Documents/Rundock/&lt;name&gt;</div>
+            <div id="create-workspace-hint" class="ws-picker-hint">Creates ~/Documents/Rundock/&lt;name&gt;</div>
+            <div id="workspace-name-notice" class="ws-name-notice">
+              <div class="ws-name-notice-row">
+                <svg class="ws-name-notice-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                <div id="workspace-name-notice-text" class="ws-name-notice-text"></div>
+              </div>
+            </div>
+            <button id="workspace-open-existing" class="ws-open-existing" onclick="openExistingWorkspace()">Open it</button>
           </div>
           <div id="workspace-error" class="ws-picker-error"></div>
         </div>

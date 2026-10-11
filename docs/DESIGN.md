@@ -86,6 +86,8 @@ including the worst case of `--elevated`. If you need something fainter than
 | `--accent-action-hover` | That fill, darker, on hover only, so the contrast grows rather than shrinks. `#B45126` |
 | `--success` | Something succeeded or is allowed |
 | `--attention` | Something needs the user, and is not an error |
+| `--attention-glow` | The attention hue at low alpha, for a notice's tinted background |
+| `--attention-text` | The attention hue as text and as an icon: the hue itself in dark (8.40:1 on `--base`), `#94600C` in light, 4.78:1 on `--base` and 4.57:1 on `--card`, where `--attention` as text measured about 2:1. Borders and glows stay on `--attention` |
 | `--working` | Something is running |
 | `--idle` | Something is present but not doing anything |
 | `--danger` | Destructive actions and errors, as a fill or an edge: `background`, `border-color`, `box-shadow`, and the `color-mix()` tints feeding those. `#D42C2A` in both themes |

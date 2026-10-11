@@ -144,6 +144,34 @@ describe('scaffoldDefaults', () => {
     assert.ok(!fs.existsSync(path.join(dir, '0 Inbox')));
     assert.strictEqual(fs.readFileSync(path.join(dir, 'CLAUDE.md'), 'utf-8'), `# ${path.basename(dir)}\n`);
   });
+
+  test('an existing CLAUDE.md is never overwritten, and the setup state is left alone', () => {
+    // Every caller should reach scaffoldDefaults only without a CLAUDE.md;
+    // this is the guard for the one that does not.
+    const own = '# Mine\n\nInstructions this workspace already had.\n';
+    const dir = useWorkspace({ claudeMd: own });
+    srv.writeState({ ...srv.readState(), setupComplete: true });
+    const result = srv.scaffoldDefaults(dir);
+    assert.strictEqual(result.success, true, 'a kept CLAUDE.md is not a failure');
+    assert.strictEqual(fs.readFileSync(path.join(dir, 'CLAUDE.md'), 'utf-8'), own);
+    assert.ok(!fs.existsSync(path.join(dir, '0 Inbox')), 'no default folders added beside it');
+    assert.strictEqual(srv.readState().setupComplete, true, 'onboarding is not restarted');
+  });
+
+  test('a CLAUDE.md that appears after the check is kept, and that is not a failure', () => {
+    const own = '# Arrived late\n';
+    const dir = useWorkspace({ files: { 'main.go': 'package main' } });
+    fs.writeFileSync(path.join(dir, 'CLAUDE.md'), own);
+    srv.writeState({ ...srv.readState(), setupComplete: true });
+    const target = path.join(dir, 'CLAUDE.md');
+    const realExists = fs.existsSync;
+    fs.existsSync = (p) => (p === target ? false : realExists(p));
+    let result;
+    try { result = srv.scaffoldDefaults(dir); } finally { fs.existsSync = realExists; }
+    assert.deepStrictEqual(result, { success: true, kept: true });
+    assert.strictEqual(fs.readFileSync(target, 'utf-8'), own);
+    assert.strictEqual(srv.readState().setupComplete, true);
+  });
 });
 
 describe('scaffoldWorkspace', () => {
