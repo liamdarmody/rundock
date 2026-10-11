@@ -21,3 +21,18 @@
 .ws-picker-hint { font-size: var(--caption); color: var(--text-2); margin-top: 6px; text-align: left; }
 .ws-picker-error { font-size: var(--caption); color: var(--danger-text); margin-top: 4px; display: none; }
 
+/* A name that is already taken. Nothing failed and nothing changed on disk, so
+   this is the attention notice, not the red error slot. */
+.ws-name-notice { display: none; width: 100%; margin-top: 8px; padding: 10px 12px; background: var(--attention-glow); border: 1px solid color-mix(in srgb, var(--attention) 40%, transparent); border-radius: var(--radius-md); text-align: left; }
+.ws-name-notice-row { display: flex; gap: 8px; align-items: flex-start; }
+.ws-name-notice-icon { flex-shrink: 0; margin-top: 1px; color: var(--attention-text); }
+.ws-name-notice-text { font-size: var(--caption); color: var(--text-1); line-height: 1.5; }
+.ws-open-existing { display: none; margin-top: 10px; align-self: flex-start; padding: 8px 20px; background: var(--card); color: var(--text-1); font-size: var(--body); font-weight: 600; border-radius: var(--radius-lg); border: 1px solid var(--border); transition: all var(--duration-base) ease; cursor: pointer; }
+.ws-open-existing:hover { border-color: var(--accent); color: var(--accent-text); }
+
+/* Characters were removed from a typed name: the hint and the field say so
+   until Create is pressed again. */
+.ws-picker-hint.is-notice { color: var(--attention-text); font-weight: 500; }
+.ws-picker-input.is-notice { border-color: var(--attention); animation: ws-notice-settle 700ms ease-out; }
+@keyframes ws-notice-settle { 0% { box-shadow: 0 0 0 3px var(--attention-glow); } 100% { box-shadow: 0 0 0 0 transparent; } }
+@media (prefers-reduced-motion: reduce) { .ws-picker-input.is-notice { animation: none; } }

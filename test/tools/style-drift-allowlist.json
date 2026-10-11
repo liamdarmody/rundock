@@ -199,5 +199,11 @@
       "rgba(193,87,41,0.4)": 1,
       "0.25s": 1
     }
+  },
+  "public/styles/views/workspace.css": {
+    "why": "One animation duration: the settle glow on the new-workspace field when characters were removed from a name. Timed to the glow fading, not to the interaction scale, so it is deliberate rather than debt.",
+    "allow": {
+      "700ms": 1
+    }
   }
 }
