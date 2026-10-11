@@ -4,13 +4,18 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
-## Unreleased
+## 0.15.6: Nothing Lost (2026-10-11)
+
+Rundock now asks before anything git can't bring back is thrown away, never writes over a workspace you already have, tells an agent when you approved its card, and stops shell commands from changing the files that hold your credentials and Claude's own settings.
 
 ### Fixed
 
-- **Restoring a file asks before throwing away your changes:** in Code mode, an agent restoring one named file from git (with `restore`, or `checkout` and a file name) ran without a card even when the file had changes git had never saved, so it could discard edits you had made by hand. It now asks, naming the file, as restoring a whole folder already did. Restoring a file with nothing unsaved still runs.
+- **Restoring a file asks before throwing away your changes:** in Code mode, an agent restoring one named file from git (with `restore`, or `checkout` and a file name) ran without a card even when the file had changes git had never saved, so it could discard edits you had made by hand. It now asks, naming the file, as restoring a whole folder already did. Restoring a file with nothing unsaved still runs. Reported by @Praveendante.
 - **Every other discard asks too:** in Code mode, switching branches by force or with the option that throws away changes, restoring the files listed in a separate file, and restoring the files a quoted pattern matches ran without a card even when they threw away changes git had never saved. They now ask, naming the files, and still run with nothing unsaved. A path using git's special path prefixes, or a file list Rundock can't read, always asks.
 - **Deleting a file asks when git can't bring it back:** in Code mode, deleting one named file (`rm`, `unlink`, `Remove-Item`, `del`) never asked, even for a file git had never saved or a file outside any repository. It now asks, naming the file, when the file has unsaved changes, git has never saved it, it is an ignored `.env` file, or it isn't in a repository. The card says which it is: changes git has never saved, or a file git has never saved. The same applies to removing a file from git by force and to securely erasing a file's contents, and deleting a symlink is judged by the link, not by the file it points to. A file git holds unchanged still deletes without a card, as do files in temp folders, package caches and Rundock's scratch folder.
+- **Creating a workspace never writes over one you already have:** creating a workspace with a name already used in `~/Documents/Rundock` replaced that workspace's CLAUDE.md and started its setup again. Now nothing on disk changes: Rundock says a workspace with that name exists and offers **Open it**. When characters have to be removed from a name, Rundock now says which ones and where the folder will go, and makes it when you press Create again.
+- **An agent knows when you approved its card:** after you approved a permission card, the agent couldn't tell a card had been raised, so it could tell you the safety check never fired. It is now told, in the same step, that you approved it in Rundock. This applies to Claude Code and Codex agents. Nothing is said when something is allowed by a rule you set earlier.
+- **Shell commands can't change your credentials or Claude's settings file:** on macOS, the sandbox now refuses shell commands that write Claude's or Codex's credential file, or Claude's own settings file (`~/.claude.json`), where an MCP server added by a command would have started outside the sandbox in your next session. Agents now ask every time before reading or changing that settings file, and that answer can't be remembered. Claude Code still saves its own settings and refreshes its credentials as before. Workspaces made with earlier versions are updated the next time you open them.
 
 ## 0.15.5: Fewer Dead Ends (2026-10-08)
 
