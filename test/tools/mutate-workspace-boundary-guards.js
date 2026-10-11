@@ -380,6 +380,65 @@ const MUTATIONS = [
     "    if (e.code !== 'ENOENT') throw new Error(`could not read ${settingsLocalPath}: ${e.message}`);\n",
     ''],
 
+  // ===== THE BLOCK DENIES WHAT THE SECRETS TIER CARDS =====
+  // Drop the credential entries and the OS layer permits a write the card
+  // layer always asks about: the two layers disagree about the same file again.
+  [SCAFFOLD, 'the block denies the runtimes\' credential files',
+    '    ...credentialDenyFor(home),\n',
+    ''],
+  // Join a registry onto the wrong home and the deny names a file that is not
+  // the credential, while the real one stays writable. The tie test reads the
+  // hook's own runtimeHomes, so it must notice.
+  [SCAFFOLD, 'the credential deny is joined onto each registry\'s own runtime home',
+    "    ...CODEX_SECRET_RELATIVE_PATHS.map(f => path.posix.join(home, '.codex', f)),",
+    "    ...CODEX_SECRET_RELATIVE_PATHS.map(f => path.posix.join(home, '.claude', f)),"],
+  // A credential named in the block and not in the registry is the other
+  // direction of drift: the tie test is bound both ways.
+  [SCAFFOLD, 'the credential deny names nothing the secrets registry does not',
+    "    ...SECRET_RELATIVE_PATHS.map(f => path.posix.join(home, '.claude', f)),",
+    "    ...[...SECRET_RELATIVE_PATHS, 'extra.json'].map(f => path.posix.join(home, '.claude', f)),"],
+  // Insert the credentials ahead of the workspace files and no earlier block
+  // is a prefix of the new list: every existing workspace reads as a person's
+  // edit and is never upgraded.
+  [SCAFFOLD, 'the credential deny is appended, so earlier blocks stay recognisable and upgrade',
+    '    ...[...RUNDOCK_ANSWER_FILES, ...RUNTIME_GUARDED_ANSWER_FILES].map(f => path.posix.join(workspaceDir, f)),\n    ...credentialDenyFor(home),\n',
+    '    ...credentialDenyFor(home),\n    ...[...RUNDOCK_ANSWER_FILES, ...RUNTIME_GUARDED_ANSWER_FILES].map(f => path.posix.join(workspaceDir, f)),\n'],
+  // Stop recognising the narrower deny lists and the block an earlier release
+  // wrote is a stranger's edit: never rewritten, never given the new deny.
+  [SCAFFOLD, 'a block carrying an earlier, shorter deny list is still recognised as ours',
+    '  for (let n = 1; n < deny.length; n++) shapes.push(withDenyWrite(block, deny.slice(0, n)));\n',
+    ''],
+  // ===== THE USER-LEVEL STATE FILE IS A SECRET AT BOTH LAYERS =====
+  // Drop the home-level files from the block and ~/.claude.json is writable
+  // by sandboxed commands again, its user-scope MCP servers with it.
+  [SCAFFOLD, 'the block denies the user-level state file and its backup',
+    '    ...HOME_SECRET_FILES.map(f => path.posix.join(home, f)),\n',
+    ''],
+  // Stop matching home-level secrets and a read of ~/.claude.json is ordinary
+  // outside access again, with a folder offered to remember.
+  [HOOK, 'a home-level secret is recognised by the secrets check',
+    '  if (!h) return isHomeSecretFile(candidate, home, foldsCase);\n',
+    '  if (!h) return false;\n'],
+  // The shell and file-tool graders read the tags, not isSecretPath, outside
+  // the runtime homes: drop the tag and the card loses its secret wording and
+  // its refusal to remember.
+  [HOOK, 'outside the runtime homes the tags still carry a home-level secret',
+    '  if (!agentHome) return { agentHome: false, secret: isHomeSecretFile(resolvedPath, home, foldsCase), persistenceSurface: false };\n',
+    '  if (!agentHome) return { agentHome: false, secret: false, persistenceSurface: false };\n'],
+  // The backup carries the same contents as the file itself.
+  [HOOK, 'the backup of the user-level state file is a secret too',
+    "const HOME_SECRET_FILES = ['.claude.json', '.claude.json.backup'];",
+    "const HOME_SECRET_FILES = ['.claude.json'];"],
+  // The runtime reads ~/.claude/.config.json in place of ~/.claude.json, so
+  // dropping it reopens the same escape under another name.
+  [HOOK, 'the file the runtime reads in place of ~/.claude.json is a secret',
+    "const SECRET_RELATIVE_PATHS = ['.credentials.json', '.config.json'];",
+    "const SECRET_RELATIVE_PATHS = ['.credentials.json'];"],
+  // Match by name anywhere and a namesake in a project is carded as a secret.
+  [HOOK, 'a home-level secret matches at the home folder root only',
+    '  return HOME_SECRET_FILES.some(f => c === foldCase(canonicalize(path.join(home, f)), foldsCase));\n',
+    '  return HOME_SECRET_FILES.some(f => c.endsWith(path.sep + foldCase(f, foldsCase)));\n'],
+
   // ===== THE BLOCK IS DRIVEN BY MODE, AND ONLY BY MODE =====
   // Ignore the mode and the switch writes the block for code mode too.
   [SCAFFOLD, 'the mode switch really drops the enable in code mode, rather than writing the enabled shape',

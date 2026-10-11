@@ -104,7 +104,9 @@ function canonicalizeCaseSimulated(resolved, foldsCase) {
 // entry below; a doc/registry binding test (workspace-boundary.test.js)
 // fails if either drifts, and nowhere else may decide either question with
 // a literal of its own.
-const SECRET_RELATIVE_PATHS = ['.credentials.json'];
+// `.config.json` is read by the runtime IN PLACE OF `~/.claude.json` whenever
+// it exists, so it carries the same user-scope MCP servers and the same stakes.
+const SECRET_RELATIVE_PATHS = ['.credentials.json', '.config.json'];
 // Directories match their whole subtree; the file matches only at the
 // folder root, not a same-named file nested somewhere already free.
 const PERSISTENCE_SURFACE_DIRS = ['agents', 'skills', 'plugins', 'commands', 'hooks', 'rules', 'output-styles'];
@@ -128,6 +130,15 @@ const PERSISTENCE_SURFACE_FILES = ['settings.json', 'CLAUDE.md'];
 // those are joined onto `~/.claude`: a shared list would make
 // `~/.claude/auth.json` a secret and `~/.codex/auth.json` nothing at all.
 const CODEX_SECRET_RELATIVE_PATHS = ['auth.json'];
+// ── Secrets that sit in the home folder itself, beside the runtime home ──
+// `~/.claude.json` is Claude Code's user-level state: user-scope MCP servers
+// (a command named there is started, outside any sandbox, by the next
+// session), per-project trust, and account details. Its `.backup` sibling
+// carries the same contents. Neither sits under `~/.claude`, so the lists
+// above, which are joined onto a runtime home, cannot name them. Matched only
+// at the home folder's own root, like every entry above is matched only at
+// its folder's root.
+const HOME_SECRET_FILES = ['.claude.json', '.claude.json.backup'];
 // `config.toml` is Codex's `settings.json`: free to read, asks on write. The
 // databases, caches, logs and session files beside it are scratch and stay
 // free both ways, the same judgement already made for `~/.claude`.
@@ -209,14 +220,23 @@ function homeFor(candidate, home = os.homedir(), foldsCase = hostFoldsCase()) {
     return c === r || c.startsWith(r + path.sep);
   }) || null;
 }
+// Every secret path, in one list: each runtime home's registry, then the
+// home-level files. The sandbox block's deny list is tied to this.
 function secretsRegistry(home = os.homedir()) {
-  return runtimeHomes(home).flatMap(h => h.secrets.map(p => path.join(h.root, p)));
+  return [
+    ...runtimeHomes(home).flatMap(h => h.secrets.map(p => path.join(h.root, p))),
+    ...HOME_SECRET_FILES.map(f => path.join(canonicalize(home), f)),
+  ];
+}
+function isHomeSecretFile(candidate, home = os.homedir(), foldsCase = hostFoldsCase()) {
+  const c = foldCase(canonicalize(candidate), foldsCase);
+  return HOME_SECRET_FILES.some(f => c === foldCase(canonicalize(path.join(home, f)), foldsCase));
 }
 function isSecretPath(candidate, home = os.homedir(), foldsCase = hostFoldsCase()) {
   if (typeof candidate !== 'string' || !candidate) return false;
   const c = foldCase(canonicalize(candidate), foldsCase);
   const h = homeFor(candidate, home, foldsCase);
-  if (!h) return false;
+  if (!h) return isHomeSecretFile(candidate, home, foldsCase);
   return h.secrets.some(p => c === foldCase(canonicalize(path.join(h.root, p)), foldsCase));
 }
 function isPersistenceSurface(candidate, home = os.homedir(), foldsCase = hostFoldsCase()) {
@@ -237,7 +257,10 @@ function agentHomeTags(resolvedPath, home = os.homedir(), foldsCase = hostFoldsC
   // product spawns two runtimes. Judged through homeFor so the tiers below are
   // read from the registry belonging to the home the path is actually in.
   const agentHome = !!homeFor(resolvedPath, home, foldsCase);
-  if (!agentHome) return { agentHome: false, secret: false, persistenceSurface: false };
+  // Outside both runtime homes the only tier is the home-level secrets: not
+  // the agent's own area, so nothing here is free, but a secret still refuses
+  // every grant and cards on every access.
+  if (!agentHome) return { agentHome: false, secret: isHomeSecretFile(resolvedPath, home, foldsCase), persistenceSurface: false };
   const tags = { agentHome: true, secret: isSecretPath(resolvedPath, home, foldsCase), persistenceSurface: isPersistenceSurface(resolvedPath, home, foldsCase) };
   if (isInstructionSurface(resolvedPath, home, foldsCase)) tags.instructionFile = true;
   return tags;
@@ -1406,6 +1429,7 @@ module.exports = {
   advisoryOutsidePaths,
   isSecretPath, isPersistenceSurface, SECRET_RELATIVE_PATHS, PERSISTENCE_SURFACE_DIRS, PERSISTENCE_SURFACE_FILES,
   CODEX_SECRET_RELATIVE_PATHS, CODEX_PERSISTENCE_SURFACE_DIRS, CODEX_PERSISTENCE_SURFACE_FILES,
+  HOME_SECRET_FILES, secretsRegistry,
   agentHomeRoot, codexHomeRoot, runtimeHomes,
   isWorkspaceAnswerFile, isRuntimeGuardedAnswerFile,
   WORKSPACE_ANSWER_FILES, RUNDOCK_ANSWER_FILES, RUNTIME_GUARDED_ANSWER_FILES,
