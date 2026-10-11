@@ -34,6 +34,16 @@ function refusalNotice(kind, toolName) {
   return `${what(subjectFor(toolName))} The refusal is deliberate: do not retry it or try another way. Stop and ask the person what to do.`;
 }
 
+// THE LINE AN AGENT IS GIVEN WHEN A PERSON APPROVED A CARD. An approval and a
+// question never asked look the same from inside a turn, so an agent that
+// reasons from the command having run can tell the person the safety check
+// never fired. This turns that inference into a fact. Only for an answer a
+// person gave on a card: an allow by a rule or by policy gets no line. Short,
+// because it is sent on every approval.
+function approvalNotice(toolName) {
+  return `The person approved ${subjectFor(toolName)} in Rundock after a permission card.`;
+}
+
 // A shell command the sandbox refused, read from what the runtime reported
 // back. The runtime marks its own sandbox refusals with a tag, which is
 // decisive. The operating system's "Operation not permitted" counts only
@@ -52,4 +62,4 @@ function sandboxBlocked(toolName, toolInput, text, { codeMode = false, platform 
   return !sandboxOff && NOT_PERMITTED.test(out);
 }
 
-module.exports = { refusalNotice, sandboxBlocked };
+module.exports = { refusalNotice, approvalNotice, sandboxBlocked };

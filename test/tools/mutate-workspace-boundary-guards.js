@@ -70,6 +70,11 @@ const WORKSPACE_HANDLER = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 
 // atomicity guards are proven by protocol-handlers-lib.test.js's own
 // read-back, not anything ws-handler-edges.test.js asserts.
 const WORKSPACE_HANDLER_UNIT = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'workspace.js'), suite: 'test/unit/protocol-handlers-lib.test.js' };
+// Creating a workspace never touches a folder that is already there, and the
+// scaffold never writes over a CLAUDE.md: each proven by the suite that drives
+// it, the create handler through the real server.
+const CREATE_HANDLER = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'workspace.js'), suite: 'test/integration/workspace-picker.test.js' };
+const SCAFFOLD_KEEP = { src: path.join(ROOT, 'lib', 'workspace', 'scaffold.js'), suite: 'test/unit/workspace-modes.test.js' };
 // The switch that keeps agents inside the workspace: where it is read from, the
 // new-workspace default, and the open-path reconcile that honours it.
 const SCAFFOLD_SWITCH = { src: path.join(ROOT, 'lib', 'workspace', 'scaffold.js'), suite: 'test/unit/sandbox-switch.test.js' };
@@ -107,6 +112,8 @@ const DESKTOP_PROFILE_RUN = { src: path.join(ROOT, 'electron', 'main.js'), suite
 // sides of the line are load-bearing.
 const VERDICT = { src: path.join(ROOT, 'scripts', 'code-mode-verdict.js'), suite: 'test/unit/code-mode-verdict.test.js' };
 const VERDICT_HOOK = { src: path.join(ROOT, 'scripts', 'code-mode-verdict.js'), suite: 'test/unit/code-mode-hook.test.js' };
+// The verdict's disk and git seam, driven through the verdict's own suite.
+const VERDICT_GIT = { src: path.join(ROOT, 'scripts', 'code-mode-git.js'), suite: 'test/unit/code-mode-verdict.test.js' };
 const CM_HOOK = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/code-mode-hook.test.js' };
 const CM_BOUNDARY = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/code-mode-boundary.test.js' };
 const CM_DEV = { src: path.join(ROOT, 'scripts', 'dev-paths.js'), suite: 'test/unit/code-mode-hook.test.js' };
@@ -155,6 +162,15 @@ const STOP_ASK_LINE = { src: path.join(ROOT, 'scripts', 'refusal-notice.js'), su
 const STOP_ASK_SCAFFOLD = { src: path.join(ROOT, 'lib', 'workspace', 'scaffold.js'), suite: 'test/unit/stop-and-ask.test.js' };
 const STOP_ASK_GLUE = { src: path.join(ROOT, 'lib', 'runtime', 'codex-glue.js'), suite: 'test/integration/codex-stop-and-ask.test.js' };
 const STOP_ASK_CLIENT = { src: path.join(ROOT, 'codex-appserver.js'), suite: 'test/integration/codex-stop-and-ask.test.js' };
+// After a person approves a card, the agent is told in the same step: the
+// hook's added context, the handler that says a card was answered, the click
+// that says so, the line itself, and the Codex steer.
+const APPROVED_HOOK = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/approval-notice.test.js' };
+const APPROVED_LINE = { src: path.join(ROOT, 'scripts', 'refusal-notice.js'), suite: 'test/unit/approval-notice.test.js' };
+const APPROVED_HANDLER = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'process-control.js'), suite: 'test/unit/approval-notice.test.js' };
+const APPROVED_CLICK = { src: path.join(ROOT, 'public', 'views', 'chat.js'), suite: 'test/unit/approval-notice.test.js' };
+const APPROVED_GLUE = { src: path.join(ROOT, 'lib', 'runtime', 'codex-glue.js'), suite: 'test/integration/codex-approval-notice.test.js' };
+const APPROVED_HANDLER_CODEX = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'process-control.js'), suite: 'test/integration/codex-approval-notice.test.js' };
 // Reading a permission file is not a change to it.
 const ANSWER_READS_HOOK = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/answer-file-reads.test.js' };
 const ANSWER_READS_VOCAB = { src: path.join(ROOT, 'public', 'read-only-shell.js'), suite: 'test/unit/answer-file-reads.test.js' };
@@ -455,6 +471,29 @@ const MUTATIONS = [
   [WORKSPACE_HANDLER, 'a first open records the switch before scaffolding, not only the mode',
     "  const state = recordFirstOpen(dir);\n\n  try { scaffoldWorkspace(dir); }",
     "  const state = readState();\n\n  try { scaffoldWorkspace(dir); }"],
+  // ===== CREATE NEVER OVERWRITES =====
+  // Without the check, a taken name typed with a character to strip is answered
+  // with the rename notice, and a second press would scaffold over it.
+  [CREATE_HANDLER, 'a workspace name that already exists is refused before anything is written',
+    '    if (fs.existsSync(dir)) { sendNameTaken(ws, rawName, dir); return; }\n',
+    ''],
+  [CREATE_HANDLER, 'a name that lost characters is said before the folder is made',
+    '    if (removed) {',
+    '    if (false) {'],
+  // The check and the mkdir are two steps: a recursive mkdir would reuse a
+  // folder made between them and scaffold over it.
+  [CREATE_HANDLER, 'the workspace folder is made without recursion, so one that appeared is refused',
+    '      try { fs.mkdirSync(dir); } catch (e) {',
+    '      try { fs.mkdirSync(dir, { recursive: true }); } catch (e) {'],
+  [CREATE_HANDLER, 'the folder offered to open is the real one on disk',
+    'openPath = fs.realpathSync.native(dir);',
+    'openPath = dir;'],
+  [SCAFFOLD_KEEP, 'the default scaffold never writes over an existing CLAUDE.md',
+    '  if (fs.existsSync(claudeMdPath)) {',
+    '  if (false) {'],
+  [SCAFFOLD_KEEP, 'a CLAUDE.md that appears after the check is kept, not reported as a failure',
+    "    if (e.code === 'EEXIST') return { success: true, kept: true };\n",
+    ''],
 
   // ===== THE ROW SAYS WHAT IS IN FORCE =====
   // Read the stored preference instead of the disk and a switch that says on
@@ -801,10 +840,10 @@ const MUTATIONS = [
     "  const claimedMode = 'knowledge';"],
   // ===== CODE MODE: THE VERDICT, THE BOUNDARY CORRECTIONS AND CODEX =====
   [VERDICT, "M1: \"inside a git working tree\" always true",
-    "    const top = ctx.seam.gitTop(scope);",
-    "    const top = ctx.seam.gitTop(scope) || scope;"],
+    "    const top = ctx.seam.gitTop(link ? ctx.pmod.dirname(link) : scope);",
+    "    const top = ctx.seam.gitTop(link ? ctx.pmod.dirname(link) : scope) || scope;"],
   [VERDICT, "M2: \"inside a git working tree\" always false",
-    "    const top = ctx.seam.gitTop(scope);",
+    "    const top = ctx.seam.gitTop(link ? ctx.pmod.dirname(link) : scope);",
     "    const top = null;"],
   [VERDICT, "M3a: the unsaved-work check on a delete always reports clean",
     "    const lost = [...(st.tracked || []), ...(st.untracked || []), ...(st.ignoredEnv || [])];",
@@ -813,8 +852,8 @@ const MUTATIONS = [
     "  return lost.length ? unsaved(reason, lost) : RUNS;",
     "  return RUNS;"],
   [VERDICT, "M4: the unsaved-work check always reports unsaved",
-    "    if (lost.length) return unsaved('unsaved-work', lost);",
-    "    return unsaved('unsaved-work', lost.length ? lost : ['x']);"],
+    "    if (lost.length) return unsaved('unsaved-work', lost, { named, changed: st.tracked || [] });",
+    "    return unsaved('unsaved-work', lost.length ? lost : ['x'], { named, changed: st.tracked || [] });"],
   [VERDICT_HOOK, "M5: a git failure is treated as clean",
     "    const st = ctx.seam.gitStatus(top, specs, { env: true });\n    if (!st || !st.ok) return always('git-unchecked');",
     "    const st = ctx.seam.gitStatus(top, specs, { env: true });\n    if (!st || !st.ok) continue;"],
@@ -845,6 +884,51 @@ const MUTATIONS = [
   [VERDICT, "M13: the PowerShell and cmd delete verbs are removed",
     "  if (ctx.dialect === 'ps' && PS_REMOVE.has(v)) return judgePsRemove(a, ctx, piped, prev);",
     ""],
+  [VERDICT, "M13a: a named file is deleted without reading git, as through 0.15.5",
+    "  const named = !bulk;\n  if (named) {",
+    "  const named = !bulk;\n  if (named && !targets.some(t => insideDotGit(t.path, ctx))) return RUNS;\n  if (named) {"],
+  [VERDICT, "M13b: a named file outside any repository is deleted without asking",
+    "    if (!top && named) { outside.push(ctx.pmod.basename(scope)); continue; }",
+    "    if (!top && named) continue;"],
+  [VERDICT, "M13c: a named file inside .git that does not exist yet is no longer git-internals",
+    "    if (dotGit) return always(dotGitReason(dotGit.path, ctx));",
+    ""],
+  [CM_CLIENT, "M13d: the outside-repository card calls named files a folder",
+    "      if (!names) return 'This deletes a folder",
+    "      if (true) return 'This deletes a folder"],
+  [VERDICT, "M13e: a restore of one named file skips git, as through 0.15.5",
+    "    scopes.push(p);\n  }\n  if (!top) return always('git-unchecked');",
+    "    if (!w.glob && w.text !== '.' && ctx.seam.exists(p) && !require('fs').statSync(p).isDirectory()) continue;\n    scopes.push(p);\n  }\n  if (!scopes.length) return RUNS;\n  if (!top) return always('git-unchecked');"],
+  [CM_CLIENT, "M13f: a delete's card no longer says what each file loses",
+    "    'unsaved-work': v => deleteCopy(v) || (namesOf(v)",
+    "    'unsaved-work': v => (namesOf(v)"],
+  [VERDICT, "M13g: a named delete follows a symlink to what it points to",
+    "    const link = named ? t.link : null;",
+    "    const link = null;"],
+  [VERDICT, "M13h: pathspec magic in a restore or checkout is read as a plain path",
+    "  if (operands.some(w => w.text.startsWith(':'))) return always('unreadable-command');\n  if (!candidates.length)",
+    "  if (!candidates.length)"],
+  [VERDICT, "M13i: a path list that cannot be read is taken as no list",
+    "  const listed = listedSpecs(rest, ctx);\n  if (listed === null) return always('unreadable-command');\n  const dd = t.indexOf('--');\n  let candidates;",
+    "  const listed = listedSpecs(rest, ctx) || undefined;\n  const dd = t.indexOf('--');\n  let candidates;"],
+  [VERDICT, "M13j: a quoted pattern after checkout is taken as a branch",
+    "      if (w.text === '.' || w.glob || /[*?[]/.test(w.text)) return true;",
+    "      if (w.text === '.' || w.glob) return true;"],
+  [VERDICT, "M13k: a forced checkout is judged like any other",
+    "  const force = sub === 'checkout' && hasFlag(t, 'f', ['--force']);",
+    "  const force = false;"],
+  [VERDICT, "M13l: a switch that discards runs without asking",
+    "  if (!hasFlag(t, 'f', ['--force', '--discard-changes'])) return RUNS;",
+    "  return RUNS;"],
+  [VERDICT, "M13m: a forced removal from git runs without asking",
+    "    case 'rm': return judgeGitRm(",
+    "    case 'rm': return RUNS; (judgeGitRm)("],
+  [VERDICT, "M13n: shred is not judged as a delete",
+    "  if (ctx.dialect === 'bash' && v === 'shred') return judgeShred(a, ctx, piped);\n",
+    ""],
+  [VERDICT_GIT, "M13o: a path list is read whatever kind of file it is",
+    "    if (!st.isFile() || st.size > LIST_LIMIT_BYTES) return null;",
+    "    if (st.size > LIST_LIMIT_BYTES) return null;"],
   [CM_HOOK, "M14: the verdict is sent in Notes mode",
     "  const verdict = (codeMode && shellCommand !== null)",
     "  const verdict = (shellCommand !== null)"],
@@ -1439,6 +1523,45 @@ const MUTATIONS = [
   [STOP_ASK_CLIENT, "Stop and ask: the approval event carries no way to steer",
     "{ type: 'approval', kind, requestId: id, params, respond, steer }",
     "{ type: 'approval', kind, requestId: id, params, respond }"],
+  [APPROVED_HOOK, "Approved: an approval on a card is never told to the agent",
+    "            ...(approved ? { additionalContext: approved } : {}),\n",
+    ""],
+  [APPROVED_HOOK, "Approved: an allow that asked nobody is told as a card",
+    "result.allow === true && result.card === true ? approvalNotice(data.tool_name) : null",
+    "result.allow === true ? approvalNotice(data.tool_name) : null"],
+  [APPROVED_HOOK, "Approved: the approval line pushes a waiting put-back line out",
+    "const context = [own.additionalContext, note].filter(Boolean).join('\\n');",
+    "const context = own.additionalContext || note;"],
+  [APPROVED_LINE, "Approved: the line names any tool it is handed",
+    "return `The person approved ${subjectFor(toolName)} in Rundock after a permission card.`;",
+    "return `The person approved this ${toolName} in Rundock after a permission card.`;"],
+  [APPROVED_HANDLER, "Approved: the handler drops that a card was answered",
+    "pending.res.end(JSON.stringify(card ? { allow: true, card: true } : { allow: msg.allow }));",
+    "pending.res.end(JSON.stringify({ allow: msg.allow }));"],
+  [APPROVED_HANDLER, "Approved: a card flag on a denial counts as an approval",
+    "const card = msg.allow === true && msg.card === true;",
+    "const card = msg.card === true;"],
+  [APPROVED_CLICK, "Approved: a click on a card does not say it was a card",
+    "    card: true,\n    toolInput: pending.toolInput || {}",
+    "    toolInput: pending.toolInput || {}"],
+  [APPROVED_HANDLER_CODEX, "Approved: a Codex decision never hears that a card was answered",
+    "pending.onDecision(msg.allow === true, 'user', { card });",
+    "pending.onDecision(msg.allow === true, 'user');"],
+  [APPROVED_GLUE, "Approved: a Codex approval on a card is never told",
+    "if (ev.respond('accept') !== false && how && how.card) tellCodexApproval(convoId, ev, toolName);",
+    "ev.respond('accept');"],
+  [APPROVED_GLUE, "Approved: a Codex allow with no card is told as a card",
+    "if (ev.respond('accept') !== false && how && how.card) tellCodexApproval(convoId, ev, toolName);",
+    "if (ev.respond('accept') !== false) tellCodexApproval(convoId, ev, toolName);"],
+  // Removing the guard alone changes nothing a test can see: a missing steer
+  // throws inside the promise and the catch absorbs it. Taking the guard's
+  // branch every time is what it stands between, and that is caught.
+  [APPROVED_GLUE, "Approved: the steer guard skips a Codex that can steer",
+    "  if (typeof ev.steer !== 'function') return;\n  Promise.resolve().then(() => ev.steer(approvalNotice(toolName)))",
+    "  if (typeof ev.steer !== 'function' || true) return;\n  Promise.resolve().then(() => ev.steer(approvalNotice(toolName)))"],
+  [APPROVED_GLUE, "Approved: a Codex without turn/steer is told in a later turn",
+    "  Promise.resolve().then(() => ev.steer(approvalNotice(toolName))).catch(() => {});",
+    "  Promise.resolve().then(() => ev.steer(approvalNotice(toolName))).catch(() => queueCodexNotice(convoId, approvalNotice(toolName)));"],
 ];
 const REPORTER = ['--test-reporter', 'spec'];
 

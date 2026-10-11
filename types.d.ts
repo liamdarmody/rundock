@@ -139,7 +139,7 @@ type WsClientMessage =
   | { type: 'delegate'; conversationId: string; agentId: string; prompt?: string }
   | { type: 'end_delegation'; conversationId: string }
   | { type: 'flush_buffer'; conversationId: string }
-  | { type: 'permission_response'; requestId: string; conversationId: string; allow: boolean; grantDir?: string }
+  | { type: 'permission_response'; requestId: string; conversationId: string; allow: boolean; grantDir?: string; card?: boolean }
   | { type: 'save_agent'; name: string; content: string }
   | { type: 'create_agent'; name: string; content: string }
   | { type: 'update_agent'; name: string; content: string }

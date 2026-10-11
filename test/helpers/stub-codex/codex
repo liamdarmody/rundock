@@ -209,12 +209,15 @@ function runAppServer() {
       // A model reads a line steered into its turn before it carries on. A
       // rule can wait for one after a decline (bounded) and answer with
       // `afterDecision.steered` when it came, as a model told to stop would.
-      if (key === 'decline' && a.awaitSteerMs > 0) {
-        const until = Date.now() + a.awaitSteerMs;
+      // `awaitSteerOnAcceptMs` waits the same way after an accept, so a line
+      // steered into an approved turn lands while the turn is still running.
+      const waitMs = key === 'decline' ? a.awaitSteerMs : (key === 'accept' ? a.awaitSteerOnAcceptMs : 0);
+      if (waitMs > 0) {
+        const until = Date.now() + waitMs;
         while (!t.steered && !t.finished && Date.now() < until) await tick(5);
         if (t.finished) return;
         const steered = (a.afterDecision || {}).steered;
-        if (t.steered && steered && steered.text != null) text = steered.text;
+        if (key === 'decline' && t.steered && steered && steered.text != null) text = steered.text;
       }
     }
 

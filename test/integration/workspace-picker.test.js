@@ -160,13 +160,102 @@ describe('create_workspace', () => {
     assert.strictEqual(res.message, 'Please enter a workspace name');
   });
 
-  test('creates under HOME/Documents/Rundock, sanitises the name, scaffolds, and announces the full boot set', async () => {
+  test('a name of only dots is refused, never resolved to the folder above', async () => {
+    const res = await request({ type: 'create_workspace', name: '..' },
+      m => m.type === 'workspace_error', 'workspace_error dots');
+    assert.strictEqual(res.message, 'Please enter a workspace name');
+  });
+
+  test('a name that already exists changes nothing on disk and offers to open it', async () => {
+    const dir = path.join(os.homedir(), 'Documents', 'Rundock', 'Already Here');
+    fs.mkdirSync(dir, { recursive: true });
+    const own = '# Already Here\n\nSet up and in use.\n';
+    fs.writeFileSync(path.join(dir, 'CLAUDE.md'), own);
+    const before = fs.readdirSync(dir).sort();
+    const workspaceBefore = h.internal.getWorkspace();
+
+    // Typed with a character to strip, too: the name it resolves to is taken,
+    // and that is what the person needs told first.
+    for (const name of ['Already Here', 'Already Here?']) {
+      const res = await request({ type: 'create_workspace', name },
+        m => m.type === 'workspace_name_taken', `workspace_name_taken for ${name}`);
+      assert.strictEqual(res.message,
+        'A workspace called "Already Here" already exists in ~/Documents/Rundock, so nothing was changed. You can open it instead.');
+      assert.strictEqual(res.openPath, fs.realpathSync.native(dir), 'the refusal carries the folder to open instead');
+      assert.strictEqual(fs.readFileSync(path.join(dir, 'CLAUDE.md'), 'utf-8'), own, 'CLAUDE.md untouched');
+      assert.deepStrictEqual(fs.readdirSync(dir).sort(), before, 'nothing added beside it');
+      assert.strictEqual(h.internal.getWorkspace(), workspaceBefore, 'no switch');
+    }
+  });
+
+  test('the folder offered is the real one: a symlink resolves to where it points', async () => {
+    const real = path.join(os.homedir(), 'Documents', 'Rundock', 'Real Target');
+    const link = path.join(os.homedir(), 'Documents', 'Rundock', 'Linked');
+    fs.mkdirSync(real, { recursive: true });
+    fs.symlinkSync(real, link, 'dir');
+    const res = await request({ type: 'create_workspace', name: 'Linked' },
+      m => m.type === 'workspace_name_taken', 'workspace_name_taken for a symlink');
+    assert.strictEqual(res.openPath, fs.realpathSync.native(real));
+    assert.match(res.message, /^A workspace called "Real Target" already exists/);
+  });
+
+  test('on a case-insensitive disk, a name in other case offers the folder as it is spelled', async (t) => {
+    const dir = path.join(os.homedir(), 'Documents', 'Rundock', 'Acme');
+    fs.mkdirSync(dir, { recursive: true });
+    if (!fs.existsSync(path.join(os.homedir(), 'Documents', 'Rundock', 'acme'))) {
+      t.skip('this disk is case-sensitive, so "acme" is a different name');
+      return;
+    }
+    const res = await request({ type: 'create_workspace', name: 'acme' },
+      m => m.type === 'workspace_name_taken', 'workspace_name_taken in other case');
+    assert.strictEqual(path.basename(res.openPath), 'Acme', 'opened as Acme, so recents gain no duplicate');
+    assert.match(res.message, /^A workspace called "Acme" already exists/);
+  });
+
+  test('a folder made between the check and the create is refused the same way, not reused', async () => {
+    // The existence check and the mkdir are two steps; the mkdir must not be
+    // recursive, or a folder that appears between them is scaffolded over.
+    const dir = path.join(os.homedir(), 'Documents', 'Rundock', 'Raced');
+    fs.mkdirSync(dir, { recursive: true });
+    const own = '# Raced\n';
+    fs.writeFileSync(path.join(dir, 'CLAUDE.md'), own);
+    const realExists = fs.existsSync;
+    fs.existsSync = (p) => (p === dir ? false : realExists(p));
+    const workspaceBefore = h.internal.getWorkspace();
+    try {
+      const res = await request({ type: 'create_workspace', name: 'Raced' },
+        m => m.type === 'workspace_name_taken' || m.type === 'workspace_set', 'reply to a raced create');
+      assert.strictEqual(res.type, 'workspace_name_taken');
+    } finally {
+      fs.existsSync = realExists;
+      h.internal.setWorkspace(workspaceBefore);
+    }
+    assert.deepStrictEqual(fs.readdirSync(dir), ['CLAUDE.md'], 'nothing added beside it');
+    assert.strictEqual(fs.readFileSync(path.join(dir, 'CLAUDE.md'), 'utf-8'), own);
+  });
+
+  test('a name that lost characters says so and where it will go, and makes nothing yet', async () => {
+    const res = await request({ type: 'create_workspace', name: 'My/Test:Space?' },
+      m => m.type === 'workspace_name_notice', 'workspace_name_notice');
+    assert.strictEqual(res.name, 'MyTestSpace');
+    assert.strictEqual(res.message,
+      'Rundock removed /, : and ? from the name. Press Create again to make the folder at ~/Documents/Rundock/MyTestSpace');
+    assert.ok(!fs.existsSync(path.join(os.homedir(), 'Documents', 'Rundock', 'MyTestSpace')), 'nothing made before the second press');
+
+    const one = await request({ type: 'create_workspace', name: 'a/b' },
+      m => m.type === 'workspace_name_notice', 'workspace_name_notice single');
+    assert.strictEqual(one.message,
+      'Rundock removed / from the name. Press Create again to make the folder at ~/Documents/Rundock/ab');
+  });
+
+  test('creates under HOME/Documents/Rundock, scaffolds, and announces the full boot set', async () => {
     const since = client.messages.length;
-    client.send({ type: 'create_workspace', name: 'My/Test:Space?' });
+    // The name the notice put in the field, sent on the second press.
+    client.send({ type: 'create_workspace', name: 'MyTestSpace' });
 
     const wsSet = (await client.waitFor(m => m.type === 'workspace_set', { since, label: 'workspace_set' })).msg;
     const expectedDir = path.join(os.homedir(), 'Documents', 'Rundock', 'MyTestSpace');
-    assert.strictEqual(wsSet.path, expectedDir, 'forbidden filename characters stripped from the name');
+    assert.strictEqual(wsSet.path, expectedDir);
     assert.strictEqual(wsSet.isEmpty, true);
     assert.strictEqual(wsSet.setupComplete, false);
     assert.strictEqual(wsSet.scaffoldError, null);

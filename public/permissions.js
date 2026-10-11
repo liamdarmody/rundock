@@ -296,15 +296,40 @@
     if (files.length === 1) return files[0];
     return `${files.slice(0, -1).join(', ')} and ${files[files.length - 1]}`;
   }
+  // A delete's verdict says which files have changes git has never saved and
+  // which git has never saved at all. Named files are named with what each
+  // loses; a folder keeps its one sentence, with the noun that fits.
+  function deleteCopy(v) {
+    const changed = v.changed ? namesOf(v.changed) : '';
+    const fresh = v.fresh ? namesOf(v.fresh) : '';
+    if (!changed && !fresh) return '';
+    if (!v.named) {
+      const what = changed && fresh ? 'files and changes' : (changed ? 'changes' : 'files');
+      return `This deletes ${what} git has never saved: ${namesOf(v)} would be lost for good.`;
+    }
+    const one = v.changed.files.length === 1 && !(Number(v.changed.more) > 0);
+    const parts = [];
+    if (changed) parts.push(`${changed}, which ${one ? 'has' : 'have'} changes git has never saved`);
+    if (fresh) parts.push(`${fresh}, which git has never saved`);
+    return `This deletes ${parts.join(', and ')}.`;
+  }
   const REASON_COPY = {
-    'unsaved-work': v => (namesOf(v)
+    'unsaved-work': v => deleteCopy(v) || (namesOf(v)
       ? `This deletes files git has never saved: ${namesOf(v)} would be lost for good.`
       : 'This deletes files git has never saved, and they would be lost for good.'),
     'unsaved-discard': v => (namesOf(v)
       ? `This throws away changes git has never saved: ${namesOf(v)} would be lost for good.`
       : 'This throws away changes git has never saved, and they would be lost for good.'),
     'git-unchecked': () => 'Rundock couldn\'t check with git what this would lose, so it can\'t tell whether it can be undone.',
-    'outside-repository': () => 'This deletes a folder that isn\'t in a git repository, so nothing can bring it back.',
+    'outside-repository': v => {
+      // A folder is unnamed; named files are named, as the unsaved-work card does.
+      const names = namesOf(v);
+      if (!names) return 'This deletes a folder that isn\'t in a git repository, so nothing can bring it back.';
+      const one = v.files.length === 1 && !(Number(v.more) > 0);
+      return one
+        ? `This deletes ${names}, which isn't in a git repository, so nothing can bring it back.`
+        : `This deletes ${names}, which aren't in a git repository, so nothing can bring them back.`;
+    },
     'repository': () => 'This deletes the repository\'s history, which is what lets every other change be undone.',
     'git-internals': () => 'This changes git\'s own files, which are what let every other change be undone.',
     'find-from-top': () => 'Starting at the top of the repository, this can delete git\'s own files as well as yours.',

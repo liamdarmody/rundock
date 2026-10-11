@@ -38,7 +38,7 @@ const { isReadOnlyShellCommand, isDestructiveShellCommand, shellSegments } = req
 const { codeModeVerdict } = require('./code-mode-verdict.js');
 const { lexSegments } = require('./code-mode-parse.js');
 const devPaths = require('./dev-paths.js');
-const { refusalNotice, sandboxBlocked } = require('./refusal-notice.js');
+const { refusalNotice, approvalNotice, sandboxBlocked } = require('./refusal-notice.js');
 
 // One directory, several names. macOS keeps /tmp and /var as symlinks into
 // /private, Dropbox and iCloud vaults are commonly reached through a symlink
@@ -1939,11 +1939,18 @@ fetchAgentNotice((agentNotice) => {
         // wording for a timeout invited the retry this exists to prevent.
         const reason = result.allow ? 'Approved in Rundock'
           : refusalNotice(result.reason === 'timeout' ? 'timeout' : 'denied', data.tool_name);
+        // An approval a person gave on a card is told to the agent too. The
+        // runtime never shows the model an allow's reason, so without this an
+        // approval reads as a question never asked. Not for an allow that
+        // asked nobody (a standing grant, an always-allow rule): only an
+        // answer from a card carries `card`.
+        const approved = result.allow === true && result.card === true ? approvalNotice(data.tool_name) : null;
         writeDecision(({
           hookSpecificOutput: {
             hookEventName: 'PreToolUse',
             permissionDecision: result.allow ? 'allow' : 'deny',
-            permissionDecisionReason: reason
+            permissionDecisionReason: reason,
+            ...(approved ? { additionalContext: approved } : {}),
           }
         }));
       } catch (e) {
