@@ -2,11 +2,12 @@
 // The facts the Code-mode verdict reads from the disk and from git, behind one
 // seam so a Windows-shaped world can be judged on any host.
 //
-// Only four questions are ever asked: does a path exist, which working tree is
-// it in, what does git hold unsaved under some paths, and which branch does a
-// push land on. Every git call has a short limit and any failure is reported
-// as a failure, never as "nothing unsaved": the caller asks when it cannot
-// check.
+// Only four questions are ever asked: does a path exist (and is it a
+// symlink), which working tree is it in, what does git hold unsaved under
+// some paths, and which branch does a push land on. The one file read is a
+// path list a git command was told to read its paths from. Every git call has a
+// short limit and any failure is reported as a failure, never as "nothing
+// unsaved": the caller asks when it cannot check.
 const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
@@ -107,8 +108,41 @@ function isTag(top, name) {
   try { git(['-C', top, 'show-ref', '--verify', '--quiet', `refs/tags/${name}`], top); return true; } catch (e) { return false; }
 }
 
-function defaultContext() {
-  return { exists: p => fs.existsSync(p), canonical: realNearest, gitTop, gitStatus, currentBranch, defaultBranches, isTag };
+// The text of a small file a command reads its path list from, or null.
+// Only a regular file is read, judged on the descriptor that was opened (so a
+// swap between a check and the open cannot slip in a fifo or a device), and
+// never more than the limit: a fifo, /dev/zero or a huge file would otherwise
+// hold the verdict, and the server that runs it, for good. The open does not
+// block on a fifo with no writer.
+function readList(p) {
+  let fd = null;
+  try {
+    fd = fs.openSync(p, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK || 0));
+    const st = fs.fstatSync(fd);
+    if (!st.isFile() || st.size > LIST_LIMIT_BYTES) return null;
+    const buf = Buffer.alloc(LIST_LIMIT_BYTES + 1);
+    let n = 0;
+    for (;;) {
+      const r = fs.readSync(fd, buf, n, buf.length - n, null);
+      if (r <= 0) break;
+      n += r;
+      if (n > LIST_LIMIT_BYTES) return null;
+    }
+    return buf.toString('utf-8', 0, n);
+  } catch (e) {
+    return null;
+  } finally {
+    if (fd !== null) { try { fs.closeSync(fd); } catch (e) { /* already gone */ } }
+  }
+}
+const LIST_LIMIT_BYTES = 1024 * 1024;
+
+function isSymlink(p) {
+  try { return fs.lstatSync(p).isSymbolicLink(); } catch (e) { return false; }
 }
 
-module.exports = { defaultContext, realNearest, gitTop, gitStatus, currentBranch, defaultBranches, isTag, GIT_LIMIT_MS };
+function defaultContext() {
+  return { exists: p => fs.existsSync(p), canonical: realNearest, gitTop, gitStatus, currentBranch, defaultBranches, isTag, isSymlink, readList };
+}
+
+module.exports = { defaultContext, realNearest, gitTop, gitStatus, currentBranch, defaultBranches, isTag, isSymlink, readList, GIT_LIMIT_MS };
