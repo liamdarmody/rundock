@@ -863,13 +863,15 @@ function expandPathFrom(word, ctx, base) {
 }
 
 // A discard of tracked changes, untracked files, or both, under `specs`
-// relative to the working tree's top.
+// relative to the working tree's top. `restores`: the discard writes files
+// back from git, so a file that is only gone from the disk loses nothing.
 function discard(top, specs, want, reason, ctx) {
   if (!top) return always('git-unchecked');
   const st = ctx.seam.gitStatus(ctx.canonical(top), specs, { env: !!want.env });
   if (!st || !st.ok) return always('git-unchecked');
+  const gone = new Set(want.restores ? st.deleted || [] : []);
   const lost = [
-    ...(want.tracked ? st.tracked || [] : []),
+    ...(want.tracked ? (st.tracked || []).filter(f => !gone.has(f)) : []),
     ...(want.untracked ? st.untracked || [] : []),
     ...(want.env ? st.ignoredEnv || [] : []),
   ];
@@ -929,7 +931,7 @@ function judgeCheckout(sub, rest, ctx, top) {
   // a spec reaches, from where, so a word starting with `:` is not read here.
   const operands = [...(listed || []), ...(dd >= 0 ? rest.slice(dd + 1) : rest.filter(w => !/^-/.test(w.text)))];
   if (operands.some(w => w.text.startsWith(':'))) return always('unreadable-command');
-  if (!candidates.length) return force ? discard(top, ['.'], { tracked: true }, 'unsaved-discard', ctx) : RUNS;
+  if (!candidates.length) return force ? discard(top, ['.'], { tracked: true, restores: true }, 'unsaved-discard', ctx) : RUNS;
   const scopes = [];
   for (const w of candidates) {
     const p = expandPath(w, ctx);
@@ -941,7 +943,7 @@ function judgeCheckout(sub, rest, ctx, top) {
     scopes.push(p);
   }
   if (!top) return always('git-unchecked');
-  return discard(top, scopes.map(p => relSpec(p, top, ctx)), { tracked: true }, 'unsaved-discard', ctx);
+  return discard(top, scopes.map(p => relSpec(p, top, ctx)), { tracked: true, restores: true }, 'unsaved-discard', ctx);
 }
 
 // A switch that discards (--discard-changes, or forced) throws away every
@@ -950,7 +952,7 @@ function judgeSwitch(rest, ctx, top, opaque) {
   const t = rest.map(w => w.text);
   if (!hasFlag(t, 'f', ['--force', '--discard-changes'])) return RUNS;
   if (opaque) return always('unreadable-command');
-  return discard(top, ['.'], { tracked: true }, 'unsaved-discard', ctx);
+  return discard(top, ['.'], { tracked: true, restores: true }, 'unsaved-discard', ctx);
 }
 
 // Removing files from git deletes them from the disk too. Without force git

@@ -56,6 +56,8 @@ function gitTop(p) {
 //   tracked     tracked files with changes
 //   untracked   new files git has never seen and does not ignore
 //   ignoredEnv  ignored .env and .env.* files, when `env` is asked for
+//   deleted     the tracked files whose only change is that they are gone
+//               from the disk, with nothing staged and nothing at the path
 // { ok: false } on any failure.
 function gitStatus(top, specs, { env = false } = {}) {
   const list = specs.length ? specs.map(s => s || '.') : ['.'];
@@ -63,12 +65,16 @@ function gitStatus(top, specs, { env = false } = {}) {
     const raw = git(['-C', top, 'status', '--porcelain=v1', '-z', '--untracked-files=all', '--', ...list], top);
     const tracked = [];
     const untracked = [];
+    const deleted = [];
     const parts = raw.split('\0').filter(Boolean);
     for (let i = 0; i < parts.length; i++) {
       const xy = parts[i].slice(0, 2);
       const file = parts[i].slice(3);
       if (xy === '??') untracked.push(file);
-      else if (xy !== '!!') tracked.push(file);
+      else if (xy !== '!!') {
+        tracked.push(file);
+        if (xy === ' D' && !onDisk(path.join(top, file))) deleted.push(file);
+      }
       if (xy[0] === 'R' || xy[0] === 'C') i++; // a rename carries its source next
     }
     let ignoredEnv = [];
@@ -83,10 +89,15 @@ function gitStatus(top, specs, { env = false } = {}) {
       const out = git(['-C', top, 'ls-files', '-z', '-o', '-i', '--exclude-standard', '--', ...patterns], top);
       ignoredEnv = out.split('\0').filter(Boolean);
     }
-    return { ok: true, tracked, untracked, ignoredEnv };
+    return { ok: true, tracked, untracked, ignoredEnv, deleted };
   } catch (e) {
     return { ok: false };
   }
+}
+
+// Whether anything at all, a dangling link or a folder included, is at `p`.
+function onDisk(p) {
+  try { fs.lstatSync(p); return true; } catch (e) { return e.code !== 'ENOENT'; }
 }
 
 function currentBranch(top) {
