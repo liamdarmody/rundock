@@ -13,13 +13,14 @@
 // The same check is the tripwire for a real read, and on Windows the only
 // one, so every rule that quiets a false card sits beside a test proving the
 // true card it must keep.
-const { test, describe, after } = require('node:test');
+const { test, describe, before, after } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
 const hook = require('../../scripts/permission-hook.js');
+const fx = require('../helpers/code-mode-fixture.js');
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shell-code-'));
 after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -80,4 +81,204 @@ describe('a backslash in a Bash word on a POSIX host is not a Windows separator'
       assert.ok(scan('cat C:\\Users\\someone\\notes.txt', { workspace: winWs, opts }), 'a drive letter elsewhere');
     }
   });
+});
+
+// Made-up commands in the shapes the false cards came from. Each is a script
+// written or run through a here-document, with words that are not places.
+const SCRIPT_SAVED = "mkdir -p .rundock/scratch/tools && cat > .rundock/scratch/tools/show.py <<'PY'\n"
+  + 'import re, sys\n'
+  + 'def tidy(body):\n'
+  + "    return re.sub(r'\\n\\s*\\n+', '\\n\\n', body)\n"
+  + "stamp = int(msg['internalDate'])/1000,\n"
+  + 'PY';
+const JOINED_LINES = "python3 - <<'PY'\nlines = ['Subject: weekly totals', 'All quiet.']\nbody = \"\\n\\n\".join(lines)\nprint(body)\nPY";
+const LABELS = "cat > labels.py <<'PY'\nfor name, count in sorted(totals.items()):\n    print(f\"\\n== {name}: {count}\")\nPY";
+const PATH_JOIN = "python3 - <<'PY'\nparts = ['inbox', 'archive', '2026']\nprint('/'.join(parts))\nPY";
+const DIGEST = "cat > digest.py <<'PY'\nout = '/'\nhead = \"\\n## Summary\"\nprint(head + out)\nPY";
+const FIELD_SHAPES = [SCRIPT_SAVED, JOINED_LINES, LABELS, PATH_JOIN, DIGEST];
+
+describe('a here-document fed to an interpreter or written to a file is judged by its string literals', () => {
+  for (const [mode, codeMode] of MODES) {
+    test(`the field shapes reach nothing (${mode} mode)`, () => {
+      for (const c of FIELD_SHAPES) assert.deepStrictEqual(places(c, { codeMode }), [], c);
+    });
+
+    test(`code in other interpreters, and prose written to a file, reach nothing (${mode} mode)`, () => {
+      for (const c of [
+        "node - <<'JS'\nconst secs = Date.now()/1000;\nconsole.log(['a', 'b'].join('/'), '\\n\\n');\nJS",
+        "ruby <<'RB'\nputs [1, 2].sum/2\nputs \"\\n== done\"\nRB",
+        "perl <<'PL'\nmy $half = $total/2;\nprint \"\\n\\n\";\nPL",
+        "cat > README.md <<'EOF'\nCall /status for health, or /metrics/daily for totals.\nEOF",
+        "tee notes.txt > /dev/null <<'EOF'\nSplit on / and keep the last part.\nEOF",
+      ]) {
+        assert.deepStrictEqual(places(c, { codeMode }), [], c);
+      }
+    });
+  }
+
+  test('a real place in a string literal still cards, whichever way the delimiter is written', () => {
+    for (const delim of ["'PY'", 'PY']) {
+      const py = (code) => `python3 - <<${delim}\n${code}\nPY`;
+      assert.deepStrictEqual(places(py("print(open('/etc/hosts').read())")), [real('/etc/hosts')], delim);
+      assert.deepStrictEqual(places(py("import os\nopen(os.path.expanduser('~/.aws/credentials')).read()")),
+        [real(path.join(home, '.aws', 'credentials'))], delim);
+      assert.deepStrictEqual(places(py("import os\nopen(os.path.expandvars('$HOME/.ssh/id_rsa')).read()")),
+        [real(path.join(home, '.ssh', 'id_rsa'))], delim);
+      const secret = scan(py("open('~/.claude/.credentials.json'.replace('~', HOME)).read()"));
+      assert.ok(secret && secret.crossings.some(c => c.secret === true), `a credential the hook treats as secret (${delim})`);
+    }
+  });
+
+  test('in node, ruby and perl, and in a file written by cat or tee', () => {
+    for (const c of [
+      "node - <<'JS'\nrequire('fs').readFileSync('/etc/hosts', 'utf8');\nJS",
+      "ruby <<'RB'\nputs File.read(\"/etc/hosts\")\nRB",
+      "perl <<'PL'\nopen(my $f, '<', '/etc/hosts');\nPL",
+      "cat > read.py <<'PY'\nprint(open('/etc/hosts').read())\nPY",
+      "tee read.js > /dev/null <<'JS'\nrequire('fs').readFileSync(\"/etc/hosts\");\nJS",
+    ]) {
+      assert.deepStrictEqual(places(c), [real('/etc/hosts')], c);
+    }
+  });
+
+  test('a climb out of the workspace and an answer file in a literal still count', () => {
+    assert.deepStrictEqual(places("python3 - <<'PY'\nopen('../outside.txt', 'w').write('x')\nPY"), [real(path.join(home, 'outside.txt'))]);
+    assert.deepStrictEqual(places("python3 - <<'PY'\nimport os\nos.chdir('..')\nPY"), [real(home)], 'a bare climb');
+    const r = scan("python3 - <<'PY'\nopen('.rundock/permissions.json', 'w').write('{}')\nPY");
+    assert.ok(r && r.crossings.some(c => c.answerFile === true), 'a write to the permission file from code is still the answer-file card');
+  });
+
+  test('home on its own is a place', () => {
+    assert.deepStrictEqual(places("python3 - <<'PY'\nimport os\nprint(os.listdir(os.path.expanduser('~')))\nPY"), [real(home)]);
+  });
+
+  test('a Windows path in a literal is still a place', () => {
+    const drive = "python3 - <<'PY'\nopen('C:\\\\Users\\\\someone\\\\.ssh\\\\id_rsa').read()\nPY";
+    assert.ok(scan(drive), 'on this host');
+    const winWs = 'C:\\Users\\someone\\ws';
+    const win = { workspace: winWs, opts: { platform: 'win32', env: { APPDATA: 'C:\\Users\\someone\\AppData\\Roaming' } } };
+    assert.ok(scan(drive, win), 'in a Windows workspace');
+    assert.ok(scan("python3 - <<'PY'\nopen(os.path.expandvars('%APPDATA%\\\\Code\\\\settings.json'))\nPY", win), 'through an environment variable');
+  });
+
+  test('an apostrophe in a comment cannot swallow the code after it', () => {
+    assert.deepStrictEqual(places("python3 - <<'PY'\n# don't print the whole file\nprint(open('/etc/hosts').read()[:80])\nPY"), [real('/etc/hosts')]);
+  });
+
+  test('backticks and command quotes inside the code run a shell, and are judged as commands', () => {
+    for (const c of [
+      "ruby <<'RB'\nputs `cat /etc/hosts`\nRB",
+      "perl <<'PL'\nmy $hosts = qx(cat /etc/hosts);\nPL",
+      "ruby <<'RB'\nhosts = %x(cat /etc/hosts)\nRB",
+      "perl <<'PL'\nmy @files = qw(/etc/hosts);\nPL",
+    ]) {
+      assert.deepStrictEqual(places(c), [real('/etc/hosts')], c);
+    }
+  });
+
+  test('an unquoted delimiter runs its substitutions before the interpreter starts', () => {
+    for (const c of [
+      'python3 - <<PY\nhosts = """$(cat /etc/hosts)"""\nPY',
+      'python3 - <<PY\nhosts = """`cat /etc/hosts`"""\nPY',
+      'cat > notes.md <<EOF\nHosts: $(cat /etc/hosts)\nEOF',
+      'node - <<-JS\n\tconst h = `$(cat /etc/hosts)`;\n\tJS',
+    ]) {
+      assert.deepStrictEqual(places(c), [real('/etc/hosts')], c);
+    }
+  });
+
+  test('a quoted delimiter runs nothing, so the same text is only text', () => {
+    assert.deepStrictEqual(places("python3 - <<'PY'\nhosts = \"$(cat /etc/hosts)\"\nPY"), []);
+  });
+});
+
+describe('a here-document fed to a shell, or to anything else, is judged as commands as before', () => {
+  test('a shell reading a here-document, quoted delimiter or not', () => {
+    for (const c of [
+      "bash <<'SH'\ncat /etc/hosts\nSH",
+      'bash <<SH\ncat /etc/hosts\nSH',
+      "sh -s <<'EOF'\ncat /etc/hosts\nEOF",
+      "zsh <<'EOF'\ncat /etc/hosts\nEOF",
+      "bash -s -- one two <<'SH'\ncat /etc/hosts\nSH",
+      "ssh build-host <<'EOF'\ncat /etc/hosts\nEOF",
+      "cat <<'SH' | bash\ncat /etc/hosts\nSH",
+    ]) {
+      assert.deepStrictEqual(places(c), [real('/etc/hosts')], c);
+    }
+  });
+
+  test('data for a script, or for a loop, is not the program', () => {
+    for (const c of [
+      "python3 tools/check.py <<'EOF'\n/etc/hosts\nEOF",
+      "python3 -c 'import sys; print(open(sys.stdin.read().strip()).read())' <<'EOF'\n/etc/hosts\nEOF",
+      "node -e 'process.stdin.pipe(process.stdout)' <<'EOF'\n/etc/hosts\nEOF",
+      "while read -r f; do wc -l \"$f\"; done <<'EOF'\n/etc/hosts\nEOF",
+    ]) {
+      assert.deepStrictEqual(places(c), [real('/etc/hosts')], c);
+    }
+  });
+
+  test('a shell script written to a file is judged as the commands it holds', () => {
+    for (const c of [
+      "cat > run.sh <<'SH'\ncat /etc/hosts\nSH",
+      "cat > tools/run <<'EOF'\n#!/usr/bin/env bash\ncat /etc/hosts\nEOF",
+      "tee Makefile > /dev/null <<'EOF'\nall:\n\tcat /etc/hosts\nEOF",
+    ]) {
+      assert.deepStrictEqual(places(c), [real('/etc/hosts')], c);
+    }
+  });
+});
+
+describe('a command that writes outside around a here-document still asks', () => {
+  test('a target before the here-document, on its line, or after it', () => {
+    const desktop = real(path.join(home, 'Desktop'));
+    for (const [c, want] of [
+      ["cat > /etc/motd.d/x <<'EOF'\nhello\nEOF", real('/etc/motd.d/x')],
+      ["python3 - <<'PY' && cp out.txt ~/Desktop/\nprint('/'.join(['a', 'b']))\nPY", desktop],
+      ["python3 - <<'PY'\nprint(int(t)/1000)\nPY\ncp out.txt ~/Desktop/", desktop],
+    ]) {
+      const r = scan(c);
+      assert.ok(r && r.crossings.some(x => x.path === want && x.write === true), `${c}: ${JSON.stringify(r && r.crossings)}`);
+      assert.strictEqual(r.crossings.length, 1, 'and nothing in the code beside it');
+    }
+  });
+});
+
+// Through the real hook, the way the runtime calls it: what a person would
+// see, in each mode. In Notes mode every command is shown, so the question is
+// whether it is shown as a crossing; in Code mode a command with no crossing
+// runs with no card at all.
+describe('through the real hook', () => {
+  const outside = fx.outsideTempRoot();
+  const SKIP = outside.skip || false;
+  let world, capture, deadPort;
+  before(async () => {
+    if (SKIP) return;
+    world = fx.buildWorld(outside.dir);
+    capture = await fx.startCaptureServer();
+    deadPort = await fx.closedPort();
+  });
+  after(async () => {
+    if (capture) await capture.close();
+    if (outside.dir) fs.rmSync(outside.dir, { recursive: true, force: true });
+  });
+  const bash = (command, codeMode) => fx.judge(world, capture, deadPort, { tool: 'Bash', input: { command }, cwd: world.ws, codeMode });
+
+  for (const [mode, codeMode] of MODES) {
+    test(`the field shapes raise no boundary card (${mode} mode)`, { skip: SKIP }, async () => {
+      for (const c of FIELD_SHAPES) {
+        const r = await bash(c, codeMode);
+        assert.ok(!(r.payload && r.payload.boundary), `${c}: no crossing`);
+        if (codeMode) assert.strictEqual(r.cls, 'runs', `${c}: and in Code mode no card at all`);
+      }
+    });
+
+    test(`a real read in the code still raises one (${mode} mode)`, { skip: SKIP }, async () => {
+      const r = await bash("python3 - <<'PY'\nprint(open('/etc/hosts').read())\nPY", codeMode);
+      assert.strictEqual(r.payload && r.payload.boundary, true);
+      const secret = await bash("python3 - <<'PY'\nimport os\nopen(os.path.expanduser('~/.aws/credentials')).read()\nPY", codeMode);
+      assert.strictEqual(secret.payload && secret.payload.boundary, true);
+      if (codeMode) assert.strictEqual(secret.dead.decision, 'deny', 'a hidden folder under home is refused when nobody can be asked');
+    });
+  }
 });

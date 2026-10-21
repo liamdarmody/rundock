@@ -36,7 +36,7 @@ const { isReadOnlyShellCommand, isDestructiveShellCommand, shellSegments } = req
 // The Code-mode verdict and the development paths live beside this file, in
 // scripts/, so they are unpacked with it (package.json asarUnpack scripts/**).
 const { codeModeVerdict, keychainVerdict } = require('./code-mode-verdict.js');
-const { lexSegments } = require('./code-mode-parse.js');
+const { lexSegments, stripHeredocs, substitutions } = require('./code-mode-parse.js');
 const devPaths = require('./dev-paths.js');
 const { refusalNotice, approvalNotice, sandboxBlocked } = require('./refusal-notice.js');
 
@@ -899,6 +899,10 @@ function echoedArgsIn(command) {
 // the character X, so `\/etc/hosts` is judged as the `/etc/hosts` it opens. A
 // drive letter or UNC name is left as written: it keeps its Windows reading.
 function shellPathTokens(command, posixEscapes = false) {
+  return shellPathWords(command, posixEscapes).map(w => w.t);
+}
+// The same words, each with where it starts in the command (`at`).
+function shellPathWords(command, posixEscapes = false) {
   const out = [];
   // Every argument sitting in a pattern position, counted per segment so the
   // same text appearing later as a real file is still seen; and the same for
@@ -917,7 +921,7 @@ function shellPathTokens(command, posixEscapes = false) {
     if (at !== -1) { skip.splice(at, 1); continue; }
     const unquoted = m[1] === undefined && m[2] === undefined;
     if (posixEscapes && unquoted && t.includes('\\') && !WIN_DRIVE.test(t) && !WIN_UNC.test(t)) t = t.replace(/\\(.)/g, '$1');
-    out.push(t);
+    out.push({ t, at: m.index });
     // Also the value after the first `=`. Flag values (`--output=/etc/x`) and
     // shell assignments (`OUT=$HOME/x`) are the two commonest places a target
     // sits in plain sight inside a larger word. The whole token is kept too,
@@ -928,7 +932,7 @@ function shellPathTokens(command, posixEscapes = false) {
       const value = t.slice(eq + 1);
       // An IFS=/ separator is dropped here, where its value is split off.
       const vat = /^IFS=/.test(t) ? skip.indexOf(value) : -1;
-      if (vat !== -1) skip.splice(vat, 1); else out.push(value);
+      if (vat !== -1) skip.splice(vat, 1); else out.push({ t: value, at: m.index });
     }
   }
   return out;
@@ -1088,6 +1092,156 @@ const BASH_ESCAPE = /^\\(?:[abefnrtv0\\'"?]|x[0-9a-fA-F]{1,2}|[0-7]{1,3}|u[0-9a-
 const WIN_SWITCH = /^\/[A-Za-z?]{1,8}(:[^\\/\s]*)?$/;
 const ENV_PREFIX = [/^\$\{?env:([A-Za-z_][A-Za-z0-9_]*)\}?(?=[\\/]|$)/i, /^%([A-Za-z_][A-Za-z0-9_]*)%(?=[\\/]|$)/];
 
+// CODE HANDED TO AN INTERPRETER IS READ AS CODE, NOT AS SHELL WORDS.
+//
+// A here-document fed to python, node, ruby or perl, or written to a file by
+// `cat >` or `tee`, is a program or a document, and its words are not places:
+// `int(ms)/1000` divides, `'/'.join(parts)` joins, `"\n\n"` is two newlines.
+// Read word by word, each was a crossing, and a shell crossing can never be
+// remembered, so a routine stopped at every one. Such a body is judged by its
+// QUOTED STRING LITERALS, which is where code names a file it opens:
+// `open('/etc/hosts')`, `'~/.aws/credentials'`, `'$HOME/.ssh/id_rsa'`.
+//
+// Kept as commands, word by word as before: a body fed to a shell or to
+// anything not named here, data piped to a script (`python3 x.py <<EOF`), a
+// shell script written to a file, backticks and Perl's and Ruby's command
+// quotes inside the code, and what an unquoted delimiter's body runs as it
+// expands (`$(...)`), which the shell runs before the interpreter starts.
+const CODE_INTERPRETER = /^(?:python(?:\d+(?:\.\d+)*)?|node|nodejs|ruby|perl)$/;
+// The flags that give an interpreter its program on the command line, after
+// which a here-document is data for that program rather than the program.
+const PROGRAM_FLAG = { python: /^-[A-Za-z]*[cm]/, node: /^(?:-[A-Za-z]*[ep]|--eval|--print)/, ruby: /^-[A-Za-z]*e/, perl: /^-[A-Za-z]*[eE]/ };
+const SCRIPT_FILE = /\.(?:sh|bash|zsh|dash|ksh|fish|command|mk)$|(?:^|\/)(?:GNUm|M|m)akefile$/;
+const SHELL_SHEBANG = /^#!.*\b(?:sh|bash|zsh|dash|ksh|fish)\b/;
+const QUOTE_OPERATOR = /^(?:qx|qq|qw|q|%[xqQwWiI]?)\s*([([{<])/;
+const CLOSING = { '(': ')', '[': ']', '{': '}', '<': '>' };
+
+function interpreterFamily(lead) {
+  if (!CODE_INTERPRETER.test(lead)) return null;
+  return lead.startsWith('python') ? 'python' : lead.startsWith('node') ? 'node' : lead;
+}
+
+// Whether the command in `segment` takes its here-document as code or text.
+function feedsCode(segment, body) {
+  const words = (String(segment).match(/'[^']*'|"[^"]*"|\S+/g) || []).map(w => w.replace(/^'(.*)'$|^"(.*)"$/s, '$1$2'));
+  let i = 0;
+  while (i < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i])) i++;
+  const lead = (words[i] || '').split('/').pop();
+  const args = [];
+  const outs = [];
+  for (let k = i + 1; k < words.length; k++) {
+    const w = words[k];
+    if (/^\d*<<-?$/.test(w)) { k++; continue; }
+    if (/^\d*<</.test(w)) continue;
+    const r = /^(\d*|&)(>>?|<)(.*)$/.exec(w);
+    if (r) {
+      const target = r[3] || words[++k] || '';
+      if (r[2] !== '<' && ['', '1', '&'].includes(r[1]) && !target.startsWith('&')) outs.push(target);
+      continue;
+    }
+    args.push(w);
+  }
+  const family = interpreterFamily(lead);
+  if (family) {
+    for (const a of args) {
+      if (a === '-') return true;
+      if (!a.startsWith('-') || PROGRAM_FLAG[family].test(a)) return false;
+    }
+    return true;
+  }
+  const files = lead === 'cat' ? outs : lead === 'tee' ? args.filter(a => !a.startsWith('-')) : [];
+  return files.length > 0 && !files.some(f => SCRIPT_FILE.test(f)) && !SHELL_SHEBANG.test(String(body).split('\n')[0]);
+}
+
+// A string literal names a place when it is shaped like one an interpreter
+// opens: an absolute path with a named first segment, a home path, a Windows
+// drive or UNC name, or a climb out with `..`. A relative path is judged too:
+// it resolves where the program runs, which matters for the answer files. A
+// lone `/`, a URL, an escape string and a bare word are text.
+function literalIsPlace(lit) {
+  if (!lit || URL_SCHEME.test(lit)) return false;
+  if (/^\/[^\s/\\]/.test(lit) || WIN_DRIVE.test(lit) || WIN_UNC.test(lit) || TRAVERSAL.test(lit)) return true;
+  if (HOME_PREFIX.some(re => re.test(lit)) || ENV_PREFIX.some(re => re.test(lit))) return true;
+  return !lit.startsWith('/') && lit.includes('/') && !lit.includes('\\');
+}
+
+// The literals in a piece of code that name a place, and the commands it runs
+// itself. A literal is quoted text on one line, so an apostrophe in a comment
+// cannot swallow the code after it.
+function codeParts(code) {
+  const s = String(code);
+  const literals = [];
+  const commands = [];
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (ch === "'" || ch === '"') {
+      let j = i + 1;
+      while (j < s.length && s[j] !== ch && s[j] !== '\n') j += s[j] === '\\' ? 2 : 1;
+      if (s[j] === ch) {
+        if (literalIsPlace(s.slice(i + 1, j))) literals.push(s.slice(i + 1, j));
+        i = j;
+      }
+      continue;
+    }
+    if (ch === '`') {
+      const j = s.indexOf('`', i + 1);
+      commands.push(s.slice(i + 1, j < 0 ? s.length : j));
+      if (j < 0) break;
+      i = j;
+      continue;
+    }
+    const q = /[\w$@%]/.test(s[i - 1] || ' ') ? null : QUOTE_OPERATOR.exec(s.slice(i, i + 4));
+    if (q) {
+      const open = q[1];
+      let depth = 0;
+      let j = i + q[0].length - 1;
+      for (; j < s.length; j++) {
+        if (s[j] === open) depth++;
+        else if (s[j] === CLOSING[open] && --depth === 0) break;
+      }
+      commands.push(s.slice(i + q[0].length, j));
+      i = j;
+    }
+  }
+  return { literals, commands };
+}
+
+// The segment of `text` that holds the character at `at`.
+function segmentAt(text, at) {
+  let from = 0;
+  for (const seg of lexSegments(text)) {
+    const start = text.indexOf(seg.text, from);
+    if (start < 0) return null;
+    from = start + seg.text.length;
+    if (at >= start && at < from) return seg.text;
+  }
+  return null;
+}
+
+// The command as the check reads it: the shell's own text, with each body fed
+// to code taken out and replaced by the commands it runs, and the literals
+// that name a place returned beside it, each at its command's `<<`.
+function judgedShellText(command) {
+  const s = String(command);
+  const cut = stripHeredocs(s);
+  if (!cut.ok || !cut.bodies.length) return { text: s, literals: [] };
+  let text = '';
+  let from = 0;
+  const literals = [];
+  for (const b of cut.bodies) {
+    text += cut.text.slice(from, b.bodyAt);
+    from = b.bodyAt;
+    const seg = segmentAt(cut.text, b.at);
+    const subs = b.expands ? substitutions(b.body, 'bash', { quoted: true }) : { ok: true, bodies: [] };
+    if (seg === null || !subs.ok || !feedsCode(seg, b.body)) { text += b.body; continue; }
+    const at = b.at + text.length - b.bodyAt;
+    const code = codeParts(b.body);
+    for (const t of code.literals) literals.push({ t, at });
+    for (const c of [...code.commands, ...subs.bodies]) text += c + '\n';
+  }
+  return { text: text + cut.text.slice(from), literals };
+}
+
 function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), foldsCase = hostFoldsCase(), opts = {}) {
   const found = [];
   const seen = new Set();
@@ -1115,13 +1269,19 @@ function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), 
   // file. So the words of the segments that do not only read are collected,
   // and an answer file is reported when one of them names it. A redirect, tee,
   // sed -i, cp or mv onto it is such a segment.
+  //
+  // A literal in code handed to an interpreter counts as written: the code
+  // can open it for writing, and nothing here can tell that it does not.
+  const view = judgedShellText(command);
   const writingWords = new Set();
   if (!readOnly) {
-    for (const seg of shellSegments(String(command))) {
+    for (const lit of view.literals) writingWords.add(lit.t);
+    for (const seg of shellSegments(view.text)) {
       if (!isReadOnlyShellCommand(seg)) for (const w of shellPathTokens(seg, posixText)) writingWords.add(w);
     }
   }
-  for (const raw of shellPathTokens(command, posixText)) {
+  const words = shellPathWords(view.text, posixText).concat(view.literals).sort((a, b) => a.at - b.at);
+  for (const { t: raw } of words) {
     let t = raw;
     let homed = false;
     for (const re of HOME_PREFIX) {
@@ -1153,7 +1313,7 @@ function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), 
     // workspace root regardless. Everything BELOW still judges against the
     // workspace root: the base says where a relative path starts, never what
     // counts as inside.
-    const resolved = canonicalize(pmod.resolve(commandBaseDir(command, workspaceRoot, pmod, opts.cwd, extraDirs, home), t), pmod);
+    const resolved = canonicalize(pmod.resolve(commandBaseDir(view.text, workspaceRoot, pmod, opts.cwd, extraDirs, home), t), pmod);
 
     // THE ANSWER FILES ARE TESTED BEFORE THE CROSSING FILTER, not after it.
     //
