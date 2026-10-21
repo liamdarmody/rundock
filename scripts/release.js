@@ -644,7 +644,9 @@ function tagRelease(version, { root = ROOT, git = gitIn(root), log = logStep } =
 
   const mergedTree = git(['rev-parse', `${merged}^{tree}`]).trim();
   requireGatePass(mergedTree, { root });
-  requireSignoff(mergedTree, version, { root, git });
+  const signedOff = requireSignoff(mergedTree, version, { root, git });
+  // Which way it was signed off, never the words: they stay in the local record.
+  log('tag', `Tree ${mergedTree.slice(0, 12)} was ${SIGNED_OFF[signedOff]}`);
 
   if (git(['ls-remote', '--tags', 'origin', `refs/tags/${tag}`]).trim()) {
     throw new Error(`Tag ${tag} already exists on the remote. Choose a new version, or recut deliberately by deleting it first.`);

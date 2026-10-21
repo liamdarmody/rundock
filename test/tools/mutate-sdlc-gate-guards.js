@@ -300,8 +300,23 @@ const MUTATIONS = [
   // naming the version and either a terminal outside an agent session, or
   // the words of an instruction given in chat, verbatim.
   [RELEASE_TAG, "the tag refuses without a hands-on sign-off",
-    "  requireSignoff(mergedTree, version, { root, git });\n",
+    "  const signedOff = requireSignoff(mergedTree, version, { root, git });\n",
+    "  const signedOff = 'terminal';\n"],
+  // The tag says which way its tree was signed off, and never the words of
+  // an instruction given in chat: the two put-something-back rows print them
+  // and carry them in the tag, and the leak test must notice each.
+  [RELEASE_TAG, "the tag says which way its tree was signed off",
+    "  log('tag', `Tree ${mergedTree.slice(0, 12)} was ${SIGNED_OFF[signedOff]}`);\n",
     ""],
+  [RELEASE_TAG, "a chat sign-off is named as chat, a terminal one as terminal",
+    "const SIGNED_OFF = { chat: 'signed off in chat on instruction', terminal: 'signed off in the terminal' };",
+    "const SIGNED_OFF = { chat: 'signed off in the terminal', terminal: 'signed off in chat on instruction' };"],
+  [RELEASE_TAG, "the tag never prints the words of a chat sign-off",
+    "  log('tag', `Tree ${mergedTree.slice(0, 12)} was ${SIGNED_OFF[signedOff]}`);\n",
+    "  log('tag', `Tree ${mergedTree.slice(0, 12)} was ${SIGNED_OFF[signedOff]}: ${(readSignoff({ root, git }) || {}).instruction}`);\n"],
+  [RELEASE_TAG, "the tag never carries the words of a chat sign-off",
+    "  git(['tag', tag], { stdio: 'pipe' });",
+    "  git(['tag', '-a', tag, '-m', `${(readSignoff({ root, git }) || {}).instruction}`], { stdio: 'pipe' });"],
   [RELEASE_SIGNOFF, "a sign-off for another tree does not count",
     "  if (signoff.tree !== headTree) {",
     "  if (false) {"],
