@@ -437,7 +437,7 @@ describe('the command line', () => {
     assert.match(out, /bump <version>/);
     assert.match(out, /tag <version>/);
     assert.match(out, /signoff <version> --confirm <version>/);
-    assert.match(out, /signoff <version> --confirm <version> --on-instruction - <<'WORDS'   record a sign-off given in chat/);
+    assert.match(out, /signoff <version> --confirm <version> --on-instruction - <<'END_OF_SIGNOFF_WORDS'   record a sign-off given in chat/);
     assert.match(out, /publish <version>/);
   });
 

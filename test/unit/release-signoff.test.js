@@ -79,12 +79,14 @@ const noTerminal = () => askAtTerminal('Note: ', { open: () => { throw Object.as
 const onInstruction = (version, words) => ['node', 'release.js', 'signoff', version, '--confirm', version, '--on-instruction', words];
 // The form every refusal prints: the words on stdin, through a here-document
 // whose quoted delimiter keeps the shell from expanding anything in them.
-const PRINTED = /--on-instruction - <<'WORDS'\n<their words>\nWORDS/;
+const PRINTED = /--on-instruction - <<'END_OF_SIGNOFF_WORDS'\n<their words>\nEND_OF_SIGNOFF_WORDS/;
 // Words a shell would mangle in double quotes: substitution, expansion,
-// quotes of both kinds, a backslash, a tab and more than one line.
+// quotes of both kinds, a backslash, a tab and more than one line, one of
+// them a plausible here-document delimiter typed on its own.
 const AWKWARD = [
   'sign off 0.12.0: `date` and $(whoami) and $HOME and ${PATH} stay as typed',
   '"double" and \'single\' quotes, a back\\slash, a tab\there,',
+  'WORDS',
   '-- a line starting with dashes, café included ',
 ].join('\n');
 
@@ -122,7 +124,7 @@ test('given in chat, --on-instruction with no visible words is refused, and noth
   const invisible = ' \t\u200B\u200C\u200D\u2060\uFEFF\u00A0';
   for (const tail of [['--on-instruction'], ['--on-instruction', ''], ['--on-instruction', '   '], ['--on-instruction', invisible]]) {
     const argv = ['node', 'release.js', 'signoff', '0.12.0', '--confirm', '0.12.0', ...tail];
-    assert.throws(() => signoff('0.12.0', { env: AGENT, ask: noTerminal, argv }), /--on-instruction needs[\s\S]*verbatim[\s\S]*--on-instruction - <<'WORDS'/, JSON.stringify(argv));
+    assert.throws(() => signoff('0.12.0', { env: AGENT, ask: noTerminal, argv }), /--on-instruction needs[\s\S]*verbatim[\s\S]*--on-instruction - <<'END_OF_SIGNOFF_WORDS'/, JSON.stringify(argv));
   }
   for (const stdin of ['', '\n', `${invisible}\n`]) {
     assert.throws(() => signoff('0.12.0', { env: AGENT, ask: noTerminal, argv: onInstruction('0.12.0', '-'), readStdin: () => stdin }), /--on-instruction needs/, JSON.stringify(stdin));
@@ -165,7 +167,16 @@ test('through a real shell, the words survive verbatim on stdin and single-quote
   const sh = (script) => spawnSync('/bin/sh', ['-c', script], { encoding: 'utf8', env: { PATH: process.env.PATH, SIGNOFF_ROOT: work, SIGNOFF_PROBE: 'expanded' } });
   const command = `${q(process.execPath)} ${q(driver)} 0.12.0 --confirm 0.12.0 --on-instruction`;
 
-  const viaStdin = sh(`${command} - <<'WORDS'\n${AWKWARD}\nWORDS\n`);
+  // The here-document exactly as a refusal prints it, with the words put in
+  // its placeholder: a line of the words that matched the delimiter would
+  // end it early, cut the record short and run the rest as commands.
+  let printed = '';
+  try { signoff('0.12.0', { env: AGENT }); } catch (err) { printed = err.message.slice(err.message.indexOf('npm run release -- signoff')); }
+  assert.match(printed, /<<'([A-Z_]+)'\n<their words>\n\1$/, 'a here-document with a quoted delimiter');
+  const script = printed
+    .replace('npm run release -- signoff 0.12.0 --confirm 0.12.0 --on-instruction', () => command)
+    .replace('<their words>', () => AWKWARD);
+  const viaStdin = sh(`${script}\n`);
   assert.strictEqual(viaStdin.status, 0, viaStdin.stderr);
   assert.strictEqual(JSON.parse(viaStdin.stdout).instruction, AWKWARD);
   assert.strictEqual(readSignoff({ root: work }).instruction, AWKWARD);
@@ -283,7 +294,7 @@ test('the tag check: no record, or one for another tree, is refused, naming both
   // Both refusals say in words that a sign-off given in chat is recorded with
   // --on-instruction, and neither prints a ready command for it: that is
   // recorded only when a sign-off was actually given.
-  const noReadyChatCommand = (message) => !/<<'WORDS'|<their words>/.test(message);
+  const noReadyChatCommand = (message) => !/<<'|<their words>/.test(message);
   assert.throws(() => requireSignoff(treeOf(work), '0.12.0', { root: work }), (err) =>
     /^No sign-off found for tree [0-9a-f]{12}\. A sign-off records the hands-on check/.test(err.message)
     && /release summary calls for one/.test(err.message)
@@ -316,7 +327,7 @@ test('the command line refuses a missing --confirm, an agent session, and an emp
   assert.strictEqual(agent.code, 1);
   assert.match(agent.out, /agent session/);
   // Printed from column 0, so the here-document's closing line still closes it.
-  assert.match(agent.out, /\nnpm run release -- signoff 0\.12\.0 --confirm 0\.12\.0 --on-instruction - <<'WORDS'\n<their words>\nWORDS\n/);
+  assert.match(agent.out, /\nnpm run release -- signoff 0\.12\.0 --confirm 0\.12\.0 --on-instruction - <<'END_OF_SIGNOFF_WORDS'\n<their words>\nEND_OF_SIGNOFF_WORDS\n/);
   const empty = cli(['signoff', '0.12.0', '--confirm', '0.12.0', '--on-instruction', ''], { CLAUDECODE: '1' });
   assert.strictEqual(empty.code, 1);
   assert.match(empty.out, /--on-instruction needs/);

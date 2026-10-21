@@ -90,14 +90,17 @@ with the words verbatim, on stdin, through a here-document whose quoted
 delimiter keeps the shell from expanding anything in them:
 
 ```
-npm run release -- signoff <version> --confirm <version> --on-instruction - <<'WORDS'
+npm run release -- signoff <version> --confirm <version> --on-instruction - <<'END_OF_SIGNOFF_WORDS'
 <their words>
-WORDS
+END_OF_SIGNOFF_WORDS
 ```
 
-Everything between the first line and the closing `WORDS` line is recorded
-as given, backticks, `$` and quotes included; the newline before `WORDS` is
-not part of the words. This is the form every refusal prints.
+Everything between the first line and the closing `END_OF_SIGNOFF_WORDS`
+line is recorded as given, backticks, `$` and quotes included; the newline
+before it is not part of the words. If any line of the words is exactly
+`END_OF_SIGNOFF_WORDS`, choose another delimiter, in both places: a line
+that matches it ends the here-document early. This is the form every
+refusal prints.
 
 The words can also be given inline, as the argument after the flag,
 single-quoted: `--on-instruction '<their words>'`. A `'` inside the words

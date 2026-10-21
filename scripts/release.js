@@ -249,12 +249,16 @@ function hasVisibleWords(words) {
   return typeof words === 'string' && words.replace(/[\s\p{Cc}\p{Cf}]/gu, '') !== '';
 }
 
-// The way every refusal prints to give the words of a chat sign-off: on
-// stdin, through a here-document whose quoted delimiter keeps the shell from
-// expanding anything in them. It starts on a line of its own, so its closing
-// line is still at the start of a line when copied.
+// The way every sign-off refusal prints to give the words of a chat
+// sign-off: on stdin, through a here-document whose quoted delimiter keeps
+// the shell from expanding anything in them. The delimiter is one nobody
+// types, because a line of the words that matched it would end the
+// here-document early, cut the record short and run the rest as commands.
+// It starts on a line of its own, so its closing line is still at the start
+// of a line when copied.
+const WORDS_DELIMITER = 'END_OF_SIGNOFF_WORDS';
 function onInstructionForm(command) {
-  return `${command} --on-instruction - <<'WORDS'\n<their words>\nWORDS`;
+  return `${command} --on-instruction - <<'${WORDS_DELIMITER}'\n<their words>\n${WORDS_DELIMITER}`;
 }
 
 // The words of a sign-off given in chat, or null when --on-instruction is
@@ -729,7 +733,7 @@ const USAGE = [
   'Usage:',
   '  npm run release -- bump <version>                       write the version and promote the changelog, to commit with the candidate',
   '  npm run release -- signoff <version> --confirm <version>   after trying the candidate from source yourself, record it for its tree',
-  "  npm run release -- signoff <version> --confirm <version> --on-instruction - <<'WORDS'   record a sign-off given in chat: its words follow on stdin, verbatim, then a line WORDS",
+  "  npm run release -- signoff <version> --confirm <version> --on-instruction - <<'END_OF_SIGNOFF_WORDS'   record a sign-off given in chat: its words follow on stdin, verbatim, then a line END_OF_SIGNOFF_WORDS",
   '  npm run release -- tag <version>                        after the gated, signed-off release pull request merges, tag the merged commit',
   '  npm run release -- publish <version> --confirm <version>   publish the draft release CI built for that tag, only after you have tested it yourself',
 ].join('\n');
