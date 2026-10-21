@@ -20,7 +20,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 
-const { bumpRelease, tagRelease, extractChangelogEntry, SIGNOFF_FILE_NAME } = require('../../scripts/release.js');
+const { bumpRelease, tagRelease, signoffRelease, extractChangelogEntry, SIGNOFF_FILE_NAME } = require('../../scripts/release.js');
 const { GATE_FILE_NAME, runGate } = require('../../scripts/release-gate.js');
 const { REQUIRED_CI_CHECKS } = require('../../scripts/release-ci.js');
 
@@ -259,6 +259,35 @@ describe('release:tag tags what actually merged, and only a gated tree', () => {
     }
     assert.strictEqual(inWork(['status', '--porcelain']), '', 'nothing in the working tree to commit');
     assert.strictEqual(inOrigin(['tag', '-l']), 'v0.12.0');
+  });
+
+  test('end to end: a sign-off given in chat, recorded by the real command, lets the tag through and goes nowhere the release goes', () => {
+    candidate('0.12.0', { signoff: false });
+    const words = 'sign off 0.12.0: the quartzzebra list passed, `ship` it';
+    const said = [];
+    // As an agent records it: in an agent session, with no terminal, the
+    // words on stdin.
+    signoffRelease('0.12.0', {
+      root: work,
+      argv: ['node', 'release.js', 'signoff', '0.12.0', '--confirm', '0.12.0', '--on-instruction', '-'],
+      env: { CLAUDECODE: '1' },
+      ask: () => { throw Object.assign(new Error('Device not configured'), { code: 'ENXIO' }); },
+      readStdin: () => `${words}\n`,
+      log: (step, msg) => said.push(msg),
+    });
+    merge();
+    tagRelease('0.12.0', { root: work, log: (step, msg) => said.push(msg) });
+
+    assert.strictEqual(inOrigin(['tag', '-l']), 'v0.12.0');
+    assert.ok(said.some((l) => /^Recorded a sign-off given in chat for 0\.12\.0 on tree /.test(l)), said.join('\n'));
+    assert.ok(said.some((l) => /was signed off in chat on instruction$/.test(l)), said.join('\n'));
+    assert.ok(said.every((l) => !l.includes('quartzzebra')), 'neither step prints the words');
+    const notes = extractChangelogEntry('0.12.0', gitAt(origin)(['show', 'v0.12.0:CHANGELOG.md']));
+    assert.ok(notes && !`${notes.title}\n${notes.body}`.includes('quartzzebra'), 'the release notes do not carry them');
+    for (const line of inOrigin(['rev-list', '--all', '--objects']).split('\n').filter(Boolean)) {
+      assert.ok(!gitAt(origin)(['cat-file', '-p', line.split(' ')[0]]).includes('quartzzebra'), `pushed object ${line}`);
+    }
+    assert.strictEqual(inWork(['status', '--porcelain']), '', 'nothing in the working tree to commit');
   });
 
   test('a sign-off given in chat for a different tree is refused, naming both trees', () => {

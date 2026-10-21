@@ -30,7 +30,8 @@
  * second gate, and any difference is refused.
  *
  * A RECUT of an unpublished draft is: delete the draft release, delete the tag
- * locally and on the remote, merge the fix, run the gate on main, tag again.
+ * locally and on the remote, merge the fix, run the gate on main, sign the
+ * new tree off, tag again.
  * Once the tag is gone the version on main is one release past the latest tag
  * again, which is all the gate asks.
  *
@@ -45,8 +46,9 @@
  * never makes anything public. It produces a DRAFT and stops there.
  *
  * `publish` is the step that matters most, and CI never runs it. Only a
- * human decides a specific version is ready for everyone, by running
- * `publish` themselves with --confirm naming that exact version (see
+ * person decides a specific version is ready for everyone, and `publish`
+ * runs on that decision, at a terminal or on an instruction given in chat to
+ * the agent that runs it, with --confirm naming that exact version (see
  * hasPublishConfirmation). This was not always enforced: on 2026-08-27 an
  * agent ran `publish` unprompted, straight after fixing unrelated build
  * bugs, because nothing but a naming convention separated it from `tag`.
@@ -339,21 +341,27 @@ function signoffKind(record) {
 }
 
 // The tag refuses without a sign-off for exactly the tree it tags, of either
-// kind, and returns the kind. A fix after the check changes the tree, so it
-// needs the check again.
+// kind, and returns the kind. A fix after the sign-off changes the tree, so
+// it needs signing off again. Both refusals name the chat kind in words and
+// never print a ready command for it: one is recorded only when a sign-off
+// was actually given.
 function requireSignoff(headTree, version, opts = {}) {
   const signoff = readSignoff(opts);
   const command = `npm run release -- signoff ${version} --confirm ${version}`;
   if (!signoff) {
     throw new Error(
-      `No hands-on sign-off found. Start Rundock from the release branch, try the test list in the browser, ` +
-      `then record it yourself, at a terminal: ${command}`
+      `No sign-off found for tree ${headTree.slice(0, 12)}. A sign-off records the hands-on check of the tree being tagged: ` +
+      `where the release summary calls for one, start Rundock from the release branch and try the test list in the browser. ` +
+      `Then sign it off at a terminal: ${command}\n` +
+      'A sign-off given in chat is recorded by the agent it was given to, with --on-instruction and the words verbatim, ' +
+      'and only when it was actually given.'
     );
   }
   if (signoff.tree !== headTree) {
     throw new Error(
-      `The hands-on check was signed off on tree ${String(signoff.tree).slice(0, 12)} but the commit being tagged has tree ${headTree.slice(0, 12)}. ` +
-      `Something changed after the check: try this tree from source and sign off again (${command}).`
+      `This release was signed off on tree ${String(signoff.tree).slice(0, 12)} but the commit being tagged has tree ${headTree.slice(0, 12)}: ` +
+      `something changed after the sign-off. Sign this tree off again, at a terminal (${command}) or, when it is given in chat, ` +
+      'with --on-instruction, and do the hands-on check again where the release summary calls for one.'
     );
   }
   const kind = signoffKind(signoff);
@@ -508,7 +516,8 @@ function publishRelease(version, { api = ghApi, log = (msg) => console.log(`[rel
 // working --confirm, so publish can never be run by copying the previous
 // step's own output. See Ratchet-Log "A split command is not a control",
 // 2026-08-27: publish and tag were already separate commands specifically
-// so a human decides when the last one runs, and nothing but that naming
+// so a person decides when the last one runs (at a terminal, or by an
+// instruction in chat to the agent that runs it), and nothing but that naming
 // convention stopped an agent running it unprompted mid-task. A stale
 // confirmation for a different version does not satisfy this, so an old
 // command cannot be reused for a new release by habit.

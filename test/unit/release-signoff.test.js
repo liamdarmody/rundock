@@ -279,14 +279,28 @@ test('a dirty tree, or a checkout at another version, is refused', () => {
   assert.ok(!fs.existsSync(recordFile()));
 });
 
-test('the tag check: no record names the command; a record for another tree is refused', () => {
-  assert.throws(() => requireSignoff(treeOf(work), '0.12.0', { root: work }), /No hands-on sign-off[\s\S]*npm run release -- signoff 0\.12\.0 --confirm 0\.12\.0/);
+test('the tag check: no record, or one for another tree, is refused, naming both kinds and what a sign-off records', () => {
+  // Both refusals say in words that a sign-off given in chat is recorded with
+  // --on-instruction, and neither prints a ready command for it: that is
+  // recorded only when a sign-off was actually given.
+  const noReadyChatCommand = (message) => !/<<'WORDS'|<their words>/.test(message);
+  assert.throws(() => requireSignoff(treeOf(work), '0.12.0', { root: work }), (err) =>
+    /^No sign-off found for tree [0-9a-f]{12}\. A sign-off records the hands-on check/.test(err.message)
+    && /release summary calls for one/.test(err.message)
+    && /at a terminal: npm run release -- signoff 0\.12\.0 --confirm 0\.12\.0\n/.test(err.message)
+    && /given in chat is recorded by the agent it was given to, with --on-instruction and the words verbatim, and only when it was actually given/.test(err.message)
+    && noReadyChatCommand(err.message));
   signoff('0.12.0');
   const tried = treeOf(work);
   fs.writeFileSync(path.join(work, 'README.md'), 'a fix after the check\n');
   git(work)(['add', '-A']);
   git(work)(['commit', '-m', 'fix']);
-  assert.throws(() => requireSignoff(treeOf(work), '0.12.0', { root: work }), new RegExp(`signed off on tree ${tried.slice(0, 12)}[\\s\\S]*${treeOf(work).slice(0, 12)}`));
+  assert.throws(() => requireSignoff(treeOf(work), '0.12.0', { root: work }), (err) =>
+    new RegExp(`signed off on tree ${tried.slice(0, 12)}[\\s\\S]*${treeOf(work).slice(0, 12)}`).test(err.message)
+    && /at a terminal \(npm run release -- signoff 0\.12\.0 --confirm 0\.12\.0\)/.test(err.message)
+    && /given in chat, with --on-instruction/.test(err.message)
+    && /hands-on check again where the release summary calls for one/.test(err.message)
+    && noReadyChatCommand(err.message));
 });
 
 test('the command line refuses a missing --confirm, an agent session, and an empty instruction, before touching git', () => {
