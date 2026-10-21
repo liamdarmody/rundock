@@ -36,7 +36,7 @@ const { isReadOnlyShellCommand, isDestructiveShellCommand, shellSegments } = req
 // The Code-mode verdict and the development paths live beside this file, in
 // scripts/, so they are unpacked with it (package.json asarUnpack scripts/**).
 const { codeModeVerdict, keychainVerdict } = require('./code-mode-verdict.js');
-const { lexSegments, stripHeredocs, substitutions } = require('./code-mode-parse.js');
+const { lexSegments, lexWords, stripHeredocs, substitutions } = require('./code-mode-parse.js');
 const devPaths = require('./dev-paths.js');
 const { refusalNotice, approvalNotice, sandboxBlocked } = require('./refusal-notice.js');
 
@@ -1218,10 +1218,10 @@ function segmentAt(text, at) {
   return null;
 }
 
-// The command as the check reads it: the shell's own text, with each body fed
-// to code taken out and replaced by the commands it runs, and the literals
-// that name a place returned beside it, each at its command's `<<`.
-function judgedShellText(command) {
+// The command's text with each here-document body fed to code taken out and
+// replaced by the commands it runs, and the literals that name a place
+// returned beside it, each at its command's `<<`.
+function heredocText(command) {
   const s = String(command);
   const cut = stripHeredocs(s);
   if (!cut.ok || !cut.bodies.length) return { text: s, literals: [] };
@@ -1240,6 +1240,46 @@ function judgedShellText(command) {
     for (const c of [...code.commands, ...subs.bodies]) text += c + '\n';
   }
   return { text: text + cut.text.slice(from), literals };
+}
+
+// CODE ON THE COMMAND LINE IS READ THE SAME WAY. `python3 -c`, `node -e`,
+// `ruby -e` and `perl -e` carry a program in one word, and a quoted word was
+// one token, so `python3 -c "open('/etc/hosts')"` named nothing while the same
+// code in a here-document carded. The word is still read as before; the
+// literals and commands inside it are read as well, at its command.
+const INLINE_CODE = { python: /^-[A-Za-z]*?c(.*)$/s, node: /^(?:-[A-Za-z]*?[ep]|--(?:eval|print)=?)(.*)$/s, ruby: /^-[A-Za-z]*?e(.*)$/s, perl: /^-[A-Za-z]*?[eE](.*)$/s };
+function inlineCode(text) {
+  const literals = [];
+  const commands = [];
+  let from = 0;
+  for (const seg of lexSegments(text)) {
+    const at = text.indexOf(seg.text, from);
+    if (at < 0) break;
+    from = at + seg.text.length;
+    const words = lexWords(seg.text).map(w => w.text);
+    let i = 0;
+    while (i < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i])) i++;
+    const family = interpreterFamily((words[i] || '').split('/').pop());
+    for (let k = i + 1; family && k < words.length; k++) {
+      const m = INLINE_CODE[family].exec(words[k]);
+      if (!m) continue;
+      const code = codeParts(m[1] || words[++k] || '');
+      for (const t of code.literals) literals.push({ t, at });
+      commands.push(...code.commands);
+    }
+  }
+  return { literals, commands };
+}
+
+// The command as the check reads it: its text, with what code it carries
+// read as code, and the literals in that code that name a place.
+function judgedShellText(command) {
+  const view = heredocText(command);
+  const inline = inlineCode(view.text);
+  return {
+    text: view.text + inline.commands.map(c => '\n' + c).join(''),
+    literals: [...view.literals, ...inline.literals],
+  };
 }
 
 function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), foldsCase = hostFoldsCase(), opts = {}) {
@@ -1397,20 +1437,22 @@ function hiddenWinRootOf(p, home) {
 //
 // WHY IT EXISTS. shellCrossings tokenises the command and inspects tokens that
 // look like paths, which is the right basis for a DECISION: it does not guess.
-// A path inside a quoted interpreter argument is not its own token, so the
-// tokeniser does not see it:
+// A path inside a quoted argument is not its own token, so the tokeniser does
+// not see it, unless the argument is code read as code (`python3 -c`,
+// `node -e`: see inlineCode):
 //
 //   cat /Users/me/.ssh/id_rsa                      -> a crossing, carded
-//   python3 -c "print(open('/Users/me/.ssh/id_rsa').read())"  -> not a crossing
+//   sh -c "cat /Users/me/.ssh/id_rsa"              -> not a crossing
 //
-// The second is still carded, by the risk grader, because an interpreter
-// invocation grades above "low". So nothing here is silently allowed. What was
-// wrong is what the card SAID: it asked whether a python command may run,
-// without mentioning that the command reads a file outside the workspace. The
-// facts were on screen in a form that is easy to approve without noticing.
+// The second is still carded, by the risk grader, because a shell invocation
+// grades above "low". So nothing here is silently allowed. What was wrong is
+// what the card SAID: it asked whether a command may run, without mentioning
+// that the command reads a file outside the workspace. The facts were on
+// screen in a form that is easy to approve without noticing.
 //
-// Measured across the shapes that evade the tokeniser (python -c, node -e,
-// sh -c, awk getline, command substitution): every one is carded by the risk
+// Measured across the shapes that evade the tokeniser (sh -c, awk getline,
+// command substitution, and python -c and node -e before their literals were
+// read): every one is carded by the risk
 // grader. The gap is a labelling gap, not a bypass, and this closes it by
 // adding information to a card that was already being shown.
 //

@@ -1966,6 +1966,18 @@ const MUTATIONS = [
   [SHELL_CODE, "Shell code: a literal in code is never counted as written",
     "    for (const lit of view.literals) writingWords.add(lit.t);\n",
     ""],
+  [SHELL_CODE, "Shell code: code given with -c or -e is not read as code",
+    "  const inline = inlineCode(view.text);",
+    "  const inline = { literals: [], commands: [] };"],
+  [SHELL_CODE, "Shell code: a command run from inside -c or -e code is not judged",
+    "    text: view.text + inline.commands.map(c => '\\n' + c).join(''),",
+    "    text: view.text,"],
+  [SHELL_CODE, "Shell code: code attached to its flag is not read",
+    "      const code = codeParts(m[1] || words[++k] || '');",
+    "      const code = codeParts(words[++k] || '');"],
+  [SHELL_CODE, "Shell code: node's long --eval is not read as code",
+    "|--(?:eval|print)=?)(.*)$/s",
+    ")(.*)$/s"],
 ];
 const REPORTER = ['--test-reporter', 'spec'];
 

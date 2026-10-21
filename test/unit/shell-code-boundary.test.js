@@ -282,3 +282,65 @@ describe('through the real hook', () => {
     });
   }
 });
+
+describe('code given to an interpreter on its command line is judged by its string literals', () => {
+  test('a real place in -c or -e code cards, which it did not before', () => {
+    for (const c of [
+      'python3 -c "print(open(\'/etc/hosts\').read())"',
+      "python3 -c 'print(open(\"/etc/hosts\").read())'",
+      'python3 -c"open(\'/etc/hosts\')"',
+      'python3 -u -c "\nimport sys\nprint(open(\'/etc/hosts\').read())\n"',
+      'node -e "require(\'fs\').readFileSync(\'/etc/hosts\')"',
+      'node --eval="require(\'fs\').readFileSync(\'/etc/hosts\')"',
+      'node -p "require(\'fs\').readFileSync(\'/etc/hosts\', \'utf8\')"',
+      "ruby -e 'puts File.read(\"/etc/hosts\")'",
+      "perl -ne 'print' -e 'open(my $f, \"<\", \"/etc/hosts\")'",
+    ]) {
+      assert.deepStrictEqual(places(c), [real('/etc/hosts')], c);
+    }
+  });
+
+  test('home, a secret and a command run from inside the code', () => {
+    assert.deepStrictEqual(places("python3 -c 'import os; open(os.path.expanduser(\"~/.aws/credentials\")).read()'"),
+      [real(path.join(home, '.aws', 'credentials'))]);
+    const secret = scan('python3 -c "print(open(\'$HOME/.claude/.credentials.json\').read())"');
+    assert.ok(secret && secret.crossings.some(c => c.secret === true), 'a credential the hook treats as secret');
+    assert.deepStrictEqual(places("ruby -e 'puts `cat /etc/hosts`'"), [real('/etc/hosts')]);
+  });
+
+  for (const [mode, codeMode] of MODES) {
+    test(`the same false-card shapes reach nothing here either (${mode} mode)`, () => {
+      for (const c of [
+        "python3 -c \"print('/'.join(['inbox', 'archive']))\"",
+        "python3 -c 'print(int(1e6)/1000)'",
+        'python3 -c "print(\'\\n\\n\'.join([\'a\', \'b\']))"',
+        "node -e \"console.log(['a', 'b'].join('/'), Date.now()/1000)\"",
+        'python3 -m http.server 8000',
+      ]) {
+        assert.deepStrictEqual(places(c, { codeMode }), [], c);
+      }
+    });
+  }
+});
+
+describe('the same code is judged the same way however it reaches the interpreter', () => {
+  const SAVED = '.rundock/scratch/tools/show.py';
+  const BENIGN = 'parts = ["inbox", "2026"]\nprint("/".join(parts), int(stamp)/1000, "\\n\\n== done")';
+  const OUTSIDE = 'print(open("/etc/hosts").read())';
+  const routes = code => [
+    `cat > ${SAVED} <<'PY'\n${code}\nPY\npython3 ${SAVED}`,
+    `python3 - <<'PY'\n${code}\nPY`,
+    `python3 -c '${code}'`,
+  ];
+
+  test('benign code raises nothing: saved by a file tool and run, saved by a here-document and run, run from one, or given with -c', () => {
+    const write = hook.classifyFileAccess('Write', { file_path: path.join(ws, SAVED), content: BENIGN }, ws, [], home);
+    assert.strictEqual(write.where, 'inside', 'the file tool saves inside the workspace');
+    assert.strictEqual(scan(`python3 ${SAVED}`), null, 'and running the saved script names nothing');
+    for (const c of routes(BENIGN)) assert.deepStrictEqual(places(c), [], c);
+  });
+
+  test('code naming a real outside file cards on every route the check can read', () => {
+    for (const c of routes(OUTSIDE)) assert.deepStrictEqual(places(c), [real('/etc/hosts')], c);
+  });
+});
