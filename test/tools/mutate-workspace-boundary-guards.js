@@ -229,6 +229,10 @@ const CONNECTOR_HOOK = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), 
 const CONNECTOR_CLIENT = { src: path.join(ROOT, 'public', 'permissions.js'), suite: 'test/unit/connector-grading.test.js' };
 const CONNECTOR_HOOK_FLOW = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/integration/connector-approvals.test.js' };
 const CONNECTOR_CLIENT_FLOW = { src: path.join(ROOT, 'public', 'permissions.js'), suite: 'test/integration/connector-approvals.test.js' };
+// A saved "Always allow" for a send is dropped by the store and refused by the
+// handler, both proven through the real server.
+const CONNECTOR_STORE_FLOW = { src: path.join(ROOT, 'lib', 'workspace', 'boundary.js'), suite: 'test/integration/connector-approvals.test.js' };
+const CONNECTOR_HANDLER_FLOW = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'workspace.js'), suite: 'test/integration/connector-approvals.test.js' };
 
 const MUTATIONS = [
   // ===== ONE DIRECTORY UNDER TWO NAMES IS ONE IDENTITY =====
@@ -1509,6 +1513,16 @@ const MUTATIONS = [
   [CONNECTOR_CLIENT, 'Connector send: the client forgets forward',
     "  const MCP_SEND_VERBS = ['send', 'resend', 'reply', 'forward'];",
     "  const MCP_SEND_VERBS = ['send', 'resend', 'reply'];"],
+  // Read a saved send back and Settings lists an allow that never answers.
+  [CONNECTOR_STORE_FLOW, 'Connector send: a saved allow for a send is read back',
+    "data.allowedTools.filter((k) => typeof k === 'string' && k && !isMcpSendTool(k))",
+    "data.allowedTools.filter((k) => typeof k === 'string' && k)"],
+  [CONNECTOR_HANDLER_FLOW, 'Connector send: an allow for a send is saved again',
+    '  if (isMcpSendTool(msg.key.trim())) {',
+    '  if (false) {'],
+  [CONNECTOR_HOOK, 'Connector send: a tool that is not a connector is taken for a send',
+    "  return String(toolName).startsWith('mcp__') && mcpActionWords(toolName).some(t => MCP_SEND_VERBS.has(t));",
+    '  return mcpActionWords(toolName).some(t => MCP_SEND_VERBS.has(t));'],
   // ===== STOP AND ASK AFTER A REFUSAL =====
   [STOP_ASK_HOOK, "Stop and ask: a denied card goes back to inviting another route",
     ": refusalNotice(result.reason === 'timeout' ? 'timeout' : 'denied', data.tool_name);",

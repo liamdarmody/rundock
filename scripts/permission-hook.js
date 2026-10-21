@@ -288,17 +288,25 @@ const MCP_DESTRUCTIVE_VERBS = new Set(['delete','remove','destroy','drop','cance
 // public/permissions.js), so a send asks every time and is never remembered.
 const MCP_SEND_VERBS = new Set(['send','resend','reply','forward']);
 const MCP_READ_VERBS = new Set(['get','list','search','find','read','fetch','retrieve','query','export','view','describe','show','info','overview','status','count','available','daily','review','recent','collaborators','comments','activity']);
-function isMcpReadTool(toolName) {
-  const action = String(toolName).split('__').slice(2).join('_');
-  if (!action) return false;
-  const tokens = action
+// The words of a connector action: the tool name after its server prefix.
+function mcpActionWords(toolName) {
+  return String(toolName).split('__').slice(2).join('_')
     .replace(/([a-z0-9])([A-Z])/g, '$1 $2') // split camelCase
     .split(/[_\-\s]+/)
     .map(t => t.toLowerCase())
     .filter(Boolean);
+}
+function isMcpReadTool(toolName) {
+  const tokens = mcpActionWords(toolName);
   if (tokens.some(t => MCP_DESTRUCTIVE_VERBS.has(t) || MCP_SEND_VERBS.has(t))) return false;
   if (tokens.some(t => MCP_READ_VERBS.has(t))) return true;
   return false;
+}
+// A connector action that sends, replies or forwards. The saved answers never
+// hold one (lib/workspace/boundary.js): it asks every time, so a saved
+// "Always allow" for it could never answer anything.
+function isMcpSendTool(toolName) {
+  return String(toolName).startsWith('mcp__') && mcpActionWords(toolName).some(t => MCP_SEND_VERBS.has(t));
 }
 
 // Deny a direct file edit to the GLOBAL Claude Code agent/skill config
@@ -1433,7 +1441,7 @@ function classifyShellAccess(toolName, toolInput, workspaceRoot, extraDirs = [],
 
 module.exports = {
   isProtectedClaudeEdit, isRuntimeHomeSurfaceEdit, isMcpReadTool, classifyFileAccess, classifyShellAccess, canonicalize,
-  MCP_READ_VERBS, MCP_DESTRUCTIVE_VERBS, MCP_SEND_VERBS,
+  MCP_READ_VERBS, MCP_DESTRUCTIVE_VERBS, MCP_SEND_VERBS, isMcpSendTool,
   advisoryOutsidePaths,
   isSecretPath, isPersistenceSurface, SECRET_RELATIVE_PATHS, PERSISTENCE_SURFACE_DIRS, PERSISTENCE_SURFACE_FILES,
   CODEX_SECRET_RELATIVE_PATHS, CODEX_PERSISTENCE_SURFACE_DIRS, CODEX_PERSISTENCE_SURFACE_FILES,

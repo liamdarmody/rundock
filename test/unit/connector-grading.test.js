@@ -60,6 +60,24 @@ describe('a connector action that sends is graded like a delete', () => {
     // A connector named for sending still has reads.
     assert.strictEqual(hook.isMcpReadTool('mcp__example_send__list_templates'), true);
     assert.strictEqual(P.classifyRisk('mcp__example_forward__create_rule', {}), 'medium');
+    assert.strictEqual(hook.isMcpSendTool('mcp__example_forward__create_rule'), false);
+  });
+});
+
+describe('which saved answers name a connector send', () => {
+  // The store of saved answers drops these (lib/workspace/boundary.js), so
+  // this decides which "Always allow" answers a workspace keeps.
+  test('every send, reply and forward', () => {
+    for (const action of SENDS) assert.strictEqual(hook.isMcpSendTool(tool(action)), true, action);
+  });
+
+  test('never a lookalike, another write, or a tool that is not a connector', () => {
+    for (const action of [...Object.keys(LOOKALIKES), 'create_draft', 'update_event']) {
+      assert.strictEqual(hook.isMcpSendTool(tool(action)), false, action);
+    }
+    for (const key of ['Bash:send', 'Bash', 'WebFetch', 'plugin__mail__send', 'Bash:git-push:default-branch']) {
+      assert.strictEqual(hook.isMcpSendTool(key), false, key);
+    }
   });
 });
 

@@ -11,6 +11,7 @@
 // agent in it send email without asking again.
 const { test, describe, before, after } = require('node:test');
 const assert = require('node:assert');
+const fs = require('node:fs');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { JSDOM } = require('jsdom');
@@ -23,6 +24,7 @@ const MAIL = (action) => `mcp__example_mail__${action}`;
 
 let client;
 let chat;
+let settings;
 let dom;
 // Everything the view sent, in order. It goes to the real server as well.
 const sent = [];
@@ -33,7 +35,7 @@ before(async () => {
   // The chat view as index.html loads it: browser modules reaching their
   // siblings as globals. Its socket is this test's own connection to the real
   // server, so what a button sends is what the server acts on.
-  dom = new JSDOM('<!doctype html><div id="messages"></div>'
+  dom = new JSDOM('<!doctype html><div id="messages"></div><div id="tool-allows-block"></div>'
     + '<div id="approvals-dock" hidden><span class="approvals-dock-count"></span><div class="approvals-dock-list"></div></div>');
   global.window = dom.window;
   global.document = dom.window.document;
@@ -52,6 +54,10 @@ before(async () => {
   global.renderConvoList = () => {};
   global.ws = { readyState: 1, send: (s) => { sent.push(JSON.parse(s)); client.ws.send(s); } };
   chat = require('../../public/views/chat.js');
+  // Settings reaches the view's saved set as a bare global, which the browser
+  // publishes from chat.js's export list.
+  global.setStandingToolAllows = chat.setStandingToolAllows;
+  settings = require('../../public/views/settings.js');
 });
 after(async () => {
   await h.shutdown();
@@ -154,6 +160,74 @@ describe('names that only look like a send are graded as before', () => {
     const r = await request(MAIL('sender_lookup'));
     assert.deepStrictEqual(r.buttons, ['allow', 'always', 'deny']);
     assert.strictEqual((await press(r, 'deny')).decision, 'deny');
+  });
+});
+
+// What an earlier release left when "Always allow" was pressed on a send: the
+// key in the workspace's saved answers, beside answers that still count.
+function saveAnswersAsBefore(tools) {
+  const file = path.join(h.workspaceDir, '.rundock', 'permissions.json');
+  let data = {};
+  try { data = JSON.parse(fs.readFileSync(file, 'utf-8')); } catch (e) { /* none saved yet */ }
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify({ ...data, allowedTools: tools }, null, 2));
+  return file;
+}
+// The saved answers as a reload reads them, handed to Settings the way app.js
+// hands them over, which is also what fills the set the cards consult.
+async function reloadSavedAnswers() {
+  const since = client.messages.length;
+  client.send({ type: 'get_tool_allows' });
+  const { msg } = await client.waitFor((m) => m.type === 'tool_allows', { since, label: 'the saved answers' });
+  settings.toolAllowsArrived(msg);
+  return msg.tools;
+}
+
+describe('a saved Always allow for a send', () => {
+  test('is dropped: not listed, not consulted, and the send asks again', async () => {
+    saveAnswersAsBefore([MAIL('send_message'), MAIL('create_label'), 'Bash:git']);
+    const tools = await reloadSavedAnswers();
+    assert.deepStrictEqual(tools, [MAIL('create_label'), 'Bash:git'], 'the other saved answers are untouched');
+    assert.doesNotMatch(document.getElementById('tool-allows-block').innerHTML, /send_message/,
+      'Settings does not list an allow that can never answer anything');
+
+    const send = await request(MAIL('send_message'));
+    assert.strictEqual(send.answeredByRule, false);
+    assert.deepStrictEqual(send.buttons, ['allow', 'deny']);
+    assert.strictEqual((await press(send, 'deny')).decision, 'deny');
+
+    const label = await request(MAIL('create_label'));
+    assert.strictEqual(label.answeredByRule, true, 'a saved answer for another action still answers it');
+    assert.strictEqual((await label.done).decision, 'allow');
+  });
+
+  test('still asks when the view holds the key from before', async () => {
+    chat.setStandingToolAllows([MAIL('send_message')]);
+    const send = await request(MAIL('send_message'));
+    assert.strictEqual(send.answeredByRule, false);
+    assert.deepStrictEqual(send.buttons, ['allow', 'deny']);
+    assert.strictEqual((await press(send, 'deny')).decision, 'deny');
+  });
+
+  test('leaves the file the next time the saved answers are written', async () => {
+    const file = saveAnswersAsBefore([MAIL('send_message'), 'Bash:git']);
+    const since = client.messages.length;
+    client.send({ type: 'add_tool_allow', key: MAIL('create_folder') });
+    await client.waitFor((m) => m.type === 'tool_allows', { since, label: 'the new answer saved' });
+    assert.deepStrictEqual(JSON.parse(fs.readFileSync(file, 'utf-8')).allowedTools, ['Bash:git', MAIL('create_folder')]);
+  });
+
+  test('cannot be saved again', async () => {
+    const file = saveAnswersAsBefore(['Bash:git']);
+    for (const action of ['send_message', 'replyToThread']) {
+      const since = client.messages.length;
+      client.send({ type: 'add_tool_allow', key: MAIL(action) });
+      const { msg } = await client.waitFor((m) => m.type === 'tool_allow_failed' || m.type === 'tool_allows',
+        { since, label: 'the answer to the save' });
+      assert.strictEqual(msg.type, 'tool_allow_failed', action);
+      assert.strictEqual(msg.key, MAIL(action));
+    }
+    assert.deepStrictEqual(JSON.parse(fs.readFileSync(file, 'utf-8')).allowedTools, ['Bash:git']);
   });
 });
 
