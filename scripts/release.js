@@ -11,7 +11,7 @@
  *   npm run release:gate                    # what CI cannot do, on the candidate's exact tree
  *   ...write the release summary; where it flags a hands-on check, try the candidate from source...
  *   npm run release -- signoff <version> --confirm <version>   # sign off this tree, yourself
- *       (or, given in chat: add --on-instruction "<their words>", and the agent records it)
+ *       (or, given in chat: the agent adds --on-instruction - and passes the words on stdin)
  *   ...merge that pull request...
  *   npm run release -- tag <version>        # tag the merged commit, which starts the build
  *   ...watch the build, review the draft it publishes...
@@ -198,7 +198,9 @@ function requireGatePass(headTree, { root = ROOT } = {}) {
 // command satisfies none of these.
 //
 // IN CHAT, the sign-off is given to an agent, which records it with
-// --on-instruction carrying the words verbatim. That lifts the session and
+// --on-instruction carrying the words verbatim: on stdin with `-`, which is
+// the form printed and documented because nothing in the words passes
+// through the shell, or inline as the next argument. That lifts the session and
 // terminal refusals and nothing else: --confirm, the clean tree and the
 // version are checked as before, and the record says `given: "chat"` with the
 // words beside the tree. It is an audit trail, not proof of who typed the
@@ -238,29 +240,64 @@ function askAtTerminal(prompt, { open = () => fs.openSync('/dev/tty', 'r+') } = 
   }
 }
 
-// The words of a sign-off given in chat, from --on-instruction: null when the
-// flag is absent, and '' when it has no words after it (nothing, blanks, or
-// the next flag where the words should be), which is refused.
-function instructionFrom(argv) {
-  const i = argv.indexOf('--on-instruction');
-  if (i === -1) return null;
-  const words = argv[i + 1];
-  return typeof words === 'string' && words.trim() && !words.startsWith('--') ? words : '';
+// Whether words hold anything a reader could see: not only whitespace,
+// control and format characters (zero-width spaces and joiners, a byte-order
+// mark).
+function hasVisibleWords(words) {
+  return typeof words === 'string' && words.replace(/[\s\p{Cc}\p{Cf}]/gu, '') !== '';
+}
+
+// The way every refusal prints to give the words of a chat sign-off: on
+// stdin, through a here-document whose quoted delimiter keeps the shell from
+// expanding anything in them. It starts on a line of its own, so its closing
+// line is still at the start of a line when copied.
+function onInstructionForm(command) {
+  return `${command} --on-instruction - <<'WORDS'\n<their words>\nWORDS`;
+}
+
+// The words of a sign-off given in chat, or null when --on-instruction is
+// absent. `-` reads them from stdin, all of it less the one newline a
+// here-document ends with; anything else after the flag is the words, inline.
+// Every form that could record something other than the words given is
+// refused, naming the form to use: an "=" form, the flag twice, inline words
+// that begin with "--" (they read as the next flag), and words with nothing
+// visible in them. A refusal never repeats the words.
+function instructionFrom(argv, readStdin, form) {
+  if (argv.some((a) => a.startsWith('--on-instruction='))) {
+    throw new Error(`--on-instruction takes its words as the next argument, or on stdin as "-", never after "=":\n${form}`);
+  }
+  const at = argv.flatMap((a, i) => (a === '--on-instruction' ? [i] : []));
+  if (!at.length) return null;
+  if (at.length > 1) {
+    throw new Error(`--on-instruction is given ${at.length} times, and a sign-off records one instruction:\n${form}`);
+  }
+  let words = argv[at[0] + 1];
+  if (words === '-') {
+    try {
+      words = readStdin().replace(/\n$/, '');
+    } catch (err) {
+      throw new Error(`The words could not be read from stdin (${err.code || err.message}):\n${form}`);
+    }
+  } else if (typeof words === 'string' && words.startsWith('--')) {
+    throw new Error(`--on-instruction is followed by something that begins with "--", which reads as the next flag: inline words cannot begin with "--". Give them on stdin:\n${form}`);
+  }
+  if (!hasVisibleWords(words)) {
+    throw new Error(`--on-instruction needs the words the sign-off was given in, verbatim, and has none with anything visible in them:\n${form}`);
+  }
+  return words;
 }
 
 function signoffRelease(version, {
   root = ROOT, git = gitIn(root), argv = process.argv, env = process.env, ask = askAtTerminal, now = () => new Date(), log = logStep,
+  readStdin = () => fs.readFileSync(0, 'utf8'),
 } = {}) {
   const command = `npm run release -- signoff ${version} --confirm ${version}`;
   if (!hasConfirmation(argv, version)) {
-    throw new Error(`A sign-off needs --confirm naming the version you tried from source:\n    ${command}`);
+    throw new Error(`A sign-off needs --confirm naming the version being signed off:\n    ${command}`);
   }
-  const instruction = instructionFrom(argv);
-  const inChat = `${command} --on-instruction "<their words>"`;
-  if (instruction === '') {
-    throw new Error(`--on-instruction needs the words the sign-off was given in, verbatim:\n    ${inChat}`);
-  }
-  const givenInChat = `If it was given to you in chat, record it with the words verbatim: ${inChat}`;
+  const form = onInstructionForm(command);
+  const instruction = instructionFrom(argv, readStdin, form);
+  const givenInChat = `If it was given to you in chat, record it with the words verbatim, on stdin:\n${form}`;
   if (instruction === null && env.CLAUDECODE) {
     throw new Error(`This is running inside an agent session. The hands-on check is yours: run the sign-off yourself, at a terminal.\n${givenInChat}`);
   }
@@ -285,7 +322,10 @@ function signoffRelease(version, {
     record = { given: 'terminal', tree, version, signedAt: now().toISOString(), ...(note ? { note } : {}) };
   }
   fs.writeFileSync(signoffPath({ root, git }), JSON.stringify(record, null, 2) + '\n');
-  log('signoff', `Recorded the hands-on check of ${version} on tree ${tree.slice(0, 12)}, ${SIGNED_OFF[record.given]}`);
+  // What was recorded, never the words, and no claim of a hands-on check.
+  log('signoff', record.given === 'chat'
+    ? `Recorded a sign-off given in chat for ${version} on tree ${tree.slice(0, 12)}`
+    : `Recorded a sign-off typed at the terminal for ${version} on tree ${tree.slice(0, 12)}`);
   return record;
 }
 
@@ -294,7 +334,7 @@ function signoffRelease(version, {
 // kind, is not one signoffRelease writes, and is null.
 function signoffKind(record) {
   if (record.given === undefined || record.given === 'terminal') return 'terminal';
-  if (record.given === 'chat' && typeof record.instruction === 'string' && record.instruction.trim()) return 'chat';
+  if (record.given === 'chat' && hasVisibleWords(record.instruction)) return 'chat';
   return null;
 }
 
@@ -680,7 +720,7 @@ const USAGE = [
   'Usage:',
   '  npm run release -- bump <version>                       write the version and promote the changelog, to commit with the candidate',
   '  npm run release -- signoff <version> --confirm <version>   after trying the candidate from source yourself, record it for its tree',
-  '  npm run release -- signoff <version> --confirm <version> --on-instruction "<their words>"   record a sign-off given in chat, with the words verbatim',
+  "  npm run release -- signoff <version> --confirm <version> --on-instruction - <<'WORDS'   record a sign-off given in chat: its words follow on stdin, verbatim, then a line WORDS",
   '  npm run release -- tag <version>                        after the gated, signed-off release pull request merges, tag the merged commit',
   '  npm run release -- publish <version> --confirm <version>   publish the draft release CI built for that tag, only after you have tested it yourself',
 ].join('\n');
