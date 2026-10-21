@@ -20,7 +20,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 
-const { bumpRelease, tagRelease, SIGNOFF_FILE_NAME } = require('../../scripts/release.js');
+const { bumpRelease, tagRelease, signoffRelease, extractChangelogEntry, SIGNOFF_FILE_NAME } = require('../../scripts/release.js');
 const { GATE_FILE_NAME, runGate } = require('../../scripts/release-gate.js');
 const { REQUIRED_CI_CHECKS } = require('../../scripts/release-ci.js');
 
@@ -64,9 +64,10 @@ function writeGateRecord(tree, { live = true, ci = { checks: { E2E: { run: 1 } }
 }
 
 // What `release -- signoff` leaves behind: the hands-on check from source,
-// recorded for one tree in git's common directory.
-function writeSignoff(tree) {
-  fs.writeFileSync(path.join(work, '.git', SIGNOFF_FILE_NAME), JSON.stringify({ tree, version: '0.12.0', signedAt: '2026-08-26T10:00:00Z' }));
+// recorded for one tree in git's common directory. With nothing else given it
+// is a record from before sign-offs said how they were given.
+function writeSignoff(tree, how = {}) {
+  fs.writeFileSync(path.join(work, '.git', SIGNOFF_FILE_NAME), JSON.stringify({ tree, version: '0.12.0', signedAt: '2026-08-26T10:00:00Z', ...how }));
 }
 
 beforeEach(() => {
@@ -176,8 +177,12 @@ describe('release:tag tags what actually merged, and only a gated tree', () => {
     assert.notStrictEqual(merged, gatedCommit, 'the merge made a new commit');
     assert.strictEqual(treeOf(merged), treeOf(gatedCommit), 'with the same tree');
 
-    const result = tagRelease('0.12.0', { root: work, log: () => {} });
+    const lines = [];
+    const result = tagRelease('0.12.0', { root: work, log: (step, msg) => lines.push(msg) });
 
+    // The sign-off here is a record from before sign-offs said how they were
+    // given, which still counts, as one typed at the terminal.
+    assert.ok(lines.some((l) => l.endsWith(`Tree ${treeOf(merged).slice(0, 12)} was signed off in the terminal`)), lines.join('\n'));
     assert.strictEqual(result.tag, 'v0.12.0');
     assert.strictEqual(inOrigin(['tag', '-l']), 'v0.12.0', 'exactly one tag on the remote');
     assert.strictEqual(inOrigin(['rev-list', '-n', '1', 'v0.12.0']), merged, 'the tag is on the merged commit');
@@ -216,6 +221,95 @@ describe('release:tag tags what actually merged, and only a gated tree', () => {
     const tried = treeOf('HEAD');
     fs.writeFileSync(path.join(work, 'README.md'), 'Rundock, fixed after the check\n');
     inWork(['commit', '-am', 'a fix after the hands-on check']);
+    writeGateRecord(treeOf('HEAD'));
+    merge();
+    assert.throws(() => tagRelease('0.12.0', { root: work, log: () => {} }), new RegExp(`signed off on tree ${tried.slice(0, 12)}[\\s\\S]*${treeOf('HEAD').slice(0, 12)}`));
+    assert.strictEqual(inOrigin(['tag', '-l']), '', 'nothing tagged');
+  });
+
+  test('after tagging, the next steps name publish with a placeholder for --confirm, never a working one', () => {
+    candidate();
+    merge();
+    const lines = [];
+    tagRelease('0.12.0', { root: work, log: (step, msg) => lines.push([step, msg]) });
+    const done = lines.filter(([step]) => step === 'done').map(([, msg]) => msg);
+    assert.ok(done.includes('Once you have decided v0.12.0 is ready for everyone: npm run release -- publish 0.12.0 --confirm <version>'), done.join('\n'));
+    assert.ok(done.some((msg) => /Do not publish yet/.test(msg)), done.join('\n'));
+    // Publishing cannot be started by copying the tag's own output.
+    assert.ok(lines.every(([, msg]) => !/--confirm 0\.12\.0/.test(msg)), lines.map(([, msg]) => msg).join('\n'));
+  });
+
+  test('a sign-off typed at the terminal lets the tag through, and the tag says so', () => {
+    candidate('0.12.0', { signoff: false });
+    writeSignoff(treeOf('HEAD'), { given: 'terminal', note: 'tried the list' });
+    merge();
+    const lines = [];
+    tagRelease('0.12.0', { root: work, log: (step, msg) => lines.push(msg) });
+    assert.ok(lines.some((l) => /was signed off in the terminal$/.test(l)), lines.join('\n'));
+    assert.ok(!lines.some((l) => /in chat/.test(l)), lines.join('\n'));
+    assert.strictEqual(inOrigin(['tag', '-l']), 'v0.12.0');
+  });
+
+  test('a sign-off given in chat lets the tag through, the tag says so, and its words go nowhere the release goes', () => {
+    // A word that appears nowhere else, so finding it anywhere is the leak.
+    const words = 'sign off 0.12.0, the zebraquartz walk looked right';
+    candidate('0.12.0', { signoff: false });
+    writeSignoff(treeOf('HEAD'), { given: 'chat', instruction: words });
+    merge();
+    const lines = [];
+    tagRelease('0.12.0', { root: work, log: (step, msg) => lines.push(`${step} ${msg}`) });
+
+    assert.ok(lines.some((l) => /was signed off in chat on instruction$/.test(l)), lines.join('\n'));
+    assert.ok(lines.every((l) => !l.includes('zebraquartz')), 'the tag never prints the words');
+    const notes = extractChangelogEntry('0.12.0', gitAt(origin)(['show', 'v0.12.0:CHANGELOG.md']));
+    assert.ok(notes && !`${notes.title}\n${notes.body}`.includes('zebraquartz'), 'the release notes do not carry them');
+    // Nothing the remote holds carries them: no commit message, tag, tree or file.
+    const objects = inOrigin(['rev-list', '--all', '--objects']).split('\n').filter(Boolean);
+    assert.ok(objects.length > 0);
+    for (const line of objects) {
+      assert.ok(!gitAt(origin)(['cat-file', '-p', line.split(' ')[0]]).includes('zebraquartz'), `pushed object ${line}`);
+    }
+    assert.strictEqual(inWork(['status', '--porcelain']), '', 'nothing in the working tree to commit');
+    assert.strictEqual(inOrigin(['tag', '-l']), 'v0.12.0');
+  });
+
+  test('end to end: a sign-off given in chat, recorded by the real command, lets the tag through and goes nowhere the release goes', () => {
+    candidate('0.12.0', { signoff: false });
+    const words = 'sign off 0.12.0: the quartzzebra list passed, `ship` it';
+    const said = [];
+    // As an agent records it: in an agent session, with no terminal, the
+    // words on stdin.
+    signoffRelease('0.12.0', {
+      root: work,
+      argv: ['node', 'release.js', 'signoff', '0.12.0', '--confirm', '0.12.0', '--on-instruction', '-'],
+      env: { CLAUDECODE: '1' },
+      ask: () => { throw Object.assign(new Error('Device not configured'), { code: 'ENXIO' }); },
+      readStdin: () => `${words}\n`,
+      stdinIsTerminal: () => false,
+      notice: (line) => said.push(line),
+      log: (step, msg) => said.push(msg),
+    });
+    merge();
+    tagRelease('0.12.0', { root: work, log: (step, msg) => said.push(msg) });
+
+    assert.strictEqual(inOrigin(['tag', '-l']), 'v0.12.0');
+    assert.ok(said.some((l) => /^Recorded a sign-off given in chat for 0\.12\.0 on tree /.test(l)), said.join('\n'));
+    assert.ok(said.some((l) => /was signed off in chat on instruction$/.test(l)), said.join('\n'));
+    assert.ok(said.every((l) => !l.includes('quartzzebra')), 'neither step prints the words');
+    const notes = extractChangelogEntry('0.12.0', gitAt(origin)(['show', 'v0.12.0:CHANGELOG.md']));
+    assert.ok(notes && !`${notes.title}\n${notes.body}`.includes('quartzzebra'), 'the release notes do not carry them');
+    for (const line of inOrigin(['rev-list', '--all', '--objects']).split('\n').filter(Boolean)) {
+      assert.ok(!gitAt(origin)(['cat-file', '-p', line.split(' ')[0]]).includes('quartzzebra'), `pushed object ${line}`);
+    }
+    assert.strictEqual(inWork(['status', '--porcelain']), '', 'nothing in the working tree to commit');
+  });
+
+  test('a sign-off given in chat for a different tree is refused, naming both trees', () => {
+    candidate('0.12.0', { signoff: false });
+    const tried = treeOf('HEAD');
+    writeSignoff(tried, { given: 'chat', instruction: 'sign off 0.12.0' });
+    fs.writeFileSync(path.join(work, 'README.md'), 'Rundock, fixed after the sign-off\n');
+    inWork(['commit', '-am', 'a fix after the sign-off']);
     writeGateRecord(treeOf('HEAD'));
     merge();
     assert.throws(() => tagRelease('0.12.0', { root: work, log: () => {} }), new RegExp(`signed off on tree ${tried.slice(0, 12)}[\\s\\S]*${treeOf('HEAD').slice(0, 12)}`));
@@ -357,7 +451,16 @@ describe('the command line', () => {
     assert.match(out, /bump <version>/);
     assert.match(out, /tag <version>/);
     assert.match(out, /signoff <version> --confirm <version>/);
+    assert.match(out, /signoff <version> --confirm <version> --on-instruction - <<'END_OF_SIGNOFF_WORDS'   record a sign-off given in chat/);
     assert.match(out, /publish <version>/);
+  });
+
+  test('publish without --confirm refuses, naming --confirm with a placeholder, never a working command', () => {
+    const { code, out } = releaseCli(['publish', '0.12.0']);
+    assert.strictEqual(code, 1);
+    assert.match(out, /npm run release -- publish 0\.12\.0 --confirm <version>\n/);
+    // Publishing cannot be started by copying its own refusal.
+    assert.doesNotMatch(out, /--confirm 0\.12\.0/);
   });
 
   test('an unknown subcommand says which one it did not recognise', () => {

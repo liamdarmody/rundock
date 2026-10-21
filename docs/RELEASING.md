@@ -11,8 +11,9 @@ npm run release -- bump <version>       # version + promoted changelog, committe
 ...push the candidate and open its pull request; wait for CI to finish on it...
 npm run walk                            # the release walk: use the product (the gate runs it too)
 npm run release:gate                    # what CI cannot do, on the candidate's exact tree
-...start Rundock from the candidate and try the test list in the browser...
-npm run release -- signoff <version> --confirm <version>   # record that check for this tree, yourself
+...write the release summary in the pull request; where it flags a hands-on check, try the candidate from source...
+npm run release -- signoff <version> --confirm <version>   # sign off this tree, at a terminal
+...or, when the sign-off is given in chat, the agent records it with --on-instruction (see below)...
 ...merge the pull request...
 npm run release -- tag <version>        # tag the merged commit, which starts the build
 npm run release -- publish <version> --confirm <version>   # publish the reviewed draft
@@ -49,33 +50,95 @@ commit with the same content needs no second gate, and any difference is
 refused. If main moved under the pull request, the merged tree differs: run the
 gate again on main once CI has finished there.
 
+## The release summary
+
+Once the gate has passed, the candidate gets a short summary in the release
+pull request's description: what changed, what is risky, what was tested,
+and whether a hands-on check is worth it. The summary flags the hands-on
+check for this release. It is required when the release changes security,
+permissions or data-loss behaviour, and optional otherwise. The pull
+requests merged into the release are reported there too (see
+[Pull requests and merges](#pull-requests-and-merges)).
+
 ## The hands-on check and its sign-off
 
-Before the cut, and never after the build: start Rundock from the release
-branch on your own machine, signed in to the real runtime, and try the short
-test list for this release in the browser. The desktop draft that `tag`
-builds is a final smoke test, not the place to find a release blocker,
-because a finding there costs a full recut.
+Where the summary calls for a hands-on check, do it before the cut, and never
+after the build: start Rundock from the release branch on your own machine,
+signed in to the real runtime, and try the short test list for this release
+in the browser. The desktop draft that `tag` builds is a final smoke test,
+not the place to find a release blocker, because a finding there costs a
+full recut.
 
-Then record it, at a terminal:
+Then sign the tree off. `release -- tag` refuses without a sign-off for
+exactly the tree it tags, naming the command, whether or not the release
+called for a hands-on check. A sign-off is given in one of two ways.
+
+**In the terminal**, by running it yourself:
 
 ```
 npm run release -- signoff <version> --confirm <version>
 ```
 
-It asks one thing, an optional note, and writes the tree, the version, the
-time and the note to `rundock-release-signoff.json` in git's common
-directory, so a sign-off made in a worktree on the release branch is seen by
-the checkout that tags, and it can never be committed. `release -- tag`
-refuses without a sign-off for exactly the tree it tags, naming this command.
-A fix merged after the check changes the tree, so it needs the check again.
+`--confirm` must name the version; the command refuses inside an agent
+session (Claude Code sets `CLAUDECODE` for every command it runs); and it
+asks one thing, an optional note, read from the controlling terminal, never
+from stdin or arguments, so nothing can be piped into it and a shell without
+a terminal is refused. Copying a printed command satisfies none of these.
 
-**It is yours to run, not an agent's.** `--confirm` must name the version;
-the command refuses inside an agent session (Claude Code sets `CLAUDECODE`
-for every command it runs); and the note is read from the controlling
-terminal, never from stdin or arguments, so nothing can be piped into it and
-a shell without a terminal is refused. Copying a printed command satisfies
-none of these.
+**In chat**, by telling the agent running the release. The agent records it
+with the words verbatim, on stdin, through a here-document whose quoted
+delimiter keeps the shell from expanding anything in them:
+
+```
+npm run release -- signoff <version> --confirm <version> --on-instruction - <<'END_OF_SIGNOFF_WORDS'
+<their words>
+END_OF_SIGNOFF_WORDS
+```
+
+Everything between the first line and the closing `END_OF_SIGNOFF_WORDS`
+line is recorded as given, backticks, `$` and quotes included; the newline
+before it is not part of the words. If any line of the words is exactly
+`END_OF_SIGNOFF_WORDS`, choose another delimiter, in both places: a line
+that matches it ends the here-document early. `-` reads until the end of
+input, so use it only with the here-document or a pipe: with a terminal on
+stdin it is refused rather than left waiting. This is the form every
+sign-off refusal prints.
+
+The words can also be given inline, as the argument after the flag,
+single-quoted: `--on-instruction '<their words>'`. A `'` inside the words
+is then written `'\''`. Inline words that begin with `--` are refused,
+because they read as the next flag; on stdin they are fine. Never put the
+words in double quotes: the shell substitutes backticks and expands `$`
+inside them before the command sees them.
+
+This lifts the agent-session and terminal refusals and nothing else:
+`--confirm` must still name the version, and the tree must be clean and
+carry that version. Of the forms that could record something other than
+the words given, every form the command can recognise is refused:
+`--on-instruction=<their words>`, the flag given twice, the placeholder
+`<their words>` left as printed, and words with nothing visible in them
+(only whitespace, zero-width characters or a byte-order mark). It cannot
+recognise words a shell has already rewritten
+in double quotes, or a here-document cut short by its own delimiter, which
+is why the forms above are the ones to use. Publishing is run the same way,
+on an instruction given in chat, with `--confirm`.
+
+**What each proves.** A terminal sign-off shows it was typed at the machine.
+A chat sign-off records that an agent acted on an instruction given in chat:
+it is an audit trail, not proof of who typed the words, because on one
+machine under one identity nothing local can tell the two apart. Both bind
+to the exact tree.
+
+Either way the record goes to `rundock-release-signoff.json` in git's common
+directory, with how it was given (`terminal` or `chat`), the tree, the
+version, the time, and the note or the instruction. A sign-off made in a
+worktree on the release branch is seen by the checkout that tags, and the
+record can never be committed. The instruction stays in that local record:
+the tag step logs only which kind of sign-off it accepted, and the words
+never reach the tag, the build or the release notes. A record written before
+sign-offs said how they were given counts as a terminal sign-off. A fix
+merged after the sign-off changes the tree, so it needs signing off again,
+and the hands-on check again where the summary calls for one.
 
 **Tests go through the real handler.** Both blockers of the first 0.15.1 cut
 passed every gate because their tests reached the store, not the handler
@@ -86,14 +149,34 @@ rule key through the `add_tool_allow` handler, and
 `test/unit/putback-same-step.test.js` runs the real permission hook against
 the real router; both fail on the code of that first cut.
 
+## Pull requests and merges
+
+Opening a pull request needs no separate go: once a change is ready, its
+branch is pushed and the pull request opened.
+
+An agent may merge a pull request when CI is green on it and an independent
+review, by a reviewer that did not write the change, has passed. A person
+merges any pull request that changes what releases the product or decides
+whether it ships:
+
+- anything under `.github/`;
+- any script the release workflow, or the `release`, `release:gate` or
+  `walk` npm scripts, run or load, including `scripts/release*.js`,
+  `scripts/verify-release-draft.js` and everything under `scripts/walk/`;
+- the `package.json` entries for those npm scripts;
+- the repository's settings.
+
+Merges are reported in the release summary.
+
 ## A recut
 
 To recut an unpublished draft: delete the draft release, delete the tag here
 and on the remote (`git tag -d v<version>`, `git push origin :refs/tags/v<version>`),
 merge the fix with its note under the release's changelog heading, run the gate
-on main once CI is green there, try the fixed tree from source and sign it off,
-and tag again. With the tag gone, the version on
-main is one release past the latest tag again, which is all the gate asks.
+on main once CI is green there, sign the fixed tree off (trying it from
+source first where the summary calls for a hands-on check), and tag again.
+With the tag gone, the version on main is one release past the latest tag
+again, which is all the gate asks.
 
 ## The release walk
 

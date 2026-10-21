@@ -9,8 +9,9 @@
  *   npm run release -- bump <version>       # version + promoted changelog, committed with the candidate
  *   ...push the candidate, open its pull request, let CI finish on it...
  *   npm run release:gate                    # what CI cannot do, on the candidate's exact tree
- *   ...start Rundock from the candidate and try the test list in the browser...
- *   npm run release -- signoff <version> --confirm <version>   # record that check for this tree, yourself
+ *   ...write the release summary; where it flags a hands-on check, try the candidate from source...
+ *   npm run release -- signoff <version> --confirm <version>   # sign off this tree, yourself
+ *       (or, given in chat: the agent adds --on-instruction - and passes the words on stdin)
  *   ...merge that pull request...
  *   npm run release -- tag <version>        # tag the merged commit, which starts the build
  *   ...watch the build, review the draft it publishes...
@@ -29,13 +30,14 @@
  * second gate, and any difference is refused.
  *
  * A RECUT of an unpublished draft is: delete the draft release, delete the tag
- * locally and on the remote, merge the fix, run the gate on main, tag again.
+ * locally and on the remote, merge the fix, run the gate on main, sign the
+ * new tree off, tag again.
  * Once the tag is gone the version on main is one release past the latest tag
  * again, which is all the gate asks.
  *
  * WHY IT IS NOT ONE COMMAND. main requires status checks with admin
  * enforcement, so nothing pushes to it directly, and merging the pull request
- * is where a human already looks.
+ * is a reviewed step of its own (docs/RELEASING.md says who merges).
  *
  * `tag` starts something that cannot be un-started: the GitHub Actions
  * workflow that builds, signs, notarises, and publishes a DRAFT release.
@@ -44,8 +46,9 @@
  * never makes anything public. It produces a DRAFT and stops there.
  *
  * `publish` is the step that matters most, and CI never runs it. Only a
- * human decides a specific version is ready for everyone, by running
- * `publish` themselves with --confirm naming that exact version (see
+ * person decides a specific version is ready for everyone, and `publish`
+ * runs on that decision, at a terminal or on an instruction given in chat to
+ * the agent that runs it, with --confirm naming that exact version (see
  * hasPublishConfirmation). This was not always enforced: on 2026-08-27 an
  * agent ran `publish` unprompted, straight after fixing unrelated build
  * bugs, because nothing but a naming convention separated it from `tag`.
@@ -175,27 +178,46 @@ function requireGatePass(headTree, { root = ROOT } = {}) {
 // Sign-off subcommand: the hands-on check from source, recorded by tree
 // ---------------------------------------------------------------------------
 
-// Before the cut, the release engineer starts Rundock from the release branch
-// and tries a short test list in the browser. That is the step that found
-// both blockers of the first 0.15.1 cut, which every gate had passed because
-// their tests reached the store and not the handler. `signoff` records that
-// it happened, against the tree that was tried, and `tag` refuses any other.
+// Before the cut, where the release summary calls for it, Rundock is started
+// from the release branch and a short test list tried in the browser. That is
+// the step that found both blockers of the first 0.15.1 cut, which every gate
+// had passed because their tests reached the store and not the handler.
+// `signoff` records that the tree was signed off, against that tree, and
+// `tag` refuses any other.
 //
 // The record lives in git's common directory, so a sign-off made in a
 // worktree on the release branch is seen by the checkout that tags main, and
-// it can never be committed. It holds the tree, the version, the time and an
-// optional note, and nothing else.
+// it can never be committed. It holds how the sign-off was given, the tree,
+// the version and the time, with the optional note typed at the terminal or
+// the words of an instruction given in chat, and nothing else.
 //
-// IT IS A HUMAN ACT. Three things stand between an agent and a sign-off:
+// AT A TERMINAL, three things stand between an agent and a sign-off:
 // --confirm must name the version (as publish's does); the command refuses
 // inside an agent session (Claude Code sets CLAUDECODE for every command it
 // runs); and the note is read from the controlling terminal, not from stdin
 // or argv, so nothing can be piped into it and a shell without a terminal,
 // which is what an agent's tool runs in, is refused. Copying a printed
-// command satisfies none of these. Writing the file by hand is forgery, and
-// is the one thing this cannot stop: like the gate record, it is a friction
-// boundary, not a security one.
+// command satisfies none of these.
+//
+// IN CHAT, the sign-off is given to an agent, which records it with
+// --on-instruction carrying the words verbatim: on stdin with `-`, which is
+// the form printed and documented because nothing in the words passes
+// through the shell, or inline as the next argument. That lifts the session and
+// terminal refusals and nothing else: --confirm, the clean tree and the
+// version are checked as before, and the record says `given: "chat"` with the
+// words beside the tree. It is an audit trail, not proof of who typed the
+// words: on one machine under one identity, nothing here can tell a person's
+// instruction from an agent's own. Publishing is already run that way, on an
+// instruction in chat with --confirm, and the two steps are kept alike. The
+// words stay in the local record: nothing prints them, and the tag, its build
+// and the release notes never carry them.
+//
+// Writing the file by hand is forgery, and is the one thing this cannot stop:
+// like the gate record, it is a friction boundary, not a security one.
 const SIGNOFF_FILE_NAME = 'rundock-release-signoff.json';
+
+// How each kind of sign-off is named in what the release prints.
+const SIGNED_OFF = { chat: 'signed off in chat on instruction', terminal: 'signed off in the terminal' };
 
 function signoffPath({ root = ROOT, git = gitIn(root) } = {}) {
   return path.resolve(root, git(['rev-parse', '--git-common-dir']).trim(), SIGNOFF_FILE_NAME);
@@ -220,15 +242,88 @@ function askAtTerminal(prompt, { open = () => fs.openSync('/dev/tty', 'r+') } = 
   }
 }
 
+// Whether words hold anything a reader could see: not only whitespace,
+// control and format characters (zero-width spaces and joiners, a byte-order
+// mark).
+function hasVisibleWords(words) {
+  return typeof words === 'string' && words.replace(/[\s\p{Cc}\p{Cf}]/gu, '') !== '';
+}
+
+// The way every sign-off refusal prints to give the words of a chat
+// sign-off: on stdin, through a here-document whose quoted delimiter keeps
+// the shell from expanding anything in them. The delimiter is one nobody
+// types, because a line of the words that matched it would end the
+// here-document early, cut the record short and run the rest as commands.
+// It starts on a line of its own, so its closing line is still at the start
+// of a line when copied.
+const WORDS_DELIMITER = 'END_OF_SIGNOFF_WORDS';
+const THEIR_WORDS = '<their words>';
+function onInstructionForm(command) {
+  return `${command} --on-instruction - <<'${WORDS_DELIMITER}'\n${THEIR_WORDS}\n${WORDS_DELIMITER}`;
+}
+
+// Whether the words are the printed placeholder and nothing else: a refusal
+// copied without being filled in, which would record a sign-off nobody gave.
+function isPlaceholder(words) {
+  return typeof words === 'string' && words.replace(/^[\s\p{Cc}\p{Cf}]+|[\s\p{Cc}\p{Cf}]+$/gu, '') === THEIR_WORDS;
+}
+
+// The words of a sign-off given in chat, or null when --on-instruction is
+// absent. `-` reads them from stdin, all of it less the one newline a
+// here-document ends with; anything else after the flag is the words, inline.
+// A read lasts until the input ends, so it is refused when stdin is a
+// terminal, where it would wait silently for Ctrl-D, and announced on its own
+// line otherwise, so a pipe that never closes is visibly what is waited on.
+// Every form that could record something other than the words given is
+// refused, naming the form to use: an "=" form, the flag twice, inline words
+// that begin with "--" (they read as the next flag), and words with nothing
+// visible in them. A refusal never repeats the words.
+function instructionFrom(argv, stdin, form) {
+  if (argv.some((a) => a.startsWith('--on-instruction='))) {
+    throw new Error(`--on-instruction takes its words as the next argument, or on stdin as "-", never after "=":\n${form}`);
+  }
+  const at = argv.flatMap((a, i) => (a === '--on-instruction' ? [i] : []));
+  if (!at.length) return null;
+  if (at.length > 1) {
+    throw new Error(`--on-instruction is given ${at.length} times, and a sign-off records one instruction:\n${form}`);
+  }
+  let words = argv[at[0] + 1];
+  if (words === '-') {
+    if (stdin.isTerminal()) {
+      throw new Error(`--on-instruction - reads the words until the input ends, and stdin here is a terminal, so it would wait for Ctrl-D. Give the words through the here-document:\n${form}`);
+    }
+    stdin.notice('Reading the sign-off words from stdin until the input ends');
+    try {
+      words = stdin.read().replace(/\n$/, '');
+    } catch (err) {
+      throw new Error(`The words could not be read from stdin (${err.code || err.message}):\n${form}`);
+    }
+  } else if (typeof words === 'string' && words.startsWith('--')) {
+    throw new Error(`--on-instruction is followed by something that begins with "--", which reads as the next flag: inline words cannot begin with "--". Give them on stdin:\n${form}`);
+  }
+  if (!hasVisibleWords(words)) {
+    throw new Error(`--on-instruction needs the words the sign-off was given in, verbatim, and has none with anything visible in them:\n${form}`);
+  }
+  if (isPlaceholder(words)) {
+    throw new Error(`--on-instruction holds the placeholder, not the words given: put the words the sign-off was given in, verbatim, where ${THEIR_WORDS} stands:\n${form}`);
+  }
+  return words;
+}
+
 function signoffRelease(version, {
   root = ROOT, git = gitIn(root), argv = process.argv, env = process.env, ask = askAtTerminal, now = () => new Date(), log = logStep,
+  readStdin = () => fs.readFileSync(0, 'utf8'), stdinIsTerminal = () => require('tty').isatty(0),
+  notice = (line) => console.error(`[release:signoff] ${line}`),
 } = {}) {
   const command = `npm run release -- signoff ${version} --confirm ${version}`;
   if (!hasConfirmation(argv, version)) {
-    throw new Error(`A sign-off needs --confirm naming the version you tried from source:\n    ${command}`);
+    throw new Error(`A sign-off needs --confirm naming the version being signed off:\n    ${command}`);
   }
-  if (env.CLAUDECODE) {
-    throw new Error('This is running inside an agent session. The hands-on check is yours: run the sign-off yourself, at a terminal.');
+  const form = onInstructionForm(command);
+  const instruction = instructionFrom(argv, { read: readStdin, isTerminal: stdinIsTerminal, notice }, form);
+  const givenInChat = `If it was given to you in chat, record it with the words verbatim, on stdin:\n${form}`;
+  if (instruction === null && env.CLAUDECODE) {
+    throw new Error(`This is running inside an agent session. The hands-on check is yours: run the sign-off yourself, at a terminal.\n${givenInChat}`);
   }
   if (git(['status', '--porcelain']).trim()) {
     throw new Error('The working tree is not clean, so what you tried is not a committed tree. Commit or stash, try it again, then sign off.');
@@ -238,35 +333,67 @@ function signoffRelease(version, {
     throw new Error(`This checkout is ${pkg.version}, not ${version}. Sign off on the release candidate, which carries the bump.`);
   }
   const tree = git(['rev-parse', 'HEAD^{tree}']).trim();
-  let note;
-  try {
-    note = ask(`Tried ${version} from source on tree ${tree.slice(0, 12)}. Note (optional, Enter to record): `);
-  } catch (err) {
-    throw new Error(`A sign-off is typed at a terminal, and this has none (${err.code || err.message}). Run it yourself, at a terminal.`);
+  let record;
+  if (instruction !== null) {
+    record = { given: 'chat', instruction, tree, version, signedAt: now().toISOString() };
+  } else {
+    let note;
+    try {
+      note = ask(`Tried ${version} from source on tree ${tree.slice(0, 12)}. Note (optional, Enter to record): `);
+    } catch (err) {
+      throw new Error(`A sign-off is typed at a terminal, and this has none (${err.code || err.message}). Run it yourself, at a terminal.\n${givenInChat}`);
+    }
+    record = { given: 'terminal', tree, version, signedAt: now().toISOString(), ...(note ? { note } : {}) };
   }
-  const record = { tree, version, signedAt: now().toISOString(), ...(note ? { note } : {}) };
   fs.writeFileSync(signoffPath({ root, git }), JSON.stringify(record, null, 2) + '\n');
-  log('signoff', `Recorded the hands-on check of ${version} on tree ${tree.slice(0, 12)}`);
+  // What was recorded, never the words, and no claim of a hands-on check.
+  log('signoff', record.given === 'chat'
+    ? `Recorded a sign-off given in chat for ${version} on tree ${tree.slice(0, 12)}`
+    : `Recorded a sign-off typed at the terminal for ${version} on tree ${tree.slice(0, 12)}`);
   return record;
 }
 
-// The tag refuses without a sign-off for exactly the tree it tags. A fix
-// after the check changes the tree, so it needs the check again.
+// How a recorded sign-off was given. A record from before sign-offs said so
+// was typed at the terminal. A chat sign-off without its words, or any other
+// kind, is not one signoffRelease writes, and is null.
+function signoffKind(record) {
+  if (record.given === undefined || record.given === 'terminal') return 'terminal';
+  if (record.given === 'chat' && hasVisibleWords(record.instruction) && !isPlaceholder(record.instruction)) return 'chat';
+  return null;
+}
+
+// The tag refuses without a sign-off for exactly the tree it tags, of either
+// kind, and returns the kind. A fix after the sign-off changes the tree, so
+// it needs signing off again. Both refusals name the chat kind in words and
+// never print a ready command for it: one is recorded only when a sign-off
+// was actually given.
 function requireSignoff(headTree, version, opts = {}) {
   const signoff = readSignoff(opts);
   const command = `npm run release -- signoff ${version} --confirm ${version}`;
   if (!signoff) {
     throw new Error(
-      `No hands-on sign-off found. Start Rundock from the release branch, try the test list in the browser, ` +
-      `then record it yourself, at a terminal: ${command}`
+      `No sign-off found for tree ${headTree.slice(0, 12)}. A sign-off records the hands-on check of the tree being tagged: ` +
+      `where the release summary calls for one, start Rundock from the release branch and try the test list in the browser. ` +
+      `Then sign it off at a terminal: ${command}\n` +
+      'A sign-off given in chat is recorded by the agent it was given to, with --on-instruction and the words verbatim, ' +
+      'and only when it was actually given.'
     );
   }
   if (signoff.tree !== headTree) {
     throw new Error(
-      `The hands-on check was signed off on tree ${String(signoff.tree).slice(0, 12)} but the commit being tagged has tree ${headTree.slice(0, 12)}. ` +
-      `Something changed after the check: try this tree from source and sign off again (${command}).`
+      `This release was signed off on tree ${String(signoff.tree).slice(0, 12)} but the commit being tagged has tree ${headTree.slice(0, 12)}: ` +
+      `something changed after the sign-off. Sign this tree off again, at a terminal (${command}) or, when it is given in chat, ` +
+      'with --on-instruction, and do the hands-on check again where the release summary calls for one.'
     );
   }
+  const kind = signoffKind(signoff);
+  if (!kind) {
+    throw new Error(
+      `The sign-off for tree ${headTree.slice(0, 12)} is not one this command writes: it is given in the terminal, ` +
+      `or in chat with the words it was given in. Sign off again: ${command}`
+    );
+  }
+  return kind;
 }
 
 // ---------------------------------------------------------------------------
@@ -411,7 +538,8 @@ function publishRelease(version, { api = ghApi, log = (msg) => console.log(`[rel
 // working --confirm, so publish can never be run by copying the previous
 // step's own output. See Ratchet-Log "A split command is not a control",
 // 2026-08-27: publish and tag were already separate commands specifically
-// so a human decides when the last one runs, and nothing but that naming
+// so a person decides when the last one runs (at a terminal, or by an
+// instruction in chat to the agent that runs it), and nothing but that naming
 // convention stopped an agent running it unprompted mid-task. A stale
 // confirmation for a different version does not satisfy this, so an old
 // command cannot be reused for a new release by habit.
@@ -588,7 +716,9 @@ function tagRelease(version, { root = ROOT, git = gitIn(root), log = logStep } =
 
   const mergedTree = git(['rev-parse', `${merged}^{tree}`]).trim();
   requireGatePass(mergedTree, { root });
-  requireSignoff(mergedTree, version, { root, git });
+  const signedOff = requireSignoff(mergedTree, version, { root, git });
+  // Which way it was signed off, never the words: they stay in the local record.
+  log('tag', `Tree ${mergedTree.slice(0, 12)} was ${SIGNED_OFF[signedOff]}`);
 
   if (git(['ls-remote', '--tags', 'origin', `refs/tags/${tag}`]).trim()) {
     throw new Error(`Tag ${tag} already exists on the remote. Choose a new version, or recut deliberately by deleting it first.`);
@@ -610,6 +740,15 @@ function tagRelease(version, { root = ROOT, git = gitIn(root), log = logStep } =
   }
 
   log('tag', `Tagged ${tag} on ${merged.slice(0, 9)} and pushed it`);
+  // What comes next, as the tag's own output. The publish line names
+  // --confirm with a placeholder, never the version, so publishing cannot be
+  // started by copying it: see hasConfirmation.
+  log('done', `Tagged ${tag}. GitHub Actions is now building, signing, notarising, and publishing a DRAFT release.`);
+  log('done', `Watch the build:   https://github.com/${REPO}/actions`);
+  log('done', `Review the draft:  https://github.com/${REPO}/releases`);
+  log('done', 'Do not publish yet. Download and test the draft build on your own machine(s) first.');
+  log('done', `Once you have decided ${tag} is ready for everyone: npm run release -- publish ${version} --confirm <version>`);
+  log('done', `If CI fails (e.g. expired Apple agreement): fix it and re-run the workflow on tag ${tag}: no need to revert main.`);
   return { tag, sha: merged };
 }
 
@@ -621,6 +760,7 @@ const USAGE = [
   'Usage:',
   '  npm run release -- bump <version>                       write the version and promote the changelog, to commit with the candidate',
   '  npm run release -- signoff <version> --confirm <version>   after trying the candidate from source yourself, record it for its tree',
+  "  npm run release -- signoff <version> --confirm <version> --on-instruction - <<'END_OF_SIGNOFF_WORDS'   record a sign-off given in chat: its words follow on stdin, verbatim, then a line END_OF_SIGNOFF_WORDS",
   '  npm run release -- tag <version>                        after the gated, signed-off release pull request merges, tag the merged commit',
   '  npm run release -- publish <version> --confirm <version>   publish the draft release CI built for that tag, only after you have tested it yourself',
 ].join('\n');
@@ -668,13 +808,6 @@ if (require.main === module) {
     } catch (err) {
       fail('tag', err.message);
     }
-    console.log('');
-    logStep('done', `Tagged v${version}. GitHub Actions is now building, signing, notarising, and publishing a DRAFT release.`);
-    logStep('done', `Watch the build:   https://github.com/${REPO}/actions`);
-    logStep('done', `Review the draft:  https://github.com/${REPO}/releases`);
-    logStep('done', 'Do not publish yet. Download and test the draft build on your own machine(s) first.');
-    logStep('done', `Once you have decided v${version} is ready for everyone: npm run release -- publish ${version} --confirm ${version}`);
-    logStep('done', `If CI fails (e.g. expired Apple agreement): fix it and re-run the workflow on tag v${version}: no need to revert main.`);
   } else if (subcommand === 'publish') {
     // Publishes the reviewed draft, binding the tag before the draft flip.
     // --confirm is required and must name this exact version: see
@@ -683,8 +816,8 @@ if (require.main === module) {
     if (!hasPublishConfirmation(process.argv, version)) {
       fail('publish',
         `Publishing v${version} makes it downloadable by everyone, not just you testing the draft.\n` +
-        `  This requires --confirm ${version}, typed fresh for this exact version after you have tested the build yourself:\n` +
-        `    npm run release -- publish ${version} --confirm ${version}\n` +
+        `  This requires --confirm naming this exact version, typed fresh after you have tested the build yourself:\n` +
+        `    npm run release -- publish ${version} --confirm <version>\n` +
         `  Never run this because it was the next line printed by an earlier step, and an agent must never supply --confirm on its own.`
       );
     }
