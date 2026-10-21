@@ -9,8 +9,8 @@
  *   npm run release -- bump <version>       # version + promoted changelog, committed with the candidate
  *   ...push the candidate, open its pull request, let CI finish on it...
  *   npm run release:gate                    # what CI cannot do, on the candidate's exact tree
- *   ...start Rundock from the candidate and try the test list in the browser...
- *   npm run release -- signoff <version> --confirm <version>   # record that check for this tree, yourself
+ *   ...write the release summary; where it flags a hands-on check, try the candidate from source...
+ *   npm run release -- signoff <version> --confirm <version>   # sign off this tree, yourself
  *       (or, given in chat: add --on-instruction "<their words>", and the agent records it)
  *   ...merge that pull request...
  *   npm run release -- tag <version>        # tag the merged commit, which starts the build
@@ -36,7 +36,7 @@
  *
  * WHY IT IS NOT ONE COMMAND. main requires status checks with admin
  * enforcement, so nothing pushes to it directly, and merging the pull request
- * is where a human already looks.
+ * is a reviewed step of its own (docs/RELEASING.md says who merges).
  *
  * `tag` starts something that cannot be un-started: the GitHub Actions
  * workflow that builds, signs, notarises, and publishes a DRAFT release.
@@ -176,11 +176,12 @@ function requireGatePass(headTree, { root = ROOT } = {}) {
 // Sign-off subcommand: the hands-on check from source, recorded by tree
 // ---------------------------------------------------------------------------
 
-// Before the cut, the release engineer starts Rundock from the release branch
-// and tries a short test list in the browser. That is the step that found
-// both blockers of the first 0.15.1 cut, which every gate had passed because
-// their tests reached the store and not the handler. `signoff` records that
-// it happened, against the tree that was tried, and `tag` refuses any other.
+// Before the cut, where the release summary calls for it, Rundock is started
+// from the release branch and a short test list tried in the browser. That is
+// the step that found both blockers of the first 0.15.1 cut, which every gate
+// had passed because their tests reached the store and not the handler.
+// `signoff` records that the tree was signed off, against that tree, and
+// `tag` refuses any other.
 //
 // The record lives in git's common directory, so a sign-off made in a
 // worktree on the release branch is seen by the checkout that tags main, and
