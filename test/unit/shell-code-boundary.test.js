@@ -244,6 +244,66 @@ describe('a command that writes outside around a here-document still asks', () =
   });
 });
 
+// A `cd` partway through a chain. The leading `cd` rule is unchanged and
+// tested in boundary.test.js; these are about one that comes later.
+describe('a cd partway through an && chain is where the words after it start', () => {
+  const SAVED_THEN_RUN = `${SCRIPT_SAVED}\ncd .rundock/scratch/data && python3 ../tools/show.py thread-1`;
+
+  for (const [mode, codeMode] of MODES) {
+    test(`a script saved, then run from the folder beside it, reaches nothing (${mode} mode)`, () => {
+      assert.deepStrictEqual(places(SAVED_THEN_RUN, { codeMode }), []);
+      assert.deepStrictEqual(places('mkdir -p out && cd out && cat ../README.md', { codeMode }), []);
+    });
+  }
+
+  test('code after the cd is measured from the new folder too', () => {
+    assert.deepStrictEqual(places("make && cd .rundock/scratch && python3 - <<'PY'\nprint(open('../tools/show.py').read())\nPY"), []);
+    assert.deepStrictEqual(places('make && cd out && python3 -c "print(open(\'../README.md\').read())"'), []);
+  });
+
+  test('a climb past the workspace from the new folder still cards', () => {
+    assert.deepStrictEqual(places('make && cd .rundock/scratch && cat ../../../secret.txt'), [real(path.join(home, 'secret.txt'))]);
+  });
+
+  test('the words before the cd, and after its chain ends, start where the command does', () => {
+    assert.deepStrictEqual(places('cat ../before.txt && cd out && cat ../inside.txt'), [real(path.join(home, 'before.txt'))]);
+    assert.deepStrictEqual(places('make && cd out && cat ../inside.txt; cat ../after.txt'), [real(path.join(home, 'after.txt'))]);
+  });
+
+  // Each of these is less certain than a single literal `cd` the words after
+  // it must follow, so the words after it are measured from where the command
+  // starts, which reports `../x.txt` outside: the safe direction.
+  test('anything less certain falls back to where the command starts', () => {
+    const x = real(path.join(home, 'x.txt'));
+    for (const c of [
+      'make && cd a/b && cd ../.. && cat ../x.txt',
+      'make && cd "$OUT" && cat ../x.txt',
+      'make && cd out; cat ../x.txt',
+      'make && cd out || cat ../x.txt',
+      'false || cd out && cat ../x.txt',
+      'ls | cd out && cat ../x.txt',
+      'make && (cd out) && cat ../x.txt',
+      'make && cd - && cat ../x.txt',
+      'make && cd a/b && (cd ../.. && cat ../x.txt)',
+      'make && cd a/b && x=$(cd ../.. && cat ../x.txt)',
+      'make && cd a/b && \\cd ../.. && cat ../x.txt',
+    ]) {
+      assert.ok(places(c).includes(x), `${c}: ${JSON.stringify(places(c))}`);
+    }
+  });
+
+  test('a leading cd - is not a base either, nor one followed by a cd in a subshell', () => {
+    const x = real(path.join(home, 'x.txt'));
+    assert.ok(places('cd - && cat ../x.txt').includes(x));
+    assert.ok(places('cd a/b && (cd ../.. && cat ../x.txt)').includes(x));
+  });
+
+  test('a cd out of the workspace is reported, and is not trusted as a base', () => {
+    fs.mkdirSync(path.join(home, 'other'), { recursive: true });
+    assert.deepStrictEqual(places('make && cd ../other && cat ./x.txt'), [real(path.join(home, 'other'))]);
+  });
+});
+
 // Through the real hook, the way the runtime calls it: what a person would
 // see, in each mode. In Notes mode every command is shown, so the question is
 // whether it is shown as a crossing; in Code mode a command with no crossing
@@ -266,7 +326,7 @@ describe('through the real hook', () => {
 
   for (const [mode, codeMode] of MODES) {
     test(`the field shapes raise no boundary card (${mode} mode)`, { skip: SKIP }, async () => {
-      for (const c of FIELD_SHAPES) {
+      for (const c of [...FIELD_SHAPES, `${SCRIPT_SAVED}\ncd .rundock/scratch/data && python3 ../tools/show.py thread-1`]) {
         const r = await bash(c, codeMode);
         assert.ok(!(r.payload && r.payload.boundary), `${c}: no crossing`);
         if (codeMode) assert.strictEqual(r.cls, 'runs', `${c}: and in Code mode no card at all`);

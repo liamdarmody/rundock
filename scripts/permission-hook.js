@@ -1047,13 +1047,16 @@ function flavourFor(token, workspaceRoot, posixText = false) {
 // boundary, so nothing here is allowed to guess its way deeper.
 //
 // Hence all four conditions. The `cd` must be the FIRST thing in the command
-// (anything later would need to know what ran in between). Its target must be
+// (anything later would need to know what ran in between), or the first of an
+// `&&` chain whose words it alone moves (see below). Its target must be
 // a literal (a variable, a substitution or a glob is not knowable here). There
 // must be no second `cd` (the base would stop being true partway through). And
 // the target must land INSIDE the workspace: a command that leaves is the case
 // this whole card exists for, and its own token reports it.
 const CD_PREFIX = /^\s*cd\s+("[^"]*"|'[^']*'|[^\s;&|]+)\s*(?:&&|;)/;
-const CD_ANYWHERE = /(?:^|[;&|]|\s)cd\s/g;
+// Counted in every spelling a shell runs as `cd`, in a subshell, a
+// substitution, quoted or escaped, so none of them can move the base unseen.
+const CD_ANYWHERE = /(?:^|[^\w./-])cd(?=[\s;&|()'"`]|$)/g;
 const CD_NOT_LITERAL = /[$`*?[\](){}<>!~]/;
 // THE BASE IS WHERE THE COMMAND RUNS. The hook input's `cwd` follows the agent
 // (Claude Code documents it: it is the new directory after a `cd`, and the
@@ -1065,24 +1068,64 @@ const CD_NOT_LITERAL = /[$`*?[\](){}<>!~]/;
 // A leading literal `cd` still narrows it, and may now land in a working
 // folder as well as the workspace: `cd ~/Projects/app && rm -rf dist`, run
 // from the workspace, is judged in `app`.
-function commandBaseDir(command, workspaceRoot, pmod, cwd, extraDirs = [], home = os.homedir()) {
+//
+// A `cd` PARTWAY THROUGH A CHAIN moves the words after it (`at`, where a word
+// starts in the command) when it is as certain as a leading one. A script
+// written by a here-document and then run from beside it,
+//
+//   cat > tools/show.py <<'PY' ... PY
+//   cd data && python3 ../tools/show.py
+//
+// reads a file inside the workspace, and measured from the root it did not.
+// Only the words joined to the `cd` by `&&` move, because only they run after
+// it succeeded, and only when the `cd` itself surely runs: it opens the
+// command, or follows `;`, a new line or `&&`. A `;` or `||` after it, a pipe
+// or `||` before it, a subshell, `cd -` and every other uncertain case below
+// leave the root as the base.
+function commandBaseDir(command, workspaceRoot, pmod, cwd, extraDirs = [], home = os.homedir(), at = 0) {
   const root = cwd ? canonicalize(pmod.resolve(cwd), pmod) : pmod.resolve(workspaceRoot);
-  const m = CD_PREFIX.exec(command);
-  if (!m) return root;
   // A second `cd` means the base stops being true partway through the command.
   const cds = String(command).match(CD_ANYWHERE);
   if (!cds || cds.length !== 1) return root;
-  let target = m[1];
+  const m = CD_PREFIX.exec(command);
+  const mid = m ? null : midChainCd(command);
+  if (!m && !(mid && at >= mid.from && at < mid.to)) return root;
+  return cdBase(m ? m[1] : mid.target, root, workspaceRoot, pmod, extraDirs, home) || root;
+}
+
+// Where a literal `cd` lands, or null when that is not certain.
+function cdBase(target, root, workspaceRoot, pmod, extraDirs, home) {
   const quoted = (target.startsWith('"') && target.endsWith('"')) || (target.startsWith("'") && target.endsWith("'"));
   if (quoted) target = target.slice(1, -1);
   for (const re of HOME_PREFIX) {
     if (re.test(target)) { target = target.replace(re, home); break; }
   }
-  if (!target || CD_NOT_LITERAL.test(target)) return root;
+  // `cd -` goes back to wherever the shell was before, which is not knowable.
+  if (!target || target.startsWith('-') || CD_NOT_LITERAL.test(target)) return null;
   const base = canonicalize(pmod.resolve(root, target), pmod);
   // Leaving the workspace and every working folder is not a base this trusts.
   // The `cd` token is scanned like any other and reports the crossing on its own.
-  return (insideWorkspaceRoot(base, workspaceRoot, pmod) || namedFolderCovers(base, extraDirs, pmod, home)) ? base : root;
+  return (insideWorkspaceRoot(base, workspaceRoot, pmod) || namedFolderCovers(base, extraDirs, pmod, home)) ? base : null;
+}
+
+// The one `cd` after the start of a command, and the stretch of the command
+// that runs only once it has succeeded: { target, from, to }.
+function midChainCd(command) {
+  const text = String(command);
+  let from = 0;
+  let found = null;
+  for (const seg of lexSegments(text)) {
+    const start = text.indexOf(seg.text, from);
+    if (start < 0) return null;
+    from = start + seg.text.length;
+    if (found) {
+      if (seg.op !== '&&') return { ...found, to: start };
+      continue;
+    }
+    const words = lexWords(seg.text);
+    if (words.length === 2 && words[0].raw === 'cd' && ['', ';', '\n', '&&'].includes(seg.op)) found = { target: words[1].raw, from };
+  }
+  return found && { ...found, to: text.length };
 }
 
 // `$env:TEMP\x` and `%LOCALAPPDATA%\x` in the forms each shell writes them, for
@@ -1321,7 +1364,7 @@ function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), 
     }
   }
   const words = shellPathWords(view.text, posixText).concat(view.literals).sort((a, b) => a.at - b.at);
-  for (const { t: raw } of words) {
+  for (const { t: raw, at } of words) {
     let t = raw;
     let homed = false;
     for (const re of HOME_PREFIX) {
@@ -1353,7 +1396,7 @@ function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), 
     // workspace root regardless. Everything BELOW still judges against the
     // workspace root: the base says where a relative path starts, never what
     // counts as inside.
-    const resolved = canonicalize(pmod.resolve(commandBaseDir(view.text, workspaceRoot, pmod, opts.cwd, extraDirs, home), t), pmod);
+    const resolved = canonicalize(pmod.resolve(commandBaseDir(view.text, workspaceRoot, pmod, opts.cwd, extraDirs, home, at), t), pmod);
 
     // THE ANSWER FILES ARE TESTED BEFORE THE CROSSING FILTER, not after it.
     //
