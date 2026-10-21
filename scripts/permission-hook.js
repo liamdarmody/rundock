@@ -1261,16 +1261,17 @@ function segmentAt(text, at) {
   return null;
 }
 
-// The command's text with each here-document body fed to code taken out and
-// replaced by the commands it runs, and the literals that name a place
-// returned beside it, each at its command's `<<`.
+// The command's text with each here-document body fed to code taken out, and
+// beside it the literals in that code that name a place and the commands the
+// code runs, each at its command's `<<`.
 function heredocText(command) {
   const s = String(command);
   const cut = stripHeredocs(s);
-  if (!cut.ok || !cut.bodies.length) return { text: s, literals: [] };
+  if (!cut.ok || !cut.bodies.length) return { text: s, literals: [], commands: [] };
   let text = '';
   let from = 0;
   const literals = [];
+  const commands = [];
   for (const b of cut.bodies) {
     text += cut.text.slice(from, b.bodyAt);
     from = b.bodyAt;
@@ -1280,9 +1281,9 @@ function heredocText(command) {
     const at = b.at + text.length - b.bodyAt;
     const code = codeParts(b.body);
     for (const t of code.literals) literals.push({ t, at });
-    for (const c of [...code.commands, ...subs.bodies]) text += c + '\n';
+    for (const c of [...code.commands, ...subs.bodies]) commands.push({ text: c, at });
   }
-  return { text: text + cut.text.slice(from), literals };
+  return { text: text + cut.text.slice(from), literals, commands };
 }
 
 // CODE ON THE COMMAND LINE IS READ THE SAME WAY. `python3 -c`, `node -e`,
@@ -1308,20 +1309,28 @@ function inlineCode(text) {
       if (!m) continue;
       const code = codeParts(m[1] || words[++k] || '');
       for (const t of code.literals) literals.push({ t, at });
-      commands.push(...code.commands);
+      for (const c of code.commands) commands.push({ text: c, at });
     }
   }
   return { literals, commands };
 }
 
 // The command as the check reads it: its text, with what code it carries
-// read as code, and the literals in that code that name a place.
+// read as code, the literals in that code that name a place, and the commands
+// the code runs.
+//
+// A COMMAND FOUND IN CODE IS KEPT OUT OF THE SHELL'S TEXT and read on its own.
+// Spliced in, a quote inside it (an apostrophe in a backtick span in a
+// comment) ran on into the lines after the here-document, and a `cd` there
+// stopped being seen. It is measured from where the command starts: it runs
+// in a shell of its own, so a `cd` inside it moves nothing outside it.
 function judgedShellText(command) {
   const view = heredocText(command);
   const inline = inlineCode(view.text);
   return {
-    text: view.text + inline.commands.map(c => '\n' + c).join(''),
+    text: view.text,
     literals: [...view.literals, ...inline.literals],
+    commands: [...view.commands, ...inline.commands],
   };
 }
 
@@ -1359,12 +1368,13 @@ function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), 
   const writingWords = new Set();
   if (!readOnly) {
     for (const lit of view.literals) writingWords.add(lit.t);
-    for (const seg of shellSegments(view.text)) {
+    for (const text of [view.text, ...view.commands.map(c => c.text)]) for (const seg of shellSegments(text)) {
       if (!isReadOnlyShellCommand(seg)) for (const w of shellPathTokens(seg, posixText)) writingWords.add(w);
     }
   }
-  const words = shellPathWords(view.text, posixText).concat(view.literals).sort((a, b) => a.at - b.at);
-  for (const { t: raw, at } of words) {
+  const ran = view.commands.flatMap(c => shellPathWords(c.text, posixText).map(w => ({ t: w.t, at: c.at, fromStart: true })));
+  const words = shellPathWords(view.text, posixText).concat(view.literals, ran).sort((a, b) => a.at - b.at);
+  for (const { t: raw, at, fromStart } of words) {
     let t = raw;
     let homed = false;
     for (const re of HOME_PREFIX) {
@@ -1396,7 +1406,7 @@ function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), 
     // workspace root regardless. Everything BELOW still judges against the
     // workspace root: the base says where a relative path starts, never what
     // counts as inside.
-    const resolved = canonicalize(pmod.resolve(commandBaseDir(view.text, workspaceRoot, pmod, opts.cwd, extraDirs, home, at), t), pmod);
+    const resolved = canonicalize(pmod.resolve(commandBaseDir(fromStart ? '' : view.text, workspaceRoot, pmod, opts.cwd, extraDirs, home, at), t), pmod);
 
     // THE ANSWER FILES ARE TESTED BEFORE THE CROSSING FILTER, not after it.
     //

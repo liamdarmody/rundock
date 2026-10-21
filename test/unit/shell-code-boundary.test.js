@@ -256,6 +256,52 @@ describe('a cd partway through an && chain is where the words after it start', (
     });
   }
 
+  // A new line or `;` before the `cd` is as good as `&&`: `X <new line> cd D
+  // && Y` runs Y only once `cd D` has succeeded, from wherever X left the
+  // shell, which is where it started when X holds no `cd`. After a
+  // here-document the separator is the new line that ends its terminator line.
+  test('a cd after a here-document, a new line or a ; moves the words after it', () => {
+    const run = '\ncd .rundock/scratch/data && python3 ../tools/show.py thread-1';
+    for (const c of [
+      SAVED_THEN_RUN,
+      `mkdir -p .rundock/scratch/tools && cat > .rundock/scratch/tools/show.py <<PY\nimport sys\nprint(sys.argv[1])\nPY${run}`,
+      'make; cd .rundock/scratch/data && python3 ../tools/show.py thread-1',
+      'make\ncd .rundock/scratch/data && python3 ../tools/show.py thread-1',
+      "node - <<'JS'\nconst dir = process.argv[2] || 'x'; if (dir) { console.log(dir); }\nJS\ncd .rundock/scratch/data && cat ../tools/show.py",
+    ]) {
+      assert.deepStrictEqual(places(c), [], c);
+    }
+  });
+
+  // A command found inside code (a backtick span, a command quote, what an
+  // unquoted delimiter runs) is judged on its own. Spliced into the shell's
+  // text, a quote inside it, like the apostrophe in a comment below, ran on
+  // into the lines after the here-document and hid the `cd`.
+  test('a quote inside a command found in the code cannot reach the shell text after it', () => {
+    for (const delim of ["'PY'", 'PY']) {
+      const c = `mkdir -p .rundock/scratch/tools && cat > .rundock/scratch/tools/show.py <<${delim}\n`
+        + "# prints the `thread's` messages, one per line\nprint(1)\nPY\n"
+        + 'cd .rundock/scratch/data && python3 ../tools/show.py thread-1';
+      assert.deepStrictEqual(places(c), [], delim);
+    }
+    assert.deepStrictEqual(places("ruby -e 'puts `echo it\"s`' && cd out && cat ../README.md"), []);
+  });
+
+  test('a command found in the code that writes an answer file is still the answer-file card', () => {
+    const r = scan("python3 - <<PY\n$(echo '{}' > .rundock/permissions.json)\nPY");
+    assert.ok(r && r.crossings.some(c => c.answerFile === true));
+  });
+
+  test('a command run from inside the code is measured from where the command starts', () => {
+    const x = real(path.join(home, 'x.txt'));
+    for (const c of [
+      "make && cd a/b && ruby -e 'puts `cd ../.. && cat ../x.txt`'",
+      "make && cd a/b && ruby <<'RB'\nputs `cd ../.. && cat ../x.txt`\nRB",
+    ]) {
+      assert.ok(places(c).includes(x), `${c}: the cd inside it moves the code's own shell, so its words are measured from where the command starts`);
+    }
+  });
+
   test('code after the cd is measured from the new folder too', () => {
     assert.deepStrictEqual(places("make && cd .rundock/scratch && python3 - <<'PY'\nprint(open('../tools/show.py').read())\nPY"), []);
     assert.deepStrictEqual(places('make && cd out && python3 -c "print(open(\'../README.md\').read())"'), []);
@@ -287,6 +333,9 @@ describe('a cd partway through an && chain is where the words after it start', (
       'make && cd a/b && (cd ../.. && cat ../x.txt)',
       'make && cd a/b && x=$(cd ../.. && cat ../x.txt)',
       'make && cd a/b && \\cd ../.. && cat ../x.txt',
+      'make & cd out && cat ../x.txt',
+      'make\ncd out ; cat ../x.txt',
+      'make\ncd out || cat ../x.txt',
     ]) {
       assert.ok(places(c).includes(x), `${c}: ${JSON.stringify(places(c))}`);
     }
