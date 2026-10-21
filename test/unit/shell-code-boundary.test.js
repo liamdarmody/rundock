@@ -302,6 +302,57 @@ describe('a cd partway through an && chain is where the words after it start', (
     }
   });
 
+  // A COMPOUND COMMAND AFTER `cd D &&` IS ONE UNIT. The `;` and new lines
+  // inside `for … done`, `while … done`, `if … fi`, `case … esac` and `{ …; }`
+  // do not end the and-or list, so D is where every word in it starts. Read
+  // as the end of the chain, they sent `python3 ../tools/show.py` inside a loop
+  // back to the workspace root.
+  const D = 'cd .rundock/scratch/data && ';
+  const COMPOUND_TAILS = [
+    'for f in a b; do python3 ../tools/show.py $f.json; done',
+    'while read -r f; do python3 ../tools/show.py "$f"; done < ../list.txt',
+    'if [ -f ../tools/show.py ]; then python3 ../tools/show.py a; else echo none; fi',
+    '{ python3 ../tools/show.py a; python3 ../tools/show.py b; }',
+    'for a in x y; do for b in 1 2; do echo $b; done; python3 ../tools/show.py $a; done',
+    'case "$mode" in full) python3 ../tools/show.py all;; *) cat ../tools/show.py;; esac',
+    'for f in a b\ndo\n  python3 ../tools/show.py $f\ndone',
+    'until [ -f ../done.txt ]; do python3 ../tools/show.py next; done && cat ../done.txt',
+  ];
+  const POSITIONS = [['at the start', ''], ['after a new line', 'mkdir -p x\n'], ['after ;', 'mkdir -p x; '], ['after &&', 'mkdir -p x && ']];
+
+  test('a loop after a cd that follows a new line reaches nothing', () => {
+    assert.deepStrictEqual(places(`mkdir -p x\n${D}for f in a b; do python3 ../tools/show.py $f.json; done`), []);
+    assert.deepStrictEqual(places(`mkdir -p x && ${D}for f in a b; do python3 ../tools/show.py $f.json; done`), []);
+    for (const delim of ["'PY'", 'PY']) {
+      const c = `mkdir -p .rundock/scratch/tools && cat > .rundock/scratch/tools/show.py <<${delim}\nimport sys\nprint(sys.argv[1])\nPY\n`
+        + `${D}for f in a b; do python3 ../tools/show.py $f.json; done`;
+      assert.deepStrictEqual(places(c), [], delim);
+    }
+  });
+
+  test('a compound after cd D && is judged the same at the start of a command and after a new line, ; or &&', () => {
+    for (const tail of COMPOUND_TAILS) {
+      for (const [where, prefix] of POSITIONS) {
+        assert.deepStrictEqual(places(prefix + D + tail), [], `${where}: ${tail}`);
+      }
+    }
+    // And a compound that is not certain falls back the same way in both.
+    const x = real(path.join(home, 'x.txt'));
+    for (const tail of ['for f in a; do cd ..; cat ../x.txt; done', 'while true; do (cd ../.. && cat ../x.txt); done']) {
+      for (const [where, prefix] of POSITIONS) {
+        assert.ok(places(prefix + D + tail).includes(x), `${where}: ${tail}`);
+      }
+    }
+  });
+
+  test('after the compound closes, a ;, new line, ||, | or & ends the certainty as before', () => {
+    const x = real(path.join(home, 'x.txt'));
+    for (const end of ['; ', '\n', ' || ', ' | ', ' & ']) {
+      const c = `mkdir -p x\n${D}for f in a b; do echo $f; done${end}cat ../x.txt`;
+      assert.ok(places(c).includes(x), JSON.stringify(c));
+    }
+  });
+
   test('code after the cd is measured from the new folder too', () => {
     assert.deepStrictEqual(places("make && cd .rundock/scratch && python3 - <<'PY'\nprint(open('../tools/show.py').read())\nPY"), []);
     assert.deepStrictEqual(places('make && cd out && python3 -c "print(open(\'../README.md\').read())"'), []);

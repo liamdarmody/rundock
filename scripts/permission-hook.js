@@ -1110,16 +1110,32 @@ function cdBase(target, root, workspaceRoot, pmod, extraDirs, home) {
 
 // The one `cd` after the start of a command, and the stretch of the command
 // that runs only once it has succeeded: { target, from, to }.
+//
+// A COMPOUND COMMAND IN THE CHAIN IS ONE UNIT. The `;` and new lines inside
+// `for`/`while`/`until`/`select` … `done`, `if` … `fi` and `case` … `esac` do
+// not end the and-or list, so the chain runs on through the closing keyword.
+// (`{ …; }` and `( … )` are already one segment.) Keywords count only in
+// command position, after `do`, `then`, `else`, `elif` or `!` as well, and a
+// `cd` inside one is a second `cd`, which the caller already refuses.
+const COMPOUND_OPENS = new Set(['for', 'while', 'until', 'select', 'if', 'case']);
+const COMPOUND_CLOSES = new Set(['done', 'fi', 'esac']);
+const KEYWORD_LEADS = new Set(['do', 'then', 'else', 'elif', '!']);
 function midChainCd(command) {
   const text = String(command);
   let from = 0;
   let found = null;
+  let depth = 0;
   for (const seg of lexSegments(text)) {
     const start = text.indexOf(seg.text, from);
     if (start < 0) return null;
     from = start + seg.text.length;
     if (found) {
-      if (seg.op !== '&&') return { ...found, to: start };
+      if (depth === 0 && seg.op !== '&&') return { ...found, to: start };
+      const ws = lexWords(seg.text).map(w => w.raw);
+      let i = 0;
+      while (i < ws.length - 1 && KEYWORD_LEADS.has(ws[i])) i++;
+      if (COMPOUND_OPENS.has(ws[i])) depth++;
+      else if (depth > 0 && COMPOUND_CLOSES.has(ws[0])) depth--;
       continue;
     }
     const words = lexWords(seg.text);
