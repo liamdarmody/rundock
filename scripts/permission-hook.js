@@ -280,6 +280,13 @@ function isInstructionSurface(candidate, home = os.homedir(), foldsCase = hostFo
 // never auto-approve; read verbs are checked before defaulting to card, so a name
 // like `API-post-search` (a search) is correctly treated as a read.
 const MCP_DESTRUCTIVE_VERBS = new Set(['delete','remove','destroy','drop','cancel','abort','archive','trash','purge','clear','uninstall']);
+// Sending verbs are checked with the destructive ones, and for the same reason:
+// a message that has gone cannot be called back. Without them a name like
+// `send_status_update` ran with no card on the strength of `status`. Whole
+// words only, so `get_sent_items`, `list_sent` and `sender_info` stay reads.
+// The client grades the same words high (MCP_SEND_VERBS in
+// public/permissions.js), so a send asks every time and is never remembered.
+const MCP_SEND_VERBS = new Set(['send','resend','reply','forward']);
 const MCP_READ_VERBS = new Set(['get','list','search','find','read','fetch','retrieve','query','export','view','describe','show','info','overview','status','count','available','daily','review','recent','collaborators','comments','activity']);
 function isMcpReadTool(toolName) {
   const action = String(toolName).split('__').slice(2).join('_');
@@ -289,7 +296,7 @@ function isMcpReadTool(toolName) {
     .split(/[_\-\s]+/)
     .map(t => t.toLowerCase())
     .filter(Boolean);
-  if (tokens.some(t => MCP_DESTRUCTIVE_VERBS.has(t))) return false;
+  if (tokens.some(t => MCP_DESTRUCTIVE_VERBS.has(t) || MCP_SEND_VERBS.has(t))) return false;
   if (tokens.some(t => MCP_READ_VERBS.has(t))) return true;
   return false;
 }
@@ -1426,6 +1433,7 @@ function classifyShellAccess(toolName, toolInput, workspaceRoot, extraDirs = [],
 
 module.exports = {
   isProtectedClaudeEdit, isRuntimeHomeSurfaceEdit, isMcpReadTool, classifyFileAccess, classifyShellAccess, canonicalize,
+  MCP_READ_VERBS, MCP_DESTRUCTIVE_VERBS, MCP_SEND_VERBS,
   advisoryOutsidePaths,
   isSecretPath, isPersistenceSurface, SECRET_RELATIVE_PATHS, PERSISTENCE_SURFACE_DIRS, PERSISTENCE_SURFACE_FILES,
   CODEX_SECRET_RELATIVE_PATHS, CODEX_PERSISTENCE_SURFACE_DIRS, CODEX_PERSISTENCE_SURFACE_FILES,

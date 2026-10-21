@@ -221,6 +221,15 @@ const MEDIA_ROUTER = { src: path.join(ROOT, 'lib', 'http-router.js'), suite: 'te
 const REPEAT_HINT = { src: path.join(ROOT, 'public', 'repeat-hint-model.js'), suite: 'test/unit/repeat-hint.test.js' };
 const REPEAT_HINT_LINK = { src: path.join(ROOT, 'public', 'views', 'settings.js'), suite: 'test/unit/repeat-hint.test.js' };
 
+// A connector action that sends, replies or forwards: never a read in the hook,
+// high risk in the client. The word tables are proven by the suite that grades
+// action names; the guards that decide a card, through the real hook, server
+// and card.
+const CONNECTOR_HOOK = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/connector-grading.test.js' };
+const CONNECTOR_CLIENT = { src: path.join(ROOT, 'public', 'permissions.js'), suite: 'test/unit/connector-grading.test.js' };
+const CONNECTOR_HOOK_FLOW = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/integration/connector-approvals.test.js' };
+const CONNECTOR_CLIENT_FLOW = { src: path.join(ROOT, 'public', 'permissions.js'), suite: 'test/integration/connector-approvals.test.js' };
+
 const MUTATIONS = [
   // ===== ONE DIRECTORY UNDER TWO NAMES IS ONE IDENTITY =====
   // Compare unresolved again and every symlink, alias and case spelling of
@@ -1480,6 +1489,26 @@ const MUTATIONS = [
   [REPEAT_HINT_LINK, 'Repeat hint link: never turns the switch off itself',
     "  const ring = find();\n",
     "  const ring = find();\n  if (target === 'sandbox') sandboxTurnOff();\n"],
+  // ===== A CONNECTOR THAT SENDS ASKS EVERY TIME =====
+  // Drop the send words from the hook's check and a send whose name carries a
+  // read word (`send_status_update`) runs with no card at all.
+  [CONNECTOR_HOOK_FLOW, 'Connector send: a send beside a read word runs as a read',
+    '  if (tokens.some(t => MCP_DESTRUCTIVE_VERBS.has(t) || MCP_SEND_VERBS.has(t))) return false;',
+    '  if (tokens.some(t => MCP_DESTRUCTIVE_VERBS.has(t))) return false;'],
+  [CONNECTOR_HOOK, 'Connector send: the hook forgets resend',
+    "const MCP_SEND_VERBS = new Set(['send','resend','reply','forward']);",
+    "const MCP_SEND_VERBS = new Set(['send','reply','forward']);"],
+  // Drop the client's grading and the card offers Always allow again, which
+  // is the one click that let every later send through unseen.
+  [CONNECTOR_CLIENT_FLOW, 'Connector send: the card offers Always allow on a send',
+    "      if (mcpActionWords(toolName).some(w => MCP_SEND_VERBS.indexOf(w) !== -1)) return 'high';\n",
+    ''],
+  [CONNECTOR_CLIENT, 'Connector send: camelCase is not split, so sendEmail is not a send',
+    "      .replace(/([a-z0-9])([A-Z])/g, '$1 $2')\n",
+    ''],
+  [CONNECTOR_CLIENT, 'Connector send: the client forgets forward',
+    "  const MCP_SEND_VERBS = ['send', 'resend', 'reply', 'forward'];",
+    "  const MCP_SEND_VERBS = ['send', 'resend', 'reply'];"],
   // ===== STOP AND ASK AFTER A REFUSAL =====
   [STOP_ASK_HOOK, "Stop and ask: a denied card goes back to inviting another route",
     ": refusalNotice(result.reason === 'timeout' ? 'timeout' : 'denied', data.tool_name);",
