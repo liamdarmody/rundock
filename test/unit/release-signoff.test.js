@@ -38,6 +38,8 @@ function signoff(version, overrides = {}) {
     now: () => new Date('2026-10-08T12:00:00Z'),
     log: () => {},
     readStdin: () => { throw new Error('stdin is read only for --on-instruction -'); },
+    stdinIsTerminal: () => false,
+    notice: () => {},
     ...overrides,
   });
 }
@@ -118,6 +120,30 @@ test('given in chat on stdin: `--on-instruction -` reads all of it, less the new
     assert.strictEqual(readSignoff({ root: work }).instruction, words);
     assert.ok(said.every((l) => !l.includes('date') && !l.includes('flag')), 'the words are never printed');
   }
+});
+
+test('with a terminal on stdin, `--on-instruction -` is refused rather than waited on, naming the here-document', () => {
+  // A terminal would hold the read open until Ctrl-D, with nothing on screen
+  // to say so. The seam stands in for a real terminal, which a test cannot
+  // count on having.
+  let reads = 0;
+  const said = [];
+  assert.throws(() => signoff('0.12.0', {
+    env: AGENT, ask: noTerminal, argv: onInstruction('0.12.0', '-'),
+    stdinIsTerminal: () => true, readStdin: () => { reads += 1; return 'sign off 0.12.0\n'; }, notice: (line) => said.push(line),
+  }), (err) => /reads the words until the input ends, and stdin here is a terminal/.test(err.message) && PRINTED.test(err.message));
+  assert.strictEqual(reads, 0, 'nothing was read');
+  assert.deepStrictEqual(said, [], 'and no read was announced');
+  assert.ok(!fs.existsSync(recordFile()), 'nothing recorded');
+});
+
+test('a read from stdin is announced on its own line before it starts', () => {
+  const events = [];
+  signoff('0.12.0', {
+    env: AGENT, ask: noTerminal, argv: onInstruction('0.12.0', '-'),
+    notice: (line) => events.push(`notice: ${line}`), readStdin: () => { events.push('read'); return 'sign off 0.12.0\n'; },
+  });
+  assert.deepStrictEqual(events, ['notice: Reading the sign-off words from stdin until the input ends', 'read']);
 });
 
 test('given in chat, --on-instruction with no visible words is refused, and nothing is recorded', () => {
@@ -333,6 +359,7 @@ test('the command line refuses a missing --confirm, an agent session, and an emp
   assert.match(empty.out, /--on-instruction needs/);
   const emptyStdin = cli(['signoff', '0.12.0', '--confirm', '0.12.0', '--on-instruction', '-'], { CLAUDECODE: '1' }, '\n');
   assert.strictEqual(emptyStdin.code, 1);
+  assert.match(emptyStdin.out, /\[release:signoff\] Reading the sign-off words from stdin until the input ends\n/);
   assert.match(emptyStdin.out, /--on-instruction needs/);
   const equals = cli(['signoff', '0.12.0', '--confirm', '0.12.0', '--on-instruction=sign off'], { CLAUDECODE: '1' });
   assert.strictEqual(equals.code, 1);

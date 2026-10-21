@@ -264,11 +264,14 @@ function onInstructionForm(command) {
 // The words of a sign-off given in chat, or null when --on-instruction is
 // absent. `-` reads them from stdin, all of it less the one newline a
 // here-document ends with; anything else after the flag is the words, inline.
+// A read lasts until the input ends, so it is refused when stdin is a
+// terminal, where it would wait silently for Ctrl-D, and announced on its own
+// line otherwise, so a pipe that never closes is visibly what is waited on.
 // Every form that could record something other than the words given is
 // refused, naming the form to use: an "=" form, the flag twice, inline words
 // that begin with "--" (they read as the next flag), and words with nothing
 // visible in them. A refusal never repeats the words.
-function instructionFrom(argv, readStdin, form) {
+function instructionFrom(argv, stdin, form) {
   if (argv.some((a) => a.startsWith('--on-instruction='))) {
     throw new Error(`--on-instruction takes its words as the next argument, or on stdin as "-", never after "=":\n${form}`);
   }
@@ -279,8 +282,12 @@ function instructionFrom(argv, readStdin, form) {
   }
   let words = argv[at[0] + 1];
   if (words === '-') {
+    if (stdin.isTerminal()) {
+      throw new Error(`--on-instruction - reads the words until the input ends, and stdin here is a terminal, so it would wait for Ctrl-D. Give the words through the here-document:\n${form}`);
+    }
+    stdin.notice('Reading the sign-off words from stdin until the input ends');
     try {
-      words = readStdin().replace(/\n$/, '');
+      words = stdin.read().replace(/\n$/, '');
     } catch (err) {
       throw new Error(`The words could not be read from stdin (${err.code || err.message}):\n${form}`);
     }
@@ -295,14 +302,15 @@ function instructionFrom(argv, readStdin, form) {
 
 function signoffRelease(version, {
   root = ROOT, git = gitIn(root), argv = process.argv, env = process.env, ask = askAtTerminal, now = () => new Date(), log = logStep,
-  readStdin = () => fs.readFileSync(0, 'utf8'),
+  readStdin = () => fs.readFileSync(0, 'utf8'), stdinIsTerminal = () => require('tty').isatty(0),
+  notice = (line) => console.error(`[release:signoff] ${line}`),
 } = {}) {
   const command = `npm run release -- signoff ${version} --confirm ${version}`;
   if (!hasConfirmation(argv, version)) {
     throw new Error(`A sign-off needs --confirm naming the version being signed off:\n    ${command}`);
   }
   const form = onInstructionForm(command);
-  const instruction = instructionFrom(argv, readStdin, form);
+  const instruction = instructionFrom(argv, { read: readStdin, isTerminal: stdinIsTerminal, notice }, form);
   const givenInChat = `If it was given to you in chat, record it with the words verbatim, on stdin:\n${form}`;
   if (instruction === null && env.CLAUDECODE) {
     throw new Error(`This is running inside an agent session. The hands-on check is yours: run the sign-off yourself, at a terminal.\n${givenInChat}`);

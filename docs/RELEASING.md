@@ -99,7 +99,9 @@ Everything between the first line and the closing `END_OF_SIGNOFF_WORDS`
 line is recorded as given, backticks, `$` and quotes included; the newline
 before it is not part of the words. If any line of the words is exactly
 `END_OF_SIGNOFF_WORDS`, choose another delimiter, in both places: a line
-that matches it ends the here-document early. This is the form every
+that matches it ends the here-document early. `-` reads until the end of
+input, so use it only with the here-document or a pipe: with a terminal on
+stdin it is refused rather than left waiting. This is the form every
 refusal prints.
 
 The words can also be given inline, as the argument after the flag,

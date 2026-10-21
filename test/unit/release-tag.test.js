@@ -273,6 +273,8 @@ describe('release:tag tags what actually merged, and only a gated tree', () => {
       env: { CLAUDECODE: '1' },
       ask: () => { throw Object.assign(new Error('Device not configured'), { code: 'ENXIO' }); },
       readStdin: () => `${words}\n`,
+      stdinIsTerminal: () => false,
+      notice: (line) => said.push(line),
       log: (step, msg) => said.push(msg),
     });
     merge();
