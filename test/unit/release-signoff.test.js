@@ -146,6 +146,21 @@ test('a read from stdin is announced on its own line before it starts', () => {
   assert.deepStrictEqual(events, ['notice: Reading the sign-off words from stdin until the input ends', 'read']);
 });
 
+test('the placeholder is not the words given: inline or on stdin it is refused, and nothing is recorded', () => {
+  // Copying a printed refusal without filling it in would otherwise record a
+  // sign-off nobody gave.
+  const placeholder = (err) => /the placeholder, not the words given/.test(err.message) && PRINTED.test(err.message);
+  for (const words of ['<their words>', '  <their words>\n']) {
+    assert.throws(() => signoff('0.12.0', { env: AGENT, ask: noTerminal, argv: onInstruction('0.12.0', words) }), placeholder, JSON.stringify(words));
+  }
+  for (const stdin of ['<their words>\n', '\t<their words> \n']) {
+    assert.throws(() => signoff('0.12.0', { env: AGENT, ask: noTerminal, argv: onInstruction('0.12.0', '-'), readStdin: () => stdin }), placeholder, JSON.stringify(stdin));
+  }
+  assert.ok(!fs.existsSync(recordFile()), 'nothing recorded');
+  // Words that merely mention it are words.
+  assert.strictEqual(signoff('0.12.0', { env: AGENT, ask: noTerminal, argv: onInstruction('0.12.0', 'sign off; ignore the <their words> line') }).instruction, 'sign off; ignore the <their words> line');
+});
+
 test('given in chat, --on-instruction with no visible words is refused, and nothing is recorded', () => {
   const invisible = ' \t\u200B\u200C\u200D\u2060\uFEFF\u00A0';
   for (const tail of [['--on-instruction'], ['--on-instruction', ''], ['--on-instruction', '   '], ['--on-instruction', invisible]]) {
@@ -217,6 +232,13 @@ test('through a real shell, the words survive verbatim on stdin and single-quote
   const doubled = sh(`${command} "sign off, $SIGNOFF_PROBE"`);
   assert.strictEqual(doubled.status, 0, doubled.stderr);
   assert.strictEqual(JSON.parse(doubled.stdout).instruction, 'sign off, expanded');
+
+  // A printed refusal run exactly as printed, never filled in, records nothing.
+  fs.rmSync(recordFile());
+  const unfilled = sh(`${printed.replace('npm run release -- signoff 0.12.0 --confirm 0.12.0 --on-instruction', () => command)}\n`);
+  assert.notStrictEqual(unfilled.status, 0, 'refused');
+  assert.match(unfilled.stderr, /the placeholder, not the words given/);
+  assert.ok(!fs.existsSync(recordFile()), 'nothing recorded');
 });
 
 test('given in chat, --confirm must still name the version, and the tree and version checks still apply', () => {
@@ -250,7 +272,7 @@ test('a record written before sign-offs said how they were given reads as one ty
 });
 
 test('a record of a kind this command never writes is refused, naming the command', () => {
-  for (const odd of [{ given: 'email' }, { given: 'chat' }, { given: 'chat', instruction: '  ' }, { given: 'chat', instruction: '\u200B\uFEFF\n' }]) {
+  for (const odd of [{ given: 'email' }, { given: 'chat' }, { given: 'chat', instruction: '  ' }, { given: 'chat', instruction: '\u200B\uFEFF\n' }, { given: 'chat', instruction: ' <their words>\n' }]) {
     fs.writeFileSync(recordFile(), JSON.stringify({ tree: treeOf(work), version: '0.12.0', signedAt: '2026-10-01T09:00:00Z', ...odd }));
     assert.throws(() => requireSignoff(treeOf(work), '0.12.0', { root: work }), /not one this command writes[\s\S]*signoff 0\.12\.0 --confirm 0\.12\.0/, JSON.stringify(odd));
   }

@@ -257,8 +257,15 @@ function hasVisibleWords(words) {
 // It starts on a line of its own, so its closing line is still at the start
 // of a line when copied.
 const WORDS_DELIMITER = 'END_OF_SIGNOFF_WORDS';
+const THEIR_WORDS = '<their words>';
 function onInstructionForm(command) {
-  return `${command} --on-instruction - <<'${WORDS_DELIMITER}'\n<their words>\n${WORDS_DELIMITER}`;
+  return `${command} --on-instruction - <<'${WORDS_DELIMITER}'\n${THEIR_WORDS}\n${WORDS_DELIMITER}`;
+}
+
+// Whether the words are the printed placeholder and nothing else: a refusal
+// copied without being filled in, which would record a sign-off nobody gave.
+function isPlaceholder(words) {
+  return typeof words === 'string' && words.replace(/^[\s\p{Cc}\p{Cf}]+|[\s\p{Cc}\p{Cf}]+$/gu, '') === THEIR_WORDS;
 }
 
 // The words of a sign-off given in chat, or null when --on-instruction is
@@ -296,6 +303,9 @@ function instructionFrom(argv, stdin, form) {
   }
   if (!hasVisibleWords(words)) {
     throw new Error(`--on-instruction needs the words the sign-off was given in, verbatim, and has none with anything visible in them:\n${form}`);
+  }
+  if (isPlaceholder(words)) {
+    throw new Error(`--on-instruction holds the placeholder, not the words given: put the words the sign-off was given in, verbatim, where ${THEIR_WORDS} stands:\n${form}`);
   }
   return words;
 }
@@ -348,7 +358,7 @@ function signoffRelease(version, {
 // kind, is not one signoffRelease writes, and is null.
 function signoffKind(record) {
   if (record.given === undefined || record.given === 'terminal') return 'terminal';
-  if (record.given === 'chat' && hasVisibleWords(record.instruction)) return 'chat';
+  if (record.given === 'chat' && hasVisibleWords(record.instruction) && !isPlaceholder(record.instruction)) return 'chat';
   return null;
 }
 
