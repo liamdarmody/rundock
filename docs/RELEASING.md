@@ -102,7 +102,7 @@ before it is not part of the words. If any line of the words is exactly
 that matches it ends the here-document early. `-` reads until the end of
 input, so use it only with the here-document or a pipe: with a terminal on
 stdin it is refused rather than left waiting. This is the form every
-refusal prints.
+sign-off refusal prints.
 
 The words can also be given inline, as the argument after the flag,
 single-quoted: `--on-instruction '<their words>'`. A `'` inside the words
@@ -113,11 +113,14 @@ inside them before the command sees them.
 
 This lifts the agent-session and terminal refusals and nothing else:
 `--confirm` must still name the version, and the tree must be clean and
-carry that version. Every form that could record something other than the
-words given is refused: `--on-instruction=<their words>`, the flag given
-twice, and words with nothing visible in them (only whitespace, zero-width
-characters or a byte-order mark). Publishing is run the same way, on an
-instruction given in chat, with `--confirm`.
+carry that version. Of the forms that could record something other than
+the words given, every form the command can recognise is refused:
+`--on-instruction=<their words>`, the flag given twice, and words with
+nothing visible in them (only whitespace, zero-width characters or a
+byte-order mark). It cannot recognise words a shell has already rewritten
+in double quotes, or a here-document cut short by its own delimiter, which
+is why the forms above are the ones to use. Publishing is run the same way,
+on an instruction given in chat, with `--confirm`.
 
 **What each proves.** A terminal sign-off shows it was typed at the machine.
 A chat sign-off records that an agent acted on an instruction given in chat:
