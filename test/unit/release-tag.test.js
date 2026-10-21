@@ -357,6 +357,7 @@ describe('the command line', () => {
     assert.match(out, /bump <version>/);
     assert.match(out, /tag <version>/);
     assert.match(out, /signoff <version> --confirm <version>/);
+    assert.match(out, /signoff <version> --confirm <version> --on-instruction "<their words>"/);
     assert.match(out, /publish <version>/);
   });
 

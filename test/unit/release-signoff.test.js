@@ -3,10 +3,11 @@
 //
 // Before the cut, the candidate is started from source and tried by hand;
 // `release -- signoff <version> --confirm <version>` records that for the
-// tree that was tried, and `release -- tag` refuses any other tree. These
-// tests run the real functions against a throwaway repository: what is
-// asserted is the record git's common directory holds afterwards, or that
-// nothing was written.
+// tree that was tried, and `release -- tag` refuses any other tree. A
+// sign-off given in chat is recorded by the agent it was given to, with
+// `--on-instruction` carrying the words verbatim. These tests run the real
+// functions against a throwaway repository: what is asserted is the record
+// git's common directory holds afterwards, or that nothing was written.
 
 const { test, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert');
@@ -63,10 +64,75 @@ test('records the tree, the version, the time and the note, outside the working 
   const record = signoff('0.12.0', { ask: () => { asked += 1; return 'tried the list, all fine'; } });
 
   assert.strictEqual(asked, 1, 'it asks one thing: the optional note');
-  assert.deepStrictEqual(record, { tree: treeOf(work), version: '0.12.0', signedAt: '2026-10-08T12:00:00.000Z', note: 'tried the list, all fine' });
+  assert.deepStrictEqual(record, { given: 'terminal', tree: treeOf(work), version: '0.12.0', signedAt: '2026-10-08T12:00:00.000Z', note: 'tried the list, all fine' });
   assert.deepStrictEqual(JSON.parse(fs.readFileSync(recordFile(), 'utf8')), record);
   assert.strictEqual(git(work)(['status', '--porcelain']).trim(), '', 'the record never shows up as a change');
-  assert.doesNotThrow(() => requireSignoff(treeOf(work), '0.12.0', { root: work }));
+  assert.strictEqual(requireSignoff(treeOf(work), '0.12.0', { root: work }), 'terminal');
+});
+
+// What an agent's shell looks like: inside an agent session, with no
+// controlling terminal to type at.
+const AGENT = { CLAUDECODE: '1' };
+const noTerminal = () => askAtTerminal('Note: ', { open: () => { throw Object.assign(new Error('Device not configured'), { code: 'ENXIO' }); } });
+const onInstruction = (version, words) => ['node', 'release.js', 'signoff', version, '--confirm', version, '--on-instruction', words];
+
+test('given in chat: from an agent session with no terminal, --on-instruction records the tree and the words verbatim', () => {
+  const words = 'sign off 0.12.0\nthe "pins" fix looked right, café included ';
+  let asked = 0;
+  const record = signoff('0.12.0', {
+    env: AGENT, argv: onInstruction('0.12.0', words), ask: () => { asked += 1; return noTerminal(); },
+  });
+
+  assert.strictEqual(asked, 0, 'nothing is asked: there is no one at a terminal to ask');
+  assert.deepStrictEqual(record, { given: 'chat', instruction: words, tree: treeOf(work), version: '0.12.0', signedAt: '2026-10-08T12:00:00.000Z' });
+  assert.deepStrictEqual(JSON.parse(fs.readFileSync(recordFile(), 'utf8')), record);
+  assert.strictEqual(git(work)(['status', '--porcelain']).trim(), '', 'the words stay in the local record and never show up as a change');
+  assert.strictEqual(requireSignoff(treeOf(work), '0.12.0', { root: work }), 'chat');
+});
+
+test('given in chat, --on-instruction with no words is refused, and nothing is recorded', () => {
+  for (const tail of [['--on-instruction'], ['--on-instruction', ''], ['--on-instruction', '   '], ['--on-instruction', '--confirm', '0.12.0']]) {
+    const argv = ['node', 'release.js', 'signoff', '0.12.0', '--confirm', '0.12.0', ...tail];
+    assert.throws(() => signoff('0.12.0', { env: AGENT, ask: noTerminal, argv }), /--on-instruction needs[\s\S]*verbatim/, argv.join(' '));
+  }
+  assert.ok(!fs.existsSync(recordFile()), 'nothing recorded');
+});
+
+test('given in chat, --confirm must still name the version, and the tree and version checks still apply', () => {
+  const words = 'sign off 0.12.0';
+  for (const argv of [
+    ['node', 'release.js', 'signoff', '0.12.0', '--on-instruction', words],
+    ['node', 'release.js', 'signoff', '0.12.0', '--confirm', '0.11.9', '--on-instruction', words],
+  ]) {
+    assert.throws(() => signoff('0.12.0', { env: AGENT, ask: noTerminal, argv }), /--confirm[\s\S]*signoff 0\.12\.0 --confirm 0\.12\.0/, argv.join(' '));
+  }
+  fs.writeFileSync(path.join(work, 'README.md'), 'uncommitted\n');
+  assert.throws(() => signoff('0.12.0', { env: AGENT, ask: noTerminal, argv: onInstruction('0.12.0', words) }), /not clean/);
+  fs.rmSync(path.join(work, 'README.md'));
+  assert.throws(() => signoff('0.12.1', { env: AGENT, ask: noTerminal, argv: onInstruction('0.12.1', words) }), /0\.12\.0, not 0\.12\.1/);
+  assert.ok(!fs.existsSync(recordFile()), 'nothing recorded');
+});
+
+test('the tag check accepts either kind for exactly its tree, and neither for another', () => {
+  signoff('0.12.0', { env: AGENT, ask: noTerminal, argv: onInstruction('0.12.0', 'sign off 0.12.0') });
+  const tried = treeOf(work);
+  assert.strictEqual(requireSignoff(tried, '0.12.0', { root: work }), 'chat');
+  fs.writeFileSync(path.join(work, 'README.md'), 'a fix after the sign-off\n');
+  git(work)(['add', '-A']);
+  git(work)(['commit', '-m', 'fix']);
+  assert.throws(() => requireSignoff(treeOf(work), '0.12.0', { root: work }), new RegExp(`signed off on tree ${tried.slice(0, 12)}[\\s\\S]*${treeOf(work).slice(0, 12)}`));
+});
+
+test('a record written before sign-offs said how they were given reads as one typed at the terminal', () => {
+  fs.writeFileSync(recordFile(), JSON.stringify({ tree: treeOf(work), version: '0.12.0', signedAt: '2026-10-01T09:00:00Z', note: 'fine' }));
+  assert.strictEqual(requireSignoff(treeOf(work), '0.12.0', { root: work }), 'terminal');
+});
+
+test('a record of a kind this command never writes is refused, naming the command', () => {
+  for (const odd of [{ given: 'email' }, { given: 'chat' }, { given: 'chat', instruction: '  ' }]) {
+    fs.writeFileSync(recordFile(), JSON.stringify({ tree: treeOf(work), version: '0.12.0', signedAt: '2026-10-01T09:00:00Z', ...odd }));
+    assert.throws(() => requireSignoff(treeOf(work), '0.12.0', { root: work }), /not one this command writes[\s\S]*signoff 0\.12\.0 --confirm 0\.12\.0/, JSON.stringify(odd));
+  }
 });
 
 test('an empty note is no note, and the sign-off still records', () => {
@@ -94,14 +160,13 @@ test('--confirm is required, and must name the version being signed off', () => 
   assert.ok(!fs.existsSync(recordFile()), 'nothing recorded');
 });
 
-test('inside an agent session it is refused, and nothing is recorded', () => {
-  assert.throws(() => signoff('0.12.0', { env: { CLAUDECODE: '1' } }), /agent session/);
+test('inside an agent session, without --on-instruction, it is refused, naming the flag, and nothing is recorded', () => {
+  assert.throws(() => signoff('0.12.0', { env: AGENT }), /agent session[\s\S]*yourself, at a terminal\.\n.*--on-instruction/);
   assert.ok(!fs.existsSync(recordFile()));
 });
 
-test('with no terminal to type at, it is refused, and nothing is recorded', () => {
-  const noTerminal = () => askAtTerminal('Note: ', { open: () => { throw Object.assign(new Error('Device not configured'), { code: 'ENXIO' }); } });
-  assert.throws(() => signoff('0.12.0', { ask: noTerminal }), /typed at a terminal[\s\S]*ENXIO/);
+test('with no terminal to type at, without --on-instruction, it is refused, naming the flag, and nothing is recorded', () => {
+  assert.throws(() => signoff('0.12.0', { ask: noTerminal }), /typed at a terminal[\s\S]*ENXIO[\s\S]*yourself, at a terminal\.\n.*--on-instruction/);
   assert.ok(!fs.existsSync(recordFile()));
 });
 
@@ -134,7 +199,7 @@ test('the tag check: no record names the command; a record for another tree is r
   assert.throws(() => requireSignoff(treeOf(work), '0.12.0', { root: work }), new RegExp(`signed off on tree ${tried.slice(0, 12)}[\\s\\S]*${treeOf(work).slice(0, 12)}`));
 });
 
-test('the command line refuses a missing --confirm, and an agent session, before touching git', () => {
+test('the command line refuses a missing --confirm, an agent session, and an empty instruction, before touching git', () => {
   const RELEASE = path.join(__dirname, '..', '..', 'scripts', 'release.js');
   const cli = (args, env) => {
     const res = spawnSync(process.execPath, [RELEASE, ...args], { encoding: 'utf8', env: { PATH: process.env.PATH, ...env } });
@@ -146,4 +211,8 @@ test('the command line refuses a missing --confirm, and an agent session, before
   const agent = cli(['signoff', '0.12.0', '--confirm', '0.12.0'], { CLAUDECODE: '1' });
   assert.strictEqual(agent.code, 1);
   assert.match(agent.out, /agent session/);
+  assert.match(agent.out, /--on-instruction/);
+  const empty = cli(['signoff', '0.12.0', '--confirm', '0.12.0', '--on-instruction', ''], { CLAUDECODE: '1' });
+  assert.strictEqual(empty.code, 1);
+  assert.match(empty.out, /--on-instruction needs/);
 });

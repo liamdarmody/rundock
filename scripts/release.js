@@ -11,6 +11,7 @@
  *   npm run release:gate                    # what CI cannot do, on the candidate's exact tree
  *   ...start Rundock from the candidate and try the test list in the browser...
  *   npm run release -- signoff <version> --confirm <version>   # record that check for this tree, yourself
+ *       (or, given in chat: add --on-instruction "<their words>", and the agent records it)
  *   ...merge that pull request...
  *   npm run release -- tag <version>        # tag the merged commit, which starts the build
  *   ...watch the build, review the draft it publishes...
@@ -183,19 +184,35 @@ function requireGatePass(headTree, { root = ROOT } = {}) {
 //
 // The record lives in git's common directory, so a sign-off made in a
 // worktree on the release branch is seen by the checkout that tags main, and
-// it can never be committed. It holds the tree, the version, the time and an
-// optional note, and nothing else.
+// it can never be committed. It holds how the sign-off was given, the tree,
+// the version and the time, with the optional note typed at the terminal or
+// the words of an instruction given in chat, and nothing else.
 //
-// IT IS A HUMAN ACT. Three things stand between an agent and a sign-off:
+// AT A TERMINAL, three things stand between an agent and a sign-off:
 // --confirm must name the version (as publish's does); the command refuses
 // inside an agent session (Claude Code sets CLAUDECODE for every command it
 // runs); and the note is read from the controlling terminal, not from stdin
 // or argv, so nothing can be piped into it and a shell without a terminal,
 // which is what an agent's tool runs in, is refused. Copying a printed
-// command satisfies none of these. Writing the file by hand is forgery, and
-// is the one thing this cannot stop: like the gate record, it is a friction
-// boundary, not a security one.
+// command satisfies none of these.
+//
+// IN CHAT, the sign-off is given to an agent, which records it with
+// --on-instruction carrying the words verbatim. That lifts the session and
+// terminal refusals and nothing else: --confirm, the clean tree and the
+// version are checked as before, and the record says `given: "chat"` with the
+// words beside the tree. It is an audit trail, not proof of who typed the
+// words: on one machine under one identity, nothing here can tell a person's
+// instruction from an agent's own. Publishing is already run that way, on an
+// instruction in chat with --confirm, and the two steps are kept alike. The
+// words stay in the local record: nothing prints them, and the tag, its build
+// and the release notes never carry them.
+//
+// Writing the file by hand is forgery, and is the one thing this cannot stop:
+// like the gate record, it is a friction boundary, not a security one.
 const SIGNOFF_FILE_NAME = 'rundock-release-signoff.json';
+
+// How each kind of sign-off is named in what the release prints.
+const SIGNED_OFF = { chat: 'signed off in chat on instruction', terminal: 'signed off in the terminal' };
 
 function signoffPath({ root = ROOT, git = gitIn(root) } = {}) {
   return path.resolve(root, git(['rev-parse', '--git-common-dir']).trim(), SIGNOFF_FILE_NAME);
@@ -220,6 +237,16 @@ function askAtTerminal(prompt, { open = () => fs.openSync('/dev/tty', 'r+') } = 
   }
 }
 
+// The words of a sign-off given in chat, from --on-instruction: null when the
+// flag is absent, and '' when it has no words after it (nothing, blanks, or
+// the next flag where the words should be), which is refused.
+function instructionFrom(argv) {
+  const i = argv.indexOf('--on-instruction');
+  if (i === -1) return null;
+  const words = argv[i + 1];
+  return typeof words === 'string' && words.trim() && !words.startsWith('--') ? words : '';
+}
+
 function signoffRelease(version, {
   root = ROOT, git = gitIn(root), argv = process.argv, env = process.env, ask = askAtTerminal, now = () => new Date(), log = logStep,
 } = {}) {
@@ -227,8 +254,14 @@ function signoffRelease(version, {
   if (!hasConfirmation(argv, version)) {
     throw new Error(`A sign-off needs --confirm naming the version you tried from source:\n    ${command}`);
   }
-  if (env.CLAUDECODE) {
-    throw new Error('This is running inside an agent session. The hands-on check is yours: run the sign-off yourself, at a terminal.');
+  const instruction = instructionFrom(argv);
+  const inChat = `${command} --on-instruction "<their words>"`;
+  if (instruction === '') {
+    throw new Error(`--on-instruction needs the words the sign-off was given in, verbatim:\n    ${inChat}`);
+  }
+  const givenInChat = `If it was given to you in chat, record it with the words verbatim: ${inChat}`;
+  if (instruction === null && env.CLAUDECODE) {
+    throw new Error(`This is running inside an agent session. The hands-on check is yours: run the sign-off yourself, at a terminal.\n${givenInChat}`);
   }
   if (git(['status', '--porcelain']).trim()) {
     throw new Error('The working tree is not clean, so what you tried is not a committed tree. Commit or stash, try it again, then sign off.');
@@ -238,20 +271,35 @@ function signoffRelease(version, {
     throw new Error(`This checkout is ${pkg.version}, not ${version}. Sign off on the release candidate, which carries the bump.`);
   }
   const tree = git(['rev-parse', 'HEAD^{tree}']).trim();
-  let note;
-  try {
-    note = ask(`Tried ${version} from source on tree ${tree.slice(0, 12)}. Note (optional, Enter to record): `);
-  } catch (err) {
-    throw new Error(`A sign-off is typed at a terminal, and this has none (${err.code || err.message}). Run it yourself, at a terminal.`);
+  let record;
+  if (instruction !== null) {
+    record = { given: 'chat', instruction, tree, version, signedAt: now().toISOString() };
+  } else {
+    let note;
+    try {
+      note = ask(`Tried ${version} from source on tree ${tree.slice(0, 12)}. Note (optional, Enter to record): `);
+    } catch (err) {
+      throw new Error(`A sign-off is typed at a terminal, and this has none (${err.code || err.message}). Run it yourself, at a terminal.\n${givenInChat}`);
+    }
+    record = { given: 'terminal', tree, version, signedAt: now().toISOString(), ...(note ? { note } : {}) };
   }
-  const record = { tree, version, signedAt: now().toISOString(), ...(note ? { note } : {}) };
   fs.writeFileSync(signoffPath({ root, git }), JSON.stringify(record, null, 2) + '\n');
-  log('signoff', `Recorded the hands-on check of ${version} on tree ${tree.slice(0, 12)}`);
+  log('signoff', `Recorded the hands-on check of ${version} on tree ${tree.slice(0, 12)}, ${SIGNED_OFF[record.given]}`);
   return record;
 }
 
-// The tag refuses without a sign-off for exactly the tree it tags. A fix
-// after the check changes the tree, so it needs the check again.
+// How a recorded sign-off was given. A record from before sign-offs said so
+// was typed at the terminal. A chat sign-off without its words, or any other
+// kind, is not one signoffRelease writes, and is null.
+function signoffKind(record) {
+  if (record.given === undefined || record.given === 'terminal') return 'terminal';
+  if (record.given === 'chat' && typeof record.instruction === 'string' && record.instruction.trim()) return 'chat';
+  return null;
+}
+
+// The tag refuses without a sign-off for exactly the tree it tags, of either
+// kind, and returns the kind. A fix after the check changes the tree, so it
+// needs the check again.
 function requireSignoff(headTree, version, opts = {}) {
   const signoff = readSignoff(opts);
   const command = `npm run release -- signoff ${version} --confirm ${version}`;
@@ -267,6 +315,14 @@ function requireSignoff(headTree, version, opts = {}) {
       `Something changed after the check: try this tree from source and sign off again (${command}).`
     );
   }
+  const kind = signoffKind(signoff);
+  if (!kind) {
+    throw new Error(
+      `The sign-off for tree ${headTree.slice(0, 12)} is not one this command writes: it is given in the terminal, ` +
+      `or in chat with the words it was given in. Sign off again: ${command}`
+    );
+  }
+  return kind;
 }
 
 // ---------------------------------------------------------------------------
@@ -621,6 +677,7 @@ const USAGE = [
   'Usage:',
   '  npm run release -- bump <version>                       write the version and promote the changelog, to commit with the candidate',
   '  npm run release -- signoff <version> --confirm <version>   after trying the candidate from source yourself, record it for its tree',
+  '  npm run release -- signoff <version> --confirm <version> --on-instruction "<their words>"   record a sign-off given in chat, with the words verbatim',
   '  npm run release -- tag <version>                        after the gated, signed-off release pull request merges, tag the merged commit',
   '  npm run release -- publish <version> --confirm <version>   publish the draft release CI built for that tag, only after you have tested it yourself',
 ].join('\n');

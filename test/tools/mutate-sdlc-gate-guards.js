@@ -297,7 +297,8 @@ const MUTATIONS = [
     ""],
   // The hands-on check from source, recorded by tree: the tag needs one, it
   // must be for the tree being tagged, and recording it needs a --confirm
-  // naming the version, outside an agent session, typed at a terminal.
+  // naming the version and either a terminal outside an agent session, or
+  // the words of an instruction given in chat, verbatim.
   [RELEASE_TAG, "the tag refuses without a hands-on sign-off",
     "  requireSignoff(mergedTree, version, { root, git });\n",
     ""],
@@ -308,11 +309,35 @@ const MUTATIONS = [
     "  if (!hasConfirmation(argv, version)) {",
     "  if (false) {"],
   [RELEASE_SIGNOFF, "a sign-off is refused inside an agent session",
-    "  if (env.CLAUDECODE) {",
+    "  if (instruction === null && env.CLAUDECODE) {",
     "  if (false) {"],
   [RELEASE_SIGNOFF, "a sign-off with no terminal to type it at is refused",
-    "    throw new Error(`A sign-off is typed at a terminal, and this has none",
-    "    note = ''; if (0) throw new Error(`A sign-off is typed at a terminal, and this has none"],
+    "      throw new Error(`A sign-off is typed at a terminal, and this has none",
+    "      note = ''; if (0) throw new Error(`A sign-off is typed at a terminal, and this has none"],
+  [RELEASE_SIGNOFF, "an instruction given in chat lifts the agent-session refusal",
+    "  if (instruction === null && env.CLAUDECODE) {",
+    "  if (env.CLAUDECODE) {"],
+  [RELEASE_SIGNOFF, "--on-instruction with no words is refused",
+    "  if (instruction === '') {",
+    "  if (false) {"],
+  [RELEASE_SIGNOFF, "blanks, or the next flag, are not the words of an instruction",
+    "  return typeof words === 'string' && words.trim() && !words.startsWith('--') ? words : '';",
+    "  return typeof words === 'string' ? words : '';"],
+  [RELEASE_SIGNOFF, "a sign-off given in chat is recorded as chat, with its words",
+    "    record = { given: 'chat', instruction, tree, version, signedAt: now().toISOString() };",
+    "    record = { given: 'terminal', tree, version, signedAt: now().toISOString() };"],
+  [RELEASE_SIGNOFF, "a sign-off typed at the terminal is recorded as terminal",
+    "    record = { given: 'terminal', tree,",
+    "    record = { tree,"],
+  [RELEASE_SIGNOFF, "a record from before sign-offs said how they were given reads as terminal",
+    "  if (record.given === undefined || record.given === 'terminal') return 'terminal';",
+    "  if (record.given === 'terminal') return 'terminal';"],
+  [RELEASE_SIGNOFF, "a chat sign-off without its words does not count",
+    "  if (record.given === 'chat' && typeof record.instruction === 'string' && record.instruction.trim()) return 'chat';",
+    "  if (record.given === 'chat') return 'chat';"],
+  [RELEASE_SIGNOFF, "a sign-off of a kind this command never writes is refused",
+    "  if (!kind) {",
+    "  if (false) {"],
 
   // ===== THE MUTATION SCOPE: WHAT A CHANGE CAN REACH =====
   // Comparing against HEAD instead of the merge base is the defect that made
