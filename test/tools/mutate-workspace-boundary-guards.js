@@ -223,6 +223,10 @@ const MEDIA_ROUTER = { src: path.join(ROOT, 'lib', 'http-router.js'), suite: 'te
 // the Settings link that must never change a setting itself.
 const REPEAT_HINT = { src: path.join(ROOT, 'public', 'repeat-hint-model.js'), suite: 'test/unit/repeat-hint.test.js' };
 const REPEAT_HINT_LINK = { src: path.join(ROOT, 'public', 'views', 'settings.js'), suite: 'test/unit/repeat-hint.test.js' };
+// What the shell check reads in a command carrying code or text for another
+// program: escape strings, here-documents, interpreter code and a `cd` partway
+// through a chain.
+const SHELL_CODE = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/shell-code-boundary.test.js' };
 
 // A connector action that sends, replies or forwards: never a read in the hook,
 // high risk in the client. The word tables are proven by the suite that grades
@@ -1324,8 +1328,8 @@ const MUTATIONS = [
     "    if (writingWords.has(raw) && (isWorkspaceAnswerFile(",
     "    if (!readOnly && (isWorkspaceAnswerFile("],
   [ANSWER_READS_HOOK, "Answer-file reads: a segment that writes a permission file is taken as a read",
-    "      if (!isReadOnlyShellCommand(seg)) for (const w of shellPathTokens(seg)) writingWords.add(w);",
-    "      if (false) for (const w of shellPathTokens(seg)) writingWords.add(w);"],
+    "      if (!isReadOnlyShellCommand(seg)) for (const w of shellPathTokens(seg, posixText)) writingWords.add(w);",
+    "      if (false) for (const w of shellPathTokens(seg, posixText)) writingWords.add(w);"],
   [ANSWER_READS_VOCAB, "Answer-file reads: od is not a read",
     "    'od', 'hexdump',",
     "    'hexdump',"],
@@ -1886,6 +1890,22 @@ const MUTATIONS = [
   [APPROVED_GLUE, "Approved: a Codex without turn/steer is told in a later turn",
     "  Promise.resolve().then(() => ev.steer(approvalNotice(toolName))).catch(() => {});",
     "  Promise.resolve().then(() => ev.steer(approvalNotice(toolName))).catch(() => queueCodexNotice(convoId, approvalNotice(toolName)));"],
+  // ===== WHAT THE SHELL CHECK READS IN CODE AND TEXT =====
+  [SHELL_CODE, "Shell code: a backslash in a Bash word is a Windows separator again on a POSIX host",
+    "    const pmod = winWorld ? path.win32 : flavourFor(t, workspaceRoot, posixText);",
+    "    const pmod = winWorld ? path.win32 : flavourFor(t, workspaceRoot);"],
+  [SHELL_CODE, "Shell code: an unquoted Bash escape is judged as written, not as bash reads it",
+    " t = t.replace(/\\\\(.)/g, '$1');",
+    " {}"],
+  [SHELL_CODE, "Shell code: a drive letter in a Bash word loses its Windows reading",
+    " && !WIN_DRIVE.test(t) && !WIN_UNC.test(t)) t = t.replace(",
+    ") t = t.replace("],
+  [SHELL_CODE, "Shell code: PowerShell words are read with POSIX rules",
+    "  const posixText = opts.shellTool !== 'PowerShell' && !winShaped;",
+    "  const posixText = !winShaped;"],
+  [SHELL_CODE, "Shell code: a Windows workspace's Bash words are read with POSIX rules",
+    "  const posixText = opts.shellTool !== 'PowerShell' && !winShaped;",
+    "  const posixText = opts.shellTool !== 'PowerShell';"],
 ];
 const REPORTER = ['--test-reporter', 'spec'];
 

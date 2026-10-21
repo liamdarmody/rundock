@@ -895,7 +895,10 @@ function echoedArgsIn(command) {
   return out;
 }
 
-function shellPathTokens(command) {
+// `posixEscapes`: an unquoted word is taken as bash reads it, each `\X` being
+// the character X, so `\/etc/hosts` is judged as the `/etc/hosts` it opens. A
+// drive letter or UNC name is left as written: it keeps its Windows reading.
+function shellPathTokens(command, posixEscapes = false) {
   const out = [];
   // Every argument sitting in a pattern position, counted per segment so the
   // same text appearing later as a real file is still seen; and the same for
@@ -906,12 +909,14 @@ function shellPathTokens(command) {
   const re = /'([^']*)'|"([^"]*)"|[^\s;|&<>()`'"]+/g;
   let m;
   while ((m = re.exec(String(command))) !== null) {
-    const t = m[1] !== undefined ? m[1] : (m[2] !== undefined ? m[2] : m[0]);
+    let t = m[1] !== undefined ? m[1] : (m[2] !== undefined ? m[2] : m[0]);
     if (!t) continue;
     // Dropped once per pattern occurrence, not everywhere the text appears, so
     // `grep '/etc/passwd' /etc/passwd` still reports the file it reads.
     const at = skip.indexOf(t);
     if (at !== -1) { skip.splice(at, 1); continue; }
+    const unquoted = m[1] === undefined && m[2] === undefined;
+    if (posixEscapes && unquoted && t.includes('\\') && !WIN_DRIVE.test(t) && !WIN_UNC.test(t)) t = t.replace(/\\(.)/g, '$1');
     out.push(t);
     // Also the value after the first `=`. Flag values (`--output=/etc/x`) and
     // shell assignments (`OUT=$HOME/x`) are the two commonest places a target
@@ -991,8 +996,11 @@ const URL_SCHEME = /^[a-z][a-z0-9+.-]*:\/\//i;
 // Which path flavour to judge a token in. On Windows `path` is already
 // `path.win32`, so this only ever differs on a non-Windows host judging a
 // Windows-shaped token, which is what the tests do.
-function flavourFor(token, workspaceRoot) {
-  if (WIN_DRIVE.test(token) || WIN_UNC.test(token) || token.includes('\\')) return path.win32;
+//
+// `posixText`: the word is bash's on a POSIX host, where a backslash is never
+// a separator, so only a drive letter or a UNC name makes it Windows-shaped.
+function flavourFor(token, workspaceRoot, posixText = false) {
+  if (WIN_DRIVE.test(token) || WIN_UNC.test(token) || (!posixText && token.includes('\\'))) return path.win32;
   if (WIN_DRIVE.test(workspaceRoot) || WIN_UNC.test(workspaceRoot)) return path.win32;
   return path;
 }
@@ -1091,6 +1099,16 @@ function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), 
   // the command as a whole (see isReadOnlyShellCommand), never of one target
   // in isolation.
   const readOnly = isReadOnlyShellCommand(command);
+  // A BACKSLASH IN A BASH WORD ON A POSIX HOST IS BASH'S, NOT WINDOWS'. It
+  // escapes the next character when the word is unquoted and is an ordinary
+  // character inside quotes; it never separates folders. Judged as a Windows
+  // separator, Python code like `'\n\n'.join(...)` or `"\n== {name}"` in a
+  // here-document became a relative Windows path that resolved outside, a card
+  // that can never be remembered. A drive letter or UNC name is still
+  // Windows-shaped, and a Windows host, a Windows-shaped workspace and the
+  // PowerShell tool keep the Windows reading unchanged.
+  const winShaped = winWorld || process.platform === 'win32' || WIN_DRIVE.test(workspaceRoot) || WIN_UNC.test(workspaceRoot);
+  const posixText = opts.shellTool !== 'PowerShell' && !winShaped;
   // AN ANSWER FILE IS CHANGED ONLY BY A SEGMENT THAT DOES MORE THAN READ.
   // `tail .rundock/permissions.json; echo done > build.log` reads the file and
   // writes somewhere else; judged as a whole it was a change to the answer
@@ -1100,10 +1118,10 @@ function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), 
   const writingWords = new Set();
   if (!readOnly) {
     for (const seg of shellSegments(String(command))) {
-      if (!isReadOnlyShellCommand(seg)) for (const w of shellPathTokens(seg)) writingWords.add(w);
+      if (!isReadOnlyShellCommand(seg)) for (const w of shellPathTokens(seg, posixText)) writingWords.add(w);
     }
   }
-  for (const raw of shellPathTokens(command)) {
+  for (const raw of shellPathTokens(command, posixText)) {
     let t = raw;
     let homed = false;
     for (const re of HOME_PREFIX) {
@@ -1130,7 +1148,7 @@ function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), 
     // as a place outside the workspace. Only for the Bash tool: in PowerShell a
     // backslash really is a separator.
     if (opts.shellTool !== 'PowerShell' && BASH_ESCAPE.test(raw)) continue;
-    const pmod = winWorld ? path.win32 : flavourFor(t, workspaceRoot);
+    const pmod = winWorld ? path.win32 : flavourFor(t, workspaceRoot, posixText);
     // Resolved against where the command actually runs, not against the
     // workspace root regardless. Everything BELOW still judges against the
     // workspace root: the base says where a relative path starts, never what
