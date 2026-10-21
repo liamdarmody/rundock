@@ -11,9 +11,9 @@ npm run release -- bump <version>       # version + promoted changelog, committe
 ...push the candidate and open its pull request; wait for CI to finish on it...
 npm run walk                            # the release walk: use the product (the gate runs it too)
 npm run release:gate                    # what CI cannot do, on the candidate's exact tree
-...write the release summary; where it flags a hands-on check, try the candidate from source...
+...write the release summary in the pull request; where it flags a hands-on check, try the candidate from source...
 npm run release -- signoff <version> --confirm <version>   # sign off this tree, at a terminal
-npm run release -- signoff <version> --confirm <version> --on-instruction "<your words>"   # or as given in chat
+...or, when the sign-off is given in chat, the agent records it with --on-instruction (see below)...
 ...merge the pull request...
 npm run release -- tag <version>        # tag the merged commit, which starts the build
 npm run release -- publish <version> --confirm <version>   # publish the reviewed draft
@@ -52,11 +52,13 @@ gate again on main once CI has finished there.
 
 ## The release summary
 
-Once the gate has passed, the candidate gets a short summary: what changed,
-what is risky, what was tested, and whether a hands-on check is worth it.
-The summary flags the hands-on check for this release. It is required when
-the release changes security, permissions or data-loss behaviour, and
-optional otherwise.
+Once the gate has passed, the candidate gets a short summary in the release
+pull request's description: what changed, what is risky, what was tested,
+and whether a hands-on check is worth it. The summary flags the hands-on
+check for this release. It is required when the release changes security,
+permissions or data-loss behaviour, and optional otherwise. The pull
+requests merged into the release are reported there too (see
+[Pull requests and merges](#pull-requests-and-merges)).
 
 ## The hands-on check and its sign-off
 
@@ -84,16 +86,33 @@ from stdin or arguments, so nothing can be piped into it and a shell without
 a terminal is refused. Copying a printed command satisfies none of these.
 
 **In chat**, by telling the agent running the release. The agent records it
-with your words, verbatim:
+with the words verbatim, on stdin, through a here-document whose quoted
+delimiter keeps the shell from expanding anything in them:
 
 ```
-npm run release -- signoff <version> --confirm <version> --on-instruction "<your words>"
+npm run release -- signoff <version> --confirm <version> --on-instruction - <<'WORDS'
+<their words>
+WORDS
 ```
+
+Everything between the first line and the closing `WORDS` line is recorded
+as given, backticks, `$` and quotes included; the newline before `WORDS` is
+not part of the words. This is the form every refusal prints.
+
+The words can also be given inline, as the argument after the flag,
+single-quoted: `--on-instruction '<their words>'`. A `'` inside the words
+is then written `'\''`. Inline words that begin with `--` are refused,
+because they read as the next flag; on stdin they are fine. Never put the
+words in double quotes: the shell substitutes backticks and expands `$`
+inside them before the command sees them.
 
 This lifts the agent-session and terminal refusals and nothing else:
-`--confirm` must still name the version, the tree must be clean and carry
-that version, and an empty instruction is refused. Publishing is run the
-same way, on an instruction given in chat, with `--confirm`.
+`--confirm` must still name the version, and the tree must be clean and
+carry that version. Every form that could record something other than the
+words given is refused: `--on-instruction=<their words>`, the flag given
+twice, and words with nothing visible in them (only whitespace, zero-width
+characters or a byte-order mark). Publishing is run the same way, on an
+instruction given in chat, with `--confirm`.
 
 **What each proves.** A terminal sign-off shows it was typed at the machine.
 A chat sign-off records that an agent acted on an instruction given in chat:
@@ -128,18 +147,27 @@ branch is pushed and the pull request opened.
 
 An agent may merge a pull request when CI is green on it and an independent
 review, by a reviewer that did not write the change, has passed. A person
-merges any pull request that changes the CI or release workflows
-(`.github/`), the release scripts (`scripts/release*.js`), or the
-repository's settings. Merges are reported in a summary.
+merges any pull request that changes what releases the product or decides
+whether it ships:
+
+- anything under `.github/`;
+- any script the release workflow, or the `release`, `release:gate` or
+  `walk` npm scripts, run or load, including `scripts/release*.js`,
+  `scripts/verify-release-draft.js` and everything under `scripts/walk/`;
+- the `package.json` entries for those npm scripts;
+- the repository's settings.
+
+Merges are reported in the release summary.
 
 ## A recut
 
 To recut an unpublished draft: delete the draft release, delete the tag here
 and on the remote (`git tag -d v<version>`, `git push origin :refs/tags/v<version>`),
 merge the fix with its note under the release's changelog heading, run the gate
-on main once CI is green there, sign the fixed tree off (trying it from source
-first where the summary calls for a hands-on check), and tag again. With the tag gone, the version on
-main is one release past the latest tag again, which is all the gate asks.
+on main once CI is green there, sign the fixed tree off (trying it from
+source first where the summary calls for a hands-on check), and tag again.
+With the tag gone, the version on main is one release past the latest tag
+again, which is all the gate asks.
 
 ## The release walk
 
