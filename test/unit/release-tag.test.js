@@ -227,6 +227,18 @@ describe('release:tag tags what actually merged, and only a gated tree', () => {
     assert.strictEqual(inOrigin(['tag', '-l']), '', 'nothing tagged');
   });
 
+  test('after tagging, the next steps name publish with a placeholder for --confirm, never a working one', () => {
+    candidate();
+    merge();
+    const lines = [];
+    tagRelease('0.12.0', { root: work, log: (step, msg) => lines.push([step, msg]) });
+    const done = lines.filter(([step]) => step === 'done').map(([, msg]) => msg);
+    assert.ok(done.includes('Once you have decided v0.12.0 is ready for everyone: npm run release -- publish 0.12.0 --confirm <version>'), done.join('\n'));
+    assert.ok(done.some((msg) => /Do not publish yet/.test(msg)), done.join('\n'));
+    // Publishing cannot be started by copying the tag's own output.
+    assert.ok(lines.every(([, msg]) => !/--confirm 0\.12\.0/.test(msg)), lines.map(([, msg]) => msg).join('\n'));
+  });
+
   test('a sign-off typed at the terminal lets the tag through, and the tag says so', () => {
     candidate('0.12.0', { signoff: false });
     writeSignoff(treeOf('HEAD'), { given: 'terminal', note: 'tried the list' });

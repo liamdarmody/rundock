@@ -730,6 +730,15 @@ function tagRelease(version, { root = ROOT, git = gitIn(root), log = logStep } =
   }
 
   log('tag', `Tagged ${tag} on ${merged.slice(0, 9)} and pushed it`);
+  // What comes next, as the tag's own output. The publish line names
+  // --confirm with a placeholder, never the version, so publishing cannot be
+  // started by copying it: see hasConfirmation.
+  log('done', `Tagged ${tag}. GitHub Actions is now building, signing, notarising, and publishing a DRAFT release.`);
+  log('done', `Watch the build:   https://github.com/${REPO}/actions`);
+  log('done', `Review the draft:  https://github.com/${REPO}/releases`);
+  log('done', 'Do not publish yet. Download and test the draft build on your own machine(s) first.');
+  log('done', `Once you have decided ${tag} is ready for everyone: npm run release -- publish ${version} --confirm <version>`);
+  log('done', `If CI fails (e.g. expired Apple agreement): fix it and re-run the workflow on tag ${tag}: no need to revert main.`);
   return { tag, sha: merged };
 }
 
@@ -789,13 +798,6 @@ if (require.main === module) {
     } catch (err) {
       fail('tag', err.message);
     }
-    console.log('');
-    logStep('done', `Tagged v${version}. GitHub Actions is now building, signing, notarising, and publishing a DRAFT release.`);
-    logStep('done', `Watch the build:   https://github.com/${REPO}/actions`);
-    logStep('done', `Review the draft:  https://github.com/${REPO}/releases`);
-    logStep('done', 'Do not publish yet. Download and test the draft build on your own machine(s) first.');
-    logStep('done', `Once you have decided v${version} is ready for everyone: npm run release -- publish ${version} --confirm ${version}`);
-    logStep('done', `If CI fails (e.g. expired Apple agreement): fix it and re-run the workflow on tag v${version}: no need to revert main.`);
   } else if (subcommand === 'publish') {
     // Publishes the reviewed draft, binding the tag before the draft flip.
     // --confirm is required and must name this exact version: see

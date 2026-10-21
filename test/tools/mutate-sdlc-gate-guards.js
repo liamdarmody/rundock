@@ -314,6 +314,11 @@ const MUTATIONS = [
   [RELEASE_TAG, "the tag never prints the words of a chat sign-off",
     "  log('tag', `Tree ${mergedTree.slice(0, 12)} was ${SIGNED_OFF[signedOff]}`);\n",
     "  log('tag', `Tree ${mergedTree.slice(0, 12)} was ${SIGNED_OFF[signedOff]}: ${(readSignoff({ root, git }) || {}).instruction}`);\n"],
+  // The tag's next steps never hold a working publish command: --confirm is
+  // a placeholder there, so publishing cannot start by copying the output.
+  [RELEASE_TAG, "the tag's next step names --confirm with a placeholder, never the version",
+    "npm run release -- publish ${version} --confirm <version>`);",
+    "npm run release -- publish ${version} --confirm ${version}`);"],
   [RELEASE_TAG, "the tag never carries the words of a chat sign-off",
     "  git(['tag', tag], { stdio: 'pipe' });",
     "  git(['tag', '-a', tag, '-m', `${(readSignoff({ root, git }) || {}).instruction}`], { stdio: 'pipe' });"],
