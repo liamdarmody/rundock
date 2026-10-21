@@ -816,8 +816,8 @@ if (require.main === module) {
     if (!hasPublishConfirmation(process.argv, version)) {
       fail('publish',
         `Publishing v${version} makes it downloadable by everyone, not just you testing the draft.\n` +
-        `  This requires --confirm ${version}, typed fresh for this exact version after you have tested the build yourself:\n` +
-        `    npm run release -- publish ${version} --confirm ${version}\n` +
+        `  This requires --confirm naming this exact version, typed fresh after you have tested the build yourself:\n` +
+        `    npm run release -- publish ${version} --confirm <version>\n` +
         `  Never run this because it was the next line printed by an earlier step, and an agent must never supply --confirm on its own.`
       );
     }

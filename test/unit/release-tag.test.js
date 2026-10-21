@@ -455,6 +455,14 @@ describe('the command line', () => {
     assert.match(out, /publish <version>/);
   });
 
+  test('publish without --confirm refuses, naming --confirm with a placeholder, never a working command', () => {
+    const { code, out } = releaseCli(['publish', '0.12.0']);
+    assert.strictEqual(code, 1);
+    assert.match(out, /npm run release -- publish 0\.12\.0 --confirm <version>\n/);
+    // Publishing cannot be started by copying its own refusal.
+    assert.doesNotMatch(out, /--confirm 0\.12\.0/);
+  });
+
   test('an unknown subcommand says which one it did not recognise', () => {
     const { code, out } = releaseCli(['frobnicate', '0.12.0']);
     assert.strictEqual(code, 1);
