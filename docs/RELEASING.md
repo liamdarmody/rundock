@@ -115,9 +115,10 @@ This lifts the agent-session and terminal refusals and nothing else:
 `--confirm` must still name the version, and the tree must be clean and
 carry that version. Of the forms that could record something other than
 the words given, every form the command can recognise is refused:
-`--on-instruction=<their words>`, the flag given twice, and words with
-nothing visible in them (only whitespace, zero-width characters or a
-byte-order mark). It cannot recognise words a shell has already rewritten
+`--on-instruction=<their words>`, the flag given twice, the placeholder
+`<their words>` left as printed, and words with nothing visible in them
+(only whitespace, zero-width characters or a byte-order mark). It cannot
+recognise words a shell has already rewritten
 in double quotes, or a here-document cut short by its own delimiter, which
 is why the forms above are the ones to use. Publishing is run the same way,
 on an instruction given in chat, with `--confirm`.
