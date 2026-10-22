@@ -404,6 +404,66 @@ describe('on a host that is not a Mac, security is an ordinary command', () => {
   });
 });
 
+// WHAT THE READER CANNOT SEE, AS ARCHITECTURE.md LISTS IT. Each example is
+// found in the group the document puts it in, and does what that group says:
+// the first still asks in Code mode, as a command Rundock cannot read; the
+// second runs with no card. Neither is a Keychain verdict in Notes mode.
+describe('what the reader cannot see, as ARCHITECTURE.md lists it', () => {
+  const doc = fs.readFileSync(path.join(__dirname, '..', '..', 'ARCHITECTURE.md'), 'utf8');
+  const at = doc.indexOf('**What it cannot see, in two groups.**');
+  const runsAt = doc.indexOf('These run with no card in Code mode:', at);
+  const endAt = doc.indexOf('In Notes mode both groups are carded as before', runsAt);
+  const STILL_ASK = [
+    ['`eval`', `eval "${K}"`],
+    ['a `case`', `case x in *) ${K};; esac`],
+    ['a function definition', `k() { ${K}; }; k`],
+    ['`caffeinate`', `caffeinate -i ${K}`],
+    ['`arch`', `arch -arm64 ${K}`],
+    ['`script`', `script -q /dev/null ${K}`],
+    ['`stdbuf`', `stdbuf -oL ${K}`],
+    ['`watch`', `watch ${K}`],
+    ['`parallel`', `parallel ${K} ::: a`],
+    ['`env -S`', `env -S "${K}"`],
+    ["`$'security'`", `$'security' find-generic-password -w -s ${SVC}`],
+    ['a glob', `sec*rity find-generic-password -w -s ${SVC}`],
+    ['a variable', `$TOOL find-generic-password -w -s ${SVC}`],
+  ];
+  const RUN = [
+    ['`python3 -c`', 'python3 -c "print(1)"'],
+    ['`node -e`', 'node -e "1"'],
+    ['`perl -e`', "perl -e 'print 1'"],
+    ['`ruby -e`', "ruby -e 'p 1'"],
+    ['`osascript -e`', "osascript -e 'return 1'"],
+    ['`./k.sh`', './k.sh'],
+    ['`bash script.sh`', 'bash script.sh'],
+    ['`bash < script.sh`', 'bash < script.sh'],
+    ['`source`', 'source k.sh'],
+    ['a symlink', `./kc find-generic-password -w -s ${SVC}`],
+    ['a copy', `bin/sec find-generic-password -w -s ${SVC}`],
+    ['an alias', `alias s=security; s find-generic-password -w -s ${SVC}`],
+    ['`xcrun security`', `xcrun security find-generic-password -w -s ${SVC}`],
+    ["`echo '…' | sh`", `echo '${K}' | sh`],
+  ];
+
+  test('the passage is there, in two groups', () => {
+    assert.ok(at > 0 && runsAt > at && endAt > runsAt, 'ARCHITECTURE.md keeps the passage and both groups');
+  });
+  for (const [named, command] of STILL_ASK) {
+    test(`still asks in Code mode: ${named}`, () => {
+      assert.ok(doc.slice(at, runsAt).includes(named), `listed among those that still ask: ${named}`);
+      assert.deepStrictEqual(codeMode(command), { verdict: 'always-asks', reason: 'unreadable-command' }, command);
+      assert.strictEqual(notesMode(command), null, command);
+    });
+  }
+  for (const [named, command] of RUN) {
+    test(`runs with no card in Code mode: ${named}`, () => {
+      assert.ok(doc.slice(runsAt, endAt).includes(named), `listed among those that run: ${named}`);
+      assert.deepStrictEqual(codeMode(command), { verdict: 'runs' }, command);
+      assert.strictEqual(notesMode(command), null, command);
+    });
+  }
+});
+
 describe('the card', () => {
   test('says why it asks, and offers no Always allow', () => {
     assert.deepStrictEqual(RP.verdictCardCopy(KEYCHAIN), {
