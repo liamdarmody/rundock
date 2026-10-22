@@ -50,15 +50,22 @@ function keptCopies(dir, prefix = '') {
 
 function runsInProgress(root) {
   const out = [];
+  // A PID IS REUSED, so a record that outlived its run can name an unrelated
+  // process: every line names its record and says what to do then.
   for (const r of readRuns(root).filter((x) => x.alive)) {
     const group = Number.isInteger(r.group) && r.group > 0 ? `, process group ${r.group}` : '';
-    out.push(`a run of ${r.what} (pid ${r.pid}${group}) is still going in this checkout: wait for it to finish, or stop it, ${AGAIN}.`);
+    const rel = path.relative(root, r.file);
+    out.push(`a run of ${r.what} (pid ${r.pid}${group}) is still going in this checkout (${rel}): wait for it to finish, or stop it, `
+      + `${AGAIN}; if no such run is going, delete ${rel}.`);
   }
   for (const m of readMarkers(root)) {
     const rel = path.relative(root, m.file);
     const files = Array.isArray(m.files) ? m.files : [];
     if (m.unreadable) out.push(`${rel} cannot be read as a mutation run record: check the files the harnesses mutate against git, then delete it.`);
-    else if (isAlive(m.pid)) out.push(`a mutation harness (pid ${m.pid}, ${m.tool}) is still running in this checkout: wait for it to finish, or stop it, ${AGAIN}.`);
+    else if (isAlive(m.pid)) {
+      out.push(`a mutation harness (pid ${m.pid}, ${m.tool}) is still running in this checkout (${rel}): wait for it to finish, `
+        + `or stop it, ${AGAIN}; if no such run is going, check ${names(files)} with git diff, then delete ${rel}.`);
+    }
     // NEVER A BARE CHECKOUT FIRST: to git the leftover mutation and an edit
     // made since are one change, and a checkout throws both away.
     else out.push(`a mutation run (pid ${m.pid}) never finished, and ${rel} names ${names(files)}, which may still hold its mutation: `
@@ -73,15 +80,18 @@ function runsInProgress(root) {
       + `keep what is yours, then delete ${MARKER_DIR}/recovered/; ${AGAIN}.`);
   }
   let held = null;
-  try { held = JSON.parse(fs.readFileSync(runRecordPath(root), 'utf8')); } catch { /* none */ }
+  const claim = runRecordPath(root);
+  try { held = JSON.parse(fs.readFileSync(claim, 'utf8')); } catch { /* none */ }
   if (held && (isAlive(held.pid) || groupAlive(held.group))) {
-    out.push(`a red-first run (pid ${held.pid}) is still going in this checkout: wait for it to finish, or stop it, ${AGAIN}.`);
+    out.push(`a red-first run (pid ${held.pid}) is still going in this checkout (${claim}): wait for it to finish, or stop it, `
+      + `${AGAIN}; if no such run is going, delete ${claim}.`);
   }
   return out;
 }
 
 function uncommitted(git) {
-  const lines = git(['status', '--porcelain=v1']).split('\n').filter(Boolean);
+  // Every untracked file, whatever status.showUntrackedFiles says.
+  const lines = git(['status', '--porcelain=v1', '--untracked-files=all']).split('\n').filter(Boolean);
   const kinds = { staged: [], unstaged: [], untracked: [] };
   for (const l of lines) {
     if (l.startsWith('??')) { kinds.untracked.push(l.slice(3)); continue; }
@@ -110,10 +120,17 @@ function realLeakScan(root, range) {
 
 function laneDone({ root = ROOT, leakScan = realLeakScan } = {}) {
   const git = (args) => execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  try { git(['rev-parse', '--is-inside-work-tree']); } catch {
+    return { failures: [`${root} is not inside a git checkout: run lane-done from the checkout the change was made in.`], commits: 0 };
+  }
   const failures = [...runsInProgress(root), ...uncommitted(git)];
   let base;
   try { base = git(['merge-base', 'HEAD', 'origin/main']).trim(); } catch {
-    failures.push(`origin/main is not known in this checkout, so there is no merge base to check from: run git fetch origin, ${AGAIN}.`);
+    const remotes = git(['remote']).split('\n').filter(Boolean);
+    failures.push(remotes.includes('origin')
+      ? `origin/main is not known in this checkout, so there is no merge base to check from: run git fetch origin, ${AGAIN}.`
+      : `this checkout has no remote named origin (its remotes: ${remotes.join(', ') || 'none'}), so there is no origin/main `
+        + `to check from: add the repository the change will merge into as origin and fetch it, ${AGAIN}.`);
     return { failures, commits: 0 };
   }
   const commits = git(['rev-list', `${base}..HEAD`]).split('\n').filter(Boolean);
@@ -131,7 +148,12 @@ function laneDone({ root = ROOT, leakScan = realLeakScan } = {}) {
 }
 
 if (require.main === module) {
-  const { failures, commits } = laneDone();
+  let outcome;
+  try { outcome = laneDone(); } catch (e) {
+    console.error(`lane-done: the checks could not finish (${String((e && e.message) || e).split('\n')[0]}), so nothing is known.`);
+    process.exit(1);
+  }
+  const { failures, commits } = outcome;
   for (const line of failures) console.error(`lane-done: ${line}`);
   if (!failures.length) {
     console.log(`lane-done: pass. Nothing running, nothing uncommitted, ${commits} commit(s) since the merge base with `

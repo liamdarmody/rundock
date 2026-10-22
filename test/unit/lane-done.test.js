@@ -111,6 +111,12 @@ describe('lane-done passes only on finished work', () => {
     assert.match(failures[0], /mutate:guards.*still going.*wait for it/);
     assert.match(failures[1], /mutate-x-guards\.js.*still running/);
     assert.match(failures[2], /red-first.*still going/);
+    // A pid is reused, so a record outliving its run can name an unrelated
+    // process: each line names its record and says what to do then.
+    const files = [`.tool-runs/${process.pid}.json`, `.mutation-runs/${process.pid}.json`, redFirst];
+    failures.forEach((line, i) => {
+      assert.ok(line.includes(`if no such run is going, `) && line.includes(`delete ${files[i]}`), line);
+    });
   });
 
   test('a red-first suite that outlived its tool still counts as running', (t) => {
@@ -193,10 +199,25 @@ describe('lane-done passes only on finished work', () => {
 
   test('without origin/main there is no base to measure from, and it says so', (t) => {
     const w = finished(t);
-    w.git('remote', 'remove', 'origin');
+    w.git('update-ref', '-d', 'refs/remotes/origin/main');
+    const unfetched = w.check().failures;
+    assert.strictEqual(unfetched.length, 1, unfetched.join('\n'));
+    assert.match(unfetched[0], /origin\/main.*git fetch origin/);
+    w.git('remote', 'rename', 'origin', 'upstream');
+    const elsewhere = w.check().failures;
+    assert.strictEqual(elsewhere.length, 1, elsewhere.join('\n'));
+    assert.match(elsewhere[0], /no remote named origin \(its remotes: upstream\)/, 'the advice names the remotes there are');
+    assert.doesNotMatch(elsewhere[0], /git fetch origin/, 'and never one that is not there');
+  });
+
+  test('untracked files are found even where git is set to hide them', (t) => {
+    const w = finished(t);
+    w.git('config', 'status.showUntrackedFiles', 'no');
+    fs.mkdirSync(path.join(w.root, 'new'));
+    fs.writeFileSync(path.join(w.root, 'new', 'stray.txt'), 'x\n');
     const { failures } = w.check();
     assert.strictEqual(failures.length, 1, failures.join('\n'));
-    assert.match(failures[0], /origin\/main.*git fetch origin/);
+    assert.match(failures[0], /^untracked files: new\/stray\.txt/);
   });
 });
 
@@ -214,6 +235,17 @@ describe('the command', () => {
     assert.strictEqual(fail.status, 1, `${fail.stdout}${fail.stderr}`);
     const lines = fail.stderr.split('\n').filter((l) => l.startsWith('lane-done: '));
     assert.strictEqual(lines.length, 2, fail.stderr);
+  });
+
+  test('outside a git checkout it says so in one line, with no stack trace', (t) => {
+    const dir = makeTempDir('lane-done-nogit-');
+    t.after(() => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* gone */ } });
+    const r = spawnSync(process.execPath, [path.join(REPO, 'scripts', 'lane-done.js')],
+      { cwd: dir, env: { ...GIT_ENV, LANE_DONE_ROOT: dir, GIT_CEILING_DIRECTORIES: path.dirname(dir) }, encoding: 'utf8' });
+    assert.strictEqual(r.status, 1, `${r.stdout}${r.stderr}`);
+    const lines = `${r.stdout}${r.stderr}`.trim().split('\n');
+    assert.strictEqual(lines.length, 1, lines.join('\n'));
+    assert.match(lines[0], /^lane-done: .*not inside a git checkout/);
   });
 
   test('is the npm script of that name', () => {
