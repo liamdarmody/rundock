@@ -1057,6 +1057,10 @@ const CD_PREFIX = /^\s*cd\s+("[^"]*"|'[^']*'|[^\s;&|]+)\s*(?:&&|;)/;
 // Counted in every spelling a shell runs as `cd`, in a subshell, a
 // substitution, quoted or escaped, so none of them can move the base unseen.
 const CD_ANYWHERE = /(?:^|[^\w./-])cd(?=[\s;&|()'"`]|$)/g;
+// Every other way a shell changes folder, anywhere in the command, makes the
+// base as uncertain as a second `cd`. `builtin cd` and `command cd` are
+// counted by the pattern above already.
+const DIR_CHANGE = /(?:^|[^\w./-])(?:pushd|popd)(?=[\s;&|()'"`]|$)/;
 const CD_NOT_LITERAL = /[$`*?[\](){}<>!~]/;
 // THE BASE IS WHERE THE COMMAND RUNS. The hook input's `cwd` follows the agent
 // (Claude Code documents it: it is the new directory after a `cd`, and the
@@ -1086,7 +1090,7 @@ function commandBaseDir(command, workspaceRoot, pmod, cwd, extraDirs = [], home 
   const root = cwd ? canonicalize(pmod.resolve(cwd), pmod) : pmod.resolve(workspaceRoot);
   // A second `cd` means the base stops being true partway through the command.
   const cds = String(command).match(CD_ANYWHERE);
-  if (!cds || cds.length !== 1) return root;
+  if (!cds || cds.length !== 1 || DIR_CHANGE.test(command)) return root;
   const m = CD_PREFIX.exec(command);
   const mid = m ? null : midChainCd(command);
   if (!m && !(mid && at >= mid.from && at < mid.to)) return root;

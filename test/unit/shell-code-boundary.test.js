@@ -404,6 +404,36 @@ describe('a cd partway through an && chain is where the words after it start', (
   });
 });
 
+// Every other way a shell changes folder makes the base uncertain, like a
+// second `cd`: `pushd`, `popd`, and `cd` reached through `builtin` or
+// `command`. Wherever one sits, the words after a trusted `cd` are measured
+// from where the command starts.
+describe('pushd, popd and cd through builtin or command count as a second cd', () => {
+  fs.mkdirSync(path.join(ws, 'a', 'b'), { recursive: true });
+  const x = real(path.join(home, 'x.txt'));
+  const SPELLINGS = ['pushd ..', 'popd', 'builtin cd ..', 'command cd ..'];
+  const SHAPES = {
+    'before a leading-position cd': s => `${s}; cd a/b && cat ../x.txt`,
+    'after a leading cd': s => `cd a/b && ${s} && cat ../x.txt`,
+    'inside a compound after a leading cd': s => `cd a/b && for f in 1; do ${s}; cat ../x.txt; done`,
+    'before a mid-chain cd': s => `make; ${s}; cd a/b && cat ../x.txt`,
+    'after a mid-chain cd': s => `make && cd a/b && ${s} && cat ../x.txt`,
+    'inside a compound after a mid-chain cd': s => `make\ncd a/b && for f in 1; do ${s}; cat ../x.txt; done`,
+  };
+  for (const [where, shape] of Object.entries(SHAPES)) {
+    test(`each spelling ${where} falls back`, () => {
+      for (const s of SPELLINGS) {
+        const c = shape(s);
+        assert.ok(places(c).includes(x), `${c}: ${JSON.stringify(places(c))}`);
+      }
+    });
+  }
+  test('without one, the same cd is still trusted', () => {
+    assert.deepStrictEqual(places('cd a/b && cat ../x.txt'), []);
+    assert.deepStrictEqual(places('make && cd a/b && cat ../x.txt'), []);
+  });
+});
+
 // Through the real hook, the way the runtime calls it: what a person would
 // see, in each mode. In Notes mode every command is shown, so the question is
 // whether it is shown as a crossing; in Code mode a command with no crossing
