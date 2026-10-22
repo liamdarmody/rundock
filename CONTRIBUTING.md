@@ -156,9 +156,12 @@ Before you report a change done, run:
 npm run lane-done
 ```
 
+The name comes from a lane: one change carried on a branch of its own, from its first commit to the point it is handed over for review.
+
 Green tests are not the same as finished work. This passes only when:
 
-- no mutation harness, mutation run or red-first run started from this checkout is still going (each records itself while it runs: `.mutation-runs/`, `.tool-runs/`, and red-first's record in the temp folder);
+- no mutation harness, mutation run or red-first run started from this checkout is still going (each records itself in the checkout while it runs, in `.mutation-runs/` or `.tool-runs/`, and removes the record when it ends or is told to stop);
+- nothing waits in `.mutation-runs/recovered/`, where a harness keeps what a file held before it puts back the files of a mutation run that never finished: compare each copy with its file, keep what is yours, then delete the folder;
 - nothing is staged, unstaged, or untracked outside `.gitignore`;
 - every commit since the merge base with `origin/main` passed `npm run precommit` on its own tree;
 - `node scripts/leak-scan.js` is clean over those commits.
