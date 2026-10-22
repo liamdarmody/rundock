@@ -86,6 +86,7 @@ const FIXTURE_NOTICE = { src: path.join(ROOT, 'test', 'helpers', 'code-mode-fixt
 const PREFLIGHT = { src: path.join(ROOT, 'scripts', 'preflight.js'), suite: 'test/unit/preflight.test.js' };
 const LANE_DONE = { src: path.join(ROOT, 'scripts', 'lane-done.js'), suite: 'test/unit/lane-done.test.js' };
 const RUN_RECORD = { src: path.join(ROOT, 'scripts', 'lib', 'run-record.js'), suite: 'test/unit/run-record.test.js' };
+const FLAKE_REGISTER = { src: path.join(ROOT, 'test', 'unit', 'flake-register.test.js'), suite: 'test/unit/flake-register.test.js' };
 const RED_FIRST_RECORD = { src: path.join(ROOT, 'scripts', 'red-first.js'), suite: 'test/unit/red-first.test.js' };
 
 const MUTATIONS = [
@@ -531,6 +532,12 @@ const MUTATIONS = [
   [LANE_DONE, "the fetch advice names a remote that exists",
     "    failures.push(remotes.includes('origin')\n",
     "    failures.push(true\n"],
+  [FLAKE_REGISTER, "a retry on another describe is not the registered test's retry",
+    "  if (!block.includes('test.describe.configure({ retries: 1 })')) return",
+    "  if (false) return"],
+  [FLAKE_REGISTER, "a retried describe holds only the registered test",
+    "  if (tests.length !== 1) return",
+    "  if (false) return"],
   [LANE_DONE, "a commit without a passing pre-commit record fails the check",
     "  if (ungated.length) {\n",
     "  if (false) {\n"],

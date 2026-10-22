@@ -25,6 +25,37 @@ function rows() {
     });
 }
 
+/**
+ * Why the retry for `title` in `src` is not where the register promises, or
+ * null: one retry, configured inside a top-level describe that holds that
+ * test and no other, so the retry reaches nothing else.
+ */
+function retryProblem(src, title) {
+  const at = src.indexOf(`'${title}'`);
+  if (at === -1) return 'no test has that title';
+  const open = src.lastIndexOf('\ntest.describe(', at);
+  if (open === -1) return 'the test is not inside a describe';
+  const close = src.indexOf('\n});', open + 1);
+  if (close === -1 || close < at) return 'the test is not inside the describe before it';
+  const block = src.slice(open, close);
+  if (!block.includes('test.describe.configure({ retries: 1 })')) return 'the describe that holds it configures no single retry';
+  const tests = block.match(/\n\s+test(?:\.fixme|\.skip|\.only)?\(\s*'/g) || [];
+  if (tests.length !== 1) return `the describe that holds it holds ${tests.length} tests`;
+  return null;
+}
+
+test('the retry check finds a retry on the wrong describe, and a describe holding more than the one test', () => {
+  const describe = (name, body) => `\ntest.describe('${name}', () => {\n${body}});\n`;
+  const retry = '  test.describe.configure({ retries: 1 });\n';
+  const one = (title) => `  test('${title}', async () => {\n    run();\n  });\n`;
+  assert.strictEqual(retryProblem(describe('d', retry + one('mine')), 'mine'), null, 'the shape the register promises');
+  assert.match(retryProblem(describe('other', retry + one('theirs')) + describe('d', one('mine')), 'mine'),
+    /configures no single retry/, 'a retry on the describe before it is not its retry');
+  assert.match(retryProblem(describe('d', retry + one('mine') + one('another')), 'mine'), /holds 2 tests/);
+  assert.match(retryProblem(`\ntest('mine', () => {});\n`, 'mine'), /not inside a describe/);
+  assert.match(retryProblem(describe('d', retry + one('mine')), 'gone'), /no test has that title/);
+});
+
 test('the register states the two-strike rule at its top', () => {
   const head = fs.readFileSync(REGISTER, 'utf8').split('\n').slice(0, 12).join('\n');
   assert.match(head, /flakes twice is fixed or quarantined/);
@@ -67,11 +98,6 @@ test('a retry is given only to a test the register names, inside its own describ
       assert.strictEqual(count, '1', `${name}: one retry, not ${count}`);
     }
     assert.ok(/(?:^|\n)\s*test\(\s*'/.test(src), 'sanity: tests were found');
-    for (const r of mine) {
-      const at = src.indexOf(`'${r.title}'`);
-      const describe = src.lastIndexOf('test.describe(', at);
-      assert.ok(describe !== -1 && src.indexOf('test.describe.configure({ retries: 1 })', describe) < at,
-        `${r.title}: its retry is configured in the describe that holds it`);
-    }
+    for (const r of mine) assert.strictEqual(retryProblem(src, r.title), null, `${name}: "${r.title}"`);
   }
 });
