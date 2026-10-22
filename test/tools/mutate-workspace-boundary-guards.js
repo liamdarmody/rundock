@@ -78,6 +78,9 @@ const SCAFFOLD_KEEP = { src: path.join(ROOT, 'lib', 'workspace', 'scaffold.js'),
 // The switch that keeps agents inside the workspace: where it is read from, the
 // new-workspace default, and the open-path reconcile that honours it.
 const SCAFFOLD_SWITCH = { src: path.join(ROOT, 'lib', 'workspace', 'scaffold.js'), suite: 'test/unit/sandbox-switch.test.js' };
+// The deny-list lengths the recogniser accepts, against the release history
+// written out in the sandbox settings suite.
+const SCAFFOLD_SETTINGS = { src: path.join(ROOT, 'lib', 'workspace', 'scaffold.js'), suite: 'test/unit/sandbox-settings.test.js' };
 const WORKSPACE_HANDLER_SWITCH = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'workspace.js'), suite: 'test/unit/sandbox-switch.test.js' };
 // What the Permissions row reports as in force, and the switch's own writes.
 const SANDBOX_STATUS = { src: path.join(ROOT, 'lib', 'workspace', 'sandbox-status.js'), suite: 'test/unit/sandbox-status.test.js' };
@@ -415,14 +418,19 @@ const MUTATIONS = [
     '  for (let n = 1; n < deny.length; n++) shapes.push(withDenyWrite(block, deny.slice(0, n)));\n'],
   // Forget a length a build wrote and every workspace carrying it is stranded.
   [SCAFFOLD, 'the list 0.15.6 wrote is recognised',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8];',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3];'],
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19];',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 19];'],
   [SCAFFOLD, 'the list 0.13.3 to 0.15.5 wrote is recognised',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8];',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 8];'],
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19];',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 8, 19];'],
   [SCAFFOLD, 'the lists the development line wrote before 0.13.3 are recognised',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8];',
-    'const WRITTEN_DENY_LENGTHS = [3, 8];'],
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19];',
+    'const WRITTEN_DENY_LENGTHS = [3, 8, 19];'],
+  // Leave the current length out and the day a longer list ships, every block
+  // this build wrote reads as a person's edit and never upgrades.
+  [SCAFFOLD_SETTINGS, 'the current deny list\'s length is recorded as written',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19];',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8];'],
   // ===== THE USER-LEVEL STATE FILE IS A SECRET AT BOTH LAYERS =====
   // Drop the home-level files from the block and ~/.claude.json is writable
   // by sandboxed commands again, its user-scope MCP servers with it.

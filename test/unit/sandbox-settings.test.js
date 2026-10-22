@@ -26,7 +26,7 @@ const os = require('node:os');
 const { execFileSync } = require('node:child_process');
 const SCAFFOLD = path.join(__dirname, '..', '..', 'lib', 'workspace', 'scaffold.js');
 
-const { sandboxSettings, isRundockSandbox } = require('../../lib/workspace/scaffold.js');
+const { sandboxSettings, isRundockSandbox, WRITTEN_DENY_LENGTHS } = require('../../lib/workspace/scaffold.js');
 
 const WS = '/tmp/sandbox-ws';
 const HOME = '/Users/someone';
@@ -347,6 +347,20 @@ describe('sandboxSettings: named working folders', () => {
         assert.strictEqual(isRundockSandbox(released(n, shape), 'darwin'), true,
           `the ${shape} block with the ${n} deny entries an earlier build wrote is ours, and must upgrade`);
       }
+    }
+  });
+
+  test('the current deny list\'s length is recorded as written, so the list that replaces it still recognises this one', () => {
+    // Recorded now, while it is current, it changes nothing: only shorter
+    // lists are accepted. It matters the day a longer list ships, when blocks
+    // this build wrote must still upgrade, and this fails until the change that
+    // makes the list longer records the new length as well.
+    for (const mode of ['knowledge', 'code']) {
+      const n = sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], FOLDERS, mode).filesystem.denyWrite.length;
+      assert.ok(WRITTEN_DENY_LENGTHS.includes(n), `the ${n}-entry list this build writes is in WRITTEN_DENY_LENGTHS`);
+    }
+    for (const n of WRITTEN_LENGTHS.filter((len) => len > 0)) {
+      assert.ok(WRITTEN_DENY_LENGTHS.includes(n), `and so is the ${n}-entry list an earlier build wrote`);
     }
   });
 

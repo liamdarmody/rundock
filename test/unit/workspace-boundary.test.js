@@ -1366,6 +1366,8 @@ describe('the block denies the runtime\'s own escape paths, whatever runtime ver
       'and says where the runtime\'s own list was read, and how');
     assert.match(paragraph, /When the workspace is the home folder/, 'and what the deny means when the workspace is the home folder');
     assert.match(paragraph, /A workspace opened inside one of those folders/, 'and for a workspace opened inside one of them');
+    assert.match(paragraph, /A deny list trimmed to exactly the length an earlier build wrote reads as that build's block and is upgraded/,
+      'and it does not claim a person\'s edit is never touched without saying where that stops');
   });
 
   test('the persistence passage says the block refuses a shell write only where the block denies it', () => {
@@ -1381,6 +1383,9 @@ describe('the block denies the runtime\'s own escape paths, whatever runtime ver
     const refused = passage.slice(refusedAt, passage.indexOf('so the sandboxed write is refused', refusedAt));
     const landsAt = passage.indexOf('is not in the block\'s deny list and lands once approved');
     assert.ok(landsAt !== -1, 'the passage says what the block leaves writable');
+    assert.match(passage.slice(landsAt, passage.indexOf('. ', landsAt)),
+      /as the 2\.1\.259 bundle's does \(a static read of the bundle, not a live measurement\)/,
+      'and says how the runtime\'s own list was read');
     const lands = passage.slice(passage.lastIndexOf('. ', landsAt), landsAt);
     const deny = scaffold.sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], []).filesystem.denyWrite;
     const surfaces = [...hook.PERSISTENCE_SURFACE_DIRS.map((d) => [d, `\`${d}/\``]), ...hook.PERSISTENCE_SURFACE_FILES.map((f) => [f, `\`${f}\``])];
