@@ -439,6 +439,42 @@ const MUTATIONS = [
     '  return HOME_SECRET_FILES.some(f => c === foldCase(canonicalize(path.join(home, f)), foldsCase));\n',
     '  return HOME_SECRET_FILES.some(f => c.endsWith(path.sep + foldCase(f, foldsCase)));\n'],
 
+  // ===== THE BLOCK DENIES WHAT THE RUNTIME ACTS ON OUTSIDE THE SANDBOX =====
+  // Drop the escape paths and the protection is whatever the installed runtime
+  // happens to deny: on a release without its own deny, a sandboxed command
+  // plants a hook, plugin or settings file that runs unconfined next session.
+  [SCAFFOLD, 'the block denies the runtime\'s own escape paths',
+    '    ...escapeDenyFor(workspaceDir, home),\n',
+    ''],
+  // Join the home folder's names onto the workspace and the real ones stay
+  // writable, while the workspace's agents and skills, which Rundock writes,
+  // are denied instead.
+  [SCAFFOLD, 'the escape paths are joined onto the runtime home, not the workspace',
+    "    ...RUNTIME_HOME_ESCAPE_PATHS.map(f => path.posix.join(home, '.claude', f)),",
+    "    ...RUNTIME_HOME_ESCAPE_PATHS.map(f => path.posix.join(workspaceDir, '.claude', f)),"],
+  // The user's settings file names hooks the runtime starts itself.
+  [SCAFFOLD, 'the user\'s settings file is denied',
+    "const RUNTIME_HOME_ESCAPE_PATHS = ['settings.json', 'plugins',",
+    "const RUNTIME_HOME_ESCAPE_PATHS = ['plugins',"],
+  // The backups are not a tier at the card, so only the block names them.
+  [SCAFFOLD, 'the runtime\'s backups of ~/.claude.json are denied',
+    "'agents', 'commands', 'backups'];",
+    "'agents', 'commands'];"],
+  // The same user-level state under a non-default sign-in.
+  [SCAFFOLD, 'the oauth-suffixed copies of ~/.claude.json are denied',
+    '    ...OAUTH_STATE_FILES.map(f => path.posix.join(home, f)),\n',
+    ''],
+  // The workspace's own settings file is loaded for every agent spawned there.
+  [SCAFFOLD, 'the workspace\'s project settings file is denied',
+    "const WORKSPACE_ESCAPE_FILES = ['.claude/settings.json'];",
+    'const WORKSPACE_ESCAPE_FILES = [];'],
+  // Put the escape paths ahead of the credential files and the block the last
+  // release wrote is no longer a prefix: every existing workspace reads as a
+  // person's edit and never gains them.
+  [SCAFFOLD, 'the escape paths are appended after the credential files, so earlier blocks upgrade',
+    '    ...credentialDenyFor(home),\n    ...escapeDenyFor(workspaceDir, home),\n',
+    '    ...escapeDenyFor(workspaceDir, home),\n    ...credentialDenyFor(home),\n'],
+
   // ===== THE BLOCK IS DRIVEN BY MODE, AND ONLY BY MODE =====
   // Ignore the mode and the switch writes the block for code mode too.
   [SCAFFOLD, 'the mode switch really drops the enable in code mode, rather than writing the enabled shape',
