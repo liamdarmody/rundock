@@ -214,6 +214,9 @@ describe('a mutation run refuses to start where a restore would be ambiguous', (
     // and nothing else, and the whole point of the refusal is that the state is
     // diagnosable rather than mysterious.
     assert.match(run.stderr, /src\.js/, 'the refusal must name the file it stopped for');
+    // ONE PLAIN LINE, saying what to do. A paragraph is read as a crash.
+    assert.equal(run.stderr.trim().split('\n').length, 1, `the refusal is one line:\n${run.stderr}`);
+    assert.match(run.stderr, /commit or stage/, 'and it says to commit or stage first');
     assert.equal(read(fixture.src), mine,
       'a refusal must leave the working tree exactly as it found it');
     assert.equal(anyMarker(fixture.repo), false,
@@ -319,6 +322,29 @@ describe('a run killed in a way nothing can catch', () => {
     // No hand-holding instructions any more: there is nothing left for a person
     // to do. Those lines survive only on the path where the sweep itself fails,
     // which the case below covers.
+  });
+
+  test('an edit made after the kill is kept aside, not wiped, when the sweep puts the file back', async (t) => {
+    // THE SWEEP RESTORES FROM THE INDEX, and the mutation it is undoing and
+    // an edit a person made since are the same kind of change to git. A run
+    // started later, over any files at all, put the file back and the edit
+    // went with it. What was on disk is now kept before the restore.
+    const fixture = scratch(t, 'hang');
+    const { kid, exited } = await mutating(t, fixture);
+    kid.kill('SIGKILL');
+    await exited;
+    const { pid } = marker(fixture.repo);
+    fs.appendFileSync(fixture.src, 'const edited = 1;\n');
+    // The next run finishes rather than hangs, so the case does not wait out a timeout.
+    fs.writeFileSync(fixture.harness, standIn('quick'));
+
+    const next = runStandIn(fixture);
+
+    assert.equal(read(fixture.src), SOURCE, 'the file is put back from the index as before');
+    const kept = path.join(markerDir(fixture.repo), 'recovered', String(pid), 'src.js');
+    assert.ok(fs.existsSync(kept), `what the file held is kept at ${kept}`);
+    assert.match(read(kept), /const edited = 1;/, 'the edit survives in the copy');
+    assert.match(next.stderr, new RegExp(`recovered/${pid}`), 'and the sweep says where');
   });
 });
 

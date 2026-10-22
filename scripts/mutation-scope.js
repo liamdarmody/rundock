@@ -46,6 +46,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { execFileSync, spawnSync } = require('node:child_process');
+const { readMarkers, unstaged, unstagedRefusal } = require('../test/tools/mutation-run.js');
 
 const ROOT = path.join(__dirname, '..');
 const TOOLS = path.join(ROOT, 'test', 'tools');
@@ -448,6 +449,24 @@ function unitLabel(u) {
   return u.start === undefined ? u.tool : `${u.tool} rows ${u.start}:${u.end}`;
 }
 
+/**
+ * The files these units would mutate that carry unstaged changes.
+ *
+ * Asked once for the whole run, before the first harness. Each harness asks
+ * too, but only when its turn comes, so a long run spent its time on the
+ * others and then reported a refusal as a failure. Files a run record holds
+ * are left out: a live run's are its own business, and a dead run's hold its
+ * leftover mutation, which the harness sweeps and which advice to stage would
+ * put in the index.
+ */
+function unstagedTargets(units, harnesses, { root = ROOT } = {}) {
+  const tools = new Set(units.map((u) => u.tool));
+  const held = new Set(readMarkers(root).flatMap((r) => (Array.isArray(r.files) ? r.files : [])));
+  const files = [...new Set(harnesses.filter((h) => tools.has(h.tool)).flatMap((h) => h.sources || []))]
+    .filter((f) => !held.has(f));
+  return (files.length && unstaged(root, files.map((f) => path.join(root, f)))) || [];
+}
+
 function runUnits(units, { root = ROOT, spawn = spawnSync } = {}) {
   const results = [];
   for (const u of units) {
@@ -646,6 +665,11 @@ function main(argv = process.argv.slice(2)) {
     shardIndex = Number(m[1]);
     units = plan.shards[shardIndex - 1].units;
   }
+  const dirty = unstagedTargets(units, loadHarnesses());
+  if (dirty.length) {
+    console.error(unstagedRefusal('[mutation-scope] refusing to start', dirty));
+    return EXIT[NO_VERDICT];
+  }
   const ran = runUnits(units);
   writeVerdict(argValue(argv, '--verdict'), { plan: plan.id, shard: shardIndex, ...ran });
   // NAMED, NOT COUNTED. "fail: 4 unit(s)" read as four failures when one of
@@ -663,6 +687,7 @@ module.exports = {
   harnessFiles, loadHarnesses, pathReferences, makeReaderIndex, selectHarnesses,
   resolveBase, changedFiles, dependencyChangeIn, planShards, outcomeOf, combine, aggregate,
   decide, buildPlan, main, escapeProperty, RUN_EVERYTHING_WHEN_TOUCHED, SECONDS_PER_SHARD, MAX_SHARDS, readCosts,
+  unstagedTargets,
   PASS, FAIL, NO_VERDICT, EXIT,
 };
 

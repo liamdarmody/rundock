@@ -126,13 +126,27 @@ function readMarkers(root) {
  * not an older commit's. Restoring from HEAD would discard staged work, which is
  * why it is not what happens here.
  *
+ * WHAT IS ON DISK IS KEPT FIRST. To git, the mutation being undone and an
+ * edit a person made after the run died are the same kind of change, and a
+ * restore from the index wipes both. So every held file that differs from the
+ * index is copied under `<record dir>/recovered/<pid>/` before it is put back.
+ *
  * Returns the files put back, or null when the restore could not be done, in
  * which case the caller falls back to telling a person what to run by hand.
  */
-function recoverAbandoned(root, held) {
+function recoverAbandoned(root, held, pid) {
   if (!held.length) return [];
   const present = held.filter((f) => { try { return fs.existsSync(path.resolve(root, f)); } catch { return false; } });
   if (!present.length) return null;
+  const differing = unstaged(root, present.map((f) => path.resolve(root, f)));
+  if (differing === null) return null;
+  try {
+    for (const f of differing) {
+      const kept = path.join(markerDir(root), 'recovered', String(pid), f);
+      fs.mkdirSync(path.dirname(kept), { recursive: true });
+      fs.copyFileSync(path.resolve(root, f), kept);
+    }
+  } catch { return null; }
   const out = spawnSync('git', ['checkout', '--', ...held], { cwd: root, encoding: 'utf8' });
   if (out.error || out.status !== 0) return null;
   return held;
@@ -207,6 +221,13 @@ function list(items) {
   return items.map((f) => `  ${f}`).join('\n');
 }
 
+/** The one-line refusal for files a run would mutate that carry unstaged changes. */
+function unstagedRefusal(prefix, files) {
+  const them = files.length === 1 ? 'it' : 'them';
+  return `${prefix}: ${files.join(', ')} ${files.length === 1 ? 'has' : 'have'} unstaged changes and `
+    + `would be mutated in place; commit or stage ${them} first (git add), then run again.`;
+}
+
 /**
  * May a run start here, and if not, what does the person looking at a stopped
  * tool need to be told?
@@ -264,7 +285,7 @@ function inspect({ root = ROOT, files = [] } = {}) {
   const swept = [];
   for (const r of records.filter((x) => x.pid !== process.pid && !isAlive(x.pid))) {
     const held = Array.isArray(r.files) ? r.files : [];
-    const put = held.length ? recoverAbandoned(root, held) : [];
+    const put = held.length ? recoverAbandoned(root, held, r.pid) : [];
     if (put === null) {
       return {
         ok: false,
@@ -293,20 +314,18 @@ function inspect({ root = ROOT, files = [] } = {}) {
         + 'so this run started without the check that a file it mutates is not already modified.',
     };
   }
+  // ONE LINE, because the reader is looking at a tool that stopped. The
+  // reason it matters: if a run dies before it restores, the mutation and the
+  // edit are one change in the working tree, and the way back from a mutation
+  // (git checkout -- <file>) also throws the edit away. Staged is enough: the
+  // index then holds the copy a restore comes back to.
   if (blocked.length) {
     return {
       ok: false,
       blocked,
       swept,
       reason: 'unstaged',
-      message: 'Refusing to start a mutation run.\n\n'
-        + 'These files have unstaged changes, and this run mutates them in place:\n'
-        + list(blocked) + '\n\n'
-        + 'If the run is killed before it restores, the mutation and your edit are\n'
-        + 'the same thing in the working tree, and the way back from a mutation\n'
-        + '(git checkout -- <file>) is also the way to throw your edit away.\n\n'
-        + 'Stage them (git add), commit them, or stash them, then run this again.\n'
-        + 'Staged is enough: the index holds the copy a restore comes back to.',
+      message: unstagedRefusal('Refusing to start a mutation run', blocked),
     };
   }
   return { ok: true, blocked: [], swept, reason: 'clean' };
@@ -341,7 +360,8 @@ function beginMutationRun({ root = ROOT, files: declared = [] } = {}) {
   // file it put back.
   for (const s2 of verdict.swept || []) {
     console.error(`A previous mutation run (pid ${s2.pid}) never finished. Its files have been put `
-      + `back from the index:\n${list(s2.files)}`);
+      + `back from the index, and what any of them held before is kept in `
+      + `${MARKER_DIR}/recovered/${s2.pid}/:\n${list(s2.files)}`);
   }
 
   const originals = new Map();
@@ -520,5 +540,5 @@ function exitCodeFor(failed, results) {
 
 module.exports = {
   beginMutationRun, inspect, markerPath, markerDir, readMarkers, recoverAbandoned, MARKER, MARKER_DIR, ROOT,
-  targetsFromRows, rowsForShard, exitCodeFor, suiteFile, NO_VERDICT,
+  targetsFromRows, rowsForShard, exitCodeFor, suiteFile, NO_VERDICT, unstaged, unstagedRefusal,
 };
