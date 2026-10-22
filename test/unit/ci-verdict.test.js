@@ -79,6 +79,17 @@ describe('each recorded case gets the action it should', () => {
     assert.doesNotMatch(v.reason, /no verdict/);
   });
 
+  test('a failed job beside a cancelled one is still a failure', () => {
+    // A cancelled job decided nothing, but the job beside it that failed did.
+    // Only a newer run makes the whole run no verdict.
+    const fx = load('real-failure');
+    const cancelled = fx.jobs.find((j) => j.conclusion === 'cancelled');
+    const v = decideFor({ ...fx, annotations: { ...fx.annotations, [cancelled.id]: [] } });
+    assert.strictEqual(v.jobs.find((j) => j.name === cancelled.name).kind, 'superseded', 'sanity: the cancelled job');
+    assert.strictEqual(v.reason, 'a real failure: Coverage floors');
+    assert.match(decideFor(fx, { newerRun: true }).reason, /^no verdict: /, 'a newer run still counts instead');
+  });
+
   test('a runner shut down with only "The operation was canceled." to show for it is re-run once', () => {
     // The shutdown line is in the job's log, not its annotations, and the job
     // ended failure, not cancelled. The mutation check's no verdict beside it

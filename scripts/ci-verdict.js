@@ -116,12 +116,14 @@ function decide({ run, jobs, annotationsFor = () => [], logFor = () => null, new
   const none = (reason) => ({ action: 'none', reason, jobs: classified });
   if (run.conclusion === 'success') return none('the run succeeded');
   if (Number(run.run_attempt) !== 1) return none(`attempt ${run.run_attempt} is never re-run, so a retry cannot loop`);
-  // NO VERDICT, NOT A FAILURE: a cancelled run decided nothing about the change.
-  if (newerRun || notOk.some((j) => j.kind === 'superseded')) {
-    return none('no verdict: superseded or cancelled, so this run decided nothing; a newer run is the one that counts');
-  }
+  const superseded = 'no verdict: superseded or cancelled, so this run decided nothing; a newer run is the one that counts';
+  if (newerRun) return none(superseded);
+  // A FAILED JOB IS READ BEFORE A CANCELLED ONE: the cancelled job decided
+  // nothing, but the failed one beside it did.
   const failures = notOk.filter((j) => j.kind === 'failure');
   if (failures.length) return none(`a real failure: ${failures.map((j) => j.name).join(', ')}`);
+  // NO VERDICT, NOT A FAILURE: a cancelled run decided nothing about the change.
+  if (notOk.some((j) => j.kind === 'superseded')) return none(superseded);
   const lost = notOk.filter((j) => j.kind === 'runner-lost');
   if (!lost.length) {
     const timed = notOk.filter((j) => j.kind === 'timed-out');
