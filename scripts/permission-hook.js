@@ -35,7 +35,7 @@ const fs = require('fs');
 const { isReadOnlyShellCommand, isDestructiveShellCommand, shellSegments } = require('../public/read-only-shell.js');
 // The Code-mode verdict and the development paths live beside this file, in
 // scripts/, so they are unpacked with it (package.json asarUnpack scripts/**).
-const { codeModeVerdict } = require('./code-mode-verdict.js');
+const { codeModeVerdict, keychainVerdict } = require('./code-mode-verdict.js');
 const { lexSegments } = require('./code-mode-parse.js');
 const devPaths = require('./dev-paths.js');
 const { refusalNotice, approvalNotice, sandboxBlocked } = require('./refusal-notice.js');
@@ -1781,12 +1781,15 @@ fetchAgentNotice((agentNotice) => {
   // it runs when what it changes can be got back with tools already to hand,
   // asks every time when it cannot, and asks once for the few acts other
   // people see first. It is computed for every Code-mode shell request, a
-  // boundary card included, so the card's class is always the verdict. It is
-  // never computed outside Code mode, where the grader is unchanged.
+  // boundary card included, so the card's class is always the verdict.
+  // Outside Code mode the grader is unchanged, except for a line that reads or
+  // changes the Keychain, which nothing but the card can stop in either mode:
+  // it carries the same verdict in Notes mode (keychainVerdict), so the card
+  // asks the same way, ahead of any saved answer.
   const shellCommand = SHELL_TOOLS.has(data && data.tool_name)
     && typeof ((data.tool_input || {}).command) === 'string' ? data.tool_input.command : null;
-  const verdict = (codeMode && shellCommand !== null)
-    ? codeModeVerdict({ toolName: data.tool_name, command: shellCommand, cwd, workspaceRoot: wsRoot, extraDirs })
+  const verdict = shellCommand !== null
+    ? (codeMode ? codeModeVerdict : keychainVerdict)({ toolName: data.tool_name, command: shellCommand, cwd, workspaceRoot: wsRoot, extraDirs })
     : null;
   // A line that reads or changes the Keychain: asked every time, with no folder
   // or rule to remember, and refused when nobody can be asked.
@@ -1843,9 +1846,10 @@ fetchAgentNotice((agentNotice) => {
     session_id: data.session_id,
     conversation_id: convoId,
     ...(advisory.length ? { advisory_outside_paths: advisory } : {}),
-    // THE VERDICT, under its own name, Code mode only. The server relays it by
-    // name and the browser draws the card from it; without it the browser
-    // grades as it always has, which is every Notes-mode request.
+    // THE VERDICT, under its own name: Code mode, and a Keychain line in Notes
+    // mode. The server relays it by name and the browser draws the card from
+    // it; without it the browser grades as it always has, which is every other
+    // Notes-mode request.
     ...(verdict ? { code_mode_verdict: verdict } : {}),
     // An answer-file write asks without claiming a crossing: it carries its own
     // reason, and the client keys its heading off this rather than off boundary.

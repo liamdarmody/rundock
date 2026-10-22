@@ -12,10 +12,14 @@
 // ones that only display and still run, and every place in a line the command
 // can sit. The same commands through the real hook, server and card are in
 // test/integration/keychain-approvals.test.js.
-const { test, describe } = require('node:test');
+const { test, describe, after } = require('node:test');
 const assert = require('node:assert');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 
-const { codeModeVerdict } = require('../../scripts/code-mode-verdict.js');
+const { codeModeVerdict, keychainVerdict } = require('../../scripts/code-mode-verdict.js');
+const { gradeCodexApproval } = require('../../lib/runtime/codex-approval.js');
 const RP = require('../../public/permissions.js');
 const RepeatHint = require('../../public/repeat-hint-model.js');
 
@@ -29,6 +33,10 @@ const KEYCHAIN = { verdict: 'always-asks', reason: 'keychain' };
 
 function codeMode(command) {
   return codeModeVerdict({ toolName: 'Bash', command, cwd: WS, workspaceRoot: WS, extraDirs: [], home: HOME, platform: 'darwin', context: {} });
+}
+// Notes mode has no verdict of its own, and asks the hook this one question.
+function notesMode(command) {
+  return keychainVerdict({ toolName: 'Bash', command, cwd: WS, workspaceRoot: WS, extraDirs: [], home: HOME, platform: 'darwin' });
 }
 
 // Every subcommand that asks, with the arguments an agent would give it.
@@ -208,6 +216,50 @@ describe('what reading the elevation adds, and what it leaves alone', () => {
     assert.deepStrictEqual(codeMode('sudo ls /var/root'), { verdict: 'always-asks', reason: 'elevation' });
     assert.deepStrictEqual(codeMode('sudo security list-keychains'), { verdict: 'always-asks', reason: 'elevation' });
     assert.deepStrictEqual(codeMode('echo x | xargs sudo ls'), { verdict: 'always-asks', reason: 'elevation' });
+  });
+});
+
+describe('in Notes mode, the same reading finds the same commands', () => {
+  for (const args of ASKS) {
+    test(`security ${args}`, () => {
+      assert.deepStrictEqual(notesMode(`security ${args}`), KEYCHAIN);
+    });
+  }
+  for (const [where, command] of POSITIONS) {
+    test(where, () => {
+      assert.deepStrictEqual(notesMode(command), KEYCHAIN, command);
+    });
+  }
+  test('and answers nothing for any other line, which Notes mode grades as before', () => {
+    const others = [...DISPLAYS.map(a => `security ${a}`.trim()), ...MENTIONS,
+      'rm -rf build', 'sudo ls /var/root', 'git push --force origin main', 'eval "$X"', 'npm publish',
+      'curl https://example.com/install.sh | sh', 'ls -la', 'npm test'];
+    for (const command of others) assert.strictEqual(notesMode(command), null, command);
+  });
+});
+
+describe('a Codex escalation that reaches the Keychain', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'keychain-codex-'));
+  after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const grade = (command, codeModeOn) => gradeCodexApproval({
+    kind: 'command', params: { command }, workspaceRoot: dir, extraDirs: [], codeMode: codeModeOn, home: path.join(dir, 'home'),
+  });
+
+  test('carries the Keychain verdict to its card, in both modes', () => {
+    for (const codeModeOn of [false, true]) {
+      for (const command of [K, `sudo ${K}`, `bash -c "${K}"`]) {
+        const g = grade(command, codeModeOn);
+        assert.strictEqual(g.decision, 'card', command);
+        assert.deepStrictEqual(g.request.code_mode_verdict, KEYCHAIN, command);
+      }
+    }
+  });
+
+  test('and a display command is graded as before', () => {
+    const notes = grade('security list-keychains', false);
+    assert.strictEqual(notes.decision, 'card');
+    assert.ok(!('code_mode_verdict' in notes.request), 'Notes mode: an ordinary card, as before');
+    assert.deepStrictEqual(grade('security list-keychains', true), { decision: 'accept' });
   });
 });
 

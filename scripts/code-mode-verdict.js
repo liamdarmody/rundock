@@ -1126,4 +1126,12 @@ function strip(ref) {
   return ref.replace(/^refs\/heads\//, '').replace(/^refs\/tags\//, '');
 }
 
-module.exports = { codeModeVerdict, RULES };
+// THE KEYCHAIN IN NOTES MODE, which has no verdict of its own: the same
+// reading of the line, with no disk or git facts (none of them decides whether
+// a line reaches the Keychain), answered only when it does, and null otherwise.
+function keychainVerdict(opts) {
+  const v = codeModeVerdict({ ...opts, context: {} });
+  return v.reason === KEYCHAIN ? v : null;
+}
+
+module.exports = { codeModeVerdict, keychainVerdict, RULES };

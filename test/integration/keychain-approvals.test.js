@@ -28,7 +28,7 @@ const K = `security find-generic-password -w -s ${SVC}`;
 const SENTENCE = 'This reads or changes a password or key stored in your Mac\'s Keychain, where sign-in tokens are kept.';
 const REFUSED = 'Rundock server unreachable. This reads or changes a password or key stored in your Mac\'s Keychain, '
   + 'and it is never done without asking, so it was refused rather than approved on your behalf.';
-const MODES = ['code'];
+const MODES = ['code', 'notes'];
 
 // Each subcommand that asks.
 const ASKS = [
@@ -289,3 +289,44 @@ for (const mode of MODES) {
     });
   });
 }
+
+// The workspace's saved answers, written as a person's earlier "Always allow"
+// clicks left them, then read back the way a reload reads them.
+function saveAnswers(tools) {
+  const file = path.join(h.workspaceDir, '.rundock', 'permissions.json');
+  let data = {};
+  try { data = JSON.parse(fs.readFileSync(file, 'utf-8')); } catch (e) { /* none saved yet */ }
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify({ ...data, allowedTools: tools }, null, 2));
+}
+async function reloadSavedAnswers() {
+  const since = client.messages.length;
+  client.send({ type: 'get_tool_allows' });
+  const { msg } = await client.waitFor((m) => m.type === 'tool_allows', { since, label: 'the saved answers' });
+  settings.toolAllowsArrived(msg);
+  return msg.tools;
+}
+
+describe('Notes mode: an Always allow saved for security', () => {
+  test('from a listing card answers the next listing, and never a Keychain read', async () => {
+    saveAnswers([]);
+    await reloadSavedAnswers();
+    const since = client.messages.length;
+    await assertAsBefore('security list-keychains', 'notes', 'always');
+    await client.waitFor((m) => m.type === 'tool_allows' && m.tools.includes('Bash:security'), { since, label: 'the rule saved' });
+
+    const listing = await request('security list-keychains', { mode: 'notes' });
+    assert.strictEqual(listing.answeredByRule, true, 'the saved rule answers what it was saved for');
+    assert.strictEqual((await listing.done).decision, 'allow');
+
+    for (const command of [K, `security dump-keychain`, `security find-generic-password -s ${SVC}`]) await assertAsks(command, 'notes');
+  });
+
+  test('in the workspace\'s saved answers, read back after a reload, never answers a Keychain read', async () => {
+    saveAnswers(['Bash:security', 'Bash:sudo', 'Bash:bash', 'Bash:echo']);
+    assert.ok((await reloadSavedAnswers()).includes('Bash:security'));
+    for (const command of [K, `sudo ${K}`, `bash -c "${K}"`, `echo ${SVC} | ${K}`]) await assertAsks(command, 'notes');
+    saveAnswers([]);
+    await reloadSavedAnswers();
+  });
+});
