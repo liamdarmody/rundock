@@ -304,6 +304,14 @@ describe('a save the server refuses is shown, and not kept', () => {
     } finally { global.ws = null; }
   });
 
+  test('the server\'s reason, when it gives one, is shown with it', () => {
+    document.getElementById('messages').innerHTML = '';
+    const reason = 'Could not record that allow: a connector that sends, replies or forwards asks every time.';
+    chat.toolAllowFailed({ type: 'tool_allow_failed', key: 'mcp__example_mail__send_message', message: reason });
+    const notes = [...document.querySelectorAll('#messages .msg-system')].map((n) => n.textContent);
+    assert.deepStrictEqual(notes, [`Rundock couldn't save "Always allow" for this, so it will ask again next time. ${reason}`]);
+  });
+
   test('the message reaches the view', () => {
     const app = fs.readFileSync(path.join(__dirname, '..', '..', 'public', 'app.js'), 'utf-8');
     assert.match(app, /case 'tool_allow_failed': toolAllowFailed\(d\); break;/);
