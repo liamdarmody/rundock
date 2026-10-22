@@ -79,6 +79,17 @@ const RELEASE_SIGNOFF = { src: path.join(ROOT, 'scripts', 'release.js'), suite: 
 // The mutation scope and the CI retry classifier, each watched by its suite.
 const SCOPE = { src: path.join(ROOT, 'scripts', 'mutation-scope.js'), suite: 'test/unit/mutation-scope.test.js' };
 const CI_VERDICT = { src: path.join(ROOT, 'scripts', 'ci-verdict.js'), suite: 'test/unit/ci-verdict.test.js' };
+// The checks a change passes before it is reported done, and the guards the
+// mutation tooling keeps around a person's own edits.
+const ENVELOPE_RUN = { src: path.join(ROOT, 'test', 'tools', 'mutation-run.js'), suite: 'test/unit/mutation-run-cleanup.test.js' };
+const FIXTURE_NOTICE = { src: path.join(ROOT, 'test', 'helpers', 'code-mode-fixture.js'), suite: 'test/unit/code-mode-fixture-root.test.js' };
+const PREFLIGHT = { src: path.join(ROOT, 'scripts', 'preflight.js'), suite: 'test/unit/preflight.test.js' };
+const LANE_DONE = { src: path.join(ROOT, 'scripts', 'lane-done.js'), suite: 'test/unit/lane-done.test.js' };
+const RUN_RECORD = { src: path.join(ROOT, 'scripts', 'lib', 'run-record.js'), suite: 'test/unit/run-record.test.js' };
+const FLAKE_REGISTER = { src: path.join(ROOT, 'test', 'unit', 'flake-register.test.js'), suite: 'test/unit/flake-register.test.js' };
+const FLAKE_REPORTER = { src: path.join(ROOT, 'test', 'e2e', 'flake-reporter.js'), suite: 'test/unit/flake-reporter.test.js' };
+const PLAYWRIGHT_CONFIG = { src: path.join(ROOT, 'playwright.config.js'), suite: 'test/unit/flake-reporter.test.js' };
+const RED_FIRST_RECORD = { src: path.join(ROOT, 'scripts', 'red-first.js'), suite: 'test/unit/red-first.test.js' };
 
 const MUTATIONS = [
   // ===== A DESTRUCTIVE STEP WITHOUT ITS CAUTION =====
@@ -433,8 +444,14 @@ const MUTATIONS = [
     "  if (Number(run.run_attempt) !== 1) return none(`attempt ${run.run_attempt} is never re-run, so a retry cannot loop`);\n",
     ""],
   [CI_VERDICT, "a superseded run is not retried",
-    "  if (newerRun || notOk.some((j) => j.kind === 'superseded')) return none('superseded: a newer run is the one that counts');\n",
+    "  if (newerRun) return none(superseded);\n",
     ""],
+  [CI_VERDICT, "a cancelled run is no verdict",
+    "  if (notOk.some((j) => j.kind === 'superseded')) return none(superseded);\n",
+    ""],
+  [CI_VERDICT, "a failed job is read before a cancelled one",
+    "  if (newerRun) return none(superseded);\n",
+    "  if (newerRun || notOk.some((j) => j.kind === 'superseded')) return none(superseded);\n"],
   // A runner shut down with only the bare cancellation in its annotations,
   // and the shutdown line only in its log.
   [CI_VERDICT, "a failed job cancelled mid-step with only the bare cancellation is a lost runner",
@@ -449,6 +466,95 @@ const MUTATIONS = [
   [CI_VERDICT, "an exit code in the log keeps a printed shutdown line a failure",
     " && !LOG_EXIT_CODE.test(log)) {\n",
     ") {\n"],
+
+  // ===== NOTHING REPORTED DONE THAT IS STILL RUNNING, UNCOMMITTED OR UNGATED =====
+  [SCOPE, "a run over unstaged edits refuses before the first harness",
+    "  if (dirty.length) {\n",
+    "  if (false) {\n"],
+  [SCOPE, "a run records itself in the checkout while it runs",
+    "  const record = recordRun(ROOT, 'npm run mutate:guards');\n",
+    "  const record = { release: () => {} };\n"],
+  [SCOPE, "a run waits for each harness without blocking its signal listeners",
+    "    const r = await run(args, root);\n",
+    "    const r = require('node:child_process').spawnSync(process.execPath, args, { cwd: root, stdio: 'inherit' });\n"],
+  [RUN_RECORD, "a run asked to stop removes its record",
+    "  for (const signal of SIGNALS) process.on(signal, onSignal);\n",
+    ""],
+  [RUN_RECORD, "a record is alive while the process group it names is",
+    "isAlive(r.pid) || groupAlive(r.group)",
+    "isAlive(r.pid)"],
+  [RUN_RECORD, "a kept record outlives the run that kept it",
+    "    process.removeListener('exit', release);\n",
+    ""],
+  [RED_FIRST_RECORD, "a red-first run is recorded in the checkout",
+    "    checkoutRecord = recordRun(repo, 'npm run red-first');\n",
+    ""],
+  [RED_FIRST_RECORD, "the run's own checkout record is not a change it failed to undo",
+    "['status', '--porcelain', '--', '.', ':(exclude).tool-runs']",
+    "['status', '--porcelain']"],
+  [RUN_RECORD, "a run asked to stop still dies of the signal",
+    "    if (process.listenerCount(signal) === 0) process.kill(process.pid, signal);\n",
+    ""],
+  [ENVELOPE_RUN, "a dead run's files are copied aside before the index restores them",
+    "      fs.copyFileSync(path.resolve(root, f), kept);\n",
+    ""],
+  [ENVELOPE_RUN, "a reused pid never overwrites a copy kept earlier",
+    "      keptDir = fs.mkdtempSync(path.join(markerDir(root), 'recovered', `${pid}-${stamp}-`));\n",
+    "      keptDir = path.join(markerDir(root), 'recovered', String(pid));\n"],
+  [ENVELOPE_RUN, "a missing fixture folder is a problem the run names",
+    "  if (probe.skip) {\n",
+    "  if (false) {\n"],
+  [FIXTURE_NOTICE, "a skipped Code-mode suite says so in one line",
+    "  if (!quiet && !toldOnce) {\n",
+    "  if (false) {\n"],
+  [PREFLIGHT, "an unregistered suite fails the cheap phase",
+    "  results.push(member);\n",
+    ""],
+  [LANE_DONE, "a run still going fails the check",
+    "  const failures = [...runsInProgress(root), ...uncommitted(git)];\n",
+    "  const failures = [...uncommitted(git)];\n"],
+  [LANE_DONE, "uncommitted work fails the check",
+    "  const failures = [...runsInProgress(root), ...uncommitted(git)];\n",
+    "  const failures = [...runsInProgress(root)];\n"],
+  [LANE_DONE, "copies a sweep kept of a dead run's files fail the check",
+    "  if (kept.length) {\n",
+    "  if (false) {\n"],
+  [LANE_DONE, "the advice for a dead run never begins with a bare checkout",
+    "or copy them aside, then git checkout -- ",
+    "put them back with git checkout -- "],
+  [LANE_DONE, "a run still going is named by its record, with what to do if none is",
+    "if no such run is going, delete ${rel}.`);",
+    "`);"],
+  [LANE_DONE, "untracked files are listed whatever git is set to show",
+    "['status', '--porcelain=v1', '--untracked-files=all']",
+    "['status', '--porcelain=v1']"],
+  [LANE_DONE, "outside a git checkout the check says so in one line",
+    "  try { git(['rev-parse', '--is-inside-work-tree']); } catch {\n",
+    "  try { } catch {\n"],
+  [LANE_DONE, "the fetch advice names a remote that exists",
+    "    failures.push(remotes.includes('origin')\n",
+    "    failures.push(true\n"],
+  [FLAKE_REGISTER, "a retry on another describe is not the registered test's retry",
+    "  if (!block.includes('test.describe.configure({ retries: 1 })')) return",
+    "  if (false) return"],
+  [FLAKE_REGISTER, "a retried describe holds only the registered test",
+    "  if (tests.length !== 1) return",
+    "  if (false) return"],
+  [FLAKE_REPORTER, "a pass on a retry is reported",
+    "    if (result.status !== 'passed' || !result.retry) return;\n",
+    "    return;\n"],
+  [FLAKE_REPORTER, "in CI the report is a warning annotation",
+    "    if (this.env.GITHUB_ACTIONS) {\n",
+    "    if (false) {\n"],
+  [PLAYWRIGHT_CONFIG, "the browser suite reports through the flake reporter",
+    ", ['./test/e2e/flake-reporter.js']]",
+    "]"],
+  [LANE_DONE, "a commit without a passing pre-commit record fails the check",
+    "  if (ungated.length) {\n",
+    "  if (false) {\n"],
+  [LANE_DONE, "a leak scan that is not clean fails the check",
+    "  if (!leakScan(root, range).ok) {\n",
+    "  if (false) {\n"],
 ];
 
 const REPORTER = ['--test-reporter', 'spec'];

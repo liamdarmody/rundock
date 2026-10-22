@@ -1789,7 +1789,13 @@ function targetsFor(mutations) {
 
 function run() {
   const targets = targetsFor(MUTATIONS);
-  const session = beginMutationRun({ files: [...new Set(targets.map((target) => target.src))] });
+  // The suites go to the envelope too: several of them build the Code-mode
+  // fixture, and without its folder they skip and every row aimed at them
+  // turns nothing red.
+  const session = beginMutationRun({
+    files: [...new Set(targets.map((target) => target.src))],
+    suites: [...new Set(targets.map((target) => target.suite))],
+  });
   const originals = new Map();
   for (const target of targets) originals.set(target, session.original(target.src));
   const results = [];

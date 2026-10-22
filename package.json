@@ -27,6 +27,7 @@
     "check:refs": "node scripts/check-internal-refs.js",
     "precommit": "node scripts/precommit-gate.js",
     "red-first": "node scripts/red-first.js",
+    "lane-done": "node scripts/lane-done.js",
     "mutate:guards": "node scripts/mutation-scope.js",
     "check:fixture": "node test/tools/regenerate-benign-before.js --check",
     "lint:styles": "node test/tools/style-drift.js",

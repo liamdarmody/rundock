@@ -45,7 +45,9 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { execFileSync, spawnSync } = require('node:child_process');
+const { execFileSync, spawn: spawnChild } = require('node:child_process');
+const { readMarkers, unstaged, unstagedRefusal } = require('../test/tools/mutation-run.js');
+const { recordRun } = require('./lib/run-record.js');
 
 const ROOT = path.join(__dirname, '..');
 const TOOLS = path.join(ROOT, 'test', 'tools');
@@ -448,13 +450,45 @@ function unitLabel(u) {
   return u.start === undefined ? u.tool : `${u.tool} rows ${u.start}:${u.end}`;
 }
 
-function runUnits(units, { root = ROOT, spawn = spawnSync } = {}) {
+/**
+ * The files these units would mutate that carry unstaged changes.
+ *
+ * Asked once for the whole run, before the first harness. Each harness asks
+ * too, but only when its turn comes, so a long run spent its time on the
+ * others and then reported a refusal as a failure. Files a run record holds
+ * are left out: a live run's are its own business, and a dead run's hold its
+ * leftover mutation, which the harness sweeps and which advice to stage would
+ * put in the index.
+ */
+function unstagedTargets(units, harnesses, { root = ROOT } = {}) {
+  const tools = new Set(units.map((u) => u.tool));
+  const held = new Set(readMarkers(root).flatMap((r) => (Array.isArray(r.files) ? r.files : [])));
+  const files = [...new Set(harnesses.filter((h) => tools.has(h.tool)).flatMap((h) => h.sources || []))]
+    .filter((f) => !held.has(f));
+  return (files.length && unstaged(root, files.map((f) => path.join(root, f)))) || [];
+}
+
+/**
+ * One harness, run to its end. ASYNCHRONOUS ON PURPOSE: while a synchronous
+ * spawn waits, no signal listener in this process can run, so an interrupted
+ * run either died without removing its record or kept going after being told
+ * to stop.
+ */
+function runHarness(args, root) {
+  return new Promise((resolve) => {
+    const kid = spawnChild(process.execPath, args, { cwd: root, stdio: 'inherit' });
+    kid.on('error', () => resolve({ status: null, signal: null }));
+    kid.on('exit', (status, signal) => resolve({ status, signal }));
+  });
+}
+
+async function runUnits(units, { root = ROOT, run = runHarness } = {}) {
   const results = [];
   for (const u of units) {
     const args = [path.join('test', 'tools', u.tool), '--markdown'];
     if (u.start !== undefined) args.push('--rows', `${u.start}:${u.end}`);
     console.log(`\n[mutation-scope] ${unitLabel(u)}`);
-    const r = spawn(process.execPath, args, { cwd: root, stdio: 'inherit' });
+    const r = await run(args, root);
     const o = outcomeOf(r.status, r.signal);
     if (o.outcome !== PASS) console.error(`[mutation-scope] ${unitLabel(u)}: ${o.outcome}${o.cause ? ` (${o.cause})` : ''}`);
     results.push({ unit: unitLabel(u), ...o });
@@ -580,7 +614,7 @@ function readPlan(file) {
   return JSON.parse(fs.readFileSync(file, 'utf8'));
 }
 
-function main(argv = process.argv.slice(2)) {
+async function main(argv = process.argv.slice(2)) {
   if (argv.includes('--aggregate')) {
     const planFile = argValue(argv, '--plan-file');
     const dir = argValue(argv, '--verdicts');
@@ -646,7 +680,16 @@ function main(argv = process.argv.slice(2)) {
     shardIndex = Number(m[1]);
     units = plan.shards[shardIndex - 1].units;
   }
-  const ran = runUnits(units);
+  const dirty = unstagedTargets(units, loadHarnesses());
+  if (dirty.length) {
+    console.error(unstagedRefusal('[mutation-scope] refusing to start', dirty));
+    return EXIT[NO_VERDICT];
+  }
+  // RECORDED WHILE IT RUNS, between harnesses as well as inside one, so the
+  // check made before a change is reported done can see it is still going.
+  const record = recordRun(ROOT, 'npm run mutate:guards');
+  const ran = await runUnits(units);
+  record.release();
   writeVerdict(argValue(argv, '--verdict'), { plan: plan.id, shard: shardIndex, ...ran });
   // NAMED, NOT COUNTED. "fail: 4 unit(s)" read as four failures when one of
   // four had failed; the line says how many did not pass, and which.
@@ -663,7 +706,8 @@ module.exports = {
   harnessFiles, loadHarnesses, pathReferences, makeReaderIndex, selectHarnesses,
   resolveBase, changedFiles, dependencyChangeIn, planShards, outcomeOf, combine, aggregate,
   decide, buildPlan, main, escapeProperty, RUN_EVERYTHING_WHEN_TOUCHED, SECONDS_PER_SHARD, MAX_SHARDS, readCosts,
+  unstagedTargets,
   PASS, FAIL, NO_VERDICT, EXIT,
 };
 
-if (require.main === module) process.exit(main());
+if (require.main === module) main().then((code) => process.exit(code));

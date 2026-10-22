@@ -54,6 +54,8 @@ scripts/screenshots/.banned-tokens.json
 .mutation-plan.json
 .mutation-verdict.json
 .mutation-runs/
+# A long run of the development tools, recorded while it runs (scripts/lib/run-record.js).
+.tool-runs/
 
 # Release walk output: screenshots and the report attached to the release PR.
 # Rebuilt on every run, local to the machine that walked.

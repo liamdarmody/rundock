@@ -110,6 +110,47 @@ describe('membership is checkable, not hand-picked', () => {
         `${file} is excluded without a reason anyone could check`);
     }
   });
+
+  test('the phase itself finds an unregistered suite, so it fails locally rather than only in CI', () => {
+    // The test above runs in the suite, which a cancelled CI run never
+    // reaches. The phase applies the same rule in a millisecond.
+    assert.deepStrictEqual(preflight.unregisteredSuites(), [], 'nothing is unregistered on this tree');
+    const inventory = "{ file: 'test/unit/brand-new.test.js', extraction: 'x', failLoudBy: 'count', where: 'y' },\n"
+      + "{ file: 'test/unit/proven-elsewhere.test.js', extraction: 'x', failLoudBy: 'mutation', where: 'y' },\n"
+      + "{ file: 'test/unit/listed.test.js', extraction: 'x', failLoudBy: 'imports', where: 'y' },\n"
+      + "{ file: 'test/unit/excused.test.js', extraction: 'x', failLoudBy: 'count', where: 'y' },";
+    assert.deepStrictEqual(preflight.unregisteredSuites({
+      inventory,
+      registry: ['test/unit/listed.test.js'],
+      notCheap: { 'test/unit/excused.test.js': 'behaviour: a reason a reader can check' },
+    }), ['test/unit/brand-new.test.js']);
+  });
+
+  test('an unregistered suite fails the phase with one plain line naming it and where to register it', () => {
+    const src = fs.readFileSync(path.join(ROOT, 'scripts', 'preflight.js'), 'utf8');
+    const registrySrc = fs.readFileSync(path.join(ROOT, 'test', 'unit', 'sdlc-gate-hardening.test.js'), 'utf8');
+    const inventoried = [...registrySrc.matchAll(
+      /\{\s*file:\s*'(test\/unit\/[^']+)'[^}]*?failLoudBy:\s*'(?:count|imports)'/g)].map((m) => m[1]);
+    const dropped = preflight.REGISTRY_SUITES.find((f) => inventoried.includes(f));
+    assert.ok(dropped, 'sanity: a registered suite the inventory names');
+    const rigged = path.join(ROOT, '.rundock', 'preflight-membership-rigged.js');
+    fs.mkdirSync(path.dirname(rigged), { recursive: true });
+    fs.writeFileSync(rigged, src
+      .replace(`  '${dropped}',\n`, '')
+      .replace(/const CHECKS = \[[\s\S]*?\];/, 'const CHECKS = [];')
+      .replace(/results\.push\(run\('registries'[\s\S]*?\)\);/, ''));
+    try {
+      const r = spawnSync(process.execPath, [rigged], { cwd: ROOT, encoding: 'utf8', env: cleanEnv() });
+      assert.notStrictEqual(r.status, 0, 'an unregistered suite fails the phase');
+      const lines = `${r.stdout}${r.stderr}`.split('\n').filter((l) => l.includes(dropped));
+      assert.strictEqual(lines.length, 1, `one line names the suite:\n${r.stdout}${r.stderr}`);
+      assert.match(lines[0], /REGISTRY_SUITES/, 'and says where to register it');
+      assert.match(lines[0], /NOT_CHEAP/, 'or where to excuse it');
+      assert.match(lines[0], /scripts\/preflight\.js/, 'in which file');
+    } finally {
+      fs.rmSync(rigged, { force: true });
+    }
+  });
 });
 
 describe('captures of another program, checked before anything expensive', () => {

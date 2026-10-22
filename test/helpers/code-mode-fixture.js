@@ -66,8 +66,16 @@ function underTemp(dir) {
 // such folder the suites that need one skip, with the reason. Under CI they
 // fail instead: a skipped suite reports green, and these suites carry the
 // evidence the permission rules rest on.
-const NO_ROOT = 'needs a writable folder outside every temp folder and git working tree (set RUNDOCK_TEST_OUTSIDE_TEMP_ROOT)';
-function outsideTempRoot({ env = process.env, candidates } = {}) {
+//
+// THE SKIP IS SAID ONCE, IN ONE LINE, with an example value. A skip reason per
+// test is easy to miss, and a mutation harness reads a skipped suite as one
+// where nothing turned red, which looks like an unguarded guard. No default is
+// added beyond /var/tmp: the next place a rule would accept is somewhere in a
+// person's home, and that is theirs to name.
+const NO_ROOT = 'needs a writable folder outside every temp folder and git working tree: set '
+  + 'RUNDOCK_TEST_OUTSIDE_TEMP_ROOT, for example RUNDOCK_TEST_OUTSIDE_TEMP_ROOT=$HOME/rundock-test-fixtures';
+let toldOnce = false;
+function outsideTempRoot({ env = process.env, candidates, quiet = false } = {}) {
   const bases = (candidates || [env.RUNDOCK_TEST_OUTSIDE_TEMP_ROOT, '/var/tmp']).filter(Boolean);
   for (const base of bases) {
     try {
@@ -78,6 +86,10 @@ function outsideTempRoot({ env = process.env, candidates } = {}) {
     } catch (e) { /* not writable here: try the next */ }
   }
   if (runningInCi(env)) throw new Error(`The Code-mode fixture ${NO_ROOT}. Under CI this fails rather than skips.`);
+  if (!quiet && !toldOnce) {
+    toldOnce = true;
+    process.stderr.write(`Code-mode suites skipped: the fixture ${NO_ROOT}\n`);
+  }
   return { skip: NO_ROOT };
 }
 function runningInCi(env) {
@@ -336,6 +348,6 @@ function classOf(live, dead, payload) {
 }
 
 module.exports = {
-  HOOK, GIT_ENV, git, write, real, outsideTempRoot, buildWorld, STATES, withState, withStateAsync, cwdFor, expand,
+  HOOK, GIT_ENV, git, write, real, outsideTempRoot, NO_ROOT, buildWorld, STATES, withState, withStateAsync, cwdFor, expand,
   startCaptureServer, closedPort, hookEnv, runHook, judge, classOf, ASKS_ONCE_REFUSAL,
 };

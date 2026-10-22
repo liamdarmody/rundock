@@ -17,6 +17,7 @@ const {
   harnessFiles, loadHarnesses, pathReferences, makeReaderIndex, selectHarnesses, resolveBase,
   changedFiles, dependencyChangeIn, planShards, outcomeOf, combine, aggregate, decide, buildPlan,
   RUN_EVERYTHING_WHEN_TOUCHED, SECONDS_PER_SHARD, MAX_SHARDS, readCosts, PASS, FAIL, NO_VERDICT,
+  unstagedTargets,
 } = require('../../scripts/mutation-scope.js');
 
 const REPO = path.join(__dirname, '..', '..');
@@ -322,6 +323,107 @@ describe('shards are planned by time, not rows', () => {
     const tools = path.join(REPO, 'test', 'tools');
     const plan = buildPlan(decide(['--all'], { root: REPO, toolsDir: tools }), { toolsDir: tools });
     for (const s of plan.shards) assert.ok(s.seconds <= 15 * 60, `shard ${s.index} is planned at ${s.seconds}s`);
+  });
+});
+
+describe('a run refuses to start over a file with unstaged changes', () => {
+  // Each harness refuses on its own, but only when its turn comes, so a full
+  // run spent its time on the others and ended "fail". The run as a whole now
+  // refuses before the first harness, in one line.
+  const recording = (targets) => harnessSource(targets).replace('process.exit(0);',
+    "require('node:fs').writeFileSync(__filename + '.ran', ''); process.exit(0);");
+  // THE TOOL IS COPIED INTO THE FIXTURE AND RUN THERE, so its root is the
+  // fixture's by construction. Run from this checkout, a run that failed to
+  // refuse would start every real harness against the real source tree.
+  const runAll = (root) => spawnSync(process.execPath, [path.join(root, 'scripts', 'mutation-scope.js'), '--all'],
+    { cwd: root, encoding: 'utf8' });
+  const copyTool = (root) => {
+    for (const rel of ['scripts/mutation-scope.js', 'scripts/lib/run-record.js', 'test/tools/mutation-run.js']) {
+      write(root, rel, fs.readFileSync(path.join(REPO, rel), 'utf8'));
+    }
+  };
+
+  test('an unstaged edit to a file a selected harness mutates refuses the whole run, in one line', () => {
+    const repo = fixtureRepo();
+    write(repo.root, 'test/tools/mutate-a-guards.js', recording([['A', 'lib/a.js', 'test/unit/a.test.js']]));
+    write(repo.root, 'test/tools/mutate-b-guards.js', recording([['B', 'lib/b.js', 'test/unit/b.test.js']]));
+    copyTool(repo.root);
+    repo.commit('recording harnesses');
+    fs.appendFileSync(path.join(repo.root, 'lib', 'a.js'), 'edited\n');
+
+    const refused = runAll(repo.root);
+    assert.strictEqual(refused.status, 3, `refused as no verdict:\n${refused.stdout}${refused.stderr}`);
+    const lines = refused.stderr.trim().split('\n');
+    assert.strictEqual(lines.length, 1, `one line:\n${refused.stderr}`);
+    assert.match(lines[0], /lib\/a\.js/, 'naming the file');
+    assert.match(lines[0], /commit or stage/, 'and saying what to do');
+    assert.ok(!fs.existsSync(path.join(tools(repo.root), 'mutate-b-guards.js.ran')), 'no harness ran');
+
+    repo.git('add', 'lib/a.js');
+    const ran = runAll(repo.root);
+    assert.strictEqual(ran.status, 0, `staged is enough:\n${ran.stdout}${ran.stderr}`);
+    assert.ok(fs.existsSync(path.join(tools(repo.root), 'mutate-a-guards.js.ran')), 'and the harnesses ran');
+  });
+
+  test('a run records itself in the checkout while it runs, and the record is gone after', () => {
+    // So the check made before a change is reported done can see a run still
+    // going, between harnesses as well as inside one, with no process table.
+    const repo = fixtureRepo();
+    write(repo.root, 'test/tools/mutate-a-guards.js', harnessSource([['A', 'lib/a.js', 'test/unit/a.test.js']])
+      .replace('process.exit(0);', "const fs = require('node:fs'); const dir = path.join(__dirname, '..', '..', '.tool-runs');"
+        + " fs.writeFileSync(__filename + '.saw', JSON.stringify(fs.readdirSync(dir)"
+        + ".map((n) => JSON.parse(fs.readFileSync(path.join(dir, n), 'utf8'))))); process.exit(0);"));
+    copyTool(repo.root);
+    repo.commit('a harness that looks for the record');
+    const r = runAll(repo.root);
+    assert.strictEqual(r.status, 0, `${r.stdout}${r.stderr}`);
+    const saw = JSON.parse(fs.readFileSync(path.join(tools(repo.root), 'mutate-a-guards.js.saw'), 'utf8'));
+    assert.strictEqual(saw.length, 1, 'one run was recorded while the harness ran');
+    assert.strictEqual(saw[0].pid, r.pid, 'naming the process that runs it');
+    assert.match(saw[0].what, /mutate:guards/, 'and what it is');
+    assert.deepStrictEqual(fs.readdirSync(path.join(repo.root, '.tool-runs')), [], 'and it is removed when the run ends');
+  });
+
+  test('an interrupted run removes its record at once, and dies of the signal', async (t) => {
+    // With the harnesses run synchronously, a signal handler in the run could
+    // not fire until the harness in hand had finished, so the run either died
+    // leaving its record or kept going after being told to stop.
+    const repo = fixtureRepo();
+    write(repo.root, 'test/tools/mutate-a-guards.js', harnessSource([['A', 'lib/a.js', 'test/unit/a.test.js']])
+      .replace('process.exit(0);', "require('node:fs').writeFileSync(__filename + '.pid', String(process.pid));"
+        + ' setTimeout(() => process.exit(0), 60000);'));
+    copyTool(repo.root);
+    repo.commit('a harness that hangs');
+    const { spawn } = require('node:child_process');
+    const run = spawn(process.execPath, [path.join(repo.root, 'scripts', 'mutation-scope.js'), '--all'],
+      { cwd: repo.root, stdio: 'ignore' });
+    const exited = new Promise((resolve) => run.on('exit', (code, signal) => resolve({ code, signal })));
+    const pidFile = path.join(tools(repo.root), 'mutate-a-guards.js.pid');
+    t.after(() => {
+      try { run.kill('SIGKILL'); } catch { /* gone */ }
+      try { process.kill(Number(fs.readFileSync(pidFile, 'utf8')), 'SIGKILL'); } catch { /* gone */ }
+    });
+    const records = () => { try { return fs.readdirSync(path.join(repo.root, '.tool-runs')); } catch { return []; } };
+    const deadline = Date.now() + 20000;
+    while (!(fs.existsSync(pidFile) && records().length) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 25));
+    assert.ok(fs.existsSync(pidFile) && records().length === 1, 'the run is recorded while its harness runs');
+    run.kill('SIGINT');
+    const how = await Promise.race([exited, new Promise((r) => setTimeout(() => r({ timedOut: true }), 10000))]);
+    assert.strictEqual(how.signal, 'SIGINT', `the run stops when told to, not after its harness: ${JSON.stringify(how)}`);
+    assert.deepStrictEqual(records(), [], 'and its record goes with it');
+  });
+
+  test('a file a run record holds is left to the harness, which knows what to do with it', () => {
+    const repo = fixtureRepo();
+    fs.appendFileSync(path.join(repo.root, 'lib', 'a.js'), 'mutant\n');
+    const hs = loadHarnesses({ toolsDir: tools(repo.root), root: repo.root });
+    const units = [{ tool: 'mutate-a-guards.js' }, { tool: 'mutate-b-guards.js' }];
+    assert.deepStrictEqual(unstagedTargets(units, hs, { root: repo.root }), ['lib/a.js']);
+    assert.deepStrictEqual(unstagedTargets([{ tool: 'mutate-b-guards.js' }], hs, { root: repo.root }), [],
+      'a file no selected harness mutates is not this run\'s business');
+    write(repo.root, '.mutation-runs/999999.json', JSON.stringify({ pid: 999999, files: ['lib/a.js'] }));
+    assert.deepStrictEqual(unstagedTargets(units, hs, { root: repo.root }), [],
+      'a dead run\'s leftover mutation is swept by the harness, never staged on this advice');
   });
 });
 

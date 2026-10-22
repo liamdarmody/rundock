@@ -18,9 +18,25 @@ after(() => fs.rmSync(tempBase, { recursive: true, force: true }));
 describe('with no folder to build the fixture in', () => {
   test('outside CI the suites skip, with the reason', () => {
     for (const env of [{}, { CI: '' }, { CI: 'false' }, { CI: '0' }]) {
-      const r = fx.outsideTempRoot({ env, candidates: [tempBase] });
+      // Quiet: the one-line notice is the next case's subject, not noise here.
+      const r = fx.outsideTempRoot({ env, candidates: [tempBase], quiet: true });
       assert.ok(r.skip && /RUNDOCK_TEST_OUTSIDE_TEMP_ROOT/.test(r.skip), JSON.stringify(env));
     }
+  });
+
+  test('outside CI the skip prints one plain line, once, naming the setting and an example value', () => {
+    // A skip reported per test is easy to miss, and a mutation harness reads
+    // the skipped suite as one where nothing turned red. Said once, plainly.
+    const { spawnSync } = require('node:child_process');
+    const helper = path.join(__dirname, '..', 'helpers', 'code-mode-fixture.js');
+    const env = { ...process.env };
+    delete env.CI;
+    const r = spawnSync(process.execPath, ['-e', `const fx = require(${JSON.stringify(helper)});
+      fx.outsideTempRoot({ env: {}, candidates: [${JSON.stringify(tempBase)}] });
+      fx.outsideTempRoot({ env: {}, candidates: [${JSON.stringify(tempBase)}] });`], { encoding: 'utf8', env });
+    const lines = r.stderr.trim().split('\n').filter(Boolean);
+    assert.strictEqual(lines.length, 1, `one line, once:\n${r.stderr}`);
+    assert.match(lines[0], /RUNDOCK_TEST_OUTSIDE_TEMP_ROOT=\S+/, 'it names the setting with an example value');
   });
 
   test('under CI they fail rather than skip', () => {
