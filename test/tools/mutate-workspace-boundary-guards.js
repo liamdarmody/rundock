@@ -1562,6 +1562,10 @@ const MUTATIONS = [
   [CONNECTOR_HOOK_FLOW, 'Connector send: the refusal does not say why',
     "    else if (connectorAlwaysAsks) why = 'A connector",
     "    else if (false) why = 'A connector"],
+  // The reason must be true of every act it covers: archiving can be undone.
+  [CONNECTOR_HOOK_FLOW, 'Connector delete: the refusal says an archive cannot be called back',
+    "sends, replies, forwards, deletes or archives is never done without asking, so with no way to ask it was refused",
+    "sends, replies, forwards or deletes cannot be called back, and it is never done without asking, so it was refused"],
   [CONNECTOR_HOOK, 'Connector delete: a tool that is not a connector is taken for a delete',
     "  return String(toolName).startsWith('mcp__') && mcpActionWords(toolName, true).some(t => MCP_DESTRUCTIVE_VERBS.has(t));",
     '  return mcpActionWords(toolName, true).some(t => MCP_DESTRUCTIVE_VERBS.has(t));'],

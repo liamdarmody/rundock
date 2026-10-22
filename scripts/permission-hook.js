@@ -1935,10 +1935,10 @@ fetchAgentNotice((agentNotice) => {
   const alwaysAsks = !!(verdict && verdict.verdict === 'always-asks');
   const crossingAlwaysAsks = codeMode && alwaysAsksCrossing(access);
   const answerFile = !!(access && (access.answerFile || boundaryCrossingsFor(access).some(c => c && c.answerFile)));
-  // AND A CONNECTOR SEND OR DELETE, which asks every time for the same reason:
-  // it cannot be called back. An agent still running after Rundock has
-  // stopped, a routine's included, would otherwise send with nobody having
-  // seen it. Only Notes mode reaches here with one: Code mode has already
+  // AND A CONNECTOR SEND OR DELETE, which asks every time: it reaches other
+  // people, or removes or archives something, and is never done unseen. An
+  // agent still running after Rundock has stopped, a routine's included,
+  // would otherwise send with nobody having seen it. Only Notes mode reaches here with one: Code mode has already
   // answered every connector action above.
   const connectorAlwaysAsks = isMcpSendTool(data.tool_name) || isMcpDeleteTool(data.tool_name);
   const failClosed = answerFile || destructive || asksOnce || alwaysAsks || crossingAlwaysAsks || connectorAlwaysAsks;
@@ -1948,7 +1948,7 @@ fetchAgentNotice((agentNotice) => {
     else if (alwaysAsks || destructive) why = 'This command cannot be undone, and it is never run without asking, so it was refused rather than approved on your behalf.';
     else if (asksOnce) why = 'This command was held for your approval and Rundock could not ask, so it was refused rather than approved on your behalf.';
     else if (crossingAlwaysAsks) why = 'This reaches a place Rundock asks about every time, and it is never done without asking, so it was refused rather than approved on your behalf.';
-    else if (connectorAlwaysAsks) why = 'A connector action that sends, replies, forwards or deletes cannot be called back, and it is never done without asking, so it was refused rather than approved on your behalf.';
+    else if (connectorAlwaysAsks) why = 'A connector action that sends, replies, forwards, deletes or archives is never done without asking, so with no way to ask it was refused rather than approved on your behalf.';
     writeDecision(({
       hookSpecificOutput: {
         hookEventName: 'PreToolUse',

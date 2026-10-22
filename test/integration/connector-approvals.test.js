@@ -192,7 +192,8 @@ describe('when Rundock cannot be asked', () => {
       const out = await runHook(MAIL(action), CONVO, await closedPort());
       assert.strictEqual(out.decision, 'deny');
       assert.match(out.reason, /^Rundock server unreachable\. /);
-      assert.match(out.reason, /sends, replies, forwards or deletes cannot be called back/);
+      assert.strictEqual(out.reason, 'Rundock server unreachable. A connector action that sends, replies, forwards, deletes or archives '
+        + 'is never done without asking, so with no way to ask it was refused rather than approved on your behalf.');
     });
   }
 
