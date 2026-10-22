@@ -78,6 +78,9 @@ const SCAFFOLD_KEEP = { src: path.join(ROOT, 'lib', 'workspace', 'scaffold.js'),
 // The switch that keeps agents inside the workspace: where it is read from, the
 // new-workspace default, and the open-path reconcile that honours it.
 const SCAFFOLD_SWITCH = { src: path.join(ROOT, 'lib', 'workspace', 'scaffold.js'), suite: 'test/unit/sandbox-switch.test.js' };
+// The deny-list lengths the recogniser accepts, against the release history
+// written out in the sandbox settings suite.
+const SCAFFOLD_SETTINGS = { src: path.join(ROOT, 'lib', 'workspace', 'scaffold.js'), suite: 'test/unit/sandbox-settings.test.js' };
 const WORKSPACE_HANDLER_SWITCH = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'workspace.js'), suite: 'test/unit/sandbox-switch.test.js' };
 // What the Permissions row reports as in force, and the switch's own writes.
 const SANDBOX_STATUS = { src: path.join(ROOT, 'lib', 'workspace', 'sandbox-status.js'), suite: 'test/unit/sandbox-status.test.js' };
@@ -220,6 +223,19 @@ const MEDIA_ROUTER = { src: path.join(ROOT, 'lib', 'http-router.js'), suite: 'te
 // the Settings link that must never change a setting itself.
 const REPEAT_HINT = { src: path.join(ROOT, 'public', 'repeat-hint-model.js'), suite: 'test/unit/repeat-hint.test.js' };
 const REPEAT_HINT_LINK = { src: path.join(ROOT, 'public', 'views', 'settings.js'), suite: 'test/unit/repeat-hint.test.js' };
+
+// A connector action that sends, replies or forwards: never a read in the hook,
+// high risk in the client. The word tables are proven by the suite that grades
+// action names; the guards that decide a card, through the real hook, server
+// and card.
+const CONNECTOR_HOOK = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/connector-grading.test.js' };
+const CONNECTOR_CLIENT = { src: path.join(ROOT, 'public', 'permissions.js'), suite: 'test/unit/connector-grading.test.js' };
+const CONNECTOR_HOOK_FLOW = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/integration/connector-approvals.test.js' };
+const CONNECTOR_CLIENT_FLOW = { src: path.join(ROOT, 'public', 'permissions.js'), suite: 'test/integration/connector-approvals.test.js' };
+// A saved "Always allow" for a send is dropped by the store and refused by the
+// handler, both proven through the real server.
+const CONNECTOR_STORE_FLOW = { src: path.join(ROOT, 'lib', 'workspace', 'boundary.js'), suite: 'test/integration/connector-approvals.test.js' };
+const CONNECTOR_HANDLER_FLOW = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'workspace.js'), suite: 'test/integration/connector-approvals.test.js' };
 
 const MUTATIONS = [
   // ===== ONE DIRECTORY UNDER TWO NAMES IS ONE IDENTITY =====
@@ -406,8 +422,28 @@ const MUTATIONS = [
   // Stop recognising the narrower deny lists and the block an earlier release
   // wrote is a stranger's edit: never rewritten, never given the new deny.
   [SCAFFOLD, 'a block carrying an earlier, shorter deny list is still recognised as ours',
-    '  for (let n = 1; n < deny.length; n++) shapes.push(withDenyWrite(block, deny.slice(0, n)));\n',
+    '  for (const n of WRITTEN_DENY_LENGTHS) if (n < deny.length) shapes.push(withDenyWrite(block, deny.slice(0, n)));\n',
     ''],
+  // Accept every shorter list and a person who removes an entry from Rundock's
+  // block has it put back on the next open, over their edit.
+  [SCAFFOLD, 'only the deny lists a build wrote are recognised, not every shorter one',
+    '  for (const n of WRITTEN_DENY_LENGTHS) if (n < deny.length) shapes.push(withDenyWrite(block, deny.slice(0, n)));\n',
+    '  for (let n = 1; n < deny.length; n++) shapes.push(withDenyWrite(block, deny.slice(0, n)));\n'],
+  // Forget a length a build wrote and every workspace carrying it is stranded.
+  [SCAFFOLD, 'the list 0.15.6 wrote is recognised',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19];',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 19];'],
+  [SCAFFOLD, 'the list 0.13.3 to 0.15.5 wrote is recognised',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19];',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 8, 19];'],
+  [SCAFFOLD, 'the lists the development line wrote before 0.13.3 are recognised',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19];',
+    'const WRITTEN_DENY_LENGTHS = [3, 8, 19];'],
+  // Leave the current length out and the day a longer list ships, every block
+  // this build wrote reads as a person's edit and never upgrades.
+  [SCAFFOLD_SETTINGS, 'the current deny list\'s length is recorded as written',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19];',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8];'],
   // ===== THE USER-LEVEL STATE FILE IS A SECRET AT BOTH LAYERS =====
   // Drop the home-level files from the block and ~/.claude.json is writable
   // by sandboxed commands again, its user-scope MCP servers with it.
@@ -438,6 +474,42 @@ const MUTATIONS = [
   [HOOK, 'a home-level secret matches at the home folder root only',
     '  return HOME_SECRET_FILES.some(f => c === foldCase(canonicalize(path.join(home, f)), foldsCase));\n',
     '  return HOME_SECRET_FILES.some(f => c.endsWith(path.sep + foldCase(f, foldsCase)));\n'],
+
+  // ===== THE BLOCK DENIES WHAT THE RUNTIME ACTS ON OUTSIDE THE SANDBOX =====
+  // Drop the escape paths and the protection is whatever the installed runtime
+  // happens to deny: on a release without its own deny, a sandboxed command
+  // plants a hook, plugin or settings file that runs unconfined next session.
+  [SCAFFOLD, 'the block denies the runtime\'s own escape paths',
+    '    ...escapeDenyFor(workspaceDir, home),\n',
+    ''],
+  // Join the home folder's names onto the workspace and the real ones stay
+  // writable, while the workspace's agents and skills, which Rundock writes,
+  // are denied instead.
+  [SCAFFOLD, 'the escape paths are joined onto the runtime home, not the workspace',
+    "    ...RUNTIME_HOME_ESCAPE_PATHS.map(f => path.posix.join(home, '.claude', f)),",
+    "    ...RUNTIME_HOME_ESCAPE_PATHS.map(f => path.posix.join(workspaceDir, '.claude', f)),"],
+  // The user's settings file names hooks the runtime starts itself.
+  [SCAFFOLD, 'the user\'s settings file is denied',
+    "const RUNTIME_HOME_ESCAPE_PATHS = ['settings.json', 'plugins',",
+    "const RUNTIME_HOME_ESCAPE_PATHS = ['plugins',"],
+  // The backups are not a tier at the card, so only the block names them.
+  [SCAFFOLD, 'the runtime\'s backups of ~/.claude.json are denied',
+    "'agents', 'commands', 'backups'];",
+    "'agents', 'commands'];"],
+  // The same user-level state under a non-default sign-in.
+  [SCAFFOLD, 'the oauth-suffixed copies of ~/.claude.json are denied',
+    '    ...OAUTH_STATE_FILES.map(f => path.posix.join(home, f)),\n',
+    ''],
+  // The workspace's own settings file is loaded for every agent spawned there.
+  [SCAFFOLD, 'the workspace\'s project settings file is denied',
+    "const WORKSPACE_ESCAPE_FILES = ['.claude/settings.json'];",
+    'const WORKSPACE_ESCAPE_FILES = [];'],
+  // Put the escape paths ahead of the credential files and the block the last
+  // release wrote is no longer a prefix: every existing workspace reads as a
+  // person's edit and never gains them.
+  [SCAFFOLD, 'the escape paths are appended after the credential files, so earlier blocks upgrade',
+    '    ...credentialDenyFor(home),\n    ...escapeDenyFor(workspaceDir, home),\n',
+    '    ...escapeDenyFor(workspaceDir, home),\n    ...credentialDenyFor(home),\n'],
 
   // ===== THE BLOCK IS DRIVEN BY MODE, AND ONLY BY MODE =====
   // Ignore the mode and the switch writes the block for code mode too.
@@ -942,8 +1014,8 @@ const MUTATIONS = [
     "verdict.verdict === 'asks-once' && typeof verdict.rule === 'string' ? verdict.rule : null;",
     "verdict.verdict === 'asks-once' && typeof verdict.rule === 'string' ? 'Bash:git' : null;"],
   [CM_HOOK, "M17: Asks once fails open when nobody can be asked",
-    "  const failClosed = answerFile || destructive || asksOnce || alwaysAsks || crossingAlwaysAsks;",
-    "  const failClosed = answerFile || destructive || alwaysAsks || crossingAlwaysAsks;"],
+    "  const failClosed = answerFile || destructive || asksOnce || alwaysAsks || crossingAlwaysAsks || connectorAlwaysAsks;",
+    "  const failClosed = answerFile || destructive || alwaysAsks || crossingAlwaysAsks || connectorAlwaysAsks;"],
   [CM_HOOK, "M18: the Code-mode branch answers before the boundary classification",
     "      && !(access && (access.where === 'outside' || access.answerFile))\n      && (!verdict || verdict.verdict === 'runs')) {",
     "      && (!verdict || verdict.verdict === 'runs')) {"],
@@ -1247,6 +1319,9 @@ const MUTATIONS = [
   [ALLOW_KEY_HANDLER, "Allow keys: a refused save is not reported",
     "    refuseToolAllow(ws, msg.key, 'Could not record that allow: that is not a tool name.');",
     "    sendToolAllows(ws);"],
+  [ALLOW_FAIL_VIEW, "Allow keys: the server's reason for a refused save is not shown",
+    "next time.' + (why ? ` ${why}` : ''));",
+    "next time.');"],
   [ALLOW_FAIL_VIEW, "Allow keys: the view keeps an allow the server refused",
     "  if (key) alwaysAllowedTools.delete(key);",
     ""],
@@ -1480,6 +1555,98 @@ const MUTATIONS = [
   [REPEAT_HINT_LINK, 'Repeat hint link: never turns the switch off itself',
     "  const ring = find();\n",
     "  const ring = find();\n  if (target === 'sandbox') sandboxTurnOff();\n"],
+  // ===== A CONNECTOR THAT SENDS ASKS EVERY TIME =====
+  // Drop the send words from the hook's check and a send whose name carries a
+  // read word (`send_status_update`) runs with no card at all.
+  [CONNECTOR_HOOK_FLOW, 'Connector send: a send beside a read word runs as a read',
+    '  if (mcpActionWords(toolName, true).some(t => MCP_DESTRUCTIVE_VERBS.has(t) || MCP_SEND_VERBS.has(t))) return false;',
+    '  if (mcpActionWords(toolName, true).some(t => MCP_DESTRUCTIVE_VERBS.has(t))) return false;'],
+  [CONNECTOR_HOOK, 'Connector send: the hook forgets resend',
+    "const MCP_SEND_VERBS = new Set(['send','resend','reply','forward','fwd']);",
+    "const MCP_SEND_VERBS = new Set(['send','reply','forward','fwd']);"],
+  [CONNECTOR_HOOK, 'Connector send: the hook forgets fwd',
+    "const MCP_SEND_VERBS = new Set(['send','resend','reply','forward','fwd']);",
+    "const MCP_SEND_VERBS = new Set(['send','resend','reply','forward']);"],
+  // Stop splitting at digits and `send2Email` is not a send; split for the
+  // read check as well and `set_ipv4info` becomes a read on `info`.
+  [CONNECTOR_HOOK, 'Connector send: the hook does not split at a digit',
+    "  if (atDigits) action = action.replace(",
+    "  if (false) action = action.replace("],
+  [CONNECTOR_HOOK, 'Connector read: the read check splits at a digit',
+    '  const tokens = mcpActionWords(toolName);\n  if (tokens.some(t => MCP_READ_VERBS.has(t))) return true;',
+    '  const tokens = mcpActionWords(toolName, true);\n  if (tokens.some(t => MCP_READ_VERBS.has(t))) return true;'],
+  [CONNECTOR_CLIENT, 'Connector send: the card does not split at a digit',
+    "      .replace(/([A-Za-z])([0-9])/g, '$1 $2').replace(/([0-9])([A-Za-z])/g, '$1 $2')\n",
+    ''],
+  // Drop the client's grading and the card offers Always allow again, which
+  // is the one click that let every later send through unseen.
+  [CONNECTOR_CLIENT_FLOW, 'Connector send: the card offers Always allow on a send',
+    "      if (words.some(w => MCP_SEND_VERBS.indexOf(w) !== -1)) return 'high';\n",
+    ''],
+  // Back to a pattern that needs `_` or `-` around the word and `deleteEvent`
+  // offers Always allow, the gap the send fix had already closed for sends.
+  [CONNECTOR_CLIENT_FLOW, 'Connector delete: the card offers Always allow on a camelCase delete',
+    "      if (words.some(w => MCP_DESTRUCTIVE_VERBS.indexOf(w) !== -1)) return 'high';\n",
+    "      if (/(^|[_\\-])(delete|remove|destroy|drop|cancel|abort|archive|trash|purge|clear|uninstall)([_\\-]|$)/.test(toolName.split('__').slice(2).join('_').toLowerCase())) return 'high';\n"],
+  [CONNECTOR_CLIENT, 'Connector send: camelCase is not split, so sendEmail is not a send',
+    "      .replace(/([a-z0-9])([A-Z])/g, '$1 $2')\n",
+    ''],
+  [CONNECTOR_CLIENT, 'Connector send: the client forgets forward',
+    "  const MCP_SEND_VERBS = ['send', 'resend', 'reply', 'forward', 'fwd'];",
+    "  const MCP_SEND_VERBS = ['send', 'resend', 'reply', 'fwd'];"],
+  // Read a saved send back and Settings lists an allow that never answers.
+  [CONNECTOR_STORE_FLOW, 'Connector send: a saved allow for a send is read back',
+    "data.allowedTools.filter((k) => typeof k === 'string' && k && !isMcpSendTool(k) && !isMcpDeleteTool(k))",
+    "data.allowedTools.filter((k) => typeof k === 'string' && k && !isMcpDeleteTool(k))"],
+  [CONNECTOR_STORE_FLOW, 'Connector delete: a saved allow for a delete is read back',
+    "data.allowedTools.filter((k) => typeof k === 'string' && k && !isMcpSendTool(k) && !isMcpDeleteTool(k))",
+    "data.allowedTools.filter((k) => typeof k === 'string' && k && !isMcpSendTool(k))"],
+  [CONNECTOR_HANDLER_FLOW, 'Connector send: an allow for a send is saved again',
+    '  if (isMcpSendTool(msg.key.trim()) || isMcpDeleteTool(msg.key.trim())) {',
+    '  if (isMcpDeleteTool(msg.key.trim())) {'],
+  [CONNECTOR_HANDLER_FLOW, 'Connector delete: an allow for a delete is saved again',
+    '  if (isMcpSendTool(msg.key.trim()) || isMcpDeleteTool(msg.key.trim())) {',
+    '  if (isMcpSendTool(msg.key.trim())) {'],
+  [CONNECTOR_HOOK, 'Connector send: a tool that is not a connector is taken for a send',
+    "  return String(toolName).startsWith('mcp__') && mcpActionWords(toolName, true).some(t => MCP_SEND_VERBS.has(t));",
+    '  return mcpActionWords(toolName, true).some(t => MCP_SEND_VERBS.has(t));'],
+  // Let a connector send or delete through when nobody can be asked and an
+  // agent still running after Rundock has stopped sends with nobody seeing it.
+  [CONNECTOR_HOOK_FLOW, 'Connector send: a send or delete is allowed when Rundock cannot be asked',
+    "  const failClosed = answerFile || destructive || asksOnce || alwaysAsks || crossingAlwaysAsks || connectorAlwaysAsks;",
+    "  const failClosed = answerFile || destructive || asksOnce || alwaysAsks || crossingAlwaysAsks;"],
+  [CONNECTOR_HOOK_FLOW, 'Connector delete: a delete is allowed when Rundock cannot be asked',
+    '  const connectorAlwaysAsks = isMcpSendTool(data.tool_name) || isMcpDeleteTool(data.tool_name);',
+    '  const connectorAlwaysAsks = isMcpSendTool(data.tool_name);'],
+  [CONNECTOR_HOOK_FLOW, 'Connector send: the refusal does not say why',
+    "    else if (connectorAlwaysAsks) why = 'A connector",
+    "    else if (false) why = 'A connector"],
+  // The reason must be true of every act it covers: archiving can be undone.
+  [CONNECTOR_HOOK_FLOW, 'Connector delete: the refusal says an archive cannot be called back',
+    "sends, replies, forwards, deletes or archives is never done without asking, so with no way to ask it was refused",
+    "sends, replies, forwards or deletes cannot be called back, and it is never done without asking, so it was refused"],
+  [CONNECTOR_HOOK, 'Connector delete: a tool that is not a connector is taken for a delete',
+    "  return String(toolName).startsWith('mcp__') && mcpActionWords(toolName, true).some(t => MCP_DESTRUCTIVE_VERBS.has(t));",
+    '  return mcpActionWords(toolName, true).some(t => MCP_DESTRUCTIVE_VERBS.has(t));'],
+  // Take the suggest rule out and a calendar's suggest_time raises a card
+  // again, where the list and get actions beside it run without one.
+  [CONNECTOR_HOOK_FLOW, 'Connector read: suggesting a time asks as a write',
+    '  return suggestsOnlyATime(tokens);',
+    '  return false;'],
+  // Loosen it and suggest_edit, suggest_time_and_book or a bare suggest run
+  // with no card, which is a write turned into a read.
+  [CONNECTOR_HOOK, 'Connector read: suggest beside any time word is a read',
+    '  return rest.length > 0 && rest.length < tokens.length && rest.every(t => MCP_SUGGEST_TIME_WORDS.has(t));',
+    '  return rest.length > 0 && rest.length < tokens.length && rest.some(t => MCP_SUGGEST_TIME_WORDS.has(t));'],
+  [CONNECTOR_HOOK, 'Connector read: a bare suggest is a read',
+    '  return rest.length > 0 && rest.length < tokens.length && rest.every(t => MCP_SUGGEST_TIME_WORDS.has(t));',
+    '  return rest.length < tokens.length && rest.every(t => MCP_SUGGEST_TIME_WORDS.has(t));'],
+  [CONNECTOR_HOOK, 'Connector read: time words with no suggest are a read',
+    '  return rest.length > 0 && rest.length < tokens.length && rest.every(t => MCP_SUGGEST_TIME_WORDS.has(t));',
+    '  return rest.length > 0 && rest.every(t => MCP_SUGGEST_TIME_WORDS.has(t));'],
+  [CONNECTOR_HOOK, 'Connector read: the time words lose availability',
+    "const MCP_SUGGEST_TIME_WORDS = new Set(['time','times','slot','slots','availability','meeting','meetings']);",
+    "const MCP_SUGGEST_TIME_WORDS = new Set(['time','times','slot','slots','meeting','meetings']);"],
   // ===== STOP AND ASK AFTER A REFUSAL =====
   [STOP_ASK_HOOK, "Stop and ask: a denied card goes back to inviting another route",
     ": refusalNotice(result.reason === 'timeout' ? 'timeout' : 'denied', data.tool_name);",

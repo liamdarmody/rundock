@@ -12,6 +12,9 @@ on:
   push:
     branches: ['**']
     tags: ['**']
+  # A required check has to report on the merge queue's combined commit too,
+  # or a queued pull request waits for it forever.
+  merge_group:
 
 permissions:
   contents: read

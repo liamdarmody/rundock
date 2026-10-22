@@ -109,6 +109,28 @@
     return 'medium';
   }
 
+  // A connector action that sends, replies or forwards is high risk for the
+  // reason a delete is: once a message has gone it cannot be called back. So it
+  // asks every time, with Allow and Deny only, and no saved "Always allow"
+  // answers it (decidePermission cards high risk ahead of the saved set). The
+  // words are matched whole, on the action part of the name split on `_`, `-`
+  // and camelCase, so `sendEmail` is a send and `get_sent_items` is not. The
+  // hook keeps the same words (MCP_SEND_VERBS in scripts/permission-hook.js) so
+  // a send never runs as a read.
+  const MCP_SEND_VERBS = ['send', 'resend', 'reply', 'forward', 'fwd'];
+  // The delete words, read the same way, so `deleteEvent` asks like
+  // `delete_event` does. The hook keeps the same list (MCP_DESTRUCTIVE_VERBS).
+  const MCP_DESTRUCTIVE_VERBS = ['delete', 'remove', 'destroy', 'drop', 'cancel', 'abort', 'archive', 'trash', 'purge', 'clear', 'uninstall'];
+  function mcpActionWords(toolName) {
+    return String(toolName).split('__').slice(2).join('_')
+      .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+      // and between a letter and a digit, so `send2Email` is a send too
+      .replace(/([A-Za-z])([0-9])/g, '$1 $2').replace(/([0-9])([A-Za-z])/g, '$1 $2')
+      .split(/[_\-\s]+/)
+      .map(w => w.toLowerCase())
+      .filter(Boolean);
+  }
+
   // Classify risk level of a tool request.
   function classifyRisk(toolName, input) {
     if (toolName === 'Bash') return classifyBashRisk((input.command || '').trim());
@@ -137,8 +159,9 @@
       // MCP reads auto-approve in the permission hook, so by the time a request
       // reaches the card it's a write or destructive action. Flag destructive ones
       // as high (no "Always allow"); other writes are medium.
-      const action = toolName.split('__').slice(2).join('_').toLowerCase();
-      if (/(^|[_\-])(delete|remove|destroy|drop|cancel|abort|archive|trash|purge|clear|uninstall)([_\-]|$)/.test(action)) return 'high';
+      const words = mcpActionWords(toolName);
+      if (words.some(w => MCP_DESTRUCTIVE_VERBS.indexOf(w) !== -1)) return 'high';
+      if (words.some(w => MCP_SEND_VERBS.indexOf(w) !== -1)) return 'high';
       return 'medium';
     }
     return 'medium';
@@ -657,6 +680,7 @@
   const agentHomeBoundaryCopy = alwaysAskCopy;
 
   return { BASH_DESCRIPTIONS, bashBin, classifyRisk, describeToolRequest, toolAllowKey, decidePermission, offersAlwaysAllow, alwaysAskCopy, answerFileCopy,
+    MCP_SEND_VERBS, MCP_DESTRUCTIVE_VERBS,
     putBackCardCopy, putBackDiffLines,
     verdictAllowKey, verdictCardCopy, ruleKeyLabel, ALWAYS_ASKS_CLOSING, allowButtonClass,
     routePermissionRequest, queuePendingPermission, pendingPermissionsFor, removePendingPermission, clearPendingPermissions,
