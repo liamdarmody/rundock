@@ -198,12 +198,34 @@ describe('sandboxSettings: named working folders', () => {
     network: { allowedDomains: ['*'] },
   };
 
+  // THE DENY LISTS RELEASES ACTUALLY WROTE, written out rather than cut from
+  // today's list, so the recogniser is checked against what is on people's
+  // disks and not against itself. Read from each tagged release's
+  // sandboxSettings output: no denyWrite for 0.13.0 to 0.13.2, three entries
+  // for 0.13.3 to 0.15.5, eight for 0.15.6. One and two entries were written by
+  // the development line between 0.13.2 and 0.13.3, and by no release.
+  const RELEASED_DENY = [
+    `${WS}/.rundock/state.json`, `${WS}/.rundock/permissions.json`, `${WS}/.claude/settings.local.json`,
+    `${HOME}/.claude/.credentials.json`, `${HOME}/.claude/.config.json`, `${HOME}/.codex/auth.json`,
+    `${HOME}/.claude.json`, `${HOME}/.claude.json.backup`,
+  ];
+  const WRITTEN_LENGTHS = [0, 1, 2, 3, 8];
+  function released(n, shape) {
+    const allowWrite = [...SHIPPED_KNOWLEDGE_BLOCK.filesystem.allowWrite, ...FOLDERS];
+    const filesystem = n ? { allowWrite, denyWrite: RELEASED_DENY.slice(0, n) } : { allowWrite };
+    if (shape === 'on') return { ...SHIPPED_KNOWLEDGE_BLOCK, filesystem };
+    if (shape === 'off') return { enabled: false, filesystem };
+    return { filesystem }; // Code mode before it stated `enabled: false`
+  }
+
   test('a workspace with no folders writes what it wrote before, and the deny is the one intended difference', () => {
     const s = sandboxSettings(WS, 'darwin', HOME, ['/tmp/t']);
     // The deny list is a deliberate addition made after the criteria were
     // frozen, approved on the ledger rather than slipped in: it protects the
     // file this very block is built from. It is the ONLY difference, and
-    // subtracting it must leave the shipped block exactly.
+    // subtracting it must leave the shipped block exactly. When this list grows,
+    // add the length it had to WRITTEN_DENY_LENGTHS in scaffold.js, or blocks
+    // the last release wrote stop being recognised and never upgrade.
     assert.deepStrictEqual(s.filesystem.denyWrite,
       [`${WS}/.rundock/state.json`, `${WS}/.rundock/permissions.json`, `${WS}/.claude/settings.local.json`,
         `${HOME}/.claude/.credentials.json`, `${HOME}/.claude/.config.json`, `${HOME}/.codex/auth.json`, `${HOME}/.claude.json`, `${HOME}/.claude.json.backup`,
@@ -295,15 +317,11 @@ describe('sandboxSettings: named working folders', () => {
       'the key-less Code mode block is one we wrote, and must be rewritten rather than preserved');
 
     // And both axes at once, because a workspace can be behind on both: opened
-    // in Code mode under 0.13.1, it has neither the key nor the full deny list.
-    const deny = older.filesystem.denyWrite || [];
-    assert.ok(deny.length >= 2, 'sanity: there is still a deny list to narrow');
-    for (let n = 0; n < deny.length; n++) {
-      const behindOnBoth = JSON.parse(JSON.stringify(older));
-      if (n === 0) delete behindOnBoth.filesystem.denyWrite;
-      else behindOnBoth.filesystem.denyWrite = deny.slice(0, n);
-      assert.strictEqual(isRundockSandbox(behindOnBoth, 'darwin'), true,
-        `no key and the first ${n} deny entries is a shape we wrote, and must upgrade`);
+    // in Code mode before the key was written, it has neither the key nor the
+    // full deny list.
+    for (const n of WRITTEN_LENGTHS) {
+      assert.strictEqual(isRundockSandbox(released(n, 'keyless'), 'darwin'), true,
+        `no key and the ${n} deny entries an earlier build wrote is a shape we wrote, and must upgrade`);
     }
   });
 
@@ -319,25 +337,35 @@ describe('sandboxSettings: named working folders', () => {
   });
 
   test('every deny list Rundock has ever written is recognised, so no release strands a workspace', () => {
-    // The gap this closes was a real upgrade path, not a hypothetical one:
-    // 0.13.1 and 0.13.2 wrote a deny list of exactly one entry, so every
-    // workspace opened under either carried a shape the recogniser refused.
-    // Refused means never rewritten and never withdrawn.
-    //
-    // Walked from the current list rather than written out, so an entry added
-    // later is covered on the day it is added rather than the day someone
-    // remembers to extend this test.
+    // Refused means never rewritten and never withdrawn, so a list a release
+    // wrote that the recogniser does not know strands every workspace carrying
+    // it. Checked against the lists written out above, not against cuts of the
+    // current one: a cut of the current list is only ever what a release wrote
+    // if the code is right, which is the thing under test.
+    for (const shape of ['on', 'off']) {
+      for (const n of WRITTEN_LENGTHS) {
+        assert.strictEqual(isRundockSandbox(released(n, shape), 'darwin'), true,
+          `the ${shape} block with the ${n} deny entries an earlier build wrote is ours, and must upgrade`);
+      }
+    }
+  });
+
+  test('a deny list cut short where no release stopped is a person\'s edit, and stays theirs', () => {
+    // Recognising every shorter list let a person remove an entry and have it
+    // put back on the next open. Only the lengths a release wrote are ours.
     for (const mode of ['knowledge', 'code']) {
       const current = sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], FOLDERS, mode);
-      const deny = current.filesystem.denyWrite || [];
-      assert.ok(deny.length >= 2, `sanity: the ${mode} block still carries a deny list to narrow`);
-      for (let n = 0; n < deny.length; n++) {
-        const older = JSON.parse(JSON.stringify(current));
-        if (n === 0) delete older.filesystem.denyWrite;
-        else older.filesystem.denyWrite = deny.slice(0, n);
-        assert.strictEqual(isRundockSandbox(older, 'darwin'), true,
-          `a ${mode} block carrying the first ${n} deny entries is one we wrote, and must upgrade`);
+      const deny = current.filesystem.denyWrite;
+      for (const removed of [1, 3, 10]) {
+        const edited = JSON.parse(JSON.stringify(current));
+        edited.filesystem.denyWrite = deny.slice(0, deny.length - removed);
+        assert.strictEqual(isRundockSandbox(edited, 'darwin'), false,
+          `a ${mode} block with its last ${removed} deny entries removed is a person's edit`);
       }
+      // Removing all eleven entries added after 0.15.6 leaves exactly the list
+      // 0.15.6 wrote, which cannot be told apart from that release's own block
+      // and so upgrades like it.
+      assert.deepStrictEqual(deny.slice(0, deny.length - 11), RELEASED_DENY, 'sanity: what is left is the 0.15.6 list');
     }
   });
 

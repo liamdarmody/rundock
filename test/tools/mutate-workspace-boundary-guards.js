@@ -406,8 +406,23 @@ const MUTATIONS = [
   // Stop recognising the narrower deny lists and the block an earlier release
   // wrote is a stranger's edit: never rewritten, never given the new deny.
   [SCAFFOLD, 'a block carrying an earlier, shorter deny list is still recognised as ours',
-    '  for (let n = 1; n < deny.length; n++) shapes.push(withDenyWrite(block, deny.slice(0, n)));\n',
+    '  for (const n of WRITTEN_DENY_LENGTHS) if (n < deny.length) shapes.push(withDenyWrite(block, deny.slice(0, n)));\n',
     ''],
+  // Accept every shorter list and a person who removes an entry from Rundock's
+  // block has it put back on the next open, over their edit.
+  [SCAFFOLD, 'only the deny lists a build wrote are recognised, not every shorter one',
+    '  for (const n of WRITTEN_DENY_LENGTHS) if (n < deny.length) shapes.push(withDenyWrite(block, deny.slice(0, n)));\n',
+    '  for (let n = 1; n < deny.length; n++) shapes.push(withDenyWrite(block, deny.slice(0, n)));\n'],
+  // Forget a length a build wrote and every workspace carrying it is stranded.
+  [SCAFFOLD, 'the list 0.15.6 wrote is recognised',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8];',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3];'],
+  [SCAFFOLD, 'the list 0.13.3 to 0.15.5 wrote is recognised',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8];',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 8];'],
+  [SCAFFOLD, 'the lists the development line wrote before 0.13.3 are recognised',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8];',
+    'const WRITTEN_DENY_LENGTHS = [3, 8];'],
   // ===== THE USER-LEVEL STATE FILE IS A SECRET AT BOTH LAYERS =====
   // Drop the home-level files from the block and ~/.claude.json is writable
   // by sandboxed commands again, its user-scope MCP servers with it.
