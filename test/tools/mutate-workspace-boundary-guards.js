@@ -1661,8 +1661,12 @@ const MUTATIONS = [
   // Stop reading `security` and every Keychain read runs in Code mode with no
   // card; let anything unnamed run and the allowlist becomes a denylist of one.
   [KEYCHAIN_VERDICT, 'Keychain: security is never read',
-    "  if (v === 'security') return judgeSecurity(a);\n",
+    "  if (v === 'security' && ctx.platform === 'darwin') return judgeSecurity(a);\n",
     ''],
+  // Away from a Mac a `security` is somebody else's program.
+  [KEYCHAIN_VERDICT, 'Keychain: security is read as the Keychain on any host',
+    "  if (v === 'security' && ctx.platform === 'darwin') return judgeSecurity(a);",
+    "  if (v === 'security') return judgeSecurity(a);"],
   [KEYCHAIN_VERDICT, 'Keychain: a subcommand not named as a display runs',
     '  return always(KEYCHAIN);\n}\n\nfunction judgeDocker',
     '  return RUNS;\n}\n\nfunction judgeDocker'],
@@ -1749,8 +1753,8 @@ const MUTATIONS = [
     "    'keychain': () => 'This reads or changes a password or key stored in your Mac\\'s Keychain, where sign-in tokens are kept.',\n",
     ''],
   [KEYCHAIN_CODEX, 'Keychain: a Codex escalation in Notes mode is graded as ordinary',
-    '  const verdict = (codeMode ? codeModeVerdict : keychainVerdict)({ toolName, command, cwd, workspaceRoot, extraDirs, home });',
-    '  const verdict = codeMode ? codeModeVerdict({ toolName, command, cwd, workspaceRoot, extraDirs, home }) : null;'],
+    '  const verdict = (codeMode ? codeModeVerdict : keychainVerdict)({ toolName, command, cwd, workspaceRoot, extraDirs, home, platform });',
+    '  const verdict = codeMode ? codeModeVerdict({ toolName, command, cwd, workspaceRoot, extraDirs, home, platform }) : null;'],
   // Through the real hook: Notes mode never asks the question, the refusal
   // misstates why, and the card offers a folder to remember.
   [KEYCHAIN_HOOK_FLOW, 'Keychain: Notes mode never asks',

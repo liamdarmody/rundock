@@ -347,8 +347,8 @@ describe('in Notes mode, the same reading finds the same commands', () => {
 describe('a Codex escalation that reaches the Keychain', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'keychain-codex-'));
   after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const grade = (command, codeModeOn) => gradeCodexApproval({
-    kind: 'command', params: { command }, workspaceRoot: dir, extraDirs: [], codeMode: codeModeOn, home: path.join(dir, 'home'),
+  const grade = (command, codeModeOn, platform = 'darwin') => gradeCodexApproval({
+    kind: 'command', params: { command }, workspaceRoot: dir, extraDirs: [], codeMode: codeModeOn, home: path.join(dir, 'home'), platform,
   });
 
   test('carries the Keychain verdict to its card, in both modes', () => {
@@ -366,6 +366,31 @@ describe('a Codex escalation that reaches the Keychain', () => {
     assert.strictEqual(notes.decision, 'card');
     assert.ok(!('code_mode_verdict' in notes.request), 'Notes mode: an ordinary card, as before');
     assert.deepStrictEqual(grade('security list-keychains', true), { decision: 'accept' });
+  });
+});
+
+// `security` and the Keychain are the Mac's. On another host a command of
+// that name is somebody else's program, and is graded as it always was.
+describe('on a host that is not a Mac, security is an ordinary command', () => {
+  const lines = [K, `bash -c "${K}"`, 'security dump-keychain', `echo ${SVC} | xargs security find-generic-password -w -s`];
+  for (const platform of ['linux', 'win32']) {
+    test(platform, () => {
+      for (const command of lines) {
+        const opts = { toolName: 'Bash', command, cwd: WS, workspaceRoot: WS, extraDirs: [], home: HOME, platform, context: {} };
+        assert.deepStrictEqual(codeModeVerdict(opts), { verdict: 'runs' }, command);
+        assert.strictEqual(keychainVerdict(opts), null, command);
+      }
+      assert.deepStrictEqual(codeModeVerdict({ toolName: 'Bash', command: `sudo ${K}`, workspaceRoot: WS, home: HOME, platform, context: {} }),
+        { verdict: 'always-asks', reason: 'elevation' }, 'sudo still asks, as elevation');
+    });
+  }
+  test('nor does a Codex escalation carry the Keychain verdict there', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'keychain-codex-linux-'));
+    try {
+      const grade = codeModeOn => gradeCodexApproval({ kind: 'command', params: { command: K }, workspaceRoot: dir, codeMode: codeModeOn, home: path.join(dir, 'home'), platform: 'linux' });
+      assert.ok(!('code_mode_verdict' in grade(false).request), 'Notes mode: an ordinary card');
+      assert.deepStrictEqual(grade(true), { decision: 'accept' }, 'Code mode: runs');
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
   });
 });
 

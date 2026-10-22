@@ -478,7 +478,8 @@ function judgeCommand(u, ctx, { piped, prev } = {}) {
   }
   if (v === 'xargs') return judgeXargs(a, ctx);
   if (ctx.dialect === 'bash' && v === 'find') return judgeFind(a, ctx);
-  if (v === 'security') return judgeSecurity(a);
+  // The Keychain is the Mac's: elsewhere a `security` is another program.
+  if (v === 'security' && ctx.platform === 'darwin') return judgeSecurity(a);
 
   // Disks, the machine, publishing, containers, git.
   if (v === 'dd' || /^mkfs(\.|$)/.test(v)) return always('disk');

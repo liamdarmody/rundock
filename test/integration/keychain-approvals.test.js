@@ -32,6 +32,9 @@ const REFUSED = 'Rundock server unreachable. This reads or changes a password or
 // The refusal for a line that also holds something else that cannot be undone.
 const refusedFor = also => (also ? `${REFUSED} Part of it also cannot be undone.` : REFUSED);
 const MODES = ['code', 'notes'];
+// The Keychain and `security` are the Mac's. On any other host the hook grades
+// a command of that name as it always has, and that is what is asserted there.
+const MAC = process.platform === 'darwin';
 
 // Each subcommand that asks.
 const ASKS = [
@@ -245,6 +248,12 @@ async function closedPort() {
 
 for (const mode of MODES) {
   const Mode = mode === 'code' ? 'Code mode' : 'Notes mode';
+  if (!MAC) {
+    describe(`${Mode}: on a host that is not a Mac, security is graded as before`, () => {
+      for (const command of [K, 'security dump-keychain', `bash -c "${K}"`]) test(command, () => assertAsBefore(command, mode));
+    });
+    continue;
+  }
 
   describe(`${Mode}: each Keychain subcommand asks every time, with Allow and Deny only`, () => {
     for (const command of ASKS) test(command, () => assertAsks(command, mode));
@@ -341,7 +350,7 @@ async function reloadSavedAnswers() {
   return msg.tools;
 }
 
-describe('Notes mode: an Always allow saved for security', () => {
+describe('Notes mode: an Always allow saved for security', { skip: !MAC && 'only a Mac has the Keychain; the host check above covers this one' }, () => {
   test('from a listing card answers the next listing, and never a Keychain read', async () => {
     saveAnswers([]);
     await reloadSavedAnswers();
