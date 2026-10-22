@@ -227,6 +227,9 @@ const REPEAT_HINT_LINK = { src: path.join(ROOT, 'public', 'views', 'settings.js'
 // program: escape strings, here-documents, interpreter code and a `cd` partway
 // through a chain.
 const SHELL_CODE = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/shell-code-boundary.test.js' };
+// The same file, the suite that times it: the folder each word starts from is
+// worked out once per command, or the check grows with the square of it.
+const SHELL_TIMING = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/shell-code-timing.test.js' };
 
 // A connector action that sends, replies or forwards: never a read in the hook,
 // high risk in the client. The word tables are proven by the suite that grades
@@ -1982,11 +1985,11 @@ const MUTATIONS = [
     "  const inChain = !!mid && at >= mid.from && at < mid.to;",
     "  const inChain = false;"],
   [SHELL_CODE, "Shell code: a second cd is trusted",
-    "  if (!cds || cds.length !== 1 || DIR_CHANGE.test(command)) return root;",
-    "  if (!cds || DIR_CHANGE.test(command)) return root;"],
+    "  if (!cds || cds.length !== 1 || DIR_CHANGE.test(command)) return fromRoot;",
+    "  if (!cds || DIR_CHANGE.test(command)) return fromRoot;"],
   [SHELL_CODE, "Shell code: pushd and popd do not make the base uncertain",
-    "  if (!cds || cds.length !== 1 || DIR_CHANGE.test(command)) return root;",
-    "  if (!cds || cds.length !== 1) return root;"],
+    "  if (!cds || cds.length !== 1 || DIR_CHANGE.test(command)) return fromRoot;",
+    "  if (!cds || cds.length !== 1) return fromRoot;"],
   [SHELL_CODE, "Shell code: the words after a cd's chain ends keep its folder",
     "      if (depth === 0 && seg.op !== '&&') return { ...found, to: start };",
     "      if (false) return { ...found, to: start };"],
@@ -2009,8 +2012,8 @@ const MUTATIONS = [
     "    for (const c of [...code.commands, ...subs.bodies]) commands.push({ text: c, at });",
     "    for (const c of [...code.commands, ...subs.bodies]) text += c + '\\n';"],
   [SHELL_CODE, "Shell code: a command run from inside the code is measured from the chain's folder",
-    "commandBaseDir(fromStart ? '' : view.text, ",
-    "commandBaseDir(view.text, "],
+    "commandBases(fromStart ? '' : view.text, ",
+    "commandBases(view.text, "],
   [SHELL_CODE, "Shell code: what a command found in code writes is not counted as written",
     "    for (const text of [view.text, ...view.commands.map(c => c.text)]) for (const seg of shellSegments(text)) {",
     "    for (const text of [view.text]) for (const seg of shellSegments(text)) {"],
@@ -2035,6 +2038,9 @@ const MUTATIONS = [
   [SHELL_CODE, "Shell code: a bare cd target is not judged, so a link out is not reported",
     "    const cdTarget = previous === 'cd';",
     "    const cdTarget = false;"],
+  [SHELL_TIMING, "Shell code: the folder each word starts from is worked out again for every word",
+    "    if (!bases.has(key)) bases.set(key, commandBases(",
+    "    bases.set(key, commandBases("],
   [SHELL_CODE, "Shell code: a cd to a variable is trusted as a base",
     " || CD_NOT_LITERAL.test(target)) return null;",
     ") return null;"],

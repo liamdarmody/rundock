@@ -313,7 +313,7 @@ Counts with no barrier, ranked by exposure:
 
 ### Wall-clock budgets
 
-Four assertions in the suite gate on elapsed real time. All four are
+Five places in the suite gate on elapsed real time. All five are
 **accept**, with the caveats stated.
 
 - **`test/integration/workspace-rollback-poll.test.js:185`**:
@@ -340,6 +340,16 @@ Four assertions in the suite gate on elapsed real time. All four are
   `Date.now() - t0 >= PERM_TIMEOUT - 50`. A lower bound proving the server did
   not short-circuit its own timeout. Correct shape; the `- 50` is a bare
   tolerance for timer coarseness.
+- **`test/unit/shell-code-timing.test.js`**: the permission hook's shell
+  check must grow linearly with the command. Doubling a chain of commands
+  after a `cd` (1,000 to 2,000) and a here-document fed to a shell (2,000 to
+  4,000 lines) may at most triple the time, the best of three runs at each
+  size, with 50ms of slack for timer coarseness; the larger size must also
+  finish under 5s. Measured at about 110ms and 140ms for the larger sizes,
+  against 6s and 3s when the check re-read the command for every word. The
+  ratio is the claim, since linear growth doubles and quadratic growth
+  quadruples: if it fails, first check whether both sizes slowed alike, which
+  is load rather than growth.
 
 ### Isolate
 

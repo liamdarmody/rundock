@@ -1086,23 +1086,33 @@ const CD_NOT_LITERAL = /[$`*?[\](){}<>!~]/;
 // command, or follows `;`, a new line or `&&`. A `;` or `||` after it, a pipe
 // or `||` before it, a subshell, `cd -` and every other uncertain case below
 // leave the root as the base.
-function commandBaseDir(command, workspaceRoot, pmod, cwd, extraDirs = [], home = os.homedir(), at = 0) {
+//
+// WORKED OUT ONCE PER COMMAND, not once per word: nothing here depends on
+// where a word sits except the last step, so the command is read once and the
+// answer for a word is a lookup by `at`. Read again for every word, a chain of
+// 2,000 commands took four times as long as one of 1,000.
+function commandBases(command, workspaceRoot, pmod, cwd, extraDirs = [], home = os.homedir()) {
   const root = cwd ? canonicalize(pmod.resolve(cwd), pmod) : pmod.resolve(workspaceRoot);
+  const fromRoot = () => root;
   // A second `cd` means the base stops being true partway through the command.
   const cds = String(command).match(CD_ANYWHERE);
-  if (!cds || cds.length !== 1 || DIR_CHANGE.test(command)) return root;
+  if (!cds || cds.length !== 1 || DIR_CHANGE.test(command)) return fromRoot;
   const m = CD_PREFIX.exec(command);
   // The `&&` chain the `cd` opens, leading or not (see midChainCd).
   const mid = midChainCd(command);
-  const inChain = !!mid && at >= mid.from && at < mid.to;
-  if (!m && !inChain) return root;
+  if (!m && !mid) return fromRoot;
   const cd = cdBase(m ? m[1] : mid.target, root, workspaceRoot, pmod, extraDirs, home);
-  if (!cd) return root;
-  // A FOLDER NOT MADE YET is the base only for the words its `&&` chain runs:
-  // a `cd` into a missing folder fails, and then nothing joined to it by `&&`
-  // runs, while what follows a `;` or `||` runs where the command started.
-  if (!cd.exists && !inChain) return root;
-  return cd.base;
+  if (!cd) return fromRoot;
+  return (at) => {
+    const inChain = !!mid && at >= mid.from && at < mid.to;
+    if (!m && !inChain) return root;
+    // A FOLDER NOT MADE YET is the base only for the words its `&&` chain
+    // runs: a `cd` into a missing folder fails, and then nothing joined to it
+    // by `&&` runs, while what follows a `;` or `||` runs where the command
+    // started.
+    if (!cd.exists && !inChain) return root;
+    return cd.base;
+  };
 }
 
 // Where a literal `cd` lands, or null when that is not certain.
@@ -1408,6 +1418,15 @@ function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), 
   }
   const ran = view.commands.flatMap(c => shellPathWords(c.text, posixText).map(w => ({ t: w.t, at: c.at, fromStart: true })));
   const words = shellPathWords(view.text, posixText).concat(view.literals, ran).sort((a, b) => a.at - b.at);
+  // The folder each word starts from, worked out once per path flavour, for
+  // the command's own words and for the commands its code runs (which start
+  // where the command does).
+  const bases = new Map();
+  const basesFor = (pmod, fromStart) => {
+    const key = (pmod === path.win32 ? 'w' : 'p') + (fromStart ? 's' : 't');
+    if (!bases.has(key)) bases.set(key, commandBases(fromStart ? '' : view.text, workspaceRoot, pmod, opts.cwd, extraDirs, home));
+    return bases.get(key);
+  };
   let previous = '';
   for (const { t: raw, at, fromStart } of words) {
     // A `cd` target is judged even as a bare word, so a folder that is a link
@@ -1445,7 +1464,7 @@ function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), 
     // workspace root regardless. Everything BELOW still judges against the
     // workspace root: the base says where a relative path starts, never what
     // counts as inside.
-    const resolved = canonicalize(pmod.resolve(commandBaseDir(fromStart ? '' : view.text, workspaceRoot, pmod, opts.cwd, extraDirs, home, at), t), pmod);
+    const resolved = canonicalize(pmod.resolve(basesFor(pmod, fromStart)(at), t), pmod);
 
     // THE ANSWER FILES ARE TESTED BEFORE THE CROSSING FILTER, not after it.
     //
