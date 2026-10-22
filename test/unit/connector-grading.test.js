@@ -106,6 +106,20 @@ describe('which connector actions delete', () => {
     }
   });
 
+  test('the card grades every one high, camelCase as well as snake and kebab case', () => {
+    for (const action of ['deleteEvent', 'removeLabel', 'cancelEvent', 'archiveThread', 'clearCache',
+      'delete_event', 'remove-label', 'API-delete-a-block', 'cancel_event', 'archive_thread', 'clear_cache', 'Delete_Event']) {
+      assert.strictEqual(P.classifyRisk(tool(action), {}), 'high', action);
+    }
+    for (const action of ['create_draft', 'update_event', 'get_deleted_items', 'deletedItemsReport']) {
+      assert.notStrictEqual(P.classifyRisk(tool(action), {}), 'high', action);
+    }
+  });
+
+  test('the card and the hook read the same delete words', () => {
+    assert.deepStrictEqual([...P.MCP_DESTRUCTIVE_VERBS].sort(), [...hook.MCP_DESTRUCTIVE_VERBS].sort());
+  });
+
   test('never a send, another write, a read, or a tool that is not a connector', () => {
     for (const action of ['send_message', 'create_draft', 'get_deleted_items', 'list_removals']) {
       assert.strictEqual(hook.isMcpDeleteTool(tool(action)), false, action);

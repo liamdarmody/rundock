@@ -1505,8 +1505,13 @@ const MUTATIONS = [
   // Drop the client's grading and the card offers Always allow again, which
   // is the one click that let every later send through unseen.
   [CONNECTOR_CLIENT_FLOW, 'Connector send: the card offers Always allow on a send',
-    "      if (mcpActionWords(toolName).some(w => MCP_SEND_VERBS.indexOf(w) !== -1)) return 'high';\n",
+    "      if (words.some(w => MCP_SEND_VERBS.indexOf(w) !== -1)) return 'high';\n",
     ''],
+  // Back to a pattern that needs `_` or `-` around the word and `deleteEvent`
+  // offers Always allow, the gap the send fix had already closed for sends.
+  [CONNECTOR_CLIENT_FLOW, 'Connector delete: the card offers Always allow on a camelCase delete',
+    "      if (words.some(w => MCP_DESTRUCTIVE_VERBS.indexOf(w) !== -1)) return 'high';\n",
+    "      if (/(^|[_\\-])(delete|remove|destroy|drop|cancel|abort|archive|trash|purge|clear|uninstall)([_\\-]|$)/.test(toolName.split('__').slice(2).join('_').toLowerCase())) return 'high';\n"],
   [CONNECTOR_CLIENT, 'Connector send: camelCase is not split, so sendEmail is not a send',
     "      .replace(/([a-z0-9])([A-Z])/g, '$1 $2')\n",
     ''],

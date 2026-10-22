@@ -134,6 +134,14 @@ describe('a connector action that sends asks every time, with Allow and Deny onl
     });
   }
 
+  for (const action of ['delete_event', 'deleteEvent', 'archiveThread']) {
+    test(`${action}, a delete, is asked the same way`, async () => {
+      const r = await request(MAIL(action));
+      assert.deepStrictEqual(r.buttons, ['allow', 'deny']);
+      assert.strictEqual((await press(r, 'deny')).decision, 'deny');
+    });
+  }
+
   test('a request no conversation owns is asked the same way, in the approvals dock', async () => {
     const r = await request(MAIL('send_message'), { convo: '' });
     assert.strictEqual(r.asked, true);
