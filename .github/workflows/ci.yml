@@ -22,6 +22,10 @@ on:
   push:
     branches: [main]
   pull_request:
+  # The merge queue tests each queued pull request on top of main and the
+  # requests ahead of it. Its checks report on that combined commit, so the
+  # same jobs run for it as for a pull request.
+  merge_group:
   # Manual runs against any branch. Exists because push and pull_request
   # event processing has been observed to stall on GitHub's side while
   # dispatch kept working; this keeps full CI reachable for a branch when
@@ -175,17 +179,27 @@ jobs:
       # merge commit, whose first parent is current main, so HEAD^1 is exactly
       # what the branch is compared against. A push to main is compared with
       # the commit it moved from; an all-zero or unreachable `before` (a new
-      # branch, a force push) falls back to the first parent. A dispatched run
-      # leaves the base to the script, which uses the merge base with main.
+      # branch, a force push) falls back to the first parent. A merge queue run
+      # is compared with the main commit its group was built on, which covers
+      # every request queued ahead of this one; if that commit isn't in the
+      # checkout, it falls back to the first parent. A dispatched run leaves
+      # the base to the script, which uses the merge base with main.
       - name: Choose the comparison base
         id: base
         env:
           EVENT: ${{ github.event_name }}
           BEFORE: ${{ github.event.before }}
+          GROUP_BASE: ${{ github.event.merge_group.base_sha }}
         run: |
           base=''
           if [ "$EVENT" = "pull_request" ]; then
             base='HEAD^1'
+          elif [ "$EVENT" = "merge_group" ]; then
+            if [ -n "$GROUP_BASE" ] && git cat-file -e "$GROUP_BASE^{commit}" 2>/dev/null; then
+              base="$GROUP_BASE"
+            else
+              base='HEAD^1'
+            fi
           elif [ "$EVENT" = "push" ]; then
             if [ -n "$BEFORE" ] && ! printf '%s' "$BEFORE" | grep -qE '^0+$' \
               && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
