@@ -47,6 +47,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { execFileSync, spawnSync } = require('node:child_process');
 const { readMarkers, unstaged, unstagedRefusal } = require('../test/tools/mutation-run.js');
+const { recordRun } = require('./lib/run-record.js');
 
 const ROOT = path.join(__dirname, '..');
 const TOOLS = path.join(ROOT, 'test', 'tools');
@@ -670,7 +671,11 @@ function main(argv = process.argv.slice(2)) {
     console.error(unstagedRefusal('[mutation-scope] refusing to start', dirty));
     return EXIT[NO_VERDICT];
   }
+  // RECORDED WHILE IT RUNS, between harnesses as well as inside one, so the
+  // check made before a change is reported done can see it is still going.
+  const release = recordRun(ROOT, 'npm run mutate:guards');
   const ran = runUnits(units);
+  release();
   writeVerdict(argValue(argv, '--verdict'), { plan: plan.id, shard: shardIndex, ...ran });
   // NAMED, NOT COUNTED. "fail: 4 unit(s)" read as four failures when one of
   // four had failed; the line says how many did not pass, and which.
