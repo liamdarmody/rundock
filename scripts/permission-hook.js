@@ -1107,6 +1107,11 @@ function cdBase(target, root, workspaceRoot, pmod, extraDirs, home) {
   // `cd -` goes back to wherever the shell was before, which is not knowable.
   if (!target || target.startsWith('-') || CD_NOT_LITERAL.test(target)) return null;
   const base = canonicalize(pmod.resolve(root, target), pmod);
+  // ITS REAL PATH, AND ONLY ONE THAT EXISTS. `base` is resolved through links,
+  // so a folder in the workspace that links elsewhere is that elsewhere. A
+  // folder not made yet cannot be checked: the command could make it a link
+  // before the `cd` runs.
+  if (!fs.existsSync(base)) return null;
   // Leaving the workspace and every working folder is not a base this trusts.
   // The `cd` token is scanned like any other and reports the crossing on its own.
   return (insideWorkspaceRoot(base, workspaceRoot, pmod) || namedFolderCovers(base, extraDirs, pmod, home)) ? base : null;
@@ -1394,7 +1399,12 @@ function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), 
   }
   const ran = view.commands.flatMap(c => shellPathWords(c.text, posixText).map(w => ({ t: w.t, at: c.at, fromStart: true })));
   const words = shellPathWords(view.text, posixText).concat(view.literals, ran).sort((a, b) => a.at - b.at);
+  let previous = '';
   for (const { t: raw, at, fromStart } of words) {
+    // A `cd` target is judged even as a bare word, so a folder that is a link
+    // to somewhere outside is reported where it really is.
+    const cdTarget = previous === 'cd';
+    previous = raw;
     let t = raw;
     let homed = false;
     for (const re of HOME_PREFIX) {
@@ -1456,7 +1466,7 @@ function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), 
     // A bare word (`dist`, `install`, `-rf`) is never a crossing, however the
     // base falls; a relative path with a separator is judged by where it
     // resolves from the base, like any other.
-    if (!homed && !t.startsWith('/') && !WIN_DRIVE.test(t) && !WIN_UNC.test(t) && !TRAVERSAL.test(t) && !/[\\/]/.test(t)) continue;
+    if (!cdTarget && !homed && !t.startsWith('/') && !WIN_DRIVE.test(t) && !WIN_UNC.test(t) && !TRAVERSAL.test(t) && !/[\\/]/.test(t)) continue;
     if (insideWorkspaceRoot(resolved, workspaceRoot, pmod)) continue;
     // A TOP-LEVEL PATH THAT DOES NOT EXIST, READ BY A COMMAND THAT ONLY READS,
     // reaches nothing: `--exclude-dir=/Build` and `git log -- /Docs` name a

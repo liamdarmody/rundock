@@ -94,6 +94,12 @@ describe('classifyShellAccess (hook-side)', () => {
   // this cost cards rather than containment. The fix must not buy them back by
   // spending containment, which is what the masking tests below are for.
   describe('a leading cd is where the relative paths start from', () => {
+    // A real workspace with a real `.claude` folder: a `cd` target is trusted
+    // as the base only once it exists.
+    const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'boundary-cd-'));
+    fs.mkdirSync(path.join(ws, '.claude'));
+    after(() => fs.rmSync(ws, { recursive: true, force: true }));
+
     test('the reported command: a file inside the workspace is not a crossing', () => {
       const r = classifyShellAccess('Bash', {
         command: `cd ${ws}/.claude && for f in agents/roo.md; do cat "$f"; done; cat ../.mcp.json`,

@@ -28,6 +28,9 @@ const home = path.join(root, 'home');
 const ws = path.join(home, 'Workspace');
 fs.mkdirSync(path.join(ws, '.rundock', 'scratch', 'data'), { recursive: true });
 fs.mkdirSync(path.join(ws, '.rundock', 'scratch', 'tools'), { recursive: true });
+// A `cd` target is trusted only once it exists, as it does when the command
+// really runs, so the folders the commands below move into are made here.
+fs.mkdirSync(path.join(ws, 'out'), { recursive: true });
 
 const MODES = [['Notes', false], ['Code', true]];
 const scan = (command, { tool = 'Bash', codeMode = false, workspace = ws, opts = {} } = {}) =>
@@ -372,6 +375,9 @@ describe('a cd partway through an && chain is where the words after it start', (
   // starts, which reports `../x.txt` outside: the safe direction.
   test('anything less certain falls back to where the command starts', () => {
     const x = real(path.join(home, 'x.txt'));
+    // Folders with these very names exist, so it is the rule that refuses
+    // them, not the absence of a folder to move into.
+    for (const name of ['-', '$OUT']) fs.mkdirSync(path.join(ws, name), { recursive: true });
     for (const c of [
       'make && cd a/b && cd ../.. && cat ../x.txt',
       'make && cd "$OUT" && cat ../x.txt',
@@ -394,6 +400,7 @@ describe('a cd partway through an && chain is where the words after it start', (
 
   test('a leading cd - is not a base either, nor one followed by a cd in a subshell', () => {
     const x = real(path.join(home, 'x.txt'));
+    fs.mkdirSync(path.join(ws, '-'), { recursive: true });
     assert.ok(places('cd - && cat ../x.txt').includes(x));
     assert.ok(places('cd a/b && (cd ../.. && cat ../x.txt)').includes(x));
   });
@@ -434,6 +441,38 @@ describe('pushd, popd and cd through builtin or command count as a second cd', (
   });
 });
 
+// A `cd` target is trusted as the base only when its real path is inside the
+// workspace. A folder in the workspace that is a link to somewhere else is
+// that somewhere else: it is reported as a crossing and is not the base. A
+// target that does not exist yet cannot be checked, so the base stays where
+// the command starts.
+describe('a cd target is trusted only when its real path is inside', () => {
+  const outsideFolder = path.join(root, 'elsewhere');
+  fs.mkdirSync(path.join(outsideFolder, 'deep'), { recursive: true });
+  fs.symlinkSync(outsideFolder, path.join(ws, 'linked'));
+  fs.mkdirSync(path.join(ws, 'present'), { recursive: true });
+  const linked = real(outsideFolder);
+
+  for (const [where, prefix] of [['leading', ''], ['mid-chain', 'make && '], ['after a new line', 'make\n']]) {
+    test(`a link to outside is a crossing, and not the base (${where} cd)`, () => {
+      const got = places(`${prefix}cd linked && cat notes.txt`);
+      assert.ok(got.includes(linked), `the link's real folder is reported: ${JSON.stringify(got)}`);
+      const climb = places(`${prefix}cd linked && cat ../x.txt`);
+      assert.ok(climb.includes(real(path.join(home, 'x.txt'))), `and ../x.txt is measured from the start: ${JSON.stringify(climb)}`);
+      assert.ok(!climb.includes(real(path.join(root, 'x.txt'))), 'not from the folder the link points at');
+    });
+
+    test(`a folder that does not exist yet is not the base (${where} cd)`, () => {
+      const got = places(`${prefix}cd not-made-yet && cat ../x.txt`);
+      assert.ok(got.includes(real(path.join(home, 'x.txt'))), JSON.stringify(got));
+    });
+
+    test(`a real folder inside is still the base (${where} cd)`, () => {
+      assert.deepStrictEqual(places(`${prefix}cd present && cat ../README.md`), []);
+    });
+  }
+});
+
 // Through the real hook, the way the runtime calls it: what a person would
 // see, in each mode. In Notes mode every command is shown, so the question is
 // whether it is shown as a crossing; in Code mode a command with no crossing
@@ -445,6 +484,7 @@ describe('through the real hook', () => {
   before(async () => {
     if (SKIP) return;
     world = fx.buildWorld(outside.dir);
+    fs.mkdirSync(path.join(world.ws, '.rundock', 'scratch', 'data'), { recursive: true });
     capture = await fx.startCaptureServer();
     deadPort = await fx.closedPort();
   });
