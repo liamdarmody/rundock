@@ -79,6 +79,12 @@ const RELEASE_SIGNOFF = { src: path.join(ROOT, 'scripts', 'release.js'), suite: 
 // The mutation scope and the CI retry classifier, each watched by its suite.
 const SCOPE = { src: path.join(ROOT, 'scripts', 'mutation-scope.js'), suite: 'test/unit/mutation-scope.test.js' };
 const CI_VERDICT = { src: path.join(ROOT, 'scripts', 'ci-verdict.js'), suite: 'test/unit/ci-verdict.test.js' };
+// The checks a change passes before it is reported done, and the guards the
+// mutation tooling keeps around a person's own edits.
+const ENVELOPE_RUN = { src: path.join(ROOT, 'test', 'tools', 'mutation-run.js'), suite: 'test/unit/mutation-run-cleanup.test.js' };
+const FIXTURE_NOTICE = { src: path.join(ROOT, 'test', 'helpers', 'code-mode-fixture.js'), suite: 'test/unit/code-mode-fixture-root.test.js' };
+const PREFLIGHT = { src: path.join(ROOT, 'scripts', 'preflight.js'), suite: 'test/unit/preflight.test.js' };
+const LANE_DONE = { src: path.join(ROOT, 'scripts', 'lane-done.js'), suite: 'test/unit/lane-done.test.js' };
 
 const MUTATIONS = [
   // ===== A DESTRUCTIVE STEP WITHOUT ITS CAUTION =====
@@ -449,6 +455,38 @@ const MUTATIONS = [
   [CI_VERDICT, "an exit code in the log keeps a printed shutdown line a failure",
     " && !LOG_EXIT_CODE.test(log)) {\n",
     ") {\n"],
+
+  // ===== NOTHING REPORTED DONE THAT IS STILL RUNNING, UNCOMMITTED OR UNGATED =====
+  [SCOPE, "a run over unstaged edits refuses before the first harness",
+    "  if (dirty.length) {\n",
+    "  if (false) {\n"],
+  [SCOPE, "a run records itself in the checkout while it runs",
+    "  const release = recordRun(ROOT, 'npm run mutate:guards');\n",
+    "  const release = () => {};\n"],
+  [ENVELOPE_RUN, "a dead run's files are copied aside before the index restores them",
+    "      fs.copyFileSync(path.resolve(root, f), kept);\n",
+    ""],
+  [ENVELOPE_RUN, "a missing fixture folder is a problem the run names",
+    "  if (probe.skip) {\n",
+    "  if (false) {\n"],
+  [FIXTURE_NOTICE, "a skipped Code-mode suite says so in one line",
+    "  if (!quiet && !toldOnce) {\n",
+    "  if (false) {\n"],
+  [PREFLIGHT, "an unregistered suite fails the cheap phase",
+    "  results.push(member);\n",
+    ""],
+  [LANE_DONE, "a run still going fails the check",
+    "  const failures = [...runsInProgress(root), ...uncommitted(git)];\n",
+    "  const failures = [...uncommitted(git)];\n"],
+  [LANE_DONE, "uncommitted work fails the check",
+    "  const failures = [...runsInProgress(root), ...uncommitted(git)];\n",
+    "  const failures = [...runsInProgress(root)];\n"],
+  [LANE_DONE, "a commit without a passing pre-commit record fails the check",
+    "  if (ungated.length) {\n",
+    "  if (false) {\n"],
+  [LANE_DONE, "a leak scan that is not clean fails the check",
+    "  if (!leakScan(root, range).ok) {\n",
+    "  if (false) {\n"],
 ];
 
 const REPORTER = ['--test-reporter', 'spec'];
