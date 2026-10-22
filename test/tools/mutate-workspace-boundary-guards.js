@@ -1769,6 +1769,15 @@ const MUTATIONS = [
   [KEYCHAIN_HOOK_FLOW, 'Keychain: the refusal leaves out what cannot be undone',
     "\n      + (verdict.also ? ' Part of it also cannot be undone.' : '')",
     ''],
+  // The test seam: a platform named without its flag must change nothing, and
+  // with it the hook must judge for the platform named, or the end-to-end
+  // suite proves the Keychain rules on a Mac alone.
+  [KEYCHAIN_HOOK_FLOW, 'Keychain: the test platform counts without its flag',
+    "  return (env.RUNDOCK_TEST_SEAMS === '1' && env.RUNDOCK_TEST_PLATFORM) || process.platform;",
+    '  return env.RUNDOCK_TEST_PLATFORM || process.platform;'],
+  [KEYCHAIN_HOOK_FLOW, 'Keychain: the hook judges for its host whatever the test names',
+    'workspaceRoot: wsRoot, extraDirs, platform: verdictPlatform() })',
+    'workspaceRoot: wsRoot, extraDirs })'],
   [KEYCHAIN_HOOK_FLOW, 'Keychain: the card offers a folder to remember',
     '          grant_dir: keychain ? null : ((boundaryCrossings[0] && boundaryCrossings[0].grantDir) || access.grantDir || null),',
     '          grant_dir: (boundaryCrossings[0] && boundaryCrossings[0].grantDir) || access.grantDir || null,'],

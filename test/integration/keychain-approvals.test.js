@@ -32,9 +32,12 @@ const REFUSED = 'Rundock server unreachable. This reads or changes a password or
 // The refusal for a line that also holds something else that cannot be undone.
 const refusedFor = also => (also ? `${REFUSED} Part of it also cannot be undone.` : REFUSED);
 const MODES = ['code', 'notes'];
-// The Keychain and `security` are the Mac's. On any other host the hook grades
-// a command of that name as it always has, and that is what is asserted there.
-const MAC = process.platform === 'darwin';
+// The Keychain and `security` are the Mac's, so the hook judges a command by
+// the platform it runs on. Every hook here is told which platform that is,
+// through the hook's one test seam, so the Mac's rules are proven on any host
+// and another host's on a Mac; nothing below depends on where the suite runs.
+const MAC = 'darwin';
+const NOT_MAC = 'linux';
 
 // Each subcommand that asks.
 const ASKS = [
@@ -131,8 +134,9 @@ after(async () => {
 });
 
 // The real hook, given one Bash call on stdin. `port` is Rundock's by default;
-// a closed one stands for Rundock not running.
-function runHook(command, { mode, port = h.port, convo = CONVO }) {
+// a closed one stands for Rundock not running. `platform` is the one the hook
+// judges for; `seams: false` names it without the flag that lets it count.
+function runHook(command, { mode, port = h.port, convo = CONVO, platform = MAC, seams = true }) {
   return new Promise((resolve, reject) => {
     const env = {
       ...process.env,
@@ -147,6 +151,9 @@ function runHook(command, { mode, port = h.port, convo = CONVO }) {
     };
     if (mode === 'code') env.RUNDOCK_CODE_MODE = '1';
     else delete env.RUNDOCK_CODE_MODE;
+    env.RUNDOCK_TEST_PLATFORM = platform;
+    if (seams) env.RUNDOCK_TEST_SEAMS = '1';
+    else delete env.RUNDOCK_TEST_SEAMS;
     const proc = spawn(process.execPath, [HOOK], { cwd: h.workspaceDir, env, stdio: ['pipe', 'pipe', 'pipe'] });
     let out = '';
     proc.stdout.on('data', (d) => { out += d; });
@@ -164,11 +171,11 @@ function runHook(command, { mode, port = h.port, convo = CONVO }) {
 }
 
 // One Bash call the whole way round, up to the point a person would act.
-async function request(command, { mode }) {
+async function request(command, { mode, platform }) {
   const since = client.messages.length;
   const sentBefore = sent.length;
   let alone = null;
-  const done = runHook(command, { mode });
+  const done = runHook(command, { mode, platform });
   done.then((r) => { alone = r; }, () => {});
   const arrived = () => client.messages.slice(since)
     .find((m) => m.type === 'control_request' && m.request && m.request.input && m.request.input.command === command);
@@ -207,8 +214,8 @@ async function assertAsks(command, mode, also) {
 
 // As it was before: in Notes mode a card with Always allow on offer, answered
 // here with `action`; in Code mode no card at all.
-async function assertAsBefore(command, mode, action = 'deny') {
-  const r = await request(command, { mode });
+async function assertAsBefore(command, mode, action = 'deny', platform = MAC) {
+  const r = await request(command, { mode, platform });
   if (mode === 'code') {
     assert.strictEqual(r.asked, false, `${command}: runs in Code mode`);
     assert.deepStrictEqual(r.hook, { decision: 'allow', reason: 'Auto-approved: workspace is in Code mode' });
@@ -248,12 +255,27 @@ async function closedPort() {
 
 for (const mode of MODES) {
   const Mode = mode === 'code' ? 'Code mode' : 'Notes mode';
-  if (!MAC) {
-    describe(`${Mode}: on a host that is not a Mac, security is graded as before`, () => {
-      for (const command of [K, 'security dump-keychain', `bash -c "${K}"`]) test(command, () => assertAsBefore(command, mode));
+  describe(`${Mode}: on a host that is not a Mac, security is graded as before`, () => {
+    for (const command of [K, 'security dump-keychain', `bash -c "${K}"`]) {
+      test(command, () => assertAsBefore(command, mode, 'deny', NOT_MAC));
+    }
+    test('and when Rundock cannot be asked, as before', async () => {
+      const before = mode === 'code'
+        ? { decision: 'allow', reason: 'Auto-approved: workspace is in Code mode' }
+        : { decision: 'allow', reason: 'Rundock server unreachable.' };
+      assert.deepStrictEqual(await runHook(K, { mode, port: await closedPort(), platform: NOT_MAC }), before);
     });
-    continue;
-  }
+  });
+
+  describe(`${Mode}: the platform is the host's unless the test seam is on`, () => {
+    // Named without RUNDOCK_TEST_SEAMS, another platform is ignored, and the
+    // hook judges for the host it is on, whichever that is.
+    test('a platform named without the flag changes nothing', async () => {
+      const other = process.platform === 'darwin' ? NOT_MAC : MAC;
+      const out = await runHook(K, { mode, port: await closedPort(), platform: other, seams: false });
+      assert.strictEqual(out.decision === 'deny', process.platform === 'darwin', JSON.stringify(out));
+    });
+  });
 
   describe(`${Mode}: each Keychain subcommand asks every time, with Allow and Deny only`, () => {
     for (const command of ASKS) test(command, () => assertAsks(command, mode));
@@ -350,7 +372,7 @@ async function reloadSavedAnswers() {
   return msg.tools;
 }
 
-describe('Notes mode: an Always allow saved for security', { skip: !MAC && 'only a Mac has the Keychain; the host check above covers this one' }, () => {
+describe('Notes mode: an Always allow saved for security', () => {
   test('from a listing card answers the next listing, and never a Keychain read', async () => {
     saveAnswers([]);
     await reloadSavedAnswers();

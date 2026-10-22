@@ -267,6 +267,16 @@ describe('reading for the Keychain asks the disk and git for nothing', () => {
     }
   });
 
+  // The bound itself, exactly, on any host: how deep a chain must go to
+  // overflow the stack without it depends on the machine, so that is not
+  // what proves the bound is there.
+  test('elevations are read eight deep and no further', () => {
+    const chain = n => `echo ${SVC} | ${'xargs sudo '.repeat(n)}${K}`;
+    assert.deepStrictEqual(codeMode(chain(8)), keychainWith('elevation'), 'eight deep, the Keychain is named');
+    assert.deepStrictEqual(codeMode(chain(9)), { verdict: 'always-asks', reason: 'elevation' }, 'nine deep, it asks as elevation');
+    assert.strictEqual(notesMode(chain(9)), null, 'and Notes mode grades it as before');
+  });
+
   // A wall-clock budget, listed in docs/TEST-TIMING.md: reading past a long
   // chain of elevations once took 172ms at 500 and overflowed the stack at
   // 2000; read word by word and only so deep, it takes a few milliseconds.
