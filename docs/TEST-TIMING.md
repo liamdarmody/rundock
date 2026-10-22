@@ -24,6 +24,9 @@ using the rule below, add it here, and fix or accept it in the same change.
 Re-running until green and moving on is how this class grew in the first
 place.
 
+Either way, record the flake in [FLAKES.md](FLAKES.md), the register of every
+test that has flaked: a test that flakes twice is fixed or quarantined.
+
 **Do not silence a flake by widening its assertion.** A test that no longer
 fails under load and no longer fails when the behaviour breaks has been
 deleted, not fixed. Every fix in this document was checked by breaking the

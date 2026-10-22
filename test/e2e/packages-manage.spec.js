@@ -81,72 +81,79 @@ async function openPackages(page) {
   await expect(page.locator('#packages-installed')).toBeVisible();
 }
 
-test('a package is a card; opening Packages checks for updates; a package updates, then uninstalls, from its card', async ({ page }) => {
-  await boot(page);
-  const workspace = await page.evaluate(() => currentWorkspacePath);
-  write(workspace, 'sales.csv', CSV);
-  writeStore(workspace);
-  seedRepo(workspace);
-  seedReceipts(workspace);
-  await page.reload();
-  await boot(page);
+// ONE RETRY FOR THIS TEST ALONE, and only while its row in docs/FLAKES.md
+// says so: it is the longest single test in the browser suite and has passed
+// its timeout on a busy CI runner. The suite has no global retry.
+test.describe('a package card through update and uninstall', () => {
+  test.describe.configure({ retries: 1 });
 
-  // A mount to reconcile: the file opens inside the extension's frame.
-  await page.locator('.nav-item[data-nav="files"]').click();
-  const csvRow = page.locator('.file-item', { hasText: 'sales.csv' }).first();
-  await expect(csvRow).toBeVisible({ timeout: 15_000 });
-  await csvRow.click();
-  await expect(page.frameLocator('#editor-content iframe.extension-frame').locator('#echo')).toHaveText(CSV.trim());
+  test('a package is a card; opening Packages checks for updates; a package updates, then uninstalls, from its card', async ({ page }) => {
+    await boot(page);
+    const workspace = await page.evaluate(() => currentWorkspacePath);
+    write(workspace, 'sales.csv', CSV);
+    writeStore(workspace);
+    seedRepo(workspace);
+    seedReceipts(workspace);
+    await page.reload();
+    await boot(page);
 
-  await openPackages(page);
-  await expect(page.locator('.packages-field-hint')).toContainText("Rundock doesn't review packages");
-  await expect(page.locator('.settings-section-label').nth(1)).toHaveText('Installed packages');
-  const card = page.locator(`.pkg-card-row[data-package="https://github.com/e2e-fixture/${NAME}"]`);
-  await expect(card.locator('.pkg-card-name')).toHaveText('Csv Echo');
-  await expect(card.locator('.pkg-card-ver')).toHaveText('v1.0.0');
-  await expect(card.locator('.pkg-card-repo a')).toHaveText(`github.com/e2e-fixture/${NAME}`);
-  await expect(card.locator('.pkg-card-counts')).toHaveText('1 extension');
-  const seeded = page.locator('.pkg-card-row[data-package="https://github.com/e2e-fixture/pack-6"]');
-  await expect(seeded.locator('.pkg-card-counts')).toHaveText('1 starter file');
+    // A mount to reconcile: the file opens inside the extension's frame.
+    await page.locator('.nav-item[data-nav="files"]').click();
+    const csvRow = page.locator('.file-item', { hasText: 'sales.csv' }).first();
+    await expect(csvRow).toBeVisible({ timeout: 15_000 });
+    await csvRow.click();
+    await expect(page.frameLocator('#editor-content iframe.extension-frame').locator('#echo')).toHaveText(CSV.trim());
 
-  // Opening the page checked for updates: the local fixture has v1.1.0.
-  await expect(card.locator('.pkg-card-status')).toHaveText('Update available: v1.1.0');
-  await card.locator('[data-action="update"]').click();
-  const review = card.locator('#packages-update-review');
-  await expect(review.locator('.pkg-review-title')).toHaveText('Update Csv Echo to v1.1.0?');
-  await expect(review.locator('.pkg-review-group-label')).toHaveText(['Changed by the author']);
-  expect(JSON.parse(fs.readFileSync(path.join(workspace, '.rundock/extensions.json'), 'utf8')).extensions[0].version).toBe('1.0.0');
-  await review.getByRole('button', { name: 'Update Csv Echo' }).click();
-  await expect(card.locator('#packages-update-done .pkg-review-title')).toHaveText('Csv Echo is updated to v1.1.0.');
-  await expect.poll(() => JSON.parse(fs.readFileSync(path.join(workspace, '.rundock/extensions.json'), 'utf8')).extensions[0].version).toBe('1.1.0');
+    await openPackages(page);
+    await expect(page.locator('.packages-field-hint')).toContainText("Rundock doesn't review packages");
+    await expect(page.locator('.settings-section-label').nth(1)).toHaveText('Installed packages');
+    const card = page.locator(`.pkg-card-row[data-package="https://github.com/e2e-fixture/${NAME}"]`);
+    await expect(card.locator('.pkg-card-name')).toHaveText('Csv Echo');
+    await expect(card.locator('.pkg-card-ver')).toHaveText('v1.0.0');
+    await expect(card.locator('.pkg-card-repo a')).toHaveText(`github.com/e2e-fixture/${NAME}`);
+    await expect(card.locator('.pkg-card-counts')).toHaveText('1 extension');
+    const seeded = page.locator('.pkg-card-row[data-package="https://github.com/e2e-fixture/pack-6"]');
+    await expect(seeded.locator('.pkg-card-counts')).toHaveText('1 starter file');
 
-  // The open view was swapped to the new version and still shows the file.
-  await page.locator('.nav-item[data-nav="files"]').click();
-  await expect(page.frameLocator('#editor-content iframe.extension-frame').locator('#echo')).toHaveText(CSV.trim());
+    // Opening the page checked for updates: the local fixture has v1.1.0.
+    await expect(card.locator('.pkg-card-status')).toHaveText('Update available: v1.1.0');
+    await card.locator('[data-action="update"]').click();
+    const review = card.locator('#packages-update-review');
+    await expect(review.locator('.pkg-review-title')).toHaveText('Update Csv Echo to v1.1.0?');
+    await expect(review.locator('.pkg-review-group-label')).toHaveText(['Changed by the author']);
+    expect(JSON.parse(fs.readFileSync(path.join(workspace, '.rundock/extensions.json'), 'utf8')).extensions[0].version).toBe('1.0.0');
+    await review.getByRole('button', { name: 'Update Csv Echo' }).click();
+    await expect(card.locator('#packages-update-done .pkg-review-title')).toHaveText('Csv Echo is updated to v1.1.0.');
+    await expect.poll(() => JSON.parse(fs.readFileSync(path.join(workspace, '.rundock/extensions.json'), 'utf8')).extensions[0].version).toBe('1.1.0');
 
-  // An item link opens where the item lives.
-  await openPackages(page);
-  await seeded.locator('.pkg-card-items .linkbtn').first().click();
-  await expect.poll(() => page.evaluate(() => currentFilePath)).toBe('notes/from-pack.md');
+    // The open view was swapped to the new version and still shows the file.
+    await page.locator('.nav-item[data-nav="files"]').click();
+    await expect(page.frameLocator('#editor-content iframe.extension-frame').locator('#echo')).toHaveText(CSV.trim());
 
-  // Uninstall asks first, lists what goes, and removes only on its named
-  // button; the package then leaves the list and its file shows plain. The
-  // item link above left Files on notes/from-pack.md, so the file is opened
-  // again by name rather than assumed to be the one on screen.
-  await openPackages(page);
-  await card.locator('[data-action="uninstall"]').click();
-  const confirm = card.locator('#packages-uninstall-confirm');
-  await expect(confirm.locator('.pkg-review-title')).toHaveText('Uninstall Csv Echo?');
-  await expect(confirm.locator('.pkg-review-item')).toHaveText(['Csv Echo (extension)']);
-  expect(fs.existsSync(path.join(workspace, '.rundock/extensions', NAME))).toBe(true);
-  await confirm.getByRole('button', { name: 'Uninstall Csv Echo' }).click();
-  await expect(page.locator('.ext-notice')).toContainText('Csv Echo is uninstalled.');
-  await expect(card).toHaveCount(0);
-  await expect.poll(() => fs.existsSync(path.join(workspace, '.rundock/extensions', NAME))).toBe(false);
-  expect(JSON.parse(fs.readFileSync(path.join(workspace, '.rundock/extensions.json'), 'utf8')).extensions).toEqual([]);
-  await page.locator('.nav-item[data-nav="files"]').click();
-  await page.locator('.file-item', { hasText: 'sales.csv' }).first().click();
-  await expect.poll(() => page.evaluate(() => currentFilePath)).toBe('sales.csv');
-  await expect(page.locator('#editor-content .viewer-unsupported')).toBeVisible();
-  await expect(page.locator('#editor-content iframe.extension-frame')).toHaveCount(0);
+    // An item link opens where the item lives.
+    await openPackages(page);
+    await seeded.locator('.pkg-card-items .linkbtn').first().click();
+    await expect.poll(() => page.evaluate(() => currentFilePath)).toBe('notes/from-pack.md');
+
+    // Uninstall asks first, lists what goes, and removes only on its named
+    // button; the package then leaves the list and its file shows plain. The
+    // item link above left Files on notes/from-pack.md, so the file is opened
+    // again by name rather than assumed to be the one on screen.
+    await openPackages(page);
+    await card.locator('[data-action="uninstall"]').click();
+    const confirm = card.locator('#packages-uninstall-confirm');
+    await expect(confirm.locator('.pkg-review-title')).toHaveText('Uninstall Csv Echo?');
+    await expect(confirm.locator('.pkg-review-item')).toHaveText(['Csv Echo (extension)']);
+    expect(fs.existsSync(path.join(workspace, '.rundock/extensions', NAME))).toBe(true);
+    await confirm.getByRole('button', { name: 'Uninstall Csv Echo' }).click();
+    await expect(page.locator('.ext-notice')).toContainText('Csv Echo is uninstalled.');
+    await expect(card).toHaveCount(0);
+    await expect.poll(() => fs.existsSync(path.join(workspace, '.rundock/extensions', NAME))).toBe(false);
+    expect(JSON.parse(fs.readFileSync(path.join(workspace, '.rundock/extensions.json'), 'utf8')).extensions).toEqual([]);
+    await page.locator('.nav-item[data-nav="files"]').click();
+    await page.locator('.file-item', { hasText: 'sales.csv' }).first().click();
+    await expect.poll(() => page.evaluate(() => currentFilePath)).toBe('sales.csv');
+    await expect(page.locator('#editor-content .viewer-unsupported')).toBeVisible();
+    await expect(page.locator('#editor-content iframe.extension-frame')).toHaveCount(0);
+  });
 });

@@ -115,6 +115,9 @@ const REGISTRY_SUITES = [
   'test/unit/release-ci.test.js',
   // Reads the retry workflow and recorded run fixtures; nothing leaves the machine.
   'test/unit/ci-verdict.test.js',
+  // A browser-spec retry that docs/FLAKES.md does not name, or a register row
+  // whose test or retry has gone.
+  'test/unit/flake-register.test.js',
 ];
 
 /**
