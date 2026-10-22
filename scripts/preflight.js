@@ -178,6 +178,45 @@ const NOT_CHEAP = {
   'test/unit/skills-empty.test.js': 'behaviour: boots a document and renders the empty skills state',
 };
 
+/**
+ * Suites the repository's inventory classifies as a pinned count or an import
+ * binding that neither list above holds.
+ *
+ * THE MEMBERSHIP RULE, APPLIED BY THE PHASE AS WELL AS BY ITS AUDIT.
+ * preflight.test.js applies it in the suite, and the suite is the step a
+ * cancelled CI run never reaches, so a new suite missing from both lists was
+ * found only by diagnosis. Reading one file and matching its rows costs a
+ * millisecond. A row proven by mutation is a harness's, not this phase's.
+ */
+const INVENTORY = 'test/unit/sdlc-gate-hardening.test.js';
+const INVENTORY_ROW = /\{\s*file:\s*'(test\/unit\/[^']+)'[^}]*?failLoudBy:\s*'(count|imports|mutation)'/g;
+function unregisteredSuites({
+  inventory = fs.readFileSync(path.join(ROOT, INVENTORY), 'utf8'),
+  registry = REGISTRY_SUITES, notCheap = NOT_CHEAP,
+} = {}) {
+  const held = new Set(registry);
+  const missing = [];
+  for (const [, file, kind] of inventory.matchAll(INVENTORY_ROW)) {
+    if (kind === 'mutation' || held.has(file) || Object.prototype.hasOwnProperty.call(notCheap, file)) continue;
+    if (!missing.includes(file)) missing.push(file);
+  }
+  return missing;
+}
+
+function membership() {
+  let missing;
+  try { missing = unregisteredSuites(); } catch (e) {
+    return { label: 'membership', ok: false, ms: 0, output: `${INVENTORY} could not be read (${e.message}).` };
+  }
+  return {
+    label: 'membership',
+    ok: !missing.length,
+    ms: 0,
+    output: missing.map((file) => `${file} is inventoried in ${INVENTORY} but not registered: `
+      + 'add it to REGISTRY_SUITES in scripts/preflight.js, or to NOT_CHEAP there with a reason.').join('\n'),
+  };
+}
+
 // Checks that are already their own commands, and already fast.
 const CHECKS = [
   { name: 'check:refs', args: ['run', 'check:refs'] },
@@ -285,6 +324,9 @@ function main() {
   // failing for reasons that have nothing to do with the change under test.
   results.push(run('registries', process.execPath,
     ['--test', '--test-concurrency=1', '--test-reporter=spec', ...REGISTRY_SUITES]));
+  const member = membership();
+  process.stdout.write(`[preflight] membership... ${member.ok ? 'ok' : 'FAILED'} (0.0s)\n`);
+  results.push(member);
 
   // The captures, checked together and reported with the rest.
   const captures = staleCaptures();
@@ -321,6 +363,6 @@ function main() {
   return 1;
 }
 
-module.exports = { REGISTRY_SUITES, CHECKS, NOT_CHEAP, PINNED_RUNTIMES, staleCaptures };
+module.exports = { REGISTRY_SUITES, CHECKS, NOT_CHEAP, PINNED_RUNTIMES, staleCaptures, unregisteredSuites };
 
 if (require.main === module) process.exit(main());
