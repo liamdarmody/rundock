@@ -27,7 +27,7 @@
 const { execFileSync, spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
-const { readMarkers } = require('../test/tools/mutation-run.js');
+const { readMarkers, MARKER_DIR } = require('../test/tools/mutation-run.js');
 const { readRuns, isAlive, groupAlive } = require('./lib/run-record.js');
 const { runRecordPath } = require('./red-first.js');
 
@@ -37,6 +37,16 @@ const ROOT = process.env.LANE_DONE_ROOT ? path.resolve(process.env.LANE_DONE_ROO
 const AGAIN = 'then run lane-done again';
 
 const names = (files) => (files.length > 10 ? `${files.slice(0, 10).join(', ')} and ${files.length - 10} more` : files.join(', '));
+
+/** Every file under the sweep's kept copies, as `<dir>/<path>`. */
+function keptCopies(dir, prefix = '') {
+  let entries = [];
+  try { entries = fs.readdirSync(path.join(dir, prefix), { withFileTypes: true }); } catch { return []; }
+  return entries.flatMap((e) => {
+    const rel = prefix ? `${prefix}/${e.name}` : e.name;
+    return e.isDirectory() ? keptCopies(dir, rel) : [rel];
+  });
+}
 
 function runsInProgress(root) {
   const out = [];
@@ -49,8 +59,18 @@ function runsInProgress(root) {
     const files = Array.isArray(m.files) ? m.files : [];
     if (m.unreadable) out.push(`${rel} cannot be read as a mutation run record: check the files the harnesses mutate against git, then delete it.`);
     else if (isAlive(m.pid)) out.push(`a mutation harness (pid ${m.pid}, ${m.tool}) is still running in this checkout: wait for it to finish, or stop it, ${AGAIN}.`);
-    else out.push(`a mutation run (pid ${m.pid}) never finished, and ${rel} names ${names(files)}: if git diff shows a mutation there, `
-      + `put them back with git checkout -- ${files.join(' ')}, then delete ${rel}.`);
+    // NEVER A BARE CHECKOUT FIRST: to git the leftover mutation and an edit
+    // made since are one change, and a checkout throws both away.
+    else out.push(`a mutation run (pid ${m.pid}) never finished, and ${rel} names ${names(files)}, which may still hold its mutation: `
+      + `let the next mutation harness run put them back (it keeps a copy of each in ${MARKER_DIR}/recovered/ first), `
+      + `or copy them aside, then git checkout -- ${files.join(' ')} and delete ${rel}; ${AGAIN}.`);
+  }
+  const kept = keptCopies(path.join(root, MARKER_DIR, 'recovered'));
+  if (kept.length) {
+    const [dir, file] = [kept[0].slice(0, kept[0].indexOf('/')), kept[0].slice(kept[0].indexOf('/') + 1)];
+    out.push(`${MARKER_DIR}/recovered/ holds what a sweep kept of files a dead mutation run had held (${names(kept)}), `
+      + `which may be your edits: compare each with its file (git diff --no-index ${MARKER_DIR}/recovered/${dir}/${file} ${file}), `
+      + `keep what is yours, then delete ${MARKER_DIR}/recovered/; ${AGAIN}.`);
   }
   let held = null;
   try { held = JSON.parse(fs.readFileSync(runRecordPath(root), 'utf8')); } catch { /* none */ }

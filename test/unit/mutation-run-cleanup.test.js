@@ -40,7 +40,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync, spawn, spawnSync } = require('node:child_process');
 
-const { inspect, markerPath, markerDir, readMarkers, MARKER_DIR } = require('../tools/mutation-run.js');
+const { inspect, markerPath, markerDir, readMarkers, recoverAbandoned, MARKER_DIR } = require('../tools/mutation-run.js');
 const markerDirName = () => MARKER_DIR;
 const { makeTempDir } = require('../helpers/workspace.js');
 
@@ -341,10 +341,25 @@ describe('a run killed in a way nothing can catch', () => {
     const next = runStandIn(fixture);
 
     assert.equal(read(fixture.src), SOURCE, 'the file is put back from the index as before');
-    const kept = path.join(markerDir(fixture.repo), 'recovered', String(pid), 'src.js');
-    assert.ok(fs.existsSync(kept), `what the file held is kept at ${kept}`);
+    const dirs = fs.readdirSync(path.join(markerDir(fixture.repo), 'recovered')).filter((d) => d.startsWith(`${pid}-`));
+    assert.equal(dirs.length, 1, 'one kept copy, under the dead run\'s pid and the time it was kept');
+    const kept = path.join(markerDir(fixture.repo), 'recovered', dirs[0], 'src.js');
     assert.match(read(kept), /const edited = 1;/, 'the edit survives in the copy');
-    assert.match(next.stderr, new RegExp(`recovered/${pid}`), 'and the sweep says where');
+    assert.ok(next.stderr.includes(`recovered/${dirs[0]}`), `and the sweep says where:\n${next.stderr}`);
+  });
+
+  test('a reused pid never overwrites a copy kept earlier', (t) => {
+    const fixture = scratch(t, 'quick');
+    const kept = [];
+    for (const text of ['const first = 1;\n', 'const second = 2;\n']) {
+      fs.appendFileSync(fixture.src, text);
+      assert.deepEqual(recoverAbandoned(fixture.repo, ['src.js'], 4242).files, ['src.js']);
+      assert.equal(read(fixture.src), SOURCE, 'put back each time');
+    }
+    const root = path.join(markerDir(fixture.repo), 'recovered');
+    for (const d of fs.readdirSync(root)) kept.push(read(path.join(root, d, 'src.js')));
+    assert.equal(kept.length, 2, 'two sweeps under one pid keep two copies');
+    assert.ok(kept.some((k) => k.includes('first')) && kept.some((k) => k.includes('second')), 'each with what it held');
   });
 });
 

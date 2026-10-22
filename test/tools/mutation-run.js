@@ -129,27 +129,36 @@ function readMarkers(root) {
  * WHAT IS ON DISK IS KEPT FIRST. To git, the mutation being undone and an
  * edit a person made after the run died are the same kind of change, and a
  * restore from the index wipes both. So every held file that differs from the
- * index is copied under `<record dir>/recovered/<pid>/` before it is put back.
+ * index is copied under `<record dir>/recovered/<pid>-<time>-<suffix>/` before
+ * it is put back: named for the time as well as the pid, because a pid is
+ * reused, and a later sweep must never overwrite a copy kept earlier.
  *
- * Returns the files put back, or null when the restore could not be done, in
- * which case the caller falls back to telling a person what to run by hand.
+ * Returns `{ files, kept }`, the files put back and the folder holding the
+ * copies (null when nothing differed), or null when the restore could not be
+ * done, in which case the caller falls back to telling a person what to run.
  */
 function recoverAbandoned(root, held, pid) {
-  if (!held.length) return [];
+  if (!held.length) return { files: [], kept: null };
   const present = held.filter((f) => { try { return fs.existsSync(path.resolve(root, f)); } catch { return false; } });
   if (!present.length) return null;
   const differing = unstaged(root, present.map((f) => path.resolve(root, f)));
   if (differing === null) return null;
+  let keptDir = null;
   try {
+    if (differing.length) {
+      const stamp = new Date().toISOString().replace(/[-:.]/g, '');
+      fs.mkdirSync(path.join(markerDir(root), 'recovered'), { recursive: true });
+      keptDir = fs.mkdtempSync(path.join(markerDir(root), 'recovered', `${pid}-${stamp}-`));
+    }
     for (const f of differing) {
-      const kept = path.join(markerDir(root), 'recovered', String(pid), f);
+      const kept = path.join(keptDir, f);
       fs.mkdirSync(path.dirname(kept), { recursive: true });
       fs.copyFileSync(path.resolve(root, f), kept);
     }
   } catch { return null; }
   const out = spawnSync('git', ['checkout', '--', ...held], { cwd: root, encoding: 'utf8' });
   if (out.error || out.status !== 0) return null;
-  return held;
+  return { files: held, kept: keptDir && relative(root, keptDir) };
 }
 
 function isAlive(pid) {
@@ -285,7 +294,7 @@ function inspect({ root = ROOT, files = [] } = {}) {
   const swept = [];
   for (const r of records.filter((x) => x.pid !== process.pid && !isAlive(x.pid))) {
     const held = Array.isArray(r.files) ? r.files : [];
-    const put = held.length ? recoverAbandoned(root, held, r.pid) : [];
+    const put = recoverAbandoned(root, held, r.pid);
     if (put === null) {
       return {
         ok: false,
@@ -299,7 +308,7 @@ function inspect({ root = ROOT, files = [] } = {}) {
           + 'Then clear the record: rm ' + r.file,
       };
     }
-    swept.push({ pid: r.pid, files: put });
+    swept.push({ pid: r.pid, files: put.files, kept: put.kept });
     try { fs.rmSync(r.file, { force: true }); } catch { /* the next start will say */ }
   }
 
@@ -367,8 +376,9 @@ function beginMutationRun({ root = ROOT, files: declared = [], suites = [] } = {
   // file it put back.
   for (const s2 of verdict.swept || []) {
     console.error(`A previous mutation run (pid ${s2.pid}) never finished. Its files have been put `
-      + `back from the index, and what any of them held before is kept in `
-      + `${MARKER_DIR}/recovered/${s2.pid}/:\n${list(s2.files)}`);
+      + 'back from the index'
+      + (s2.kept ? `, and what they held before is kept in ${s2.kept}/ (compare, keep what is yours, then delete it)` : '')
+      + `:\n${list(s2.files)}`);
   }
 
   const originals = new Map();

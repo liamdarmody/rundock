@@ -149,7 +149,37 @@ describe('lane-done passes only on finished work', () => {
       JSON.stringify({ pid: gone, tool: 'mutate-x-guards.js', files: ['a.js'] }));
     const { failures } = w.check();
     assert.strictEqual(failures.length, 1, failures.join('\n'));
-    assert.match(failures[0], new RegExp(`pid ${gone}\\) never finished.*a\\.js.*git checkout -- a\\.js`));
+    assert.match(failures[0], new RegExp(`pid ${gone}\\) never finished.*a\\.js`));
+    assert.match(failures[0], /let the next mutation harness run put them back.*or copy them aside, then git checkout -- a\.js/,
+      'the advice keeps an edit made since: a sweep or a copy first, never a bare checkout');
+  });
+
+  test('kill, edit, lane-done, another harness, lane-done: the edit is never lost from view', (t) => {
+    const { inspect } = require('../tools/mutation-run.js');
+    const w = finished(t);
+    const gone = spawnSync(process.execPath, ['-e', '']).pid;
+    // A run killed while it held a.js mutated, and an edit made on top since.
+    fs.writeFileSync(path.join(w.root, 'a.js'), 'module.exports = 0; // mutant\nconst mine = 1;\n');
+    fs.mkdirSync(path.join(w.root, '.mutation-runs'));
+    fs.writeFileSync(path.join(w.root, '.mutation-runs', `${gone}.json`),
+      JSON.stringify({ pid: gone, tool: 'mutate-x-guards.js', files: ['a.js'] }));
+
+    const first = w.check().failures;
+    assert.strictEqual(first.length, 2, first.join('\n'));
+    assert.ok(first.some((l) => /never finished.*copy them aside/.test(l)), first.join('\n'));
+    assert.ok(first.some((l) => /^unstaged changes: a\.js/.test(l)), first.join('\n'));
+
+    inspect({ root: w.root, files: [] }); // the next harness to start sweeps the dead run
+    assert.strictEqual(fs.readFileSync(path.join(w.root, 'a.js'), 'utf8'), 'module.exports = 3;\n', 'a.js is put back');
+
+    const second = w.check().failures;
+    assert.strictEqual(second.length, 1, `the edit, now in an ignored folder, still fails the check:\n${second.join('\n')}`);
+    assert.match(second[0], /\.mutation-runs\/recovered\/.*git diff --no-index .*a\.js a\.js.*then delete \.mutation-runs\/recovered\//);
+    const kept = fs.readdirSync(path.join(w.root, '.mutation-runs', 'recovered'));
+    assert.ok(second[0].includes(`.mutation-runs/recovered/${kept[0]}/a.js`), second[0]);
+
+    fs.rmSync(path.join(w.root, '.mutation-runs', 'recovered'), { recursive: true });
+    assert.deepStrictEqual(w.check().failures, [], 'and once compared and deleted, the check passes');
   });
 
   test('a leak scan that is not clean fails, naming the range and the command that shows it', (t) => {
