@@ -1755,6 +1755,9 @@ const MUTATIONS = [
   [KEYCHAIN_CODEX, 'Keychain: a Codex escalation in Notes mode is graded as ordinary',
     '  const verdict = (codeMode ? codeModeVerdict : keychainVerdict)({ toolName, command, cwd, workspaceRoot, extraDirs, home, platform });',
     '  const verdict = codeMode ? codeModeVerdict({ toolName, command, cwd, workspaceRoot, extraDirs, home, platform }) : null;'],
+  [KEYCHAIN_CODEX, 'Keychain: a Codex Keychain card offers a folder to remember',
+    "        grant_dir: verdict && verdict.reason === 'keychain' ? null : ((crossings[0] && crossings[0].grantDir) || access.grantDir || null),",
+    '        grant_dir: (crossings[0] && crossings[0].grantDir) || access.grantDir || null,'],
   // Through the real hook: Notes mode never asks the question, the refusal
   // misstates why, and the card offers a folder to remember.
   [KEYCHAIN_HOOK_FLOW, 'Keychain: Notes mode never asks',

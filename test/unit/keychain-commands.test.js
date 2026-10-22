@@ -361,6 +361,16 @@ describe('a Codex escalation that reaches the Keychain', () => {
     }
   });
 
+  test('names no folder to remember, in both modes, when the command also names one outside', () => {
+    const outside = path.join(__dirname, '..', 'fixtures', 'example.keychain-db');
+    for (const codeModeOn of [false, true]) {
+      const g = grade(`${K} ${outside}`, codeModeOn);
+      assert.strictEqual(g.request.boundary, true, 'a crossing, as before');
+      assert.strictEqual(g.request.grant_dir, null, 'no folder named on the card');
+      assert.ok(grade(`cat ${outside}`, codeModeOn).request.grant_dir, 'another command reaching the same file still names its folder');
+    }
+  });
+
   test('and a display command is graded as before', () => {
     const notes = grade('security list-keychains', false);
     assert.strictEqual(notes.decision, 'card');
