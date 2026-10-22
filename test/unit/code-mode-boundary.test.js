@@ -276,13 +276,13 @@ describe('working folders reach Claude Code as additional directories', () => {
 });
 
 describe('the OS sandbox block is unchanged', () => {
-  test('the Code-mode block for fixed inputs is byte-identical to v0.15.0, plus the credential deny', () => {
+  test('the Code-mode block for fixed inputs is byte-identical to v0.15.0, plus the appended denies', () => {
     const scaffold = require('../../lib/workspace/scaffold.js');
     const block = scaffold.sandboxSettings('/w/ws', 'darwin', '/Users/someone', ['/var/folders/zz/T', '/private/var/folders/zz/T'], ['/Users/someone/Projects'], 'code');
     // Recorded from v0.15.0 with these exact inputs. The one change since is
-    // entries APPENDED to denyWrite: the runtimes' credential files and the
-    // user-level state file, which narrows what the block permits and widens
-    // nothing.
+    // entries APPENDED to denyWrite: the runtimes' credential files, the
+    // user-level state file, and the paths the runtime acts on outside the
+    // sandbox, which narrows what the block permits and widens nothing.
     assert.deepStrictEqual(block, {
       enabled: false,
       filesystem: {
@@ -294,6 +294,10 @@ describe('the OS sandbox block is unchanged', () => {
           '/w/ws/.rundock/state.json', '/w/ws/.rundock/permissions.json', '/w/ws/.claude/settings.local.json',
           '/Users/someone/.claude/.credentials.json', '/Users/someone/.claude/.config.json', '/Users/someone/.codex/auth.json',
           '/Users/someone/.claude.json', '/Users/someone/.claude.json.backup',
+          '/Users/someone/.claude/settings.json', '/Users/someone/.claude/plugins', '/Users/someone/.claude/hooks',
+          '/Users/someone/.claude/skills', '/Users/someone/.claude/agents', '/Users/someone/.claude/commands',
+          '/Users/someone/.claude/backups', '/Users/someone/.claude-staging-oauth.json',
+          '/Users/someone/.claude-local-oauth.json', '/Users/someone/.claude-custom-oauth.json',
         ],
       },
     }, 'the development paths are a card rule, not a widening of what the operating system allows');
