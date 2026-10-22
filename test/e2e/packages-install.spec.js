@@ -37,17 +37,27 @@ async function boot(page) {
 // THROUGH THE RAIL, NOT AROUND IT: the Settings entry, then the Packages
 // item, the way a person reaches the section. A workspace switch redraws
 // the shell and can undo one click, so the poll clicks again each time.
+//
+// EACH CLICK IS BOUNDED. A click waits for its target to be visible, with no
+// limit of its own, so a redraw that hid the Settings sidebar between the two
+// clicks left the second one waiting and the poll timed out without clicking
+// again. A bounded click that misses fails this attempt, and the poll starts
+// the next one from the rail.
 async function openPackages(page) {
   await expect.poll(
     async () => {
-      await page.locator('.nav-item[data-nav="settings"]').click();
-      await page.locator('.settings-nav-item[data-settings="packages"]').click();
+      try {
+        await page.locator('.nav-item[data-nav="settings"]').click({ timeout: 2000 });
+        await page.locator('.settings-nav-item[data-settings="packages"]').click({ timeout: 2000 });
+      } catch {
+        return false;
+      }
       return page.evaluate(() => {
         const el = document.getElementById('packages-source-link');
         return !!(el && el.offsetParent !== null);
       });
     },
-    { message: 'the packages field is on screen after clicking through the rail' },
+    { message: 'the packages field is on screen after clicking through the rail', timeout: 15_000 },
   ).toBe(true);
   // THE POLL IS THE WAIT. A second, unforced assertion on the same element
   // re-checks what the poll has already established, and can land during a
@@ -94,6 +104,18 @@ async function seedRepo(page, name, files) {
 async function readLink(page, link) {
   await page.fill('#packages-source-link', link);
   await page.getByRole('button', { name: 'Add', exact: true }).click();
+}
+
+// Switch the shared server's workspace and wait until the page has SETTLED in
+// it, not merely heard of it. currentWorkspacePath changes as soon as the
+// switch is acknowledged, but the page picks where to land only when the
+// conversation list arrives after it, and for a fresh workspace that is the
+// setup conversation, which takes the screen away from Settings. A test that
+// starts clicking in between races that navigation.
+async function switchWorkspace(page, dir) {
+  await page.evaluate((d) => ws.send(JSON.stringify({ type: 'set_workspace', path: d })), dir);
+  await expect.poll(() => page.evaluate((d) => currentWorkspacePath === d && conversationsLoaded, dir),
+    { message: `the page has settled in ${path.basename(dir)}`, timeout: 15_000 }).toBe(true);
 }
 
 async function fileExists(page, rel) {
@@ -194,14 +216,12 @@ test('switching workspace returns the flow to idle, discarding the previous plan
   // real one buried at the top. The handback belongs in a finally, so a
   // failure here stays a failure here.
   try {
-    await page.evaluate((dir) => ws.send(JSON.stringify({ type: 'set_workspace', path: dir })), other);
-    await expect.poll(() => page.evaluate(() => currentWorkspacePath)).toBe(other);
+    await switchWorkspace(page, other);
     await openPackages(page);
     await expect(page.locator('#packages-source-link')).toHaveValue('');
     await expect(page.locator('.packages-confirm-card')).toHaveCount(0);
   } finally {
-    await page.evaluate((dir) => ws.send(JSON.stringify({ type: 'set_workspace', path: dir })), original);
-    await expect.poll(() => page.evaluate(() => currentWorkspacePath)).toBe(original);
+    await switchWorkspace(page, original);
   }
 });
 
@@ -488,16 +508,14 @@ test('a typed link survives a redraw from an update check finishing, and a chang
     const other = original + '-typing';
     fs.mkdirSync(other, { recursive: true });
     try {
-      await page.evaluate((dir) => ws.send(JSON.stringify({ type: 'set_workspace', path: dir })), other);
-      await expect.poll(() => page.evaluate(() => currentWorkspacePath)).toBe(other);
+      await switchWorkspace(page, other);
       // Whatever the switch left on screen holds no typed link, and opening
       // Packages again, which redraws the section, does not bring one back.
       await expect.poll(() => page.evaluate(() => { const el = document.getElementById('packages-source-link'); return el ? el.value : ''; })).toBe('');
       await openPackages(page);
       await expect(page.locator('#packages-source-link')).toHaveValue('');
     } finally {
-      await page.evaluate((dir) => ws.send(JSON.stringify({ type: 'set_workspace', path: dir })), original);
-      await expect.poll(() => page.evaluate(() => currentWorkspacePath)).toBe(original);
+      await switchWorkspace(page, original);
     }
   } finally {
     fs.rmSync(path.join(receipts, '2026-09-01-typing.json'), { force: true });
