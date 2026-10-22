@@ -384,6 +384,35 @@ describe('a run refuses to start over a file with unstaged changes', () => {
     assert.deepStrictEqual(fs.readdirSync(path.join(repo.root, '.tool-runs')), [], 'and it is removed when the run ends');
   });
 
+  test('an interrupted run removes its record at once, and dies of the signal', async (t) => {
+    // With the harnesses run synchronously, a signal handler in the run could
+    // not fire until the harness in hand had finished, so the run either died
+    // leaving its record or kept going after being told to stop.
+    const repo = fixtureRepo();
+    write(repo.root, 'test/tools/mutate-a-guards.js', harnessSource([['A', 'lib/a.js', 'test/unit/a.test.js']])
+      .replace('process.exit(0);', "require('node:fs').writeFileSync(__filename + '.pid', String(process.pid));"
+        + ' setTimeout(() => process.exit(0), 60000);'));
+    copyTool(repo.root);
+    repo.commit('a harness that hangs');
+    const { spawn } = require('node:child_process');
+    const run = spawn(process.execPath, [path.join(repo.root, 'scripts', 'mutation-scope.js'), '--all'],
+      { cwd: repo.root, stdio: 'ignore' });
+    const exited = new Promise((resolve) => run.on('exit', (code, signal) => resolve({ code, signal })));
+    const pidFile = path.join(tools(repo.root), 'mutate-a-guards.js.pid');
+    t.after(() => {
+      try { run.kill('SIGKILL'); } catch { /* gone */ }
+      try { process.kill(Number(fs.readFileSync(pidFile, 'utf8')), 'SIGKILL'); } catch { /* gone */ }
+    });
+    const records = () => { try { return fs.readdirSync(path.join(repo.root, '.tool-runs')); } catch { return []; } };
+    const deadline = Date.now() + 20000;
+    while (!(fs.existsSync(pidFile) && records().length) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 25));
+    assert.ok(fs.existsSync(pidFile) && records().length === 1, 'the run is recorded while its harness runs');
+    run.kill('SIGINT');
+    const how = await Promise.race([exited, new Promise((r) => setTimeout(() => r({ timedOut: true }), 10000))]);
+    assert.strictEqual(how.signal, 'SIGINT', `the run stops when told to, not after its harness: ${JSON.stringify(how)}`);
+    assert.deepStrictEqual(records(), [], 'and its record goes with it');
+  });
+
   test('a file a run record holds is left to the harness, which knows what to do with it', () => {
     const repo = fixtureRepo();
     fs.appendFileSync(path.join(repo.root, 'lib', 'a.js'), 'mutant\n');

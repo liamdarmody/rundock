@@ -85,6 +85,7 @@ const ENVELOPE_RUN = { src: path.join(ROOT, 'test', 'tools', 'mutation-run.js'),
 const FIXTURE_NOTICE = { src: path.join(ROOT, 'test', 'helpers', 'code-mode-fixture.js'), suite: 'test/unit/code-mode-fixture-root.test.js' };
 const PREFLIGHT = { src: path.join(ROOT, 'scripts', 'preflight.js'), suite: 'test/unit/preflight.test.js' };
 const LANE_DONE = { src: path.join(ROOT, 'scripts', 'lane-done.js'), suite: 'test/unit/lane-done.test.js' };
+const RUN_RECORD = { src: path.join(ROOT, 'scripts', 'lib', 'run-record.js'), suite: 'test/unit/run-record.test.js' };
 
 const MUTATIONS = [
   // ===== A DESTRUCTIVE STEP WITHOUT ITS CAUTION =====
@@ -467,8 +468,17 @@ const MUTATIONS = [
     "  if (dirty.length) {\n",
     "  if (false) {\n"],
   [SCOPE, "a run records itself in the checkout while it runs",
-    "  const release = recordRun(ROOT, 'npm run mutate:guards');\n",
-    "  const release = () => {};\n"],
+    "  const record = recordRun(ROOT, 'npm run mutate:guards');\n",
+    "  const record = { release: () => {} };\n"],
+  [SCOPE, "a run waits for each harness without blocking its signal listeners",
+    "    const r = await run(args, root);\n",
+    "    const r = require('node:child_process').spawnSync(process.execPath, args, { cwd: root, stdio: 'inherit' });\n"],
+  [RUN_RECORD, "a run asked to stop removes its record",
+    "  for (const signal of SIGNALS) process.on(signal, onSignal);\n",
+    ""],
+  [RUN_RECORD, "a run asked to stop still dies of the signal",
+    "    if (process.listenerCount(signal) === 0) process.kill(process.pid, signal);\n",
+    ""],
   [ENVELOPE_RUN, "a dead run's files are copied aside before the index restores them",
     "      fs.copyFileSync(path.resolve(root, f), kept);\n",
     ""],

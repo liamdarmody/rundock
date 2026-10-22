@@ -45,7 +45,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { execFileSync, spawnSync } = require('node:child_process');
+const { execFileSync, spawn: spawnChild } = require('node:child_process');
 const { readMarkers, unstaged, unstagedRefusal } = require('../test/tools/mutation-run.js');
 const { recordRun } = require('./lib/run-record.js');
 
@@ -468,13 +468,27 @@ function unstagedTargets(units, harnesses, { root = ROOT } = {}) {
   return (files.length && unstaged(root, files.map((f) => path.join(root, f)))) || [];
 }
 
-function runUnits(units, { root = ROOT, spawn = spawnSync } = {}) {
+/**
+ * One harness, run to its end. ASYNCHRONOUS ON PURPOSE: while a synchronous
+ * spawn waits, no signal listener in this process can run, so an interrupted
+ * run either died without removing its record or kept going after being told
+ * to stop.
+ */
+function runHarness(args, root) {
+  return new Promise((resolve) => {
+    const kid = spawnChild(process.execPath, args, { cwd: root, stdio: 'inherit' });
+    kid.on('error', () => resolve({ status: null, signal: null }));
+    kid.on('exit', (status, signal) => resolve({ status, signal }));
+  });
+}
+
+async function runUnits(units, { root = ROOT, run = runHarness } = {}) {
   const results = [];
   for (const u of units) {
     const args = [path.join('test', 'tools', u.tool), '--markdown'];
     if (u.start !== undefined) args.push('--rows', `${u.start}:${u.end}`);
     console.log(`\n[mutation-scope] ${unitLabel(u)}`);
-    const r = spawn(process.execPath, args, { cwd: root, stdio: 'inherit' });
+    const r = await run(args, root);
     const o = outcomeOf(r.status, r.signal);
     if (o.outcome !== PASS) console.error(`[mutation-scope] ${unitLabel(u)}: ${o.outcome}${o.cause ? ` (${o.cause})` : ''}`);
     results.push({ unit: unitLabel(u), ...o });
@@ -600,7 +614,7 @@ function readPlan(file) {
   return JSON.parse(fs.readFileSync(file, 'utf8'));
 }
 
-function main(argv = process.argv.slice(2)) {
+async function main(argv = process.argv.slice(2)) {
   if (argv.includes('--aggregate')) {
     const planFile = argValue(argv, '--plan-file');
     const dir = argValue(argv, '--verdicts');
@@ -673,9 +687,9 @@ function main(argv = process.argv.slice(2)) {
   }
   // RECORDED WHILE IT RUNS, between harnesses as well as inside one, so the
   // check made before a change is reported done can see it is still going.
-  const release = recordRun(ROOT, 'npm run mutate:guards');
-  const ran = runUnits(units);
-  release();
+  const record = recordRun(ROOT, 'npm run mutate:guards');
+  const ran = await runUnits(units);
+  record.release();
   writeVerdict(argValue(argv, '--verdict'), { plan: plan.id, shard: shardIndex, ...ran });
   // NAMED, NOT COUNTED. "fail: 4 unit(s)" read as four failures when one of
   // four had failed; the line says how many did not pass, and which.
@@ -696,4 +710,4 @@ module.exports = {
   PASS, FAIL, NO_VERDICT, EXIT,
 };
 
-if (require.main === module) process.exit(main());
+if (require.main === module) main().then((code) => process.exit(code));

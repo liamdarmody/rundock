@@ -8,15 +8,18 @@
 // sandboxes will not spawn, so a run says it is running here, by pid, and
 // liveness is asked of the kernel with signal 0.
 //
-// One file per run, named for its pid, removed when the run exits. A run
-// killed outright leaves its file behind; a later record sweeps it, and a
-// reader skips it, because a dead pid is not a run in progress.
+// One file per run, named for its pid, removed when the run exits or is
+// asked to stop by SIGINT, SIGTERM or SIGHUP: a record outliving its run
+// reads as a run still going once the pid is reused. A run killed outright
+// leaves its file behind; a later record sweeps it, and a reader skips it,
+// because a dead pid is not a run in progress.
 
 const fs = require('node:fs');
 const path = require('node:path');
 
 // Beside .mutation-runs/ and .precommit-gate/, and ignored like them.
 const RUN_DIR = '.tool-runs';
+const SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP'];
 
 function isAlive(pid) {
   if (!Number.isInteger(pid) || pid <= 0) return false;
@@ -45,7 +48,10 @@ function readRuns(root) {
   return out;
 }
 
-/** Record this process as running `what` in `root` until it exits. */
+/**
+ * Record this process as running `what` in `root` until it exits or is asked
+ * to stop. Returns `{ file, release }`; release removes the record early.
+ */
 function recordRun(root, what) {
   for (const old of readRuns(root).filter((r) => !r.alive)) fs.rmSync(old.file, { force: true });
   const file = path.join(root, RUN_DIR, `${process.pid}.json`);
@@ -53,11 +59,23 @@ function recordRun(root, what) {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, `${JSON.stringify({ pid: process.pid, what, startedAt: new Date().toISOString() })}\n`);
   } catch {
-    return () => {};
+    return { file: null, release: () => {} };
   }
-  const release = () => { try { fs.rmSync(file, { force: true }); } catch { /* already gone */ } };
+  const release = () => {
+    try { fs.rmSync(file, { force: true }); } catch { /* already gone */ }
+    process.removeListener('exit', release);
+    for (const signal of SIGNALS) process.removeListener(signal, onSignal);
+  };
+  // RE-RAISED, so whatever drove the run sees it die of the signal it sent,
+  // and only where nothing else is listening, so another module's tidying
+  // still runs and ends the process its own way.
+  function onSignal(signal) {
+    release();
+    if (process.listenerCount(signal) === 0) process.kill(process.pid, signal);
+  }
   process.on('exit', release);
-  return release;
+  for (const signal of SIGNALS) process.on(signal, onSignal);
+  return { file, release };
 }
 
 module.exports = { RUN_DIR, isAlive, readRuns, recordRun };
