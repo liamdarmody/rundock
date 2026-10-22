@@ -245,6 +245,9 @@ const KEYCHAIN_VERDICT = { src: path.join(ROOT, 'scripts', 'code-mode-verdict.js
 const KEYCHAIN_CLIENT = { src: path.join(ROOT, 'public', 'permissions.js'), suite: 'test/unit/keychain-commands.test.js' };
 const KEYCHAIN_CODEX = { src: path.join(ROOT, 'lib', 'runtime', 'codex-approval.js'), suite: 'test/unit/keychain-commands.test.js' };
 const KEYCHAIN_PARSE = { src: path.join(ROOT, 'scripts', 'code-mode-parse.js'), suite: 'test/unit/keychain-commands.test.js' };
+// The hook's platform seam: inert in the app, and never handed to an agent.
+const KEYCHAIN_HOOK_UNIT = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/keychain-commands.test.js' };
+const KEYCHAIN_SPAWN_ENV = { src: path.join(ROOT, 'lib', 'runtime', 'claude.js'), suite: 'test/unit/claude-runtime-lib.test.js' };
 const KEYCHAIN_HOOK_FLOW = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/integration/keychain-approvals.test.js' };
 
 const MUTATIONS = [
@@ -1778,6 +1781,15 @@ const MUTATIONS = [
   [KEYCHAIN_HOOK_FLOW, 'Keychain: the test platform counts without its flag',
     "  return (env.RUNDOCK_TEST_SEAMS === '1' && env.RUNDOCK_TEST_PLATFORM) || process.platform;",
     '  return env.RUNDOCK_TEST_PLATFORM || process.platform;'],
+  [KEYCHAIN_HOOK_UNIT, 'Keychain: the platform seam is read in the app',
+    '  if (versions.electron) return process.platform;\n',
+    ''],
+  [KEYCHAIN_SPAWN_ENV, "Keychain: an agent inherits the seam's flag",
+    '  delete env.RUNDOCK_TEST_SEAMS;\n',
+    ''],
+  [KEYCHAIN_SPAWN_ENV, "Keychain: an agent inherits the seam's platform",
+    '  delete env.RUNDOCK_TEST_PLATFORM;\n',
+    ''],
   [KEYCHAIN_HOOK_FLOW, 'Keychain: the hook judges for its host whatever the test names',
     'workspaceRoot: wsRoot, extraDirs, keychainPlatform: keychainPlatform() })',
     'workspaceRoot: wsRoot, extraDirs })'],

@@ -330,3 +330,30 @@ test('the log reports inheritance from the marker a real spawn carries', () => {
   // a spawn carrying both reports the marker's answer.
   assert.strictEqual(rt.modelForLog([rt.INHERIT_MARKER, '--model', 'sonnet']), '(inherited)');
 });
+
+// THE HOOK'S TEST SEAM NEVER REACHES AN AGENT. The permission hook reads a
+// platform from RUNDOCK_TEST_PLATFORM when RUNDOCK_TEST_SEAMS is 1, for the
+// end-to-end suites. The spawn environment is copied from Rundock's own, and
+// Rundock's own can be set from outside it (`launchctl setenv` reaches every
+// app launched from the Dock afterwards), so both names are taken out here,
+// like the RUNDOCK values Rundock sets itself.
+test('a spawned agent never inherits the hook\'s test seam', () => {
+  const rt = freshClaudeRuntime();
+  rt.wireClaudeRuntimeDeps({ getActualPort: () => 4444 });
+  const saved = { seams: process.env.RUNDOCK_TEST_SEAMS, platform: process.env.RUNDOCK_TEST_PLATFORM };
+  process.env.RUNDOCK_TEST_SEAMS = '1';
+  process.env.RUNDOCK_TEST_PLATFORM = 'win32';
+  try {
+    withTwoWorkspaces((config, wsA) => {
+      config.setWorkspace(wsA);
+      for (const env of [rt.getSpawnEnv('convo-1'), rt.getSpawnEnv(null)]) {
+        assert.ok(!('RUNDOCK_TEST_SEAMS' in env), 'no RUNDOCK_TEST_SEAMS');
+        assert.ok(!('RUNDOCK_TEST_PLATFORM' in env), 'no RUNDOCK_TEST_PLATFORM');
+      }
+    });
+  } finally {
+    for (const [key, value] of [['RUNDOCK_TEST_SEAMS', saved.seams], ['RUNDOCK_TEST_PLATFORM', saved.platform]]) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  }
+});

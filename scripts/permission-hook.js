@@ -1470,7 +1470,7 @@ module.exports = {
   WORKSPACE_ANSWER_FILES, RUNDOCK_ANSWER_FILES, RUNTIME_GUARDED_ANSWER_FILES,
   boundaryCrossingsFor,
   REFUSED_CLAUDE_EDIT_DIRS, isReadOnlyShellCommand, isRundockAnswerFileAnywhere, isRundockWorkspaceSettingsFile, isAnswerFileOfAnyWorkspace, otherWorkspaceRootOf, isOtherWorkspaceAgentSurface,
-  INSTRUCTION_SURFACES, isInstructionSurface, hiddenHomeRootOf, alwaysAsksCrossing, SHELL_TOOLS,
+  INSTRUCTION_SURFACES, isInstructionSurface, hiddenHomeRootOf, alwaysAsksCrossing, SHELL_TOOLS, keychainPlatform,
 };
 
 if (require.main === module) main();
@@ -1526,11 +1526,19 @@ function alwaysAsksCrossing(access) {
 // simply no line, and the decision is unaffected.
 const AGENT_NOTICE_ID = /^[A-Za-z0-9_-][A-Za-z0-9_.-]{0,127}$/;
 // THE PLATFORM THE KEYCHAIN GATE JUDGES FOR, which is this host's: the Keychain
-// rules are the Mac's. It moves that gate and nothing else: the verdict's path
-// handling and its checks on deletes always follow the real host. One test-only
-// seam, off unless RUNDOCK_TEST_SEAMS is 1: then RUNDOCK_TEST_PLATFORM names
-// another, so the end-to-end suites prove the Mac's rules on any host.
-function keychainPlatform(env = process.env) {
+// rules are the Mac's. One test-only seam, so the end-to-end suites prove the
+// Mac's rules on any host: with RUNDOCK_TEST_SEAMS set to 1,
+// RUNDOCK_TEST_PLATFORM names another platform. Three limits keep it a seam:
+//   - it moves that gate and nothing else; the verdict's path handling and its
+//     checks on deletes always follow the real host;
+//   - it is never read in the app, whose hook always runs as the Electron
+//     binary, so it is inert there by construction;
+//   - Rundock takes both names out of the environment it starts agents with
+//     (getSpawnEnv in lib/runtime/claude.js), so its own launch environment
+//     cannot pass them to a hook.
+// `env` and `versions` are defaulted seams for the tests of these limits.
+function keychainPlatform(env = process.env, versions = process.versions) {
+  if (versions.electron) return process.platform;
   return (env.RUNDOCK_TEST_SEAMS === '1' && env.RUNDOCK_TEST_PLATFORM) || process.platform;
 }
 

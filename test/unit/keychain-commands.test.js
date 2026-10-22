@@ -483,6 +483,25 @@ describe('what the reader cannot see, as ARCHITECTURE.md lists it', () => {
   }
 });
 
+// THE HOOK'S PLATFORM SEAM, judged with the environment and the runtime's
+// versions handed in. It names a platform only with its flag, and never in the
+// packaged app, whose hook always runs as the Electron binary.
+describe('the hook\'s platform seam', () => {
+  const { keychainPlatform } = require('../../scripts/permission-hook.js');
+  const other = process.platform === 'win32' ? 'linux' : 'win32';
+  const NODE = { node: process.versions.node };
+  test('names a platform with its flag', () => {
+    assert.strictEqual(keychainPlatform({ RUNDOCK_TEST_SEAMS: '1', RUNDOCK_TEST_PLATFORM: other }, NODE), other);
+  });
+  test('changes nothing without its flag', () => {
+    assert.strictEqual(keychainPlatform({ RUNDOCK_TEST_PLATFORM: other }, NODE), process.platform);
+    assert.strictEqual(keychainPlatform({}, NODE), process.platform);
+  });
+  test('changes nothing when the hook runs as Electron, as it does in the app', () => {
+    assert.strictEqual(keychainPlatform({ RUNDOCK_TEST_SEAMS: '1', RUNDOCK_TEST_PLATFORM: other }, { ...NODE, electron: '42.9.3' }), process.platform);
+  });
+});
+
 describe('the card', () => {
   test('says why it asks, and offers no Always allow', () => {
     assert.deepStrictEqual(RP.verdictCardCopy(KEYCHAIN), {
