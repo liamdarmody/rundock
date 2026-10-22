@@ -391,7 +391,9 @@ jobs:
     # Ceiling, not a wait. Observed maxima this session are far below it, so a
     # healthy run is unaffected and only a stuck one is cut short. Without any
     # timeout the default is six hours, which a hung browser install nearly spent.
-    timeout-minutes: 25
+    # 30 leaves room for one stalled browser install, the wait for its package
+    # manager to finish, and a full suite.
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -428,10 +430,21 @@ jobs:
         # bare retry loop around a HANG never reaches its second attempt: the
         # first one simply never returns. The job ceiling would eventually cut
         # it, but as a failure rather than a recovery.
+        #
+        # A timed-out attempt can leave the apt-get it started (as root, so
+        # `timeout` never reaches it) running and holding the dpkg lock. The
+        # next attempt then fails on the lock at once, and so does the one
+        # after it, while the first is still downloading. Wait for any package
+        # manager still running, up to five minutes, before trying again.
         run: |
           for attempt in 1 2 3; do
             if timeout 300 npx playwright install --with-deps chromium; then exit 0; fi
-            echo "Chromium install failed or stalled (attempt $attempt); retrying in 15s"
+            echo "Chromium install failed or stalled (attempt $attempt)"
+            for i in $(seq 1 60); do
+              pgrep -x apt-get >/dev/null || pgrep -x dpkg >/dev/null || break
+              sleep 5
+            done
+            echo "Retrying in 15s"
             sleep 15
           done
           echo "Chromium install failed on all 3 attempts"
