@@ -22,7 +22,8 @@ const path = require('node:path');
 const hook = require('../../scripts/permission-hook.js');
 const fx = require('../helpers/code-mode-fixture.js');
 
-const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shell-code-'));
+// By its real path, so a path spelled under it is already in canonical form.
+const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'shell-code-')));
 after(() => fs.rmSync(root, { recursive: true, force: true }));
 const home = path.join(root, 'home');
 const ws = path.join(home, 'Workspace');
@@ -444,8 +445,10 @@ describe('pushd, popd and cd through builtin or command count as a second cd', (
 // A `cd` target is trusted as the base only when its real path is inside the
 // workspace. A folder in the workspace that is a link to somewhere else is
 // that somewhere else: it is reported as a crossing and is not the base. A
-// target that does not exist yet cannot be checked, so the base stays where
-// the command starts.
+// folder not made yet is judged by its deepest existing folder, resolved
+// through links, with the rest appended: a `cd` into a missing folder fails,
+// so it is the base only for the words its `&&` chain runs after it, and not
+// at all when the rest climbs with `..`.
 describe('a cd target is trusted only when its real path is inside', () => {
   const outsideFolder = path.join(root, 'elsewhere');
   fs.mkdirSync(path.join(outsideFolder, 'deep'), { recursive: true });
@@ -462,8 +465,21 @@ describe('a cd target is trusted only when its real path is inside', () => {
       assert.ok(!climb.includes(real(path.join(root, 'x.txt'))), 'not from the folder the link points at');
     });
 
-    test(`a folder that does not exist yet is not the base (${where} cd)`, () => {
-      const got = places(`${prefix}cd not-made-yet && cat ../x.txt`);
+    test(`a folder made by the command itself is the base for its && chain (${where} cd)`, () => {
+      const make = prefix ? prefix.replace('make', 'mkdir -p fresh/n2/n3') : '';
+      assert.deepStrictEqual(places(`${make}cd fresh && cat ../README.md`), [], 'one level');
+      assert.deepStrictEqual(places(`${make}cd fresh/n2/n3 && cat ../../../README.md`), [], 'nested');
+    });
+
+    test(`a folder not made yet under a link out is reported, and is not the base (${where} cd)`, () => {
+      const got = places(`${prefix}cd linked/later && cat ../notes.txt`);
+      assert.ok(got.includes(path.join(linked, 'later')), `the link's real folder is reported: ${JSON.stringify(got)}`);
+      assert.ok(got.includes(real(path.join(home, 'notes.txt'))), `and ../notes.txt is measured from the start: ${JSON.stringify(got)}`);
+      assert.ok(!got.includes(path.join(linked, 'notes.txt')), 'not from the folder the link points at');
+    });
+
+    test(`a folder not made yet with .. in the rest is not the base (${where} cd)`, () => {
+      const got = places(`${prefix}cd fresh/../later && cat ../x.txt`);
       assert.ok(got.includes(real(path.join(home, 'x.txt'))), JSON.stringify(got));
     });
 
@@ -471,6 +487,18 @@ describe('a cd target is trusted only when its real path is inside', () => {
       assert.deepStrictEqual(places(`${prefix}cd present && cat ../README.md`), []);
     });
   }
+
+  // A leading `cd` into a folder that exists is the base for the whole
+  // command, `;` and all, as it always was. One into a folder not made yet is
+  // the base only for its `&&` chain: if it fails, what follows a `;` or `||`
+  // runs where the command started.
+  test('a leading cd into a missing folder is the base only for its && chain', () => {
+    const x = real(path.join(home, 'x.txt'));
+    for (const c of ['cd fresh; cat ../x.txt', 'cd fresh\ncat ../x.txt', 'cd fresh && make || cat ../x.txt', 'cd fresh && make; cat ../x.txt']) {
+      assert.ok(places(c).includes(x), `${JSON.stringify(c)}: ${JSON.stringify(places(c))}`);
+    }
+    assert.deepStrictEqual(places('cd present; cat ../README.md'), [], 'a folder that exists keeps the leading rule as it was');
+  });
 });
 
 // Through the real hook, the way the runtime calls it: what a person would

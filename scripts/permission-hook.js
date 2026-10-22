@@ -1092,9 +1092,17 @@ function commandBaseDir(command, workspaceRoot, pmod, cwd, extraDirs = [], home 
   const cds = String(command).match(CD_ANYWHERE);
   if (!cds || cds.length !== 1 || DIR_CHANGE.test(command)) return root;
   const m = CD_PREFIX.exec(command);
-  const mid = m ? null : midChainCd(command);
-  if (!m && !(mid && at >= mid.from && at < mid.to)) return root;
-  return cdBase(m ? m[1] : mid.target, root, workspaceRoot, pmod, extraDirs, home) || root;
+  // The `&&` chain the `cd` opens, leading or not (see midChainCd).
+  const mid = midChainCd(command);
+  const inChain = !!mid && at >= mid.from && at < mid.to;
+  if (!m && !inChain) return root;
+  const cd = cdBase(m ? m[1] : mid.target, root, workspaceRoot, pmod, extraDirs, home);
+  if (!cd) return root;
+  // A FOLDER NOT MADE YET is the base only for the words its `&&` chain runs:
+  // a `cd` into a missing folder fails, and then nothing joined to it by `&&`
+  // runs, while what follows a `;` or `||` runs where the command started.
+  if (!cd.exists && !inChain) return root;
+  return cd.base;
 }
 
 // Where a literal `cd` lands, or null when that is not certain.
@@ -1106,15 +1114,16 @@ function cdBase(target, root, workspaceRoot, pmod, extraDirs, home) {
   }
   // `cd -` goes back to wherever the shell was before, which is not knowable.
   if (!target || target.startsWith('-') || CD_NOT_LITERAL.test(target)) return null;
+  // ITS REAL PATH. `base` is resolved through links, so a folder in the
+  // workspace that links elsewhere is that elsewhere. For a folder not made
+  // yet that is its deepest existing folder, resolved the same way, with the
+  // rest appended; a `..` in a target that does not exist is not followed.
   const base = canonicalize(pmod.resolve(root, target), pmod);
-  // ITS REAL PATH, AND ONLY ONE THAT EXISTS. `base` is resolved through links,
-  // so a folder in the workspace that links elsewhere is that elsewhere. A
-  // folder not made yet cannot be checked: the command could make it a link
-  // before the `cd` runs.
-  if (!fs.existsSync(base)) return null;
+  const exists = fs.existsSync(base);
+  if (!exists && TRAVERSAL.test(target)) return null;
   // Leaving the workspace and every working folder is not a base this trusts.
   // The `cd` token is scanned like any other and reports the crossing on its own.
-  return (insideWorkspaceRoot(base, workspaceRoot, pmod) || namedFolderCovers(base, extraDirs, pmod, home)) ? base : null;
+  return (insideWorkspaceRoot(base, workspaceRoot, pmod) || namedFolderCovers(base, extraDirs, pmod, home)) ? { base, exists } : null;
 }
 
 // The one `cd` after the start of a command, and the stretch of the command
