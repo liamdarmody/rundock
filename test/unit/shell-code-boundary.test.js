@@ -34,8 +34,8 @@ fs.mkdirSync(path.join(ws, '.rundock', 'scratch', 'tools'), { recursive: true })
 fs.mkdirSync(path.join(ws, 'out'), { recursive: true });
 
 const MODES = [['Notes', false], ['Code', true]];
-const scan = (command, { tool = 'Bash', codeMode = false, workspace = ws, opts = {} } = {}) =>
-  hook.classifyShellAccess(tool, { command }, workspace, [], home, false, { codeMode, ...opts });
+const scan = (command, { tool = 'Bash', codeMode = false, workspace = ws, opts = {}, extraDirs = [] } = {}) =>
+  hook.classifyShellAccess(tool, { command }, workspace, extraDirs, home, false, { codeMode, ...opts });
 const places = (command, o) => {
   const r = scan(command, o);
   return r ? r.crossings.map(c => c.path) : [];
@@ -222,6 +222,15 @@ describe('an absolute literal whose first folder does not exist here is text', (
       for (const c of [`python3 -c "print(open('${lit}').read())"`, `python3 - <<'PY'\nprint(open('${lit}').read())\nPY`]) {
         assert.ok(places(c).includes(real(lit)), `${c}: ${JSON.stringify(places(c))}`);
       }
+    }
+  });
+
+  test('a URL in a literal is text, even one whose dot-dot segments would climb out', () => {
+    for (const c of [
+      "python3 - <<'PY'\nimport urllib.request as u\nprint(u.urlopen('https://example.com/../../../../notes').read())\nPY",
+      "node - <<'JS'\nfetch('http://localhost:3000/../../../../etc/hosts').then(r => r.text());\nJS",
+    ]) {
+      assert.deepStrictEqual(places(c), [], c);
     }
   });
 
@@ -439,6 +448,15 @@ describe('a cd partway through an && chain is where the words after it start', (
     fs.mkdirSync(path.join(ws, '-'), { recursive: true });
     assert.ok(places('cd - && cat ../x.txt').includes(x));
     assert.ok(places('cd a/b && (cd ../.. && cat ../x.txt)').includes(x));
+  });
+
+  test('a cd into a working folder is a base too', () => {
+    const projects = path.join(home, 'Projects');
+    fs.mkdirSync(path.join(projects, 'app'), { recursive: true });
+    fs.mkdirSync(path.join(projects, 'other'), { recursive: true });
+    for (const c of [`make && cd ${projects}/app && cat ../other/x.txt`, `cd ${projects}/app && cat ../other/x.txt`]) {
+      assert.deepStrictEqual(places(c, { extraDirs: [projects] }), [], c);
+    }
   });
 
   test('a cd out of the workspace is reported, and is not trusted as a base', () => {

@@ -1276,7 +1276,9 @@ function feedsCode(segment, body) {
 // opens: an absolute path with a named first segment, a home path, a Windows
 // drive or UNC name, or a climb out with `..`. A relative path is judged too:
 // it resolves where the program runs, which matters for the answer files. A
-// lone `/`, a URL, an escape string and a bare word are text.
+// lone `/`, an escape string and a bare word are text, and a URL is dropped
+// with every other URL where each word is judged (shellCrossings), the one
+// check that decides it for a literal as for a command's own words.
 //
 // `posixText`: on a POSIX host an absolute literal whose FIRST folder does not
 // exist here is text. Code is full of strings shaped like absolute paths that
@@ -1291,7 +1293,7 @@ function firstFolderExists(lit) {
   return firstFolderSeen.get(first);
 }
 function literalIsPlace(lit, posixText = false) {
-  if (!lit || URL_SCHEME.test(lit)) return false;
+  if (!lit) return false;
   if (posixText && /^\/[^\s/\\]/.test(lit) && !firstFolderExists(lit)) return false;
   if (/^\/[^\s/\\]/.test(lit) || WIN_DRIVE.test(lit) || WIN_UNC.test(lit) || TRAVERSAL.test(lit)) return true;
   if (HOME_PREFIX.some(re => re.test(lit)) || ENV_PREFIX.some(re => re.test(lit))) return true;
