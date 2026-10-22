@@ -596,7 +596,11 @@ function setStandingToolAllows(keys) {
 function toolAllowFailed(msg) {
   const key = msg && typeof msg.key === 'string' ? msg.key.trim() : '';
   if (key) alwaysAllowedTools.delete(key);
-  addSystemMsg('Rundock couldn\'t save "Always allow" for this, so it will ask again next time.');
+  // The server's reason follows when it gives one: a save refused on purpose,
+  // such as a connector send that asks every time, reads differently from one
+  // that could not be written. Shown as text, never as markup.
+  const why = msg && typeof msg.message === 'string' ? msg.message.trim().slice(0, 300) : '';
+  addSystemMsg('Rundock couldn\'t save "Always allow" for this, so it will ask again next time.' + (why ? ` ${why}` : ''));
 }
 
 // Permission/trust decision logic lives in permissions.js (unit-tested;
