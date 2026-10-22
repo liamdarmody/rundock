@@ -106,7 +106,7 @@ describe('the verb tables', () => {
     assert.deepStrictEqual([...hook.MCP_READ_VERBS].sort(), [
       'activity', 'available', 'collaborators', 'comments', 'count', 'daily', 'describe', 'export', 'fetch', 'find',
       'get', 'info', 'list', 'overview', 'query', 'read', 'recent', 'retrieve', 'review', 'search', 'show', 'status',
-      'view',
+      'suggest', 'view',
     ]);
   });
 
@@ -119,5 +119,31 @@ describe('the verb tables', () => {
   test('a send word wins over a read word, whichever comes first', () => {
     assert.strictEqual(hook.isMcpReadTool(tool('search_and_reply')), false);
     assert.strictEqual(hook.isMcpReadTool(tool('reply_and_search')), false);
+  });
+});
+
+describe('suggesting is a read', () => {
+  // A calendar's suggest_time reads availability and changes nothing, like the
+  // list, search and get actions beside it.
+  const calendar = (action) => `mcp__example_calendar__${action}`;
+
+  test('suggest_time runs as a read, like the calendar reads beside it', () => {
+    for (const action of ['suggest_time', 'suggestTime', 'list_events', 'search_events', 'get_event']) {
+      assert.strictEqual(hook.isMcpReadTool(calendar(action)), true, action);
+    }
+  });
+
+  test('a calendar write beside it still asks', () => {
+    for (const action of ['create_event', 'update_event', 'respond_to_event']) {
+      assert.strictEqual(hook.isMcpReadTool(calendar(action)), false, action);
+    }
+    assert.strictEqual(hook.isMcpReadTool(calendar('delete_event')), false);
+  });
+
+  test('suggesting never outranks a send or a delete, and only the whole word counts', () => {
+    assert.strictEqual(hook.isMcpReadTool(calendar('suggest_and_send_invite')), false);
+    assert.strictEqual(P.classifyRisk(calendar('suggest_and_send_invite'), {}), 'high');
+    assert.strictEqual(hook.isMcpReadTool(calendar('suggest_then_cancel_event')), false);
+    assert.strictEqual(hook.isMcpReadTool(calendar('create_suggestion')), false, 'a suggestion made is a write');
   });
 });

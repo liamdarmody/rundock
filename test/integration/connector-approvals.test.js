@@ -163,6 +163,23 @@ describe('names that only look like a send are graded as before', () => {
   });
 });
 
+describe('suggesting a time is a read', () => {
+  const CALENDAR = (action) => `mcp__example_calendar__${action}`;
+  for (const action of ['suggest_time', 'list_events', 'get_event']) {
+    test(`${action} runs with no card`, async () => {
+      const r = await request(CALENDAR(action));
+      assert.strictEqual(r.asked, false);
+      assert.deepStrictEqual(r.hook, { decision: 'allow', reason: 'Auto-approved: MCP read' });
+    });
+  }
+
+  test('creating an event still asks', async () => {
+    const r = await request(CALENDAR('create_event'));
+    assert.deepStrictEqual(r.buttons, ['allow', 'always', 'deny']);
+    assert.strictEqual((await press(r, 'deny')).decision, 'deny');
+  });
+});
+
 // What an earlier release left when "Always allow" was pressed on a send: the
 // key in the workspace's saved answers, beside answers that still count.
 function saveAnswersAsBefore(tools) {

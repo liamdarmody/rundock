@@ -287,7 +287,9 @@ const MCP_DESTRUCTIVE_VERBS = new Set(['delete','remove','destroy','drop','cance
 // The client grades the same words high (MCP_SEND_VERBS in
 // public/permissions.js), so a send asks every time and is never remembered.
 const MCP_SEND_VERBS = new Set(['send','resend','reply','forward']);
-const MCP_READ_VERBS = new Set(['get','list','search','find','read','fetch','retrieve','query','export','view','describe','show','info','overview','status','count','available','daily','review','recent','collaborators','comments','activity']);
+// `suggest` is a read: a calendar's suggest_time reads availability and books
+// nothing, like the list, search and get actions beside it.
+const MCP_READ_VERBS = new Set(['get','list','search','find','read','fetch','retrieve','query','export','view','describe','show','info','overview','status','count','available','daily','review','recent','collaborators','comments','activity','suggest']);
 // The words of a connector action: the tool name after its server prefix.
 function mcpActionWords(toolName) {
   return String(toolName).split('__').slice(2).join('_')

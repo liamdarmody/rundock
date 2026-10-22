@@ -1523,6 +1523,11 @@ const MUTATIONS = [
   [CONNECTOR_HOOK, 'Connector send: a tool that is not a connector is taken for a send',
     "  return String(toolName).startsWith('mcp__') && mcpActionWords(toolName).some(t => MCP_SEND_VERBS.has(t));",
     '  return mcpActionWords(toolName).some(t => MCP_SEND_VERBS.has(t));'],
+  // Take suggest back out of the reads and a calendar's suggest_time raises a
+  // card again, where the list and get actions beside it run without one.
+  [CONNECTOR_HOOK_FLOW, 'Connector read: suggesting a time asks as a write',
+    "'collaborators','comments','activity','suggest']);",
+    "'collaborators','comments','activity']);"],
   // ===== STOP AND ASK AFTER A REFUSAL =====
   [STOP_ASK_HOOK, "Stop and ask: a denied card goes back to inviting another route",
     ": refusalNotice(result.reason === 'timeout' ? 'timeout' : 'denied', data.tool_name);",
