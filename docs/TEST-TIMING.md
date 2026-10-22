@@ -99,6 +99,7 @@ messages.
 | `test/unit/red-first.test.js` "a test command that traps SIGINT does not hold the tree hostage" | Same shape at 300ms; recorded as a flake in `docs/evidence/scheduler-lifecycle-evidence.md` | **fixed** |
 | `test/unit/red-first-orphans.test.js` "a second start is refused..." | Failed once on CI Node 24 under load; `sleep 25` is a budget for the test's own duration | **fixed** |
 | Playwright browser suite | 2026-08-14, traced to contention | **isolate** (see below) |
+| `test/e2e/packages-manage.spec.js` "a package is a card; opening Packages checks for updates; a package updates, then uninstalls, from its card" | Passed its 60-second test timeout on a CI runner, 2026-10-11; the longest single test in the browser suite | **retry once**, see [FLAKES.md](FLAKES.md) |
 | `test/integration/delegation.test.js` "agent CRUD while an orchestrator is live flags it..." | Spawn count 1, saw 2, twice during gate runs; `docs/evidence/scheduler-lifecycle-evidence.md` | **not fixed**, see below |
 | `test/integration/process-lifecycle.test.js` | Failed once in setup; `docs/evidence/navigation-inventory-evidence.md` | **not fixed**, see below |
 

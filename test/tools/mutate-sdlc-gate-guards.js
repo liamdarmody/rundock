@@ -87,6 +87,8 @@ const PREFLIGHT = { src: path.join(ROOT, 'scripts', 'preflight.js'), suite: 'tes
 const LANE_DONE = { src: path.join(ROOT, 'scripts', 'lane-done.js'), suite: 'test/unit/lane-done.test.js' };
 const RUN_RECORD = { src: path.join(ROOT, 'scripts', 'lib', 'run-record.js'), suite: 'test/unit/run-record.test.js' };
 const FLAKE_REGISTER = { src: path.join(ROOT, 'test', 'unit', 'flake-register.test.js'), suite: 'test/unit/flake-register.test.js' };
+const FLAKE_REPORTER = { src: path.join(ROOT, 'test', 'e2e', 'flake-reporter.js'), suite: 'test/unit/flake-reporter.test.js' };
+const PLAYWRIGHT_CONFIG = { src: path.join(ROOT, 'playwright.config.js'), suite: 'test/unit/flake-reporter.test.js' };
 const RED_FIRST_RECORD = { src: path.join(ROOT, 'scripts', 'red-first.js'), suite: 'test/unit/red-first.test.js' };
 
 const MUTATIONS = [
@@ -538,6 +540,15 @@ const MUTATIONS = [
   [FLAKE_REGISTER, "a retried describe holds only the registered test",
     "  if (tests.length !== 1) return",
     "  if (false) return"],
+  [FLAKE_REPORTER, "a pass on a retry is reported",
+    "    if (result.status !== 'passed' || !result.retry) return;\n",
+    "    return;\n"],
+  [FLAKE_REPORTER, "in CI the report is a warning annotation",
+    "    if (this.env.GITHUB_ACTIONS) {\n",
+    "    if (false) {\n"],
+  [PLAYWRIGHT_CONFIG, "the browser suite reports through the flake reporter",
+    ", ['./test/e2e/flake-reporter.js']]",
+    "]"],
   [LANE_DONE, "a commit without a passing pre-commit record fails the check",
     "  if (ungated.length) {\n",
     "  if (false) {\n"],

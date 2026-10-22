@@ -11,6 +11,9 @@ known, and its status. Status is one of `retry once`, `open`, `fixed` or
 in a `test.describe` that holds only it; the browser suite has no global retry,
 because a retry hides a timing regression as readily as a slow runner.
 `test/unit/flake-register.test.js` holds every retry in the suite to this page.
+A pass on a retry is a strike too, and a passing run would hide it, so
+`test/e2e/flake-reporter.js` reports each one: a warning annotation in CI, a
+plain `[flake]` line locally. Add its date to the test's row.
 
 Before fixing one, read [TEST-TIMING.md](TEST-TIMING.md): most flakes here are
 timing assertions, and it says how to tell a wait that is needed from one that
