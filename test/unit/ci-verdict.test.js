@@ -59,6 +59,26 @@ describe('each recorded case gets the action it should', () => {
     assert.strictEqual(decideFor(load('runner-shutdown'), { newerRun: true }).action, 'none');
   });
 
+  test('a cancelled run is no verdict, never a failure', () => {
+    // A run cancelled for a newer one decided nothing about the change, and a
+    // reader who takes it for red re-runs or debugs work that never failed.
+    const superseded = decideFor(load('superseded'));
+    assert.match(superseded.reason, /^no verdict: /);
+    assert.doesNotMatch(superseded.reason, /fail/);
+    // Cancelled by hand, with no newer run and nothing in the annotations.
+    const fx = load('superseded');
+    const bare = decideFor({ ...fx, annotations: {} });
+    assert.match(bare.reason, /^no verdict: /);
+    assert.ok(bare.jobs.every((j) => j.kind !== 'failure'), 'no cancelled job is read as a failure');
+    assert.match(decideFor(load('runner-shutdown'), { newerRun: true }).reason, /^no verdict: /);
+  });
+
+  test('a failed run is a failure, not no verdict', () => {
+    const v = decideFor(load('real-failure'));
+    assert.match(v.reason, /^a real failure: /);
+    assert.doesNotMatch(v.reason, /no verdict/);
+  });
+
   test('a runner shut down with only "The operation was canceled." to show for it is re-run once', () => {
     // The shutdown line is in the job's log, not its annotations, and the job
     // ended failure, not cancelled. The mutation check's no verdict beside it

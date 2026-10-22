@@ -433,8 +433,8 @@ const MUTATIONS = [
     "  if (Number(run.run_attempt) !== 1) return none(`attempt ${run.run_attempt} is never re-run, so a retry cannot loop`);\n",
     ""],
   [CI_VERDICT, "a superseded run is not retried",
-    "  if (newerRun || notOk.some((j) => j.kind === 'superseded')) return none('superseded: a newer run is the one that counts');\n",
-    ""],
+    "  if (newerRun || notOk.some((j) => j.kind === 'superseded')) {\n",
+    "  if (false) {\n"],
   // A runner shut down with only the bare cancellation in its annotations,
   // and the shutdown line only in its log.
   [CI_VERDICT, "a failed job cancelled mid-step with only the bare cancellation is a lost runner",
