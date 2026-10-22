@@ -196,6 +196,41 @@ describe('a here-document fed to an interpreter or written to a file is judged b
   });
 });
 
+// AN ABSOLUTE LITERAL WHOSE FIRST FOLDER IS NOT ON THIS MACHINE IS TEXT. Code
+// is full of strings shaped like absolute paths that name no file: a route
+// (`/health`, `/api/v1/x`), a URL path (`/docs/intro`), a regex (`/+`). On a
+// POSIX host a literal is a place only when its first folder exists here,
+// so `/etc/…`, `/tmp/…`, `/var/…` and a home folder still card.
+describe('an absolute literal whose first folder does not exist here is text', () => {
+  const ROUTES = [
+    `node -e "require('http').get({ host: 'localhost', port: 3000, path: '/health' }, r => r.pipe(process.stdout))"`,
+    `python3 -c "import re; print(re.sub('/+', '/', 'a//b'))"`,
+    `node -e "console.log(new URL('/docs/intro', 'https://example.com').href)"`,
+    `node -e "console.log(/v1/.test('/api/v1/x'))"`,
+    "python3 - <<'PY'\nimport urllib.request\nprint(urllib.request.urlopen(BASE + '/api/v1/users').read())\nPY",
+    "node - <<'JS'\napp.get('/health', (req, res) => res.send('ok'));\napp.get('/metrics/daily', send);\nJS",
+  ];
+  for (const [mode, codeMode] of MODES) {
+    test(`routes, URL paths and patterns in code reach nothing (${mode} mode)`, () => {
+      for (const c of ROUTES) assert.deepStrictEqual(places(c, { codeMode }), [], c);
+    });
+  }
+
+  test('a literal whose first folder exists still cards, in -c code and in a here-document', () => {
+    const own = path.join(home, 'notes.txt');
+    for (const lit of ['/etc/hosts', '/tmp/report.txt', '/var/log/report.log', own]) {
+      for (const c of [`python3 -c "print(open('${lit}').read())"`, `python3 - <<'PY'\nprint(open('${lit}').read())\nPY`]) {
+        assert.ok(places(c).includes(real(lit)), `${c}: ${JSON.stringify(places(c))}`);
+      }
+    }
+  });
+
+  test('a Windows workspace keeps the Windows reading', () => {
+    const win = { workspace: 'C:\\Users\\someone\\ws', opts: { platform: 'win32' } };
+    assert.ok(scan(`python3 -c "print(open('/health').read())"`, win), 'judged as before');
+  });
+});
+
 describe('a here-document fed to a shell, or to anything else, is judged as commands as before', () => {
   test('a shell reading a here-document, quoted delimiter or not', () => {
     for (const c of [

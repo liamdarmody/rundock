@@ -1245,8 +1245,22 @@ function feedsCode(segment, body) {
 // drive or UNC name, or a climb out with `..`. A relative path is judged too:
 // it resolves where the program runs, which matters for the answer files. A
 // lone `/`, a URL, an escape string and a bare word are text.
-function literalIsPlace(lit) {
+//
+// `posixText`: on a POSIX host an absolute literal whose FIRST folder does not
+// exist here is text. Code is full of strings shaped like absolute paths that
+// name no file: a route (`/health`, `/api/v1/x`), a URL path (`/docs/intro`),
+// a regex (`/+`). Read as places, `-c` code with one asked every time and was
+// refused unattended. `/etc/…`, `/tmp/…`, `/var/…` and a home folder have a
+// first folder that exists, and still card. One cached look per first folder.
+const firstFolderSeen = new Map();
+function firstFolderExists(lit) {
+  const first = '/' + lit.slice(1).split('/')[0];
+  if (!firstFolderSeen.has(first)) firstFolderSeen.set(first, fs.existsSync(first));
+  return firstFolderSeen.get(first);
+}
+function literalIsPlace(lit, posixText = false) {
   if (!lit || URL_SCHEME.test(lit)) return false;
+  if (posixText && /^\/[^\s/\\]/.test(lit) && !firstFolderExists(lit)) return false;
   if (/^\/[^\s/\\]/.test(lit) || WIN_DRIVE.test(lit) || WIN_UNC.test(lit) || TRAVERSAL.test(lit)) return true;
   if (HOME_PREFIX.some(re => re.test(lit)) || ENV_PREFIX.some(re => re.test(lit))) return true;
   return !lit.startsWith('/') && lit.includes('/') && !lit.includes('\\');
@@ -1255,7 +1269,7 @@ function literalIsPlace(lit) {
 // The literals in a piece of code that name a place, and the commands it runs
 // itself. A literal is quoted text on one line, so an apostrophe in a comment
 // cannot swallow the code after it.
-function codeParts(code) {
+function codeParts(code, posixText = false) {
   const s = String(code);
   const literals = [];
   const commands = [];
@@ -1265,7 +1279,7 @@ function codeParts(code) {
       let j = i + 1;
       while (j < s.length && s[j] !== ch && s[j] !== '\n') j += s[j] === '\\' ? 2 : 1;
       if (s[j] === ch) {
-        if (literalIsPlace(s.slice(i + 1, j))) literals.push(s.slice(i + 1, j));
+        if (literalIsPlace(s.slice(i + 1, j), posixText)) literals.push(s.slice(i + 1, j));
         i = j;
       }
       continue;
@@ -1308,7 +1322,7 @@ function segmentAt(text, at) {
 // The command's text with each here-document body fed to code taken out, and
 // beside it the literals in that code that name a place and the commands the
 // code runs, each at its command's `<<`.
-function heredocText(command) {
+function heredocText(command, posixText = false) {
   const s = String(command);
   const cut = stripHeredocs(s);
   if (!cut.ok || !cut.bodies.length) return { text: s, literals: [], commands: [] };
@@ -1323,7 +1337,7 @@ function heredocText(command) {
     const subs = b.expands ? substitutions(b.body, 'bash', { quoted: true }) : { ok: true, bodies: [] };
     if (seg === null || !subs.ok || !feedsCode(seg, b.body)) { text += b.body; continue; }
     const at = b.at + text.length - b.bodyAt;
-    const code = codeParts(b.body);
+    const code = codeParts(b.body, posixText);
     for (const t of code.literals) literals.push({ t, at });
     for (const c of [...code.commands, ...subs.bodies]) commands.push({ text: c, at });
   }
@@ -1336,7 +1350,7 @@ function heredocText(command) {
 // code in a here-document carded. The word is still read as before; the
 // literals and commands inside it are read as well, at its command.
 const INLINE_CODE = { python: /^-[A-Za-z]*?c(.*)$/s, node: /^(?:-[A-Za-z]*?[ep]|--(?:eval|print)=?)(.*)$/s, ruby: /^-[A-Za-z]*?e(.*)$/s, perl: /^-[A-Za-z]*?[eE](.*)$/s };
-function inlineCode(text) {
+function inlineCode(text, posixText = false) {
   const literals = [];
   const commands = [];
   let from = 0;
@@ -1351,7 +1365,7 @@ function inlineCode(text) {
     for (let k = i + 1; family && k < words.length; k++) {
       const m = INLINE_CODE[family].exec(words[k]);
       if (!m) continue;
-      const code = codeParts(m[1] || words[++k] || '');
+      const code = codeParts(m[1] || words[++k] || '', posixText);
       for (const t of code.literals) literals.push({ t, at });
       for (const c of code.commands) commands.push({ text: c, at });
     }
@@ -1368,9 +1382,9 @@ function inlineCode(text) {
 // comment) ran on into the lines after the here-document, and a `cd` there
 // stopped being seen. It is measured from where the command starts: it runs
 // in a shell of its own, so a `cd` inside it moves nothing outside it.
-function judgedShellText(command) {
-  const view = heredocText(command);
-  const inline = inlineCode(view.text);
+function judgedShellText(command, posixText = false) {
+  const view = heredocText(command, posixText);
+  const inline = inlineCode(view.text, posixText);
   return {
     text: view.text,
     literals: [...view.literals, ...inline.literals],
@@ -1408,7 +1422,7 @@ function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), 
   //
   // A literal in code handed to an interpreter counts as written: the code
   // can open it for writing, and nothing here can tell that it does not.
-  const view = judgedShellText(command);
+  const view = judgedShellText(command, posixText);
   const writingWords = new Set();
   if (!readOnly) {
     for (const lit of view.literals) writingWords.add(lit.t);
