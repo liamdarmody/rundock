@@ -1053,6 +1053,39 @@ describe('the agent\'s own folder: three tiers, one registry', () => {
   });
 });
 
+// WHAT EARLIER BUILDS ACTUALLY WROTE, frozen from each one's sandboxSettings
+// output rather than cut from today's list, so an upgrade test cannot pass
+// merely because the current list agrees with itself. Every build wrote the
+// same head of writable roots, then this machine's temp roots (`tail`). The
+// deny lists, by length: none for 0.13.0 to 0.13.2; three for 0.13.3 to
+// 0.15.5; eight for 0.15.6. One and two entries were written by the
+// development line between 0.13.2 and 0.13.3, and by no release; that line
+// also wrote Code mode without an `enabled` key ('keyless').
+function releasedDenyWrite(ws, home) {
+  return [
+    `${ws}/.rundock/state.json`, `${ws}/.rundock/permissions.json`, `${ws}/.claude/settings.local.json`,
+    `${home}/.claude/.credentials.json`, `${home}/.claude/.config.json`, `${home}/.codex/auth.json`,
+    `${home}/.claude.json`, `${home}/.claude.json.backup`,
+  ];
+}
+const RELEASED_DENY_LENGTHS = [0, 1, 2, 3, 8];
+function releasedBlock(n, ws, home, tail, shape) {
+  const allowWrite = [ws, `${home}/.npm`, `${home}/.claude`, `${home}/.claude.json`, '/tmp/claude', '/private/tmp/claude', ...tail];
+  const filesystem = n ? { allowWrite, denyWrite: releasedDenyWrite(ws, home).slice(0, n) } : { allowWrite };
+  if (shape === 'on') return { enabled: true, autoAllowBashIfSandboxed: true, filesystem, network: { allowedDomains: ['*'] } };
+  if (shape === 'off') return { enabled: false, filesystem };
+  return { filesystem };
+}
+// The escape paths this change appends after the 0.15.6 list, under a home.
+function homeEscapes(home) {
+  return [
+    `${home}/.claude/settings.json`,
+    `${home}/.claude/plugins`, `${home}/.claude/hooks`, `${home}/.claude/skills`,
+    `${home}/.claude/agents`, `${home}/.claude/commands`, `${home}/.claude/backups`,
+    `${home}/.claude-staging-oauth.json`, `${home}/.claude-local-oauth.json`, `${home}/.claude-custom-oauth.json`,
+  ];
+}
+
 // THE TWO LAYERS AGREE ABOUT THE CREDENTIAL FILES. The block's write list
 // names `~/.claude` whole, because the runtime's bookkeeping lives there, and
 // that once left the credential file writable at the operating-system layer
@@ -1087,16 +1120,19 @@ describe('every credential the secrets tier names is denied by the OS block as w
   test('the deny list names no credential the registry does not, so neither list can grow alone', () => {
     const block = scaffold.sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], []);
     const outsideWorkspace = block.filesystem.denyWrite.filter((p) => !p.startsWith(WS + '/'));
-    assert.deepStrictEqual(outsideWorkspace, registryPaths(HOME),
-      'beyond the workspace\'s own files, the deny list is exactly the secrets registry, in registry order');
+    assert.deepStrictEqual(outsideWorkspace, [...registryPaths(HOME), ...homeEscapes(HOME)],
+      'beyond the workspace\'s own files, the deny list is exactly the secrets registry, in registry order, then the runtime\'s escape paths');
   });
 
-  test('the credential entries come last, so every block written before them is a prefix and still ours', () => {
+  test('the credential entries follow the workspace files, so every block written before them is a prefix and still ours', () => {
     const block = scaffold.sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], []);
     const deny = block.filesystem.denyWrite;
     const secrets = registryPaths(HOME);
-    assert.deepStrictEqual(deny.slice(-secrets.length), secrets, 'appended after the workspace files, never inserted among them');
-    const asEarlierReleasesWroteIt = { ...block, filesystem: { ...block.filesystem, denyWrite: deny.slice(0, -secrets.length) } };
+    const first = deny.indexOf(secrets[0]);
+    assert.ok(first > 0 && deny.slice(0, first).every((p) => p.startsWith(WS + '/')),
+      'appended after the workspace files, never inserted among them');
+    assert.deepStrictEqual(deny.slice(first, first + secrets.length), secrets, 'and together, in registry order');
+    const asEarlierReleasesWroteIt = { ...block, filesystem: { ...block.filesystem, denyWrite: deny.slice(0, first) } };
     assert.strictEqual(scaffold.isRundockSandbox(asEarlierReleasesWroteIt, 'darwin'), true,
       'the block every earlier 0.15 release wrote is still recognised as Rundock\'s own');
   });
@@ -1173,15 +1209,15 @@ describe('opening a workspace upgrades Rundock\'s own block to deny the credenti
   }
   const settingsPath = (ws) => path.join(ws, '.claude', 'settings.local.json');
   const read = (ws) => JSON.parse(fs.readFileSync(settingsPath(ws), 'utf8'));
-  // The block as an earlier release wrote it: today's block, credential
-  // entries removed. Built from a real open so the folders and temp roots are
-  // exactly what this machine writes.
+  // The block as an earlier release wrote it: today's block, cut back to the
+  // three workspace files it denied. Built from a real open so the folders
+  // and temp roots are exactly what this machine writes.
   function workspaceWithEarlierBlock(prefix) {
     const ws = tmp(prefix);
     open(ws);
     const settings = read(ws);
-    settings.sandbox.filesystem.denyWrite = settings.sandbox.filesystem.denyWrite.filter((p) => !credentials().includes(p));
-    assert.strictEqual(settings.sandbox.filesystem.denyWrite.length, 3, 'fixture sanity: the three workspace files an earlier release denied');
+    settings.sandbox.filesystem.denyWrite = settings.sandbox.filesystem.denyWrite.slice(0, 3);
+    assert.ok(settings.sandbox.filesystem.denyWrite.every((p) => !credentials().includes(p)), 'fixture sanity: the three workspace files an earlier release denied');
     fs.writeFileSync(settingsPath(ws), JSON.stringify(settings, null, 2));
     return ws;
   }
@@ -1204,7 +1240,7 @@ describe('opening a workspace upgrades Rundock\'s own block to deny the credenti
     open(ws);
     const settings = read(ws);
     assert.strictEqual(settings.sandbox.enabled, false, 'fixture sanity: the off shape');
-    settings.sandbox.filesystem.denyWrite = settings.sandbox.filesystem.denyWrite.filter((p) => !credentials().includes(p));
+    settings.sandbox.filesystem.denyWrite = settings.sandbox.filesystem.denyWrite.slice(0, 3);
     fs.writeFileSync(settingsPath(ws), JSON.stringify(settings, null, 2));
     open(ws);
     for (const c of credentials()) assert.ok(read(ws).sandbox.filesystem.denyWrite.includes(c), `${c} is denied in the off shape too`);
@@ -1239,6 +1275,216 @@ describe('opening a workspace upgrades Rundock\'s own block to deny the credenti
     assert.strictEqual(twice, once, 'the second open finds the block current and leaves the file byte for byte');
     const deny = read(ws).sandbox.filesystem.denyWrite;
     assert.strictEqual(new Set(deny).size, deny.length, 'and no entry was appended twice');
+  });
+});
+
+// THE FILES THE RUNTIME ACTS ON OUTSIDE THE SANDBOX. A sandboxed command that
+// writes one of these runs code unconfined in a later session. Claude Code
+// refuses those writes itself, but only from the release that added each
+// refusal, and Rundock spawns whichever release is installed, so the block
+// names every one of them as well.
+describe('the block denies the runtime\'s own escape paths, whatever runtime version runs it', () => {
+  const HOME = '/Users/someone';
+  const WS = '/w/ws';
+  const HOME_ESCAPES = homeEscapes(HOME);
+  const credentials = (home) => hook.secretsRegistry(home).map((p) => p.split(path.sep).join('/'));
+
+  test('every one is in denyWrite, in both shapes the block takes', () => {
+    for (const mode of ['on', 'off']) {
+      const deny = scaffold.sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], [], mode).filesystem.denyWrite;
+      for (const p of HOME_ESCAPES) assert.ok(deny.includes(p), `the ${mode} block denies ${p}`);
+    }
+  });
+
+  test('they follow the credential files, so the block every earlier release wrote is a prefix and upgrades', () => {
+    const block = scaffold.sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], []);
+    const deny = block.filesystem.denyWrite;
+    const lastCredential = deny.indexOf(credentials(HOME).slice(-1)[0]);
+    assert.deepStrictEqual(deny.slice(lastCredential + 1, lastCredential + 1 + HOME_ESCAPES.length), HOME_ESCAPES,
+      'appended after every entry an earlier release wrote, in this order');
+    const asTheLastReleaseWroteIt = { ...block, filesystem: { ...block.filesystem, denyWrite: deny.slice(0, lastCredential + 1) } };
+    assert.strictEqual(scaffold.isRundockSandbox(asTheLastReleaseWroteIt, 'darwin'), true,
+      'a block without them is still recognised as Rundock\'s own, so the next open can add them');
+  });
+
+  test('the runtime\'s bookkeeping stays writable, and no read is denied', () => {
+    for (const mode of ['on', 'off']) {
+      const fsBlock = scaffold.sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], [], mode).filesystem;
+      assert.ok(fsBlock.allowWrite.includes(`${HOME}/.claude`), 'the write list still names the runtime home whole');
+      assert.ok(!fsBlock.allowWrite.some((p) => HOME_ESCAPES.includes(p)), 'and names none of the denied paths itself');
+      assert.ok(!('denyRead' in fsBlock), `the ${mode} block denies writes only`);
+    }
+  });
+
+  test('the home folder\'s escape paths are not joined onto the workspace, whose agents and skills Rundock writes', () => {
+    // The home folder's agents/ and skills/ are denied; the workspace's are the
+    // copies Rundock reads and writes through its own server.
+    const deny = scaffold.sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], []).filesystem.denyWrite;
+    for (const name of ['agents', 'skills', 'plugins', 'hooks', 'commands', 'backups']) {
+      assert.ok(!deny.some((p) => p === `${WS}/.claude/${name}` || p.startsWith(`${WS}/.claude/${name}/`)),
+        `${WS}/.claude/${name} is not denied`);
+    }
+  });
+
+  test('the workspace\'s project settings file is denied too, last of all', () => {
+    // The runtime loads `.claude/settings.json` from the workspace for every
+    // agent Rundock spawns there, and starts the hooks it names itself.
+    for (const mode of ['on', 'off']) {
+      const deny = scaffold.sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], [], mode).filesystem.denyWrite;
+      assert.ok(deny.includes(`${WS}/.claude/settings.json`), `the ${mode} block denies the project settings file`);
+    }
+    const block = scaffold.sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], []);
+    const deny = block.filesystem.denyWrite;
+    assert.strictEqual(deny[deny.length - 1], `${WS}/.claude/settings.json`, 'appended, never inserted');
+    assert.deepStrictEqual(deny.slice(-1 - HOME_ESCAPES.length, -1), HOME_ESCAPES, 'straight after the home folder\'s escape paths');
+    const withoutIt = { ...block, filesystem: { ...block.filesystem, denyWrite: deny.slice(0, -1) } };
+    assert.strictEqual(scaffold.isRundockSandbox(withoutIt, 'darwin'), false,
+      'no release wrote the list without it, so a block missing only it is a person\'s edit, and stays theirs');
+  });
+
+  test('the operating-system paragraph names every escape path the block denies', () => {
+    // Read from the block rather than from a list kept here, so an entry added
+    // to the code without a word in the document fails.
+    const doc = fs.readFileSync(path.join(ROOT, 'ARCHITECTURE.md'), 'utf8');
+    const start = doc.indexOf('**The guarantee is the operating-system row, and only that row.**');
+    assert.ok(start !== -1, 'the paragraph is present');
+    const paragraph = doc.slice(start, doc.indexOf('\n', start));
+    const deny = scaffold.sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], []).filesystem.denyWrite;
+    const escapes = deny.slice(deny.indexOf(credentials(HOME).slice(-1)[0]) + 1);
+    assert.ok(escapes.length > 0, 'sanity: there are escape paths to name');
+    for (const p of escapes) {
+      const name = p.startsWith(`${HOME}/.claude/settings.json`) ? '~/.claude/settings.json'
+        : p.startsWith(`${HOME}/.claude/`) ? p.slice(`${HOME}/.claude/`.length)
+          : p.startsWith(`${HOME}/.claude-`) ? `~/${p.slice(`${HOME}/`.length)}`
+            : p.startsWith(`${WS}/`) ? p.slice(`${WS}/`.length) : p;
+      assert.ok(paragraph.includes(`\`${name}\``), `the paragraph names \`${name}\`, which the block denies`);
+    }
+    assert.match(paragraph, /acts on outside the sandbox in a later session, including/,
+      'the list is offered as examples of what the runtime acts on, not as all of it');
+    assert.match(paragraph,
+      /The Claude Code 2\.1\.259 bundle carries that last group of `denyWrite` entries in its own built-in write-deny list \(a static read of the bundle, not a live measurement\)/,
+      'and says where the runtime\'s own list was read, and how');
+    assert.match(paragraph, /When the workspace is the home folder/, 'and what the deny means when the workspace is the home folder');
+    assert.match(paragraph, /A workspace opened inside one of those folders/, 'and for a workspace opened inside one of them');
+    assert.match(paragraph, /A deny list trimmed to exactly the length an earlier build wrote reads as that build's block and is upgraded/,
+      'and it does not claim a person\'s edit is never touched without saying where that stops');
+  });
+
+  test('the persistence passage says the block refuses a shell write only where the block denies it', () => {
+    // Bound in both directions over the registry's own surfaces: each one the
+    // block denies is named where the passage says the write is refused, and
+    // each one it does not deny is named where the passage says the write lands.
+    const doc = fs.readFileSync(path.join(ROOT, 'ARCHITECTURE.md'), 'utf8');
+    const passage = doc.slice(doc.indexOf('<!-- boundary-registry-start -->'), doc.indexOf('<!-- boundary-registry-end -->'));
+    const approved = passage.indexOf('Approving it lets the command run.');
+    assert.ok(approved !== -1, 'the passage says what approving a shell write does');
+    const refusedAt = passage.indexOf('the block\'s `denyWrite` list names', approved);
+    assert.ok(refusedAt !== -1, 'the passage says what the block denies');
+    const refused = passage.slice(refusedAt, passage.indexOf('so the sandboxed write is refused', refusedAt));
+    const landsAt = passage.indexOf('is not in the block\'s deny list and lands once approved');
+    assert.ok(landsAt !== -1, 'the passage says what the block leaves writable');
+    assert.match(passage.slice(landsAt, passage.indexOf('. ', landsAt)),
+      /as the 2\.1\.259 bundle's does \(a static read of the bundle, not a live measurement\)/,
+      'and says how the runtime\'s own list was read');
+    const lands = passage.slice(passage.lastIndexOf('. ', landsAt), landsAt);
+    const deny = scaffold.sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], []).filesystem.denyWrite;
+    const surfaces = [...hook.PERSISTENCE_SURFACE_DIRS.map((d) => [d, `\`${d}/\``]), ...hook.PERSISTENCE_SURFACE_FILES.map((f) => [f, `\`${f}\``])];
+    for (const [name, quoted] of surfaces) {
+      if (deny.includes(`${HOME}/.claude/${name}`)) {
+        assert.ok(refused.includes(quoted) && !lands.includes(quoted), `${quoted} is denied by the block, and the passage says its write is refused`);
+      } else {
+        assert.ok(lands.includes(quoted) && !refused.includes(quoted), `${quoted} is not denied by the block, and the passage says its write lands`);
+      }
+    }
+  });
+});
+
+// AN EXISTING WORKSPACE GAINS THE ESCAPE PATHS THE WAY IT GAINED THE CREDENTIAL
+// FILES: on its next open, and on every write of the switch, in both shapes.
+describe('an existing workspace gains the escape-path denies on open, and keeps them across the switch', () => {
+  const home = os.homedir();
+  const escapes = (ws) => [...homeEscapes(home), path.posix.join(ws, '.claude', 'settings.json')];
+  function open(ws) {
+    const prev = scaffold.wireScaffoldDeps({ invalidateAgentCache: () => {}, rebaselineAgentsWatcher: () => {} });
+    try { scaffold.scaffoldWorkspace(ws, { platform: 'darwin' }); } finally { scaffold.wireScaffoldDeps(prev); }
+  }
+  const settingsPath = (ws) => path.join(ws, '.claude', 'settings.local.json');
+  const read = (ws) => JSON.parse(fs.readFileSync(settingsPath(ws), 'utf8'));
+  // A workspace carrying the block an earlier build wrote, from the frozen
+  // record of that build's output, with the mode that build wrote it under.
+  function workspaceWithReleasedBlock(prefix, n, shape) {
+    const ws = tmp(prefix);
+    fs.mkdirSync(path.join(ws, '.rundock'), { recursive: true });
+    fs.mkdirSync(path.join(ws, '.claude'), { recursive: true });
+    fs.writeFileSync(path.join(ws, '.rundock', 'state.json'), JSON.stringify({ workspaceMode: shape === 'on' ? 'knowledge' : 'code' }));
+    fs.writeFileSync(settingsPath(ws), JSON.stringify({ sandbox: releasedBlock(n, ws, home, scaffold.tempRoots(), shape) }, null, 2));
+    return ws;
+  }
+  // Each length an earlier build wrote, in each shape it wrote it in.
+  const WRITTEN = [[0, 'on'], [1, 'on'], [1, 'keyless'], [2, 'on'], [2, 'keyless'], [3, 'on'], [3, 'off'], [8, 'on'], [8, 'off']];
+  assert.deepStrictEqual([...new Set(WRITTEN.map(([n]) => n))], RELEASED_DENY_LENGTHS, 'fixture sanity: every written length is driven');
+
+  for (const [n, shape] of WRITTEN) {
+    test(`opening upgrades the ${shape} block with the ${n} deny entries an earlier build wrote`, () => {
+      const ws = workspaceWithReleasedBlock(`wb-escape-open-${n}-${shape}-`, n, shape);
+      const before = read(ws).sandbox;
+      open(ws);
+      const after = read(ws).sandbox;
+      for (const p of escapes(ws)) assert.ok(after.filesystem.denyWrite.includes(p), `${p} is denied after the open`);
+      assert.deepStrictEqual(after.filesystem.denyWrite.slice(0, n), releasedDenyWrite(ws, home).slice(0, n),
+        'the entries that build wrote keep their place');
+      assert.deepStrictEqual(after.filesystem.allowWrite, before.filesystem.allowWrite, 'nothing the block permitted moved');
+      assert.strictEqual(after.enabled, shape === 'on', 'and the switch is what that build\'s mode implied');
+    });
+  }
+
+  test('switching the block off and on again keeps them, and so does a block the switch upgrades', () => {
+    const ws = workspaceWithReleasedBlock('wb-escape-switch-', 8, 'on');
+    scaffold.reconcileSandboxForMode(ws, 'off', 'darwin');
+    assert.strictEqual(read(ws).sandbox.enabled, false, 'sanity: the switch wrote the off shape');
+    for (const p of escapes(ws)) assert.ok(read(ws).sandbox.filesystem.denyWrite.includes(p), `${p} is denied in the off shape`);
+    scaffold.reconcileSandboxForMode(ws, 'on', 'darwin');
+    assert.strictEqual(read(ws).sandbox.enabled, true, 'sanity: and back on');
+    for (const p of escapes(ws)) assert.ok(read(ws).sandbox.filesystem.denyWrite.includes(p), `${p} is denied in the on shape`);
+  });
+
+  test('a block a person wrote does not gain them', () => {
+    const ws = workspaceWithReleasedBlock('wb-escape-theirs-', 8, 'on');
+    const settings = read(ws);
+    settings.sandbox.filesystem.denyWrite.push(path.posix.join(ws, 'notes.md'));
+    fs.writeFileSync(settingsPath(ws), JSON.stringify(settings, null, 2));
+    const theirs = JSON.stringify(read(ws).sandbox);
+    open(ws);
+    scaffold.reconcileSandboxForMode(ws, 'off', 'darwin');
+    assert.strictEqual(JSON.stringify(read(ws).sandbox), theirs, 'neither the open nor the switch rewrites it');
+  });
+
+  for (const removed of [1, 3, 10]) {
+    test(`a person who removes the last ${removed} deny ${removed === 1 ? 'entry' : 'entries'} keeps the block they wrote`, () => {
+      const ws = tmp(`wb-escape-removed-${removed}-`);
+      open(ws);
+      const settings = read(ws);
+      settings.sandbox.filesystem.denyWrite = settings.sandbox.filesystem.denyWrite.slice(0, -removed);
+      fs.writeFileSync(settingsPath(ws), JSON.stringify(settings, null, 2));
+      const theirs = JSON.stringify(read(ws).sandbox);
+      open(ws);
+      assert.strictEqual(JSON.stringify(read(ws).sandbox), theirs, 'the next open leaves it byte for byte');
+      scaffold.reconcileSandboxForMode(ws, 'off', 'darwin');
+      assert.strictEqual(JSON.stringify(read(ws).sandbox), theirs, 'and so does the switch');
+    });
+  }
+
+  test('removing all eleven leaves the 0.15.6 list, which upgrades like that release\'s own block', () => {
+    // The two cannot be told apart on disk: a person who removes exactly the
+    // entries added after 0.15.6 has written that release's block.
+    const ws = tmp('wb-escape-removed-all-');
+    open(ws);
+    const settings = read(ws);
+    settings.sandbox.filesystem.denyWrite = settings.sandbox.filesystem.denyWrite.slice(0, -11);
+    assert.deepStrictEqual(settings.sandbox.filesystem.denyWrite, releasedDenyWrite(ws, home), 'sanity: exactly the 0.15.6 list');
+    fs.writeFileSync(settingsPath(ws), JSON.stringify(settings, null, 2));
+    open(ws);
+    for (const p of escapes(ws)) assert.ok(read(ws).sandbox.filesystem.denyWrite.includes(p), `${p} is back after the open`);
   });
 });
 
@@ -1471,23 +1717,18 @@ describe('a workspace written before the permission file was protected', () => {
   const home = os.homedir();
 
   test('is still recognised as ours, so it gets the new protection rather than being left alone', () => {
-    // The recogniser derives its prior shapes by narrowing the CURRENT deny
-    // list, so every PROPER PREFIX of it is a shape this once wrote. That makes
-    // the order of the registry load-bearing: a new entry appended last leaves
-    // the old list as a prefix and every existing workspace is recognised and
+    // The recogniser rebuilds the CURRENT block and accepts the shorter deny
+    // lists earlier builds wrote, each a prefix of today's. That makes the
+    // order of the registry load-bearing: a new entry appended last leaves the
+    // old list as a prefix and every existing workspace is recognised and
     // rewritten, while the same entry inserted first would strand all of them
     // as user-authored and they would never be protected at all.
     const ws = tmp('wb-selfgrant-upgrade-');
     const current = scaffold.sandboxSettings(ws, 'darwin', home, ['/tmp/t'], [], 'knowledge');
-    const deny = current.filesystem.denyWrite;
-    assert.ok(deny.length >= 2, 'there is an earlier shape to be an upgrade from');
-    assert.ok(deny.slice(0, -1).some(p => p.endsWith('.claude/settings.local.json')),
-      'the permission file sits before the newest entry, so the list without the newest entry still carries it');
-
-    const asItWasWritten = {
-      ...current,
-      filesystem: { ...current.filesystem, denyWrite: deny.slice(0, deny.length - 1) },
-    };
+    assert.deepStrictEqual(current.filesystem.denyWrite.slice(0, 2), releasedDenyWrite(ws, home).slice(0, 2),
+      'the list written before the permission file is still the head of today\'s');
+    assert.ok(current.filesystem.denyWrite.includes(path.posix.join(ws, '.claude', 'settings.local.json')), 'and today\'s carries it');
+    const asItWasWritten = releasedBlock(2, ws, home, ['/tmp/t'], 'on');
     assert.strictEqual(scaffold.isRundockSandbox(asItWasWritten, 'darwin'), true,
       'a block written before this change is ours, not the person\'s, so it is safe to rewrite');
   });
@@ -1543,9 +1784,7 @@ describe('an existing workspace is actually upgraded, not merely recognised', ()
     // workspace that already exists never gets it.
     const ws = tmp('wb-selfgrant-reconcile-');
     const home = os.homedir();
-    const current = scaffold.sandboxSettings(ws, 'darwin', home, ['/tmp/t'], [], 'knowledge');
-    const deny = current.filesystem.denyWrite;
-    const older = { ...current, filesystem: { ...current.filesystem, denyWrite: deny.slice(0, deny.length - 1) } };
+    const older = releasedBlock(2, ws, home, scaffold.tempRoots(), 'on');
 
     fs.mkdirSync(path.join(ws, '.claude'), { recursive: true });
     const settingsPath = path.join(ws, '.claude', 'settings.local.json');

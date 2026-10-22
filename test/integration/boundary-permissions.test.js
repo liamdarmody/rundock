@@ -491,9 +491,10 @@ describe('workspace file-access boundary', () => {
     // THIS TEST EXISTS TO BIND THE TRUST PAGE TO THE HOOK. ARCHITECTURE.md
     // states that a file-edit tool writing to a persistence surface under the
     // runtime home is refused outright, while a shell command reaching the
-    // same path still cards and can genuinely land, because the runtime's
+    // same path still cards and is approvable, because the runtime's
     // sensitive-file rule governs its file-edit tools and the command layer is
-    // governed by the OS block, which names this folder writable. Both halves
+    // governed by the OS block: where none runs the write lands, and where one
+    // does its deny list refuses the sandboxed write. Both halves
     // are read here at ONE path, so the page cannot drift from the product:
     // the registry-binding test compares names only and could never catch a
     // claim about verdicts.
@@ -589,10 +590,10 @@ describe('workspace file-access boundary', () => {
     }
 
     // A SHELL WRITE TO THE SAME PATH STILL CARDS. The runtime's own refusal
-    // covers the file-edit tools, not a redirect, and the sandbox grants this
-    // folder to the command layer, so a shell write can genuinely land here.
-    // Carding it is therefore the honest answer, and the tag the card carries
-    // is what names persistence to the reader.
+    // covers the file-edit tools, not a redirect, and wherever no sandbox runs
+    // a shell write lands here (where one does, the block's deny list refuses
+    // it). Carding it is therefore the honest answer, and the tag the card
+    // carries is what names persistence to the reader.
     for (const extraEnv of [{}, { RUNDOCK_CODE_MODE: '1' }]) {
       const since = client.messages.length;
       const pending = runHook('Bash', { command: `echo x > ${surfaceTarget}` }, extraEnv);
@@ -725,10 +726,10 @@ describe('workspace file-access boundary', () => {
     // and a file-tool edit to one is now refused outright rather than carded,
     // because the runtime rejects those writes itself whatever is approved
     // here. That refusal covers the file-edit tools only, which is the same
-    // set the runtime's own rule covers: a shell redirect can genuinely land
-    // in this folder, so it still cards, and it is the crossing left that can
-    // carry a grant. The grant directory below is the client's choice in its
-    // response, not something the card has to have offered.
+    // set the runtime's own rule covers: a shell redirect lands in this folder
+    // wherever no sandbox runs, so it still cards, and it is the crossing left
+    // that can carry a grant. The grant directory below is the client's choice
+    // in its response, not something the card has to have offered.
     let since = client.messages.length;
     const pendingGrant = runHook('Bash', { command: `echo x > ${path.join(home, '.claude', 'commands', 'note.md')}` });
     const grantCard = await client.waitFor(m => m.type === 'control_request'
