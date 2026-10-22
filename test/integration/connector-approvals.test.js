@@ -298,7 +298,38 @@ describe('a saved Always allow for a send', () => {
       document.getElementById('messages').innerHTML = '';
       chat.toolAllowFailed(msg);
       assert.match(document.querySelector('#messages .msg-system').textContent,
-        /ask again next time\. Could not record that allow: a connector that sends, replies or forwards asks every time\.$/);
+        /ask again next time\. Could not record that allow: a connector action that sends, replies, forwards, deletes or archives asks every time\.$/);
+    }
+    assert.deepStrictEqual(JSON.parse(fs.readFileSync(file, 'utf-8')).allowedTools, ['Bash:git']);
+  });
+});
+
+describe('a saved Always allow for a delete', () => {
+  // A delete asks every time too, whatever case its name is written in, so a
+  // saved allow for one can never answer anything either.
+  test('is dropped: not listed, not consulted, and the delete asks again', async () => {
+    saveAnswersAsBefore([MAIL('deleteEvent'), MAIL('remove-label'), MAIL('delete2'), MAIL('create_label'), 'Bash:git']);
+    const tools = await reloadSavedAnswers();
+    assert.deepStrictEqual(tools, [MAIL('create_label'), 'Bash:git'], 'the other saved answers are untouched');
+    assert.doesNotMatch(document.getElementById('tool-allows-block').innerHTML, /deleteEvent|remove-label|delete2/,
+      'Settings does not list an allow that can never answer anything');
+
+    const del = await request(MAIL('deleteEvent'));
+    assert.strictEqual(del.answeredByRule, false);
+    assert.deepStrictEqual(del.buttons, ['allow', 'deny']);
+    assert.strictEqual((await press(del, 'deny')).decision, 'deny');
+  });
+
+  test('cannot be saved again', async () => {
+    const file = saveAnswersAsBefore(['Bash:git']);
+    for (const action of ['removeLabel', 'delete_event', 'archiveThread']) {
+      const since = client.messages.length;
+      client.send({ type: 'add_tool_allow', key: MAIL(action) });
+      const { msg } = await client.waitFor((m) => m.type === 'tool_allow_failed' || m.type === 'tool_allows',
+        { since, label: 'the answer to the save' });
+      assert.strictEqual(msg.type, 'tool_allow_failed', action);
+      assert.strictEqual(msg.key, MAIL(action));
+      assert.match(msg.message, /deletes or archives asks every time\.$/);
     }
     assert.deepStrictEqual(JSON.parse(fs.readFileSync(file, 'utf-8')).allowedTools, ['Bash:git']);
   });
