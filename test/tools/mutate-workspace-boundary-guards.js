@@ -78,6 +78,9 @@ const SCAFFOLD_KEEP = { src: path.join(ROOT, 'lib', 'workspace', 'scaffold.js'),
 // The switch that keeps agents inside the workspace: where it is read from, the
 // new-workspace default, and the open-path reconcile that honours it.
 const SCAFFOLD_SWITCH = { src: path.join(ROOT, 'lib', 'workspace', 'scaffold.js'), suite: 'test/unit/sandbox-switch.test.js' };
+// The deny-list lengths the recogniser accepts, against the release history
+// written out in the sandbox settings suite.
+const SCAFFOLD_SETTINGS = { src: path.join(ROOT, 'lib', 'workspace', 'scaffold.js'), suite: 'test/unit/sandbox-settings.test.js' };
 const WORKSPACE_HANDLER_SWITCH = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'workspace.js'), suite: 'test/unit/sandbox-switch.test.js' };
 // What the Permissions row reports as in force, and the switch's own writes.
 const SANDBOX_STATUS = { src: path.join(ROOT, 'lib', 'workspace', 'sandbox-status.js'), suite: 'test/unit/sandbox-status.test.js' };
@@ -419,8 +422,28 @@ const MUTATIONS = [
   // Stop recognising the narrower deny lists and the block an earlier release
   // wrote is a stranger's edit: never rewritten, never given the new deny.
   [SCAFFOLD, 'a block carrying an earlier, shorter deny list is still recognised as ours',
-    '  for (let n = 1; n < deny.length; n++) shapes.push(withDenyWrite(block, deny.slice(0, n)));\n',
+    '  for (const n of WRITTEN_DENY_LENGTHS) if (n < deny.length) shapes.push(withDenyWrite(block, deny.slice(0, n)));\n',
     ''],
+  // Accept every shorter list and a person who removes an entry from Rundock's
+  // block has it put back on the next open, over their edit.
+  [SCAFFOLD, 'only the deny lists a build wrote are recognised, not every shorter one',
+    '  for (const n of WRITTEN_DENY_LENGTHS) if (n < deny.length) shapes.push(withDenyWrite(block, deny.slice(0, n)));\n',
+    '  for (let n = 1; n < deny.length; n++) shapes.push(withDenyWrite(block, deny.slice(0, n)));\n'],
+  // Forget a length a build wrote and every workspace carrying it is stranded.
+  [SCAFFOLD, 'the list 0.15.6 wrote is recognised',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19];',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 19];'],
+  [SCAFFOLD, 'the list 0.13.3 to 0.15.5 wrote is recognised',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19];',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 8, 19];'],
+  [SCAFFOLD, 'the lists the development line wrote before 0.13.3 are recognised',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19];',
+    'const WRITTEN_DENY_LENGTHS = [3, 8, 19];'],
+  // Leave the current length out and the day a longer list ships, every block
+  // this build wrote reads as a person's edit and never upgrades.
+  [SCAFFOLD_SETTINGS, 'the current deny list\'s length is recorded as written',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19];',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8];'],
   // ===== THE USER-LEVEL STATE FILE IS A SECRET AT BOTH LAYERS =====
   // Drop the home-level files from the block and ~/.claude.json is writable
   // by sandboxed commands again, its user-scope MCP servers with it.
@@ -451,6 +474,42 @@ const MUTATIONS = [
   [HOOK, 'a home-level secret matches at the home folder root only',
     '  return HOME_SECRET_FILES.some(f => c === foldCase(canonicalize(path.join(home, f)), foldsCase));\n',
     '  return HOME_SECRET_FILES.some(f => c.endsWith(path.sep + foldCase(f, foldsCase)));\n'],
+
+  // ===== THE BLOCK DENIES WHAT THE RUNTIME ACTS ON OUTSIDE THE SANDBOX =====
+  // Drop the escape paths and the protection is whatever the installed runtime
+  // happens to deny: on a release without its own deny, a sandboxed command
+  // plants a hook, plugin or settings file that runs unconfined next session.
+  [SCAFFOLD, 'the block denies the runtime\'s own escape paths',
+    '    ...escapeDenyFor(workspaceDir, home),\n',
+    ''],
+  // Join the home folder's names onto the workspace and the real ones stay
+  // writable, while the workspace's agents and skills, which Rundock writes,
+  // are denied instead.
+  [SCAFFOLD, 'the escape paths are joined onto the runtime home, not the workspace',
+    "    ...RUNTIME_HOME_ESCAPE_PATHS.map(f => path.posix.join(home, '.claude', f)),",
+    "    ...RUNTIME_HOME_ESCAPE_PATHS.map(f => path.posix.join(workspaceDir, '.claude', f)),"],
+  // The user's settings file names hooks the runtime starts itself.
+  [SCAFFOLD, 'the user\'s settings file is denied',
+    "const RUNTIME_HOME_ESCAPE_PATHS = ['settings.json', 'plugins',",
+    "const RUNTIME_HOME_ESCAPE_PATHS = ['plugins',"],
+  // The backups are not a tier at the card, so only the block names them.
+  [SCAFFOLD, 'the runtime\'s backups of ~/.claude.json are denied',
+    "'agents', 'commands', 'backups'];",
+    "'agents', 'commands'];"],
+  // The same user-level state under a non-default sign-in.
+  [SCAFFOLD, 'the oauth-suffixed copies of ~/.claude.json are denied',
+    '    ...OAUTH_STATE_FILES.map(f => path.posix.join(home, f)),\n',
+    ''],
+  // The workspace's own settings file is loaded for every agent spawned there.
+  [SCAFFOLD, 'the workspace\'s project settings file is denied',
+    "const WORKSPACE_ESCAPE_FILES = ['.claude/settings.json'];",
+    'const WORKSPACE_ESCAPE_FILES = [];'],
+  // Put the escape paths ahead of the credential files and the block the last
+  // release wrote is no longer a prefix: every existing workspace reads as a
+  // person's edit and never gains them.
+  [SCAFFOLD, 'the escape paths are appended after the credential files, so earlier blocks upgrade',
+    '    ...credentialDenyFor(home),\n    ...escapeDenyFor(workspaceDir, home),\n',
+    '    ...escapeDenyFor(workspaceDir, home),\n    ...credentialDenyFor(home),\n'],
 
   // ===== THE BLOCK IS DRIVEN BY MODE, AND ONLY BY MODE =====
   // Ignore the mode and the switch writes the block for code mode too.
