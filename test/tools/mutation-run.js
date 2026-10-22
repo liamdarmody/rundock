@@ -343,7 +343,14 @@ function inspect({ root = ROOT, files = [] } = {}) {
  * the temp-root preflight each harness already runs, and it means a harness
  * cannot forget to act on the verdict.
  */
-function beginMutationRun({ root = ROOT, files: declared = [] } = {}) {
+function beginMutationRun({ root = ROOT, files: declared = [], suites = [] } = {}) {
+  // Asked before anything is read or recorded: a run whose suites would skip
+  // has no verdict to give, so it is not started.
+  const fixture = fixtureRootProblem(suites, { root });
+  if (fixture) {
+    console.error(`Refusing to start a mutation run: ${fixture}`);
+    process.exit(NO_VERDICT);
+  }
   // Deduplicated, because a harness names one target per guard and several
   // guards of the same file are ordinary. Left in, the same path would be read
   // twice, restored twice, and listed twice in a refusal that is supposed to be
@@ -439,12 +446,40 @@ function beginMutationRun({ root = ROOT, files: declared = [] } = {}) {
   // tree. Read AFTER arming, so a harness that has lost its call never reaches
   // this and fails that test rather than passing it.
   if (process.argv.includes('--guard-only')) {
-    console.error(`mutation run armed over ${files.length} file(s):\n${list(record.files)}`);
+    const usable = fixture === null && suites.some((suite) => readsFixture(root, suite))
+      ? ', and the Code-mode fixture folder is usable' : '';
+    console.error(`mutation run armed over ${files.length} file(s)${usable}:\n${list(record.files)}`);
     session.finish();
     process.exit(0);
   }
 
   return session;
+}
+
+/** Does this suite build its fixture with the Code-mode fixture helper? */
+function readsFixture(root, suite) {
+  try { return fs.readFileSync(path.resolve(root, suiteFile(suite)), 'utf8').includes('code-mode-fixture'); } catch { return false; }
+}
+
+/**
+ * Why the suites a run reads would skip for want of a fixture folder, as one
+ * line, or null when none of them needs one or the folder is usable.
+ *
+ * WITHOUT THE FOLDER THOSE SUITES SKIP, a skipped suite turns nothing red, and
+ * every row aimed at one reads as a guard nobody watches. That was diagnosed
+ * afresh on each first run. The folder is probed the way the suites probe it,
+ * and the probe removed; under CI the helper throws, which is the same answer.
+ */
+function fixtureRootProblem(suites, { root = ROOT, env = process.env, candidates } = {}) {
+  if (!suites.some((suite) => readsFixture(root, suite))) return null;
+  const { outsideTempRoot, NO_ROOT } = require('../helpers/code-mode-fixture.js');
+  let probe;
+  try { probe = outsideTempRoot({ env, candidates, quiet: true }); } catch { probe = { skip: NO_ROOT }; }
+  if (probe.skip) {
+    return `the Code-mode suites it reads would skip and their rows would turn nothing red; the fixture ${NO_ROOT}.`;
+  }
+  fs.rmSync(probe.dir, { recursive: true, force: true });
+  return null;
 }
 
 // THREE OUTCOMES, NOT TWO. A harness exits 0 when every guard it broke turned
@@ -540,5 +575,5 @@ function exitCodeFor(failed, results) {
 
 module.exports = {
   beginMutationRun, inspect, markerPath, markerDir, readMarkers, recoverAbandoned, MARKER, MARKER_DIR, ROOT,
-  targetsFromRows, rowsForShard, exitCodeFor, suiteFile, NO_VERDICT, unstaged, unstagedRefusal,
+  targetsFromRows, rowsForShard, exitCodeFor, suiteFile, NO_VERDICT, unstaged, unstagedRefusal, fixtureRootProblem,
 };

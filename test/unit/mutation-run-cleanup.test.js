@@ -401,6 +401,54 @@ describe('every mutation harness runs inside the envelope', () => {
   }
 });
 
+describe('a run whose suites need the Code-mode fixture folder', () => {
+  // Without a usable folder those suites skip, a skipped suite turns nothing
+  // red, and every row aimed at one read as an unguarded guard. Diagnosed
+  // afresh on each first run, so the run now says so before it starts.
+  const fx = require('../helpers/code-mode-fixture.js');
+  const { fixtureRootProblem } = require('../tools/mutation-run.js');
+  const NEEDS = 'test/unit/code-mode-hook.test.js';
+
+  test('with no usable folder, the problem is one line naming the setting and an example value', (t) => {
+    const tempBase = makeTempDir('fixture-base-');
+    t.after(() => { try { fs.rmSync(tempBase, { recursive: true, force: true }); } catch { /* gone */ } });
+    for (const env of [{}, { CI: 'true' }]) {
+      const problem = fixtureRootProblem([NEEDS], { env, candidates: [tempBase] });
+      assert.ok(problem && !problem.includes('\n'), `one line (${JSON.stringify(env)}): ${problem}`);
+      assert.match(problem, /RUNDOCK_TEST_OUTSIDE_TEMP_ROOT=\S+/);
+    }
+    assert.strictEqual(fixtureRootProblem(['test/unit/boundary.test.js'], { env: {}, candidates: [tempBase] }), null,
+      'a run whose suites do not use the fixture is not asked about it');
+  });
+
+  test('with a usable folder there is no problem, and nothing is left in it', () => {
+    const probe = fx.outsideTempRoot();
+    if (probe.skip) return; // no such folder on this machine; the case above covers it
+    fs.rmSync(probe.dir, { recursive: true, force: true });
+    assert.strictEqual(fixtureRootProblem([NEEDS]), null);
+  });
+
+  test('the boundary harness hands its suites to the envelope, which checks the folder', (t) => {
+    // Driven, as the cases above are: a harness that stopped passing its
+    // suites would arm without the check and say nothing about the folder.
+    const tmpRoot = makeTempDir('mutation-run-fixture-');
+    t.after(() => { try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch { /* gone */ } });
+    const env = { ...process.env, TMPDIR: tmpRoot, TEMP: tmpRoot, TMP: tmpRoot };
+    delete env.NODE_TEST_CONTEXT;
+    const run = spawnSync(process.execPath, ['test/tools/mutate-workspace-boundary-guards.js', '--guard-only'],
+      { cwd: REPO, env, encoding: 'utf8', timeout: 60000 });
+    const out = run.stderr || '';
+    if (/RUNDOCK_TEST_OUTSIDE_TEMP_ROOT=/.test(out)) {
+      assert.strictEqual(run.status, 3, `no usable folder is no verdict:\n${out}`);
+      assert.strictEqual(out.trim().split('\n').length, 1, `in one line:\n${out}`);
+    } else {
+      assert.match(out, /mutation run armed|Refusing to start a mutation run/, out);
+      if (run.status === 0) assert.match(out, /Code-mode fixture folder is usable/, `the folder was checked:\n${out}`);
+    }
+    assert.equal(anyMarker(REPO), false, 'and no record is left behind');
+  });
+});
+
 describe('the verdict, without starting anything', () => {
   // The subprocess cases above prove the wiring. These prove the decision, and
   // they are cheap enough to cover the corners that are awkward to stage for
