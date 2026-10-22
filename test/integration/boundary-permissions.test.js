@@ -839,13 +839,14 @@ describe('the answer-file reason reaches the browser', () => {
   });
 });
 
-// THE LAUNCHER THE RUNTIME STARTS THE PERMISSION HOOK THROUGH, asked about in
-// sequence through the real hook and the real server. A denial is not kept as
-// a standing no and an approval is not kept as a standing yes: each attempt
-// asks. The same write through another tool asks as well. Rundock's own write
-// of the file is made from the server's process, which neither the hook nor the
-// sandbox judges, so it lands with no card.
-describe('the launcher the permission hook is started through', () => {
+// THE FILES THAT DECIDE WHAT RUNS, asked about in sequence through the real
+// hook and the real server: the launcher the runtime starts the permission hook
+// through, `.mcp.json`, the project settings and the hook scripts. A denial is
+// not kept as a standing no and an approval is not kept as a standing yes: each
+// attempt asks. The same write through another tool asks as well. Rundock's
+// own writes of these files are made from the server's process, which neither
+// the hook nor the sandbox judges, so they land with no card.
+describe('the files that decide what runs, asked about in sequence', () => {
   const launcher = () => path.join(h.workspaceDir, '.rundock', 'permission-hook.sh');
   const isAnswerFileCard = m => m.type === 'control_request' && m.request
     && (m.request.answer_file === true
@@ -876,6 +877,35 @@ describe('the launcher the permission hook is started through', () => {
     since = client.messages.length;
     const edit = await answer(runHook('Edit', { file_path: launcher(), old_string: 'exit', new_string: 'exit' }), since, false, 'an edit after an approval');
     assert.strictEqual(decisionOf(edit.out), 'deny', 'the approval before it answered nothing: this one asked');
+  });
+
+  test('the files that decide what runs ask the same way, and keep asking', async () => {
+    for (const rel of ['.mcp.json', '.claude/settings.json', '.claude/hooks/pre-tool.sh']) {
+      const target = path.join(h.workspaceDir, ...rel.split('/'));
+      let since = client.messages.length;
+      const first = await answer(runHook('Write', { file_path: target, content: '{}' }), since, false, `${rel}: the first attempt`);
+      assert.strictEqual(first.msg.request.resolved_path, canonicalize(target), `${rel}: the card names the file`);
+      assert.strictEqual(decisionOf(first.out), 'deny', `${rel}: denied, it does not run`);
+      since = client.messages.length;
+      const retry = await answer(runHook('Write', { file_path: target, content: '{}' }), since, true, `${rel}: the retry`);
+      assert.strictEqual(decisionOf(retry.out), 'allow', `${rel}: the retry asked again, and this time was approved`);
+      since = client.messages.length;
+      const shell = await answer(runHook('Bash', { command: `echo '{}' | tee ${rel}` }), since, false, `${rel}: by tee`);
+      assert.strictEqual(decisionOf(shell.out), 'deny', `${rel}: the approval before it answered nothing: tee asked`);
+    }
+  });
+
+  test("Rundock's own write of the project settings lands, with no card", async () => {
+    const scaffold = require('../../lib/workspace/scaffold.js');
+    const settings = path.join(h.workspaceDir, '.claude', 'settings.json');
+    fs.mkdirSync(path.dirname(settings), { recursive: true });
+    fs.writeFileSync(settings, JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: 'afplay /System/Library/Sounds/Glass.aiff' }] }] } }));
+    const since = client.messages.length;
+    scaffold.scaffoldWorkspace(h.workspaceDir, { platform: 'darwin' });
+    const muted = JSON.parse(fs.readFileSync(settings, 'utf-8')).hooks.Stop[0].hooks[0].command;
+    assert.strictEqual(muted, '[ -z "$RUNDOCK" ] && afplay /System/Library/Sounds/Glass.aiff || true', 'the server muted the sound hook in the file');
+    await h.delay(300);
+    assert.strictEqual(client.messages.slice(since).filter(m => m.type === 'control_request').length, 0, 'and nothing asked');
   });
 
   test("Rundock's own write of it lands, with no card", async () => {

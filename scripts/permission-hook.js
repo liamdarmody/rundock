@@ -562,13 +562,6 @@ function hiddenHomeRootOf(p, home = os.homedir()) {
 // THE CARD ON THESE IS THE ONLY PROTECTION THEY HAVE. Do not "simplify" it.
 const RUNTIME_GUARDED_ANSWER_FILES = ['.claude/settings.local.json'];
 const RUNDOCK_ANSWER_FILES = ['.rundock/state.json', '.rundock/permissions.json'];
-// The workspace's project settings (`.claude/settings.json`) are answer files
-// too: Claude Code loads them for every agent Rundock spawns here, and they can
-// carry hooks and permission allow rules. They are matched, for this workspace
-// and every other Rundock workspace alike, by isRundockWorkspaceSettingsFile
-// below, and carded rather than refused: the runtime is only measured to refuse
-// the settings file it is launched with.
-//
 // THE LAUNCHER THIS HOOK IS STARTED THROUGH. lib/workspace/scaffold.js writes
 // `.rundock/permission-hook.sh` (`.cmd` on Windows) and names it in the settings
 // file the runtime is launched with, so the runtime runs it before every tool
@@ -578,8 +571,22 @@ const RUNDOCK_ANSWER_FILES = ['.rundock/state.json', '.rundock/permissions.json'
 // Kept out of RUNDOCK_ANSWER_FILES, whose entries open the sandbox block's deny
 // list: that list only ever grows at its end (scaffold.js appends it there).
 const LAUNCHER_FILES = ['.rundock/permission-hook.sh', '.rundock/permission-hook.cmd'];
-const WORKSPACE_ANSWER_FILES = [...RUNDOCK_ANSWER_FILES, ...RUNTIME_GUARDED_ANSWER_FILES, ...LAUNCHER_FILES];
-function matchesAnswerFileSet(set, resolvedPath, workspaceRoot, foldsCase = hostFoldsCase(), pmod = path) {
+// THE FILES THAT DECIDE WHAT THE RUNTIME STARTS, outside the shell sandbox.
+// `.mcp.json` is handed to the runtime with --mcp-config (lib/runtime/claude.js),
+// and a stdio server named there starts at the next spawn as its own process.
+// The project's `.claude/settings.json` is loaded for every agent Rundock spawns
+// here and can name hooks, which the runtime runs itself, and an `env`. It was
+// matched only while the workspace held `.rundock/state.json` (see
+// isRundockWorkspaceSettingsFile below); named here, it no longer depends on
+// that. The scripts under `.claude/hooks/` are what those hooks commonly run,
+// so a write to one is a write to the hook: the folder and everything in it.
+// Carded rather than refused: the runtime is only measured to refuse the
+// settings file it is launched with.
+const WHAT_RUNS_FILES = ['.mcp.json', '.claude/settings.json'];
+const WHAT_RUNS_DIRS = ['.claude/hooks'];
+const WORKSPACE_ANSWER_FILES = [...RUNDOCK_ANSWER_FILES, ...RUNTIME_GUARDED_ANSWER_FILES, ...LAUNCHER_FILES, ...WHAT_RUNS_FILES];
+// `within`: an entry is a folder, matched with everything under it.
+function matchesAnswerFileSet(set, resolvedPath, workspaceRoot, foldsCase = hostFoldsCase(), pmod = path, within = false) {
   if (typeof resolvedPath !== 'string' || !resolvedPath) return false;
   if (typeof workspaceRoot !== 'string' || !workspaceRoot) return false;
   // Windows paths fold case whatever the host says, which is why the flavour
@@ -594,9 +601,10 @@ function matchesAnswerFileSet(set, resolvedPath, workspaceRoot, foldsCase = host
   const c = foldCase(canonicalize(resolvedPath, pmod), folds);
   // The registry spells its paths with forward slashes, so the segments are
   // split and rejoined in the flavour being compared rather than pasted in.
-  return set.some((f) => (
-    c === foldCase(canonicalize(pmod.join(pmod.resolve(workspaceRoot), ...f.split('/')), pmod), folds)
-  ));
+  return set.some((f) => {
+    const entry = foldCase(canonicalize(pmod.join(pmod.resolve(workspaceRoot), ...f.split('/')), pmod), folds);
+    return c === entry || (within && c.startsWith(entry + pmod.sep));
+  });
 }
 
 // ANOTHER WORKSPACE'S ANSWERS ARE ANSWERS TOO. A folder named as a working
@@ -625,10 +633,22 @@ function isRundockWorkspaceSettingsFile(resolvedPath) {
   if (path.basename(claudeDir) !== '.claude' || !WORKSPACE_SETTINGS_NAMES.includes(path.basename(resolvedPath))) return false;
   return fs.existsSync(path.join(path.dirname(claudeDir), '.rundock', 'state.json'));
 }
-// An answer file of ANY Rundock workspace: its `.rundock` files by name, and
-// its Claude settings files.
+// The other files that decide what runs in a Rundock workspace, by the same
+// rule: its `.mcp.json`, and anything under its `.claude/hooks/`.
+function isRundockWorkspaceRunsFile(resolvedPath) {
+  if (typeof resolvedPath !== 'string' || !resolvedPath) return false;
+  const isWorkspace = d => fs.existsSync(path.join(d, '.rundock', 'state.json'));
+  if (path.basename(resolvedPath) === '.mcp.json') return isWorkspace(path.dirname(resolvedPath));
+  for (let cur = resolvedPath, up = path.dirname(cur); up !== cur; cur = up, up = path.dirname(cur)) {
+    if (path.basename(cur) === 'hooks' && path.basename(up) === '.claude' && isWorkspace(path.dirname(up))) return true;
+  }
+  return false;
+}
+// An answer file of ANY Rundock workspace: its `.rundock` files by name, its
+// Claude settings files, and the files that decide what runs there.
 function isAnswerFileOfAnyWorkspace(resolvedPath, pmod = path) {
-  return isRundockAnswerFileAnywhere(resolvedPath, pmod) || (pmod === path && isRundockWorkspaceSettingsFile(resolvedPath));
+  return isRundockAnswerFileAnywhere(resolvedPath, pmod)
+    || (pmod === path && (isRundockWorkspaceSettingsFile(resolvedPath) || isRundockWorkspaceRunsFile(resolvedPath)));
 }
 
 // The Rundock workspace, other than the current one, that holds `p`: the
@@ -663,7 +683,8 @@ function isOtherWorkspaceAgentSurface(p, workspaceRoot) {
 // the matcher: the canonicalisation and case-folding rules above were each
 // arrived at by a defect, and a second copy would not inherit them.
 function isWorkspaceAnswerFile(resolvedPath, workspaceRoot, foldsCase = hostFoldsCase(), pmod = path) {
-  return matchesAnswerFileSet(WORKSPACE_ANSWER_FILES, resolvedPath, workspaceRoot, foldsCase, pmod);
+  return matchesAnswerFileSet(WORKSPACE_ANSWER_FILES, resolvedPath, workspaceRoot, foldsCase, pmod)
+    || matchesAnswerFileSet(WHAT_RUNS_DIRS, resolvedPath, workspaceRoot, foldsCase, pmod, true);
 }
 
 // Same matching rules as isWorkspaceAnswerFile, over the runtime-guarded subset.
@@ -708,8 +729,11 @@ function classifyFileAccess(toolName, toolInput, workspaceRoot, extraDirs = [], 
     // time, never remembered.
     return { where: 'outside', resolvedPath, grantDir: null, agentHome: false, secret: false, persistenceSurface: true, otherWorkspace: true, write: true };
   }
-  if (inside && writing && isWorkspaceAnswerFile(resolvedPath, workspaceRoot, foldsCase)) {
-    // `where` says where the file IS, and this one is inside. It used to say
+  if (writing && isWorkspaceAnswerFile(resolvedPath, workspaceRoot, foldsCase)) {
+    // `where` says where the file IS, and this one is inside, unless a folder
+    // of the workspace's own is a link to somewhere else (a `.claude` kept in a
+    // dotfiles folder, say): the file is still this workspace's, compared by
+    // its real path, and asks as one, with nothing to remember. It used to say
     // 'outside' because that was the only classification that both forced a
     // card and refused a standing grant, and the client then printed "wants to
     // reach outside your workspace" above a path plainly inside the workspace.
@@ -721,7 +745,7 @@ function classifyFileAccess(toolName, toolInput, workspaceRoot, extraDirs = [], 
     // relied on 'outside' to mean "always ask, never remember" reads this flag
     // instead. They are enumerated at the call sites: the code-mode
     // auto-approve, and the decision payload.
-    return { where: 'inside', resolvedPath, grantDir: null, answerFile: true };
+    return { where: inside ? 'inside' : 'outside', resolvedPath, grantDir: null, answerFile: true };
   }
   if (inside) return { where: 'inside', resolvedPath };
   // CODE MODE'S DEVELOPMENT PATHS: the temp folders and package caches are
@@ -1477,7 +1501,7 @@ module.exports = {
   HOME_SECRET_FILES, secretsRegistry,
   agentHomeRoot, codexHomeRoot, runtimeHomes,
   isWorkspaceAnswerFile, isRuntimeGuardedAnswerFile,
-  WORKSPACE_ANSWER_FILES, RUNDOCK_ANSWER_FILES, RUNTIME_GUARDED_ANSWER_FILES, LAUNCHER_FILES,
+  WORKSPACE_ANSWER_FILES, RUNDOCK_ANSWER_FILES, RUNTIME_GUARDED_ANSWER_FILES, LAUNCHER_FILES, WHAT_RUNS_FILES, WHAT_RUNS_DIRS,
   boundaryCrossingsFor,
   REFUSED_CLAUDE_EDIT_DIRS, isReadOnlyShellCommand, isRundockAnswerFileAnywhere, isRundockWorkspaceSettingsFile, isAnswerFileOfAnyWorkspace, otherWorkspaceRootOf, isOtherWorkspaceAgentSurface,
   INSTRUCTION_SURFACES, isInstructionSurface, hiddenHomeRootOf, alwaysAsksCrossing, SHELL_TOOLS,

@@ -243,6 +243,7 @@ const CONNECTOR_HANDLER_FLOW = { src: path.join(ROOT, 'lib', 'protocol', 'handle
 const WHAT_RUNS_HOOK = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/what-runs-files.test.js' };
 const WHAT_RUNS_CLIENT = { src: path.join(ROOT, 'public', 'permissions.js'), suite: 'test/unit/what-runs-files.test.js' };
 const WHAT_RUNS_VIEW = { src: path.join(ROOT, 'public', 'views', 'chat.js'), suite: 'test/unit/what-runs-files.test.js' };
+const WHAT_RUNS_CODEX = { src: path.join(ROOT, 'lib', 'runtime', 'codex-approval.js'), suite: 'test/unit/codex-escalation-grading.test.js' };
 
 const MUTATIONS = [
   // ===== ONE DIRECTORY UNDER TWO NAMES IS ONE IDENTITY =====
@@ -1741,8 +1742,8 @@ const MUTATIONS = [
     "  Promise.resolve().then(() => ev.steer(approvalNotice(toolName))).catch(() => queueCodexNotice(convoId, approvalNotice(toolName)));"],
   // ===== THE FILES THAT DECIDE WHAT RUNS ALWAYS ASK =====
   [WHAT_RUNS_HOOK, 'What runs: the launcher is ordinary inside work, so a write to it runs with no card',
-    'const WORKSPACE_ANSWER_FILES = [...RUNDOCK_ANSWER_FILES, ...RUNTIME_GUARDED_ANSWER_FILES, ...LAUNCHER_FILES];',
-    'const WORKSPACE_ANSWER_FILES = [...RUNDOCK_ANSWER_FILES, ...RUNTIME_GUARDED_ANSWER_FILES];'],
+    'const WORKSPACE_ANSWER_FILES = [...RUNDOCK_ANSWER_FILES, ...RUNTIME_GUARDED_ANSWER_FILES, ...LAUNCHER_FILES, ...WHAT_RUNS_FILES];',
+    'const WORKSPACE_ANSWER_FILES = [...RUNDOCK_ANSWER_FILES, ...RUNTIME_GUARDED_ANSWER_FILES, ...WHAT_RUNS_FILES];'],
   [WHAT_RUNS_HOOK, "What runs: another workspace's launcher is not matched by name",
     "[...RUNDOCK_ANSWER_FILES, ...LAUNCHER_FILES].some(f => fold(f.split('/')[1]) === fold(parts[n - 1]))",
     "RUNDOCK_ANSWER_FILES.some(f => fold(f.split('/')[1]) === fold(parts[n - 1]))"],
@@ -1755,6 +1756,30 @@ const MUTATIONS = [
   [WHAT_RUNS_VIEW, 'What runs: the card reads no path when choosing its words',
     '    const named = [req.resolved_path, ...crossingList.map(c => c && c.path)].filter(Boolean);',
     '    const named = [];'],
+  [WHAT_RUNS_HOOK, 'What runs: .mcp.json and the project settings are ordinary inside work',
+    'const WORKSPACE_ANSWER_FILES = [...RUNDOCK_ANSWER_FILES, ...RUNTIME_GUARDED_ANSWER_FILES, ...LAUNCHER_FILES, ...WHAT_RUNS_FILES];',
+    'const WORKSPACE_ANSWER_FILES = [...RUNDOCK_ANSWER_FILES, ...RUNTIME_GUARDED_ANSWER_FILES, ...LAUNCHER_FILES];'],
+  [WHAT_RUNS_HOOK, 'What runs: the hook-scripts folder is not looked at',
+    '    || matchesAnswerFileSet(WHAT_RUNS_DIRS, resolvedPath, workspaceRoot, foldsCase, pmod, true);',
+    ';'],
+  [WHAT_RUNS_HOOK, 'What runs: a folder entry matches only the folder itself, not what is in it',
+    '    return c === entry || (within && c.startsWith(entry + pmod.sep));',
+    '    return c === entry;'],
+  [WHAT_RUNS_HOOK, "What runs: a workspace's own file reached through a linked folder is ordinary outside access",
+    '  if (writing && isWorkspaceAnswerFile(resolvedPath, workspaceRoot, foldsCase)) {\n    // `where` says',
+    '  if (inside && writing && isWorkspaceAnswerFile(resolvedPath, workspaceRoot, foldsCase)) {\n    // `where` says'],
+  [WHAT_RUNS_HOOK, "What runs: another workspace's .mcp.json and hook scripts are not matched",
+    '    || (pmod === path && (isRundockWorkspaceSettingsFile(resolvedPath) || isRundockWorkspaceRunsFile(resolvedPath)));',
+    '    || (pmod === path && isRundockWorkspaceSettingsFile(resolvedPath));'],
+  [WHAT_RUNS_CLIENT, 'What runs: the card for .mcp.json and the project settings is worded as an ordinary answer file',
+    "      if (parts[n - 1] === '.mcp.json' || (n >= 2 && parts[n - 2] === '.claude' && parts[n - 1] === 'settings.json')) return 'runs';\n",
+    ''],
+  [WHAT_RUNS_CLIENT, 'What runs: the card for a hook script is worded as an ordinary answer file',
+    "      if (parts.some((s, i) => s === '.claude' && parts[i + 1] === 'hooks')) return 'runs';\n",
+    ''],
+  [WHAT_RUNS_CODEX, 'What runs: a Codex file change inside the hook-scripts folder of a workspace with no state file is accepted',
+    '  if (own || hook.isWorkspaceAnswerFile(g, workspaceRoot)) return true;',
+    '  if (own) return true;'],
 ];
 const REPORTER = ['--test-reporter', 'spec'];
 

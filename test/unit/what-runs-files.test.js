@@ -7,6 +7,11 @@
 // once by a file tool, and with no card for a shell redirect, in both modes.
 // Rewriting it switches every permission check off.
 //
+// Three more files decide what the runtime starts, outside the shell sandbox:
+// `.mcp.json`, whose stdio servers start at the next spawn; the project's
+// `.claude/settings.json`, whose hooks and `env` the runtime acts on; and the
+// scripts under `.claude/hooks/` that those hooks run.
+//
 // Each is now an answer file: it asks every time, with Allow and Deny only, in
 // Notes and Code mode alike; no saved "Always allow" or folder grant answers
 // it; and when Rundock cannot be asked it is refused. Driven through the real
@@ -30,6 +35,9 @@ before(async () => {
   // A launcher of the shape Rundock writes, in this made-up workspace only.
   fx.write(path.join(world.ws, '.rundock', 'permission-hook.sh'), '#!/bin/sh\nexit 0\n');
   fx.write(path.join(world.ws, 'notes.txt'), 'notes\n');
+  fx.write(path.join(world.ws, '.mcp.json'), '{ "mcpServers": {} }\n');
+  fx.write(path.join(world.ws, '.claude', 'settings.json'), '{}\n');
+  fx.write(path.join(world.ws, '.claude', 'hooks', 'pre-tool.sh'), '#!/bin/sh\nexit 0\n');
   // A second Rundock workspace inside the working folder.
   other = path.join(world.projects, 'other-ws');
   fx.write(path.join(other, '.rundock', 'state.json'), '{}\n');
@@ -43,9 +51,14 @@ after(async () => {
 
 // Each file, and the words its card must use: its heading, then why it asks.
 const LAUNCHER = { summary: /permission-summary">Wants to change Rundock's permission checks</, says: /starts Rundock's permission checks themselves/ };
+const RUNS = { summary: /permission-summary">Wants to change what runs outside the sandbox</, says: /decides what Rundock or Claude Code runs, outside the sandbox/ };
 const TARGETS = [
   { rel: '.rundock/permission-hook.sh', ...LAUNCHER },
   { rel: '.rundock/permission-hook.cmd', ...LAUNCHER },
+  { rel: '.mcp.json', ...RUNS },
+  { rel: '.claude/settings.json', ...RUNS },
+  { rel: '.claude/hooks/pre-tool.sh', ...RUNS },
+  { rel: '.claude/hooks/lib/notify.py', ...RUNS },
 ];
 // Every shell form that writes, edits or deletes a file. `F` is the target as
 // an agent would write it, relative to the workspace.
@@ -118,6 +131,50 @@ describe('the files that decide what runs always ask, through the real hook', { 
     });
   }
 
+  test('the hook-scripts folder itself, removed, replaced or created, asks', async () => {
+    for (const { codeMode, label } of MODES) {
+      for (const command of ['rm -rf .claude/hooks', 'mv tools .claude/hooks', 'mkdir -p .claude/hooks/new', 'cp -r tools .claude/hooks']) {
+        assertAlwaysAsks(await fx.judge(world, capture, deadPort, { tool: 'Bash', input: { command }, cwd: world.ws, codeMode }), `${label}: ${command}`);
+      }
+    }
+  });
+
+  test('they ask in a workspace that has no state file yet', async () => {
+    // Without `.rundock/state.json` a folder is not recognised as a Rundock
+    // workspace by name, so this is the workspace's own registry speaking.
+    const bare = path.join(world.root, 'bare-ws');
+    fx.write(path.join(bare, '.claude', 'settings.json'), '{}\n');
+    for (const { codeMode, label } of MODES) {
+      const env = { ...fx.hookEnv(world, { port: deadPort, codeMode }), RUNDOCK_WORKSPACE: bare };
+      for (const rel of ['.claude/settings.json', '.mcp.json', '.claude/hooks/pre-tool.sh', '.claude/hooks/lib/notify.py']) {
+        for (const [tool, input] of [['Write', { file_path: path.join(bare, rel), content: '{}' }], ['Bash', { command: `echo '{}' > ${rel}` }]]) {
+          const out = await fx.runHook(env, { session_id: 'bare', hook_event_name: 'PreToolUse', tool_name: tool, tool_input: input, cwd: bare });
+          assert.strictEqual(out.decision, 'deny', `${label}: ${tool} ${rel} is refused with nobody to ask`);
+          assert.match(out.reason, /never changed without asking/, `${label}: ${tool} ${rel}, and says why`);
+        }
+      }
+    }
+  });
+
+  test('a .claude folder kept elsewhere through a symlink is still the workspace\'s own', async () => {
+    // A person who keeps their settings in a dotfiles folder and links it in.
+    const kept = path.join(world.root, 'dotfiles', 'claude');
+    fx.write(path.join(kept, 'settings.json'), '{}\n');
+    fx.write(path.join(kept, 'settings.local.json'), '{}\n');
+    fx.write(path.join(kept, 'hooks', 'pre-tool.sh'), '#!/bin/sh\n');
+    const linked = path.join(world.root, 'linked-ws');
+    fx.write(path.join(linked, '.rundock', 'state.json'), '{}\n');
+    fs.symlinkSync(kept, path.join(linked, '.claude'));
+    for (const { codeMode, label } of MODES) {
+      for (const rel of ['.claude/settings.json', '.claude/hooks/pre-tool.sh', '.claude/settings.local.json']) {
+        const r = await fx.judge({ ...world, ws: linked }, capture, deadPort, { tool: 'Write', input: { file_path: path.join(linked, rel), content: 'x' }, cwd: linked, codeMode, extraDirs: [] });
+        assertAlwaysAsks(r, `${label}: Write ${rel}`);
+        const b = await fx.judge({ ...world, ws: linked }, capture, deadPort, { tool: 'Bash', input: { command: `echo x > ${rel}` }, cwd: linked, codeMode, extraDirs: [] });
+        assertAlwaysAsks(b, `${label}: echo x > ${rel}`);
+      }
+    }
+  });
+
   test('a symlink inside the workspace that points at the launcher is the launcher', async () => {
     const alias = path.join(world.ws, 'tools', 'hook.sh');
     fs.mkdirSync(path.dirname(alias), { recursive: true });
@@ -143,9 +200,9 @@ describe('the files that decide what runs always ask, through the real hook', { 
 
 // The same question asked of the classifier, where a test can choose the kind
 // of filesystem rather than inherit the host's.
-describe('a case variant of the launcher is the launcher where the filesystem folds case', { skip: SKIP }, () => {
+describe('a case variant of each file is that file where the filesystem folds case', { skip: SKIP }, () => {
   test('file tools and shell commands alike', () => {
-    for (const rel of ['.RUNDOCK/Permission-Hook.SH', '.Rundock/PERMISSION-HOOK.cmd']) {
+    for (const rel of ['.RUNDOCK/Permission-Hook.SH', '.Rundock/PERMISSION-HOOK.cmd', '.MCP.json', '.Claude/Settings.JSON', '.claude/Hooks/pre-tool.sh', '.CLAUDE/HOOKS/new.sh']) {
       const a = hook.classifyFileAccess('Write', { file_path: path.join(world.ws, rel) }, world.ws, [], world.home, true, true);
       assert.strictEqual(a && a.answerFile, true, `Write ${rel}`);
       const s = hook.classifyShellAccess('Bash', { command: `echo x > ${rel}` }, world.ws, [], world.home, true, { cwd: world.ws });
@@ -254,7 +311,8 @@ describe('nothing stored answers it', { skip: SKIP }, () => {
 
 // The files beside them are graded as they were.
 describe('the ordinary files beside them are unchanged', { skip: SKIP }, () => {
-  const NEIGHBOURS = ['.rundock/scratch/x.txt', '.claude/agents/a.md', '.claude/skills/s/SKILL.md', 'mcp.json', '.rundock/permission-hook.sh.bak'];
+  const NEIGHBOURS = ['.rundock/scratch/x.txt', '.claude/agents/a.md', '.claude/skills/s/SKILL.md', 'mcp.json', '.rundock/permission-hook.sh.bak',
+    'notes/.mcp.json', '.claude/settings.json.bak', '.claude/hooks.md', '.claude/hooks-old/x.sh'];
   for (const { codeMode, label } of MODES) {
     test(`a write to each is ordinary work (${label} mode)`, async () => {
       for (const rel of NEIGHBOURS) {

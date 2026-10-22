@@ -599,15 +599,22 @@
         + 'so a change to it can switch every check off. An agent can request a change to it, but never keep the '
         + 'permission: this asks every time, and there is no option to stop being asked.',
     },
+    runs: {
+      summary: 'Wants to change what runs outside the sandbox',
+      context: 'This file decides what Rundock or Claude Code runs, outside the sandbox. An agent can request a change to it, '
+        + 'but never keep the permission: this asks every time, and there is no option to stop being asked.',
+    },
   };
   function answerFileKind(paths) {
     const kinds = (Array.isArray(paths) ? paths : [paths]).map((p) => {
       const parts = String(p || '').split(/[\\/]+/).filter(Boolean).map(s => s.toLowerCase());
       const n = parts.length;
       if (n >= 2 && parts[n - 2] === '.rundock' && /^permission-hook\.(sh|cmd)$/.test(parts[n - 1])) return 'launcher';
+      if (parts[n - 1] === '.mcp.json' || (n >= 2 && parts[n - 2] === '.claude' && parts[n - 1] === 'settings.json')) return 'runs';
+      if (parts.some((s, i) => s === '.claude' && parts[i + 1] === 'hooks')) return 'runs';
       return 'answers';
     });
-    return ['launcher'].find(k => kinds.includes(k)) || 'answers';
+    return ['launcher', 'runs'].find(k => kinds.includes(k)) || 'answers';
   }
   function answerFileCopy(paths) { return ANSWER_FILE_COPY[answerFileKind(paths)].context; }
   function answerFileSummary(paths) { return ANSWER_FILE_COPY[answerFileKind(paths)].summary; }
