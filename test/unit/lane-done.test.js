@@ -127,6 +127,20 @@ describe('lane-done passes only on finished work', () => {
     assert.match(failures[0], /red-first.*still going/);
   });
 
+  test('a red-first run recorded in the checkout is seen whatever the temp folder, by its suite\'s group too', (t) => {
+    const w = finished(t);
+    const { spawn } = require('node:child_process');
+    const suite = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], { detached: true, stdio: 'ignore' });
+    t.after(() => { try { process.kill(-suite.pid, 'SIGKILL'); } catch { /* gone */ } });
+    const gone = spawnSync(process.execPath, ['-e', '']).pid;
+    fs.mkdirSync(path.join(w.root, '.tool-runs'));
+    fs.writeFileSync(path.join(w.root, '.tool-runs', `${gone}.json`),
+      JSON.stringify({ pid: gone, group: suite.pid, what: 'npm run red-first' }));
+    const { failures } = w.check();
+    assert.strictEqual(failures.length, 1, failures.join('\n'));
+    assert.match(failures[0], new RegExp(`red-first \\(pid ${gone}, process group ${suite.pid}\\) is still going`));
+  });
+
   test('a mutation run that died is named with the files it may have left mutated', (t) => {
     const w = finished(t);
     const gone = spawnSync(process.execPath, ['-e', '']).pid;

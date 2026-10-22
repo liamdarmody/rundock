@@ -400,6 +400,31 @@ describe('the restore runs whatever happens, which is the claim AC-4 makes', () 
   // reverted run throw while the first run passes, which is the only way to
   // reach the restore by the path a real failure would take.
 
+  test('a run is recorded in the checkout while it runs, so a check under another temp folder sees it', async () => {
+    // The claim lives in the temp folder, and a sandboxed session can have a
+    // temp folder of its own: a check made there never saw the run.
+    const { readRuns } = require('../../scripts/lib/run-record.js');
+    const { dir } = repo({
+      added: { 'lib2.js': 'module.exports.b = () => 2;\n' },
+      testFile: "const assert = require('assert');\nmodule.exports = () => { assert.ok(true); };\n",
+    });
+    try {
+      const seen = [];
+      const runner = () => { seen.push(readRuns(dir)); return seen.length === 1; };
+      const r = await redFirst({ repo: dir, base: 'main', tests: CMD, runner });
+      assert.notStrictEqual(r.outcome, 'refused', r.reason);
+      assert.strictEqual(seen.length, 2, `both runs were reached: ${r.outcome}, ${r.reason}`);
+      for (const runs of seen) {
+        assert.strictEqual(runs.length, 1, 'one record in the checkout during each run');
+        assert.match(runs[0].what, /red-first/);
+        assert.strictEqual(runs[0].pid, process.pid);
+      }
+      assert.deepStrictEqual(readRuns(dir), [], 'and none once it has ended');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test('a throw from the reverted run still puts the source back', async () => {
     const { dir } = repo({
       added: { 'lib2.js': 'module.exports.b = () => 2;\n' },

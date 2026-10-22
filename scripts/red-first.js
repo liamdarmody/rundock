@@ -348,6 +348,7 @@ function restoreTo(repo, ref, files) {
 // `groupRunning` and `endGroup` are re-exported because this tool's own
 // orphan tests drive them directly.
 const { exists, groupRunning, endGroup, pause, POLL_MS } = require('./lib/process-group.js');
+const { recordRun } = require('./lib/run-record.js');
 
 /**
  * Where a run in progress is recorded, so the next start can see it.
@@ -689,7 +690,12 @@ async function redFirst({ repo, base = null, tests, log = () => {}, runner = nul
    * suite under it. Writing the record back on every ending would be a change
    * no reader and no test could observe.
    */
+  // THE SAME RUN, RECORDED IN THE CHECKOUT, which a check run under another
+  // temp folder can see. Written once the tree has been found clean.
+  let checkoutRecord = null;
+
   const writeRunRecord = (group) => {
+    if (checkoutRecord) checkoutRecord.update({ group: survived[0] || group || null });
     if (!holdsRecord) return;
     try {
       publishRecord(recordFile, { ...claimed, group: group || null,
@@ -713,6 +719,8 @@ async function redFirst({ repo, base = null, tests, log = () => {}, runner = nul
    * one syscall and means a record belonging to somebody else is left alone.
    */
   const releaseRun = () => {
+    if (checkoutRecord && survived.length) checkoutRecord.keep();
+    else if (checkoutRecord) checkoutRecord.release();
     if (!holdsRecord) return;
     const held = readRunRecord(recordFile);
     if (!held || Number(held.pid) !== process.pid) return;
@@ -858,6 +866,7 @@ async function redFirst({ repo, base = null, tests, log = () => {}, runner = nul
       return result('refused', 'the working tree has uncommitted changes, and this '
         + 'rewrites tracked files; commit or stash first');
     }
+    checkoutRecord = recordRun(repo, 'npm run red-first');
 
     const resolved = resolveBase(repo, base);
     if (!resolved.ok) return result('refused', resolved.reason);
@@ -964,7 +973,8 @@ async function redFirst({ repo, base = null, tests, log = () => {}, runner = nul
       namesFailedWithoutChange: withoutChange.names || [],
     };
 
-    if (git(repo, ['status', '--porcelain'])) {
+    // The run's own record in the checkout is not a change it failed to undo.
+    if (git(repo, ['status', '--porcelain', '--', '.', ':(exclude).tool-runs'])) {
       return result('refused', 'the tree did not come back clean after restoring; '
         + 'inspect before trusting any result', { source: sourceFiles, tests: testFiles });
     }

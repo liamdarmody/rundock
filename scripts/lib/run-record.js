@@ -32,7 +32,19 @@ function isAlive(pid) {
   }
 }
 
-/** Every record in `root`, with whether its process is still alive. */
+// A run's suite can head a process group of its own and outlive the run;
+// signal 0 to the negated id asks about the whole group.
+function groupAlive(group) {
+  if (!Number.isInteger(group) || group <= 0) return false;
+  try {
+    process.kill(-group, 0);
+    return true;
+  } catch (err) {
+    return err.code === 'EPERM';
+  }
+}
+
+/** Every record in `root`, alive while its process or the group it names is. */
 function readRuns(root) {
   const dir = path.join(root, RUN_DIR);
   let names = [];
@@ -42,7 +54,7 @@ function readRuns(root) {
     const file = path.join(dir, name);
     try {
       const r = JSON.parse(fs.readFileSync(file, 'utf8'));
-      out.push({ ...r, file, alive: isAlive(r.pid) });
+      out.push({ ...r, file, alive: isAlive(r.pid) || groupAlive(r.group) });
     } catch { /* a half-written or foreign file names no run */ }
   }
   return out;
@@ -50,7 +62,9 @@ function readRuns(root) {
 
 /**
  * Record this process as running `what` in `root` until it exits or is asked
- * to stop. Returns `{ file, release }`; release removes the record early.
+ * to stop. Returns `{ file, release, update, keep }`: release removes the
+ * record early, update adds fields to it (a suite's process group), and keep
+ * leaves it in place past this process, for a group known to have survived.
  */
 function recordRun(root, what) {
   for (const old of readRuns(root).filter((r) => !r.alive)) fs.rmSync(old.file, { force: true });
@@ -59,12 +73,22 @@ function recordRun(root, what) {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, `${JSON.stringify({ pid: process.pid, what, startedAt: new Date().toISOString() })}\n`);
   } catch {
-    return { file: null, release: () => {} };
+    return { file: null, release: () => {}, update: () => {}, keep: () => {} };
   }
-  const release = () => {
-    try { fs.rmSync(file, { force: true }); } catch { /* already gone */ }
+  let done = false;
+  const base = { pid: process.pid, what, startedAt: new Date().toISOString() };
+  const keep = () => {
+    done = true;
     process.removeListener('exit', release);
     for (const signal of SIGNALS) process.removeListener(signal, onSignal);
+  };
+  const release = () => {
+    try { fs.rmSync(file, { force: true }); } catch { /* already gone */ }
+    keep();
+  };
+  const update = (fields) => {
+    if (done) return;
+    try { fs.writeFileSync(file, `${JSON.stringify({ ...base, ...fields })}\n`); } catch { /* the record stays as it was */ }
   };
   // RE-RAISED, so whatever drove the run sees it die of the signal it sent,
   // and only where nothing else is listening, so another module's tidying
@@ -75,7 +99,7 @@ function recordRun(root, what) {
   }
   process.on('exit', release);
   for (const signal of SIGNALS) process.on(signal, onSignal);
-  return { file, release };
+  return { file, release, update, keep };
 }
 
-module.exports = { RUN_DIR, isAlive, readRuns, recordRun };
+module.exports = { RUN_DIR, isAlive, groupAlive, readRuns, recordRun };

@@ -86,6 +86,7 @@ const FIXTURE_NOTICE = { src: path.join(ROOT, 'test', 'helpers', 'code-mode-fixt
 const PREFLIGHT = { src: path.join(ROOT, 'scripts', 'preflight.js'), suite: 'test/unit/preflight.test.js' };
 const LANE_DONE = { src: path.join(ROOT, 'scripts', 'lane-done.js'), suite: 'test/unit/lane-done.test.js' };
 const RUN_RECORD = { src: path.join(ROOT, 'scripts', 'lib', 'run-record.js'), suite: 'test/unit/run-record.test.js' };
+const RED_FIRST_RECORD = { src: path.join(ROOT, 'scripts', 'red-first.js'), suite: 'test/unit/red-first.test.js' };
 
 const MUTATIONS = [
   // ===== A DESTRUCTIVE STEP WITHOUT ITS CAUTION =====
@@ -476,6 +477,18 @@ const MUTATIONS = [
   [RUN_RECORD, "a run asked to stop removes its record",
     "  for (const signal of SIGNALS) process.on(signal, onSignal);\n",
     ""],
+  [RUN_RECORD, "a record is alive while the process group it names is",
+    "isAlive(r.pid) || groupAlive(r.group)",
+    "isAlive(r.pid)"],
+  [RUN_RECORD, "a kept record outlives the run that kept it",
+    "    process.removeListener('exit', release);\n",
+    ""],
+  [RED_FIRST_RECORD, "a red-first run is recorded in the checkout",
+    "    checkoutRecord = recordRun(repo, 'npm run red-first');\n",
+    ""],
+  [RED_FIRST_RECORD, "the run's own checkout record is not a change it failed to undo",
+    "['status', '--porcelain', '--', '.', ':(exclude).tool-runs']",
+    "['status', '--porcelain']"],
   [RUN_RECORD, "a run asked to stop still dies of the signal",
     "    if (process.listenerCount(signal) === 0) process.kill(process.pid, signal);\n",
     ""],

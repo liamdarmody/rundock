@@ -66,3 +66,27 @@ test('a record whose process has gone is read as not alive, and swept by the nex
   t.after(() => run.release());
   assert.deepStrictEqual(readRuns(root).map((r) => r.what), ['this run']);
 });
+
+test('a record can name the process group a run started, and is alive while that group is', (t) => {
+  // A run killed outright can leave its suite running in a group of its own;
+  // the record says so, so a check reads the run as still going.
+  const root = scratch(t);
+  const run = recordRun(root, 'a run with a suite');
+  t.after(() => run.release());
+  const suite = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], { detached: true, stdio: 'ignore' });
+  t.after(() => { try { process.kill(-suite.pid, 'SIGKILL'); } catch { /* gone */ } });
+  run.update({ group: suite.pid });
+  const gone = spawnSync(process.execPath, ['-e', '']).pid;
+  const file = path.join(root, RUN_DIR, `${process.pid}.json`);
+  fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, 'utf8')), pid: gone }));
+  const [record] = readRuns(root);
+  assert.strictEqual(record.group, suite.pid);
+  assert.strictEqual(record.alive, true, 'its pid is gone, but its group is not');
+});
+
+test('a kept record outlives the run that kept it', (t) => {
+  const root = scratch(t);
+  const r = spawnSync(process.execPath, ['-e', `const run = require(${JSON.stringify(MODULE)}).recordRun(${JSON.stringify(root)}, 'a run that left a survivor'); run.keep();`]);
+  assert.strictEqual(r.status, 0);
+  assert.strictEqual(fs.readdirSync(path.join(root, RUN_DIR)).length, 1);
+});

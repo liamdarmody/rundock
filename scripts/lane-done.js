@@ -28,7 +28,7 @@ const { execFileSync, spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const { readMarkers } = require('../test/tools/mutation-run.js');
-const { readRuns, isAlive } = require('./lib/run-record.js');
+const { readRuns, isAlive, groupAlive } = require('./lib/run-record.js');
 const { runRecordPath } = require('./red-first.js');
 
 // Overridable ONLY so the command can be exercised against a throwaway
@@ -38,17 +38,11 @@ const AGAIN = 'then run lane-done again';
 
 const names = (files) => (files.length > 10 ? `${files.slice(0, 10).join(', ')} and ${files.length - 10} more` : files.join(', '));
 
-// A red-first run's suite heads its own process group, which can outlive the
-// tool that started it; signal 0 to the negated id asks about the group.
-function groupAlive(group) {
-  if (!Number.isInteger(group) || group <= 0) return false;
-  try { process.kill(-group, 0); return true; } catch (err) { return err.code === 'EPERM'; }
-}
-
 function runsInProgress(root) {
   const out = [];
   for (const r of readRuns(root).filter((x) => x.alive)) {
-    out.push(`a run of ${r.what} (pid ${r.pid}) is still going in this checkout: wait for it to finish, or stop it, ${AGAIN}.`);
+    const group = Number.isInteger(r.group) && r.group > 0 ? `, process group ${r.group}` : '';
+    out.push(`a run of ${r.what} (pid ${r.pid}${group}) is still going in this checkout: wait for it to finish, or stop it, ${AGAIN}.`);
   }
   for (const m of readMarkers(root)) {
     const rel = path.relative(root, m.file);
