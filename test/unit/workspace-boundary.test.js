@@ -1289,14 +1289,29 @@ describe('the block denies the runtime\'s own escape paths, whatever runtime ver
     }
   });
 
-  test('the workspace\'s own agents and skills stay writable: Rundock and its agents keep them there', () => {
+  test('the home folder\'s escape paths are not joined onto the workspace, whose agents and skills Rundock writes', () => {
     // The home folder's agents/ and skills/ are denied; the workspace's are the
-    // copies Rundock reads, writes through its own server, and lets agents edit.
+    // copies Rundock reads and writes through its own server.
     const deny = scaffold.sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], []).filesystem.denyWrite;
     for (const name of ['agents', 'skills', 'plugins', 'hooks', 'commands', 'backups']) {
       assert.ok(!deny.some((p) => p === `${WS}/.claude/${name}` || p.startsWith(`${WS}/.claude/${name}/`)),
         `${WS}/.claude/${name} is not denied`);
     }
+  });
+
+  test('the workspace\'s project settings file is denied too, last of all', () => {
+    // The runtime loads `.claude/settings.json` from the workspace for every
+    // agent Rundock spawns there, and starts the hooks it names itself.
+    for (const mode of ['on', 'off']) {
+      const deny = scaffold.sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], [], mode).filesystem.denyWrite;
+      assert.ok(deny.includes(`${WS}/.claude/settings.json`), `the ${mode} block denies the project settings file`);
+    }
+    const block = scaffold.sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], []);
+    const deny = block.filesystem.denyWrite;
+    assert.strictEqual(deny[deny.length - 1], `${WS}/.claude/settings.json`, 'appended, never inserted');
+    assert.deepStrictEqual(deny.slice(-1 - HOME_ESCAPES.length, -1), HOME_ESCAPES, 'straight after the home folder\'s escape paths');
+    const withoutIt = { ...block, filesystem: { ...block.filesystem, denyWrite: deny.slice(0, -1) } };
+    assert.strictEqual(scaffold.isRundockSandbox(withoutIt, 'darwin'), true, 'so a block without it is still ours, and upgrades');
   });
 });
 
@@ -1304,9 +1319,10 @@ describe('the block denies the runtime\'s own escape paths, whatever runtime ver
 // FILES: on its next open, and on every write of the switch, in both shapes.
 describe('an existing workspace gains the escape-path denies on open, and keeps them across the switch', () => {
   const home = os.homedir();
-  const escapes = () => [
+  const escapes = (ws) => [
     ...['settings.json', 'plugins', 'hooks', 'skills', 'agents', 'commands', 'backups'].map((f) => path.posix.join(home, '.claude', f)),
     ...['.claude-staging-oauth.json', '.claude-local-oauth.json', '.claude-custom-oauth.json'].map((f) => path.posix.join(home, f)),
+    path.posix.join(ws, '.claude', 'settings.json'),
   ];
   function open(ws) {
     const prev = scaffold.wireScaffoldDeps({ invalidateAgentCache: () => {}, rebaselineAgentsWatcher: () => {} });
@@ -1326,7 +1342,7 @@ describe('an existing workspace gains the escape-path denies on open, and keeps 
     open(ws);
     const settings = read(ws);
     settings.sandbox.filesystem.denyWrite = settings.sandbox.filesystem.denyWrite.slice(0, LAST_RELEASE_DENY_LENGTH);
-    assert.ok(settings.sandbox.filesystem.denyWrite.every((p) => !escapes().includes(p)), 'fixture sanity: none of the escape paths yet');
+    assert.ok(settings.sandbox.filesystem.denyWrite.every((p) => !escapes(ws).includes(p)), 'fixture sanity: none of the escape paths yet');
     fs.writeFileSync(settingsPath(ws), JSON.stringify(settings, null, 2));
     return ws;
   }
@@ -1338,7 +1354,7 @@ describe('an existing workspace gains the escape-path denies on open, and keeps 
       assert.strictEqual(before.enabled, enabled, 'fixture sanity: the shape under test');
       open(ws);
       const after = read(ws).sandbox;
-      for (const p of escapes()) assert.ok(after.filesystem.denyWrite.includes(p), `${p} is denied after the open`);
+      for (const p of escapes(ws)) assert.ok(after.filesystem.denyWrite.includes(p), `${p} is denied after the open`);
       assert.deepStrictEqual(after.filesystem.denyWrite.slice(0, LAST_RELEASE_DENY_LENGTH), before.filesystem.denyWrite,
         'the entries the last release wrote keep their place');
       assert.deepStrictEqual(after.filesystem.allowWrite, before.filesystem.allowWrite, 'nothing the block permitted moved');
@@ -1350,10 +1366,10 @@ describe('an existing workspace gains the escape-path denies on open, and keeps 
     const ws = workspaceWithLastReleaseBlock('wb-escape-switch-');
     scaffold.reconcileSandboxForMode(ws, 'off', 'darwin');
     assert.strictEqual(read(ws).sandbox.enabled, false, 'sanity: the switch wrote the off shape');
-    for (const p of escapes()) assert.ok(read(ws).sandbox.filesystem.denyWrite.includes(p), `${p} is denied in the off shape`);
+    for (const p of escapes(ws)) assert.ok(read(ws).sandbox.filesystem.denyWrite.includes(p), `${p} is denied in the off shape`);
     scaffold.reconcileSandboxForMode(ws, 'on', 'darwin');
     assert.strictEqual(read(ws).sandbox.enabled, true, 'sanity: and back on');
-    for (const p of escapes()) assert.ok(read(ws).sandbox.filesystem.denyWrite.includes(p), `${p} is denied in the on shape`);
+    for (const p of escapes(ws)) assert.ok(read(ws).sandbox.filesystem.denyWrite.includes(p), `${p} is denied in the on shape`);
   });
 
   test('a block a person wrote does not gain them', () => {

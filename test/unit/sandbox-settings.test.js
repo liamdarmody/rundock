@@ -209,7 +209,8 @@ describe('sandboxSettings: named working folders', () => {
         `${HOME}/.claude/.credentials.json`, `${HOME}/.claude/.config.json`, `${HOME}/.codex/auth.json`, `${HOME}/.claude.json`, `${HOME}/.claude.json.backup`,
         `${HOME}/.claude/settings.json`, `${HOME}/.claude/plugins`, `${HOME}/.claude/hooks`, `${HOME}/.claude/skills`,
         `${HOME}/.claude/agents`, `${HOME}/.claude/commands`, `${HOME}/.claude/backups`,
-        `${HOME}/.claude-staging-oauth.json`, `${HOME}/.claude-local-oauth.json`, `${HOME}/.claude-custom-oauth.json`],
+        `${HOME}/.claude-staging-oauth.json`, `${HOME}/.claude-local-oauth.json`, `${HOME}/.claude-custom-oauth.json`,
+        `${WS}/.claude/settings.json`],
       'the intended difference, named: every file that holds answers to permission questions, the workspace\'s own permission configuration included, then the runtimes\' credential files, then what the runtime acts on outside the sandbox');
     const { denyWrite, ...filesystem } = s.filesystem;
     assert.deepStrictEqual({ ...s, filesystem }, SHIPPED_KNOWLEDGE_BLOCK,

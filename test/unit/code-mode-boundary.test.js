@@ -298,6 +298,7 @@ describe('the OS sandbox block is unchanged', () => {
           '/Users/someone/.claude/skills', '/Users/someone/.claude/agents', '/Users/someone/.claude/commands',
           '/Users/someone/.claude/backups', '/Users/someone/.claude-staging-oauth.json',
           '/Users/someone/.claude-local-oauth.json', '/Users/someone/.claude-custom-oauth.json',
+          '/w/ws/.claude/settings.json',
         ],
       },
     }, 'the development paths are a card rule, not a widening of what the operating system allows');
