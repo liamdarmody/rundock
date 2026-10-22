@@ -102,11 +102,15 @@ function judgeLine(text, ctx, depth = 0) {
   // verdict reads; see judgeGit.
   if (gitEnvironmentIn(text, ctx)) ctx = { ...ctx, gitRedirected: true };
   // Here-document bodies are data, not commands, unless a shell reads them.
-  // One that never ends leaves the line unreadable, and the shell runs it all
-  // the same, so its text is also read as commands: that can only find more,
-  // and a Keychain command on the line is still named.
-  const h = ctx.heredocsAsCommands ? { text, bodies: [], ok: true } : stripHeredocs(text, ctx.dialect);
-  if (!h.ok) return stricter(always('unreadable-command'), judgeLine(text, { ...ctx, heredocsAsCommands: true }, depth + 1));
+  // One that never ends leaves the line unreadable; what is known of it (see
+  // `unfinished` in code-mode-parse.js) is still read, for the Keychain alone.
+  const h = stripHeredocs(text, ctx.dialect);
+  if (!h.ok) return stricter(always('unreadable-command'), h.unfinished ? judgeStripped(h.unfinished, inert(ctx), depth + 1) : RUNS);
+  return judgeStripped(h, ctx, depth);
+}
+
+// A line with its here-document bodies cut out: its commands, strictest wins.
+function judgeStripped(h, ctx, depth) {
   let result = RUNS;
   for (const b of h.bodies) if (b.expands) result = stricter(result, judgeSubstitutions(b.body, ctx, depth, true));
   const segments = lexSegments(h.text, ctx.dialect);
@@ -135,7 +139,7 @@ function judgeLine(text, ctx, depth = 0) {
     const u = unwrap(words, ctx);
     if (!u) { prev = null; continue; }
     if (u.unreadable) { result = stricter(result, always('unreadable-command')); prev = null; continue; }
-    if (u.elevated) { result = stricter(result, judgeElevated(u, ctx, depth)); prev = u; continue; }
+    if (u.elevated) { result = stricter(result, judgeElevated(u, ctx)); prev = u; continue; }
     if (/(^|[^<])<<(?!<)/.test(seg.text) && SHELLS.has(u.verb)) shellReadsHeredoc = true;
     // A here-string (`<<< word`) is data for the command, not an argument,
     // except to a shell, which runs it.
@@ -288,13 +292,25 @@ function unwrap(words, ctx) {
 }
 const UNREADABLE = Object.freeze({ verb: null, args: [], words: [], elevated: false, unreadable: true });
 
-// ELEVATION ALWAYS ASKS. What sudo or doas runs is read as well, past their
-// own options, so a Keychain command under one is named as one; any other
-// elevation, or one with nothing after it, asks as elevation.
+// READ FOR THE KEYCHAIN ALONE. Where the answer is already Always asks
+// (elevation, an unreadable line), the rest is read only to name a Keychain
+// command, so it is read with no disk or git facts. Anything else it finds is
+// dropped by `stricter`, since the reason already given comes first.
+const INERT = Object.freeze({
+  exists: () => false, gitTop: () => null, gitStatus: () => ({ ok: false }), currentBranch: () => null,
+  defaultBranches: () => ['main', 'master'], isTag: () => false, isSymlink: () => false, readList: () => null,
+});
+const inert = ctx => ({ ...ctx, seam: INERT, canonical: p => ctx.pmod.resolve(p) });
+
+// ELEVATION ALWAYS ASKS. What sudo or doas runs is read as well, for the
+// Keychain alone: past their own options, word by word rather than as a new
+// line, and through no more than MAX_DEPTH elevations, so a long chain of them
+// costs little more than reading it once.
 const ELEVATION_VALUE_FLAGS = 'aCDghpRrTtUu';
 const ELEVATION_VALUE_LONG = /^--(user|group|host|prompt|chdir|chroot|close-from|role|type|command-timeout|other-user)$/;
-function judgeElevated(u, ctx, depth) {
-  if (ctx.dialect !== 'bash' || !['sudo', 'doas'].includes(verbOf(u.words[0].text, ctx))) return always('elevation');
+function judgeElevated(u, ctx) {
+  const elevations = (ctx.elevations || 0) + 1;
+  if (elevations > MAX_DEPTH || ctx.dialect !== 'bash' || !['sudo', 'doas'].includes(verbOf(u.words[0].text, ctx))) return always('elevation');
   const w = u.words.slice(1);
   while (w.length && /^-./.test(w[0].text)) {
     const f = w.shift().text;
@@ -303,8 +319,10 @@ function judgeElevated(u, ctx, depth) {
     // A short option taking a value takes the next word when it ends the group.
     if (!/^--/.test(f) && [...f.slice(1)].findIndex(c => ELEVATION_VALUE_FLAGS.includes(c)) === f.length - 2) w.shift();
   }
-  if (!w.length) return always('elevation');
-  return stricter(always('elevation'), judgeLine(w.map(x => x.raw).join(' '), ctx, depth + 1));
+  const quiet = { ...inert(ctx), elevations };
+  const inner = unwrap(w, quiet);
+  if (!inner || inner.unreadable) return always('elevation');
+  return stricter(always('elevation'), inner.elevated ? judgeElevated(inner, quiet) : judgeCommand(inner, quiet));
 }
 
 // THE WRAPPERS' OWN OPTIONS, as far as they are modelled: the words left once
@@ -792,7 +810,7 @@ function judgeFind(args, ctx) {
     const u = unwrap(cmd, ctx);
     if (!u) continue;
     if (u.unreadable) return always('unreadable-command');
-    if (u.elevated) return judgeElevated(u, ctx, 0);
+    if (u.elevated) return judgeElevated(u, ctx);
     if (['rm', 'unlink', 'rmdir', 'shred'].includes(u.verb)) {
       result = stricter(result, judgeDelete(startTargets, { bulk: true, kind: 'find' }, ctx));
     } else {
@@ -817,7 +835,7 @@ function judgeXargs(args, ctx) {
   const u = unwrap(ws, ctx);
   if (!u) return RUNS;
   if (u.unreadable) return always('unreadable-command');
-  if (u.elevated) return judgeElevated(u, ctx, 0);
+  if (u.elevated) return judgeElevated(u, ctx);
   return judgeCommand(u, ctx, { piped: true });
 }
 

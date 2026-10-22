@@ -308,7 +308,7 @@ Counts with no barrier, ranked by exposure:
 
 ### Wall-clock budgets
 
-Three assertions in the suite gate on elapsed real time. All three are
+Four assertions in the suite gate on elapsed real time. All four are
 **accept**, with the caveats stated.
 
 - **`test/integration/workspace-rollback-poll.test.js:185`**:
@@ -324,6 +324,13 @@ Three assertions in the suite gate on elapsed real time. All three are
   assertion two lines above it, which proves the same property exactly. The
   build measurement at line 51 is logged and never asserted, so it will never
   catch a regression.
+- **`test/unit/keychain-commands.test.js`**, "a long chain of xargs and sudo is
+  read quickly, and still asks": `Date.now() - started < 1000`. A budget
+  against observed times of 2 to 8ms, so over 100x headroom. It stands for a
+  cost rather than a behaviour: reading past each elevation once re-read the
+  rest of the line, which took 172ms at 500 elevations deep and overflowed the
+  stack at 2000. The overflow is also caught by the verdict asserted beside
+  the budget; the slow half is caught only by the budget.
 - **`test/integration/http-api.test.js:351`**:
   `Date.now() - t0 >= PERM_TIMEOUT - 50`. A lower bound proving the server did
   not short-circuit its own timeout. Correct shape; the `- 50` is a bare

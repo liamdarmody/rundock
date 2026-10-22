@@ -135,7 +135,7 @@ function stripHeredocs(line, dialect = 'bash') {
     if (ch === '\n' && pending.length) {
       const markers = pending.splice(0);
       const j = skipHeredocBodies(s, i, markers);
-      if (j < 0) return { text: s, bodies, ok: false };
+      if (j < 0) return { text: s, bodies, ok: false, unfinished: unfinished(out, bodies, s.slice(i + 1), markers[0]) };
       for (const m of markers) bodies.push({ body: m.body, expands: !m.quoted });
       out += '\n';
       i = j;
@@ -143,8 +143,16 @@ function stripHeredocs(line, dialect = 'bash') {
     }
     out += ch;
   }
-  if (pending.length) return { text: s, bodies, ok: false };
+  if (pending.length) return { text: s, bodies, ok: false, unfinished: unfinished(out, bodies, '', pending[0]) };
   return { text: out, bodies, ok: true };
+}
+
+// A here-document whose delimiter never comes: the line is unreadable, and
+// what is known of it is still given, read on the side of finding more. The
+// command lines up to the marker, and the body taken to the end of the text,
+// which is data unless a shell reads it, as for any here-document.
+function unfinished(text, bodies, body, marker) {
+  return { text, bodies: [...bodies, { body, expands: !marker.quoted }], ok: true };
 }
 
 // The commands a line runs inside itself: the bodies of `$( )`, backticks and

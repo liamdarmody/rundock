@@ -244,6 +244,7 @@ const CONNECTOR_HANDLER_FLOW = { src: path.join(ROOT, 'lib', 'protocol', 'handle
 const KEYCHAIN_VERDICT = { src: path.join(ROOT, 'scripts', 'code-mode-verdict.js'), suite: 'test/unit/keychain-commands.test.js' };
 const KEYCHAIN_CLIENT = { src: path.join(ROOT, 'public', 'permissions.js'), suite: 'test/unit/keychain-commands.test.js' };
 const KEYCHAIN_CODEX = { src: path.join(ROOT, 'lib', 'runtime', 'codex-approval.js'), suite: 'test/unit/keychain-commands.test.js' };
+const KEYCHAIN_PARSE = { src: path.join(ROOT, 'scripts', 'code-mode-parse.js'), suite: 'test/unit/keychain-commands.test.js' };
 const KEYCHAIN_HOOK_FLOW = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/integration/keychain-approvals.test.js' };
 
 const MUTATIONS = [
@@ -1014,8 +1015,8 @@ const MUTATIONS = [
     "  const gone = new Set(want.restores ? st.deleted || [] : []);",
     "  const gone = new Set();"],
   [CM_HOOK, "M14: the verdict is sent in Notes mode",
-    "  const verdict = (codeMode && shellCommand !== null)",
-    "  const verdict = (shellCommand !== null)"],
+    "    ? (codeMode ? codeModeVerdict : keychainVerdict)({ toolName: data.tool_name,",
+    "    ? codeModeVerdict({ toolName: data.tool_name,"],
   [CM_CLIENT, "M15: the client offers Always allow on Always asks",
     "    if (verdict && verdict.verdict) return verdict.verdict === 'asks-once';",
     "    if (verdict && verdict.verdict) return verdict.verdict !== 'runs';"],
@@ -1684,8 +1685,16 @@ const MUTATIONS = [
     ' || (b.reason === KEYCHAIN && b.verdict === a.verdict) ? b : a);',
     ' ? b : a);'],
   [KEYCHAIN_VERDICT, 'Keychain: what sudo runs is not read',
-    "  return stricter(always('elevation'), judgeLine(w.map(x => x.raw).join(' '), ctx, depth + 1));",
+    "  return stricter(always('elevation'), inner.elevated ? judgeElevated(inner, quiet) : judgeCommand(inner, quiet));",
     "  return always('elevation');"],
+  // Read what sudo runs, or an unfinished here-document, with the facts and
+  // they ask git about everything they pass, for an answer that cannot change.
+  [KEYCHAIN_VERDICT, 'Keychain: what sudo runs is read with git',
+    '  const quiet = { ...inert(ctx), elevations };',
+    '  const quiet = { ...ctx, elevations };'],
+  [KEYCHAIN_VERDICT, 'Keychain: elevations are read however deep',
+    "  if (elevations > MAX_DEPTH || ctx.dialect !== 'bash'",
+    "  if (ctx.dialect !== 'bash'"],
   [KEYCHAIN_VERDICT, "Keychain: sudo's short options are read as the command",
     "    if (!/^--/.test(f) && [...f.slice(1)].findIndex(c => ELEVATION_VALUE_FLAGS.includes(c)) === f.length - 2) w.shift();\n",
     ''],
@@ -1696,16 +1705,26 @@ const MUTATIONS = [
     'findIndex(c => ELEVATION_VALUE_FLAGS.includes(c)) === f.length - 2) w.shift();',
     'findIndex(c => ELEVATION_VALUE_FLAGS.includes(c)) !== -1) w.shift();'],
   [KEYCHAIN_VERDICT, 'Keychain: xargs and sudo is not read past',
-    '  if (u.elevated) return judgeElevated(u, ctx, 0);\n  return judgeCommand(u, ctx, { piped: true });',
+    '  if (u.elevated) return judgeElevated(u, ctx);\n  return judgeCommand(u, ctx, { piped: true });',
     "  if (u.elevated) return always('elevation');\n  return judgeCommand(u, ctx, { piped: true });"],
   [KEYCHAIN_VERDICT, 'Keychain: find -exec and sudo is not read past',
-    "    if (u.elevated) return judgeElevated(u, ctx, 0);\n    if (['rm',",
+    "    if (u.elevated) return judgeElevated(u, ctx);\n    if (['rm',",
     "    if (u.elevated) return always('elevation');\n    if (['rm',"],
   // The shell runs a line whose here-document never ends; reading none of it
   // lets a Keychain read ride in on one in Notes mode.
   [KEYCHAIN_VERDICT, 'Keychain: a here-document that never ends hides the line',
-    "  if (!h.ok) return stricter(always('unreadable-command'), judgeLine(text, { ...ctx, heredocsAsCommands: true }, depth + 1));",
+    "  if (!h.ok) return stricter(always('unreadable-command'), h.unfinished ? judgeStripped(h.unfinished, inert(ctx), depth + 1) : RUNS);",
     "  if (!h.ok) return always('unreadable-command');"],
+  [KEYCHAIN_VERDICT, 'Keychain: an unfinished here-document is read with git',
+    'judgeStripped(h.unfinished, inert(ctx), depth + 1)',
+    'judgeStripped(h.unfinished, ctx, depth + 1)'],
+  [KEYCHAIN_PARSE, 'Keychain: an unfinished here-document gives nothing to read',
+    '      if (j < 0) return { text: s, bodies, ok: false, unfinished: unfinished(out, bodies, s.slice(i + 1), markers[0]) };',
+    '      if (j < 0) return { text: s, bodies, ok: false };'],
+  // Read an unfinished body as commands and prose in it raises a Keychain card.
+  [KEYCHAIN_PARSE, "Keychain: an unfinished here-document's body is read as commands",
+    '  return { text, bodies: [...bodies, { body, expands: !marker.quoted }], ok: true };',
+    '  return { text: `${text}\n${body}`, bodies, ok: true };'],
   [KEYCHAIN_VERDICT, 'Keychain: Notes mode is handed every verdict',
     '  return v.reason === KEYCHAIN ? v : null;',
     '  return v;'],

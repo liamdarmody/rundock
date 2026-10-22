@@ -219,6 +219,74 @@ describe('what reading the elevation adds, and what it leaves alone', () => {
   });
 });
 
+// A context that counts every fact the verdict asks the disk or git for, and
+// answers as a repository holding unsaved work under build/ would.
+function counting() {
+  const calls = { n: 0 };
+  const tick = (v) => () => { calls.n++; return v; };
+  return {
+    calls,
+    context: {
+      exists: tick(true), gitTop: tick(WS), currentBranch: tick('feat/x'), defaultBranches: tick(['main']),
+      gitStatus: tick({ ok: true, tracked: [], untracked: ['build/new.txt'], ignoredEnv: [] }),
+      isTag: tick(false), isSymlink: tick(false), readList: tick(null),
+    },
+  };
+}
+function codeModeCounting(command) {
+  const c = counting();
+  const v = codeModeVerdict({ toolName: 'Bash', command, cwd: WS, workspaceRoot: WS, extraDirs: [], home: HOME, platform: 'darwin', context: c.context });
+  return { v, calls: c.calls.n };
+}
+
+describe('reading for the Keychain asks the disk and git for nothing', () => {
+  test('the counter counts: an ordinary delete still reads git', () => {
+    const r = codeModeCounting('rm -rf build');
+    assert.strictEqual(r.v.reason, 'unsaved-work');
+    assert.ok(r.calls > 0);
+  });
+
+  test('what sudo, doas, xargs sudo and find -exec sudo run', () => {
+    for (const command of ['sudo -- rm -rf build', 'doas rm -rf build', 'echo build | xargs sudo rm -rf',
+      'find . -name x -exec sudo rm -rf build \\;', 'sudo git clean -fdx', 'sudo bash -c "rm -rf build"']) {
+      assert.deepStrictEqual(codeModeCounting(command), { v: { verdict: 'always-asks', reason: 'elevation' }, calls: 0 }, command);
+    }
+  });
+
+  test('a line whose here-document never ends', () => {
+    for (const command of ['cat <<EOF\nrm -rf build\ngit clean -fdx\n', 'rm -rf build <<EOF\nmore', 'bash <<EOF\nrm -rf build\n']) {
+      assert.deepStrictEqual(codeModeCounting(command), { v: { verdict: 'always-asks', reason: 'unreadable-command' }, calls: 0 }, command);
+    }
+  });
+
+  // A wall-clock budget, listed in docs/TEST-TIMING.md: reading past a long
+  // chain of elevations once took 172ms at 500 and overflowed the stack at
+  // 2000; read word by word and only so deep, it takes a few milliseconds.
+  test('a long chain of xargs and sudo is read quickly, and still asks', () => {
+    for (const k of [500, 2000]) {
+      const command = `echo x | ${'xargs sudo '.repeat(k)}ls`;
+      const started = Date.now();
+      assert.deepStrictEqual(codeModeCounting(command), { v: { verdict: 'always-asks', reason: 'elevation' }, calls: 0 }, `${k} deep`);
+      assert.strictEqual(notesMode(command), null);
+      assert.ok(Date.now() - started < 1000, `${k} deep took ${Date.now() - started}ms`);
+    }
+  });
+});
+
+describe('a here-document that never ends', () => {
+  test('is data unless a shell reads it, so prose in it is never a Keychain command', () => {
+    const prose = 'cat <<EOF\nsecurity find-generic-password is how a password is read\n';
+    assert.deepStrictEqual(codeMode(prose), { verdict: 'always-asks', reason: 'unreadable-command' });
+    assert.strictEqual(notesMode(prose), null);
+  });
+
+  test('fed to a shell, its body is commands, to the end of the text', () => {
+    const fed = `bash <<EOF\necho start\n${K}\n`;
+    assert.strictEqual(codeMode(fed).reason, 'keychain');
+    assert.strictEqual(notesMode(fed).reason, 'keychain');
+  });
+});
+
 describe('in Notes mode, the same reading finds the same commands', () => {
   for (const args of ASKS) {
     test(`security ${args}`, () => {
