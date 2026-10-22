@@ -126,16 +126,39 @@ function readMarkers(root) {
  * not an older commit's. Restoring from HEAD would discard staged work, which is
  * why it is not what happens here.
  *
- * Returns the files put back, or null when the restore could not be done, in
- * which case the caller falls back to telling a person what to run by hand.
+ * WHAT IS ON DISK IS KEPT FIRST. To git, the mutation being undone and an
+ * edit a person made after the run died are the same kind of change, and a
+ * restore from the index wipes both. So every held file that differs from the
+ * index is copied under `<record dir>/recovered/<pid>-<time>-<suffix>/` before
+ * it is put back: named for the time as well as the pid, because a pid is
+ * reused, and a later sweep must never overwrite a copy kept earlier.
+ *
+ * Returns `{ files, kept }`, the files put back and the folder holding the
+ * copies (null when nothing differed), or null when the restore could not be
+ * done, in which case the caller falls back to telling a person what to run.
  */
-function recoverAbandoned(root, held) {
-  if (!held.length) return [];
+function recoverAbandoned(root, held, pid) {
+  if (!held.length) return { files: [], kept: null };
   const present = held.filter((f) => { try { return fs.existsSync(path.resolve(root, f)); } catch { return false; } });
   if (!present.length) return null;
+  const differing = unstaged(root, present.map((f) => path.resolve(root, f)));
+  if (differing === null) return null;
+  let keptDir = null;
+  try {
+    if (differing.length) {
+      const stamp = new Date().toISOString().replace(/[-:.]/g, '');
+      fs.mkdirSync(path.join(markerDir(root), 'recovered'), { recursive: true });
+      keptDir = fs.mkdtempSync(path.join(markerDir(root), 'recovered', `${pid}-${stamp}-`));
+    }
+    for (const f of differing) {
+      const kept = path.join(keptDir, f);
+      fs.mkdirSync(path.dirname(kept), { recursive: true });
+      fs.copyFileSync(path.resolve(root, f), kept);
+    }
+  } catch { return null; }
   const out = spawnSync('git', ['checkout', '--', ...held], { cwd: root, encoding: 'utf8' });
   if (out.error || out.status !== 0) return null;
-  return held;
+  return { files: held, kept: keptDir && relative(root, keptDir) };
 }
 
 function isAlive(pid) {
@@ -207,6 +230,13 @@ function list(items) {
   return items.map((f) => `  ${f}`).join('\n');
 }
 
+/** The one-line refusal for files a run would mutate that carry unstaged changes. */
+function unstagedRefusal(prefix, files) {
+  const them = files.length === 1 ? 'it' : 'them';
+  return `${prefix}: ${files.join(', ')} ${files.length === 1 ? 'has' : 'have'} unstaged changes and `
+    + `would be mutated in place; commit or stage ${them} first (git add), then run again.`;
+}
+
 /**
  * May a run start here, and if not, what does the person looking at a stopped
  * tool need to be told?
@@ -264,7 +294,7 @@ function inspect({ root = ROOT, files = [] } = {}) {
   const swept = [];
   for (const r of records.filter((x) => x.pid !== process.pid && !isAlive(x.pid))) {
     const held = Array.isArray(r.files) ? r.files : [];
-    const put = held.length ? recoverAbandoned(root, held) : [];
+    const put = recoverAbandoned(root, held, r.pid);
     if (put === null) {
       return {
         ok: false,
@@ -278,7 +308,7 @@ function inspect({ root = ROOT, files = [] } = {}) {
           + 'Then clear the record: rm ' + r.file,
       };
     }
-    swept.push({ pid: r.pid, files: put });
+    swept.push({ pid: r.pid, files: put.files, kept: put.kept });
     try { fs.rmSync(r.file, { force: true }); } catch { /* the next start will say */ }
   }
 
@@ -293,20 +323,18 @@ function inspect({ root = ROOT, files = [] } = {}) {
         + 'so this run started without the check that a file it mutates is not already modified.',
     };
   }
+  // ONE LINE, because the reader is looking at a tool that stopped. The
+  // reason it matters: if a run dies before it restores, the mutation and the
+  // edit are one change in the working tree, and the way back from a mutation
+  // (git checkout -- <file>) also throws the edit away. Staged is enough: the
+  // index then holds the copy a restore comes back to.
   if (blocked.length) {
     return {
       ok: false,
       blocked,
       swept,
       reason: 'unstaged',
-      message: 'Refusing to start a mutation run.\n\n'
-        + 'These files have unstaged changes, and this run mutates them in place:\n'
-        + list(blocked) + '\n\n'
-        + 'If the run is killed before it restores, the mutation and your edit are\n'
-        + 'the same thing in the working tree, and the way back from a mutation\n'
-        + '(git checkout -- <file>) is also the way to throw your edit away.\n\n'
-        + 'Stage them (git add), commit them, or stash them, then run this again.\n'
-        + 'Staged is enough: the index holds the copy a restore comes back to.',
+      message: unstagedRefusal('Refusing to start a mutation run', blocked),
     };
   }
   return { ok: true, blocked: [], swept, reason: 'clean' };
@@ -324,7 +352,14 @@ function inspect({ root = ROOT, files = [] } = {}) {
  * the temp-root preflight each harness already runs, and it means a harness
  * cannot forget to act on the verdict.
  */
-function beginMutationRun({ root = ROOT, files: declared = [] } = {}) {
+function beginMutationRun({ root = ROOT, files: declared = [], suites = [] } = {}) {
+  // Asked before anything is read or recorded: a run whose suites would skip
+  // has no verdict to give, so it is not started.
+  const fixture = fixtureRootProblem(suites, { root });
+  if (fixture) {
+    console.error(`Refusing to start a mutation run: ${fixture}`);
+    process.exit(NO_VERDICT);
+  }
   // Deduplicated, because a harness names one target per guard and several
   // guards of the same file are ordinary. Left in, the same path would be read
   // twice, restored twice, and listed twice in a refusal that is supposed to be
@@ -341,7 +376,9 @@ function beginMutationRun({ root = ROOT, files: declared = [] } = {}) {
   // file it put back.
   for (const s2 of verdict.swept || []) {
     console.error(`A previous mutation run (pid ${s2.pid}) never finished. Its files have been put `
-      + `back from the index:\n${list(s2.files)}`);
+      + 'back from the index'
+      + (s2.kept ? `, and what they held before is kept in ${s2.kept}/ (compare, keep what is yours, then delete it)` : '')
+      + `:\n${list(s2.files)}`);
   }
 
   const originals = new Map();
@@ -419,12 +456,40 @@ function beginMutationRun({ root = ROOT, files: declared = [] } = {}) {
   // tree. Read AFTER arming, so a harness that has lost its call never reaches
   // this and fails that test rather than passing it.
   if (process.argv.includes('--guard-only')) {
-    console.error(`mutation run armed over ${files.length} file(s):\n${list(record.files)}`);
+    const usable = fixture === null && suites.some((suite) => readsFixture(root, suite))
+      ? ', and the Code-mode fixture folder is usable' : '';
+    console.error(`mutation run armed over ${files.length} file(s)${usable}:\n${list(record.files)}`);
     session.finish();
     process.exit(0);
   }
 
   return session;
+}
+
+/** Does this suite build its fixture with the Code-mode fixture helper? */
+function readsFixture(root, suite) {
+  try { return fs.readFileSync(path.resolve(root, suiteFile(suite)), 'utf8').includes('code-mode-fixture'); } catch { return false; }
+}
+
+/**
+ * Why the suites a run reads would skip for want of a fixture folder, as one
+ * line, or null when none of them needs one or the folder is usable.
+ *
+ * WITHOUT THE FOLDER THOSE SUITES SKIP, a skipped suite turns nothing red, and
+ * every row aimed at one reads as a guard nobody watches. That was diagnosed
+ * afresh on each first run. The folder is probed the way the suites probe it,
+ * and the probe removed; under CI the helper throws, which is the same answer.
+ */
+function fixtureRootProblem(suites, { root = ROOT, env = process.env, candidates } = {}) {
+  if (!suites.some((suite) => readsFixture(root, suite))) return null;
+  const { outsideTempRoot, NO_ROOT } = require('../helpers/code-mode-fixture.js');
+  let probe;
+  try { probe = outsideTempRoot({ env, candidates, quiet: true }); } catch { probe = { skip: NO_ROOT }; }
+  if (probe.skip) {
+    return `the Code-mode suites it reads would skip and their rows would turn nothing red; the fixture ${NO_ROOT}.`;
+  }
+  fs.rmSync(probe.dir, { recursive: true, force: true });
+  return null;
 }
 
 // THREE OUTCOMES, NOT TWO. A harness exits 0 when every guard it broke turned
@@ -520,5 +585,5 @@ function exitCodeFor(failed, results) {
 
 module.exports = {
   beginMutationRun, inspect, markerPath, markerDir, readMarkers, recoverAbandoned, MARKER, MARKER_DIR, ROOT,
-  targetsFromRows, rowsForShard, exitCodeFor, suiteFile, NO_VERDICT,
+  targetsFromRows, rowsForShard, exitCodeFor, suiteFile, NO_VERDICT, unstaged, unstagedRefusal, fixtureRootProblem,
 };

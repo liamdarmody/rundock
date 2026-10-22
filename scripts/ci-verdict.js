@@ -27,8 +27,9 @@
  *                 (a failed step, an exit-code annotation or log line) keeps it
  *                 a failure, whatever else it printed: a test that prints the
  *                 shutdown text cannot buy a re-run with it.
- *   superseded    the concurrency group cancelled it for a newer run. Nothing
- *                 to do: the newer run is the one that counts.
+ *   superseded    the concurrency group cancelled it for a newer run, or it
+ *                 was cancelled. No verdict, never a failure, and nothing to
+ *                 do: the newer run is the one that counts.
  *   timed-out     the job reached its time cap. No verdict, and no re-run,
  *                 because the same work would reach the same cap.
  *   no-verdict    the mutation check reached no verdict for another reason.
@@ -115,9 +116,14 @@ function decide({ run, jobs, annotationsFor = () => [], logFor = () => null, new
   const none = (reason) => ({ action: 'none', reason, jobs: classified });
   if (run.conclusion === 'success') return none('the run succeeded');
   if (Number(run.run_attempt) !== 1) return none(`attempt ${run.run_attempt} is never re-run, so a retry cannot loop`);
-  if (newerRun || notOk.some((j) => j.kind === 'superseded')) return none('superseded: a newer run is the one that counts');
+  const superseded = 'no verdict: superseded or cancelled, so this run decided nothing; a newer run is the one that counts';
+  if (newerRun) return none(superseded);
+  // A FAILED JOB IS READ BEFORE A CANCELLED ONE: the cancelled job decided
+  // nothing, but the failed one beside it did.
   const failures = notOk.filter((j) => j.kind === 'failure');
   if (failures.length) return none(`a real failure: ${failures.map((j) => j.name).join(', ')}`);
+  // NO VERDICT, NOT A FAILURE: a cancelled run decided nothing about the change.
+  if (notOk.some((j) => j.kind === 'superseded')) return none(superseded);
   const lost = notOk.filter((j) => j.kind === 'runner-lost');
   if (!lost.length) {
     const timed = notOk.filter((j) => j.kind === 'timed-out');

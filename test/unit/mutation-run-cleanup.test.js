@@ -40,7 +40,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync, spawn, spawnSync } = require('node:child_process');
 
-const { inspect, markerPath, markerDir, readMarkers, MARKER_DIR } = require('../tools/mutation-run.js');
+const { inspect, markerPath, markerDir, readMarkers, recoverAbandoned, MARKER_DIR } = require('../tools/mutation-run.js');
 const markerDirName = () => MARKER_DIR;
 const { makeTempDir } = require('../helpers/workspace.js');
 
@@ -214,6 +214,9 @@ describe('a mutation run refuses to start where a restore would be ambiguous', (
     // and nothing else, and the whole point of the refusal is that the state is
     // diagnosable rather than mysterious.
     assert.match(run.stderr, /src\.js/, 'the refusal must name the file it stopped for');
+    // ONE PLAIN LINE, saying what to do. A paragraph is read as a crash.
+    assert.equal(run.stderr.trim().split('\n').length, 1, `the refusal is one line:\n${run.stderr}`);
+    assert.match(run.stderr, /commit or stage/, 'and it says to commit or stage first');
     assert.equal(read(fixture.src), mine,
       'a refusal must leave the working tree exactly as it found it');
     assert.equal(anyMarker(fixture.repo), false,
@@ -320,6 +323,44 @@ describe('a run killed in a way nothing can catch', () => {
     // to do. Those lines survive only on the path where the sweep itself fails,
     // which the case below covers.
   });
+
+  test('an edit made after the kill is kept aside, not wiped, when the sweep puts the file back', async (t) => {
+    // THE SWEEP RESTORES FROM THE INDEX, and the mutation it is undoing and
+    // an edit a person made since are the same kind of change to git. A run
+    // started later, over any files at all, put the file back and the edit
+    // went with it. What was on disk is now kept before the restore.
+    const fixture = scratch(t, 'hang');
+    const { kid, exited } = await mutating(t, fixture);
+    kid.kill('SIGKILL');
+    await exited;
+    const { pid } = marker(fixture.repo);
+    fs.appendFileSync(fixture.src, 'const edited = 1;\n');
+    // The next run finishes rather than hangs, so the case does not wait out a timeout.
+    fs.writeFileSync(fixture.harness, standIn('quick'));
+
+    const next = runStandIn(fixture);
+
+    assert.equal(read(fixture.src), SOURCE, 'the file is put back from the index as before');
+    const dirs = fs.readdirSync(path.join(markerDir(fixture.repo), 'recovered')).filter((d) => d.startsWith(`${pid}-`));
+    assert.equal(dirs.length, 1, 'one kept copy, under the dead run\'s pid and the time it was kept');
+    const kept = path.join(markerDir(fixture.repo), 'recovered', dirs[0], 'src.js');
+    assert.match(read(kept), /const edited = 1;/, 'the edit survives in the copy');
+    assert.ok(next.stderr.includes(`recovered/${dirs[0]}`), `and the sweep says where:\n${next.stderr}`);
+  });
+
+  test('a reused pid never overwrites a copy kept earlier', (t) => {
+    const fixture = scratch(t, 'quick');
+    const kept = [];
+    for (const text of ['const first = 1;\n', 'const second = 2;\n']) {
+      fs.appendFileSync(fixture.src, text);
+      assert.deepEqual(recoverAbandoned(fixture.repo, ['src.js'], 4242).files, ['src.js']);
+      assert.equal(read(fixture.src), SOURCE, 'put back each time');
+    }
+    const root = path.join(markerDir(fixture.repo), 'recovered');
+    for (const d of fs.readdirSync(root)) kept.push(read(path.join(root, d, 'src.js')));
+    assert.equal(kept.length, 2, 'two sweeps under one pid keep two copies');
+    assert.ok(kept.some((k) => k.includes('first')) && kept.some((k) => k.includes('second')), 'each with what it held');
+  });
 });
 
 describe('every mutation harness runs inside the envelope', () => {
@@ -373,6 +414,54 @@ describe('every mutation harness runs inside the envelope', () => {
         `${rel} left a record behind, which would refuse the next real run`);
     });
   }
+});
+
+describe('a run whose suites need the Code-mode fixture folder', () => {
+  // Without a usable folder those suites skip, a skipped suite turns nothing
+  // red, and every row aimed at one read as an unguarded guard. Diagnosed
+  // afresh on each first run, so the run now says so before it starts.
+  const fx = require('../helpers/code-mode-fixture.js');
+  const { fixtureRootProblem } = require('../tools/mutation-run.js');
+  const NEEDS = 'test/unit/code-mode-hook.test.js';
+
+  test('with no usable folder, the problem is one line naming the setting and an example value', (t) => {
+    const tempBase = makeTempDir('fixture-base-');
+    t.after(() => { try { fs.rmSync(tempBase, { recursive: true, force: true }); } catch { /* gone */ } });
+    for (const env of [{}, { CI: 'true' }]) {
+      const problem = fixtureRootProblem([NEEDS], { env, candidates: [tempBase] });
+      assert.ok(problem && !problem.includes('\n'), `one line (${JSON.stringify(env)}): ${problem}`);
+      assert.match(problem, /RUNDOCK_TEST_OUTSIDE_TEMP_ROOT=\S+/);
+    }
+    assert.strictEqual(fixtureRootProblem(['test/unit/boundary.test.js'], { env: {}, candidates: [tempBase] }), null,
+      'a run whose suites do not use the fixture is not asked about it');
+  });
+
+  test('with a usable folder there is no problem, and nothing is left in it', () => {
+    const probe = fx.outsideTempRoot();
+    if (probe.skip) return; // no such folder on this machine; the case above covers it
+    fs.rmSync(probe.dir, { recursive: true, force: true });
+    assert.strictEqual(fixtureRootProblem([NEEDS]), null);
+  });
+
+  test('the boundary harness hands its suites to the envelope, which checks the folder', (t) => {
+    // Driven, as the cases above are: a harness that stopped passing its
+    // suites would arm without the check and say nothing about the folder.
+    const tmpRoot = makeTempDir('mutation-run-fixture-');
+    t.after(() => { try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch { /* gone */ } });
+    const env = { ...process.env, TMPDIR: tmpRoot, TEMP: tmpRoot, TMP: tmpRoot };
+    delete env.NODE_TEST_CONTEXT;
+    const run = spawnSync(process.execPath, ['test/tools/mutate-workspace-boundary-guards.js', '--guard-only'],
+      { cwd: REPO, env, encoding: 'utf8', timeout: 60000 });
+    const out = run.stderr || '';
+    if (/RUNDOCK_TEST_OUTSIDE_TEMP_ROOT=/.test(out)) {
+      assert.strictEqual(run.status, 3, `no usable folder is no verdict:\n${out}`);
+      assert.strictEqual(out.trim().split('\n').length, 1, `in one line:\n${out}`);
+    } else {
+      assert.match(out, /mutation run armed|Refusing to start a mutation run/, out);
+      if (run.status === 0) assert.match(out, /Code-mode fixture folder is usable/, `the folder was checked:\n${out}`);
+    }
+    assert.equal(anyMarker(REPO), false, 'and no record is left behind');
+  });
 });
 
 describe('the verdict, without starting anything', () => {

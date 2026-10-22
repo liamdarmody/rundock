@@ -33,7 +33,9 @@ module.exports = defineConfig({
   // a retry would hide real timing regressions instead of surfacing them.
   timeout: 60_000,
   expect: { timeout: 7_000 },
-  reporter: process.env.CI ? [['list'], ['github']] : [['list']],
+  // The flake reporter says when a test passed only on its retry, which is
+  // the strike docs/FLAKES.md counts and which a passing run otherwise hides.
+  reporter: [...(process.env.CI ? [['list'], ['github']] : [['list']]), ['./test/e2e/flake-reporter.js']],
   use: {
     baseURL: `http://localhost:${PORT}`,
     // Every spec's browser starts signed in, as one that opened the printed

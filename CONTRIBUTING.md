@@ -122,7 +122,9 @@ Rundock has a substantial automated suite, and PRs are expected to keep it green
 
 Expectations for a PR: the full suite green on Node 22 and 24 (CI checks both), new behaviour covered by tests (bug fixes include a regression test that fails before the fix), and byte-for-byte guarantees respected if you touch the editor. Then test by hand against a real workspace with agents: verify your change across the team, conversations, skills, and files views as relevant.
 
-**If a test fails and then passes on a re-run, read [docs/TEST-TIMING.md](docs/TEST-TIMING.md) before re-running again.** It carries the inventory of every assertion in the suite that depends on timing or on how two things interleave, says which are known to be load-sensitive and which are correct as written, and gives the rule for adding a wait: poll for a condition that must be reached, sleep only to prove something never happens. A test not listed there is a new instance of that class and should be classified rather than re-run until green.
+**The Code-mode suites need a folder outside every temp folder and git working tree** for their fixture: `/var/tmp` where it is writable, or the folder `RUNDOCK_TEST_OUTSIDE_TEMP_ROOT` names, for example `RUNDOCK_TEST_OUTSIDE_TEMP_ROOT=$HOME/rundock-test-fixtures`. Without one they skip with a one-line notice, and the mutation harness whose rows read them refuses to start rather than report rows that turned nothing red.
+
+**If a test fails and then passes on a re-run, read [docs/TEST-TIMING.md](docs/TEST-TIMING.md) before re-running again.** It carries the inventory of every assertion in the suite that depends on timing or on how two things interleave, says which are known to be load-sensitive and which are correct as written, and gives the rule for adding a wait: poll for a condition that must be reached, sleep only to prove something never happens. A test not listed there is a new instance of that class and should be classified rather than re-run until green. Record the flake in [docs/FLAKES.md](docs/FLAKES.md) as well: a test that flakes twice is fixed or quarantined.
 
 ### Tests and the launch key
 
@@ -145,6 +147,26 @@ npm run red-first
 Flags reach the script through npm after a `--`, as in `npm run red-first -- --tests "npm run test:coverage"`. Naming a base yourself is still allowed; one that reaches back past your branch's fork point is refused rather than measured, and the refusal names what it would have reverted.
 
 Exit 0 only when discrimination is proven. Every other outcome names itself rather than reporting a bare failure: `NOT-PROVABLE` (nothing of yours could go red, which is its own finding), `NOT-DISCRIMINATING` (the tests pass with your source reverted), `INCONCLUSIVE` (the suite was already failing) and `REFUSED` (the run could not be trusted, and it says why). The result folds into `.precommit-gate.json` beside the pre-commit checks, so a reviewer reads one record rather than two that can disagree.
+
+### The last step of any change
+
+Before you report a change done, run:
+
+```bash
+npm run lane-done
+```
+
+The name comes from a lane: one change carried on a branch of its own, from its first commit to the point it is handed over for review.
+
+Green tests are not the same as finished work. This passes only when:
+
+- no mutation harness, mutation run or red-first run started from this checkout is still going (each records itself in the checkout while it runs, in `.mutation-runs/` or `.tool-runs/`, and removes the record when it ends or is told to stop);
+- nothing waits in `.mutation-runs/recovered/`, where a harness keeps what a file held before it puts back the files of a mutation run that never finished: compare each copy with its file, keep what is yours, then delete the folder;
+- nothing is staged, unstaged, or untracked outside `.gitignore`;
+- every commit since the merge base with `origin/main` passed `npm run precommit` on its own tree;
+- `node scripts/leak-scan.js` is clean over those commits.
+
+Each condition that fails prints one line saying what to do, and the command exits non-zero. Whether a run is still going is asked of the operating system by process id, never of `ps`, so the check works where the process table cannot be read.
 
 ## Licence
 
