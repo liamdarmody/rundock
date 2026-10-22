@@ -1497,11 +1497,25 @@ const MUTATIONS = [
   // Drop the send words from the hook's check and a send whose name carries a
   // read word (`send_status_update`) runs with no card at all.
   [CONNECTOR_HOOK_FLOW, 'Connector send: a send beside a read word runs as a read',
-    '  if (tokens.some(t => MCP_DESTRUCTIVE_VERBS.has(t) || MCP_SEND_VERBS.has(t))) return false;',
-    '  if (tokens.some(t => MCP_DESTRUCTIVE_VERBS.has(t))) return false;'],
+    '  if (mcpActionWords(toolName, true).some(t => MCP_DESTRUCTIVE_VERBS.has(t) || MCP_SEND_VERBS.has(t))) return false;',
+    '  if (mcpActionWords(toolName, true).some(t => MCP_DESTRUCTIVE_VERBS.has(t))) return false;'],
   [CONNECTOR_HOOK, 'Connector send: the hook forgets resend',
-    "const MCP_SEND_VERBS = new Set(['send','resend','reply','forward']);",
-    "const MCP_SEND_VERBS = new Set(['send','reply','forward']);"],
+    "const MCP_SEND_VERBS = new Set(['send','resend','reply','forward','fwd']);",
+    "const MCP_SEND_VERBS = new Set(['send','reply','forward','fwd']);"],
+  [CONNECTOR_HOOK, 'Connector send: the hook forgets fwd',
+    "const MCP_SEND_VERBS = new Set(['send','resend','reply','forward','fwd']);",
+    "const MCP_SEND_VERBS = new Set(['send','resend','reply','forward']);"],
+  // Stop splitting at digits and `send2Email` is not a send; split for the
+  // read check as well and `set_ipv4info` becomes a read on `info`.
+  [CONNECTOR_HOOK, 'Connector send: the hook does not split at a digit',
+    "  if (atDigits) action = action.replace(",
+    "  if (false) action = action.replace("],
+  [CONNECTOR_HOOK, 'Connector read: the read check splits at a digit',
+    '  const tokens = mcpActionWords(toolName);\n  if (tokens.some(t => MCP_READ_VERBS.has(t))) return true;',
+    '  const tokens = mcpActionWords(toolName, true);\n  if (tokens.some(t => MCP_READ_VERBS.has(t))) return true;'],
+  [CONNECTOR_CLIENT, 'Connector send: the card does not split at a digit',
+    "      .replace(/([A-Za-z])([0-9])/g, '$1 $2').replace(/([0-9])([A-Za-z])/g, '$1 $2')\n",
+    ''],
   // Drop the client's grading and the card offers Always allow again, which
   // is the one click that let every later send through unseen.
   [CONNECTOR_CLIENT_FLOW, 'Connector send: the card offers Always allow on a send',
@@ -1516,8 +1530,8 @@ const MUTATIONS = [
     "      .replace(/([a-z0-9])([A-Z])/g, '$1 $2')\n",
     ''],
   [CONNECTOR_CLIENT, 'Connector send: the client forgets forward',
-    "  const MCP_SEND_VERBS = ['send', 'resend', 'reply', 'forward'];",
-    "  const MCP_SEND_VERBS = ['send', 'resend', 'reply'];"],
+    "  const MCP_SEND_VERBS = ['send', 'resend', 'reply', 'forward', 'fwd'];",
+    "  const MCP_SEND_VERBS = ['send', 'resend', 'reply', 'fwd'];"],
   // Read a saved send back and Settings lists an allow that never answers.
   [CONNECTOR_STORE_FLOW, 'Connector send: a saved allow for a send is read back',
     "data.allowedTools.filter((k) => typeof k === 'string' && k && !isMcpSendTool(k))",
@@ -1526,8 +1540,8 @@ const MUTATIONS = [
     '  if (isMcpSendTool(msg.key.trim())) {',
     '  if (false) {'],
   [CONNECTOR_HOOK, 'Connector send: a tool that is not a connector is taken for a send',
-    "  return String(toolName).startsWith('mcp__') && mcpActionWords(toolName).some(t => MCP_SEND_VERBS.has(t));",
-    '  return mcpActionWords(toolName).some(t => MCP_SEND_VERBS.has(t));'],
+    "  return String(toolName).startsWith('mcp__') && mcpActionWords(toolName, true).some(t => MCP_SEND_VERBS.has(t));",
+    '  return mcpActionWords(toolName, true).some(t => MCP_SEND_VERBS.has(t));'],
   // Let a connector send or delete through when nobody can be asked and an
   // agent still running after Rundock has stopped sends with nobody seeing it.
   [CONNECTOR_HOOK_FLOW, 'Connector send: a send or delete is allowed when Rundock cannot be asked',
@@ -1540,8 +1554,8 @@ const MUTATIONS = [
     "    else if (connectorAlwaysAsks) why = 'A connector",
     "    else if (false) why = 'A connector"],
   [CONNECTOR_HOOK, 'Connector delete: a tool that is not a connector is taken for a delete',
-    "  return String(toolName).startsWith('mcp__') && mcpActionWords(toolName).some(t => MCP_DESTRUCTIVE_VERBS.has(t));",
-    '  return mcpActionWords(toolName).some(t => MCP_DESTRUCTIVE_VERBS.has(t));'],
+    "  return String(toolName).startsWith('mcp__') && mcpActionWords(toolName, true).some(t => MCP_DESTRUCTIVE_VERBS.has(t));",
+    '  return mcpActionWords(toolName, true).some(t => MCP_DESTRUCTIVE_VERBS.has(t));'],
   // Take the suggest rule out and a calendar's suggest_time raises a card
   // again, where the list and get actions beside it run without one.
   [CONNECTOR_HOOK_FLOW, 'Connector read: suggesting a time asks as a write',

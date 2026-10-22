@@ -117,13 +117,15 @@
   // and camelCase, so `sendEmail` is a send and `get_sent_items` is not. The
   // hook keeps the same words (MCP_SEND_VERBS in scripts/permission-hook.js) so
   // a send never runs as a read.
-  const MCP_SEND_VERBS = ['send', 'resend', 'reply', 'forward'];
+  const MCP_SEND_VERBS = ['send', 'resend', 'reply', 'forward', 'fwd'];
   // The delete words, read the same way, so `deleteEvent` asks like
   // `delete_event` does. The hook keeps the same list (MCP_DESTRUCTIVE_VERBS).
   const MCP_DESTRUCTIVE_VERBS = ['delete', 'remove', 'destroy', 'drop', 'cancel', 'abort', 'archive', 'trash', 'purge', 'clear', 'uninstall'];
   function mcpActionWords(toolName) {
     return String(toolName).split('__').slice(2).join('_')
       .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+      // and between a letter and a digit, so `send2Email` is a send too
+      .replace(/([A-Za-z])([0-9])/g, '$1 $2').replace(/([0-9])([A-Za-z])/g, '$1 $2')
       .split(/[_\-\s]+/)
       .map(w => w.toLowerCase())
       .filter(Boolean);

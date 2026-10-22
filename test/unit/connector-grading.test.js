@@ -25,6 +25,8 @@ const SENDS = [
   'bulk_send', 'resend_verification', 'reply-all', 'replyToComment', 'forwardInvite',
   // Each also carries a read word, which is what let it run with no card at all.
   'send_status_update', 'reply_to_review', 'forward_recent_messages', 'send_daily_digest',
+  // A word that runs into a digit, and the short form of forward.
+  'send2Email', 'reply2', 'v2_send', 'fwd_message', 'fwdEmail', 'auto_fwd',
 ];
 
 // Names that look like a send and are not one, each with the grade it had
@@ -98,6 +100,32 @@ describe('names that only look like a send are graded as before', () => {
   });
 });
 
+describe('a word that runs into a digit', () => {
+  // Split there only to find a send or a delete, which can only ask more. The
+  // read check keeps the words whole, so a write is never made a read by a
+  // read word found inside a name that only touches it.
+  test('a send or a delete next to a digit is found', () => {
+    for (const action of ['send2Email', 'reply2', 'remove2Label', 'delete_v2']) {
+      assert.strictEqual(hook.isMcpReadTool(tool(action)), false, action);
+      assert.strictEqual(P.classifyRisk(tool(action), {}), 'high', action);
+    }
+    assert.strictEqual(hook.isMcpDeleteTool(tool('remove2Label')), true);
+  });
+
+  test('a write is not made a read by a read word next to a digit', () => {
+    for (const action of ['set_ipv4info', 'update_s3list', 'put_mp4view']) {
+      assert.strictEqual(hook.isMcpReadTool(tool(action)), false, action);
+      assert.strictEqual(P.classifyRisk(tool(action), {}), 'medium', action);
+    }
+  });
+
+  test('a read with a digit in it is still a read', () => {
+    for (const action of ['get_v2_items', 'list_s3_buckets', 'fetch_v2']) {
+      assert.strictEqual(hook.isMcpReadTool(tool(action)), true, action);
+    }
+  });
+});
+
 describe('which connector actions delete', () => {
   // Refused rather than allowed when Rundock cannot be asked, like a send.
   test('a delete word anywhere in the action, split as a send is', () => {
@@ -130,7 +158,7 @@ describe('which connector actions delete', () => {
 
 describe('the verb tables', () => {
   test('the words that make an action a send, a delete or a read, pinned', () => {
-    assert.deepStrictEqual([...hook.MCP_SEND_VERBS].sort(), ['forward', 'reply', 'resend', 'send']);
+    assert.deepStrictEqual([...hook.MCP_SEND_VERBS].sort(), ['forward', 'fwd', 'reply', 'resend', 'send']);
     assert.deepStrictEqual([...hook.MCP_DESTRUCTIVE_VERBS].sort(),
       ['abort', 'archive', 'cancel', 'clear', 'delete', 'destroy', 'drop', 'purge', 'remove', 'trash', 'uninstall']);
     assert.deepStrictEqual([...hook.MCP_READ_VERBS].sort(), [

@@ -124,7 +124,8 @@ async function press(r, action) {
 }
 
 describe('a connector action that sends asks every time, with Allow and Deny only', () => {
-  for (const action of ['send_message', 'reply_to_thread', 'forward_email', 'resend_verification', 'sendEmail', 'send_status_update']) {
+  for (const action of ['send_message', 'reply_to_thread', 'forward_email', 'resend_verification', 'sendEmail', 'send_status_update',
+    'send2Email', 'fwd_message']) {
     test(action, async () => {
       const r = await request(MAIL(action));
       assert.strictEqual(r.asked, true, 'the hook sends it to a card rather than running it');

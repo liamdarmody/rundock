@@ -286,7 +286,7 @@ const MCP_DESTRUCTIVE_VERBS = new Set(['delete','remove','destroy','drop','cance
 // words only, so `get_sent_items`, `list_sent` and `sender_info` stay reads.
 // The client grades the same words high (MCP_SEND_VERBS in
 // public/permissions.js), so a send asks every time and is never remembered.
-const MCP_SEND_VERBS = new Set(['send','resend','reply','forward']);
+const MCP_SEND_VERBS = new Set(['send','resend','reply','forward','fwd']);
 const MCP_READ_VERBS = new Set(['get','list','search','find','read','fetch','retrieve','query','export','view','describe','show','info','overview','status','count','available','daily','review','recent','collaborators','comments','activity']);
 // `suggest` is a read only when it suggests a time. A calendar's suggest_time
 // reads availability and books nothing, like the list, search and get actions
@@ -298,16 +298,21 @@ function suggestsOnlyATime(tokens) {
   return rest.length > 0 && rest.length < tokens.length && rest.every(t => MCP_SUGGEST_TIME_WORDS.has(t));
 }
 // The words of a connector action: the tool name after its server prefix.
-function mcpActionWords(toolName) {
-  return String(toolName).split('__').slice(2).join('_')
-    .replace(/([a-z0-9])([A-Z])/g, '$1 $2') // split camelCase
+// `atDigits` also splits between a letter and a digit (`send2Email`). It is
+// used only to find a send or a delete, where more words can only ask more;
+// the read check keeps words whole, so `set_ipv4info` never reads as `info`.
+function mcpActionWords(toolName, atDigits = false) {
+  let action = String(toolName).split('__').slice(2).join('_')
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2'); // split camelCase
+  if (atDigits) action = action.replace(/([A-Za-z])([0-9])/g, '$1 $2').replace(/([0-9])([A-Za-z])/g, '$1 $2');
+  return action
     .split(/[_\-\s]+/)
     .map(t => t.toLowerCase())
     .filter(Boolean);
 }
 function isMcpReadTool(toolName) {
+  if (mcpActionWords(toolName, true).some(t => MCP_DESTRUCTIVE_VERBS.has(t) || MCP_SEND_VERBS.has(t))) return false;
   const tokens = mcpActionWords(toolName);
-  if (tokens.some(t => MCP_DESTRUCTIVE_VERBS.has(t) || MCP_SEND_VERBS.has(t))) return false;
   if (tokens.some(t => MCP_READ_VERBS.has(t))) return true;
   return suggestsOnlyATime(tokens);
 }
@@ -315,12 +320,12 @@ function isMcpReadTool(toolName) {
 // hold one (lib/workspace/boundary.js): it asks every time, so a saved
 // "Always allow" for it could never answer anything.
 function isMcpSendTool(toolName) {
-  return String(toolName).startsWith('mcp__') && mcpActionWords(toolName).some(t => MCP_SEND_VERBS.has(t));
+  return String(toolName).startsWith('mcp__') && mcpActionWords(toolName, true).some(t => MCP_SEND_VERBS.has(t));
 }
 // A connector action that deletes. With a send, it is refused rather than
 // allowed when Rundock cannot be asked (see unanswered in main).
 function isMcpDeleteTool(toolName) {
-  return String(toolName).startsWith('mcp__') && mcpActionWords(toolName).some(t => MCP_DESTRUCTIVE_VERBS.has(t));
+  return String(toolName).startsWith('mcp__') && mcpActionWords(toolName, true).some(t => MCP_DESTRUCTIVE_VERBS.has(t));
 }
 
 // Deny a direct file edit to the GLOBAL Claude Code agent/skill config
