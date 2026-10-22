@@ -38,7 +38,10 @@ const RANK = { runs: 0, 'asks-once': 1, 'always-asks': 2 };
 const RUNS = Object.freeze({ verdict: 'runs' });
 const once = (rule, extra) => ({ verdict: 'asks-once', rule, ...(extra || {}) });
 const always = (reason, extra) => ({ verdict: 'always-asks', reason, ...(extra || {}) });
-const stricter = (a, b) => (RANK[b.verdict] > RANK[a.verdict] ? b : a);
+// Between two reasons to always ask, the Keychain is the one the card names
+// (see judgeSecurity), wherever it sits in the line.
+const KEYCHAIN = 'keychain';
+const stricter = (a, b) => (RANK[b.verdict] > RANK[a.verdict] || (b.reason === KEYCHAIN && b.verdict === a.verdict) ? b : a);
 
 const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'fish']);
 const FETCHERS = new Set(['curl', 'wget', 'irm', 'iwr', 'invoke-restmethod', 'invoke-webrequest']);
@@ -99,8 +102,11 @@ function judgeLine(text, ctx, depth = 0) {
   // verdict reads; see judgeGit.
   if (gitEnvironmentIn(text, ctx)) ctx = { ...ctx, gitRedirected: true };
   // Here-document bodies are data, not commands, unless a shell reads them.
-  const h = stripHeredocs(text, ctx.dialect);
-  if (!h.ok) return always('unreadable-command');
+  // One that never ends leaves the line unreadable, and the shell runs it all
+  // the same, so its text is also read as commands: that can only find more,
+  // and a Keychain command on the line is still named.
+  const h = ctx.heredocsAsCommands ? { text, bodies: [], ok: true } : stripHeredocs(text, ctx.dialect);
+  if (!h.ok) return stricter(always('unreadable-command'), judgeLine(text, { ...ctx, heredocsAsCommands: true }, depth + 1));
   let result = RUNS;
   for (const b of h.bodies) if (b.expands) result = stricter(result, judgeSubstitutions(b.body, ctx, depth, true));
   const segments = lexSegments(h.text, ctx.dialect);
@@ -129,7 +135,7 @@ function judgeLine(text, ctx, depth = 0) {
     const u = unwrap(words, ctx);
     if (!u) { prev = null; continue; }
     if (u.unreadable) { result = stricter(result, always('unreadable-command')); prev = null; continue; }
-    if (u.elevated) { result = stricter(result, always('elevation')); prev = u; continue; }
+    if (u.elevated) { result = stricter(result, judgeElevated(u, ctx, depth)); prev = u; continue; }
     if (/(^|[^<])<<(?!<)/.test(seg.text) && SHELLS.has(u.verb)) shellReadsHeredoc = true;
     // A here-string (`<<< word`) is data for the command, not an argument,
     // except to a shell, which runs it.
@@ -282,6 +288,25 @@ function unwrap(words, ctx) {
 }
 const UNREADABLE = Object.freeze({ verb: null, args: [], words: [], elevated: false, unreadable: true });
 
+// ELEVATION ALWAYS ASKS. What sudo or doas runs is read as well, past their
+// own options, so a Keychain command under one is named as one; any other
+// elevation, or one with nothing after it, asks as elevation.
+const ELEVATION_VALUE_FLAGS = 'aCDghpRrTtUu';
+const ELEVATION_VALUE_LONG = /^--(user|group|host|prompt|chdir|chroot|close-from|role|type|command-timeout|other-user)$/;
+function judgeElevated(u, ctx, depth) {
+  if (ctx.dialect !== 'bash' || !['sudo', 'doas'].includes(verbOf(u.words[0].text, ctx))) return always('elevation');
+  const w = u.words.slice(1);
+  while (w.length && /^-./.test(w[0].text)) {
+    const f = w.shift().text;
+    if (f === '--') break;
+    if (ELEVATION_VALUE_LONG.test(f)) { w.shift(); continue; }
+    // A short option taking a value takes the next word when it ends the group.
+    if (!/^--/.test(f) && [...f.slice(1)].findIndex(c => ELEVATION_VALUE_FLAGS.includes(c)) === f.length - 2) w.shift();
+  }
+  if (!w.length) return always('elevation');
+  return stricter(always('elevation'), judgeLine(w.map(x => x.raw).join(' '), ctx, depth + 1));
+}
+
 // THE WRAPPERS' OWN OPTIONS, as far as they are modelled: the words left once
 // the wrapper and its options are removed, 'lookup' for a command that only
 // names a program, or null for an option not modelled here.
@@ -427,6 +452,7 @@ function judgeCommand(u, ctx, { piped, prev } = {}) {
   }
   if (v === 'xargs') return judgeXargs(a, ctx);
   if (ctx.dialect === 'bash' && v === 'find') return judgeFind(a, ctx);
+  if (v === 'security') return judgeSecurity(a);
 
   // Disks, the machine, publishing, containers, git.
   if (v === 'dd' || /^mkfs(\.|$)/.test(v)) return always('disk');
@@ -523,6 +549,33 @@ function inner(arg, ctx, dialect) {
 }
 function knownCmdVars(text) {
   return String(text).replace(/%(USERPROFILE|TEMP|TMP|LOCALAPPDATA|APPDATA)%/gi, '').indexOf('%') === -1;
+}
+
+// THE KEYCHAIN. On a Mac the runtime keeps its live sign-in token there, and
+// the command sandbox lets every command reach it, because the runtime signs
+// in through the same service: a sandboxed `security` searches the Keychain
+// like any other. So `security` always asks, unless it only displays the
+// keychain list or settings, checks a certificate or prints help: these exact
+// names, so a shortened or misspelled one asks rather than being guessed at.
+// A password lookup without -w or -g asks too: it prints the item's account
+// and service, which is how the command that reads the token finds it. -i and
+// -p read further commands from stdin, which nothing here sees.
+const SECURITY_DISPLAYS = new Set(['help', 'error', 'show-keychain-info', 'verify-cert', 'find-identity']);
+// These display without -s and set the list, or the default, with it.
+const SECURITY_DISPLAYS_UNLESS_SET = new Set(['list-keychains', 'default-keychain', 'login-keychain']);
+function judgeSecurity(args) {
+  let i = 0;
+  for (; i < args.length && /^-./.test(args[i].text) && args[i].text !== '--'; i++) {
+    if (!/^-[hlqv]+$/.test(args[i].text)) return always(KEYCHAIN);
+  }
+  if (args[i] && args[i].text === '--') i++;
+  const sub = args[i];
+  if (!sub) return RUNS; // with no command, it prints its list of commands
+  // A name only known when the line runs, or a pattern, keeps its `$` or `*`
+  // here, so it never matches a display name and asks.
+  if (SECURITY_DISPLAYS.has(sub.text)) return RUNS;
+  if (SECURITY_DISPLAYS_UNLESS_SET.has(sub.text) && !args.slice(i + 1).some(w => w.expands || /^-[A-Za-z]*s/.test(w.text))) return RUNS;
+  return always(KEYCHAIN);
 }
 
 function judgeDocker(v, t) {
@@ -739,7 +792,7 @@ function judgeFind(args, ctx) {
     const u = unwrap(cmd, ctx);
     if (!u) continue;
     if (u.unreadable) return always('unreadable-command');
-    if (u.elevated) return always('elevation');
+    if (u.elevated) return judgeElevated(u, ctx, 0);
     if (['rm', 'unlink', 'rmdir', 'shred'].includes(u.verb)) {
       result = stricter(result, judgeDelete(startTargets, { bulk: true, kind: 'find' }, ctx));
     } else {
@@ -764,7 +817,7 @@ function judgeXargs(args, ctx) {
   const u = unwrap(ws, ctx);
   if (!u) return RUNS;
   if (u.unreadable) return always('unreadable-command');
-  if (u.elevated) return always('elevation');
+  if (u.elevated) return judgeElevated(u, ctx, 0);
   return judgeCommand(u, ctx, { piped: true });
 }
 

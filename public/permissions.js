@@ -372,6 +372,7 @@
     'wsl-unregister': () => 'This deletes the Linux distribution and everything stored in it.',
     'publish': () => 'This publishes a package version that can never be replaced.',
     'every-process': () => 'This stops every program you have open, Rundock included.',
+    'keychain': () => 'This reads or changes a password or key stored in your Mac\'s Keychain, where sign-in tokens are kept.',
   };
   const ALWAYS_ASKS_CLOSING = 'Rundock asks about commands like this every time, even in Code mode, so there is no Always allow.';
 

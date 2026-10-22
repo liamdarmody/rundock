@@ -1788,6 +1788,9 @@ fetchAgentNotice((agentNotice) => {
   const verdict = (codeMode && shellCommand !== null)
     ? codeModeVerdict({ toolName: data.tool_name, command: shellCommand, cwd, workspaceRoot: wsRoot, extraDirs })
     : null;
+  // A line that reads or changes the Keychain: asked every time, with no folder
+  // or rule to remember, and refused when nobody can be asked.
+  const keychain = !!(verdict && verdict.reason === 'keychain');
   if (codeMode
       && !(access && (access.where === 'outside' || access.answerFile))
       && (!verdict || verdict.verdict === 'runs')) {
@@ -1867,7 +1870,7 @@ fetchAgentNotice((agentNotice) => {
           // does is draw a button; what `grantable` does is decide whether a
           // stored grant may answer. Two questions, and they are answered by two
           // fields on purpose.
-          grant_dir: (boundaryCrossings[0] && boundaryCrossings[0].grantDir) || access.grantDir || null,
+          grant_dir: keychain ? null : ((boundaryCrossings[0] && boundaryCrossings[0].grantDir) || access.grantDir || null),
           // WHETHER A STANDING FOLDER GRANT MAY ANSWER THIS AT ALL.
           //
           // False for every shell command. A folder grant and a command
@@ -1945,6 +1948,7 @@ fetchAgentNotice((agentNotice) => {
   function unanswered(reason) {
     let why;
     if (answerFile) why = 'This file records your own permission answers, and it is never changed without asking, so it was refused rather than approved on your behalf.';
+    else if (keychain) why = 'This reads or changes a password or key stored in your Mac\'s Keychain, and it is never done without asking, so it was refused rather than approved on your behalf.';
     else if (alwaysAsks || destructive) why = 'This command cannot be undone, and it is never run without asking, so it was refused rather than approved on your behalf.';
     else if (asksOnce) why = 'This command was held for your approval and Rundock could not ask, so it was refused rather than approved on your behalf.';
     else if (crossingAlwaysAsks) why = 'This reaches a place Rundock asks about every time, and it is never done without asking, so it was refused rather than approved on your behalf.';
