@@ -17,7 +17,8 @@
 // every mode, and no setting should silence it, so it neither counts nor gets
 // the hint. Nor does a card no setting would stop: a secret, an answer file,
 // an instruction file, a hidden folder under home, a persistence surface, a
-// Code-mode verdict, or a crossing whose places share no one folder.
+// verdict (Code mode's, or a Keychain read's in either mode), or a crossing
+// whose places share no one folder.
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = factory(require('./permissions.js'));
   else root.RundockRepeatHint = factory(root.RundockPermissions);
@@ -47,8 +48,9 @@
     const tool = r.tool_name || '';
     const input = r.input || {};
     if (r.put_back || r.answer_file === true) return null;
-    // Any Code-mode verdict on a card means Code mode has already judged it
-    // worth a person's decision: it can't be undone, or it asks once by rule.
+    // Any verdict on a card means it has already been judged worth a person's
+    // decision: it can't be undone or asks once by rule (Code mode), or, in
+    // either mode, it reads or changes the Keychain, which no setting stops.
     if (r.code_mode_verdict && r.code_mode_verdict.verdict) return null;
     // A command that can't be undone always asks. It never counts.
     if (RundockPermissions.classifyRisk(tool, input) === 'high') return null;

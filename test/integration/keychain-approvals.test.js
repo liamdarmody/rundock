@@ -15,7 +15,8 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 const http = require('node:http');
-const { spawn } = require('node:child_process');
+const os = require('node:os');
+const { spawn, execFileSync } = require('node:child_process');
 const { JSDOM } = require('jsdom');
 
 const h = require('../helpers/harness.js');
@@ -28,6 +29,8 @@ const K = `security find-generic-password -w -s ${SVC}`;
 const SENTENCE = 'This reads or changes a password or key stored in your Mac\'s Keychain, where sign-in tokens are kept.';
 const REFUSED = 'Rundock server unreachable. This reads or changes a password or key stored in your Mac\'s Keychain, '
   + 'and it is never done without asking, so it was refused rather than approved on your behalf.';
+// The refusal for a line that also holds something else that cannot be undone.
+const refusedFor = also => (also ? `${REFUSED} Part of it also cannot be undone.` : REFUSED);
 const MODES = ['code', 'notes'];
 
 // Each subcommand that asks.
@@ -74,7 +77,7 @@ const POSITIONS = [
   ['in a pipe', `echo ${SVC} | ${K}`],
   ['in a subshell', `(${K})`],
   ['in a substitution', `TOKEN=$(${K})`],
-  ['after sudo', `sudo ${K}`],
+  ['after sudo', `sudo ${K}`, 'elevation'],
   ['after nice', `nice -n 10 ${K}`],
   ['after time', `time ${K}`],
   ['through xargs', `echo ${SVC} | xargs security find-generic-password -w -s`],
@@ -84,8 +87,8 @@ const POSITIONS = [
   ['inside bash -c', `bash -c "${K}"`],
   ['inside sh -c', `sh -c '${K}'`],
   ['in a here-document fed to a shell', `bash <<EOF\n${K}\nEOF`],
-  ['through xargs and sudo', `echo ${SVC} | xargs sudo security find-generic-password -w -s`],
-  ['after nice and sudo', `nice sudo ${K}`],
+  ['through xargs and sudo', `echo ${SVC} | xargs sudo security find-generic-password -w -s`, 'elevation'],
+  ['after nice and sudo', `nice sudo ${K}`, 'elevation'],
 ];
 
 let client;
@@ -136,6 +139,8 @@ function runHook(command, { mode, port = h.port, convo = CONVO }) {
       RUNDOCK_CONVO_ID: convo,
       RUNDOCK_HOOK_TOKEN: h.hookToken(convo || null),
       RUNDOCK_EXTRA_DIRS: '',
+      // Git as a fresh install has it, whatever this machine's own settings.
+      GIT_CONFIG_GLOBAL: os.devNull, GIT_CONFIG_NOSYSTEM: '1',
     };
     if (mode === 'code') env.RUNDOCK_CODE_MODE = '1';
     else delete env.RUNDOCK_CODE_MODE;
@@ -182,12 +187,14 @@ async function press(r, action) {
   return r.done;
 }
 
-// Asked with Allow and Deny only, saying why, and refused when denied.
-async function assertAsks(command, mode) {
+// Asked with Allow and Deny only, saying why, and refused when denied. `also`
+// is the other reason the line always asks, kept beside the Keychain.
+async function assertAsks(command, mode, also) {
   const r = await request(command, { mode });
   assert.strictEqual(r.asked, true, `${command}: sent to a card rather than run`);
   assert.strictEqual(r.answeredByRule, false, `${command}: no saved answer answers it`);
-  assert.deepStrictEqual(r.msg.request.code_mode_verdict, { verdict: 'always-asks', reason: 'keychain' }, command);
+  const v = r.msg.request.code_mode_verdict;
+  assert.deepStrictEqual({ verdict: v.verdict, reason: v.reason, also: v.also && v.also.reason }, { verdict: 'always-asks', reason: 'keychain', also }, command);
   assert.deepStrictEqual(r.buttons, ['allow', 'deny'], `${command}: Allow and Deny only`);
   assert.strictEqual(r.allowLabel, 'Allow once');
   assert.ok(r.context.includes(SENTENCE), `${command}: the card says why: ${r.context}`);
@@ -212,6 +219,21 @@ async function assertAsBefore(command, mode, action = 'deny') {
   return r;
 }
 
+// A repository in the workspace whose drafts/ holds a file git has never saved.
+function repositoryWithUnsavedWork() {
+  const dir = path.join(h.workspaceDir, 'proj');
+  if (fs.existsSync(path.join(dir, '.git'))) return;
+  fs.mkdirSync(path.join(dir, 'drafts'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'README.md'), 'readme\n');
+  const env = {
+    ...process.env, GIT_CONFIG_GLOBAL: os.devNull, GIT_CONFIG_NOSYSTEM: '1',
+    GIT_AUTHOR_NAME: 'Test User', GIT_AUTHOR_EMAIL: 'test@example.invalid',
+    GIT_COMMITTER_NAME: 'Test User', GIT_COMMITTER_EMAIL: 'test@example.invalid',
+  };
+  for (const args of [['init', '-q'], ['add', 'README.md'], ['commit', '-q', '-m', 'start']]) execFileSync('git', args, { cwd: dir, env, stdio: 'ignore' });
+  fs.writeFileSync(path.join(dir, 'drafts', 'plan.md'), 'not saved anywhere\n');
+}
+
 // A port nothing listens on: Rundock has quit, or never answered.
 async function closedPort() {
   const s = http.createServer();
@@ -229,7 +251,19 @@ for (const mode of MODES) {
   });
 
   describe(`${Mode}: wherever the command sits in the line`, () => {
-    for (const [where, command] of POSITIONS) test(where, () => assertAsks(command, mode));
+    for (const [where, command, also] of POSITIONS) test(where, () => assertAsks(command, mode, also));
+  });
+
+  describe(`${Mode}: a Keychain read beside a delete of work git has never saved`, () => {
+    const LOST = 'This deletes files git has never saved: drafts/plan.md would be lost for good.';
+    for (const command of [`cd proj && rm -rf drafts && ${K}`, `cd proj && ${K} && rm -rf drafts`]) {
+      test(command, async () => {
+        repositoryWithUnsavedWork();
+        const r = await assertAsks(command, mode, 'unsaved-work');
+        assert.ok(r.context.includes(`${SENTENCE} ${LOST}`), `the card names both: ${r.context}`);
+        assert.deepStrictEqual(await runHook(command, { mode, port: await closedPort() }), { decision: 'deny', reason: refusedFor(true) });
+      });
+    }
   });
 
   describe(`${Mode}: what only displays is graded as before`, () => {
@@ -250,10 +284,10 @@ for (const mode of MODES) {
 
   describe(`${Mode}: no saved Always allow answers it`, () => {
     test('whichever word the line starts with', async () => {
-      const lines = [K, ...POSITIONS.map(([, c]) => c)];
-      chat.setStandingToolAllows(['Bash:security', ...lines.map(c => RP.toolAllowKey('Bash', { command: c }))]);
+      const lines = [[K], ...POSITIONS.map(([, c, also]) => [c, also])];
+      chat.setStandingToolAllows(['Bash:security', ...lines.map(([c]) => RP.toolAllowKey('Bash', { command: c }))]);
       try {
-        for (const command of lines) await assertAsks(command, mode);
+        for (const [command, also] of lines) await assertAsks(command, mode, also);
       } finally { chat.setStandingToolAllows([]); }
     });
   });
@@ -261,8 +295,8 @@ for (const mode of MODES) {
   describe(`${Mode}: when Rundock cannot be asked`, () => {
     test('every Keychain command is refused, and the agent is told why', async () => {
       const port = await closedPort();
-      for (const command of [...ASKS, ...POSITIONS.map(([, c]) => c)]) {
-        assert.deepStrictEqual(await runHook(command, { mode, port }), { decision: 'deny', reason: REFUSED }, command);
+      for (const [command, also] of [...ASKS.map(c => [c]), ...POSITIONS.map(([, c, a]) => [c, a])]) {
+        assert.deepStrictEqual(await runHook(command, { mode, port }), { decision: 'deny', reason: refusedFor(also) }, command);
       }
     });
     test('what only displays carries on as before', async () => {
@@ -325,7 +359,7 @@ describe('Notes mode: an Always allow saved for security', () => {
   test('in the workspace\'s saved answers, read back after a reload, never answers a Keychain read', async () => {
     saveAnswers(['Bash:security', 'Bash:sudo', 'Bash:bash', 'Bash:echo']);
     assert.ok((await reloadSavedAnswers()).includes('Bash:security'));
-    for (const command of [K, `sudo ${K}`, `bash -c "${K}"`, `echo ${SVC} | ${K}`]) await assertAsks(command, 'notes');
+    for (const [command, also] of [[K], [`sudo ${K}`, 'elevation'], [`bash -c "${K}"`], [`echo ${SVC} | ${K}`]]) await assertAsks(command, 'notes', also);
     saveAnswers([]);
     await reloadSavedAnswers();
   });

@@ -38,10 +38,18 @@ const RANK = { runs: 0, 'asks-once': 1, 'always-asks': 2 };
 const RUNS = Object.freeze({ verdict: 'runs' });
 const once = (rule, extra) => ({ verdict: 'asks-once', rule, ...(extra || {}) });
 const always = (reason, extra) => ({ verdict: 'always-asks', reason, ...(extra || {}) });
-// Between two reasons to always ask, the Keychain is the one the card names
-// (see judgeSecurity), wherever it sits in the line.
+// Between two reasons to always ask, the first in the line is the one given,
+// except that a Keychain read (see judgeSecurity) is always named. Nothing is
+// lost by that: the first other reason is kept beside it, as `also`, so the
+// card for a line that reads the Keychain and deletes unsaved work says both.
 const KEYCHAIN = 'keychain';
-const stricter = (a, b) => (RANK[b.verdict] > RANK[a.verdict] || (b.reason === KEYCHAIN && b.verdict === a.verdict) ? b : a);
+function stricter(a, b) {
+  if (RANK[a.verdict] !== RANK[b.verdict]) return RANK[b.verdict] > RANK[a.verdict] ? b : a;
+  if (a.reason !== KEYCHAIN && b.reason !== KEYCHAIN) return a;
+  const named = a.reason === KEYCHAIN ? a : b;
+  const also = [a, b].map(v => (v.reason === KEYCHAIN ? v.also : v)).find(Boolean);
+  return also ? { ...named, also } : named;
+}
 
 const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'fish']);
 const FETCHERS = new Set(['curl', 'wget', 'irm', 'iwr', 'invoke-restmethod', 'invoke-webrequest']);
@@ -1145,11 +1153,14 @@ function strip(ref) {
 }
 
 // THE KEYCHAIN IN NOTES MODE, which has no verdict of its own: the same
-// reading of the line, with no disk or git facts (none of them decides whether
-// a line reaches the Keychain), answered only when it does, and null otherwise.
+// reading of the line, first with no disk or git facts (none of them decides
+// whether a line reaches the Keychain), and null when it does not. Only for a
+// line that does are the facts read, so its card names what else on it cannot
+// be undone, as Code mode's does; should that reading fail, the Keychain alone.
 function keychainVerdict(opts) {
-  const v = codeModeVerdict({ ...opts, context: {} });
-  return v.reason === KEYCHAIN ? v : null;
+  if (codeModeVerdict({ ...opts, context: {} }).reason !== KEYCHAIN) return null;
+  const v = codeModeVerdict(opts);
+  return v.reason === KEYCHAIN ? v : always(KEYCHAIN);
 }
 
 module.exports = { codeModeVerdict, keychainVerdict, RULES };

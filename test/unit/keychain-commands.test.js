@@ -30,6 +30,9 @@ const HOME = '/home/agent';
 const SVC = 'example-service';
 const K = `security find-generic-password -w -s ${SVC}`;
 const KEYCHAIN = { verdict: 'always-asks', reason: 'keychain' };
+const SENTENCE = 'This reads or changes a password or key stored in your Mac\'s Keychain, where sign-in tokens are kept.';
+// The Keychain verdict, with the other reason to always ask the line holds, if any.
+const keychainWith = also => (also ? { ...KEYCHAIN, also: { verdict: 'always-asks', reason: also } } : KEYCHAIN);
 
 function codeMode(command) {
   return codeModeVerdict({ toolName: 'Bash', command, cwd: WS, workspaceRoot: WS, extraDirs: [], home: HOME, platform: 'darwin', context: {} });
@@ -137,14 +140,14 @@ const POSITIONS = [
   ['after env', `env ${K}`],
   ['after env VAR=', `env LANG=C ${K}`],
   ['after an assignment', `LANG=C ${K}`],
-  ['after sudo', `sudo ${K}`],
-  ['after sudo and its options', `sudo -u root -E ${K}`],
-  ['after sudo and its long options', `sudo --user root --preserve-env ${K}`],
-  ['after sudo with a value joined to its option', `sudo -uroot ${K}`],
-  ['after doas', `doas ${K}`],
+  ['after sudo', `sudo ${K}`, 'elevation'],
+  ['after sudo and its options', `sudo -u root -E ${K}`, 'elevation'],
+  ['after sudo and its long options', `sudo --user root --preserve-env ${K}`, 'elevation'],
+  ['after sudo with a value joined to its option', `sudo -uroot ${K}`, 'elevation'],
+  ['after doas', `doas ${K}`, 'elevation'],
   ['after nice', `nice ${K}`],
   ['after nice -n', `nice -n 10 ${K}`],
-  ['after nice and sudo', `nice sudo ${K}`],
+  ['after nice and sudo', `nice sudo ${K}`, 'elevation'],
   ['after time', `time ${K}`],
   ['after nohup', `nohup ${K}`],
   ['after exec', `exec ${K}`],
@@ -165,20 +168,20 @@ const POSITIONS = [
   ['behind if', `if ${K}; then echo found; fi`],
   ['through xargs', `echo ${SVC} | xargs security find-generic-password -w -s`],
   ['through xargs -I', `echo ${SVC} | xargs -I{} security find-generic-password -w -s {}`],
-  ['through xargs and sudo', `echo ${SVC} | xargs sudo security find-generic-password -w -s`],
+  ['through xargs and sudo', `echo ${SVC} | xargs sudo security find-generic-password -w -s`, 'elevation'],
   ['through find -exec', `find . -name x -exec ${K} \\;`],
-  ['through find -exec and sudo', `find . -name x -exec sudo ${K} \\;`],
+  ['through find -exec and sudo', `find . -name x -exec sudo ${K} \\;`, 'elevation'],
   ['inside bash -c', `bash -c "${K}"`],
   ['inside sh -c', `sh -c '${K}'`],
   ['inside zsh -c', `zsh -c "${K}"`],
   ['inside bash -lc', `bash -lc "${K}"`],
-  ['inside sudo bash -c', `sudo bash -c "${K}"`],
+  ['inside sudo bash -c', `sudo bash -c "${K}"`, 'elevation'],
   ['in a here-document fed to bash', `bash <<EOF\n${K}\nEOF`],
   ['in a quoted here-document fed to sh', `sh <<'EOF'\n${K}\nEOF`],
   ['in a here-string fed to bash', `bash <<< "${K}"`],
-  ['before a here-document that never ends, which the shell still runs', `${K} <<EOF\nmore`],
-  ['after a command that asks for another reason', `eval "$X"; ${K}`],
-  ['before a command that asks for another reason', `${K}; eval "$X"`],
+  ['before a here-document that never ends', `${K} <<EOF\nmore`, 'unreadable-command'],
+  ['after a command that asks for another reason', `eval "$X"; ${K}`, 'unreadable-command'],
+  ['before a command that asks for another reason', `${K}; eval "$X"`, 'unreadable-command'],
 ];
 
 describe('in Code mode, a Keychain command always asks, and says it is the Keychain', () => {
@@ -187,9 +190,9 @@ describe('in Code mode, a Keychain command always asks, and says it is the Keych
       assert.deepStrictEqual(codeMode(`security ${args}`), KEYCHAIN);
     });
   }
-  for (const [where, command] of POSITIONS) {
+  for (const [where, command, also] of POSITIONS) {
     test(where, () => {
-      assert.deepStrictEqual(codeMode(command), KEYCHAIN, command);
+      assert.deepStrictEqual(codeMode(command), keychainWith(also), command);
     });
   }
 });
@@ -233,6 +236,11 @@ function counting() {
     },
   };
 }
+function notesModeCounting(command) {
+  const c = counting();
+  const v = keychainVerdict({ toolName: 'Bash', command, cwd: WS, workspaceRoot: WS, extraDirs: [], home: HOME, platform: 'darwin', context: c.context });
+  return { v, calls: c.calls.n };
+}
 function codeModeCounting(command) {
   const c = counting();
   const v = codeModeVerdict({ toolName: 'Bash', command, cwd: WS, workspaceRoot: WS, extraDirs: [], home: HOME, platform: 'darwin', context: c.context });
@@ -273,6 +281,36 @@ describe('reading for the Keychain asks the disk and git for nothing', () => {
   });
 });
 
+describe('the Keychain is named, and what else on the line cannot be undone is kept', () => {
+  // What the delete alone is asked about: files under build/ git has never saved.
+  const alone = () => codeModeCounting('rm -rf build').v;
+
+  for (const command of [`rm -rf build && ${K}`, `${K} && rm -rf build`]) {
+    test(command, () => {
+      assert.strictEqual(alone().reason, 'unsaved-work');
+      assert.deepStrictEqual(codeModeCounting(command).v, { ...KEYCHAIN, also: alone() }, 'Code mode');
+      assert.deepStrictEqual(notesModeCounting(command).v, { ...KEYCHAIN, also: alone() }, 'Notes mode');
+    });
+  }
+
+  test('the first other reason on the line is the one kept', () => {
+    assert.deepStrictEqual(codeModeCounting(`eval "$X"; rm -rf build; ${K}`).v, keychainWith('unreadable-command'));
+    assert.deepStrictEqual(codeModeCounting(`rm -rf build; ${K}; eval "$X"`).v, { ...KEYCHAIN, also: alone() });
+  });
+
+  test('Notes mode reads the facts only for a line that reaches the Keychain', () => {
+    assert.deepStrictEqual(notesModeCounting('rm -rf build'), { v: null, calls: 0 });
+    assert.ok(notesModeCounting(`rm -rf build && ${K}`).calls > 0);
+  });
+
+  test('the card says both', () => {
+    assert.strictEqual(RP.verdictCardCopy({ ...KEYCHAIN, also: alone() }).sentence,
+      `${SENTENCE} This deletes files git has never saved: build/new.txt would be lost for good.`);
+    assert.strictEqual(RP.verdictCardCopy(keychainWith('elevation')).sentence,
+      `${SENTENCE} This runs as an administrator, beyond anything Rundock can see or check.`);
+  });
+});
+
 describe('a here-document that never ends', () => {
   test('is data unless a shell reads it, so prose in it is never a Keychain command', () => {
     const prose = 'cat <<EOF\nsecurity find-generic-password is how a password is read\n';
@@ -293,9 +331,9 @@ describe('in Notes mode, the same reading finds the same commands', () => {
       assert.deepStrictEqual(notesMode(`security ${args}`), KEYCHAIN);
     });
   }
-  for (const [where, command] of POSITIONS) {
+  for (const [where, command, also] of POSITIONS) {
     test(where, () => {
-      assert.deepStrictEqual(notesMode(command), KEYCHAIN, command);
+      assert.deepStrictEqual(notesMode(command), keychainWith(also), command);
     });
   }
   test('and answers nothing for any other line, which Notes mode grades as before', () => {
@@ -315,10 +353,10 @@ describe('a Codex escalation that reaches the Keychain', () => {
 
   test('carries the Keychain verdict to its card, in both modes', () => {
     for (const codeModeOn of [false, true]) {
-      for (const command of [K, `sudo ${K}`, `bash -c "${K}"`]) {
+      for (const [command, also] of [[K], [`sudo ${K}`, 'elevation'], [`bash -c "${K}"`]]) {
         const g = grade(command, codeModeOn);
         assert.strictEqual(g.decision, 'card', command);
-        assert.deepStrictEqual(g.request.code_mode_verdict, KEYCHAIN, command);
+        assert.deepStrictEqual(g.request.code_mode_verdict, keychainWith(also), command);
       }
     }
   });
@@ -334,7 +372,7 @@ describe('a Codex escalation that reaches the Keychain', () => {
 describe('the card', () => {
   test('says why it asks, and offers no Always allow', () => {
     assert.deepStrictEqual(RP.verdictCardCopy(KEYCHAIN), {
-      sentence: 'This reads or changes a password or key stored in your Mac\'s Keychain, where sign-in tokens are kept.',
+      sentence: SENTENCE,
       closing: RP.ALWAYS_ASKS_CLOSING, allowLabel: 'Allow once', alwaysLabel: null,
     });
     for (const risk of ['low', 'medium', 'high']) assert.strictEqual(RP.offersAlwaysAllow(risk, KEYCHAIN), false, risk);
