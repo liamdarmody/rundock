@@ -1313,6 +1313,57 @@ describe('the block denies the runtime\'s own escape paths, whatever runtime ver
     const withoutIt = { ...block, filesystem: { ...block.filesystem, denyWrite: deny.slice(0, -1) } };
     assert.strictEqual(scaffold.isRundockSandbox(withoutIt, 'darwin'), true, 'so a block without it is still ours, and upgrades');
   });
+
+  test('the operating-system paragraph names every escape path the block denies', () => {
+    // Read from the block rather than from a list kept here, so an entry added
+    // to the code without a word in the document fails.
+    const doc = fs.readFileSync(path.join(ROOT, 'ARCHITECTURE.md'), 'utf8');
+    const start = doc.indexOf('**The guarantee is the operating-system row, and only that row.**');
+    assert.ok(start !== -1, 'the paragraph is present');
+    const paragraph = doc.slice(start, doc.indexOf('\n', start));
+    const deny = scaffold.sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], []).filesystem.denyWrite;
+    const escapes = deny.slice(deny.indexOf(credentials(HOME).slice(-1)[0]) + 1);
+    assert.ok(escapes.length > 0, 'sanity: there are escape paths to name');
+    for (const p of escapes) {
+      const name = p.startsWith(`${HOME}/.claude/settings.json`) ? '~/.claude/settings.json'
+        : p.startsWith(`${HOME}/.claude/`) ? p.slice(`${HOME}/.claude/`.length)
+          : p.startsWith(`${HOME}/.claude-`) ? `~/${p.slice(`${HOME}/`.length)}`
+            : p.startsWith(`${WS}/`) ? p.slice(`${WS}/`.length) : p;
+      assert.ok(paragraph.includes(`\`${name}\``), `the paragraph names \`${name}\`, which the block denies`);
+    }
+    assert.match(paragraph, /acts on outside the sandbox in a later session, including/,
+      'the list is offered as examples of what the runtime acts on, not as all of it');
+    assert.match(paragraph,
+      /The Claude Code 2\.1\.259 bundle carries that last group of `denyWrite` entries in its own built-in write-deny list \(a static read of the bundle, not a live measurement\)/,
+      'and says where the runtime\'s own list was read, and how');
+    assert.match(paragraph, /When the workspace is the home folder/, 'and what the deny means when the workspace is the home folder');
+    assert.match(paragraph, /A workspace opened inside one of those folders/, 'and for a workspace opened inside one of them');
+  });
+
+  test('the persistence passage says the block refuses a shell write only where the block denies it', () => {
+    // Bound in both directions over the registry's own surfaces: each one the
+    // block denies is named where the passage says the write is refused, and
+    // each one it does not deny is named where the passage says the write lands.
+    const doc = fs.readFileSync(path.join(ROOT, 'ARCHITECTURE.md'), 'utf8');
+    const passage = doc.slice(doc.indexOf('<!-- boundary-registry-start -->'), doc.indexOf('<!-- boundary-registry-end -->'));
+    const approved = passage.indexOf('Approving it lets the command run.');
+    assert.ok(approved !== -1, 'the passage says what approving a shell write does');
+    const refusedAt = passage.indexOf('the block\'s `denyWrite` list names', approved);
+    assert.ok(refusedAt !== -1, 'the passage says what the block denies');
+    const refused = passage.slice(refusedAt, passage.indexOf('so the sandboxed write is refused', refusedAt));
+    const landsAt = passage.indexOf('is not in the block\'s deny list and lands once approved');
+    assert.ok(landsAt !== -1, 'the passage says what the block leaves writable');
+    const lands = passage.slice(passage.lastIndexOf('. ', landsAt), landsAt);
+    const deny = scaffold.sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], []).filesystem.denyWrite;
+    const surfaces = [...hook.PERSISTENCE_SURFACE_DIRS.map((d) => [d, `\`${d}/\``]), ...hook.PERSISTENCE_SURFACE_FILES.map((f) => [f, `\`${f}\``])];
+    for (const [name, quoted] of surfaces) {
+      if (deny.includes(`${HOME}/.claude/${name}`)) {
+        assert.ok(refused.includes(quoted) && !lands.includes(quoted), `${quoted} is denied by the block, and the passage says its write is refused`);
+      } else {
+        assert.ok(lands.includes(quoted) && !refused.includes(quoted), `${quoted} is not denied by the block, and the passage says its write lands`);
+      }
+    }
+  });
 });
 
 // AN EXISTING WORKSPACE GAINS THE ESCAPE PATHS THE WAY IT GAINED THE CREDENTIAL
