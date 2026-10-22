@@ -136,8 +136,11 @@ describe('the verb tables', () => {
     assert.deepStrictEqual([...hook.MCP_READ_VERBS].sort(), [
       'activity', 'available', 'collaborators', 'comments', 'count', 'daily', 'describe', 'export', 'fetch', 'find',
       'get', 'info', 'list', 'overview', 'query', 'read', 'recent', 'retrieve', 'review', 'search', 'show', 'status',
-      'suggest', 'view',
+      'view',
     ]);
+    // `suggest` reads only beside these words, and only these.
+    assert.deepStrictEqual([...hook.MCP_SUGGEST_TIME_WORDS].sort(),
+      ['availability', 'meeting', 'meetings', 'slot', 'slots', 'time', 'times']);
   });
 
   test('the client grades the same words as a send that the hook does', () => {
@@ -152,14 +155,25 @@ describe('the verb tables', () => {
   });
 });
 
-describe('suggesting is a read', () => {
-  // A calendar's suggest_time reads availability and changes nothing, like the
-  // list, search and get actions beside it.
+describe('suggesting a time is a read, and suggesting anything else asks', () => {
+  // A calendar's suggest_time reads availability and books nothing, like the
+  // list, search and get actions beside it. A document's suggest_edit makes a
+  // suggestion other people see, so `suggest` is a read only when every other
+  // word in the action names a time or availability.
   const calendar = (action) => `mcp__example_calendar__${action}`;
 
-  test('suggest_time runs as a read, like the calendar reads beside it', () => {
-    for (const action of ['suggest_time', 'suggestTime', 'list_events', 'search_events', 'get_event']) {
+  test('suggesting a time runs as a read, like the calendar reads beside it', () => {
+    for (const action of ['suggest_time', 'suggestTime', 'suggest_times', 'suggest_meeting_slots', 'suggest_availability',
+      'list_events', 'search_events', 'get_event']) {
       assert.strictEqual(hook.isMcpReadTool(calendar(action)), true, action);
+    }
+  });
+
+  test('suggesting anything else asks, as an ordinary write', () => {
+    for (const action of ['suggest_edit', 'suggest_edits', 'suggest_changes', 'suggest_and_book', 'suggest_time_and_book',
+      'update_suggest', 'post_suggest', 'suggest', 'meeting_slots']) {
+      assert.strictEqual(hook.isMcpReadTool(calendar(action)), false, action);
+      assert.strictEqual(P.classifyRisk(calendar(action), {}), 'medium', action);
     }
   });
 

@@ -206,15 +206,22 @@ describe('when Rundock cannot be asked', () => {
   });
 });
 
-describe('suggesting a time is a read', () => {
+describe('suggesting a time is a read, and suggesting an edit is not', () => {
   const CALENDAR = (action) => `mcp__example_calendar__${action}`;
-  for (const action of ['suggest_time', 'list_events', 'get_event']) {
+  for (const action of ['suggest_time', 'suggest_meeting_slots', 'list_events', 'get_event']) {
     test(`${action} runs with no card`, async () => {
       const r = await request(CALENDAR(action));
       assert.strictEqual(r.asked, false);
       assert.deepStrictEqual(r.hook, { decision: 'allow', reason: 'Auto-approved: MCP read' });
     });
   }
+
+  test('suggesting an edit asks, as an ordinary write', async () => {
+    const r = await request('mcp__example_docs__suggest_edit');
+    assert.strictEqual(r.asked, true);
+    assert.deepStrictEqual(r.buttons, ['allow', 'always', 'deny']);
+    assert.strictEqual((await press(r, 'deny')).decision, 'deny');
+  });
 
   test('creating an event still asks', async () => {
     const r = await request(CALENDAR('create_event'));

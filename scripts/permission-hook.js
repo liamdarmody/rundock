@@ -287,9 +287,16 @@ const MCP_DESTRUCTIVE_VERBS = new Set(['delete','remove','destroy','drop','cance
 // The client grades the same words high (MCP_SEND_VERBS in
 // public/permissions.js), so a send asks every time and is never remembered.
 const MCP_SEND_VERBS = new Set(['send','resend','reply','forward']);
-// `suggest` is a read: a calendar's suggest_time reads availability and books
-// nothing, like the list, search and get actions beside it.
-const MCP_READ_VERBS = new Set(['get','list','search','find','read','fetch','retrieve','query','export','view','describe','show','info','overview','status','count','available','daily','review','recent','collaborators','comments','activity','suggest']);
+const MCP_READ_VERBS = new Set(['get','list','search','find','read','fetch','retrieve','query','export','view','describe','show','info','overview','status','count','available','daily','review','recent','collaborators','comments','activity']);
+// `suggest` is a read only when it suggests a time. A calendar's suggest_time
+// reads availability and books nothing, like the list, search and get actions
+// beside it; suggest_edit, suggest_changes or suggest_and_book write. So it
+// counts only when every other word in the action names a time, and one does.
+const MCP_SUGGEST_TIME_WORDS = new Set(['time','times','slot','slots','availability','meeting','meetings']);
+function suggestsOnlyATime(tokens) {
+  const rest = tokens.filter(t => t !== 'suggest');
+  return rest.length > 0 && rest.length < tokens.length && rest.every(t => MCP_SUGGEST_TIME_WORDS.has(t));
+}
 // The words of a connector action: the tool name after its server prefix.
 function mcpActionWords(toolName) {
   return String(toolName).split('__').slice(2).join('_')
@@ -302,7 +309,7 @@ function isMcpReadTool(toolName) {
   const tokens = mcpActionWords(toolName);
   if (tokens.some(t => MCP_DESTRUCTIVE_VERBS.has(t) || MCP_SEND_VERBS.has(t))) return false;
   if (tokens.some(t => MCP_READ_VERBS.has(t))) return true;
-  return false;
+  return suggestsOnlyATime(tokens);
 }
 // A connector action that sends, replies or forwards. The saved answers never
 // hold one (lib/workspace/boundary.js): it asks every time, so a saved
@@ -1448,7 +1455,7 @@ function classifyShellAccess(toolName, toolInput, workspaceRoot, extraDirs = [],
 
 module.exports = {
   isProtectedClaudeEdit, isRuntimeHomeSurfaceEdit, isMcpReadTool, classifyFileAccess, classifyShellAccess, canonicalize,
-  MCP_READ_VERBS, MCP_DESTRUCTIVE_VERBS, MCP_SEND_VERBS, isMcpSendTool, isMcpDeleteTool,
+  MCP_READ_VERBS, MCP_DESTRUCTIVE_VERBS, MCP_SEND_VERBS, MCP_SUGGEST_TIME_WORDS, isMcpSendTool, isMcpDeleteTool,
   advisoryOutsidePaths,
   isSecretPath, isPersistenceSurface, SECRET_RELATIVE_PATHS, PERSISTENCE_SURFACE_DIRS, PERSISTENCE_SURFACE_FILES,
   CODEX_SECRET_RELATIVE_PATHS, CODEX_PERSISTENCE_SURFACE_DIRS, CODEX_PERSISTENCE_SURFACE_FILES,

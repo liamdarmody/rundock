@@ -1542,11 +1542,25 @@ const MUTATIONS = [
   [CONNECTOR_HOOK, 'Connector delete: a tool that is not a connector is taken for a delete',
     "  return String(toolName).startsWith('mcp__') && mcpActionWords(toolName).some(t => MCP_DESTRUCTIVE_VERBS.has(t));",
     '  return mcpActionWords(toolName).some(t => MCP_DESTRUCTIVE_VERBS.has(t));'],
-  // Take suggest back out of the reads and a calendar's suggest_time raises a
-  // card again, where the list and get actions beside it run without one.
+  // Take the suggest rule out and a calendar's suggest_time raises a card
+  // again, where the list and get actions beside it run without one.
   [CONNECTOR_HOOK_FLOW, 'Connector read: suggesting a time asks as a write',
-    "'collaborators','comments','activity','suggest']);",
-    "'collaborators','comments','activity']);"],
+    '  return suggestsOnlyATime(tokens);',
+    '  return false;'],
+  // Loosen it and suggest_edit, suggest_time_and_book or a bare suggest run
+  // with no card, which is a write turned into a read.
+  [CONNECTOR_HOOK, 'Connector read: suggest beside any time word is a read',
+    '  return rest.length > 0 && rest.length < tokens.length && rest.every(t => MCP_SUGGEST_TIME_WORDS.has(t));',
+    '  return rest.length > 0 && rest.length < tokens.length && rest.some(t => MCP_SUGGEST_TIME_WORDS.has(t));'],
+  [CONNECTOR_HOOK, 'Connector read: a bare suggest is a read',
+    '  return rest.length > 0 && rest.length < tokens.length && rest.every(t => MCP_SUGGEST_TIME_WORDS.has(t));',
+    '  return rest.length < tokens.length && rest.every(t => MCP_SUGGEST_TIME_WORDS.has(t));'],
+  [CONNECTOR_HOOK, 'Connector read: time words with no suggest are a read',
+    '  return rest.length > 0 && rest.length < tokens.length && rest.every(t => MCP_SUGGEST_TIME_WORDS.has(t));',
+    '  return rest.length > 0 && rest.every(t => MCP_SUGGEST_TIME_WORDS.has(t));'],
+  [CONNECTOR_HOOK, 'Connector read: the time words lose availability',
+    "const MCP_SUGGEST_TIME_WORDS = new Set(['time','times','slot','slots','availability','meeting','meetings']);",
+    "const MCP_SUGGEST_TIME_WORDS = new Set(['time','times','slot','slots','meeting','meetings']);"],
   // ===== STOP AND ASK AFTER A REFUSAL =====
   [STOP_ASK_HOOK, "Stop and ask: a denied card goes back to inviting another route",
     ": refusalNotice(result.reason === 'timeout' ? 'timeout' : 'denied', data.tool_name);",
