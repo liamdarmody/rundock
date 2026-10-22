@@ -838,3 +838,55 @@ describe('the answer-file reason reaches the browser', () => {
       'reads were always free and this change must not start carding them');
   });
 });
+
+// THE LAUNCHER THE RUNTIME STARTS THE PERMISSION HOOK THROUGH, asked about in
+// sequence through the real hook and the real server. A denial is not kept as
+// a standing no and an approval is not kept as a standing yes: each attempt
+// asks. The same write through another tool asks as well. Rundock's own write
+// of the file is made from the server's process, which neither the hook nor the
+// sandbox judges, so it lands with no card.
+describe('the launcher the permission hook is started through', () => {
+  const launcher = () => path.join(h.workspaceDir, '.rundock', 'permission-hook.sh');
+  const isAnswerFileCard = m => m.type === 'control_request' && m.request
+    && (m.request.answer_file === true
+      || (Array.isArray(m.request.crossings) && m.request.crossings.length > 0 && m.request.crossings.every(c => c && c.answerFile)));
+  async function answer(pending, since, allow, label) {
+    const { msg } = await client.waitFor(isAnswerFileCard, { since, label });
+    assert.strictEqual(msg.request.grant_dir || null, null, `${label}: nothing a standing grant could be built from`);
+    client.send({ type: 'permission_response', requestId: msg.request_id, conversationId: 'boundary-test', allow });
+    return { msg, out: await pending };
+  }
+
+  test('denied, then retried, it asks again; through another tool it asks too; an approval is not remembered', async () => {
+    let since = client.messages.length;
+    const first = await answer(runHook('Write', { file_path: launcher(), content: 'exit 0' }), since, false, 'the first attempt');
+    assert.strictEqual(first.msg.request.answer_file, true, 'a file-tool write arrives as the answer-file card');
+    assert.notStrictEqual(first.msg.request.boundary, true, 'and does not claim the workspace was left');
+    assert.strictEqual(first.msg.request.resolved_path, canonicalize(launcher()), 'naming the launcher');
+    assert.strictEqual(decisionOf(first.out), 'deny', 'denied, it does not run');
+
+    since = client.messages.length;
+    const retry = await answer(runHook('Write', { file_path: launcher(), content: 'exit 0' }), since, false, 'the retry');
+    assert.strictEqual(decisionOf(retry.out), 'deny', 'the retry asked again, and was denied again');
+
+    since = client.messages.length;
+    const shell = await answer(runHook('Bash', { command: 'echo "exit 0" > .rundock/permission-hook.sh' }), since, true, 'the same write by redirect');
+    assert.strictEqual(decisionOf(shell.out), 'allow', 'approved once, that one runs');
+
+    since = client.messages.length;
+    const edit = await answer(runHook('Edit', { file_path: launcher(), old_string: 'exit', new_string: 'exit' }), since, false, 'an edit after an approval');
+    assert.strictEqual(decisionOf(edit.out), 'deny', 'the approval before it answered nothing: this one asked');
+  });
+
+  test("Rundock's own write of it lands, with no card", async () => {
+    const scaffold = require('../../lib/workspace/scaffold.js');
+    fs.writeFileSync(launcher(), '#!/bin/sh\nexit 0\n');
+    const since = client.messages.length;
+    scaffold.scaffoldWorkspace(h.workspaceDir, { platform: 'darwin' });
+    assert.match(fs.readFileSync(launcher(), 'utf-8'), /ELECTRON_RUN_AS_NODE=1 exec .*permission-hook\.js/,
+      'the server put its own launcher back');
+    await h.delay(300);
+    assert.strictEqual(client.messages.slice(since).filter(m => m.type === 'control_request').length, 0,
+      'and nothing asked: the hook never sees a write the server makes');
+  });
+});

@@ -440,7 +440,7 @@
   function alwaysAskCopy(crossing) {
     if (!crossing) return null;
     if (crossing.secret) return ALWAYS_ASK_COPY.secret;
-    if (crossing.answerFile) return ALWAYS_ASK_COPY.answerFile;
+    if (crossing.answerFile) return answerFileCopy(crossing.path);
     if (crossing.instructionFile) return ALWAYS_ASK_COPY.instructionFile;
     if (crossing.hiddenHome) return hiddenHomeCopy(crossing.hiddenHome, crossing.write === true);
     if (crossing.persistenceSurface) return ALWAYS_ASK_COPY.persistenceSurface;
@@ -585,7 +585,32 @@
     return null;
   }
 
-  function answerFileCopy() { return ALWAYS_ASK_COPY.answerFile; }
+  // WHICH ANSWER FILE A CARD IS ABOUT, for its words only. Whether a write asks
+  // is the hook's decision (the answer-file registry in
+  // scripts/permission-hook.js); the card reads the kind off the path it already
+  // shows, so every road a request takes here (the hook, a Codex approval, a
+  // replay) is worded alike. `paths` is one path or several; the most serious
+  // kind among them leads.
+  const ANSWER_FILE_COPY = {
+    answers: { summary: 'Wants to change what agents are allowed to do', context: ALWAYS_ASK_COPY.answerFile },
+    launcher: {
+      summary: 'Wants to change Rundock\'s permission checks',
+      context: 'This file starts Rundock\'s permission checks themselves, before every tool an agent uses, '
+        + 'so a change to it can switch every check off. An agent can request a change to it, but never keep the '
+        + 'permission: this asks every time, and there is no option to stop being asked.',
+    },
+  };
+  function answerFileKind(paths) {
+    const kinds = (Array.isArray(paths) ? paths : [paths]).map((p) => {
+      const parts = String(p || '').split(/[\\/]+/).filter(Boolean).map(s => s.toLowerCase());
+      const n = parts.length;
+      if (n >= 2 && parts[n - 2] === '.rundock' && /^permission-hook\.(sh|cmd)$/.test(parts[n - 1])) return 'launcher';
+      return 'answers';
+    });
+    return ['launcher'].find(k => kinds.includes(k)) || 'answers';
+  }
+  function answerFileCopy(paths) { return ANSWER_FILE_COPY[answerFileKind(paths)].context; }
+  function answerFileSummary(paths) { return ANSWER_FILE_COPY[answerFileKind(paths)].summary; }
 
   // ── The put-back card ────────────────────────────────────────────────────
   // Rundock has already put back a change to one of the workspace's permission
@@ -679,7 +704,7 @@
   // reach the same table, and new callers should use alwaysAskCopy.
   const agentHomeBoundaryCopy = alwaysAskCopy;
 
-  return { BASH_DESCRIPTIONS, bashBin, classifyRisk, describeToolRequest, toolAllowKey, decidePermission, offersAlwaysAllow, alwaysAskCopy, answerFileCopy,
+  return { BASH_DESCRIPTIONS, bashBin, classifyRisk, describeToolRequest, toolAllowKey, decidePermission, offersAlwaysAllow, alwaysAskCopy, answerFileCopy, answerFileSummary, answerFileKind,
     MCP_SEND_VERBS, MCP_DESTRUCTIVE_VERBS,
     putBackCardCopy, putBackDiffLines,
     verdictAllowKey, verdictCardCopy, ruleKeyLabel, ALWAYS_ASKS_CLOSING, allowButtonClass,

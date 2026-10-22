@@ -824,10 +824,12 @@ function renderPermissionCard(d, convoId, host) {
 
   if (answerFile) {
     // What is at stake, said plainly. Not which tool, not where the file sits:
-    // this request would change the rules that decide what agents may do.
-    summary = 'Wants to change what agents are allowed to do';
+    // this request would change the rules that decide what agents may do, or
+    // what runs when they act.
+    const named = [req.resolved_path, ...crossingList.map(c => c && c.path)].filter(Boolean);
+    summary = RundockPermissions.answerFileSummary(named);
     detail = req.resolved_path || detail;
-    context = RundockPermissions.answerFileCopy();
+    context = RundockPermissions.answerFileCopy(named);
   } else if (boundary) {
     const reads = toolName === 'Read' || toolName === 'Glob' || toolName === 'Grep';
     // A shell crossing does not say which act it is. The command may read,

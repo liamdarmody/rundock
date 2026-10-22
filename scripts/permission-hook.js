@@ -568,7 +568,17 @@ const RUNDOCK_ANSWER_FILES = ['.rundock/state.json', '.rundock/permissions.json'
 // and every other Rundock workspace alike, by isRundockWorkspaceSettingsFile
 // below, and carded rather than refused: the runtime is only measured to refuse
 // the settings file it is launched with.
-const WORKSPACE_ANSWER_FILES = [...RUNDOCK_ANSWER_FILES, ...RUNTIME_GUARDED_ANSWER_FILES];
+//
+// THE LAUNCHER THIS HOOK IS STARTED THROUGH. lib/workspace/scaffold.js writes
+// `.rundock/permission-hook.sh` (`.cmd` on Windows) and names it in the settings
+// file the runtime is launched with, so the runtime runs it before every tool
+// call, and whatever it says runs in this hook's place: a rewritten launcher
+// can answer every check itself or skip them all. It sits inside the
+// workspace, so a write to it passed as ordinary inside work, in both modes.
+// Kept out of RUNDOCK_ANSWER_FILES, whose entries open the sandbox block's deny
+// list: that list only ever grows at its end (scaffold.js appends it there).
+const LAUNCHER_FILES = ['.rundock/permission-hook.sh', '.rundock/permission-hook.cmd'];
+const WORKSPACE_ANSWER_FILES = [...RUNDOCK_ANSWER_FILES, ...RUNTIME_GUARDED_ANSWER_FILES, ...LAUNCHER_FILES];
 function matchesAnswerFileSet(set, resolvedPath, workspaceRoot, foldsCase = hostFoldsCase(), pmod = path) {
   if (typeof resolvedPath !== 'string' || !resolvedPath) return false;
   if (typeof workspaceRoot !== 'string' || !workspaceRoot) return false;
@@ -601,7 +611,7 @@ function isRundockAnswerFileAnywhere(resolvedPath, pmod = path) {
   const parts = resolvedPath.split(/[\\/]+/);
   const n = parts.length;
   const fold = v => (pmod === path.win32 || hostFoldsCase() ? v.toLowerCase() : v);
-  return n >= 2 && fold(parts[n - 2]) === '.rundock' && RUNDOCK_ANSWER_FILES.some(f => fold(f.split('/')[1]) === fold(parts[n - 1]));
+  return n >= 2 && fold(parts[n - 2]) === '.rundock' && [...RUNDOCK_ANSWER_FILES, ...LAUNCHER_FILES].some(f => fold(f.split('/')[1]) === fold(parts[n - 1]));
 }
 
 // A Claude settings file of a Rundock workspace: `.claude/settings.json` or
@@ -1467,7 +1477,7 @@ module.exports = {
   HOME_SECRET_FILES, secretsRegistry,
   agentHomeRoot, codexHomeRoot, runtimeHomes,
   isWorkspaceAnswerFile, isRuntimeGuardedAnswerFile,
-  WORKSPACE_ANSWER_FILES, RUNDOCK_ANSWER_FILES, RUNTIME_GUARDED_ANSWER_FILES,
+  WORKSPACE_ANSWER_FILES, RUNDOCK_ANSWER_FILES, RUNTIME_GUARDED_ANSWER_FILES, LAUNCHER_FILES,
   boundaryCrossingsFor,
   REFUSED_CLAUDE_EDIT_DIRS, isReadOnlyShellCommand, isRundockAnswerFileAnywhere, isRundockWorkspaceSettingsFile, isAnswerFileOfAnyWorkspace, otherWorkspaceRootOf, isOtherWorkspaceAgentSurface,
   INSTRUCTION_SURFACES, isInstructionSurface, hiddenHomeRootOf, alwaysAsksCrossing, SHELL_TOOLS,
@@ -1944,7 +1954,7 @@ fetchAgentNotice((agentNotice) => {
   const failClosed = answerFile || destructive || asksOnce || alwaysAsks || crossingAlwaysAsks || connectorAlwaysAsks;
   function unanswered(reason) {
     let why;
-    if (answerFile) why = 'This file records your own permission answers, and it is never changed without asking, so it was refused rather than approved on your behalf.';
+    if (answerFile) why = 'This file records your own permission answers or decides what runs, and it is never changed without asking, so it was refused rather than approved on your behalf.';
     else if (alwaysAsks || destructive) why = 'This command cannot be undone, and it is never run without asking, so it was refused rather than approved on your behalf.';
     else if (asksOnce) why = 'This command was held for your approval and Rundock could not ask, so it was refused rather than approved on your behalf.';
     else if (crossingAlwaysAsks) why = 'This reaches a place Rundock asks about every time, and it is never done without asking, so it was refused rather than approved on your behalf.';

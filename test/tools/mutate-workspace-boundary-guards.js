@@ -237,6 +237,13 @@ const CONNECTOR_CLIENT_FLOW = { src: path.join(ROOT, 'public', 'permissions.js')
 const CONNECTOR_STORE_FLOW = { src: path.join(ROOT, 'lib', 'workspace', 'boundary.js'), suite: 'test/integration/connector-approvals.test.js' };
 const CONNECTOR_HANDLER_FLOW = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'workspace.js'), suite: 'test/integration/connector-approvals.test.js' };
 
+// The files that decide what runs: the launcher the permission hook is started
+// through, the workspace's connector and project settings, and its hook
+// scripts. Each always asks, through the real hook and the real card.
+const WHAT_RUNS_HOOK = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/what-runs-files.test.js' };
+const WHAT_RUNS_CLIENT = { src: path.join(ROOT, 'public', 'permissions.js'), suite: 'test/unit/what-runs-files.test.js' };
+const WHAT_RUNS_VIEW = { src: path.join(ROOT, 'public', 'views', 'chat.js'), suite: 'test/unit/what-runs-files.test.js' };
+
 const MUTATIONS = [
   // ===== ONE DIRECTORY UNDER TWO NAMES IS ONE IDENTITY =====
   // Compare unresolved again and every symlink, alias and case spelling of
@@ -1732,6 +1739,22 @@ const MUTATIONS = [
   [APPROVED_GLUE, "Approved: a Codex without turn/steer is told in a later turn",
     "  Promise.resolve().then(() => ev.steer(approvalNotice(toolName))).catch(() => {});",
     "  Promise.resolve().then(() => ev.steer(approvalNotice(toolName))).catch(() => queueCodexNotice(convoId, approvalNotice(toolName)));"],
+  // ===== THE FILES THAT DECIDE WHAT RUNS ALWAYS ASK =====
+  [WHAT_RUNS_HOOK, 'What runs: the launcher is ordinary inside work, so a write to it runs with no card',
+    'const WORKSPACE_ANSWER_FILES = [...RUNDOCK_ANSWER_FILES, ...RUNTIME_GUARDED_ANSWER_FILES, ...LAUNCHER_FILES];',
+    'const WORKSPACE_ANSWER_FILES = [...RUNDOCK_ANSWER_FILES, ...RUNTIME_GUARDED_ANSWER_FILES];'],
+  [WHAT_RUNS_HOOK, "What runs: another workspace's launcher is not matched by name",
+    "[...RUNDOCK_ANSWER_FILES, ...LAUNCHER_FILES].some(f => fold(f.split('/')[1]) === fold(parts[n - 1]))",
+    "RUNDOCK_ANSWER_FILES.some(f => fold(f.split('/')[1]) === fold(parts[n - 1]))"],
+  [WHAT_RUNS_CLIENT, 'What runs: the launcher card is worded as an ordinary answer file',
+    "      if (n >= 2 && parts[n - 2] === '.rundock' && /^permission-hook\\.(sh|cmd)$/.test(parts[n - 1])) return 'launcher';\n",
+    ''],
+  [WHAT_RUNS_CLIENT, 'What runs: the stakes on a card that also reaches outside ignore which file it is',
+    '    if (crossing.answerFile) return answerFileCopy(crossing.path);',
+    '    if (crossing.answerFile) return answerFileCopy();'],
+  [WHAT_RUNS_VIEW, 'What runs: the card reads no path when choosing its words',
+    '    const named = [req.resolved_path, ...crossingList.map(c => c && c.path)].filter(Boolean);',
+    '    const named = [];'],
 ];
 const REPORTER = ['--test-reporter', 'spec'];
 
