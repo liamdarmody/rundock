@@ -13,6 +13,7 @@ const { test, describe, before, after } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
+const http = require('node:http');
 const { spawn } = require('node:child_process');
 const { JSDOM } = require('jsdom');
 
@@ -64,13 +65,14 @@ after(async () => {
   if (dom) dom.window.close();
 });
 
-// The real hook, given one tool call on stdin, in Notes mode.
-function runHook(toolName, convo) {
+// The real hook, given one tool call on stdin, in Notes mode. `port` is
+// Rundock's by default; a closed one stands for Rundock not running.
+function runHook(toolName, convo, port = h.port) {
   return new Promise((resolve, reject) => {
     const env = {
       ...process.env,
       RUNDOCK: '1',
-      RUNDOCK_PORT: String(h.port),
+      RUNDOCK_PORT: String(port),
       RUNDOCK_WORKSPACE: h.workspaceDir,
       RUNDOCK_CONVO_ID: convo,
       RUNDOCK_HOOK_TOKEN: h.hookToken(convo || null),
@@ -160,6 +162,39 @@ describe('names that only look like a send are graded as before', () => {
     const r = await request(MAIL('sender_lookup'));
     assert.deepStrictEqual(r.buttons, ['allow', 'always', 'deny']);
     assert.strictEqual((await press(r, 'deny')).decision, 'deny');
+  });
+});
+
+// A port nothing listens on: Rundock has quit, or never answered.
+async function closedPort() {
+  const s = http.createServer();
+  await new Promise((r) => s.listen(0, '127.0.0.1', r));
+  const { port } = s.address();
+  await new Promise((r) => s.close(r));
+  return port;
+}
+
+describe('when Rundock cannot be asked', () => {
+  // An agent still running after Rundock has stopped, a routine's included,
+  // meets a hook with nobody to ask. Ordinary work carries on; a send or a
+  // delete through a connector is refused, because nobody saw it.
+  for (const action of ['send_message', 'replyToThread', 'forward_email', 'delete_event', 'archiveThread']) {
+    test(`${action} is refused, and the agent is told why`, async () => {
+      const out = await runHook(MAIL(action), CONVO, await closedPort());
+      assert.strictEqual(out.decision, 'deny');
+      assert.match(out.reason, /^Rundock server unreachable\. /);
+      assert.match(out.reason, /sends, replies, forwards or deletes cannot be called back/);
+    });
+  }
+
+  test('a draft carries on as before', async () => {
+    assert.deepStrictEqual(await runHook(MAIL('create_draft'), CONVO, await closedPort()),
+      { decision: 'allow', reason: 'Rundock server unreachable.' });
+  });
+
+  test('a read carries on as before', async () => {
+    assert.deepStrictEqual(await runHook(MAIL('get_sent_items'), CONVO, await closedPort()),
+      { decision: 'allow', reason: 'Auto-approved: MCP read' });
   });
 });
 

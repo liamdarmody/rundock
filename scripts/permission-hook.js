@@ -310,6 +310,11 @@ function isMcpReadTool(toolName) {
 function isMcpSendTool(toolName) {
   return String(toolName).startsWith('mcp__') && mcpActionWords(toolName).some(t => MCP_SEND_VERBS.has(t));
 }
+// A connector action that deletes. With a send, it is refused rather than
+// allowed when Rundock cannot be asked (see unanswered in main).
+function isMcpDeleteTool(toolName) {
+  return String(toolName).startsWith('mcp__') && mcpActionWords(toolName).some(t => MCP_DESTRUCTIVE_VERBS.has(t));
+}
 
 // Deny a direct file edit to the GLOBAL Claude Code agent/skill config
 // (~/.claude/agents, ~/.claude/skills). Rundock never reads the global folder,
@@ -1443,7 +1448,7 @@ function classifyShellAccess(toolName, toolInput, workspaceRoot, extraDirs = [],
 
 module.exports = {
   isProtectedClaudeEdit, isRuntimeHomeSurfaceEdit, isMcpReadTool, classifyFileAccess, classifyShellAccess, canonicalize,
-  MCP_READ_VERBS, MCP_DESTRUCTIVE_VERBS, MCP_SEND_VERBS, isMcpSendTool,
+  MCP_READ_VERBS, MCP_DESTRUCTIVE_VERBS, MCP_SEND_VERBS, isMcpSendTool, isMcpDeleteTool,
   advisoryOutsidePaths,
   isSecretPath, isPersistenceSurface, SECRET_RELATIVE_PATHS, PERSISTENCE_SURFACE_DIRS, PERSISTENCE_SURFACE_FILES,
   CODEX_SECRET_RELATIVE_PATHS, CODEX_PERSISTENCE_SURFACE_DIRS, CODEX_PERSISTENCE_SURFACE_FILES,
@@ -1918,13 +1923,20 @@ fetchAgentNotice((agentNotice) => {
   const alwaysAsks = !!(verdict && verdict.verdict === 'always-asks');
   const crossingAlwaysAsks = codeMode && alwaysAsksCrossing(access);
   const answerFile = !!(access && (access.answerFile || boundaryCrossingsFor(access).some(c => c && c.answerFile)));
-  const failClosed = answerFile || destructive || asksOnce || alwaysAsks || crossingAlwaysAsks;
+  // AND A CONNECTOR SEND OR DELETE, which asks every time for the same reason:
+  // it cannot be called back. An agent still running after Rundock has
+  // stopped, a routine's included, would otherwise send with nobody having
+  // seen it. Only Notes mode reaches here with one: Code mode has already
+  // answered every connector action above.
+  const connectorAlwaysAsks = isMcpSendTool(data.tool_name) || isMcpDeleteTool(data.tool_name);
+  const failClosed = answerFile || destructive || asksOnce || alwaysAsks || crossingAlwaysAsks || connectorAlwaysAsks;
   function unanswered(reason) {
     let why;
     if (answerFile) why = 'This file records your own permission answers, and it is never changed without asking, so it was refused rather than approved on your behalf.';
     else if (alwaysAsks || destructive) why = 'This command cannot be undone, and it is never run without asking, so it was refused rather than approved on your behalf.';
     else if (asksOnce) why = 'This command was held for your approval and Rundock could not ask, so it was refused rather than approved on your behalf.';
     else if (crossingAlwaysAsks) why = 'This reaches a place Rundock asks about every time, and it is never done without asking, so it was refused rather than approved on your behalf.';
+    else if (connectorAlwaysAsks) why = 'A connector action that sends, replies, forwards or deletes cannot be called back, and it is never done without asking, so it was refused rather than approved on your behalf.';
     writeDecision(({
       hookSpecificOutput: {
         hookEventName: 'PreToolUse',

@@ -98,6 +98,22 @@ describe('names that only look like a send are graded as before', () => {
   });
 });
 
+describe('which connector actions delete', () => {
+  // Refused rather than allowed when Rundock cannot be asked, like a send.
+  test('a delete word anywhere in the action, split as a send is', () => {
+    for (const action of ['delete_event', 'deleteEvent', 'remove-label', 'cancelEvent', 'archive_thread', 'bulk_trash']) {
+      assert.strictEqual(hook.isMcpDeleteTool(tool(action)), true, action);
+    }
+  });
+
+  test('never a send, another write, a read, or a tool that is not a connector', () => {
+    for (const action of ['send_message', 'create_draft', 'get_deleted_items', 'list_removals']) {
+      assert.strictEqual(hook.isMcpDeleteTool(tool(action)), false, action);
+    }
+    for (const key of ['Bash:delete', 'plugin__mail__delete']) assert.strictEqual(hook.isMcpDeleteTool(key), false, key);
+  });
+});
+
 describe('the verb tables', () => {
   test('the words that make an action a send, a delete or a read, pinned', () => {
     assert.deepStrictEqual([...hook.MCP_SEND_VERBS].sort(), ['forward', 'reply', 'resend', 'send']);

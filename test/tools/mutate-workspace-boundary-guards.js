@@ -955,8 +955,8 @@ const MUTATIONS = [
     "verdict.verdict === 'asks-once' && typeof verdict.rule === 'string' ? verdict.rule : null;",
     "verdict.verdict === 'asks-once' && typeof verdict.rule === 'string' ? 'Bash:git' : null;"],
   [CM_HOOK, "M17: Asks once fails open when nobody can be asked",
-    "  const failClosed = answerFile || destructive || asksOnce || alwaysAsks || crossingAlwaysAsks;",
-    "  const failClosed = answerFile || destructive || alwaysAsks || crossingAlwaysAsks;"],
+    "  const failClosed = answerFile || destructive || asksOnce || alwaysAsks || crossingAlwaysAsks || connectorAlwaysAsks;",
+    "  const failClosed = answerFile || destructive || alwaysAsks || crossingAlwaysAsks || connectorAlwaysAsks;"],
   [CM_HOOK, "M18: the Code-mode branch answers before the boundary classification",
     "      && !(access && (access.where === 'outside' || access.answerFile))\n      && (!verdict || verdict.verdict === 'runs')) {",
     "      && (!verdict || verdict.verdict === 'runs')) {"],
@@ -1523,6 +1523,20 @@ const MUTATIONS = [
   [CONNECTOR_HOOK, 'Connector send: a tool that is not a connector is taken for a send',
     "  return String(toolName).startsWith('mcp__') && mcpActionWords(toolName).some(t => MCP_SEND_VERBS.has(t));",
     '  return mcpActionWords(toolName).some(t => MCP_SEND_VERBS.has(t));'],
+  // Let a connector send or delete through when nobody can be asked and an
+  // agent still running after Rundock has stopped sends with nobody seeing it.
+  [CONNECTOR_HOOK_FLOW, 'Connector send: a send or delete is allowed when Rundock cannot be asked',
+    "  const failClosed = answerFile || destructive || asksOnce || alwaysAsks || crossingAlwaysAsks || connectorAlwaysAsks;",
+    "  const failClosed = answerFile || destructive || asksOnce || alwaysAsks || crossingAlwaysAsks;"],
+  [CONNECTOR_HOOK_FLOW, 'Connector delete: a delete is allowed when Rundock cannot be asked',
+    '  const connectorAlwaysAsks = isMcpSendTool(data.tool_name) || isMcpDeleteTool(data.tool_name);',
+    '  const connectorAlwaysAsks = isMcpSendTool(data.tool_name);'],
+  [CONNECTOR_HOOK_FLOW, 'Connector send: the refusal does not say why',
+    "    else if (connectorAlwaysAsks) why = 'A connector",
+    "    else if (false) why = 'A connector"],
+  [CONNECTOR_HOOK, 'Connector delete: a tool that is not a connector is taken for a delete',
+    "  return String(toolName).startsWith('mcp__') && mcpActionWords(toolName).some(t => MCP_DESTRUCTIVE_VERBS.has(t));",
+    '  return mcpActionWords(toolName).some(t => MCP_DESTRUCTIVE_VERBS.has(t));'],
   // Take suggest back out of the reads and a calendar's suggest_time raises a
   // card again, where the list and get actions beside it run without one.
   [CONNECTOR_HOOK_FLOW, 'Connector read: suggesting a time asks as a write',
