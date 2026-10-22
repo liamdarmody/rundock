@@ -357,8 +357,8 @@ describe('in Notes mode, the same reading finds the same commands', () => {
 describe('a Codex escalation that reaches the Keychain', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'keychain-codex-'));
   after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const grade = (command, codeModeOn, platform = 'darwin') => gradeCodexApproval({
-    kind: 'command', params: { command }, workspaceRoot: dir, extraDirs: [], codeMode: codeModeOn, home: path.join(dir, 'home'), platform,
+  const grade = (command, codeModeOn, keychainPlatform = 'darwin') => gradeCodexApproval({
+    kind: 'command', params: { command }, workspaceRoot: dir, extraDirs: [], codeMode: codeModeOn, home: path.join(dir, 'home'), keychainPlatform,
   });
 
   test('carries the Keychain verdict to its card, in both modes', () => {
@@ -404,10 +404,19 @@ describe('on a host that is not a Mac, security is an ordinary command', () => {
         { verdict: 'always-asks', reason: 'elevation' }, 'sudo still asks, as elevation');
     });
   }
+  // The Keychain rules follow `keychainPlatform` and nothing else does: path
+  // handling and the delete checks stay on `platform`, the real host.
+  test('the Keychain gate has a platform of its own', () => {
+    const v = (platform, keychainPlatform) => codeModeVerdict({ toolName: 'Bash', command: K, workspaceRoot: WS, home: HOME, platform, keychainPlatform, context: {} });
+    assert.deepStrictEqual(v('linux', 'darwin'), KEYCHAIN);
+    assert.deepStrictEqual(v('darwin', 'linux'), { verdict: 'runs' });
+    assert.deepStrictEqual(v('darwin', undefined), KEYCHAIN, 'with none named, the host\'s');
+  });
+
   test('nor does a Codex escalation carry the Keychain verdict there', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'keychain-codex-linux-'));
     try {
-      const grade = codeModeOn => gradeCodexApproval({ kind: 'command', params: { command: K }, workspaceRoot: dir, codeMode: codeModeOn, home: path.join(dir, 'home'), platform: 'linux' });
+      const grade = codeModeOn => gradeCodexApproval({ kind: 'command', params: { command: K }, workspaceRoot: dir, codeMode: codeModeOn, home: path.join(dir, 'home'), keychainPlatform: 'linux' });
       assert.ok(!('code_mode_verdict' in grade(false).request), 'Notes mode: an ordinary card');
       assert.deepStrictEqual(grade(true), { decision: 'accept' }, 'Code mode: runs');
     } finally { fs.rmSync(dir, { recursive: true, force: true }); }

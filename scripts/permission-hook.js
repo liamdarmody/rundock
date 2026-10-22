@@ -1525,18 +1525,18 @@ function alwaysAsksCrossing(access) {
 // with the server unreachable, slow or saying anything unexpected, there is
 // simply no line, and the decision is unaffected.
 const AGENT_NOTICE_ID = /^[A-Za-z0-9_-][A-Za-z0-9_.-]{0,127}$/;
+// THE PLATFORM THE KEYCHAIN GATE JUDGES FOR, which is this host's: the Keychain
+// rules are the Mac's. It moves that gate and nothing else: the verdict's path
+// handling and its checks on deletes always follow the real host. One test-only
+// seam, off unless RUNDOCK_TEST_SEAMS is 1: then RUNDOCK_TEST_PLATFORM names
+// another, so the end-to-end suites prove the Mac's rules on any host.
+function keychainPlatform(env = process.env) {
+  return (env.RUNDOCK_TEST_SEAMS === '1' && env.RUNDOCK_TEST_PLATFORM) || process.platform;
+}
+
 // The token Rundock started this agent with, bound to its conversation. The
 // server's two hook routes accept nothing else, and act only for the
 // conversation it names (lib/auth).
-// THE PLATFORM THE VERDICT JUDGES FOR, which is this host's: the Keychain rules
-// are the Mac's. One test-only seam, off unless RUNDOCK_TEST_SEAMS is 1: then
-// RUNDOCK_TEST_PLATFORM names another, so the end-to-end suites prove the Mac's
-// rules on any host and the other hosts' on a Mac. It is read from the
-// environment Rundock starts the runtime with, which already decides far more
-// than this does (RUNDOCK, RUNDOCK_CODE_MODE).
-function verdictPlatform(env = process.env) {
-  return (env.RUNDOCK_TEST_SEAMS === '1' && env.RUNDOCK_TEST_PLATFORM) || process.platform;
-}
 
 function hookTokenHeader() {
   const token = process.env.RUNDOCK_HOOK_TOKEN || '';
@@ -1799,7 +1799,7 @@ fetchAgentNotice((agentNotice) => {
   const shellCommand = SHELL_TOOLS.has(data && data.tool_name)
     && typeof ((data.tool_input || {}).command) === 'string' ? data.tool_input.command : null;
   const verdict = shellCommand !== null
-    ? (codeMode ? codeModeVerdict : keychainVerdict)({ toolName: data.tool_name, command: shellCommand, cwd, workspaceRoot: wsRoot, extraDirs, platform: verdictPlatform() })
+    ? (codeMode ? codeModeVerdict : keychainVerdict)({ toolName: data.tool_name, command: shellCommand, cwd, workspaceRoot: wsRoot, extraDirs, keychainPlatform: keychainPlatform() })
     : null;
   // A line that reads or changes the Keychain: asked every time, with no folder
   // or rule to remember, and refused when nobody can be asked.

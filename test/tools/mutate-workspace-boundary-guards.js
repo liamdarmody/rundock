@@ -1661,12 +1661,15 @@ const MUTATIONS = [
   // Stop reading `security` and every Keychain read runs in Code mode with no
   // card; let anything unnamed run and the allowlist becomes a denylist of one.
   [KEYCHAIN_VERDICT, 'Keychain: security is never read',
-    "  if (v === 'security' && ctx.platform === 'darwin') return judgeSecurity(a);\n",
+    "  if (v === 'security' && ctx.keychainPlatform === 'darwin') return judgeSecurity(a);\n",
     ''],
   // Away from a Mac a `security` is somebody else's program.
   [KEYCHAIN_VERDICT, 'Keychain: security is read as the Keychain on any host',
-    "  if (v === 'security' && ctx.platform === 'darwin') return judgeSecurity(a);",
+    "  if (v === 'security' && ctx.keychainPlatform === 'darwin') return judgeSecurity(a);",
     "  if (v === 'security') return judgeSecurity(a);"],
+  [KEYCHAIN_VERDICT, 'Keychain: the Keychain gate ignores the platform it is named',
+    '    keychainPlatform: opts.keychainPlatform || platform,',
+    '    keychainPlatform: platform,'],
   [KEYCHAIN_VERDICT, 'Keychain: a subcommand not named as a display runs',
     '  return always(KEYCHAIN);\n}\n\nfunction judgeDocker',
     '  return RUNS;\n}\n\nfunction judgeDocker'],
@@ -1753,8 +1756,8 @@ const MUTATIONS = [
     "    'keychain': () => 'This reads or changes a password or key stored in your Mac\\'s Keychain, where sign-in tokens are kept.',\n",
     ''],
   [KEYCHAIN_CODEX, 'Keychain: a Codex escalation in Notes mode is graded as ordinary',
-    '  const verdict = (codeMode ? codeModeVerdict : keychainVerdict)({ toolName, command, cwd, workspaceRoot, extraDirs, home, platform });',
-    '  const verdict = codeMode ? codeModeVerdict({ toolName, command, cwd, workspaceRoot, extraDirs, home, platform }) : null;'],
+    '  const verdict = (codeMode ? codeModeVerdict : keychainVerdict)({ toolName, command, cwd, workspaceRoot, extraDirs, home, keychainPlatform });',
+    '  const verdict = codeMode ? codeModeVerdict({ toolName, command, cwd, workspaceRoot, extraDirs, home, keychainPlatform }) : null;'],
   [KEYCHAIN_CODEX, 'Keychain: a Codex Keychain card offers a folder to remember',
     "        grant_dir: verdict && verdict.reason === 'keychain' ? null : ((crossings[0] && crossings[0].grantDir) || access.grantDir || null),",
     '        grant_dir: (crossings[0] && crossings[0].grantDir) || access.grantDir || null,'],
@@ -1776,8 +1779,13 @@ const MUTATIONS = [
     "  return (env.RUNDOCK_TEST_SEAMS === '1' && env.RUNDOCK_TEST_PLATFORM) || process.platform;",
     '  return env.RUNDOCK_TEST_PLATFORM || process.platform;'],
   [KEYCHAIN_HOOK_FLOW, 'Keychain: the hook judges for its host whatever the test names',
-    'workspaceRoot: wsRoot, extraDirs, platform: verdictPlatform() })',
+    'workspaceRoot: wsRoot, extraDirs, keychainPlatform: keychainPlatform() })',
     'workspaceRoot: wsRoot, extraDirs })'],
+  // Hand the seam to the whole verdict and Windows path handling on this host
+  // lets Code mode run deletes it always asks about.
+  [KEYCHAIN_HOOK_FLOW, 'Keychain: the platform seam moves the whole verdict',
+    'workspaceRoot: wsRoot, extraDirs, keychainPlatform: keychainPlatform() })',
+    'workspaceRoot: wsRoot, extraDirs, platform: keychainPlatform() })'],
   [KEYCHAIN_HOOK_FLOW, 'Keychain: the card offers a folder to remember',
     '          grant_dir: keychain ? null : ((boundaryCrossings[0] && boundaryCrossings[0].grantDir) || access.grantDir || null),',
     '          grant_dir: (boundaryCrossings[0] && boundaryCrossings[0].grantDir) || access.grantDir || null,'],

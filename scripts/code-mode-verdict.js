@@ -71,6 +71,9 @@ function codeModeVerdict(opts) {
   const ctx = {
     dialect: opts.toolName === 'PowerShell' ? 'ps' : 'bash',
     platform, pmod,
+    // Where the Keychain rules apply: this host unless a test names another.
+    // Path handling and every other rule follow `platform`, the real host.
+    keychainPlatform: opts.keychainPlatform || platform,
     fold: platform === 'darwin' || platform === 'win32',
     home: canonical(home),
     env: opts.env || process.env,
@@ -479,7 +482,7 @@ function judgeCommand(u, ctx, { piped, prev } = {}) {
   if (v === 'xargs') return judgeXargs(a, ctx);
   if (ctx.dialect === 'bash' && v === 'find') return judgeFind(a, ctx);
   // The Keychain is the Mac's: elsewhere a `security` is another program.
-  if (v === 'security' && ctx.platform === 'darwin') return judgeSecurity(a);
+  if (v === 'security' && ctx.keychainPlatform === 'darwin') return judgeSecurity(a);
 
   // Disks, the machine, publishing, containers, git.
   if (v === 'dd' || /^mkfs(\.|$)/.test(v)) return always('disk');

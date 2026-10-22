@@ -372,6 +372,24 @@ async function reloadSavedAnswers() {
   return msg.tools;
 }
 
+// THE SEAM MOVES THE KEYCHAIN GATE AND NOTHING ELSE. Naming another platform
+// turns the Mac's Keychain rules off; it must never also turn on another
+// platform's path handling for the rest of the verdict, where Windows paths
+// read on this host would let Code mode run deletes it always asks about.
+describe('Code mode: the platform seam moves the Keychain gate alone', () => {
+  const CANNOT_UNDO = 'Rundock server unreachable. This command cannot be undone, and it is never run without asking, '
+    + 'so it was refused rather than approved on your behalf.';
+  for (const command of ['cd proj && rm -rf .', 'cd proj && rm -rf .git', 'cd proj && rm -rf *', 'cd proj && rm -rf drafts']) {
+    test(`${command}, with the seam naming win32, still always asks`, async () => {
+      repositoryWithUnsavedWork();
+      for (const platform of [MAC, 'win32']) {
+        assert.deepStrictEqual(await runHook(command, { mode: 'code', port: await closedPort(), platform }),
+          { decision: 'deny', reason: CANNOT_UNDO }, platform);
+      }
+    });
+  }
+});
+
 describe('Notes mode: an Always allow saved for security', () => {
   test('from a listing card answers the next listing, and never a Keychain read', async () => {
     saveAnswers([]);
