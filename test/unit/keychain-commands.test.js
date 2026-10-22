@@ -354,6 +354,14 @@ describe('in Notes mode, the same reading finds the same commands', () => {
   });
 });
 
+// A FOLDER OUTSIDE EVERY TEMP FOLDER, for the cards that would offer one. Code
+// mode treats a temp folder as a development path, which no card is about, so
+// a target under one would leave a test of the withheld folder with no folder
+// to withhold. The Code-mode fixture helper finds such a place, or says why
+// there is none, and those tests skip with that reason.
+const OUTSIDE = require('../helpers/code-mode-fixture.js').outsideTempRoot();
+after(() => { if (OUTSIDE.dir) fs.rmSync(OUTSIDE.dir, { recursive: true, force: true }); });
+
 describe('a Codex escalation that reaches the Keychain', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'keychain-codex-'));
   after(() => fs.rmSync(dir, { recursive: true, force: true }));
@@ -371,8 +379,8 @@ describe('a Codex escalation that reaches the Keychain', () => {
     }
   });
 
-  test('names no folder to remember, in both modes, when the command also names one outside', () => {
-    const outside = path.join(__dirname, '..', 'fixtures', 'example.keychain-db');
+  test('names no folder to remember, in both modes, when the command also names one outside', { skip: OUTSIDE.skip || false }, () => {
+    const outside = path.join(OUTSIDE.dir, 'example.keychain-db');
     for (const codeModeOn of [false, true]) {
       const g = grade(`${K} ${outside}`, codeModeOn);
       assert.strictEqual(g.request.boundary, true, 'a crossing, as before');

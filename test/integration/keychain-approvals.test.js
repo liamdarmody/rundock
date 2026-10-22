@@ -97,6 +97,13 @@ const POSITIONS = [
   ['after nice and sudo', `nice sudo ${K}`, 'elevation'],
 ];
 
+// A FOLDER OUTSIDE EVERY TEMP FOLDER, for the cards that would offer one. Code
+// mode treats a temp folder as a development path, which no card is about, so
+// a target under one would leave a test of the withheld folder with no folder
+// to withhold. The Code-mode fixture helper finds such a place, or says why
+// there is none, and those tests skip with that reason.
+const OUTSIDE = require('../helpers/code-mode-fixture.js').outsideTempRoot();
+
 let client;
 let chat;
 let settings;
@@ -129,6 +136,7 @@ before(async () => {
   settings = require('../../public/views/settings.js');
 });
 after(async () => {
+  if (OUTSIDE.dir) fs.rmSync(OUTSIDE.dir, { recursive: true, force: true });
   await h.shutdown();
   if (dom) dom.window.close();
 });
@@ -302,8 +310,8 @@ for (const mode of MODES) {
   });
 
   describe(`${Mode}: a Keychain command that also names a folder outside`, () => {
-    test('offers no folder to remember', async () => {
-      const outside = path.join(__dirname, '..', 'fixtures', 'example.keychain-db');
+    test('offers no folder to remember', { skip: OUTSIDE.skip || false }, async () => {
+      const outside = path.join(OUTSIDE.dir, 'example.keychain-db');
       const r = await request(`${K} ${outside}`, { mode });
       assert.strictEqual(r.msg.request.boundary, true, 'a crossing, as before');
       assert.strictEqual(r.msg.request.grant_dir, null, 'no folder named on the request');
