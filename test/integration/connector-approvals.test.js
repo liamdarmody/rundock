@@ -294,6 +294,11 @@ describe('a saved Always allow for a send', () => {
         { since, label: 'the answer to the save' });
       assert.strictEqual(msg.type, 'tool_allow_failed', action);
       assert.strictEqual(msg.key, MAIL(action));
+      // What the person reads: the server's reason, not only that it failed.
+      document.getElementById('messages').innerHTML = '';
+      chat.toolAllowFailed(msg);
+      assert.match(document.querySelector('#messages .msg-system').textContent,
+        /ask again next time\. Could not record that allow: a connector that sends, replies or forwards asks every time\.$/);
     }
     assert.deepStrictEqual(JSON.parse(fs.readFileSync(file, 'utf-8')).allowedTools, ['Bash:git']);
   });
