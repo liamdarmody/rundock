@@ -477,6 +477,58 @@ describe('pushd, popd and cd through builtin or command count as a second cd', (
   });
 });
 
+// A FOLDER CHANGE IS COUNTED BY COMMAND POSITION. `cd` as an argument (a
+// pattern handed to grep, text handed to echo) moves nothing, so it is not a
+// second `cd`. Every place a shell runs it as a command still counts: inside
+// `( )`, `{ }`, `$( )` and backticks, after `builtin`, `command`, `eval`,
+// keywords and case patterns, and in a function body.
+describe('a cd is counted where the shell runs it as a command', () => {
+  for (const [where, prefix] of [['leading', ''], ['mid-chain', 'make && '], ['after a new line', 'make\n']]) {
+    test(`cd as an argument is not a second cd (${where} cd)`, () => {
+      for (const tail of [
+        "grep -rn 'cd ' ../docs",
+        'grep -n "(cd" ../docs/guide.md',
+        "grep -c 'cd' ../notes.md",
+        'echo "next, cd into it" > ../log.txt',
+      ]) {
+        const c = `${prefix}cd src && ${tail}`;
+        assert.deepStrictEqual(places(c), [], c);
+      }
+    });
+  }
+
+  // A command that cannot be lexed (here an unclosed substitution) falls back
+  // to counting every `cd`, `pushd` and `popd` in its text, wherever it is.
+  test('when the command cannot be lexed, every cd, pushd and popd in the text counts', () => {
+    fs.mkdirSync(path.join(ws, 'a', 'b'), { recursive: true });
+    const x = real(path.join(home, 'x.txt'));
+    for (const c of [
+      'make && cd a/b && (cd ../.. && cat ../x.txt) && echo "$(unclosed',
+      'make && cd a/b && pushd .. && cat ../x.txt && echo "$(unclosed',
+    ]) {
+      assert.ok(places(c).includes(x), `${c}: ${JSON.stringify(places(c))}`);
+    }
+  });
+
+  test('every place the shell runs cd as a command still counts', () => {
+    fs.mkdirSync(path.join(ws, 'a', 'b'), { recursive: true });
+    const x = real(path.join(home, 'x.txt'));
+    for (const c of [
+      "make && cd a/b && eval 'cd ../..' && cat ../x.txt",
+      'g() { cd ../..; }; cd a/b && g && cat ../x.txt',
+      'function g { cd ../..; }; make && cd a/b && g && cat ../x.txt',
+      'make && cd a/b && case "$m" in x) cd ../..;; esac && cat ../x.txt',
+      'make && cd a/b && if cd ../..; then cat ../x.txt; fi',
+      'make && cd a/b && echo $(cd ../.. && cat ../x.txt)',
+      'make && cd a/b && echo `cd ../.. && cat ../x.txt`',
+      'make && cd a/b && { cd ../..; cat ../x.txt; }',
+      'make && cd a/b && x=1 cd ../.. && cat ../x.txt',
+    ]) {
+      assert.ok(places(c).includes(x), `${c}: ${JSON.stringify(places(c))}`);
+    }
+  });
+});
+
 // A `cd` target is trusted as the base only when its real path is inside the
 // workspace. A folder in the workspace that is a link to somewhere else is
 // that somewhere else: it is reported as a crossing and is not the base. A

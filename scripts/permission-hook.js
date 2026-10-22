@@ -1054,13 +1054,42 @@ function flavourFor(token, workspaceRoot, posixText = false) {
 // the target must land INSIDE the workspace: a command that leaves is the case
 // this whole card exists for, and its own token reports it.
 const CD_PREFIX = /^\s*cd\s+("[^"]*"|'[^']*'|[^\s;&|]+)\s*(?:&&|;)/;
-// Counted in every spelling a shell runs as `cd`, in a subshell, a
-// substitution, quoted or escaped, so none of them can move the base unseen.
+// The patterns below count every `cd`, `pushd` and `popd` in the text, and
+// are used only when the command cannot be lexed; see folderChanges.
 const CD_ANYWHERE = /(?:^|[^\w./-])cd(?=[\s;&|()'"`]|$)/g;
-// Every other way a shell changes folder, anywhere in the command, makes the
-// base as uncertain as a second `cd`. `builtin cd` and `command cd` are
-// counted by the pattern above already.
 const DIR_CHANGE = /(?:^|[^\w./-])(?:pushd|popd)(?=[\s;&|()'"`]|$)/;
+// A FOLDER CHANGE IS COUNTED WHERE THE SHELL RUNS IT AS A COMMAND: the first
+// word of a command once unquoted, after a keyword, an assignment, a case
+// pattern, `builtin` or `command`, inside `( )`, `{ }`, `$( )` and backticks,
+// in a function body and in what `eval` runs. `cd` given to a command as an
+// argument (`grep -rn 'cd ' docs`) moves nothing and is not counted; every
+// other `pushd` or `popd` makes the base as uncertain as a second `cd`.
+// Returns { cd, other }, or null when the command cannot be lexed.
+const COMMAND_LEADS = new Set(['do', 'then', 'else', 'elif', '!', 'if', 'while', 'until', 'time']);
+function folderChanges(text, depth = 0) {
+  const subs = depth > 8 ? { ok: false } : substitutions(String(text));
+  if (!subs.ok) return null;
+  const found = { cd: 0, other: 0 };
+  const add = (r) => { if (r) { found.cd += r.cd; found.other += r.other; } return !!r; };
+  for (const body of subs.bodies) if (!add(folderChanges(body, depth + 1))) return null;
+  for (const seg of lexSegments(String(text))) {
+    const words = lexWords(seg.text);
+    // A group or a function body anywhere in the command runs as commands.
+    for (const w of words) {
+      const close = { '(': ')', '{': '}' }[w.raw[0]];
+      if (close && !add(folderChanges(w.raw.slice(1, w.raw.lastIndexOf(close)), depth + 1))) return null;
+    }
+    let i = 0;
+    if (words[0] && words[0].raw === 'case') { while (i < words.length && !/\)$/.test(words[i].raw)) i++; i++; }
+    while (i < words.length && (COMMAND_LEADS.has(words[i].raw) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i].raw) || (/\)$/.test(words[i].raw) && !/^[({]/.test(words[i].raw)))) i++;
+    if (words[i] && (words[i].text === 'builtin' || words[i].text === 'command')) { i++; while (words[i] && words[i].text.startsWith('-')) i++; }
+    const w = words[i] ? words[i].text : '';
+    if (w === 'eval' && !add(folderChanges(words.slice(i + 1).map(v => v.text).join(' '), depth + 1))) return null;
+    if (w === 'cd') found.cd++;
+    else if (w === 'pushd' || w === 'popd') found.other++;
+  }
+  return found;
+}
 const CD_NOT_LITERAL = /[$`*?[\](){}<>!~]/;
 // THE BASE IS WHERE THE COMMAND RUNS. The hook input's `cwd` follows the agent
 // (Claude Code documents it: it is the new directory after a `cd`, and the
@@ -1094,9 +1123,12 @@ const CD_NOT_LITERAL = /[$`*?[\](){}<>!~]/;
 function commandBases(command, workspaceRoot, pmod, cwd, extraDirs = [], home = os.homedir()) {
   const root = cwd ? canonicalize(pmod.resolve(cwd), pmod) : pmod.resolve(workspaceRoot);
   const fromRoot = () => root;
-  // A second `cd` means the base stops being true partway through the command.
-  const cds = String(command).match(CD_ANYWHERE);
-  if (!cds || cds.length !== 1 || DIR_CHANGE.test(command)) return fromRoot;
+  // A second `cd`, or any `pushd` or `popd`, means the base stops being true
+  // partway through the command.
+  const changes = folderChanges(command);
+  const cds = changes ? changes.cd : (String(command).match(CD_ANYWHERE) || []).length;
+  const other = changes ? changes.other > 0 : DIR_CHANGE.test(command);
+  if (cds !== 1 || other) return fromRoot;
   const m = CD_PREFIX.exec(command);
   // The `&&` chain the `cd` opens, leading or not (see midChainCd).
   const mid = midChainCd(command);
