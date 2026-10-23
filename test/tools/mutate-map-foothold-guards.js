@@ -100,9 +100,11 @@ const MUTATIONS = [
     "        if (true) {"],
   // Swallow a real failure into a success and a corrupt index renders as an
   // empty workspace with nothing telling anybody.
+  // The index's own failure: its 500 and the cause it carries, so the guard
+  // names this place and no other route's error handling.
   [ROUTER, 'a failing index answers 500 with its cause, never a quiet 200',
-    "      res.writeHead(500, { 'Content-Type': 'application/json' });",
-    "      res.writeHead(200, { 'Content-Type': 'application/json' });"],
+    "      res.writeHead(500, { 'Content-Type': 'application/json' });\n      res.end(JSON.stringify({ error: String((e && e.message) || e) }));",
+    "      res.writeHead(200, { 'Content-Type': 'application/json' });\n      res.end(JSON.stringify({ error: String((e && e.message) || e) }));"],
 
   // ===== THE LIST RIDES THE SURFACE A LINKED DOCUMENT IS READ ON =====
   // Unwire the markdown mount and the feature is unreachable for the one

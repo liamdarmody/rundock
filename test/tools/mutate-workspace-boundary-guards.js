@@ -1956,8 +1956,8 @@ const MUTATIONS = [
   // Past the alias rows and the fields shown is exactly where a recipient can
   // be put out of sight: reduce what is there to a count and it is.
   [CONNECTOR_CARD_MODEL, 'Connector card: fields past a number are dropped from the list',
-    '    const list = (key, raw) => { others.push({ key, text: rawText(raw) }); };',
-    '    const list = (key, raw) => { if (others.length < 200) others.push({ key, text: rawText(raw) }); };'],
+    '      others.push({ key, text: rawText(raw) });',
+    '      if (others.length < 200) others.push({ key, text: rawText(raw) });'],
   [CONNECTOR_CARD_VIEW, 'Connector card: the fields past those shown are not drawn',
     ', ...rest.map(line));',
     ');'],
