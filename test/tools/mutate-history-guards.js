@@ -56,16 +56,33 @@ const MUTATIONS = [
   [MERGE, 'a transcript that opens with an agent turn is taken to say when it began',
     "  return first && first.role === 'user' ? Date.parse(first.timestamp) : NaN;",
     '  return first ? Date.parse(first.timestamp) : NaN;'],
-  // The session's copy of the person's message can share its transcript
-  // entry's millisecond: taken for earlier history, the message shows twice.
-  [MERGE, 'the person\'s own message, stamped with its transcript entry, is taken for earlier history',
-    'jsonlPool.filter((m) => Date.parse(m.timestamp) < start)',
-    'jsonlPool.filter((m) => Date.parse(m.timestamp) <= start)'],
+  // A clock stepped back puts the turn's own line a few milliseconds before
+  // its transcript entry: taken for earlier history, the message shows twice.
+  [MERGE, 'a line a few milliseconds before the start is taken for earlier history',
+    'const EARLIER_MARGIN_MS = 1000;',
+    'const EARLIER_MARGIN_MS = 0;'],
+  [MERGE, 'a line exactly a second before the start is taken for earlier history',
+    'const isEarlier = timed ? at < cut :',
+    'const isEarlier = timed ? at <= cut :'],
   // Everything with a time taken for earlier history shows what the
-  // transcript keeps hidden: a delegate's brief, an orchestrator's <silent>.
+  // transcript keeps hidden, and shows the transcript's own turns twice.
   [MERGE, 'every line with a time is taken for earlier history',
-    'jsonlPool.filter((m) => Date.parse(m.timestamp) < start)',
-    'jsonlPool.filter((m) => Date.parse(m.timestamp) > 0)'],
+    'const isEarlier = timed ? at < cut :',
+    'const isEarlier = timed ? at > 0 :'],
+  // ===== LINES WITH NO TIME =====
+  // Compared by time an untimed line is never earlier, and vanishes.
+  [MERGE, 'an earlier line with no time is never earlier history',
+    ' : !reached && Number.isFinite(cut);',
+    ' : false;'],
+  // Without noticing where its file reached the start, an untimed line of the
+  // new turn is taken for earlier history and shown twice.
+  [MERGE, 'an untimed line after its file reached the start is taken for earlier history',
+    '          if (timed && at >= cut) reached = true;\n',
+    ''],
+  // Ordered as if it had no neighbours, an untimed line jumps to the front.
+  [MERGE, 'an untimed earlier line loses its place beside the line before it',
+    '          if (timed && isEarlier) lastEarlier = at;\n',
+    ''],
   // ===== MATCHING THE TRANSCRIPT'S TURNS =====
   // Matched among the earlier lines too, a turn said in the same words as an
   // earlier one takes the earlier lines, and its own vanish.
@@ -84,8 +101,8 @@ const MUTATIONS = [
   // File by file, a specialist's earlier reply lands after everything the
   // orchestrator said.
   [MERGE, 'the earlier history is shown file by file, not in time order',
-    '\n          .sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp));',
-    ';'],
+    'jsonlPool.filter((m) => m._earlier).sort((a, b) => a._at - b._at);',
+    'jsonlPool.filter((m) => m._earlier);'],
   // A resumed session's new file repeats the lines before it.
   [MERGE, 'a line a resumed file repeats is shown twice',
     '      if (seenLines.has(line)) continue;\n',

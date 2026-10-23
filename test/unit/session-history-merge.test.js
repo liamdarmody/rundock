@@ -217,6 +217,57 @@ describe('a new turn after history only the session file holds', () => {
     ]);
   });
 
+  test('a clock stepped back: the turn\'s own line, stamped up to a second before its entry, is still the turn\'s', async () => {
+    // Rundock and Claude Code stamp their lines on the same clock, but a clock
+    // can step back between the two. A line counts as earlier history only
+    // when it is more than a second before the transcript began.
+    const iso = (ms) => new Date(ms).toISOString();
+    for (const [label, behind] of [['five milliseconds', 5], ['exactly a second', 1000]]) {
+      const convoId = `stepped-back-${behind}`;
+      newTurn(convoId, 'Send the summary to the team.', 'Sent to the team list.');
+      const start = Date.parse(srv.loadTranscript(convoId)[0].timestamp);
+      const res = await history(convoId, { [`sess-stepped-${behind}`]: [
+        user('Who is on the team list?', iso(start - 1001)),
+        user('Send the summary to the team.', iso(start - behind)),
+        reply('Sent to the team list.', later(80)),
+      ] });
+      assert.deepStrictEqual(res.messages.map((m) => m.content), [
+        'Who is on the team list?',
+        'Send the summary to the team.',
+        'Sent to the team list.',
+      ], `${label} behind: shown once, as the turn's, and a line just over a second behind is earlier history`);
+    }
+  });
+
+  test('an earlier line with no timestamp is earlier while its file has not reached the transcript\'s time', async () => {
+    // Without a time a line cannot be compared, so its place in its own file
+    // decides: before the first line stamped at or after the start, it is
+    // earlier history, and it is ordered just after the earlier line before it.
+    const convoId = 'untimed-earlier';
+    newTurn(convoId, 'Now the budget section.', 'The budget section is drafted.');
+    const res = await history(convoId, {
+      'sess-untimed': [
+        user('Who reads the plan?', '2026-01-13T09:00:00.000Z'),
+        reply('The leadership team.', null),
+        user('And the timeline?', '2026-01-13T09:20:00.000Z'),
+        user('Now the budget section.', later(50)),
+        // After the file reached the transcript's time: the turn's, not earlier.
+        reply('The budget section is drafted.', null),
+      ],
+      'sess-untimed-other': [
+        reply('Two quarters, starting in April.', '2026-01-13T09:10:00.000Z'),
+      ],
+    });
+    assert.deepStrictEqual(res.messages.map((m) => m.content), [
+      'Who reads the plan?',
+      'The leadership team.',
+      'Two quarters, starting in April.',
+      'And the timeline?',
+      'Now the budget section.',
+      'The budget section is drafted.',
+    ]);
+  });
+
   test('what the session holds from after the transcript began, and the transcript does not name, stays hidden', async () => {
     // The transcript decides what is shown once it exists. A delegate's file
     // opens with the brief Rundock sent it, behind the catch-up it missed, and
