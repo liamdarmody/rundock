@@ -322,6 +322,7 @@ const ALLOWED_GUARD = { src: path.join(ROOT, 'lib', 'workspace', 'answer-file-gu
 const ALLOWED_HANDLER = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'process-control.js'), suite: 'test/unit/allowed-change-stands.test.js' };
 const ALLOWED_TURNS = { src: path.join(ROOT, 'lib', 'runtime', 'claude-turn-guard.js'), suite: 'test/unit/allowed-change-stands.test.js' };
 const ALLOWED_WIRING = { src: path.join(ROOT, 'server.js'), suite: 'test/unit/allowed-change-stands.test.js' };
+const ALLOWED_ROUTER = { src: path.join(ROOT, 'lib', 'http-router.js'), suite: 'test/unit/allowed-change-stands.test.js' };
 // What agents are told about the connector files, against the card's words.
 const PROMPT_CONNECTORS = { src: path.join(ROOT, 'lib', 'agents', 'prompt.js'), suite: 'test/unit/discovery.test.js' };
 // What Rundock decides for an agent's environment, never inherited from its own.
@@ -1537,7 +1538,7 @@ const MUTATIONS = [
     "+ (check ? '&check=1' : '')",
     ""],
   [PUTBACK_ROUTER, "Same step: the server does not check before handing out the line",
-    "    if (checkFirst) require('./workspace/answer-file-guard.js').checkAnswerFilesNow(getWorkspace());",
+    "    if (checkFirst) require('./workspace/answer-file-guard.js').checkAnswerFilesNow(getWorkspace(), { finishedFor: id || null });",
     ""],
   [PUTBACK_GUARD, "Same step: a check on demand checks nothing",
     "  if (!g || !g.listeners.size) return [];",
@@ -2296,6 +2297,12 @@ const MUTATIONS = [
   [ALLOWED_GUARD, 'Allowed change: an allow nothing used outlives its turn',
     '        for (const [p, m] of allowedChanges) if (m.convoId === c) allowedChanges.delete(p);\n',
     ''],
+  [ALLOWED_GUARD, "Allowed change: a shell allow outlives its own command's finished-call check",
+    '    for (const [p, m] of allowedChanges) if (m.convoId === finishedFor && m.digest === null) allowedChanges.delete(p);\n',
+    ''],
+  [ALLOWED_ROUTER, 'Allowed change: the server does not say whose tool call finished',
+    'checkAnswerFilesNow(getWorkspace(), { finishedFor: id || null })',
+    'checkAnswerFilesNow(getWorkspace())'],
   [ALLOWED_HANDLER, 'Allowed change: an Allow on the card marks nothing',
     '      if (card) { try { markAllowedAnswerFiles(pending); }',
     '      if (false) { try { markAllowedAnswerFiles(pending); }'],

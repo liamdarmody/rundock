@@ -169,6 +169,40 @@ describe('what an Allow does not cover is still put back', () => {
     assert.strictEqual(t.asked.length, 1);
   });
 
+  // A SHELL COMMAND NAMES NO CONTENT, so its mark covers only that command:
+  // it goes at the check made as that command finishes. A later write in the
+  // same turn, by whatever means, is put back.
+  test('a shell allow covers its own command only: a write after that command finished is put back', () => {
+    const t = claudeTurn('c-later');
+    try {
+      answer({ conversationId: 'c-later', toolName: 'Bash', toolInput: { command: 'cat .mcp.json > /dev/null' }, boundary: true, crossings: [{ path: mcp, answerFile: true }] });
+      // The allowed command finished without writing; its finished-call check.
+      checkAnswerFilesNow(ws, { finishedFor: 'c-later' });
+      fs.writeFileSync(mcp, 'written later');
+      t.endTurn();
+    } finally { t.done(); }
+    assert.strictEqual(fs.readFileSync(mcp, 'utf-8'), ORIGINAL, 'the later write is put back');
+    assert.strictEqual(t.asked.length, 1, 'and offered on the card');
+  });
+
+  test('the finished-call check of another conversation leaves a shell allow alone', () => {
+    const t = claudeTurn('c-mine-2');
+    try {
+      answer({ conversationId: 'c-mine-2', toolName: 'Bash', toolInput: { command: 'x' }, boundary: true, crossings: [{ path: mcp, answerFile: true }] });
+      checkAnswerFilesNow(ws, { finishedFor: 'c-someone-else' });
+      fs.writeFileSync(mcp, 'mine');
+      checkAnswerFilesNow(ws, { finishedFor: 'c-mine-2' });
+      t.endTurn();
+    } finally { t.done(); }
+    assert.strictEqual(fs.readFileSync(mcp, 'utf-8'), 'mine');
+    assert.strictEqual(t.asked.length, 0);
+  });
+
+  test('the server drops a shell allow at the conversation\'s finished-call check', () => {
+    const src = fs.readFileSync(path.join(__dirname, '..', '..', 'lib', 'http-router.js'), 'utf8');
+    assert.match(src, /checkAnswerFilesNow\(getWorkspace\(\), \{ finishedFor: id \|\| null \}\)/);
+  });
+
   test('an allow nothing used ends with the turn it was given in', () => {
     const t = claudeTurn('c-unused');
     try {
