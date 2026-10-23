@@ -308,6 +308,12 @@ const LAUNCHCTL_ANY_MODE = { src: path.join(ROOT, 'scripts', 'code-mode-verdict.
 const ANSWER_WRITES = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/answer-file-writes.test.js' };
 const ANSWER_WRITES_VOCAB = { src: path.join(ROOT, 'public', 'read-only-shell.js'), suite: 'test/unit/answer-file-writes.test.js' };
 const ANSWER_WRITES_VERDICT = { src: path.join(ROOT, 'scripts', 'code-mode-verdict.js'), suite: 'test/unit/answer-file-writes.test.js' };
+// Rundock's console folder under home: the hook, the stored-grant check, the
+// card's words and the sandbox block, through a made-up home.
+const CONSOLE_HOOK = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/console-folder.test.js' };
+const CONSOLE_GRANT = { src: path.join(ROOT, 'lib', 'workspace', 'boundary.js'), suite: 'test/unit/console-folder.test.js' };
+const CONSOLE_CARD = { src: path.join(ROOT, 'public', 'permissions.js'), suite: 'test/unit/console-folder.test.js' };
+const CONSOLE_SANDBOX = { src: path.join(ROOT, 'lib', 'workspace', 'scaffold.js'), suite: 'test/unit/console-folder.test.js' };
 // A change allowed on the hook's card stands, without a second card.
 const ALLOWED_GUARD = { src: path.join(ROOT, 'lib', 'workspace', 'answer-file-guard.js'), suite: 'test/unit/allowed-change-stands.test.js' };
 const ALLOWED_HANDLER = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'process-control.js'), suite: 'test/unit/allowed-change-stands.test.js' };
@@ -524,19 +530,22 @@ const MUTATIONS = [
     '  for (let n = 1; n < deny.length; n++) shapes.push(withDenyWrite(block, deny.slice(0, n)));\n'],
   // Forget a length a build wrote and every workspace carrying it is stranded.
   [SCAFFOLD, 'the list 0.15.6 wrote is recognised',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22];',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 19, 21, 22];'],
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23];',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 19, 21, 22, 23];'],
   [SCAFFOLD, 'the list 0.13.3 to 0.15.5 wrote is recognised',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22];',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 8, 19, 21, 22];'],
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23];',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 8, 19, 21, 22, 23];'],
   [SCAFFOLD, 'the lists the development line wrote before 0.13.3 are recognised',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22];',
-    'const WRITTEN_DENY_LENGTHS = [3, 8, 19, 21, 22];'],
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23];',
+    'const WRITTEN_DENY_LENGTHS = [3, 8, 19, 21, 22, 23];'],
   // Leave the current length out and the day a longer list ships, every block
   // this build wrote reads as a person's edit and never upgrades.
   [SCAFFOLD_SETTINGS, 'the current deny list\'s length is recorded as written',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22];',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21];'],
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23];',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22];'],
+  [SCAFFOLD_SETTINGS, 'Connector secrets: the twenty-two-entry list the last build wrote is recognised',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23];',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 23];'],
   // ===== THE USER-LEVEL STATE FILE IS A SECRET AT BOTH LAYERS =====
   // Drop the home-level files from the block and ~/.claude.json is writable
   // by sandboxed commands again, its user-scope MCP servers with it.
@@ -1191,8 +1200,8 @@ const MUTATIONS = [
     "  if (writing && !isWorkspaceAnswerFile(resolvedPath, workspaceRoot, foldsCase) && isAnswerFileOfAnyWorkspace(resolvedPath)) {",
     "  if (false) {"],
   [CM_BOUNDARY, "Proxy: another workspace's answer file, by shell, matched for the current workspace only",
-    " || isAnswerFileOfAnyWorkspace(r, pmod) || reachesAnswerFiles(raw, r, pmod))",
-    " || reachesAnswerFiles(raw, r, pmod))"],
+    " || isAnswerFileOfAnyWorkspace(r, pmod) || reachesAnswerFiles(raw, r, pmod)\n",
+    " || reachesAnswerFiles(raw, r, pmod)\n"],
   [CM_CODEX_BOUNDARY, "Proxy: Codex grades another workspace's answer file as ordinary work",
     "  if (hook.isAnswerFileOfAnyWorkspace(g)) return true;\n  if (path.basename(g) === '.rundock') return true;",
     "  return false;"],
@@ -2125,17 +2134,17 @@ const MUTATIONS = [
   // Forget the length the last build wrote and every workspace carrying it is
   // stranded: never rewritten, never given the new entries.
   [SCAFFOLD_SETTINGS, 'What runs: the nineteen-entry list is recognised',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22];',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 21, 22];'],
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23];',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 21, 22, 23];'],
   [SCAFFOLD, 'What runs: the nineteen-entry list upgrades on the next open',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22];',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 21, 22];'],
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23];',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 21, 22, 23];'],
   [SCAFFOLD_SETTINGS, 'Connector secrets: the twenty-one-entry list the last build wrote is recognised',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22];',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 22];'],
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23];',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 22, 23];'],
   [SCAFFOLD, 'Connector secrets: the twenty-one-entry list upgrades on the next open',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22];',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 22];'],
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23];',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 22, 23];'],
   // An inherited Code-mode flag puts a Notes workspace under Code-mode grading;
   // an inherited conversation id names a conversation the agent does not have.
   [SPAWN_ENV, 'Spawn env: an inherited RUNDOCK_CODE_MODE reaches the agent',
@@ -2213,6 +2222,31 @@ const MUTATIONS = [
     '  if (isWorkspaceAnswerFile(crossing.path, getWorkspace()) || isAnswerFileOfAnyWorkspace(crossing.path)) return false;',
     '  if (isWorkspaceAnswerFile(crossing.path, getWorkspace())) return false;'],
   // ===== THE GUARD WATCHES WHAT RUNS, FOR CODEX =====
+  // ===== RUNDOCK'S CONSOLE FOLDER ALWAYS ASKS =====
+  [CONSOLE_HOOK, 'Console folder: a file tool writes to it as ordinary work',
+    '  if (writing && isRundockConsolePath(resolvedPath, home, foldsCase)) {',
+    '  if (false) {'],
+  [CONSOLE_HOOK, 'Console folder: a shell command writes to it as ordinary work',
+    '          || isRundockConsolePath(r, home, foldsCase, pmod) || globReachesConsole(r, home, foldsCase, pmod));',
+    '          || globReachesConsole(r, home, foldsCase, pmod));'],
+  [CONSOLE_HOOK, 'Console folder: a glob at home that matches it is not looked at',
+    '          || isRundockConsolePath(r, home, foldsCase, pmod) || globReachesConsole(r, home, foldsCase, pmod));',
+    '          || isRundockConsolePath(r, home, foldsCase, pmod));'],
+  [CONSOLE_HOOK, 'Console folder: only the folder itself is matched, not what is in it',
+    '  return matchesAnswerFileSet([RUNDOCK_CONSOLE_DIR], resolvedPath, home, foldsCase, pmod, true);',
+    '  return matchesAnswerFileSet([RUNDOCK_CONSOLE_DIR], resolvedPath, home, foldsCase, pmod);'],
+  [CONSOLE_HOOK, 'Console folder: it is matched against the workspace rather than home',
+    '  return matchesAnswerFileSet([RUNDOCK_CONSOLE_DIR], resolvedPath, home, foldsCase, pmod, true);',
+    '  return matchesAnswerFileSet([RUNDOCK_CONSOLE_DIR], resolvedPath, process.env.RUNDOCK_WORKSPACE || home, foldsCase, pmod, true);'],
+  [CONSOLE_GRANT, 'Console folder: a stored folder grant answers a write to it',
+    '  if (isRundockConsolePath(crossing.path, home)) return false;\n',
+    ''],
+  [CONSOLE_CARD, 'Console folder: the card calls it the permission answers',
+    "      if (parts.includes('.rundock-console')) return 'console';\n",
+    ''],
+  [CONSOLE_SANDBOX, 'Console folder: the sandbox block leaves it writable',
+    '    path.posix.join(home, RUNDOCK_CONSOLE_DIR),\n',
+    ''],
   [ALLOWED_GUARD, 'Allowed change: a change allowed on the card is put back and asked about again',
     '    if (!outsideTurn && modeKept && takeAllowed(g, f, now)) { g.snapshot.set(f, now); continue; }\n',
     ''],

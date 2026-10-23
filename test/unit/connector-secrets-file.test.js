@@ -135,7 +135,7 @@ describe('the per-user connector file asks before an agent changes it', () => {
     const scaffold = require('../../lib/workspace/scaffold.js');
     for (const mode of ['on', 'off']) {
       const deny = scaffold.sandboxSettings('/w/ws', 'darwin', '/Users/someone', ['/tmp/t'], [], mode).filesystem.denyWrite;
-      assert.strictEqual(deny[deny.length - 1], `/w/ws/${REL}`, `the ${mode} block denies it, appended last`);
+      assert.strictEqual(deny[deny.indexOf('/w/ws/.rundock/permission-hook.sh') + 1], `/w/ws/${REL}`, `the ${mode} block denies it, appended after the launcher`);
     }
   });
 

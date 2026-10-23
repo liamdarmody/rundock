@@ -310,6 +310,7 @@ describe('the OS sandbox block is unchanged', () => {
           '/Users/someone/.claude/backups', '/Users/someone/.claude-staging-oauth.json',
           '/Users/someone/.claude-local-oauth.json', '/Users/someone/.claude-custom-oauth.json',
           '/w/ws/.claude/settings.json', '/w/ws/.mcp.json', '/w/ws/.rundock/permission-hook.sh', '/w/ws/.rundock/mcp-secrets.json',
+          '/Users/someone/.rundock-console',
         ],
       },
     }, 'the development paths are a card rule, not a widening of what the operating system allows');

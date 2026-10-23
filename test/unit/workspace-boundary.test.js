@@ -1120,8 +1120,8 @@ describe('every credential the secrets tier names is denied by the OS block as w
   test('the deny list names no credential the registry does not, so neither list can grow alone', () => {
     const block = scaffold.sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], []);
     const outsideWorkspace = block.filesystem.denyWrite.filter((p) => !p.startsWith(WS + '/'));
-    assert.deepStrictEqual(outsideWorkspace, [...registryPaths(HOME), ...homeEscapes(HOME)],
-      'beyond the workspace\'s own files, the deny list is exactly the secrets registry, in registry order, then the runtime\'s escape paths');
+    assert.deepStrictEqual(outsideWorkspace, [...registryPaths(HOME), ...homeEscapes(HOME), `${HOME}/.rundock-console`],
+      'beyond the workspace\'s own files, the deny list is exactly the secrets registry, in registry order, then the runtime\'s escape paths, then Rundock\'s console folder');
   });
 
   test('the credential entries follow the workspace files, so every block written before them is a prefix and still ours', () => {
@@ -1268,7 +1268,7 @@ describe('opening a workspace upgrades Rundock\'s own block to deny the credenti
 
   test('a block every earlier build wrote gains the files that decide what runs on the next open', () => {
     const runs = (ws) => [path.posix.join(ws, '.mcp.json'), path.posix.join(ws, '.rundock', 'permission-hook.sh'), path.posix.join(ws, '.rundock', 'mcp-secrets.json')];
-    for (const n of [21, 19, 8, 3]) {
+    for (const n of [22, 21, 19, 8, 3]) {
       const ws = tmp(`wb-runs-upgrade-${n}-`);
       open(ws);
       const settings = read(ws);
@@ -1278,6 +1278,7 @@ describe('opening a workspace upgrades Rundock\'s own block to deny the credenti
       open(ws);
       assert.deepStrictEqual(read(ws).sandbox.filesystem.denyWrite, current, `the ${n}-entry block is ours, and is brought up to the whole list`);
       for (const p of runs(ws)) assert.ok(current.includes(p), `${p} is denied after the upgrade`);
+      assert.ok(current.includes(path.posix.join(os.homedir(), '.rundock-console')), 'and so is Rundock\'s console folder');
     }
   });
 
@@ -1288,7 +1289,7 @@ describe('opening a workspace upgrades Rundock\'s own block to deny the credenti
       const settings = read(ws);
       const deny = settings.sandbox.filesystem.denyWrite;
       settings.sandbox.filesystem.denyWrite = change === 'trim'
-        ? deny.slice(0, deny.length - 2)
+        ? deny.slice(0, deny.length - 3)
         : [...deny.slice(0, 18), path.posix.join(ws, 'their-own.json')];
       fs.writeFileSync(settingsPath(ws), JSON.stringify(settings, null, 2));
       const theirs = fs.readFileSync(settingsPath(ws), 'utf8');
@@ -1381,8 +1382,8 @@ describe('the block denies the runtime\'s own escape paths, whatever runtime ver
   test('the workspace\'s connector files and the permission hook\'s launcher are denied last of all', () => {
     for (const mode of ['on', 'off']) {
       const deny = scaffold.sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], [], mode).filesystem.denyWrite;
-      assert.deepStrictEqual(deny.slice(-4), [`${WS}/.claude/settings.json`, `${WS}/.mcp.json`, `${WS}/.rundock/permission-hook.sh`, `${WS}/.rundock/mcp-secrets.json`],
-        `the ${mode} block appends them after the project settings, each after the last, never inserting them`);
+      assert.deepStrictEqual(deny.slice(-5), [`${WS}/.claude/settings.json`, `${WS}/.mcp.json`, `${WS}/.rundock/permission-hook.sh`, `${WS}/.rundock/mcp-secrets.json`, `${HOME}/.rundock-console`],
+        `the ${mode} block appends them after the project settings, each after the last, never inserting them, and Rundock's console folder after them`);
     }
   });
 
@@ -1412,7 +1413,7 @@ describe('the block denies the runtime\'s own escape paths, whatever runtime ver
     for (const p of escapes) {
       const name = p.startsWith(`${HOME}/.claude/settings.json`) ? '~/.claude/settings.json'
         : p.startsWith(`${HOME}/.claude/`) ? p.slice(`${HOME}/.claude/`.length)
-          : p.startsWith(`${HOME}/.claude-`) ? `~/${p.slice(`${HOME}/`.length)}`
+          : p.startsWith(`${HOME}/.`) ? `~/${p.slice(`${HOME}/`.length)}`
             : p.startsWith(`${WS}/`) ? p.slice(`${WS}/`.length) : p;
       assert.ok(paragraph.includes(`\`${name}\``), `the paragraph names \`${name}\`, which the block denies`);
     }
@@ -1518,7 +1519,7 @@ describe('an existing workspace gains the escape-path denies on open, and keeps 
 
   // Not one entry: removing only the last leaves the list the build before
   // this one wrote, which cannot be told apart from it and so upgrades.
-  for (const removed of [2, 4, 10]) {
+  for (const removed of [3, 5, 10]) {
     test(`a person who removes the last ${removed} deny entries keeps the block they wrote`, () => {
       const ws = tmp(`wb-escape-removed-${removed}-`);
       open(ws);
@@ -1533,13 +1534,13 @@ describe('an existing workspace gains the escape-path denies on open, and keeps 
     });
   }
 
-  test('removing all fourteen leaves the 0.15.6 list, which upgrades like that release\'s own block', () => {
+  test('removing all fifteen leaves the 0.15.6 list, which upgrades like that release\'s own block', () => {
     // The two cannot be told apart on disk: a person who removes exactly the
     // entries added after 0.15.6 has written that release's block.
     const ws = tmp('wb-escape-removed-all-');
     open(ws);
     const settings = read(ws);
-    settings.sandbox.filesystem.denyWrite = settings.sandbox.filesystem.denyWrite.slice(0, -14);
+    settings.sandbox.filesystem.denyWrite = settings.sandbox.filesystem.denyWrite.slice(0, -15);
     assert.deepStrictEqual(settings.sandbox.filesystem.denyWrite, releasedDenyWrite(ws, home), 'sanity: exactly the 0.15.6 list');
     fs.writeFileSync(settingsPath(ws), JSON.stringify(settings, null, 2));
     open(ws);

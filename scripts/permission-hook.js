@@ -592,6 +592,29 @@ const MCP_SECRETS_FILE = '.rundock/mcp-secrets.json';
 const WHAT_RUNS_FILES = ['.mcp.json', '.claude/settings.json', MCP_SECRETS_FILE];
 const WHAT_RUNS_DIRS = ['.claude/hooks'];
 const WORKSPACE_ANSWER_FILES = [...RUNDOCK_ANSWER_FILES, ...RUNTIME_GUARDED_ANSWER_FILES, ...LAUNCHER_FILES, ...WHAT_RUNS_FILES];
+// RUNDOCK'S CONSOLE FOLDER, under the home folder rather than any workspace.
+// It holds the script Rundock opens in Terminal when a person reconnects
+// Claude Code, so whatever it says runs outside every sandbox the moment they
+// press the button. A write there, the folder itself and everything in it, is
+// asked about every time like an answer file, wherever the workspace is: with
+// the workspace at the home folder it is otherwise ordinary work inside it.
+const RUNDOCK_CONSOLE_DIR = '.rundock-console';
+function isRundockConsolePath(resolvedPath, home = os.homedir(), foldsCase = hostFoldsCase(), pmod = path) {
+  return matchesAnswerFileSet([RUNDOCK_CONSOLE_DIR], resolvedPath, home, foldsCase, pmod, true);
+}
+// A glob at the home folder, or inside the console folder, that can match it:
+// `rm -rf ~/.rundock-*`, `rm ~/.rundock-console/*`.
+function globReachesConsole(resolvedPath, home = os.homedir(), foldsCase = hostFoldsCase(), pmod = path) {
+  const folds = foldsCase || pmod === path.win32;
+  const segs = String(resolvedPath).split(/[\\/]+/);
+  const at = segs.findIndex(s => /[*?[]/.test(s));
+  if (at < 0) return false;
+  const dir = foldCase(canonicalize(segs.slice(0, at).join(pmod.sep) || pmod.sep, pmod), folds);
+  const root = foldCase(canonicalize(pmod.resolve(home), pmod), folds);
+  const consoleDir = foldCase(canonicalize(pmod.join(pmod.resolve(home), RUNDOCK_CONSOLE_DIR), pmod), folds);
+  if (dir === consoleDir || dir.startsWith(consoleDir + pmod.sep)) return true;
+  return dir === root && segs[at].startsWith('.') && globSegmentRegex(segs[at], folds).test(RUNDOCK_CONSOLE_DIR);
+}
 // `within`: an entry is a folder, matched with everything under it.
 function matchesAnswerFileSet(set, resolvedPath, workspaceRoot, foldsCase = hostFoldsCase(), pmod = path, within = false) {
   if (typeof resolvedPath !== 'string' || !resolvedPath) return false;
@@ -752,6 +775,11 @@ function classifyFileAccess(toolName, toolInput, workspaceRoot, extraDirs = [], 
     // relied on 'outside' to mean "always ask, never remember" reads this flag
     // instead. They are enumerated at the call sites: the code-mode
     // auto-approve, and the decision payload.
+    return { where: inside ? 'inside' : 'outside', resolvedPath, grantDir: null, answerFile: true };
+  }
+  // Rundock's console folder under home, asked about the same way, inside the
+  // workspace or not (see RUNDOCK_CONSOLE_DIR).
+  if (writing && isRundockConsolePath(resolvedPath, home, foldsCase)) {
     return { where: inside ? 'inside' : 'outside', resolvedPath, grantDir: null, answerFile: true };
   }
   if (inside) return { where: 'inside', resolvedPath };
@@ -1704,7 +1732,8 @@ function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), 
     if (!folder) continue;
     for (const src of sources) {
       const target = canonicalize(pmod.join(d, pmod.basename(src)), pmod);
-      if (isWorkspaceAnswerFile(target, workspaceRoot, foldsCase, pmod) || isAnswerFileOfAnyWorkspace(target, pmod) || reachesAnswerFiles(null, target, pmod)) addAnswer(target, pmod);
+      if (isWorkspaceAnswerFile(target, workspaceRoot, foldsCase, pmod) || isAnswerFileOfAnyWorkspace(target, pmod) || reachesAnswerFiles(null, target, pmod)
+        || isRundockConsolePath(target, home, foldsCase, pmod)) addAnswer(target, pmod);
     }
   }
   let previous = '';
@@ -1763,7 +1792,9 @@ function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), 
     if (writingWords.has(raw)) {
       const forms = braceForms(t);
       const hits = (forms.length > 1 ? forms.map(f => canonicalize(pmod.resolve(base, f), pmod)) : [resolved])
-        .filter(r => isWorkspaceAnswerFile(r, workspaceRoot, foldsCase, pmod) || isAnswerFileOfAnyWorkspace(r, pmod) || reachesAnswerFiles(raw, r, pmod));
+        .filter(r => isWorkspaceAnswerFile(r, workspaceRoot, foldsCase, pmod) || isAnswerFileOfAnyWorkspace(r, pmod) || reachesAnswerFiles(raw, r, pmod)
+          // Rundock's console folder under home, wherever the workspace is.
+          || isRundockConsolePath(r, home, foldsCase, pmod) || globReachesConsole(r, home, foldsCase, pmod));
       if (hits.length) {
         for (const r of hits) addAnswer(r, pmod);
         continue;
@@ -2084,7 +2115,7 @@ module.exports = {
   CODEX_SECRET_RELATIVE_PATHS, CODEX_PERSISTENCE_SURFACE_DIRS, CODEX_PERSISTENCE_SURFACE_FILES,
   HOME_SECRET_FILES, secretsRegistry,
   agentHomeRoot, codexHomeRoot, runtimeHomes,
-  isWorkspaceAnswerFile, isRuntimeGuardedAnswerFile,
+  isWorkspaceAnswerFile, isRuntimeGuardedAnswerFile, isRundockConsolePath, RUNDOCK_CONSOLE_DIR,
   WORKSPACE_ANSWER_FILES, RUNDOCK_ANSWER_FILES, RUNTIME_GUARDED_ANSWER_FILES, LAUNCHER_FILES, WHAT_RUNS_FILES, WHAT_RUNS_DIRS,
   boundaryCrossingsFor,
   REFUSED_CLAUDE_EDIT_DIRS, isReadOnlyShellCommand, isRundockAnswerFileAnywhere, isRundockWorkspaceSettingsFile, isAnswerFileOfAnyWorkspace, otherWorkspaceRootOf, isOtherWorkspaceAgentSurface,
