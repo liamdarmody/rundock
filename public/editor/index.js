@@ -88,6 +88,9 @@ export function createEditor({
   // Optional resolver for wikilink targets: (target) -> bool. Used by the
   // properties panel to render unresolvable frontmatter links visibly dead.
   resolveWikilink = null,
+  // Optional: (target) -> void, called instead of onWikilinkClick for a link
+  // the resolver says is missing, so the host can create the note.
+  onCreateWikilink = null,
 }) {
   if (!element) throw new Error('createEditor: element is required');
 
@@ -111,6 +114,7 @@ export function createEditor({
   // would-corrupt edit re-renders from the file's truth and changes nothing.
   const panelOpts = {
     onWikilinkClick,
+    onCreateWikilink,
     resolveWikilink,
     onEditProperty: (key, value) => {
       // A { list: { remove|add } } mutation is a byte-honest single-item

@@ -97,30 +97,33 @@ export function parsePropWikilink(value) {
   return { target, alias: m[2] ? m[2].trim() : null };
 }
 
-function renderWikilinkValue(link, resolveWikilink) {
+// `links` is { resolve, creatable }: the host's resolver, and whether a click
+// on a missing link creates the note.
+function renderWikilinkValue(link, links) {
   const display = link.alias || link.target;
-  // Unresolvable targets look visibly dead rather than erroring on click.
-  const dead = typeof resolveWikilink === 'function' && !resolveWikilink(link.target);
-  return `<a class="prop-wikilink${dead ? ' dead' : ''}" tabindex="0" data-target="${escapeHtml(link.target)}"${dead ? ' title="No matching file in this workspace"' : ''}>${escapeHtml(display)}</a>`;
+  // A target that matches no file looks missing, and says what a click does.
+  const dead = typeof links.resolve === 'function' && !links.resolve(link.target);
+  const title = links.creatable ? 'Does not exist yet. Click to create it' : 'No matching file in this workspace';
+  return `<a class="prop-wikilink${dead ? ' dead' : ''}" tabindex="0" data-target="${escapeHtml(link.target)}"${dead ? ` title="${title}"` : ''}>${escapeHtml(display)}</a>`;
 }
 
 // Text with links among its words: each link an anchor, every word escaped.
 // A run of words carries where it starts in the value (data-at), so a click
 // on the words opens the editor with the caret at the same place.
-function renderLinkedText(text, resolveWikilink) {
+function renderLinkedText(text, links) {
   let at = 0;
   return linkSegments(text).map((seg) => {
     const start = at;
     at += seg.text.length;
     return seg.link
-      ? renderWikilinkValue(seg.link, resolveWikilink)
+      ? renderWikilinkValue(seg.link, links)
       : `<span class="prop-text" data-at="${start}">${escapeHtml(seg.text)}</span>`;
   }).join('');
 }
 
 const hasLink = (text) => linkSegments(text).some((s) => s.link);
 
-function renderValue(value, type, resolveWikilink, editable, rawItems) {
+function renderValue(value, type, links, editable, rawItems) {
   if (type === 'null') return '<span class="prop-value empty">empty</span>';
   if (type === 'bool') {
     const on = value === true;
@@ -147,7 +150,7 @@ function renderValue(value, type, resolveWikilink, editable, rawItems) {
         }
         const remove = '<button type="button" class="prop-chip-remove" title="Remove">&times;</button>';
         return hasLink(String(v))
-          ? `<span class="prop-link-item" data-item-index="${i}">${renderLinkedText(String(v), resolveWikilink)}${remove}</span>`
+          ? `<span class="prop-link-item" data-item-index="${i}">${renderLinkedText(String(v), links)}${remove}</span>`
           : `<span class="prop-chip" data-item-index="${i}">${escapeHtml(String(v))}${remove}</span>`;
       })
       .join('');
@@ -167,7 +170,7 @@ function renderValue(value, type, resolveWikilink, editable, rawItems) {
     // be edited by clicking it: the pencil is the edit affordance that is
     // always there, for the keyboard and for touch as well.
     const edit = editable ? '<button type="button" class="prop-wikilink-edit" title="Edit value">' + PENCIL_SVG + '</button>' : '';
-    return `<span class="prop-value string linked">${renderLinkedText(String(value), resolveWikilink)}${edit}</span>`;
+    return `<span class="prop-value string linked">${renderLinkedText(String(value), links)}${edit}</span>`;
   }
   return `<span class="prop-value string">${escapeHtml(String(value))}</span>`;
 }
@@ -189,15 +192,17 @@ const PENCIL_SVG = '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" 
 // Renders the panel into the given container element. Returns the count of
 // rows rendered so the caller can decide whether to show the panel at all.
 // opts.onWikilinkClick: wikilink property values become clickable and route
-// through it; opts.resolveWikilink(target) -> bool marks dead links.
+// through it; opts.resolveWikilink(target) -> bool marks dead links, and a
+// click on one goes to opts.onCreateWikilink(target) when there is one.
 // opts.onEditProperty(key, newValue) -> bool: when present, scalar values
 // edit inline, bools toggle, and list chips remove/add. The callback owns
 // the byte-honest YAML surgery; a false return leaves the panel unchanged.
 // opts.raw: the frontmatter block as written, which is where the name of an
 // unquoted [[link]] is read from, since YAML parses one as a nested list.
 export function renderProperties(container, parsed, opts = {}) {
-  const { onWikilinkClick = null, resolveWikilink = null, onEditProperty = null, raw = null } = opts;
+  const { onWikilinkClick = null, onCreateWikilink = null, resolveWikilink = null, onEditProperty = null, raw = null } = opts;
   if (!container) return 0;
+  const links = { resolve: resolveWikilink, creatable: typeof onCreateWikilink === 'function' };
   // The container is a single persistent node reused for every file. Store the
   // current render's callbacks and data here; the delegated handlers (attached
   // exactly once, below) read this at event time. Attaching per render instead
@@ -205,7 +210,7 @@ export function renderProperties(container, parsed, opts = {}) {
   // data, so a click would fire several at once and edit the wrong file.
   // `shown` is each value as the panel shows and edits it.
   const shown = {};
-  container.__propsState = { parsed, shown, onWikilinkClick, resolveWikilink, onEditProperty };
+  container.__propsState = { parsed, shown, onWikilinkClick, onCreateWikilink, resolveWikilink, onEditProperty };
   container.innerHTML = '';
   if (!parsed || typeof parsed !== 'object') {
     container.classList.remove('visible');
@@ -233,7 +238,7 @@ export function renderProperties(container, parsed, opts = {}) {
       <div class="prop-row${editable ? ' editable' : ''}" data-prop-key="${escapeHtml(key)}" data-prop-type="${escapeHtml(type)}">
         <span class="prop-icon" title="${escapeHtml(type)}">${typeIconSvg(type)}</span>
         <span class="prop-key">${escapeHtml(key)}</span>
-        ${renderValue(value, type, resolveWikilink, editable, written && written.items)}
+        ${renderValue(value, type, links, editable, written && written.items)}
       </div>
     `);
   }
@@ -249,7 +254,7 @@ export function renderProperties(container, parsed, opts = {}) {
   container.classList.toggle('props-editable', typeof onEditProperty === 'function');
 
   // Delegated handlers attach once and read container.__propsState (refreshed
-  // above), so they always act on the file currently shown. Dead links inert.
+  // above), so they always act on the file currently shown.
   wirePropsHandlers(container);
   return rows.length;
 }
@@ -266,15 +271,18 @@ function wirePropsHandlers(container) {
   if (container.__propsWired) return;
   container.__propsWired = true;
 
+  // A link opens its note; a link to a missing note creates it, when the host
+  // can, and is inert when it cannot.
   const activate = (event) => {
     const st = container.__propsState;
-    if (!st || typeof st.onWikilinkClick !== 'function') return;
-    const el = event.target.closest && event.target.closest('a.prop-wikilink');
-    if (!el || el.classList.contains('dead')) return;
+    const el = st && event.target.closest && event.target.closest('a.prop-wikilink');
+    if (!el) return;
     if (event.type === 'keydown' && event.key !== 'Enter') return;
+    const go = el.classList.contains('dead') ? st.onCreateWikilink : st.onWikilinkClick;
+    if (typeof go !== 'function') return;
     event.preventDefault();
     event.stopPropagation();
-    st.onWikilinkClick(el.getAttribute('data-target') || '');
+    go(el.getAttribute('data-target') || '');
   };
   container.addEventListener('click', activate);
   container.addEventListener('keydown', activate);

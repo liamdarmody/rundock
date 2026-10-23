@@ -161,6 +161,15 @@ body.light .tiptap-editor-pane .prop-wikilink:not(.dead) { color: var(--accent-t
 .prop-add { display: inline-flex; align-items: center; justify-content: center; background: none; border: 1px dashed var(--border); border-radius: var(--radius-pill); color: var(--text-2); width: 20px; height: 20px; line-height: 1; cursor: pointer; font-size: 13px; opacity: 0.55; transition: opacity var(--duration-base) ease, color var(--duration-base) ease, border-color var(--duration-base) ease; }
 .props-editable .prop-row.editable:hover .prop-add { opacity: 1; }
 .prop-add:hover { color: var(--accent); border-color: var(--accent); opacity: 1; }
+/* The short notice a note made from a link opens with, or the plain words for
+   why it could not be made. Fixed to the window, because the editor beneath
+   it is replaced by the new note; centred low, clear of the approvals dock.
+   On --elevated, where --danger-text reads (it measures under 4.5:1 on
+   --card); the --border-strong edge sets it off the pane. */
+.link-notice { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 150; max-width: min(420px, calc(100vw - 32px)); display: flex; flex-direction: column; gap: 2px; padding: 10px 14px; background: var(--elevated); color: var(--text-1); border: 1px solid var(--border-strong); border-radius: var(--radius-lg); font-size: 13px; }
+.link-notice-title { font-weight: 600; }
+.link-notice-detail { color: var(--text-2-strong); font-size: var(--caption); font-family: var(--font-mono); overflow-wrap: anywhere; }
+.link-notice.refused .link-notice-detail { color: var(--danger-text); font-family: inherit; }
 /* External-edit conflict banner: a visible choice, never a silent overwrite. */
 #external-edit-banner { display: flex; align-items: center; gap: 10px; padding: 10px 24px; background: rgba(232,168,76,0.10); border-bottom: 1px solid rgba(232,168,76,0.35); font-size: var(--body); color: var(--text-1); }
 #external-edit-banner .banner-text { flex: 1; }

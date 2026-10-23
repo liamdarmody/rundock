@@ -265,6 +265,17 @@ describe('editing a value with links in it', () => {
     } finally { p.done(); }
   });
 
+  test('clicking a link to a missing note asks the host to create it, and opens nothing', () => {
+    const created = [];
+    const p = mount(NOTE, { onCreateWikilink: (t) => created.push(t) });
+    try {
+      p.click(p.row('see-also').querySelector('a.dead'));
+      assert.deepEqual(created, ['Old plan']);
+      assert.deepEqual(p.opened, []);
+      assert.equal(p.row('see-also').querySelector('input'), null, 'no edit starts either');
+    } finally { p.done(); }
+  });
+
   test('every value holding a link has the pencil', () => {
     const p = mount(NOTE);
     try {

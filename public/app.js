@@ -793,12 +793,17 @@ function handle(d) {
       if (d.path === currentFilePath) recheckExtensionClaim();
       break;
     case 'path_created':
+      // A note a link asked for opens with a short notice (settleLinkCreate).
+      if (settleLinkCreate(d)) break;
       // The tree was refreshed by the preceding file_tree push; open a new
       // note/board in the editor and reveal it. A new folder just appears.
       if (d.kind !== 'folder') { ws.send(JSON.stringify({ type: 'read_file', path: d.path })); }
       setTimeout(() => highlightFileInSidebar(d.path), 0);
       break;
     case 'create_error':
+      // A link's note that already exists opens instead; other refusals for
+      // a link are said in its notice rather than a dialog.
+      if (settleLinkCreate(d)) break;
       // A system error is its plain sentence alone (a dialog has no Details,
       // and a path never goes in the sentence); a guard's refusal keeps its
       // own short words with the name the person typed.

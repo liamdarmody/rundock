@@ -127,6 +127,8 @@ async function initTiptapEditor(path, content) {
     toolbarHostElement: document.getElementById('tiptap-editor-pane'),
     onUpdate: () => onTiptapEditorUpdate(),
     onWikilinkClick: (target) => openWikilink(target),
+    // A link to a note that does not exist creates it, then opens it.
+    onCreateWikilink: (target) => createNoteFromLink(target),
     // Frontmatter wikilinks that match no file render visibly dead.
     resolveWikilink: (target) => {
       if (!cachedFileTree) return true; // tree not loaded yet: never false-flag
@@ -2279,6 +2281,53 @@ function linkCreatePath(target, fromPath) {
   return { path: folder ? folder + '/' + file : file };
 }
 
+// A click on a link to a missing note creates the note, with no prompt. The
+// paths on their way to the server are held here until it answers, so a
+// second click meanwhile does nothing rather than asking twice.
+const pendingLinkCreates = new Set();
+function createNoteFromLink(target) {
+  const where = linkCreatePath(target, currentFilePath);
+  if (where.refusal) { showLinkNotice('That note cannot be created', where.refusal, true); return; }
+  if (pendingLinkCreates.has(where.path) || !ws || ws.readyState !== WebSocket.OPEN) return;
+  pendingLinkCreates.add(where.path);
+  ws.send(JSON.stringify({ type: 'create_path', kind: 'note', path: where.path, content: '' }));
+}
+
+// The server's answer to a create a link asked for: the new note opens with a
+// short notice; a note already there opens instead, never overwritten; any
+// other refusal is said plainly. False for an answer no link asked for, which
+// the caller handles as before.
+function settleLinkCreate(msg) {
+  if (!pendingLinkCreates.delete(msg.path)) return false;
+  if (msg.type === 'path_created' || msg.reason === 'already exists') openWorkspaceFilePath(msg.path);
+  if (msg.type === 'path_created') {
+    showLinkNotice('Created ' + msg.path.split('/').pop().replace(/\.md$/i, ''), msg.path, false);
+  } else if (msg.reason !== 'already exists') {
+    showLinkNotice('That note cannot be created',
+      msg.reason === 'invalid path' ? 'That place is outside this workspace, or hidden.' : String(msg.reason), true);
+  }
+  return true;
+}
+
+// One short notice at a time, gone by itself. Built from text nodes, never markup.
+let linkNoticeTimer = null;
+function showLinkNotice(title, detail, refused) {
+  const old = document.querySelector('.link-notice');
+  if (old) old.remove();
+  const box = document.createElement('div');
+  box.className = 'link-notice' + (refused ? ' refused' : '');
+  box.setAttribute('role', 'status');
+  for (const [cls, text] of [['link-notice-title', title], ['link-notice-detail', detail]]) {
+    const line = document.createElement('div');
+    line.className = cls;
+    line.textContent = text;
+    box.appendChild(line);
+  }
+  document.body.appendChild(box);
+  clearTimeout(linkNoticeTimer);
+  linkNoticeTimer = setTimeout(() => box.remove(), 4000);
+}
+
 /**
  * What links here, and what this links to, as data the view can draw.
  *
@@ -2391,6 +2440,7 @@ return {
   openBinaryOrUnsupportedFile, renderEditorContent, setEditorMode,
   getFileContentForSave, openWikilink, openWorkspaceFilePath,
   highlightFileInSidebar, findFileInTree, wikilinkSearchName, linkCreatePath, fileConnections,
+  createNoteFromLink, settleLinkCreate,
   renderFileConnections, drawFileConnections, drawFileConnectionsLoading, removeFileConnections,
   fileConnectionsIndexReady,
   updateEditorBackButton,

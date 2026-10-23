@@ -75,8 +75,8 @@ function declared(sheet, selector, property, themeName, lightSelector = `body.li
   return rule.get(property);
 }
 
-const PANEL = ['.tiptap-editor-pane .properties', 'background', BASE];
-const PAGE = ['.main', 'background', BASE];
+const PANEL = ['.tiptap-editor-pane .properties', 'background'];
+const PAGE = ['.main', 'background'];
 const LINK = '.tiptap-editor-pane .prop-wikilink';
 const PAIRINGS = [
   // [label, [selector, property, light variant], background]
@@ -84,6 +84,9 @@ const PAIRINGS = [
   ['panel link to a missing note', [`${LINK}.dead`, 'color'], PANEL],
   ['words around panel links', ['.tiptap-editor-pane .prop-value', 'color'], PANEL],
   ['body link to a note that exists', ['.tiptap-editor .ProseMirror a.wikilink', 'color'], PAGE],
+  ['notice title', ['.link-notice', 'color'], ['.link-notice', 'background']],
+  ['notice path', ['.link-notice-detail', 'color'], ['.link-notice', 'background']],
+  ['notice refusal', ['.link-notice.refused .link-notice-detail', 'color'], ['.link-notice', 'background']],
 ];
 
 describe('link colours in a note clear 4.5:1 in both themes', () => {

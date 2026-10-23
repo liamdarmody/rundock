@@ -6,8 +6,11 @@
 // stay missing after the note exists. Every name here is made up.
 const { test, describe } = require('node:test');
 const assert = require('node:assert');
+const { JSDOM } = require('jsdom');
 
-const { linkCreatePath, findFileInTree, wikilinkSearchName } = require('../../public/views/files.js');
+const {
+  linkCreatePath, findFileInTree, wikilinkSearchName, createNoteFromLink, settleLinkCreate,
+} = require('../../public/views/files.js');
 
 const FROM = 'Projects/Alpha/Launch.md';
 
@@ -92,5 +95,84 @@ describe('what a link cannot create, said in plain words', () => {
         assert.ok(!r.path.startsWith('/') && !r.path.split('/').includes('..'), `${target} -> ${r.path}`);
       }
     }
+  });
+});
+
+// The click itself, in the app-owned globals files.js reads at call time.
+function shell() {
+  const dom = new JSDOM('<!doctype html><body></body>');
+  const sent = [];
+  const stubs = {
+    window: dom.window, document: dom.window.document,
+    WebSocket: { OPEN: 1 },
+    ws: { readyState: 1, send: (raw) => sent.push(JSON.parse(raw)) },
+    currentFilePath: FROM, editorReturnView: 'editor', fileHistory: [],
+    enteredFromFiles: () => {}, switchNav: () => {}, showView: () => {},
+  };
+  for (const [k, v] of Object.entries(stubs)) global[k] = v;
+  const notice = () => dom.window.document.querySelector('.link-notice');
+  const cleanup = () => { for (const k of Object.keys(stubs)) delete global[k]; dom.window.close(); };
+  return { sent, notice, cleanup };
+}
+
+describe('creating the note from a click', () => {
+  test('one click sends one create, and a second click while it is on its way sends nothing', () => {
+    const { sent, cleanup } = shell();
+    try {
+      createNoteFromLink('Roadmap');
+      createNoteFromLink('Roadmap');
+      assert.deepStrictEqual(sent, [{ type: 'create_path', kind: 'note', path: 'Projects/Alpha/Roadmap.md', content: '' }]);
+    } finally { settleLinkCreate({ type: 'create_error', path: 'Projects/Alpha/Roadmap.md', reason: 'x' }); cleanup(); }
+  });
+
+  test('when it is made, it opens at once with a short notice naming where it went', () => {
+    const { sent, notice, cleanup } = shell();
+    try {
+      createNoteFromLink('Archive/Old plan');
+      assert.strictEqual(settleLinkCreate({ type: 'path_created', path: 'Archive/Old plan.md', kind: 'note' }), true);
+      assert.deepStrictEqual(sent.slice(1), [{ type: 'read_file', path: 'Archive/Old plan.md' }]);
+      assert.strictEqual(notice().textContent, 'Created Old planArchive/Old plan.md');
+      assert.ok(!notice().classList.contains('refused'));
+      createNoteFromLink('Archive/Old plan');
+      assert.strictEqual(sent.length, 3, 'once settled, the guard lets go');
+    } finally { settleLinkCreate({ type: 'create_error', path: 'Archive/Old plan.md', reason: 'x' }); cleanup(); }
+  });
+
+  test('a note that already exists is opened, never overwritten, and nothing is said as an error', () => {
+    const { sent, notice, cleanup } = shell();
+    try {
+      createNoteFromLink('Roadmap');
+      assert.strictEqual(settleLinkCreate({ type: 'create_error', path: 'Projects/Alpha/Roadmap.md', reason: 'already exists' }), true);
+      assert.deepStrictEqual(sent.map((m) => m.type), ['create_path', 'read_file']);
+      assert.strictEqual(sent[1].path, 'Projects/Alpha/Roadmap.md');
+      assert.strictEqual(notice(), null);
+    } finally { cleanup(); }
+  });
+
+  test('a name that cannot be used is refused in plain words, and nothing is sent', () => {
+    const { sent, notice, cleanup } = shell();
+    try {
+      createNoteFromLink('Q3: plan');
+      assert.deepStrictEqual(sent, []);
+      assert.ok(notice().classList.contains('refused'));
+      assert.match(notice().textContent, /^That note cannot be created.*cannot contain/);
+    } finally { cleanup(); }
+  });
+
+  test('a refusal from the server is said plainly too', () => {
+    const { notice, cleanup } = shell();
+    try {
+      createNoteFromLink('Roadmap');
+      settleLinkCreate({ type: 'create_error', path: 'Projects/Alpha/Roadmap.md', reason: 'invalid path' });
+      assert.match(notice().textContent, /outside this workspace/);
+    } finally { cleanup(); }
+  });
+
+  test('an answer for a create no link asked for is left to the caller', () => {
+    const { sent, cleanup } = shell();
+    try {
+      assert.strictEqual(settleLinkCreate({ type: 'path_created', path: 'Board.md', kind: 'board' }), false);
+      assert.deepStrictEqual(sent, []);
+    } finally { cleanup(); }
   });
 });
