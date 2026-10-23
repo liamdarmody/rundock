@@ -262,6 +262,8 @@ describe('nothing stored answers it', { skip: SKIP }, () => {
     global.serverPlatform = 'darwin';
     global.workspaceMode = 'knowledge';
     global.activeConversation = { id: 'convo-1' };
+    // The roster app.js keeps; a Codex request names its agent from it.
+    global.agents = [];
     chat = require('../../public/views/chat.js');
   });
   after(() => { if (dom) dom.window.close(); });
