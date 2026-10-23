@@ -135,6 +135,77 @@ describe('between turns', () => {
   });
 });
 
+// A HOOK SCRIPT THAT WAS NOT THERE WHEN THE BASELINE WAS TAKEN is a change from
+// nothing. The folder is listed at every check, so a script added during a
+// turn is removed and offered on the card, and one a person adds between turns
+// is the starting point for the next.
+describe('a hook script that was not there before', () => {
+  test('one an agent adds during a turn is removed and offered on the card, nested ones included', () => {
+    const d = drivenGlue();
+    const entry = { agentId: 'builder', processId: 'p1' };
+    try {
+      glue.guardCodexTurn(entry, 'convo-1');
+      fs.writeFileSync(path.join(ws, '.claude', 'hooks', 'new.sh'), 'planted');
+      fs.mkdirSync(path.join(ws, '.claude', 'hooks', 'more'));
+      fs.writeFileSync(path.join(ws, '.claude', 'hooks', 'more', 'deep.py'), 'planted');
+      glue.releaseCodexTurnGuard(entry);
+    } finally { d.restore(); }
+    assert.ok(!fs.existsSync(path.join(ws, '.claude', 'hooks', 'new.sh')), 'the new script is gone');
+    assert.ok(!fs.existsSync(path.join(ws, '.claude', 'hooks', 'more', 'deep.py')), 'and so is the nested one');
+    assert.deepStrictEqual(d.asked.map(r => r.grading.put_back.relative).sort(), ['.claude/hooks/more/deep.py', '.claude/hooks/new.sh']);
+    for (const r of d.asked) {
+      assert.strictEqual(r.grading.put_back.before, null, 'shown as a file that did not exist');
+      assert.strictEqual(r.grading.put_back.after, 'planted');
+    }
+  });
+
+  test('one added in a hooks folder that did not exist when the turn started', () => {
+    fs.rmSync(path.join(ws, '.claude', 'hooks'), { recursive: true });
+    const d = drivenGlue();
+    const entry = { agentId: 'builder', processId: 'p1' };
+    try {
+      glue.guardCodexTurn(entry, 'convo-1');
+      fs.mkdirSync(path.join(ws, '.claude', 'hooks'));
+      fs.writeFileSync(path.join(ws, '.claude', 'hooks', 'first.sh'), 'planted');
+      glue.releaseCodexTurnGuard(entry);
+    } finally { d.restore(); }
+    assert.ok(!fs.existsSync(path.join(ws, '.claude', 'hooks', 'first.sh')));
+    assert.deepStrictEqual(d.asked.map(r => r.grading.put_back.relative), ['.claude/hooks/first.sh']);
+  });
+
+  test('one a person adds between turns is the starting point for the next turn', () => {
+    const d = drivenGlue();
+    const entry = { agentId: 'builder', processId: 'p1' };
+    const added = path.join(ws, '.claude', 'hooks', 'added.sh');
+    try {
+      glue.guardCodexTurn(entry, 'convo-1');
+      glue.releaseCodexTurnGuard(entry);
+      fs.writeFileSync(added, 'by hand');
+      glue.guardCodexTurn(entry, 'convo-1');
+      assert.strictEqual(fs.readFileSync(added, 'utf-8'), 'by hand', 'left as the person made it');
+      fs.appendFileSync(added, ' planted');
+      glue.releaseCodexTurnGuard(entry);
+    } finally { d.restore(); }
+    assert.strictEqual(fs.readFileSync(added, 'utf-8'), 'by hand', 'an agent\'s change to it is put back to the person\'s version');
+    assert.deepStrictEqual(d.asked.map(r => [r.grading.put_back.relative, r.grading.put_back.before]), [['.claude/hooks/added.sh', 'by hand']]);
+  });
+
+  test('a hooks folder swapped for a link is not listed, so nothing where it points is removed', () => {
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'what-runs-outside-'));
+    fs.writeFileSync(path.join(outside, 'keep.txt'), 'not the workspace\'s');
+    const d = drivenGlue();
+    const entry = { agentId: 'builder', processId: 'p1' };
+    try {
+      glue.guardCodexTurn(entry, 'convo-1');
+      fs.rmSync(path.join(ws, '.claude', 'hooks'), { recursive: true });
+      fs.symlinkSync(outside, path.join(ws, '.claude', 'hooks'));
+      glue.releaseCodexTurnGuard(entry);
+      assert.strictEqual(fs.readFileSync(path.join(outside, 'keep.txt'), 'utf-8'), 'not the workspace\'s');
+      assert.ok(!d.asked.some(r => r.grading.put_back.relative === '.claude/hooks/keep.txt'), 'not taken for a new script');
+    } finally { d.restore(); fs.rmSync(outside, { recursive: true, force: true }); }
+  });
+});
+
 describe('Rundock\'s own writes of these files stand', () => {
   test('the launcher written on open, and a connector the person allowed, during a turn', () => {
     const scaffold = require('../../lib/workspace/scaffold.js');
