@@ -39,6 +39,8 @@ const MERGE_SERVER = { src: HISTORY, suite: 'test/integration/session-history.te
 // Which session lines are Rundock's own, and the message counts that read them.
 const LINES = { src: path.join(ROOT, 'lib', 'delegation', 'rundock-lines.js'), suite: 'test/unit/session-history-merge.test.js' };
 const COUNTS = { src: path.join(ROOT, 'server.js'), suite: 'test/integration/session-history.test.js' };
+// The session parser, read through the real server.
+const PARSER = { src: path.join(ROOT, 'server.js'), suite: 'test/integration/session-history.test.js' };
 
 const MUTATIONS = [
   // ===== THE EARLIER HISTORY =====
@@ -134,6 +136,40 @@ const MUTATIONS = [
   [COUNTS, 'the message count counts the <silent> sentinel',
     "      if (rundockLines.isRundockReply(textParts.join('\\n\\n'))) continue;\n",
     ''],
+  // ===== CLAUDE CODE'S OWN NOTES =====
+  // Written as the person's message: a compaction summary and the notes
+  // around local commands.
+  [PARSER, 'the history shows Claude Code\'s compaction summaries and meta notes',
+    '      const obj = JSON.parse(line);\n      if (isClaudeCodeNote(obj)) continue;\n',
+    '      const obj = JSON.parse(line);\n'],
+  [PARSER, 'the message count counts Claude Code\'s compaction summaries and meta notes',
+    '    try { obj = JSON.parse(line); } catch (e) { continue; }\n    if (isClaudeCodeNote(obj)) continue;\n',
+    '    try { obj = JSON.parse(line); } catch (e) { continue; }\n'],
+  [PARSER, 'a meta note is taken for the person\'s message',
+    'obj.isCompactSummary === true || obj.isMeta === true',
+    'obj.isCompactSummary === true'],
+  [PARSER, 'a compaction summary is taken for the person\'s message',
+    'obj.isCompactSummary === true || obj.isMeta === true',
+    'obj.isMeta === true'],
+  // ===== HOW MUCH OF A FILE IS READ =====
+  // Asked for its newest 999 lines, a long earlier session loses its oldest
+  // lines from view, as the transcript once lost them all.
+  [MERGE_SERVER, 'a long session is read only to its newest 999 lines',
+    'parseSessionHistory(s.sessionId, Infinity, 0)',
+    'parseSessionHistory(s.sessionId, 999, 0)'],
+  // Matched among the whole of a long file, a capped transcript's rebuild
+  // grows with the square of the file.
+  [MERGE, 'the transcript\'s turns are matched among the whole of a long file',
+    'let past = hasTranscript ? kept.filter((m) => !m._earlier).length - MATCH_WINDOW : 0;',
+    'let past = 0;'],
+  // The window is for the lines a turn is matched among, never the earlier
+  // ones or a file nothing is matched in.
+  [MERGE, 'earlier lines are cut to fit the window',
+    '          if (!m._earlier && past > 0) { past--; continue; }',
+    '          if (past > 0) { past--; continue; }'],
+  [MERGE_SERVER, 'a file with no transcript is cut to its newest lines',
+    'let past = hasTranscript ? kept.filter',
+    'let past = true ? kept.filter'],
 ];
 
 // The reporter is named explicitly rather than left to the default, which

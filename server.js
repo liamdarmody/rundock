@@ -427,6 +427,15 @@ function getSessionJsonlPath(sessionId) {
   return null;
 }
 
+// CLAUDE CODE'S OWN NOTES, written as the person's message though the person
+// never wrote them: the summary it leaves when it compacts a session ("This
+// session is being continued from a previous conversation...", flagged
+// isCompactSummary) and the notes around local commands (flagged isMeta).
+// Skipped by the history and the message counts alike.
+function isClaudeCodeNote(obj) {
+  return !!obj && (obj.isCompactSummary === true || obj.isMeta === true);
+}
+
 async function parseSessionHistory(sessionId, limit = 20, offset = 0) {
   const filePath = getSessionJsonlPath(sessionId);
   if (!filePath) return { messages: [], totalCount: 0, hasMore: false };
@@ -440,6 +449,7 @@ async function parseSessionHistory(sessionId, limit = 20, offset = 0) {
   for await (const line of rl) {
     try {
       const obj = JSON.parse(line);
+      if (isClaudeCodeNote(obj)) continue;
       // User text messages (not tool results)
       if (obj.type === 'user' && obj.message && typeof obj.message.content === 'string') {
         displayable.push({ role: 'user', content: obj.message.content, timestamp: obj.timestamp || null });
@@ -516,6 +526,7 @@ function readSessionMessageCount(filePath) {
     if (!line) continue;
     let obj;
     try { obj = JSON.parse(line); } catch (e) { continue; }
+    if (isClaudeCodeNote(obj)) continue;
     // User text turns: tool_result entries have array content and are excluded
     // by the typeof === 'string' guard.
     if (obj.type === 'user' && obj.message && typeof obj.message.content === 'string') {

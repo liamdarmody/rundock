@@ -34,9 +34,10 @@ const reply = (content, timestamp) => ({ role: 'assistant', content, timestamp }
 const later = (ms) => new Date(Date.now() + ms).toISOString();
 
 // The real handler, given each session file's parsed lines, in the order the
-// conversation lists its sessions.
+// conversation lists its sessions. The stand-in parser keeps the newest
+// `limit` lines, as the real one does.
 async function history(convoId, sessions, extra = {}) {
-  const ctx = { store: { parseSessionHistory: async (sessionId) => ({ messages: sessions[sessionId] || [] }) } };
+  const ctx = { store: { parseSessionHistory: async (sessionId, limit) => ({ messages: (sessions[sessionId] || []).slice(-limit) }) } };
   const sent = [];
   handleGetSessionHistory(ctx, { send: (s) => sent.push(JSON.parse(s)) }, {
     conversationId: convoId,
@@ -266,6 +267,38 @@ describe('a new turn after history only the session file holds', () => {
       'Now the budget section.',
       'The budget section is drafted.',
     ]);
+  });
+
+  test('the transcript\'s turns are matched among each file\'s newest lines; earlier history is read in full', async () => {
+    // Matching scans the lines once per turn, so a whole long file in it makes
+    // a capped transcript's rebuild grow with the square of the file. Each
+    // file's newest 999 lines from the transcript's time are what its turns are
+    // looked up among, as when the parser was asked for no more; a turn whose
+    // line is older than that shows the transcript's own text, as it always
+    // did. Earlier history is never searched turn by turn, so all of it shows.
+    const convoId = 'long-file';
+    const SESSION_ONLY = ' A sentence only the session holds.';
+    srv.appendTranscript(convoId, 'user', 'user', 'Start the long review.');
+    srv.appendTranscript(convoId, 'agent', 'content-lead', 'First pass done.');
+    const t0 = Date.parse(srv.loadTranscript(convoId)[0].timestamp);
+    const iso = (ms) => new Date(ms).toISOString();
+    const lines = [];
+    for (let i = 0; i < 1200; i++) lines.push(user(`Earlier question ${i}`, iso(t0 - 86400000 + i * 1000)));
+    lines.push(user('Start the long review.', iso(t0 + 10)));
+    lines.push(reply(`First pass done.${SESSION_ONLY}`, iso(t0 + 20)));
+    for (let i = 0; i < 1000; i++) lines.push(user(`Later note ${i}`, iso(t0 + 1000 + i)));
+    srv.appendTranscript(convoId, 'user', 'user', 'Last question.');
+    srv.appendTranscript(convoId, 'agent', 'content-lead', 'Last answer.');
+    lines.push(user('Last question.', later(50)));
+    lines.push(reply(`Last answer.${SESSION_ONLY}`, later(80)));
+
+    const res = await history(convoId, { 'sess-long': lines }, { limit: 5000 });
+    const shown = res.messages.map((m) => m.content);
+    assert.strictEqual(shown.filter((c) => c.startsWith('Earlier question')).length, 1200, 'all of the earlier history');
+    assert.strictEqual(shown[0], 'Earlier question 0');
+    assert.ok(shown.includes(`Last answer.${SESSION_ONLY}`), 'a turn among the newest lines is matched to them');
+    assert.ok(shown.includes('First pass done.') && !shown.includes(`First pass done.${SESSION_ONLY}`),
+      'a turn older than the newest 999 lines shows the transcript\'s text, never a scan of the whole file');
   });
 
   test('what the session holds from after the transcript began, and the transcript does not name, stays hidden', async () => {
