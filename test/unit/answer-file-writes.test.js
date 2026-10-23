@@ -208,6 +208,74 @@ describe('a command asks about an answer file only when it can write it', () => 
       child.stdin.end(JSON.stringify({ hook_event_name: 'PreToolUse', session_id: 's', cwd: ws, tool_name: 'Bash', tool_input: { command } }));
     });
   }
+  // CODE ASKS ABOUT AN ANSWER FILE ONLY WHEN IT CAN WRITE ONE. A literal in
+  // code handed to an interpreter counts as written only as the path given to
+  // a call that removes, moves, renames, copies into, makes or writes a file,
+  // to an open with a mode that writes, or to a command the code runs, by
+  // itself or through a name it was put in. Reading one, or naming one to
+  // skip it, asks about nothing.
+  const CODE_READS = [
+    "python3 -c \"import json; print(json.load(open('.mcp.json')))\"",
+    "node -e \"console.log(require('fs').readFileSync('.claude/settings.json', 'utf8'))\"",
+    "python3 - <<'PY'\nimport os\nfor root, dirs, files in os.walk('.'):\n    dirs[:] = [d for d in dirs if d not in ('.git', '.claude', '.rundock')]\n    for f in files:\n        print(os.path.join(root, f))\nPY",
+    "cat > tools/walk.py <<'PY'\nimport os\nSKIP = {'.claude', '.rundock', '.git'}\nfor root, dirs, files in os.walk('.'):\n    dirs[:] = [d for d in dirs if d not in SKIP]\nPY",
+    "python3 -c \"print('.claude')\"",
+    "python3 - <<'PY'\nimport os\nfor root, dirs, files in os.walk('.'):\n    if '.claude' in dirs:\n        dirs.remove('.claude')\nPY",
+    "python3 - <<'PY'\nCFG = '.mcp.json'\nprint(open(CFG).read())\nPY",
+    "python3 - <<'PY'\nopen('.mcp.json', 'r').read()\nopen('.claude/settings.json', encoding='utf-8').read()\nPY",
+    "node -e \"const p = '.claude'; console.log(p.replace('.', ''))\"",
+    "python3 - <<'PY'\nimport shutil\nshutil.copy('.mcp.json', 'backup.json')\nPY",
+    "python3 - <<'PY'\nfrom pathlib import Path\nprint(Path('.claude/settings.json').read_text())\nPY",
+    "perl -e \"open(F, '<', '.mcp.json'); print <F>\"",
+    "ruby -e \"puts File.read('.mcp.json')\"",
+    // What a write call writes is its path, not the content handed to it.
+    "node -e \"require('fs').writeFileSync('out.json', require('fs').readFileSync('.mcp.json'))\"",
+    // A loop's list ends where a comprehension's condition starts.
+    "python3 - <<'PY'\nimport os, shutil\n[shutil.rmtree(d) for d in os.listdir('build') if d not in ('.claude', '.rundock')]\nPY",
+  ];
+  const CODE_WRITES = [
+    "python3 - <<'PY'\nCFG = '.mcp.json'\nwith open(CFG, 'w') as f:\n    f.write('{}')\nPY",
+    "python3 - <<'PY'\nimport json\njson.dump({}, open('.mcp.json', 'a'))\nPY",
+    "python3 - <<'PY'\nimport os\nos.remove(os.path.join('.claude', 'settings.json'))\nPY",
+    "python3 - <<'PY'\nimport os\nos.makedirs('.claude/hooks', exist_ok=True)\nPY",
+    "python3 - <<'PY'\nimport shutil\nshutil.move('x.json', '.mcp.json')\nPY",
+    "python3 - <<'PY'\nimport shutil\nshutil.copytree('backup', '.claude')\nPY",
+    "python3 - <<'PY'\nfrom pathlib import Path\nPath('.mcp.json').write_text('{}')\nPY",
+    "python3 - <<'PY'\nfrom pathlib import Path\np = Path('.claude') / 'settings.json'\np.write_text('{}')\nPY",
+    "python3 - <<'PY'\nfrom pathlib import Path\nPath('.claude/hooks/pre-tool.sh').unlink()\nPY",
+    "python3 - <<'PY'\nimport shutil\nfor d in ('.claude', '.rundock'):\n    shutil.rmtree(d)\nPY",
+    "python3 - <<'PY'\nimport subprocess\nsubprocess.run(['rm', '-rf', '.claude'])\nPY",
+    "python3 -c \"import os; os.system('rm .mcp.json')\"",
+    "node -e \"require('fs').promises.rm('.claude', { recursive: true })\"",
+    "node -e \"const fs = require('fs'); fs.appendFileSync('.mcp.json', 'x')\"",
+    "node -e \"const { rmSync } = require('fs'); rmSync('.rundock', { recursive: true })\"",
+    "node -e \"require('fs').renameSync('x.json', '.claude/settings.json')\"",
+    "node -e \"require('child_process').execSync('rm -rf .claude')\"",
+    "ruby -e \"File.write('.mcp.json', '{}')\"", "ruby -e \"require 'fileutils'; FileUtils.rm_rf('.claude')\"",
+    "perl -e \"unlink('.mcp.json')\"",
+    "python3 - <<'PY'\nimport os\nos.open('.mcp.json', os.O_WRONLY | os.O_CREAT)\nPY",
+    "node -e \"require('fs').unlink('.mcp.json', () => {})\"",
+    "node -e \"for (const d of ['.claude']) require('fs').rmSync(d, { recursive: true })\"",
+    "node -e \"const dirs = ['.claude', '.rundock']; dirs.forEach(d => require('fs').rmSync(d, { recursive: true }))\"",
+    "ruby -e \"require 'fileutils'; dirs = ['.claude']; dirs.each { |d| FileUtils.rm_rf(d) }\"",
+    "perl -e 'foreach my $f (\".mcp.json\") { unlink($f) }'",
+  ];
+  test('code asks about an answer file only when it can write one', () => {
+    for (const codeMode of [false, true]) {
+      const label = codeMode ? 'Code' : 'Notes';
+      for (const c of CODE_READS) assert.strictEqual(answerFileIn(c, codeMode), false, `${label}: ${c}`);
+      for (const c of CODE_WRITES) assert.strictEqual(answerFileIn(c, codeMode), true, `${label}: ${c}`);
+    }
+  });
+  test('through the real hook, code that only reads an answer file runs in Code mode and draws no refusal in Notes mode', async () => {
+    for (const c of CODE_READS) {
+      assert.strictEqual(await hookDecision(c, true), 'allow', `Code: ${c}`);
+      assert.notStrictEqual(await hookDecision(c, false), 'deny', `Notes: ${c}`);
+    }
+    assert.strictEqual(await hookDecision("python3 -c \"open('.mcp.json','w')\"", true), 'deny', 'code that writes one is still refused with nobody to ask');
+    assert.strictEqual(await hookDecision("python3 -c \"open('.mcp.json','w')\"", false), 'deny', 'in Notes mode too');
+  });
+
   test('through the real hook in Code mode, the reads run unattended and a write is refused', async () => {
     for (const c of ['git diff .mcp.json', 'jq . .mcp.json', 'cp .mcp.json backup.json', 'diff .mcp.json x.json']) {
       assert.strictEqual(await hookDecision(c, true), 'allow', c);

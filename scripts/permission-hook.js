@@ -1631,24 +1631,245 @@ function literalIsPlace(lit, reading = null) {
 // place: `open('.mcp.json', 'w')` names one with no slash at all.
 const MAY_NAME_ANSWER_FILE = /\.(?:mcp\.json|rundock|claude)/i;
 
-// The literals in a piece of code that name a place, those that may name an
-// answer file (`names`), and the commands it runs itself. A literal is quoted
+// WHAT CODE CAN WRITE, of the literals it names. Code names files to read
+// them, to list them and to skip them far more often than to change them, so
+// a literal counts as written only where the code can write it:
+//
+//   - the path given to a call that removes, moves, renames, copies into,
+//     makes or writes a file (Python's os, shutil and pathlib, Node's fs in
+//     its plain, Sync and promises forms, Ruby's File and FileUtils, Perl's
+//     builtins), called bare or on its module, never as a method of anything
+//     else, so `dirs.remove('.claude')` and `p.replace('.', '')` are not;
+//   - a path given to an open whose mode or flags write;
+//   - a path that is the receiver of a pathlib method that writes;
+//   - and the same through a name: a literal put in a variable, or a loop
+//     over one, counts where that name reaches such a call.
+//
+// A command the code runs (`os.system`, `subprocess`, `child_process`) is read
+// as a command by the caller. Not followed: a path handed to a function of the
+// code's own, a call written without brackets (Ruby's and Perl's), and a path
+// built from names the code works out as it runs.
+const MODULE_QUALIFIER = /(?:(?:^|[^\w$.])(?:os|shutil|fs|fsp|fse|fsExtra|FileUtils|File|Dir|IO)|\bpromises)\s*\.\s*$/;
+const FS_REQUIRE_QUALIFIER = /require\(\s*['"](?:node:)?fs(?:\/promises|-extra)?['"]\s*\)\s*\.\s*$/;
+// Which arguments name what the call changes: all, the first, the first two
+// (a move changes both ends) or all but the first (a copy or a link makes the
+// last). DISTINCT names count however they are called; PLAIN names only when
+// called bare or on a file module.
+const DISTINCT_WRITES = {
+  all: ['rmtree', 'remove_tree', 'rm_rf', 'rm_r', 'rm_f', 'remove_dir', 'remove_entry', 'removedirs', 'rmSync', 'unlinkSync', 'rmdirSync', 'removeSync', 'emptyDir', 'emptyDirSync', 'chmodSync'],
+  first: ['makedirs', 'mkdirSync', 'mkdir_p', 'mkpath', 'make_path', 'ensureDir', 'ensureDirSync', 'ensureFile', 'ensureFileSync', 'writeFile', 'writeFileSync', 'appendFile', 'appendFileSync', 'createWriteStream', 'outputFile', 'outputFileSync', 'outputJson', 'outputJsonSync', 'writeJson', 'writeJsonSync', 'truncateSync', 'binwrite'],
+  two: ['renameSync', 'moveSync', 'renames'],
+  rest: ['copytree', 'copyfile', 'copy2', 'copyFile', 'copyFileSync', 'cpSync', 'copySync', 'symlinkSync', 'linkSync', 'cp_r', 'ln_s', 'ln_sf'],
+};
+const PLAIN_WRITES = {
+  all: ['remove', 'unlink', 'rmdir', 'rm', 'delete', 'chmod'],
+  first: ['mkdir', 'truncate', 'write', 'touch'],
+  two: ['rename', 'replace', 'move', 'mv'],
+  rest: ['copy', 'cp', 'symlink', 'link', 'install'],
+};
+const writeKinds = (table) => new Map(Object.entries(table).flatMap(([kind, names]) => names.map(n => [n, kind])));
+const DISTINCT_KIND = writeKinds(DISTINCT_WRITES);
+const PLAIN_KIND = writeKinds(PLAIN_WRITES);
+const OPEN_CALLS = new Set(['open', 'openSync', 'fopen', 'sysopen']);
+// A mode that writes: Python's, Node's and Ruby's letters, and Perl's arrows.
+const WRITE_MODE = /^(?:[rbtUs]*[wax+][rbtUswax+]*|\+<|\+?>>?)(?::.*)?$/;
+const WRITE_FLAGS = /\bO_(?:WRONLY|RDWR|CREAT|TRUNC|APPEND)\b/;
+// The pathlib methods that change the path they are called on.
+const PATH_WRITES = new Set(['unlink', 'rmdir', 'touch', 'mkdir', 'write_text', 'write_bytes', 'chmod', 'lchmod', 'symlink_to', 'hardlink_to', 'rename', 'replace', 'rmtree']);
+const PATH_VALUE = /\b(?:Path|PurePath|PosixPath|WindowsPath|Pathname)\b/;
+// The calls that run a command, whose literals the caller reads as one.
+const RUNS_COMMAND = new Set(['system', 'popen', 'Popen', 'check_call', 'check_output', 'execSync', 'spawnSync', 'execFileSync', 'spawn', 'execFile']);
+const RUN_QUALIFIER = /(?:^|[^\w$.])(?:subprocess|child_process|cp|os|Open3|Kernel)\s*\.\s*$|require\(\s*['"](?:node:)?child_process['"]\s*\)\s*\.\s*$/;
+const RUNS_COMMAND_ON_MODULE = new Set(['run', 'call', 'exec', 'getoutput', 'getstatusoutput', 'capture2', 'capture3', 'popen3']);
+
+function codeWrites(s, masked, lits) {
+  const written = new Set();
+  const commands = [];
+  if (!lits.length) return { written, commands };
+  const litsIn = (a, b) => lits.filter(l => l.start >= a && l.end <= b);
+  const namesIn = (a, b) => masked.slice(a, b).match(/[$@%]?[A-Za-z_][\w]*/g) || [];
+  const OPENERS = '([{';
+  const CLOSERS = ')]}';
+  const closeOf = (open) => {
+    let depth = 0;
+    for (let k = open; k < masked.length; k++) {
+      if (OPENERS.includes(masked[k])) depth++;
+      else if (CLOSERS.includes(masked[k]) && --depth === 0) return k;
+    }
+    return masked.length;
+  };
+  const openOf = (close) => {
+    let depth = 0;
+    for (let k = close; k >= 0; k--) {
+      if (CLOSERS.includes(masked[k])) depth++;
+      else if (OPENERS.includes(masked[k]) && --depth === 0) return k;
+    }
+    return -1;
+  };
+  const argsOf = (open, close) => {
+    const args = [];
+    let depth = 0;
+    let from = open + 1;
+    for (let k = open + 1; k < close; k++) {
+      if (OPENERS.includes(masked[k])) depth++;
+      else if (CLOSERS.includes(masked[k])) depth--;
+      else if (masked[k] === ',' && depth === 0) { args.push([from, k]); from = k + 1; }
+    }
+    if (masked.slice(from, close).trim()) args.push([from, close]);
+    return args;
+  };
+  // Where an expression starting at `a` ends: the end of its line or
+  // statement, the bracket that closes around it, or (for a loop's list) a
+  // `:` or an `if` at its own depth.
+  const expressionEnd = (a, loop = false) => {
+    let depth = 0;
+    for (let k = a; k < masked.length; k++) {
+      const c = masked[k];
+      if (OPENERS.includes(c)) depth++;
+      else if (CLOSERS.includes(c)) { if (--depth < 0) return k; }
+      else if (depth === 0 && (c === '\n' || c === ';' || (loop && (c === ':' || /^\bif\b/.test(masked.slice(k, k + 3)) && /\W/.test(masked[k - 1] || ' '))))) return k;
+    }
+    return masked.length;
+  };
+  // What each name may hold: the literals and names put in it, and whether
+  // it is a path object.
+  const vars = new Map();
+  const note = (name, a, b) => {
+    const v = vars.get(name) || { lits: new Set(), names: new Set(), path: false };
+    for (const l of litsIn(a, b)) v.lits.add(l.value);
+    for (const n of namesIn(a, b)) if (n !== name) v.names.add(n);
+    if (PATH_VALUE.test(masked.slice(a, b))) v.path = true;
+    vars.set(name, v);
+  };
+  for (const m of masked.matchAll(/(?<![\w$.])([$@%]?[A-Za-z_][\w]*)\s*=(?![=~>])/g)) {
+    const a = m.index + m[0].length;
+    note(m[1], a, expressionEnd(a));
+  }
+  for (const m of masked.matchAll(/\bfor\s+([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)\s+in\s+/g)) {
+    const a = m.index + m[0].length;
+    for (const name of m[1].split(',')) note(name.trim(), a, expressionEnd(a, true));
+  }
+  for (const m of masked.matchAll(/\bfor\s*\(\s*(?:const|let|var|my)?\s*([$]?[A-Za-z_$][\w$]*)\s+(?:of|in)\s+/g)) {
+    const a = m.index + m[0].length;
+    note(m[1], a, expressionEnd(a));
+  }
+  for (const m of masked.matchAll(/\bfor(?:each)?\s+my\s+(\$\w+)\s*\(/g)) {
+    const open = m.index + m[0].length - 1;
+    note(m[1], open, closeOf(open));
+  }
+  for (const m of masked.matchAll(/([$@]?[A-Za-z_][\w]*)\s*\.\s*(?:forEach|each|map|filter|flatMap)\s*(?:\(\s*\(?|\{\s*\||do\s*\|)\s*([A-Za-z_$][\w$]*)/g)) {
+    const v = vars.get(m[2]) || { lits: new Set(), names: new Set(), path: false };
+    v.names.add(m[1]);
+    vars.set(m[2], v);
+  }
+  const valuesOf = (name, depth = 0, out = new Set()) => {
+    const v = vars.get(name);
+    if (!v || depth > 4) return out;
+    for (const l of v.lits) out.add(l);
+    for (const n of v.names) valuesOf(n, depth + 1, out);
+    return out;
+  };
+  const isPath = (name, depth = 0) => {
+    const v = vars.get(name);
+    return !!v && depth <= 4 && (v.path || [...v.names].some(n => isPath(n, depth + 1)));
+  };
+  const mark = (a, b, skip = null) => {
+    for (const l of litsIn(a, b)) if (!skip || !skip(l.value)) written.add(l.value);
+    for (const n of namesIn(a, b)) for (const v of valuesOf(n)) written.add(v);
+  };
+  // The receiver of a method called at `nameAt`: the terms before its dot,
+  // joined by pathlib's `/`. Null when there is no dot.
+  const receiverOf = (nameAt) => {
+    let k = nameAt - 1;
+    while (k >= 0 && /\s/.test(masked[k])) k--;
+    if (masked[k] !== '.') return null;
+    const end = k;
+    k--;
+    let start = end;
+    for (let terms = 0; terms < 16; terms++) {
+      while (k >= 0 && /[ \t]/.test(masked[k])) k--;
+      if (k < 0) break;
+      if (masked[k] === ')' || masked[k] === ']') {
+        const opener = openOf(k);
+        if (opener < 0) return null;
+        k = opener - 1;
+        while (k >= 0 && /[\w$.]/.test(masked[k])) k--;
+      } else if (masked[k] === "'" || masked[k] === '"') {
+        const l = lits.find(x => x.end === k + 1);
+        if (!l) return null;
+        k = l.start - 1;
+      } else if (/[\w$]/.test(masked[k])) {
+        while (k >= 0 && /[\w$.]/.test(masked[k])) k--;
+      } else break;
+      start = k + 1;
+      let q = k;
+      while (q >= 0 && /[ \t]/.test(masked[q])) q--;
+      if (masked[q] !== '/') break;
+      k = q - 1;
+    }
+    return { start, end };
+  };
+  for (const m of masked.matchAll(/(?<![\w$])([A-Za-z_][\w]*)\s*\(/g)) {
+    const name = m[1];
+    const nameAt = m.index;
+    const open = nameAt + m[0].length - 1;
+    const before = s.slice(Math.max(0, nameAt - 80), nameAt);
+    const dotted = /\.\s*$/.test(before);
+    const onModule = MODULE_QUALIFIER.test(before) || FS_REQUIRE_QUALIFIER.test(before);
+    const close = closeOf(open);
+    const args = argsOf(open, close);
+    // A command the code runs is handed back to be read as one.
+    if ((RUNS_COMMAND.has(name) && (!dotted || RUN_QUALIFIER.test(before) || name === 'Popen'))
+      || (RUNS_COMMAND_ON_MODULE.has(name) && RUN_QUALIFIER.test(before))) {
+      const words = litsIn(open, close).map(l => l.value);
+      if (words.length) commands.push(words.join(' '));
+      continue;
+    }
+    if (OPEN_CALLS.has(name) || (name === 'new' && /\bFile\s*\.\s*$/.test(before))) {
+      const inner = litsIn(open, close);
+      if (!inner.some(l => WRITE_MODE.test(l.value)) && !WRITE_FLAGS.test(masked.slice(open, close))) continue;
+      mark(open, close, v => WRITE_MODE.test(v));
+      const r = dotted && !onModule ? receiverOf(nameAt) : null;
+      if (r && (PATH_VALUE.test(masked.slice(r.start, r.end)) || namesIn(r.start, r.end).some(n => isPath(n)))) mark(r.start, r.end);
+      continue;
+    }
+    const kind = DISTINCT_KIND.get(name) || ((!dotted || onModule) ? PLAIN_KIND.get(name) : undefined);
+    if (kind) {
+      const picked = kind === 'all' ? args : kind === 'first' ? args.slice(0, 1) : kind === 'two' ? args.slice(0, 2) : args.slice(1);
+      for (const [a, b] of picked) mark(a, b);
+      continue;
+    }
+    if (dotted && PATH_WRITES.has(name)) {
+      const r = receiverOf(nameAt);
+      if (!r || !(PATH_VALUE.test(masked.slice(r.start, r.end)) || namesIn(r.start, r.end).some(n => isPath(n)))) continue;
+      mark(r.start, r.end);
+      if (name === 'rename' || name === 'replace') mark(open, close);
+    }
+  }
+  return { written, commands };
+}
+
+// The literals in a piece of code that name a place (each with whether the
+// code can write it), those that may name an answer file and that the code
+// can write (`names`), and the commands it runs itself. A literal is quoted
 // text on one line, so an apostrophe in a comment cannot swallow the code
 // after it.
 function codeParts(code, reading = null) {
   const s = String(code);
-  const literals = [];
-  const names = [];
+  const found = [];
   const commands = [];
+  // The code with each literal's text, each backtick span and each quote
+  // operator's body blanked, so nothing inside one is read as code.
+  const blank = new Uint8Array(s.length);
+  const blankOut = (a, b) => { for (let k = a; k < b && k < s.length; k++) if (s[k] !== '\n') blank[k] = 1; };
   for (let i = 0; i < s.length; i++) {
     const ch = s[i];
     if (ch === "'" || ch === '"') {
       let j = i + 1;
       while (j < s.length && s[j] !== ch && s[j] !== '\n') j += s[j] === '\\' ? 2 : 1;
       if (s[j] === ch) {
-        const lit = s.slice(i + 1, j);
-        if (literalIsPlace(lit, reading)) literals.push(lit);
-        if (MAY_NAME_ANSWER_FILE.test(lit)) names.push(lit);
+        found.push({ start: i, end: j + 1, value: s.slice(i + 1, j) });
+        blankOut(i + 1, j);
         i = j;
       }
       continue;
@@ -1656,6 +1877,7 @@ function codeParts(code, reading = null) {
     if (ch === '`') {
       const j = s.indexOf('`', i + 1);
       commands.push(s.slice(i + 1, j < 0 ? s.length : j));
+      blankOut(i + 1, j < 0 ? s.length : j);
       if (j < 0) break;
       i = j;
       continue;
@@ -1670,10 +1892,16 @@ function codeParts(code, reading = null) {
         else if (s[j] === CLOSING[open] && --depth === 0) break;
       }
       commands.push(s.slice(i + q[0].length, j));
+      blankOut(i + q[0].length, j);
       i = j;
     }
   }
-  return { literals, names, commands };
+  let masked = '';
+  for (let k = 0; k < s.length; k++) masked += blank[k] ? ' ' : s[k];
+  const { written, commands: run } = codeWrites(s, masked, found);
+  const literals = found.filter(l => literalIsPlace(l.value, reading)).map(l => ({ t: l.value, written: written.has(l.value) }));
+  const names = found.filter(l => MAY_NAME_ANSWER_FILE.test(l.value) && written.has(l.value)).map(l => l.value);
+  return { literals, names, commands: [...commands, ...run] };
 }
 
 // The segment of `text` that holds the character at `at`.
@@ -1708,7 +1936,7 @@ function heredocText(command, reading = null) {
     if (seg === null || !subs.ok || !feedsCode(seg, b.body)) { text += b.body; continue; }
     const at = b.at + text.length - b.bodyAt;
     const code = codeParts(b.body, reading);
-    for (const t of code.literals) literals.push({ t, at });
+    for (const l of code.literals) literals.push({ ...l, at });
     for (const t of code.names) names.push({ t, at });
     for (const c of [...code.commands, ...subs.bodies]) commands.push({ text: c, at });
   }
@@ -1769,7 +1997,7 @@ function inlineCode(text, reading = null) {
       const m = INLINE_CODE[family].exec(words[k]);
       if (!m) continue;
       const code = codeParts(m[1] || words[++k] || '', reading);
-      for (const t of code.literals) literals.push({ t, at });
+      for (const l of code.literals) literals.push({ ...l, at });
       for (const t of code.names) names.push({ t, at });
       for (const c of code.commands) commands.push({ text: c, at });
     }
@@ -1824,12 +2052,12 @@ function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), 
   // only reads it; see answerFileWriteWords for which words count as written.
   // The command's own text and each command its code runs are read alike.
   //
-  // A literal in code handed to an interpreter counts as written: the code
-  // can open it for writing, and nothing here can tell that it does not.
+  // A literal in code handed to an interpreter counts as written only where
+  // the code can write it (see codeWrites): `open('.mcp.json')` reads it.
   const view = judgedShellText(command, { posixText, firstFolders: opts.firstFolders || new Map() });
   const writes = { words: new Set(), into: [] };
   if (!readOnly) {
-    for (const lit of view.literals) writes.words.add(lit.t);
+    for (const lit of view.literals) if (lit.written) writes.words.add(lit.t);
     for (const [text, fromStart] of [[view.text, false], ...view.commands.map(c => [c.text, true])]) {
       const w = answerFileWriteWords(text, posixText);
       for (const x of w.words) writes.words.add(x);
@@ -1899,10 +2127,11 @@ function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), 
     }
     return out;
   };
-  // EVERY LITERAL IN CODE THAT MAY NAME AN ANSWER FILE, place-shaped or not.
-  // The place filter is for crossings outside the workspace: a bare name such
-  // as `.mcp.json` or `.claude` is not shaped like a place, and dropping it
-  // there let `open('.mcp.json', 'w')` and `shutil.rmtree('.claude')` through.
+  // EVERY LITERAL IN CODE THAT MAY NAME AN ANSWER FILE AND THAT THE CODE CAN
+  // WRITE, place-shaped or not. The place filter is for crossings outside the
+  // workspace: a bare name such as `.mcp.json` or `.claude` is not shaped like
+  // a place, and dropping it there let `open('.mcp.json', 'w')` and
+  // `shutil.rmtree('.claude')` through.
   // Tested here against the answer files, a folder holding them and the
   // console folder, and nothing else, so what counts as a crossing outside
   // is unchanged.
