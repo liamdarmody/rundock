@@ -88,6 +88,9 @@ const WRITES = [
   // An output redirect from the same program still writes, and so does one
   // opened for reading and writing, or a file named as an argument too.
   'python3 tools/run.py > .mcp.json', 'python3 tools/run.py <> .mcp.json', 'python3 tools/run.py .mcp.json < .mcp.json',
+  // `<>` opens the file for writing too, and makes it if it is missing,
+  // whatever the program it feeds then does.
+  'cat <> .mcp.json', 'cat 0<>.claude/settings.json',
   // A shell given its command with -c reads that word as commands, so what
   // they write is judged as if typed: through common prefixes and a path too.
   'sh -c "echo x > .mcp.json"', "bash -c 'rm -rf .claude'", "zsh -c 'cp a .claude/settings.json'", "bash -lc 'echo x >> .mcp.json'",
