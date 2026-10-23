@@ -314,6 +314,7 @@ const CONSOLE_HOOK = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), su
 const CONSOLE_GRANT = { src: path.join(ROOT, 'lib', 'workspace', 'boundary.js'), suite: 'test/unit/console-folder.test.js' };
 const CONSOLE_CARD = { src: path.join(ROOT, 'public', 'permissions.js'), suite: 'test/unit/console-folder.test.js' };
 const CONSOLE_SANDBOX = { src: path.join(ROOT, 'lib', 'workspace', 'scaffold.js'), suite: 'test/unit/console-folder.test.js' };
+const CONSOLE_WRITER = { src: path.join(ROOT, 'lib', 'runtime', 'claude-console.js'), suite: 'test/unit/console-folder.test.js' };
 // A change allowed on the hook's card stands, without a second card.
 const ALLOWED_GUARD = { src: path.join(ROOT, 'lib', 'workspace', 'answer-file-guard.js'), suite: 'test/unit/allowed-change-stands.test.js' };
 const ALLOWED_HANDLER = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'process-control.js'), suite: 'test/unit/allowed-change-stands.test.js' };
@@ -2244,6 +2245,12 @@ const MUTATIONS = [
   [CONSOLE_CARD, 'Console folder: the card calls it the permission answers',
     "      if (parts.includes('.rundock-console')) return 'console';\n",
     ''],
+  [CONSOLE_HOOK, 'Console folder: the hook guards a folder the Reconnect window does not write',
+    "const RUNDOCK_CONSOLE_DIR = '.rundock-console';",
+    "const RUNDOCK_CONSOLE_DIR = '.rundock-terminal';"],
+  [CONSOLE_WRITER, 'Console folder: the Reconnect window writes where the hook does not look',
+    "const CONSOLE_SCRIPT_DIR = '.rundock-console';",
+    "const CONSOLE_SCRIPT_DIR = '.rundock-terminal';"],
   [CONSOLE_SANDBOX, 'Console folder: the sandbox block leaves it writable',
     '    path.posix.join(home, RUNDOCK_CONSOLE_DIR),\n',
     ''],

@@ -138,6 +138,23 @@ describe('the sandbox block denies the folder', () => {
   });
 });
 
+// ONE FOLDER, NAMED IN TWO PLACES. The Reconnect Claude window writes its
+// script where lib/runtime/claude-console.js says; the hook guards where its
+// own registry says. Read from what the window would write, so the two cannot
+// drift apart unnoticed.
+describe('the folder guarded is the one Reconnect writes', () => {
+  test('the script the Reconnect Claude window writes on macOS is a write that always asks', () => {
+    const { consoleCommand } = require('../../lib/runtime/claude-console.js');
+    const c = consoleCommand('/usr/local/bin/claude', 'darwin', {}, { purpose: 'reconnect', home, version: '2.1.50' });
+    assert.ok(c && c.script && c.script.file, 'sanity: on macOS the reconnect window writes a script first');
+    assert.strictEqual(hook.isRundockConsolePath(c.script.file, home), true, 'its file is in the folder the hook guards');
+    for (const ws of [home, nested]) {
+      const a = hook.classifyFileAccess('Write', { file_path: c.script.file, content: 'x' }, ws, [], home, true);
+      assert.strictEqual(a && a.answerFile, true, `an agent's write to it asks (${ws === home ? 'home' : 'under home'})`);
+    }
+  });
+});
+
 describe('a folder of the same name elsewhere is ordinary', () => {
   test('a .rundock-console inside the workspace, below home, is not the console folder', () => {
     const a = hook.classifyShellAccess('Bash', { command: 'echo x > .rundock-console/run.command' }, nested, [], home, true, { cwd: nested });
