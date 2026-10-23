@@ -366,6 +366,7 @@
     'history-rewrite': () => 'This rewrites every commit in the repository\'s history.',
     'worktree-force': () => 'This deletes a working tree even if it holds changes git has never saved.',
     'elevation': () => 'This runs as an administrator, beyond anything Rundock can see or check.',
+    'launch-environment': () => 'This changes what macOS starts, or the settings every program started from now on is given, Rundock included, beyond anything Rundock can see or check.',
     'fetched-code': () => 'This runs a script from the internet without showing it to anyone first.',
     'volumes': () => 'This deletes the Docker volumes for this project, including any database data in them.',
     'disk': () => 'This writes directly to a disk or erases one.',

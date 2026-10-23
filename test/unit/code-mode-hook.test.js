@@ -190,6 +190,27 @@ describe('six irreversible acts ask exactly once each, with no Always allow, and
   }
 });
 
+describe('launchctl, through the real hook in Code mode', { skip: SKIP }, () => {
+  for (const command of ['launchctl setenv RUNDOCK_CODE_MODE 1', 'launchctl unsetenv PATH', 'launchctl load -w ~/Library/LaunchAgents/x.plist',
+    'launchctl bootstrap gui/501 ~/Library/LaunchAgents/x.plist', 'launchctl submit -l x -- /bin/sh -c true']) {
+    test(`${command} always asks, with no Always allow, and is refused unanswered`, async () => {
+      const r = await fx.judge(world, capture, deadPort, { tool: 'Bash', input: { command }, cwd: world.ws });
+      assert.strictEqual(r.cls, 'always-asks');
+      const v = r.payload.code_mode_verdict;
+      assert.strictEqual(v.reason, 'launch-environment');
+      assert.strictEqual(RP.offersAlwaysAllow(RP.classifyRisk('Bash', { command }), v), false, 'the card offers no Always allow');
+      assert.strictEqual(r.dead.decision, 'deny');
+      assert.ok(r.dead.reason.endsWith(ALWAYS_ASKS_REFUSAL), 'refused, as an irreversible command is, when nobody can be asked');
+    });
+  }
+  test('reading it still runs with no card', async () => {
+    for (const command of ['launchctl print gui/501', 'launchctl list', 'launchctl getenv PATH']) {
+      const r = await fx.judge(world, capture, deadPort, { tool: 'Bash', input: { command }, cwd: world.ws });
+      assert.strictEqual(r.cls, 'runs', command);
+    }
+  });
+});
+
 describe('where the command runs', { skip: SKIP }, () => {
   test('with no cwd available, a relative bulk delete asks', async () => {
     const r = await fx.judge(world, capture, deadPort, { tool: 'Bash', input: { command: 'rm -rf dist' }, cwd: undefined });

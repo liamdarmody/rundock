@@ -82,6 +82,7 @@ describe('the Always-asks card copy is exact', () => {
     [{ verdict: 'always-asks', reason: 'force-push-default', branch: 'main' }, 'This rewrites main, the branch everyone else builds on.'],
     [{ verdict: 'always-asks', reason: 'stash-or-reflog' }, 'This deletes git\'s only saved copy of those changes.'],
     [{ verdict: 'always-asks', reason: 'elevation' }, 'This runs as an administrator, beyond anything Rundock can see or check.'],
+    [{ verdict: 'always-asks', reason: 'launch-environment' }, 'This changes what macOS starts, or the settings every program started from now on is given, Rundock included, beyond anything Rundock can see or check.'],
     [{ verdict: 'always-asks', reason: 'fetched-code' }, 'This runs a script from the internet without showing it to anyone first.'],
     [{ verdict: 'always-asks', reason: 'volumes' }, 'This deletes the Docker volumes for this project, including any database data in them.'],
     [{ verdict: 'always-asks', reason: 'disk' }, 'This writes directly to a disk or erases one.'],
