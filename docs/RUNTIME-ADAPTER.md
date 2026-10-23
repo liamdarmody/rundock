@@ -76,10 +76,17 @@ escalations surface. The human decides; the runtime never self-approves.
   `.claude/hooks/`), are therefore also watched during every Claude turn,
   direct chats, delegates and
   routines alike (`lib/runtime/claude-turn-guard.js`): a change Rundock did
-  not make is put back at once and offered on the answer-file card. The
+  not make is put back at once and offered on the answer-file card, except
+  one the person allowed on the hook's card in that conversation, which
+  stands, and a change to the launcher, which is put back to the one this
+  copy of Rundock wrote with no card. The
   comparison is against a baseline kept for as long as Rundock runs, so a
   change made while no turn is running (a job an agent left behind, or an
-  edit by hand) is put back, and asked about, when the next turn starts.
+  edit by hand) is put back, and asked about, when the next turn starts;
+  one to `.mcp.json`, `.rundock/mcp-secrets.json`, a hook script or the
+  Claude Code settings files is taken as it stands, since people and git
+  edit those too, and for all but the settings files a quiet notice names
+  the file.
   The agent whose change was put back during its turn is told as well, in
   the same step: a PostToolUse hook (registered where Rundock owns the
   settings file) asks the server to check the permission files as each tool
