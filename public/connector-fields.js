@@ -111,8 +111,19 @@
     return out.length > limit ? `${out.slice(0, limit)}…` : out;
   }
 
-  // Something that reads as an email address, anywhere in a value.
-  const EMAIL_LIKE = /[^\s@<>"]+@[^\s@<>"]+\.[^\s@<>"]+/;
+  // Something that reads as an email address, anywhere in a value: a
+  // character that can end a name, an "@", a host and a dot.
+  //
+  // ONE CHARACTER BEFORE THE "@", NOT A RUN. Every unread value is looked
+  // through on the window's main thread as a card is drawn. An unbounded run
+  // there restarts at every position of a value with no "@", so the work grew
+  // with the square of the value's length (0.9s for one value of 20,000
+  // characters, 10.6s for ten). A run bounded at 64 is linear but still tries
+  // 64 characters at every position (about 94ms for ten such values). For a
+  // yes or no, a run of any length before the "@" matches exactly when its
+  // last character does, so one character gives the same answers in well
+  // under a millisecond.
+  const EMAIL_LIKE = /[^\s@<>"]@[^\s@<>".]+\.[^\s@<>"]/;
 
   // Text from a string, a number, a list, or a body object ({ content }, { text }).
   // Null when the value holds none the card can read as one text, or is nested

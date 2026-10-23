@@ -1971,6 +1971,12 @@ const MUTATIONS = [
   [CONNECTOR_CARD_MODEL, 'Connector card: an address in an unread field is not noticed',
     '      if (!unreadAddress && EMAIL_LIKE.test(rawText(raw, MAX_TEXT))) unreadAddress = true;\n',
     ''],
+  // The old address pattern: an unbounded run before the "@" restarts at
+  // every position of a long value with no "@", and the main thread waits
+  // seconds for a card.
+  [CONNECTOR_FIELDS_MODEL, 'Connector card: the address pattern takes time with the square of a value',
+    '  const EMAIL_LIKE = /[^\\s@<>"]@[^\\s@<>".]+\\.[^\\s@<>"]/;',
+    '  const EMAIL_LIKE = /[^\\s@<>"]+@[^\\s@<>"]+\\.[^\\s@<>"]+/;'],
   [CONNECTOR_FIELDS_MODEL, 'Connector card: an address past the part of a value shown is not noticed',
     'EMAIL_LIKE.test(rawText(raw, MAX_TEXT))',
     'EMAIL_LIKE.test(rawText(raw))'],

@@ -313,7 +313,7 @@ Counts with no barrier, ranked by exposure:
 
 ### Wall-clock budgets
 
-Five places in the suite gate on elapsed real time. All five are
+Six places in the suite gate on elapsed real time. All six are
 **accept**, with the caveats stated.
 
 - **`test/integration/workspace-rollback-poll.test.js:185`**:
@@ -336,6 +336,16 @@ Five places in the suite gate on elapsed real time. All five are
   rest of the line, which took 172ms at 500 elevations deep and overflowed the
   stack at 2000. The overflow is also caught by the verdict asserted beside
   the budget; the slow half is caught only by the budget.
+- **`test/unit/connector-fields.test.js`**, "ten long values with no address
+  are looked through in well under 200ms": `Date.now() - started < 200`. A
+  budget against an observed time under 1ms, so over 200x headroom. It stands
+  for a cost rather than a behaviour: a connector card looks through every
+  field it does not read for an email address, on the window's main thread,
+  and the pattern it used restarted an unbounded run at every position of a
+  value with no "@", which took 0.9s for one 20,000-character value and
+  10.6s for ten. A mutation row puts that pattern back and turns this red.
+  If it fails, check the address pattern for a run before the "@" before
+  raising the number.
 - **`test/integration/http-api.test.js:351`**:
   `Date.now() - t0 >= PERM_TIMEOUT - 50`. A lower bound proving the server did
   not short-circuit its own timeout. Correct shape; the `- 50` is a bare

@@ -499,3 +499,30 @@ describe('a value the reader cannot handle is kept as written, never thrown on',
     assert.strictEqual(F.formatWhen(f.start), 'Tue 29 Feb 2028, all day');
   });
 });
+
+describe('what reads as an email address in a field the card does not read', () => {
+  const noticed = (value) => F.connectorFields('mcp__example_chat__send_message', { channel: 'C1', text: 'hi', note: value }).unreadAddress;
+
+  test('an address, and one inside a link, are noticed; a handle and a bare host are not', () => {
+    assert.strictEqual(noticed('sam@example.org'), true);
+    assert.strictEqual(noticed('https://user@host.example/path'), true);
+    assert.strictEqual(noticed('ask @sam.rivera about it'), false);
+    assert.strictEqual(noticed('x@y'), false);
+  });
+
+  // A WALL-CLOCK BUDGET, listed in docs/TEST-TIMING.md. Every unread value is
+  // looked through for an address on the window's main thread, as each card is
+  // drawn. A pattern with an unbounded run before the "@" restarts at every
+  // position of a value that has none, so its work grew with the square of
+  // the value's length: 0.9s for one 20,000-character value and 10.6s for
+  // ten. With the run bounded, ten such values take a few milliseconds.
+  test('ten long values with no address are looked through in well under 200ms', () => {
+    const input = { channel: 'C1', text: 'hi' };
+    for (let i = 0; i < 10; i++) input[`note${i}`] = 'a'.repeat(20000);
+    const started = Date.now();
+    const f = F.connectorFields('mcp__example_chat__send_message', input);
+    const ms = Date.now() - started;
+    assert.strictEqual(f.unreadAddress, false);
+    assert.ok(ms < 200, `${ms}ms to read ten 20,000-character values`);
+  });
+});
