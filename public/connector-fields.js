@@ -33,6 +33,7 @@
   const MAX_OTHERS = 25;       // unread fields listed, then counted
   const MAX_OTHER_TEXT = 300;  // an unread value, or one shown as written
   const MAX_LIST = 500;        // entries drawn from a list that is never folded (Bcc)
+  const MAX_ALIAS_ROWS = 10;   // rows for one field under many names; the rest are listed
   // How deep any value is read or written out. Past it a value is kept as
   // written, so one nested thousands deep cannot overflow the stack and stop
   // the card being drawn.
@@ -168,27 +169,32 @@
 
   // Each field read from every source that carries it. `read` maps a field to
   // how its value is read. The first value is the field's; a field found more
-  // than once has every one in `aliases`, each under the key it came from.
-  // Every key of a source that is none of the fields is in `others`.
+  // than once has up to MAX_ALIAS_ROWS of them in `aliases`, each under the key
+  // it came from, and any past that are listed in `others` with every key of a
+  // source that is none of the fields, so no request can fill a card with rows.
   function gather(sources, read) {
     const values = {}, aliases = {}, others = [];
     let found = false, othersMore = 0;
+    const list = (key, raw) => {
+      if (others.length < MAX_OTHERS) others.push({ key, text: rawText(raw) });
+      else othersMore++;
+    };
     const fields = Object.keys(read);
     for (const field of fields) {
       const all = [];
       for (const s of sources) {
-        for (const k of keysFor(s.obj, KEYS[field])) if (!s.skip.has(k)) all.push({ key: clip(s.prefix + k, MAX_KEY), value: read[field](s.obj[k]) });
+        for (const k of keysFor(s.obj, KEYS[field])) if (!s.skip.has(k)) all.push({ key: clip(s.prefix + k, MAX_KEY), raw: s.obj[k] });
       }
-      values[field] = all.length ? all[0].value : EMPTY[field];
-      if (all.length > 1) aliases[field] = all;
+      values[field] = all.length ? read[field](all[0].raw) : EMPTY[field];
+      if (all.length > 1) aliases[field] = all.slice(0, MAX_ALIAS_ROWS).map((o) => ({ key: o.key, value: read[field](o.raw) }));
+      for (const o of all.slice(MAX_ALIAS_ROWS)) list(o.key, o.raw);
       if (all.length) found = true;
     }
     const names = new Set(fields.flatMap((field) => KEYS[field]));
     for (const s of sources) {
       for (const k of Object.keys(s.obj)) {
         if (s.skip.has(k) || names.has(norm(k)) || s.obj[k] === undefined) continue;
-        if (others.length < MAX_OTHERS) others.push({ key: clip(s.prefix + k, MAX_KEY), text: rawText(s.obj[k]) });
-        else othersMore++;
+        list(clip(s.prefix + k, MAX_KEY), s.obj[k]);
       }
     }
     return { values, aliases, others, othersMore, found };
@@ -335,6 +341,6 @@
 
   return {
     connectorFields, cutList, cutText, contextFor, hasUnreadFields, recipientsOf, addressText, formatWhen, durationText,
-    SHOWN, MORE_SHOWN, SUBJECT_SOFT, MAX_TEXT, MAX_ADDRESS, MAX_OTHERS, MAX_OTHER_TEXT, MAX_LIST,
+    SHOWN, MORE_SHOWN, SUBJECT_SOFT, MAX_TEXT, MAX_ADDRESS, MAX_OTHERS, MAX_OTHER_TEXT, MAX_LIST, MAX_ALIAS_ROWS,
   };
 }));

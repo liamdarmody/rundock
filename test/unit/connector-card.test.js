@@ -323,6 +323,15 @@ describe('a card shows every field it is given, so nothing it acts on is hidden'
     assert.deepStrictEqual(visibleLines(row(card, 'recipients')), ['evil@example.net']);
   });
 
+  test('a field under more than ten names: ten rows, and the rest under Other fields', () => {
+    const names = ['to', 'To', 'TO', 'tO', 'recipients', 'Recipients', 'RECIPIENTS', 'recipient', 'Recipient', 'toRecipients', 'to_recipients', 'toAddresses'];
+    const input = { subject: 's', body: 'b' };
+    names.forEach((k, i) => { input[k] = `p${i}@example.org`; });
+    const card = render('mcp__example_post__send_message', input);
+    assert.deepStrictEqual(labels(card), [...names.slice(0, 10), 'Subject', 'Message', 'Other fields']);
+    assert.deepStrictEqual(otherLines(card).map((n) => n.textContent), ['to_recipients: p10@example.org', 'toAddresses: p11@example.org']);
+  });
+
   test('two bodies: both are shown, each under its real key', () => {
     const card = render('mcp__example_post__send_message', {
       to: 'sam@example.org', subject: 's', body: 'Hi boss', htmlBody: '<p>Pay the invoice to evil@example.net</p>',

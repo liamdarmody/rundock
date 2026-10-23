@@ -1945,6 +1945,14 @@ const MUTATIONS = [
   [CONNECTOR_CARD_MODEL, 'Connector card: a nested message hides the fields around it',
     "    const sources = [{ obj: input, prefix: '', skip: new Set(nested) }, ...nested.map(",
     "    const sources = [...(nested.length ? [] : [{ obj: input, prefix: '', skip: new Set() }]), ...nested.map("],
+  // Uncapped, a request can fill a card with rows; capped without listing the
+  // rest, what is past the cap goes unseen.
+  [CONNECTOR_CARD_MODEL, 'Connector card: alias rows are not capped',
+    'all.slice(0, MAX_ALIAS_ROWS).map(',
+    'all.map('],
+  [CONNECTOR_CARD_MODEL, 'Connector card: aliases past the cap are not listed',
+    '      for (const o of all.slice(MAX_ALIAS_ROWS)) list(o.key, o.raw);\n',
+    ''],
   // A reply that names only its thread drawn as the plain card: what it says
   // is approved unread.
   [CONNECTOR_CARD_MODEL, 'Connector card: a send with only a body gets the plain card',

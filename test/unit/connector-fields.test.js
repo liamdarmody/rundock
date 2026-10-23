@@ -101,6 +101,16 @@ describe('every field a request carries is read, so a card can show what the ser
     assert.deepStrictEqual(Object.keys(f.aliases), ['to'], 'a field with one alias has no entry');
   });
 
+  test('a field under more than ten names: ten alias rows, and the rest listed with the other fields', () => {
+    const names = ['to', 'To', 'TO', 'tO', 'recipients', 'Recipients', 'RECIPIENTS', 'recipient', 'Recipient', 'toRecipients', 'to_recipients', 'toAddresses'];
+    const input = { subject: 's' };
+    names.forEach((k, i) => { input[k] = `p${i}@example.org`; });
+    const f = F.connectorFields('mcp__example_post__send_message', input);
+    assert.strictEqual(F.MAX_ALIAS_ROWS, 10);
+    assert.deepStrictEqual(f.aliases.to.map((o) => o.key), names.slice(0, 10));
+    assert.deepStrictEqual(f.others, [{ key: 'to_recipients', text: 'p10@example.org' }, { key: 'toAddresses', text: 'p11@example.org' }]);
+  });
+
   test('two spellings of one name are two fields', () => {
     const f = F.connectorFields('mcp__example_post__send_message', { to: 'a@example.org', TO: 'b@example.org', subject: 's' });
     assert.deepStrictEqual(f.aliases.to.map((o) => o.key), ['to', 'TO']);
