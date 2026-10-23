@@ -387,4 +387,27 @@ describe('the sandbox marker', () => {
     assert.strictEqual(refuseIfSandboxed('x', 'y', { env: {}, exit: () => { called = true; }, write: () => { called = true; } }), false);
     assert.strictEqual(called, false);
   });
+
+  const RUNNER = path.join(__dirname, '..', '..', 'scripts', 'exempt-run.js');
+  const said = (options) => {
+    let out = '';
+    refuseIfSandboxed('The thing', 'npm run thing', { env: { SANDBOX_RUNTIME: '1' }, exit: () => {}, write: (s) => { out += s; }, ...options });
+    return out;
+  };
+
+  test('it names the runner only when its own command is excluded, and otherwise the cd and script forms', () => {
+    const plain = said({ patterns: [] });
+    assert.doesNotMatch(plain, /exempt-run/);
+    assert.match(plain.replace(/\s+/g, ' '), /Run a cd as a call of its own first, and read the output from the result of the call\./);
+    assert.match(plain.replace(/\s+/g, ' '), /a small script in the repository's test tree or its gitignored scratch folder \(\.rundock\/scratch\/\)/);
+    assert.match(said({ patterns: [`node ${RUNNER} *`] }), /Or, as scripts\/exempt-run\.js is itself excluded/);
+  });
+
+  test('without exclusions given, it reads the ones configured for the project', () => {
+    const project = fs.mkdtempSync(path.join(os.tmpdir(), 'command-shape-project-'));
+    fs.mkdirSync(path.join(project, '.claude'));
+    fs.writeFileSync(path.join(project, '.claude', 'settings.local.json'),
+      JSON.stringify({ sandbox: { excludedCommands: [`node ${RUNNER} *`] } }));
+    assert.match(said({ env: { SANDBOX_RUNTIME: '1', CLAUDE_PROJECT_DIR: project } }), /scripts\/exempt-run\.js is itself excluded/);
+  });
 });

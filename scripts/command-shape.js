@@ -51,10 +51,8 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { matchingPattern, exclusionsFrom, settingsFilesFor } = require('./lib/sandbox.js');
+const { matchingPattern, exclusionsFrom, settingsFilesFor, RUNNER, runnerExcluded } = require('./lib/sandbox.js');
 const { stripHeredocs } = require('./code-mode-parse.js');
-
-const RUNNER = path.join(__dirname, 'exempt-run.js');
 
 // Git subcommands that need what the sandbox withholds: the network and the
 // stored credential.
@@ -235,13 +233,6 @@ function exclusionFor(words, patterns) {
     if (p) return { pattern: p, near: true, length: k };
   }
   return null;
-}
-
-// Whether the runner's own command is excluded. Only then does it, and what it
-// starts, run outside the sandbox; otherwise it is sandboxed like anything
-// else, so it is named only when it is excluded.
-function runnerExcluded(patterns) {
-  return Boolean(matchingPattern(`node ${RUNNER} args.json`, patterns));
 }
 
 const WRAPPER_NAMES = {
