@@ -1320,6 +1320,10 @@ const COPIES_FROM_SOURCES = new Set(['cp', 'install']);
 // resolve once it knows whether the destination is a folder.
 const PLACES_INTO = new Set(['cp', 'install', 'mv', 'ln']);
 const REDIRECT = /^(?:\d*|&)(?:>>?|>\|)(.*)$/;
+// AN INPUT REDIRECT IS A READ, whatever program it feeds: `<` and `0<` open the
+// file for reading, and `<<<` hands over a string. Not `<>`, which opens it for
+// writing too, a here-document's `<<`, or process substitution `<(`.
+const INPUT_REDIRECT = /^\d*(?:<<<|<(?![<>(]))(.*)$/;
 // `posixText` reads an unquoted word as bash does, each `\X` being X, the way
 // shellPathWords reads it, so the words compare. Each `into` entry carries
 // `at`, where its segment starts in `command`, for the folder it starts from.
@@ -1339,6 +1343,8 @@ function answerFileWriteWords(command, posixText = false) {
     const written = [];
     const rest = [];
     for (let i = 0; i < words.length; i++) {
+      const input = INPUT_REDIRECT.exec(words[i]);
+      if (input) { if (!input[1]) i++; continue; }
       const m = REDIRECT.exec(words[i]);
       if (!m) { rest.push(words[i]); continue; }
       const target = m[1] || words[++i];
@@ -1376,7 +1382,9 @@ function answerFileWriteWords(command, posixText = false) {
       if (dest) into.push({ dest, sources: named ? operands : operands.slice(0, -1), at: Math.max(0, segAt) });
     }
     for (const w of written) out.add(w);
-    if (!reads) for (const t of shellPathTokens(seg, posixText)) out.add(t);
+    // The words of the segment without its redirects: what it reads from is not
+    // written, and what it writes to is in `written` already.
+    if (!reads) for (const t of shellPathTokens(rest.join(' '), posixText)) out.add(t);
   }
   return { words: out, into };
 }

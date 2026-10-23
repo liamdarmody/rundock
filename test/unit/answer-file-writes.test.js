@@ -45,6 +45,9 @@ const READS = [
   'cat .mcp.json > copy.json', 'sed s/a/b/ .claude/settings.json', 'sed -n 1,5p .mcp.json', 'dd if=.mcp.json of=copy.json',
   'shasum .rundock/permission-hook.sh', 'install -m 644 .mcp.json backup.json', 'cat .rundock/permissions.json > copy.json',
   'tree -a .claude/hooks', 'file .mcp.json', 'stat .rundock/permission-hook.sh', 'strings .rundock/permission-hook.sh',
+  // An input redirect is a read, whatever program it feeds.
+  'python3 tools/run.py < .mcp.json', 'node tool.js 0< .claude/settings.json', 'python3 tools/run.py <.mcp.json > out.txt',
+  'python3 tools/run.py <<< .mcp.json',
 ];
 const WRITES = [
   'echo x > .mcp.json', 'echo x >> .mcp.json', 'echo x 1> .mcp.json', 'echo x >.mcp.json', 'echo x &> .mcp.json', 'echo x | tee .mcp.json',
@@ -74,6 +77,9 @@ const WRITES = [
   "node - <<'JS'\nrequire('fs').rmSync('.claude', { recursive: true })\nJS",
   "python3 -c \"open('.mcp.json','w')\"", "node -e \"require('fs').writeFileSync('.mcp.json', '{}')\"",
   "python3 - <<'PY'\nopen('./.mcp.json','w')\nPY", "python3 - <<'PY'\nopen('.rundock/permission-hook.sh','w')\nPY",
+  // An output redirect from the same program still writes, and so does one
+  // opened for reading and writing, or a file named as an argument too.
+  'python3 tools/run.py > .mcp.json', 'python3 tools/run.py <> .mcp.json', 'python3 tools/run.py .mcp.json < .mcp.json',
   // A shell given its command with -c reads that word as commands, so what
   // they write is judged as if typed: through common prefixes and a path too.
   'sh -c "echo x > .mcp.json"', "bash -c 'rm -rf .claude'", "zsh -c 'cp a .claude/settings.json'", "bash -lc 'echo x >> .mcp.json'",
