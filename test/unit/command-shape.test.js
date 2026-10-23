@@ -210,6 +210,57 @@ describe('everything else runs as before', () => {
       assert.strictEqual(verdict('E2E_TITLE="a b" npx playwright test').verdict, 'refuse', 'a quoted VAR=value is not the command');
       assert.strictEqual(verdict('cd "/work/my lane" && npx playwright test').fix.cwd, '/work/my lane', 'a quoted word leaves the next one unquoted');
     });
+
+    test('quoted text that runs something, or follows a VAR=value or a quoted word, is judged on its own', () => {
+      assert.strictEqual(verdict('echo "$(npx playwright test)" | cat').verdict, 'refuse', 'a substitution in quotes runs a command');
+      assert.strictEqual(verdict('echo $(true) "npx playwright test" | cat').verdict, 'pass', 'a substitution marks only its own word');
+      assert.strictEqual(verdict('A=1 echo "npx playwright test" | cat').verdict, 'pass', 'the VAR=value takes its own mark with it');
+      assert.strictEqual(verdict('echo "x" npx\\ playwright\\ test | cat').verdict, 'refuse', 'a word after a quoted one is not quoted');
+    });
+  });
+
+  describe('text a shell runs is a command, and is matched like one', () => {
+    for (const shell of ['sh', 'bash', 'zsh', 'dash', 'ksh']) {
+      test(`${shell} -c`, () => {
+        const r = verdict(`${shell} -c "npx playwright test" | cat`);
+        assert.strictEqual(r.verdict, 'refuse');
+        assert.strictEqual(r.segment, 'npx playwright test');
+        assert.ok(r.wrappers.includes('shell'));
+      });
+    }
+
+    test('a shell named by its path, with -c in a cluster of options', () => {
+      assert.strictEqual(verdict("/bin/bash -lc 'gh pr list' > /work/out.txt").segment, 'gh pr list');
+    });
+
+    test('eval', () => {
+      assert.strictEqual(verdict('eval "gh pr list" | cat').segment, 'gh pr list');
+    });
+
+    test('a here-document fed to a shell, and what it runs that loses nothing in the sandbox', () => {
+      const r = verdict("bash <<'EOF'\ncd /work/lane\nnpx playwright test\nEOF");
+      assert.strictEqual(r.verdict, 'refuse');
+      assert.strictEqual(r.segment, 'npx playwright test');
+      assert.strictEqual(r.fix.cwd, '/work/lane');
+      assert.strictEqual(verdict("bash <<'EOF'\nls -la\nEOF").verdict, 'pass');
+      assert.strictEqual(verdict('bash -c "git status" | cat').verdict, 'pass');
+    });
+
+    test('a bare shell whose command string an exclusion names, when the whole command matches none', () => {
+      assert.strictEqual(verdict('bash -c "gh pr list"').verdict, 'refuse');
+      assert.strictEqual(verdict('bash -c "npx playwright test"').verdict, 'pass', 'the whole command matches "*npx playwright *"');
+    });
+
+    test('a cd before the shell is the directory its command runs in', () => {
+      assert.strictEqual(verdict('cd /work/lane && sh -c "npx playwright test"').fix.cwd, '/work/lane');
+    });
+
+    test('a quoted program path, and a quoted command word, are matched as written', () => {
+      const r = verdict('node "/work/scratch/test-a/run.js" | head');
+      assert.strictEqual(r.verdict, 'refuse');
+      assert.strictEqual(r.pattern, 'node /work/scratch/test-*/*.js');
+      assert.strictEqual(classify('"/work/my tools/run" x | cat', ['/work/my tools/run *']).verdict, 'refuse');
+    });
   });
 
   test('with no exclusions configured nothing is refused', () => {

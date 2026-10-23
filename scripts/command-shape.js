@@ -24,9 +24,13 @@
  * is never refused: it runs outside the sandbox whatever its shape.
  *
  * Text that is data is never matched against an exclusion: the body of a
- * here-document, which is input to the command it is fed to, and the text
- * inside a quoted argument. A quoted argument still counts as an argument, so
- * `gh pr comment 3 --body "x" | cat` is refused under `gh *` as before.
+ * here-document fed to anything but a shell, and a quoted argument with a
+ * space in it. A quoted argument still counts as an argument, so
+ * `gh pr comment 3 --body "x y" | cat` is refused under `gh *` as before. The
+ * command word, and a quoted word with no space such as a script path, are
+ * matched as written. Text a shell runs is a command line, matched as one
+ * wrapped in that shell: the string after `sh -c` (or bash, zsh, dash, ksh),
+ * what `eval` is given, and a here-document fed to a shell.
  *
  * WHAT IT SUGGESTS: the command bare, on its own; after a `cd`, two calls, the
  * `cd` and then the command; for a VAR=value, a small script in the test tree
@@ -73,36 +77,42 @@ function substitutionEnd(s, i) {
   return s.length;
 }
 
-// The command with each here-document's body cut out, the marker kept. A body
-// is data for the command it is fed to, so nothing in it is a command; one
-// that never reaches its delimiter is data to the end of the text.
-function withoutHeredocBodies(command) {
+// The command with each here-document's body cut out, the marker kept, and
+// the bodies in the order of their markers. A body is input to the command it
+// is fed to; one that never reaches its delimiter runs to the end of the text.
+function heredocs(command) {
   const r = stripHeredocs(String(command));
-  if (r.ok) return r.text;
-  return r.unfinished ? r.unfinished.text : String(command);
+  const done = r.ok ? r : r.unfinished;
+  return done ? { text: done.text, bodies: done.bodies.map((b) => b.body) } : { text: String(command), bodies: [] };
 }
 
-// `quoted[k]` says whether any part of `words[k]` was quoted.
+// `quoted[k]` says whether part of `words[k]` was quoted and none of it runs a
+// command (a substitution), and `heredocs` numbers the here-documents a
+// segment is fed, in the order of the line.
 function parse(command) {
   const s = String(command);
-  const segments = [{ words: [], quoted: [], redirects: [] }];
+  const fresh = () => ({ words: [], quoted: [], redirects: [], heredocs: [] });
+  const segments = [fresh()];
   const wrappers = new Set();
   let word = null;
   let quoted = false;
+  let runs = false;
   let quote = null;
   let redirectNext = false;
+  let heredocCount = 0;
 
   const cur = () => segments[segments.length - 1];
   const endWord = () => {
     if (word === null) return;
-    if (redirectNext) { cur().redirects.push(word); redirectNext = false; } else { cur().words.push(word); cur().quoted.push(quoted); }
+    if (redirectNext) { cur().redirects.push(word); redirectNext = false; } else { cur().words.push(word); cur().quoted.push(quoted && !runs); }
     word = null;
     quoted = false;
+    runs = false;
   };
   const split = (kind) => {
     endWord();
     wrappers.add(kind);
-    if (cur().words.length || cur().redirects.length) segments.push({ words: [], quoted: [], redirects: [] });
+    if (cur().words.length || cur().redirects.length) segments.push(fresh());
   };
 
   for (let i = 0; i < s.length; i++) {
@@ -115,14 +125,14 @@ function parse(command) {
     if (quote === '"') {
       if (c === '"') { quote = null; continue; }
       if (c === '\\' && next !== undefined && '"\\$`'.includes(next)) { word += next; i++; continue; }
-      if (c === '`' || (c === '$' && next === '(')) { const end = substitutionEnd(s, i); wrappers.add('substitution'); word += s.slice(i, end); i = end - 1; continue; }
+      if (c === '`' || (c === '$' && next === '(')) { const end = substitutionEnd(s, i); wrappers.add('substitution'); runs = true; word += s.slice(i, end); i = end - 1; continue; }
       word += c;
       continue;
     }
     if (c === '\\') { word = (word ?? '') + (next ?? ''); i++; continue; }
     if (c === "'" || c === '"') { quote = c; word = word ?? ''; quoted = true; continue; }
     if (c === ' ' || c === '\t') { endWord(); continue; }
-    if (c === '`' || (c === '$' && next === '(')) { const end = substitutionEnd(s, i); wrappers.add('substitution'); word = (word ?? '') + s.slice(i, end); i = end - 1; continue; }
+    if (c === '`' || (c === '$' && next === '(')) { const end = substitutionEnd(s, i); wrappers.add('substitution'); runs = true; word = (word ?? '') + s.slice(i, end); i = end - 1; continue; }
     if (c === '\n' || c === ';') { split('chain'); continue; }
     if (c === '(' || c === ')') { split('subshell'); continue; }
     if (c === '|') {
@@ -145,6 +155,7 @@ function parse(command) {
       const dup = /^[<>]&(\d+|-)/.exec(s.slice(i));
       if (dup) { i += dup[0].length - 1; continue; }
       wrappers.add('redirect');
+      if (c === '<' && next === '<' && s[i + 2] !== '<') cur().heredocs.push(heredocCount++);
       while (s[i + 1] === '>' || s[i + 1] === '<' || s[i + 1] === '|') i++;
       redirectNext = true;
       continue;
@@ -177,6 +188,30 @@ function gitDir(words) {
   return words[0] === 'git' && i > 0 && words[i + 1] ? words[i + 1] : null;
 }
 
+// The directory a segment runs in, where the line says: git's -C, or the
+// nearest cd before it.
+function cwdOf(segments, i) {
+  let cwd = gitDir(segments[i].words);
+  for (let j = i - 1; j >= 0 && !cwd; j--) {
+    if (segments[j].words[0] === 'cd' && segments[j].words[1]) cwd = segments[j].words[1];
+  }
+  return cwd;
+}
+
+const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh']);
+
+// The text a segment hands a shell to run as a command line: the string after
+// a shell's -c, what eval is given, or a here-document fed to a shell. That
+// text is commands, not data, so it is matched like any other command.
+function shellRuns(seg, bodies) {
+  const name = path.basename(seg.words[0] || '');
+  if (name === 'eval') return [seg.words.slice(1).join(' ')];
+  if (!SHELLS.has(name)) return [];
+  const c = seg.words.findIndex((w, k) => k > 0 && /^-[A-Za-z]*c[A-Za-z]*$/.test(w));
+  if (c > 0) return seg.words.slice(c + 1, c + 2);
+  return seg.heredocs.map((n) => bodies[n]).filter((b) => b !== undefined);
+}
+
 // ---------------------------------------------------------------------------
 // The decision
 // ---------------------------------------------------------------------------
@@ -205,31 +240,40 @@ const WRAPPER_NAMES = {
   substitution: 'a command substitution ("$(...)" or backticks)',
   env: 'a VAR=value prefix',
   subshell: 'a subshell',
+  shell: 'a shell ("sh -c", "eval" or a here-document fed to a shell)',
 };
 
-// A quoted word stands in for any text but no pattern's literal part, so the
-// text inside a quoted argument is never what makes an exclusion match.
+// A quoted argument with a space in it is data: a message, a body, a script
+// for another interpreter. It stands in for any text but no pattern's literal
+// part, so it is never what makes an exclusion match. The command word, and a
+// quoted word with no space such as a path, are matched as written.
 const QUOTED = '\0';
+const asMatched = (seg) => seg.words.map((w, k) => (k > 0 && seg.quoted[k] && /\s/.test(w) ? QUOTED : w));
 
-function classify(command, patterns) {
+// `outer` is set for text a shell runs: it runs inside that shell, never as
+// one bare command, and in the directory the shell was started in.
+function classify(command, patterns, outer = null) {
   if (!patterns || !patterns.length) return { verdict: 'pass' };
-  const raw = withoutHeredocBodies(command).trim();
+  const { text, bodies } = heredocs(command);
+  const raw = text.trim();
   if (!raw) return { verdict: 'pass' };
   const { segments, wrappers } = parse(raw);
+  if (outer) wrappers.add('shell');
   const bare = wrappers.size === 0 && segments.length === 1;
 
   if (bare && matchingPattern(raw, patterns)) return { verdict: 'pass' };
 
   for (let i = 0; i < segments.length; i++) {
     const seg = segments[i];
-    const hit = exclusionFor(seg.words.map((w, k) => (seg.quoted[k] ? QUOTED : w)), patterns);
+    const cwd = cwdOf(segments, i) || (outer && outer.cwd) || null;
+    for (const run of shellRuns(seg, bodies)) {
+      const inner = classify(run, patterns, { cwd });
+      if (inner.verdict === 'refuse') return inner;
+    }
+    const hit = exclusionFor(asMatched(seg), patterns);
     if (!hit) continue;
     if (bare && !hit.near) return { verdict: 'pass' };
     if (!bare && seg.words[0] === 'git' && !GIT_REMOTE.has(gitSubcommand(seg.words))) continue;
-    let cwd = gitDir(seg.words);
-    for (let j = i - 1; j >= 0 && !cwd; j--) {
-      if (segments[j].words[0] === 'cd' && segments[j].words[1]) cwd = segments[j].words[1];
-    }
     const result = {
       verdict: 'refuse',
       kind: bare ? 'near-miss' : 'wrapped',
