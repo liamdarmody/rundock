@@ -113,6 +113,22 @@ function locateKey(lines, key) {
   return null;
 }
 
+// A top-level key's value as written: `inline` is the rest of the key line,
+// `items` the text after each `- ` of a block list. Read-only; null when the
+// key cannot be located. Lets a reader see what YAML's parse has lost, such
+// as the exact name inside an unquoted [[link]].
+export function rawValueText(raw, key) {
+  if (typeof raw !== 'string' || !raw.startsWith('---')) return null;
+  const lines = raw.split('\n');
+  const loc = locateKey(lines, key);
+  if (!loc) return null;
+  const keyLine = lines[loc.keyLine];
+  const items = lines.slice(loc.valueStart, loc.valueEnd)
+    .filter((l) => /^\s*- /.test(l))
+    .map((l) => l.replace(/^\s*- /, '').trim());
+  return { inline: keyLine.slice(keyLine.indexOf(':') + 1).trim(), items };
+}
+
 // Replace a top-level property's value in the raw frontmatter block.
 // newValue: string | number | boolean | array of strings.
 // Returns { raw, changed }; unlocatable keys and unsupported shapes return
