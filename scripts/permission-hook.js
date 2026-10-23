@@ -1220,7 +1220,8 @@ function globReachesAnswerFiles(resolvedPath, workspaceRoot, foldsCase = hostFol
   const at = segs.findIndex(s => /[*?[]/.test(s));
   if (at < 0) return false;
   const pattern = segs[at];
-  const re = new RegExp(`^${pattern.replace(/[.+^${}()|\\]/g, '\\$&').replace(/\*/g, '[^/]*').replace(/\?/g, '[^/]')}$`, folds ? 'i' : '');
+  // `[!...]` and `[^...]` are classes of what they do not name.
+  const re = new RegExp(`^${pattern.replace(/[.+^${}()|\\]/g, '\\$&').replace(/\*/g, '[^/]*').replace(/\?/g, '[^/]').replace(/\[(?:!|\\\^)/g, '[^')}$`, folds ? 'i' : '');
   const root = foldCase(canonicalize(pmod.resolve(workspaceRoot), pmod), folds);
   const dir = foldCase(canonicalize(segs.slice(0, at).join(pmod.sep) || pmod.sep, pmod), folds);
   if (dir !== root && !dir.startsWith(root + pmod.sep)) return false;
@@ -1230,6 +1231,22 @@ function globReachesAnswerFiles(resolvedPath, workspaceRoot, foldsCase = hostFol
     const first = p.slice(dir.length + 1).split(pmod.sep)[0];
     return !(first.startsWith('.') && !pattern.startsWith('.')) && re.test(first);
   });
+}
+
+// BRACES ARE THE SHELL'S, expanded before the command sees the word, so
+// `rm -rf .{claude,rundock}` names `.claude` and `.rundock`. Each group with a
+// comma is expanded, innermost first, up to `limit` words; a word left with
+// braces is judged as it is.
+function braceForms(word, limit = 64) {
+  const done = [];
+  const queue = [String(word)];
+  while (queue.length && done.length + queue.length <= limit) {
+    const w = queue.shift();
+    const m = /\{([^{}]*,[^{}]*)\}/.exec(w);
+    if (!m) { done.push(w); continue; }
+    for (const alt of m[1].split(',')) queue.push(w.slice(0, m.index) + alt + w.slice(m.index + m[0].length));
+  }
+  return [...done, ...queue];
 }
 
 function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), foldsCase = hostFoldsCase(), opts = {}) {
@@ -1303,7 +1320,8 @@ function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), 
     // workspace root regardless. Everything BELOW still judges against the
     // workspace root: the base says where a relative path starts, never what
     // counts as inside.
-    const resolved = canonicalize(pmod.resolve(commandBaseDir(command, workspaceRoot, pmod, opts.cwd, extraDirs, home), t), pmod);
+    const base = commandBaseDir(command, workspaceRoot, pmod, opts.cwd, extraDirs, home);
+    const resolved = canonicalize(pmod.resolve(base, t), pmod);
 
     // THE ANSWER FILES ARE TESTED BEFORE THE CROSSING FILTER, not after it.
     //
@@ -1318,9 +1336,14 @@ function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), 
     //
     // The second is how anyone would actually write it, and it is the shape a
     // test using an absolute path never sees.
-    if (writingWords.has(raw) && (isWorkspaceAnswerFile(resolved, workspaceRoot, foldsCase, pmod) || isAnswerFileOfAnyWorkspace(resolved, pmod) || reachesAnswerFiles(raw, resolved, pmod))) {
-      addAnswer(resolved, pmod);
-      continue;
+    if (writingWords.has(raw)) {
+      const forms = braceForms(t);
+      const hits = (forms.length > 1 ? forms.map(f => canonicalize(pmod.resolve(base, f), pmod)) : [resolved])
+        .filter(r => isWorkspaceAnswerFile(r, workspaceRoot, foldsCase, pmod) || isAnswerFileOfAnyWorkspace(r, pmod) || reachesAnswerFiles(raw, r, pmod));
+      if (hits.length) {
+        for (const r of hits) addAnswer(r, pmod);
+        continue;
+      }
     }
 
     // Skip tokens that could not cross. A relative token resolves against the

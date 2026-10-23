@@ -96,12 +96,17 @@ describe('a command asks about an answer file only when it can write it', () => 
     'git checkout -- .claude', 'cp -r backup/.claude .', 'cp backup/.mcp.json .', 'mv backup/settings.json .claude',
     'cp backup/permission-hook.sh .rundock/', 'rm -rf .claude/*', 'rm .rundock/*.json', 'rm -rf .*', 'rm -f .m?p.json',
     'rm -rf projects/other-ws/.rundock', 'mv projects/other-ws/.claude x', 'install -d -m 000 .claude',
+    // The shell expands braces before the command sees the word, and `[!...]`
+    // and `[^...]` are classes that match what they do not name.
+    'rm -rf .{claude,rundock}', 'rm -rf {src,.claude}', 'rm -f .{mcp,other}.json', 'rm -rf .claude/{hooks,agents}', 'rm -rf .{a,{b,rundock}}',
+    'rm -rf .[!.]*', 'rm -rf .[^.]*', 'rm -rf .[!a]*',
   ];
   const FOLDER_ORDINARY = [
     'rm -rf .rundock/scratch', 'rm -rf .rundock/scratch/*', 'ls .claude', 'cp -r .claude backup', 'cp x.json .', 'mv notes.txt .claude/agents/',
     'rm -rf node_modules', 'rm *.json', 'git add .', 'rm -rf .claude/agents/old.md', 'cp -r skills .claude/skills', 'rm -rf *',
     // Into a folder that holds answer files, under another name: only that name is written.
     'cp x.json .claude', 'mv notes.txt .rundock/', 'cp -t .claude x.json',
+    'rm -rf {src,dist}', 'rm -rf .claude/{agents,skills}', 'rm -rf [!.]*', 'rm -rf .[!cmr]*', 'echo ${HOME}',
   ];
   test('a command that removes, moves or writes into a folder holding answer files asks', () => {
     for (const d of ['backup/.claude', 'projects/other-ws/.rundock', 'projects/other-ws/.claude', '.claude/agents', '.rundock/scratch', 'skills']) fs.mkdirSync(path.join(ws, d), { recursive: true });
@@ -126,6 +131,25 @@ describe('a command asks about an answer file only when it can write it', () => 
     const home = os.homedir();
     const a = hook.classifyShellAccess('Bash', { command: `tree -o ${path.join(home, '.claude', 'settings.json')}` }, ws, [], home, true, { cwd: ws });
     assert.ok(a && hook.boundaryCrossingsFor(a).length > 0, "tree -o into the runtime's own settings is a crossing");
+  });
+
+  // `git clean -x` and `-X` name no file, yet remove what git ignores, and the
+  // workspace's own `.rundock` folder is ignored: the permission answers, the
+  // launcher and the connector secrets go with it. Notes mode grades the
+  // command destructive; Code mode ran it when nothing untracked was lost.
+  test('git clean that removes ignored files asks in Code mode while .rundock is in reach', () => {
+    const { codeModeVerdict } = require('../../scripts/code-mode-verdict.js');
+    const context = {
+      gitTop: () => ws, canonical: p => path.resolve(p), exists: () => true,
+      gitStatus: () => ({ ok: true, tracked: [], untracked: [], ignoredEnv: [], deleted: [] }),
+    };
+    const verdict = c => codeModeVerdict({ command: c, workspaceRoot: ws, cwd: ws, toolName: 'Bash', context, platform: process.platform });
+    for (const c of ['git clean -fdx', 'git clean -fdX', 'git clean -f -d -x', 'git clean -fx .rundock', 'git clean -fdx .']) {
+      const v = verdict(c);
+      assert.strictEqual(v.verdict, 'always-asks', c);
+      assert.ok(JSON.stringify(v).includes('.rundock'), `${c}: the card names it`);
+    }
+    for (const c of ['git clean -fd', 'git clean -fdx src', 'git clean -ndx']) assert.strictEqual(verdict(c).verdict, 'runs', c);
   });
 
   function hookDecision(command, codeMode) {

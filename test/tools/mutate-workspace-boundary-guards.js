@@ -274,6 +274,7 @@ const LAUNCHCTL_ANY_MODE = { src: path.join(ROOT, 'scripts', 'code-mode-verdict.
 // Which words a command can write, for the answer-file check, without the fixture.
 const ANSWER_WRITES = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/answer-file-writes.test.js' };
 const ANSWER_WRITES_VOCAB = { src: path.join(ROOT, 'public', 'read-only-shell.js'), suite: 'test/unit/answer-file-writes.test.js' };
+const ANSWER_WRITES_VERDICT = { src: path.join(ROOT, 'scripts', 'code-mode-verdict.js'), suite: 'test/unit/answer-file-writes.test.js' };
 // A change allowed on the hook's card stands, without a second card.
 const ALLOWED_GUARD = { src: path.join(ROOT, 'lib', 'workspace', 'answer-file-guard.js'), suite: 'test/unit/allowed-change-stands.test.js' };
 const ALLOWED_HANDLER = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'process-control.js'), suite: 'test/unit/allowed-change-stands.test.js' };
@@ -1145,8 +1146,8 @@ const MUTATIONS = [
     "  if (writing && !isWorkspaceAnswerFile(resolvedPath, workspaceRoot, foldsCase) && isAnswerFileOfAnyWorkspace(resolvedPath)) {",
     "  if (false) {"],
   [CM_BOUNDARY, "Proxy: another workspace's answer file, by shell, matched for the current workspace only",
-    " || isAnswerFileOfAnyWorkspace(resolved, pmod)",
-    ""],
+    " || isAnswerFileOfAnyWorkspace(r, pmod) || reachesAnswerFiles(raw, r, pmod))",
+    " || reachesAnswerFiles(raw, r, pmod))"],
   [CM_CODEX_BOUNDARY, "Proxy: Codex grades another workspace's answer file as ordinary work",
     "  if (hook.isAnswerFileOfAnyWorkspace(g)) return true;\n  if (path.basename(g) === '.rundock') return true;",
     "  return false;"],
@@ -1358,8 +1359,8 @@ const MUTATIONS = [
     "  return [...waiting, input].filter(Boolean).join('\\n\\n');",
     "  return input;"],
   [ANSWER_READS_HOOK, "Answer-file reads: a command that only reads a permission file is taken as changing it",
-    "    if (writingWords.has(raw) && (isWorkspaceAnswerFile(",
-    "    if (!readOnly && (isWorkspaceAnswerFile("],
+    "    if (writingWords.has(raw)) {",
+    "    if (!readOnly) {"],
   [ANSWER_READS_HOOK, "Answer-file reads: a segment that writes a permission file is taken as a read",
     '    if (!reads) for (const t of shellPathTokens(seg)) out.add(t);',
     '    if (false) for (const t of shellPathTokens(seg)) out.add(t);'],
@@ -1420,6 +1421,15 @@ const MUTATIONS = [
   [ANSWER_WRITES, 'Answer-file writes: a folder install -d makes is taken as one it copies into',
     '    if (PLACES_INTO.has(verb) && !makesFolders) {',
     '    if (PLACES_INTO.has(verb)) {'],
+  [ANSWER_WRITES, 'Answer-file writes: braces are not expanded',
+    '      const forms = braceForms(t);',
+    '      const forms = [t];'],
+  [ANSWER_WRITES, 'Answer-file writes: a negated class is taken as a class of what it names',
+    ".replace(/\\[(?:!|\\\\\\^)/g, '[^')",
+    ''],
+  [ANSWER_WRITES_VERDICT, 'Answer-file writes: git clean -x runs in Code mode with .rundock in reach',
+    '  if ((onlyIgnored || alsoIgnored) && scopes.some(p => under(rundock, p, ctx) || under(p, rundock, ctx))) {',
+    '  if (false) {'],
   [ANSWER_WRITES_VOCAB, 'Read-only vocabulary: tree -o is taken as a read',
     '  var WRITING_FLAGS = { tree: /(^|\\s)-[A-Za-z]*o/, file:',
     '  var WRITING_FLAGS = { file:'],

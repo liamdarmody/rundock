@@ -1030,6 +1030,13 @@ function judgeClean(rest, ctx, top) {
     scopes = [ctx.base];
   }
   if (!top) return always('git-unchecked');
+  // THE WORKSPACE'S OWN `.rundock` FOLDER IS IGNORED, so `-x` and `-X` remove
+  // it: the permission answers, the launcher and the connector secrets, none
+  // of which anything rebuilds. Asked about whenever it is in reach.
+  const rundock = ctx.pmod.join(ctx.workspaceRoot, '.rundock');
+  if ((onlyIgnored || alsoIgnored) && scopes.some(p => under(rundock, p, ctx) || under(p, rundock, ctx))) {
+    return unsaved('unsaved-work', ['.rundock/']);
+  }
   // Ignored files rebuild, except .env files, which nobody can recreate.
   return discard(top, scopes.map(p => relSpec(p, top, ctx)),
     { untracked: !onlyIgnored, env: onlyIgnored || alsoIgnored }, 'unsaved-work', ctx);
