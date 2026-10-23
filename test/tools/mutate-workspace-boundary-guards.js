@@ -1963,8 +1963,23 @@ const MUTATIONS = [
     ');'],
   // Folded away is still acted on: the card has to say it.
   [CONNECTOR_CARD_MODEL, 'Connector card: a card with fields folded away does not say so',
-    "    return baseContext(f, server) + (isCrowded(f) ? CROWDED : '');",
-    '    return baseContext(f, server);'],
+    "    const said = baseContext(f, server) + (isCrowded(f) ? CROWDED : '');",
+    '    const said = baseContext(f, server);'],
+  // An email address in a field the card does not read can be who a request
+  // reaches, whatever a destination row says: never noticed, or noticed and
+  // never said, it goes out of sight behind the destination.
+  [CONNECTOR_CARD_MODEL, 'Connector card: an address in an unread field is not noticed',
+    '      if (!unreadAddress && EMAIL_LIKE.test(rawText(raw, MAX_TEXT))) unreadAddress = true;\n',
+    ''],
+  [CONNECTOR_FIELDS_MODEL, 'Connector card: an address past the part of a value shown is not noticed',
+    'EMAIL_LIKE.test(rawText(raw, MAX_TEXT))',
+    'EMAIL_LIKE.test(rawText(raw))'],
+  [CONNECTOR_CARD_MODEL, 'Connector card: an address in an unread field draws no sentence',
+    "(f.unreadAddress && f.action !== 'draft' && !said.includes('Other fields') ? ADDRESS_NOTE : '')",
+    "''"],
+  [CONNECTOR_CARD_VIEW, 'Connector card: an address beside a destination draws no To row',
+    ' || f.unreadAddress);',
+    ');'],
   [CONNECTOR_CARD_MODEL, 'Connector card: aliases past the cap do not count as folded away',
     '(f.aliasOverflow || 0) > 0 || ',
     ''],

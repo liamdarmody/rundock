@@ -262,6 +262,19 @@ describe('a send, reply or forward says where it goes', () => {
     }
   });
 
+  test('a destination beside recipients under an unknown name: the To row and a sentence say so', () => {
+    const card = render('mcp__example_post__send_message', { threadId: 't1', to_emails: ['evil@example.net'], body: 'hi' });
+    assert.deepStrictEqual(labels(card), ['threadId', 'To', 'Message', 'Other fields']);
+    assert.match(text(row(card, 'To')), /Not recognised: see Other fields/);
+    assert.match(contextText(card), /An email address is in a field the card does not read: check Other fields before allowing\./);
+  });
+
+  test('a thread timestamp beside a channel stays quiet', () => {
+    const card = render('mcp__example_chat__send_message', { channel: 'C1', thread_ts: '1700000000.000100', text: 'hi' });
+    assert.deepStrictEqual(labels(card), ['channel', 'Message', 'Other fields']);
+    assert.strictEqual(contextText(card), PLAIN);
+  });
+
   test('a forward to a channel still says where it goes', () => {
     const card = render('mcp__example_chat__forward_message', { channel: 'C1', id: 'm1', text: 'FYI' });
     assert.deepStrictEqual(labels(card), ['channel', 'Message', 'Other fields']);

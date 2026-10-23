@@ -23,7 +23,7 @@ describe('an email request is read by generic field names', () => {
     const { to, cc, bcc, ...rest } = f;
     assert.deepStrictEqual(rest, {
       kind: 'email', action: 'send', subject: 'Venue for the 14th', body: 'Hi Sam,\nSee you then.',
-      aliases: {}, others: [], aliasOverflow: 0, destinations: [], emailShaped: true,
+      aliases: {}, others: [], aliasOverflow: 0, unreadAddress: false, destinations: [], emailShaped: true,
     });
     assert.deepStrictEqual(texts(to), ['sam@example.org', 'priya@example.com', 'jo@example.net']);
     assert.deepStrictEqual(texts(cc), ['lee@example.org']);
@@ -91,6 +91,22 @@ describe('an email request is read by generic field names', () => {
     assert.deepStrictEqual(draft.others.map((o) => o.key), ['threadId']);
   });
 
+  test('an email address in any unread value is noticed, wherever it is in the value, and the card says so', () => {
+    const NOTE = /An email address is in a field the card does not read: check Other fields before allowing\./;
+    const f = F.connectorFields('mcp__example_post__send_message', { threadId: 't1', to_emails: ['evil@example.net'], body: 'hi' });
+    assert.strictEqual(f.unreadAddress, true);
+    assert.match(F.contextFor(f, 'x'), NOTE, 'whatever the destination row says');
+    const deep = F.connectorFields('mcp__example_chat__send_message', { channel: 'C1', notes: `${'x'.repeat(400)} evil@example.net`, text: 'hi' });
+    assert.strictEqual(deep.unreadAddress, true, 'past the part of a value the card shows');
+    const quiet = F.connectorFields('mcp__example_chat__send_message', { channel: 'C1', thread_ts: '1700000000.000100', text: 'hi' });
+    assert.strictEqual(quiet.unreadAddress, false, 'a thread timestamp is not an address');
+    assert.strictEqual(F.contextFor(quiet, 'x'), 'Sends straight away from your account. It cannot be undone, so this always asks.');
+    const ev = F.connectorFields('mcp__example_calendar__create_event', { title: 't', attendees: ['a@example.org'], organizer_email: 'evil@example.net' });
+    assert.match(F.contextFor(ev, 'x'), NOTE, 'an event too');
+    const draft = F.connectorFields('mcp__example_post__create_draft', { to: 'a@example.org', cc_list: 'evil@example.net' });
+    assert.doesNotMatch(F.contextFor(draft, 'x'), NOTE, 'a draft sends nothing');
+  });
+
   test('on a forward an id or a thread is the message forwarded, not where it goes', () => {
     const f = F.connectorFields('mcp__example_post__forward', { id: 'm1', threadId: 't1', channel: 'C1', body: 'FYI' });
     assert.deepStrictEqual(f.destinations, [{ key: 'channel', value: 'C1' }]);
@@ -116,7 +132,7 @@ describe('an email request is read by generic field names', () => {
   test('missing fields come back empty, not invented', () => {
     const f = F.connectorFields('mcp__example_post__create_draft', { subject: '' });
     assert.deepStrictEqual(f, {
-      kind: 'email', action: 'draft', to: [], cc: [], bcc: [], subject: '', body: '', aliases: {}, others: [], aliasOverflow: 0,
+      kind: 'email', action: 'draft', to: [], cc: [], bcc: [], subject: '', body: '', aliases: {}, others: [], aliasOverflow: 0, unreadAddress: false,
       destinations: [], emailShaped: true,
     });
   });

@@ -89,18 +89,18 @@
   // Any value as text, for one the card cannot otherwise read: a string as it
   // is, anything else written out the way JSON writes it, cut short either way.
   // Bounded in depth and in length whatever it is given.
-  function rawText(v) {
+  function rawText(v, limit = MAX_OTHER_TEXT) {
     let out = '';
     const walk = (x, depth) => {
-      if (out.length > MAX_OTHER_TEXT) return;
-      if (typeof x === 'string') { const s = clip(x, MAX_OTHER_TEXT + 1); out += depth ? JSON.stringify(s) : s; return; }
+      if (out.length > limit) return;
+      if (typeof x === 'string') { const s = clip(x, limit + 1); out += depth ? JSON.stringify(s) : s; return; }
       if (x === null || typeof x !== 'object') { out += String(x); return; }
       if (depth >= MAX_DEPTH) { out += '…'; return; }
       const list = Array.isArray(x);
       const keys = list ? null : Object.keys(x);
       const n = list ? x.length : keys.length;
       out += list ? '[' : '{';
-      for (let i = 0; i < n && out.length <= MAX_OTHER_TEXT; i++) {
+      for (let i = 0; i < n && out.length <= limit; i++) {
         if (i) out += ', ';
         if (!list) out += `${JSON.stringify(clip(keys[i], MAX_KEY))}: `;
         walk(list ? x[i] : x[keys[i]], depth + 1);
@@ -108,8 +108,11 @@
       out += list ? ']' : '}';
     };
     walk(v, 0);
-    return out.length > MAX_OTHER_TEXT ? `${out.slice(0, MAX_OTHER_TEXT)}…` : out;
+    return out.length > limit ? `${out.slice(0, limit)}…` : out;
   }
+
+  // Something that reads as an email address, anywhere in a value.
+  const EMAIL_LIKE = /[^\s@<>"]+@[^\s@<>"]+\.[^\s@<>"]+/;
 
   // Text from a string, a number, a list, or a body object ({ content }, { text }).
   // Null when the value holds none the card can read as one text, or is nested
@@ -181,12 +184,18 @@
   // request can fill a card with rows. Every one is listed, however many
   // there are, each value cut short on its own: a count is somewhere a
   // recipient could be put that no one can open.
+  //
   // `keys` is the names each field is read by (KEYS, unless an action reads a
-  // field by fewer).
+  // field by fewer). `unreadAddress` says whether any listed value holds
+  // something that reads as an email address, looked for through the whole
+  // value up to MAX_TEXT, not just the part the card shows.
   function gather(sources, read, keys = KEYS) {
     const values = {}, aliases = {}, others = [], firstKey = {};
-    let found = false, aliasOverflow = 0;
-    const list = (key, raw) => { others.push({ key, text: rawText(raw) }); };
+    let found = false, aliasOverflow = 0, unreadAddress = false;
+    const list = (key, raw) => {
+      others.push({ key, text: rawText(raw) });
+      if (!unreadAddress && EMAIL_LIKE.test(rawText(raw, MAX_TEXT))) unreadAddress = true;
+    };
     const fields = Object.keys(read);
     for (const field of fields) {
       const all = [];
@@ -205,7 +214,7 @@
         list(clip(s.prefix + k, MAX_KEY), s.obj[k]);
       }
     }
-    return { values, aliases, others, aliasOverflow, found, firstKey };
+    return { values, aliases, others, aliasOverflow, unreadAddress, found, firstKey };
   }
 
   function emailOf(input, words) {
@@ -237,7 +246,7 @@
     const { destination: all, ...aliases } = g.aliases;
     const destinations = all || (g.firstKey.destination ? [{ key: g.firstKey.destination, value: first }] : []);
     return {
-      kind: 'email', action, ...values, aliases, others: g.others, aliasOverflow: g.aliasOverflow,
+      kind: 'email', action, ...values, aliases, others: g.others, aliasOverflow: g.aliasOverflow, unreadAddress: g.unreadAddress,
       // A recipient or a subject makes it an email; a body and a destination
       // alone are a message, with no empty Subject row to explain.
       destinations, emailShaped: sources.some((s) => addressed(s.obj)),
@@ -311,7 +320,7 @@
     if (!g.found) return null;
     return {
       kind: 'event', action: words.some((w) => CHANGE_WORDS.includes(w)) ? 'update' : 'create',
-      ...g.values, aliases: g.aliases, others: g.others, aliasOverflow: g.aliasOverflow,
+      ...g.values, aliases: g.aliases, others: g.others, aliasOverflow: g.aliasOverflow, unreadAddress: g.unreadAddress,
     };
   }
 
@@ -358,9 +367,15 @@
   }
   const CROWDED = ' This request has more fields than the card shows at once: open Other fields and check every one before allowing.';
 
-  // The sentence under the card's title.
+  const ADDRESS_NOTE = ' An email address is in a field the card does not read: check Other fields before allowing.';
+
+  // The sentence under the card's title. An email address in a field the
+  // card does not read can be who a request reaches, whatever a destination
+  // row says, so the card says so unless it already points at Other fields. A
+  // draft sends nothing.
   function contextFor(f, server) {
-    return baseContext(f, server) + (isCrowded(f) ? CROWDED : '');
+    const said = baseContext(f, server) + (isCrowded(f) ? CROWDED : '');
+    return said + (f.unreadAddress && f.action !== 'draft' && !said.includes('Other fields') ? ADDRESS_NOTE : '');
   }
 
   // What the request does. Every alias of a field counts toward who is
