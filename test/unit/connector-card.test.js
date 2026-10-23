@@ -99,6 +99,36 @@ describe('the card for an agent\'s connector change', () => {
     assert.match(detailOf(html), /curl evil/);
   });
 
+  // A CONTROL CHARACTER IS SHOWN, NEVER ACTED ON. Each detail line is drawn on
+  // a line of its own, so a line break inside an argument, a URL or a helper
+  // would draw a line of the agent's choosing, such as a `URL:` line naming a
+  // server that is not the one it would reach.
+  // Made from code points, so this file holds none of them itself.
+  const LINE_SEPARATOR = String.fromCharCode(0x2028);
+  const RIGHT_TO_LEFT_OVERRIDE = String.fromCharCode(0x202e);
+  const NUL = String.fromCharCode(0);
+  const detailLines = html => detailOf(html).replace(/^[\s\S]*?<code class="permission-detail">|<\/code>[\s\S]*$/g, '').split('<br>');
+  test('a line break in an argument, URL, transport or helper draws no line of its own', () => {
+    const html = ask({ tool_name: 'SaveConnector', input: {
+      name: 'cc', action: 'add', command: 'node', args: ['s.js', 'x\nURL: https://trusted.example/mcp'],
+      url: 'https://real.example/mcp\r\nTransport: sse', transport: 'http\nHeader helper: none',
+      headersHelper: `sh run.sh${LINE_SEPARATOR}Other settings: none`,
+    } });
+    const lines = detailLines(html);
+    assert.strictEqual(lines.length, 4, `one line each for the command, URL, transport and helper: ${JSON.stringify(lines)}`);
+    assert.ok(lines[0].startsWith('node s.js $\'x\\nURL: https://trusted.example/mcp\''), `the argument is quoted as a shell would need it, its line break shown: ${lines[0]}`);
+    assert.ok(lines[1].startsWith('URL: "https://real.example/mcp\\r\\nTransport: sse"'), lines[1]);
+    assert.ok(lines[2].startsWith('Transport: "http\\nHeader helper: none"'), lines[2]);
+    assert.ok(lines[3].startsWith('Header helper: "sh run.sh\\u2028Other settings: none"'), lines[3]);
+  });
+
+  test('a character that reorders or hides text is shown by its code', () => {
+    const word = RP.describeToolRequest('SaveConnector', { name: 'b', command: 'node', args: [`a${RIGHT_TO_LEFT_OVERRIDE}b`, `c${NUL}d`, "it's\t"] }).detail;
+    assert.strictEqual(word, "node $'a\\u202eb' $'c\\u0000d' $'it\\'s\\t'");
+    const names = RP.describeToolRequest('SaveConnector', { name: 'b', command: 'node', env: [`A${LINE_SEPARATOR}B`] }).detail;
+    assert.strictEqual(names.split('\n')[1], 'Other environment names: "A\\u2028B"', 'a name is shown by its escape too');
+  });
+
   test('a long command is shown whole, open, with nothing clipped', () => {
     const args = Array.from({ length: 60 }, (_, i) => `--flag-${i}=value-${i}`);
     const html = ask({ tool_name: 'SaveConnector', input: { name: 'long', action: 'add', command: 'node', args } });

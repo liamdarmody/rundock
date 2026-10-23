@@ -245,9 +245,28 @@
   // THE CARD FOR AN AGENT'S CONNECTOR CHANGE: the server, and exactly what it
   // would run (the command and its arguments, quoted as a shell would need
   // them) or reach (its URL), with the names of what is set for it.
+  //
+  // A CONTROL CHARACTER IS SHOWN, NEVER ACTED ON. Each detail line is drawn on
+  // a line of its own, so a line break inside an argument, a URL or a helper
+  // would draw a line of the agent's choosing, such as a `URL:` line naming a
+  // server it would not reach; others hide or reorder text. A word holding one
+  // is quoted the way a shell writes it, `$'...'`, and any other value is
+  // shown in double quotes, each such character by its escape. Built from
+  // code points so the source holds none of them itself.
+  const hex4 = n => n.toString(16).padStart(4, '0');
+  const CONTROL_RANGES = [[0x00, 0x1f], [0x7f, 0x9f], [0x200e, 0x200f], [0x2028, 0x2029], [0x202a, 0x202e], [0x2066, 0x2069]];
+  const CONTROL = new RegExp(`[${CONTROL_RANGES.map(([a, b]) => `\\u${hex4(a)}-\\u${hex4(b)}`).join('')}]`);
+  const CONTROL_ALL = new RegExp(CONTROL.source, 'g');
+  const SHORT_ESCAPE = { '\n': '\\n', '\r': '\\r', '\t': '\\t' };
+  const escapeControl = s => s.replace(CONTROL_ALL, c => SHORT_ESCAPE[c] || `\\u${hex4(c.charCodeAt(0))}`);
   function shellWord(a) {
     const s = String(a);
+    if (CONTROL.test(s)) return `$'${escapeControl(s.replace(/\\/g, '\\\\').replace(/'/g, "\\'"))}'`;
     return /^[\w@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, "'\\''")}'`;
+  }
+  function shownValue(v) {
+    const s = String(v);
+    return CONTROL.test(s) ? `"${escapeControl(s.replace(/\\/g, '\\\\').replace(/"/g, '\\"'))}"` : s;
   }
   // THE NAMES ARE THE AGENT'S WORDS. An environment, header or setting name
   // comes from the entry the agent wrote, so only a plain name is said in a
@@ -265,8 +284,8 @@
     const verb = removing ? 'Remove' : (i.action === 'replace' ? 'Change' : 'Add');
     const lines = [];
     if (runs) lines.push(runs);
-    if (typeof i.url === 'string') lines.push(`URL: ${i.url}`);
-    if (typeof i.transport === 'string') lines.push(`Transport: ${i.transport}`);
+    if (typeof i.url === 'string') lines.push(`URL: ${shownValue(i.url)}`);
+    if (typeof i.transport === 'string') lines.push(`Transport: ${shownValue(i.transport)}`);
     const said = [];
     if (removing) said.push('An agent asked Rundock to remove this connector from .mcp.json, so agents would no longer start it or connect to it.');
     else if (runs) said.push('An agent asked Rundock to write this into .mcp.json. Claude Code would run this command as its own process, outside the sandbox, whenever an agent starts.');
@@ -280,11 +299,11 @@
         const ok = names.filter(n => plain.test(n));
         const odd = names.filter(n => !plain.test(n));
         if (ok.length) said.push(`${sentence}: ${ok.join(', ')}.`);
-        if (odd.length) lines.push(`${label}: ${odd.map(n => JSON.stringify(n)).join(', ')}`);
+        if (odd.length) lines.push(`${label}: ${odd.map(n => escapeControl(JSON.stringify(n))).join(', ')}`);
       }
       if (typeof i.headersHelper === 'string') {
         said.push('Before connecting it would run a command to make its headers, shown below.');
-        lines.push(`Header helper: ${i.headersHelper}`);
+        lines.push(`Header helper: ${shownValue(i.headersHelper)}`);
       }
       if (lines.some(l => /^Other /.test(l))) said.push('It also sets the names shown quoted below.');
     }
