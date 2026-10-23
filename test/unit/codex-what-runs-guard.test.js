@@ -28,6 +28,7 @@ const RP = require('../../public/permissions.js');
 
 const FILES = ['.rundock/permission-hook.sh', '.rundock/permission-hook.cmd', '.mcp.json', '.rundock/mcp-secrets.json',
   '.claude/hooks/pre-tool.sh', '.claude/hooks/lib/notify.py'];
+const LAUNCHERS = ['.rundock/permission-hook.sh', '.rundock/permission-hook.cmd'];
 let ws;
 let prevWorkspace;
 beforeEach(() => {
@@ -68,7 +69,8 @@ describe('during a Codex turn, a change to a file that decides what runs is put 
       } finally { d.restore(); }
       for (const f of FILES) assert.strictEqual(read(f), before[f], `${f} is back to what it was when the turn started`);
       assert.strictEqual(fs.statSync(path.join(ws, '.rundock', 'permission-hook.sh')).mode & 0o777, 0o755, 'the launcher keeps its mode');
-      assert.deepStrictEqual(d.asked.map(r => r.grading.put_back.relative).sort(), [...FILES].sort(), 'one put-back card for each');
+      assert.deepStrictEqual(d.asked.map(r => r.grading.put_back.relative).sort(), FILES.filter(f => !LAUNCHERS.includes(f)).sort(),
+        'one put-back card for each, and none for the launchers, which are put back without one');
       for (const req of d.asked) {
         assert.strictEqual(req.grading.answer_file, true);
         assert.strictEqual(req.grading.grant_dir, null);
@@ -119,7 +121,7 @@ describe('between turns', () => {
     assert.strictEqual(d.asked.length, 0, 'and nobody is asked');
   });
 
-  test('a change to the launcher is put back and asked about, since only Rundock writes it', () => {
+  test('a change to the launcher is put back, since only Rundock writes it', () => {
     const d = drivenGlue();
     const entry = { agentId: 'builder', processId: 'p1' };
     try {
@@ -130,8 +132,65 @@ describe('between turns', () => {
       glue.releaseCodexTurnGuard(entry);
     } finally { d.restore(); }
     assert.strictEqual(read('.rundock/permission-hook.sh'), 'original .rundock/permission-hook.sh\n');
-    assert.strictEqual(d.asked.length, 1);
-    assert.strictEqual(d.asked[0].grading.put_back.outsideTurn, true);
+    assert.strictEqual(d.asked.length, 0, 'with no card: there is nothing a person could choose to keep');
+  });
+});
+
+// THE LAUNCHER IS THIS RUNDOCK'S OWN. Two copies of Rundock open on one
+// workspace (an installed app and one run from source, say) each write their
+// own launcher, and each took the other's as a change to put back and offer
+// on a card, every time. Whoever changed it, the launcher is put back to the
+// one this copy wrote, with no card and no line to the agent.
+describe('the launcher, with another copy of Rundock on the same workspace', () => {
+  const launcher = () => path.join(ws, '.rundock', 'permission-hook.sh');
+  const MINE = '#!/bin/sh\nexec "/this/copy" "$@"\n';
+  const THEIRS = '#!/bin/sh\nexec "/the/other/copy" "$@"\n';
+
+  test('the other copy\'s launcher, written during a turn, is replaced by this copy\'s own, silently', () => {
+    fs.writeFileSync(launcher(), MINE);
+    guardLib.noteOwnWrite(launcher(), MINE);
+    const d = drivenGlue();
+    const entry = { agentId: 'builder', processId: 'p1' };
+    try {
+      glue.guardCodexTurn(entry, 'convo-2');
+      fs.writeFileSync(launcher(), THEIRS);
+      glue.releaseCodexTurnGuard(entry);
+    } finally { d.restore(); }
+    assert.strictEqual(fs.readFileSync(launcher(), 'utf-8'), MINE);
+    assert.strictEqual(fs.statSync(launcher()).mode & 0o777, 0o755, 'still runnable');
+    assert.strictEqual(d.asked.length, 0, 'no card');
+    assert.strictEqual(glue.withAgentNotice('convo-2', 'next'), 'next', 'and nothing said to the agent');
+  });
+
+  test('the launcher this copy wrote last is the one put back, when the other copy\'s lands before the next check', () => {
+    fs.writeFileSync(launcher(), MINE);
+    guardLib.noteOwnWrite(launcher(), MINE);
+    const REWRITTEN = '#!/bin/sh\nexec "/this/copy/updated" "$@"\n';
+    const d = drivenGlue();
+    const entry = { agentId: 'builder', processId: 'p1' };
+    try {
+      glue.guardCodexTurn(entry, 'convo-4');
+      // This copy writes a new launcher, and the other's lands on top of it
+      // before any check has seen this one.
+      guardLib.noteOwnWrite(launcher(), REWRITTEN);
+      fs.writeFileSync(launcher(), THEIRS);
+      glue.releaseCodexTurnGuard(entry);
+    } finally { d.restore(); }
+    assert.strictEqual(fs.readFileSync(launcher(), 'utf-8'), REWRITTEN);
+    assert.strictEqual(d.asked.length, 0);
+  });
+
+  test('one already there when the guard first starts is replaced too', () => {
+    guardLib.noteOwnWrite(launcher(), MINE);
+    fs.writeFileSync(launcher(), THEIRS);
+    const d = drivenGlue();
+    const entry = { agentId: 'builder', processId: 'p1' };
+    try {
+      glue.guardCodexTurn(entry, 'convo-3');
+      glue.releaseCodexTurnGuard(entry);
+    } finally { d.restore(); }
+    assert.strictEqual(fs.readFileSync(launcher(), 'utf-8'), MINE);
+    assert.strictEqual(d.asked.length, 0);
   });
 });
 
