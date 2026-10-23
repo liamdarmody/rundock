@@ -1954,16 +1954,26 @@ const MUTATIONS = [
     '        if (s.skip.has(k) || names.has(norm(k)) || s.obj[k] === undefined) continue;',
     '        continue;'],
   [CONNECTOR_CARD_VIEW, 'Connector card: unshown keys are hidden',
-    "  if (unread) row('Other fields', otherFields());",
+    "  if (f.others.length || f.othersMore) row('Other fields', otherFields());",
     "  if (false) row('Other fields', otherFields());"],
   // While keys went unread, "(none)", "Just you", "No one else is invited" and
   // "No recipients are set" may all be untrue.
-  [CONNECTOR_CARD_VIEW, 'Connector card: an empty field says none while fields went unread',
-    "unread ? 'Not recognised: see Other fields' : text",
+  [CONNECTOR_CARD_VIEW, 'Connector card: an empty recipient list says none while fields went unread',
+    "unreadFields ? 'Not recognised: see Other fields' : text",
     'text'],
   [CONNECTOR_CARD_MODEL, 'Connector card: the card says nobody is reached while fields went unread',
-    '    const unread = f.others.length > 0 || f.othersMore > 0;',
+    '    const unread = hasUnreadFields(f);',
     '    const unread = false;'],
+  // A warning on every card is one nobody reads: count an id or a calendar as
+  // unread and nearly every event warns.
+  [CONNECTOR_CARD_MODEL, 'Connector card: a well-known key makes the card warn',
+    "f.others.some((o) => !WELL_KNOWN.has(norm(String(o.key).split('.').pop())))",
+    'f.others.length > 0'],
+  // The warning belongs on the rows of who is reached, not on a subject or a
+  // message.
+  [CONNECTOR_CARD_VIEW, 'Connector card: a subject or a message says Not recognised',
+    "  const empty = (text) => el('span', 'permission-empty', text);",
+    "  const empty = (text) => el('span', 'permission-empty', unreadFields ? 'Not recognised: see Other fields' : text);"],
   // One isolate for the name and the address, and an override in the name
   // reorders the address beside it.
   [CONNECTOR_CARD_VIEW, 'Connector card: a name and its address share one isolate',

@@ -817,11 +817,15 @@ function connectorFieldsElement(f, toolName) {
   const dl = el('dl', 'permission-fields');
   // A label can be a key the agent chose, so it is text in an isolate too.
   const row = (label, parts) => { const dd = el('dd'); dd.append(...parts); const dt = el('dt'); dt.append(el('bdi', '', label)); dl.append(dt, dd); };
-  // While some fields went unread, an empty field may only look empty: what it
-  // holds can be under a name this card does not know. So it says where to look
-  // rather than "(none)" or "Just you".
-  const unread = f.others.length > 0 || f.othersMore > 0;
-  const empty = (text) => el('span', 'permission-empty', unread ? 'Not recognised: see Other fields' : text);
+  const empty = (text) => el('span', 'permission-empty', text);
+  // While a field went unread that could hold who a request reaches, an empty
+  // list of recipients or attendees may only look empty: they can be under a
+  // name this card does not know. So that row says where to look rather than
+  // "(none)" or "Just you". Only that row: a subject or a message under an
+  // unknown name is listed under Other fields and its own row reads as usual,
+  // and keys almost every request carries (an id, a calendar) never count.
+  const unreadFields = F.hasUnreadFields(f);
+  const nobody = (text) => el('span', 'permission-empty', unreadFields ? 'Not recognised: see Other fields' : text);
   const entry = (e) => {
     const n = el('span', 'permission-line');
     if (e.raw !== undefined) n.append(el('bdi', 'permission-as-written', e.raw));
@@ -830,7 +834,7 @@ function connectorFieldsElement(f, toolName) {
     return n;
   };
   const people = (list, none) => {
-    if (!list.length) return [empty(none)];
+    if (!list.length) return [nobody(none)];
     const cut = F.cutList(list);
     const out = cut.shown.map(entry);
     if (cut.more.length) {
@@ -844,7 +848,7 @@ function connectorFieldsElement(f, toolName) {
   // Bcc is shown whole: the people a message is copied to in secret are the
   // ones a person most needs to see, so none of them is folded away.
   const everyone = (list, none) => {
-    if (!list.length) return [empty(none)];
+    if (!list.length) return [nobody(none)];
     const out = list.slice(0, F.MAX_LIST).map(entry);
     if (list.length > F.MAX_LIST) out.push(el('span', 'permission-line permission-cut', `… and ${list.length - F.MAX_LIST} more addresses`));
     return out;
@@ -883,7 +887,7 @@ function connectorFieldsElement(f, toolName) {
     const length = !f.aliases.start && !f.aliases.end && F.durationText(f.start, f.end);
     field('start', 'Starts', when, true);
     field('end', 'Ends', (w) => (length ? [...when(w), ' ', el('span', 'permission-cut', `(${length})`)] : when(w)), true);
-    field('attendees', 'Attendees', (list) => (list.length ? people(list, '') : [unread ? empty('') : document.createTextNode('Just you')]), true);
+    field('attendees', 'Attendees', (list) => (list.length ? people(list, '') : [unreadFields ? nobody('') : document.createTextNode('Just you')]), true);
   }
   // Every key the model read as none of the fields, each a block of its own,
   // its key and its value as text.
@@ -896,7 +900,7 @@ function connectorFieldsElement(f, toolName) {
     if (f.othersMore) lines.push(el('span', 'permission-line permission-cut', `… and ${f.othersMore} more ${f.othersMore === 1 ? 'field' : 'fields'}`));
     return lines;
   };
-  if (unread) row('Other fields', otherFields());
+  if (f.others.length || f.othersMore) row('Other fields', otherFields());
   const raw = el('div', 'permission-raw');
   raw.append(el('b', '', 'Tool name:'), document.createTextNode(' ' + toolName));
   const frag = document.createDocumentFragment();

@@ -528,3 +528,53 @@ describe('a value the browser cuts short can always be opened', () => {
     assert.ok(boxIn(row(card, 'Message')), 'the box is there once the dock can measure it');
   });
 });
+
+// A warning on every card is a warning nobody reads. Keys a connector carries
+// on almost every request (an id, a calendar, a time zone, a description) are
+// still listed under Other fields, but they cannot hide who a request reaches,
+// so they never turn the card's words into a warning; and the warning is only
+// ever on the rows of who is reached.
+describe('the unread-field warning is kept for who a request reaches', () => {
+  const contextText = (card) => text(card.querySelector('.permission-context'));
+  const otherKeys = (card) => [...row(card, 'Other fields').querySelectorAll(':scope > .permission-line .permission-other-key')].map((n) => n.textContent);
+
+  test('a plain event with its calendar and time zone reads normally, and still lists them', () => {
+    const card = render('mcp__example_calendar__create_event', { calendarId: 'primary', title: 'Sync', start: '2026-11-03T12:00:00Z', timeZone: 'Europe/London' });
+    assert.strictEqual(contextText(card), 'Adds an event to your calendar. No one else is invited.');
+    assert.strictEqual(text(row(card, 'Attendees')), 'Just you');
+    assert.strictEqual(text(row(card, 'Ends')), '(not set)');
+    assert.deepStrictEqual(otherKeys(card), ['calendarId', 'timeZone']);
+  });
+
+  test('a draft with its id reads normally', () => {
+    const card = render('mcp__example_mail__update_draft', { draftId: 'd1', to: 'sam@example.org', body: 'Hi' });
+    assert.strictEqual(contextText(card), 'Saves a draft in example mail. Nothing is sent.');
+    assert.strictEqual(text(row(card, 'Subject')), '(no subject)');
+    assert.deepStrictEqual(otherKeys(card), ['draftId']);
+  });
+
+  test('every well-known key is quiet: a send with only those and nobody to send to says so plainly', () => {
+    const card = render('mcp__example_post__send_message', {
+      id: '1', threadId: 't', messageId: 'm', draftId: 'd', calendarId: 'c', eventId: 'e', time_zone: 'UTC', description: 'x', location: 'y', subject: 's',
+    });
+    assert.strictEqual(text(row(card, 'To')), '(none)');
+    assert.match(contextText(card), /No recipients are set, so this will probably fail\.$/);
+    assert.strictEqual(otherKeys(card).length, 9, 'and all of them are listed');
+  });
+
+  test('an unknown recipient key still warns, on the recipient row and in the sentence only', () => {
+    const card = render('mcp__example_post__send_message', { to_emails: ['evil@example.net'], subject: '', body: '' });
+    assert.match(text(row(card, 'To')), /Not recognised: see Other fields/);
+    assert.match(contextText(card), /No recipients were recognised/);
+    assert.strictEqual(text(row(card, 'Subject')), '(no subject)');
+    assert.strictEqual(text(row(card, 'Message')), '(empty)');
+  });
+
+  test('an unknown attendee key still warns, on the attendee row and in the sentence only', () => {
+    const card = render('mcp__example_calendar__create_event', { invitee_list: ['evil@example.net'], start: '2026-11-03T12:00:00Z' });
+    assert.match(text(row(card, 'Attendees')), /Not recognised: see Other fields/);
+    assert.match(contextText(card), /Check Other fields for anyone it invites/);
+    assert.strictEqual(text(row(card, 'Title')), '(untitled)');
+    assert.strictEqual(text(row(card, 'Ends')), '(not set)');
+  });
+});

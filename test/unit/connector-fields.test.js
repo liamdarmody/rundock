@@ -157,6 +157,17 @@ describe('every field a request carries is read, so a card can show what the ser
     assert.match(F.contextFor(ev, 'x'), /Other fields/);
   });
 
+  test('keys a connector carries on almost every request are listed but never make the card warn', () => {
+    const ev = F.connectorFields('mcp__example_calendar__create_event', { calendarId: 'primary', title: 't', timeZone: 'Europe/London' });
+    assert.deepStrictEqual(ev.others.map((o) => o.key), ['calendarId', 'timeZone']);
+    assert.strictEqual(F.hasUnreadFields(ev), false);
+    assert.strictEqual(F.contextFor(ev, 'x'), 'Adds an event to your calendar. No one else is invited.');
+    const nested = F.connectorFields('mcp__example_office__reply', { message: { subject: 's', conversationId: 'c' }, messageId: 'm' });
+    assert.strictEqual(F.hasUnreadFields(nested), true, 'a key that is not one of them, nested or not, still counts');
+    const quiet = F.connectorFields('mcp__example_office__reply', { message: { subject: 's', id: 'c' }, messageId: 'm' });
+    assert.strictEqual(F.hasUnreadFields(quiet), false, 'a well-known key under the nested message is quiet too');
+  });
+
   test('every alias counts toward who is reached', () => {
     const ev = F.connectorFields('mcp__example_calendar__create_event', { title: 't', attendees: ['a@example.org'], guests: ['b@example.org', 'a@example.org'] });
     assert.strictEqual(F.contextFor(ev, 'x'), 'Adds an event to your calendar. 2 people will be emailed an invitation.');

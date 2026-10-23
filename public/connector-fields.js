@@ -56,6 +56,12 @@
   const ADDRESS_KEYS = ['email', 'address', 'mail', 'emailAddress'];
   const NAME_KEYS = ['name', 'displayName'];
   const TIME_KEYS = ['dateTime', 'datetime', 'date_time', 'date', 'time', 'value'];
+  // Keys a connector carries on almost every request: which item, which
+  // calendar, which zone, and words about an event. They are listed under
+  // Other fields like any key the card does not read, but they cannot hide who
+  // a request reaches, so they never turn the card's words into a warning. A
+  // warning on every card is one nobody reads.
+  const WELL_KNOWN = new Set(['id', 'threadid', 'messageid', 'draftid', 'calendarid', 'eventid', 'timezone', 'description', 'location']);
   const SEND_KIND = { send: 'send', resend: 'send', reply: 'reply', forward: 'forward', fwd: 'forward' };
   const EVENT_WORDS = ['event', 'events', 'meeting', 'appointment', 'invite', 'invitation'];
   const CHANGE_WORDS = ['update', 'patch', 'edit', 'change', 'modify', 'move', 'reschedule'];
@@ -296,11 +302,18 @@
     return { preview: lines.slice(0, BODY_LINES).join('\n'), moreLines, cut: moreLines > 0 || full.length > BODY_SOFT, full, overflow: whole.length - full.length };
   }
 
+  // Whether a field went unread that could be holding who a request reaches:
+  // any key under Other fields that is not a well-known one (the last part of
+  // a nested key's path is what is compared), or any past the listed number.
+  function hasUnreadFields(f) {
+    return f.othersMore > 0 || f.others.some((o) => !WELL_KNOWN.has(norm(String(o.key).split('.').pop())));
+  }
+
   // The sentence under the card's title. Every alias of a field counts toward
   // who is reached. While fields went unread, nobody being found is not the
   // same as nobody being there, so the card points at Other fields instead.
   function contextFor(f, server) {
-    const unread = f.others.length > 0 || f.othersMore > 0;
+    const unread = hasUnreadFields(f);
     const every = (field) => (f.aliases[field] ? f.aliases[field].map((o) => o.value) : [f[field]]).flat();
     if (f.kind === 'event') {
       const n = new Set(every('attendees').map(addressText)).size;
@@ -317,7 +330,7 @@
   }
 
   return {
-    connectorFields, cutList, cutText, contextFor, recipientsOf, addressText, formatWhen, durationText,
+    connectorFields, cutList, cutText, contextFor, hasUnreadFields, recipientsOf, addressText, formatWhen, durationText,
     SHOWN, MORE_SHOWN, SUBJECT_SOFT, MAX_TEXT, MAX_ADDRESS, MAX_OTHERS, MAX_OTHER_TEXT, MAX_LIST,
   };
 }));
