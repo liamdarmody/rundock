@@ -76,6 +76,9 @@ const WRITES = [
   "python3 - <<'PY'\nimport shutil\nshutil.rmtree('.rundock')\nPY",
   "node - <<'JS'\nrequire('fs').rmSync('.claude', { recursive: true })\nJS",
   "python3 -c \"open('.mcp.json','w')\"", "node -e \"require('fs').writeFileSync('.mcp.json', '{}')\"",
+  // Perl's three-argument open names the file. (The two-argument form, with
+  // the mode written into the name, is not caught; see ARCHITECTURE.md.)
+  "perl -e \"open(F, '>', '.claude/hooks/pre.sh')\"",
   "python3 - <<'PY'\nopen('./.mcp.json','w')\nPY", "python3 - <<'PY'\nopen('.rundock/permission-hook.sh','w')\nPY",
   // Where the folder a word starts from is not certain, each literal cd in the
   // command is tried as well, chained where one follows another, and a loop
