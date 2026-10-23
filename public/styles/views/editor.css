@@ -170,6 +170,7 @@ body.light .tiptap-editor-pane .prop-wikilink:not(.dead) { color: var(--accent-t
 .link-notice-title { font-weight: 600; }
 .link-notice-detail { color: var(--text-2-strong); font-size: var(--caption); font-family: var(--font-mono); overflow-wrap: anywhere; }
 .link-notice.refused .link-notice-detail { color: var(--danger-text); font-family: inherit; }
+.link-notice-note { color: var(--text-2-strong); font-size: var(--caption); }
 /* External-edit conflict banner: a visible choice, never a silent overwrite. */
 #external-edit-banner { display: flex; align-items: center; gap: 10px; padding: 10px 24px; background: rgba(232,168,76,0.10); border-bottom: 1px solid rgba(232,168,76,0.35); font-size: var(--body); color: var(--text-1); }
 #external-edit-banner .banner-text { flex: 1; }

@@ -2270,11 +2270,13 @@ function wikilinkResolves(tree, target, fromPath) {
 // is the note the same link then finds. Nothing here can name a place outside
 // the workspace: '.' and '..' are refused, as is any name the file tree would
 // hide, and the server's create guard checks the same again.
-const LINK_NAME_FORBIDDEN_RE = /[:*?"<>|\\]/;
+// Control characters are refused with the rest, so a NUL never reaches the
+// server's file calls.
+const LINK_NAME_FORBIDDEN_RE = /[:*?"<>|\\\u0000-\u001f]/;
 function linkCreatePath(target, fromPath) {
   const name = String(target == null ? '' : target).split('#')[0].trim();
   if (!name) return { refusal: 'That link has no note name.' };
-  if (LINK_NAME_FORBIDDEN_RE.test(name)) return { refusal: 'Note and folder names cannot contain : * ? " < > | or a backslash.' };
+  if (LINK_NAME_FORBIDDEN_RE.test(name)) return { refusal: 'Note and folder names cannot contain : * ? " < > |, a backslash or a control character.' };
   const segments = name.split('/');
   if (segments.some((s) => s === '.' || s === '..')) return { refusal: 'That link points outside this workspace.' };
   if (segments.some((s) => !s.trim())) return { refusal: 'A folder in that link has no name.' };
@@ -2289,9 +2291,10 @@ function linkCreatePath(target, fromPath) {
 // paths on their way to the server are held here until it answers, so a
 // second click meanwhile does nothing rather than asking twice.
 const pendingLinkCreates = new Set();
+const NOTHING_CREATED = 'Nothing was created. Edit the link to change the name.';
 function createNoteFromLink(target) {
   const where = linkCreatePath(target, currentFilePath);
-  if (where.refusal) { showLinkNotice('That note cannot be created', where.refusal, true); return; }
+  if (where.refusal) { showLinkNotice('That note cannot be created', where.refusal, true, NOTHING_CREATED); return; }
   if (pendingLinkCreates.has(where.path) || !ws || ws.readyState !== WebSocket.OPEN) return;
   pendingLinkCreates.add(where.path);
   ws.send(JSON.stringify({ type: 'create_path', kind: 'note', path: where.path, content: '' }));
@@ -2308,20 +2311,23 @@ function settleLinkCreate(msg) {
     showLinkNotice('Created ' + msg.path.split('/').pop().replace(/\.md$/i, ''), msg.path, false);
   } else if (msg.reason !== 'already exists') {
     showLinkNotice('That note cannot be created',
-      msg.reason === 'invalid path' ? 'That place is outside this workspace, or hidden.' : String(msg.reason), true);
+      msg.reason === 'invalid path' ? 'That place is outside this workspace, or hidden.' : String(msg.reason), true, NOTHING_CREATED);
   }
   return true;
 }
 
-// One short notice at a time, gone by itself. Built from text nodes, never markup.
+// One short notice at a time, gone by itself. Built from text nodes, never
+// markup: a title, the detail, and an optional line on what to do next.
 let linkNoticeTimer = null;
-function showLinkNotice(title, detail, refused) {
+function showLinkNotice(title, detail, refused, note = null) {
   const old = document.querySelector('.link-notice');
   if (old) old.remove();
   const box = document.createElement('div');
   box.className = 'link-notice' + (refused ? ' refused' : '');
   box.setAttribute('role', 'status');
-  for (const [cls, text] of [['link-notice-title', title], ['link-notice-detail', detail]]) {
+  const lines = [['link-notice-title', title], ['link-notice-detail', detail]];
+  if (note) lines.push(['link-notice-note', note]);
+  for (const [cls, text] of lines) {
     const line = document.createElement('div');
     line.className = cls;
     line.textContent = text;

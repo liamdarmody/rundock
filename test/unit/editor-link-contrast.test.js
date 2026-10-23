@@ -88,6 +88,7 @@ const PAIRINGS = [
   ['notice title', ['.link-notice', 'color'], ['.link-notice', 'background']],
   ['notice path', ['.link-notice-detail', 'color'], ['.link-notice', 'background']],
   ['notice refusal', ['.link-notice.refused .link-notice-detail', 'color'], ['.link-notice', 'background']],
+  ['notice next step', ['.link-notice-note', 'color'], ['.link-notice', 'background']],
 ];
 
 describe('link colours in a note clear 4.5:1 in both themes', () => {

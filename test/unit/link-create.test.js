@@ -78,6 +78,12 @@ describe('what a link cannot create, said in plain words', () => {
     }
   });
 
+  test('a control character, so NUL and its kind never reach the server', () => {
+    for (const ch of ['\u0000', '\u0001', '\t', '\u001b', '\u001f']) {
+      assert.match(refused(`Q3${ch}plan`), /control character/, JSON.stringify(ch));
+    }
+  });
+
   test('anything that leaves the workspace or its own folder', () => {
     for (const target of ['../elsewhere', 'Archive/../../elsewhere', '..', '.', 'a/./b']) {
       assert.match(refused(target), /outside this workspace/, target);
@@ -167,6 +173,7 @@ describe('creating the note from a click', () => {
       assert.deepStrictEqual(sent, []);
       assert.ok(notice().classList.contains('refused'));
       assert.match(notice().textContent, /^That note cannot be created.*cannot contain/);
+      assert.match(notice().textContent, /Nothing was created\. Edit the link to change the name\.$/);
     } finally { cleanup(); }
   });
 
@@ -176,6 +183,7 @@ describe('creating the note from a click', () => {
       createNoteFromLink('Roadmap');
       settleLinkCreate({ type: 'create_error', path: 'Projects/Alpha/Roadmap.md', reason: 'invalid path' });
       assert.match(notice().textContent, /outside this workspace/);
+      assert.match(notice().textContent, /Nothing was created\. Edit the link to change the name\.$/);
     } finally { cleanup(); }
   });
 
