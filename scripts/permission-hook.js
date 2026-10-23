@@ -35,7 +35,7 @@ const fs = require('fs');
 const { isReadOnlyShellCommand, isDestructiveShellCommand, shellSegments } = require('../public/read-only-shell.js');
 // The Code-mode verdict and the development paths live beside this file, in
 // scripts/, so they are unpacked with it (package.json asarUnpack scripts/**).
-const { codeModeVerdict } = require('./code-mode-verdict.js');
+const { codeModeVerdict, keychainVerdict } = require('./code-mode-verdict.js');
 const { lexSegments } = require('./code-mode-parse.js');
 const devPaths = require('./dev-paths.js');
 const { refusalNotice, approvalNotice, sandboxBlocked } = require('./refusal-notice.js');
@@ -1470,7 +1470,7 @@ module.exports = {
   WORKSPACE_ANSWER_FILES, RUNDOCK_ANSWER_FILES, RUNTIME_GUARDED_ANSWER_FILES,
   boundaryCrossingsFor,
   REFUSED_CLAUDE_EDIT_DIRS, isReadOnlyShellCommand, isRundockAnswerFileAnywhere, isRundockWorkspaceSettingsFile, isAnswerFileOfAnyWorkspace, otherWorkspaceRootOf, isOtherWorkspaceAgentSurface,
-  INSTRUCTION_SURFACES, isInstructionSurface, hiddenHomeRootOf, alwaysAsksCrossing, SHELL_TOOLS,
+  INSTRUCTION_SURFACES, isInstructionSurface, hiddenHomeRootOf, alwaysAsksCrossing, SHELL_TOOLS, keychainPlatform,
 };
 
 if (require.main === module) main();
@@ -1525,9 +1525,27 @@ function alwaysAsksCrossing(access) {
 // with the server unreachable, slow or saying anything unexpected, there is
 // simply no line, and the decision is unaffected.
 const AGENT_NOTICE_ID = /^[A-Za-z0-9_-][A-Za-z0-9_.-]{0,127}$/;
+// THE PLATFORM THE KEYCHAIN GATE JUDGES FOR, which is this host's: the Keychain
+// rules are the Mac's. One test-only seam, so the end-to-end suites prove the
+// Mac's rules on any host: with RUNDOCK_TEST_SEAMS set to 1,
+// RUNDOCK_TEST_PLATFORM names another platform. Three limits keep it a seam:
+//   - it moves that gate and nothing else; the verdict's path handling and its
+//     checks on deletes always follow the real host;
+//   - it is never read in the app, whose hook always runs as the Electron
+//     binary, so it is inert there by construction;
+//   - Rundock takes both names out of the environment it starts agents with
+//     (getSpawnEnv in lib/runtime/claude.js), so its own launch environment
+//     cannot pass them to a hook.
+// `env` and `versions` are defaulted seams for the tests of these limits.
+function keychainPlatform(env = process.env, versions = process.versions) {
+  if (versions.electron) return process.platform;
+  return (env.RUNDOCK_TEST_SEAMS === '1' && env.RUNDOCK_TEST_PLATFORM) || process.platform;
+}
+
 // The token Rundock started this agent with, bound to its conversation. The
 // server's two hook routes accept nothing else, and act only for the
 // conversation it names (lib/auth).
+
 function hookTokenHeader() {
   const token = process.env.RUNDOCK_HOOK_TOKEN || '';
   return token ? { 'X-Rundock-Hook-Token': token } : {};
@@ -1781,13 +1799,19 @@ fetchAgentNotice((agentNotice) => {
   // it runs when what it changes can be got back with tools already to hand,
   // asks every time when it cannot, and asks once for the few acts other
   // people see first. It is computed for every Code-mode shell request, a
-  // boundary card included, so the card's class is always the verdict. It is
-  // never computed outside Code mode, where the grader is unchanged.
+  // boundary card included, so the card's class is always the verdict.
+  // Outside Code mode the grader is unchanged, except for a line that reads or
+  // changes the Keychain, which nothing but the card can stop in either mode:
+  // it carries the same verdict in Notes mode (keychainVerdict), so the card
+  // asks the same way, ahead of any saved answer.
   const shellCommand = SHELL_TOOLS.has(data && data.tool_name)
     && typeof ((data.tool_input || {}).command) === 'string' ? data.tool_input.command : null;
-  const verdict = (codeMode && shellCommand !== null)
-    ? codeModeVerdict({ toolName: data.tool_name, command: shellCommand, cwd, workspaceRoot: wsRoot, extraDirs })
+  const verdict = shellCommand !== null
+    ? (codeMode ? codeModeVerdict : keychainVerdict)({ toolName: data.tool_name, command: shellCommand, cwd, workspaceRoot: wsRoot, extraDirs, keychainPlatform: keychainPlatform() })
     : null;
+  // A line that reads or changes the Keychain: asked every time, with no folder
+  // or rule to remember, and refused when nobody can be asked.
+  const keychain = !!(verdict && verdict.reason === 'keychain');
   if (codeMode
       && !(access && (access.where === 'outside' || access.answerFile))
       && (!verdict || verdict.verdict === 'runs')) {
@@ -1840,9 +1864,10 @@ fetchAgentNotice((agentNotice) => {
     session_id: data.session_id,
     conversation_id: convoId,
     ...(advisory.length ? { advisory_outside_paths: advisory } : {}),
-    // THE VERDICT, under its own name, Code mode only. The server relays it by
-    // name and the browser draws the card from it; without it the browser
-    // grades as it always has, which is every Notes-mode request.
+    // THE VERDICT, under its own name: Code mode, and a Keychain line in Notes
+    // mode. The server relays it by name and the browser draws the card from
+    // it; without it the browser grades as it always has, which is every other
+    // Notes-mode request.
     ...(verdict ? { code_mode_verdict: verdict } : {}),
     // An answer-file write asks without claiming a crossing: it carries its own
     // reason, and the client keys its heading off this rather than off boundary.
@@ -1867,7 +1892,7 @@ fetchAgentNotice((agentNotice) => {
           // does is draw a button; what `grantable` does is decide whether a
           // stored grant may answer. Two questions, and they are answered by two
           // fields on purpose.
-          grant_dir: (boundaryCrossings[0] && boundaryCrossings[0].grantDir) || access.grantDir || null,
+          grant_dir: keychain ? null : ((boundaryCrossings[0] && boundaryCrossings[0].grantDir) || access.grantDir || null),
           // WHETHER A STANDING FOLDER GRANT MAY ANSWER THIS AT ALL.
           //
           // False for every shell command. A folder grant and a command
@@ -1945,6 +1970,8 @@ fetchAgentNotice((agentNotice) => {
   function unanswered(reason) {
     let why;
     if (answerFile) why = 'This file records your own permission answers, and it is never changed without asking, so it was refused rather than approved on your behalf.';
+    else if (keychain) why = 'This reads or changes a password or key stored in your Mac\'s Keychain, and it is never done without asking, so it was refused rather than approved on your behalf.'
+      + (verdict.also ? ' Part of it also cannot be undone.' : '');
     else if (alwaysAsks || destructive) why = 'This command cannot be undone, and it is never run without asking, so it was refused rather than approved on your behalf.';
     else if (asksOnce) why = 'This command was held for your approval and Rundock could not ask, so it was refused rather than approved on your behalf.';
     else if (crossingAlwaysAsks) why = 'This reaches a place Rundock asks about every time, and it is never done without asking, so it was refused rather than approved on your behalf.';

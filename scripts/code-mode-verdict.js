@@ -38,7 +38,18 @@ const RANK = { runs: 0, 'asks-once': 1, 'always-asks': 2 };
 const RUNS = Object.freeze({ verdict: 'runs' });
 const once = (rule, extra) => ({ verdict: 'asks-once', rule, ...(extra || {}) });
 const always = (reason, extra) => ({ verdict: 'always-asks', reason, ...(extra || {}) });
-const stricter = (a, b) => (RANK[b.verdict] > RANK[a.verdict] ? b : a);
+// Between two reasons to always ask, the first in the line is the one given,
+// except that a Keychain read (see judgeSecurity) is always named. Nothing is
+// lost by that: the first other reason is kept beside it, as `also`, so the
+// card for a line that reads the Keychain and deletes unsaved work says both.
+const KEYCHAIN = 'keychain';
+function stricter(a, b) {
+  if (RANK[a.verdict] !== RANK[b.verdict]) return RANK[b.verdict] > RANK[a.verdict] ? b : a;
+  if (a.reason !== KEYCHAIN && b.reason !== KEYCHAIN) return a;
+  const named = a.reason === KEYCHAIN ? a : b;
+  const also = [a, b].map(v => (v.reason === KEYCHAIN ? v.also : v)).find(Boolean);
+  return also ? { ...named, also } : named;
+}
 
 const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'fish']);
 const FETCHERS = new Set(['curl', 'wget', 'irm', 'iwr', 'invoke-restmethod', 'invoke-webrequest']);
@@ -60,6 +71,9 @@ function codeModeVerdict(opts) {
   const ctx = {
     dialect: opts.toolName === 'PowerShell' ? 'ps' : 'bash',
     platform, pmod,
+    // Where the Keychain rules apply: this host unless a test names another.
+    // Path handling and every other rule follow `platform`, the real host.
+    keychainPlatform: opts.keychainPlatform || platform,
     fold: platform === 'darwin' || platform === 'win32',
     home: canonical(home),
     env: opts.env || process.env,
@@ -99,8 +113,15 @@ function judgeLine(text, ctx, depth = 0) {
   // verdict reads; see judgeGit.
   if (gitEnvironmentIn(text, ctx)) ctx = { ...ctx, gitRedirected: true };
   // Here-document bodies are data, not commands, unless a shell reads them.
+  // One that never ends leaves the line unreadable; what is known of it (see
+  // `unfinished` in code-mode-parse.js) is still read, for the Keychain alone.
   const h = stripHeredocs(text, ctx.dialect);
-  if (!h.ok) return always('unreadable-command');
+  if (!h.ok) return stricter(always('unreadable-command'), h.unfinished ? judgeStripped(h.unfinished, inert(ctx), depth + 1) : RUNS);
+  return judgeStripped(h, ctx, depth);
+}
+
+// A line with its here-document bodies cut out: its commands, strictest wins.
+function judgeStripped(h, ctx, depth) {
   let result = RUNS;
   for (const b of h.bodies) if (b.expands) result = stricter(result, judgeSubstitutions(b.body, ctx, depth, true));
   const segments = lexSegments(h.text, ctx.dialect);
@@ -129,7 +150,7 @@ function judgeLine(text, ctx, depth = 0) {
     const u = unwrap(words, ctx);
     if (!u) { prev = null; continue; }
     if (u.unreadable) { result = stricter(result, always('unreadable-command')); prev = null; continue; }
-    if (u.elevated) { result = stricter(result, always('elevation')); prev = u; continue; }
+    if (u.elevated) { result = stricter(result, judgeElevated(u, ctx)); prev = u; continue; }
     if (/(^|[^<])<<(?!<)/.test(seg.text) && SHELLS.has(u.verb)) shellReadsHeredoc = true;
     // A here-string (`<<< word`) is data for the command, not an argument,
     // except to a shell, which runs it.
@@ -282,6 +303,39 @@ function unwrap(words, ctx) {
 }
 const UNREADABLE = Object.freeze({ verb: null, args: [], words: [], elevated: false, unreadable: true });
 
+// READ FOR THE KEYCHAIN ALONE. Where the answer is already Always asks
+// (elevation, an unreadable line), the rest is read only to name a Keychain
+// command, so it is read with no disk or git facts. Anything else it finds is
+// dropped by `stricter`, since the reason already given comes first.
+const INERT = Object.freeze({
+  exists: () => false, gitTop: () => null, gitStatus: () => ({ ok: false }), currentBranch: () => null,
+  defaultBranches: () => ['main', 'master'], isTag: () => false, isSymlink: () => false, readList: () => null,
+});
+const inert = ctx => ({ ...ctx, seam: INERT, canonical: p => ctx.pmod.resolve(p) });
+
+// ELEVATION ALWAYS ASKS. What sudo or doas runs is read as well, for the
+// Keychain alone: past their own options, word by word rather than as a new
+// line, and through no more than MAX_DEPTH elevations, so a long chain of them
+// costs little more than reading it once.
+const ELEVATION_VALUE_FLAGS = 'aCDghpRrTtUu';
+const ELEVATION_VALUE_LONG = /^--(user|group|host|prompt|chdir|chroot|close-from|role|type|command-timeout|other-user)$/;
+function judgeElevated(u, ctx) {
+  const elevations = (ctx.elevations || 0) + 1;
+  if (elevations > MAX_DEPTH || ctx.dialect !== 'bash' || !['sudo', 'doas'].includes(verbOf(u.words[0].text, ctx))) return always('elevation');
+  const w = u.words.slice(1);
+  while (w.length && /^-./.test(w[0].text)) {
+    const f = w.shift().text;
+    if (f === '--') break;
+    if (ELEVATION_VALUE_LONG.test(f)) { w.shift(); continue; }
+    // A short option taking a value takes the next word when it ends the group.
+    if (!/^--/.test(f) && [...f.slice(1)].findIndex(c => ELEVATION_VALUE_FLAGS.includes(c)) === f.length - 2) w.shift();
+  }
+  const quiet = { ...inert(ctx), elevations };
+  const inner = unwrap(w, quiet);
+  if (!inner || inner.unreadable) return always('elevation');
+  return stricter(always('elevation'), inner.elevated ? judgeElevated(inner, quiet) : judgeCommand(inner, quiet));
+}
+
 // THE WRAPPERS' OWN OPTIONS, as far as they are modelled: the words left once
 // the wrapper and its options are removed, 'lookup' for a command that only
 // names a program, or null for an option not modelled here.
@@ -427,6 +481,8 @@ function judgeCommand(u, ctx, { piped, prev } = {}) {
   }
   if (v === 'xargs') return judgeXargs(a, ctx);
   if (ctx.dialect === 'bash' && v === 'find') return judgeFind(a, ctx);
+  // The Keychain is the Mac's: elsewhere a `security` is another program.
+  if (v === 'security' && ctx.keychainPlatform === 'darwin') return judgeSecurity(a);
 
   // Disks, the machine, publishing, containers, git.
   if (v === 'dd' || /^mkfs(\.|$)/.test(v)) return always('disk');
@@ -523,6 +579,33 @@ function inner(arg, ctx, dialect) {
 }
 function knownCmdVars(text) {
   return String(text).replace(/%(USERPROFILE|TEMP|TMP|LOCALAPPDATA|APPDATA)%/gi, '').indexOf('%') === -1;
+}
+
+// THE KEYCHAIN. On a Mac the runtime keeps its live sign-in token there, and
+// the command sandbox lets every command reach it, because the runtime signs
+// in through the same service: a sandboxed `security` searches the Keychain
+// like any other. So `security` always asks, unless it only displays the
+// keychain list or settings, checks a certificate or prints help: these exact
+// names, so a shortened or misspelled one asks rather than being guessed at.
+// A password lookup without -w or -g asks too: it prints the item's account
+// and service, which is how the command that reads the token finds it. -i and
+// -p read further commands from stdin, which nothing here sees.
+const SECURITY_DISPLAYS = new Set(['help', 'error', 'show-keychain-info', 'verify-cert', 'find-identity']);
+// These display without -s and set the list, or the default, with it.
+const SECURITY_DISPLAYS_UNLESS_SET = new Set(['list-keychains', 'default-keychain', 'login-keychain']);
+function judgeSecurity(args) {
+  let i = 0;
+  for (; i < args.length && /^-./.test(args[i].text) && args[i].text !== '--'; i++) {
+    if (!/^-[hlqv]+$/.test(args[i].text)) return always(KEYCHAIN);
+  }
+  if (args[i] && args[i].text === '--') i++;
+  const sub = args[i];
+  if (!sub) return RUNS; // with no command, it prints its list of commands
+  // A name only known when the line runs, or a pattern, keeps its `$` or `*`
+  // here, so it never matches a display name and asks.
+  if (SECURITY_DISPLAYS.has(sub.text)) return RUNS;
+  if (SECURITY_DISPLAYS_UNLESS_SET.has(sub.text) && !args.slice(i + 1).some(w => w.expands || /^-[A-Za-z]*s/.test(w.text))) return RUNS;
+  return always(KEYCHAIN);
 }
 
 function judgeDocker(v, t) {
@@ -739,7 +822,7 @@ function judgeFind(args, ctx) {
     const u = unwrap(cmd, ctx);
     if (!u) continue;
     if (u.unreadable) return always('unreadable-command');
-    if (u.elevated) return always('elevation');
+    if (u.elevated) return judgeElevated(u, ctx);
     if (['rm', 'unlink', 'rmdir', 'shred'].includes(u.verb)) {
       result = stricter(result, judgeDelete(startTargets, { bulk: true, kind: 'find' }, ctx));
     } else {
@@ -764,7 +847,7 @@ function judgeXargs(args, ctx) {
   const u = unwrap(ws, ctx);
   if (!u) return RUNS;
   if (u.unreadable) return always('unreadable-command');
-  if (u.elevated) return always('elevation');
+  if (u.elevated) return judgeElevated(u, ctx);
   return judgeCommand(u, ctx, { piped: true });
 }
 
@@ -1073,4 +1156,15 @@ function strip(ref) {
   return ref.replace(/^refs\/heads\//, '').replace(/^refs\/tags\//, '');
 }
 
-module.exports = { codeModeVerdict, RULES };
+// THE KEYCHAIN IN NOTES MODE, which has no verdict of its own: the same
+// reading of the line, first with no disk or git facts (none of them decides
+// whether a line reaches the Keychain), and null when it does not. Only for a
+// line that does are the facts read, so its card names what else on it cannot
+// be undone, as Code mode's does; should that reading fail, the Keychain alone.
+function keychainVerdict(opts) {
+  if (codeModeVerdict({ ...opts, context: {} }).reason !== KEYCHAIN) return null;
+  const v = codeModeVerdict(opts);
+  return v.reason === KEYCHAIN ? v : always(KEYCHAIN);
+}
+
+module.exports = { codeModeVerdict, keychainVerdict, RULES };

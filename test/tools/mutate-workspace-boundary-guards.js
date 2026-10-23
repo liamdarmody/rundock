@@ -237,6 +237,19 @@ const CONNECTOR_CLIENT_FLOW = { src: path.join(ROOT, 'public', 'permissions.js')
 const CONNECTOR_STORE_FLOW = { src: path.join(ROOT, 'lib', 'workspace', 'boundary.js'), suite: 'test/integration/connector-approvals.test.js' };
 const CONNECTOR_HANDLER_FLOW = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'workspace.js'), suite: 'test/integration/connector-approvals.test.js' };
 
+// A shell command that reads or changes the Keychain: always asks, in both
+// modes. The reading of the line, the card's sentence and Codex's grading are
+// proven by the suite that drives them in process; the hook's own guards,
+// through the real hook, server and card.
+const KEYCHAIN_VERDICT = { src: path.join(ROOT, 'scripts', 'code-mode-verdict.js'), suite: 'test/unit/keychain-commands.test.js' };
+const KEYCHAIN_CLIENT = { src: path.join(ROOT, 'public', 'permissions.js'), suite: 'test/unit/keychain-commands.test.js' };
+const KEYCHAIN_CODEX = { src: path.join(ROOT, 'lib', 'runtime', 'codex-approval.js'), suite: 'test/unit/keychain-commands.test.js' };
+const KEYCHAIN_PARSE = { src: path.join(ROOT, 'scripts', 'code-mode-parse.js'), suite: 'test/unit/keychain-commands.test.js' };
+// The hook's platform seam: inert in the app, and never handed to an agent.
+const KEYCHAIN_HOOK_UNIT = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/keychain-commands.test.js' };
+const KEYCHAIN_SPAWN_ENV = { src: path.join(ROOT, 'lib', 'runtime', 'claude.js'), suite: 'test/unit/claude-runtime-lib.test.js' };
+const KEYCHAIN_HOOK_FLOW = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/integration/keychain-approvals.test.js' };
+
 const MUTATIONS = [
   // ===== ONE DIRECTORY UNDER TWO NAMES IS ONE IDENTITY =====
   // Compare unresolved again and every symlink, alias and case spelling of
@@ -1005,8 +1018,8 @@ const MUTATIONS = [
     "  const gone = new Set(want.restores ? st.deleted || [] : []);",
     "  const gone = new Set();"],
   [CM_HOOK, "M14: the verdict is sent in Notes mode",
-    "  const verdict = (codeMode && shellCommand !== null)",
-    "  const verdict = (shellCommand !== null)"],
+    "    ? (codeMode ? codeModeVerdict : keychainVerdict)({ toolName: data.tool_name,",
+    "    ? codeModeVerdict({ toolName: data.tool_name,"],
   [CM_CLIENT, "M15: the client offers Always allow on Always asks",
     "    if (verdict && verdict.verdict) return verdict.verdict === 'asks-once';",
     "    if (verdict && verdict.verdict) return verdict.verdict !== 'runs';"],
@@ -1647,6 +1660,147 @@ const MUTATIONS = [
   [CONNECTOR_HOOK, 'Connector read: the time words lose availability',
     "const MCP_SUGGEST_TIME_WORDS = new Set(['time','times','slot','slots','availability','meeting','meetings']);",
     "const MCP_SUGGEST_TIME_WORDS = new Set(['time','times','slot','slots','meeting','meetings']);"],
+  // ===== A KEYCHAIN COMMAND ASKS EVERY TIME =====
+  // Stop reading `security` and every Keychain read runs in Code mode with no
+  // card; let anything unnamed run and the allowlist becomes a denylist of one.
+  [KEYCHAIN_VERDICT, 'Keychain: security is never read',
+    "  if (v === 'security' && ctx.keychainPlatform === 'darwin') return judgeSecurity(a);\n",
+    ''],
+  // Away from a Mac a `security` is somebody else's program.
+  [KEYCHAIN_VERDICT, 'Keychain: security is read as the Keychain on any host',
+    "  if (v === 'security' && ctx.keychainPlatform === 'darwin') return judgeSecurity(a);",
+    "  if (v === 'security') return judgeSecurity(a);"],
+  [KEYCHAIN_VERDICT, 'Keychain: the Keychain gate ignores the platform it is named',
+    '    keychainPlatform: opts.keychainPlatform || platform,',
+    '    keychainPlatform: platform,'],
+  [KEYCHAIN_VERDICT, 'Keychain: a subcommand not named as a display runs',
+    '  return always(KEYCHAIN);\n}\n\nfunction judgeDocker',
+    '  return RUNS;\n}\n\nfunction judgeDocker'],
+  [KEYCHAIN_VERDICT, 'Keychain: a password lookup without -w or -g runs',
+    '  if (SECURITY_DISPLAYS.has(sub.text)) return RUNS;',
+    "  if (SECURITY_DISPLAYS.has(sub.text) || (/^find-/.test(sub.text) && !args.some(w => /^-[wgp]$/.test(w.text)))) return RUNS;"],
+  [KEYCHAIN_VERDICT, 'Keychain: -s on a display command goes unnoticed',
+    '  if (SECURITY_DISPLAYS_UNLESS_SET.has(sub.text) && !args.slice(i + 1).some(w => w.expands || /^-[A-Za-z]*s/.test(w.text))) return RUNS;',
+    '  if (SECURITY_DISPLAYS_UNLESS_SET.has(sub.text)) return RUNS;'],
+  [KEYCHAIN_VERDICT, 'Keychain: interactive mode runs',
+    '    if (!/^-[hlqv]+$/.test(args[i].text)) return always(KEYCHAIN);',
+    '    if (!/^-[hilpqv]+$/.test(args[i].text)) return always(KEYCHAIN);'],
+  // The other direction: a display asking is a card on everyday code signing.
+  [KEYCHAIN_VERDICT, 'Keychain: listing code-signing identities asks',
+    "const SECURITY_DISPLAYS = new Set(['help', 'error', 'show-keychain-info', 'verify-cert', 'find-identity']);",
+    "const SECURITY_DISPLAYS = new Set(['help', 'error', 'show-keychain-info', 'verify-cert']);"],
+  // Lose the tie and a line that asks for another reason first hides the
+  // Keychain from Notes mode, which only hears a Keychain verdict.
+  [KEYCHAIN_VERDICT, 'Keychain: another reason to ask hides the Keychain',
+    '  if (a.reason !== KEYCHAIN && b.reason !== KEYCHAIN) return a;',
+    '  return a;'],
+  // Drop the other reason and a card for a line that reads the Keychain and
+  // deletes unsaved work no longer says what would be lost.
+  [KEYCHAIN_VERDICT, 'Keychain: the other reason on the line is dropped',
+    '  return also ? { ...named, also } : named;',
+    '  return named;'],
+  [KEYCHAIN_VERDICT, 'Keychain: a later reason is kept over an earlier one',
+    '  const also = [a, b].map(v =>',
+    '  const also = [b, a].map(v =>'],
+  [KEYCHAIN_CLIENT, 'Keychain: the card leaves out the other reason',
+    '    const also = verdict.also && REASON_COPY[verdict.also.reason];',
+    '    const also = null;'],
+  [KEYCHAIN_VERDICT, 'Keychain: what sudo runs is not read',
+    "  return stricter(always('elevation'), inner.elevated ? judgeElevated(inner, quiet) : judgeCommand(inner, quiet));",
+    "  return always('elevation');"],
+  // Read what sudo runs, or an unfinished here-document, with the facts and
+  // they ask git about everything they pass, for an answer that cannot change.
+  [KEYCHAIN_VERDICT, 'Keychain: what sudo runs is read with git',
+    '  const quiet = { ...inert(ctx), elevations };',
+    '  const quiet = { ...ctx, elevations };'],
+  [KEYCHAIN_VERDICT, 'Keychain: elevations are read however deep',
+    "  if (elevations > MAX_DEPTH || ctx.dialect !== 'bash'",
+    "  if (ctx.dialect !== 'bash'"],
+  [KEYCHAIN_VERDICT, "Keychain: sudo's short options are read as the command",
+    "    if (!/^--/.test(f) && [...f.slice(1)].findIndex(c => ELEVATION_VALUE_FLAGS.includes(c)) === f.length - 2) w.shift();\n",
+    ''],
+  [KEYCHAIN_VERDICT, "Keychain: sudo's long options are read as the command",
+    '    if (ELEVATION_VALUE_LONG.test(f)) { w.shift(); continue; }\n',
+    ''],
+  [KEYCHAIN_VERDICT, "Keychain: a value joined to a sudo option swallows the command",
+    'findIndex(c => ELEVATION_VALUE_FLAGS.includes(c)) === f.length - 2) w.shift();',
+    'findIndex(c => ELEVATION_VALUE_FLAGS.includes(c)) !== -1) w.shift();'],
+  [KEYCHAIN_VERDICT, 'Keychain: xargs and sudo is not read past',
+    '  if (u.elevated) return judgeElevated(u, ctx);\n  return judgeCommand(u, ctx, { piped: true });',
+    "  if (u.elevated) return always('elevation');\n  return judgeCommand(u, ctx, { piped: true });"],
+  [KEYCHAIN_VERDICT, 'Keychain: find -exec and sudo is not read past',
+    "    if (u.elevated) return judgeElevated(u, ctx);\n    if (['rm',",
+    "    if (u.elevated) return always('elevation');\n    if (['rm',"],
+  // The shell runs a line whose here-document never ends; reading none of it
+  // lets a Keychain read ride in on one in Notes mode.
+  [KEYCHAIN_VERDICT, 'Keychain: a here-document that never ends hides the line',
+    "  if (!h.ok) return stricter(always('unreadable-command'), h.unfinished ? judgeStripped(h.unfinished, inert(ctx), depth + 1) : RUNS);",
+    "  if (!h.ok) return always('unreadable-command');"],
+  [KEYCHAIN_VERDICT, 'Keychain: an unfinished here-document is read with git',
+    'judgeStripped(h.unfinished, inert(ctx), depth + 1)',
+    'judgeStripped(h.unfinished, ctx, depth + 1)'],
+  [KEYCHAIN_PARSE, 'Keychain: an unfinished here-document gives nothing to read',
+    '      if (j < 0) return { text: s, bodies, ok: false, unfinished: unfinished(out, bodies, s.slice(i + 1), markers[0]) };',
+    '      if (j < 0) return { text: s, bodies, ok: false };'],
+  // Read an unfinished body as commands and prose in it raises a Keychain card.
+  [KEYCHAIN_PARSE, "Keychain: an unfinished here-document's body is read as commands",
+    '  return { text, bodies: [...bodies, { body, expands: !marker.quoted }], ok: true };',
+    '  return { text: `${text}\n${body}`, bodies, ok: true };'],
+  [KEYCHAIN_VERDICT, 'Keychain: Notes mode is handed every verdict',
+    '  if (codeModeVerdict({ ...opts, context: {} }).reason !== KEYCHAIN) return null;\n',
+    ''],
+  [KEYCHAIN_VERDICT, 'Keychain: Notes mode finds nothing',
+    '  return v.reason === KEYCHAIN ? v : always(KEYCHAIN);',
+    '  return null;'],
+  [KEYCHAIN_VERDICT, 'Keychain: Notes mode reads no facts for its card',
+    '  const v = codeModeVerdict(opts);',
+    '  const v = codeModeVerdict({ ...opts, context: {} });'],
+  [KEYCHAIN_CLIENT, 'Keychain: the card says it cannot be undone',
+    "    'keychain': () => 'This reads or changes a password or key stored in your Mac\\'s Keychain, where sign-in tokens are kept.',\n",
+    ''],
+  [KEYCHAIN_CODEX, 'Keychain: a Codex escalation in Notes mode is graded as ordinary',
+    '  const verdict = (codeMode ? codeModeVerdict : keychainVerdict)({ toolName, command, cwd, workspaceRoot, extraDirs, home, keychainPlatform });',
+    '  const verdict = codeMode ? codeModeVerdict({ toolName, command, cwd, workspaceRoot, extraDirs, home, keychainPlatform }) : null;'],
+  [KEYCHAIN_CODEX, 'Keychain: a Codex Keychain card offers a folder to remember',
+    "        grant_dir: verdict && verdict.reason === 'keychain' ? null : ((crossings[0] && crossings[0].grantDir) || access.grantDir || null),",
+    '        grant_dir: (crossings[0] && crossings[0].grantDir) || access.grantDir || null,'],
+  // Through the real hook: Notes mode never asks the question, the refusal
+  // misstates why, and the card offers a folder to remember.
+  [KEYCHAIN_HOOK_FLOW, 'Keychain: Notes mode never asks',
+    '    ? (codeMode ? codeModeVerdict : keychainVerdict)({ toolName: data.tool_name,',
+    '    ? (codeMode ? codeModeVerdict : () => null)({ toolName: data.tool_name,'],
+  [KEYCHAIN_HOOK_FLOW, 'Keychain: refused unanswered as a command that cannot be undone',
+    '    else if (keychain) why = ',
+    '    else if (false) why = '],
+  [KEYCHAIN_HOOK_FLOW, 'Keychain: the refusal leaves out what cannot be undone',
+    "\n      + (verdict.also ? ' Part of it also cannot be undone.' : '')",
+    ''],
+  // The test seam: a platform named without its flag must change nothing, and
+  // with it the hook must judge for the platform named, or the end-to-end
+  // suite proves the Keychain rules on a Mac alone.
+  [KEYCHAIN_HOOK_FLOW, 'Keychain: the test platform counts without its flag',
+    "  return (env.RUNDOCK_TEST_SEAMS === '1' && env.RUNDOCK_TEST_PLATFORM) || process.platform;",
+    '  return env.RUNDOCK_TEST_PLATFORM || process.platform;'],
+  [KEYCHAIN_HOOK_UNIT, 'Keychain: the platform seam is read in the app',
+    '  if (versions.electron) return process.platform;\n',
+    ''],
+  [KEYCHAIN_SPAWN_ENV, "Keychain: an agent inherits the seam's flag",
+    '  delete env.RUNDOCK_TEST_SEAMS;\n',
+    ''],
+  [KEYCHAIN_SPAWN_ENV, "Keychain: an agent inherits the seam's platform",
+    '  delete env.RUNDOCK_TEST_PLATFORM;\n',
+    ''],
+  [KEYCHAIN_HOOK_FLOW, 'Keychain: the hook judges for its host whatever the test names',
+    'workspaceRoot: wsRoot, extraDirs, keychainPlatform: keychainPlatform() })',
+    'workspaceRoot: wsRoot, extraDirs })'],
+  // Hand the seam to the whole verdict and Windows path handling on this host
+  // lets Code mode run deletes it always asks about.
+  [KEYCHAIN_HOOK_FLOW, 'Keychain: the platform seam moves the whole verdict',
+    'workspaceRoot: wsRoot, extraDirs, keychainPlatform: keychainPlatform() })',
+    'workspaceRoot: wsRoot, extraDirs, platform: keychainPlatform() })'],
+  [KEYCHAIN_HOOK_FLOW, 'Keychain: the card offers a folder to remember',
+    '          grant_dir: keychain ? null : ((boundaryCrossings[0] && boundaryCrossings[0].grantDir) || access.grantDir || null),',
+    '          grant_dir: (boundaryCrossings[0] && boundaryCrossings[0].grantDir) || access.grantDir || null,'],
   // ===== STOP AND ASK AFTER A REFUSAL =====
   [STOP_ASK_HOOK, "Stop and ask: a denied card goes back to inviting another route",
     ": refusalNotice(result.reason === 'timeout' ? 'timeout' : 'denied', data.tool_name);",
