@@ -464,3 +464,67 @@ describe('a value the card cannot read never stops it drawing', () => {
     assert.match(document.querySelector('.approvals-dock-count').textContent, /1 waiting/);
   });
 });
+
+// The thresholds for "Show full …" hold in a card the width of the thread. In
+// the 440px approvals dock a shorter body or subject is clamped too, and text
+// cut short with nothing to open it is text a person approves unread. jsdom
+// lays nothing out, so a browser's measurements are stubbed: a preview that
+// holds more than its lines show reports a taller scroll height.
+describe('a value the browser cuts short can always be opened', () => {
+  const tool = 'mcp__example_post__send_message';
+  const isPreview = (el) => el.classList.contains('permission-body') || el.classList.contains('permission-clamp');
+  function measured(cut, run) {
+    const proto = dom.window.HTMLElement.prototype;
+    Object.defineProperty(proto, 'scrollHeight', { configurable: true, get() { return cut(this) ? 120 : 40; } });
+    Object.defineProperty(proto, 'clientHeight', { configurable: true, get() { return 40; } });
+    try { return run(); } finally { delete proto.scrollHeight; delete proto.clientHeight; }
+  }
+  const boxIn = (dd) => dd.querySelector(':scope > details.permission-full');
+
+  test('a body under the thresholds that the browser cuts gets Show full message', () => {
+    const body = 'word '.repeat(40).trim();
+    assert.ok(body.length < 300 && !body.includes('\n'), 'under both thresholds');
+    const card = measured(isPreview, () => render(tool, { to: 'a@example.org', subject: 's', body }));
+    const box = boxIn(row(card, 'Message'));
+    assert.ok(box, 'the whole message can be opened');
+    assert.strictEqual(text(box.querySelector('summary')), 'Show full message');
+    assert.strictEqual(text(box.querySelector('.permission-full-text')), body);
+  });
+
+  test('a subject under the threshold that the browser cuts gets Show full subject', () => {
+    const subject = 'Quarterly numbers for the board, with the hiring plan and the open budget questions';
+    assert.ok(subject.length < 120);
+    const card = measured(isPreview, () => render(tool, { to: 'a@example.org', subject, body: 'b' }));
+    const box = boxIn(row(card, 'Subject'));
+    assert.ok(box);
+    assert.strictEqual(text(box.querySelector('summary')), 'Show full subject');
+    assert.strictEqual(text(box.querySelector('.permission-full-subject')), subject);
+  });
+
+  test('a title the browser cuts gets Show full title', () => {
+    const card = measured(isPreview, () => render('mcp__example_calendar__create_event', { title: 'Planning across every team for next year' }));
+    const box = boxIn(row(card, 'Title'));
+    assert.ok(box);
+    assert.strictEqual(text(box.querySelector('summary')), 'Show full title');
+    assert.strictEqual(text(box.querySelector('.permission-full-text')), 'Planning across every team for next year');
+  });
+
+  test('nothing cut, nothing to open', () => {
+    const card = measured(() => false, () => render(tool, { to: 'a@example.org', subject: 'Short', body: 'Short.' }));
+    assert.strictEqual(card.querySelector('details.permission-full'), null);
+  });
+
+  test('a card drawn while the dock was hidden is measured again once the dock shows', () => {
+    const dock = document.getElementById('approvals-dock');
+    document.querySelector('.approvals-dock-list').innerHTML = '';
+    dock.hidden = true;
+    const body = 'word '.repeat(40).trim();
+    // A hidden element measures nothing, so a preview reads as cut only once
+    // the dock is shown.
+    measured((el) => isPreview(el) && !dock.hidden,
+      () => chat.handleOwnerlessPermissionRequest({ request_id: 'dock-cut', request: { tool_name: tool, input: { to: 'a@example.org', subject: 's', body } } }));
+    assert.strictEqual(dock.hidden, false);
+    const card = document.getElementById('perm-dock-cut');
+    assert.ok(boxIn(row(card, 'Message')), 'the box is there once the dock can measure it');
+  });
+});

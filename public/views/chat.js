@@ -752,6 +752,45 @@ function nameTheFolderHint() {
 const SANDBOX_RETRY_HINT = 'This one is the operating system refusing a write outside your workspace, '
   + 'because Keep agents inside this workspace is on in Settings under Permissions.';
 
+// The box that opens a clamped value in full, by the kind of value it holds:
+// its label, and the class of the element holding the whole text.
+const FULL_TEXT_BOXES = {
+  subject: ['Show full subject', 'permission-full-subject'],
+  title: ['Show full title', 'permission-full-text'],
+  message: ['Show full message', 'permission-full-text'],
+};
+function fullTextBox(kind, text) {
+  const [label, cls] = FULL_TEXT_BOXES[kind];
+  const box = document.createElement('details');
+  box.className = 'permission-full';
+  const summary = document.createElement('summary');
+  summary.textContent = label;
+  const whole = document.createElement('div');
+  whole.className = cls;
+  whole.textContent = text;
+  box.append(summary, whole);
+  return box;
+}
+
+// A VALUE THE BROWSER HAS CUT SHORT CAN ALWAYS BE OPENED. The field box offers
+// the whole text when a value passes the model's thresholds, which hold in a
+// card the width of the thread. A narrower host, such as the approvals dock,
+// clamps shorter values too, and text cut short with nothing to open it is
+// text a person approves unread. So once a card is on the page, and again when
+// a hidden host is shown, any preview whose content overflows its lines gets
+// the same box. A preview under the thresholds holds its whole value, so the
+// box is made from what it holds.
+function revealClampedText(scope) {
+  if (!scope) return;
+  for (const shown of scope.querySelectorAll('.permission-fields [data-full]')) {
+    const dd = shown.parentElement;
+    if (!dd || dd.querySelector(':scope > details.permission-full')) continue;
+    if (!(shown.scrollHeight > shown.clientHeight + 1)) continue;
+    if (!FULL_TEXT_BOXES[shown.dataset.full]) continue;
+    dd.append(fullTextBox(shown.dataset.full, shown.textContent));
+  }
+}
+
 // THE FIELDS OF A CONNECTOR REQUEST, built as elements with every value set as
 // text. Each value is an agent's: an address or a subject can carry markup, a
 // right-to-left override or a zero-width character, and none of it may become
@@ -807,15 +846,19 @@ function connectorFieldsElement(f, toolName) {
     if (list.length > F.MAX_LIST) out.push(el('span', 'permission-line permission-cut', `… and ${list.length - F.MAX_LIST} more addresses`));
     return out;
   };
-  const box = (label, content) => { const d = el('details', 'permission-full'); d.append(el('summary', '', label), content); return d; };
-  const clamped = (text, none, label, full) => (text
-    ? [el('span', 'permission-clamp', text), ...(text.length > F.SUBJECT_SOFT ? [box(label, el('div', full, text))] : [])]
+  const box = (kind, text) => fullTextBox(kind, text);
+  // A clamped value carries the kind of box that opens it, so one the browser
+  // cuts shorter than the thresholds expect can be given its box once drawn
+  // (revealClampedText).
+  const preview = (tag, cls, text, kind) => { const n = el(tag, cls, text); n.dataset.full = kind; return n; };
+  const clamped = (text, none, kind) => (text
+    ? [preview('span', 'permission-clamp', text, kind), ...(text.length > F.SUBJECT_SOFT ? [box(kind, text)] : [])]
     : [empty(none)]);
   const message = (text) => {
     const body = F.cutText(text);
-    const parts = body.full ? [el('div', 'permission-body', body.preview)] : [empty('(empty)')];
+    const parts = body.full ? [preview('div', 'permission-body', body.preview, 'message')] : [empty('(empty)')];
     if (body.moreLines) parts.push(el('span', 'permission-cut', `… ${body.moreLines} more ${body.moreLines === 1 ? 'line' : 'lines'}`));
-    if (body.cut) parts.push(box('Show full message', el('div', 'permission-full-text', body.full + (body.overflow ? `\n… (${body.overflow} more characters)` : ''))));
+    if (body.cut) parts.push(box('message', body.full + (body.overflow ? `\n… (${body.overflow} more characters)` : '')));
     return parts;
   };
   // One row under the field's own label, or, for a field found under more than
@@ -829,10 +872,10 @@ function connectorFieldsElement(f, toolName) {
     field('to', 'To', (list) => people(list, '(none)'), true);
     field('cc', 'Cc', (list) => people(list, '(none)'));
     field('bcc', 'Bcc', (list) => everyone(list, '(none)'));
-    field('subject', 'Subject', (text) => clamped(text, '(no subject)', 'Show full subject', 'permission-full-subject'), true);
+    field('subject', 'Subject', (text) => clamped(text, '(no subject)', 'subject'), true);
     field('body', 'Message', message, true);
   } else {
-    field('title', 'Title', (text) => clamped(text, '(untitled)', 'Show full title', 'permission-full-text'), true);
+    field('title', 'Title', (text) => clamped(text, '(untitled)', 'title'), true);
     const when = (w) => [w ? document.createTextNode(F.formatWhen(w)) : empty('(not set)')];
     const length = !f.aliases.start && !f.aliases.end && F.durationText(f.start, f.end);
     field('start', 'Starts', when, true);
@@ -1203,6 +1246,7 @@ function renderPermissionCard(d, convoId, host) {
   // take and no thinking indicator to pause.
   if (host) {
     host.appendChild(card);
+    revealClampedText(card);
     return;
   }
 
@@ -1236,6 +1280,7 @@ function renderPermissionCard(d, convoId, host) {
   } catch (e) { live = null; }
   if (live && live.parentNode === m) m.insertBefore(card, live);
   else m.appendChild(card);
+  revealClampedText(card);
   drawRepeatHint(card, convoId, requestId);
   scrollBottom();
 }
@@ -1432,6 +1477,8 @@ function updateApprovalsDock() {
   if (!dock || !list) return;
   const waiting = list.querySelectorAll('[data-perm-action="allow"]').length;
   dock.hidden = list.children.length === 0;
+  // A card drawn while the dock was hidden measured nothing; measure it now.
+  if (!dock.hidden) revealClampedText(list);
   const count = dock.querySelector('.approvals-dock-count');
   if (count) count.textContent = waiting === 1 ? '1 waiting' : `${waiting} waiting`;
 }

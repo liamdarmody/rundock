@@ -1990,6 +1990,17 @@ const MUTATIONS = [
   [CONNECTOR_FIELDS_MODEL, 'Connector card: an impossible time is printed as a time',
     '    if (m && !(realDay(+m[1], +m[2], +m[3]) && realTime(+m[4], +m[5]))) return { raw: clip(s, 120) };\n',
     ''],
+  // ===== TEXT CUT SHORT CAN ALWAYS BE OPENED =====
+  // Trust the thresholds alone and a value the dock clamps sooner is cut with
+  // nothing to open it.
+  [CONNECTOR_CARD_VIEW, 'Connector card: a preview the browser cuts gets nothing to open it',
+    '    if (!(shown.scrollHeight > shown.clientHeight + 1)) continue;',
+    '    continue;'],
+  // Measure only while drawing and a card drawn into the hidden dock is never
+  // measured at all.
+  [CONNECTOR_CARD_VIEW, 'Connector card: a card drawn into the hidden dock is never measured again',
+    '  if (!dock.hidden) revealClampedText(list);\n',
+    ''],
   // ===== RECONNECTING CLAUDE CODE IS FOR RUNDOCK'S OWN WINDOW =====
   // Open the reconnect routes and any process on this machine can open a
   // console here, or spend a turn checking, with no key at all.
