@@ -265,6 +265,8 @@ const GUARD_RUNS_LAUNCHER = { src: path.join(ROOT, 'lib', 'workspace', 'scaffold
 const GUARD_RUNS_CONNECTOR = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'team.js'), suite: 'test/unit/codex-what-runs-guard.test.js' };
 const GUARD_RUNS_CARD = { src: path.join(ROOT, 'public', 'permissions.js'), suite: 'test/unit/codex-what-runs-guard.test.js' };
 const GUARD_RUNS_LINE = { src: path.join(ROOT, 'lib', 'runtime', 'codex-glue.js'), suite: 'test/unit/codex-what-runs-guard.test.js' };
+// What agents are told about the connector files, against the card's words.
+const PROMPT_CONNECTORS = { src: path.join(ROOT, 'lib', 'agents', 'prompt.js'), suite: 'test/unit/discovery.test.js' };
 // What Rundock decides for an agent's environment, never inherited from its own.
 const SPAWN_ENV = { src: path.join(ROOT, 'lib', 'runtime', 'claude.js'), suite: 'test/unit/workspace-modes.test.js' };
 
@@ -1895,6 +1897,12 @@ const MUTATIONS = [
   [VERDICT, 'launchctl: a subcommand piped in through xargs runs',
     "  if (!args.length) return piped ? always('unreadable-command') : RUNS;",
     '  if (!args.length) return RUNS;'],
+  [PROMPT_CONNECTORS, 'Prompt: the agent is told to put a credential value in the per-user file itself',
+    'and ask the person to add the value to .rundock/mcp-secrets.json themselves.',
+    'and put its value there.'],
+  [PROMPT_CONNECTORS, 'Prompt: the agent is told every edit of .mcp.json is refused whatever is approved',
+    'Rundock asks the person about every such edit, and the runtime you run on may protect that file as well, so it may refuse it even after the person allows it, which wastes their time.',
+    'that file is protected wherever it lives and every such attempt is refused, whatever the user approves, so trying and reporting the refusal wastes their time.'],
   // A stored grant over a parent of several workspaces must not answer for
   // another workspace's answer files.
   [BOUNDARY, 'Stored grant: another workspace\'s answer files are covered by a grant over their parent',

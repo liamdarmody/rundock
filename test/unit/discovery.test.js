@@ -545,6 +545,17 @@ describe('rosters and system prompt', () => {
     assert.ok(prompt.includes('.rundock/mcp-secrets.json'), 'the per-user file credential values belong in is named');
     assert.match(prompt, /CREDENTIAL VALUES DO NOT GO IN \.mcp\.json/,
       'and the file they must not go in is named unmissably, not implied');
+    // The per-user file is the person's, and a write to it asks every time, so
+    // the agent asks them to add the value, or tells them to expect the card;
+    // it never puts the value there as though nothing would ask.
+    assert.match(prompt, /ask the person to add the value to \.rundock\/mcp-secrets\.json themselves/,
+      'the agent asks the person to add a credential value');
+    assert.match(prompt, /Rundock shows them a card first, every time/, 'or says a card will ask, as the card does');
+    assert.doesNotMatch(prompt, /put its value there/, 'and is never told to write the value itself as though nothing asks');
+    // Saying every edit is refused whatever is approved would contradict the
+    // card, which says Claude Code may refuse it even after Allow.
+    assert.doesNotMatch(prompt, /every such attempt is refused, whatever the user approves/);
+    assert.match(prompt, /may refuse it even after the person allows it/, 'the prompt and the card say the same thing');
 
     // The original protections survive the rewrite.
     assert.ok(prompt.includes('claude.ai'), 'account connectors still point at where they are managed');
