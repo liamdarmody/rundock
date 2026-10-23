@@ -33,6 +33,7 @@ const at = (...p) => path.join(ROOT, ...p);
 const PANEL_SUITE = 'test/unit/frontmatter-links.test.js';
 
 const LINKS = { src: at('public', 'editor', 'markdown', 'prop-links.js'), suite: PANEL_SUITE };
+const RAW = { src: at('public', 'editor', 'markdown', 'frontmatter-edit.js'), suite: PANEL_SUITE };
 const PANEL = { src: at('public', 'editor', 'panels', 'properties.js'), suite: PANEL_SUITE };
 const PANEL_XSS = { src: at('public', 'editor', 'panels', 'properties.js'), suite: 'test/unit/callouts-and-properties.test.js' };
 const EDITOR = { src: at('public', 'editor', 'index.js'), suite: PANEL_SUITE };
@@ -64,6 +65,9 @@ const MUTATIONS = [
     '  if (!Array.isArray(parsed)) return null;'],
   [LINKS, 'nothing but a comment may follow an unquoted link',
     "  if (segs.length > 2 || (segs.length === 2 && !/^\\s+#/.test(segs[1].text))) return null;",
+    ''],
+  [RAW, 'only a list\'s own items count, not dashes nested inside them',
+    '    .filter((l) => l.search(/\\S/) === indent)\n',
     ''],
   [PANEL, 'the panel reads an unquoted link from the raw YAML',
     '    const unquoted = written ? unquotedLinkText(parsedValue, written.inline) : null;',

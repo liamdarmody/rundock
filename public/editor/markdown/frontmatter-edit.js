@@ -116,15 +116,20 @@ function locateKey(lines, key) {
 // A top-level key's value as written: `inline` is the rest of the key line,
 // `items` the text after each `- ` of a block list. Read-only; null when the
 // key cannot be located. Lets a reader see what YAML's parse has lost, such
-// as the exact name inside an unquoted [[link]].
+// as the exact name inside an unquoted [[link]]. Only dashes at the first
+// item's indent are the list's own items: a deeper one belongs to a nested
+// list or a block of text inside an item, and counting it would misalign
+// every item after it.
 export function rawValueText(raw, key) {
   if (typeof raw !== 'string' || !raw.startsWith('---')) return null;
   const lines = raw.split('\n');
   const loc = locateKey(lines, key);
   if (!loc) return null;
   const keyLine = lines[loc.keyLine];
-  const items = lines.slice(loc.valueStart, loc.valueEnd)
-    .filter((l) => /^\s*- /.test(l))
+  const dashed = lines.slice(loc.valueStart, loc.valueEnd).filter((l) => /^\s*- /.test(l));
+  const indent = dashed.length ? dashed[0].search(/\S/) : 0;
+  const items = dashed
+    .filter((l) => l.search(/\S/) === indent)
     .map((l) => l.replace(/^\s*- /, '').trim());
   return { inline: keyLine.slice(keyLine.indexOf(':') + 1).trim(), items };
 }

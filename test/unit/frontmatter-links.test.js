@@ -106,6 +106,24 @@ describe('an unquoted [[X]], which YAML reads as a nested list', () => {
     assert.equal(unquotedLinkText(parsed.list[1], items[1]), null, 'a quoted item is a string, read as one');
   });
 
+  test('only the list\'s own items count, not the dashes inside a nested list or a block of text', () => {
+    const src = [
+      '---',
+      'related:',
+      '  - [[Alpha]]',
+      '  - - nested',
+      '    - list',
+      '  - |',
+      '    - not an item',
+      '  - [[Beta]]',
+      '---',
+      '',
+    ].join('\n');
+    const fm = extractFrontmatter(src);
+    assert.equal(fm.parsed.related.length, 4, 'YAML reads four items');
+    assert.deepEqual(rawValueText(fm.raw, 'related').items, ['[[Alpha]]', '- nested', '|', '[[Beta]]']);
+  });
+
   test('a nested list that is not one link, or a quoted value, is left alone', () => {
     assert.equal(unquoted('pair'), null);
     assert.equal(unquoted('quoted'), null);
@@ -197,6 +215,16 @@ describe('the properties panel shows links inside values', () => {
     } finally { p.done(); }
   });
 
+  test('an unquoted link in a list that also holds a nested list or a block of text is a link', () => {
+    const src = '---\nrelated:\n  - [[Brief]]\n  - - nested\n    - list\n  - |\n    - not an item\n  - [[Plan]]\n---\n';
+    const p = mount(src);
+    try {
+      assert.deepEqual([...p.row('related').querySelectorAll('a.prop-wikilink')].map((a) => a.getAttribute('data-target')),
+        ['Brief', 'Plan']);
+      assert.equal(p.markdown(), src);
+    } finally { p.done(); }
+  });
+
   test('the links the Map counts and the panel does not are exactly the ones written down', () => {
     // The list in public/editor/markdown/prop-links.js, one line each.
     const src = [
@@ -207,12 +235,14 @@ describe('the properties panel shows links inside values', () => {
       'nested:',
       '  child: "[[In a nested object]]"',
       'flow: [[[In a flow list]]]',
+      '"quoted key": [[Under a quoted key]]',
       'source: "[the brief](Brief.md)"',
       '---',
       '',
     ].join('\n');
     const counted = extractLinks(extractFrontmatter(src).raw).filter((l) => l.kind !== 'embed').map((l) => l.target);
-    assert.deepEqual(counted, ['In a comment', 'After a value', 'In a key', 'In a nested object', 'In a flow list', 'Brief.md']);
+    assert.deepEqual(counted, ['In a comment', 'After a value', 'In a key', 'In a nested object', 'In a flow list',
+      'Under a quoted key', 'Brief.md']);
     const p = mount(src);
     try {
       assert.equal(p.props.querySelectorAll('a').length, 0, 'the panel draws none of them');

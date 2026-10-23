@@ -21,6 +21,8 @@
 //  - in a nested object's value: the panel hides nested objects;
 //  - unquoted inside a flow list, `key: [[[X]]]`: no raw line to read it from,
 //    so it shows as a nested value rather than guess at the name;
+//  - unquoted under a quoted key, `"my key": [[X]]`: the raw line is found by
+//    the key as written bare, so it too shows as a nested value;
 //  - a markdown link, [text](note.md): the panel shows it as text;
 //  - anywhere in frontmatter YAML cannot parse: the panel shows nothing.
 //
