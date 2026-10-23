@@ -74,6 +74,11 @@ const WRITES = [
   "node - <<'JS'\nrequire('fs').rmSync('.claude', { recursive: true })\nJS",
   "python3 -c \"open('.mcp.json','w')\"", "node -e \"require('fs').writeFileSync('.mcp.json', '{}')\"",
   "python3 - <<'PY'\nopen('./.mcp.json','w')\nPY", "python3 - <<'PY'\nopen('.rundock/permission-hook.sh','w')\nPY",
+  // A shell given its command with -c reads that word as commands, so what
+  // they write is judged as if typed: through common prefixes and a path too.
+  'sh -c "echo x > .mcp.json"', "bash -c 'rm -rf .claude'", "zsh -c 'cp a .claude/settings.json'", "bash -lc 'echo x >> .mcp.json'",
+  "env FOO=1 bash -c 'rm .mcp.json'", "/bin/sh -c 'touch .claude/hooks/x.sh'", "exec dash -c 'echo x > .mcp.json'",
+  "nohup sh -c 'rm -rf .rundock' &", "sudo -u someone sh -c 'echo x > .mcp.json'", "bash -e -c 'mv x.json .mcp.json'",
   // The forms that asked before this change, and still do.
   'echo x > .rundock/permissions.json', 'echo x >> .rundock/state.json', 'cat x > .claude/settings.local.json', 'tee .rundock/permissions.json',
   'echo x | tee -a .rundock/state.json', 'sed -i s/a/b/ .rundock/permissions.json', 'cp x .rundock/permissions.json', 'mv x .claude/settings.json',
@@ -118,6 +123,8 @@ describe('a command asks about an answer file only when it can write it', () => 
     'rm -rf {src,dist}', 'rm -rf .claude/{agents,skills}', 'rm -rf [!.]*', 'rm -rf .[!cmr]*', 'echo ${HOME}',
     // A `[` with no `]` after it is the character itself, not a class.
     '[ -f x.json ] && rm notes.txt', 'rm -f [ x.json', 'touch .[a',
+    // A shell's -c command that writes only ordinary files names none.
+    "bash -c 'echo hi > notes.txt'", "sh -c 'cat .mcp.json'", "bash -c 'ls .claude'",
     // Code naming only ordinary files names no answer file.
     "python3 - <<'PY'\nopen('notes.txt','w').write('x')\nprint('done')\nPY", "node -e \"require('fs').writeFileSync('x.json', 'w')\"",
   ];

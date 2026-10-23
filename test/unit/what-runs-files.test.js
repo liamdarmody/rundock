@@ -50,11 +50,12 @@ after(async () => {
 });
 
 // Each file, and the words its card must use: its heading, then why it asks.
+// The launchers are refused before any card (LAUNCHERS below), so they draw
+// none: Rundock writes them and puts any other change back.
 const LAUNCHER = { summary: /permission-summary">Wants to change Rundock's permission checks</, says: /starts Rundock's permission checks themselves/ };
 const RUNS = { summary: /permission-summary">Wants to change what runs outside the sandbox</, says: /decides what Rundock or Claude Code runs, outside the sandbox/ };
+const LAUNCHERS = ['.rundock/permission-hook.sh', '.rundock/permission-hook.cmd'];
 const TARGETS = [
-  { rel: '.rundock/permission-hook.sh', ...LAUNCHER },
-  { rel: '.rundock/permission-hook.cmd', ...LAUNCHER },
   { rel: '.mcp.json', ...RUNS },
   { rel: '.claude/settings.json', ...RUNS },
   { rel: '.claude/hooks/pre-tool.sh', ...RUNS },
@@ -78,6 +79,14 @@ function assertAlwaysAsks(r, what) {
   assert.strictEqual(r.live.decision, 'allow', `${what}: an approval on the card is honoured`);
   assert.strictEqual(r.dead.decision, 'deny', `${what}: refused when Rundock cannot be asked`);
   assert.match(r.dead.reason, /never changed without asking/, `${what}: and the agent is told why`);
+}
+// A launcher write: refused by the hook itself, with no request to the server.
+function assertRefused(r, what) {
+  assert.strictEqual(r.payload, null, `${what}: no card is raised`);
+  for (const [run, side] of [[r.live, 'with Rundock there'], [r.dead, 'with nobody to ask']]) {
+    assert.strictEqual(run.decision, 'deny', `${what}: refused ${side}`);
+    assert.match(run.reason, /starts its permission checks/, `${what}: and says why, ${side}`);
+  }
 }
 
 describe('the files that decide what runs always ask, through the real hook', { skip: SKIP }, () => {
@@ -110,6 +119,27 @@ describe('the files that decide what runs always ask, through the real hook', { 
         assertAlwaysAsks(await fx.judge(world, capture, deadPort, { tool: 'Bash', input: { command: moved }, cwd: world.ws, codeMode }), `${label}: ${moved}`);
         const ps = `Set-Content -Path ${rel} -Value x`;
         assertAlwaysAsks(await fx.judge(world, capture, deadPort, { tool: 'PowerShell', input: { command: ps }, cwd: world.ws, codeMode }), `${label}: ${ps}`);
+      }
+    });
+
+    test(`a launcher is refused, by every file tool and shell form, here and in another workspace (${label} mode)`, async () => {
+      for (const rel of LAUNCHERS) {
+        for (const ws of [world.ws, other]) {
+          const file_path = path.join(ws, ...rel.split('/'));
+          for (const [tool, input] of [
+            ['Write', { file_path, content: 'x' }],
+            ['Edit', { file_path, old_string: 'exit 0', new_string: 'exit 1' }],
+            ['MultiEdit', { file_path, edits: [{ old_string: 'exit 0', new_string: 'exit 1' }] }],
+          ]) {
+            assertRefused(await fx.judge(world, capture, deadPort, { tool, input, cwd: world.ws, codeMode }), `${label}: ${tool} ${file_path}`);
+          }
+        }
+        for (const form of SHELL_FORMS) {
+          const command = form.replace(/\bF\b/g, rel);
+          assertRefused(await fx.judge(world, capture, deadPort, { tool: 'Bash', input: { command }, cwd: world.ws, codeMode }), `${label}: ${command}`);
+        }
+        const elsewhere = `echo x > ${path.join(other, rel)}`;
+        assertRefused(await fx.judge(world, capture, deadPort, { tool: 'Bash', input: { command: elsewhere }, cwd: world.ws, codeMode }), `${label}: ${elsewhere}`);
       }
     });
 
@@ -180,8 +210,8 @@ describe('the files that decide what runs always ask, through the real hook', { 
     fs.mkdirSync(path.dirname(alias), { recursive: true });
     fs.symlinkSync(path.join('..', '.rundock', 'permission-hook.sh'), alias);
     for (const { codeMode, label } of MODES) {
-      assertAlwaysAsks(await fx.judge(world, capture, deadPort, { tool: 'Write', input: { file_path: alias, content: 'x' }, cwd: world.ws, codeMode }), `${label}: Write through the alias`);
-      assertAlwaysAsks(await fx.judge(world, capture, deadPort, { tool: 'Bash', input: { command: 'echo x > tools/hook.sh' }, cwd: world.ws, codeMode }), `${label}: a redirect through the alias`);
+      assertRefused(await fx.judge(world, capture, deadPort, { tool: 'Write', input: { file_path: alias, content: 'x' }, cwd: world.ws, codeMode }), `${label}: Write through the alias`);
+      assertRefused(await fx.judge(world, capture, deadPort, { tool: 'Bash', input: { command: 'echo x > tools/hook.sh' }, cwd: world.ws, codeMode }), `${label}: a redirect through the alias`);
     }
   });
 
@@ -273,6 +303,17 @@ describe('nothing stored answers it', { skip: SKIP }, () => {
           chat.setStandingToolAllows([]);
         }
       }
+    }
+  });
+
+  // A launcher draws a card only where the hook is not the one asking: a
+  // Codex agent's escalation that reaches one. That card names the checks.
+  test('a card drawn for a launcher names the permission checks it starts', () => {
+    for (const rel of LAUNCHERS) {
+      const p = path.join(world.ws, rel);
+      const html = ask({ subtype: 'can_use_tool', tool_name: 'WriteFile', input: { path: p, approvalKind: 'fileChange' }, answer_file: true, resolved_path: p, grant_dir: null });
+      assert.match(html, LAUNCHER.summary, `${rel}: the heading`);
+      assert.match(html, LAUNCHER.says, `${rel}: and the reason`);
     }
   });
 

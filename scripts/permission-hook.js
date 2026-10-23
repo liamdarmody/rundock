@@ -1649,6 +1649,35 @@ function heredocText(command, reading = null) {
 // code in a here-document carded. The word is still read as before; the
 // literals and commands inside it are read as well, at its command.
 const INLINE_CODE = { python: /^-[A-Za-z]*?c(.*)$/s, node: /^(?:-[A-Za-z]*?[ep]|--(?:eval|print)=?)(.*)$/s, ruby: /^-[A-Za-z]*?e(.*)$/s, perl: /^-[A-Za-z]*?[eE](.*)$/s };
+// A SHELL GIVEN ITS COMMAND WITH -c runs that word as commands, so it is read
+// as commands, as a here-document fed to a shell is: through the prefixes
+// that run what follows them, and the shell named by a path too. The command
+// is the first word after the options once `-c` (alone or in a bundle such as
+// `-lc`) has been given.
+const SHELL_NAMES = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'fish']);
+const RUNS_WHAT_FOLLOWS = new Set(['env', 'exec', 'command', 'nohup', 'nice', 'time', 'sudo', 'doas']);
+const PREFIX_TAKES_VALUE = { sudo: /^-[ugCDhpr]$/, doas: /^-[uC]$/, nice: /^-n$/, env: /^-[uS]$/ };
+function shellDashC(words) {
+  let i = 0;
+  for (let depth = 0; depth < 8; depth++) {
+    while (i < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i])) i++;
+    const lead = (words[i] || '').split('/').pop();
+    if (!RUNS_WHAT_FOLLOWS.has(lead)) break;
+    i++;
+    while (i < words.length && words[i].startsWith('-')) i += (PREFIX_TAKES_VALUE[lead] && PREFIX_TAKES_VALUE[lead].test(words[i])) ? 2 : 1;
+  }
+  if (!SHELL_NAMES.has((words[i] || '').split('/').pop())) return null;
+  let given = false;
+  for (let k = i + 1; k < words.length; k++) {
+    const w = words[k];
+    if (/^-[A-Za-z]*c[A-Za-z]*$/.test(w)) { given = true; continue; }
+    if (w === '-o' || w === '+o') { k++; continue; }
+    if (w.startsWith('-') || w.startsWith('+')) continue;
+    return given ? w : null;
+  }
+  return null;
+}
+
 function inlineCode(text, reading = null) {
   const literals = [];
   const names = [];
@@ -1659,6 +1688,8 @@ function inlineCode(text, reading = null) {
     if (at < 0) break;
     from = at + seg.text.length;
     const words = lexWords(seg.text).map(w => w.text);
+    const shellCommand = shellDashC(words);
+    if (shellCommand) commands.push({ text: shellCommand, at });
     let i = 0;
     while (i < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i])) i++;
     const family = interpreterFamily((words[i] || '').split('/').pop());
