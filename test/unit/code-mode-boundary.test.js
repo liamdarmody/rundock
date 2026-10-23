@@ -111,6 +111,17 @@ describe('a backslash escape is not a path', { skip: SKIP }, () => {
       }
     });
   }
+  // On macOS and Linux a backslash in a Bash word is never a separator at all
+  // (see shell-code-boundary.test.js). On a Windows host, Git Bash words keep
+  // the Windows reading, and there a lone escape is what this rule drops.
+  for (const codeMode of [true, false]) {
+    test(`and on Windows, where a backslash is a separator (${codeMode ? 'Code' : 'Notes'} mode)`, () => {
+      for (const c of ["printf 'a b' | tr ' ' '\\n'", "tr '\\t' '\\n' < notes.txt", "printf '%s\\0' a b"]) {
+        const r = hook.classifyShellAccess('Bash', { command: c }, 'C:\\Users\\dev\\ws', [], 'C:\\Users\\dev', true, { platform: 'win32', codeMode });
+        assert.strictEqual(r, null, c);
+      }
+    });
+  }
   test('the escape is dropped, and nothing real beside it is', () => {
     const a = scan("tr '\\n' ' ' < ~/elsewhere/x.txt");
     assert.deepStrictEqual(a.crossings.map(c => c.path), [fx.real(path.join(world.home, 'elsewhere', 'x.txt'))]);
