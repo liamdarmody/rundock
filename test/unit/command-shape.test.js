@@ -236,6 +236,7 @@ describe('everything else runs as before', () => {
 
     test('quoted text that runs something, or follows a VAR=value or a quoted word, is judged on its own', () => {
       assert.strictEqual(verdict('echo "$(npx playwright test)" | cat').verdict, 'refuse', 'a substitution in quotes runs a command');
+      assert.strictEqual(verdict('echo "$(true) npx playwright test" | cat').verdict, 'pass', 'the text round a substitution is still data');
       assert.strictEqual(verdict('echo $(true) "npx playwright test" | cat').verdict, 'pass', 'a substitution marks only its own word');
       assert.strictEqual(verdict('A=1 echo "npx playwright test" | cat').verdict, 'pass', 'the VAR=value takes its own mark with it');
       assert.strictEqual(verdict('echo "x" npx\\ playwright\\ test | cat').verdict, 'refuse', 'a word after a quoted one is not quoted');
@@ -283,6 +284,26 @@ describe('everything else runs as before', () => {
       assert.strictEqual(r.verdict, 'refuse');
       assert.strictEqual(r.pattern, 'node /work/scratch/test-*/*.js');
       assert.strictEqual(classify('"/work/my tools/run" x | cat', ['/work/my tools/run *']).verdict, 'refuse');
+    });
+  });
+
+  describe('a command substitution runs a command, and is matched like one', () => {
+    for (const cmd of ['echo "$(gh pr list)" | cat', 'echo $(gh pr list) | cat', 'X=$(gh pr list) && echo $X',
+      'echo "`gh pr list`" | cat', 'echo `gh pr list` | cat']) {
+      test(cmd, () => {
+        const r = verdict(cmd);
+        assert.strictEqual(r.verdict, 'refuse');
+        assert.strictEqual(r.segment, 'gh pr list');
+        assert.ok(r.wrappers.includes('substitution'));
+      });
+    }
+
+    test('in a here-document whose body expands, but not in a quoted one or in single quotes', () => {
+      const r = verdict('cat <<EOF > /work/f\n$(npx playwright test)\nEOF');
+      assert.strictEqual(r.verdict, 'refuse');
+      assert.strictEqual(r.segment, 'npx playwright test');
+      assert.strictEqual(verdict("cat <<'EOF' > /work/f\n$(npx playwright test)\nEOF").verdict, 'pass');
+      assert.strictEqual(verdict("echo '$(gh pr list)' | cat").verdict, 'pass');
     });
   });
 
