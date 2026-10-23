@@ -36,15 +36,13 @@ describe('the shapes that ran sandboxed are refused', () => {
     const r = verdict('gh pr list --state open | head -5');
     assert.strictEqual(r.verdict, 'refuse');
     assert.ok(r.wrappers.includes('pipe'));
-    assert.ok(r.fix.piped, 'a pipe is replaced by an output file');
-    assert.match(r.message, /"stdout"/);
+    assert.ok(r.fix.piped);
   });
 
   test('gh redirected to a file names that file as the output', () => {
     const r = verdict('gh pr view 12 --json body > /work/out/pr.json');
     assert.strictEqual(r.verdict, 'refuse');
     assert.strictEqual(r.fix.stdout, '/work/out/pr.json');
-    assert.match(r.message, /"stdout":"\/work\/out\/pr\.json"/);
   });
 
   test('node with an argument where the exclusion names the script alone', () => {
@@ -67,11 +65,9 @@ describe('the shapes that ran sandboxed are refused', () => {
     assert.strictEqual(r.fix.cwd, '/work/lane');
     assert.deepStrictEqual(r.fix.argv, ['npx', 'playwright', 'test', 'e2e/a.spec.js']);
     assert.match(r.message, /1\. cd \/work\/lane\n {2}2\. npx playwright test e2e\/a\.spec\.js/);
-    assert.match(r.message, /exempt-run\.js <args-file>\.json/);
-    assert.match(r.message, /"cwd":"\/work\/lane"/);
   });
 
-  test('a VAR=value prefix moves into the runner file', () => {
+  test('a VAR=value prefix', () => {
     const r = verdict('E2E_PORT=4100 npx playwright test');
     assert.strictEqual(r.verdict, 'refuse');
     assert.deepStrictEqual(r.fix.env, { E2E_PORT: '4100' });
@@ -92,6 +88,88 @@ describe('the shapes that ran sandboxed are refused', () => {
 
   test('the release gate run after anything', () => {
     assert.strictEqual(verdict('git status; npm run release:gate').verdict, 'refuse');
+  });
+});
+
+describe('the refusal names forms that work', () => {
+  const RUNNER = path.join(__dirname, '..', '..', 'scripts', 'exempt-run.js');
+  const refusals = [
+    'gh pr list --state open | head -5',
+    'gh pr view 12 --json body > /work/out/pr.json',
+    'cd /work/lane && npx playwright test e2e/a.spec.js',
+    'E2E_PORT=4100 npx playwright test',
+    'node /work/scratch/test-a/run.js "a b"',
+  ];
+
+  test('a command that needs nothing from its wrapper: run it bare, and read the output from the result', () => {
+    for (const cmd of ['gh pr list --state open | head -5', 'gh pr view 12 --json body > /work/out/pr.json']) {
+      const { message } = verdict(cmd);
+      assert.match(message, /Run it bare, as one call with nothing before or after it:\n {2}gh pr (list --state open|view 12 --json body)\n/);
+      assert.match(message, /Its output comes back as the result of the call: read it there, not through a pipe or a file\./);
+    }
+  });
+
+  test('a command after a cd: two calls, the cd and then the command, piped or not', () => {
+    const r = verdict('cd /work/lane && gh pr list | head -5');
+    assert.match(r.message, /Run it as two calls, the cd alone and then the command alone:\n {2}1\. cd \/work\/lane\n {2}2\. gh pr list\n/);
+    const git = verdict('cd /work/other && git -C /work/lane push origin x | cat');
+    assert.match(git.message, /Run it bare[^\n]*\n {2}git -C \/work\/lane push origin x\n/, 'git -C already carries its directory');
+    assert.doesNotMatch(git.message, /two calls/);
+  });
+
+  test('a VAR=value: a small script in the test tree or the scratch folder that sets it for its child process', () => {
+    const message = verdict('cd /work/lane && E2E_PORT=4100 npx playwright test').message.replace(/\s+/g, ' ');
+    assert.match(message, /A bare command cannot carry E2E_PORT=4100\./);
+    assert.match(message, /small script in the repository's test tree or its gitignored scratch folder \(\.rundock\/scratch\/\)/);
+    assert.match(message, /starts the command as a child process in \/work\/lane with that set, and run the script bare\./);
+  });
+
+  test('an exclusion that names the script alone: put the values inside it and run it with no arguments', () => {
+    const { message } = verdict('node /work/scratch/test-a/run.js "a b"');
+    assert.match(message, /Put the values inside the script and run it bare, as the exclusion names it:\n {2}node \/work\/scratch\/test-a\/run\.js$/m);
+  });
+
+  describe('a suggested command is printed as written, quotes and all', () => {
+    for (const [label, cmd, written] of [
+      ['single quotes', "gh pr comment 3 --body 'it works' | cat", "gh pr comment 3 --body 'it works'"],
+      ['double quotes', 'gh pr comment 3 --body "npx playwright test" | cat', 'gh pr comment 3 --body "npx playwright test"'],
+      ['escaped quotes', 'gh pr comment 3 --body "say \\"hi\\"" --title it\\\'s | cat', 'gh pr comment 3 --body "say \\"hi\\"" --title it\\\'s'],
+      ['after a here-document', "python3 - <<'EOF'\nprint('x')\nEOF\ngh pr comment 3 --body 'done: \"ok\"' | cat", "gh pr comment 3 --body 'done: \"ok\"'"],
+    ]) {
+      test(label, () => {
+        const r = verdict(cmd);
+        assert.strictEqual(r.segment, written);
+        assert.ok(r.message.includes(`\n  ${written}\n`), r.message);
+      });
+    }
+
+    test('a cd, a VAR=value and a near miss, with no spaces round the operators', () => {
+      assert.match(verdict('cd "/work/my lane"&&gh pr list||true').message, /\n {2}1\. cd "\/work\/my lane"\n {2}2\. gh pr list$/);
+      const env = verdict("E2E_TITLE='a b' npx playwright test");
+      assert.match(env.message, /cannot carry E2E_TITLE='a b'\./);
+      assert.strictEqual(env.segment, 'npx playwright test', 'the VAR=value is not part of the command shown');
+      assert.match(verdict("node '/work/scratch/test-a/run.js' \"a b\"").message, /\n {2}node '\/work\/scratch\/test-a\/run\.js'$/);
+    });
+  });
+
+  test('a wrapped near miss: put the values inside the script, after the cd if there is one', () => {
+    const near = ['node /work/near.js'];
+    const piped = classify('node /work/near.js a b | head', near);
+    assert.strictEqual(piped.verdict, 'refuse');
+    assert.match(piped.message, /Put the values inside the script and run it bare:\n {2}node \/work\/near\.js\n/);
+    assert.doesNotMatch(piped.message, /\n {2}node \/work\/near\.js a b/, 'run bare, that is a near miss again');
+    assert.match(piped.message, /Its output comes back as the result of the call/);
+    assert.match(classify('cd /work && node /work/near.js a b', near).message,
+      /Put the values inside the script and run it bare, after the cd as a call of its own:\n {2}1\. cd \/work\n {2}2\. node \/work\/near\.js$/);
+  });
+
+  test('the runner is offered only when its own command is excluded', () => {
+    for (const cmd of refusals) assert.doesNotMatch(verdict(cmd).message, /exempt-run/, cmd);
+    const withRunner = [...PATTERNS, `node ${RUNNER} *`];
+    const cd = classify('cd /work/lane && npx playwright test e2e/a.spec.js', withRunner).message;
+    assert.match(cd, new RegExp(`Or, as the runner's own command is excluded too[^\\n]*\\n {2}node ${RUNNER.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} <args-file>\\.json\\n`));
+    assert.match(cd, /"cwd":"\/work\/lane"/);
+    assert.match(classify('gh pr view 12 --json body > /work/out/pr.json', withRunner).message, /"stdout":"\/work\/out\/pr\.json"/);
   });
 });
 
@@ -130,6 +208,156 @@ describe('everything else runs as before', () => {
     assert.strictEqual(verdict('gh pr comment 3 --body "a && b | c > d"').verdict, 'pass');
   });
 
+  describe('text that is data, not a command, is never matched', () => {
+    const script = [
+      "python3 - <<'EOF'",
+      'import subprocess',
+      '# the browser comes from npx playwright install chromium',
+      'print("if this fails, run npx playwright install first")',
+      'EOF',
+    ].join('\n');
+
+    test('the body of a quoted here-document fed to an interpreter', () => {
+      assert.strictEqual(verdict(script).verdict, 'pass');
+    });
+
+    test('the body of a here-document that never reaches its delimiter', () => {
+      assert.strictEqual(verdict(script.slice(0, script.lastIndexOf('\nEOF'))).verdict, 'pass');
+    });
+
+    test('a real exempt command after or before the here-document is still refused', () => {
+      const after = verdict(`${script}\nnpx playwright test | tail -3`);
+      assert.strictEqual(after.verdict, 'refuse');
+      assert.strictEqual(after.segment, 'npx playwright test');
+      const before = verdict(`gh pr list > /work/out.txt; ${script}`);
+      assert.strictEqual(before.verdict, 'refuse');
+      assert.strictEqual(before.segment, 'gh pr list');
+    });
+
+    test('a quoted string argument, which still leaves the command it is passed to matched', () => {
+      assert.strictEqual(verdict('python3 -c "import os; os.system(\'npx playwright install\')" > /work/out.txt').verdict, 'pass');
+      assert.strictEqual(verdict("echo 'next: npx playwright test' && npm test").verdict, 'pass');
+      const r = verdict('gh pr comment 3 --body "npx playwright test" | cat');
+      assert.strictEqual(r.verdict, 'refuse');
+      assert.strictEqual(r.pattern, 'gh *');
+      assert.strictEqual(r.segment, 'gh pr comment 3 --body "npx playwright test"');
+      assert.strictEqual(verdict('E2E_TITLE="a b" npx playwright test').verdict, 'refuse', 'a quoted VAR=value is not the command');
+      assert.strictEqual(verdict('cd "/work/my lane" && npx playwright test').fix.cwd, '/work/my lane', 'a quoted word leaves the next one unquoted');
+    });
+
+    test('quoted text that runs something, or follows a VAR=value or a quoted word, is judged on its own', () => {
+      assert.strictEqual(verdict('echo "$(npx playwright test)" | cat').verdict, 'refuse', 'a substitution in quotes runs a command');
+      assert.strictEqual(verdict('echo "$(true) npx playwright test" | cat').verdict, 'pass', 'the text round a substitution is still data');
+      assert.strictEqual(verdict('echo $(true) "npx playwright test" | cat').verdict, 'pass', 'a substitution marks only its own word');
+      assert.strictEqual(verdict('A=1 echo "npx playwright test" | cat').verdict, 'pass', 'the VAR=value takes its own mark with it');
+      assert.strictEqual(verdict('echo "x" npx\\ playwright\\ test | cat').verdict, 'refuse', 'a word after a quoted one is not quoted');
+    });
+  });
+
+  describe('text a shell runs is a command, and is matched like one', () => {
+    for (const shell of ['sh', 'bash', 'zsh', 'dash', 'ksh']) {
+      test(`${shell} -c`, () => {
+        const r = verdict(`${shell} -c "npx playwright test" | cat`);
+        assert.strictEqual(r.verdict, 'refuse');
+        assert.strictEqual(r.segment, 'npx playwright test');
+        assert.ok(r.wrappers.includes('shell'));
+      });
+    }
+
+    test('a shell named by its path, with -c in a cluster of options', () => {
+      assert.strictEqual(verdict("/bin/bash -lc 'gh pr list' > /work/out.txt").segment, 'gh pr list');
+    });
+
+    test('eval', () => {
+      assert.strictEqual(verdict('eval "gh pr list" | cat').segment, 'gh pr list');
+    });
+
+    test('a here-document fed to a shell, and what it runs that loses nothing in the sandbox', () => {
+      const r = verdict("bash <<'EOF'\ncd /work/lane\nnpx playwright test\nEOF");
+      assert.strictEqual(r.verdict, 'refuse');
+      assert.strictEqual(r.segment, 'npx playwright test');
+      assert.strictEqual(r.fix.cwd, '/work/lane');
+      assert.strictEqual(verdict("bash <<'EOF'\nls -la\nEOF").verdict, 'pass');
+      assert.strictEqual(verdict('bash -c "git status" | cat').verdict, 'pass');
+    });
+
+    test('a bare shell whose command string an exclusion names, when the whole command matches none', () => {
+      assert.strictEqual(verdict('bash -c "gh pr list"').verdict, 'refuse');
+      assert.strictEqual(verdict('bash -c "npx playwright test"').verdict, 'pass', 'the whole command matches "*npx playwright *"');
+    });
+
+    test('a cd before the shell is the directory its command runs in', () => {
+      assert.strictEqual(verdict('cd /work/lane && sh -c "npx playwright test"').fix.cwd, '/work/lane');
+    });
+
+    test('a quoted path with a space in it is matched as written', () => {
+      for (const p of ['/work/my dir/run.js', '~/my dir/run.js', './my dir/run.js', '../my dir/run.js']) {
+        assert.strictEqual(classify(`node "${p}" | head`, [`node ${p}*`]).verdict, 'refuse', p);
+      }
+    });
+
+    test('a quoted program path, and a quoted command word, are matched as written', () => {
+      const r = verdict('node "/work/scratch/test-a/run.js" | head');
+      assert.strictEqual(r.verdict, 'refuse');
+      assert.strictEqual(r.pattern, 'node /work/scratch/test-*/*.js');
+      assert.strictEqual(classify('"/work/my tools/run" x | cat', ['/work/my tools/run *']).verdict, 'refuse');
+      assert.strictEqual(classify('"my tool" x | cat', ['my tool *']).verdict, 'refuse', 'a command word is never data');
+      assert.strictEqual(verdict('npm run "precommit" | cat').verdict, 'refuse', 'a quoted word with no space is not data');
+    });
+  });
+
+  describe('a shell reached past a prefix, or reading what is piped into it', () => {
+    for (const [label, cmd] of [
+      ['xargs', 'xargs -I{} sh -c "npx playwright test {}" < /work/list'],
+      ['timeout and its duration', 'timeout 300 bash -c "npx playwright test" | tail'],
+      ['nohup', 'nohup sh -c "npx playwright test" > /work/log'],
+      ['env and its VAR=value', 'env FOO=1 bash -c "npx playwright test" | cat'],
+      ['env with a here-document', "env bash <<'EOF'\nnpx playwright test\nEOF"],
+      ['sudo and its option value, with a here-document', "sudo -u me bash <<'EOF'\nnpx playwright test\nEOF"],
+      ['a here-document piped into a shell', "cat <<'EOF' | bash\nnpx playwright test\nEOF"],
+      ['a quoted word piped into a shell', 'echo "npx playwright test" | bash'],
+    ]) {
+      test(label, () => {
+        const r = verdict(cmd);
+        assert.strictEqual(r.verdict, 'refuse');
+        assert.match(r.segment, /^npx playwright test/);
+      });
+    }
+
+    test('options end at the first word that is not one, and -o takes a value', () => {
+      assert.strictEqual(verdict('bash script.sh -c "gh pr list" | cat').verdict, 'pass');
+      assert.strictEqual(verdict("bash script.sh <<'EOF'\nnpx playwright test\nEOF").verdict, 'pass', 'a script is fed input, not commands');
+      assert.strictEqual(verdict('bash -o pipefail -c "gh pr list" | cat').segment, 'gh pr list');
+      assert.strictEqual(verdict('echo "npx playwright test"; bash').verdict, 'pass', 'only a pipe feeds the shell');
+      assert.strictEqual(verdict("bash -s one <<'EOF'\nnpx playwright test\nEOF").verdict, 'refuse', '-s reads commands from stdin');
+    });
+
+    test('a shell piped or redirected keeps the line about its output', () => {
+      assert.match(verdict('sh -c "npx playwright test" | cat').message, /Its output comes back as the result of the call/);
+      assert.match(verdict('nohup sh -c "npx playwright test" > /work/log').message, /Its output comes back as the result of the call/);
+    });
+  });
+
+  describe('a command substitution runs a command, and is matched like one', () => {
+    for (const cmd of ['echo "$(gh pr list)" | cat', 'echo $(gh pr list) | cat', 'X=$(gh pr list) && echo $X',
+      'echo "`gh pr list`" | cat', 'echo `gh pr list` | cat']) {
+      test(cmd, () => {
+        const r = verdict(cmd);
+        assert.strictEqual(r.verdict, 'refuse');
+        assert.strictEqual(r.segment, 'gh pr list');
+        assert.ok(r.wrappers.includes('substitution'));
+      });
+    }
+
+    test('in a here-document whose body expands, but not in a quoted one or in single quotes', () => {
+      const r = verdict('cat <<EOF > /work/f\n$(npx playwright test)\nEOF');
+      assert.strictEqual(r.verdict, 'refuse');
+      assert.strictEqual(r.segment, 'npx playwright test');
+      assert.strictEqual(verdict("cat <<'EOF' > /work/f\n$(npx playwright test)\nEOF").verdict, 'pass');
+      assert.strictEqual(verdict("echo '$(gh pr list)' | cat").verdict, 'pass');
+    });
+  });
+
   test('with no exclusions configured nothing is refused', () => {
     assert.strictEqual(classify('cd x && gh pr list | head', []).verdict, 'pass');
   });
@@ -160,7 +388,7 @@ describe('the hook', () => {
   const settings = path.join(dir, 'settings.json');
   fs.writeFileSync(settings, JSON.stringify({ sandbox: { excludedCommands: ['gh *'] } }));
   const payload = (command, tool = 'Bash') => JSON.stringify({ tool_name: tool, tool_input: { command }, cwd: dir });
-  const env = { CLAUDE_PROJECT_DIR: path.join(dir, 'none') };
+  const env = { CLAUDE_PROJECT_DIR: path.join(dir, 'none'), HOME: path.join(dir, 'home') };
 
   test('refuses with exit 2 and the fix on stderr', () => {
     const r = runHook({ input: payload('gh pr list | head'), argv: ['--settings', settings], env });
@@ -172,6 +400,35 @@ describe('the hook', () => {
     assert.strictEqual(runHook({ input: payload('gh pr list'), argv: ['--settings', settings], env }).code, 0);
     assert.strictEqual(runHook({ input: payload('gh pr list | head', 'Read'), argv: ['--settings', settings], env }).code, 0);
     assert.strictEqual(runHook({ input: '{not json', argv: ['--settings', settings], env }).code, 0);
+  });
+
+  test('a wrapped command runs as written when its sandbox is deliberately off, and is refused when it is on', () => {
+    const shaped = (input) => JSON.stringify({ tool_name: 'Bash', tool_input: input, cwd: dir });
+    const run = (input) => runHook({ input: shaped(input), argv: ['--settings', settings], env }).code;
+    assert.strictEqual(run({ command: 'cd /x && gh pr list | head', dangerouslyDisableSandbox: true }), 0);
+    assert.strictEqual(run({ command: 'cd /x && gh pr list | head', dangerouslyDisableSandbox: false }), 2);
+    assert.strictEqual(run({ command: 'cd /x && gh pr list | head' }), 2);
+    assert.strictEqual(run({ command: 'cd /x && gh pr list | head', dangerouslyDisableSandbox: 'true' }), 2,
+      'only the boolean the tool sends turns the sandbox off');
+  });
+
+  test('a command asking for no sandbox is still checked where the settings refuse unsandboxed commands', () => {
+    const input = JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'cd /x && gh pr list | head', dangerouslyDisableSandbox: true }, cwd: dir });
+    const allow = (name, value) => {
+      const file = path.join(dir, name);
+      fs.writeFileSync(file, JSON.stringify({ sandbox: { allowUnsandboxedCommands: value } }));
+      return file;
+    };
+    assert.strictEqual(runHook({ input, argv: ['--settings', settings, '--settings', allow('locked.json', false)], env }).code, 2);
+    assert.strictEqual(runHook({ input, argv: ['--settings', settings, '--settings', allow('open.json', true)], env }).code, 0);
+    const home = path.join(env.HOME, '.claude');
+    fs.mkdirSync(home, { recursive: true });
+    fs.writeFileSync(path.join(home, 'settings.json'), JSON.stringify({ sandbox: { allowUnsandboxedCommands: false } }));
+    try {
+      assert.strictEqual(runHook({ input, argv: ['--settings', settings], env }).code, 2, "the user's settings count too");
+    } finally {
+      fs.rmSync(home, { recursive: true });
+    }
   });
 
   test('reads the project settings from CLAUDE_PROJECT_DIR', () => {
@@ -220,5 +477,28 @@ describe('the sandbox marker', () => {
     let called = false;
     assert.strictEqual(refuseIfSandboxed('x', 'y', { env: {}, exit: () => { called = true; }, write: () => { called = true; } }), false);
     assert.strictEqual(called, false);
+  });
+
+  const RUNNER = path.join(__dirname, '..', '..', 'scripts', 'exempt-run.js');
+  const said = (options) => {
+    let out = '';
+    refuseIfSandboxed('The thing', 'npm run thing', { env: { SANDBOX_RUNTIME: '1' }, exit: () => {}, write: (s) => { out += s; }, ...options });
+    return out;
+  };
+
+  test('it names the runner only when its own command is excluded, and otherwise the cd and script forms', () => {
+    const plain = said({ patterns: [] });
+    assert.doesNotMatch(plain, /exempt-run/);
+    assert.match(plain.replace(/\s+/g, ' '), /Run a cd as a call of its own first, and read the output from the result of the call\./);
+    assert.match(plain.replace(/\s+/g, ' '), /a small script in the repository's test tree or its gitignored scratch folder \(\.rundock\/scratch\/\)/);
+    assert.match(said({ patterns: [`node ${RUNNER} *`] }), /Or, as scripts\/exempt-run\.js is itself excluded/);
+  });
+
+  test('without exclusions given, it reads the ones configured for the project', () => {
+    const project = fs.mkdtempSync(path.join(os.tmpdir(), 'command-shape-project-'));
+    fs.mkdirSync(path.join(project, '.claude'));
+    fs.writeFileSync(path.join(project, '.claude', 'settings.local.json'),
+      JSON.stringify({ sandbox: { excludedCommands: [`node ${RUNNER} *`] } }));
+    assert.match(said({ env: { SANDBOX_RUNTIME: '1', CLAUDE_PROJECT_DIR: project } }), /scripts\/exempt-run\.js is itself excluded/);
   });
 });

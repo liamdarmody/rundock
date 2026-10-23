@@ -24,7 +24,7 @@
  */
 
 const { spawnSync } = require('node:child_process');
-const { isSandboxed } = require('./lib/sandbox.js');
+const { isSandboxed, exclusionsHere, runnerExcluded } = require('./lib/sandbox.js');
 
 const ROOT = require('node:path').join(__dirname, '..');
 const SELF = 'node scripts/capability-preflight.js';
@@ -93,17 +93,18 @@ function checkPush({ run = defaultRun, cwd = ROOT } = {}) {
   return { ok: true, detail: `git can push ${name} to origin (dry run) and gh is signed in.` };
 }
 
-async function preflight({ env = process.env, want = { browser: true, push: true }, browser = checkBrowser, push = checkPush } = {}) {
+// `patterns`, the sandbox exclusions, default to the ones configured where this
+// runs; scripts/exempt-run.js is suggested only when they exclude it too.
+async function preflight({ env = process.env, want = { browser: true, push: true }, browser = checkBrowser, push = checkPush, patterns } = {}) {
   if (isSandboxed(env)) {
-    return {
-      code: 2,
-      lines: [
-        '[capability] SANDBOXED: this shell is inside the agent sandbox (SANDBOX_RUNTIME=1), so neither a browser nor a',
-        '[capability] push can work here, so neither was tried. Fix this first: a browser or credential error seen here says nothing.',
-        `[capability] Fix: run "${SELF}" (or the lane's own command) as one bare command, from the worktree, with nothing`,
-        '[capability] chained, piped or redirected, so the sandbox exclusions match it; or through scripts/exempt-run.js.',
-      ],
-    };
+    const lines = [
+      '[capability] SANDBOXED: this shell is inside the agent sandbox (SANDBOX_RUNTIME=1), so neither a browser nor a',
+      '[capability] push can work here, so neither was tried. Fix this first: a browser or credential error seen here says nothing.',
+      `[capability] Fix: run "${SELF}" (or the lane's own command) as one bare command, from the worktree, with nothing`,
+      '[capability] chained, piped or redirected, so the sandbox exclusions match it.',
+    ];
+    if (runnerExcluded(patterns || exclusionsHere(env))) lines.push('[capability] Or run it through scripts/exempt-run.js, which is itself excluded.');
+    return { code: 2, lines };
   }
   const lines = [];
   let failed = 0;
