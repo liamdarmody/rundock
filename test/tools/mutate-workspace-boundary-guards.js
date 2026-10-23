@@ -323,6 +323,8 @@ const ALLOWED_HANDLER = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'p
 const ALLOWED_TURNS = { src: path.join(ROOT, 'lib', 'runtime', 'claude-turn-guard.js'), suite: 'test/unit/allowed-change-stands.test.js' };
 const ALLOWED_WIRING = { src: path.join(ROOT, 'server.js'), suite: 'test/unit/allowed-change-stands.test.js' };
 const ALLOWED_ROUTER = { src: path.join(ROOT, 'lib', 'http-router.js'), suite: 'test/unit/allowed-change-stands.test.js' };
+// A hook request's id, drawn from the operating system's random source.
+const HOOK_REQUEST_ID = { src: path.join(ROOT, 'lib', 'http-router.js'), suite: 'test/integration/permission-ownership.test.js' };
 // What agents are told about the connector files, against the card's words.
 const PROMPT_CONNECTORS = { src: path.join(ROOT, 'lib', 'agents', 'prompt.js'), suite: 'test/unit/discovery.test.js' };
 // What Rundock decides for an agent's environment, never inherited from its own.
@@ -2357,6 +2359,9 @@ const MUTATIONS = [
   [ALLOWED_HANDLER, "Allowed change: an Edit's result is not worked out",
     ': current.replace(ti.old_string, () => ti.new_string);',
     ': current;'],
+  [HOOK_REQUEST_ID, 'Request id: a hook request is named by the time and a predictable suffix',
+    "        const requestId = 'perm-' + crypto.randomBytes(16).toString('hex');",
+    "        const requestId = 'perm-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);"],
   [ALLOWED_HANDLER, "Allowed change: a MultiEdit's result is not worked out",
     "  const edits = toolName === 'Edit' ? [ti] : (toolName === 'MultiEdit' && Array.isArray(ti.edits) && ti.edits.length ? ti.edits : null);",
     "  const edits = toolName === 'Edit' ? [ti] : null;"],

@@ -82,6 +82,23 @@ test('a request whose session matches nothing carries neither a conversation nor
   assert.strictEqual((await answer).allow, false);
 });
 
+// The id is what a window's answer names, so it is drawn as the server's own
+// request ids are: 128 bits from the operating system's random source, not a
+// timestamp and a few characters from a predictable generator.
+test('a hook request is named by 128 random bits, never by the time', async () => {
+  const ids = [];
+  for (const n of [1, 2]) {
+    const since = client.messages.length;
+    const answer = postJson({ tool_name: 'Bash', tool_input: { command: `sh request-id-${n}.sh` }, conversation_id: 'convo-request-id' });
+    const { msg: card } = await client.waitFor(m => m.type === 'control_request', { since, label: `card ${n}` });
+    client.send({ type: 'permission_response', requestId: card.request_id, conversationId: 'convo-request-id', allow: false });
+    assert.strictEqual((await answer).allow, false);
+    assert.match(card.request_id, /^perm-[0-9a-f]{32}$/, 'perm- and 32 hex digits');
+    ids.push(card.request_id);
+  }
+  assert.notStrictEqual(ids[0], ids[1], 'and no two alike');
+});
+
 test('an answer in one window is announced to every window', async () => {
   const other = await h.connect();
   const since = client.messages.length;
