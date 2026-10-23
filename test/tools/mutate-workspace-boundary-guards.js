@@ -2011,6 +2011,12 @@ const MUTATIONS = [
     '(nobody ? (false ?'],
   // Where a send goes, never read or never drawn: a thread reply or a chat
   // message says nothing about where it lands.
+  // On a forward an id names the message forwarded: taken for where it goes,
+  // it hides the To row and the warning beside a recipient list under an
+  // unknown name.
+  [CONNECTOR_CARD_MODEL, 'Connector card: an id on a forward is taken for where it goes',
+    "KEYS.destination.filter((n) => n !== 'id' && n !== 'threadid')",
+    'KEYS.destination'],
   [CONNECTOR_CARD_MODEL, 'Connector card: where a send goes is not read',
     "    if (action !== 'draft') read.destination = lineOf;\n",
     ''],

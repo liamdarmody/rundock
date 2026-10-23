@@ -245,6 +245,28 @@ describe('a send, reply or forward says where it goes', () => {
     assert.deepStrictEqual(labels(card), ['threadId', 'Message']);
   });
 
+  // On a forward an id or a thread names the message being forwarded, not
+  // where it goes, so it never stands in for a recipient.
+  test('a forward with an id and recipients under an unknown key: the To row warns, and both are listed', () => {
+    const card = render('mcp__example_post__forward', { id: 'm1', to_emails: ['evil@example.net'], body: 'FYI' });
+    assert.deepStrictEqual(labels(card), ['To', 'Message', 'Other fields']);
+    assert.match(text(row(card, 'To')), /Not recognised: see Other fields/);
+    const listed = [...row(card, 'Other fields').querySelectorAll(':scope > .permission-line')].map((n) => n.textContent);
+    assert.deepStrictEqual(listed, ['id: m1', 'to_emails: ["evil@example.net"]']);
+  });
+
+  test('a forward with a message id or a thread id reads the same way', () => {
+    for (const input of [{ messageId: 'm1', body: 'FYI' }, { threadId: 't1', body: 'FYI' }]) {
+      const card = render('mcp__example_post__forward', input);
+      assert.deepStrictEqual(labels(card), ['To', 'Message', 'Other fields'], JSON.stringify(input));
+    }
+  });
+
+  test('a forward to a channel still says where it goes', () => {
+    const card = render('mcp__example_chat__forward_message', { channel: 'C1', id: 'm1', text: 'FYI' });
+    assert.deepStrictEqual(labels(card), ['channel', 'Message', 'Other fields']);
+  });
+
   test('a destination is text, never markup, in an isolate of its own', () => {
     const card = render('mcp__example_chat__send_message', { channel: '<img src=x onerror="window.__pwned=9">', text: 'hi' });
     assert.strictEqual(card.querySelectorAll('img').length, 0);

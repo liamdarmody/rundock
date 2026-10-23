@@ -181,7 +181,9 @@
   // request can fill a card with rows. Every one is listed, however many
   // there are, each value cut short on its own: a count is somewhere a
   // recipient could be put that no one can open.
-  function gather(sources, read) {
+  // `keys` is the names each field is read by (KEYS, unless an action reads a
+  // field by fewer).
+  function gather(sources, read, keys = KEYS) {
     const values = {}, aliases = {}, others = [], firstKey = {};
     let found = false, aliasOverflow = 0;
     const list = (key, raw) => { others.push({ key, text: rawText(raw) }); };
@@ -189,14 +191,14 @@
     for (const field of fields) {
       const all = [];
       for (const s of sources) {
-        for (const k of keysFor(s.obj, KEYS[field])) if (!s.skip.has(k)) all.push({ key: clip(s.prefix + k, MAX_KEY), raw: s.obj[k] });
+        for (const k of keysFor(s.obj, keys[field])) if (!s.skip.has(k)) all.push({ key: clip(s.prefix + k, MAX_KEY), raw: s.obj[k] });
       }
       values[field] = all.length ? read[field](all[0].raw) : EMPTY[field];
       if (all.length > 1) aliases[field] = all.slice(0, MAX_ALIAS_ROWS).map((o) => ({ key: o.key, value: read[field](o.raw) }));
       for (const o of all.slice(MAX_ALIAS_ROWS)) { aliasOverflow++; list(o.key, o.raw); }
       if (all.length) { found = true; firstKey[field] = all[0].key; }
     }
-    const names = new Set(fields.flatMap((field) => KEYS[field]));
+    const names = new Set(fields.flatMap((field) => keys[field]));
     for (const s of sources) {
       for (const k of Object.keys(s.obj)) {
         if (s.skip.has(k) || names.has(norm(k)) || s.obj[k] === undefined) continue;
@@ -226,7 +228,11 @@
     // Where a send goes when it names a place rather than a person: read, so it
     // is drawn under the key it came from and never counted as unread.
     if (action !== 'draft') read.destination = lineOf;
-    const g = gather(sources, read);
+    // On a forward an id or a thread names the message being forwarded, not
+    // where it goes, so it is never taken for a destination there; the keys
+    // that name a place still are.
+    const keys = action === 'forward' ? { ...KEYS, destination: KEYS.destination.filter((n) => n !== 'id' && n !== 'threadid') } : KEYS;
+    const g = gather(sources, read, keys);
     const { destination: first, ...values } = g.values;
     const { destination: all, ...aliases } = g.aliases;
     const destinations = all || (g.firstKey.destination ? [{ key: g.firstKey.destination, value: first }] : []);

@@ -91,6 +91,14 @@ describe('an email request is read by generic field names', () => {
     assert.deepStrictEqual(draft.others.map((o) => o.key), ['threadId']);
   });
 
+  test('on a forward an id or a thread is the message forwarded, not where it goes', () => {
+    const f = F.connectorFields('mcp__example_post__forward', { id: 'm1', threadId: 't1', channel: 'C1', body: 'FYI' });
+    assert.deepStrictEqual(f.destinations, [{ key: 'channel', value: 'C1' }]);
+    assert.deepStrictEqual(f.others.map((o) => o.key), ['id', 'threadId']);
+    const reply = F.connectorFields('mcp__example_post__reply', { id: 'm1', body: 'ok' });
+    assert.deepStrictEqual(reply.destinations, [{ key: 'id', value: 'm1' }], 'on a reply an id is still where it goes');
+  });
+
   test('which requests are email-shaped: a recipient or a subject, not a body alone', () => {
     assert.strictEqual(F.connectorFields('mcp__example_post__send_message', { to: 'a@example.org', body: 'b' }).emailShaped, true);
     assert.strictEqual(F.connectorFields('mcp__example_post__send_message', { subject: 's' }).emailShaped, true);
