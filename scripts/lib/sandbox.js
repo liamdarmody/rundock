@@ -65,6 +65,22 @@ function exclusionsFrom(files) {
   return out;
 }
 
+// Whether a command may ask to run outside the sandbox. Claude Code ignores
+// the request, and runs the command sandboxed, when any of these settings sets
+// sandbox.allowUnsandboxedCommands to false.
+function unsandboxedAllowed(files) {
+  for (const file of files) {
+    let parsed;
+    try {
+      parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+    } catch {
+      continue;
+    }
+    if (parsed && parsed.sandbox && parsed.sandbox.allowUnsandboxedCommands === false) return false;
+  }
+  return true;
+}
+
 // The settings files Claude Code reads for a project directory, in no
 // particular order (the lists are merged, so order does not matter here).
 function settingsFilesFor(projectDir, home = os.homedir()) {
@@ -123,6 +139,6 @@ function refuseIfSandboxed(what, bareCommand, { env = process.env, exit = proces
 }
 
 module.exports = {
-  isSandboxed, globToRegExp, matchingPattern, exclusionsFrom, settingsFilesFor, exclusionsHere, RUNNER, runnerExcluded,
+  isSandboxed, globToRegExp, matchingPattern, exclusionsFrom, unsandboxedAllowed, settingsFilesFor, exclusionsHere, RUNNER, runnerExcluded,
   sandboxRefusal, refuseIfSandboxed,
 };

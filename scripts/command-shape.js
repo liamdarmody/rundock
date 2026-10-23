@@ -21,7 +21,10 @@
  * commands, and a wrapped `git log | head` loses nothing in the sandbox, so a
  * wrapped git command is refused only when it talks to a remote. A command
  * whose tool input turns its sandbox off (`dangerouslyDisableSandbox: true`)
- * is never refused: it runs outside the sandbox whatever its shape.
+ * is never refused: it runs outside the sandbox whatever its shape. That holds
+ * only while no settings file the hook reads sets
+ * `sandbox.allowUnsandboxedCommands` to false; then the request is ignored,
+ * the command runs sandboxed, and it is checked like any other.
  *
  * Text that is data is never matched against an exclusion: the body of a
  * here-document fed to anything but a shell, and a quoted argument with a
@@ -59,7 +62,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { matchingPattern, exclusionsFrom, settingsFilesFor, RUNNER, runnerExcluded } = require('./lib/sandbox.js');
+const { matchingPattern, exclusionsFrom, unsandboxedAllowed, settingsFilesFor, RUNNER, runnerExcluded } = require('./lib/sandbox.js');
 const { stripHeredocs, substitutions } = require('./code-mode-parse.js');
 
 // Git subcommands that need what the sandbox withholds: the network and the
@@ -411,7 +414,7 @@ function settingsFiles(argv, env, payloadCwd) {
   const files = [];
   for (let i = 0; i < argv.length; i++) if (argv[i] === '--settings' && argv[i + 1]) files.push(argv[++i]);
   const projectDir = env.CLAUDE_PROJECT_DIR || payloadCwd;
-  files.push(...settingsFilesFor(projectDir));
+  files.push(...settingsFilesFor(projectDir, env.HOME));
   return files;
 }
 
@@ -425,10 +428,12 @@ function runHook({ input, argv = [], env = process.env }) {
   if (!payload || payload.tool_name !== 'Bash') return { code: 0 };
   const command = payload.tool_input && payload.tool_input.command;
   if (typeof command !== 'string') return { code: 0 };
+  const files = settingsFiles(argv, env, payload.cwd);
   // With its sandbox deliberately off, a command runs outside the sandbox
-  // whatever its shape, so no shape of it can fail the way this guards.
-  if (payload.tool_input.dangerouslyDisableSandbox === true) return { code: 0 };
-  const patterns = exclusionsFrom(settingsFiles(argv, env, payload.cwd));
+  // whatever its shape, so no shape of it can fail the way this guards;
+  // unless the settings refuse unsandboxed commands, when it runs sandboxed.
+  if (payload.tool_input.dangerouslyDisableSandbox === true && unsandboxedAllowed(files)) return { code: 0 };
+  const patterns = exclusionsFrom(files);
   const result = classify(command, patterns);
   if (result.verdict !== 'refuse') return { code: 0 };
   return { code: 2, stderr: `${result.message}\n` };

@@ -388,7 +388,7 @@ describe('the hook', () => {
   const settings = path.join(dir, 'settings.json');
   fs.writeFileSync(settings, JSON.stringify({ sandbox: { excludedCommands: ['gh *'] } }));
   const payload = (command, tool = 'Bash') => JSON.stringify({ tool_name: tool, tool_input: { command }, cwd: dir });
-  const env = { CLAUDE_PROJECT_DIR: path.join(dir, 'none') };
+  const env = { CLAUDE_PROJECT_DIR: path.join(dir, 'none'), HOME: path.join(dir, 'home') };
 
   test('refuses with exit 2 and the fix on stderr', () => {
     const r = runHook({ input: payload('gh pr list | head'), argv: ['--settings', settings], env });
@@ -410,6 +410,25 @@ describe('the hook', () => {
     assert.strictEqual(run({ command: 'cd /x && gh pr list | head' }), 2);
     assert.strictEqual(run({ command: 'cd /x && gh pr list | head', dangerouslyDisableSandbox: 'true' }), 2,
       'only the boolean the tool sends turns the sandbox off');
+  });
+
+  test('a command asking for no sandbox is still checked where the settings refuse unsandboxed commands', () => {
+    const input = JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'cd /x && gh pr list | head', dangerouslyDisableSandbox: true }, cwd: dir });
+    const allow = (name, value) => {
+      const file = path.join(dir, name);
+      fs.writeFileSync(file, JSON.stringify({ sandbox: { allowUnsandboxedCommands: value } }));
+      return file;
+    };
+    assert.strictEqual(runHook({ input, argv: ['--settings', settings, '--settings', allow('locked.json', false)], env }).code, 2);
+    assert.strictEqual(runHook({ input, argv: ['--settings', settings, '--settings', allow('open.json', true)], env }).code, 0);
+    const home = path.join(env.HOME, '.claude');
+    fs.mkdirSync(home, { recursive: true });
+    fs.writeFileSync(path.join(home, 'settings.json'), JSON.stringify({ sandbox: { allowUnsandboxedCommands: false } }));
+    try {
+      assert.strictEqual(runHook({ input, argv: ['--settings', settings], env }).code, 2, "the user's settings count too");
+    } finally {
+      fs.rmSync(home, { recursive: true });
+    }
   });
 
   test('reads the project settings from CLAUDE_PROJECT_DIR', () => {
