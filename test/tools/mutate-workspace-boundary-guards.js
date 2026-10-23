@@ -244,6 +244,8 @@ const WHAT_RUNS_HOOK = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), 
 const WHAT_RUNS_CLIENT = { src: path.join(ROOT, 'public', 'permissions.js'), suite: 'test/unit/what-runs-files.test.js' };
 const WHAT_RUNS_VIEW = { src: path.join(ROOT, 'public', 'views', 'chat.js'), suite: 'test/unit/what-runs-files.test.js' };
 const WHAT_RUNS_CODEX = { src: path.join(ROOT, 'lib', 'runtime', 'codex-approval.js'), suite: 'test/unit/codex-escalation-grading.test.js' };
+// What Rundock decides for an agent's environment, never inherited from its own.
+const SPAWN_ENV = { src: path.join(ROOT, 'lib', 'runtime', 'claude.js'), suite: 'test/unit/workspace-modes.test.js' };
 
 const MUTATIONS = [
   // ===== ONE DIRECTORY UNDER TWO NAMES IS ONE IDENTITY =====
@@ -1804,6 +1806,14 @@ const MUTATIONS = [
   [SCAFFOLD, 'What runs: the list the last build wrote upgrades on the next open',
     'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21];',
     'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 21];'],
+  // An inherited Code-mode flag puts a Notes workspace under Code-mode grading;
+  // an inherited conversation id names a conversation the agent does not have.
+  [SPAWN_ENV, 'Spawn env: an inherited RUNDOCK_CODE_MODE reaches the agent',
+    "const INHERITED_NAMES_CLEARED = ['RUNDOCK_CODE_MODE', 'RUNDOCK_CONVO_ID'];",
+    "const INHERITED_NAMES_CLEARED = ['RUNDOCK_CONVO_ID'];"],
+  [SPAWN_ENV, 'Spawn env: an inherited RUNDOCK_CONVO_ID reaches the agent',
+    "const INHERITED_NAMES_CLEARED = ['RUNDOCK_CODE_MODE', 'RUNDOCK_CONVO_ID'];",
+    "const INHERITED_NAMES_CLEARED = ['RUNDOCK_CODE_MODE'];"],
 ];
 const REPORTER = ['--test-reporter', 'spec'];
 
