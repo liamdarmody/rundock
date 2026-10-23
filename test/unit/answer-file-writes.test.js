@@ -99,6 +99,14 @@ const WRITES = [
   'sh -c "echo x > .mcp.json"', "bash -c 'rm -rf .claude'", "zsh -c 'cp a .claude/settings.json'", "bash -lc 'echo x >> .mcp.json'",
   "env FOO=1 bash -c 'rm .mcp.json'", "/bin/sh -c 'touch .claude/hooks/x.sh'", "exec dash -c 'echo x > .mcp.json'",
   "nohup sh -c 'rm -rf .rundock' &", "sudo -u someone sh -c 'echo x > .mcp.json'", "bash -e -c 'mv x.json .mcp.json'",
+  // timeout and xargs run what follows them too, past their own options and
+  // timeout's duration, and a shell's command is read for the shells and the
+  // code it runs in turn.
+  "timeout 10 sh -c 'echo x > .mcp.json'", "timeout -s KILL -k 5 30s bash -c 'rm -rf .claude'", "timeout --signal=TERM 5 sh -c 'rm .mcp.json'",
+  "timeout --preserve-status 1m bash -c 'touch .claude/hooks/x.sh'",
+  "find . -print0 | xargs -0 sh -c 'echo x > .mcp.json'", "ls | xargs -n 1 -P 4 bash -c 'rm -rf .claude'", "ls | xargs -I{} sh -c 'cp {} .claude/settings.json'",
+  "ls | xargs --null -r sh -c 'rm .mcp.json'",
+  "bash -c \"bash -c 'echo x > .mcp.json'\"", "sh -c \"timeout 5 sh -c 'rm -rf .rundock'\"", "bash -c \"python3 -c 'open(\\\".mcp.json\\\", \\\"w\\\")'\"",
   // The forms that asked before this change, and still do.
   'echo x > .rundock/permissions.json', 'echo x >> .rundock/state.json', 'cat x > .claude/settings.local.json', 'tee .rundock/permissions.json',
   'echo x | tee -a .rundock/state.json', 'sed -i s/a/b/ .rundock/permissions.json', 'cp x .rundock/permissions.json', 'mv x .claude/settings.json',
@@ -148,6 +156,8 @@ describe('a command asks about an answer file only when it can write it', () => 
     'echo x > settings.json; if true; then cd .claude; fi', "cd \"$DIR\" && cd hooks; echo x > notes.txt",
     // A shell's -c command that writes only ordinary files names none.
     "bash -c 'echo hi > notes.txt'", "sh -c 'cat .mcp.json'", "bash -c 'ls .claude'",
+    "timeout 5 sh -c 'echo hi > notes.txt'", "ls | xargs -0 sh -c 'cat .mcp.json'", "bash -c \"bash -c 'cat .mcp.json'\"",
+    "bash -c \"python3 -c 'print(open(\\\".mcp.json\\\").read())'\"",
     // Code naming only ordinary files names no answer file.
     "python3 - <<'PY'\nopen('notes.txt','w').write('x')\nprint('done')\nPY", "node -e \"require('fs').writeFileSync('x.json', 'w')\"",
   ];

@@ -1951,12 +1951,19 @@ function heredocText(command, reading = null) {
 const INLINE_CODE = { python: /^-[A-Za-z]*?c(.*)$/s, node: /^(?:-[A-Za-z]*?[ep]|--(?:eval|print)=?)(.*)$/s, ruby: /^-[A-Za-z]*?e(.*)$/s, perl: /^-[A-Za-z]*?[eE](.*)$/s };
 // A SHELL GIVEN ITS COMMAND WITH -c runs that word as commands, so it is read
 // as commands, as a here-document fed to a shell is: through the prefixes
-// that run what follows them, and the shell named by a path too. The command
-// is the first word after the options once `-c` (alone or in a bundle such as
-// `-lc`) has been given.
+// that run what follows them (`xargs` and `timeout` among them, past their
+// options and `timeout`'s duration), and the shell named by a path too. The
+// command is the first word after the options once `-c` (alone or in a bundle
+// such as `-lc`) has been given.
 const SHELL_NAMES = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'fish']);
-const RUNS_WHAT_FOLLOWS = new Set(['env', 'exec', 'command', 'nohup', 'nice', 'time', 'sudo', 'doas']);
-const PREFIX_TAKES_VALUE = { sudo: /^-[ugCDhpr]$/, doas: /^-[uC]$/, nice: /^-n$/, env: /^-[uS]$/ };
+const RUNS_WHAT_FOLLOWS = new Set(['env', 'exec', 'command', 'nohup', 'nice', 'time', 'sudo', 'doas', 'timeout', 'xargs']);
+const PREFIX_TAKES_VALUE = {
+  sudo: /^-[ugCDhpr]$/, doas: /^-[uC]$/, nice: /^-n$/, env: /^-[uS]$/,
+  timeout: /^(?:-[sk]|--signal|--kill-after)$/,
+  xargs: /^(?:-[nLPsIEda]|--(?:max-args|max-lines|max-procs|max-chars|eof|delimiter|arg-file|process-slot-var))$/,
+};
+// A prefix that takes one word of its own before the command: the duration.
+const PREFIX_TAKES_WORD = new Set(['timeout']);
 function shellDashC(words) {
   let i = 0;
   for (let depth = 0; depth < 8; depth++) {
@@ -1965,6 +1972,7 @@ function shellDashC(words) {
     if (!RUNS_WHAT_FOLLOWS.has(lead)) break;
     i++;
     while (i < words.length && words[i].startsWith('-')) i += (PREFIX_TAKES_VALUE[lead] && PREFIX_TAKES_VALUE[lead].test(words[i])) ? 2 : 1;
+    if (PREFIX_TAKES_WORD.has(lead)) i++;
   }
   if (!SHELL_NAMES.has((words[i] || '').split('/').pop())) return null;
   let given = false;
@@ -1978,7 +1986,7 @@ function shellDashC(words) {
   return null;
 }
 
-function inlineCode(text, reading = null) {
+function inlineCode(text, reading = null, depth = 0) {
   const literals = [];
   const names = [];
   const commands = [];
@@ -1989,7 +1997,15 @@ function inlineCode(text, reading = null) {
     from = at + seg.text.length;
     const words = lexWords(seg.text).map(w => w.text);
     const shellCommand = shellDashC(words);
-    if (shellCommand) commands.push({ text: shellCommand, at });
+    if (shellCommand) {
+      // What the shell runs is read as any command is, its here-documents, its
+      // code and the shells it runs in turn included, a few levels deep.
+      const inner = depth < 4 ? judgedShellText(shellCommand, reading, depth + 1) : { text: shellCommand, literals: [], names: [], commands: [] };
+      commands.push({ text: inner.text, at });
+      for (const l of inner.literals) literals.push({ ...l, at });
+      for (const n of inner.names) names.push({ ...n, at });
+      for (const c of inner.commands) commands.push({ text: c.text, at });
+    }
     let i = 0;
     while (i < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i])) i++;
     const family = interpreterFamily((words[i] || '').split('/').pop());
@@ -2014,9 +2030,9 @@ function inlineCode(text, reading = null) {
 // comment) ran on into the lines after the here-document, and a `cd` there
 // stopped being seen. It is measured from where the command starts: it runs
 // in a shell of its own, so a `cd` inside it moves nothing outside it.
-function judgedShellText(command, reading = null) {
+function judgedShellText(command, reading = null, depth = 0) {
   const view = heredocText(command, reading);
-  const inline = inlineCode(view.text, reading);
+  const inline = inlineCode(view.text, reading, depth);
   return {
     text: view.text,
     literals: [...view.literals, ...inline.literals],
