@@ -40,6 +40,7 @@ const DELEGATE = { src: at('public', 'editor', 'index.js'), suite: 'test/unit/wi
 const BODY = { src: at('public', 'editor', 'plugins', 'missing-links.js'), suite: PANEL_SUITE };
 const CREATE = { src: at('public', 'views', 'files.js'), suite: 'test/unit/link-create.test.js' };
 const HOST_RESOLVER = { src: at('public', 'views', 'files.js'), suite: PANEL_SUITE };
+const APP = { src: at('public', 'app.js'), suite: 'test/unit/link-create.test.js' };
 // The rules only the server can keep: it is the last thing between a click
 // and an existing note's bytes, so the booted-server suite watches it.
 const SERVER = { src: at('lib', 'protocol', 'handlers', 'files.js'), suite: 'test/integration/create-path-exclusive.test.js' };
@@ -137,6 +138,15 @@ const MUTATIONS = [
   [CREATE, 'a second click while a create is on its way sends nothing',
     '  if (pendingLinkCreates.has(where.path) || !ws || ws.readyState !== WebSocket.OPEN) return;',
     '  if (!ws || ws.readyState !== WebSocket.OPEN) return;'],
+  [CREATE, 'a click while the connection is closed says so',
+    "    showLinkNotice('Not connected', 'Nothing was sent. Try again once the connection returns.', true);\n",
+    ''],
+  [CREATE, 'a lost connection clears the creates it was carrying',
+    '  pendingLinkCreates.clear();',
+    ''],
+  [APP, 'the socket close handler clears a link\'s pending creates',
+    ' linkCreatesConnectionLost();',
+    ''],
   [CREATE, 'a note that already exists is opened instead',
     "  if (msg.type === 'path_created' || msg.reason === 'already exists') openWorkspaceFilePath(msg.path);",
     "  if (msg.type === 'path_created') openWorkspaceFilePath(msg.path);"],

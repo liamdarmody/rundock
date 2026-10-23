@@ -2295,9 +2295,19 @@ const NOTHING_CREATED = 'Nothing was created. Edit the link to change the name.'
 function createNoteFromLink(target) {
   const where = linkCreatePath(target, currentFilePath);
   if (where.refusal) { showLinkNotice('That note cannot be created', where.refusal, true, NOTHING_CREATED); return; }
-  if (pendingLinkCreates.has(where.path) || !ws || ws.readyState !== WebSocket.OPEN) return;
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    showLinkNotice('Not connected', 'Nothing was sent. Try again once the connection returns.', true);
+    return;
+  }
+  if (pendingLinkCreates.has(where.path)) return;
   pendingLinkCreates.add(where.path);
   ws.send(JSON.stringify({ type: 'create_path', kind: 'note', path: where.path, content: '' }));
+}
+
+// The connection closed: no answer is coming for a create on its way, so it
+// must not hold its path and turn the next click on that link into nothing.
+function linkCreatesConnectionLost() {
+  pendingLinkCreates.clear();
 }
 
 // The server's answer to a create a link asked for: the new note opens with a
@@ -2450,7 +2460,7 @@ return {
   openBinaryOrUnsupportedFile, renderEditorContent, setEditorMode,
   getFileContentForSave, openWikilink, openWorkspaceFilePath,
   highlightFileInSidebar, findFileInTree, wikilinkSearchName, wikilinkResolves, linkCreatePath, fileConnections,
-  createNoteFromLink, settleLinkCreate,
+  createNoteFromLink, settleLinkCreate, linkCreatesConnectionLost,
   renderFileConnections, drawFileConnections, drawFileConnectionsLoading, removeFileConnections,
   fileConnectionsIndexReady,
   updateEditorBackButton,

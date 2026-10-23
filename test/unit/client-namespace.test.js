@@ -130,6 +130,7 @@ const MANIFEST = {
     "highlightFileInSidebar",
     "initTiptapEditor",
     "linkCreatePath",
+    "linkCreatesConnectionLost",
     "loadFileContent",
     "loadTiptapEditorModule",
     "loadViewersModule",

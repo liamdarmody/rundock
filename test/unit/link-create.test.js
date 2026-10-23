@@ -6,10 +6,13 @@
 // stay missing after the note exists. Every name here is made up.
 const { test, describe } = require('node:test');
 const assert = require('node:assert');
+const fs = require('node:fs');
+const path = require('node:path');
 const { JSDOM } = require('jsdom');
 
 const {
   linkCreatePath, findFileInTree, wikilinkSearchName, createNoteFromLink, settleLinkCreate, wikilinkResolves,
+  linkCreatesConnectionLost,
 } = require('../../public/views/files.js');
 
 const FROM = 'Projects/Alpha/Launch.md';
@@ -185,6 +188,29 @@ describe('creating the note from a click', () => {
       assert.match(notice().textContent, /outside this workspace/);
       assert.match(notice().textContent, /Nothing was created\. Edit the link to change the name\.$/);
     } finally { cleanup(); }
+  });
+
+  test('a click while the connection is closed says so, and sends nothing', () => {
+    const { sent, notice, cleanup } = shell();
+    try {
+      global.ws.readyState = 3;
+      createNoteFromLink('Roadmap');
+      assert.deepStrictEqual(sent, []);
+      assert.match(notice().textContent, /^Not connected.*Nothing was sent/);
+    } finally { cleanup(); }
+  });
+
+  test('a create lost with the connection does not leave later clicks silent', () => {
+    const { sent, cleanup } = shell();
+    try {
+      createNoteFromLink('Roadmap');
+      linkCreatesConnectionLost();
+      createNoteFromLink('Roadmap');
+      assert.strictEqual(sent.length, 2, 'the second click is sent, not swallowed as a duplicate');
+      // And the socket's own close handler is what clears them.
+      const app = fs.readFileSync(path.join(__dirname, '..', '..', 'public', 'app.js'), 'utf8');
+      assert.match(app, /ws\.onclose = \(\) => \{[^\n]*linkCreatesConnectionLost\(\);/);
+    } finally { settleLinkCreate({ type: 'create_error', path: 'Projects/Alpha/Roadmap.md', reason: 'x' }); cleanup(); }
   });
 
   test('an answer for a create no link asked for is left to the caller', () => {
