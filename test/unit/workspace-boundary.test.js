@@ -1887,6 +1887,36 @@ describe('no grant already stored can answer for the permission file', () => {
   });
 });
 
+// NOR FOR ANOTHER WORKSPACE'S. A stored grant over a parent of several Rundock
+// workspaces covers each of them, so without this it would answer for their
+// permission answers and the files that decide what runs there.
+describe('no grant already stored can answer for another workspace\'s answer files', () => {
+  test('a standing grant over a parent of both workspaces covers that workspace\'s ordinary files only', () => {
+    const parent = tmp('wb-other-covered-');
+    const ws = path.join(parent, 'mine');
+    const other = path.join(parent, 'theirs');
+    for (const dir of [ws, other]) {
+      fs.mkdirSync(path.join(dir, '.rundock'), { recursive: true });
+      fs.mkdirSync(path.join(dir, '.claude', 'hooks'), { recursive: true });
+      fs.writeFileSync(path.join(dir, '.rundock', 'state.json'), '{}');
+    }
+    const original = config.getWorkspace();
+    try {
+      config.setWorkspace(ws);
+      boundary.addBoundaryGrant(parent);
+      for (const rel of ['.rundock/state.json', '.rundock/permissions.json', '.rundock/permission-hook.sh', '.rundock/mcp-secrets.json',
+        '.mcp.json', '.claude/settings.json', '.claude/settings.local.json', '.claude/hooks/pre-tool.sh']) {
+        const target = path.join(other, ...rel.split('/'));
+        assert.strictEqual(boundary.boundaryGrantCovers(target), true, `sanity: the grant reaches ${rel} by the prefix rule`);
+        assert.strictEqual(boundary.crossingCovered({ path: target }), false, `and still does not answer for the other workspace's ${rel}`);
+      }
+      assert.strictEqual(boundary.crossingCovered({ path: path.join(other, 'notes.md') }), true, 'its ordinary files stay covered');
+    } finally {
+      config.setWorkspace(original);
+    }
+  });
+});
+
 // CODE MODE MUST NOT SWALLOW A WRITE TO THE WORKSPACE'S OWN ANSWER FILES.
 //
 // This is the trap that made the misleading card worth keeping until it was

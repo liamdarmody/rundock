@@ -1895,6 +1895,11 @@ const MUTATIONS = [
   [VERDICT, 'launchctl: a subcommand piped in through xargs runs',
     "  if (!args.length) return piped ? always('unreadable-command') : RUNS;",
     '  if (!args.length) return RUNS;'],
+  // A stored grant over a parent of several workspaces must not answer for
+  // another workspace's answer files.
+  [BOUNDARY, 'Stored grant: another workspace\'s answer files are covered by a grant over their parent',
+    '  if (isWorkspaceAnswerFile(crossing.path, getWorkspace()) || isAnswerFileOfAnyWorkspace(crossing.path)) return false;',
+    '  if (isWorkspaceAnswerFile(crossing.path, getWorkspace())) return false;'],
   // ===== THE GUARD WATCHES WHAT RUNS, FOR CODEX =====
   [GUARD_RUNS, 'Guard: only the permission answers are watched',
     'const ANSWER_FILES = [...WORKSPACE_ANSWER_FILES];',
