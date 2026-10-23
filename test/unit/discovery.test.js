@@ -557,6 +557,14 @@ describe('rosters and system prompt', () => {
     assert.doesNotMatch(prompt, /every such attempt is refused, whatever the user approves/);
     assert.match(prompt, /may refuse it even after the person allows it/, 'the prompt and the card say the same thing');
 
+    // THE GUIDE DOES NOT SEND AN AGENT TO EDIT THE PROJECT SETTINGS. Rundock
+    // mutes sound hooks itself when it opens a workspace, and an agent's change
+    // to .claude/settings.json asks every time, so suggesting the edit only
+    // raises a card for something already done.
+    const guide = fs.readFileSync(path.join(__dirname, '..', '..', 'scaffold', 'rundock-guide.md'), 'utf-8');
+    assert.doesNotMatch(guide, /suggest wrapping them/, 'the guide no longer suggests editing the hooks');
+    assert.match(guide, /Rundock mutes them itself/, 'it says Rundock mutes them, as the workspace summary does');
+
     // The original protections survive the rewrite.
     assert.ok(prompt.includes('claude.ai'), 'account connectors still point at where they are managed');
     assert.ok(prompt.includes('Never invent Rundock settings'), 'inventing panels is still forbidden');

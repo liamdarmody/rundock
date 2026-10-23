@@ -265,6 +265,9 @@ const GUARD_RUNS_LAUNCHER = { src: path.join(ROOT, 'lib', 'workspace', 'scaffold
 const GUARD_RUNS_CONNECTOR = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'team.js'), suite: 'test/unit/codex-what-runs-guard.test.js' };
 const GUARD_RUNS_CARD = { src: path.join(ROOT, 'public', 'permissions.js'), suite: 'test/unit/codex-what-runs-guard.test.js' };
 const GUARD_RUNS_LINE = { src: path.join(ROOT, 'lib', 'runtime', 'codex-glue.js'), suite: 'test/unit/codex-what-runs-guard.test.js' };
+// The guide's instruction about sound hooks, which would otherwise send an
+// agent to edit the project settings.
+const GUIDE_HOOKS = { src: path.join(ROOT, 'scaffold', 'rundock-guide.md'), suite: 'test/unit/discovery.test.js' };
 // launchctl in either mode, through suites that need no fixture.
 const LAUNCHCTL_NOTES = { src: path.join(ROOT, 'public', 'read-only-shell.js'), suite: 'test/unit/launchctl-asks.test.js' };
 const LAUNCHCTL_ANY_MODE = { src: path.join(ROOT, 'scripts', 'code-mode-verdict.js'), suite: 'test/unit/launchctl-asks.test.js' };
@@ -1926,6 +1929,9 @@ const MUTATIONS = [
   [VERDICT, 'launchctl: submit runs with no card',
     "const LAUNCHCTL_CHANGES = new Set(['setenv', 'unsetenv', 'load', 'bootstrap', 'submit', 'config']);",
     "const LAUNCHCTL_CHANGES = new Set(['setenv', 'unsetenv', 'load', 'bootstrap', 'config']);"],
+  [GUIDE_HOOKS, 'Guide: the agent is sent to edit the project settings to mute a sound hook',
+    "tell the user Rundock mutes them itself each time it opens the workspace, so they stay silent in Rundock and still sound elsewhere. Don't edit `.claude/settings.json` to do it: Rundock asks the user about every change to that file",
+    'warn the user that these will fire on every response in Rundock and suggest wrapping them with `[ -z "$RUNDOCK" ] &&` to suppress in Rundock'],
   [LAUNCHCTL_ANY_MODE, 'launchctl: config runs with no card in Code mode',
     "const LAUNCHCTL_CHANGES = new Set(['setenv', 'unsetenv', 'load', 'bootstrap', 'submit', 'config']);",
     "const LAUNCHCTL_CHANGES = new Set(['setenv', 'unsetenv', 'load', 'bootstrap', 'submit']);"],

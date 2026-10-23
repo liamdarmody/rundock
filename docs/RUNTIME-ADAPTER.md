@@ -70,8 +70,11 @@ escalations surface. The human decides; the runtime never self-approves.
   `.claude/settings.json` is an answer file too, since it can carry hooks
   and permission rules. The hook reads the command a tool call carries, not
   what a script does once it runs, so a write made inside `node -e` or a
-  script never meets it; the workspace's own permission files are therefore
-  also watched during every Claude turn, direct chats, delegates and
+  script never meets it; the workspace's own permission files, and the
+  files that decide what runs (the launcher the hook is started through,
+  `.mcp.json`, `.rundock/mcp-secrets.json` and the hook scripts under
+  `.claude/hooks/`), are therefore also watched during every Claude turn,
+  direct chats, delegates and
   routines alike (`lib/runtime/claude-turn-guard.js`): a change Rundock did
   not make is put back at once and offered on the answer-file card. The
   comparison is against a baseline kept for as long as Rundock runs, so a
@@ -92,10 +95,11 @@ escalations surface. The human decides; the runtime never self-approves.
   meet: in Code mode a command the verdict says runs is answered `accept`
   with no card (never `acceptForSession`), and in both modes a file change
   inside the workspace or a working folder is accepted with no card. An
-  escalation that touches the workspace's own permission files is always
-  the answer-file card, and because such a write inside the workspace
-  never escalates at all (measured, and no thread option stops it), those
-  files are watched during every Codex turn, against the same baseline: a
+  escalation that touches the workspace's own permission files, or a file
+  that decides what runs, is always the answer-file card, and because such
+  a write inside the workspace never escalates at all (measured, and no
+  thread option stops it), those files are watched during every Codex turn,
+  against the same baseline: a
   change Rundock did not make is put back at once and offered on the
   answer-file card (`lib/workspace/answer-file-guard.js`). A request to widen Codex's own
   permission profile (`item/permissions/requestApproval`) is always
