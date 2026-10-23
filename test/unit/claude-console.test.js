@@ -59,30 +59,126 @@ describe('what opens the console, per platform', () => {
 });
 
 describe('opening it', () => {
+  // Each test opens through a gate of its own, so one test's console is not
+  // another's "opened a moment ago".
   test('opened: the child is let go and the answer is ok', async () => {
     const f = fakeSpawn('spawn');
-    assert.deepStrictEqual(await C.openClaudeConsole({ bin: '/opt/example/claude', platform: 'darwin', spawn: f.spawn }), { ok: true });
+    assert.deepStrictEqual(await C.openClaudeConsole({ bin: '/opt/example/claude', platform: 'darwin', spawn: f.spawn, gate: C.consoleGate() }), { ok: true });
     assert.strictEqual(f.calls.length, 1);
     assert.deepStrictEqual(f.calls[0].options, { detached: true, stdio: 'ignore' });
     assert.ok(f.calls[0].child.unrefed);
   });
   test('no claude: not found, and nothing is started', async () => {
     const f = fakeSpawn('spawn');
-    assert.deepStrictEqual(await C.openClaudeConsole({ bin: null, platform: 'darwin', spawn: f.spawn }), { ok: false, reason: 'not-found' });
-    assert.deepStrictEqual(await C.openClaudeConsole({ bin: 'claude', platform: 'darwin', spawn: f.spawn }), { ok: false, reason: 'not-found' },
+    assert.deepStrictEqual(await C.openClaudeConsole({ bin: null, platform: 'darwin', spawn: f.spawn, gate: C.consoleGate() }), { ok: false, reason: 'not-found' });
+    assert.deepStrictEqual(await C.openClaudeConsole({ bin: 'claude', platform: 'darwin', spawn: f.spawn, gate: C.consoleGate() }), { ok: false, reason: 'not-found' },
       'a bare name is what a failed lookup leaves, not a found binary');
     assert.strictEqual(f.calls.length, 0);
   });
   test('no console on this platform: unsupported, and nothing is started', async () => {
     const f = fakeSpawn('spawn');
-    assert.deepStrictEqual(await C.openClaudeConsole({ bin: '/opt/example/claude', platform: 'linux', env: {}, spawn: f.spawn }), { ok: false, reason: 'unsupported' });
+    assert.deepStrictEqual(await C.openClaudeConsole({ bin: '/opt/example/claude', platform: 'linux', env: {}, spawn: f.spawn, gate: C.consoleGate() }), { ok: false, reason: 'unsupported' });
     assert.strictEqual(f.calls.length, 0);
   });
   test('a start that fails, at once or a moment later, is a failure and never an unhandled error', async () => {
     for (const answer of ['error', 'throw']) {
       const f = fakeSpawn(answer);
-      assert.deepStrictEqual(await C.openClaudeConsole({ bin: '/opt/example/claude', platform: 'darwin', spawn: f.spawn }), { ok: false, reason: 'failed' }, answer);
+      assert.deepStrictEqual(await C.openClaudeConsole({ bin: '/opt/example/claude', platform: 'darwin', spawn: f.spawn, gate: C.consoleGate() }), { ok: false, reason: 'failed' }, answer);
     }
+  });
+});
+
+describe('how many consoles open', () => {
+  const BIN = '/opt/example/claude';
+  test('ten asks at once open one console, and every ask is answered', async () => {
+    const f = fakeSpawn('spawn');
+    const gate = C.consoleGate();
+    const answers = await Promise.all(Array.from({ length: 10 }, () => C.openClaudeConsole({ bin: BIN, platform: 'darwin', spawn: f.spawn, gate })));
+    assert.strictEqual(f.calls.length, 1);
+    for (const a of answers) assert.deepStrictEqual(a, { ok: true });
+  });
+
+  test('an ask straight after one opened opens nothing more, and one after the pause opens again', async () => {
+    const f = fakeSpawn('spawn');
+    const gate = C.consoleGate();
+    let t = 1000;
+    const now = () => t;
+    await C.openClaudeConsole({ bin: BIN, platform: 'darwin', spawn: f.spawn, gate, now });
+    t += C.OPEN_COOLDOWN_MS - 1;
+    assert.deepStrictEqual(await C.openClaudeConsole({ bin: BIN, platform: 'darwin', spawn: f.spawn, gate, now }), { ok: true }, 'the window that just opened is the answer');
+    assert.strictEqual(f.calls.length, 1);
+    t += 2;
+    await C.openClaudeConsole({ bin: BIN, platform: 'darwin', spawn: f.spawn, gate, now });
+    assert.strictEqual(f.calls.length, 2, '"Open the window again" still works once the pause is over');
+  });
+
+  test('a console that failed to open does not hold back the next try', async () => {
+    const gate = C.consoleGate();
+    const bad = fakeSpawn('error');
+    assert.deepStrictEqual(await C.openClaudeConsole({ bin: BIN, platform: 'darwin', spawn: bad.spawn, gate }), { ok: false, reason: 'failed' });
+    const good = fakeSpawn('spawn');
+    assert.deepStrictEqual(await C.openClaudeConsole({ bin: BIN, platform: 'darwin', spawn: good.spawn, gate }), { ok: true });
+    assert.strictEqual(good.calls.length, 1);
+  });
+
+  test('the server\'s route and the desktop\'s channel open through the one shared gate', async () => {
+    // Neither caller passes a gate of its own, so both share the module's.
+    const f = fakeSpawn('spawn');
+    const [a, b] = await Promise.all([
+      C.openClaudeConsole({ bin: BIN, platform: 'darwin', spawn: f.spawn, purpose: 'reconnect' }),
+      C.openClaudeConsole({ bin: BIN, platform: 'darwin', spawn: f.spawn }),
+    ]);
+    assert.deepStrictEqual([a, b], [{ ok: true }, { ok: true }]);
+    assert.strictEqual(f.calls.length, 1);
+    const src = (file) => require('node:fs').readFileSync(require('node:path').join(__dirname, '..', '..', file), 'utf8');
+    assert.doesNotMatch(src('server.js'), /openClaudeConsole\(\{[^}]*gate:/, 'the server passes no gate of its own');
+    assert.doesNotMatch(src('electron/main.js'), /openClaudeConsole\(\{[^}]*gate:/, 'nor does the desktop app');
+  });
+});
+
+describe('what the console is called', () => {
+  const BIN = 'C:\\Program Files\\claude.exe';
+  test('opened from the reconnect card it is "Reconnect Claude"; the first-run wizard keeps its own', () => {
+    assert.strictEqual(C.consoleCommand(BIN, 'win32', {}, undefined, C.CONSOLE_TITLES.reconnect).command, 'start "Reconnect Claude" cmd /k ""C:\\Program Files\\claude.exe""');
+    assert.strictEqual(C.consoleCommand(BIN, 'win32', {}).command, 'start "Sign in to Claude" cmd /k ""C:\\Program Files\\claude.exe""');
+  });
+
+  // The opener checks the path is absolute where it runs, so these use one
+  // that is absolute here; only the title is under test.
+  const HERE = '/opt/example/claude';
+  test('the card\'s console asks for "Reconnect Claude" from the server and from the desktop app alike', async () => {
+    const f = fakeSpawn('spawn');
+    await C.openClaudeConsole({ bin: HERE, platform: 'win32', spawn: f.spawn, purpose: 'reconnect', gate: C.consoleGate() });
+    assert.match(f.calls[0].command, /^start "Reconnect Claude" /);
+    const src = (file) => require('node:fs').readFileSync(require('node:path').join(__dirname, '..', '..', file), 'utf8');
+    assert.match(src('server.js'), /openClaudeConsole\(\{ bin: resolveClaudeBin\(\), purpose: 'reconnect' \}\)/);
+    assert.match(src('electron/main.js'), /launchClaudeSignIn\('reconnect'\)/);
+  });
+
+  test('a purpose it does not know is the wizard\'s title, never text from the caller', async () => {
+    const f = fakeSpawn('spawn');
+    await C.openClaudeConsole({ bin: HERE, platform: 'win32', spawn: f.spawn, purpose: '" & calc & "', gate: C.consoleGate() });
+    assert.match(f.calls[0].command, /^start "Sign in to Claude" /);
+  });
+});
+
+describe('the desktop channel answers only the main window\'s own page', () => {
+  const frame = { name: 'main' };
+  const sub = { name: 'sub' };
+  const contents = { mainFrame: frame };
+  const win = { webContents: contents };
+  test('its own top frame is let in; a frame inside it, another window and no window are not', () => {
+    assert.strictEqual(C.fromMainFrame({ sender: contents, senderFrame: frame }, win), true);
+    assert.strictEqual(C.fromMainFrame({ sender: contents, senderFrame: sub }, win), false, 'a subframe the window hosts');
+    assert.strictEqual(C.fromMainFrame({ sender: contents }, win), false, 'a sender with no frame');
+    assert.strictEqual(C.fromMainFrame({ sender: { mainFrame: frame }, senderFrame: frame }, win), false, 'another webContents');
+    assert.strictEqual(C.fromMainFrame({ sender: contents, senderFrame: frame }, null), false, 'no main window');
+  });
+  test('the channel asks it', () => {
+    const main = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', '..', 'electron', 'main.js'), 'utf8');
+    const at = main.indexOf("ipcMain.handle('claude-reconnect'");
+    assert.ok(at > 0);
+    assert.match(main.slice(at, at + 300), /fromMainFrame\(event, mainWindow\)/);
   });
 });
 

@@ -263,6 +263,11 @@ const RECONNECT_AUTH = { src: path.join(ROOT, 'lib', 'auth', 'index.js'), suite:
 const CLAUDE_CONSOLE = { src: path.join(ROOT, 'lib', 'runtime', 'claude-console.js'), suite: 'test/unit/claude-console.test.js' };
 const RECONNECT_SERVER = { src: path.join(ROOT, 'server.js'), suite: 'test/integration/claude-reconnect.test.js' };
 const RECONNECT_CARD = { src: path.join(ROOT, 'public', 'views', 'chat.js'), suite: 'test/unit/reconnect-card.test.js' };
+// Where the console is asked for: the desktop's channel and the server's route,
+// each read by the console suite, and the first-run wizard that reads its answer.
+const CONSOLE_DESKTOP = { src: path.join(ROOT, 'electron', 'main.js'), suite: 'test/unit/claude-console.test.js' };
+const CONSOLE_SERVER = { src: path.join(ROOT, 'server.js'), suite: 'test/unit/claude-console.test.js' };
+const CONSOLE_WIZARD = { src: path.join(ROOT, 'electron', 'wizard.html'), suite: 'test/unit/wizard-first-run.test.js' };
 
 // A shell command that reads or changes the Keychain: always asks, in both
 // modes. The reading of the line, the card's sentence and Codex's grading are
@@ -2043,6 +2048,32 @@ const MUTATIONS = [
   [RECONNECT_CARD, 'Reconnect: a check that could not tell is shown as still disconnected',
     "(!r || r.known === false ? 'unchecked' : 'notyet')",
     "'notyet'"],
+  // Every ask opening a window of its own: ten at once opened ten.
+  [CLAUDE_CONSOLE, 'Reconnect: asks while a console is opening each open another',
+    '  if (gate.opening) return gate.opening;\n',
+    ''],
+  [CLAUDE_CONSOLE, 'Reconnect: an ask straight after one opened opens another',
+    '  if (gate.openedAt !== null && t >= gate.openedAt && t - gate.openedAt < OPEN_COOLDOWN_MS) return Promise.resolve({ ok: true });\n',
+    ''],
+  // The window's title goes onto a shell command line, so only fixed words may.
+  [CLAUDE_CONSOLE, 'Reconnect: the console takes its title from the caller',
+    'Object.prototype.hasOwnProperty.call(CONSOLE_TITLES, purpose) ? CONSOLE_TITLES[purpose] : CONSOLE_TITLES.signin',
+    'CONSOLE_TITLES[purpose] || purpose'],
+  [CONSOLE_SERVER, 'Reconnect: the card\'s console from the server is called "Sign in to Claude"',
+    "{ bin: resolveClaudeBin(), purpose: 'reconnect' }",
+    '{ bin: resolveClaudeBin() }'],
+  // A frame inside the main window, such as one a page embeds, taken for the
+  // window itself.
+  [CLAUDE_CONSOLE, 'Reconnect: a frame inside the window is taken for the window',
+    ' && event.senderFrame && event.senderFrame === contents.mainFrame',
+    ''],
+  [CONSOLE_DESKTOP, 'Reconnect: the desktop channel answers any frame of the main window',
+    "require('../lib/runtime/claude-console.js').fromMainFrame(event, mainWindow)",
+    'mainWindow && event.sender === mainWindow.webContents'],
+  // The wizard reading a field the opener never sends says only "try again".
+  [CONSOLE_WIZARD, 'Reconnect: the wizard reads an error the opener never gives',
+    '}[res && res.reason];',
+    '}[res && res.error];'],
   // ===== WHAT THE SHELL CHECK READS IN CODE AND TEXT =====
   [SHELL_CODE, "Shell code: a backslash in a Bash word is a Windows separator again on a POSIX host",
     "    const pmod = winWorld ? path.win32 : flavourFor(t, workspaceRoot, posixText);",

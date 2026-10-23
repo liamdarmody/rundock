@@ -214,10 +214,11 @@ function launchCodexSignIn() {
 // wizard keeps polling and advances automatically once authentication
 // succeeds; the chat's reconnect card waits for the person to say they are
 // done. The console per platform is lib/runtime/claude-console.js, the one the
-// server opens for a browser running from source. Resolves { ok, reason? };
-// never throws.
-function launchClaudeSignIn() {
-  return require('../lib/runtime/claude-console.js').openClaudeConsole({ bin: findClaude() });
+// server opens for a browser running from source. `purpose` names the window:
+// the wizard's is "Sign in to Claude", the card's 'reconnect'. Resolves
+// { ok, reason? }; never throws.
+function launchClaudeSignIn(purpose) {
+  return require('../lib/runtime/claude-console.js').openClaudeConsole({ bin: findClaude(), purpose });
 }
 
 // ===== FIRST-RUN WIZARD =====
@@ -308,9 +309,10 @@ ipcMain.handle('select-directory', async () => {
 ipcMain.handle('get-app-version', () => app.getVersion());
 
 // The chat's reconnect card, when Claude Code's session has expired: the same
-// console the first-run wizard opens, asked for by the main window only.
-ipcMain.handle('claude-reconnect', (event) => (mainWindow && event.sender === mainWindow.webContents
-  ? launchClaudeSignIn() : { ok: false, reason: 'failed' }));
+// console the first-run wizard opens, asked for by the main window's own page
+// only, never by a frame inside it.
+ipcMain.handle('claude-reconnect', (event) => (require('../lib/runtime/claude-console.js').fromMainFrame(event, mainWindow)
+  ? launchClaudeSignIn('reconnect') : { ok: false, reason: 'failed' }));
 
 // ===== RENDERER STORAGE =====
 

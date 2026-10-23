@@ -694,7 +694,7 @@ httpRouter.wireHttpRouterDeps({
   // The reconnect card's two routes. The check's answer is also the runtime
   // status's evidence, when it could find out: a failed turn counts as signed
   // out only when its words are a sign-in failure (isAuthError).
-  openClaudeConsole: () => claudeConsole.openClaudeConsole({ bin: resolveClaudeBin() }),
+  openClaudeConsole: () => claudeConsole.openClaudeConsole({ bin: resolveClaudeBin(), purpose: 'reconnect' }),
   checkClaudeConnection: () => claudeConsole.checkConnection({ bin: resolveClaudeBin(), isAuthFailure: isAuthError }).then((r) => {
     if (r.known) _claudeAuthEvidence = r.connected;
     return { connected: r.connected, known: r.known };
