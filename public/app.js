@@ -257,7 +257,7 @@ function connect() {
   ws = new WebSocket(`${p}//${location.host}`, RundockSignIn.socketProtocols(RundockSignIn.readToken(pageStorage)));
   ws.onopen = () => { everConnected = true; const so = document.getElementById('signed-out'); if (so) so.hidden = true; setConn('connected'); ws.send(JSON.stringify({type:'get_workspaces'})); };
   ws.onmessage = e => handle(JSON.parse(e.data));
-  ws.onclose = () => { setConn('disconnected'); packagesConnectionLost(); extensionFetchesConnectionLost(); showIfSignedOut(); setTimeout(connect, 2000); };
+  ws.onclose = () => { setConn('disconnected'); packagesConnectionLost(); extensionFetchesConnectionLost(); linkCreatesConnectionLost(); showIfSignedOut(); setTimeout(connect, 2000); };
   ws.onerror = () => {}; // Prevent unhandled error; onclose fires next
 }
 function setConn(s) { const b=document.getElementById('connection-bar'); b.className=`connection-bar ${s}`; b.textContent=s==='connected'?'Connected':s==='disconnected'?'Disconnected. Reconnecting...':'Connecting...'; if(s==='connected')setTimeout(()=>b.style.display='none',2000); else b.style.display='block'; }
@@ -793,16 +793,21 @@ function handle(d) {
       if (d.path === currentFilePath) recheckExtensionClaim();
       break;
     case 'path_created':
+      // A note a link asked for opens with a short notice (settleLinkCreate).
+      if (settleLinkCreate(d)) break;
       // The tree was refreshed by the preceding file_tree push; open a new
       // note/board in the editor and reveal it. A new folder just appears.
       if (d.kind !== 'folder') { ws.send(JSON.stringify({ type: 'read_file', path: d.path })); }
       setTimeout(() => highlightFileInSidebar(d.path), 0);
       break;
     case 'create_error':
+      // A link's note that already exists opens instead; other refusals for
+      // a link are said in its notice rather than a dialog.
+      if (settleLinkCreate(d)) break;
       // A system error is its plain sentence alone (a dialog has no Details,
       // and a path never goes in the sentence); a guard's refusal keeps its
       // own short words with the name the person typed.
-      alert(d.detail ? d.reason : 'Could not create "' + d.path + '": ' + d.reason);
+      alert(d.system ? d.reason : 'Could not create "' + d.path + '": ' + d.reason);
       break;
     case 'agent_saved':
       if (!d.updated) setupComplete = true;

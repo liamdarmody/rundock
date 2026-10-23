@@ -3,7 +3,7 @@
 // quoted, unlocatable keys refused.
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { replaceProperty, editListItem, onlyEditedKeyChanged } from '../../public/editor/markdown/frontmatter-edit.js';
+import { replaceProperty, editListItem, onlyEditedKeyChanged, scalarEditRefusal } from '../../public/editor/markdown/frontmatter-edit.js';
 
 const RAW = [
   '---',
@@ -262,5 +262,36 @@ describe('refuses edits that would silently drop a comment, anchor, or corrupt a
     const r = editListItem(raw, 'tags', { add: 'c' });
     assert.equal(r.changed, true);
     assert.ok(r.raw.includes('[a, b, c]'));
+  });
+});
+
+describe('scalarEditRefusal says up front what replaceProperty will refuse', () => {
+  const raw = [
+    '---',
+    'commented: value # keep this note',
+    'linked: [[Brief]] # kept for later',
+    'anchored: &a hello',
+    'folded: >',
+    '  a long',
+    '  value',
+    'quotedHash: "a # is not a comment"',
+    'plain: draft',
+    '---',
+  ].join('\n');
+
+  test('each refusal is a plain sentence, and the edit is refused exactly then', () => {
+    for (const [key, words] of [['commented', /comment/], ['linked', /comment/], ['anchored', /anchor/], ['folded', /several lines/]]) {
+      assert.match(scalarEditRefusal(raw, key), words, key);
+      assert.equal(replaceProperty(raw, key, 'x').changed, false, `${key}: refused by the edit too`);
+    }
+    for (const key of ['quotedHash', 'plain']) {
+      assert.equal(scalarEditRefusal(raw, key), null, key);
+      assert.equal(replaceProperty(raw, key, 'x').changed, true, `${key}: the edit lands`);
+    }
+  });
+
+  test('a key it cannot find, or no block at all, refuses nothing up front', () => {
+    assert.equal(scalarEditRefusal(raw, 'absent'), null);
+    assert.equal(scalarEditRefusal(null, 'plain'), null);
   });
 });

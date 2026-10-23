@@ -249,10 +249,12 @@ function isWritableInWorkspace(targetPath) {
 // any path with a dot-leading component: a leading-dot basename is filtered
 // out of the file tree (so the new file would be invisible), and '.'/'..'
 // segments are traversal. Independent of isInsideWorkspace so a '..' that
-// happens to resolve back inside the workspace is still refused.
+// happens to resolve back inside the workspace is still refused. A backslash
+// splits too: on Windows it is a separator when the path is resolved, so
+// `x\..\.claude\y.md` would otherwise hide both its traversal and its dot-folder.
 function isSafeCreatePath(rel) {
   if (typeof rel !== 'string' || !rel) return false;
-  const segments = rel.split('/').filter(Boolean);
+  const segments = rel.split(/[\\/]/).filter(Boolean);
   if (!segments.length) return false;
   return !segments.some((seg) => seg.startsWith('.'));
 }

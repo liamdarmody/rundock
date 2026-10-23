@@ -127,17 +127,10 @@ async function initTiptapEditor(path, content) {
     toolbarHostElement: document.getElementById('tiptap-editor-pane'),
     onUpdate: () => onTiptapEditorUpdate(),
     onWikilinkClick: (target) => openWikilink(target),
-    // Frontmatter wikilinks that match no file render visibly dead.
-    resolveWikilink: (target) => {
-      if (!cachedFileTree) return true; // tree not loaded yet: never false-flag
-      // Through the shared search-name rule, which also fixes a drift this
-      // check had grown: it appended .md to anything not already ending .md,
-      // so a frontmatter [[chart.png]] was tested as chart.png.md and
-      // rendered dead while clicking it worked. currentFilePath is this
-      // file's own path, so a bare target resolves against the folder it was
-      // actually written in, the same as a click on it would.
-      return !!findFileInTree(cachedFileTree, wikilinkSearchName(target), currentFilePath);
-    },
+    // A link to a note that does not exist creates it, then opens it.
+    onCreateWikilink: (target) => createNoteFromLink(target),
+    // Wikilinks that match no file render as missing, and a click makes them.
+    resolveWikilink: (target) => wikilinkResolves(cachedFileTree, target, currentFilePath),
     // Review identity: workspace profile name -> 'me' fallback; the agent
     // roster lets review attribution render known agents as agent chips.
     author: (workspaceAnalysis && workspaceAnalysis.userProfile && workspaceAnalysis.userProfile.fields && workspaceAnalysis.userProfile.fields.name)
@@ -2257,6 +2250,104 @@ function wikilinkSearchName(target) {
   return VIEWABLE_LINK_EXT_RE.test(baseName) ? baseName : baseName + '.md';
 }
 
+// Whether a link's target is a file the editor can open, for the editor's
+// missing-link marks. A tree not loaded yet never flags anything. A link to a
+// heading or block in the same note ([[#Risks]]) has no note name at all, so
+// it is never missing. Otherwise through the shared search-name rule, which
+// also fixed a drift this check had grown: it appended .md to anything not
+// already ending .md, so [[chart.png]] was tested as chart.png.md and marked
+// missing while clicking it worked. fromPath is the note the link is in, so
+// a bare target resolves against its folder, as a click on it does.
+function wikilinkResolves(tree, target, fromPath) {
+  if (!tree || !String(target).split('#')[0].trim()) return true;
+  return !!findFileInTree(tree, wikilinkSearchName(target), fromPath);
+}
+
+// Where a note made from a link to a missing note goes, as { path }, or why it
+// cannot be made, as { refusal } in plain words. A bare name goes beside the
+// note the link was written in (fromPath); a name with a folder in it counts
+// from the workspace root, as the resolver above reads it, so the note made
+// is the note the same link then finds. Nothing here can name a place outside
+// the workspace: '.' and '..' are refused, as is any name the file tree would
+// hide, and the server's create guard checks the same again.
+// Control characters are refused with the rest (C0, DEL and C1), so a NUL
+// never reaches the server's file calls.
+const LINK_NAME_FORBIDDEN_RE = /[:*?"<>|\\\u0000-\u001f\u007f-\u009f]/;
+function linkCreatePath(target, fromPath) {
+  const name = String(target == null ? '' : target).split('#')[0].trim();
+  if (!name) return { refusal: 'That link has no note name.' };
+  if (LINK_NAME_FORBIDDEN_RE.test(name)) return { refusal: 'Note and folder names cannot contain : * ? " < > |, a backslash or a control character.' };
+  const segments = name.split('/');
+  if (segments.some((s) => s === '.' || s === '..')) return { refusal: 'That link points outside this workspace.' };
+  if (segments.some((s) => !s.trim())) return { refusal: 'A folder in that link has no name.' };
+  if (segments.some((s) => s.startsWith('.'))) return { refusal: 'Note and folder names cannot start with a dot.' };
+  const file = wikilinkSearchName(name);
+  if (!/\.md$/i.test(file)) return { refusal: 'Only notes can be made from a link, and this one names another kind of file.' };
+  const folder = segments.length > 1 || !fromPath ? '' : String(fromPath).split('/').slice(0, -1).join('/');
+  return { path: folder ? folder + '/' + file : file };
+}
+
+// A click on a link to a missing note creates the note, with no prompt. The
+// paths on their way to the server are held here until it answers, so a
+// second click meanwhile does nothing rather than asking twice.
+const pendingLinkCreates = new Set();
+const NOTHING_CREATED = 'Nothing was created. Edit the link to change the name.';
+function createNoteFromLink(target) {
+  const where = linkCreatePath(target, currentFilePath);
+  if (where.refusal) { showLinkNotice('That note cannot be created', where.refusal, true, NOTHING_CREATED); return; }
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    showLinkNotice('Not connected', 'Nothing was sent. Try again once the connection returns.', true);
+    return;
+  }
+  if (pendingLinkCreates.has(where.path)) return;
+  pendingLinkCreates.add(where.path);
+  ws.send(JSON.stringify({ type: 'create_path', kind: 'note', path: where.path, content: '' }));
+}
+
+// The connection closed: no answer is coming for a create on its way, so it
+// must not hold its path and turn the next click on that link into nothing.
+function linkCreatesConnectionLost() {
+  pendingLinkCreates.clear();
+}
+
+// The server's answer to a create a link asked for: the new note opens with a
+// short notice; a note already there opens instead, never overwritten; any
+// other refusal is said plainly. False for an answer no link asked for, which
+// the caller handles as before.
+function settleLinkCreate(msg) {
+  if (!pendingLinkCreates.delete(msg.path)) return false;
+  if (msg.type === 'path_created' || msg.reason === 'already exists') openWorkspaceFilePath(msg.path);
+  if (msg.type === 'path_created') {
+    showLinkNotice('Created ' + msg.path.split('/').pop().replace(/\.md$/i, ''), msg.path, false);
+  } else if (msg.reason !== 'already exists') {
+    showLinkNotice('That note cannot be created',
+      msg.reason === 'invalid path' ? 'That place is outside this workspace, or hidden.' : String(msg.reason), true, NOTHING_CREATED);
+  }
+  return true;
+}
+
+// One short notice at a time, gone by itself. Built from text nodes, never
+// markup: a title, the detail, and an optional line on what to do next.
+let linkNoticeTimer = null;
+function showLinkNotice(title, detail, refused, note = null) {
+  const old = document.querySelector('.link-notice');
+  if (old) old.remove();
+  const box = document.createElement('div');
+  box.className = 'link-notice' + (refused ? ' refused' : '');
+  box.setAttribute('role', 'status');
+  const lines = [['link-notice-title', title], ['link-notice-detail', detail]];
+  if (note) lines.push(['link-notice-note', note]);
+  for (const [cls, text] of lines) {
+    const line = document.createElement('div');
+    line.className = cls;
+    line.textContent = text;
+    box.appendChild(line);
+  }
+  document.body.appendChild(box);
+  clearTimeout(linkNoticeTimer);
+  linkNoticeTimer = setTimeout(() => box.remove(), 4000);
+}
+
 /**
  * What links here, and what this links to, as data the view can draw.
  *
@@ -2368,7 +2459,8 @@ return {
   openBoardFile, openMarkdownFile, openLegacyTextFile,
   openBinaryOrUnsupportedFile, renderEditorContent, setEditorMode,
   getFileContentForSave, openWikilink, openWorkspaceFilePath,
-  highlightFileInSidebar, findFileInTree, wikilinkSearchName, fileConnections,
+  highlightFileInSidebar, findFileInTree, wikilinkSearchName, wikilinkResolves, linkCreatePath, fileConnections,
+  createNoteFromLink, settleLinkCreate, linkCreatesConnectionLost,
   renderFileConnections, drawFileConnections, drawFileConnectionsLoading, removeFileConnections,
   fileConnectionsIndexReady,
   updateEditorBackButton,

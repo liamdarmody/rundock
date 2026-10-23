@@ -3,10 +3,11 @@
 //
 // The boundary check inspects tokens that look like paths. That is the right
 // basis for a decision, because it does not guess. It also means a path inside
-// a quoted interpreter argument is invisible to it:
+// a quoted argument is invisible to it unless the argument is code it reads
+// as code (`python3 -c`, `node -e`, whose string literals are judged):
 //
-//   cat /Users/me/.ssh/id_rsa                                -> a crossing
-//   python3 -c "print(open('/Users/me/.ssh/id_rsa').read())" -> not a crossing
+//   cat /Users/me/.ssh/id_rsa             -> a crossing
+//   sh -c "cat /Users/me/.ssh/id_rsa"     -> not a crossing
 //
 // Measured across every evading shape tried (python -c, node -e, sh -c, awk
 // getline, command substitution): all of them are carded anyway, by the risk
@@ -50,7 +51,7 @@ describe('it sees what the tokeniser cannot', () => {
   ];
 
   for (const [name, command] of EVADERS) {
-    test(`${name}: the path is named even though it is not a crossing`, () => {
+    test(`${name}: the path is named on the card`, () => {
       const found = hook.advisoryOutsidePaths(command, WS, []);
       assert.ok(found.includes(SECRET),
         `the card would ask whether a command may run without saying it reads ${SECRET}`);
@@ -140,7 +141,7 @@ describe('it cannot change a decision', () => {
   });
 
   test('classifying a command is unaffected by what the advisory finds', () => {
-    const command = `python3 -c "print(open('${SECRET}').read())"`;
+    const command = `sh -c "cat ${SECRET}"`;
     assert.ok(hook.advisoryOutsidePaths(command, WS, []).length > 0, 'the label finds it');
     assert.strictEqual(hook.classifyShellAccess('Bash', { command }, WS, []), null,
       'and the decision is exactly what it was before: not a crossing, left to '

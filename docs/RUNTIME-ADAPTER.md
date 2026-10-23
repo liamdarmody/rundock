@@ -69,8 +69,9 @@ escalations surface. The human decides; the runtime never self-approves.
   instruction files: they carry no such keys. The current workspace's
   `.claude/settings.json` is an answer file too, since it can carry hooks
   and permission rules. The hook reads the command a tool call carries, not
-  what a script does once it runs, so a write made inside `node -e` or a
-  script never meets it; the workspace's own permission files, and the
+  what a script does once it runs, so a write made by a script, or by code
+  that builds its path as it runs, never meets it; the workspace's own
+  permission files, and the
   files that decide what runs (the launcher the hook is started through,
   `.mcp.json`, `.rundock/mcp-secrets.json` and the hook scripts under
   `.claude/hooks/`), are therefore also watched during every Claude turn,

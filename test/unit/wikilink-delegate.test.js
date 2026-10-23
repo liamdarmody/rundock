@@ -68,6 +68,38 @@ describe('the wikilink delegate serves both spellings', () => {
   });
 });
 
+// A link to a note that does not exist creates it, in the body as in the
+// properties panel, through the same host function. Both spellings, because a
+// link inside a callout is a body link too.
+describe('a link to a missing note creates it', () => {
+  function creating(html, withCreate = true) {
+    const dom = new JSDOM(`<div id="host">${html}</div>`);
+    const el = dom.window.document.getElementById('host');
+    const opened = [];
+    const created = [];
+    wireWikilinkClicks(el, (target) => opened.push(target), {
+      resolveWikilink: (target) => target === 'Plan',
+      onCreateWikilink: withCreate ? (target) => created.push(target) : null,
+    });
+    for (const a of el.querySelectorAll('a')) a.click();
+    return { opened, created };
+  }
+
+  test('a missing target goes to the create function, a found one opens', () => {
+    const { opened, created } = creating('<a class="wikilink" data-target="Plan">p</a>'
+      + '<a class="wikilink" data-target="Old plan" data-alias="older">o</a>'
+      + '<a class="wikilink" data-wikilink="Roadmap">r</a>');
+    assert.deepStrictEqual(opened, ['Plan']);
+    assert.deepStrictEqual(created, ['Old plan', 'Roadmap']);
+  });
+
+  test('with no create function, every link opens as before', () => {
+    const { opened, created } = creating('<a class="wikilink" data-target="Plan">p</a><a class="wikilink" data-target="Old plan">o</a>', false);
+    assert.deepStrictEqual(opened, ['Plan', 'Old plan']);
+    assert.deepStrictEqual(created, []);
+  });
+});
+
 // A relative link to a workspace file in the rich editor opens that file in
 // Rundock, exactly as read-only rendering does, by the same resolver.
 describe('a relative link to a workspace file opens in Rundock', () => {

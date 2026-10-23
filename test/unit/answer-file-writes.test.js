@@ -107,6 +107,8 @@ describe('a command asks about an answer file only when it can write it', () => 
     // Into a folder that holds answer files, under another name: only that name is written.
     'cp x.json .claude', 'mv notes.txt .rundock/', 'cp -t .claude x.json',
     'rm -rf {src,dist}', 'rm -rf .claude/{agents,skills}', 'rm -rf [!.]*', 'rm -rf .[!cmr]*', 'echo ${HOME}',
+    // A `[` with no `]` after it is the character itself, not a class.
+    '[ -f x.json ] && rm notes.txt', 'rm -f [ x.json', 'touch .[a',
   ];
   test('a command that removes, moves or writes into a folder holding answer files asks', () => {
     for (const d of ['backup/.claude', 'projects/other-ws/.rundock', 'projects/other-ws/.claude', '.claude/agents', '.rundock/scratch', 'skills']) fs.mkdirSync(path.join(ws, d), { recursive: true });

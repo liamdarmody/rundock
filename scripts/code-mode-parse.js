@@ -101,8 +101,10 @@ function skipHeredocBodies(s, nl, markers) {
 }
 
 // Cut the here-document bodies out of a line, so the data they carry is not
-// read as commands. Returns { text, bodies: [{ body, expands }], ok }. The
-// marker stays, so a caller can see which command a body was fed to.
+// read as commands. Returns { text, bodies: [{ body, expands, at, bodyAt }],
+// ok }. The marker stays, so a caller can see which command a body was fed
+// to: `at` is where its `<<` sits in `text`, and `bodyAt` where the body (and
+// its delimiter line) was cut out.
 function stripHeredocs(line, dialect = 'bash') {
   const s = String(line);
   if (dialect !== 'bash' || s.indexOf('<<') < 0) return { text: s, bodies: [], ok: true };
@@ -127,6 +129,7 @@ function stripHeredocs(line, dialect = 'bash') {
     if (ch === '<' && s[i + 1] === '<' && s[i + 2] !== '<') {
       const m = heredocMarker(s, i + 2);
       if (!m) return { text: s, bodies, ok: false };
+      m.at = out.length;
       pending.push(m);
       out += s.slice(i, m.end);
       i = m.end - 1;
@@ -135,16 +138,24 @@ function stripHeredocs(line, dialect = 'bash') {
     if (ch === '\n' && pending.length) {
       const markers = pending.splice(0);
       const j = skipHeredocBodies(s, i, markers);
-      if (j < 0) return { text: s, bodies, ok: false };
-      for (const m of markers) bodies.push({ body: m.body, expands: !m.quoted });
+      if (j < 0) return { text: s, bodies, ok: false, unfinished: unfinished(out, bodies, s.slice(i + 1), markers[0]) };
       out += '\n';
+      for (const m of markers) bodies.push({ body: m.body, expands: !m.quoted, at: m.at, bodyAt: out.length });
       i = j;
       continue;
     }
     out += ch;
   }
-  if (pending.length) return { text: s, bodies, ok: false };
+  if (pending.length) return { text: s, bodies, ok: false, unfinished: unfinished(out, bodies, '', pending[0]) };
   return { text: out, bodies, ok: true };
+}
+
+// A here-document whose delimiter never comes: the line is unreadable, and
+// what is known of it is still given, read on the side of finding more. The
+// command lines up to the marker, and the body taken to the end of the text,
+// which is data unless a shell reads it, as for any here-document.
+function unfinished(text, bodies, body, marker) {
+  return { text, bodies: [...bodies, { body, expands: !marker.quoted }], ok: true };
 }
 
 // The commands a line runs inside itself: the bodies of `$( )`, backticks and

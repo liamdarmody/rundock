@@ -4,9 +4,9 @@
 [![Latest release](https://img.shields.io/github/v/release/liamdarmody/rundock)](https://github.com/liamdarmody/rundock/releases)
 [![GitHub stars](https://img.shields.io/github/stars/liamdarmody/rundock?style=social)](https://github.com/liamdarmody/rundock/stargazers)
 
-The AI team workspace. Build and manage a team of AI agents in files you own, no terminal needed. Free and open source. Works with the Claude or ChatGPT subscription you may already have. Built by someone running their own business, for people running their own.
+The AI team workspace. Build and manage a team of AI agents in files you own. Free and source-available. Works with the Claude or ChatGPT subscription you may already have. Built by someone running their own business, for people running their own.
 
-**[Download for macOS or Windows](https://rundock.ai/download)** · guided setup, about ten minutes, no terminal in your day.
+**[Download for macOS or Windows](https://rundock.ai/download)** · guided setup; after it, your day happens in Rundock.
 
 You run content, ops, sales, admin, and research. When you started, there was nobody else, so the work fell to you. A single chatbot is a single assistant. An agent platform built for developers assumes you can write code. Rundock gives you a team you can actually manage: an org chart of named specialists, parallel conversations you can watch side by side, and delegation that happens in front of you. One beta user described it as having a virtual team of highly paid experts, running in parallel. That is the experience.
 
@@ -62,7 +62,7 @@ Read the full version at [docs.rundock.ai/principles](https://docs.rundock.ai/pr
 
 ## Getting started
 
-You do not need to write code. You need a subscription that can run agents (Claude Pro or Max; a ChatGPT plan works too, see [Runtimes](#runtimes)) and a folder to call your workspace. Rundock's first-run wizard helps you install Claude Code and sign in, so there is no terminal setup to do by hand.
+You do not need to write code. You need a subscription that can run agents (Claude Pro or Max; a ChatGPT plan works too, see [Runtimes](#runtimes)) and a folder to call your workspace. Rundock's first-run wizard walks you through installing Claude Code (one command to paste) and connecting your Claude account.
 
 1. Get a [Claude Pro or Max subscription](https://claude.com/product/claude-code). Claude Code runs your team by default; Rundock's wizard installs and signs you in.
 2. Download Rundock for your platform, from [rundock.ai/download](https://rundock.ai/download) or the [releases page](https://github.com/liamdarmody/rundock/releases):
@@ -122,7 +122,7 @@ To pull updates later, run `npm run update` in the install directory.
 
 The entire stack runs on your machine. Rundock never sends your files, your agents, or your conversations anywhere. Rundock itself contacts only GitHub: the desktop app checks there for its own updates, and Rundock fetches a package from there when you add it, check it for updates or update it. None of your files, agents or conversations go with those requests. Everything else is your runtime and the connectors you choose: Claude Code talks to Anthropic's API, Codex (if you use it) talks to OpenAI's, and any connector you add reaches its own service. The runtime sends only the active conversation, processed under your own subscription. There is no cloud service, no account to create, no server-side database, no telemetry. Sign-in and keys are managed by each runtime's CLI, and Rundock never reads their contents: it learns that Claude Code is signed in from how its turns go, and that Codex is signed in from whether its credentials file exists.
 
-Inside the app, every action that matters asks first. An agent that wants to run a command or change a file outside its permissions raises a card you allow once, always allow, or deny. In Notes mode, a connector action whose name says it deletes, sends, replies or forwards asks every time, with no always allow, because it can't be called back, while reading through a connector, such as suggesting a meeting time, doesn't ask. Settings, Permissions lists everything you have always allowed, and takes any of it back. Notes mode suits a workspace of documents; Code mode lets agents run everyday development commands without asking, while commands that can't be undone still ask every time. Details at [docs.rundock.ai/concepts/permissions](https://docs.rundock.ai/concepts/permissions).
+Inside the app, every action that matters asks first. An agent that wants to run a command or change a file outside its permissions raises a card you allow once, always allow, or deny. In Notes mode, a connector action whose name says it deletes, sends, replies or forwards asks every time, with no always allow, because it can't be called back, while reading through a connector, such as suggesting a meeting time, doesn't ask. On a Mac, a command that reads or changes a password or key in your Keychain asks every time in both modes, with no always allow. Settings, Permissions lists everything you have always allowed, and takes any of it back. Notes mode suits a workspace of documents; Code mode lets agents run everyday development commands without asking, while commands that can't be undone still ask every time. Details at [docs.rundock.ai/concepts/permissions](https://docs.rundock.ai/concepts/permissions).
 
 ## Licence
 
