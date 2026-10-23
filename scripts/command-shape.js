@@ -28,6 +28,13 @@
  * inside a quoted argument. A quoted argument still counts as an argument, so
  * `gh pr comment 3 --body "x" | cat` is refused under `gh *` as before.
  *
+ * WHAT IT SUGGESTS: the command bare, on its own; after a `cd`, two calls, the
+ * `cd` and then the command; for a VAR=value, a small script in the test tree
+ * or the gitignored scratch folder that sets it for the child process it
+ * starts. scripts/exempt-run.js is named only when its own command matches an
+ * exclusion: a runner not configured as an exclusion runs sandboxed like
+ * anything else, so pointing to it would only move the failure.
+ *
  * As a Claude Code PreToolUse hook (matcher "Bash"):
  *   node scripts/command-shape.js [--settings <file>]...
  * It reads the hook payload on stdin, reads `sandbox.excludedCommands` from the
@@ -176,12 +183,19 @@ function gitDir(words) {
 
 function exclusionFor(words, patterns) {
   const whole = matchingPattern(words.join(' '), patterns);
-  if (whole) return { pattern: whole, near: false };
+  if (whole) return { pattern: whole, near: false, length: words.length };
   for (let k = words.length - 1; k >= 1; k--) {
     const p = matchingPattern(words.slice(0, k).join(' '), patterns);
-    if (p) return { pattern: p, near: true };
+    if (p) return { pattern: p, near: true, length: k };
   }
   return null;
+}
+
+// Whether the runner's own command is excluded. Only then does it, and what it
+// starts, run outside the sandbox; otherwise it is sandboxed like anything
+// else, so it is named only when it is excluded.
+function runnerExcluded(patterns) {
+  return Boolean(matchingPattern(`node ${RUNNER} args.json`, patterns));
 }
 
 const WRAPPER_NAMES = {
@@ -222,9 +236,11 @@ function classify(command, patterns) {
       pattern: hit.pattern,
       segment: seg.words.join(' '),
       wrappers: [...wrappers],
+      runner: runnerExcluded(patterns),
       fix: {
         cwd,
         argv: seg.words.slice(),
+        named: seg.words.slice(0, hit.length).join(' '),
         env: Object.fromEntries(seg.env.map((e) => [e.slice(0, e.indexOf('=')), e.slice(e.indexOf('=') + 1)])),
         stdout: seg.redirects[0] || null,
         piped: wrappers.has('pipe') && i < segments.length - 1,
@@ -240,34 +256,35 @@ function refusalMessage(r) {
   const lines = [];
   if (r.kind === 'near-miss') {
     lines.push(`Refused before it ran: the sandbox exclusion "${r.pattern}" matches this command only without its`,
-      'arguments, so with them it runs inside the sandbox and fails late.');
+      'arguments, so with them it runs inside the sandbox and fails late.',
+      '',
+      'Put the values inside the script and run it bare, as the exclusion names it:',
+      `  ${r.fix.named}`);
   } else {
     const how = r.wrappers.map((w) => WRAPPER_NAMES[w]).join(', ');
     lines.push(`Refused before it ran: "${r.segment}" runs outside the sandbox only as one bare command (exclusion`,
       `"${r.pattern}"). Wrapped in ${how}, it runs inside the sandbox and fails late and misleadingly:`,
-      'a browser that cannot start, a credential that reads as invalid.');
+      'a browser that cannot start, a credential that reads as invalid.',
+      '');
+    const env = Object.entries(r.fix.env).map(([k, v]) => `${k}=${v}`).join(' ');
+    if (env) {
+      lines.push(`A bare command cannot carry ${env}. Write a small script in the repository's test tree or its`,
+        `gitignored scratch folder (.rundock/scratch/) that starts the command as a child process${r.fix.cwd ? ` in ${r.fix.cwd}` : ''}`,
+        'with that set, and run the script bare.');
+    } else if (r.fix.cwd && !gitDir(r.fix.argv)) {
+      lines.push('Run it as two calls, the cd alone and then the command alone:', `  1. cd ${r.fix.cwd}`, `  2. ${r.segment}`);
+    } else {
+      lines.push('Run it bare, as one call with nothing before or after it:', `  ${r.segment}`);
+    }
+    if (r.fix.stdout || r.fix.piped) lines.push('Its output comes back as the result of the call: read it there, not through a pipe or a file.');
   }
-  lines.push('');
-  const twoCalls = r.kind === 'wrapped' && !r.fix.stdout && !r.fix.piped && !Object.keys(r.fix.env).length;
-  if (twoCalls) {
-    lines.push('Run it as two calls, where the working directory persists between calls:');
-    if (r.fix.cwd) lines.push(`  1. cd ${r.fix.cwd}`, `  2. ${r.segment}`);
-    else lines.push(`  ${r.segment}`, '  (alone, with nothing chained before or after it)');
-    lines.push('');
+  if (r.runner) {
+    const spec = { cwd: r.fix.cwd || '<absolute working directory>', argv: r.fix.argv };
+    if (Object.keys(r.fix.env).length) spec.env = r.fix.env;
+    if (r.fix.stdout || r.fix.piped) spec.stdout = r.fix.stdout || '<absolute path for the output, beside the arguments file>';
+    lines.push('', "Or, as the runner's own command is excluded too, put the arguments in a JSON file and run it bare:",
+      `  node ${RUNNER} <args-file>.json`, 'with the file holding:', `  ${JSON.stringify(spec)}`);
   }
-  const spec = { cwd: r.fix.cwd || '<absolute working directory>', argv: r.fix.argv };
-  if (Object.keys(r.fix.env).length) spec.env = r.fix.env;
-  if (r.fix.stdout || r.fix.piped) spec.stdout = r.fix.stdout || '<absolute path for the output, beside this file>';
-  lines.push(twoCalls
-    ? 'Or, where the working directory resets between calls, write its arguments to a JSON file and run the runner on it, bare:'
-    : 'Write its arguments to a JSON file and run the runner on it, bare:',
-    `  node ${RUNNER} <args-file>.json`,
-    'with the file holding:',
-    `  ${JSON.stringify(spec)}`);
-  if (r.kind === 'near-miss') {
-    lines.push('', `The runner accepts a command whose script "${r.pattern}" names. Or put the values inside the script.`);
-  }
-  if (r.fix.piped) lines.push('', 'Then read or filter that output file in a separate call.');
   return lines.join('\n');
 }
 

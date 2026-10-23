@@ -36,15 +36,13 @@ describe('the shapes that ran sandboxed are refused', () => {
     const r = verdict('gh pr list --state open | head -5');
     assert.strictEqual(r.verdict, 'refuse');
     assert.ok(r.wrappers.includes('pipe'));
-    assert.ok(r.fix.piped, 'a pipe is replaced by an output file');
-    assert.match(r.message, /"stdout"/);
+    assert.ok(r.fix.piped);
   });
 
   test('gh redirected to a file names that file as the output', () => {
     const r = verdict('gh pr view 12 --json body > /work/out/pr.json');
     assert.strictEqual(r.verdict, 'refuse');
     assert.strictEqual(r.fix.stdout, '/work/out/pr.json');
-    assert.match(r.message, /"stdout":"\/work\/out\/pr\.json"/);
   });
 
   test('node with an argument where the exclusion names the script alone', () => {
@@ -67,11 +65,9 @@ describe('the shapes that ran sandboxed are refused', () => {
     assert.strictEqual(r.fix.cwd, '/work/lane');
     assert.deepStrictEqual(r.fix.argv, ['npx', 'playwright', 'test', 'e2e/a.spec.js']);
     assert.match(r.message, /1\. cd \/work\/lane\n {2}2\. npx playwright test e2e\/a\.spec\.js/);
-    assert.match(r.message, /exempt-run\.js <args-file>\.json/);
-    assert.match(r.message, /"cwd":"\/work\/lane"/);
   });
 
-  test('a VAR=value prefix moves into the runner file', () => {
+  test('a VAR=value prefix', () => {
     const r = verdict('E2E_PORT=4100 npx playwright test');
     assert.strictEqual(r.verdict, 'refuse');
     assert.deepStrictEqual(r.fix.env, { E2E_PORT: '4100' });
@@ -92,6 +88,54 @@ describe('the shapes that ran sandboxed are refused', () => {
 
   test('the release gate run after anything', () => {
     assert.strictEqual(verdict('git status; npm run release:gate').verdict, 'refuse');
+  });
+});
+
+describe('the refusal names forms that work', () => {
+  const RUNNER = path.join(__dirname, '..', '..', 'scripts', 'exempt-run.js');
+  const refusals = [
+    'gh pr list --state open | head -5',
+    'gh pr view 12 --json body > /work/out/pr.json',
+    'cd /work/lane && npx playwright test e2e/a.spec.js',
+    'E2E_PORT=4100 npx playwright test',
+    'node /work/scratch/test-a/run.js "a b"',
+  ];
+
+  test('a command that needs nothing from its wrapper: run it bare, and read the output from the result', () => {
+    for (const cmd of ['gh pr list --state open | head -5', 'gh pr view 12 --json body > /work/out/pr.json']) {
+      const { message } = verdict(cmd);
+      assert.match(message, /Run it bare, as one call with nothing before or after it:\n {2}gh pr (list --state open|view 12 --json body)\n/);
+      assert.match(message, /Its output comes back as the result of the call: read it there, not through a pipe or a file\./);
+    }
+  });
+
+  test('a command after a cd: two calls, the cd and then the command, piped or not', () => {
+    const r = verdict('cd /work/lane && gh pr list | head -5');
+    assert.match(r.message, /Run it as two calls, the cd alone and then the command alone:\n {2}1\. cd \/work\/lane\n {2}2\. gh pr list\n/);
+    const git = verdict('cd /work/other && git -C /work/lane push origin x | cat');
+    assert.match(git.message, /Run it bare[^\n]*\n {2}git -C \/work\/lane push origin x\n/, 'git -C already carries its directory');
+    assert.doesNotMatch(git.message, /two calls/);
+  });
+
+  test('a VAR=value: a small script in the test tree or the scratch folder that sets it for its child process', () => {
+    const message = verdict('cd /work/lane && E2E_PORT=4100 npx playwright test').message.replace(/\s+/g, ' ');
+    assert.match(message, /A bare command cannot carry E2E_PORT=4100\./);
+    assert.match(message, /small script in the repository's test tree or its gitignored scratch folder \(\.rundock\/scratch\/\)/);
+    assert.match(message, /starts the command as a child process in \/work\/lane with that set, and run the script bare\./);
+  });
+
+  test('an exclusion that names the script alone: put the values inside it and run it with no arguments', () => {
+    const { message } = verdict('node /work/scratch/test-a/run.js "a b"');
+    assert.match(message, /Put the values inside the script and run it bare, as the exclusion names it:\n {2}node \/work\/scratch\/test-a\/run\.js$/m);
+  });
+
+  test('the runner is offered only when its own command is excluded', () => {
+    for (const cmd of refusals) assert.doesNotMatch(verdict(cmd).message, /exempt-run/, cmd);
+    const withRunner = [...PATTERNS, `node ${RUNNER} *`];
+    const cd = classify('cd /work/lane && npx playwright test e2e/a.spec.js', withRunner).message;
+    assert.match(cd, new RegExp(`Or, as the runner's own command is excluded too[^\\n]*\\n {2}node ${RUNNER.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} <args-file>\\.json\\n`));
+    assert.match(cd, /"cwd":"\/work\/lane"/);
+    assert.match(classify('gh pr view 12 --json body > /work/out/pr.json', withRunner).message, /"stdout":"\/work\/out\/pr\.json"/);
   });
 });
 
