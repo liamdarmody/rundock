@@ -100,6 +100,10 @@ function ensurePath() {
   }
 }
 
+// What `claude --version` said the last time findClaude found Claude Code:
+// the reconnect console runs Claude Code's login command only on a version
+// that has it (lib/runtime/claude-console.js, hasAuthLogin).
+let claudeFoundVersion = null;
 function findClaude() {
   ensurePath();
   const isWindows = process.platform === 'win32';
@@ -121,9 +125,10 @@ function findClaude() {
     } else {
       bin = output;
     }
-    // Sanity-check the resolved binary. Quote the path so a directory with
-    // spaces (common on Windows) does not split the command.
-    execSync(`"${bin}" --version`, { timeout: 10000 });
+    // Sanity-check the resolved binary, keeping the version it reports. Quote
+    // the path so a directory with spaces (common on Windows) does not split
+    // the command.
+    claudeFoundVersion = String(execSync(`"${bin}" --version`, { timeout: 10000 }));
     return bin;
   } catch {
     return null;
@@ -217,13 +222,14 @@ function launchCodexSignIn() {
 // server opens for a browser running from source. `purpose` chooses the
 // console: the wizard's, "Sign in to Claude", runs `claude`; the card's,
 // 'reconnect', runs Claude Code's own login command, `claude auth login`
-// (on macOS through a script the opener writes first). The opener is
-// handed the lookup rather than its answer, so it runs findClaude (a command,
-// on this process) only once its gate has let the ask through, never for an
-// ask while a console opens or just after. Resolves { ok, reason? }; never
-// throws.
+// (on macOS through a script the opener writes first), on a Claude Code
+// whose version has it. The opener is handed the lookup rather than its
+// answer, so it runs findClaude (a command, on this process) only once its
+// gate has let the ask through, never for an ask while a console opens or
+// just after; it then asks for the version that lookup just read. Resolves
+// { ok, reason? }; never throws.
 function launchClaudeSignIn(purpose) {
-  return require('../lib/runtime/claude-console.js').openClaudeConsole({ findBin: findClaude, purpose });
+  return require('../lib/runtime/claude-console.js').openClaudeConsole({ findBin: findClaude, findVersion: () => claudeFoundVersion, purpose });
 }
 
 // ===== FIRST-RUN WIZARD =====

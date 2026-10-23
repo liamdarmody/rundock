@@ -62,6 +62,9 @@ describe('what opens the console, per platform', () => {
   // ready to chat and only say "Please run /login" once a message is sent.
   const BIN = '/opt/example/bin/claude';
   const HOME = '/home/example';
+  // A Claude Code that has `claude auth login`, as `claude --version` says it.
+  const version = '2.1.309 (Claude Code)';
+  const reconnect = { purpose: 'reconnect', home: HOME, version };
   test('macOS: the wizard\'s console opens Terminal on claude itself', () => {
     assert.deepStrictEqual(C.consoleCommand(BIN, 'darwin', {}), { command: 'open', args: ['-a', 'Terminal', BIN], options: {} });
   });
@@ -69,13 +72,13 @@ describe('what opens the console, per platform', () => {
     // Terminal runs a file it is given, never words after it, and driving it
     // by AppleScript raises an Automation prompt: so a script, of fixed words.
     const file = path.join(HOME, '.rundock-console', 'Reconnect Claude.command');
-    assert.deepStrictEqual(C.consoleCommand(BIN, 'darwin', {}, undefined, 'reconnect', HOME), {
+    assert.deepStrictEqual(C.consoleCommand(BIN, 'darwin', {}, reconnect), {
       command: 'open', args: ['-a', 'Terminal', file], options: {},
       script: { file, content: "#!/bin/sh\nexec '/opt/example/bin/claude' auth login\n" },
     });
   });
   test('macOS: a quote in the path is written so the shell reads the path as it is', () => {
-    const c = C.consoleCommand("/opt/it's here/claude", 'darwin', {}, undefined, 'reconnect', HOME);
+    const c = C.consoleCommand("/opt/it's here/claude", 'darwin', {}, reconnect);
     assert.strictEqual(c.script.content, "#!/bin/sh\nexec '/opt/it'\\''s here/claude' auth login\n");
   });
   test('Windows opens a console that stays open, the path quoted for spaces and the words after it', () => {
@@ -84,44 +87,109 @@ describe('what opens the console, per platform', () => {
     const W = 'C:\\Program Files\\claude.exe';
     const signin = C.consoleCommand(W, 'win32', {});
     assert.deepStrictEqual(signin, { command: 'start "Sign in to Claude" cmd /k ""C:\\Program Files\\claude.exe""', args: [], options: { shell: true } });
-    const reconnect = C.consoleCommand(W, 'win32', {}, undefined, 'reconnect');
-    assert.deepStrictEqual(reconnect, { command: 'start "Reconnect Claude" cmd /k ""C:\\Program Files\\claude.exe" auth login"', args: [], options: { shell: true } });
+    assert.deepStrictEqual(C.consoleCommand(W, 'win32', {}, reconnect), { command: 'start "Reconnect Claude" cmd /k ""C:\\Program Files\\claude.exe" auth login"', args: [], options: { shell: true } });
   });
   test('Linux needs a display and a terminal to open, and hands the terminal each word on its own', () => {
     // Debian policy for x-terminal-emulator: the words after -e are the
     // program's argument list, run as by execvp, never one string for a shell.
     const withTerminal = { DISPLAY: ':0', PATH: __dirname };
+    const found = () => true;
     assert.strictEqual(C.consoleCommand(BIN, 'linux', { PATH: '/nowhere' }), null, 'no display');
     assert.strictEqual(C.consoleCommand(BIN, 'linux', { DISPLAY: ':0', PATH: '/nowhere' }), null, 'no terminal on the path');
-    assert.deepStrictEqual(C.consoleCommand(BIN, 'linux', withTerminal, () => true),
+    assert.deepStrictEqual(C.consoleCommand(BIN, 'linux', withTerminal, { found }),
       { command: 'x-terminal-emulator', args: ['-e', BIN], options: {} });
-    assert.deepStrictEqual(C.consoleCommand(BIN, 'linux', withTerminal, () => true, 'reconnect'),
+    assert.deepStrictEqual(C.consoleCommand(BIN, 'linux', withTerminal, { ...reconnect, found }),
       { command: 'x-terminal-emulator', args: ['-e', BIN, 'auth', 'login'], options: {} });
   });
   test('a purpose it does not know opens what the wizard opens', () => {
     const linux = { DISPLAY: ':0' };
+    const found = () => true;
     for (const purpose of ['__proto__', 'constructor', 'toString', '" & calc & "', undefined]) {
       for (const platform of ['darwin', 'win32', 'linux']) {
-        assert.deepStrictEqual(C.consoleCommand(BIN, platform, linux, () => true, purpose, HOME), C.consoleCommand(BIN, platform, linux, () => true, 'signin', HOME), `${platform} ${String(purpose)}`);
+        assert.deepStrictEqual(C.consoleCommand(BIN, platform, linux, { found, purpose, home: HOME, version }),
+          C.consoleCommand(BIN, platform, linux, { found, purpose: 'signin', home: HOME, version }), `${platform} ${String(purpose)}`);
       }
     }
   });
   test('anywhere else there is no console to open', () => {
     assert.strictEqual(C.consoleCommand(BIN, 'freebsd', { DISPLAY: ':0' }), null);
-    assert.strictEqual(C.consoleCommand(BIN, 'freebsd', { DISPLAY: ':0' }, () => true, 'reconnect', HOME), null);
+    assert.strictEqual(C.consoleCommand(BIN, 'freebsd', { DISPLAY: ':0' }, { ...reconnect, found: () => true }), null);
+  });
+});
+
+describe('a Claude Code without its login command', () => {
+  // `claude auth login` arrived in Claude Code 2.1.41 ("Added `claude auth
+  // login`, `claude auth status`, and `claude auth logout` CLI subcommands").
+  // Rundock declares no minimum version, so on an older one, or one whose
+  // version is not known, the reconnect console runs `claude` bare, as before,
+  // rather than a command Claude Code does not have.
+  const BIN = '/opt/example/bin/claude';
+  const HOME = '/home/example';
+  const env = { DISPLAY: ':0' };
+  const found = () => true;
+  const bare = (platform) => C.consoleCommand(BIN, platform, env, { found, home: HOME });
+  const words = (platform, version) => C.consoleCommand(BIN, platform, env, { found, purpose: 'reconnect', home: HOME, version });
+  test('the first version with it is 2.1.41', () => {
+    assert.deepStrictEqual(C.AUTH_LOGIN_SINCE, [2, 1, 41]);
+  });
+  test('from 2.1.41 on, the reconnect console runs claude auth login', () => {
+    for (const version of ['2.1.41', '2.1.41 (Claude Code)', '2.1.100', '2.1.309', '2.2.0', '3.0.0', '10.0.0']) {
+      assert.deepStrictEqual(words('linux', version).args, ['-e', BIN, 'auth', 'login'], version);
+      assert.match(words('win32', version).command, / auth login"$/, version);
+      assert.ok(words('darwin', version).script, version);
+    }
+  });
+  test('before 2.1.41, or with no version known, it runs claude bare, as the wizard\'s does', () => {
+    for (const version of ['2.1.40', '2.1.4', '2.0.99', '1.9.100', '0.2.21', null, undefined, '', 'unknown', '2.1', 'v', 42]) {
+      for (const platform of ['darwin', 'win32', 'linux']) {
+        const c = words(platform, version);
+        assert.deepStrictEqual({ ...c, command: c.command.replace('"Reconnect Claude"', '"Sign in to Claude"') }, bare(platform), `${platform} ${String(version)}`);
+      }
+      assert.strictEqual(words('darwin', version).script, undefined, 'no script is written for a bare claude');
+      assert.match(words('win32', version).command, /^start "Reconnect Claude" /, 'still the reconnect window');
+    }
+  });
+  test('the opener asks for the version once Claude Code is found, after the gate, and runs bare when it cannot tell', async () => {
+    const opened = async (opts) => {
+      const f = fakeSpawn('spawn');
+      await C.openClaudeConsole({ bin: BIN, platform: 'linux', env: terminalOnPath(), spawn: f.spawn, purpose: 'reconnect', gate: C.consoleGate(), ...opts });
+      return f.calls[0].args;
+    };
+    assert.deepStrictEqual(await opened({ version: '2.1.41' }), ['-e', BIN, 'auth', 'login']);
+    assert.deepStrictEqual(await opened({ version: '2.1.40' }), ['-e', BIN]);
+    assert.deepStrictEqual(await opened({ findVersion: () => '2.1.309 (Claude Code)' }), ['-e', BIN, 'auth', 'login']);
+    assert.deepStrictEqual(await opened({ findVersion: () => { throw new Error('no answer'); } }), ['-e', BIN]);
+    assert.deepStrictEqual(await opened({}), ['-e', BIN]);
+    // Never during the pause, nor when there is no Claude Code to ask about.
+    const gate = C.consoleGate();
+    let asked = 0;
+    const findVersion = () => { asked++; return '2.1.309'; };
+    const f = fakeSpawn('spawn');
+    await C.openClaudeConsole({ bin: BIN, platform: 'linux', env: terminalOnPath(), spawn: f.spawn, purpose: 'reconnect', gate, findVersion });
+    await C.openClaudeConsole({ bin: BIN, platform: 'linux', env: terminalOnPath(), spawn: f.spawn, purpose: 'reconnect', gate, findVersion });
+    await C.openClaudeConsole({ bin: null, platform: 'linux', env: terminalOnPath(), spawn: f.spawn, purpose: 'reconnect', gate: C.consoleGate(), findVersion });
+    assert.strictEqual(asked, 1);
+  });
+  test('the server passes the version it already probed, and the desktop the one its lookup read', () => {
+    const src = (file) => fs.readFileSync(path.join(__dirname, '..', '..', file), 'utf8');
+    assert.ok(src('server.js').includes("openClaudeConsole({ bin: resolveClaudeBin(), version: _claudeProbeCache && _claudeProbeCache.version, purpose: 'reconnect' })"));
+    const main = src('electron/main.js');
+    assert.ok(main.includes('openClaudeConsole({ findBin: findClaude, findVersion: () => claudeFoundVersion, purpose })'));
+    assert.ok(main.includes('claudeFoundVersion = String(execSync(`"${bin}" --version`, { timeout: 10000 }));'));
   });
 });
 
 describe('what each console runs, as opened', () => {
   const BIN = '/opt/example/claude';
   const SCRIPT = "#!/bin/sh\nexec '/opt/example/claude' auth login\n";
+  const version = '2.1.309';
   test('macOS: reconnecting writes the script first, then opens Terminal on it', async () => {
     const home = madeUpHome();
     const file = scriptAt(home);
     const f = fakeSpawn('spawn');
     let there = null;
     const spawn = (command, args, options) => { there = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null; return f.spawn(command, args, options); };
-    assert.deepStrictEqual(await C.openClaudeConsole({ bin: BIN, platform: 'darwin', spawn, purpose: 'reconnect', home, gate: C.consoleGate() }), { ok: true });
+    assert.deepStrictEqual(await C.openClaudeConsole({ bin: BIN, version, platform: 'darwin', spawn, purpose: 'reconnect', home, gate: C.consoleGate() }), { ok: true });
     assert.strictEqual(f.calls.length, 1);
     assert.strictEqual(f.calls[0].command, 'open');
     assert.deepStrictEqual(f.calls[0].args, ['-a', 'Terminal', file]);
@@ -138,7 +206,7 @@ describe('what each console runs, as opened', () => {
     const env = terminalOnPath();
     const opened = async (platform, purpose) => {
       const f = fakeSpawn('spawn');
-      assert.deepStrictEqual(await C.openClaudeConsole({ bin: BIN, platform, env, spawn: f.spawn, purpose, gate: C.consoleGate() }), { ok: true });
+      assert.deepStrictEqual(await C.openClaudeConsole({ bin: BIN, version, platform, env, spawn: f.spawn, purpose, gate: C.consoleGate() }), { ok: true });
       return { command: f.calls[0].command, args: f.calls[0].args };
     };
     assert.deepStrictEqual(await opened('win32', 'reconnect'), { command: 'start "Reconnect Claude" cmd /k ""/opt/example/claude" auth login"', args: [] });
@@ -150,7 +218,7 @@ describe('what each console runs, as opened', () => {
     const home = madeUpHome();
     fs.symlinkSync(madeUpHome(), path.join(home, '.rundock-console'));
     const f = fakeSpawn('spawn');
-    assert.deepStrictEqual(await C.openClaudeConsole({ bin: BIN, platform: 'darwin', spawn: f.spawn, purpose: 'reconnect', home, gate: C.consoleGate() }), { ok: false, reason: 'failed' });
+    assert.deepStrictEqual(await C.openClaudeConsole({ bin: BIN, version, platform: 'darwin', spawn: f.spawn, purpose: 'reconnect', home, gate: C.consoleGate() }), { ok: false, reason: 'failed' });
     assert.strictEqual(f.calls.length, 0);
   });
   test('a path holding a line break or NUL is refused on every platform: nothing is written or opened', async () => {
@@ -349,7 +417,7 @@ describe('how many consoles open', () => {
 
   test('the desktop app hands the opener its lookup rather than its answer', () => {
     const main = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', '..', 'electron', 'main.js'), 'utf8');
-    assert.match(main, /openClaudeConsole\(\{ findBin: findClaude, purpose \}\)/);
+    assert.match(main, /openClaudeConsole\(\{ findBin: findClaude, findVersion: \(\) => claudeFoundVersion, purpose \}\)/);
     assert.doesNotMatch(main, /openClaudeConsole\(\{ bin: findClaude\(\)/);
   });
 
@@ -382,7 +450,7 @@ describe('how many consoles open', () => {
 describe('what the console is called', () => {
   const BIN = 'C:\\Program Files\\claude.exe';
   test('opened from the reconnect card it is "Reconnect Claude"; the first-run wizard keeps its own', () => {
-    const reconnect = C.consoleCommand(BIN, 'win32', {}, undefined, 'reconnect').command;
+    const reconnect = C.consoleCommand(BIN, 'win32', {}, { purpose: 'reconnect' }).command;
     const signin = C.consoleCommand(BIN, 'win32', {}).command;
     assert.ok(reconnect.startsWith('start "Reconnect Claude" cmd /k '), reconnect);
     assert.ok(signin.startsWith('start "Sign in to Claude" cmd /k '), signin);
@@ -397,7 +465,7 @@ describe('what the console is called', () => {
     await C.openClaudeConsole({ bin: HERE, platform: 'win32', spawn: f.spawn, purpose: 'reconnect', gate: C.consoleGate() });
     assert.match(f.calls[0].command, /^start "Reconnect Claude" /);
     const src = (file) => require('node:fs').readFileSync(require('node:path').join(__dirname, '..', '..', file), 'utf8');
-    assert.match(src('server.js'), /openClaudeConsole\(\{ bin: resolveClaudeBin\(\), purpose: 'reconnect' \}\)/);
+    assert.match(src('server.js'), /openClaudeConsole\(\{ bin: resolveClaudeBin\(\), version: [^}]*, purpose: 'reconnect' \}\)/);
     assert.match(src('electron/main.js'), /launchClaudeSignIn\('reconnect'\)/);
   });
 
