@@ -578,3 +578,60 @@ describe('the unread-field warning is kept for who a request reaches', () => {
     assert.strictEqual(text(row(card, 'Ends')), '(not set)');
   });
 });
+
+// A card drawn while the chat is not on screen (the person is in Files or
+// Settings when a send arrives) measures nothing, and a window made narrower
+// can clamp a value that fitted. Both change the size of the host the card is
+// in, so a host is watched for that. The browser's ResizeObserver and its
+// measurements are stubbed: jsdom has neither.
+describe('a card is measured again when its host is shown or resized', () => {
+  const tool = 'mcp__example_post__send_message';
+  const body = 'word '.repeat(40).trim();
+  const isPreview = (el) => el.classList.contains('permission-body') || el.classList.contains('permission-clamp');
+  function measured(cut, run) {
+    const proto = dom.window.HTMLElement.prototype;
+    Object.defineProperty(proto, 'scrollHeight', { configurable: true, get() { return cut(this) ? 120 : 40; } });
+    Object.defineProperty(proto, 'clientHeight', { configurable: true, get() { return 40; } });
+    try { return run(); } finally { delete proto.scrollHeight; delete proto.clientHeight; }
+  }
+  const boxIn = (dd) => dd.querySelector(':scope > details.permission-full');
+  let watchers;
+  before(() => {
+    watchers = [];
+    global.ResizeObserver = class {
+      constructor(cb) { this.cb = cb; this.targets = []; watchers.push(this); }
+      observe(t) { this.targets.push(t); }
+      unobserve() {}
+      disconnect() {}
+    };
+  });
+  after(() => { delete global.ResizeObserver; });
+  // The browser saying a watched element changed size.
+  const resized = (target) => { for (const w of watchers) if (w.targets.includes(target)) w.cb([{ target }]); };
+
+  test('a card drawn while the chat was hidden gets its box when the chat is shown', () => {
+    const card = measured(() => false, () => render(tool, { to: 'a@example.org', subject: 's', body }));
+    assert.strictEqual(boxIn(row(card, 'Message')), null, 'hidden, it measured nothing');
+    measured(isPreview, () => resized(document.getElementById('messages')));
+    assert.ok(boxIn(row(card, 'Message')), 'shown, it is measured again and can be opened');
+  });
+
+  test('a card that fitted gets its box when the window is made narrower', () => {
+    const card = measured(() => false, () => render(tool, { to: 'a@example.org', subject: 'A subject that fits on two lines at this width', body: 'b' }));
+    assert.strictEqual(boxIn(row(card, 'Subject')), null);
+    measured(isPreview, () => resized(document.getElementById('messages')));
+    assert.ok(boxIn(row(card, 'Subject')));
+  });
+
+  test('a dock card gets its box when the dock is resized', () => {
+    const dock = document.getElementById('approvals-dock');
+    const list = document.querySelector('.approvals-dock-list');
+    list.innerHTML = '';
+    measured(() => false, () => chat.handleOwnerlessPermissionRequest({ request_id: 'dock-resized', request: { tool_name: tool, input: { to: 'a@example.org', subject: 's', body } } }));
+    assert.strictEqual(dock.hidden, false);
+    const card = document.getElementById('perm-dock-resized');
+    assert.strictEqual(boxIn(row(card, 'Message')), null);
+    measured(isPreview, () => resized(list));
+    assert.ok(boxIn(row(card, 'Message')));
+  });
+});

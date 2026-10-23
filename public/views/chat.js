@@ -794,6 +794,22 @@ function revealClampedText(scope) {
   }
 }
 
+// A HOST THAT IS SHOWN OR RESIZED IS MEASURED AGAIN. A card drawn while the
+// chat is not on screen (the person is in Files or Settings when a send
+// arrives) measures nothing, and a window made narrower can clamp a value that
+// fitted. Both change the size of the host the card was drawn into, so each
+// host is watched, once, and whenever its size changes its cards are measured
+// again. Where the browser has no ResizeObserver, cards are measured only when
+// drawn and when the dock shows itself.
+const watchedCardHosts = new WeakSet();
+let cardHostWatcher = null;
+function watchCardHost(host) {
+  if (!host || watchedCardHosts.has(host) || typeof ResizeObserver !== 'function') return;
+  if (!cardHostWatcher) cardHostWatcher = new ResizeObserver((entries) => { for (const entry of entries) revealClampedText(entry.target); });
+  cardHostWatcher.observe(host);
+  watchedCardHosts.add(host);
+}
+
 // THE FIELDS OF A CONNECTOR REQUEST, built as elements with every value set as
 // text. Each value is an agent's: an address or a subject can carry markup, a
 // right-to-left override or a zero-width character, and none of it may become
@@ -1254,6 +1270,7 @@ function renderPermissionCard(d, convoId, host) {
   if (host) {
     host.appendChild(card);
     revealClampedText(card);
+    watchCardHost(host);
     return;
   }
 
@@ -1288,6 +1305,7 @@ function renderPermissionCard(d, convoId, host) {
   if (live && live.parentNode === m) m.insertBefore(card, live);
   else m.appendChild(card);
   revealClampedText(card);
+  watchCardHost(m);
   drawRepeatHint(card, convoId, requestId);
   scrollBottom();
 }

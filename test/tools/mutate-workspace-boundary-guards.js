@@ -2021,6 +2021,17 @@ const MUTATIONS = [
   [CONNECTOR_CARD_VIEW, 'Connector card: a card drawn into the hidden dock is never measured again',
     '  if (!dock.hidden) revealClampedText(list);\n',
     ''],
+  // A card drawn while the chat is hidden, or one a narrower window clamps,
+  // is measured again only when its host's size changes.
+  [CONNECTOR_CARD_VIEW, 'Connector card: a host that is shown or resized is not measured again',
+    '  if (!cardHostWatcher) cardHostWatcher = new ResizeObserver((entries) => { for (const entry of entries) revealClampedText(entry.target); });',
+    '  if (!cardHostWatcher) cardHostWatcher = new ResizeObserver(() => {});'],
+  [CONNECTOR_CARD_VIEW, 'Connector card: the thread a card is drawn into is never watched',
+    '  watchCardHost(m);\n',
+    ''],
+  [CONNECTOR_CARD_VIEW, 'Connector card: the dock a card is drawn into is never watched',
+    '    watchCardHost(host);\n',
+    ''],
   // ===== RECONNECTING CLAUDE CODE IS FOR RUNDOCK'S OWN WINDOW =====
   // Open the reconnect routes and any process on this machine can open a
   // console here, or spend a turn checking, with no key at all.
