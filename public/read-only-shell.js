@@ -251,6 +251,13 @@
   // and stable, and because only this one flag executes anything.
   var EXECUTING_FLAGS = { rg: /(^|\s)--pre\b/ };
 
+  // Two listed programs also WRITE a file they are given, with no redirect on
+  // the line: `tree -o FILE` sends its listing there (alone or in a bundle such
+  // as `-ao`), and `file -C` compiles a magic file. Either makes the segment
+  // not a read. Named for the same reason as the flag above: each program has
+  // exactly one such option.
+  var WRITING_FLAGS = { tree: /(^|\s)-[A-Za-z]*o/, file: /(^|\s)(-[A-Za-z]*C|--compile\b)/ };
+
   // Whether one segment's leading command only reads. An empty segment (a
   // trailing separator) carries nothing to disqualify it.
   //
@@ -286,6 +293,8 @@
     if (first === 'find') return findOnlyReads(words.slice(1));
     if (Object.prototype.hasOwnProperty.call(EXECUTING_FLAGS, first)
       && EXECUTING_FLAGS[first].test(segment)) return false;
+    if (Object.prototype.hasOwnProperty.call(WRITING_FLAGS, first)
+      && WRITING_FLAGS[first].test(segment)) return false;
     if (READ_ONLY_SHELL_COMMANDS.indexOf(first) >= 0) return true;
     if (NO_TARGET_COMMANDS.indexOf(first) >= 0) return true;
     if (READ_ONLY_POWERSHELL_COMMANDS.indexOf(first.toLowerCase()) >= 0) return true;

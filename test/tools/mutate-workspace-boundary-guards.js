@@ -273,6 +273,7 @@ const LAUNCHCTL_NOTES = { src: path.join(ROOT, 'public', 'read-only-shell.js'), 
 const LAUNCHCTL_ANY_MODE = { src: path.join(ROOT, 'scripts', 'code-mode-verdict.js'), suite: 'test/unit/launchctl-asks.test.js' };
 // Which words a command can write, for the answer-file check, without the fixture.
 const ANSWER_WRITES = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/answer-file-writes.test.js' };
+const ANSWER_WRITES_VOCAB = { src: path.join(ROOT, 'public', 'read-only-shell.js'), suite: 'test/unit/answer-file-writes.test.js' };
 // What agents are told about the connector files, against the card's words.
 const PROMPT_CONNECTORS = { src: path.join(ROOT, 'lib', 'agents', 'prompt.js'), suite: 'test/unit/discovery.test.js' };
 // What Rundock decides for an agent's environment, never inherited from its own.
@@ -1402,6 +1403,24 @@ const MUTATIONS = [
   [ANSWER_WRITES, 'Answer-file writes: a comparer or viewer naming one still asks as a change',
     "    let reads = isReadOnlyShellCommand(rest.join(' ')) || READS_NAMED_FILES.has(verb);",
     "    let reads = isReadOnlyShellCommand(rest.join(' '));"],
+  [ANSWER_WRITES, 'Answer-file writes: a pager, sdiff or bat is taken as only reading',
+    "const READS_NAMED_FILES = new Set(['jq', 'diff', 'cmp', 'comm', 'md5', 'md5sum', 'shasum', 'sha1sum', 'sha256sum', 'cksum', 'strings']);",
+    "const READS_NAMED_FILES = new Set(['jq', 'diff', 'cmp', 'comm', 'sdiff', 'md5', 'md5sum', 'shasum', 'sha1sum', 'sha256sum', 'cksum', 'strings', 'less', 'more', 'bat']);"],
+  [ANSWER_WRITES, 'Answer-file writes: install -d is taken as a copy',
+    '    if (makesFolders) reads = false;\n',
+    ''],
+  [ANSWER_WRITES, 'Answer-file writes: a folder install -d makes is taken as one it copies into',
+    '    if (PLACES_INTO.has(verb) && !makesFolders) {',
+    '    if (PLACES_INTO.has(verb)) {'],
+  [ANSWER_WRITES_VOCAB, 'Read-only vocabulary: tree -o is taken as a read',
+    '  var WRITING_FLAGS = { tree: /(^|\\s)-[A-Za-z]*o/, file:',
+    '  var WRITING_FLAGS = { file:'],
+  [ANSWER_WRITES_VOCAB, 'Read-only vocabulary: file -C is taken as a read',
+    ', file: /(^|\\s)(-[A-Za-z]*C|--compile\\b)/ };',
+    ' };'],
+  [ANSWER_WRITES_VOCAB, 'Read-only vocabulary: a writing flag is never looked at',
+    '      && WRITING_FLAGS[first].test(segment)) return false;',
+    '      && false) return false;'],
   [ANSWER_READS_VOCAB, "Answer-file reads: od is not a read",
     "    'od', 'hexdump',",
     "    'hexdump',"],

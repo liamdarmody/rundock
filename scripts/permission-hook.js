@@ -1130,7 +1130,13 @@ const ENV_PREFIX = [/^\$\{?env:([A-Za-z_][A-Za-z0-9_]*)\}?(?=[\\/]|$)/i, /^%([A-
 // read-only vocabulary already passes, a comparer or viewer below, git with a
 // subcommand that only reads, `sed` without in-place editing, or a copy whose
 // source is the file. Unknown means written: the safe direction.
-const READS_NAMED_FILES = new Set(['jq', 'diff', 'cmp', 'comm', 'sdiff', 'md5', 'md5sum', 'shasum', 'sha1sum', 'sha256sum', 'cksum', 'file', 'stat', 'less', 'more', 'bat', 'strings']);
+//
+// ONLY PROGRAMS WITH NO OPTION THAT WRITES A FILE. A pager writes its log file
+// (`less -o`, `--log-file`), sdiff its merged output (`-o`, `--output`) and
+// bat its cache (`--target`), each with no redirect on the line, so they are
+// left out and ask like any program this does not know. `file` and `stat` are
+// judged by the shared vocabulary, which knows `file -C` compiles a file.
+const READS_NAMED_FILES = new Set(['jq', 'diff', 'cmp', 'comm', 'md5', 'md5sum', 'shasum', 'sha1sum', 'sha256sum', 'cksum', 'strings']);
 const GIT_READ_SUBCOMMANDS = new Set(['diff', 'log', 'show', 'blame', 'annotate', 'status', 'ls-files', 'grep', 'cat-file', 'shortlog', 'whatchanged', 'rev-parse', 'describe']);
 const COPIES_FROM_SOURCES = new Set(['cp', 'install']);
 // A copy, move or link into a folder writes the file of each source's name
@@ -1172,7 +1178,11 @@ function answerFileWriteWords(command) {
       reads = true;
       if (operands.length > 1) written.push(operands[operands.length - 1]);
     }
-    if (PLACES_INTO.has(verb)) {
+    // `install -d` copies nothing: it creates each folder it names, or sets the
+    // mode and owner of one already there, so every word it names is written.
+    const makesFolders = verb === 'install' && args.some(a => /^-[a-zA-Z]*d/.test(a) || a === '--directory');
+    if (makesFolders) reads = false;
+    if (PLACES_INTO.has(verb) && !makesFolders) {
       const t = args.indexOf('-t');
       const named = t >= 0 ? args[t + 1] : (args.find(a => a.startsWith('--target-directory=')) || '').slice('--target-directory='.length);
       const operands = args.filter((a, i) => !a.startsWith('-') && !(t >= 0 && i === t + 1));

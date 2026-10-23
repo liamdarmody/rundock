@@ -44,6 +44,7 @@ const READS = [
   'diff .mcp.json x.json', 'cmp .rundock/permission-hook.sh x.json', 'cp .mcp.json backup.json', 'cp .rundock/mcp-secrets.json secrets.bak',
   'cat .mcp.json > copy.json', 'sed s/a/b/ .claude/settings.json', 'sed -n 1,5p .mcp.json', 'dd if=.mcp.json of=copy.json',
   'shasum .rundock/permission-hook.sh', 'install -m 644 .mcp.json backup.json', 'cat .rundock/permissions.json > copy.json',
+  'tree -a .claude/hooks', 'file .mcp.json', 'stat .rundock/permission-hook.sh', 'strings .rundock/permission-hook.sh',
 ];
 const WRITES = [
   'echo x > .mcp.json', 'echo x >> .mcp.json', 'echo x 1> .mcp.json', 'echo x >.mcp.json', 'echo x &> .mcp.json', 'echo x | tee .mcp.json',
@@ -57,6 +58,13 @@ const WRITES = [
   'git checkout -- .mcp.json', 'git restore .claude/settings.json', 'git add .mcp.json', 'git commit -m x .mcp.json',
   'git diff --output=.mcp.json', 'python3 tool.py .mcp.json', 'echo x > .claude/hooks/pre-tool.sh', 'cp x.json .claude/hooks/new.sh',
   "cat > .mcp.json <<'EOF'\nx\nEOF",
+  // Viewers and listers that write a file they are given with no redirect:
+  // a pager's log file, sdiff's merged output, tree's output file, a compiled
+  // magic file, and the folders install -d creates or sets the mode of.
+  'less -o .mcp.json x.json', 'less -O .mcp.json x.json', 'less --log-file=.mcp.json x.json', 'more -o .mcp.json x.json',
+  'sdiff -o .mcp.json x.json notes.txt', 'sdiff --output=.mcp.json x.json notes.txt', 'bat cache --build --target .claude/hooks',
+  'tree -o .mcp.json', 'tree -a -o .claude/settings.json', 'tree -ao .rundock/permission-hook.sh', 'file -C -m .claude/hooks/magic',
+  'install -d .claude/hooks/new', 'install -d -m 000 .rundock/mcp-secrets.json',
   // The forms that asked before this change, and still do.
   'echo x > .rundock/permissions.json', 'echo x >> .rundock/state.json', 'cat x > .claude/settings.local.json', 'tee .rundock/permissions.json',
   'echo x | tee -a .rundock/state.json', 'sed -i s/a/b/ .rundock/permissions.json', 'cp x .rundock/permissions.json', 'mv x .claude/settings.json',
@@ -87,7 +95,7 @@ describe('a command asks about an answer file only when it can write it', () => 
     'rm -rf .claude', 'mv .claude old-claude', 'rm -rf .rundock', 'mv .rundock old', 'rm -rf .claude/hooks', 'chmod -R 000 .rundock',
     'git checkout -- .claude', 'cp -r backup/.claude .', 'cp backup/.mcp.json .', 'mv backup/settings.json .claude',
     'cp backup/permission-hook.sh .rundock/', 'rm -rf .claude/*', 'rm .rundock/*.json', 'rm -rf .*', 'rm -f .m?p.json',
-    'rm -rf projects/other-ws/.rundock', 'mv projects/other-ws/.claude x',
+    'rm -rf projects/other-ws/.rundock', 'mv projects/other-ws/.claude x', 'install -d -m 000 .claude',
   ];
   const FOLDER_ORDINARY = [
     'rm -rf .rundock/scratch', 'rm -rf .rundock/scratch/*', 'ls .claude', 'cp -r .claude backup', 'cp x.json .', 'mv notes.txt .claude/agents/',
@@ -102,6 +110,22 @@ describe('a command asks about an answer file only when it can write it', () => 
       for (const c of FOLDER_WRITES) assert.strictEqual(answerFileIn(c, codeMode), true, `${codeMode ? 'Code' : 'Notes'}: ${c}`);
       for (const c of FOLDER_ORDINARY) assert.strictEqual(answerFileIn(c, codeMode), false, `${codeMode ? 'Code' : 'Notes'}: ${c}`);
     }
+  });
+
+  // The shared read-only vocabulary frees a command everywhere it is used, so
+  // a lister given a file to write is not a read there either: `tree -o` into
+  // the runtime's own settings would otherwise pass as a read of them.
+  test('tree -o and file -C are not reads in the shared vocabulary', () => {
+    const { isReadOnlyShellCommand } = require('../../public/read-only-shell.js');
+    for (const c of ['tree -o out.txt', 'tree -ao out.txt .', 'file -C -m magic', 'file --compile -m magic']) {
+      assert.strictEqual(isReadOnlyShellCommand(c), false, c);
+    }
+    for (const c of ['tree', 'tree -a -L 2 .claude', 'file x.json', 'tree --noreport .']) {
+      assert.strictEqual(isReadOnlyShellCommand(c), true, c);
+    }
+    const home = os.homedir();
+    const a = hook.classifyShellAccess('Bash', { command: `tree -o ${path.join(home, '.claude', 'settings.json')}` }, ws, [], home, true, { cwd: ws });
+    assert.ok(a && hook.boundaryCrossingsFor(a).length > 0, "tree -o into the runtime's own settings is a crossing");
   });
 
   function hookDecision(command, codeMode) {
