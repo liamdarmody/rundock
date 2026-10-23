@@ -1280,21 +1280,27 @@ function feedsCode(segment, body) {
 // with every other URL where each word is judged (shellCrossings), the one
 // check that decides it for a literal as for a command's own words.
 //
-// `posixText`: on a POSIX host an absolute literal whose FIRST folder does not
-// exist here is text. Code is full of strings shaped like absolute paths that
-// name no file: a route (`/health`, `/api/v1/x`), a URL path (`/docs/intro`),
-// a regex (`/+`). Read as places, `-c` code with one asked every time and was
-// refused unattended. `/etc/…`, `/tmp/…`, `/var/…` and a home folder have a
-// first folder that exists, and still card. One cached look per first folder.
-const firstFolderSeen = new Map();
-function firstFolderExists(lit) {
+// `reading`, for one classification: { posixText, firstFolders }. On a POSIX
+// host an absolute literal whose FIRST folder does not exist here is text.
+// Code is full of strings shaped like absolute paths that name no file: a
+// route (`/health`, `/api/v1/x`), a URL path (`/docs/intro`), a regex (`/+`).
+// Read as places, `-c` code with one asked every time and was refused
+// unattended. `/etc/…`, `/tmp/…`, `/var/…` and a home folder have a first
+// folder that exists, and still card.
+//
+// LOOKED UP ONCE PER CLASSIFICATION, in `firstFolders`, which
+// classifyShellAccess makes for each command. The server runs for days and
+// asks this on every Codex command, so a list kept for the life of the process
+// would grow without end and keep reporting a folder made after it started,
+// an installer's `/opt` say, as missing.
+function firstFolderExists(lit, firstFolders) {
   const first = '/' + lit.slice(1).split('/')[0];
-  if (!firstFolderSeen.has(first)) firstFolderSeen.set(first, fs.existsSync(first));
-  return firstFolderSeen.get(first);
+  if (!firstFolders.has(first)) firstFolders.set(first, fs.existsSync(first));
+  return firstFolders.get(first);
 }
-function literalIsPlace(lit, posixText = false) {
+function literalIsPlace(lit, reading = null) {
   if (!lit) return false;
-  if (posixText && /^\/[^\s/\\]/.test(lit) && !firstFolderExists(lit)) return false;
+  if (reading && reading.posixText && /^\/[^\s/\\]/.test(lit) && !firstFolderExists(lit, reading.firstFolders)) return false;
   if (/^\/[^\s/\\]/.test(lit) || WIN_DRIVE.test(lit) || WIN_UNC.test(lit) || TRAVERSAL.test(lit)) return true;
   if (HOME_PREFIX.some(re => re.test(lit)) || ENV_PREFIX.some(re => re.test(lit))) return true;
   return !lit.startsWith('/') && lit.includes('/') && !lit.includes('\\');
@@ -1303,7 +1309,7 @@ function literalIsPlace(lit, posixText = false) {
 // The literals in a piece of code that name a place, and the commands it runs
 // itself. A literal is quoted text on one line, so an apostrophe in a comment
 // cannot swallow the code after it.
-function codeParts(code, posixText = false) {
+function codeParts(code, reading = null) {
   const s = String(code);
   const literals = [];
   const commands = [];
@@ -1313,7 +1319,7 @@ function codeParts(code, posixText = false) {
       let j = i + 1;
       while (j < s.length && s[j] !== ch && s[j] !== '\n') j += s[j] === '\\' ? 2 : 1;
       if (s[j] === ch) {
-        if (literalIsPlace(s.slice(i + 1, j), posixText)) literals.push(s.slice(i + 1, j));
+        if (literalIsPlace(s.slice(i + 1, j), reading)) literals.push(s.slice(i + 1, j));
         i = j;
       }
       continue;
@@ -1356,7 +1362,7 @@ function segmentAt(text, at) {
 // The command's text with each here-document body fed to code taken out, and
 // beside it the literals in that code that name a place and the commands the
 // code runs, each at its command's `<<`.
-function heredocText(command, posixText = false) {
+function heredocText(command, reading = null) {
   const s = String(command);
   const cut = stripHeredocs(s);
   if (!cut.ok || !cut.bodies.length) return { text: s, literals: [], commands: [] };
@@ -1371,7 +1377,7 @@ function heredocText(command, posixText = false) {
     const subs = b.expands ? substitutions(b.body, 'bash', { quoted: true }) : { ok: true, bodies: [] };
     if (seg === null || !subs.ok || !feedsCode(seg, b.body)) { text += b.body; continue; }
     const at = b.at + text.length - b.bodyAt;
-    const code = codeParts(b.body, posixText);
+    const code = codeParts(b.body, reading);
     for (const t of code.literals) literals.push({ t, at });
     for (const c of [...code.commands, ...subs.bodies]) commands.push({ text: c, at });
   }
@@ -1384,7 +1390,7 @@ function heredocText(command, posixText = false) {
 // code in a here-document carded. The word is still read as before; the
 // literals and commands inside it are read as well, at its command.
 const INLINE_CODE = { python: /^-[A-Za-z]*?c(.*)$/s, node: /^(?:-[A-Za-z]*?[ep]|--(?:eval|print)=?)(.*)$/s, ruby: /^-[A-Za-z]*?e(.*)$/s, perl: /^-[A-Za-z]*?[eE](.*)$/s };
-function inlineCode(text, posixText = false) {
+function inlineCode(text, reading = null) {
   const literals = [];
   const commands = [];
   let from = 0;
@@ -1399,7 +1405,7 @@ function inlineCode(text, posixText = false) {
     for (let k = i + 1; family && k < words.length; k++) {
       const m = INLINE_CODE[family].exec(words[k]);
       if (!m) continue;
-      const code = codeParts(m[1] || words[++k] || '', posixText);
+      const code = codeParts(m[1] || words[++k] || '', reading);
       for (const t of code.literals) literals.push({ t, at });
       for (const c of code.commands) commands.push({ text: c, at });
     }
@@ -1416,9 +1422,9 @@ function inlineCode(text, posixText = false) {
 // comment) ran on into the lines after the here-document, and a `cd` there
 // stopped being seen. It is measured from where the command starts: it runs
 // in a shell of its own, so a `cd` inside it moves nothing outside it.
-function judgedShellText(command, posixText = false) {
-  const view = heredocText(command, posixText);
-  const inline = inlineCode(view.text, posixText);
+function judgedShellText(command, reading = null) {
+  const view = heredocText(command, reading);
+  const inline = inlineCode(view.text, reading);
   return {
     text: view.text,
     literals: [...view.literals, ...inline.literals],
@@ -1456,7 +1462,7 @@ function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), 
   //
   // A literal in code handed to an interpreter counts as written: the code
   // can open it for writing, and nothing here can tell that it does not.
-  const view = judgedShellText(command, posixText);
+  const view = judgedShellText(command, { posixText, firstFolders: opts.firstFolders || new Map() });
   const writingWords = new Set();
   if (!readOnly) {
     for (const lit of view.literals) writingWords.add(lit.t);
@@ -1810,7 +1816,9 @@ function classifyShellAccess(toolName, toolInput, workspaceRoot, extraDirs = [],
   // Signal 2.
   if (typeof ti.command !== 'string' || !ti.command) return null;
   const windowsSwitches = toolName === 'PowerShell' || /\bcmd(\.exe)?\s+\/[ck]\b/i.test(ti.command);
-  const crossings = shellCrossings(ti.command, workspaceRoot, extraDirs, home, foldsCase, { ...opts, windowsSwitches, shellTool: toolName });
+  // The first folders this command's code literals name, looked up afresh for
+  // every classification (see literalIsPlace).
+  const crossings = shellCrossings(ti.command, workspaceRoot, extraDirs, home, foldsCase, { ...opts, windowsSwitches, shellTool: toolName, firstFolders: new Map() });
   if (!crossings.length) return null;
   // `grantDir` AND `grantable` ARE DIFFERENT QUESTIONS, and conflating them is
   // why this offered nothing.

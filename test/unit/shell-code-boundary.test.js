@@ -238,6 +238,24 @@ describe('an absolute literal whose first folder does not exist here is text', (
     const win = { workspace: 'C:\\Users\\someone\\ws', opts: { platform: 'win32' } };
     assert.ok(scan(`python3 -c "print(open('/health').read())"`, win), 'judged as before');
   });
+
+  // The look at a first folder lasts one classification. The server stays up
+  // for days, and a top-level folder made after it started (an installer's
+  // `/opt`, say) must be seen the next time, not remembered as missing. A
+  // folder cannot be made at the root here, so the look is answered by hand.
+  test('a first folder made between two classifications is seen by the second', () => {
+    const realExists = fs.existsSync;
+    let made = false;
+    fs.existsSync = p => (p === '/made-later' ? made : realExists(p));
+    try {
+      const c = `python3 -c "print(open('/made-later/notes.txt').read())"`;
+      assert.deepStrictEqual(places(c), [], 'not there yet: text');
+      made = true;
+      assert.deepStrictEqual(places(c), ['/made-later/notes.txt'], 'there now: a place');
+    } finally {
+      fs.existsSync = realExists;
+    }
+  });
 });
 
 describe('a here-document fed to a shell, or to anything else, is judged as commands as before', () => {
