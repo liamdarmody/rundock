@@ -209,20 +209,64 @@ describe('a connector card with no email or calendar fields', () => {
   });
 });
 
-describe('a send, reply or forward with only a body', () => {
-  test('a reply with a thread id and a body shows what it says', () => {
-    const card = render('mcp__example_post__reply_to_thread', { threadId: 't1', body: 'Sounds good, see you then.' });
-    assert.ok(card.querySelector('dl.permission-fields'), 'the field card, not the plain one');
-    assert.strictEqual(text(row(card, 'Message').querySelector('.permission-body')), 'Sounds good, see you then.');
-    assert.strictEqual(text(row(card, 'To')), '(none)', 'a thread id is not who it reaches, so no warning');
-    assert.strictEqual(text(row(card, 'Other fields')), 'threadId: t1');
+// A thread reply or a chat message names where it goes rather than who it
+// reaches, so its card says where it goes, under the key it came from, and
+// never claims it will fail for want of a recipient. A message that is not an
+// email has no empty Subject or To row to explain.
+describe('a send, reply or forward says where it goes', () => {
+  const PLAIN = 'Sends straight away from your account. It cannot be undone, so this always asks.';
+  const contextText = (card) => text(card.querySelector('.permission-context'));
+  const labels = (card) => rows(card).map(([l]) => l);
+
+  test('a send to a thread: its thread, and what it says', () => {
+    const card = render('mcp__example_post__send_message', { threadId: 't1', body: 'On my way.' });
+    assert.deepStrictEqual(labels(card), ['threadId', 'Message']);
+    assert.strictEqual(text(row(card, 'threadId')), 't1');
+    assert.strictEqual(text(row(card, 'Message').querySelector('.permission-body')), 'On my way.');
+    assert.strictEqual(contextText(card), PLAIN, 'never that it will fail');
   });
 
-  test('a chat message shows its text, and its channel is listed as a field the card does not read', () => {
+  test('a chat send by id: the id, and what it says', () => {
+    const card = render('mcp__example_chat__send_message', { id: 'C1', text: 'hello' });
+    assert.deepStrictEqual(labels(card), ['id', 'Message']);
+    assert.strictEqual(contextText(card), PLAIN);
+  });
+
+  test('a chat send to a channel: the channel, and what it says, with no warning', () => {
     const card = render('mcp__example_chat__send_message', { channel: 'general', text: 'hello' });
-    assert.strictEqual(text(row(card, 'Message').querySelector('.permission-body')), 'hello');
-    assert.strictEqual(text(row(card, 'Other fields')), 'channel: general');
-    assert.match(text(row(card, 'To')), /Not recognised: see Other fields/, 'who it reaches is under a name the card does not know');
+    assert.deepStrictEqual(labels(card), ['channel', 'Message']);
+    assert.strictEqual(text(row(card, 'channel')), 'general');
+    assert.doesNotMatch(card.textContent, /Not recognised/);
+    assert.strictEqual(contextText(card), PLAIN);
+  });
+
+  test('a reply with a thread id and a body: its thread, and what it says', () => {
+    const card = render('mcp__example_post__reply_to_thread', { threadId: 't1', body: 'Sounds good, see you then.' });
+    assert.deepStrictEqual(labels(card), ['threadId', 'Message']);
+  });
+
+  test('a destination is text, never markup, in an isolate of its own', () => {
+    const card = render('mcp__example_chat__send_message', { channel: '<img src=x onerror="window.__pwned=9">', text: 'hi' });
+    assert.strictEqual(card.querySelectorAll('img').length, 0);
+    assert.ok(row(card, 'channel').querySelector('bdi'));
+  });
+
+  test('an email send with no recipients and nothing else still says it will probably fail', () => {
+    const card = render('mcp__example_post__send_message', { to: [], subject: 'Hi', body: 'b' });
+    assert.match(contextText(card), /No recipients are set, so this will probably fail\.$/);
+    assert.deepStrictEqual(labels(card), ['To', 'Subject', 'Message']);
+  });
+
+  test('an email send with no recipients beside other fields says to check them, not that it will fail', () => {
+    const card = render('mcp__example_post__send_message', { to: [], subject: 'Hi', body: 'b', messageId: 'm1' });
+    assert.doesNotMatch(contextText(card), /probably fail/);
+    assert.match(contextText(card), /No recipients were recognised: check Other fields before allowing\./);
+  });
+
+  test('a message with no destination and no recipient keeps its To row, and warns', () => {
+    const card = render('mcp__example_chat__send_message', { text: 'hello', room: 'r1' });
+    assert.deepStrictEqual(labels(card), ['To', 'Message', 'Other fields']);
+    assert.match(text(row(card, 'To')), /Not recognised: see Other fields/);
   });
 });
 
@@ -408,11 +452,11 @@ describe('a card shows every field it is given, so nothing it acts on is hidden'
 
   test('each other field is a block of its own, its key and value as text, a long value capped', () => {
     const card = render('mcp__example_post__send_message', {
-      to: 'a@example.org', subject: 's', body: 'b', threadId: '<b>t1</b>', notes: 'z'.repeat(5000), flags: { urgent: true },
+      to: 'a@example.org', subject: 's', body: 'b', ref: '<b>t1</b>', notes: 'z'.repeat(5000), flags: { urgent: true },
     });
     const lines = otherLines(card);
-    assert.deepStrictEqual(lines.map((n) => n.querySelector('.permission-other-key').textContent), ['threadId', 'notes', 'flags']);
-    assert.strictEqual(lines[0].textContent, 'threadId: <b>t1</b>');
+    assert.deepStrictEqual(lines.map((n) => n.querySelector('.permission-other-key').textContent), ['ref', 'notes', 'flags']);
+    assert.strictEqual(lines[0].textContent, 'ref: <b>t1</b>');
     assert.strictEqual(card.querySelectorAll('b').length, 1, 'no element was made from a value (the one <b> is the card\'s own "Tool name:" label)');
     assert.ok(lines[1].textContent.length < 400, 'a long value is capped');
     assert.ok(lines[1].textContent.endsWith('…'), 'and says so');
@@ -607,13 +651,20 @@ describe('the unread-field warning is kept for who a request reaches', () => {
     assert.deepStrictEqual(otherKeys(card), ['draftId']);
   });
 
-  test('every well-known key is quiet: a send with only those and nobody to send to says so plainly', () => {
-    const card = render('mcp__example_post__send_message', {
-      id: '1', threadId: 't', messageId: 'm', draftId: 'd', calendarId: 'c', eventId: 'e', time_zone: 'UTC', description: 'x', location: 'y', subject: 's',
+  test('every well-known key is quiet on an event: it reads normally, and all of them are listed', () => {
+    const card = render('mcp__example_calendar__create_event', {
+      id: '1', threadId: 't', messageId: 'm', draftId: 'd', calendarId: 'c', eventId: 'e', time_zone: 'UTC', description: 'x', location: 'y', title: 'Sync',
     });
-    assert.strictEqual(text(row(card, 'To')), '(none)');
-    assert.match(contextText(card), /No recipients are set, so this will probably fail\.$/);
-    assert.strictEqual(otherKeys(card).length, 9, 'and all of them are listed');
+    assert.strictEqual(contextText(card), 'Adds an event to your calendar. No one else is invited.');
+    assert.strictEqual(text(row(card, 'Attendees')), 'Just you');
+    assert.strictEqual(otherKeys(card).length, 9);
+  });
+
+  test('a well-known key is quiet on a draft, and never on a send', () => {
+    const draft = render('mcp__example_post__create_draft', { subject: 's', messageId: 'm1' });
+    assert.strictEqual(text(row(draft, 'To')), '(none)');
+    const send = render('mcp__example_post__send_message', { subject: 's', messageId: 'm1' });
+    assert.match(text(row(send, 'To')), /Not recognised: see Other fields/, 'on a send it could be where the message goes');
   });
 
   test('an unknown recipient key still warns, on the recipient row and in the sentence only', () => {

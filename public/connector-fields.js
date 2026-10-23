@@ -52,17 +52,23 @@
     start: ['start', 'starttime', 'startdatetime', 'startdate', 'startat', 'begin'],
     end: ['end', 'endtime', 'enddatetime', 'enddate', 'endat'],
     attendees: ['attendees', 'guests', 'invitees', 'participants', 'attendeeemails', 'guestemails'],
+    // Where a send, reply or forward goes when it names a place rather than
+    // a person: a channel, a chat, a conversation, a thread, a user. Read only
+    // for those actions, never for a draft or an event, where an id or a
+    // thread is just the item worked on.
+    destination: ['channel', 'channelid', 'chatid', 'conversationid', 'threadid', 'userid', 'recipientid', 'id'],
   };
-  const EMPTY = { to: [], cc: [], bcc: [], attendees: [], subject: '', body: '', title: '', start: null, end: null };
+  const EMPTY = { to: [], cc: [], bcc: [], attendees: [], subject: '', body: '', title: '', start: null, end: null, destination: '' };
   const TEXT_KEYS = ['content', 'text', 'value', 'plain', 'html'];
   const ADDRESS_KEYS = ['email', 'address', 'mail', 'emailAddress'];
   const NAME_KEYS = ['name', 'displayName'];
   const TIME_KEYS = ['dateTime', 'datetime', 'date_time', 'date', 'time', 'value'];
-  // Keys a connector carries on almost every request: which item, which
-  // calendar, which zone, and words about an event. They are listed under
-  // Other fields like any key the card does not read, but they cannot hide who
-  // a request reaches, so they never turn the card's words into a warning. A
-  // warning on every card is one nobody reads.
+  // Keys a connector carries on almost every event or draft: which item,
+  // which calendar, which zone, and words about an event. They are listed
+  // under Other fields like any key the card does not read, but on an event or
+  // a draft they cannot hide who a request reaches, so there they never turn
+  // the card's words into a warning. A warning on every card is one nobody
+  // reads.
   const WELL_KNOWN = new Set(['id', 'threadid', 'messageid', 'draftid', 'calendarid', 'eventid', 'timezone', 'description', 'location']);
   const SEND_KIND = { send: 'send', resend: 'send', reply: 'reply', forward: 'forward', fwd: 'forward' };
   const EVENT_WORDS = ['event', 'events', 'meeting', 'appointment', 'invite', 'invitation'];
@@ -176,7 +182,7 @@
   // request can fill a card with rows. Everything is listed, never reduced to
   // a count, up to MAX_LISTED; only past that is anything counted.
   function gather(sources, read) {
-    const values = {}, aliases = {}, others = [];
+    const values = {}, aliases = {}, others = [], firstKey = {};
     let found = false, othersMore = 0, aliasOverflow = 0;
     const list = (key, raw) => {
       if (others.length < MAX_LISTED) others.push({ key, text: rawText(raw) });
@@ -191,7 +197,7 @@
       values[field] = all.length ? read[field](all[0].raw) : EMPTY[field];
       if (all.length > 1) aliases[field] = all.slice(0, MAX_ALIAS_ROWS).map((o) => ({ key: o.key, value: read[field](o.raw) }));
       for (const o of all.slice(MAX_ALIAS_ROWS)) { aliasOverflow++; list(o.key, o.raw); }
-      if (all.length) found = true;
+      if (all.length) { found = true; firstKey[field] = all[0].key; }
     }
     const names = new Set(fields.flatMap((field) => KEYS[field]));
     for (const s of sources) {
@@ -200,7 +206,7 @@
         list(clip(s.prefix + k, MAX_KEY), s.obj[k]);
       }
     }
-    return { values, aliases, others, othersMore, aliasOverflow, found };
+    return { values, aliases, others, othersMore, aliasOverflow, found, firstKey };
   }
 
   function emailOf(input, words) {
@@ -210,7 +216,8 @@
     // A send, reply or forward needs nothing but a body to be read: a reply
     // can name only its thread, and what it says is still what a person is
     // approving. A draft that names no one and no subject is left as it was.
-    const looksLikeMail = (o) => ['to', 'cc', 'bcc', 'subject'].some((k) => keysFor(o, KEYS[k]).length)
+    const addressed = (o) => ['to', 'cc', 'bcc', 'subject'].some((k) => keysFor(o, KEYS[k]).length);
+    const looksLikeMail = (o) => addressed(o)
       || (action !== 'draft' && keysFor(o, KEYS.body).length > 0);
     // An email nested under `message` is read as well as the input around it,
     // each field under its path, so a top-level `to` beside `message.to` is a
@@ -218,8 +225,20 @@
     const nested = Object.keys(input).filter((k) => norm(k) === 'message' && isObj(input[k]) && looksLikeMail(input[k]));
     const sources = [{ obj: input, prefix: '', skip: new Set(nested) }, ...nested.map((k) => ({ obj: input[k], prefix: `${k}.`, skip: new Set() }))];
     if (!sources.some((s) => looksLikeMail(s.obj))) return null;
-    const g = gather(sources, { to: recipientsOf, cc: recipientsOf, bcc: recipientsOf, subject: lineOf, body: bodyOf });
-    return { kind: 'email', action, ...g.values, aliases: g.aliases, others: g.others, othersMore: g.othersMore, aliasOverflow: g.aliasOverflow };
+    const read = { to: recipientsOf, cc: recipientsOf, bcc: recipientsOf, subject: lineOf, body: bodyOf };
+    // Where a send goes when it names a place rather than a person: read, so it
+    // is drawn under the key it came from and never counted as unread.
+    if (action !== 'draft') read.destination = lineOf;
+    const g = gather(sources, read);
+    const { destination: first, ...values } = g.values;
+    const { destination: all, ...aliases } = g.aliases;
+    const destinations = all || (g.firstKey.destination ? [{ key: g.firstKey.destination, value: first }] : []);
+    return {
+      kind: 'email', action, ...values, aliases, others: g.others, othersMore: g.othersMore, aliasOverflow: g.aliasOverflow,
+      // A recipient or a subject makes it an email; a body and a destination
+      // alone are a message, with no empty Subject row to explain.
+      destinations, emailShaped: sources.some((s) => addressed(s.obj)),
+    };
   }
 
   // A time: an ISO string with or without an offset, a date alone (all day),
@@ -316,10 +335,14 @@
   }
 
   // Whether a field went unread that could be holding who a request reaches:
-  // any key under Other fields that is not a well-known one (the last part of
-  // a nested key's path is what is compared), or any past the listed number.
+  // any key under Other fields, or any past the listed number. On an event or
+  // a draft a well-known key is quiet (the last part of a nested key's path is
+  // what is compared): there an id, a thread or a calendar names the item
+  // worked on. On a send, reply or forward a key like that can be where the
+  // message goes, so there every unread key counts.
   function hasUnreadFields(f) {
-    return f.othersMore > 0 || f.others.some((o) => !WELL_KNOWN.has(norm(String(o.key).split('.').pop())));
+    const quiet = (o) => (f.kind === 'event' || f.action === 'draft') && WELL_KNOWN.has(norm(String(o.key).split('.').pop()));
+    return f.othersMore > 0 || f.others.some((o) => !quiet(o));
   }
 
   // Whether a request has more fields than the card shows at once: a field
@@ -352,9 +375,14 @@
         : `Adds an event to your calendar. ${n ? `${who} will be emailed an invitation.` : nobody}`;
     }
     if (f.action === 'draft') return `Saves a draft in ${server}. Nothing is sent.`;
-    const nobody = f.action === 'send' && !['to', 'cc', 'bcc'].some((k) => every(k).length);
+    // A send names who it reaches, or where it goes. One that names neither is
+    // said to probably fail only when it carries nothing else at all: any
+    // other field could be who it reaches.
+    const reached = ['to', 'cc', 'bcc'].some((k) => every(k).length) || f.destinations.length > 0;
+    const nobody = f.action === 'send' && !reached;
+    const anyOthers = f.others.length > 0 || f.othersMore > 0;
     return 'Sends straight away from your account. It cannot be undone, so this always asks.'
-      + (nobody ? (unread ? ' No recipients were recognised: check Other fields before allowing.' : ' No recipients are set, so this will probably fail.') : '');
+      + (nobody ? (anyOthers ? ' No recipients were recognised: check Other fields before allowing.' : ' No recipients are set, so this will probably fail.') : '');
   }
 
   return {

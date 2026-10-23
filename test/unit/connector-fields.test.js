@@ -23,7 +23,7 @@ describe('an email request is read by generic field names', () => {
     const { to, cc, bcc, ...rest } = f;
     assert.deepStrictEqual(rest, {
       kind: 'email', action: 'send', subject: 'Venue for the 14th', body: 'Hi Sam,\nSee you then.',
-      aliases: {}, others: [], othersMore: 0, aliasOverflow: 0,
+      aliases: {}, others: [], othersMore: 0, aliasOverflow: 0, destinations: [], emailShaped: true,
     });
     assert.deepStrictEqual(texts(to), ['sam@example.org', 'priya@example.com', 'jo@example.net']);
     assert.deepStrictEqual(texts(cc), ['lee@example.org']);
@@ -61,20 +61,40 @@ describe('an email request is read by generic field names', () => {
     assert.deepStrictEqual(f.others, [{ key: 'saveToSentItems', text: 'true' }], 'the field the card does not read is listed, not dropped');
   });
 
-  test('a send, reply or forward with only a body is read: what it says is shown, and the rest listed', () => {
+  test('a send, reply or forward with only a body is read, and where it goes is read as its destination', () => {
     const reply = F.connectorFields('mcp__example_post__reply_to_thread', { threadId: 't1', body: 'Sounds good, see you then.' });
     assert.strictEqual(reply.kind, 'email');
     assert.strictEqual(reply.action, 'reply');
     assert.strictEqual(reply.body, 'Sounds good, see you then.');
-    assert.deepStrictEqual(reply.others, [{ key: 'threadId', text: 't1' }]);
-    assert.strictEqual(F.hasUnreadFields(reply), false, 'a thread id is not who it reaches');
+    assert.deepStrictEqual(reply.destinations, [{ key: 'threadId', value: 't1' }]);
+    assert.deepStrictEqual(reply.others, [], 'where it goes is read, not left unread');
+    assert.strictEqual(reply.emailShaped, false);
     const chat = F.connectorFields('mcp__example_chat__send_message', { channel: 'general', text: 'hello' });
     assert.strictEqual(chat.body, 'hello');
-    assert.deepStrictEqual(chat.others, [{ key: 'channel', text: 'general' }]);
-    assert.strictEqual(F.hasUnreadFields(chat), true, 'a channel could be who it reaches');
+    assert.deepStrictEqual(chat.destinations, [{ key: 'channel', value: 'general' }]);
+    assert.deepStrictEqual(chat.others, []);
+    const byId = F.connectorFields('mcp__example_chat__send_message', { id: 'C1', text: 'hello' });
+    assert.deepStrictEqual(byId.destinations, [{ key: 'id', value: 'C1' }], 'on a send an id is where it goes');
     const forward = F.connectorFields('mcp__example_post__forward', { messageId: 'm1', body: 'FYI' });
     assert.strictEqual(forward.action, 'forward');
     assert.strictEqual(forward.body, 'FYI');
+  });
+
+  test('every destination key, each under its own name, and never on a draft', () => {
+    const keys = ['channel', 'channel_id', 'chatId', 'conversationId', 'threadId', 'userId', 'recipientId', 'id'];
+    const input = { text: 'hello' };
+    keys.forEach((k, i) => { input[k] = `d${i}`; });
+    const f = F.connectorFields('mcp__example_chat__send_message', input);
+    assert.deepStrictEqual(f.destinations.map((d) => d.key), keys);
+    const draft = F.connectorFields('mcp__example_post__create_draft', { to: 'a@example.org', threadId: 't1' });
+    assert.deepStrictEqual(draft.destinations, [], 'a draft sends nothing, so its thread is just the item it belongs to');
+    assert.deepStrictEqual(draft.others.map((o) => o.key), ['threadId']);
+  });
+
+  test('which requests are email-shaped: a recipient or a subject, not a body alone', () => {
+    assert.strictEqual(F.connectorFields('mcp__example_post__send_message', { to: 'a@example.org', body: 'b' }).emailShaped, true);
+    assert.strictEqual(F.connectorFields('mcp__example_post__send_message', { subject: 's' }).emailShaped, true);
+    assert.strictEqual(F.connectorFields('mcp__example_chat__send_message', { channel: 'c', text: 't' }).emailShaped, false);
   });
 
   test('forward and fwd are forwards, resend is a send', () => {
@@ -89,6 +109,7 @@ describe('an email request is read by generic field names', () => {
     const f = F.connectorFields('mcp__example_post__create_draft', { subject: '' });
     assert.deepStrictEqual(f, {
       kind: 'email', action: 'draft', to: [], cc: [], bcc: [], subject: '', body: '', aliases: {}, others: [], othersMore: 0, aliasOverflow: 0,
+      destinations: [], emailShaped: true,
     });
   });
 });
@@ -134,9 +155,9 @@ describe('every field a request carries is read, so a card can show what the ser
   });
 
   test('every key the card does not read is listed with its value as text, in order', () => {
-    const f = F.connectorFields('mcp__example_post__send_message', { to: 'a@example.org', to_emails: ['evil@example.net'], subject: 's', flags: { urgent: true }, threadId: null });
+    const f = F.connectorFields('mcp__example_post__send_message', { to: 'a@example.org', to_emails: ['evil@example.net'], subject: 's', flags: { urgent: true }, trackingId: null });
     assert.deepStrictEqual(f.others, [
-      { key: 'to_emails', text: '["evil@example.net"]' }, { key: 'flags', text: '{"urgent": true}' }, { key: 'threadId', text: 'null' },
+      { key: 'to_emails', text: '["evil@example.net"]' }, { key: 'flags', text: '{"urgent": true}' }, { key: 'trackingId', text: 'null' },
     ]);
   });
 
@@ -216,15 +237,31 @@ describe('every field a request carries is read, so a card can show what the ser
     assert.match(F.contextFor(ev, 'x'), /Other fields/);
   });
 
-  test('keys a connector carries on almost every request are listed but never make the card warn', () => {
+  test('keys almost every request carries are listed, and quiet on an event or a draft only', () => {
     const ev = F.connectorFields('mcp__example_calendar__create_event', { calendarId: 'primary', title: 't', timeZone: 'Europe/London' });
     assert.deepStrictEqual(ev.others.map((o) => o.key), ['calendarId', 'timeZone']);
     assert.strictEqual(F.hasUnreadFields(ev), false);
     assert.strictEqual(F.contextFor(ev, 'x'), 'Adds an event to your calendar. No one else is invited.');
-    const nested = F.connectorFields('mcp__example_office__reply', { message: { subject: 's', conversationId: 'c' }, messageId: 'm' });
-    assert.strictEqual(F.hasUnreadFields(nested), true, 'a key that is not one of them, nested or not, still counts');
-    const quiet = F.connectorFields('mcp__example_office__reply', { message: { subject: 's', id: 'c' }, messageId: 'm' });
-    assert.strictEqual(F.hasUnreadFields(quiet), false, 'a well-known key under the nested message is quiet too');
+    const quiet = F.connectorFields('mcp__example_office__create_draft', { message: { subject: 's', id: 'c' }, messageId: 'm' });
+    assert.strictEqual(F.hasUnreadFields(quiet), false, 'a well-known key, nested or not, is quiet on a draft');
+    const loud = F.connectorFields('mcp__example_office__create_draft', { message: { subject: 's', foo: 'c' } });
+    assert.strictEqual(F.hasUnreadFields(loud), true, 'any other key, nested or not, still counts');
+    const send = F.connectorFields('mcp__example_post__send_message', { subject: 's', messageId: 'm' });
+    assert.strictEqual(F.hasUnreadFields(send), true, 'on a send, a key that names an item can be where it goes');
+  });
+
+  test('a send says it will probably fail only when it reaches no one and carries nothing else', () => {
+    const bare = F.connectorFields('mcp__example_post__send_message', { to: [], subject: 'Hi', body: 'b' });
+    assert.match(F.contextFor(bare, 'x'), /No recipients are set, so this will probably fail\.$/);
+    for (const extra of [{ messageId: 'm' }, { priority: 'high' }]) {
+      const f = F.connectorFields('mcp__example_post__send_message', { to: [], subject: 'Hi', ...extra });
+      assert.doesNotMatch(F.contextFor(f, 'x'), /probably fail/, JSON.stringify(extra));
+      assert.match(F.contextFor(f, 'x'), /No recipients were recognised: check Other fields before allowing\./);
+    }
+    for (const input of [{ threadId: 't1', body: 'b' }, { id: 'C1', text: 'hello' }, { channel: 'general', text: 'hello' }]) {
+      const f = F.connectorFields('mcp__example_chat__send_message', input);
+      assert.strictEqual(F.contextFor(f, 'x'), 'Sends straight away from your account. It cannot be undone, so this always asks.', JSON.stringify(input));
+    }
   });
 
   test('every alias counts toward who is reached', () => {

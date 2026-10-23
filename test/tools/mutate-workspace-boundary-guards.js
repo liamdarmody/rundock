@@ -1995,8 +1995,38 @@ const MUTATIONS = [
   // A warning on every card is one nobody reads: count an id or a calendar as
   // unread and nearly every event warns.
   [CONNECTOR_CARD_MODEL, 'Connector card: a well-known key makes the card warn',
-    "f.others.some((o) => !WELL_KNOWN.has(norm(String(o.key).split('.').pop())))",
+    'f.others.some((o) => !quiet(o))',
     'f.others.length > 0'],
+  // On a send, an id or a thread can be where the message goes: quiet there,
+  // and a send that reaches no one reads as one that will fail.
+  [CONNECTOR_CARD_MODEL, 'Connector card: a well-known key is quiet on a send',
+    "(f.kind === 'event' || f.action === 'draft') && ",
+    ''],
+  // A send that names where it goes, or carries other fields, said to fail.
+  [CONNECTOR_CARD_MODEL, 'Connector card: a send that names where it goes is said to fail',
+    ' || f.destinations.length > 0',
+    ''],
+  [CONNECTOR_CARD_MODEL, 'Connector card: a send beside other fields is said to fail',
+    '(nobody ? (anyOthers ?',
+    '(nobody ? (false ?'],
+  // Where a send goes, never read or never drawn: a thread reply or a chat
+  // message says nothing about where it lands.
+  [CONNECTOR_CARD_MODEL, 'Connector card: where a send goes is not read',
+    "    if (action !== 'draft') read.destination = lineOf;\n",
+    ''],
+  [CONNECTOR_CARD_VIEW, 'Connector card: where a send goes is not drawn',
+    "    for (const d of f.destinations) row(d.key, [d.value ? el('bdi', 'permission-destination', d.value) : empty('(empty)')]);\n",
+    ''],
+  // A message that is not an email, drawn with an empty Subject and To.
+  [CONNECTOR_CARD_MODEL, 'Connector card: every request is taken for an email',
+    'destinations, emailShaped: sources.some((s) => addressed(s.obj)),',
+    'destinations, emailShaped: true,'],
+  [CONNECTOR_CARD_VIEW, 'Connector card: a message shows an empty Subject row',
+    "(text) => clamped(text, '(no subject)', 'subject'), f.emailShaped);",
+    "(text) => clamped(text, '(no subject)', 'subject'), true);"],
+  [CONNECTOR_CARD_VIEW, 'Connector card: a message that names where it goes shows an empty To row',
+    'f.emailShaped || !f.destinations.length',
+    'true'],
   // The warning belongs on the rows of who is reached, not on a subject or a
   // message.
   [CONNECTOR_CARD_VIEW, 'Connector card: a subject or a message says Not recognised',

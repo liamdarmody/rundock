@@ -892,10 +892,14 @@ function connectorFieldsElement(f, toolName) {
     else if (always || f[name].length) row(label, draw(f[name]));
   };
   if (f.kind === 'email') {
-    field('to', 'To', (list) => people(list, '(none)'), true);
+    // Where a send goes when it names a place rather than a person, under the
+    // key it came from. Then a message that is not an email has no empty To
+    // row (the destination says where it goes) and no empty Subject row.
+    for (const d of f.destinations) row(d.key, [d.value ? el('bdi', 'permission-destination', d.value) : empty('(empty)')]);
+    field('to', 'To', (list) => people(list, '(none)'), f.emailShaped || !f.destinations.length);
     field('cc', 'Cc', (list) => people(list, '(none)'));
     field('bcc', 'Bcc', (list) => everyone(list, '(none)'));
-    field('subject', 'Subject', (text) => clamped(text, '(no subject)', 'subject'), true);
+    field('subject', 'Subject', (text) => clamped(text, '(no subject)', 'subject'), f.emailShaped);
     field('body', 'Message', message, true);
   } else {
     field('title', 'Title', (text) => clamped(text, '(untitled)', 'title'), true);
