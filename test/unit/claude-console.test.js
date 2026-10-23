@@ -112,6 +112,40 @@ describe('how many consoles open', () => {
     assert.strictEqual(f.calls.length, 2, '"Open the window again" still works once the pause is over');
   });
 
+  test('an ask while one opens, or during the pause, does not look for Claude Code again', async () => {
+    // On the desktop, looking for Claude Code runs a command on the main
+    // process, so the gate is asked first.
+    const f = fakeSpawn('spawn');
+    const gate = C.consoleGate();
+    let t = 1000;
+    const now = () => t;
+    let looked = 0;
+    const findBin = () => { looked++; return BIN; };
+    await Promise.all(Array.from({ length: 5 }, () => C.openClaudeConsole({ findBin, platform: 'darwin', spawn: f.spawn, gate, now })));
+    assert.strictEqual(looked, 1, 'once for five asks at once');
+    t += 100;
+    await C.openClaudeConsole({ findBin, platform: 'darwin', spawn: f.spawn, gate, now });
+    assert.strictEqual(looked, 1, 'not at all during the pause');
+    t += C.OPEN_COOLDOWN_MS;
+    await C.openClaudeConsole({ findBin, platform: 'darwin', spawn: f.spawn, gate, now });
+    assert.strictEqual(looked, 2, 'and again once the pause is over');
+    assert.strictEqual(f.calls.length, 2);
+  });
+
+  test('a lookup that finds nothing, or throws, is not found', async () => {
+    for (const findBin of [() => null, () => { throw new Error('lookup failed'); }]) {
+      const f = fakeSpawn('spawn');
+      assert.deepStrictEqual(await C.openClaudeConsole({ findBin, platform: 'darwin', spawn: f.spawn, gate: C.consoleGate() }), { ok: false, reason: 'not-found' });
+      assert.strictEqual(f.calls.length, 0);
+    }
+  });
+
+  test('the desktop app hands the opener its lookup rather than its answer', () => {
+    const main = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', '..', 'electron', 'main.js'), 'utf8');
+    assert.match(main, /openClaudeConsole\(\{ findBin: findClaude, purpose \}\)/);
+    assert.doesNotMatch(main, /openClaudeConsole\(\{ bin: findClaude\(\)/);
+  });
+
   test('a console that failed to open does not hold back the next try', async () => {
     const gate = C.consoleGate();
     const bad = fakeSpawn('error');

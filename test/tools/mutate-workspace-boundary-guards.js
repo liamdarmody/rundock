@@ -2089,6 +2089,14 @@ const MUTATIONS = [
   [CLAUDE_CONSOLE, 'Reconnect: an ask straight after one opened opens another',
     '  if (gate.openedAt !== null && t >= gate.openedAt && t - gate.openedAt < OPEN_COOLDOWN_MS) return Promise.resolve({ ok: true });\n',
     ''],
+  // Looking for Claude Code runs a command on the desktop's main process: look
+  // before the gate and every press during the pause pays for it.
+  [CLAUDE_CONSOLE, 'Reconnect: Claude Code is looked for before the gate is asked',
+    '  if (gate.opening) return gate.opening;\n',
+    "  if (typeof findBin === 'function') findBin();\n  if (gate.opening) return gate.opening;\n"],
+  [CONSOLE_DESKTOP, 'Reconnect: the desktop app looks for Claude Code before asking the opener',
+    'openClaudeConsole({ findBin: findClaude, purpose })',
+    'openClaudeConsole({ bin: findClaude(), purpose })'],
   // The window's title goes onto a shell command line, so only fixed words may.
   [CLAUDE_CONSOLE, 'Reconnect: the console takes its title from the caller',
     'Object.prototype.hasOwnProperty.call(CONSOLE_TITLES, purpose) ? CONSOLE_TITLES[purpose] : CONSOLE_TITLES.signin',
