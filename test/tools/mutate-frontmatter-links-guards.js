@@ -148,8 +148,8 @@ const MUTATIONS = [
 
   // ===== ONCE, AND NEVER OVER A NOTE ALREADY THERE =====
   [CREATE, 'a second click while a create is on its way sends nothing',
-    '  if (pendingLinkCreates.has(where.path) || !ws || ws.readyState !== WebSocket.OPEN) return;',
-    '  if (!ws || ws.readyState !== WebSocket.OPEN) return;'],
+    '  if (pendingLinkCreates.has(where.path)) return;\n',
+    ''],
   [CREATE, 'a click while the connection is closed says so',
     "    showLinkNotice('Not connected', 'Nothing was sent. Try again once the connection returns.', true);\n",
     ''],
