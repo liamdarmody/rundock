@@ -21,14 +21,16 @@ import { renderProperties } from './panels/properties.js';
 import { replaceProperty, editListItem, onlyEditedKeyChanged } from './markdown/frontmatter-edit.js';
 import { extractFrontmatter } from './markdown/frontmatter.js';
 import { setFindQuery, findNext, findPrev, setFindIndex, clearFind, getFindState } from './plugins/find.js';
+import { createMissingLinksPlugin } from './plugins/missing-links.js';
 
 export { setFindQuery, findNext, findPrev, setFindIndex, clearFind, getFindState };
 
 const _editorHandles = new WeakMap();
 
 // Wires a click delegate on the host element that routes wikilink clicks to
-// the host's onWikilinkClick callback. Returns an unbind function.
-export function wireWikilinkClicks(hostElement, onWikilinkClick) {
+// the host's onWikilinkClick callback, or, for a target the resolver says is
+// missing, to onCreateWikilink when there is one. Returns an unbind function.
+export function wireWikilinkClicks(hostElement, onWikilinkClick, { resolveWikilink = null, onCreateWikilink = null } = {}) {
   if (!hostElement || typeof onWikilinkClick !== 'function') return () => {};
   const handler = (event) => {
     // A RELATIVE LINK TO A WORKSPACE FILE opens it inside Rundock, as it does
@@ -61,7 +63,11 @@ export function wireWikilinkClicks(hostElement, onWikilinkClick) {
       || anchor.getAttribute('data-wikilink')
       || '';
     const alias  = anchor.getAttribute('data-alias') || null;
-    if (target) onWikilinkClick(target, alias);
+    if (!target) return;
+    const missing = typeof onCreateWikilink === 'function' && typeof resolveWikilink === 'function'
+      && !resolveWikilink(target);
+    if (missing) onCreateWikilink(target);
+    else onWikilinkClick(target, alias);
   };
   hostElement.addEventListener('click', handler);
   return () => hostElement.removeEventListener('click', handler);
@@ -88,6 +94,9 @@ export function createEditor({
   // Optional resolver for wikilink targets: (target) -> bool. Used by the
   // properties panel to render unresolvable frontmatter links visibly dead.
   resolveWikilink = null,
+  // Optional: (target) -> void, called instead of onWikilinkClick for a link
+  // the resolver says is missing, so the host can create the note.
+  onCreateWikilink = null,
 }) {
   if (!element) throw new Error('createEditor: element is required');
 
@@ -111,6 +120,7 @@ export function createEditor({
   // would-corrupt edit re-renders from the file's truth and changes nothing.
   const panelOpts = {
     onWikilinkClick,
+    onCreateWikilink,
     resolveWikilink,
     onEditProperty: (key, value) => {
       // A { list: { remove|add } } mutation is a byte-honest single-item
@@ -134,7 +144,7 @@ export function createEditor({
     },
   };
   const renderPanel = () => {
-    const count = renderProperties(propertiesElement, parts.parsed, panelOpts);
+    const count = renderProperties(propertiesElement, parts.parsed, { ...panelOpts, raw: parts.raw });
     if (propertiesElement) propertiesElement.__propsRerender = renderPanel;
     return count;
   };
@@ -177,7 +187,12 @@ export function createEditor({
     });
   }
 
-  const detachWikilinks = wireWikilinkClicks(element, onWikilinkClick);
+  // Body links to missing notes look missing, and a click creates the note,
+  // exactly as in the properties panel.
+  if (typeof resolveWikilink === 'function') {
+    editor.registerPlugin(createMissingLinksPlugin(resolveWikilink, typeof onCreateWikilink === 'function'));
+  }
+  const detachWikilinks = wireWikilinkClicks(element, onWikilinkClick, { resolveWikilink, onCreateWikilink });
 
   _editorHandles.set(editor, {
     parts,

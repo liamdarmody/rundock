@@ -113,6 +113,27 @@ function locateKey(lines, key) {
   return null;
 }
 
+// A top-level key's value as written: `inline` is the rest of the key line,
+// `items` the text after each `- ` of a block list. Read-only; null when the
+// key cannot be located. Lets a reader see what YAML's parse has lost, such
+// as the exact name inside an unquoted [[link]]. Only dashes at the first
+// item's indent are the list's own items: a deeper one belongs to a nested
+// list or a block of text inside an item, and counting it would misalign
+// every item after it.
+export function rawValueText(raw, key) {
+  if (typeof raw !== 'string' || !raw.startsWith('---')) return null;
+  const lines = raw.split('\n');
+  const loc = locateKey(lines, key);
+  if (!loc) return null;
+  const keyLine = lines[loc.keyLine];
+  const dashed = lines.slice(loc.valueStart, loc.valueEnd).filter((l) => /^\s*- /.test(l));
+  const indent = dashed.length ? dashed[0].search(/\S/) : 0;
+  const items = dashed
+    .filter((l) => l.search(/\S/) === indent)
+    .map((l) => l.replace(/^\s*- /, '').trim());
+  return { inline: keyLine.slice(keyLine.indexOf(':') + 1).trim(), items };
+}
+
 // Replace a top-level property's value in the raw frontmatter block.
 // newValue: string | number | boolean | array of strings.
 // Returns { raw, changed }; unlocatable keys and unsupported shapes return
@@ -170,25 +191,42 @@ export function replaceProperty(raw, key, newValue) {
   // reparses survivors; the Array branch above is kept only for direct
   // full-list replacement callers.)
 
-  // Scalar. Refuse whenever the key has ANY continuation lines: a nested
-  // object/list (empty inline value) OR a block/folded/multi-line scalar
-  // (`title: >` + indented lines, or a plain scalar wrapped across lines).
-  // Editing only the key line there would leave the stale continuation body
-  // behind, and for a plain multi-line scalar the result is still valid YAML
-  // that silently merges the old body into the new value. Refuse; the panel
+  // Scalar: refused in exactly the cases scalarRefusalAt names, and the panel
   // snaps back to the file's truth.
-  if (loc.valueEnd > loc.valueStart) return { raw, changed: false };
+  if (scalarRefusalAt(lines, loc)) return { raw, changed: false };
   const spacing = after.match(/^[ \t]*/)[0] || ' ';
-  // A trailing comment, or a YAML anchor/alias/tag on the value, cannot be
-  // preserved by a scalar re-emit (formatScalar reformats only the value), so
-  // refuse rather than silently strip it. The panel snaps back to the file's
-  // truth. Quoted spans are removed first so a '#' inside quotes is not read as
-  // a comment.
-  const valueRaw = after.trim();
-  const unquoted = valueRaw.replace(/"(?:[^"\\]|\\.)*"|'(?:[^']|'')*'/g, '');
-  if (/(?:^|\s)#/.test(unquoted) || /^[&*!]/.test(valueRaw)) return { raw, changed: false };
   lines[loc.keyLine] = `${keyPart}${spacing}${formatScalar(newValue, after.trim())}`;
   return { raw: lines.join('\n'), changed: true };
+}
+
+// Why a located top-level scalar cannot be rewritten in place, as a plain
+// sentence, or null when it can.
+//  - ANY continuation lines: a nested object/list (empty inline value) OR a
+//    block/folded/multi-line scalar (`title: >` + indented lines, or a plain
+//    scalar wrapped across lines). Editing only the key line would leave the
+//    stale body behind, and for a plain multi-line scalar the result is still
+//    valid YAML that silently merges the old body into the new value.
+//  - A trailing comment, or a YAML anchor/alias/tag on the value: a scalar
+//    re-emit (formatScalar reformats only the value) would strip it. Quoted
+//    spans are removed first so a '#' inside quotes is not read as a comment.
+function scalarRefusalAt(lines, loc) {
+  if (loc.valueEnd > loc.valueStart) return 'This value spans several lines in the file, so it is edited there.';
+  const keyLine = lines[loc.keyLine];
+  const valueRaw = keyLine.slice(keyLine.indexOf(':') + 1).trim();
+  const unquoted = valueRaw.replace(/"(?:[^"\\]|\\.)*"|'(?:[^']|'')*'/g, '');
+  if (/(?:^|\s)#/.test(unquoted)) return 'This value has a comment beside it in the file, so it is edited there, where the comment is kept.';
+  if (/^[&*!]/.test(valueRaw)) return 'This value carries a YAML anchor or tag, so it is edited in the file.';
+  return null;
+}
+
+// What replaceProperty would refuse for a scalar `key`, said up front so the
+// panel offers no edit that can only snap back. Null when the edit would
+// land, or when the key cannot be located (the edit itself refuses that).
+export function scalarEditRefusal(raw, key) {
+  if (typeof raw !== 'string' || !raw.startsWith('---')) return null;
+  const lines = raw.split('\n');
+  const loc = locateKey(lines, key);
+  return loc ? scalarRefusalAt(lines, loc) : null;
 }
 
 // General byte-honesty backstop. Given the frontmatter block before and after

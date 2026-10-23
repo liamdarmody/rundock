@@ -4,6 +4,7 @@
 // traversal ('.'/'..'). Independent of the workspace boundary check.
 const { test, describe } = require('node:test');
 const assert = require('node:assert');
+const path = require('node:path');
 
 const { _internal: srv } = require('../../server.js');
 const { isSafeCreatePath } = srv;
@@ -29,6 +30,17 @@ describe('isSafeCreatePath', () => {
 
   test('rejects an intermediate dot-folder', () => {
     assert.strictEqual(isSafeCreatePath('.hidden/note.md'), false);
+  });
+
+  test('a backslash is a separator too, as it is on Windows', () => {
+    // On Windows the server resolves the path with backslashes as separators,
+    // so a name split only on '/' hides its traversal and its dot-folder.
+    const rel = 'x\\..\\.claude\\agents\\y.md';
+    assert.strictEqual(path.win32.resolve('C:\\ws', rel), 'C:\\ws\\.claude\\agents\\y.md', 'where Windows would put it');
+    assert.strictEqual(isSafeCreatePath(rel), false);
+    assert.strictEqual(isSafeCreatePath('..\\outside.md'), false);
+    assert.strictEqual(isSafeCreatePath('notes\\.env'), false);
+    assert.strictEqual(isSafeCreatePath('notes\\Plan.md'), true, 'a backslashed name with no dot segment is still allowed');
   });
 
   test('rejects empty and non-string input', () => {

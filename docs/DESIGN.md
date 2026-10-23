@@ -77,12 +77,12 @@ including the worst case of `--elevated`. If you need something fainter than
 | Token | Means |
 |---|---|
 | `--accent` | Rundock's colour. Primary actions, focus, selection |
-| `--accent-hover` | The accent, lifted, on hover only |
+| `--accent-hover` | The accent, lifted, on hover. One resting use, recorded rather than hidden: links in the properties panel in dark, where the brand measures 4.43:1 on `--card` and this measures 5.37:1 |
 | `--accent-glow` | The accent at low alpha, for tinted backgrounds |
 | `--accent-action` | The fill of a filled control: a primary button, the checkbox and slider fill, the toggle track when on, each with white text, tick or thumb. `#C15729` in both themes, where white clears 4.5:1; white on `--accent` measures 2.85:1 |
 | `--accent-control` | The fill of a control shape that carries no text or icon: the checked checkbox, the toggle when on, the slider's fill and thumb, a selected radio dot, a meter's fill. Needs 3:1 against its surface, not 4.5:1. The brand itself in dark (4.43:1 on `--card`), `#DB5933` in light (3.28 to 3.83:1). The white tick and thumb drawn on it measure 2.85:1 in dark, an accepted exception because the state is carried by shape and position |
 | `--accent-control-hover` | That fill on hover: the brand's hover in dark, `#DD6440` in light |
-| `--accent-text` | The brand hue as text, light theme only: `#BF401B`, 4.54 to 5.30:1 on the light surfaces, where `--accent` as text measured 2.44 to 2.85:1. In dark it is the brand value itself, so dark is unchanged. Used by `.linkbtn.accent` |
+| `--accent-text` | The brand hue as text, light theme only: `#BF401B`, 4.54 to 5.30:1 on the light surfaces, where `--accent` as text measured 2.44 to 2.85:1. In dark it is the brand value itself, so dark is unchanged. Used by `.linkbtn.accent`, by wikilinks in a note's body, and by links in the properties panel in light (in dark the panel's links take `--accent-hover`, since the brand measures 4.43:1 on `--card`) |
 | `--accent-action-hover` | That fill, darker, on hover only, so the contrast grows rather than shrinks. `#B45126` |
 | `--success` | Something succeeded or is allowed |
 | `--attention` | Something needs the user, and is not an error |
@@ -94,7 +94,7 @@ including the worst case of `--elevated`. If you need something fainter than
 | `--danger-text` | Destructive actions and errors, as text: any `color` declaration. `#F0706E` in dark, `#D42C2A` in light |
 | `--success-text` | The success hue as text and as an outline button's edge (Always allow, Allow once on the permission card): the fill itself in dark, `#266A36` in light, 5.14:1 on the light permission card where `--success` as text measures 1.64:1 |
 | `--border-strong` | A quiet control's edge that must still read as a control (the permission card's Deny): 3.20:1 on the dark card, 3.58:1 on the light one |
-| `--text-2-strong` | Secondary text on a control (the permission card's Deny label): 4.70:1 on the dark card, 4.59:1 on the light one |
+| `--text-2-strong` | Secondary text on a control (the permission card's Deny label): 4.70:1 on the dark card, 4.59:1 on the light one. Also a link to a note that does not exist yet, dashed, in the properties panel and the note body |
 
 Use these for what they mean, never for what colour they happen to be. If you
 want a red border and nothing has gone wrong, `--danger` is the wrong token and
