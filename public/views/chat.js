@@ -907,13 +907,25 @@ function connectorFieldsElement(f, toolName) {
   }
   // Every key the model read as none of the fields, each a block of its own,
   // its key and its value as text.
+  // The first ones shown, and every other one listed one click away, never
+  // reduced to a count: past the alias rows and the fields shown is exactly
+  // where a recipient can be put out of sight. Only past the number the model
+  // lists at all is anything counted, and the card's sentence then says fields
+  // are folded away.
   const otherFields = () => {
-    const lines = f.others.map((o) => {
+    const line = (o) => {
       const n = el('span', 'permission-line permission-other');
       n.append(el('bdi', 'permission-other-key', o.key), ': ', el('bdi', '', o.text));
       return n;
-    });
-    if (f.othersMore) lines.push(el('span', 'permission-line permission-cut', `… and ${f.othersMore} more ${f.othersMore === 1 ? 'field' : 'fields'}`));
+    };
+    const lines = f.others.slice(0, F.MAX_OTHERS).map(line);
+    const rest = f.others.slice(F.MAX_OTHERS);
+    if (rest.length || f.othersMore) {
+      const more = el('details', 'permission-more');
+      more.append(el('summary', '', `+${rest.length + f.othersMore} more ${rest.length + f.othersMore === 1 ? 'field' : 'fields'}`), ...rest.map(line));
+      if (f.othersMore) more.append(el('span', 'permission-line permission-cut', `… and ${f.othersMore} more ${f.othersMore === 1 ? 'field' : 'fields'} not shown`));
+      lines.push(more);
+    }
     return lines;
   };
   if (f.others.length || f.othersMore) row('Other fields', otherFields());

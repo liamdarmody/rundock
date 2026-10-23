@@ -23,7 +23,7 @@ describe('an email request is read by generic field names', () => {
     const { to, cc, bcc, ...rest } = f;
     assert.deepStrictEqual(rest, {
       kind: 'email', action: 'send', subject: 'Venue for the 14th', body: 'Hi Sam,\nSee you then.',
-      aliases: {}, others: [], othersMore: 0,
+      aliases: {}, others: [], othersMore: 0, aliasOverflow: 0,
     });
     assert.deepStrictEqual(texts(to), ['sam@example.org', 'priya@example.com', 'jo@example.net']);
     assert.deepStrictEqual(texts(cc), ['lee@example.org']);
@@ -88,7 +88,7 @@ describe('an email request is read by generic field names', () => {
   test('missing fields come back empty, not invented', () => {
     const f = F.connectorFields('mcp__example_post__create_draft', { subject: '' });
     assert.deepStrictEqual(f, {
-      kind: 'email', action: 'draft', to: [], cc: [], bcc: [], subject: '', body: '', aliases: {}, others: [], othersMore: 0,
+      kind: 'email', action: 'draft', to: [], cc: [], bcc: [], subject: '', body: '', aliases: {}, others: [], othersMore: 0, aliasOverflow: 0,
     });
   });
 });
@@ -164,14 +164,47 @@ describe('every field a request carries is read, so a card can show what the ser
     assert.deepStrictEqual(f.end, { raw: '{"when": "after lunch"}' });
   });
 
-  test('a long value is capped, and past a number of fields the rest are counted', () => {
+  test('a long value is capped, and fields past the number shown are still listed, to be opened', () => {
     const input = { to: 'a@example.org', subject: 's', notes: 'z'.repeat(5000) };
     for (let i = 0; i < F.MAX_OTHERS + 5; i++) input[`extra${i}`] = i;
     const f = F.connectorFields('mcp__example_post__send_message', input);
-    assert.strictEqual(f.others.length, F.MAX_OTHERS);
-    assert.strictEqual(f.othersMore, 6, 'the fields past the cap are counted, not dropped silently');
+    assert.strictEqual(f.others.length, F.MAX_OTHERS + 6, 'listed, never reduced to a count');
+    assert.strictEqual(f.othersMore, 0);
+    assert.strictEqual(F.isCrowded(f), true, 'more than the card shows at once');
     assert.ok(f.others[0].text.length <= F.MAX_OTHER_TEXT + 1);
     assert.ok(f.others[0].text.endsWith('…'));
+  });
+
+  test('only past a large overall cap are fields counted, and the count is said', () => {
+    const input = { to: 'a@example.org', subject: 's' };
+    for (let i = 0; i < F.MAX_LISTED + 7; i++) input[`extra${i}`] = i;
+    const f = F.connectorFields('mcp__example_post__send_message', input);
+    assert.strictEqual(f.others.length, F.MAX_LISTED);
+    assert.strictEqual(f.othersMore, 7);
+    assert.match(F.contextFor(f, 'x'), /more fields than the card shows at once/);
+  });
+
+  test('recipients past the alias cap and past the fields shown are listed, never only counted, and the card says so', () => {
+    // Forty spellings that all read as `to`, each harmless, then the one that
+    // is not: past both caps it must still be reachable, and the card must
+    // say fields are folded away.
+    const input = { subject: 's', body: 'b' };
+    for (let i = 0; i < 40; i++) input[`to${'_'.repeat(i)}`] = `ok${i}@example.org`;
+    input.recipients = ['evil@example.net'];
+    const f = F.connectorFields('mcp__example_post__send_message', input);
+    assert.strictEqual(f.aliases.to.length, F.MAX_ALIAS_ROWS);
+    assert.strictEqual(f.aliasOverflow, 31);
+    assert.deepStrictEqual(f.others.at(-1), { key: 'recipients', text: '["evil@example.net"]' });
+    assert.strictEqual(f.othersMore, 0);
+    assert.match(F.contextFor(f, 'x'), /more fields than the card shows at once: open Other fields and check every one before allowing\./);
+  });
+
+  test('a field past the alias cap alone makes the card say fields are listed apart', () => {
+    const input = { subject: 's' };
+    for (let i = 0; i < F.MAX_ALIAS_ROWS + 1; i++) input[`to${'_'.repeat(i)}`] = `ok${i}@example.org`;
+    const f = F.connectorFields('mcp__example_post__send_message', input);
+    assert.strictEqual(f.others.length, 1, 'well under the number shown');
+    assert.strictEqual(F.isCrowded(f), true);
   });
 
   test('a card with unread fields never says there is nobody', () => {

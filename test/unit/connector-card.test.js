@@ -330,6 +330,34 @@ describe('a card shows every field it is given, so nothing it acts on is hidden'
     const card = render('mcp__example_post__send_message', input);
     assert.deepStrictEqual(labels(card), [...names.slice(0, 10), 'Subject', 'Message', 'Other fields']);
     assert.deepStrictEqual(otherLines(card).map((n) => n.textContent), ['to_recipients: p10@example.org', 'toAddresses: p11@example.org']);
+    assert.match(contextText(card), /more fields than the card shows at once/, 'and the card says some are listed apart');
+  });
+
+  test('recipients past both caps: reachable in a disclosure under Other fields, and the card says fields are folded', () => {
+    const input = { subject: 's', body: 'b' };
+    for (let i = 0; i < 40; i++) input[`to${'_'.repeat(i)}`] = `ok${i}@example.org`;
+    input.recipients = ['evil@example.net'];
+    const card = render('mcp__example_post__send_message', input);
+    const F = global.RundockConnectorFields;
+    const other = row(card, 'Other fields');
+    assert.strictEqual(other.querySelectorAll(':scope > .permission-line').length, F.MAX_OTHERS, 'the first ones shown');
+    const more = other.querySelector(':scope > details.permission-more');
+    assert.ok(more, 'the rest one click away');
+    assert.strictEqual(text(more.querySelector('summary')), '+6 more fields');
+    const folded = [...more.querySelectorAll('.permission-line')].map((n) => n.textContent);
+    assert.ok(folded.includes('recipients: ["evil@example.net"]'), `the last recipient is reachable: ${JSON.stringify(folded)}`);
+    assert.match(contextText(card), /more fields than the card shows at once: open Other fields and check every one before allowing\./);
+  });
+
+  test('past the overall cap the disclosure says how many fields are not shown', () => {
+    const F = global.RundockConnectorFields;
+    const input = { to: 'a@example.org', subject: 's' };
+    for (let i = 0; i < F.MAX_LISTED + 7; i++) input[`extra${i}`] = i;
+    const card = render('mcp__example_post__send_message', input);
+    const more = row(card, 'Other fields').querySelector(':scope > details.permission-more');
+    const lines = [...more.querySelectorAll('.permission-line')].map((n) => n.textContent);
+    assert.strictEqual(lines.length, F.MAX_LISTED - F.MAX_OTHERS + 1);
+    assert.strictEqual(lines.at(-1), '… and 7 more fields not shown');
   });
 
   test('two bodies: both are shown, each under its real key', () => {

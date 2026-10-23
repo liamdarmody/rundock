@@ -30,7 +30,8 @@
   const MAX_TEXT = 20000;   // any one value, so a huge payload cannot swamp the card
   const MAX_ADDRESS = 320;
   const MAX_KEY = 64;          // a key, shown as a label
-  const MAX_OTHERS = 25;       // unread fields listed, then counted
+  const MAX_OTHERS = 25;       // unread fields shown; the rest are one click away
+  const MAX_LISTED = 200;      // unread fields listed at all; only past this are they counted
   const MAX_OTHER_TEXT = 300;  // an unread value, or one shown as written
   const MAX_LIST = 500;        // entries drawn from a list that is never folded (Bcc)
   const MAX_ALIAS_ROWS = 10;   // rows for one field under many names; the rest are listed
@@ -170,13 +171,15 @@
   // Each field read from every source that carries it. `read` maps a field to
   // how its value is read. The first value is the field's; a field found more
   // than once has up to MAX_ALIAS_ROWS of them in `aliases`, each under the key
-  // it came from, and any past that are listed in `others` with every key of a
-  // source that is none of the fields, so no request can fill a card with rows.
+  // it came from, and any past that (counted in `aliasOverflow`) are listed in
+  // `others` with every key of a source that is none of the fields, so no
+  // request can fill a card with rows. Everything is listed, never reduced to
+  // a count, up to MAX_LISTED; only past that is anything counted.
   function gather(sources, read) {
     const values = {}, aliases = {}, others = [];
-    let found = false, othersMore = 0;
+    let found = false, othersMore = 0, aliasOverflow = 0;
     const list = (key, raw) => {
-      if (others.length < MAX_OTHERS) others.push({ key, text: rawText(raw) });
+      if (others.length < MAX_LISTED) others.push({ key, text: rawText(raw) });
       else othersMore++;
     };
     const fields = Object.keys(read);
@@ -187,7 +190,7 @@
       }
       values[field] = all.length ? read[field](all[0].raw) : EMPTY[field];
       if (all.length > 1) aliases[field] = all.slice(0, MAX_ALIAS_ROWS).map((o) => ({ key: o.key, value: read[field](o.raw) }));
-      for (const o of all.slice(MAX_ALIAS_ROWS)) list(o.key, o.raw);
+      for (const o of all.slice(MAX_ALIAS_ROWS)) { aliasOverflow++; list(o.key, o.raw); }
       if (all.length) found = true;
     }
     const names = new Set(fields.flatMap((field) => KEYS[field]));
@@ -197,7 +200,7 @@
         list(clip(s.prefix + k, MAX_KEY), s.obj[k]);
       }
     }
-    return { values, aliases, others, othersMore, found };
+    return { values, aliases, others, othersMore, aliasOverflow, found };
   }
 
   function emailOf(input, words) {
@@ -216,7 +219,7 @@
     const sources = [{ obj: input, prefix: '', skip: new Set(nested) }, ...nested.map((k) => ({ obj: input[k], prefix: `${k}.`, skip: new Set() }))];
     if (!sources.some((s) => looksLikeMail(s.obj))) return null;
     const g = gather(sources, { to: recipientsOf, cc: recipientsOf, bcc: recipientsOf, subject: lineOf, body: bodyOf });
-    return { kind: 'email', action, ...g.values, aliases: g.aliases, others: g.others, othersMore: g.othersMore };
+    return { kind: 'email', action, ...g.values, aliases: g.aliases, others: g.others, othersMore: g.othersMore, aliasOverflow: g.aliasOverflow };
   }
 
   // A time: an ISO string with or without an offset, a date alone (all day),
@@ -286,7 +289,7 @@
     if (!g.found) return null;
     return {
       kind: 'event', action: words.some((w) => CHANGE_WORDS.includes(w)) ? 'update' : 'create',
-      ...g.values, aliases: g.aliases, others: g.others, othersMore: g.othersMore,
+      ...g.values, aliases: g.aliases, others: g.others, othersMore: g.othersMore, aliasOverflow: g.aliasOverflow,
     };
   }
 
@@ -319,10 +322,25 @@
     return f.othersMore > 0 || f.others.some((o) => !WELL_KNOWN.has(norm(String(o.key).split('.').pop())));
   }
 
-  // The sentence under the card's title. Every alias of a field counts toward
-  // who is reached. While fields went unread, nobody being found is not the
-  // same as nobody being there, so the card points at Other fields instead.
+  // Whether a request has more fields than the card shows at once: a field
+  // under more names than it has rows for (the rest are listed apart), unread
+  // fields past the number shown (the rest are one click away), or any past
+  // the number listed (those are only counted). Then the card says so, because
+  // what is folded away is still what the request acts on.
+  function isCrowded(f) {
+    return (f.aliasOverflow || 0) > 0 || f.others.length > MAX_OTHERS || f.othersMore > 0;
+  }
+  const CROWDED = ' This request has more fields than the card shows at once: open Other fields and check every one before allowing.';
+
+  // The sentence under the card's title.
   function contextFor(f, server) {
+    return baseContext(f, server) + (isCrowded(f) ? CROWDED : '');
+  }
+
+  // What the request does. Every alias of a field counts toward who is
+  // reached. While fields went unread, nobody being found is not the same as
+  // nobody being there, so the card points at Other fields instead.
+  function baseContext(f, server) {
     const unread = hasUnreadFields(f);
     const every = (field) => (f.aliases[field] ? f.aliases[field].map((o) => o.value) : [f[field]]).flat();
     if (f.kind === 'event') {
@@ -340,7 +358,7 @@
   }
 
   return {
-    connectorFields, cutList, cutText, contextFor, hasUnreadFields, recipientsOf, addressText, formatWhen, durationText,
-    SHOWN, MORE_SHOWN, SUBJECT_SOFT, MAX_TEXT, MAX_ADDRESS, MAX_OTHERS, MAX_OTHER_TEXT, MAX_LIST, MAX_ALIAS_ROWS,
+    connectorFields, cutList, cutText, contextFor, hasUnreadFields, isCrowded, recipientsOf, addressText, formatWhen, durationText,
+    SHOWN, MORE_SHOWN, SUBJECT_SOFT, MAX_TEXT, MAX_ADDRESS, MAX_OTHERS, MAX_LISTED, MAX_OTHER_TEXT, MAX_LIST, MAX_ALIAS_ROWS,
   };
 }));

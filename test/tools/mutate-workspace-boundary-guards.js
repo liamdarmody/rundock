@@ -1951,7 +1951,22 @@ const MUTATIONS = [
     'all.slice(0, MAX_ALIAS_ROWS).map(',
     'all.map('],
   [CONNECTOR_CARD_MODEL, 'Connector card: aliases past the cap are not listed',
-    '      for (const o of all.slice(MAX_ALIAS_ROWS)) list(o.key, o.raw);\n',
+    '      for (const o of all.slice(MAX_ALIAS_ROWS)) { aliasOverflow++; list(o.key, o.raw); }\n',
+    ''],
+  // Past the alias rows and the fields shown is exactly where a recipient can
+  // be put out of sight: reduce what is there to a count and it is.
+  [CONNECTOR_CARD_MODEL, 'Connector card: fields past the number shown are only counted',
+    '      if (others.length < MAX_LISTED) others.push({ key, text: rawText(raw) });',
+    '      if (others.length < MAX_OTHERS) others.push({ key, text: rawText(raw) });'],
+  [CONNECTOR_CARD_VIEW, 'Connector card: the fields past those shown are not drawn',
+    ', ...rest.map(line));',
+    ');'],
+  // Folded away is still acted on: the card has to say it.
+  [CONNECTOR_CARD_MODEL, 'Connector card: a card with fields folded away does not say so',
+    "    return baseContext(f, server) + (isCrowded(f) ? CROWDED : '');",
+    '    return baseContext(f, server);'],
+  [CONNECTOR_CARD_MODEL, 'Connector card: aliases past the cap do not count as folded away',
+    '(f.aliasOverflow || 0) > 0 || ',
     ''],
   // A reply that names only its thread drawn as the plain card: what it says
   // is approved unread.
