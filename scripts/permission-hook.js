@@ -582,7 +582,14 @@ const LAUNCHER_FILES = ['.rundock/permission-hook.sh', '.rundock/permission-hook
 // so a write to one is a write to the hook: the folder and everything in it.
 // Carded rather than refused: the runtime is only measured to refuse the
 // settings file it is launched with.
-const WHAT_RUNS_FILES = ['.mcp.json', '.claude/settings.json'];
+//
+// `.rundock/mcp-secrets.json` supplies the `env` and `headers` each declared
+// server is started with (lib/workspace/mcp-secrets.js), and an `env` such as
+// NODE_OPTIONS changes what a stdio server runs. It holds credentials, and only
+// the person writes it, never Rundock. A `.rundock` name, so it is matched by
+// name in every Rundock workspace, like the launcher.
+const MCP_SECRETS_FILE = '.rundock/mcp-secrets.json';
+const WHAT_RUNS_FILES = ['.mcp.json', '.claude/settings.json', MCP_SECRETS_FILE];
 const WHAT_RUNS_DIRS = ['.claude/hooks'];
 const WORKSPACE_ANSWER_FILES = [...RUNDOCK_ANSWER_FILES, ...RUNTIME_GUARDED_ANSWER_FILES, ...LAUNCHER_FILES, ...WHAT_RUNS_FILES];
 // `within`: an entry is a folder, matched with everything under it.
@@ -619,7 +626,7 @@ function isRundockAnswerFileAnywhere(resolvedPath, pmod = path) {
   const parts = resolvedPath.split(/[\\/]+/);
   const n = parts.length;
   const fold = v => (pmod === path.win32 || hostFoldsCase() ? v.toLowerCase() : v);
-  return n >= 2 && fold(parts[n - 2]) === '.rundock' && [...RUNDOCK_ANSWER_FILES, ...LAUNCHER_FILES].some(f => fold(f.split('/')[1]) === fold(parts[n - 1]));
+  return n >= 2 && fold(parts[n - 2]) === '.rundock' && [...RUNDOCK_ANSWER_FILES, ...LAUNCHER_FILES, MCP_SECRETS_FILE].some(f => fold(f.split('/')[1]) === fold(parts[n - 1]));
 }
 
 // A Claude settings file of a Rundock workspace: `.claude/settings.json` or

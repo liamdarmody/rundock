@@ -203,8 +203,8 @@ describe('sandboxSettings: named working folders', () => {
   // disks and not against itself. Read from each tagged release's
   // sandboxSettings output: no denyWrite for 0.13.0 to 0.13.2, three entries
   // for 0.13.3 to 0.15.5, eight for 0.15.6. One and two entries were written by
-  // the development line between 0.13.2 and 0.13.3, and by no release; all
-  // nineteen by the development line after 0.15.6.
+  // the development line between 0.13.2 and 0.13.3, and by no release; the
+  // first nineteen, then all twenty-one, by the development line after 0.15.6.
   const RELEASED_DENY = [
     `${WS}/.rundock/state.json`, `${WS}/.rundock/permissions.json`, `${WS}/.claude/settings.local.json`,
     `${HOME}/.claude/.credentials.json`, `${HOME}/.claude/.config.json`, `${HOME}/.codex/auth.json`,
@@ -213,8 +213,9 @@ describe('sandboxSettings: named working folders', () => {
     `${HOME}/.claude/agents`, `${HOME}/.claude/commands`, `${HOME}/.claude/backups`,
     `${HOME}/.claude-staging-oauth.json`, `${HOME}/.claude-local-oauth.json`, `${HOME}/.claude-custom-oauth.json`,
     `${WS}/.claude/settings.json`,
+    `${WS}/.mcp.json`, `${WS}/.rundock/permission-hook.sh`,
   ];
-  const WRITTEN_LENGTHS = [0, 1, 2, 3, 8, 19];
+  const WRITTEN_LENGTHS = [0, 1, 2, 3, 8, 19, 21];
   function released(n, shape) {
     const allowWrite = [...SHIPPED_KNOWLEDGE_BLOCK.filesystem.allowWrite, ...FOLDERS];
     const filesystem = n ? { allowWrite, denyWrite: RELEASED_DENY.slice(0, n) } : { allowWrite };
@@ -237,8 +238,8 @@ describe('sandboxSettings: named working folders', () => {
         `${HOME}/.claude/settings.json`, `${HOME}/.claude/plugins`, `${HOME}/.claude/hooks`, `${HOME}/.claude/skills`,
         `${HOME}/.claude/agents`, `${HOME}/.claude/commands`, `${HOME}/.claude/backups`,
         `${HOME}/.claude-staging-oauth.json`, `${HOME}/.claude-local-oauth.json`, `${HOME}/.claude-custom-oauth.json`,
-        `${WS}/.claude/settings.json`, `${WS}/.mcp.json`, `${WS}/.rundock/permission-hook.sh`],
-      'the intended difference, named: every file that holds answers to permission questions, the workspace\'s own permission configuration included, then the runtimes\' credential files, then what the runtime acts on outside the sandbox, then the workspace\'s connector file and the launcher the permission hook is started through');
+        `${WS}/.claude/settings.json`, `${WS}/.mcp.json`, `${WS}/.rundock/permission-hook.sh`, `${WS}/.rundock/mcp-secrets.json`],
+      'the intended difference, named: every file that holds answers to permission questions, the workspace\'s own permission configuration included, then the runtimes\' credential files, then what the runtime acts on outside the sandbox, then the workspace\'s connector file, the launcher the permission hook is started through, and the per-user connector file');
     const { denyWrite, ...filesystem } = s.filesystem;
     assert.deepStrictEqual({ ...s, filesystem }, SHIPPED_KNOWLEDGE_BLOCK,
       'and with it removed, key for key and value for value, the block that shipped');
@@ -375,18 +376,19 @@ describe('sandboxSettings: named working folders', () => {
     for (const mode of ['knowledge', 'code']) {
       const current = sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], FOLDERS, mode);
       const deny = current.filesystem.denyWrite;
-      for (const removed of [1, 3, 10]) {
+      for (const removed of [2, 4, 10]) {
         const edited = JSON.parse(JSON.stringify(current));
         edited.filesystem.denyWrite = deny.slice(0, deny.length - removed);
         assert.strictEqual(isRundockSandbox(edited, 'darwin'), false,
           `a ${mode} block with its last ${removed} deny entries removed is a person's edit`);
       }
-      // Removing all thirteen entries added after 0.15.6 leaves exactly the list
-      // 0.15.6 wrote, and removing the last two leaves the list the build after
-      // it wrote; neither can be told apart from that build's own block, and
-      // each upgrades like it.
-      assert.deepStrictEqual(deny.slice(0, deny.length - 13), RELEASED_DENY.slice(0, 8), 'sanity: what is left is the 0.15.6 list');
-      assert.deepStrictEqual(deny.slice(0, deny.length - 2), RELEASED_DENY, 'sanity: and the list the last build wrote');
+      // Removing all fourteen entries added after 0.15.6 leaves exactly the list
+      // 0.15.6 wrote, and removing the last three or the last one leaves a list
+      // a build after it wrote; none can be told apart from that build's own
+      // block, and each upgrades like it.
+      assert.deepStrictEqual(deny.slice(0, deny.length - 14), RELEASED_DENY.slice(0, 8), 'sanity: what is left is the 0.15.6 list');
+      assert.deepStrictEqual(deny.slice(0, deny.length - 3), RELEASED_DENY.slice(0, 19), 'sanity: and the nineteen-entry list');
+      assert.deepStrictEqual(deny.slice(0, deny.length - 1), RELEASED_DENY, 'sanity: and the list the last build wrote');
     }
   });
 

@@ -1267,8 +1267,8 @@ describe('opening a workspace upgrades Rundock\'s own block to deny the credenti
   });
 
   test('a block every earlier build wrote gains the files that decide what runs on the next open', () => {
-    const runs = (ws) => [path.posix.join(ws, '.mcp.json'), path.posix.join(ws, '.rundock', 'permission-hook.sh')];
-    for (const n of [19, 8, 3]) {
+    const runs = (ws) => [path.posix.join(ws, '.mcp.json'), path.posix.join(ws, '.rundock', 'permission-hook.sh'), path.posix.join(ws, '.rundock', 'mcp-secrets.json')];
+    for (const n of [21, 19, 8, 3]) {
       const ws = tmp(`wb-runs-upgrade-${n}-`);
       open(ws);
       const settings = read(ws);
@@ -1288,7 +1288,7 @@ describe('opening a workspace upgrades Rundock\'s own block to deny the credenti
       const settings = read(ws);
       const deny = settings.sandbox.filesystem.denyWrite;
       settings.sandbox.filesystem.denyWrite = change === 'trim'
-        ? deny.slice(0, deny.length - 1)
+        ? deny.slice(0, deny.length - 2)
         : [...deny.slice(0, 18), path.posix.join(ws, 'their-own.json')];
       fs.writeFileSync(settingsPath(ws), JSON.stringify(settings, null, 2));
       const theirs = fs.readFileSync(settingsPath(ws), 'utf8');
@@ -1374,14 +1374,15 @@ describe('the block denies the runtime\'s own escape paths, whatever runtime ver
   });
 
   // The launcher the runtime starts the permission hook through decides what
-  // every check answers, and `.mcp.json` names servers the runtime starts as
-  // their own processes. The hook asks about a write to either; this is the
-  // half that refuses a sandboxed write however it was made.
-  test('the workspace\'s connector file and the permission hook\'s launcher are denied last of all', () => {
+  // every check answers, `.mcp.json` names servers the runtime starts as their
+  // own processes, and the per-user connector file sets their environment. The
+  // hook asks about a write to any of them; this is the half that refuses a
+  // sandboxed write however it was made.
+  test('the workspace\'s connector files and the permission hook\'s launcher are denied last of all', () => {
     for (const mode of ['on', 'off']) {
       const deny = scaffold.sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], [], mode).filesystem.denyWrite;
-      assert.deepStrictEqual(deny.slice(-3), [`${WS}/.claude/settings.json`, `${WS}/.mcp.json`, `${WS}/.rundock/permission-hook.sh`],
-        `the ${mode} block appends them after the project settings, never inserting them`);
+      assert.deepStrictEqual(deny.slice(-4), [`${WS}/.claude/settings.json`, `${WS}/.mcp.json`, `${WS}/.rundock/permission-hook.sh`, `${WS}/.rundock/mcp-secrets.json`],
+        `the ${mode} block appends them after the project settings, each after the last, never inserting them`);
     }
   });
 
@@ -1515,8 +1516,10 @@ describe('an existing workspace gains the escape-path denies on open, and keeps 
     assert.strictEqual(JSON.stringify(read(ws).sandbox), theirs, 'neither the open nor the switch rewrites it');
   });
 
-  for (const removed of [1, 3, 10]) {
-    test(`a person who removes the last ${removed} deny ${removed === 1 ? 'entry' : 'entries'} keeps the block they wrote`, () => {
+  // Not one entry: removing only the last leaves the list the build before
+  // this one wrote, which cannot be told apart from it and so upgrades.
+  for (const removed of [2, 4, 10]) {
+    test(`a person who removes the last ${removed} deny entries keeps the block they wrote`, () => {
       const ws = tmp(`wb-escape-removed-${removed}-`);
       open(ws);
       const settings = read(ws);
@@ -1530,13 +1533,13 @@ describe('an existing workspace gains the escape-path denies on open, and keeps 
     });
   }
 
-  test('removing all thirteen leaves the 0.15.6 list, which upgrades like that release\'s own block', () => {
+  test('removing all fourteen leaves the 0.15.6 list, which upgrades like that release\'s own block', () => {
     // The two cannot be told apart on disk: a person who removes exactly the
     // entries added after 0.15.6 has written that release's block.
     const ws = tmp('wb-escape-removed-all-');
     open(ws);
     const settings = read(ws);
-    settings.sandbox.filesystem.denyWrite = settings.sandbox.filesystem.denyWrite.slice(0, -13);
+    settings.sandbox.filesystem.denyWrite = settings.sandbox.filesystem.denyWrite.slice(0, -14);
     assert.deepStrictEqual(settings.sandbox.filesystem.denyWrite, releasedDenyWrite(ws, home), 'sanity: exactly the 0.15.6 list');
     fs.writeFileSync(settingsPath(ws), JSON.stringify(settings, null, 2));
     open(ws);

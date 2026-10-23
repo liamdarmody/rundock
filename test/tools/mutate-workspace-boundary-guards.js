@@ -250,6 +250,9 @@ const CONNECTOR_ASK = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'tea
 const CONNECTOR_ASK_FLOW = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'team.js'), suite: 'test/integration/connector-asks.test.js' };
 const CONNECTOR_CARD = { src: path.join(ROOT, 'public', 'permissions.js'), suite: 'test/unit/connector-card.test.js' };
 const CONNECTOR_WIRING = { src: path.join(ROOT, 'server.js'), suite: 'test/integration/connector-asks.test.js' };
+// The per-user connector file, through the real hook and the card's words.
+const SECRETS_HOOK = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/connector-secrets-file.test.js' };
+const SECRETS_CARD = { src: path.join(ROOT, 'public', 'permissions.js'), suite: 'test/unit/connector-secrets-file.test.js' };
 // What Rundock decides for an agent's environment, never inherited from its own.
 const SPAWN_ENV = { src: path.join(ROOT, 'lib', 'runtime', 'claude.js'), suite: 'test/unit/workspace-modes.test.js' };
 
@@ -447,19 +450,19 @@ const MUTATIONS = [
     '  for (let n = 1; n < deny.length; n++) shapes.push(withDenyWrite(block, deny.slice(0, n)));\n'],
   // Forget a length a build wrote and every workspace carrying it is stranded.
   [SCAFFOLD, 'the list 0.15.6 wrote is recognised',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21];',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 19, 21];'],
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22];',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 19, 21, 22];'],
   [SCAFFOLD, 'the list 0.13.3 to 0.15.5 wrote is recognised',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21];',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 8, 19, 21];'],
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22];',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 8, 19, 21, 22];'],
   [SCAFFOLD, 'the lists the development line wrote before 0.13.3 are recognised',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21];',
-    'const WRITTEN_DENY_LENGTHS = [3, 8, 19, 21];'],
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22];',
+    'const WRITTEN_DENY_LENGTHS = [3, 8, 19, 21, 22];'],
   // Leave the current length out and the day a longer list ships, every block
   // this build wrote reads as a person's edit and never upgrades.
   [SCAFFOLD_SETTINGS, 'the current deny list\'s length is recorded as written',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21];',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19];'],
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22];',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21];'],
   // ===== THE USER-LEVEL STATE FILE IS A SECRET AT BOTH LAYERS =====
   // Drop the home-level files from the block and ~/.claude.json is writable
   // by sandboxed commands again, its user-scope MCP servers with it.
@@ -1753,8 +1756,8 @@ const MUTATIONS = [
     'const WORKSPACE_ANSWER_FILES = [...RUNDOCK_ANSWER_FILES, ...RUNTIME_GUARDED_ANSWER_FILES, ...LAUNCHER_FILES, ...WHAT_RUNS_FILES];',
     'const WORKSPACE_ANSWER_FILES = [...RUNDOCK_ANSWER_FILES, ...RUNTIME_GUARDED_ANSWER_FILES, ...WHAT_RUNS_FILES];'],
   [WHAT_RUNS_HOOK, "What runs: another workspace's launcher is not matched by name",
-    "[...RUNDOCK_ANSWER_FILES, ...LAUNCHER_FILES].some(f => fold(f.split('/')[1]) === fold(parts[n - 1]))",
-    "RUNDOCK_ANSWER_FILES.some(f => fold(f.split('/')[1]) === fold(parts[n - 1]))"],
+    "[...RUNDOCK_ANSWER_FILES, ...LAUNCHER_FILES, MCP_SECRETS_FILE].some(f => fold(f.split('/')[1]) === fold(parts[n - 1]))",
+    "[...RUNDOCK_ANSWER_FILES, MCP_SECRETS_FILE].some(f => fold(f.split('/')[1]) === fold(parts[n - 1]))"],
   [WHAT_RUNS_CLIENT, 'What runs: the launcher card is worded as an ordinary answer file',
     "      if (n >= 2 && parts[n - 2] === '.rundock' && /^permission-hook\\.(sh|cmd)$/.test(parts[n - 1])) return 'launcher';\n",
     ''],
@@ -1794,11 +1797,23 @@ const MUTATIONS = [
     '    ...WORKSPACE_RUNS_FILES.map(f => path.posix.join(workspaceDir, f)),\n',
     ''],
   [SCAFFOLD, 'What runs: the block denies the launcher',
-    "const WORKSPACE_RUNS_FILES = ['.mcp.json', '.rundock/permission-hook.sh'];",
-    "const WORKSPACE_RUNS_FILES = ['.mcp.json'];"],
+    "const WORKSPACE_RUNS_FILES = ['.mcp.json', '.rundock/permission-hook.sh', '.rundock/mcp-secrets.json'];",
+    "const WORKSPACE_RUNS_FILES = ['.mcp.json', '.rundock/mcp-secrets.json'];"],
   [SCAFFOLD, 'What runs: the block denies the connector file',
-    "const WORKSPACE_RUNS_FILES = ['.mcp.json', '.rundock/permission-hook.sh'];",
-    "const WORKSPACE_RUNS_FILES = ['.rundock/permission-hook.sh'];"],
+    "const WORKSPACE_RUNS_FILES = ['.mcp.json', '.rundock/permission-hook.sh', '.rundock/mcp-secrets.json'];",
+    "const WORKSPACE_RUNS_FILES = ['.rundock/permission-hook.sh', '.rundock/mcp-secrets.json'];"],
+  [SECRETS_HOOK, 'Connector secrets: the per-user connector file is ordinary inside work',
+    "const WHAT_RUNS_FILES = ['.mcp.json', '.claude/settings.json', MCP_SECRETS_FILE];",
+    "const WHAT_RUNS_FILES = ['.mcp.json', '.claude/settings.json'];"],
+  [SECRETS_HOOK, "Connector secrets: another workspace's copy is not matched by name",
+    "[...RUNDOCK_ANSWER_FILES, ...LAUNCHER_FILES, MCP_SECRETS_FILE].some(f => fold(f.split('/')[1]) === fold(parts[n - 1]))",
+    "[...RUNDOCK_ANSWER_FILES, ...LAUNCHER_FILES].some(f => fold(f.split('/')[1]) === fold(parts[n - 1]))"],
+  [SECRETS_CARD, 'Connector secrets: the card is worded as an ordinary answer file',
+    "      if (n >= 2 && parts[n - 2] === '.rundock' && parts[n - 1] === 'mcp-secrets.json') return 'connectorSecrets';\n",
+    ''],
+  [SCAFFOLD, 'Connector secrets: the block denies the per-user connector file',
+    "const WORKSPACE_RUNS_FILES = ['.mcp.json', '.rundock/permission-hook.sh', '.rundock/mcp-secrets.json'];",
+    "const WORKSPACE_RUNS_FILES = ['.mcp.json', '.rundock/permission-hook.sh'];"],
   // Insert them ahead of the escape paths and the block the last build wrote is
   // no longer a prefix: every workspace carrying it reads as a person's edit.
   [SCAFFOLD, 'What runs: they are appended after the escape paths, so the last build\'s block upgrades',
@@ -1806,12 +1821,18 @@ const MUTATIONS = [
     '    ...WORKSPACE_RUNS_FILES.map(f => path.posix.join(workspaceDir, f)),\n    ...escapeDenyFor(workspaceDir, home),\n'],
   // Forget the length the last build wrote and every workspace carrying it is
   // stranded: never rewritten, never given the new entries.
-  [SCAFFOLD_SETTINGS, 'What runs: the list the last build wrote is recognised',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21];',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 21];'],
-  [SCAFFOLD, 'What runs: the list the last build wrote upgrades on the next open',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21];',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 21];'],
+  [SCAFFOLD_SETTINGS, 'What runs: the nineteen-entry list is recognised',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22];',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 21, 22];'],
+  [SCAFFOLD, 'What runs: the nineteen-entry list upgrades on the next open',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22];',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 21, 22];'],
+  [SCAFFOLD_SETTINGS, 'Connector secrets: the twenty-one-entry list the last build wrote is recognised',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22];',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 22];'],
+  [SCAFFOLD, 'Connector secrets: the twenty-one-entry list upgrades on the next open',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22];',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 22];'],
   // An inherited Code-mode flag puts a Notes workspace under Code-mode grading;
   // an inherited conversation id names a conversation the agent does not have.
   [SPAWN_ENV, 'Spawn env: an inherited RUNDOCK_CODE_MODE reaches the agent',
