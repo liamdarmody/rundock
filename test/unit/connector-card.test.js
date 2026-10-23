@@ -280,6 +280,27 @@ describe('a send, reply or forward says where it goes', () => {
     assert.deepStrictEqual(labels(card), ['channel', 'Message', 'Other fields']);
   });
 
+  test('a long destination is cut at an address\'s length, with the whole of it one click away', () => {
+    const F = global.RundockConnectorFields;
+    const long = 'c'.repeat(20000);
+    const dd = row(render('mcp__example_chat__send_message', { channel: long, text: 'hi' }), 'channel');
+    const shown = dd.querySelector(':scope > bdi.permission-destination');
+    assert.strictEqual(shown.textContent.length, F.MAX_ADDRESS + 1);
+    assert.ok(shown.textContent.endsWith('…'), 'and says it is cut');
+    const box = dd.querySelector(':scope > details.permission-full');
+    assert.ok(box, 'the whole value one click away');
+    assert.strictEqual(text(box.querySelector('summary')), 'Show full value');
+    assert.strictEqual(text(box.querySelector('.permission-full-text')), long);
+  });
+
+  test('a destination of an address\'s length is drawn whole, with nothing to open', () => {
+    const F = global.RundockConnectorFields;
+    const exact = 'c'.repeat(F.MAX_ADDRESS);
+    const dd = row(render('mcp__example_chat__send_message', { channel: exact, text: 'hi' }), 'channel');
+    assert.strictEqual(text(dd.querySelector(':scope > bdi.permission-destination')), exact);
+    assert.strictEqual(dd.querySelector('details'), null);
+  });
+
   test('a destination is text, never markup, in an isolate of its own', () => {
     const card = render('mcp__example_chat__send_message', { channel: '<img src=x onerror="window.__pwned=9">', text: 'hi' });
     assert.strictEqual(card.querySelectorAll('img').length, 0);

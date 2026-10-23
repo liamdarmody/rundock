@@ -2036,8 +2036,12 @@ const MUTATIONS = [
     "    if (action !== 'draft') read.destination = lineOf;\n",
     ''],
   [CONNECTOR_CARD_VIEW, 'Connector card: where a send goes is not drawn',
-    "    for (const d of f.destinations) row(d.key, [d.value ? el('bdi', 'permission-destination', d.value) : empty('(empty)')]);\n",
+    "    for (const d of f.destinations) row(d.key, d.value ? place(d.value) : [empty('(empty)')]);\n",
     ''],
+  // A destination of any length drawn whole swamps the card it is on.
+  [CONNECTOR_CARD_VIEW, 'Connector card: a long destination is drawn whole',
+    '    const place = (v) => (v.length > F.MAX_ADDRESS',
+    '    const place = (v) => (false'],
   // A message that is not an email, drawn with an empty Subject and To.
   [CONNECTOR_CARD_MODEL, 'Connector card: every request is taken for an email',
     'destinations, emailShaped: sources.some((s) => addressed(s.obj)),',

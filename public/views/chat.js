@@ -761,6 +761,7 @@ const FULL_TEXT_BOXES = {
   subject: ['Show full subject', 'permission-full-subject'],
   title: ['Show full title', 'permission-full-text'],
   message: ['Show full message', 'permission-full-text'],
+  destination: ['Show full value', 'permission-full-text'],
 };
 function fullTextBox(kind, text) {
   const [label, cls] = FULL_TEXT_BOXES[kind];
@@ -897,7 +898,12 @@ function connectorFieldsElement(f, toolName) {
     // row (the destination says where it goes) and no empty Subject row,
     // unless an unread field holds an email address: then the To row stays,
     // to say who it may reach is under Other fields.
-    for (const d of f.destinations) row(d.key, [d.value ? el('bdi', 'permission-destination', d.value) : empty('(empty)')]);
+    // A destination is cut at an address's length, with the whole of it one
+    // click away, so a long one cannot swamp the card.
+    const place = (v) => (v.length > F.MAX_ADDRESS
+      ? [el('bdi', 'permission-destination', `${v.slice(0, F.MAX_ADDRESS)}…`), fullTextBox('destination', v)]
+      : [el('bdi', 'permission-destination', v)]);
+    for (const d of f.destinations) row(d.key, d.value ? place(d.value) : [empty('(empty)')]);
     field('to', 'To', (list) => people(list, '(none)'), f.emailShaped || !f.destinations.length || f.unreadAddress);
     field('cc', 'Cc', (list) => people(list, '(none)'));
     field('bcc', 'Bcc', (list) => everyone(list, '(none)'));
