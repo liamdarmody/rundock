@@ -274,6 +274,11 @@ const LAUNCHCTL_ANY_MODE = { src: path.join(ROOT, 'scripts', 'code-mode-verdict.
 // Which words a command can write, for the answer-file check, without the fixture.
 const ANSWER_WRITES = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/answer-file-writes.test.js' };
 const ANSWER_WRITES_VOCAB = { src: path.join(ROOT, 'public', 'read-only-shell.js'), suite: 'test/unit/answer-file-writes.test.js' };
+// A change allowed on the hook's card stands, without a second card.
+const ALLOWED_GUARD = { src: path.join(ROOT, 'lib', 'workspace', 'answer-file-guard.js'), suite: 'test/unit/allowed-change-stands.test.js' };
+const ALLOWED_HANDLER = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'process-control.js'), suite: 'test/unit/allowed-change-stands.test.js' };
+const ALLOWED_TURNS = { src: path.join(ROOT, 'lib', 'runtime', 'claude-turn-guard.js'), suite: 'test/unit/allowed-change-stands.test.js' };
+const ALLOWED_WIRING = { src: path.join(ROOT, 'server.js'), suite: 'test/unit/allowed-change-stands.test.js' };
 // What agents are told about the connector files, against the card's words.
 const PROMPT_CONNECTORS = { src: path.join(ROOT, 'lib', 'agents', 'prompt.js'), suite: 'test/unit/discovery.test.js' };
 // What Rundock decides for an agent's environment, never inherited from its own.
@@ -1199,7 +1204,7 @@ const MUTATIONS = [
     "        writePlain(change.file, change.agentContent, change.mode);",
     "        require('fs').writeFileSync(change.file, change.agentContent);"],
   [CLAUDE_TURN_GUARD, "Claude turns: a turn is never guarded",
-    "  const start = () => { if (!guard) guard = acquire(workspace, onChange); };",
+    "  const start = () => { if (!guard) guard = acquire(workspace, onChange, { convoId }); };",
     "  const start = () => {};"],
   [CLAUDE_TURN_GUARD, "Claude turns: a turn never ends, so an idle process second-guesses the person",
     "      if (RESULT_LINE.test(text)) { end(); tail = ''; return; }",
@@ -1993,6 +1998,39 @@ const MUTATIONS = [
     '  if (isWorkspaceAnswerFile(crossing.path, getWorkspace()) || isAnswerFileOfAnyWorkspace(crossing.path)) return false;',
     '  if (isWorkspaceAnswerFile(crossing.path, getWorkspace())) return false;'],
   // ===== THE GUARD WATCHES WHAT RUNS, FOR CODEX =====
+  [ALLOWED_GUARD, 'Allowed change: a change allowed on the card is put back and asked about again',
+    '    if (!outsideTurn && modeKept && takeAllowed(g, f, now)) { g.snapshot.set(f, now); continue; }\n',
+    ''],
+  [ALLOWED_GUARD, 'Allowed change: any content stands once the path is allowed',
+    '  if (mark.digest !== null && !(isPlain(now) && digest(now.bytes) === mark.digest)) return false;\n',
+    ''],
+  [ALLOWED_GUARD, "Allowed change: another conversation's allow covers this one",
+    '  if (!mark || ![...g.listeners].some(l => l.convoId === mark.convoId)) return false;',
+    '  if (!mark) return false;'],
+  [ALLOWED_GUARD, 'Allowed change: an allow is used more than once',
+    '  allowedChanges.delete(at);\n  return true;',
+    '  return true;'],
+  [ALLOWED_GUARD, 'Allowed change: an allow nothing used outlives its turn',
+    '        for (const [p, m] of allowedChanges) if (m.convoId === c) allowedChanges.delete(p);\n',
+    ''],
+  [ALLOWED_HANDLER, 'Allowed change: an Allow on the card marks nothing',
+    '      if (card) { try { markAllowedAnswerFiles(pending); }',
+    '      if (false) { try { markAllowedAnswerFiles(pending); }'],
+  [ALLOWED_HANDLER, "Allowed change: a shell command's answer files are not marked",
+    '  for (const c of pending.crossings || []) if (c && c.answerFile && c.path) files.add(c.path);\n',
+    ''],
+  [ALLOWED_HANDLER, 'Allowed change: a shell command is held to content it never named',
+    '  const shell = SHELL_TOOLS.has(pending.toolName);',
+    '  const shell = false;'],
+  [ALLOWED_HANDLER, "Allowed change: an Edit's result is not worked out",
+    ': current.replace(ti.old_string, () => ti.new_string);',
+    ': current;'],
+  [ALLOWED_TURNS, "Allowed change: a Claude turn's guard is not told its conversation",
+    'guard = acquire(workspace, onChange, { convoId });',
+    'guard = acquire(workspace, onChange);'],
+  [ALLOWED_WIRING, "Allowed change: the server does not pass the conversation to the turn guard",
+    '    workspace: config.getWorkspace(),\n    convoId,\n',
+    '    workspace: config.getWorkspace(),\n'],
   [GUARD_RUNS, 'Guard: only the permission answers are watched',
     'const ANSWER_FILES = [...WORKSPACE_ANSWER_FILES];',
     "const ANSWER_FILES = ['.rundock/permissions.json', '.rundock/state.json', '.claude/settings.local.json', '.claude/settings.json'];"],

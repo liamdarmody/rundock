@@ -656,6 +656,7 @@ claudeRuntime.wireClaudeRuntimeDeps({
   // Every Claude turn runs under the same answer-file guard as a Codex turn.
   onClaudeSpawn: (proc, { convoId, agentId }) => watchClaudeTurns(proc, {
     workspace: config.getWorkspace(),
+    convoId,
     onChange: (change) => codexGlue.surfaceAnswerFileChange({ agentId, processId: null }, convoId, change, 'claude'),
   }),
 });
