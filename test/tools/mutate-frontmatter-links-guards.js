@@ -76,6 +76,14 @@ const MUTATIONS = [
     '{ ...panelOpts, raw: parts.raw }',
     'panelOpts'],
 
+  // ===== NO EDIT OFFERED THAT CAN ONLY SNAP BACK =====
+  [RAW, 'a value with a comment beside it is refused up front, with the reason',
+    "  if (/(?:^|\\s)#/.test(unquoted)) return 'This value has a comment beside it in the file, so it is edited there, where the comment is kept.';\n",
+    ''],
+  [PANEL, 'the panel offers no edit the file would refuse',
+    '    const editable = onEditProperty && !refusal && [',
+    '    const editable = onEditProperty && ['],
+
   // ===== ESCAPING AROUND IN-TEXT LINKS =====
   [PANEL, 'the words around a link are escaped',
     '<span class="prop-text" data-at="${start}">${escapeHtml(seg.text)}</span>',

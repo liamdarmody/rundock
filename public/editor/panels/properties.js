@@ -10,7 +10,7 @@
 // renderer; the renderer itself never mutates the underlying data.
 
 import { linkSegments, unquotedLinkText } from '../markdown/prop-links.js';
-import { rawValueText } from '../markdown/frontmatter-edit.js';
+import { rawValueText, scalarEditRefusal } from '../markdown/frontmatter-edit.js';
 
 // Per-type row icons as Lucide-style inline SVGs (24 viewBox, 1.8 stroke, round
 // caps). Icons read as a type at a glance where the previous glyphs did not.
@@ -233,9 +233,13 @@ export function renderProperties(container, parsed, opts = {}) {
     shown[key] = value;
     const type = inferType(value);
     if (type === 'object') { nestedHidden += 1; continue; }
-    const editable = onEditProperty && ['string', 'number', 'date', 'bool', 'list', 'null'].includes(type);
+    // A scalar the file cannot take an edit to (a comment beside it, an
+    // anchor, several lines) is not offered one that would only snap back,
+    // and the row says why.
+    const refusal = onEditProperty && type !== 'list' ? scalarEditRefusal(raw, key) : null;
+    const editable = onEditProperty && !refusal && ['string', 'number', 'date', 'bool', 'list', 'null'].includes(type);
     rows.push(`
-      <div class="prop-row${editable ? ' editable' : ''}" data-prop-key="${escapeHtml(key)}" data-prop-type="${escapeHtml(type)}">
+      <div class="prop-row${editable ? ' editable' : ''}" data-prop-key="${escapeHtml(key)}" data-prop-type="${escapeHtml(type)}"${refusal ? ` title="${escapeHtml(refusal)}"` : ''}>
         <span class="prop-icon" title="${escapeHtml(type)}">${typeIconSvg(type)}</span>
         <span class="prop-key">${escapeHtml(key)}</span>
         ${renderValue(value, type, links, editable, written && written.items)}

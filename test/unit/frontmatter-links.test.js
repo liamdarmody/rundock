@@ -347,6 +347,27 @@ describe('editing a value with links in it', () => {
     } finally { p.done(); }
   });
 
+  test('a value the file cannot take an edit to offers none, and says why', () => {
+    // The edit is refused for a value with a comment beside it (the comment
+    // could not be kept), so the panel must not offer one that snaps back.
+    const src = '---\nsupersedes: [[Brief]] # kept for later\ntitle: Hello # draft\nplain: Hello\n---\n';
+    const p = mount(src);
+    try {
+      for (const key of ['supersedes', 'title']) {
+        const row = p.row(key);
+        assert.ok(!row.classList.contains('editable'), `${key}: not offered for editing`);
+        assert.equal(row.querySelector('.prop-wikilink-edit'), null, `${key}: no pencil`);
+        assert.match(row.getAttribute('title'), /comment beside it/, `${key}: says why`);
+        p.click(row.querySelector('.prop-value'));
+        assert.equal(row.querySelector('input'), null, `${key}: a click opens no editor`);
+      }
+      p.click(p.row('supersedes').querySelector('a.prop-wikilink'));
+      assert.deepEqual(p.opened, ['Brief'], 'the link still opens');
+      assert.ok(p.row('plain').classList.contains('editable'), 'a value without a comment still edits');
+      assert.equal(p.markdown(), src);
+    } finally { p.done(); }
+  });
+
   test('every value holding a link has the pencil', () => {
     const p = mount(NOTE);
     try {
