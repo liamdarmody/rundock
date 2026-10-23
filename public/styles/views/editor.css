@@ -135,11 +135,17 @@ textarea.editor-content { resize: none; border: none; background: transparent; w
 .tiptap-editor-pane .prop-key { font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace; font-size: var(--caption); color: var(--text-2); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tiptap-editor-pane .prop-value { font-size: var(--body); color: var(--text-1); display: flex; flex-wrap: wrap; gap: 6px; align-items: center; min-width: 0; }
 .tiptap-editor-pane .prop-value.empty { color: var(--text-2); font-style: italic; }
-/* Frontmatter wikilinks: clickable like inline wikilinks; unresolvable targets look dead, not broken. */
-.tiptap-editor-pane .prop-wikilink { color: var(--accent); cursor: pointer; text-decoration: none; }
-.tiptap-editor-pane .prop-wikilink:hover { text-decoration: underline; }
+/* Frontmatter wikilinks. A link can sit among words, so it is underlined as
+   well as coloured. The brand as text is 4.43:1 on the panel's --card in dark,
+   just short, so dark uses the lifted hover hue (5.37:1) and light the brand's
+   text token (4.54:1). A link to a missing note is muted and dashed at full
+   strength (4.70:1 dark, 5.02:1 light); an opacity would cost it contrast.
+   Measured in test/unit/editor-link-contrast.test.js. */
+.tiptap-editor-pane .prop-wikilink { color: var(--accent-hover); cursor: pointer; text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 2px; border-radius: var(--radius-xs); }
+body.light .tiptap-editor-pane .prop-wikilink:not(.dead) { color: var(--accent-text); }
+.tiptap-editor-pane .prop-wikilink:hover { background: var(--accent-glow); }
 .tiptap-editor-pane .prop-wikilink:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; border-radius: var(--radius-xs); }
-.tiptap-editor-pane .prop-wikilink.dead { color: var(--text-2); cursor: default; text-decoration: underline dashed; text-underline-offset: 3px; opacity: 0.75; }
+.tiptap-editor-pane .prop-wikilink.dead { color: var(--text-2-strong); text-decoration-style: dashed; text-underline-offset: 3px; }
 /* Inline property editing: values invite a click; chips remove; lists add. */
 .props-editable .prop-row.editable .prop-value { cursor: text; border-radius: var(--radius-sm); }
 .props-editable .prop-row.editable .prop-value:hover { background: var(--accent-glow, rgba(232,122,90,0.10)); }
@@ -172,9 +178,14 @@ textarea.editor-content { resize: none; border: none; background: transparent; w
    muted rather than an actionable pill. */
 .tiptap-editor-pane .prop-chip.non-editable { border-color: var(--border); color: var(--text-2); cursor: default; }
 .tiptap-editor-pane .prop-chip.non-editable:hover { background: transparent; }
-/* Edit affordance for a pure-wikilink value (which otherwise only navigates). */
-.prop-wikilink-edit { display: none; align-items: center; justify-content: center; background: none; border: none; color: var(--text-2); cursor: pointer; padding: 0 0 0 6px; line-height: 1; }
-.props-editable .prop-row.editable:hover .prop-wikilink-edit { display: inline-flex; }
+/* Edit affordance for a value holding links (a click on a link navigates).
+   Hidden by opacity rather than display, so it stays in the tab order: it
+   shows on hover, while focus is in the row, and always where nothing can
+   hover. */
+.prop-wikilink-edit { display: inline-flex; opacity: 0; align-items: center; justify-content: center; background: none; border: none; color: var(--text-2); cursor: pointer; padding: 0 0 0 6px; line-height: 1; transition: opacity var(--duration-fast) ease; }
+.props-editable .prop-row.editable:hover .prop-wikilink-edit,
+.props-editable .prop-row.editable:focus-within .prop-wikilink-edit { opacity: 1; }
+@media (hover: none) { .prop-wikilink-edit { opacity: 1; } }
 .prop-wikilink-edit:hover { color: var(--accent); }
 .tiptap-editor { font-size: var(--body); line-height: 1.7; outline: none; }
 .tiptap-editor .ProseMirror { outline: none; min-height: 200px; }
@@ -226,7 +237,7 @@ textarea.editor-content { resize: none; border: none; background: transparent; w
 .tiptap-editor .ProseMirror pre .editor-copy-code-btn.copied { opacity: 1; color: var(--success); }
 .tiptap-editor .ProseMirror pre code { background: transparent; padding: 0; font-size: 13px; line-height: 1.5; }
 .tiptap-editor .ProseMirror a { color: var(--accent); text-decoration: underline; cursor: pointer; }
-.tiptap-editor .ProseMirror a.wikilink { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; padding: 0 2px; border-radius: var(--radius-xs); transition: background var(--duration-base) ease, color var(--duration-base) ease; }
+.tiptap-editor .ProseMirror a.wikilink { color: var(--accent-text); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; padding: 0 2px; border-radius: var(--radius-xs); transition: background var(--duration-base) ease, color var(--duration-base) ease; }
 .tiptap-editor .ProseMirror a.wikilink:hover { color: var(--accent-hover); background: var(--accent-glow); }
 .tiptap-editor .ProseMirror a.wikilink.ProseMirror-selectednode { background: var(--accent-glow); outline: 1px solid var(--accent); outline-offset: 1px; }
 .tiptap-editor .ProseMirror .callout { background: rgba(122,162,232,0.08); border: 1px solid rgba(122,162,232,0.20); border-radius: var(--radius-lg); padding: 12px 16px; margin: 12px 0; --callout-color: var(--working); --callout-text: var(--callout-color); }

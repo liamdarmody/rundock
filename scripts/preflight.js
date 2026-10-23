@@ -76,6 +76,8 @@ const REGISTRY_SUITES = [
   // is the membership rule for this phase exactly.
   'test/unit/danger-token.test.js',
   'test/unit/attention-token.test.js',
+  // The same arithmetic over the colours links in a note are drawn in.
+  'test/unit/editor-link-contrast.test.js',
   // Manifest equality over discovered call sites and doors. Each of these fails
   // when something is ADDED and not written down, which is the membership rule,
   // and each was previously reported only after the suite had run under coverage.
