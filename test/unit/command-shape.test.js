@@ -129,6 +129,29 @@ describe('the refusal names forms that work', () => {
     assert.match(message, /Put the values inside the script and run it bare, as the exclusion names it:\n {2}node \/work\/scratch\/test-a\/run\.js$/m);
   });
 
+  describe('a suggested command is printed as written, quotes and all', () => {
+    for (const [label, cmd, written] of [
+      ['single quotes', "gh pr comment 3 --body 'it works' | cat", "gh pr comment 3 --body 'it works'"],
+      ['double quotes', 'gh pr comment 3 --body "npx playwright test" | cat', 'gh pr comment 3 --body "npx playwright test"'],
+      ['escaped quotes', 'gh pr comment 3 --body "say \\"hi\\"" --title it\\\'s | cat', 'gh pr comment 3 --body "say \\"hi\\"" --title it\\\'s'],
+      ['after a here-document', "python3 - <<'EOF'\nprint('x')\nEOF\ngh pr comment 3 --body 'done: \"ok\"' | cat", "gh pr comment 3 --body 'done: \"ok\"'"],
+    ]) {
+      test(label, () => {
+        const r = verdict(cmd);
+        assert.strictEqual(r.segment, written);
+        assert.ok(r.message.includes(`\n  ${written}\n`), r.message);
+      });
+    }
+
+    test('a cd, a VAR=value and a near miss, with no spaces round the operators', () => {
+      assert.match(verdict('cd "/work/my lane"&&gh pr list||true').message, /\n {2}1\. cd "\/work\/my lane"\n {2}2\. gh pr list$/);
+      const env = verdict("E2E_TITLE='a b' npx playwright test");
+      assert.match(env.message, /cannot carry E2E_TITLE='a b'\./);
+      assert.strictEqual(env.segment, 'npx playwright test', 'the VAR=value is not part of the command shown');
+      assert.match(verdict("node '/work/scratch/test-a/run.js' \"a b\"").message, /\n {2}node '\/work\/scratch\/test-a\/run\.js'$/);
+    });
+  });
+
   test('the runner is offered only when its own command is excluded', () => {
     for (const cmd of refusals) assert.doesNotMatch(verdict(cmd).message, /exempt-run/, cmd);
     const withRunner = [...PATTERNS, `node ${RUNNER} *`];
@@ -206,7 +229,7 @@ describe('everything else runs as before', () => {
       const r = verdict('gh pr comment 3 --body "npx playwright test" | cat');
       assert.strictEqual(r.verdict, 'refuse');
       assert.strictEqual(r.pattern, 'gh *');
-      assert.strictEqual(r.segment, 'gh pr comment 3 --body npx playwright test');
+      assert.strictEqual(r.segment, 'gh pr comment 3 --body "npx playwright test"');
       assert.strictEqual(verdict('E2E_TITLE="a b" npx playwright test').verdict, 'refuse', 'a quoted VAR=value is not the command');
       assert.strictEqual(verdict('cd "/work/my lane" && npx playwright test').fix.cwd, '/work/my lane', 'a quoted word leaves the next one unquoted');
     });

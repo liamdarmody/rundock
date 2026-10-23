@@ -35,7 +35,9 @@
  * WHAT IT SUGGESTS: the command bare, on its own; after a `cd`, two calls, the
  * `cd` and then the command; for a VAR=value, a small script in the test tree
  * or the gitignored scratch folder that sets it for the child process it
- * starts. scripts/exempt-run.js is named only when its own command matches an
+ * starts. Each command is printed as written, quotes and all, since run bare
+ * with its quotes stripped it would be a different command.
+ * scripts/exempt-run.js is named only when its own command matches an
  * exclusion: a runner not configured as an exclusion runs sandboxed like
  * anything else, so pointing to it would only move the failure.
  *
@@ -87,24 +89,29 @@ function heredocs(command) {
 }
 
 // `quoted[k]` says whether part of `words[k]` was quoted and none of it runs a
-// command (a substitution), and `heredocs` numbers the here-documents a
-// segment is fed, in the order of the line.
+// command (a substitution), `raw[k]` is the word as written, quotes and all,
+// and `heredocs` numbers the here-documents a segment is fed, in the order of
+// the line.
 function parse(command) {
   const s = String(command);
-  const fresh = () => ({ words: [], quoted: [], redirects: [], heredocs: [] });
+  const fresh = () => ({ words: [], raw: [], quoted: [], redirects: [], heredocs: [] });
   const segments = [fresh()];
   const wrappers = new Set();
   let word = null;
+  let start = 0;
   let quoted = false;
   let runs = false;
   let quote = null;
   let redirectNext = false;
   let heredocCount = 0;
+  let i = 0;
 
   const cur = () => segments[segments.length - 1];
+  const begin = () => { if (word === null) { word = ''; start = i; } };
+  // Called with `i` on the character that ends the word.
   const endWord = () => {
     if (word === null) return;
-    if (redirectNext) { cur().redirects.push(word); redirectNext = false; } else { cur().words.push(word); cur().quoted.push(quoted && !runs); }
+    if (redirectNext) { cur().redirects.push(word); redirectNext = false; } else { cur().words.push(word); cur().raw.push(s.slice(start, i)); cur().quoted.push(quoted && !runs); }
     word = null;
     quoted = false;
     runs = false;
@@ -115,7 +122,7 @@ function parse(command) {
     if (cur().words.length || cur().redirects.length) segments.push(fresh());
   };
 
-  for (let i = 0; i < s.length; i++) {
+  for (; i < s.length; i++) {
     const c = s[i];
     const next = s[i + 1];
     if (quote === "'") {
@@ -129,18 +136,18 @@ function parse(command) {
       word += c;
       continue;
     }
-    if (c === '\\') { word = (word ?? '') + (next ?? ''); i++; continue; }
-    if (c === "'" || c === '"') { quote = c; word = word ?? ''; quoted = true; continue; }
+    if (c === '\\') { begin(); word += next ?? ''; i++; continue; }
+    if (c === "'" || c === '"') { begin(); quote = c; quoted = true; continue; }
     if (c === ' ' || c === '\t') { endWord(); continue; }
-    if (c === '`' || (c === '$' && next === '(')) { const end = substitutionEnd(s, i); wrappers.add('substitution'); runs = true; word = (word ?? '') + s.slice(i, end); i = end - 1; continue; }
+    if (c === '`' || (c === '$' && next === '(')) { const end = substitutionEnd(s, i); wrappers.add('substitution'); runs = true; begin(); word += s.slice(i, end); i = end - 1; continue; }
     if (c === '\n' || c === ';') { split('chain'); continue; }
     if (c === '(' || c === ')') { split('subshell'); continue; }
     if (c === '|') {
-      if (next === '|') { i++; split('chain'); } else { if (next === '&') i++; split('pipe'); }
+      if (next === '|') { split('chain'); i++; } else { split('pipe'); if (next === '&') i++; }
       continue;
     }
     if (c === '&') {
-      if (next === '&') { i++; split('chain'); continue; }
+      if (next === '&') { split('chain'); i++; continue; }
       if (next === '>') { endWord(); wrappers.add('redirect'); i++; if (s[i + 1] === '>') i++; redirectNext = true; continue; }
       split('chain');
       continue;
@@ -160,13 +167,15 @@ function parse(command) {
       redirectNext = true;
       continue;
     }
-    word = (word ?? '') + c;
+    begin();
+    word += c;
   }
   endWord();
 
   for (const seg of segments) {
     seg.env = [];
-    while (seg.words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(seg.words[0])) { seg.env.push(seg.words.shift()); seg.quoted.shift(); }
+    seg.envRaw = [];
+    while (seg.words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(seg.words[0])) { seg.env.push(seg.words.shift()); seg.envRaw.push(seg.raw.shift()); seg.quoted.shift(); }
     if (seg.env.length) wrappers.add('env');
   }
   return { segments: segments.filter((seg) => seg.words.length || seg.env.length), wrappers };
@@ -189,13 +198,15 @@ function gitDir(words) {
 }
 
 // The directory a segment runs in, where the line says: git's -C, or the
-// nearest cd before it.
+// nearest cd before it. `shown` is that cd's directory as written; git's -C
+// needs no cd, so it has none.
 function cwdOf(segments, i) {
-  let cwd = gitDir(segments[i].words);
-  for (let j = i - 1; j >= 0 && !cwd; j--) {
-    if (segments[j].words[0] === 'cd' && segments[j].words[1]) cwd = segments[j].words[1];
+  const git = gitDir(segments[i].words);
+  if (git) return { cwd: git, shown: null };
+  for (let j = i - 1; j >= 0; j--) {
+    if (segments[j].words[0] === 'cd' && segments[j].words[1]) return { cwd: segments[j].words[1], shown: segments[j].raw[1] };
   }
-  return cwd;
+  return null;
 }
 
 const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh']);
@@ -265,9 +276,9 @@ function classify(command, patterns, outer = null) {
 
   for (let i = 0; i < segments.length; i++) {
     const seg = segments[i];
-    const cwd = cwdOf(segments, i) || (outer && outer.cwd) || null;
+    const at = cwdOf(segments, i) || (outer && outer.at) || null;
     for (const run of shellRuns(seg, bodies)) {
-      const inner = classify(run, patterns, { cwd });
+      const inner = classify(run, patterns, { at });
       if (inner.verdict === 'refuse') return inner;
     }
     const hit = exclusionFor(asMatched(seg), patterns);
@@ -278,13 +289,15 @@ function classify(command, patterns, outer = null) {
       verdict: 'refuse',
       kind: bare ? 'near-miss' : 'wrapped',
       pattern: hit.pattern,
-      segment: seg.words.join(' '),
+      segment: seg.raw.join(' '),
       wrappers: [...wrappers],
       runner: runnerExcluded(patterns),
       fix: {
-        cwd,
+        cwd: at && at.cwd,
+        cd: at && at.shown,
         argv: seg.words.slice(),
-        named: seg.words.slice(0, hit.length).join(' '),
+        named: seg.raw.slice(0, hit.length).join(' '),
+        shownEnv: seg.envRaw.join(' '),
         env: Object.fromEntries(seg.env.map((e) => [e.slice(0, e.indexOf('=')), e.slice(e.indexOf('=') + 1)])),
         stdout: seg.redirects[0] || null,
         piped: wrappers.has('pipe') && i < segments.length - 1,
@@ -310,13 +323,13 @@ function refusalMessage(r) {
       `"${r.pattern}"). Wrapped in ${how}, it runs inside the sandbox and fails late and misleadingly:`,
       'a browser that cannot start, a credential that reads as invalid.',
       '');
-    const env = Object.entries(r.fix.env).map(([k, v]) => `${k}=${v}`).join(' ');
+    const env = r.fix.shownEnv;
     if (env) {
       lines.push(`A bare command cannot carry ${env}. Write a small script in the repository's test tree or its`,
-        `gitignored scratch folder (.rundock/scratch/) that starts the command as a child process${r.fix.cwd ? ` in ${r.fix.cwd}` : ''}`,
+        `gitignored scratch folder (.rundock/scratch/) that starts the command as a child process${r.fix.cwd ? ` in ${r.fix.cd || r.fix.cwd}` : ''}`,
         'with that set, and run the script bare.');
-    } else if (r.fix.cwd && !gitDir(r.fix.argv)) {
-      lines.push('Run it as two calls, the cd alone and then the command alone:', `  1. cd ${r.fix.cwd}`, `  2. ${r.segment}`);
+    } else if (r.fix.cd) {
+      lines.push('Run it as two calls, the cd alone and then the command alone:', `  1. cd ${r.fix.cd}`, `  2. ${r.segment}`);
     } else {
       lines.push('Run it bare, as one call with nothing before or after it:', `  ${r.segment}`);
     }
