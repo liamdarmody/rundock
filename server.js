@@ -681,6 +681,7 @@ schedulerLib.wireSchedulerDeps({
   getWssClients: () => wss.clients,
 });
 const httpRouter = require('./lib/http-router.js');
+const claudeConsole = require('./lib/runtime/claude-console.js');
 httpRouter.wireHttpRouterDeps({
   // Live state BY IDENTITY: the accessors return the root's own maps.
   chatProcesses: () => chatProcesses,
@@ -690,6 +691,13 @@ httpRouter.wireHttpRouterDeps({
   fileIndexInProgress,
   getPermissionTimeoutMs: () => PERMISSION_TIMEOUT_MS,
   routineRunForSession: (sessionId) => schedulerLib.runForSession(sessionId),
+  // The reconnect card's two routes. The check's answer is also the runtime
+  // status's evidence, when it could find out.
+  openClaudeConsole: () => claudeConsole.openClaudeConsole({ bin: resolveClaudeBin() }),
+  checkClaudeConnection: () => claudeConsole.checkConnection({ bin: resolveClaudeBin() }).then((r) => {
+    if (r.known) _claudeAuthEvidence = r.connected;
+    return { connected: r.connected };
+  }),
 });
 
 // ===== AGENT HELPERS =====

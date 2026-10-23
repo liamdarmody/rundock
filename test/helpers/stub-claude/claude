@@ -58,6 +58,18 @@ if (argv.includes('--version')) {
   process.exit(0);
 }
 
+// The connection check (`--print test --output-format text`, the turn the
+// reconnect card's "I've reconnected" runs): answer at once, without a
+// scenario or a log line. A test signs the stub out with STUB_CLAUDE_SIGNED_OUT.
+if (argv.includes('--print') && argv[argv.indexOf('--output-format') + 1] === 'text') {
+  if (process.env.STUB_CLAUDE_SIGNED_OUT === '1') {
+    process.stderr.write('Invalid API key. Please run /login\n');
+    process.exit(1);
+  }
+  process.stdout.write('ok\n');
+  process.exit(0);
+}
+
 function argValue(flag) {
   const i = argv.indexOf(flag);
   return i >= 0 ? argv[i + 1] : null;
