@@ -698,6 +698,74 @@ function nameTheFolderHint() {
 const SANDBOX_RETRY_HINT = 'This one is the operating system refusing a write outside your workspace, '
   + 'because Keep agents inside this workspace is on in Settings under Permissions.';
 
+// THE FIELDS OF A CONNECTOR REQUEST, built as elements with every value set as
+// text. Each value is an agent's: an address or a subject can carry markup, a
+// right-to-left override or a zero-width character, and none of it may become
+// anything but the characters it is. Each address is its own block, so an
+// override in one cannot run on into the next. The cut-off rules are the
+// model's (public/connector-fields.js).
+function connectorFieldsElement(f, toolName) {
+  const F = RundockConnectorFields;
+  const el = (tag, cls, text) => {
+    const n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text !== undefined) n.textContent = text;
+    return n;
+  };
+  const dl = el('dl', 'permission-fields');
+  const row = (label, parts) => { const dd = el('dd'); dd.append(...parts); dl.append(el('dt', '', label), dd); };
+  const empty = (text) => el('span', 'permission-empty', text);
+  const people = (list, none) => {
+    if (!list.length) return [empty(none)];
+    const cut = F.cutList(list);
+    const out = cut.shown.map(a => el('span', 'permission-line', a));
+    if (cut.more.length) {
+      const more = el('details', 'permission-more');
+      more.append(el('summary', '', `+${list.length - cut.shown.length} more`), ...cut.more.map(a => el('span', 'permission-line', a)));
+      if (cut.rest) more.append(el('span', 'permission-line permission-cut', `… and ${cut.rest} more addresses`));
+      out.push(more);
+    }
+    return out;
+  };
+  if (f.kind === 'email') {
+    row('To', people(f.to, '(none)'));
+    if (f.cc.length) row('Cc', people(f.cc, ''));
+    if (f.bcc.length) row('Bcc', people(f.bcc, ''));
+    row('Subject', [f.subject ? el('span', 'permission-clamp', f.subject) : empty('(no subject)')]);
+    const body = F.cutText(f.body);
+    const longSubject = f.subject.length > F.SUBJECT_SOFT;
+    const parts = body.full ? [el('div', 'permission-body', body.preview)] : [empty('(empty)')];
+    if (body.moreLines) parts.push(el('span', 'permission-cut', `… ${body.moreLines} more ${body.moreLines === 1 ? 'line' : 'lines'}`));
+    if (body.cut || longSubject) {
+      const full = el('div', 'permission-full-text');
+      if (longSubject) full.append(el('div', 'permission-full-subject', f.subject));
+      full.append(document.createTextNode(body.full + (body.overflow ? `\n… (${body.overflow} more characters)` : '')));
+      const box = el('details', 'permission-full');
+      box.append(el('summary', '', 'Show full message'), full);
+      parts.push(box);
+    }
+    row('Message', parts);
+  } else {
+    const title = [f.title ? el('span', 'permission-clamp', f.title) : empty('(untitled)')];
+    if (f.title.length > F.SUBJECT_SOFT) {
+      const box = el('details', 'permission-full');
+      box.append(el('summary', '', 'Show full title'), el('div', 'permission-full-text', f.title));
+      title.push(box);
+    }
+    row('Title', title);
+    const when = (w) => (w ? document.createTextNode(F.formatWhen(w)) : empty('(not set)'));
+    const length = F.durationText(f.start, f.end);
+    row('Starts', [when(f.start)]);
+    row('Ends', length ? [when(f.end), document.createTextNode(' '), el('span', 'permission-cut', `(${length})`)] : [when(f.end)]);
+    row('Attendees', f.attendees.length ? people(f.attendees, '') : [document.createTextNode('Just you')]);
+  }
+  const raw = el('div', 'permission-raw');
+  raw.append(el('b', '', 'Tool name:'), document.createTextNode(' ' + toolName));
+  const frag = document.createDocumentFragment();
+  frag.append(dl, raw);
+  return frag;
+}
+
 function renderPermissionCard(d, convoId, host) {
   const req = d.request || {};
   const requestId = d.request_id || '';
@@ -916,6 +984,13 @@ function renderPermissionCard(d, convoId, host) {
     context = boundary && context ? `${context} ${said}` : said;
   }
 
+  // WHAT A CONNECTOR'S EMAIL OR EVENT SAYS, on the card that approves it. Only
+  // where nothing else is the reason for asking: a boundary or answer-file card
+  // keeps its own copy.
+  const fields = (!boundary && !answerFile && !verdictCopy && typeof RundockConnectorFields !== 'undefined')
+    ? RundockConnectorFields.connectorFields(toolName, input) : null;
+  if (fields) context = RundockConnectorFields.contextFor(fields, RundockPermissions.connectorServerName(toolName));
+
   // Store callback data for safe event handling (no inline onclick injection).
   // toolInput is echoed back in control_response (required by Claude Code).
   pendingPermissions.set(requestId, { convoId, key, toolInput: input, grantDir: wholeFolderOffered ? req.grant_dir : null });
@@ -944,7 +1019,10 @@ function renderPermissionCard(d, convoId, host) {
   const renderRisk = boundary ? 'high'
     : (verdict && verdict.verdict === 'always-asks') ? 'high'
       : (verdict && verdict.verdict === 'asks-once') ? 'medium' : risk;
-  const allowLabel = (verdictCopy && verdictCopy.allowLabel === 'Allow once') || crossingAlwaysAsks ? 'Allow once' : 'Allow';
+  // A connector send asks every time too: once a message has gone it cannot be
+  // called back, so no answer is remembered and the card says "Allow once".
+  const connectorSend = !verdict && !boundary && RundockPermissions.isConnectorSend(toolName);
+  const allowLabel = (verdictCopy && verdictCopy.allowLabel === 'Allow once') || crossingAlwaysAsks || connectorSend ? 'Allow once' : 'Allow';
   const alwaysLabel = verdictCopy && verdictCopy.alwaysLabel ? verdictCopy.alwaysLabel : 'Always allow';
   // Every value below is model-chosen: the tool name, the command text, the
   // file paths, up to 1500 characters of the content an agent wants to write.
@@ -974,7 +1052,7 @@ function renderPermissionCard(d, convoId, host) {
         <span class="permission-summary">${esc(summary)}</span>
       </div>
       ${context ? `<div class="permission-context">${esc(context)}</div>` : ''}
-      ${crossings.length > 1
+      ${fields ? '<div class="permission-fields-slot"></div>' : crossings.length > 1
         ? `<div class="permission-detail">${crossings.map(c => esc(c.path)).join('<br>')}</div>`
         : (toolName === 'Bash' && input.description && detail.length > 60)
           ? `<details class="permission-detail-collapse"><summary>Show command</summary><code class="permission-detail">${esc(detail)}</code></details>`
@@ -991,6 +1069,7 @@ function renderPermissionCard(d, convoId, host) {
       </div>
     </div>
   `;
+  if (fields) card.querySelector('.permission-fields-slot').replaceWith(connectorFieldsElement(fields, toolName));
 
   // Attach event listeners safely (no inline onclick)
   card.querySelectorAll('[data-perm-action]').forEach(btn => {

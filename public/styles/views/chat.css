@@ -128,6 +128,26 @@ body.light .permission-detail { background: var(--elevated); }
 .permission-diff .diff-add { background: color-mix(in srgb, var(--success) 18%, transparent); color: var(--text-1); border-radius: var(--radius-sm); }
 .permission-diff .diff-del { background: color-mix(in srgb, var(--danger) 16%, transparent); color: var(--text-1); border-radius: var(--radius-sm); }
 .permission-diff .diff-ctx, .permission-diff .diff-gap { color: var(--text-3); }
+/* A connector request's fields (public/views/chat.js connectorFieldsElement):
+   a label column and the values, on the same box the detail block uses. Each
+   address is a block of its own; the subject clamps to two lines and the
+   message to three, with the whole message in a box that scrolls. Labels, cut
+   markers and empty values are --text-2-strong, which reads on the box in both
+   themes (test/unit/permission-card-contrast.test.js). */
+.permission-fields { margin: 0 0 0 var(--permission-text-column); background: var(--base); border-radius: var(--radius-md); padding: 10px 12px; display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 6px 12px; font-size: 13px; line-height: 1.45; }
+body.light .permission-fields { background: var(--elevated); }
+.permission-fields dt { color: var(--text-2-strong); font-size: var(--caption); font-weight: 500; padding-top: 1px; }
+.permission-fields dd { margin: 0; color: var(--text-1); min-width: 0; overflow-wrap: anywhere; }
+.permission-line { display: block; }
+.permission-cut, .permission-empty { color: var(--text-2-strong); }
+.permission-clamp { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.permission-body { white-space: pre-wrap; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.permission-fields summary { cursor: pointer; color: var(--text-2-strong); text-decoration: underline; text-underline-offset: 2px; list-style: none; }
+.permission-fields summary::-webkit-details-marker { display: none; }
+.permission-full-text { white-space: pre-wrap; max-height: 150px; overflow: auto; margin-top: 6px; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.permission-full-subject { font-weight: 600; margin-bottom: 6px; }
+.permission-raw { margin-left: var(--permission-text-column); font-family: var(--font-mono); font-size: var(--label); color: var(--text-2-strong); word-break: break-all; }
+.permission-raw b { font-family: 'Inter', system-ui, -apple-system, sans-serif; font-weight: 500; }
 /* Indented to 24px so the buttons share the text column with the header text,
    the context line and the detail block, all of which already hang past the
    icon. Before this the card had two left edges 24px apart: everything read as

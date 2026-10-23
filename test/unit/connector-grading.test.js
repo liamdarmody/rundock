@@ -66,6 +66,16 @@ describe('a connector action that sends is graded like a delete', () => {
   });
 });
 
+describe('which connector actions are sends, for the card that always asks', () => {
+  test('every send, reply and forward, and nothing else', () => {
+    for (const action of SENDS) assert.strictEqual(P.isConnectorSend(tool(action)), true, action);
+    for (const action of [...Object.keys(LOOKALIKES), 'create_draft', 'update_event', 'delete_message']) {
+      assert.strictEqual(P.isConnectorSend(tool(action)), false, action);
+    }
+    for (const name of ['Bash', 'WebFetch', 'plugin__mail__send']) assert.strictEqual(P.isConnectorSend(name), false, name);
+  });
+});
+
 describe('which saved answers name a connector send', () => {
   // The store of saved answers drops these (lib/workspace/boundary.js), so
   // this decides which "Always allow" answers a workspace keeps.
