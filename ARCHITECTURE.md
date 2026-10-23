@@ -104,7 +104,7 @@ Contents:
 
 What does **not** live in `.rundock/`:
 
-- **Full message content.** The complete model output, tool calls, and tool results live in Claude Code's own JSONL transcripts at `~/.claude/projects/<projectHash>/<sessionId>.jsonl`. Rundock keeps a slimmer copy in `transcripts/` for UI replay, but the source of truth for the actual conversation is Claude Code's JSONL.
+- **Full message content.** The complete model output, tool calls, and tool results live in Claude Code's own JSONL transcripts at `~/.claude/projects/<projectHash>/<sessionId>.jsonl`. Rundock keeps a slimmer copy in `transcripts/` for UI replay, but the source of truth for the actual conversation is Claude Code's JSONL. A reopened conversation's history is rebuilt from both (`lib/protocol/handlers/history.js`): the JSONL supplies the words, and the transcript orders and attributes them from the moment it began, which is what keeps a specialist's replies interleaved with the orchestrator's rather than grouped by session file. A conversation whose earlier history is in its JSONL alone (imported, seeded, or older than transcripts) starts a transcript with its first new message; the lines from before that message are shown ahead of the transcript's turns, in time order across session files, each once, and are never matched to a later turn.
 - **Theme and UI preferences.** These live in browser local storage. They do not sync between machines.
 - **Agent and skill files.** These live in the workspace under `.claude/agents/` and `.claude/skills/`. Rundock reads them; it does not store them in `.rundock/`.
 

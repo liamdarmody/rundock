@@ -360,6 +360,60 @@ describe('get_session_history: multi-session merge', () => {
 
 });
 
+describe('get_session_history: a new turn after history only the session file holds', () => {
+  test('the earlier history stays in view after a real turn, and search still finds it', async () => {
+    // Imported, seeded, or older than transcripts: the conversation's history
+    // is in its session file and there is no transcript. A real chat turn then
+    // goes through the server, which starts the transcript with it. Before the
+    // fix, history read back showed that turn alone.
+    const convoId = 'sh-earlier-1';
+    const sessionId = 'sess-earlier-1';
+    writeSession(sessionId, [
+      userLine('Who is the launch plan for?', '2026-01-05T09:00:00.000Z'),
+      assistantLine('The audience is small teams moving off spreadsheets.', '2026-01-05T09:00:20.000Z'),
+      userLine('Draft the timing section.', '2026-01-05T09:05:00.000Z'),
+      assistantLine('Here is the timing section, in three phases.', '2026-01-05T09:05:40.000Z'),
+    ]);
+    const sessionIds = [{ sessionId, agentId: 'lead-designer' }];
+    client.send({ type: 'save_conversation', conversation: { id: convoId, agentId: 'lead-designer', title: 'Imported plan', sessionId, sessionIds } });
+    // A resumed spawn names no agent, so the rule matches on the prompt.
+    h.writeScenario([{ match: { promptIncludes: 'channels section' }, turn: [{ text: 'Channels: email first, then the forum.' }] }]);
+
+    client.send({ type: 'chat', conversationId: convoId, agent: 'lead-designer', content: 'Now the channels section.', sessionId });
+    await client.waitForEvent('system', 'done', convoId);
+    const transcript = JSON.parse(fs.readFileSync(path.join(h.workspaceDir, '.rundock', 'transcripts', `${convoId}.json`), 'utf-8'));
+    assert.deepStrictEqual(transcript.map((t) => [t.role, t.agent]), [['user', 'user'], ['agent', 'lead-designer']],
+      'the turn started a transcript, as it does for any conversation');
+    // The resumed session file gains the turn's lines, as Claude Code writes
+    // them; the stub claude keeps no session file when resuming.
+    fs.appendFileSync(path.join(sessionsDir, `${sessionId}.jsonl`), [
+      userLine('Now the channels section.', new Date().toISOString()),
+      assistantLine('Channels: email first, then the forum.', new Date(Date.now() + 5).toISOString()),
+    ].map((e) => JSON.stringify(e)).join('\n') + '\n');
+
+    const res = await getHistory({ conversationId: convoId, sessionIds });
+    assert.deepStrictEqual(res.messages.map((m) => m.content), [
+      'Who is the launch plan for?',
+      'The audience is small teams moving off spreadsheets.',
+      'Draft the timing section.',
+      'Here is the timing section, in three phases.',
+      'Now the channels section.',
+      'Channels: email first, then the forum.',
+    ]);
+    assert.strictEqual(res.messages.at(-1).agentId, 'lead-designer');
+    assert.strictEqual(res.totalCount, 6);
+
+    // Search reads the session files, never the transcript, and a turn only
+    // adds to what it has read: the earlier message is still found.
+    const since = client.messages.length;
+    client.send({ type: 'search_conversations', query: 'spreadsheets' });
+    const { msg: found } = await client.waitFor((m) => m.type === 'search_results' && m.query === 'spreadsheets', { since, label: 'search_results' });
+    const hit = found.results.find((r) => r.id === convoId);
+    assert.ok(hit, `the conversation is found by its earlier words: ${JSON.stringify(found.results.map((r) => r.id))}`);
+    assert.strictEqual(hit.matchType, 'content');
+  });
+});
+
 describe('get_session_history: single-session fallback', () => {
   test('without sessionIds, the named session is read directly with limit and offset', async () => {
     const convoId = 'sh-single-1';
