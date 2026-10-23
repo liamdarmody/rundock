@@ -39,9 +39,9 @@ const EDITOR = { src: at('public', 'editor', 'index.js'), suite: PANEL_SUITE };
 const DELEGATE = { src: at('public', 'editor', 'index.js'), suite: 'test/unit/wikilink-delegate.test.js' };
 const BODY = { src: at('public', 'editor', 'plugins', 'missing-links.js'), suite: PANEL_SUITE };
 const CREATE = { src: at('public', 'views', 'files.js'), suite: 'test/unit/link-create.test.js' };
-// The one rule only the server can keep: it is the last thing between a
-// click and an existing note's bytes, so the booted-server suite watches it.
-const SERVER = { src: at('lib', 'protocol', 'handlers', 'files.js'), suite: 'test/integration/conversation-metadata.test.js' };
+// The rules only the server can keep: it is the last thing between a click
+// and an existing note's bytes, so the booted-server suite watches it.
+const SERVER = { src: at('lib', 'protocol', 'handlers', 'files.js'), suite: 'test/integration/create-path-exclusive.test.js' };
 
 const MUTATIONS = [
   // ===== WHAT IS A LINK: THE MAP'S GRAMMAR =====
@@ -125,9 +125,14 @@ const MUTATIONS = [
   [CREATE, 'only an answer a link asked for is taken from the caller',
     '  if (!pendingLinkCreates.delete(msg.path)) return false;',
     '  pendingLinkCreates.delete(msg.path);'],
-  [SERVER, 'the server never writes over an existing file',
-    "  } else if (msg.kind !== 'folder' && fs.existsSync(full)) {",
-    '  } else if (false) {'],
+  // Without `wx` the write follows a dangling link out of the workspace and
+  // empties a file another writer made after any check.
+  [SERVER, 'the create is exclusive: nothing already at the path is written over',
+    "fs.writeFileSync(full, msg.content || '', { encoding: 'utf-8', flag: 'wx' });",
+    "fs.writeFileSync(full, msg.content || '', 'utf-8');"],
+  [SERVER, 'something already at the path is answered as already there',
+    "          if (e && e.code !== 'EEXIST') throw e;",
+    '          throw e;'],
 ];
 
 const REPORTER = ['--test-reporter', 'spec'];
