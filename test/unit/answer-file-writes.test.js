@@ -78,6 +78,30 @@ describe('a command asks about an answer file only when it can write it', () => 
     });
   }
 
+  // A FOLDER THAT HOLDS ANSWER FILES IS THEM. Removing, moving or replacing
+  // `.claude` or `.rundock` changes every answer file inside, and a copy or move
+  // into a folder writes the file of the same name there.
+  const FOLDER_WRITES = [
+    'rm -rf .claude', 'mv .claude old-claude', 'rm -rf .rundock', 'mv .rundock old', 'rm -rf .claude/hooks', 'chmod -R 000 .rundock',
+    'git checkout -- .claude', 'cp -r backup/.claude .', 'cp backup/.mcp.json .', 'mv backup/settings.json .claude',
+    'cp backup/permission-hook.sh .rundock/', 'rm -rf .claude/*', 'rm .rundock/*.json', 'rm -rf .*', 'rm -f .m?p.json',
+    'rm -rf projects/other-ws/.rundock', 'mv projects/other-ws/.claude x',
+  ];
+  const FOLDER_ORDINARY = [
+    'rm -rf .rundock/scratch', 'rm -rf .rundock/scratch/*', 'ls .claude', 'cp -r .claude backup', 'cp x.json .', 'mv notes.txt .claude/agents/',
+    'rm -rf node_modules', 'rm *.json', 'git add .', 'rm -rf .claude/agents/old.md', 'cp -r skills .claude/skills', 'rm -rf *',
+    // Into a folder that holds answer files, under another name: only that name is written.
+    'cp x.json .claude', 'mv notes.txt .rundock/', 'cp -t .claude x.json',
+  ];
+  test('a command that removes, moves or writes into a folder holding answer files asks', () => {
+    for (const d of ['backup/.claude', 'projects/other-ws/.rundock', 'projects/other-ws/.claude', '.claude/agents', '.rundock/scratch', 'skills']) fs.mkdirSync(path.join(ws, d), { recursive: true });
+    fs.writeFileSync(path.join(ws, 'projects', 'other-ws', '.rundock', 'state.json'), '{}');
+    for (const codeMode of [false, true]) {
+      for (const c of FOLDER_WRITES) assert.strictEqual(answerFileIn(c, codeMode), true, `${codeMode ? 'Code' : 'Notes'}: ${c}`);
+      for (const c of FOLDER_ORDINARY) assert.strictEqual(answerFileIn(c, codeMode), false, `${codeMode ? 'Code' : 'Notes'}: ${c}`);
+    }
+  });
+
   function hookDecision(command, codeMode) {
     const env = { ...process.env, RUNDOCK: '1', RUNDOCK_WORKSPACE: ws, RUNDOCK_PORT: String(closed), RUNDOCK_EXTRA_DIRS: '' };
     delete env.RUNDOCK_CODE_MODE;

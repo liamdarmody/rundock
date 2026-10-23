@@ -1133,9 +1133,14 @@ const ENV_PREFIX = [/^\$\{?env:([A-Za-z_][A-Za-z0-9_]*)\}?(?=[\\/]|$)/i, /^%([A-
 const READS_NAMED_FILES = new Set(['jq', 'diff', 'cmp', 'comm', 'sdiff', 'md5', 'md5sum', 'shasum', 'sha1sum', 'sha256sum', 'cksum', 'file', 'stat', 'less', 'more', 'bat', 'strings']);
 const GIT_READ_SUBCOMMANDS = new Set(['diff', 'log', 'show', 'blame', 'annotate', 'status', 'ls-files', 'grep', 'cat-file', 'shortlog', 'whatchanged', 'rev-parse', 'describe']);
 const COPIES_FROM_SOURCES = new Set(['cp', 'install']);
+// A copy, move or link into a folder writes the file of each source's name
+// there: `into` carries each destination and its sources, for the caller to
+// resolve once it knows whether the destination is a folder.
+const PLACES_INTO = new Set(['cp', 'install', 'mv', 'ln']);
 const REDIRECT = /^(?:\d*|&)(?:>>?|>\|)(.*)$/;
 function answerFileWriteWords(command) {
   const out = new Set();
+  const into = [];
   const bare = w => w.replace(/^['"]|['"]$/g, '');
   for (const seg of shellSegments(String(command))) {
     const words = seg.match(/'([^']*)'|"([^"]*)"|[^\s]+/g) || [];
@@ -1166,10 +1171,54 @@ function answerFileWriteWords(command) {
       reads = true;
       if (operands.length > 1) written.push(operands[operands.length - 1]);
     }
+    if (PLACES_INTO.has(verb)) {
+      const t = args.indexOf('-t');
+      const named = t >= 0 ? args[t + 1] : (args.find(a => a.startsWith('--target-directory=')) || '').slice('--target-directory='.length);
+      const operands = args.filter((a, i) => !a.startsWith('-') && !(t >= 0 && i === t + 1));
+      const dest = named || (operands.length > 1 ? operands[operands.length - 1] : null);
+      if (dest) into.push({ dest, sources: named ? operands : operands.slice(0, -1) });
+    }
     for (const w of written) out.add(w);
     if (!reads) for (const t of shellPathTokens(seg)) out.add(t);
   }
-  return out;
+  return { words: out, into };
+}
+
+// A FOLDER THAT HOLDS ANSWER FILES IS THEM: removing, moving or replacing
+// `.claude` or `.rundock` changes every answer file inside. A proper folder of
+// the workspace (never its root) holding one of its answer files or the
+// hook-scripts folder, or another Rundock workspace's `.rundock` or `.claude`.
+function holdsAnswerFiles(resolvedPath, workspaceRoot, foldsCase = hostFoldsCase(), pmod = path) {
+  const folds = foldsCase || pmod === path.win32;
+  const c = foldCase(canonicalize(resolvedPath, pmod), folds);
+  const root = pmod.resolve(workspaceRoot);
+  if (c.startsWith(foldCase(canonicalize(root, pmod), folds) + pmod.sep)
+    && [...WORKSPACE_ANSWER_FILES, ...WHAT_RUNS_DIRS].some(f => foldCase(canonicalize(pmod.join(root, ...f.split('/')), pmod), folds).startsWith(c + pmod.sep))) return true;
+  if (pmod !== path) return false;
+  const name = path.basename(resolvedPath);
+  return (name === '.rundock' || name === '.claude') && fs.existsSync(path.join(path.dirname(resolvedPath), '.rundock', 'state.json'));
+}
+
+// A GLOB THAT CAN REACH ONE: `rm -rf .claude/*` and `rm .rundock/*.json` name
+// no answer file and match several. Matched by the shell's own rule that a
+// pattern not starting with `.` never matches a name that does, so `rm -rf *`
+// at the workspace root reaches none of them and `rm -rf .*` reaches them all.
+function globReachesAnswerFiles(resolvedPath, workspaceRoot, foldsCase = hostFoldsCase(), pmod = path) {
+  const folds = foldsCase || pmod === path.win32;
+  const segs = String(resolvedPath).split(/[\\/]+/);
+  const at = segs.findIndex(s => /[*?[]/.test(s));
+  if (at < 0) return false;
+  const pattern = segs[at];
+  const re = new RegExp(`^${pattern.replace(/[.+^${}()|\\]/g, '\\$&').replace(/\*/g, '[^/]*').replace(/\?/g, '[^/]')}$`, folds ? 'i' : '');
+  const root = foldCase(canonicalize(pmod.resolve(workspaceRoot), pmod), folds);
+  const dir = foldCase(canonicalize(segs.slice(0, at).join(pmod.sep) || pmod.sep, pmod), folds);
+  if (dir !== root && !dir.startsWith(root + pmod.sep)) return false;
+  return [...WORKSPACE_ANSWER_FILES, ...WHAT_RUNS_DIRS].some((f) => {
+    const p = foldCase(canonicalize(pmod.join(pmod.resolve(workspaceRoot), ...f.split('/')), pmod), folds);
+    if (!p.startsWith(dir + pmod.sep)) return false;
+    const first = p.slice(dir.length + 1).split(pmod.sep)[0];
+    return !(first.startsWith('.') && !pattern.startsWith('.')) && re.test(first);
+  });
 }
 
 function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), foldsCase = hostFoldsCase(), opts = {}) {
@@ -1187,7 +1236,30 @@ function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), 
   // .rundock/permissions.json; echo done > build.log` reads the file and writes
   // somewhere else, and `git diff .mcp.json` or `cp .mcp.json backup.json`
   // only reads it; see answerFileWriteWords for which words count as written.
-  const writingWords = readOnly ? new Set() : answerFileWriteWords(command);
+  const writes = readOnly ? { words: new Set(), into: [] } : answerFileWriteWords(command);
+  const writingWords = writes.words;
+  // A folder a copy or move writes INTO is not itself replaced: what it writes
+  // is checked by name below, so `cp x.json .claude` asks about nothing.
+  const intoFolders = new Set(writes.into.map(i => i.dest));
+  const reachesAnswerFiles = (raw, resolved, pmod) => !intoFolders.has(raw)
+    && (holdsAnswerFiles(resolved, workspaceRoot, foldsCase, pmod) || globReachesAnswerFiles(resolved, workspaceRoot, foldsCase, pmod));
+  const addAnswer = (resolved, pmod) => {
+    const akey = pmod === path.win32 ? resolved.toLowerCase() : resolved;
+    if (!seen.has(akey)) { seen.add(akey); found.push({ path: resolved, answerFile: true }); }
+  };
+  // What a copy, move or link writes into a folder: the file of each source's
+  // name there (`cp backup/.mcp.json .`).
+  for (const { dest, sources } of writes.into) {
+    const pmod = winWorld ? path.win32 : flavourFor(dest, workspaceRoot);
+    const d = canonicalize(pmod.resolve(commandBaseDir(command, workspaceRoot, pmod, opts.cwd, extraDirs, home), dest), pmod);
+    let folder = /[\\/]$/.test(dest);
+    try { folder = folder || fs.statSync(d).isDirectory(); } catch (e) { /* not there: a file name */ }
+    if (!folder) continue;
+    for (const src of sources) {
+      const target = canonicalize(pmod.join(d, pmod.basename(src)), pmod);
+      if (isWorkspaceAnswerFile(target, workspaceRoot, foldsCase, pmod) || isAnswerFileOfAnyWorkspace(target, pmod) || reachesAnswerFiles(null, target, pmod)) addAnswer(target, pmod);
+    }
+  }
   for (const raw of shellPathTokens(command)) {
     let t = raw;
     let homed = false;
@@ -1235,9 +1307,8 @@ function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), 
     //
     // The second is how anyone would actually write it, and it is the shape a
     // test using an absolute path never sees.
-    if (writingWords.has(raw) && (isWorkspaceAnswerFile(resolved, workspaceRoot, foldsCase, pmod) || isAnswerFileOfAnyWorkspace(resolved, pmod))) {
-      const akey = pmod === path.win32 ? resolved.toLowerCase() : resolved;
-      if (!seen.has(akey)) { seen.add(akey); found.push({ path: resolved, answerFile: true }); }
+    if (writingWords.has(raw) && (isWorkspaceAnswerFile(resolved, workspaceRoot, foldsCase, pmod) || isAnswerFileOfAnyWorkspace(resolved, pmod) || reachesAnswerFiles(raw, resolved, pmod))) {
+      addAnswer(resolved, pmod);
       continue;
     }
 
