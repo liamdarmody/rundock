@@ -43,6 +43,7 @@ const CREATE = { src: at('public', 'views', 'files.js'), suite: 'test/unit/link-
 // and an existing note's bytes, so the booted-server suite watches it.
 const SERVER = { src: at('lib', 'protocol', 'handlers', 'files.js'), suite: 'test/integration/create-path-exclusive.test.js' };
 const SERVER_UNIT = { src: at('lib', 'protocol', 'handlers', 'files.js'), suite: 'test/unit/protocol-handlers-lib.test.js' };
+const CREATE_GUARD = { src: at('server.js'), suite: 'test/unit/create-path-guard.test.js' };
 
 const MUTATIONS = [
   // ===== WHAT IS A LINK: THE MAP'S GRAMMAR =====
@@ -137,6 +138,9 @@ const MUTATIONS = [
   [SERVER_UNIT, 'a failed create sends a plain sentence, never the raw error and its path',
     'reason: r.message, system: true }',
     'reason: r.message, detail: r.detail, system: true }'],
+  [CREATE_GUARD, 'the server splits a created path on backslashes too, as Windows does',
+    String.raw`  const segments = rel.split(/[\\/]/).filter(Boolean);`,
+    "  const segments = rel.split('/').filter(Boolean);"],
   [SERVER_UNIT, 'a failed create takes away the empty folders it made',
     '          if (made) removeEmptyFoldersUpTo(path.dirname(full), made);\n',
     ''],
