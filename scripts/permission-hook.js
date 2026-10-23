@@ -1290,6 +1290,70 @@ function midChainCd(command) {
   return found && { ...found, to: text.length };
 }
 
+// THE LITERAL FOLDER CHANGES AND `for` LISTS IN A COMMAND, for the answer-file
+// check where the base is unsure (see shellCrossings). Read where the shell
+// runs a word as a command, after a keyword such as `then` or `do` and inside
+// a group as well: { moves: [{ target, at }], loops: [{ name, items }] }, with
+// `at` where the move's segment starts in `text`. A target is kept as written,
+// for the caller to judge whether it is literal. A loop item that expands is
+// not knowable here and is left out.
+function movesAndLoops(text, offset = 0, depth = 0, acc = { moves: [], loops: [] }) {
+  const s = String(text);
+  let from = 0;
+  for (const seg of lexSegments(s)) {
+    const start = s.indexOf(seg.text, from);
+    if (start >= 0) from = start + seg.text.length;
+    const at = offset + Math.max(0, start);
+    const words = lexWords(seg.text);
+    if (depth < 8) {
+      for (const w of words) {
+        const close = { '(': ')', '{': '}' }[w.raw[0]];
+        if (close) movesAndLoops(w.raw.slice(1, w.raw.lastIndexOf(close)), at, depth + 1, acc);
+      }
+    }
+    let i = 0;
+    while (i < words.length - 1 && COMMAND_LEADS.has(words[i].raw)) i++;
+    const lead = words[i] ? words[i].text : '';
+    if (lead === 'cd' || lead === 'pushd') {
+      let j = i + 1;
+      while (words[j] && /^-[LPe@]+$/.test(words[j].text)) j++;
+      if (words[j]) acc.moves.push({ target: words[j].text, at });
+    } else if (lead === 'for' && words[i + 1] && /^[A-Za-z_][A-Za-z0-9_]*$/.test(words[i + 1].text) && words[i + 2] && words[i + 2].text === 'in') {
+      const items = [];
+      for (const v of words.slice(i + 3)) {
+        if (v.text === 'do' && !v.quoted) break;
+        if (!v.expands) items.push(v.text);
+      }
+      acc.loops.push({ name: words[i + 1].text, items });
+    }
+  }
+  return acc;
+}
+
+// WHERE THE LITERAL FOLDER CHANGES MAY LEAVE THE SHELL. Each lands from every
+// start and from every landing before it, so `cd .claude && cd hooks` reaches
+// `.claude/hooks` whether or not the second `cd` ran after the first. A target
+// that expands, a glob and `cd -` are not followed. At most 32 landings.
+function cdLandings(moves, starts, pmod, home) {
+  const out = [];
+  const seen = new Set();
+  for (const { target, at } of moves) {
+    let t = target;
+    for (const re of HOME_PREFIX) {
+      if (re.test(t)) { t = t.replace(re, home); break; }
+    }
+    if (!t || t.startsWith('-') || CD_NOT_LITERAL.test(t)) continue;
+    for (const b of [...starts, ...out.map(l => l.base)]) {
+      const base = canonicalize(pmod.resolve(b, t), pmod);
+      if (seen.has(base)) continue;
+      if (out.length >= 32) return out;
+      seen.add(base);
+      out.push({ base, at });
+    }
+  }
+  return out;
+}
+
 // `$env:TEMP\x` and `%LOCALAPPDATA%\x` in the forms each shell writes them, for
 // the development paths; `$env:USERPROFILE` and `%USERPROFILE%` are home and are
 // handled with the other home shorthands.
@@ -1793,6 +1857,48 @@ function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), 
     if (!bases.has(key)) bases.set(key, commandBases(fromStart ? '' : view.text, workspaceRoot, pmod, opts.cwd, extraDirs, home));
     return bases.get(key);
   };
+  // WHERE THE BASE IS UNSURE, A WRITTEN WORD IS TRIED FROM EACH LITERAL `cd` AS
+  // WELL. The base falls back to where the command started whenever a `cd` is
+  // not certain: inside an `if`, after a second one, or in a command a shell is
+  // handed. Measured only from there, `if true; then cd .claude/hooks && echo x
+  // > pre.sh; fi` wrote a bare `pre.sh`. So each landing of a literal `cd` or
+  // `pushd` before a written word is tried too (one in a command handed to a
+  // shell counts for that command's words only), and the word asks if any of
+  // them makes it an answer file. A certain base comes from the command's one
+  // `cd`, whose one landing is that base, so there this adds nothing.
+  const scanned = movesAndLoops(view.text);
+  const commandScans = view.commands.map(c => movesAndLoops(c.text));
+  const startOf = (pmod) => (opts.cwd ? canonicalize(pmod.resolve(opts.cwd), pmod) : pmod.resolve(workspaceRoot));
+  const landings = new Map();
+  const landingsFor = (pmod) => {
+    const key = pmod === path.win32 ? 'w' : 'p';
+    if (!landings.has(key)) {
+      const start = startOf(pmod);
+      const outer = cdLandings(scanned.moves, [start], pmod, home).map(l => ({ ...l, scope: null }));
+      const inner = view.commands.flatMap((c, k) => cdLandings(commandScans[k].moves, [start, ...outer.filter(l => l.at < c.at).map(l => l.base)], pmod, home)
+        .map(l => ({ base: l.base, at: c.at, scope: c.at })));
+      landings.set(key, outer.concat(inner));
+    }
+    return landings.get(key);
+  };
+  const cdStarts = (pmod, at, fromStart) => landingsFor(pmod)
+    .filter(l => (l.scope === null ? l.at < at : fromStart && l.scope === at)).map(l => l.base);
+  // A LOOP VARIABLE STANDS FOR EACH WORD OF ITS LIST. `for f in .mcp.json; do
+  // echo x > $f; done` writes `.mcp.json`, so a written word naming `$f` or
+  // `${f}` is also tried with each word of the list in its place.
+  const loops = scanned.loops.concat(...commandScans.map(s => s.loops));
+  const loopForms = (word) => {
+    const out = [word];
+    for (const { name, items } of loops) {
+      const ref = new RegExp('\\$(?:\\{' + name + '\\}|' + name + '(?![A-Za-z0-9_]))', 'g');
+      if (word.search(ref) < 0) continue;
+      for (const item of items) {
+        if (out.length >= 64) return out;
+        out.push(word.replace(ref, () => item));
+      }
+    }
+    return out;
+  };
   // EVERY LITERAL IN CODE THAT MAY NAME AN ANSWER FILE, place-shaped or not.
   // The place filter is for crossings outside the workspace: a bare name such
   // as `.mcp.json` or `.claude` is not shaped like a place, and dropping it
@@ -1879,7 +1985,9 @@ function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), 
     // test using an absolute path never sees.
     if (writingWords.has(raw)) {
       const forms = braceForms(t);
-      const hits = (forms.length > 1 ? forms.map(f => canonicalize(pmod.resolve(base, f), pmod)) : [resolved])
+      const spellings = forms.flatMap(loopForms);
+      const starts = [base, ...cdStarts(pmod, at, fromStart)];
+      const hits = (spellings.length > 1 || starts.length > 1 ? starts.flatMap(b => spellings.map(f => canonicalize(pmod.resolve(b, f), pmod))) : [resolved])
         .filter(r => isWorkspaceAnswerFile(r, workspaceRoot, foldsCase, pmod) || isAnswerFileOfAnyWorkspace(r, pmod) || reachesAnswerFiles(raw, r, pmod)
           // Rundock's console folder under home, wherever the workspace is.
           || isRundockConsolePath(r, home, foldsCase, pmod) || globReachesConsole(r, home, foldsCase, pmod));

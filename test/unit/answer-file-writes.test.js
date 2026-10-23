@@ -77,6 +77,14 @@ const WRITES = [
   "node - <<'JS'\nrequire('fs').rmSync('.claude', { recursive: true })\nJS",
   "python3 -c \"open('.mcp.json','w')\"", "node -e \"require('fs').writeFileSync('.mcp.json', '{}')\"",
   "python3 - <<'PY'\nopen('./.mcp.json','w')\nPY", "python3 - <<'PY'\nopen('.rundock/permission-hook.sh','w')\nPY",
+  // Where the folder a word starts from is not certain, each literal cd in the
+  // command is tried as well, chained where one follows another, and a loop
+  // variable written to is tried with each word of its list.
+  'if true; then cd .claude/hooks && echo x > pre.sh; fi', 'cd .claude && cd hooks && echo x > pre.sh',
+  'cd .claude; echo x > settings.json', 'for f in .mcp.json; do echo x > $f; done',
+  'for f in a.json .mcp.json; do cp x.json "$f"; done', 'for d in .claude; do rm -rf ${d}; done',
+  "sh -c 'cd .claude && echo x > settings.json'", 'pushd .claude/hooks && echo x > pre.sh && popd',
+  'ls; cd .rundock && cd .. && cd .claude && echo x > settings.json',
   // An output redirect from the same program still writes, and so does one
   // opened for reading and writing, or a file named as an argument too.
   'python3 tools/run.py > .mcp.json', 'python3 tools/run.py <> .mcp.json', 'python3 tools/run.py .mcp.json < .mcp.json',
@@ -129,6 +137,9 @@ describe('a command asks about an answer file only when it can write it', () => 
     'rm -rf {src,dist}', 'rm -rf .claude/{agents,skills}', 'rm -rf [!.]*', 'rm -rf .[!cmr]*', 'echo ${HOME}',
     // A `[` with no `]` after it is the character itself, not a class.
     '[ -f x.json ] && rm notes.txt', 'rm -f [ x.json', 'touch .[a',
+    // A cd and a loop that reach only ordinary files name none.
+    'cd skills && echo x > .mcp.json', 'for f in a.txt notes.txt; do echo x > $f; done', 'cd .claude && ls agents',
+    'echo x > settings.json; if true; then cd .claude; fi', "cd \"$DIR\" && cd hooks; echo x > notes.txt",
     // A shell's -c command that writes only ordinary files names none.
     "bash -c 'echo hi > notes.txt'", "sh -c 'cat .mcp.json'", "bash -c 'ls .claude'",
     // Code naming only ordinary files names no answer file.
