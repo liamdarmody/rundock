@@ -490,7 +490,7 @@ function argsUnknown(v, a, ctx) {
 // did. `asuser` and `bsexec` run the command after their argument, which is
 // judged like any other. With no subcommand at the end of a pipe (`xargs
 // launchctl`), the subcommand is only known when it runs.
-const LAUNCHCTL_CHANGES = new Set(['setenv', 'unsetenv', 'load', 'bootstrap', 'submit']);
+const LAUNCHCTL_CHANGES = new Set(['setenv', 'unsetenv', 'load', 'bootstrap', 'submit', 'config']);
 const LAUNCHCTL_CARRIES = new Set(['asuser', 'bsexec']);
 function judgeLaunchctl(args, ctx, piped) {
   if (!args.length) return piped ? always('unreadable-command') : RUNS;

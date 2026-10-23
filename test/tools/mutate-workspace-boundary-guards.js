@@ -265,6 +265,9 @@ const GUARD_RUNS_LAUNCHER = { src: path.join(ROOT, 'lib', 'workspace', 'scaffold
 const GUARD_RUNS_CONNECTOR = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'team.js'), suite: 'test/unit/codex-what-runs-guard.test.js' };
 const GUARD_RUNS_CARD = { src: path.join(ROOT, 'public', 'permissions.js'), suite: 'test/unit/codex-what-runs-guard.test.js' };
 const GUARD_RUNS_LINE = { src: path.join(ROOT, 'lib', 'runtime', 'codex-glue.js'), suite: 'test/unit/codex-what-runs-guard.test.js' };
+// launchctl in either mode, through suites that need no fixture.
+const LAUNCHCTL_NOTES = { src: path.join(ROOT, 'public', 'read-only-shell.js'), suite: 'test/unit/launchctl-asks.test.js' };
+const LAUNCHCTL_ANY_MODE = { src: path.join(ROOT, 'scripts', 'code-mode-verdict.js'), suite: 'test/unit/launchctl-asks.test.js' };
 // Which words a command can write, for the answer-file check, without the fixture.
 const ANSWER_WRITES = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/answer-file-writes.test.js' };
 // What agents are told about the connector files, against the card's words.
@@ -1909,20 +1912,26 @@ const MUTATIONS = [
   // Each subcommand that changes the launch environment or starts a program
   // under launchd always asks, like elevation; reading it runs.
   [VERDICT, 'launchctl: setenv runs with no card',
-    "const LAUNCHCTL_CHANGES = new Set(['setenv', 'unsetenv', 'load', 'bootstrap', 'submit']);",
-    "const LAUNCHCTL_CHANGES = new Set(['unsetenv', 'load', 'bootstrap', 'submit']);"],
+    "const LAUNCHCTL_CHANGES = new Set(['setenv', 'unsetenv', 'load', 'bootstrap', 'submit', 'config']);",
+    "const LAUNCHCTL_CHANGES = new Set(['unsetenv', 'load', 'bootstrap', 'submit', 'config']);"],
   [VERDICT, 'launchctl: unsetenv runs with no card',
-    "const LAUNCHCTL_CHANGES = new Set(['setenv', 'unsetenv', 'load', 'bootstrap', 'submit']);",
-    "const LAUNCHCTL_CHANGES = new Set(['setenv', 'load', 'bootstrap', 'submit']);"],
+    "const LAUNCHCTL_CHANGES = new Set(['setenv', 'unsetenv', 'load', 'bootstrap', 'submit', 'config']);",
+    "const LAUNCHCTL_CHANGES = new Set(['setenv', 'load', 'bootstrap', 'submit', 'config']);"],
   [VERDICT, 'launchctl: load runs with no card',
-    "const LAUNCHCTL_CHANGES = new Set(['setenv', 'unsetenv', 'load', 'bootstrap', 'submit']);",
-    "const LAUNCHCTL_CHANGES = new Set(['setenv', 'unsetenv', 'bootstrap', 'submit']);"],
+    "const LAUNCHCTL_CHANGES = new Set(['setenv', 'unsetenv', 'load', 'bootstrap', 'submit', 'config']);",
+    "const LAUNCHCTL_CHANGES = new Set(['setenv', 'unsetenv', 'bootstrap', 'submit', 'config']);"],
   [VERDICT, 'launchctl: bootstrap runs with no card',
-    "const LAUNCHCTL_CHANGES = new Set(['setenv', 'unsetenv', 'load', 'bootstrap', 'submit']);",
-    "const LAUNCHCTL_CHANGES = new Set(['setenv', 'unsetenv', 'load', 'submit']);"],
+    "const LAUNCHCTL_CHANGES = new Set(['setenv', 'unsetenv', 'load', 'bootstrap', 'submit', 'config']);",
+    "const LAUNCHCTL_CHANGES = new Set(['setenv', 'unsetenv', 'load', 'submit', 'config']);"],
   [VERDICT, 'launchctl: submit runs with no card',
-    "const LAUNCHCTL_CHANGES = new Set(['setenv', 'unsetenv', 'load', 'bootstrap', 'submit']);",
-    "const LAUNCHCTL_CHANGES = new Set(['setenv', 'unsetenv', 'load', 'bootstrap']);"],
+    "const LAUNCHCTL_CHANGES = new Set(['setenv', 'unsetenv', 'load', 'bootstrap', 'submit', 'config']);",
+    "const LAUNCHCTL_CHANGES = new Set(['setenv', 'unsetenv', 'load', 'bootstrap', 'config']);"],
+  [LAUNCHCTL_ANY_MODE, 'launchctl: config runs with no card in Code mode',
+    "const LAUNCHCTL_CHANGES = new Set(['setenv', 'unsetenv', 'load', 'bootstrap', 'submit', 'config']);",
+    "const LAUNCHCTL_CHANGES = new Set(['setenv', 'unsetenv', 'load', 'bootstrap', 'submit']);"],
+  [LAUNCHCTL_NOTES, 'launchctl: in Notes mode a change is graded medium, so a saved allow for launchctl answers it',
+    '    if (/\\blaunchctl\\s+(setenv|unsetenv|load|bootstrap|submit|config)\\b/i.test(cmd)) return true;\n',
+    ''],
   [VERDICT, 'launchctl: the verdict never reads it',
     "  if (v === 'launchctl') return judgeLaunchctl(a, ctx, piped);\n",
     ''],

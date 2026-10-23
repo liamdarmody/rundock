@@ -345,6 +345,10 @@
     // an arbitrary command per match and -delete removes files, so a bare find
     // leading segment must not shield these.
     if (/\bfind\b[\s\S]*-(exec(dir)?|delete|ok(dir)?)\b/.test(cmd)) return true;
+    // macOS's launch services: these change what every program started from
+    // now on inherits, Rundock included, or start one under launchd, so they
+    // are graded like an irreversible act, wherever they sit in the line.
+    if (/\blaunchctl\s+(setenv|unsetenv|load|bootstrap|submit|config)\b/i.test(cmd)) return true;
     var segments = shellSegments(cmd);
     for (var i = 0; i < segments.length; i++) {
       if (DESTRUCTIVE_LEADING.test(segments[i].trim())) return true;
