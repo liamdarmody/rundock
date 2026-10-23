@@ -2961,7 +2961,9 @@ const MUTATIONS = [
   [SHELL_CODE, "Shell code: a lone slash in a string literal is a place",
     "  return !lit.startsWith('/') && lit.includes('/') && !lit.includes('\\\\');",
     "  return true;"],
-  [SHELL_CODE, "Shell code: a relative path in a string literal is text, so an answer file is missed",
+  // The answer files are read from every literal that may name one, so what
+  // this rule alone decides is a relative literal that leads out through a link.
+  [SHELL_CODE, "Shell code: a relative path in a string literal is text, so one that leads out through a link is missed",
     "  return !lit.startsWith('/') && lit.includes('/') && !lit.includes('\\\\');",
     "  return false;"],
   [SHELL_CODE, "Shell code: an absolute path in a string literal is text",
@@ -3012,6 +3014,8 @@ const MUTATIONS = [
   [SHELL_CODE, "Shell code: a shell shebang is not noticed",
     " && !SHELL_SHEBANG.test(String(body).split('\\n')[0]);",
     ";"],
+  // A written literal that names no answer file by name, such as a glob over
+  // one, is caught only here.
   [SHELL_CODE, "Shell code: a literal in code is never counted as written",
     "    for (const lit of view.literals) if (lit.written) writes.words.add(lit.t);\n",
     ""],

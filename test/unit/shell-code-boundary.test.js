@@ -152,6 +152,23 @@ describe('a here-document fed to an interpreter or written to a file is judged b
     assert.ok(r && r.crossings.some(c => c.answerFile === true), 'a write to the permission file from code is still the answer-file card');
   });
 
+  // A relative literal is a place: it can lead out through a folder in the
+  // workspace that links elsewhere, which no rule for the answer files sees.
+  test('a relative path in a literal that leads out through a link is a place', () => {
+    const outside = path.join(root, 'elsewhere');
+    fs.mkdirSync(outside, { recursive: true });
+    const link = path.join(ws, 'linked');
+    if (!fs.existsSync(link)) fs.symlinkSync(outside, link);
+    assert.deepStrictEqual(places("python3 - <<'PY'\nprint(open('linked/notes.txt').read())\nPY"), [real(path.join(outside, 'notes.txt'))]);
+  });
+
+  // A place-shaped literal the code writes is tested against the answer files
+  // by itself: a glob names none of them, yet can match them.
+  test('a written literal that is a glob over an answer-file folder asks', () => {
+    const r = scan("python3 - <<'PY'\nimport glob, shutil\nfor p in glob.glob('./.rund*'):\n    shutil.rmtree(p)\nPY");
+    assert.ok(r && r.crossings.some(c => c.answerFile === true), 'removing what a glob over .rundock matches asks');
+  });
+
   test('home on its own is a place', () => {
     assert.deepStrictEqual(places("python3 - <<'PY'\nimport os\nprint(os.listdir(os.path.expanduser('~')))\nPY"), [real(home)]);
   });
