@@ -652,6 +652,18 @@ function isRundockAnswerFileAnywhere(resolvedPath, pmod = path) {
   return n >= 2 && fold(parts[n - 2]) === '.rundock' && [...RUNDOCK_ANSWER_FILES, ...LAUNCHER_FILES, MCP_SECRETS_FILE].some(f => fold(f.split('/')[1]) === fold(parts[n - 1]));
 }
 
+// A Rundock launcher, this workspace's or another's, matched by name like the
+// other `.rundock` files. An agent's write to one is refused before any card:
+// Rundock writes it itself and puts any other change to it back, so an Allow
+// could never hold (LAUNCHER_REFUSAL in main).
+function isLauncherFile(resolvedPath, pmod = path) {
+  if (typeof resolvedPath !== 'string' || !resolvedPath) return false;
+  const parts = resolvedPath.split(/[\\/]+/);
+  const n = parts.length;
+  const fold = v => (pmod === path.win32 || hostFoldsCase() ? v.toLowerCase() : v);
+  return n >= 2 && fold(parts[n - 2]) === '.rundock' && LAUNCHER_FILES.some(f => fold(f.split('/')[1]) === fold(parts[n - 1]));
+}
+
 // A Claude settings file of a Rundock workspace: `.claude/settings.json` or
 // `.claude/settings.local.json` directly under a folder holding
 // `.rundock/state.json`. Only inside a Rundock workspace: in a code project the
@@ -748,6 +760,11 @@ function classifyFileAccess(toolName, toolInput, workspaceRoot, extraDirs = [], 
   // would be worse: it would read as Rundock having permitted the write.
   if (inside && writing && isRuntimeGuardedAnswerFile(resolvedPath, workspaceRoot, foldsCase)) {
     return { where: 'inside', resolvedPath, grantDir: null, answerFile: true, enforcedDeny: 'runtime-settings' };
+  }
+  // A launcher, this workspace's or another's: refused the same way, before
+  // any card (isLauncherFile).
+  if (writing && isLauncherFile(resolvedPath)) {
+    return { where: inside ? 'inside' : 'outside', resolvedPath, grantDir: null, answerFile: true, enforcedDeny: 'launcher' };
   }
   if (writing && !isWorkspaceAnswerFile(resolvedPath, workspaceRoot, foldsCase) && isAnswerFileOfAnyWorkspace(resolvedPath)) {
     // Another workspace's answer file, inside a named folder or not: carded
@@ -2447,6 +2464,24 @@ fetchAgentNotice((agentNotice) => {
         hookEventName: 'PreToolUse',
         permissionDecision: 'deny',
         permissionDecisionReason: "This is the settings file the runtime was started with, and the runtime refuses every write to it: it holds the permission rules themselves, so nothing inside it can grant permission to change it. Rundock cannot approve past that, so it does not ask. Edit the file yourself if you need to, or ask for the specific permission you want and it can be requested properly."
+      }
+    }));
+    process.exit(0);
+  }
+
+  // THE LAUNCHER, BY A FILE TOOL OR A SHELL COMMAND. Rundock writes it each
+  // time it opens the workspace and puts any other change to it back without a
+  // card (lib/workspace/answer-file-guard.js), so a card's Allow could never
+  // hold: the agent would be told it was approved while the write was undone.
+  // Refused here instead, in both modes, with the reason.
+  const launcherWrite = !!access && (access.enforcedDeny === 'launcher'
+    || (Array.isArray(access.crossings) && access.crossings.some(c => c && c.answerFile && isLauncherFile(c.path))));
+  if (launcherWrite) {
+    writeDecision(({
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        permissionDecision: 'deny',
+        permissionDecisionReason: "This is the launcher Rundock starts its permission checks through. Rundock writes it itself each time it opens a workspace and puts back any other change to it, so a change could never stand, and it does not ask. Nothing needs changing there: tell the person what you were trying to do instead."
       }
     }));
     process.exit(0);

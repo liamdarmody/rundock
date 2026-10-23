@@ -308,6 +308,8 @@ const LAUNCHCTL_ANY_MODE = { src: path.join(ROOT, 'scripts', 'code-mode-verdict.
 const ANSWER_WRITES = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/answer-file-writes.test.js' };
 const ANSWER_WRITES_VOCAB = { src: path.join(ROOT, 'public', 'read-only-shell.js'), suite: 'test/unit/answer-file-writes.test.js' };
 const ANSWER_WRITES_VERDICT = { src: path.join(ROOT, 'scripts', 'code-mode-verdict.js'), suite: 'test/unit/answer-file-writes.test.js' };
+// The launcher is refused before any card, through the real hook.
+const LAUNCHER_REFUSED = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/launcher-refused.test.js' };
 // Rundock's console folder under home: the hook, the stored-grant check, the
 // card's words and the sandbox block, through a made-up home.
 const CONSOLE_HOOK = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/console-folder.test.js' };
@@ -2235,6 +2237,19 @@ const MUTATIONS = [
     '  if (isWorkspaceAnswerFile(crossing.path, getWorkspace()) || isAnswerFileOfAnyWorkspace(crossing.path)) return false;',
     '  if (isWorkspaceAnswerFile(crossing.path, getWorkspace())) return false;'],
   // ===== THE GUARD WATCHES WHAT RUNS, FOR CODEX =====
+  // ===== THE LAUNCHER IS REFUSED, NOT ASKED ABOUT =====
+  [LAUNCHER_REFUSED, 'Launcher: a file tool writing it raises a card whose Allow cannot hold',
+    "    return { where: inside ? 'inside' : 'outside', resolvedPath, grantDir: null, answerFile: true, enforcedDeny: 'launcher' };",
+    "    return { where: inside ? 'inside' : 'outside', resolvedPath, grantDir: null, answerFile: true };"],
+  [LAUNCHER_REFUSED, 'Launcher: a shell command writing it raises a card whose Allow cannot hold',
+    '    || (Array.isArray(access.crossings) && access.crossings.some(c => c && c.answerFile && isLauncherFile(c.path))));',
+    ');'],
+  [LAUNCHER_REFUSED, 'Launcher: the refusal is never applied',
+    '  if (launcherWrite) {',
+    '  if (false) {'],
+  [LAUNCHER_REFUSED, "Launcher: another workspace's launcher is not matched",
+    "  return n >= 2 && fold(parts[n - 2]) === '.rundock' && LAUNCHER_FILES.some(f => fold(f.split('/')[1]) === fold(parts[n - 1]));",
+    "  return n >= 2 && fold(parts[n - 2]) === '.rundock' && LAUNCHER_FILES.some(f => fold(f.split('/')[1]) === fold(parts[n - 1])) && !resolvedPath.includes('projects');"],
   // ===== RUNDOCK'S CONSOLE FOLDER ALWAYS ASKS =====
   [CONSOLE_HOOK, 'Console folder: a file tool writes to it as ordinary work',
     '  if (writing && isRundockConsolePath(resolvedPath, home, foldsCase)) {',

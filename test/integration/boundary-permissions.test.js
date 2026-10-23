@@ -858,25 +858,21 @@ describe('the files that decide what runs, asked about in sequence', () => {
     return { msg, out: await pending };
   }
 
-  test('denied, then retried, it asks again; through another tool it asks too; an approval is not remembered', async () => {
-    let since = client.messages.length;
-    const first = await answer(runHook('Write', { file_path: launcher(), content: 'exit 0' }), since, false, 'the first attempt');
-    assert.strictEqual(first.msg.request.answer_file, true, 'a file-tool write arrives as the answer-file card');
-    assert.notStrictEqual(first.msg.request.boundary, true, 'and does not claim the workspace was left');
-    assert.strictEqual(first.msg.request.resolved_path, canonicalize(launcher()), 'naming the launcher');
-    assert.strictEqual(decisionOf(first.out), 'deny', 'denied, it does not run');
-
-    since = client.messages.length;
-    const retry = await answer(runHook('Write', { file_path: launcher(), content: 'exit 0' }), since, false, 'the retry');
-    assert.strictEqual(decisionOf(retry.out), 'deny', 'the retry asked again, and was denied again');
-
-    since = client.messages.length;
-    const shell = await answer(runHook('Bash', { command: 'echo "exit 0" > .rundock/permission-hook.sh' }), since, true, 'the same write by redirect');
-    assert.strictEqual(decisionOf(shell.out), 'allow', 'approved once, that one runs');
-
-    since = client.messages.length;
-    const edit = await answer(runHook('Edit', { file_path: launcher(), old_string: 'exit', new_string: 'exit' }), since, false, 'an edit after an approval');
-    assert.strictEqual(decisionOf(edit.out), 'deny', 'the approval before it answered nothing: this one asked');
+  // The launcher is refused before any card: Rundock writes it and puts any
+  // other change back, so an Allow could never hold.
+  test('the launcher is refused with a reason and no card, by every tool, every time', async () => {
+    for (const [tool, input] of [
+      ['Write', { file_path: launcher(), content: 'exit 0' }],
+      ['Write', { file_path: launcher(), content: 'exit 0' }],
+      ['Bash', { command: 'echo "exit 0" > .rundock/permission-hook.sh' }],
+      ['Edit', { file_path: launcher(), old_string: 'exit', new_string: 'exit' }],
+    ]) {
+      const since = client.messages.length;
+      const out = await runHook(tool, input);
+      assert.strictEqual(decisionOf(out), 'deny', `${tool}: refused`);
+      assert.match(reasonOf(out) || '', /starts its permission checks/, `${tool}: with the reason`);
+      assert.ok(!client.messages.slice(since).some(m => m.type === 'control_request'), `${tool}: and no card was raised`);
+    }
   });
 
   test('the files that decide what runs ask the same way, and keep asking', async () => {
