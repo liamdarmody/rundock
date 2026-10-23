@@ -254,11 +254,13 @@
   //   { action: 'allow', reason: 'low-risk' }        read-only auto-approve policy
   //   { action: 'card' }                             ask the human
   function decidePermission(risk, key, alwaysAllowedSet, verdict) {
-    // IN CODE MODE THE HOOK'S VERDICT DECIDES, whatever this grader would have
-    // painted. Always asks is carded ahead of every standing allow; Asks once
-    // is answered only by a standing allow under its own rule key, never by a
-    // legacy binary key such as Bash:git; Runs is allowed. With no verdict,
-    // which is every Notes-mode request, nothing below changes.
+    // THE HOOK'S VERDICT DECIDES, whatever this grader would have painted.
+    // Always asks is carded ahead of every standing allow; Asks once is
+    // answered only by a standing allow under its own rule key, never by a
+    // legacy binary key such as Bash:git; Runs is allowed. Every Code-mode
+    // shell request carries one, and in Notes mode only a line that reads or
+    // changes the Keychain does. With no verdict, which is every other
+    // Notes-mode request, nothing below changes.
     if (verdict && verdict.verdict) {
       if (verdict.verdict === 'always-asks') return { action: 'card' };
       if (verdict.verdict === 'asks-once') {
@@ -372,6 +374,7 @@
     'wsl-unregister': () => 'This deletes the Linux distribution and everything stored in it.',
     'publish': () => 'This publishes a package version that can never be replaced.',
     'every-process': () => 'This stops every program you have open, Rundock included.',
+    'keychain': () => 'This reads or changes a password or key stored in your Mac\'s Keychain, where sign-in tokens are kept.',
   };
   const ALWAYS_ASKS_CLOSING = 'Rundock asks about commands like this every time, even in Code mode, so there is no Always allow.';
 
@@ -391,8 +394,10 @@
       };
     }
     const f = REASON_COPY[verdict.reason];
+    // Another reason on the same line to always ask, kept beside the Keychain.
+    const also = verdict.also && REASON_COPY[verdict.also.reason];
     return {
-      sentence: f ? f(verdict) : 'This can\'t be undone.',
+      sentence: [f ? f(verdict) : 'This can\'t be undone.', also ? also(verdict.also) : ''].filter(Boolean).join(' '),
       closing: ALWAYS_ASKS_CLOSING, allowLabel: 'Allow once', alwaysLabel: null,
     };
   }
