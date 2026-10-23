@@ -209,32 +209,15 @@ function launchCodexSignIn() {
   }
 }
 
-// Launch Claude Code's interactive sign-in in a visible terminal, so the user
-// can complete the browser OAuth without opening a terminal or knowing any
-// commands themselves. The wizard keeps polling and advances automatically once
-// authentication succeeds. Cross-platform; best-effort (never throws).
+// Launch Claude Code in a visible console, so the user can complete the browser
+// OAuth without opening a terminal or knowing any commands themselves. The
+// wizard keeps polling and advances automatically once authentication
+// succeeds; the chat's reconnect card waits for the person to say they are
+// done. The console per platform is lib/runtime/claude-console.js, the one the
+// server opens for a browser running from source. Resolves { ok, reason? };
+// never throws.
 function launchClaudeSignIn() {
-  const bin = findClaude();
-  if (!bin) return { ok: false, error: 'Claude Code was not found.' };
-  const { spawn } = require('child_process');
-  try {
-    if (process.platform === 'win32') {
-      // Open a new console window running claude and keep it open (/k). The
-      // doubled quotes around the path tolerate spaces in the user profile path.
-      spawn(`start "Sign in to Claude" cmd /k ""${bin}""`, {
-        shell: true, detached: true, stdio: 'ignore',
-      }).unref();
-    } else if (process.platform === 'darwin') {
-      // Open Terminal.app and run claude in it.
-      spawn('open', ['-a', 'Terminal', bin], { detached: true, stdio: 'ignore' }).unref();
-    } else {
-      // Linux: use the distribution's default terminal emulator.
-      spawn('x-terminal-emulator', ['-e', bin], { detached: true, stdio: 'ignore' }).unref();
-    }
-    return { ok: true };
-  } catch (err) {
-    return { ok: false, error: err && err.message ? err.message : String(err) };
-  }
+  return require('../lib/runtime/claude-console.js').openClaudeConsole({ bin: findClaude() });
 }
 
 // ===== FIRST-RUN WIZARD =====
@@ -323,6 +306,11 @@ ipcMain.handle('select-directory', async () => {
 });
 
 ipcMain.handle('get-app-version', () => app.getVersion());
+
+// The chat's reconnect card, when Claude Code's session has expired: the same
+// console the first-run wizard opens, asked for by the main window only.
+ipcMain.handle('claude-reconnect', (event) => (mainWindow && event.sender === mainWindow.webContents
+  ? launchClaudeSignIn() : { ok: false, reason: 'failed' }));
 
 // ===== RENDERER STORAGE =====
 

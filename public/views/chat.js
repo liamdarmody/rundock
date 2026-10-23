@@ -309,23 +309,77 @@ function buildDelegationDivider(agentData, opts = {}) {
   return divider;
 }
 
-// Recovery card shown when the Claude Code sign-in expires (401). Replaces the
-// raw error blob with a clear explanation and the steps to reconnect.
+// THE CARD SHOWN WHEN CLAUDE CODE'S SESSION HAS EXPIRED (a 401), with one
+// button that reconnects it. The desktop app opens a console running `claude`
+// through its main process; a browser running from source asks the server to
+// (lib/runtime/claude-console.js). The person types nothing. The card cannot
+// notice by itself when they have finished: the server learns Claude Code is
+// connected only from a turn that works, so the card waits for "I've
+// reconnected" and runs that one check then. Where no console can be opened it
+// shows the steps to run. Every state is fixed copy, and none says "sign in".
+const AUTH_DOCS = '<a href="https://docs.rundock.ai/troubleshooting/authentication" target="_blank" rel="noopener">';
+const authTitle = (t, pulse) => `<div class="auth-error-title">${pulse ? '<span class="auth-pulse" aria-hidden="true"></span>' : ''}${t}</div>`;
+const authBody = (t) => `<div class="auth-error-body">${t}</div>`;
+const authButton = (label, action, ghost) => `<button type="button" class="auth-btn${ghost ? ' auth-btn-ghost' : ''}" data-auth="${action}">${label}</button>`;
+const authActions = (...buttons) => `<div class="auth-actions">${buttons.join('')}</div>`;
+const AUTH_TROUBLE = `<div class="auth-error-foot">${AUTH_DOCS}Troubleshooting</a></div>`;
+const authWaiting = (body, busy) => authTitle('Waiting for Claude', true) + authBody(body) + authActions(
+  busy ? '<button type="button" class="auth-btn" aria-busy="true" disabled><span class="auth-pulse" aria-hidden="true"></span>Checking</button>'
+    : authButton("I've reconnected", 'check'),
+  authButton('Open the window again', 'open', true));
+const AUTH_WAIT_COPY = "A window has opened running Claude Code. Finish there, then come back and press I've reconnected.";
+const AUTH_NOT_OPENED = authTitle('Rundock could not open the window');
+const AUTH_CARD = {
+  ready: ['', authTitle('Claude needs reconnecting')
+    + authBody('Rundock lost its connection to Claude Code. Your conversations are safe. Reconnect, then resend your message.')
+    + authActions(authButton('Reconnect Claude', 'open'))
+    + `<div class="auth-error-foot">A window opens and runs Claude Code for you. You type nothing. ${AUTH_DOCS}Troubleshooting</a></div>`],
+  waiting: ['', authWaiting(AUTH_WAIT_COPY)],
+  checking: ['', authWaiting(AUTH_WAIT_COPY, true)],
+  notyet: ['', authWaiting("Claude Code isn't connected yet. Finish in the window, then press I've reconnected again.")],
+  reconnected: ['auth-ok', authTitle('Reconnected') + authBody('Claude Code is connected again. Resend your message to carry on.')],
+  notfound: ['auth-bad', AUTH_NOT_OPENED + authBody('Claude Code was not found on this computer. Check it is installed, then try again.')
+    + authActions(authButton('Try again', 'open', true)) + AUTH_TROUBLE],
+  failed: ['auth-bad', AUTH_NOT_OPENED + authBody('Something stopped it opening. Try again, or follow the troubleshooting steps.')
+    + authActions(authButton('Try again', 'open', true)) + AUTH_TROUBLE],
+  // Where no console can be opened: the steps to run, as they always were.
+  manual: ['', authTitle('Claude needs reconnecting')
+    + authBody('Rundock lost its connection to Claude Code. This is a Claude Code session, not a Rundock fault, and your conversations are safe. To reconnect:')
+    + '<ol class="auth-error-steps"><li>Open a terminal.</li>'
+    + '<li>Run <code>claude</code> <button class="auth-error-copy" onclick="copyAuthCmd(this)" title="Copy command">copy</button></li>'
+    + '<li>If it shows you are already logged in, log out and log back in.</li></ol>'
+    + `<div class="auth-error-foot">Then resend your message. ${AUTH_DOCS}Full steps and details &#x2192;</a></div>`],
+};
+function drawAuthCard(el, state) {
+  const [tone, html] = AUTH_CARD[state];
+  el.className = 'auth-error-card' + (tone ? ` ${tone}` : '');
+  el.innerHTML = html;
+  el.querySelectorAll('[data-auth]').forEach(b => b.addEventListener('click', () => authCardAction(el, b.dataset.auth)));
+}
+// Open the console: through the desktop's main process where there is one,
+// otherwise by asking the server. The answer is { ok, reason } either way.
+function reconnectClaude() {
+  const api = typeof window !== 'undefined' ? window.electronAPI : null;
+  if (api && typeof api.reconnectClaude === 'function') return api.reconnectClaude();
+  return fetch('/api/claude/reconnect', { method: 'POST' }).then(r => (r.ok ? r.json() : { ok: false, reason: 'failed' }));
+}
+async function authCardAction(el, action) {
+  el.querySelectorAll('button').forEach(b => { b.disabled = true; });
+  if (action === 'check') {
+    drawAuthCard(el, 'checking');
+    const r = await fetch('/api/claude/connection', { method: 'POST' }).then(x => (x.ok ? x.json() : null), () => null);
+    drawAuthCard(el, r && r.connected === true ? 'reconnected' : 'notyet');
+    return;
+  }
+  const r = await Promise.resolve().then(reconnectClaude).catch(() => null);
+  drawAuthCard(el, r && r.ok ? 'waiting' : ({ 'not-found': 'notfound', unsupported: 'manual' }[r && r.reason] || 'failed'));
+}
 function renderAuthErrorCard(convoId) {
   if (convoId && activeConversation?.id !== convoId) return;
   const m = document.getElementById('messages');
   if (!m) return;
   const d = document.createElement('div');
-  d.className = 'auth-error-card';
-  d.innerHTML =
-    `<div class="auth-error-title">Claude Code sign-in expired</div>` +
-    `<div class="auth-error-body">Rundock lost its connection to Claude Code because your sign-in expired. This is a Claude Code session, not a Rundock fault, and your conversations are safe. To reconnect:</div>` +
-    `<ol class="auth-error-steps">` +
-      `<li>Open a terminal.</li>` +
-      `<li>Run <code>claude</code> <button class="auth-error-copy" onclick="copyAuthCmd(this)" title="Copy command">copy</button></li>` +
-      `<li>If it shows you are already logged in, log out and log back in.</li>` +
-    `</ol>` +
-    `<div class="auth-error-foot">Then resend your message. <a href="https://docs.rundock.ai/troubleshooting/authentication" target="_blank" rel="noopener">Full steps and details &#x2192;</a></div>`;
+  drawAuthCard(d, 'ready');
   m.appendChild(d);
   scrollBottom();
 }

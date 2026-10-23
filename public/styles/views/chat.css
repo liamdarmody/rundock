@@ -42,6 +42,26 @@
 .auth-error-copy:hover { color: var(--text-1); border-color: var(--text-2); }
 .auth-error-foot { margin-top: 8px; font-size: var(--caption); color: var(--text-2); }
 .auth-error-foot a { color: var(--working); }
+/* The reconnect card (public/views/chat.js drawAuthCard): its buttons, the
+   waiting pulse and the two settled states. The primary is the action fill
+   with white text; the ghost is the quiet outline the permission card's Deny
+   uses. While waiting it pulses with the thinking indicator's rhythm, never a
+   spinner, and holds still under reduced motion. Reconnected carries the
+   success hue on its title and edge; could-not-open carries danger on its edge
+   alone, with the title in the body colour. */
+.auth-actions { display: flex; gap: 8px; align-items: center; margin-top: 12px; flex-wrap: wrap; }
+.auth-btn { display: inline-flex; align-items: center; padding: 7px 18px; border-radius: var(--radius-lg); font-size: var(--caption); font-weight: 600; background: var(--accent-action); color: white; border: 1px solid var(--accent-action); cursor: pointer; }
+.auth-btn:hover:not(:disabled) { background: var(--accent-action-hover); }
+.auth-btn:disabled { cursor: default; }
+.auth-btn-ghost { padding: 7px 14px; font-weight: 500; background: transparent; color: var(--text-2-strong); border-color: var(--border-strong); }
+.auth-btn-ghost:hover:not(:disabled) { background: var(--elevated); color: var(--text-1); }
+.auth-btn:focus-visible { outline: 2px solid var(--accent-control); outline-offset: 2px; }
+.auth-pulse { display: inline-block; width: 8px; height: 8px; margin-right: 8px; border-radius: var(--radius-circle); background: currentColor; animation: agentPulse 1.8s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .auth-pulse { animation: none; } }
+.auth-error-card.auth-ok { border-color: var(--success-text); }
+.auth-error-card.auth-ok .auth-error-title { color: var(--success-text); }
+.auth-error-card.auth-bad { border-color: var(--danger-text); }
+.auth-error-card.auth-bad .auth-error-title { color: var(--text-1); }
 /* Codex runtime surfaces */
 .codex-error-detail { margin-top: 8px; font-family: 'SF Mono','Fira Code','Consolas',monospace; font-size: var(--label); color: var(--text-2); word-break: break-word; }
 .codex-firstrun-card { align-self: center; max-width: 480px; margin: 8px auto; padding: 14px 16px; background: rgba(122,162,232,0.07); border: 1px solid rgba(122,162,232,0.35); border-radius: var(--radius-xl); font-size: var(--caption); line-height: 1.6; color: var(--text-1); animation: fadeIn var(--duration-slow) ease; }
