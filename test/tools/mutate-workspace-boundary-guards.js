@@ -241,6 +241,7 @@ const CONNECTOR_HANDLER_FLOW = { src: path.join(ROOT, 'lib', 'protocol', 'handle
 // through, the workspace's connector and project settings, and its hook
 // scripts. Each always asks, through the real hook and the real card.
 const WHAT_RUNS_HOOK = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/what-runs-files.test.js' };
+const REGISTRY_TO_GUARD = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/codex-what-runs-guard.test.js' };
 const WHAT_RUNS_CLIENT = { src: path.join(ROOT, 'public', 'permissions.js'), suite: 'test/unit/what-runs-files.test.js' };
 const WHAT_RUNS_VIEW = { src: path.join(ROOT, 'public', 'views', 'chat.js'), suite: 'test/unit/what-runs-files.test.js' };
 const WHAT_RUNS_CODEX = { src: path.join(ROOT, 'lib', 'runtime', 'codex-approval.js'), suite: 'test/unit/codex-escalation-grading.test.js' };
@@ -1859,7 +1860,11 @@ const MUTATIONS = [
     "  Promise.resolve().then(() => ev.steer(approvalNotice(toolName))).catch(() => {});",
     "  Promise.resolve().then(() => ev.steer(approvalNotice(toolName))).catch(() => queueCodexNotice(convoId, approvalNotice(toolName)));"],
   // ===== THE FILES THAT DECIDE WHAT RUNS ALWAYS ASK =====
-  [WHAT_RUNS_HOOK, 'What runs: the launcher is ordinary inside work, so a write to it runs with no card',
+  // The hook matches the `.rundock` names in every workspace, this one
+  // included (isRundockAnswerFileAnywhere), so the registry entry is what
+  // puts the launcher and the connector secrets under the guard: these rows
+  // run the guard's suite.
+  [REGISTRY_TO_GUARD, 'What runs: the launcher is left out of the registry, so the guard does not watch it',
     'const WORKSPACE_ANSWER_FILES = [...RUNDOCK_ANSWER_FILES, ...RUNTIME_GUARDED_ANSWER_FILES, ...LAUNCHER_FILES, ...WHAT_RUNS_FILES];',
     'const WORKSPACE_ANSWER_FILES = [...RUNDOCK_ANSWER_FILES, ...RUNTIME_GUARDED_ANSWER_FILES, ...WHAT_RUNS_FILES];'],
   [WHAT_RUNS_HOOK, "What runs: another workspace's launcher is not matched by name",
@@ -1912,7 +1917,7 @@ const MUTATIONS = [
   [RUNS_NOTE, 'What runs: the card for a file Claude Code protects promises that an Allow holds',
     "Claude Code protects it too, and may '\n        + 'refuse the change even after you allow it here. An agent",
     "An agent"],
-  [SECRETS_HOOK, 'Connector secrets: the per-user connector file is ordinary inside work',
+  [REGISTRY_TO_GUARD, 'Connector secrets: the per-user connector file is left out of the registry, so the guard does not watch it',
     "const WHAT_RUNS_FILES = ['.mcp.json', '.claude/settings.json', MCP_SECRETS_FILE];",
     "const WHAT_RUNS_FILES = ['.mcp.json', '.claude/settings.json'];"],
   [SECRETS_HOOK, "Connector secrets: another workspace's copy is not matched by name",
