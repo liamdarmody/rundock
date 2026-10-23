@@ -6,6 +6,8 @@
 // before it depends on a browser or a push.
 const { test, describe } = require('node:test');
 const assert = require('node:assert');
+const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
@@ -42,6 +44,20 @@ describe('the capability preflight', () => {
     assert.match(text, /SANDBOXED/);
     assert.match(text, /one bare command/);
     assert.doesNotMatch(text, /can't start|token invalid/i);
+  });
+
+  test('inside the sandbox it names the runner only when its own command is excluded', async () => {
+    const RUNNER = path.join(ROOT, 'scripts', 'exempt-run.js');
+    const text = async (options) => (await preflight({ browser: never, push: never, ...options })).lines.join('\n');
+    assert.doesNotMatch(await text({ env: { SANDBOX_RUNTIME: '1' }, patterns: [] }), /exempt-run/);
+    assert.match(await text({ env: { SANDBOX_RUNTIME: '1' }, patterns: [`node ${RUNNER} *`] }),
+      /Or run it through scripts\/exempt-run\.js, which is itself excluded\./);
+    const project = fs.mkdtempSync(path.join(os.tmpdir(), 'capability-project-'));
+    fs.mkdirSync(path.join(project, '.claude'));
+    fs.writeFileSync(path.join(project, '.claude', 'settings.local.json'),
+      JSON.stringify({ sandbox: { excludedCommands: [`node ${RUNNER} *`] } }));
+    assert.match(await text({ env: { SANDBOX_RUNTIME: '1', CLAUDE_PROJECT_DIR: project } }), /which is itself excluded/,
+      'without exclusions given, it reads the ones configured for the project');
   });
 
   test('outside it, each check reports ok or its cause and fix', async () => {
