@@ -128,6 +128,7 @@ const MANIFEST = {
     "hideExternalEditConflict",
     "highlightFileInSidebar",
     "initTiptapEditor",
+    "linkCreatePath",
     "loadFileContent",
     "loadTiptapEditorModule",
     "loadViewersModule",

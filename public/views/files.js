@@ -2257,6 +2257,28 @@ function wikilinkSearchName(target) {
   return VIEWABLE_LINK_EXT_RE.test(baseName) ? baseName : baseName + '.md';
 }
 
+// Where a note made from a link to a missing note goes, as { path }, or why it
+// cannot be made, as { refusal } in plain words. A bare name goes beside the
+// note the link was written in (fromPath); a name with a folder in it counts
+// from the workspace root, as the resolver above reads it, so the note made
+// is the note the same link then finds. Nothing here can name a place outside
+// the workspace: '.' and '..' are refused, as is any name the file tree would
+// hide, and the server's create guard checks the same again.
+const LINK_NAME_FORBIDDEN_RE = /[:*?"<>|\\]/;
+function linkCreatePath(target, fromPath) {
+  const name = String(target == null ? '' : target).split('#')[0].trim();
+  if (!name) return { refusal: 'That link has no note name.' };
+  if (LINK_NAME_FORBIDDEN_RE.test(name)) return { refusal: 'Note and folder names cannot contain : * ? " < > | or a backslash.' };
+  const segments = name.split('/');
+  if (segments.some((s) => s === '.' || s === '..')) return { refusal: 'That link points outside this workspace.' };
+  if (segments.some((s) => !s.trim())) return { refusal: 'A folder in that link has no name.' };
+  if (segments.some((s) => s.startsWith('.'))) return { refusal: 'Note and folder names cannot start with a dot.' };
+  const file = wikilinkSearchName(name);
+  if (!/\.md$/i.test(file)) return { refusal: 'Only notes can be made from a link, and this one names another kind of file.' };
+  const folder = segments.length > 1 || !fromPath ? '' : String(fromPath).split('/').slice(0, -1).join('/');
+  return { path: folder ? folder + '/' + file : file };
+}
+
 /**
  * What links here, and what this links to, as data the view can draw.
  *
@@ -2368,7 +2390,7 @@ return {
   openBoardFile, openMarkdownFile, openLegacyTextFile,
   openBinaryOrUnsupportedFile, renderEditorContent, setEditorMode,
   getFileContentForSave, openWikilink, openWorkspaceFilePath,
-  highlightFileInSidebar, findFileInTree, wikilinkSearchName, fileConnections,
+  highlightFileInSidebar, findFileInTree, wikilinkSearchName, linkCreatePath, fileConnections,
   renderFileConnections, drawFileConnections, drawFileConnectionsLoading, removeFileConnections,
   fileConnectionsIndexReady,
   updateEditorBackButton,
