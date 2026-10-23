@@ -1162,7 +1162,8 @@ function answerFileWriteWords(command) {
       while (i < args.length && args[i].startsWith('-')) i += (args[i] === '-C' || args[i] === '-c') ? 2 : 1;
       reads = GIT_READ_SUBCOMMANDS.has(args[i]) && !args.some(a => a.startsWith('--output'));
     } else if (verb === 'sed') {
-      reads = !args.some(a => /^-[a-zA-Z]*i/.test(a) || a.startsWith('--in-place'));
+      // `-i` everywhere, and macOS sed's `-I` as well.
+      reads = !args.some(a => /^-[a-zA-Z]*[iI]/.test(a) || a.startsWith('--in-place'));
     } else if (verb === 'dd') {
       reads = true;
       for (const a of args) if (a.startsWith('of=')) written.push(a.slice(3));

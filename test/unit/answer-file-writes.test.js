@@ -49,6 +49,8 @@ const WRITES = [
   'echo x > .mcp.json', 'echo x >> .mcp.json', 'echo x 1> .mcp.json', 'echo x >.mcp.json', 'echo x &> .mcp.json', 'echo x | tee .mcp.json',
   'jq . x.json > .mcp.json', 'cp x.json .mcp.json', 'install x.json .mcp.json', 'dd if=x.json of=.mcp.json',
   "sed -i '' s/a/b/ .mcp.json", 'sed -i.bak s/a/b/ .claude/settings.json', 'sed -Ei s/a/b/ .mcp.json', 'sed --in-place s/a/b/ .mcp.json',
+  // macOS sed edits in place with a capital -I as well.
+  "sed -I '' s/a/b/ .mcp.json", 'sed -I .bak s/a/b/ .mcp.json', 'sed -I.bak s/a/b/ .claude/settings.json', 'sed -EI s/a/b/ .mcp.json',
   'perl -pi -e s/a/b/ .mcp.json', 'touch .rundock/permission-hook.sh', 'truncate -s 0 .rundock/mcp-secrets.json',
   'chmod 777 .rundock/permission-hook.sh', 'rm .mcp.json', 'mv .mcp.json old.json', 'mv x.json .mcp.json', 'ln -s .mcp.json alias.json',
   'cp -l .mcp.json x.json', 'cp --link .mcp.json x.json', 'cp -t . .mcp.json', 'rsync --remove-source-files .mcp.json x.json',
