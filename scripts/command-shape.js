@@ -23,6 +23,11 @@
  * whose tool input turns its sandbox off (`dangerouslyDisableSandbox: true`)
  * is never refused: it runs outside the sandbox whatever its shape.
  *
+ * Text that is data is never matched against an exclusion: the body of a
+ * here-document, which is input to the command it is fed to, and the text
+ * inside a quoted argument. A quoted argument still counts as an argument, so
+ * `gh pr comment 3 --body "x" | cat` is refused under `gh *` as before.
+ *
  * As a Claude Code PreToolUse hook (matcher "Bash"):
  *   node scripts/command-shape.js [--settings <file>]...
  * It reads the hook payload on stdin, reads `sandbox.excludedCommands` from the
@@ -34,6 +39,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { matchingPattern, exclusionsFrom, settingsFilesFor } = require('./lib/sandbox.js');
+const { stripHeredocs } = require('./code-mode-parse.js');
 
 const RUNNER = path.join(__dirname, 'exempt-run.js');
 
@@ -60,24 +66,36 @@ function substitutionEnd(s, i) {
   return s.length;
 }
 
+// The command with each here-document's body cut out, the marker kept. A body
+// is data for the command it is fed to, so nothing in it is a command; one
+// that never reaches its delimiter is data to the end of the text.
+function withoutHeredocBodies(command) {
+  const r = stripHeredocs(String(command));
+  if (r.ok) return r.text;
+  return r.unfinished ? r.unfinished.text : String(command);
+}
+
+// `quoted[k]` says whether any part of `words[k]` was quoted.
 function parse(command) {
   const s = String(command);
-  const segments = [{ words: [], redirects: [] }];
+  const segments = [{ words: [], quoted: [], redirects: [] }];
   const wrappers = new Set();
   let word = null;
+  let quoted = false;
   let quote = null;
   let redirectNext = false;
 
   const cur = () => segments[segments.length - 1];
   const endWord = () => {
     if (word === null) return;
-    if (redirectNext) { cur().redirects.push(word); redirectNext = false; } else cur().words.push(word);
+    if (redirectNext) { cur().redirects.push(word); redirectNext = false; } else { cur().words.push(word); cur().quoted.push(quoted); }
     word = null;
+    quoted = false;
   };
   const split = (kind) => {
     endWord();
     wrappers.add(kind);
-    if (cur().words.length || cur().redirects.length) segments.push({ words: [], redirects: [] });
+    if (cur().words.length || cur().redirects.length) segments.push({ words: [], quoted: [], redirects: [] });
   };
 
   for (let i = 0; i < s.length; i++) {
@@ -95,7 +113,7 @@ function parse(command) {
       continue;
     }
     if (c === '\\') { word = (word ?? '') + (next ?? ''); i++; continue; }
-    if (c === "'" || c === '"') { quote = c; word = word ?? ''; continue; }
+    if (c === "'" || c === '"') { quote = c; word = word ?? ''; quoted = true; continue; }
     if (c === ' ' || c === '\t') { endWord(); continue; }
     if (c === '`' || (c === '$' && next === '(')) { const end = substitutionEnd(s, i); wrappers.add('substitution'); word = (word ?? '') + s.slice(i, end); i = end - 1; continue; }
     if (c === '\n' || c === ';') { split('chain'); continue; }
@@ -130,7 +148,7 @@ function parse(command) {
 
   for (const seg of segments) {
     seg.env = [];
-    while (seg.words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(seg.words[0])) seg.env.push(seg.words.shift());
+    while (seg.words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(seg.words[0])) { seg.env.push(seg.words.shift()); seg.quoted.shift(); }
     if (seg.env.length) wrappers.add('env');
   }
   return { segments: segments.filter((seg) => seg.words.length || seg.env.length), wrappers };
@@ -175,9 +193,13 @@ const WRAPPER_NAMES = {
   subshell: 'a subshell',
 };
 
+// A quoted word stands in for any text but no pattern's literal part, so the
+// text inside a quoted argument is never what makes an exclusion match.
+const QUOTED = '\0';
+
 function classify(command, patterns) {
   if (!patterns || !patterns.length) return { verdict: 'pass' };
-  const raw = String(command).trim();
+  const raw = withoutHeredocBodies(command).trim();
   if (!raw) return { verdict: 'pass' };
   const { segments, wrappers } = parse(raw);
   const bare = wrappers.size === 0 && segments.length === 1;
@@ -186,7 +208,7 @@ function classify(command, patterns) {
 
   for (let i = 0; i < segments.length; i++) {
     const seg = segments[i];
-    const hit = exclusionFor(seg.words, patterns);
+    const hit = exclusionFor(seg.words.map((w, k) => (seg.quoted[k] ? QUOTED : w)), patterns);
     if (!hit) continue;
     if (bare && !hit.near) return { verdict: 'pass' };
     if (!bare && seg.words[0] === 'git' && !GIT_REMOTE.has(gitSubcommand(seg.words))) continue;

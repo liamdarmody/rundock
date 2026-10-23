@@ -130,6 +130,44 @@ describe('everything else runs as before', () => {
     assert.strictEqual(verdict('gh pr comment 3 --body "a && b | c > d"').verdict, 'pass');
   });
 
+  describe('text that is data, not a command, is never matched', () => {
+    const script = [
+      "python3 - <<'EOF'",
+      'import subprocess',
+      '# the browser comes from npx playwright install chromium',
+      'print("if this fails, run npx playwright install first")',
+      'EOF',
+    ].join('\n');
+
+    test('the body of a quoted here-document fed to an interpreter', () => {
+      assert.strictEqual(verdict(script).verdict, 'pass');
+    });
+
+    test('the body of a here-document that never reaches its delimiter', () => {
+      assert.strictEqual(verdict(script.slice(0, script.lastIndexOf('\nEOF'))).verdict, 'pass');
+    });
+
+    test('a real exempt command after or before the here-document is still refused', () => {
+      const after = verdict(`${script}\nnpx playwright test | tail -3`);
+      assert.strictEqual(after.verdict, 'refuse');
+      assert.strictEqual(after.segment, 'npx playwright test');
+      const before = verdict(`gh pr list > /work/out.txt; ${script}`);
+      assert.strictEqual(before.verdict, 'refuse');
+      assert.strictEqual(before.segment, 'gh pr list');
+    });
+
+    test('a quoted string argument, which still leaves the command it is passed to matched', () => {
+      assert.strictEqual(verdict('python3 -c "import os; os.system(\'npx playwright install\')" > /work/out.txt').verdict, 'pass');
+      assert.strictEqual(verdict("echo 'next: npx playwright test' && npm test").verdict, 'pass');
+      const r = verdict('gh pr comment 3 --body "npx playwright test" | cat');
+      assert.strictEqual(r.verdict, 'refuse');
+      assert.strictEqual(r.pattern, 'gh *');
+      assert.strictEqual(r.segment, 'gh pr comment 3 --body npx playwright test');
+      assert.strictEqual(verdict('E2E_TITLE="a b" npx playwright test').verdict, 'refuse', 'a quoted VAR=value is not the command');
+      assert.strictEqual(verdict('cd "/work/my lane" && npx playwright test').fix.cwd, '/work/my lane', 'a quoted word leaves the next one unquoted');
+    });
+  });
+
   test('with no exclusions configured nothing is refused', () => {
     assert.strictEqual(classify('cd x && gh pr list | head', []).verdict, 'pass');
   });
