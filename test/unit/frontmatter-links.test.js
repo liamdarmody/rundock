@@ -359,3 +359,36 @@ describe('links in the note body behave the same way', () => {
     } finally { p.done(); }
   });
 });
+
+describe('a link to a heading in the same note is never missing', () => {
+  // Through the host's own resolver, the one the Files view hands the editor.
+  const { wikilinkResolves } = createRequire(import.meta.url)('../../public/views/files.js');
+  const TREE = [{ type: 'folder', name: 'notes', path: 'notes', children: [
+    { type: 'file', name: 'Launch.md', path: 'notes/Launch.md' },
+  ] }];
+  const resolve = (t) => wikilinkResolves(TREE, t, 'notes/Launch.md');
+  const src = '---\nsee: "[[#Risks]] and [[#^block|that line]]"\n---\n\nThe [[#Risks]] are below, unlike [[Ghost]].\n';
+
+  test('in the properties panel', () => {
+    const created = [];
+    const p = mount(src, { resolveWikilink: resolve, onCreateWikilink: (t) => created.push(t) });
+    try {
+      const anchors = [...p.row('see').querySelectorAll('a.prop-wikilink')];
+      assert.deepEqual(anchors.map((a) => [a.getAttribute('data-target'), a.classList.contains('dead')]),
+        [['#Risks', false], ['#^block', false]]);
+      p.click(anchors[0]);
+      assert.deepEqual(created, [], 'a click creates nothing');
+    } finally { p.done(); }
+  });
+
+  test('in the note body', () => {
+    const created = [];
+    const p = mount(src, { resolveWikilink: resolve, onCreateWikilink: (t) => created.push(t) });
+    try {
+      assert.deepEqual([...p.element.querySelectorAll('a.wikilink')].map((a) => [a.getAttribute('data-target'), a.classList.contains('dead')]),
+        [['#Risks', false], ['Ghost', true]]);
+      p.click(p.element.querySelector('a.wikilink'));
+      assert.deepEqual(created, [], 'a click creates nothing');
+    } finally { p.done(); }
+  });
+});

@@ -39,6 +39,7 @@ const EDITOR = { src: at('public', 'editor', 'index.js'), suite: PANEL_SUITE };
 const DELEGATE = { src: at('public', 'editor', 'index.js'), suite: 'test/unit/wikilink-delegate.test.js' };
 const BODY = { src: at('public', 'editor', 'plugins', 'missing-links.js'), suite: PANEL_SUITE };
 const CREATE = { src: at('public', 'views', 'files.js'), suite: 'test/unit/link-create.test.js' };
+const HOST_RESOLVER = { src: at('public', 'views', 'files.js'), suite: PANEL_SUITE };
 // The rules only the server can keep: it is the last thing between a click
 // and an existing note's bytes, so the booted-server suite watches it.
 const SERVER = { src: at('lib', 'protocol', 'handlers', 'files.js'), suite: 'test/integration/create-path-exclusive.test.js' };
@@ -97,6 +98,12 @@ const MUTATIONS = [
   [BODY, 'a link added while editing is marked too',
     '      apply: (tr, set) => (tr.docChanged ? decorate(tr.doc) : set),',
     '      apply: (tr, set) => set,'],
+
+  // A link to a heading in the same note names no note, so it is never
+  // missing: without this it draws dashed in the panel and the body.
+  [HOST_RESOLVER, 'a link to a heading in the same note is never missing',
+    "  if (!tree || !String(target).split('#')[0].trim()) return true;",
+    '  if (!tree) return true;'],
 
   // ===== NEVER OUTSIDE THE WORKSPACE =====
   [CREATE, '. and .. are refused as leaving the workspace',

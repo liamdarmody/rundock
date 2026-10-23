@@ -129,17 +129,8 @@ async function initTiptapEditor(path, content) {
     onWikilinkClick: (target) => openWikilink(target),
     // A link to a note that does not exist creates it, then opens it.
     onCreateWikilink: (target) => createNoteFromLink(target),
-    // Frontmatter wikilinks that match no file render visibly dead.
-    resolveWikilink: (target) => {
-      if (!cachedFileTree) return true; // tree not loaded yet: never false-flag
-      // Through the shared search-name rule, which also fixes a drift this
-      // check had grown: it appended .md to anything not already ending .md,
-      // so a frontmatter [[chart.png]] was tested as chart.png.md and
-      // rendered dead while clicking it worked. currentFilePath is this
-      // file's own path, so a bare target resolves against the folder it was
-      // actually written in, the same as a click on it would.
-      return !!findFileInTree(cachedFileTree, wikilinkSearchName(target), currentFilePath);
-    },
+    // Wikilinks that match no file render as missing, and a click makes them.
+    resolveWikilink: (target) => wikilinkResolves(cachedFileTree, target, currentFilePath),
     // Review identity: workspace profile name -> 'me' fallback; the agent
     // roster lets review attribution render known agents as agent chips.
     author: (workspaceAnalysis && workspaceAnalysis.userProfile && workspaceAnalysis.userProfile.fields && workspaceAnalysis.userProfile.fields.name)
@@ -2259,6 +2250,19 @@ function wikilinkSearchName(target) {
   return VIEWABLE_LINK_EXT_RE.test(baseName) ? baseName : baseName + '.md';
 }
 
+// Whether a link's target is a file the editor can open, for the editor's
+// missing-link marks. A tree not loaded yet never flags anything. A link to a
+// heading or block in the same note ([[#Risks]]) has no note name at all, so
+// it is never missing. Otherwise through the shared search-name rule, which
+// also fixed a drift this check had grown: it appended .md to anything not
+// already ending .md, so [[chart.png]] was tested as chart.png.md and marked
+// missing while clicking it worked. fromPath is the note the link is in, so
+// a bare target resolves against its folder, as a click on it does.
+function wikilinkResolves(tree, target, fromPath) {
+  if (!tree || !String(target).split('#')[0].trim()) return true;
+  return !!findFileInTree(tree, wikilinkSearchName(target), fromPath);
+}
+
 // Where a note made from a link to a missing note goes, as { path }, or why it
 // cannot be made, as { refusal } in plain words. A bare name goes beside the
 // note the link was written in (fromPath); a name with a folder in it counts
@@ -2439,7 +2443,7 @@ return {
   openBoardFile, openMarkdownFile, openLegacyTextFile,
   openBinaryOrUnsupportedFile, renderEditorContent, setEditorMode,
   getFileContentForSave, openWikilink, openWorkspaceFilePath,
-  highlightFileInSidebar, findFileInTree, wikilinkSearchName, linkCreatePath, fileConnections,
+  highlightFileInSidebar, findFileInTree, wikilinkSearchName, wikilinkResolves, linkCreatePath, fileConnections,
   createNoteFromLink, settleLinkCreate,
   renderFileConnections, drawFileConnections, drawFileConnectionsLoading, removeFileConnections,
   fileConnectionsIndexReady,

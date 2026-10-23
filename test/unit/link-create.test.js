@@ -9,7 +9,7 @@ const assert = require('node:assert');
 const { JSDOM } = require('jsdom');
 
 const {
-  linkCreatePath, findFileInTree, wikilinkSearchName, createNoteFromLink, settleLinkCreate,
+  linkCreatePath, findFileInTree, wikilinkSearchName, createNoteFromLink, settleLinkCreate, wikilinkResolves,
 } = require('../../public/views/files.js');
 
 const FROM = 'Projects/Alpha/Launch.md';
@@ -50,6 +50,17 @@ describe('where a note made from a link goes', () => {
       const { path } = linkCreatePath(target, FROM);
       assert.strictEqual(findFileInTree(treeWith(path), wikilinkSearchName(target), FROM), path, target);
     }
+  });
+});
+
+describe('which links are missing, by the resolver the editor is handed', () => {
+  test('a heading in the same note, a found note and an unloaded tree are never missing', () => {
+    const tree = treeWith('Projects/Alpha/Plan.md');
+    assert.strictEqual(wikilinkResolves(tree, '#Risks', FROM), true, 'a heading in this note');
+    assert.strictEqual(wikilinkResolves(tree, ' #^block ', FROM), true, 'a block in this note');
+    assert.strictEqual(wikilinkResolves(tree, 'Plan#Risks', FROM), true, 'a heading in a note that exists');
+    assert.strictEqual(wikilinkResolves(null, 'Anything', FROM), true, 'no tree yet: never flagged');
+    assert.strictEqual(wikilinkResolves(tree, 'Roadmap', FROM), false, 'a note that does not exist');
   });
 });
 

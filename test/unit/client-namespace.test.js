@@ -167,6 +167,7 @@ const MANIFEST = {
     "treeIconSvg",
     "updateEditorBackButton",
     "viewStateReplyArrived",
+    "wikilinkResolves",
     "wikilinkSearchName",
   ],
   "find.js": [
