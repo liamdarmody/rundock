@@ -10,15 +10,26 @@
 // address and message below is made up.
 const { test, describe, before, after } = require('node:test');
 const assert = require('node:assert');
+const fs = require('node:fs');
+const path = require('node:path');
 const { JSDOM } = require('jsdom');
+
+// The approvals dock exactly as index.html declares it.
+const INDEX_SRC = fs.readFileSync(path.join(__dirname, '..', '..', 'public', 'index.html'), 'utf-8');
+const dockMarkup = () => new JSDOM(INDEX_SRC).window.document.getElementById('approvals-dock').outerHTML;
 
 let chat, dom;
 before(() => {
-  dom = new JSDOM('<div id="messages"></div>');
+  dom = new JSDOM(`<div id="messages"></div>${dockMarkup()}`);
   global.window = dom.window;
   global.document = dom.window.document;
   global.pendingPermissions = new Map();
   global.pendingPermissionsByConvo = new Map();
+  global.activeConversation = { id: 'convo-1' };
+  global.unread = { markPermission: () => {}, resolvePermission: () => {} };
+  global.updateUnreadBadge = () => {};
+  global.renderConvoList = () => {};
+  global.agents = [];
   global.ws = null;
   global.userScrolledUp = false;
   global.esc = (t) => { const d = document.createElement('div'); d.textContent = t; return d.innerHTML; };
@@ -372,5 +383,84 @@ describe('a card shows every field it is given, so nothing it acts on is hidden'
     assert.strictEqual(a.textContent, 'sam@example.org');
     assert.ok(!n.contains(a) && !a.contains(n), 'neither isolate holds the other');
     assert.strictEqual(line.textContent, `${name} <sam@example.org>`);
+  });
+});
+
+// A card that is not drawn is a decision the person never gets to make, and a
+// throw while drawing one also stops every card queued after it and leaves the
+// approvals dock uncounted.
+describe('a value the card cannot read never stops it drawing', () => {
+  const F = () => global.RundockConnectorFields;
+  // Replace one function of the field model for the length of `run`.
+  function swapped(name, fn, run) {
+    const was = F()[name];
+    F()[name] = fn;
+    try { return run(); } finally { F()[name] = was; }
+  }
+  const plain = (card, tool) => {
+    assert.ok(card, 'a card is drawn');
+    assert.strictEqual(card.querySelector('dl.permission-fields'), null, 'without the field box');
+    assert.strictEqual(text(card.querySelector('code.permission-detail')), tool, 'the plain card, the raw name in its detail block');
+    assert.ok(card.querySelector('[data-perm-action="deny"]'), 'and it can be answered');
+  };
+
+  test('an epoch too large for a date: the card draws, the time as written', () => {
+    const card = render('mcp__example_calendar__create_event', { title: 'Sync', start: 1e20 });
+    assert.ok(card, 'a card is drawn');
+    assert.strictEqual(text(row(card, 'Starts')), '100000000000000000000');
+  });
+
+  test('a subject nested twenty thousand deep: the card draws', () => {
+    let subject = 'hello';
+    for (let i = 0; i < 20000; i++) subject = { content: subject };
+    const card = render('mcp__example_post__send_message', { to: 'a@example.org', subject, body: 'b' });
+    assert.ok(card, 'a card is drawn');
+    assert.ok(row(card, 'Subject'), 'with its fields');
+  });
+
+  test('an impossible date: the card says what was sent, never "undefined"', () => {
+    const card = render('mcp__example_calendar__create_event', { title: 'Sync', start: '2026-13-45' });
+    assert.strictEqual(text(row(card, 'Starts')), '2026-13-45');
+  });
+
+  test('the field reader throws: the plain card is drawn', () => {
+    const tool = 'mcp__example_post__send_message';
+    const card = swapped('connectorFields', () => { throw new RangeError('boom'); }, () => render(tool, { to: 'a@example.org', subject: 's' }));
+    plain(card, tool);
+    assert.deepStrictEqual(buttons(card), ['Allow once', 'Deny'], 'and a send still asks every time');
+  });
+
+  test('drawing the fields throws: the plain card is drawn', () => {
+    const tool = 'mcp__example_post__send_message';
+    const card = swapped('cutText', () => { throw new RangeError('boom'); }, () => render(tool, { to: 'a@example.org', subject: 's', body: 'b' }));
+    plain(card, tool);
+    assert.doesNotMatch(text(card.querySelector('.permission-context')) || '', /Sends straight away/, 'no sentence from a field box that was not drawn');
+  });
+
+  test('a card that fails does not stop the cards queued after it', () => {
+    const real = F().connectorFields;
+    const req = (id, input) => ({ request_id: id, request: { tool_name: 'mcp__example_post__send_message', input } });
+    document.getElementById('messages').innerHTML = '';
+    global.activeConversation = { id: 'convo-1' };
+    chat.handlePermissionRequest(req('queued-bad', { to: 'a@example.org', subject: 'bad' }), 'convo-bg');
+    chat.handlePermissionRequest(req('queued-good', { to: 'b@example.org', subject: 'good' }), 'convo-bg');
+    assert.strictEqual(document.getElementById('perm-queued-bad'), null, 'queued while its conversation is in the background');
+    global.activeConversation = { id: 'convo-bg' };
+    try {
+      swapped('connectorFields', (t, input) => { if (input.subject === 'bad') throw new RangeError('boom'); return real(t, input); },
+        () => chat.renderPendingPermissionCards('convo-bg'));
+    } finally { global.activeConversation = { id: 'convo-1' }; }
+    plain(document.getElementById('perm-queued-bad'), 'mcp__example_post__send_message');
+    assert.ok(document.getElementById('perm-queued-good').querySelector('dl.permission-fields'), 'the next card is drawn, with its fields');
+  });
+
+  test('a dock card that fails is still drawn, and the dock counts it', () => {
+    const tool = 'mcp__example_post__send_message';
+    document.querySelector('.approvals-dock-list').innerHTML = '';
+    swapped('connectorFields', () => { throw new RangeError('boom'); },
+      () => chat.handleOwnerlessPermissionRequest({ request_id: 'dock-bad', request: { tool_name: tool, input: { to: 'a@example.org', subject: 's' } } }));
+    plain(document.querySelector('#approvals-dock #perm-dock-bad'), tool);
+    assert.strictEqual(document.getElementById('approvals-dock').hidden, false, 'the dock shows itself');
+    assert.match(document.querySelector('.approvals-dock-count').textContent, /1 waiting/);
   });
 });

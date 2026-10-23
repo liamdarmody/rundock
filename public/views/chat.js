@@ -1079,9 +1079,26 @@ function renderPermissionCard(d, convoId, host) {
   // WHAT A CONNECTOR'S EMAIL OR EVENT SAYS, on the card that approves it. Only
   // where nothing else is the reason for asking: a boundary or answer-file card
   // keeps its own copy.
-  const fields = (!boundary && !answerFile && !verdictCopy && typeof RundockConnectorFields !== 'undefined')
-    ? RundockConnectorFields.connectorFields(toolName, input) : null;
-  if (fields) context = RundockConnectorFields.contextFor(fields, RundockPermissions.connectorServerName(toolName));
+  //
+  // READING AND DRAWING THE FIELDS CAN NEVER COST THE CARD. Every value is an
+  // agent's, and a card that throws is a decision the person never gets to
+  // make; it would also stop every card queued after it and leave the approvals
+  // dock uncounted. So the box is built here, before anything is drawn, and if
+  // reading or building it throws, the card is the plain one it would have been.
+  let fields = null;
+  let fieldsBox = null;
+  if (!boundary && !answerFile && !verdictCopy && typeof RundockConnectorFields !== 'undefined') {
+    try {
+      fields = RundockConnectorFields.connectorFields(toolName, input);
+      if (fields) {
+        fieldsBox = connectorFieldsElement(fields, toolName);
+        context = RundockConnectorFields.contextFor(fields, RundockPermissions.connectorServerName(toolName));
+      }
+    } catch (e) {
+      fields = null;
+      fieldsBox = null;
+    }
+  }
 
   // Store callback data for safe event handling (no inline onclick injection).
   // toolInput is echoed back in control_response (required by Claude Code).
@@ -1144,7 +1161,7 @@ function renderPermissionCard(d, convoId, host) {
         <span class="permission-summary">${esc(summary)}</span>
       </div>
       ${context ? `<div class="permission-context">${esc(context)}</div>` : ''}
-      ${fields ? '<div class="permission-fields-slot"></div>' : crossings.length > 1
+      ${fieldsBox ? '<div class="permission-fields-slot"></div>' : crossings.length > 1
         ? `<div class="permission-detail">${crossings.map(c => esc(c.path)).join('<br>')}</div>`
         : (toolName === 'Bash' && input.description && detail.length > 60)
           ? `<details class="permission-detail-collapse"><summary>Show command</summary><code class="permission-detail">${esc(detail)}</code></details>`
@@ -1161,7 +1178,17 @@ function renderPermissionCard(d, convoId, host) {
       </div>
     </div>
   `;
-  if (fields) card.querySelector('.permission-fields-slot').replaceWith(connectorFieldsElement(fields, toolName));
+  if (fieldsBox) {
+    const slot = card.querySelector('.permission-fields-slot');
+    try {
+      slot.replaceWith(fieldsBox);
+    } catch (e) {
+      const plain = document.createElement('code');
+      plain.className = 'permission-detail';
+      plain.textContent = detail;
+      slot.replaceWith(plain);
+    }
+  }
 
   // Attach event listeners safely (no inline onclick)
   card.querySelectorAll('[data-perm-action]').forEach(btn => {

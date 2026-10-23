@@ -317,3 +317,43 @@ describe('what an event card says', () => {
   });
   function people4() { return ['a@example.org', 'b@example.org', 'c@example.org', 'd@example.org']; }
 });
+
+// Every value is an agent's, and a value the reader cannot handle must cost
+// the card nothing: it is kept as written, never thrown on.
+describe('a value the reader cannot handle is kept as written, never thrown on', () => {
+  const nest = (depth, wrap, inner) => { let v = inner; for (let i = 0; i < depth; i++) v = wrap(v); return v; };
+
+  test('an epoch too large for a date is kept as written', () => {
+    const f = F.connectorFields('mcp__example_calendar__create_event', { title: 't', start: 1e20, end: -1e20 });
+    assert.deepStrictEqual(f.start, { raw: '100000000000000000000' });
+    assert.strictEqual(F.formatWhen(f.start), '100000000000000000000');
+    assert.strictEqual(F.formatWhen(f.end), '-100000000000000000000');
+    assert.strictEqual(F.durationText(f.start, f.end), null);
+  });
+
+  test('a subject, a body, a recipient and a time nested twenty thousand deep are read without overflowing the stack', () => {
+    const f = F.connectorFields('mcp__example_post__send_message', {
+      to: [nest(20000, (v) => ({ emailAddress: v }), { address: 'a@example.org' })],
+      subject: nest(20000, (v) => ({ content: v }), 'hello'),
+      body: nest(20000, (v) => [v], 'text'),
+    });
+    assert.ok(f.subject.length <= F.MAX_OTHER_TEXT + 1, 'the subject is written out, cut short');
+    assert.strictEqual(typeof f.body, 'string');
+    assert.notStrictEqual(f.to[0].raw, undefined, 'the recipient is kept as written');
+    const e = F.connectorFields('mcp__example_calendar__create_event', { title: 't', start: nest(20000, (v) => ({ dateTime: v }), '2026-11-03T14:00:00Z') });
+    assert.notStrictEqual(e.start.raw, undefined);
+  });
+
+  test('an impossible date or time is kept as written, never printed as a day that does not exist', () => {
+    for (const s of ['2026-13-45', '2026-02-30', '2026-00-10', '2026-11-03T25:00', '2026-11-03T10:61', '2026-02-30T10:00:00Z', '2026-13-01T10:00:00+01:00']) {
+      const f = F.connectorFields('mcp__example_calendar__create_event', { title: 't', start: s });
+      assert.deepStrictEqual(f.start, { raw: s }, s);
+      assert.doesNotMatch(F.formatWhen(f.start), /undefined/, s);
+    }
+  });
+
+  test('a leap day is a real day', () => {
+    const f = F.connectorFields('mcp__example_calendar__create_event', { title: 't', start: '2028-02-29' });
+    assert.strictEqual(F.formatWhen(f.start), 'Tue 29 Feb 2028, all day');
+  });
+});

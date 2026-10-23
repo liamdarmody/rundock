@@ -250,6 +250,9 @@ const CONNECTOR_HANDLER_FLOW = { src: path.join(ROOT, 'lib', 'protocol', 'handle
 const CONNECTOR_CARD_VIEW = { src: path.join(ROOT, 'public', 'views', 'chat.js'), suite: 'test/unit/connector-card.test.js' };
 const CONNECTOR_CARD_MODEL = { src: path.join(ROOT, 'public', 'connector-fields.js'), suite: 'test/unit/connector-card.test.js' };
 const CONNECTOR_CARD_GRADE = { src: path.join(ROOT, 'public', 'permissions.js'), suite: 'test/unit/connector-card.test.js' };
+// The field model's own reading, where its suite reaches what the card's does
+// not: every shape of value it must survive without throwing.
+const CONNECTOR_FIELDS_MODEL = { src: path.join(ROOT, 'public', 'connector-fields.js'), suite: 'test/unit/connector-fields.test.js' };
 // Reconnecting Claude Code from the chat: two routes that open a console on
 // this machine and spend a turn checking, which only Rundock's own window may
 // reach. Proven through the real server by the routes' own suite.
@@ -1960,6 +1963,33 @@ const MUTATIONS = [
   [CONNECTOR_CARD_VIEW, 'Connector card: Bcc is folded behind +N more',
     "    field('bcc', 'Bcc', (list) => everyone(list, '(none)'));",
     "    field('bcc', 'Bcc', (list) => people(list, '(none)'));"],
+  // ===== A VALUE THE CARD CANNOT READ NEVER STOPS IT =====
+  // Let a throw out and the card is never drawn, nor any card queued after it.
+  [CONNECTOR_CARD_VIEW, 'Connector card: a field that throws stops the card',
+    '      fields = null;\n      fieldsBox = null;\n',
+    '      throw e;\n'],
+  // An epoch no date can hold, read as one, throws when it is formatted.
+  [CONNECTOR_CARD_MODEL, 'Connector card: an epoch no date can hold is read as a date',
+    '      return isNaN(at.getTime()) ? { raw: String(v) } : { at };',
+    '      return { at };'],
+  // Read without a depth limit and a value nested thousands deep overflows the
+  // stack.
+  [CONNECTOR_CARD_MODEL, 'Connector card: text is read however deep it is nested',
+    '    if (depth >= MAX_DEPTH) return null;\n',
+    ''],
+  [CONNECTOR_FIELDS_MODEL, 'Connector card: a recipient is read however deep it is nested',
+    '    if (isObj(v) && depth < MAX_DEPTH) {',
+    '    if (isObj(v)) {'],
+  [CONNECTOR_FIELDS_MODEL, 'Connector card: a time is read however deep it is nested',
+    '    if (depth >= MAX_DEPTH) return { raw: rawText(v) };\n    if (isObj(v)) {',
+    '    if (isObj(v)) {'],
+  // A day or a time that does not exist printed as though it did.
+  [CONNECTOR_CARD_MODEL, 'Connector card: an impossible date is printed as a day',
+    '    if (m) return realDay(+m[1], +m[2], +m[3]) ? { allDay: true, parts: [+m[1], +m[2], +m[3], 0, 0] } : { raw: clip(s, 120) };',
+    '    if (m) return { allDay: true, parts: [+m[1], +m[2], +m[3], 0, 0] };'],
+  [CONNECTOR_FIELDS_MODEL, 'Connector card: an impossible time is printed as a time',
+    '    if (m && !(realDay(+m[1], +m[2], +m[3]) && realTime(+m[4], +m[5]))) return { raw: clip(s, 120) };\n',
+    ''],
   // ===== RECONNECTING CLAUDE CODE IS FOR RUNDOCK'S OWN WINDOW =====
   // Open the reconnect routes and any process on this machine can open a
   // console here, or spend a turn checking, with no key at all.

@@ -33,7 +33,10 @@
   const MAX_OTHERS = 25;       // unread fields listed, then counted
   const MAX_OTHER_TEXT = 300;  // an unread value, or one shown as written
   const MAX_LIST = 500;        // entries drawn from a list that is never folded (Bcc)
-  const MAX_DEPTH = 8;         // nesting written out for a value shown as written
+  // How deep any value is read or written out. Past it a value is kept as
+  // written, so one nested thousands deep cannot overflow the stack and stop
+  // the card being drawn.
+  const MAX_DEPTH = 8;
 
   // Compared lower-case with `_`, `-` and spaces removed, so `bcc_recipients`,
   // `bccRecipients` and `BCC` are one name.
@@ -96,24 +99,25 @@
   }
 
   // Text from a string, a number, a list, or a body object ({ content }, { text }).
-  // Null when the value holds none the card can read as one text, so the card
-  // shows it as written rather than as empty.
-  function textOf(v) {
+  // Null when the value holds none the card can read as one text, or is nested
+  // past MAX_DEPTH, so the card shows it as written rather than as empty.
+  function textOf(v, depth = 0) {
     if (typeof v === 'string') return v;
     if (typeof v === 'number' || typeof v === 'boolean') return String(v);
     if (v === null || v === undefined) return '';
+    if (depth >= MAX_DEPTH) return null;
     if (Array.isArray(v)) {
-      const parts = v.map(textOf);
+      const parts = v.map((x) => textOf(x, depth + 1));
       return parts.includes(null) ? null : parts.filter(Boolean).join('\n');
     }
-    if (isObj(v)) return TEXT_KEYS.some((k) => v[k] != null) ? oneOf(v, TEXT_KEYS) : (Object.keys(v).length ? null : '');
+    if (isObj(v)) return TEXT_KEYS.some((k) => v[k] != null) ? oneOf(v, TEXT_KEYS, depth + 1) : (Object.keys(v).length ? null : '');
     return null;
   }
   // The one text the `keys` of `obj` hold between them: '' when none does, and
   // null when two hold different texts or one cannot be read, so the card
   // shows what was sent instead of choosing between them.
-  function oneOf(obj, keys) {
-    const texts = keys.filter((k) => obj[k] != null).map((k) => textOf(obj[k]));
+  function oneOf(obj, keys, depth = 0) {
+    const texts = keys.filter((k) => obj[k] != null).map((k) => textOf(obj[k], depth));
     if (texts.includes(null)) return null;
     const said = texts.filter((t) => t.trim());
     return new Set(said.map((t) => t.trim())).size > 1 ? null : (said[0] || '');
@@ -123,17 +127,17 @@
   // mail, name | displayName }, or the same wrapped as { emailAddress: {...} };
   // or { raw } for an entry the card cannot read as one address, shown as
   // written. A name is kept beside its address, never instead of it.
-  function entryOf(v) {
+  function entryOf(v, depth = 0) {
     if (v === null || v === undefined) return null;
     if (typeof v === 'string' || typeof v === 'number') {
       const s = String(v).trim();
       return s ? { name: '', address: clip(s, MAX_ADDRESS) } : null;
     }
-    if (isObj(v)) {
+    if (isObj(v) && depth < MAX_DEPTH) {
       const beside = ADDRESS_KEYS.concat(NAME_KEYS).some((k) => k !== 'emailAddress' && v[k] != null);
-      if (isObj(v.emailAddress) && !beside) return entryOf(v.emailAddress);
-      const address = oneOf(v, ADDRESS_KEYS);
-      const name = oneOf(v, NAME_KEYS);
+      if (isObj(v.emailAddress) && !beside) return entryOf(v.emailAddress, depth + 1);
+      const address = oneOf(v, ADDRESS_KEYS, depth + 1);
+      const name = oneOf(v, NAME_KEYS, depth + 1);
       if (address !== null && name !== null && (address.trim() || name.trim())) {
         const a = address.trim(), n = name.trim();
         return { name: a && n && n !== a ? clip(n, MAX_ADDRESS) : '', address: clip(a || n, MAX_ADDRESS) };
@@ -143,7 +147,7 @@
   }
   function recipientsOf(v) {
     const list = Array.isArray(v) ? v : (typeof v === 'string' ? v.split(/[,;\n]/) : (v == null ? [] : [v]));
-    return list.map(entryOf).filter(Boolean);
+    return list.map((x) => entryOf(x)).filter(Boolean);
   }
   // A recipient as one line of text: "Name <address>", the address, or the
   // entry as written.
@@ -204,24 +208,33 @@
   // { dateTime | date, timeZone }. A time written without an offset is shown as
   // written, with the zone it names; one that cannot be read, or an object
   // holding two different times or none the card knows, is kept as written.
+  // So is an epoch no date can hold and a date or time that does not exist:
+  // the card says what was sent rather than a day that never comes.
   const DATE_ONLY = /^(\d{4})-(\d{2})-(\d{2})$/;
   const DATE_TIME = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::\d{2}(?:\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?$/i;
-  function whenOf(v) {
+  const realDay = (y, mo, d) => mo >= 1 && mo <= 12 && d >= 1 && d <= new Date(Date.UTC(y, mo, 0)).getUTCDate();
+  const realTime = (h, mi) => h <= 23 && mi <= 59;
+  function whenOf(v, depth = 0) {
     if (v === undefined || v === null || v === '') return null;
+    if (depth >= MAX_DEPTH) return { raw: rawText(v) };
     if (isObj(v)) {
       const zone = typeof v.timeZone === 'string' ? v.timeZone : (typeof v.timezone === 'string' ? v.timezone : null);
       const held = TIME_KEYS.filter((k) => v[k] != null);
       if (!held.length || new Set(held.map((k) => rawText(v[k]))).size > 1) return { raw: rawText(v) };
-      const w = whenOf(v[held[0]]);
+      const w = whenOf(v[held[0]], depth + 1);
       return w && w.parts && !w.allDay && zone ? { ...w, zone: clip(zone, 64) } : w;
     }
-    if (typeof v === 'number' && isFinite(v)) return { at: new Date(v < 1e11 ? v * 1000 : v) };
-    const t = textOf(v);
+    if (typeof v === 'number') {
+      const at = new Date(v < 1e11 ? v * 1000 : v);
+      return isNaN(at.getTime()) ? { raw: String(v) } : { at };
+    }
+    const t = textOf(v, depth);
     if (t === null) return { raw: rawText(v) };
     const s = t.trim();
     let m = DATE_ONLY.exec(s);
-    if (m) return { allDay: true, parts: [+m[1], +m[2], +m[3], 0, 0] };
+    if (m) return realDay(+m[1], +m[2], +m[3]) ? { allDay: true, parts: [+m[1], +m[2], +m[3], 0, 0] } : { raw: clip(s, 120) };
     m = DATE_TIME.exec(s);
+    if (m && !(realDay(+m[1], +m[2], +m[3]) && realTime(+m[4], +m[5]))) return { raw: clip(s, 120) };
     if (m && !m[6]) return { parts: [+m[1], +m[2], +m[3], +m[4], +m[5]] };
     const at = m ? new Date(s.replace(' ', 'T')) : null;
     return at && !isNaN(at.getTime()) ? { at } : { raw: clip(s, 120) };
