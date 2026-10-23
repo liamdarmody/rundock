@@ -253,6 +253,8 @@ const CONNECTOR_WIRING = { src: path.join(ROOT, 'server.js'), suite: 'test/integ
 // The per-user connector file, through the real hook and the card's words.
 const SECRETS_HOOK = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/connector-secrets-file.test.js' };
 const SECRETS_CARD = { src: path.join(ROOT, 'public', 'permissions.js'), suite: 'test/unit/connector-secrets-file.test.js' };
+// The card for a file Claude Code protects itself says an Allow may not hold.
+const RUNS_NOTE = { src: path.join(ROOT, 'public', 'permissions.js'), suite: 'test/unit/boundary-card.test.js' };
 // What Rundock decides for an agent's environment, never inherited from its own.
 const SPAWN_ENV = { src: path.join(ROOT, 'lib', 'runtime', 'claude.js'), suite: 'test/unit/workspace-modes.test.js' };
 
@@ -1802,6 +1804,9 @@ const MUTATIONS = [
   [SCAFFOLD, 'What runs: the block denies the connector file',
     "const WORKSPACE_RUNS_FILES = ['.mcp.json', '.rundock/permission-hook.sh', '.rundock/mcp-secrets.json'];",
     "const WORKSPACE_RUNS_FILES = ['.rundock/permission-hook.sh', '.rundock/mcp-secrets.json'];"],
+  [RUNS_NOTE, 'What runs: the card for a file Claude Code protects promises that an Allow holds',
+    "Claude Code protects it too, and may '\n        + 'refuse the change even after you allow it here. An agent",
+    "An agent"],
   [SECRETS_HOOK, 'Connector secrets: the per-user connector file is ordinary inside work',
     "const WHAT_RUNS_FILES = ['.mcp.json', '.claude/settings.json', MCP_SECRETS_FILE];",
     "const WHAT_RUNS_FILES = ['.mcp.json', '.claude/settings.json'];"],

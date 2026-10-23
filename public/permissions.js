@@ -638,10 +638,14 @@
         + 'Rundock or Claude Code runs, outside the sandbox. An agent can request a change to it, but never keep the '
         + 'permission: this asks every time, and there is no option to stop being asked.',
     },
+    // `.mcp.json` and the `.claude` folder are among Claude Code's own protected
+    // paths: it never approves a write to them on its own, and Rundock runs it
+    // with nobody at its own prompt, so an Allow here may not take effect.
     runs: {
       summary: 'Wants to change what runs outside the sandbox',
-      context: 'This file decides what Rundock or Claude Code runs, outside the sandbox. An agent can request a change to it, '
-        + 'but never keep the permission: this asks every time, and there is no option to stop being asked.',
+      context: 'This file decides what Rundock or Claude Code runs, outside the sandbox. Claude Code protects it too, and may '
+        + 'refuse the change even after you allow it here. An agent can request a change to it, but never keep the '
+        + 'permission: this asks every time, and there is no option to stop being asked.',
     },
   };
   function answerFileKind(paths) {
