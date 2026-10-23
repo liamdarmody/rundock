@@ -113,6 +113,16 @@ describe('an unquoted [[X]], which YAML reads as a nested list', () => {
     assert.equal(unquotedLinkText('[[X]]', '[[X]]'), null, 'a parsed string is not the nested shape');
   });
 
+  test('the text is read as a link only when the parse has the shape that text gives', () => {
+    // Text and parse that do not belong together (a misread line) are never
+    // trusted: the parse must be exactly one list holding one list.
+    assert.equal(unquotedLinkText(['X'], '[[X]]'), null, 'a flat list');
+    assert.equal(unquotedLinkText([['A'], ['B']], '[[A]]'), null, 'two lists');
+    assert.equal(unquotedLinkText([], '[[A]]'), null, 'an empty list');
+    assert.equal(unquotedLinkText([['A']], '[[A]] and more'), null, 'words after the link');
+    assert.equal(unquotedLinkText([['A']], '[[A]] [[B]]'), null, 'a second link');
+  });
+
   test('rawValueText answers null for a key that is not there', () => {
     assert.equal(rawValueText(raw, 'absent'), null);
     assert.equal(rawValueText(null, 'plain'), null);
@@ -168,12 +178,13 @@ describe('the properties panel shows links inside values', () => {
     } finally { p.done(); }
   });
 
-  test('the words are escaped, so markup in a value is text', () => {
-    const p = mount('---\nnote: "<img src=x onerror=boom()> and [[Plan]]"\n---\n');
+  test('the words and a link\'s alias are escaped, so markup in a value is text', () => {
+    const p = mount('---\nnote: "<img src=x onerror=boom()> and [[Plan|<b>the plan</b>]]"\n---\n');
     try {
       const row = p.row('note');
       assert.equal(row.querySelector('img'), null, 'no element is made from the words');
-      assert.equal(row.querySelector('.prop-value').textContent, '<img src=x onerror=boom()> and Plan');
+      assert.equal(row.querySelector('b'), null, 'no element is made from the alias');
+      assert.equal(row.querySelector('.prop-value').textContent, '<img src=x onerror=boom()> and <b>the plan</b>');
     } finally { p.done(); }
   });
 
