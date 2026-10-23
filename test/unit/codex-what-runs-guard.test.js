@@ -193,6 +193,9 @@ describe('a hook script that was not there before', () => {
   test('a hooks folder swapped for a link is not listed, so nothing where it points is removed', () => {
     const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'what-runs-outside-'));
     fs.writeFileSync(path.join(outside, 'keep.txt'), 'not the workspace\'s');
+    // An empty hooks folder, so no script of its own is put back first.
+    fs.rmSync(path.join(ws, '.claude', 'hooks'), { recursive: true });
+    fs.mkdirSync(path.join(ws, '.claude', 'hooks'));
     const d = drivenGlue();
     const entry = { agentId: 'builder', processId: 'p1' };
     try {
@@ -203,6 +206,67 @@ describe('a hook script that was not there before', () => {
       assert.strictEqual(fs.readFileSync(path.join(outside, 'keep.txt'), 'utf-8'), 'not the workspace\'s');
       assert.ok(!d.asked.some(r => r.grading.put_back.relative === '.claude/hooks/keep.txt'), 'not taken for a new script');
     } finally { d.restore(); fs.rmSync(outside, { recursive: true, force: true }); }
+  });
+});
+
+// A FOLDER ON THE WAY SWAPPED FOR A LINK. Reading through it, the watched files
+// look changed, and putting them back through it would overwrite or remove
+// files wherever it points: `.claude` linked to the runtime's own folder would
+// have its settings replaced, or removed when the workspace had none. The link
+// is taken away first, or the person's own link put back, and only then are
+// the files restored, inside the workspace.
+describe('a folder on the way swapped for a link', () => {
+  let outside;
+  beforeEach(() => {
+    outside = fs.mkdtempSync(path.join(os.tmpdir(), 'what-runs-outside-'));
+    fs.mkdirSync(path.join(outside, 'hooks'));
+    fs.writeFileSync(path.join(outside, 'settings.json'), 'theirs');
+    fs.writeFileSync(path.join(outside, 'hooks', 'pre-tool.sh'), 'theirs');
+  });
+  afterEach(() => { fs.rmSync(outside, { recursive: true, force: true }); });
+  const untouched = () => {
+    assert.strictEqual(fs.readFileSync(path.join(outside, 'settings.json'), 'utf-8'), 'theirs', 'nothing where the link points is overwritten or removed');
+    assert.strictEqual(fs.readFileSync(path.join(outside, 'hooks', 'pre-tool.sh'), 'utf-8'), 'theirs');
+  };
+
+  test('.claude swapped for a link: nothing where it points is changed, and the files are back inside the workspace', () => {
+    const d = drivenGlue();
+    const entry = { agentId: 'builder', processId: 'p1' };
+    try {
+      glue.guardCodexTurn(entry, 'convo-1');
+      fs.renameSync(path.join(ws, '.claude'), path.join(ws, 'moved'));
+      fs.symlinkSync(outside, path.join(ws, '.claude'));
+      glue.releaseCodexTurnGuard(entry);
+    } finally { d.restore(); }
+    untouched();
+    assert.ok(fs.lstatSync(path.join(ws, '.claude')).isDirectory(), '.claude is a folder in the workspace again');
+    assert.strictEqual(read('.claude/hooks/pre-tool.sh'), 'original .claude/hooks/pre-tool.sh\n');
+    assert.ok(!fs.existsSync(path.join(ws, '.claude', 'settings.json')), 'a file that was not there is still not there');
+  });
+
+  test('the person\'s own link stays, and one pointed somewhere else is pointed back', () => {
+    const mine = fs.mkdtempSync(path.join(os.tmpdir(), 'what-runs-mine-'));
+    try {
+      fs.renameSync(path.join(ws, '.claude'), path.join(mine, 'claude'));
+      fs.writeFileSync(path.join(mine, 'claude', 'settings.json'), 'mine');
+      fs.symlinkSync(path.join(mine, 'claude'), path.join(ws, '.claude'));
+      const d = drivenGlue();
+      const entry = { agentId: 'builder', processId: 'p1' };
+      try {
+        glue.guardCodexTurn(entry, 'convo-1');
+        fs.appendFileSync(path.join(ws, '.claude', 'settings.json'), ' planted');
+        glue.releaseCodexTurnGuard(entry);
+        assert.strictEqual(fs.readlinkSync(path.join(ws, '.claude')), path.join(mine, 'claude'), 'the link a person made is kept');
+        assert.strictEqual(fs.readFileSync(path.join(mine, 'claude', 'settings.json'), 'utf-8'), 'mine', 'and the change through it is put back');
+        glue.guardCodexTurn(entry, 'convo-1');
+        fs.unlinkSync(path.join(ws, '.claude'));
+        fs.symlinkSync(outside, path.join(ws, '.claude'));
+        glue.releaseCodexTurnGuard(entry);
+      } finally { d.restore(); }
+      untouched();
+      assert.strictEqual(fs.readlinkSync(path.join(ws, '.claude')), path.join(mine, 'claude'), 'pointed back where the person had it');
+      assert.strictEqual(fs.readFileSync(path.join(mine, 'claude', 'settings.json'), 'utf-8'), 'mine');
+    } finally { fs.rmSync(mine, { recursive: true, force: true }); }
   });
 });
 
