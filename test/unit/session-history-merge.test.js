@@ -18,6 +18,7 @@ const assert = require('node:assert');
 
 const { _internal: srv } = require('../../server.js');
 const { handleGetSessionHistory } = require('../../lib/protocol/handlers/history.js');
+const { buildDelegateContext, buildScopeReturnPrompt } = require('../../lib/delegation/catch-up.js');
 const { makeWorkspace, cleanup, standardTeam } = require('../helpers/workspace.js');
 
 after(cleanup);
@@ -246,6 +247,53 @@ describe('a new turn after history only the session file holds', () => {
     assert.ok(res.messages.some((m) => m.type === 'routing' && m.agentId === 'chief-of-staff'), 'the handover divider is kept');
   });
 
+  test('a delegation from before the transcript began shows what was said, never Rundock\'s own prompts', async () => {
+    // Rundock's prompts open with a catch-up heading as often as not, and an
+    // orchestrator answers a finished delegation with <silent>. Neither is a
+    // message, from before the transcript or after it. Built by Rundock's own
+    // builders, so the test reads the prompts exactly as agents receive them.
+    const brief = buildDelegateContext({ missed: { text: 'USER: Plan the offsite.' }, brief: 'Find three venues within budget.', arriving: true });
+    const handback = buildScopeReturnPrompt({ mode: 'complete', orchMissed: { text: 'RESEARCH-LEAD: Three venues fit.' }, specialistId: 'research-lead', outputBlock: '\n\nThree venues fit the budget.' });
+    const resumed = buildScopeReturnPrompt({ mode: 'continue', orchMissed: { text: 'USER: Which is closest?' }, specialistId: 'research-lead', outputBlock: '\n\nThe lakeside one.' });
+    assert.ok(brief.startsWith('THE CONVERSATION SO FAR, BEFORE YOU JOINED:') && handback.startsWith('SINCE YOUR LAST TURN IN THIS CONVERSATION:'),
+      'precondition: both catch-up headings are in play');
+    const sessions = {
+      'sess-orch-before': [
+        user('Plan the offsite.', '2026-01-12T09:00:00.000Z'),
+        reply('Handing the venues to the research lead.', '2026-01-12T09:00:10.000Z'),
+        user(handback, '2026-01-12T09:03:00.000Z'),
+        reply('<silent>', '2026-01-12T09:03:05.000Z'),
+        user(resumed, '2026-01-12T09:04:00.000Z'),
+        reply('<silent> <!-- RUNDOCK:COMPLETE -->', '2026-01-12T09:04:05.000Z'),
+        user('Which is closest?', '2026-01-12T09:10:00.000Z'),
+        reply('The lakeside one, twenty minutes away.', '2026-01-12T09:10:20.000Z'),
+      ],
+      'sess-research-before': [
+        user(brief, '2026-01-12T09:01:00.000Z'),
+        reply('Three venues fit the budget.', '2026-01-12T09:02:00.000Z'),
+      ],
+    };
+    const said = [
+      'Plan the offsite.',
+      'Handing the venues to the research lead.',
+      'Three venues fit the budget.',
+      'Which is closest?',
+      'The lakeside one, twenty minutes away.',
+    ];
+
+    // With no transcript at all, the session files are the history.
+    const alone = await history('delegated-no-transcript', sessions);
+    assert.deepStrictEqual([...alone.messages.map((m) => m.content)].sort(), [...said].sort());
+
+    // And with one, they are the history before it.
+    const convoId = 'delegated-before-start';
+    newTurn(convoId, 'Book the lakeside venue.', 'Booked for the first week of March.', 'chief-of-staff');
+    const res = await history(convoId, { ...sessions, 'sess-orch-before': [...sessions['sess-orch-before'],
+      user('Book the lakeside venue.', later(50)),
+      reply('Booked for the first week of March.', later(80))] });
+    assert.deepStrictEqual(res.messages.map((m) => m.content), [...said, 'Book the lakeside venue.', 'Booked for the first week of March.']);
+  });
+
   test('a transcript that opens with an agent turn shows what it always showed', async () => {
     // Only a transcript that opens with the person's own message says when it
     // began. One that opens with an agent turn was started by a prompt Rundock
@@ -257,5 +305,36 @@ describe('a new turn after history only the session file holds', () => {
       reply('Welcome. Here is what is in this workspace.', '2026-01-11T07:59:30.000Z'),
     ] });
     assert.deepStrictEqual(res.messages.map((m) => m.content), ['Welcome. Here is what is in this workspace.']);
+  });
+});
+
+describe('which session lines are Rundock\'s own', () => {
+  const lines = require('../../lib/delegation/rundock-lines.js');
+  test('every prompt Rundock\'s builders write is one, whichever heading it opens with', () => {
+    const missed = { text: 'USER: Plan the offsite.' };
+    const prompts = [
+      buildDelegateContext({ missed, brief: 'Find three venues.', arriving: true }),
+      buildDelegateContext({ missed, brief: 'Find three venues.', arriving: false }),
+      buildDelegateContext({ missed: { text: null }, brief: 'Find three venues.' }),
+      ...['complete', 'continue', 'return'].flatMap((mode) => [missed, { text: null }].map((orchMissed) => buildScopeReturnPrompt({
+        mode, orchMissed, specialistId: 'research-lead', outputBlock: '\n\nThree venues.', pendingRequest: 'Book one.',
+      }))),
+      'CONVERSATION SO FAR:\nUSER: hello',
+      '[SYSTEM: A specialist just returned. Ask the user what they need next.]',
+    ];
+    for (const p of prompts) assert.strictEqual(lines.isRundockPrompt(p), true, p.slice(0, 60));
+    for (const said of ['Plan the offsite.', 'Since your last turn, the plan changed.', 'What is a [DELEGATION BRIEF]?']) {
+      assert.strictEqual(lines.isRundockPrompt(said), false, said);
+    }
+  });
+  test('a reply that is only the <silent> sentinel is one; a short reply of the agent\'s own is not', () => {
+    for (const r of ['<silent>', '<SILENT>', '  <silent>\n', '<silent> <!-- RUNDOCK:COMPLETE -->', 'No response requested.']) {
+      assert.strictEqual(lines.isRundockReply(r), true, r);
+    }
+    for (const r of ['Done.', 'OK', 'Yes, agreed.', 'Say <silent> to park me.', '<!-- RUNDOCK:COMPLETE -->']) {
+      assert.strictEqual(lines.isRundockReply(r), false, r);
+    }
+    // The same sentinel test the live path parks a reply by.
+    for (const r of ['<silent>', '<SILENT>', '<silent> <!-- RUNDOCK:COMPLETE -->']) assert.strictEqual(srv.isSilentParkResponse(r), true, r);
   });
 });

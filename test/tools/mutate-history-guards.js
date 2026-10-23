@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 'use strict';
 // Break each rule that keeps a conversation's earlier history in view once a
-// transcript exists, and report which tests notice
-// (lib/protocol/handlers/history.js).
+// transcript exists, and each that keeps Rundock's own session lines out of it
+// and out of the message counts, and report which tests notice
+// (lib/protocol/handlers/history.js, lib/delegation/rundock-lines.js).
 //
 // A conversation whose history is only in its session files, imported, seeded,
 // or older than transcripts, starts a transcript with its first new message.
@@ -35,6 +36,9 @@ const ROOT = path.join(__dirname, '..', '..');
 const HISTORY = path.join(ROOT, 'lib', 'protocol', 'handlers', 'history.js');
 const MERGE = { src: HISTORY, suite: 'test/unit/session-history-merge.test.js' };
 const MERGE_SERVER = { src: HISTORY, suite: 'test/integration/session-history.test.js' };
+// Which session lines are Rundock's own, and the message counts that read them.
+const LINES = { src: path.join(ROOT, 'lib', 'delegation', 'rundock-lines.js'), suite: 'test/unit/session-history-merge.test.js' };
+const COUNTS = { src: path.join(ROOT, 'server.js'), suite: 'test/integration/session-history.test.js' };
 
 const MUTATIONS = [
   // ===== THE EARLIER HISTORY =====
@@ -85,6 +89,33 @@ const MUTATIONS = [
   // A resumed session's new file repeats the lines before it.
   [MERGE, 'a line a resumed file repeats is shown twice',
     '      if (seenLines.has(line)) continue;\n',
+    ''],
+  // ===== RUNDOCK'S OWN LINES =====
+  // A prompt behind a catch-up heading opens with the heading, not its tag:
+  // left off the list, every delegate's brief and every handback is shown.
+  [LINES, 'a prompt behind a catch-up heading is taken for a message',
+    '  ...Object.values(CATCH_UP_HEADINGS),\n',
+    ''],
+  [LINES, 'the <silent> sentinel is taken for a reply',
+    "  return /<silent>/i.test(t) && withoutSilentSentinel(t) === '';",
+    '  return false;'],
+  // Without the sentinel itself in it, a reply that is only a marker would be
+  // hidden too: it is narrower than the live path's test on purpose.
+  [LINES, 'a reply that is only a marker is taken for the sentinel',
+    "  return /<silent>/i.test(t) && withoutSilentSentinel(t) === '';",
+    "  return withoutSilentSentinel(t) === '';"],
+  [MERGE, 'the history shows Rundock\'s own prompts',
+    "          if (m.role === 'user' && isRundockPrompt(m.content)) continue;\n",
+    ''],
+  [MERGE, 'the history shows the <silent> sentinel',
+    "          if (m.role === 'assistant' && isRundockReply(m.content)) continue;\n",
+    ''],
+  // The conversation list counts what the history shows, from the same list.
+  [COUNTS, 'the message count counts Rundock\'s own prompts',
+    '      if (rundockLines.isRundockPrompt(obj.message.content)) continue;\n',
+    ''],
+  [COUNTS, 'the message count counts the <silent> sentinel',
+    "      if (rundockLines.isRundockReply(textParts.join('\\n\\n'))) continue;\n",
     ''],
 ];
 

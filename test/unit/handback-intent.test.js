@@ -399,8 +399,8 @@ describe('a handoff marker never survives into text a person or an agent reads',
   // and "every place that handles markers is consolidated" are different
   // claims and only the second is worth anything.
   const STRIPPERS = [
-    { file: 'server.js', fn: 'stripRundockMarkers',
-      where: 'sanitises specialist output before it enters an orchestrator prompt' },
+    { file: 'lib/delegation/markers.js', fn: 'stripRundockMarkers',
+      where: 'sanitises specialist output before it enters an orchestrator prompt, and finds the <silent> sentinel' },
     { file: 'public/markers.js', fn: 'stripMarkers',
       where: 'the client mirror, used for rendered text and conversation previews' },
     { file: 'lib/store/transcripts.js', fn: 'renderDeltaEntryBody',

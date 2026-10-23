@@ -18,7 +18,7 @@ const PKG_VERSION = require('./package.json').version;
 const searchLib = require('./search.js');
 const { resolvePermissionConvoId } = require('./permission-routing.js');
 const { normalizeWorkspaceMode } = require('./lib/workspace/mode.js');
-const { resolveMarkers, noteHandoffMarker, HANDOFF_MODES } = require('./lib/delegation/markers.js');
+const { resolveMarkers, noteHandoffMarker, HANDOFF_MODES, stripRundockMarkers } = require('./lib/delegation/markers.js');
 const { createHandbackBuilder } = require('./lib/delegation/handback.js');
 const { createDelegationRecord, attachDelegationRecord } = require('./lib/delegation/state.js');
 const config = require('./lib/config.js');
@@ -368,28 +368,17 @@ function extractSnippet(text, query, contextChars = 60) {
   return snippet;
 }
 
-// Strip RUNDOCK markers from text (server-side mirror of client stripRundockMarkers).
-// Used to sanitize specialist output before injecting into orchestrator prompts.
-function stripRundockMarkers(t) {
-  return t
-    .replace(/<!-- RUNDOCK:DELEGATE agent=[\w-]+ -->\n?[\s\S]*/g, '')
-    .replace(/<!-- RUNDOCK:RETURN -->/g, '')
-    .replace(/<!-- RUNDOCK:COMPLETE -->/g, '')
-    .replace(/<!-- RUNDOCK:CONTINUE -->/g, '')
-    .replace(/<!-- RUNDOCK:DOCS_GAP[^>]*-->/g, '')
-    .replace(/<!-- RUNDOCK:(?:SAVE|CREATE)_AGENT name=[\w-]+ -->[\s\S]*?<!-- \/RUNDOCK:(?:SAVE|CREATE)_AGENT -->/g, '')
-    .replace(/<!-- RUNDOCK:SAVE_SKILL name=[\w-]+ -->[\s\S]*?<!-- \/RUNDOCK:SAVE_SKILL -->/g, '')
-    .replace(/<!-- RUNDOCK:DELETE_(?:SKILL|AGENT) name=[\w-]+ -->/g, '');
-}
+// stripRundockMarkers lives with the markers (lib/delegation/markers.js), and
+// which session lines are Rundock's own beside them (rundock-lines.js).
+const rundockLines = require('./lib/delegation/rundock-lines.js');
 
 // Check whether a silent-park response is effectively empty (sentinel, near-empty, or no-op).
 // Returns true if the response should be treated as empty and not appended to transcript.
 function isSilentParkResponse(text) {
   if (!text) return true;
-  // Strip the <silent> sentinel
-  let cleaned = text.replace(/<silent>/gi, '').trim();
-  // Strip RUNDOCK markers that might wrap the sentinel
-  cleaned = stripRundockMarkers(cleaned).trim();
+  // The <silent> sentinel and any RUNDOCK markers wrapping it, taken out by the
+  // same test the history and the message counts use to recognise the sentinel.
+  const cleaned = rundockLines.withoutSilentSentinel(text);
   // Treat as empty if under 10 non-whitespace chars or matches known no-op patterns
   const nonWs = cleaned.replace(/\s/g, '');
   if (nonWs.length < 10) return true;
@@ -530,11 +519,9 @@ function readSessionMessageCount(filePath) {
     // User text turns: tool_result entries have array content and are excluded
     // by the typeof === 'string' guard.
     if (obj.type === 'user' && obj.message && typeof obj.message.content === 'string') {
-      const text = obj.message.content;
-      // Skip Rundock-injected priming messages: these aren't user-visible bubbles.
-      if (text.startsWith('CONVERSATION SO FAR:') ||
-          text.startsWith('[SYSTEM:') ||
-          text.startsWith('[DELEGATION BRIEF]')) continue;
+      // Skip Rundock's own prompts: these aren't user-visible bubbles. The one
+      // list the history uses too (lib/delegation/rundock-lines.js).
+      if (rundockLines.isRundockPrompt(obj.message.content)) continue;
       count++;
       continue;
     }
@@ -545,8 +532,8 @@ function readSessionMessageCount(filePath) {
         .filter(b => b.type === 'text' && b.text && b.text.trim())
         .map(b => b.text);
       if (textParts.length === 0) continue;
-      // Skip resume ghosts: empty placeholder bubbles emitted on session resume.
-      if (textParts.join('\n\n').trim() === 'No response requested.') continue;
+      // Skip resume ghosts and the <silent> sentinel, as the history does.
+      if (rundockLines.isRundockReply(textParts.join('\n\n'))) continue;
       count++;
     }
   }

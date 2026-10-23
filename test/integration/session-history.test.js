@@ -414,6 +414,43 @@ describe('get_session_history: a new turn after history only the session file ho
   });
 });
 
+describe('Rundock\'s own lines in a session file, in history and in the message count', () => {
+  test('a delegation\'s prompts and the <silent> sentinel are neither shown nor counted', async () => {
+    // Real parser, real counts: the conversation list and the history read the
+    // same files and must agree on what a message is.
+    const { buildDelegateContext, buildScopeReturnPrompt } = require('../../lib/delegation/catch-up.js');
+    const brief = buildDelegateContext({ missed: { text: 'USER: Plan the offsite.' }, brief: 'Find three venues.', arriving: true });
+    const handback = buildScopeReturnPrompt({ mode: 'complete', orchMissed: { text: 'RESEARCH-LEAD: Three venues.' }, specialistId: 'research-lead', outputBlock: '\n\nThree venues.' });
+    writeSession('sess-own-orch', [
+      userLine('Plan the offsite.', '2026-01-12T09:00:00.000Z'),
+      assistantLine('Handing the venues to the research lead.', '2026-01-12T09:00:10.000Z'),
+      userLine(handback, '2026-01-12T09:03:00.000Z'),
+      assistantLine('<silent>', '2026-01-12T09:03:05.000Z'),
+    ]);
+    writeSession('sess-own-research', [
+      userLine(brief, '2026-01-12T09:01:00.000Z'),
+      assistantLine('Three venues fit the budget.', '2026-01-12T09:02:00.000Z'),
+    ]);
+    const convoId = 'sh-own-lines';
+    const sessionIds = [{ sessionId: 'sess-own-orch', agentId: 'chief-of-staff' }, { sessionId: 'sess-own-research', agentId: 'research-lead' }];
+    client.send({ type: 'save_conversation', conversation: { id: convoId, agentId: 'chief-of-staff', title: 'Offsite', sessionIds } });
+
+    const res = await getHistory({ conversationId: convoId, sessionIds });
+    assert.deepStrictEqual(res.messages.map((m) => m.content), [
+      'Plan the offsite.',
+      'Handing the venues to the research lead.',
+      'Three venues fit the budget.',
+    ]);
+
+    const since = client.messages.length;
+    client.send({ type: 'get_conversations' });
+    const { msg } = await client.waitFor((m) => m.type === 'conversations', { since, label: 'conversations' });
+    const listed = msg.conversations.find((c) => c.id === convoId);
+    assert.ok(listed, 'the conversation is listed');
+    assert.strictEqual(listed.messageCount, 3, 'the count is what the history shows');
+  });
+});
+
 describe('get_session_history: single-session fallback', () => {
   test('without sessionIds, the named session is read directly with limit and offset', async () => {
     const convoId = 'sh-single-1';
