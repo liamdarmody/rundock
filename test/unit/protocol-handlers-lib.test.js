@@ -1296,6 +1296,33 @@ describe('handler seams (stub ctx, capture ws)', () => {
     }
   });
 
+  test('a failure with no errno of its own still answers a plain sentence, never the raw message', () => {
+    // A crafted name carrying a NUL: Node refuses the path with a TypeError
+    // whose message quotes the absolute path, and no errno rule describes it.
+    const table = buildDispatch();
+    const original = config.getWorkspace();
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'proto-handlers-'));
+    try {
+      config.setWorkspace(dir);
+      const inside = (p) => path.resolve(p).startsWith(path.resolve(dir) + path.sep);
+      const ctx = {
+        workspace: { isInsideWorkspace: inside, isWritableInWorkspace: inside, isSafeCreatePath: srv.isSafeCreatePath },
+        store: { ensureSearchEngine: () => null },
+      };
+      for (const kind of ['note', 'folder']) {
+        const ws = captureWs();
+        table.create_path(ctx, ws, { type: 'create_path', path: `crafted\u0000${kind}`, kind, content: '' });
+        const [answer] = ws.sent;
+        assert.strictEqual(answer.type, 'create_error', kind);
+        assert.strictEqual(answer.reason, `Rundock couldn't create the ${kind === 'folder' ? 'folder' : 'file'}.`, kind);
+        assert.ok(!JSON.stringify(answer).includes(dir), `${kind}: no absolute path anywhere in the reply`);
+      }
+    } finally {
+      config.setWorkspace(original);
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test('a create that fails takes away the empty folders it made, and only those', () => {
     const table = buildDispatch();
     const original = config.getWorkspace();

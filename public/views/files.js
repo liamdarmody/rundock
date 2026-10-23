@@ -2270,9 +2270,9 @@ function wikilinkResolves(tree, target, fromPath) {
 // is the note the same link then finds. Nothing here can name a place outside
 // the workspace: '.' and '..' are refused, as is any name the file tree would
 // hide, and the server's create guard checks the same again.
-// Control characters are refused with the rest, so a NUL never reaches the
-// server's file calls.
-const LINK_NAME_FORBIDDEN_RE = /[:*?"<>|\\\u0000-\u001f]/;
+// Control characters are refused with the rest (C0, DEL and C1), so a NUL
+// never reaches the server's file calls.
+const LINK_NAME_FORBIDDEN_RE = /[:*?"<>|\\\u0000-\u001f\u007f-\u009f]/;
 function linkCreatePath(target, fromPath) {
   const name = String(target == null ? '' : target).split('#')[0].trim();
   if (!name) return { refusal: 'That link has no note name.' };

@@ -82,7 +82,7 @@ describe('what a link cannot create, said in plain words', () => {
   });
 
   test('a control character, so NUL and its kind never reach the server', () => {
-    for (const ch of ['\u0000', '\u0001', '\t', '\u001b', '\u001f']) {
+    for (const ch of ['\u0000', '\u0001', '\t', '\u001b', '\u001f', '\u007f', '\u0080', '\u0085', '\u009f']) {
       assert.match(refused(`Q3${ch}plan`), /control character/, JSON.stringify(ch));
     }
   });
