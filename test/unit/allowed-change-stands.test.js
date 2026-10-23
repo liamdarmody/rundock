@@ -98,6 +98,44 @@ describe('an Allow on the hook card', () => {
     assert.strictEqual(t.asked.length, 0);
   });
 
+  test('a MultiEdit allowed on the card stands, each edit applied in turn to the file as it stood', () => {
+    const t = claudeTurn('c-multi');
+    const edits = [
+      { old_string: '{}', new_string: '{"a":{}}' },
+      // The second edit matches only once the first has been made.
+      { old_string: '"a":{}', new_string: '"a":{"url":"https://example.com/mcp"}' },
+    ];
+    const NEW = '{"mcpServers":{"a":{"url":"https://example.com/mcp"}}}\n';
+    try {
+      answer({ conversationId: 'c-multi', toolName: 'MultiEdit', toolInput: { file_path: mcp, edits }, answerFile: true, resolvedPath: mcp });
+      fs.writeFileSync(mcp, NEW);
+      t.endTurn();
+    } finally { t.done(); }
+    assert.strictEqual(fs.readFileSync(mcp, 'utf-8'), NEW, 'the allowed edits stand');
+    assert.strictEqual(t.asked.length, 0, 'no second card');
+  });
+
+  test('a MultiEdit marks only the content its edits make: other content is put back', () => {
+    const t = claudeTurn('c-multi-other');
+    try {
+      answer({ conversationId: 'c-multi-other', toolName: 'MultiEdit', toolInput: { file_path: mcp, edits: [{ old_string: '{}', new_string: '{"a":{}}' }] }, answerFile: true, resolvedPath: mcp });
+      fs.writeFileSync(mcp, '{"mcpServers":{"b":{}}}\n');
+      t.endTurn();
+    } finally { t.done(); }
+    assert.strictEqual(fs.readFileSync(mcp, 'utf-8'), ORIGINAL, 'what the card did not show is put back');
+    assert.strictEqual(t.asked.length, 1, 'and asked about');
+  });
+
+  test('a MultiEdit whose edits do not apply to the file marks nothing', () => {
+    const t = claudeTurn('c-multi-miss');
+    try {
+      answer({ conversationId: 'c-multi-miss', toolName: 'MultiEdit', toolInput: { file_path: mcp, edits: [{ old_string: '{}', new_string: '[]' }, { old_string: 'absent', new_string: 'x' }] }, answerFile: true, resolvedPath: mcp });
+      fs.writeFileSync(mcp, '{"mcpServers":[]}\n');
+      t.endTurn();
+    } finally { t.done(); }
+    assert.strictEqual(fs.readFileSync(mcp, 'utf-8'), ORIGINAL, 'a result that cannot be worked out is not marked');
+  });
+
   test('a shell command allowed on the card covers the change it makes to the files it named', () => {
     const t = claudeTurn('c-shell');
     try {
