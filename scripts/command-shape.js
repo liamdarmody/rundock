@@ -27,8 +27,8 @@
  * here-document fed to anything but a shell, and a quoted argument with a
  * space in it. A quoted argument still counts as an argument, so
  * `gh pr comment 3 --body "x y" | cat` is refused under `gh *` as before. The
- * command word, and a quoted word with no space such as a script path, are
- * matched as written. Text a shell runs is a command line, matched as one
+ * command word, a quoted word with no space, and a quoted path (starting /,
+ * ~/, ./ or ../) with spaces in it, are matched as written. Text a shell runs is a command line, matched as one
  * wrapped in that shell: the string after `sh -c` (or bash, zsh, dash, ksh),
  * what `eval` is given, and what a shell reading stdin is fed, a here-document
  * or the here-document or quoted words of the command piped into it. A shell
@@ -302,10 +302,11 @@ const WRAPPER_NAMES = {
 
 // A quoted argument with a space in it is data: a message, a body, a script
 // for another interpreter. It stands in for any text but no pattern's literal
-// part, so it is never what makes an exclusion match. The command word, and a
-// quoted word with no space such as a path, are matched as written.
+// part, so it is never what makes an exclusion match. The command word, a
+// quoted word with no space, and a quoted path (starting /, ~/, ./ or ../),
+// spaces and all, are matched as written.
 const QUOTED = '\0';
-const asMatched = (seg) => seg.words.map((w, k) => (k > 0 && seg.quoted[k] && /\s/.test(w) ? QUOTED : w));
+const asMatched = (seg) => seg.words.map((w, k) => (k > 0 && seg.quoted[k] && /\s/.test(w) && !/^(~|\.{1,2})?\//.test(w) ? QUOTED : w));
 
 // `outer` is set for text a shell or a substitution runs: it runs inside that
 // one (`kind`), never as one bare command, and in the directory it was

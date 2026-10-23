@@ -290,11 +290,19 @@ describe('everything else runs as before', () => {
       assert.strictEqual(verdict('cd /work/lane && sh -c "npx playwright test"').fix.cwd, '/work/lane');
     });
 
+    test('a quoted path with a space in it is matched as written', () => {
+      for (const p of ['/work/my dir/run.js', '~/my dir/run.js', './my dir/run.js', '../my dir/run.js']) {
+        assert.strictEqual(classify(`node "${p}" | head`, [`node ${p}*`]).verdict, 'refuse', p);
+      }
+    });
+
     test('a quoted program path, and a quoted command word, are matched as written', () => {
       const r = verdict('node "/work/scratch/test-a/run.js" | head');
       assert.strictEqual(r.verdict, 'refuse');
       assert.strictEqual(r.pattern, 'node /work/scratch/test-*/*.js');
       assert.strictEqual(classify('"/work/my tools/run" x | cat', ['/work/my tools/run *']).verdict, 'refuse');
+      assert.strictEqual(classify('"my tool" x | cat', ['my tool *']).verdict, 'refuse', 'a command word is never data');
+      assert.strictEqual(verdict('npm run "precommit" | cat').verdict, 'refuse', 'a quoted word with no space is not data');
     });
   });
 
