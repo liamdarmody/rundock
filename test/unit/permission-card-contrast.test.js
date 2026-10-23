@@ -198,6 +198,7 @@ const FIELD_TEXT = [
   ['cut-off marker ("+4 more", "… 3 more lines")', '.permission-cut', 6.47, 5.86],
   ['empty value ("(none)")', '.permission-empty', 6.47, 5.86],
   ['"+N more" and "Show full message"', '.permission-fields summary', 6.47, 5.86],
+  ['an unread field\'s key, under Other fields', '.permission-other-key', 6.47, 5.86],
 ];
 function fieldBox(themeName) {
   const value = themeName === 'light' ? decl('body.light .permission-fields', 'background') : decl('.permission-fields', 'background');

@@ -756,8 +756,14 @@ const SANDBOX_RETRY_HINT = 'This one is the operating system refusing a write ou
 // text. Each value is an agent's: an address or a subject can carry markup, a
 // right-to-left override or a zero-width character, and none of it may become
 // anything but the characters it is. Each address is its own block, so an
-// override in one cannot run on into the next. The cut-off rules are the
-// model's (public/connector-fields.js).
+// override in one cannot run on into the next, and within it the name and the
+// address are isolates of their own, so an override in the name cannot reorder
+// the address. The cut-off rules are the model's (public/connector-fields.js).
+//
+// The box takes the place of the raw request, so it leaves nothing out: a
+// field found under more than one name is a row per name, each labelled with
+// the key it came under, and every key the model read as none of the fields
+// is listed under Other fields.
 function connectorFieldsElement(f, toolName) {
   const F = RundockConnectorFields;
   const el = (tag, cls, text) => {
@@ -767,52 +773,84 @@ function connectorFieldsElement(f, toolName) {
     return n;
   };
   const dl = el('dl', 'permission-fields');
-  const row = (label, parts) => { const dd = el('dd'); dd.append(...parts); dl.append(el('dt', '', label), dd); };
-  const empty = (text) => el('span', 'permission-empty', text);
+  // A label can be a key the agent chose, so it is text in an isolate too.
+  const row = (label, parts) => { const dd = el('dd'); dd.append(...parts); const dt = el('dt'); dt.append(el('bdi', '', label)); dl.append(dt, dd); };
+  // While some fields went unread, an empty field may only look empty: what it
+  // holds can be under a name this card does not know. So it says where to look
+  // rather than "(none)" or "Just you".
+  const unread = f.others.length > 0 || f.othersMore > 0;
+  const empty = (text) => el('span', 'permission-empty', unread ? 'Not recognised: see Other fields' : text);
+  const entry = (e) => {
+    const n = el('span', 'permission-line');
+    if (e.raw !== undefined) n.append(el('bdi', 'permission-as-written', e.raw));
+    else if (e.name) n.append(el('bdi', 'permission-name', e.name), ' <', el('bdi', 'permission-address', e.address), '>');
+    else n.append(el('bdi', 'permission-address', e.address));
+    return n;
+  };
   const people = (list, none) => {
     if (!list.length) return [empty(none)];
     const cut = F.cutList(list);
-    const out = cut.shown.map(a => el('span', 'permission-line', a));
+    const out = cut.shown.map(entry);
     if (cut.more.length) {
       const more = el('details', 'permission-more');
-      more.append(el('summary', '', `+${list.length - cut.shown.length} more`), ...cut.more.map(a => el('span', 'permission-line', a)));
+      more.append(el('summary', '', `+${list.length - cut.shown.length} more`), ...cut.more.map(entry));
       if (cut.rest) more.append(el('span', 'permission-line permission-cut', `… and ${cut.rest} more addresses`));
       out.push(more);
     }
     return out;
   };
-  if (f.kind === 'email') {
-    row('To', people(f.to, '(none)'));
-    if (f.cc.length) row('Cc', people(f.cc, ''));
-    if (f.bcc.length) row('Bcc', people(f.bcc, ''));
-    row('Subject', [f.subject ? el('span', 'permission-clamp', f.subject) : empty('(no subject)')]);
-    const body = F.cutText(f.body);
-    const longSubject = f.subject.length > F.SUBJECT_SOFT;
+  // Bcc is shown whole: the people a message is copied to in secret are the
+  // ones a person most needs to see, so none of them is folded away.
+  const everyone = (list, none) => {
+    if (!list.length) return [empty(none)];
+    const out = list.slice(0, F.MAX_LIST).map(entry);
+    if (list.length > F.MAX_LIST) out.push(el('span', 'permission-line permission-cut', `… and ${list.length - F.MAX_LIST} more addresses`));
+    return out;
+  };
+  const box = (label, content) => { const d = el('details', 'permission-full'); d.append(el('summary', '', label), content); return d; };
+  const clamped = (text, none, label, full) => (text
+    ? [el('span', 'permission-clamp', text), ...(text.length > F.SUBJECT_SOFT ? [box(label, el('div', full, text))] : [])]
+    : [empty(none)]);
+  const message = (text) => {
+    const body = F.cutText(text);
     const parts = body.full ? [el('div', 'permission-body', body.preview)] : [empty('(empty)')];
     if (body.moreLines) parts.push(el('span', 'permission-cut', `… ${body.moreLines} more ${body.moreLines === 1 ? 'line' : 'lines'}`));
-    if (body.cut || longSubject) {
-      const full = el('div', 'permission-full-text');
-      if (longSubject) full.append(el('div', 'permission-full-subject', f.subject));
-      full.append(document.createTextNode(body.full + (body.overflow ? `\n… (${body.overflow} more characters)` : '')));
-      const box = el('details', 'permission-full');
-      box.append(el('summary', '', 'Show full message'), full);
-      parts.push(box);
-    }
-    row('Message', parts);
+    if (body.cut) parts.push(box('Show full message', el('div', 'permission-full-text', body.full + (body.overflow ? `\n… (${body.overflow} more characters)` : ''))));
+    return parts;
+  };
+  // One row under the field's own label, or, for a field found under more than
+  // one name, a row per name under the key it came under.
+  const field = (name, label, draw, always) => {
+    const all = f.aliases[name];
+    if (all) for (const o of all) row(o.key, draw(o.value));
+    else if (always || f[name].length) row(label, draw(f[name]));
+  };
+  if (f.kind === 'email') {
+    field('to', 'To', (list) => people(list, '(none)'), true);
+    field('cc', 'Cc', (list) => people(list, '(none)'));
+    field('bcc', 'Bcc', (list) => everyone(list, '(none)'));
+    field('subject', 'Subject', (text) => clamped(text, '(no subject)', 'Show full subject', 'permission-full-subject'), true);
+    field('body', 'Message', message, true);
   } else {
-    const title = [f.title ? el('span', 'permission-clamp', f.title) : empty('(untitled)')];
-    if (f.title.length > F.SUBJECT_SOFT) {
-      const box = el('details', 'permission-full');
-      box.append(el('summary', '', 'Show full title'), el('div', 'permission-full-text', f.title));
-      title.push(box);
-    }
-    row('Title', title);
-    const when = (w) => (w ? document.createTextNode(F.formatWhen(w)) : empty('(not set)'));
-    const length = F.durationText(f.start, f.end);
-    row('Starts', [when(f.start)]);
-    row('Ends', length ? [when(f.end), document.createTextNode(' '), el('span', 'permission-cut', `(${length})`)] : [when(f.end)]);
-    row('Attendees', f.attendees.length ? people(f.attendees, '') : [document.createTextNode('Just you')]);
+    field('title', 'Title', (text) => clamped(text, '(untitled)', 'Show full title', 'permission-full-text'), true);
+    const when = (w) => [w ? document.createTextNode(F.formatWhen(w)) : empty('(not set)')];
+    const length = !f.aliases.start && !f.aliases.end && F.durationText(f.start, f.end);
+    field('start', 'Starts', when, true);
+    field('end', 'Ends', (w) => (length ? [...when(w), ' ', el('span', 'permission-cut', `(${length})`)] : when(w)), true);
+    field('attendees', 'Attendees', (list) => (list.length ? people(list, '') : [unread ? empty('') : document.createTextNode('Just you')]), true);
   }
+  // Every key the model read as none of the fields, each a block of its own,
+  // its key and its value as text.
+  const otherFields = () => {
+    const lines = f.others.map((o) => {
+      const n = el('span', 'permission-line permission-other');
+      n.append(el('bdi', 'permission-other-key', o.key), ': ', el('bdi', '', o.text));
+      return n;
+    });
+    if (f.othersMore) lines.push(el('span', 'permission-line permission-cut', `… and ${f.othersMore} more ${f.othersMore === 1 ? 'field' : 'fields'}`));
+    return lines;
+  };
+  if (unread) row('Other fields', otherFields());
   const raw = el('div', 'permission-raw');
   raw.append(el('b', '', 'Tool name:'), document.createTextNode(' ' + toolName));
   const frag = document.createDocumentFragment();

@@ -11,17 +11,23 @@ const assert = require('node:assert');
 
 const F = require('../../public/connector-fields.js');
 
+// A recipient list as the card writes it: "Name <address>", or the address.
+const texts = (list) => list.map(F.addressText);
+
 describe('an email request is read by generic field names', () => {
   test('flat fields, recipients as a comma-separated string', () => {
     const f = F.connectorFields('mcp__example_post__send_message', {
       to: 'sam@example.org, priya@example.com; jo@example.net', cc: 'lee@example.org',
       subject: 'Venue for the 14th', body: 'Hi Sam,\nSee you then.',
     });
-    assert.deepStrictEqual(f, {
-      kind: 'email', action: 'send',
-      to: ['sam@example.org', 'priya@example.com', 'jo@example.net'], cc: ['lee@example.org'], bcc: [],
-      subject: 'Venue for the 14th', body: 'Hi Sam,\nSee you then.',
+    const { to, cc, bcc, ...rest } = f;
+    assert.deepStrictEqual(rest, {
+      kind: 'email', action: 'send', subject: 'Venue for the 14th', body: 'Hi Sam,\nSee you then.',
+      aliases: {}, others: [], othersMore: 0,
     });
+    assert.deepStrictEqual(texts(to), ['sam@example.org', 'priya@example.com', 'jo@example.net']);
+    assert.deepStrictEqual(texts(cc), ['lee@example.org']);
+    assert.deepStrictEqual(bcc, []);
   });
 
   test('arrays of address objects, named and unnamed, and the body under `text`', () => {
@@ -31,8 +37,9 @@ describe('an email request is read by generic field names', () => {
       Subject: 'Notes', text: 'Short note.',
     });
     assert.strictEqual(f.action, 'draft');
-    assert.deepStrictEqual(f.to, ['Sam Rivera <sam@example.org>', 'jo@example.net', 'lee@example.org']);
-    assert.deepStrictEqual(f.bcc, ['records@example.org']);
+    assert.deepStrictEqual(texts(f.to), ['Sam Rivera <sam@example.org>', 'jo@example.net', 'lee@example.org']);
+    assert.deepStrictEqual(f.to[0], { name: 'Sam Rivera', address: 'sam@example.org' }, 'the name is kept apart from its address');
+    assert.deepStrictEqual(texts(f.bcc), ['records@example.org']);
     assert.strictEqual(f.subject, 'Notes');
     assert.strictEqual(f.body, 'Short note.');
   });
@@ -48,9 +55,10 @@ describe('an email request is read by generic field names', () => {
       saveToSentItems: true,
     });
     assert.strictEqual(f.action, 'reply');
-    assert.deepStrictEqual(f.to, ['Sam <sam@example.org>']);
-    assert.deepStrictEqual(f.cc, ['priya@example.com']);
+    assert.deepStrictEqual(texts(f.to), ['Sam <sam@example.org>']);
+    assert.deepStrictEqual(texts(f.cc), ['priya@example.com']);
     assert.strictEqual(f.body, 'Agreed.');
+    assert.deepStrictEqual(f.others, [{ key: 'saveToSentItems', text: 'true' }], 'the field the card does not read is listed, not dropped');
   });
 
   test('forward and fwd are forwards, resend is a send', () => {
@@ -63,7 +71,97 @@ describe('an email request is read by generic field names', () => {
 
   test('missing fields come back empty, not invented', () => {
     const f = F.connectorFields('mcp__example_post__create_draft', { subject: '' });
-    assert.deepStrictEqual(f, { kind: 'email', action: 'draft', to: [], cc: [], bcc: [], subject: '', body: '' });
+    assert.deepStrictEqual(f, {
+      kind: 'email', action: 'draft', to: [], cc: [], bcc: [], subject: '', body: '', aliases: {}, others: [], othersMore: 0,
+    });
+  });
+});
+
+describe('every field a request carries is read, so a card can show what the service acts on', () => {
+  test('every alias of a field is kept, each under its real key, the first as the field', () => {
+    const f = F.connectorFields('mcp__example_post__send_message', { to: 'boss@example.org', recipients: ['evil@example.net'], subject: 's' });
+    assert.deepStrictEqual(texts(f.to), ['boss@example.org']);
+    assert.deepStrictEqual(f.aliases.to.map((o) => [o.key, texts(o.value)]), [['to', ['boss@example.org']], ['recipients', ['evil@example.net']]]);
+    assert.deepStrictEqual(Object.keys(f.aliases), ['to'], 'a field with one alias has no entry');
+  });
+
+  test('two spellings of one name are two fields', () => {
+    const f = F.connectorFields('mcp__example_post__send_message', { to: 'a@example.org', TO: 'b@example.org', subject: 's' });
+    assert.deepStrictEqual(f.aliases.to.map((o) => o.key), ['to', 'TO']);
+  });
+
+  test('a body and an HTML body are both kept', () => {
+    const f = F.connectorFields('mcp__example_post__send_message', { to: 'a@example.org', body: 'Hi boss', htmlBody: '<p>evil</p>' });
+    assert.deepStrictEqual(f.aliases.body.map((o) => [o.key, o.value]), [['body', 'Hi boss'], ['htmlBody', '<p>evil</p>']]);
+  });
+
+  test('a top-level field beside the nested message is read too, under its path', () => {
+    const f = F.connectorFields('mcp__example_office__send_mail', { to: 'top@example.org', message: { to: 'nested@example.net', subject: 's' } });
+    assert.deepStrictEqual(f.aliases.to.map((o) => [o.key, texts(o.value)]), [['to', ['top@example.org']], ['message.to', ['nested@example.net']]]);
+    assert.strictEqual(f.subject, 's');
+    assert.deepStrictEqual(f.others, [], 'the nested message is read, not listed');
+  });
+
+  test('a summary and a title are both kept', () => {
+    const f = F.connectorFields('mcp__example_calendar__create_event', { summary: 'Decoy', title: 'Real' });
+    assert.deepStrictEqual(f.aliases.title.map((o) => [o.key, o.value]), [['summary', 'Decoy'], ['title', 'Real']]);
+  });
+
+  test('every key the card does not read is listed with its value as text, in order', () => {
+    const f = F.connectorFields('mcp__example_post__send_message', { to: 'a@example.org', to_emails: ['evil@example.net'], subject: 's', flags: { urgent: true }, threadId: null });
+    assert.deepStrictEqual(f.others, [
+      { key: 'to_emails', text: '["evil@example.net"]' }, { key: 'flags', text: '{"urgent": true}' }, { key: 'threadId', text: 'null' },
+    ]);
+  });
+
+  test('a recognised key holding nothing is not listed, and an entry in a shape the card cannot read is shown as written', () => {
+    const f = F.connectorFields('mcp__example_post__send_message', { to: [{ addr: 'evil@example.net' }, 'ok@example.org'], cc: null, subject: 's' });
+    assert.deepStrictEqual(f.to, [{ raw: '{"addr": "evil@example.net"}' }, { name: '', address: 'ok@example.org' }]);
+    assert.deepStrictEqual(f.others, []);
+  });
+
+  test('two different addresses in one entry are shown as written rather than one picked', () => {
+    const f = F.connectorFields('mcp__example_post__send_message', { to: [{ email: 'boss@example.org', address: 'evil@example.net' }], subject: 's' });
+    assert.deepStrictEqual(f.to, [{ raw: '{"email": "boss@example.org", "address": "evil@example.net"}' }]);
+  });
+
+  test('two different texts in one body object are shown as written rather than one picked', () => {
+    const f = F.connectorFields('mcp__example_post__send_message', { to: 'a@example.org', body: { content: 'Hi boss', html: '<p>evil</p>' } });
+    assert.strictEqual(f.body, '{"content": "Hi boss", "html": "<p>evil</p>"}');
+  });
+
+  test('a time object holding two different times, or none the card knows, is shown as written', () => {
+    const f = F.connectorFields('mcp__example_calendar__create_event', {
+      title: 't', start: { dateTime: '2026-11-03T14:00:00Z', date: '2026-12-25' }, end: { when: 'after lunch' },
+    });
+    assert.deepStrictEqual(f.start, { raw: '{"dateTime": "2026-11-03T14:00:00Z", "date": "2026-12-25"}' });
+    assert.deepStrictEqual(f.end, { raw: '{"when": "after lunch"}' });
+  });
+
+  test('a long value is capped, and past a number of fields the rest are counted', () => {
+    const input = { to: 'a@example.org', subject: 's', notes: 'z'.repeat(5000) };
+    for (let i = 0; i < F.MAX_OTHERS + 5; i++) input[`extra${i}`] = i;
+    const f = F.connectorFields('mcp__example_post__send_message', input);
+    assert.strictEqual(f.others.length, F.MAX_OTHERS);
+    assert.strictEqual(f.othersMore, 6, 'the fields past the cap are counted, not dropped silently');
+    assert.ok(f.others[0].text.length <= F.MAX_OTHER_TEXT + 1);
+    assert.ok(f.others[0].text.endsWith('…'));
+  });
+
+  test('a card with unread fields never says there is nobody', () => {
+    const send = F.connectorFields('mcp__example_post__send_message', { to_emails: ['evil@example.net'], subject: 's' });
+    assert.doesNotMatch(F.contextFor(send, 'example post'), /No recipients are set/);
+    assert.match(F.contextFor(send, 'example post'), /Other fields/);
+    const ev = F.connectorFields('mcp__example_calendar__create_event', { title: 't', invitee_list: ['evil@example.net'] });
+    assert.doesNotMatch(F.contextFor(ev, 'x'), /No one else is invited/);
+    assert.match(F.contextFor(ev, 'x'), /Other fields/);
+  });
+
+  test('every alias counts toward who is reached', () => {
+    const ev = F.connectorFields('mcp__example_calendar__create_event', { title: 't', attendees: ['a@example.org'], guests: ['b@example.org', 'a@example.org'] });
+    assert.strictEqual(F.contextFor(ev, 'x'), 'Adds an event to your calendar. 2 people will be emailed an invitation.');
+    const send = F.connectorFields('mcp__example_post__send_message', { to: [], recipients: ['b@example.org'], subject: 's' });
+    assert.doesNotMatch(F.contextFor(send, 'x'), /No recipients/);
   });
 });
 
@@ -111,7 +209,7 @@ describe('the cut-off rules', () => {
     assert.strictEqual(c.full.length, F.MAX_TEXT);
     assert.strictEqual(c.overflow, 50);
     const address = `${'a'.repeat(400)}@example.org`;
-    assert.strictEqual(F.connectorFields('mcp__example_post__send', { to: [address] }).to[0].length, F.MAX_ADDRESS);
+    assert.strictEqual(F.connectorFields('mcp__example_post__send', { to: [address] }).to[0].address.length, F.MAX_ADDRESS);
   });
 });
 
@@ -142,7 +240,7 @@ describe('a calendar event is read by generic field names', () => {
     assert.strictEqual(f.kind, 'event');
     assert.strictEqual(f.action, 'create');
     assert.strictEqual(f.title, 'Launch review');
-    assert.deepStrictEqual(f.attendees, ['sam@example.org', 'Priya <priya@example.com>']);
+    assert.deepStrictEqual(texts(f.attendees), ['sam@example.org', 'Priya <priya@example.com>']);
     assert.strictEqual(F.formatWhen(f.start, { timeZone: 'UTC' }), 'Tue 3 Nov 2026, 14:00');
     assert.strictEqual(F.formatWhen(f.start, { timeZone: 'America/New_York' }), 'Tue 3 Nov 2026, 09:00',
       'an instant is shown in the viewer\'s own time');
@@ -160,7 +258,7 @@ describe('a calendar event is read by generic field names', () => {
     assert.strictEqual(F.formatWhen(f.start), 'Tue 3 Nov 2026, 09:30 (Europe/Paris)',
       'a time written without an offset is shown as written, with the zone it names');
     assert.strictEqual(F.durationText(f.start, f.end), '1 hr 30 min');
-    assert.deepStrictEqual(f.attendees, ['jo@example.net']);
+    assert.deepStrictEqual(texts(f.attendees), ['jo@example.net']);
   });
 
   test('flat names: a title, start_time and end_time with offsets, guests as a string', () => {
@@ -170,7 +268,7 @@ describe('a calendar event is read by generic field names', () => {
     });
     assert.strictEqual(F.formatWhen(f.start, { timeZone: 'UTC' }), 'Tue 3 Nov 2026, 13:00');
     assert.strictEqual(F.durationText(f.start, f.end), '2 hr');
-    assert.deepStrictEqual(f.attendees, ['sam@example.org', 'jo@example.net']);
+    assert.deepStrictEqual(texts(f.attendees), ['sam@example.org', 'jo@example.net']);
   });
 
   test('an all-day event, as a date object or a date string', () => {

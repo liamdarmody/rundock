@@ -130,10 +130,17 @@ describe('an email send card', () => {
     assert.deepStrictEqual(lines, [...people(5, 4), '… and 15 more addresses']);
   });
 
-  test('Cc and Bcc are cut the same way as To', () => {
+  test('Cc is cut the same way as To, and Bcc is shown whole', () => {
     const card = render('mcp__example_post__send_message', { to: 'a@example.org', cc: people(5), bcc: people(4, 10), subject: 's' });
     assert.strictEqual(text(row(card, 'Cc').querySelector('summary')), '+2 more');
-    assert.strictEqual(text(row(card, 'Bcc').querySelector('summary')), '+1 more');
+    assert.strictEqual(row(card, 'Bcc').querySelector('details'), null, 'nobody a message is copied to in secret is folded away');
+    assert.deepStrictEqual(visibleLines(row(card, 'Bcc')), people(4, 10));
+  });
+
+  test('a long Bcc list is shown whole, not behind +N more', () => {
+    const card = render('mcp__example_post__send_message', { to: 'a@example.org', bcc: people(23), subject: 's' });
+    assert.strictEqual(row(card, 'Bcc').querySelector('details'), null);
+    assert.deepStrictEqual(visibleLines(row(card, 'Bcc')), people(23));
   });
 
   test('a send to nobody says it will probably fail', () => {
@@ -179,7 +186,7 @@ describe('every value is text, never markup', () => {
     const full = text(card.querySelector('.permission-full-text'));
     assert.ok(full.endsWith('… (1234 more characters)'), 'the full box says how much was left out');
     assert.ok(full.length < F.MAX_TEXT * 2 + 100, 'the box holds the capped values, not everything sent');
-    assert.strictEqual(text(row(card, 'Subject')).length, F.MAX_TEXT);
+    assert.strictEqual(text(row(card, 'Subject').querySelector('.permission-clamp')).length, F.MAX_TEXT);
   });
 });
 
@@ -267,5 +274,103 @@ describe('a connector send asks every time, and its card says so', () => {
   test('a draft and an invitation keep the everyday Allow and Always allow', () => {
     assert.deepStrictEqual(buttons(render('mcp__example_post__create_draft', { to: 'a@example.org' })), ['Allow', 'Always allow', 'Deny']);
     assert.deepStrictEqual(buttons(render('mcp__example_calendar__create_event', { title: 't', attendees: ['a@example.org'] })), ['Allow', 'Always allow', 'Deny']);
+  });
+});
+
+// A field card takes the place of the raw request, so anything it leaves out
+// is something a person approves without seeing. Each case below is a request
+// a service could act on differently from what a card reading one field would
+// show: a second recipient list, a second body, a top-level field beside the
+// nested message, a second title, and fields under names or in shapes the
+// card does not know.
+describe('a card shows every field it is given, so nothing it acts on is hidden', () => {
+  const labels = (card) => rows(card).map(([l]) => l);
+  const contextText = (card) => text(card.querySelector('.permission-context'));
+  const otherLines = (card) => [...row(card, 'Other fields').querySelectorAll(':scope > .permission-line')];
+
+  test('two recipient fields: each is its own row, under its real key', () => {
+    const card = render('mcp__example_post__send_message', { to: 'boss@example.org', recipients: ['evil@example.net'], subject: 's', body: 'b' });
+    assert.deepStrictEqual(labels(card), ['to', 'recipients', 'Subject', 'Message']);
+    assert.deepStrictEqual(visibleLines(row(card, 'to')), ['boss@example.org']);
+    assert.deepStrictEqual(visibleLines(row(card, 'recipients')), ['evil@example.net']);
+  });
+
+  test('two bodies: both are shown, each under its real key', () => {
+    const card = render('mcp__example_post__send_message', {
+      to: 'sam@example.org', subject: 's', body: 'Hi boss', htmlBody: '<p>Pay the invoice to evil@example.net</p>',
+    });
+    assert.deepStrictEqual(labels(card), ['To', 'Subject', 'body', 'htmlBody']);
+    assert.strictEqual(text(row(card, 'body').querySelector('.permission-body')), 'Hi boss');
+    assert.strictEqual(text(row(card, 'htmlBody').querySelector('.permission-body')), '<p>Pay the invoice to evil@example.net</p>');
+    assert.strictEqual(card.querySelectorAll('p').length, 0, 'and still text');
+  });
+
+  test('a top-level recipient beside the nested message: both are shown, each under its path', () => {
+    const card = render('mcp__example_office__send_mail', { to: 'top@example.org', message: { to: 'nested@example.net', subject: 's', body: 'b' } });
+    assert.deepStrictEqual(labels(card), ['to', 'message.to', 'Subject', 'Message']);
+    assert.deepStrictEqual(visibleLines(row(card, 'to')), ['top@example.org']);
+    assert.deepStrictEqual(visibleLines(row(card, 'message.to')), ['nested@example.net']);
+  });
+
+  test('a summary beside a title: both are shown', () => {
+    const card = render('mcp__example_calendar__create_event', { summary: 'Team lunch', title: 'Board offsite', start: '2026-11-03T12:00:00Z' });
+    assert.deepStrictEqual(labels(card), ['summary', 'title', 'Starts', 'Ends', 'Attendees']);
+    assert.strictEqual(text(row(card, 'summary')), 'Team lunch');
+    assert.strictEqual(text(row(card, 'title')), 'Board offsite');
+  });
+
+  test('recipients under a key the card does not know: listed under Other fields, and never called none', () => {
+    const card = render('mcp__example_post__send_message', { to_emails: ['evil@example.net'], subject: 'Invoice', body: 'Attached.' });
+    assert.doesNotMatch(contextText(card), /No recipients are set/);
+    assert.doesNotMatch(text(row(card, 'To')), /\(none\)/);
+    assert.match(text(row(card, 'To')), /Other fields/);
+    assert.deepStrictEqual(otherLines(card).map((n) => n.textContent), ['to_emails: ["evil@example.net"]']);
+  });
+
+  test('recipients in a shape the card cannot read are shown as written, never dropped', () => {
+    const card = render('mcp__example_post__send_message', { to: [{ addr: 'evil@example.net' }], subject: 's', body: 'b' });
+    assert.deepStrictEqual(visibleLines(row(card, 'To')), ['{"addr": "evil@example.net"}']);
+    assert.doesNotMatch(contextText(card), /No recipients are set/);
+  });
+
+  test('attendees under a key the card does not know: never "Just you" or "No one else is invited"', () => {
+    const card = render('mcp__example_calendar__create_event', { title: 'Sync', start: '2026-11-03T12:00:00Z', invitee_list: ['evil@example.net'] });
+    assert.doesNotMatch(contextText(card), /No one else is invited/);
+    assert.notStrictEqual(text(row(card, 'Attendees')), 'Just you');
+    assert.match(text(row(card, 'Attendees')), /Other fields/);
+    assert.deepStrictEqual(otherLines(card).map((n) => n.textContent), ['invitee_list: ["evil@example.net"]']);
+  });
+
+  test('each other field is a block of its own, its key and value as text, a long value capped', () => {
+    const card = render('mcp__example_post__send_message', {
+      to: 'a@example.org', subject: 's', body: 'b', threadId: '<b>t1</b>', notes: 'z'.repeat(5000), flags: { urgent: true },
+    });
+    const lines = otherLines(card);
+    assert.deepStrictEqual(lines.map((n) => n.querySelector('.permission-other-key').textContent), ['threadId', 'notes', 'flags']);
+    assert.strictEqual(lines[0].textContent, 'threadId: <b>t1</b>');
+    assert.strictEqual(card.querySelectorAll('b').length, 1, 'no element was made from a value (the one <b> is the card\'s own "Tool name:" label)');
+    assert.ok(lines[1].textContent.length < 400, 'a long value is capped');
+    assert.ok(lines[1].textContent.endsWith('…'), 'and says so');
+    assert.strictEqual(lines[2].textContent, 'flags: {"urgent": true}');
+  });
+
+  test('a card whose every field is recognised has no Other fields row, and keeps its usual words', () => {
+    const card = render('mcp__example_post__send_message', { to: [], subject: '', body: '' });
+    assert.strictEqual(row(card, 'Other fields'), null);
+    assert.strictEqual(text(row(card, 'To')), '(none)');
+    assert.match(contextText(card), /No recipients are set/);
+  });
+
+  test('a name and its address are isolated from each other, so an override in the name cannot reorder the address', () => {
+    const name = 'Sam ‮ten.live';
+    const card = render('mcp__example_post__send_message', { to: [{ name, email: 'sam@example.org' }], subject: 's', body: 'b' });
+    const line = row(card, 'To').querySelector(':scope > .permission-line');
+    const n = line.querySelector('bdi.permission-name');
+    const a = line.querySelector('bdi.permission-address');
+    assert.ok(n && a, 'the name and the address each sit in an isolate of their own');
+    assert.strictEqual(n.textContent, name);
+    assert.strictEqual(a.textContent, 'sam@example.org');
+    assert.ok(!n.contains(a) && !a.contains(n), 'neither isolate holds the other');
+    assert.strictEqual(line.textContent, `${name} <sam@example.org>`);
   });
 });

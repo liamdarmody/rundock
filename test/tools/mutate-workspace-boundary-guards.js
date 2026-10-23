@@ -1921,6 +1921,45 @@ const MUTATIONS = [
   [CONNECTOR_CARD_GRADE, 'Connector card: a send offers Always allow',
     "      if (words.some(w => MCP_SEND_VERBS.indexOf(w) !== -1)) return 'high';\n",
     ''],
+  // The card takes the place of the raw request, so a field it does not show
+  // is one a person approves blind. Keep only the first alias and a second
+  // recipient list, a second body or a second title is never shown.
+  [CONNECTOR_CARD_MODEL, 'Connector card: an alias is dropped',
+    '    return found;\n',
+    '    return found.slice(0, 1);\n'],
+  // Read a top-level field only when there is no nested message, and a `to`
+  // beside `message.to` goes where the card never mentions.
+  [CONNECTOR_CARD_MODEL, 'Connector card: a nested message hides the fields around it',
+    "    const sources = [{ obj: input, prefix: '', skip: new Set(nested) }, ...nested.map(",
+    "    const sources = [...(nested.length ? [] : [{ obj: input, prefix: '', skip: new Set() }]), ...nested.map("],
+  // Drop an entry the card cannot read and its recipient is approved unseen.
+  [CONNECTOR_CARD_MODEL, 'Connector card: an entry the card cannot read is dropped',
+    '    return { raw: rawText(v) };\n  }\n  function recipientsOf',
+    '    return null;\n  }\n  function recipientsOf'],
+  // Unread keys: never collected, or collected and never drawn.
+  [CONNECTOR_CARD_MODEL, 'Connector card: unshown keys are not collected',
+    '        if (s.skip.has(k) || names.has(norm(k)) || s.obj[k] === undefined) continue;',
+    '        continue;'],
+  [CONNECTOR_CARD_VIEW, 'Connector card: unshown keys are hidden',
+    "  if (unread) row('Other fields', otherFields());",
+    "  if (false) row('Other fields', otherFields());"],
+  // While keys went unread, "(none)", "Just you", "No one else is invited" and
+  // "No recipients are set" may all be untrue.
+  [CONNECTOR_CARD_VIEW, 'Connector card: an empty field says none while fields went unread',
+    "unread ? 'Not recognised: see Other fields' : text",
+    'text'],
+  [CONNECTOR_CARD_MODEL, 'Connector card: the card says nobody is reached while fields went unread',
+    '    const unread = f.others.length > 0 || f.othersMore > 0;',
+    '    const unread = false;'],
+  // One isolate for the name and the address, and an override in the name
+  // reorders the address beside it.
+  [CONNECTOR_CARD_VIEW, 'Connector card: a name and its address share one isolate',
+    "    else if (e.name) n.append(el('bdi', 'permission-name', e.name), ' <', el('bdi', 'permission-address', e.address), '>');",
+    "    else if (e.name) n.append(el('bdi', 'permission-name', `${e.name} <${e.address}>`));"],
+  // Fold Bcc and the people a message is copied to in secret are out of sight.
+  [CONNECTOR_CARD_VIEW, 'Connector card: Bcc is folded behind +N more',
+    "    field('bcc', 'Bcc', (list) => everyone(list, '(none)'));",
+    "    field('bcc', 'Bcc', (list) => people(list, '(none)'));"],
   // ===== RECONNECTING CLAUDE CODE IS FOR RUNDOCK'S OWN WINDOW =====
   // Open the reconnect routes and any process on this machine can open a
   // console here, or spend a turn checking, with no key at all.

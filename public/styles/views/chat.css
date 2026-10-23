@@ -166,7 +166,7 @@ body.light .permission-detail { background: var(--elevated); }
    themes (test/unit/permission-card-contrast.test.js). */
 .permission-fields { margin: 0 0 0 var(--permission-text-column); background: var(--base); border-radius: var(--radius-md); padding: 10px 12px; display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 6px 12px; font-size: 13px; line-height: 1.45; }
 body.light .permission-fields { background: var(--elevated); }
-.permission-fields dt { color: var(--text-2-strong); font-size: var(--caption); font-weight: 500; padding-top: 1px; }
+.permission-fields dt { color: var(--text-2-strong); font-size: var(--caption); font-weight: 500; padding-top: 1px; overflow-wrap: anywhere; }
 .permission-fields dd { margin: 0; color: var(--text-1); min-width: 0; overflow-wrap: anywhere; }
 .permission-line { display: block; }
 .permission-cut, .permission-empty { color: var(--text-2-strong); }
@@ -176,6 +176,8 @@ body.light .permission-fields { background: var(--elevated); }
 .permission-fields summary::-webkit-details-marker { display: none; }
 .permission-full-text { white-space: pre-wrap; max-height: 150px; overflow: auto; margin-top: 6px; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); }
 .permission-full-subject { font-weight: 600; margin-bottom: 6px; }
+.permission-full > .permission-full-subject { margin: 6px 0 0; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow-wrap: anywhere; }
+.permission-other-key { color: var(--text-2-strong); }
 .permission-raw { margin-left: var(--permission-text-column); font-family: var(--font-mono); font-size: var(--label); color: var(--text-2-strong); word-break: break-all; }
 .permission-raw b { font-family: 'Inter', system-ui, -apple-system, sans-serif; font-weight: 500; }
 /* Indented to 24px so the buttons share the text column with the header text,
