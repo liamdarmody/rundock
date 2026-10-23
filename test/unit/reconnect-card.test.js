@@ -183,16 +183,39 @@ describe('when the window cannot be opened', () => {
     }
   });
 
-  test('no console on this platform: the steps to run, as plain words', async () => {
+  test('no console on this platform: one step, Claude Code\'s own login command, as plain words', async () => {
+    // `claude auth login` goes straight to the browser; a bare `claude` with
+    // a refused session can start ready to chat and log nobody in.
     answers.reconnect = { ok: false, reason: 'unsupported' };
     const card = draw();
     await press(card, 'Reconnect Claude');
     assert.strictEqual(title(card), 'Claude needs reconnecting');
+    assert.match(card.querySelector('.auth-error-body').textContent, /your conversations are safe\. To reconnect:$/);
     const steps = [...card.querySelectorAll('.auth-error-steps li')].map((li) => li.textContent);
-    assert.strictEqual(steps.length, 3);
-    assert.match(steps[0], /Open a terminal\./);
-    assert.strictEqual(card.querySelector('.auth-error-steps code').textContent, 'claude');
-    assert.match(steps[2], /log out and log back in/);
+    assert.strictEqual(steps.length, 1);
+    assert.match(steps[0], /^Open a terminal and run claude auth login\b/);
+    assert.strictEqual(card.querySelector('.auth-error-steps code').textContent, 'claude auth login');
+    assert.match(card.querySelector('.auth-error-foot').textContent, /^Then resend your message\. Full steps and details/);
     neverSaysSignIn(card);
+  });
+
+  test('its copy button copies exactly the command it shows', async () => {
+    answers.reconnect = { ok: false, reason: 'unsupported' };
+    const card = draw();
+    await press(card, 'Reconnect Claude');
+    const copy = card.querySelector('.auth-error-steps .auth-error-copy');
+    assert.strictEqual(copy.getAttribute('onclick'), 'copyAuthCmd(this)');
+    const copied = [];
+    const had = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+    Object.defineProperty(globalThis, 'navigator', { configurable: true, writable: true, value: { clipboard: { writeText: async (t) => { copied.push(t); } } } });
+    try {
+      chat.copyAuthCmd(copy);
+      await settle();
+    } finally {
+      if (had) Object.defineProperty(globalThis, 'navigator', had); else delete globalThis.navigator;
+    }
+    assert.deepStrictEqual(copied, [card.querySelector('.auth-error-steps code').textContent]);
+    assert.deepStrictEqual(copied, ['claude auth login']);
+    assert.strictEqual(copy.textContent, 'copied');
   });
 });

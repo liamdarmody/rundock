@@ -125,7 +125,9 @@ test('when the console cannot be opened the wizard says why, from the reason the
   // The opener answers { ok: false, reason }, the same answer the chat's
   // reconnect card reads, never an `error` string.
   const html = fs.readFileSync(WIZARD_HTML, 'utf8');
-  for (const [reason, said] of [['not-found', /Claude Code was not found/], ['unsupported', /no terminal/i], ['failed', /Something stopped it opening/]]) {
+  // Unsupported is a path or a system Rundock cannot open a window for, so
+  // it says what to do by hand, plainly, and never "sign in".
+  for (const [reason, said] of [['not-found', /Claude Code was not found/], ['unsupported', /^Rundock couldn't open a window here\. Open a terminal and run: claude$/], ['failed', /Something stopped it opening/]]) {
     const dom = new JSDOM(html, {
       runScripts: 'dangerously',
       beforeParse(window) {
@@ -143,6 +145,7 @@ test('when the console cannot be opened the wizard says why, from the reason the
     const hint = dom.window.document.getElementById('auth-hint').textContent;
     assert.match(hint, said, `${reason}: ${hint}`);
     assert.doesNotMatch(hint, /undefined/);
+    if (reason === 'unsupported') assert.doesNotMatch(hint, /sign(?:ed|ing)?[\s-]*in\b/i);
     dom.window.close();
   }
 });

@@ -329,6 +329,9 @@ const authWaiting = (body, busy) => authTitle('Waiting for Claude', true) + auth
   authButton('Open the window again', 'open', true));
 const AUTH_WAIT_COPY = "A window has opened running Claude Code. Finish there, then come back and press I've reconnected.";
 const AUTH_NOT_OPENED = authTitle('Rundock could not open the window');
+// What the manual steps show and their copy button copies: one string, so the
+// two cannot differ.
+const AUTH_LOGIN_CMD = 'claude auth login';
 const AUTH_CARD = {
   ready: ['', authTitle('Claude needs reconnecting')
     + authBody('Rundock lost its connection to Claude Code. Your conversations are safe. Reconnect, then resend your message.')
@@ -345,12 +348,12 @@ const AUTH_CARD = {
     + authActions(authButton('Try again', 'open', true)) + AUTH_TROUBLE],
   failed: ['auth-bad', AUTH_NOT_OPENED + authBody('Something stopped it opening. Try again, or follow the troubleshooting steps.')
     + authActions(authButton('Try again', 'open', true)) + AUTH_TROUBLE],
-  // Where no console can be opened: the steps to run, as they always were.
+  // Where no console can be opened: the one step to run, Claude Code's own
+  // login command (AUTH_LOGIN_CMD), the one the console runs. A bare `claude`
+  // with a refused session can start ready to chat and log nobody in.
   manual: ['', authTitle('Claude needs reconnecting')
     + authBody('Rundock lost its connection to Claude Code. This is a Claude Code session, not a Rundock fault, and your conversations are safe. To reconnect:')
-    + '<ol class="auth-error-steps"><li>Open a terminal.</li>'
-    + '<li>Run <code>claude</code> <button class="auth-error-copy" onclick="copyAuthCmd(this)" title="Copy command">copy</button></li>'
-    + '<li>If it shows you are already logged in, log out and log back in.</li></ol>'
+    + `<ol class="auth-error-steps"><li>Open a terminal and run <code>${AUTH_LOGIN_CMD}</code> <button class="auth-error-copy" onclick="copyAuthCmd(this)" title="Copy command">copy</button></li></ol>`
     + `<div class="auth-error-foot">Then resend your message. ${AUTH_DOCS}Full steps and details &#x2192;</a></div>`],
 };
 function drawAuthCard(el, state) {
@@ -388,7 +391,7 @@ function renderAuthErrorCard(convoId) {
 }
 function copyAuthCmd(btn) {
   const done = () => { const t = btn.textContent; btn.textContent = 'copied'; setTimeout(() => { btn.textContent = t; }, 2000); };
-  if (navigator.clipboard?.writeText) { navigator.clipboard.writeText('claude').then(done).catch(() => {}); }
+  if (navigator.clipboard?.writeText) { navigator.clipboard.writeText(AUTH_LOGIN_CMD).then(done).catch(() => {}); }
 }
 
 function agentDisplayName(agentId) {

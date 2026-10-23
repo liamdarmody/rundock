@@ -373,15 +373,18 @@
         btn.textContent = 'Sign in to Claude';
         const hint = document.getElementById('auth-hint');
         // The opener answers with a reason (lib/runtime/claude-console.js),
-        // the same one the chat's reconnect card reads.
+        // the same one the chat's reconnect card reads. Unsupported is a
+        // system, or a path to Claude Code, Rundock cannot open a window for:
+        // trying again cannot help, so it says what to run by hand.
         const why = {
           'not-found': 'Claude Code was not found.',
-          unsupported: 'there is no terminal Rundock can open on this system.',
           failed: 'Something stopped it opening.',
         }[res && res.reason];
-        if (hint) hint.textContent = why
-          ? ('Could not start sign-in: ' + why)
-          : 'Could not start sign-in. Please try again.';
+        if (hint) hint.textContent = (res && res.reason === 'unsupported')
+          ? "Rundock couldn't open a window here. Open a terminal and run: claude"
+          : why
+            ? ('Could not start sign-in: ' + why)
+            : 'Could not start sign-in. Please try again.';
       }
     }
 
