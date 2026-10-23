@@ -13,6 +13,12 @@
 // server to open a console; that one request is answered here, so no window
 // opens on the machine running the suite. "I've reconnected" then runs the real
 // check through the real server, against the stub, which answers connected.
+//
+// THAT TURN IS SENT IN A CONVERSATION OF ITS OWN, deleted afterwards, never in
+// a seeded one. The specs share one server and one seeded workspace, and a
+// turn gives its conversation a transcript, which from then on decides what
+// that conversation's history shows. Sent in the seeded "Board prep planning"
+// conversation, it hid the eighty messages search.spec.js opens and flashes.
 const { test, expect } = require('@playwright/test');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -103,10 +109,14 @@ test('an expired session draws the reconnect card, and reconnecting needs no ter
   fs.writeFileSync(scenario, JSON.stringify({
     rules: [{ match: { promptIncludes: PROMPT }, isError: true, turn: [{ text: 'authentication_error: OAuth token has expired' }] }],
   }));
+  let convoId = null;
   try {
     const opened = [];
     await page.route('**/api/claude/reconnect', (route) => { opened.push(route.request().method()); return route.fulfill({ json: { ok: true } }); });
-    await openC1(page);
+    await page.goto('/');
+    await expect(page.locator('.convo-item').first()).toBeVisible();
+    convoId = await page.evaluate(() => createConversation('default', 'Reconnect card e2e').id);
+    await expect(page.locator('#view-chat')).toBeVisible();
     await page.locator('#msg-input').fill(PROMPT);
     await page.locator('#send-btn').click();
 
@@ -126,5 +136,7 @@ test('an expired session draws the reconnect card, and reconnecting needs no ter
     await expect(card).not.toContainText(/sign[\s-]*in/i);
   } finally {
     fs.rmSync(scenario, { force: true });
+    // Leave the shared workspace as the next spec expects it.
+    if (convoId) await page.evaluate((id) => deleteConversation(id, { stopPropagation() {} }), convoId).catch(() => {});
   }
 });
