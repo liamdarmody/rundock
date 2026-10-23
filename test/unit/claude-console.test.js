@@ -221,20 +221,41 @@ describe('what each console runs, as opened', () => {
     assert.deepStrictEqual(await C.openClaudeConsole({ bin: BIN, version, platform: 'darwin', spawn: f.spawn, purpose: 'reconnect', home, gate: C.consoleGate() }), { ok: false, reason: 'failed' });
     assert.strictEqual(f.calls.length, 0);
   });
-  test('a path holding a line break or NUL is refused on every platform: nothing is written or opened', async () => {
+  test('a path holding a line break or NUL opens nothing on any platform: the steps to run instead', async () => {
     // It would end the line it is written into, the script's or cmd's, and
-    // start another.
+    // start another. Unsupported rather than failed: trying again cannot work,
+    // so the card shows the step to run by hand.
     const env = terminalOnPath();
     for (const bad of ['/opt/example/cla\nude', '/opt/example/cla\rude', '/opt/example/cla\0ude']) {
       for (const platform of ['darwin', 'win32', 'linux']) {
         const home = madeUpHome();
         const f = fakeSpawn('spawn');
-        assert.deepStrictEqual(await C.openClaudeConsole({ bin: bad, platform, env, spawn: f.spawn, purpose: 'reconnect', home, gate: C.consoleGate() }),
-          { ok: false, reason: 'failed' }, `${platform} ${JSON.stringify(bad)}`);
+        assert.deepStrictEqual(await C.openClaudeConsole({ bin: bad, version, platform, env, spawn: f.spawn, purpose: 'reconnect', home, gate: C.consoleGate() }),
+          { ok: false, reason: 'unsupported' }, `${platform} ${JSON.stringify(bad)}`);
         assert.strictEqual(f.calls.length, 0);
         assert.deepStrictEqual(fs.readdirSync(home), []);
       }
     }
+  });
+  test('Windows: a path holding &, ^ or % opens nothing, for either console: the steps to run instead', async () => {
+    // The doubled quotes leave the path outside the outer cmd's quotes, where
+    // & ends the command, ^ escapes and % expands: a profile such as
+    // C:\Users\R&D would split the command in two.
+    for (const bad of ['C:\\Users\\R&D\\.local\\bin\\claude.exe', 'C:\\Users\\a^b\\claude.exe', 'C:\\Users\\100%\\claude.exe', 'C:\\x\\%PATH%\\claude.exe']) {
+      for (const purpose of ['reconnect', 'signin']) {
+        assert.strictEqual(C.consoleCommand(bad, 'win32', {}, { purpose, version }), null, `${purpose} ${bad}`);
+      }
+    }
+    const f = fakeSpawn('spawn');
+    assert.deepStrictEqual(await C.openClaudeConsole({ bin: '/opt/R&D/claude', version, platform: 'win32', spawn: f.spawn, purpose: 'reconnect', gate: C.consoleGate() }), { ok: false, reason: 'unsupported' });
+    assert.deepStrictEqual(await C.openClaudeConsole({ bin: '/opt/R&D/claude', version, platform: 'win32', spawn: f.spawn, gate: C.consoleGate() }), { ok: false, reason: 'unsupported' });
+    assert.strictEqual(f.calls.length, 0);
+  });
+  test('elsewhere those characters are only part of the path: Linux hands it over as one word, and the macOS script quotes it', () => {
+    const odd = '/opt/R&D 100%/^/claude';
+    assert.deepStrictEqual(C.consoleCommand(odd, 'linux', { DISPLAY: ':0' }, { found: () => true, purpose: 'reconnect', version }).args, ['-e', odd, 'auth', 'login']);
+    assert.strictEqual(C.consoleCommand(odd, 'darwin', {}, { purpose: 'reconnect', version, home: '/home/example' }).script.content,
+      "#!/bin/sh\nexec '/opt/R&D 100%/^/claude' auth login\n");
   });
 });
 

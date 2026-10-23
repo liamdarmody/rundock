@@ -2219,8 +2219,21 @@ const MUTATIONS = [
     'String(execSync('],
   // A path that ends its line starts a command of its own on the next.
   [CLAUDE_CONSOLE, 'Reconnect: a line break or NUL in the Claude Code path is written onto the command line',
-    "  if (/[\\0\\r\\n]/.test(found)) return Promise.resolve({ ok: false, reason: 'failed' });\n",
+    "  if (/[\\0\\r\\n]/.test(found)) return Promise.resolve({ ok: false, reason: 'unsupported' });\n",
     ''],
+  // A path no console can take is never going to open: "Try again" cannot
+  // work, so the card must show the step to run by hand.
+  [CLAUDE_CONSOLE, 'Reconnect: a path no console can take offers Try again instead of the steps',
+    "/.test(found)) return Promise.resolve({ ok: false, reason: 'unsupported' });",
+    "/.test(found)) return Promise.resolve({ ok: false, reason: 'failed' });"],
+  // Outside the outer cmd's quotes, & ends the command, ^ escapes and %
+  // expands: C:\Users\R&D splits the command in two.
+  [CLAUDE_CONSOLE, 'Reconnect: a Windows path holding &, ^ or % is put on cmd\'s line',
+    '    if (/[&^%]/.test(bin)) return null;\n',
+    ''],
+  [CONSOLE_WIZARD, 'Reconnect: the wizard says sign-in could not start where no window can open',
+    "res && res.reason === 'unsupported'",
+    'false'],
   [CLAUDE_CONSOLE, 'Reconnect: a quote in the Claude Code path ends the macOS script\'s quoting',
     ".split(\"'\").join(\"'\\\\''\")",
     ''],
