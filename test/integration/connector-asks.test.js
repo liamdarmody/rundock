@@ -54,6 +54,19 @@ describe('an agent\'s connector change asks first', () => {
     assert.deepStrictEqual(servers()['local-tools'], STDIO, 'written once allowed');
   });
 
+  test('a second connector is merged in, and the first is kept', async () => {
+    // Getting this wrong drops every server somebody already had.
+    let since = client.messages.length;
+    client.send({ type: 'save_connector', name: 'calendar', content: '{"url":"https://mcp.example.com/mcp"}' });
+    const card = await client.waitFor(isConnectorCard('SaveConnector'), { since, label: 'second connector card' });
+    assert.match(card.msg.request_id, /^perm-[0-9a-f]{32}$/, 'the card\'s id is random, not guessable from the clock');
+    since = client.messages.length;
+    answer(card.msg, true);
+    await client.waitFor(m => m.type === 'connector_saved', { since, label: 'second connector saved' });
+    assert.deepStrictEqual(servers()['local-tools'], STDIO, 'the first is still there');
+    assert.deepStrictEqual(servers().calendar, { url: 'https://mcp.example.com/mcp' }, 'beside the second');
+  });
+
   test('Deny writes nothing, and nor does a card nobody answers', async () => {
     let since = client.messages.length;
     client.send({ type: 'save_connector', name: 'denied', content: JSON.stringify(STDIO) });

@@ -2588,7 +2588,8 @@ function getRuntimeStatus() {
 // asked. Only those fields pass.
 const SERVER_REQUEST_FIELDS = ['code_mode_verdict', 'boundary', 'resolved_path', 'grant_dir', 'crossings', 'answer_file', 'put_back'];
 function requestServerPermission({ convoId, toolName, toolInput, onDecision, grading }) {
-  const requestId = 'perm-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  // An id nothing can guess: an answer is matched to its card by this alone.
+  const requestId = 'perm-' + require('crypto').randomBytes(16).toString('hex');
   pendingPermissionRequests.set(requestId, {
     onDecision,
     conversationId: convoId,
