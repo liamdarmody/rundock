@@ -372,8 +372,15 @@
         btn.disabled = false;
         btn.textContent = 'Sign in to Claude';
         const hint = document.getElementById('auth-hint');
-        if (hint) hint.textContent = (res && res.error)
-          ? ('Could not start sign-in: ' + res.error)
+        // The opener answers with a reason (lib/runtime/claude-console.js),
+        // the same one the chat's reconnect card reads.
+        const why = {
+          'not-found': 'Claude Code was not found.',
+          unsupported: 'there is no terminal Rundock can open on this system.',
+          failed: 'Something stopped it opening.',
+        }[res && res.reason];
+        if (hint) hint.textContent = why
+          ? ('Could not start sign-in: ' + why)
           : 'Could not start sign-in. Please try again.';
       }
     }

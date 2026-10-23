@@ -17,6 +17,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   signInCodex: () => ipcRenderer.invoke('wizard-signin-codex'),
   wizardDone: () => ipcRenderer.invoke('wizard-done'),
 
+  // The chat's reconnect card: opens a console running Claude Code, the same
+  // one the wizard's button opens. Resolves { ok, reason? }.
+  reconnectClaude: () => ipcRenderer.invoke('claude-reconnect'),
+
   // Listen for update notifications from main process
   onUpdate: (callback) => {
     ipcRenderer.on('rundock-update', (event, data) => callback(data));

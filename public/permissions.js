@@ -131,6 +131,18 @@
       .filter(Boolean);
   }
 
+  // A connector action that sends, replies or forwards: the card that always
+  // asks, drawn with "Allow once" and Deny (chat.js renderPermissionCard).
+  function isConnectorSend(toolName) {
+    return String(toolName).startsWith('mcp__') && mcpActionWords(toolName).some(w => MCP_SEND_VERBS.indexOf(w) !== -1);
+  }
+
+  // The connector's name as a card says it: `mcp__example_mail__send` is
+  // "example mail". Shared by the summary line and the field cards.
+  function connectorServerName(toolName) {
+    return (String(toolName).split('__')[1] || 'connector').replace(/^claude_ai_/, '').replace(/_/g, ' ').trim();
+  }
+
   // Classify risk level of a tool request.
   function classifyRisk(toolName, input) {
     if (toolName === 'Bash') return classifyBashRisk((input.command || '').trim());
@@ -231,7 +243,7 @@
       ({ summary, context, detail } = connectorCopy(toolName, input));
     } else if (toolName.startsWith('mcp__')) {
       const parts = toolName.split('__');
-      const server = (parts[1] || 'connector').replace(/^claude_ai_/, '').replace(/_/g, ' ').trim();
+      const server = connectorServerName(toolName);
       const action = parts.slice(2).join('_').replace(/^api[_\-\s]+/i, '').replace(/[_\-]+/g, ' ').trim();
       summary = action ? `${server}: ${action}` : `Use ${server}`;
       detail = toolName;
@@ -813,7 +825,7 @@
   const agentHomeBoundaryCopy = alwaysAskCopy;
 
   return { BASH_DESCRIPTIONS, bashBin, classifyRisk, describeToolRequest, toolAllowKey, decidePermission, offersAlwaysAllow, alwaysAskCopy, answerFileCopy, answerFileSummary, answerFileKind,
-    MCP_SEND_VERBS, MCP_DESTRUCTIVE_VERBS,
+    MCP_SEND_VERBS, MCP_DESTRUCTIVE_VERBS, mcpActionWords, connectorServerName, isConnectorSend,
     putBackCardCopy, putBackDiffLines,
     verdictAllowKey, verdictCardCopy, ruleKeyLabel, ALWAYS_ASKS_CLOSING, allowButtonClass,
     routePermissionRequest, queuePendingPermission, pendingPermissionsFor, removePendingPermission, clearPendingPermissions,

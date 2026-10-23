@@ -81,7 +81,10 @@ const DEPENDENCY_KEYS = ['dependencies', 'devDependencies', 'optionalDependencie
 // shard is planned at ten minutes, so a slice whose rows run slower than its
 // harness's average still lands well under fifteen.
 const SECONDS_PER_SHARD = 600;
-const MAX_SHARDS = 10;
+// Raised from ten when the full set, planned at its measured costs, put a
+// capped shard past fifteen minutes: the cap holds the shard count, so more
+// rows than it fits stretch every shard instead of adding one.
+const MAX_SHARDS = 12;
 const COSTS_FILE = 'mutation-costs.json';
 const FALLBACK_SECONDS_PER_ROW = 5;
 

@@ -309,23 +309,80 @@ function buildDelegationDivider(agentData, opts = {}) {
   return divider;
 }
 
-// Recovery card shown when the Claude Code sign-in expires (401). Replaces the
-// raw error blob with a clear explanation and the steps to reconnect.
+// THE CARD SHOWN WHEN CLAUDE CODE'S SESSION HAS EXPIRED (a 401), with one
+// button that reconnects it. The desktop app opens a console running `claude`
+// through its main process; a browser running from source asks the server to
+// (lib/runtime/claude-console.js). The person types nothing. The card cannot
+// notice by itself when they have finished: the server learns Claude Code is
+// connected only from a turn that works, so the card waits for "I've
+// reconnected" and runs that one check then. Where no console can be opened it
+// shows the steps to run. Every state is fixed copy, and none says "sign in".
+const AUTH_DOCS = '<a href="https://docs.rundock.ai/troubleshooting/authentication" target="_blank" rel="noopener">';
+const authTitle = (t, pulse) => `<div class="auth-error-title">${pulse ? '<span class="auth-pulse" aria-hidden="true"></span>' : ''}${t}</div>`;
+const authBody = (t) => `<div class="auth-error-body">${t}</div>`;
+const authButton = (label, action, ghost) => `<button type="button" class="auth-btn${ghost ? ' auth-btn-ghost' : ''}" data-auth="${action}">${label}</button>`;
+const authActions = (...buttons) => `<div class="auth-actions">${buttons.join('')}</div>`;
+const AUTH_TROUBLE = `<div class="auth-error-foot">${AUTH_DOCS}Troubleshooting</a></div>`;
+const authWaiting = (body, busy) => authTitle('Waiting for Claude', true) + authBody(body) + authActions(
+  busy ? '<button type="button" class="auth-btn" aria-busy="true" disabled><span class="auth-pulse" aria-hidden="true"></span>Checking</button>'
+    : authButton("I've reconnected", 'check'),
+  authButton('Open the window again', 'open', true));
+const AUTH_WAIT_COPY = "A window has opened running Claude Code. Finish there, then come back and press I've reconnected.";
+const AUTH_NOT_OPENED = authTitle('Rundock could not open the window');
+const AUTH_CARD = {
+  ready: ['', authTitle('Claude needs reconnecting')
+    + authBody('Rundock lost its connection to Claude Code. Your conversations are safe. Reconnect, then resend your message.')
+    + authActions(authButton('Reconnect Claude', 'open'))
+    + `<div class="auth-error-foot">A window opens and runs Claude Code for you. You type nothing. ${AUTH_DOCS}Troubleshooting</a></div>`],
+  waiting: ['', authWaiting(AUTH_WAIT_COPY)],
+  checking: ['', authWaiting(AUTH_WAIT_COPY, true)],
+  notyet: ['', authWaiting("Claude Code isn't connected yet. Finish in the window, then press I've reconnected again.")],
+  // A check that failed for a reason other than the sign-in, or got no answer:
+  // it learnt nothing, so the card claims nothing.
+  unchecked: ['', authWaiting("Rundock couldn't check whether Claude Code is connected. Wait a moment, then press I've reconnected again.")],
+  reconnected: ['auth-ok', authTitle('Reconnected') + authBody('Claude Code is connected again. Resend your message to carry on.')],
+  notfound: ['auth-bad', AUTH_NOT_OPENED + authBody('Claude Code was not found on this computer. Check it is installed, then try again.')
+    + authActions(authButton('Try again', 'open', true)) + AUTH_TROUBLE],
+  failed: ['auth-bad', AUTH_NOT_OPENED + authBody('Something stopped it opening. Try again, or follow the troubleshooting steps.')
+    + authActions(authButton('Try again', 'open', true)) + AUTH_TROUBLE],
+  // Where no console can be opened: the steps to run, as they always were.
+  manual: ['', authTitle('Claude needs reconnecting')
+    + authBody('Rundock lost its connection to Claude Code. This is a Claude Code session, not a Rundock fault, and your conversations are safe. To reconnect:')
+    + '<ol class="auth-error-steps"><li>Open a terminal.</li>'
+    + '<li>Run <code>claude</code> <button class="auth-error-copy" onclick="copyAuthCmd(this)" title="Copy command">copy</button></li>'
+    + '<li>If it shows you are already logged in, log out and log back in.</li></ol>'
+    + `<div class="auth-error-foot">Then resend your message. ${AUTH_DOCS}Full steps and details &#x2192;</a></div>`],
+};
+function drawAuthCard(el, state) {
+  const [tone, html] = AUTH_CARD[state];
+  el.className = 'auth-error-card' + (tone ? ` ${tone}` : '');
+  el.innerHTML = html;
+  el.querySelectorAll('[data-auth]').forEach(b => b.addEventListener('click', () => authCardAction(el, b.dataset.auth)));
+}
+// Open the console: through the desktop's main process where there is one,
+// otherwise by asking the server. The answer is { ok, reason } either way.
+function reconnectClaude() {
+  const api = typeof window !== 'undefined' ? window.electronAPI : null;
+  if (api && typeof api.reconnectClaude === 'function') return api.reconnectClaude();
+  return fetch('/api/claude/reconnect', { method: 'POST' }).then(r => (r.ok ? r.json() : { ok: false, reason: 'failed' }));
+}
+async function authCardAction(el, action) {
+  el.querySelectorAll('button').forEach(b => { b.disabled = true; });
+  if (action === 'check') {
+    drawAuthCard(el, 'checking');
+    const r = await fetch('/api/claude/connection', { method: 'POST' }).then(x => (x.ok ? x.json() : null), () => null);
+    drawAuthCard(el, r && r.connected === true ? 'reconnected' : (!r || r.known === false ? 'unchecked' : 'notyet'));
+    return;
+  }
+  const r = await Promise.resolve().then(reconnectClaude).catch(() => null);
+  drawAuthCard(el, r && r.ok ? 'waiting' : ({ 'not-found': 'notfound', unsupported: 'manual' }[r && r.reason] || 'failed'));
+}
 function renderAuthErrorCard(convoId) {
   if (convoId && activeConversation?.id !== convoId) return;
   const m = document.getElementById('messages');
   if (!m) return;
   const d = document.createElement('div');
-  d.className = 'auth-error-card';
-  d.innerHTML =
-    `<div class="auth-error-title">Claude Code sign-in expired</div>` +
-    `<div class="auth-error-body">Rundock lost its connection to Claude Code because your sign-in expired. This is a Claude Code session, not a Rundock fault, and your conversations are safe. To reconnect:</div>` +
-    `<ol class="auth-error-steps">` +
-      `<li>Open a terminal.</li>` +
-      `<li>Run <code>claude</code> <button class="auth-error-copy" onclick="copyAuthCmd(this)" title="Copy command">copy</button></li>` +
-      `<li>If it shows you are already logged in, log out and log back in.</li>` +
-    `</ol>` +
-    `<div class="auth-error-foot">Then resend your message. <a href="https://docs.rundock.ai/troubleshooting/authentication" target="_blank" rel="noopener">Full steps and details &#x2192;</a></div>`;
+  drawAuthCard(d, 'ready');
   m.appendChild(d);
   scrollBottom();
 }
@@ -698,6 +755,197 @@ function nameTheFolderHint() {
 const SANDBOX_RETRY_HINT = 'This one is the operating system refusing a write outside your workspace, '
   + 'because Keep agents inside this workspace is on in Settings under Permissions.';
 
+// The box that opens a clamped value in full, by the kind of value it holds:
+// its label, and the class of the element holding the whole text.
+const FULL_TEXT_BOXES = {
+  subject: ['Show full subject', 'permission-full-subject'],
+  title: ['Show full title', 'permission-full-text'],
+  message: ['Show full message', 'permission-full-text'],
+  destination: ['Show full value', 'permission-full-text'],
+};
+function fullTextBox(kind, text) {
+  const [label, cls] = FULL_TEXT_BOXES[kind];
+  const box = document.createElement('details');
+  box.className = 'permission-full';
+  const summary = document.createElement('summary');
+  summary.textContent = label;
+  const whole = document.createElement('div');
+  whole.className = cls;
+  whole.textContent = text;
+  box.append(summary, whole);
+  return box;
+}
+
+// A VALUE THE BROWSER HAS CUT SHORT CAN ALWAYS BE OPENED. The field box offers
+// the whole text when a value passes the model's thresholds, which hold in a
+// card the width of the thread. A narrower host, such as the approvals dock,
+// clamps shorter values too, and text cut short with nothing to open it is
+// text a person approves unread. So once a card is on the page, and again when
+// a hidden host is shown, any preview whose content overflows its lines gets
+// the same box. A preview under the thresholds holds its whole value, so the
+// box is made from what it holds.
+function revealClampedText(scope) {
+  if (!scope) return;
+  for (const shown of scope.querySelectorAll('.permission-fields [data-full]')) {
+    const dd = shown.parentElement;
+    if (!dd || dd.querySelector(':scope > details.permission-full')) continue;
+    if (!(shown.scrollHeight > shown.clientHeight + 1)) continue;
+    if (!FULL_TEXT_BOXES[shown.dataset.full]) continue;
+    dd.append(fullTextBox(shown.dataset.full, shown.textContent));
+  }
+}
+
+// A HOST THAT IS SHOWN OR RESIZED IS MEASURED AGAIN. A card drawn while the
+// chat is not on screen (the person is in Files or Settings when a send
+// arrives) measures nothing, and a window made narrower can clamp a value that
+// fitted. Both change the size of the host the card was drawn into, so each
+// host is watched, once, and whenever its size changes its cards are measured
+// again. Where the browser has no ResizeObserver, cards are measured only when
+// drawn and when the dock shows itself.
+const watchedCardHosts = new WeakSet();
+let cardHostWatcher = null;
+function watchCardHost(host) {
+  if (!host || watchedCardHosts.has(host) || typeof ResizeObserver !== 'function') return;
+  if (!cardHostWatcher) cardHostWatcher = new ResizeObserver((entries) => { for (const entry of entries) revealClampedText(entry.target); });
+  cardHostWatcher.observe(host);
+  watchedCardHosts.add(host);
+}
+
+// THE FIELDS OF A CONNECTOR REQUEST, built as elements with every value set as
+// text. Each value is an agent's: an address or a subject can carry markup, a
+// right-to-left override or a zero-width character, and none of it may become
+// anything but the characters it is. Each address is its own block, so an
+// override in one cannot run on into the next, and within it the name and the
+// address are isolates of their own, so an override in the name cannot reorder
+// the address. The cut-off rules are the model's (public/connector-fields.js).
+//
+// The box takes the place of the raw request, so it leaves nothing out: a
+// field found under more than one name is a row per name, each labelled with
+// the key it came under, and every key the model read as none of the fields
+// is listed under Other fields.
+function connectorFieldsElement(f, toolName) {
+  const F = RundockConnectorFields;
+  const el = (tag, cls, text) => {
+    const n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text !== undefined) n.textContent = text;
+    return n;
+  };
+  const dl = el('dl', 'permission-fields');
+  // A label can be a key the agent chose, so it is text in an isolate too.
+  const row = (label, parts) => { const dd = el('dd'); dd.append(...parts); const dt = el('dt'); dt.append(el('bdi', '', label)); dl.append(dt, dd); };
+  const empty = (text) => el('span', 'permission-empty', text);
+  // While a field went unread that could hold who a request reaches, an empty
+  // list of recipients or attendees may only look empty: they can be under a
+  // name this card does not know. So that row says where to look rather than
+  // "(none)" or "Just you". Only that row: a subject or a message under an
+  // unknown name is listed under Other fields and its own row reads as usual,
+  // and keys almost every request carries (an id, a calendar) never count.
+  const unreadFields = F.hasUnreadFields(f);
+  const nobody = (text) => el('span', 'permission-empty', unreadFields ? 'Not recognised: see Other fields' : text);
+  const entry = (e) => {
+    const n = el('span', 'permission-line');
+    if (e.raw !== undefined) n.append(el('bdi', 'permission-as-written', e.raw));
+    else if (e.name) n.append(el('bdi', 'permission-name', e.name), ' <', el('bdi', 'permission-address', e.address), '>');
+    else n.append(el('bdi', 'permission-address', e.address));
+    return n;
+  };
+  const people = (list, none) => {
+    if (!list.length) return [nobody(none)];
+    const cut = F.cutList(list);
+    const out = cut.shown.map(entry);
+    if (cut.more.length) {
+      const more = el('details', 'permission-more');
+      more.append(el('summary', '', `+${list.length - cut.shown.length} more`), ...cut.more.map(entry));
+      if (cut.rest) more.append(el('span', 'permission-line permission-cut', `… and ${cut.rest} more addresses`));
+      out.push(more);
+    }
+    return out;
+  };
+  // Bcc is shown whole: the people a message is copied to in secret are the
+  // ones a person most needs to see, so none of them is folded away.
+  const everyone = (list, none) => {
+    if (!list.length) return [nobody(none)];
+    const out = list.slice(0, F.MAX_LIST).map(entry);
+    if (list.length > F.MAX_LIST) out.push(el('span', 'permission-line permission-cut', `… and ${list.length - F.MAX_LIST} more addresses`));
+    return out;
+  };
+  const box = (kind, text) => fullTextBox(kind, text);
+  // A clamped value carries the kind of box that opens it, so one the browser
+  // cuts shorter than the thresholds expect can be given its box once drawn
+  // (revealClampedText).
+  const preview = (tag, cls, text, kind) => { const n = el(tag, cls, text); n.dataset.full = kind; return n; };
+  const clamped = (text, none, kind) => (text
+    ? [preview('span', 'permission-clamp', text, kind), ...(text.length > F.SUBJECT_SOFT ? [box(kind, text)] : [])]
+    : [empty(none)]);
+  const message = (text) => {
+    const body = F.cutText(text);
+    const parts = body.full ? [preview('div', 'permission-body', body.preview, 'message')] : [empty('(empty)')];
+    if (body.moreLines) parts.push(el('span', 'permission-cut', `… ${body.moreLines} more ${body.moreLines === 1 ? 'line' : 'lines'}`));
+    if (body.cut) parts.push(box('message', body.full + (body.overflow ? `\n… (${body.overflow} more characters)` : '')));
+    return parts;
+  };
+  // One row under the field's own label, or, for a field found under more than
+  // one name, a row per name under the key it came under.
+  const field = (name, label, draw, always) => {
+    const all = f.aliases[name];
+    if (all) for (const o of all) row(o.key, draw(o.value));
+    else if (always || f[name].length) row(label, draw(f[name]));
+  };
+  if (f.kind === 'email') {
+    // Where a send goes when it names a place rather than a person, under the
+    // key it came from. Then a message that is not an email has no empty To
+    // row (the destination says where it goes) and no empty Subject row,
+    // unless an unread field holds an email address: then the To row stays,
+    // to say who it may reach is under Other fields.
+    // A destination is cut at an address's length, with the whole of it one
+    // click away, so a long one cannot swamp the card.
+    const place = (v) => (v.length > F.MAX_ADDRESS
+      ? [el('bdi', 'permission-destination', `${v.slice(0, F.MAX_ADDRESS)}…`), fullTextBox('destination', v)]
+      : [el('bdi', 'permission-destination', v)]);
+    for (const d of f.destinations) row(d.key, d.value ? place(d.value) : [empty('(empty)')]);
+    field('to', 'To', (list) => people(list, '(none)'), f.emailShaped || !f.destinations.length || f.unreadAddress);
+    field('cc', 'Cc', (list) => people(list, '(none)'));
+    field('bcc', 'Bcc', (list) => everyone(list, '(none)'));
+    field('subject', 'Subject', (text) => clamped(text, '(no subject)', 'subject'), f.emailShaped);
+    field('body', 'Message', message, true);
+  } else {
+    field('title', 'Title', (text) => clamped(text, '(untitled)', 'title'), true);
+    const when = (w) => [w ? document.createTextNode(F.formatWhen(w)) : empty('(not set)')];
+    const length = !f.aliases.start && !f.aliases.end && F.durationText(f.start, f.end);
+    field('start', 'Starts', when, true);
+    field('end', 'Ends', (w) => (length ? [...when(w), ' ', el('span', 'permission-cut', `(${length})`)] : when(w)), true);
+    field('attendees', 'Attendees', (list) => (list.length ? people(list, '') : [unreadFields ? nobody('') : document.createTextNode('Just you')]), true);
+  }
+  // Every key the model read as none of the fields, each a block of its own,
+  // its key and its value as text.
+  // The first ones shown, and every other one, however many, listed one click
+  // away and never reduced to a count: past the alias rows and the fields
+  // shown is exactly where a recipient can be put out of sight. The card's
+  // sentence says when fields are folded away.
+  const otherFields = () => {
+    const line = (o) => {
+      const n = el('span', 'permission-line permission-other');
+      n.append(el('bdi', 'permission-other-key', o.key), ': ', el('bdi', '', o.text));
+      return n;
+    };
+    const lines = f.others.slice(0, F.MAX_OTHERS).map(line);
+    const rest = f.others.slice(F.MAX_OTHERS);
+    if (rest.length) {
+      const more = el('details', 'permission-more');
+      more.append(el('summary', '', `+${rest.length} more ${rest.length === 1 ? 'field' : 'fields'}`), ...rest.map(line));
+      lines.push(more);
+    }
+    return lines;
+  };
+  if (f.others.length) row('Other fields', otherFields());
+  const raw = el('div', 'permission-raw');
+  raw.append(el('b', '', 'Tool name:'), document.createTextNode(' ' + toolName));
+  const frag = document.createDocumentFragment();
+  frag.append(dl, raw);
+  return frag;
+}
+
 function renderPermissionCard(d, convoId, host) {
   const req = d.request || {};
   const requestId = d.request_id || '';
@@ -918,6 +1166,30 @@ function renderPermissionCard(d, convoId, host) {
     context = boundary && context ? `${context} ${said}` : said;
   }
 
+  // WHAT A CONNECTOR'S EMAIL OR EVENT SAYS, on the card that approves it. Only
+  // where nothing else is the reason for asking: a boundary or answer-file card
+  // keeps its own copy.
+  //
+  // READING AND DRAWING THE FIELDS CAN NEVER COST THE CARD. Every value is an
+  // agent's, and a card that throws is a decision the person never gets to
+  // make; it would also stop every card queued after it and leave the approvals
+  // dock uncounted. So the box is built here, before anything is drawn, and if
+  // reading or building it throws, the card is the plain one it would have been.
+  let fields = null;
+  let fieldsBox = null;
+  if (!boundary && !answerFile && !verdictCopy && typeof RundockConnectorFields !== 'undefined') {
+    try {
+      fields = RundockConnectorFields.connectorFields(toolName, input);
+      if (fields) {
+        fieldsBox = connectorFieldsElement(fields, toolName);
+        context = RundockConnectorFields.contextFor(fields, RundockPermissions.connectorServerName(toolName));
+      }
+    } catch (e) {
+      fields = null;
+      fieldsBox = null;
+    }
+  }
+
   // Store callback data for safe event handling (no inline onclick injection).
   // toolInput is echoed back in control_response (required by Claude Code).
   pendingPermissions.set(requestId, { convoId, key, toolInput: input, grantDir: wholeFolderOffered ? req.grant_dir : null });
@@ -946,7 +1218,10 @@ function renderPermissionCard(d, convoId, host) {
   const renderRisk = boundary ? 'high'
     : (verdict && verdict.verdict === 'always-asks') ? 'high'
       : (verdict && verdict.verdict === 'asks-once') ? 'medium' : risk;
-  const allowLabel = (verdictCopy && verdictCopy.allowLabel === 'Allow once') || crossingAlwaysAsks ? 'Allow once' : 'Allow';
+  // A connector send asks every time too: once a message has gone it cannot be
+  // called back, so no answer is remembered and the card says "Allow once".
+  const connectorSend = !verdict && !boundary && RundockPermissions.isConnectorSend(toolName);
+  const allowLabel = (verdictCopy && verdictCopy.allowLabel === 'Allow once') || crossingAlwaysAsks || connectorSend ? 'Allow once' : 'Allow';
   const alwaysLabel = verdictCopy && verdictCopy.alwaysLabel ? verdictCopy.alwaysLabel : 'Always allow';
   // Every value below is model-chosen: the tool name, the command text, the
   // file paths, up to 1500 characters of the content an agent wants to write.
@@ -976,7 +1251,7 @@ function renderPermissionCard(d, convoId, host) {
         <span class="permission-summary">${esc(summary)}</span>
       </div>
       ${context ? `<div class="permission-context">${esc(context)}</div>` : ''}
-      ${crossings.length > 1
+      ${fieldsBox ? '<div class="permission-fields-slot"></div>' : crossings.length > 1
         ? `<div class="permission-detail">${crossings.map(c => esc(c.path)).join('<br>')}</div>`
         // An agent's connector change: what it would run, line by line, open
         // and unclipped, since this card is the person's only look at it.
@@ -997,6 +1272,17 @@ function renderPermissionCard(d, convoId, host) {
       </div>
     </div>
   `;
+  if (fieldsBox) {
+    const slot = card.querySelector('.permission-fields-slot');
+    try {
+      slot.replaceWith(fieldsBox);
+    } catch (e) {
+      const plain = document.createElement('code');
+      plain.className = 'permission-detail';
+      plain.textContent = detail;
+      slot.replaceWith(plain);
+    }
+  }
 
   // Attach event listeners safely (no inline onclick)
   card.querySelectorAll('[data-perm-action]').forEach(btn => {
@@ -1011,6 +1297,8 @@ function renderPermissionCard(d, convoId, host) {
   // take and no thinking indicator to pause.
   if (host) {
     host.appendChild(card);
+    revealClampedText(card);
+    watchCardHost(host);
     return;
   }
 
@@ -1044,6 +1332,8 @@ function renderPermissionCard(d, convoId, host) {
   } catch (e) { live = null; }
   if (live && live.parentNode === m) m.insertBefore(card, live);
   else m.appendChild(card);
+  revealClampedText(card);
+  watchCardHost(m);
   drawRepeatHint(card, convoId, requestId);
   scrollBottom();
 }
@@ -1240,6 +1530,8 @@ function updateApprovalsDock() {
   if (!dock || !list) return;
   const waiting = list.querySelectorAll('[data-perm-action="allow"]').length;
   dock.hidden = list.children.length === 0;
+  // A card drawn while the dock was hidden measured nothing; measure it now.
+  if (!dock.hidden) revealClampedText(list);
   const count = dock.querySelector('.approvals-dock-count');
   if (count) count.textContent = waiting === 1 ? '1 waiting' : `${waiting} waiting`;
 }
