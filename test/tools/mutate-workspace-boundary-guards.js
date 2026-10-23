@@ -439,19 +439,19 @@ const MUTATIONS = [
     '  for (let n = 1; n < deny.length; n++) shapes.push(withDenyWrite(block, deny.slice(0, n)));\n'],
   // Forget a length a build wrote and every workspace carrying it is stranded.
   [SCAFFOLD, 'the list 0.15.6 wrote is recognised',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19];',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 19];'],
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21];',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 19, 21];'],
   [SCAFFOLD, 'the list 0.13.3 to 0.15.5 wrote is recognised',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19];',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 8, 19];'],
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21];',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 8, 19, 21];'],
   [SCAFFOLD, 'the lists the development line wrote before 0.13.3 are recognised',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19];',
-    'const WRITTEN_DENY_LENGTHS = [3, 8, 19];'],
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21];',
+    'const WRITTEN_DENY_LENGTHS = [3, 8, 19, 21];'],
   // Leave the current length out and the day a longer list ships, every block
   // this build wrote reads as a person's edit and never upgrades.
   [SCAFFOLD_SETTINGS, 'the current deny list\'s length is recorded as written',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19];',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8];'],
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21];',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19];'],
   // ===== THE USER-LEVEL STATE FILE IS A SECRET AT BOTH LAYERS =====
   // Drop the home-level files from the block and ~/.claude.json is writable
   // by sandboxed commands again, its user-scope MCP servers with it.
@@ -1780,6 +1780,30 @@ const MUTATIONS = [
   [WHAT_RUNS_CODEX, 'What runs: a Codex file change inside the hook-scripts folder of a workspace with no state file is accepted',
     '  if (own || hook.isWorkspaceAnswerFile(g, workspaceRoot)) return true;',
     '  if (own) return true;'],
+  // The sandbox block names the launcher and .mcp.json as well, so a sandboxed
+  // write to either is refused however it was made.
+  [SCAFFOLD, 'What runs: the block denies the connector file and the launcher',
+    '    ...WORKSPACE_RUNS_FILES.map(f => path.posix.join(workspaceDir, f)),\n',
+    ''],
+  [SCAFFOLD, 'What runs: the block denies the launcher',
+    "const WORKSPACE_RUNS_FILES = ['.mcp.json', '.rundock/permission-hook.sh'];",
+    "const WORKSPACE_RUNS_FILES = ['.mcp.json'];"],
+  [SCAFFOLD, 'What runs: the block denies the connector file',
+    "const WORKSPACE_RUNS_FILES = ['.mcp.json', '.rundock/permission-hook.sh'];",
+    "const WORKSPACE_RUNS_FILES = ['.rundock/permission-hook.sh'];"],
+  // Insert them ahead of the escape paths and the block the last build wrote is
+  // no longer a prefix: every workspace carrying it reads as a person's edit.
+  [SCAFFOLD, 'What runs: they are appended after the escape paths, so the last build\'s block upgrades',
+    '    ...escapeDenyFor(workspaceDir, home),\n    ...WORKSPACE_RUNS_FILES.map(f => path.posix.join(workspaceDir, f)),\n',
+    '    ...WORKSPACE_RUNS_FILES.map(f => path.posix.join(workspaceDir, f)),\n    ...escapeDenyFor(workspaceDir, home),\n'],
+  // Forget the length the last build wrote and every workspace carrying it is
+  // stranded: never rewritten, never given the new entries.
+  [SCAFFOLD_SETTINGS, 'What runs: the list the last build wrote is recognised',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21];',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 21];'],
+  [SCAFFOLD, 'What runs: the list the last build wrote upgrades on the next open',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21];',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 21];'],
 ];
 const REPORTER = ['--test-reporter', 'spec'];
 

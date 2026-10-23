@@ -1266,6 +1266,37 @@ describe('opening a workspace upgrades Rundock\'s own block to deny the credenti
     assert.deepStrictEqual(read(other).sandbox, plain, 'nor is a block that never resembled ours');
   });
 
+  test('a block every earlier build wrote gains the files that decide what runs on the next open', () => {
+    const runs = (ws) => [path.posix.join(ws, '.mcp.json'), path.posix.join(ws, '.rundock', 'permission-hook.sh')];
+    for (const n of [19, 8, 3]) {
+      const ws = tmp(`wb-runs-upgrade-${n}-`);
+      open(ws);
+      const settings = read(ws);
+      const current = settings.sandbox.filesystem.denyWrite;
+      settings.sandbox.filesystem.denyWrite = current.slice(0, n);
+      fs.writeFileSync(settingsPath(ws), JSON.stringify(settings, null, 2));
+      open(ws);
+      assert.deepStrictEqual(read(ws).sandbox.filesystem.denyWrite, current, `the ${n}-entry block is ours, and is brought up to the whole list`);
+      for (const p of runs(ws)) assert.ok(current.includes(p), `${p} is denied after the upgrade`);
+    }
+  });
+
+  test('a list trimmed where no build stopped, or with an entry changed, is left byte for byte', () => {
+    for (const change of ['trim', 'edit']) {
+      const ws = tmp(`wb-runs-theirs-${change}-`);
+      open(ws);
+      const settings = read(ws);
+      const deny = settings.sandbox.filesystem.denyWrite;
+      settings.sandbox.filesystem.denyWrite = change === 'trim'
+        ? deny.slice(0, deny.length - 1)
+        : [...deny.slice(0, 18), path.posix.join(ws, 'their-own.json')];
+      fs.writeFileSync(settingsPath(ws), JSON.stringify(settings, null, 2));
+      const theirs = fs.readFileSync(settingsPath(ws), 'utf8');
+      open(ws);
+      assert.strictEqual(JSON.stringify(read(ws).sandbox), JSON.stringify(JSON.parse(theirs).sandbox), `a ${change === 'trim' ? 'trimmed' : 'changed'} list is a person's edit, and stays theirs`);
+    }
+  });
+
   test('opening twice after the upgrade changes nothing the second time', () => {
     const ws = workspaceWithEarlierBlock('wb-cred-twice-');
     open(ws);
@@ -1326,7 +1357,7 @@ describe('the block denies the runtime\'s own escape paths, whatever runtime ver
     }
   });
 
-  test('the workspace\'s project settings file is denied too, last of all', () => {
+  test('the workspace\'s project settings file is denied too, after the home folder\'s escape paths', () => {
     // The runtime loads `.claude/settings.json` from the workspace for every
     // agent Rundock spawns there, and starts the hooks it names itself.
     for (const mode of ['on', 'off']) {
@@ -1335,11 +1366,36 @@ describe('the block denies the runtime\'s own escape paths, whatever runtime ver
     }
     const block = scaffold.sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], []);
     const deny = block.filesystem.denyWrite;
-    assert.strictEqual(deny[deny.length - 1], `${WS}/.claude/settings.json`, 'appended, never inserted');
-    assert.deepStrictEqual(deny.slice(-1 - HOME_ESCAPES.length, -1), HOME_ESCAPES, 'straight after the home folder\'s escape paths');
-    const withoutIt = { ...block, filesystem: { ...block.filesystem, denyWrite: deny.slice(0, -1) } };
+    const at = deny.indexOf(`${WS}/.claude/settings.json`);
+    assert.deepStrictEqual(deny.slice(at - HOME_ESCAPES.length, at), HOME_ESCAPES, 'straight after the home folder\'s escape paths');
+    const withoutIt = { ...block, filesystem: { ...block.filesystem, denyWrite: deny.filter((p) => p !== `${WS}/.claude/settings.json`) } };
     assert.strictEqual(scaffold.isRundockSandbox(withoutIt, 'darwin'), false,
       'no release wrote the list without it, so a block missing only it is a person\'s edit, and stays theirs');
+  });
+
+  // The launcher the runtime starts the permission hook through decides what
+  // every check answers, and `.mcp.json` names servers the runtime starts as
+  // their own processes. The hook asks about a write to either; this is the
+  // half that refuses a sandboxed write however it was made.
+  test('the workspace\'s connector file and the permission hook\'s launcher are denied last of all', () => {
+    for (const mode of ['on', 'off']) {
+      const deny = scaffold.sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], [], mode).filesystem.denyWrite;
+      assert.deepStrictEqual(deny.slice(-3), [`${WS}/.claude/settings.json`, `${WS}/.mcp.json`, `${WS}/.rundock/permission-hook.sh`],
+        `the ${mode} block appends them after the project settings, never inserting them`);
+    }
+  });
+
+  test('each is a file the hook asks about, so the two enforcement points name the same files', () => {
+    const ws = tmp('wb-runs-bound-');
+    for (const f of scaffold.WORKSPACE_RUNS_FILES) {
+      assert.ok(hook.isWorkspaceAnswerFile(path.join(ws, ...f.split('/')), ws), `${f} is an answer file to the hook`);
+      const access = hook.classifyFileAccess('Write', { file_path: path.join(ws, ...f.split('/')) }, ws, [], os.homedir());
+      assert.strictEqual(access.answerFile, true, `and a write to ${f} asks`);
+    }
+    assert.ok(hook.LAUNCHER_FILES.filter((f) => f.endsWith('.sh')).every((f) => scaffold.WORKSPACE_RUNS_FILES.includes(f)),
+      'every launcher a macOS block can meet is denied');
+    assert.ok(hook.WHAT_RUNS_FILES.every((f) => scaffold.WORKSPACE_RUNS_FILES.includes(f) || f === '.claude/settings.json'),
+      'and every file the hook says decides what runs, the project settings being denied with the escape paths');
   });
 
   test('the operating-system paragraph names every escape path the block denies', () => {
@@ -1474,13 +1530,13 @@ describe('an existing workspace gains the escape-path denies on open, and keeps 
     });
   }
 
-  test('removing all eleven leaves the 0.15.6 list, which upgrades like that release\'s own block', () => {
+  test('removing all thirteen leaves the 0.15.6 list, which upgrades like that release\'s own block', () => {
     // The two cannot be told apart on disk: a person who removes exactly the
     // entries added after 0.15.6 has written that release's block.
     const ws = tmp('wb-escape-removed-all-');
     open(ws);
     const settings = read(ws);
-    settings.sandbox.filesystem.denyWrite = settings.sandbox.filesystem.denyWrite.slice(0, -11);
+    settings.sandbox.filesystem.denyWrite = settings.sandbox.filesystem.denyWrite.slice(0, -13);
     assert.deepStrictEqual(settings.sandbox.filesystem.denyWrite, releasedDenyWrite(ws, home), 'sanity: exactly the 0.15.6 list');
     fs.writeFileSync(settingsPath(ws), JSON.stringify(settings, null, 2));
     open(ws);
