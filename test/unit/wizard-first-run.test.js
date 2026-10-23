@@ -121,6 +121,32 @@ test('the content column widens with the window, and the spacing is one notch ti
   assert.match(ruleBody(html, '.step'), /padding: 12px 16px;/);
 });
 
+test('when the console cannot be opened the wizard says why, from the reason the opener gives', async () => {
+  // The opener answers { ok: false, reason }, the same answer the chat's
+  // reconnect card reads, never an `error` string.
+  const html = fs.readFileSync(WIZARD_HTML, 'utf8');
+  for (const [reason, said] of [['not-found', /Claude Code was not found/], ['unsupported', /no terminal/i], ['failed', /Something stopped it opening/]]) {
+    const dom = new JSDOM(html, {
+      runScripts: 'dangerously',
+      beforeParse(window) {
+        window.electronAPI = {
+          platform: 'darwin',
+          checkRuntimes: async () => ({ claude: { status: 'not-authenticated' }, codex: { installed: false, authenticated: false } }),
+          signInClaude: async () => ({ ok: false, reason }),
+          signInCodex: async () => ({ ok: true }),
+          wizardDone: () => {},
+        };
+      },
+    });
+    await new Promise((r) => setTimeout(r, 250));
+    await dom.window.signIn();
+    const hint = dom.window.document.getElementById('auth-hint').textContent;
+    assert.match(hint, said, `${reason}: ${hint}`);
+    assert.doesNotMatch(hint, /undefined/);
+    dom.window.close();
+  }
+});
+
 test('the install instructions hide once Claude Code is installed, and return if it goes missing', async () => {
   const { dom, runtimes } = loadWizard('not-authenticated');
   const { document } = dom.window;

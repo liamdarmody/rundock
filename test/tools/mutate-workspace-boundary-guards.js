@@ -243,6 +243,31 @@ const CONNECTOR_CLIENT_FLOW = { src: path.join(ROOT, 'public', 'permissions.js')
 // handler, both proven through the real server.
 const CONNECTOR_STORE_FLOW = { src: path.join(ROOT, 'lib', 'workspace', 'boundary.js'), suite: 'test/integration/connector-approvals.test.js' };
 const CONNECTOR_HANDLER_FLOW = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'workspace.js'), suite: 'test/integration/connector-approvals.test.js' };
+// The card a person approves a connector send from: the fields it shows, the
+// model that decides how many recipients are shown, and the grading that keeps
+// Always allow off a send, each proven by the suite that renders the real card
+// under jsdom and reads back what a person sees.
+const CONNECTOR_CARD_VIEW = { src: path.join(ROOT, 'public', 'views', 'chat.js'), suite: 'test/unit/connector-card.test.js' };
+const CONNECTOR_CARD_MODEL = { src: path.join(ROOT, 'public', 'connector-fields.js'), suite: 'test/unit/connector-card.test.js' };
+const CONNECTOR_CARD_GRADE = { src: path.join(ROOT, 'public', 'permissions.js'), suite: 'test/unit/connector-card.test.js' };
+// The field model's own reading, where its suite reaches what the card's does
+// not: every shape of value it must survive without throwing.
+const CONNECTOR_FIELDS_MODEL = { src: path.join(ROOT, 'public', 'connector-fields.js'), suite: 'test/unit/connector-fields.test.js' };
+// Reconnecting Claude Code from the chat: two routes that open a console on
+// this machine and spend a turn checking, which only Rundock's own window may
+// reach. Proven through the real server by the routes' own suite.
+const RECONNECT_ROUTES = { src: path.join(ROOT, 'lib', 'http-router.js'), suite: 'test/integration/claude-reconnect.test.js' };
+const RECONNECT_AUTH = { src: path.join(ROOT, 'lib', 'auth', 'index.js'), suite: 'test/integration/claude-reconnect.test.js' };
+// The console and the check themselves, the server's reading of the check, and
+// the card that shows its answer.
+const CLAUDE_CONSOLE = { src: path.join(ROOT, 'lib', 'runtime', 'claude-console.js'), suite: 'test/unit/claude-console.test.js' };
+const RECONNECT_SERVER = { src: path.join(ROOT, 'server.js'), suite: 'test/integration/claude-reconnect.test.js' };
+const RECONNECT_CARD = { src: path.join(ROOT, 'public', 'views', 'chat.js'), suite: 'test/unit/reconnect-card.test.js' };
+// Where the console is asked for: the desktop's channel and the server's route,
+// each read by the console suite, and the first-run wizard that reads its answer.
+const CONSOLE_DESKTOP = { src: path.join(ROOT, 'electron', 'main.js'), suite: 'test/unit/claude-console.test.js' };
+const CONSOLE_SERVER = { src: path.join(ROOT, 'server.js'), suite: 'test/unit/claude-console.test.js' };
+const CONSOLE_WIZARD = { src: path.join(ROOT, 'electron', 'wizard.html'), suite: 'test/unit/wizard-first-run.test.js' };
 
 // A shell command that reads or changes the Keychain: always asks, in both
 // modes. The reading of the line, the card's sentence and Codex's grading are
@@ -1893,6 +1918,280 @@ const MUTATIONS = [
   [APPROVED_GLUE, "Approved: a Codex without turn/steer is told in a later turn",
     "  Promise.resolve().then(() => ev.steer(approvalNotice(toolName))).catch(() => {});",
     "  Promise.resolve().then(() => ev.steer(approvalNotice(toolName))).catch(() => queueCodexNotice(convoId, approvalNotice(toolName)));"],
+  // ===== A CONNECTOR CARD SHOWS WHAT IS SENT, AS TEXT =====
+  // Every value on the card is an agent's. Set one as markup and an address or
+  // a subject becomes an element on the card a person approves from.
+  [CONNECTOR_CARD_VIEW, 'Connector card: a field value is set as markup',
+    '    if (text !== undefined) n.textContent = text;',
+    '    if (text !== undefined) n.innerHTML = text;'],
+  // Show fewer recipients before "+N more" and a send is approved with someone
+  // it goes to folded out of sight.
+  [CONNECTOR_CARD_MODEL, 'Connector card: fewer recipients are shown before the rest are folded away',
+    '  const SHOWN = 3;',
+    '  const SHOWN = 2;'],
+  // The same grading the approval flow proves above, read off the card itself:
+  // drop it and a send offers Always allow beside Allow once.
+  [CONNECTOR_CARD_GRADE, 'Connector card: a send offers Always allow',
+    "      if (words.some(w => MCP_SEND_VERBS.indexOf(w) !== -1)) return 'high';\n",
+    ''],
+  // The card takes the place of the raw request, so a field it does not show
+  // is one a person approves blind. Keep only the first alias and a second
+  // recipient list, a second body or a second title is never shown.
+  [CONNECTOR_CARD_MODEL, 'Connector card: an alias is dropped',
+    '    return found;\n',
+    '    return found.slice(0, 1);\n'],
+  // Read a top-level field only when there is no nested message, and a `to`
+  // beside `message.to` goes where the card never mentions.
+  [CONNECTOR_CARD_MODEL, 'Connector card: a nested message hides the fields around it',
+    "    const sources = [{ obj: input, prefix: '', skip: new Set(nested) }, ...nested.map(",
+    "    const sources = [...(nested.length ? [] : [{ obj: input, prefix: '', skip: new Set() }]), ...nested.map("],
+  // Uncapped, a request can fill a card with rows; capped without listing the
+  // rest, what is past the cap goes unseen.
+  [CONNECTOR_CARD_MODEL, 'Connector card: alias rows are not capped',
+    'all.slice(0, MAX_ALIAS_ROWS).map(',
+    'all.map('],
+  [CONNECTOR_CARD_MODEL, 'Connector card: aliases past the cap are not listed',
+    '      for (const o of all.slice(MAX_ALIAS_ROWS)) { aliasOverflow++; list(o.key, o.raw); }\n',
+    ''],
+  // Past the alias rows and the fields shown is exactly where a recipient can
+  // be put out of sight: reduce what is there to a count and it is.
+  [CONNECTOR_CARD_MODEL, 'Connector card: fields past a number are dropped from the list',
+    '      others.push({ key, text: rawText(raw) });',
+    '      if (others.length < 200) others.push({ key, text: rawText(raw) });'],
+  [CONNECTOR_CARD_VIEW, 'Connector card: the fields past those shown are not drawn',
+    ', ...rest.map(line));',
+    ');'],
+  // Folded away is still acted on: the card has to say it.
+  [CONNECTOR_CARD_MODEL, 'Connector card: a card with fields folded away does not say so',
+    "    const said = baseContext(f, server) + (isCrowded(f) ? CROWDED : '');",
+    '    const said = baseContext(f, server);'],
+  // An email address in a field the card does not read can be who a request
+  // reaches, whatever a destination row says: never noticed, or noticed and
+  // never said, it goes out of sight behind the destination.
+  [CONNECTOR_CARD_MODEL, 'Connector card: an address in an unread field is not noticed',
+    '      if (!unreadAddress && EMAIL_LIKE.test(rawText(raw, MAX_TEXT))) unreadAddress = true;\n',
+    ''],
+  // The old address pattern: an unbounded run before the "@" restarts at
+  // every position of a long value with no "@", and the main thread waits
+  // seconds for a card.
+  [CONNECTOR_FIELDS_MODEL, 'Connector card: the address pattern takes time with the square of a value',
+    '  const EMAIL_LIKE = /[^\\s@<>"]@[^\\s@<>".]+\\.[^\\s@<>"]/;',
+    '  const EMAIL_LIKE = /[^\\s@<>"]+@[^\\s@<>"]+\\.[^\\s@<>"]+/;'],
+  [CONNECTOR_FIELDS_MODEL, 'Connector card: an address past the part of a value shown is not noticed',
+    'EMAIL_LIKE.test(rawText(raw, MAX_TEXT))',
+    'EMAIL_LIKE.test(rawText(raw))'],
+  [CONNECTOR_CARD_MODEL, 'Connector card: an address in an unread field draws no sentence',
+    "(f.unreadAddress && f.action !== 'draft' && !said.includes('Other fields') ? ADDRESS_NOTE : '')",
+    "''"],
+  [CONNECTOR_CARD_VIEW, 'Connector card: an address beside a destination draws no To row',
+    ' || f.unreadAddress);',
+    ');'],
+  [CONNECTOR_CARD_MODEL, 'Connector card: aliases past the cap do not count as folded away',
+    '(f.aliasOverflow || 0) > 0 || ',
+    ''],
+  // A reply that names only its thread drawn as the plain card: what it says
+  // is approved unread.
+  [CONNECTOR_CARD_MODEL, 'Connector card: a send with only a body gets the plain card',
+    "\n      || (action !== 'draft' && keysFor(o, KEYS.body).length > 0);",
+    ';'],
+  // Drop an entry the card cannot read and its recipient is approved unseen.
+  [CONNECTOR_CARD_MODEL, 'Connector card: an entry the card cannot read is dropped',
+    '    return { raw: rawText(v) };\n  }\n  function recipientsOf',
+    '    return null;\n  }\n  function recipientsOf'],
+  // Unread keys: never collected, or collected and never drawn.
+  [CONNECTOR_CARD_MODEL, 'Connector card: unshown keys are not collected',
+    '        if (s.skip.has(k) || names.has(norm(k)) || s.obj[k] === undefined) continue;',
+    '        continue;'],
+  [CONNECTOR_CARD_VIEW, 'Connector card: unshown keys are hidden',
+    "  if (f.others.length) row('Other fields', otherFields());",
+    "  if (false) row('Other fields', otherFields());"],
+  // While keys went unread, "(none)", "Just you", "No one else is invited" and
+  // "No recipients are set" may all be untrue.
+  [CONNECTOR_CARD_VIEW, 'Connector card: an empty recipient list says none while fields went unread',
+    "unreadFields ? 'Not recognised: see Other fields' : text",
+    'text'],
+  [CONNECTOR_CARD_MODEL, 'Connector card: the card says nobody is reached while fields went unread',
+    '    const unread = hasUnreadFields(f);',
+    '    const unread = false;'],
+  // A warning on every card is one nobody reads: count an id or a calendar as
+  // unread and nearly every event warns.
+  [CONNECTOR_CARD_MODEL, 'Connector card: a well-known key makes the card warn',
+    'f.others.some((o) => !quiet(o))',
+    'f.others.length > 0'],
+  // On a send, an id or a thread can be where the message goes: quiet there,
+  // and a send that reaches no one reads as one that will fail.
+  [CONNECTOR_CARD_MODEL, 'Connector card: a well-known key is quiet on a send',
+    "(f.kind === 'event' || f.action === 'draft') && ",
+    ''],
+  // A send that names where it goes, or carries other fields, said to fail.
+  [CONNECTOR_CARD_MODEL, 'Connector card: a send that names where it goes is said to fail',
+    ' || f.destinations.length > 0',
+    ''],
+  [CONNECTOR_CARD_MODEL, 'Connector card: a send beside other fields is said to fail',
+    '(nobody ? (anyOthers ?',
+    '(nobody ? (false ?'],
+  // Where a send goes, never read or never drawn: a thread reply or a chat
+  // message says nothing about where it lands.
+  // On a forward an id names the message forwarded: taken for where it goes,
+  // it hides the To row and the warning beside a recipient list under an
+  // unknown name.
+  [CONNECTOR_CARD_MODEL, 'Connector card: an id on a forward is taken for where it goes',
+    "KEYS.destination.filter((n) => n !== 'id' && n !== 'threadid')",
+    'KEYS.destination'],
+  [CONNECTOR_CARD_MODEL, 'Connector card: where a send goes is not read',
+    "    if (action !== 'draft') read.destination = lineOf;\n",
+    ''],
+  [CONNECTOR_CARD_VIEW, 'Connector card: where a send goes is not drawn',
+    "    for (const d of f.destinations) row(d.key, d.value ? place(d.value) : [empty('(empty)')]);\n",
+    ''],
+  // A destination of any length drawn whole swamps the card it is on.
+  [CONNECTOR_CARD_VIEW, 'Connector card: a long destination is drawn whole',
+    '    const place = (v) => (v.length > F.MAX_ADDRESS',
+    '    const place = (v) => (false'],
+  // A message that is not an email, drawn with an empty Subject and To.
+  [CONNECTOR_CARD_MODEL, 'Connector card: every request is taken for an email',
+    'destinations, emailShaped: sources.some((s) => addressed(s.obj)),',
+    'destinations, emailShaped: true,'],
+  [CONNECTOR_CARD_VIEW, 'Connector card: a message shows an empty Subject row',
+    "(text) => clamped(text, '(no subject)', 'subject'), f.emailShaped);",
+    "(text) => clamped(text, '(no subject)', 'subject'), true);"],
+  [CONNECTOR_CARD_VIEW, 'Connector card: a message that names where it goes shows an empty To row',
+    'f.emailShaped || !f.destinations.length',
+    'true'],
+  // The warning belongs on the rows of who is reached, not on a subject or a
+  // message.
+  [CONNECTOR_CARD_VIEW, 'Connector card: a subject or a message says Not recognised',
+    "  const empty = (text) => el('span', 'permission-empty', text);",
+    "  const empty = (text) => el('span', 'permission-empty', unreadFields ? 'Not recognised: see Other fields' : text);"],
+  // One isolate for the name and the address, and an override in the name
+  // reorders the address beside it.
+  [CONNECTOR_CARD_VIEW, 'Connector card: a name and its address share one isolate',
+    "    else if (e.name) n.append(el('bdi', 'permission-name', e.name), ' <', el('bdi', 'permission-address', e.address), '>');",
+    "    else if (e.name) n.append(el('bdi', 'permission-name', `${e.name} <${e.address}>`));"],
+  // Fold Bcc and the people a message is copied to in secret are out of sight.
+  [CONNECTOR_CARD_VIEW, 'Connector card: Bcc is folded behind +N more',
+    "    field('bcc', 'Bcc', (list) => everyone(list, '(none)'));",
+    "    field('bcc', 'Bcc', (list) => people(list, '(none)'));"],
+  // ===== A VALUE THE CARD CANNOT READ NEVER STOPS IT =====
+  // Let a throw out and the card is never drawn, nor any card queued after it.
+  [CONNECTOR_CARD_VIEW, 'Connector card: a field that throws stops the card',
+    '      fields = null;\n      fieldsBox = null;\n',
+    '      throw e;\n'],
+  // An epoch no date can hold, read as one, throws when it is formatted.
+  [CONNECTOR_CARD_MODEL, 'Connector card: an epoch no date can hold is read as a date',
+    '      return isNaN(at.getTime()) ? { raw: String(v) } : { at };',
+    '      return { at };'],
+  // Read without a depth limit and a value nested thousands deep overflows the
+  // stack.
+  [CONNECTOR_CARD_MODEL, 'Connector card: text is read however deep it is nested',
+    '    if (depth >= MAX_DEPTH) return null;\n',
+    ''],
+  [CONNECTOR_FIELDS_MODEL, 'Connector card: a recipient is read however deep it is nested',
+    '    if (isObj(v) && depth < MAX_DEPTH) {',
+    '    if (isObj(v)) {'],
+  [CONNECTOR_FIELDS_MODEL, 'Connector card: a time is read however deep it is nested',
+    '    if (depth >= MAX_DEPTH) return { raw: rawText(v) };\n    if (isObj(v)) {',
+    '    if (isObj(v)) {'],
+  // A day or a time that does not exist printed as though it did.
+  [CONNECTOR_CARD_MODEL, 'Connector card: an impossible date is printed as a day',
+    '    if (m) return realDay(+m[1], +m[2], +m[3]) ? { allDay: true, parts: [+m[1], +m[2], +m[3], 0, 0] } : { raw: clip(s, 120) };',
+    '    if (m) return { allDay: true, parts: [+m[1], +m[2], +m[3], 0, 0] };'],
+  [CONNECTOR_FIELDS_MODEL, 'Connector card: an impossible time is printed as a time',
+    '    if (m && !(realDay(+m[1], +m[2], +m[3]) && realTime(+m[4], +m[5]))) return { raw: clip(s, 120) };\n',
+    ''],
+  // ===== TEXT CUT SHORT CAN ALWAYS BE OPENED =====
+  // Trust the thresholds alone and a value the dock clamps sooner is cut with
+  // nothing to open it.
+  [CONNECTOR_CARD_VIEW, 'Connector card: a preview the browser cuts gets nothing to open it',
+    '    if (!(shown.scrollHeight > shown.clientHeight + 1)) continue;',
+    '    continue;'],
+  // Measure only while drawing and a card drawn into the hidden dock is never
+  // measured at all.
+  [CONNECTOR_CARD_VIEW, 'Connector card: a card drawn into the hidden dock is never measured again',
+    '  if (!dock.hidden) revealClampedText(list);\n',
+    ''],
+  // A card drawn while the chat is hidden, or one a narrower window clamps,
+  // is measured again only when its host's size changes.
+  [CONNECTOR_CARD_VIEW, 'Connector card: a host that is shown or resized is not measured again',
+    '  if (!cardHostWatcher) cardHostWatcher = new ResizeObserver((entries) => { for (const entry of entries) revealClampedText(entry.target); });',
+    '  if (!cardHostWatcher) cardHostWatcher = new ResizeObserver(() => {});'],
+  [CONNECTOR_CARD_VIEW, 'Connector card: the thread a card is drawn into is never watched',
+    '  watchCardHost(m);\n',
+    ''],
+  [CONNECTOR_CARD_VIEW, 'Connector card: the dock a card is drawn into is never watched',
+    '    watchCardHost(host);\n',
+    ''],
+  // ===== RECONNECTING CLAUDE CODE IS FOR RUNDOCK'S OWN WINDOW =====
+  // Open the reconnect routes and any process on this machine can open a
+  // console here, or spend a turn checking, with no key at all.
+  [AUTH_ROUTES, 'Reconnect: the reconnect routes are listed as needing no key',
+    "  if (method === 'POST' && (url === '/api/auth/session' || url === '/api/permission-request')) return true;",
+    "  if (method === 'POST' && (url === '/api/auth/session' || url === '/api/permission-request' || url.startsWith('/api/claude/'))) return true;"],
+  [RECONNECT_ROUTES, 'Reconnect: a request with no credentials reaches the routes',
+    "  if (method === 'POST' && (url === '/api/auth/session' || url === '/api/permission-request')) return true;",
+    "  if (method === 'POST' && (url === '/api/auth/session' || url === '/api/permission-request' || url.startsWith('/api/claude/'))) return true;"],
+  // An agent's own process tree holds the permission hook's token. Let that
+  // token stand for the window and an agent can open a console or spend a turn.
+  [RECONNECT_AUTH, 'Reconnect: the permission hook\'s token is taken for the window',
+    "  if (sameSecret(headers[KEY_HEADER], LAUNCH_KEY)) return 'key';\n",
+    "  if (sameSecret(headers[KEY_HEADER], LAUNCH_KEY)) return 'key';\n  if (hookScopeOf(req) !== undefined) return 'hook';\n"],
+  // `--print` skips the trust prompt: run the check in the shared temp folder
+  // and another account's project settings and hooks run with it.
+  [CLAUDE_CONSOLE, 'Reconnect: the check runs in the shared temp folder',
+    '{ cwd: os.homedir(), stdio:',
+    '{ cwd: os.tmpdir(), stdio:'],
+  // Never release the one-at-a-time guard and every later check is handed the
+  // first one's answer.
+  [CLAUDE_CONSOLE, 'Reconnect: the one-at-a-time guard is never released',
+    '  p.then(() => { if (inFlight === p) inFlight = null; });\n',
+    ''],
+  // A dropped connection is not a sign-out.
+  [CLAUDE_CONSOLE, 'Reconnect: any failed check counts as signed out',
+    'finish(false, signedOut())',
+    'finish(false, true)'],
+  [RECONNECT_SERVER, 'Reconnect: the server does not say which failures are a sign-out',
+    '{ bin: resolveClaudeBin(), isAuthFailure: isAuthError }',
+    '{ bin: resolveClaudeBin() }'],
+  [RECONNECT_SERVER, 'Reconnect: a check that could not tell changes the runtime status',
+    '    if (r.known) _claudeAuthEvidence = r.connected;',
+    '    _claudeAuthEvidence = r.connected;'],
+  [RECONNECT_CARD, 'Reconnect: a check that could not tell is shown as still disconnected',
+    "(!r || r.known === false ? 'unchecked' : 'notyet')",
+    "'notyet'"],
+  // Every ask opening a window of its own: ten at once opened ten.
+  [CLAUDE_CONSOLE, 'Reconnect: asks while a console is opening each open another',
+    '  if (gate.opening) return gate.opening;\n',
+    ''],
+  [CLAUDE_CONSOLE, 'Reconnect: an ask straight after one opened opens another',
+    '  if (gate.openedAt !== null && t >= gate.openedAt && t - gate.openedAt < OPEN_COOLDOWN_MS) return Promise.resolve({ ok: true });\n',
+    ''],
+  // Looking for Claude Code runs a command on the desktop's main process: look
+  // before the gate and every press during the pause pays for it.
+  [CLAUDE_CONSOLE, 'Reconnect: Claude Code is looked for before the gate is asked',
+    '  if (gate.opening) return gate.opening;\n',
+    "  if (typeof findBin === 'function') findBin();\n  if (gate.opening) return gate.opening;\n"],
+  [CONSOLE_DESKTOP, 'Reconnect: the desktop app looks for Claude Code before asking the opener',
+    'openClaudeConsole({ findBin: findClaude, purpose })',
+    'openClaudeConsole({ bin: findClaude(), purpose })'],
+  // The window's title goes onto a shell command line, so only fixed words may.
+  [CLAUDE_CONSOLE, 'Reconnect: the console takes its title from the caller',
+    'Object.prototype.hasOwnProperty.call(CONSOLE_TITLES, purpose) ? CONSOLE_TITLES[purpose] : CONSOLE_TITLES.signin',
+    'CONSOLE_TITLES[purpose] || purpose'],
+  [CONSOLE_SERVER, 'Reconnect: the card\'s console from the server is called "Sign in to Claude"',
+    "{ bin: resolveClaudeBin(), purpose: 'reconnect' }",
+    '{ bin: resolveClaudeBin() }'],
+  // A frame inside the main window, such as one a page embeds, taken for the
+  // window itself.
+  [CLAUDE_CONSOLE, 'Reconnect: a frame inside the window is taken for the window',
+    ' && event.senderFrame && event.senderFrame === contents.mainFrame',
+    ''],
+  [CONSOLE_DESKTOP, 'Reconnect: the desktop channel answers any frame of the main window',
+    "require('../lib/runtime/claude-console.js').fromMainFrame(event, mainWindow)",
+    'mainWindow && event.sender === mainWindow.webContents'],
+  // The wizard reading a field the opener never sends says only "try again".
+  [CONSOLE_WIZARD, 'Reconnect: the wizard reads an error the opener never gives',
+    '}[res && res.reason];',
+    '}[res && res.error];'],
   // ===== WHAT THE SHELL CHECK READS IN CODE AND TEXT =====
   [SHELL_CODE, "Shell code: a backslash in a Bash word is a Windows separator again on a POSIX host",
     "    const pmod = winWorld ? path.win32 : flavourFor(t, workspaceRoot, posixText);",

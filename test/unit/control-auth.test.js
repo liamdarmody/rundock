@@ -144,6 +144,9 @@ describe('lib/http-router: the routes that need no key', () => {
       assert.strictEqual(open(url), false, url);
     }
     assert.strictEqual(open('/api/review-sidecar', 'POST'), false);
+    // Opening a console on this machine, and spending a turn to check it.
+    assert.strictEqual(open('/api/claude/reconnect', 'POST'), false);
+    assert.strictEqual(open('/api/claude/connection', 'POST'), false);
     assert.strictEqual(open('/', 'POST'), false);
   });
 });
