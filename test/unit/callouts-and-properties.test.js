@@ -199,28 +199,42 @@ describe('frontmatter wikilink properties', () => {
     assert.equal(parsePropWikilink('[[]]'), null);
   });
 
-  test('renderProperties makes wikilink values clickable and marks dead links', () => {
+  test('renderProperties makes wikilink values clickable, and a missing one creates its note', () => {
     const dom = new JSDOM('<div id="p"></div>', { url: 'http://localhost/' });
     global.HTMLElement = dom.window.HTMLElement; // renderValue never needs it, but keep env sane
     const container = dom.window.document.getElementById('p');
     const clicks = [];
-    renderProperties(container, {
+    const created = [];
+    const opts = {
+      onWikilinkClick: (t) => clicks.push(t),
+      onCreateWikilink: (t) => created.push(t),
+      resolveWikilink: (t) => t === 'Live Note',
+    };
+    const values = {
       related: ['[[Live Note]]', '[[Ghost Note]]', 'plain'],
       project: '[[Live Note|The Project]]',
-    }, {
-      onWikilinkClick: (t) => clicks.push(t),
-      resolveWikilink: (t) => t === 'Live Note',
-    });
+    };
+    renderProperties(container, values, opts);
     const links = [...container.querySelectorAll('a.prop-wikilink')];
     assert.equal(links.length, 3);
     const dead = links.find((l) => l.classList.contains('dead'));
     assert.equal(dead.textContent, 'Ghost Note');
+    assert.match(dead.getAttribute('title'), /Click to create it/);
     const alias = links.find((l) => l.textContent === 'The Project');
     assert.ok(alias, 'alias renders as display text');
 
     links[0].dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
     dead.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
-    assert.deepEqual(clicks, ['Live Note'], 'live link routes; dead link is inert');
+    dead.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    assert.deepEqual(clicks, ['Live Note'], 'a live link opens');
+    assert.deepEqual(created, ['Ghost Note', 'Ghost Note'], 'a missing link creates, by click or by Enter');
+
+    // With no way to create, a missing link stays inert and does not claim to.
+    renderProperties(container, values, { ...opts, onCreateWikilink: null });
+    const inert = container.querySelector('a.prop-wikilink.dead');
+    assert.doesNotMatch(inert.getAttribute('title'), /create/);
+    inert.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
+    assert.deepEqual([clicks.length, created.length], [1, 2]);
   });
 
   test('adding a list item keeps existing chips visible and adds inline', () => {

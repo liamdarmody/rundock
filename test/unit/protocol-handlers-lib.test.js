@@ -1280,15 +1280,68 @@ describe('handler seams (stub ctx, capture ws)', () => {
       const [answer] = ws.sent;
       assert.strictEqual(answer.type, 'create_error');
       assert.strictEqual(answer.path, 'notes/x.md');
-      // The real failure, said plainly (no guard branch can produce it), with
-      // the errno text, path and all, kept for Details and out of the sentence.
+      // The real failure, said plainly (no guard branch can produce it). The
+      // errno text is not sent at all: it carries the absolute workspace
+      // path, and nothing the window shows reads it.
       assert.match(answer.reason, /^Rundock couldn't create a folder because something with that name already exists\./, `the catch reported the real failure, got ${answer.reason}`);
-      assert.ok(!answer.reason.includes(dir), 'no path in the sentence');
-      assert.match(answer.detail, /^EEXIST:/, 'the errno text is the detail');
-      assert.ok(answer.detail.includes(path.join(dir, 'notes')), 'and the path is in the detail');
+      assert.strictEqual(answer.system, true, 'marked as a system failure rather than a guard refusal');
+      assert.ok(!('detail' in answer), 'no raw error text is sent');
+      assert.ok(!JSON.stringify(answer).includes(dir), 'no absolute path anywhere in the reply');
       assert.strictEqual(broadcasts, 0, 'a failed create broadcasts no tree');
       assert.ok(!fs.existsSync(path.join(dir, 'notes', 'x.md')), 'nothing was created');
       assert.ok(fs.statSync(path.join(dir, 'notes')).isFile(), 'the obstruction is untouched');
+    } finally {
+      config.setWorkspace(original);
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a failure with no errno of its own still answers a plain sentence, never the raw message', () => {
+    // A crafted name carrying a NUL: Node refuses the path with a TypeError
+    // whose message quotes the absolute path, and no errno rule describes it.
+    const table = buildDispatch();
+    const original = config.getWorkspace();
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'proto-handlers-'));
+    try {
+      config.setWorkspace(dir);
+      const inside = (p) => path.resolve(p).startsWith(path.resolve(dir) + path.sep);
+      const ctx = {
+        workspace: { isInsideWorkspace: inside, isWritableInWorkspace: inside, isSafeCreatePath: srv.isSafeCreatePath },
+        store: { ensureSearchEngine: () => null },
+      };
+      for (const kind of ['note', 'folder']) {
+        const ws = captureWs();
+        table.create_path(ctx, ws, { type: 'create_path', path: `crafted\u0000${kind}`, kind, content: '' });
+        const [answer] = ws.sent;
+        assert.strictEqual(answer.type, 'create_error', kind);
+        assert.strictEqual(answer.reason, `Rundock couldn't create the ${kind === 'folder' ? 'folder' : 'file'}.`, kind);
+        assert.ok(!JSON.stringify(answer).includes(dir), `${kind}: no absolute path anywhere in the reply`);
+      }
+    } finally {
+      config.setWorkspace(original);
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a create that fails takes away the empty folders it made, and only those', () => {
+    const table = buildDispatch();
+    const original = config.getWorkspace();
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'proto-handlers-'));
+    try {
+      config.setWorkspace(dir);
+      fs.mkdirSync(path.join(dir, 'kept'));
+      const inside = (p) => path.resolve(p).startsWith(path.resolve(dir) + path.sep);
+      const ctx = {
+        workspace: { isInsideWorkspace: inside, isWritableInWorkspace: inside, isSafeCreatePath: srv.isSafeCreatePath },
+        store: { ensureSearchEngine: () => null },
+      };
+      const ws = captureWs();
+      // Folders that can be made, under a name no file system holds.
+      const rel = `kept/new/deeper/${'n'.repeat(300)}.md`;
+      table.create_path(ctx, ws, { type: 'create_path', path: rel, kind: 'note', content: '' });
+      assert.strictEqual(ws.sent[0].type, 'create_error');
+      assert.ok(!fs.existsSync(path.join(dir, 'kept', 'new')), 'the folders this create made are gone');
+      assert.ok(fs.existsSync(path.join(dir, 'kept')), 'the folder that was already there stays');
     } finally {
       config.setWorkspace(original);
       fs.rmSync(dir, { recursive: true, force: true });
