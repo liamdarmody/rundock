@@ -63,6 +63,16 @@ describe('launchctl in Notes mode', () => {
     }
   });
 
+  // What the line itself does not say: launchctl reading its subcommands from
+  // standard input, or a subcommand only the shell fills in.
+  test('a subcommand the line does not spell out is graded high too', () => {
+    for (const command of ['echo setenv X 1 | launchctl', 'printf "setenv X 1" | launchctl; ls', 'launchctl $SUB X 1',
+      'launchctl "$(echo setenv)" X 1', 'launchctl `echo setenv` X 1', "launchctl 'setenv' X 1", 'launchctl \\setenv X 1']) {
+      assert.strictEqual(RP.classifyRisk('Bash', { command }), 'high', command);
+    }
+    for (const command of ['which launchctl', 'man launchctl', 'pwd', 'echo $HOME']) assert.notStrictEqual(RP.classifyRisk('Bash', { command }), 'high', command);
+  });
+
   test('reading it is graded as before', () => {
     for (const command of READS) assert.notStrictEqual(RP.classifyRisk('Bash', { command }), 'high', command);
   });

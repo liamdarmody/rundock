@@ -361,8 +361,18 @@
     var segments = shellSegments(cmd);
     for (var i = 0; i < segments.length; i++) {
       if (DESTRUCTIVE_LEADING.test(segments[i].trim())) return true;
+      if (launchctlUnspelled(segments[i])) return true;
     }
     return false;
+  }
+  // launchctl leading a segment with no subcommand (it reads them from
+  // standard input, so `echo setenv X 1 | launchctl` changes what it likes)
+  // or with one only the shell fills in (`launchctl $SUB X 1`, a quoted or
+  // substituted word): what it would change is not on the line.
+  function launchctlUnspelled(segment) {
+    var words = String(segment).trim().split(/\s+/).filter(Boolean);
+    if (!words.length || bareWord(words[0]) !== 'launchctl') return false;
+    return words.length === 1 || /^["'$`\\]/.test(words[1]);
   }
 
   // Only what a caller actually uses. The registries stay private: exporting
