@@ -8,11 +8,13 @@
 // and the check runs before each one.
 //
 // A WALL-CLOCK BUDGET, so it is listed in docs/TEST-TIMING.md. The ratio is
-// the claim: doubling the command should roughly double the time, and a
-// quadratic cost quadruples it, so the bound of 3 sits between the two. Each
-// size is timed three times and the best kept, so one slow moment on a busy
-// machine is not read as growth. The ceilings are a backstop several times
-// what the work takes on a laptop.
+// the claim, measured across a FOURFOLD step: four times the command should
+// take about four times as long, and a quadratic cost takes sixteen, so the
+// bound of 8 sits well clear of both. A twofold step was too close to call on
+// a shared runner, where linear growth measured 3.7 against a bound of 3 and
+// quadratic growth is only 4. Each size is timed three times and the best
+// kept, so one slow moment on a busy machine is not read as growth. The
+// ceiling is a backstop many times what the work takes on a laptop.
 const { test, describe, after } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -40,19 +42,19 @@ const best = command => Math.min(once(command), once(command), once(command));
 function linear(small, large, label) {
   const first = once(large);
   assert.ok(first < 5000, `${label} took ${Math.round(first)} ms`);
-  const two = Math.min(first, once(large), once(large));
-  const one = best(small);
-  assert.ok(two <= 3 * one + 50, `${label} took ${Math.round(two)} ms against ${Math.round(one)} ms for half as much`);
+  const big = Math.min(first, once(large), once(large));
+  const quarter = best(small);
+  assert.ok(big <= 8 * quarter + 50, `${label} took ${Math.round(big)} ms against ${Math.round(quarter)} ms for a quarter as much`);
 }
 
 describe('the shell check grows linearly with the command', () => {
   test('a chain of commands after a cd', () => {
     const chain = n => 'mkdir -p out && cd out && ' + Array.from({ length: n }, (_, i) => `cat ../f${i}.txt`).join(' && ');
-    linear(chain(1000), chain(2000), '2,000 commands');
+    linear(chain(500), chain(2000), '2,000 commands');
   });
 
   test('a long here-document fed to a shell', () => {
     const doc = n => "mkdir -p out && cd out && bash <<'SH'\n" + Array.from({ length: n }, (_, i) => `echo line ${i}`).join('\n') + '\nSH';
-    linear(doc(2000), doc(4000), '4,000 lines');
+    linear(doc(1000), doc(4000), '4,000 lines');
   });
 });
