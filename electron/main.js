@@ -214,8 +214,10 @@ function launchCodexSignIn() {
 // wizard keeps polling and advances automatically once authentication
 // succeeds; the chat's reconnect card waits for the person to say they are
 // done. The console per platform is lib/runtime/claude-console.js, the one the
-// server opens for a browser running from source. `purpose` names the window:
-// the wizard's is "Sign in to Claude", the card's 'reconnect'. The opener is
+// server opens for a browser running from source. `purpose` chooses the
+// console: the wizard's, "Sign in to Claude", runs `claude`; the card's,
+// 'reconnect', runs Claude Code's own login command, `claude auth login`
+// (on macOS through a script the opener writes first). The opener is
 // handed the lookup rather than its answer, so it runs findClaude (a command,
 // on this process) only once its gate has let the ask through, never for an
 // ask while a console opens or just after. Resolves { ok, reason? }; never

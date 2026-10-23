@@ -2158,6 +2158,14 @@ const MUTATIONS = [
   [RECONNECT_CARD, 'Reconnect: a check that could not tell is shown as still disconnected',
     "(!r || r.known === false ? 'unchecked' : 'notyet')",
     "'notyet'"],
+  // The manual step is Claude Code's own login command; a bare `claude` with a
+  // refused session can start ready to chat and log nobody in.
+  [RECONNECT_CARD, 'Reconnect: the manual step says to run a bare claude',
+    "const AUTH_LOGIN_CMD = 'claude auth login';",
+    "const AUTH_LOGIN_CMD = 'claude';"],
+  [RECONNECT_CARD, 'Reconnect: the manual step\'s copy button copies a bare claude',
+    'writeText(AUTH_LOGIN_CMD)',
+    "writeText('claude')"],
   // Every ask opening a window of its own: ten at once opened ten.
   [CLAUDE_CONSOLE, 'Reconnect: asks while a console is opening each open another',
     '  if (gate.opening) return gate.opening;\n',
@@ -2173,13 +2181,55 @@ const MUTATIONS = [
   [CONSOLE_DESKTOP, 'Reconnect: the desktop app looks for Claude Code before asking the opener',
     'openClaudeConsole({ findBin: findClaude, purpose })',
     'openClaudeConsole({ bin: findClaude(), purpose })'],
-  // The window's title goes onto a shell command line, so only fixed words may.
-  [CLAUDE_CONSOLE, 'Reconnect: the console takes its title from the caller',
-    'Object.prototype.hasOwnProperty.call(CONSOLE_TITLES, purpose) ? CONSOLE_TITLES[purpose] : CONSOLE_TITLES.signin',
-    'CONSOLE_TITLES[purpose] || purpose'],
-  [CONSOLE_SERVER, 'Reconnect: the card\'s console from the server is called "Sign in to Claude"',
+  // The window's title and Claude Code's words go onto a command line, so only
+  // fixed words may.
+  [CLAUDE_CONSOLE, 'Reconnect: the console takes its title and words from the caller',
+    "Object.prototype.hasOwnProperty.call(CONSOLE_TITLES, purpose) ? purpose : 'signin'",
+    'purpose'],
+  [CONSOLE_SERVER, 'Reconnect: the card\'s console from the server is the wizard\'s, "Sign in to Claude" running a bare claude',
     "{ bin: resolveClaudeBin(), purpose: 'reconnect' }",
     '{ bin: resolveClaudeBin() }'],
+  [CONSOLE_DESKTOP, 'Reconnect: the card\'s console from the desktop app is the wizard\'s, running a bare claude',
+    "? launchClaudeSignIn('reconnect') :",
+    '? launchClaudeSignIn() :'],
+  // With a refused session a bare `claude` can start ready to chat and say
+  // "Please run /login" only once a message is sent: nobody is logged in.
+  [CLAUDE_CONSOLE, 'Reconnect: the card\'s console runs a bare claude',
+    "const CONSOLE_WORDS = { signin: [], reconnect: ['auth', 'login'] };",
+    'const CONSOLE_WORDS = { signin: [], reconnect: [] };'],
+  // A path that ends its line starts a command of its own on the next.
+  [CLAUDE_CONSOLE, 'Reconnect: a line break or NUL in the Claude Code path is written onto the command line',
+    "  if (/[\\0\\r\\n]/.test(found)) return Promise.resolve({ ok: false, reason: 'failed' });\n",
+    ''],
+  [CLAUDE_CONSOLE, 'Reconnect: a quote in the Claude Code path ends the macOS script\'s quoting',
+    ".split(\"'\").join(\"'\\\\''\")",
+    ''],
+  [CLAUDE_CONSOLE, 'Reconnect: a macOS script that cannot be written throws out of the opener',
+    "} catch (e) { return Promise.resolve({ ok: false, reason: 'failed' }); }",
+    '} catch (e) { throw e; }'],
+  // The macOS script runs as the person: whoever can change it, or the folder
+  // it is in, chooses what runs.
+  [CLAUDE_CONSOLE, 'Reconnect: the macOS script folder is made open, then closed',
+    'fs.mkdirSync(dir, { mode: 0o700 })',
+    'fs.mkdirSync(dir)'],
+  [CLAUDE_CONSOLE, 'Reconnect: a macOS script folder that is a link is written through',
+    '!st.isDirectory() || ',
+    ''],
+  [CLAUDE_CONSOLE, 'Reconnect: a macOS script folder another account owns is used',
+    ' || st.uid !== uid',
+    ''],
+  [CLAUDE_CONSOLE, 'Reconnect: a macOS script folder left open to others stays open',
+    '  if ((st.mode & 0o777) !== 0o700) fs.chmodSync(dir, 0o700);\n',
+    ''],
+  [CLAUDE_CONSOLE, 'Reconnect: a leftover macOS script, or a link in its place, is not removed first',
+    "  try { fs.unlinkSync(file); } catch (e) { if (e.code !== 'ENOENT') throw e; }\n",
+    ''],
+  [CLAUDE_CONSOLE, 'Reconnect: the macOS script is written through whatever appears at its path',
+    ' | fs.constants.O_EXCL',
+    ''],
+  [CLAUDE_CONSOLE, 'Reconnect: the macOS script takes its mode from the umask',
+    '    fs.fchmodSync(fd, 0o700);\n',
+    ''],
   // A frame inside the main window, such as one a page embeds, taken for the
   // window itself.
   [CLAUDE_CONSOLE, 'Reconnect: a frame inside the window is taken for the window',
