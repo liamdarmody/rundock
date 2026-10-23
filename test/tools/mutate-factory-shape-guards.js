@@ -70,6 +70,13 @@ const MUTATIONS = [
   [SHAPE, 'a wrapped git command that stays local is let through',
     "    if (!bare && seg.words[0] === 'git' && !GIT_REMOTE.has(gitSubcommand(seg.words))) continue;\n",
     ""],
+  // ===== A COMMAND WITH ITS SANDBOX OFF RUNS OUTSIDE IT IN ANY SHAPE =====
+  [SHAPE, 'a command whose sandbox is deliberately off is let through',
+    "  if (payload.tool_input.dangerouslyDisableSandbox === true) return { code: 0 };\n",
+    ""],
+  [SHAPE, 'only the boolean true turns the sandbox off',
+    "  if (payload.tool_input.dangerouslyDisableSandbox === true) return { code: 0 };",
+    "  if (payload.tool_input.dangerouslyDisableSandbox) return { code: 0 };"],
   // ===== THE FIX NAMES THE DIRECTORY =====
   [SHAPE, 'the fix takes the directory from the cd before the command',
     "      if (segments[j].words[0] === 'cd' && segments[j].words[1]) cwd = segments[j].words[1];",

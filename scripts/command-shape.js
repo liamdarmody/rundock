@@ -19,7 +19,9 @@
  *     arguments (a pattern with no trailing `*`).
  * Git is the one carve-out: `git *` is usually excluded for its network
  * commands, and a wrapped `git log | head` loses nothing in the sandbox, so a
- * wrapped git command is refused only when it talks to a remote.
+ * wrapped git command is refused only when it talks to a remote. A command
+ * whose tool input turns its sandbox off (`dangerouslyDisableSandbox: true`)
+ * is never refused: it runs outside the sandbox whatever its shape.
  *
  * As a Claude Code PreToolUse hook (matcher "Bash"):
  *   node scripts/command-shape.js [--settings <file>]...
@@ -269,6 +271,9 @@ function runHook({ input, argv = [], env = process.env }) {
   if (!payload || payload.tool_name !== 'Bash') return { code: 0 };
   const command = payload.tool_input && payload.tool_input.command;
   if (typeof command !== 'string') return { code: 0 };
+  // With its sandbox deliberately off, a command runs outside the sandbox
+  // whatever its shape, so no shape of it can fail the way this guards.
+  if (payload.tool_input.dangerouslyDisableSandbox === true) return { code: 0 };
   const patterns = exclusionsFrom(settingsFiles(argv, env, payload.cwd));
   const result = classify(command, patterns);
   if (result.verdict !== 'refuse') return { code: 0 };

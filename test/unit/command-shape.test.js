@@ -174,6 +174,16 @@ describe('the hook', () => {
     assert.strictEqual(runHook({ input: '{not json', argv: ['--settings', settings], env }).code, 0);
   });
 
+  test('a wrapped command runs as written when its sandbox is deliberately off, and is refused when it is on', () => {
+    const shaped = (input) => JSON.stringify({ tool_name: 'Bash', tool_input: input, cwd: dir });
+    const run = (input) => runHook({ input: shaped(input), argv: ['--settings', settings], env }).code;
+    assert.strictEqual(run({ command: 'cd /x && gh pr list | head', dangerouslyDisableSandbox: true }), 0);
+    assert.strictEqual(run({ command: 'cd /x && gh pr list | head', dangerouslyDisableSandbox: false }), 2);
+    assert.strictEqual(run({ command: 'cd /x && gh pr list | head' }), 2);
+    assert.strictEqual(run({ command: 'cd /x && gh pr list | head', dangerouslyDisableSandbox: 'true' }), 2,
+      'only the boolean the tool sends turns the sandbox off');
+  });
+
   test('reads the project settings from CLAUDE_PROJECT_DIR', () => {
     const project = path.join(dir, 'project');
     fs.mkdirSync(path.join(project, '.claude'), { recursive: true });
