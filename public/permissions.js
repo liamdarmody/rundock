@@ -155,6 +155,10 @@
       // graded medium, and what it can remember is a folder, never the tool.
       return (input && input.graded === 'boundary') ? 'medium' : 'high';
     }
+    // An agent's connector change, raised by the server before it writes
+    // .mcp.json: a stdio server is a command run outside the sandbox. High, so
+    // it is carded ahead of every standing allow and never offers one.
+    if (toolName === 'SaveConnector' || toolName === 'DeleteConnector') return 'high';
     if (toolName.startsWith('mcp__')) {
       // MCP reads auto-approve in the permission hook, so by the time a request
       // reaches the card it's a write or destructive action. Flag destructive ones
@@ -223,6 +227,8 @@
     } else if (toolName === 'Read') {
       summary = 'Read a file';
       detail = input.file_path || '';
+    } else if (toolName === 'SaveConnector' || toolName === 'DeleteConnector') {
+      ({ summary, context, detail } = connectorCopy(toolName, input));
     } else if (toolName.startsWith('mcp__')) {
       const parts = toolName.split('__');
       const server = (parts[1] || 'connector').replace(/^claude_ai_/, '').replace(/_/g, ' ').trim();
@@ -234,6 +240,32 @@
       detail = JSON.stringify(input).substring(0, 200);
     }
     return { summary, context, detail };
+  }
+
+  // THE CARD FOR AN AGENT'S CONNECTOR CHANGE: the server, and exactly what it
+  // would run (the command and its arguments, quoted as a shell would need
+  // them) or reach (its URL), with the names of what is set for it.
+  function shellWord(a) {
+    const s = String(a);
+    return /^[\w@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, "'\\''")}'`;
+  }
+  function connectorCopy(toolName, input) {
+    const i = input || {};
+    const runs = typeof i.command === 'string' ? [i.command, ...(Array.isArray(i.args) ? i.args : [])].map(shellWord).join(' ') : '';
+    const removing = toolName === 'DeleteConnector';
+    const verb = removing ? 'Remove' : (i.action === 'replace' ? 'Change' : 'Add');
+    const said = [];
+    if (removing) said.push('An agent asked Rundock to remove this connector from .mcp.json, so agents would no longer start it or connect to it.');
+    else if (runs) said.push('An agent asked Rundock to write this into .mcp.json. Claude Code would run this command as its own process, outside the sandbox, whenever an agent starts.');
+    else said.push('An agent asked Rundock to write this into .mcp.json. Agents would connect to it whenever one starts.');
+    if (!removing) {
+      if (Array.isArray(i.env) && i.env.length) said.push(`It would be started with these set: ${i.env.join(', ')}.`);
+      if (Array.isArray(i.headers) && i.headers.length) said.push(`It would send these headers: ${i.headers.join(', ')}.`);
+      if (typeof i.headersHelper === 'string') said.push(`To make its headers it would run: ${i.headersHelper}`);
+      if (Array.isArray(i.others) && i.others.length) said.push(`It also sets: ${i.others.join(', ')}.`);
+    }
+    said.push('Rundock asks about every connector an agent adds or removes, so there is no Always allow.');
+    return { summary: `${verb} the connector ${i.name || ''}`.trim(), context: said.join(' '), detail: runs || i.url || JSON.stringify(i) };
   }
 
   // Key for always-allow matching.

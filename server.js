@@ -1451,7 +1451,9 @@ const wsHandlerContext = {
     invalidateFileListCache, invalidateFileTreeCache, noteExtensionRecordsChanged, watchOpenFile,
     fileTreeForSend, broadcastFileTree, armFileTreeWatcher,
   },
-  runtime: { getRuntimeStatus, killAllChildren, cleanOrphanedProcesses },
+  // requestServerPermission: the card a handler raises before acting for an
+  // agent (an agent's connector change, in team.js).
+  runtime: { getRuntimeStatus, killAllChildren, cleanOrphanedProcesses, requestServerPermission },
   signals: { reportStartup, phaseTimer },         // startup telemetry (recordEvent is lib-owned)
   broadcast: safeSend,
   config,                                         // lib/config module: getWorkspace at use time

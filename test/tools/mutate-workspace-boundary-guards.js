@@ -244,6 +244,12 @@ const WHAT_RUNS_HOOK = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), 
 const WHAT_RUNS_CLIENT = { src: path.join(ROOT, 'public', 'permissions.js'), suite: 'test/unit/what-runs-files.test.js' };
 const WHAT_RUNS_VIEW = { src: path.join(ROOT, 'public', 'views', 'chat.js'), suite: 'test/unit/what-runs-files.test.js' };
 const WHAT_RUNS_CODEX = { src: path.join(ROOT, 'lib', 'runtime', 'codex-approval.js'), suite: 'test/unit/codex-escalation-grading.test.js' };
+// An agent's connector change asks the person first: the handler that asks,
+// the card that words it, and the wiring that hands the handler the card.
+const CONNECTOR_ASK = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'team.js'), suite: 'test/unit/protocol-handlers-lib.test.js' };
+const CONNECTOR_ASK_FLOW = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'team.js'), suite: 'test/integration/connector-asks.test.js' };
+const CONNECTOR_CARD = { src: path.join(ROOT, 'public', 'permissions.js'), suite: 'test/unit/connector-card.test.js' };
+const CONNECTOR_WIRING = { src: path.join(ROOT, 'server.js'), suite: 'test/integration/connector-asks.test.js' };
 // What Rundock decides for an agent's environment, never inherited from its own.
 const SPAWN_ENV = { src: path.join(ROOT, 'lib', 'runtime', 'claude.js'), suite: 'test/unit/workspace-modes.test.js' };
 
@@ -1853,6 +1859,46 @@ const MUTATIONS = [
   [VERDICT, 'launchctl: a subcommand piped in through xargs runs',
     "  if (!args.length) return piped ? always('unreadable-command') : RUNS;",
     '  if (!args.length) return RUNS;'],
+  // ===== AN AGENT'S CONNECTOR CHANGE ASKS FIRST =====
+  [CONNECTOR_ASK, 'Connector: a change is written without asking',
+    'function askFirst(ctx, ws, msg, toolName, toolInput, write) {\n',
+    'function askFirst(ctx, ws, msg, toolName, toolInput, write) {\n  return write();\n'],
+  [CONNECTOR_ASK_FLOW, 'Connector: through the real server, a change is written without asking',
+    'function askFirst(ctx, ws, msg, toolName, toolInput, write) {\n',
+    'function askFirst(ctx, ws, msg, toolName, toolInput, write) {\n  return write();\n'],
+  [CONNECTOR_ASK, 'Connector: an allow no person gave on a card writes',
+    '      if (allow === true && how && how.card === true) { write(); return; }',
+    '      if (allow === true) { write(); return; }'],
+  [CONNECTOR_ASK, 'Connector: Deny or no answer writes',
+    '      if (allow === true && how && how.card === true) { write(); return; }',
+    '      if (true) { write(); return; }'],
+  [CONNECTOR_ASK_FLOW, 'Connector: the file is not read again once allowed',
+    "    const now = connectorFile(ctx, ws);\n    if (!now) return;\n    now.parsed.mcpServers[msg.name] = entry;\n    writeConnectorFile(ctx, ws, now.file, now.parsed, 'saved', msg.name);",
+    "    found.parsed.mcpServers[msg.name] = entry;\n    writeConnectorFile(ctx, ws, found.file, found.parsed, 'saved', msg.name);"],
+  [CONNECTOR_ASK, 'Connector: the card is not told the command or its arguments',
+    '    input.command = e.command;\n    input.args = Array.isArray(e.args) ? e.args.map(String) : [];\n',
+    ''],
+  [CONNECTOR_ASK, 'Connector: the card is not told the URL',
+    "  if (typeof e.url === 'string') input.url = e.url;\n",
+    ''],
+  [CONNECTOR_ASK, 'Connector: the card is not told what environment is set',
+    '  if (keys(e.env).length) input.env = keys(e.env);\n',
+    ''],
+  [CONNECTOR_ASK, 'Connector: a removal is described as an addition',
+    "connectorCardInput(msg.name, 'remove',",
+    "connectorCardInput(msg.name, 'add',"],
+  [CONNECTOR_CARD, 'Connector card: graded below high, so a saved allow answers it and Always allow is offered',
+    "    if (toolName === 'SaveConnector' || toolName === 'DeleteConnector') return 'high';\n",
+    ''],
+  [CONNECTOR_CARD, 'Connector card: worded as an unknown tool, without the command',
+    "    } else if (toolName === 'SaveConnector' || toolName === 'DeleteConnector') {\n      ({ summary, context, detail } = connectorCopy(toolName, input));\n",
+    ''],
+  [CONNECTOR_CARD, 'Connector card: an argument with a space is shown unquoted',
+    '  function shellWord(a) {\n    const s = String(a);\n',
+    '  function shellWord(a) {\n    const s = String(a);\n    return s;\n'],
+  [CONNECTOR_WIRING, 'Connector: the handlers are not handed the card',
+    '  runtime: { getRuntimeStatus, killAllChildren, cleanOrphanedProcesses, requestServerPermission },',
+    '  runtime: { getRuntimeStatus, killAllChildren, cleanOrphanedProcesses },'],
   [CM_CLIENT, 'launchctl: the card gives no reason of its own',
     "    'launch-environment': () => 'This changes what macOS starts, or the settings every program started from now on is given, Rundock included, beyond anything Rundock can see or check.',\n",
     ''],
