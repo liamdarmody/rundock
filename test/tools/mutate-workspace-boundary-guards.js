@@ -236,6 +236,18 @@ const CONNECTOR_CLIENT_FLOW = { src: path.join(ROOT, 'public', 'permissions.js')
 // handler, both proven through the real server.
 const CONNECTOR_STORE_FLOW = { src: path.join(ROOT, 'lib', 'workspace', 'boundary.js'), suite: 'test/integration/connector-approvals.test.js' };
 const CONNECTOR_HANDLER_FLOW = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'workspace.js'), suite: 'test/integration/connector-approvals.test.js' };
+// The card a person approves a connector send from: the fields it shows, the
+// model that decides how many recipients are shown, and the grading that keeps
+// Always allow off a send, each proven by the suite that renders the real card
+// under jsdom and reads back what a person sees.
+const CONNECTOR_CARD_VIEW = { src: path.join(ROOT, 'public', 'views', 'chat.js'), suite: 'test/unit/connector-card.test.js' };
+const CONNECTOR_CARD_MODEL = { src: path.join(ROOT, 'public', 'connector-fields.js'), suite: 'test/unit/connector-card.test.js' };
+const CONNECTOR_CARD_GRADE = { src: path.join(ROOT, 'public', 'permissions.js'), suite: 'test/unit/connector-card.test.js' };
+// Reconnecting Claude Code from the chat: two routes that open a console on
+// this machine and spend a turn checking, which only Rundock's own window may
+// reach. Proven through the real server by the routes' own suite.
+const RECONNECT_ROUTES = { src: path.join(ROOT, 'lib', 'http-router.js'), suite: 'test/integration/claude-reconnect.test.js' };
+const RECONNECT_AUTH = { src: path.join(ROOT, 'lib', 'auth', 'index.js'), suite: 'test/integration/claude-reconnect.test.js' };
 
 // A shell command that reads or changes the Keychain: always asks, in both
 // modes. The reading of the line, the card's sentence and Codex's grading are
@@ -1886,6 +1898,36 @@ const MUTATIONS = [
   [APPROVED_GLUE, "Approved: a Codex without turn/steer is told in a later turn",
     "  Promise.resolve().then(() => ev.steer(approvalNotice(toolName))).catch(() => {});",
     "  Promise.resolve().then(() => ev.steer(approvalNotice(toolName))).catch(() => queueCodexNotice(convoId, approvalNotice(toolName)));"],
+  // ===== A CONNECTOR CARD SHOWS WHAT IS SENT, AS TEXT =====
+  // Every value on the card is an agent's. Set one as markup and an address or
+  // a subject becomes an element on the card a person approves from.
+  [CONNECTOR_CARD_VIEW, 'Connector card: a field value is set as markup',
+    '    if (text !== undefined) n.textContent = text;',
+    '    if (text !== undefined) n.innerHTML = text;'],
+  // Show fewer recipients before "+N more" and a send is approved with someone
+  // it goes to folded out of sight.
+  [CONNECTOR_CARD_MODEL, 'Connector card: fewer recipients are shown before the rest are folded away',
+    '  const SHOWN = 3;',
+    '  const SHOWN = 2;'],
+  // The same grading the approval flow proves above, read off the card itself:
+  // drop it and a send offers Always allow beside Allow once.
+  [CONNECTOR_CARD_GRADE, 'Connector card: a send offers Always allow',
+    "      if (words.some(w => MCP_SEND_VERBS.indexOf(w) !== -1)) return 'high';\n",
+    ''],
+  // ===== RECONNECTING CLAUDE CODE IS FOR RUNDOCK'S OWN WINDOW =====
+  // Open the reconnect routes and any process on this machine can open a
+  // console here, or spend a turn checking, with no key at all.
+  [AUTH_ROUTES, 'Reconnect: the reconnect routes are listed as needing no key',
+    "  if (method === 'POST' && (url === '/api/auth/session' || url === '/api/permission-request')) return true;",
+    "  if (method === 'POST' && (url === '/api/auth/session' || url === '/api/permission-request' || url.startsWith('/api/claude/'))) return true;"],
+  [RECONNECT_ROUTES, 'Reconnect: a request with no credentials reaches the routes',
+    "  if (method === 'POST' && (url === '/api/auth/session' || url === '/api/permission-request')) return true;",
+    "  if (method === 'POST' && (url === '/api/auth/session' || url === '/api/permission-request' || url.startsWith('/api/claude/'))) return true;"],
+  // An agent's own process tree holds the permission hook's token. Let that
+  // token stand for the window and an agent can open a console or spend a turn.
+  [RECONNECT_AUTH, 'Reconnect: the permission hook\'s token is taken for the window',
+    "  if (sameSecret(headers[KEY_HEADER], LAUNCH_KEY)) return 'key';\n",
+    "  if (sameSecret(headers[KEY_HEADER], LAUNCH_KEY)) return 'key';\n  if (hookScopeOf(req) !== undefined) return 'hook';\n"],
 ];
 const REPORTER = ['--test-reporter', 'spec'];
 

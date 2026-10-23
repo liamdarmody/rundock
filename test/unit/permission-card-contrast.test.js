@@ -23,7 +23,9 @@ function tokens() {
   const block = (selector) => {
     const start = clean.indexOf(`${selector} {`);
     assert.ok(start !== -1, `tokens.css has no ${selector} block`);
-    const body = clean.slice(start, clean.indexOf('}', start));
+    // From after the brace, so the selector's own colon (`:root`) is not
+    // taken for a declaration's and the block's first token is kept.
+    const body = clean.slice(clean.indexOf('{', start) + 1, clean.indexOf('}', start));
     const out = new Map();
     for (const decl of body.split(';')) {
       const i = decl.indexOf(':');
@@ -37,7 +39,10 @@ function tokens() {
 }
 
 function chatRules() {
-  const css = strip(fs.readFileSync(path.join(ROOT, 'public', 'styles', 'views', 'chat.css'), 'utf-8'));
+  // A rule inside an @media block is read as if it stood alone, so the block's
+  // braces never leak into the next selector.
+  const css = strip(fs.readFileSync(path.join(ROOT, 'public', 'styles', 'views', 'chat.css'), 'utf-8'))
+    .replace(/@media[^{]*\{((?:[^{}]*\{[^{}]*\})*)\s*\}/g, '$1');
   const map = new Map();
   let i = 0;
   while (i < css.length) {
@@ -67,6 +72,7 @@ function resolve(value, theme, where) {
   return v.trim();
 }
 function rgb(value, where) {
+  if (value === 'white') value = '#FFFFFF';
   const m = /^#([0-9a-f]{6})$/i.exec(value);
   assert.ok(m, `${where} resolves to ${value}, not a six-digit hex`);
   const n = parseInt(m[1], 16);
@@ -178,6 +184,92 @@ describe('the ratios the token notes state are the ratios the tokens give', () =
     assert.strictEqual(round2(r), 4.84);
   });
 });
+
+// THE WORDS ON THE CARD, and the field box a connector's email or event is
+// drawn in. The context line under the title was --text-2: 4.26:1 on the dark
+// card and 3.58:1 on the light one, below 4.5:1 in both.
+const CARD_TEXT = [
+  ['context line under the title', '.permission-context', 4.70, 4.59],
+  ['tool name at the foot', '.permission-raw', 4.70, 4.59],
+];
+const FIELD_TEXT = [
+  ['field label (To, Subject, Starts)', '.permission-fields dt', 6.47, 5.86],
+  ['field value', '.permission-fields dd', 14.90, 17.40],
+  ['cut-off marker ("+4 more", "… 3 more lines")', '.permission-cut', 6.47, 5.86],
+  ['empty value ("(none)")', '.permission-empty', 6.47, 5.86],
+  ['"+N more" and "Show full message"', '.permission-fields summary', 6.47, 5.86],
+];
+function fieldBox(themeName) {
+  const value = themeName === 'light' ? decl('body.light .permission-fields', 'background') : decl('.permission-fields', 'background');
+  return rgb(resolve(value, T[themeName], `${themeName} field box`), `${themeName} field box`);
+}
+for (const themeName of ['dark', 'light']) {
+  describe(`the card's words and the field box, ${themeName} theme`, () => {
+    const at = themeName === 'dark' ? 2 : 3;
+    for (const row of CARD_TEXT) {
+      test(`${row[0]}: ${row[at]}:1 on the card`, () => {
+        const r = ratio(rgb(resolve(decl(row[1], 'color'), T[themeName], row[1]), row[1]), cardBackground(themeName));
+        assert.ok(r >= 4.5, `${round2(r)}:1`);
+        assert.strictEqual(round2(r), row[at]);
+      });
+    }
+    for (const row of FIELD_TEXT) {
+      test(`${row[0]}: ${row[at]}:1 on the field box`, () => {
+        const r = ratio(rgb(resolve(decl(row[1], 'color'), T[themeName], row[1]), row[1]), fieldBox(themeName));
+        assert.ok(r >= 4.5, `${round2(r)}:1`);
+        assert.strictEqual(round2(r), row[at]);
+      });
+    }
+  });
+}
+
+// THE RECONNECT CARD, every state, on its own tint over the main pane
+// (--elevated, public/styles/base.css .main). Three of these were below the bar
+// before: the title in light (--attention, 1.96:1), the Troubleshooting link in
+// light (--working, 2.44:1), and the foot line in both (--text-2, 4.32:1).
+// [what, selector, property, bar, dark, light]
+const RECONNECT = [
+  ['title', '.auth-error-title', 'color', 4.5, 6.19, 5.05],
+  ['message', '.auth-error-body', 'color', 4.5, 10.98, 16.48],
+  ['foot line', '.auth-error-foot', 'color', 4.5, 4.77, 5.55],
+  ['Troubleshooting link', '.auth-error-foot a', 'color', 4.5, 4.77, 5.55],
+  ['"Reconnected" title', '.auth-error-card.auth-ok .auth-error-title', 'color', 4.5, 6.11, 6.22],
+  ['"Reconnected" edge', '.auth-error-card.auth-ok', 'border-color', 3, 6.11, 6.22],
+  ['"Could not open" title', '.auth-error-card.auth-bad .auth-error-title', 'color', 4.5, 10.98, 16.48],
+  ['"Could not open" edge', '.auth-error-card.auth-bad', 'border-color', 3, 4.43, 4.74],
+  ['ghost button label (Open the window again, Try again)', '.auth-btn-ghost', 'color', 4.5, 4.77, 5.55],
+  ['ghost button edge', '.auth-btn-ghost', 'border-color', 3, 3.25, 4.32],
+];
+function reconnectCard(themeName) {
+  return over(decl('.auth-error-card', 'background'), rgb(resolve('var(--elevated)', T[themeName], 'main pane'), 'main pane'));
+}
+for (const themeName of ['dark', 'light']) {
+  describe(`the reconnect card, ${themeName} theme`, () => {
+    const at = themeName === 'dark' ? 4 : 5;
+    for (const row of RECONNECT) {
+      test(`${row[0]}: ${row[at]}:1, at least ${row[3]}:1`, () => {
+        const r = ratio(rgb(resolve(decl(row[1], row[2]), T[themeName], row[1]), row[1]), reconnectCard(themeName));
+        assert.ok(r >= row[3], `${round2(r)}:1`);
+        assert.strictEqual(round2(r), row[at]);
+      });
+    }
+    test('the link is underlined, so it is a link without a colour of its own', () => {
+      assert.match(decl('.auth-error-foot a', 'text-decoration'), /underline/);
+    });
+    test('the primary button\'s white label clears 4.5:1 on its fill and on its hover', () => {
+      const label = rgb(resolve(decl('.auth-btn', 'color'), T[themeName], 'label'), 'label');
+      for (const [selector, want] of [['.auth-btn', 4.5], ['.auth-btn:hover:not(:disabled)', 5.07]]) {
+        const r = ratio(label, rgb(resolve(decl(selector, 'background'), T[themeName], selector), selector));
+        assert.strictEqual(round2(r), want, selector);
+      }
+    });
+    test('its buttons draw the control focus ring, at least 3:1 on the card', () => {
+      assert.strictEqual(decl('.auth-btn:focus-visible', 'outline'), '2px solid var(--accent-control)');
+      const r = ratio(rgb(resolve('var(--accent-control)', T[themeName], 'ring'), 'ring'), reconnectCard(themeName));
+      assert.ok(r >= 3, `${round2(r)}:1`);
+    });
+  });
+}
 
 describe('which Allow a card draws', () => {
   const RP = require('../../public/permissions.js');
