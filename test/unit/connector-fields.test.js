@@ -61,6 +61,22 @@ describe('an email request is read by generic field names', () => {
     assert.deepStrictEqual(f.others, [{ key: 'saveToSentItems', text: 'true' }], 'the field the card does not read is listed, not dropped');
   });
 
+  test('a send, reply or forward with only a body is read: what it says is shown, and the rest listed', () => {
+    const reply = F.connectorFields('mcp__example_post__reply_to_thread', { threadId: 't1', body: 'Sounds good, see you then.' });
+    assert.strictEqual(reply.kind, 'email');
+    assert.strictEqual(reply.action, 'reply');
+    assert.strictEqual(reply.body, 'Sounds good, see you then.');
+    assert.deepStrictEqual(reply.others, [{ key: 'threadId', text: 't1' }]);
+    assert.strictEqual(F.hasUnreadFields(reply), false, 'a thread id is not who it reaches');
+    const chat = F.connectorFields('mcp__example_chat__send_message', { channel: 'general', text: 'hello' });
+    assert.strictEqual(chat.body, 'hello');
+    assert.deepStrictEqual(chat.others, [{ key: 'channel', text: 'general' }]);
+    assert.strictEqual(F.hasUnreadFields(chat), true, 'a channel could be who it reaches');
+    const forward = F.connectorFields('mcp__example_post__forward', { messageId: 'm1', body: 'FYI' });
+    assert.strictEqual(forward.action, 'forward');
+    assert.strictEqual(forward.body, 'FYI');
+  });
+
   test('forward and fwd are forwards, resend is a send', () => {
     assert.strictEqual(F.connectorFields('mcp__example_post__forwardEmail', { to: 'a@example.org' }).action, 'forward');
     assert.strictEqual(F.connectorFields('mcp__example_post__fwd_message', { to: 'a@example.org' }).action, 'forward');
@@ -177,8 +193,12 @@ describe('every field a request carries is read, so a card can show what the ser
 });
 
 describe('anything else is left to the card it has today', () => {
-  test('a chat send has no email fields', () => {
-    assert.strictEqual(F.connectorFields('mcp__example_chat__send_message', { channel: 'general', text: 'hello' }), null);
+  test('a send with neither a body nor email fields', () => {
+    assert.strictEqual(F.connectorFields('mcp__example_chat__send_message', { channel: 'general' }), null);
+  });
+  test('a draft with only a body', () => {
+    assert.strictEqual(F.connectorFields('mcp__example_post__create_draft', { body: 'Notes' }), null,
+      'a draft that names no one and no subject is left as it was');
   });
   test('an email-shaped write that neither drafts nor sends', () => {
     assert.strictEqual(F.connectorFields('mcp__example_post__compose', { to: 'a@example.org', subject: 's' }), null,

@@ -1945,6 +1945,11 @@ const MUTATIONS = [
   [CONNECTOR_CARD_MODEL, 'Connector card: a nested message hides the fields around it',
     "    const sources = [{ obj: input, prefix: '', skip: new Set(nested) }, ...nested.map(",
     "    const sources = [...(nested.length ? [] : [{ obj: input, prefix: '', skip: new Set() }]), ...nested.map("],
+  // A reply that names only its thread drawn as the plain card: what it says
+  // is approved unread.
+  [CONNECTOR_CARD_MODEL, 'Connector card: a send with only a body gets the plain card',
+    "\n      || (action !== 'draft' && keysFor(o, KEYS.body).length > 0);",
+    ';'],
   // Drop an entry the card cannot read and its recipient is approved unseen.
   [CONNECTOR_CARD_MODEL, 'Connector card: an entry the card cannot read is dropped',
     '    return { raw: rawText(v) };\n  }\n  function recipientsOf',

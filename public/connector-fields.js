@@ -198,7 +198,11 @@
     const send = words.map((w) => SEND_KIND[w]).find(Boolean);
     const action = send || (words.includes('draft') ? 'draft' : null);
     if (!action) return null;
-    const looksLikeMail = (o) => ['to', 'cc', 'bcc', 'subject'].some((k) => keysFor(o, KEYS[k]).length);
+    // A send, reply or forward needs nothing but a body to be read: a reply
+    // can name only its thread, and what it says is still what a person is
+    // approving. A draft that names no one and no subject is left as it was.
+    const looksLikeMail = (o) => ['to', 'cc', 'bcc', 'subject'].some((k) => keysFor(o, KEYS[k]).length)
+      || (action !== 'draft' && keysFor(o, KEYS.body).length > 0);
     // An email nested under `message` is read as well as the input around it,
     // each field under its path, so a top-level `to` beside `message.to` is a
     // second recipient list rather than one the card never mentions.

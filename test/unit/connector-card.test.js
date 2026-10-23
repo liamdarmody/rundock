@@ -203,9 +203,26 @@ describe('every value is text, never markup', () => {
 
 describe('a connector card with no email or calendar fields', () => {
   test('is drawn as it was, with the raw name in the detail block', () => {
-    const card = render('mcp__example_chat__send_message', { channel: 'general', text: 'hello' });
+    const card = render('mcp__example_chat__add_reaction', { channel: 'general', emoji: 'thumbsup' });
     assert.strictEqual(card.querySelector('dl.permission-fields'), null);
-    assert.strictEqual(text(card.querySelector('code.permission-detail')), 'mcp__example_chat__send_message');
+    assert.strictEqual(text(card.querySelector('code.permission-detail')), 'mcp__example_chat__add_reaction');
+  });
+});
+
+describe('a send, reply or forward with only a body', () => {
+  test('a reply with a thread id and a body shows what it says', () => {
+    const card = render('mcp__example_post__reply_to_thread', { threadId: 't1', body: 'Sounds good, see you then.' });
+    assert.ok(card.querySelector('dl.permission-fields'), 'the field card, not the plain one');
+    assert.strictEqual(text(row(card, 'Message').querySelector('.permission-body')), 'Sounds good, see you then.');
+    assert.strictEqual(text(row(card, 'To')), '(none)', 'a thread id is not who it reaches, so no warning');
+    assert.strictEqual(text(row(card, 'Other fields')), 'threadId: t1');
+  });
+
+  test('a chat message shows its text, and its channel is listed as a field the card does not read', () => {
+    const card = render('mcp__example_chat__send_message', { channel: 'general', text: 'hello' });
+    assert.strictEqual(text(row(card, 'Message').querySelector('.permission-body')), 'hello');
+    assert.strictEqual(text(row(card, 'Other fields')), 'channel: general');
+    assert.match(text(row(card, 'To')), /Not recognised: see Other fields/, 'who it reaches is under a name the card does not know');
   });
 });
 
