@@ -36,11 +36,13 @@ const READS = [
   'head -5 .rundock/state.json', 'ls -l .rundock/permissions.json', 'wc -l .claude/settings.local.json', 'grep allow .rundock/permissions.json',
   'cat .claude/settings.json', 'hexdump -C .rundock/permissions.json', 'tail -c 200 .rundock/permissions.json; echo; od -c .rundock/state.json',
   'cat .rundock/permissions.json && echo done > build.log', 'tail .rundock/permissions.json | wc -l',
+  // A copy out of one reads it: what is written is the copy.
+  'cat .rundock/permissions.json > copy.json', 'cp .rundock/permissions.json copy.json',
 ];
 const WRITES = [
   'echo x > .rundock/permissions.json', 'echo x >> .rundock/state.json', 'cat x > .claude/settings.local.json', 'tee .rundock/permissions.json',
   'echo x | tee -a .rundock/state.json', 'sed -i s/a/b/ .rundock/permissions.json', 'cp x .rundock/permissions.json', 'mv x .claude/settings.json',
-  'cat .rundock/permissions.json > copy.json', 'rm .rundock/permissions.json', 'cat .rundock/permissions.json; echo x > .rundock/permissions.json',
+  'rm .rundock/permissions.json', 'cat .rundock/permissions.json; echo x > .rundock/permissions.json',
   'truncate -s 0 .rundock/state.json', 'ln -sf x .rundock/permissions.json',
 ];
 

@@ -1121,6 +1121,57 @@ const BASH_ESCAPE = /^\\(?:[abefnrtv0\\'"?]|x[0-9a-fA-F]{1,2}|[0-7]{1,3}|u[0-9a-
 const WIN_SWITCH = /^\/[A-Za-z?]{1,8}(:[^\\/\s]*)?$/;
 const ENV_PREFIX = [/^\$\{?env:([A-Za-z_][A-Za-z0-9_]*)\}?(?=[\\/]|$)/i, /^%([A-Za-z_][A-Za-z0-9_]*)%(?=[\\/]|$)/];
 
+// THE WORDS A COMMAND CAN WRITE, for the answer-file check: a redirect or tee
+// target, the destination of a copy, install or dd, and every word of a
+// segment whose program is not known to only read the files it names (so
+// `sed -i`, `perl -i`, `rm`, `mv`, `ln`, `touch`, `truncate`, `chmod`, a git
+// command that changes the working tree, `git add` and `git commit` included,
+// and any program this does not know). A program known to read is one the
+// read-only vocabulary already passes, a comparer or viewer below, git with a
+// subcommand that only reads, `sed` without in-place editing, or a copy whose
+// source is the file. Unknown means written: the safe direction.
+const READS_NAMED_FILES = new Set(['jq', 'diff', 'cmp', 'comm', 'sdiff', 'md5', 'md5sum', 'shasum', 'sha1sum', 'sha256sum', 'cksum', 'file', 'stat', 'less', 'more', 'bat', 'strings']);
+const GIT_READ_SUBCOMMANDS = new Set(['diff', 'log', 'show', 'blame', 'annotate', 'status', 'ls-files', 'grep', 'cat-file', 'shortlog', 'whatchanged', 'rev-parse', 'describe']);
+const COPIES_FROM_SOURCES = new Set(['cp', 'install']);
+const REDIRECT = /^(?:\d*|&)(?:>>?|>\|)(.*)$/;
+function answerFileWriteWords(command) {
+  const out = new Set();
+  const bare = w => w.replace(/^['"]|['"]$/g, '');
+  for (const seg of shellSegments(String(command))) {
+    const words = seg.match(/'([^']*)'|"([^"]*)"|[^\s]+/g) || [];
+    const written = [];
+    const rest = [];
+    for (let i = 0; i < words.length; i++) {
+      const m = REDIRECT.exec(words[i]);
+      if (!m) { rest.push(words[i]); continue; }
+      const target = m[1] || words[++i];
+      if (target && !target.startsWith('&')) written.push(bare(target));
+    }
+    let at = 0;
+    while (at < rest.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(rest[at])) at++;
+    const verb = bare(rest[at] || '').split('/').pop();
+    const args = rest.slice(at + 1).map(bare);
+    let reads = isReadOnlyShellCommand(rest.join(' ')) || READS_NAMED_FILES.has(verb);
+    if (verb === 'git') {
+      let i = 0;
+      while (i < args.length && args[i].startsWith('-')) i += (args[i] === '-C' || args[i] === '-c') ? 2 : 1;
+      reads = GIT_READ_SUBCOMMANDS.has(args[i]) && !args.some(a => a.startsWith('--output'));
+    } else if (verb === 'sed') {
+      reads = !args.some(a => /^-[a-zA-Z]*i/.test(a) || a.startsWith('--in-place'));
+    } else if (verb === 'dd') {
+      reads = true;
+      for (const a of args) if (a.startsWith('of=')) written.push(a.slice(3));
+    } else if (COPIES_FROM_SOURCES.has(verb) && !args.some(a => a === '-t' || /^--(target-directory|link|symbolic-link)/.test(a) || /^-[a-zA-Z]*[ls]/.test(a))) {
+      const operands = args.filter(a => !a.startsWith('-'));
+      reads = true;
+      if (operands.length > 1) written.push(operands[operands.length - 1]);
+    }
+    for (const w of written) out.add(w);
+    if (!reads) for (const t of shellPathTokens(seg)) out.add(t);
+  }
+  return out;
+}
+
 function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), foldsCase = hostFoldsCase(), opts = {}) {
   const found = [];
   const seen = new Set();
@@ -1132,18 +1183,11 @@ function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), 
   // the command as a whole (see isReadOnlyShellCommand), never of one target
   // in isolation.
   const readOnly = isReadOnlyShellCommand(command);
-  // AN ANSWER FILE IS CHANGED ONLY BY A SEGMENT THAT DOES MORE THAN READ.
-  // `tail .rundock/permissions.json; echo done > build.log` reads the file and
-  // writes somewhere else; judged as a whole it was a change to the answer
-  // file. So the words of the segments that do not only read are collected,
-  // and an answer file is reported when one of them names it. A redirect, tee,
-  // sed -i, cp or mv onto it is such a segment.
-  const writingWords = new Set();
-  if (!readOnly) {
-    for (const seg of shellSegments(String(command))) {
-      if (!isReadOnlyShellCommand(seg)) for (const w of shellPathTokens(seg)) writingWords.add(w);
-    }
-  }
+  // AN ANSWER FILE IS CHANGED ONLY BY WHAT CAN WRITE IT. `tail
+  // .rundock/permissions.json; echo done > build.log` reads the file and writes
+  // somewhere else, and `git diff .mcp.json` or `cp .mcp.json backup.json`
+  // only reads it; see answerFileWriteWords for which words count as written.
+  const writingWords = readOnly ? new Set() : answerFileWriteWords(command);
   for (const raw of shellPathTokens(command)) {
     let t = raw;
     let homed = false;

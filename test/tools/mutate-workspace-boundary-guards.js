@@ -265,6 +265,8 @@ const GUARD_RUNS_LAUNCHER = { src: path.join(ROOT, 'lib', 'workspace', 'scaffold
 const GUARD_RUNS_CONNECTOR = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'team.js'), suite: 'test/unit/codex-what-runs-guard.test.js' };
 const GUARD_RUNS_CARD = { src: path.join(ROOT, 'public', 'permissions.js'), suite: 'test/unit/codex-what-runs-guard.test.js' };
 const GUARD_RUNS_LINE = { src: path.join(ROOT, 'lib', 'runtime', 'codex-glue.js'), suite: 'test/unit/codex-what-runs-guard.test.js' };
+// Which words a command can write, for the answer-file check, without the fixture.
+const ANSWER_WRITES = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/answer-file-writes.test.js' };
 // What agents are told about the connector files, against the card's words.
 const PROMPT_CONNECTORS = { src: path.join(ROOT, 'lib', 'agents', 'prompt.js'), suite: 'test/unit/discovery.test.js' };
 // What Rundock decides for an agent's environment, never inherited from its own.
@@ -1344,8 +1346,32 @@ const MUTATIONS = [
     "    if (writingWords.has(raw) && (isWorkspaceAnswerFile(",
     "    if (!readOnly && (isWorkspaceAnswerFile("],
   [ANSWER_READS_HOOK, "Answer-file reads: a segment that writes a permission file is taken as a read",
-    "      if (!isReadOnlyShellCommand(seg)) for (const w of shellPathTokens(seg)) writingWords.add(w);",
-    "      if (false) for (const w of shellPathTokens(seg)) writingWords.add(w);"],
+    '    if (!reads) for (const t of shellPathTokens(seg)) out.add(t);',
+    '    if (false) for (const t of shellPathTokens(seg)) out.add(t);'],
+  [ANSWER_WRITES, 'Answer-file writes: a segment that can write a file is taken as a read',
+    '    if (!reads) for (const t of shellPathTokens(seg)) out.add(t);',
+    '    if (false) for (const t of shellPathTokens(seg)) out.add(t);'],
+  [ANSWER_WRITES, 'Answer-file writes: a redirect target is not taken as written',
+    "      if (target && !target.startsWith('&')) written.push(bare(target));",
+    '      if (false) written.push(bare(target));'],
+  [ANSWER_WRITES, 'Answer-file writes: the destination of a copy is not taken as written',
+    '      if (operands.length > 1) written.push(operands[operands.length - 1]);',
+    '      if (false) written.push(operands[operands.length - 1]);'],
+  [ANSWER_WRITES, 'Answer-file writes: the file dd writes is not taken as written',
+    "      for (const a of args) if (a.startsWith('of=')) written.push(a.slice(3));",
+    "      for (const a of args) if (false) written.push(a.slice(3));"],
+  [ANSWER_WRITES, 'Answer-file writes: sed editing in place is taken as a read',
+    "      reads = !args.some(a => /^-[a-zA-Z]*i/.test(a) || a.startsWith('--in-place'));",
+    '      reads = true;'],
+  [ANSWER_WRITES, 'Answer-file writes: every git subcommand is taken as a read',
+    "      reads = GIT_READ_SUBCOMMANDS.has(args[i]) && !args.some(a => a.startsWith('--output'));",
+    '      reads = true;'],
+  [ANSWER_WRITES, 'Answer-file writes: a copy that links, or names its target folder, is taken as a read of its sources',
+    "!args.some(a => a === '-t' || /^--(target-directory|link|symbolic-link)/.test(a) || /^-[a-zA-Z]*[ls]/.test(a))",
+    'true'],
+  [ANSWER_WRITES, 'Answer-file writes: a comparer or viewer naming one still asks as a change',
+    "    let reads = isReadOnlyShellCommand(rest.join(' ')) || READS_NAMED_FILES.has(verb);",
+    "    let reads = isReadOnlyShellCommand(rest.join(' '));"],
   [ANSWER_READS_VOCAB, "Answer-file reads: od is not a read",
     "    'od', 'hexdump',",
     "    'hexdump',"],
