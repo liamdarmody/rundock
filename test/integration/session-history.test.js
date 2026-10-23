@@ -499,6 +499,59 @@ describe('Claude Code\'s own lines, and an earlier session longer than the parse
     assert.strictEqual(msg.conversations.find((c) => c.id === 'sh-compacted-a').messageCount, 4, 'counted as shown');
   });
 
+  test('Claude Code\'s notes are hidden by its own display rule, and the turns it shows are kept', async () => {
+    // Claude Code marks many lines isMeta (reminders, hook context, skill
+    // bodies, task notices, a custom command's expanded prompt, continuations)
+    // and shows a meta line only when a person or a peer sent it, or when it
+    // carries a prompt id or a turn origin; a line seen only in its transcript
+    // view, or a virtual one, is not shown either. The origin kinds are the SDK's
+    // own (SDKMessageOrigin: human, peer, task-notification, auto-continuation).
+    const at = (n) => `2026-01-16T09:${String(n).padStart(2, '0')}:00.000Z`;
+    const note = (content, extra, n) => ({ type: 'user', message: { role: 'user', content }, timestamp: at(n), ...extra });
+    const command = '<command-name>/review</command-name>\n<command-message>review</command-message>\n<command-args></command-args>';
+    writeSession('sess-notes', [
+      // Rundock's own prompt on stdin, with the fields the repo's capture
+      // records on it (scripts/transcript-truth/captured-transcript.json).
+      note('Plan the launch.', { promptId: 'p-1', promptSource: 'sdk', turnOrigin: 'sdk', permissionMode: 'default', turnPosition: 0, userType: 'external' }, 0),
+      assistantLine('Here is the plan.', at(1)),
+      note('<system-reminder>The plan is due on Friday.</system-reminder>', { isMeta: true }, 2),
+      note('SessionStart hook additional context: the workspace holds a launch plan.', { isMeta: true }, 3),
+      note('Base directory for this skill: /skills/launch\n\nUse this skill to plan a launch.', { isMeta: true }, 4),
+      note('<task-notification>The export finished.</task-notification>', { isMeta: true, origin: { kind: 'task-notification' } }, 5),
+      // The command as typed is a plain line and stays; its expanded prompt is meta.
+      note(command, {}, 6),
+      note('Review the open pull requests and list what blocks each one.', { isMeta: true }, 7),
+      note('Continue from where you left off.', { isMeta: true, origin: { kind: 'auto-continuation' } }, 8),
+      note('This conversation was summarised to save space.', { isVisibleInTranscriptOnly: true }, 9),
+      note('A placeholder Claude Code keeps for itself.', { isVirtual: true }, 10),
+      note('The earlier part of this conversation, summarised.', { isCompactSummary: true }, 11),
+      note('Can you check the budget too?', { isMeta: true, origin: { kind: 'peer', from: 'peer-1', name: 'Budget lead' } }, 12),
+      note('I am back; carry on with the launch.', { isMeta: true, origin: { kind: 'human' } }, 13),
+      note('Run the weekly check.', { isMeta: true, promptId: 'p-2' }, 14),
+      note('Resume the review.', { isMeta: true, turnOrigin: 'task_notification' }, 15),
+      assistantLine('All done.', at(16)),
+    ]);
+    const shown = [
+      'Plan the launch.',
+      'Here is the plan.',
+      command,
+      'Can you check the budget too?',
+      'I am back; carry on with the launch.',
+      'Run the weekly check.',
+      'Resume the review.',
+      'All done.',
+    ];
+    const sessionIds = [{ sessionId: 'sess-notes', agentId: 'chief-of-staff' }];
+    const res = await getHistory({ conversationId: 'sh-notes', sessionIds });
+    assert.deepStrictEqual(res.messages.map((m) => m.content), shown);
+
+    client.send({ type: 'save_conversation', conversation: { id: 'sh-notes', agentId: 'chief-of-staff', title: 'Notes', sessionIds } });
+    const since = client.messages.length;
+    client.send({ type: 'get_conversations' });
+    const { msg } = await client.waitFor((m) => m.type === 'conversations', { since, label: 'conversations' });
+    assert.strictEqual(msg.conversations.find((c) => c.id === 'sh-notes').messageCount, shown.length, 'counted as shown');
+  });
+
   test('an earlier session longer than 999 lines is shown from its first line', async () => {
     // Paging reaches back through history of any length, so the earlier
     // history is read in full rather than its newest 999 lines.

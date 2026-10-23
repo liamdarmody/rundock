@@ -374,18 +374,8 @@ const rundockLines = require('./lib/delegation/rundock-lines.js');
 
 // Check whether a silent-park response is effectively empty (sentinel, near-empty, or no-op).
 // Returns true if the response should be treated as empty and not appended to transcript.
-function isSilentParkResponse(text) {
-  if (!text) return true;
-  // The <silent> sentinel and any RUNDOCK markers wrapping it, taken out by the
-  // same test the history and the message counts use to recognise the sentinel.
-  const cleaned = rundockLines.withoutSilentSentinel(text);
-  // Treat as empty if under 10 non-whitespace chars or matches known no-op patterns
-  const nonWs = cleaned.replace(/\s/g, '');
-  if (nonWs.length < 10) return true;
-  const noOpPatterns = ['No response requested.', 'OK', 'Understood.', 'Acknowledged.'];
-  if (noOpPatterns.includes(cleaned)) return true;
-  return false;
-}
+// One test, shared with the history and the message counts (rundock-lines.js).
+const isSilentParkResponse = rundockLines.isSilentParkResponse;
 
 // Prepare specialist output for injection into orchestrator handback prompt.
 // Strips markers, trims whitespace, and caps length to avoid blowing context.
@@ -428,12 +418,29 @@ function getSessionJsonlPath(sessionId) {
 }
 
 // CLAUDE CODE'S OWN NOTES, written as the person's message though the person
-// never wrote them: the summary it leaves when it compacts a session ("This
-// session is being continued from a previous conversation...", flagged
-// isCompactSummary) and the notes around local commands (flagged isMeta).
-// Skipped by the history and the message counts alike.
+// never wrote them, hidden here as Claude Code itself hides them. Skipped by
+// the history and the message counts alike.
+//
+// The summary it leaves when it compacts a session ("This session is being
+// continued from a previous conversation...") is always hidden. Otherwise its
+// display rule: a line carrying a prompt id or a turn origin is a turn and is
+// shown, which is how Rundock's own prompts on stdin arrive (the repo's capture
+// records promptId and turnOrigin "sdk" on them). A meta line, which Claude
+// Code uses for reminders, hook context, skill bodies, task notices, a custom
+// command's expanded prompt and continuations, is shown only when a person or
+// a peer sent it; a teammate is a peer. A line seen only in its transcript
+// view, or a virtual one, is hidden. The command as typed is a plain line and
+// is shown. The origin kinds are the SDK's (SDKMessageOrigin).
 function isClaudeCodeNote(obj) {
-  return !!obj && (obj.isCompactSummary === true || obj.isMeta === true);
+  if (!obj) return false;
+  if (obj.isCompactSummary === true) return true;
+  if (obj.promptId || obj.turnOrigin) return false;
+  if (obj.isMeta === true) return !sentByPersonOrPeer(obj.origin);
+  return obj.isVirtual === true || obj.isVisibleInTranscriptOnly === true;
+}
+function sentByPersonOrPeer(origin) {
+  const kind = origin && origin.kind;
+  return kind === 'human' || kind === 'peer';
 }
 
 async function parseSessionHistory(sessionId, limit = 20, offset = 0) {

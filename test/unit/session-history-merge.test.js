@@ -412,13 +412,34 @@ describe('which session lines are Rundock\'s own', () => {
     }
   });
   test('a reply that is only the <silent> sentinel is one; a short reply of the agent\'s own is not', () => {
-    for (const r of ['<silent>', '<SILENT>', '  <silent>\n', '<silent> <!-- RUNDOCK:COMPLETE -->', 'No response requested.']) {
+    for (const r of ['<silent>', '<SILENT>', '  <silent>\n', '<silent> <!-- RUNDOCK:COMPLETE -->', 'No response requested.', '<silent> Done.', '<silent>\nUnderstood.']) {
       assert.strictEqual(lines.isRundockReply(r), true, r);
     }
     for (const r of ['Done.', 'OK', 'Yes, agreed.', 'Say <silent> to park me.', '<!-- RUNDOCK:COMPLETE -->']) {
       assert.strictEqual(lines.isRundockReply(r), false, r);
     }
-    // The same sentinel test the live path parks a reply by.
-    for (const r of ['<silent>', '<SILENT>', '<silent> <!-- RUNDOCK:COMPLETE -->']) assert.strictEqual(srv.isSilentParkResponse(r), true, r);
+    // The same test the live path parks a reply by.
+    for (const r of ['<silent>', '<SILENT>', '<silent> <!-- RUNDOCK:COMPLETE -->', '<silent> Done.']) assert.strictEqual(srv.isSilentParkResponse(r), true, r);
+    assert.strictEqual(srv.isSilentParkResponse, lines.isSilentParkResponse, 'one test, not two copies');
+  });
+  test('a sentinel reply is shown as the conversation showed it live: parked, or its words without the sentinel', async () => {
+    // Live, a reply carrying <silent> is parked when only a few words or a
+    // no-op are left beside it, and otherwise shown with the sentinel taken
+    // out (public/conversation-state.js). Earlier history shows it the same way.
+    const convoId = 'sentinel-replies';
+    newTurn(convoId, 'Anything else?', 'Nothing else for now.', 'chief-of-staff');
+    const res = await history(convoId, { 'sess-sentinel': [
+      user('Compare the venues.', '2026-01-17T09:00:00.000Z'),
+      reply('<silent> Done.', '2026-01-17T09:00:10.000Z'),
+      reply('<silent>\nThe lakeside venue is closest and fits the budget.', '2026-01-17T09:00:20.000Z'),
+      user('Anything else?', later(50)),
+      reply('Nothing else for now.', later(80)),
+    ] });
+    assert.deepStrictEqual(res.messages.map((m) => m.content), [
+      'Compare the venues.',
+      'The lakeside venue is closest and fits the budget.',
+      'Anything else?',
+      'Nothing else for now.',
+    ]);
   });
 });
