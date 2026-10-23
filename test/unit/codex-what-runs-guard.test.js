@@ -52,8 +52,12 @@ function asFileEdit(f, text) { fs.appendFileSync(path.join(ws, f), text); }
 function asShellRedirect(f, text) { execFileSync('sh', ['-c', `printf '%s' '${text}' >> '${path.join(ws, f)}'`]); }
 function drivenGlue() {
   const asked = [];
-  const prev = glue.wireCodexGlueDeps({ safeSend: () => {}, requestServerPermission: (req) => { asked.push(req); } });
-  return { asked, restore: () => glue.wireCodexGlueDeps(prev) };
+  const notices = [];
+  const prev = glue.wireCodexGlueDeps({
+    safeSend: (s) => { const m = JSON.parse(s); if (m.subtype === 'notice') notices.push(m); },
+    requestServerPermission: (req) => { asked.push(req); },
+  });
+  return { asked, notices, restore: () => glue.wireCodexGlueDeps(prev) };
 }
 
 describe('during a Codex turn, a change to a file that decides what runs is put back and reported', () => {
@@ -107,18 +111,40 @@ describe('during a Codex turn, a change to a file that decides what runs is put 
 });
 
 describe('between turns', () => {
-  test('a change to .mcp.json, the per-user connector file or a hook script, made outside Rundock, becomes the starting point', () => {
+  // Taken as the starting point, which is also the one way a late write by an
+  // agent's background job can stand, so the person is told which file, in a
+  // quiet notice rather than a card.
+  test('a change to .mcp.json, the per-user connector file or a hook script, made outside Rundock, becomes the starting point, said in a notice', () => {
+    const d = drivenGlue();
+    const entry = { agentId: 'builder', processId: 'p1' };
+    const changed = ['.mcp.json', '.rundock/mcp-secrets.json', '.claude/hooks/pre-tool.sh'];
+    try {
+      glue.guardCodexTurn(entry, 'convo-1');
+      glue.releaseCodexTurnGuard(entry);
+      for (const f of changed) asFileEdit(f, 'by hand');
+      glue.guardCodexTurn(entry, 'convo-1');
+      glue.releaseCodexTurnGuard(entry);
+    } finally { d.restore(); }
+    for (const f of changed) assert.match(read(f), /by hand$/, `${f} is left as the person made it`);
+    assert.strictEqual(d.asked.length, 0, 'and nobody is asked');
+    assert.strictEqual(d.notices.length, changed.length, 'one notice for each');
+    for (const f of changed) {
+      const n = d.notices.find(m => m.content.startsWith(`${f} changed while no agent was running`));
+      assert.ok(n, `the notice names ${f}`);
+      assert.match(n.content, /kept it as it is\. It decides what runs/);
+      assert.strictEqual(n._conversationId, 'convo-1', 'in the conversation whose turn found it');
+    }
+  });
+
+  test('the first turn in a workspace says nothing about the files already there', () => {
     const d = drivenGlue();
     const entry = { agentId: 'builder', processId: 'p1' };
     try {
       glue.guardCodexTurn(entry, 'convo-1');
       glue.releaseCodexTurnGuard(entry);
-      for (const f of ['.mcp.json', '.rundock/mcp-secrets.json', '.claude/hooks/pre-tool.sh']) asFileEdit(f, 'by hand');
-      glue.guardCodexTurn(entry, 'convo-1');
-      glue.releaseCodexTurnGuard(entry);
     } finally { d.restore(); }
-    for (const f of ['.mcp.json', '.rundock/mcp-secrets.json', '.claude/hooks/pre-tool.sh']) assert.match(read(f), /by hand$/, `${f} is left as the person made it`);
-    assert.strictEqual(d.asked.length, 0, 'and nobody is asked');
+    assert.deepStrictEqual(d.notices, []);
+    assert.deepStrictEqual(d.asked, []);
   });
 
   test('a change to the launcher is put back, since only Rundock writes it', () => {
@@ -242,6 +268,7 @@ describe('a hook script that was not there before', () => {
       fs.writeFileSync(added, 'by hand');
       glue.guardCodexTurn(entry, 'convo-1');
       assert.strictEqual(fs.readFileSync(added, 'utf-8'), 'by hand', 'left as the person made it');
+      assert.ok(d.notices.some(m => m.content.startsWith('.claude/hooks/added.sh changed while no agent was running')), 'and named in a notice');
       fs.appendFileSync(added, ' planted');
       glue.releaseCodexTurnGuard(entry);
     } finally { d.restore(); }
