@@ -250,6 +250,7 @@ const CONNECTOR_ASK = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'tea
 const CONNECTOR_ASK_FLOW = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'team.js'), suite: 'test/integration/connector-asks.test.js' };
 const CONNECTOR_CARD = { src: path.join(ROOT, 'public', 'permissions.js'), suite: 'test/unit/connector-card.test.js' };
 const CONNECTOR_WIRING = { src: path.join(ROOT, 'server.js'), suite: 'test/integration/connector-asks.test.js' };
+const CONNECTOR_VIEW = { src: path.join(ROOT, 'public', 'views', 'chat.js'), suite: 'test/unit/connector-card.test.js' };
 // The per-user connector file, through the real hook and the card's words.
 const SECRETS_HOOK = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/connector-secrets-file.test.js' };
 const SECRETS_CARD = { src: path.join(ROOT, 'public', 'permissions.js'), suite: 'test/unit/connector-secrets-file.test.js' };
@@ -1959,6 +1960,27 @@ const MUTATIONS = [
   [CONNECTOR_CARD, 'Connector card: an argument with a space is shown unquoted',
     '  function shellWord(a) {\n    const s = String(a);\n',
     '  function shellWord(a) {\n    const s = String(a);\n    return s;\n'],
+  [CONNECTOR_CARD, 'Connector card: an environment name that is not a plain name is put in a sentence',
+    '  const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;',
+    '  const ENV_NAME = /.*/;'],
+  [CONNECTOR_CARD, 'Connector card: a header name that is not an HTTP token is put in a sentence',
+    "  const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;",
+    '  const HEADER_NAME = /.*/;'],
+  [CONNECTOR_CARD, 'Connector card: a setting name that is not a plain name is put in a sentence',
+    '  const SETTING_NAME = /^[A-Za-z_][A-Za-z0-9_-]*$/;',
+    '  const SETTING_NAME = /.*/;'],
+  [CONNECTOR_CARD, 'Connector card: the URL is hidden beside a command',
+    "    if (typeof i.url === 'string') lines.push(`URL: ${i.url}`);",
+    "    if (typeof i.url === 'string' && !runs) lines.push(`URL: ${i.url}`);"],
+  [CONNECTOR_CARD, 'Connector card: the transport is not shown',
+    "    if (typeof i.transport === 'string') lines.push(`Transport: ${i.transport}`);\n",
+    ''],
+  [CONNECTOR_CARD, 'Connector card: the header helper is not shown',
+    '        lines.push(`Header helper: ${i.headersHelper}`);\n',
+    ''],
+  [CONNECTOR_VIEW, 'Connector card: the detail is clipped like any other',
+    "        : (toolName === 'SaveConnector' || toolName === 'DeleteConnector')\n",
+    "        : false\n"],
   [CONNECTOR_WIRING, 'Connector: the handlers are not handed the card',
     '  runtime: { getRuntimeStatus, killAllChildren, cleanOrphanedProcesses, requestServerPermission },',
     '  runtime: { getRuntimeStatus, killAllChildren, cleanOrphanedProcesses },'],

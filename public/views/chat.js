@@ -978,6 +978,10 @@ function renderPermissionCard(d, convoId, host) {
       ${context ? `<div class="permission-context">${esc(context)}</div>` : ''}
       ${crossings.length > 1
         ? `<div class="permission-detail">${crossings.map(c => esc(c.path)).join('<br>')}</div>`
+        // An agent's connector change: what it would run, line by line, open
+        // and unclipped, since this card is the person's only look at it.
+        : (toolName === 'SaveConnector' || toolName === 'DeleteConnector')
+          ? `<details class="permission-detail-collapse" open><summary>What it would run</summary><code class="permission-detail">${detail.split('\n').map(esc).join('<br>')}</code></details>`
         : (toolName === 'Bash' && input.description && detail.length > 60)
           ? `<details class="permission-detail-collapse"><summary>Show command</summary><code class="permission-detail">${esc(detail)}</code></details>`
           : `<code class="permission-detail">${esc(detail)}</code>`}

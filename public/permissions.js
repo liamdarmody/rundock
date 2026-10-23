@@ -249,23 +249,47 @@
     const s = String(a);
     return /^[\w@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, "'\\''")}'`;
   }
+  // THE NAMES ARE THE AGENT'S WORDS. An environment, header or setting name
+  // comes from the entry the agent wrote, so only a plain name is said in a
+  // sentence; anything else is shown JSON-quoted on a line of its own in the
+  // detail, where it cannot read as Rundock speaking. Header names are HTTP
+  // tokens. A command, a URL and a header helper are always detail lines.
+  const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+  const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
+  const SETTING_NAME = /^[A-Za-z_][A-Za-z0-9_-]*$/;
   function connectorCopy(toolName, input) {
     const i = input || {};
-    const runs = typeof i.command === 'string' ? [i.command, ...(Array.isArray(i.args) ? i.args : [])].map(shellWord).join(' ') : '';
+    const list = v => (Array.isArray(v) ? v.map(String) : []);
+    const runs = typeof i.command === 'string' ? [i.command, ...list(i.args)].map(shellWord).join(' ') : '';
     const removing = toolName === 'DeleteConnector';
     const verb = removing ? 'Remove' : (i.action === 'replace' ? 'Change' : 'Add');
+    const lines = [];
+    if (runs) lines.push(runs);
+    if (typeof i.url === 'string') lines.push(`URL: ${i.url}`);
+    if (typeof i.transport === 'string') lines.push(`Transport: ${i.transport}`);
     const said = [];
     if (removing) said.push('An agent asked Rundock to remove this connector from .mcp.json, so agents would no longer start it or connect to it.');
     else if (runs) said.push('An agent asked Rundock to write this into .mcp.json. Claude Code would run this command as its own process, outside the sandbox, whenever an agent starts.');
     else said.push('An agent asked Rundock to write this into .mcp.json. Agents would connect to it whenever one starts.');
     if (!removing) {
-      if (Array.isArray(i.env) && i.env.length) said.push(`It would be started with these set: ${i.env.join(', ')}.`);
-      if (Array.isArray(i.headers) && i.headers.length) said.push(`It would send these headers: ${i.headers.join(', ')}.`);
-      if (typeof i.headersHelper === 'string') said.push(`To make its headers it would run: ${i.headersHelper}`);
-      if (Array.isArray(i.others) && i.others.length) said.push(`It also sets: ${i.others.join(', ')}.`);
+      for (const [names, plain, sentence, label] of [
+        [list(i.env), ENV_NAME, 'It would be started with these set', 'Other environment names'],
+        [list(i.headers), HEADER_NAME, 'It would send these headers', 'Other header names'],
+        [list(i.others), SETTING_NAME, 'It also sets', 'Other settings'],
+      ]) {
+        const ok = names.filter(n => plain.test(n));
+        const odd = names.filter(n => !plain.test(n));
+        if (ok.length) said.push(`${sentence}: ${ok.join(', ')}.`);
+        if (odd.length) lines.push(`${label}: ${odd.map(n => JSON.stringify(n)).join(', ')}`);
+      }
+      if (typeof i.headersHelper === 'string') {
+        said.push('Before connecting it would run a command to make its headers, shown below.');
+        lines.push(`Header helper: ${i.headersHelper}`);
+      }
+      if (lines.some(l => /^Other /.test(l))) said.push('It also sets the names shown quoted below.');
     }
     said.push('Rundock asks about every connector an agent adds or removes, so there is no Always allow.');
-    return { summary: `${verb} the connector ${i.name || ''}`.trim(), context: said.join(' '), detail: runs || i.url || JSON.stringify(i) };
+    return { summary: `${verb} the connector ${i.name || ''}`.trim(), context: said.join(' '), detail: lines.length ? lines.join('\n') : JSON.stringify(i) };
   }
 
   // Key for always-allow matching.
