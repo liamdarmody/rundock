@@ -152,6 +152,17 @@ describe('the refusal names forms that work', () => {
     });
   });
 
+  test('a wrapped near miss: put the values inside the script, after the cd if there is one', () => {
+    const near = ['node /work/near.js'];
+    const piped = classify('node /work/near.js a b | head', near);
+    assert.strictEqual(piped.verdict, 'refuse');
+    assert.match(piped.message, /Put the values inside the script and run it bare:\n {2}node \/work\/near\.js\n/);
+    assert.doesNotMatch(piped.message, /\n {2}node \/work\/near\.js a b/, 'run bare, that is a near miss again');
+    assert.match(piped.message, /Its output comes back as the result of the call/);
+    assert.match(classify('cd /work && node /work/near.js a b', near).message,
+      /Put the values inside the script and run it bare, after the cd as a call of its own:\n {2}1\. cd \/work\n {2}2\. node \/work\/near\.js$/);
+  });
+
   test('the runner is offered only when its own command is excluded', () => {
     for (const cmd of refusals) assert.doesNotMatch(verdict(cmd).message, /exempt-run/, cmd);
     const withRunner = [...PATTERNS, `node ${RUNNER} *`];

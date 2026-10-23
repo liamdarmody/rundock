@@ -242,6 +242,12 @@ const MUTATIONS = [
   [SHAPE, 'a near miss is given as the command the exclusion names',
     "        named: seg.raw.slice(0, hit.length).join(' '),",
     "        named: seg.raw.join(' '),"],
+  [SHAPE, 'a wrapped near miss is given as the command the exclusion names',
+    "    } else if (r.fix.near) {",
+    "    } else if (false) {"],
+  [SHAPE, 'a wrapped near miss keeps the cd before it',
+    "      if (r.fix.cd) lines.push('Put the values inside the script",
+    "      if (false) lines.push('Put the values inside the script"],
   // ===== THE FIX NAMES THE DIRECTORY =====
   [SHAPE, 'the fix takes the directory from the cd before the command',
     "    if (segments[j].words[0] === 'cd' && segments[j].words[1]) return",

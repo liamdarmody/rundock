@@ -41,7 +41,9 @@
  * WHAT IT SUGGESTS: the command bare, on its own; after a `cd`, two calls, the
  * `cd` and then the command; for a VAR=value, a small script in the test tree
  * or the gitignored scratch folder that sets it for the child process it
- * starts. Each command is printed as written, quotes and all, since run bare
+ * starts; for a near miss, wrapped or not, the script with its values put
+ * inside it, after the cd if there is one, since run bare with its arguments
+ * it is a near miss again. Each command is printed as written, quotes and all, since run bare
  * with its quotes stripped it would be a different command.
  * scripts/exempt-run.js is named only when its own command matches an
  * exclusion: a runner not configured as an exclusion runs sandboxed like
@@ -347,6 +349,7 @@ function classify(command, patterns, outer = null) {
         cd: at && at.shown,
         argv: seg.words.slice(),
         named: seg.raw.slice(0, hit.length).join(' '),
+        near: hit.near,
         shownEnv: seg.envRaw.join(' '),
         env: Object.fromEntries(seg.env.map((e) => [e.slice(0, e.indexOf('=')), e.slice(e.indexOf('=') + 1)])),
         stdout,
@@ -378,6 +381,10 @@ function refusalMessage(r) {
       lines.push(`A bare command cannot carry ${env}. Write a small script in the repository's test tree or its`,
         `gitignored scratch folder (.rundock/scratch/) that starts the command as a child process${r.fix.cwd ? ` in ${r.fix.cd || r.fix.cwd}` : ''}`,
         'with that set, and run the script bare.');
+    } else if (r.fix.near) {
+      // Run bare with its arguments, a near miss is refused again.
+      if (r.fix.cd) lines.push('Put the values inside the script and run it bare, after the cd as a call of its own:', `  1. cd ${r.fix.cd}`, `  2. ${r.fix.named}`);
+      else lines.push('Put the values inside the script and run it bare:', `  ${r.fix.named}`);
     } else if (r.fix.cd) {
       lines.push('Run it as two calls, the cd alone and then the command alone:', `  1. cd ${r.fix.cd}`, `  2. ${r.segment}`);
     } else {
