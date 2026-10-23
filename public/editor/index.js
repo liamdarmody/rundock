@@ -134,7 +134,7 @@ export function createEditor({
     },
   };
   const renderPanel = () => {
-    const count = renderProperties(propertiesElement, parts.parsed, panelOpts);
+    const count = renderProperties(propertiesElement, parts.parsed, { ...panelOpts, raw: parts.raw });
     if (propertiesElement) propertiesElement.__propsRerender = renderPanel;
     return count;
   };

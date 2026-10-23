@@ -9,7 +9,8 @@ import { linkSegments, wholeLink, unquotedLinkText } from '../../public/editor/m
 import { rawValueText } from '../../public/editor/markdown/frontmatter-edit.js';
 import { extractFrontmatter } from '../../public/editor/markdown/frontmatter.js';
 
-await bootEditorEnv();
+const env = await bootEditorEnv();
+const { extractLinks } = createRequire(import.meta.url)('../../lib/links.js');
 
 const links = (text) => linkSegments(text).filter((s) => s.link).map((s) => s.link);
 
@@ -59,7 +60,6 @@ describe('links inside a text value', () => {
   });
 
   test('the grammar is the Map\'s: the same text gives the same targets', () => {
-    const { extractLinks } = createRequire(import.meta.url)('../../lib/links.js');
     for (const text of [
       '[[Plan]] section 4, [[Templates]] W4 and W5, [[Log]]',
       'See [[A|one|two]], [[B|]] and [[ C ]]', '[[x]y]] [[ok]]', '![[e.png]] [[f]] `[[g]]`',
@@ -116,5 +116,162 @@ describe('an unquoted [[X]], which YAML reads as a nested list', () => {
   test('rawValueText answers null for a key that is not there', () => {
     assert.equal(rawValueText(raw, 'absent'), null);
     assert.equal(rawValueText(null, 'plain'), null);
+  });
+});
+
+// ── The properties panel, through the real editor ──────────────────────────
+const NOTE = [
+  '---',
+  'status: Draft, reviewed Monday',
+  'builds-on: "[[Plan]] section 4, [[Templates]] W4 and W5, [[Log]]"',
+  'supersedes: [[Launch checklist]]',
+  'related:',
+  '  - "[[Brief]]"',
+  '  - "[[Style guide|house style]]"',
+  '  - [[Plan#Risks]]',
+  'depends-on: "[[Roadmap]]"',
+  'see-also: "See [[Plan]], and [[Old plan]] once it is written"',
+  '---',
+  '',
+  'Body text.',
+  '',
+].join('\n');
+const EXISTING = new Set(['Plan', 'Templates', 'Log', 'Launch checklist', 'Brief', 'Style guide']);
+const exists = (target) => EXISTING.has(target.split('#')[0]);
+
+function mount(src, extra = {}) {
+  const doc = env.window.document;
+  const props = doc.createElement('div');
+  const element = doc.createElement('div');
+  doc.body.append(props, element);
+  const opened = [];
+  const { editor } = env.createEditor({
+    element, rawMarkdown: src, propertiesElement: props,
+    onWikilinkClick: (t) => opened.push(t), resolveWikilink: exists, ...extra,
+  });
+  const row = (key) => props.querySelector(`.prop-row[data-prop-key="${key}"]`);
+  const click = (el) => el.dispatchEvent(new env.window.MouseEvent('click', { bubbles: true }));
+  const key = (el, k) => el.dispatchEvent(new env.window.KeyboardEvent('keydown', { key: k, bubbles: true }));
+  const done = () => { env.destroyEditor(editor); props.remove(); element.remove(); };
+  return { doc, editor, props, opened, row, click, key, done, markdown: () => env.getMarkdown(editor) };
+}
+
+describe('the properties panel shows links inside values', () => {
+  test('every link in a text value is a link, and the words between stay words', () => {
+    const p = mount(NOTE);
+    try {
+      const row = p.row('builds-on');
+      assert.deepEqual([...row.querySelectorAll('a.prop-wikilink')].map((a) => a.textContent), ['Plan', 'Templates', 'Log']);
+      assert.equal(row.querySelector('.prop-value').textContent, 'Plan section 4, Templates W4 and W5, Log');
+      assert.deepEqual([...p.row('see-also').querySelectorAll('a')].map((a) => [a.textContent, a.classList.contains('dead')]),
+        [['Plan', false], ['Old plan', true]], 'a missing link sits among live ones, marked');
+    } finally { p.done(); }
+  });
+
+  test('the words are escaped, so markup in a value is text', () => {
+    const p = mount('---\nnote: "<img src=x onerror=boom()> and [[Plan]]"\n---\n');
+    try {
+      const row = p.row('note');
+      assert.equal(row.querySelector('img'), null, 'no element is made from the words');
+      assert.equal(row.querySelector('.prop-value').textContent, '<img src=x onerror=boom()> and Plan');
+    } finally { p.done(); }
+  });
+
+  test('the links the panel draws are the links the Map counts', () => {
+    const p = mount(NOTE);
+    try {
+      const drawn = [...p.props.querySelectorAll('a.prop-wikilink')].map((a) => a.getAttribute('data-target'));
+      const counted = extractLinks(extractFrontmatter(NOTE).raw).filter((l) => l.kind === 'wikilink').map((l) => l.target);
+      assert.deepEqual(drawn, counted);
+    } finally { p.done(); }
+  });
+
+  test('an alias shows its words, a heading stays on the target, an unquoted item is a link', () => {
+    const p = mount(NOTE);
+    try {
+      const related = [...p.row('related').querySelectorAll('a.prop-wikilink')];
+      assert.deepEqual(related.map((a) => [a.textContent, a.getAttribute('data-target')]),
+        [['Brief', 'Brief'], ['house style', 'Style guide'], ['Plan#Risks', 'Plan#Risks']]);
+      assert.ok(p.row('depends-on').querySelector('a.prop-wikilink.dead'), 'a missing whole-value link is marked');
+    } finally { p.done(); }
+  });
+
+  test('an unquoted link renders as a link, and the file is left byte for byte', () => {
+    const p = mount(NOTE);
+    try {
+      const row = p.row('supersedes');
+      assert.equal(row.getAttribute('data-prop-type'), 'string', 'a text value, not a nested list');
+      assert.equal(row.querySelector('a.prop-wikilink').getAttribute('data-target'), 'Launch checklist');
+      p.click(row.querySelector('.prop-wikilink-edit'));
+      const input = row.querySelector('input.prop-edit-input');
+      assert.equal(input.value, '[[Launch checklist]]', 'the editor shows the link as written');
+      p.key(input, 'Escape');
+      assert.equal(p.markdown(), NOTE);
+    } finally { p.done(); }
+  });
+});
+
+describe('editing a value with links in it', () => {
+  test('clicking a link opens it and does not start an edit', () => {
+    const p = mount(NOTE);
+    try {
+      const row = p.row('builds-on');
+      p.click(row.querySelectorAll('a.prop-wikilink')[1]);
+      assert.deepEqual(p.opened, ['Templates']);
+      assert.equal(row.querySelector('input'), null);
+    } finally { p.done(); }
+  });
+
+  test('clicking the words opens the raw text with the caret where the click landed', () => {
+    const p = mount(NOTE);
+    try {
+      const row = p.row('builds-on');
+      const words = row.querySelectorAll('.prop-text')[1]; // " W4 and W5, "
+      const range = p.doc.createRange();
+      range.setStart(words.firstChild, 3);
+      const sel = p.doc.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+      p.click(words);
+      const input = row.querySelector('input.prop-edit-input');
+      assert.equal(input.value, '[[Plan]] section 4, [[Templates]] W4 and W5, [[Log]]');
+      const at = '[[Plan]] section 4, [[Templates]] W4'.length;
+      assert.deepEqual([input.selectionStart, input.selectionEnd], [at, at]);
+      assert.deepEqual(p.opened, []);
+    } finally { p.done(); }
+  });
+
+  test('an edit changes only the bytes that were typed', () => {
+    const p = mount(NOTE);
+    try {
+      const row = p.row('builds-on');
+      p.click(row.querySelector('.prop-text'));
+      const input = row.querySelector('input.prop-edit-input');
+      input.value = input.value.replace('W4 and W5', 'W4 to W6');
+      p.key(input, 'Enter');
+      assert.equal(p.markdown(), NOTE.replace('W4 and W5', 'W4 to W6'));
+    } finally { p.done(); }
+  });
+
+  test('an unquoted link that is edited is written as a quoted value', () => {
+    const p = mount(NOTE);
+    try {
+      const row = p.row('supersedes');
+      p.click(row.querySelector('.prop-wikilink-edit'));
+      const input = row.querySelector('input.prop-edit-input');
+      input.value = '[[Launch list]]';
+      p.key(input, 'Enter');
+      assert.equal(p.markdown(), NOTE.replace('supersedes: [[Launch checklist]]', 'supersedes: "[[Launch list]]"'));
+    } finally { p.done(); }
+  });
+
+  test('every value holding a link has the pencil', () => {
+    const p = mount(NOTE);
+    try {
+      for (const key of ['builds-on', 'supersedes', 'depends-on', 'see-also']) {
+        assert.ok(p.row(key).querySelector('.prop-wikilink-edit'), key);
+      }
+      assert.equal(p.row('status').querySelector('.prop-wikilink-edit'), null, 'plain text needs none');
+    } finally { p.done(); }
   });
 });

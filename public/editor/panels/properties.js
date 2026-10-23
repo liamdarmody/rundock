@@ -9,6 +9,9 @@
 // 'object' | 'null'. The panel uses the type to pick an icon and a value
 // renderer; the renderer itself never mutates the underlying data.
 
+import { linkSegments, unquotedLinkText } from '../markdown/prop-links.js';
+import { rawValueText } from '../markdown/frontmatter-edit.js';
+
 // Per-type row icons as Lucide-style inline SVGs (24 viewBox, 1.8 stroke, round
 // caps). Icons read as a type at a glance where the previous glyphs did not.
 const TYPE_ICON_PATHS = {
@@ -81,8 +84,8 @@ export function dateString(value) {
 }
 
 // A property value that IS a wikilink: "[[target]]" or "[[target|alias]]"
-// (quotes already consumed by YAML). Obsidian renders these as links in its
-// properties panel; so do we. Values merely CONTAINING a wikilink stay text.
+// (quotes already consumed by YAML). Rendering no longer needs this test:
+// every link in a text value is a link, wherever it sits (renderLinkedText).
 const PROP_WIKILINK_RE = /^\[\[([^\[\]\|\n]+?)(?:\|([^\[\]\|\n]+?))?\]\]$/;
 
 export function parsePropWikilink(value) {
@@ -101,7 +104,23 @@ function renderWikilinkValue(link, resolveWikilink) {
   return `<a class="prop-wikilink${dead ? ' dead' : ''}" tabindex="0" data-target="${escapeHtml(link.target)}"${dead ? ' title="No matching file in this workspace"' : ''}>${escapeHtml(display)}</a>`;
 }
 
-function renderValue(value, type, resolveWikilink, editable) {
+// Text with links among its words: each link an anchor, every word escaped.
+// A run of words carries where it starts in the value (data-at), so a click
+// on the words opens the editor with the caret at the same place.
+function renderLinkedText(text, resolveWikilink) {
+  let at = 0;
+  return linkSegments(text).map((seg) => {
+    const start = at;
+    at += seg.text.length;
+    return seg.link
+      ? renderWikilinkValue(seg.link, resolveWikilink)
+      : `<span class="prop-text" data-at="${start}">${escapeHtml(seg.text)}</span>`;
+  }).join('');
+}
+
+const hasLink = (text) => linkSegments(text).some((s) => s.link);
+
+function renderValue(value, type, resolveWikilink, editable, rawItems) {
   if (type === 'null') return '<span class="prop-value empty">empty</span>';
   if (type === 'bool') {
     const on = value === true;
@@ -116,15 +135,19 @@ function renderValue(value, type, resolveWikilink, editable) {
     // list item renders its content readably and is marked non-editable: it has
     // no remove control, because removing a multi-line block item by index
     // could corrupt the neighbouring bytes.
+    // An unquoted `- [[X]]` item arrives as a nested list; its name is read
+    // from its own line, and only when every item has a line to read.
+    const lines = rawItems && rawItems.length === value.length ? rawItems : [];
     const items = value
-      .map((v, i) => {
+      .map((item, i) => {
+        const unquoted = unquotedLinkText(item, lines[i]);
+        const v = unquoted !== null ? unquoted : item;
         if (v !== null && typeof v === 'object') {
           return `<span class="prop-chip non-editable" title="Nested value (not editable)">${escapeHtml(compactValue(v))}</span>`;
         }
-        const link = parsePropWikilink(v);
         const remove = '<button type="button" class="prop-chip-remove" title="Remove">&times;</button>';
-        return link
-          ? `<span class="prop-link-item" data-item-index="${i}">${renderWikilinkValue(link, resolveWikilink)}${remove}</span>`
+        return hasLink(String(v))
+          ? `<span class="prop-link-item" data-item-index="${i}">${renderLinkedText(String(v), resolveWikilink)}${remove}</span>`
           : `<span class="prop-chip" data-item-index="${i}">${escapeHtml(String(v))}${remove}</span>`;
       })
       .join('');
@@ -139,12 +162,12 @@ function renderValue(value, type, resolveWikilink, editable) {
   if (type === 'object') {
     return '<span class="prop-value empty">nested object (not editable)</span>';
   }
-  const link = parsePropWikilink(value);
-  if (link) {
-    // A value that IS a pure wikilink navigates on click, so it needs its own
-    // edit affordance; without one it could never be edited inline.
+  if (hasLink(String(value))) {
+    // A link navigates on click, so a value made only of links could never
+    // be edited by clicking it: the pencil is the edit affordance that is
+    // always there, for the keyboard and for touch as well.
     const edit = editable ? '<button type="button" class="prop-wikilink-edit" title="Edit value">' + PENCIL_SVG + '</button>' : '';
-    return `<span class="prop-value string">${renderWikilinkValue(link, resolveWikilink)}${edit}</span>`;
+    return `<span class="prop-value string linked">${renderLinkedText(String(value), resolveWikilink)}${edit}</span>`;
   }
   return `<span class="prop-value string">${escapeHtml(String(value))}</span>`;
 }
@@ -170,15 +193,19 @@ const PENCIL_SVG = '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" 
 // opts.onEditProperty(key, newValue) -> bool: when present, scalar values
 // edit inline, bools toggle, and list chips remove/add. The callback owns
 // the byte-honest YAML surgery; a false return leaves the panel unchanged.
+// opts.raw: the frontmatter block as written, which is where the name of an
+// unquoted [[link]] is read from, since YAML parses one as a nested list.
 export function renderProperties(container, parsed, opts = {}) {
-  const { onWikilinkClick = null, resolveWikilink = null, onEditProperty = null } = opts;
+  const { onWikilinkClick = null, resolveWikilink = null, onEditProperty = null, raw = null } = opts;
   if (!container) return 0;
   // The container is a single persistent node reused for every file. Store the
   // current render's callbacks and data here; the delegated handlers (attached
   // exactly once, below) read this at event time. Attaching per render instead
   // would stack a new handler each file/edit, each bound to a stale file's
   // data, so a click would fire several at once and edit the wrong file.
-  container.__propsState = { parsed, onWikilinkClick, resolveWikilink, onEditProperty };
+  // `shown` is each value as the panel shows and edits it.
+  const shown = {};
+  container.__propsState = { parsed, shown, onWikilinkClick, resolveWikilink, onEditProperty };
   container.innerHTML = '';
   if (!parsed || typeof parsed !== 'object') {
     container.classList.remove('visible');
@@ -193,7 +220,12 @@ export function renderProperties(container, parsed, opts = {}) {
 
   let nestedHidden = 0;
   const rows = [];
-  for (const [key, value] of entries) {
+  for (const [key, parsedValue] of entries) {
+    const written = rawValueText(raw, key);
+    // An unquoted `key: [[X]]` is a text value holding one link, as written.
+    const unquoted = written ? unquotedLinkText(parsedValue, written.inline) : null;
+    const value = unquoted !== null ? unquoted : parsedValue;
+    shown[key] = value;
     const type = inferType(value);
     if (type === 'object') { nestedHidden += 1; continue; }
     const editable = onEditProperty && ['string', 'number', 'date', 'bool', 'list', 'null'].includes(type);
@@ -201,7 +233,7 @@ export function renderProperties(container, parsed, opts = {}) {
       <div class="prop-row${editable ? ' editable' : ''}" data-prop-key="${escapeHtml(key)}" data-prop-type="${escapeHtml(type)}">
         <span class="prop-icon" title="${escapeHtml(type)}">${typeIconSvg(type)}</span>
         <span class="prop-key">${escapeHtml(key)}</span>
-        ${renderValue(value, type, resolveWikilink, editable)}
+        ${renderValue(value, type, resolveWikilink, editable, written && written.items)}
       </div>
     `);
   }
@@ -265,7 +297,7 @@ function rerenderProps(container) {
 // simply snaps back. onEditProperty is captured from the state read at the
 // moment editing begins, so one edit stays internally consistent even if the
 // file changes while the input is open.
-function openScalarInput(container, row, seed, apply) {
+function openScalarInput(container, row, seed, apply, caret = null) {
   if (row.querySelector('input.prop-edit-input')) return;
   const doc = container.ownerDocument;
   const valueEl = row.querySelector('.prop-value');
@@ -274,7 +306,8 @@ function openScalarInput(container, row, seed, apply) {
   input.value = seed;
   valueEl.replaceWith(input);
   input.focus();
-  input.select();
+  if (caret === null) input.select();
+  else input.setSelectionRange(caret, caret);
   // Identity of the render this input was opened against. If the panel
   // re-renders (a file switch, or a live external refresh) __propsState is
   // replaced, so a later commit from this now-orphaned input would write to
@@ -345,10 +378,10 @@ function handleEditClick(container, st, event) {
   const key = row.getAttribute('data-prop-key');
   const type = row.getAttribute('data-prop-type');
   const { parsed, onEditProperty } = st;
-  const value = parsed[key];
+  const value = st.shown && key in st.shown ? st.shown[key] : parsed[key];
 
-  // The explicit edit control on a pure-wikilink value opens the inline editor
-  // seeded with the raw wikilink text. Checked before the navigation bail below.
+  // The explicit edit control on a value holding links opens the inline editor
+  // seeded with the raw text, links and all. Checked before the navigation bail below.
   if (event.target.closest('.prop-wikilink-edit')) {
     openScalarInput(container, row, String(value), (text) => {
       const t = text.trim();
@@ -386,6 +419,30 @@ function handleEditClick(container, st, event) {
       const t = text.trim();
       if (type === 'number' && /^-?\d+(\.\d+)?$/.test(t)) onEditProperty(key, Number(t));
       else onEditProperty(key, t);
-    });
+    }, caretInValue(row, event));
   }
+}
+
+// Where in the value a click on its words landed, or null. Read from the
+// point under the pointer where the browser can say, otherwise from the
+// collapsed selection the click left; either way it has to land in a run of
+// words in this row, whose data-at says where that run starts in the value.
+function caretInValue(row, event) {
+  const doc = row.ownerDocument;
+  let node = null;
+  let offset = 0;
+  if (doc.caretPositionFromPoint) {
+    const p = doc.caretPositionFromPoint(event.clientX, event.clientY);
+    if (p) { node = p.offsetNode; offset = p.offset; }
+  } else if (doc.caretRangeFromPoint) {
+    const r = doc.caretRangeFromPoint(event.clientX, event.clientY);
+    if (r) { node = r.startContainer; offset = r.startOffset; }
+  } else {
+    const sel = doc.getSelection ? doc.getSelection() : null;
+    if (sel && sel.rangeCount && sel.isCollapsed) { node = sel.anchorNode; offset = sel.anchorOffset; }
+  }
+  if (!node || node.nodeType !== 3) return null;
+  const run = node.parentElement && node.parentElement.closest('.prop-text[data-at]');
+  if (!run || !row.contains(run)) return null;
+  return Number(run.getAttribute('data-at')) + offset;
 }
