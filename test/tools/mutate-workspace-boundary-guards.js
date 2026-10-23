@@ -255,6 +255,15 @@ const SECRETS_HOOK = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), su
 const SECRETS_CARD = { src: path.join(ROOT, 'public', 'permissions.js'), suite: 'test/unit/connector-secrets-file.test.js' };
 // The card for a file Claude Code protects itself says an Allow may not hold.
 const RUNS_NOTE = { src: path.join(ROOT, 'public', 'permissions.js'), suite: 'test/unit/boundary-card.test.js' };
+// The detect-and-restore guard watches the files that decide what runs, for a
+// Codex agent whose writes inside the workspace never meet a card; Rundock's
+// own writers record what they wrote, and the put-back card and the agent's
+// line say what the file decides.
+const GUARD_RUNS = { src: path.join(ROOT, 'lib', 'workspace', 'answer-file-guard.js'), suite: 'test/unit/codex-what-runs-guard.test.js' };
+const GUARD_RUNS_LAUNCHER = { src: path.join(ROOT, 'lib', 'workspace', 'scaffold.js'), suite: 'test/unit/codex-what-runs-guard.test.js' };
+const GUARD_RUNS_CONNECTOR = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'team.js'), suite: 'test/unit/codex-what-runs-guard.test.js' };
+const GUARD_RUNS_CARD = { src: path.join(ROOT, 'public', 'permissions.js'), suite: 'test/unit/codex-what-runs-guard.test.js' };
+const GUARD_RUNS_LINE = { src: path.join(ROOT, 'lib', 'runtime', 'codex-glue.js'), suite: 'test/unit/codex-what-runs-guard.test.js' };
 // What Rundock decides for an agent's environment, never inherited from its own.
 const SPAWN_ENV = { src: path.join(ROOT, 'lib', 'runtime', 'claude.js'), suite: 'test/unit/workspace-modes.test.js' };
 
@@ -1287,14 +1296,14 @@ const MUTATIONS = [
     ""],
   // ===== OUTSIDE CHANGES TO THE CLAUDE CODE SETTINGS, AND THE APPROVED COPY =====
   [CM_ANSWER_GUARD, "Answer-file guard: a settings change made outside Rundock between turns is reported",
-    "SHARED_FILES.has(relative)) { g.snapshot.set(f, now); continue; }",
-    "SHARED_FILES.has(relative)) { g.snapshot.set(f, now); const l = [...g.listeners].pop(); if (l) l({ file: f, relative, agentContent: null, restored: false, outsideTurn: true }); continue; }"],
+    "isShared(relative)) { g.snapshot.set(f, now); continue; }",
+    "isShared(relative)) { g.snapshot.set(f, now); const l = [...g.listeners].pop(); if (l) l({ file: f, relative, agentContent: null, restored: false, outsideTurn: true }); continue; }"],
   [CM_ANSWER_GUARD, "Answer-file guard: a Claude Code settings change between turns is put back like Rundock's own files",
-    "    if (outsideTurn && SHARED_FILES.has(relative)) {",
+    "    if (outsideTurn && isShared(relative)) {",
     "    if (false) {"],
   [CM_ANSWER_GUARD, "Answer-file guard: Rundock's own files changed between turns are kept like the settings",
-    "const SHARED_FILES = new Set(['.claude/settings.local.json', '.claude/settings.json']);",
-    "const SHARED_FILES = new Set(['.claude/settings.local.json', '.claude/settings.json', '.rundock/permissions.json', '.rundock/state.json']);"],
+    "const SHARED_FILES = new Set(['.claude/settings.local.json', '.claude/settings.json', '.mcp.json', '.rundock/mcp-secrets.json']);",
+    "const SHARED_FILES = new Set(['.claude/settings.local.json', '.claude/settings.json', '.mcp.json', '.rundock/mcp-secrets.json', '.rundock/permissions.json', '.rundock/state.json']);"],
   [CM_ANSWER_GUARD, "Answer-file guard: a restored plain file loses its mode",
     "  if (isPlain(was)) return writePlain(file, was.bytes, was.mode);",
     "  if (isPlain(was)) return writePlain(file, was.bytes);"],
@@ -1885,6 +1894,34 @@ const MUTATIONS = [
   [VERDICT, 'launchctl: a subcommand piped in through xargs runs',
     "  if (!args.length) return piped ? always('unreadable-command') : RUNS;",
     '  if (!args.length) return RUNS;'],
+  // ===== THE GUARD WATCHES WHAT RUNS, FOR CODEX =====
+  [GUARD_RUNS, 'Guard: only the permission answers are watched',
+    'const ANSWER_FILES = [...WORKSPACE_ANSWER_FILES];',
+    "const ANSWER_FILES = ['.rundock/permissions.json', '.rundock/state.json', '.claude/settings.local.json', '.claude/settings.json'];"],
+  [GUARD_RUNS, 'Guard: the hook scripts are not watched',
+    '    const files = [...ANSWER_FILES, ...hookScriptsIn(k)].map(',
+    '    const files = [...ANSWER_FILES].map('],
+  [GUARD_RUNS, 'Guard: a hand edit to .mcp.json between turns is put back',
+    "const SHARED_FILES = new Set(['.claude/settings.local.json', '.claude/settings.json', '.mcp.json', '.rundock/mcp-secrets.json']);",
+    "const SHARED_FILES = new Set(['.claude/settings.local.json', '.claude/settings.json', '.rundock/mcp-secrets.json']);"],
+  [GUARD_RUNS, 'Guard: a hand edit to a hook script between turns is put back',
+    'const isShared = relative => SHARED_FILES.has(relative) || relative.startsWith(`${HOOK_SCRIPTS_DIR}/`);',
+    'const isShared = relative => SHARED_FILES.has(relative);'],
+  [GUARD_RUNS, 'Guard: a change to the launcher between turns is kept unasked',
+    "const SHARED_FILES = new Set(['.claude/settings.local.json', '.claude/settings.json', '.mcp.json', '.rundock/mcp-secrets.json']);",
+    "const SHARED_FILES = new Set(['.claude/settings.local.json', '.claude/settings.json', '.mcp.json', '.rundock/mcp-secrets.json', '.rundock/permission-hook.sh']);"],
+  [GUARD_RUNS_LAUNCHER, 'Guard: the launcher Rundock writes is put back as somebody else\'s change',
+    '        fs.chmodSync(launcher, 0o755);\n        noteOwnWrite(launcher, body);\n',
+    '        fs.chmodSync(launcher, 0o755);\n'],
+  [GUARD_RUNS_CONNECTOR, 'Guard: a connector the person allowed is put back as somebody else\'s change',
+    '    fs.writeFileSync(file, body, \'utf-8\');\n    // Recorded, so the answer-file guard takes it as Rundock\'s own write.\n    noteOwnWrite(file, body);\n',
+    '    fs.writeFileSync(file, body, \'utf-8\');\n'],
+  [GUARD_RUNS_CARD, 'Guard: the put-back card says every file holds permission answers',
+    "    const kind = PUT_BACK_KIND[kindOf === 'connectorSecrets' ? 'runs' : kindOf] || PUT_BACK_KIND.answers;",
+    '    const kind = PUT_BACK_KIND.answers;'],
+  [GUARD_RUNS_LINE, 'Guard: the agent is told every file holds permission answers',
+    "  const why = RESTORE_REASON[require('../../public/permissions.js').answerFileKind(relative)] || 'it holds the person\\'s permission answers';",
+    "  const why = 'it holds the person\\'s permission answers';"],
   // ===== AN AGENT'S CONNECTOR CHANGE ASKS FIRST =====
   [CONNECTOR_ASK, 'Connector: a change is written without asking',
     'function askFirst(ctx, ws, msg, toolName, toolInput, write) {\n',

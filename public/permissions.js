@@ -669,21 +669,30 @@
   // change instead. `putBack` is { runtime: 'claude' | 'codex', outsideTurn,
   // relative }. Approved copy, word for word.
   const PUT_BACK_RUNTIME = { claude: 'Claude Code', codex: 'Codex' };
+  // What each kind of watched file is, for the put-back card's heading and
+  // body: the permission answers keep their approved words.
+  const PUT_BACK_KIND = {
+    answers: { heading: 'Rundock put back a change to your permission answers', is: 'the file that holds your own answers about what agents may do' },
+    launcher: { heading: 'Rundock put back a change to its permission checks', is: 'the file that starts Rundock\'s permission checks' },
+    runs: { heading: 'Rundock put back a change to what runs', is: 'a file that decides what Rundock or Claude Code runs' },
+  };
   function putBackCardCopy(putBack) {
     const p = putBack || {};
     const file = p.relative || 'a permission file';
     const who = PUT_BACK_RUNTIME[p.runtime] || PUT_BACK_RUNTIME.claude;
+    const kindOf = answerFileKind(p.relative);
+    const kind = PUT_BACK_KIND[kindOf === 'connectorSecrets' ? 'runs' : kindOf] || PUT_BACK_KIND.answers;
     return p.outsideTurn ? {
       origin: 'No agent was running when this happened',
       unattributed: true,
-      heading: 'Rundock put back a change to your permission answers',
+      heading: kind.heading,
       body: `${file} changed while no agent was running. Rundock restored it straight away. Keep that change instead?`,
       disclosure: 'Show change', leave: 'Leave it restored', keep: 'Keep the change',
     } : {
       origin: `${who}, running in this conversation`,
       unattributed: false,
-      heading: 'Rundock put back a change to your permission answers',
-      body: `${who} ran a command that changed ${file}, the file that holds your own answers about what agents may do. `
+      heading: kind.heading,
+      body: `${who} ran a command that changed ${file}, ${kind.is}. `
         + 'Rundock restored it straight away. Keep the agent\'s change instead?',
       disclosure: 'Show change', leave: 'Leave it restored', keep: 'Keep the change',
     };
