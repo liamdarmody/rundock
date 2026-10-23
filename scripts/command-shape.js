@@ -30,7 +30,11 @@
  * command word, and a quoted word with no space such as a script path, are
  * matched as written. Text a shell runs is a command line, matched as one
  * wrapped in that shell: the string after `sh -c` (or bash, zsh, dash, ksh),
- * what `eval` is given, and a here-document fed to a shell. So is the body of
+ * what `eval` is given, and what a shell reading stdin is fed, a here-document
+ * or the here-document or quoted words of the command piped into it. A shell
+ * is found past env, sudo, xargs, nohup, time, timeout, nice, exec and
+ * command, and its options end at its first other word, so a script's own
+ * `-c` is not the shell's, and a script is fed input, not commands. So is the body of
  * a `$( )` or backtick substitution, in the line, in a VAR=value, or in a
  * here-document body that expands (its marker unquoted).
  *
@@ -120,6 +124,7 @@ function parse(command) {
     endWord();
     wrappers.add(kind);
     if (cur().words.length || cur().redirects.length) segments.push(fresh());
+    cur().op = kind;
   };
 
   for (; i < s.length; i++) {
@@ -211,16 +216,51 @@ function cwdOf(segments, i) {
 
 const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh']);
 
+// Words that run the command after them, each with those of its options that
+// take a value. A shell behind one is still a shell.
+const PREFIXES = {
+  env: ['-u', '-C', '-S'], sudo: ['-u', '-g', '-C', '-D', '-h', '-p', '-R', '-T', '-U'],
+  xargs: ['-I', '-L', '-n', '-P', '-s', '-E', '-d', '-a'], nohup: [], time: [],
+  timeout: ['-s', '-k'], nice: ['-n'], exec: ['-a'], command: [],
+};
+
+// The index of the word that names the command, past any prefixes, their
+// options, env's VAR=value words and timeout's duration.
+function commandIndex(words) {
+  let k = 0;
+  while (k < words.length && Object.hasOwn(PREFIXES, path.basename(words[k]))) {
+    const prefix = path.basename(words[k]);
+    for (k++; k < words.length && (/^-./.test(words[k]) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[k])); k++) {
+      if (PREFIXES[prefix].includes(words[k])) k++;
+    }
+    if (prefix === 'timeout') k++;
+  }
+  return k;
+}
+
 // The text a segment hands a shell to run as a command line: the string after
-// a shell's -c, what eval is given, or a here-document fed to a shell. That
-// text is commands, not data, so it is matched like any other command.
-function shellRuns(seg, bodies) {
-  const name = path.basename(seg.words[0] || '');
-  if (name === 'eval') return [seg.words.slice(1).join(' ')];
+// a shell's -c, what eval is given, or what a shell reading its commands from
+// stdin is fed: its here-document, or the here-document or quoted words of the
+// segment piped into it (`before`). That text is commands, not data.
+function shellRuns(seg, bodies, before) {
+  const k = commandIndex(seg.words);
+  const name = path.basename(seg.words[k] || '');
+  if (name === 'eval') return [seg.words.slice(k + 1).join(' ')];
   if (!SHELLS.has(name)) return [];
-  const c = seg.words.findIndex((w, k) => k > 0 && /^-[A-Za-z]*c[A-Za-z]*$/.test(w));
-  if (c > 0) return seg.words.slice(c + 1, c + 2);
-  return seg.heredocs.map((n) => bodies[n] && bodies[n].body).filter((b) => b !== undefined);
+  // Options end at the first word that is not one; -o and -O take a value.
+  let j = k + 1;
+  for (; j < seg.words.length && /^[-+]./.test(seg.words[j]); j++) {
+    if (/^-[A-Za-z]*c[A-Za-z]*$/.test(seg.words[j])) return seg.words.slice(j + 1, j + 2);
+    if (/^[-+][oO]$/.test(seg.words[j])) j++;
+  }
+  // A script runs from its file, and what it is fed is its input, unless -s.
+  const stdin = seg.words.slice(k + 1, j).some((w) => /^-[A-Za-z]*s[A-Za-z]*$/.test(w));
+  if (j < seg.words.length && seg.words[j] !== '-' && !stdin) return [];
+  const fed = seg.heredocs.map((n) => bodies[n] && bodies[n].body);
+  if (before && seg.op === 'pipe') {
+    fed.push(...before.heredocs.map((n) => bodies[n] && bodies[n].body), ...before.words.filter((w, q) => before.quoted[q]));
+  }
+  return fed.filter((b) => b !== undefined);
 }
 
 // The commands a segment runs inside itself: the bodies of the $( ) and
@@ -282,9 +322,12 @@ function classify(command, patterns, outer = null) {
   for (let i = 0; i < segments.length; i++) {
     const seg = segments[i];
     const at = cwdOf(segments, i) || (outer && outer.at) || null;
-    for (const [kind, runs] of [['shell', shellRuns(seg, bodies)], ['substitution', substitutionRuns(seg, bodies)]]) {
+    // Where its output goes, which is where the output of what it runs goes.
+    const stdout = seg.redirects[0] || (outer && outer.stdout) || null;
+    const piped = (wrappers.has('pipe') && i < segments.length - 1) || Boolean(outer && outer.piped);
+    for (const [kind, runs] of [['shell', shellRuns(seg, bodies, segments[i - 1])], ['substitution', substitutionRuns(seg, bodies)]]) {
       for (const run of runs) {
-        const inner = classify(run, patterns, { at, kind });
+        const inner = classify(run, patterns, { at, kind, stdout, piped });
         if (inner.verdict === 'refuse') return inner;
       }
     }
@@ -306,8 +349,8 @@ function classify(command, patterns, outer = null) {
         named: seg.raw.slice(0, hit.length).join(' '),
         shownEnv: seg.envRaw.join(' '),
         env: Object.fromEntries(seg.env.map((e) => [e.slice(0, e.indexOf('=')), e.slice(e.indexOf('=') + 1)])),
-        stdout: seg.redirects[0] || null,
-        piped: wrappers.has('pipe') && i < segments.length - 1,
+        stdout,
+        piped,
       },
     };
     result.message = refusalMessage(result);

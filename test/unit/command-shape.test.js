@@ -287,6 +287,38 @@ describe('everything else runs as before', () => {
     });
   });
 
+  describe('a shell reached past a prefix, or reading what is piped into it', () => {
+    for (const [label, cmd] of [
+      ['xargs', 'xargs -I{} sh -c "npx playwright test {}" < /work/list'],
+      ['timeout and its duration', 'timeout 300 bash -c "npx playwright test" | tail'],
+      ['nohup', 'nohup sh -c "npx playwright test" > /work/log'],
+      ['env and its VAR=value', 'env FOO=1 bash -c "npx playwright test" | cat'],
+      ['env with a here-document', "env bash <<'EOF'\nnpx playwright test\nEOF"],
+      ['sudo and its option value, with a here-document', "sudo -u me bash <<'EOF'\nnpx playwright test\nEOF"],
+      ['a here-document piped into a shell', "cat <<'EOF' | bash\nnpx playwright test\nEOF"],
+      ['a quoted word piped into a shell', 'echo "npx playwright test" | bash'],
+    ]) {
+      test(label, () => {
+        const r = verdict(cmd);
+        assert.strictEqual(r.verdict, 'refuse');
+        assert.match(r.segment, /^npx playwright test/);
+      });
+    }
+
+    test('options end at the first word that is not one, and -o takes a value', () => {
+      assert.strictEqual(verdict('bash script.sh -c "gh pr list" | cat').verdict, 'pass');
+      assert.strictEqual(verdict("bash script.sh <<'EOF'\nnpx playwright test\nEOF").verdict, 'pass', 'a script is fed input, not commands');
+      assert.strictEqual(verdict('bash -o pipefail -c "gh pr list" | cat').segment, 'gh pr list');
+      assert.strictEqual(verdict('echo "npx playwright test"; bash').verdict, 'pass', 'only a pipe feeds the shell');
+      assert.strictEqual(verdict("bash -s one <<'EOF'\nnpx playwright test\nEOF").verdict, 'refuse', '-s reads commands from stdin');
+    });
+
+    test('a shell piped or redirected keeps the line about its output', () => {
+      assert.match(verdict('sh -c "npx playwright test" | cat').message, /Its output comes back as the result of the call/);
+      assert.match(verdict('nohup sh -c "npx playwright test" > /work/log').message, /Its output comes back as the result of the call/);
+    });
+  });
+
   describe('a command substitution runs a command, and is matched like one', () => {
     for (const cmd of ['echo "$(gh pr list)" | cat', 'echo $(gh pr list) | cat', 'X=$(gh pr list) && echo $X',
       'echo "`gh pr list`" | cat', 'echo `gh pr list` | cat']) {
