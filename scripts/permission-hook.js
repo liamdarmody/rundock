@@ -1536,12 +1536,20 @@ function literalIsPlace(lit, reading = null) {
   return !lit.startsWith('/') && lit.includes('/') && !lit.includes('\\');
 }
 
-// The literals in a piece of code that name a place, and the commands it runs
-// itself. A literal is quoted text on one line, so an apostrophe in a comment
-// cannot swallow the code after it.
+// A literal that could name an answer file, a folder holding them or the
+// console folder: each of those names has `.mcp.json`, `.rundock` or `.claude`
+// in it. Read for the answer files only, whether or not it is shaped like a
+// place: `open('.mcp.json', 'w')` names one with no slash at all.
+const MAY_NAME_ANSWER_FILE = /\.(?:mcp\.json|rundock|claude)/i;
+
+// The literals in a piece of code that name a place, those that may name an
+// answer file (`names`), and the commands it runs itself. A literal is quoted
+// text on one line, so an apostrophe in a comment cannot swallow the code
+// after it.
 function codeParts(code, reading = null) {
   const s = String(code);
   const literals = [];
+  const names = [];
   const commands = [];
   for (let i = 0; i < s.length; i++) {
     const ch = s[i];
@@ -1549,7 +1557,9 @@ function codeParts(code, reading = null) {
       let j = i + 1;
       while (j < s.length && s[j] !== ch && s[j] !== '\n') j += s[j] === '\\' ? 2 : 1;
       if (s[j] === ch) {
-        if (literalIsPlace(s.slice(i + 1, j), reading)) literals.push(s.slice(i + 1, j));
+        const lit = s.slice(i + 1, j);
+        if (literalIsPlace(lit, reading)) literals.push(lit);
+        if (MAY_NAME_ANSWER_FILE.test(lit)) names.push(lit);
         i = j;
       }
       continue;
@@ -1574,7 +1584,7 @@ function codeParts(code, reading = null) {
       i = j;
     }
   }
-  return { literals, commands };
+  return { literals, names, commands };
 }
 
 // The segment of `text` that holds the character at `at`.
@@ -1595,10 +1605,11 @@ function segmentAt(text, at) {
 function heredocText(command, reading = null) {
   const s = String(command);
   const cut = stripHeredocs(s);
-  if (!cut.ok || !cut.bodies.length) return { text: s, literals: [], commands: [] };
+  if (!cut.ok || !cut.bodies.length) return { text: s, literals: [], names: [], commands: [] };
   let text = '';
   let from = 0;
   const literals = [];
+  const names = [];
   const commands = [];
   for (const b of cut.bodies) {
     text += cut.text.slice(from, b.bodyAt);
@@ -1609,9 +1620,10 @@ function heredocText(command, reading = null) {
     const at = b.at + text.length - b.bodyAt;
     const code = codeParts(b.body, reading);
     for (const t of code.literals) literals.push({ t, at });
+    for (const t of code.names) names.push({ t, at });
     for (const c of [...code.commands, ...subs.bodies]) commands.push({ text: c, at });
   }
-  return { text: text + cut.text.slice(from), literals, commands };
+  return { text: text + cut.text.slice(from), literals, names, commands };
 }
 
 // CODE ON THE COMMAND LINE IS READ THE SAME WAY. `python3 -c`, `node -e`,
@@ -1622,6 +1634,7 @@ function heredocText(command, reading = null) {
 const INLINE_CODE = { python: /^-[A-Za-z]*?c(.*)$/s, node: /^(?:-[A-Za-z]*?[ep]|--(?:eval|print)=?)(.*)$/s, ruby: /^-[A-Za-z]*?e(.*)$/s, perl: /^-[A-Za-z]*?[eE](.*)$/s };
 function inlineCode(text, reading = null) {
   const literals = [];
+  const names = [];
   const commands = [];
   let from = 0;
   for (const seg of lexSegments(text)) {
@@ -1637,10 +1650,11 @@ function inlineCode(text, reading = null) {
       if (!m) continue;
       const code = codeParts(m[1] || words[++k] || '', reading);
       for (const t of code.literals) literals.push({ t, at });
+      for (const t of code.names) names.push({ t, at });
       for (const c of code.commands) commands.push({ text: c, at });
     }
   }
-  return { literals, commands };
+  return { literals, names, commands };
 }
 
 // The command as the check reads it: its text, with what code it carries
@@ -1658,6 +1672,7 @@ function judgedShellText(command, reading = null) {
   return {
     text: view.text,
     literals: [...view.literals, ...inline.literals],
+    names: [...view.names, ...inline.names],
     commands: [...view.commands, ...inline.commands],
   };
 }
@@ -1722,6 +1737,23 @@ function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), 
     if (!bases.has(key)) bases.set(key, commandBases(fromStart ? '' : view.text, workspaceRoot, pmod, opts.cwd, extraDirs, home));
     return bases.get(key);
   };
+  // EVERY LITERAL IN CODE THAT MAY NAME AN ANSWER FILE, place-shaped or not.
+  // The place filter is for crossings outside the workspace: a bare name such
+  // as `.mcp.json` or `.claude` is not shaped like a place, and dropping it
+  // there let `open('.mcp.json', 'w')` and `shutil.rmtree('.claude')` through.
+  // Tested here against the answer files, a folder holding them and the
+  // console folder, and nothing else, so what counts as a crossing outside
+  // is unchanged.
+  if (!readOnly) {
+    for (const { t: lit, at } of view.names) {
+      let t = lit;
+      for (const re of HOME_PREFIX) { if (re.test(t)) { t = t.replace(re, home); break; } }
+      const flavour = winWorld ? path.win32 : flavourFor(t, workspaceRoot, posixText);
+      const r = canonicalize(flavour.resolve(basesFor(flavour, false)(at), t), flavour);
+      if (isWorkspaceAnswerFile(r, workspaceRoot, foldsCase, flavour) || isAnswerFileOfAnyWorkspace(r, flavour)
+        || holdsAnswerFiles(r, workspaceRoot, foldsCase, flavour) || isRundockConsolePath(r, home, foldsCase, flavour)) addAnswer(r, flavour);
+    }
+  }
   // What a copy, move or link writes into a folder: the file of each source's
   // name there (`cp backup/.mcp.json .`), from the folder its segment starts in.
   for (const { dest, sources, at, fromStart } of writes.into) {

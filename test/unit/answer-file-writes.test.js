@@ -65,6 +65,15 @@ const WRITES = [
   'sdiff -o .mcp.json x.json notes.txt', 'sdiff --output=.mcp.json x.json notes.txt', 'bat cache --build --target .claude/hooks',
   'tree -o .mcp.json', 'tree -a -o .claude/settings.json', 'tree -ao .rundock/permission-hook.sh', 'file -C -m .claude/hooks/magic',
   'install -d .claude/hooks/new', 'install -d -m 000 .rundock/mcp-secrets.json',
+  // Code handed to an interpreter names a file in a string literal, and a bare
+  // name with no slash in it is still one: any literal there can be opened for
+  // writing or removed, and nothing here can tell that it is not.
+  "python3 - <<'PY'\nopen('.mcp.json','w').write('{}')\nPY",
+  "python3 - <<'PY'\nimport shutil\nshutil.rmtree('.claude')\nPY",
+  "python3 - <<'PY'\nimport shutil\nshutil.rmtree('.rundock')\nPY",
+  "node - <<'JS'\nrequire('fs').rmSync('.claude', { recursive: true })\nJS",
+  "python3 -c \"open('.mcp.json','w')\"", "node -e \"require('fs').writeFileSync('.mcp.json', '{}')\"",
+  "python3 - <<'PY'\nopen('./.mcp.json','w')\nPY", "python3 - <<'PY'\nopen('.rundock/permission-hook.sh','w')\nPY",
   // The forms that asked before this change, and still do.
   'echo x > .rundock/permissions.json', 'echo x >> .rundock/state.json', 'cat x > .claude/settings.local.json', 'tee .rundock/permissions.json',
   'echo x | tee -a .rundock/state.json', 'sed -i s/a/b/ .rundock/permissions.json', 'cp x .rundock/permissions.json', 'mv x .claude/settings.json',
@@ -109,6 +118,8 @@ describe('a command asks about an answer file only when it can write it', () => 
     'rm -rf {src,dist}', 'rm -rf .claude/{agents,skills}', 'rm -rf [!.]*', 'rm -rf .[!cmr]*', 'echo ${HOME}',
     // A `[` with no `]` after it is the character itself, not a class.
     '[ -f x.json ] && rm notes.txt', 'rm -f [ x.json', 'touch .[a',
+    // Code naming only ordinary files names no answer file.
+    "python3 - <<'PY'\nopen('notes.txt','w').write('x')\nprint('done')\nPY", "node -e \"require('fs').writeFileSync('x.json', 'w')\"",
   ];
   test('a command that removes, moves or writes into a folder holding answer files asks', () => {
     for (const d of ['backup/.claude', 'projects/other-ws/.rundock', 'projects/other-ws/.claude', '.claude/agents', '.rundock/scratch', 'skills']) fs.mkdirSync(path.join(ws, d), { recursive: true });
