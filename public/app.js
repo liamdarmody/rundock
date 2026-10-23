@@ -807,7 +807,7 @@ function handle(d) {
       // A system error is its plain sentence alone (a dialog has no Details,
       // and a path never goes in the sentence); a guard's refusal keeps its
       // own short words with the name the person typed.
-      alert(d.detail ? d.reason : 'Could not create "' + d.path + '": ' + d.reason);
+      alert(d.system ? d.reason : 'Could not create "' + d.path + '": ' + d.reason);
       break;
     case 'agent_saved':
       if (!d.updated) setupComplete = true;
