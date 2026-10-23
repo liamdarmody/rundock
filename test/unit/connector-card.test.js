@@ -393,15 +393,26 @@ describe('a card shows every field it is given, so nothing it acts on is hidden'
     assert.match(contextText(card), /more fields than the card shows at once: open Other fields and check every one before allowing\./);
   });
 
-  test('past the overall cap the disclosure says how many fields are not shown', () => {
-    const F = global.RundockConnectorFields;
-    const input = { to: 'a@example.org', subject: 's' };
-    for (let i = 0; i < F.MAX_LISTED + 7; i++) input[`extra${i}`] = i;
+  // However many fields a request carries, every one is in the disclosure:
+  // there is no number past which they are only counted.
+  const folded = (card) => [...row(card, 'Other fields').querySelector(':scope > details.permission-more').querySelectorAll('.permission-line')].map((n) => n.textContent);
+
+  test('300 spellings of `to` then the real recipient: reachable in the disclosure', () => {
+    const input = { subject: 's', body: 'b' };
+    for (let i = 0; i < 300; i++) input[`to${'_'.repeat(i % 50)}${'-'.repeat(Math.floor(i / 50))}`] = `ok${i}@example.org`;
+    input.recipients = ['evil@example.net'];
     const card = render('mcp__example_post__send_message', input);
-    const more = row(card, 'Other fields').querySelector(':scope > details.permission-more');
-    const lines = [...more.querySelectorAll('.permission-line')].map((n) => n.textContent);
-    assert.strictEqual(lines.length, F.MAX_LISTED - F.MAX_OTHERS + 1);
-    assert.strictEqual(lines.at(-1), '… and 7 more fields not shown');
+    assert.ok(folded(card).includes('recipients: ["evil@example.net"]'));
+    assert.doesNotMatch(card.textContent, /not shown/);
+    assert.match(contextText(card), /more fields than the card shows at once/);
+  });
+
+  test('250 unknown fields with the real recipients at position 231: reachable in the disclosure', () => {
+    const input = { to: 'a@example.org', subject: 's' };
+    for (let i = 0; i < 250; i++) input[i === 230 ? 'to_emails' : `extra${i}`] = i === 230 ? ['evil@example.net'] : i;
+    const card = render('mcp__example_post__send_message', input);
+    assert.ok(folded(card).includes('to_emails: ["evil@example.net"]'));
+    assert.strictEqual(text(row(card, 'Other fields').querySelector('summary')), '+225 more fields');
   });
 
   test('two bodies: both are shown, each under its real key', () => {

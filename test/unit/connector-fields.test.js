@@ -23,7 +23,7 @@ describe('an email request is read by generic field names', () => {
     const { to, cc, bcc, ...rest } = f;
     assert.deepStrictEqual(rest, {
       kind: 'email', action: 'send', subject: 'Venue for the 14th', body: 'Hi Sam,\nSee you then.',
-      aliases: {}, others: [], othersMore: 0, aliasOverflow: 0, destinations: [], emailShaped: true,
+      aliases: {}, others: [], aliasOverflow: 0, destinations: [], emailShaped: true,
     });
     assert.deepStrictEqual(texts(to), ['sam@example.org', 'priya@example.com', 'jo@example.net']);
     assert.deepStrictEqual(texts(cc), ['lee@example.org']);
@@ -108,7 +108,7 @@ describe('an email request is read by generic field names', () => {
   test('missing fields come back empty, not invented', () => {
     const f = F.connectorFields('mcp__example_post__create_draft', { subject: '' });
     assert.deepStrictEqual(f, {
-      kind: 'email', action: 'draft', to: [], cc: [], bcc: [], subject: '', body: '', aliases: {}, others: [], othersMore: 0, aliasOverflow: 0,
+      kind: 'email', action: 'draft', to: [], cc: [], bcc: [], subject: '', body: '', aliases: {}, others: [], aliasOverflow: 0,
       destinations: [], emailShaped: true,
     });
   });
@@ -190,19 +190,27 @@ describe('every field a request carries is read, so a card can show what the ser
     for (let i = 0; i < F.MAX_OTHERS + 5; i++) input[`extra${i}`] = i;
     const f = F.connectorFields('mcp__example_post__send_message', input);
     assert.strictEqual(f.others.length, F.MAX_OTHERS + 6, 'listed, never reduced to a count');
-    assert.strictEqual(f.othersMore, 0);
     assert.strictEqual(F.isCrowded(f), true, 'more than the card shows at once');
     assert.ok(f.others[0].text.length <= F.MAX_OTHER_TEXT + 1);
     assert.ok(f.others[0].text.endsWith('…'));
   });
 
-  test('only past a large overall cap are fields counted, and the count is said', () => {
-    const input = { to: 'a@example.org', subject: 's' };
-    for (let i = 0; i < F.MAX_LISTED + 7; i++) input[`extra${i}`] = i;
-    const f = F.connectorFields('mcp__example_post__send_message', input);
-    assert.strictEqual(f.others.length, F.MAX_LISTED);
-    assert.strictEqual(f.othersMore, 7);
+  test('every unread field is listed however many there are, never counted', () => {
+    // 250 unknown keys with the real recipients at position 231, and 300
+    // spellings of `to` with the real one last: both must be listed.
+    const unknown = { to: 'a@example.org', subject: 's' };
+    for (let i = 0; i < 250; i++) unknown[i === 230 ? 'to_emails' : `extra${i}`] = i === 230 ? ['evil@example.net'] : i;
+    const f = F.connectorFields('mcp__example_post__send_message', unknown);
+    assert.strictEqual(f.others.length, 250);
+    assert.deepStrictEqual(f.others[230], { key: 'to_emails', text: '["evil@example.net"]' });
+    assert.strictEqual('othersMore' in f, false, 'there is no count to fall into');
     assert.match(F.contextFor(f, 'x'), /more fields than the card shows at once/);
+    const spellings = { subject: 's' };
+    for (let i = 0; i < 300; i++) spellings[`to${'_'.repeat(i % 50)}${'-'.repeat(Math.floor(i / 50))}`] = `ok${i}@example.org`;
+    spellings.recipients = ['evil@example.net'];
+    const g = F.connectorFields('mcp__example_post__send_message', spellings);
+    assert.strictEqual(g.aliasOverflow, 291);
+    assert.deepStrictEqual(g.others.at(-1), { key: 'recipients', text: '["evil@example.net"]' });
   });
 
   test('recipients past the alias cap and past the fields shown are listed, never only counted, and the card says so', () => {
@@ -216,7 +224,6 @@ describe('every field a request carries is read, so a card can show what the ser
     assert.strictEqual(f.aliases.to.length, F.MAX_ALIAS_ROWS);
     assert.strictEqual(f.aliasOverflow, 31);
     assert.deepStrictEqual(f.others.at(-1), { key: 'recipients', text: '["evil@example.net"]' });
-    assert.strictEqual(f.othersMore, 0);
     assert.match(F.contextFor(f, 'x'), /more fields than the card shows at once: open Other fields and check every one before allowing\./);
   });
 

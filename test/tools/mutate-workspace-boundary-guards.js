@@ -1955,9 +1955,9 @@ const MUTATIONS = [
     ''],
   // Past the alias rows and the fields shown is exactly where a recipient can
   // be put out of sight: reduce what is there to a count and it is.
-  [CONNECTOR_CARD_MODEL, 'Connector card: fields past the number shown are only counted',
-    '      if (others.length < MAX_LISTED) others.push({ key, text: rawText(raw) });',
-    '      if (others.length < MAX_OTHERS) others.push({ key, text: rawText(raw) });'],
+  [CONNECTOR_CARD_MODEL, 'Connector card: fields past a number are dropped from the list',
+    '    const list = (key, raw) => { others.push({ key, text: rawText(raw) }); };',
+    '    const list = (key, raw) => { if (others.length < 200) others.push({ key, text: rawText(raw) }); };'],
   [CONNECTOR_CARD_VIEW, 'Connector card: the fields past those shown are not drawn',
     ', ...rest.map(line));',
     ');'],
@@ -1982,7 +1982,7 @@ const MUTATIONS = [
     '        if (s.skip.has(k) || names.has(norm(k)) || s.obj[k] === undefined) continue;',
     '        continue;'],
   [CONNECTOR_CARD_VIEW, 'Connector card: unshown keys are hidden',
-    "  if (f.others.length || f.othersMore) row('Other fields', otherFields());",
+    "  if (f.others.length) row('Other fields', otherFields());",
     "  if (false) row('Other fields', otherFields());"],
   // While keys went unread, "(none)", "Just you", "No one else is invited" and
   // "No recipients are set" may all be untrue.

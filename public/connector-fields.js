@@ -30,8 +30,7 @@
   const MAX_TEXT = 20000;   // any one value, so a huge payload cannot swamp the card
   const MAX_ADDRESS = 320;
   const MAX_KEY = 64;          // a key, shown as a label
-  const MAX_OTHERS = 25;       // unread fields shown; the rest are one click away
-  const MAX_LISTED = 200;      // unread fields listed at all; only past this are they counted
+  const MAX_OTHERS = 25;       // unread fields shown; every other one is one click away
   const MAX_OTHER_TEXT = 300;  // an unread value, or one shown as written
   const MAX_LIST = 500;        // entries drawn from a list that is never folded (Bcc)
   const MAX_ALIAS_ROWS = 10;   // rows for one field under many names; the rest are listed
@@ -179,15 +178,13 @@
   // than once has up to MAX_ALIAS_ROWS of them in `aliases`, each under the key
   // it came from, and any past that (counted in `aliasOverflow`) are listed in
   // `others` with every key of a source that is none of the fields, so no
-  // request can fill a card with rows. Everything is listed, never reduced to
-  // a count, up to MAX_LISTED; only past that is anything counted.
+  // request can fill a card with rows. Every one is listed, however many
+  // there are, each value cut short on its own: a count is somewhere a
+  // recipient could be put that no one can open.
   function gather(sources, read) {
     const values = {}, aliases = {}, others = [], firstKey = {};
-    let found = false, othersMore = 0, aliasOverflow = 0;
-    const list = (key, raw) => {
-      if (others.length < MAX_LISTED) others.push({ key, text: rawText(raw) });
-      else othersMore++;
-    };
+    let found = false, aliasOverflow = 0;
+    const list = (key, raw) => { others.push({ key, text: rawText(raw) }); };
     const fields = Object.keys(read);
     for (const field of fields) {
       const all = [];
@@ -206,7 +203,7 @@
         list(clip(s.prefix + k, MAX_KEY), s.obj[k]);
       }
     }
-    return { values, aliases, others, othersMore, aliasOverflow, found, firstKey };
+    return { values, aliases, others, aliasOverflow, found, firstKey };
   }
 
   function emailOf(input, words) {
@@ -234,7 +231,7 @@
     const { destination: all, ...aliases } = g.aliases;
     const destinations = all || (g.firstKey.destination ? [{ key: g.firstKey.destination, value: first }] : []);
     return {
-      kind: 'email', action, ...values, aliases, others: g.others, othersMore: g.othersMore, aliasOverflow: g.aliasOverflow,
+      kind: 'email', action, ...values, aliases, others: g.others, aliasOverflow: g.aliasOverflow,
       // A recipient or a subject makes it an email; a body and a destination
       // alone are a message, with no empty Subject row to explain.
       destinations, emailShaped: sources.some((s) => addressed(s.obj)),
@@ -308,7 +305,7 @@
     if (!g.found) return null;
     return {
       kind: 'event', action: words.some((w) => CHANGE_WORDS.includes(w)) ? 'update' : 'create',
-      ...g.values, aliases: g.aliases, others: g.others, othersMore: g.othersMore, aliasOverflow: g.aliasOverflow,
+      ...g.values, aliases: g.aliases, others: g.others, aliasOverflow: g.aliasOverflow,
     };
   }
 
@@ -342,16 +339,16 @@
   // message goes, so there every unread key counts.
   function hasUnreadFields(f) {
     const quiet = (o) => (f.kind === 'event' || f.action === 'draft') && WELL_KNOWN.has(norm(String(o.key).split('.').pop()));
-    return f.othersMore > 0 || f.others.some((o) => !quiet(o));
+    return f.others.some((o) => !quiet(o));
   }
 
   // Whether a request has more fields than the card shows at once: a field
-  // under more names than it has rows for (the rest are listed apart), unread
-  // fields past the number shown (the rest are one click away), or any past
-  // the number listed (those are only counted). Then the card says so, because
-  // what is folded away is still what the request acts on.
+  // under more names than it has rows for (the rest are listed apart), or
+  // unread fields past the number shown (the rest are one click away). Then
+  // the card says so, because what is folded away is still what the request
+  // acts on.
   function isCrowded(f) {
-    return (f.aliasOverflow || 0) > 0 || f.others.length > MAX_OTHERS || f.othersMore > 0;
+    return (f.aliasOverflow || 0) > 0 || f.others.length > MAX_OTHERS;
   }
   const CROWDED = ' This request has more fields than the card shows at once: open Other fields and check every one before allowing.';
 
@@ -380,13 +377,13 @@
     // other field could be who it reaches.
     const reached = ['to', 'cc', 'bcc'].some((k) => every(k).length) || f.destinations.length > 0;
     const nobody = f.action === 'send' && !reached;
-    const anyOthers = f.others.length > 0 || f.othersMore > 0;
+    const anyOthers = f.others.length > 0;
     return 'Sends straight away from your account. It cannot be undone, so this always asks.'
       + (nobody ? (anyOthers ? ' No recipients were recognised: check Other fields before allowing.' : ' No recipients are set, so this will probably fail.') : '');
   }
 
   return {
     connectorFields, cutList, cutText, contextFor, hasUnreadFields, isCrowded, recipientsOf, addressText, formatWhen, durationText,
-    SHOWN, MORE_SHOWN, SUBJECT_SOFT, MAX_TEXT, MAX_ADDRESS, MAX_OTHERS, MAX_LISTED, MAX_OTHER_TEXT, MAX_LIST, MAX_ALIAS_ROWS,
+    SHOWN, MORE_SHOWN, SUBJECT_SOFT, MAX_TEXT, MAX_ADDRESS, MAX_OTHERS, MAX_OTHER_TEXT, MAX_LIST, MAX_ALIAS_ROWS,
   };
 }));
