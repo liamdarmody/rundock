@@ -4,15 +4,19 @@
 // fake spawn stands in, and says what it was asked to start.
 const { test, describe } = require('node:test');
 const assert = require('node:assert');
+const os = require('node:os');
 const { EventEmitter } = require('node:events');
 
 const C = require('../../lib/runtime/claude-console.js');
 
-// A spawn that records its call and answers with the event it is told to.
-function fakeSpawn(answer, { code = 0 } = {}) {
+// A spawn that records its call and answers with the event it is told to,
+// after writing `said` to stderr when it closes.
+function fakeSpawn(answer, { code = 0, said = '' } = {}) {
   const calls = [];
   const spawn = (command, args, options) => {
     const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
     child.unref = () => { child.unrefed = true; };
     child.kill = () => { child.killed = true; };
     calls.push({ command, args, options, child });
@@ -20,12 +24,17 @@ function fakeSpawn(answer, { code = 0 } = {}) {
     setImmediate(() => {
       if (answer === 'spawn') child.emit('spawn');
       if (answer === 'error') child.emit('error', Object.assign(new Error('not found'), { code: 'ENOENT' }));
-      if (answer === 'close') child.emit('close', code);
+      if (answer === 'close') {
+        if (said) child.stderr.emit('data', Buffer.from(said));
+        child.emit('close', code);
+      }
     });
     return child;
   };
   return { spawn, calls };
 }
+// What the server passes: whether a failed turn's words say it is signed out.
+const isAuthFailure = (text) => /please run \/login|invalid authentication credentials/i.test(text);
 
 describe('what opens the console, per platform', () => {
   const BIN = '/opt/example/bin/claude';
@@ -78,19 +87,47 @@ describe('opening it', () => {
 });
 
 describe('checking the connection', () => {
-  test('a turn that finishes is connected; one that fails is not', async () => {
+  test('a turn that finishes is connected; one refused for its sign-in is not', async () => {
     const ok = fakeSpawn('close', { code: 0 });
-    assert.deepStrictEqual(await C.checkConnection({ bin: '/opt/example/claude', spawn: ok.spawn }), { connected: true, known: true });
+    assert.deepStrictEqual(await C.checkConnection({ bin: '/opt/example/claude', spawn: ok.spawn, isAuthFailure }), { connected: true, known: true });
     assert.deepStrictEqual(ok.calls[0].args, ['--print', 'test', '--output-format', 'text'], 'the first-run check, unchanged');
-    assert.strictEqual(ok.calls[0].options.stdio, 'ignore');
-    const no = fakeSpawn('close', { code: 1 });
-    assert.deepStrictEqual(await C.checkConnection({ bin: '/opt/example/claude', spawn: no.spawn }), { connected: false, known: true });
+    assert.deepStrictEqual(ok.calls[0].options.stdio, ['ignore', 'pipe', 'pipe'], 'what it says is read, so a failure can be told apart');
+    const no = fakeSpawn('close', { code: 1, said: 'Invalid API key. Please run /login\n' });
+    assert.deepStrictEqual(await C.checkConnection({ bin: '/opt/example/claude', spawn: no.spawn, isAuthFailure }), { connected: false, known: true });
+  });
+
+  test('a turn that fails for any other reason says it does not know', async () => {
+    // A dropped connection or an overloaded service says nothing about the
+    // sign-in, so it must not mark Claude Code signed out.
+    for (const said of ['API Error: Connection error.\n', '']) {
+      const f = fakeSpawn('close', { code: 1, said });
+      assert.deepStrictEqual(await C.checkConnection({ bin: '/opt/example/claude', spawn: f.spawn, isAuthFailure }), { connected: false, known: false }, said);
+    }
+  });
+
+  test('the check runs from the home folder, never from a temp folder another account can write to', async () => {
+    // `--print` skips the trust prompt, so project settings and hooks in the
+    // folder it runs in would run unasked. On Linux the temp folder is the
+    // shared /tmp.
+    const f = fakeSpawn('close', { code: 0 });
+    await C.checkConnection({ bin: '/opt/example/claude', spawn: f.spawn, isAuthFailure });
+    assert.strictEqual(f.calls[0].options.cwd, os.homedir());
+    assert.notStrictEqual(f.calls[0].options.cwd, os.tmpdir());
+  });
+
+  test('a start that throws at once does not leave the one-at-a-time guard holding its answer', async () => {
+    const thrown = fakeSpawn('throw');
+    assert.deepStrictEqual(await C.checkConnection({ bin: '/opt/example/claude', spawn: thrown.spawn, isAuthFailure }), { connected: false, known: false });
+    const next = fakeSpawn('close', { code: 0 });
+    assert.deepStrictEqual(await C.checkConnection({ bin: '/opt/example/claude', spawn: next.spawn, isAuthFailure }), { connected: true, known: true },
+      'the next check runs rather than being handed the failed one');
+    assert.strictEqual(next.calls.length, 1);
   });
   test('a check that cannot run, or runs too long, says it does not know', async () => {
     const err = fakeSpawn('error');
-    assert.deepStrictEqual(await C.checkConnection({ bin: '/opt/example/claude', spawn: err.spawn }), { connected: false, known: false });
+    assert.deepStrictEqual(await C.checkConnection({ bin: '/opt/example/claude', spawn: err.spawn, isAuthFailure }), { connected: false, known: false });
     const slow = fakeSpawn('never');
-    assert.deepStrictEqual(await C.checkConnection({ bin: '/opt/example/claude', spawn: slow.spawn, timeoutMs: 20 }), { connected: false, known: false });
+    assert.deepStrictEqual(await C.checkConnection({ bin: '/opt/example/claude', spawn: slow.spawn, timeoutMs: 20, isAuthFailure }), { connected: false, known: false });
     assert.ok(slow.calls[0].child.killed, 'the check that ran too long is stopped');
   });
   test('one check at a time: a second ask while one runs gets the same answer', async () => {

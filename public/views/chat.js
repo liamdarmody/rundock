@@ -337,6 +337,9 @@ const AUTH_CARD = {
   waiting: ['', authWaiting(AUTH_WAIT_COPY)],
   checking: ['', authWaiting(AUTH_WAIT_COPY, true)],
   notyet: ['', authWaiting("Claude Code isn't connected yet. Finish in the window, then press I've reconnected again.")],
+  // A check that failed for a reason other than the sign-in, or got no answer:
+  // it learnt nothing, so the card claims nothing.
+  unchecked: ['', authWaiting("Rundock couldn't check whether Claude Code is connected. Wait a moment, then press I've reconnected again.")],
   reconnected: ['auth-ok', authTitle('Reconnected') + authBody('Claude Code is connected again. Resend your message to carry on.')],
   notfound: ['auth-bad', AUTH_NOT_OPENED + authBody('Claude Code was not found on this computer. Check it is installed, then try again.')
     + authActions(authButton('Try again', 'open', true)) + AUTH_TROUBLE],
@@ -368,7 +371,7 @@ async function authCardAction(el, action) {
   if (action === 'check') {
     drawAuthCard(el, 'checking');
     const r = await fetch('/api/claude/connection', { method: 'POST' }).then(x => (x.ok ? x.json() : null), () => null);
-    drawAuthCard(el, r && r.connected === true ? 'reconnected' : 'notyet');
+    drawAuthCard(el, r && r.connected === true ? 'reconnected' : (!r || r.known === false ? 'unchecked' : 'notyet'));
     return;
   }
   const r = await Promise.resolve().then(reconnectClaude).catch(() => null);

@@ -258,6 +258,11 @@ const CONNECTOR_FIELDS_MODEL = { src: path.join(ROOT, 'public', 'connector-field
 // reach. Proven through the real server by the routes' own suite.
 const RECONNECT_ROUTES = { src: path.join(ROOT, 'lib', 'http-router.js'), suite: 'test/integration/claude-reconnect.test.js' };
 const RECONNECT_AUTH = { src: path.join(ROOT, 'lib', 'auth', 'index.js'), suite: 'test/integration/claude-reconnect.test.js' };
+// The console and the check themselves, the server's reading of the check, and
+// the card that shows its answer.
+const CLAUDE_CONSOLE = { src: path.join(ROOT, 'lib', 'runtime', 'claude-console.js'), suite: 'test/unit/claude-console.test.js' };
+const RECONNECT_SERVER = { src: path.join(ROOT, 'server.js'), suite: 'test/integration/claude-reconnect.test.js' };
+const RECONNECT_CARD = { src: path.join(ROOT, 'public', 'views', 'chat.js'), suite: 'test/unit/reconnect-card.test.js' };
 
 // A shell command that reads or changes the Keychain: always asks, in both
 // modes. The reading of the line, the card's sentence and Codex's grading are
@@ -2015,6 +2020,29 @@ const MUTATIONS = [
   [RECONNECT_AUTH, 'Reconnect: the permission hook\'s token is taken for the window',
     "  if (sameSecret(headers[KEY_HEADER], LAUNCH_KEY)) return 'key';\n",
     "  if (sameSecret(headers[KEY_HEADER], LAUNCH_KEY)) return 'key';\n  if (hookScopeOf(req) !== undefined) return 'hook';\n"],
+  // `--print` skips the trust prompt: run the check in the shared temp folder
+  // and another account's project settings and hooks run with it.
+  [CLAUDE_CONSOLE, 'Reconnect: the check runs in the shared temp folder',
+    '{ cwd: os.homedir(), stdio:',
+    '{ cwd: os.tmpdir(), stdio:'],
+  // Never release the one-at-a-time guard and every later check is handed the
+  // first one's answer.
+  [CLAUDE_CONSOLE, 'Reconnect: the one-at-a-time guard is never released',
+    '  p.then(() => { if (inFlight === p) inFlight = null; });\n',
+    ''],
+  // A dropped connection is not a sign-out.
+  [CLAUDE_CONSOLE, 'Reconnect: any failed check counts as signed out',
+    'finish(false, signedOut())',
+    'finish(false, true)'],
+  [RECONNECT_SERVER, 'Reconnect: the server does not say which failures are a sign-out',
+    '{ bin: resolveClaudeBin(), isAuthFailure: isAuthError }',
+    '{ bin: resolveClaudeBin() }'],
+  [RECONNECT_SERVER, 'Reconnect: a check that could not tell changes the runtime status',
+    '    if (r.known) _claudeAuthEvidence = r.connected;',
+    '    _claudeAuthEvidence = r.connected;'],
+  [RECONNECT_CARD, 'Reconnect: a check that could not tell is shown as still disconnected',
+    "(!r || r.known === false ? 'unchecked' : 'notyet')",
+    "'notyet'"],
   // ===== WHAT THE SHELL CHECK READS IN CODE AND TEXT =====
   [SHELL_CODE, "Shell code: a backslash in a Bash word is a Windows separator again on a POSIX host",
     "    const pmod = winWorld ? path.win32 : flavourFor(t, workspaceRoot, posixText);",

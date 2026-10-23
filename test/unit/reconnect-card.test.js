@@ -132,6 +132,22 @@ describe('reconnecting', () => {
     neverSaysSignIn(card);
   });
 
+  test('a check that could not tell says so, never that it is still disconnected, and waits again', async () => {
+    // A dropped connection or a busy service says nothing about the sign-in.
+    for (const set of [{ connection: { connected: false, known: false } }, { status: 500 }]) {
+      const card = draw();
+      await press(card, 'Reconnect Claude');
+      Object.assign(answers, set);
+      await press(card, 'I\'ve reconnected');
+      assert.strictEqual(title(card), 'Waiting for Claude', JSON.stringify(set));
+      assert.match(card.textContent, /couldn't check/, JSON.stringify(set));
+      assert.doesNotMatch(card.textContent, /isn't connected yet/, 'it does not claim what it could not find out');
+      assert.deepStrictEqual(labels(card), ['I\'ve reconnected', 'Open the window again']);
+      neverSaysSignIn(card);
+      answers = { reconnect: { ok: true }, connection: { connected: true }, status: 200 };
+    }
+  });
+
   test('"Open the window again" opens it again', async () => {
     const card = draw();
     await press(card, 'Reconnect Claude');

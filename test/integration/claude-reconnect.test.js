@@ -38,6 +38,7 @@ before(async () => {
 after(async () => {
   if (prevDeps) router.wireHttpRouterDeps(prevDeps);
   delete process.env.STUB_CLAUDE_SIGNED_OUT;
+  delete process.env.STUB_CLAUDE_CHECK_FAILS;
   await h.shutdown();
 });
 beforeEach(() => { opened = 0; checked = 0; });
@@ -96,7 +97,7 @@ describe('what the routes answer', () => {
   test('the check says connected, and the runtime status agrees', async () => {
     delete process.env.STUB_CLAUDE_SIGNED_OUT;
     const res = await post('/api/claude/connection', h.authHeaders());
-    assert.deepStrictEqual(JSON.parse(res.text), { connected: true });
+    assert.deepStrictEqual(JSON.parse(res.text), { connected: true, known: true });
     const status = await runtimeStatus();
     assert.strictEqual(status.claude.authenticated, true);
   });
@@ -105,11 +106,27 @@ describe('what the routes answer', () => {
     process.env.STUB_CLAUDE_SIGNED_OUT = '1';
     try {
       const res = await post('/api/claude/connection', h.authHeaders());
-      assert.deepStrictEqual(JSON.parse(res.text), { connected: false });
+      assert.deepStrictEqual(JSON.parse(res.text), { connected: false, known: true });
       const status = await runtimeStatus();
       assert.strictEqual(status.claude.authenticated, false);
     } finally {
       delete process.env.STUB_CLAUDE_SIGNED_OUT;
+    }
+  });
+
+  test('a check that fails for another reason says it could not tell, and leaves the runtime status as it was', async () => {
+    // Connected first, so a failure that wrongly signed Claude Code out would
+    // show as a change.
+    delete process.env.STUB_CLAUDE_SIGNED_OUT;
+    await post('/api/claude/connection', h.authHeaders());
+    assert.strictEqual((await runtimeStatus()).claude.authenticated, true);
+    process.env.STUB_CLAUDE_CHECK_FAILS = '1';
+    try {
+      const res = await post('/api/claude/connection', h.authHeaders());
+      assert.deepStrictEqual(JSON.parse(res.text), { connected: false, known: false });
+      assert.strictEqual((await runtimeStatus()).claude.authenticated, true, 'a dropped connection is not a sign-out');
+    } finally {
+      delete process.env.STUB_CLAUDE_CHECK_FAILS;
     }
   });
 });
