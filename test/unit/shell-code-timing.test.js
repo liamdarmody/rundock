@@ -27,30 +27,32 @@ const home = path.join(root, 'home');
 const ws = path.join(home, 'Workspace');
 fs.mkdirSync(path.join(ws, 'out'), { recursive: true });
 
-const best = (command) => {
-  let ms = Infinity;
-  for (let k = 0; k < 3; k++) {
-    const t0 = process.hrtime.bigint();
-    hook.classifyShellAccess('Bash', { command }, ws, [], home, false, {});
-    ms = Math.min(ms, Number(process.hrtime.bigint() - t0) / 1e6);
-  }
-  return ms;
+const once = (command) => {
+  const t0 = process.hrtime.bigint();
+  hook.classifyShellAccess('Bash', { command }, ws, [], home, false, {});
+  return Number(process.hrtime.bigint() - t0) / 1e6;
 };
+const best = command => Math.min(once(command), once(command), once(command));
+
+// The ceiling is checked after ONE run of the larger size, before the ratio,
+// so a check that has gone quadratic fails in seconds rather than after six
+// slow runs.
+function linear(small, large, label) {
+  const first = once(large);
+  assert.ok(first < 5000, `${label} took ${Math.round(first)} ms`);
+  const two = Math.min(first, once(large), once(large));
+  const one = best(small);
+  assert.ok(two <= 3 * one + 50, `${label} took ${Math.round(two)} ms against ${Math.round(one)} ms for half as much`);
+}
 
 describe('the shell check grows linearly with the command', () => {
   test('a chain of commands after a cd', () => {
     const chain = n => 'mkdir -p out && cd out && ' + Array.from({ length: n }, (_, i) => `cat ../f${i}.txt`).join(' && ');
-    const one = best(chain(1000));
-    const two = best(chain(2000));
-    assert.ok(two <= 3 * one + 50, `2,000 commands took ${Math.round(two)} ms against ${Math.round(one)} ms for 1,000`);
-    assert.ok(two < 5000, `2,000 commands took ${Math.round(two)} ms`);
+    linear(chain(1000), chain(2000), '2,000 commands');
   });
 
   test('a long here-document fed to a shell', () => {
     const doc = n => "mkdir -p out && cd out && bash <<'SH'\n" + Array.from({ length: n }, (_, i) => `echo line ${i}`).join('\n') + '\nSH';
-    const one = best(doc(2000));
-    const two = best(doc(4000));
-    assert.ok(two <= 3 * one + 50, `4,000 lines took ${Math.round(two)} ms against ${Math.round(one)} ms for 2,000`);
-    assert.ok(two < 5000, `4,000 lines took ${Math.round(two)} ms`);
+    linear(doc(2000), doc(4000), '4,000 lines');
   });
 });

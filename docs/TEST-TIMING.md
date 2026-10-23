@@ -345,7 +345,8 @@ Five places in the suite gate on elapsed real time. All five are
   after a `cd` (1,000 to 2,000) and a here-document fed to a shell (2,000 to
   4,000 lines) may at most triple the time, the best of three runs at each
   size, with 50ms of slack for timer coarseness; the larger size must also
-  finish under 5s. Measured at about 110ms and 140ms for the larger sizes,
+  finish under 5s, checked after its first run so that a check gone quadratic
+  fails in seconds. Measured at about 110ms and 140ms for the larger sizes,
   against 6s and 3s when the check re-read the command for every word. The
   ratio is the claim, since linear growth doubles and quadratic growth
   quadruples: if it fails, first check whether both sizes slowed alike, which
