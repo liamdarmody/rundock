@@ -12,6 +12,20 @@
 //
 // The grammar is lib/links.js's, so the panel and the Map agree on what is a
 // link: an embed (![[X]]) is not one, and neither is a link inside `code`.
+//
+// Where the two still differ, on purpose. The Map reads the raw text and the
+// panel reads parsed values, so the Map counts a link the panel cannot show:
+//
+//  - in a YAML comment, a whole line or after a value: YAML drops comments;
+//  - in a key: a key is a name, shown as text;
+//  - in a nested object's value: the panel hides nested objects;
+//  - unquoted inside a flow list, `key: [[[X]]]`: no raw line to read it from,
+//    so it shows as a nested value rather than guess at the name;
+//  - a markdown link, [text](note.md): the panel shows it as text;
+//  - anywhere in frontmatter YAML cannot parse: the panel shows nothing.
+//
+// Each of these is pinned in test/unit/frontmatter-links.test.js, so a change
+// to either side shows up as a change to this list.
 
 const LINK_RE = /(!?)\[\[([^[\]\n|]+)(?:\|([^[\]\n]*))?\]\]/g;
 const CODE_SPAN_RE = /`[^`\n]*`/g;

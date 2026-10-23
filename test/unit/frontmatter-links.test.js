@@ -186,6 +186,36 @@ describe('the properties panel shows links inside values', () => {
     } finally { p.done(); }
   });
 
+  test('the links the Map counts and the panel does not are exactly the ones written down', () => {
+    // The list in public/editor/markdown/prop-links.js, one line each.
+    const src = [
+      '---',
+      '# see [[In a comment]]',
+      'title: Kept # and [[After a value]]',
+      '"[[In a key]]": x',
+      'nested:',
+      '  child: "[[In a nested object]]"',
+      'flow: [[[In a flow list]]]',
+      'source: "[the brief](Brief.md)"',
+      '---',
+      '',
+    ].join('\n');
+    const counted = extractLinks(extractFrontmatter(src).raw).filter((l) => l.kind !== 'embed').map((l) => l.target);
+    assert.deepEqual(counted, ['In a comment', 'After a value', 'In a key', 'In a nested object', 'In a flow list', 'Brief.md']);
+    const p = mount(src);
+    try {
+      assert.equal(p.props.querySelectorAll('a').length, 0, 'the panel draws none of them');
+      assert.equal(p.markdown(), src, 'and leaves every one as written');
+    } finally { p.done(); }
+
+    const unparsable = '---\nbad: [unclosed\nref: "[[Plan]]"\n---\n';
+    assert.deepEqual(extractLinks(unparsable).map((l) => l.target), ['Plan']);
+    const q = mount(unparsable);
+    try {
+      assert.equal(q.props.querySelectorAll('a').length, 0, 'frontmatter that cannot parse shows nothing');
+    } finally { q.done(); }
+  });
+
   test('an alias shows its words, a heading stays on the target, an unquoted item is a link', () => {
     const p = mount(NOTE);
     try {
