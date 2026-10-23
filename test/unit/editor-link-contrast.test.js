@@ -84,6 +84,7 @@ const PAIRINGS = [
   ['panel link to a missing note', [`${LINK}.dead`, 'color'], PANEL],
   ['words around panel links', ['.tiptap-editor-pane .prop-value', 'color'], PANEL],
   ['body link to a note that exists', ['.tiptap-editor .ProseMirror a.wikilink', 'color'], PAGE],
+  ['body link to a missing note', ['.tiptap-editor .ProseMirror a.wikilink.dead', 'color'], PAGE],
   ['notice title', ['.link-notice', 'color'], ['.link-notice', 'background']],
   ['notice path', ['.link-notice-detail', 'color'], ['.link-notice', 'background']],
   ['notice refusal', ['.link-notice.refused .link-notice-detail', 'color'], ['.link-notice', 'background']],
@@ -105,10 +106,12 @@ describe('link colours in a note clear 4.5:1 in both themes', () => {
 });
 
 describe('a link is told apart by more than colour', () => {
-  test('a panel link is underlined, and a missing one dashed, at full strength', () => {
-    assert.match(EDITOR.get(LINK).get('text-decoration'), /underline/);
-    assert.match(EDITOR.get(`${LINK}.dead`).get('text-decoration-style'), /dashed/);
-    assert.ok(!EDITOR.get(`${LINK}.dead`).has('opacity'), 'opacity would lower the measured contrast');
+  test('a link is underlined, and a missing one dashed, at full strength', () => {
+    for (const sel of [LINK, '.tiptap-editor .ProseMirror a.wikilink']) {
+      assert.match(EDITOR.get(sel).get('text-decoration'), /underline/, sel);
+      assert.match(EDITOR.get(`${sel}.dead`).get('text-decoration-style'), /dashed/, sel);
+      assert.ok(!EDITOR.get(`${sel}.dead`).has('opacity'), `${sel}: opacity would lower the measured contrast`);
+    }
   });
 
   test('the pencil is hidden by opacity, so it stays in the tab order', () => {

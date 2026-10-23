@@ -248,6 +248,9 @@ body.light .tiptap-editor-pane .prop-wikilink:not(.dead) { color: var(--accent-t
 .tiptap-editor .ProseMirror a { color: var(--accent); text-decoration: underline; cursor: pointer; }
 .tiptap-editor .ProseMirror a.wikilink { color: var(--accent-text); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; padding: 0 2px; border-radius: var(--radius-xs); transition: background var(--duration-base) ease, color var(--duration-base) ease; }
 .tiptap-editor .ProseMirror a.wikilink:hover { color: var(--accent-hover); background: var(--accent-glow); }
+/* A link to a missing note, as in the properties panel: muted and dashed at
+   full strength, keeping its tone on hover. After the hover rule so it wins. */
+.tiptap-editor .ProseMirror a.wikilink.dead { color: var(--text-2-strong); text-decoration-style: dashed; text-underline-offset: 3px; }
 .tiptap-editor .ProseMirror a.wikilink.ProseMirror-selectednode { background: var(--accent-glow); outline: 1px solid var(--accent); outline-offset: 1px; }
 .tiptap-editor .ProseMirror .callout { background: rgba(122,162,232,0.08); border: 1px solid rgba(122,162,232,0.20); border-radius: var(--radius-lg); padding: 12px 16px; margin: 12px 0; --callout-color: var(--working); --callout-text: var(--callout-color); }
 /* A callout has two custom properties: --callout-color is its tone, read by

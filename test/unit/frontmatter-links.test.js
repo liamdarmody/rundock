@@ -153,7 +153,7 @@ function mount(src, extra = {}) {
   const click = (el) => el.dispatchEvent(new env.window.MouseEvent('click', { bubbles: true }));
   const key = (el, k) => el.dispatchEvent(new env.window.KeyboardEvent('keydown', { key: k, bubbles: true }));
   const done = () => { env.destroyEditor(editor); props.remove(); element.remove(); };
-  return { doc, editor, props, opened, row, click, key, done, markdown: () => env.getMarkdown(editor) };
+  return { doc, editor, element, props, opened, row, click, key, done, markdown: () => env.getMarkdown(editor) };
 }
 
 describe('the properties panel shows links inside values', () => {
@@ -283,6 +283,38 @@ describe('editing a value with links in it', () => {
         assert.ok(p.row(key).querySelector('.prop-wikilink-edit'), key);
       }
       assert.equal(p.row('status').querySelector('.prop-wikilink-edit'), null, 'plain text needs none');
+    } finally { p.done(); }
+  });
+});
+
+describe('links in the note body behave the same way', () => {
+  const BODY = 'The launch follows the [[Plan]]. Open questions live in [[Old plan|the old plan]].\n';
+  const bodyLinks = (p) => [...p.element.querySelectorAll('a.wikilink')]
+    .map((a) => [a.getAttribute('data-target'), a.classList.contains('dead')]);
+
+  test('a link to a missing note is marked, and the file is unchanged', () => {
+    const p = mount(BODY);
+    try {
+      assert.deepEqual(bodyLinks(p), [['Plan', false], ['Old plan', true]]);
+      assert.equal(p.markdown(), BODY, 'the mark is a decoration, never content');
+    } finally { p.done(); }
+  });
+
+  test('clicking it creates the note; clicking a found one opens it', () => {
+    const created = [];
+    const p = mount(BODY, { onCreateWikilink: (t) => created.push(t) });
+    try {
+      for (const a of p.element.querySelectorAll('a.wikilink')) p.click(a);
+      assert.deepEqual(p.opened, ['Plan']);
+      assert.deepEqual(created, ['Old plan']);
+    } finally { p.done(); }
+  });
+
+  test('a link added while editing is marked as soon as it is there', () => {
+    const p = mount(BODY);
+    try {
+      p.editor.commands.insertContentAt(1, [{ type: 'wikilink', attrs: { target: 'Ghost' } }, { type: 'text', text: ' ' }]);
+      assert.deepEqual(bodyLinks(p)[0], ['Ghost', true]);
     } finally { p.done(); }
   });
 });
