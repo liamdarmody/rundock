@@ -331,6 +331,18 @@ describe('a command asks about an answer file only when it can write it', () => 
     "python3 - <<'PY'\nimport glob, os\nfor p in glob.glob('.claude/hooks/*'):\n    os.remove(p)\nPY",
     "python3 - <<'PY'\nfrom pathlib import Path\nPath('.claude/hooks/pre-tool.sh').parent.rmdir()\nPY",
     "python3 - <<'PY'\nfrom pathlib import Path\nPath('.mcp.json').replace('backup.json')\nPY",
+    // A use no rule recognises asks: the path as an operand of an operator
+    // the check does not model, or a branch of a conditional, reaches only
+    // the default at the end, and the write through the name it lands in is
+    // then caught by nothing else.
+    "python3 - <<'PY'\nimport os\ntarget = os.environ.get('CFG') or '.mcp.json'\nopen(target, 'w').write('{}')\nPY",
+    "node - <<'JS'\nconst target = process.argv[2] || '.claude/settings.json';\nrequire('fs').writeFileSync(target, '{}');\nJS",
+    "node - <<'JS'\nconst target = process.env.PROD ? '.mcp.json' : 'dev.json';\nrequire('fs').writeFileSync(target, '{}');\nJS",
+    "python3 - <<'PY'\nimport sys\ntarget = (len(sys.argv) > 1 and '.mcp.json')\nopen(target, 'w').write('{}')\nPY",
+    // And a call or a method nobody listed, on anything.
+    "python3 - <<'PY'\nimport mylib\nmylib.sync('.mcp.json')\nPY",
+    "python3 - <<'PY'\nfrom tools import deploy\ndeploy({}, '.claude/settings.json')\nPY",
+    "node - <<'JS'\nconst client = makeClient();\nclient.store.save('.mcp.json', {});\nJS",
   ];
   test('code asks about an answer file only when it can write one', () => {
     for (const codeMode of [false, true]) {
