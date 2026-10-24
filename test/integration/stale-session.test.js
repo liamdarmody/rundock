@@ -573,23 +573,27 @@ describe('a live process that fails some other way', () => {
     }
   });
 
-  test('a resume that failed for another reason does not hand on what the failed process may have read', async () => {
+  test('a resume that failed for another reason before its session started hands on what was kept', async () => {
+    // A process that never started a session acted on nothing it was sent, so
+    // the message sent while it was starting goes to the fresh one, once.
     const convoId = h.freshConvoId('other-failure');
     seed(convoId, { agentId: 'chief-of-staff', sessionId: 'odd-orch-dd', sessionIds: [{ agentId: 'chief-of-staff', sessionId: 'odd-orch-dd' }] });
     scenario([
       // Both messages are read, and the process dies before its session starts.
       { match: { resume: true, promptIncludes: 'ASK-DD' }, crash: 1, delayMs: 700, stderr: 'the session store is busy\n' },
-      { match: { agent: 'chief-of-staff', promptIncludes: 'ASK-DD' }, turn: [{ text: 'FRESH-DD' }] },
+      { match: { agent: 'chief-of-staff', promptIncludes: 'ASK-DD first' }, turn: [{ text: 'FRESH-DD' }] },
+      { match: { agent: 'chief-of-staff', promptIncludes: 'ASK-DD second' }, turn: [{ text: 'FRESH-AGAIN-DD' }] },
     ], []);
     h.clearInvocations();
     const since = client.messages.length;
     client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: 'ASK-DD first', sessionId: 'odd-orch-dd' });
     client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: 'ASK-DD second', sessionId: 'odd-orch-dd' });
-    await waitForResult(convoId, 'FRESH-DD', since, 'the retry answers');
+    await waitForResult(convoId, 'FRESH-AGAIN-DD', since, 'the message sent while it was starting is answered too');
     await h.delay(800);
     const fresh = h.readPrompts().filter(p => p.resume == null).map(p => p.prompt);
-    assert.deepStrictEqual(fresh, ['ASK-DD first'],
-      'only a refusal for a missing session hands on what was kept, because a process refused that way read nothing');
+    assert.deepStrictEqual(fresh, ['ASK-DD first', 'ASK-DD second'],
+      'the fresh start is sent both, in order, each once');
+    assert.strictEqual(spawnsFor(convoId).length, 2, 'started again once');
     h.reapConvo(convoId);
   });
 });

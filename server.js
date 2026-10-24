@@ -1786,13 +1786,13 @@ wss.on('connection', (ws) => {
                 liveWs.emit('message', JSON.stringify(freshMsg));
                 // What the person sent while the refused process was starting
                 // follows it, in order, into the fresh one: the first emit has
-                // already put a live process in place for these to reach. Only
-                // for a refusal: a process that failed for another reason may
-                // have read them, and sending them again could repeat work.
-                if (entry.missingSession) {
-                  for (const carried of takeUnstartedWrites(entry)) {
-                    liveWs.emit('message', JSON.stringify({ ...freshMsg, content: carried }));
-                  }
+                // already put a live process in place for these to reach. After
+                // any failure, not only a refusal: what is still kept went to a
+                // process that never started a session (its init clears the
+                // list), so it acted on none of it, and dropping it lost what
+                // the person had said.
+                for (const carried of takeUnstartedWrites(entry)) {
+                  liveWs.emit('message', JSON.stringify({ ...freshMsg, content: carried }));
                 }
                 return;
               }
