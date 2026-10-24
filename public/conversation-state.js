@@ -41,8 +41,8 @@
 //     as the stopped reply (detached, never removed).
 //   - A session Claude Code no longer has is forgotten by id, wherever the
 //     conversation stores it (session_expired, or info naming
-//     expiredSessionId), so it is never resumed again; info that names no
-//     session still clears the primary as before.
+//     expiredSessionId), so it is never resumed again. Info that names no
+//     session forgets nothing: it is a notice like any other.
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = factory(require('./markers.js'));
   else root.RundockConversationState = factory(root.RundockMarkers);
@@ -159,25 +159,25 @@
 
   function reduceNotice(state, message) {
     // Neutral notice: informational pill with NO side effects (distinct
-    // from 'info', which doubles as the stale-session signal).
+    // from 'info', which forgets the session it names when it names one).
     if (!message.content) return none(state);
     return { state, effects: [{ type: 'notice', content: message.content }] };
   }
 
-  function reduceInfo(state, message, ctx) {
+  function reduceInfo(state, message) {
     if (!message.content) return none(state);
     const effects = [];
-    // THE SESSION THAT EXPIRED, WHEN THE SERVER CAN NAME IT. The id it names is
-    // the one forgotten, wherever it is stored. Clearing the primary instead
-    // was right only when the expired session was the primary: when it was a
-    // delegate's, the orchestrator's live session was thrown away and the
-    // delegate's fresh one took its place.
+    // ONLY THE SESSION THE SERVER NAMES IS FORGOTTEN, wherever it is stored.
+    //
+    // Any info used to clear the primary, on the reading that info meant "your
+    // session expired". It does not: it also carries a blocked handoff, a
+    // failed spawn of Claude Code or Codex, and a resume that failed for some
+    // other reason. Each of those threw away a live orchestrator session, and
+    // a delegate's expiry threw away the orchestrator's, with the delegate's
+    // fresh session taking its place. A session that truly expired is named,
+    // and a fresh start sets the new primary itself when its init arrives.
     if (message.expiredSessionId) {
       effects.push({ type: 'forget-session', sessionId: message.expiredSessionId });
-    } else if (ctx.hasPrimarySession) {
-      // Stale session named by nothing: the server is retrying fresh, so the
-      // stored primary sessionId must be cleared.
-      effects.push({ type: 'clear-session' });
     }
     effects.push({ type: 'notice', content: message.content });
     return { state, effects };
@@ -426,7 +426,7 @@
       case 'process_started': return reduceProcessStarted(state, message);
       case 'init': return reduceInit(state, message, ctx);
       case 'notice': return reduceNotice(state, message);
-      case 'info': return reduceInfo(state, message, ctx);
+      case 'info': return reduceInfo(state, message);
       case 'session_expired': return reduceSessionExpired(state, message);
       case 'cancelled': return reduceCancelled(state, message);
       case 'done': return reduceDone(state, message);

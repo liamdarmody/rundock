@@ -70,7 +70,6 @@ function replay(messages, opts = {}) {
         if (ef.setPrimary) convo.sessionId = ef.sessionId;
         if (ef.addToChain) convo.sessionIds.push({ sessionId: ef.sessionId, agentId: ef.agentId });
       }
-      if (ef.type === 'clear-session') convo.sessionId = null;
     }
   });
   return { state, effects, log, convo };
@@ -419,12 +418,16 @@ test('init: a delegate session becomes primary when no primary exists yet', () =
   assert.strictEqual(r.effects[0].addToChain, true);
 });
 
-test('info clears the stored session only when one exists; notice never does', () => {
+test('info that names no session is a notice and forgets nothing, primary or not; notice never forgets', () => {
+  // Blocked handoffs, spawn failures and resumes that failed for some other
+  // reason all arrive as info. None of them says a session is gone.
   const s = createState();
-  const withSession = reduce(s, { type: 'system', subtype: 'info', content: 'Session expired' }, { hasPrimarySession: true });
-  assert.deepStrictEqual(types(withSession.effects), ['clear-session', 'notice']);
-  const withoutSession = reduce(s, { type: 'system', subtype: 'info', content: 'Session expired' }, { hasPrimarySession: false });
-  assert.deepStrictEqual(types(withoutSession.effects), ['notice']);
+  for (const content of ['Blocked a handoff to the writer', "Couldn't start Claude Code: permission denied.", 'Previous session expired. Starting fresh.']) {
+    for (const hasPrimarySession of [true, false]) {
+      assert.deepStrictEqual(reduce(s, { type: 'system', subtype: 'info', content }, { hasPrimarySession }).effects,
+        [{ type: 'notice', content }], `${content} (primary ${hasPrimarySession})`);
+    }
+  }
   const notice = reduce(s, { type: 'system', subtype: 'notice', content: 'Write request approved' }, {});
   assert.deepStrictEqual(notice.effects, [{ type: 'notice', content: 'Write request approved' }]);
   assert.deepStrictEqual(reduce(s, { type: 'system', subtype: 'notice' }, {}).effects, [], 'notice without content is a no-op');

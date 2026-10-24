@@ -67,7 +67,7 @@ function assertNotTold(convoId, since = 0) {
 
 /**
  * What the open window holds for one conversation, driven by the real reducer
- * and the real stored-session rules. The three effect executors mirror
+ * and the real stored-session rules. The two effect executors mirror
  * public/app.js line for line; each ends in the save the window sends.
  */
 function windowFor(record) {
@@ -89,9 +89,6 @@ function windowFor(record) {
         if (!convo.sessionIds) convo.sessionIds = [];
         if (ef.addToChain) convo.sessionIds.push({ sessionId: ef.sessionId, agentId: ef.agentId });
         save();
-      } else if (ef.type === 'clear-session') {
-        convo.sessionId = null;
-        save();
       } else if (ef.type === 'forget-session') {
         if (forgetSession(convo, ef.sessionId)) save();
       }
@@ -100,9 +97,9 @@ function windowFor(record) {
   return {
     convo,
     get activeAgentId() { return state.activeAgentId || convo.agentId; },
-    /** Read every message that has arrived for this conversation, in order. */
-    sync() {
-      for (; seen < client.messages.length; seen++) {
+    /** Read the messages that have arrived for this conversation, in order, up to `until`. */
+    sync(until = client.messages.length) {
+      for (; seen < until; seen++) {
         const m = client.messages[seen];
         if (m._conversationId !== convo.id || m.type !== 'system') continue;
         if (!['init', 'info', 'session_expired', 'agent_switch'].includes(m.subtype)) continue;
@@ -560,6 +557,71 @@ describe('talking straight to an agent whose stored session is gone', () => {
       'both reach the fresh session, in the order they were sent, each once');
     assert.deepStrictEqual(spawnsFor(convoId).map(i => i.resume), ['dead-lead-s', null], 'one fresh start carries both');
     assertNoRawRefusal(convoId, since);
+    h.reapConvo(convoId);
+  });
+});
+
+describe('an info message that names no session', () => {
+  // Info carries a blocked handoff, a failed spawn, and a resume that failed
+  // for some other reason. None of them says a session is gone, and each used
+  // to clear the window's primary session, a live orchestrator's included.
+  // The window reads up to and including the info, and no further: a later
+  // init would set a primary again and hide what the info itself did.
+  async function primaryAfter(convoId, win, since, pred, label) {
+    const { msg, index } = await client.waitFor(m => m._conversationId === convoId && m.type === 'system' && m.subtype === 'info' && pred(m),
+      { since, label, timeout: 15000 });
+    assert.strictEqual(msg.expiredSessionId, undefined, 'it names no session');
+    win.sync(index + 1);
+    await settled();
+    return { msg, primary: win.convo.sessionId, stored: stored(convoId) };
+  }
+
+  test('a blocked handoff leaves the orchestrator\'s session alone', async () => {
+    const convoId = h.freshConvoId('info-blocked');
+    const record = seed(convoId, { agentId: 'chief-of-staff', sessionId: 'live-orch-v', sessionIds: [{ agentId: 'chief-of-staff', sessionId: 'live-orch-v' }] });
+    scenario([
+      { match: { resume: true, promptIncludes: 'ASK-V' },
+        turn: [{ agentTool: { subagent_type: 'content-analyst', description: 'To the analyst.', prompt: 'analyse it' } }] },
+      { match: { promptIncludes: 'delegation-blocked' }, turn: [{ text: 'Understood, I will route it properly.' }] },
+    ], []);
+    const win = windowFor(record);
+    const since = client.messages.length;
+    win.send('ASK-V please');
+    const seen = await primaryAfter(convoId, win, since, m => /Blocked a handoff/.test(m.content || ''), 'the blocked handoff');
+    assert.strictEqual(seen.primary, 'live-orch-v');
+    assert.strictEqual(seen.stored.sessionId, 'live-orch-v');
+    h.reapConvo(convoId);
+  });
+
+  test('a failed spawn of Claude Code leaves the stored session alone', async () => {
+    const convoId = h.freshConvoId('info-spawn');
+    const record = seed(convoId, { agentId: 'chief-of-staff', sessionId: 'live-orch-w', sessionIds: [{ agentId: 'chief-of-staff', sessionId: 'live-orch-w' }] });
+    const win = windowFor(record);
+    const since = client.messages.length;
+    h.internal.handleChatSpawnError(Object.assign(new Error('spawn claude EACCES'), { code: 'EACCES' }), convoId);
+    const seen = await primaryAfter(convoId, win, since, m => /Couldn't start Claude Code/.test(m.content || ''), 'the spawn failure');
+    assert.strictEqual(seen.primary, 'live-orch-w', 'a transient failure to start must not cost the conversation its session');
+    assert.strictEqual(seen.stored.sessionId, 'live-orch-w');
+  });
+
+  test('a resume that failed for another reason leaves every session alone, the orchestrator\'s included', async () => {
+    const convoId = h.freshConvoId('info-other');
+    const record = seed(convoId, {
+      agentId: 'chief-of-staff', activeAgentId: 'content-lead', sessionId: 'live-orch-x',
+      sessionIds: [{ agentId: 'chief-of-staff', sessionId: 'live-orch-x' }, { agentId: 'content-lead', sessionId: 'odd-lead-x' }],
+    });
+    scenario([
+      { match: { resume: true, promptIncludes: 'ASK-X' }, crash: 1, stderr: 'the session could not be loaded right now\n' },
+      { match: { agent: 'content-lead', promptIncludes: 'ASK-X' }, turn: [{ text: 'LEAD-RETRIED-X' }] },
+    ], []);
+    const win = windowFor(record);
+    const since = client.messages.length;
+    win.send('ASK-X please');
+    await waitForResult(convoId, 'LEAD-RETRIED-X', since, 'the retry still answers');
+    const seen = await primaryAfter(convoId, win, since, () => true, 'the retry notice');
+    assert.strictEqual(seen.primary, 'live-orch-x', 'a delegate\'s failure never clears the orchestrator\'s session');
+    assert.ok(idsIn(seen.stored).includes('odd-lead-x'), 'and a session nobody said was gone is not forgotten');
+    assert.ok(!messagesFor(convoId, since).some(m => m.subtype === 'session_expired'));
     h.reapConvo(convoId);
   });
 });
