@@ -343,6 +343,16 @@ describe('a command asks about an answer file only when it can write it', () => 
     "python3 - <<'PY'\nimport mylib\nmylib.sync('.mcp.json')\nPY",
     "python3 - <<'PY'\nfrom tools import deploy\ndeploy({}, '.claude/settings.json')\nPY",
     "node - <<'JS'\nconst client = makeClient();\nclient.store.save('.mcp.json', {});\nJS",
+    // A command the code runs is read with its names and loop values filled
+    // in, and a runner imported by name, under an alias or in brackets over
+    // several lines, is one.
+    "python3 - <<'PY'\nimport subprocess\nfor d in ('.claude',):\n    subprocess.run(['rm', '-rf', d])\nPY",
+    "python3 - <<'PY'\nimport subprocess\nfor f in ('.mcp.json',):\n    subprocess.run(['sh', '-c', 'echo x > ' + f])\nPY",
+    "python3 - <<'PY'\nimport subprocess\ncmd = 'echo x > .mcp.json'\nsubprocess.run(['sh', '-c', cmd])\nPY",
+    "python3 - <<'PY'\nfrom subprocess import call\ncall('rm -rf .claude', shell=True)\nPY",
+    "python3 - <<'PY'\nimport os, subprocess\nsubprocess.call('rm .mcp.json', shell=True)\nPY",
+    "python3 - <<'PY'\nfrom subprocess import (\n    check_output,\n    call as sh,\n)\nsh('rm -rf .claude', shell=True)\nPY",
+    "node - <<'JS'\nconst { execSync: run } = require('child_process');\nrun('rm -rf .claude');\nJS",
   ];
   test('code asks about an answer file only when it can write one', () => {
     for (const codeMode of [false, true]) {

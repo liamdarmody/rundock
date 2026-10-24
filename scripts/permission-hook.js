@@ -1777,22 +1777,27 @@ function codeUse(s, masked, lits) {
   };
   const calleeText = (call, open) => s.slice(call.start, open).replace(/\s+/g, '');
 
-  // Names bound to modules: imported, required, or taken from a module.
+  // Names bound to modules: imported, required, or taken from a module, each
+  // with the name it was imported as (`call as sh` binds `sh` to `call`). An
+  // import ends at its line break, or at the bracket that closes a list
+  // written over several lines.
   const modules = new Set();
-  for (const m of masked.matchAll(/^[ \t]*import\s+([\w.]+(?:\s+as\s+\w+)?(?:\s*,\s*[\w.]+(?:\s+as\s+\w+)?)*)/gm)) {
-    for (const part of m[1].split(',')) { const p = part.trim().split(/\s+as\s+/); modules.add((p[1] || p[0].split('.')[0]).trim()); }
+  const imported = new Map();
+  const bind = (name, original) => { const n = String(name).trim(); if (/^[A-Za-z_$][\w$]*$/.test(n)) { modules.add(n); imported.set(n, String(original).trim()); } };
+  for (const m of masked.matchAll(/^[ \t]*import[ \t]+([\w.]+(?:[ \t]+as[ \t]+\w+)?(?:[ \t]*,[ \t]*[\w.]+(?:[ \t]+as[ \t]+\w+)?)*)/gm)) {
+    for (const part of m[1].split(',')) { const p = part.trim().split(/\s+as\s+/); bind(p[1] || p[0].split('.')[0], p[0]); }
   }
-  for (const m of masked.matchAll(/^[ \t]*from\s+[\w.]+\s+import\s+\(?([\w\s,]+)\)?/gm)) {
-    for (const part of m[1].split(',')) { const p = part.trim().split(/\s+as\s+/); if (p[0]) modules.add((p[1] || p[0]).trim()); }
+  for (const m of masked.matchAll(/^[ \t]*from[ \t]+[\w.]+[ \t]+import[ \t]+(\([^)]*\)|[^\n;#]*)/gm)) {
+    for (const part of m[1].replace(/^\(|\)$/g, '').split(',')) { const p = part.trim().split(/\s+as\s+/); if (p[0]) bind(p[1] || p[0], p[0]); }
   }
-  for (const m of masked.matchAll(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:await\s+)?(?:require|import)\s*\(/g)) modules.add(m[1]);
+  for (const m of masked.matchAll(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:await\s+)?(?:require|import)\s*\(/g)) bind(m[1], m[1]);
   for (const m of masked.matchAll(/\b(?:const|let|var)\s+\{([^}]*)\}\s*=\s*(?:await\s+)?(?:require|import)\s*\(/g)) {
-    for (const part of m[1].split(',')) { const p = part.split(':'); const n = (p[1] || p[0]).trim(); if (n) modules.add(n); }
+    for (const part of m[1].split(',')) { const p = part.split(':'); if (p[0].trim()) bind(p[1] || p[0], p[0]); }
   }
   for (const m of masked.matchAll(/^[ \t]*import\s+(?:\*\s+as\s+([A-Za-z_$][\w$]*)|([A-Za-z_$][\w$]*))?\s*,?\s*(?:\{([^}]*)\})?\s*from\b/gm)) {
-    if (m[1]) modules.add(m[1]);
-    if (m[2]) modules.add(m[2]);
-    for (const part of (m[3] || '').split(',')) { const p = part.trim().split(/\s+as\s+/); if (p[0]) modules.add((p[1] || p[0]).trim()); }
+    if (m[1]) bind(m[1], m[1]);
+    if (m[2]) bind(m[2], m[2]);
+    for (const part of (m[3] || '').split(',')) { const p = part.trim().split(/\s+as\s+/); if (p[0]) bind(p[1] || p[0], p[0]); }
   }
   // A name bound to part of a module (`p = require('fs').promises`) is one.
   for (const m of masked.matchAll(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*([A-Za-z_$][\w$]*)\s*\.\s*promises\b/g)) if (modules.has(m[2]) || m[2] === 'fs') modules.add(m[1]);
@@ -1876,7 +1881,9 @@ function codeUse(s, masked, lits) {
   const isCollection = (a, b) => {
     [a, b] = trim(a, b);
     if (a >= b) return false;
-    if ((masked[a] === '[' || masked[a] === '{' || masked[a] === '(') && closeOf(a) === b - 1) return masked[a] !== '(' || argsOf(a, b - 1).length > 1;
+    // A bracket is a tuple with more than one item, or one with a comma after
+    // its only item (`('.claude',)`).
+    if ((masked[a] === '[' || masked[a] === '{' || masked[a] === '(') && closeOf(a) === b - 1) return masked[a] !== '(' || argsOf(a, b - 1).length > 1 || /,\s*$/.test(masked.slice(a + 1, b - 1));
     const name = masked.slice(a, b);
     return /^[$@%]?[A-Za-z_][\w]*$/.test(name) && (vars.get(name) || []).some(([x, y]) => isCollection(x, y));
   };
@@ -1940,7 +1947,7 @@ function codeUse(s, masked, lits) {
     if (lit && lit.end === b) return interpolate(lit);
     if ((masked[a] === '[' || masked[a] === '{' || masked[a] === '(') && closeOf(a) === b - 1) {
       const parts = argsOf(a, b - 1);
-      if (masked[a] === '(' && parts.length === 1) return resolve(a + 1, b - 1, depth + 1);
+      if (masked[a] === '(' && parts.length === 1 && !/,\s*$/.test(masked.slice(a + 1, b - 1))) return resolve(a + 1, b - 1, depth + 1);
       return cap(parts.flatMap(([x, y]) => resolve(x, y, depth + 1)));
     }
     const plus = splitTop(a, b, '+');
@@ -2205,6 +2212,20 @@ function codeUse(s, masked, lits) {
     for (const [a, b] of occurrences(name)) if (parentSpan(a, b)) { const [x, y] = grow(a, b); addNode(x, y); }
   }
 
+  // THE COMMAND A RUNNER IS GIVEN, word by word: its first argument and the
+  // list it is handed, each word filled in from the names and loop values it
+  // may hold. Keyword arguments (`shell=True`) are not words.
+  const commandWords = (open, close) => {
+    const args = argsOf(open, close).filter(([x, y]) => !/^\s*[A-Za-z_]\w*\s*[=:](?!=)/.test(masked.slice(x, y)));
+    if (!args.length) return [];
+    const isList = ([x, y]) => { const [tx, ty] = trim(x, y); return '[('.includes(masked[tx]) && closeOf(tx) === ty - 1; };
+    const parts = [];
+    if (!isList(args[0])) parts.push(args[0]);
+    const list = args.find(isList);
+    if (list) { const [tx, ty] = trim(list[0], list[1]); parts.push(...argsOf(tx, ty - 1)); }
+    const words = product(parts.map(([x, y]) => resolve(x, y).map(v => v.split(UNKNOWN).join(''))), (x, y) => `${x} ${y}`);
+    return words.filter(w => w.trim());
+  };
   // Commands the code runs, read by the caller as commands.
   const commands = [];
   for (const m of masked.matchAll(/(?<![\w$])([A-Za-z_][\w]*)\s*\(/g)) {
@@ -2212,11 +2233,10 @@ function codeUse(s, masked, lits) {
     const call = callAt(open);
     if (!call) continue;
     const recv = call.dotted ? masked.slice(call.recvStart, call.recvEnd).replace(/\s+/g, '') : '';
-    const runs = RUNS_COMMAND.has(call.name) || (RUNS_COMMAND_ON_MODULE.has(call.name) && ((call.dotted && isModuleText(recv)) || (!call.dotted && modules.has(call.name))));
+    const original = call.dotted ? call.name : (imported.get(call.name) || call.name);
+    const runs = RUNS_COMMAND.has(original) || (RUNS_COMMAND_ON_MODULE.has(original) && ((call.dotted && isModuleText(recv)) || (!call.dotted && imported.has(call.name))));
     if (!runs) continue;
-    const close = closeOf(open);
-    const words = lits.filter(l => l.start > open && l.end <= close).map(l => l.value);
-    if (words.length) commands.push(words.join(' '));
+    for (const command of commandWords(open, closeOf(open))) commands.push(command);
   }
   return { nodes: [...nodes.values()], literalNode, consumed, commands };
 }
