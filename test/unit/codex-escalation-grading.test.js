@@ -176,7 +176,8 @@ describe('file-change escalations, graded by grantRoot in both modes', { skip: S
 });
 
 describe('Codex cannot write the workspace\'s own permission answers without asking', { skip: SKIP }, () => {
-  const ANSWER_FILES = ['.rundock/permissions.json', '.rundock/state.json', '.claude/settings.local.json'];
+  const ANSWER_FILES = ['.rundock/permissions.json', '.rundock/state.json', '.claude/settings.local.json',
+    '.rundock/permission-hook.sh', '.mcp.json', '.claude/settings.json', '.claude/hooks/pre-tool.sh', '.claude/hooks'];
   for (const codeMode of [true, false]) {
     const mode = codeMode ? 'Code' : 'Notes';
     test(`a file change at an answer file, or at the folder holding one, is the answer-file card (${mode} mode)`, () => {
@@ -190,8 +191,22 @@ describe('Codex cannot write the workspace\'s own permission answers without ask
       }
     });
 
+    test(`a file change in the hook-scripts folder asks before the workspace has a state file (${mode} mode)`, () => {
+      const state = path.join(world.ws, '.rundock', 'state.json');
+      const kept = fs.readFileSync(state);
+      fs.rmSync(state);
+      try {
+        for (const g of [path.join(world.ws, '.claude', 'hooks', 'pre-tool.sh'), path.join(world.ws, '.claude', 'hooks', 'lib', 'notify.py')]) {
+          const r = change(g, { codeMode });
+          assert.strictEqual(r.decision, 'card', `${g} is never accepted by grading`);
+          assert.strictEqual(r.request.answer_file, true, `${g} is carded as the answer file`);
+        }
+      } finally { fs.writeFileSync(state, kept); }
+    });
+
     test(`a command writing an answer file is the answer-file card (${mode} mode)`, () => {
-      for (const c of ["echo '{}' > .rundock/permissions.json", 'cp /dev/null .rundock/state.json', "printf x >> .claude/settings.local.json"]) {
+      for (const c of ["echo '{}' > .rundock/permissions.json", 'cp /dev/null .rundock/state.json', "printf x >> .claude/settings.local.json",
+        'printf x >> .rundock/permission-hook.sh', "echo '{}' > .mcp.json", 'cp /dev/null .claude/settings.json', 'tee .claude/hooks/pre-tool.sh']) {
         const r = cmd(c, world.ws, { codeMode });
         assert.strictEqual(r.decision, 'card', c);
         const isAnswerFile = r.request.answer_file === true || (Array.isArray(r.request.crossings) && r.request.crossings.some(x => x.answerFile));

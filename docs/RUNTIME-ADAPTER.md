@@ -69,14 +69,25 @@ escalations surface. The human decides; the runtime never self-approves.
   instruction files: they carry no such keys. The current workspace's
   `.claude/settings.json` is an answer file too, since it can carry hooks
   and permission rules. The hook reads the command a tool call carries, not
-  what a script does once it runs, so a write made inside `node -e` or a
-  script never meets it; the workspace's own permission files are therefore
-  also watched during every Claude turn, direct chats, delegates and
+  what a script does once it runs, so a write made by a script, or by code
+  that builds its path as it runs, never meets it; the workspace's own
+  permission files, and the
+  files that decide what runs (the launcher the hook is started through,
+  `.mcp.json`, `.rundock/mcp-secrets.json` and the hook scripts under
+  `.claude/hooks/`), are therefore also watched during every Claude turn,
+  direct chats, delegates and
   routines alike (`lib/runtime/claude-turn-guard.js`): a change Rundock did
-  not make is put back at once and offered on the answer-file card. The
+  not make is put back at once and offered on the answer-file card, except
+  one the person allowed on the hook's card in that conversation, which
+  stands, and a change to the launcher, which is put back to the one this
+  copy of Rundock wrote with no card. The
   comparison is against a baseline kept for as long as Rundock runs, so a
   change made while no turn is running (a job an agent left behind, or an
-  edit by hand) is put back, and asked about, when the next turn starts.
+  edit by hand) is put back, and asked about, when the next turn starts;
+  one to `.mcp.json`, `.rundock/mcp-secrets.json`, a hook script or the
+  Claude Code settings files is taken as it stands, since people and git
+  edit those too, and for all but the settings files a quiet notice names
+  the file.
   The agent whose change was put back during its turn is told as well, in
   the same step: a PostToolUse hook (registered where Rundock owns the
   settings file) asks the server to check the permission files as each tool
@@ -92,10 +103,11 @@ escalations surface. The human decides; the runtime never self-approves.
   meet: in Code mode a command the verdict says runs is answered `accept`
   with no card (never `acceptForSession`), and in both modes a file change
   inside the workspace or a working folder is accepted with no card. An
-  escalation that touches the workspace's own permission files is always
-  the answer-file card, and because such a write inside the workspace
-  never escalates at all (measured, and no thread option stops it), those
-  files are watched during every Codex turn, against the same baseline: a
+  escalation that touches the workspace's own permission files, or a file
+  that decides what runs, is always the answer-file card, and because such
+  a write inside the workspace never escalates at all (measured, and no
+  thread option stops it), those files are watched during every Codex turn,
+  against the same baseline: a
   change Rundock did not make is put back at once and offered on the
   answer-file card (`lib/workspace/answer-file-guard.js`). A request to widen Codex's own
   permission profile (`item/permissions/requestApproval`) is always

@@ -642,6 +642,59 @@ describe('how a line is read', { skip: SKIP }, () => {
   });
 });
 
+// ── macOS's launch services ─────────────────────────────────────────────────
+// `launchctl setenv` and `unsetenv` change the environment every program
+// started from now on inherits, Rundock included the next time it is opened
+// from the Dock; `load`, `bootstrap` and `submit` start a program under launchd,
+// outside anything Rundock sees. Graded like elevation: they always ask. Reading
+// it (`print`, `list`, `getenv`) runs as before. `asuser` and `bsexec` carry a
+// command of their own, which is judged like any other.
+describe('launchctl changes what every later program inherits, so it always asks', { skip: SKIP }, () => {
+  const CHANGES = ['setenv RUNDOCK_CODE_MODE 1', 'unsetenv PATH', 'load -w ~/Library/LaunchAgents/x.plist',
+    'bootstrap gui/501 ~/Library/LaunchAgents/x.plist', 'submit -l x -- /bin/sh -c true'];
+  const READS = ['print gui/501', 'list', 'getenv PATH', 'print-disabled gui/501'];
+  // Every position the reader already follows a command into, with C the command.
+  const POSITIONS = ['C', '/bin/launchctl C', 'true && launchctl C', 'false || launchctl C', 'ls; launchctl C',
+    'echo x | launchctl C', '( launchctl C )', '{ launchctl C; }', 'if true; then launchctl C; fi', 'echo "$(launchctl C)"',
+    "bash -c 'launchctl C'", "sh -lc 'launchctl C'", 'env X=1 launchctl C', 'command launchctl C', 'exec launchctl C', 'nohup launchctl C',
+    'time launchctl C', 'nice launchctl C', 'timeout 5 launchctl C', 'X=1 launchctl C', "echo C | xargs launchctl", 'find . -maxdepth 0 -exec launchctl C \\;',
+    "sh <<'EOF'\nlaunchctl C\nEOF", 'launchctl asuser 501 launchctl C', 'launchctl bsexec 1 launchctl C'];
+  const at = (position, c) => (position === 'C' ? `launchctl ${c}` : position.replace('launchctl C', `launchctl ${c}`).replace('echo C', `echo ${c}`));
+
+  test('setenv, unsetenv, load, bootstrap and submit always ask, wherever they sit in the line', () => {
+    for (const c of CHANGES) {
+      for (const position of POSITIONS) {
+        const command = at(position, c);
+        const v = verdictFor(command);
+        assert.strictEqual(v.verdict, 'always-asks', command);
+        if (!/xargs/.test(command)) assert.strictEqual(v.reason, 'launch-environment', `${command}: for its own reason`);
+      }
+    }
+  });
+
+  test('reading it runs as before, in the same positions', () => {
+    for (const c of READS) {
+      for (const position of POSITIONS.filter(p => !/xargs/.test(p))) {
+        const command = at(position, c);
+        assert.strictEqual(verdictFor(command).verdict, 'runs', command);
+      }
+    }
+  });
+
+  test('the program name folds case where the filesystem does, and the subcommand is read in any case', () => {
+    assert.strictEqual(verdictFor('LAUNCHCTL setenv X 1', { platform: 'darwin' }).verdict, 'always-asks');
+    assert.strictEqual(verdictFor('launchctl SetEnv X 1', { platform: 'darwin' }).verdict, 'always-asks');
+  });
+
+  test('a subcommand only known when the line runs asks, as an unread command does', () => {
+    for (const c of ['launchctl "$SUB" X 1', 'launchctl $(echo setenv) X 1']) assert.strictEqual(verdictFor(c).verdict, 'always-asks', c);
+  });
+
+  test('sudo in front of it still reads as elevation', () => {
+    assert.strictEqual(verdictFor('sudo launchctl setenv X 1').reason, 'elevation');
+  });
+});
+
 // ── Words only known when the line runs ─────────────────────────────────────
 // A verb held in a variable or produced by a substitution cannot be read, so
 // the line asks, as eval does. A substitution anywhere runs a command of its

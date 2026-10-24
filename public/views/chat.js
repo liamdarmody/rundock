@@ -1073,10 +1073,12 @@ function renderPermissionCard(d, convoId, host) {
 
   if (answerFile) {
     // What is at stake, said plainly. Not which tool, not where the file sits:
-    // this request would change the rules that decide what agents may do.
-    summary = 'Wants to change what agents are allowed to do';
+    // this request would change the rules that decide what agents may do, or
+    // what runs when they act.
+    const named = [req.resolved_path, ...crossingList.map(c => c && c.path)].filter(Boolean);
+    summary = RundockPermissions.answerFileSummary(named);
     detail = req.resolved_path || detail;
-    context = RundockPermissions.answerFileCopy();
+    context = RundockPermissions.answerFileCopy(named);
   } else if (boundary) {
     const reads = toolName === 'Read' || toolName === 'Glob' || toolName === 'Grep';
     // A shell crossing does not say which act it is. The command may read,
@@ -1252,6 +1254,10 @@ function renderPermissionCard(d, convoId, host) {
       ${context ? `<div class="permission-context">${esc(context)}</div>` : ''}
       ${fieldsBox ? '<div class="permission-fields-slot"></div>' : crossings.length > 1
         ? `<div class="permission-detail">${crossings.map(c => esc(c.path)).join('<br>')}</div>`
+        // An agent's connector change: what it would run, line by line, open
+        // and unclipped, since this card is the person's only look at it.
+        : (toolName === 'SaveConnector' || toolName === 'DeleteConnector')
+          ? `<details class="permission-detail-collapse" open><summary>What it would run</summary><code class="permission-detail">${detail.split('\n').map(esc).join('<br>')}</code></details>`
         : (toolName === 'Bash' && input.description && detail.length > 60)
           ? `<details class="permission-detail-collapse"><summary>Show command</summary><code class="permission-detail">${esc(detail)}</code></details>`
           : `<code class="permission-detail">${esc(detail)}</code>`}

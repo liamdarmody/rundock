@@ -251,6 +251,13 @@
   // and stable, and because only this one flag executes anything.
   var EXECUTING_FLAGS = { rg: /(^|\s)--pre\b/ };
 
+  // Two listed programs also WRITE a file they are given, with no redirect on
+  // the line: `tree -o FILE` sends its listing there (alone or in a bundle such
+  // as `-ao`), and `file -C` compiles a magic file. Either makes the segment
+  // not a read. Named for the same reason as the flag above: each program has
+  // exactly one such option.
+  var WRITING_FLAGS = { tree: /(^|\s)-[A-Za-z]*o/, file: /(^|\s)(-[A-Za-z]*C|--compile\b)/ };
+
   // Whether one segment's leading command only reads. An empty segment (a
   // trailing separator) carries nothing to disqualify it.
   //
@@ -286,6 +293,8 @@
     if (first === 'find') return findOnlyReads(words.slice(1));
     if (Object.prototype.hasOwnProperty.call(EXECUTING_FLAGS, first)
       && EXECUTING_FLAGS[first].test(segment)) return false;
+    if (Object.prototype.hasOwnProperty.call(WRITING_FLAGS, first)
+      && WRITING_FLAGS[first].test(segment)) return false;
     if (READ_ONLY_SHELL_COMMANDS.indexOf(first) >= 0) return true;
     if (NO_TARGET_COMMANDS.indexOf(first) >= 0) return true;
     if (READ_ONLY_POWERSHELL_COMMANDS.indexOf(first.toLowerCase()) >= 0) return true;
@@ -345,11 +354,25 @@
     // an arbitrary command per match and -delete removes files, so a bare find
     // leading segment must not shield these.
     if (/\bfind\b[\s\S]*-(exec(dir)?|delete|ok(dir)?)\b/.test(cmd)) return true;
+    // macOS's launch services: these change what every program started from
+    // now on inherits, Rundock included, or start one under launchd, so they
+    // are graded like an irreversible act, wherever they sit in the line.
+    if (/\blaunchctl\s+(setenv|unsetenv|load|bootstrap|submit|config)\b/i.test(cmd)) return true;
     var segments = shellSegments(cmd);
     for (var i = 0; i < segments.length; i++) {
       if (DESTRUCTIVE_LEADING.test(segments[i].trim())) return true;
+      if (launchctlUnspelled(segments[i])) return true;
     }
     return false;
+  }
+  // launchctl leading a segment with no subcommand (it reads them from
+  // standard input, so `echo setenv X 1 | launchctl` changes what it likes)
+  // or with one only the shell fills in (`launchctl $SUB X 1`, a quoted or
+  // substituted word): what it would change is not on the line.
+  function launchctlUnspelled(segment) {
+    var words = String(segment).trim().split(/\s+/).filter(Boolean);
+    if (!words.length || bareWord(words[0]) !== 'launchctl') return false;
+    return words.length === 1 || /^["'$`\\]/.test(words[1]);
   }
 
   // Only what a caller actually uses. The registries stay private: exporting

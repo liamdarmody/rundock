@@ -367,6 +367,29 @@ describe('the card for the file that records permission answers', () => {
 // The behaviour was right and its stated reason was false, which on a security
 // prompt is worse than it sounds: a card that misstates why it is asking
 // devalues every other card.
+// CLAUDE CODE PROTECTS SOME OF THESE FILES ITSELF. Its documented protected
+// paths include `.mcp.json` and the whole `.claude` folder, whose writes it
+// never approves on its own, and Rundock runs it with nobody at its own prompt,
+// so an Allow here may not take effect for them. The card says so for those
+// files, and only for those: the launcher and the per-user connector file sit
+// in `.rundock`, which Claude Code does not protect, so an Allow there holds.
+describe('the answer-file card is honest about what Claude Code refuses itself', () => {
+  const NOTE = /Claude Code protects it too, and may refuse the change even after you allow it here/;
+  for (const p of ['/ws/.mcp.json', '/ws/.claude/settings.json', '/ws/.claude/hooks/pre-tool.sh']) {
+    test(`${p} says Claude Code may refuse it anyway`, () => {
+      for (const request of [
+        { tool_name: 'Write', input: { file_path: p }, answer_file: true, resolved_path: p, grant_dir: null },
+        { tool_name: 'Bash', input: { command: `echo x > ${p}` }, boundary: true, resolved_path: p, grant_dir: null, crossings: [{ path: p, answerFile: true }] },
+      ]) assert.match(render(request), NOTE, `${request.tool_name} ${p}`);
+    });
+  }
+  for (const p of ['/ws/.rundock/permission-hook.sh', '/ws/.rundock/mcp-secrets.json', '/ws/.rundock/permissions.json']) {
+    test(`${p} makes no such claim, because an Allow there takes effect`, () => {
+      assert.doesNotMatch(render({ tool_name: 'Write', input: { file_path: p }, answer_file: true, resolved_path: p, grant_dir: null }), NOTE);
+    });
+  }
+});
+
 describe('the answer-file card', () => {
   const WRITE = {
     tool_name: 'Write',
