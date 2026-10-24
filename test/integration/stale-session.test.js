@@ -777,6 +777,29 @@ describe('a refusal that reaches the pipe in pieces', () => {
     h.reapConvo(convoId);
   });
 
+  test('a warning on an earlier line does not let the first piece of a refusal show', async () => {
+    // Claude Code's note that it read no stdin is filtered from the window but
+    // still stays in the stderr written so far. Judged on the whole of it, the
+    // first piece of a split refusal looked like something else and was shown.
+    const convoId = h.freshConvoId('stale-preamble');
+    const record = seed(convoId, {
+      agentId: 'chief-of-staff', activeAgentId: 'content-lead', sessionId: 'live-orch-ac',
+      sessionIds: [{ agentId: 'chief-of-staff', sessionId: 'live-orch-ac' }, { agentId: 'content-lead', sessionId: 'dead-lead-ac' }],
+    });
+    scenario([
+      { match: { agent: 'content-lead', promptIncludes: 'ASK-AC' }, turn: [{ text: 'LEAD-FRESH-AC' }] },
+    ], ['dead-lead-ac'], { refusalSplitAt: 12, refusalPreamble: 'Warning: no stdin data received in 3s, proceeding without it\n' });
+    h.clearInvocations();
+    const win = windowFor(record);
+    const since = client.messages.length;
+    win.send('ASK-AC hello');
+    await waitForResult(convoId, 'LEAD-FRESH-AC', since, 'the fresh start answers');
+    await h.delay(200);
+    assert.deepStrictEqual(messagesFor(convoId, since).filter(m => m.type === 'error').map(m => m.content), [],
+      'no piece of the refusal is shown');
+    assert.strictEqual(messagesFor(convoId, since).filter(m => m.subtype === 'session_expired').length, 1);
+    h.reapConvo(convoId);
+  });
 });
 
 describe('an info message that names no session', () => {

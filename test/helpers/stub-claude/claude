@@ -40,7 +40,8 @@
 //                                    // startup exactly as Claude Code refuses an
 //                                    // id it has no session file for
 //     "refusalExitMs": 0,            // how long the refused process lingers
-//     "refusalSplitAt": 0 }          // write the refusal line in pieces
+//     "refusalSplitAt": 0,           // write the refusal line in pieces
+//     "refusalPreamble": "..." }     // stderr written just before the refusal
 // A crash rule may give "stderrChunks": [...] to write its stderr in pieces.
 // Any rule may give "exitAfterTurn": n to exit with code n after its turn.
 // First matching rule wins; rules are re-read from disk on every message so
@@ -205,9 +206,14 @@ const REFUSED_RESUME = RESUME != null && Array.isArray(TOP.deadSessions) && TOP.
 if (REFUSED_RESUME) {
   // `refusalSplitAt` writes the line in pieces a moment apart (cut at that
   // character, then the newline on its own), the way a pipe may deliver it.
+  // `refusalPreamble` is stderr written on its own just before the refusal,
+  // such as Claude Code's warning that it read no stdin.
   const line = `No conversation found with session ID: ${RESUME}`;
   const cut = Number(TOP.refusalSplitAt) || 0;
-  const pieces = cut > 0 ? [line.slice(0, cut), line.slice(cut), '\n'] : [`${line}\n`];
+  const pieces = [
+    ...(TOP.refusalPreamble ? [String(TOP.refusalPreamble)] : []),
+    ...(cut > 0 ? [line.slice(0, cut), line.slice(cut), '\n'] : [`${line}\n`]),
+  ];
   const wait = Number(TOP.refusalExitMs) || 0;
   const finish = () => (wait > 0 ? setTimeout(() => exitWhenWritten(1), wait) : exitWhenWritten(1));
   writePieces(pieces, finish);

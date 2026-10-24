@@ -43,6 +43,12 @@ describe('stderr that could still be a refusal', () => {
     assert.strictEqual(mayBeRefusal(REFUSAL), true);
   });
 
+  test('is judged on the line still being written, not on earlier lines', () => {
+    assert.strictEqual(mayBeRefusal('Warning: no stdin data received\nNo con'), true,
+      'a warning before it says nothing about whether this line is a refusal');
+    assert.strictEqual(mayBeRefusal('No con\n'), false, 'a finished line is no longer an opening');
+  });
+
   test('is not text that has gone its own way, nor nothing at all', () => {
     assert.strictEqual(mayBeRefusal('No connection'), false);
     assert.strictEqual(mayBeRefusal(`${REFUSAL}: sess-1\n`), false, 'the whole line is matched as a refusal, not held');
