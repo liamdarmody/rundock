@@ -74,6 +74,8 @@ Each Rundock conversation has its own Claude Code session ID. When a user opens 
 
 Resume works because Claude Code persists every session as a JSONL transcript in the user's home directory (see The .rundock workspace directory, below). Rundock does not store conversation message content itself; it stores enough metadata to find and resume each session.
 
+Claude Code removes old session files on its own schedule, so a stored id can outlive its session. Resuming one is refused with "No conversation found with session ID". Every resume path recognizes that refusal in one place (`lib/runtime/missing-session.js`): the id is forgotten from the conversation's stored state and from every open window, the store will not take it back from a window that saves it again, and the turn starts again in a fresh session (a delegate briefed as arriving, an orchestrator given its handback) with a short notice. A resume that cannot be started again where it failed says what happened and asks the person to send again. The raw refusal is never shown.
+
 ### Delegation: how the orchestrator hands off to a specialist
 
 The delegation handoff works in five steps:

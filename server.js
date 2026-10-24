@@ -653,6 +653,7 @@ const {
 } = claudeRuntime;
 const codexGlue = require('./lib/runtime/codex-glue.js');
 const { watchClaudeTurns } = require('./lib/runtime/claude-turn-guard.js');
+const { STARTING_FRESH } = require('./lib/runtime/missing-session.js');
 claudeRuntime.wireClaudeRuntimeDeps({
   getActualPort: () => ACTUAL_PORT,
   // Every Claude turn runs under the same answer-file guard as a Codex turn.
@@ -1742,8 +1743,13 @@ wss.on('connection', (ws) => {
                 (stderrRef.value.includes('session') || stderrRef.value.includes('resume') || stderrRef.value.includes('not found'));
               if (isResumeFailure) {
                 console.log(`[Chat] Resume failed for session ${msg.sessionId}, retrying fresh`);
+                entry.missingSessionRecovered = true; // started again below
                 processes.delete(convoId);
-                safeSend(JSON.stringify({ type: 'system', subtype: 'info', content: 'Previous session expired. Starting fresh.', _conversationId: convoId, _processId: processId }));
+                // Naming the session Claude Code refused, when it was refused,
+                // so the window forgets that one and not whichever is primary.
+                safeSend(JSON.stringify({ type: 'system', subtype: 'info', content: STARTING_FRESH,
+                  ...(entry.missingSession ? { expiredSessionId: entry.missingSession } : {}),
+                  _conversationId: convoId, _processId: processId }));
                 const freshMsg = { ...msg, sessionId: null, _resumeRetry: true };
                 const liveWs = [...connectedClients].find(c => c.readyState === 1) || ws;
                 liveWs.emit('message', JSON.stringify(freshMsg));
@@ -1839,8 +1845,11 @@ wss.on('connection', (ws) => {
               (legacyStderrRef.value.includes('session') || legacyStderrRef.value.includes('resume') || legacyStderrRef.value.includes('not found'));
             if (isResumeFailure) {
               console.log(`[Chat] Resume failed for session ${msg.sessionId}, retrying fresh`);
+              entry.missingSessionRecovered = true; // started again below
               processes.delete(convoId);
-              safeSend(JSON.stringify({ type: 'system', subtype: 'info', content: 'Previous session expired. Starting fresh.', _conversationId: convoId, _processId: processId }));
+              safeSend(JSON.stringify({ type: 'system', subtype: 'info', content: STARTING_FRESH,
+                ...(entry.missingSession ? { expiredSessionId: entry.missingSession } : {}),
+                _conversationId: convoId, _processId: processId }));
               const freshMsg = { ...msg, sessionId: null, _resumeRetry: true };
               const liveWs = [...connectedClients].find(c => c.readyState === 1) || ws;
               liveWs.emit('message', JSON.stringify(freshMsg));

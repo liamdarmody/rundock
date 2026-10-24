@@ -33,9 +33,13 @@
 //                            { "agentTool": { "subagent_type": "wren", "prompt": "..." } },
 //                            { "tool": { "name": "Read", "input": {...} } },
 //                            { "raw": { ...literal envelope... } } ],
-//                  "webFetch": "http://..." } ] }  // a real HTTP request from this
+//                  "webFetch": "http://..." } ],   // a real HTTP request from this
 //                                                  // process first, reported as a
 //                                                  // WebFetch call and its status
+//     "deadSessions": ["id", ...],   // a --resume of any of these is refused at
+//                                    // startup exactly as Claude Code refuses an
+//                                    // id it has no session file for
+//     "refusalExitMs": 0 }           // how long the refused process lingers
 // First matching rule wins; rules are re-read from disk on every message so
 // tests can rewrite the script mid-scenario. The stub also appends every
 // invocation to `stub-invocations.jsonl` (cwd) for spawn-arg assertions.
@@ -176,6 +180,30 @@ function loadRules() {
   } catch (e) {
     return [];
   }
+}
+
+// A SESSION CLAUDE CODE NO LONGER HAS, refused the way the real binary refuses
+// it. Asked to --resume an id whose session file has gone (pruned, or never
+// written on this machine), the CLI writes one line to stderr and exits 1 at
+// startup: before it reads any input, and before any init envelope. A scenario
+// names such ids in its top-level `deadSessions`. Read once, at spawn, which is
+// when the real binary looks, so a test brings a session back by rewriting the
+// list before the next spawn. `refusalExitMs` holds the process open that long
+// after the line is written, which is the moment a person can still stop it.
+function scenarioTop() {
+  try {
+    return JSON.parse(fs.readFileSync(SCENARIO_FILE, 'utf-8')) || {};
+  } catch (e) {
+    return {};
+  }
+}
+const TOP = scenarioTop();
+const REFUSED_RESUME = RESUME != null && Array.isArray(TOP.deadSessions) && TOP.deadSessions.includes(RESUME);
+if (REFUSED_RESUME) {
+  writeErr(`No conversation found with session ID: ${RESUME}\n`);
+  const wait = Number(TOP.refusalExitMs) || 0;
+  if (wait > 0) setTimeout(() => exitWhenWritten(1), wait);
+  else exitWhenWritten(1);
 }
 
 function matches(rule, prompt) {
@@ -414,8 +442,10 @@ function handleUserMessage(content) {
   else emitTurn(rule, content);
 }
 
-const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
-rl.on('line', (line) => {
+// A refused resume never reads its input, exactly as the real binary never
+// does: nothing below runs for it, so no prompt is logged and no turn is spoken.
+const rl = REFUSED_RESUME ? null : readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+if (rl) rl.on('line', (line) => {
   if (!line.trim()) return;
   let msg;
   try { msg = JSON.parse(line); } catch (e) { return; }
@@ -429,7 +459,7 @@ rl.on('line', (line) => {
 
 // Routine spawns use stdio: ['ignore', ...] and pass the prompt as the last
 // positional argument with --print. Handle that shape too.
-if (PRINT) {
+if (PRINT && !REFUSED_RESUME) {
   const positional = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
