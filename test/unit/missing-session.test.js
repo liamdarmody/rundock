@@ -5,7 +5,7 @@ const { test, describe } = require('node:test');
 const assert = require('node:assert');
 const {
   REFUSAL, refusedResume, resumedSessionOf, mayBeRefusal, noteExpired, isExpired, withoutResume,
-  noteUnstartedWrite, takeUnstartedWrites, startingFresh, notResumedNotice,
+  noteUnstartedWrite, takeUnstartedWrites, holdFreshCatchUp, withFreshCatchUp, startingFresh, notResumedNotice,
 } = require('../../lib/runtime/missing-session.js');
 
 const resumed = (id) => ({ spawnargs: ['claude', '--model', 'm', '--resume', id, '--agent', 'writer'] });
@@ -101,6 +101,22 @@ test('a fresh start names whose earlier context is gone', () => {
   const said = startingFresh('Quill');
   assert.strictEqual(said, "Quill's previous session expired. Starting fresh.");
   assert.ok(!said.includes(REFUSAL));
+});
+
+describe('a catch-up held for the next message', () => {
+  test('goes in front of the next message once, and is then spent', () => {
+    const entry = {};
+    holdFreshCatchUp(entry, 'CATCH-UP\n\n');
+    assert.strictEqual(withFreshCatchUp(entry, 'first'), 'CATCH-UP\n\nfirst');
+    assert.strictEqual(withFreshCatchUp(entry, 'second'), 'second');
+  });
+
+  test('nothing held leaves every message as it was sent', () => {
+    const entry = {};
+    holdFreshCatchUp(entry, '');
+    assert.strictEqual(withFreshCatchUp(entry, 'as sent'), 'as sent');
+    assert.strictEqual(withFreshCatchUp(null, 'as sent'), 'as sent');
+  });
 });
 
 test('what a person is told names the agent and what to do, and never the raw refusal', () => {

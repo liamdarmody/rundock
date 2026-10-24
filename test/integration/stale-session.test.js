@@ -409,8 +409,16 @@ describe('handing back to an orchestrator whose stored session is gone', () => {
 
     await waitForResult(convoId, 'FOLLOW-ANSWER-O', since, 'the fresh orchestrator answers the follow-up');
     assert.deepStrictEqual(spawnsFor(convoId).filter(i => i.agent === 'chief-of-staff').map(i => i.resume), ['dead-orch-o', null]);
-    assert.deepStrictEqual(h.promptsFor('chief-of-staff'), ['FOLLOW-O and also this'],
+    const prompts = h.promptsFor('chief-of-staff');
+    assert.strictEqual(prompts.length, 1,
       'the follow-up superseded the routing prompt, as it does on a resume, and arrived exactly once');
+    assert.ok(prompts[0].endsWith('FOLLOW-O and also this'), 'the person\'s own words, as sent, last');
+    // A FRESH SESSION THAT KNOWS NOTHING is not left to answer it blind: with
+    // no handback prompt of its own, the follow-up carries the catch-up.
+    assert.match(prompts[0], /BEFORE YOU JOINED/, 'the conversation, as an arrival');
+    assert.match(prompts[0], /do TASK-O/, 'with the request the specialist was working on');
+    assert.match(prompts[0], /Not my lane\./, 'and what the specialist handed back');
+    assert.ok(!prompts[0].includes('routing-request'), 'and still no routing prompt');
     assert.ok(!messagesFor(convoId, since).some(m => m.type === 'result' && /ROUTING-FIRED-O/.test(m.result || '')));
     assertNoRawRefusal(convoId, since);
     h.reapConvo(convoId);
@@ -440,11 +448,54 @@ describe('handing back to an orchestrator whose stored session is gone', () => {
     const prompts = h.promptsFor('chief-of-staff');
     assert.strictEqual(prompts.length, 2, 'the handback and the follow-up, each once');
     assert.match(prompts[0], /routing-request/, 'the handback first');
+    assert.ok(!prompts[0].includes('FOLLOW-P'), 'holding the conversation as it stood at the handback, not the follow-up');
     assert.strictEqual(prompts[1], 'FOLLOW-P meanwhile', 'then what the person sent while it was starting');
     assertNoRawRefusal(convoId, since);
     h.reapConvo(convoId);
   });
 
+  test('a handback paused by the circuit breaker gives the next message the catch-up instead', async () => {
+    // Paused, the handback writes no prompt, so the fresh orchestrator has
+    // nothing to start from. The person's next message, sent after the pause
+    // and after the fresh start, is what it is first told, so it carries the
+    // conversation and the specialist's output in front of it.
+    const convoId = h.freshConvoId('stale-breaker');
+    const record = seed(convoId, {
+      agentId: 'chief-of-staff', activeAgentId: 'content-lead', sessionId: 'dead-orch-y',
+      sessionIds: [{ agentId: 'chief-of-staff', sessionId: 'dead-orch-y' }, { agentId: 'content-lead', sessionId: 'live-lead-y' }],
+    });
+    scenario([
+      { match: { resume: true, promptIncludes: 'TASK-Y' }, turn: [{ text: 'Not mine, handing back. <!-- RUNDOCK:RETURN -->' }] },
+      { match: { agent: 'chief-of-staff', promptIncludes: 'NEXT-Y' }, turn: [{ text: 'ORCH-NEXT-Y' }] },
+      { match: { agent: 'chief-of-staff', promptIncludes: 'AFTER-Y' }, turn: [{ text: 'ORCH-AFTER-Y' }] },
+    ], ['dead-orch-y']);
+    h.internal.agentAutoResumeCount.set(convoId, h.internal.MAX_CONSECUTIVE_AGENT_RESUMES - 1);
+    h.clearInvocations();
+    const win = windowFor(record);
+    let since = client.messages.length;
+    win.send('do TASK-Y');
+    await client.waitFor(m => m.type === 'assistant' && m._conversationId === convoId && /Auto-paused/.test(JSON.stringify(m)),
+      { since, label: 'the circuit breaker pauses the handback', timeout: 15000 });
+    await client.waitFor(m => m.subtype === 'info' && m._conversationId === convoId && m.expiredSessionId === 'dead-orch-y',
+      { since, label: 'the fresh start', timeout: 15000 });
+
+    since = client.messages.length;
+    win.send('NEXT-Y please');
+    await waitForResult(convoId, 'ORCH-NEXT-Y', since, 'the next message is answered');
+    let prompts = h.promptsFor('chief-of-staff');
+    assert.strictEqual(prompts.length, 1);
+    assert.match(prompts[0], /BEFORE YOU JOINED/, 'the conversation, as an arrival');
+    assert.match(prompts[0], /do TASK-Y/, 'with the request the specialist was working on');
+    assert.match(prompts[0], /Not mine, handing back\./, 'and what the specialist handed back');
+    assert.ok(prompts[0].endsWith('NEXT-Y please'), 'then the person\'s own words, as sent');
+
+    since = client.messages.length;
+    win.send('AFTER-Y too');
+    await waitForResult(convoId, 'ORCH-AFTER-Y', since, 'the message after it');
+    prompts = h.promptsFor('chief-of-staff');
+    assert.strictEqual(prompts[1], 'AFTER-Y too', 'the catch-up is given once, not with every message');
+    h.reapConvo(convoId);
+  });
 });
 
 describe('a live process that fails some other way', () => {

@@ -666,7 +666,7 @@ const {
 } = claudeRuntime;
 const codexGlue = require('./lib/runtime/codex-glue.js');
 const { watchClaudeTurns } = require('./lib/runtime/claude-turn-guard.js');
-const { startingFresh, noteUnstartedWrite, takeUnstartedWrites } = require('./lib/runtime/missing-session.js');
+const { startingFresh, noteUnstartedWrite, takeUnstartedWrites, withFreshCatchUp } = require('./lib/runtime/missing-session.js');
 claudeRuntime.wireClaudeRuntimeDeps({
   getActualPort: () => ACTUAL_PORT,
   // Every Claude turn runs under the same answer-file guard as a Codex turn.
@@ -1633,10 +1633,13 @@ wss.on('connection', (ws) => {
             existing.scopeReturnSource = null; // User sent new message, allow re-delegation
             resetAutoResume(convoId); // User spoke, reset circuit breaker
             if (existing.delegation) { existing.receivedFollowUp = true; }
+            // A fresh start that had no prompt of its own gives its first
+            // message the catch-up it is owed; every other message is as sent.
+            const followUp = withFreshCatchUp(existing, msg.content);
             // Kept until this process has started its session: one still
             // starting may yet be refused, and then never reads this.
-            noteUnstartedWrite(existing, msg.content);
-            existing.process.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: msg.content } }) + '\n');
+            noteUnstartedWrite(existing, followUp);
+            existing.process.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: followUp } }) + '\n');
           } else {
             // No live process: spawn a new one (first message or after disconnect)
             // Stop any stale entry first (runtime-aware: a leftover Codex
