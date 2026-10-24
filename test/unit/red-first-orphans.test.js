@@ -779,8 +779,25 @@ describe('starting on top of a run that is still going', () => {
       const record = runRecordPath(dir);
       assert.strictEqual(fs.existsSync(record), true,
         `the live run must be recorded somewhere the next start can read: ${record}`);
-      const written = JSON.parse(fs.readFileSync(record, 'utf8'));
+      // WAITED FOR, NOT READ ONCE. The tool names the group in its record
+      // only after the spawn has returned, and the suite's shell runs from the
+      // moment it is spawned, so on a loaded runner the shell can write both
+      // of its pids while the record still says `group: null`. Read at that
+      // instant, `written.group` was null, the check below for the group's
+      // number passed by matching the "null" in the command's /dev/null, and
+      // the run then failed asking whether group null was running, as "the
+      // refusal must not end the run it found". Failed that way on CI Node 24
+      // and passed on re-run; reproduced every time by holding back the
+      // record's update by a second and a half. The group the record must
+      // name is the one the suite's shell heads, the `$$` it wrote second.
+      let written = null;
+      const named = await until(() => {
+        written = readRecord(record);
+        return !!written && written.group === pids[1];
+      });
       t.diagnostic(`record: ${JSON.stringify(written)}`);
+      assert.strictEqual(named, true,
+        `the live run's record must come to name the group its suite heads (${pids[1]}): ${JSON.stringify(written)}`);
 
       const second = cli(dir, 'echo this must never run');
       t.diagnostic(`second start said: ${second.stdout.trim()}`);
@@ -790,7 +807,9 @@ describe('starting on top of a run that is still going', () => {
       // Named, not merely refused. A refusal that says "something is
       // running" leaves the reader with the same pkill they would have reached
       // for anyway, which is the second defect this card exists to avoid.
-      assert.match(second.stdout, new RegExp(`\\b${written.group}\\b`),
+      // Matched as the refusal words it, so no other number or word in the
+      // output can stand in for it.
+      assert.ok(second.stdout.includes(`process group ${written.group} running`),
         `the refusal must name the process group it found\n${second.stdout}`);
       assert.match(second.stdout, new RegExp(`sleep ${LONG}`),
         `the refusal must name the command that is running\n${second.stdout}`);
