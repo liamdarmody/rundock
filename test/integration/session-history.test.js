@@ -360,6 +360,241 @@ describe('get_session_history: multi-session merge', () => {
 
 });
 
+describe('get_session_history: a new turn after history only the session file holds', () => {
+  test('the earlier history stays in view after a real turn, and search still finds it', async () => {
+    // Imported, seeded, or older than transcripts: the conversation's history
+    // is in its session file and there is no transcript. A real chat turn then
+    // goes through the server, which starts the transcript with it. Before the
+    // fix, history read back showed that turn alone.
+    const convoId = 'sh-earlier-1';
+    const sessionId = 'sess-earlier-1';
+    writeSession(sessionId, [
+      userLine('Who is the launch plan for?', '2026-01-05T09:00:00.000Z'),
+      assistantLine('The audience is small teams moving off spreadsheets.', '2026-01-05T09:00:20.000Z'),
+      userLine('Draft the timing section.', '2026-01-05T09:05:00.000Z'),
+      assistantLine('Here is the timing section, in three phases.', '2026-01-05T09:05:40.000Z'),
+    ]);
+    const sessionIds = [{ sessionId, agentId: 'lead-designer' }];
+    client.send({ type: 'save_conversation', conversation: { id: convoId, agentId: 'lead-designer', title: 'Imported plan', sessionId, sessionIds } });
+    // A resumed spawn names no agent, so the rule matches on the prompt.
+    h.writeScenario([{ match: { promptIncludes: 'channels section' }, turn: [{ text: 'Channels: email first, then the forum.' }] }]);
+
+    client.send({ type: 'chat', conversationId: convoId, agent: 'lead-designer', content: 'Now the channels section.', sessionId });
+    await client.waitForEvent('system', 'done', convoId);
+    const transcript = JSON.parse(fs.readFileSync(path.join(h.workspaceDir, '.rundock', 'transcripts', `${convoId}.json`), 'utf-8'));
+    assert.deepStrictEqual(transcript.map((t) => [t.role, t.agent]), [['user', 'user'], ['agent', 'lead-designer']],
+      'the turn started a transcript, as it does for any conversation');
+    // The resumed session file gains the turn's lines, as Claude Code writes
+    // them; the stub claude keeps no session file when resuming.
+    fs.appendFileSync(path.join(sessionsDir, `${sessionId}.jsonl`), [
+      userLine('Now the channels section.', new Date().toISOString()),
+      assistantLine('Channels: email first, then the forum.', new Date(Date.now() + 5).toISOString()),
+    ].map((e) => JSON.stringify(e)).join('\n') + '\n');
+
+    const res = await getHistory({ conversationId: convoId, sessionIds });
+    assert.deepStrictEqual(res.messages.map((m) => m.content), [
+      'Who is the launch plan for?',
+      'The audience is small teams moving off spreadsheets.',
+      'Draft the timing section.',
+      'Here is the timing section, in three phases.',
+      'Now the channels section.',
+      'Channels: email first, then the forum.',
+    ]);
+    assert.strictEqual(res.messages.at(-1).agentId, 'lead-designer');
+    assert.strictEqual(res.totalCount, 6);
+
+    // Search reads the session files, never the transcript, and a turn only
+    // adds to what it has read: the earlier message is still found.
+    const since = client.messages.length;
+    client.send({ type: 'search_conversations', query: 'spreadsheets' });
+    const { msg: found } = await client.waitFor((m) => m.type === 'search_results' && m.query === 'spreadsheets', { since, label: 'search_results' });
+    const hit = found.results.find((r) => r.id === convoId);
+    assert.ok(hit, `the conversation is found by its earlier words: ${JSON.stringify(found.results.map((r) => r.id))}`);
+    assert.strictEqual(hit.matchType, 'content');
+  });
+});
+
+describe('Rundock\'s own lines in a session file, in history and in the message count', () => {
+  test('a delegation\'s prompts and the <silent> sentinel are neither shown nor counted', async () => {
+    // Real parser, real counts: the conversation list and the history read the
+    // same files and must agree on what a message is.
+    const { buildDelegateContext, buildScopeReturnPrompt } = require('../../lib/delegation/catch-up.js');
+    const brief = buildDelegateContext({ missed: { text: 'USER: Plan the offsite.' }, brief: 'Find three venues.', arriving: true });
+    const handback = buildScopeReturnPrompt({ mode: 'complete', orchMissed: { text: 'RESEARCH-LEAD: Three venues.' }, specialistId: 'research-lead', outputBlock: '\n\nThree venues.' });
+    writeSession('sess-own-orch', [
+      userLine('Plan the offsite.', '2026-01-12T09:00:00.000Z'),
+      assistantLine('Handing the venues to the research lead.', '2026-01-12T09:00:10.000Z'),
+      userLine(handback, '2026-01-12T09:03:00.000Z'),
+      assistantLine('<silent>', '2026-01-12T09:03:05.000Z'),
+    ]);
+    writeSession('sess-own-research', [
+      userLine(brief, '2026-01-12T09:01:00.000Z'),
+      assistantLine('Three venues fit the budget.', '2026-01-12T09:02:00.000Z'),
+    ]);
+    const convoId = 'sh-own-lines';
+    const sessionIds = [{ sessionId: 'sess-own-orch', agentId: 'chief-of-staff' }, { sessionId: 'sess-own-research', agentId: 'research-lead' }];
+    client.send({ type: 'save_conversation', conversation: { id: convoId, agentId: 'chief-of-staff', title: 'Offsite', sessionIds } });
+
+    const res = await getHistory({ conversationId: convoId, sessionIds });
+    assert.deepStrictEqual(res.messages.map((m) => m.content), [
+      'Plan the offsite.',
+      'Handing the venues to the research lead.',
+      'Three venues fit the budget.',
+    ]);
+
+    const since = client.messages.length;
+    client.send({ type: 'get_conversations' });
+    const { msg } = await client.waitFor((m) => m.type === 'conversations', { since, label: 'conversations' });
+    const listed = msg.conversations.find((c) => c.id === convoId);
+    assert.ok(listed, 'the conversation is listed');
+    assert.strictEqual(listed.messageCount, 3, 'the count is what the history shows');
+  });
+});
+
+describe('Claude Code\'s own lines, and an earlier session longer than the parser was asked for', () => {
+  // Claude Code writes two kinds of line as the person's message that the
+  // person never wrote: the summary it leaves when it compacts a session, and
+  // the notes it adds around local commands. Shaped as Claude Code flags them.
+  const compactLine = (ts) => ({ type: 'user', isCompactSummary: true, isVisibleInTranscriptOnly: true,
+    message: { role: 'user', content: 'This session is being continued from a previous conversation that ran out of context. The conversation is summarized below: planning the launch.' }, timestamp: ts });
+  const metaLine = (ts) => ({ type: 'user', isMeta: true,
+    message: { role: 'user', content: 'Caveat: The messages below were generated by the user while running local commands. DO NOT respond to these messages or otherwise consider them in your response unless the user explicitly asks you to.' }, timestamp: ts });
+  const said = ['Plan the launch.', 'Here is the plan.', 'Add a timeline.', 'Timeline added.'];
+  function writeCompacted(sessionId) {
+    writeSession(sessionId, [
+      userLine(said[0], '2026-01-14T09:00:00.000Z'),
+      assistantLine(said[1], '2026-01-14T09:00:20.000Z'),
+      compactLine('2026-01-14T09:30:00.000Z'),
+      metaLine('2026-01-14T09:31:00.000Z'),
+      userLine(said[2], '2026-01-14T09:32:00.000Z'),
+      assistantLine(said[3], '2026-01-14T09:32:30.000Z'),
+    ]);
+  }
+
+  test('a compaction summary and a meta note are neither shown nor counted, on any path', async () => {
+    writeCompacted('sess-compacted-a');
+    const sessionIds = [{ sessionId: 'sess-compacted-a', agentId: 'chief-of-staff' }];
+    const merged = await getHistory({ conversationId: 'sh-compacted-a', sessionIds });
+    assert.deepStrictEqual(merged.messages.map((m) => m.content), said, 'with no transcript');
+    const single = await getHistory({ conversationId: 'sh-compacted-b', sessionId: 'sess-compacted-a', limit: 20 });
+    assert.deepStrictEqual(single.messages.map((m) => m.content), said, 'read as a single session');
+
+    writeCompacted('sess-compacted-c');
+    const now = new Date().toISOString();
+    writeTranscript('sh-compacted-c', [
+      { role: 'user', agent: 'user', text: 'Now the budget.', timestamp: now },
+      { role: 'agent', agent: 'chief-of-staff', text: 'Budget drafted.', timestamp: now },
+    ]);
+    fs.appendFileSync(path.join(sessionsDir, 'sess-compacted-c.jsonl'), [
+      userLine('Now the budget.', new Date(Date.now() + 10).toISOString()),
+      assistantLine('Budget drafted.', new Date(Date.now() + 20).toISOString()),
+    ].map((e) => JSON.stringify(e)).join('\n') + '\n');
+    const withTranscript = await getHistory({ conversationId: 'sh-compacted-c', sessionIds: [{ sessionId: 'sess-compacted-c' }] });
+    assert.deepStrictEqual(withTranscript.messages.map((m) => m.content), [...said, 'Now the budget.', 'Budget drafted.'], 'as earlier history');
+
+    client.send({ type: 'save_conversation', conversation: { id: 'sh-compacted-a', agentId: 'chief-of-staff', title: 'Compacted', sessionIds } });
+    const since = client.messages.length;
+    client.send({ type: 'get_conversations' });
+    const { msg } = await client.waitFor((m) => m.type === 'conversations', { since, label: 'conversations' });
+    assert.strictEqual(msg.conversations.find((c) => c.id === 'sh-compacted-a').messageCount, 4, 'counted as shown');
+  });
+
+  test('Claude Code\'s notes are hidden by its own display rule, and the turns it shows are kept', async () => {
+    // Claude Code marks many lines isMeta (reminders, hook context, skill
+    // bodies, task notices, a custom command's expanded prompt, continuations)
+    // and shows a meta line only when a person or a peer sent it, whatever
+    // else it carries; a line seen only in its transcript view, or a virtual
+    // one, is not shown either. It stamps a prompt id on every user line it
+    // keeps, a tool result's included (the repo's capture shows one on each),
+    // so a prompt id says nothing about whether a line is shown. The origin
+    // kinds are the SDK's own (SDKMessageOrigin).
+    const at = (n) => `2026-01-16T09:${String(n).padStart(2, '0')}:00.000Z`;
+    const note = (content, extra, n) => ({ type: 'user', message: { role: 'user', content }, timestamp: at(n), promptId: `p-${n}`, ...extra });
+    const command = '<command-name>/review</command-name>\n<command-message>review</command-message>\n<command-args></command-args>';
+    writeSession('sess-notes', [
+      // Rundock's own prompt on stdin, with the fields the repo's capture
+      // records on it (scripts/transcript-truth/captured-transcript.json).
+      note('Plan the launch.', { promptSource: 'sdk', turnOrigin: 'sdk', permissionMode: 'default', turnPosition: 0, userType: 'external' }, 0),
+      assistantLine('Here is the plan.', at(1)),
+      note('<system-reminder>The plan is due on Friday.</system-reminder>', { isMeta: true }, 2),
+      note('SessionStart hook additional context: the workspace holds a launch plan.', { isMeta: true }, 3),
+      note('Base directory for this skill: /skills/launch\n\nUse this skill to plan a launch.', { isMeta: true }, 4),
+      note('<task-notification>The export finished.</task-notification>', { isMeta: true, origin: { kind: 'task-notification' } }, 5),
+      // The command as typed is a plain line and stays; its expanded prompt is meta.
+      note(command, {}, 6),
+      note('Review the open pull requests and list what blocks each one.', { isMeta: true }, 7),
+      note('Continue from where you left off.', { isMeta: true, origin: { kind: 'auto-continuation' } }, 8),
+      note('This conversation was summarised to save space.', { isVisibleInTranscriptOnly: true }, 9),
+      note('A placeholder Claude Code keeps for itself.', { isVirtual: true }, 10),
+      note('The earlier part of this conversation, summarised.', { isCompactSummary: true }, 11),
+      note('Can you check the budget too?', { isMeta: true, origin: { kind: 'peer', from: 'peer-1', name: 'Budget lead' } }, 12),
+      note('I am back; carry on with the launch.', { isMeta: true, origin: { kind: 'human' } }, 13),
+      // A turn origin no more makes a meta line visible than a prompt id does.
+      note('Run the weekly check.', { isMeta: true, turnOrigin: 'sdk' }, 14),
+      // A task notification is not meta, and Rundock never shows one: the
+      // capture's own shape, then each of its two marks alone.
+      note('<task-notification>\n<task-id>task-1</task-id>\n<status>completed</status>\n</task-notification>',
+        { origin: { kind: 'task-notification', producer: 'session-task' }, turnOrigin: 'task_notification', promptSource: 'sdk', queueSkipAttachments: true }, 15),
+      note('<task-notification>\n<task-id>task-2</task-id>\n</task-notification>', { origin: { kind: 'task-notification' } }, 16),
+      note('<task-notification>\n<task-id>task-3</task-id>\n</task-notification>', { turnOrigin: 'task_notification' }, 17),
+      assistantLine('All done.', at(18)),
+      // A reply is Claude Code's to show whatever it carries.
+      { ...JSON.parse(JSON.stringify(assistantLine('Kept after a note.', at(19)))), isVisibleInTranscriptOnly: true },
+    ]);
+    const shown = [
+      'Plan the launch.',
+      'Here is the plan.',
+      command,
+      'Can you check the budget too?',
+      'I am back; carry on with the launch.',
+      'All done.',
+      'Kept after a note.',
+    ];
+    const sessionIds = [{ sessionId: 'sess-notes', agentId: 'chief-of-staff' }];
+    const res = await getHistory({ conversationId: 'sh-notes', sessionIds });
+    assert.deepStrictEqual(res.messages.map((m) => m.content), shown);
+
+    client.send({ type: 'save_conversation', conversation: { id: 'sh-notes', agentId: 'chief-of-staff', title: 'Notes', sessionIds } });
+    const since = client.messages.length;
+    client.send({ type: 'get_conversations' });
+    const { msg } = await client.waitFor((m) => m.type === 'conversations', { since, label: 'conversations' });
+    assert.strictEqual(msg.conversations.find((c) => c.id === 'sh-notes').messageCount, shown.length, 'counted as shown');
+  });
+
+  test('an earlier session longer than 999 lines is shown from its first line', async () => {
+    // Paging reaches back through history of any length, so the earlier
+    // history is read in full rather than its newest 999 lines.
+    const iso = (ms) => new Date(ms).toISOString();
+    const base = Date.parse('2026-01-15T08:00:00.000Z');
+    const lines = [];
+    for (let i = 0; i < 550; i++) {
+      lines.push(userLine(`Earlier question ${i}`, iso(base + i * 2000)));
+      lines.push(assistantLine(`Earlier answer ${i}`, iso(base + i * 2000 + 1000)));
+    }
+    writeSession('sess-long-alone', lines);
+    const alone = await getHistory({ conversationId: 'sh-long-alone', sessionIds: [{ sessionId: 'sess-long-alone' }], limit: 5000 });
+    assert.strictEqual(alone.totalCount, 1100, 'with no transcript');
+    assert.strictEqual(alone.messages[0].content, 'Earlier question 0');
+
+    writeSession('sess-long-earlier', [...lines,
+      userLine('Summarise all of it.', iso(Date.now() + 10)),
+      assistantLine('Summarised in three points.', iso(Date.now() + 20))]);
+    const now = new Date().toISOString();
+    writeTranscript('sh-long-earlier', [
+      { role: 'user', agent: 'user', text: 'Summarise all of it.', timestamp: now },
+      { role: 'agent', agent: 'chief-of-staff', text: 'Summarised in three points.', timestamp: now },
+    ]);
+    const res = await getHistory({ conversationId: 'sh-long-earlier', sessionIds: [{ sessionId: 'sess-long-earlier' }], limit: 5000 });
+    assert.strictEqual(res.totalCount, 1102, 'as earlier history');
+    assert.strictEqual(res.messages[0].content, 'Earlier question 0');
+    assert.deepStrictEqual(res.messages.slice(-2).map((m) => m.content), ['Summarise all of it.', 'Summarised in three points.']);
+    // And paging back from the newest page reaches the first line.
+    const oldest = await getHistory({ conversationId: 'sh-long-earlier', sessionIds: [{ sessionId: 'sess-long-earlier' }], limit: 200, offset: 1000 });
+    assert.strictEqual(oldest.messages[0].content, 'Earlier question 0');
+    assert.strictEqual(oldest.hasMore, false);
+  });
+});
+
 describe('get_session_history: single-session fallback', () => {
   test('without sessionIds, the named session is read directly with limit and offset', async () => {
     const convoId = 'sh-single-1';
