@@ -289,14 +289,14 @@ describe('shards are planned by time, not rows', () => {
   test('a harness whose rows differ in cost is split by time, not rows', () => {
     // Slow rows sit together. Cut by row count, the slice holding them ran
     // past its job's limit while the others finished in minutes; weighted by
-    // what each row was measured to take, the cut follows the time.
+    // what each row is estimated to take, the cut follows the time.
     const rowLabels = Array.from({ length: 200 }, (_, i) => `row ${i}`);
     const mixed = { tool: 'mixed', rows: rowLabels.length, rowLabels };
     const slow = Object.fromEntries(rowLabels.slice(0, 60).map((l) => [l, 20]));
     const weighted = { ...costs, perLabel: { mixed: slow } };
     const cost = (i) => (i < 60 ? 20 : 5);
     const { shards, seconds } = planShards([mixed], { costs: weighted });
-    assert.strictEqual(seconds, 60 * 20 + 140 * 5, 'a row costs what was measured for its label, else its harness rate');
+    assert.strictEqual(seconds, 60 * 20 + 140 * 5, 'a row costs what is given for its label, else its harness rate');
     const units = shards.flatMap((s) => s.units).sort((a, b) => a.start - b.start);
     assert.ok(units.length >= 2, 'the harness is split');
     for (const u of units) {
@@ -310,6 +310,30 @@ describe('shards are planned by time, not rows', () => {
     assert.deepStrictEqual(covered, [...Array(rowLabels.length).keys()], 'every row once, in order');
   });
 
+  test('an integration row with no cost of its own is planned at its harness\'s integration rate', () => {
+    // Integration rows start a server and run several times slower than the
+    // rest, so a new one planned at the harness's average was planned short.
+    const rowLabels = ['known', 'new unit', 'new integration'];
+    const rowSuites = ['test/unit/a.test.js', 'test/unit/b.test.js', 'test/integration/c.test.js'];
+    const h = { tool: 'mixed', rows: 3, rowLabels, rowSuites };
+    const priced = { ...costs, perLabel: { mixed: { known: 2 } }, perIntegration: { mixed: 30 } };
+    assert.strictEqual(planShards([h], { costs: priced }).seconds, 2 + 5 + 30, 'its own cost, its harness rate, its integration rate');
+    assert.strictEqual(planShards([h], { costs: { ...priced, perIntegration: {} } }).seconds, 2 + 5 + 5, 'with no integration rate, its harness rate');
+    const c = readCosts(path.join(REPO, 'test', 'tools'));
+    assert.ok(Object.keys(c.perIntegration).length >= 1, 'sanity: the table has integration rates');
+    for (const [tool, r] of Object.entries(c.perIntegration)) {
+      assert.ok(Number(r) > Number(c.perRow[tool]), `${tool}: integration rows are planned above the harness average`);
+    }
+  });
+
+  test('a harness is read with the suite each row runs', () => {
+    const hs = loadHarnesses({ toolsDir: path.join(REPO, 'test', 'tools'), root: REPO });
+    for (const h of hs) {
+      assert.ok(Array.isArray(h.rowSuites) && h.rowSuites.length === h.rows, `${h.tool}: one suite per row`);
+      for (const s of h.rowSuites) assert.ok(h.suites.includes(s), `${h.tool}: ${s} is one of its suites`);
+    }
+  });
+
   test('a harness is read with the label of each row', () => {
     const hs = loadHarnesses({ toolsDir: path.join(REPO, 'test', 'tools'), root: REPO });
     for (const h of hs) {
@@ -318,7 +342,7 @@ describe('shards are planned by time, not rows', () => {
     }
   });
 
-  test('the measured costs by label name rows that exist', () => {
+  test('the inferred costs by label name rows that exist', () => {
     // A label renamed or removed falls back to its harness's rate, which is
     // safe, but a table that names nothing that exists measures nothing.
     const tools = path.join(REPO, 'test', 'tools');

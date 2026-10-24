@@ -1,5 +1,5 @@
 {
-  "about": "Seconds per mutation row, per harness, measured on the CI runner from the shard logs of two full runs of every harness (each harness's measured seconds over its rows, averaged). A harness split across shards also has seconds per row by label: each slice's measured seconds shared among its rows in proportion to one plus the tests each turned red, since a mutant that turns a hundred slow tests red can take a hundred times one that turns one. The plan weights shards by these so no shard nears its time limit. A harness missing here is planned at defaultSecondsPerRow, and a row missing from its harness's labels at that harness's rate; re-measure when a shard runs past fifteen minutes.",
+  "about": "Seconds per mutation row. secondsPerRow is measured on the CI runner from the shard logs of two full runs of every harness: each harness's measured seconds over its rows, averaged. secondsPerRowLabel, for each harness CI runs in slices, is inferred, not measured: no run records a row's own time, so each slice's measured seconds are shared among its rows in proportion to one plus the tests each turned red, averaged over the runs. secondsPerIntegrationRow is the mean of those inferred costs over a harness's integration rows, the rate for an integration row with no cost of its own. The plan weights shards by these so no shard nears its time limit. A harness missing here is planned at defaultSecondsPerRow, and any other row missing from its harness's labels at that harness's rate; re-measure when a shard runs past fifteen minutes.",
   "defaultSecondsPerRow": 5,
   "secondsPerRow": {
     "mutate-approve-once-guards.js": 0.89,
@@ -34,6 +34,9 @@
     "mutate-view-state-guards.js": 3.3,
     "mutate-workspace-boundary-guards.js": 4.95,
     "mutate-workspace-rollback-guards.js": 7.34
+  },
+  "secondsPerIntegrationRow": {
+    "mutate-workspace-boundary-guards.js": 6.36
   },
   "secondsPerRowLabel": {
     "mutate-extension-host-guards.js": {
