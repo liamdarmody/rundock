@@ -43,6 +43,8 @@ const SAVE = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'conversation
 const CLEANUP = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'conversations.js'), suite: 'test/integration/conversation-metadata.test.js' };
 // The rules both sides share about a record's sessions.
 const CLIENT = { src: path.join(ROOT, 'public', 'conversation-state.js'), suite: 'test/unit/conversation-state.test.js' };
+// The engine's stream handling, driven directly where no server run can show it.
+const ENGINE_UNIT = { src: path.join(ROOT, 'lib', 'delegation', 'engine.js'), suite: 'test/unit/stream-handlers.test.js' };
 // Recognizing the refusal at all, and what is kept for a turn starting again.
 const RULES = { src: path.join(ROOT, 'lib', 'runtime', 'missing-session.js'), suite: 'test/unit/missing-session.test.js' };
 // How a handback prompt is headed for an orchestrator starting fresh.
@@ -135,8 +137,11 @@ const MUTATIONS = [
     "  for (const carried of takeUnstartedWrites(entry)) {\n    proc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: carried } }) + '\\n');\n  }\n",
     ''],
   [SERVER, 'the chat path\'s retry sends what was kept after the first message',
-    "                for (const carried of takeUnstartedWrites(entry)) {\n                  liveWs.emit('message', JSON.stringify({ ...freshMsg, content: carried }));\n                }\n",
+    "                  for (const carried of takeUnstartedWrites(entry)) {\n                    liveWs.emit('message', JSON.stringify({ ...freshMsg, content: carried }));\n                  }\n",
     ''],
+  [SERVER, 'the chat path hands on what was kept only after a refusal',
+    '                if (entry.missingSession) {\n                  for (const carried',
+    '                if (true) {\n                  for (const carried'],
   [RULES, 'nothing is kept once the session has started',
     '  if (!entry || entry.sessionId) return;',
     '  if (!entry) return;'],
@@ -187,6 +192,15 @@ const MUTATIONS = [
   [SERVER, 'the chat path names the agent starting fresh',
     "                const freshName = (agentData && (agentData.displayName || agentData.name)) || msg.agent;",
     "                const freshName = msg.agent;"],
+  [SERVER, 'only a process that never started its session is retried as a failed resume',
+    'code !== 0 && !entry.sessionId &&\n                (stderrRef',
+    'code !== 0 &&\n                (stderrRef'],
+  [SERVER, 'the legacy path retries only a process that never started its session',
+    'code !== 0 && !entry.sessionId &&\n              (legacyStderrRef',
+    'code !== 0 &&\n              (legacyStderrRef'],
+  [ENGINE_UNIT, 'once the session starts, nothing kept for a refused start is kept',
+    '          // this point, they could be sent a second time.\n          takeUnstartedWrites(entry);\n',
+    '          // this point, they could be sent a second time.\n'],
   [SERVER, 'the chat path\'s own retry counts as starting again',
     '\n                entry.missingSessionRecovered = true; // started again below',
     ''],

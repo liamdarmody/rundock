@@ -441,6 +441,103 @@ describe('handing back to an orchestrator whose stored session is gone', () => {
     assertNoRawRefusal(convoId, since);
     h.reapConvo(convoId);
   });
+
+});
+
+describe('a live process that fails some other way', () => {
+  // Nothing about a crash or a reap after the session has started is a resume
+  // that failed. Treated as one, the turn was replayed fresh with the message
+  // the process was started with and everything kept for it, so a request that
+  // had already run ran again.
+  test('a crash after answering re-sends nothing', async () => {
+    const convoId = h.freshConvoId('live-crash');
+    seed(convoId, { agentId: 'chief-of-staff', sessionId: 'live-orch-aa', sessionIds: [{ agentId: 'chief-of-staff', sessionId: 'live-orch-aa' }] });
+    scenario([
+      { match: { promptIncludes: 'ONE-AA' }, turn: [{ text: 'ANSWER-ONE-AA' }] },
+      { match: { promptIncludes: 'TWO-AA' }, turn: [{ text: 'ANSWER-TWO-AA' }] },
+      { match: { promptIncludes: 'THREE-AA' }, crash: 1, stderr: 'MCP server "notes" not found\n' },
+    ], []);
+    h.clearInvocations();
+    const since = client.messages.length;
+    // The same tick, so TWO is written before the session has started.
+    client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: 'ONE-AA first', sessionId: 'live-orch-aa' });
+    client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: 'TWO-AA second', sessionId: 'live-orch-aa' });
+    await waitForResult(convoId, 'ANSWER-TWO-AA', since, 'both are answered');
+    const beforeThree = client.messages.length;
+    client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: 'THREE-AA third', sessionId: 'live-orch-aa' });
+    await client.waitFor(m => m.type === 'error' && m._conversationId === convoId && /not found/.test(m.content || ''),
+      { since: beforeThree, label: 'the crash, said as itself', timeout: 15000 });
+    await h.waitUntil(() => !h.internal.chatProcesses.has(convoId));
+    await h.delay(1500);
+
+    assert.deepStrictEqual(h.readPrompts().map(p => p.prompt), ['ONE-AA first', 'TWO-AA second', 'THREE-AA third'],
+      'each message reached Claude Code once');
+    assert.strictEqual(spawnsFor(convoId).length, 1, 'nothing was started again');
+    assert.ok(!messagesFor(convoId, since).some(m => m.subtype === 'info'), 'and no fresh start was announced');
+    h.reapConvo(convoId);
+  });
+
+  test('a reap after answering re-sends nothing', async () => {
+    const convoId = h.freshConvoId('live-reap');
+    seed(convoId, { agentId: 'chief-of-staff', sessionId: 'live-orch-bb', sessionIds: [{ agentId: 'chief-of-staff', sessionId: 'live-orch-bb' }] });
+    scenario([
+      // A warning that happens to say "session", which the wide match reads.
+      { match: { promptIncludes: 'ONE-BB' }, stderr: 'note: session cache warmed\n', turn: [{ text: 'ANSWER-ONE-BB' }] },
+    ], []);
+    h.clearInvocations();
+    const since = client.messages.length;
+    client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: 'ONE-BB only', sessionId: 'live-orch-bb' });
+    await waitForResult(convoId, 'ANSWER-ONE-BB', since, 'answered');
+    await h.waitUntil(() => { const e = h.internal.chatProcesses.get(convoId); return Boolean(e && e.idle); });
+    const entry = h.internal.chatProcesses.get(convoId);
+    h.internal.reapIdleAgents(Date.now() + 24 * 60 * 60 * 1000);
+    await h.waitUntil(() => entry.process.exitCode !== null || entry.process.signalCode !== null);
+    await h.delay(1500);
+
+    assert.deepStrictEqual(h.readPrompts().map(p => p.prompt), ['ONE-BB only'], 'the answered message is not sent again');
+    assert.strictEqual(spawnsFor(convoId).length, 1, 'nothing was started again');
+    h.reapConvo(convoId);
+  });
+
+  test('the legacy spawn does not replay a turn that answered and then failed', async () => {
+    const convoId = h.freshConvoId('live-legacy');
+    seed(convoId, { agentId: 'chief-of-staff', sessionId: 'live-orch-cc', sessionIds: [{ agentId: 'chief-of-staff', sessionId: 'live-orch-cc' }] });
+    scenario([
+      { match: { promptIncludes: 'ONE-CC' }, stderr: 'MCP server "notes" not found\n', exitAfterTurn: 1, turn: [{ text: 'ANSWER-ONE-CC' }] },
+    ], []);
+    h.clearInvocations();
+    process.env.RUNDOCK_LEGACY_SPAWN = '1';
+    try {
+      const since = client.messages.length;
+      client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: 'ONE-CC only', sessionId: 'live-orch-cc' });
+      await waitForResult(convoId, 'ANSWER-ONE-CC', since, 'answered');
+      await h.delay(1500);
+      assert.strictEqual(spawnsFor(convoId).length, 1, 'nothing was started again');
+      assert.deepStrictEqual(h.readPrompts().map(p => p.prompt), ['ONE-CC only']);
+    } finally {
+      delete process.env.RUNDOCK_LEGACY_SPAWN;
+    }
+  });
+
+  test('a resume that failed for another reason does not hand on what the failed process may have read', async () => {
+    const convoId = h.freshConvoId('other-failure');
+    seed(convoId, { agentId: 'chief-of-staff', sessionId: 'odd-orch-dd', sessionIds: [{ agentId: 'chief-of-staff', sessionId: 'odd-orch-dd' }] });
+    scenario([
+      // Both messages are read, and the process dies before its session starts.
+      { match: { resume: true, promptIncludes: 'ASK-DD' }, crash: 1, delayMs: 700, stderr: 'the session store is busy\n' },
+      { match: { agent: 'chief-of-staff', promptIncludes: 'ASK-DD' }, turn: [{ text: 'FRESH-DD' }] },
+    ], []);
+    h.clearInvocations();
+    const since = client.messages.length;
+    client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: 'ASK-DD first', sessionId: 'odd-orch-dd' });
+    client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: 'ASK-DD second', sessionId: 'odd-orch-dd' });
+    await waitForResult(convoId, 'FRESH-DD', since, 'the retry answers');
+    await h.delay(800);
+    const fresh = h.readPrompts().filter(p => p.resume == null).map(p => p.prompt);
+    assert.deepStrictEqual(fresh, ['ASK-DD first'],
+      'only a refusal for a missing session hands on what was kept, because a process refused that way read nothing');
+    h.reapConvo(convoId);
+  });
 });
 
 describe('talking straight to an agent whose stored session is gone', () => {
@@ -610,6 +707,7 @@ describe('a refusal that reaches the pipe in pieces', () => {
     assert.ok(idsIn(stored(convoId)).includes('live-orch-u'));
     h.reapConvo(convoId);
   });
+
 });
 
 describe('an info message that names no session', () => {

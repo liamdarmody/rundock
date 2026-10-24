@@ -42,6 +42,7 @@
 //     "refusalExitMs": 0,            // how long the refused process lingers
 //     "refusalSplitAt": 0 }          // write the refusal line in pieces
 // A crash rule may give "stderrChunks": [...] to write its stderr in pieces.
+// Any rule may give "exitAfterTurn": n to exit with code n after its turn.
 // First matching rule wins; rules are re-read from disk on every message so
 // tests can rewrite the script mid-scenario. The stub also appends every
 // invocation to `stub-invocations.jsonl` (cwd) for spawn-arg assertions.
@@ -370,7 +371,10 @@ function emitTurn(rule, prompt) {
   } else {
     for (const e of events) writeOut(JSON.stringify(e) + '\n');
   }
-  if (PRINT) exitWhenWritten(0);
+  // `exitAfterTurn: n` ends the process with code n once the turn is out: a
+  // run that answered and then failed, which is not a resume that failed.
+  if (rule.exitAfterTurn != null) exitWhenWritten(Number(rule.exitAfterTurn));
+  else if (PRINT) exitWhenWritten(0);
 }
 
 // Model an MCP server. The real `claude` spawns these as its OWN children over

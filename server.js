@@ -1758,7 +1758,13 @@ wss.on('connection', (ws) => {
               // cancel sends SIGTERM (code===null !== 0) and a cancelled resumed
               // conversation whose stderr mentions session/resume/not found would
               // otherwise replay the original prompt.
-              const isResumeFailure = msg.sessionId && !msg._resumeRetry && !entry.cancelled && code !== 0 &&
+              //
+              // AND ONLY A PROCESS THAT NEVER STARTED ITS SESSION. A resume fails
+              // before the session starts or not at all. Matched later, a process
+              // that had answered for an hour and then crashed, or was reaped,
+              // with any of those words on stderr replayed the message it was
+              // started with, and the person's request ran twice.
+              const isResumeFailure = msg.sessionId && !msg._resumeRetry && !entry.cancelled && code !== 0 && !entry.sessionId &&
                 (stderrRef.value.includes('session') || stderrRef.value.includes('resume') || stderrRef.value.includes('not found'));
               if (isResumeFailure) {
                 console.log(`[Chat] Resume failed for session ${msg.sessionId}, retrying fresh`);
@@ -1775,9 +1781,13 @@ wss.on('connection', (ws) => {
                 liveWs.emit('message', JSON.stringify(freshMsg));
                 // What the person sent while the refused process was starting
                 // follows it, in order, into the fresh one: the first emit has
-                // already put a live process in place for these to reach.
-                for (const carried of takeUnstartedWrites(entry)) {
-                  liveWs.emit('message', JSON.stringify({ ...freshMsg, content: carried }));
+                // already put a live process in place for these to reach. Only
+                // for a refusal: a process that failed for another reason may
+                // have read them, and sending them again could repeat work.
+                if (entry.missingSession) {
+                  for (const carried of takeUnstartedWrites(entry)) {
+                    liveWs.emit('message', JSON.stringify({ ...freshMsg, content: carried }));
+                  }
                 }
                 return;
               }
@@ -1867,7 +1877,10 @@ wss.on('connection', (ws) => {
             const current = processes.get(convoId);
             if (current && current.processId !== processId) return;
 
-            const isResumeFailure = msg.sessionId && !msg._resumeRetry && !entry.cancelled && code !== 0 &&
+            // Only a process that never started its session, as on the
+            // interactive path: a turn that answered and then failed is not a
+            // resume that failed, and replaying it would run the request twice.
+            const isResumeFailure = msg.sessionId && !msg._resumeRetry && !entry.cancelled && code !== 0 && !entry.sessionId &&
               (legacyStderrRef.value.includes('session') || legacyStderrRef.value.includes('resume') || legacyStderrRef.value.includes('not found'));
             if (isResumeFailure) {
               console.log(`[Chat] Resume failed for session ${msg.sessionId}, retrying fresh`);
@@ -3528,6 +3541,8 @@ module.exports._internal = {
   killAllChildren, cleanOrphanedProcesses, loadPidFile, savePidFile, pidRecordAlive,
   processCommand, readProcCmdline, parseProcCmdline, psCommand,
   commandLineCapability, COMMAND_LINE_SOURCES,
+  // one idle-reaper sweep, at a chosen time
+  reapIdleAgents,
   // live state maps
   chatProcesses, convoTranscripts, pendingPermissionRequests,
   agentAutoResumeCount, disconnectBuffer, connectedClients,

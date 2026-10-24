@@ -67,6 +67,17 @@ describe('stdout JSONL parsing', () => {
     assert.strictEqual(captured[0]._sessionId, 'sess-42');
   });
 
+  test('once the session starts, nothing kept for a refused start is kept any longer', () => {
+    // Messages are kept while a process could still be refused, to hand to a
+    // fresh start. Once its session starts it reads them all, and anything
+    // still kept could be sent a second time.
+    const entry = makeEntry();
+    entry.unstartedWrites = ['written before the session started'];
+    srv.wireProcessHandlers(entry, 'convo-1', null, {});
+    push(entry, [fx.init('sess-43')]);
+    assert.deepStrictEqual(entry.unstartedWrites, []);
+  });
+
   test('a line split across two chunks is buffered and parsed once complete', () => {
     const entry = makeEntry();
     srv.wireProcessHandlers(entry, 'convo-1', null, {});
