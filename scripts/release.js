@@ -3,7 +3,7 @@
 /**
  * Release script for Rundock (tag-and-let-CI-build model).
  *
- * A release is one pull request and three commands, and the gaps between them
+ * A release is one pull request and four commands, and the gaps between them
  * are the point. See docs/RELEASING.md for the full order.
  *
  *   npm run release -- bump <version>       # version + promoted changelog, committed with the candidate
@@ -13,7 +13,8 @@
  *   npm run release -- signoff <version> --confirm <version>   # sign off this tree, yourself
  *       (or, given in chat: the agent adds --on-instruction - and passes the words on stdin)
  *   ...merge that pull request...
- *   npm run release -- tag <version>        # tag the merged commit, which starts the build
+ *   npm run release -- tag <version>        # tag the merged commit, here only; it prints the push
+ *   git push origin v<version>              # push the tag, as its own bare command, which starts the build
  *   ...watch the build, review the draft it publishes...
  *   npm run release -- publish <version> --confirm <version>   # publish the reviewed draft
  *
@@ -33,7 +34,7 @@
  *
  * A RECUT of an unpublished draft is: delete the draft release, delete the tag
  * locally and on the remote, merge the fix, run the gate on main, sign the
- * new tree off, tag again.
+ * new tree off, tag again and push the tag.
  * Once the tag is gone the version on main is one release past the latest tag
  * again, which is all the gate asks.
  *
@@ -41,11 +42,18 @@
  * enforcement, so nothing pushes to it directly, and merging the pull request
  * is a reviewed step of its own (docs/RELEASING.md says who merges).
  *
- * `tag` starts something that cannot be un-started: the GitHub Actions
- * workflow that builds, signs, notarises, and publishes a DRAFT release.
- * Building does not happen on your laptop, and no Apple or signing
+ * Pushing the tag starts something that cannot be un-started: the GitHub
+ * Actions workflow that builds, signs, notarises, and publishes a DRAFT
+ * release. Building does not happen on your laptop, and no Apple or signing
  * credentials are needed locally: those live in the CI environment. But CI
  * never makes anything public. It produces a DRAFT and stops there.
+ *
+ * `tag` DOES NOT PUSH. It creates the tag here, prints the push as one bare
+ * command, and stops. It used to push the tag itself, and under a sandbox
+ * that push has no credential: it failed, the tag was removed again, and an
+ * earlier version logged "pushed" when the push had been held back. The push
+ * is run as its own command, with nothing before or after it, where the
+ * credential is.
  *
  * `publish` is the step that matters most, and CI never runs it. Only a
  * person decides a specific version is ready for everyone, and `publish`
@@ -77,8 +85,10 @@ const REPO = 'liamdarmody/rundock';
 // Helpers
 // ---------------------------------------------------------------------------
 
+// A step's line, or, with no step, a bare line: a command printed to be
+// copied as it stands, with nothing in front of it.
 function logStep(step, msg) {
-  console.log(`[release:${step}] ${msg}`);
+  console.log(step ? `[release:${step}] ${msg}` : msg);
 }
 
 function fail(step, msg) {
@@ -99,10 +109,11 @@ const git = gitIn(ROOT);
 // Steps
 // ---------------------------------------------------------------------------
 
-// Must be on main, fully clean tree, in sync with origin, and the tag must not
-// already exist. Runs BEFORE any file is modified so a failed pre-flight leaves
-// the working tree untouched. Throws so it is unit-testable; the main flow
-// converts to fail().
+// Must be on main, with a fully clean tree, in sync with origin. Runs BEFORE
+// anything is created so a failed pre-flight leaves nothing behind. Whether
+// the tag already exists is judged by tagRelease, which knows the commit it
+// would go on. Throws so it is unit-testable; the main flow converts to
+// fail().
 function preflight(version, { root = ROOT, git = gitIn(root) } = {}) {
   let branch;
   try {
@@ -127,11 +138,6 @@ function preflight(version, { root = ROOT, git = gitIn(root) } = {}) {
   const behind = git(['rev-list', '--count', 'HEAD..origin/main']).trim();
   if (parseInt(behind, 10) > 0) {
     throw new Error(`Local main is ${behind} commit(s) behind origin/main. Pull before releasing.`);
-  }
-
-  const tag = `v${version}`;
-  if (git(['tag', '-l', tag]).trim()) {
-    throw new Error(`Tag ${tag} already exists locally. Choose a new version or delete the tag.`);
   }
 }
 
@@ -677,18 +683,25 @@ function bumpRelease(version, { root = ROOT, log = logStep } = {}) {
 // Run after the release pull request has been reviewed and merged. It cannot
 // assume the merge landed just because it was asked to run, so it reads the
 // state of `origin/main` and refuses unless the release commit is actually
-// there. Tagging is the irreversible half of a release: the tag is what starts
-// the build, sign, notarise and draft publish workflow.
+// there. Pushing the tag is the irreversible half of a release: the pushed
+// tag is what starts the build, sign, notarise and draft publish workflow.
 //
 // THE GATE IS CHECKED HERE, BY TREE. The candidate carries its bump, so the
 // merged commit is the gated content itself: a merge that makes a new commit
 // with the same tree is accepted, and any difference is refused.
 //
+// IT TAGS HERE AND STOPS. The tag is created locally and the push is printed
+// as one bare command, for the person to run as its own step; nothing here
+// pushes, and nothing here says a push was made. Run again after the push
+// failed or was skipped, it finds its own tag on the commit being tagged,
+// checks everything again, creates nothing new and prints the push again. A
+// tag left here on another commit, or one already on the remote, is refused.
+//
 // Throws so it is unit-testable; the main flow converts to fail().
 function tagRelease(version, { root = ROOT, git = gitIn(root), log = logStep } = {}) {
   const tag = `v${version}`;
 
-  // On main, clean tree, not behind origin, and the tag not already local.
+  // On main, clean tree, not behind origin.
   preflight(version, { root, git });
 
   // The tag must land on the reviewed commit, so local main has to BE that
@@ -734,36 +747,71 @@ function tagRelease(version, { root = ROOT, git = gitIn(root), log = logStep } =
   // Which way it was signed off, never the words: they stay in the local record.
   log('tag', `Tree ${mergedTree.slice(0, 12)} was ${SIGNED_OFF[signedOff]}`);
 
-  if (git(['ls-remote', '--tags', 'origin', `refs/tags/${tag}`]).trim()) {
-    throw new Error(`Tag ${tag} already exists on the remote. Choose a new version, or recut deliberately by deleting it first.`);
+  // Already on the remote: it was pushed, and its build started then, so
+  // there is nothing left for this command to do.
+  const remote = remoteTagCommit(git, tag);
+  if (remote === merged) {
+    throw new Error(
+      `Tag ${tag} is already on the remote, on ${merged.slice(0, 9)}, the commit being tagged: it has been pushed, ` +
+      `and its build started when it was. Watch it: https://github.com/${REPO}/actions`
+    );
+  }
+  if (remote) {
+    throw new Error(
+      `Tag ${tag} is already on the remote, on ${remote.slice(0, 9)}, not on ${merged.slice(0, 9)}, the commit being tagged. ` +
+      'Choose a new version, or recut deliberately by deleting it first, here and on the remote (docs/RELEASING.md, "A recut").'
+    );
   }
 
-  git(['tag', tag], { stdio: 'pipe' });
-  try {
-    git(['push', 'origin', tag], { stdio: 'pipe' });
-  } catch (err) {
-    // Leave nothing tagged anywhere. A local tag left behind would make the
-    // next attempt fail the preflight instead of retrying the push.
-    let cleanup = 'The local tag has been removed, so nothing is tagged anywhere.';
-    try {
-      git(['tag', '-d', tag], { stdio: 'pipe' });
-    } catch (deleteErr) {
-      cleanup = `The local tag could not be removed either (${deleteErr.message}); delete it with "git tag -d ${tag}" before trying again.`;
-    }
-    throw new Error(`Pushing ${tag} failed: ${err.message}\n\n${cleanup}`);
+  // Already here: on this commit it is this command's own tag from a run whose
+  // push failed or was skipped, and it is reused; on another commit it is left
+  // from an earlier cut, and moving it is not this command's to do.
+  const local = localTagCommit(git, tag);
+  if (local && local !== merged) {
+    throw new Error(
+      `Tag ${tag} already exists here, on ${local.slice(0, 9)}, not on ${merged.slice(0, 9)}, the commit being tagged, ` +
+      `and the remote does not have it. It is left from an earlier cut: delete it ("git tag -d ${tag}") and run this again.`
+    );
   }
+  if (!local) git(['tag', tag], { stdio: 'pipe' });
 
-  log('tag', `Tagged ${tag} on ${merged.slice(0, 9)} and pushed it`);
-  // What comes next, as the tag's own output. The publish line names
-  // --confirm with a placeholder, never the version, so publishing cannot be
-  // started by copying it: see hasConfirmation.
-  log('done', `Tagged ${tag}. GitHub Actions is now building, signing, notarising, and publishing a DRAFT release.`);
+  const push = `git push origin ${tag}`;
+  log('tag', local
+    ? `${tag} was already tagged here on ${merged.slice(0, 9)} by an earlier run, and is not on the remote: nothing new was created, and nothing has been pushed`
+    : `Tagged ${tag} on ${merged.slice(0, 9)}, here only: nothing has been pushed`);
+  // What comes next, as the tag's own output. The push is printed on a line
+  // of its own, exactly as it is to be run. The publish line names --confirm
+  // with a placeholder, never the version, so publishing cannot be started by
+  // copying it: see hasConfirmation.
+  log('done', 'Push the tag yourself, as one bare command with nothing before or after it. Pushing it starts the build:');
+  log(null, push);
+  log('done', 'Once it is pushed, GitHub Actions builds, signs, notarises and publishes a DRAFT release.');
   log('done', `Watch the build:   https://github.com/${REPO}/actions`);
   log('done', `Review the draft:  https://github.com/${REPO}/releases`);
+  log('done', `If the push fails, the tag stays here: fix what stopped it and push again. "npm run release -- tag ${version}" run again checks everything again, creates nothing new and prints the push again.`);
   log('done', 'Do not publish yet. Download and test the draft build on your own machine(s) first.');
   log('done', `Once you have decided ${tag} is ready for everyone: npm run release -- publish ${version} --confirm <version>`);
   log('done', `If CI fails (e.g. expired Apple agreement): fix it and re-run the workflow on tag ${tag}: no need to revert main.`);
-  return { tag, sha: merged };
+  return { tag, sha: merged, push, created: !local };
+}
+
+// The commit a tag on the remote names, or null when the remote has none: the
+// peeled line for an annotated tag, which is listed only when asked for by
+// name, and the tag's own line otherwise.
+function remoteTagCommit(git, tag) {
+  const lines = git(['ls-remote', '--tags', 'origin', `refs/tags/${tag}`, `refs/tags/${tag}^{}`]).trim().split('\n').filter(Boolean);
+  const peeled = lines.find((l) => l.endsWith(`refs/tags/${tag}^{}`));
+  const line = peeled || lines.find((l) => l.endsWith(`refs/tags/${tag}`));
+  return line ? line.split(/\s+/)[0] : null;
+}
+
+// The commit a tag here names, or null when there is none.
+function localTagCommit(git, tag) {
+  try {
+    return git(['rev-parse', '--verify', '--quiet', `refs/tags/${tag}^{commit}`], { stdio: 'pipe' }).trim() || null;
+  } catch {
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -775,7 +823,8 @@ const USAGE = [
   '  npm run release -- bump <version>                       write the version and promote the changelog, to commit with the candidate',
   '  npm run release -- signoff <version> --confirm <version>   after trying the candidate from source yourself, record it for its tree',
   "  npm run release -- signoff <version> --confirm <version> --on-instruction - <<'END_OF_SIGNOFF_WORDS'   record a sign-off given in chat: its words follow on stdin, verbatim, then a line END_OF_SIGNOFF_WORDS",
-  '  npm run release -- tag <version>                        after the gated, signed-off release pull request merges, tag the merged commit',
+  '  npm run release -- tag <version>                        after the gated, signed-off release pull request merges, tag the merged commit here and print the push',
+  '  git push origin v<version>                              push the tag, as its own bare command: this starts the build',
   '  npm run release -- publish <version> --confirm <version>   publish the draft release CI built for that tag, only after you have tested it yourself',
 ].join('\n');
 

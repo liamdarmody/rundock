@@ -1,9 +1,9 @@
 # Releasing
 
-A release is one pull request and three commands. The candidate carries its
-own version bump and promoted changelog, CI runs the required checks on it, the
-release gate runs what CI cannot on the same tree, and the merged commit is
-tagged. The commands and the reasons they are separate are documented at the
+A release is one pull request and four commands: bump, tag, the push of the
+tag, and publish. The candidate carries its own version bump and promoted
+changelog, CI runs the required checks on it, the release gate runs what CI
+cannot on the same tree, and the merged commit is tagged. The commands and the reasons they are separate are documented at the
 top of `scripts/release.js`.
 
 ```
@@ -15,9 +15,32 @@ npm run release:gate                    # what CI cannot do, on the candidate's 
 npm run release -- signoff <version> --confirm <version>   # sign off this tree, at a terminal
 ...or, when the sign-off is given in chat, the agent records it with --on-instruction (see below)...
 ...merge the pull request...
-npm run release -- tag <version>        # tag the merged commit, which starts the build
+npm run release -- tag <version>        # tag the merged commit, here only; it prints the push
+git push origin v<version>              # push the tag, as its own bare command: this starts the build
 npm run release -- publish <version> --confirm <version>   # publish the reviewed draft
 ```
+
+## Tagging and the push
+
+`release -- tag` checks the merged commit (on main, clean, the same as
+`origin/main`, the version and the notes, the gate record and the sign-off),
+creates the tag on it here, and stops. It never pushes. It prints the push on
+a line of its own, exactly as it is to be run:
+
+```
+git push origin v<version>
+```
+
+Run that as one bare command, with nothing before or after it: no `cd`, no
+`&&`, no pipe. The push is what starts the build, and it needs the credential
+a sandboxed command does not have, which is why it is a step of its own.
+
+If the push fails, or is skipped, the tag stays here. Fix what stopped it and
+push again. Running `release -- tag` again is safe too: it finds its own tag on
+the commit being tagged, checks everything again, creates nothing new and
+prints the push again. A tag left here on another commit is refused, naming
+both commits and the command that deletes it. Once the tag is on the remote,
+`tag` refuses and says it has been pushed: its build started then.
 
 ## Which checks come from CI
 
@@ -183,7 +206,8 @@ To recut an unpublished draft: delete the draft release, delete the tag here
 and on the remote (`git tag -d v<version>`, `git push origin :refs/tags/v<version>`),
 merge the fix with its note under the release's changelog heading, run the gate
 on main once CI is green there, sign the fixed tree off (trying it from
-source first where the summary calls for a hands-on check), and tag again.
+source first where the summary calls for a hands-on check), tag again, and
+push the tag, as before, with the bare command `tag` prints.
 With the tag gone, the version on main is one release past the latest tag
 again, which is all the gate asks.
 
