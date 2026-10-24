@@ -1,9 +1,9 @@
 # Releasing
 
-A release is one pull request and three commands. The candidate carries its
-own version bump and promoted changelog, CI runs the required checks on it, the
-release gate runs what CI cannot on the same tree, and the merged commit is
-tagged. The commands and the reasons they are separate are documented at the
+A release is one pull request and four commands: bump, tag, the push of the
+tag, and publish. The candidate carries its own version bump and promoted
+changelog, CI runs the required checks on it, the release gate runs what CI
+cannot on the same tree, and the merged commit is tagged. The commands and the reasons they are separate are documented at the
 top of `scripts/release.js`.
 
 ```
@@ -15,9 +15,38 @@ npm run release:gate                    # what CI cannot do, on the candidate's 
 npm run release -- signoff <version> --confirm <version>   # sign off this tree, at a terminal
 ...or, when the sign-off is given in chat, the agent records it with --on-instruction (see below)...
 ...merge the pull request...
-npm run release -- tag <version>        # tag the merged commit, which starts the build
+npm run release -- tag <version>        # tag the merged commit, here only; it prints the push
+git push origin refs/tags/v<version>    # push the tag, as its own bare command: this starts the build
 npm run release -- publish <version> --confirm <version>   # publish the reviewed draft
 ```
+
+## Tagging and the push
+
+`release -- tag` checks the merged commit (on main, clean, the same as
+`origin/main`, the version and the notes, the gate record and the sign-off),
+creates the tag on it here, and stops. On a detached HEAD, a checkout on no
+branch, it refuses and says to switch to main (`git switch main`). It never pushes. It prints the push on
+a line of its own, exactly as it is to be run:
+
+```
+git push origin refs/tags/v<version>
+```
+
+Run that as one bare command, with nothing before or after it: no `cd`, no
+`&&`, no pipe. The push is what starts the build, and it needs the credential
+a sandboxed command does not have, which is why it is a step of its own. It
+names the tag by its full ref, so a branch that shares the tag's name cannot
+make the push ambiguous.
+
+If the push fails, or is skipped, the tag stays here. Fix what stopped it and
+push again. Running `release -- tag` again is safe too: it finds its own tag on
+the commit being tagged, checks everything again, creates nothing new and
+prints the push again. A tag left here on another commit, from an earlier run
+or cut, is refused, naming both commits and the command that deletes it. Once
+the tag is on the remote, `tag` refuses and says it has been pushed: its build
+started then. A tag on the remote on another commit is refused too, naming
+both commits: choose a new version, or recut (see [A recut](#a-recut)),
+deleting it here and on the remote first.
 
 ## Which checks come from CI
 
@@ -44,11 +73,24 @@ next patch, minor or major), and the top heading of `CHANGELOG.md` names that
 version: `npm run release -- bump <version>` writes both from the
 `## Unreleased` section. The gate refuses any other version.
 
-`.release-gate.json` records the tree the gate passed on. `release -- tag`
-accepts it when the merged commit has that tree, so a merge that makes a new
-commit with the same content needs no second gate, and any difference is
-refused. If main moved under the pull request, the merged tree differs: run the
-gate again on main once CI has finished there.
+The gate record, `rundock-release-gate.json` in git's common directory,
+records the tree the gate passed on. `release -- tag` accepts it when the
+merged commit has that tree, so a merge that makes a new commit with the same
+content needs no second gate, and any difference is refused. If main moved
+under the pull request, the merged tree differs: run the gate again on main
+once CI has finished there.
+
+The common directory is shared by every worktree of the repository, so a gate
+run in a release worktree is seen by the checkout of main that tags, with
+nothing to copy, and the record can never be committed. There is one record
+per repository: the last gate to pass is the one `tag` reads, and it is the
+only place a pass is read from. A record there that cannot be read is
+refused, naming the file, and nothing is read in its place: run the gate
+again. Gates before this one wrote `.release-gate.json` in the folder they ran
+in. `tag` never reads that file as a pass, since any folder can hold one:
+when there is no record, the refusal names any it finds, in the checkout that
+tags or in a worktree git lists, as written by an older gate, and the gate has
+to be run again.
 
 ## The release summary
 
@@ -174,7 +216,8 @@ To recut an unpublished draft: delete the draft release, delete the tag here
 and on the remote (`git tag -d v<version>`, `git push origin :refs/tags/v<version>`),
 merge the fix with its note under the release's changelog heading, run the gate
 on main once CI is green there, sign the fixed tree off (trying it from
-source first where the summary calls for a hands-on check), and tag again.
+source first where the summary calls for a hands-on check), tag again, and
+push the tag, as before, with the bare command `tag` prints.
 With the tag gone, the version on main is one release past the latest tag
 again, which is all the gate asks.
 

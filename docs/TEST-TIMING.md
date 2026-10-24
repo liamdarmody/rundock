@@ -97,7 +97,7 @@ messages.
 | `test/integration/search-warmup.test.js` all three tests | Blocked a card's gate five times; 6,000-file index against an 8s default | **fixed** |
 | `test/unit/red-first.test.js` "an interrupt during the reverted run does not leave the tree reverted" | Signal fired after a guessed 150ms | **fixed** |
 | `test/unit/red-first.test.js` "a test command that traps SIGINT does not hold the tree hostage" | Same shape at 300ms; recorded as a flake in `docs/evidence/scheduler-lifecycle-evidence.md` | **fixed** |
-| `test/unit/red-first-orphans.test.js` "a second start is refused..." | Failed once on CI Node 24 under load; `sleep 25` is a budget for the test's own duration | **fixed** |
+| `test/unit/red-first-orphans.test.js` "a second start is refused..." | Failed on CI Node 24 under load: first because `sleep 25` was a budget for the test's own duration; later because it read the run record once, as soon as the suite's shell had written its pids, and the tool names the group in the record only after the spawn returns, so the read could see `group: null`. It now waits for the record to name the group the shell heads. See [FLAKES.md](FLAKES.md) | **fixed** |
 | Playwright browser suite | 2026-08-14, traced to contention | **isolate** (see below) |
 | `test/e2e/packages-manage.spec.js` "a package is a card; opening Packages checks for updates; a package updates, then uninstalls, from its card" | Passed its 60-second test timeout on a CI runner, 2026-10-11; the longest single test in the browser suite | **retry once**, see [FLAKES.md](FLAKES.md) |
 | `test/e2e/packages-install.spec.js` "switching workspace returns the flow to idle, discarding the previous plan" | Failed on main 2026-09-29, 2026-10-02 and 2026-10-11: the setup conversation of a fresh workspace took the screen mid-click, and an unbounded click on the hidden item outlasted its poll | **fixed**, see [FLAKES.md](FLAKES.md) |
@@ -263,8 +263,14 @@ timing is a seam rather than a sleep. Listed so the inventory is complete.
 - **Bounded polls.** `test/unit/signals.test.js` and `signals-lib.test.js`
   (2000/25), `test/unit/red-first-orphans.test.js`'s `until` (15000/50),
   `test/unit/precommit-gate-orphans.test.js`'s `until` (20000/25),
-  `test/unit/codex-appserver.test.js`'s `waitForInvocation` (2000/10). All the
-  right shape.
+  `test/unit/codex-appserver.test.js`'s `waitForInvocation` (2000/10),
+  `test/unit/page-ready.test.js`'s page waits (2000/10, against a page that
+  changes at 120 to 150ms; its one lower bound, `>= 140`, can be missed only
+  by a wait that returned before the page changed; its frozen-page waits run
+  at 80ms inside a 1000ms ceiling that only a hang reaches; and its two upper
+  bounds, under 800ms for a 500ms wait, sit between the wait's limit and the
+  900ms or more that asks given the whole timeout would take). All the right
+  shape.
 - **Long-lived children as negative devices.** `setInterval(() => {}, 1e9)` and
   `sleep ${LONG}` in `test/helpers/stub-claude/claude`,
   `test/unit/pid-file.test.js`, `test/unit/red-first-orphans.test.js` and
