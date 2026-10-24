@@ -522,7 +522,7 @@ function requireNotesMatchBuild(version, { root = ROOT, git = gitIn(root), log =
       `The build was made from the tag and the notes are published from it, so publishing now would ` +
       `describe work the build may not contain.\n` +
       `Recut deliberately: delete the draft release, delete the tag locally and on the remote, then ` +
-      `"npm run release -- tag ${version}" to tag and rebuild from current main.`
+      `"npm run release -- tag ${version}" to tag current main, and push the tag it prints, which rebuilds.`
     );
   }
   log('publish', `Notes at ${tag} match origin/main, so the build and its notes describe the same work`);

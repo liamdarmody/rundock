@@ -577,6 +577,9 @@ describe('publish refuses when the notes and the build have drifted apart', () =
       assert.match(err.message, /4ab416fe5/, 'and what main is at');
       assert.match(err.message, /7 commit/, 'and the distance between them');
       assert.match(err.message, /delete the tag/i, 'and how to recover, which is what someone will need next');
+      // Tagging no longer pushes, so the recovery names the push, which is
+      // what rebuilds.
+      assert.match(err.message, /"npm run release -- tag 0\.9\.9" to tag current main, and push the tag it prints, which rebuilds/);
     }
   });
 
