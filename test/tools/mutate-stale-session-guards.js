@@ -45,6 +45,8 @@ const CLEANUP = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'conversat
 const CLIENT = { src: path.join(ROOT, 'public', 'conversation-state.js'), suite: 'test/unit/conversation-state.test.js' };
 // Recognizing the refusal at all, and what is kept for a turn starting again.
 const RULES = { src: path.join(ROOT, 'lib', 'runtime', 'missing-session.js'), suite: 'test/unit/missing-session.test.js' };
+// How a handback prompt is headed for an orchestrator starting fresh.
+const CATCHUP = { src: path.join(ROOT, 'lib', 'delegation', 'catch-up.js'), suite: STALE };
 
 const MUTATIONS = [
   // ===== THE REFUSAL IS RECOGNIZED, AND NEVER SHOWN RAW =====
@@ -97,9 +99,15 @@ const MUTATIONS = [
   [ENGINE, 'the fresh orchestrator is handed the handback',
     '      startWithoutSession(orchEntry, convoId, args, orchFreshPrompt, orchWire, onOrchClose);',
     '      startWithoutSession(orchEntry, convoId, args, null, orchWire, onOrchClose);'],
-  [ENGINE, 'the handback a fresh orchestrator gets claims no last turn',
-    '        mode, orchMissed: { text: null }, specialistId: specialistEntry.agentId, outputBlock,',
-    '        mode, orchMissed, specialistId: specialistEntry.agentId, outputBlock,'],
+  [ENGINE, 'a fresh orchestrator\'s handback is headed as an arrival',
+    '        mode, arriving: true, specialistId: specialistEntry.agentId, outputBlock,',
+    '        mode, arriving: false, specialistId: specialistEntry.agentId, outputBlock,'],
+  [ENGINE, 'a fresh orchestrator is given the whole conversation, its own turns included',
+    'orchMissed: deltaSince(loadTranscript(convoId) || [], orchestrator.id, undefined, [specialistEntry.agentId], agentDisplayNames(), true),',
+    'orchMissed: deltaSince(loadTranscript(convoId) || [], orchestrator.id, undefined, [specialistEntry.agentId], agentDisplayNames(), false),'],
+  [CATCHUP, 'a handback prompt honors the arrival heading it is asked for',
+    '  const catchUp = catchUpPrefix(orchMissed, arriving);',
+    '  const catchUp = catchUpPrefix(orchMissed);'],
 
   // ===== WHAT THE PERSON SENT WHILE IT WAS STARTING GOES WITH IT =====
   [SERVER, 'a message sent into a process still starting is kept',

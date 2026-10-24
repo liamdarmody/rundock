@@ -782,7 +782,11 @@ describe('the names come from the real roster', () => {
     // FIVE, with the same reasoning one runtime over: a Claude delegate whose
     // stored session Claude Code no longer has is started again fresh, and is
     // briefed as an arrival, from the live roster like the rest.
-    assert.strictEqual(calls, 5,
+    //
+    // SIX: an orchestrator handed back to on a session Claude Code no longer
+    // has starts fresh the same way, and is given the conversation as an
+    // arrival rather than the handback alone.
+    assert.strictEqual(calls, 6,
       'every path that builds a catch-up must take the map from the live roster, '
       + 'or one of them silently labels turns with internal ids');
   });

@@ -310,8 +310,9 @@ describe('handing back to an orchestrator whose stored session is gone', () => {
       agentId: 'chief-of-staff', activeAgentId: 'content-lead', sessionId: 'dead-orch-d',
       sessionIds: [{ agentId: 'chief-of-staff', sessionId: 'dead-orch-d' }, { agentId: 'content-lead', sessionId: 'live-lead-d' }],
     });
-    // The orchestrator spoke before the lead took over, so a resume would have
-    // been told what it missed since then. A fresh session must not be.
+    // The orchestrator spoke before the lead took over. A resume would have
+    // been told what it missed since then; a fresh session has no "since", and
+    // is given the conversation as an arrival instead.
     h.internal.convoTranscripts.set(convoId, [
       { role: 'user', agent: 'user', text: 'plan the trip' },
       { role: 'agent', agent: 'chief-of-staff', text: 'ORCH-EARLIER-D: the lead will take this' },
@@ -332,13 +333,45 @@ describe('handing back to an orchestrator whose stored session is gone', () => {
     const orch = spawnsFor(convoId).filter(i => i.agent === 'chief-of-staff');
     assert.deepStrictEqual(orch.map(i => i.resume), ['dead-orch-d', null]);
     const prompt = h.promptsFor('chief-of-staff').pop();
+    assert.match(prompt, /routing-request/, 'the fresh orchestrator is given the handback');
     assert.match(prompt, /FLIGHT-D/, 'the pending request reaches the fresh orchestrator');
     assert.ok(!prompt.includes('SINCE YOUR LAST TURN'), 'with no claim about a last turn it never had');
+    assert.match(prompt, /BEFORE YOU JOINED/, 'and the conversation as an arrival');
+    assert.match(prompt, /plan the trip/, 'the original request, which the handback alone does not carry');
+    assert.match(prompt, /ORCH-EARLIER-D/, 'and what it had said itself, which a fresh session cannot remember');
+    assert.ok(!prompt.includes('LEAD-BETWEEN-D'), 'without the returning specialist, whose message the handback carries');
     const info = messagesFor(convoId, since).find(m => m.subtype === 'info');
     assert.strictEqual(info && info.expiredSessionId, 'dead-orch-d');
     assertNoRawRefusal(convoId, since);
     assertNotTold(convoId, since);
     assert.ok(!idsIn(stored(convoId)).includes('dead-orch-d'), 'the dead id is gone from what is stored');
+    h.reapConvo(convoId);
+  });
+
+  test('in continue mode too, the fresh orchestrator is told the request it never saw', async () => {
+    // A CONTINUE handback carries the specialist's output and no pending
+    // request, so without the conversation a fresh orchestrator had nothing to
+    // say what the work was for.
+    const convoId = h.freshConvoId('stale-continue');
+    const record = seed(convoId, {
+      agentId: 'chief-of-staff', activeAgentId: 'content-lead', sessionId: 'dead-orch-r',
+      sessionIds: [{ agentId: 'chief-of-staff', sessionId: 'dead-orch-r' }, { agentId: 'content-lead', sessionId: 'live-lead-r' }],
+    });
+    scenario([
+      { match: { resume: true, promptIncludes: 'ORIGINAL-ASK-R' }, turn: [{ text: 'Draft done; it needs a picture next. <!-- RUNDOCK:CONTINUE -->' }] },
+      { match: { agent: 'chief-of-staff', promptIncludes: 'work-continues' }, turn: [{ text: 'ORCH-CONTINUES-R' }] },
+    ], ['dead-orch-r']);
+    h.clearInvocations();
+    const win = windowFor(record);
+    const since = client.messages.length;
+    win.send('write the ORIGINAL-ASK-R post');
+    await waitForResult(convoId, 'ORCH-CONTINUES-R', since, 'the fresh orchestrator carries on');
+    assert.deepStrictEqual(spawnsFor(convoId).filter(i => i.agent === 'chief-of-staff').map(i => i.resume), ['dead-orch-r', null]);
+    const prompt = h.promptsFor('chief-of-staff').pop();
+    assert.match(prompt, /work-continues/);
+    assert.match(prompt, /BEFORE YOU JOINED/);
+    assert.match(prompt, /ORIGINAL-ASK-R/, 'the request the work was for');
+    assert.ok(!prompt.includes('SINCE YOUR LAST TURN'));
     h.reapConvo(convoId);
   });
 
