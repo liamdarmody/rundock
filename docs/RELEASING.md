@@ -41,9 +41,12 @@ make the push ambiguous.
 If the push fails, or is skipped, the tag stays here. Fix what stopped it and
 push again. Running `release -- tag` again is safe too: it finds its own tag on
 the commit being tagged, checks everything again, creates nothing new and
-prints the push again. A tag left here on another commit is refused, naming
-both commits and the command that deletes it. Once the tag is on the remote,
-`tag` refuses and says it has been pushed: its build started then.
+prints the push again. A tag left here on another commit, from an earlier run
+or cut, is refused, naming both commits and the command that deletes it. Once
+the tag is on the remote, `tag` refuses and says it has been pushed: its build
+started then. A tag on the remote on another commit is refused too, naming
+both commits: choose a new version, or recut (see [A recut](#a-recut)),
+deleting it here and on the remote first.
 
 ## Which checks come from CI
 

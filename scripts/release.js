@@ -785,12 +785,12 @@ function tagRelease(version, { root = ROOT, git = gitIn(root), log = logStep } =
 
   // Already here: on this commit it is this command's own tag from a run whose
   // push failed or was skipped, and it is reused; on another commit it is left
-  // from an earlier cut, and moving it is not this command's to do.
+  // from an earlier run or cut, and moving it is not this command's to do.
   const local = localTagCommit(git, tag);
   if (local && local !== merged) {
     throw new Error(
       `Tag ${tag} already exists here, on ${local.slice(0, 9)}, not on ${merged.slice(0, 9)}, the commit being tagged, ` +
-      `and the remote does not have it. It is left from an earlier cut: delete it ("git tag -d ${tag}") and run this again.`
+      `and the remote does not have it. It is left from an earlier run or cut: delete it ("git tag -d ${tag}") and run this again.`
     );
   }
   // On the commit that was checked, named, never on HEAD: HEAD can move in

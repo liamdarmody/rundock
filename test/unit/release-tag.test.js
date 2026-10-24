@@ -524,8 +524,11 @@ describe('release:tag tags what actually merged, and only a gated tree', () => {
     const stale = inWork(['rev-parse', 'HEAD~1']);
     inWork(['tag', 'v0.12.0', stale]);
 
+    // It can be this command's own unpushed tag from a run before main moved,
+    // so it is not called a cut's alone.
     assert.throws(() => tagRelease('0.12.0', { root: work, log: () => {} }), (err) =>
       err.message.includes(stale.slice(0, 9)) && err.message.includes(mergedCommit().slice(0, 9))
+      && err.message.includes('It is left from an earlier run or cut')
       && err.message.includes('git tag -d v0.12.0'));
     assert.strictEqual(localTag(), stale, 'the tag is left where it was');
     assert.strictEqual(inOrigin(['tag', '-l']), '', 'nothing pushed');
