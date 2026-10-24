@@ -270,6 +270,39 @@ describe('delegating to an agent whose stored session is gone', () => {
   });
 });
 
+describe('a message sent while a refused delegate is still starting', () => {
+  test('follows the brief into the fresh delegate, in order, each once', async () => {
+    const convoId = h.freshConvoId('stale-delegate-follow');
+    const record = seed(convoId, {
+      agentId: 'chief-of-staff', sessionId: 'live-orch-q',
+      sessionIds: [{ agentId: 'chief-of-staff', sessionId: 'live-orch-q' }, { agentId: 'content-lead', sessionId: 'dead-lead-q' }],
+    });
+    scenario([
+      { match: { resume: true, promptIncludes: 'ASK-Q', promptExcludes: 'DELEGATION BRIEF' },
+        turn: [{ agentTool: { subagent_type: 'content-lead', description: 'To the lead.', prompt: 'BRIEF-ONE q' } }] },
+      { match: { agent: 'content-lead', promptIncludes: 'BRIEF-ONE' }, turn: [{ text: 'LEAD-BRIEFED-Q' }] },
+      { match: { agent: 'content-lead', promptIncludes: 'FOLLOW-Q' }, turn: [{ text: 'LEAD-FOLLOWED-Q' }] },
+    ], ['dead-lead-q'], { refusalExitMs: 1200 });
+    h.clearInvocations();
+    const win = windowFor(record);
+    const since = client.messages.length;
+    win.send('ASK-Q please');
+    await client.waitFor(m => m.subtype === 'session_expired' && m._conversationId === convoId,
+      { since, label: 'the delegate is refused and still lingering', timeout: 15000 });
+    const sent = win.send('FOLLOW-Q one more thing');
+    assert.strictEqual(sent.agent, 'content-lead', 'addressed to the delegate the window now shows');
+
+    await waitForResult(convoId, 'LEAD-FOLLOWED-Q', since, 'the follow-up is answered');
+    assert.deepStrictEqual(spawnsFor(convoId).filter(i => i.agent === 'content-lead').map(i => i.resume), ['dead-lead-q', null]);
+    const prompts = h.promptsFor('content-lead');
+    assert.strictEqual(prompts.length, 2, 'the brief and the follow-up, each once');
+    assert.match(prompts[0], /BRIEF-ONE q/, 'the brief first');
+    assert.strictEqual(prompts[1], 'FOLLOW-Q one more thing', 'then what the person sent');
+    assertNoRawRefusal(convoId, since);
+    h.reapConvo(convoId);
+  });
+});
+
 describe('handing back to an orchestrator whose stored session is gone', () => {
   test('the orchestrator starts fresh with the handback, so the request is routed instead of lost', async () => {
     const convoId = h.freshConvoId('stale-handback');
@@ -306,6 +339,69 @@ describe('handing back to an orchestrator whose stored session is gone', () => {
     assertNoRawRefusal(convoId, since);
     assertNotTold(convoId, since);
     assert.ok(!idsIn(stored(convoId)).includes('dead-orch-d'), 'the dead id is gone from what is stored');
+    h.reapConvo(convoId);
+  });
+
+  test('a follow-up held back during the handoff reaches the fresh orchestrator, not the refused one', async () => {
+    // The kill window is seeded as kill-window.test.js seeds it, so the
+    // follow-up is reliably held back and replayed into the orchestrator the
+    // moment it is spawned, which is the process about to be refused.
+    const convoId = h.freshConvoId('stale-buffered');
+    const record = seed(convoId, {
+      agentId: 'chief-of-staff', activeAgentId: 'content-lead', sessionId: 'dead-orch-o',
+      sessionIds: [{ agentId: 'chief-of-staff', sessionId: 'dead-orch-o' }, { agentId: 'content-lead', sessionId: 'live-lead-o' }],
+    });
+    scenario([
+      { match: { resume: true, promptIncludes: 'TASK-O' }, turn: [{ text: 'Not my lane. <!-- RUNDOCK:RETURN -->' }] },
+      { match: { agent: 'chief-of-staff', promptIncludes: 'routing-request' }, turn: [{ text: 'ROUTING-FIRED-O' }] },
+      { match: { agent: 'chief-of-staff', promptIncludes: 'FOLLOW-O' }, turn: [{ text: 'FOLLOW-ANSWER-O' }] },
+    ], ['dead-orch-o']);
+    h.clearInvocations();
+    const win = windowFor(record);
+    const since = client.messages.length;
+    win.send('do TASK-O');
+    await client.waitFor(m => m.type === 'result' && m._conversationId === convoId && m._agent === 'content-lead',
+      { since, label: 'the specialist hands back', timeout: 15000 });
+    const entry = h.internal.chatProcesses.get(convoId);
+    assert.ok(entry && entry.scopeReturn, 'the specialist is in its auto-return window');
+    h.internal.convoTransitions.set(convoId, { state: 'killing', owner: entry, queued: [], failsafe: setTimeout(() => {}, 30000) });
+    win.send('FOLLOW-O and also this');
+
+    await waitForResult(convoId, 'FOLLOW-ANSWER-O', since, 'the fresh orchestrator answers the follow-up');
+    assert.deepStrictEqual(spawnsFor(convoId).filter(i => i.agent === 'chief-of-staff').map(i => i.resume), ['dead-orch-o', null]);
+    assert.deepStrictEqual(h.promptsFor('chief-of-staff'), ['FOLLOW-O and also this'],
+      'the follow-up superseded the routing prompt, as it does on a resume, and arrived exactly once');
+    assert.ok(!messagesFor(convoId, since).some(m => m.type === 'result' && /ROUTING-FIRED-O/.test(m.result || '')));
+    assertNoRawRefusal(convoId, since);
+    h.reapConvo(convoId);
+  });
+
+  test('a message sent while the refused orchestrator is still starting follows the handback into the fresh one', async () => {
+    const convoId = h.freshConvoId('stale-unbuffered');
+    const record = seed(convoId, {
+      agentId: 'chief-of-staff', activeAgentId: 'content-lead', sessionId: 'dead-orch-p',
+      sessionIds: [{ agentId: 'chief-of-staff', sessionId: 'dead-orch-p' }, { agentId: 'content-lead', sessionId: 'live-lead-p' }],
+    });
+    scenario([
+      { match: { resume: true, promptIncludes: 'TASK-P' }, turn: [{ text: 'Not my lane. <!-- RUNDOCK:RETURN -->' }] },
+      { match: { agent: 'chief-of-staff', promptIncludes: 'routing-request' }, turn: [{ text: 'ROUTED-P' }] },
+      { match: { agent: 'chief-of-staff', promptIncludes: 'FOLLOW-P' }, turn: [{ text: 'FOLLOW-ANSWER-P' }] },
+    ], ['dead-orch-p'], { refusalExitMs: 1200 });
+    h.clearInvocations();
+    const win = windowFor(record);
+    const since = client.messages.length;
+    win.send('do TASK-P');
+    await client.waitFor(m => m.subtype === 'session_expired' && m._conversationId === convoId && m.sessionId === 'dead-orch-p',
+      { since, label: 'the orchestrator is refused and still lingering', timeout: 15000 });
+    win.send('FOLLOW-P meanwhile');
+
+    await waitForResult(convoId, 'FOLLOW-ANSWER-P', since, 'the follow-up is answered');
+    assert.deepStrictEqual(spawnsFor(convoId).filter(i => i.agent === 'chief-of-staff').map(i => i.resume), ['dead-orch-p', null]);
+    const prompts = h.promptsFor('chief-of-staff');
+    assert.strictEqual(prompts.length, 2, 'the handback and the follow-up, each once');
+    assert.match(prompts[0], /routing-request/, 'the handback first');
+    assert.strictEqual(prompts[1], 'FOLLOW-P meanwhile', 'then what the person sent while it was starting');
+    assertNoRawRefusal(convoId, since);
     h.reapConvo(convoId);
   });
 });
@@ -406,6 +502,32 @@ describe('talking straight to an agent whose stored session is gone', () => {
     } finally {
       delete process.env.RUNDOCK_LEGACY_SPAWN;
     }
+  });
+
+  test('a second message sent while the refused resume is still starting is answered after the first', async () => {
+    const convoId = h.freshConvoId('stale-direct-follow');
+    const record = seed(convoId, {
+      agentId: 'chief-of-staff', activeAgentId: 'content-lead', sessionId: 'live-orch-s',
+      sessionIds: [{ agentId: 'chief-of-staff', sessionId: 'live-orch-s' }, { agentId: 'content-lead', sessionId: 'dead-lead-s' }],
+    });
+    scenario([
+      { match: { agent: 'content-lead', promptIncludes: 'FIRST-S' }, turn: [{ text: 'LEAD-FIRST-S' }] },
+      { match: { agent: 'content-lead', promptIncludes: 'SECOND-S' }, turn: [{ text: 'LEAD-SECOND-S' }] },
+    ], ['dead-lead-s'], { refusalExitMs: 1200 });
+    h.clearInvocations();
+    const win = windowFor(record);
+    const since = client.messages.length;
+    win.send('FIRST-S hello');
+    await client.waitFor(m => m.subtype === 'session_expired' && m._conversationId === convoId,
+      { since, label: 'the resume is refused and still lingering', timeout: 15000 });
+    win.send('SECOND-S and this');
+
+    await waitForResult(convoId, 'LEAD-SECOND-S', since, 'the second message is answered');
+    assert.deepStrictEqual(h.promptsFor('content-lead'), ['FIRST-S hello', 'SECOND-S and this'],
+      'both reach the fresh session, in the order they were sent, each once');
+    assert.deepStrictEqual(spawnsFor(convoId).map(i => i.resume), ['dead-lead-s', null], 'one fresh start carries both');
+    assertNoRawRefusal(convoId, since);
+    h.reapConvo(convoId);
   });
 });
 

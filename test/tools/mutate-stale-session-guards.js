@@ -43,7 +43,7 @@ const SAVE = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'conversation
 const CLEANUP = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'conversations.js'), suite: 'test/integration/conversation-metadata.test.js' };
 // The rules both sides share about a record's sessions.
 const CLIENT = { src: path.join(ROOT, 'public', 'conversation-state.js'), suite: 'test/unit/conversation-state.test.js' };
-// Recognizing the refusal at all.
+// Recognizing the refusal at all, and what is kept for a turn starting again.
 const RULES = { src: path.join(ROOT, 'lib', 'runtime', 'missing-session.js'), suite: 'test/unit/missing-session.test.js' };
 
 const MUTATIONS = [
@@ -100,6 +100,23 @@ const MUTATIONS = [
   [ENGINE, 'the handback a fresh orchestrator gets claims no last turn',
     '        mode, orchMissed: { text: null }, specialistId: specialistEntry.agentId, outputBlock,',
     '        mode, orchMissed, specialistId: specialistEntry.agentId, outputBlock,'],
+
+  // ===== WHAT THE PERSON SENT WHILE IT WAS STARTING GOES WITH IT =====
+  [SERVER, 'a message sent into a process still starting is kept',
+    '            noteUnstartedWrite(existing, msg.content);\n',
+    ''],
+  [ENGINE, 'a turn started again is given what was kept, after its prompt',
+    "  for (const carried of takeUnstartedWrites(entry)) {\n    proc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: carried } }) + '\\n');\n  }\n",
+    ''],
+  [SERVER, 'the chat path\'s retry sends what was kept after the first message',
+    "                for (const carried of takeUnstartedWrites(entry)) {\n                  liveWs.emit('message', JSON.stringify({ ...freshMsg, content: carried }));\n                }\n",
+    ''],
+  [RULES, 'nothing is kept once the session has started',
+    '  if (!entry || entry.sessionId) return;',
+    '  if (!entry) return;'],
+  [RULES, 'what is kept is handed over once',
+    '  if (entry) entry.unstartedWrites = [];\n',
+    ''],
   [ENGINE, 'starting again drops the resume and keeps everything else',
     '  const proc = spawnClaude(withoutResume(args), {',
     '  const proc = spawnClaude(args, {'],

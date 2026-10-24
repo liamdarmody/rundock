@@ -4,7 +4,8 @@
 const { test, describe } = require('node:test');
 const assert = require('node:assert');
 const {
-  REFUSAL, refusedResume, resumedSessionOf, noteExpired, isExpired, withoutResume, notResumedNotice,
+  REFUSAL, refusedResume, resumedSessionOf, noteExpired, isExpired, withoutResume,
+  noteUnstartedWrite, takeUnstartedWrites, notResumedNotice,
 } = require('../../lib/runtime/missing-session.js');
 
 const resumed = (id) => ({ spawnargs: ['claude', '--model', 'm', '--resume', id, '--agent', 'writer'] });
@@ -32,6 +33,27 @@ describe('a refused resume', () => {
     assert.strictEqual(resumedSessionOf({}), null);
     assert.strictEqual(resumedSessionOf(null), null);
     assert.strictEqual(resumedSessionOf({ spawnargs: ['claude', '--resume'] }), null);
+  });
+});
+
+describe('what was written into a process before it started its session', () => {
+  test('is kept in order, and taken once', () => {
+    const entry = {};
+    noteUnstartedWrite(entry, 'first');
+    noteUnstartedWrite(entry, 'second');
+    assert.deepStrictEqual(takeUnstartedWrites(entry), ['first', 'second']);
+    assert.deepStrictEqual(takeUnstartedWrites(entry), [], 'nothing is handed over twice');
+  });
+
+  test('is not kept once the session has started, when no refusal can follow', () => {
+    const entry = { sessionId: 'sess-live' };
+    noteUnstartedWrite(entry, 'read by the live process');
+    assert.deepStrictEqual(takeUnstartedWrites(entry), []);
+  });
+
+  test('a missing entry keeps and hands over nothing', () => {
+    noteUnstartedWrite(null, 'x');
+    assert.deepStrictEqual(takeUnstartedWrites(null), []);
   });
 });
 

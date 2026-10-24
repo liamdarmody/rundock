@@ -666,7 +666,7 @@ const {
 } = claudeRuntime;
 const codexGlue = require('./lib/runtime/codex-glue.js');
 const { watchClaudeTurns } = require('./lib/runtime/claude-turn-guard.js');
-const { STARTING_FRESH } = require('./lib/runtime/missing-session.js');
+const { STARTING_FRESH, noteUnstartedWrite, takeUnstartedWrites } = require('./lib/runtime/missing-session.js');
 claudeRuntime.wireClaudeRuntimeDeps({
   getActualPort: () => ACTUAL_PORT,
   // Every Claude turn runs under the same answer-file guard as a Codex turn.
@@ -1630,6 +1630,9 @@ wss.on('connection', (ws) => {
             existing.scopeReturnSource = null; // User sent new message, allow re-delegation
             resetAutoResume(convoId); // User spoke, reset circuit breaker
             if (existing.delegation) { existing.receivedFollowUp = true; }
+            // Kept until this process has started its session: one still
+            // starting may yet be refused, and then never reads this.
+            noteUnstartedWrite(existing, msg.content);
             existing.process.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: msg.content } }) + '\n');
           } else {
             // No live process: spawn a new one (first message or after disconnect)
@@ -1766,6 +1769,12 @@ wss.on('connection', (ws) => {
                 const freshMsg = { ...msg, sessionId: null, _resumeRetry: true };
                 const liveWs = [...connectedClients].find(c => c.readyState === 1) || ws;
                 liveWs.emit('message', JSON.stringify(freshMsg));
+                // What the person sent while the refused process was starting
+                // follows it, in order, into the fresh one: the first emit has
+                // already put a live process in place for these to reach.
+                for (const carried of takeUnstartedWrites(entry)) {
+                  liveWs.emit('message', JSON.stringify({ ...freshMsg, content: carried }));
+                }
                 return;
               }
 

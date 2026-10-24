@@ -999,6 +999,9 @@ describe('the stored conversation can only reach a delegate through the cap', ()
       // hand it what a fresh session is owed: a delegate's arrival brief, from
       // the same capped builder, or the handback prompt with no catch-up.
       ['proc', 'freshPrompt'],
+      // And after it, each message the person sent while the refused process
+      // was starting, which it never read: their own words, as they sent them.
+      ['proc', 'carried'],
       // A resumed agent picking its own conversation back up.
       ['proc', 'prompt'],
       // THE ONE THAT STARTS A DELEGATE. Everything a delegation hands over
