@@ -43,7 +43,7 @@
  * is a reviewed step of its own (docs/RELEASING.md says who merges).
  *
  * Pushing the tag starts something that cannot be un-started: the GitHub
- * Actions workflow that builds, signs, notarises, and publishes a DRAFT
+ * Actions workflow that builds, signs, notarizes, and publishes a DRAFT
  * release. Building does not happen on your laptop, and no Apple or signing
  * credentials are needed locally: those live in the CI environment. But CI
  * never makes anything public. It produces a DRAFT and stops there.
@@ -697,7 +697,7 @@ function bumpRelease(version, { root = ROOT, log = logStep } = {}) {
 // assume the merge landed just because it was asked to run, so it reads the
 // state of `origin/main` and refuses unless the release commit is actually
 // there. Pushing the tag is the irreversible half of a release: the pushed
-// tag is what starts the build, sign, notarise and draft publish workflow.
+// tag is what starts the build, sign, notarize and draft publish workflow.
 //
 // THE GATE IS CHECKED HERE, BY TREE. The candidate carries its bump, so the
 // merged commit is the gated content itself: a merge that makes a new commit
@@ -798,7 +798,7 @@ function tagRelease(version, { root = ROOT, git = gitIn(root), log = logStep } =
   // copying it: see hasConfirmation.
   log('done', 'Push the tag yourself, as one bare command with nothing before or after it. Pushing it starts the build:');
   log(null, push);
-  log('done', 'Once it is pushed, GitHub Actions builds, signs, notarises and publishes a DRAFT release.');
+  log('done', 'Once it is pushed, GitHub Actions builds, signs, notarizes and publishes a DRAFT release.');
   log('done', `Watch the build:   https://github.com/${REPO}/actions`);
   log('done', `Review the draft:  https://github.com/${REPO}/releases`);
   log('done', `If the push fails, the tag stays here: fix what stopped it and push again. "npm run release -- tag ${version}" run again checks everything again, creates nothing new and prints the push again.`);
