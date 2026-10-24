@@ -24,7 +24,8 @@ npm run release -- publish <version> --confirm <version>   # publish the reviewe
 
 `release -- tag` checks the merged commit (on main, clean, the same as
 `origin/main`, the version and the notes, the gate record and the sign-off),
-creates the tag on it here, and stops. It never pushes. It prints the push on
+creates the tag on it here, and stops. On a detached HEAD, a checkout on no
+branch, it refuses and says to switch to main (`git switch main`). It never pushes. It prints the push on
 a line of its own, exactly as it is to be run:
 
 ```

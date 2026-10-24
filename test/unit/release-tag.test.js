@@ -502,6 +502,19 @@ describe('release:tag tags what actually merged, and only a gated tree', () => {
     assert.strictEqual(inOrigin(['tag', '-l']), '', 'nothing pushed');
   });
 
+  test('on a detached HEAD, it refuses in plain words, saying to switch to main, and makes nothing', () => {
+    candidate();
+    merge();
+    inWork(['checkout', '--detach']);
+    const at = inWork(['rev-parse', '--short', 'HEAD']);
+    assert.throws(() => tagRelease('0.12.0', { root: work, log: () => {} }), (err) =>
+      err.message.startsWith(`HEAD is detached at ${at}: this checkout is on no branch, and a release is tagged from main.`)
+      && err.message.includes('Switch to main ("git switch main") and run this again.')
+      && !/fatal|Command failed|symbolic ref/.test(err.message));
+    assert.strictEqual(localTag(), null, 'nothing tagged here');
+    assert.strictEqual(inOrigin(['tag', '-l']), '', 'or on the remote');
+  });
+
   test('a dirty tree: refuses', () => {
     candidate();
     merge();
@@ -589,6 +602,12 @@ describe('every refusal of the tag, through what a person does next', () => {
       breakIt: () => fs.rmSync(path.join(work, '.git', SIGNOFF_FILE_NAME)),
       putRight: () => writeSignoff(treeOf('HEAD')),
       refusal: /No sign-off found[\s\S]*npm run release -- signoff 0\.12\.0 --confirm 0\.12\.0/,
+    },
+    {
+      name: 'a detached HEAD',
+      breakIt: () => inWork(['checkout', '--detach']),
+      putRight: () => inWork(['checkout', 'main']),
+      refusal: /HEAD is detached at [0-9a-f]+: this checkout is on no branch[\s\S]*git switch main/,
     },
   ];
 

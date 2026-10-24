@@ -117,8 +117,21 @@ const git = gitIn(ROOT);
 function preflight(version, { root = ROOT, git = gitIn(root) } = {}) {
   let branch;
   try {
-    branch = git(['symbolic-ref', '--short', 'HEAD']).trim();
+    branch = git(['symbolic-ref', '--quiet', '--short', 'HEAD'], { stdio: 'pipe' }).trim();
   } catch (err) {
+    // A DETACHED HEAD is on no branch at all, which git reports, quietly, as
+    // exit status 1; every other failure is 128 and keeps its own words. Said
+    // in plain words, because the raw "fatal: ref HEAD is not a symbolic ref"
+    // names neither the cause nor the fix, and the fix is always the same: a
+    // release is tagged from main.
+    if (err.status === 1) {
+      let at = '';
+      try { at = ` at ${git(['rev-parse', '--short', 'HEAD'], { stdio: 'pipe' }).trim()}`; } catch { /* no commit to name */ }
+      throw new Error(
+        `HEAD is detached${at}: this checkout is on no branch, and a release is tagged from main. ` +
+        'Switch to main ("git switch main") and run this again. Nothing has been tagged.'
+      );
+    }
     throw new Error(`Could not determine current branch: ${err.message}`);
   }
   if (branch !== 'main') {
