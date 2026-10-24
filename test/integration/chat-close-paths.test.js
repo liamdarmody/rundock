@@ -42,7 +42,11 @@ describe('resume failure recovery', () => {
     const info = (await client.waitFor(
       m => m.type === 'system' && m.subtype === 'info' && m._conversationId === convoId,
       { label: 'session-expired info' })).msg;
-    assert.strictEqual(info.content, 'Previous session expired. Starting fresh.');
+    // Naming the agent whose earlier context is gone, by the name the team uses.
+    const orchestrator = h.internal.discoverAgents().find(a => a.id === 'chief-of-staff');
+    assert.strictEqual(info.content,
+      require('../../lib/runtime/missing-session.js').startingFresh(orchestrator.displayName));
+    assert.match(info.content, /'s previous session expired\. Starting fresh\.$/);
 
     const result = (await client.waitFor(
       m => m.type === 'result' && m._conversationId === convoId,

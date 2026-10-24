@@ -23,7 +23,13 @@ const fs = require('node:fs');
 const path = require('node:path');
 const h = require('../helpers/harness.js');
 const { createState, reduce, forgetSession, resumeSessionFor } = require('../../public/conversation-state.js');
-const { REFUSAL, STARTING_FRESH } = require('../../lib/runtime/missing-session.js');
+const { REFUSAL, startingFresh } = require('../../lib/runtime/missing-session.js');
+
+/** The name the team uses for an agent, which is what a person is told. */
+function nameOf(agentId) {
+  const a = h.internal.discoverAgents().find(x => x.id === agentId);
+  return (a && (a.displayName || a.name)) || agentId;
+}
 
 let client;
 before(async () => { await h.boot(); client = await h.connect(); });
@@ -168,7 +174,7 @@ describe('delegating to an agent whose stored session is gone', () => {
     assert.ok(!prompt.includes('SINCE YOUR LAST TURN'), 'a fresh session has no last turn to be since');
 
     const info = messagesFor(convoId, since).find(m => m.type === 'system' && m.subtype === 'info');
-    assert.strictEqual(info.content, STARTING_FRESH, 'the person is told, in words');
+    assert.strictEqual(info.content, startingFresh(nameOf('content-lead')), 'the person is told, in words, whose');
     assert.strictEqual(info.expiredSessionId, 'dead-lead-a', 'naming the session the window must forget');
     assertNoRawRefusal(convoId, since);
     assertNotTold(convoId, since);
@@ -339,6 +345,7 @@ describe('handing back to an orchestrator whose stored session is gone', () => {
     assert.ok(!prompt.includes('LEAD-BETWEEN-D'), 'without the returning specialist, whose message the handback carries');
     const info = messagesFor(convoId, since).find(m => m.subtype === 'info');
     assert.strictEqual(info && info.expiredSessionId, 'dead-orch-d');
+    assert.strictEqual(info.content, startingFresh(nameOf('chief-of-staff')));
     assertNoRawRefusal(convoId, since);
     assertNotTold(convoId, since);
     assert.ok(!idsIn(stored(convoId)).includes('dead-orch-d'), 'the dead id is gone from what is stored');
@@ -455,7 +462,7 @@ describe('talking straight to an agent whose stored session is gone', () => {
     await waitForResult(convoId, 'LEAD-FRESH-E', since);
 
     const info = messagesFor(convoId, since).find(m => m.subtype === 'info');
-    assert.strictEqual(info.content, STARTING_FRESH);
+    assert.strictEqual(info.content, startingFresh(nameOf('content-lead')));
     assert.strictEqual(info.expiredSessionId, 'dead-lead-e');
     assertNoRawRefusal(convoId, since);
     assertNotTold(convoId, since);
@@ -529,6 +536,7 @@ describe('talking straight to an agent whose stored session is gone', () => {
       assertNoRawRefusal(convoId, since);
       assertNotTold(convoId, since);
       assert.deepStrictEqual(idsIn(stored(convoId)), []);
+      assert.strictEqual(info.content, startingFresh(nameOf('chief-of-staff')));
     } finally {
       delete process.env.RUNDOCK_LEGACY_SPAWN;
     }

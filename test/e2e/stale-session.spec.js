@@ -83,7 +83,8 @@ test('delegating to an agent whose stored session is gone answers fresh, says so
 
     const messages = page.locator('#messages');
     await expect(messages).toContainText('Fresh draft from the lead.');
-    await expect(messages).toContainText('Previous session expired. Starting fresh.');
+    // Naming the lead, whose earlier context is the part that is gone.
+    await expect(messages).toContainText(/'s previous session expired\. Starting fresh\./);
     await expect(messages).not.toContainText('No conversation found');
 
     // What the window holds: the dead id is gone and the orchestrator's live

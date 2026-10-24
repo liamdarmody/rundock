@@ -5,7 +5,7 @@ const { test, describe } = require('node:test');
 const assert = require('node:assert');
 const {
   REFUSAL, refusedResume, resumedSessionOf, mayBeRefusal, noteExpired, isExpired, withoutResume,
-  noteUnstartedWrite, takeUnstartedWrites, notResumedNotice,
+  noteUnstartedWrite, takeUnstartedWrites, startingFresh, notResumedNotice,
 } = require('../../lib/runtime/missing-session.js');
 
 const resumed = (id) => ({ spawnargs: ['claude', '--model', 'm', '--resume', id, '--agent', 'writer'] });
@@ -95,6 +95,12 @@ describe('the sessions known to be gone', () => {
     noteExpired(null);
     assert.strictEqual(isExpired(null), false);
   });
+});
+
+test('a fresh start names whose earlier context is gone', () => {
+  const said = startingFresh('Quill');
+  assert.strictEqual(said, "Quill's previous session expired. Starting fresh.");
+  assert.ok(!said.includes(REFUSAL));
 });
 
 test('what a person is told names the agent and what to do, and never the raw refusal', () => {

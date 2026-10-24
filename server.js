@@ -666,7 +666,7 @@ const {
 } = claudeRuntime;
 const codexGlue = require('./lib/runtime/codex-glue.js');
 const { watchClaudeTurns } = require('./lib/runtime/claude-turn-guard.js');
-const { STARTING_FRESH, noteUnstartedWrite, takeUnstartedWrites } = require('./lib/runtime/missing-session.js');
+const { startingFresh, noteUnstartedWrite, takeUnstartedWrites } = require('./lib/runtime/missing-session.js');
 claudeRuntime.wireClaudeRuntimeDeps({
   getActualPort: () => ACTUAL_PORT,
   // Every Claude turn runs under the same answer-file guard as a Codex turn.
@@ -1763,7 +1763,8 @@ wss.on('connection', (ws) => {
                 processes.delete(convoId);
                 // Naming the session Claude Code refused, when it was refused,
                 // so the window forgets that one and not whichever is primary.
-                safeSend(JSON.stringify({ type: 'system', subtype: 'info', content: STARTING_FRESH,
+                const freshName = (agentData && (agentData.displayName || agentData.name)) || msg.agent;
+                safeSend(JSON.stringify({ type: 'system', subtype: 'info', content: startingFresh(freshName),
                   ...(entry.missingSession ? { expiredSessionId: entry.missingSession } : {}),
                   _conversationId: convoId, _processId: processId }));
                 const freshMsg = { ...msg, sessionId: null, _resumeRetry: true };
@@ -1869,7 +1870,8 @@ wss.on('connection', (ws) => {
               console.log(`[Chat] Resume failed for session ${msg.sessionId}, retrying fresh`);
               entry.missingSessionRecovered = true; // started again below
               processes.delete(convoId);
-              safeSend(JSON.stringify({ type: 'system', subtype: 'info', content: STARTING_FRESH,
+              const freshName = (agentData && (agentData.displayName || agentData.name)) || msg.agent;
+              safeSend(JSON.stringify({ type: 'system', subtype: 'info', content: startingFresh(freshName),
                 ...(entry.missingSession ? { expiredSessionId: entry.missingSession } : {}),
                 _conversationId: convoId, _processId: processId }));
               const freshMsg = { ...msg, sessionId: null, _resumeRetry: true };
