@@ -200,10 +200,14 @@ function requireGatePass(headTree, { root = ROOT, git = gitIn(root) } = {}) {
       `Any change to the content invalidates the gate. Re-run "npm run release:gate" on what is being tagged.`
     );
   }
-  if (!record.live) {
+  // Exactly true, never merely truthy: the gate writes a boolean, so a record
+  // whose `live` is a string, a number or missing was not written by a full
+  // gate, and "false" would otherwise pass as true.
+  if (record.live !== true) {
+    const live = record.live === undefined ? 'missing' : JSON.stringify(record.live);
     throw new Error(
-      `The gate on tree ${record.tree.slice(0, 12)} ran without live smoke (--no-live). ` +
-      `Releases require the full gate: re-run "npm run release:gate" without flags.`
+      `The gate record for tree ${record.tree.slice(0, 12)} does not show live smoke: its "live" field is ${live}, and only true ` +
+      'counts (a gate run with --no-live records false). Releases require the full gate: re-run "npm run release:gate" without flags.'
     );
   }
   if (!record.ci || record.ci.skipped || !record.ci.checks) {

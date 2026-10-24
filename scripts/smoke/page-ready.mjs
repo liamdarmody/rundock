@@ -18,12 +18,12 @@
 // reading the client's own globals (`ws`, `currentWorkspacePath`, `agents`,
 // `activeConversation`), which the browser suite reads the same way.
 //
-// EVERY ASK IS BOUNDED. A page that is frozen, or busy past the point of
-// answering, leaves page.evaluate waiting with no limit of its own, and the
-// journey with it. Each ask is raced against the same timeout the wait it
-// belongs to was given, and one that does not answer in time fails with that
-// reason.
-import { waitFor } from './wait-for.mjs';
+// EVERY ASK IS BOUNDED, BY WHAT IS LEFT OF ITS WAIT. A page that is frozen, or
+// busy past the point of answering, leaves page.evaluate waiting with no limit
+// of its own, and the journey with it. Each ask is raced against the time left
+// in the wait it belongs to, not against the wait's whole timeout, so a slow
+// ask near the end cannot carry the wait past its stated limit; one that does
+// not answer in time fails with that reason, stated against the wait's limit.
 
 const DEFAULTS = { timeout: 30000, interval: 100 };
 
@@ -31,28 +31,39 @@ const DEFAULTS = { timeout: 30000, interval: 100 };
 export function evaluateWithin(page, ms, fn, arg) {
   let timer;
   const late = new Promise((resolve, reject) => {
-    timer = setTimeout(() => reject(new Error(`the page did not answer within ${ms / 1000}s`)), ms);
+    timer = setTimeout(() => reject(Object.assign(new Error(`the page did not answer within ${ms / 1000}s`), { timedOut: true })), ms);
   });
   return Promise.race([page.evaluate(fn, arg), late]).finally(() => clearTimeout(timer));
 }
 
-// Polls one question of the page until it answers truthily or the time is
-// up. Returns { value } on success; otherwise { error }, the last reason the
-// page gave for not answering, or null when it answered and the answer was
-// no.
+// Why an ask failed, in its wait's own terms: a page that did not answer is
+// reported against the limit the wait was given, whatever was left of it.
+function reasonFor(err, timeout) {
+  return err.timedOut ? `the page did not answer within ${timeout / 1000}s` : err.message;
+}
+
+// Polls one question of the page until it answers truthily or the wait's
+// time is up, giving each ask only the time that is left. A question that
+// throws means "not yet". Returns { value } on success; otherwise { error },
+// the last reason the page gave for not answering, or null when it answered
+// and the answer was no.
 async function askUntil(page, ask, { timeout, interval }) {
+  const deadline = Date.now() + timeout;
   let error = null;
-  const value = await waitFor(async () => {
+  for (;;) {
+    const left = deadline - Date.now();
+    if (left <= 0) return { error };
     try {
-      const answer = await ask(page, timeout);
+      const answer = await ask(page, left);
       error = null;
-      return answer;
+      if (answer) return { value: answer };
     } catch (err) {
       error = err;
-      return null;
     }
-  }, timeout, interval);
-  return value ? { value } : { error };
+    const rest = deadline - Date.now();
+    if (rest <= 0) return { error };
+    await new Promise((resolve) => setTimeout(resolve, Math.min(interval, rest)));
+  }
 }
 
 // The page has an open socket to the server, and the server has told it which
@@ -76,7 +87,7 @@ export async function waitForPage(page, { timeout = DEFAULTS.timeout, interval =
   return {
     ok: false,
     detail: asked.error
-      ? asked.error.message
+      ? reasonFor(asked.error, timeout)
       : `the socket did not open, or the server did not name the workspace, within ${timeout / 1000}s`,
   };
 }
@@ -85,24 +96,28 @@ export async function waitForPage(page, { timeout = DEFAULTS.timeout, interval =
 // checks that a conversation with that agent is what opened. Returns
 // { ok, detail }, the detail saying what went wrong, so the journey records
 // the step as failed with its reason rather than sending to the wrong agent.
+//
+// `timeout` bounds the whole call: the start is given what the wait for the
+// roster left of it.
 export async function startConversationWith(page, agentId, { timeout = DEFAULTS.timeout, interval = DEFAULTS.interval } = {}) {
+  const deadline = Date.now() + timeout;
   const asked = await askUntil(page, (p, ms) => pageKnowsAgent(p, agentId, { timeout: ms }), { timeout, interval });
   if (!asked.value) {
     return {
       ok: false,
       detail: asked.error
-        ? `${asked.error.message}, so no conversation with ${agentId} was started`
+        ? `${reasonFor(asked.error, timeout)}, so no conversation with ${agentId} was started`
         : `the page's roster never held ${agentId} within ${timeout / 1000}s, so no conversation was started`,
     };
   }
   let opened;
   try {
-    opened = await evaluateWithin(page, timeout, (id) => {
+    opened = await evaluateWithin(page, Math.max(1, deadline - Date.now()), (id) => {
       window.startConversation(id);
       return activeConversation ? activeConversation.agentId : null;
     }, agentId);
   } catch (err) {
-    return { ok: false, detail: `${err.message} when asked to start a conversation with ${agentId}` };
+    return { ok: false, detail: `${reasonFor(err, timeout)} when asked to start a conversation with ${agentId}` };
   }
   if (opened !== agentId) {
     return { ok: false, detail: `a conversation with ${agentId} was asked for, and one with ${opened} opened` };

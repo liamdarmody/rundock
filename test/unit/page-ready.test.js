@@ -32,8 +32,10 @@ const CONNECTING = 0;
 // A page with the client's globals. `startConversation` behaves as the
 // client's does: an id it does not know opens a conversation with the first
 // agent it knows. `freezes(source)` says which asks the page never answers,
-// as a frozen or swamped page does not.
-function fakePage({ ws = { readyState: OPEN }, workspace = '/w', agents = [], start, freezes = () => false } = {}) {
+// as a frozen or swamped page does not; `slow(source, ms)` says which asks,
+// made `ms` after the page was, take 10 seconds to answer.
+function fakePage({ ws = { readyState: OPEN }, workspace = '/w', agents = [], start, freezes = () => false, slow = () => false } = {}) {
+  const made = Date.now();
   const calls = [];
   const globals = { ws, currentWorkspacePath: workspace, agents, activeConversation: null };
   globals.window = globals;
@@ -48,6 +50,9 @@ function fakePage({ ws = { readyState: OPEN }, workspace = '/w', agents = [], st
     calls,
     evaluate: async (fn, arg) => {
       if (freezes(fn.toString())) return new Promise(() => {});
+      // Unreferenced, so an answer nobody waits for any more cannot hold the
+      // suite open.
+      if (slow(fn.toString(), Date.now() - made)) await new Promise((resolve) => { setTimeout(resolve, 10000).unref(); });
       return vm.runInContext(`(${fn.toString()})(${JSON.stringify(arg)})`, context);
     },
   };
@@ -103,6 +108,19 @@ describe('the page is connected before a journey sends anything', () => {
     const result = await within(1000, pageReady.waitForPage(fakePage({ freezes: always }), { timeout: 80, interval: 10 }));
     assert.deepStrictEqual(result, { ok: false, detail: 'the page did not answer within 0.08s' });
   });
+
+  // An ask made near the end of a wait is given what is left of it, not a
+  // whole timeout of its own. Given the whole 500ms, the slow ask that starts
+  // at about 400ms runs the wait to 900ms or more; given what is left, the
+  // wait ends at its 500ms limit. The 800ms bound sits between the two.
+  test('a slow ask near the end of a wait fails at the wait\'s limit, not past it', async () => {
+    const page = fakePage({ ws: { readyState: CONNECTING }, slow: (src, ms) => ms >= 400 });
+    const started = Date.now();
+    const result = await within(3000, pageReady.waitForPage(page, { timeout: 500, interval: 10 }));
+    const took = Date.now() - started;
+    assert.deepStrictEqual(result, { ok: false, detail: 'the page did not answer within 0.5s' });
+    assert.ok(took < 800, `the wait ran ${took}ms against its 500ms limit`);
+  });
 });
 
 describe('a conversation is started with the agent asked for, or not at all', () => {
@@ -147,6 +165,21 @@ describe('a conversation is started with the agent asked for, or not at all', ()
     const page = fakePage({ agents: [GUIDE, COS], freezes: (src) => src.includes('startConversation') });
     const result = await within(1000, pageReady.startConversationWith(page, COS.id, { timeout: 80, interval: 10 }));
     assert.deepStrictEqual(result, { ok: false, detail: 'the page did not answer within 0.08s when asked to start a conversation with chief-of-staff' });
+  });
+
+  // The roster names the agent only near the end of the call's limit, and the
+  // start is then slow: it is given what the roster wait left, so the call
+  // ends at its 500ms limit rather than 500ms after the roster answered.
+  test('a start made near the end of the call is given what is left of it, and fails at the limit', async () => {
+    const page = fakePage({ agents: [GUIDE], slow: (src) => src.includes('startConversation') });
+    const started = Date.now();
+    const [result] = await Promise.all([
+      within(3000, pageReady.startConversationWith(page, COS.id, { timeout: 500, interval: 10 })),
+      later(400, () => { page.globals.agents = [GUIDE, COS]; }),
+    ]);
+    const took = Date.now() - started;
+    assert.deepStrictEqual(result, { ok: false, detail: 'the page did not answer within 0.5s when asked to start a conversation with chief-of-staff' });
+    assert.ok(took < 800, `the call ran ${took}ms against its 500ms limit`);
   });
 });
 

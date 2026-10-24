@@ -344,6 +344,16 @@ describe('release refuses to tag without a gate pass on the tree being tagged', 
     assert.throws(() => pass(), /live/i);
   });
 
+  test('a live field that is not exactly true is refused, naming the field and what it holds', () => {
+    // A hand-edited record: "false" is truthy, and so is 1.
+    for (const [live, shown] of [['false', '"false"'], [1, '1'], [undefined, 'missing']]) {
+      write({ live });
+      assert.throws(() => pass(), (err) => err.message.includes(`its "live" field is ${shown}, and only true counts`), String(live));
+    }
+    write({ live: true });
+    assert.doesNotThrow(() => pass());
+  });
+
   test('gate passed without reading CI: refused', () => {
     write({ ci: { skipped: true } });
     assert.throws(() => pass(), /CI/);
