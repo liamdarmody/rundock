@@ -2353,24 +2353,38 @@ const INLINE_CODE = { python: /^-[A-Za-z]*?c(.*)$/s, node: /^(?:-[A-Za-z]*?[ep]|
 // command is the first word after the options once `-c` (alone or in a bundle
 // such as `-lc`) has been given.
 const SHELL_NAMES = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'fish']);
-const RUNS_WHAT_FOLLOWS = new Set(['env', 'exec', 'command', 'nohup', 'nice', 'time', 'sudo', 'doas', 'timeout', 'xargs']);
+const RUNS_WHAT_FOLLOWS = new Set(['env', 'exec', 'command', 'nohup', 'nice', 'time', 'sudo', 'doas', 'timeout', 'gtimeout', 'xargs',
+  'stdbuf', 'ionice', 'caffeinate', 'npx', 'uv run']);
 const PREFIX_TAKES_VALUE = {
   sudo: /^-[ugCDhpr]$/, doas: /^-[uC]$/, nice: /^-n$/, env: /^-[uS]$/,
-  timeout: /^(?:-[sk]|--signal|--kill-after)$/,
-  xargs: /^(?:-[nLPsIEda]|--(?:max-args|max-lines|max-procs|max-chars|eof|delimiter|arg-file|process-slot-var))$/,
+  timeout: /^(?:-[sk]|--signal|--kill-after)$/, gtimeout: /^(?:-[sk]|--signal|--kill-after)$/,
+  // BSD's -J, -R and -S as well as GNU's options.
+  xargs: /^(?:-[nLPsIEdaJRS]|--(?:max-args|max-lines|max-procs|max-chars|eof|delimiter|arg-file|process-slot-var))$/,
+  stdbuf: /^-[ioe]$/, ionice: /^-[cnp]$/, caffeinate: /^-[tw]$/,
+  npx: /^(?:-p|--package)$/,
+  'uv run': /^(?:-p|--python|--with|--with-requirements|--with-editable|--project|--directory|--env-file|--extra|--group|--package|--index|--index-url)$/,
 };
 // A prefix that takes one word of its own before the command: the duration.
-const PREFIX_TAKES_WORD = new Set(['timeout']);
-function shellDashC(words) {
+const PREFIX_TAKES_WORD = new Set(['timeout', 'gtimeout']);
+// WHERE THE PROGRAM A COMMAND RUNS IS NAMED: past its assignments and the
+// prefixes that run what follows them, with their options and their own
+// words. Shared by the shell's `-c` and the code given on the command line,
+// so both are found after the same prefixes.
+function programIndex(words) {
   let i = 0;
   for (let depth = 0; depth < 8; depth++) {
     while (i < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i])) i++;
-    const lead = (words[i] || '').split('/').pop();
+    const first = (words[i] || '').split('/').pop();
+    const lead = first === 'uv' && words[i + 1] === 'run' ? 'uv run' : first;
     if (!RUNS_WHAT_FOLLOWS.has(lead)) break;
-    i++;
+    i += lead === 'uv run' ? 2 : 1;
     while (i < words.length && words[i].startsWith('-')) i += (PREFIX_TAKES_VALUE[lead] && PREFIX_TAKES_VALUE[lead].test(words[i])) ? 2 : 1;
     if (PREFIX_TAKES_WORD.has(lead)) i++;
   }
+  return i;
+}
+function shellDashC(words) {
+  const i = programIndex(words);
   if (!SHELL_NAMES.has((words[i] || '').split('/').pop())) return null;
   let given = false;
   for (let k = i + 1; k < words.length; k++) {
@@ -2403,8 +2417,7 @@ function inlineCode(text, reading = null, depth = 0) {
       for (const n of inner.names) names.push({ ...n, at });
       for (const c of inner.commands) commands.push({ text: c.text, at });
     }
-    let i = 0;
-    while (i < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i])) i++;
+    const i = programIndex(words);
     const family = interpreterFamily((words[i] || '').split('/').pop());
     for (let k = i + 1; family && k < words.length; k++) {
       const m = INLINE_CODE[family].exec(words[k]);

@@ -107,6 +107,15 @@ const WRITES = [
   "find . -print0 | xargs -0 sh -c 'echo x > .mcp.json'", "ls | xargs -n 1 -P 4 bash -c 'rm -rf .claude'", "ls | xargs -I{} sh -c 'cp {} .claude/settings.json'",
   "ls | xargs --null -r sh -c 'rm .mcp.json'",
   "bash -c \"bash -c 'echo x > .mcp.json'\"", "sh -c \"timeout 5 sh -c 'rm -rf .rundock'\"", "bash -c \"python3 -c 'open(\\\".mcp.json\\\", \\\"w\\\")'\"",
+  // Code given on the command line is read after the same prefixes.
+  "timeout 5 python3 -c \"open('.mcp.json','w')\"", "env python3 -c \"open('.mcp.json','w')\"", "nohup node -e \"require('fs').rmSync('.claude', { recursive: true })\"",
+  "ls | xargs python3 -c \"open('.mcp.json','w')\"", "uv run python -c \"open('.mcp.json','w')\"", "uv run --with requests python -c \"open('.mcp.json','w')\"",
+  "npx node -e \"require('fs').writeFileSync('.mcp.json', '{}')\"", "sudo -u someone python3 -c \"open('.mcp.json','w')\"",
+  // BSD xargs's -J, -R and -S take values, and gtimeout, stdbuf, ionice and
+  // caffeinate run what follows them.
+  "ls | xargs -J % sh -c 'rm .mcp.json'", "ls | xargs -R 2 -S 255 sh -c 'rm .mcp.json'", "gtimeout -k 5 30 sh -c 'rm -rf .claude'",
+  "stdbuf -o L sh -c 'echo x > .mcp.json'", "stdbuf -oL sh -c 'echo x > .mcp.json'", "ionice -c 3 sh -c 'rm .mcp.json'",
+  "caffeinate -t 60 sh -c 'rm .mcp.json'", "caffeinate -i python3 -c \"open('.mcp.json','w')\"",
   // The forms that asked before this change, and still do.
   'echo x > .rundock/permissions.json', 'echo x >> .rundock/state.json', 'cat x > .claude/settings.local.json', 'tee .rundock/permissions.json',
   'echo x | tee -a .rundock/state.json', 'sed -i s/a/b/ .rundock/permissions.json', 'cp x .rundock/permissions.json', 'mv x .claude/settings.json',
@@ -157,6 +166,7 @@ describe('a command asks about an answer file only when it can write it', () => 
     // A shell's -c command that writes only ordinary files names none.
     "bash -c 'echo hi > notes.txt'", "sh -c 'cat .mcp.json'", "bash -c 'ls .claude'",
     "timeout 5 sh -c 'echo hi > notes.txt'", "ls | xargs -0 sh -c 'cat .mcp.json'", "bash -c \"bash -c 'cat .mcp.json'\"",
+    "timeout 5 python3 -c \"print(open('.mcp.json').read())\"", "uv run python -c \"print('ok')\"", "caffeinate -i sh -c 'echo hi > notes.txt'",
     "bash -c \"python3 -c 'print(open(\\\".mcp.json\\\").read())'\"",
     // Code naming only ordinary files names no answer file.
     "python3 - <<'PY'\nopen('notes.txt','w').write('x')\nprint('done')\nPY", "node -e \"require('fs').writeFileSync('x.json', 'w')\"",
