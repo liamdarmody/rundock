@@ -22,10 +22,18 @@
  * against the stub and the live runtime, the release walk (a real browser and
  * GitHub), and the packaged build's boot.
  *
- * THE RECORD NAMES A TREE. `.release-gate.json` records the tree the gate
- * passed on, so a merge that makes a new commit with the same content needs no
- * second gate, and `release -- tag` accepts the record exactly when the merged
+ * THE RECORD NAMES A TREE. The gate record records the tree the gate passed
+ * on, so a merge that makes a new commit with the same content needs no second
+ * gate, and `release -- tag` accepts the record exactly when the merged
  * commit's tree is that tree.
+ *
+ * THE RECORD LIVES IN GIT'S COMMON DIRECTORY, beside the sign-off, as
+ * `rundock-release-gate.json`. The gate runs in the release worktree and `tag`
+ * runs on main, usually in another checkout: a record written into the folder
+ * the gate ran in, as it once was, could not be seen from main and had to be
+ * copied across by hand. Every worktree of a repository shares the common
+ * directory, and nothing in it can be committed. One record per repository:
+ * the last gate to pass is the one `tag` reads.
  *
  * THE CANDIDATE CARRIES ITS OWN VERSION. package.json is exactly one release
  * past the latest tag (the next patch, minor or major) and CHANGELOG.md's top
@@ -49,7 +57,12 @@ const path = require('path');
 const { ciVerdict } = require('./release-ci.js');
 
 const ROOT = path.join(__dirname, '..');
-const GATE_FILE_NAME = '.release-gate.json';
+const GATE_FILE_NAME = 'rundock-release-gate.json';
+// Where the gate kept its record before it moved to git's common directory:
+// in the folder it ran in, under this name. Still read, for one release, so a
+// pass made before the move is not lost; remove it, and its lookup, after the
+// release that follows this one.
+const LEGACY_GATE_FILE_NAME = '.release-gate.json';
 
 // ---------------------------------------------------------------------------
 // Preconditions (pure, unit-tested)
@@ -217,14 +230,68 @@ function buildSteps(live) {
   return steps;
 }
 
-function readGateRecord(root = ROOT) {
-  const file = path.join(root, GATE_FILE_NAME);
-  if (!fs.existsSync(file)) return null;
+// ---------------------------------------------------------------------------
+// The record
+// ---------------------------------------------------------------------------
+
+// A git runner bound to one folder, the shape every caller passes.
+function gitAt(root) {
+  return (args) => execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+}
+
+// Where the record is kept: git's common directory, which every worktree of
+// the repository shares, so the release worktree that ran the gate and the
+// checkout of main that tags read the same file.
+function gateRecordPath({ root = ROOT, git = gitAt(root) } = {}) {
+  return path.resolve(root, String(git(['rev-parse', '--git-common-dir'])).trim(), GATE_FILE_NAME);
+}
+
+function readJson(file) {
   try {
     return JSON.parse(fs.readFileSync(file, 'utf8'));
   } catch {
     return null;
   }
+}
+
+function readGateRecord(opts = {}) {
+  let file;
+  try { file = gateRecordPath(opts); } catch { return null; }
+  return readJson(file);
+}
+
+// Records left at the old location: the folder of each worktree of the
+// repository, since the gate wrote its record in whichever one it ran in.
+function legacyGateRecords({ root = ROOT, git = gitAt(root) } = {}) {
+  const real = (p) => { try { return fs.realpathSync(p); } catch { return path.resolve(p); } };
+  const folders = [real(root)];
+  try {
+    for (const line of String(git(['worktree', 'list', '--porcelain'])).split('\n')) {
+      if (line.startsWith('worktree ')) folders.push(real(line.slice('worktree '.length)));
+    }
+  } catch { /* no list of worktrees: the folder asked about is the only one */ }
+  const found = [];
+  for (const folder of [...new Set(folders)]) {
+    const file = path.join(folder, LEGACY_GATE_FILE_NAME);
+    const record = readJson(file);
+    if (record) found.push({ file, record });
+  }
+  return found;
+}
+
+// The record `tag` judges for `tree`, and where it was read. The one in git's
+// common directory when there is one; otherwise, for one release, one at the
+// old location, preferring one for this tree, so a refusal can name the file
+// it read. `file` is where the record is kept when none was found.
+function findGateRecord(tree, opts = {}) {
+  let file = null;
+  try { file = gateRecordPath(opts); } catch { /* not a repository: only the old location can hold one */ }
+  const record = file ? readJson(file) : null;
+  if (record) return { record, file, legacy: false };
+  const old = legacyGateRecords(opts);
+  const chosen = old.find((o) => o.record.tree === tree) || old[0];
+  if (chosen) return { record: chosen.record, file: chosen.file, legacy: true };
+  return { record: null, file, legacy: false };
 }
 
 async function runGate({
@@ -239,6 +306,7 @@ async function runGate({
   // A gate pass must describe a reproducible tree: refuse dirty trees.
   let sha;
   let tree;
+  let recordFile;
   try {
     const dirty = String(exec('git', ['status', '--porcelain'])).trim();
     if (dirty) {
@@ -246,6 +314,9 @@ async function runGate({
     }
     sha = String(exec('git', ['rev-parse', 'HEAD'])).trim();
     tree = String(exec('git', ['rev-parse', 'HEAD^{tree}'])).trim();
+    // Resolved before any step, so a record that could not be kept is a
+    // refusal now rather than after the whole gate has run.
+    recordFile = gateRecordPath({ root, git: (args) => exec('git', args) });
   } catch (err) {
     return finish(false, `git preflight failed: ${err.message}`);
   }
@@ -308,7 +379,7 @@ async function runGate({
     wallClockSeconds: Math.round((Date.now() - startedAt) / 100) / 10,
     steps: timings,
   };
-  fs.writeFileSync(path.join(root, GATE_FILE_NAME), JSON.stringify(record, null, 2) + '\n');
+  fs.writeFileSync(recordFile, JSON.stringify(record, null, 2) + '\n');
   const caveats = [!live && 'NO LIVE SMOKE', !ci && 'CI NOT READ'].filter(Boolean);
   log(`[gate] PASS on tree ${tree.slice(0, 12)} (${version}) in ${record.wallClockSeconds}s` +
     (caveats.length ? ` (${caveats.join(', ')}: release will refuse this record)` : ''));
@@ -331,6 +402,6 @@ if (require.main === module) {
 }
 
 module.exports = {
-  GATE_FILE_NAME, nextVersions, candidateVersion, smokePorts, portHolders, requireSmokePortsFree,
-  buildSteps, readGateRecord, runGate,
+  GATE_FILE_NAME, LEGACY_GATE_FILE_NAME, nextVersions, candidateVersion, smokePorts, portHolders, requireSmokePortsFree,
+  buildSteps, gateRecordPath, readGateRecord, findGateRecord, runGate,
 };

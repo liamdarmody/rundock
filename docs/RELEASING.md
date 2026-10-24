@@ -44,11 +44,20 @@ next patch, minor or major), and the top heading of `CHANGELOG.md` names that
 version: `npm run release -- bump <version>` writes both from the
 `## Unreleased` section. The gate refuses any other version.
 
-`.release-gate.json` records the tree the gate passed on. `release -- tag`
-accepts it when the merged commit has that tree, so a merge that makes a new
-commit with the same content needs no second gate, and any difference is
-refused. If main moved under the pull request, the merged tree differs: run the
-gate again on main once CI has finished there.
+The gate record, `rundock-release-gate.json` in git's common directory,
+records the tree the gate passed on. `release -- tag` accepts it when the
+merged commit has that tree, so a merge that makes a new commit with the same
+content needs no second gate, and any difference is refused. If main moved
+under the pull request, the merged tree differs: run the gate again on main
+once CI has finished there.
+
+The common directory is shared by every worktree of the repository, so a gate
+run in a release worktree is seen by the checkout of main that tags, with
+nothing to copy, and the record can never be committed. There is one record
+per repository: the last gate to pass is the one `tag` reads. Gates before
+this one wrote `.release-gate.json` in the folder they ran in; for one release,
+`tag` still reads a record there, from any worktree, and names that file in
+any refusal of it.
 
 ## The release summary
 

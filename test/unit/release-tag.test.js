@@ -21,7 +21,7 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 
 const { bumpRelease, tagRelease, signoffRelease, extractChangelogEntry, SIGNOFF_FILE_NAME } = require('../../scripts/release.js');
-const { GATE_FILE_NAME, runGate } = require('../../scripts/release-gate.js');
+const { GATE_FILE_NAME, LEGACY_GATE_FILE_NAME, runGate } = require('../../scripts/release-gate.js');
 const { REQUIRED_CI_CHECKS } = require('../../scripts/release-ci.js');
 
 const CHANGELOG = `# Changelog
@@ -57,10 +57,27 @@ const inWork = (args) => gitAt(work)(args).trim();
 const inOrigin = (args) => gitAt(origin)(args).trim();
 const treeOf = (ref) => inWork(['rev-parse', `${ref}^{tree}`]);
 
-function writeGateRecord(tree, { live = true, ci = { checks: { E2E: { run: 1 } } } } = {}) {
-  fs.writeFileSync(path.join(work, GATE_FILE_NAME), JSON.stringify({
+// What a green gate leaves behind, in git's common directory, where every
+// worktree of the repository reads it. `file` puts it somewhere else.
+function writeGateRecord(tree, { live = true, ci = { checks: { E2E: { run: 1 } } }, file = path.join(work, '.git', GATE_FILE_NAME) } = {}) {
+  fs.writeFileSync(file, JSON.stringify({
     tree, sha: 'not-what-is-checked', live, ci, passedAt: '2026-08-26T09:00:00Z', wallClockSeconds: 300, steps: [],
   }));
+}
+
+// The real gate against a repository folder, with only its expensive steps,
+// GitHub and the port probe stood in for: CI reports every required job green
+// on `tree`.
+function gateIn(root, tree) {
+  const exec = (cmd, args) => (cmd === 'git' ? run('git', args, root) : '');
+  const gh = (args) => {
+    const url = args.find((a) => a.startsWith('repos/'));
+    if (/workflows\/ci\.yml\/runs/.test(url)) {
+      return JSON.stringify({ workflow_runs: [{ id: 5, event: 'push', head_sha: 'x', head_commit: { tree_id: tree }, pull_requests: [] }] });
+    }
+    return JSON.stringify({ jobs: REQUIRED_CI_CHECKS.map((name) => ({ name, status: 'completed', conclusion: 'success' })) });
+  };
+  return runGate({ root, exec, gh, busy: async () => false, log: () => {} });
 }
 
 // What `release -- signoff` leaves behind: the hands-on check from source,
@@ -86,9 +103,11 @@ beforeEach(() => {
   fs.writeFileSync(path.join(work, 'package.json'), JSON.stringify({ name: 'rundock', version: '0.11.8' }, null, 2) + '\n');
   fs.writeFileSync(path.join(work, 'CHANGELOG.md'), CHANGELOG);
   fs.writeFileSync(path.join(work, 'README.md'), 'Rundock\n');
-  // The gate record is ignored in the real repository, and has to be here too:
-  // an untracked file makes the tree dirty, which the preflight refuses.
-  fs.writeFileSync(path.join(work, '.gitignore'), `${GATE_FILE_NAME}\n`);
+  // The gate record's old location is ignored in the real repository, and has
+  // to be here too: an untracked file makes the tree dirty, which the
+  // preflight refuses. Its location now, git's common directory, needs no
+  // ignoring, because nothing in it is ever part of the tree.
+  fs.writeFileSync(path.join(work, '.gitignore'), `${LEGACY_GATE_FILE_NAME}\n`);
   git(['add', '-A']);
   git(['commit', '-m', 'initial']);
   git(['tag', 'v0.11.8']);
@@ -375,17 +394,7 @@ describe('a recut of an unpublished draft needs no hand-run step', () => {
   // and the tag, merge the fix, run the gate on main, tag again. The real gate
   // runs here against the real repository; only its expensive steps, GitHub
   // and the port probe are stood in for.
-  function gateHere(tree) {
-    const exec = (cmd, args) => (cmd === 'git' ? run('git', args, work) : '');
-    const gh = (args) => {
-      const url = args.find((a) => a.startsWith('repos/'));
-      if (/workflows\/ci\.yml\/runs/.test(url)) {
-        return JSON.stringify({ workflow_runs: [{ id: 5, event: 'push', head_sha: 'x', head_commit: { tree_id: tree }, pull_requests: [] }] });
-      }
-      return JSON.stringify({ jobs: REQUIRED_CI_CHECKS.map((name) => ({ name, status: 'completed', conclusion: 'success' })) });
-    };
-    return runGate({ root: work, exec, gh, busy: async () => false, log: () => {} });
-  }
+  const gateHere = (tree) => gateIn(work, tree);
 
   test('gate, tag, delete the tag, fix, gate, tag: every step passes as written', async () => {
     inWork(['checkout', '-b', 'release/0.12.0']);
@@ -418,6 +427,83 @@ describe('a recut of an unpublished draft needs no hand-run step', () => {
     const result = tagRelease('0.12.0', { root: work, log: () => {} });
     assert.strictEqual(inOrigin(['rev-list', '-n', '1', 'v0.12.0']), inWork(['rev-parse', 'HEAD']), 'the new tag is on the fix');
     assert.strictEqual(result.tag, 'v0.12.0');
+  });
+});
+
+describe('the gate record is read from any worktree of the repository', () => {
+  // The gate runs in the release worktree and the tag runs on main, usually in
+  // another checkout. The record used to be written into the folder the gate
+  // ran in, where the checkout that tags could not see it, so it was copied
+  // across by hand. It is kept in git's common directory now, beside the
+  // sign-off.
+  let wt;
+  beforeEach(() => { wt = path.join(dir, 'release-worktree'); });
+  const inWt = (args) => run('git', args, wt).trim();
+
+  // The candidate, built and committed in a worktree of its own on the
+  // release branch, as a release is cut.
+  function candidateInWorktree(version = '0.12.0') {
+    inWork(['worktree', 'add', '-b', `release/${version}`, wt]);
+    bumpRelease(version, { root: wt, log: () => {} });
+    inWt(['commit', '-am', `Release ${version}`]);
+    return inWt(['rev-parse', 'HEAD^{tree}']);
+  }
+  function mergeIntoMain(version = '0.12.0') {
+    inWork(['merge', '--no-ff', '-m', `Release ${version} (#42)`, `release/${version}`]);
+    inWork(['push', 'origin', 'main']);
+  }
+  const nothingAt = (folder) => !fs.existsSync(path.join(folder, GATE_FILE_NAME)) && !fs.existsSync(path.join(folder, LEGACY_GATE_FILE_NAME));
+
+  test('a gate run in a release worktree lets the checkout of main tag, with nothing copied', async () => {
+    const tree = candidateInWorktree();
+    const gated = await gateIn(wt, tree);
+    assert.strictEqual(gated.ok, true, gated.error);
+    assert.ok(nothingAt(wt), 'nothing is written in the worktree the gate ran in');
+    assert.strictEqual(inWt(['status', '--porcelain']), '', 'so there is nothing there to commit');
+    writeSignoff(tree);
+    mergeIntoMain();
+    assert.ok(nothingAt(work), 'and nothing has been copied into the checkout that tags');
+
+    const result = tagRelease('0.12.0', { root: work, log: () => {} });
+    assert.strictEqual(result.tag, 'v0.12.0');
+    assert.strictEqual(inWork(['rev-list', '-n', '1', 'v0.12.0']), inWork(['rev-parse', 'HEAD']), 'the merged commit is tagged');
+  });
+
+  test('for one release, a record an older gate left in a release worktree still lets the tag through, and the tag says where it read it', () => {
+    const tree = candidateInWorktree();
+    writeGateRecord(tree, { file: path.join(wt, LEGACY_GATE_FILE_NAME) });
+    writeSignoff(tree);
+    mergeIntoMain();
+    const lines = [];
+    tagRelease('0.12.0', { root: work, log: (step, msg) => lines.push(msg) });
+    assert.ok(lines.some((l) => l.includes(path.join(fs.realpathSync(wt), LEGACY_GATE_FILE_NAME))), lines.join('\n'));
+    assert.strictEqual(inWork(['tag', '-l', 'v0.12.0']), 'v0.12.0');
+  });
+
+  test('for one release, a record an older gate left in the checkout that tags still counts', () => {
+    inWork(['checkout', '-b', 'release/0.12.0']);
+    bumpRelease('0.12.0', { root: work, log: () => {} });
+    inWork(['commit', '-am', 'Release 0.12.0']);
+    writeGateRecord(treeOf('HEAD'), { file: path.join(work, LEGACY_GATE_FILE_NAME) });
+    writeSignoff(treeOf('HEAD'));
+    inWork(['checkout', 'main']);
+    mergeIntoMain();
+    tagRelease('0.12.0', { root: work, log: () => {} });
+    assert.strictEqual(inWork(['tag', '-l', 'v0.12.0']), 'v0.12.0');
+  });
+
+  test('a record at the old location for another tree is refused, naming the file and both trees', () => {
+    const gated = candidateInWorktree();
+    writeGateRecord(gated, { file: path.join(wt, LEGACY_GATE_FILE_NAME) });
+    fs.writeFileSync(path.join(wt, 'README.md'), 'Rundock, changed after the gate\n');
+    inWt(['commit', '-am', 'a change after the gate']);
+    const changed = inWt(['rev-parse', 'HEAD^{tree}']);
+    writeSignoff(changed);
+    mergeIntoMain();
+    assert.throws(() => tagRelease('0.12.0', { root: work, log: () => {} }), (err) =>
+      err.message.includes(path.join(fs.realpathSync(wt), LEGACY_GATE_FILE_NAME))
+      && err.message.includes(gated.slice(0, 12)) && err.message.includes(changed.slice(0, 12)));
+    assert.strictEqual(inWork(['tag', '-l', 'v0.12.0']), '', 'nothing tagged');
   });
 });
 

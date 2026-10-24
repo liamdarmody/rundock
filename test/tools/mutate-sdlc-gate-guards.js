@@ -73,6 +73,9 @@ const GATE = { src: path.join(ROOT, 'scripts', 'precommit-gate.js'), suite: 'tes
 // the suite that drives it.
 const RELEASE_CI = { src: path.join(ROOT, 'scripts', 'release-ci.js'), suite: 'test/unit/release-ci.test.js' };
 const RELEASE_GATE = { src: path.join(ROOT, 'scripts', 'release-gate.js'), suite: 'test/unit/release-gate.test.js' };
+// Where the gate keeps its record, watched by the suite that runs the real gate
+// in a release worktree and tags from the checkout of main.
+const RELEASE_GATE_TAG = { src: path.join(ROOT, 'scripts', 'release-gate.js'), suite: 'test/unit/release-tag.test.js' };
 const RELEASE_RECORD = { src: path.join(ROOT, 'scripts', 'release.js'), suite: 'test/unit/release-gate.test.js' };
 const RELEASE_TAG = { src: path.join(ROOT, 'scripts', 'release.js'), suite: 'test/unit/release-tag.test.js' };
 const RELEASE_SIGNOFF = { src: path.join(ROOT, 'scripts', 'release.js'), suite: 'test/unit/release-signoff.test.js' };
@@ -304,7 +307,37 @@ const MUTATIONS = [
     "  if (!record.ci || record.ci.skipped || !record.ci.checks) {",
     "  if (false) {"],
   [RELEASE_TAG, "the tag checks the gate record against the merged tree",
-    "  requireGatePass(mergedTree, { root });\n",
+    "  requireGatePass(mergedTree, { root, git, log });\n",
+    ""],
+  // The gate record lives in git's common directory, so a gate run in the
+  // release worktree is read by the checkout of main that tags, and a record
+  // an older gate left in the folder it ran in is still read for one release.
+  [RELEASE_GATE_TAG, "the gate writes its record to git's common directory",
+    "    recordFile = gateRecordPath({ root, git: (args) => exec('git', args) });",
+    "    recordFile = path.join(root, GATE_FILE_NAME);"],
+  [RELEASE_GATE_TAG, "the record is kept where every worktree of the repository reads it",
+    "  return path.resolve(root, String(git(['rev-parse', '--git-common-dir'])).trim(), GATE_FILE_NAME);",
+    "  return path.resolve(root, GATE_FILE_NAME);"],
+  [RELEASE_GATE, "the record in git's common directory is judged first",
+    "  if (record) return { record, file, legacy: false };",
+    "  if (false) return { record, file, legacy: false };"],
+  [RELEASE_GATE, "a record at the old location is still read, for one release",
+    "  const old = legacyGateRecords(opts);",
+    "  const old = [];"],
+  [RELEASE_GATE, "every worktree's folder is searched for a record at the old location",
+    "      if (line.startsWith('worktree ')) folders.push(real(line.slice('worktree '.length)));",
+    "      if (false) folders.push(real(line.slice('worktree '.length)));"],
+  [RELEASE_GATE, "of several records at the old location, the one for the tree being tagged is judged",
+    "  const chosen = old.find((o) => o.record.tree === tree) || old[0];",
+    "  const chosen = old[0];"],
+  [RELEASE_RECORD, "with no record anywhere, the refusal names where the record is kept",
+    "      `No release gate pass found: ${found.file || 'the gate record'} is missing or unreadable, and no worktree ` +",
+    "      `No release gate pass found: the gate record is missing or unreadable, and no worktree ` +"],
+  [RELEASE_RECORD, "a refusal of a record read at the old location names the file",
+    "  const where = found.legacy ? ` (the record read is ${found.file}, at the old location)` : '';",
+    "  const where = '';"],
+  [RELEASE_RECORD, "the tag says where it read a record at the old location",
+    "    log('tag', `Read the gate pass from ${found.file}, where the gate kept its record before it moved to git's common directory`);\n",
     ""],
   // The hands-on check from source, recorded by tree: the tag needs one, it
   // must be for the tree being tagged, and recording it needs a --confirm
