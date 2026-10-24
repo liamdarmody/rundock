@@ -80,6 +80,27 @@ describe('get_conversations: load pipeline', () => {
       'and the in-flight pointer is not rewritten on disk either');
   });
 
+  test('a conversation with a transcript survives the cleanup with no session id left', async () => {
+    // Its only session can be gone: Claude Code removes old session files, and
+    // a session it no longer has is forgotten from the record. The transcript
+    // still says a message was sent, which is what the cleanup is asking.
+    const oldStamp = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+    const convosFile = path.join(h.workspaceDir, '.rundock', 'conversations.json');
+    fs.writeFileSync(convosFile, JSON.stringify([
+      { id: 'sessionless-kept', agentId: 'chief-of-staff', title: 'Kept', sessionId: null, sessionIds: [], lastActiveAt: oldStamp },
+      { id: 'sessionless-empty', agentId: 'chief-of-staff', title: 'Abandoned', sessionId: null, sessionIds: [], lastActiveAt: oldStamp },
+    ]));
+    h.internal.convoTranscripts.set('sessionless-kept', [{ role: 'user', agent: 'user', text: 'the first question' }]);
+    h.internal.saveTranscript('sessionless-kept');
+
+    const res = await getConversations();
+    assert.ok(res.conversations.some(c => c.id === 'sessionless-kept'),
+      'deleting it as never used would lose its title and history from the sidebar for good');
+    assert.ok(!res.conversations.some(c => c.id === 'sessionless-empty'), 'one with nothing sent still goes');
+    const persisted = JSON.parse(fs.readFileSync(convosFile, 'utf-8'));
+    assert.deepStrictEqual(persisted.map(c => c.id), ['sessionless-kept']);
+  });
+
   test('enriches each conversation with messageCount and a stripped last-message preview', async () => {
     const convoId = 'enrich-1';
     writeSession('sess-enrich-1', [
