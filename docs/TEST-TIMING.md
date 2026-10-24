@@ -266,7 +266,9 @@ timing is a seam rather than a sleep. Listed so the inventory is complete.
   `test/unit/codex-appserver.test.js`'s `waitForInvocation` (2000/10),
   `test/unit/page-ready.test.js`'s page waits (2000/10, against a page that
   changes at 120 to 150ms; its one lower bound, `>= 140`, can be missed only
-  by a wait that returned before the page changed). All the right shape.
+  by a wait that returned before the page changed; its frozen-page waits run
+  at 80ms inside a 1000ms ceiling that only a hang reaches). All the right
+  shape.
 - **Long-lived children as negative devices.** `setInterval(() => {}, 1e9)` and
   `sleep ${LONG}` in `test/helpers/stub-claude/claude`,
   `test/unit/pid-file.test.js`, `test/unit/red-first-orphans.test.js` and

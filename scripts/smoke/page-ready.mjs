@@ -17,39 +17,93 @@
 // Every question here is a function run IN the page, through page.evaluate,
 // reading the client's own globals (`ws`, `currentWorkspacePath`, `agents`,
 // `activeConversation`), which the browser suite reads the same way.
+//
+// EVERY ASK IS BOUNDED. A page that is frozen, or busy past the point of
+// answering, leaves page.evaluate waiting with no limit of its own, and the
+// journey with it. Each ask is raced against the same timeout the wait it
+// belongs to was given, and one that does not answer in time fails with that
+// reason.
 import { waitFor } from './wait-for.mjs';
+
+const DEFAULTS = { timeout: 30000, interval: 100 };
+
+// page.evaluate, or a rejection saying the page did not answer within `ms`.
+export function evaluateWithin(page, ms, fn, arg) {
+  let timer;
+  const late = new Promise((resolve, reject) => {
+    timer = setTimeout(() => reject(new Error(`the page did not answer within ${ms / 1000}s`)), ms);
+  });
+  return Promise.race([page.evaluate(fn, arg), late]).finally(() => clearTimeout(timer));
+}
+
+// Polls one question of the page until it answers truthily or the time is
+// up. Returns { value } on success; otherwise { error }, the last reason the
+// page gave for not answering, or null when it answered and the answer was
+// no.
+async function askUntil(page, ask, { timeout, interval }) {
+  let error = null;
+  const value = await waitFor(async () => {
+    try {
+      const answer = await ask(page, timeout);
+      error = null;
+      return answer;
+    } catch (err) {
+      error = err;
+      return null;
+    }
+  }, timeout, interval);
+  return value ? { value } : { error };
+}
 
 // The page has an open socket to the server, and the server has told it which
 // workspace it shows: what a journey needs before it sends anything.
-export function pageConnected(page) {
-  return page.evaluate(() => typeof ws !== 'undefined' && !!ws && ws.readyState === 1
+export function pageConnected(page, { timeout = DEFAULTS.timeout } = {}) {
+  return evaluateWithin(page, timeout, () => typeof ws !== 'undefined' && !!ws && ws.readyState === 1
     && typeof currentWorkspacePath !== 'undefined' && !!currentWorkspacePath);
 }
 
 // The page's roster holds this agent.
-export function pageKnowsAgent(page, agentId) {
-  return page.evaluate((id) => typeof agents !== 'undefined' && Array.isArray(agents)
+export function pageKnowsAgent(page, agentId, { timeout = DEFAULTS.timeout } = {}) {
+  return evaluateWithin(page, timeout, (id) => typeof agents !== 'undefined' && Array.isArray(agents)
     && agents.some((a) => a.id === id), agentId);
 }
 
-// Waits for the page to be connected; true once it is, false if it never is.
-export async function waitForPage(page, { timeout = 30000, interval = 100 } = {}) {
-  return !!(await waitFor(() => pageConnected(page), timeout, interval));
+// Waits for the page to be connected. Returns { ok, detail }, the detail
+// saying why when it is not.
+export async function waitForPage(page, { timeout = DEFAULTS.timeout, interval = DEFAULTS.interval } = {}) {
+  const asked = await askUntil(page, (p, ms) => pageConnected(p, { timeout: ms }), { timeout, interval });
+  if (asked.value) return { ok: true, detail: '' };
+  return {
+    ok: false,
+    detail: asked.error
+      ? asked.error.message
+      : `the socket did not open, or the server did not name the workspace, within ${timeout / 1000}s`,
+  };
 }
 
 // Starts a conversation with `agentId` once the page knows the agent, and
 // checks that a conversation with that agent is what opened. Returns
 // { ok, detail }, the detail saying what went wrong, so the journey records
 // the step as failed with its reason rather than sending to the wrong agent.
-export async function startConversationWith(page, agentId, { timeout = 30000, interval = 100 } = {}) {
-  const known = await waitFor(() => pageKnowsAgent(page, agentId), timeout, interval);
-  if (!known) {
-    return { ok: false, detail: `the page's roster never held ${agentId} within ${timeout / 1000}s, so no conversation was started` };
+export async function startConversationWith(page, agentId, { timeout = DEFAULTS.timeout, interval = DEFAULTS.interval } = {}) {
+  const asked = await askUntil(page, (p, ms) => pageKnowsAgent(p, agentId, { timeout: ms }), { timeout, interval });
+  if (!asked.value) {
+    return {
+      ok: false,
+      detail: asked.error
+        ? `${asked.error.message}, so no conversation with ${agentId} was started`
+        : `the page's roster never held ${agentId} within ${timeout / 1000}s, so no conversation was started`,
+    };
   }
-  const opened = await page.evaluate((id) => {
-    window.startConversation(id);
-    return activeConversation ? activeConversation.agentId : null;
-  }, agentId);
+  let opened;
+  try {
+    opened = await evaluateWithin(page, timeout, (id) => {
+      window.startConversation(id);
+      return activeConversation ? activeConversation.agentId : null;
+    }, agentId);
+  } catch (err) {
+    return { ok: false, detail: `${err.message} when asked to start a conversation with ${agentId}` };
+  }
   if (opened !== agentId) {
     return { ok: false, detail: `a conversation with ${agentId} was asked for, and one with ${opened} opened` };
   }

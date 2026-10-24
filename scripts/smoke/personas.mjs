@@ -97,9 +97,9 @@ async function withApp(workspace, scenario, fn) {
     // Connected, and told which workspace it shows, before the journey sends
     // anything. This was a fixed 1.5-second sleep, which a loaded machine
     // inside the release gate can outlast (see page-ready.mjs).
-    if (!(await waitForPage(page))) {
-      record(`${path.basename(workspace)} page connects and shows its workspace`, false,
-        'the socket did not open, or the server did not name the workspace, within 30s');
+    const connected = await waitForPage(page);
+    if (!connected.ok) {
+      record(`${path.basename(workspace)} page connects and shows its workspace`, false, connected.detail);
       return;
     }
     await fn({ page, port, serverLogTail: () => withoutKey(serverLog.slice(-1500)) });

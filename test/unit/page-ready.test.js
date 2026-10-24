@@ -31,8 +31,9 @@ const CONNECTING = 0;
 
 // A page with the client's globals. `startConversation` behaves as the
 // client's does: an id it does not know opens a conversation with the first
-// agent it knows.
-function fakePage({ ws = { readyState: OPEN }, workspace = '/w', agents = [], start } = {}) {
+// agent it knows. `freezes(source)` says which asks the page never answers,
+// as a frozen or swamped page does not.
+function fakePage({ ws = { readyState: OPEN }, workspace = '/w', agents = [], start, freezes = () => false } = {}) {
   const calls = [];
   const globals = { ws, currentWorkspacePath: workspace, agents, activeConversation: null };
   globals.window = globals;
@@ -45,12 +46,24 @@ function fakePage({ ws = { readyState: OPEN }, workspace = '/w', agents = [], st
   return {
     globals,
     calls,
-    evaluate: async (fn, arg) => vm.runInContext(`(${fn.toString()})(${JSON.stringify(arg)})`, context),
+    evaluate: async (fn, arg) => {
+      if (freezes(fn.toString())) return new Promise(() => {});
+      return vm.runInContext(`(${fn.toString()})(${JSON.stringify(arg)})`, context);
+    },
   };
 }
 
 const later = (ms, change) => new Promise((resolve) => setTimeout(() => { change(); resolve(); }, ms));
 const FAST = { timeout: 2000, interval: 10 };
+
+// The promise's value, or a failure after `ms`: a helper that hangs fails the
+// test, by name, instead of holding the suite open.
+function within(ms, promise) {
+  let timer;
+  const hung = new Promise((resolve, reject) => { timer = setTimeout(() => reject(new Error(`still waiting after ${ms}ms`)), ms); });
+  return Promise.race([promise, hung]).finally(() => clearTimeout(timer));
+}
+const always = () => true;
 
 describe('the page is connected before a journey sends anything', () => {
   test('a socket still connecting is not connected', async () => {
@@ -76,12 +89,19 @@ describe('the page is connected before a journey sends anything', () => {
       pageReady.waitForPage(page, FAST),
       later(150, () => { page.globals.ws.readyState = OPEN; page.globals.currentWorkspacePath = '/w'; }),
     ]);
-    assert.strictEqual(ready, true);
+    assert.deepStrictEqual(ready, { ok: true, detail: '' });
     assert.ok(Date.now() - started >= 140, 'it waited for the page');
   });
 
-  test('a page that never connects is reported as false, not waited on forever', async () => {
-    assert.strictEqual(await pageReady.waitForPage(fakePage({ ws: { readyState: CONNECTING } }), { timeout: 60, interval: 10 }), false);
+  test('a page that never connects is reported, with the reason, not waited on forever', async () => {
+    const result = await pageReady.waitForPage(fakePage({ ws: { readyState: CONNECTING } }), { timeout: 60, interval: 10 });
+    assert.strictEqual(result.ok, false);
+    assert.match(result.detail, /the socket did not open, or the server did not name the workspace, within 0\.06s/);
+  });
+
+  test('a frozen page fails with that reason within the timeout, instead of hanging', async () => {
+    const result = await within(1000, pageReady.waitForPage(fakePage({ freezes: always }), { timeout: 80, interval: 10 }));
+    assert.deepStrictEqual(result, { ok: false, detail: 'the page did not answer within 0.08s' });
   });
 });
 
@@ -115,6 +135,19 @@ describe('a conversation is started with the agent asked for, or not at all', ()
     assert.strictEqual(result.ok, false);
     assert.match(result.detail, /with chief-of-staff was asked for, and one with rundock-guide opened/);
   });
+
+  test('a page frozen before it answers about the roster fails with that reason, and starts nothing', async () => {
+    const page = fakePage({ agents: [GUIDE, COS], freezes: always });
+    const result = await within(1000, pageReady.startConversationWith(page, COS.id, { timeout: 80, interval: 10 }));
+    assert.deepStrictEqual(result, { ok: false, detail: 'the page did not answer within 0.08s, so no conversation with chief-of-staff was started' });
+    assert.deepStrictEqual(page.calls, []);
+  });
+
+  test('a page that freezes when asked to start the conversation fails with that reason', async () => {
+    const page = fakePage({ agents: [GUIDE, COS], freezes: (src) => src.includes('startConversation') });
+    const result = await within(1000, pageReady.startConversationWith(page, COS.id, { timeout: 80, interval: 10 }));
+    assert.deepStrictEqual(result, { ok: false, detail: 'the page did not answer within 0.08s when asked to start a conversation with chief-of-staff' });
+  });
 });
 
 describe('the persona journeys ask the page rather than sleep', () => {
@@ -122,7 +155,8 @@ describe('the persona journeys ask the page rather than sleep', () => {
 
   test('after signing in, the page is waited for, not slept on', () => {
     assert.ok(SRC.includes("import { waitForPage, startConversationWith } from './page-ready.mjs';"));
-    assert.ok(SRC.includes('if (!(await waitForPage(page))) {'), 'the journey waits for the page to connect');
+    assert.ok(SRC.includes('const connected = await waitForPage(page);'), 'the journey waits for the page to connect');
+    assert.ok(SRC.includes('if (!connected.ok) {'), 'and stops, recording why, when it does not');
     assert.ok(!SRC.includes('waitForTimeout(1500)'), 'the fixed sleep after signing in is gone');
   });
 
