@@ -1766,8 +1766,10 @@ wss.on('connection', (ws) => {
               // before the session starts or not at all. Matched later, a process
               // that had answered for an hour and then crashed, or was reaped,
               // with any of those words on stderr replayed the message it was
-              // started with, and the person's request ran twice.
-              const isResumeFailure = msg.sessionId && !msg._resumeRetry && !entry.cancelled && code !== 0 && !entry.sessionId &&
+              // started with, and the person's request ran twice. Claude Code's
+              // own refusal is retried even after an init, should one ever come
+              // first: a refused session never ran a turn.
+              const isResumeFailure = msg.sessionId && !msg._resumeRetry && !entry.cancelled && code !== 0 && (!entry.sessionId || entry.missingSession) &&
                 (stderrRef.value.includes('session') || stderrRef.value.includes('resume') || stderrRef.value.includes('not found'));
               if (isResumeFailure) {
                 console.log(`[Chat] Resume failed for session ${msg.sessionId}, retrying fresh`);
@@ -1883,7 +1885,8 @@ wss.on('connection', (ws) => {
             // Only a process that never started its session, as on the
             // interactive path: a turn that answered and then failed is not a
             // resume that failed, and replaying it would run the request twice.
-            const isResumeFailure = msg.sessionId && !msg._resumeRetry && !entry.cancelled && code !== 0 && !entry.sessionId &&
+            // Claude Code's own refusal is retried even after an init.
+            const isResumeFailure = msg.sessionId && !msg._resumeRetry && !entry.cancelled && code !== 0 && (!entry.sessionId || entry.missingSession) &&
               (legacyStderrRef.value.includes('session') || legacyStderrRef.value.includes('resume') || legacyStderrRef.value.includes('not found'));
             if (isResumeFailure) {
               console.log(`[Chat] Resume failed for session ${msg.sessionId}, retrying fresh`);

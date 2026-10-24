@@ -693,6 +693,41 @@ describe('talking straight to an agent whose stored session is gone', () => {
     }
   });
 
+  test('a refusal that comes after an init is still started again fresh', async () => {
+    // Claude Code is not known to send its init before refusing, and nothing
+    // promises it never will. A refused session ran no turn, so the init it
+    // sent first is no reason to leave the person's message unanswered.
+    const convoId = h.freshConvoId('stale-after-init');
+    seed(convoId, { agentId: 'chief-of-staff', sessionId: 'dead-orch-ee', sessionIds: [{ agentId: 'chief-of-staff', sessionId: 'dead-orch-ee' }] });
+    scenario([{ match: { promptIncludes: 'ASK-EE' }, turn: [{ text: 'FRESH-EE' }] }], ['dead-orch-ee'], { refusalAfterInit: true });
+    h.clearInvocations();
+    const since = client.messages.length;
+    client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: 'ASK-EE hi', sessionId: 'dead-orch-ee' });
+    await waitForResult(convoId, 'FRESH-EE', since, 'the fresh start answers');
+    const info = messagesFor(convoId, since).find(m => m.subtype === 'info');
+    assert.strictEqual(info.expiredSessionId, 'dead-orch-ee');
+    assert.deepStrictEqual(spawnsFor(convoId).map(i => i.resume), ['dead-orch-ee', null], 'refused once, then started fresh');
+    assertNoRawRefusal(convoId, since);
+    h.reapConvo(convoId);
+  });
+
+  test('the legacy spawn starts a refusal that came after an init again fresh too', async () => {
+    const convoId = h.freshConvoId('stale-after-init-legacy');
+    seed(convoId, { agentId: 'chief-of-staff', sessionId: 'dead-orch-ff', sessionIds: [{ agentId: 'chief-of-staff', sessionId: 'dead-orch-ff' }] });
+    scenario([{ match: { promptIncludes: 'ASK-FF' }, turn: [{ text: 'FRESH-FF' }] }], ['dead-orch-ff'], { refusalAfterInit: true });
+    h.clearInvocations();
+    process.env.RUNDOCK_LEGACY_SPAWN = '1';
+    try {
+      const since = client.messages.length;
+      client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: 'ASK-FF hi', sessionId: 'dead-orch-ff' });
+      await waitForResult(convoId, 'FRESH-FF', since, 'the fresh start answers');
+      assert.strictEqual(messagesFor(convoId, since).find(m => m.subtype === 'info').expiredSessionId, 'dead-orch-ff');
+      assert.deepStrictEqual(spawnsFor(convoId).map(i => i.resume), ['dead-orch-ff', null], 'refused once, then started fresh');
+    } finally {
+      delete process.env.RUNDOCK_LEGACY_SPAWN;
+    }
+  });
+
   test('a second message sent while the refused resume is still starting is answered after the first', async () => {
     const convoId = h.freshConvoId('stale-direct-follow');
     const record = seed(convoId, {

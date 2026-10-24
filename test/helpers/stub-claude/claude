@@ -41,7 +41,8 @@
 //                                    // id it has no session file for
 //     "refusalExitMs": 0,            // how long the refused process lingers
 //     "refusalSplitAt": 0,           // write the refusal line in pieces
-//     "refusalPreamble": "..." }     // stderr written just before the refusal
+//     "refusalPreamble": "...",      // stderr written just before the refusal
+//     "refusalAfterInit": false }    // send the init envelope before refusing
 // A crash rule may give "stderrChunks": [...] to write its stderr in pieces.
 // Any rule may give "exitAfterTurn": n to exit with code n after its turn.
 // First matching rule wins; rules are re-read from disk on every message so
@@ -216,6 +217,9 @@ if (REFUSED_RESUME) {
   ];
   const wait = Number(TOP.refusalExitMs) || 0;
   const finish = () => (wait > 0 ? setTimeout(() => exitWhenWritten(1), wait) : exitWhenWritten(1));
+  // `refusalAfterInit` sends the init envelope for the refused id first. The
+  // real binary is not known to, but nothing guarantees the order either.
+  if (TOP.refusalAfterInit) { writeOut(fx.toLines([fx.init(RESUME)])); initSent = true; }
   writePieces(pieces, finish);
 }
 
