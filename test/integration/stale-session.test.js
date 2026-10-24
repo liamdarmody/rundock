@@ -300,6 +300,9 @@ describe('a message sent while a refused delegate is still starting', () => {
     const prompts = h.promptsFor('content-lead');
     assert.strictEqual(prompts.length, 2, 'the brief and the follow-up, each once');
     assert.match(prompts[0], /BRIEF-ONE q/, 'the brief first');
+    assert.match(prompts[0], /ASK-Q please/, 'holding the conversation as it stood when the delegation began');
+    assert.ok(!prompts[0].includes('FOLLOW-Q'),
+      'and not the follow-up, which arrives on its own: in the brief as well, the delegate read it twice');
     assert.strictEqual(prompts[1], 'FOLLOW-Q one more thing', 'then what the person sent');
     assertNoRawRefusal(convoId, since);
     h.reapConvo(convoId);
