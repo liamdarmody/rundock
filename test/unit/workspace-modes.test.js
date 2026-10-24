@@ -541,6 +541,39 @@ describe('state + conversation persistence', () => {
     assert.strictEqual(env2.RUNDOCK_CONVO_ID, undefined);
   });
 
+  // WHAT RUNDOCK DECIDES FOR AN AGENT IS NEVER INHERITED. The spawn copies the
+  // environment Rundock was launched with, and the permission hook reads Code
+  // mode from RUNDOCK_CODE_MODE alone, so one set where Rundock was started (a
+  // launch agent, a terminal) put a Notes workspace under Code-mode grading.
+  // RUNDOCK_CONVO_ID is the conversation the hook says it is asking for, and a
+  // routine's agent, which has none, carried whatever the launch named.
+  function withInherited(name, value, fn) {
+    const had = Object.prototype.hasOwnProperty.call(process.env, name);
+    const was = process.env[name];
+    process.env[name] = value;
+    try { return fn(); } finally { if (had) process.env[name] = was; else delete process.env[name]; }
+  }
+
+  test('getSpawnEnv: an inherited RUNDOCK_CODE_MODE never reaches a Notes workspace\'s agent', () => {
+    useWorkspace({});
+    withInherited('RUNDOCK_CODE_MODE', '1', () => {
+      srv.writeState({ workspaceMode: 'notes' });
+      assert.strictEqual(srv.getSpawnEnv('convo-1').RUNDOCK_CODE_MODE, undefined, 'Notes: the inherited flag is cleared');
+      srv.writeState({});
+      assert.strictEqual(srv.getSpawnEnv('convo-1').RUNDOCK_CODE_MODE, undefined, 'and with no mode stored');
+      srv.writeState({ workspaceMode: 'code' });
+      assert.strictEqual(srv.getSpawnEnv('convo-1').RUNDOCK_CODE_MODE, '1', 'Code mode is still set where Rundock decides it');
+    });
+  });
+
+  test('getSpawnEnv: an inherited RUNDOCK_CONVO_ID never names a conversation for an agent', () => {
+    useWorkspace({});
+    withInherited('RUNDOCK_CONVO_ID', 'inherited-convo', () => {
+      assert.strictEqual(srv.getSpawnEnv(null).RUNDOCK_CONVO_ID, undefined, 'an agent with no conversation names none');
+      assert.strictEqual(srv.getSpawnEnv('convo-7').RUNDOCK_CONVO_ID, 'convo-7', 'and one with a conversation names its own');
+    });
+  });
+
   test('getBareArgs: add-dir always; settings/mcp-config only when files exist', () => {
     const dir = useWorkspace({});
     assert.deepStrictEqual(srv.getBareArgs(), ['--add-dir', dir]);

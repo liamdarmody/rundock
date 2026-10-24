@@ -77,22 +77,42 @@ const DEPENDENCY_KEYS = ['dependencies', 'devDependencies', 'optionalDependencie
 // times in seconds per row (a row that boots a document and mounts frames is
 // not a row that grades a string), so equal row counts put one shard at its
 // thirty-minute limit while others finished in four. Each harness is weighted
-// by its measured seconds per row (test/tools/mutation-costs.json), and a
-// shard is planned at ten minutes, so a slice whose rows run slower than its
-// harness's average still lands well under fifteen.
+// by its measured seconds per row (test/tools/mutation-costs.json), a harness
+// split across shards by what each of its rows is inferred to take, and a
+// shard is planned at ten minutes, so a slice whose rows run slower than
+// estimated still lands well under fifteen.
 const SECONDS_PER_SHARD = 600;
-const MAX_SHARDS = 10;
+// Raised from ten when the full set, planned at its measured costs, put a
+// capped shard past fifteen minutes: the cap holds the shard count, so more
+// rows than it fits stretch every shard instead of adding one.
+const MAX_SHARDS = 12;
 const COSTS_FILE = 'mutation-costs.json';
 const FALLBACK_SECONDS_PER_ROW = 5;
 
-/** Seconds per row for each harness, and the default for one not measured. */
+/**
+ * Seconds per row for each harness (measured: a harness's time over its
+ * rows), the default for one not measured, and, for a harness split across
+ * shards, seconds for each row by its label (`perLabel[tool][label]`).
+ * Within one harness a row can take a hundred times another (a mutant that
+ * turns a hundred slow tests red against one that grades a string), and such
+ * rows sit together, so a harness cut by row count put one slice past its
+ * job's limit while the others finished in minutes.
+ *
+ * THE COSTS BY LABEL ARE INFERRED, NOT MEASURED: no run records a row's own
+ * time, so each slice's measured time is shared among its rows in
+ * proportion to one plus the tests each turned red. A label keeps its cost
+ * when rows are added around it. A row with no cost of its own is planned at
+ * its harness's rate, or, where it reads an integration suite, at the rate
+ * inferred for that harness's integration rows (`perIntegration[tool]`),
+ * which start a server and run slower than the rest.
+ */
 function readCosts(toolsDir = TOOLS) {
   try {
     const doc = JSON.parse(fs.readFileSync(path.join(toolsDir, COSTS_FILE), 'utf8'));
     const fallback = Number(doc.defaultSecondsPerRow) > 0 ? Number(doc.defaultSecondsPerRow) : FALLBACK_SECONDS_PER_ROW;
-    return { perRow: doc.secondsPerRow || {}, fallback };
+    return { perRow: doc.secondsPerRow || {}, perLabel: doc.secondsPerRowLabel || {}, perIntegration: doc.secondsPerIntegrationRow || {}, fallback };
   } catch {
-    return { perRow: {}, fallback: FALLBACK_SECONDS_PER_ROW };
+    return { perRow: {}, perLabel: {}, perIntegration: {}, fallback: FALLBACK_SECONDS_PER_ROW };
   }
 }
 
@@ -127,6 +147,8 @@ function loadHarnesses({ toolsDir = TOOLS, root = ROOT } = {}) {
       if (!Array.isArray(rows) || !rows.length) throw new Error('it exports no MUTATIONS');
       const sources = new Set();
       const suites = new Set();
+      const rowLabels = [];
+      const rowSuites = [];
       for (const row of rows) {
         const target = Array.isArray(row) && row[0] && typeof row[0] === 'object' ? row[0] : mod.TARGET;
         if (!target || typeof target.src !== 'string' || typeof target.suite !== 'string') {
@@ -134,9 +156,11 @@ function loadHarnesses({ toolsDir = TOOLS, root = ROOT } = {}) {
         }
         sources.add(rel(realRoot, real(path.resolve(root, target.src))));
         suites.add(suiteFile(target.suite));
+        rowLabels.push(Array.isArray(row) ? row.find((v) => typeof v === 'string') || '' : String(row));
+        rowSuites.push(suiteFile(target.suite));
       }
       const guarded = new Set([own, ...sources, ...suites]);
-      return { tool, file: own, rows: rows.length, sources: [...sources], suites: [...suites], guarded: [...guarded] };
+      return { tool, file: own, rows: rows.length, sources: [...sources], suites: [...suites], rowLabels, rowSuites, guarded: [...guarded] };
     } catch (e) {
       return { tool, file: own, rows: null, error: e.message, guarded: [own] };
     }
@@ -381,7 +405,8 @@ function dependencyChangeIn(changed, { root = ROOT, base, head = null, git = git
 /**
  * Pack the selected harnesses into shards, by estimated time.
  *
- * Each harness costs its rows times its measured seconds per row. The unit of
+ * Each harness costs its rows times its measured seconds per row, or, where
+ * the cost table infers a cost for each row, the sum of those. The unit of
  * work is a harness, or a slice of rows within a harness too slow for one
  * shard. The shard count is the estimated total over the per-shard target,
  * capped; units are placed slowest first onto the least-loaded shard.
@@ -393,18 +418,45 @@ function planShards(harnesses, { costs = { perRow: {}, fallback: FALLBACK_SECOND
     const r = Number(costs.perRow && costs.perRow[tool]);
     return r > 0 ? r : costs.fallback;
   };
-  const items = harnesses.map((h) => ({ tool: h.tool, rows: h.rows || 0, perRow: rate(h.tool) }));
+  // What each row costs, where the harness has costs by label and its rows
+  // are known by label; null where every row costs the same. A row with no
+  // cost of its own that reads an integration suite is planned at the rate
+  // inferred for its harness's integration rows.
+  const rowCosts = (h) => {
+    const byLabel = costs.perLabel && costs.perLabel[h.tool];
+    if (!byLabel || !Array.isArray(h.rowLabels) || h.rowLabels.length !== h.rows) return null;
+    const integration = Number(costs.perIntegration && costs.perIntegration[h.tool]);
+    const fallbackFor = (i) => (integration > 0 && Array.isArray(h.rowSuites) && String(h.rowSuites[i]).startsWith('test/integration/') ? integration : rate(h.tool));
+    return h.rowLabels.map((l, i) => (Number(byLabel[l]) > 0 ? Number(byLabel[l]) : fallbackFor(i)));
+  };
+  const items = harnesses.map((h) => ({ tool: h.tool, rows: h.rows || 0, perRow: rate(h.tool), costs: rowCosts(h) }));
+  const sum = (list) => list.reduce((n, c) => n + c, 0);
+  const estimate = (h) => (h.costs ? sum(h.costs) : h.rows * h.perRow);
   const total = items.reduce((n, h) => n + h.rows, 0);
-  const seconds = items.reduce((n, h) => n + h.rows * h.perRow, 0);
+  const seconds = items.reduce((n, h) => n + estimate(h), 0);
   if (!items.length) return { shards: [], total: 0, seconds: 0 };
   const count = Math.max(1, Math.min(maxShards, Math.ceil(seconds / target)));
   const cap = Math.max(target, seconds / count);
   const round = (n) => Math.round(n);
   const units = [];
   for (const h of items) {
-    const est = h.rows * h.perRow;
+    const est = estimate(h);
     if (!h.rows || est <= cap) { units.push({ tool: h.tool, rows: h.rows, seconds: round(est) }); continue; }
     const pieces = Math.ceil(est / cap);
+    if (h.costs) {
+      // Cut where the time, not the row count, reaches each piece's share.
+      let start = 0;
+      let spent = 0;
+      for (let i = 0, piece = 1; i < h.rows; i++) {
+        spent += h.costs[i];
+        if (i === h.rows - 1 || (piece < pieces && spent >= (est * piece) / pieces)) {
+          units.push({ tool: h.tool, start, end: i + 1, rows: i + 1 - start, seconds: round(sum(h.costs.slice(start, i + 1))) });
+          start = i + 1;
+          piece++;
+        }
+      }
+      continue;
+    }
     const size = Math.ceil(h.rows / pieces);
     for (let start = 0; start < h.rows; start += size) {
       const end = Math.min(h.rows, start + size);

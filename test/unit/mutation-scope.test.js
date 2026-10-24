@@ -286,6 +286,79 @@ describe('shards are planned by time, not rows', () => {
     for (const s of shards) assert.ok(s.seconds <= SECONDS_PER_SHARD * 1.1, `shard ${s.index} is planned at ${s.seconds}s`);
   });
 
+  test('a harness whose rows differ in cost is split by time, not rows', () => {
+    // Slow rows sit together. Cut by row count, the slice holding them ran
+    // past its job's limit while the others finished in minutes; weighted by
+    // what each row is estimated to take, the cut follows the time.
+    const rowLabels = Array.from({ length: 200 }, (_, i) => `row ${i}`);
+    const mixed = { tool: 'mixed', rows: rowLabels.length, rowLabels };
+    const slow = Object.fromEntries(rowLabels.slice(0, 60).map((l) => [l, 20]));
+    const weighted = { ...costs, perLabel: { mixed: slow } };
+    const cost = (i) => (i < 60 ? 20 : 5);
+    const { shards, seconds } = planShards([mixed], { costs: weighted });
+    assert.strictEqual(seconds, 60 * 20 + 140 * 5, 'a row costs what is given for its label, else its harness rate');
+    const units = shards.flatMap((s) => s.units).sort((a, b) => a.start - b.start);
+    assert.ok(units.length >= 2, 'the harness is split');
+    for (const u of units) {
+      let real = 0;
+      for (let i = u.start; i < u.end; i++) real += cost(i);
+      assert.strictEqual(u.seconds, real, `rows ${u.start}:${u.end} are planned at what they cost`);
+      assert.ok(real <= SECONDS_PER_SHARD * 1.1, `rows ${u.start}:${u.end} cost ${real}s, within a shard`);
+    }
+    assert.ok(units[0].rows < units[units.length - 1].rows, 'the slice of slow rows holds fewer rows');
+    const covered = units.flatMap((u) => [...Array(u.end - u.start).keys()].map((i) => i + u.start));
+    assert.deepStrictEqual(covered, [...Array(rowLabels.length).keys()], 'every row once, in order');
+  });
+
+  test('an integration row with no cost of its own is planned at its harness\'s integration rate', () => {
+    // Integration rows start a server and run several times slower than the
+    // rest, so a new one planned at the harness's average was planned short.
+    const rowLabels = ['known', 'new unit', 'new integration'];
+    const rowSuites = ['test/unit/a.test.js', 'test/unit/b.test.js', 'test/integration/c.test.js'];
+    const h = { tool: 'mixed', rows: 3, rowLabels, rowSuites };
+    const priced = { ...costs, perLabel: { mixed: { known: 2 } }, perIntegration: { mixed: 30 } };
+    assert.strictEqual(planShards([h], { costs: priced }).seconds, 2 + 5 + 30, 'its own cost, its harness rate, its integration rate');
+    assert.strictEqual(planShards([h], { costs: { ...priced, perIntegration: {} } }).seconds, 2 + 5 + 5, 'with no integration rate, its harness rate');
+    const c = readCosts(path.join(REPO, 'test', 'tools'));
+    assert.ok(Object.keys(c.perIntegration).length >= 1, 'sanity: the table has integration rates');
+    for (const [tool, r] of Object.entries(c.perIntegration)) {
+      assert.ok(Number(r) > Number(c.perRow[tool]), `${tool}: integration rows are planned above the harness average`);
+    }
+  });
+
+  test('a harness is read with the suite each row runs', () => {
+    const hs = loadHarnesses({ toolsDir: path.join(REPO, 'test', 'tools'), root: REPO });
+    for (const h of hs) {
+      assert.ok(Array.isArray(h.rowSuites) && h.rowSuites.length === h.rows, `${h.tool}: one suite per row`);
+      for (const s of h.rowSuites) assert.ok(h.suites.includes(s), `${h.tool}: ${s} is one of its suites`);
+    }
+  });
+
+  test('a harness is read with the label of each row', () => {
+    const hs = loadHarnesses({ toolsDir: path.join(REPO, 'test', 'tools'), root: REPO });
+    for (const h of hs) {
+      assert.ok(Array.isArray(h.rowLabels) && h.rowLabels.length === h.rows, `${h.tool}: one label per row`);
+      assert.ok(h.rowLabels.every((l) => typeof l === 'string' && l.length > 0), `${h.tool}: every row has a label`);
+    }
+  });
+
+  test('the inferred costs by label name rows that exist', () => {
+    // A label renamed or removed falls back to its harness's rate, which is
+    // safe, but a table that names nothing that exists measures nothing.
+    const tools = path.join(REPO, 'test', 'tools');
+    const { perLabel } = readCosts(tools);
+    const hs = loadHarnesses({ toolsDir: tools, root: REPO });
+    assert.ok(Object.keys(perLabel).length >= 1, 'sanity: the table has costs by label');
+    for (const [tool, labels] of Object.entries(perLabel)) {
+      const h = hs.find((x) => x.tool === tool);
+      assert.ok(h, `${tool} has costs by label but is not on disk`);
+      const known = new Set(h.rowLabels);
+      const named = Object.keys(labels);
+      assert.ok(named.filter((l) => known.has(l)).length >= named.length * 0.9, `${tool}: most labels with a cost are rows today`);
+      for (const v of Object.values(labels)) assert.ok(Number(v) > 0, `${tool}: every cost is positive`);
+    }
+  });
+
   test('every row lands in exactly one shard', () => {
     const hs = [h('slow', 271), h('fast', 262), h('unmeasured', 217), h('a', 127), h('b', 95), h('c', 58)];
     const { shards } = planShards(hs, { costs });

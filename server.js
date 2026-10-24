@@ -18,7 +18,7 @@ const PKG_VERSION = require('./package.json').version;
 const searchLib = require('./search.js');
 const { resolvePermissionConvoId } = require('./permission-routing.js');
 const { normalizeWorkspaceMode } = require('./lib/workspace/mode.js');
-const { resolveMarkers, noteHandoffMarker, HANDOFF_MODES } = require('./lib/delegation/markers.js');
+const { resolveMarkers, noteHandoffMarker, HANDOFF_MODES, stripRundockMarkers } = require('./lib/delegation/markers.js');
 const { createHandbackBuilder } = require('./lib/delegation/handback.js');
 const { createDelegationRecord, attachDelegationRecord } = require('./lib/delegation/state.js');
 const config = require('./lib/config.js');
@@ -368,35 +368,14 @@ function extractSnippet(text, query, contextChars = 60) {
   return snippet;
 }
 
-// Strip RUNDOCK markers from text (server-side mirror of client stripRundockMarkers).
-// Used to sanitize specialist output before injecting into orchestrator prompts.
-function stripRundockMarkers(t) {
-  return t
-    .replace(/<!-- RUNDOCK:DELEGATE agent=[\w-]+ -->\n?[\s\S]*/g, '')
-    .replace(/<!-- RUNDOCK:RETURN -->/g, '')
-    .replace(/<!-- RUNDOCK:COMPLETE -->/g, '')
-    .replace(/<!-- RUNDOCK:CONTINUE -->/g, '')
-    .replace(/<!-- RUNDOCK:DOCS_GAP[^>]*-->/g, '')
-    .replace(/<!-- RUNDOCK:(?:SAVE|CREATE)_AGENT name=[\w-]+ -->[\s\S]*?<!-- \/RUNDOCK:(?:SAVE|CREATE)_AGENT -->/g, '')
-    .replace(/<!-- RUNDOCK:SAVE_SKILL name=[\w-]+ -->[\s\S]*?<!-- \/RUNDOCK:SAVE_SKILL -->/g, '')
-    .replace(/<!-- RUNDOCK:DELETE_(?:SKILL|AGENT) name=[\w-]+ -->/g, '');
-}
+// stripRundockMarkers lives with the markers (lib/delegation/markers.js), and
+// which session lines are Rundock's own beside them (rundock-lines.js).
+const rundockLines = require('./lib/delegation/rundock-lines.js');
 
 // Check whether a silent-park response is effectively empty (sentinel, near-empty, or no-op).
 // Returns true if the response should be treated as empty and not appended to transcript.
-function isSilentParkResponse(text) {
-  if (!text) return true;
-  // Strip the <silent> sentinel
-  let cleaned = text.replace(/<silent>/gi, '').trim();
-  // Strip RUNDOCK markers that might wrap the sentinel
-  cleaned = stripRundockMarkers(cleaned).trim();
-  // Treat as empty if under 10 non-whitespace chars or matches known no-op patterns
-  const nonWs = cleaned.replace(/\s/g, '');
-  if (nonWs.length < 10) return true;
-  const noOpPatterns = ['No response requested.', 'OK', 'Understood.', 'Acknowledged.'];
-  if (noOpPatterns.includes(cleaned)) return true;
-  return false;
-}
+// One test, shared with the history and the message counts (rundock-lines.js).
+const isSilentParkResponse = rundockLines.isSilentParkResponse;
 
 // Prepare specialist output for injection into orchestrator handback prompt.
 // Strips markers, trims whitespace, and caps length to avoid blowing context.
@@ -438,6 +417,40 @@ function getSessionJsonlPath(sessionId) {
   return null;
 }
 
+// CLAUDE CODE'S OWN NOTES, written as the person's message though the person
+// never wrote them, hidden here as Claude Code itself hides them. Skipped by
+// the history and the message counts alike.
+//
+// Its display rule, in its own order. Only a user line can be a note; a reply
+// is shown whatever it carries. The summary it leaves when it compacts a
+// session ("This session is being continued from a previous conversation...")
+// is hidden. A meta line, which Claude Code uses for reminders, hook context,
+// skill bodies, task notices, a custom command's expanded prompt and
+// continuations, is shown only when a person or a peer sent it (a teammate is
+// a peer), whatever else it carries: Claude Code stamps a prompt id on every
+// user line it keeps, a tool result's included, so a prompt id says nothing
+// here. A task notification, Claude Code telling the agent a task finished,
+// is hidden: Rundock never shows one live. A line seen only in Claude Code's
+// transcript view, or a virtual one, is hidden. Anything else is shown, which
+// is how Rundock's own prompts on stdin arrive (the repo's capture records
+// them with a prompt id, turn origin "sdk" and no meta mark), and the command
+// as typed. The origin kinds are the SDK's (SDKMessageOrigin).
+function isClaudeCodeNote(obj) {
+  if (!obj || obj.type !== 'user') return false;
+  if (obj.isCompactSummary === true) return true;
+  if (obj.isMeta === true) return !sentByPersonOrPeer(obj.origin);
+  if (isTaskNotification(obj)) return true;
+  return obj.isVirtual === true || obj.isVisibleInTranscriptOnly === true;
+}
+function sentByPersonOrPeer(origin) {
+  const kind = origin && origin.kind;
+  return kind === 'human' || kind === 'peer';
+}
+// Marked either way in the capture: the origin's kind and the turn origin.
+function isTaskNotification(obj) {
+  return (!!obj.origin && obj.origin.kind === 'task-notification') || obj.turnOrigin === 'task_notification';
+}
+
 async function parseSessionHistory(sessionId, limit = 20, offset = 0) {
   const filePath = getSessionJsonlPath(sessionId);
   if (!filePath) return { messages: [], totalCount: 0, hasMore: false };
@@ -451,6 +464,7 @@ async function parseSessionHistory(sessionId, limit = 20, offset = 0) {
   for await (const line of rl) {
     try {
       const obj = JSON.parse(line);
+      if (isClaudeCodeNote(obj)) continue;
       // User text messages (not tool results)
       if (obj.type === 'user' && obj.message && typeof obj.message.content === 'string') {
         displayable.push({ role: 'user', content: obj.message.content, timestamp: obj.timestamp || null });
@@ -527,14 +541,13 @@ function readSessionMessageCount(filePath) {
     if (!line) continue;
     let obj;
     try { obj = JSON.parse(line); } catch (e) { continue; }
+    if (isClaudeCodeNote(obj)) continue;
     // User text turns: tool_result entries have array content and are excluded
     // by the typeof === 'string' guard.
     if (obj.type === 'user' && obj.message && typeof obj.message.content === 'string') {
-      const text = obj.message.content;
-      // Skip Rundock-injected priming messages: these aren't user-visible bubbles.
-      if (text.startsWith('CONVERSATION SO FAR:') ||
-          text.startsWith('[SYSTEM:') ||
-          text.startsWith('[DELEGATION BRIEF]')) continue;
+      // Skip Rundock's own prompts: these aren't user-visible bubbles. The one
+      // list the history uses too (lib/delegation/rundock-lines.js).
+      if (rundockLines.isRundockPrompt(obj.message.content)) continue;
       count++;
       continue;
     }
@@ -545,8 +558,8 @@ function readSessionMessageCount(filePath) {
         .filter(b => b.type === 'text' && b.text && b.text.trim())
         .map(b => b.text);
       if (textParts.length === 0) continue;
-      // Skip resume ghosts: empty placeholder bubbles emitted on session resume.
-      if (textParts.join('\n\n').trim() === 'No response requested.') continue;
+      // Skip resume ghosts and the <silent> sentinel, as the history does.
+      if (rundockLines.isRundockReply(textParts.join('\n\n'))) continue;
       count++;
     }
   }
@@ -658,6 +671,7 @@ claudeRuntime.wireClaudeRuntimeDeps({
   // Every Claude turn runs under the same answer-file guard as a Codex turn.
   onClaudeSpawn: (proc, { convoId, agentId }) => watchClaudeTurns(proc, {
     workspace: config.getWorkspace(),
+    convoId,
     onChange: (change) => codexGlue.surfaceAnswerFileChange({ agentId, processId: null }, convoId, change, 'claude'),
   }),
 });
@@ -1465,7 +1479,9 @@ const wsHandlerContext = {
     invalidateFileListCache, invalidateFileTreeCache, noteExtensionRecordsChanged, watchOpenFile,
     fileTreeForSend, broadcastFileTree, armFileTreeWatcher,
   },
-  runtime: { getRuntimeStatus, killAllChildren, cleanOrphanedProcesses },
+  // requestServerPermission: the card a handler raises before acting for an
+  // agent (an agent's connector change, in team.js).
+  runtime: { getRuntimeStatus, killAllChildren, cleanOrphanedProcesses, requestServerPermission },
   signals: { reportStartup, phaseTimer },         // startup telemetry (recordEvent is lib-owned)
   broadcast: safeSend,
   config,                                         // lib/config module: getWorkspace at use time
@@ -2600,7 +2616,8 @@ function getRuntimeStatus() {
 // asked. Only those fields pass.
 const SERVER_REQUEST_FIELDS = ['code_mode_verdict', 'boundary', 'resolved_path', 'grant_dir', 'crossings', 'answer_file', 'put_back'];
 function requestServerPermission({ convoId, toolName, toolInput, onDecision, grading }) {
-  const requestId = 'perm-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  // An id nothing can guess: an answer is matched to its card by this alone.
+  const requestId = 'perm-' + require('crypto').randomBytes(16).toString('hex');
   pendingPermissionRequests.set(requestId, {
     onDecision,
     conversationId: convoId,

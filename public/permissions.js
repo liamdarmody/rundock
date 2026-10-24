@@ -167,6 +167,10 @@
       // graded medium, and what it can remember is a folder, never the tool.
       return (input && input.graded === 'boundary') ? 'medium' : 'high';
     }
+    // An agent's connector change, raised by the server before it writes
+    // .mcp.json: a stdio server is a command run outside the sandbox. High, so
+    // it is carded ahead of every standing allow and never offers one.
+    if (toolName === 'SaveConnector' || toolName === 'DeleteConnector') return 'high';
     if (toolName.startsWith('mcp__')) {
       // MCP reads auto-approve in the permission hook, so by the time a request
       // reaches the card it's a write or destructive action. Flag destructive ones
@@ -235,6 +239,8 @@
     } else if (toolName === 'Read') {
       summary = 'Read a file';
       detail = input.file_path || '';
+    } else if (toolName === 'SaveConnector' || toolName === 'DeleteConnector') {
+      ({ summary, context, detail } = connectorCopy(toolName, input));
     } else if (toolName.startsWith('mcp__')) {
       const parts = toolName.split('__');
       const server = connectorServerName(toolName);
@@ -246,6 +252,75 @@
       detail = JSON.stringify(input).substring(0, 200);
     }
     return { summary, context, detail };
+  }
+
+  // THE CARD FOR AN AGENT'S CONNECTOR CHANGE: the server, and exactly what it
+  // would run (the command and its arguments, quoted as a shell would need
+  // them) or reach (its URL), with the names of what is set for it.
+  //
+  // A CONTROL CHARACTER IS SHOWN, NEVER ACTED ON. Each detail line is drawn on
+  // a line of its own, so a line break inside an argument, a URL or a helper
+  // would draw a line of the agent's choosing, such as a `URL:` line naming a
+  // server it would not reach; others hide or reorder text. A word holding one
+  // is quoted the way a shell writes it, `$'...'`, and any other value is
+  // shown in double quotes, each such character by its escape. Built from
+  // code points so the source holds none of them itself.
+  const hex4 = n => n.toString(16).padStart(4, '0');
+  const CONTROL_RANGES = [[0x00, 0x1f], [0x7f, 0x9f], [0x200e, 0x200f], [0x2028, 0x2029], [0x202a, 0x202e], [0x2066, 0x2069]];
+  const CONTROL = new RegExp(`[${CONTROL_RANGES.map(([a, b]) => `\\u${hex4(a)}-\\u${hex4(b)}`).join('')}]`);
+  const CONTROL_ALL = new RegExp(CONTROL.source, 'g');
+  const SHORT_ESCAPE = { '\n': '\\n', '\r': '\\r', '\t': '\\t' };
+  const escapeControl = s => s.replace(CONTROL_ALL, c => SHORT_ESCAPE[c] || `\\u${hex4(c.charCodeAt(0))}`);
+  function shellWord(a) {
+    const s = String(a);
+    if (CONTROL.test(s)) return `$'${escapeControl(s.replace(/\\/g, '\\\\').replace(/'/g, "\\'"))}'`;
+    return /^[\w@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, "'\\''")}'`;
+  }
+  function shownValue(v) {
+    const s = String(v);
+    return CONTROL.test(s) ? `"${escapeControl(s.replace(/\\/g, '\\\\').replace(/"/g, '\\"'))}"` : s;
+  }
+  // THE NAMES ARE THE AGENT'S WORDS. An environment, header or setting name
+  // comes from the entry the agent wrote, so only a plain name is said in a
+  // sentence; anything else is shown JSON-quoted on a line of its own in the
+  // detail, where it cannot read as Rundock speaking. Header names are HTTP
+  // tokens. A command, a URL and a header helper are always detail lines.
+  const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+  const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
+  const SETTING_NAME = /^[A-Za-z_][A-Za-z0-9_-]*$/;
+  function connectorCopy(toolName, input) {
+    const i = input || {};
+    const list = v => (Array.isArray(v) ? v.map(String) : []);
+    const runs = typeof i.command === 'string' ? [i.command, ...list(i.args)].map(shellWord).join(' ') : '';
+    const removing = toolName === 'DeleteConnector';
+    const verb = removing ? 'Remove' : (i.action === 'replace' ? 'Change' : 'Add');
+    const lines = [];
+    if (runs) lines.push(runs);
+    if (typeof i.url === 'string') lines.push(`URL: ${shownValue(i.url)}`);
+    if (typeof i.transport === 'string') lines.push(`Transport: ${shownValue(i.transport)}`);
+    const said = [];
+    if (removing) said.push('An agent asked Rundock to remove this connector from .mcp.json, so agents would no longer start it or connect to it.');
+    else if (runs) said.push('An agent asked Rundock to write this into .mcp.json. Claude Code would run this command as its own process, outside the sandbox, whenever an agent starts.');
+    else said.push('An agent asked Rundock to write this into .mcp.json. Agents would connect to it whenever one starts.');
+    if (!removing) {
+      for (const [names, plain, sentence, label] of [
+        [list(i.env), ENV_NAME, 'It would be started with these set', 'Other environment names'],
+        [list(i.headers), HEADER_NAME, 'It would send these headers', 'Other header names'],
+        [list(i.others), SETTING_NAME, 'It also sets', 'Other settings'],
+      ]) {
+        const ok = names.filter(n => plain.test(n));
+        const odd = names.filter(n => !plain.test(n));
+        if (ok.length) said.push(`${sentence}: ${ok.join(', ')}.`);
+        if (odd.length) lines.push(`${label}: ${odd.map(n => escapeControl(JSON.stringify(n))).join(', ')}`);
+      }
+      if (typeof i.headersHelper === 'string') {
+        said.push('Before connecting it would run a command to make its headers, shown below.');
+        lines.push(`Header helper: ${shownValue(i.headersHelper)}`);
+      }
+      if (lines.some(l => /^Other /.test(l))) said.push('It also sets the names shown quoted below.');
+    }
+    said.push('Rundock asks about every connector an agent adds or removes, so there is no Always allow.');
+    return { summary: `${verb} the connector ${i.name || ''}`.trim(), context: said.join(' '), detail: lines.length ? lines.join('\n') : JSON.stringify(i) };
   }
 
   // Key for always-allow matching.
@@ -380,6 +455,7 @@
     'history-rewrite': () => 'This rewrites every commit in the repository\'s history.',
     'worktree-force': () => 'This deletes a working tree even if it holds changes git has never saved.',
     'elevation': () => 'This runs as an administrator, beyond anything Rundock can see or check.',
+    'launch-environment': () => 'This changes what macOS starts, or the settings every program started from now on is given, Rundock included, beyond anything Rundock can see or check.',
     'fetched-code': () => 'This runs a script from the internet without showing it to anyone first.',
     'volumes': () => 'This deletes the Docker volumes for this project, including any database data in them.',
     'disk': () => 'This writes directly to a disk or erases one.',
@@ -457,7 +533,7 @@
   function alwaysAskCopy(crossing) {
     if (!crossing) return null;
     if (crossing.secret) return ALWAYS_ASK_COPY.secret;
-    if (crossing.answerFile) return ALWAYS_ASK_COPY.answerFile;
+    if (crossing.answerFile) return answerFileCopy(crossing.path);
     if (crossing.instructionFile) return ALWAYS_ASK_COPY.instructionFile;
     if (crossing.hiddenHome) return hiddenHomeCopy(crossing.hiddenHome, crossing.write === true);
     if (crossing.persistenceSurface) return ALWAYS_ASK_COPY.persistenceSurface;
@@ -602,7 +678,58 @@
     return null;
   }
 
-  function answerFileCopy() { return ALWAYS_ASK_COPY.answerFile; }
+  // WHICH ANSWER FILE A CARD IS ABOUT, for its words only. Whether a write asks
+  // is the hook's decision (the answer-file registry in
+  // scripts/permission-hook.js); the card reads the kind off the path it already
+  // shows, so every road a request takes here (the hook, a Codex approval, a
+  // replay) is worded alike. `paths` is one path or several; the most serious
+  // kind among them leads.
+  const ANSWER_FILE_COPY = {
+    answers: { summary: 'Wants to change what agents are allowed to do', context: ALWAYS_ASK_COPY.answerFile },
+    launcher: {
+      summary: 'Wants to change Rundock\'s permission checks',
+      context: 'This file starts Rundock\'s permission checks themselves, before every tool an agent uses, '
+        + 'so a change to it can switch every check off. An agent can request a change to it, but never keep the '
+        + 'permission: this asks every time, and there is no option to stop being asked.',
+    },
+    connectorSecrets: {
+      summary: 'Wants to change what runs outside the sandbox',
+      context: 'This file holds connector credentials and the environment each connector is started with, so it decides what '
+        + 'Rundock or Claude Code runs, outside the sandbox. An agent can request a change to it, but never keep the '
+        + 'permission: this asks every time, and there is no option to stop being asked.',
+    },
+    // `.mcp.json` and the `.claude` folder are among Claude Code's own protected
+    // paths: it never approves a write to them on its own, and Rundock runs it
+    // with nobody at its own prompt, so an Allow here may not take effect.
+    runs: {
+      summary: 'Wants to change what runs outside the sandbox',
+      context: 'This file decides what Rundock or Claude Code runs, outside the sandbox. Claude Code protects it too, and may '
+        + 'refuse the change even after you allow it here. An agent can request a change to it, but never keep the '
+        + 'permission: this asks every time, and there is no option to stop being asked.',
+    },
+    // `~/.rundock-console`: the script Rundock opens in Terminal to reconnect.
+    console: {
+      summary: 'Wants to change what Rundock opens in Terminal',
+      context: 'This folder holds the script Rundock opens in Terminal when you reconnect Claude Code, so a change to it '
+        + 'decides what runs on your computer, outside the sandbox, the next time you reconnect. An agent can request a '
+        + 'change to it, but never keep the permission: this asks every time, and there is no option to stop being asked.',
+    },
+  };
+  function answerFileKind(paths) {
+    const kinds = (Array.isArray(paths) ? paths : [paths]).map((p) => {
+      const parts = String(p || '').split(/[\\/]+/).filter(Boolean).map(s => s.toLowerCase());
+      const n = parts.length;
+      if (n >= 2 && parts[n - 2] === '.rundock' && /^permission-hook\.(sh|cmd)$/.test(parts[n - 1])) return 'launcher';
+      if (n >= 2 && parts[n - 2] === '.rundock' && parts[n - 1] === 'mcp-secrets.json') return 'connectorSecrets';
+      if (parts[n - 1] === '.mcp.json' || (n >= 2 && parts[n - 2] === '.claude' && parts[n - 1] === 'settings.json')) return 'runs';
+      if (parts.some((s, i) => s === '.claude' && parts[i + 1] === 'hooks')) return 'runs';
+      if (parts.includes('.rundock-console')) return 'console';
+      return 'answers';
+    });
+    return ['launcher', 'console', 'runs', 'connectorSecrets'].find(k => kinds.includes(k)) || 'answers';
+  }
+  function answerFileCopy(paths) { return ANSWER_FILE_COPY[answerFileKind(paths)].context; }
+  function answerFileSummary(paths) { return ANSWER_FILE_COPY[answerFileKind(paths)].summary; }
 
   // ── The put-back card ────────────────────────────────────────────────────
   // Rundock has already put back a change to one of the workspace's permission
@@ -610,21 +737,30 @@
   // change instead. `putBack` is { runtime: 'claude' | 'codex', outsideTurn,
   // relative }. Approved copy, word for word.
   const PUT_BACK_RUNTIME = { claude: 'Claude Code', codex: 'Codex' };
+  // What each kind of watched file is, for the put-back card's heading and
+  // body: the permission answers keep their approved words.
+  const PUT_BACK_KIND = {
+    answers: { heading: 'Rundock put back a change to your permission answers', is: 'the file that holds your own answers about what agents may do' },
+    launcher: { heading: 'Rundock put back a change to its permission checks', is: 'the file that starts Rundock\'s permission checks' },
+    runs: { heading: 'Rundock put back a change to what runs', is: 'a file that decides what Rundock or Claude Code runs' },
+  };
   function putBackCardCopy(putBack) {
     const p = putBack || {};
     const file = p.relative || 'a permission file';
     const who = PUT_BACK_RUNTIME[p.runtime] || PUT_BACK_RUNTIME.claude;
+    const kindOf = answerFileKind(p.relative);
+    const kind = PUT_BACK_KIND[kindOf === 'connectorSecrets' ? 'runs' : kindOf] || PUT_BACK_KIND.answers;
     return p.outsideTurn ? {
       origin: 'No agent was running when this happened',
       unattributed: true,
-      heading: 'Rundock put back a change to your permission answers',
+      heading: kind.heading,
       body: `${file} changed while no agent was running. Rundock restored it straight away. Keep that change instead?`,
       disclosure: 'Show change', leave: 'Leave it restored', keep: 'Keep the change',
     } : {
       origin: `${who}, running in this conversation`,
       unattributed: false,
-      heading: 'Rundock put back a change to your permission answers',
-      body: `${who} ran a command that changed ${file}, the file that holds your own answers about what agents may do. `
+      heading: kind.heading,
+      body: `${who} ran a command that changed ${file}, ${kind.is}. `
         + 'Rundock restored it straight away. Keep the agent\'s change instead?',
       disclosure: 'Show change', leave: 'Leave it restored', keep: 'Keep the change',
     };
@@ -696,7 +832,7 @@
   // reach the same table, and new callers should use alwaysAskCopy.
   const agentHomeBoundaryCopy = alwaysAskCopy;
 
-  return { BASH_DESCRIPTIONS, bashBin, classifyRisk, describeToolRequest, toolAllowKey, decidePermission, offersAlwaysAllow, alwaysAskCopy, answerFileCopy,
+  return { BASH_DESCRIPTIONS, bashBin, classifyRisk, describeToolRequest, toolAllowKey, decidePermission, offersAlwaysAllow, alwaysAskCopy, answerFileCopy, answerFileSummary, answerFileKind,
     MCP_SEND_VERBS, MCP_DESTRUCTIVE_VERBS, mcpActionWords, connectorServerName, isConnectorSend,
     putBackCardCopy, putBackDiffLines,
     verdictAllowKey, verdictCardCopy, ruleKeyLabel, ALWAYS_ASKS_CLOSING, allowButtonClass,

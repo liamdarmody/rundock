@@ -495,6 +495,7 @@ function judgeCommand(u, ctx, { piped, prev } = {}) {
   if (v === 'taskkill' && /\/fi\b/i.test(texts.join(' ')) && /username/i.test(texts.join(' '))) return always('every-process');
   if (['npm', 'yarn', 'pnpm'].includes(v) && texts[0] === 'publish') return always('publish');
   if (v === 'docker' || v === 'docker-compose') return judgeDocker(v, texts);
+  if (v === 'launchctl') return judgeLaunchctl(a, ctx, piped);
   if (v === 'set-executionpolicy') return once(RULES.executionPolicy);
   if (v === 'gh' && texts[0] === 'pr' && texts[1] === 'merge') return once(RULES.defaultBranch);
   if (v === 'git') return judgeGit(a, ctx);
@@ -533,7 +534,30 @@ function argsUnknown(v, a, ctx) {
   // enough. Anything else could say `-1`, which is every process.
   if (['kill', 'taskkill'].includes(v)) return a.some(w => exp(w) && !pidLookup(w, ctx));
   if (['wsl', 'format', 'diskutil'].includes(v)) return a.some(exp);
+  if (v === 'launchctl') return !!a[0] && exp(a[0]);
   return false;
+}
+
+// MACOS'S LAUNCH SERVICES, graded like elevation. `setenv` and `unsetenv`
+// change the environment every program started from now on inherits, Rundock
+// included the next time it is opened from the Dock; `load`, `bootstrap` and
+// `submit` start a program under launchd, outside anything Rundock sees. So
+// they always ask. Reading (`print`, `list`, `getenv` and the rest) runs as it
+// did. `asuser` and `bsexec` run the command after their argument, which is
+// judged like any other. With no subcommand at the end of a pipe (`xargs
+// launchctl`), the subcommand is only known when it runs.
+const LAUNCHCTL_CHANGES = new Set(['setenv', 'unsetenv', 'load', 'bootstrap', 'submit', 'config']);
+const LAUNCHCTL_CARRIES = new Set(['asuser', 'bsexec']);
+function judgeLaunchctl(args, ctx, piped) {
+  if (!args.length) return piped ? always('unreadable-command') : RUNS;
+  const sub = args[0].text.toLowerCase();
+  if (LAUNCHCTL_CHANGES.has(sub)) return always('launch-environment');
+  if (!LAUNCHCTL_CARRIES.has(sub)) return RUNS;
+  const u = unwrap(args.slice(2), ctx);
+  if (!u) return RUNS;
+  if (u.unreadable) return always('unreadable-command');
+  if (u.elevated) return always('elevation');
+  return judgeCommand(u, ctx, {});
 }
 
 // THE PROCESS-ID LOOKUPS KILL ACCEPTS: `lsof -t` on a port, and `pidof` a
@@ -1089,6 +1113,13 @@ function judgeClean(rest, ctx, top) {
     scopes = [ctx.base];
   }
   if (!top) return always('git-unchecked');
+  // THE WORKSPACE'S OWN `.rundock` FOLDER IS IGNORED, so `-x` and `-X` remove
+  // it: the permission answers, the launcher and the connector secrets, none
+  // of which anything rebuilds. Asked about whenever it is in reach.
+  const rundock = ctx.pmod.join(ctx.workspaceRoot, '.rundock');
+  if ((onlyIgnored || alsoIgnored) && scopes.some(p => under(rundock, p, ctx) || under(p, rundock, ctx))) {
+    return unsaved('unsaved-work', ['.rundock/']);
+  }
   // Ignored files rebuild, except .env files, which nobody can recreate.
   return discard(top, scopes.map(p => relSpec(p, top, ctx)),
     { untracked: !onlyIgnored, env: onlyIgnored || alsoIgnored }, 'unsaved-work', ctx);

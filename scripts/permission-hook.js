@@ -562,14 +562,61 @@ function hiddenHomeRootOf(p, home = os.homedir()) {
 // THE CARD ON THESE IS THE ONLY PROTECTION THEY HAVE. Do not "simplify" it.
 const RUNTIME_GUARDED_ANSWER_FILES = ['.claude/settings.local.json'];
 const RUNDOCK_ANSWER_FILES = ['.rundock/state.json', '.rundock/permissions.json'];
-// The workspace's project settings (`.claude/settings.json`) are answer files
-// too: Claude Code loads them for every agent Rundock spawns here, and they can
-// carry hooks and permission allow rules. They are matched, for this workspace
-// and every other Rundock workspace alike, by isRundockWorkspaceSettingsFile
-// below, and carded rather than refused: the runtime is only measured to refuse
-// the settings file it is launched with.
-const WORKSPACE_ANSWER_FILES = [...RUNDOCK_ANSWER_FILES, ...RUNTIME_GUARDED_ANSWER_FILES];
-function matchesAnswerFileSet(set, resolvedPath, workspaceRoot, foldsCase = hostFoldsCase(), pmod = path) {
+// THE LAUNCHER THIS HOOK IS STARTED THROUGH. lib/workspace/scaffold.js writes
+// `.rundock/permission-hook.sh` (`.cmd` on Windows) and names it in the settings
+// file the runtime is launched with, so the runtime runs it before every tool
+// call, and whatever it says runs in this hook's place: a rewritten launcher
+// can answer every check itself or skip them all. It sits inside the
+// workspace, so a write to it passed as ordinary inside work, in both modes.
+// Kept out of RUNDOCK_ANSWER_FILES, whose entries open the sandbox block's deny
+// list: that list only ever grows at its end (scaffold.js appends it there).
+const LAUNCHER_FILES = ['.rundock/permission-hook.sh', '.rundock/permission-hook.cmd'];
+// THE FILES THAT DECIDE WHAT THE RUNTIME STARTS, outside the shell sandbox.
+// `.mcp.json` is handed to the runtime with --mcp-config (lib/runtime/claude.js),
+// and a stdio server named there starts at the next spawn as its own process.
+// The project's `.claude/settings.json` is loaded for every agent Rundock spawns
+// here and can name hooks, which the runtime runs itself, and an `env`. It was
+// matched only while the workspace held `.rundock/state.json` (see
+// isRundockWorkspaceSettingsFile below); named here, it no longer depends on
+// that. The scripts under `.claude/hooks/` are what those hooks commonly run,
+// so a write to one is a write to the hook: the folder and everything in it.
+// Carded rather than refused: the runtime is only measured to refuse the
+// settings file it is launched with.
+//
+// `.rundock/mcp-secrets.json` supplies the `env` and `headers` each declared
+// server is started with (lib/workspace/mcp-secrets.js), and an `env` such as
+// NODE_OPTIONS changes what a stdio server runs. It holds credentials, and only
+// the person writes it, never Rundock. A `.rundock` name, so it is matched by
+// name in every Rundock workspace, like the launcher.
+const MCP_SECRETS_FILE = '.rundock/mcp-secrets.json';
+const WHAT_RUNS_FILES = ['.mcp.json', '.claude/settings.json', MCP_SECRETS_FILE];
+const WHAT_RUNS_DIRS = ['.claude/hooks'];
+const WORKSPACE_ANSWER_FILES = [...RUNDOCK_ANSWER_FILES, ...RUNTIME_GUARDED_ANSWER_FILES, ...LAUNCHER_FILES, ...WHAT_RUNS_FILES];
+// RUNDOCK'S CONSOLE FOLDER, under the home folder rather than any workspace.
+// It holds the script Rundock opens in Terminal when a person reconnects
+// Claude Code, so whatever it says runs outside every sandbox the moment they
+// press the button. A write there, the folder itself and everything in it, is
+// asked about every time like an answer file, wherever the workspace is: with
+// the workspace at the home folder it is otherwise ordinary work inside it.
+const RUNDOCK_CONSOLE_DIR = '.rundock-console';
+function isRundockConsolePath(resolvedPath, home = os.homedir(), foldsCase = hostFoldsCase(), pmod = path) {
+  return matchesAnswerFileSet([RUNDOCK_CONSOLE_DIR], resolvedPath, home, foldsCase, pmod, true);
+}
+// A glob at the home folder, or inside the console folder, that can match it:
+// `rm -rf ~/.rundock-*`, `rm ~/.rundock-console/*`.
+function globReachesConsole(resolvedPath, home = os.homedir(), foldsCase = hostFoldsCase(), pmod = path) {
+  const folds = foldsCase || pmod === path.win32;
+  const segs = String(resolvedPath).split(/[\\/]+/);
+  const at = segs.findIndex(s => /[*?[]/.test(s));
+  if (at < 0) return false;
+  const dir = foldCase(canonicalize(segs.slice(0, at).join(pmod.sep) || pmod.sep, pmod), folds);
+  const root = foldCase(canonicalize(pmod.resolve(home), pmod), folds);
+  const consoleDir = foldCase(canonicalize(pmod.join(pmod.resolve(home), RUNDOCK_CONSOLE_DIR), pmod), folds);
+  if (dir === consoleDir || dir.startsWith(consoleDir + pmod.sep)) return true;
+  return dir === root && segs[at].startsWith('.') && globSegmentRegex(segs[at], folds).test(RUNDOCK_CONSOLE_DIR);
+}
+// `within`: an entry is a folder, matched with everything under it.
+function matchesAnswerFileSet(set, resolvedPath, workspaceRoot, foldsCase = hostFoldsCase(), pmod = path, within = false) {
   if (typeof resolvedPath !== 'string' || !resolvedPath) return false;
   if (typeof workspaceRoot !== 'string' || !workspaceRoot) return false;
   // Windows paths fold case whatever the host says, which is why the flavour
@@ -584,9 +631,10 @@ function matchesAnswerFileSet(set, resolvedPath, workspaceRoot, foldsCase = host
   const c = foldCase(canonicalize(resolvedPath, pmod), folds);
   // The registry spells its paths with forward slashes, so the segments are
   // split and rejoined in the flavour being compared rather than pasted in.
-  return set.some((f) => (
-    c === foldCase(canonicalize(pmod.join(pmod.resolve(workspaceRoot), ...f.split('/')), pmod), folds)
-  ));
+  return set.some((f) => {
+    const entry = foldCase(canonicalize(pmod.join(pmod.resolve(workspaceRoot), ...f.split('/')), pmod), folds);
+    return c === entry || (within && c.startsWith(entry + pmod.sep));
+  });
 }
 
 // ANOTHER WORKSPACE'S ANSWERS ARE ANSWERS TOO. A folder named as a working
@@ -601,7 +649,19 @@ function isRundockAnswerFileAnywhere(resolvedPath, pmod = path) {
   const parts = resolvedPath.split(/[\\/]+/);
   const n = parts.length;
   const fold = v => (pmod === path.win32 || hostFoldsCase() ? v.toLowerCase() : v);
-  return n >= 2 && fold(parts[n - 2]) === '.rundock' && RUNDOCK_ANSWER_FILES.some(f => fold(f.split('/')[1]) === fold(parts[n - 1]));
+  return n >= 2 && fold(parts[n - 2]) === '.rundock' && [...RUNDOCK_ANSWER_FILES, ...LAUNCHER_FILES, MCP_SECRETS_FILE].some(f => fold(f.split('/')[1]) === fold(parts[n - 1]));
+}
+
+// A Rundock launcher, this workspace's or another's, matched by name like the
+// other `.rundock` files. An agent's write to one is refused before any card:
+// Rundock writes it itself and puts any other change to it back, so an Allow
+// could never hold (LAUNCHER_REFUSAL in main).
+function isLauncherFile(resolvedPath, pmod = path) {
+  if (typeof resolvedPath !== 'string' || !resolvedPath) return false;
+  const parts = resolvedPath.split(/[\\/]+/);
+  const n = parts.length;
+  const fold = v => (pmod === path.win32 || hostFoldsCase() ? v.toLowerCase() : v);
+  return n >= 2 && fold(parts[n - 2]) === '.rundock' && LAUNCHER_FILES.some(f => fold(f.split('/')[1]) === fold(parts[n - 1]));
 }
 
 // A Claude settings file of a Rundock workspace: `.claude/settings.json` or
@@ -615,10 +675,22 @@ function isRundockWorkspaceSettingsFile(resolvedPath) {
   if (path.basename(claudeDir) !== '.claude' || !WORKSPACE_SETTINGS_NAMES.includes(path.basename(resolvedPath))) return false;
   return fs.existsSync(path.join(path.dirname(claudeDir), '.rundock', 'state.json'));
 }
-// An answer file of ANY Rundock workspace: its `.rundock` files by name, and
-// its Claude settings files.
+// The other files that decide what runs in a Rundock workspace, by the same
+// rule: its `.mcp.json`, and anything under its `.claude/hooks/`.
+function isRundockWorkspaceRunsFile(resolvedPath) {
+  if (typeof resolvedPath !== 'string' || !resolvedPath) return false;
+  const isWorkspace = d => fs.existsSync(path.join(d, '.rundock', 'state.json'));
+  if (path.basename(resolvedPath) === '.mcp.json') return isWorkspace(path.dirname(resolvedPath));
+  for (let cur = resolvedPath, up = path.dirname(cur); up !== cur; cur = up, up = path.dirname(cur)) {
+    if (path.basename(cur) === 'hooks' && path.basename(up) === '.claude' && isWorkspace(path.dirname(up))) return true;
+  }
+  return false;
+}
+// An answer file of ANY Rundock workspace: its `.rundock` files by name, its
+// Claude settings files, and the files that decide what runs there.
 function isAnswerFileOfAnyWorkspace(resolvedPath, pmod = path) {
-  return isRundockAnswerFileAnywhere(resolvedPath, pmod) || (pmod === path && isRundockWorkspaceSettingsFile(resolvedPath));
+  return isRundockAnswerFileAnywhere(resolvedPath, pmod)
+    || (pmod === path && (isRundockWorkspaceSettingsFile(resolvedPath) || isRundockWorkspaceRunsFile(resolvedPath)));
 }
 
 // The Rundock workspace, other than the current one, that holds `p`: the
@@ -653,7 +725,8 @@ function isOtherWorkspaceAgentSurface(p, workspaceRoot) {
 // the matcher: the canonicalisation and case-folding rules above were each
 // arrived at by a defect, and a second copy would not inherit them.
 function isWorkspaceAnswerFile(resolvedPath, workspaceRoot, foldsCase = hostFoldsCase(), pmod = path) {
-  return matchesAnswerFileSet(WORKSPACE_ANSWER_FILES, resolvedPath, workspaceRoot, foldsCase, pmod);
+  return matchesAnswerFileSet(WORKSPACE_ANSWER_FILES, resolvedPath, workspaceRoot, foldsCase, pmod)
+    || matchesAnswerFileSet(WHAT_RUNS_DIRS, resolvedPath, workspaceRoot, foldsCase, pmod, true);
 }
 
 // Same matching rules as isWorkspaceAnswerFile, over the runtime-guarded subset.
@@ -688,6 +761,11 @@ function classifyFileAccess(toolName, toolInput, workspaceRoot, extraDirs = [], 
   if (inside && writing && isRuntimeGuardedAnswerFile(resolvedPath, workspaceRoot, foldsCase)) {
     return { where: 'inside', resolvedPath, grantDir: null, answerFile: true, enforcedDeny: 'runtime-settings' };
   }
+  // A launcher, this workspace's or another's: refused the same way, before
+  // any card (isLauncherFile).
+  if (writing && isLauncherFile(resolvedPath)) {
+    return { where: inside ? 'inside' : 'outside', resolvedPath, grantDir: null, answerFile: true, enforcedDeny: 'launcher' };
+  }
   if (writing && !isWorkspaceAnswerFile(resolvedPath, workspaceRoot, foldsCase) && isAnswerFileOfAnyWorkspace(resolvedPath)) {
     // Another workspace's answer file, inside a named folder or not: carded
     // like this workspace's own, never offered as a folder to remember.
@@ -698,8 +776,11 @@ function classifyFileAccess(toolName, toolInput, workspaceRoot, extraDirs = [], 
     // time, never remembered.
     return { where: 'outside', resolvedPath, grantDir: null, agentHome: false, secret: false, persistenceSurface: true, otherWorkspace: true, write: true };
   }
-  if (inside && writing && isWorkspaceAnswerFile(resolvedPath, workspaceRoot, foldsCase)) {
-    // `where` says where the file IS, and this one is inside. It used to say
+  if (writing && isWorkspaceAnswerFile(resolvedPath, workspaceRoot, foldsCase)) {
+    // `where` says where the file IS, and this one is inside, unless a folder
+    // of the workspace's own is a link to somewhere else (a `.claude` kept in a
+    // dotfiles folder, say): the file is still this workspace's, compared by
+    // its real path, and asks as one, with nothing to remember. It used to say
     // 'outside' because that was the only classification that both forced a
     // card and refused a standing grant, and the client then printed "wants to
     // reach outside your workspace" above a path plainly inside the workspace.
@@ -711,7 +792,12 @@ function classifyFileAccess(toolName, toolInput, workspaceRoot, extraDirs = [], 
     // relied on 'outside' to mean "always ask, never remember" reads this flag
     // instead. They are enumerated at the call sites: the code-mode
     // auto-approve, and the decision payload.
-    return { where: 'inside', resolvedPath, grantDir: null, answerFile: true };
+    return { where: inside ? 'inside' : 'outside', resolvedPath, grantDir: null, answerFile: true };
+  }
+  // Rundock's console folder under home, asked about the same way, inside the
+  // workspace or not (see RUNDOCK_CONSOLE_DIR).
+  if (writing && isRundockConsolePath(resolvedPath, home, foldsCase)) {
+    return { where: inside ? 'inside' : 'outside', resolvedPath, grantDir: null, answerFile: true };
   }
   if (inside) return { where: 'inside', resolvedPath };
   // CODE MODE'S DEVELOPMENT PATHS: the temp folders and package caches are
@@ -1204,12 +1290,245 @@ function midChainCd(command) {
   return found && { ...found, to: text.length };
 }
 
+// THE LITERAL FOLDER CHANGES AND `for` LISTS IN A COMMAND, for the answer-file
+// check where the base is unsure (see shellCrossings). Read where the shell
+// runs a word as a command, after a keyword such as `then` or `do` and inside
+// a group as well: { moves: [{ target, at }], loops: [{ name, items }] }, with
+// `at` where the move's segment starts in `text`. A target is kept as written,
+// for the caller to judge whether it is literal. A loop item that expands is
+// not knowable here and is left out.
+function movesAndLoops(text, offset = 0, depth = 0, acc = { moves: [], loops: [] }) {
+  const s = String(text);
+  let from = 0;
+  for (const seg of lexSegments(s)) {
+    const start = s.indexOf(seg.text, from);
+    if (start >= 0) from = start + seg.text.length;
+    const at = offset + Math.max(0, start);
+    const words = lexWords(seg.text);
+    if (depth < 8) {
+      for (const w of words) {
+        const close = { '(': ')', '{': '}' }[w.raw[0]];
+        if (close) movesAndLoops(w.raw.slice(1, w.raw.lastIndexOf(close)), at, depth + 1, acc);
+      }
+    }
+    let i = 0;
+    while (i < words.length - 1 && COMMAND_LEADS.has(words[i].raw)) i++;
+    const lead = words[i] ? words[i].text : '';
+    if (lead === 'cd' || lead === 'pushd') {
+      let j = i + 1;
+      while (words[j] && /^-[LPe@]+$/.test(words[j].text)) j++;
+      if (words[j]) acc.moves.push({ target: words[j].text, at });
+    } else if (lead === 'for' && words[i + 1] && /^[A-Za-z_][A-Za-z0-9_]*$/.test(words[i + 1].text) && words[i + 2] && words[i + 2].text === 'in') {
+      const items = [];
+      for (const v of words.slice(i + 3)) {
+        if (v.text === 'do' && !v.quoted) break;
+        if (!v.expands) items.push(v.text);
+      }
+      acc.loops.push({ name: words[i + 1].text, items });
+    }
+  }
+  return acc;
+}
+
+// WHERE THE LITERAL FOLDER CHANGES MAY LEAVE THE SHELL. Each lands from every
+// start and from every landing before it, so `cd .claude && cd hooks` reaches
+// `.claude/hooks` whether or not the second `cd` ran after the first. A target
+// that expands, a glob and `cd -` are not followed. At most 32 landings.
+function cdLandings(moves, starts, pmod, home) {
+  const out = [];
+  const seen = new Set();
+  for (const { target, at } of moves) {
+    let t = target;
+    for (const re of HOME_PREFIX) {
+      if (re.test(t)) { t = t.replace(re, home); break; }
+    }
+    if (!t || t.startsWith('-') || CD_NOT_LITERAL.test(t)) continue;
+    for (const b of [...starts, ...out.map(l => l.base)]) {
+      const base = canonicalize(pmod.resolve(b, t), pmod);
+      if (seen.has(base)) continue;
+      if (out.length >= 32) return out;
+      seen.add(base);
+      out.push({ base, at });
+    }
+  }
+  return out;
+}
+
 // `$env:TEMP\x` and `%LOCALAPPDATA%\x` in the forms each shell writes them, for
 // the development paths; `$env:USERPROFILE` and `%USERPROFILE%` are home and are
 // handled with the other home shorthands.
 const BASH_ESCAPE = /^\\(?:[abefnrtv0\\'"?]|x[0-9a-fA-F]{1,2}|[0-7]{1,3}|u[0-9a-fA-F]{4})$/;
 const WIN_SWITCH = /^\/[A-Za-z?]{1,8}(:[^\\/\s]*)?$/;
 const ENV_PREFIX = [/^\$\{?env:([A-Za-z_][A-Za-z0-9_]*)\}?(?=[\\/]|$)/i, /^%([A-Za-z_][A-Za-z0-9_]*)%(?=[\\/]|$)/];
+
+// THE WORDS A COMMAND CAN WRITE, for the answer-file check: a redirect or tee
+// target, the destination of a copy, install or dd, and every word of a
+// segment whose program is not known to only read the files it names (so
+// `sed -i`, `perl -i`, `rm`, `mv`, `ln`, `touch`, `truncate`, `chmod`, a git
+// command that changes the working tree, `git add` and `git commit` included,
+// and any program this does not know). A program known to read is one the
+// read-only vocabulary already passes, a comparer or viewer below, git with a
+// subcommand that only reads, `sed` without in-place editing, or a copy whose
+// source is the file. Unknown means written: the safe direction.
+//
+// ONLY PROGRAMS WITH NO OPTION THAT WRITES A FILE. A pager writes its log file
+// (`less -o`, `--log-file`), sdiff its merged output (`-o`, `--output`) and
+// bat its cache (`--target`), each with no redirect on the line, so they are
+// left out and ask like any program this does not know. `file` and `stat` are
+// judged by the shared vocabulary, which knows `file -C` compiles a file.
+const READS_NAMED_FILES = new Set(['jq', 'diff', 'cmp', 'comm', 'md5', 'md5sum', 'shasum', 'sha1sum', 'sha256sum', 'cksum', 'strings']);
+const GIT_READ_SUBCOMMANDS = new Set(['diff', 'log', 'show', 'blame', 'annotate', 'status', 'ls-files', 'grep', 'cat-file', 'shortlog', 'whatchanged', 'rev-parse', 'describe']);
+const COPIES_FROM_SOURCES = new Set(['cp', 'install']);
+// A copy, move or link into a folder writes the file of each source's name
+// there: `into` carries each destination and its sources, for the caller to
+// resolve once it knows whether the destination is a folder.
+const PLACES_INTO = new Set(['cp', 'install', 'mv', 'ln']);
+const REDIRECT = /^(?:\d*|&)(?:>>?|>\|)(.*)$/;
+// AN INPUT REDIRECT IS A READ, whatever program it feeds: `<` and `0<` open the
+// file for reading, and `<<<` hands over a string. Not `<>`, which opens it for
+// writing too, a here-document's `<<`, or process substitution `<(`.
+const INPUT_REDIRECT = /^\d*(?:<<<|<(?![<>(]))(.*)$/;
+// `posixText` reads an unquoted word as bash does, each `\X` being X, the way
+// shellPathWords reads it, so the words compare. Each `into` entry carries
+// `at`, where its segment starts in `command`, for the folder it starts from.
+function answerFileWriteWords(command, posixText = false) {
+  const out = new Set();
+  const into = [];
+  const bare = (w) => {
+    const s = w.replace(/^['"]|['"]$/g, '');
+    return posixText && !/^['"]/.test(w) && s.includes('\\') && !WIN_DRIVE.test(s) && !WIN_UNC.test(s) ? s.replace(/\\(.)/g, '$1') : s;
+  };
+  const text = String(command);
+  let from = 0;
+  for (const seg of shellSegments(text)) {
+    const segAt = text.indexOf(seg, from);
+    if (segAt >= 0) from = segAt + seg.length;
+    const words = seg.match(/'([^']*)'|"([^"]*)"|[^\s]+/g) || [];
+    const written = [];
+    const rest = [];
+    for (let i = 0; i < words.length; i++) {
+      const input = INPUT_REDIRECT.exec(words[i]);
+      if (input) { if (!input[1]) i++; continue; }
+      const m = REDIRECT.exec(words[i]);
+      if (!m) { rest.push(words[i]); continue; }
+      const target = m[1] || words[++i];
+      if (target && !target.startsWith('&')) written.push(bare(target));
+    }
+    let at = 0;
+    while (at < rest.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(rest[at])) at++;
+    const verb = bare(rest[at] || '').split('/').pop();
+    const args = rest.slice(at + 1).map(bare);
+    let reads = isReadOnlyShellCommand(rest.join(' ')) || READS_NAMED_FILES.has(verb);
+    if (verb === 'git') {
+      let i = 0;
+      while (i < args.length && args[i].startsWith('-')) i += (args[i] === '-C' || args[i] === '-c') ? 2 : 1;
+      reads = GIT_READ_SUBCOMMANDS.has(args[i]) && !args.some(a => a.startsWith('--output'));
+    } else if (verb === 'sed') {
+      // `-i` everywhere, and macOS sed's `-I` as well.
+      reads = !args.some(a => /^-[a-zA-Z]*[iI]/.test(a) || a.startsWith('--in-place'));
+    } else if (verb === 'dd') {
+      reads = true;
+      for (const a of args) if (a.startsWith('of=')) written.push(a.slice(3));
+    } else if (COPIES_FROM_SOURCES.has(verb) && !args.some(a => a === '-t' || /^--(target-directory|link|symbolic-link)/.test(a) || /^-[a-zA-Z]*[ls]/.test(a))) {
+      const operands = args.filter(a => !a.startsWith('-'));
+      reads = true;
+      if (operands.length > 1) written.push(operands[operands.length - 1]);
+    }
+    // `install -d` copies nothing: it creates each folder it names, or sets the
+    // mode and owner of one already there, so every word it names is written.
+    const makesFolders = verb === 'install' && args.some(a => /^-[a-zA-Z]*d/.test(a) || a === '--directory');
+    if (makesFolders) reads = false;
+    if (PLACES_INTO.has(verb) && !makesFolders) {
+      const t = args.indexOf('-t');
+      const named = t >= 0 ? args[t + 1] : (args.find(a => a.startsWith('--target-directory=')) || '').slice('--target-directory='.length);
+      const operands = args.filter((a, i) => !a.startsWith('-') && !(t >= 0 && i === t + 1));
+      const dest = named || (operands.length > 1 ? operands[operands.length - 1] : null);
+      if (dest) into.push({ dest, sources: named ? operands : operands.slice(0, -1), at: Math.max(0, segAt) });
+    }
+    for (const w of written) out.add(w);
+    // The words of the segment without its redirects: what it reads from is not
+    // written, and what it writes to is in `written` already.
+    if (!reads) for (const t of shellPathTokens(rest.join(' '), posixText)) out.add(t);
+  }
+  return { words: out, into };
+}
+
+// A FOLDER THAT HOLDS ANSWER FILES IS THEM: removing, moving or replacing
+// `.claude` or `.rundock` changes every answer file inside. A proper folder of
+// the workspace (never its root) holding one of its answer files or the
+// hook-scripts folder, or another Rundock workspace's `.rundock` or `.claude`.
+function holdsAnswerFiles(resolvedPath, workspaceRoot, foldsCase = hostFoldsCase(), pmod = path) {
+  const folds = foldsCase || pmod === path.win32;
+  const c = foldCase(canonicalize(resolvedPath, pmod), folds);
+  const root = pmod.resolve(workspaceRoot);
+  if (c.startsWith(foldCase(canonicalize(root, pmod), folds) + pmod.sep)
+    && [...WORKSPACE_ANSWER_FILES, ...WHAT_RUNS_DIRS].some(f => foldCase(canonicalize(pmod.join(root, ...f.split('/')), pmod), folds).startsWith(c + pmod.sep))) return true;
+  if (pmod !== path) return false;
+  const name = path.basename(resolvedPath);
+  return (name === '.rundock' || name === '.claude') && fs.existsSync(path.join(path.dirname(resolvedPath), '.rundock', 'state.json'));
+}
+
+// One glob word as the shell matches it: `*` and `?` within a name, and a
+// class `[...]`, where `[!...]` and `[^...]` are classes of what they do not
+// name. A `[` with no `]` after it is the character itself, as in `[ -f x ]`.
+function globSegmentRegex(pattern, folds) {
+  let out = '';
+  for (let i = 0; i < pattern.length; i++) {
+    const ch = pattern[i];
+    if (ch === '*') { out += '[^/]*'; continue; }
+    if (ch === '?') { out += '[^/]'; continue; }
+    if (ch === '[') {
+      const close = pattern.indexOf(']', i + 2);
+      if (close < 0) { out += '\\['; continue; }
+      let body = pattern.slice(i + 1, close);
+      const negate = body[0] === '!' || body[0] === '^';
+      if (negate) body = body.slice(1);
+      out += `[${negate ? '^' : ''}${body.replace(/[\\\]^]/g, '\\$&')}]`;
+      i = close;
+      continue;
+    }
+    out += ch.replace(/[.+^${}()|\\\]]/g, '\\$&');
+  }
+  return new RegExp(`^${out}$`, folds ? 'i' : '');
+}
+
+// A GLOB THAT CAN REACH ONE: `rm -rf .claude/*` and `rm .rundock/*.json` name
+// no answer file and match several. Matched by the shell's own rule that a
+// pattern not starting with `.` never matches a name that does, so `rm -rf *`
+// at the workspace root reaches none of them and `rm -rf .*` reaches them all.
+function globReachesAnswerFiles(resolvedPath, workspaceRoot, foldsCase = hostFoldsCase(), pmod = path) {
+  const folds = foldsCase || pmod === path.win32;
+  const segs = String(resolvedPath).split(/[\\/]+/);
+  const at = segs.findIndex(s => /[*?[]/.test(s));
+  if (at < 0) return false;
+  const pattern = segs[at];
+  const re = globSegmentRegex(pattern, folds);
+  const root = foldCase(canonicalize(pmod.resolve(workspaceRoot), pmod), folds);
+  const dir = foldCase(canonicalize(segs.slice(0, at).join(pmod.sep) || pmod.sep, pmod), folds);
+  if (dir !== root && !dir.startsWith(root + pmod.sep)) return false;
+  return [...WORKSPACE_ANSWER_FILES, ...WHAT_RUNS_DIRS].some((f) => {
+    const p = foldCase(canonicalize(pmod.join(pmod.resolve(workspaceRoot), ...f.split('/')), pmod), folds);
+    if (!p.startsWith(dir + pmod.sep)) return false;
+    const first = p.slice(dir.length + 1).split(pmod.sep)[0];
+    return !(first.startsWith('.') && !pattern.startsWith('.')) && re.test(first);
+  });
+}
+
+// BRACES ARE THE SHELL'S, expanded before the command sees the word, so
+// `rm -rf .{claude,rundock}` names `.claude` and `.rundock`. Each group with a
+// comma is expanded, innermost first, up to `limit` words; a word left with
+// braces is judged as it is.
+function braceForms(word, limit = 64) {
+  const done = [];
+  const queue = [String(word)];
+  while (queue.length && done.length + queue.length <= limit) {
+    const w = queue.shift();
+    const m = /\{([^{}]*,[^{}]*)\}/.exec(w);
+    if (!m) { done.push(w); continue; }
+    for (const alt of m[1].split(',')) queue.push(w.slice(0, m.index) + alt + w.slice(m.index + m[0].length));
+  }
+  return [...done, ...queue];
+}
 
 // CODE HANDED TO AN INTERPRETER IS READ AS CODE, NOT AS SHELL WORDS.
 //
@@ -1306,27 +1625,690 @@ function literalIsPlace(lit, reading = null) {
   return !lit.startsWith('/') && lit.includes('/') && !lit.includes('\\');
 }
 
-// The literals in a piece of code that name a place, and the commands it runs
-// itself. A literal is quoted text on one line, so an apostrophe in a comment
-// cannot swallow the code after it.
+// A literal that could name an answer file, a folder holding them or the
+// console folder: each of those names has `.mcp.json`, `.rundock` or `.claude`
+// in it. Read for the answer files only, whether or not it is shaped like a
+// place: `open('.mcp.json', 'w')` names one with no slash at all.
+const MAY_NAME_ANSWER_FILE = /\.(?:mcp\.json|rundock|claude)/i;
+
+// A mode that writes: Python's, Node's and Ruby's letters, and Perl's arrows.
+const WRITE_MODE = /^(?:[rbtUs]*[wax+][rbtUswax+]*|\+<|\+?>>?)(?::.*)?$/;
+
+// HOW CODE USES A PATH THAT NAMES AN ANSWER FILE: A WRITE UNLESS SHOWN
+// OTHERWISE.
+//
+// Code handed to an interpreter names files to read them, list them and skip
+// them far more often than to change them, but it changes them in more ways
+// than any list of write calls can hold: an alias (`import os as o`), a runner
+// imported by name, a path built in an f-string or a template, a path
+// object's own methods, a mode kept in a variable. A list of writes let each
+// of those through, so the rule runs the other way. A path in the code counts
+// as written unless every use of it is one CODE_READS_ALLOWED lists:
+//
+//   - a call that only reads or tests it (`calls`): print and the console, the
+//     readers (`read_text`, `readFileSync`, `File.read`), the tests
+//     (`os.path.exists`, `existsSync`, `stat`);
+//   - `open` with no mode, or with a read mode written as a literal
+//     (`openCalls`);
+//   - the source of a copy (`copySources`);
+//   - a listing it is the source of (`sources`: `os.listdir`, `os.walk`,
+//     `glob`), judged by what is done with the listing;
+//   - a loop over it, when every use of the loop's variable is one of these;
+//   - a comparison or a membership test (`comparisons`), and a set, list or
+//     tuple used only for them, as a walk that skips `.claude` uses one;
+//   - a string method it is handed as a pattern, or a list method on a value
+//     that is neither a module nor a path (`argumentMethods`:
+//     `replace('.claude', '')`, `dirs.remove('.claude')`);
+//   - a read or a test of it as the receiver (`receiverReads`:
+//     `Path('.mcp.json').exists()`), or a method whose result carries it on
+//     (`receiverPassThrough`), judged by that result's use;
+//   - a name it is put in, where every use of that name is one of these;
+//   - a statement on its own, such as a docstring.
+//
+// A PATH BUILT FROM PARTS IS JUDGED WHOLE: a join (`os.path.join`,
+// `path.join`, `path.resolve`, `File.join`), pathlib's `/` and `.joinpath`, a
+// path constructor, an f-string, a template, Ruby's `#{}` and `+` all give
+// one path, judged by the caller, so `.rundock/scratch/x` is ordinary while
+// `.claude/settings.json` is not. A part the code works out as it runs is
+// unknown: the known part before it is judged as a folder the path may be
+// inside, and the known part after it as a path on its own.
+const CODE_READS_ALLOWED = Object.freeze({
+  calls: Object.freeze(['print', 'pprint', 'puts', 'pp', 'len', 'repr', 'log', 'info', 'warn', 'error', 'debug',
+    'exists', 'isfile', 'isdir', 'islink', 'lexists', 'getsize', 'getmtime', 'stat', 'lstat', 'access',
+    'existsSync', 'statSync', 'lstatSync', 'accessSync', 'readFileSync', 'readFile', 'createReadStream',
+    'read_text', 'read_bytes', 'read', 'readlines', 'exist?', 'exists?', 'file?', 'directory?', 'require']),
+  openCalls: Object.freeze(['open', 'openSync', 'fopen']),
+  sources: Object.freeze(['listdir', 'scandir', 'walk', 'glob', 'iglob', 'rglob', 'iterdir', 'readdir', 'readdirSync', 'opendir', 'entries', 'children']),
+  copySources: Object.freeze(['copy', 'copy2', 'copyfile', 'copytree', 'copyFile', 'copyFileSync', 'cp', 'cpSync', 'cp_r', 'copySync', 'copy_file', 'copy_entry']),
+  comparisons: Object.freeze(['==', '!=', '===', '!==', '<=', '>=', 'in', 'not in', 'is', 'is not']),
+  argumentMethods: Object.freeze(['replace', 'replaceAll', 'startswith', 'endswith', 'startsWith', 'endsWith', 'split', 'rsplit',
+    'strip', 'lstrip', 'rstrip', 'includes', 'indexOf', 'lastIndexOf', 'find', 'rfind', 'count', 'removeprefix', 'removesuffix',
+    'partition', 'rpartition', 'match', 'search', 'test', 'sub', 'gsub', 'contains', 'has',
+    'remove', 'append', 'add', 'discard', 'index', 'insert', 'extend', 'push', 'unshift', 'delete', 'get', 'pop']),
+  receiverReads: Object.freeze(['exists', 'is_file', 'is_dir', 'is_symlink', 'is_absolute', 'stat', 'lstat', 'read_text', 'read_bytes',
+    'samefile', 'startswith', 'endswith', 'startsWith', 'endsWith', 'includes', 'indexOf', 'find', 'count', 'exist?', 'file?', 'directory?',
+    'has', 'get']),
+  receiverPassThrough: Object.freeze(['resolve', 'absolute', 'expanduser', 'as_posix', 'with_suffix', 'with_name', 'relative_to',
+    'parent', 'name', 'stem', 'suffix', 'iterdir', 'glob', 'rglob', 'lower', 'upper', 'strip', 'lstrip', 'rstrip', 'split',
+    'format', 'encode', 'replace', 'toLowerCase', 'toUpperCase', 'trim', 'slice', 'substring', 'toString', 'normalize', 'to_s']),
+});
+const ALLOWED = Object.fromEntries(Object.entries(CODE_READS_ALLOWED).map(([k, v]) => [k, new Set(v)]));
+const UNKNOWN = '\u0000';
+const READ_MODE = /^(?:[rbtU]+|<)(?::.*)?$/;
+// A receiver that is a module: one the check knows by name, one the code
+// imported or required under any name, and `require(...)` itself.
+const KNOWN_MODULES = /^(?:os(?:\.path)?|posixpath|ntpath|shutil|pathlib|subprocess|io|codecs|glob|json|fs|fsp|fse|fsExtra|path|child_process|promises|File|FileUtils|Dir|IO|Pathname|Kernel|Open3)$/;
+const PATH_VALUE_TEXT = /\b(?:Path|PurePath|PosixPath|WindowsPath|PurePosixPath|PureWindowsPath|Pathname)\b/;
+const KEYWORDS = new Set(['if', 'elif', 'while', 'for', 'foreach', 'in', 'not', 'and', 'or', 'return', 'yield', 'with', 'assert', 'del',
+  'switch', 'case', 'catch', 'unless', 'until', 'when', 'typeof', 'await', 'throw', 'lambda', 'except', 'from', 'import', 'raise']);
+// A command the code runs, whose literals the caller reads as one.
+const RUNS_COMMAND = new Set(['system', 'popen', 'Popen', 'check_call', 'check_output', 'getoutput', 'getstatusoutput', 'execSync',
+  'spawnSync', 'execFileSync', 'spawn', 'execFile', 'execvp', 'execv', 'execlp', 'execl', 'spawnv', 'spawnvp']);
+const RUNS_COMMAND_ON_MODULE = new Set(['run', 'call', 'exec', 'capture2', 'capture3', 'popen3']);
+
+function codeUse(s, masked, lits) {
+  const litByStart = new Map(lits.map(l => [l.pre, l]));
+  const litByEnd = new Map(lits.map(l => [l.end, l]));
+  const OPENERS = '([{';
+  const CLOSERS = ')]}';
+  const isIdent = (c) => !!c && /[\w$]/.test(c);
+  const back = (k) => { while (k >= 0 && /\s/.test(masked[k])) k--; return k; };
+  const fwd = (k) => { while (k < masked.length && /\s/.test(masked[k])) k++; return k; };
+  const closeOf = (open) => {
+    let depth = 0;
+    for (let k = open; k < masked.length; k++) {
+      if (OPENERS.includes(masked[k])) depth++;
+      else if (CLOSERS.includes(masked[k]) && --depth === 0) return k;
+    }
+    return masked.length;
+  };
+  const openOf = (close) => {
+    let depth = 0;
+    for (let k = close; k >= 0; k--) {
+      if (CLOSERS.includes(masked[k])) depth++;
+      else if (OPENERS.includes(masked[k]) && --depth === 0) return k;
+    }
+    return -1;
+  };
+  const enclosing = (a) => {
+    let depth = 0;
+    for (let k = a - 1; k >= 0; k--) {
+      if (CLOSERS.includes(masked[k])) depth++;
+      else if (OPENERS.includes(masked[k])) { if (depth === 0) return k; depth--; }
+    }
+    return -1;
+  };
+  const argsOf = (open, close) => {
+    const args = [];
+    let depth = 0;
+    let from = open + 1;
+    for (let k = open + 1; k < close; k++) {
+      if (OPENERS.includes(masked[k])) depth++;
+      else if (CLOSERS.includes(masked[k])) depth--;
+      else if (masked[k] === ',' && depth === 0) { args.push([from, k]); from = k + 1; }
+    }
+    if (masked.slice(from, close).trim()) args.push([from, close]);
+    return args;
+  };
+  const trim = (a, b) => { while (a < b && /\s/.test(masked[a])) a++; while (b > a && /\s/.test(masked[b - 1])) b--; return [a, b]; };
+  // The call whose argument list opens at `open`: its name, where its callee
+  // starts and the receiver before its name. Null when `open` opens no call.
+  const callAt = (open) => {
+    let k = back(open - 1);
+    if (k < 0) return null;
+    if (masked[k] === '?' || masked[k] === '!') k--;
+    if (!isIdent(masked[k])) return null;
+    let n = k;
+    while (n >= 0 && isIdent(masked[n])) n--;
+    const name = masked.slice(n + 1, open).trim();
+    if (KEYWORDS.has(name)) return null;
+    let start = n + 1;
+    let q = back(n);
+    const dotted = masked[q] === '.';
+    let recvEnd = dotted ? q : -1;
+    while (masked[q] === '.') {
+      q = back(q - 1);
+      if (masked[q] === ')' || masked[q] === ']') { const o = openOf(q); if (o < 0) break; q = back(o - 1); }
+      else if (litByEnd.has(q + 1)) { q = litByEnd.get(q + 1).pre - 1; start = q + 1; q = back(q); continue; }
+      while (q >= 0 && isIdent(masked[q])) q--;
+      start = q + 1;
+      q = back(q);
+    }
+    return { name, start, dotted, recvStart: dotted ? start : -1, recvEnd };
+  };
+  const calleeText = (call, open) => s.slice(call.start, open).replace(/\s+/g, '');
+
+  // Names bound to modules: imported, required, or taken from a module, each
+  // with the name it was imported as (`call as sh` binds `sh` to `call`). An
+  // import ends at its line break, or at the bracket that closes a list
+  // written over several lines.
+  const modules = new Set();
+  const imported = new Map();
+  const bind = (name, original) => { const n = String(name).trim(); if (/^[A-Za-z_$][\w$]*$/.test(n)) { modules.add(n); imported.set(n, String(original).trim()); } };
+  for (const m of masked.matchAll(/^[ \t]*import[ \t]+([\w.]+(?:[ \t]+as[ \t]+\w+)?(?:[ \t]*,[ \t]*[\w.]+(?:[ \t]+as[ \t]+\w+)?)*)/gm)) {
+    for (const part of m[1].split(',')) { const p = part.trim().split(/\s+as\s+/); bind(p[1] || p[0].split('.')[0], p[0]); }
+  }
+  for (const m of masked.matchAll(/^[ \t]*from[ \t]+[\w.]+[ \t]+import[ \t]+(\([^)]*\)|[^\n;#]*)/gm)) {
+    for (const part of m[1].replace(/^\(|\)$/g, '').split(',')) { const p = part.trim().split(/\s+as\s+/); if (p[0]) bind(p[1] || p[0], p[0]); }
+  }
+  for (const m of masked.matchAll(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:await\s+)?(?:require|import)\s*\(/g)) bind(m[1], m[1]);
+  for (const m of masked.matchAll(/\b(?:const|let|var)\s+\{([^}]*)\}\s*=\s*(?:await\s+)?(?:require|import)\s*\(/g)) {
+    for (const part of m[1].split(',')) { const p = part.split(':'); if (p[0].trim()) bind(p[1] || p[0], p[0]); }
+  }
+  for (const m of masked.matchAll(/^[ \t]*import\s+(?:\*\s+as\s+([A-Za-z_$][\w$]*)|([A-Za-z_$][\w$]*))?\s*,?\s*(?:\{([^}]*)\})?\s*from\b/gm)) {
+    if (m[1]) bind(m[1], m[1]);
+    if (m[2]) bind(m[2], m[2]);
+    for (const part of (m[3] || '').split(',')) { const p = part.trim().split(/\s+as\s+/); if (p[0]) bind(p[1] || p[0], p[0]); }
+  }
+  // A name bound to part of a module (`p = require('fs').promises`) is one.
+  for (const m of masked.matchAll(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*([A-Za-z_$][\w$]*)\s*\.\s*promises\b/g)) if (modules.has(m[2]) || m[2] === 'fs') modules.add(m[1]);
+  const rootOf = (text) => (text.match(/^[$@%]?[A-Za-z_][\w]*/) || [''])[0];
+  const isModuleText = (text) => KNOWN_MODULES.test(text) || modules.has(rootOf(text)) || /\b(?:require|import)\s*\(|\.promises\b/.test(text);
+
+  // What each name may hold: the expressions put in it.
+  const vars = new Map();
+  const loops = new Map();
+  const note = (map, name, a, b) => { if (!map.has(name)) map.set(name, []); map.get(name).push([a, b]); };
+  const expressionEnd = (a, stopAt = '') => {
+    let depth = 0;
+    for (let k = a; k < masked.length; k++) {
+      const c = masked[k];
+      if (OPENERS.includes(c)) depth++;
+      else if (CLOSERS.includes(c)) { if (--depth < 0) return k; }
+      else if (depth === 0 && (c === '\n' || c === ';' || stopAt.includes(c))) return k;
+      else if (depth === 0 && stopAt.includes('i') && /^\bif\b/.test(masked.slice(k, k + 3)) && /\W/.test(masked[k - 1] || ' ')) return k;
+    }
+    return masked.length;
+  };
+  // Where a name is given a value at the top level: at the start of its line,
+  // with nothing before it but a declaration keyword. Code there runs top to
+  // bottom, so a use after the next such assignment sees that value instead.
+  const topAssigns = new Map();
+  const isTopLevel = (nameAt) => {
+    const lineStart = masked.lastIndexOf('\n', nameAt - 1) + 1;
+    return /^(?:(?:const|let|var|my|our|local)\s+)?$/.test(masked.slice(lineStart, nameAt));
+  };
+  for (const m of masked.matchAll(/(?:^|[\n;{]|\b(?:const|let|var|my|our|local)\s)[ \t]*([$@%]?[A-Za-z_][\w]*)[ \t]*=(?![=~>])/g)) {
+    const a = m.index + m[0].length;
+    note(vars, m[1], a, expressionEnd(a));
+    const nameAt = m.index + m[0].lastIndexOf(m[1]);
+    if (isTopLevel(nameAt)) note(topAssigns, m[1], nameAt, nameAt);
+  }
+  for (const m of masked.matchAll(/\bfor\s+\(?([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)\)?\s+in\s+/g)) {
+    const a = m.index + m[0].length;
+    const e = expressionEnd(a, ':i');
+    for (const n of m[1].split(',')) note(loops, n.trim(), a, e);
+  }
+  for (const m of masked.matchAll(/\bfor\s*\(\s*(?:const|let|var)?\s*([A-Za-z_$][\w$]*)\s+(?:of|in)\s+/g)) {
+    const a = m.index + m[0].length;
+    note(loops, m[1], a, expressionEnd(a));
+  }
+  for (const m of masked.matchAll(/\bfor(?:each)?\s+(?:my\s+|our\s+)?(\$\w+)\s*\(/g)) {
+    const open = m.index + m[0].length - 1;
+    note(loops, m[1], open, closeOf(open) + 1);
+  }
+  for (const m of masked.matchAll(/([$@]?[A-Za-z_][\w]*)\s*\.\s*(?:forEach|each|map|flatMap|filter|some|every)\s*(?:\(\s*\(?\s*|\{\s*\|\s*|do\s*\|\s*)([A-Za-z_$][\w$]*)/g)) {
+    const at = m.index;
+    note(loops, m[2], at, at + m[1].length);
+  }
+
+  // THE VALUES AN EXPRESSION MAY HAVE, as paths with UNKNOWN where a part is
+  // worked out as the code runs. At most 16.
+  const cap = (list) => [...new Set(list)].slice(0, 16);
+  const product = (lists, combine) => {
+    let out = [''];
+    let first = true;
+    for (const list of lists) {
+      const next = [];
+      for (const a of out) for (const b of list) next.push(first ? b : combine(a, b));
+      out = cap(next);
+      first = false;
+    }
+    return out;
+  };
+  const joinTwo = (a, b) => {
+    if (b === '') return a;
+    if (b.startsWith('/') || WIN_DRIVE.test(b)) return b;
+    if (a === '') return b;
+    return a.replace(/\/+$/, '') + '/' + b;
+  };
+  const visiting = new Set();
+  const interpolate = (lit) => {
+    let text = lit.value;
+    const isF = /[fF]/.test(s.slice(lit.pre, lit.start));
+    const parts = [];
+    const re = lit.kind === 'template' ? /\$\{([^}]*)\}/g : (isF ? /\{([^{}]*)\}/g : (s[lit.start] === '"' ? /#\{([^}]*)\}/g : null));
+    if (!re) return [text];
+    let last = 0;
+    for (const m of text.matchAll(re)) {
+      parts.push([text.slice(last, m.index)]);
+      const name = m[1].split(/[!:]/)[0].trim();
+      parts.push(/^[A-Za-z_$][\w$]*$/.test(name) ? valuesOfName(name) : [UNKNOWN]);
+      last = m.index + m[0].length;
+    }
+    parts.push([text.slice(last)]);
+    return product(parts, (x, y) => x + y);
+  };
+  const isCollection = (a, b) => {
+    [a, b] = trim(a, b);
+    if (a >= b) return false;
+    // A bracket is a tuple with more than one item, or one with a comma after
+    // its only item (`('.claude',)`).
+    if ((masked[a] === '[' || masked[a] === '{' || masked[a] === '(') && closeOf(a) === b - 1) return masked[a] !== '(' || argsOf(a, b - 1).length > 1 || /,\s*$/.test(masked.slice(a + 1, b - 1));
+    const name = masked.slice(a, b);
+    return /^[$@%]?[A-Za-z_][\w]*$/.test(name) && (vars.get(name) || []).some(([x, y]) => isCollection(x, y));
+  };
+  const valuesOfName = (name) => {
+    if (visiting.has(name)) return [UNKNOWN];
+    visiting.add(name);
+    const out = [];
+    for (const [x, y] of vars.get(name) || []) out.push(...resolve(x, y));
+    for (const [x, y] of loops.get(name) || []) out.push(...(isCollection(x, y) ? resolve(x, y) : [UNKNOWN]));
+    visiting.delete(name);
+    return out.length ? cap(out) : [UNKNOWN];
+  };
+  const splitTop = (a, b, op) => {
+    const parts = [];
+    let depth = 0;
+    let from = a;
+    for (let k = a; k < b; k++) {
+      const c = masked[k];
+      if (OPENERS.includes(c)) depth++;
+      else if (CLOSERS.includes(c)) depth--;
+      else if (depth === 0 && c === op && masked[k + 1] !== op && masked[k - 1] !== op && masked[k + 1] !== '=' && masked[k - 1] !== '*' && masked[k + 1] !== '*') {
+        parts.push([from, k]);
+        from = k + 1;
+      }
+    }
+    parts.push([from, b]);
+    return parts;
+  };
+  const isPathish = (a, b) => {
+    const text = masked.slice(a, b);
+    return PATH_VALUE_TEXT.test(text) || (text.match(/[A-Za-z_][\w]*/g) || []).some(n => isPathName(n));
+  };
+  // A receiver that is a path object, not a string made from one.
+  const isPathReceiver = (a, b) => {
+    const text = masked.slice(a, b).trim();
+    if (/^(?:str|String|repr|os\.fspath|fspath)\s*\(/.test(text)) return false;
+    if (/\.\s*(?:read_text|read_bytes|as_posix|decode|readFileSync|readFile|toString|to_s)\s*\([^()]*\)$/.test(text) || /\.\s*(?:name|stem|suffix)$/.test(text)) return false;
+    return isPathish(a, b);
+  };
+  const pathNames = new Map();
+  const isPathName = (n) => {
+    if (pathNames.has(n)) return pathNames.get(n);
+    pathNames.set(n, false);
+    const r = [...(vars.get(n) || []), ...(loops.get(n) || [])].some(([x, y]) => isPathish(x, y));
+    pathNames.set(n, r);
+    return r;
+  };
+  const transformOf = (call, open) => {
+    const callee = calleeText(call, open);
+    if (/(?:^|\.)(?:os\.path|posixpath|ntpath|path(?:\.posix|\.win32)?|File)\.join$/.test(callee) || /(?:^|\.)path(?:\.posix|\.win32)?\.resolve$/.test(callee)) return 'join';
+    if (/^require\(['"](?:node:)?path['"]\)(?:\.(?:posix|win32))?\.(?:join|resolve)$/.test(callee)) return 'join';
+    if (/(?:^|\.)(?:Path|PurePath|PosixPath|WindowsPath|PurePosixPath|PureWindowsPath)$/.test(callee) || /(?:^|\.)Pathname\.new$/.test(callee)) return 'join';
+    if (call.dotted && call.name === 'joinpath') return 'joinpath';
+    if (/(?:^|\.)(?:str|String|fspath|abspath|normpath|realpath|expanduser|normalize|expand_path)$/.test(callee)) return 'value';
+    // A set or a map built from a list, judged as that list.
+    if (/^(?:Set|Map|WeakSet|set|frozenset|list|tuple)$/.test(callee)) return 'collection';
+    return null;
+  };
+  const resolve = (a, b, depth = 0) => {
+    [a, b] = trim(a, b);
+    if (/^new\s/.test(masked.slice(a, a + 4))) a = fwd(a + 3);
+    if (a >= b || depth > 12) return [UNKNOWN];
+    const lit = litByStart.get(a);
+    if (lit && lit.end === b) return interpolate(lit);
+    if ((masked[a] === '[' || masked[a] === '{' || masked[a] === '(') && closeOf(a) === b - 1) {
+      const parts = argsOf(a, b - 1);
+      if (masked[a] === '(' && parts.length === 1 && !/,\s*$/.test(masked.slice(a + 1, b - 1))) return resolve(a + 1, b - 1, depth + 1);
+      return cap(parts.flatMap(([x, y]) => resolve(x, y, depth + 1)));
+    }
+    const plus = splitTop(a, b, '+');
+    if (plus.length > 1) return product(plus.map(([x, y]) => resolve(x, y, depth + 1)), (x, y) => x + y);
+    const slash = splitTop(a, b, '/');
+    if (slash.length > 1 && isPathish(a, b)) return product(slash.map(([x, y]) => resolve(x, y, depth + 1)), joinTwo);
+    const text = masked.slice(a, b);
+    if (/^[$@%]?[A-Za-z_][\w]*$/.test(text)) return valuesOfName(text);
+    if (masked[b - 1] === ')') {
+      const open = openOf(b - 1);
+      const call = open >= 0 ? callAt(open) : null;
+      if (call && call.start === a) {
+        const args = argsOf(open, b - 1);
+        const kind = transformOf(call, open);
+        if (kind === 'join') return product(args.map(([x, y]) => resolve(x, y, depth + 1)), joinTwo);
+        if (kind === 'joinpath') return product([resolve(call.recvStart, call.recvEnd, depth + 1), ...args.map(([x, y]) => resolve(x, y, depth + 1))], joinTwo);
+        if (kind === 'value' && args.length) return resolve(args[0][0], args[0][1], depth + 1);
+        if (kind === 'collection') return cap(args.flatMap(([x, y]) => resolve(x, y, depth + 1)));
+        if (call.dotted && ['resolve', 'absolute', 'expanduser', 'as_posix', 'format'].includes(call.name)) {
+          const inner = resolve(call.recvStart, call.recvEnd, depth + 1);
+          return call.name === 'format' ? inner.map(v => v.replace(/\{[^}]*\}/g, UNKNOWN)) : inner;
+        }
+      }
+    }
+    return [UNKNOWN];
+  };
+  // The paths to judge for a value: the whole path, or around an unknown part
+  // the known folder before it and the known path after it.
+  const judged = (values) => {
+    const out = new Set();
+    for (const v of values) {
+      if (!v.includes(UNKNOWN)) { if (v) out.add(v); continue; }
+      const pieces = v.split(UNKNOWN);
+      const head = pieces[0].replace(/\/+$/, '');
+      const tail = pieces[pieces.length - 1].replace(/^\/+/, '');
+      if (head) out.add(head);
+      if (tail) out.add(tail);
+    }
+    return [...out];
+  };
+
+  // THE LARGER EXPRESSION A SPAN IS PART OF, where that expression is one path
+  // or one list of them: a join or a path constructor it is an argument of, a
+  // `+` or pathlib `/` it is a term of, a list, tuple or set it is an element
+  // of, or brackets around it. Null when it is used as it is.
+  const parentSpan = (a, b) => {
+    const nextI = fwd(b);
+    const prevI = back(a - 1);
+    // A method that keeps the path: `.joinpath(...)`, `.resolve()`, `.format(...)`.
+    const keep = /^\.\s*(joinpath|resolve|absolute|expanduser|as_posix|format)\s*\(/.exec(masked.slice(nextI, nextI + 24));
+    if (keep && (keep[1] !== 'format' || litByStart.has(a))) {
+      const open = nextI + keep[0].length - 1;
+      return [a, closeOf(open) + 1];
+    }
+    // A term of `+`, or of pathlib's `/` where the expression is a path.
+    for (const op of ['+', '/']) {
+      const after = masked[nextI] === op && masked[nextI + 1] !== op && masked[nextI + 1] !== '=' && masked[nextI + 1] !== '*';
+      const before = masked[prevI] === op && masked[prevI - 1] !== op && masked[prevI - 1] !== '*' && masked[prevI - 1] !== '<';
+      if (!after && !before) continue;
+      const open = enclosing(a);
+      const lo = open + 1;
+      const hi = open >= 0 ? closeOf(open) : masked.length;
+      // The statement or argument the chain sits in.
+      let from = lo;
+      let to = hi;
+      let depth = 0;
+      for (let k = a - 1; k >= lo; k--) {
+        const c = masked[k];
+        if (CLOSERS.includes(c)) depth++;
+        else if (OPENERS.includes(c)) depth--;
+        else if (depth === 0 && (c === ',' || c === '\n' || c === ';' || (c === '=' && masked[k + 1] !== '=' && masked[k - 1] !== '=' && masked[k - 1] !== '!'))) { from = k + 1; break; }
+      }
+      depth = 0;
+      for (let k = b; k < hi; k++) {
+        const c = masked[k];
+        if (OPENERS.includes(c)) depth++;
+        else if (CLOSERS.includes(c)) depth--;
+        else if (depth === 0 && (c === ',' || c === '\n' || c === ';' || c === ':')) { to = k; break; }
+      }
+      const [x, y] = trim(from, to);
+      if (op === '/' && !isPathish(x, y)) continue;
+      if (x < a || y > b) return [x, y];
+    }
+    const open = enclosing(a);
+    if (open < 0) return null;
+    const close = closeOf(open);
+    const args = argsOf(open, close);
+    const whole = args.some(([x, y]) => { const t = trim(x, y); return t[0] === a && t[1] === b; });
+    if (!whole) return null;
+    if (masked[open] === '(') {
+      if (/\bfor(?:each)?\s+(?:my\s+|our\s+)?\$\w+\s*$/.test(masked.slice(Math.max(0, open - 40), open))) return [open, close + 1];
+      const call = callAt(open);
+      if (call) {
+        const kind = transformOf(call, open);
+        if (kind === 'joinpath') return [call.recvStart, close + 1];
+        if (kind === 'collection') {
+          const made = /\bnew\s+$/.exec(masked.slice(Math.max(0, call.start - 8), call.start));
+          return [made ? call.start - made[0].length : call.start, close + 1];
+        }
+        return kind ? [call.start, close + 1] : null;
+      }
+      return [open, close + 1];
+    }
+    if (masked[open] === '[') return isIdent(masked[back(open - 1)]) || ')]'.includes(masked[back(open - 1)]) ? null : [open, close + 1];
+    // A brace is a set or a list only after an operator or a bracket, not a block.
+    return /(?:[=(,[:]|\breturn|\bin)\s*$/.test(masked.slice(Math.max(0, open - 12), open)) ? [open, close + 1] : null;
+  };
+
+  // HOW A SPAN IS USED: 'read' where the use is one CODE_READS_ALLOWED lists,
+  // 'write' otherwise.
+  const useCache = new Map();
+  const occurrenceCache = new Map();
+  const occurrences = (name) => {
+    if (occurrenceCache.has(name)) return occurrenceCache.get(name);
+    const out = [];
+    occurrenceCache.set(name, out);
+    const re = new RegExp(`(?<![\\w$.])${name.replace(/[$@%]/g, '\\$&')}(?![\\w$])`, 'g');
+    for (const m of masked.matchAll(re)) {
+      const a = m.index;
+      const b = a + m[0].length;
+      const rest = masked.slice(b, b + 4);
+      if (/^\s*=(?![=~>])/.test(rest)) continue;
+      if (/\bfor(?:each)?\s*\(?\s*(?:const|let|var|my|our)?\s*(?:[\w$]+\s*,\s*)*$/.test(masked.slice(Math.max(0, a - 60), a)) && /^\s*(?:,|\)?\s*(?:in|of)\b|\s*\()/.test(masked.slice(b, b + 12))) continue;
+      if (/\|\s*(?:[\w$]+\s*,\s*)*$/.test(masked.slice(Math.max(0, a - 20), a)) && /^\s*[|,]/.test(rest)) continue;
+      if (/^\s*=>/.test(rest) || /^\s*\)\s*=>/.test(masked.slice(b, b + 8))) continue;
+      out.push([a, b]);
+    }
+    return out;
+  };
+  const usesOf = (names, depth, before = Infinity) => {
+    for (const name of names) {
+      for (const [a, b] of occurrences(name)) if (a < before && useOf(a, b, depth + 1) === 'write') return 'write';
+    }
+    return 'read';
+  };
+  // The uses that see the value given at `nameAt`: in code run top to bottom,
+  // those before the name's next top-level assignment. A use anywhere else,
+  // in a loop or a function that may run later, counts whatever its place.
+  const usesUntilNext = (name, nameAt) => {
+    if (!isTopLevel(nameAt)) return Infinity;
+    const next = (topAssigns.get(name) || []).map(([x]) => x).filter(x => x > nameAt).sort((x, y) => x - y)[0];
+    return next === undefined ? Infinity : next;
+  };
+  const openMode = (args, idx) => {
+    for (let i = 0; i < args.length; i++) {
+      if (i === idx) continue;
+      const [x, y] = trim(args[i][0], args[i][1]);
+      const kw = /^([A-Za-z_]\w*)\s*[=:](?!=)\s*/.exec(masked.slice(x, y));
+      const from = kw ? fwd(x + kw[0].length) : x;
+      if (kw && !/^(?:mode|flags)$/.test(kw[1])) continue;
+      const lit = litByStart.get(from);
+      if (lit && lit.end === y) {
+        if (WRITE_MODE.test(lit.value)) return 'write';
+        if (READ_MODE.test(lit.value)) continue;
+      }
+      if (kw || i === idx + 1) return 'write';
+    }
+    return 'read';
+  };
+  const classifyCall = (call, open, close, a, b, depth) => {
+    const args = argsOf(open, close);
+    const idx = args.findIndex(([x, y]) => a >= x && b <= y);
+    const recv = call.dotted ? masked.slice(call.recvStart, call.recvEnd).replace(/\s+/g, '') : '';
+    const onModule = call.dotted && isModuleText(recv);
+    const onPath = call.dotted && isPathReceiver(call.recvStart, call.recvEnd);
+    const kw = idx >= 0 ? /^\s*[A-Za-z_]\w*\s*=(?!=)/.test(masked.slice(args[idx][0], a)) : false;
+    if (transformOf(call, open)) return 'read';
+    if (ALLOWED.calls.has(call.name)) return 'read';
+    if (ALLOWED.openCalls.has(call.name) || (call.name === 'new' && /(?:^|\.)File$/.test(recv))) return openMode(args, idx);
+    if (ALLOWED.sources.has(call.name)) return useOf(call.start, close + 1, depth + 1);
+    if (ALLOWED.copySources.has(call.name)) return idx === 0 && !kw ? 'read' : 'write';
+    if (ALLOWED.argumentMethods.has(call.name) && call.dotted && !onModule && !onPath) return 'read';
+    return 'write';
+  };
+  const classifyReceiver = (method, open, a, b, end, depth) => {
+    const onPath = isPathReceiver(a, b);
+    if (method === 'open' && open >= 0) return openMode(argsOf(open, closeOf(open)), -1);
+    if (method === 'replace' && onPath) return 'write';
+    if (ALLOWED.receiverReads.has(method)) return 'read';
+    if (ALLOWED.receiverPassThrough.has(method)) return useOf(a, end, depth + 1);
+    return 'write';
+  };
+  // The text of the statement before `k`, from the last line break, `;` or `{`.
+  const statementBefore = (k) => {
+    const from = Math.max(masked.lastIndexOf('\n', k - 1), masked.lastIndexOf(';', k - 1), masked.lastIndexOf('{', k - 1)) + 1;
+    return masked.slice(from, k);
+  };
+  const classify = (a, b, depth) => {
+    const before = masked.slice(Math.max(0, a - 160), a);
+    const after = masked.slice(b, b + 160);
+    // Part of a larger path or list, judged as that.
+    const parent = parentSpan(a, b);
+    if (parent && (parent[0] !== a || parent[1] !== b)) return 'read';
+    // A loop over it.
+    let m = /\bfor\s+\(?([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)\)?\s+in\s*$/.exec(before);
+    if (m) return usesOf(m[1].split(',').map(n => n.trim()), depth);
+    m = /\bfor\s*\(\s*(?:const|let|var)?\s*([A-Za-z_$][\w$]*)\s+(?:of|in)\s*$/.exec(before);
+    if (m) return usesOf([m[1]], depth);
+    m = /\bfor(?:each)?\s+(?:my\s+|our\s+)?(\$\w+)\s*$/.exec(before);
+    if (m) return usesOf([m[1]], depth);
+    m = /^\s*\.\s*(?:forEach|each|map|flatMap|filter|some|every)\s*(?:\(\s*\(?\s*|\{\s*\|\s*|do\s*\|\s*)([A-Za-z_$][\w$]*)/.exec(after);
+    if (m) return usesOf([m[1]], depth);
+    // The receiver of a method or an attribute.
+    m = /^\s*\.\s*([A-Za-z_]\w*[?!]?)/.exec(after);
+    if (m) {
+      const nameEnd = b + m[0].length;
+      const parenAt = fwd(nameEnd);
+      const isCall = masked[parenAt] === '(';
+      return classifyReceiver(m[1], isCall ? parenAt : -1, a, b, isCall ? closeOf(parenAt) + 1 : nameEnd, depth);
+    }
+    // A comparison or a membership test.
+    if (/(?:===?|!==?|<=|>=|\bnot\s+in|\bin|\bis(?:\s+not)?)\s*$/.test(before) || /^\s*(?:===?|!==?|<=|>=|not\s+in\b|in\b|is\b)/.test(after)) return 'read';
+    if (/\b(?:return|yield|throw)\s*$/.test(before)) return 'write';
+    const open = enclosing(a);
+    const call = open >= 0 && masked[open] === '(' ? callAt(open) : null;
+    const prevI = back(a - 1);
+    if (masked[prevI] === '=' && !'=!<>+-*/%&|^:~'.includes(masked[prevI - 1] || '') && masked[prevI + 1] !== '=') {
+      // Put in a name: judged by every use of the name.
+      const stmt = statementBefore(prevI);
+      const t = /^[ \t]*(?:(?:const|let|var|my|our|local)\s+)?([$@%]?[A-Za-z_][\w]*)[ \t]*$/.exec(stmt);
+      if (t) return usesOf([t[1]], depth, usesUntilNext(t[1], prevI - stmt.length + t[0].lastIndexOf(t[1])));
+      // A keyword argument (`file='.mcp.json'`) is judged as an argument.
+      const kwArg = call && argsOf(open, closeOf(open)).some(([x, y]) => x <= a && b <= y && /^\s*[A-Za-z_]\w*\s*=\s*$/.test(masked.slice(x, a)));
+      if (!kwArg) return 'write';
+    }
+    // An argument of a call, as a whole argument.
+    if (call) {
+      const close = closeOf(open);
+      const whole = argsOf(open, close).some(([x, y]) => {
+        const [tx, ty] = trim(x, y);
+        return ty === b && (tx === a || /^\s*[A-Za-z_]\w*\s*[=:]\s*$/.test(masked.slice(tx, a)));
+      });
+      return whole ? classifyCall(call, open, close, a, b, depth) : 'write';
+    }
+    if (open >= 0 && masked[open] === '[' && (isIdent(masked[back(open - 1)]) || ')]'.includes(masked[back(open - 1)]))) {
+      // A key deleted from a mapping (`del servers['.claude']`) names no file.
+      return /^[ \t]*del[ \t]+[\w.]+[ \t]*$/.test(statementBefore(open)) ? 'read' : 'write';
+    }
+    // A statement on its own.
+    const stmt = statementBefore(a);
+    if (/^[ \t]*$/.test(stmt) && /^[ \t]*(?:$|[\n;}#])/.test(after)) return 'read';
+    return 'write';
+  };
+  const useOf = (a, b, depth = 0) => {
+    if (depth > 10) return 'write';
+    const key = `${a}:${b}`;
+    if (useCache.has(key)) return useCache.get(key);
+    useCache.set(key, 'write');
+    const r = classify(a, b, depth);
+    useCache.set(key, r);
+    return r;
+  };
+
+  // EVERY PATH THE CODE NAMES, from each literal and from each name inside a
+  // larger path, grown to the whole path or list it is part of.
+  const nodes = new Map();
+  const consumed = new Set();
+  const grow = (a, b) => {
+    for (let i = 0; i < 16; i++) {
+      const p = parentSpan(a, b);
+      if (!p || (p[0] === a && p[1] === b)) break;
+      [a, b] = p;
+    }
+    return [a, b];
+  };
+  const addNode = (a, b) => {
+    const key = `${a}:${b}`;
+    if (!nodes.has(key)) nodes.set(key, { a, b, values: judged(resolve(a, b)), quiet: useOf(a, b) === 'read' });
+    return nodes.get(key);
+  };
+  const literalNode = new Map();
+  for (const lit of lits) {
+    const [a, b] = grow(lit.pre, lit.end);
+    const node = addNode(a, b);
+    literalNode.set(lit, node);
+    if (a !== lit.pre || b !== lit.end) consumed.add(lit);
+  }
+  for (const name of new Set([...vars.keys(), ...loops.keys()])) {
+    for (const [a, b] of occurrences(name)) if (parentSpan(a, b)) { const [x, y] = grow(a, b); addNode(x, y); }
+  }
+
+  // THE COMMAND A RUNNER IS GIVEN, word by word: its first argument and the
+  // list it is handed, each word filled in from the names and loop values it
+  // may hold. Keyword arguments (`shell=True`) are not words.
+  const commandWords = (open, close) => {
+    const args = argsOf(open, close).filter(([x, y]) => !/^\s*[A-Za-z_]\w*\s*[=:](?!=)/.test(masked.slice(x, y)));
+    if (!args.length) return [];
+    const isList = ([x, y]) => { const [tx, ty] = trim(x, y); return '[('.includes(masked[tx]) && closeOf(tx) === ty - 1; };
+    const parts = [];
+    if (!isList(args[0])) parts.push(args[0]);
+    const list = args.find(isList);
+    if (list) { const [tx, ty] = trim(list[0], list[1]); parts.push(...argsOf(tx, ty - 1)); }
+    const words = product(parts.map(([x, y]) => resolve(x, y).map(v => v.split(UNKNOWN).join(''))), (x, y) => `${x} ${y}`);
+    return words.filter(w => w.trim());
+  };
+  // Commands the code runs, read by the caller as commands.
+  const commands = [];
+  for (const m of masked.matchAll(/(?<![\w$])([A-Za-z_][\w]*)\s*\(/g)) {
+    const open = m.index + m[0].length - 1;
+    const call = callAt(open);
+    if (!call) continue;
+    const recv = call.dotted ? masked.slice(call.recvStart, call.recvEnd).replace(/\s+/g, '') : '';
+    const original = call.dotted ? call.name : (imported.get(call.name) || call.name);
+    const runs = RUNS_COMMAND.has(original) || (RUNS_COMMAND_ON_MODULE.has(original) && ((call.dotted && isModuleText(recv)) || (!call.dotted && imported.has(call.name))));
+    if (!runs) continue;
+    for (const command of commandWords(open, closeOf(open))) commands.push(command);
+  }
+  return { nodes: [...nodes.values()], literalNode, consumed, commands };
+}
+
+// The literals in a piece of code that name a place (each with whether the
+// code counts as writing it), the paths that may name an answer file and that
+// the code counts as writing (`names`), and the commands it runs itself. A
+// literal is quoted text on one line, so an apostrophe in a comment cannot
+// swallow the code after it. A path built from parts is given whole, beside
+// the literals it was built from.
 function codeParts(code, reading = null) {
   const s = String(code);
-  const literals = [];
+  const found = [];
   const commands = [];
+  // The code with each literal's text, each backtick span and each quote
+  // operator's body blanked, so nothing inside one is read as code.
+  const blank = new Uint8Array(s.length);
+  const blankOut = (a, b) => { for (let k = a; k < b && k < s.length; k++) if (s[k] !== '\n') blank[k] = 1; };
   for (let i = 0; i < s.length; i++) {
     const ch = s[i];
     if (ch === "'" || ch === '"') {
       let j = i + 1;
       while (j < s.length && s[j] !== ch && s[j] !== '\n') j += s[j] === '\\' ? 2 : 1;
       if (s[j] === ch) {
-        if (literalIsPlace(s.slice(i + 1, j), reading)) literals.push(s.slice(i + 1, j));
+        // Python's prefixes (`f`, `r`, `b`, `u`) belong to the literal.
+        let pre = i;
+        while (pre > 0 && i - pre < 2 && /[fFrRbBuU]/.test(s[pre - 1])) pre--;
+        if (pre < i && /[\w$]/.test(s[pre - 1] || '')) pre = i;
+        found.push({ start: i, pre, end: j + 1, value: s.slice(i + 1, j), kind: 'quote' });
+        blankOut(i + 1, j);
         i = j;
       }
       continue;
     }
     if (ch === '`') {
       const j = s.indexOf('`', i + 1);
-      commands.push(s.slice(i + 1, j < 0 ? s.length : j));
+      const end = j < 0 ? s.length : j;
+      commands.push(s.slice(i + 1, end));
+      // A template literal is a string too, for the paths code builds in one.
+      if (j >= 0) found.push({ start: i, pre: i, end: j + 1, value: s.slice(i + 1, j), kind: 'template' });
+      blankOut(i + 1, end);
       if (j < 0) break;
       i = j;
       continue;
@@ -1341,10 +2323,33 @@ function codeParts(code, reading = null) {
         else if (s[j] === CLOSING[open] && --depth === 0) break;
       }
       commands.push(s.slice(i + q[0].length, j));
+      blankOut(i + q[0].length, j);
       i = j;
     }
   }
-  return { literals, commands };
+  let masked = '';
+  for (let k = 0; k < s.length; k++) masked += blank[k] ? ' ' : s[k];
+  const { nodes, literalNode, consumed, commands: run } = codeUse(s, masked, found);
+  const literals = [];
+  const names = [];
+  const seen = new Set();
+  const addLiteral = (t, written) => {
+    const key = `${written ? 1 : 0}${t}`;
+    if (!seen.has(key) && literalIsPlace(t, reading)) { seen.add(key); literals.push({ t, written }); }
+  };
+  for (const l of found) {
+    if (l.kind !== 'quote') continue;
+    const node = literalNode.get(l);
+    const own = !consumed.has(l) && node.values.length === 1 && node.values[0] === l.value;
+    addLiteral(l.value, own && !node.quiet);
+  }
+  for (const node of nodes) {
+    for (const v of node.values) {
+      addLiteral(v, !node.quiet);
+      if (!node.quiet && MAY_NAME_ANSWER_FILE.test(v)) names.push(v);
+    }
+  }
+  return { literals, names: [...new Set(names)], commands: [...commands, ...run] };
 }
 
 // The segment of `text` that holds the character at `at`.
@@ -1365,10 +2370,11 @@ function segmentAt(text, at) {
 function heredocText(command, reading = null) {
   const s = String(command);
   const cut = stripHeredocs(s);
-  if (!cut.ok || !cut.bodies.length) return { text: s, literals: [], commands: [] };
+  if (!cut.ok || !cut.bodies.length) return { text: s, literals: [], names: [], commands: [] };
   let text = '';
   let from = 0;
   const literals = [];
+  const names = [];
   const commands = [];
   for (const b of cut.bodies) {
     text += cut.text.slice(from, b.bodyAt);
@@ -1378,10 +2384,11 @@ function heredocText(command, reading = null) {
     if (seg === null || !subs.ok || !feedsCode(seg, b.body)) { text += b.body; continue; }
     const at = b.at + text.length - b.bodyAt;
     const code = codeParts(b.body, reading);
-    for (const t of code.literals) literals.push({ t, at });
+    for (const l of code.literals) literals.push({ ...l, at });
+    for (const t of code.names) names.push({ t, at });
     for (const c of [...code.commands, ...subs.bodies]) commands.push({ text: c, at });
   }
-  return { text: text + cut.text.slice(from), literals, commands };
+  return { text: text + cut.text.slice(from), literals, names, commands };
 }
 
 // CODE ON THE COMMAND LINE IS READ THE SAME WAY. `python3 -c`, `node -e`,
@@ -1390,8 +2397,60 @@ function heredocText(command, reading = null) {
 // code in a here-document carded. The word is still read as before; the
 // literals and commands inside it are read as well, at its command.
 const INLINE_CODE = { python: /^-[A-Za-z]*?c(.*)$/s, node: /^(?:-[A-Za-z]*?[ep]|--(?:eval|print)=?)(.*)$/s, ruby: /^-[A-Za-z]*?e(.*)$/s, perl: /^-[A-Za-z]*?[eE](.*)$/s };
-function inlineCode(text, reading = null) {
+// A SHELL GIVEN ITS COMMAND WITH -c runs that word as commands, so it is read
+// as commands, as a here-document fed to a shell is: through the prefixes
+// that run what follows them (`xargs` and `timeout` among them, past their
+// options and `timeout`'s duration), and the shell named by a path too. The
+// command is the first word after the options once `-c` (alone or in a bundle
+// such as `-lc`) has been given.
+const SHELL_NAMES = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'fish']);
+const RUNS_WHAT_FOLLOWS = new Set(['env', 'exec', 'command', 'nohup', 'nice', 'time', 'sudo', 'doas', 'timeout', 'gtimeout', 'xargs',
+  'stdbuf', 'ionice', 'caffeinate', 'npx', 'uv run']);
+const PREFIX_TAKES_VALUE = {
+  sudo: /^-[ugCDhpr]$/, doas: /^-[uC]$/, nice: /^-n$/, env: /^-[uS]$/,
+  timeout: /^(?:-[sk]|--signal|--kill-after)$/, gtimeout: /^(?:-[sk]|--signal|--kill-after)$/,
+  // BSD's -J, -R and -S as well as GNU's options.
+  xargs: /^(?:-[nLPsIEdaJRS]|--(?:max-args|max-lines|max-procs|max-chars|eof|delimiter|arg-file|process-slot-var))$/,
+  stdbuf: /^-[ioe]$/, ionice: /^-[cnp]$/, caffeinate: /^-[tw]$/,
+  npx: /^(?:-p|--package)$/,
+  'uv run': /^(?:-p|--python|--with|--with-requirements|--with-editable|--project|--directory|--env-file|--extra|--group|--package|--index|--index-url)$/,
+};
+// A prefix that takes one word of its own before the command: the duration.
+const PREFIX_TAKES_WORD = new Set(['timeout', 'gtimeout']);
+// WHERE THE PROGRAM A COMMAND RUNS IS NAMED: past its assignments and the
+// prefixes that run what follows them, with their options and their own
+// words. Shared by the shell's `-c` and the code given on the command line,
+// so both are found after the same prefixes.
+function programIndex(words) {
+  let i = 0;
+  for (let depth = 0; depth < 8; depth++) {
+    while (i < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i])) i++;
+    const first = (words[i] || '').split('/').pop();
+    const lead = first === 'uv' && words[i + 1] === 'run' ? 'uv run' : first;
+    if (!RUNS_WHAT_FOLLOWS.has(lead)) break;
+    i += lead === 'uv run' ? 2 : 1;
+    while (i < words.length && words[i].startsWith('-')) i += (PREFIX_TAKES_VALUE[lead] && PREFIX_TAKES_VALUE[lead].test(words[i])) ? 2 : 1;
+    if (PREFIX_TAKES_WORD.has(lead)) i++;
+  }
+  return i;
+}
+function shellDashC(words) {
+  const i = programIndex(words);
+  if (!SHELL_NAMES.has((words[i] || '').split('/').pop())) return null;
+  let given = false;
+  for (let k = i + 1; k < words.length; k++) {
+    const w = words[k];
+    if (/^-[A-Za-z]*c[A-Za-z]*$/.test(w)) { given = true; continue; }
+    if (w === '-o' || w === '+o') { k++; continue; }
+    if (w.startsWith('-') || w.startsWith('+')) continue;
+    return given ? w : null;
+  }
+  return null;
+}
+
+function inlineCode(text, reading = null, depth = 0) {
   const literals = [];
+  const names = [];
   const commands = [];
   let from = 0;
   for (const seg of lexSegments(text)) {
@@ -1399,18 +2458,28 @@ function inlineCode(text, reading = null) {
     if (at < 0) break;
     from = at + seg.text.length;
     const words = lexWords(seg.text).map(w => w.text);
-    let i = 0;
-    while (i < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i])) i++;
+    const shellCommand = shellDashC(words);
+    if (shellCommand) {
+      // What the shell runs is read as any command is, its here-documents, its
+      // code and the shells it runs in turn included, a few levels deep.
+      const inner = depth < 4 ? judgedShellText(shellCommand, reading, depth + 1) : { text: shellCommand, literals: [], names: [], commands: [] };
+      commands.push({ text: inner.text, at });
+      for (const l of inner.literals) literals.push({ ...l, at });
+      for (const n of inner.names) names.push({ ...n, at });
+      for (const c of inner.commands) commands.push({ text: c.text, at });
+    }
+    const i = programIndex(words);
     const family = interpreterFamily((words[i] || '').split('/').pop());
     for (let k = i + 1; family && k < words.length; k++) {
       const m = INLINE_CODE[family].exec(words[k]);
       if (!m) continue;
       const code = codeParts(m[1] || words[++k] || '', reading);
-      for (const t of code.literals) literals.push({ t, at });
+      for (const l of code.literals) literals.push({ ...l, at });
+      for (const t of code.names) names.push({ t, at });
       for (const c of code.commands) commands.push({ text: c, at });
     }
   }
-  return { literals, commands };
+  return { literals, names, commands };
 }
 
 // The command as the check reads it: its text, with what code it carries
@@ -1422,12 +2491,13 @@ function inlineCode(text, reading = null) {
 // comment) ran on into the lines after the here-document, and a `cd` there
 // stopped being seen. It is measured from where the command starts: it runs
 // in a shell of its own, so a `cd` inside it moves nothing outside it.
-function judgedShellText(command, reading = null) {
+function judgedShellText(command, reading = null, depth = 0) {
   const view = heredocText(command, reading);
-  const inline = inlineCode(view.text, reading);
+  const inline = inlineCode(view.text, reading, depth);
   return {
     text: view.text,
     literals: [...view.literals, ...inline.literals],
+    names: [...view.names, ...inline.names],
     commands: [...view.commands, ...inline.commands],
   };
 }
@@ -1453,23 +2523,34 @@ function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), 
   // PowerShell tool keep the Windows reading unchanged.
   const winShaped = winWorld || process.platform === 'win32' || WIN_DRIVE.test(workspaceRoot) || WIN_UNC.test(workspaceRoot);
   const posixText = opts.shellTool !== 'PowerShell' && !winShaped;
-  // AN ANSWER FILE IS CHANGED ONLY BY A SEGMENT THAT DOES MORE THAN READ.
-  // `tail .rundock/permissions.json; echo done > build.log` reads the file and
-  // writes somewhere else; judged as a whole it was a change to the answer
-  // file. So the words of the segments that do not only read are collected,
-  // and an answer file is reported when one of them names it. A redirect, tee,
-  // sed -i, cp or mv onto it is such a segment.
+  // AN ANSWER FILE IS CHANGED ONLY BY WHAT CAN WRITE IT. `tail
+  // .rundock/permissions.json; echo done > build.log` reads the file and writes
+  // somewhere else, and `git diff .mcp.json` or `cp .mcp.json backup.json`
+  // only reads it; see answerFileWriteWords for which words count as written.
+  // The command's own text and each command its code runs are read alike.
   //
-  // A literal in code handed to an interpreter counts as written: the code
-  // can open it for writing, and nothing here can tell that it does not.
+  // A literal in code handed to an interpreter counts as written unless every
+  // use of it is a read (see codeUse): `open('.mcp.json')` reads it.
   const view = judgedShellText(command, { posixText, firstFolders: opts.firstFolders || new Map() });
-  const writingWords = new Set();
+  const writes = { words: new Set(), into: [] };
   if (!readOnly) {
-    for (const lit of view.literals) writingWords.add(lit.t);
-    for (const text of [view.text, ...view.commands.map(c => c.text)]) for (const seg of shellSegments(text)) {
-      if (!isReadOnlyShellCommand(seg)) for (const w of shellPathTokens(seg, posixText)) writingWords.add(w);
+    for (const lit of view.literals) if (lit.written) writes.words.add(lit.t);
+    for (const [text, fromStart] of [[view.text, false], ...view.commands.map(c => [c.text, true])]) {
+      const w = answerFileWriteWords(text, posixText);
+      for (const x of w.words) writes.words.add(x);
+      for (const i of w.into) writes.into.push({ ...i, fromStart });
     }
   }
+  const writingWords = writes.words;
+  // A folder a copy or move writes INTO is not itself replaced: what it writes
+  // is checked by name below, so `cp x.json .claude` asks about nothing.
+  const intoFolders = new Set(writes.into.map(i => i.dest));
+  const reachesAnswerFiles = (raw, resolved, pmod) => !intoFolders.has(raw)
+    && (holdsAnswerFiles(resolved, workspaceRoot, foldsCase, pmod) || globReachesAnswerFiles(resolved, workspaceRoot, foldsCase, pmod));
+  const addAnswer = (resolved, pmod) => {
+    const akey = pmod === path.win32 ? resolved.toLowerCase() : resolved;
+    if (!seen.has(akey)) { seen.add(akey); found.push({ path: resolved, answerFile: true }); }
+  };
   const ran = view.commands.flatMap(c => shellPathWords(c.text, posixText).map(w => ({ t: w.t, at: c.at, fromStart: true })));
   const words = shellPathWords(view.text, posixText).concat(view.literals, ran).sort((a, b) => a.at - b.at);
   // The folder each word starts from, worked out once per path flavour, for
@@ -1481,6 +2562,80 @@ function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), 
     if (!bases.has(key)) bases.set(key, commandBases(fromStart ? '' : view.text, workspaceRoot, pmod, opts.cwd, extraDirs, home));
     return bases.get(key);
   };
+  // WHERE THE BASE IS UNSURE, A WRITTEN WORD IS TRIED FROM EACH LITERAL `cd` AS
+  // WELL. The base falls back to where the command started whenever a `cd` is
+  // not certain: inside an `if`, after a second one, or in a command a shell is
+  // handed. Measured only from there, `if true; then cd .claude/hooks && echo x
+  // > pre.sh; fi` wrote a bare `pre.sh`. So each landing of a literal `cd` or
+  // `pushd` before a written word is tried too (one in a command handed to a
+  // shell counts for that command's words only), and the word asks if any of
+  // them makes it an answer file. A certain base comes from the command's one
+  // `cd`, whose one landing is that base, so there this adds nothing.
+  const scanned = movesAndLoops(view.text);
+  const commandScans = view.commands.map(c => movesAndLoops(c.text));
+  const startOf = (pmod) => (opts.cwd ? canonicalize(pmod.resolve(opts.cwd), pmod) : pmod.resolve(workspaceRoot));
+  const landings = new Map();
+  const landingsFor = (pmod) => {
+    const key = pmod === path.win32 ? 'w' : 'p';
+    if (!landings.has(key)) {
+      const start = startOf(pmod);
+      const outer = cdLandings(scanned.moves, [start], pmod, home).map(l => ({ ...l, scope: null }));
+      const inner = view.commands.flatMap((c, k) => cdLandings(commandScans[k].moves, [start, ...outer.filter(l => l.at < c.at).map(l => l.base)], pmod, home)
+        .map(l => ({ base: l.base, at: c.at, scope: c.at })));
+      landings.set(key, outer.concat(inner));
+    }
+    return landings.get(key);
+  };
+  const cdStarts = (pmod, at, fromStart) => landingsFor(pmod)
+    .filter(l => (l.scope === null ? l.at < at : fromStart && l.scope === at)).map(l => l.base);
+  // A LOOP VARIABLE STANDS FOR EACH WORD OF ITS LIST. `for f in .mcp.json; do
+  // echo x > $f; done` writes `.mcp.json`, so a written word naming `$f` or
+  // `${f}` is also tried with each word of the list in its place.
+  const loops = scanned.loops.concat(...commandScans.map(s => s.loops));
+  const loopForms = (word) => {
+    const out = [word];
+    for (const { name, items } of loops) {
+      const ref = new RegExp('\\$(?:\\{' + name + '\\}|' + name + '(?![A-Za-z0-9_]))', 'g');
+      if (word.search(ref) < 0) continue;
+      for (const item of items) {
+        if (out.length >= 64) return out;
+        out.push(word.replace(ref, () => item));
+      }
+    }
+    return out;
+  };
+  // EVERY LITERAL IN CODE THAT MAY NAME AN ANSWER FILE AND THAT THE CODE CAN
+  // WRITE, place-shaped or not. The place filter is for crossings outside the
+  // workspace: a bare name such as `.mcp.json` or `.claude` is not shaped like
+  // a place, and dropping it there let `open('.mcp.json', 'w')` and
+  // `shutil.rmtree('.claude')` through.
+  // Tested here against the answer files, a folder holding them and the
+  // console folder, and nothing else, so what counts as a crossing outside
+  // is unchanged.
+  if (!readOnly) {
+    for (const { t: lit, at } of view.names) {
+      let t = lit;
+      for (const re of HOME_PREFIX) { if (re.test(t)) { t = t.replace(re, home); break; } }
+      const flavour = winWorld ? path.win32 : flavourFor(t, workspaceRoot, posixText);
+      const r = canonicalize(flavour.resolve(basesFor(flavour, false)(at), t), flavour);
+      if (isWorkspaceAnswerFile(r, workspaceRoot, foldsCase, flavour) || isAnswerFileOfAnyWorkspace(r, flavour)
+        || holdsAnswerFiles(r, workspaceRoot, foldsCase, flavour) || isRundockConsolePath(r, home, foldsCase, flavour)) addAnswer(r, flavour);
+    }
+  }
+  // What a copy, move or link writes into a folder: the file of each source's
+  // name there (`cp backup/.mcp.json .`), from the folder its segment starts in.
+  for (const { dest, sources, at, fromStart } of writes.into) {
+    const pmod = winWorld ? path.win32 : flavourFor(dest, workspaceRoot, posixText);
+    const d = canonicalize(pmod.resolve(basesFor(pmod, fromStart)(at), dest), pmod);
+    let folder = /[\\/]$/.test(dest);
+    try { folder = folder || fs.statSync(d).isDirectory(); } catch (e) { /* not there: a file name */ }
+    if (!folder) continue;
+    for (const src of sources) {
+      const target = canonicalize(pmod.join(d, pmod.basename(src)), pmod);
+      if (isWorkspaceAnswerFile(target, workspaceRoot, foldsCase, pmod) || isAnswerFileOfAnyWorkspace(target, pmod) || reachesAnswerFiles(null, target, pmod)
+        || isRundockConsolePath(target, home, foldsCase, pmod)) addAnswer(target, pmod);
+    }
+  }
   let previous = '';
   for (const { t: raw, at, fromStart } of words) {
     // A `cd` target is judged even as a bare word, so a folder that is a link
@@ -1518,7 +2673,8 @@ function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), 
     // workspace root regardless. Everything BELOW still judges against the
     // workspace root: the base says where a relative path starts, never what
     // counts as inside.
-    const resolved = canonicalize(pmod.resolve(basesFor(pmod, fromStart)(at), t), pmod);
+    const base = basesFor(pmod, fromStart)(at);
+    const resolved = canonicalize(pmod.resolve(base, t), pmod);
 
     // THE ANSWER FILES ARE TESTED BEFORE THE CROSSING FILTER, not after it.
     //
@@ -1533,10 +2689,18 @@ function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), 
     //
     // The second is how anyone would actually write it, and it is the shape a
     // test using an absolute path never sees.
-    if (writingWords.has(raw) && (isWorkspaceAnswerFile(resolved, workspaceRoot, foldsCase, pmod) || isAnswerFileOfAnyWorkspace(resolved, pmod))) {
-      const akey = pmod === path.win32 ? resolved.toLowerCase() : resolved;
-      if (!seen.has(akey)) { seen.add(akey); found.push({ path: resolved, answerFile: true }); }
-      continue;
+    if (writingWords.has(raw)) {
+      const forms = braceForms(t);
+      const spellings = forms.flatMap(loopForms);
+      const starts = [base, ...cdStarts(pmod, at, fromStart)];
+      const hits = (spellings.length > 1 || starts.length > 1 ? starts.flatMap(b => spellings.map(f => canonicalize(pmod.resolve(b, f), pmod))) : [resolved])
+        .filter(r => isWorkspaceAnswerFile(r, workspaceRoot, foldsCase, pmod) || isAnswerFileOfAnyWorkspace(r, pmod) || reachesAnswerFiles(raw, r, pmod)
+          // Rundock's console folder under home, wherever the workspace is.
+          || isRundockConsolePath(r, home, foldsCase, pmod) || globReachesConsole(r, home, foldsCase, pmod));
+      if (hits.length) {
+        for (const r of hits) addAnswer(r, pmod);
+        continue;
+      }
     }
 
     // Skip tokens that could not cross. A relative token resolves against the
@@ -1853,9 +3017,9 @@ module.exports = {
   CODEX_SECRET_RELATIVE_PATHS, CODEX_PERSISTENCE_SURFACE_DIRS, CODEX_PERSISTENCE_SURFACE_FILES,
   HOME_SECRET_FILES, secretsRegistry,
   agentHomeRoot, codexHomeRoot, runtimeHomes,
-  isWorkspaceAnswerFile, isRuntimeGuardedAnswerFile,
-  WORKSPACE_ANSWER_FILES, RUNDOCK_ANSWER_FILES, RUNTIME_GUARDED_ANSWER_FILES,
-  boundaryCrossingsFor,
+  isWorkspaceAnswerFile, isRuntimeGuardedAnswerFile, isRundockConsolePath, RUNDOCK_CONSOLE_DIR,
+  WORKSPACE_ANSWER_FILES, RUNDOCK_ANSWER_FILES, RUNTIME_GUARDED_ANSWER_FILES, LAUNCHER_FILES, WHAT_RUNS_FILES, WHAT_RUNS_DIRS,
+  boundaryCrossingsFor, CODE_READS_ALLOWED,
   REFUSED_CLAUDE_EDIT_DIRS, isReadOnlyShellCommand, isRundockAnswerFileAnywhere, isRundockWorkspaceSettingsFile, isAnswerFileOfAnyWorkspace, otherWorkspaceRootOf, isOtherWorkspaceAgentSurface,
   INSTRUCTION_SURFACES, isInstructionSurface, hiddenHomeRootOf, alwaysAsksCrossing, SHELL_TOOLS, keychainPlatform,
 };
@@ -2158,6 +3322,24 @@ fetchAgentNotice((agentNotice) => {
     process.exit(0);
   }
 
+  // THE LAUNCHER, BY A FILE TOOL OR A SHELL COMMAND. Rundock writes it each
+  // time it opens the workspace and puts any other change to it back without a
+  // card (lib/workspace/answer-file-guard.js), so a card's Allow could never
+  // hold: the agent would be told it was approved while the write was undone.
+  // Refused here instead, in both modes, with the reason.
+  const launcherWrite = !!access && (access.enforcedDeny === 'launcher'
+    || (Array.isArray(access.crossings) && access.crossings.some(c => c && c.answerFile && isLauncherFile(c.path))));
+  if (launcherWrite) {
+    writeDecision(({
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        permissionDecision: 'deny',
+        permissionDecisionReason: "This is the launcher Rundock starts its permission checks through. Rundock writes it itself each time it opens a workspace and puts back any other change to it, so a change could never stand, and it does not ask. Nothing needs changing there: tell the person what you were trying to do instead."
+      }
+    }));
+    process.exit(0);
+  }
+
   // `answerFile` is excluded HERE, at the first branch that can allow anything,
   // and not only at the code-mode branch below. This instant-allow fires in
   // every mode, so reclassifying an answer file as inside without touching this
@@ -2356,7 +3538,7 @@ fetchAgentNotice((agentNotice) => {
   const failClosed = answerFile || destructive || asksOnce || alwaysAsks || crossingAlwaysAsks || connectorAlwaysAsks;
   function unanswered(reason) {
     let why;
-    if (answerFile) why = 'This file records your own permission answers, and it is never changed without asking, so it was refused rather than approved on your behalf.';
+    if (answerFile) why = 'This file records your own permission answers or decides what runs, and it is never changed without asking, so it was refused rather than approved on your behalf.';
     else if (keychain) why = 'This reads or changes a password or key stored in your Mac\'s Keychain, and it is never done without asking, so it was refused rather than approved on your behalf.'
       + (verdict.also ? ' Part of it also cannot be undone.' : '');
     else if (alwaysAsks || destructive) why = 'This command cannot be undone, and it is never run without asking, so it was refused rather than approved on your behalf.';
