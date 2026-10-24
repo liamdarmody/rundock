@@ -140,8 +140,11 @@ describe('it cannot change a decision', () => {
       'the advisory must not be assigned into either decision input');
   });
 
+  // A form the classifier still does not read: a shell's -c word is now read
+  // as commands, and so is code given with -c or -e, so neither can stand in
+  // for "the label finds it, the decision does not".
   test('classifying a command is unaffected by what the advisory finds', () => {
-    const command = `sh -c "cat ${SECRET}"`;
+    const command = `awk 'BEGIN{while((getline l < "${SECRET}")>0) print l}'`;
     assert.ok(hook.advisoryOutsidePaths(command, WS, []).length > 0, 'the label finds it');
     assert.strictEqual(hook.classifyShellAccess('Bash', { command }, WS, []), null,
       'and the decision is exactly what it was before: not a crossing, left to '

@@ -838,3 +838,81 @@ describe('the answer-file reason reaches the browser', () => {
       'reads were always free and this change must not start carding them');
   });
 });
+
+// THE FILES THAT DECIDE WHAT RUNS, asked about in sequence through the real
+// hook and the real server: the launcher the runtime starts the permission hook
+// through, `.mcp.json`, the project settings and the hook scripts. A denial is
+// not kept as a standing no and an approval is not kept as a standing yes: each
+// attempt asks. The same write through another tool asks as well. Rundock's
+// own writes of these files are made from the server's process, which neither
+// the hook nor the sandbox judges, so they land with no card.
+describe('the files that decide what runs, asked about in sequence', () => {
+  const launcher = () => path.join(h.workspaceDir, '.rundock', 'permission-hook.sh');
+  const isAnswerFileCard = m => m.type === 'control_request' && m.request
+    && (m.request.answer_file === true
+      || (Array.isArray(m.request.crossings) && m.request.crossings.length > 0 && m.request.crossings.every(c => c && c.answerFile)));
+  async function answer(pending, since, allow, label) {
+    const { msg } = await client.waitFor(isAnswerFileCard, { since, label });
+    assert.strictEqual(msg.request.grant_dir || null, null, `${label}: nothing a standing grant could be built from`);
+    client.send({ type: 'permission_response', requestId: msg.request_id, conversationId: 'boundary-test', allow });
+    return { msg, out: await pending };
+  }
+
+  // The launcher is refused before any card: Rundock writes it and puts any
+  // other change back, so an Allow could never hold.
+  test('the launcher is refused with a reason and no card, by every tool, every time', async () => {
+    for (const [tool, input] of [
+      ['Write', { file_path: launcher(), content: 'exit 0' }],
+      ['Write', { file_path: launcher(), content: 'exit 0' }],
+      ['Bash', { command: 'echo "exit 0" > .rundock/permission-hook.sh' }],
+      ['Edit', { file_path: launcher(), old_string: 'exit', new_string: 'exit' }],
+    ]) {
+      const since = client.messages.length;
+      const out = await runHook(tool, input);
+      assert.strictEqual(decisionOf(out), 'deny', `${tool}: refused`);
+      assert.match(reasonOf(out) || '', /starts its permission checks/, `${tool}: with the reason`);
+      assert.ok(!client.messages.slice(since).some(m => m.type === 'control_request'), `${tool}: and no card was raised`);
+    }
+  });
+
+  test('the files that decide what runs ask the same way, and keep asking', async () => {
+    for (const rel of ['.mcp.json', '.claude/settings.json', '.claude/hooks/pre-tool.sh']) {
+      const target = path.join(h.workspaceDir, ...rel.split('/'));
+      let since = client.messages.length;
+      const first = await answer(runHook('Write', { file_path: target, content: '{}' }), since, false, `${rel}: the first attempt`);
+      assert.strictEqual(first.msg.request.resolved_path, canonicalize(target), `${rel}: the card names the file`);
+      assert.strictEqual(decisionOf(first.out), 'deny', `${rel}: denied, it does not run`);
+      since = client.messages.length;
+      const retry = await answer(runHook('Write', { file_path: target, content: '{}' }), since, true, `${rel}: the retry`);
+      assert.strictEqual(decisionOf(retry.out), 'allow', `${rel}: the retry asked again, and this time was approved`);
+      since = client.messages.length;
+      const shell = await answer(runHook('Bash', { command: `echo '{}' | tee ${rel}` }), since, false, `${rel}: by tee`);
+      assert.strictEqual(decisionOf(shell.out), 'deny', `${rel}: the approval before it answered nothing: tee asked`);
+    }
+  });
+
+  test("Rundock's own write of the project settings lands, with no card", async () => {
+    const scaffold = require('../../lib/workspace/scaffold.js');
+    const settings = path.join(h.workspaceDir, '.claude', 'settings.json');
+    fs.mkdirSync(path.dirname(settings), { recursive: true });
+    fs.writeFileSync(settings, JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: 'afplay /System/Library/Sounds/Glass.aiff' }] }] } }));
+    const since = client.messages.length;
+    scaffold.scaffoldWorkspace(h.workspaceDir, { platform: 'darwin' });
+    const muted = JSON.parse(fs.readFileSync(settings, 'utf-8')).hooks.Stop[0].hooks[0].command;
+    assert.strictEqual(muted, '[ -z "$RUNDOCK" ] && afplay /System/Library/Sounds/Glass.aiff || true', 'the server muted the sound hook in the file');
+    await h.delay(300);
+    assert.strictEqual(client.messages.slice(since).filter(m => m.type === 'control_request').length, 0, 'and nothing asked');
+  });
+
+  test("Rundock's own write of it lands, with no card", async () => {
+    const scaffold = require('../../lib/workspace/scaffold.js');
+    fs.writeFileSync(launcher(), '#!/bin/sh\nexit 0\n');
+    const since = client.messages.length;
+    scaffold.scaffoldWorkspace(h.workspaceDir, { platform: 'darwin' });
+    assert.match(fs.readFileSync(launcher(), 'utf-8'), /ELECTRON_RUN_AS_NODE=1 exec .*permission-hook\.js/,
+      'the server put its own launcher back');
+    await h.delay(300);
+    assert.strictEqual(client.messages.slice(since).filter(m => m.type === 'control_request').length, 0,
+      'and nothing asked: the hook never sees a write the server makes');
+  });
+});

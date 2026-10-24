@@ -671,6 +671,7 @@ claudeRuntime.wireClaudeRuntimeDeps({
   // Every Claude turn runs under the same answer-file guard as a Codex turn.
   onClaudeSpawn: (proc, { convoId, agentId }) => watchClaudeTurns(proc, {
     workspace: config.getWorkspace(),
+    convoId,
     onChange: (change) => codexGlue.surfaceAnswerFileChange({ agentId, processId: null }, convoId, change, 'claude'),
   }),
 });
@@ -1478,7 +1479,9 @@ const wsHandlerContext = {
     invalidateFileListCache, invalidateFileTreeCache, noteExtensionRecordsChanged, watchOpenFile,
     fileTreeForSend, broadcastFileTree, armFileTreeWatcher,
   },
-  runtime: { getRuntimeStatus, killAllChildren, cleanOrphanedProcesses },
+  // requestServerPermission: the card a handler raises before acting for an
+  // agent (an agent's connector change, in team.js).
+  runtime: { getRuntimeStatus, killAllChildren, cleanOrphanedProcesses, requestServerPermission },
   signals: { reportStartup, phaseTimer },         // startup telemetry (recordEvent is lib-owned)
   broadcast: safeSend,
   config,                                         // lib/config module: getWorkspace at use time
@@ -2613,7 +2616,8 @@ function getRuntimeStatus() {
 // asked. Only those fields pass.
 const SERVER_REQUEST_FIELDS = ['code_mode_verdict', 'boundary', 'resolved_path', 'grant_dir', 'crossings', 'answer_file', 'put_back'];
 function requestServerPermission({ convoId, toolName, toolInput, onDecision, grading }) {
-  const requestId = 'perm-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  // An id nothing can guess: an answer is matched to its card by this alone.
+  const requestId = 'perm-' + require('crypto').randomBytes(16).toString('hex');
   pendingPermissionRequests.set(requestId, {
     onDecision,
     conversationId: convoId,
