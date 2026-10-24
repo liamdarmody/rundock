@@ -39,6 +39,10 @@
 //     superseded turn's partial text must never leak into the next turn's
 //     rendered answer. The already-rendered partial bubble stays in the DOM
 //     as the stopped reply (detached, never removed).
+//   - A session Claude Code no longer has is forgotten by id, wherever the
+//     conversation stores it (session_expired, or info naming
+//     expiredSessionId), so it is never resumed again; info that names no
+//     session still clears the primary as before.
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = factory(require('./markers.js'));
   else root.RundockConversationState = factory(root.RundockMarkers);
@@ -163,11 +167,28 @@
   function reduceInfo(state, message, ctx) {
     if (!message.content) return none(state);
     const effects = [];
-    // Stale session: the server is retrying fresh, so the stored primary
-    // sessionId must be cleared.
-    if (ctx.hasPrimarySession) effects.push({ type: 'clear-session' });
+    // THE SESSION THAT EXPIRED, WHEN THE SERVER CAN NAME IT. The id it names is
+    // the one forgotten, wherever it is stored. Clearing the primary instead
+    // was right only when the expired session was the primary: when it was a
+    // delegate's, the orchestrator's live session was thrown away and the
+    // delegate's fresh one took its place.
+    if (message.expiredSessionId) {
+      effects.push({ type: 'forget-session', sessionId: message.expiredSessionId });
+    } else if (ctx.hasPrimarySession) {
+      // Stale session named by nothing: the server is retrying fresh, so the
+      // stored primary sessionId must be cleared.
+      effects.push({ type: 'clear-session' });
+    }
     effects.push({ type: 'notice', content: message.content });
     return { state, effects };
+  }
+
+  // A session Claude Code no longer has. Draws nothing: what the person sees
+  // is said by whichever message follows, a fresh start or a plain notice. This
+  // only makes sure the dead id is not sent again.
+  function reduceSessionExpired(state, message) {
+    if (!message.sessionId) return none(state);
+    return { state, effects: [{ type: 'forget-session', sessionId: message.sessionId }] };
   }
 
   function reduceCancelled(state, message) {
@@ -406,6 +427,7 @@
       case 'init': return reduceInit(state, message, ctx);
       case 'notice': return reduceNotice(state, message);
       case 'info': return reduceInfo(state, message, ctx);
+      case 'session_expired': return reduceSessionExpired(state, message);
       case 'cancelled': return reduceCancelled(state, message);
       case 'done': return reduceDone(state, message);
       case 'agent_switch': return reduceAgentSwitch(state, message, ctx);
@@ -603,6 +625,46 @@
     return { state: next, effects };
   }
 
+  // ── stored sessions ───────────────────────────────────────────────────────
+
+  // Forget a session wherever a conversation record keeps it: as the primary,
+  // and every place it appears in the chain. ONE RULE FOR BOTH SIDES. The
+  // server applies it to what it has stored, the window to what it holds and
+  // saves back, and the two cannot disagree about what was forgotten.
+  // Changes the record in place; says whether anything changed.
+  function forgetSession(convo, sessionId) {
+    if (!convo || !sessionId) return false;
+    let changed = false;
+    if (convo.sessionId === sessionId) {
+      convo.sessionId = null;
+      changed = true;
+    }
+    if (Array.isArray(convo.sessionIds)) {
+      const kept = convo.sessionIds.filter(s => !(s && s.sessionId === sessionId));
+      if (kept.length !== convo.sessionIds.length) {
+        convo.sessionIds = kept;
+        changed = true;
+      }
+    }
+    return changed;
+  }
+
+  // The session a message to `agentId` resumes, or null to start fresh.
+  //
+  // The conversation's own agent resumes the primary. Any other agent resumes
+  // its own last session in the chain, and NEVER another agent's: falling back
+  // to the primary there resumed the orchestrator's session under the
+  // specialist's name. That fallback is kept only for a record with no chain at
+  // all, which predates the chain and keeps every session as its primary.
+  function resumeSessionFor(convo, agentId) {
+    if (!convo) return null;
+    if (agentId === convo.agentId) return convo.sessionId || null;
+    const chain = Array.isArray(convo.sessionIds) ? convo.sessionIds : [];
+    const own = chain.filter(s => s && s.agentId === agentId).pop();
+    if (own && own.sessionId) return own.sessionId;
+    return chain.length ? null : (convo.sessionId || null);
+  }
+
   // ── entry point ───────────────────────────────────────────────────────────
 
   function reduce(state, message, ctx) {
@@ -636,5 +698,5 @@
     }
   }
 
-  return { createState, reduce, isStale, watchdogVerdict };
+  return { createState, reduce, isStale, watchdogVerdict, forgetSession, resumeSessionFor };
 }));

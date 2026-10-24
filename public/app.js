@@ -655,6 +655,12 @@ function handle(d) {
         convoState[convoId] = r.state;
         executeEffects(convoId, r.effects);
       }
+      // A session Claude Code no longer has: forget it, draw nothing.
+      if(d.subtype==='session_expired' && convoId) {
+        const r = RundockConversationState.reduce(getConvoState(convoId), d, {});
+        convoState[convoId] = r.state;
+        executeEffects(convoId, r.effects);
+      }
       // Stale session: server is retrying fresh, clear the old sessionId
       if(d.subtype==='info' && d.content && convoId) {
         const convo = conversations.find(c => c.id === convoId);
@@ -954,6 +960,12 @@ const EFFECT_EXECUTORS = {
     if (!convo) return;
     convo.sessionId = null;
     persistConversation(convo);
+  },
+  // A session Claude Code no longer has, dropped from what this window holds
+  // and saves back, so the next message never resumes it again.
+  'forget-session': (convoId, ef) => {
+    const convo = conversations.find(c => c.id === convoId);
+    if (convo && RundockConversationState.forgetSession(convo, ef.sessionId)) persistConversation(convo);
   },
   'notice': (convoId, ef) => addSystemMsgToConvo(ef.content, convoId, false),
   'add-cancelled-badge': (convoId, ef) => {

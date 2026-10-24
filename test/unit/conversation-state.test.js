@@ -12,7 +12,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 
-const { createState, reduce, isStale, watchdogVerdict } = require('../../public/conversation-state.js');
+const { createState, reduce, isStale, watchdogVerdict, forgetSession, resumeSessionFor } = require('../../public/conversation-state.js');
 const { scanMarkers } = require('../../public/markers.js');
 const seq = require('../fixtures/orchestration-sequences.js');
 
@@ -428,6 +428,68 @@ test('info clears the stored session only when one exists; notice never does', (
   const notice = reduce(s, { type: 'system', subtype: 'notice', content: 'Write request approved' }, {});
   assert.deepStrictEqual(notice.effects, [{ type: 'notice', content: 'Write request approved' }]);
   assert.deepStrictEqual(reduce(s, { type: 'system', subtype: 'notice' }, {}).effects, [], 'notice without content is a no-op');
+});
+
+test('info naming the expired session forgets that session, and never clears the primary in its place', () => {
+  const r = reduce(createState(), { type: 'system', subtype: 'info', content: 'Previous session expired. Starting fresh.', expiredSessionId: 'sess-writer-gone' }, { hasPrimarySession: true });
+  assert.deepStrictEqual(r.effects, [
+    { type: 'forget-session', sessionId: 'sess-writer-gone' },
+    { type: 'notice', content: 'Previous session expired. Starting fresh.' },
+  ], "a delegate's expiry clearing the primary threw away the orchestrator's live session");
+});
+
+test('session_expired forgets the named session and draws nothing; with no id it does nothing', () => {
+  assert.deepStrictEqual(reduce(createState(), { type: 'system', subtype: 'session_expired', sessionId: 'sess-gone' }, {}).effects,
+    [{ type: 'forget-session', sessionId: 'sess-gone' }]);
+  assert.deepStrictEqual(reduce(createState(), { type: 'system', subtype: 'session_expired' }, {}).effects, []);
+});
+
+test('forgetSession drops the id as primary and from every place in the chain, and says it changed something', () => {
+  const convo = { agentId: 'orch', sessionId: 'gone', sessionIds: [
+    { sessionId: 'gone', agentId: 'orch' }, { sessionId: 'kept', agentId: 'writer' }, { sessionId: 'gone', agentId: 'orch' },
+  ] };
+  assert.strictEqual(forgetSession(convo, 'gone'), true);
+  assert.strictEqual(convo.sessionId, null);
+  assert.deepStrictEqual(convo.sessionIds, [{ sessionId: 'kept', agentId: 'writer' }]);
+});
+
+test('forgetSession leaves a record that does not hold the id exactly as it was', () => {
+  const convo = { agentId: 'orch', sessionId: 'live', sessionIds: [{ sessionId: 'kept', agentId: 'writer' }] };
+  const before = JSON.parse(JSON.stringify(convo));
+  assert.strictEqual(forgetSession(convo, 'gone'), false);
+  assert.deepStrictEqual(convo, before);
+  const chainOnly = { agentId: 'orch', sessionId: 'live', sessionIds: [{ sessionId: 'gone', agentId: 'writer' }] };
+  assert.strictEqual(forgetSession(chainOnly, 'gone'), true, 'a chain-only change still counts');
+  assert.strictEqual(chainOnly.sessionId, 'live', 'and the primary it did not hold is untouched');
+  assert.strictEqual(forgetSession(null, 'gone'), false);
+  assert.strictEqual(forgetSession({ sessionId: null }, null), false, 'no id forgets nothing');
+});
+
+test('resumeSessionFor: the conversation\'s own agent resumes the primary, another agent its own last session', () => {
+  const convo = { agentId: 'orch', sessionId: 'sess-orch', sessionIds: [
+    { sessionId: 'sess-orch', agentId: 'orch' }, { sessionId: 'sess-writer-1', agentId: 'writer' }, { sessionId: 'sess-writer-2', agentId: 'writer' },
+  ] };
+  assert.strictEqual(resumeSessionFor(convo, 'orch'), 'sess-orch');
+  assert.strictEqual(resumeSessionFor(convo, 'writer'), 'sess-writer-2', 'the latest, not the first');
+  // The primary is the conversation's own agent's session whether or not the
+  // chain lists it: an older record kept it there alone.
+  const primaryOnly = { agentId: 'orch', sessionId: 'sess-orch-only', sessionIds: [{ sessionId: 'sess-writer-1', agentId: 'writer' }] };
+  assert.strictEqual(resumeSessionFor(primaryOnly, 'orch'), 'sess-orch-only');
+});
+
+test('resumeSessionFor never hands one agent another agent\'s session', () => {
+  // The delegate's own session was forgotten (Claude Code no longer had it),
+  // so it has none left. Falling back to the primary resumed the
+  // orchestrator's session under the delegate's name.
+  const convo = { agentId: 'orch', sessionId: 'sess-orch', sessionIds: [{ sessionId: 'sess-orch', agentId: 'orch' }] };
+  assert.strictEqual(resumeSessionFor(convo, 'writer'), null, 'no session of its own means a fresh start as itself');
+  assert.strictEqual(resumeSessionFor({ agentId: 'orch', sessionId: null, sessionIds: [] }, 'orch'), null);
+});
+
+test('resumeSessionFor keeps the primary for a record that predates the chain', () => {
+  assert.strictEqual(resumeSessionFor({ agentId: 'orch', sessionId: 'sess-old' }, 'writer'), 'sess-old');
+  assert.strictEqual(resumeSessionFor({ agentId: 'orch', sessionId: 'sess-old', sessionIds: [] }, 'writer'), 'sess-old');
+  assert.strictEqual(resumeSessionFor(null, 'writer'), null);
 });
 
 // ── streaming ───────────────────────────────────────────────────────────────
