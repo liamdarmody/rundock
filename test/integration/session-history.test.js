@@ -502,17 +502,19 @@ describe('Claude Code\'s own lines, and an earlier session longer than the parse
   test('Claude Code\'s notes are hidden by its own display rule, and the turns it shows are kept', async () => {
     // Claude Code marks many lines isMeta (reminders, hook context, skill
     // bodies, task notices, a custom command's expanded prompt, continuations)
-    // and shows a meta line only when a person or a peer sent it, or when it
-    // carries a prompt id or a turn origin; a line seen only in its transcript
-    // view, or a virtual one, is not shown either. The origin kinds are the SDK's
-    // own (SDKMessageOrigin: human, peer, task-notification, auto-continuation).
+    // and shows a meta line only when a person or a peer sent it, whatever
+    // else it carries; a line seen only in its transcript view, or a virtual
+    // one, is not shown either. It stamps a prompt id on every user line it
+    // keeps, a tool result's included (the repo's capture shows one on each),
+    // so a prompt id says nothing about whether a line is shown. The origin
+    // kinds are the SDK's own (SDKMessageOrigin).
     const at = (n) => `2026-01-16T09:${String(n).padStart(2, '0')}:00.000Z`;
-    const note = (content, extra, n) => ({ type: 'user', message: { role: 'user', content }, timestamp: at(n), ...extra });
+    const note = (content, extra, n) => ({ type: 'user', message: { role: 'user', content }, timestamp: at(n), promptId: `p-${n}`, ...extra });
     const command = '<command-name>/review</command-name>\n<command-message>review</command-message>\n<command-args></command-args>';
     writeSession('sess-notes', [
       // Rundock's own prompt on stdin, with the fields the repo's capture
       // records on it (scripts/transcript-truth/captured-transcript.json).
-      note('Plan the launch.', { promptId: 'p-1', promptSource: 'sdk', turnOrigin: 'sdk', permissionMode: 'default', turnPosition: 0, userType: 'external' }, 0),
+      note('Plan the launch.', { promptSource: 'sdk', turnOrigin: 'sdk', permissionMode: 'default', turnPosition: 0, userType: 'external' }, 0),
       assistantLine('Here is the plan.', at(1)),
       note('<system-reminder>The plan is due on Friday.</system-reminder>', { isMeta: true }, 2),
       note('SessionStart hook additional context: the workspace holds a launch plan.', { isMeta: true }, 3),
@@ -527,9 +529,17 @@ describe('Claude Code\'s own lines, and an earlier session longer than the parse
       note('The earlier part of this conversation, summarised.', { isCompactSummary: true }, 11),
       note('Can you check the budget too?', { isMeta: true, origin: { kind: 'peer', from: 'peer-1', name: 'Budget lead' } }, 12),
       note('I am back; carry on with the launch.', { isMeta: true, origin: { kind: 'human' } }, 13),
-      note('Run the weekly check.', { isMeta: true, promptId: 'p-2' }, 14),
-      note('Resume the review.', { isMeta: true, turnOrigin: 'task_notification' }, 15),
-      assistantLine('All done.', at(16)),
+      // A turn origin no more makes a meta line visible than a prompt id does.
+      note('Run the weekly check.', { isMeta: true, turnOrigin: 'sdk' }, 14),
+      // A task notification is not meta, and Rundock never shows one: the
+      // capture's own shape, then each of its two marks alone.
+      note('<task-notification>\n<task-id>task-1</task-id>\n<status>completed</status>\n</task-notification>',
+        { origin: { kind: 'task-notification', producer: 'session-task' }, turnOrigin: 'task_notification', promptSource: 'sdk', queueSkipAttachments: true }, 15),
+      note('<task-notification>\n<task-id>task-2</task-id>\n</task-notification>', { origin: { kind: 'task-notification' } }, 16),
+      note('<task-notification>\n<task-id>task-3</task-id>\n</task-notification>', { turnOrigin: 'task_notification' }, 17),
+      assistantLine('All done.', at(18)),
+      // A reply is Claude Code's to show whatever it carries.
+      { ...JSON.parse(JSON.stringify(assistantLine('Kept after a note.', at(19)))), isVisibleInTranscriptOnly: true },
     ]);
     const shown = [
       'Plan the launch.',
@@ -537,9 +547,8 @@ describe('Claude Code\'s own lines, and an earlier session longer than the parse
       command,
       'Can you check the budget too?',
       'I am back; carry on with the launch.',
-      'Run the weekly check.',
-      'Resume the review.',
       'All done.',
+      'Kept after a note.',
     ];
     const sessionIds = [{ sessionId: 'sess-notes', agentId: 'chief-of-staff' }];
     const res = await getHistory({ conversationId: 'sh-notes', sessionIds });

@@ -421,26 +421,34 @@ function getSessionJsonlPath(sessionId) {
 // never wrote them, hidden here as Claude Code itself hides them. Skipped by
 // the history and the message counts alike.
 //
-// The summary it leaves when it compacts a session ("This session is being
-// continued from a previous conversation...") is always hidden. Otherwise its
-// display rule: a line carrying a prompt id or a turn origin is a turn and is
-// shown, which is how Rundock's own prompts on stdin arrive (the repo's capture
-// records promptId and turnOrigin "sdk" on them). A meta line, which Claude
-// Code uses for reminders, hook context, skill bodies, task notices, a custom
-// command's expanded prompt and continuations, is shown only when a person or
-// a peer sent it; a teammate is a peer. A line seen only in its transcript
-// view, or a virtual one, is hidden. The command as typed is a plain line and
-// is shown. The origin kinds are the SDK's (SDKMessageOrigin).
+// Its display rule, in its own order. Only a user line can be a note; a reply
+// is shown whatever it carries. The summary it leaves when it compacts a
+// session ("This session is being continued from a previous conversation...")
+// is hidden. A meta line, which Claude Code uses for reminders, hook context,
+// skill bodies, task notices, a custom command's expanded prompt and
+// continuations, is shown only when a person or a peer sent it (a teammate is
+// a peer), whatever else it carries: Claude Code stamps a prompt id on every
+// user line it keeps, a tool result's included, so a prompt id says nothing
+// here. A task notification, Claude Code telling the agent a task finished,
+// is hidden: Rundock never shows one live. A line seen only in Claude Code's
+// transcript view, or a virtual one, is hidden. Anything else is shown, which
+// is how Rundock's own prompts on stdin arrive (the repo's capture records
+// them with a prompt id, turn origin "sdk" and no meta mark), and the command
+// as typed. The origin kinds are the SDK's (SDKMessageOrigin).
 function isClaudeCodeNote(obj) {
-  if (!obj) return false;
+  if (!obj || obj.type !== 'user') return false;
   if (obj.isCompactSummary === true) return true;
-  if (obj.promptId || obj.turnOrigin) return false;
   if (obj.isMeta === true) return !sentByPersonOrPeer(obj.origin);
+  if (isTaskNotification(obj)) return true;
   return obj.isVirtual === true || obj.isVisibleInTranscriptOnly === true;
 }
 function sentByPersonOrPeer(origin) {
   const kind = origin && origin.kind;
   return kind === 'human' || kind === 'peer';
+}
+// Marked either way in the capture: the origin's kind and the turn origin.
+function isTaskNotification(obj) {
+  return (!!obj.origin && obj.origin.kind === 'task-notification') || obj.turnOrigin === 'task_notification';
 }
 
 async function parseSessionHistory(sessionId, limit = 20, offset = 0) {

@@ -156,9 +156,26 @@ const MUTATIONS = [
   [PARSER, 'a compaction summary is taken for the person\'s message',
     '  if (obj.isCompactSummary === true) return true;\n',
     ''],
-  [PARSER, 'a meta line with a prompt id or a turn origin is hidden',
-    '  if (obj.promptId || obj.turnOrigin) return false;\n',
+  // Claude Code stamps a prompt id on every user line it keeps: let one, or a
+  // turn origin, decide before the meta check and every reminder, hook
+  // context and skill body is shown.
+  [PARSER, 'a prompt id or a turn origin makes a meta line visible',
+    '  if (obj.isMeta === true) return !sentByPersonOrPeer(obj.origin);',
+    '  if (obj.promptId || obj.turnOrigin) return false;\n  if (obj.isMeta === true) return !sentByPersonOrPeer(obj.origin);'],
+  // Only a user line can be a note: a reply is Claude Code's to show.
+  [PARSER, 'a reply is put to the note test',
+    "  if (!obj || obj.type !== 'user') return false;",
+    '  if (!obj) return false;'],
+  // A task notification is not meta: shown, it is raw XML in a user bubble.
+  [PARSER, 'a task notification is shown as the person\'s message',
+    '  if (isTaskNotification(obj)) return true;\n',
     ''],
+  [PARSER, 'a task notification marked only by its origin is shown',
+    "(!!obj.origin && obj.origin.kind === 'task-notification') || obj.turnOrigin === 'task_notification'",
+    "obj.turnOrigin === 'task_notification'"],
+  [PARSER, 'a task notification marked only by its turn origin is shown',
+    "(!!obj.origin && obj.origin.kind === 'task-notification') || obj.turnOrigin === 'task_notification'",
+    "(!!obj.origin && obj.origin.kind === 'task-notification')"],
   [PARSER, 'every meta line is hidden, a person\'s and a peer\'s too',
     '  if (obj.isMeta === true) return !sentByPersonOrPeer(obj.origin);',
     '  if (obj.isMeta === true) return true;'],
