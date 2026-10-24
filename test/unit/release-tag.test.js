@@ -302,13 +302,26 @@ describe('release:tag tags what actually merged, and only a gated tree', () => {
     merge();
     const { result, lines } = tagAndRead();
     const bare = lines.filter((l) => l.step === null).map((l) => l.msg);
-    assert.deepStrictEqual(bare, ['git push origin v0.12.0'], 'one bare line, and it is the push');
-    assert.strictEqual(result.push, 'git push origin v0.12.0');
+    assert.deepStrictEqual(bare, ['git push origin refs/tags/v0.12.0'], 'one bare line, and it is the push, by the tag\'s full ref');
+    assert.strictEqual(result.push, 'git push origin refs/tags/v0.12.0');
     assert.strictEqual(inOrigin(['tag', '-l']), '', 'not pushed until it is run');
 
     inWork(printedPush(lines));
     assert.strictEqual(inOrigin(['rev-list', '-n', '1', 'v0.12.0']), mergedCommit(), 'pushed, on the merged commit');
-    assert.ok(releaseWorkflowBuilds('v0.12.0'), 'and the release workflow starts on a pushed tag of that name');
+    const ref = printedPush(lines)[2];
+    assert.ok(ref.startsWith('refs/tags/') && releaseWorkflowBuilds(ref.slice('refs/tags/'.length)), 'and the release workflow starts on a pushed tag of that name');
+  });
+
+  test('a branch that shares the tag\'s name cannot make the printed push ambiguous, or send the branch', () => {
+    candidate();
+    merge();
+    inWork(['branch', 'v0.12.0', 'HEAD~1']);
+    const { lines } = tagAndRead();
+    // The short form is what the full ref is printed to avoid.
+    assert.throws(() => inWork(['push', 'origin', 'v0.12.0']), /matches more than one/);
+    inWork(printedPush(lines));
+    assert.strictEqual(inOrigin(['rev-list', '-n', '1', 'refs/tags/v0.12.0']), mergedCommit(), 'the tag is pushed, on the merged commit');
+    assert.strictEqual(inOrigin(['branch', '--list', 'v0.12.0']), '', 'and no branch of that name');
   });
 
   test('run again after the push was skipped, it checks everything again, creates nothing new and prints the same push', () => {
@@ -698,7 +711,7 @@ describe('every refusal of the tag, through what a person does next', () => {
         merge();
         rule.breakIt();
         refused(null);
-        assert.throws(() => inWork(['push', 'origin', 'v0.12.0']), /src refspec v0\.12\.0 does not match any/);
+        assert.throws(() => inWork(['push', 'origin', 'refs/tags/v0.12.0']), /src refspec refs\/tags\/v0\.12\.0 does not match any/);
         assert.strictEqual(inOrigin(['tag', '-l']), '', 'nothing reached the remote');
         rule.putRight();
         inWork(printedPush(tagAndRead().lines));

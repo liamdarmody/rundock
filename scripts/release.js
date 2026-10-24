@@ -14,7 +14,7 @@
  *       (or, given in chat: the agent adds --on-instruction - and passes the words on stdin)
  *   ...merge that pull request...
  *   npm run release -- tag <version>        # tag the merged commit, here only; it prints the push
- *   git push origin v<version>              # push the tag, as its own bare command, which starts the build
+ *   git push origin refs/tags/v<version>    # push the tag, as its own bare command, which starts the build
  *   ...watch the build, review the draft it publishes...
  *   npm run release -- publish <version> --confirm <version>   # publish the reviewed draft
  *
@@ -797,7 +797,9 @@ function tagRelease(version, { root = ROOT, git = gitIn(root), log = logStep } =
   // the time the checks and the remote lookup above take.
   if (!local) git(['tag', tag, merged], { stdio: 'pipe' });
 
-  const push = `git push origin ${tag}`;
+  // By its full ref, so a branch that happens to share the tag's name cannot
+  // make the push ambiguous, or send the branch instead.
+  const push = `git push origin refs/tags/${tag}`;
   log('tag', local
     ? `${tag} was already tagged here on ${merged.slice(0, 9)} by an earlier run, and is not on the remote: nothing new was created, and nothing has been pushed`
     : `Tagged ${tag} on ${merged.slice(0, 9)}, here only: nothing has been pushed`);
@@ -846,7 +848,7 @@ const USAGE = [
   '  npm run release -- signoff <version> --confirm <version>   after trying the candidate from source yourself, record it for its tree',
   "  npm run release -- signoff <version> --confirm <version> --on-instruction - <<'END_OF_SIGNOFF_WORDS'   record a sign-off given in chat: its words follow on stdin, verbatim, then a line END_OF_SIGNOFF_WORDS",
   '  npm run release -- tag <version>                        after the gated, signed-off release pull request merges, tag the merged commit here and print the push',
-  '  git push origin v<version>                              push the tag, as its own bare command: this starts the build',
+  '  git push origin refs/tags/v<version>                    push the tag, as its own bare command: this starts the build',
   '  npm run release -- publish <version> --confirm <version>   publish the draft release CI built for that tag, only after you have tested it yourself',
 ].join('\n');
 

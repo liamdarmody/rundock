@@ -16,7 +16,7 @@ npm run release -- signoff <version> --confirm <version>   # sign off this tree,
 ...or, when the sign-off is given in chat, the agent records it with --on-instruction (see below)...
 ...merge the pull request...
 npm run release -- tag <version>        # tag the merged commit, here only; it prints the push
-git push origin v<version>              # push the tag, as its own bare command: this starts the build
+git push origin refs/tags/v<version>    # push the tag, as its own bare command: this starts the build
 npm run release -- publish <version> --confirm <version>   # publish the reviewed draft
 ```
 
@@ -29,12 +29,14 @@ branch, it refuses and says to switch to main (`git switch main`). It never push
 a line of its own, exactly as it is to be run:
 
 ```
-git push origin v<version>
+git push origin refs/tags/v<version>
 ```
 
 Run that as one bare command, with nothing before or after it: no `cd`, no
 `&&`, no pipe. The push is what starts the build, and it needs the credential
-a sandboxed command does not have, which is why it is a step of its own.
+a sandboxed command does not have, which is why it is a step of its own. It
+names the tag by its full ref, so a branch that shares the tag's name cannot
+make the push ambiguous.
 
 If the push fails, or is skipped, the tag stays here. Fix what stopped it and
 push again. Running `release -- tag` again is safe too: it finds its own tag on
