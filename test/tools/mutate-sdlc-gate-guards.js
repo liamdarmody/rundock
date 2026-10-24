@@ -79,6 +79,11 @@ const RELEASE_GATE_TAG = { src: path.join(ROOT, 'scripts', 'release-gate.js'), s
 const RELEASE_RECORD = { src: path.join(ROOT, 'scripts', 'release.js'), suite: 'test/unit/release-gate.test.js' };
 const RELEASE_TAG = { src: path.join(ROOT, 'scripts', 'release.js'), suite: 'test/unit/release-tag.test.js' };
 const RELEASE_SIGNOFF = { src: path.join(ROOT, 'scripts', 'release.js'), suite: 'test/unit/release-signoff.test.js' };
+// The release gate's persona step: what its journeys ask of the page before
+// they act, and the journeys' use of it, watched by the suite that drives the
+// helpers against a slow page and reads the journeys.
+const SMOKE_PAGE = { src: path.join(ROOT, 'scripts', 'smoke', 'page-ready.mjs'), suite: 'test/unit/page-ready.test.js' };
+const PERSONAS = { src: path.join(ROOT, 'scripts', 'smoke', 'personas.mjs'), suite: 'test/unit/page-ready.test.js' };
 // The mutation scope and the CI retry classifier, each watched by its suite.
 const SCOPE = { src: path.join(ROOT, 'scripts', 'mutation-scope.js'), suite: 'test/unit/mutation-scope.test.js' };
 const CI_VERDICT = { src: path.join(ROOT, 'scripts', 'ci-verdict.js'), suite: 'test/unit/ci-verdict.test.js' };
@@ -477,6 +482,33 @@ const MUTATIONS = [
   [RELEASE_SIGNOFF, "a sign-off of a kind this command never writes is refused",
     "  if (!kind) {",
     "  if (false) {"],
+
+  // ===== THE PERSONA JOURNEYS ASK THE PAGE, THEY DO NOT SLEEP =====
+  // A fixed sleep after signing in, and one after starting a conversation,
+  // lost to a loaded machine in the release gate: the socket still
+  // connecting, or a roster not yet naming the agent, so the client opened a
+  // conversation with another one.
+  [SMOKE_PAGE, "a socket still connecting is not a connected page",
+    "  return page.evaluate(() => typeof ws !== 'undefined' && !!ws && ws.readyState === 1\n",
+    "  return page.evaluate(() => typeof ws !== 'undefined' && !!ws\n"],
+  [SMOKE_PAGE, "a page the server has not told its workspace is not connected",
+    "    && typeof currentWorkspacePath !== 'undefined' && !!currentWorkspacePath);",
+    "    && true);"],
+  [SMOKE_PAGE, "the roster is waited for, not read once",
+    "  const known = await waitFor(() => pageKnowsAgent(page, agentId), timeout, interval);",
+    "  const known = await pageKnowsAgent(page, agentId);"],
+  [SMOKE_PAGE, "no conversation is started with an agent the page does not know",
+    "  if (!known) {",
+    "  if (false) {"],
+  [SMOKE_PAGE, "a conversation that opened with another agent is reported",
+    "  if (opened !== agentId) {",
+    "  if (false) {"],
+  [PERSONAS, "the journey waits for the page after signing in",
+    "    if (!(await waitForPage(page))) {",
+    "    await page.waitForTimeout(1500); if (false) {"],
+  [PERSONAS, "the delegation journey starts its conversation through the helper",
+    "      const withCos = await startConversationWith(page, 'chief-of-staff');",
+    "      const withCos = { ok: true, detail: '' }; await page.evaluate(() => window.startConversation('chief-of-staff'));"],
 
   // ===== THE MUTATION SCOPE: WHAT A CHANGE CAN REACH =====
   // Comparing against HEAD instead of the merge base is the defect that made

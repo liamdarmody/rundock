@@ -263,8 +263,10 @@ timing is a seam rather than a sleep. Listed so the inventory is complete.
 - **Bounded polls.** `test/unit/signals.test.js` and `signals-lib.test.js`
   (2000/25), `test/unit/red-first-orphans.test.js`'s `until` (15000/50),
   `test/unit/precommit-gate-orphans.test.js`'s `until` (20000/25),
-  `test/unit/codex-appserver.test.js`'s `waitForInvocation` (2000/10). All the
-  right shape.
+  `test/unit/codex-appserver.test.js`'s `waitForInvocation` (2000/10),
+  `test/unit/page-ready.test.js`'s page waits (2000/10, against a page that
+  changes at 120 to 150ms; its one lower bound, `>= 140`, can be missed only
+  by a wait that returned before the page changed). All the right shape.
 - **Long-lived children as negative devices.** `setInterval(() => {}, 1e9)` and
   `sleep ${LONG}` in `test/helpers/stub-claude/claude`,
   `test/unit/pid-file.test.js`, `test/unit/red-first-orphans.test.js` and
