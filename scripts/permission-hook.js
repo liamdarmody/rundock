@@ -1684,9 +1684,10 @@ const CODE_READS_ALLOWED = Object.freeze({
   argumentMethods: Object.freeze(['replace', 'replaceAll', 'startswith', 'endswith', 'startsWith', 'endsWith', 'split', 'rsplit',
     'strip', 'lstrip', 'rstrip', 'includes', 'indexOf', 'lastIndexOf', 'find', 'rfind', 'count', 'removeprefix', 'removesuffix',
     'partition', 'rpartition', 'match', 'search', 'test', 'sub', 'gsub', 'contains', 'has',
-    'remove', 'append', 'add', 'discard', 'index', 'insert', 'extend', 'push', 'unshift', 'delete', 'get']),
+    'remove', 'append', 'add', 'discard', 'index', 'insert', 'extend', 'push', 'unshift', 'delete', 'get', 'pop']),
   receiverReads: Object.freeze(['exists', 'is_file', 'is_dir', 'is_symlink', 'is_absolute', 'stat', 'lstat', 'read_text', 'read_bytes',
-    'samefile', 'startswith', 'endswith', 'startsWith', 'endsWith', 'includes', 'indexOf', 'find', 'count', 'exist?', 'file?', 'directory?']),
+    'samefile', 'startswith', 'endswith', 'startsWith', 'endsWith', 'includes', 'indexOf', 'find', 'count', 'exist?', 'file?', 'directory?',
+    'has', 'get']),
   receiverPassThrough: Object.freeze(['resolve', 'absolute', 'expanduser', 'as_posix', 'with_suffix', 'with_name', 'relative_to',
     'parent', 'name', 'stem', 'suffix', 'iterdir', 'glob', 'rglob', 'lower', 'upper', 'strip', 'lstrip', 'rstrip', 'split',
     'format', 'encode', 'replace', 'toLowerCase', 'toUpperCase', 'trim', 'slice', 'substring', 'toString', 'normalize', 'to_s']),
@@ -1819,9 +1820,19 @@ function codeUse(s, masked, lits) {
     }
     return masked.length;
   };
+  // Where a name is given a value at the top level: at the start of its line,
+  // with nothing before it but a declaration keyword. Code there runs top to
+  // bottom, so a use after the next such assignment sees that value instead.
+  const topAssigns = new Map();
+  const isTopLevel = (nameAt) => {
+    const lineStart = masked.lastIndexOf('\n', nameAt - 1) + 1;
+    return /^(?:(?:const|let|var|my|our|local)\s+)?$/.test(masked.slice(lineStart, nameAt));
+  };
   for (const m of masked.matchAll(/(?:^|[\n;{]|\b(?:const|let|var|my|our|local)\s)[ \t]*([$@%]?[A-Za-z_][\w]*)[ \t]*=(?![=~>])/g)) {
     const a = m.index + m[0].length;
     note(vars, m[1], a, expressionEnd(a));
+    const nameAt = m.index + m[0].lastIndexOf(m[1]);
+    if (isTopLevel(nameAt)) note(topAssigns, m[1], nameAt, nameAt);
   }
   for (const m of masked.matchAll(/\bfor\s+\(?([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)\)?\s+in\s+/g)) {
     const a = m.index + m[0].length;
@@ -1938,10 +1949,13 @@ function codeUse(s, masked, lits) {
     if (/(?:^|\.)(?:Path|PurePath|PosixPath|WindowsPath|PurePosixPath|PureWindowsPath)$/.test(callee) || /(?:^|\.)Pathname\.new$/.test(callee)) return 'join';
     if (call.dotted && call.name === 'joinpath') return 'joinpath';
     if (/(?:^|\.)(?:str|String|fspath|abspath|normpath|realpath|expanduser|normalize|expand_path)$/.test(callee)) return 'value';
+    // A set or a map built from a list, judged as that list.
+    if (/^(?:Set|Map|WeakSet|set|frozenset|list|tuple)$/.test(callee)) return 'collection';
     return null;
   };
   const resolve = (a, b, depth = 0) => {
     [a, b] = trim(a, b);
+    if (/^new\s/.test(masked.slice(a, a + 4))) a = fwd(a + 3);
     if (a >= b || depth > 12) return [UNKNOWN];
     const lit = litByStart.get(a);
     if (lit && lit.end === b) return interpolate(lit);
@@ -1965,6 +1979,7 @@ function codeUse(s, masked, lits) {
         if (kind === 'join') return product(args.map(([x, y]) => resolve(x, y, depth + 1)), joinTwo);
         if (kind === 'joinpath') return product([resolve(call.recvStart, call.recvEnd, depth + 1), ...args.map(([x, y]) => resolve(x, y, depth + 1))], joinTwo);
         if (kind === 'value' && args.length) return resolve(args[0][0], args[0][1], depth + 1);
+        if (kind === 'collection') return cap(args.flatMap(([x, y]) => resolve(x, y, depth + 1)));
         if (call.dotted && ['resolve', 'absolute', 'expanduser', 'as_posix', 'format'].includes(call.name)) {
           const inner = resolve(call.recvStart, call.recvEnd, depth + 1);
           return call.name === 'format' ? inner.map(v => v.replace(/\{[^}]*\}/g, UNKNOWN)) : inner;
@@ -2042,6 +2057,10 @@ function codeUse(s, masked, lits) {
       if (call) {
         const kind = transformOf(call, open);
         if (kind === 'joinpath') return [call.recvStart, close + 1];
+        if (kind === 'collection') {
+          const made = /\bnew\s+$/.exec(masked.slice(Math.max(0, call.start - 8), call.start));
+          return [made ? call.start - made[0].length : call.start, close + 1];
+        }
         return kind ? [call.start, close + 1] : null;
       }
       return [open, close + 1];
@@ -2072,11 +2091,19 @@ function codeUse(s, masked, lits) {
     }
     return out;
   };
-  const usesOf = (names, depth) => {
+  const usesOf = (names, depth, before = Infinity) => {
     for (const name of names) {
-      for (const [a, b] of occurrences(name)) if (useOf(a, b, depth + 1) === 'write') return 'write';
+      for (const [a, b] of occurrences(name)) if (a < before && useOf(a, b, depth + 1) === 'write') return 'write';
     }
     return 'read';
+  };
+  // The uses that see the value given at `nameAt`: in code run top to bottom,
+  // those before the name's next top-level assignment. A use anywhere else,
+  // in a loop or a function that may run later, counts whatever its place.
+  const usesUntilNext = (name, nameAt) => {
+    if (!isTopLevel(nameAt)) return Infinity;
+    const next = (topAssigns.get(name) || []).map(([x]) => x).filter(x => x > nameAt).sort((x, y) => x - y)[0];
+    return next === undefined ? Infinity : next;
   };
   const openMode = (args, idx) => {
     for (let i = 0; i < args.length; i++) {
@@ -2153,8 +2180,9 @@ function codeUse(s, masked, lits) {
     const prevI = back(a - 1);
     if (masked[prevI] === '=' && !'=!<>+-*/%&|^:~'.includes(masked[prevI - 1] || '') && masked[prevI + 1] !== '=') {
       // Put in a name: judged by every use of the name.
-      const t = /^[ \t]*(?:(?:const|let|var|my|our|local)\s+)?([$@%]?[A-Za-z_][\w]*)[ \t]*$/.exec(statementBefore(prevI));
-      if (t) return usesOf([t[1]], depth);
+      const stmt = statementBefore(prevI);
+      const t = /^[ \t]*(?:(?:const|let|var|my|our|local)\s+)?([$@%]?[A-Za-z_][\w]*)[ \t]*$/.exec(stmt);
+      if (t) return usesOf([t[1]], depth, usesUntilNext(t[1], prevI - stmt.length + t[0].lastIndexOf(t[1])));
       // A keyword argument (`file='.mcp.json'`) is judged as an argument.
       const kwArg = call && argsOf(open, closeOf(open)).some(([x, y]) => x <= a && b <= y && /^\s*[A-Za-z_]\w*\s*=\s*$/.test(masked.slice(x, a)));
       if (!kwArg) return 'write';
@@ -2168,7 +2196,10 @@ function codeUse(s, masked, lits) {
       });
       return whole ? classifyCall(call, open, close, a, b, depth) : 'write';
     }
-    if (open >= 0 && masked[open] === '[' && (isIdent(masked[back(open - 1)]) || ')]'.includes(masked[back(open - 1)]))) return 'write';
+    if (open >= 0 && masked[open] === '[' && (isIdent(masked[back(open - 1)]) || ')]'.includes(masked[back(open - 1)]))) {
+      // A key deleted from a mapping (`del servers['.claude']`) names no file.
+      return /^[ \t]*del[ \t]+[\w.]+[ \t]*$/.test(statementBefore(open)) ? 'read' : 'write';
+    }
     // A statement on its own.
     const stmt = statementBefore(a);
     if (/^[ \t]*$/.test(stmt) && /^[ \t]*(?:$|[\n;}#])/.test(after)) return 'read';

@@ -268,6 +268,13 @@ describe('a command asks about an answer file only when it can write it', () => 
     "python3 -c \"import sys; print(sys.argv[1] == '.mcp.json')\"",
     "ruby -e \"puts File.exist?('.mcp.json')\"",
     "python3 - <<'PY'\nfrom pathlib import Path\nprint(Path('.mcp.json').exists(), Path('.claude').is_dir())\nPY",
+    // A mapping's pop and del, and a set or a map built to test against.
+    "python3 - <<'PY'\ncfg = {}\ncfg.pop('.mcp.json', None)\nservers = {}\ndel servers['.claude']\nPY",
+    "node - <<'JS'\nconst SKIP = new Set(['.claude', '.git']);\nfor (const name of require('fs').readdirSync('.')) if (!SKIP.has(name)) console.log(name);\nJS",
+    "node - <<'JS'\nconst LABELS = new Map([['.mcp.json', 'servers'], ['.claude', 'settings']]);\nconsole.log(LABELS.get(process.argv[2]));\nJS",
+    "python3 - <<'PY'\nimport os\nSKIP = frozenset({'.claude', '.rundock'})\nprint([d for d in os.listdir('.') if d not in SKIP])\nPY",
+    // A name given a new value is judged by what it held at each use.
+    "python3 - <<'PY'\nimport json\np = '.mcp.json'\ncfg = json.load(open(p))\np = 'report.json'\njson.dump(cfg, open(p, 'w'))\nPY",
   ];
   const CODE_WRITES = [
     "python3 - <<'PY'\nCFG = '.mcp.json'\nwith open(CFG, 'w') as f:\n    f.write('{}')\nPY",
@@ -353,6 +360,14 @@ describe('a command asks about an answer file only when it can write it', () => 
     "python3 - <<'PY'\nimport os, subprocess\nsubprocess.call('rm .mcp.json', shell=True)\nPY",
     "python3 - <<'PY'\nfrom subprocess import (\n    check_output,\n    call as sh,\n)\nsh('rm -rf .claude', shell=True)\nPY",
     "node - <<'JS'\nconst { execSync: run } = require('child_process');\nrun('rm -rf .claude');\nJS",
+    // A name is judged by the uses of what it held at the time, but only in
+    // code run top to bottom: a use inside a loop or a function that may run
+    // after a later assignment still counts.
+    "python3 - <<'PY'\np = 'report.json'\np = '.mcp.json'\nopen(p, 'w').write('{}')\nPY",
+    "python3 - <<'PY'\np = '.mcp.json'\nopen(p, 'w').write('{}')\np = 'x.json'\nPY",
+    "python3 - <<'PY'\np = '.mcp.json'\nfor i in range(2):\n    open(p, 'w').write('{}')\n    p = 'x.json'\nPY",
+    "python3 - <<'PY'\np = '.mcp.json'\ndef save():\n    open(p, 'w').write('{}')\nsave()\nPY",
+    "python3 - <<'PY'\np = '.mcp.json'\nfor i in range(0):\n    p = 'x.json'\nopen(p, 'w').write('{}')\nPY",
   ];
   test('code asks about an answer file only when it can write one', () => {
     for (const codeMode of [false, true]) {
@@ -377,9 +392,10 @@ describe('a command asks about an answer file only when it can write it', () => 
       argumentMethods: ['replace', 'replaceAll', 'startswith', 'endswith', 'startsWith', 'endsWith', 'split', 'rsplit',
         'strip', 'lstrip', 'rstrip', 'includes', 'indexOf', 'lastIndexOf', 'find', 'rfind', 'count', 'removeprefix', 'removesuffix',
         'partition', 'rpartition', 'match', 'search', 'test', 'sub', 'gsub', 'contains', 'has',
-        'remove', 'append', 'add', 'discard', 'index', 'insert', 'extend', 'push', 'unshift', 'delete', 'get'],
+        'remove', 'append', 'add', 'discard', 'index', 'insert', 'extend', 'push', 'unshift', 'delete', 'get', 'pop'],
       receiverReads: ['exists', 'is_file', 'is_dir', 'is_symlink', 'is_absolute', 'stat', 'lstat', 'read_text', 'read_bytes',
-        'samefile', 'startswith', 'endswith', 'startsWith', 'endsWith', 'includes', 'indexOf', 'find', 'count', 'exist?', 'file?', 'directory?'],
+        'samefile', 'startswith', 'endswith', 'startsWith', 'endsWith', 'includes', 'indexOf', 'find', 'count', 'exist?', 'file?', 'directory?',
+        'has', 'get'],
       receiverPassThrough: ['resolve', 'absolute', 'expanduser', 'as_posix', 'with_suffix', 'with_name', 'relative_to',
         'parent', 'name', 'stem', 'suffix', 'iterdir', 'glob', 'rglob', 'lower', 'upper', 'strip', 'lstrip', 'rstrip', 'split',
         'format', 'encode', 'replace', 'toLowerCase', 'toUpperCase', 'trim', 'slice', 'substring', 'toString', 'normalize', 'to_s'],
