@@ -762,6 +762,21 @@ describe('a refusal that reaches the pipe in pieces', () => {
     h.reapConvo(convoId);
   });
 
+  test('stderr held back and never finished is still shown when the stream ends', async () => {
+    const convoId = h.freshConvoId('stale-unfinished');
+    seed(convoId, { agentId: 'chief-of-staff', sessionId: 'live-orch-ab', sessionIds: [{ agentId: 'chief-of-staff', sessionId: 'live-orch-ab' }] });
+    scenario([
+      { match: { resume: true, promptIncludes: 'ASK-AB' }, crash: 1, stderrChunks: ['No con'] },
+    ], []);
+    const since = client.messages.length;
+    client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: 'ASK-AB hi', sessionId: 'live-orch-ab' });
+    await client.waitForEvent('system', 'done', convoId, { since, label: 'the failed turn ends', timeout: 15000 });
+    await h.delay(200);
+    assert.deepStrictEqual(messagesFor(convoId, since).filter(m => m.type === 'error').map(m => m.content), ['No con'],
+      'an error with no newline after it is never swallowed');
+    h.reapConvo(convoId);
+  });
+
 });
 
 describe('an info message that names no session', () => {
