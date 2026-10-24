@@ -218,12 +218,14 @@ describe('a command asks about an answer file only when it can write it', () => 
       child.stdin.end(JSON.stringify({ hook_event_name: 'PreToolUse', session_id: 's', cwd: ws, tool_name: 'Bash', tool_input: { command } }));
     });
   }
-  // CODE ASKS ABOUT AN ANSWER FILE ONLY WHEN IT CAN WRITE ONE. A literal in
-  // code handed to an interpreter counts as written only as the path given to
-  // a call that removes, moves, renames, copies into, makes or writes a file,
-  // to an open with a mode that writes, or to a command the code runs, by
-  // itself or through a name it was put in. Reading one, or naming one to
-  // skip it, asks about nothing.
+  // CODE ASKS ABOUT AN ANSWER FILE UNLESS IT ONLY READS IT. A path in code
+  // handed to an interpreter (a literal, or one built from parts by a join,
+  // pathlib's `/`, an f-string or a template) that names an answer file, a
+  // folder holding them or the console folder counts as written, unless every
+  // use of it is one the check recognises as a read or as plain string
+  // handling (CODE_READS_ALLOWED in the hook). A use it does not recognise
+  // asks: an alias, a helper or a form nobody listed is a write until shown
+  // otherwise.
   const CODE_READS = [
     "python3 -c \"import json; print(json.load(open('.mcp.json')))\"",
     "node -e \"console.log(require('fs').readFileSync('.claude/settings.json', 'utf8'))\"",
@@ -242,6 +244,20 @@ describe('a command asks about an answer file only when it can write it', () => 
     "node -e \"require('fs').writeFileSync('out.json', require('fs').readFileSync('.mcp.json'))\"",
     // A loop's list ends where a comprehension's condition starts.
     "python3 - <<'PY'\nimport os, shutil\n[shutil.rmtree(d) for d in os.listdir('build') if d not in ('.claude', '.rundock')]\nPY",
+    // A path built from parts is judged whole: inside .claude or .rundock is
+    // not an answer file, and a string pattern is not a path.
+    "python3 - <<'PY'\nimport os\nos.makedirs(os.path.join('.rundock', 'scratch'), exist_ok=True)\nPY",
+    "node -e \"require('fs').mkdirSync(require('path').join('.rundock', 'scratch', 'x'), { recursive: true })\"",
+    "python3 - <<'PY'\nfrom pathlib import Path\n(Path('.claude') / 'agents' / 'new.md').write_text('x')\nPY",
+    "python3 - <<'PY'\nfrom pathlib import Path\nfor p in Path('docs').rglob('*.md'):\n    print(str(p).replace('.claude/', ''))\nPY",
+    "python3 - <<'PY'\nfrom pathlib import Path\nf = Path('notes.md')\nf.write_text(f.read_text().replace('.claude', '.config'))\nPY",
+    // Tests of a path, listings, comparisons and printing are reads.
+    "python3 -c \"import os; print(os.path.exists('.mcp.json'), os.path.isdir('.claude'))\"",
+    "node -e \"const fs = require('fs'); if (fs.existsSync('.claude/settings.json')) console.log(fs.statSync('.mcp.json').size)\"",
+    "python3 - <<'PY'\nimport os\nfor name in os.listdir('.claude'):\n    print(name)\nPY",
+    "python3 -c \"import sys; print(sys.argv[1] == '.mcp.json')\"",
+    "ruby -e \"puts File.exist?('.mcp.json')\"",
+    "python3 - <<'PY'\nfrom pathlib import Path\nprint(Path('.mcp.json').exists(), Path('.claude').is_dir())\nPY",
   ];
   const CODE_WRITES = [
     "python3 - <<'PY'\nCFG = '.mcp.json'\nwith open(CFG, 'w') as f:\n    f.write('{}')\nPY",
@@ -269,6 +285,42 @@ describe('a command asks about an answer file only when it can write it', () => 
     "node -e \"const dirs = ['.claude', '.rundock']; dirs.forEach(d => require('fs').rmSync(d, { recursive: true }))\"",
     "ruby -e \"require 'fileutils'; dirs = ['.claude']; dirs.each { |d| FileUtils.rm_rf(d) }\"",
     "perl -e 'foreach my $f (\".mcp.json\") { unlink($f) }'",
+    // Forms nobody listed are writes until shown otherwise: aliases, runners
+    // imported under another name, names inside f-strings and templates, a
+    // path object's own writes, a mode kept in a variable, and a path kept
+    // somewhere the check does not follow.
+    "python3 - <<'PY'\nfrom shutil import rmtree as r\nr('.claude')\nPY",
+    "python3 - <<'PY'\nimport os as o\no.remove('.mcp.json')\nPY",
+    "python3 - <<'PY'\nimport subprocess as sp\nsp.run(['rm', '-rf', '.claude'])\nPY",
+    "python3 - <<'PY'\nfrom subprocess import run\nrun(['rm', '-rf', '.claude'])\nPY",
+    "python3 - <<'PY'\nimport os\nos.execvp('rm', ['rm', '-rf', '.claude'])\nPY",
+    "python3 - <<'PY'\nimport subprocess\nfor d in ['.claude', '.rundock']:\n    subprocess.run(['rm', '-rf', d])\nPY",
+    "python3 - <<'PY'\nd = '.claude'\nopen(f'{d}/settings.json', 'w').write('{}')\nPY",
+    "node - <<'JS'\nconst d = '.claude';\nrequire('fs').rmSync(`${d}`, { recursive: true });\nJS",
+    "ruby - <<'RB'\nrequire 'fileutils'\nd = '.claude'\nFileUtils.rm_rf(\"#{d}\")\nRB",
+    "node - <<'JS'\nconst { rmSync: r } = require('fs');\nr('.claude', { recursive: true });\nJS",
+    "node - <<'JS'\nimport * as f from 'node:fs/promises';\nawait f.rm('.claude', { recursive: true });\nJS",
+    "node - <<'JS'\nconst p = require('fs').promises;\np.unlink('.mcp.json');\nJS",
+    "node - <<'JS'\nconst fsx = require('fs');\nfsx.unlink('.mcp.json', () => {});\nJS",
+    "python3 - <<'PY'\nfrom pathlib import Path\nPath.cwd().joinpath('.mcp.json').write_text('{}')\nPY",
+    "ruby - <<'RB'\nrequire 'pathname'\nPathname.new('.claude').rmtree\nRB",
+    "ruby - <<'RB'\nrequire 'pathname'\nPathname.new('.mcp.json').write('{}')\nRB",
+    "ruby - <<'RB'\nrequire 'pathname'\nPathname.new('.mcp.json').delete\nRB",
+    "python3 - <<'PY'\nm = 'w'\nopen('.mcp.json', m).write('{}')\nPY",
+    "python3 - <<'PY'\nimport os\nos.open('.mcp.json', 577)\nPY",
+    "python3 - <<'PY'\na, b = '.mcp.json', 'x.json'\nopen(a, 'w').write('{}')\nPY",
+    "python3 - <<'PY'\nclass C:\n    def __init__(self):\n        self.path = '.mcp.json'\n    def save(self):\n        open(self.path, 'w').write('{}')\nC().save()\nPY",
+    // A path built from parts that names one, or a folder holding them with
+    // the rest unknown, asks.
+    "node -e \"require('fs').writeFileSync(require('path').join('.claude', 'hooks', 'x.sh'), '')\"",
+    "python3 - <<'PY'\nfrom pathlib import Path\n(Path('.claude') / 'settings.json').write_text('{}')\nPY",
+    "python3 - <<'PY'\nimport os, sys\nos.remove(os.path.join('.claude', sys.argv[1]))\nPY",
+    "python3 - <<'PY'\nimport os\nB = '.claude'\nF = 'settings.json'\nos.remove(os.path.join(B, F))\nPY",
+    // What is done with a listing, or with a result that carries the path
+    // on, is what counts.
+    "python3 - <<'PY'\nimport glob, os\nfor p in glob.glob('.claude/hooks/*'):\n    os.remove(p)\nPY",
+    "python3 - <<'PY'\nfrom pathlib import Path\nPath('.claude/hooks/pre-tool.sh').parent.rmdir()\nPY",
+    "python3 - <<'PY'\nfrom pathlib import Path\nPath('.mcp.json').replace('backup.json')\nPY",
   ];
   test('code asks about an answer file only when it can write one', () => {
     for (const codeMode of [false, true]) {
@@ -277,6 +329,35 @@ describe('a command asks about an answer file only when it can write it', () => 
       for (const c of CODE_WRITES) assert.strictEqual(answerFileIn(c, codeMode), true, `${label}: ${c}`);
     }
   });
+  // THE READS ARE A LIST, AND THE LIST IS PINNED. Anything not on it asks, so
+  // widening it widens what code may do to an answer file unasked: a change
+  // here is a change to this test and to the architecture notes, on purpose.
+  test('the uses of an answer file that code may make unasked are the listed ones', () => {
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(hook.CODE_READS_ALLOWED)), {
+      calls: ['print', 'pprint', 'puts', 'pp', 'len', 'repr', 'log', 'info', 'warn', 'error', 'debug',
+        'exists', 'isfile', 'isdir', 'islink', 'lexists', 'getsize', 'getmtime', 'stat', 'lstat', 'access',
+        'existsSync', 'statSync', 'lstatSync', 'accessSync', 'readFileSync', 'readFile', 'createReadStream',
+        'read_text', 'read_bytes', 'read', 'readlines', 'exist?', 'exists?', 'file?', 'directory?', 'require'],
+      openCalls: ['open', 'openSync', 'fopen'],
+      sources: ['listdir', 'scandir', 'walk', 'glob', 'iglob', 'rglob', 'iterdir', 'readdir', 'readdirSync', 'opendir', 'entries', 'children'],
+      copySources: ['copy', 'copy2', 'copyfile', 'copytree', 'copyFile', 'copyFileSync', 'cp', 'cpSync', 'cp_r', 'copySync', 'copy_file', 'copy_entry'],
+      comparisons: ['==', '!=', '===', '!==', '<=', '>=', 'in', 'not in', 'is', 'is not'],
+      argumentMethods: ['replace', 'replaceAll', 'startswith', 'endswith', 'startsWith', 'endsWith', 'split', 'rsplit',
+        'strip', 'lstrip', 'rstrip', 'includes', 'indexOf', 'lastIndexOf', 'find', 'rfind', 'count', 'removeprefix', 'removesuffix',
+        'partition', 'rpartition', 'match', 'search', 'test', 'sub', 'gsub', 'contains', 'has',
+        'remove', 'append', 'add', 'discard', 'index', 'insert', 'extend', 'push', 'unshift', 'delete', 'get'],
+      receiverReads: ['exists', 'is_file', 'is_dir', 'is_symlink', 'is_absolute', 'stat', 'lstat', 'read_text', 'read_bytes',
+        'samefile', 'startswith', 'endswith', 'startsWith', 'endsWith', 'includes', 'indexOf', 'find', 'count', 'exist?', 'file?', 'directory?'],
+      receiverPassThrough: ['resolve', 'absolute', 'expanduser', 'as_posix', 'with_suffix', 'with_name', 'relative_to',
+        'parent', 'name', 'stem', 'suffix', 'iterdir', 'glob', 'rglob', 'lower', 'upper', 'strip', 'lstrip', 'rstrip', 'split',
+        'format', 'encode', 'replace', 'toLowerCase', 'toUpperCase', 'trim', 'slice', 'substring', 'toString', 'normalize', 'to_s'],
+    });
+    const notes = fs.readFileSync(path.join(__dirname, '..', '..', 'ARCHITECTURE.md'), 'utf8');
+    for (const [group, list] of Object.entries(hook.CODE_READS_ALLOWED)) {
+      for (const name of list) assert.ok(notes.includes(`\`${name}\``), `ARCHITECTURE.md lists ${group}: ${name}`);
+    }
+  });
+
   test('through the real hook, code that only reads an answer file runs in Code mode and draws no refusal in Notes mode', async () => {
     for (const c of CODE_READS) {
       assert.strictEqual(await hookDecision(c, true), 'allow', `Code: ${c}`);
