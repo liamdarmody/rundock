@@ -59,9 +59,11 @@ const { ciVerdict } = require('./release-ci.js');
 const ROOT = path.join(__dirname, '..');
 const GATE_FILE_NAME = 'rundock-release-gate.json';
 // Where the gate kept its record before it moved to git's common directory:
-// in the folder it ran in, under this name. Still read, for one release, so a
-// pass made before the move is not lost; remove it, and its lookup, after the
-// release that follows this one.
+// in the folder it ran in, under this name. NEVER READ AS A PASS. Any folder
+// can hold a file of that name, written by hand as easily as by a gate, and
+// every gate run since the move writes the common directory; so a file found
+// here is only named, in the refusal, as written by an older gate. Remove
+// this, and the search for it, after the release that follows this one.
 const LEGACY_GATE_FILE_NAME = '.release-gate.json';
 
 // ---------------------------------------------------------------------------
@@ -260,9 +262,9 @@ function readGateRecord(opts = {}) {
   return readJson(file);
 }
 
-// Records left at the old location: the folder of each worktree of the
-// repository, since the gate wrote its record in whichever one it ran in.
-function legacyGateRecords({ root = ROOT, git = gitAt(root) } = {}) {
+// Files left at the old location, so a refusal can name them: one in the
+// folder asked about or in any worktree git lists. Found, never read.
+function legacyGateFiles({ root = ROOT, git = gitAt(root) } = {}) {
   const real = (p) => { try { return fs.realpathSync(p); } catch { return path.resolve(p); } };
   const folders = [real(root)];
   try {
@@ -270,28 +272,31 @@ function legacyGateRecords({ root = ROOT, git = gitAt(root) } = {}) {
       if (line.startsWith('worktree ')) folders.push(real(line.slice('worktree '.length)));
     }
   } catch { /* no list of worktrees: the folder asked about is the only one */ }
-  const found = [];
-  for (const folder of [...new Set(folders)]) {
-    const file = path.join(folder, LEGACY_GATE_FILE_NAME);
-    const record = readJson(file);
-    if (record) found.push({ file, record });
-  }
-  return found;
+  return [...new Set(folders)].map((folder) => path.join(folder, LEGACY_GATE_FILE_NAME)).filter((file) => fs.existsSync(file));
 }
 
-// The record `tag` judges for `tree`, and where it was read. The one in git's
-// common directory when there is one; otherwise, for one release, one at the
-// old location, preferring one for this tree, so a refusal can name the file
-// it read. `file` is where the record is kept when none was found.
-function findGateRecord(tree, opts = {}) {
-  let file = null;
-  try { file = gateRecordPath(opts); } catch { /* not a repository: only the old location can hold one */ }
-  const record = file ? readJson(file) : null;
-  if (record) return { record, file, legacy: false };
-  const old = legacyGateRecords(opts);
-  const chosen = old.find((o) => o.record.tree === tree) || old[0];
-  if (chosen) return { record: chosen.record, file: chosen.file, legacy: true };
-  return { record: null, file, legacy: false };
+// The record `tag` judges, from git's common directory and nowhere else.
+// Returns { record, file } when there is one; { record: null, file, legacy }
+// when there is none, `legacy` naming any file left at the old location; and
+// { record: null, file, unreadable } when the file is there and cannot be read
+// as a record. That last FAILS CLOSED: a record that is present and damaged is
+// a refusal naming it, never a reason to look anywhere else.
+function findGateRecord(opts = {}) {
+  let file;
+  try {
+    file = gateRecordPath(opts);
+  } catch (err) {
+    return { record: null, file: null, unreadable: `git could not name its common directory: ${err.message}` };
+  }
+  if (!fs.existsSync(file)) return { record: null, file, legacy: legacyGateFiles(opts) };
+  let record;
+  try {
+    record = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (err) {
+    return { record: null, file, unreadable: err.message };
+  }
+  if (!record || typeof record !== 'object') return { record: null, file, unreadable: 'it holds no record' };
+  return { record, file };
 }
 
 async function runGate({

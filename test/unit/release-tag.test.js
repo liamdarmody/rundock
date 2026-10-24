@@ -166,6 +166,7 @@ function merge(version = '0.12.0') {
 
 // The commit the release merged as: what the tag must go on.
 const mergedCommit = () => inOrigin(['rev-parse', 'main']);
+const mergedTree = () => treeOf(mergedCommit());
 // The commit the tag names here, or null when there is no tag here.
 const localTag = (tag = 'v0.12.0') => (inWork(['tag', '-l', tag]) ? inWork(['rev-list', '-n', '1', tag]) : null);
 
@@ -694,7 +695,7 @@ describe('every refusal of the tag, through what a person does next', () => {
   }
 });
 
-describe('the gate record is read from any worktree of the repository', () => {
+describe('the gate record is read from git\'s common directory, and nowhere else', () => {
   // The gate runs in the release worktree and the tag runs on main, usually in
   // another checkout. The record used to be written into the folder the gate
   // ran in, where the checkout that tags could not see it, so it was copied
@@ -733,18 +734,23 @@ describe('the gate record is read from any worktree of the repository', () => {
     assert.strictEqual(inWork(['rev-list', '-n', '1', 'v0.12.0']), inWork(['rev-parse', 'HEAD']), 'the merged commit is tagged');
   });
 
-  test('for one release, a record an older gate left in a release worktree still lets the tag through, and the tag says where it read it', () => {
+  // A `.release-gate.json` in a folder, the name older gates wrote, is never
+  // read as a pass, from any folder: the refusal names it, and the gate has to
+  // be run again.
+  const refusedNaming = (file) => (err) => /^No release gate pass found/.test(err.message)
+    && err.message.includes(`There is a record at the old location (${file})`)
+    && /never read as a pass, so the gate has to be run again/.test(err.message);
+
+  test('a record an older gate left in a release worktree is not a pass: tag refuses, naming it', () => {
     const tree = candidateInWorktree();
     writeGateRecord(tree, { file: path.join(wt, LEGACY_GATE_FILE_NAME) });
     writeSignoff(tree);
     mergeIntoMain();
-    const lines = [];
-    tagRelease('0.12.0', { root: work, log: (step, msg) => lines.push(msg) });
-    assert.ok(lines.some((l) => l.includes(path.join(fs.realpathSync(wt), LEGACY_GATE_FILE_NAME))), lines.join('\n'));
-    assert.strictEqual(inWork(['tag', '-l', 'v0.12.0']), 'v0.12.0');
+    assert.throws(() => tagRelease('0.12.0', { root: work, log: () => {} }), refusedNaming(path.join(fs.realpathSync(wt), LEGACY_GATE_FILE_NAME)));
+    assert.strictEqual(localTag(), null, 'nothing tagged');
   });
 
-  test('for one release, a record an older gate left in the checkout that tags still counts', () => {
+  test('a record an older gate left in the checkout that tags is not a pass either', () => {
     inWork(['checkout', '-b', 'release/0.12.0']);
     bumpRelease('0.12.0', { root: work, log: () => {} });
     inWork(['commit', '-am', 'Release 0.12.0']);
@@ -752,22 +758,31 @@ describe('the gate record is read from any worktree of the repository', () => {
     writeSignoff(treeOf('HEAD'));
     inWork(['checkout', 'main']);
     mergeIntoMain();
-    tagRelease('0.12.0', { root: work, log: () => {} });
-    assert.strictEqual(inWork(['tag', '-l', 'v0.12.0']), 'v0.12.0');
+    assert.throws(() => tagRelease('0.12.0', { root: work, log: () => {} }), refusedNaming(path.join(fs.realpathSync(work), LEGACY_GATE_FILE_NAME)));
+    assert.strictEqual(localTag(), null, 'nothing tagged');
   });
 
-  test('a record at the old location for another tree is refused, naming the file and both trees', () => {
-    const gated = candidateInWorktree();
-    writeGateRecord(gated, { file: path.join(wt, LEGACY_GATE_FILE_NAME) });
-    fs.writeFileSync(path.join(wt, 'README.md'), 'Rundock, changed after the gate\n');
-    inWt(['commit', '-am', 'a change after the gate']);
-    const changed = inWt(['rev-parse', 'HEAD^{tree}']);
-    writeSignoff(changed);
-    mergeIntoMain();
+  test('a hand-written record in an unrelated feature worktree does not let the tag through', () => {
+    candidate('0.12.0', { gate: false });
+    merge();
+    // Any worktree can hold a file of the old name, describing the very tree
+    // being tagged, without a gate ever having run.
+    const feature = path.join(dir, 'feature-worktree');
+    inWork(['worktree', 'add', '-b', 'feature/unrelated', feature]);
+    writeGateRecord(mergedTree(), { file: path.join(feature, LEGACY_GATE_FILE_NAME) });
+    assert.throws(() => tagRelease('0.12.0', { root: work, log: () => {} }), refusedNaming(path.join(fs.realpathSync(feature), LEGACY_GATE_FILE_NAME)));
+    assert.strictEqual(localTag(), null, 'nothing tagged');
+  });
+
+  test('an unparseable record in the common directory is refused, naming it, and a good one at the old location does not stand in', () => {
+    candidate('0.12.0', { gate: false });
+    merge();
+    const common = path.join(work, '.git', GATE_FILE_NAME);
+    fs.writeFileSync(common, '{"tree": ');
+    writeGateRecord(mergedTree(), { file: path.join(work, LEGACY_GATE_FILE_NAME) });
     assert.throws(() => tagRelease('0.12.0', { root: work, log: () => {} }), (err) =>
-      err.message.includes(path.join(fs.realpathSync(wt), LEGACY_GATE_FILE_NAME))
-      && err.message.includes(gated.slice(0, 12)) && err.message.includes(changed.slice(0, 12)));
-    assert.strictEqual(inWork(['tag', '-l', 'v0.12.0']), '', 'nothing tagged');
+      err.message.startsWith(`The gate record ${common} cannot be read (`) && !err.message.includes(LEGACY_GATE_FILE_NAME));
+    assert.strictEqual(localTag(), null, 'nothing tagged');
   });
 });
 

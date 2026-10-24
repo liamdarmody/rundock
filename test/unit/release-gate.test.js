@@ -310,10 +310,23 @@ describe('release refuses to tag without a gate pass on the tree being tagged', 
     tree: TREE, sha: 'abc123def', live: true, ci: { checks: { E2E: { run: 1 } } }, passedAt: '2026-08-11T09:00:00Z', wallClockSeconds: 300, steps: [],
   };
   const write = (record, file = recordFile()) => fs.writeFileSync(file, JSON.stringify({ ...RECORD, ...record }));
-  const pass = (opts = {}) => requireGatePass(TREE, { root, git: gitFor(), log: () => {}, ...opts });
+  const pass = (opts = {}) => requireGatePass(TREE, { root, git: gitFor(), ...opts });
 
   test('no gate record: fails naming the command to run, and where the record is kept', () => {
     assert.throws(() => pass(), (err) => /release:gate/.test(err.message) && err.message.includes(recordFile()));
+  });
+
+  // Present and damaged is a refusal naming the file, never a reason to look
+  // anywhere else.
+  test('a record in the common directory that cannot be parsed is refused, naming it', () => {
+    fs.writeFileSync(recordFile(), '{"tree": "eeee');
+    assert.throws(() => pass(), (err) => err.message.startsWith(`The gate record ${recordFile()} cannot be read (`)
+      && /nothing else is read in its place[\s\S]*npm run release:gate/.test(err.message));
+  });
+
+  test('a record that parses to no record is refused as unreadable too', () => {
+    fs.writeFileSync(recordFile(), 'null');
+    assert.throws(() => pass(), /cannot be read \(it holds no record\)/);
   });
 
   test('gate passed on a different tree: fails naming both trees', () => {
@@ -341,44 +354,42 @@ describe('release refuses to tag without a gate pass on the tree being tagged', 
     assert.doesNotThrow(() => pass());
   });
 
-  // For one release: a record an older gate left in the folder it ran in.
-  describe('a record at the old location, for one release', () => {
+  // A `.release-gate.json` in a folder, the name older gates wrote, is never
+  // read as a pass: any folder can hold one, written by hand as easily as by
+  // a gate. Found, it is only named, so the reader knows to run the gate.
+  describe('a record at the old location is never a pass, only named', () => {
     const legacyIn = (folder) => path.join(folder, LEGACY_GATE_FILE_NAME);
     let other;
     beforeEach(() => { other = fs.mkdtempSync(path.join(os.tmpdir(), 'release-gate-worktree-')); });
     afterEach(() => { fs.rmSync(other, { recursive: true, force: true }); });
+    const namesOld = (file) => (err) => /^No release gate pass found/.test(err.message)
+      && err.message.includes(`There is a record at the old location (${file})`)
+      && /an older gate wrote it, and it is never read as a pass, so the gate has to be run again[\s\S]*npm run release:gate/.test(err.message);
 
-    test('one in the folder the tag runs in is read, and the tag says where it read it', () => {
+    test('one in the folder the tag runs in, for this very tree, is refused and named', () => {
       write({}, legacyIn(root));
-      const said = [];
-      pass({ log: (step, msg) => said.push(msg) });
-      assert.ok(said.some((l) => l.includes(legacyIn(fs.realpathSync(root)))), said.join('\n'));
+      assert.throws(() => pass(), namesOld(legacyIn(fs.realpathSync(root))));
     });
 
-    test('one in another worktree of the repository is read too', () => {
+    test('one in another worktree git lists is refused and named too', () => {
       write({}, legacyIn(other));
-      assert.throws(() => pass(), /release:gate/, 'a worktree git does not list is not searched');
-      assert.doesNotThrow(() => pass({ git: gitFor({ worktrees: [root, other] }) }));
+      assert.throws(() => pass(), (err) => /No release gate pass found/.test(err.message) && !err.message.includes(LEGACY_GATE_FILE_NAME),
+        'a folder git does not list is not searched');
+      assert.throws(() => pass({ git: gitFor({ worktrees: [root, other] }) }), namesOld(legacyIn(fs.realpathSync(other))));
     });
 
-    test('of several, the one for the tree being tagged is the one judged', () => {
-      write({ tree: '1'.repeat(40) }, legacyIn(root));
-      write({}, legacyIn(other));
-      assert.doesNotThrow(() => pass({ git: gitFor({ worktrees: [root, other] }) }));
+    test('an unparseable record in the common directory is refused as unreadable, and a good one at the old location does not stand in', () => {
+      fs.writeFileSync(recordFile(), 'not json');
+      write({}, legacyIn(root));
+      assert.throws(() => pass(), (err) => /cannot be read/.test(err.message) && !err.message.includes(LEGACY_GATE_FILE_NAME));
     });
 
-    test('a refusal of one names the file it read', () => {
-      write({ tree: '1'.repeat(40) }, legacyIn(root));
-      const named = (err) => err.message.includes(legacyIn(fs.realpathSync(root))) && /old location/.test(err.message);
-      assert.throws(() => pass(), (err) => /111111111111[\s\S]*eeeeeeeeeeee/.test(err.message) && named(err));
-      write({ live: false }, legacyIn(root));
-      assert.throws(() => pass(), (err) => /live/i.test(err.message) && named(err));
-    });
-
-    test('the record in the common directory is judged before any at the old location', () => {
+    test('the record in the common directory is the one judged, whatever the old location holds', () => {
       write({ live: false });
       write({}, legacyIn(root));
       assert.throws(() => pass(), (err) => /live/i.test(err.message) && !err.message.includes(LEGACY_GATE_FILE_NAME));
+      write({});
+      assert.doesNotThrow(() => pass());
     });
   });
 });

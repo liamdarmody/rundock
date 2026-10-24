@@ -76,7 +76,7 @@ const { execFileSync } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 
-const { LEGACY_GATE_FILE_NAME, findGateRecord } = require('./release-gate.js');
+const { findGateRecord } = require('./release-gate.js');
 
 const ROOT = path.join(__dirname, '..');
 const REPO = 'liamdarmody/rundock';
@@ -162,48 +162,55 @@ function preflight(version, { root = ROOT, git = gitIn(root) } = {}) {
 // accepted and any difference at all is refused. A record gated without live
 // smoke, or without reading CI's results, is refused too.
 //
-// For one release, a record the gate left in the folder it ran in, before it
-// kept its record in the common directory, is read as well, from any worktree
-// of the repository: it is judged by the same rules, and every refusal of one
-// names the file, so a stale copy is found rather than guessed at. Throws so
-// it is unit-testable; the main flow converts to fail().
-function requireGatePass(headTree, { root = ROOT, git = gitIn(root), log = logStep } = {}) {
-  const found = findGateRecord(headTree, { root, git });
+// The common directory is the only place a pass is read from. A record there
+// that cannot be read is refused, naming it, and nothing stands in for it. A
+// `.release-gate.json` left in a folder by a gate from before the move is never
+// read as a pass, since any folder can hold a file of that name: when there
+// is no record, the refusal names any it finds, in the checkout that tags or
+// in a worktree git lists, as written by an older gate. Throws so it is
+// unit-testable; the main flow converts to fail().
+function requireGatePass(headTree, { root = ROOT, git = gitIn(root) } = {}) {
+  const found = findGateRecord({ root, git });
+  if (found.unreadable) {
+    throw new Error(
+      `The gate record ${found.file || 'in git\'s common directory'} cannot be read (${found.unreadable}), so there is no gate pass ` +
+      'to check, and nothing else is read in its place. Run "npm run release:gate" on this candidate again: it writes the record afresh.'
+    );
+  }
   const record = found.record;
   if (!record) {
+    const old = found.legacy.length
+      ? ` There is a record at the old location (${found.legacy.join(', ')}): an older gate wrote it, and it is never read ` +
+        'as a pass, so the gate has to be run again.'
+      : '';
     throw new Error(
-      `No release gate pass found: ${found.file || 'the gate record'} is missing or unreadable, and no worktree ` +
-      `holds one at the old location (${LEGACY_GATE_FILE_NAME}). ` +
+      `No release gate pass found: there is no ${found.file}.${old} ` +
       `Run "npm run release:gate" on this candidate first; the tag refuses to move without it.`
     );
   }
-  const where = found.legacy ? ` (the record read is ${found.file}, at the old location)` : '';
   if (!record.tree) {
     throw new Error(
-      `The gate record names no tree (it was written by an older gate, keyed by commit)${where}. ` +
-      `Re-run "npm run release:gate" on the candidate.`
+      'The gate record names no tree (it was written by an older gate, keyed by commit). ' +
+      'Re-run "npm run release:gate" on the candidate.'
     );
   }
   if (record.tree !== headTree) {
     throw new Error(
-      `The release gate passed on tree ${record.tree.slice(0, 12)} but the commit being tagged has tree ${headTree.slice(0, 12)}${where}. ` +
+      `The release gate passed on tree ${record.tree.slice(0, 12)} but the commit being tagged has tree ${headTree.slice(0, 12)}. ` +
       `Any change to the content invalidates the gate. Re-run "npm run release:gate" on what is being tagged.`
     );
   }
   if (!record.live) {
     throw new Error(
-      `The gate on tree ${record.tree.slice(0, 12)} ran without live smoke (--no-live)${where}. ` +
+      `The gate on tree ${record.tree.slice(0, 12)} ran without live smoke (--no-live). ` +
       `Releases require the full gate: re-run "npm run release:gate" without flags.`
     );
   }
   if (!record.ci || record.ci.skipped || !record.ci.checks) {
     throw new Error(
-      `The gate on tree ${record.tree.slice(0, 12)} did not read CI's results (--no-ci)${where}. ` +
+      `The gate on tree ${record.tree.slice(0, 12)} did not read CI's results (--no-ci). ` +
       `Releases require them: re-run "npm run release:gate" without flags.`
     );
-  }
-  if (found.legacy) {
-    log('tag', `Read the gate pass from ${found.file}, where the gate kept its record before it moved to git's common directory`);
   }
 }
 
@@ -755,7 +762,7 @@ function tagRelease(version, { root = ROOT, git = gitIn(root), log = logStep } =
   }
 
   const mergedTree = git(['rev-parse', `${merged}^{tree}`]).trim();
-  requireGatePass(mergedTree, { root, git, log });
+  requireGatePass(mergedTree, { root, git });
   const signedOff = requireSignoff(mergedTree, version, { root, git });
   // Which way it was signed off, never the words: they stay in the local record.
   log('tag', `Tree ${mergedTree.slice(0, 12)} was ${SIGNED_OFF[signedOff]}`);

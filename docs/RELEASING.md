@@ -78,10 +78,14 @@ once CI has finished there.
 The common directory is shared by every worktree of the repository, so a gate
 run in a release worktree is seen by the checkout of main that tags, with
 nothing to copy, and the record can never be committed. There is one record
-per repository: the last gate to pass is the one `tag` reads. Gates before
-this one wrote `.release-gate.json` in the folder they ran in; for one release,
-`tag` still reads a record there, from any worktree, and names that file in
-any refusal of it.
+per repository: the last gate to pass is the one `tag` reads, and it is the
+only place a pass is read from. A record there that cannot be read is
+refused, naming the file, and nothing is read in its place: run the gate
+again. Gates before this one wrote `.release-gate.json` in the folder they ran
+in. `tag` never reads that file as a pass, since any folder can hold one:
+when there is no record, the refusal names any it finds, in the checkout that
+tags or in a worktree git lists, as written by an older gate, and the gate has
+to be run again.
 
 ## The release summary
 
