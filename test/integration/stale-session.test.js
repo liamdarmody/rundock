@@ -802,6 +802,41 @@ describe('a refusal that reaches the pipe in pieces', () => {
   });
 });
 
+describe('an agent with no name to give', () => {
+  test('is "The agent" when its turn starts fresh, never its id', async () => {
+    const convoId = h.freshConvoId('nameless-fresh');
+    seed(convoId, { agentId: 'departed-agent', sessionId: 'dead-gone-ad', sessionIds: [{ agentId: 'departed-agent', sessionId: 'dead-gone-ad' }] });
+    scenario([{ match: { promptIncludes: 'ASK-AD' }, turn: [{ text: 'FRESH-AD' }] }], ['dead-gone-ad']);
+    const since = client.messages.length;
+    client.send({ type: 'chat', conversationId: convoId, agent: 'departed-agent', content: 'ASK-AD hi', sessionId: 'dead-gone-ad' });
+    await waitForResult(convoId, 'FRESH-AD', since, 'the fresh start answers');
+    const info = messagesFor(convoId, since).find(m => m.subtype === 'info');
+    assert.strictEqual(info.content, startingFresh(null));
+    assert.match(info.content, /^The agent's previous session expired/);
+    assert.ok(!info.content.includes('departed-agent'), 'a raw id is never in the copy');
+    h.reapConvo(convoId);
+  });
+
+  test('is "The agent" when its resume cannot be started again, never its id', async () => {
+    const convoId = h.freshConvoId('nameless-notice');
+    seed(convoId, { agentId: 'chief-of-staff', sessionId: 'dead-gone-ae', sessionIds: [{ agentId: 'chief-of-staff', sessionId: 'dead-gone-ae' }] });
+    scenario([], ['dead-gone-ae']);
+    h.internal.chatProcesses.set(convoId, {
+      agentId: 'chief-of-staff', processId: 'p-gone-ae', exited: true, scopeReturnSource: 'content-lead', toolCalls: [],
+    });
+    const since = client.messages.length;
+    h.internal.handleDelegation({
+      conversationId: convoId, targetAgent: 'content-lead', context: 'again', _intercepted: true,
+      _parentSessionId: 'dead-gone-ae', _parentAgentId: 'departed-agent',
+    }, h.internal.chatProcesses);
+    const { msg } = await client.waitFor(m => m.type === 'system' && m.subtype === 'notice' && m._conversationId === convoId
+      && /no longer available/.test(m.content || ''), { since, label: 'the plain notice', timeout: 15000 });
+    assert.match(msg.content, /^The agent's earlier session is no longer available/);
+    assert.ok(!msg.content.includes('departed-agent'), 'a raw id is never in the copy');
+    h.reapConvo(convoId);
+  });
+});
+
 describe('an info message that names no session', () => {
   // Info carries a blocked handoff, a failed spawn, and a resume that failed
   // for some other reason. None of them says a session is gone, and each used

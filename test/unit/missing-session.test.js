@@ -109,6 +109,12 @@ test('a fresh start names whose earlier context is gone', () => {
   assert.ok(!said.includes(REFUSAL));
 });
 
+test('an agent with no name to give is "The agent" in both notices', () => {
+  assert.strictEqual(startingFresh(null), "The agent's previous session expired. Starting fresh.");
+  assert.match(notResumedNotice(null), /^The agent's earlier session is no longer available/);
+  assert.match(notResumedNotice(''), /^The agent's /);
+});
+
 describe('a catch-up held for the next message', () => {
   test('goes in front of the next message once, and is then spent', () => {
     const entry = {};

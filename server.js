@@ -1775,7 +1775,7 @@ wss.on('connection', (ws) => {
                 processes.delete(convoId);
                 // Naming the session Claude Code refused, when it was refused,
                 // so the window forgets that one and not whichever is primary.
-                const freshName = (agentData && (agentData.displayName || agentData.name)) || msg.agent;
+                const freshName = (agentData && agentData.displayName) || null;
                 safeSend(JSON.stringify({ type: 'system', subtype: 'info', content: startingFresh(freshName),
                   ...(entry.missingSession ? { expiredSessionId: entry.missingSession } : {}),
                   _conversationId: convoId, _processId: processId }));
@@ -1889,7 +1889,7 @@ wss.on('connection', (ws) => {
               console.log(`[Chat] Resume failed for session ${msg.sessionId}, retrying fresh`);
               entry.missingSessionRecovered = true; // started again below
               processes.delete(convoId);
-              const freshName = (agentData && (agentData.displayName || agentData.name)) || msg.agent;
+              const freshName = (agentData && agentData.displayName) || null;
               safeSend(JSON.stringify({ type: 'system', subtype: 'info', content: startingFresh(freshName),
                 ...(entry.missingSession ? { expiredSessionId: entry.missingSession } : {}),
                 _conversationId: convoId, _processId: processId }));
