@@ -530,4 +530,32 @@ describe('a refused resume the person stopped', () => {
     assert.ok(!idsIn(stored(convoId)).includes('dead-lead-k'), 'the dead id is still forgotten');
     h.reapConvo(convoId);
   });
+
+  test('a handback the person stopped does not start the orchestrator again either', async () => {
+    const convoId = h.freshConvoId('stale-cancel-handback');
+    const record = seed(convoId, {
+      agentId: 'chief-of-staff', activeAgentId: 'content-lead', sessionId: 'dead-orch-l',
+      sessionIds: [{ agentId: 'chief-of-staff', sessionId: 'dead-orch-l' }, { agentId: 'content-lead', sessionId: 'live-lead-l' }],
+    });
+    scenario([
+      { match: { resume: true, promptIncludes: 'TRAIN-L' }, turn: [{ text: 'Not mine to do. <!-- RUNDOCK:RETURN -->' }] },
+      { match: { agent: 'chief-of-staff' }, turn: [{ text: 'SHOULD-NOT-ROUTE-L' }] },
+    ], ['dead-orch-l'], { refusalExitMs: 1500 });
+    h.clearInvocations();
+    const win = windowFor(record);
+    const since = client.messages.length;
+    win.send('book me a TRAIN-L');
+    await client.waitFor(m => m.subtype === 'session_expired' && m._conversationId === convoId && m.sessionId === 'dead-orch-l',
+      { since, label: 'the orchestrator\'s refusal is seen while it lingers', timeout: 15000 });
+    client.send({ type: 'cancel', conversationId: convoId });
+    await client.waitForEvent('system', 'cancelled', convoId, { since, label: 'stopped' });
+    await h.delay(2500);
+
+    assert.deepStrictEqual(spawnsFor(convoId).filter(i => i.agent === 'chief-of-staff').map(i => i.resume), ['dead-orch-l'],
+      'the stopped handback is never started again');
+    assert.ok(!messagesFor(convoId, since).some(m => m.type === 'result' && /SHOULD-NOT-ROUTE-L/.test(m.result || '')));
+    assert.ok(!messagesFor(convoId, since).some(m => m.subtype === 'info'), 'no fresh start is announced');
+    assertNotTold(convoId, since);
+    h.reapConvo(convoId);
+  });
 });
