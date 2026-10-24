@@ -52,7 +52,12 @@ global.activeConversation = null;
 global.userScrolledUp = false;
 global.unread = {};
 global.agentLastActivity = {};
-global.RundockConversationState = { watchdogVerdict: () => ({ action: 'stop' }) };
+// The real module, so the session a send resumes is decided by the real rule;
+// only the watchdog is stilled, because its interval would hold the suite open.
+global.RundockConversationState = {
+  ...require(path.join(ROOT, 'public', 'conversation-state.js')),
+  watchdogVerdict: () => ({ action: 'stop' }),
+};
 global.RundockChatMarkup = require(path.join(ROOT, 'public', 'chat-markup.js'));
 global.esc = (t) => String(t);
 global.formatMd = (t) => String(t);

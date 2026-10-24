@@ -61,9 +61,7 @@ function dispatchMessage(convo, text) {
   // Also resolve the correct session ID for that agent so --resume loads the right context.
   const state = getConvoState(convo.id);
   const resumeAgent = state.activeAgentId || convo.agentId;
-  const resumeSessionId = (resumeAgent !== convo.agentId && convo.sessionIds)
-    ? (convo.sessionIds.filter(s => s.agentId === resumeAgent).pop()?.sessionId || convo.sessionId)
-    : convo.sessionId;
+  const resumeSessionId = RundockConversationState.resumeSessionFor(convo, resumeAgent);
   const chatMsg = { type: 'chat', content, agent: resumeAgent, conversationId: convo.id };
   if (resumeSessionId) chatMsg.sessionId = resumeSessionId;
   ws.send(JSON.stringify(chatMsg));

@@ -666,6 +666,7 @@ const {
 } = claudeRuntime;
 const codexGlue = require('./lib/runtime/codex-glue.js');
 const { watchClaudeTurns } = require('./lib/runtime/claude-turn-guard.js');
+const { startingFresh, noteUnstartedWrite, takeUnstartedWrites, withFreshCatchUp } = require('./lib/runtime/missing-session.js');
 claudeRuntime.wireClaudeRuntimeDeps({
   getActualPort: () => ACTUAL_PORT,
   // Every Claude turn runs under the same answer-file guard as a Codex turn.
@@ -1632,7 +1633,13 @@ wss.on('connection', (ws) => {
             existing.scopeReturnSource = null; // User sent new message, allow re-delegation
             resetAutoResume(convoId); // User spoke, reset circuit breaker
             if (existing.delegation) { existing.receivedFollowUp = true; }
-            existing.process.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: msg.content } }) + '\n');
+            // A fresh start that had no prompt of its own gives its first
+            // message the catch-up it is owed; every other message is as sent.
+            const followUp = withFreshCatchUp(existing, msg.content);
+            // Kept until this process has started its session: one still
+            // starting may yet be refused, and then never reads this.
+            noteUnstartedWrite(existing, followUp);
+            existing.process.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: followUp } }) + '\n');
           } else {
             // No live process: spawn a new one (first message or after disconnect)
             // Stop any stale entry first (runtime-aware: a leftover Codex
@@ -1754,15 +1761,39 @@ wss.on('connection', (ws) => {
               // cancel sends SIGTERM (code===null !== 0) and a cancelled resumed
               // conversation whose stderr mentions session/resume/not found would
               // otherwise replay the original prompt.
-              const isResumeFailure = msg.sessionId && !msg._resumeRetry && !entry.cancelled && code !== 0 &&
+              //
+              // AND ONLY A PROCESS THAT NEVER STARTED ITS SESSION. A resume fails
+              // before the session starts or not at all. Matched later, a process
+              // that had answered for an hour and then crashed, or was reaped,
+              // with any of those words on stderr replayed the message it was
+              // started with, and the person's request ran twice. Claude Code's
+              // own refusal is retried even after an init, should one ever come
+              // first: a refused session never ran a turn.
+              const isResumeFailure = msg.sessionId && !msg._resumeRetry && !entry.cancelled && code !== 0 && (!entry.sessionId || entry.missingSession) &&
                 (stderrRef.value.includes('session') || stderrRef.value.includes('resume') || stderrRef.value.includes('not found'));
               if (isResumeFailure) {
                 console.log(`[Chat] Resume failed for session ${msg.sessionId}, retrying fresh`);
+                entry.missingSessionRecovered = true; // started again below
                 processes.delete(convoId);
-                safeSend(JSON.stringify({ type: 'system', subtype: 'info', content: 'Previous session expired. Starting fresh.', _conversationId: convoId, _processId: processId }));
+                // Naming the session Claude Code refused, when it was refused,
+                // so the window forgets that one and not whichever is primary.
+                const freshName = (agentData && agentData.displayName) || null;
+                safeSend(JSON.stringify({ type: 'system', subtype: 'info', content: startingFresh(freshName),
+                  ...(entry.missingSession ? { expiredSessionId: entry.missingSession } : {}),
+                  _conversationId: convoId, _processId: processId }));
                 const freshMsg = { ...msg, sessionId: null, _resumeRetry: true };
                 const liveWs = [...connectedClients].find(c => c.readyState === 1) || ws;
                 liveWs.emit('message', JSON.stringify(freshMsg));
+                // What the person sent while the refused process was starting
+                // follows it, in order, into the fresh one: the first emit has
+                // already put a live process in place for these to reach. After
+                // any failure, not only a refusal: what is still kept went to a
+                // process that never started a session (its init clears the
+                // list), so it acted on none of it, and dropping it lost what
+                // the person had said.
+                for (const carried of takeUnstartedWrites(entry)) {
+                  liveWs.emit('message', JSON.stringify({ ...freshMsg, content: carried }));
+                }
                 return;
               }
 
@@ -1851,12 +1882,20 @@ wss.on('connection', (ws) => {
             const current = processes.get(convoId);
             if (current && current.processId !== processId) return;
 
-            const isResumeFailure = msg.sessionId && !msg._resumeRetry && !entry.cancelled && code !== 0 &&
+            // Only a process that never started its session, as on the
+            // interactive path: a turn that answered and then failed is not a
+            // resume that failed, and replaying it would run the request twice.
+            // Claude Code's own refusal is retried even after an init.
+            const isResumeFailure = msg.sessionId && !msg._resumeRetry && !entry.cancelled && code !== 0 && (!entry.sessionId || entry.missingSession) &&
               (legacyStderrRef.value.includes('session') || legacyStderrRef.value.includes('resume') || legacyStderrRef.value.includes('not found'));
             if (isResumeFailure) {
               console.log(`[Chat] Resume failed for session ${msg.sessionId}, retrying fresh`);
+              entry.missingSessionRecovered = true; // started again below
               processes.delete(convoId);
-              safeSend(JSON.stringify({ type: 'system', subtype: 'info', content: 'Previous session expired. Starting fresh.', _conversationId: convoId, _processId: processId }));
+              const freshName = (agentData && agentData.displayName) || null;
+              safeSend(JSON.stringify({ type: 'system', subtype: 'info', content: startingFresh(freshName),
+                ...(entry.missingSession ? { expiredSessionId: entry.missingSession } : {}),
+                _conversationId: convoId, _processId: processId }));
               const freshMsg = { ...msg, sessionId: null, _resumeRetry: true };
               const liveWs = [...connectedClients].find(c => c.readyState === 1) || ws;
               liveWs.emit('message', JSON.stringify(freshMsg));
@@ -3508,6 +3547,8 @@ module.exports._internal = {
   killAllChildren, cleanOrphanedProcesses, loadPidFile, savePidFile, pidRecordAlive,
   processCommand, readProcCmdline, parseProcCmdline, psCommand,
   commandLineCapability, COMMAND_LINE_SOURCES,
+  // one idle-reaper sweep, at a chosen time
+  reapIdleAgents,
   // live state maps
   chatProcesses, convoTranscripts, pendingPermissionRequests,
   agentAutoResumeCount, disconnectBuffer, connectedClients,

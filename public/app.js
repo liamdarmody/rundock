@@ -647,20 +647,22 @@ function handle(d) {
         executeEffects(convoId, r.effects);
       }
       // Neutral notice: informational pill with NO side effects. Used for
-      // Codex write-request outcomes. Distinct from 'info', which doubles
-      // as the stale-session signal and clears the stored sessionId: that
-      // side effect must never fire for a routine notice.
+      // Codex write-request outcomes. Distinct from 'info', which forgets the
+      // session it names when it names one.
       if(d.subtype==='notice' && d.content && convoId) {
         const r = RundockConversationState.reduce(getConvoState(convoId), d, {});
         convoState[convoId] = r.state;
         executeEffects(convoId, r.effects);
       }
-      // Stale session: server is retrying fresh, clear the old sessionId
+      // A session Claude Code no longer has: forget it, draw nothing.
+      if(d.subtype==='session_expired' && convoId) {
+        const r = RundockConversationState.reduce(getConvoState(convoId), d, {});
+        convoState[convoId] = r.state;
+        executeEffects(convoId, r.effects);
+      }
+      // An informational pill, and the session it names (if any) forgotten
       if(d.subtype==='info' && d.content && convoId) {
-        const convo = conversations.find(c => c.id === convoId);
-        const r = RundockConversationState.reduce(getConvoState(convoId), d, {
-          hasPrimarySession: !!(convo && convo.sessionId),
-        });
+        const r = RundockConversationState.reduce(getConvoState(convoId), d, {});
         convoState[convoId] = r.state;
         executeEffects(convoId, r.effects);
       }
@@ -949,11 +951,11 @@ const EFFECT_EXECUTORS = {
     if (ef.addToChain) convo.sessionIds.push({ sessionId: ef.sessionId, agentId: ef.agentId });
     persistConversation(convo);
   },
-  'clear-session': (convoId) => {
+  // A session Claude Code no longer has, dropped from what this window holds
+  // and saves back, so the next message never resumes it again.
+  'forget-session': (convoId, ef) => {
     const convo = conversations.find(c => c.id === convoId);
-    if (!convo) return;
-    convo.sessionId = null;
-    persistConversation(convo);
+    if (convo && RundockConversationState.forgetSession(convo, ef.sessionId)) persistConversation(convo);
   },
   'notice': (convoId, ef) => addSystemMsgToConvo(ef.content, convoId, false),
   'add-cancelled-badge': (convoId, ef) => {

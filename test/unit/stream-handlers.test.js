@@ -67,6 +67,17 @@ describe('stdout JSONL parsing', () => {
     assert.strictEqual(captured[0]._sessionId, 'sess-42');
   });
 
+  test('once the session starts, nothing kept for a refused start is kept any longer', () => {
+    // Messages are kept while a process could still be refused, to hand to a
+    // fresh start. Once its session starts it reads them all, and anything
+    // still kept could be sent a second time.
+    const entry = makeEntry();
+    entry.unstartedWrites = ['written before the session started'];
+    srv.wireProcessHandlers(entry, 'convo-1', null, {});
+    push(entry, [fx.init('sess-43')]);
+    assert.deepStrictEqual(entry.unstartedWrites, []);
+  });
+
   test('a line split across two chunks is buffered and parsed once complete', () => {
     const entry = makeEntry();
     srv.wireProcessHandlers(entry, 'convo-1', null, {});
@@ -499,5 +510,43 @@ describe('text blocks in one turn keep their boundary', () => {
     push(viaBlocks, [fx.assistantMessage('First part.', [{ type: 'text', text: 'Second part.' }])]);
     assert.strictEqual(viaBlocks.responseText, 'First part.\n\nSecond part.',
       'the two ways of filling the same field agree about the same turn');
+  });
+});
+
+describe('a refused resume whose store cannot be written', () => {
+  test('is warned about, and the window is still told to forget the session', () => {
+    // Forgetting the refused id on disk must not take the turn down with it:
+    // a store that cannot be written costs one wasted resume next time, which
+    // recovers the same way. Throwing here would leave the refusal unhandled.
+    const convoId = 'unwritable-store-1';
+    const dir = makeWorkspace({
+      agents: standardTeam(),
+      files: { '.rundock/conversations.json': JSON.stringify([{
+        id: convoId, agentId: 'lead-designer', sessionId: 'dead-store-1',
+        sessionIds: [{ agentId: 'lead-designer', sessionId: 'dead-store-1' }],
+      }]) },
+    });
+    const file = require('node:path').join(dir, '.rundock', 'conversations.json');
+    const fs = require('node:fs');
+    srv.setWorkspace(dir);
+    const warnings = [];
+    const realWarn = console.warn;
+    console.warn = (m) => warnings.push(String(m));
+    try {
+      fs.chmodSync(file, 0o444);
+      const entry = makeEntry();
+      entry.process.spawnargs = ['claude', '--print', '--resume', 'dead-store-1'];
+      srv.wireProcessHandlers(entry, convoId, null, {});
+      assert.doesNotThrow(() => entry.process.stderr.emit('data',
+        Buffer.from('No conversation found with session ID: dead-store-1\n')));
+      assert.ok(warnings.some((w) => /could not forget session dead-store-1 on disk/.test(w)),
+        `and says so rather than failing silently (got ${JSON.stringify(warnings)})`);
+      assert.ok(captured.some((m) => m.type === 'system' && m.subtype === 'session_expired' && m.sessionId === 'dead-store-1'),
+        'every open window is still told to forget it');
+      assert.strictEqual(entry.missingSession, 'dead-store-1', 'and the refusal is still recorded for a fresh start');
+    } finally {
+      console.warn = realWarn;
+      try { fs.chmodSync(file, 0o644); } catch { /* going anyway */ }
+    }
   });
 });

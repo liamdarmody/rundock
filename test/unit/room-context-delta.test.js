@@ -778,7 +778,15 @@ describe('the names come from the real roster', () => {
     // resume is attempted, fails, and the delegate lands on a fresh thread. That
     // fallback carries its own catch-up built as an arrival, and it must build
     // its names from the live roster like the other three.
-    assert.strictEqual(calls, 4,
+    //
+    // FIVE, with the same reasoning one runtime over: a Claude delegate whose
+    // stored session Claude Code no longer has is started again fresh, and is
+    // briefed as an arrival, from the live roster like the rest.
+    //
+    // SIX: an orchestrator handed back to on a session Claude Code no longer
+    // has starts fresh the same way, and is given the conversation as an
+    // arrival rather than the handback alone.
+    assert.strictEqual(calls, 6,
       'every path that builds a catch-up must take the map from the live roster, '
       + 'or one of them silently labels turns with internal ids');
   });
@@ -991,6 +999,13 @@ describe('the stored conversation can only reach a delegate through the cap', ()
     assert.deepStrictEqual(writes, [
       // A permission block, answered on the process that asked.
       ['blockedEntry.process', 'blockPrompt'],
+      // A turn started again after Claude Code refused its resume. Its callers
+      // hand it what a fresh session is owed: a delegate's arrival brief, from
+      // the same capped builder, or the handback prompt with no catch-up.
+      ['proc', 'freshPrompt'],
+      // And after it, each message the person sent while the refused process
+      // was starting, which it never read: their own words, as they sent them.
+      ['proc', 'carried'],
       // A resumed agent picking its own conversation back up.
       ['proc', 'prompt'],
       // THE ONE THAT STARTS A DELEGATE. Everything a delegation hands over

@@ -59,6 +59,13 @@ test('a missing codex binary surfaces install guidance and a clean done', async 
     m => m.type === 'system' && m.subtype === 'info' && m._conversationId === convoId,
     { since, label: 'install guidance' });
   assert.match(info.content, INSTALL_GUIDANCE, 'codex-specific guidance, never the Claude-install message');
+  // A missing binary says nothing about any session, so the window it reaches
+  // forgets nothing: run through the window's own reducer, a live primary
+  // session survives it.
+  assert.strictEqual(info.expiredSessionId, undefined, 'it names no session');
+  const { createState, reduce } = require('../../public/conversation-state.js');
+  assert.deepStrictEqual(reduce(createState(), info, { hasPrimarySession: true }).effects,
+    [{ type: 'notice', content: info.content }], 'a notice, and nothing forgotten');
   const { msg: done } = await client.waitFor(
     m => m.type === 'system' && m.subtype === 'done' && m._conversationId === convoId,
     { since, label: 'done after spawn failure' });
