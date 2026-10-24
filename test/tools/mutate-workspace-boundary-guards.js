@@ -3092,7 +3092,10 @@ const MUTATIONS = [
     " && !SHELL_SHEBANG.test(String(body).split('\\n')[0]);",
     ";"],
   // A written literal that names no answer file by name, such as a glob over
-  // one, is caught only here.
+  // one, is caught only by the written-literal route. Its test is shared: the
+  // row before, which makes a relative literal text, turns it red as well,
+  // and only that row's test of a literal leading out through a link is its
+  // own.
   [SHELL_CODE, "Shell code: a literal in code is never counted as written",
     "    for (const lit of view.literals) if (lit.written) writes.words.add(lit.t);\n",
     ""],

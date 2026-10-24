@@ -163,7 +163,9 @@ describe('a here-document fed to an interpreter or written to a file is judged b
   });
 
   // A place-shaped literal the code writes is tested against the answer files
-  // by itself: a glob names none of them, yet can match them.
+  // by itself: a glob names none of them, yet can match them. Not this route's
+  // alone: a relative literal read as text fails it too, so the link test
+  // above is the one only that rule decides.
   test('a written literal that is a glob over an answer-file folder asks', () => {
     const r = scan("python3 - <<'PY'\nimport glob, shutil\nfor p in glob.glob('./.rund*'):\n    shutil.rmtree(p)\nPY");
     assert.ok(r && r.crossings.some(c => c.answerFile === true), 'removing what a glob over .rundock matches asks');
