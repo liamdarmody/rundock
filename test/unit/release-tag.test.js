@@ -282,6 +282,21 @@ describe('release:tag tags what actually merged, and only a gated tree', () => {
     assert.ok(lines.some((l) => l.step === 'tag' && /here only: nothing has been pushed$/.test(l.msg)), lines.map((l) => l.msg).join('\n'));
   });
 
+  test('the tag goes on the commit that was checked, even when HEAD moves before it is made', () => {
+    candidate();
+    merge();
+    const checked = mergedCommit();
+    // HEAD moves while the tag is still being decided: after the gate and the
+    // sign-off are checked, at the lookup on the remote.
+    const git = (args, opts) => {
+      if (args[0] === 'ls-remote') gitAt(work)(['commit', '--allow-empty', '-m', 'a commit made while tag ran']);
+      return gitAt(work)(args, opts);
+    };
+    tagRelease('0.12.0', { root: work, git, log: () => {} });
+    assert.notStrictEqual(inWork(['rev-parse', 'HEAD']), checked, 'HEAD did move');
+    assert.strictEqual(localTag(), checked, 'the tag is on the commit that was checked');
+  });
+
   test('the push is printed on a line of its own, as the exact bare command, and running it is what puts the tag on the remote', () => {
     candidate();
     merge();

@@ -376,15 +376,19 @@ const MUTATIONS = [
     "    npm run release -- publish ${version} --confirm <version>\\n`",
     "    npm run release -- publish ${version} --confirm ${version}\\n`"],
   [RELEASE_TAG, "the tag never carries the words of a chat sign-off",
-    "  if (!local) git(['tag', tag], { stdio: 'pipe' });",
-    "  if (!local) git(['tag', '-a', tag, '-m', `${(readSignoff({ root, git }) || {}).instruction}`], { stdio: 'pipe' });"],
-  // The tag is made here and the push is printed, never made: the push needs
-  // a credential a sandboxed command does not have, and is run bare, as its
-  // own step. Run again after a failed or skipped push, the tag reuses its own
-  // tag; one on another commit, or one already pushed, is refused.
+    "  if (!local) git(['tag', tag, merged], { stdio: 'pipe' });",
+    "  if (!local) git(['tag', '-a', tag, merged, '-m', `${(readSignoff({ root, git }) || {}).instruction}`], { stdio: 'pipe' });"],
+  // The tag is made here, on the commit that was checked, and the push is
+  // printed, never made: the push needs a credential a sandboxed command does
+  // not have, and is run bare, as its own step. Run again after a failed or
+  // skipped push, the tag reuses its own tag; one on another commit, or one
+  // already pushed, is refused.
+  [RELEASE_TAG, "the tag goes on the commit that was checked, not on HEAD",
+    "  if (!local) git(['tag', tag, merged], { stdio: 'pipe' });",
+    "  if (!local) git(['tag', tag], { stdio: 'pipe' });"],
   [RELEASE_TAG, "the tag pushes nothing",
-    "  if (!local) git(['tag', tag], { stdio: 'pipe' });\n",
-    "  if (!local) git(['tag', tag], { stdio: 'pipe' });\n  git(['push', 'origin', tag], { stdio: 'pipe' });\n"],
+    "  if (!local) git(['tag', tag, merged], { stdio: 'pipe' });\n",
+    "  if (!local) git(['tag', tag, merged], { stdio: 'pipe' });\n  git(['push', 'origin', tag], { stdio: 'pipe' });\n"],
   [RELEASE_TAG, "the push printed is the exact bare command",
     "  const push = `git push origin ${tag}`;",
     "  const push = `npm run release -- push ${version}`;"],

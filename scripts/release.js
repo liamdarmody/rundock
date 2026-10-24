@@ -793,7 +793,9 @@ function tagRelease(version, { root = ROOT, git = gitIn(root), log = logStep } =
       `and the remote does not have it. It is left from an earlier cut: delete it ("git tag -d ${tag}") and run this again.`
     );
   }
-  if (!local) git(['tag', tag], { stdio: 'pipe' });
+  // On the commit that was checked, named, never on HEAD: HEAD can move in
+  // the time the checks and the remote lookup above take.
+  if (!local) git(['tag', tag, merged], { stdio: 'pipe' });
 
   const push = `git push origin ${tag}`;
   log('tag', local
