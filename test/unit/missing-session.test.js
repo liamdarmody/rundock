@@ -4,7 +4,7 @@
 const { test, describe } = require('node:test');
 const assert = require('node:assert');
 const {
-  REFUSAL, refusedResume, resumedSessionOf, noteExpired, isExpired, withoutResume,
+  REFUSAL, refusedResume, resumedSessionOf, mayBeRefusal, noteExpired, isExpired, withoutResume,
   noteUnstartedWrite, takeUnstartedWrites, notResumedNotice,
 } = require('../../lib/runtime/missing-session.js');
 
@@ -33,6 +33,21 @@ describe('a refused resume', () => {
     assert.strictEqual(resumedSessionOf({}), null);
     assert.strictEqual(resumedSessionOf(null), null);
     assert.strictEqual(resumedSessionOf({ spawnargs: ['claude', '--resume'] }), null);
+  });
+});
+
+describe('stderr that could still be a refusal', () => {
+  test('is any non-empty opening of the refusal, leading space aside', () => {
+    assert.strictEqual(mayBeRefusal('No con'), true);
+    assert.strictEqual(mayBeRefusal('  No conversation found with'), true);
+    assert.strictEqual(mayBeRefusal(REFUSAL), true);
+  });
+
+  test('is not text that has gone its own way, nor nothing at all', () => {
+    assert.strictEqual(mayBeRefusal('No connection'), false);
+    assert.strictEqual(mayBeRefusal(`${REFUSAL}: sess-1\n`), false, 'the whole line is matched as a refusal, not held');
+    assert.strictEqual(mayBeRefusal(''), false);
+    assert.strictEqual(mayBeRefusal('   '), false);
   });
 });
 

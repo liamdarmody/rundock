@@ -39,7 +39,9 @@
 //     "deadSessions": ["id", ...],   // a --resume of any of these is refused at
 //                                    // startup exactly as Claude Code refuses an
 //                                    // id it has no session file for
-//     "refusalExitMs": 0 }           // how long the refused process lingers
+//     "refusalExitMs": 0,            // how long the refused process lingers
+//     "refusalSplitAt": 0 }          // write the refusal line in pieces
+// A crash rule may give "stderrChunks": [...] to write its stderr in pieces.
 // First matching rule wins; rules are re-read from disk on every message so
 // tests can rewrite the script mid-scenario. The stub also appends every
 // invocation to `stub-invocations.jsonl` (cwd) for spawn-arg assertions.
@@ -200,10 +202,26 @@ function scenarioTop() {
 const TOP = scenarioTop();
 const REFUSED_RESUME = RESUME != null && Array.isArray(TOP.deadSessions) && TOP.deadSessions.includes(RESUME);
 if (REFUSED_RESUME) {
-  writeErr(`No conversation found with session ID: ${RESUME}\n`);
+  // `refusalSplitAt` writes the line in pieces a moment apart (cut at that
+  // character, then the newline on its own), the way a pipe may deliver it.
+  const line = `No conversation found with session ID: ${RESUME}`;
+  const cut = Number(TOP.refusalSplitAt) || 0;
+  const pieces = cut > 0 ? [line.slice(0, cut), line.slice(cut), '\n'] : [`${line}\n`];
   const wait = Number(TOP.refusalExitMs) || 0;
-  if (wait > 0) setTimeout(() => exitWhenWritten(1), wait);
-  else exitWhenWritten(1);
+  const finish = () => (wait > 0 ? setTimeout(() => exitWhenWritten(1), wait) : exitWhenWritten(1));
+  writePieces(pieces, finish);
+}
+
+// Write stderr in pieces a moment apart, so each reaches the reader as its
+// own chunk, then carry on.
+function writePieces(pieces, then) {
+  let at = 0;
+  const next = () => {
+    writeErr(String(pieces[at++]));
+    if (at < pieces.length) setTimeout(next, 40);
+    else then();
+  };
+  next();
 }
 
 function matches(rule, prompt) {
@@ -422,6 +440,12 @@ function handleUserMessage(content) {
       // asserted. A crash is still a crash: no result envelope, non-zero code.
       exitWhenWritten(code);
     };
+    // `stderrChunks` writes the crash's stderr in those pieces, a moment
+    // apart, so a reader sees each as its own chunk.
+    if (Array.isArray(rule.stderrChunks)) {
+      writePieces(rule.stderrChunks, die);
+      return;
+    }
     if (rule.delayMs) setTimeout(die, rule.delayMs);
     else die();
     return;

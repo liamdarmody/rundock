@@ -561,6 +561,49 @@ describe('talking straight to an agent whose stored session is gone', () => {
   });
 });
 
+describe('a refusal that reaches the pipe in pieces', () => {
+  test('is still recognized, nothing of it is shown, and it is forgotten once', async () => {
+    const convoId = h.freshConvoId('stale-split');
+    const record = seed(convoId, {
+      agentId: 'chief-of-staff', activeAgentId: 'content-lead', sessionId: 'live-orch-t',
+      sessionIds: [{ agentId: 'chief-of-staff', sessionId: 'live-orch-t' }, { agentId: 'content-lead', sessionId: 'dead-lead-t' }],
+    });
+    // Cut inside the words themselves, so no single piece holds them whole.
+    scenario([
+      { match: { agent: 'content-lead', promptIncludes: 'ASK-T' }, turn: [{ text: 'LEAD-FRESH-T' }] },
+    ], ['dead-lead-t'], { refusalSplitAt: 12 });
+    h.clearInvocations();
+    const win = windowFor(record);
+    const since = client.messages.length;
+    win.send('ASK-T hello');
+    await waitForResult(convoId, 'LEAD-FRESH-T', since, 'the fresh start answers');
+    await h.delay(200);
+    assert.deepStrictEqual(messagesFor(convoId, since).filter(m => m.type === 'error').map(m => m.content), [],
+      'no piece of the refusal is shown, not even its opening words');
+    assert.strictEqual(messagesFor(convoId, since).filter(m => m.subtype === 'session_expired').length, 1,
+      'and it is forgotten once, however many pieces follow');
+    assert.ok(!idsIn(stored(convoId)).includes('dead-lead-t'));
+    h.reapConvo(convoId);
+  });
+
+  test('stderr that only began like a refusal is shown whole, once it is clearly something else', async () => {
+    const convoId = h.freshConvoId('stale-lookalike');
+    seed(convoId, { agentId: 'chief-of-staff', sessionId: 'live-orch-u', sessionIds: [{ agentId: 'chief-of-staff', sessionId: 'live-orch-u' }] });
+    scenario([
+      { match: { resume: true, promptIncludes: 'ASK-U' }, crash: 1, stderrChunks: ['No con', 'nection to the service', '\n'] },
+    ], []);
+    const since = client.messages.length;
+    client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: 'ASK-U hi', sessionId: 'live-orch-u' });
+    await client.waitForEvent('system', 'done', convoId, { since, label: 'the failed turn ends', timeout: 15000 });
+    await h.delay(200);
+    assert.strictEqual(messagesFor(convoId, since).filter(m => m.type === 'error').map(m => m.content).join(''),
+      'No connection to the service\n', 'held only while it could have been a refusal, then shown whole, once');
+    assert.ok(!messagesFor(convoId, since).some(m => m.subtype === 'session_expired'), 'and nothing is forgotten');
+    assert.ok(idsIn(stored(convoId)).includes('live-orch-u'));
+    h.reapConvo(convoId);
+  });
+});
+
 describe('an info message that names no session', () => {
   // Info carries a blocked handoff, a failed spawn, and a resume that failed
   // for some other reason. None of them says a session is gone, and each used
