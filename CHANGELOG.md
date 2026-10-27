@@ -4,6 +4,34 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
+## 0.15.7: See What You Approve (2026-10-27)
+
+Connector cards now show who an email goes to and what it says before you allow it, and sends always ask. An expired Claude session reconnects from the app. Code inside an agent's commands no longer raises false cards that stopped routines, and agents now ask before changing the files that decide what runs outside the sandbox.
+
+### Added
+
+- **Connector cards show what an agent is about to do:** a card for drafting, sending, replying to or forwarding an email shows the recipients (the first three, then how many more, with Bcc always shown in full), the subject and the first lines of the message, with the whole message one click away. A calendar card shows the title, start, end and attendees, and how many people will be emailed an invitation. A send, reply or forward shows where it goes. Any field the card doesn't read is listed under Other fields, a card never says there's no one to send to when an unread field could hold recipients, and an email address in an unread field is called out.
+- **Reconnect Claude from the app:** when Claude Code's session has expired, the card now reads "Claude needs reconnecting". Reconnect Claude opens a window that runs Claude Code's login, you finish in your browser and type nothing, then press I've reconnected. Where no window can be opened, the card shows the one command to run.
+- **Links in properties you can click:** wikilinks inside property values, including an unquoted `[[Note]]`, lists, aliases and headings, are now clickable in the properties panel.
+- **Clicking a link to a missing note creates it:** in the properties panel or the note body, as Obsidian does. A bare name is created in the current note's folder, and a path counts from the workspace root. Links to missing notes are drawn muted with a dashed underline.
+
+### Changed
+
+- **Sending, replying, forwarding and deleting through a connector always ask:** with Allow once and Deny only, and an Always allow saved earlier for these no longer applies. When Rundock can't ask, they're refused.
+- **Suggesting a meeting time no longer asks:** finding a time from calendar availability is a read, like listing events.
+
+### Fixed
+
+- **No more false "outside your workspace" cards from code inside a command:** code an agent wrote inside a command (a here-document, `python3 -c`, `node -e`) raised cards for text that only looked like a path, and those cards stopped scheduled routines. Code is now judged by the places it actually names, so real outside paths still ask, and a `cd` partway through a command is followed.
+- **Earlier messages stay in view after a new message:** a conversation whose earlier messages were only in Claude Code's session file (imported, or from before Rundock kept its own record) showed only the newest turn once you sent a message. Nothing was lost on disk. It's all shown now, in order, with Rundock's own internal prompts kept out of view.
+- **A conversation whose Claude Code session has gone no longer gets stuck:** when Claude Code had removed a conversation's stored session, every message, even starting fresh with the same agent, failed with "No conversation found with session ID". Rundock now forgets the old session, starts the agent fresh with the conversation so far, carries over a message you sent in the meantime, and never shows the raw error.
+- **Agents ask before changing the files that decide what runs:** an agent could change `.mcp.json`, the per-user connector file, the project's Claude settings or its hook scripts without a card, and those files start programs outside the sandbox. A change to any of them now asks every time, with Allow and Deny only, in Notes and Code mode, including through shell commands and code an agent runs. A change to the launcher Rundock's permission checks start through is refused outright. If a change gets past the card, for example from a Codex agent, Rundock puts it back after the turn. A connector an agent asks Rundock to add or remove raises a card showing exactly what it would run. Workspaces are updated the next time you open them.
+- **The Keychain always asks:** on macOS, a shell command that reads or changes the Keychain now asks every time, with Allow and Deny only, and that answer can't be remembered.
+- **Code mode no longer removes Rundock's own folder without asking:** `git clean` with `-x` ran without a card when nothing untracked would be lost, and could remove `.rundock` with your permission settings in it. It now asks while that folder is in reach.
+- **Putting a file back never writes outside the workspace:** if a folder in the workspace had been swapped for a link, putting back a protected file could write to, or remove, the file the link led to, such as your own Claude settings. Rundock now removes the swapped-in link first.
+- **How Rundock was started can't change how it grades commands:** settings inherited from the way Rundock was launched could put a Notes workspace under Code mode grading. They're now cleared, and `launchctl` changes to launch settings always ask.
+- **More of Claude Code's protected paths stay protected on every version:** on macOS, Rundock's sandbox now denies writes to Claude Code's own protected paths itself, rather than relying on the version you have.
+
 ## 0.15.6: Nothing Lost (2026-10-11)
 
 Rundock now asks before anything git can't bring back is thrown away, never writes over a workspace you already have, tells an agent when you approved its card, and stops shell commands from changing the files that hold your credentials and Claude's own settings.
