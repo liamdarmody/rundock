@@ -567,6 +567,40 @@ describe('a mutation result that cannot be parsed is a refusal, not a crash', ()
     assert.match(nightly, /node scripts\/mutation-scope\.js --all/,
       'the nightly sweep no longer asks the selector for every harness');
   });
+
+  // ONE JOB OUTGREW ITS CLOCK. Run end to end in a single job, the complete set
+  // was cut off at the job's timeout with rows unrun. The nightly has the
+  // scoped run's shape instead: a plan job shards every harness and publishes
+  // the matrix, each shard runs only its slice of that plan, and a verdict job
+  // that runs always() reads every shard's verdict into one outcome.
+  test('the nightly sweep runs the complete set as planned shards with one verdict', () => {
+    const nightly = read('.github', 'workflows', 'mutation-nightly.yml');
+    const jobs = {};
+    let current = null;
+    for (const line of nightly.slice(nightly.search(/^jobs:\s*$/m)).split('\n').slice(1)) {
+      if (/^\S/.test(line)) break;
+      const head = /^ {2}([\w-]+):\s*$/.exec(line);
+      if (head) current = head[1];
+      else if (current && !/^ {2}#/.test(line)) jobs[current] = `${jobs[current] || ''}${line}\n`;
+    }
+    const names = Object.keys(jobs);
+    assert.doesNotMatch(nightly, /mutation-scope\.js --all(?![^\n]*--plan)/,
+      'a nightly step runs every harness in one job; the complete set must be planned into shards');
+    const plan = names.find((n) => /mutation-scope\.js --all\b[^\n]*--plan\b/.test(jobs[n])
+      && /^ +matrix: \$\{\{ steps\.[\w-]+\.outputs\.matrix \}\}/m.test(jobs[n]));
+    assert.ok(plan, 'no nightly job plans every harness (--all --plan) and publishes the matrix');
+    const shard = names.find((n) => jobs[n].includes(`fromJSON(needs.${plan}.outputs.matrix)`));
+    assert.ok(shard, `no nightly job takes its matrix from the ${plan} job`);
+    assert.match(jobs[shard], /mutation-scope\.js --shard "\$SHARD\/\$SHARDS"\s+--plan-file /,
+      'a nightly shard must run its slice of the plan file, never a second selection of its own');
+    const verdict = names.find((n) => /mutation-scope\.js --aggregate\b/.test(jobs[n]));
+    assert.ok(verdict, 'no nightly job reads every shard verdict into one outcome');
+    const needs = ((/^ {4}needs: \[([^\]]*)\]/m.exec(jobs[verdict]) || [])[1] || '').split(',').map((s) => s.trim());
+    assert.ok(needs.includes(plan) && needs.includes(shard),
+      `the nightly verdict job must need both ${plan} and ${shard}, so it reads every shard`);
+    assert.match(jobs[verdict], /^ {4}if: always\(\)\s*$/m,
+      'the nightly verdict job must run always(): a shard that died is no verdict, never a skipped check');
+  });
 });
 
 // ---------------------------------------------------------------------------
