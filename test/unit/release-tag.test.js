@@ -21,7 +21,7 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 
 const { bumpRelease, tagRelease, signoffRelease, extractChangelogEntry, SIGNOFF_FILE_NAME } = require('../../scripts/release.js');
-const { GATE_FILE_NAME, runGate } = require('../../scripts/release-gate.js');
+const { GATE_FILE_NAME, LEGACY_GATE_FILE_NAME, runGate } = require('../../scripts/release-gate.js');
 const { REQUIRED_CI_CHECKS } = require('../../scripts/release-ci.js');
 
 const CHANGELOG = `# Changelog
@@ -57,10 +57,27 @@ const inWork = (args) => gitAt(work)(args).trim();
 const inOrigin = (args) => gitAt(origin)(args).trim();
 const treeOf = (ref) => inWork(['rev-parse', `${ref}^{tree}`]);
 
-function writeGateRecord(tree, { live = true, ci = { checks: { E2E: { run: 1 } } } } = {}) {
-  fs.writeFileSync(path.join(work, GATE_FILE_NAME), JSON.stringify({
+// What a green gate leaves behind, in git's common directory, where every
+// worktree of the repository reads it. `file` puts it somewhere else.
+function writeGateRecord(tree, { live = true, ci = { checks: { E2E: { run: 1 } } }, file = path.join(work, '.git', GATE_FILE_NAME) } = {}) {
+  fs.writeFileSync(file, JSON.stringify({
     tree, sha: 'not-what-is-checked', live, ci, passedAt: '2026-08-26T09:00:00Z', wallClockSeconds: 300, steps: [],
   }));
+}
+
+// The real gate against a repository folder, with only its expensive steps,
+// GitHub and the port probe stood in for: CI reports every required job green
+// on `tree`.
+function gateIn(root, tree) {
+  const exec = (cmd, args) => (cmd === 'git' ? run('git', args, root) : '');
+  const gh = (args) => {
+    const url = args.find((a) => a.startsWith('repos/'));
+    if (/workflows\/ci\.yml\/runs/.test(url)) {
+      return JSON.stringify({ workflow_runs: [{ id: 5, event: 'push', head_sha: 'x', head_commit: { tree_id: tree }, pull_requests: [] }] });
+    }
+    return JSON.stringify({ jobs: REQUIRED_CI_CHECKS.map((name) => ({ name, status: 'completed', conclusion: 'success' })) });
+  };
+  return runGate({ root, exec, gh, busy: async () => false, log: () => {} });
 }
 
 // What `release -- signoff` leaves behind: the hands-on check from source,
@@ -86,9 +103,11 @@ beforeEach(() => {
   fs.writeFileSync(path.join(work, 'package.json'), JSON.stringify({ name: 'rundock', version: '0.11.8' }, null, 2) + '\n');
   fs.writeFileSync(path.join(work, 'CHANGELOG.md'), CHANGELOG);
   fs.writeFileSync(path.join(work, 'README.md'), 'Rundock\n');
-  // The gate record is ignored in the real repository, and has to be here too:
-  // an untracked file makes the tree dirty, which the preflight refuses.
-  fs.writeFileSync(path.join(work, '.gitignore'), `${GATE_FILE_NAME}\n`);
+  // The gate record's old location is ignored in the real repository, and has
+  // to be here too: an untracked file makes the tree dirty, which the
+  // preflight refuses. Its location now, git's common directory, needs no
+  // ignoring, because nothing in it is ever part of the tree.
+  fs.writeFileSync(path.join(work, '.gitignore'), `${LEGACY_GATE_FILE_NAME}\n`);
   git(['add', '-A']);
   git(['commit', '-m', 'initial']);
   git(['tag', 'v0.11.8']);
@@ -128,24 +147,82 @@ describe('release:bump writes the candidate\'s version and notes, and nothing el
   });
 });
 
+// The candidate: a release branch carrying the bump, gated on its tree.
+function candidate(version = '0.12.0', { gate = true, signoff = true } = {}) {
+  inWork(['checkout', '-b', `release/${version}`]);
+  bumpRelease(version, { root: work, log: () => {} });
+  inWork(['commit', '-am', `Release ${version}`]);
+  if (gate) writeGateRecord(treeOf('HEAD'));
+  if (signoff) writeSignoff(treeOf('HEAD'));
+}
+
+// What a merged pull request leaves behind: a new commit on main, pushed,
+// with local main in step with it.
+function merge(version = '0.12.0') {
+  inWork(['checkout', 'main']);
+  inWork(['merge', '--no-ff', '-m', `Release ${version} (#42)`, `release/${version}`]);
+  inWork(['push', 'origin', 'main']);
+}
+
+// The commit the release merged as: what the tag must go on.
+const mergedCommit = () => inOrigin(['rev-parse', 'main']);
+const mergedTree = () => treeOf(mergedCommit());
+// The commit the tag names here, or null when there is no tag here.
+const localTag = (tag = 'v0.12.0') => (inWork(['tag', '-l', tag]) ? inWork(['rev-list', '-n', '1', tag]) : null);
+
+// `tag` run as a person reads it: every line it prints, with its step. A
+// bare line has no step.
+function tagAndRead(version = '0.12.0', opts = {}) {
+  const lines = [];
+  const result = tagRelease(version, { root: work, log: (step, msg) => lines.push({ step, msg }), ...opts });
+  return { result, lines };
+}
+
+// The push `tag` printed, as the arguments git takes: the one bare line it
+// prints, which is a git command and nothing else.
+function printedPush(lines) {
+  const bare = lines.filter((l) => l.step === null);
+  assert.strictEqual(bare.length, 1, `one bare line, the push: ${JSON.stringify(lines)}`);
+  const words = bare[0].msg.split(' ');
+  assert.strictEqual(words[0], 'git', bare[0].msg);
+  return words.slice(1);
+}
+
+// From here on the remote refuses every push, the way a push without a
+// credential fails; and then takes them again.
+function remoteRefusesPushes() {
+  const hooks = path.join(origin, 'hooks');
+  fs.mkdirSync(hooks, { recursive: true });
+  fs.writeFileSync(path.join(hooks, 'pre-receive'), '#!/bin/sh\necho "refused: no credential" >&2\nexit 1\n', { mode: 0o755 });
+  inOrigin(['config', 'core.hooksPath', hooks]);
+}
+function remoteTakesPushes() {
+  fs.rmSync(path.join(origin, 'hooks', 'pre-receive'), { force: true });
+}
+
+// A GitHub workflow filter, `*` for any run of characters, as a pattern.
+function globToRegExp(glob) {
+  const literal = (s) => s.replace(/[.+?^$(){}|[\]\\]/g, '\\$&');
+  return new RegExp(`^${glob.split('*').map(literal).join('.*')}$`);
+}
+
+// Whether the release workflow starts on a push of this tag, read from the
+// workflow's own trigger rather than restated here.
+function releaseWorkflowBuilds(tag) {
+  const lines = fs.readFileSync(path.join(__dirname, '..', '..', '.github', 'workflows', 'release.yml'), 'utf8').split('\n');
+  const push = lines.findIndex((l) => l.trim() === 'push:');
+  const tags = lines.findIndex((l, i) => i > push && l.trim() === 'tags:');
+  const globs = [];
+  for (const l of lines.slice(tags + 1)) {
+    const t = l.trim();
+    if (!t.startsWith('- ')) break;
+    globs.push(t.slice(2).replace(/^['"]|['"]$/g, ''));
+  }
+  assert.ok(push > -1 && tags > push && globs.length > 0, 'the release workflow is started by pushed tags');
+  return globs.some((g) => globToRegExp(g).test(tag));
+}
+
 describe('release:tag tags what actually merged, and only a gated tree', () => {
-  // The candidate: a release branch carrying the bump, gated on its tree.
-  function candidate(version = '0.12.0', { gate = true, signoff = true } = {}) {
-    inWork(['checkout', '-b', `release/${version}`]);
-    bumpRelease(version, { root: work, log: () => {} });
-    inWork(['commit', '-am', `Release ${version}`]);
-    if (gate) writeGateRecord(treeOf('HEAD'));
-    if (signoff) writeSignoff(treeOf('HEAD'));
-  }
-
-  // What a merged pull request leaves behind: a new commit on main, pushed,
-  // with local main in step with it.
-  function merge(version = '0.12.0') {
-    inWork(['checkout', 'main']);
-    inWork(['merge', '--no-ff', '-m', `Release ${version} (#42)`, `release/${version}`]);
-    inWork(['push', 'origin', 'main']);
-  }
-
   test('the release pull request has not merged yet: refuses, naming both versions', () => {
     candidate();
     inWork(['checkout', 'main']);
@@ -184,10 +261,111 @@ describe('release:tag tags what actually merged, and only a gated tree', () => {
     // given, which still counts, as one typed at the terminal.
     assert.ok(lines.some((l) => l.endsWith(`Tree ${treeOf(merged).slice(0, 12)} was signed off in the terminal`)), lines.join('\n'));
     assert.strictEqual(result.tag, 'v0.12.0');
-    assert.strictEqual(inOrigin(['tag', '-l']), 'v0.12.0', 'exactly one tag on the remote');
-    assert.strictEqual(inOrigin(['rev-list', '-n', '1', 'v0.12.0']), merged, 'the tag is on the merged commit');
-    assert.strictEqual(JSON.parse(inOrigin(['show', 'v0.12.0:package.json'])).version, '0.12.0');
-    assert.match(gitAt(origin)(['show', 'v0.12.0:CHANGELOG.md']), /^## 0\.12\.0: Foundations \(/m);
+    assert.strictEqual(inWork(['tag', '-l']), 'v0.11.8\nv0.12.0', 'exactly one new tag here');
+    assert.strictEqual(localTag(), merged, 'the tag is on the merged commit');
+    assert.strictEqual(JSON.parse(inWork(['show', 'v0.12.0:package.json'])).version, '0.12.0');
+    assert.match(gitAt(work)(['show', 'v0.12.0:CHANGELOG.md']), /^## 0\.12\.0: Foundations \(/m);
+  });
+
+  test('the tag is made here and nothing is pushed: no push is tried, and nothing it prints claims one', () => {
+    candidate();
+    merge();
+    const calls = [];
+    const git = (args, opts) => { calls.push(args.join(' ')); return gitAt(work)(args, opts); };
+    const { result, lines } = tagAndRead('0.12.0', { git });
+
+    assert.ok(!calls.some((c) => c.startsWith('push')), `no push was tried: ${calls.filter((c) => c.startsWith('push')).join(', ')}`);
+    assert.strictEqual(inOrigin(['tag', '-l']), '', 'the remote has no tag');
+    assert.strictEqual(localTag(), mergedCommit(), 'the tag is here, on the merged commit');
+    assert.strictEqual(result.created, true);
+    assert.ok(lines.every((l) => !/\band pushed\b|\bpushed it\b|\bis now building\b/i.test(l.msg)), lines.map((l) => l.msg).join('\n'));
+    assert.ok(lines.some((l) => l.step === 'tag' && /here only: nothing has been pushed$/.test(l.msg)), lines.map((l) => l.msg).join('\n'));
+  });
+
+  test('the tag goes on the commit that was checked, even when HEAD moves before it is made', () => {
+    candidate();
+    merge();
+    const checked = mergedCommit();
+    // HEAD moves while the tag is still being decided: after the gate and the
+    // sign-off are checked, at the lookup on the remote.
+    const git = (args, opts) => {
+      if (args[0] === 'ls-remote') gitAt(work)(['commit', '--allow-empty', '-m', 'a commit made while tag ran']);
+      return gitAt(work)(args, opts);
+    };
+    tagRelease('0.12.0', { root: work, git, log: () => {} });
+    assert.notStrictEqual(inWork(['rev-parse', 'HEAD']), checked, 'HEAD did move');
+    assert.strictEqual(localTag(), checked, 'the tag is on the commit that was checked');
+  });
+
+  test('the push is printed on a line of its own, as the exact bare command, and running it is what puts the tag on the remote', () => {
+    candidate();
+    merge();
+    const { result, lines } = tagAndRead();
+    const bare = lines.filter((l) => l.step === null).map((l) => l.msg);
+    assert.deepStrictEqual(bare, ['git push origin refs/tags/v0.12.0'], 'one bare line, and it is the push, by the tag\'s full ref');
+    assert.strictEqual(result.push, 'git push origin refs/tags/v0.12.0');
+    assert.strictEqual(inOrigin(['tag', '-l']), '', 'not pushed until it is run');
+
+    inWork(printedPush(lines));
+    assert.strictEqual(inOrigin(['rev-list', '-n', '1', 'v0.12.0']), mergedCommit(), 'pushed, on the merged commit');
+    const ref = printedPush(lines)[2];
+    assert.ok(ref.startsWith('refs/tags/') && releaseWorkflowBuilds(ref.slice('refs/tags/'.length)), 'and the release workflow starts on a pushed tag of that name');
+  });
+
+  test('a branch that shares the tag\'s name cannot make the printed push ambiguous, or send the branch', () => {
+    candidate();
+    merge();
+    inWork(['branch', 'v0.12.0', 'HEAD~1']);
+    const { lines } = tagAndRead();
+    // The short form is what the full ref is printed to avoid.
+    assert.throws(() => inWork(['push', 'origin', 'v0.12.0']), /matches more than one/);
+    inWork(printedPush(lines));
+    assert.strictEqual(inOrigin(['rev-list', '-n', '1', 'refs/tags/v0.12.0']), mergedCommit(), 'the tag is pushed, on the merged commit');
+    assert.strictEqual(inOrigin(['branch', '--list', 'v0.12.0']), '', 'and no branch of that name');
+  });
+
+  test('run again after the push was skipped, it checks everything again, creates nothing new and prints the same push', () => {
+    candidate();
+    merge();
+    const first = tagAndRead();
+    const calls = [];
+    const git = (args, opts) => { calls.push(args.join(' ')); return gitAt(work)(args, opts); };
+    const again = tagAndRead('0.12.0', { git });
+
+    assert.strictEqual(again.result.created, false, 'nothing new was created');
+    assert.ok(!calls.some((c) => c === 'tag v0.12.0' || c.startsWith('tag -d') || c.startsWith('push')), calls.join('\n'));
+    assert.ok(calls.some((c) => c.startsWith('rev-parse') && c.includes('^{tree}')), 'the merged tree was read and judged again');
+    assert.deepStrictEqual(printedPush(again.lines), printedPush(first.lines), 'the same push');
+    assert.ok(again.lines.some((l) => l.step === 'tag' && /already tagged here on [0-9a-f]{9} by an earlier run, and is not on the remote/.test(l.msg)), again.lines.map((l) => l.msg).join('\n'));
+    assert.strictEqual(localTag(), mergedCommit());
+  });
+
+  test('once the tag is on the remote, tag refuses and says it has been pushed, and its build started', () => {
+    candidate();
+    merge();
+    inWork(printedPush(tagAndRead().lines));
+    assert.throws(() => tagRelease('0.12.0', { root: work, log: () => {} }), (err) =>
+      /already on the remote, on [0-9a-f]{9}, the commit being tagged: it has been pushed, and its build started/.test(err.message)
+      && err.message.includes(mergedCommit().slice(0, 9)));
+  });
+
+  test('an annotated tag pushed by hand on the commit being tagged is read by its commit, as pushed', () => {
+    candidate();
+    merge();
+    inWork(['tag', '-a', 'v0.12.0', '-m', 'Release 0.12.0', mergedCommit()]);
+    inWork(['push', 'origin', 'v0.12.0']);
+    inWork(['tag', '-d', 'v0.12.0']);
+    assert.throws(() => tagRelease('0.12.0', { root: work, log: () => {} }), /the commit being tagged: it has been pushed/);
+  });
+
+  test('a tag on the remote on another commit is refused, naming both commits and the recut', () => {
+    candidate();
+    merge();
+    const stale = inWork(['rev-parse', 'HEAD~1']);
+    inWork(['push', 'origin', `${stale}:refs/tags/v0.12.0`]);
+    assert.throws(() => tagRelease('0.12.0', { root: work, log: () => {} }), (err) =>
+      err.message.includes(stale.slice(0, 9)) && err.message.includes(mergedCommit().slice(0, 9)) && /A recut/.test(err.message));
+    assert.strictEqual(localTag(), null, 'nothing made here');
   });
 
   test('a one-byte difference from the gated tree is refused', () => {
@@ -247,7 +425,7 @@ describe('release:tag tags what actually merged, and only a gated tree', () => {
     tagRelease('0.12.0', { root: work, log: (step, msg) => lines.push(msg) });
     assert.ok(lines.some((l) => /was signed off in the terminal$/.test(l)), lines.join('\n'));
     assert.ok(!lines.some((l) => /in chat/.test(l)), lines.join('\n'));
-    assert.strictEqual(inOrigin(['tag', '-l']), 'v0.12.0');
+    assert.strictEqual(localTag(), mergedCommit());
   });
 
   test('a sign-off given in chat lets the tag through, the tag says so, and its words go nowhere the release goes', () => {
@@ -257,10 +435,12 @@ describe('release:tag tags what actually merged, and only a gated tree', () => {
     writeSignoff(treeOf('HEAD'), { given: 'chat', instruction: words });
     merge();
     const lines = [];
-    tagRelease('0.12.0', { root: work, log: (step, msg) => lines.push(`${step} ${msg}`) });
+    tagRelease('0.12.0', { root: work, log: (step, msg) => lines.push({ step, msg }) });
+    // Pushed as the person pushes it, so what the remote holds can be read.
+    inWork(printedPush(lines));
 
-    assert.ok(lines.some((l) => /was signed off in chat on instruction$/.test(l)), lines.join('\n'));
-    assert.ok(lines.every((l) => !l.includes('zebraquartz')), 'the tag never prints the words');
+    assert.ok(lines.some((l) => /was signed off in chat on instruction$/.test(l.msg)), lines.map((l) => l.msg).join('\n'));
+    assert.ok(lines.every((l) => !`${l.step} ${l.msg}`.includes('zebraquartz')), 'the tag never prints the words');
     const notes = extractChangelogEntry('0.12.0', gitAt(origin)(['show', 'v0.12.0:CHANGELOG.md']));
     assert.ok(notes && !`${notes.title}\n${notes.body}`.includes('zebraquartz'), 'the release notes do not carry them');
     // Nothing the remote holds carries them: no commit message, tag, tree or file.
@@ -290,7 +470,9 @@ describe('release:tag tags what actually merged, and only a gated tree', () => {
       log: (step, msg) => said.push(msg),
     });
     merge();
-    tagRelease('0.12.0', { root: work, log: (step, msg) => said.push(msg) });
+    const tagged = [];
+    tagRelease('0.12.0', { root: work, log: (step, msg) => { said.push(msg); tagged.push({ step, msg }); } });
+    inWork(printedPush(tagged));
 
     assert.strictEqual(inOrigin(['tag', '-l']), 'v0.12.0');
     assert.ok(said.some((l) => /^Recorded a sign-off given in chat for 0\.12\.0 on tree /.test(l)), said.join('\n'));
@@ -336,13 +518,33 @@ describe('release:tag tags what actually merged, and only a gated tree', () => {
     assert.strictEqual(inOrigin(['tag', '-l']), '', 'nothing tagged');
   });
 
-  test('the tag already exists: refuses', () => {
+  test('a tag left here on another commit is refused, naming both commits and the command that deletes it', () => {
     candidate();
     merge();
-    inWork(['tag', 'v0.12.0']);
+    const stale = inWork(['rev-parse', 'HEAD~1']);
+    inWork(['tag', 'v0.12.0', stale]);
 
-    assert.throws(() => tagRelease('0.12.0', { root: work, log: () => {} }), /v0\.12\.0/);
+    // It can be this command's own unpushed tag from a run before main moved,
+    // so it is not called a cut's alone.
+    assert.throws(() => tagRelease('0.12.0', { root: work, log: () => {} }), (err) =>
+      err.message.includes(stale.slice(0, 9)) && err.message.includes(mergedCommit().slice(0, 9))
+      && err.message.includes('It is left from an earlier run or cut')
+      && err.message.includes('git tag -d v0.12.0'));
+    assert.strictEqual(localTag(), stale, 'the tag is left where it was');
     assert.strictEqual(inOrigin(['tag', '-l']), '', 'nothing pushed');
+  });
+
+  test('on a detached HEAD, it refuses in plain words, saying to switch to main, and makes nothing', () => {
+    candidate();
+    merge();
+    inWork(['checkout', '--detach']);
+    const at = inWork(['rev-parse', '--short', 'HEAD']);
+    assert.throws(() => tagRelease('0.12.0', { root: work, log: () => {} }), (err) =>
+      err.message.startsWith(`HEAD is detached at ${at}: this checkout is on no branch, and a release is tagged from main.`)
+      && err.message.includes('Switch to main ("git switch main") and run this again.')
+      && !/fatal|Command failed|symbolic ref/.test(err.message));
+    assert.strictEqual(localTag(), null, 'nothing tagged here');
+    assert.strictEqual(inOrigin(['tag', '-l']), '', 'or on the remote');
   });
 
   test('a dirty tree: refuses', () => {
@@ -354,18 +556,20 @@ describe('release:tag tags what actually merged, and only a gated tree', () => {
     assert.strictEqual(inOrigin(['tag', '-l']), '', 'nothing tagged');
   });
 
-  test('a failed tag push leaves no tag behind, so running it again is not blocked', () => {
+  test('a push that failed leaves the tag here, and running tag again is not blocked by it', () => {
     candidate();
     merge();
-    const git = (args) => {
-      if (args[0] === 'push') throw new Error('the remote refused the tag');
-      return gitAt(work)(args);
-    };
-
-    assert.throws(() => tagRelease('0.12.0', { root: work, git, log: () => {} }), /refused the tag/);
-
+    const first = tagAndRead();
+    remoteRefusesPushes();
+    assert.throws(() => inWork(printedPush(first.lines)), /refused: no credential/);
     assert.strictEqual(inOrigin(['tag', '-l']), '', 'no tag on the remote');
-    assert.strictEqual(inWork(['tag', '-l', 'v0.12.0']), '', 'no local tag either, so a retry gets past the preflight');
+    assert.strictEqual(localTag(), mergedCommit(), 'the tag stays here');
+
+    const again = tagAndRead();
+    assert.strictEqual(again.result.created, false);
+    remoteTakesPushes();
+    inWork(printedPush(again.lines));
+    assert.strictEqual(inOrigin(['rev-list', '-n', '1', 'v0.12.0']), mergedCommit(), 'the second push lands it');
   });
 });
 
@@ -375,19 +579,9 @@ describe('a recut of an unpublished draft needs no hand-run step', () => {
   // and the tag, merge the fix, run the gate on main, tag again. The real gate
   // runs here against the real repository; only its expensive steps, GitHub
   // and the port probe are stood in for.
-  function gateHere(tree) {
-    const exec = (cmd, args) => (cmd === 'git' ? run('git', args, work) : '');
-    const gh = (args) => {
-      const url = args.find((a) => a.startsWith('repos/'));
-      if (/workflows\/ci\.yml\/runs/.test(url)) {
-        return JSON.stringify({ workflow_runs: [{ id: 5, event: 'push', head_sha: 'x', head_commit: { tree_id: tree }, pull_requests: [] }] });
-      }
-      return JSON.stringify({ jobs: REQUIRED_CI_CHECKS.map((name) => ({ name, status: 'completed', conclusion: 'success' })) });
-    };
-    return runGate({ root: work, exec, gh, busy: async () => false, log: () => {} });
-  }
+  const gateHere = (tree) => gateIn(work, tree);
 
-  test('gate, tag, delete the tag, fix, gate, tag: every step passes as written', async () => {
+  test('gate, tag, push, delete the tag, fix, gate, tag, push: every step passes as written', async () => {
     inWork(['checkout', '-b', 'release/0.12.0']);
     bumpRelease('0.12.0', { root: work, log: () => {} });
     inWork(['commit', '-am', 'Release 0.12.0']);
@@ -397,7 +591,7 @@ describe('a recut of an unpublished draft needs no hand-run step', () => {
     inWork(['checkout', 'main']);
     inWork(['merge', '--no-ff', '-m', 'Release 0.12.0 (#42)', 'release/0.12.0']);
     inWork(['push', 'origin', 'main']);
-    tagRelease('0.12.0', { root: work, log: () => {} });
+    inWork(printedPush(tagAndRead().lines));
 
     // A release-blocking bug is found in the draft: delete the draft (on
     // GitHub) and the tag, here and on the remote.
@@ -415,9 +609,211 @@ describe('a recut of an unpublished draft needs no hand-run step', () => {
     // The fix changed the tree, so the hands-on check is owed again.
     assert.throws(() => tagRelease('0.12.0', { root: work, log: () => {} }), /signed off on tree/);
     writeSignoff(treeOf('HEAD'));
-    const result = tagRelease('0.12.0', { root: work, log: () => {} });
+    const { result, lines } = tagAndRead();
+    inWork(printedPush(lines));
     assert.strictEqual(inOrigin(['rev-list', '-n', '1', 'v0.12.0']), inWork(['rev-parse', 'HEAD']), 'the new tag is on the fix');
     assert.strictEqual(result.tag, 'v0.12.0');
+  });
+});
+
+describe('every refusal of the tag, through what a person does next', () => {
+  // For each rule that refuses: the inverse (a tag made, then deleted by
+  // hand), the undo (a recut after deleting it, as docs/RELEASING.md "A recut"
+  // gives it), the retry (tag run again after the push failed) and the most
+  // common next step (pushing the tag, which starts the build). Each rule says
+  // how it is broken, how it is put right, and what its refusal says.
+  const RULES = [
+    {
+      name: 'no gate pass for the tree',
+      breakIt: () => fs.rmSync(path.join(work, '.git', GATE_FILE_NAME)),
+      putRight: () => writeGateRecord(treeOf('HEAD')),
+      refusal: /No release gate pass found[\s\S]*npm run release:gate/,
+    },
+    {
+      name: 'no sign-off for the tree',
+      breakIt: () => fs.rmSync(path.join(work, '.git', SIGNOFF_FILE_NAME)),
+      putRight: () => writeSignoff(treeOf('HEAD')),
+      refusal: /No sign-off found[\s\S]*npm run release -- signoff 0\.12\.0 --confirm 0\.12\.0/,
+    },
+    {
+      name: 'a detached HEAD',
+      breakIt: () => inWork(['checkout', '--detach']),
+      putRight: () => inWork(['checkout', 'main']),
+      refusal: /HEAD is detached at [0-9a-f]+: this checkout is on no branch[\s\S]*git switch main/,
+    },
+  ];
+
+  const tagIt = () => tagRelease('0.12.0', { root: work, log: () => {} });
+
+  // The fix a recut merges, with its note under the release's heading.
+  function fixOnMain() {
+    fs.writeFileSync(path.join(work, 'CHANGELOG.md'),
+      fs.readFileSync(path.join(work, 'CHANGELOG.md'), 'utf8').replace('- A user visible fix.', '- A user visible fix.\n- The bug the draft showed.'));
+    inWork(['commit', '-am', 'Fix the bug the draft showed (#43)']);
+    inWork(['push', 'origin', 'main']);
+  }
+
+  for (const rule of RULES) {
+    describe(rule.name, () => {
+      // Refused, with the tag here exactly as it was before, and none pushed.
+      function refused(tagBefore) {
+        assert.throws(tagIt, rule.refusal);
+        assert.strictEqual(localTag(), tagBefore, 'the refusal changed no tag here');
+        assert.strictEqual(inOrigin(['tag', '-l']), '', 'and pushed none');
+      }
+
+      test('the inverse: a tag made and then deleted by hand is refused again, and nothing is made; put right, it tags again', () => {
+        candidate();
+        merge();
+        tagIt();
+        inWork(['tag', '-d', 'v0.12.0']);
+        rule.breakIt();
+        refused(null);
+        rule.putRight();
+        tagIt();
+        assert.strictEqual(localTag(), mergedCommit());
+      });
+
+      test('the undo: a recut after deleting the tag is refused until it is put right, then tags the fix', () => {
+        candidate();
+        merge();
+        inWork(printedPush(tagAndRead().lines));
+        inWork(['tag', '-d', 'v0.12.0']);
+        inWork(['push', 'origin', ':refs/tags/v0.12.0']);
+        fixOnMain();
+        writeGateRecord(treeOf('HEAD'));
+        writeSignoff(treeOf('HEAD'));
+        rule.breakIt();
+        refused(null);
+        rule.putRight();
+        const { lines } = tagAndRead();
+        assert.strictEqual(localTag(), mergedCommit(), 'the new tag is on the fix');
+        inWork(printedPush(lines));
+        assert.strictEqual(inOrigin(['rev-list', '-n', '1', 'v0.12.0']), mergedCommit());
+      });
+
+      test('the retry: run again after the push failed, it is refused and leaves its tag alone; put right, it prints the push again', () => {
+        candidate();
+        merge();
+        const first = tagAndRead();
+        remoteRefusesPushes();
+        assert.throws(() => inWork(printedPush(first.lines)), /refused: no credential/);
+        rule.breakIt();
+        refused(mergedCommit());
+        rule.putRight();
+        const again = tagAndRead();
+        assert.strictEqual(again.result.created, false, 'nothing new is created');
+        assert.deepStrictEqual(printedPush(again.lines), printedPush(first.lines), 'the same push is printed');
+        remoteTakesPushes();
+        inWork(printedPush(again.lines));
+        assert.strictEqual(inOrigin(['rev-list', '-n', '1', 'v0.12.0']), mergedCommit());
+      });
+
+      test('the next step: refused, there is no tag to push, so no build can start; put right, the printed push starts it', () => {
+        candidate();
+        merge();
+        rule.breakIt();
+        refused(null);
+        assert.throws(() => inWork(['push', 'origin', 'refs/tags/v0.12.0']), /src refspec refs\/tags\/v0\.12\.0 does not match any/);
+        assert.strictEqual(inOrigin(['tag', '-l']), '', 'nothing reached the remote');
+        rule.putRight();
+        inWork(printedPush(tagAndRead().lines));
+        assert.strictEqual(inOrigin(['rev-list', '-n', '1', 'v0.12.0']), mergedCommit(), 'the tag is on the remote, on the merged commit');
+        assert.ok(releaseWorkflowBuilds('v0.12.0'), 'where the release workflow starts on it');
+        assert.throws(tagIt, /already on the remote[\s\S]*it has been pushed/, 'and tag now says it has been pushed');
+      });
+    });
+  }
+});
+
+describe('the gate record is read from git\'s common directory, and nowhere else', () => {
+  // The gate runs in the release worktree and the tag runs on main, usually in
+  // another checkout. The record used to be written into the folder the gate
+  // ran in, where the checkout that tags could not see it, so it was copied
+  // across by hand. It is kept in git's common directory now, beside the
+  // sign-off.
+  let wt;
+  beforeEach(() => { wt = path.join(dir, 'release-worktree'); });
+  const inWt = (args) => run('git', args, wt).trim();
+
+  // The candidate, built and committed in a worktree of its own on the
+  // release branch, as a release is cut.
+  function candidateInWorktree(version = '0.12.0') {
+    inWork(['worktree', 'add', '-b', `release/${version}`, wt]);
+    bumpRelease(version, { root: wt, log: () => {} });
+    inWt(['commit', '-am', `Release ${version}`]);
+    return inWt(['rev-parse', 'HEAD^{tree}']);
+  }
+  function mergeIntoMain(version = '0.12.0') {
+    inWork(['merge', '--no-ff', '-m', `Release ${version} (#42)`, `release/${version}`]);
+    inWork(['push', 'origin', 'main']);
+  }
+  const nothingAt = (folder) => !fs.existsSync(path.join(folder, GATE_FILE_NAME)) && !fs.existsSync(path.join(folder, LEGACY_GATE_FILE_NAME));
+
+  test('a gate run in a release worktree lets the checkout of main tag, with nothing copied', async () => {
+    const tree = candidateInWorktree();
+    const gated = await gateIn(wt, tree);
+    assert.strictEqual(gated.ok, true, gated.error);
+    assert.ok(nothingAt(wt), 'nothing is written in the worktree the gate ran in');
+    assert.strictEqual(inWt(['status', '--porcelain']), '', 'so there is nothing there to commit');
+    writeSignoff(tree);
+    mergeIntoMain();
+    assert.ok(nothingAt(work), 'and nothing has been copied into the checkout that tags');
+
+    const result = tagRelease('0.12.0', { root: work, log: () => {} });
+    assert.strictEqual(result.tag, 'v0.12.0');
+    assert.strictEqual(inWork(['rev-list', '-n', '1', 'v0.12.0']), inWork(['rev-parse', 'HEAD']), 'the merged commit is tagged');
+  });
+
+  // A `.release-gate.json` in a folder, the name older gates wrote, is never
+  // read as a pass, from any folder: the refusal names it, and the gate has to
+  // be run again.
+  const refusedNaming = (file) => (err) => /^No release gate pass found/.test(err.message)
+    && err.message.includes(`There is a record at the old location (${file})`)
+    && /never read as a pass, so the gate has to be run again/.test(err.message);
+
+  test('a record an older gate left in a release worktree is not a pass: tag refuses, naming it', () => {
+    const tree = candidateInWorktree();
+    writeGateRecord(tree, { file: path.join(wt, LEGACY_GATE_FILE_NAME) });
+    writeSignoff(tree);
+    mergeIntoMain();
+    assert.throws(() => tagRelease('0.12.0', { root: work, log: () => {} }), refusedNaming(path.join(fs.realpathSync(wt), LEGACY_GATE_FILE_NAME)));
+    assert.strictEqual(localTag(), null, 'nothing tagged');
+  });
+
+  test('a record an older gate left in the checkout that tags is not a pass either', () => {
+    inWork(['checkout', '-b', 'release/0.12.0']);
+    bumpRelease('0.12.0', { root: work, log: () => {} });
+    inWork(['commit', '-am', 'Release 0.12.0']);
+    writeGateRecord(treeOf('HEAD'), { file: path.join(work, LEGACY_GATE_FILE_NAME) });
+    writeSignoff(treeOf('HEAD'));
+    inWork(['checkout', 'main']);
+    mergeIntoMain();
+    assert.throws(() => tagRelease('0.12.0', { root: work, log: () => {} }), refusedNaming(path.join(fs.realpathSync(work), LEGACY_GATE_FILE_NAME)));
+    assert.strictEqual(localTag(), null, 'nothing tagged');
+  });
+
+  test('a hand-written record in an unrelated feature worktree does not let the tag through', () => {
+    candidate('0.12.0', { gate: false });
+    merge();
+    // Any worktree can hold a file of the old name, describing the very tree
+    // being tagged, without a gate ever having run.
+    const feature = path.join(dir, 'feature-worktree');
+    inWork(['worktree', 'add', '-b', 'feature/unrelated', feature]);
+    writeGateRecord(mergedTree(), { file: path.join(feature, LEGACY_GATE_FILE_NAME) });
+    assert.throws(() => tagRelease('0.12.0', { root: work, log: () => {} }), refusedNaming(path.join(fs.realpathSync(feature), LEGACY_GATE_FILE_NAME)));
+    assert.strictEqual(localTag(), null, 'nothing tagged');
+  });
+
+  test('an unparseable record in the common directory is refused, naming it, and a good one at the old location does not stand in', () => {
+    candidate('0.12.0', { gate: false });
+    merge();
+    const common = path.join(work, '.git', GATE_FILE_NAME);
+    fs.writeFileSync(common, '{"tree": ');
+    writeGateRecord(mergedTree(), { file: path.join(work, LEGACY_GATE_FILE_NAME) });
+    assert.throws(() => tagRelease('0.12.0', { root: work, log: () => {} }), (err) =>
+      err.message.startsWith(`The gate record ${common} cannot be read (`) && !err.message.includes(LEGACY_GATE_FILE_NAME));
+    assert.strictEqual(localTag(), null, 'nothing tagged');
   });
 });
 

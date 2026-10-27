@@ -33,6 +33,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { waitFor } from './wait-for.mjs';
+import { waitForPage, startConversationWith } from './page-ready.mjs';
 
 const require = createRequire(import.meta.url);
 const { waitForSignInLink, withoutKey } = require('../sign-in-link.js');
@@ -92,8 +93,15 @@ async function withApp(workspace, scenario, fn) {
   const signInUrl = await waitForSignInLink(() => serverLog);
   if (!signInUrl) throw new Error('the server printed no sign-in link');
   await page.goto(signInUrl);
-  await page.waitForTimeout(1500);
   try {
+    // Connected, and told which workspace it shows, before the journey sends
+    // anything. This was a fixed 1.5-second sleep, which a loaded machine
+    // inside the release gate can outlast (see page-ready.mjs).
+    const connected = await waitForPage(page);
+    if (!connected.ok) {
+      record(`${path.basename(workspace)} page connects and shows its workspace`, false, connected.detail);
+      return;
+    }
     await fn({ page, port, serverLogTail: () => withoutKey(serverLog.slice(-1500)) });
   } catch (err) {
     record('persona journey aborted', false, err.message);
@@ -268,18 +276,20 @@ async function newUserPersona() {
     // journey spends its budget on onboarding, and the daily-driver live
     // delegation already covers real-model delegation end to end).
     if (!LIVE) {
-      await page.evaluate(() => window.startConversation('chief-of-staff'));
-      await page.waitForTimeout(500);
-      await sendAndWaitTurn(page, workspace, 'PERSONA-NU ask scout to research something');
-      const delegated = await waitFor(() => page.locator('.msg-bubble', { hasText: 'PERSONA-NU-SCOUT-REPLY' }).count().then(c => c > 0), 45000);
-      record('NEW-USER first delegation works in the fresh workspace', !!delegated);
+      // Started once the page's roster holds the agent, and checked to be
+      // with that agent: the team is on disk before the roster naming it has
+      // reached the page, and a conversation started before then opens with
+      // another agent (see page-ready.mjs).
+      const withCos = await startConversationWith(page, 'chief-of-staff');
+      if (withCos.ok) await sendAndWaitTurn(page, workspace, 'PERSONA-NU ask scout to research something');
+      const delegated = withCos.ok && await waitFor(() => page.locator('.msg-bubble', { hasText: 'PERSONA-NU-SCOUT-REPLY' }).count().then(c => c > 0), 45000);
+      record('NEW-USER first delegation works in the fresh workspace', !!delegated, withCos.detail);
 
       // First skill: Doc saves it, the file exists where skills live.
-      await page.evaluate(() => window.startConversation('rundock-guide'));
-      await page.waitForTimeout(500);
-      await sendAndWaitTurn(page, workspace, 'PERSONA-NU create a skill for daily summaries');
-      const skillFile = await waitFor(() => fs.existsSync(path.join(workspace, '.claude', 'skills', 'daily-summary', 'SKILL.md')), 45000);
-      record('NEW-USER first skill lands on disk', !!skillFile);
+      const withDoc = await startConversationWith(page, 'rundock-guide');
+      if (withDoc.ok) await sendAndWaitTurn(page, workspace, 'PERSONA-NU create a skill for daily summaries');
+      const skillFile = withDoc.ok && await waitFor(() => fs.existsSync(path.join(workspace, '.claude', 'skills', 'daily-summary', 'SKILL.md')), 45000);
+      record('NEW-USER first skill lands on disk', !!skillFile, withDoc.detail);
     }
   });
 }

@@ -73,9 +73,17 @@ const GATE = { src: path.join(ROOT, 'scripts', 'precommit-gate.js'), suite: 'tes
 // the suite that drives it.
 const RELEASE_CI = { src: path.join(ROOT, 'scripts', 'release-ci.js'), suite: 'test/unit/release-ci.test.js' };
 const RELEASE_GATE = { src: path.join(ROOT, 'scripts', 'release-gate.js'), suite: 'test/unit/release-gate.test.js' };
+// Where the gate keeps its record, watched by the suite that runs the real gate
+// in a release worktree and tags from the checkout of main.
+const RELEASE_GATE_TAG = { src: path.join(ROOT, 'scripts', 'release-gate.js'), suite: 'test/unit/release-tag.test.js' };
 const RELEASE_RECORD = { src: path.join(ROOT, 'scripts', 'release.js'), suite: 'test/unit/release-gate.test.js' };
 const RELEASE_TAG = { src: path.join(ROOT, 'scripts', 'release.js'), suite: 'test/unit/release-tag.test.js' };
 const RELEASE_SIGNOFF = { src: path.join(ROOT, 'scripts', 'release.js'), suite: 'test/unit/release-signoff.test.js' };
+// The release gate's persona step: what its journeys ask of the page before
+// they act, and the journeys' use of it, watched by the suite that drives the
+// helpers against a slow page and reads the journeys.
+const SMOKE_PAGE = { src: path.join(ROOT, 'scripts', 'smoke', 'page-ready.mjs'), suite: 'test/unit/page-ready.test.js' };
+const PERSONAS = { src: path.join(ROOT, 'scripts', 'smoke', 'personas.mjs'), suite: 'test/unit/page-ready.test.js' };
 // The mutation scope and the CI retry classifier, each watched by its suite.
 const SCOPE = { src: path.join(ROOT, 'scripts', 'mutation-scope.js'), suite: 'test/unit/mutation-scope.test.js' };
 const CI_VERDICT = { src: path.join(ROOT, 'scripts', 'ci-verdict.js'), suite: 'test/unit/ci-verdict.test.js' };
@@ -298,14 +306,51 @@ const MUTATIONS = [
     "  if (record.tree !== headTree) {",
     "  if (false) {"],
   [RELEASE_RECORD, "a record without live smoke is refused",
-    "  if (!record.live) {",
+    "  if (record.live !== true) {",
     "  if (false) {"],
+  [RELEASE_RECORD, "only a live field of exactly true counts",
+    "  if (record.live !== true) {",
+    "  if (!record.live) {"],
   [RELEASE_RECORD, "a record that did not read CI is refused",
     "  if (!record.ci || record.ci.skipped || !record.ci.checks) {",
     "  if (false) {"],
   [RELEASE_TAG, "the tag checks the gate record against the merged tree",
-    "  requireGatePass(mergedTree, { root });\n",
+    "  requireGatePass(mergedTree, { root, git });\n",
     ""],
+  // The gate record lives in git's common directory, so a gate run in the
+  // release worktree is read by the checkout of main that tags, and it is
+  // read from nowhere else: a damaged one is refused, naming it, and a file of
+  // the old name in any folder is never a pass, only named in the refusal.
+  [RELEASE_GATE_TAG, "the gate writes its record to git's common directory",
+    "    recordFile = gateRecordPath({ root, git: (args) => exec('git', args) });",
+    "    recordFile = path.join(root, GATE_FILE_NAME);"],
+  [RELEASE_GATE_TAG, "the record is kept where every worktree of the repository reads it",
+    "  return path.resolve(root, String(git(['rev-parse', '--git-common-dir'])).trim(), GATE_FILE_NAME);",
+    "  return path.resolve(root, GATE_FILE_NAME);"],
+  [RELEASE_GATE_TAG, "a record at the old location is never read as a pass",
+    "  if (!fs.existsSync(file)) return { record: null, file, legacy: legacyGateFiles(opts) };",
+    "  if (!fs.existsSync(file)) { const legacy = legacyGateFiles(opts); return legacy.length ? { record: readJson(legacy[0]), file: legacy[0] } : { record: null, file, legacy }; }"],
+  [RELEASE_GATE, "a damaged record in the common directory is refused as unreadable",
+    "    return { record: null, file, unreadable: err.message };",
+    "    return { record: null, file, legacy: legacyGateFiles(opts) };"],
+  [RELEASE_GATE, "a damaged record never falls back to the old location",
+    "    return { record: null, file, unreadable: err.message };",
+    "    { const legacy = legacyGateFiles(opts); if (legacy.length) return { record: readJson(legacy[0]), file: legacy[0] }; return { record: null, file, unreadable: err.message }; }"],
+  [RELEASE_GATE, "a record that parses to no record is unreadable",
+    "  if (!record || typeof record !== 'object') return { record: null, file, unreadable: 'it holds no record' };\n",
+    ""],
+  [RELEASE_GATE, "every worktree's folder is searched for a file at the old location",
+    "      if (line.startsWith('worktree ')) folders.push(real(line.slice('worktree '.length)));",
+    "      if (false) folders.push(real(line.slice('worktree '.length)));"],
+  [RELEASE_RECORD, "an unreadable record is refused, naming it",
+    "  if (found.unreadable) {",
+    "  if (false) {"],
+  [RELEASE_RECORD, "with no record, the refusal names where the record is kept",
+    "      `No release gate pass found: there is no ${found.file}.${old} ` +",
+    "      `No release gate pass found.${old} ` +"],
+  [RELEASE_RECORD, "with no record, the refusal names any file left at the old location",
+    "    const old = found.legacy.length",
+    "    const old = false"],
   // The hands-on check from source, recorded by tree: the tag needs one, it
   // must be for the tree being tagged, and recording it needs a --confirm
   // naming the version and either a terminal outside an agent session, or
@@ -334,8 +379,49 @@ const MUTATIONS = [
     "    npm run release -- publish ${version} --confirm <version>\\n`",
     "    npm run release -- publish ${version} --confirm ${version}\\n`"],
   [RELEASE_TAG, "the tag never carries the words of a chat sign-off",
-    "  git(['tag', tag], { stdio: 'pipe' });",
-    "  git(['tag', '-a', tag, '-m', `${(readSignoff({ root, git }) || {}).instruction}`], { stdio: 'pipe' });"],
+    "  if (!local) git(['tag', tag, merged], { stdio: 'pipe' });",
+    "  if (!local) git(['tag', '-a', tag, merged, '-m', `${(readSignoff({ root, git }) || {}).instruction}`], { stdio: 'pipe' });"],
+  // The tag is made here, on the commit that was checked, and the push is
+  // printed, never made: the push needs a credential a sandboxed command does
+  // not have, and is run bare, as its own step. Run again after a failed or
+  // skipped push, the tag reuses its own tag; one on another commit, or one
+  // already pushed, is refused.
+  [RELEASE_TAG, "the tag goes on the commit that was checked, not on HEAD",
+    "  if (!local) git(['tag', tag, merged], { stdio: 'pipe' });",
+    "  if (!local) git(['tag', tag], { stdio: 'pipe' });"],
+  [RELEASE_TAG, "the tag pushes nothing",
+    "  if (!local) git(['tag', tag, merged], { stdio: 'pipe' });\n",
+    "  if (!local) git(['tag', tag, merged], { stdio: 'pipe' });\n  git(['push', 'origin', tag], { stdio: 'pipe' });\n"],
+  [RELEASE_TAG, "the push printed is the exact bare command",
+    "  const push = `git push origin refs/tags/${tag}`;",
+    "  const push = `npm run release -- push ${version}`;"],
+  [RELEASE_TAG, "the push names the tag by its full ref",
+    "  const push = `git push origin refs/tags/${tag}`;",
+    "  const push = `git push origin ${tag}`;"],
+  [RELEASE_TAG, "the push is printed on a line of its own",
+    "  log(null, push);\n",
+    "  log('done', push);\n"],
+  [RELEASE_TAG, "the tag never says it pushed",
+    "    : `Tagged ${tag} on ${merged.slice(0, 9)}, here only: nothing has been pushed`);",
+    "    : `Tagged ${tag} on ${merged.slice(0, 9)} and pushed it`);"],
+  [RELEASE_TAG, "run again, the tag reuses its own tag on the commit being tagged",
+    "  if (local && local !== merged) {",
+    "  if (local) {"],
+  [RELEASE_TAG, "a tag left here on another commit is refused",
+    "  if (local && local !== merged) {",
+    "  if (false) {"],
+  [RELEASE_TAG, "a tag already pushed is refused as pushed",
+    "  if (remote === merged) {",
+    "  if (false) {"],
+  [RELEASE_TAG, "a tag on the remote on another commit is refused",
+    "  if (remote) {",
+    "  if (false) {"],
+  [RELEASE_TAG, "a detached HEAD is refused in plain words, naming main",
+    "    if (err.status === 1) {",
+    "    if (false) {"],
+  [RELEASE_TAG, "an annotated tag on the remote is read by its commit",
+    "  const lines = git(['ls-remote', '--tags', 'origin', `refs/tags/${tag}`, `refs/tags/${tag}^{}`]).trim().split('\\n').filter(Boolean);",
+    "  const lines = git(['ls-remote', '--tags', 'origin', `refs/tags/${tag}`]).trim().split('\\n').filter(Boolean);"],
   [RELEASE_SIGNOFF, "a sign-off for another tree does not count",
     "  if (signoff.tree !== headTree) {",
     "  if (false) {"],
@@ -410,6 +496,56 @@ const MUTATIONS = [
   [RELEASE_SIGNOFF, "a sign-off of a kind this command never writes is refused",
     "  if (!kind) {",
     "  if (false) {"],
+
+  // ===== THE PERSONA JOURNEYS ASK THE PAGE, THEY DO NOT SLEEP =====
+  // A fixed sleep after signing in, and one after starting a conversation,
+  // lost to a loaded machine in the release gate: the socket still
+  // connecting, or a roster not yet naming the agent, so the client opened a
+  // conversation with another one.
+  [SMOKE_PAGE, "a socket still connecting is not a connected page",
+    "  return evaluateWithin(page, timeout, () => typeof ws !== 'undefined' && !!ws && ws.readyState === 1\n",
+    "  return evaluateWithin(page, timeout, () => typeof ws !== 'undefined' && !!ws\n"],
+  [SMOKE_PAGE, "a page the server has not told its workspace is not connected",
+    "    && typeof currentWorkspacePath !== 'undefined' && !!currentWorkspacePath);",
+    "    && true);"],
+  [SMOKE_PAGE, "the roster is waited for, not read once",
+    "  const asked = await askUntil(page, (p, ms) => pageKnowsAgent(p, agentId, { timeout: ms }), { timeout, interval });",
+    "  const asked = { value: await pageKnowsAgent(page, agentId, { timeout }) };"],
+  [SMOKE_PAGE, "no conversation is started with an agent the page does not know",
+    "  if (!asked.value) {\n    return {\n      ok: false,",
+    "  if (false) {\n    return {\n      ok: false,"],
+  [SMOKE_PAGE, "a conversation that opened with another agent is reported",
+    "  if (opened !== agentId) {",
+    "  if (false) {"],
+  // A frozen page leaves page.evaluate waiting with no limit of its own, so
+  // every ask is raced against its wait's timeout, and the reason reaches the
+  // journey's record.
+  [SMOKE_PAGE, "every ask of the page is bounded",
+    "  return Promise.race([page.evaluate(fn, arg), late]).finally(() => clearTimeout(timer));",
+    "  clearTimeout(timer); late.catch(() => {}); return page.evaluate(fn, arg);"],
+  [SMOKE_PAGE, "a page that did not answer says so in the journey's reason",
+    "      error = err;",
+    "      error = null;"],
+  [SMOKE_PAGE, "a page that freezes when asked to start a conversation is reported, not thrown",
+    "    return { ok: false, detail: `${reasonFor(err, timeout)} when asked to start a conversation with ${agentId}` };",
+    "    throw err;"],
+  // Each ask is given what is left of its wait, so a slow ask near the end
+  // cannot carry the wait past its stated limit.
+  [SMOKE_PAGE, "each ask is given only what is left of its wait",
+    "      const answer = await ask(page, left);",
+    "      const answer = await ask(page, timeout);"],
+  [SMOKE_PAGE, "the start is given what the roster wait left of the call",
+    "    opened = await evaluateWithin(page, Math.max(1, deadline - Date.now()), (id) => {",
+    "    opened = await evaluateWithin(page, timeout, (id) => {"],
+  [SMOKE_PAGE, "a page that did not answer is reported against its wait's limit",
+    "  return err.timedOut ? `the page did not answer within ${timeout / 1000}s` : err.message;",
+    "  return err.message;"],
+  [PERSONAS, "the journey waits for the page after signing in",
+    "    const connected = await waitForPage(page);",
+    "    await page.waitForTimeout(1500); const connected = { ok: true };"],
+  [PERSONAS, "the delegation journey starts its conversation through the helper",
+    "      const withCos = await startConversationWith(page, 'chief-of-staff');",
+    "      const withCos = { ok: true, detail: '' }; await page.evaluate(() => window.startConversation('chief-of-staff'));"],
 
   // ===== THE MUTATION SCOPE: WHAT A CHANGE CAN REACH =====
   // Comparing against HEAD instead of the merge base is the defect that made

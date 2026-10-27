@@ -11,8 +11,8 @@
 // here), on a clean committed tree, and writes what ran, on which commit and
 // tree, with each step's outcome, to docs/evidence/trust-boundary/.
 //
-// It never writes .release-gate.json: a record of two steps is not a gate
-// pass, and scripts/release.js must never read one as such.
+// It never writes the gate record (rundock-release-gate.json): a record of two
+// steps is not a gate pass, and scripts/release.js must never read one as such.
 //
 //   node test/tools/record-case-identity-gate.js
 
