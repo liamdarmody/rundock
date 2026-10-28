@@ -151,6 +151,35 @@ describe('a save that succeeds keeps the file itself', () => {
   });
 });
 
+describe('a save shorter than what the file held', () => {
+  test('both saves leave exactly the new bytes, with nothing of the old after them', () => {
+    const dir = workspace();
+    writeFileNoFollow(path.join(dir, 'notes', 'a.csv'), 'short\n');
+    assert.strictEqual(onDisk(dir).toString('utf8'), 'short\n');
+    fs.writeFileSync(path.join(dir, 'notes', 'a.csv'), BEFORE);
+    assert.strictEqual(writeExtensionFile(dir, 'notes/a.csv', 'short\n'), null);
+    assert.strictEqual(onDisk(dir).toString('utf8'), 'short\n');
+  });
+});
+
+// The editor's save passes the page's content on as it arrived. Anything but
+// text is refused before the file is touched: a list of numbers, or the shape
+// a buffer takes in JSON, would otherwise be written as raw bytes.
+describe('content that is not text', () => {
+  for (const [name, content] of [
+    ['a list of byte values', [104, 105, 10]],
+    ['a buffer as JSON writes it', { type: 'Buffer', data: [104, 105, 10] }],
+  ]) {
+    test(`an editor save of ${name} is answered as failed, and the file is untouched`, () => {
+      const dir = workspace();
+      const ws = socket();
+      files.handleSaveFile(ctx, ws, { path: 'notes/a.csv', content });
+      assert.deepStrictEqual(ws.sent.map((m) => m.type), ['file_save_failed']);
+      assert.ok(onDisk(dir).equals(BEFORE), 'nothing was written and nothing was emptied');
+    });
+  }
+});
+
 describe('a write the drive cuts short and then refuses', () => {
   test('both saves throw the system\'s own error and leave the file as it was', (t) => {
     const dir = workspace();
