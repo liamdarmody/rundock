@@ -305,7 +305,7 @@ function seamScope({ registry, fetcher, hostLoader, pane, openWikilink, currentP
   const sourcesState = cutFiles(/let sourcesWatchId = null;[\s\S]*?(?=const SOURCES_TIMEOUT_MS = )/, 'the named-sources state');
   const surfaced = [];
   const noted = [];
-  const paneStub = pane ||{ classList: { remove() {}, add() {} }, className: '', textContent: '' };
+  const paneStub = pane || { classList: { remove() {}, add() {} }, className: '', textContent: '' };
   const windowStub = {
     rundockRendererRegistry: registry,
     rundockExtensionUiFetcher: fetcher,
