@@ -781,7 +781,7 @@ function handle(d) {
     case 'file_save_failed': {
       // The system refused the write (a locked or read-only file, a full
       // drive): the sentence says so and what to try, the raw words are Details.
-      fileSaveFailed(d.path, d.incomplete === true);
+      fileSaveFailed(d.path, d.left);
       const status = document.getElementById('editor-status');
       if (status) { status.style.color = 'var(--attention)'; RundockReadableError.showIn(status, d.incomplete ? `${d.message} ${INCOMPLETE_SAVE_NOTE}` : d.message, d.detail); }
       break;

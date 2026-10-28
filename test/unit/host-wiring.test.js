@@ -300,9 +300,12 @@ function seamScope({ registry, fetcher, hostLoader, pane, openWikilink, currentP
     'fetchViewState(extension, path)', 'scheduleViewState(extension, path, state)', 'viewStateReplyArrived(d)',
     'requestViewState(extension, path)',
   ].map((sig) => cutFiles(new RegExp(`function ${sig.replace(/[()]/g, '\\$&')} \\{[\\s\\S]*?\\n\\}`), sig));
+  // The named-sources state, sliced from the shipped file so a field added
+  // there cannot be missing here; only the timeout is this suite's own.
+  const sourcesState = cutFiles(/let sourcesWatchId = null;[\s\S]*?(?=const SOURCES_TIMEOUT_MS = )/, 'the named-sources state');
   const surfaced = [];
   const noted = [];
-  const paneStub = pane || { classList: { remove() {}, add() {} }, className: '', textContent: '' };
+  const paneStub = pane ||{ classList: { remove() {}, add() {} }, className: '', textContent: '' };
   const windowStub = {
     rundockRendererRegistry: registry,
     rundockExtensionUiFetcher: fetcher,
@@ -318,7 +321,7 @@ function seamScope({ registry, fetcher, hostLoader, pane, openWikilink, currentP
     'destroyActiveFileViewer', 'destroyTiptapEditorIfActive', 'clearTimeout', 'fileSaves',
     'loadViewersModule', 'FILE_SURFACES', 'openBinaryOrUnsupportedFile', 'surfaced', 'saveFileGuarded',
     `let activeExtensionMount = null; let placedRegions = []; let activeExtensionMountInfo = null; let extensionSeamToken = 0;
-     let sourcesWatchId = null; let sourcesWaiter = null; let sourcesSeq = 0; const sourceBaselines = new Map(); const incompleteSources = new Set(); const SOURCES_TIMEOUT_MS = 50;
+     ${sourcesState} const SOURCES_TIMEOUT_MS = 50;
      const ws = state.ws; const WebSocket = { OPEN: 1 };
      let viewStateSeq = 0; const viewStateWaiters = new Map(); const VIEW_STATE_TIMEOUT_MS = 50;
      let currentFilePath = state.currentFilePath; let rawFileContent = state.rawFileContent;

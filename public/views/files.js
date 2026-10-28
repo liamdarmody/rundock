@@ -192,20 +192,14 @@ function saveTiptapFile() {
 // false-positive; a disk state identical to what we are writing is not a
 // conflict either.
 const diskBaselines = new Map();
-// The paths whose bytes on disk were left by Rundock's own failed save, one
-// whose previous content could not be put back (`incomplete`). Those bytes
-// are Rundock's, not an outside edit: until the next save is sent, a change
-// pushed for the path becomes its baseline, with the person's text and its
-// unsaved state kept and no choice raised, and that save writes over it.
-const incompleteSaves = new Set();
 
-// The server could not write a save (file_save_failed): the bytes on disk are
-// not the ones sent, so the baseline set optimistically when it was sent is
-// dropped, or the next save would read the unchanged disk as someone else's
-// edit and offer a conflict. The open file is unsaved again.
-function fileSaveFailed(path, incomplete) {
-  diskBaselines.delete(path);
-  if (incomplete) incompleteSaves.add(path);
+// The server could not write a save (file_save_failed). What its answer says
+// the file holds now (`left`) is the baseline: the watcher's push of those
+// bytes is no change, any other is an outside edit, and the retry passes the
+// check. With nothing said, the baseline goes. The file is unsaved again.
+function fileSaveFailed(path, left) {
+  if (typeof left === 'string') diskBaselines.set(path, left);
+  else diskBaselines.delete(path);
   if (path === currentFilePath) editorDirty = true;
 }
 
@@ -227,7 +221,6 @@ async function saveFileGuarded(path, content, opts = {}) {
       ? { type: 'save_file', path, content, origin: 'extension' }
       : { type: 'save_file', path, content }));
     diskBaselines.set(path, content);
-    incompleteSaves.delete(path);
     // Track what we just wrote as the current bytes for the open file. Without
     // this, a surface whose live content falls back to rawFileContent (the
     // board) looks stale when the file-watcher echoes our own save back, and
@@ -317,7 +310,6 @@ function currentLiveContent() {
 // the save-time guard already uses, so no edit is ever silently overwritten.
 function handleExternalFileChange(path, diskContent) {
   if (path !== currentFilePath) return;
-  if (incompleteSaves.has(path)) { diskBaselines.set(path, diskContent); return; }
   const action = ExternalRefresh.externalChangeAction({
     disk: diskContent,
     baseline: diskBaselines.get(path),
@@ -686,10 +678,8 @@ function loadFileContent(path, content) {
   // currentLiveContent misbehave.
   editorMode = 'preview';
   // What we believe is on disk: the external-edit guard compares against
-  // this before every save. The editor now holds the disk's text, so a mark
-  // a failed save left no longer applies.
+  // this before every save.
   diskBaselines.set(path, content);
-  incompleteSaves.delete(path);
   document.getElementById('editor-filename').textContent = path;
   document.getElementById('editor-status').textContent = '';
   document.getElementById('editor-header').classList.remove('hidden');
@@ -1422,8 +1412,8 @@ let sourcesSeq = 0;
 // What each source's view was last handed, for the external-edit check on a
 // source write, the same check the editors' save makes against the disk.
 const sourceBaselines = new Map();
-// The same mark as incompleteSaves, for a source a view writes.
-const incompleteSources = new Set();
+// Sources whose failed save could not be put back (see heldForView).
+const sourceHolds = new Map();
 const SOURCES_TIMEOUT_MS = 8000;
 
 function requestSources(path) {
@@ -1507,19 +1497,32 @@ function noteSourceBaselines(list) {
   }
 }
 
+// A list as the view is handed it: a held source still holding exactly what
+// its failed save left is handed as the view's own text; one holding anything
+// else has moved on, so its hold goes. No list is ever held back.
+function heldForView(list) {
+  return list.map((s) => {
+    const hold = s && sourceHolds.get(s.path);
+    if (hold && s.content === hold.left) return { ...s, content: hold.sent };
+    if (hold) sourceHolds.delete(s.path);
+    return s;
+  });
+}
+
 // A reply from the server's sources handler. Only the live mount's watch id
 // is answered; everything else is a mount that has ended.
 function sourcesReplyArrived(d) {
-  if (!d) return;
-  // A source save the system refused (it carries the raw detail): the bytes
-  // on disk are not the ones sent, so the baseline set when it was sent goes,
-  // as fileSaveFailed does for the editor.
-  if (d.type === 'source_save_refused') {
-    if (d.detail || d.incomplete) sourceBaselines.delete(d.source);
-    if (d.incomplete) incompleteSources.add(d.source);
+  // A source save the system refused (with its raw detail) for the live mount's
+  // note: `left` is the baseline, and an incomplete one is held (heldForView).
+  if (d && d.type === 'source_save_refused') {
+    if (!d.detail || activeExtensionMountInfo?.path !== d.path) return;
+    const sent = sourceBaselines.get(d.source);
+    if (typeof d.left === 'string') sourceBaselines.set(d.source, d.left);
+    else sourceBaselines.delete(d.source);
+    if (d.incomplete && typeof d.left === 'string' && typeof sent === 'string') sourceHolds.set(d.source, { left: d.left, sent });
     return;
   }
-  if (d.watchId !== sourcesWatchId) return;
+  if (!d || d.watchId !== sourcesWatchId) return;
   if (d.type === 'sources_resolved' && sourcesWaiter && sourcesWaiter.watchId === d.watchId) {
     sourcesWaiter.settle(d);
     return;
@@ -1527,16 +1530,12 @@ function sourcesReplyArrived(d) {
   if (d.type === 'sources_changed' && activeExtensionMount && typeof activeExtensionMount.updateSources === 'function') {
     const list = d.ok ? d.sources : [];
     noteSourceBaselines(list);
-    // What Rundock's own failed save left is now the baseline, and is not
-    // handed to the view, which keeps the person's text. The view's next save
-    // changes the file, so the watch pushes a fresh list, which resyncs it.
-    if (list.some((s) => s && incompleteSources.has(s.path))) return;
-    activeExtensionMount.updateSources(list);
+    activeExtensionMount.updateSources(heldForView(list));
   }
 }
 
 function endSourcesWatch() {
-  incompleteSources.clear();
+  sourceHolds.clear();
   if (!sourcesWatchId) return;
   const watchId = sourcesWatchId;
   sourcesWatchId = null;
@@ -1561,7 +1560,7 @@ async function saveSourceGuarded(notePath, source, content) {
       onTheirs: () => {
         sourceBaselines.set(source, disk);
         if (activeExtensionMount && typeof activeExtensionMount.updateSources === 'function') {
-          requestSources(notePath).then((r) => { if (r.ok && r.watchId === sourcesWatchId) { noteSourceBaselines(r.sources); activeExtensionMount.updateSources(r.sources); } });
+          requestSources(notePath).then((r) => { if (r.ok && r.watchId === sourcesWatchId) { noteSourceBaselines(r.sources); activeExtensionMount.updateSources(heldForView(r.sources)); } });
         }
       },
       // Mine: an explicit decision to write over it.
@@ -1572,7 +1571,7 @@ async function saveSourceGuarded(notePath, source, content) {
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type: 'save_source', path: notePath, source, content }));
     sourceBaselines.set(source, content);
-    incompleteSources.delete(source);
+    sourceHolds.delete(source);
   }
   return true;
 }
