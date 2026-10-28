@@ -22,6 +22,8 @@ const { writeFileNoFollow } = require('../../lib/workspace/link-safe-write.js');
 const { writeExtensionFile } = require('../../lib/workspace/extension-file.js');
 const files = require('../../lib/protocol/handlers/files.js');
 const sources = require('../../lib/protocol/handlers/sources.js');
+const { readNormalisedFile } = require('../../lib/agents/discovery.js');
+const { resolveSources } = require('../../lib/workspace/named-sources.js');
 const { makeTempDir } = require('../helpers/workspace.js');
 
 const realWriteSync = fs.writeSync;
@@ -77,7 +79,8 @@ function handed(buffer, offset, length) {
 
 // fs.writeSync, following a script. Each step is the most bytes that call
 // really writes, at the position it was asked for (Infinity for all of
-// them, 0 for none), or an error it throws instead; the last step repeats.
+// them, 0 for none), an error it throws instead, or a function it runs in
+// place of the call; the last step repeats.
 // A runaway loop is stopped with an error of its own rather than left to
 // hang the suite. The standard streams pass straight through.
 function scripted(...steps) {
@@ -87,6 +90,7 @@ function scripted(...steps) {
     stub.calls += 1;
     if (stub.calls > 1000) throw new Error('the write was tried over a thousand times');
     if (step instanceof Error) throw step;
+    if (typeof step === 'function') return step();
     const bytes = handed(buffer, offset, length);
     const at = typeof buffer === 'string' ? offset : position;
     return realWriteSync(fd, bytes, 0, Math.min(step, bytes.length), at);
@@ -277,6 +281,89 @@ describe('a failed save whose previous content could not be put back', () => {
       assert.ok(!('incomplete' in restored.sent[0]), 'a file that was put back is not called incomplete');
     });
   }
+});
+
+// A failed save says what the file holds now (`left`), read back through the
+// open file and given as the watcher for that path would push it, so the
+// page can believe it: then the push of the same bytes is no change, and any
+// other change is still an outside edit.
+describe('what a failed save says the file holds', () => {
+  // Old content with a lone CR and a CRLF, where the two watchers' rules
+  // differ, cut by a restore that stops two bytes into a four-byte character.
+  const MIXED = 'line\rone\r\nnew,é,€,\u{1F600}\r\n'.repeat(40);
+  const CUT = 23;
+  const cutRestore = () => scripted(100, enospc(), CUT, systemError('EBUSY', 'resource busy or locked'));
+  const mixedWorkspace = () => {
+    const dir = workspace();
+    fs.writeFileSync(path.join(dir, 'notes', 'a.csv'), MIXED);
+    return dir;
+  };
+
+  test('the editor\'s answer holds what the open-file watcher would push, byte for byte', (t) => {
+    const dir = mixedWorkspace();
+    const ws = socket();
+    t.mock.method(fs, 'writeSync', cutRestore());
+    files.handleSaveFile(ctx, ws, { path: 'notes/a.csv', content: AFTER });
+    t.mock.restoreAll();
+    assert.strictEqual(ws.sent[0].type, 'file_save_failed');
+    assert.strictEqual(ws.sent[0].left, readNormalisedFile(path.join(dir, 'notes', 'a.csv')));
+    assert.match(ws.sent[0].left, /^line\rone\nnew,/, 'a CRLF read as the watcher reads it, a lone CR kept');
+    assert.match(ws.sent[0].left, /�$/, 'the cut character decoded as the watcher decodes it');
+  });
+
+  test('a view\'s answer holds what the sources watch would hand the view, byte for byte', (t) => {
+    const dir = mixedWorkspace();
+    const ws = socket();
+    t.mock.method(fs, 'writeSync', cutRestore());
+    sources.handleSaveSource(ctx, ws, { path: 'dash.md', source: 'notes/a.csv', content: AFTER });
+    t.mock.restoreAll();
+    const watched = resolveSources(dir, 'dash.md').sources.find((s) => s.path === 'notes/a.csv');
+    assert.strictEqual(ws.sent[0].type, 'source_save_refused');
+    assert.strictEqual(ws.sent[0].left, watched.content);
+    assert.match(ws.sent[0].left, /^line\none\nnew,/, 'both line endings read as the sources watch reads them');
+  });
+
+  test('a failed save that was put back says the old content', (t) => {
+    const dir = workspace();
+    const ws = socket();
+    t.mock.method(fs, 'writeSync', scripted(512, enospc(), Infinity));
+    files.handleSaveFile(ctx, ws, { path: 'notes/a.csv', content: AFTER });
+    t.mock.restoreAll();
+    assert.strictEqual(ws.sent[0].left, readNormalisedFile(path.join(dir, 'notes', 'a.csv')));
+    assert.ok(onDisk(dir).equals(BEFORE));
+  });
+
+  test('it is read through the open file, never by its path, so a link put in its place is not followed', (t) => {
+    const dir = workspace();
+    const file = path.join(dir, 'notes', 'a.csv');
+    fs.writeFileSync(path.join(dir, 'elsewhere.txt'), 'CANARY');
+    const swapThenFail = () => {
+      fs.renameSync(file, `${file}.moved`);
+      fs.symlinkSync(path.join(dir, 'elsewhere.txt'), file);
+      throw systemError('EBUSY', 'resource busy or locked');
+    };
+    t.mock.method(fs, 'writeSync', scripted(100, enospc(), 5, swapThenFail));
+    let thrown = null;
+    try { writeFileNoFollow(file, AFTER); } catch (e) { thrown = e; }
+    t.mock.restoreAll();
+    assert.strictEqual(thrown && thrown.code, 'ENOSPC');
+    assert.ok(Buffer.isBuffer(thrown.left), 'what the file holds is attached as bytes');
+    assert.ok(thrown.left.equals(fs.readFileSync(`${file}.moved`)), 'the bytes of the file the save had open');
+    assert.ok(!thrown.left.toString('utf8').includes('CANARY'), 'never the bytes behind the link');
+  });
+
+  test('when it cannot be read back, the answer says nothing of it, and the error is still the write\'s', (t) => {
+    const dir = workspace();
+    const ws = socket();
+    t.mock.method(fs, 'writeSync', scripted(512, enospc(), Infinity));
+    t.mock.method(fs, 'fstatSync', () => { throw systemError('EIO', 'i/o error'); });
+    files.handleSaveFile(ctx, ws, { path: 'notes/a.csv', content: AFTER });
+    t.mock.restoreAll();
+    assert.strictEqual(ws.sent[0].type, 'file_save_failed');
+    assert.match(ws.sent[0].message, /because the drive is full\./);
+    assert.ok(!('left' in ws.sent[0]));
+    assert.ok(onDisk(dir).equals(BEFORE));
+  });
 });
 
 describe('a write that makes no progress', () => {
