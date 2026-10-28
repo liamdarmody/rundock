@@ -1,6 +1,6 @@
 'use strict';
-// A save that cannot be written whole leaves the file as it was, and is
-// answered as failed, never as saved.
+// A save that cannot be written whole puts back what the file held, where it
+// can, and is answered as failed, never as saved.
 //
 // One write call may write fewer bytes than it is handed: a nearly full
 // drive, or a limit on file size, stops it part way, and the only sign is the
