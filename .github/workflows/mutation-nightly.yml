@@ -44,22 +44,70 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  mutation-sweep:
-    name: Every guard, no selection
+  # SHARDS, NOT ONE JOB. Run end to end in one job, the complete set outgrew
+  # each timeout it was given and was cut off with rows unrun. It now has the
+  # scoped run's shape from ci.yml: the plan packs every harness into shards by
+  # measured cost, the shards run side by side, and the verdict job reads every
+  # shard's verdict into one outcome. Growth adds shards, not minutes, up to the
+  # planner's cap (MAX_SHARDS in scripts/mutation-scope.js). The complete set
+  # already fills it, so from here each shard lengthens instead; a shard nearing
+  # its timeout is the sign to raise the cap.
+  #
+  # The job names differ from ci.yml's on purpose: required checks match by
+  # name across workflows, so a nightly `Mutation guards` could stand in for
+  # the scoped check on a commit this sweep ran on.
+  mutation-plan:
+    name: Plan every harness
     runs-on: ubuntu-latest
-    # First measured at 1204s for the complete set, when seventy-five minutes
-    # left generous room. The set has grown since (the Code-mode guards alone
-    # added close to a hundred rows) and a sweep now runs past that ceiling and
-    # is cut off with rows unrun, which reads as a failure of the guards rather
-    # than of the clock. A hundred and twenty minutes covers the current set
-    # with room for a slower runner. Splitting the sweep into parallel jobs is
-    # the lasting fix, planned separately; this ceiling holds until then.
-    timeout-minutes: 120
+    timeout-minutes: 10
+    outputs:
+      count: ${{ steps.plan.outputs.count }}
+      matrix: ${{ steps.plan.outputs.matrix }}
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+
+      - name: Set up Node 24
+        uses: actions/setup-node@v5
         with:
-          fetch-depth: 0
+          node-version: '24'
+          cache: npm
+
+      - name: Install runtime dependencies
+        run: npm ci --omit=dev
+
+      - name: Install test-only DOM dependency
+        run: npm install --no-save --ignore-scripts jsdom@29.1.1
+
+      # Every harness the selector discovers in test/tools/, so a new harness
+      # is in the sweep the day it lands, with no list to update. Writing the
+      # plan runs nothing.
+      - name: Shard every harness
+        id: plan
+        run: node scripts/mutation-scope.js --all --plan --out mutation-plan.json
+
+      - name: Keep the plan for the shards and the verdict
+        uses: actions/upload-artifact@v7
+        with:
+          name: mutation-plan
+          path: mutation-plan.json
+          retention-days: 7
+
+  mutation-shard:
+    name: Sweep shard ${{ matrix.shard }}
+    needs: mutation-plan
+    if: needs.mutation-plan.outputs.count != '0'
+    runs-on: ubuntu-latest
+    # A shard is planned at ten minutes, more once the cap is reached. Thirty
+    # bounds a hang; a shard cut off here writes no verdict, which reads as no
+    # verdict, never as a pass.
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.mutation-plan.outputs.matrix) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
 
       - name: Set up Node 24
         uses: actions/setup-node@v5
@@ -76,12 +124,63 @@ jobs:
       - name: Install test-only DOM dependency
         run: npm install --no-save --ignore-scripts jsdom@29.1.1
 
-      # Every harness the selector discovers in test/tools/, so a new harness
-      # is in the sweep the day it lands, with no list to update.
-      - name: Remove every guard in turn and require a red test
-        run: node scripts/mutation-scope.js --all
+      - name: Fetch the plan
+        uses: actions/download-artifact@v8
+        with:
+          name: mutation-plan
+
+      - name: Remove each guard in this shard, and require a red test
+        env:
+          SHARD: ${{ matrix.shard }}
+          SHARDS: ${{ needs.mutation-plan.outputs.count }}
+        run: >-
+          node scripts/mutation-scope.js --shard "$SHARD/$SHARDS"
+          --plan-file mutation-plan.json --verdict "verdict-$SHARD.json"
 
       # The tools restore what they mutate, including when a run throws. A
-      # failure that leaves any file modified is itself worth seeing.
+      # shard that leaves any file modified is itself worth seeing.
       - name: Fail if any tool left a file modified
         run: git diff --exit-code
+
+      - name: Keep this shard's verdict, whether it passed or not
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: mutation-verdict-${{ matrix.shard }}
+          path: verdict-${{ matrix.shard }}.json
+          retention-days: 7
+          if-no-files-found: ignore
+
+  mutation-sweep:
+    name: Complete set verdict
+    needs: [mutation-plan, mutation-shard]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Node 24
+        uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+
+      - name: Fetch the plan and every verdict
+        if: needs.mutation-plan.result == 'success'
+        uses: actions/download-artifact@v8
+        with:
+          pattern: mutation-*
+          path: mutation
+          merge-multiple: true
+
+      # Pass, fail, or no verdict. A shard that wrote no verdict (it died, was
+      # cancelled or timed out) is no verdict for that shard, and the sweep
+      # ends non-green, titled "No verdict".
+      - name: One outcome from every shard
+        env:
+          PLAN_RESULT: ${{ needs.mutation-plan.result }}
+        run: >-
+          node scripts/mutation-scope.js --aggregate
+          --plan-file mutation/mutation-plan.json --verdicts mutation
+          --plan-result "$PLAN_RESULT"
