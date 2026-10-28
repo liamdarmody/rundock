@@ -130,21 +130,31 @@ test.describe('named sources in the app', () => {
     // The watch hands the view a changed file within one interval, after
     // which a save is no longer against stale bytes; so the edit and the save
     // race it, and a lost race is simply tried again. Each attempt waits for
-    // its own answer before the next begins: isVisible() does not wait, so
-    // it could see the banner a previous attempt raised late and read the
-    // file while this attempt's save was still writing it.
-    let raised = false;
-    for (let attempt = 0; attempt < 6 && !raised; attempt += 1) {
-      fs.writeFileSync(path.join(workspace, 'notes', 'a.csv'), `disk edit ${attempt}\n`);
+    // its own outcome before the next one starts: the choice raised, with
+    // nothing written, or the view's bytes on disk, a lost race. Waiting for
+    // one of the two rather than for a length of time means no attempt can
+    // overlap the next, however long its save takes, so the file read after
+    // the loop holds the edit of the attempt that raised the choice.
+    const source = path.join(workspace, 'notes', 'a.csv');
+    const banner = page.locator('#external-edit-banner');
+    let raisedOn = -1;
+    for (let attempt = 0; attempt < 6 && raisedOn < 0; attempt += 1) {
+      fs.writeFileSync(source, `disk edit ${attempt}\n`);
       await frame(page).locator('#save').click();
-      raised = await page.locator('#external-edit-banner').waitFor({ state: 'visible', timeout: 1500 }).then(() => true, () => false);
-      if (!raised) await page.waitForTimeout(900);
+      let outcome = null;
+      await expect.poll(async () => {
+        if (await banner.isVisible()) outcome = 'raised';
+        else if (fs.readFileSync(source, 'utf8') === 'VIEW-EDIT\n') outcome = 'saved';
+        return outcome;
+      }, { message: `attempt ${attempt} ends with the choice raised or the save on disk`, timeout: 10_000 }).not.toBeNull();
+      if (outcome === 'raised') raisedOn = attempt;
+      else await page.waitForTimeout(900);
     }
-    expect(raised, 'the choice was raised').toBe(true);
-    await expect(page.locator('#external-edit-banner')).toContainText('notes/a.csv');
-    expect(fs.readFileSync(path.join(workspace, 'notes', 'a.csv'), 'utf8')).toMatch(/^disk edit/);
+    expect(raisedOn, 'the choice was raised').toBeGreaterThanOrEqual(0);
+    await expect(banner).toContainText('notes/a.csv');
+    expect(fs.readFileSync(source, 'utf8')).toBe(`disk edit ${raisedOn}\n`);
     await page.locator('#external-edit-banner .banner-btn[data-choice="mine"]').click();
-    await expect.poll(() => fs.readFileSync(path.join(workspace, 'notes', 'a.csv'), 'utf8')).toBe('VIEW-EDIT\n');
+    await expect.poll(() => fs.readFileSync(source, 'utf8')).toBe('VIEW-EDIT\n');
   });
 
   test('an extension that did not declare sources, on a marked note that lists files, is handed an empty list', async ({ page }) => {
