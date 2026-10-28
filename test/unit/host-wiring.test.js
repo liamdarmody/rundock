@@ -318,7 +318,7 @@ function seamScope({ registry, fetcher, hostLoader, pane, openWikilink, currentP
     'destroyActiveFileViewer', 'destroyTiptapEditorIfActive', 'clearTimeout', 'fileSaves',
     'loadViewersModule', 'FILE_SURFACES', 'openBinaryOrUnsupportedFile', 'surfaced', 'saveFileGuarded',
     `let activeExtensionMount = null; let placedRegions = []; let activeExtensionMountInfo = null; let extensionSeamToken = 0;
-     let sourcesWatchId = null; let sourcesWaiter = null; let sourcesSeq = 0; const sourceBaselines = new Map(); const SOURCES_TIMEOUT_MS = 50;
+     let sourcesWatchId = null; let sourcesWaiter = null; let sourcesSeq = 0; const sourceBaselines = new Map(); const incompleteSources = new Set(); const SOURCES_TIMEOUT_MS = 50;
      const ws = state.ws; const WebSocket = { OPEN: 1 };
      let viewStateSeq = 0; const viewStateWaiters = new Map(); const VIEW_STATE_TIMEOUT_MS = 50;
      let currentFilePath = state.currentFilePath; let rawFileContent = state.rawFileContent;

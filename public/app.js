@@ -461,6 +461,10 @@ function packagesImportLanded(d) {
 const EXTENSIONS_PAGE_REPLIES = new Set(['packages_page', 'packages_page_error', 'extension_state', 'package_uninstall_result',
   'extension_install_result', 'extensions', 'package_install_error', 'package_update_status', 'package_update_result']);
 
+// Said after a failed save's own sentence when its previous content could not
+// be put back either (`incomplete`).
+const INCOMPLETE_SAVE_NOTE = "Your changes are still here, but the file on disk may now be incomplete, so keep this window open until you've saved again.";
+
 function handle(d) {
   // TWO FIELDS, AND THEY ARE NOT INTERCHANGEABLE. `_conversationId` tags a
   // message emitted by a running agent process, so it is what the streaming
@@ -765,10 +769,11 @@ function handle(d) {
     case 'view_state': case 'view_state_refused': viewStateReplyArrived(d); break;
     case 'source_saved': { const st = document.getElementById('editor-status'); if (st) { st.style.color = 'var(--success)'; st.textContent = 'Saved'; } break; }
     case 'source_save_refused': {
+      sourcesReplyArrived(d);
       const status = document.getElementById('editor-status');
       if (status) {
         status.style.color = 'var(--attention)';
-        if (d.detail) RundockReadableError.showIn(status, d.reason, d.detail);
+        if (d.detail) RundockReadableError.showIn(status, d.incomplete ? `${d.reason} ${INCOMPLETE_SAVE_NOTE}` : d.reason, d.detail);
         else status.textContent = `Not saved: ${d.reason}`;
       }
       break;
@@ -776,9 +781,9 @@ function handle(d) {
     case 'file_save_failed': {
       // The system refused the write (a locked or read-only file, a full
       // drive): the sentence says so and what to try, the raw words are Details.
-      fileSaveFailed(d.path);
+      fileSaveFailed(d.path, d.incomplete === true);
       const status = document.getElementById('editor-status');
-      if (status) { status.style.color = 'var(--attention)'; RundockReadableError.showIn(status, d.message, d.detail); }
+      if (status) { status.style.color = 'var(--attention)'; RundockReadableError.showIn(status, d.incomplete ? `${d.message} ${INCOMPLETE_SAVE_NOTE}` : d.message, d.detail); }
       break;
     }
     case 'file_save_refused': {

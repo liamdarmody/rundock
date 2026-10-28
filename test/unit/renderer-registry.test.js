@@ -260,7 +260,7 @@ describe('the file view seam degrades, and never mounts blind', () => {
       'openWikilink', 'destroyActiveFileViewer', 'destroyTiptapEditorIfActive', 'clearTimeout', 'fileSaves',
       `let activeExtensionMount = null; let extensionSeamToken = 0;
        let placedRegions = [];
-       let sourcesWatchId = null; let sourcesWaiter = null; let sourcesSeq = 0; const sourceBaselines = new Map(); const SOURCES_TIMEOUT_MS = 50;
+       let sourcesWatchId = null; let sourcesWaiter = null; let sourcesSeq = 0; const sourceBaselines = new Map(); const incompleteSources = new Set(); const SOURCES_TIMEOUT_MS = 50;
        // A socket that records what the page asks and, when a test supplies
        // one, answers get_sources the way the server's handler does.
        const ws = { readyState: 1, send(m) {

@@ -53,6 +53,16 @@ const SOURCE_SAVE_ANSWER = {
   src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'sources.js'),
   suite: 'test/unit/short-write-saves.test.js',
 };
+// The page's half: what its own failed write left is its own, never an
+// outside edit, until the next save is sent.
+const PAGE_MARK = {
+  src: path.join(ROOT, 'public', 'views', 'files.js'),
+  suite: 'test/unit/incomplete-save-client.test.js',
+};
+const PAGE_ANSWER = {
+  src: path.join(ROOT, 'public', 'app.js'),
+  suite: 'test/unit/incomplete-save-client.test.js',
+};
 
 // [target, label, the guard as it is written, what it becomes without it]
 const MUTATIONS = [
@@ -123,6 +133,45 @@ const MUTATIONS = [
   [SOURCE_SAVE_ANSWER, 'a failed source save that could not be put back is answered as incomplete',
     ', ...(e && e.restoreFailed ? { incomplete: true } : {})',
     ''],
+  [PAGE_MARK, 'an incomplete save marks its path',
+    '  if (incomplete) incompleteSaves.add(path);\n',
+    ''],
+  [PAGE_MARK, 'a change pushed for a marked path is taken as its baseline, with no choice raised',
+    '  if (incompleteSaves.has(path)) { diskBaselines.set(path, diskContent); return; }\n',
+    ''],
+  [PAGE_MARK, 'the next save sent is the end of the mark',
+    '    diskBaselines.set(path, content);\n    incompleteSaves.delete(path);\n',
+    '    diskBaselines.set(path, content);\n'],
+  [PAGE_MARK, 'opening the file again is the end of the mark',
+    '  diskBaselines.set(path, content);\n  incompleteSaves.delete(path);\n',
+    '  diskBaselines.set(path, content);\n'],
+  [PAGE_MARK, 'a source save the system refused drops its baseline',
+    '    if (d.detail || d.incomplete) sourceBaselines.delete(d.source);\n',
+    ''],
+  [PAGE_MARK, 'an incomplete source save marks the source',
+    '    if (d.incomplete) incompleteSources.add(d.source);\n',
+    ''],
+  [PAGE_MARK, 'a list holding a marked source is not handed to the view',
+    '    if (list.some((s) => s && incompleteSources.has(s.path))) return;\n',
+    ''],
+  [PAGE_MARK, 'the next source save sent is the end of its mark',
+    '    incompleteSources.delete(source);\n',
+    ''],
+  [PAGE_MARK, 'a mount that ends is the end of its marks',
+    '  incompleteSources.clear();\n',
+    ''],
+  [PAGE_ANSWER, 'a failed save passes on whether it was incomplete',
+    'fileSaveFailed(d.path, d.incomplete === true);',
+    'fileSaveFailed(d.path);'],
+  [PAGE_ANSWER, 'a refused source save reaches the sources reply',
+    "    case 'source_save_refused': {\n      sourcesReplyArrived(d);\n",
+    "    case 'source_save_refused': {\n"],
+  [PAGE_ANSWER, 'an incomplete save is said after its own sentence',
+    'd.incomplete ? `${d.message} ${INCOMPLETE_SAVE_NOTE}` : d.message',
+    'd.message'],
+  [PAGE_ANSWER, 'an incomplete source save is said after its own sentence',
+    'd.incomplete ? `${d.reason} ${INCOMPLETE_SAVE_NOTE}` : d.reason',
+    'd.reason'],
 ];
 
 // Guards deliberately NOT mutated, each with the reason. A named exclusion is
