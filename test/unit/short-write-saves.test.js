@@ -263,9 +263,17 @@ describe('a write that makes no progress', () => {
 });
 
 // The same cut, made by the operating system rather than a stub: a process
-// whose file-size limit is 512 bytes saves 2,000. Once SIGXFSZ is ignored,
-// the write over the limit returns EFBIG, and the old bytes, which fit under
-// the limit, go back.
+// whose file-size limit is one block (512 or 1,024 bytes, depending on the
+// shell) saves 2,000. The child installs a SIGXFSZ handler so the write over
+// the limit returns EFBIG instead of ending the process, and the old bytes,
+// which fit under the limit, go back.
+//
+// The handler is gone by the time the process exits, so anything the child
+// writes to a file at exit would be cut off and the child killed. Under
+// --experimental-test-coverage, Node hands every child a NODE_V8_COVERAGE
+// folder unless the key is already set, and the child writes its coverage
+// there at exit; a cut-off coverage file then spoils the whole run's report.
+// An empty value counts as unset, so the child writes none.
 const CHILD = [
   "process.on('SIGXFSZ', () => {});",
   "const path = require('path');",
@@ -285,7 +293,7 @@ describe('a real file-size limit', { skip: process.platform === 'win32' ? 'no ul
     const run = spawnSync('/bin/sh', ['-c', 'ulimit -f 1 && exec "$0" "$@"', process.execPath, '-e', CHILD,
       path.join(__dirname, '..', '..', 'lib', 'workspace', 'link-safe-write.js'),
       path.join(__dirname, '..', '..', 'lib', 'workspace', 'extension-file.js'),
-      dir], { encoding: 'utf8', timeout: 30_000 });
+      dir], { encoding: 'utf8', timeout: 30_000, env: { ...process.env, NODE_V8_COVERAGE: '' } });
     assert.strictEqual(run.status, 0, `the child ran to the end: ${run.stderr}`);
     assert.deepStrictEqual(JSON.parse(run.stdout), { editor: 'threw EFBIG', extension: 'threw EFBIG' });
     assert.ok(onDisk(dir).equals(BEFORE), 'the editor\'s file kept its bytes');
