@@ -6,6 +6,10 @@
 // writes every file whether or not the journal, the backups or the rollback
 // exist, so every recovery guard here is proven by breaking it.
 //
+// The same holds for the in-place replace a save makes, so its guards are
+// here too: a save that keeps only one write call's bytes, or puts nothing
+// back when it fails, still writes every byte on a disk that takes them.
+//
 //   node test/tools/mutate-atomic-write-guards.js            # report
 //   node test/tools/mutate-atomic-write-guards.js --markdown # as a table
 //
@@ -29,6 +33,35 @@ const ROOT = path.join(__dirname, '..', '..');
 const PRIMITIVE = {
   src: path.join(ROOT, 'lib', 'workspace', 'atomic-write.js'),
   suite: 'test/unit/atomic-write.test.js',
+};
+// The replace every editor, board, sidecar and extension save makes, and the
+// extension save that calls it, watched by the suite that cuts writes short.
+const IN_PLACE = {
+  src: path.join(ROOT, 'lib', 'workspace', 'link-safe-write.js'),
+  suite: 'test/unit/short-write-saves.test.js',
+};
+const IN_PLACE_EXTENSION = {
+  src: path.join(ROOT, 'lib', 'workspace', 'extension-file.js'),
+  suite: 'test/unit/short-write-saves.test.js',
+};
+// The handlers that say a failed save could not be put back either.
+const SAVE_ANSWER = {
+  src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'files.js'),
+  suite: 'test/unit/short-write-saves.test.js',
+};
+const SOURCE_SAVE_ANSWER = {
+  src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'sources.js'),
+  suite: 'test/unit/short-write-saves.test.js',
+};
+// The page's half: what its own failed write left is its own, never an
+// outside edit, until the next save is sent.
+const PAGE_MARK = {
+  src: path.join(ROOT, 'public', 'views', 'files.js'),
+  suite: 'test/unit/incomplete-save-client.test.js',
+};
+const PAGE_ANSWER = {
+  src: path.join(ROOT, 'public', 'app.js'),
+  suite: 'test/unit/incomplete-save-client.test.js',
 };
 
 // [target, label, the guard as it is written, what it becomes without it]
@@ -67,6 +100,102 @@ const MUTATIONS = [
   [PRIMITIVE, 'the directories a run creates are recorded for recovery to remove',
     '    createdDirs: plannedParents(root, entries),',
     '    createdDirs: [],'],
+  [IN_PLACE, 'only text is saved, so a list of numbers is never written as bytes',
+    "  if (typeof content !== 'string') throw new TypeError('The content to save must be text.');\n",
+    ''],
+  [IN_PLACE, 'a save empties the file before it writes, so a shorter save leaves nothing of the old',
+    '  fs.ftruncateSync(fd, 0);\n  try {\n',
+    '  try {\n'],
+  [IN_PLACE, 'a save writes every byte, not only what the first write call took',
+    '    offset += written;',
+    '    offset = bytes.length;'],
+  [IN_PLACE, 'a write call that takes nothing is an error, not a retry',
+    '    if (!(written > 0)) {',
+    '    if (false) {'],
+  [IN_PLACE, 'each write names its position, so the read before it cannot move it',
+    'fs.writeSync(fd, bytes, offset, bytes.length - offset, offset);',
+    'fs.writeSync(fd, bytes, offset, bytes.length - offset);'],
+  [IN_PLACE, 'a save that fails puts back what the file held',
+    '      fs.ftruncateSync(fd, 0);\n      writeAll(fd, previous);\n',
+    ''],
+  [IN_PLACE, 'a restore that fails too never replaces the write\'s own error',
+    "    } catch {\n      if (e && typeof e === 'object') Object.assign(e, { restoreFailed: true });\n    }",
+    '    } catch (restoreError) {\n      throw restoreError;\n    }'],
+  [IN_PLACE, 'the editor\'s save goes through the replace',
+    '    replaceContent(fd, content);\n  } finally {',
+    "    fs.writeSync(fd, content, null, 'utf-8');\n  } finally {"],
+  [IN_PLACE_EXTENSION, 'an extension\'s save goes through the replace',
+    '    replaceContent(fd, content);',
+    "    fs.writeSync(fd, content, null, 'utf-8');"],
+  [IN_PLACE, 'a failed save reads back what the file holds',
+    "      if (e && typeof e === 'object') Object.assign(e, { left: readAll(fd) });\n",
+    ''],
+  [IN_PLACE, 'the read back names its position, so where the writes left the offset cannot move it',
+    'fs.readSync(fd, bytes, offset, bytes.length - offset, offset)',
+    'fs.readSync(fd, bytes, offset, bytes.length - offset, null)'],
+  [IN_PLACE, 'a read back that fails attaches nothing, and the error stays the write\'s',
+    "    try {\n      if (e && typeof e === 'object') Object.assign(e, { left: readAll(fd) });\n    } catch { /* unreadable: the answer says nothing of it */ }\n",
+    "    if (e && typeof e === 'object') Object.assign(e, { left: readAll(fd) });\n"],
+  [SAVE_ANSWER, 'a failed save says what the file holds',
+    ': {}), ...left });',
+    ': {}) });'],
+  [SAVE_ANSWER, 'what a failed save says the file holds is read as the open-file watcher reads it',
+    "{ left: e.left.toString('utf-8').replace(/\\r\\n/g, '\\n') }",
+    "{ left: e.left.toString('utf-8') }"],
+  [SOURCE_SAVE_ANSWER, 'a failed source save says what the file holds',
+    ': {}), ...left });',
+    ': {}) });'],
+  [SOURCE_SAVE_ANSWER, 'what a failed source save says the file holds is read as the sources watch reads it',
+    "{ left: e.left.toString('utf8').replace(/\\r\\n?/g, '\\n') }",
+    "{ left: e.left.toString('utf8') }"],
+  [SAVE_ANSWER, 'a failed save that could not be put back is answered as incomplete',
+    ', ...(e && e.restoreFailed ? { incomplete: true } : {})',
+    ''],
+  [SOURCE_SAVE_ANSWER, 'a failed source save that could not be put back is answered as incomplete',
+    ', ...(e && e.restoreFailed ? { incomplete: true } : {})',
+    ''],
+  [PAGE_MARK, 'a failed save takes what the file holds as its baseline',
+    "  if (typeof left === 'string') diskBaselines.set(path, left);\n  else diskBaselines.delete(path);\n",
+    '  diskBaselines.delete(path);\n'],
+  [PAGE_MARK, 'a source refusal for another note changes nothing',
+    '    if (!d.detail || activeExtensionMountInfo?.path !== d.path) return;\n',
+    '    if (!d.detail) return;\n'],
+  [PAGE_MARK, 'a source refusal takes what the file holds as its baseline',
+    "    if (typeof d.left === 'string') sourceBaselines.set(d.source, d.left);\n    else sourceBaselines.delete(d.source);\n",
+    '    sourceBaselines.delete(d.source);\n'],
+  [PAGE_MARK, 'a source that could not be put back is held',
+    '    if (d.incomplete && typeof d.left === \'string\' && typeof sent === \'string\') sourceHolds.set(d.source, { left: d.left, sent });\n',
+    ''],
+  [PAGE_MARK, 'a held source that still holds what its save left is handed as the view\'s text',
+    '    if (hold && s.content === hold.left) return { ...s, content: hold.sent };\n',
+    ''],
+  [PAGE_MARK, 'a held source that has moved on loses its hold',
+    '    if (hold) sourceHolds.delete(s.path);\n',
+    ''],
+  [PAGE_MARK, 'a changed list is prepared for the view',
+    '    activeExtensionMount.updateSources(heldForView(list));',
+    '    activeExtensionMount.updateSources(list);'],
+  [PAGE_MARK, 'a list read again after Reload theirs is prepared for the view',
+    'activeExtensionMount.updateSources(heldForView(r.sources));',
+    'activeExtensionMount.updateSources(r.sources);'],
+  [PAGE_MARK, 'the next source save sent ends its hold',
+    '    sourceHolds.delete(source);\n',
+    ''],
+  [PAGE_MARK, 'a mount that ends ends its holds',
+    '  sourceHolds.clear();\n',
+    ''],
+  [PAGE_ANSWER, 'a failed save passes on what the file holds',
+    'fileSaveFailed(d.path, d.left);',
+    'fileSaveFailed(d.path);'],
+  [PAGE_ANSWER, 'a refused source save reaches the sources reply',
+    "    case 'source_save_refused': {\n      sourcesReplyArrived(d);\n",
+    "    case 'source_save_refused': {\n"],
+  [PAGE_ANSWER, 'an incomplete save is said after its own sentence',
+    'd.incomplete ? `${d.message} ${INCOMPLETE_SAVE_NOTE}` : d.message',
+    'd.message'],
+  [PAGE_ANSWER, 'an incomplete source save is said after its own sentence',
+    'd.incomplete ? `${d.reason} ${INCOMPLETE_SAVE_NOTE}` : d.reason',
+    'd.reason'],
 ];
 
 // Guards deliberately NOT mutated, each with the reason. A named exclusion is

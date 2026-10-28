@@ -193,12 +193,13 @@ function saveTiptapFile() {
 // conflict either.
 const diskBaselines = new Map();
 
-// The server could not write a save (file_save_failed): the bytes on disk are
-// still the old ones, so the baseline set optimistically when it was sent is
-// dropped, or the next save would read the unchanged disk as someone else's
-// edit and offer a conflict. The open file is unsaved again.
-function fileSaveFailed(path) {
-  diskBaselines.delete(path);
+// The server could not write a save (file_save_failed). What its answer says
+// the file holds now (`left`) is the baseline: the watcher's push of those
+// bytes is no change, any other is an outside edit, and the retry passes the
+// check. With nothing said, the baseline goes. The file is unsaved again.
+function fileSaveFailed(path, left) {
+  if (typeof left === 'string') diskBaselines.set(path, left);
+  else diskBaselines.delete(path);
   if (path === currentFilePath) editorDirty = true;
 }
 
@@ -1411,6 +1412,8 @@ let sourcesSeq = 0;
 // What each source's view was last handed, for the external-edit check on a
 // source write, the same check the editors' save makes against the disk.
 const sourceBaselines = new Map();
+// Sources whose failed save could not be put back (see heldForView).
+const sourceHolds = new Map();
 const SOURCES_TIMEOUT_MS = 8000;
 
 function requestSources(path) {
@@ -1494,9 +1497,31 @@ function noteSourceBaselines(list) {
   }
 }
 
+// A list as the view is handed it: a held source still holding exactly what
+// its failed save left is handed as the view's own text; one holding anything
+// else has moved on, so its hold goes. No list is ever held back.
+function heldForView(list) {
+  return list.map((s) => {
+    const hold = s && sourceHolds.get(s.path);
+    if (hold && s.content === hold.left) return { ...s, content: hold.sent };
+    if (hold) sourceHolds.delete(s.path);
+    return s;
+  });
+}
+
 // A reply from the server's sources handler. Only the live mount's watch id
 // is answered; everything else is a mount that has ended.
 function sourcesReplyArrived(d) {
+  // A source save the system refused (with its raw detail) for the live mount's
+  // note: `left` is the baseline, and an incomplete one is held (heldForView).
+  if (d && d.type === 'source_save_refused') {
+    if (!d.detail || activeExtensionMountInfo?.path !== d.path) return;
+    const sent = sourceBaselines.get(d.source);
+    if (typeof d.left === 'string') sourceBaselines.set(d.source, d.left);
+    else sourceBaselines.delete(d.source);
+    if (d.incomplete && typeof d.left === 'string' && typeof sent === 'string') sourceHolds.set(d.source, { left: d.left, sent });
+    return;
+  }
   if (!d || d.watchId !== sourcesWatchId) return;
   if (d.type === 'sources_resolved' && sourcesWaiter && sourcesWaiter.watchId === d.watchId) {
     sourcesWaiter.settle(d);
@@ -1505,11 +1530,12 @@ function sourcesReplyArrived(d) {
   if (d.type === 'sources_changed' && activeExtensionMount && typeof activeExtensionMount.updateSources === 'function') {
     const list = d.ok ? d.sources : [];
     noteSourceBaselines(list);
-    activeExtensionMount.updateSources(list);
+    activeExtensionMount.updateSources(heldForView(list));
   }
 }
 
 function endSourcesWatch() {
+  sourceHolds.clear();
   if (!sourcesWatchId) return;
   const watchId = sourcesWatchId;
   sourcesWatchId = null;
@@ -1534,7 +1560,7 @@ async function saveSourceGuarded(notePath, source, content) {
       onTheirs: () => {
         sourceBaselines.set(source, disk);
         if (activeExtensionMount && typeof activeExtensionMount.updateSources === 'function') {
-          requestSources(notePath).then((r) => { if (r.ok && r.watchId === sourcesWatchId) { noteSourceBaselines(r.sources); activeExtensionMount.updateSources(r.sources); } });
+          requestSources(notePath).then((r) => { if (r.ok && r.watchId === sourcesWatchId) { noteSourceBaselines(r.sources); activeExtensionMount.updateSources(heldForView(r.sources)); } });
         }
       },
       // Mine: an explicit decision to write over it.
@@ -1545,6 +1571,7 @@ async function saveSourceGuarded(notePath, source, content) {
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type: 'save_source', path: notePath, source, content }));
     sourceBaselines.set(source, content);
+    sourceHolds.delete(source);
   }
   return true;
 }

@@ -79,14 +79,14 @@ const MUTATIONS = [
   // Throw again and a refused save is logged by the dispatcher and the editor
   // keeps saying Unsaved.
   [FILES, 'a save the system refuses is answered',
-    "        // saying it is saving. Said plainly, with the raw words as detail.\n        ws.send(JSON.stringify({ type: 'file_save_failed', path: msg.path, ...readable(e, { action: 'save this file' }) }));",
-    '        // saying it is saving. Said plainly, with the raw words as detail.\n        throw e;'],
+    '        // saying it is saving.\n        ws.send(saveFailed(msg.path, e));',
+    '        // saying it is saving.\n        throw e;'],
   [PACKAGES, 'an install error is said through the mapper',
     "    requestId,\n    ...readableFor(operation, error),",
     "    requestId,\n    message: error && error.message ? error.message : String(error),"],
   [SOURCES, 'a source save the system refuses carries its detail',
-    "    send(ws, { type: 'source_save_refused', path: notePath, source, reason: r.message, detail: r.detail });",
-    "    send(ws, { type: 'source_save_refused', path: notePath, source, reason: r.message });"],
+    "    send(ws, { type: 'source_save_refused', path: notePath, source, reason: r.message, detail: r.detail, ...(e && e.restoreFailed ? { incomplete: true } : {}), ...left });",
+    "    send(ws, { type: 'source_save_refused', path: notePath, source, reason: r.message, ...(e && e.restoreFailed ? { incomplete: true } : {}), ...left });"],
   [RUN_DETAIL, 'a run\'s system error is said in plain words',
     '    return described ? described.message : `The reason it gave: ${reason}`;',
     '    return `The reason it gave: ${reason}`;'],

@@ -242,8 +242,11 @@ describe('the file view seam degrades, and never mounts blind', () => {
     // The named-sources half of the seam, cut from source for the same reason.
     // The view state read at mount, cut with it; with no fetcher on the
     // window stub it answers no state at once.
-    const sourcesFns = ['requestSources(path)', 'noteSourceBaselines(list)', 'endSourcesWatch()', 'sourcesReplyArrived(d)', 'fetchViewState(extension, path)']
+    const sourcesFns = ['requestSources(path)', 'noteSourceBaselines(list)', 'heldForView(list)', 'endSourcesWatch()', 'sourcesReplyArrived(d)', 'fetchViewState(extension, path)']
       .map((sig) => cut(new RegExp(`function ${sig.replace(/[()]/g, '\\$&')} \\{[\\s\\S]*?\\n\\}`), sig)).join(';\n');
+    // The named-sources state, sliced from the shipped file so a field added
+    // there cannot be missing here; only the timeout is this suite's own.
+    const sourcesState = cut(/let sourcesWatchId = null;[\s\S]*?(?=const SOURCES_TIMEOUT_MS = )/, 'the named-sources state');
     const surfaced = [];
     const noted = [];
     const paneStub = { classList: { remove() {}, add() {} }, className: '', textContent: '' };
@@ -260,7 +263,7 @@ describe('the file view seam degrades, and never mounts blind', () => {
       'openWikilink', 'destroyActiveFileViewer', 'destroyTiptapEditorIfActive', 'clearTimeout', 'fileSaves',
       `let activeExtensionMount = null; let extensionSeamToken = 0;
        let placedRegions = [];
-       let sourcesWatchId = null; let sourcesWaiter = null; let sourcesSeq = 0; const sourceBaselines = new Map(); const SOURCES_TIMEOUT_MS = 50;
+       ${sourcesState} const SOURCES_TIMEOUT_MS = 50;
        // A socket that records what the page asks and, when a test supplies
        // one, answers get_sources the way the server's handler does.
        const ws = { readyState: 1, send(m) {
