@@ -463,7 +463,7 @@ const EXTENSIONS_PAGE_REPLIES = new Set(['packages_page', 'packages_page_error',
 
 // Said after a failed save's own sentence when its previous content could not
 // be put back either (`incomplete`).
-const INCOMPLETE_SAVE_NOTE = "Your changes are still here, but the file on disk may now be incomplete, so keep this window open until you've saved again.";
+const INCOMPLETE_SAVE_NOTE = 'Your changes are still here, but the file on disk may now be incomplete. Stay on this file and make any edit to save it again.';
 
 function handle(d) {
   // TWO FIELDS, AND THEY ARE NOT INTERCHANGEABLE. `_conversationId` tags a
