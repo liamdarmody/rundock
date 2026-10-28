@@ -4,7 +4,7 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
-## 0.15.7: See What You Approve (2026-10-27)
+## 0.15.7: See What You Approve (2026-10-28)
 
 Connector cards now show who an email goes to and what it says before you allow it, and sends always ask. An expired Claude session reconnects from the app. Code inside an agent's commands no longer raises false cards that stopped routines, and agents now ask before changing the files that decide what runs outside the sandbox.
 
@@ -22,6 +22,7 @@ Connector cards now show who an email goes to and what it says before you allow 
 
 ### Fixed
 
+- **A save the drive cuts short is never reported as saved:** on a nearly full drive, a save could keep only part of a note, lose what it held before, and still say "Saved". This affected the editor and boards from 0.15.4 and extension views from 0.15.0. A save now writes the whole note or says it failed, and when it fails, Rundock puts the note's previous version back. If even that isn't possible, your changes stay on screen and a line says the file on disk may be incomplete. Saves that work are unchanged.
 - **No more false "outside your workspace" cards from code inside a command:** code an agent wrote inside a command (a here-document, `python3 -c`, `node -e`) raised cards for text that only looked like a path, and those cards stopped scheduled routines. Code is now judged by the places it actually names, so real outside paths still ask, and a `cd` partway through a command is followed.
 - **Earlier messages stay in view after a new message:** a conversation whose earlier messages were only in Claude Code's session file (imported, or from before Rundock kept its own record) showed only the newest turn once you sent a message. Nothing was lost on disk. It's all shown now, in order, with Rundock's own internal prompts kept out of view.
 - **A conversation whose Claude Code session has gone no longer gets stuck:** when Claude Code had removed a conversation's stored session, every message, even starting fresh with the same agent, failed with "No conversation found with session ID". Rundock now forgets the old session, starts the agent fresh with the conversation so far, carries over a message you sent in the meantime, and never shows the raw error.
