@@ -6,6 +6,10 @@
 // writes every file whether or not the journal, the backups or the rollback
 // exist, so every recovery guard here is proven by breaking it.
 //
+// The same holds for the in-place replace a save makes, so its guards are
+// here too: a save that keeps only one write call's bytes, or puts nothing
+// back when it fails, still writes every byte on a disk that takes them.
+//
 //   node test/tools/mutate-atomic-write-guards.js            # report
 //   node test/tools/mutate-atomic-write-guards.js --markdown # as a table
 //
@@ -29,6 +33,16 @@ const ROOT = path.join(__dirname, '..', '..');
 const PRIMITIVE = {
   src: path.join(ROOT, 'lib', 'workspace', 'atomic-write.js'),
   suite: 'test/unit/atomic-write.test.js',
+};
+// The replace every editor, board, sidecar and extension save makes, and the
+// extension save that calls it, watched by the suite that cuts writes short.
+const IN_PLACE = {
+  src: path.join(ROOT, 'lib', 'workspace', 'link-safe-write.js'),
+  suite: 'test/unit/short-write-saves.test.js',
+};
+const IN_PLACE_EXTENSION = {
+  src: path.join(ROOT, 'lib', 'workspace', 'extension-file.js'),
+  suite: 'test/unit/short-write-saves.test.js',
 };
 
 // [target, label, the guard as it is written, what it becomes without it]
@@ -67,6 +81,27 @@ const MUTATIONS = [
   [PRIMITIVE, 'the directories a run creates are recorded for recovery to remove',
     '    createdDirs: plannedParents(root, entries),',
     '    createdDirs: [],'],
+  [IN_PLACE, 'a save writes every byte, not only what the first write call took',
+    '    offset += written;',
+    '    offset = bytes.length;'],
+  [IN_PLACE, 'a write call that takes nothing is an error, not a retry',
+    '    if (!(written > 0)) {',
+    '    if (false) {'],
+  [IN_PLACE, 'each write names its position, so the read before it cannot move it',
+    'fs.writeSync(fd, bytes, offset, bytes.length - offset, offset);',
+    'fs.writeSync(fd, bytes, offset, bytes.length - offset);'],
+  [IN_PLACE, 'a save that fails puts back what the file held',
+    '      fs.ftruncateSync(fd, 0);\n      writeAll(fd, previous);\n',
+    ''],
+  [IN_PLACE, 'a restore that fails too never replaces the write\'s own error',
+    "    } catch {\n      if (e && typeof e === 'object') Object.assign(e, { restoreFailed: true });\n    }",
+    '    } catch (restoreError) {\n      throw restoreError;\n    }'],
+  [IN_PLACE, 'the editor\'s save goes through the replace',
+    '    replaceContent(fd, content);\n  } finally {',
+    "    fs.writeSync(fd, content, null, 'utf-8');\n  } finally {"],
+  [IN_PLACE_EXTENSION, 'an extension\'s save goes through the replace',
+    '    replaceContent(fd, content);',
+    "    fs.writeSync(fd, content, null, 'utf-8');"],
 ];
 
 // Guards deliberately NOT mutated, each with the reason. A named exclusion is
