@@ -129,12 +129,15 @@ test.describe('named sources in the app', () => {
     await expect.poll(async () => (await seen(page)).some((m) => m.type === 'init')).toBe(true);
     // The watch hands the view a changed file within one interval, after
     // which a save is no longer against stale bytes; so the edit and the save
-    // race it, and a lost race is simply tried again.
+    // race it, and a lost race is simply tried again. Each attempt waits for
+    // its own answer before the next begins: isVisible() does not wait, so
+    // it could see the banner a previous attempt raised late and read the
+    // file while this attempt's save was still writing it.
     let raised = false;
     for (let attempt = 0; attempt < 6 && !raised; attempt += 1) {
       fs.writeFileSync(path.join(workspace, 'notes', 'a.csv'), `disk edit ${attempt}\n`);
       await frame(page).locator('#save').click();
-      raised = await page.locator('#external-edit-banner').isVisible({ timeout: 1500 }).catch(() => false);
+      raised = await page.locator('#external-edit-banner').waitFor({ state: 'visible', timeout: 1500 }).then(() => true, () => false);
       if (!raised) await page.waitForTimeout(900);
     }
     expect(raised, 'the choice was raised').toBe(true);
