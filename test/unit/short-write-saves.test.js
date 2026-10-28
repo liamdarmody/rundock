@@ -248,6 +248,37 @@ describe('a restore that fails too', () => {
   });
 });
 
+// When the previous content could not be put back either, the answer says so
+// (`incomplete`), so the page can treat what is on disk as its own failed
+// write's rather than as an edit made outside Rundock. A failed save whose
+// restore worked says nothing of the kind.
+describe('a failed save whose previous content could not be put back', () => {
+  const restoreFails = () => scripted(512, enospc(), systemError('EBUSY', 'resource busy or locked'));
+  const restoreWorks = () => scripted(512, enospc(), Infinity);
+  for (const [name, save] of [
+    ['the editor\'s save', (ws) => files.handleSaveFile(ctx, ws, { path: 'notes/a.csv', content: AFTER })],
+    ['a save an extension caused', (ws) => files.handleSaveFile(ctx, ws, { path: 'notes/a.csv', content: AFTER, origin: 'extension' })],
+    ['a view\'s save to a named source', (ws) => sources.handleSaveSource(ctx, ws, { path: 'dash.md', source: 'notes/a.csv', content: AFTER })],
+  ]) {
+    test(`${name} is answered as incomplete only when the restore failed`, (t) => {
+      workspace();
+      const failed = socket();
+      t.mock.method(fs, 'writeSync', restoreFails());
+      save(failed);
+      t.mock.restoreAll();
+      workspace();
+      const restored = socket();
+      t.mock.method(fs, 'writeSync', restoreWorks());
+      save(restored);
+      t.mock.restoreAll();
+      assert.strictEqual(failed.sent.length, 1);
+      assert.strictEqual(failed.sent[0].incomplete, true, 'the restore failed, so what is on disk is the failed write\'s');
+      assert.strictEqual(restored.sent.length, 1);
+      assert.ok(!('incomplete' in restored.sent[0]), 'a file that was put back is not called incomplete');
+    });
+  }
+});
+
 describe('a write that makes no progress', () => {
   test('both saves throw rather than try again, and leave the file as it was', (t) => {
     const dir = workspace();

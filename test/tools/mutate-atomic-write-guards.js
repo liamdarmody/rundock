@@ -44,6 +44,15 @@ const IN_PLACE_EXTENSION = {
   src: path.join(ROOT, 'lib', 'workspace', 'extension-file.js'),
   suite: 'test/unit/short-write-saves.test.js',
 };
+// The handlers that say a failed save could not be put back either.
+const SAVE_ANSWER = {
+  src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'files.js'),
+  suite: 'test/unit/short-write-saves.test.js',
+};
+const SOURCE_SAVE_ANSWER = {
+  src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'sources.js'),
+  suite: 'test/unit/short-write-saves.test.js',
+};
 
 // [target, label, the guard as it is written, what it becomes without it]
 const MUTATIONS = [
@@ -108,6 +117,12 @@ const MUTATIONS = [
   [IN_PLACE_EXTENSION, 'an extension\'s save goes through the replace',
     '    replaceContent(fd, content);',
     "    fs.writeSync(fd, content, null, 'utf-8');"],
+  [SAVE_ANSWER, 'a failed save that could not be put back is answered as incomplete',
+    ', ...(e && e.restoreFailed ? { incomplete: true } : {})',
+    ''],
+  [SOURCE_SAVE_ANSWER, 'a failed source save that could not be put back is answered as incomplete',
+    ', ...(e && e.restoreFailed ? { incomplete: true } : {})',
+    ''],
 ];
 
 // Guards deliberately NOT mutated, each with the reason. A named exclusion is
