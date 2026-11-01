@@ -227,6 +227,9 @@ const REPEAT_HINT_LINK = { src: path.join(ROOT, 'public', 'views', 'settings.js'
 // program: escape strings, here-documents, interpreter code and a `cd` partway
 // through a chain.
 const SHELL_CODE = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/shell-code-boundary.test.js' };
+// The same file, the suite that runs it as its own process: a hook that dies
+// answers nothing, and the runtime carries on as though nothing had objected.
+const HOOK_CRASH = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/hook-never-crashes.test.js' };
 // The same file, the suite that times it: the folder each word starts from is
 // worked out once per command, or the check grows with the square of it.
 const SHELL_TIMING = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/shell-code-timing.test.js' };
@@ -3052,6 +3055,28 @@ const MUTATIONS = [
   [CONSOLE_WIZARD, 'Reconnect: the wizard reads an error the opener never gives',
     '}[res && res.reason];',
     '}[res && res.error];'],
+  // ===== A HOOK THAT DIES ANSWERS NOTHING =====
+  [HOOK_CRASH, 'Hook crash: a class that will not compile is kept, and kills the hook',
+    "out += classCompiles(cls) ? cls : '[^/]';",
+    "out += cls;"],
+  [HOOK_CRASH, 'Hook crash: a class that will not compile matches nothing, so a glob reaches less than it can',
+    "out += classCompiles(cls) ? cls : '[^/]';",
+    "out += classCompiles(cls) ? cls : '(?!)';"],
+  [HOOK_CRASH, 'Hook crash: nothing answers for a failure in the hook',
+    "process.on('uncaughtException', () => {",
+    "process.on('neverEmitted', () => {"],
+  [HOOK_CRASH, 'Hook crash: a failure allows the call instead of refusing it',
+    "hookEventName: 'PreToolUse',\n        permissionDecision: 'deny',\n        permissionDecisionReason: 'Rundock could not",
+    "hookEventName: 'PreToolUse',\n        permissionDecision: 'allow',\n        permissionDecisionReason: 'Rundock could not"],
+  [HOOK_CRASH, 'Hook crash: a failure after a tool has finished refuses too',
+    "const deciding = process.env.RUNDOCK && event === 'PreToolUse';",
+    "const deciding = process.env.RUNDOCK;"],
+  [HOOK_CRASH, 'Hook crash: a failure outside Rundock refuses too',
+    "const deciding = process.env.RUNDOCK && event === 'PreToolUse';",
+    "const deciding = event === 'PreToolUse';"],
+  [HOOK_CRASH, 'Hook crash: the refusal never sees which event it is answering',
+    "input += chunk; hookInput = input;",
+    "input += chunk;"],
   // ===== WHAT THE SHELL CHECK READS IN CODE AND TEXT =====
   [SHELL_CODE, "Shell code: a backslash in a Bash word is a Windows separator again on a POSIX host",
     "    const pmod = winWorld ? path.win32 : flavourFor(t, workspaceRoot, posixText);",

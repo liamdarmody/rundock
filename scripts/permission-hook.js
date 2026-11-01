@@ -14,6 +14,29 @@
  * If the Rundock server is unreachable, allows by default to avoid blocking.
  */
 
+// WHATEVER GOES WRONG IN THIS PROCESS, THE TOOL CALL IS REFUSED. The runtime
+// reads a hook that dies as a hook with nothing to say and carries on, so an
+// exception here would let the call through with every check below skipped.
+// Installed ahead of the requires, so a hook that cannot load refuses too; an
+// unhandled rejection arrives here as well. Outside Rundock this hook decides
+// nothing, and a finished tool has nothing left to refuse.
+let hookInput = '';
+if (require.main === module) {
+  process.on('uncaughtException', () => {
+    let event = 'PreToolUse';
+    try { event = JSON.parse(hookInput).hook_event_name || event; } catch (e) { /* refused below */ }
+    const deciding = process.env.RUNDOCK && event === 'PreToolUse';
+    process.stdout.write(JSON.stringify(!deciding ? {} : {
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        permissionDecision: 'deny',
+        permissionDecisionReason: 'Rundock could not check this request, so it was refused rather than approved on your behalf.',
+      },
+    }));
+    process.exit(0);
+  });
+}
+
 const http = require('http');
 const os = require('os');
 const path = require('path');
@@ -1468,6 +1491,10 @@ function holdsAnswerFiles(resolvedPath, workspaceRoot, foldsCase = hostFoldsCase
   return (name === '.rundock' || name === '.claude') && fs.existsSync(path.join(path.dirname(resolvedPath), '.rundock', 'state.json'));
 }
 
+function classCompiles(cls) {
+  try { new RegExp(cls); return true; } catch (e) { return false; }
+}
+
 // One glob word as the shell matches it: `*` and `?` within a name, and a
 // class `[...]`, where `[!...]` and `[^...]` are classes of what they do not
 // name. A `[` with no `]` after it is the character itself, as in `[ -f x ]`.
@@ -1483,7 +1510,12 @@ function globSegmentRegex(pattern, folds) {
       let body = pattern.slice(i + 1, close);
       const negate = body[0] === '!' || body[0] === '^';
       if (negate) body = body.slice(1);
-      out += `[${negate ? '^' : ''}${body.replace(/[\\\]^]/g, '\\$&')}]`;
+      const cls = `[${negate ? '^' : ''}${body.replace(/[\\\]^]/g, '\\$&')}]`;
+      // A range that runs backwards, as in `[z-a]`, is empty to the shell and an
+      // error to a regular expression. Any one character stands in for such a
+      // class: wider than the shell's, so a glob is never judged to reach less
+      // than it can.
+      out += classCompiles(cls) ? cls : '[^/]';
       i = close;
       continue;
     }
@@ -3126,7 +3158,7 @@ function fetchAgentNotice(done, { check = false } = {}) {
 
 function main() {
 let input = '';
-process.stdin.on('data', chunk => { input += chunk; });
+process.stdin.on('data', chunk => { input += chunk; hookInput = input; });
 process.stdin.on('end', () => {
 // A FINISHED TOOL CALL (PostToolUse), or one that failed (PostToolUseFailure).
 // Nothing is decided here: the server is asked to check the permission files
