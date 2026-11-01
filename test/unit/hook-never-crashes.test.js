@@ -12,7 +12,8 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { spawnSync } = require('node:child_process');
+const http = require('node:http');
+const { spawnSync, spawn } = require('node:child_process');
 
 const HOOK = path.join(__dirname, '..', '..', 'scripts', 'permission-hook.js');
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'hook-crash-')));
@@ -20,12 +21,12 @@ const ws = path.join(root, 'ws');
 fs.mkdirSync(path.join(ws, '.claude'), { recursive: true });
 after(() => { fs.rmSync(root, { recursive: true, force: true }); });
 
-function runHook(payload, { preload, env = {} } = {}) {
+function runHook(payload, { preload, env = {}, timeout = 30000 } = {}) {
   const args = preload ? ['--require', preload, HOOK] : [HOOK];
   const r = spawnSync(process.execPath, args, {
     input: JSON.stringify({ hook_event_name: 'PreToolUse', cwd: ws, session_id: 's', ...payload }),
     encoding: 'utf8',
-    timeout: 30000,
+    timeout,
     env: {
       ...process.env,
       NODE_V8_COVERAGE: '',
@@ -43,6 +44,22 @@ function runHook(payload, { preload, env = {} } = {}) {
   let answer = null;
   try { answer = JSON.parse(r.stdout); } catch (e) { /* asserted by the callers */ }
   return { status: r.status, stderr: r.stderr, answer };
+}
+// The same run with a server to talk to, which has to stay free to answer.
+function runHookAgainst(port, payload, env = {}) {
+  return new Promise((resolve) => {
+    const proc = spawn(process.execPath, [HOOK], {
+      env: { ...process.env, NODE_V8_COVERAGE: '', RUNDOCK: '1', RUNDOCK_PORT: String(port), RUNDOCK_WORKSPACE: ws, RUNDOCK_CONVO_ID: '', RUNDOCK_CODE_MODE: '', RUNDOCK_TEST_SEAMS: '1', RUNDOCK_TEST_PLATFORM: 'darwin', ...env },
+    });
+    let out = '';
+    proc.stdout.on('data', (c) => { out += c; });
+    proc.on('close', (status) => {
+      let answer = null;
+      try { answer = JSON.parse(out); } catch (e) { /* asserted by the callers */ }
+      resolve({ status, answer });
+    });
+    proc.stdin.end(JSON.stringify({ hook_event_name: 'PreToolUse', cwd: ws, session_id: 's', ...payload }));
+  });
 }
 const bash = (command) => ({ tool_name: 'Bash', tool_input: { command } });
 const decision = (r) => r.answer && r.answer.hookSpecificOutput && r.answer.hookSpecificOutput.permissionDecision;
@@ -93,6 +110,75 @@ describe('a word in a command cannot kill the hook', () => {
   test('and only that file', () => {
     assert.strictEqual(decision(runHook(bash('echo x > .q[z-ac]p.json'))), 'allow');
   });
+
+  // The class ends where the shell says it does, and `[:alpha:]` is a class of
+  // its own that a regular expression would read as a list of letters.
+  for (const word of ['.m[[:alpha:]]p.json', '.m[z-a[:alpha:]]p.json', '.m[!]x]p.json', '.m[[.c.]]p.json', '.m[[=c=]]p.json']) {
+    test(`${word} reaches .mcp.json`, () => {
+      assert.strictEqual(decision(runHook(bash(`echo x > ${word}`))), 'deny');
+    });
+  }
+
+  test('a class with a bracket in it does not reach what it cannot name', () => {
+    assert.strictEqual(decision(runHook(bash('echo x > .q[[:alpha:]]p.json'))), 'allow');
+  });
+
+  // Each star can match nothing, so a regular expression tries every way of
+  // sharing a name between them, and a hook out of time gives no answer either.
+  test('a word made of stars cannot stall the hook', () => {
+    const r = runHook(bash(`security dump-keychain; rm .rundock/${'*'.repeat(40)}z`), { timeout: 10000 });
+    assert.strictEqual(r.status, 0, 'the hook ran out of time');
+    assert.strictEqual(decision(r), 'deny');
+  });
+});
+
+describe('a reply cut short is not an answer', () => {
+  // Headers, then nothing: no `end`, no error, and the process simply runs out
+  // of things to wait for, with nothing said.
+  const cutsOff = (url) => new Promise((resolve) => {
+    const server = http.createServer((req, res) => {
+      req.resume();
+      if (!req.url.startsWith(url)) { res.end('{}'); return; }
+      res.writeHead(200, { 'Content-Length': '100' });
+      res.flushHeaders();
+      res.write('{');
+      setImmediate(() => req.socket.destroy());
+    });
+    server.listen(0, '127.0.0.1', () => resolve(server));
+  });
+  const close = (server) => new Promise((resolve) => { server.closeAllConnections(); server.close(resolve); });
+
+  for (const [what, payload] of [
+    ['a Keychain read', bash('security dump-keychain')],
+    ['a connector send', { tool_name: 'mcp__example__send_message', tool_input: {} }],
+    ['a change to .mcp.json', bash('echo x > .mcp.json')],
+  ]) {
+    test(`${what} is refused when the card's reply never finishes`, async () => {
+      const server = await cutsOff('/api/permission-request');
+      try {
+        const r = await runHookAgainst(server.address().port, payload);
+        assert.strictEqual(r.status, 0);
+        assert.strictEqual(decision(r), 'deny');
+      } finally { await close(server); }
+    });
+  }
+
+  test('the same when the notice ahead of it never finishes', async () => {
+    const server = await cutsOff('/api/agent-notice');
+    try {
+      const r = await runHookAgainst(server.address().port, bash('security dump-keychain'), { RUNDOCK_CONVO_ID: 'c1' });
+      assert.strictEqual(decision(r), 'deny');
+    } finally { await close(server); }
+  });
+
+  test('a finished tool still decides nothing', async () => {
+    const server = await cutsOff('/api/agent-notice');
+    try {
+      const r = await runHookAgainst(server.address().port,
+        { hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command: 'echo x' }, tool_response: {} }, { RUNDOCK_CONVO_ID: 'c1' });
+      assert.deepStrictEqual(r.answer, {});
+    } finally { await close(server); }
+  });
 });
 
 describe('anything else that goes wrong in the hook is a refusal', () => {
@@ -131,6 +217,13 @@ describe('anything else that goes wrong in the hook is a refusal', () => {
     const r = runHook(tool, { preload: throwsOnLoad, env: { RUNDOCK: '' } });
     assert.strictEqual(r.status, 0, r.stderr);
     assert.deepStrictEqual(r.answer, {});
+  });
+
+  test('requiring the file adds no listener: only the hook process refuses', () => {
+    const count = `process.listenerCount('uncaughtException') + process.listenerCount('beforeExit')`;
+    const r = spawnSync(process.execPath, ['-e', `const before = ${count}; require(${JSON.stringify(HOOK)}); console.log(${count} - before);`],
+      { encoding: 'utf8', env: { ...process.env, NODE_V8_COVERAGE: '' } });
+    assert.strictEqual(r.stdout.trim(), '0', r.stderr);
   });
 
   test('a failure after a tool has finished decides nothing', () => {

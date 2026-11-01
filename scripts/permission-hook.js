@@ -11,30 +11,36 @@
  * 4. This script receives the decision and tells Claude Code
  *
  * If not running inside Rundock (no RUNDOCK env var), passes through silently.
- * If the Rundock server is unreachable, allows by default to avoid blocking.
+ * If the Rundock server is unreachable, a request that always asks is refused
+ * and any other is allowed, to avoid blocking.
  */
 
-// WHATEVER GOES WRONG IN THIS PROCESS, THE TOOL CALL IS REFUSED. The runtime
-// reads a hook that dies as a hook with nothing to say and carries on, so an
-// exception here would let the call through with every check below skipped.
-// Installed ahead of the requires, so a hook that cannot load refuses too; an
-// unhandled rejection arrives here as well. Outside Rundock this hook decides
-// nothing, and a finished tool has nothing left to refuse.
+// A HOOK THAT STOPS WITHOUT ANSWERING REFUSES THE TOOL CALL. The runtime reads a
+// hook with nothing to say as a hook with no objection and carries on, so an
+// exception here, or a reply that never finishes, would let the call through
+// with the checks below skipped. Every answer in this file ends in
+// process.exit, so `beforeExit` only ever means none was given. Installed ahead
+// of the requires, so a hook that cannot load refuses too; an unhandled
+// rejection arrives here as well. Outside Rundock this hook decides nothing, and
+// a finished tool has nothing left to refuse. Input that cannot be read at all
+// is handled where it is parsed, below.
 let hookInput = '';
+function refuseUnanswered() {
+  let event = 'PreToolUse';
+  try { event = JSON.parse(hookInput).hook_event_name || event; } catch (e) { /* refused below */ }
+  const deciding = process.env.RUNDOCK && event === 'PreToolUse';
+  process.stdout.write(JSON.stringify(!deciding ? {} : {
+    hookSpecificOutput: {
+      hookEventName: 'PreToolUse',
+      permissionDecision: 'deny',
+      permissionDecisionReason: 'Rundock could not check this request, so it was refused rather than approved on your behalf.',
+    },
+  }));
+  process.exit(0);
+}
 if (require.main === module) {
-  process.on('uncaughtException', () => {
-    let event = 'PreToolUse';
-    try { event = JSON.parse(hookInput).hook_event_name || event; } catch (e) { /* refused below */ }
-    const deciding = process.env.RUNDOCK && event === 'PreToolUse';
-    process.stdout.write(JSON.stringify(!deciding ? {} : {
-      hookSpecificOutput: {
-        hookEventName: 'PreToolUse',
-        permissionDecision: 'deny',
-        permissionDecisionReason: 'Rundock could not check this request, so it was refused rather than approved on your behalf.',
-      },
-    }));
-    process.exit(0);
-  });
+  process.on('uncaughtException', refuseUnanswered);
+  process.on('beforeExit', refuseUnanswered);
 }
 
 const http = require('http');
@@ -1495,6 +1501,24 @@ function classCompiles(cls) {
   try { new RegExp(cls); return true; } catch (e) { return false; }
 }
 
+// The `]` that closes the class opening at `open`, found as the shell finds it:
+// one first in the class is a member, and one inside `[:alpha:]`, `[.x.]` or
+// `[=x=]`, or after a backslash, closes nothing. -1 if no `]` does.
+function classEnd(pattern, open) {
+  let i = open + 1;
+  if (pattern[i] === '!' || pattern[i] === '^') i++;
+  if (pattern[i] === ']') i++;
+  for (; i < pattern.length; i++) {
+    if (pattern[i] === ']') return i;
+    if (pattern[i] === '\\') { i++; continue; }
+    if (pattern[i] === '[' && ':.='.includes(pattern[i + 1])) {
+      const end = pattern.indexOf(`${pattern[i + 1]}]`, i + 2);
+      if (end >= 0) i = end + 1;
+    }
+  }
+  return -1;
+}
+
 // One glob word as the shell matches it: `*` and `?` within a name, and a
 // class `[...]`, where `[!...]` and `[^...]` are classes of what they do not
 // name. A `[` with no `]` after it is the character itself, as in `[ -f x ]`.
@@ -1502,20 +1526,22 @@ function globSegmentRegex(pattern, folds) {
   let out = '';
   for (let i = 0; i < pattern.length; i++) {
     const ch = pattern[i];
-    if (ch === '*') { out += '[^/]*'; continue; }
+    // One star for a run of them: each can match nothing, so a regular expression
+    // would try every way of sharing a name between them and never finish.
+    if (ch === '*') { if (!out.endsWith('[^/]*')) out += '[^/]*'; continue; }
     if (ch === '?') { out += '[^/]'; continue; }
     if (ch === '[') {
-      const close = pattern.indexOf(']', i + 2);
+      const close = classEnd(pattern, i);
       if (close < 0) { out += '\\['; continue; }
       let body = pattern.slice(i + 1, close);
       const negate = body[0] === '!' || body[0] === '^';
       if (negate) body = body.slice(1);
       const cls = `[${negate ? '^' : ''}${body.replace(/[\\\]^]/g, '\\$&')}]`;
       // A range that runs backwards, as in `[z-a]`, is empty to the shell and an
-      // error to a regular expression. Any one character stands in for such a
-      // class: wider than the shell's, so a glob is never judged to reach less
-      // than it can.
-      out += classCompiles(cls) ? cls : '[^/]';
+      // error to a regular expression, and `[:alpha:]` and its kin mean nothing
+      // to one. Any one character stands in for such a class: wider than the
+      // shell's, so it never narrows what the glob reaches.
+      out += !/\[[:.=]/.test(body) && classCompiles(cls) ? cls : '[^/]';
       i = close;
       continue;
     }
@@ -3194,7 +3220,7 @@ fetchAgentNotice((agentNotice) => {
   try {
     data = JSON.parse(input);
   } catch (e) {
-    // Bad input: pass through
+    // Bad input: pass through, since nothing says what it was asking for.
     process.stdout.write(JSON.stringify({}));
     process.exit(0);
   }
