@@ -112,7 +112,7 @@ The catch-up window is the calendar day for daily routines and the weekday for w
 
 Catch-up means routines run late, not on time. A 05:00 briefing on a machine opened at 09:00 runs at 09:00. If the timing matters rather than the fact that it ran, see the always-on options below.
 
-The scheduler runs each routine by spawning a headless Claude Code subprocess with the routine's prompt as the input message. The agent slug is passed so Claude Code loads the correct system prompt. The subprocess runs with `--dangerously-skip-permissions` because there is no user available to approve tool calls in real time.
+The scheduler runs each routine by spawning a headless Claude Code subprocess with the routine's prompt as the input message. The agent's name is passed, as it is in a conversation, so Claude Code loads that agent's file and applies any `tools:` line in it. That includes the orchestrator's routines. The subprocess runs with `--dangerously-skip-permissions` because there is no user available to approve tool calls in real time.
 
 If you want routines to fire while you are away from your computer, see [Always-on routines: VPS or Claude routines](#always-on-routines-vps-or-claude-routines) for two practical paths.
 

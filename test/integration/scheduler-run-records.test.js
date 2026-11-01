@@ -125,7 +125,9 @@ before(async () => {
     // a routine that reported a failure. The delay holds it open past the
     // synchronous tick, the same as the keeper rule above.
     { match: { agent: 'crasher' }, delayMs: 200, crash: 1 },
-    { match: { agent: 'mismatched' }, turn: [{ text: 'mismatched ran' }] },
+    // By the frontmatter name, which is what the child is started with: the id
+    // is a file name, and Claude Code does not know agents by their files.
+    { match: { agent: 'Mismatched Display Name' }, turn: [{ text: 'mismatched ran' }] },
   ]);
   // No rules: the codex stub answers an unmatched prompt with an ordinary turn
   // that completes, which is the successful path on that runtime.
@@ -851,7 +853,7 @@ test('a start that throws while the record store is unwritable still fails safel
       'the end-of-tick bookkeeping still ran, so the pass did not end at the thrower');
 
     assert.ok(await settled(MISMATCH), 'the run that did start finished');
-    assert.ok(h.promptsFor('mismatched').includes(MISMATCH_BODY),
+    assert.ok(h.promptsFor('Mismatched Display Name').includes(MISMATCH_BODY),
       'and it really did the work, rather than only being recorded as having started');
   } finally {
     fs.rmSync(runsDir(), { force: true });
