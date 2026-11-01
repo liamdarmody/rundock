@@ -1501,22 +1501,12 @@ function classCompiles(cls) {
   try { new RegExp(cls); return true; } catch (e) { return false; }
 }
 
-// The `]` that closes the class opening at `open`, found as the shell finds it:
-// one first in the class is a member, and one inside `[:alpha:]`, `[.x.]` or
-// `[=x=]`, or after a backslash, closes nothing. -1 if no `]` does.
+// The `]` that closes the class opening at `open`: a `]` first in the class is a
+// member, unless it is the only one there is.
 function classEnd(pattern, open) {
-  let i = open + 1;
-  if (pattern[i] === '!' || pattern[i] === '^') i++;
-  if (pattern[i] === ']') i++;
-  for (; i < pattern.length; i++) {
-    if (pattern[i] === ']') return i;
-    if (pattern[i] === '\\') { i++; continue; }
-    if (pattern[i] === '[' && ':.='.includes(pattern[i + 1])) {
-      const end = pattern.indexOf(`${pattern[i + 1]}]`, i + 2);
-      if (end >= 0) i = end + 1;
-    }
-  }
-  return -1;
+  const first = '!^'.includes(pattern[open + 1]) ? open + 2 : open + 1;
+  const close = pattern.indexOf(']', first + 1);
+  return close >= 0 ? close : pattern.indexOf(']', open + 2);
 }
 
 // One glob word as the shell matches it: `*` and `?` within a name, and a
@@ -1531,6 +1521,10 @@ function globSegmentRegex(pattern, folds) {
     if (ch === '*') { if (!out.endsWith('[^/]*')) out += '[^/]*'; continue; }
     if (ch === '?') { out += '[^/]'; continue; }
     if (ch === '[') {
+      // A `[:`, `[.` or `[=` inside a class: bash and zsh read these differently,
+      // and neither as a regular expression would, so the rest of the word stands
+      // for anything rather than be read too narrowly for one of them.
+      if (/^\[[!^]?\]?[^\]]*\[[:.=]/.test(pattern.slice(i))) { out += '[^/]*'; break; }
       const close = classEnd(pattern, i);
       if (close < 0) { out += '\\['; continue; }
       let body = pattern.slice(i + 1, close);
@@ -1538,10 +1532,9 @@ function globSegmentRegex(pattern, folds) {
       if (negate) body = body.slice(1);
       const cls = `[${negate ? '^' : ''}${body.replace(/[\\\]^]/g, '\\$&')}]`;
       // A range that runs backwards, as in `[z-a]`, is empty to the shell and an
-      // error to a regular expression, and `[:alpha:]` and its kin mean nothing
-      // to one. Any one character stands in for such a class: wider than the
-      // shell's, so it never narrows what the glob reaches.
-      out += !/\[[:.=]/.test(body) && classCompiles(cls) ? cls : '[^/]';
+      // error to a regular expression. Any one character stands in for such a
+      // class: wider than the shell's, so it never narrows what the glob reaches.
+      out += classCompiles(cls) ? cls : '[^/]';
       i = close;
       continue;
     }
@@ -3176,6 +3169,8 @@ function fetchAgentNotice(done, { check = false } = {}) {
     let body = '';
     res.on('data', (c) => { body += c; if (body.length > 8192) { req.destroy(); finish(null); } });
     res.on('end', () => { let text = null; try { text = JSON.parse(body).text; } catch (e) { /* no line */ } finish(text); });
+    // A reply cut short never reaches `end`.
+    res.on('close', () => finish(null));
   });
   req.on('error', () => finish(null));
   req.on('timeout', () => { req.destroy(); finish(null); });

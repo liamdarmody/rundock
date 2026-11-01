@@ -113,8 +113,16 @@ describe('a word in a command cannot kill the hook', () => {
 
   // The class ends where the shell says it does, and `[:alpha:]` is a class of
   // its own that a regular expression would read as a list of letters.
-  for (const word of ['.m[[:alpha:]]p.json', '.m[z-a[:alpha:]]p.json', '.m[!]x]p.json', '.m[[.c.]]p.json', '.m[[=c=]]p.json']) {
-    test(`${word} reaches .mcp.json`, () => {
+  //
+  // Commands run under bash or zsh, and the two part ways on a class holding a
+  // `[`: zsh reads `[.` and `[=` as plain members and a lone `[!]` as any one
+  // character, so each of these names a protected file in at least one of them.
+  for (const word of [
+    '.m[[:alpha:]]p.json', '.m[z-a[:alpha:]]p.json', '.m[!]x]p.json', '.m[[.c.]]p.json', '.m[[=c=]]p.json',
+    '.m[[.c.]p.json', '.m[[=c=]p.json', '.m[!]p.json', '.m[^[==]p.json', '.m[[=c]p[.=]json',
+    '.rundock/permis[!]ions.json', '.rundock/st[[.a.]te.json',
+  ]) {
+    test(`${word} reaches the file it can name`, () => {
       assert.strictEqual(decision(runHook(bash(`echo x > ${word}`))), 'deny');
     });
   }
@@ -168,6 +176,16 @@ describe('a reply cut short is not an answer', () => {
     try {
       const r = await runHookAgainst(server.address().port, bash('security dump-keychain'), { RUNDOCK_CONVO_ID: 'c1' });
       assert.strictEqual(decision(r), 'deny');
+    } finally { await close(server); }
+  });
+
+  // The notice is only ever a line for the agent: losing it changes no answer.
+  test('a notice cut short does not refuse an ordinary call', async () => {
+    const server = await cutsOff('/api/agent-notice');
+    try {
+      const r = await runHookAgainst(server.address().port,
+        { tool_name: 'Read', tool_input: { file_path: path.join(ws, 'note.md') } }, { RUNDOCK_CONVO_ID: 'c1' });
+      assert.strictEqual(decision(r), 'allow');
     } finally { await close(server); }
   });
 
