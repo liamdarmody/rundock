@@ -195,8 +195,21 @@ describe('the persona journeys ask the page rather than sleep', () => {
 
   test('every conversation is started through the helper, with the agent it names', () => {
     assert.ok(!SRC.includes('window.startConversation('), 'no conversation is started straight in the page');
-    assert.ok(SRC.includes("await startConversationWith(page, 'chief-of-staff');"));
+    assert.ok(SRC.includes("await startConversationWith(page, 'default');"));
     assert.ok(SRC.includes("await startConversationWith(page, 'rundock-guide');"));
     assert.ok(!SRC.includes('waitForTimeout(500)'), 'the half-second sleeps after starting one are gone');
+  });
+
+  // The roster calls an agent with `order: 0` `default`, whatever its file is
+  // called, so a wait for the file's name can never end. Only the release gate
+  // runs this journey, so a wrong id here is found at the gate unless this
+  // holds the journey's own file to the rule the roster uses.
+  test('the orchestrator the journey creates is asked for by its id in the roster', () => {
+    const { agentIsDefault, parseAgentFrontmatter } = require('../../lib/agents/discovery.js');
+    const file = /---\\nname: chief-of-staff\\n[\s\S]*?\\n---/.exec(SRC);
+    assert.ok(file, 'the journey writes an orchestrator file');
+    const meta = parseAgentFrontmatter(file[0].replace(/\\n/g, '\n'));
+    assert.strictEqual(agentIsDefault(meta), true, 'its file makes it the default agent, so its id in the roster is default');
+    assert.ok(SRC.includes("await startConversationWith(page, 'default');"), 'and the journey asks for that id');
   });
 });
