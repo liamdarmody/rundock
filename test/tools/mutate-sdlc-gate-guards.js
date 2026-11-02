@@ -544,8 +544,8 @@ const MUTATIONS = [
     "    const connected = await waitForPage(page);",
     "    await page.waitForTimeout(1500); const connected = { ok: true };"],
   [PERSONAS, "the delegation journey starts its conversation through the helper",
-    "      const withCos = await startConversationWith(page, 'chief-of-staff');",
-    "      const withCos = { ok: true, detail: '' }; await page.evaluate(() => window.startConversation('chief-of-staff'));"],
+    "      const withCos = await startConversationWith(page, 'default');",
+    "      const withCos = { ok: true, detail: '' }; await page.evaluate(() => window.startConversation('default'));"],
 
   // ===== THE MUTATION SCOPE: WHAT A CHANGE CAN REACH =====
   // Comparing against HEAD instead of the merge base is the defect that made

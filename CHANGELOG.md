@@ -4,7 +4,7 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
-## 0.15.7: See What You Approve (2026-11-01)
+## 0.15.7: See What You Approve (2026-11-02)
 
 Connector cards now show who an email goes to and what it says before you allow it, and in Notes mode a Claude Code agent's connector action with send as a whole word in its name always asks. An expired Claude session reconnects from the app. Code in a here-document raises fewer of the false cards that stopped routines, and agents now ask before changing the files that decide what runs outside the sandbox.
 

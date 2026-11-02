@@ -280,7 +280,9 @@ async function newUserPersona() {
       // with that agent: the team is on disk before the roster naming it has
       // reached the page, and a conversation started before then opens with
       // another agent (see page-ready.mjs).
-      const withCos = await startConversationWith(page, 'chief-of-staff');
+      // By `default`, not by its file's name: the roster gives an agent with
+      // `order: 0` that id, whatever the file is called.
+      const withCos = await startConversationWith(page, 'default');
       if (withCos.ok) await sendAndWaitTurn(page, workspace, 'PERSONA-NU ask scout to research something');
       const delegated = withCos.ok && await waitFor(() => page.locator('.msg-bubble', { hasText: 'PERSONA-NU-SCOUT-REPLY' }).count().then(c => c > 0), 45000);
       record('NEW-USER first delegation works in the fresh workspace', !!delegated, withCos.detail);
