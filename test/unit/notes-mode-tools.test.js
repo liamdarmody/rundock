@@ -2,8 +2,10 @@
 // THE NOTES-MODE LIST, AS ONE VALUE.
 //
 // Notes mode keeps an agent from writing files that run as code. Claude Code
-// enforces that through one --disallowed-tools value, built in one place.
-// These tests pin the value itself.
+// enforces that through one --disallowed-tools value, built in one place, and
+// it has two readers: every conversation spawn and every routine spawn. These
+// tests pin the value itself, and the scheduler's reader before the server
+// wires it.
 //
 // What the value has to contain is decided by how Claude Code reads its rules,
 // which was measured rather than assumed: a path rule matches only under
@@ -14,9 +16,11 @@
 const { test, describe } = require('node:test');
 const assert = require('node:assert');
 
-// That the server hands every Notes-mode conversation exactly this value is
-// pinned on the real spawn arguments, in
-// test/integration/spawn-argv-freeze.test.js.
+// server.js is deliberately not loaded here: it wires the scheduler when it is
+// required, and the last test below is about the scheduler before anything
+// wires it. That a conversation and a routine are handed this same value is
+// pinned on their real spawn arguments, in
+// test/integration/scheduler-notes-mode-block.test.js.
 const mode = require('../../lib/workspace/mode.js');
 
 const RULE = /^(Write|Edit)\(\*\.([a-z]+)\)$/;
@@ -64,3 +68,14 @@ describe('the Notes-mode list', () => {
   });
 });
 
+describe('the scheduler, before anything wires it', () => {
+  // The server wires the scheduler's reader at boot. A routine that somehow
+  // started before that, or in a process that never wires it, is held to the
+  // restrictive mode rather than to none.
+  test('reads the Notes list', () => {
+    const scheduler = require('../../lib/scheduler.js');
+    const defaults = scheduler.wireSchedulerDeps({});
+    assert.strictEqual(typeof defaults.getDisallowedTools, 'function', 'the scheduler has a reader for the list');
+    assert.strictEqual(defaults.getDisallowedTools(), mode.NOTES_DISALLOWED_TOOLS);
+  });
+});

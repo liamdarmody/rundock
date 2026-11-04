@@ -254,6 +254,10 @@ describe('spawn argv freeze', () => {
     assert.deepStrictEqual(maskArgv(inv[0].argv), [
       '--add-dir', '<add-dir>',
       '--settings', '<settings>',
+      // The workspace mode's list, as a conversation gets it, and BEFORE
+      // --print: the flag takes every argument up to the next flag, so after
+      // the last one it would take the prompt below as one more tool.
+      '--disallowed-tools', DISALLOWED_TOOLS_KNOWLEDGE,
       '--print',
       '--output-format', 'stream-json',
       '--verbose',

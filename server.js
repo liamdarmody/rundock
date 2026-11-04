@@ -698,6 +698,9 @@ schedulerLib.wireSchedulerDeps({
   // The client set is read through an accessor: wss is created later at
   // boot. The spawn plumbing is a direct lib require inside the scheduler.
   getWssClients: () => wss.clients,
+  // The same reader every conversation spawn uses, so a routine is handed the
+  // same list for the same mode.
+  getDisallowedTools,
 });
 const httpRouter = require('./lib/http-router.js');
 const claudeConsole = require('./lib/runtime/claude-console.js');
