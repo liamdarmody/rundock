@@ -91,6 +91,28 @@ const NOT_FILE_WRITERS = [
   'WebFetch', 'WebSearch', 'Workflow',
 ];
 
+// WHICH TOOLS WERE CHECKED, AND HOW.
+//
+// Which tools: Claude Code 2.1.318 offers three tools that write a file's
+// contents: Write, Edit and NotebookEdit. MultiEdit is not a tool in this
+// version, so the Notes list does not name it. Write and Edit are held by the
+// list's Edit(*.ext) rules, because Claude Code matches a path rule only
+// under Edit(...) and that rule covers every tool that writes a file.
+// NotebookEdit is named bare, which turns it off.
+//
+// How: test/tools/claude-cli-notes-mode-probe.js, run by hand, runs the
+// installed CLI and reads the tool list from each run's init event. Each run
+// had a fresh empty folder and home folder, with user, project and local
+// settings, plugins and MCP servers kept out (--setting-sources "",
+// --strict-mcp-config), a placeholder API key, and a stand-in for the messages
+// API on 127.0.0.1, so no account was used and no model was called. The list
+// was read once with no --disallowed-tools and once with the Notes list. Other
+// cases in the same record show the list refusing a Write and an Edit of an
+// executable file.
+//
+// The record: test/fixtures/claude-cli-notes-mode.json, made with Claude Code
+// 2.1.318. Its claudeCode field names the version and its method field the
+// method; the first test below checks that both are there.
 describe('the tools the installed Claude Code offers', () => {
   test('were measured on a named version, by a stated method', () => {
     assert.match(RECORD.claudeCode, /^\d+\.\d+\.\d+$/);
