@@ -1,0 +1,832 @@
+{
+  "about": "What the installed Claude Code refused under the Notes-mode list, measured by test/tools/claude-cli-notes-mode-probe.js. test/unit/stub-claude-matches-cli.test.js holds the stub to it.",
+  "claudeCode": "2.1.318",
+  "method": "The real CLI in a routine spawn shape (--print --output-format stream-json --verbose --dangerously-skip-permissions), in a fresh empty folder with an empty home folder, with user, project and local settings, plugins and MCP servers kept out (--setting-sources \"\", --strict-mcp-config), a placeholder API key, and a stand-in for the messages API on 127.0.0.1 that asked for each case's tool calls in turn. No account was used and no model was called. A tool inventory is the tool list in the run's init event. Paths are relative to the case's folder.",
+  "notesList": "Write(*.js),Write(*.jsx),Write(*.ts),Write(*.tsx),Write(*.py),Write(*.sh),Write(*.bash),Write(*.rb),Write(*.pl),Write(*.exe),Write(*.dll),Write(*.so),Edit(*.js),Edit(*.jsx),Edit(*.ts),Edit(*.tsx),Edit(*.py),Edit(*.sh),Edit(*.bash),Edit(*.rb),Edit(*.pl),Edit(*.exe),Edit(*.dll),Edit(*.so),NotebookEdit",
+  "conversation": {
+    "permissionMode": "acceptEdits",
+    "allowedTools": "Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,ToolSearch,Agent,Skill",
+    "how": "A case marked shape \"conversation\" ran as server.js spawns a conversation: no --print, the prompt on stdin as stream-json, --include-partial-messages, and this permission mode and allowed-tools list in place of --dangerously-skip-permissions."
+  },
+  "cases": [
+    {
+      "name": "tool inventory, no list",
+      "list": null,
+      "steps": [],
+      "observed": {
+        "exitCode": 0,
+        "tools": [
+          "Task",
+          "Bash",
+          "CronCreate",
+          "CronDelete",
+          "CronList",
+          "Edit",
+          "EnterWorktree",
+          "ExitWorktree",
+          "ListAgents",
+          "Monitor",
+          "NotebookEdit",
+          "Read",
+          "ReportFindings",
+          "ScheduleWakeup",
+          "SendMessage",
+          "Skill",
+          "TaskStop",
+          "ToolSearch",
+          "WebFetch",
+          "WebSearch",
+          "Workflow",
+          "Write"
+        ],
+        "results": []
+      }
+    },
+    {
+      "name": "tool inventory, Notes list",
+      "list": "notes",
+      "steps": [],
+      "observed": {
+        "exitCode": 0,
+        "tools": [
+          "Task",
+          "Bash",
+          "CronCreate",
+          "CronDelete",
+          "CronList",
+          "Edit",
+          "EnterWorktree",
+          "ExitWorktree",
+          "ListAgents",
+          "Monitor",
+          "Read",
+          "ReportFindings",
+          "ScheduleWakeup",
+          "SendMessage",
+          "Skill",
+          "TaskStop",
+          "ToolSearch",
+          "WebFetch",
+          "WebSearch",
+          "Workflow",
+          "Write"
+        ],
+        "results": []
+      }
+    },
+    {
+      "name": "a Write(path) rule alone",
+      "list": "Write(*.py)",
+      "steps": [
+        {
+          "tool": "Write",
+          "file": "tool.py",
+          "content": "print(\"hello\")\n"
+        }
+      ],
+      "observe": [
+        "tool.py"
+      ],
+      "observed": {
+        "exitCode": 0,
+        "results": [
+          {
+            "refused": false
+          }
+        ],
+        "files": {
+          "tool.py": "print(\"hello\")\n"
+        }
+      }
+    },
+    {
+      "name": "an Edit(path) rule alone",
+      "list": "Edit(*.py)",
+      "steps": [
+        {
+          "tool": "Write",
+          "file": "tool.py",
+          "content": "print(\"hello\")\n"
+        },
+        {
+          "tool": "Write",
+          "file": "sub/tool.py",
+          "content": "print(\"hello\")\n"
+        },
+        {
+          "tool": "Write",
+          "file": "note.md",
+          "content": "a note\n"
+        }
+      ],
+      "observe": [
+        "tool.py",
+        "sub/tool.py",
+        "note.md"
+      ],
+      "observed": {
+        "exitCode": 0,
+        "results": [
+          {
+            "refused": true,
+            "message": "<tool_use_error>File is in a directory that is denied by your permission settings.</tool_use_error>"
+          },
+          {
+            "refused": true,
+            "message": "<tool_use_error>File is in a directory that is denied by your permission settings.</tool_use_error>"
+          },
+          {
+            "refused": false
+          }
+        ],
+        "files": {
+          "tool.py": null,
+          "sub/tool.py": null,
+          "note.md": "a note\n"
+        }
+      }
+    },
+    {
+      "name": "Notes list, file writes",
+      "list": "notes",
+      "steps": [
+        {
+          "tool": "Write",
+          "file": "tool.py",
+          "content": "print(\"hello\")\n"
+        },
+        {
+          "tool": "Write",
+          "file": "build.sh",
+          "content": "echo hello\n"
+        },
+        {
+          "tool": "Write",
+          "file": "lib.dll",
+          "content": "binary\n"
+        },
+        {
+          "tool": "Write",
+          "file": "lib.so",
+          "content": "binary\n"
+        },
+        {
+          "tool": "NotebookEdit",
+          "file": "analysis.ipynb",
+          "content": "print(1)"
+        },
+        {
+          "tool": "Write",
+          "file": "summary.md",
+          "content": "a note\n"
+        },
+        {
+          "tool": "Write",
+          "file": "list.txt",
+          "content": "a list\n"
+        },
+        {
+          "tool": "Write",
+          "file": "data.json",
+          "content": "{}\n"
+        }
+      ],
+      "observe": [
+        "tool.py",
+        "build.sh",
+        "lib.dll",
+        "lib.so",
+        "analysis.ipynb",
+        "summary.md",
+        "list.txt",
+        "data.json"
+      ],
+      "observed": {
+        "exitCode": 0,
+        "results": [
+          {
+            "refused": true,
+            "message": "<tool_use_error>File is in a directory that is denied by your permission settings.</tool_use_error>"
+          },
+          {
+            "refused": true,
+            "message": "<tool_use_error>File is in a directory that is denied by your permission settings.</tool_use_error>"
+          },
+          {
+            "refused": true,
+            "message": "<tool_use_error>File is in a directory that is denied by your permission settings.</tool_use_error>"
+          },
+          {
+            "refused": true,
+            "message": "<tool_use_error>File is in a directory that is denied by your permission settings.</tool_use_error>"
+          },
+          {
+            "refused": true,
+            "message": "<tool_use_error>Error: No such tool available: NotebookEdit. NotebookEdit is disabled for this session, in subagents as well as here.</tool_use_error>"
+          },
+          {
+            "refused": false
+          },
+          {
+            "refused": false
+          },
+          {
+            "refused": false
+          }
+        ],
+        "files": {
+          "tool.py": null,
+          "build.sh": null,
+          "lib.dll": null,
+          "lib.so": null,
+          "analysis.ipynb": null,
+          "summary.md": "a note\n",
+          "list.txt": "a list\n",
+          "data.json": "{}\n"
+        }
+      }
+    },
+    {
+      "name": "Notes list, edits",
+      "list": "notes",
+      "seed": {
+        "tool.py": "print(1)\n",
+        "note.md": "old text\n"
+      },
+      "steps": [
+        {
+          "tool": "Read",
+          "file": "tool.py"
+        },
+        {
+          "tool": "Edit",
+          "file": "tool.py",
+          "old": "print(1)",
+          "new": "print(2)"
+        },
+        {
+          "tool": "Read",
+          "file": "note.md"
+        },
+        {
+          "tool": "Edit",
+          "file": "note.md",
+          "old": "old text",
+          "new": "new text"
+        }
+      ],
+      "observe": [
+        "tool.py",
+        "note.md"
+      ],
+      "observed": {
+        "exitCode": 0,
+        "results": [
+          {
+            "refused": false
+          },
+          {
+            "refused": true,
+            "message": "<tool_use_error>File is in a directory that is denied by your permission settings.</tool_use_error>"
+          },
+          {
+            "refused": false
+          },
+          {
+            "refused": false
+          }
+        ],
+        "files": {
+          "tool.py": "print(1)\n",
+          "note.md": "new text\n"
+        }
+      }
+    },
+    {
+      "name": "Notes list, a retried write",
+      "list": "notes",
+      "steps": [
+        {
+          "tool": "Write",
+          "file": "tool.py",
+          "content": "print(\"hello\")\n"
+        },
+        {
+          "tool": "Write",
+          "file": "tool.py",
+          "content": "print(\"hello\")\n"
+        },
+        {
+          "tool": "Write",
+          "file": "first.md",
+          "content": "a note\n"
+        }
+      ],
+      "observe": [
+        "tool.py",
+        "first.md"
+      ],
+      "observed": {
+        "exitCode": 0,
+        "results": [
+          {
+            "refused": true,
+            "message": "<tool_use_error>File is in a directory that is denied by your permission settings.</tool_use_error>"
+          },
+          {
+            "refused": true,
+            "message": "<tool_use_error>File is in a directory that is denied by your permission settings.</tool_use_error>"
+          },
+          {
+            "refused": false
+          }
+        ],
+        "files": {
+          "tool.py": null,
+          "first.md": "a note\n"
+        }
+      }
+    },
+    {
+      "name": "Notes list, the same work saved as a note",
+      "list": "notes",
+      "steps": [
+        {
+          "tool": "Write",
+          "file": "report.py",
+          "content": "Quarterly figures\nRevenue: 12\n"
+        },
+        {
+          "tool": "Write",
+          "file": "report.md",
+          "content": "Quarterly figures\nRevenue: 12\n"
+        }
+      ],
+      "observe": [
+        "report.py",
+        "report.md"
+      ],
+      "observed": {
+        "exitCode": 0,
+        "results": [
+          {
+            "refused": true,
+            "message": "<tool_use_error>File is in a directory that is denied by your permission settings.</tool_use_error>"
+          },
+          {
+            "refused": false
+          }
+        ],
+        "files": {
+          "report.py": null,
+          "report.md": "Quarterly figures\nRevenue: 12\n"
+        }
+      }
+    },
+    {
+      "name": "Notes list, shell renames and deletes",
+      "list": "notes",
+      "seed": {
+        "tool.py": "x\n",
+        "other.sh": "x\n",
+        "note.md": "x\n",
+        "old.md": "x\n",
+        "gone.md": "x\n"
+      },
+      "steps": [
+        {
+          "tool": "Bash",
+          "command": "rm tool.py"
+        },
+        {
+          "tool": "Bash",
+          "command": "mv other.sh other.md"
+        },
+        {
+          "tool": "Bash",
+          "command": "mv note.md note.py"
+        },
+        {
+          "tool": "Bash",
+          "command": "mv old.md new.md"
+        },
+        {
+          "tool": "Bash",
+          "command": "rm gone.md"
+        }
+      ],
+      "observe": [
+        "tool.py",
+        "other.sh",
+        "other.md",
+        "note.md",
+        "note.py",
+        "old.md",
+        "new.md",
+        "gone.md"
+      ],
+      "observed": {
+        "exitCode": 0,
+        "results": [
+          {
+            "refused": true,
+            "message": "Permission to use Bash with command rm tool.py has been denied."
+          },
+          {
+            "refused": true,
+            "message": "Permission to use Bash with command mv other.sh other.md has been denied."
+          },
+          {
+            "refused": true,
+            "message": "Permission to use Bash with command mv note.md note.py has been denied."
+          },
+          {
+            "refused": false
+          },
+          {
+            "refused": false
+          }
+        ],
+        "files": {
+          "tool.py": "x\n",
+          "other.sh": "x\n",
+          "other.md": null,
+          "note.md": "x\n",
+          "note.py": null,
+          "old.md": null,
+          "new.md": "x\n",
+          "gone.md": null
+        }
+      }
+    },
+    {
+      "name": "Notes list, shell renames and deletes, the hook answering allow",
+      "list": "notes",
+      "hook": "allow",
+      "seed": {
+        "tool.py": "x\n",
+        "other.sh": "x\n",
+        "note.md": "x\n",
+        "old.md": "x\n",
+        "gone.md": "x\n"
+      },
+      "steps": [
+        {
+          "tool": "Bash",
+          "command": "rm tool.py"
+        },
+        {
+          "tool": "Bash",
+          "command": "mv other.sh other.md"
+        },
+        {
+          "tool": "Bash",
+          "command": "mv note.md note.py"
+        },
+        {
+          "tool": "Bash",
+          "command": "mv old.md new.md"
+        },
+        {
+          "tool": "Bash",
+          "command": "rm gone.md"
+        }
+      ],
+      "observe": [
+        "tool.py",
+        "other.sh",
+        "other.md",
+        "note.md",
+        "note.py",
+        "old.md",
+        "new.md",
+        "gone.md"
+      ],
+      "observed": {
+        "exitCode": 0,
+        "results": [
+          {
+            "refused": true,
+            "message": "Permission to use Bash with command rm tool.py has been denied."
+          },
+          {
+            "refused": true,
+            "message": "Permission to use Bash with command mv other.sh other.md has been denied."
+          },
+          {
+            "refused": true,
+            "message": "Permission to use Bash with command mv note.md note.py has been denied."
+          },
+          {
+            "refused": false
+          },
+          {
+            "refused": false
+          }
+        ],
+        "files": {
+          "tool.py": "x\n",
+          "other.sh": "x\n",
+          "other.md": null,
+          "note.md": "x\n",
+          "note.py": null,
+          "old.md": null,
+          "new.md": "x\n",
+          "gone.md": null
+        },
+        "hookAsked": [
+          {
+            "tool": "Bash",
+            "about": "rm tool.py"
+          },
+          {
+            "tool": "Bash",
+            "about": "mv other.sh other.md"
+          },
+          {
+            "tool": "Bash",
+            "about": "mv note.md note.py"
+          },
+          {
+            "tool": "Bash",
+            "about": "mv old.md new.md"
+          },
+          {
+            "tool": "Bash",
+            "about": "rm gone.md"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Notes list, file writes, the hook answering allow",
+      "list": "notes",
+      "hook": "allow",
+      "steps": [
+        {
+          "tool": "Write",
+          "file": "tool.py",
+          "content": "print(\"hello\")\n"
+        },
+        {
+          "tool": "Write",
+          "file": "note.md",
+          "content": "a note\n"
+        }
+      ],
+      "observe": [
+        "tool.py",
+        "note.md"
+      ],
+      "observed": {
+        "exitCode": 0,
+        "results": [
+          {
+            "refused": true,
+            "message": "<tool_use_error>File is in a directory that is denied by your permission settings.</tool_use_error>"
+          },
+          {
+            "refused": false
+          }
+        ],
+        "files": {
+          "tool.py": null,
+          "note.md": "a note\n"
+        },
+        "hookAsked": [
+          {
+            "tool": "Write",
+            "about": "note.md"
+          }
+        ]
+      }
+    },
+    {
+      "name": "a conversation, Notes list, shell renames and deletes, the hook answering allow",
+      "list": "notes",
+      "hook": "allow",
+      "shape": "conversation",
+      "seed": {
+        "tool.py": "x\n",
+        "other.sh": "x\n",
+        "note.md": "x\n",
+        "old.md": "x\n",
+        "gone.md": "x\n"
+      },
+      "steps": [
+        {
+          "tool": "Bash",
+          "command": "rm tool.py"
+        },
+        {
+          "tool": "Bash",
+          "command": "mv other.sh other.md"
+        },
+        {
+          "tool": "Bash",
+          "command": "mv note.md note.py"
+        },
+        {
+          "tool": "Bash",
+          "command": "mv old.md new.md"
+        },
+        {
+          "tool": "Bash",
+          "command": "rm gone.md"
+        }
+      ],
+      "observe": [
+        "tool.py",
+        "other.sh",
+        "other.md",
+        "note.md",
+        "note.py",
+        "old.md",
+        "new.md",
+        "gone.md"
+      ],
+      "observed": {
+        "exitCode": 0,
+        "results": [
+          {
+            "refused": true,
+            "message": "Permission to use Bash with command rm tool.py has been denied."
+          },
+          {
+            "refused": true,
+            "message": "Permission to use Bash with command mv other.sh other.md has been denied."
+          },
+          {
+            "refused": true,
+            "message": "Permission to use Bash with command mv note.md note.py has been denied."
+          },
+          {
+            "refused": false
+          },
+          {
+            "refused": false
+          }
+        ],
+        "files": {
+          "tool.py": "x\n",
+          "other.sh": "x\n",
+          "other.md": null,
+          "note.md": "x\n",
+          "note.py": null,
+          "old.md": null,
+          "new.md": "x\n",
+          "gone.md": null
+        },
+        "hookAsked": [
+          {
+            "tool": "Bash",
+            "about": "rm tool.py"
+          },
+          {
+            "tool": "Bash",
+            "about": "mv other.sh other.md"
+          },
+          {
+            "tool": "Bash",
+            "about": "mv note.md note.py"
+          },
+          {
+            "tool": "Bash",
+            "about": "mv old.md new.md"
+          },
+          {
+            "tool": "Bash",
+            "about": "rm gone.md"
+          }
+        ]
+      }
+    },
+    {
+      "name": "a conversation, Notes list, file writes, the hook answering allow",
+      "list": "notes",
+      "hook": "allow",
+      "shape": "conversation",
+      "steps": [
+        {
+          "tool": "Write",
+          "file": "tool.py",
+          "content": "print(\"hello\")\n"
+        },
+        {
+          "tool": "Write",
+          "file": "note.md",
+          "content": "a note\n"
+        }
+      ],
+      "observe": [
+        "tool.py",
+        "note.md"
+      ],
+      "observed": {
+        "exitCode": 0,
+        "results": [
+          {
+            "refused": true,
+            "message": "<tool_use_error>File is in a directory that is denied by your permission settings.</tool_use_error>"
+          },
+          {
+            "refused": false
+          }
+        ],
+        "files": {
+          "tool.py": null,
+          "note.md": "a note\n"
+        },
+        "hookAsked": [
+          {
+            "tool": "Write",
+            "about": "note.md"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Notes list, a note's shell delete, the hook answering deny",
+      "list": "notes",
+      "hook": "deny",
+      "seed": {
+        "gone.md": "x\n"
+      },
+      "steps": [
+        {
+          "tool": "Bash",
+          "command": "rm gone.md"
+        }
+      ],
+      "observe": [
+        "gone.md"
+      ],
+      "observed": {
+        "exitCode": 0,
+        "results": [
+          {
+            "refused": true,
+            "message": "PreToolUse:Bash hook error: Denied"
+          }
+        ],
+        "files": {
+          "gone.md": "x\n"
+        },
+        "hookAsked": [
+          {
+            "tool": "Bash",
+            "about": "rm gone.md"
+          }
+        ]
+      }
+    },
+    {
+      "name": "no list",
+      "list": null,
+      "seed": {
+        "tool.py": "x\n"
+      },
+      "steps": [
+        {
+          "tool": "Bash",
+          "command": "rm tool.py"
+        },
+        {
+          "tool": "Write",
+          "file": "lib.dll",
+          "content": "binary\n"
+        }
+      ],
+      "observe": [
+        "tool.py",
+        "lib.dll"
+      ],
+      "observed": {
+        "exitCode": 0,
+        "results": [
+          {
+            "refused": false
+          },
+          {
+            "refused": false
+          }
+        ],
+        "files": {
+          "tool.py": null,
+          "lib.dll": "binary\n"
+        }
+      }
+    },
+    {
+      "name": "Notes list placed just before the prompt",
+      "list": "notes",
+      "placement": "before-prompt",
+      "steps": [],
+      "observed": {
+        "exitCode": 1,
+        "error": "Error: Input must be provided either through stdin or as a prompt argument when using --print",
+        "results": []
+      }
+    }
+  ]
+}

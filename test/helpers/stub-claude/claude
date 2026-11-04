@@ -45,6 +45,12 @@
 //     "refusalAfterInit": false }    // send the init envelope before refusing
 // A crash rule may give "stderrChunks": [...] to write its stderr in pieces.
 // Any rule may give "exitAfterTurn": n to exit with code n after its turn.
+// A rule may give "shell": ["rm a.md", "mv b.md c.md"], commands the run
+// gives its shell tool. Each is put to the PreToolUse hooks the --settings
+// file names first, as Claude Code does, and really runs unless a hook or the
+// deny rules refuse it (see THE TOOL FLAGS below). `writes` entries are held
+// to the same deny rules, and a `writes` entry may give "content", the exact
+// text the write carries.
 // First matching rule wins; rules are re-read from disk on every message so
 // tests can rewrite the script mid-scenario. The stub also appends every
 // invocation to `stub-invocations.jsonl` (cwd) for spawn-arg assertions.
@@ -116,6 +122,162 @@ try {
     },
   }) + '\n');
 } catch (e) { /* logging is best-effort */ }
+
+// THE TOOL FLAGS, READ AS CLAUDE CODE READS THEM.
+//
+// Both are variadic in the real CLI (`--allowed-tools <tools...>` and
+// `--disallowed-tools <tools...>` in its help): each takes every argument
+// after it up to the next one starting with a dash. So a list placed where
+// only the prompt follows it takes the prompt as one more tool, and a --print
+// run is left with no input.
+const VARIADIC_FLAGS = new Set(['--allowed-tools', '--disallowed-tools']);
+function variadicValues(flag) {
+  const out = [];
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] !== flag) continue;
+    for (let j = i + 1; j < argv.length && !argv[j].startsWith('-'); j++) out.push(argv[j]);
+  }
+  return out;
+}
+
+// The deny rules, and what they refuse. Measured against a real run in the
+// routine's spawn shape (--print --dangerously-skip-permissions, driven by a
+// stand-in for the API), not read from documentation:
+//   - a path rule matches only under Edit(...), and an Edit(path) rule covers
+//     every tool that writes a file. Claude Code's own rule check says a
+//     Write(path) rule never matches, and a run given only Write(*.py) wrote
+//     tool.py;
+//   - a bare tool name turns that tool off;
+//   - a shell `rm` or `mv` that names a path an Edit(path) rule covers is
+//     refused, even when the permission hook answered allow, in a routine's
+//     spawn shape and in a conversation's;
+//   - a write a path rule refuses is never put to the hook; a shell command is
+//     put to it first, and refused afterwards all the same.
+// The measurement is committed, with the tool that makes it:
+// test/fixtures/claude-cli-notes-mode.json, written by
+// test/tools/claude-cli-notes-mode-probe.js, and
+// test/unit/stub-claude-matches-cli.test.js holds this stub to it. The
+// refusal messages below are the CLI's own words from that record.
+// Only the shapes Rundock writes are modelled: a bare name, and `*.ext`, which
+// has no slash and so matches a file of that name at any depth, as gitignore
+// patterns do. Any other shape stops the run with a line on stderr rather than
+// quietly matching nothing, so no test can pass on a rule the stub ignored.
+const FILE_WRITING_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
+function splitRules(values) {
+  // "Comma or space-separated", and a rule's own parentheses may hold either.
+  const out = [];
+  for (const value of values) {
+    let depth = 0;
+    let cur = '';
+    for (const ch of value) {
+      if (ch === '(') depth++;
+      if (ch === ')') depth--;
+      if (depth === 0 && (ch === ',' || /\s/.test(ch))) {
+        if (cur) out.push(cur);
+        cur = '';
+        continue;
+      }
+      cur += ch;
+    }
+    if (cur) out.push(cur);
+  }
+  return out;
+}
+function notModelled(what) {
+  // Synchronous, so the line is out before the exit.
+  fs.writeSync(2, `stub claude: ${what} is not modelled\n`);
+  process.exit(2);
+}
+const DENY_RULES = splitRules(variadicValues('--disallowed-tools')).map((text) => {
+  const m = /^([A-Za-z]+)(?:\((.*)\))?$/.exec(text);
+  const ext = m && m[2] !== undefined ? /^\*(\.[^/*?[\]]+)$/.exec(m[2]) : null;
+  if (!m || (m[2] !== undefined && !ext)) notModelled(`the deny rule ${text}`);
+  return { tool: m[1], ext: ext ? ext[1] : null };
+});
+function deniedTool(tool) {
+  return DENY_RULES.some(r => r.ext === null && r.tool === tool);
+}
+function deniedPath(file) {
+  return DENY_RULES.some(r => r.tool === 'Edit' && r.ext !== null && path.basename(file).endsWith(r.ext));
+}
+function disabledTool(tool) {
+  return `<tool_use_error>Error: No such tool available: ${tool}. ${tool} is disabled for this session, in subagents as well as here.</tool_use_error>`;
+}
+const REFUSED_PATH = '<tool_use_error>File is in a directory that is denied by your permission settings.</tool_use_error>';
+// What the CLI says back to a write the deny rules refuse, or null.
+function writeRefusal(tool, file) {
+  if (deniedTool(tool)) return disabledTool(tool);
+  if (FILE_WRITING_TOOLS.has(tool) && deniedPath(file)) return REFUSED_PATH;
+  return null;
+}
+function deniedWrite(tool, file) {
+  return writeRefusal(tool, file) !== null;
+}
+
+// THE PreToolUse HOOKS, run as Claude Code runs them: each command hook whose
+// matcher matches the tool, through the shell, with the call as JSON on stdin
+// and this process's environment (which is how Rundock's hook finds its
+// server). An answer of deny refuses the call, in the CLI's words for it.
+// Allow, or no answer, leaves it to the deny rules, which still refuse what
+// they cover.
+// Only shell entries are put to the hooks here: a file-tool write never is,
+// which matches the CLI for every write a path rule refuses (it never asks the
+// hook about one) and leaves the hook unasked for the writes it allows. An
+// answer of ask, and a hook exiting 2, are not modelled.
+const SETTINGS = (() => {
+  const value = argValue('--settings');
+  if (!value) return {};
+  try { return JSON.parse(value.trim().startsWith('{') ? value : fs.readFileSync(value, 'utf8')); } catch (e) { return {}; }
+})();
+function preToolUseHooks(tool) {
+  const entries = (SETTINGS.hooks && Array.isArray(SETTINGS.hooks.PreToolUse)) ? SETTINGS.hooks.PreToolUse : [];
+  return entries.filter((e) => {
+    const m = e && typeof e.matcher === 'string' ? e.matcher : '';
+    if (!m || m === '*') return true;
+    try { return new RegExp(`^(?:${m})$`).test(tool); } catch (err) { return m === tool; }
+  }).flatMap(e => (Array.isArray(e.hooks) ? e.hooks : [])).filter(h => h && h.type === 'command' && h.command);
+}
+function askHooks(tool, input) {
+  const { spawnSync } = require('child_process');
+  for (const hook of preToolUseHooks(tool)) {
+    if (hook.shell && hook.shell !== 'bash') notModelled(`a hook run through ${hook.shell}`);
+    const r = spawnSync('/bin/sh', ['-c', hook.command], {
+      cwd: process.cwd(), env: process.env, encoding: 'utf8',
+      timeout: (Number(hook.timeout) || 60) * 1000,
+      input: JSON.stringify({
+        session_id: FIXED_SESSION || RESUME || '', cwd: process.cwd(), permission_mode: argValue('--permission-mode') || 'default',
+        hook_event_name: 'PreToolUse', tool_name: tool, tool_input: input,
+      }),
+    });
+    if (r.status === 2) notModelled('a hook exiting 2');
+    let out = {};
+    try { out = JSON.parse(r.stdout || '{}'); } catch (e) { /* no answer */ }
+    const said = out && out.hookSpecificOutput ? out.hookSpecificOutput : {};
+    if (said.permissionDecision === 'deny') return `PreToolUse:${tool} hook error: ${said.permissionDecisionReason || ''}`;
+    if (said.permissionDecision === 'ask') notModelled('a hook answering ask');
+  }
+  return null;
+}
+
+// A rule's `shell` entries: `rm` and `mv` only, the two whose refusal was
+// measured, with plain space-separated paths. Each is put to the hooks, then
+// to the deny rules, and really runs against the disk unless one of them
+// refuses it, in which case nothing is touched. Returns what the CLI would
+// have said back, which the transcript records.
+function runShell(command) {
+  const [verb, ...words] = String(command).trim().split(/\s+/);
+  if (verb !== 'rm' && verb !== 'mv') notModelled(`the shell command ${verb}`);
+  const paths = words.filter(w => !w.startsWith('-')).map(w => path.resolve(process.cwd(), w));
+  if (deniedTool('Bash')) return { command, refusal: disabledTool('Bash') };
+  const hookRefusal = askHooks('Bash', { command, description: 'shell' });
+  if (hookRefusal !== null) return { command, refusal: hookRefusal };
+  if (paths.some(deniedPath)) return { command, refusal: `Permission to use Bash with command ${command} has been denied.` };
+  try {
+    if (verb === 'rm') for (const p of paths) fs.rmSync(p, { force: true });
+    else fs.renameSync(paths[0], paths[1]);
+  } catch (e) { return { command, refusal: null, failed: e.message }; }
+  return { command, refusal: null };
+}
 
 // The server SIGKILLs stubs mid-stream by design (interception, auto-return).
 // Never crash on a broken pipe.
@@ -332,7 +494,7 @@ function beginTranscript(rule, prompt) {
   putTranscript(rule, [
     tfx.prompt(FIXED_SESSION, String(prompt)),
     ...(rule.writes || []).map(w => tfx.unanswered(FIXED_SESSION, {
-      tool: w.tool || 'Write', file: path.resolve(process.cwd(), w.file), outcome: w.outcome || 'create', at: w.at,
+      tool: w.tool || 'Write', file: path.resolve(process.cwd(), w.file), outcome: w.outcome || 'create', at: w.at, content: w.content,
     })),
   ]);
 }
@@ -343,8 +505,9 @@ function beginTranscript(rule, prompt) {
 // for. The file writes are not conditional on a transcript being kept: a run
 // whose transcript goes missing still changed the workspace, which is the case
 // that separates "changed nothing" from "nobody can say".
-function finishTranscript(rule, prompt) {
+function finishTranscript(rule, prompt, shellRan = []) {
   const lines = [tfx.prompt(FIXED_SESSION, String(prompt))];
+  for (const ran of shellRan) lines.push(tfx.shellTool(FIXED_SESSION, ran));
   for (const w of rule.writes || []) {
     const file = path.resolve(process.cwd(), w.file);
     // WHETHER THIS WAS A CREATION OR AN OVERWRITE IS DECIDED BY THE DISK, not
@@ -353,21 +516,26 @@ function finishTranscript(rule, prompt) {
     // assert an edit against a run that created something, which is the field
     // the whole created-versus-edited distinction lives in.
     let outcome = w.outcome === 'error' ? 'error' : null;
+    // A write the deny rules refuse never reaches the disk, and its tool call
+    // ends in an error carrying the CLI's own words for the refusal.
+    const refusal = outcome === 'error' ? null : writeRefusal(w.tool || 'Write', file);
+    if (refusal !== null) outcome = 'error';
     if (outcome !== 'error') {
       try {
         outcome = fs.existsSync(file) ? 'update' : 'create';
         fs.mkdirSync(path.dirname(file), { recursive: true });
-        fs.writeFileSync(file, `${outcome}:${w.file}\n`);
+        fs.writeFileSync(file, w.content != null ? String(w.content) : `${outcome}:${w.file}\n`);
       } catch (e) { /* the transcript still records what was attempted */ }
     }
-    lines.push(tfx.completed(FIXED_SESSION, { tool: w.tool || 'Write', file, outcome, at: w.at }));
+    lines.push(tfx.completed(FIXED_SESSION, { tool: w.tool || 'Write', file, outcome, at: w.at, content: w.content, refusal }));
   }
   for (const block of rule.turn || []) if (block.text != null) lines.push(tfx.say(FIXED_SESSION, block.text));
   putTranscript(rule, lines);
 }
 
 function emitTurn(rule, prompt) {
-  if (FIXED_SESSION) finishTranscript(rule, prompt);
+  const shellRan = (rule.shell || []).map(runShell);
+  if (FIXED_SESSION) finishTranscript(rule, prompt, shellRan);
   const events = buildEnvelopes(rule);
   // A run that ends normally can still have written to stderr: warnings,
   // progress, deprecation notices. Modelled because stderr is a pipe like any
@@ -502,9 +670,13 @@ if (PRINT && !REFUSED_RESUME) {
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a.startsWith('--')) {
+      // A variadic flag takes everything up to the next flag, the prompt
+      // included if nothing else stands between them.
+      if (VARIADIC_FLAGS.has(a)) {
+        while (i + 1 < argv.length && !argv[i + 1].startsWith('-')) i++;
       // flags with values (skip the value); boolean flags have no value
-      if (['--model', '--agent', '--resume', '--output-format', '--input-format',
-        '--permission-mode', '--allowed-tools', '--disallowed-tools',
+      } else if (['--model', '--agent', '--resume', '--output-format', '--input-format',
+        '--permission-mode',
         '--append-system-prompt', '--settings', '--mcp-config', '--add-dir',
         '--session-id'].includes(a)) i++;
     } else {
@@ -513,5 +685,10 @@ if (PRINT && !REFUSED_RESUME) {
   }
   if (positional.length > 0) {
     handleUserMessage(positional[positional.length - 1]);
+  } else if (argValue('--input-format') !== 'stream-json') {
+    // What the real CLI says, and how it ends, when a --print run has no
+    // prompt and nothing on stdin: before any turn, with exit code 1.
+    writeErr('Error: Input must be provided either through stdin or as a prompt argument when using --print\n');
+    exitWhenWritten(1);
   }
 }

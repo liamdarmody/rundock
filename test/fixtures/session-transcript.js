@@ -58,19 +58,22 @@ function say(sessionId, text, at = '2026-08-22T19:15:05.000Z') {
  * for one that did not. `at` stamps the ASK, which is when the run touched
  * the file.
  */
-function fileTool(sessionId, { tool = 'Write', file, outcome = 'create', at = '2026-08-22T19:15:10.000Z', resultPath } = {}) {
+function fileTool(sessionId, { tool = 'Write', file, outcome = 'create', at = '2026-08-22T19:15:10.000Z', resultPath, content = 'body', refusal = null } = {}) {
   const id = toolId();
   const inputKey = FILE_TOOLS[tool].input;
   const resultKey = FILE_TOOLS[tool].result;
   const ask = line({
     type: 'assistant', sessionId, timestamp: at,
-    message: { role: 'assistant', content: [{ type: 'tool_use', id, name: tool, input: { [inputKey]: file, content: 'body' } }] },
+    message: { role: 'assistant', content: [{ type: 'tool_use', id, name: tool, input: { [inputKey]: file, content: content == null ? 'body' : content } }] },
   });
+  // `refusal` is what the runtime said back to a call it refused, in its own
+  // words; without one, an error is the operating system's.
+  const said = refusal || `EPERM: operation not permitted, open '${file}.tmp'`;
   const answered = outcome === 'error'
     ? line({
       type: 'user', sessionId, timestamp: at,
-      toolUseResult: `Error: EPERM: operation not permitted, open '${file}.tmp'`,
-      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, is_error: true, content: `EPERM: operation not permitted, open '${file}.tmp'` }] },
+      toolUseResult: `Error: ${said}`,
+      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, is_error: true, content: said }] },
     })
     : line({
       type: 'user', sessionId, timestamp: at,
@@ -137,6 +140,24 @@ function sidechainSay(sessionId, text, at = '2026-08-22T19:15:22.000Z') {
   });
 }
 
+/**
+ * A shell command and what came back, as the stub `claude` records one. Made
+ * for the stub's own transcript, not captured: the session reader reads file
+ * tools only and passes over this, and the tests that read it want the
+ * refusal, which is the CLI's own words (test/fixtures/claude-cli-notes-mode.json).
+ */
+function shellTool(sessionId, { command, refusal = null, at = '2026-08-22T19:15:09.000Z' } = {}) {
+  const id = toolId();
+  return line({
+    type: 'assistant', sessionId, timestamp: at,
+    message: { role: 'assistant', content: [{ type: 'tool_use', id, name: 'Bash', input: { command, description: 'shell' } }] },
+  }) + line({
+    type: 'user', sessionId, timestamp: at,
+    toolUseResult: refusal ? `Error: ${refusal}` : { stdout: '', stderr: '', interrupted: false },
+    message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, ...(refusal ? { is_error: true } : {}), content: refusal || '' }] },
+  });
+}
+
 /** An ask with no answer yet: the shape a transcript has WHILE a tool runs. */
 function unanswered(sessionId, opts) {
   return fileTool(sessionId, opts).ask;
@@ -148,4 +169,4 @@ function completed(sessionId, opts) {
   return ask + answered;
 }
 
-module.exports = { prompt, say, fileTool, unanswered, completed, delegate, sidechainWrite, sidechainSay };
+module.exports = { prompt, say, fileTool, shellTool, unanswered, completed, delegate, sidechainWrite, sidechainSay };

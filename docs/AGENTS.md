@@ -140,7 +140,7 @@ Rundock has two workspace modes that change agent behaviour at the platform leve
 
 | Mode | What it changes |
 |---|---|
-| **Notes** (default) | Restricts file writes and edits for executable file types (`.js`, `.py`, `.sh`, etc) so agents cannot accidentally write or modify code in a knowledge-work workspace. Tool permission cards are shown for most operations. |
+| **Notes** (default) | Restricts file writes and edits for executable file types (`.js`, `.py`, `.sh`, `.dll`, `.so`, etc) and turns off notebook editing, so agents cannot accidentally write or modify code in a knowledge-work workspace. Claude Code applies the same restriction to renaming or deleting one of those files with `mv` or `rm`, even when its card is approved; renaming or deleting a note is unaffected. It holds for routines as well as conversations. Tool permission cards are shown for most operations. |
 | **Code** | Removes the executable-file write restriction. Auto-approves common build and dev tools so agents can iterate on code without permission card interruptions. Used for software project workspaces. |
 
 Mode is set in Settings under Permissions, where it is the question "What are you working on?", or by editing `.rundock/state.json` directly. The stored values are `notes` and `code`; a workspace an earlier release stored as `knowledge` is read as Notes:
