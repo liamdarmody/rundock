@@ -684,7 +684,10 @@ function secretsReachedBy(word, { starts, unfollowed, relative, entries, folds, 
   for (const b of starts) {
     const r = canonicalize(pmod.resolve(b, word), pmod);
     for (const e of entries) {
-      if (glob ? globReachesPath(r, e.reach, folds, pmod) || globReachesPath(r, e.path, folds, pmod) : foldCase(r, folds) === foldCase(e.path, folds)) hits.add(e.path);
+      const hit = glob
+        ? e.reach.some(x => globReachesPath(r, x, folds, pmod)) || globReachesPath(r, e.path, folds, pmod)
+        : foldCase(r, folds) === foldCase(e.path, folds);
+      if (hit) hits.add(e.path);
     }
   }
   if (unfollowed && relative) for (const e of entries) if (named(e)) hits.add(e.path);
@@ -702,12 +705,22 @@ function globReachesPath(resolvedGlob, target, folds, pmod = path) {
   const prefix = dir.endsWith(pmod.sep) ? dir : dir + pmod.sep;
   if (!t.startsWith(prefix)) return false;
   const names = String(target).slice(prefix.length).split(/[\\/]+/);
-  const match = (p, n) => {
-    if (!p.length) return !n.length;
-    if (p[0] === '**') return match(p.slice(1), n) || (n.length > 0 && match(p, n.slice(1)));
-    return n.length > 0 && globSegmentRegex(p[0], folds).test(n[0]) && match(p.slice(1), n.slice(1));
+  // Each pattern position against each name position once, so a run of `**`
+  // costs their product, not every way of sharing the names between them.
+  const pat = segs.slice(at);
+  const res = pat.map(p => (p === '**' ? null : globSegmentRegex(p, folds)));
+  const memo = new Map();
+  const match = (i, j) => {
+    const key = i * (names.length + 1) + j;
+    if (memo.has(key)) return memo.get(key);
+    let r;
+    if (i === pat.length) r = j === names.length;
+    else if (pat[i] === '**') r = match(i + 1, j) || (j < names.length && match(i, j + 1));
+    else r = j < names.length && res[i].test(names[j]) && match(i + 1, j + 1);
+    memo.set(key, r);
+    return r;
   };
-  return match(segs.slice(at), names);
+  return match(0, 0);
 }
 
 // `within`: an entry is a folder, matched with everything under it.
@@ -1415,8 +1428,16 @@ function movesAndLoops(text, offset = 0, depth = 0, acc = { moves: [], loops: []
     }
     let i = 0;
     while (i < words.length - 1 && COMMAND_LEADS.has(words[i].raw)) i++;
-    const lead = words[i] ? words[i].text : '';
+    const plain = i === 0;
     for (let k = 0; k <= i && k < words.length; k++) if (COMPOUND_OPENS.has(words[k].raw)) compound++;
+    // `builtin cd` and `command cd` move the shell as `cd` does. `command -v
+    // cd` only names it, and is no move.
+    let describes = false;
+    if (words[i] && (words[i].text === 'builtin' || words[i].text === 'command') && words[i + 1]) {
+      i++;
+      while (words[i + 1] && words[i].text.startsWith('-')) { if (/^-[a-zA-Z]*[vV]/.test(words[i].text)) describes = true; i++; }
+    }
+    const lead = describes ? '' : (words[i] ? words[i].text : '');
     if (lead === 'cd' || lead === 'pushd') {
       let j = i + 1;
       while (words[j] && /^-[LPe@]+$/.test(words[j].text)) j++;
@@ -1425,7 +1446,7 @@ function movesAndLoops(text, offset = 0, depth = 0, acc = { moves: [], loops: []
       // loop or a `case`, not after `||`, and not in a pipeline or the
       // background, where it runs in a shell of its own.
       const after = segs[si + 1] ? segs[si + 1].op : '';
-      const certain = depth === 0 && compound === 0 && i === 0
+      const certain = depth === 0 && compound === 0 && plain
         && ['', ';', '\n', '&&'].includes(seg.op) && !['|', '&'].includes(after);
       if (words[j]) acc.moves.push({ target: words[j].text, at, certain, lead, nested: depth > 0 });
       // A `cd` with nothing after it goes home. A bare `pushd` swaps the top of
@@ -2761,8 +2782,16 @@ function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), 
       topSegs.push({ at: Math.max(0, start), op: seg.op });
     }
   }
-  const segmentAt = (at) => { let k = -1; for (let i = 0; i < topSegs.length; i++) if (topSegs[i].at <= at) k = i; return k; };
-  const onlyAnds = (from, to) => { for (let i = from + 1; i <= to; i++) if (topSegs[i].op !== '&&') return false; return true; };
+  const segmentAt = (at) => {
+    let lo = 0;
+    let hi = topSegs.length - 1;
+    let k = -1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (topSegs[mid].at <= at) { k = mid; lo = mid + 1; } else hi = mid - 1;
+    }
+    return k;
+  };
   const movesInOrder = scanned.moves.slice().sort((a, b) => a.at - b.at);
   // Each folder is looked at once, and past a few dozen places the shell
   // could be in, the answer is "cannot tell", which asks.
@@ -2772,44 +2801,97 @@ function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), 
     return isFolder.get(p);
   };
   const MAX_PLACES = 64;
-  const possibleFoldersAt = (at) => {
-    if (!everyMoveSeen) return null;
-    const w = segmentAt(at);
-    let branches = [{ cur: startOf(path), prev: null }];
+  // ONE PASS, LEFT TO RIGHT, for every segment. For a word in segment w, a
+  // move before the last segment w is reached by anything but `&&` may have
+  // failed without stopping the word, so it adds its landing; a move after it
+  // must have worked for the word to run, so it replaces the folders. Hence
+  // two running sets: every move so far applied as "may fail", and the moves
+  // since the last break applied as "worked" on top of the first set as it was
+  // at that break. Null from the first move this cannot place onwards.
+  let foldersBySegment = null;
+  const firstNestedAt = new Map();
+  const moveTo = (b, m) => {
+    if (m.target === '-') return m.lead === 'cd' && b.prev ? b.prev : null;
+    if (!followable(m.target)) return null;
+    let t = m.target;
+    for (const re of HOME_PREFIX) { if (re.test(t)) { t = t.replace(re, home); break; } }
+    return canonicalize(path.resolve(b.cur, t));
+  };
+  // `worked`: whether the move must have succeeded for the word to run.
+  const applyMove = (branches, m, worked) => {
+    const next = [];
+    for (const b of branches) {
+      const to = moveTo(b, m);
+      if (to === null) return null;
+      const isDir = folderThere(to);
+      if (isDir) next.push({ cur: to, prev: b.cur });
+      if (!worked || !isDir) next.push(b);
+    }
+    const out = [...new Map(next.map(b => [`${b.cur}\0${b.prev}`, b])).values()];
+    return out.length > MAX_PLACES ? null : out;
+  };
+  const computeFolders = () => {
+    const n = topSegs.length;
+    const out = new Array(n).fill(null);
+    if (!everyMoveSeen || !n) return out;
+    const movesIn = Array.from({ length: n }, () => []);
     for (const m of movesInOrder) {
       const k = segmentAt(m.at);
-      if (k < 0 || k > w || m.at >= at) continue;
-      // A `cd`'s own target is read before it moves. A move in a group earlier
-      // in the word's own segment is one this cannot place.
-      if (k === w) { if (m.nested) return null; continue; }
-      if (!m.certain) return null;
-      const must = onlyAnds(k, w);
-      const next = [];
-      for (const b of branches) {
-        let to;
-        if (m.target === '-') {
-          if (m.lead !== 'cd' || !b.prev) return null;
-          to = b.prev;
-        } else {
-          if (!followable(m.target)) return null;
-          let t = m.target;
-          for (const re of HOME_PREFIX) { if (re.test(t)) { t = t.replace(re, home); break; } }
-          to = canonicalize(path.resolve(b.cur, t));
-        }
-        const isDir = folderThere(to);
-        if (isDir) next.push({ cur: to, prev: b.cur });
-        if (!must || !isDir) next.push(b);
-      }
-      const keyOf = (b) => `${b.cur}\0${b.prev}`;
-      branches = [...new Map(next.map(b => [keyOf(b), b])).values()];
-      if (branches.length > MAX_PLACES) return null;
+      if (k < 0) continue;
+      movesIn[k].push(m);
+      if (m.nested && !firstNestedAt.has(k)) firstNestedAt.set(k, m.at);
     }
-    return [...new Set(branches.map(b => b.cur))];
+    let mayFail = [{ cur: startOf(path), prev: null }];
+    let worked = mayFail;
+    for (let w = 0; w < n; w++) {
+      if (w > 0) {
+        // The moves of the segment before take effect here.
+        for (const m of movesIn[w - 1]) {
+          if (!m.certain) return out;
+          if (mayFail) mayFail = applyMove(mayFail, m, false);
+          if (worked) worked = applyMove(worked, m, true);
+        }
+        if (!mayFail && !worked) return out;
+        if (topSegs[w].op !== '&&') worked = mayFail;
+      }
+      if (!worked) return out;
+      out[w] = [...new Set(worked.map(b => b.cur))];
+    }
+    return out;
+  };
+  const possibleFoldersAt = (at) => {
+    if (!foldersBySegment) foldersBySegment = computeFolders();
+    const w = segmentAt(at);
+    if (w < 0) return null;
+    // A move in a group earlier in the word's own segment is one this cannot
+    // place. A `cd`'s own target is read before it moves.
+    if (firstNestedAt.has(w) && firstNestedAt.get(w) < at) return null;
+    return foldersBySegment[w];
   };
   // The registry, spelled once per command, for the credential check.
-  // `reach` is the entry as the shell lists it, in its folder, not resolved
-  // through a link: what a glob expands to.
-  const secretEntries = winWorld ? [] : secretsRegistry(home).map(p => ({ path: canonicalize(p), reach: p, name: path.basename(p) }));
+  // `reach` is each spelling the shell can list the entry by, not resolved
+  // through a link, which is what a glob expands to: under home as given and
+  // as it resolves, with the runtime folders named as they sit there. The
+  // registry's own rows arrive resolved, so a linked `~/.claude` is only
+  // reachable by `~/.c*` through these.
+  const homeSpellings = [...new Set([home, canonicalize(home)])];
+  const spelled = new Map();
+  const spell = (rel) => {
+    for (const h of homeSpellings) {
+      const p = path.join(h, rel);
+      const c = canonicalize(p);
+      if (!spelled.has(c)) spelled.set(c, new Set());
+      spelled.get(c).add(p);
+    }
+  };
+  for (const rel of SECRET_RELATIVE_PATHS) spell(path.join('.claude', rel));
+  for (const rel of CODEX_SECRET_RELATIVE_PATHS) spell(path.join('.codex', rel));
+  for (const f of HOME_SECRET_FILES) spell(f);
+  const secretEntries = winWorld ? [] : secretsRegistry(home).map((p) => {
+    const c = canonicalize(p);
+    return { path: c, reach: [...new Set([p, ...(spelled.get(c) || [])])], name: path.basename(p) };
+  });
+  const secretNames = new Set(secretEntries.map(e => foldCase(e.name, foldsCase)));
   // A CREDENTIAL FILE IS REPORTED AS ITS DIRECT SPELLING WOULD BE: the same
   // exemption (the workspace's own files) and the same tags, so the card a relative
   // or glob spelling raises is the one `cat ~/.claude/.credentials.json`
@@ -2947,13 +3029,16 @@ function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), 
     // reading there is free. So the word is also resolved from every literal
     // landing, braces and loop words expanded, and a glob is matched against
     // what it can expand to (see secretsReachedBy).
-    if (secretEntries.length && pmod === path) {
+    const forms = secretEntries.length && pmod === path ? braceForms(t).flatMap(loopForms) : [];
+    if (forms.some(f => /[*?[]/.test(f) || secretNames.has(foldCase(String(f).split(/[\\/]+/).pop(), foldsCase)))) {
       const relative = !homed && !pmod.isAbsolute(t);
       const here = fromStart ? null : possibleFoldersAt(at);
-      const starts = here ? [base, ...here] : [base, ...cdStarts(pmod, at, fromStart)];
-      const unsure = !here && unfollowedBefore(at, fromStart);
+      const starts = here || [base, ...cdStarts(pmod, at, fromStart)];
+      // A move this cannot place, or one the move scan cannot see at all (in an
+      // `eval`, say), leaves the shell anywhere.
+      const unsure = !here && (unfollowedBefore(at, fromStart) || !everyMoveSeen);
       const reached = new Set();
-      for (const form of braceForms(t).flatMap(loopForms)) {
+      for (const form of forms) {
         for (const r of secretsReachedBy(form, { starts, unfollowed: unsure, relative, entries: secretEntries, folds: foldsCase })) reached.add(r);
       }
       if ([...reached].map(reportSecret).some(Boolean)) continue;

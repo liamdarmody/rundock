@@ -316,6 +316,8 @@ describe('a credential file named after a cd or by a glob, when something fails'
           `cd ~/.claude && cat .c${'*'.repeat(40)}s.json`,
           `cat ~/.claude/.c${'*'.repeat(40)}s.json`,
           `cat ~/${'**/'.repeat(30)}.credentials.json`,
+          // Absolute, so every name above home is matched too.
+          `cat /${'**/'.repeat(60)}.credentials.json`,
         ]) {
           const before = cards.length;
           const r = await inTime(runHookAgainst(server.address().port, bash(command), { ...homeEnv, ...env }), 10000);
@@ -323,10 +325,12 @@ describe('a credential file named after a cd or by a glob, when something fails'
           assert.strictEqual(decision(r), 'deny', `${command}: refused by the card`);
           assert.ok(secretCard(cards.slice(before)), `${command}: and the card was a secret one`);
         }
-        const before = cards.length;
-        const miss = await inTime(runHookAgainst(server.address().port, bash(`cat ~/.claude/.c${'*'.repeat(40)}z`), { ...homeEnv, ...env }), 10000);
-        assert.strictEqual(miss.status, 0);
-        assert.ok(!secretCard(cards.slice(before)), 'a word that cannot name one raises no secret card');
+        for (const word of [`~/.claude/.c${'*'.repeat(40)}z`, `/${'**/'.repeat(60)}nothing-by-this-name.json`]) {
+          const from = cards.length;
+          const miss = await inTime(runHookAgainst(server.address().port, bash(`cat ${word}`), { ...homeEnv, ...env }), 10000);
+          assert.strictEqual(miss.status, 0);
+          assert.ok(!secretCard(cards.slice(from)), `${word}: a word that cannot name one raises no secret card`);
+        }
       } finally { await close(server); }
     });
   }

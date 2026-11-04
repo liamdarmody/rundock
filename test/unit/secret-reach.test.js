@@ -56,6 +56,14 @@ fs.mkdirSync(path.join(root, 'store'));
 fs.writeFileSync(path.join(root, 'store', 'credentials.json'), '{}');
 fs.symlinkSync(path.join(root, 'store', 'credentials.json'), path.join(fileLinked, '.claude', '.credentials.json'));
 
+// And one whose credential file links into a folder named as a working folder,
+// which must not cover it.
+const namedLinked = path.join(root, 'named-linked');
+fs.mkdirSync(path.join(namedLinked, '.claude'), { recursive: true });
+fs.mkdirSync(path.join(namedLinked, 'dotfiles'));
+fs.writeFileSync(path.join(namedLinked, 'dotfiles', 'claude-credentials.json'), '{}');
+fs.symlinkSync(path.join(namedLinked, 'dotfiles', 'claude-credentials.json'), path.join(namedLinked, '.claude', '.credentials.json'));
+
 const POSIX = process.platform === 'win32' ? 'the home folder and links are read the POSIX way here' : false;
 const MODES = [['Notes mode', {}], ['Code mode', { RUNDOCK_CODE_MODE: '1' }]];
 
@@ -86,7 +94,7 @@ after(async () => {
 });
 
 // The hook's whole answer, and every card it asked the stand-in for.
-function ask(command, env = {}, { homeDir = home, at, tool = 'Bash', input } = {}) {
+function ask(command, env = {}, { homeDir = home, at, tool = 'Bash', input, cwd = ws } = {}) {
   const session = `s${++runs}`;
   return new Promise((resolve) => {
     const proc = spawn(process.execPath, [HOOK], {
@@ -105,7 +113,7 @@ function ask(command, env = {}, { homeDir = home, at, tool = 'Bash', input } = {
       resolve({ answer, decision: o.permissionDecision || null, reason: o.permissionDecisionReason || null, cards: asked.get(session) || [] });
     });
     proc.stdin.end(JSON.stringify({
-      hook_event_name: 'PreToolUse', cwd: ws, session_id: session, tool_name: tool, tool_input: input || { command },
+      hook_event_name: 'PreToolUse', cwd, session_id: session, tool_name: tool, tool_input: input || { command },
     }));
   });
 }
@@ -199,7 +207,9 @@ describe('a credential file that is a link, or in a folder that is one, still as
   const fileCreds = path.join(root, 'store', 'credentials.json');
   for (const [label, env] of MODES) {
     for (const [homeDir, file, where] of [[dirLinked, linkedCreds, 'the folder is a link'], [fileLinked, fileCreds, 'the file is a link']]) {
-      for (const command of ['cat ~/.claude/.credentials.json', 'cat ~/.claude/.cred*', 'cat ~/.claude/*', 'cd ~/.claude && cat .credentials.json']) {
+      // `~/.c*` is matched against the folder as it sits in home, not where it
+      // leads.
+      for (const command of ['cat ~/.claude/.credentials.json', 'cat ~/.claude/.cred*', 'cat ~/.claude/*', 'cat ~/.c*/.credentials.json', 'cd ~/.claude && cat .credentials.json']) {
         test(`${label}, ${where}: ${command}`, () => assertSecretCard(command, file, null, env, { homeDir }));
       }
       test(`${label}, ${where}: the Read tool`, async () => {
@@ -210,6 +220,35 @@ describe('a credential file that is a link, or in a folder that is one, still as
         assert.strictEqual(r.cards[0].grant_dir, null);
       });
     }
+  }
+});
+
+describe('a credential file that links into a named working folder is not covered by it', { skip: POSIX, concurrency: 8 }, () => {
+  const file = path.join(namedLinked, 'dotfiles', 'claude-credentials.json');
+  for (const [label, mode] of MODES) {
+    const env = { ...mode, RUNDOCK_EXTRA_DIRS: path.join(namedLinked, 'dotfiles') };
+    for (const command of ['cat ~/.claude/.credentials.json', 'cd ~/.claude && cat .credentials.json', 'cat ~/.claude/.cred*', 'cat ~/.c*/.credentials.json']) {
+      test(`${label}: ${command}`, async () => {
+        await assertSecretCard(command, file, null, env, { homeDir: namedLinked });
+      });
+    }
+    for (const tool of ['Read', 'Write']) {
+      test(`${label}: the ${tool} tool`, async () => {
+        const input = { file_path: path.join(namedLinked, '.claude', '.credentials.json'), ...(tool === 'Write' ? { content: 'x' } : {}) };
+        const r = await ask(null, env, { homeDir: namedLinked, tool, input });
+        assert.strictEqual(r.decision, 'deny', 'carded, and refused by the stand-in');
+        assert.strictEqual(r.cards.length, 1);
+        assert.ok(secretOf(r.cards[0], file), 'the card names the file as a secret');
+        assert.strictEqual(r.cards[0].boundary, true, 'a boundary card, which never offers a standing allow');
+        assert.strictEqual(r.cards[0].grant_dir, null, 'no folder to remember');
+      });
+    }
+    // The control: the same folder still covers an ordinary file in it.
+    test(`${label}: an ordinary file in that folder stays covered`, async () => {
+      const r = await ask(null, env, { homeDir: namedLinked, tool: 'Read', input: { file_path: path.join(namedLinked, 'dotfiles', 'notes.md') } });
+      assert.strictEqual(r.decision, 'allow');
+      assert.strictEqual(r.cards.length, 0);
+    });
   }
 });
 
@@ -245,6 +284,8 @@ describe('the five sequences', { skip: POSIX, concurrency: 8 }, () => {
       await assertAsOnMain(label, 'cd ~/.claude && cd /tmp && cat .credentials.json', env);
       // `cd -` goes back to the folder before the last move.
       await assertAsOnMain(label, 'cd ~/.claude && cd - && cat .credentials.json', env);
+      // A cd run through `command` is followed like any other.
+      await assertAsOnMain(label, 'cd ~/.claude && command cd /tmp && cat .credentials.json', env);
       // And where it really is decides: from home, `.claude.json` is one.
       await assertSecretCard('cd ~/.claude && cd .. && cat .claude.json', CLAUDE_JSON, 'cat ~/.claude.json', env);
     });
@@ -262,9 +303,35 @@ describe('the five sequences', { skip: POSIX, concurrency: 8 }, () => {
         'cd ~/.claude && eval "cd /tmp" && cat .credentials.json',
         // The folder before the first move is not known.
         'cd - && cat .credentials.json',
+        // A folder change the move scan cannot see.
+        `eval 'cd ~/.claude' && cat .credentials.json`,
+        'eval cd ~/.claude && cat .credentials.json',
+        // `command -v cd` names `cd` and moves nothing: the shell stays put.
+        'cd ~/.claude && command -v cd && cat .credentials.json',
       ]) {
         await assertSecretCard(command, CREDENTIALS, null, env);
       }
+    });
+
+    test(`${label}: a cd run through command or builtin moves the shell as cd does`, async () => {
+      await assertSecretCard('command cd ~/.claude && cat .credentials.json', CREDENTIALS, null, env);
+      await assertSecretCard('builtin cd ~/.claude && cat .credentials.json', CREDENTIALS, null, env);
+      await assertSecretCard('command cd ~/.codex && cat auth.json', CODEX_AUTH, null, env);
+    });
+
+    // The folder the runtime says the command starts in is where a bare name
+    // is read from, until a `cd` the shell is sure to make moves it.
+    test(`${label}: a command starting in the runtime folder`, async () => {
+      const there = path.join(home, '.claude');
+      const r = await ask('cat .credentials.json', env, { cwd: there });
+      assert.strictEqual(r.cards.length, 1);
+      assert.ok(secretOf(r.cards[0], CREDENTIALS), 'a bare name there is the credential file');
+      const out = await ask('cd /tmp && cat .credentials.json', env, { cwd: there });
+      assert.ok(!anySecret(out.cards), 'after a cd the shell is sure to make, the start folder is not tried');
+      assert.strictEqual(out.decision, ON_MAIN[label].decision);
+      assert.strictEqual(out.cards.length, ON_MAIN[label].cards);
+      const unsure = await ask('cd /tmp; cat .credentials.json', env, { cwd: there });
+      assert.ok(secretOf(unsure.cards[0], CREDENTIALS), 'but across `;` a failed cd leaves it there');
     });
 
     test(`${label}: the retry, after a refusal, raises the same card again`, async () => {
