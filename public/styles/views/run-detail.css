@@ -49,6 +49,11 @@
    things this box exists to say, the other being the outcome itself. */
 .rd-when { font-size: var(--caption); font-weight: 600; color: var(--text-2); margin: 0; }
 .rd-took { font-size: var(--caption); color: var(--text-3); margin: 6px 0 0; }
+/* The count of refused cards. A secondary fact beside the duration, but one
+   a reader should notice: a run can read as finished and still have skipped
+   the steps it was refused, so it takes the guidance colour, not the quieter
+   one .rd-took has. */
+.rd-refused { font-size: var(--caption); color: var(--text-2); margin: 6px 0 0; }
 /* Only ever drawn on a run that is still going (view.state.stoppable), so it
    sits last in the card, after the facts, closest to .rd-card's own gap. */
 .rd-stop-row { margin-top: 4px; }
