@@ -94,6 +94,15 @@ const REASONS = { src: path.join(ROOT, 'public', 'run-detail-model.js'), suite: 
 const ROUTINES_VIEW = { src: path.join(ROOT, 'public', 'views', 'routines.js'), suite: 'test/unit/run-detail-doors.test.js' };
 const APP = { src: path.join(ROOT, 'public', 'app.js'), suite: 'test/unit/run-detail-doors.test.js' };
 const VIEW_DOORS = { src: path.join(ROOT, 'public', 'views', 'run-detail.js'), suite: 'test/unit/run-detail-doors.test.js' };
+// The count of a run's refused cards. Written by the scheduler and wired by
+// the server, watched by the file that drives real routine runs through the
+// real hook and reads their records; counted by the permission route and the
+// card's handler, watched by the file that answers real hook requests through
+// the real route with a stand-in for the scheduler's count.
+const COUNT_WRITER = { src: path.join(ROOT, 'lib', 'scheduler.js'), suite: 'test/integration/unattended-refusal.test.js' };
+const COUNT_WIRING = { src: path.join(ROOT, 'server.js'), suite: 'test/integration/unattended-refusal.test.js' };
+const COUNT_ROUTE = { src: path.join(ROOT, 'lib', 'http-router.js'), suite: 'test/unit/unattended-refusal.test.js' };
+const COUNT_DENY = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'process-control.js'), suite: 'test/unit/unattended-refusal.test.js' };
 
 // [target, label, the guard as it is written, what it becomes without it]
 const MUTATIONS = [
@@ -233,6 +242,40 @@ const MUTATIONS = [
   [VIEW, 'a reply for another routine is not drawn on this screen',
     '  if (reply.agentId !== asked.agentId || reply.routine !== asked.routine) return;',
     '  if (!reply.run && !asked) return;'],
+  // ===== THE COUNT OF REFUSED CARDS =====
+  [COUNT_WRITER, 'Refused count: a refused card is never added to its run',
+    '    run.refusedCards = (run.refusedCards || 0) + 1;',
+    '    run.refusedCards = run.refusedCards || 0;'],
+  [COUNT_WRITER, 'Refused count: the open record is not rewritten when a card is refused',
+    '    run.refusedCards = (run.refusedCards || 0) + 1;\n    writeOpenRecord(run);',
+    '    run.refusedCards = (run.refusedCards || 0) + 1;'],
+  [COUNT_WRITER, 'Refused count: an open record with none carries the field',
+    '    filesReason: \'running\',\n    // Only once there is one to count, so a run with none has a record\n    // byte-for-byte what it was, and an older reader meets nothing new.\n    ...(run.refusedCards > 0 ? { refusedCards: run.refusedCards } : {}),',
+    '    filesReason: \'running\',\n    refusedCards: run.refusedCards,'],
+  [COUNT_WRITER, 'Refused count: the closing write drops the count',
+    '    ...(run.refusedCards > 0 ? { refusedCards: run.refusedCards } : {}),\n    files: observed.files,',
+    '    files: observed.files,'],
+  [COUNT_WRITER, 'Refused count: a run with none still carries the field',
+    '    ...(run.refusedCards > 0 ? { refusedCards: run.refusedCards } : {}),\n    files: observed.files,',
+    '    refusedCards: run.refusedCards,\n    files: observed.files,'],
+  [COUNT_WIRING, 'Refused count: the server never hands the route the count',
+    '  noteRefusedCard: (runId) => schedulerLib.noteRefusedCard(runId),',
+    '  noteRefusedCard: () => false,'],
+  [COUNT_ROUTE, 'Refused count: a card nobody answered is never counted',
+    '              if (pending.countRefusal) pending.countRefusal();\n',
+    ''],
+  [COUNT_ROUTE, "Refused count: a conversation's card is counted too",
+    '          ...(run ? { countRefusal: refusalCounter(run) } : {}),',
+    '          countRefusal: refusalCounter(run || { id: convoId }),'],
+  [COUNT_ROUTE, 'Refused count: a count that throws costs the answer',
+    "    try { deps.noteRefusedCard(run.id); } catch (e) {\n      console.warn(`[Permission] Could not count a refused card for run ${run.id}: ${e && e.message ? e.message : e}`);\n    }",
+    '    deps.noteRefusedCard(run.id);'],
+  [COUNT_DENY, 'Refused count: a denied card is never counted',
+    '      if (msg.allow !== true && pending.countRefusal) pending.countRefusal();\n',
+    ''],
+  [COUNT_DENY, 'Refused count: an approval is counted as a refusal',
+    '      if (msg.allow !== true && pending.countRefusal) pending.countRefusal();',
+    '      if (pending.countRefusal) pending.countRefusal();'],
 ];
 
 // The reporter is named explicitly rather than left to the default, which

@@ -102,6 +102,10 @@ describe('the wording', () => {
 const ROUTINE_SESSION = 'routine-session-1';
 const ROUTINE_RUN = { id: 'run-1', routine: 'Morning briefing', agent: 'ada' };
 let ws, outside, server, port, pending, sent, prevRouter, prevRt, prevWorkspace, timeoutMs;
+// The scheduler's count, stood in for: every run id it was asked to count, in
+// order, and a switch that makes it throw as a broken store would.
+const counted = [];
+let countThrows = false;
 before(async () => {
   ws = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'unattended-refusal-')));
   outside = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'unattended-refusal-outside-')));
@@ -119,6 +123,11 @@ before(async () => {
     getPermissionTimeoutMs: () => timeoutMs,
     // The scheduler's own lookup, stood in for: the routine's session is its run's.
     routineRunForSession: (sid) => (sid === ROUTINE_SESSION ? ROUTINE_RUN : null),
+    noteRefusedCard: (runId) => {
+      if (countThrows) throw new Error('the runs folder cannot be written');
+      counted.push(runId);
+      return true;
+    },
   });
   server = http.createServer(router.handleHttpRequest);
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
@@ -263,5 +272,87 @@ describe('a conversation\'s refused card keeps today\'s words, through the real 
     const { card, out } = await askAndAnswer(conversationEnv('convo-delegated'), ROUTINE_SESSION, false);
     assert.strictEqual(card._run, undefined, 'a conversation\'s card is never a run\'s');
     assert.strictEqual(reasonOf(out), ATTENDED.denied);
+  });
+});
+
+// ── The route counts a routine's refused cards ──
+//
+// Counted where the card is settled, by the server, never by the agent: a
+// denial clicked in the window, or a card left until it timed out. Each card
+// is settled once, so it is counted once; a call asked again is a new card.
+
+describe('the route counts a routine\'s refused cards, once each', () => {
+  const countedSince = (n) => counted.slice(n);
+
+  test('a denied card is counted once, against its run', async () => {
+    const n = counted.length;
+    const { card } = await askAndAnswer(routineEnv(), ROUTINE_SESSION, false);
+    assert.deepStrictEqual(countedSince(n), [ROUTINE_RUN.id]);
+    // A second click on the settled card finds nothing waiting, and counts nothing.
+    handlePermissionResponse({ pendingPermissions: pending, broadcast: () => {} }, { send() {} }, { requestId: card.request_id, conversationId: '', allow: false, card: true });
+    assert.deepStrictEqual(countedSince(n), [ROUTINE_RUN.id]);
+  });
+
+  test('a card nobody answered in time is counted once', async () => {
+    timeoutMs = 50;
+    const n = counted.length;
+    try {
+      await askAndAnswer(routineEnv(), ROUTINE_SESSION);
+    } finally { timeoutMs = 60000; }
+    assert.deepStrictEqual(countedSince(n), [ROUTINE_RUN.id]);
+  });
+
+  test('an approved card is not counted', async () => {
+    const n = counted.length;
+    const { out } = await askAndAnswer(routineEnv(), ROUTINE_SESSION, true);
+    assert.strictEqual(out.hookSpecificOutput.permissionDecision, 'allow');
+    assert.deepStrictEqual(countedSince(n), []);
+  });
+
+  test('a conversation\'s refused card is not counted, timed out or denied', async () => {
+    const n = counted.length;
+    await askAndAnswer(conversationEnv('chat-2'), ROUTINE_SESSION, false);
+    timeoutMs = 50;
+    try { await askAndAnswer(conversationEnv('chat-2'), 'chat-session-2'); } finally { timeoutMs = 60000; }
+    assert.deepStrictEqual(countedSince(n), []);
+  });
+
+  test('a card whose asker went away is not counted', async () => {
+    const n = counted.length;
+    const since = sent.length;
+    const child = spawn(process.execPath, [HOOK], { env: routineEnv(), stdio: ['pipe', 'pipe', 'pipe'] });
+    child.stdin.end(JSON.stringify(outsideRead(ROUTINE_SESSION)));
+    const card = await waitFor(() => sent.slice(since).find((m) => m.type === 'control_request'));
+    child.kill('SIGKILL');
+    await waitFor(() => sent.slice(since).find((m) => m.type === 'permission_ended' && m.requestId === card.request_id));
+    assert.strictEqual(pending.has(card.request_id), false);
+    assert.deepStrictEqual(countedSince(n), []);
+  });
+
+  // The retry: each refusal is its own card, so each is counted.
+  test('a call refused, asked again and refused again is counted twice', async () => {
+    const n = counted.length;
+    await askAndAnswer(routineEnv(), ROUTINE_SESSION, false);
+    await askAndAnswer(routineEnv(), ROUTINE_SESSION, false);
+    assert.deepStrictEqual(countedSince(n), [ROUTINE_RUN.id, ROUTINE_RUN.id]);
+  });
+
+  // The control failing: a count that throws costs the count, never the answer.
+  test('a count that throws still refuses, in the routine\'s words, and the route keeps answering', async () => {
+    countThrows = true;
+    try {
+      const denied = (await askAndAnswer(routineEnv(), ROUTINE_SESSION, false)).out;
+      assert.strictEqual(denied.hookSpecificOutput.permissionDecision, 'deny');
+      assert.strictEqual(reasonOf(denied), UNATTENDED.denied);
+      timeoutMs = 50;
+      let late;
+      try { late = (await askAndAnswer(routineEnv(), ROUTINE_SESSION)).out; } finally { timeoutMs = 60000; }
+      assert.strictEqual(late.hookSpecificOutput.permissionDecision, 'deny');
+      assert.strictEqual(reasonOf(late), UNATTENDED.timeout);
+    } finally { countThrows = false; }
+    const n = counted.length;
+    const next = (await askAndAnswer(routineEnv(), ROUTINE_SESSION, false)).out;
+    assert.strictEqual(reasonOf(next), UNATTENDED.denied);
+    assert.deepStrictEqual(countedSince(n), [ROUTINE_RUN.id], 'and the next refusal is counted again');
   });
 });

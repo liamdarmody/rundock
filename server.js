@@ -713,6 +713,7 @@ httpRouter.wireHttpRouterDeps({
   fileIndexInProgress,
   getPermissionTimeoutMs: () => PERMISSION_TIMEOUT_MS,
   routineRunForSession: (sessionId) => schedulerLib.runForSession(sessionId),
+  noteRefusedCard: (runId) => schedulerLib.noteRefusedCard(runId),
   // The reconnect card's two routes. The check's answer is also the runtime
   // status's evidence, when it could find out: a failed turn counts as signed
   // out only when its words are a sign-in failure (isAuthError).
