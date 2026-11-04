@@ -898,3 +898,76 @@ describe('PACKAGES.md: the starter file consent wording is the offer\'s own', ()
     assert.ok(doc.includes(`\`${STARTER_DIR}/<path>\``));
   });
 });
+
+// ---------------------------------------------------------------------------
+// docs/AGENTS.md and docs/SKILLS.md: what Notes mode holds, and for whom
+// ---------------------------------------------------------------------------
+
+describe('AGENTS.md and SKILLS.md: Notes mode holds routines as well as conversations', () => {
+  // The Notes row of the modes table in AGENTS.md says what the mode refuses
+  // and that it holds for routines as well as conversations. SKILLS.md says a
+  // skill inherits the mode of the agent that runs it, and a skill can be run
+  // by a routine. Both are pinned to the one list a conversation spawn and a
+  // routine spawn are handed (lib/workspace/mode.js), read through each
+  // spawn's own reader, and the rename and delete sentence to what the
+  // installed CLI was measured to do (test/fixtures/claude-cli-notes-mode.json).
+  const { NOTES_BLOCKED_EXTENSIONS, NOTES_DISALLOWED_TOOLS } = require('../../lib/workspace/mode.js');
+  const scheduler = require('../../lib/scheduler.js');
+  const record = require('../fixtures/claude-cli-notes-mode.json');
+  const agentsDoc = fs.readFileSync(path.join(ROOT, 'docs', 'AGENTS.md'), 'utf-8');
+  const notesRow = agentsDoc.split('\n').find(l => l.startsWith('| **Notes**')) || '';
+  const modeSection = (() => {
+    const from = skillsDoc.indexOf('## Workspace mode');
+    const to = skillsDoc.indexOf('\n## ', from + 1);
+    return from < 0 ? '' : skillsDoc.slice(from, to < 0 ? undefined : to);
+  })();
+
+  // The list each spawn would be handed in a workspace in this mode: the
+  // conversation's reader in the server, and the routine's, which the server
+  // wires into the scheduler.
+  function listsFor(mode) {
+    const dir = useWorkspace();
+    srv.writeState({ ...srv.readState(), workspaceMode: mode });
+    const wired = scheduler.wireSchedulerDeps({});
+    return { dir, conversation: srv.getDisallowedTools(), routine: wired.getDisallowedTools() };
+  }
+
+  test('the Notes row names only extensions the list blocks, and blocks notebook editing as it says', () => {
+    assert.ok(notesRow, 'AGENTS.md has a Notes row in its modes table');
+    const named = [...notesRow.matchAll(/`\.([a-z]+)`/g)].map(m => m[1]);
+    assert.ok(named.length >= 5, 'the row names extensions');
+    for (const ext of named) assert.ok(NOTES_BLOCKED_EXTENSIONS.includes(ext), `.${ext} is one the list blocks`);
+    assert.match(notesRow, /turns off notebook editing/);
+    assert.ok(NOTES_DISALLOWED_TOOLS.split(',').includes('NotebookEdit'));
+  });
+
+  test('"It holds for routines as well as conversations": both spawns read the same list in Notes mode, and none in Code mode', () => {
+    assert.match(notesRow, /It holds for routines as well as conversations\./);
+    const notes = listsFor('notes');
+    assert.strictEqual(notes.conversation, NOTES_DISALLOWED_TOOLS, 'a conversation is handed the Notes list');
+    assert.strictEqual(notes.routine, NOTES_DISALLOWED_TOOLS, 'and a routine the same one');
+    const code = listsFor('code');
+    assert.strictEqual(code.conversation, '');
+    assert.strictEqual(code.routine, '', 'the Code row: no restriction, for either');
+  });
+
+  test('the rename and delete sentence is what Claude Code was measured to do, with the card approved', () => {
+    assert.match(notesRow, /renaming or deleting one of those files with `mv` or `rm`, even when its card is approved; renaming or deleting a note is unaffected/);
+    for (const c of record.cases.filter(k => k.hook === 'allow' && k.steps.some(s => s.tool === 'Bash'))) {
+      const answer = cmd => c.observed.results[c.steps.findIndex(s => s.command === cmd)];
+      assert.strictEqual(answer('rm tool.py').refused, true, `${c.name}: an executable file's delete is refused after the hook allowed it`);
+      assert.strictEqual(answer('mv other.sh other.md').refused, true, `${c.name}: and its rename`);
+      assert.strictEqual(answer('rm gone.md').refused, false, `${c.name}: a note's delete goes ahead`);
+      assert.strictEqual(answer('mv old.md new.md').refused, false, `${c.name}: and its rename`);
+    }
+  });
+
+  test('SKILLS.md makes no claim about routines in its own words; its claim covers them through the mode a skill inherits', () => {
+    assert.match(modeSection, /Skills inherit the workspace mode of the agent that invokes them\. If the workspace is in Notes mode, write restrictions on executable file types apply to anything the skill instructs the agent to do\./);
+    // Said outright, so nobody reads this pin as one on a sentence that is not
+    // there: the section never mentions routines. A skill run by a routine is
+    // run by the routine's agent, which is handed the Notes list (above).
+    assert.doesNotMatch(modeSection, /routine/i, 'SKILLS.md\'s workspace mode section has no routine claim of its own');
+    assert.strictEqual(listsFor('notes').routine, NOTES_DISALLOWED_TOOLS);
+  });
+});
