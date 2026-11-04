@@ -167,6 +167,11 @@ describe('a credential file named relative to a cd asks as the direct spelling d
     // A copy, and a write.
     ['cd ~/.claude && cp .credentials.json /tmp/x', CREDENTIALS, 'cp ~/.claude/.credentials.json /tmp/x'],
     ['cd ~/.claude && echo x > .credentials.json', CREDENTIALS, 'echo x > ~/.claude/.credentials.json'],
+    // A cd into a folder an earlier command makes, which is not there yet when
+    // the command is judged.
+    ['cd ~/.claude && mkdir -p new && cd new && cat ../.credentials.json', CREDENTIALS, 'mkdir -p new && cat ~/.claude/.credentials.json'],
+    // A cd that fails across `;` leaves the shell where it was.
+    ['cd ~/.claude; cd ./nonexistent; cat .credentials.json', CREDENTIALS, 'cat ~/.claude/.credentials.json'],
   ];
   for (const [label, env] of MODES) {
     for (const [command, file, direct] of cases) {
@@ -187,6 +192,11 @@ describe('a glob that can expand to a credential file asks about the file it rea
     ['cat ~/.c*/.credentials.json', CREDENTIALS],
     ['cat ~/**/.credentials.json', CREDENTIALS],
     ['cd ~/.claude && cat .cred*', CREDENTIALS],
+    // A glob folder climbed back out of: the shell expands `*` to a folder
+    // there, so `*/..` is the folder it started in.
+    ['cd ~/.claude && cat */../.credentials.json', CREDENTIALS],
+    ['cat ~/.claude/projects/*/../../.credentials.json', CREDENTIALS],
+    ['cat ~/.c*/projects/../.credentials.json', CREDENTIALS],
   ];
   // A star does not match a leading dot by the shell's default, but the
   // runtime's shell starts from a snapshot of the person's own settings, which
