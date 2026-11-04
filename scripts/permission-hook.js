@@ -644,6 +644,63 @@ function globReachesConsole(resolvedPath, home = os.homedir(), foldsCase = hostF
   if (dir === consoleDir || dir.startsWith(consoleDir + pmod.sep)) return true;
   return dir === root && segs[at].startsWith('.') && globSegmentRegex(segs[at], folds).test(RUNDOCK_CONSOLE_DIR);
 }
+// THE CREDENTIAL FILES A WORD CAN REACH, however it is spelled. The secrets
+// tier cards on any access, and the sandbox block beneath it refuses writes
+// only, so for a read the card is the whole guard. Comparing a word's text
+// with the registry left two ordinary spellings with no card at all: a name
+// relative to a `cd` (`cd ~/.claude && cat .credentials.json`), which the
+// caller resolves from every folder the `cd` may have left the shell in, and a
+// glob (`cat ~/.claude/.cred*`), which never equals the name it expands to.
+//
+// A STAR MATCHES A LEADING DOT HERE, unlike the shell's default and unlike the
+// answer-file globs above. The runtime's shell starts from a snapshot of the
+// person's own shell settings, which can turn on `dotglob` or `globdots`, so
+// `cat ~/.claude/*` may read the credential file. With nothing beneath the
+// card, the wider reading is the safe one.
+//
+// `starts` are the folders a relative word may be resolved from. `unfollowed`
+// says a `cd` before the word went somewhere this cannot know (`cd "$X"`,
+// `cd $(...)`); a relative word bearing a registry entry's own name is then
+// asked about as that entry, rather than guessed to be somewhere harmless.
+// Returns the registry paths reached, each spelled as the registry spells it.
+function secretsReachedBy(word, { starts, unfollowed, relative, entries, folds, pmod = path }) {
+  const glob = /[*?[]/.test(word);
+  const name = String(word).split(/[\\/]+/).pop();
+  const nameRe = glob ? globSegmentRegex(name, folds) : null;
+  const named = (e) => (glob ? nameRe.test(e.name) : foldCase(name, folds) === foldCase(e.name, folds));
+  // A literal word can only reach a file whose name it ends in, which keeps
+  // the resolving below off every ordinary word in the command.
+  if (!glob && !entries.some(named)) return [];
+  const hits = new Set();
+  for (const b of starts) {
+    const r = canonicalize(pmod.resolve(b, word), pmod);
+    for (const e of entries) {
+      if (glob ? globReachesPath(r, e.path, folds, pmod) : foldCase(r, folds) === foldCase(e.path, folds)) hits.add(e.path);
+    }
+  }
+  if (unfollowed && relative) for (const e of entries) if (named(e)) hits.add(e.path);
+  return [...hits];
+}
+// Whether a resolved glob can expand to `target`: every segment from the first
+// one holding a glob is matched against the segments of `target` below the
+// folder before it, a `**` standing for any number of them.
+function globReachesPath(resolvedGlob, target, folds, pmod = path) {
+  const segs = String(resolvedGlob).split(/[\\/]+/);
+  const at = segs.findIndex(s => /[*?[]/.test(s));
+  if (at < 0) return false;
+  const dir = foldCase(segs.slice(0, at).join(pmod.sep) || pmod.sep, folds);
+  const t = foldCase(String(target), folds);
+  const prefix = dir.endsWith(pmod.sep) ? dir : dir + pmod.sep;
+  if (!t.startsWith(prefix)) return false;
+  const names = String(target).slice(prefix.length).split(/[\\/]+/);
+  const match = (p, n) => {
+    if (!p.length) return !n.length;
+    if (p[0] === '**') return match(p.slice(1), n) || (n.length > 0 && match(p, n.slice(1)));
+    return n.length > 0 && globSegmentRegex(p[0], folds).test(n[0]) && match(p.slice(1), n.slice(1));
+  };
+  return match(segs.slice(at), names);
+}
+
 // `within`: an entry is a folder, matched with everything under it.
 function matchesAnswerFileSet(set, resolvedPath, workspaceRoot, foldsCase = hostFoldsCase(), pmod = path, within = false) {
   if (typeof resolvedPath !== 'string' || !resolvedPath) return false;
@@ -1347,6 +1404,10 @@ function movesAndLoops(text, offset = 0, depth = 0, acc = { moves: [], loops: []
       let j = i + 1;
       while (words[j] && /^-[LPe@]+$/.test(words[j].text)) j++;
       if (words[j]) acc.moves.push({ target: words[j].text, at });
+      // A `cd` with nothing after it goes home. A bare `pushd` swaps the top of
+      // the stack, which is not knowable here, and is kept as a move that
+      // cannot be followed.
+      else acc.moves.push({ target: lead === 'cd' ? '~' : '-', at });
     } else if (lead === 'for' && words[i + 1] && /^[A-Za-z_][A-Za-z0-9_]*$/.test(words[i + 1].text) && words[i + 2] && words[i + 2].text === 'in') {
       const items = [];
       for (const v of words.slice(i + 3)) {
@@ -2639,6 +2700,34 @@ function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), 
   };
   const cdStarts = (pmod, at, fromStart) => landingsFor(pmod)
     .filter(l => (l.scope === null ? l.at < at : fromStart && l.scope === at)).map(l => l.base);
+  // THE MOVES NO LANDING CAN BE WORKED OUT FOR: a target that expands, `cd -`,
+  // a bare `pushd`. After one of these the shell may be anywhere, which is
+  // what the credential check below has to assume.
+  const followable = (target) => {
+    let t = target;
+    for (const re of HOME_PREFIX) { if (re.test(t)) { t = t.replace(re, home); break; } }
+    return !!t && !t.startsWith('-') && !CD_NOT_LITERAL.test(t);
+  };
+  const unfollowed = scanned.moves.filter(m => !followable(m.target)).map(m => ({ at: m.at, scope: null }))
+    .concat(view.commands.flatMap((c, k) => (commandScans[k].moves.some(m => !followable(m.target)) ? [{ at: c.at, scope: c.at }] : [])));
+  const unfollowedBefore = (at, fromStart) => unfollowed.some(l => (l.scope === null ? l.at < at : fromStart && l.scope === at));
+  // The registry, spelled once per command, for the credential check.
+  const secretEntries = winWorld ? [] : secretsRegistry(home).map(p => ({ path: canonicalize(p), name: path.basename(p) }));
+  // A CREDENTIAL FILE IS REPORTED AS ITS DIRECT SPELLING WOULD BE: the same
+  // exemptions (the workspace's own files, a working folder that names it,
+  // Code mode's development paths) and the same tags, so the card a relative
+  // or glob spelling raises is the one `cat ~/.claude/.credentials.json`
+  // raises. Answers whether it was reported, now or by an earlier word.
+  const reportSecret = (r) => {
+    if (insideWorkspaceRoot(r, workspaceRoot, path)) return false;
+    if (namedFolderCovers(r, extraDirs, path, home, foldsCase)) return false;
+    if (codeMode && devPaths.isDevPath(r, devOpts)) return false;
+    if (seen.has(r)) return true;
+    seen.add(r);
+    const hidden = hiddenHomeRootOf(r, home);
+    found.push({ path: r, ...agentHomeTags(r, home, foldsCase), ...(hidden ? { hiddenHome: path.basename(hidden.replace(/\\/g, '/')) } : {}), ...(readOnly ? {} : { write: true }) });
+    return true;
+  };
   // A LOOP VARIABLE STANDS FOR EACH WORD OF ITS LIST. `for f in .mcp.json; do
   // echo x > $f; done` writes `.mcp.json`, so a written word naming `$f` or
   // `${f}` is also tried with each word of the list in its place.
@@ -2752,6 +2841,24 @@ function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), 
         for (const r of hits) addAnswer(r, pmod);
         continue;
       }
+    }
+
+    // A CREDENTIAL FILE, TESTED BEFORE THE CROSSING FILTER for the reason the
+    // answer files are: a bare `.credentials.json` cannot cross from the base,
+    // but after `cd ~/.claude` it is the credential file. The base trusts no
+    // `cd` out of the workspace, on the reasoning that such a `cd` reports its
+    // own crossing; one into the runtime's folder reports nothing, because
+    // reading there is free. So the word is also resolved from every literal
+    // landing, braces and loop words expanded, and a glob is matched against
+    // what it can expand to (see secretsReachedBy).
+    if (secretEntries.length && pmod === path) {
+      const relative = !homed && !pmod.isAbsolute(t);
+      const starts = [base, ...cdStarts(pmod, at, fromStart)];
+      const reached = new Set();
+      for (const form of braceForms(t).flatMap(loopForms)) {
+        for (const r of secretsReachedBy(form, { starts, unfollowed: unfollowedBefore(at, fromStart), relative, entries: secretEntries, folds: foldsCase })) reached.add(r);
+      }
+      if ([...reached].map(reportSecret).some(Boolean)) continue;
     }
 
     // Skip tokens that could not cross. A relative token resolves against the
