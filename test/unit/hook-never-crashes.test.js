@@ -382,7 +382,9 @@ describe('a credential file named after a cd or by a glob, when something fails'
   fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
   fs.writeFileSync(path.join(home, '.claude', '.credentials.json'), '{}');
   const homeEnv = { HOME: home, USERPROFILE: home };
-  const COVERED = ['cd ~/.claude && cat .credentials.json', 'cd "$X" && cat .credentials.json', 'cat ~/.claude/.cred*'];
+  const COVERED = ['cd ~/.claude && cat .credentials.json', 'cd "$X" && cat .credentials.json', 'cat ~/.claude/.cred*',
+    // A folder holding one, handed to a program that reads all of it.
+    'grep -r token ~/.claude', 'cd ~/.claude && grep -r token', 'foo -r ~/.claude'];
   const MODES = [['Notes mode', {}], ['Code mode', { RUNDOCK_CODE_MODE: '1' }]];
   const POSIX = { skip: process.platform === 'win32' && 'the home folder is read from HOME here' };
   const throwsOnRequest = path.join(root, 'secret-throws-on-request.js');

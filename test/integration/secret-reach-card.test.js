@@ -25,7 +25,9 @@ const { canonicalize } = require('../../scripts/permission-hook.js');
 const HOOK = path.join(__dirname, '..', '..', 'scripts', 'permission-hook.js');
 const CONVO = 'secret-reach';
 const MODES = [['Notes mode', {}], ['Code mode', { RUNDOCK_CODE_MODE: '1' }]];
-const SPELLINGS = ['cd ~/.claude && cat .credentials.json', 'cat ~/.claude/.cred*'];
+const SPELLINGS = ['cd ~/.claude && cat .credentials.json', 'cat ~/.claude/.cred*',
+  // The folder that holds it, handed to a program that reads all of it.
+  'grep -r token ~/.claude', 'cd ~/.claude && tar czf - .'];
 const POSIX = { skip: process.platform === 'win32' && 'the home folder is read from HOME here' };
 
 let client;

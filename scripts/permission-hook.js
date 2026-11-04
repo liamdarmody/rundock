@@ -824,6 +824,64 @@ function secretsReachedBy(word, { starts, unfollowed, relative, entries, folds, 
   if (unfollowed && relative) for (const e of entries) if (named(e)) hits.add(e.path);
   return [...hits];
 }
+// THE FOLDERS A COMMAND READS EVERYTHING INSIDE, for the credential check.
+// `~/.claude` and `~/.codex` are free to read, so a word naming either is never
+// reported, and `grep -r token ~/.claude`, `cp -r ~/.claude /tmp/x` and
+// `tar czf - ~/.claude` read the credential files inside with no card. A
+// program here reads the contents of a folder it is handed; one that lists
+// names (`ls -R`, `du`, a `find` that runs nothing) does not, and stays free.
+//
+// UNKNOWN WITH A RECURSIVE FLAG MEANS A READER: a program not named below,
+// handed `-r`, `-R` or `--recursive`, is judged to read the folder, the safe
+// direction for a file with nothing beneath the card.
+const RECURSIVE_READERS = new Set(['rg', 'ag', 'ack', 'rsync', 'tar', 'gtar', 'bsdtar', 'zip', '7z', '7za', 'ditto', 'pax', 'cpio']);
+const RECURSIVE_WHEN_FLAGGED = { grep: /[rR]/, egrep: /[rR]/, fgrep: /[rR]/, cp: /[rRa]/, scp: /r/, diff: /r/ };
+const SEARCHES_CWD_UNNAMED = new Set(['grep', 'egrep', 'fgrep', 'rg', 'ag', 'ack', 'find']);
+const LISTS_NAMES_ONLY = new Set(['ls', 'du', 'tree', 'stat', 'file', 'cd', 'pushd', 'popd', 'test', '[', 'realpath', 'readlink', 'dirname', 'basename', 'pwd', 'mkdir', 'echo', 'printf', 'true', 'false']);
+const RUNS_THE_NEXT_WORD = new Set(['sudo', 'env', 'nice', 'nohup', 'time', 'command', 'builtin', 'exec', 'timeout', 'stdbuf', 'xargs']);
+const RUNS_PER_NAME = new Set(['-exec', '-execdir', '-ok', '-okdir']);
+// [{ word, at }]: each word a reader was handed as a folder, as it is written,
+// with where its segment starts. A reader that searches the folder it runs in
+// and was handed none (`cd ~/.claude && grep -r token`) is handed `.`.
+function recursiveReadWords(command) {
+  const found = [];
+  const text = String(command);
+  let from = 0;
+  for (const seg of shellSegments(text)) {
+    const segAt = text.indexOf(seg, from);
+    if (segAt >= 0) from = segAt + seg.length;
+    const ws = (seg.match(/'([^']*)'|"([^"]*)"|[^\s]+/g) || []).filter(w => !REDIRECT.test(w) && !INPUT_REDIRECT.test(w)).map(w => w.replace(/^['"]|['"]$/g, ''));
+    let i = 0;
+    while (i < ws.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(ws[i])) i++;
+    while (i < ws.length && RUNS_THE_NEXT_WORD.has(ws[i].split('/').pop())) {
+      const prefix = ws[i++].split('/').pop();
+      while (i < ws.length && (ws[i].startsWith('-') || /=/.test(ws[i]) || (prefix === 'timeout' && /^\d/.test(ws[i])))) i++;
+    }
+    const verb = (ws[i] || '').split('/').pop();
+    const args = ws.slice(i + 1);
+    const shortFlags = args.filter(a => /^-[A-Za-z]+$/.test(a));
+    const longFlag = (re) => args.some(a => re.test(a));
+    const pipedToXargs = /^\s*\|(?!\|)\s*xargs\b/.test(text.slice(Math.max(0, segAt) + seg.length));
+    let reads;
+    if (verb === 'find') reads = args.some(a => RUNS_PER_NAME.has(a)) || pipedToXargs;
+    else if (RECURSIVE_READERS.has(verb)) reads = true;
+    else if (Object.prototype.hasOwnProperty.call(RECURSIVE_WHEN_FLAGGED, verb)) {
+      reads = shortFlags.some(a => RECURSIVE_WHEN_FLAGGED[verb].test(a.slice(1))) || longFlag(/^--(recursive|dereference-recursive|archive|directories=recurse)$/) || (args.includes('-d') && args[args.indexOf('-d') + 1] === 'recurse');
+    } else reads = !LISTS_NAMES_ONLY.has(verb) && (shortFlags.some(a => /[rR]/.test(a)) || longFlag(/^--recursive$/));
+    if (!reads) continue;
+    let operands = args.filter(a => !a.startsWith('-'));
+    if (verb === 'find') {
+      const end = args.findIndex(a => a.startsWith('-') || a === '(' || a === '!');
+      operands = (end < 0 ? args : args.slice(0, end));
+    } else if (SEARCHES_CWD_UNNAMED.has(verb) && !args.some(a => /^-(e|f)$|^--(regexp|file)(=|$)/.test(a))) {
+      operands = operands.slice(1);
+    }
+    if (!operands.length && SEARCHES_CWD_UNNAMED.has(verb)) operands = ['.'];
+    for (const o of operands) found.push({ word: o, at: Math.max(0, segAt) });
+  }
+  return found;
+}
+
 // Whether a resolved glob can expand to `target`: every segment from the first
 // one holding a glob is matched against the segments of `target` below the
 // folder before it, a `**` standing for any number of them.
@@ -3026,6 +3084,38 @@ function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), 
     return { path: c, reach: [...new Set([p, ...(spelled.get(c) || [])])], name: path.basename(p) };
   });
   const secretNames = new Set(secretEntries.map(e => foldCase(e.name, foldsCase)));
+  // The runtime homes, which hold credential files and are free to read, and
+  // the words and places the command reads everything inside of. Each home is
+  // known by both its spellings, as written under home and where its links
+  // lead, so a linked `~/.claude` is the same folder.
+  // As a glob lists each one: by its own name under home, as given and as home
+  // resolves, the runtime folder itself not resolved (the registry's roots are).
+  const homeRoots = winWorld ? [] : runtimeHomes(home).map((h, i) => ({
+    root: h.root,
+    real: canonicalize(h.root),
+    listed: [...new Set(homeSpellings.map(s => path.join(s, ['.claude', '.codex'][i])))],
+  }));
+  const under = (p, dir) => foldCase(p, foldsCase).startsWith(foldCase(dir, foldsCase) + path.sep);
+  const entriesUnder = (h) => secretEntries.filter(e => e.reach.some(x => under(x, h.root)) || under(e.path, h.real));
+  const folderReads = [];
+  for (const [text, at] of [[view.text, null], ...view.commands.map(c => [c.text, c.at])]) {
+    for (const r of recursiveReadWords(text)) folderReads.push(at === null ? { ...r, fromStart: false } : { word: r.word, at, fromStart: true });
+  }
+  // The runtime homes a word handed to such a reader reaches, from `starts`.
+  const homesReadBy = (word, starts) => {
+    const out = [];
+    const glob = /[*?[]/.test(word);
+    for (const b of starts) {
+      const r = canonicalize(path.resolve(b, word));
+      for (const h of homeRoots) {
+        const hit = glob
+          ? h.listed.some(x => globReachesPath(r, x, foldsCase)) || globReachesPath(r, h.real, foldsCase)
+          : foldCase(r, foldsCase) === foldCase(h.real, foldsCase) || foldCase(r, foldsCase) === foldCase(h.root, foldsCase);
+        if (hit) out.push(h);
+      }
+    }
+    return out;
+  };
   // A CREDENTIAL FILE IS REPORTED AS ITS DIRECT SPELLING WOULD BE: the same
   // exemption (the workspace's own files) and the same tags, so the card a relative
   // or glob spelling raises is the one `cat ~/.claude/.credentials.json`
@@ -3087,6 +3177,28 @@ function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), 
       const target = canonicalize(pmod.join(d, pmod.basename(src)), pmod);
       if (isWorkspaceAnswerFile(target, workspaceRoot, foldsCase, pmod) || isAnswerFileOfAnyWorkspace(target, pmod) || reachesAnswerFiles(null, target, pmod)
         || isRundockConsolePath(target, home, foldsCase, pmod)) addAnswer(target, pmod);
+    }
+  }
+  // A RUNTIME HOME HANDED TO A PROGRAM THAT READS EVERYTHING INSIDE IT reads
+  // the credential files there: `grep -r token ~/.claude`, `tar czf - ~/.claude`,
+  // or `cd ~/.claude && grep -r token`, whose reader searches the folder it
+  // runs in. Each folder is judged from where the shell can be, as a word is
+  // below, and asks as the credential files it holds. A folder copied INTO is
+  // counted too: what lands there can replace the credential file.
+  for (const { word, at, fromStart } of folderReads) {
+    let t = word;
+    for (const re of HOME_PREFIX) { if (re.test(t)) { t = t.replace(re, home); break; } }
+    if (t === word) {
+      for (const re of ENV_PREFIX) {
+        const m = re.exec(t);
+        const val = m && devPaths.envValue(opts.env || process.env, m[1]);
+        if (val) { t = val + t.slice(m[0].length); break; }
+      }
+    }
+    const here = fromStart ? null : possibleFoldersAt(at);
+    const starts = here || [basesFor(path, fromStart)(at), ...cdStarts(path, at, fromStart)];
+    for (const form of braceForms(t).flatMap(loopForms)) {
+      for (const h of homesReadBy(form, starts)) for (const e of entriesUnder(h)) reportSecret(e.path);
     }
   }
   let previous = '';
