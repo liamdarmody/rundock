@@ -8,12 +8,15 @@
 // so a routine spawned without the list could write what no conversation in the
 // same workspace can.
 //
-// THE DISK IS THE EVIDENCE. The stub really writes, renames and deletes, and
-// refuses exactly what Claude Code refuses for the list it was handed (pinned
-// against measured results in test/unit/stub-claude-tool-rules.test.js). So
-// each assertion below is about what is in the workspace after the run, and
-// every run that is refused something also does something it is allowed to, so
-// a refusal cannot be mistaken for a run that never reached its work.
+// THE DISK IS THE EVIDENCE, AND THE RUN'S OWN TRANSCRIPT SAYS WHY. The stub
+// really writes, renames and deletes, puts each shell command to Rundock's real
+// permission hook first, and refuses exactly what Claude Code refuses for the
+// list it was handed, in the CLI's own words. That model is held to a
+// measurement of the installed CLI (test/fixtures/claude-cli-notes-mode.json,
+// by test/unit/stub-claude-matches-cli.test.js). So each assertion below is
+// about what is in the workspace after the run and what each call was told,
+// and every run that is refused something also does something it is allowed
+// to, so a refusal cannot be mistaken for a run that never reached its work.
 const { test, describe, before, after } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -22,6 +25,16 @@ const h = require('../helpers/harness.js');
 
 const scheduler = require('../../lib/scheduler.js');
 const { NOTES_DISALLOWED_TOOLS } = require('../../lib/workspace/mode.js');
+const { findTranscript } = require('../../lib/runtime/session-transcript.js');
+
+// What Claude Code said back when it refused, as measured.
+const RECORD = require('../fixtures/claude-cli-notes-mode.json');
+function measured(caseName, command) {
+  const c = RECORD.cases.find(k => k.name === caseName);
+  return c.observed.results[c.steps.findIndex(s => (s.command || s.file) === command)].message;
+}
+const REFUSED_WRITE = measured('Notes list, file writes', 'tool.py');
+const refusedShell = command => measured('Notes list, shell renames and deletes', 'rm tool.py').replace('rm tool.py', command);
 
 const AGENT = 'content-lead';
 let client;
@@ -54,25 +67,78 @@ function folder(name) {
   };
 }
 
+// Answers every permission card that matches, from now on, with Allow, as a
+// person approving each one would, through the same message the window sends.
+function approveCards(match) {
+  let next = client.messages.length;
+  let stopped = false;
+  const answered = [];
+  const loop = (async () => {
+    while (!stopped) {
+      for (; next < client.messages.length; next++) {
+        const m = client.messages[next];
+        if (m.type !== 'control_request' || !match(m)) continue;
+        client.send({ type: 'permission_response', requestId: m.request_id, conversationId: m._conversationId, allow: true, card: true });
+        answered.push(m);
+      }
+      await h.delay(20);
+    }
+  })();
+  return { answered, stop: async () => { stopped = true; await loop; } };
+}
+
+// Each tool call a run made and what it was told, from the session transcript
+// the run keeps, in the order it made them.
+function callsOf(sessionId) {
+  const file = findTranscript(sessionId);
+  assert.ok(file, `the run ${sessionId} kept a transcript`);
+  const asked = [];
+  const told = new Map();
+  for (const line of fs.readFileSync(file, 'utf8').split('\n').filter(Boolean)) {
+    const entry = JSON.parse(line);
+    for (const b of (entry.message && Array.isArray(entry.message.content)) ? entry.message.content : []) {
+      if (b.type === 'tool_use') asked.push(b);
+      if (b.type === 'tool_result') told.set(b.tool_use_id, b);
+    }
+  }
+  return asked.map((b) => {
+    const r = told.get(b.id);
+    const target = b.input.command || path.basename(b.input.file_path || b.input.notebook_path || '');
+    return { tool: b.name, target, content: b.input.content, answered: !!r, refused: !!(r && r.is_error), message: r && r.is_error ? r.content : null };
+  });
+}
+
 // One routine run, started the way the scheduler starts every run, waited
-// out, and handed back with the argument list it was spawned with.
-async function runRoutine(rule = {}) {
+// out, and handed back with the argument list it was spawned with, what each
+// of its tool calls was told, and the cards approved for it (`approve`).
+async function runRoutine(rule = {}, { approve = false } = {}) {
   const n = ++seq;
   const prompt = `routine work number ${n}`;
-  const key = `${AGENT}:notes-block-${n}`;
+  const name = `notes-block-${n}`;
+  const key = `${AGENT}:${name}`;
   h.clearInvocations();
   h.clearPrompts();
   h.writeScenario([{ match: { agent: AGENT, promptIncludes: prompt }, turn: [{ text: 'done' }], ...rule }]);
   const agent = h.internal.discoverAgents().find(a => a.id === AGENT);
   assert.ok(agent, 'fixture agent present');
-  h.internal.executeRoutine(agent, { name: `notes-block-${n}`, schedule: 'every day at 09:00', prompt }, key);
-  assert.ok(await h.waitUntil(() => {
-    const s = h.internal.routineState[key];
-    return s && s.status !== 'running';
-  }), 'the run finished');
+  const cards = approve ? approveCards(m => !!m._run && m._run.routine === name) : null;
+  h.internal.executeRoutine(agent, { name, schedule: 'every day at 09:00', prompt }, key);
+  try {
+    assert.ok(await h.waitUntil(() => {
+      const s = h.internal.routineState[key];
+      return s && s.status !== 'running';
+    }), 'the run finished');
+  } finally {
+    if (cards) await cards.stop();
+  }
   const spawns = h.readInvocations().filter(i => i.print);
   assert.strictEqual(spawns.length, 1, 'exactly one routine spawn');
-  return { argv: spawns[0].argv, prompt, status: h.internal.routineState[key].status };
+  const argv = spawns[0].argv;
+  const sessionId = argv[argv.indexOf('--session-id') + 1];
+  return {
+    argv, prompt, sessionId, status: h.internal.routineState[key].status,
+    calls: callsOf(sessionId), approved: cards ? cards.answered.map(m => m.request.input.command) : [],
+  };
 }
 
 function listOf(argv) {
@@ -137,40 +203,95 @@ describe('a Notes-mode routine', () => {
   test('is refused a retried write, in the same run and in the next one', async () => {
     const w = folder('retried-write');
     const first = await runRoutine({ writes: [{ file: w.rel('tool.py') }, { file: w.rel('tool.py') }, { file: w.rel('first.md') }] });
-    assert.ok(w.has('first.md') && !w.has('tool.py'), 'both attempts in the first run were refused');
+    // Both attempts reached the file tool, and each was told it was refused.
+    const attempts = first.calls.filter(c => c.target === 'tool.py');
+    assert.strictEqual(attempts.length, 2, 'the first run asked to write tool.py twice');
+    for (const [i, a] of attempts.entries()) {
+      assert.deepStrictEqual([a.tool, a.answered, a.refused, a.message], ['Write', true, true, REFUSED_WRITE], `attempt ${i + 1} was refused`);
+    }
+    assert.ok(first.calls.some(c => c.target === 'first.md' && c.answered && !c.refused), 'and the run went on to its note');
+    assert.ok(w.has('first.md') && !w.has('tool.py'), 'nothing reached the disk');
+
     const second = await runRoutine({ writes: [{ file: w.rel('tool.py') }, { file: w.rel('second.md') }] });
-    assert.ok(w.has('second.md') && !w.has('tool.py'), 'the next run was refused too');
+    assert.notStrictEqual(second.sessionId, first.sessionId, 'the next run is a separate spawn, with its own session');
+    const again = second.calls.filter(c => c.target === 'tool.py');
+    assert.strictEqual(again.length, 1);
+    assert.deepStrictEqual([again[0].refused, again[0].message], [true, REFUSED_WRITE], 'the next run was refused on its own account');
+    assert.ok(w.has('second.md') && !w.has('tool.py'));
     // On every spawn, not only the first.
     assert.strictEqual(listOf(first.argv), NOTES_DISALLOWED_TOOLS);
     assert.strictEqual(listOf(second.argv), NOTES_DISALLOWED_TOOLS);
   });
 
-  test('can save the same work as a note once the executable write is refused', async () => {
+  test('can save the same work, unchanged, as a note once the executable write is refused', async () => {
     const w = folder('next-step');
-    await runRoutine({ writes: [{ file: w.rel('report.py') }, { file: w.rel('report.md') }] });
-    assert.ok(!w.has('report.py'), 'the executable write was refused');
-    assert.ok(w.has('report.md'), 'the same work saved as a note went ahead');
+    const work = 'Quarterly figures\nRevenue: 12\nCosts: 7\n';
+    const run = await runRoutine({ writes: [{ file: w.rel('report.py'), content: work }, { file: w.rel('report.md'), content: work }] });
+    const [py, md] = ['report.py', 'report.md'].map(f => run.calls.find(c => c.target === f));
+    assert.strictEqual(py.content, work, 'the refused write carried the work');
+    assert.deepStrictEqual([py.refused, py.message], [true, REFUSED_WRITE], 'and was refused');
+    assert.ok(!w.has('report.py'));
+    assert.strictEqual(md.content, work, 'the note carried the same work');
+    assert.strictEqual(md.refused, false);
+    assert.strictEqual(w.read('report.md'), work, 'and the note on disk holds exactly those bytes');
   });
 
-  test('is refused a rename or delete of an executable file, and not of a note', async () => {
+  test('is refused a rename or delete of an executable file even with its card approved, and not of a note', async () => {
     // Claude Code holds a shell `rm` or `mv` to the same Edit(path) rules, so
-    // with the list on the spawn these are refused by the CLI itself, even when
-    // the permission hook allows them, exactly as a Notes-mode conversation's
-    // already are. A rename or delete of an ordinary note is untouched.
+    // with the list on the spawn these are refused by the CLI itself, after the
+    // permission hook has asked and been answered Allow. A rename or delete of
+    // an ordinary note goes ahead once its card is approved.
     const w = folder('rename-delete');
     for (const f of ['tool.py', 'other.sh', 'note.md', 'old.md', 'gone.md']) w.seed(f);
-    await runRoutine({
-      shell: [
-        `rm ${w.rel('tool.py')}`,
-        `mv ${w.rel('other.sh')} ${w.rel('other.md')}`,
-        `mv ${w.rel('note.md')} ${w.rel('note.py')}`,
-        `mv ${w.rel('old.md')} ${w.rel('new.md')}`,
-        `rm ${w.rel('gone.md')}`,
-      ],
-    });
+    const commands = {
+      deletePy: `rm ${w.rel('tool.py')}`,
+      renameSh: `mv ${w.rel('other.sh')} ${w.rel('other.md')}`,
+      renameToPy: `mv ${w.rel('note.md')} ${w.rel('note.py')}`,
+      renameNote: `mv ${w.rel('old.md')} ${w.rel('new.md')}`,
+      deleteNote: `rm ${w.rel('gone.md')}`,
+    };
+    const run = await runRoutine({ shell: Object.values(commands) }, { approve: true });
+    // The deletes are the commands Rundock cards, and each card was approved.
+    assert.ok(run.approved.includes(commands.deletePy), 'deleting tool.py raised a card, and it was approved');
+    assert.ok(run.approved.includes(commands.deleteNote), 'deleting gone.md raised a card, and it was approved');
+    const told = command => run.calls.find(c => c.tool === 'Bash' && c.target === command);
+    for (const key of ['deletePy', 'renameSh', 'renameToPy']) {
+      assert.deepStrictEqual([told(commands[key]).refused, told(commands[key]).message], [true, refusedShell(commands[key])], `${commands[key]} was refused by Claude Code`);
+    }
+    for (const key of ['renameNote', 'deleteNote']) assert.strictEqual(told(commands[key]).refused, false, `${commands[key]} went ahead`);
     assert.ok(w.has('tool.py'), 'deleting tool.py was refused');
     assert.ok(w.has('other.sh') && !w.has('other.md'), 'renaming other.sh away was refused');
     assert.ok(w.has('note.md') && !w.has('note.py'), 'renaming a note to an executable name was refused');
+    assert.ok(!w.has('old.md') && w.has('new.md'), 'renaming a note went ahead');
+    assert.ok(!w.has('gone.md'), 'deleting a note went ahead');
+  });
+});
+
+describe('a Notes-mode conversation', () => {
+  test('is refused a rename or delete of an executable file when its card is approved, and renames or deletes a note', async () => {
+    // The same check, reached the way a person reaches it: the agent asks, the
+    // card is shown in the conversation, the person approves it, the hook
+    // answers Allow, and Claude Code refuses all the same.
+    const w = folder('conversation-rename-delete');
+    for (const f of ['tool.py', 'other.sh', 'old.md', 'gone.md']) w.seed(f);
+    const commands = [`rm ${w.rel('tool.py')}`, `mv ${w.rel('other.sh')} ${w.rel('other.md')}`, `mv ${w.rel('old.md')} ${w.rel('new.md')}`, `rm ${w.rel('gone.md')}`];
+    const convoId = h.freshConvoId('notes-rename-delete');
+    h.clearInvocations();
+    h.writeScenario([{ match: { agent: 'lead-designer', promptIncludes: 'tidy the folder' }, shell: commands, turn: [{ text: 'tidied.' }] }]);
+    const cards = approveCards(m => m._conversationId === convoId);
+    try {
+      client.send({ type: 'chat', conversationId: convoId, agent: 'lead-designer', content: 'tidy the folder' });
+      await client.waitForEvent('system', 'done', convoId);
+    } finally {
+      await cards.stop();
+      h.reapConvo(convoId);
+    }
+    assert.strictEqual(listOf(h.readInvocations()[0].argv), NOTES_DISALLOWED_TOOLS, 'the conversation carried the Notes list');
+    const approved = cards.answered.map(m => m.request.input.command);
+    assert.ok(approved.includes(commands[0]), 'deleting tool.py raised a card in the conversation, and it was approved');
+    assert.ok(approved.includes(commands[3]), 'deleting gone.md raised a card, and it was approved');
+    assert.ok(w.has('tool.py'), 'deleting tool.py was refused all the same');
+    assert.ok(w.has('other.sh') && !w.has('other.md'), 'renaming other.sh away was refused');
     assert.ok(!w.has('old.md') && w.has('new.md'), 'renaming a note went ahead');
     assert.ok(!w.has('gone.md'), 'deleting a note went ahead');
   });
@@ -182,7 +303,7 @@ describe('a Code-mode routine', () => {
     try {
       const w = folder('code-mode');
       w.seed('old.py');
-      const { argv, prompt } = await runRoutine({ writes: [{ file: w.rel('tool.py') }], shell: [`rm ${w.rel('old.py')}`] });
+      const { argv, prompt } = await runRoutine({ writes: [{ file: w.rel('tool.py') }], shell: [`rm ${w.rel('old.py')}`] }, { approve: true });
       assert.ok(!argv.includes('--disallowed-tools'), 'no list in Code mode');
       // Nothing new sits between the spawn plumbing and --print.
       const head = argv.slice(0, argv.indexOf('--print'));

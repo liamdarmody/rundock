@@ -15,6 +15,10 @@
 //   - a bare tool name turns that tool off;
 //   - a shell `rm` or `mv` naming a path an Edit(path) rule covers is refused,
 //     whatever the permission hook answered.
+//
+// The measurement itself is committed, as test/fixtures/claude-cli-notes-mode.json
+// (made by test/tools/claude-cli-notes-mode-probe.js), and
+// test/unit/stub-claude-matches-cli.test.js holds the stub to it case by case.
 const { test, describe, after } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
