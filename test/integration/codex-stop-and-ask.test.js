@@ -65,6 +65,9 @@ describe('a refused Codex approval tells the agent in the same turn', () => {
     const s = steers();
     assert.strictEqual(s.length, 1, 'said once');
     assert.deepStrictEqual(s[0].params.input, [{ type: 'text', text: refusalNotice('denied', SHELL) }]);
+    // A Codex conversation is a conversation: it is told to stop and ask, never
+    // that nobody is there, whatever the line's default becomes.
+    assert.match(s[0].params.input[0].text, /The refusal is deliberate: do not retry it or try another way\. Stop and ask the person what to do\.$/);
     assert.ok(s[0].params.expectedTurnId, 'bound to the turn that was refused');
     assert.strictEqual(s[0].params.threadId, turnStarts()[0].params.threadId, 'in its own conversation\'s thread');
   });

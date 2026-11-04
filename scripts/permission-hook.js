@@ -3152,6 +3152,14 @@ function hookTokenHeader() {
   const token = process.env.RUNDOCK_HOOK_TOKEN || '';
   return token ? { 'X-Rundock-Hook-Token': token } : {};
 }
+
+// A RUN NOBODY CAN BE ASKED FROM: a routine's. Rundock starts every
+// conversation's agent, a delegated one included, with the conversation it
+// belongs to (getSpawnEnv in lib/runtime/claude.js), and only the scheduler
+// starts one with none, which is also how the server tells a routine's card
+// from a conversation's. Every refusal this hook hands over is worded from
+// this one answer, so a routine is told the same thing wherever it is told.
+function unattendedRun(env = process.env) { return !env.RUNDOCK_CONVO_ID; }
 function fetchAgentNotice(done, { check = false } = {}) {
   const id = process.env.RUNDOCK_CONVO_ID || '';
   if (!process.env.RUNDOCK || !AGENT_NOTICE_ID.test(id)) { done(null); return; }
@@ -3188,7 +3196,8 @@ process.stdin.on('end', () => {
 // once, whichever asks first.
 //
 // A command the sandbox refused is told in the same step too, by the same
-// route: the agent is to stop and ask, not look for another way round.
+// route: the agent is not to look for another way round, and is told what to
+// do next in the words every refusal uses (scripts/refusal-notice.js).
 let hookEvent = '';
 let finished = null;
 try { finished = JSON.parse(input); hookEvent = finished.hook_event_name || ''; } catch (e) { /* judged below */ }
@@ -3198,7 +3207,7 @@ if (hookEvent === 'PostToolUse' || hookEvent === 'PostToolUseFailure') {
     : (finished.tool_response && finished.tool_response.stderr);
   const blocked = !!process.env.RUNDOCK && sandboxBlocked(finished.tool_name, finished.tool_input, said, { codeMode: process.env.RUNDOCK_CODE_MODE === '1' });
   fetchAgentNotice((note) => {
-    const context = [note, blocked ? refusalNotice('sandbox', finished.tool_name) : null].filter(Boolean).join('\n');
+    const context = [note, blocked ? refusalNotice('sandbox', finished.tool_name, { unattended: unattendedRun() }) : null].filter(Boolean).join('\n');
     process.stdout.write(JSON.stringify(context ? { hookSpecificOutput: { hookEventName: hookEvent, additionalContext: context } } : {}));
     process.exit(0);
   }, { check: true });
@@ -3626,10 +3635,11 @@ fetchAgentNotice((agentNotice) => {
       try {
         const result = JSON.parse(body);
         // A refusal tells the agent, in this same answer, that it was on
-        // purpose and to stop and ask (scripts/refusal-notice.js). The old
-        // wording for a timeout invited the retry this exists to prevent.
+        // purpose and what to do next (scripts/refusal-notice.js): stop and
+        // ask in a conversation, carry on or say it failed in a routine. The
+        // old wording for a timeout invited the retry this exists to prevent.
         const reason = result.allow ? 'Approved in Rundock'
-          : refusalNotice(result.reason === 'timeout' ? 'timeout' : 'denied', data.tool_name);
+          : refusalNotice(result.reason === 'timeout' ? 'timeout' : 'denied', data.tool_name, { unattended: unattendedRun() });
         // An approval a person gave on a card is told to the agent too. The
         // runtime never shows the model an allow's reason, so without this an
         // approval reads as a question never asked. Not for an allow that
@@ -3663,7 +3673,7 @@ fetchAgentNotice((agentNotice) => {
       hookSpecificOutput: {
         hookEventName: 'PreToolUse',
         permissionDecision: 'deny',
-        permissionDecisionReason: refusalNotice('timeout', data.tool_name)
+        permissionDecisionReason: refusalNotice('timeout', data.tool_name, { unattended: unattendedRun() })
       }
     }));
     process.exit(0);
