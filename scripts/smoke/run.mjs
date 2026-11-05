@@ -178,8 +178,11 @@ record('S4 specialist scope return hands back (handback event, kind return)', !!
 // (permissions.js): no card, silent allow. High-risk commands must card and
 // wait for a click. Both behaviours are product contract; both are checked.
 // Asked as the agent of the conversation on screen would ask: a hook token is
-// bound to a conversation, or to a routine run that is going.
-const s5Convo = await page.evaluate(() => (window.activeConversation && window.activeConversation.id) || '');
+// bound to a conversation, or to a routine run that is going. The page holds
+// the open conversation in a top-level `let`, which is a global binding and
+// never a property of window.
+const onScreenConvo = () => page.evaluate(() => (typeof activeConversation !== 'undefined' && activeConversation && activeConversation.id) || '');
+const s5Convo = await onScreenConvo();
 const s5HookToken = await askHookToken(server, s5Convo || null);
 const lowP = fetch(`http://127.0.0.1:${PORT}/api/permission-request`, {
   method: 'POST', headers: { 'content-type': 'application/json', 'x-rundock-hook-token': s5HookToken },
@@ -250,7 +253,7 @@ record('S5b a destructive command after a lone & does not auto-approve', !(s6c &
 // persist a per-workspace grant, and the second access must be silent.
 {
   const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'smoke-outside-'));
-  const activeConvo = await page.evaluate(() => (window.activeConversation && window.activeConversation.id) || '');
+  const activeConvo = await onScreenConvo();
   const activeHookToken = await askHookToken(server, activeConvo || null);
   const hookPath = path.join(ROOT, 'scripts', 'permission-hook.js');
   const runHook = (toolInput) => new Promise((resolve) => {
