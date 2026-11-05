@@ -195,6 +195,9 @@ function stopHtml(view) {
 
 function detailHtml(view, title, agent) {
   const meta = view.duration ? `<p class="settings-caption rd-took">${escText(`Took ${view.duration}.`)}</p>` : '';
+  // How many of its cards were refused, beside how long it took: both are
+  // facts the server recorded about the run, said only when there is one.
+  const refused = view.refused ? `<p class="settings-caption rd-refused" data-run-detail="refused">${escText(view.refused)}</p>` : '';
   // WHEN IT STARTED, said next to the outcome rather than left for the
   // reader to work out from "13 seconds" and a mental subtraction, or not
   // said at all. `view.when` is null only where there is no started moment
@@ -213,6 +216,7 @@ function detailHtml(view, title, agent) {
         + errorDetailsHtml(view.state.guidanceDetail)
       : '')
     + meta
+    + refused
     + stopHtml(view)
     + '</div>'
     + filesHtml(view.files);

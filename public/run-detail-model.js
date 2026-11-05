@@ -319,6 +319,22 @@
   }
 
   /**
+   * How many of a run's permission cards were refused, in words, or null.
+   *
+   * The count is the server's, written only once there is one (refusedCards),
+   * so a run that carried on past a refused step and said nothing about it
+   * still shows it. Null for none, for a record from before the count
+   * existed, and for anything that is not a whole number above nought: the
+   * line is a fact the server wrote, never a guess at a malformed one.
+   */
+  function refusedWords(count) {
+    if (typeof count !== 'number' || !Number.isInteger(count) || count < 1) return null;
+    return count === 1
+      ? '1 permission card was refused or left unanswered.'
+      : `${count} permission cards were refused or left unanswered.`;
+  }
+
+  /**
    * How long a run took, in words, or null where nothing knows.
    *
    * NULL FOR A RUN STILL GOING AND FOR ONE WHOSE ENDING NEVER RAN, because in
@@ -485,6 +501,7 @@
         stoppable: !!state.stoppable,
       },
       duration: found ? durationWords(record.durationMs) : null,
+      refused: found ? refusedWords(record.refusedCards) : null,
       files: changedFiles(found ? record : null, FILES_LABELS[state.filesLabel] || FILES_LABELS.complete),
     };
   }
@@ -537,6 +554,6 @@
   return {
     RUN_STATES, DECLARED_FAILED_STATE, WITHOUT_AGENT_STATE, UNRECOGNISED_STATE, NO_RECORD_STATE, FILES_UNKNOWN_WORDS, FILES_UNKNOWN_FALLBACK,
     CHANGE_LABELS, CHANGE_FALLBACK, FILES_LABELS, NO_FILES_CHANGED, UNKNOWN_FILES_LEAD, NO_REASON_GIVEN,
-    changedFiles, unknownWords, durationWords, describeRun, baseName, startedWords, triggerOf, STARTED_MANUALLY,
+    changedFiles, unknownWords, durationWords, refusedWords, describeRun, baseName, startedWords, triggerOf, STARTED_MANUALLY,
   };
 }));

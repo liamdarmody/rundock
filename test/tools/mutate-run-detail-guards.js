@@ -283,6 +283,25 @@ const MUTATIONS = [
   [COUNT_DENY, 'Refused count: a string "true" is counted as an approval',
     '      if (!allow && pending.countRefusal) pending.countRefusal();',
     '      if (msg.allow !== true && msg.allow !== \'true\' && pending.countRefusal) pending.countRefusal();'],
+  // The count on the run screen.
+  [MODEL, 'Refused count: the screen is never told the count',
+    '      refused: found ? refusedWords(record.refusedCards) : null,',
+    '      refused: null,'],
+  [MODEL, 'Refused count: a run with none says nought were refused',
+    "    if (typeof count !== 'number' || !Number.isInteger(count) || count < 1) return null;",
+    "    if (typeof count !== 'number' || !Number.isInteger(count) || count < 0) return null;"],
+  [MODEL, 'Refused count: a count that is not a whole number is said',
+    "    if (typeof count !== 'number' || !Number.isInteger(count) || count < 1) return null;",
+    '    if (!count) return null;'],
+  [MODEL, 'Refused count: one card is said in the plural',
+    '    return count === 1\n',
+    '    return false\n'],
+  [MODEL_VIEW, 'Refused count: an older record renders differently from one with none',
+    "    if (typeof count !== 'number' || !Number.isInteger(count) || count < 1) return null;",
+    '    if (count === undefined) return null;'],
+  [VIEW, 'Refused count: the line is never drawn',
+    '    + refused\n',
+    ''],
 ];
 
 // The reporter is named explicitly rather than left to the default, which

@@ -515,3 +515,31 @@ describe('stopping the run on screen', () => {
     assert.deepStrictEqual(w.sent, []);
   });
 });
+
+describe('the cards a run had refused, on the page', () => {
+  test('a run with refused cards says how many, beside how long it took', () => {
+    const { doc, dom } = draw(record({ refusedCards: 2 }));
+    const line = doc.querySelector('[data-run-detail="refused"]');
+    assert.ok(line, 'the count is drawn');
+    assert.strictEqual(line.textContent, '2 permission cards were refused or left unanswered.');
+    assert.ok(line.closest('.rd-card'), 'inside the box that reports the outcome');
+    dom.window.close();
+  });
+
+  test('an older record, written before the count existed, renders as it always did', () => {
+    const older = draw(record());
+    const none = draw(record({ refusedCards: 0 }));
+    assert.strictEqual(older.doc.querySelector('[data-run-detail="refused"]'), null);
+    assert.strictEqual(older.html, none.html, 'a run with none renders the same as a record with no count');
+    assert.match(pageText(older.doc), /13 seconds/);
+    older.dom.window.close();
+    none.dom.window.close();
+  });
+
+  test('a count carrying markup cannot reach the page as markup', () => {
+    const { doc, dom } = draw(record({ refusedCards: '<b>2</b>' }));
+    assert.strictEqual(doc.querySelector('[data-run-detail="refused"]'), null);
+    assert.strictEqual(doc.querySelector('#run-detail-content b'), null);
+    dom.window.close();
+  });
+});
