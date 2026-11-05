@@ -1833,8 +1833,8 @@ const MUTATIONS = [
     '  verifyClient: ({ req }) => true\n'],
   // ===== ONLY RUNDOCK'S OWN WINDOW DRIVES THE SERVER =====
   [AUTH_UNIT, 'Auth: an unknown hook token belongs to no conversation',
-    '  return hookScopes.has(token) ? hookScopes.get(token) : undefined;',
-    '  return hookScopes.has(token) ? hookScopes.get(token) : null;'],
+    '  return runTokens.has(token) ? null : undefined;',
+    '  return null;'],
   [AUTH_DOOR, 'Auth: every WebSocket upgrade asks for the key',
     '    && auth.authenticate(req, server.address().port),',
     '    && true,'],
