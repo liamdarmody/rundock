@@ -446,3 +446,99 @@ describe('the hook gives one answer for each call', () => {
     assert.strictEqual(decision(allowed), 'allow', `one answer, the hook's own: ${allowed.stdout}`);
   });
 });
+
+describe('input the hook cannot read is refused inside Rundock, and passes through outside it', () => {
+  // Input the hook cannot read says nothing about what it was asking for, so
+  // nothing about it can be checked, and the runtime took the pass-through it
+  // used to get as no objection. Inside Rundock it is refused in the words of
+  // any request the hook could not check; outside, the hook decides nothing.
+  const everyday = JSON.stringify({ hook_event_name: 'PreToolUse', cwd: ws, session_id: 's', ...bash('ls') });
+  const cutOff = everyday.slice(0, -1);
+  const UNREADABLE = [
+    ['input that is not JSON', 'PreToolUse Bash ls'],
+    ['empty input', ''],
+    ['input cut off partway', everyday.slice(0, Math.floor(everyday.length / 2))],
+    ['input cut off before its last character', cutOff],
+    ['JSON that is a string, not a request', '"PreToolUse"'],
+    ['JSON that is a list, not a request', '["PreToolUse","Bash","ls"]'],
+  ];
+  for (const [what, raw] of UNREADABLE) {
+    test(`${what} is refused, a routine and a conversation each in their own words, and passes through outside Rundock`, () => {
+      const routine = runHook(null, { raw, env: ROUTINE });
+      assert.strictEqual(routine.status, 0, routine.stderr);
+      assert.deepStrictEqual(routine.answer, couldNotCheck(true), routine.stdout);
+      const conversation = runHook(null, { raw, env: CONVERSATION });
+      assert.strictEqual(conversation.status, 0, conversation.stderr);
+      assert.deepStrictEqual(conversation.answer, couldNotCheck(false), conversation.stdout);
+      const outside = runHook(null, { raw, env: { RUNDOCK: '' } });
+      assert.strictEqual(outside.status, 0, outside.stderr);
+      assert.deepStrictEqual(outside.answer, {}, outside.stdout);
+    });
+  }
+
+  // 1. THE INVERSE ACTION: what can be read is answered as it always was.
+  test('well-formed input gets its ordinary answer inside Rundock and passes through outside it, where the same input cut off is refused inside', () => {
+    const inside = runHook(null, { raw: everyday });
+    assert.strictEqual(inside.status, 0, inside.stderr);
+    assert.strictEqual(decision(inside), 'allow', inside.stdout);
+    assert.strictEqual(reasonOf(inside), 'Rundock server unreachable.', 'the answer anything ordinary gets with nobody to ask');
+    const outside = runHook(null, { raw: everyday, env: { RUNDOCK: '' } });
+    assert.strictEqual(outside.status, 0, outside.stderr);
+    assert.deepStrictEqual(outside.answer, {});
+    assert.deepStrictEqual(runHook(null, { raw: cutOff }).answer, couldNotCheck(true));
+  });
+
+  // 2. THE UNDO: nothing carries over to the next call.
+  test('after a refusal for input it cannot read, the next well-formed request is answered as usual, and the refusal asked Rundock nothing', async () => {
+    const NOTE = 'A line Rundock left for this agent.';
+    const notes = [NOTE];
+    const asked = [];
+    const server = await new Promise((resolve) => {
+      const s = http.createServer((req, res) => {
+        req.resume();
+        asked.push(req.url.split('?')[0]);
+        // The line is handed over once, to whichever answer asks for it first.
+        res.end(JSON.stringify(req.url.startsWith('/api/agent-notice') ? { text: notes.shift() || '' } : { allow: true }));
+      });
+      s.listen(0, '127.0.0.1', () => resolve(s));
+    });
+    try {
+      const port = server.address().port;
+      const refused = await runHookAgainst(port, null, CONVERSATION, { raw: cutOff });
+      assert.strictEqual(refused.status, 0);
+      assert.deepStrictEqual(refused.answer, couldNotCheck(false), refused.stdout);
+      assert.deepStrictEqual(asked, [], 'no card was raised for it, and the line left for the agent was not taken');
+      const next = await runHookAgainst(port, ORDINARY, CONVERSATION);
+      assert.strictEqual(next.status, 0);
+      assert.deepStrictEqual(next.answer, { hookSpecificOutput: {
+        hookEventName: 'PreToolUse', permissionDecision: 'allow', permissionDecisionReason: 'Approved in Rundock', additionalContext: NOTE,
+      } }, next.stdout);
+      assert.deepStrictEqual(asked, ['/api/agent-notice', '/api/permission-request']);
+    } finally {
+      server.closeAllConnections();
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  // 3. THE RETRY: the same input is refused again, in the same words.
+  test('the same unreadable input sent again is refused again, in the same words', () => {
+    for (const env of [ROUTINE, CONVERSATION]) {
+      const first = runHook(null, { raw: cutOff, env });
+      const again = runHook(null, { raw: cutOff, env });
+      assert.strictEqual(decision(first), 'deny', first.stdout);
+      assert.strictEqual(again.status, 0, again.stderr);
+      assert.strictEqual(again.stdout, first.stdout);
+    }
+  });
+
+  // 4. THE MOST COMMON NEXT STEP: the agent reads why, in the words for its
+  // kind of run, which are the words any request the hook could not check gets.
+  test('a routine and a conversation are each refused in their own words, the words a hook that cannot load gives them', () => {
+    const routine = runHook(null, { raw: cutOff, env: ROUTINE });
+    assertRoutineWords(routine);
+    assert.strictEqual(routine.stdout, runHook(ORDINARY, { preload: throwsOnLoad, env: ROUTINE }).stdout);
+    const conversation = runHook(null, { raw: cutOff, env: CONVERSATION });
+    assertConversationWords(conversation);
+    assert.strictEqual(conversation.stdout, runHook(ORDINARY, { preload: throwsOnLoad, env: CONVERSATION }).stdout);
+  });
+});

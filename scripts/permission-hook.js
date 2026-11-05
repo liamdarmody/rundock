@@ -13,6 +13,11 @@
  * If not running inside Rundock (no RUNDOCK env var), passes through silently.
  * If the Rundock server is unreachable, a request that always asks is refused
  * and any other is allowed, to avoid blocking.
+ * If the hook cannot answer (an exception, an unhandled rejection under any
+ * --unhandled-rejections mode, a hook that cannot load, a process left with
+ * nothing to wait for) or cannot read its input (not JSON, empty, cut off), the
+ * call is refused inside Rundock and passes through outside it. Either way the
+ * hook prints one answer for the call.
  */
 
 // A HOOK THAT STOPS WITHOUT ANSWERING REFUSES THE TOOL CALL. The runtime reads a
@@ -22,8 +27,8 @@
 // ends in process.exit, so `beforeExit` only ever means none was given.
 // Installed ahead of the requires, so a hook that cannot load refuses too.
 // Outside Rundock this hook decides nothing, and a finished tool has nothing
-// left to refuse. Input that cannot be read at all is handled where it is
-// parsed, below.
+// left to refuse. Input that cannot be read at all is refused by the same
+// function, where it is parsed, below.
 let hookInput = '';
 // ONE ANSWER FOR EACH CALL. Set once an answer has been written whole. Nothing
 // in this file runs between an answer and its exit, so a rejection or an error
@@ -3239,6 +3244,16 @@ if (hookEvent === 'PostToolUse' || hookEvent === 'PostToolUseFailure') {
   }, { check: true });
   return;
 }
+// INPUT THIS HOOK CANNOT READ IS REFUSED, inside Rundock, in the words of any
+// request it could not check (refuseUnanswered, at the top), a routine's
+// included. Input that is not JSON, is empty, is cut off, or is JSON but not an
+// object says nothing about what it was asking for, so nothing about it can be
+// checked, and the pass-through it used to get was read by the runtime as no
+// objection. Refused before anything is asked of Rundock, so it raises no card
+// and leaves the line Rundock left for this agent to the next answer. Which
+// event it was cannot be read either, so it is taken as the one this hook
+// decides; outside Rundock it still passes through.
+if (!finished || typeof finished !== 'object' || Array.isArray(finished)) { refuseUnanswered(); return; }
 fetchAgentNotice((agentNotice) => {
   // Not running in Rundock: pass through (no decision, Claude Code handles normally)
   if (!process.env.RUNDOCK) {
@@ -3246,14 +3261,8 @@ fetchAgentNotice((agentNotice) => {
     process.exit(0);
   }
 
-  let data;
-  try {
-    data = JSON.parse(input);
-  } catch (e) {
-    // Bad input: pass through, since nothing says what it was asking for.
-    process.stdout.write(JSON.stringify({}));
-    process.exit(0);
-  }
+  // Read once, above, where input that could not be read was refused.
+  const data = finished;
 
   const wsRoot = process.env.RUNDOCK_WORKSPACE || process.cwd();
   // Every answer this hook gives from here on also hands over any line

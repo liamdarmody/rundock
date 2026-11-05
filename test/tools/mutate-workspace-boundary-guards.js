@@ -3201,6 +3201,17 @@ const MUTATIONS = [
   [HOOK_CRASH, 'Hook crash: an answer written is never counted as given',
     "  process.stdout.write(JSON.stringify(output));\n  answered = true;",
     "  process.stdout.write(JSON.stringify(output));"],
+  // Input the hook cannot read passed through before, which the runtime reads
+  // as no objection; it is refused now, inside Rundock.
+  [HOOK_CRASH, 'Hook crash: input the hook cannot read passes through again',
+    "if (!finished || typeof finished !== 'object' || Array.isArray(finished)) { refuseUnanswered(); return; }",
+    "if (!finished || typeof finished !== 'object' || Array.isArray(finished)) { writeAnswer({}); process.exit(0); }"],
+  [HOOK_CRASH, 'Hook crash: JSON that is not an object is read as a request',
+    "if (!finished || typeof finished !== 'object' || Array.isArray(finished))",
+    "if (!finished || Array.isArray(finished))"],
+  [HOOK_CRASH, 'Hook crash: a JSON list is read as a request',
+    "if (!finished || typeof finished !== 'object' || Array.isArray(finished))",
+    "if (!finished || typeof finished !== 'object')"],
   [HOOK_CRASH, 'Hook crash: the refusal is armed in everything that requires the file',
     "if (require.main === module) {\n  process.on('uncaughtException', refuseUnanswered);",
     "if (true) {\n  process.on('uncaughtException', refuseUnanswered);"],
