@@ -51,9 +51,9 @@
 // deny rules refuse it (see THE TOOL FLAGS below). `writes` entries are held
 // to the same deny rules, and a `writes` entry may give "content", the exact
 // text the write carries.
-// Any rule may give "hooks": [{ "event", "tool", "input", "error" }] to run
-// Rundock's real permission hook for each call, in order, before its turn: see
-// runHookCalls below.
+// Any rule may give "hooks": [{ "event", "tool", "input", "error", "extra" }] to
+// run Rundock's real permission hook for each call, in order, before its turn:
+// see runHookCalls below.
 // First matching rule wins; rules are re-read from disk on every message so
 // tests can rewrite the script mid-scenario. The stub also appends every
 // invocation to `stub-invocations.jsonl` (cwd) for spawn-arg assertions.
@@ -659,9 +659,11 @@ function handleUserMessage(content) {
 // the tool, with this process's environment (the one Rundock started this
 // agent with, conversation and token included) and this session's id. Each
 // call waits for the one before it, as an agent's tool calls do. Every answer
-// is logged to `stub-hook-answers.jsonl` (cwd), in order, so a test reads what
-// the agent was told rather than inferring it. `event` defaults to PreToolUse;
-// `error` is a failed call's error, for PostToolUseFailure.
+// is logged to `stub-hook-answers.jsonl` (cwd), in order, with this process's
+// pid to tie it to its invocation, so a test reads what the agent was told
+// rather than inferring it. `event` defaults to PreToolUse; `error` is a failed
+// call's error, for PostToolUseFailure; `extra` adds fields to the payload, as
+// the runtime adds `agent_id` and `agent_type` for a call made by a subagent.
 const HOOK_LOG = path.join(process.cwd(), 'stub-hook-answers.jsonl');
 const PERMISSION_HOOK = path.join(__dirname, '..', '..', '..', 'scripts', 'permission-hook.js');
 function runHookCalls(calls, then) {
@@ -673,12 +675,13 @@ function runHookCalls(calls, then) {
     const input = {
       session_id: SESSION_ID, hook_event_name: event, tool_name: call.tool || 'Bash', tool_input: call.input || {}, cwd: process.cwd(),
       ...(call.error != null ? { error: String(call.error) } : {}),
+      ...(call.extra && typeof call.extra === 'object' ? call.extra : {}),
     };
     let out = '';
     const log = (answer) => {
       try {
         fs.appendFileSync(HOOK_LOG, JSON.stringify({
-          agent: AGENT, sessionId: SESSION_ID, convo: process.env.RUNDOCK_CONVO_ID || null, event, tool: input.tool_name, answer, raw: answer ? undefined : out, ts: Date.now(),
+          pid: process.pid, agent: AGENT, sessionId: SESSION_ID, subagent: input.agent_id || null, convo: process.env.RUNDOCK_CONVO_ID || null, event, tool: input.tool_name, answer, raw: answer ? undefined : out, ts: Date.now(),
         }) + '\n');
       } catch (e) { /* logging is best-effort */ }
       next();

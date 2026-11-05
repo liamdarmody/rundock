@@ -17,6 +17,7 @@ const path = require('node:path');
 const h = require('../helpers/harness.js');
 const { agentFile, standardTeam, makeTempDir } = require('../helpers/workspace.js');
 const { refusalNotice } = require('../../scripts/refusal-notice.js');
+const { MARKERS } = require('../fixtures/stream-json.js');
 
 const ROUTINE_AGENT = 'keeper';
 let client, outside;
@@ -182,6 +183,43 @@ test('a run that ends on the failure line it was told is recorded as failed, wit
   assert.strictEqual(record.error, 'the notes could not be read');
   assert.strictEqual(record.declared, true);
   assert.strictEqual(record.refusedCards, 1);
+});
+
+// A subagent the routine starts with its Task tool runs inside the routine's
+// own process, and the runtime calls the hook for it with the routine's own
+// session id, adding the subagent's id and type (measured, in
+// test/fixtures/subagent-hook-payload.json). So its refused card is the run's,
+// told the routine's words and counted once on its record.
+test('a subagent\'s refused card counts once on the routine\'s run, told the routine\'s words', async () => {
+  const { agent_id: subagent, agent_type: type } = require('../fixtures/subagent-hook-payload.json').subagent;
+  h.writeScenario([{ match: { agent: ROUTINE_AGENT, promptIncludes: 'count a subagent' }, hooks: [{ ...readOutside(), extra: { agent_id: subagent, agent_type: type } }, readOutside('other.md')], turn: [{ text: 'Did the rest.' }] }]);
+  const before = answersFrom(ROUTINE_AGENT).length;
+  const record = await runRoutine('count-subagent', 'count a subagent', [false, false]);
+  const [bySubagent, byRoutine] = answersFrom(ROUTINE_AGENT).slice(before);
+  assert.strictEqual(bySubagent.subagent, subagent, 'the first card was raised as the subagent');
+  assert.strictEqual(byRoutine.subagent, null, 'and the second as the routine itself');
+  assert.strictEqual(bySubagent.sessionId, byRoutine.sessionId, 'under the one session');
+  assert.strictEqual(reasonOf(bySubagent), refusalNotice('denied', 'Bash', { unattended: true }));
+  assert.strictEqual(record.refusedCards, 2, 'each counted once, on the run');
+});
+
+// Rundock's own delegation is read from a conversation's output: an Agent tool
+// call it intercepts, or a handback marker. A routine's output is never read
+// (lib/scheduler.js starts it with its output ignored), so a routine that
+// names another agent starts nobody, and no card of its run can come from a
+// session of another agent's.
+test('a routine cannot start a Rundock delegation, whatever its output says', async () => {
+  h.clearInvocations();
+  h.writeScenario([
+    { match: { agent: ROUTINE_AGENT, promptIncludes: 'hand it on' }, turn: [{ text: 'Handing this on.' }, { agentTool: { subagent_type: 'content-lead', prompt: 'routine handoff brief' } }, { text: `Handed on. ${MARKERS.RETURN}` }] },
+    { match: { agent: 'content-lead' }, hooks: [readOutside()], turn: [{ text: 'A delegate the routine started.' }] },
+  ]);
+  const record = await runRoutine('no-delegation', 'hand it on', []);
+  assert.strictEqual(record.status, 'succeeded');
+  await h.delay(300);
+  assert.deepStrictEqual(h.readInvocations().map((i) => i.agent), [ROUTINE_AGENT], 'only the routine\'s own agent was ever started');
+  assert.strictEqual(answersFrom('content-lead').filter((a) => a.convo === null).length, 0);
+  assert.strictEqual(Object.prototype.hasOwnProperty.call(record, 'refusedCards'), false);
 });
 
 // The control failing: a runs folder that cannot be written loses the count,

@@ -356,3 +356,44 @@ describe('the route counts a routine\'s refused cards, once each', () => {
     assert.deepStrictEqual(countedSince(n), [ROUTINE_RUN.id], 'and the next refusal is counted again');
   });
 });
+
+// ── A subagent a routine starts ──
+//
+// A routine's agent can start a subagent with its Task tool. That subagent runs
+// inside the routine's own process, and the runtime calls the hook for it with
+// the routine's session id, adding only `agent_id` and `agent_type` (measured,
+// in test/fixtures/subagent-hook-payload.json). So its cards are the run's,
+// found by the session as the routine's own are, and counted on its record.
+// A routine cannot reach Rundock's own delegation at all: that is read from a
+// conversation's output, and a routine's output is never read
+// (test/integration/unattended-refusal.test.js drives both).
+describe('a subagent a routine starts raises its cards as the routine', () => {
+  const measured = require('../fixtures/subagent-hook-payload.json');
+
+  test('the runtime calls the hook for a subagent with its parent\'s session id', () => {
+    assert.strictEqual(measured.subagent.session_id, measured.parent.session_id);
+    assert.strictEqual(typeof measured.subagent.agent_id, 'string');
+    assert.strictEqual(measured.subagent.agent_type, 'general-purpose');
+    assert.ok(!('agent_id' in measured.parent) && !('agent_type' in measured.parent), 'the parent\'s own call names no subagent');
+    const { agent_id: id, agent_type: type, tool_use_id: a, ...rest } = measured.subagent;
+    const { tool_use_id: b, ...parentRest } = measured.parent;
+    assert.deepStrictEqual(rest, parentRest, 'and nothing else in the call tells the two apart');
+  });
+
+  test('so a subagent\'s refused card is the run\'s card, counted once on it, in the routine\'s words', async () => {
+    const n = counted.length;
+    const since = sent.length;
+    // The measured subagent call, in the routine's session, asking for a read
+    // outside the workspace the way the routine's own call would.
+    const { tool_name: tn, tool_input: ti, transcript_path: tp, cwd: c, ...shape } = measured.subagent;
+    const call = { ...shape, ...outsideRead(ROUTINE_SESSION) };
+    assert.strictEqual(call.agent_id, measured.subagent.agent_id);
+    const answer = runHook(routineEnv(), call);
+    const card = await waitFor(() => sent.slice(since).find((m) => m.type === 'control_request'));
+    assert.deepStrictEqual(card._run, { id: ROUTINE_RUN.id, routine: ROUTINE_RUN.routine, agent: ROUTINE_RUN.agent });
+    handlePermissionResponse({ pendingPermissions: pending, broadcast: () => {} }, { send() {} }, { requestId: card.request_id, conversationId: card._conversationId, allow: false, card: true });
+    const out = (await answer).json;
+    assert.strictEqual(reasonOf(out), UNATTENDED.denied);
+    assert.deepStrictEqual(counted.slice(n), [ROUTINE_RUN.id]);
+  });
+});
