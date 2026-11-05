@@ -114,6 +114,8 @@ Catch-up means routines run late, not on time. A 05:00 briefing on a machine ope
 
 The scheduler runs each routine by spawning a headless Claude Code subprocess with the routine's prompt as the input message. The agent's name is passed, as it is in a conversation, so Claude Code loads that agent's file and applies any `tools:` line in it. That includes the orchestrator's routines. The subprocess runs with `--dangerously-skip-permissions` because there is no user available to approve tool calls in real time.
 
+**Every routine run is told that nobody is watching.** One fixed line is added to its system prompt: nobody can answer a question or approve a step, so it should not ask or wait for a reply, should carry on with the rest of the job when a step is refused, should save its work in the workspace as it goes, and should end its final message on a `RUN STATUS` line (see [A run can say it failed](#a-run-can-say-it-failed)). On Claude Code it is passed with `--append-system-prompt`. Codex has no such flag, so there it travels with the agent's instructions, ahead of the routine prompt. The routine prompt itself is never changed, because it is the plan an approval was given for. A run you press gets the line too: you can watch it, but nothing you type can reach it. A conversation never gets it. The words live in `scripts/refusal-notice.js`, beside the line a refused step is given, and both end on the same failure line. (Pinned by `test/unit/doc-claims.test.js`.)
+
 If you want routines to fire while you are away from your computer, see [Always-on routines: VPS or Claude routines](#always-on-routines-vps-or-claude-routines) for two practical paths.
 
 ### Running a routine now

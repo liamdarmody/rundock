@@ -288,14 +288,14 @@ describe('ROUTINES.md: the child\'s output is discarded', () => {
   // see it. Same technique as test/unit/scheduler-lib.test.js, and the same
   // reason: a spawn dep on the wiring surface would be a seam in production
   // code that only tests would ever use.
-  function stdioTheSpawnAsksFor() {
+  function whatTheSpawnIsAskedFor() {
     const claude = require(CLAUDE_KEY);
     const realSpawn = claude.spawnClaude;
     const prevClaudeDeps = claude.wireClaudeRuntimeDeps({ getActualPort: () => 0 });
     const cached = require.cache[SCHEDULER_KEY];
     let seen = null;
     claude.spawnClaude = (args, options) => {
-      seen = options;
+      seen = { args, options };
       // A child that reports nothing and is never driven. The run is left
       // held, which is why the workspace below is this test's own.
       return new (require('node:events').EventEmitter)();
@@ -313,11 +313,11 @@ describe('ROUTINES.md: the child\'s output is discarded', () => {
       if (cached) require.cache[SCHEDULER_KEY] = cached;
     }
     assert.ok(seen, 'the scheduler reached the spawn, so there is a configuration to read');
-    return seen.stdio;
+    return seen;
   }
 
   test('the spawn asks for no output pipes at all, which is what the page promises', () => {
-    const stdio = stdioTheSpawnAsksFor();
+    const { stdio } = whatTheSpawnIsAskedFor().options;
     assert.deepStrictEqual(stdio, ['ignore', 'ignore', 'ignore'],
       'stdin, stdout and stderr are all discarded: an unread pipe in ANY slot hangs the child');
 
@@ -336,6 +336,28 @@ describe('ROUTINES.md: the child\'s output is discarded', () => {
     assert.ok(paragraph, 'the claim is in the page');
     assert.match(paragraph, /doc-claims\.test\.js/,
       'the paragraph making the claim must name the test that pins it, so the next editor moves both');
+  });
+
+  // The claim: every routine run is told that nobody is watching, in its
+  // system prompt, in the words scripts/refusal-notice.js keeps beside the line
+  // a refused step is given. Read off the arguments the scheduler really hands
+  // the spawn, the same stand-in the stdio claim above is read through.
+  test('every routine is told nobody is watching, in its system prompt, as the page says', () => {
+    const { UNATTENDED_RUN, FAILED_LINE } = require('../../scripts/refusal-notice.js');
+    const { args } = whatTheSpawnIsAskedFor();
+    assert.strictEqual(args[args.indexOf('--append-system-prompt') + 1], UNATTENDED_RUN,
+      'the line goes in the system prompt');
+    assert.strictEqual(args[args.length - 1], 'p', 'and the routine prompt is sent as it was written');
+
+    const paragraph = routinesDoc.split('\n').find(l => l.startsWith('**Every routine run is told that nobody is watching.**'));
+    assert.ok(paragraph, 'ROUTINES.md says every routine run is told');
+    assert.match(paragraph, /`--append-system-prompt`/);
+    assert.match(paragraph, /Codex has no such flag/);
+    assert.match(paragraph, /The routine prompt itself is never changed/);
+    assert.match(paragraph, /A conversation never gets it\./);
+    assert.match(paragraph, /`scripts\/refusal-notice\.js`/);
+    assert.ok(UNATTENDED_RUN.endsWith(FAILED_LINE), 'and both lines end on the same failure line, as it says');
+    assert.match(paragraph, /doc-claims\.test\.js/, 'the paragraph names the test that pins it');
   });
 });
 
