@@ -411,7 +411,7 @@ describe('ROUTINES.md: the child\'s output is discarded, and its stderr kept onl
     const paragraph = routinesDoc.split('\n').find(l => l.startsWith('**Every routine run is told that nobody is watching.**'));
     assert.ok(paragraph, 'ROUTINES.md says every routine run is told');
     assert.match(paragraph, /`--append-system-prompt`/);
-    assert.match(paragraph, /Codex has no such flag/);
+    assert.match(paragraph, /On Codex it is the thread's developer instructions/);
     assert.match(paragraph, /The routine prompt itself is never changed/);
     assert.match(paragraph, /A conversation never gets it\./);
     assert.match(paragraph, /`scripts\/refusal-notice\.js`/);

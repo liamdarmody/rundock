@@ -6,9 +6,10 @@
 // a routine to carry on only after the refusal, and a run that had already
 // asked a question in its final message, or stopped to wait for an answer,
 // read as finished with nothing saved. So every routine run, on either
-// runtime, carries one fixed line in its system prompt. It goes in the system
-// prompt because the routine prompt is the plan an approval was given for, and
-// changing that would lapse every approval.
+// runtime, carries one fixed line in its session-level instructions: the
+// system prompt on Claude Code, the thread's developer instructions on Codex.
+// It never goes in the turn input, because the routine prompt is the plan an
+// approval was given for, and changing that would lapse every approval.
 //
 // A conversation has somebody to ask, so it never gets the line.
 const { test, before, after } = require('node:test');
@@ -76,14 +77,21 @@ test('a routine on Claude Code carries the line in its system prompt, and its ro
   await settle('writer:sweep');
 });
 
-test('a routine on Codex carries the line ahead of its routine prompt', async () => {
+// The thread/start each Codex request in the stub's log asked for.
+const codexThreadStarts = () => h.readInvocations()
+  .filter(i => i.mode === 'app-server' && i.method === 'thread/start')
+  .map(i => i.params || {});
+
+test('a routine on Codex carries the line in its thread\'s developer instructions, and its turn input is unchanged', async () => {
   h.clearInvocations();
   client.send({ type: 'run_routine_now', agentId: 'helper', name: 'check', occurrence: 0 });
   assert.ok(await h.waitUntil(() => h.codexTurnPrompts().some(p => p.includes('helper check')), 20000), 'the routine started a turn');
+  const [thread] = codexThreadStarts();
+  assert.ok(thread, 'the routine started a thread');
+  assert.strictEqual(thread.developerInstructions, UNATTENDED_RUN, 'the line is in the session-level channel');
   const prompt = h.codexTurnPrompts().find(p => p.includes('helper check'));
-  assert.ok(prompt.includes(UNATTENDED_RUN), 'Codex has no system prompt flag, so the line travels with the instructions');
-  assert.ok(prompt.indexOf(UNATTENDED_RUN) < prompt.lastIndexOf('helper check'), 'ahead of the routine prompt, which stays last');
-  assert.ok(prompt.endsWith('helper check'));
+  assert.ok(!prompt.includes('Nobody is watching'), 'and nowhere in the turn input');
+  assert.ok(prompt.endsWith('helper check'), 'whose routine prompt is last, as it was approved');
   await settle('helper:check');
 });
 
@@ -104,4 +112,8 @@ test('a conversation has somebody to ask, on either runtime, and never gets the 
   const turn = h.codexTurnPrompts().find(p => p.includes('hello helper'));
   assert.ok(turn, 'the Codex conversation started a turn');
   assert.ok(!turn.includes('Nobody is watching'), 'and its prompt carries no routine line');
+  const threads = codexThreadStarts();
+  assert.ok(threads.length, 'on a thread it started');
+  assert.ok(threads.every(t => !String(t.developerInstructions || '').includes('Nobody is watching')),
+    'whose developer instructions carry no routine line either');
 });
