@@ -1030,8 +1030,9 @@ test('a run that outlives a workspace switch closes its record where it began', 
 // a plain session, as routines always ran, and its record says so in words
 // a person can act on: what was not applied, why, and which file to fix.
 //
-// The stub reads the agent files with the model in
-// test/helpers/claude-code-agents.js, and refuses as Claude Code refuses.
+// The stub reads the agent files as Claude Code does (the reading in
+// lib/agents/claude-code-load.js, held to a record of the real CLI), and
+// refuses as Claude Code refuses.
 
 // Every child a routine with this prompt started, in order.
 function spawnsFor(prompt) {
@@ -1185,32 +1186,59 @@ test('any other failure is recorded as it always was, and starts nothing else', 
   });
 });
 
-// Sequence 5. The fallback failing: what Claude Code said cannot be kept, or
-// cannot be read back. Without its words there is still the shape of the
-// ending, which is the shape only this failure has among a child that was
-// started as an agent: refused before any session existed. So the run still
-// falls back and still says the file did not load, and says the reason could
-// not be read, rather than passing for a plain success.
-for (const [label, flags] of [['written', 'w'], ['read', 'r']]) {
-  test(`when what Claude Code said cannot be ${label}, the record still says the agent file did not load`, async (t) => {
-    const realOpen = fs.openSync;
-    t.mock.method(fs, 'openSync', function (file, how, ...rest) {
-      if (String(file).endsWith('.stderr') && how === flags) {
-        throw Object.assign(new Error(`EACCES: permission denied, open '${file}'`), { code: 'EACCES' });
-      }
-      return realOpen.call(fs, file, how, ...rest);
-    });
-    await loadingAgentFiles(async () => {
-      begin(label === 'written' ? 29 : 30, [UNDESCRIBED]);
-      h.clearInvocations();
-      driveTicks(t);
-      assert.ok(await settled(UNDESCRIBED));
-      assert.strictEqual(spawnsFor('undescribed sweep body').length, 2, 'it still fell back, once');
-      const [rec] = records();
-      assertFallbackRecord(rec, 'undescribed.md');
-      assert.match(rec.notice, /What Claude Code said could not be read/, 'and it says the reason could not be read');
-      assert.notStrictEqual(shown(rec).chip, runDetail.RUN_STATES.succeeded.chip, 'never a plain success');
-      assert.deepStrictEqual(capturesLeft(), [], 'and nothing is left in the runs folder');
-    });
+// Every way the capture can be unavailable: it cannot be created, a link was
+// planted at its path first, or it cannot be read back. `realOpen` and
+// `realRead` are fs's own, so everything else still opens and reads.
+const realOpen = fs.openSync;
+const realRead = fs.readSync;
+function captureFails(t, how) {
+  const ours = new Set();
+  t.mock.method(fs, 'openSync', function (file, ...rest) {
+    if (!String(file).endsWith('.stderr')) return realOpen.call(fs, file, ...rest);
+    if (how === 'created') throw Object.assign(new Error(`EACCES: permission denied, open '${file}'`), { code: 'EACCES' });
+    if (how === 'planted') fs.symlinkSync(planted(), file);
+    const fd = realOpen.call(fs, file, ...rest);
+    ours.add(fd);
+    return fd;
+  });
+  t.mock.method(fs, 'readSync', function (fd, ...rest) {
+    if (how === 'read' && ours.delete(fd)) throw Object.assign(new Error('EIO: i/o error, read'), { code: 'EIO' });
+    return realRead.call(fs, fd, ...rest);
+  });
+}
+// What a link planted at a capture's path points at, which no run may touch.
+function planted() { return path.join(h.workspaceDir, 'planted-target.txt'); }
+// The links a planted capture leaves are not the scheduler's to remove: it
+// removes only a file it created.
+function removePlanted() {
+  for (const f of capturesLeft()) fs.rmSync(path.join(runsDir(), f), { force: true });
+}
+
+// Sequence 5. The fallback failing: what Claude Code said cannot be had.
+// Without its words there is still the shape of the ending, refused before
+// any session existed, so the run falls back once and says the file did not
+// load, and that the reason could not be read.
+for (const how of ['created', 'planted', 'read']) {
+  test(`when the capture cannot be ${how}, a file Claude Code refuses still falls back and says so`, async (t) => {
+    fs.writeFileSync(planted(), 'untouched\n');
+    captureFails(t, how);
+    try {
+      await loadingAgentFiles(async () => {
+        begin(34, [UNDESCRIBED]);
+        h.clearInvocations();
+        driveTicks(t);
+        assert.ok(await settled(UNDESCRIBED));
+        assert.strictEqual(spawnsFor('undescribed sweep body').length, 2, 'it fell back, once');
+        const [rec] = records();
+        assertFallbackRecord(rec, 'undescribed.md');
+        assert.match(rec.notice, /What Claude Code said could not be read/, 'and it says the reason could not be read');
+        assert.notStrictEqual(shown(rec).chip, runDetail.RUN_STATES.succeeded.chip, 'never a plain success');
+        assert.strictEqual(fs.readFileSync(planted(), 'utf-8'), 'untouched\n', 'and a planted link\'s target is untouched');
+      });
+    } finally {
+      removePlanted();
+      fs.rmSync(planted(), { force: true });
+    }
+    assert.deepStrictEqual(capturesLeft(), [], 'nothing is left in the runs folder');
   });
 }

@@ -334,6 +334,11 @@ describe('ROUTINES.md: the child\'s output is discarded, and its stderr kept onl
     assert.ok(!options.stdio.includes('pipe'), 'and no slot is a pipe');
     const [run] = sched.runningRuns();
     assert.ok(beside.includes(`${run.id}.stderr`), 'the file is beside the run\'s record, named for the run');
+    if (process.platform !== 'win32') {
+      assert.strictEqual(fs.fstatSync(stderr).mode & 0o777, 0o600, 'and readable by its user alone');
+    }
+    assert.match(routinesDoc, /The file is created new, readable by your user alone, and never opened through a link or over a file already there\. Only its first 4 KB are kept/,
+      'which the page says, with the bound');
 
     // The page's half of the same claim. Read as the sentence a user meets,
     // not as a keyword, because "discarded" appears elsewhere on the page.
@@ -384,6 +389,7 @@ describe('ROUTINES.md: the child\'s output is discarded, and its stderr kept onl
     assert.match(record.notice, /\.claude\/agents\/runner\.md/);
     const { describeRun, WITHOUT_AGENT_STATE } = require('../../public/run-detail-model.js');
     assert.strictEqual(describeRun(record).state.chip, WITHOUT_AGENT_STATE.chip);
+
 
     const loads = routinesDoc.split('\n').find(l => l.includes("**A routine loads its agent's file.**"));
     assert.ok(loads, 'ROUTINES.md says what a routine loads');

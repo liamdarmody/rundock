@@ -1197,11 +1197,6 @@ test('closing a restart-orphaned record writes nothing to the value double-fire 
   });
 });
 
-// WHAT A DEAD PROCESS'S CHILD SAID IS NOT LEFT BEHIND. A run keeps its
-// child's stderr in a file beside its record until the run ends, and a run
-// whose process died never ends. So the startup close that closes its record
-// removes that file too, and leaves alone the capture of a run still going in
-// the process doing the closing.
 // A PLAIN SESSION THAT CANNOT EVEN START, after Claude Code could not load the
 // agent file, is the run's outcome. It is recorded as failed with the reason
 // the start gave, the notice stays on the record, the routine is released,
@@ -1238,6 +1233,11 @@ test('a fallback whose plain session cannot start is recorded as failed with its
   });
 });
 
+// WHAT A DEAD PROCESS'S CHILD SAID IS NOT LEFT BEHIND. A run keeps its
+// child's stderr in a file beside its record until the run ends, and a run
+// whose process died never ends. So the startup close that closes its record
+// removes that file too, and leaves alone the capture of a run still going in
+// the process doing the closing.
 test('a capture a dead process left beside its record is removed when the record is closed', async () => {
   await withTempWorkspaceAsync(async (ws) => {
     await withTempHomeAsync(async () => {
@@ -1256,6 +1256,10 @@ test('a capture a dead process left beside its record is removed when the record
         const live = sched.runningRuns()[0];
         assert.ok(live, 'a run is going here');
         assert.ok(fs.existsSync(path.join(runs, `${live.id}.stderr`)), 'and its capture is open beside its record');
+        if (process.platform !== 'win32') {
+          assert.strictEqual(fs.statSync(path.join(runs, `${live.id}.stderr`)).mode & 0o777, 0o600,
+            'readable by this user alone');
+        }
 
         sched.loadRoutineState();
 
@@ -1263,6 +1267,39 @@ test('a capture a dead process left beside its record is removed when the record
           'the orphaned record really was closed by this load');
         assert.ok(!fs.existsSync(path.join(runs, 'orphan.stderr')), 'and the capture its child left went with it');
         assert.ok(fs.existsSync(path.join(runs, `${live.id}.stderr`)), 'while the capture of the run still going stays');
+      });
+    });
+  });
+});
+
+// A CHILD THAT WRITES WITHOUT END TO STDERR IS NEVER MADE TO WAIT, AND NEVER
+// FILLS THE DISK. A real child, handed the descriptor the scheduler made,
+// writes far more than the capture keeps and exits by itself; the capture is
+// watched while it writes, and never holds more than the start it keeps plus
+// what the child wrote between two cuts.
+test('a child writing far past what the capture keeps finishes, and the capture stays small', async () => {
+  const { spawn } = require('node:child_process');
+  const CHUNK = 16 * 1024;
+  const CHUNKS = 600;
+  const WRITER = `const b = Buffer.alloc(${CHUNK}, 120); const pause = new Int32Array(new SharedArrayBuffer(4));
+for (let i = 0; i < ${CHUNKS}; i++) { require('fs').writeSync(2, b); Atomics.wait(pause, 0, 0, 2); }`;
+  await withTempWorkspaceAsync(async (ws) => {
+    await withTempHomeAsync(async () => {
+      await withFakeSpawn((args, options) => spawn(process.execPath, ['-e', WRITER], { stdio: options.stdio }), async (sched) => {
+        sched.executeRoutine({ ...AGENT, fileName: 'runner.md' }, ROUTINE, KEY);
+        const live = sched.runningRuns()[0];
+        const file = path.join(ws, '.rundock', 'runs', `${live.id}.stderr`);
+        let biggest = 0;
+        let looks = 0;
+        assert.ok(await until(() => {
+          try { biggest = Math.max(biggest, fs.statSync(file).size); looks++; } catch (e) { /* gone at the end */ }
+          return sched.routineState[KEY] && sched.routineState[KEY].status !== 'running';
+        }, 6000), 'the child finished by itself');
+        assert.ok(looks > 10, 'the capture was watched while the child wrote');
+        assert.strictEqual(sched.routineState[KEY].status, 'completed', 'and the run is the success it was');
+        assert.ok(biggest < (CHUNK * CHUNKS) / 5,
+          `the capture peaked at ${biggest} bytes of the ${CHUNK * CHUNKS} the child wrote`);
+        assert.ok(!fs.existsSync(file), 'and is gone once the run ended');
       });
     });
   });
