@@ -12,10 +12,12 @@
 //
 // THE CASES. Routine values the writer used to leave bare and now quotes (a
 // colon and a space, a leading backtick, stray quotation marks), each written
-// both ways; the top-level leniency the reading models; a file with no
-// `name:` and one with no `description:`; an agent no file defines; and an
-// agent whose `tools:` line leaves out Bash, asked by the model to run Bash,
-// beside the same agent with no `tools:` line.
+// both ways; the top-level leniency the reading models; a quoted escape for a
+// code point past U+10FFFF; a file with no `name:` and one with no
+// `description:`; an agent no file defines; a file whose name on disk differs
+// from its `name:`; and an agent whose `tools:` line leaves out Bash, asked by
+// the model to run Bash, beside the same agent with no `tools:` line, and
+// beside the plain session a fallback starts while that same file is present.
 //
 // HOW EACH CASE RUNS. The real CLI, spawned with the arguments the scheduler
 // gives a routine in a workspace like the case's folder (Code mode, no
@@ -23,18 +25,23 @@
 // stream-json, --verbose, --dangerously-skip-permissions,
 // --append-system-prompt with the unattended line, --session-id, --agent, the
 // prompt last. test/unit/claude-cli-agent-load.test.js reads the scheduler's
-// own spawn and holds routineArgv to it. In a fresh folder holding the case's
-// agent file, with its own empty home and config folders, a
+// own spawn and holds routineArgv to it, for the agent and for the plain
+// session a fallback starts, which passes no --agent. In a fresh folder
+// holding the case's agent file, with its own empty home and config folders, a
 // placeholder API key, and ANTHROPIC_BASE_URL pointed at a stand-in for the
 // messages API on 127.0.0.1. No account is used and no model is called. A file
 // counts as loaded when a request reaches the stand-in carrying the agent's
-// own instructions. Every folder the case made is removed afterwards.
+// own instructions. The run's own turn (a request offering tools, sent for
+// the routine prompt) is answered with the case's tool calls, whether or not
+// those instructions came with it. Every folder the case made is removed
+// afterwards.
 //
 // RUN BY HAND, NEVER BY THE SUITE OR CI: it needs a real Claude Code install,
 // and it is not a *.test.js file, so `npm test` does not collect it.
 //
 //   node test/tools/claude-cli-agent-load-probe.js           measure, compare with the record
 //   node test/tools/claude-cli-agent-load-probe.js --write   measure, and write the record
+//   node test/tools/claude-cli-agent-load-probe.js --only <text>   only the cases named with it; never written
 //
 // CLAUDE_BIN names the binary; otherwise the `claude` on PATH. The test stub is
 // refused. The record holds no path, user or machine name, and a record that
@@ -82,9 +89,14 @@ const CASES = [
     { name: `a routine prompt with ${label}, as the writer writes it now`, agent: 'probe', file: writtenNow(prompt) },
   ]),
   { name: 'a colon and a space in a top-level description', agent: 'probe', file: agentFile('name: probe\ndescription: Probes: the loader') },
+  {
+    name: 'a code point past U+10FFFF, escaped in a quoted routine prompt', agent: 'probe',
+    file: writtenNow('placeholder').replace(/^( {4}prompt: ).*$/m, (_, lead) => `${lead}"\\U00110000"`),
+  },
   { name: 'no name line', agent: 'probe', file: agentFile('description: Probes the loader') },
   { name: 'no description line', agent: 'probe', file: agentFile('name: probe') },
   { name: 'an agent no file defines', agent: 'nobody-here', file: BASE },
+  { name: 'a file whose name on disk differs from its name line', agent: 'probe', fileName: 'helper-notes.md', file: BASE },
   {
     name: 'a tools line without Bash, and the model asks for Bash', agent: 'probe',
     file: agentFile('name: probe\ndescription: Probes the loader\ntools: Read, Write'),
@@ -94,12 +106,18 @@ const CASES = [
     name: 'no tools line, and the model asks for Bash', agent: 'probe', file: BASE,
     steps: [{ tool: 'Bash', command: `touch ${SENTINEL}` }],
   },
+  {
+    name: 'the same tools line, run as the plain session a fallback starts, and the model asks for Bash', agent: null,
+    file: agentFile('name: probe\ndescription: Probes the loader\ntools: Read, Write'),
+    steps: [{ tool: 'Bash', command: `touch ${SENTINEL}` }],
+  },
 ];
 
-// What the scheduler passes a routine started as `agent` in `dir`.
+// What the scheduler passes a routine started as `agent` in `dir`, or, with
+// no agent, the plain session a fallback starts.
 function routineArgv(dir, sessionId, agent) {
   return ['--add-dir', dir, '--print', '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions',
-    '--append-system-prompt', UNATTENDED_RUN, '--session-id', sessionId, '--agent', agent, PROMPT];
+    '--append-system-prompt', UNATTENDED_RUN, '--session-id', sessionId, ...(agent == null ? [] : ['--agent', agent]), PROMPT];
 }
 
 function resolveClaude() {
@@ -116,8 +134,15 @@ function textOf(content) {
   return '';
 }
 
-// The stand-in for the messages API. A request that offers tools and carries
-// the agent's instructions is the agent's own turn: it is answered with the
+// The text of a request's first user message.
+function firstUserText(json) {
+  const first = (json.messages || []).find(m => m && m.role === 'user');
+  return first ? textOf(first.content) : '';
+}
+
+// The stand-in for the messages API. Any request carrying the agent's
+// instructions means the file loaded. A request that offers tools and was
+// sent for the routine prompt is the run's own turn: it is answered with the
 // case's next tool call, and once every call has a result, with text.
 // Anything else gets a plain answer.
 function standIn(steps) {
@@ -150,9 +175,9 @@ function standIn(steps) {
         res.writeHead(200, { 'content-type': 'application/json' });
         return res.end(JSON.stringify({ input_tokens: 1 }));
       }
-      const own = textOf(json.system).includes(MARKER) && Array.isArray(json.tools);
-      if (!own) return text(res, 'ok');
-      seen.loaded = true;
+      if (textOf(json.system).includes(MARKER)) seen.loaded = true;
+      const turn = Array.isArray(json.tools) && json.tools.length > 0 && firstUserText(json).includes(PROMPT);
+      if (!turn) return text(res, 'ok');
       if (!seen.toolsOffered) seen.toolsOffered = json.tools.map(t => t.name).sort();
       for (const m of json.messages || []) {
         for (const b of Array.isArray(m.content) ? m.content : []) {
@@ -208,7 +233,7 @@ async function runCase(bin, c) {
   for (const d of [work, home, config, tmp]) fs.mkdirSync(d, { recursive: true });
   const dir = fs.realpathSync(work);
   fs.mkdirSync(path.join(dir, '.claude', 'agents'), { recursive: true });
-  fs.writeFileSync(path.join(dir, '.claude', 'agents', 'probe.md'), c.file);
+  fs.writeFileSync(path.join(dir, '.claude', 'agents', c.fileName || 'probe.md'), c.file);
   const scrub = scrubber([work, home, config, tmp, root]);
   const api = await standIn(c.steps || []);
 
@@ -248,19 +273,20 @@ function leaks(text) {
 }
 
 async function main() {
-  const write = process.argv.includes('--write');
+  const only = process.argv.includes('--only') ? process.argv[process.argv.indexOf('--only') + 1] || '' : null;
+  const write = process.argv.includes('--write') && only === null;
   const bin = resolveClaude();
   // `claude --version` prints the version first: "2.1.318 (Claude Code)".
   const version = execFileSync(bin, ['--version'], { encoding: 'utf8' }).trim().split(/\s+/)[0] || null;
   const cases = [];
-  for (const c of CASES) {
+  for (const c of CASES.filter(x => only === null || x.name.includes(only))) {
     process.stderr.write(`[probe] ${c.name}\n`);
     cases.push({ ...c, observed: await runCase(bin, c) });
   }
   const record = {
     about: 'Which agent files the installed Claude Code loaded and refused, measured by test/tools/claude-cli-agent-load-probe.js. test/unit/claude-cli-agent-load.test.js holds lib/agents/claude-code-load.js and the test stub to it.',
     claudeCode: version,
-    method: 'The real CLI spawned as the scheduler spawns a routine (--add-dir, --print, --output-format stream-json, --verbose, --dangerously-skip-permissions, --append-system-prompt, --session-id, --agent, the prompt last), in a fresh folder holding the case\'s agent file as .claude/agents/probe.md, with empty home and config folders, a placeholder API key, and a stand-in for the messages API on 127.0.0.1. No account was used and no model was called. A file counts as loaded when a request carrying its instructions reached the stand-in. The stand-in asked for each case\'s tool calls in turn.',
+    method: 'The real CLI spawned as the scheduler spawns a routine (--add-dir, --print, --output-format stream-json, --verbose, --dangerously-skip-permissions, --append-system-prompt, --session-id, --agent, the prompt last), in a fresh folder holding the case\'s agent file in .claude/agents (as probe.md unless the case names it), with empty home and config folders, a placeholder API key, and a stand-in for the messages API on 127.0.0.1. No account was used and no model was called. A file counts as loaded when a request carrying its instructions reached the stand-in. On the run\'s own turn the stand-in asked for each case\'s tool calls in turn. A case with no agent was run as the plain session a fallback starts, with no --agent.',
     cases,
   };
   const body = `${JSON.stringify(record, null, 2)}\n`;
@@ -268,6 +294,10 @@ async function main() {
   if (found.length) {
     process.stderr.write(`[probe] refusing: the record would carry ${found.join(', ')}\n`);
     process.exit(1);
+  }
+  if (only !== null) {
+    process.stderr.write(`${JSON.stringify(cases.map(c => ({ name: c.name, observed: c.observed })), null, 2)}\n`);
+    return;
   }
   if (write) {
     fs.writeFileSync(RECORD, body);
