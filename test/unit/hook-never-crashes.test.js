@@ -773,6 +773,125 @@ describe('an answer counts only once the whole of it has been written', () => {
   });
 });
 
+// A rejection nobody handles, created in the turn the hook decides on an
+// allow: as the server's approval of a card arrives, and as the request
+// arrives, before a call the hook allows at once.
+const rejectsAsApprovalArrives = preloadFile('rejects-as-approval-arrives', `
+  const http = require('http');
+  const request = http.request;
+  http.request = function (options, callback) {
+    if (!options || typeof options !== 'object' || !String(options.path).startsWith('/api/permission-request')) {
+      return request.apply(this, arguments);
+    }
+    return request.call(this, options, (res) => {
+      const emit = res.emit;
+      res.emit = function (event, ...rest) {
+        if (event === 'end') Promise.reject(new Error('forced rejection as the approval arrives'));
+        return emit.call(this, event, ...rest);
+      };
+      callback(res);
+    });
+  };
+`);
+const rejectsAsRequestArrives = preloadFile('rejects-as-request-arrives', `
+  const emit = process.stdin.emit;
+  process.stdin.emit = function (event, ...rest) {
+    if (event === 'end') Promise.reject(new Error('forced rejection as the request arrives'));
+    return emit.call(this, event, ...rest);
+  };
+`);
+// A call inside the workspace, which the hook allows at once, in the turn the
+// request arrives in.
+const READ_INSIDE = { tool_name: 'Read', tool_input: { file_path: path.join(ws, 'note.md') } };
+
+describe('an allow waits until a rejection from its own turn has been handled', () => {
+  // Node hands an unhandled rejection to its handler only once the turn that
+  // made it is over, and the hook used to write an allow and exit inside that
+  // turn, so a rejection from the same turn never refused the call. An allow
+  // is now written a turn later, by which time the rejection has refused.
+  for (const mode of REJECTION_MODES) {
+    test(`under --unhandled-rejections=${mode}, a rejection as a card's approval arrives refuses the call, whether its reader reads or has gone`, async () => {
+      const server = await cardServer({ allow: true });
+      try {
+        const port = server.address().port;
+        const read = await runHookAgainst(port, ORDINARY, rejections(mode), { preload: rejectsAsApprovalArrives });
+        assert.strictEqual(read.status, 0);
+        assert.deepStrictEqual(read.answer, couldNotCheck(true), read.stdout);
+        const gone = await runHookInto('gone', ORDINARY, { port, preload: rejectsAsApprovalArrives, env: rejections(mode) });
+        assert.strictEqual(gone.status, 2, gone.stderr);
+        assert.ok(gone.stderr.trim().endsWith(couldNotCheckWords(true)), gone.stderr);
+      } finally { await stopServer(server); }
+    });
+
+    test(`under --unhandled-rejections=${mode}, a rejection as the request arrives refuses a call the hook would allow at once, whether its reader reads or has gone`, async () => {
+      const read = runHook(READ_INSIDE, { preload: rejectsAsRequestArrives, env: rejections(mode) });
+      assert.strictEqual(read.status, 0, read.stderr);
+      assert.deepStrictEqual(read.answer, couldNotCheck(true), read.stdout);
+      const gone = await runHookInto('gone', READ_INSIDE, { preload: rejectsAsRequestArrives, env: rejections(mode) });
+      assert.strictEqual(gone.status, 2, gone.stderr);
+      assert.ok(gone.stderr.trim().endsWith(couldNotCheckWords(true)), gone.stderr);
+    });
+  }
+
+  // Each call the hook allows at once is answered by the allow alone: the code
+  // that decided it stops there, and nothing after it asks Rundock anything.
+  // An allow waits a turn, so a request started after it in the same turn,
+  // and anything that request raised, would come first. Each call is run
+  // again with a rejection forced as any request starts (rejectsOnRequest),
+  // which refuses the call if, and only if, something is asked.
+  test('a call the hook allows at once is allowed without a card, with a server that would refuse every card', async () => {
+    const asked = [];
+    const server = await new Promise((resolve) => {
+      const s = http.createServer((req, res) => {
+        req.resume();
+        asked.push(req.url.split('?')[0]);
+        res.end(JSON.stringify({ allow: false }));
+      });
+      s.listen(0, '127.0.0.1', () => resolve(s));
+    });
+    try {
+      const port = server.address().port;
+      for (const [what, call, env, reason] of [
+        ['a file inside the workspace', READ_INSIDE, {}, 'In-workspace file access'],
+        ['a command in Code mode', bash('ls'), { RUNDOCK_CODE_MODE: '1' }, 'Auto-approved: workspace is in Code mode'],
+        ['a connector read', { tool_name: 'mcp__example__list_things', tool_input: {} }, {}, 'Auto-approved: MCP read'],
+      ]) {
+        for (const preload of [undefined, rejectsOnRequest]) {
+          const r = await runHookAgainst(port, call, env, { preload });
+          assert.strictEqual(r.status, 0, what);
+          assert.strictEqual(decision(r), 'allow', `${what}${preload ? ', nothing asked after the allow' : ''}: ${r.stdout}`);
+          assert.strictEqual(reasonOf(r), reason, what);
+        }
+      }
+      assert.deepStrictEqual(asked, [], 'no card was raised for any of them');
+    } finally { await stopServer(server); }
+  });
+
+  test('with no rejection, the same calls are still allowed, with one answer each, and a refusal is still written in the turn it is decided, in its own words', async () => {
+    const inside = runHook(READ_INSIDE);
+    assert.strictEqual(inside.status, 0, inside.stderr);
+    assert.deepStrictEqual(inside.answer, { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow', permissionDecisionReason: 'In-workspace file access' } });
+    const approved = await cardServer({ allow: true });
+    try {
+      const r = await runHookAgainst(approved.address().port, ORDINARY);
+      assert.strictEqual(r.status, 0);
+      assert.strictEqual(decision(r), 'allow', r.stdout);
+      assert.strictEqual(reasonOf(r), 'Approved in Rundock');
+    } finally { await stopServer(approved); }
+    // A card refused, with a rejection made in the same turn: the refusal is
+    // not held back as an allow is, so it keeps the card's words.
+    const refused = await cardServer({ allow: false });
+    try {
+      const port = refused.address().port;
+      const plain = await runHookAgainst(port, ORDINARY);
+      assert.strictEqual(decision(plain), 'deny', plain.stdout);
+      const r = await runHookAgainst(port, ORDINARY, rejections('none'), { preload: rejectsAsApprovalArrives });
+      assert.strictEqual(r.status, 0);
+      assert.deepStrictEqual(r.answer, plain.answer, r.stdout);
+    } finally { await stopServer(refused); }
+  });
+});
+
 describe('what these tests use to force a failure', () => {
   test('can only make the hook refuse, never allow, and none of it is reachable from a tool call', async () => {
     // A refusal is a deny, or the runtime's block when not even that could be

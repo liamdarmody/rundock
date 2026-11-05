@@ -39,14 +39,39 @@ let hookInput = '';
 // answer that cannot be written ends the call in `undelivered`.
 let answer = null;
 let delivered = false;
-function writeAnswer(output) {
+// AN ALLOW WAITS ONE TURN. Node hands an unhandled rejection to its handler,
+// below, only once the turn that made it is over, and an allow written, and
+// exited on, inside that turn let the call through with the rejection never
+// handled. So an allow is written by setImmediate, after that turn and the
+// rejections from it have been dealt with: a rejection from the turn has
+// refused the call by then, and the allow, finding it answered, prints
+// nothing. The allow ends the call itself, so the code that decided it ends
+// with endCall, which leaves the call to the allow. A refusal, and an answer
+// that decides nothing, are written in their own turn, as before.
+let allowWaiting = false;
+function writeAnswer(output, turnOver = false) {
   if (answer) {
     if (!delivered) undelivered(answer);
+    return;
+  }
+  if (allows(output) && !turnOver) {
+    if (!allowWaiting) {
+      allowWaiting = true;
+      setImmediate(() => { writeAnswer(output, true); process.exit(0); });
+    }
     return;
   }
   answer = output;
   delivered = writeWhole(1, JSON.stringify(output));
   if (!delivered) undelivered(output);
+}
+function allows(output) {
+  const own = output && output.hookSpecificOutput;
+  return Boolean(own) && own.permissionDecision === 'allow';
+}
+// The end of a call whose answer may be an allow waiting for its turn.
+function endCall() {
+  if (!allowWaiting || answer) process.exit(0);
 }
 // AN ANSWER THAT DID NOT ARRIVE, after which nothing more is printed. A call
 // this hook decides is blocked: the runtime reads exit code 2 from a
@@ -3516,7 +3541,8 @@ fetchAgentNotice((agentNotice) => {
         permissionDecisionReason: 'In-workspace file access'
       }
     }));
-    process.exit(0);
+    endCall();
+    return;
   }
 
   // CODE MODE: ordinary work runs with no card. Out-of-workspace access still
@@ -3552,7 +3578,8 @@ fetchAgentNotice((agentNotice) => {
         permissionDecisionReason: 'Auto-approved: workspace is in Code mode'
       }
     }));
-    process.exit(0);
+    endCall();
+    return;
   }
   // Notes mode keeps its own definition of an irreversible command, unchanged.
   const destructive = !codeMode && shellCommand !== null && isDestructiveShellCommand(shellCommand);
@@ -3569,7 +3596,8 @@ fetchAgentNotice((agentNotice) => {
         permissionDecisionReason: 'Auto-approved: MCP read'
       }
     }));
-    process.exit(0);
+    endCall();
+    return;
   }
 
   const port = process.env.RUNDOCK_PORT || 3000;
@@ -3713,7 +3741,7 @@ fetchAgentNotice((agentNotice) => {
         permissionDecisionReason: failClosed ? unansweredNotice(`${reason} ${why}`, { unattended: unattendedRun() }) : reason,
       }
     }));
-    process.exit(0);
+    endCall();
   }
 
   const req = http.request({
@@ -3756,7 +3784,7 @@ fetchAgentNotice((agentNotice) => {
       } catch (e) {
         unanswered('Rundock hook: could not parse server response.');
       }
-      process.exit(0);
+      endCall();
     });
   });
 

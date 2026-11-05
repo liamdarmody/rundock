@@ -3198,8 +3198,8 @@ const MUTATIONS = [
   // One answer for each call, and it counts only once the whole of it has
   // been written.
   [HOOK_CRASH, 'Hook crash: a failure after the answer prints a second one',
-    "  if (answer) {\n    if (!delivered) undelivered(answer);\n    return;\n  }\n  answer = output;",
-    "  answer = output;"],
+    "  if (answer) {\n    if (!delivered) undelivered(answer);\n    return;\n  }\n  if (allows(output) && !turnOver) {",
+    "  if (allows(output) && !turnOver) {"],
   [HOOK_CRASH, 'Hook crash: a failure after an answer that never arrived lets the call through',
     "    if (!delivered) undelivered(answer);\n    return;",
     "    return;"],
@@ -3228,6 +3228,26 @@ const MUTATIONS = [
   [HOOK_CRASH, 'Hook crash: an answer that cannot be written blocks outside Rundock and after a tool too',
     "  if (!decidingCall()) process.exit(0);\n  const own",
     "  const own"],
+  // An allow waits one turn, so a rejection from the turn it was decided in
+  // refuses first.
+  [HOOK_CRASH, 'Hook crash: an allow is written in the turn it was decided',
+    "  if (allows(output) && !turnOver) {",
+    "  if (false) {"],
+  [HOOK_CRASH, 'Hook crash: the call ends before a waiting allow is written',
+    "  if (!allowWaiting || answer) process.exit(0);",
+    "  process.exit(0);"],
+  [HOOK_CRASH, 'Hook crash: a refusal waits a turn as an allow does',
+    "  if (allows(output) && !turnOver) {",
+    "  if (Boolean(output && output.hookSpecificOutput && output.hookSpecificOutput.permissionDecision) && !turnOver) {"],
+  [HOOK_CRASH, 'Hook crash: a file inside the workspace goes on to ask for a card after it is allowed',
+    "        permissionDecisionReason: 'In-workspace file access'\n      }\n    }));\n    endCall();\n    return;",
+    "        permissionDecisionReason: 'In-workspace file access'\n      }\n    }));\n    endCall();"],
+  [HOOK_CRASH, 'Hook crash: a command in Code mode goes on to ask for a card after it is allowed',
+    "        permissionDecisionReason: 'Auto-approved: workspace is in Code mode'\n      }\n    }));\n    endCall();\n    return;",
+    "        permissionDecisionReason: 'Auto-approved: workspace is in Code mode'\n      }\n    }));\n    endCall();"],
+  [HOOK_CRASH, 'Hook crash: a connector read goes on to ask for a card after it is allowed',
+    "        permissionDecisionReason: 'Auto-approved: MCP read'\n      }\n    }));\n    endCall();\n    return;",
+    "        permissionDecisionReason: 'Auto-approved: MCP read'\n      }\n    }));\n    endCall();"],
   // Input the hook cannot read passed through before, which the runtime reads
   // as no objection; it is refused now, inside Rundock.
   [HOOK_CRASH, 'Hook crash: input the hook cannot read passes through again',
