@@ -20,6 +20,7 @@ const { makeTempDir, cleanup } = require('../helpers/workspace.js');
 const { readAgentFile } = require('../../lib/agents/claude-code-load.js');
 const { loadableAgentNames, agentNotFoundLine } = require('../helpers/claude-code-agents.js');
 const { appendRoutineBlock } = require('../../lib/agents/routines.js');
+const { EventEmitter } = require('node:events');
 
 after(cleanup);
 
@@ -111,4 +112,41 @@ test('a tools line that leaves out Bash keeps a routine from running Bash', () =
   assert.ok(open.observed.toolsOffered.includes('Bash'));
   assert.strictEqual(open.observed.results[0].refused, false);
   assert.strictEqual(open.observed.sentinelCreated, true, 'without the line, the same call made the file');
+});
+
+// The probe started Claude Code with the arguments the scheduler gives a
+// routine, read off the scheduler's own spawn in a workspace like the probe's
+// folder: Code mode, no settings or MCP file, no model. A scheduler that
+// starts routines differently fails here until the probe is changed and run
+// again.
+test('the probe starts Claude Code exactly as the scheduler starts a routine', () => {
+  const { routineArgv, PROMPT } = require('../tools/claude-cli-agent-load-probe.js');
+  const config = require('../../lib/config.js');
+  const claude = require('../../lib/runtime/claude.js');
+  const SCHEDULER_KEY = require.resolve('../../lib/scheduler.js');
+  const original = config.getWorkspace();
+  const ws = makeTempDir('rundock-agent-load-argv-');
+  const realSpawn = claude.spawnClaude;
+  const prevDeps = claude.wireClaudeRuntimeDeps({ getActualPort: () => 0 });
+  const cached = require.cache[SCHEDULER_KEY];
+  let argv = null;
+  try {
+    config.setWorkspace(ws);
+    // As spawnClaude hands them to the CLI: its internal model marker, which
+    // asks for no --model at all, never reaches the binary.
+    claude.spawnClaude = (args) => { argv = args.filter(a => a !== claude.INHERIT_MARKER); return new EventEmitter(); };
+    delete require.cache[SCHEDULER_KEY];
+    const sched = require(SCHEDULER_KEY);
+    sched.wireSchedulerDeps({ getWssClients: () => [], getDisallowedTools: () => '' });
+    sched.executeRoutine({ id: 'probe', name: 'probe', fileName: 'probe.md', description: 'Probes the loader' },
+      { name: 'r', prompt: PROMPT }, 'probe:r');
+  } finally {
+    claude.spawnClaude = realSpawn;
+    claude.wireClaudeRuntimeDeps(prevDeps);
+    config.setWorkspace(original);
+    delete require.cache[SCHEDULER_KEY];
+    if (cached) require.cache[SCHEDULER_KEY] = cached;
+  }
+  assert.ok(argv, 'the scheduler reached the spawn');
+  assert.deepStrictEqual(argv, routineArgv(ws, argv[argv.indexOf('--session-id') + 1], 'probe'));
 });

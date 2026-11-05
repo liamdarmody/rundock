@@ -1263,8 +1263,8 @@ function removePlanted() {
 // file is then asked by the rules Claude Code was measured to load by. Here
 // they refuse it (it has no description), so the run falls back once and says
 // the file did not load, and that the reason could not be read.
-for (const how of ['created', 'planted', 'read']) {
-  test(`when the capture cannot be ${how}, a file Claude Code refuses still falls back and says so`, async (t) => {
+for (const [how, label] of [['created', 'cannot be created'], ['planted', 'meets a link planted at its path'], ['read', 'cannot be read back']]) {
+  test(`when the capture ${label}, a file Claude Code refuses still falls back and says so`, async (t) => {
     fs.writeFileSync(planted(), 'untouched\n');
     captureFails(t, how);
     try {
@@ -1290,7 +1290,7 @@ for (const how of ['created', 'planted', 'read']) {
   // The other half. The file loads by those rules, and the child stopped
   // before its session for a reason of its own. Nothing is guessed: one
   // child, failed, in plain words, with no notice.
-  test(`when the capture cannot be ${how}, a file that loads is not run again without its agent`, async (t) => {
+  test(`when the capture ${label}, a file that loads is not run again without its agent`, async (t) => {
     fs.writeFileSync(planted(), 'untouched\n');
     captureFails(t, how);
     try {

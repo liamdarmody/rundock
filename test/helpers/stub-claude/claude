@@ -398,7 +398,9 @@ if (REFUSED_RESUME) {
 // no `name:`, no `description:`, or frontmatter its YAML reader refuses. A
 // --print run started with --agent naming such an agent then writes one line
 // to stderr and exits 1, before any session or transcript exists. The
-// reading is test/helpers/claude-code-agents.js's model of Claude Code's.
+// reading is lib/agents/claude-code-load.js, through
+// test/helpers/claude-code-agents.js, and test/unit/claude-cli-agent-load.test.js
+// holds it to a record of the real CLI.
 //
 // OPT IN, with a top-level `loadAgentFiles: true`, because most fixtures here
 // were written with no description, and the real binary would drop every one

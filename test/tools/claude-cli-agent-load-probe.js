@@ -17,11 +17,14 @@
 // agent whose `tools:` line leaves out Bash, asked by the model to run Bash,
 // beside the same agent with no `tools:` line.
 //
-// HOW EACH CASE RUNS. The real CLI, spawned the way the scheduler spawns a
-// routine (--add-dir, --print, --output-format stream-json, --verbose,
-// --dangerously-skip-permissions, --append-system-prompt with the unattended
-// line, --session-id, --agent, the prompt last), in a fresh folder holding
-// the case's agent file, with its own empty home and config folders, a
+// HOW EACH CASE RUNS. The real CLI, spawned with the arguments the scheduler
+// gives a routine in a workspace like the case's folder (Code mode, no
+// settings or MCP file, no model): --add-dir, --print, --output-format
+// stream-json, --verbose, --dangerously-skip-permissions,
+// --append-system-prompt with the unattended line, --session-id, --agent, the
+// prompt last. test/unit/claude-cli-agent-load.test.js reads the scheduler's
+// own spawn and holds routineArgv to it. In a fresh folder holding the case's
+// agent file, with its own empty home and config folders, a
 // placeholder API key, and ANTHROPIC_BASE_URL pointed at a stand-in for the
 // messages API on 127.0.0.1. No account is used and no model is called. A file
 // counts as loaded when a request reaches the stand-in carrying the agent's
@@ -92,6 +95,12 @@ const CASES = [
     steps: [{ tool: 'Bash', command: `touch ${SENTINEL}` }],
   },
 ];
+
+// What the scheduler passes a routine started as `agent` in `dir`.
+function routineArgv(dir, sessionId, agent) {
+  return ['--add-dir', dir, '--print', '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions',
+    '--append-system-prompt', UNATTENDED_RUN, '--session-id', sessionId, '--agent', agent, PROMPT];
+}
 
 function resolveClaude() {
   const bin = process.env.CLAUDE_BIN || execFileSync('which', ['claude'], { encoding: 'utf8' }).trim();
@@ -203,9 +212,7 @@ async function runCase(bin, c) {
   const scrub = scrubber([work, home, config, tmp, root]);
   const api = await standIn(c.steps || []);
 
-  const argv = ['--add-dir', dir, '--print', '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions',
-    '--append-system-prompt', UNATTENDED_RUN, '--session-id', randomUUID(), '--agent', c.agent, PROMPT];
-  const child = spawn(bin, argv, { cwd: dir, env: cleanEnv(api.port, home, config, tmp), stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(bin, routineArgv(dir, randomUUID(), c.agent), { cwd: dir, env: cleanEnv(api.port, home, config, tmp), stdio: ['ignore', 'pipe', 'pipe'] });
   let err = '';
   child.stdout.resume();
   child.stderr.on('data', (d) => { err += d; });
@@ -275,7 +282,11 @@ async function main() {
   process.exit(same ? 0 : 1);
 }
 
-main().catch((e) => {
-  process.stderr.write(`[probe] ${e.stack || e.message}\n`);
-  process.exit(1);
-});
+module.exports = { routineArgv, PROMPT };
+
+if (require.main === module) {
+  main().catch((e) => {
+    process.stderr.write(`[probe] ${e.stack || e.message}\n`);
+    process.exit(1);
+  });
+}
