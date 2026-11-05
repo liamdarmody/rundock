@@ -1,0 +1,62 @@
+{
+  "about": "Which token each hook request carried, and which session it named, when a routine run started a subagent and a nested claude, measured by test/tools/claude-cli-run-token-probe.js. test/integration/routine-run-token.test.js holds the test stub to it.",
+  "claudeCode": "2.1.318",
+  "method": "The real CLI spawned as the scheduler spawns a routine in a Notes-mode workspace (getBareArgs: --add-dir and --settings; the Notes-mode --disallowed-tools list; then --print, --output-format stream-json, --verbose, --dangerously-skip-permissions, --append-system-prompt, --session-id, no --agent, the prompt last), with getSpawnEnv's environment for a routine run carrying a token made for the case, or none for the control. The workspace's .claude/settings.local.json registered Rundock's own permission hook for Bash through a launcher, as the scaffold does, and RUNDOCK_PORT pointed at a stand-in for Rundock on 127.0.0.1 that recorded each hook request and answered allow. Empty home and config folders, a placeholder API key, and a stand-in for the messages API on 127.0.0.1 that answered every turn with the case's tool calls. No account was used and no model was called. The nested claude was started from the Bash tool with -p and no other flag, so it had only what it inherited.",
+  "cases": [
+    {
+      "name": "a Task subagent started by the run",
+      "token": true,
+      "observed": {
+        "exitCode": 0,
+        "modelTurnsServed": true,
+        "requests": [
+          {
+            "from": "the run",
+            "token": "the run's",
+            "session": "the run's"
+          },
+          {
+            "from": "the subagent",
+            "token": "the run's",
+            "session": "the run's"
+          }
+        ]
+      }
+    },
+    {
+      "name": "a claude started with -p from the run's shell",
+      "token": true,
+      "observed": {
+        "exitCode": 0,
+        "modelTurnsServed": true,
+        "requests": [
+          {
+            "from": "the run, starting claude",
+            "token": "the run's",
+            "session": "the run's"
+          },
+          {
+            "from": "the nested claude",
+            "token": "the run's",
+            "session": "another"
+          }
+        ]
+      }
+    },
+    {
+      "name": "the control: a run started with no token",
+      "token": false,
+      "observed": {
+        "exitCode": 0,
+        "modelTurnsServed": true,
+        "requests": [
+          {
+            "from": "the run",
+            "token": "none",
+            "session": "the run's"
+          }
+        ]
+      }
+    }
+  ]
+}

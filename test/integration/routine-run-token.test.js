@@ -151,14 +151,38 @@ test('a run\'s token, once its record has closed, is refused as unknown and file
   assert.deepStrictEqual(recordOf('token-ended'), ended, 'and the record is as it closed, its count untouched');
 });
 
+// MEASURED, NOT ASSUMED. test/tools/claude-cli-run-token-probe.js ran the
+// real CLI as a routine run that started a subagent and a `claude -p` from its
+// shell, and recorded which token and which session each hook request carried
+// (test/fixtures/claude-cli-run-token.json). The stub stands in for both by
+// running the hook in its own environment, so it is made to send the sessions
+// the record says each sends, and what it sent is held to the record after
+// the run: a stub that drifts from the CLI, or a CLI release that stops
+// passing the token on, fails here.
+const MEASURED = require('../fixtures/claude-cli-run-token.json');
+const measured = (from) => MEASURED.cases.flatMap((c) => c.observed.requests).filter((r) => r.from === from)
+  .map(({ token, session }) => ({ token, session }));
+const sessionSent = (session) => (session === 'the run\'s' ? {} : session === 'another' ? { session_id: 'nested-claude-session' } : { session_id: null });
+
+test('the record tells a request that carried the run\'s token from one that carried none, measured with the real CLI', () => {
+  assert.ok(MEASURED.claudeCode, 'it names the Claude Code it was measured with');
+  for (const c of MEASURED.cases) assert.strictEqual(c.observed.exitCode, 0, `${c.name}: the CLI ran to the end`);
+  assert.deepStrictEqual(measured('the subagent').map((r) => r.token), ['the run\'s'], 'a subagent\'s request carried the run\'s token');
+  assert.deepStrictEqual(measured('the nested claude').map((r) => r.token), ['the run\'s'], 'so did a nested claude\'s');
+  const control = MEASURED.cases.find((c) => !c.token).observed.requests;
+  assert.deepStrictEqual(control.map((r) => r.token), ['none'], 'and a run started with none sent none');
+});
+
 test('a Task subagent\'s call and a nested claude\'s, carrying the run\'s token, are the run\'s cards, whatever session they name', async () => {
-  // The measured subagent call: the parent's session, plus agent_id and
-  // agent_type. A `claude` started from the run's shell has a session of its
-  // own, or the call names none.
+  // The measured subagent call: agent_id and agent_type, and the session the
+  // record says. A `claude` started from the run's shell names the session
+  // the record says it does, and a call may name none.
   const { agent_id: subagent, agent_type: type } = require('../fixtures/subagent-hook-payload.json').subagent;
+  const [sub] = measured('the subagent');
+  const [nested] = measured('the nested claude');
   h.writeScenario([{
     match: { agent: KEEPER, promptIncludes: 'work started inside' },
-    hooks: [readOutside({ agent_id: subagent, agent_type: type }), readOutside({ session_id: 'nested-claude-session' }), readOutside({ session_id: null })],
+    hooks: [readOutside({ agent_id: subagent, agent_type: type, ...sessionSent(sub.session) }), readOutside(sessionSent(nested.session)), readOutside({ session_id: null })],
     turn: [{ text: 'Did the rest.' }],
   }]);
   await save(KEEPER, 'token-inside', 'work started inside');
@@ -180,6 +204,13 @@ test('a Task subagent\'s call and a nested claude\'s, carrying the run\'s token,
   assert.deepStrictEqual(told.map((x) => [x.subagent, x.sentSession]), [[subagent, run.sessionId], [null, 'nested-claude-session'], [null, null]],
     'the hook really sent a subagent\'s call, another session, and none');
   for (const x of told) assert.strictEqual(x.answer.hookSpecificOutput.permissionDecisionReason, UNATTENDED_DENIED);
+  // What the stub sent, in the record's words: a card filed on the run is a
+  // request that carried the run's token.
+  const sent = told.slice(0, 2).map((x, i) => ({
+    token: cards[i]._run.id === run.id && tokenOf(run) ? 'the run\'s' : 'none',
+    session: !x.sentSession ? 'none' : x.sentSession === run.sessionId ? 'the run\'s' : 'another',
+  }));
+  assert.deepStrictEqual(sent, [sub, nested], 'the stub sent what the real CLI was measured sending');
 });
 
 test('a request held back through the end of its run is refused when it finishes during the routine\'s next run, and counts on neither', async () => {
