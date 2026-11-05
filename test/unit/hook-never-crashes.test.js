@@ -21,10 +21,12 @@ const ws = path.join(root, 'ws');
 fs.mkdirSync(path.join(ws, '.claude'), { recursive: true });
 after(() => { fs.rmSync(root, { recursive: true, force: true }); });
 
-function runHook(payload, { preload, env = {}, timeout = 30000 } = {}) {
-  const args = preload ? ['--require', preload, HOOK] : [HOOK];
+// `raw` is sent as standard input exactly as given, for input the hook cannot
+// read; `preload` may name more than one file.
+function runHook(payload, { preload, env = {}, timeout = 30000, raw } = {}) {
+  const args = [...[].concat(preload || []).flatMap((file) => ['--require', file]), HOOK];
   const r = spawnSync(process.execPath, args, {
-    input: JSON.stringify({ hook_event_name: 'PreToolUse', cwd: ws, session_id: 's', ...payload }),
+    input: raw !== undefined ? raw : JSON.stringify({ hook_event_name: 'PreToolUse', cwd: ws, session_id: 's', ...payload }),
     encoding: 'utf8',
     timeout,
     env: {
@@ -41,24 +43,29 @@ function runHook(payload, { preload, env = {}, timeout = 30000 } = {}) {
       ...env,
     },
   });
+  // Two answers in one run do not parse as one, so `answer` is null for them.
   let answer = null;
   try { answer = JSON.parse(r.stdout); } catch (e) { /* asserted by the callers */ }
-  return { status: r.status, stderr: r.stderr, answer };
+  return { status: r.status, stdout: r.stdout, stderr: r.stderr, answer };
 }
-// The same run with a server to talk to, which has to stay free to answer.
-function runHookAgainst(port, payload, env = {}) {
+// The same run with a server to talk to, which has to stay free to answer. A
+// run still going after `timeout` is ended, and its status is then null.
+function runHookAgainst(port, payload, env = {}, { preload, raw, timeout = 30000 } = {}) {
   return new Promise((resolve) => {
-    const proc = spawn(process.execPath, [HOOK], {
+    const args = [...[].concat(preload || []).flatMap((file) => ['--require', file]), HOOK];
+    const proc = spawn(process.execPath, args, {
       env: { ...process.env, NODE_V8_COVERAGE: '', RUNDOCK: '1', RUNDOCK_PORT: String(port), RUNDOCK_WORKSPACE: ws, RUNDOCK_CONVO_ID: '', RUNDOCK_CODE_MODE: '', RUNDOCK_TEST_SEAMS: '1', RUNDOCK_TEST_PLATFORM: 'darwin', ...env },
     });
+    const ending = setTimeout(() => proc.kill('SIGKILL'), timeout);
     let out = '';
     proc.stdout.on('data', (c) => { out += c; });
     proc.on('close', (status) => {
+      clearTimeout(ending);
       let answer = null;
       try { answer = JSON.parse(out); } catch (e) { /* asserted by the callers */ }
-      resolve({ status, answer });
+      resolve({ status, stdout: out, answer });
     });
-    proc.stdin.end(JSON.stringify({ hook_event_name: 'PreToolUse', cwd: ws, session_id: 's', ...payload }));
+    proc.stdin.end(raw !== undefined ? raw : JSON.stringify({ hook_event_name: 'PreToolUse', cwd: ws, session_id: 's', ...payload }));
   });
 }
 const bash = (command) => ({ tool_name: 'Bash', tool_input: { command } });
@@ -82,6 +89,37 @@ function assertConversationWords(r) {
   assert.strictEqual(decision(r), 'deny', r.answer && JSON.stringify(r.answer));
   assert.ok(!reasonOf(r).includes(UNATTENDED_NEXT), `a conversation keeps its words: ${reasonOf(r)}`);
 }
+
+// EVERY FAILURE IN THIS FILE IS FORCED FROM OUTSIDE THE HOOK, by a file the
+// test loads ahead of it with `--require` on the command line it starts the
+// hook with. The hook itself has no switch for any of them, so nothing in a
+// tool call's input, which reaches the hook only as the request on standard
+// input, can set one off.
+const preloadFile = (name, body) => {
+  const file = path.join(root, `${name}.js`);
+  fs.writeFileSync(file, body);
+  return file;
+};
+const throwsOnRequest = preloadFile('throws-on-request', `
+  require('http').request = () => { throw new Error('forced failure'); };
+`);
+const throwsOnLoad = preloadFile('throws-on-load', `
+  const Module = require('module');
+  const load = Module._load;
+  Module._load = function (request, ...rest) {
+    if (String(request).endsWith('refusal-notice.js')) throw new Error('forced failure');
+    return load.call(this, request, ...rest);
+  };
+`);
+// The hook's own wait for a card is five minutes; this shortens it for one run,
+// so the code that answers is still the hook's own timeout branch.
+const shortWait = preloadFile('short-wait', `
+  const http = require('http');
+  const request = http.request;
+  http.request = function (options, ...rest) {
+    return request.call(this, typeof options === 'object' ? { ...options, timeout: 300 } : options, ...rest);
+  };
+`);
 
 // Every one of these holds a bracket with a range that runs backwards, which
 // the shell reads as an empty range and a regular expression refuses to compile.
@@ -214,17 +252,8 @@ describe('a reply cut short is not an answer', () => {
   });
 
   // A card nobody answers and a server that never replies: the hook's own
-  // wait runs out. The wait is five minutes, so a preload shortens it for
-  // this one run; the code that answers is the hook's own timeout branch.
+  // wait runs out (shortened for this run by the short-wait preload).
   test('a routine whose card is never answered at all is refused, in the routine\'s words, when the hook stops waiting', async () => {
-    const shortWait = path.join(root, 'short-wait.js');
-    fs.writeFileSync(shortWait, `
-      const http = require('http');
-      const request = http.request;
-      http.request = function (options, ...rest) {
-        return request.call(this, typeof options === 'object' ? { ...options, timeout: 300 } : options, ...rest);
-      };
-    `);
     const held = [];
     const server = await new Promise((resolve) => {
       const s = http.createServer((req, res) => {
@@ -288,22 +317,6 @@ describe('a reply cut short is not an answer', () => {
 });
 
 describe('anything else that goes wrong in the hook is a refusal', () => {
-  const preload = (name, body) => {
-    const file = path.join(root, `${name}.js`);
-    fs.writeFileSync(file, body);
-    return file;
-  };
-  const throwsOnRequest = preload('throws-on-request', `
-    require('http').request = () => { throw new Error('forced failure'); };
-  `);
-  const throwsOnLoad = preload('throws-on-load', `
-    const Module = require('module');
-    const load = Module._load;
-    Module._load = function (request, ...rest) {
-      if (String(request).endsWith('refusal-notice.js')) throw new Error('forced failure');
-      return load.call(this, request, ...rest);
-    };
-  `);
   const tool = { tool_name: 'mcp__example__update_thing', tool_input: {} };
 
   test('a failure while judging a tool call refuses it, and says why', () => {
@@ -346,7 +359,7 @@ describe('anything else that goes wrong in the hook is a refusal', () => {
   });
 
   test('requiring the file adds no listener: only the hook process refuses', () => {
-    const count = `process.listenerCount('uncaughtException') + process.listenerCount('beforeExit')`;
+    const count = `process.listenerCount('uncaughtException') + process.listenerCount('unhandledRejection') + process.listenerCount('beforeExit')`;
     const r = spawnSync(process.execPath, ['-e', `const before = ${count}; require(${JSON.stringify(HOOK)}); console.log(${count} - before);`],
       { encoding: 'utf8', env: { ...process.env, NODE_V8_COVERAGE: '' } });
     assert.strictEqual(r.stdout.trim(), '0', r.stderr);
@@ -357,5 +370,79 @@ describe('anything else that goes wrong in the hook is a refusal', () => {
       { preload: throwsOnRequest, env: { RUNDOCK_CONVO_ID: 'c1' } });
     assert.strictEqual(r.status, 0, r.stderr);
     assert.deepStrictEqual(r.answer, {});
+  });
+});
+
+// ===== A REJECTION NOBODY HANDLES, AND INPUT THE HOOK CANNOT READ =====
+
+// What any request the hook could not check is refused with, in a
+// conversation; a routine's refusal goes on to say what to do next.
+const COULD_NOT_CHECK = 'Rundock could not check this request, so it was refused rather than approved on your behalf.';
+const couldNotCheck = (unattended) => ({
+  hookSpecificOutput: {
+    hookEventName: 'PreToolUse',
+    permissionDecision: 'deny',
+    permissionDecisionReason: unattended ? `${COULD_NOT_CHECK} ${UNATTENDED_NEXT}` : COULD_NOT_CHECK,
+  },
+});
+// A call the hook allows on its own when nobody can be asked (port 1 refuses
+// every connection), and one it refuses on its own.
+const ORDINARY = { tool_name: 'mcp__example__update_thing', tool_input: {} };
+const GUARDED = bash('security dump-keychain');
+
+// A rejection nobody handles, raised as the hook starts asking the server
+// anything: the agent's notice in a conversation, the card in a routine.
+const rejectsOnRequest = preloadFile('rejects-on-request', `
+  const http = require('http');
+  const request = http.request;
+  http.request = function (...args) {
+    Promise.reject(new Error('forced rejection'));
+    return request.apply(this, args);
+  };
+`);
+// The hook answers and asks to exit, and is held there for a moment in which a
+// rejection, or an error, arrives. Nothing in the hook runs between an answer
+// and its exit, so only a test can put anything in that moment.
+const afterTheAnswer = (name, raise) => preloadFile(name, `
+  const exit = process.exit;
+  process.exit = function () {
+    process.exit = exit;
+    ${raise}
+  };
+`);
+const rejectionAfterAnswer = afterTheAnswer('rejection-after-answer', `Promise.reject(new Error('forced rejection after the answer'));`);
+const errorAfterAnswer = afterTheAnswer('error-after-answer', `process.nextTick(() => { throw new Error('forced error after the answer'); });`);
+// Every mode NODE_OPTIONS can name for what the runtime does with a rejection.
+const REJECTION_MODES = ['throw', 'strict', 'warn', 'warn-with-error-code', 'none'];
+const rejections = (mode) => ({ NODE_OPTIONS: `--unhandled-rejections=${mode}` });
+
+describe('a rejection nobody handles is a refusal, whatever the runtime is told to do with one', () => {
+  // The runtime's default turns an unhandled rejection into an exception,
+  // which the hook already refused. NODE_OPTIONS, inherited from wherever
+  // Rundock was started, can tell it to warn instead, or to say nothing at
+  // all, and the hook then carried on and allowed the call as though nothing
+  // had gone wrong. In every mode a rejection after the answer adds nothing.
+  for (const mode of REJECTION_MODES) {
+    test(`under --unhandled-rejections=${mode}, a rejection before the answer refuses, and one after it adds nothing`, () => {
+      const refused = runHook(ORDINARY, { preload: rejectsOnRequest, env: rejections(mode) });
+      assert.strictEqual(refused.status, 0, refused.stderr);
+      assert.deepStrictEqual(refused.answer, couldNotCheck(true), refused.stdout);
+      const kept = runHook(GUARDED, { preload: rejectionAfterAnswer, env: rejections(mode) });
+      assert.strictEqual(kept.status, 0, kept.stderr);
+      assert.strictEqual(decision(kept), 'deny', `one answer, the hook's own: ${kept.stdout}`);
+      assert.match(reasonOf(kept), /Keychain/);
+    });
+  }
+});
+
+describe('the hook gives one answer for each call', () => {
+  test('an error arriving after the answer is written prints no second one, and a refusal stays a refusal', () => {
+    const refused = runHook(GUARDED, { preload: errorAfterAnswer });
+    assert.strictEqual(refused.status, 0, refused.stderr);
+    assert.strictEqual(decision(refused), 'deny', `one answer, the hook's own: ${refused.stdout}`);
+    assert.match(reasonOf(refused), /Keychain/);
+    const allowed = runHook(ORDINARY, { preload: errorAfterAnswer });
+    assert.strictEqual(allowed.status, 0, allowed.stderr);
+    assert.strictEqual(decision(allowed), 'allow', `one answer, the hook's own: ${allowed.stdout}`);
   });
 });

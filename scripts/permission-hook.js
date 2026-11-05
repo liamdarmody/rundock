@@ -17,25 +17,35 @@
 
 // A HOOK THAT STOPS WITHOUT ANSWERING REFUSES THE TOOL CALL. The runtime reads a
 // hook with nothing to say as a hook with no objection and carries on, so an
-// exception here, or a reply that never finishes, would let the call through
-// with the checks below skipped. Every answer in this file ends in
-// process.exit, so `beforeExit` only ever means none was given. Installed ahead
-// of the requires, so a hook that cannot load refuses too; an unhandled
-// rejection arrives here as well. Outside Rundock this hook decides nothing, and
-// a finished tool has nothing left to refuse. Input that cannot be read at all
-// is handled where it is parsed, below.
+// exception here, an unhandled rejection, or a reply that never finishes, would
+// let the call through with the checks below skipped. Every answer in this file
+// ends in process.exit, so `beforeExit` only ever means none was given.
+// Installed ahead of the requires, so a hook that cannot load refuses too.
+// Outside Rundock this hook decides nothing, and a finished tool has nothing
+// left to refuse. Input that cannot be read at all is handled where it is
+// parsed, below.
 let hookInput = '';
+// ONE ANSWER FOR EACH CALL. Set once an answer has been written whole. Nothing
+// in this file runs between an answer and its exit, so a rejection or an error
+// arriving after one can only have been forced from outside; it then prints no
+// second answer and leaves the first as it was, so a refusal stays a refusal.
+let answered = false;
+function writeAnswer(output) {
+  process.stdout.write(JSON.stringify(output));
+  answered = true;
+}
 // What a routine is told to do next, the same sentence as UNATTENDED_NEXT in
 // scripts/refusal-notice.js. Copied rather than required because this runs
 // when the hook could not load, which is when a require fails; held equal to
 // that one by test/unit/hook-never-crashes.test.js.
 const UNATTENDED_NEXT_UNLOADED = 'This run has nobody to ask, so carry on with the rest of the job without that step. If you cannot finish without it, make the last line of your final message: RUN STATUS: failed: <one-line reason>';
 function refuseUnanswered() {
+  if (answered) process.exit(0);
   let event = 'PreToolUse';
   try { event = JSON.parse(hookInput).hook_event_name || event; } catch (e) { /* refused below */ }
   const deciding = process.env.RUNDOCK && event === 'PreToolUse';
   const refused = 'Rundock could not check this request, so it was refused rather than approved on your behalf.';
-  process.stdout.write(JSON.stringify(!deciding ? {} : {
+  writeAnswer(!deciding ? {} : {
     hookSpecificOutput: {
       hookEventName: 'PreToolUse',
       permissionDecision: 'deny',
@@ -44,11 +54,18 @@ function refuseUnanswered() {
       // there before anything else in this file has run).
       permissionDecisionReason: unattendedRun() ? `${refused} ${UNATTENDED_NEXT_UNLOADED}` : refused,
     },
-  }));
+  });
   process.exit(0);
 }
 if (require.main === module) {
   process.on('uncaughtException', refuseUnanswered);
+  // A REJECTION NOBODY HANDLES, under every --unhandled-rejections mode that
+  // NODE_OPTIONS, inherited from wherever Rundock was started, can name. Under
+  // `strict` one arrives as an exception, above; under `throw` (the default),
+  // `warn`, `warn-with-error-code` and `none` it arrives here, and without this
+  // the last three let the hook carry on and answer as though nothing had
+  // gone wrong.
+  process.on('unhandledRejection', refuseUnanswered);
   process.on('beforeExit', refuseUnanswered);
 }
 
@@ -3217,7 +3234,7 @@ if (hookEvent === 'PostToolUse' || hookEvent === 'PostToolUseFailure') {
   const blocked = !!process.env.RUNDOCK && sandboxBlocked(finished.tool_name, finished.tool_input, said, { codeMode: process.env.RUNDOCK_CODE_MODE === '1' });
   fetchAgentNotice((note) => {
     const context = [note, blocked ? refusalNotice('sandbox', finished.tool_name, { unattended: unattendedRun() }) : null].filter(Boolean).join('\n');
-    process.stdout.write(JSON.stringify(context ? { hookSpecificOutput: { hookEventName: hookEvent, additionalContext: context } } : {}));
+    writeAnswer(context ? { hookSpecificOutput: { hookEventName: hookEvent, additionalContext: context } } : {});
     process.exit(0);
   }, { check: true });
   return;
@@ -3225,7 +3242,7 @@ if (hookEvent === 'PostToolUse' || hookEvent === 'PostToolUseFailure') {
 fetchAgentNotice((agentNotice) => {
   // Not running in Rundock: pass through (no decision, Claude Code handles normally)
   if (!process.env.RUNDOCK) {
-    process.stdout.write(JSON.stringify({}));
+    writeAnswer({});
     process.exit(0);
   }
 
@@ -3245,10 +3262,10 @@ fetchAgentNotice((agentNotice) => {
   // server before deciding (agentNotice, below); it is never read from a file.
   const writeDecision = (answer) => {
     const note = agentNotice;
-    if (!note) { process.stdout.write(JSON.stringify(answer)); return; }
+    if (!note) { writeAnswer(answer); return; }
     const own = answer.hookSpecificOutput || { hookEventName: 'PreToolUse' };
     const context = [own.additionalContext, note].filter(Boolean).join('\n');
-    process.stdout.write(JSON.stringify({ ...answer, hookSpecificOutput: { ...own, additionalContext: context } }));
+    writeAnswer({ ...answer, hookSpecificOutput: { ...own, additionalContext: context } });
   };
   // THE FOLDERS AS THEY ARE NOW, not only as they were when this agent started.
   //
