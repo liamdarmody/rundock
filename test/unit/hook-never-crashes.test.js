@@ -542,3 +542,110 @@ describe('input the hook cannot read is refused inside Rundock, and passes throu
     assert.strictEqual(conversation.stdout, runHook(ORDINARY, { preload: throwsOnLoad, env: CONVERSATION }).stdout);
   });
 });
+
+// A standard output that cannot be written, as when its reader has gone: every
+// write, or only the first.
+const writeFails = `throw Object.assign(new Error('write EPIPE (forced)'), { code: 'EPIPE' });`;
+const stdoutFails = preloadFile('stdout-fails', `process.stdout.write = () => { ${writeFails} };`);
+const stdoutFailsOnce = preloadFile('stdout-fails-once', `
+  const write = process.stdout.write;
+  process.stdout.write = function () { process.stdout.write = write; ${writeFails} };
+`);
+// A server that answers every card with `reply`, or holds it unanswered.
+const cardServer = (reply) => new Promise((resolve) => {
+  const s = http.createServer((req, res) => {
+    req.resume();
+    if (!req.url.startsWith('/api/permission-request')) { res.end('{}'); return; }
+    if (reply) res.end(JSON.stringify(reply));
+  });
+  s.listen(0, '127.0.0.1', () => resolve(s));
+});
+const stopServer = (server) => new Promise((resolve) => { server.closeAllConnections(); server.close(resolve); });
+
+// 5. THE CONTROL FAILING.
+describe('the refusal holds when what refuses fails too', () => {
+  // Claude Code reads exit code 2 from a PreToolUse hook as a block, with
+  // standard error as the reason, whatever standard output holds.
+  test('a refusal that cannot be written still refuses: the hook exits 2, the runtime\'s block, and says why on standard error', () => {
+    for (const [env, unattended] of [[ROUTINE, true], [CONVERSATION, false]]) {
+      const why = couldNotCheck(unattended).hookSpecificOutput.permissionDecisionReason;
+      for (const [what, r] of [
+        ['input it cannot read', runHook(null, { raw: '', preload: stdoutFails, env })],
+        ['a failure while judging', runHook(ORDINARY, { preload: [stdoutFails, throwsOnRequest], env })],
+        ['an allow it cannot write', runHook(ORDINARY, { preload: stdoutFails, env })],
+      ]) {
+        assert.strictEqual(r.status, 2, `${what}: ${r.stderr}`);
+        assert.strictEqual(r.stdout, '', what);
+        assert.strictEqual(r.stderr.trim(), why, what);
+      }
+    }
+    // Outside Rundock the hook decides nothing, so it blocks nothing either.
+    const outside = runHook(ORDINARY, { preload: stdoutFails, env: { RUNDOCK: '' } });
+    assert.strictEqual(outside.status, 0, outside.stderr);
+    assert.strictEqual(outside.stdout, '');
+  });
+
+  test('a refusal whose writing fails is never followed by an allow', async () => {
+    // The card is refused, and writing that refusal fails once. A reply that
+    // could not be read allows ordinary access, so the failed write must never
+    // be taken for one.
+    const server = await cardServer({ allow: false });
+    try {
+      const r = await runHookAgainst(server.address().port, ORDINARY, {}, { preload: stdoutFailsOnce });
+      assert.strictEqual(r.status, 0);
+      assert.deepStrictEqual(r.answer, couldNotCheck(true), r.stdout);
+    } finally { await stopServer(server); }
+  });
+
+  test('a rejection while the server is being asked still refuses, a routine and a conversation each in their own words, where the runtime is told to do nothing about one', () => {
+    const routine = runHook(ORDINARY, { preload: rejectsOnRequest, env: { ...ROUTINE, ...rejections('none') } });
+    assert.strictEqual(routine.status, 0, routine.stderr);
+    assert.deepStrictEqual(routine.answer, couldNotCheck(true), routine.stdout);
+    // In a conversation the first thing asked is the line left for its agent.
+    const conversation = runHook(ORDINARY, { preload: rejectsOnRequest, env: { ...CONVERSATION, ...rejections('none') } });
+    assert.strictEqual(conversation.status, 0, conversation.stderr);
+    assert.deepStrictEqual(conversation.answer, couldNotCheck(false), conversation.stdout);
+  });
+
+  test('a stall: a rejection while the card is held refuses at once, and the same stall without one is refused when the hook stops waiting', async () => {
+    const server = await cardServer(null);
+    try {
+      const port = server.address().port;
+      const rejected = await runHookAgainst(port, ORDINARY, rejections('none'), { preload: rejectsOnRequest, timeout: 10000 });
+      assert.strictEqual(rejected.status, 0, 'the hook was left waiting for a card nobody will answer');
+      assert.deepStrictEqual(rejected.answer, couldNotCheck(true), rejected.stdout);
+      const stalled = await runHookAgainst(port, ORDINARY, {}, { preload: shortWait, timeout: 10000 });
+      assert.strictEqual(stalled.status, 0);
+      assert.strictEqual(decision(stalled), 'deny', stalled.stdout);
+      assert.strictEqual(reasonOf(stalled), refusalNotice('timeout', ORDINARY.tool_name, { unattended: true }));
+    } finally { await stopServer(server); }
+  });
+});
+
+describe('what these tests use to force a failure', () => {
+  test('can only make the hook refuse, never allow, and none of it is reachable from a tool call', () => {
+    // A refusal is a deny, or the runtime's block when not even that could be
+    // written.
+    const refused = (r) => decision(r) === 'deny' || (r.status === 2 && r.stdout === '');
+    for (const [what, preload, env] of [
+      ['a failure while judging', throwsOnRequest, {}],
+      ['a hook that cannot load', throwsOnLoad, {}],
+      ...REJECTION_MODES.map((mode) => [`a rejection under ${mode}`, rejectsOnRequest, rejections(mode)]),
+      ['a standard output that cannot be written', stdoutFails, {}],
+      ['a first write that fails', stdoutFailsOnce, {}],
+    ]) {
+      assert.ok(refused(runHook(ORDINARY, { preload, env })), `${what} refuses a call the hook would allow`);
+      assert.ok(refused(runHook(GUARDED, { preload, env })), `${what} still refuses one the hook refuses`);
+    }
+    // One arriving after the answer forces nothing, and a refusal stays one.
+    for (const preload of [rejectionAfterAnswer, errorAfterAnswer]) {
+      assert.strictEqual(decision(runHook(GUARDED, { preload })), 'deny');
+    }
+    // Each is loaded by the test's own command line. The hook has no switch
+    // for any of them: it reads nothing from its command line, and its only
+    // test seam is the Keychain platform's, which forces no failure.
+    const src = fs.readFileSync(HOOK, 'utf8');
+    assert.ok(!/process\.(argv|execArgv)/.test(src), 'the hook takes nothing from its command line');
+    assert.deepStrictEqual([...new Set(src.match(/RUNDOCK_TEST_[A-Z_]+/g))].sort(), ['RUNDOCK_TEST_PLATFORM', 'RUNDOCK_TEST_SEAMS']);
+  });
+});

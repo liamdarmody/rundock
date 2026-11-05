@@ -50,7 +50,7 @@ function refuseUnanswered() {
   try { event = JSON.parse(hookInput).hook_event_name || event; } catch (e) { /* refused below */ }
   const deciding = process.env.RUNDOCK && event === 'PreToolUse';
   const refused = 'Rundock could not check this request, so it was refused rather than approved on your behalf.';
-  writeAnswer(!deciding ? {} : {
+  const output = !deciding ? {} : {
     hookSpecificOutput: {
       hookEventName: 'PreToolUse',
       permissionDecision: 'deny',
@@ -59,7 +59,20 @@ function refuseUnanswered() {
       // there before anything else in this file has run).
       permissionDecisionReason: unattendedRun() ? `${refused} ${UNATTENDED_NEXT_UNLOADED}` : refused,
     },
-  });
+  };
+  try {
+    writeAnswer(output);
+  } catch (e) {
+    // A REFUSAL THAT CANNOT BE WRITTEN STILL REFUSES. The runtime reads exit
+    // code 2 from a PreToolUse hook as a block, with standard error as the
+    // reason, whatever standard output holds; on macOS and Linux the launcher
+    // execs this file, so the code reaches the runtime as it is. Outside
+    // Rundock nothing is decided, so nothing is blocked either.
+    if (deciding) {
+      try { process.stderr.write(`${output.hookSpecificOutput.permissionDecisionReason}\n`); } catch (e2) { /* the code alone blocks */ }
+      process.exit(2);
+    }
+  }
   process.exit(0);
 }
 if (require.main === module) {
@@ -3667,6 +3680,7 @@ fetchAgentNotice((agentNotice) => {
     let body = '';
     res.on('data', chunk => { body += chunk; });
     res.on('end', () => {
+      let decided;
       try {
         const result = JSON.parse(body);
         // A refusal tells the agent, in this same answer, that it was on
@@ -3681,17 +3695,22 @@ fetchAgentNotice((agentNotice) => {
         // asked nobody (a standing grant, an always-allow rule): only an
         // answer from a card carries `card`.
         const approved = result.allow === true && result.card === true ? approvalNotice(data.tool_name) : null;
-        writeDecision(({
+        decided = {
           hookSpecificOutput: {
             hookEventName: 'PreToolUse',
             permissionDecision: result.allow ? 'allow' : 'deny',
             permissionDecisionReason: reason,
             ...(approved ? { additionalContext: approved } : {}),
           }
-        }));
+        };
       } catch (e) {
         unanswered('Rundock hook: could not parse server response.');
       }
+      // WRITTEN OUTSIDE THE CATCH. A reply that cannot be read allows ordinary
+      // access, so a write that fails must never be taken for one: inside the
+      // catch, a refusal whose writing failed was answered again as an allow.
+      // A failed write ends in refuseUnanswered, at the top, instead.
+      writeDecision(decided);
       process.exit(0);
     });
   });

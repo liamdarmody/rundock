@@ -3212,6 +3212,40 @@ const MUTATIONS = [
   [HOOK_CRASH, 'Hook crash: a JSON list is read as a request',
     "if (!finished || typeof finished !== 'object' || Array.isArray(finished))",
     "if (!finished || typeof finished !== 'object')"],
+  // A refusal that cannot be written ends in the runtime's own block instead.
+  [HOOK_CRASH, 'Hook crash: a refusal that cannot be written lets the call through',
+    "      process.exit(2);",
+    "      process.exit(0);"],
+  [HOOK_CRASH, 'Hook crash: a refusal that cannot be written says why nowhere',
+    "      try { process.stderr.write(`${output.hookSpecificOutput.permissionDecisionReason}\\n`); } catch (e2) { /* the code alone blocks */ }\n",
+    ""],
+  [HOOK_CRASH, 'Hook crash: an output that cannot be written blocks the call outside Rundock too',
+    "    if (deciding) {\n      try { process.stderr.write(",
+    "    if (true) {\n      try { process.stderr.write("],
+  [HOOK_CRASH, "Hook crash: a card's answer that fails to be written is answered again as a reply that could not be read",
+    "        decided = {\n"
+    + "          hookSpecificOutput: {\n"
+    + "            hookEventName: 'PreToolUse',\n"
+    + "            permissionDecision: result.allow ? 'allow' : 'deny',\n"
+    + "            permissionDecisionReason: reason,\n"
+    + "            ...(approved ? { additionalContext: approved } : {}),\n"
+    + "          }\n"
+    + "        };\n"
+    + "      } catch (e) {\n"
+    + "        unanswered('Rundock hook: could not parse server response.');\n"
+    + "      }\n",
+    "        writeDecision({\n"
+    + "          hookSpecificOutput: {\n"
+    + "            hookEventName: 'PreToolUse',\n"
+    + "            permissionDecision: result.allow ? 'allow' : 'deny',\n"
+    + "            permissionDecisionReason: reason,\n"
+    + "            ...(approved ? { additionalContext: approved } : {}),\n"
+    + "          }\n"
+    + "        });\n"
+    + "      } catch (e) {\n"
+    + "        unanswered('Rundock hook: could not parse server response.');\n"
+    + "      }\n"
+    + "      if (answered) process.exit(0);\n"],
   [HOOK_CRASH, 'Hook crash: the refusal is armed in everything that requires the file',
     "if (require.main === module) {\n  process.on('uncaughtException', refuseUnanswered);",
     "if (true) {\n  process.on('uncaughtException', refuseUnanswered);"],
