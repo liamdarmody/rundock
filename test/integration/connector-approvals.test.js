@@ -18,6 +18,8 @@ const { spawn } = require('node:child_process');
 const { JSDOM } = require('jsdom');
 
 const h = require('../helpers/harness.js');
+const auth = require('../../lib/auth/index.js');
+const ROUTER = require('../../lib/http-router.js');
 
 const HOOK = path.join(__dirname, '..', '..', 'scripts', 'permission-hook.js');
 const CONVO = 'connector-approvals';
@@ -50,6 +52,8 @@ before(async () => {
   global.serverPlatform = 'darwin';
   global.workspaceMode = 'knowledge';
   global.activeConversation = { id: CONVO };
+  // The team the page has loaded, which a routine run's card names its agent from.
+  global.agents = [];
   global.unread = { markPermission() {}, resolvePermission() {} };
   global.updateUnreadBadge = () => {};
   global.renderConvoList = () => {};
@@ -66,8 +70,9 @@ after(async () => {
 });
 
 // The real hook, given one tool call on stdin, in Notes mode. `port` is
-// Rundock's by default; a closed one stands for Rundock not running.
-function runHook(toolName, convo, port = h.port) {
+// Rundock's by default; a closed one stands for Rundock not running. `token`
+// is a routine run's own, for a request no conversation owns.
+function runHook(toolName, convo, port = h.port, token = null) {
   return new Promise((resolve, reject) => {
     const env = {
       ...process.env,
@@ -75,7 +80,7 @@ function runHook(toolName, convo, port = h.port) {
       RUNDOCK_PORT: String(port),
       RUNDOCK_WORKSPACE: h.workspaceDir,
       RUNDOCK_CONVO_ID: convo,
-      RUNDOCK_HOOK_TOKEN: h.hookToken(convo || null),
+      RUNDOCK_HOOK_TOKEN: token || h.hookToken(convo || null),
       RUNDOCK_EXTRA_DIRS: '',
     };
     delete env.RUNDOCK_CODE_MODE;
@@ -96,11 +101,11 @@ function runHook(toolName, convo, port = h.port) {
 // Either the hook answers it alone (a read, with no request to the server), or
 // a request reaches the view, which answers it from a saved rule or draws a
 // card. `done` resolves with the hook's decision once somebody has answered.
-async function request(toolName, { convo = CONVO } = {}) {
+async function request(toolName, { convo = CONVO, token = null } = {}) {
   const since = client.messages.length;
   const sentBefore = sent.length;
   let alone = null;
-  const done = runHook(toolName, convo);
+  const done = runHook(toolName, convo, h.port, token);
   done.then((r) => { alone = r; }, () => {});
   const arrived = () => client.messages.slice(since)
     .find((m) => m.type === 'control_request' && m.request && m.request.tool_name === toolName);
@@ -144,11 +149,21 @@ describe('a connector action that sends asks every time, with Allow and Deny onl
   }
 
   test('a request no conversation owns is asked the same way, in the approvals dock', async () => {
-    const r = await request(MAIL('send_message'), { convo: '' });
-    assert.strictEqual(r.asked, true);
-    assert.ok(r.card && r.card.closest('.approvals-dock-list'), 'drawn in the dock, not in the conversation on screen');
-    assert.deepStrictEqual(r.buttons, ['allow', 'deny']);
-    assert.strictEqual((await press(r, 'deny')).decision, 'deny');
+    // A routine run's request, the only kind no conversation owns, carrying
+    // its run's own token; the run the scheduler has going is stood in for.
+    const run = { id: 'run-connector', routine: 'Inbox triage', agent: 'ada' };
+    const prev = ROUTER.wireHttpRouterDeps({ routineRun: (id) => (id === run.id ? run : null) });
+    const token = auth.issueRunHookToken(run.id);
+    try {
+      const r = await request(MAIL('send_message'), { convo: '', token });
+      assert.strictEqual(r.asked, true);
+      assert.ok(r.card && r.card.closest('.approvals-dock-list'), 'drawn in the dock, not in the conversation on screen');
+      assert.deepStrictEqual(r.buttons, ['allow', 'deny']);
+      assert.strictEqual((await press(r, 'deny')).decision, 'deny');
+    } finally {
+      auth.retireRunHookToken(token);
+      ROUTER.wireHttpRouterDeps({ routineRun: prev.routineRun });
+    }
   });
 
   test('another connector write still offers Always allow', async () => {
