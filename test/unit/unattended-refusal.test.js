@@ -232,6 +232,27 @@ describe('a routine\'s refused card, through the real hook', () => {
     assert.strictEqual(out.hookSpecificOutput.additionalContext, approvalNotice('Bash'));
   });
 
+  // The answer is read once, as a boolean: only `true` approves.
+  test('an answer that is not a plain true refuses, the string "true" included, and the hook is told so', async () => {
+    for (const allow of ['true', 1, 'yes', {}, null]) {
+      const { out } = await askAndAnswer(routineEnv(), ROUTINE_SESSION, allow);
+      assert.strictEqual(out.hookSpecificOutput.permissionDecision, 'deny', JSON.stringify(allow));
+      assert.strictEqual(reasonOf(out), UNATTENDED.denied, JSON.stringify(allow));
+    }
+    const { out } = await askAndAnswer(conversationEnv('convo-string-true'), 's-string-true', 'true');
+    assert.strictEqual(out.hookSpecificOutput.permissionDecision, 'deny', 'in a conversation too');
+  });
+
+  test('the one value read is the one the hook and every window are told', () => {
+    let body = null;
+    const told = [];
+    const waiting = new Map([['perm-string-true', { res: { writeHead() {}, end(b) { body = JSON.parse(b); } }, timer: null, toolName: 'Bash', conversationId: '' }]]);
+    handlePermissionResponse({ pendingPermissions: waiting, broadcast: (s) => told.push(JSON.parse(s)) }, { send() {} },
+      { requestId: 'perm-string-true', conversationId: '', allow: 'true', card: true });
+    assert.deepStrictEqual(body, { allow: false }, 'the hook is answered with a boolean refusal');
+    assert.strictEqual(told[0].allow, false, 'and every window hears the same');
+  });
+
   // The retry: the same call asked again is refused again, in the same words.
   test('a refused call asked again is refused again, in the same words', async () => {
     const first = (await askAndAnswer(routineEnv(), ROUTINE_SESSION, false)).out;
