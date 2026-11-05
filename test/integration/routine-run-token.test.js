@@ -98,25 +98,49 @@ function press(agentId, name) {
 const closed = (name) => h.waitUntil(() => { const r = recordOf(name); return r && r.status !== 'running'; }, { timeout: 15000 });
 
 test('a card raised with one run\'s token, naming another live run\'s session, is the first run\'s and names its routine and agent', async () => {
-  // Run B is going, and holds.
-  const holds = { match: { agent: LEDGER, promptIncludes: 'b holds' }, delayMs: 3000, turn: [{ text: 'B done.' }] };
+  // Run B is going, held open by a card of its own until run A's card is filed.
+  const holds = { match: { agent: LEDGER, promptIncludes: 'b holds' }, hooks: [readOutside()], turn: [{ text: 'B done.' }] };
   h.writeScenario([holds]);
   await save(LEDGER, 'token-b', 'b holds');
+  let since = client.messages.length;
   press(LEDGER, 'token-b');
-  assert.ok(await h.waitUntil(() => { const r = recordOf('token-b'); return r && r.status === 'running' && r.sessionId; }), 'run B is going');
-  const b = recordOf('token-b');
+  const { msg: hold } = await client.waitFor((m) => m.type === 'control_request' && m._run, { since, label: 'run B\'s own card, which holds it open' });
+  const b = recordById(hold._run.id);
 
-  // Run A asks, its hook naming run B's session in the request.
-  h.writeScenario([holds, { match: { agent: KEEPER, promptIncludes: 'a asks' }, hooks: [readOutside({ session_id: b.sessionId })], turn: [{ text: 'A done.' }] }]);
-  await save(KEEPER, 'token-a', 'a asks');
-  const since = client.messages.length;
-  press(KEEPER, 'token-a');
-  const { msg: card } = await client.waitFor((m) => m.type === 'control_request' && m._run, { since, label: 'run A\'s card' });
+  // Run A asks, its hook naming run B's session in the request. Every request
+  // the route receives is kept as it arrived, token and body.
+  const received = [];
+  const keep = (req) => {
+    if (req.url !== '/api/permission-request') return;
+    let body = '';
+    req.on('data', (c) => { body += c; });
+    req.on('end', () => { try { received.push({ token: req.headers['x-rundock-hook-token'], body: JSON.parse(body) }); } catch (e) { /* not JSON */ } });
+  };
+  h.internal.server.on('request', keep);
+  let card;
+  try {
+    h.writeScenario([holds, { match: { agent: KEEPER, promptIncludes: 'a asks' }, hooks: [readOutside({ session_id: b.sessionId })], turn: [{ text: 'A done.' }] }]);
+    await save(KEEPER, 'token-a', 'a asks');
+    since = client.messages.length;
+    press(KEEPER, 'token-a');
+    ({ msg: card } = await client.waitFor((m) => m.type === 'control_request' && m.request_id !== hold.request_id, { since, label: 'run A\'s card' }));
+  } finally { h.internal.server.off('request', keep); }
   const a = recordOf('token-a');
-  assert.deepStrictEqual(card._run, { id: a.id, routine: 'token-a', agent: KEEPER }, 'run A\'s card, naming run A\'s routine and agent');
-  assert.strictEqual(card._conversationId, '');
-  client.send({ type: 'permission_response', requestId: card.request_id, conversationId: '', allow: false, card: true });
 
+  // At the moment run A's card is filed, both runs are going, and the request
+  // it came from named run B's own session.
+  const going = schedulerLib.runningRuns().map((r) => r.id);
+  assert.ok(going.includes(a.id) && going.includes(b.id), 'both runs are going');
+  assert.strictEqual(recordById(b.id).status, 'running');
+  const asked = received.filter((x) => x.token === tokenOf(a));
+  assert.deepStrictEqual(asked.map((x) => x.body.session_id), [b.sessionId], 'run A\'s request named run B\'s own session');
+  assert.notStrictEqual(a.sessionId, b.sessionId);
+  assert.deepStrictEqual(card._run, { id: a.id, routine: 'token-a', agent: KEEPER }, 'yet the card is run A\'s, naming run A\'s routine and agent');
+  assert.strictEqual(card._conversationId, '');
+
+  // Run B is let go only now, its own card approved, and run A's card refused.
+  answer(hold, true);
+  answer(card, false);
   assert.ok(await h.waitUntil(() => h.readHookAnswers().some((x) => x.agent === KEEPER && x.sentSession === b.sessionId)), 'run A\'s hook was answered');
   const told = h.readHookAnswers().find((x) => x.agent === KEEPER && x.sentSession === b.sessionId);
   assert.strictEqual(told.answer.hookSpecificOutput.permissionDecisionReason, UNATTENDED_DENIED);
