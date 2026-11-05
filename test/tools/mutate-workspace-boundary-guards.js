@@ -225,6 +225,14 @@ const AUTH_SPAWN = { src: path.join(ROOT, 'lib', 'runtime', 'claude.js'), suite:
 const AUTH_HOOK = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/integration/boundary-permissions.test.js' };
 const AUTH_WINDOW = { src: path.join(ROOT, 'electron', 'window-key.js'), suite: 'test/unit/control-auth.test.js' };
 const AUTH_SIGNIN = { src: path.join(ROOT, 'public', 'sign-in-model.js'), suite: 'test/unit/control-auth.test.js' };
+// A routine run's own hook token: checked at the card route, watched by the
+// file that runs the real hook against the real route; issued and retired by
+// the scheduler, watched by the file that starts runs with a stand-in spawn;
+// and the card's answer, read once, watched by the file that answers real
+// hook requests through the real route.
+const RUN_TOKEN_ROUTE = { src: path.join(ROOT, 'lib', 'http-router.js'), suite: 'test/unit/routine-run-token.test.js' };
+const RUN_TOKEN_SCHED = { src: path.join(ROOT, 'lib', 'scheduler.js'), suite: 'test/unit/scheduler-lib.test.js' };
+const ANSWER_READ = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'process-control.js'), suite: 'test/unit/unattended-refusal.test.js' };
 // The key the Windows launcher makes and hands over, consumed and never echoed.
 const LAUNCHER = { src: path.join(ROOT, 'lib', 'auth', 'index.js'), suite: 'test/unit/launcher-code.test.js' };
 const LAUNCHER_BANNER = { src: path.join(ROOT, 'server.js'), suite: 'test/unit/launcher-code.test.js' };
@@ -1868,6 +1876,27 @@ const MUTATIONS = [
   [AUTH_SPAWN, 'Auth: an agent is started with its conversation\'s hook token',
     "  const hookToken = convoId ? require('../auth/index.js').issueHookToken(convoId) : runToken;\n",
     '  const hookToken = runToken;\n'],
+  [AUTH_UNIT, 'Run token: a retired token still names its run',
+    "  if (typeof token === 'string') runTokens.delete(token);",
+    '  return token;'],
+  [AUTH_UNIT, 'Run token: two runs are handed one token',
+    "  const token = crypto.randomBytes(24).toString('base64url');\n  runTokens.set(token, runId);",
+    "  const token = [...runTokens.keys()][0] || crypto.randomBytes(24).toString('base64url');\n  runTokens.set(token, runId);"],
+  [RUN_TOKEN_ROUTE, 'Run token: a token with no live run behind it files a card that names no run',
+    '    if (scope === null && !run) {',
+    '    if (false) {'],
+  [RUN_TOKEN_ROUTE, 'Run token: a run lookup that fails is not caught',
+    "  try {\n    const runId = auth.hookRunOf(req);\n    return (runId && deps.routineRun(runId)) || null;\n  } catch (e) {",
+    "  {\n    const runId = auth.hookRunOf(req);\n    return (runId && deps.routineRun(runId)) || null;\n  } if (0) { const e = 0;"],
+  [RUN_TOKEN_SCHED, 'Run token: a run\'s token outlives its record',
+    '  auth.retireRunHookToken(run.hookToken);\n',
+    ''],
+  [RUN_TOKEN_SCHED, 'Run token: a routine is started without its run\'s token',
+    '    env: getSpawnEnv(null, run.hookToken),',
+    '    env: getSpawnEnv(null),'],
+  [ANSWER_READ, 'Answer: any truthy answer approves the card',
+    '    const allow = msg.allow === true;',
+    '    const allow = !!msg.allow;'],
   [AUTH_HOOK, 'Auth: the hook sends its token with a card request',
     "      'Content-Length': Buffer.byteLength(payload),\n      ...hookTokenHeader(),",
     "      'Content-Length': Buffer.byteLength(payload),"],
@@ -2306,8 +2335,8 @@ const MUTATIONS = [
     "  return options && options.unattended === true ? `${reason} ${UNATTENDED_NEXT}` : reason;",
     "  return `${reason} ${UNATTENDED_NEXT}`;"],
   [SPAWN_SCHEDULER, "Spawn path: a routine's run is started with a conversation",
-    "    env: getSpawnEnv(null),",
-    "    env: getSpawnEnv('routine'),"],
+    "    env: getSpawnEnv(null, run.hookToken),",
+    "    env: getSpawnEnv('routine', run.hookToken),"],
   [SPAWN_SERVER, "Spawn path: a conversation's interactive turn is started with none",
     "              cwd: WORKSPACE,\n              env: getSpawnEnv(convoId),",
     "              cwd: WORKSPACE,\n              env: getSpawnEnv(null),"],
@@ -2342,8 +2371,8 @@ const MUTATIONS = [
     "try { require('child_process').spawn('open', ['-R', full], { stdio: 'ignore' }); } catch (e) {}",
     "try { require('child_process').spawn('open', ['-R', full], { stdio: 'ignore' }); require('child_process').spawn('claude', ['-p', full]); } catch (e) {}"],
   [INVENTORY_SCHEDULER, "Inventory: getSpawnEnv given to something other than an agent spawn",
-    "    env: getSpawnEnv(null),",
-    "    env: getSpawnEnv(null), shadow: getSpawnEnv('x'),"],
+    "    env: getSpawnEnv(null, run.hookToken),",
+    "    env: getSpawnEnv(null, run.hookToken), shadow: getSpawnEnv('x'),"],
   [INVENTORY_SERVER, "Inventory: a conversation's spawn passes no conversation",
     "              cwd: WORKSPACE,\n              env: getSpawnEnv(convoId),",
     "              cwd: WORKSPACE,\n              env: getSpawnEnv(null),"],

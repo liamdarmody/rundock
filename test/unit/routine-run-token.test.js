@@ -38,6 +38,8 @@ const RUNS = new Map([
 const liveRun = (id) => RUNS.get(id) || null;
 let lookup = liveRun;
 let lookups = 0;
+// The scheduler's count of refused cards, stood in for: each run id counted.
+const counted = [];
 let ws, outside, server, port, pending, sent, prevRouter, prevRt, prevWorkspace;
 
 before(async () => {
@@ -55,6 +57,7 @@ before(async () => {
     safeSend: (s) => sent.push(JSON.parse(s)),
     getPermissionTimeoutMs: () => 60000,
     routineRun: (id) => { lookups++; return lookup(id); },
+    noteRefusedCard: (id) => { counted.push(id); return true; },
   });
   server = http.createServer(router.handleHttpRequest);
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
@@ -149,6 +152,7 @@ describe('the environment a routine run is started with', () => {
 describe('the run is the token\'s, whatever the request names', () => {
   test('a card names the run its token was issued for, whatever session the request names, or none', async () => {
     const token = auth.issueRunHookToken('run-a');
+    const n = counted.length;
     try {
       // Another live run's session, a `claude` started from the run's own
       // shell (a session of its own), and a call that names no session.
@@ -159,19 +163,23 @@ describe('the run is the token\'s, whatever the request names', () => {
         assert.strictEqual(decision(out), 'deny');
         assert.strictEqual(reasonOf(out), UNATTENDED_DENIED, 'told in a routine\'s words');
       }
+      assert.deepStrictEqual(counted.slice(n), ['run-a', 'run-a', 'run-a'], 'each refusal counted on run A, none on run B');
     } finally { auth.retireRunHookToken(token); }
   });
 
   test('a Task subagent\'s call, carrying the run\'s token, is the run\'s card', async () => {
     const token = auth.issueRunHookToken('run-b');
+    const n = counted.length;
     try {
       const { card } = await askAndDeny(routineEnv(token), outsideRead('session-of-run-a', { agent_id: 'a1b2c3d4e5f6a7b8c', agent_type: 'general-purpose' }));
       assert.deepStrictEqual(card._run, RUNS.get('run-b'));
+      assert.deepStrictEqual(counted.slice(n), ['run-b'], 'and counted on it');
     } finally { auth.retireRunHookToken(token); }
   });
 
   test('no field in the body moves a card to another run or into a conversation', async () => {
     const token = auth.issueRunHookToken('run-a');
+    const n = counted.length;
     try {
       const since = sent.length;
       const answer = fetch(`http://127.0.0.1:${port}/api/permission-request`, {
@@ -187,6 +195,7 @@ describe('the run is the token\'s, whatever the request names', () => {
       assert.strictEqual(card._conversationId, '');
       deny(card);
       assert.deepStrictEqual(await (await answer).json(), { allow: false });
+      assert.deepStrictEqual(counted.slice(n), ['run-a'], 'and the refusal is counted on the token\'s run');
     } finally { auth.retireRunHookToken(token); }
   });
 });
@@ -195,6 +204,7 @@ describe('a token with no live run behind it is refused, and files nothing', () 
   test('a retired token is refused as unknown, as one never issued is', async () => {
     const token = auth.issueRunHookToken('run-a');
     auth.retireRunHookToken(token);
+    const n = counted.length;
     const { out, cards } = await askRefused(routineEnv(token), outsideRead('session-of-run-a'));
     assert.deepStrictEqual(cards, [], 'no card');
     assert.strictEqual(decision(out), 'deny');
@@ -203,14 +213,17 @@ describe('a token with no live run behind it is refused, and files nothing', () 
       method: 'POST', headers: { 'Content-Type': 'application/json', [auth.HOOK_HEADER]: token }, body: '{"tool_name":"Bash"}',
     });
     assert.strictEqual(res.status, 401);
+    assert.deepStrictEqual(counted.slice(n), [], 'and no count changes');
   });
 
   test('a token whose run the scheduler does not have going is refused', async () => {
     const token = auth.issueRunHookToken('run-not-going');
+    const n = counted.length;
     try {
       const { out, cards } = await askRefused(routineEnv(token), outsideRead('s'));
       assert.deepStrictEqual(cards, []);
       assert.strictEqual(decision(out), 'deny');
+      assert.deepStrictEqual(counted.slice(n), []);
     } finally { auth.retireRunHookToken(token); }
   });
 
@@ -221,8 +234,10 @@ describe('a token with no live run behind it is refused, and files nothing', () 
     const token = auth.issueRunHookToken('run-a');
     try {
       lookup = () => { throw new Error('the scheduler fell over'); };
+      const n = counted.length;
       const { out, cards } = await askRefused(routineEnv(token), outsideRead('session-of-run-a'));
       assert.deepStrictEqual(cards, [], 'no card, with a run or without one');
+      assert.deepStrictEqual(counted.slice(n), [], 'and nothing counted on any run');
       assert.strictEqual(decision(out), 'deny');
       assert.strictEqual(reasonOf(out), UNATTENDED_DENIED);
       lookup = liveRun;
@@ -233,8 +248,9 @@ describe('a token with no live run behind it is refused, and files nothing', () 
 });
 
 describe('a conversation\'s token is checked as before', () => {
-  test('its card is its conversation\'s, and no run is looked up for it', async () => {
+  test('its card is its conversation\'s, and no run is looked up for it, or counted', async () => {
     const n = lookups;
+    const c = counted.length;
     lookup = () => { throw new Error('a conversation\'s card never asks for a run'); };
     try {
       const { card, out } = await askAndDeny(claudeRt.getSpawnEnv('convo-checked'), outsideRead('session-of-run-a'));
@@ -243,5 +259,6 @@ describe('a conversation\'s token is checked as before', () => {
       assert.strictEqual(reasonOf(out), refusalNotice('denied', 'Bash'), 'and told to stop and ask, as before');
     } finally { lookup = liveRun; }
     assert.strictEqual(lookups, n);
+    assert.deepStrictEqual(counted.slice(c), []);
   });
 });

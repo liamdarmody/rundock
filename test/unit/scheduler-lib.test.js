@@ -517,6 +517,41 @@ test('each run is started with a hook token of its own, bound to it, and retired
   });
 });
 
+// THE REFUSED-CARD COUNT. Counted on the live run named, written to its open
+// record as it goes and to its closed one at the end, and only once there is
+// one to count. A run that has ended, or one never started, counts nothing.
+test('a refused card is counted on its live run, open record and closed, and nowhere once the run has ended', async () => {
+  await withTempWorkspaceAsync(async () => {
+    const children = [];
+    await withFakeSpawn(() => { const c = new EventEmitter(); children.push(c); return c; }, async (sched) => {
+      assert.strictEqual(sched.executeRoutine(AGENT, ROUTINE, KEY), true);
+      assert.strictEqual(sched.executeRoutine(AGENT, { name: 'r2', prompt: 'p' }, 'runner:r2'), true);
+      const [a, b] = sched.runningRuns().map((r) => r.id);
+      const recordOf = (id) => sched.readRunRecords().find((r) => r.id === id);
+      assert.strictEqual('refusedCards' in recordOf(a), false, 'none until there is one');
+
+      assert.strictEqual(sched.noteRefusedCard(a), true);
+      assert.strictEqual(recordOf(a).refusedCards, 1, 'written to the open record at once');
+      assert.strictEqual(recordOf(a).status, 'running');
+      assert.strictEqual(sched.noteRefusedCard(a), true);
+      assert.strictEqual(recordOf(a).refusedCards, 2);
+      assert.strictEqual('refusedCards' in recordOf(b), false, 'and only on the run named');
+
+      for (const id of ['run-never-started', '', null, undefined, 7]) assert.strictEqual(sched.noteRefusedCard(id), false);
+
+      children[0].emit('close', 0);
+      const closed = recordOf(a);
+      assert.strictEqual(closed.status, 'succeeded');
+      assert.strictEqual(closed.refusedCards, 2, 'the closed record keeps the count');
+      assert.strictEqual(sched.noteRefusedCard(a), false, 'an ended run counts nothing');
+      assert.deepStrictEqual(recordOf(a), closed, 'and its record is not reopened');
+
+      children[1].emit('close', 0);
+      assert.strictEqual('refusedCards' in recordOf(b), false, 'a run with none closes with none');
+    });
+  });
+});
+
 // The cost of listening to both: a failure that reports twice must not be
 // recorded twice. Counted through the broadcast, which happens once when a run
 // starts and once per outcome, so a second outcome is a third broadcast.

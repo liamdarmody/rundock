@@ -8,7 +8,8 @@
 // Nothing in the request decides which run a card belongs to: a call naming
 // another live run's session, a Task subagent's call, and a call from a
 // `claude` started in the run's own shell (with a session of its own, or none)
-// are each the run's. A token whose run has ended is refused as unknown.
+// are each the run's, and counted on it. A token whose run has ended is
+// refused as unknown, and changes no count.
 const { test, before, after } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -83,17 +84,23 @@ test('a card raised with one run\'s token, naming another live run\'s session, i
   const told = h.readHookAnswers().find((x) => x.agent === KEEPER && x.sentSession === b.sessionId);
   assert.strictEqual(told.answer.hookSpecificOutput.permissionDecisionReason, UNATTENDED_DENIED);
   assert.ok(await closed('token-a') && await closed('token-b'), 'both runs end');
+  assert.strictEqual(recordOf('token-a').refusedCards, 1, 'the refusal is counted on run A');
+  assert.strictEqual('refusedCards' in recordOf('token-b'), false, 'and run B, whose session it named, counts none');
 
   const [tokenA, tokenB] = [tokenOf(a), tokenOf(b)];
   assert.ok(tokenA && tokenB && tokenA !== tokenB, 'each run was started with a token of its own');
 });
 
 test('a run\'s token, once its record has closed, is refused as unknown and files nothing', async () => {
-  h.writeScenario([{ match: { agent: KEEPER, promptIncludes: 'ends at once' }, turn: [{ text: 'Done.' }] }]);
-  await save(KEEPER, 'token-ended', 'ends at once');
+  h.writeScenario([{ match: { agent: KEEPER, promptIncludes: 'ends after one refusal' }, hooks: [readOutside()], turn: [{ text: 'Done.' }] }]);
+  await save(KEEPER, 'token-ended', 'ends after one refusal');
+  const pressed = client.messages.length;
   press(KEEPER, 'token-ended');
+  const { msg: first } = await client.waitFor((m) => m.type === 'control_request' && m._run, { since: pressed, label: 'the run\'s card' });
+  client.send({ type: 'permission_response', requestId: first.request_id, conversationId: '', allow: false, card: true });
   assert.ok(await closed('token-ended'), 'the run ends');
   const ended = recordOf('token-ended');
+  assert.strictEqual(ended.refusedCards, 1);
   const token = tokenOf(ended);
   assert.ok(token, 'the run was started with a token');
 
@@ -106,7 +113,7 @@ test('a run\'s token, once its record has closed, is refused as unknown and file
   assert.strictEqual(res.status, 401, 'refused as a token Rundock never issued is');
   await h.delay(200);
   assert.deepStrictEqual(client.messages.slice(since).filter((m) => m.type === 'control_request'), [], 'no card');
-  assert.deepStrictEqual(recordOf('token-ended'), ended, 'and the record is as it closed');
+  assert.deepStrictEqual(recordOf('token-ended'), ended, 'and the record is as it closed, its count untouched');
 });
 
 test('a Task subagent\'s call and a nested claude\'s, carrying the run\'s token, are the run\'s cards, whatever session they name', async () => {
@@ -132,6 +139,7 @@ test('a Task subagent\'s call and a nested claude\'s, carrying the run\'s token,
   assert.ok(await closed('token-inside'), 'the run ends');
   const run = recordOf('token-inside');
   for (const card of cards) assert.deepStrictEqual(card._run, { id: run.id, routine: 'token-inside', agent: KEEPER });
+  assert.strictEqual(run.refusedCards, 3, 'each refusal counted once, on the run');
 
   const told = h.readHookAnswers().filter((x) => x.agent === KEEPER && x.sessionId === run.sessionId);
   assert.deepStrictEqual(told.map((x) => [x.subagent, x.sentSession]), [[subagent, run.sessionId], [null, 'nested-claude-session'], [null, null]],
