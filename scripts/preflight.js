@@ -51,6 +51,9 @@ const REGISTRY_SUITES = [
   // No test may POST a permission card to a live Rundock: the hook defaults to
   // port 3000, so an unpinned test storms whoever is running the app.
   'test/unit/no-live-server-in-tests.test.js',
+  // Only the scheduler starts an agent with no conversation, which is what
+  // tells a routine's refused card apart from a conversation's.
+  'test/unit/unattended-spawn-paths.test.js',
   // Every innerHTML assignment is classified, and the totals beside it.
   'test/unit/innerhtml-inventory.test.js',
   // Documents that state the code's own numbers, names and lists.

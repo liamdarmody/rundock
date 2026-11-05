@@ -164,6 +164,27 @@ const STOP_ASK_HOOK = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), s
 const STOP_ASK_LINE = { src: path.join(ROOT, 'scripts', 'refusal-notice.js'), suite: 'test/unit/stop-and-ask.test.js' };
 const STOP_ASK_SCAFFOLD = { src: path.join(ROOT, 'lib', 'workspace', 'scaffold.js'), suite: 'test/unit/stop-and-ask.test.js' };
 const STOP_ASK_GLUE = { src: path.join(ROOT, 'lib', 'runtime', 'codex-glue.js'), suite: 'test/integration/codex-stop-and-ask.test.js' };
+// A run nobody can be asked from is told to carry on or say it failed: the
+// hook that decides who can be asked and hands every refusal over in those
+// words, and the words themselves, each driven by the suite that runs the real
+// hook with the environment each kind of spawn builds.
+const UNATTENDED_HOOK = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/unattended-refusal.test.js' };
+const UNATTENDED_LINE = { src: path.join(ROOT, 'scripts', 'refusal-notice.js'), suite: 'test/unit/unattended-refusal.test.js' };
+// The same words when the check itself fails (a crash, a stall, a reply cut
+// off), driven by the suite that forces each failure on the real hook.
+const UNATTENDED_CRASH = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/hook-never-crashes.test.js' };
+const UNATTENDED_CRASH_LINE = { src: path.join(ROOT, 'scripts', 'refusal-notice.js'), suite: 'test/unit/hook-never-crashes.test.js' };
+// Each spawn of an agent, with the conversation it passes, driven through a
+// refused card by the suite that starts each one for real.
+const SPAWN_SERVER = { src: path.join(ROOT, 'server.js'), suite: 'test/integration/spawn-path-wording.test.js' };
+const SPAWN_ENGINE = { src: path.join(ROOT, 'lib', 'delegation', 'engine.js'), suite: 'test/integration/spawn-path-wording.test.js' };
+const SPAWN_SCHEDULER = { src: path.join(ROOT, 'lib', 'scheduler.js'), suite: 'test/integration/spawn-path-wording.test.js' };
+// The inventory of every process the app starts, read from the source.
+const INVENTORY_ENGINE = { src: path.join(ROOT, 'lib', 'delegation', 'engine.js'), suite: 'test/unit/unattended-spawn-paths.test.js' };
+const INVENTORY_FILES = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'files.js'), suite: 'test/unit/unattended-spawn-paths.test.js' };
+const INVENTORY_SCHEDULER = { src: path.join(ROOT, 'lib', 'scheduler.js'), suite: 'test/unit/unattended-spawn-paths.test.js' };
+const INVENTORY_SERVER = { src: path.join(ROOT, 'server.js'), suite: 'test/unit/unattended-spawn-paths.test.js' };
+const SPAWN_CONVO_ENV = { src: path.join(ROOT, 'lib', 'runtime', 'claude.js'), suite: 'test/integration/spawn-path-wording.test.js' };
 const STOP_ASK_CLIENT = { src: path.join(ROOT, 'codex-appserver.js'), suite: 'test/integration/codex-stop-and-ask.test.js' };
 // After a person approves a card, the agent is told in the same step: the
 // hook's added context, the handler that says a card was answered, the click
@@ -2209,16 +2230,16 @@ const MUTATIONS = [
     '          grant_dir: (boundaryCrossings[0] && boundaryCrossings[0].grantDir) || access.grantDir || null,'],
   // ===== STOP AND ASK AFTER A REFUSAL =====
   [STOP_ASK_HOOK, "Stop and ask: a denied card goes back to inviting another route",
-    ": refusalNotice(result.reason === 'timeout' ? 'timeout' : 'denied', data.tool_name);",
+    ": refusalNotice(result.reason === 'timeout' ? 'timeout' : 'denied', data.tool_name, { unattended: unattendedRun() });",
     ": 'This command was not approved. Acknowledge and move on.';"],
   [STOP_ASK_HOOK, "Stop and ask: a timed-out card is told as a denial",
-    "refusalNotice(result.reason === 'timeout' ? 'timeout' : 'denied', data.tool_name)",
-    "refusalNotice('denied', data.tool_name)"],
+    "refusalNotice(result.reason === 'timeout' ? 'timeout' : 'denied', data.tool_name, { unattended: unattendedRun() })",
+    "refusalNotice('denied', data.tool_name, { unattended: unattendedRun() })"],
   [STOP_ASK_HOOK, "Stop and ask: a failed call never reaches the after-call branch",
     "if (hookEvent === 'PostToolUse' || hookEvent === 'PostToolUseFailure') {",
     "if (hookEvent === 'PostToolUse') {"],
   [STOP_ASK_HOOK, "Stop and ask: a sandbox block is never told",
-    "blocked ? refusalNotice('sandbox', finished.tool_name) : null",
+    "blocked ? refusalNotice('sandbox', finished.tool_name, { unattended: unattendedRun() }) : null",
     "null"],
   [STOP_ASK_HOOK, "Stop and ask: told outside Rundock too",
     "const blocked = !!process.env.RUNDOCK && sandboxBlocked(",
@@ -2238,6 +2259,94 @@ const MUTATIONS = [
   [STOP_ASK_LINE, "Stop and ask: a kind that is no refusal still gets a line",
     "const what = Object.prototype.hasOwnProperty.call(WHAT, kind) ? WHAT[kind] : null;",
     "const what = WHAT[kind] || null;"],
+  // ===== A RUN NOBODY CAN BE ASKED FROM =====
+  [UNATTENDED_HOOK, "Unattended: a routine's refused card is told to stop and ask",
+    ": refusalNotice(result.reason === 'timeout' ? 'timeout' : 'denied', data.tool_name, { unattended: unattendedRun() });",
+    ": refusalNotice(result.reason === 'timeout' ? 'timeout' : 'denied', data.tool_name);"],
+  [UNATTENDED_HOOK, "Unattended: a routine's own timeout is told to stop and ask",
+    "permissionDecisionReason: refusalNotice('timeout', data.tool_name, { unattended: unattendedRun() })",
+    "permissionDecisionReason: refusalNotice('timeout', data.tool_name)"],
+  [UNATTENDED_HOOK, "Unattended: a routine's sandbox block is told to stop and ask",
+    "blocked ? refusalNotice('sandbox', finished.tool_name, { unattended: unattendedRun() }) : null",
+    "blocked ? refusalNotice('sandbox', finished.tool_name) : null"],
+  [UNATTENDED_HOOK, "Unattended: a conversation is told it has nobody to ask",
+    "function unattendedRun(env = process.env) { return !env.RUNDOCK_CONVO_ID; }",
+    "function unattendedRun(env = process.env) { return true; }"],
+  [UNATTENDED_HOOK, "Unattended: a routine is told what a conversation is told",
+    "function unattendedRun(env = process.env) { return !env.RUNDOCK_CONVO_ID; }",
+    "function unattendedRun(env = process.env) { return false; }"],
+  [UNATTENDED_LINE, "Unattended: the line ignores who can be asked",
+    "  if (options && options.unattended === true) return `${refused} ${UNATTENDED_NEXT}`;\n",
+    ""],
+  [UNATTENDED_LINE, "Unattended: any truthy option makes a conversation a routine",
+    "  if (options && options.unattended === true) return `${refused} ${UNATTENDED_NEXT}`;",
+    "  if (options && options.unattended) return `${refused} ${UNATTENDED_NEXT}`;"],
+  [UNATTENDED_LINE, "Unattended: a routine is no longer told not to work round the refusal",
+    "  if (options && options.unattended === true) return `${refused} ${UNATTENDED_NEXT}`;",
+    "  if (options && options.unattended === true) return `${what(subjectFor(toolName))} ${UNATTENDED_NEXT}`;"],
+  [UNATTENDED_LINE, "Unattended: a routine is not told the failure line its record reads",
+    " If you cannot finish without it, make the last line of your final message: RUN STATUS: failed: <one-line reason>';",
+    " If you cannot finish without it, say so in your final message.';"],
+  [UNATTENDED_CRASH, "Unattended: a hook that cannot check tells a routine nothing of what to do next",
+    "permissionDecisionReason: unattendedRun() ? `${refused} ${UNATTENDED_NEXT_UNLOADED}` : refused,",
+    "permissionDecisionReason: refused,"],
+  [UNATTENDED_CRASH, "Unattended: a hook that cannot check swaps a routine's words for a conversation's",
+    "permissionDecisionReason: unattendedRun() ? `${refused} ${UNATTENDED_NEXT_UNLOADED}` : refused,",
+    "permissionDecisionReason: !unattendedRun() ? `${refused} ${UNATTENDED_NEXT_UNLOADED}` : refused,"],
+  [UNATTENDED_CRASH, "Unattended: the copy a hook that cannot load uses drifts from every refusal's",
+    "const UNATTENDED_NEXT_UNLOADED = 'This run has nobody to ask, so carry on with the rest of the job without that step.",
+    "const UNATTENDED_NEXT_UNLOADED = 'This run has nobody to ask, so carry on without that step."],
+  [UNATTENDED_CRASH, "Unattended: a routine whose reply is cut off is not told what to do next",
+    "failClosed ? unansweredNotice(`${reason} ${why}`, { unattended: unattendedRun() }) : reason,",
+    "failClosed ? `${reason} ${why}` : reason,"],
+  [UNATTENDED_CRASH, "Unattended: a routine left waiting by a stalled server is told to stop and ask",
+    "permissionDecisionReason: refusalNotice('timeout', data.tool_name, { unattended: unattendedRun() })",
+    "permissionDecisionReason: refusalNotice('timeout', data.tool_name)"],
+  [UNATTENDED_CRASH_LINE, "Unattended: a failed check tells a conversation it has nobody to ask",
+    "  return options && options.unattended === true ? `${reason} ${UNATTENDED_NEXT}` : reason;",
+    "  return `${reason} ${UNATTENDED_NEXT}`;"],
+  [SPAWN_SCHEDULER, "Spawn path: a routine's run is started with a conversation",
+    "    env: getSpawnEnv(null),",
+    "    env: getSpawnEnv('routine'),"],
+  [SPAWN_SERVER, "Spawn path: a conversation's interactive turn is started with none",
+    "              cwd: WORKSPACE,\n              env: getSpawnEnv(convoId),",
+    "              cwd: WORKSPACE,\n              env: getSpawnEnv(null),"],
+  [SPAWN_SERVER, "Spawn path: a conversation's legacy turn is started with none",
+    "            cwd: WORKSPACE,\n            env: getSpawnEnv(convoId),",
+    "            cwd: WORKSPACE,\n            env: getSpawnEnv(null),"],
+  [SPAWN_SERVER, "Spawn path: a chat message with no conversation id is started with none",
+    "const convoId = msg.conversationId || 'default';",
+    "const convoId = msg.conversationId || '';"],
+  [SPAWN_ENGINE, "Spawn path: a delegate started fresh without its session is started with no conversation",
+    "spawnClaude(withoutResume(args), {\n    cwd: config.getWorkspace(),\n    env: getSpawnEnv(convoId),",
+    "spawnClaude(withoutResume(args), {\n    cwd: config.getWorkspace(),\n    env: getSpawnEnv(null),"],
+  [SPAWN_ENGINE, "Spawn path: the orchestrator started for a handback is started with no conversation",
+    "' resume=none'}`);\n\n  const proc = spawnClaude(args, {\n    cwd: config.getWorkspace(),\n    env: getSpawnEnv(convoId),",
+    "' resume=none'}`);\n\n  const proc = spawnClaude(args, {\n    cwd: config.getWorkspace(),\n    env: getSpawnEnv(null),"],
+  [SPAWN_ENGINE, "Spawn path: a caller resumed after a blocked handoff is started with no conversation",
+    "const proc = spawnClaude(args, { cwd: config.getWorkspace(), env: getSpawnEnv(convoId),",
+    "const proc = spawnClaude(args, { cwd: config.getWorkspace(), env: getSpawnEnv(null),"],
+  [SPAWN_ENGINE, "Spawn path: a delegate is started with no conversation",
+    ": spawnClaude(delegateArgs, {\n        cwd: config.getWorkspace(),\n        env: getSpawnEnv(convoId),",
+    ": spawnClaude(delegateArgs, {\n        cwd: config.getWorkspace(),\n        env: getSpawnEnv(null),"],
+  [SPAWN_ENGINE, "Spawn path: a parent resumed after its delegate is started with no conversation",
+    "const resumeProc = spawnClaude(resumeArgs, {\n        cwd: config.getWorkspace(),\n        env: getSpawnEnv(convoId),",
+    "const resumeProc = spawnClaude(resumeArgs, {\n        cwd: config.getWorkspace(),\n        env: getSpawnEnv(null),"],
+  [SPAWN_CONVO_ENV, "Spawn path: the spawn environment drops the conversation it is given",
+    "  if (convoId) env.RUNDOCK_CONVO_ID = convoId;\n",
+    ""],
+  [INVENTORY_ENGINE, "Inventory: a second agent spawn added beside a listed one goes unlisted",
+    "  const proc = spawnClaude(args, { cwd: config.getWorkspace(), env: getSpawnEnv(convoId),",
+    "  if (opts.twice) spawnClaude(args, { cwd: config.getWorkspace(), env: getSpawnEnv(convoId) });\n  const proc = spawnClaude(args, { cwd: config.getWorkspace(), env: getSpawnEnv(convoId),"],
+  [INVENTORY_FILES, "Inventory: another program started where one is listed goes unlisted",
+    "try { require('child_process').spawn('open', ['-R', full], { stdio: 'ignore' }); } catch (e) {}",
+    "try { require('child_process').spawn('open', ['-R', full], { stdio: 'ignore' }); require('child_process').spawn('claude', ['-p', full]); } catch (e) {}"],
+  [INVENTORY_SCHEDULER, "Inventory: getSpawnEnv given to something other than an agent spawn",
+    "    env: getSpawnEnv(null),",
+    "    env: getSpawnEnv(null), shadow: getSpawnEnv('x'),"],
+  [INVENTORY_SERVER, "Inventory: a conversation's spawn passes no conversation",
+    "              cwd: WORKSPACE,\n              env: getSpawnEnv(convoId),",
+    "              cwd: WORKSPACE,\n              env: getSpawnEnv(null),"],
   [STOP_ASK_SCAFFOLD, "Stop and ask: the failure hook is never registered",
     "for (const event of ['PostToolUse', 'PostToolUseFailure']) {",
     "for (const event of ['PostToolUse']) {"],
@@ -3087,8 +3196,8 @@ const MUTATIONS = [
     "if (require.main === module) {\n  process.on('uncaughtException', refuseUnanswered);",
     "if (true) {\n  process.on('uncaughtException', refuseUnanswered);"],
   [HOOK_CRASH, 'Hook crash: a failure allows the call instead of refusing it',
-    "hookEventName: 'PreToolUse',\n      permissionDecision: 'deny',\n      permissionDecisionReason: 'Rundock could not",
-    "hookEventName: 'PreToolUse',\n      permissionDecision: 'allow',\n      permissionDecisionReason: 'Rundock could not"],
+    "hookEventName: 'PreToolUse',\n      permissionDecision: 'deny',\n      // A routine, which has nobody to ask, is told what to do next",
+    "hookEventName: 'PreToolUse',\n      permissionDecision: 'allow',\n      // A routine, which has nobody to ask, is told what to do next"],
   [HOOK_CRASH, 'Hook crash: a failure after a tool has finished refuses too',
     "const deciding = process.env.RUNDOCK && event === 'PreToolUse';",
     "const deciding = process.env.RUNDOCK;"],

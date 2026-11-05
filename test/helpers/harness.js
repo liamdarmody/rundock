@@ -157,6 +157,14 @@ function readStubOutputs() {
 // and inferring success from the rule firing: that pattern fails as a timeout
 // with no expected-vs-actual, and is how handback payload bugs stayed hidden.
 // Codex equivalent: codexTurnPrompts().
+// What the permission hook answered each `hooks` call a stub made, in order
+// (test/helpers/stub-claude/claude, runHookCalls).
+function readHookAnswers() {
+  const file = path.join(workspaceDir, 'stub-hook-answers.jsonl');
+  if (!fs.existsSync(file)) return [];
+  return fs.readFileSync(file, 'utf-8').split('\n').filter(Boolean).map(l => JSON.parse(l));
+}
+
 function readPrompts() {
   const file = path.join(workspaceDir, 'stub-prompts.jsonl');
   if (!fs.existsSync(file)) return [];
@@ -371,7 +379,7 @@ function freshConvoId(prefix = 'it') {
 module.exports = {
   boot, shutdown, connect, writeScenario, writeCodexScenario, codexTurnPrompts,
   readInvocations, clearInvocations,
-  readGrandchildren, readStubOutputs, pidAlive, waitForPidExit,
+  readGrandchildren, readStubOutputs, readHookAnswers, pidAlive, waitForPidExit,
   readPrompts, promptsFor, unmatchedPrompts, assertAllPromptsMatched, clearPrompts,
   delay, waitUntil, freshConvoId, reapConvo,
   authHeaders, hookToken, hookHeaders,
