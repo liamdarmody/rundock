@@ -109,11 +109,11 @@ function readSequence(st, n) {
     const pad = leadingBlanks(after);
     const rest = after.slice(pad);
     const line = st.at;
-    if (startsSequence(rest)) fail(line, 'a list inside a list item on one line is not modelled');
+    if (startsSequence(rest)) fail(line, 'a list inside a list item on one line is not modeled');
     if (ENTRY.test(rest)) {
       // A mapping whose first key shares the dash's line: read from the column
       // that key starts in, as YAML does.
-      if (/\t/.test(after.slice(0, pad))) fail(line, 'a tab before a key is not modelled');
+      if (/\t/.test(after.slice(0, pad))) fail(line, 'a tab before a key is not modeled');
       st.lines[line] = ' '.repeat(n + 1 + pad) + rest;
       out.push(readMapping(st, n + 1 + pad));
       continue;
@@ -152,7 +152,7 @@ function readInline(st, raw, line, n) {
     return value;
   }
   if (first === '|' || first === '>') return readBlockScalar(st, text, line, n);
-  if ('{&*!%'.includes(first)) fail(line, `a value starting with ${first} is not modelled`);
+  if ('{&*!%'.includes(first)) fail(line, `a value starting with ${first} is not modeled`);
   if (first === '@' || first === '`') fail(line, `a value cannot start with ${first}, which YAML reserves`);
   if (',]}'.includes(first)) fail(line, `a value cannot start with ${first}`);
   if ('-?:'.includes(first) && (text.length === 1 || /\s/.test(text[1]))) fail(line, `a value cannot start with "${first} " here`);
@@ -197,7 +197,7 @@ function readDoubleQuoted(text, line) {
     if (c === '"') return { value: out, end: i + 1 };
     if (c !== '\\') { out += c; continue; }
     const e = text[++i];
-    if (e === undefined) fail(line, 'a quoted value over several lines is not modelled');
+    if (e === undefined) fail(line, 'a quoted value over several lines is not modeled');
     if (Object.prototype.hasOwnProperty.call(ESCAPES, e)) { out += ESCAPES[e]; continue; }
     const width = HEX_ESCAPES[e];
     const hex = width ? text.slice(i + 1, i + 1 + width) : '';
@@ -218,13 +218,13 @@ function readSingleQuoted(text, line) {
   return fail(line, 'a quoted value with no closing quote');
 }
 
-// `[a, "b c", d]` on one line. Nesting is not modelled.
+// `[a, "b c", d]` on one line. Nesting is not modeled.
 function readFlowList(text, line) {
   const out = [];
   let i = 1;
   for (;;) {
     while (text[i] === ' ') i++;
-    if (i >= text.length) fail(line, 'a flow list over several lines is not modelled');
+    if (i >= text.length) fail(line, 'a flow list over several lines is not modeled');
     // An empty list, or a comma before the closing bracket, which YAML allows.
     if (text[i] === ']') return { value: out, end: i + 1 };
     let item;
@@ -236,7 +236,7 @@ function readFlowList(text, line) {
       const stop = text.slice(i).search(/[,\]]/);
       if (stop === -1) fail(line, 'a flow list with no closing bracket');
       const raw = text.slice(i, i + stop).trim();
-      if (/[[{}#&*!|>%@`'"]/.test(raw[0] || '') || /[[\]{}]|:\s|:$|\s#/.test(raw)) fail(line, `"${raw}" is not modelled inside a flow list`);
+      if (/[[{}#&*!|>%@`'"]/.test(raw[0] || '') || /[[\]{}]|:\s|:$|\s#/.test(raw)) fail(line, `"${raw}" is not modeled inside a flow list`);
       item = typed(raw);
       i += stop;
     }

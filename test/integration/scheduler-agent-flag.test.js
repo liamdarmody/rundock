@@ -18,6 +18,12 @@
 // there a file to load? `fileName`. What does Claude Code call it? `name`.
 // Every assertion here reads a real child's argument list, because the flag is
 // the whole of what decides this.
+//
+// THE STUB READS EACH FILE AS CLAUDE CODE DOES (loadAgentFiles, and the model
+// in test/helpers/claude-code-agents.js), and refuses an --agent no file
+// loads for, with Claude Code's own line and exit code. So every run here that
+// passes is a run whose file loads; what happens to one that does not is in
+// scheduler-run-records.test.js.
 const { test, before, after } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -26,6 +32,7 @@ const h = require('../helpers/harness.js');
 const { agentFile } = require('../helpers/workspace.js');
 const scheduler = require('../../lib/scheduler.js');
 const { invalidateAgentCache } = require('../../lib/agents/discovery.js');
+const { readAgentFile } = require('../helpers/claude-code-agents.js');
 
 const LEAD = 'team-lead';      // order 0, so its roster id is 'default'
 const WRITER = 'writer';       // file name and frontmatter name agree
@@ -43,20 +50,20 @@ before(async () => {
   await h.boot({
     agents: {
       [LEAD]: agentFile({
-        name: LEAD, type: 'orchestrator', order: 0,
+        name: LEAD, description: 'Leads the team', type: 'orchestrator', order: 0,
         routines: [{ name: 'brief', schedule: 'every day at 07:00', prompt: 'lead brief', enabled: true }],
       }),
       [WRITER]: agentFile({
-        name: WRITER, type: 'specialist', order: 1, reportsTo: LEAD,
+        name: WRITER, description: 'Writes', type: 'specialist', order: 1, reportsTo: LEAD,
         routines: [{ name: 'sweep', schedule: 'every day at 07:00', prompt: 'writer sweep', enabled: true }],
       }),
       'keeper-file': agentFile({
-        name: KEEPER, type: 'specialist', order: 2, reportsTo: LEAD,
+        name: KEEPER, description: 'Keeps notes', type: 'specialist', order: 2, reportsTo: LEAD,
         routines: [{ name: 'tidy', schedule: 'every day at 07:00', prompt: 'keeper tidy', enabled: true }],
       }),
     },
   });
-  h.writeScenario([{ match: {}, turn: [{ text: 'done.' }] }]);
+  h.writeScenario([{ match: {}, turn: [{ text: 'done.' }] }], { loadAgentFiles: true });
   prevDeps = scheduler.wireSchedulerDeps({ now: () => clock.at });
   h.internal.stopScheduler();
   client = await h.connect();
@@ -84,6 +91,31 @@ test('the agent that orchestrates keeps the id default, which is what made this 
   const lead = h.internal.discoverAgents().find(a => a.name === LEAD);
   assert.strictEqual(lead.id, 'default');
   assert.ok(lead.fileName, 'and it has a real file');
+});
+
+test('every file here loads in Claude Code\'s reading, so nothing below can be a fallback', () => {
+  const dir = path.join(h.workspaceDir, '.claude', 'agents');
+  for (const file of fs.readdirSync(dir)) {
+    const read = readAgentFile(fs.readFileSync(path.join(dir, file), 'utf-8'));
+    assert.ok(read.loads, `${file} loads: ${read.why || ''}`);
+  }
+});
+
+// Sequence 1, the inverse of a fallback: a file that loads is run as its
+// agent, once, and its record carries no notice.
+test('a file that loads is run as its agent, once, with no fallback and no notice', async () => {
+  h.clearInvocations();
+  client.send({ type: 'run_routine_now', agentId: WRITER, name: 'sweep', occurrence: 0 });
+  const spawn = await spawnFor('writer sweep');
+  assert.strictEqual(agentFlag(spawn.argv), WRITER);
+  await settle(`${WRITER}:sweep`);
+  await h.delay(200);
+  const spawns = h.readInvocations().filter(i => Array.isArray(i.argv) && i.argv[i.argv.length - 1] === 'writer sweep');
+  assert.strictEqual(spawns.length, 1, 'one child, and no plain session after it');
+  const record = scheduler.readRunRecords().find(r => r.sessionId === spawn.argv[spawn.argv.indexOf('--session-id') + 1]);
+  assert.ok(record, 'the run left its record');
+  assert.strictEqual(record.status, 'succeeded');
+  assert.ok(!('notice' in record), 'and nothing on it says the agent did not load');
 });
 
 test('a scheduled run of the orchestrator starts as the orchestrator', async (t) => {

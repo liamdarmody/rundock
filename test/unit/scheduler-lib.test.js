@@ -913,12 +913,13 @@ function writeTranscript(home, sessionId, lines) {
 
 // Read straight off the disk rather than through readRunRecords, so what is
 // asserted is the file a restarted process would meet rather than a reading
-// performed by the module under test.
+// performed by the module under test. The records only: a run still going
+// also keeps what its child says on stderr beside its record, until it ends.
 function runRecords(ws) {
   const dir = path.join(ws, '.rundock', 'runs');
   let names;
   try { names = fs.readdirSync(dir); } catch (e) { return []; }
-  return names.map(n => JSON.parse(fs.readFileSync(path.join(dir, n), 'utf-8')));
+  return names.filter(n => n.endsWith('.json')).map(n => JSON.parse(fs.readFileSync(path.join(dir, n), 'utf-8')));
 }
 
 // The real workspace open path, driven for a scheduler that has only just been
@@ -1192,6 +1193,41 @@ test('closing a restart-orphaned record writes nothing to the value double-fire 
       assert.deepStrictEqual(sched.getNextRun('every day at 09:00', sched.routineState[KEY].lastRun),
         new Date(2026, 7, 12, 9, 0, 0),
         'so the catch-up run this routine is still owed today is still owed');
+    });
+  });
+});
+
+// WHAT A DEAD PROCESS'S CHILD SAID IS NOT LEFT BEHIND. A run keeps its
+// child's stderr in a file beside its record until the run ends, and a run
+// whose process died never ends. So the startup close that closes its record
+// removes that file too, and leaves alone the capture of a run still going in
+// the process doing the closing.
+test('a capture a dead process left beside its record is removed when the record is closed', async () => {
+  await withTempWorkspaceAsync(async (ws) => {
+    await withTempHomeAsync(async () => {
+      const runs = path.join(ws, '.rundock', 'runs');
+      fs.mkdirSync(runs, { recursive: true });
+      fs.writeFileSync(path.join(runs, 'orphan.json'), JSON.stringify({
+        id: 'orphan', agent: 'runner', routine: 'r', sessionId: null,
+        status: 'running', startedAt: new Date(2026, 7, 11, 9, 0, 0).toISOString(), endedAt: null,
+        durationMs: null, error: null, files: null, filesStatus: 'unknown', filesReason: 'running',
+      }));
+      fs.writeFileSync(path.join(runs, 'orphan.stderr'), "--agent 'runner' not found.\n");
+
+      await withFakeSpawn(() => new EventEmitter(), async (sched) => {
+        // A run going in this process, whose capture must survive the close.
+        sched.executeRoutine({ ...AGENT, fileName: 'runner.md' }, ROUTINE, KEY);
+        const live = sched.runningRuns()[0];
+        assert.ok(live, 'a run is going here');
+        assert.ok(fs.existsSync(path.join(runs, `${live.id}.stderr`)), 'and its capture is open beside its record');
+
+        sched.loadRoutineState();
+
+        assert.strictEqual(runRecords(ws).find(r => r.id === 'orphan').status, 'interrupted',
+          'the orphaned record really was closed by this load');
+        assert.ok(!fs.existsSync(path.join(runs, 'orphan.stderr')), 'and the capture its child left went with it');
+        assert.ok(fs.existsSync(path.join(runs, `${live.id}.stderr`)), 'while the capture of the run still going stays');
+      });
     });
   });
 });

@@ -4,7 +4,7 @@
 // Claude Code reads the part between the --- lines as YAML and drops the WHOLE
 // file when it cannot, which takes the agent's instructions and its `tools:`
 // line with it. Rundock reads the same lines with its own parser, which never
-// complained, so a routine prompt like "Summarise: inbox" was written as it
+// complained, so a routine prompt like "Summarize: inbox" was written as it
 // stood and the file it went into stopped loading, with nothing on either side
 // saying so. In a conversation that is a plain session with no tools line; in a
 // routine it is a run that cannot start as its agent.
@@ -41,9 +41,9 @@ const AGENT = [
 // The values that broke a file, and their near neighbours. Each is something a
 // person types into a routine as an ordinary sentence.
 const AWKWARD = [
-  'Summarise: inbox, calendar and tasks',
+  'Summarize: inbox, calendar and tasks',
   '`npm test` then report what failed',
-  '"Summarise" the inbox, then file it',
+  '"Summarize" the inbox, then file it',
   "'Weekly' review",
   'Check issue #4 before the stand-up',
   'Ends with a colon:',
@@ -155,9 +155,9 @@ describe('the model of Claude Code\'s reading refuses what Claude Code refuses',
   // refusing these, every test above it can pass on a file Claude Code drops.
   const nested = (line) => `---\nname: lead\ndescription: Runs the team\nroutines:\n  - name: r\n    ${line}\n---\n`;
   for (const [what, line] of [
-    ['a colon and a space in a prompt', 'prompt: Summarise: inbox'],
+    ['a colon and a space in a prompt', 'prompt: Summarize: inbox'],
     ['a prompt that starts with a backtick', 'prompt: `npm test` then report'],
-    ['a stray quote', 'prompt: "Summarise" the inbox'],
+    ['a stray quote', 'prompt: "Summarize" the inbox'],
   ]) {
     test(what, () => {
       const read = readAgentFile(nested(line));

@@ -33,6 +33,8 @@ const { agentFile, makeWorkspace } = require('../helpers/workspace.js');
 const { calledFrom } = require('../helpers/stack.js');
 
 const scheduler = require('../../lib/scheduler.js');
+const { invalidateAgentCache } = require('../../lib/agents/discovery.js');
+const runDetail = require('../../public/run-detail-model.js');
 
 // Built rather than written, so the byte that makes the faulty fixture throw
 // is visible in the source instead of being an invisible character in it.
@@ -45,13 +47,27 @@ const CRASHER = 'crasher:crash-check';
 const CODEX = 'codex-keeper:codex-check';
 const MISMATCH = 'mismatched:whoami';
 const RENAMED = 'keeper:briefing-renamed';
-const ALL = [KEEPER, TWINS, FAULTY, CRASHER, CODEX, MISMATCH, RENAMED];
+// The agents whose files Claude Code cannot load, and two that it can.
+const UNLOADABLE = 'unloadable:digest';
+const UNDESCRIBED = 'undescribed:sweep';
+const NAMELESS = 'nameless:tidy';
+const RETRIER = 'retrier:retry';
+const RELAPSER = 'relapser:relapse';
+const STUMBLER = 'stumbler:stumble';
+const LOCKED_OUT = 'locked-out:check';
+const ALL = [KEEPER, TWINS, FAULTY, CRASHER, CODEX, MISMATCH, RENAMED,
+  UNLOADABLE, UNDESCRIBED, NAMELESS, RETRIER, RELAPSER, STUMBLER, LOCKED_OUT];
 
 const KEEPER_BODY = 'keeper routine body';
 const TWIN_EARLY = 'twin early body';
 const TWIN_LATE = 'twin late body';
 const CRASH_BODY = 'crasher routine body';
 const MISMATCH_BODY = 'mismatched routine body';
+// A prompt a person types as an ordinary sentence, written into the file by
+// hand exactly as it stands, which is what Rundock itself used to write. A
+// colon and a space inside a nested value: Claude Code drops the whole file.
+const UNLOADABLE_BODY = 'Summarize: inbox and calendar';
+const RETRY_FAILED_REASON = 'the inbox could not be reached';
 
 // September 2026, local components, so the fixture is timezone-independent.
 function dayAt(day, hour, minute) { return new Date(2026, 8, day, hour, minute, 0); }
@@ -59,6 +75,38 @@ function dayAt(day, hour, minute) { return new Date(2026, 8, day, hour, minute, 
 const clock = { at: dayAt(1, 5, 30) };
 let prevDeps = null;
 let keeperAgentFile = null;
+
+const STUB_RULES = [
+  // The delay holds the child open past the synchronous tick, which is what
+  // lets a test move the clock between a run's start and its end and read
+  // the record while it is still open.
+  { match: { agent: 'keeper' }, delayMs: 200, turn: [{ text: 'keeper ran' }] },
+  { match: { agent: 'twins' }, turn: [{ text: 'twin ran' }] },
+  // Exits non-zero WITHOUT a result envelope: an abnormal mid-run death, not
+  // a routine that reported a failure. The delay holds it open past the
+  // synchronous tick, the same as the keeper rule above.
+  { match: { agent: 'crasher' }, delayMs: 200, crash: 1 },
+  // By the frontmatter name, which is what the child is started with: the id
+  // is a file name, and Claude Code does not know agents by their files.
+  { match: { agent: 'Mismatched Display Name' }, turn: [{ text: 'mismatched ran' }] },
+  // The plain sessions a fallback starts, which pass no --agent at all.
+  { match: { agent: null, promptIncludes: 'retrier body' }, turn: [{ text: `Could not finish.\nRUN STATUS: failed: ${RETRY_FAILED_REASON}` }] },
+  { match: { agent: null, promptIncludes: 'relapser body' }, crash: 1 },
+  { match: { agent: 'stumbler' }, crash: 1, stderr: 'API Error: 500 the service is overloaded\n' },
+  { match: { agent: 'locked-out' }, crash: 1, beforeSession: true, stderr: 'Invalid API key. Please run /login\n' },
+];
+
+// THE STUB READS AGENT FILES THE WAY CLAUDE CODE DOES, for the length of fn.
+// Opt in, because the other fixtures here carry no description and would all
+// be refused; restored afterwards whatever happens inside.
+async function loadingAgentFiles(fn) {
+  h.writeScenario(STUB_RULES, { loadAgentFiles: true });
+  try {
+    return await fn();
+  } finally {
+    h.writeScenario(STUB_RULES);
+  }
+}
 
 before(async () => {
   await h.boot({
@@ -112,23 +160,49 @@ before(async () => {
         name: 'Mismatched Display Name', type: 'specialist', order: 6,
         routines: [{ name: 'whoami', schedule: 'every day at 05:00', prompt: MISMATCH_BODY, enabled: true }],
       }),
+      // THE FILES CLAUDE CODE CANNOT LOAD, one for each reason it drops one:
+      // YAML it cannot read, no description, and no name. Every other fixture
+      // here has no description either, which is why the stub reads agent
+      // files only for the tests that ask it to (loadingAgentFiles below).
+      unloadable: agentFile({
+        name: 'unloadable', description: 'Has a routine Claude Code cannot read', type: 'specialist', order: 7,
+        routines: [{ name: 'digest', schedule: 'every day at 05:00', prompt: UNLOADABLE_BODY, enabled: true }],
+      }),
+      undescribed: agentFile({
+        name: 'undescribed', type: 'specialist', order: 8,
+        routines: [{ name: 'sweep', schedule: 'every day at 05:00', prompt: 'undescribed sweep body', enabled: true }],
+      }),
+      // A plain session that then fails too: by saying so, and by crashing.
+      retrier: agentFile({
+        name: 'retrier', type: 'specialist', order: 10,
+        routines: [{ name: 'retry', schedule: 'every day at 05:00', prompt: 'retrier body', enabled: true }],
+      }),
+      relapser: agentFile({
+        name: 'relapser', type: 'specialist', order: 11,
+        routines: [{ name: 'relapse', schedule: 'every day at 05:00', prompt: 'relapser body', enabled: true }],
+      }),
+      // Files that load, whose runs fail for other reasons: one mid-run, one
+      // at startup before any session exists, which is when an agent that
+      // did not load is refused too.
+      stumbler: agentFile({
+        name: 'stumbler', description: 'Loads, then fails', type: 'specialist', order: 12,
+        routines: [{ name: 'stumble', schedule: 'every day at 05:00', prompt: 'stumbler body', enabled: true }],
+      }),
+      'locked-out': agentFile({
+        name: 'locked-out', description: 'Loads, and is refused at startup', type: 'specialist', order: 13,
+        routines: [{ name: 'check', schedule: 'every day at 05:00', prompt: 'locked out body', enabled: true }],
+      }),
+      // No name line at all, which agentFile cannot write. Rundock knows the
+      // agent by its file name; Claude Code drops a file with no name.
+      nameless: [
+        '---', 'description: Has no name line', 'type: specialist', 'order: 9',
+        'routines:', '  - name: tidy', '    schedule: every day at 05:00', '    prompt: nameless tidy body', '    enabled: true',
+        '---', '', 'You have no name.', '',
+      ].join('\n'),
     },
   });
   keeperAgentFile = path.join(h.workspaceDir, '.claude', 'agents', 'keeper.md');
-  h.writeScenario([
-    // The delay holds the child open past the synchronous tick, which is what
-    // lets a test move the clock between a run's start and its end and read
-    // the record while it is still open.
-    { match: { agent: 'keeper' }, delayMs: 200, turn: [{ text: 'keeper ran' }] },
-    { match: { agent: 'twins' }, turn: [{ text: 'twin ran' }] },
-    // Exits non-zero WITHOUT a result envelope: an abnormal mid-run death, not
-    // a routine that reported a failure. The delay holds it open past the
-    // synchronous tick, the same as the keeper rule above.
-    { match: { agent: 'crasher' }, delayMs: 200, crash: 1 },
-    // By the frontmatter name, which is what the child is started with: the id
-    // is a file name, and Claude Code does not know agents by their files.
-    { match: { agent: 'Mismatched Display Name' }, turn: [{ text: 'mismatched ran' }] },
-  ]);
+  h.writeScenario(STUB_RULES);
   // No rules: the codex stub answers an unmatched prompt with an ordinary turn
   // that completes, which is the successful path on that runtime.
   h.writeCodexScenario([]);
@@ -304,6 +378,7 @@ test('a start that throws closes its record as failed, with the reason it gave',
   assert.strictEqual(rec.endedAt, rec.startedAt,
     'a failure that never reached a child ends in the instant it began');
   assert.strictEqual(rec.durationMs, 0, 'so it took no time');
+  assert.deepStrictEqual(capturesLeft(), [], 'and the file opened for what the child would say went with it');
 
   // The two stores agree that this failed, in their own words. The routine
   // state keeps the tokens it shipped with; the record uses the frozen
@@ -942,3 +1017,200 @@ test('a run that outlives a workspace switch closes its record where it began', 
     h.internal.setWorkspace(h.workspaceDir);
   }
 });
+
+// ---------------------------------------------------------------------------
+// An agent file Claude Code cannot load
+// ---------------------------------------------------------------------------
+
+// Claude Code drops an agent file it cannot read, and says nothing about it.
+// A --print run started with --agent naming that agent stops at once, before
+// any session exists, with one line on stderr and exit code 1. Before the
+// routine passed --agent, a broken file cost nothing a routine could see; now
+// it would cost the run. So a run that hits exactly that goes ahead once as
+// a plain session, as routines always ran, and its record says so in words
+// a person can act on: what was not applied, why, and which file to fix.
+//
+// The stub reads the agent files with the model in
+// test/helpers/claude-code-agents.js, and refuses as Claude Code refuses.
+
+// Every child a routine with this prompt started, in order.
+function spawnsFor(prompt) {
+  return h.readInvocations().filter(i => i.print && Array.isArray(i.argv) && i.argv[i.argv.length - 1] === prompt);
+}
+const agentOf = (spawn) => (spawn.argv.includes('--agent') ? spawn.argv[spawn.argv.indexOf('--agent') + 1] : null);
+function capturesLeft() {
+  try { return fs.readdirSync(runsDir()).filter(f => !f.endsWith('.json')); } catch (e) { return []; }
+}
+// How a reader of the run's record is shown it.
+function shown(record) { return runDetail.describeRun(record, { now: clock.at }).state; }
+
+// What every fallback record has to say, whichever the reason was.
+function assertFallbackRecord(rec, file) {
+  assert.strictEqual(typeof rec.notice, 'string', 'the record carries a notice');
+  assert.match(rec.notice, /went ahead once as a plain session/, 'saying the run went ahead without its agent');
+  assert.match(rec.notice, /instructions and its tools: line were not applied/, 'and what that cost');
+  assert.ok(rec.notice.includes(`.claude/agents/${file}`), `naming the file to fix: ${rec.notice}`);
+  assert.match(rec.notice, /To fix it/, 'and how to fix it');
+}
+
+for (const [label, key, prompt, name, file, cause] of [
+  ['YAML Claude Code cannot read', UNLOADABLE, UNLOADABLE_BODY, 'unloadable', 'unloadable.md', /double quotes/],
+  ['no description', UNDESCRIBED, 'undescribed sweep body', 'undescribed', 'undescribed.md', /has no description: line/],
+  ['no name', NAMELESS, 'nameless tidy body', 'nameless', 'nameless.md', /name: line/],
+]) {
+  test(`an agent file with ${label} runs once as a plain session, and its record says why and what to fix`, async (t) => {
+    await loadingAgentFiles(async () => {
+      begin(21, [key]);
+      h.clearInvocations();
+      driveTicks(t);
+      assert.ok(await settled(key), 'the run reached an outcome');
+
+      const spawns = spawnsFor(prompt);
+      assert.strictEqual(spawns.length, 2, 'two children: the agent, refused, then the plain session');
+      assert.strictEqual(agentOf(spawns[0]), name, 'the first was started as the agent');
+      assert.strictEqual(agentOf(spawns[1]), null, 'the second as a plain session, once');
+
+      const recs = records();
+      assert.strictEqual(recs.length, 1, 'one run, one record');
+      const rec = recs[0];
+      assert.strictEqual(rec.status, 'succeeded', 'the plain session did the work');
+      assertFallbackRecord(rec, file);
+      assert.match(rec.notice, new RegExp(`Claude Code said: --agent '${name}' not found\\.`),
+        'the reason is what Claude Code reported, read from its own words');
+      assert.match(rec.notice, cause, 'and the cause the file shows, where there is one to name');
+      assert.strictEqual(rec.sessionId, spawns[1].argv[spawns[1].argv.indexOf('--session-id') + 1],
+        'the record names the session that ran, so what it changed can be read');
+      assert.strictEqual(rec.filesStatus, 'known', 'and it was');
+      assert.deepStrictEqual(capturesLeft(), [], 'and nothing but the record is left in the runs folder');
+    });
+  });
+}
+
+// Sequence 4. The most common thing a person does next is open the run, so
+// the record has to read as a run without its agent. A plain success would
+// tell them nothing was wrong.
+test('a fallback run reads as having run without its agent, never as a plain success', async (t) => {
+  await loadingAgentFiles(async () => {
+    begin(22, [UNLOADABLE]);
+    driveTicks(t);
+    assert.ok(await settled(UNLOADABLE));
+    const [rec] = records();
+    const state = shown(rec);
+    assert.notStrictEqual(state.chip, runDetail.RUN_STATES.succeeded.chip, 'not the chip a run that finished as its agent gets');
+    assert.strictEqual(state.chip, 'Ran without its agent');
+    assert.strictEqual(state.tone, 'bad');
+    assert.match(state.headline, /without its agent/);
+    assert.strictEqual(state.guidance, rec.notice, 'the notice is the guidance, the file and the fix included');
+    assert.ok(state.guidance.includes('.claude/agents/unloadable.md'));
+  });
+});
+
+// Sequence 2. The undo: the file is fixed, and the next run loads it.
+test('once the file is fixed, the next run loads it and carries no notice', async (t) => {
+  const file = path.join(h.workspaceDir, '.claude', 'agents', 'unloadable.md');
+  const broken = fs.readFileSync(file, 'utf-8');
+  try {
+    await loadingAgentFiles(async () => {
+      begin(23, [UNLOADABLE]);
+      driveTicks(t);
+      assert.ok(await settled(UNLOADABLE));
+      assert.ok(records()[0].notice, 'the broken file fell back');
+
+      // The fix the notice gives: the value in double quotes. Rundock reads
+      // the quoted form back as the same prompt, so the plan an approval was
+      // given for is the plan this run sends.
+      fs.writeFileSync(file, broken.replace(`prompt: ${UNLOADABLE_BODY}`, `prompt: ${JSON.stringify(UNLOADABLE_BODY)}`));
+      invalidateAgentCache();
+
+      begin(24, [UNLOADABLE]);
+      h.clearInvocations();
+      driveTicks(t);
+      assert.ok(await settled(UNLOADABLE));
+      const spawns = spawnsFor(UNLOADABLE_BODY);
+      assert.strictEqual(spawns.length, 1, 'one child, the agent itself');
+      assert.strictEqual(agentOf(spawns[0]), 'unloadable');
+      const [rec] = records();
+      assert.strictEqual(rec.status, 'succeeded');
+      assert.ok(!('notice' in rec), 'and no notice, because nothing fell back');
+      assert.strictEqual(shown(rec).chip, runDetail.RUN_STATES.succeeded.chip);
+    });
+  } finally {
+    fs.writeFileSync(file, broken);
+    invalidateAgentCache();
+  }
+});
+
+// Sequence 3. The retry: once, and only once.
+test('a plain session that then fails is recorded as failed with its own reason, and is not started again', async (t) => {
+  await loadingAgentFiles(async () => {
+    for (const [day, key, prompt, reason] of [
+      [25, RETRIER, 'retrier body', RETRY_FAILED_REASON],
+      [26, RELAPSER, 'relapser body', null],
+    ]) {
+      begin(day, [key]);
+      h.clearInvocations();
+      driveTicks(t);
+      assert.ok(await settled(key), `${key} reached an outcome`);
+      // Room for a third child, if anything were going to start one.
+      await h.delay(300);
+      assert.strictEqual(spawnsFor(prompt).length, 2, `${key}: the agent, then one plain session, and nothing after it`);
+      const [rec] = records();
+      assert.strictEqual(rec.status, 'failed', `${key}: the plain session's failure is the run's`);
+      assert.strictEqual(rec.error, reason, `${key}: with the plain session's own reason, as any failure records it`);
+      assertFallbackRecord(rec, `${key.split(':')[0]}.md`);
+      assert.match(shown(rec).guidance, /plain session/, `${key}: and a reader is told the agent did not load as well`);
+      assert.deepStrictEqual(capturesLeft(), [], `${key}: nothing left in the runs folder`);
+    }
+  });
+});
+
+// Only that failure falls back. A file that loads and then fails, mid-run or
+// at startup before any session exists, is recorded exactly as it was: one
+// child, failed, no notice, and no reason taken from what it printed.
+test('any other failure is recorded as it always was, and starts nothing else', async (t) => {
+  await loadingAgentFiles(async () => {
+    for (const [day, key, prompt] of [[27, STUMBLER, 'stumbler body'], [28, LOCKED_OUT, 'locked out body']]) {
+      begin(day, [key]);
+      h.clearInvocations();
+      driveTicks(t);
+      assert.ok(await settled(key), `${key} reached an outcome`);
+      await h.delay(300);
+      assert.strictEqual(spawnsFor(prompt).length, 1, `${key}: one child, and no plain session after it`);
+      const [rec] = records();
+      assert.strictEqual(rec.status, 'failed');
+      assert.strictEqual(rec.error, null, `${key}: an exit code is still not a message`);
+      assert.ok(!('notice' in rec), `${key}: and nothing says the agent did not load, because it did`);
+      assert.deepStrictEqual(capturesLeft(), [], `${key}: the capture is gone whichever way the child ended`);
+    }
+  });
+});
+
+// Sequence 5. The fallback failing: what Claude Code said cannot be kept, or
+// cannot be read back. Without its words there is still the shape of the
+// ending, which is the shape only this failure has among a child that was
+// started as an agent: refused before any session existed. So the run still
+// falls back and still says the file did not load, and says the reason could
+// not be read, rather than passing for a plain success.
+for (const [label, flags] of [['written', 'w'], ['read', 'r']]) {
+  test(`when what Claude Code said cannot be ${label}, the record still says the agent file did not load`, async (t) => {
+    const realOpen = fs.openSync;
+    t.mock.method(fs, 'openSync', function (file, how, ...rest) {
+      if (String(file).endsWith('.stderr') && how === flags) {
+        throw Object.assign(new Error(`EACCES: permission denied, open '${file}'`), { code: 'EACCES' });
+      }
+      return realOpen.call(fs, file, how, ...rest);
+    });
+    await loadingAgentFiles(async () => {
+      begin(label === 'written' ? 29 : 30, [UNDESCRIBED]);
+      h.clearInvocations();
+      driveTicks(t);
+      assert.ok(await settled(UNDESCRIBED));
+      assert.strictEqual(spawnsFor('undescribed sweep body').length, 2, 'it still fell back, once');
+      const [rec] = records();
+      assertFallbackRecord(rec, 'undescribed.md');
+      assert.match(rec.notice, /What Claude Code said could not be read/, 'and it says the reason could not be read');
+      assert.notStrictEqual(shown(rec).chip, runDetail.RUN_STATES.succeeded.chip, 'never a plain success');
+      assert.deepStrictEqual(capturesLeft(), [], 'and nothing is left in the runs folder');
+    });
+  });
+}

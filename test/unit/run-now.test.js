@@ -94,7 +94,10 @@ const runsDir = (ws) => path.join(ws, '.rundock', 'runs');
 function recordsOn(ws) {
   const dir = runsDir(ws);
   if (!fs.existsSync(dir)) return [];
-  return fs.readdirSync(dir).map(name => JSON.parse(fs.readFileSync(path.join(dir, name), 'utf-8')));
+  // The records only: a run still going also keeps its child's stderr beside
+  // its record until it ends.
+  return fs.readdirSync(dir).filter(name => name.endsWith('.json'))
+    .map(name => JSON.parse(fs.readFileSync(path.join(dir, name), 'utf-8')));
 }
 const stateFile = (ws) => path.join(ws, '.rundock', 'routine-state.json');
 const slotsFile = (ws) => path.join(ws, '.rundock', 'routine-slots.json');

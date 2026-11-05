@@ -87,8 +87,10 @@ async function boot(opts = {}) {
   return { internal, port, workspaceDir };
 }
 
-function writeScenario(rules) {
-  fs.writeFileSync(path.join(workspaceDir, 'stub-scenario.json'), JSON.stringify({ rules }, null, 2));
+// `extra` sets the stub's top-level options, read once when a child starts
+// (see test/helpers/stub-claude/claude): `loadAgentFiles`, for one.
+function writeScenario(rules, extra = {}) {
+  fs.writeFileSync(path.join(workspaceDir, 'stub-scenario.json'), JSON.stringify({ ...extra, rules }, null, 2));
 }
 
 // App-server scenario rules for the stub codex binary (see the rule shape
