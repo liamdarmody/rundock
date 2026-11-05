@@ -102,3 +102,43 @@ describe('the models Doc teaches', () => {
       'an audit that enforces the three names reverts a gateway identifier the user deliberately set');
   });
 });
+
+// WHAT DOC TEACHES ABOUT FRONTMATTER VALUES. Claude Code reads the part of an
+// agent file between the --- lines as YAML and drops the whole file when it
+// cannot, so a colon used as a separator inside a value there costs the agent
+// its instructions and its tools: line. Doc's guide used to tell it to use
+// colons to separate labels from descriptions in "any text within the agent
+// file", descriptions included. The colon belongs in the instructions body;
+// a frontmatter value keeps it out, or goes in double quotes.
+describe('the frontmatter Doc teaches', () => {
+  const guide = fs.readFileSync(path.join(SCAFFOLD, 'rundock-guide.md'), 'utf-8');
+  const lines = guide.split('\n');
+
+  test('colons as separators are recommended for the instructions body only', () => {
+    const SEPARATOR_ADVICE = /colons? (to|as) separat/i;
+    const advice = lines.filter((line) => SEPARATOR_ADVICE.test(line));
+    // A prohibition scan passes on an empty result, so the guide is required
+    // to still give the advice before its scope is checked.
+    assert.ok(advice.length >= 1, 'the guide no longer gives any separator advice; this check has gone blind');
+    for (const line of advice) {
+      const recommends = /use colons? (to|as) separat/i.test(line);
+      if (recommends) {
+        assert.match(line, /in the instructions below the frontmatter, use colons/i,
+          `a line recommends colons as separators without keeping them out of frontmatter values:\n${line}`);
+      }
+    }
+  });
+
+  test('a frontmatter value is kept plain, or put in double quotes', () => {
+    const rule = lines.find((line) => /never use a colon as a separator inside a frontmatter value/i.test(line));
+    assert.ok(rule, 'the guide does not tell Doc to keep colons out of frontmatter values');
+    assert.match(rule, /colon followed by a space/);
+    assert.match(rule, /double quotes/);
+  });
+
+  test("Doc's own file loads in Claude Code's reading", () => {
+    const { readAgentFile } = require('../helpers/claude-code-agents.js');
+    const read = readAgentFile(guide);
+    assert.ok(read.loads, `Doc's file would be dropped: ${read.why}`);
+  });
+});

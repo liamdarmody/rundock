@@ -259,16 +259,17 @@ describe('SKILLS.md: only slugs are injected into the prompt', () => {
 // docs/ROUTINES.md: where a routine's output goes
 // ---------------------------------------------------------------------------
 
-describe('ROUTINES.md: the child\'s output is discarded', () => {
-  // The claim: "The child's stdout and stderr are attached to the null device,
-  // so a routine can print as much as it likes and every write completes."
+describe('ROUTINES.md: the child\'s output is discarded, and its stderr kept only until the run ends', () => {
+  // The claim: "The child's stdout is attached to the null device, and its
+  // stderr to a file beside the run's record", read once when the child ends
+  // and then removed.
   //
   // This one is load-bearing in a way the others are not: it is the claim that
   // says the hazard cannot happen. The page previously stated the opposite,
   // that the pipes were open but unread and that this was a deliberate choice,
   // and that sentence was true for as long as it took a routine to print
   // 160 KB, after which the routine hung and never ran again. Put 'pipe' back
-  // in either slot and this sentence is false with nothing noticing: the
+  // in any slot and this sentence is false with nothing noticing: the
   // integration test would catch the hang, and nothing at all would catch the
   // prose drifting from the spawn.
   //
@@ -280,7 +281,10 @@ describe('ROUTINES.md: the child\'s output is discarded', () => {
   const CLAUDE_KEY = require.resolve('../../lib/runtime/claude.js');
   const SCHEDULER_KEY = require.resolve('../../lib/scheduler.js');
 
-  // The stdio the scheduler asks for when it starts a routine.
+  // What the scheduler asks of each spawn when it starts a routine, and what
+  // was beside the run's record at that moment. `drive` stands in for each
+  // child in turn: it is handed the arguments, the options and the stand-in
+  // child, and may write to the child's stderr and end it.
   //
   // lib/scheduler.js destructures spawnClaude at load, so a copy required
   // after the export is swapped closes over the stand-in, and the swap is
@@ -288,54 +292,151 @@ describe('ROUTINES.md: the child\'s output is discarded', () => {
   // see it. Same technique as test/unit/scheduler-lib.test.js, and the same
   // reason: a spawn dep on the wiring surface would be a seam in production
   // code that only tests would ever use.
-  function stdioTheSpawnAsksFor() {
+  function whatTheSpawnIsAskedFor(agent = { id: 'runner', name: 'Runner' }, drive = () => {}) {
     const claude = require(CLAUDE_KEY);
     const realSpawn = claude.spawnClaude;
     const prevClaudeDeps = claude.wireClaudeRuntimeDeps({ getActualPort: () => 0 });
     const cached = require.cache[SCHEDULER_KEY];
-    let seen = null;
+    const spawns = [];
+    let sched = null;
+    let dir = null;
     claude.spawnClaude = (args, options) => {
-      seen = options;
-      // A child that reports nothing and is never driven. The run is left
-      // held, which is why the workspace below is this test's own.
-      return new (require('node:events').EventEmitter)();
+      const runs = path.join(dir, '.rundock', 'runs');
+      // A child that reports nothing unless `drive` makes it. One that is never
+      // ended leaves its run held, which is why the workspace is this test's own.
+      const child = new (require('node:events').EventEmitter)();
+      spawns.push({ args, options, beside: fs.existsSync(runs) ? fs.readdirSync(runs) : [] });
+      drive(spawns.length, { args, options, child });
+      return child;
     };
     try {
       delete require.cache[SCHEDULER_KEY];
-      const sched = require(SCHEDULER_KEY);
+      sched = require(SCHEDULER_KEY);
       delete require.cache[SCHEDULER_KEY];
       sched.wireSchedulerDeps({ getWssClients: () => [] });
-      useWorkspace({ agents: standardTeam() });
-      sched.executeRoutine({ id: 'runner', name: 'Runner' }, { name: 'r', prompt: 'p' }, 'runner:r');
+      dir = useWorkspace({ agents: standardTeam() });
+      sched.executeRoutine(agent, { name: 'r', prompt: 'p' }, `${agent.id}:r`);
     } finally {
       claude.spawnClaude = realSpawn;
       claude.wireClaudeRuntimeDeps(prevClaudeDeps);
       if (cached) require.cache[SCHEDULER_KEY] = cached;
     }
-    assert.ok(seen, 'the scheduler reached the spawn, so there is a configuration to read');
-    return seen.stdio;
+    assert.ok(spawns.length, 'the scheduler reached the spawn, so there is a configuration to read');
+    return { ...spawns[0], spawns, sched, dir };
   }
 
-  test('the spawn asks for no output pipes at all, which is what the page promises', () => {
-    const stdio = stdioTheSpawnAsksFor();
-    assert.deepStrictEqual(stdio, ['ignore', 'ignore', 'ignore'],
-      'stdin, stdout and stderr are all discarded: an unread pipe in ANY slot hangs the child');
+  test('the spawn discards stdout and gives stderr a file, never a pipe, which is what the page promises', () => {
+    const { options, beside, sched } = whatTheSpawnIsAskedFor();
+    const [stdin, stdout, stderr] = options.stdio;
+    assert.strictEqual(stdin, 'ignore');
+    assert.strictEqual(stdout, 'ignore', 'stdout is discarded: an unread pipe in ANY slot hangs the child');
+    assert.strictEqual(typeof stderr, 'number', 'stderr is a file descriptor, which no reader has to drain');
+    assert.ok(!options.stdio.includes('pipe'), 'and no slot is a pipe');
+    const [run] = sched.runningRuns();
+    assert.ok(beside.includes(`${run.id}.stderr`), 'the file is beside the run\'s record, named for the run');
+    if (process.platform !== 'win32') {
+      assert.strictEqual(fs.fstatSync(stderr).mode & 0o777, 0o600, 'and readable by its user alone');
+    }
+    assert.match(routinesDoc, /The file is created new, readable by your user alone, and never opened through a link or over a file already there\. Only its last 4 KB are kept/,
+      'which the page says, with the bound');
+    assert.match(routinesDoc, /The file is cut back, not capped as it is written/, 'and what the bound does not promise');
 
     // The page's half of the same claim. Read as the sentence a user meets,
     // not as a keyword, because "discarded" appears elsewhere on the page.
-    assert.match(routinesDoc, /stdout and stderr are attached to the null device/,
+    assert.match(routinesDoc, /The child's stdout is attached to the null device, and its stderr to a file beside the run's record/,
       'ROUTINES.md must state what the spawn does, and it is this sentence that says it');
-    assert.match(routinesDoc, /\*\*Rundock discards both\.\*\*/,
+    assert.match(routinesDoc, /\*\*Rundock discards stdout, and keeps stderr in a file only until the run ends\.\*\*/,
       'and say it in the paragraph a reader looking for routine output would land on');
+    assert.doesNotMatch(routinesDoc, /\*\*Rundock discards both\.\*\*/, 'the old sentence, which is no longer true, is gone');
+  });
+
+  test('the file is gone once the child has ended, as the page says', () => {
+    const { dir } = whatTheSpawnIsAskedFor(undefined, (n, { child }) => setImmediate(() => child.emit('close', 0)));
+    return new Promise(resolve => setImmediate(resolve)).then(() => new Promise(resolve => setImmediate(resolve))).then(() => {
+      const left = fs.readdirSync(path.join(dir, '.rundock', 'runs')).filter(f => !f.endsWith('.json'));
+      assert.deepStrictEqual(left, [], 'nothing but the record is left in the runs folder');
+      assert.match(routinesDoc, /and removes it, whether the run finished, failed, crashed or never started/);
+    });
   });
 
   test('the doc says it is pinned, and names this file', () => {
     // Named beside the claim itself rather than only once in the file, so an
     // editor rewriting this paragraph is told where its behaviour is asserted.
-    const paragraph = routinesDoc.split('\n').find(l => l.includes('Rundock discards both'));
+    const paragraph = routinesDoc.split('\n').find(l => l.includes('Rundock discards stdout, and keeps stderr in a file'));
     assert.ok(paragraph, 'the claim is in the page');
     assert.match(paragraph, /doc-claims\.test\.js/,
       'the paragraph making the claim must name the test that pins it, so the next editor moves both');
+  });
+
+  // The claim: "A routine loads its agent's file", and when Claude Code cannot
+  // load it, the run goes ahead once as a plain session and its record says
+  // so. Read off the spawns the scheduler really makes when the first child
+  // says what Claude Code says and ends as Claude Code ends.
+  test('a routine is started as its agent, and falls back once, with a notice, when Claude Code cannot load the file', async () => {
+    const agent = { id: 'runner', name: 'Runner', fileName: 'runner.md', description: '' };
+    const { spawns, sched } = whatTheSpawnIsAskedFor(agent, (n, { options, child }) => {
+      if (n === 1) fs.writeSync(options.stdio[2], "--agent 'Runner' not found. Available agents: claude, Explore\n");
+      setImmediate(() => child.emit('close', n === 1 ? 1 : 0));
+    });
+    for (let i = 0; i < 5; i++) await new Promise(resolve => setImmediate(resolve));
+    assert.strictEqual(spawns.length, 2, 'the agent, then one plain session');
+    const flag = (args) => (args.includes('--agent') ? args[args.indexOf('--agent') + 1] : null);
+    assert.strictEqual(flag(spawns[0].args), 'Runner', 'started as the agent, by its name');
+    assert.strictEqual(flag(spawns[1].args), null, 'then as a plain session');
+    const [record] = sched.readRunRecords();
+    assert.strictEqual(record.status, 'succeeded');
+    assert.match(record.notice, /instructions and its tools: line were not applied/);
+    assert.match(record.notice, /Claude Code said: --agent 'Runner' not found\./);
+    assert.match(record.notice, /\.claude\/agents\/runner\.md/);
+    const { describeRun, WITHOUT_AGENT_STATE } = require('../../public/run-detail-model.js');
+    assert.strictEqual(describeRun(record).state.chip, WITHOUT_AGENT_STATE.chip);
+
+    // And the line alone is not enough: naming another agent, it starts
+    // nothing else.
+    const other = whatTheSpawnIsAskedFor(agent, (n, { options, child }) => {
+      fs.writeSync(options.stdio[2], "--agent 'Someone else' not found. Available agents: claude, Explore\n");
+      setImmediate(() => child.emit('close', 1));
+    });
+    for (let i = 0; i < 5; i++) await new Promise(resolve => setImmediate(resolve));
+    assert.strictEqual(other.spawns.length, 1, 'a refusal of another agent is not a refusal of this one');
+    assert.strictEqual(other.sched.readRunRecords()[0].status, 'failed');
+
+    const loads = routinesDoc.split('\n').find(l => l.includes("**A routine loads its agent's file.**"));
+    assert.ok(loads, 'ROUTINES.md says what a routine loads');
+    assert.match(loads, /its instructions, and any `tools:` line in it, apply to the routine/);
+    const fallback = routinesDoc.split('\n').find(l => l.startsWith('**If Claude Code cannot load the agent file, the run goes ahead once without it, and its record says so.**'));
+    assert.ok(fallback, 'and how it falls back');
+    assert.match(fallback, /`--agent '<name>' not found`/, 'naming the line Claude Code writes, which is the line the scheduler recognizes');
+    assert.ok(fallback.includes(`**${WITHOUT_AGENT_STATE.chip}**`), 'and the words the run screen shows');
+    assert.match(fallback, /a `notice`/, 'and the field the record carries');
+    assert.match(fallback, /at most once/);
+    assert.match(fallback, /It falls back only when both hold: no session was started, and the line names this agent\./);
+    assert.match(fallback, /If they load it, nothing is guessed: the run is recorded as failed, once, with the reason that Claude Code stopped before the session started and Rundock could not read why, and with no notice\./);
+    assert.match(fallback, /If the file holds YAML those rules do not cover, or Rundock fails to read it, that is deliberately a failed run too, and not a fallback/);
+    assert.match(fallback, /`claude --print --agent '<name>' "say hello"`, run in the workspace, answers `--agent '<name>' not found` when it cannot\./);
+    assert.match(fallback, /doc-claims\.test\.js/, 'the paragraph names the test that pins it');
+  });
+
+  // The claim: every routine run is told that nobody is watching, in its
+  // system prompt, in the words scripts/refusal-notice.js keeps beside the line
+  // a refused step is given. Read off the arguments the scheduler really hands
+  // the spawn, the same stand-in the stdio claim above is read through.
+  test('every routine is told nobody is watching, in its system prompt, as the page says', () => {
+    const { UNATTENDED_RUN, FAILED_LINE } = require('../../scripts/refusal-notice.js');
+    const { args } = whatTheSpawnIsAskedFor();
+    assert.strictEqual(args[args.indexOf('--append-system-prompt') + 1], UNATTENDED_RUN,
+      'the line goes in the system prompt');
+    assert.strictEqual(args[args.length - 1], 'p', 'and the routine prompt is sent as it was written');
+
+    const paragraph = routinesDoc.split('\n').find(l => l.startsWith('**Every routine run is told that nobody is watching.**'));
+    assert.ok(paragraph, 'ROUTINES.md says every routine run is told');
+    assert.match(paragraph, /`--append-system-prompt`/);
+    assert.match(paragraph, /On Codex it is the thread's developer instructions/);
+    assert.match(paragraph, /The routine prompt itself is never changed/);
+    assert.match(paragraph, /A conversation never gets it\./);
+    assert.match(paragraph, /`scripts\/refusal-notice\.js`/);
+    assert.ok(UNATTENDED_RUN.endsWith(FAILED_LINE), 'and both lines end on the same failure line, as it says');
+    assert.match(paragraph, /doc-claims\.test\.js/, 'the paragraph names the test that pins it');
   });
 });
 

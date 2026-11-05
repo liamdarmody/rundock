@@ -1,0 +1,228 @@
+{
+  "about": "Which agent files the installed Claude Code loaded and refused, measured by test/tools/claude-cli-agent-load-probe.js. test/unit/claude-cli-agent-load.test.js holds lib/agents/claude-code-load.js and the test stub to it.",
+  "claudeCode": "2.1.318",
+  "method": "The real CLI spawned as the scheduler spawns a routine (--add-dir, --print, --output-format stream-json, --verbose, --dangerously-skip-permissions, --append-system-prompt, --session-id, --agent, the prompt last), in a fresh folder holding the case's agent file in .claude/agents (as probe.md unless the case names it), with empty home and config folders, a placeholder API key, and a stand-in for the messages API on 127.0.0.1. No account was used and no model was called. A file counts as loaded when a request carrying its instructions reached the stand-in. On the run's own turn the stand-in asked for each case's tool calls in turn. A case with no agent was run as the plain session a fallback starts, with no --agent.",
+  "cases": [
+    {
+      "name": "a routine prompt with a colon and a space, as the writer used to write it",
+      "agent": "probe",
+      "file": "---\nname: probe\ndescription: Probes the loader\nroutines:\n  - name: r\n    schedule: every day at 07:00\n    prompt: Summarize: inbox, calendar and tasks\n    runOn: local\n    enabled: true\n    planHash: e14a13aff580f69c23df74448a26683fe528283d4982ffcf85421d48ddc16f58\n    planApprovedHash: e14a13aff580f69c23df74448a26683fe528283d4982ffcf85421d48ddc16f58\n---\n\nYou are the probe agent. PROBE-AGENT-INSTRUCTIONS\n",
+      "observed": {
+        "exitCode": 1,
+        "loaded": false,
+        "stderr": "--agent 'probe' not found. Available agents: claude, Explore, general-purpose, Plan, statusline-setup"
+      }
+    },
+    {
+      "name": "a routine prompt with a colon and a space, as the writer writes it now",
+      "agent": "probe",
+      "file": "---\nname: probe\ndescription: Probes the loader\nroutines:\n  - name: r\n    schedule: every day at 07:00\n    prompt: \"Summarize: inbox, calendar and tasks\"\n    runOn: local\n    enabled: true\n    planHash: e14a13aff580f69c23df74448a26683fe528283d4982ffcf85421d48ddc16f58\n    planApprovedHash: e14a13aff580f69c23df74448a26683fe528283d4982ffcf85421d48ddc16f58\n---\n\nYou are the probe agent. PROBE-AGENT-INSTRUCTIONS\n",
+      "observed": {
+        "exitCode": 0,
+        "loaded": true,
+        "stderr": ""
+      }
+    },
+    {
+      "name": "a routine prompt with a leading backtick, as the writer used to write it",
+      "agent": "probe",
+      "file": "---\nname: probe\ndescription: Probes the loader\nroutines:\n  - name: r\n    schedule: every day at 07:00\n    prompt: `npm test` then report what failed\n    runOn: local\n    enabled: true\n    planHash: 0947ec08544039ad3a3e0ba81cad42e3453da63b41c39d9470407ef12c70edb9\n    planApprovedHash: 0947ec08544039ad3a3e0ba81cad42e3453da63b41c39d9470407ef12c70edb9\n---\n\nYou are the probe agent. PROBE-AGENT-INSTRUCTIONS\n",
+      "observed": {
+        "exitCode": 1,
+        "loaded": false,
+        "stderr": "--agent 'probe' not found. Available agents: claude, Explore, general-purpose, Plan, statusline-setup"
+      }
+    },
+    {
+      "name": "a routine prompt with a leading backtick, as the writer writes it now",
+      "agent": "probe",
+      "file": "---\nname: probe\ndescription: Probes the loader\nroutines:\n  - name: r\n    schedule: every day at 07:00\n    prompt: \"`npm test` then report what failed\"\n    runOn: local\n    enabled: true\n    planHash: 0947ec08544039ad3a3e0ba81cad42e3453da63b41c39d9470407ef12c70edb9\n    planApprovedHash: 0947ec08544039ad3a3e0ba81cad42e3453da63b41c39d9470407ef12c70edb9\n---\n\nYou are the probe agent. PROBE-AGENT-INSTRUCTIONS\n",
+      "observed": {
+        "exitCode": 0,
+        "loaded": true,
+        "stderr": ""
+      }
+    },
+    {
+      "name": "a routine prompt with stray quotation marks, as the writer used to write it",
+      "agent": "probe",
+      "file": "---\nname: probe\ndescription: Probes the loader\nroutines:\n  - name: r\n    schedule: every day at 07:00\n    prompt: \"Summarize\" the inbox, then file it\n    runOn: local\n    enabled: true\n    planHash: 2962c2839c76f19f1e851b40b2d8229022836861038b1c0b505bb1969b1ac65e\n    planApprovedHash: 2962c2839c76f19f1e851b40b2d8229022836861038b1c0b505bb1969b1ac65e\n---\n\nYou are the probe agent. PROBE-AGENT-INSTRUCTIONS\n",
+      "observed": {
+        "exitCode": 1,
+        "loaded": false,
+        "stderr": "--agent 'probe' not found. Available agents: claude, Explore, general-purpose, Plan, statusline-setup"
+      }
+    },
+    {
+      "name": "a routine prompt with stray quotation marks, as the writer writes it now",
+      "agent": "probe",
+      "file": "---\nname: probe\ndescription: Probes the loader\nroutines:\n  - name: r\n    schedule: every day at 07:00\n    prompt: \"\\\"Summarize\\\" the inbox, then file it\"\n    runOn: local\n    enabled: true\n    planHash: 2962c2839c76f19f1e851b40b2d8229022836861038b1c0b505bb1969b1ac65e\n    planApprovedHash: 2962c2839c76f19f1e851b40b2d8229022836861038b1c0b505bb1969b1ac65e\n---\n\nYou are the probe agent. PROBE-AGENT-INSTRUCTIONS\n",
+      "observed": {
+        "exitCode": 0,
+        "loaded": true,
+        "stderr": ""
+      }
+    },
+    {
+      "name": "a colon and a space in a top-level description",
+      "agent": "probe",
+      "file": "---\nname: probe\ndescription: Probes: the loader\n---\n\nYou are the probe agent. PROBE-AGENT-INSTRUCTIONS\n",
+      "observed": {
+        "exitCode": 0,
+        "loaded": true,
+        "stderr": ""
+      }
+    },
+    {
+      "name": "a code point past U+10FFFF, escaped in a quoted routine prompt",
+      "agent": "probe",
+      "file": "---\nname: probe\ndescription: Probes the loader\nroutines:\n  - name: r\n    schedule: every day at 07:00\n    prompt: \"\\U00110000\"\n    runOn: local\n    enabled: true\n    planHash: 0e112614d34d66bb4d7cbcd1df370edff2053c1efc3eeb53c164fcac63a9360a\n    planApprovedHash: 0e112614d34d66bb4d7cbcd1df370edff2053c1efc3eeb53c164fcac63a9360a\n---\n\nYou are the probe agent. PROBE-AGENT-INSTRUCTIONS\n",
+      "observed": {
+        "exitCode": 1,
+        "loaded": false,
+        "stderr": "--agent 'probe' not found. Available agents: claude, Explore, general-purpose, Plan, statusline-setup"
+      }
+    },
+    {
+      "name": "no name line",
+      "agent": "probe",
+      "file": "---\ndescription: Probes the loader\n---\n\nYou are the probe agent. PROBE-AGENT-INSTRUCTIONS\n",
+      "observed": {
+        "exitCode": 1,
+        "loaded": false,
+        "stderr": "--agent 'probe' not found. Available agents: claude, Explore, general-purpose, Plan, statusline-setup"
+      }
+    },
+    {
+      "name": "no description line",
+      "agent": "probe",
+      "file": "---\nname: probe\n---\n\nYou are the probe agent. PROBE-AGENT-INSTRUCTIONS\n",
+      "observed": {
+        "exitCode": 1,
+        "loaded": false,
+        "stderr": "--agent 'probe' not found. Available agents: claude, Explore, general-purpose, Plan, statusline-setup"
+      }
+    },
+    {
+      "name": "an agent no file defines",
+      "agent": "nobody-here",
+      "file": "---\nname: probe\ndescription: Probes the loader\n---\n\nYou are the probe agent. PROBE-AGENT-INSTRUCTIONS\n",
+      "observed": {
+        "exitCode": 1,
+        "loaded": false,
+        "stderr": "--agent 'nobody-here' not found. Available agents: claude, Explore, general-purpose, Plan, probe, statusline-setup"
+      }
+    },
+    {
+      "name": "a file whose name on disk differs from its name line",
+      "agent": "probe",
+      "fileName": "helper-notes.md",
+      "file": "---\nname: probe\ndescription: Probes the loader\n---\n\nYou are the probe agent. PROBE-AGENT-INSTRUCTIONS\n",
+      "observed": {
+        "exitCode": 0,
+        "loaded": true,
+        "stderr": ""
+      }
+    },
+    {
+      "name": "a tools line without Bash, and the model asks for Bash",
+      "agent": "probe",
+      "file": "---\nname: probe\ndescription: Probes the loader\ntools: Read, Write\n---\n\nYou are the probe agent. PROBE-AGENT-INSTRUCTIONS\n",
+      "steps": [
+        {
+          "tool": "Bash",
+          "command": "touch sentinel.txt"
+        }
+      ],
+      "observed": {
+        "exitCode": 0,
+        "loaded": true,
+        "stderr": "",
+        "toolsOffered": [
+          "DeferredToolPlaceholder",
+          "Read",
+          "Write"
+        ],
+        "results": [
+          {
+            "refused": true,
+            "message": "<tool_use_error>Error: No such tool available: Bash. Bash is not among the tools available here. Continue with the tools you have.</tool_use_error>"
+          }
+        ],
+        "sentinelCreated": false
+      }
+    },
+    {
+      "name": "no tools line, and the model asks for Bash",
+      "agent": "probe",
+      "file": "---\nname: probe\ndescription: Probes the loader\n---\n\nYou are the probe agent. PROBE-AGENT-INSTRUCTIONS\n",
+      "steps": [
+        {
+          "tool": "Bash",
+          "command": "touch sentinel.txt"
+        }
+      ],
+      "observed": {
+        "exitCode": 0,
+        "loaded": true,
+        "stderr": "",
+        "toolsOffered": [
+          "Agent",
+          "Bash",
+          "DeferredToolPlaceholder",
+          "Edit",
+          "ListAgents",
+          "Read",
+          "ReportFindings",
+          "ScheduleWakeup",
+          "Skill",
+          "ToolSearch",
+          "Workflow",
+          "Write"
+        ],
+        "results": [
+          {
+            "refused": false
+          }
+        ],
+        "sentinelCreated": true
+      }
+    },
+    {
+      "name": "the same tools line, run as the plain session a fallback starts, and the model asks for Bash",
+      "agent": null,
+      "file": "---\nname: probe\ndescription: Probes the loader\ntools: Read, Write\n---\n\nYou are the probe agent. PROBE-AGENT-INSTRUCTIONS\n",
+      "steps": [
+        {
+          "tool": "Bash",
+          "command": "touch sentinel.txt"
+        }
+      ],
+      "observed": {
+        "exitCode": 0,
+        "loaded": false,
+        "stderr": "",
+        "toolsOffered": [
+          "Agent",
+          "Bash",
+          "DeferredToolPlaceholder",
+          "Edit",
+          "ListAgents",
+          "Read",
+          "ReportFindings",
+          "ScheduleWakeup",
+          "Skill",
+          "ToolSearch",
+          "Workflow",
+          "Write"
+        ],
+        "results": [
+          {
+            "refused": false
+          }
+        ],
+        "sentinelCreated": true
+      }
+    }
+  ]
+}

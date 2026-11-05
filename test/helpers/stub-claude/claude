@@ -42,8 +42,13 @@
 //     "refusalExitMs": 0,            // how long the refused process lingers
 //     "refusalSplitAt": 0,           // write the refusal line in pieces
 //     "refusalPreamble": "...",      // stderr written just before the refusal
-//     "refusalAfterInit": false }    // send the init envelope before refusing
+//     "refusalAfterInit": false,     // send the init envelope before refusing
+//     "loadAgentFiles": false }      // read agent files as Claude Code does, and
+//                                    // refuse an --agent no file loads for
+//                                    // (see AGENT_NOT_LOADED below)
 // A crash rule may give "stderrChunks": [...] to write its stderr in pieces.
+// A crash rule may give "beforeSession": true to fail at startup, before the
+// session's transcript exists, as an expired login does.
 // Any rule may give "exitAfterTurn": n to exit with code n after its turn.
 // A rule may give "shell": ["rm a.md", "mv b.md c.md"], commands the run
 // gives its shell tool. Each is put to the PreToolUse hooks the --settings
@@ -388,6 +393,34 @@ if (REFUSED_RESUME) {
   writePieces(pieces, finish);
 }
 
+// AN AGENT FILE CLAUDE CODE CANNOT LOAD, refused the way the real binary
+// refuses it. Claude Code drops an agent file it cannot read without a word:
+// no `name:`, no `description:`, or frontmatter its YAML reader refuses. A
+// --print run started with --agent naming such an agent then writes one line
+// to stderr and exits 1, before any session or transcript exists. The
+// reading is lib/agents/claude-code-load.js, through
+// test/helpers/claude-code-agents.js, and test/unit/claude-cli-agent-load.test.js
+// holds it to a record of the real CLI.
+//
+// OPT IN, with a top-level `loadAgentFiles: true`, because most fixtures here
+// were written with no description, and the real binary would drop every one
+// of them. Conversation spawns are not modeled: there, Claude Code runs on as
+// a plain session and says nothing at all, which is no reply a stub can give.
+// Read once, at spawn, which is when the real binary looks, so a test fixes a
+// file and the next child loads it.
+const AGENT_NOT_LOADED = (() => {
+  if (!PRINT || REFUSED_RESUME || AGENT == null || TOP.loadAgentFiles !== true) return false;
+  const agents = require(path.join(__dirname, '..', 'claude-code-agents.js'));
+  const available = agents.loadableAgentNames(process.cwd());
+  if (available.includes(AGENT)) return false;
+  // `refusalPreamble`, as for a refused resume: whatever Claude Code printed
+  // before it refused, which puts the refusal last.
+  if (TOP.refusalPreamble) writeErr(String(TOP.refusalPreamble));
+  writeErr(`${agents.agentNotFoundLine(AGENT, available)}\n`);
+  exitWhenWritten(1);
+  return true;
+})();
+
 // Write stderr in pieces a moment apart, so each reaches the reader as its
 // own chunk, then carry on.
 function writePieces(pieces, then) {
@@ -607,7 +640,7 @@ function handleUserMessage(content) {
   // going, which is what progress is read from. It holds the tools asked for
   // and no outcomes yet, which is exactly what a run that died halfway leaves
   // behind.
-  if (FIXED_SESSION) beginTranscript(rule, content);
+  if (FIXED_SESSION && !rule.beforeSession) beginTranscript(rule, content);
   if (rule.crash != null) {
     // Abnormal death: exit without emitting a result envelope, so the
     // server's close handler runs with no result for this turn.
@@ -698,7 +731,7 @@ function runHookCalls(calls, then) {
 
 // A refused resume never reads its input, exactly as the real binary never
 // does: nothing below runs for it, so no prompt is logged and no turn is spoken.
-const rl = REFUSED_RESUME ? null : readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+const rl = (REFUSED_RESUME || AGENT_NOT_LOADED) ? null : readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
 if (rl) rl.on('line', (line) => {
   if (!line.trim()) return;
   let msg;
@@ -713,7 +746,7 @@ if (rl) rl.on('line', (line) => {
 
 // Routine spawns use stdio: ['ignore', ...] and pass the prompt as the last
 // positional argument with --print. Handle that shape too.
-if (PRINT && !REFUSED_RESUME) {
+if (PRINT && !REFUSED_RESUME && !AGENT_NOT_LOADED) {
   const positional = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];

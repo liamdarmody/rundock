@@ -77,6 +77,7 @@ test('pressing Run disables the control while the stub runtime runs, and the row
   await expect(row.locator('.run-status.live')).toHaveCount(0);
   await expect(row.locator('.run-status.failed')).toHaveCount(0);
   const records = fs.readdirSync(path.join(workspace, '.rundock', 'runs'))
+    .filter(name => name.endsWith('.json'))
     .map(name => JSON.parse(fs.readFileSync(path.join(workspace, '.rundock', 'runs', name), 'utf-8')));
   expect(records.filter(r => r.routine === ROUTINE).map(r => r.trigger)).toEqual(['manual']);
 });

@@ -81,7 +81,10 @@ test('a routine\'s request is shown in the approvals dock, named for the routine
   const runsDir = path.join(workspace, '.rundock', 'runs');
   let run = null;
   await expect.poll(() => {
-    run = fs.readdirSync(runsDir).map(n => JSON.parse(fs.readFileSync(path.join(runsDir, n), 'utf-8')))
+    // The records only: a run still going also keeps its child's stderr
+    // beside its record until it ends.
+    run = fs.readdirSync(runsDir).filter(n => n.endsWith('.json'))
+      .map(n => JSON.parse(fs.readFileSync(path.join(runsDir, n), 'utf-8')))
       .find(r => r.routine === ROUTINE && r.status === 'running' && r.sessionId) || null;
     return !!run;
   }).toBe(true);

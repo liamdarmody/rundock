@@ -262,6 +262,11 @@ describe('spawn argv freeze', () => {
       '--output-format', 'stream-json',
       '--verbose',
       '--dangerously-skip-permissions',
+      // Nobody is watching a routine, and it is told so in its system prompt,
+      // never in the routine prompt an approval was given for. The value is
+      // one fixed line rather than a per-agent prompt, so it is asserted
+      // below in full rather than left masked.
+      '--append-system-prompt', '<append-system-prompt>',
       // The run names the session it will run under, which is the only way
       // anything can find the transcript it leaves afterwards: the run's own
       // output is discarded at the spawn and never read. An identity on the
@@ -270,6 +275,8 @@ describe('spawn argv freeze', () => {
       '--agent', 'content-lead',
       'freeze routine path',
     ]);
+    const argv = inv[0].argv;
+    assert.strictEqual(argv[argv.indexOf('--append-system-prompt') + 1], require('../../scripts/refusal-notice.js').UNATTENDED_RUN);
   });
 
   test('codex app-server spawn: full argv frozen and thread policy invariants pinned', async () => {

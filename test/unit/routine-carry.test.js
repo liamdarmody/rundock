@@ -62,7 +62,18 @@ describe('withRoutineState', () => {
     assert.throws(() => withRoutineState(incoming.replace(/\n/g, '\r\n'), routineStateOf(LIVE)), /cannot carry/);
     assert.throws(() => withRoutineState(incoming, [{ name: 'Morning briefing', occurrence: 0, fields: { enabled: 'true\nprompt: evil' } }]));
     assert.throws(() => withRoutineState(incoming, [{ name: 'Morning briefing', occurrence: 0, fields: { prompt: 'x' } }]), /not a routine switch/);
-    assert.throws(() => withRoutineState(incoming, [{ name: 'Morning briefing', occurrence: 0, fields: { enabled: ' true' } }]), /cannot carry "enabled"/,
-      'a value that would not read back as written is refused rather than written');
+    // A value with space round it used to be written bare, read back trimmed,
+    // and so refused here. The writer now quotes a value YAML would misread,
+    // which is what lets it read back exactly as it was written: carried,
+    // quoted, and equal.
+    const spaced = withRoutineState(incoming, [{ name: 'Morning briefing', occurrence: 0, fields: { enabled: ' true' } }]);
+    assert.ok(spaced.includes('    enabled: " true"'), 'the spaced value is written in quotes');
+    assert.strictEqual(blocksOf(spaced)[0].enabled, ' true', 'and reads back as written');
+    // A switch that still cannot land is refused, never written and passed.
+    // A block that repeats the key is one: the writer changes the first line
+    // and the reader keeps the last, so what was written does not read back.
+    const repeated = agent(block('Morning briefing', 'Go.', '    enabled: false\n    enabled: false\n'));
+    assert.throws(() => withRoutineState(repeated, [{ name: 'Morning briefing', occurrence: 0, fields: { enabled: 'true' } }]),
+      /cannot carry "enabled" onto the routine "Morning briefing"/, 'a switch that did not land is a refusal');
   });
 });
