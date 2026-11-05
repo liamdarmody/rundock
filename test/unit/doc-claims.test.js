@@ -412,6 +412,8 @@ describe('ROUTINES.md: the child\'s output is discarded, and its stderr kept onl
     assert.match(fallback, /at most once/);
     assert.match(fallback, /It falls back only when both hold: no session was started, and the line names this agent\./);
     assert.match(fallback, /If they load it, nothing is guessed: the run is recorded as failed, once, with the reason that Claude Code stopped before the session started and Rundock could not read why, and with no notice\./);
+    assert.match(fallback, /If the file holds YAML those rules do not cover, or Rundock fails to read it, that is deliberately a failed run too, and not a fallback/);
+    assert.match(fallback, /`claude --print --agent '<name>' "say hello"`, run in the workspace, answers `--agent '<name>' not found` when it cannot\./);
     assert.match(fallback, /doc-claims\.test\.js/, 'the paragraph names the test that pins it');
   });
 

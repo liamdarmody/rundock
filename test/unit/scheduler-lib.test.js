@@ -1284,9 +1284,11 @@ const UNMODELED = { label: 'YAML the rules do not model', text: '---\nname: Runn
 const READER_THROWS = { label: 'a reader that throws', text: '---\nname: Runner\ndescription: Runs\n---\n', throws: true };
 // Capture unopenable, the agent file as the case has it, and a first child
 // that exits 1 before any session. Returns the spawns and the run's record.
+// Both stand-ins are put back before it returns, so a test can call it more
+// than once and leave the real ones to the tests after it.
 async function runWithoutStderr(t, { text, throws }, end = (child) => setImmediate(() => child.emit('close', 1))) {
   const realOpen = fs.openSync;
-  t.mock.method(fs, 'openSync', function (file, ...rest) {
+  const opening = t.mock.method(fs, 'openSync', function (file, ...rest) {
     if (String(file).endsWith('.stderr')) throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
     return realOpen.call(fs, file, ...rest);
   });
@@ -1313,6 +1315,7 @@ async function runWithoutStderr(t, { text, throws }, end = (child) => setImmedia
     }));
   } finally {
     load.readAgentFile = realRead;
+    opening.mock.restore();
   }
 }
 
@@ -1326,6 +1329,27 @@ for (const c of [UNREADABLE, UNMODELED, READER_THROWS]) {
     assert.ok(!('notice' in record), 'and no notice');
   });
 }
+
+// A FILE RUNDOCK COULD NOT CHECK IS A FAILED RUN, DELIBERATELY, AND ITS REASON
+// SAYS WHAT TO DO. Not a fallback, for the reason above; but a bare "could not
+// read why" would leave a person nothing to act on. So the reason names the
+// file, says Rundock could not check its YAML and where, and gives the one
+// command whose answer says whether Claude Code loads it.
+test('a file Rundock could not check fails with a reason that names the file and how to check it', async (t) => {
+  const { record } = await runWithoutStderr(t, UNMODELED);
+  assert.strictEqual(record.error, [
+    'Claude Code stopped before the session started, and Rundock could not read why.',
+    'The agent file .claude/agents/runner.md uses YAML Rundock cannot check (at line 6 of the file), so Rundock could not tell whether Claude Code loads it, and did not run the routine without it.',
+    'To check, run claude --print --agent \'Runner\' "say hello" in the workspace: if Claude Code answers --agent \'Runner\' not found, it cannot load the file, and that line is the place to start.',
+  ].join(' '));
+  const thrown = (await runWithoutStderr(t, READER_THROWS)).record;
+  assert.match(thrown.error, /The agent file \.claude\/agents\/runner\.md uses YAML Rundock cannot check, so/,
+    'a reading that failed says the same, without a line it does not have');
+  assert.match(thrown.error, /it cannot load the file\.$/);
+  const unreadable = (await runWithoutStderr(t, UNREADABLE)).record;
+  assert.strictEqual(unreadable.error, 'Claude Code stopped before the session started, and Rundock could not read why.',
+    'while a file that could not be read at all has nothing more to say');
+});
 
 // EVERY CLOSE ENDS IN AN OUTCOME. A throw anywhere in settling how a run
 // ended, here forced on the way into the plain session, is caught in the

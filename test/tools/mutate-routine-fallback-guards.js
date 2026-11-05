@@ -55,6 +55,16 @@ const MUTATIONS = [
   [ENDING, 'the capture is cut back at all',
     '      if (size <= CAPTURE_BYTES) return;',
     '      return;'],
+  // ===== A FILE RUNDOCK COULD NOT CHECK IS A FAILED RUN, AND SAYS WHY =====
+  [ENDING, 'YAML the rules do not model is never called refused',
+    '    return read.unmodeled ? { refused: false, unchecked: { line: read.line } } : { refused: true };',
+    '    return { refused: true };'],
+  [ENDING, 'a file that could not be checked is given the reason that says what to do',
+    '    return { ok: false, err: { message: judged.unchecked ? uncheckedStop(agent, judged.unchecked) : UNREAD_STOP } };',
+    '    return { ok: false, err: { message: UNREAD_STOP } };'],
+  [ENDING, 'the line the reason names is the line in the file, not in its frontmatter',
+    '  const where = unchecked.line ? ` (at line ${unchecked.line + 1} of the file)` : \'\';',
+    '  const where = unchecked.line ? ` (at line ${unchecked.line} of the file)` : \'\';'],
 ];
 
 function redTests(suite) {
