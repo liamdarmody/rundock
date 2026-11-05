@@ -40,12 +40,13 @@
 //   node scripts/hook-block-truth/capture.js --write   measure, and write the record
 //
 // CLAUDE_BIN names the binary; otherwise the `claude` on PATH. The test stub is
-// refused. Every case runs under .rundock/scratch/ in this repository, which
-// is removed afterwards. The record holds no path, user or machine name: paths
-// are written relative to the case's folder, the capture is scrubbed
-// (scripts/capture-scrub.js), and a record that would still carry one of this
-// machine's names is refused rather than written. Exits 0 when the
-// measurement matches the record (or was written), 1 otherwise.
+// refused. Every case runs in a folder of its own inside one made new for the
+// run, private to this user and outside the repository, which is removed
+// afterwards (createRunRoot, below). The record holds no path, user or
+// machine name: paths are written relative to the case's folder, the capture
+// is scrubbed (scripts/capture-scrub.js), and a record that would still
+// carry one of this machine's names is refused rather than written. Exits 0
+// when the measurement matches the record (or was written), 1 otherwise.
 
 const fs = require('node:fs');
 const os = require('node:os');
@@ -59,7 +60,6 @@ const RECORD = path.join(__dirname, 'captured-hook-block.json');
 const HOOK = path.join(ROOT, 'scripts', 'permission-hook.js');
 const READER_GONE = path.join(__dirname, 'reader-gone.js');
 const STUB_DIR = path.join(ROOT, 'test', 'helpers', 'stub-claude');
-const SCRATCH = path.join(ROOT, '.rundock', 'scratch', 'hook-block-truth');
 const SENTINEL = 'sentinel.txt';
 const COMMAND = `echo ran > ${SENTINEL}`;
 const PLAIN_REASON = 'Blocked by a hook that exited 2.';
@@ -210,15 +210,39 @@ function cleanEnv({ home, config, tmp, apiPort, rundockPort, workspace, log }) {
   };
 }
 
-async function runCase(bin, c, index) {
-  const root = path.join(SCRATCH, `case-${index}`);
-  fs.rmSync(root, { recursive: true, force: true });
-  const workspace = path.join(root, 'workspace');
-  const aux = path.join(root, 'aux');
-  const home = path.join(root, 'home');
-  const config = path.join(root, 'config');
-  const tmp = path.join(root, 'tmp');
-  for (const d of [path.join(workspace, '.claude'), aux, home, config, tmp]) fs.mkdirSync(d, { recursive: true });
+// THE RUN'S OWN FOLDER, made new, private, and outside the repository. A
+// folder inside the repository can be swapped for a link to one anywhere else
+// by anything that can write there, an agent included, and a run that cleared
+// or removed a fixed path under it then removed what the link led to. mkdtemp
+// makes a folder nobody named beforehand, which only this user can open (mode
+// 0700). Every case's folders are made new inside it and nothing is cleared
+// before use, and at the end only this folder is removed: rmSync removes a
+// link put in its place as a link, and never what it leads to.
+function createRunRoot(tmp = os.tmpdir()) {
+  return fs.mkdtempSync(path.join(tmp, 'rundock-hook-block-'));
+}
+// One case's folders, made new inside the run's folder: a case folder that
+// is already there is an error, never something to clear.
+function caseFolders(runRoot, index) {
+  const root = path.join(runRoot, `case-${index}`);
+  fs.mkdirSync(root);
+  const dirs = {
+    root,
+    workspace: path.join(root, 'workspace'),
+    aux: path.join(root, 'aux'),
+    home: path.join(root, 'home'),
+    config: path.join(root, 'config'),
+    tmp: path.join(root, 'tmp'),
+  };
+  for (const d of [path.join(dirs.workspace, '.claude'), dirs.aux, dirs.home, dirs.config, dirs.tmp]) fs.mkdirSync(d, { recursive: true });
+  return dirs;
+}
+function removeRunRoot(runRoot) {
+  fs.rmSync(runRoot, { recursive: true, force: true });
+}
+
+async function runCase(bin, c, index, runRoot) {
+  const { root, workspace, aux, home, config, tmp } = caseFolders(runRoot, index);
   const scrub = scrubber([workspace, aux, home, config, tmp, root]);
   const log = path.join(aux, 'hook-exit.json');
 
@@ -264,7 +288,6 @@ async function runCase(bin, c, index) {
   const result = api.results[0];
   observed.toolResult = result ? { isError: result.isError, text: scrub(result.text) } : null;
   observed.sentinelExists = fs.existsSync(path.join(workspace, SENTINEL));
-  fs.rmSync(root, { recursive: true, force: true });
   return observed;
 }
 
@@ -285,13 +308,14 @@ async function main() {
   // `claude --version` prints the version first: "2.1.318 (Claude Code)".
   const version = execFileSync(bin, ['--version'], { encoding: 'utf8' }).trim().split(/\s+/)[0] || null;
   const cases = [];
+  const runRoot = createRunRoot();
   try {
     for (const [i, c] of CASES.entries()) {
       process.stderr.write(`[hook-block] ${c.name}\n`);
-      cases.push({ name: c.name, observed: await runCase(bin, c, i) });
+      cases.push({ name: c.name, observed: await runCase(bin, c, i, runRoot) });
     }
   } finally {
-    fs.rmSync(SCRATCH, { recursive: true, force: true });
+    removeRunRoot(runRoot);
   }
   const record = {
     about: 'What the installed Claude Code did with a tool call whose PreToolUse hook could not answer on standard output, measured by scripts/hook-block-truth/capture.js. test/unit/hook-block-capture.test.js holds it to what it claims.',
@@ -319,7 +343,11 @@ async function main() {
   process.exit(same ? 0 : 1);
 }
 
-main().catch((e) => {
-  process.stderr.write(`[hook-block] ${e.stack || e.message}\n`);
-  process.exit(1);
-});
+module.exports = { createRunRoot, caseFolders, removeRunRoot };
+
+if (require.main === module) {
+  main().catch((e) => {
+    process.stderr.write(`[hook-block] ${e.stack || e.message}\n`);
+    process.exit(1);
+  });
+}

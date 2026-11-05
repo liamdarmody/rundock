@@ -129,3 +129,78 @@ describe("today's hook ends the way the capture recorded", () => {
     }
   });
 });
+
+describe("the capture's own folders", () => {
+  // Loaded, not run: the capture runs only from its own command line.
+  const { createRunRoot, caseFolders, removeRunRoot } = require('../../scripts/hook-block-truth/capture.js');
+  const REPO = fs.realpathSync(path.join(__dirname, '..', '..'));
+  // Whatever a failing run left is removed: a link as a link, a folder whole.
+  const tidy = (p) => {
+    let st = null;
+    try { st = fs.lstatSync(p); } catch (e) { return; }
+    if (st.isSymbolicLink()) fs.unlinkSync(p);
+    else fs.rmSync(p, { recursive: true, force: true });
+  };
+
+  test('a run works in a folder made new for it, which only this user can open, outside the repository, and removes it at the end', (t) => {
+    const run = createRunRoot();
+    t.after(() => tidy(run));
+    try {
+      const real = fs.realpathSync(run);
+      assert.ok(!real.startsWith(REPO + path.sep), `outside the repository: ${real}`);
+      if (process.platform !== 'win32') assert.strictEqual(fs.statSync(run).mode & 0o777, 0o700);
+      assert.deepStrictEqual(fs.readdirSync(run), []);
+      const dirs = caseFolders(run, 0);
+      for (const d of [dirs.workspace, dirs.aux, dirs.home, dirs.config, dirs.tmp]) {
+        assert.ok(fs.realpathSync(d).startsWith(real + path.sep), d);
+      }
+      assert.throws(() => caseFolders(run, 0), { code: 'EEXIST' }, 'a case folder is made new, never cleared and used again');
+    } finally {
+      removeRunRoot(run);
+    }
+    assert.strictEqual(fs.existsSync(run), false);
+  });
+
+  // THE PLACE THE CAPTURE USED TO WORK, inside the repository, where anything
+  // that can write there could leave a link to a folder elsewhere, which a
+  // run then cleared and removed. A link is planted there, and at the run's
+  // folder before it is removed, and what each leads to is left as it was.
+  test("a link planted where the capture used to work, or in place of the run's folder, is never followed", (t) => {
+    const old = path.join(REPO, '.rundock', 'scratch', 'hook-block-truth');
+    let present = true;
+    try { fs.lstatSync(old); } catch (e) { present = false; }
+    assert.ok(!present, `${old} must not exist for this test to plant a link there`);
+    const victim = fs.mkdtempSync(path.join(os.tmpdir(), 'hook-block-victim-'));
+    const made = [];
+    for (const d of [path.join(REPO, '.rundock'), path.join(REPO, '.rundock', 'scratch')]) {
+      if (!fs.existsSync(d)) { fs.mkdirSync(d); made.unshift(d); }
+    }
+    t.after(() => {
+      try { fs.unlinkSync(old); } catch (e) { /* not planted */ }
+      for (const d of made) { try { fs.rmdirSync(d); } catch (e) { /* not empty: not ours alone */ } }
+      fs.rmSync(victim, { recursive: true, force: true });
+    });
+    for (const d of ['case-0', 'case-1']) {
+      fs.mkdirSync(path.join(victim, d));
+      fs.writeFileSync(path.join(victim, d, 'keep.txt'), 'keep\n');
+    }
+    fs.writeFileSync(path.join(victim, 'keep.txt'), 'keep\n');
+    const listing = (dir) => fs.readdirSync(dir, { recursive: true }).map(String).sort();
+    const before = listing(victim);
+    fs.symlinkSync(victim, old, 'dir');
+
+    const run = createRunRoot();
+    const moved = `${run}-moved`;
+    t.after(() => { tidy(run); tidy(moved); });
+    caseFolders(run, 0);
+    caseFolders(run, 1);
+    assert.deepStrictEqual(listing(victim), before, 'nothing was made or cleared through the link');
+    // The run's folder swapped for a link to the same place before it is
+    // removed: the link goes, and what it led to stays.
+    fs.renameSync(run, moved);
+    fs.symlinkSync(victim, run, 'dir');
+    removeRunRoot(run);
+    assert.strictEqual(fs.existsSync(run), false);
+    assert.deepStrictEqual(listing(victim), before, 'nothing was removed through either link');
+  });
+});

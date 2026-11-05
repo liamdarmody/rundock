@@ -251,6 +251,7 @@ const SHELL_CODE = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suit
 // The same file, the suite that runs it as its own process: a hook that dies
 // answers nothing, and the runtime carries on as though nothing had objected.
 const HOOK_CRASH = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/hook-never-crashes.test.js' };
+const HOOK_BLOCK_CAPTURE = { src: path.join(ROOT, 'scripts', 'hook-block-truth', 'capture.js'), suite: 'test/unit/hook-block-capture.test.js' };
 // The same file, the suite that times it: the folder each word starts from is
 // worked out once per command, or the check grows with the square of it.
 const SHELL_TIMING = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/shell-code-timing.test.js' };
@@ -3274,6 +3275,17 @@ const MUTATIONS = [
   [HOOK_CRASH, 'Hook crash: the refusal never sees which event it is answering',
     "input += chunk; hookInput = input;",
     "input += chunk;"],
+  // The capture works in a folder made new for the run, outside the
+  // repository, so no link left inside the repository can lead it elsewhere.
+  [HOOK_BLOCK_CAPTURE, 'Hook block capture: a run works under the repository again',
+    "  return fs.mkdtempSync(path.join(tmp, 'rundock-hook-block-'));",
+    "  const dir = path.join(ROOT, '.rundock', 'scratch', 'hook-block-truth'); fs.mkdirSync(dir, { recursive: true }); return dir;"],
+  [HOOK_BLOCK_CAPTURE, 'Hook block capture: a case clears its folder before using it',
+    "  fs.mkdirSync(root);\n  const dirs = {",
+    "  fs.rmSync(root, { recursive: true, force: true });\n  fs.mkdirSync(root);\n  const dirs = {"],
+  [HOOK_BLOCK_CAPTURE, "Hook block capture: the run's folder is left behind",
+    "  fs.rmSync(runRoot, { recursive: true, force: true });",
+    ""],
   // ===== WHAT THE SHELL CHECK READS IN CODE AND TEXT =====
   [SHELL_CODE, "Shell code: a backslash in a Bash word is a Windows separator again on a POSIX host",
     "    const pmod = winWorld ? path.win32 : flavourFor(t, workspaceRoot, posixText);",
