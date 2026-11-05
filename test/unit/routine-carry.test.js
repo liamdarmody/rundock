@@ -62,7 +62,12 @@ describe('withRoutineState', () => {
     assert.throws(() => withRoutineState(incoming.replace(/\n/g, '\r\n'), routineStateOf(LIVE)), /cannot carry/);
     assert.throws(() => withRoutineState(incoming, [{ name: 'Morning briefing', occurrence: 0, fields: { enabled: 'true\nprompt: evil' } }]));
     assert.throws(() => withRoutineState(incoming, [{ name: 'Morning briefing', occurrence: 0, fields: { prompt: 'x' } }]), /not a routine switch/);
-    assert.throws(() => withRoutineState(incoming, [{ name: 'Morning briefing', occurrence: 0, fields: { enabled: ' true' } }]), /cannot carry "enabled"/,
-      'a value that would not read back as written is refused rather than written');
+    // A value with space round it used to be written bare, read back trimmed,
+    // and so refused here. The writer now quotes a value YAML would misread,
+    // which is what lets it read back exactly as it was written: carried,
+    // quoted, and equal.
+    const spaced = withRoutineState(incoming, [{ name: 'Morning briefing', occurrence: 0, fields: { enabled: ' true' } }]);
+    assert.ok(spaced.includes('    enabled: " true"'), 'the spaced value is written in quotes');
+    assert.strictEqual(blocksOf(spaced)[0].enabled, ' true', 'and reads back as written');
   });
 });
