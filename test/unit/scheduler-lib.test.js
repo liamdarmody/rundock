@@ -1272,6 +1272,47 @@ test('a capture a dead process left beside its record is removed when the record
   });
 });
 
+// WHAT THE FILE CHECK CANNOT JUDGE, IT DOES NOT CALL BROKEN. With nothing
+// read from Claude Code, the agent file is asked instead, and a file Rundock
+// cannot read, or one holding YAML outside the rules it was measured by, is
+// not called refused: that would run the routine without its tools: line on
+// a guess. The run fails once, in plain words.
+test('with nothing read from Claude Code, a file the rules cannot judge is not run again without its agent', async (t) => {
+  const realOpen = fs.openSync;
+  t.mock.method(fs, 'openSync', function (file, ...rest) {
+    if (String(file).endsWith('.stderr')) throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
+    return realOpen.call(fs, file, ...rest);
+  });
+  for (const [label, text] of [
+    ['a file Rundock cannot read', null],
+    ['YAML the rules do not model', '---\nname: Runner\ndescription: Runs\nroutines:\n  - name: r\n    prompt: &p do it\n---\n'],
+  ]) {
+    await withTempWorkspaceAsync(async (ws) => {
+      await withTempHomeAsync(async () => {
+        if (text) {
+          fs.mkdirSync(path.join(ws, '.claude', 'agents'), { recursive: true });
+          fs.writeFileSync(path.join(ws, '.claude', 'agents', 'runner.md'), text);
+        }
+        const spawns = [];
+        await withFakeSpawn((args) => {
+          spawns.push(args);
+          const child = new EventEmitter();
+          setImmediate(() => child.emit('close', 1));
+          return child;
+        }, async (sched) => {
+          sched.executeRoutine({ ...AGENT, fileName: 'runner.md', description: 'Runs' }, ROUTINE, KEY);
+          assert.ok(await until(() => sched.routineState[KEY] && sched.routineState[KEY].status !== 'running'), `${label}: the run ended`);
+          assert.strictEqual(spawns.length, 1, `${label}: one child, and no plain session after it`);
+          const [record] = runRecords(ws);
+          assert.strictEqual(record.status, 'failed', label);
+          assert.strictEqual(record.error, 'Claude Code stopped before the session started, and Rundock could not read why.', label);
+          assert.ok(!('notice' in record), `${label}: and no notice`);
+        });
+      });
+    });
+  }
+});
+
 // A CHILD THAT WRITES WITHOUT END TO STDERR IS NEVER MADE TO WAIT, AND NEVER
 // FILLS THE DISK. A real child, handed the descriptor the scheduler made,
 // writes far more than the capture keeps and exits by itself; the capture is

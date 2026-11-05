@@ -55,8 +55,10 @@ const RETRIER = 'retrier:retry';
 const RELAPSER = 'relapser:relapse';
 const STUMBLER = 'stumbler:stumble';
 const LOCKED_OUT = 'locked-out:check';
+const LATECOMER = 'latecomer:check';
+const IMPOSTOR = 'impostor:check';
 const ALL = [KEEPER, TWINS, FAULTY, CRASHER, CODEX, MISMATCH, RENAMED,
-  UNLOADABLE, UNDESCRIBED, NAMELESS, RETRIER, RELAPSER, STUMBLER, LOCKED_OUT];
+  UNLOADABLE, UNDESCRIBED, NAMELESS, RETRIER, RELAPSER, STUMBLER, LOCKED_OUT, LATECOMER, IMPOSTOR];
 
 const KEEPER_BODY = 'keeper routine body';
 const TWIN_EARLY = 'twin early body';
@@ -94,6 +96,10 @@ const STUB_RULES = [
   { match: { agent: null, promptIncludes: 'relapser body' }, crash: 1 },
   { match: { agent: 'stumbler' }, crash: 1, stderr: 'API Error: 500 the service is overloaded\n' },
   { match: { agent: 'locked-out' }, crash: 1, beforeSession: true, stderr: 'Invalid API key. Please run /login\n' },
+  // Claude Code's refusal line, written by runs it does not describe: one
+  // whose session had already started, and one that names another agent.
+  { match: { agent: 'latecomer' }, crash: 1, stderr: "--agent 'latecomer' not found. Available agents: claude, Explore\n" },
+  { match: { agent: 'impostor' }, crash: 1, beforeSession: true, stderr: "--agent 'someone-else' not found. Available agents: claude, Explore\n" },
 ];
 
 // THE STUB READS AGENT FILES THE WAY CLAUDE CODE DOES, for the length of fn.
@@ -191,6 +197,14 @@ before(async () => {
       'locked-out': agentFile({
         name: 'locked-out', description: 'Loads, and is refused at startup', type: 'specialist', order: 13,
         routines: [{ name: 'check', schedule: 'every day at 05:00', prompt: 'locked out body', enabled: true }],
+      }),
+      latecomer: agentFile({
+        name: 'latecomer', description: 'Loads, starts, then prints a refusal', type: 'specialist', order: 14,
+        routines: [{ name: 'check', schedule: 'every day at 05:00', prompt: 'latecomer body', enabled: true }],
+      }),
+      impostor: agentFile({
+        name: 'impostor', description: 'Loads, and prints a refusal of another agent', type: 'specialist', order: 15,
+        routines: [{ name: 'check', schedule: 'every day at 05:00', prompt: 'impostor body', enabled: true }],
       }),
       // No name line at all, which agentFile cannot write. Rundock knows the
       // agent by its file name; Claude Code drops a file with no name.
@@ -1186,6 +1200,37 @@ test('any other failure is recorded as it always was, and starts nothing else', 
   });
 });
 
+// Both halves, or no fallback. A plain session runs without the file's
+// tools: line, so only Claude Code's own refusal of this agent, before any
+// session existed, earns one. The refusal line alone does not: a run whose
+// session had started keeps its failure whatever it printed, and so does a
+// refusal that names some other agent.
+test('the refusal line without the refusal it describes is recorded as the failure it is', async (t) => {
+  await loadingAgentFiles(async () => {
+    for (const [day, key, prompt, why] of [
+      [31, LATECOMER, 'latecomer body', 'a session that had started'],
+      [32, IMPOSTOR, 'impostor body', 'a line naming another agent'],
+    ]) {
+      begin(day, [key]);
+      h.clearInvocations();
+      driveTicks(t);
+      assert.ok(await settled(key), `${why}: the run reached an outcome`);
+      await h.delay(300);
+      assert.strictEqual(spawnsFor(prompt).length, 1, `${why}: one child, and no plain session after it`);
+      const [rec] = records();
+      assert.strictEqual(rec.status, 'failed', `${why}: failed`);
+      assert.strictEqual(rec.error, null, `${why}: with no reason taken from what it printed`);
+      assert.ok(!('notice' in rec), `${why}: and nothing says the agent did not load`);
+      assert.deepStrictEqual(capturesLeft(), [], `${why}: nothing left in the runs folder`);
+    }
+    // The first really had a session: its record found the transcript.
+    begin(33, [LATECOMER]);
+    driveTicks(t);
+    assert.ok(await settled(LATECOMER));
+    assert.notStrictEqual(records()[0].filesReason, 'no-transcript', 'the latecomer started its session');
+  });
+});
+
 // Every way the capture can be unavailable: it cannot be created, a link was
 // planted at its path first, or it cannot be read back. `realOpen` and
 // `realRead` are fs's own, so everything else still opens and reads.
@@ -1214,10 +1259,10 @@ function removePlanted() {
   for (const f of capturesLeft()) fs.rmSync(path.join(runsDir(), f), { force: true });
 }
 
-// Sequence 5. The fallback failing: what Claude Code said cannot be had.
-// Without its words there is still the shape of the ending, refused before
-// any session existed, so the run falls back once and says the file did not
-// load, and that the reason could not be read.
+// Sequence 5. The fallback failing: what Claude Code said cannot be had. The
+// file is then asked by the rules Claude Code was measured to load by. Here
+// they refuse it (it has no description), so the run falls back once and says
+// the file did not load, and that the reason could not be read.
 for (const how of ['created', 'planted', 'read']) {
   test(`when the capture cannot be ${how}, a file Claude Code refuses still falls back and says so`, async (t) => {
     fs.writeFileSync(planted(), 'untouched\n');
@@ -1233,6 +1278,33 @@ for (const how of ['created', 'planted', 'read']) {
         assertFallbackRecord(rec, 'undescribed.md');
         assert.match(rec.notice, /What Claude Code said could not be read/, 'and it says the reason could not be read');
         assert.notStrictEqual(shown(rec).chip, runDetail.RUN_STATES.succeeded.chip, 'never a plain success');
+        assert.strictEqual(fs.readFileSync(planted(), 'utf-8'), 'untouched\n', 'and a planted link\'s target is untouched');
+      });
+    } finally {
+      removePlanted();
+      fs.rmSync(planted(), { force: true });
+    }
+    assert.deepStrictEqual(capturesLeft(), [], 'nothing is left in the runs folder');
+  });
+
+  // The other half. The file loads by those rules, and the child stopped
+  // before its session for a reason of its own. Nothing is guessed: one
+  // child, failed, in plain words, with no notice.
+  test(`when the capture cannot be ${how}, a file that loads is not run again without its agent`, async (t) => {
+    fs.writeFileSync(planted(), 'untouched\n');
+    captureFails(t, how);
+    try {
+      await loadingAgentFiles(async () => {
+        begin(35, [LOCKED_OUT]);
+        h.clearInvocations();
+        driveTicks(t);
+        assert.ok(await settled(LOCKED_OUT));
+        await h.delay(300);
+        assert.strictEqual(spawnsFor('locked out body').length, 1, 'one child, and no plain session after it');
+        const [rec] = records();
+        assert.strictEqual(rec.status, 'failed', 'failed, never a success');
+        assert.strictEqual(rec.error, 'Claude Code stopped before the session started, and Rundock could not read why.');
+        assert.ok(!('notice' in rec), 'and nothing says the agent file did not load');
         assert.strictEqual(fs.readFileSync(planted(), 'utf-8'), 'untouched\n', 'and a planted link\'s target is untouched');
       });
     } finally {

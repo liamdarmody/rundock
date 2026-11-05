@@ -390,6 +390,15 @@ describe('ROUTINES.md: the child\'s output is discarded, and its stderr kept onl
     const { describeRun, WITHOUT_AGENT_STATE } = require('../../public/run-detail-model.js');
     assert.strictEqual(describeRun(record).state.chip, WITHOUT_AGENT_STATE.chip);
 
+    // And the line alone is not enough: naming another agent, it starts
+    // nothing else.
+    const other = whatTheSpawnIsAskedFor(agent, (n, { options, child }) => {
+      fs.writeSync(options.stdio[2], "--agent 'Someone else' not found. Available agents: claude, Explore\n");
+      setImmediate(() => child.emit('close', 1));
+    });
+    for (let i = 0; i < 5; i++) await new Promise(resolve => setImmediate(resolve));
+    assert.strictEqual(other.spawns.length, 1, 'a refusal of another agent is not a refusal of this one');
+    assert.strictEqual(other.sched.readRunRecords()[0].status, 'failed');
 
     const loads = routinesDoc.split('\n').find(l => l.includes("**A routine loads its agent's file.**"));
     assert.ok(loads, 'ROUTINES.md says what a routine loads');
@@ -400,6 +409,8 @@ describe('ROUTINES.md: the child\'s output is discarded, and its stderr kept onl
     assert.ok(fallback.includes(`**${WITHOUT_AGENT_STATE.chip}**`), 'and the words the run screen shows');
     assert.match(fallback, /a `notice`/, 'and the field the record carries');
     assert.match(fallback, /at most once/);
+    assert.match(fallback, /It falls back only when both hold: no session was started, and the line names this agent\./);
+    assert.match(fallback, /If they load it, nothing is guessed: the run is recorded as failed, once, with the reason that Claude Code stopped before the session started and Rundock could not read why, and with no notice\./);
     assert.match(fallback, /doc-claims\.test\.js/, 'the paragraph names the test that pins it');
   });
 
