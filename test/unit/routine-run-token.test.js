@@ -399,6 +399,74 @@ describe('a request whose body arrives late is checked again when it has', () =>
   });
 });
 
+// A RUN'S CARDS STILL OPEN AS IT ENDS: refused, every window told, each
+// counted once on its run, and then gone, so a later answer finds nothing.
+// The scheduler calls this as the run's record closes.
+describe('a run\'s cards still open as it ends are refused and counted with it', () => {
+  // Ask with `token` and wait for the card; the answer arrives later.
+  async function asked(token) {
+    const since = sent.length;
+    const answered = send(token).then((res) => res.json());
+    const card = await waitFor(() => sent.slice(since).find((m) => m.type === 'control_request'));
+    return { answered, card };
+  }
+
+  test('only that run\'s open cards are refused, every window is told, each is counted once, and a later answer does nothing', async () => {
+    const [tokenA, tokenB] = [auth.issueRunHookToken('run-a'), auth.issueRunHookToken('run-b')];
+    const convo = claudeRt.getSpawnEnv('convo-left-open').RUNDOCK_HOOK_TOKEN;
+    try {
+      const mine = [await asked(tokenA), await asked(tokenA)];
+      const others = [await asked(tokenB), await asked(convo)];
+      const since = sent.length;
+      const n = counted.length;
+      router.settleRunCards('run-a');
+      for (const { answered, card } of mine) {
+        assert.deepStrictEqual(await answered, { allow: false, reason: 'run-ended' }, 'each asker is told no');
+        assert.strictEqual(pending.has(card.request_id), false, 'and nothing waits on it');
+      }
+      assert.deepStrictEqual(sent.slice(since).map((m) => [m.type, m.requestId, m.reason]),
+        mine.map(({ card }) => ['permission_ended', card.request_id, 'ended']), 'every window is told each has ended');
+      assert.deepStrictEqual(counted.slice(n), ['run-a', 'run-a'], 'each counted once, on its run');
+      for (const { card } of others) assert.ok(pending.has(card.request_id), 'another run\'s card, and a conversation\'s, stay open');
+
+      deny(mine[0].card);
+      handlePermissionResponse({ pendingPermissions: pending, broadcast: () => { throw new Error('a late answer reached the windows'); } }, { send() {} },
+        { requestId: mine[1].card.request_id, conversationId: '', allow: true, card: true });
+      assert.deepStrictEqual(counted.slice(n), ['run-a', 'run-a'], 'a later answer counts nothing');
+      for (const { card } of others) deny(card);
+      await Promise.all(others.map((o) => o.answered));
+    } finally { auth.retireRunHookToken(tokenA); auth.retireRunHookToken(tokenB); }
+  });
+
+  // THE CONTROL FAILING: telling the windows throws, and one hook's answer
+  // cannot be written. Both cards are still counted, that hook is never let
+  // through, and the route goes on answering.
+  test('a card whose window message or answer fails is still counted, and its hook is never let through', async () => {
+    const token = auth.issueRunHookToken('run-a');
+    const prev = router.wireHttpRouterDeps({});
+    try {
+      const told = await asked(token);
+      const unwritable = await asked(token);
+      const stuck = pending.get(unwritable.card.request_id).res;
+      stuck.writeHead = () => { throw new Error('the answer to the hook could not be written'); };
+      let letThrough = false;
+      unwritable.answered.then((body) => { letThrough = body.allow === true; }, () => {});
+      try {
+        const n = counted.length;
+        router.wireHttpRouterDeps({ safeSend: () => { throw new Error('the windows could not be told'); } });
+        assert.doesNotThrow(() => router.settleRunCards('run-a'));
+        router.wireHttpRouterDeps({ safeSend: prev.safeSend });
+        assert.deepStrictEqual(counted.slice(n), ['run-a', 'run-a'], 'both counted');
+        assert.deepStrictEqual(await told.answered, { allow: false, reason: 'run-ended' });
+        await new Promise((r) => setTimeout(r, 200));
+        assert.strictEqual(letThrough, false, 'the hook that could not be answered is never let through');
+      } finally { stuck.destroy(); }
+      const { card } = await askAndDeny(routineEnv(token), outsideRead('session-of-run-a'));
+      assert.deepStrictEqual(card._run, RUNS.get('run-a'), 'and the route goes on answering');
+    } finally { router.wireHttpRouterDeps({ safeSend: prev.safeSend }); auth.retireRunHookToken(token); }
+  });
+});
+
 describe('a conversation\'s token is checked as before', () => {
   test('its card is its conversation\'s, and no run is looked up for it, or counted', async () => {
     const n = lookups;

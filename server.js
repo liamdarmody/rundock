@@ -701,6 +701,7 @@ schedulerLib.wireSchedulerDeps({
   // The same reader every conversation spawn uses, so a routine is handed the
   // same list for the same mode.
   getDisallowedTools,
+  settleRunCards: (runId) => httpRouter.settleRunCards(runId),
 });
 const httpRouter = require('./lib/http-router.js');
 const claudeConsole = require('./lib/runtime/claude-console.js');

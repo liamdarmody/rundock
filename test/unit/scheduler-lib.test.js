@@ -552,6 +552,35 @@ test('a refused card is counted on its live run, open record and closed, and now
   });
 });
 
+// A RUN'S CARDS STILL OPEN AS IT CLOSES are settled first, while it is still
+// going, so what they count is on the closed record (the server refuses and
+// counts them: settleRunCards in lib/http-router.js). A settling that throws
+// costs those cards' count and never the closing.
+test('a run\'s open cards are settled as it closes and counted on the closed record, and a settling that throws does not stop the close', async () => {
+  await withTempWorkspaceAsync(async () => {
+    const children = [];
+    await withFakeSpawn(() => { const c = new EventEmitter(); children.push(c); return c; }, async (sched) => {
+      assert.strictEqual(sched.executeRoutine(AGENT, ROUTINE, KEY), true);
+      assert.strictEqual(sched.executeRoutine(AGENT, { name: 'r2', prompt: 'p' }, 'runner:r2'), true);
+      const [a, b] = sched.runningRuns().map((r) => r.id);
+      const recordOf = (id) => sched.readRunRecords().find((r) => r.id === id);
+      const settled = [];
+      // Two cards still open on run A, counted as the server counts them.
+      sched.wireSchedulerDeps({ settleRunCards: (id) => { settled.push(id); sched.noteRefusedCard(id); sched.noteRefusedCard(id); } });
+      children[0].emit('close', 0);
+      assert.deepStrictEqual(settled, [a], 'settled once, for the run that closed');
+      assert.strictEqual(recordOf(a).status, 'succeeded');
+      assert.strictEqual(recordOf(a).refusedCards, 2, 'its open cards are on the closed record');
+
+      sched.wireSchedulerDeps({ settleRunCards: () => { throw new Error('the settling fell over'); } });
+      children[1].emit('close', 0);
+      assert.strictEqual(recordOf(b).status, 'succeeded', 'the record closes with its outcome all the same');
+      assert.strictEqual('refusedCards' in recordOf(b), false);
+      assert.deepStrictEqual(sched.runningRuns(), [], 'and no run is left listed as going');
+    });
+  });
+});
+
 // The cost of listening to both: a failure that reports twice must not be
 // recorded twice. Counted through the broadcast, which happens once when a run
 // starts and once per outcome, so a second outcome is a third broadcast.

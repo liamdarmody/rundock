@@ -19,6 +19,8 @@ const http = require('node:http');
 const path = require('node:path');
 const h = require('../helpers/harness.js');
 const ROUTER = require('../../lib/http-router.js');
+const schedulerLib = require('../../lib/scheduler.js');
+const { handlePermissionResponse } = require('../../lib/protocol/handlers/process-control.js');
 const { agentFile, makeTempDir } = require('../helpers/workspace.js');
 const { refusalNotice } = require('../../scripts/refusal-notice.js');
 
@@ -247,43 +249,154 @@ test('a request held back through the end of its run is refused when it finishes
 });
 
 // THE RUN ENDS WHILE ONE OF ITS CARDS IS OPEN: here a request sent with the
-// run's token, whose asker outlives the run. The card stays answerable, and
-// whatever settles it after the close, a denial or the timeout, answers the
-// asker and never writes to the closed record.
-test('a run that ends while one of its cards is open keeps its record as it closed, whether the card is then denied or times out', async () => {
-  h.writeScenario([{ match: { agent: KEEPER, promptIncludes: 'ends with cards open' }, hooks: [readOutside()], turn: [{ text: 'Done.' }] }]);
-  await save(KEEPER, 'token-open', 'ends with cards open');
-  let since = client.messages.length;
-  press(KEEPER, 'token-open');
-  const { msg: own, index } = await client.waitFor((m) => m.type === 'control_request' && m._run, { since, label: 'the run\'s own card' });
-  const run = recordById(own._run.id);
-  const token = tokenOf(run);
-
-  since = index + 1;
-  const denied = permissionRequest(token);
-  const { msg: toDeny, index: at } = await client.waitFor((m) => m.type === 'control_request' && m.request_id !== own.request_id, { since, label: 'the card to deny' });
-  const prev = ROUTER.wireHttpRouterDeps({ getPermissionTimeoutMs: () => 3000 });
-  let timedOut;
+// run's token, whose asker outlives the run. The card is refused as the
+// record closes, its asker told no, every window told it has ended, and it is
+// counted with the run. Nothing after the close changes any of that.
+const pendingNow = () => h.internal.pendingPermissionRequests;
+// Start the routine and wait for its own card, which holds the run open.
+async function startHeld(agent, name) {
+  const since = client.messages.length;
+  press(agent, name);
+  const { msg: own, index } = await client.waitFor((m) => m.type === 'control_request' && m._run && m._run.routine === name, { since, label: `${name}'s own card` });
+  return { own, index, run: recordById(own._run.id), token: tokenOf(recordById(own._run.id)) };
+}
+// A card asked with the run's token, its timer set to `timeoutMs`: the first
+// card raised after message `since`.
+async function openCard(token, since, timeoutMs) {
+  const prev = timeoutMs ? ROUTER.wireHttpRouterDeps({ getPermissionTimeoutMs: () => timeoutMs }) : null;
   try {
-    timedOut = permissionRequest(token).then((res) => res.json());
-    await client.waitFor((m) => m.type === 'control_request' && m.request_id !== toDeny.request_id, { since: at + 1, label: 'the card to time out' });
-  } finally { ROUTER.wireHttpRouterDeps({ getPermissionTimeoutMs: prev.getPermissionTimeoutMs }); }
-  let settled = false;
-  timedOut.then(() => { settled = true; });
+    const asked = permissionRequest(token);
+    const { msg: card, index } = await client.waitFor((m) => m.type === 'control_request', { since, label: 'the open card' });
+    return { asked, card, index, filedAt: Date.now() };
+  } finally { if (prev) ROUTER.wireHttpRouterDeps({ getPermissionTimeoutMs: prev.getPermissionTimeoutMs }); }
+}
+const closedRun = (id) => h.waitUntil(() => recordById(id).status !== 'running', { timeout: 15000 });
 
+test('a card still open when its run ends is refused and counted with the run, and nothing after the close changes that', async () => {
+  h.writeScenario([{ match: { agent: KEEPER, promptIncludes: 'ends with a card open' }, hooks: [readOutside()], turn: [{ text: 'Done.' }] }]);
+  await save(KEEPER, 'token-open', 'ends with a card open');
+  const { own, index, run, token } = await startHeld(KEEPER, 'token-open');
+  const open = await openCard(token, index + 1, 3000);
+
+  // The run's own card approved, which is never counted, and the run ends
+  // with the other still open.
+  const since = client.messages.length;
   answer(own, true);
-  assert.ok(await h.waitUntil(() => recordById(run.id).status !== 'running', { timeout: 15000 }), 'the run ends');
-  assert.strictEqual(settled, false, 'with both cards still open');
+  assert.deepStrictEqual(await (await open.asked).json(), { allow: false, reason: 'run-ended' }, 'the open card\'s asker is told no as the run ends');
+  assert.ok(await closedRun(run.id), 'the run ends');
   const file = recordFile(run.id);
   const closedAs = fs.readFileSync(file, 'utf-8');
-  assert.strictEqual('refusedCards' in JSON.parse(closedAs), false);
+  assert.strictEqual(JSON.parse(closedAs).status, 'succeeded');
+  assert.strictEqual(JSON.parse(closedAs).refusedCards, 1, 'the open card is counted with the run, and the approved one is not');
+  assert.ok(client.messages.slice(since).some((m) => m.type === 'permission_ended' && m.requestId === open.card.request_id && m.reason === 'ended'), 'and every window is told the card has ended');
+  assert.strictEqual(pendingNow().has(open.card.request_id), false, 'nothing is left waiting on it');
 
-  answer(toDeny, false);
-  assert.deepStrictEqual(await (await denied).json(), { allow: false }, 'a denial after the close still answers the asker');
-  await h.delay(200);
-  assert.strictEqual(fs.readFileSync(file, 'utf-8'), closedAs, 'and leaves the record as it closed');
+  // UNDO: a person answers the settled card after the close, both ways, and
+  // its own timer runs out. None of it does anything.
+  const after = client.messages.length;
+  answer(open.card, true);
+  answer(open.card, false);
+  await h.delay(Math.max(0, open.filedAt + 3000 + 300 - Date.now()));
+  const aboutCards = (m) => m.type === 'control_request' || m.type.startsWith('permission');
+  assert.deepStrictEqual(client.messages.slice(after).filter(aboutCards).map((m) => [m.type, m.requestId, m.reason]),
+    [['permission_ended', open.card.request_id, 'not-pending'], ['permission_ended', open.card.request_id, 'not-pending']],
+    'each late answer is told it is too late, and no window hears of the card again');
+  assert.strictEqual(fs.readFileSync(file, 'utf-8'), closedAs, 'the record is as it closed, the card counted once');
 
-  assert.deepStrictEqual(await timedOut, { allow: false, reason: 'timeout' }, 'so does the timeout');
+  // RETRY: the same asker asks again after the close.
+  const again = client.messages.length;
+  assert.strictEqual((await permissionRequest(token)).status, 401, 'refused as an unknown token is');
   await h.delay(200);
-  assert.strictEqual(fs.readFileSync(file, 'utf-8'), closedAs, 'and it too leaves the record as it closed');
+  assert.deepStrictEqual(client.messages.slice(again).filter((m) => m.type === 'control_request'), [], 'with no card');
+  assert.strictEqual(fs.readFileSync(file, 'utf-8'), closedAs, 'and no count');
+
+  // THE NEXT RUN of the same routine starts with no count, and the settled
+  // card is neither on it nor waiting in a window that opens now.
+  const next = await startHeld(KEEPER, 'token-open');
+  assert.notStrictEqual(next.run.id, run.id);
+  assert.notStrictEqual(next.own.request_id, open.card.request_id);
+  assert.strictEqual('refusedCards' in next.run, false, 'the next run starts with no count');
+  const fresh = await h.connect();
+  try {
+    const { msg: waiting } = await fresh.waitFor((m) => m.type === 'pending_permissions', { label: 'what a new window is told is waiting' });
+    assert.ok(waiting.requestIds.includes(next.own.request_id));
+    assert.strictEqual(waiting.requestIds.includes(open.card.request_id), false, 'the settled card is not waiting');
+  } finally { fresh.close(); }
+  answer(next.own, true);
+  assert.ok(await closedRun(next.run.id), 'the next run ends');
+  assert.strictEqual('refusedCards' in recordById(next.run.id), false, 'having closed with no open card, it has no count');
+  assert.strictEqual(fs.readFileSync(file, 'utf-8'), closedAs, 'and the earlier run is untouched');
+});
+
+// THE CONTROL FAILING: telling the windows throws, and one card's answer to
+// its hook cannot be written. The record still closes, with its outcome and
+// both cards counted, the hook that could not be answered is never let
+// through, and the server goes on answering.
+test('a card that cannot be settled cleanly as its run ends is still counted, and its hook is never let through', async () => {
+  h.writeScenario([{ match: { agent: KEEPER, promptIncludes: 'ends with settling broken' }, hooks: [readOutside()], turn: [{ text: 'Done.' }] }]);
+  await save(KEEPER, 'token-broken', 'ends with settling broken');
+  const { own, index, run, token } = await startHeld(KEEPER, 'token-broken');
+  const told = await openCard(token, index + 1);
+  const unwritable = await openCard(token, told.index + 1);
+  let letThrough = false;
+  unwritable.asked.then((res) => res.json()).then((body) => { letThrough = body.allow === true; }, () => {});
+  const stuck = pendingNow().get(unwritable.card.request_id).res;
+  stuck.writeHead = () => { throw new Error('the answer to the hook could not be written'); };
+  // The unanswered asker is let go at the end, whatever happens, so a
+  // failure here cannot leave a request open on the server.
+  try {
+    const prev = ROUTER.wireHttpRouterDeps({ safeSend: () => { throw new Error('the windows could not be told'); } });
+    try {
+      answer(own, true);
+      assert.ok(await closedRun(run.id), 'the run ends');
+    } finally { ROUTER.wireHttpRouterDeps({ safeSend: prev.safeSend }); }
+    const closedAs = recordById(run.id);
+    assert.strictEqual(closedAs.status, 'succeeded', 'the record closes with its outcome');
+    assert.strictEqual(closedAs.refusedCards, 2, 'and both cards counted');
+    assert.deepStrictEqual(await (await told.asked).json(), { allow: false, reason: 'run-ended' });
+    await h.delay(300);
+    assert.strictEqual(letThrough, false, 'the hook that could not be answered is never let through');
+    assert.strictEqual(pendingNow().has(unwritable.card.request_id), false);
+    assert.strictEqual((await permissionRequest('not-a-token')).status, 401, 'and the server goes on answering');
+  } finally { stuck.destroy(); }
+});
+
+// THE RACE: a denial, and a timeout, landing inside the close itself, after
+// the run's outcome is known and just before its open cards are settled. The
+// timer is caught as it is set, so it can be made to fire at that moment.
+// Either way the card is counted once.
+const RACE_TIMEOUT_MS = 987654;
+test('a denial or a timeout that lands as the run is closing is counted once', async () => {
+  h.writeScenario([{ match: { agent: KEEPER, promptIncludes: 'ends as a card settles' }, hooks: [readOutside()], turn: [{ text: 'Done.' }] }]);
+  await save(KEEPER, 'token-race', 'ends as a card settles');
+  const prev = schedulerLib.wireSchedulerDeps({});
+  const closing = async (land) => {
+    const { own, index, run, token } = await startHeld(KEEPER, 'token-race');
+    const open = await openCard(token, index + 1, RACE_TIMEOUT_MS);
+    schedulerLib.wireSchedulerDeps({ settleRunCards: (id) => { if (id === run.id) land(open.card.request_id); return prev.settleRunCards(id); } });
+    try {
+      answer(own, true);
+      assert.ok(await closedRun(run.id), 'the run ends');
+    } finally { schedulerLib.wireSchedulerDeps({ settleRunCards: prev.settleRunCards }); }
+    return { body: await (await open.asked).json(), record: recordById(run.id) };
+  };
+
+  const denied = await closing((requestId) => handlePermissionResponse({ pendingPermissions: pendingNow(), broadcast: () => {} }, { send() {} },
+    { requestId, conversationId: '', allow: false, card: true }));
+  assert.deepStrictEqual(denied.body, { allow: false }, 'the denial answered the asker');
+  assert.strictEqual(denied.record.refusedCards, 1, 'and the card is counted once, not again as the run closed');
+
+  const realSetTimeout = global.setTimeout;
+  let timer = null;
+  global.setTimeout = function (fn, ms, ...rest) {
+    const t = realSetTimeout.call(this, fn, ms, ...rest);
+    if (ms === RACE_TIMEOUT_MS) timer = { fn, t };
+    return t;
+  };
+  let timedOut;
+  try {
+    timedOut = await closing(() => { clearTimeout(timer.t); timer.fn(); });
+  } finally { global.setTimeout = realSetTimeout; }
+  assert.deepStrictEqual(timedOut.body, { allow: false, reason: 'timeout' }, 'the timeout answered the asker');
+  assert.strictEqual(timedOut.record.refusedCards, 1, 'and the card is counted once, not again as the run closed');
 });

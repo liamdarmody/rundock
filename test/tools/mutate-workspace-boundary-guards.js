@@ -232,7 +232,9 @@ const AUTH_SIGNIN = { src: path.join(ROOT, 'public', 'sign-in-model.js'), suite:
 // hook requests through the real route.
 const RUN_TOKEN_ROUTE = { src: path.join(ROOT, 'lib', 'http-router.js'), suite: 'test/unit/routine-run-token.test.js' };
 const RUN_TOKEN_SCHED = { src: path.join(ROOT, 'lib', 'scheduler.js'), suite: 'test/unit/scheduler-lib.test.js' };
-const RUN_TOKEN_CLOSED = { src: path.join(ROOT, 'lib', 'scheduler.js'), suite: 'test/integration/routine-run-token.test.js' };
+const RUN_END_CLOSE = { src: path.join(ROOT, 'lib', 'scheduler.js'), suite: 'test/integration/routine-run-token.test.js' };
+const RUN_END_ANSWER = { src: path.join(ROOT, 'lib', 'http-router.js'), suite: 'test/integration/routine-run-token.test.js' };
+const RUN_END_DENY = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'process-control.js'), suite: 'test/integration/routine-run-token.test.js' };
 const ANSWER_READ = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'process-control.js'), suite: 'test/unit/unattended-refusal.test.js' };
 // The key the Windows launcher makes and hands over, consumed and never echoed.
 const LAUNCHER = { src: path.join(ROOT, 'lib', 'auth', 'index.js'), suite: 'test/unit/launcher-code.test.js' };
@@ -1898,9 +1900,30 @@ const MUTATIONS = [
   [RUN_TOKEN_ROUTE, 'Run token: a late body is checked only for some run being found',
     '      if (run && (!still || still.id !== run.id)) {',
     '      if (run && !still) {'],
-  [RUN_TOKEN_CLOSED, 'Run token: a card settled after its run closed rewrites the closed record',
-    "  const run = typeof runId === 'string' ? liveRuns.get(runId) : null;\n  if (!run) return false;",
-    "  const run = typeof runId === 'string' ? (liveRuns.get(runId) || { id: runId, dir: runsDir() }) : null;\n  if (!run) return false;"],
+  [RUN_TOKEN_SCHED, 'Run end: a run\'s open cards are not settled as it closes',
+    '  try { deps.settleRunCards(run.id); } catch (e) {',
+    '  try { } catch (e) {'],
+  [RUN_TOKEN_SCHED, 'Run end: a settling that throws stops the record closing',
+    '  try { deps.settleRunCards(run.id); } catch (e) {',
+    '  { deps.settleRunCards(run.id); } if (0) { const e = 0;'],
+  [RUN_TOKEN_ROUTE, 'Run end: a card settled as its run ends stays open, so a later answer counts it again',
+    "    deps.pendingPermissionRequests().delete(requestId);\n    clearTimeout(pending.timer);\n    console.log(`[Permission] Refused (its run ended)",
+    "    clearTimeout(pending.timer);\n    console.log(`[Permission] Refused (its run ended)"],
+  [RUN_TOKEN_ROUTE, 'Run end: a card settled as its run ends lets its hook through',
+    "      pending.res.end(JSON.stringify({ allow: false, reason: 'run-ended' }));",
+    "      pending.res.end(JSON.stringify({ allow: true, reason: 'run-ended' }));"],
+  [RUN_END_CLOSE, 'Run end, through real runs: a run\'s open cards are not settled as it closes',
+    '  try { deps.settleRunCards(run.id); } catch (e) {',
+    '  try { } catch (e) {'],
+  [RUN_END_ANSWER, 'Run end, through real runs: a card settled as its run ends lets its hook through',
+    "      pending.res.end(JSON.stringify({ allow: false, reason: 'run-ended' }));",
+    "      pending.res.end(JSON.stringify({ allow: true, reason: 'run-ended' }));"],
+  [RUN_END_ANSWER, 'Run end, through real runs: a card settled as its run ends stays open, so a later answer counts it again',
+    "    deps.pendingPermissionRequests().delete(requestId);\n    clearTimeout(pending.timer);\n    console.log(`[Permission] Refused (its run ended)",
+    "    clearTimeout(pending.timer);\n    console.log(`[Permission] Refused (its run ended)"],
+  [RUN_END_DENY, 'Run end: a card a denial settled is counted again as its run closes',
+    '    ctx.pendingPermissions.delete(msg.requestId);\n',
+    ''],
   [RUN_TOKEN_SCHED, 'Run token: a run\'s token outlives its record',
     '  auth.retireRunHookToken(run.hookToken);\n',
     ''],
