@@ -25,15 +25,24 @@
 // a finished tool has nothing left to refuse. Input that cannot be read at all
 // is handled where it is parsed, below.
 let hookInput = '';
+// What a routine is told to do next, the same sentence as UNATTENDED_NEXT in
+// scripts/refusal-notice.js. Copied rather than required because this runs
+// when the hook could not load, which is when a require fails; held equal to
+// that one by test/unit/hook-never-crashes.test.js.
+const UNATTENDED_NEXT_UNLOADED = 'This run has nobody to ask, so carry on with the rest of the job without that step. If you cannot finish without it, make the last line of your final message: RUN STATUS: failed: <one-line reason>';
 function refuseUnanswered() {
   let event = 'PreToolUse';
   try { event = JSON.parse(hookInput).hook_event_name || event; } catch (e) { /* refused below */ }
   const deciding = process.env.RUNDOCK && event === 'PreToolUse';
+  const refused = 'Rundock could not check this request, so it was refused rather than approved on your behalf.';
   process.stdout.write(JSON.stringify(!deciding ? {} : {
     hookSpecificOutput: {
       hookEventName: 'PreToolUse',
       permissionDecision: 'deny',
-      permissionDecisionReason: 'Rundock could not check this request, so it was refused rather than approved on your behalf.',
+      // A routine, which has nobody to ask, is told what to do next as every
+      // other refusal tells it (unattendedRun, below: a declaration, so it is
+      // there before anything else in this file has run).
+      permissionDecisionReason: unattendedRun() ? `${refused} ${UNATTENDED_NEXT_UNLOADED}` : refused,
     },
   }));
   process.exit(0);
@@ -67,7 +76,7 @@ const { isReadOnlyShellCommand, isDestructiveShellCommand, shellSegments } = req
 const { codeModeVerdict, keychainVerdict } = require('./code-mode-verdict.js');
 const { lexSegments, lexWords, stripHeredocs, substitutions } = require('./code-mode-parse.js');
 const devPaths = require('./dev-paths.js');
-const { refusalNotice, approvalNotice, sandboxBlocked } = require('./refusal-notice.js');
+const { refusalNotice, unansweredNotice, approvalNotice, sandboxBlocked } = require('./refusal-notice.js');
 
 // One directory, several names. macOS keeps /tmp and /var as symlinks into
 // /private, Dropbox and iCloud vaults are commonly reached through a symlink
@@ -3070,7 +3079,7 @@ module.exports = {
   agentHomeRoot, codexHomeRoot, runtimeHomes,
   isWorkspaceAnswerFile, isRuntimeGuardedAnswerFile, isRundockConsolePath, RUNDOCK_CONSOLE_DIR,
   WORKSPACE_ANSWER_FILES, RUNDOCK_ANSWER_FILES, RUNTIME_GUARDED_ANSWER_FILES, LAUNCHER_FILES, WHAT_RUNS_FILES, WHAT_RUNS_DIRS,
-  boundaryCrossingsFor, CODE_READS_ALLOWED,
+  boundaryCrossingsFor, CODE_READS_ALLOWED, UNATTENDED_NEXT_UNLOADED,
   REFUSED_CLAUDE_EDIT_DIRS, isReadOnlyShellCommand, isRundockAnswerFileAnywhere, isRundockWorkspaceSettingsFile, isAnswerFileOfAnyWorkspace, otherWorkspaceRootOf, isOtherWorkspaceAgentSurface,
   INSTRUCTION_SURFACES, isInstructionSurface, hiddenHomeRootOf, alwaysAsksCrossing, SHELL_TOOLS, keychainPlatform,
 };
@@ -3611,7 +3620,7 @@ fetchAgentNotice((agentNotice) => {
       hookSpecificOutput: {
         hookEventName: 'PreToolUse',
         permissionDecision: failClosed ? 'deny' : 'allow',
-        permissionDecisionReason: failClosed ? `${reason} ${why}` : reason,
+        permissionDecisionReason: failClosed ? unansweredNotice(`${reason} ${why}`, { unattended: unattendedRun() }) : reason,
       }
     }));
     process.exit(0);

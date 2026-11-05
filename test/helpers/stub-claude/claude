@@ -659,9 +659,10 @@ function handleUserMessage(content) {
 // the tool, with this process's environment (the one Rundock started this
 // agent with, conversation and token included) and this session's id. Each
 // call waits for the one before it, as an agent's tool calls do. Every answer
-// is logged to `stub-hook-answers.jsonl` (cwd), in order, so a test reads what
-// the agent was told rather than inferring it. `event` defaults to PreToolUse;
-// `error` is a failed call's error, for PostToolUseFailure.
+// is logged to `stub-hook-answers.jsonl` (cwd), in order, with this process's
+// pid to tie it to its invocation, so a test reads what the agent was told
+// rather than inferring it. `event` defaults to PreToolUse; `error` is a failed
+// call's error, for PostToolUseFailure.
 const HOOK_LOG = path.join(process.cwd(), 'stub-hook-answers.jsonl');
 const PERMISSION_HOOK = path.join(__dirname, '..', '..', '..', 'scripts', 'permission-hook.js');
 function runHookCalls(calls, then) {
@@ -678,7 +679,7 @@ function runHookCalls(calls, then) {
     const log = (answer) => {
       try {
         fs.appendFileSync(HOOK_LOG, JSON.stringify({
-          agent: AGENT, sessionId: SESSION_ID, convo: process.env.RUNDOCK_CONVO_ID || null, event, tool: input.tool_name, answer, raw: answer ? undefined : out, ts: Date.now(),
+          pid: process.pid, agent: AGENT, sessionId: SESSION_ID, convo: process.env.RUNDOCK_CONVO_ID || null, event, tool: input.tool_name, answer, raw: answer ? undefined : out, ts: Date.now(),
         }) + '\n');
       } catch (e) { /* logging is best-effort */ }
       next();

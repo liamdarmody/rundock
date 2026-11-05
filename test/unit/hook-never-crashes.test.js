@@ -63,6 +63,25 @@ function runHookAgainst(port, payload, env = {}) {
 }
 const bash = (command) => ({ tool_name: 'Bash', tool_input: { command } });
 const decision = (r) => r.answer && r.answer.hookSpecificOutput && r.answer.hookSpecificOutput.permissionDecision;
+const reasonOf = (r) => r.answer && r.answer.hookSpecificOutput && r.answer.hookSpecificOutput.permissionDecisionReason;
+
+// A ROUTINE'S AGENT, which has nobody to ask, is started with no conversation
+// at all (getSpawnEnv(null) in lib/runtime/claude.js takes the name out), and a
+// conversation's with its id. However the hook fails, a routine is still told
+// what to do next in the words every refusal tells it, and a conversation
+// keeps its own. An undefined value is left out of the child's environment.
+const { refusalNotice, UNATTENDED_NEXT } = require('../../scripts/refusal-notice.js');
+const ROUTINE = { RUNDOCK_CONVO_ID: undefined };
+const CONVERSATION = { RUNDOCK_CONVO_ID: 'c1' };
+function assertRoutineWords(r) {
+  assert.strictEqual(decision(r), 'deny', r.answer && JSON.stringify(r.answer));
+  assert.ok(reasonOf(r).endsWith(` ${UNATTENDED_NEXT}`), `told what to do next: ${reasonOf(r)}`);
+  assert.ok(!/ask the person/.test(reasonOf(r)), 'and never told to ask anyone');
+}
+function assertConversationWords(r) {
+  assert.strictEqual(decision(r), 'deny', r.answer && JSON.stringify(r.answer));
+  assert.ok(!reasonOf(r).includes(UNATTENDED_NEXT), `a conversation keeps its words: ${reasonOf(r)}`);
+}
 
 // Every one of these holds a bracket with a range that runs backwards, which
 // the shell reads as an empty range and a regular expression refuses to compile.
@@ -138,6 +157,16 @@ describe('a word in a command cannot kill the hook', () => {
     assert.strictEqual(r.status, 0, 'the hook ran out of time');
     assert.strictEqual(decision(r), 'deny');
   });
+
+  test('the same word in a routine is refused in the routine\'s words, and in a conversation in its own', () => {
+    const command = bash(`security dump-keychain; rm .rundock/${'*'.repeat(40)}z`);
+    const routine = runHook(command, { timeout: 10000, env: ROUTINE });
+    assert.strictEqual(routine.status, 0, 'the hook ran out of time');
+    assertRoutineWords(routine);
+    const conversation = runHook(command, { timeout: 10000, env: CONVERSATION });
+    assert.strictEqual(conversation.status, 0, 'the hook ran out of time');
+    assertConversationWords(conversation);
+  });
 });
 
 describe('a reply cut short is not an answer', () => {
@@ -170,6 +199,65 @@ describe('a reply cut short is not an answer', () => {
       } finally { await close(server); }
     });
   }
+
+  test('a routine whose card reply never finishes is refused in the routine\'s words, a conversation in its own', async () => {
+    const server = await cutsOff('/api/permission-request');
+    try {
+      const port = server.address().port;
+      const routine = await runHookAgainst(port, bash('security dump-keychain'), ROUTINE);
+      assert.strictEqual(routine.status, 0);
+      assertRoutineWords(routine);
+      const conversation = await runHookAgainst(port, bash('security dump-keychain'), CONVERSATION);
+      assert.strictEqual(conversation.status, 0);
+      assertConversationWords(conversation);
+    } finally { await close(server); }
+  });
+
+  // A card nobody answers and a server that never replies: the hook's own
+  // wait runs out. The wait is five minutes, so a preload shortens it for
+  // this one run; the code that answers is the hook's own timeout branch.
+  test('a routine whose card is never answered at all is refused, in the routine\'s words, when the hook stops waiting', async () => {
+    const shortWait = path.join(root, 'short-wait.js');
+    fs.writeFileSync(shortWait, `
+      const http = require('http');
+      const request = http.request;
+      http.request = function (options, ...rest) {
+        return request.call(this, typeof options === 'object' ? { ...options, timeout: 300 } : options, ...rest);
+      };
+    `);
+    const held = [];
+    const server = await new Promise((resolve) => {
+      const s = http.createServer((req, res) => {
+        req.resume();
+        if (!req.url.startsWith('/api/permission-request')) { res.end('{}'); return; }
+        held.push(res);
+      });
+      s.listen(0, '127.0.0.1', () => resolve(s));
+    });
+    const run = (env) => new Promise((resolve) => {
+      const proc = spawn(process.execPath, ['--require', shortWait, HOOK], {
+        env: { ...process.env, NODE_V8_COVERAGE: '', RUNDOCK: '1', RUNDOCK_PORT: String(server.address().port), RUNDOCK_WORKSPACE: ws, RUNDOCK_CODE_MODE: '', RUNDOCK_TEST_SEAMS: '1', RUNDOCK_TEST_PLATFORM: 'darwin', ...env },
+      });
+      let out = '';
+      proc.stdout.on('data', (c) => { out += c; });
+      proc.on('close', (status) => {
+        let answer = null;
+        try { answer = JSON.parse(out); } catch (e) { /* asserted below */ }
+        resolve({ status, answer });
+      });
+      proc.stdin.end(JSON.stringify({ hook_event_name: 'PreToolUse', cwd: ws, session_id: 's', ...bash('security dump-keychain') }));
+    });
+    try {
+      const routine = await run(ROUTINE);
+      assert.strictEqual(routine.status, 0);
+      assert.strictEqual(held.length, 1, 'the card reached the server and was held there');
+      assert.strictEqual(decision(routine), 'deny');
+      assert.strictEqual(reasonOf(routine), refusalNotice('timeout', 'Bash', { unattended: true }));
+      const conversation = await run(CONVERSATION);
+      assert.strictEqual(decision(conversation), 'deny');
+      assert.strictEqual(reasonOf(conversation), refusalNotice('timeout', 'Bash'));
+    } finally { await close(server); }
+  });
 
   test('the same when the notice ahead of it never finishes', async () => {
     const server = await cutsOff('/api/agent-notice');
@@ -229,6 +317,26 @@ describe('anything else that goes wrong in the hook is a refusal', () => {
     const r = runHook(tool, { preload: throwsOnLoad });
     assert.strictEqual(r.status, 0, r.stderr);
     assert.strictEqual(decision(r), 'deny');
+  });
+
+  test('a routine is refused in the routine\'s words when judging fails, a conversation in the words it had', () => {
+    assertRoutineWords(runHook(tool, { preload: throwsOnRequest, env: ROUTINE }));
+    const conversation = runHook(tool, { preload: throwsOnRequest, env: CONVERSATION });
+    assertConversationWords(conversation);
+    assert.strictEqual(reasonOf(conversation), 'Rundock could not check this request, so it was refused rather than approved on your behalf.');
+  });
+
+  test('and the same when the hook cannot even load', () => {
+    assertRoutineWords(runHook(tool, { preload: throwsOnLoad, env: ROUTINE }));
+    const conversation = runHook(tool, { preload: throwsOnLoad, env: CONVERSATION });
+    assertConversationWords(conversation);
+    assert.strictEqual(reasonOf(conversation), 'Rundock could not check this request, so it was refused rather than approved on your behalf.');
+  });
+
+  // The hook that cannot load cannot require the wording either, so it holds
+  // its own copy; the two must never drift apart.
+  test('the copy a hook that cannot load uses is the sentence every refusal uses', () => {
+    assert.strictEqual(require(HOOK).UNATTENDED_NEXT_UNLOADED, UNATTENDED_NEXT);
   });
 
   test('outside Rundock the hook decides nothing, and that holds when it cannot load', () => {

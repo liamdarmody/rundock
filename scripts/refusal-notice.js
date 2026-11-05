@@ -51,6 +51,14 @@ function refusalNotice(kind, toolName, options) {
   return `${refused} Stop and ask the person what to do.`;
 }
 
+// A REFUSAL BECAUSE THE CHECK ITSELF FAILED (the server could not be reached,
+// or its reply never finished), for a call that is never made without asking.
+// A conversation keeps the words it had; a routine is told what to do next as
+// every other refusal tells it, because it has nobody to ask either way.
+function unansweredNotice(reason, options) {
+  return options && options.unattended === true ? `${reason} ${UNATTENDED_NEXT}` : reason;
+}
+
 // THE LINE AN AGENT IS GIVEN WHEN A PERSON APPROVED A CARD. An approval and a
 // question never asked look the same from inside a turn, so an agent that
 // reasons from the command having run can tell the person the safety check
@@ -79,4 +87,4 @@ function sandboxBlocked(toolName, toolInput, text, { codeMode = false, platform 
   return !sandboxOff && NOT_PERMITTED.test(out);
 }
 
-module.exports = { refusalNotice, approvalNotice, sandboxBlocked };
+module.exports = { refusalNotice, unansweredNotice, approvalNotice, sandboxBlocked, UNATTENDED_NEXT };
