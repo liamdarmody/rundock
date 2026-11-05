@@ -42,6 +42,19 @@ const MUTATIONS = [
   [ENDING, 'an ending that was not handed on is always recorded',
     '        if (!handedOn) {',
     '        if (false) {'],
+  // ===== WHAT IS KEPT OF STDERR IS ITS END =====
+  [ENDING, 'the ending reads the end of what the child wrote',
+    '    const now = readTail(capture.fd, fs.fstatSync(capture.fd).size, CAPTURE_BYTES);',
+    '    const now = readTail(capture.fd, Math.min(CAPTURE_BYTES, fs.fstatSync(capture.fd).size), CAPTURE_BYTES);'],
+  [ENDING, 'a cut keeps in memory the tail it read',
+    '      capture.kept = tail;',
+    '      capture.kept = null;'],
+  [ENDING, 'a cut empties the file rather than keeping its start',
+    '      fs.ftruncateSync(capture.fd, 0);',
+    '      fs.ftruncateSync(capture.fd, CAPTURE_BYTES);'],
+  [ENDING, 'the capture is cut back at all',
+    '      if (size <= CAPTURE_BYTES) return;',
+    '      return;'],
 ];
 
 function redTests(suite) {

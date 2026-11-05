@@ -1378,6 +1378,47 @@ for (let i = 0; i < ${CHUNKS}; i++) { require('fs').writeSync(2, b); Atomics.wai
   });
 });
 
+// THE CAPTURE KEEPS THE END. A real child prints 8 KB of something else and
+// refuses as Claude Code refuses: exiting at once, so nothing is cut and the
+// end of the file is read; or with a pause long enough for the capture to be
+// cut back either before the refusal is written, or after it, which puts the
+// refusal itself in memory and empties the file before the child exits. Each
+// way the refusal is what the ending reads, and the run falls back once with
+// the notice.
+for (const [when, order] of [
+  ['with no cut at all', 'noise, refusal'],
+  ['when the capture is cut back before the refusal', 'noise, pause, refusal'],
+  ['when the capture is cut back after the refusal', 'noise, refusal, pause'],
+]) {
+  test(`a refusal after 8 KB of other output is still read ${when}`, async () => {
+    const { spawn } = require('node:child_process');
+    const steps = {
+      noise: "fs.writeSync(2, 'warning: something else entirely\\n'.repeat(256));",
+      pause: 'Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 300);',
+      refusal: "fs.writeSync(2, \"--agent 'Runner' not found. Available agents: claude, Explore\\n\");",
+    };
+    const CHILD = `const fs = require('fs'); ${order.split(', ').map(x => steps[x]).join(' ')} process.exit(1);`;
+    await withTempWorkspaceAsync(async (ws) => {
+      await withTempHomeAsync(async () => {
+        const spawns = [];
+        await withFakeSpawn((args, options) => {
+          spawns.push(args);
+          if (spawns.length === 1) return spawn(process.execPath, ['-e', CHILD], { stdio: options.stdio });
+          const child = new EventEmitter();
+          setImmediate(() => child.emit('close', 0));
+          return child;
+        }, async (sched) => {
+          sched.executeRoutine({ ...AGENT, fileName: 'runner.md', description: 'Runs' }, ROUTINE, KEY);
+          assert.ok(await until(() => sched.routineState[KEY] && sched.routineState[KEY].status !== 'running', 600), 'the run ended');
+          assert.strictEqual(spawns.length, 2, 'the agent, refused, then one plain session');
+          const [record] = runRecords(ws);
+          assert.match(record.notice, /Claude Code said: --agent 'Runner' not found\./, 'the refusal was read from the end');
+        });
+      });
+    });
+  });
+}
+
 // A start that threw is an ending too, and it has to leave the run
 // unreachable. A handle left in the map would answer every later stop with yes
 // while signalling at a process id that no longer belongs to anything of ours.

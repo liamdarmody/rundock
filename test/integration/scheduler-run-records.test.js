@@ -1211,6 +1211,26 @@ test('any other failure is recorded as it always was, and starts nothing else', 
   });
 });
 
+// The refusal is the last thing Claude Code writes, after whatever it printed
+// first. A child that printed 8 KB of something else and then refused is
+// still recognized, because what is kept of stderr is its end.
+test('a refusal after 8 KB of other output on stderr still falls back once, with the notice', async (t) => {
+  h.writeScenario(STUB_RULES, { loadAgentFiles: true, refusalPreamble: `${'warning: something else entirely\n'.repeat(256)}` });
+  try {
+    begin(37, [UNDESCRIBED]);
+    h.clearInvocations();
+    driveTicks(t);
+    assert.ok(await settled(UNDESCRIBED));
+    assert.strictEqual(spawnsFor('undescribed sweep body').length, 2, 'the agent, refused, then one plain session');
+    const [rec] = records();
+    assertFallbackRecord(rec, 'undescribed.md');
+    assert.match(rec.notice, /Claude Code said: --agent 'undescribed' not found\./, 'with what Claude Code said, read from the end');
+    assert.deepStrictEqual(capturesLeft(), []);
+  } finally {
+    h.writeScenario(STUB_RULES);
+  }
+});
+
 // Both halves, or no fallback. A plain session runs without the file's
 // tools: line, so only Claude Code's own refusal of this agent, before any
 // session existed, earns one. The refusal line alone does not: a run whose

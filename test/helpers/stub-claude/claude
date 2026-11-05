@@ -413,6 +413,9 @@ const AGENT_NOT_LOADED = (() => {
   const agents = require(path.join(__dirname, '..', 'claude-code-agents.js'));
   const available = agents.loadableAgentNames(process.cwd());
   if (available.includes(AGENT)) return false;
+  // `refusalPreamble`, as for a refused resume: whatever Claude Code printed
+  // before it refused, which puts the refusal last.
+  if (TOP.refusalPreamble) writeErr(String(TOP.refusalPreamble));
   writeErr(`${agents.agentNotFoundLine(AGENT, available)}\n`);
   exitWhenWritten(1);
   return true;
