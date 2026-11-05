@@ -1202,6 +1202,42 @@ test('closing a restart-orphaned record writes nothing to the value double-fire 
 // whose process died never ends. So the startup close that closes its record
 // removes that file too, and leaves alone the capture of a run still going in
 // the process doing the closing.
+// A PLAIN SESSION THAT CANNOT EVEN START, after Claude Code could not load the
+// agent file, is the run's outcome. It is recorded as failed with the reason
+// the start gave, the notice stays on the record, the routine is released,
+// and nothing is tried a third time.
+test('a fallback whose plain session cannot start is recorded as failed with its reason, and keeps its notice', async () => {
+  await withTempWorkspaceAsync(async (ws) => {
+    await withTempHomeAsync(async () => {
+      const spawns = [];
+      await withFakeSpawn((args, options) => {
+        spawns.push(args);
+        if (spawns.length > 1) throw new Error('spawn refused');
+        // What Claude Code writes when it cannot load the file, into the
+        // capture the scheduler handed the child, and then its exit code.
+        const child = new EventEmitter();
+        fs.writeSync(options.stdio[2], "--agent 'Runner' not found. Available agents: claude, Explore\n");
+        setImmediate(() => child.emit('close', 1));
+        return child;
+      }, async (sched) => {
+        sched.executeRoutine({ ...AGENT, fileName: 'runner.md', description: 'Runs' }, ROUTINE, KEY);
+        assert.ok(await until(() => sched.routineState[KEY] && sched.routineState[KEY].status !== 'running'), 'the run ended');
+
+        assert.strictEqual(spawns.length, 2, 'the agent, then one plain session, and nothing after it');
+        assert.ok(spawns[0].includes('--agent'), 'started as its agent');
+        assert.ok(!spawns[1].includes('--agent'), 'then as a plain session');
+        assert.strictEqual(sched.routineState[KEY].status, 'failed', 'and the routine is released as failed');
+        const [record] = runRecords(ws);
+        assert.strictEqual(record.status, 'failed');
+        assert.strictEqual(record.error, 'spawn refused', 'with the reason the plain session gave');
+        assert.match(record.notice, /could not load the agent file \.claude\/agents\/runner\.md/, 'and the notice kept');
+        assert.deepStrictEqual(fs.readdirSync(path.join(ws, '.rundock', 'runs')).filter(n => !n.endsWith('.json')), [],
+          'with no capture left behind');
+      });
+    });
+  });
+});
+
 test('a capture a dead process left beside its record is removed when the record is closed', async () => {
   await withTempWorkspaceAsync(async (ws) => {
     await withTempHomeAsync(async () => {
