@@ -57,8 +57,9 @@ const STUMBLER = 'stumbler:stumble';
 const LOCKED_OUT = 'locked-out:check';
 const LATECOMER = 'latecomer:check';
 const IMPOSTOR = 'impostor:check';
+const ESCAPEE = 'escapee:check';
 const ALL = [KEEPER, TWINS, FAULTY, CRASHER, CODEX, MISMATCH, RENAMED,
-  UNLOADABLE, UNDESCRIBED, NAMELESS, RETRIER, RELAPSER, STUMBLER, LOCKED_OUT, LATECOMER, IMPOSTOR];
+  UNLOADABLE, UNDESCRIBED, NAMELESS, RETRIER, RELAPSER, STUMBLER, LOCKED_OUT, LATECOMER, IMPOSTOR, ESCAPEE];
 
 const KEEPER_BODY = 'keeper routine body';
 const TWIN_EARLY = 'twin early body';
@@ -70,6 +71,9 @@ const MISMATCH_BODY = 'mismatched routine body';
 // colon and a space inside a nested value: Claude Code drops the whole file.
 const UNLOADABLE_BODY = 'Summarize: inbox and calendar';
 const RETRY_FAILED_REASON = 'the inbox could not be reached';
+// A quoted escape for a code point past U+10FFFF, as written in the file and
+// as Rundock sends it, quotes and all. Claude Code refuses the file.
+const ESCAPEE_BODY = '"\\U00110000"';
 
 // September 2026, local components, so the fixture is timezone-independent.
 function dayAt(day, hour, minute) { return new Date(2026, 8, day, hour, minute, 0); }
@@ -206,6 +210,13 @@ before(async () => {
         name: 'impostor', description: 'Loads, and prints a refusal of another agent', type: 'specialist', order: 15,
         routines: [{ name: 'check', schedule: 'every day at 05:00', prompt: 'impostor body', enabled: true }],
       }),
+      // A routine prompt holding an escape past the last code point Unicode
+      // has, written by hand. Claude Code refuses the file.
+      escapee: [
+        '---', 'name: escapee', 'description: Has an escape Claude Code cannot read', 'type: specialist', 'order: 16',
+        'routines:', '  - name: check', '    schedule: every day at 05:00', `    prompt: ${ESCAPEE_BODY}`, '    enabled: true',
+        '---', '', 'You are the escapee.', '',
+      ].join('\n'),
       // No name line at all, which agentFile cannot write. Rundock knows the
       // agent by its file name; Claude Code drops a file with no name.
       nameless: [
@@ -1314,3 +1325,25 @@ for (const [how, label] of [['created', 'cannot be created'], ['planted', 'meets
     assert.deepStrictEqual(capturesLeft(), [], 'nothing is left in the runs folder');
   });
 }
+
+// An agent file the reader used to throw on: an escape for a code point past
+// the last one Unicode has. With what Claude Code said unreadable, the file is
+// what is asked, and the asking must end in an outcome rather than an
+// exception out of the handler that ends the run, which would leave the run
+// open or take the server down. Claude Code refuses the file, so the run falls
+// back once, and the server goes on answering.
+test('a file the reader once threw on, with the capture unreadable, still ends the run, and the server stays up', async (t) => {
+  captureFails(t, 'created');
+  await loadingAgentFiles(async () => {
+    begin(36, [ESCAPEE]);
+    h.clearInvocations();
+    driveTicks(t);
+    assert.ok(await settled(ESCAPEE), 'the run reached an outcome');
+    assert.strictEqual(spawnsFor(ESCAPEE_BODY).length, 2, 'Claude Code refuses the file, so it fell back once');
+    const [rec] = records();
+    assertFallbackRecord(rec, 'escapee.md');
+    assert.match(rec.notice, /What Claude Code said could not be read/);
+    const res = await fetch(`http://127.0.0.1:${h.port}/`, { headers: h.authHeaders() });
+    assert.strictEqual(res.status, 200, 'and the server is still answering');
+  });
+});

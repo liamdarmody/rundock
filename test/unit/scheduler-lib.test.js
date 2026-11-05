@@ -1274,43 +1274,75 @@ test('a capture a dead process left beside its record is removed when the record
 
 // WHAT THE FILE CHECK CANNOT JUDGE, IT DOES NOT CALL BROKEN. With nothing
 // read from Claude Code, the agent file is asked instead, and a file Rundock
-// cannot read, or one holding YAML outside the rules it was measured by, is
-// not called refused: that would run the routine without its tools: line on
-// a guess. The run fails once, in plain words.
-test('with nothing read from Claude Code, a file the rules cannot judge is not run again without its agent', async (t) => {
+// cannot read, one holding YAML outside the rules it was measured by, or one
+// the reader throws on, is not called refused: that would run the routine
+// without its tools: line on a guess. The run fails once, in plain words, and
+// a throw from the reader goes no further than the check.
+const LOAD_KEY = require.resolve('../../lib/agents/claude-code-load.js');
+const UNREADABLE = { label: 'a file Rundock cannot read', text: null };
+const UNMODELED = { label: 'YAML the rules do not model', text: '---\nname: Runner\ndescription: Runs\nroutines:\n  - name: r\n    prompt: &p do it\n---\n' };
+const READER_THROWS = { label: 'a reader that throws', text: '---\nname: Runner\ndescription: Runs\n---\n', throws: true };
+// Capture unopenable, the agent file as the case has it, and a first child
+// that exits 1 before any session. Returns the spawns and the run's record.
+async function runWithoutStderr(t, { text, throws }, end = (child) => setImmediate(() => child.emit('close', 1))) {
   const realOpen = fs.openSync;
   t.mock.method(fs, 'openSync', function (file, ...rest) {
     if (String(file).endsWith('.stderr')) throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
     return realOpen.call(fs, file, ...rest);
   });
-  for (const [label, text] of [
-    ['a file Rundock cannot read', null],
-    ['YAML the rules do not model', '---\nname: Runner\ndescription: Runs\nroutines:\n  - name: r\n    prompt: &p do it\n---\n'],
-  ]) {
-    await withTempWorkspaceAsync(async (ws) => {
-      await withTempHomeAsync(async () => {
-        if (text) {
-          fs.mkdirSync(path.join(ws, '.claude', 'agents'), { recursive: true });
-          fs.writeFileSync(path.join(ws, '.claude', 'agents', 'runner.md'), text);
-        }
-        const spawns = [];
-        await withFakeSpawn((args) => {
-          spawns.push(args);
-          const child = new EventEmitter();
-          setImmediate(() => child.emit('close', 1));
-          return child;
-        }, async (sched) => {
-          sched.executeRoutine({ ...AGENT, fileName: 'runner.md', description: 'Runs' }, ROUTINE, KEY);
-          assert.ok(await until(() => sched.routineState[KEY] && sched.routineState[KEY].status !== 'running'), `${label}: the run ended`);
-          assert.strictEqual(spawns.length, 1, `${label}: one child, and no plain session after it`);
-          const [record] = runRecords(ws);
-          assert.strictEqual(record.status, 'failed', label);
-          assert.strictEqual(record.error, 'Claude Code stopped before the session started, and Rundock could not read why.', label);
-          assert.ok(!('notice' in record), `${label}: and no notice`);
-        });
+  const load = require(LOAD_KEY);
+  const realRead = load.readAgentFile;
+  if (throws) load.readAgentFile = () => { throw new RangeError('the reader broke'); };
+  try {
+    return await withTempWorkspaceAsync(async (ws) => withTempHomeAsync(async () => {
+      if (text) {
+        fs.mkdirSync(path.join(ws, '.claude', 'agents'), { recursive: true });
+        fs.writeFileSync(path.join(ws, '.claude', 'agents', 'runner.md'), text);
+      }
+      const spawns = [];
+      return withFakeSpawn((args) => {
+        spawns.push(args);
+        const child = new EventEmitter();
+        end(child);
+        return child;
+      }, async (sched) => {
+        sched.executeRoutine({ ...AGENT, fileName: 'runner.md', description: 'Runs' }, ROUTINE, KEY);
+        const ended = await until(() => sched.routineState[KEY] && sched.routineState[KEY].status !== 'running');
+        return { ended, spawns, record: runRecords(ws)[0], state: sched.routineState[KEY] };
       });
-    });
+    }));
+  } finally {
+    load.readAgentFile = realRead;
   }
+}
+
+for (const c of [UNREADABLE, UNMODELED, READER_THROWS]) {
+  test(`with nothing read from Claude Code, ${c.label} is not run again without its agent`, async (t) => {
+    const { ended, spawns, record } = await runWithoutStderr(t, c);
+    assert.ok(ended, 'the run ended');
+    assert.strictEqual(spawns.length, 1, 'one child, and no plain session after it');
+    assert.strictEqual(record.status, 'failed');
+    assert.match(record.error, /^Claude Code stopped before the session started, and Rundock could not read why\./);
+    assert.ok(!('notice' in record), 'and no notice');
+  });
+}
+
+// EVERY CLOSE ENDS IN AN OUTCOME. A throw anywhere in settling how a run
+// ended, here forced on the way into the plain session, is caught in the
+// handler: the run is recorded as failed with that reason, the routine is
+// released, and nothing escapes to take the process down.
+test('a throw while settling how a run ended still records the run, and escapes nothing', async (t) => {
+  const realLog = console.log;
+  t.mock.method(console, 'log', (...args) => {
+    if (String(args[0]).includes('runs once as a plain session')) throw new Error('forced while handing on');
+    return realLog.apply(console, args);
+  });
+  const { ended, spawns, record, state } = await runWithoutStderr(t, { text: '---\nname: Runner\n---\n' });
+  assert.ok(ended, 'the run ended');
+  assert.strictEqual(state.status, 'failed', 'and the routine is released');
+  assert.strictEqual(spawns.length, 1, 'the plain session never started');
+  assert.strictEqual(record.status, 'failed');
+  assert.strictEqual(record.error, 'forced while handing on', 'with the reason the throw gave');
 });
 
 // A CHILD THAT WRITES WITHOUT END TO STDERR IS NEVER MADE TO WAIT, AND NEVER

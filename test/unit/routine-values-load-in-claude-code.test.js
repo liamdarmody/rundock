@@ -167,6 +167,17 @@ describe('the model of Claude Code\'s reading refuses what Claude Code refuses',
     });
   }
 
+  // A code point past the last one Unicode has, written as an escape. Claude
+  // Code refuses the file; a reader that threw here instead would take down
+  // whatever asked it, which is the scheduler deciding how a run ended.
+  test('an escape for a code point past U+10FFFF is refused, and nothing is thrown', () => {
+    const read = readAgentFile(nested('prompt: "\\U00110000"'));
+    assert.strictEqual(read.loads, false);
+    assert.match(read.why, /past the last code point Unicode has/);
+    assert.ok(!read.unmodeled, 'a refusal the reading makes, not one it could not judge');
+    assert.strictEqual(readAgentFile(nested('prompt: "\\U0010FFFF"')).loads, true, 'while the last one there is still loads');
+  });
+
   test('a starter prompt with a stray quote drops the file too', () => {
     const read = readAgentFile('---\nname: lead\ndescription: Runs the team\nprompts:\n  - "First" prompt\n---\n');
     assert.strictEqual(read.loads, false);
