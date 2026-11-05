@@ -10,8 +10,9 @@
 // routine it is a run that cannot start as its agent.
 //
 // So every value is judged twice here. Claude Code's reading, which no test
-// can run, is the model in test/helpers/claude-code-agents.js: a strict YAML
-// reader that refuses what a YAML reader refuses, and nothing it cannot read.
+// can run, is lib/agents/claude-code-load.js: a strict YAML reader that
+// refuses what a YAML reader refuses, held to a record of the real CLI by
+// test/unit/claude-cli-agent-load.test.js.
 // Rundock's reading is its own parser, and a value has to come back from it
 // exactly as it went in: quoting is how a value is written, never part of it.
 const { test, describe } = require('node:test');

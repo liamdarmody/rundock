@@ -19,11 +19,16 @@
 // Every assertion here reads a real child's argument list, because the flag is
 // the whole of what decides this.
 //
-// THE STUB READS EACH FILE AS CLAUDE CODE DOES (loadAgentFiles, and the model
-// in test/helpers/claude-code-agents.js), and refuses an --agent no file
+// THE STUB READS EACH FILE AS CLAUDE CODE DOES (loadAgentFiles, and the
+// reading in lib/agents/claude-code-load.js), and refuses an --agent no file
 // loads for, with Claude Code's own line and exit code. So every run here that
 // passes is a run whose file loads; what happens to one that does not is in
 // scheduler-run-records.test.js.
+//
+// That a file started this way has its `tools:` line applied is measured
+// rather than assumed: test/unit/claude-cli-agent-load.test.js holds a record
+// of the real CLI, in which an agent whose `tools:` line leaves out Bash was
+// not offered Bash and could not run it.
 const { test, before, after } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
