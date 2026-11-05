@@ -9,12 +9,16 @@
 // another live run's session, a Task subagent's call, and a call from a
 // `claude` started in the run's own shell (with a session of its own, or none)
 // are each the run's, and counted on it. A token whose run has ended is
-// refused as unknown, and changes no count.
+// refused as unknown, and changes no count, even on a request that began while
+// the run was going and held its body back until after. A card still open
+// when its run ends answers its asker, and never writes to the closed record.
 const { test, before, after } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
+const http = require('node:http');
 const path = require('node:path');
 const h = require('../helpers/harness.js');
+const ROUTER = require('../../lib/http-router.js');
 const { agentFile, makeTempDir } = require('../helpers/workspace.js');
 const { refusalNotice } = require('../../scripts/refusal-notice.js');
 
@@ -50,6 +54,37 @@ const tokenOf = (record) => {
   return inv && inv.env.RUNDOCK_HOOK_TOKEN;
 };
 const UNATTENDED_DENIED = refusalNotice('denied', 'Bash', { unattended: true });
+const LATE = { tool_name: 'Bash', tool_input: { command: 'sh late.sh' } };
+const permissionRequest = (token, body = LATE) => fetch(`http://127.0.0.1:${h.port}/api/permission-request`, {
+  method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Rundock-Hook-Token': token }, body: JSON.stringify(body),
+});
+const answer = (card, allow) => client.send({ type: 'permission_response', requestId: card.request_id, conversationId: '', allow, card: true });
+const recordById = (id) => records().find((r) => r.id === id);
+const recordFile = (id) => fs.readdirSync(runsDir()).map((n) => path.join(runsDir(), n)).find((p) => p.endsWith('.json') && JSON.parse(fs.readFileSync(p, 'utf-8')).id === id);
+
+// A request sent with a run's token whose body is held back: its headers and
+// the start of its body go at once, the rest when `finish` is called. Resolves
+// once the route has looked the token up, so the run was going when it began.
+async function held(token, body = LATE) {
+  const text = JSON.stringify(body);
+  let looked = false;
+  const prev = ROUTER.wireHttpRouterDeps({});
+  ROUTER.wireHttpRouterDeps({ routineRun: (id) => { looked = true; return prev.routineRun(id); } });
+  try {
+    const req = http.request({
+      host: '127.0.0.1', port: h.port, path: '/api/permission-request', method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(text), 'X-Rundock-Hook-Token': token },
+    });
+    const answered = new Promise((resolve) => {
+      req.on('response', (res) => { let b = ''; res.on('data', (d) => { b += d; }); res.on('end', () => resolve({ status: res.statusCode, body: JSON.parse(b) })); });
+      req.on('error', (e) => resolve({ error: e.code }));
+    });
+    req.write(text.slice(0, 10));
+    if (!await h.waitUntil(() => looked)) req.destroy();
+    assert.ok(looked, 'the route looked the token up while the run was going');
+    return { answered, finish: () => req.end(text.slice(10)), abort: () => req.destroy() };
+  } finally { ROUTER.wireHttpRouterDeps({ routineRun: prev.routineRun }); }
+}
 
 async function save(agentId, name, prompt) {
   client.send({ type: 'save_routine', agentId, routine: { name, schedule: 'every day at 07:00', prompt, runOn: 'local' } });
@@ -145,4 +180,79 @@ test('a Task subagent\'s call and a nested claude\'s, carrying the run\'s token,
   assert.deepStrictEqual(told.map((x) => [x.subagent, x.sentSession]), [[subagent, run.sessionId], [null, 'nested-claude-session'], [null, null]],
     'the hook really sent a subagent\'s call, another session, and none');
   for (const x of told) assert.strictEqual(x.answer.hookSpecificOutput.permissionDecisionReason, UNATTENDED_DENIED);
+});
+
+test('a request held back through the end of its run is refused when it finishes during the routine\'s next run, and counts on neither', async () => {
+  h.writeScenario([{ match: { agent: KEEPER, promptIncludes: 'runs twice' }, hooks: [readOutside()], turn: [{ text: 'Done.' }] }]);
+  await save(KEEPER, 'token-again', 'runs twice');
+  let since = client.messages.length;
+  press(KEEPER, 'token-again');
+  const { msg: first } = await client.waitFor((m) => m.type === 'control_request' && m._run, { since, label: 'the first run\'s card' });
+  const firstRun = recordById(first._run.id);
+  const request = await held(tokenOf(firstRun));
+  answer(first, true);
+  assert.ok(await h.waitUntil(() => recordById(firstRun.id).status !== 'running', { timeout: 15000 }), 'the first run ends');
+
+  since = client.messages.length;
+  press(KEEPER, 'token-again');
+  const { msg: second, index } = await client.waitFor((m) => m.type === 'control_request' && m._run && m._run.id !== firstRun.id, { since, label: 'the next run\'s card' });
+  assert.strictEqual(recordById(second._run.id).status, 'running', 'the same routine is going again');
+
+  request.finish();
+  // Whichever comes first: the answer, a card the held request filed, or
+  // three seconds of neither. A stray card is refused at once and a request
+  // left unanswered is dropped, so none is left waiting.
+  const stray = h.waitUntil(() => client.messages.slice(index + 1).some((m) => m.type === 'control_request'), { timeout: 3000 });
+  const out = await Promise.race([request.answered, stray.then(() => null)]);
+  const filed = client.messages.slice(index + 1).filter((m) => m.type === 'control_request');
+  for (const card of filed) answer(card, false);
+  assert.deepStrictEqual(filed, [], 'the held request files no card, on the run it began in or the one going now');
+  if (!out) request.abort();
+  assert.strictEqual((out || await request.answered).status, 401, 'refused as an unknown token is');
+
+  answer(second, true);
+  assert.ok(await h.waitUntil(() => recordById(second._run.id).status !== 'running', { timeout: 15000 }), 'the next run ends');
+  for (const id of [firstRun.id, second._run.id]) assert.strictEqual('refusedCards' in recordById(id), false, 'and neither run counts a refusal');
+});
+
+// THE RUN ENDS WHILE ONE OF ITS CARDS IS OPEN: here a request sent with the
+// run's token, whose asker outlives the run. The card stays answerable, and
+// whatever settles it after the close, a denial or the timeout, answers the
+// asker and never writes to the closed record.
+test('a run that ends while one of its cards is open keeps its record as it closed, whether the card is then denied or times out', async () => {
+  h.writeScenario([{ match: { agent: KEEPER, promptIncludes: 'ends with cards open' }, hooks: [readOutside()], turn: [{ text: 'Done.' }] }]);
+  await save(KEEPER, 'token-open', 'ends with cards open');
+  let since = client.messages.length;
+  press(KEEPER, 'token-open');
+  const { msg: own, index } = await client.waitFor((m) => m.type === 'control_request' && m._run, { since, label: 'the run\'s own card' });
+  const run = recordById(own._run.id);
+  const token = tokenOf(run);
+
+  since = index + 1;
+  const denied = permissionRequest(token);
+  const { msg: toDeny, index: at } = await client.waitFor((m) => m.type === 'control_request' && m.request_id !== own.request_id, { since, label: 'the card to deny' });
+  const prev = ROUTER.wireHttpRouterDeps({ getPermissionTimeoutMs: () => 3000 });
+  let timedOut;
+  try {
+    timedOut = permissionRequest(token).then((res) => res.json());
+    await client.waitFor((m) => m.type === 'control_request' && m.request_id !== toDeny.request_id, { since: at + 1, label: 'the card to time out' });
+  } finally { ROUTER.wireHttpRouterDeps({ getPermissionTimeoutMs: prev.getPermissionTimeoutMs }); }
+  let settled = false;
+  timedOut.then(() => { settled = true; });
+
+  answer(own, true);
+  assert.ok(await h.waitUntil(() => recordById(run.id).status !== 'running', { timeout: 15000 }), 'the run ends');
+  assert.strictEqual(settled, false, 'with both cards still open');
+  const file = recordFile(run.id);
+  const closedAs = fs.readFileSync(file, 'utf-8');
+  assert.strictEqual('refusedCards' in JSON.parse(closedAs), false);
+
+  answer(toDeny, false);
+  assert.deepStrictEqual(await (await denied).json(), { allow: false }, 'a denial after the close still answers the asker');
+  await h.delay(200);
+  assert.strictEqual(fs.readFileSync(file, 'utf-8'), closedAs, 'and leaves the record as it closed');
+
+  assert.deepStrictEqual(await timedOut, { allow: false, reason: 'timeout' }, 'so does the timeout');
+  await h.delay(200);
+  assert.strictEqual(fs.readFileSync(file, 'utf-8'), closedAs, 'and it too leaves the record as it closed');
 });

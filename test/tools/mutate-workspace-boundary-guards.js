@@ -232,6 +232,7 @@ const AUTH_SIGNIN = { src: path.join(ROOT, 'public', 'sign-in-model.js'), suite:
 // hook requests through the real route.
 const RUN_TOKEN_ROUTE = { src: path.join(ROOT, 'lib', 'http-router.js'), suite: 'test/unit/routine-run-token.test.js' };
 const RUN_TOKEN_SCHED = { src: path.join(ROOT, 'lib', 'scheduler.js'), suite: 'test/unit/scheduler-lib.test.js' };
+const RUN_TOKEN_CLOSED = { src: path.join(ROOT, 'lib', 'scheduler.js'), suite: 'test/integration/routine-run-token.test.js' };
 const ANSWER_READ = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'process-control.js'), suite: 'test/unit/unattended-refusal.test.js' };
 // The key the Windows launcher makes and hands over, consumed and never echoed.
 const LAUNCHER = { src: path.join(ROOT, 'lib', 'auth', 'index.js'), suite: 'test/unit/launcher-code.test.js' };
@@ -1888,6 +1889,18 @@ const MUTATIONS = [
   [RUN_TOKEN_ROUTE, 'Run token: a run lookup that fails is not caught',
     "  try {\n    const runId = auth.hookRunOf(req);\n    return (runId && deps.routineRun(runId)) || null;\n  } catch (e) {",
     "  {\n    const runId = auth.hookRunOf(req);\n    return (runId && deps.routineRun(runId)) || null;\n  } if (0) { const e = 0;"],
+  [RUN_TOKEN_ROUTE, 'Run token: a late body files its card on a run that has since ended',
+    '      if (run && (!still || still.id !== run.id)) {',
+    '      if (false) {'],
+  [RUN_TOKEN_ROUTE, 'Run token: a late body is checked only for its token still being issued',
+    '      if (run && (!still || still.id !== run.id)) {',
+    '      if (run && !auth.hookRunOf(req)) {'],
+  [RUN_TOKEN_ROUTE, 'Run token: a late body is checked only for some run being found',
+    '      if (run && (!still || still.id !== run.id)) {',
+    '      if (run && !still) {'],
+  [RUN_TOKEN_CLOSED, 'Run token: a card settled after its run closed rewrites the closed record',
+    "  const run = typeof runId === 'string' ? liveRuns.get(runId) : null;\n  if (!run) return false;",
+    "  const run = typeof runId === 'string' ? (liveRuns.get(runId) || { id: runId, dir: runsDir() }) : null;\n  if (!run) return false;"],
   [RUN_TOKEN_SCHED, 'Run token: a run\'s token outlives its record',
     '  auth.retireRunHookToken(run.hookToken);\n',
     ''],

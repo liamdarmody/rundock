@@ -7,10 +7,12 @@
 // not `session_id`, which a Task subagent shares with its parent and a
 // `claude` started from the run's own shell does not, and not anything else.
 // A token whose run has ended is refused as unknown, and a lookup that fails
-// refuses the request rather than filing it with no run. A conversation's
-// token is issued and checked exactly as before.
+// refuses the request rather than filing it with no run. The token is looked
+// up again once the body has arrived, so a request that held its body back
+// until its run had ended files nothing. A conversation's token is issued and
+// checked exactly as before.
 //
-// Each case runs Rundock's real permission hook as its own process, with the
+// Most cases run Rundock's real permission hook as its own process, with the
 // environment the scheduler starts a routine with (getSpawnEnv), against the
 // real route, the way test/unit/hook-never-crashes.test.js drives the hook.
 const { test, describe, before, after } = require('node:test');
@@ -65,6 +67,7 @@ before(async () => {
   prevRt = claudeRt.wireClaudeRuntimeDeps({ getActualPort: () => port });
 });
 after(async () => {
+  server.closeAllConnections();
   await new Promise((r) => server.close(r));
   router.wireHttpRouterDeps(prevRouter);
   claudeRt.wireClaudeRuntimeDeps(prevRt);
@@ -244,6 +247,155 @@ describe('a token with no live run behind it is refused, and files nothing', () 
       const { card } = await askAndDeny(routineEnv(token), outsideRead('session-of-run-a'));
       assert.deepStrictEqual(card._run, RUNS.get('run-a'), 'and the next request is the run\'s again');
     } finally { lookup = liveRun; auth.retireRunHookToken(token); }
+  });
+});
+
+// A request whose body is held back. The headers and the start of the body go
+// at once, and the route looks the token up as they arrive; the rest goes only
+// when `finish` is called, and `abort` drops the connection instead.
+async function held(token, body) {
+  const text = JSON.stringify(body);
+  const n = lookups;
+  const req = http.request({
+    host: '127.0.0.1', port, path: '/api/permission-request', method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(text), [auth.HOOK_HEADER]: token },
+  });
+  const answered = new Promise((resolve) => {
+    req.on('response', (res) => {
+      let b = '';
+      res.on('data', (d) => { b += d; });
+      res.on('end', () => resolve({ status: res.statusCode, body: JSON.parse(b) }));
+    });
+    req.on('error', (e) => resolve({ error: e.code }));
+  });
+  req.write(text.slice(0, 10));
+  try { await waitFor(() => lookups > n); } catch (e) { req.destroy(); throw e; }
+  return { answered, finish: () => req.end(text.slice(10)), abort: () => req.destroy() };
+}
+const LATE = { tool_name: 'Bash', tool_input: { command: 'sh late.sh' }, session_id: 'session-of-run-a' };
+const send = (token, body = LATE) => fetch(`http://127.0.0.1:${port}/api/permission-request`, {
+  method: 'POST', headers: { 'Content-Type': 'application/json', [auth.HOOK_HEADER]: token }, body: JSON.stringify(body),
+});
+// Finish a held request whose run has changed meanwhile: it is refused as an
+// unknown token is, with no card, nothing waiting, and no count.
+async function refusedWhenFinished(request) {
+  const since = sent.length;
+  const before = pending.size;
+  const n = counted.length;
+  request.finish();
+  // Whichever comes first: the answer, a card, or five seconds of neither. A
+  // card is denied at once, and a request left unanswered is dropped, so a
+  // route that gets this wrong fails here rather than waiting out a timeout.
+  let poll;
+  let gaveUp;
+  const filed = new Promise((resolve) => {
+    poll = setInterval(() => { const c = sent.slice(since).find((m) => m.type === 'control_request'); if (c) resolve(c); }, 10);
+    gaveUp = setTimeout(() => resolve('unanswered'), 5000);
+  });
+  const card = await Promise.race([request.answered.then(() => null), filed]);
+  clearInterval(poll);
+  clearTimeout(gaveUp);
+  if (card === 'unanswered') request.abort();
+  else if (card) deny(card);
+  const out = await request.answered;
+  assert.strictEqual(out.status, 401, 'refused as an unknown token is');
+  assert.deepStrictEqual(sent.slice(since), [], 'no card, and nothing sent to any window');
+  assert.strictEqual(pending.size, before, 'nothing left waiting');
+  assert.deepStrictEqual(counted.slice(n), [], 'and no count changes');
+}
+
+describe('a request whose body arrives late is checked again when it has', () => {
+  test('a run still going when its late body arrives files its card, and the refusal is counted on it', async () => {
+    const token = auth.issueRunHookToken('run-a');
+    const n = counted.length;
+    try {
+      const since = sent.length;
+      const request = await held(token, LATE);
+      await new Promise((r) => setTimeout(r, 200));
+      request.finish();
+      const card = await waitFor(() => sent.slice(since).find((m) => m.type === 'control_request'));
+      assert.deepStrictEqual(card._run, RUNS.get('run-a'));
+      deny(card);
+      assert.deepStrictEqual((await request.answered).body, { allow: false });
+      assert.deepStrictEqual(counted.slice(n), ['run-a'], 'counted on the run, once');
+    } finally { auth.retireRunHookToken(token); }
+  });
+
+  test('a token retired while its body was held is refused when the body arrives, and again when the request is sent once more', async () => {
+    const token = auth.issueRunHookToken('run-a');
+    const request = await held(token, LATE);
+    auth.retireRunHookToken(token);
+    await refusedWhenFinished(request);
+    const since = sent.length;
+    const n = counted.length;
+    assert.strictEqual((await send(token)).status, 401, 'the same request again is refused');
+    assert.deepStrictEqual(sent.slice(since), [], 'and files no card');
+    assert.deepStrictEqual(counted.slice(n), []);
+  });
+
+  test('a run the scheduler no longer has going is refused when the body arrives, though its token is still issued', async () => {
+    const token = auth.issueRunHookToken('run-a');
+    try {
+      const request = await held(token, LATE);
+      lookup = (id) => (id === 'run-a' ? null : liveRun(id));
+      await refusedWhenFinished(request);
+    } finally { lookup = liveRun; auth.retireRunHookToken(token); }
+  });
+
+  test('a token that names a different run when the body arrives is refused, and files on neither run', async () => {
+    const token = auth.issueRunHookToken('run-a');
+    try {
+      const request = await held(token, LATE);
+      lookup = (id) => (id === 'run-a' ? RUNS.get('run-b') : liveRun(id));
+      await refusedWhenFinished(request);
+    } finally { lookup = liveRun; auth.retireRunHookToken(token); }
+  });
+
+  // THE CONTROL FAILING: the second lookup throws. The request is refused,
+  // never filed on the run the first lookup found.
+  test('a lookup that fails when the body arrives refuses the request, and the route keeps answering', async () => {
+    const token = auth.issueRunHookToken('run-a');
+    try {
+      const request = await held(token, LATE);
+      lookup = () => { throw new Error('the scheduler fell over'); };
+      await refusedWhenFinished(request);
+      lookup = liveRun;
+      const { card } = await askAndDeny(routineEnv(token), outsideRead('session-of-run-a'));
+      assert.deepStrictEqual(card._run, RUNS.get('run-a'), 'and the next request is the run\'s again');
+    } finally { lookup = liveRun; auth.retireRunHookToken(token); }
+  });
+
+  test('a client that drops its connection part way through the body files no card, and the route keeps answering', async () => {
+    const token = auth.issueRunHookToken('run-a');
+    try {
+      const since = sent.length;
+      const before = pending.size;
+      const n = counted.length;
+      const request = await held(token, LATE);
+      request.abort();
+      assert.ok((await request.answered).error, 'the client has no answer');
+      await new Promise((r) => setTimeout(r, 200));
+      assert.deepStrictEqual(sent.slice(since), [], 'no card');
+      assert.strictEqual(pending.size, before);
+      assert.deepStrictEqual(counted.slice(n), []);
+      const { card } = await askAndDeny(routineEnv(token), outsideRead('session-of-run-a'));
+      assert.deepStrictEqual(card._run, RUNS.get('run-a'));
+    } finally { auth.retireRunHookToken(token); }
+  });
+
+  test('a body that never finishes files no card', async () => {
+    const token = auth.issueRunHookToken('run-a');
+    const since = sent.length;
+    const before = pending.size;
+    const n = counted.length;
+    const request = await held(token, LATE);
+    try {
+      await new Promise((r) => setTimeout(r, 500));
+      assert.deepStrictEqual(sent.slice(since), [], 'no card while the body is unfinished');
+      assert.strictEqual(pending.size, before);
+      assert.deepStrictEqual(counted.slice(n), []);
+    } finally { request.abort(); auth.retireRunHookToken(token); }
+    await request.answered;
   });
 });
 
