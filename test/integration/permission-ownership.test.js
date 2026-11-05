@@ -4,8 +4,9 @@
 // A routine has no conversation, so a request its agent raises arrives with
 // none. The server used to forward it bare, and the client put it in whatever
 // conversation was open. Here the server's half is pinned: a routine's
-// request is attributed to its run by the session the scheduler spawned, and
-// a request that ends (answered in any window, answered too late, or its
+// request is attributed to its run by the hook token the scheduler started it
+// with, raised through the real hook by the run's own process, and a request
+// that ends (answered in any window, answered too late, or its
 // asker gone) says so to every window, so no copy of its card is left
 // accepting a click nothing will receive. The client's half is pinned in
 // test/unit/permission-ownership.test.js and test/e2e/permission-ownership.spec.js.
@@ -15,7 +16,7 @@ const fs = require('node:fs');
 const http = require('node:http');
 const path = require('node:path');
 const h = require('../helpers/harness.js');
-const { agentFile } = require('../helpers/workspace.js');
+const { agentFile, makeTempDir } = require('../helpers/workspace.js');
 const scheduler = require('../../lib/scheduler.js');
 
 const AGENT = 'runner';
@@ -29,8 +30,11 @@ before(async () => {
     agents: { runner: agentFile({ name: AGENT, type: 'specialist', order: 1 }) },
     env: { RUNDOCK_PERMISSION_TIMEOUT_MS: String(PERM_TIMEOUT) },
   });
-  // The run stays live long enough to raise a request while it is going.
-  h.writeScenario([{ match: { agent: AGENT, promptIncludes: PROMPT }, delayMs: 4000, turn: [{ text: 'held run ran' }] }]);
+  // The run's agent asks, through the real hook, to read a file outside the
+  // workspace, which always raises a card, and stays live while it waits.
+  const outside = makeTempDir('ownership-outside-');
+  fs.writeFileSync(path.join(outside, 'labels.md'), '# labels\n');
+  h.writeScenario([{ match: { agent: AGENT, promptIncludes: PROMPT }, hooks: [{ tool: 'Bash', input: { command: `cat ${path.join(outside, 'labels.md')}` } }], delayMs: 1000, turn: [{ text: 'held run ran' }] }]);
   h.internal.stopScheduler();
   client = await h.connect();
 });
@@ -52,15 +56,11 @@ function postJson(body) {
 test('a request from a routine run is attributed to the run, never to a conversation', async () => {
   client.send({ type: 'save_routine', agentId: AGENT, routine: { name: ROUTINE, schedule: 'every day at 07:00', prompt: PROMPT, runOn: 'local' } });
   await client.waitFor(m => m.type === 'routine_saved', { label: 'routine_saved' });
-  client.send({ type: 'run_routine_now', agentId: AGENT, name: ROUTINE, occurrence: 0 });
-  assert.ok(await h.waitUntil(() => records().some(r => r.status === 'running' && r.sessionId)), 'the run is live with a session');
-  const run = records().find(r => r.status === 'running');
-  assert.deepStrictEqual(scheduler.runForSession(run.sessionId), { id: run.id, routine: ROUTINE, agent: AGENT },
-    'the scheduler names the live run for its session');
-
   const since = client.messages.length;
-  const answer = postJson({ tool_name: 'Bash', tool_input: { command: 'sh apply-labels.sh' }, session_id: run.sessionId, conversation_id: '' });
+  client.send({ type: 'run_routine_now', agentId: AGENT, name: ROUTINE, occurrence: 0 });
   const { msg: card } = await client.waitFor(m => m.type === 'control_request', { since, label: 'the routine card' });
+  const run = records().find(r => r.status === 'running');
+  assert.deepStrictEqual(scheduler.runById(run.id), { id: run.id, routine: ROUTINE, agent: AGENT }, 'the scheduler names the live run');
   assert.strictEqual(card._conversationId, '', 'it borrows no conversation');
   assert.deepStrictEqual(card._run, { id: run.id, routine: ROUTINE, agent: AGENT }, 'it names the run, the routine and the agent');
 
@@ -70,19 +70,23 @@ test('a request from a routine run is attributed to the run, never to a conversa
   assert.deepStrictEqual(replay._run, card._run);
   late.close();
 
-  assert.deepStrictEqual(await answer, { allow: false, reason: 'timeout' }, 'unanswered, it is denied at the timeout as before');
+  assert.ok(await h.waitUntil(() => h.readHookAnswers().some(a => a.agent === AGENT)), 'the run\'s agent was answered');
+  const told = h.readHookAnswers().find(a => a.agent === AGENT).answer.hookSpecificOutput;
+  assert.strictEqual(told.permissionDecision, 'deny', 'unanswered, it is denied at the timeout as before');
+  assert.match(told.permissionDecisionReason, /^No one answered the request for this command in time/);
   assert.ok(await h.waitUntil(() => records().every(r => r.status !== 'running'), 8000), 'the run ends');
-  assert.strictEqual(scheduler.runForSession(run.sessionId), null, 'and an ended run owns nothing');
+  assert.strictEqual(scheduler.runById(run.id), null, 'and an ended run owns nothing');
 });
 
-test('a request whose session matches nothing carries neither a conversation nor a run', async () => {
+test('a request whose token names no run going is refused, and raises no card', async () => {
   const since = client.messages.length;
-  const answer = postJson({ tool_name: 'Bash', tool_input: { command: 'sh stray.sh' }, session_id: 'no-such-session', conversation_id: '' });
-  const { msg: card } = await client.waitFor(m => m.type === 'control_request', { since, label: 'the stray card' });
-  assert.strictEqual(card._conversationId, '');
-  assert.strictEqual(card._run, undefined);
-  client.send({ type: 'permission_response', requestId: card.request_id, conversationId: '', allow: false });
-  assert.strictEqual((await answer).allow, false);
+  const res = await fetch(`http://127.0.0.1:${h.port}/api/permission-request`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', ...h.hookHeaders(null) },
+    body: JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'sh stray.sh' }, session_id: 'no-such-session', conversation_id: '' }),
+  });
+  assert.strictEqual(res.status, 401);
+  await h.delay(200);
+  assert.deepStrictEqual(client.messages.slice(since).filter(m => m.type === 'control_request'), [], 'never filed as a card with no run');
 });
 
 // The id is what a window's answer names, so it is drawn as the server's own

@@ -481,6 +481,42 @@ test('a child that never launched puts the reason it gave in the run record', as
   });
 });
 
+// EACH RUN'S OWN HOOK TOKEN. Issued as the run opens, handed to its child in
+// its environment and written nowhere, and retired as its record closes, so a
+// request carrying it afterwards is refused as unknown (lib/auth). Two runs
+// going at once never share one.
+test('each run is started with a hook token of its own, bound to it, and retired as its record closes', async () => {
+  const auth = require('../../lib/auth/index.js');
+  await withTempWorkspaceAsync(async () => {
+    const children = [];
+    const envs = [];
+    const spawnOne = (args, opts) => { envs.push(opts.env); const c = new EventEmitter(); children.push(c); return c; };
+    await withFakeSpawn(spawnOne, async (sched) => {
+      assert.strictEqual(sched.executeRoutine(AGENT, ROUTINE, KEY), true);
+      assert.strictEqual(sched.executeRoutine(AGENT, { name: 'r2', prompt: 'p' }, 'runner:r2'), true);
+      const [first, second] = envs.map((e) => e.RUNDOCK_HOOK_TOKEN);
+      assert.ok(first && second && first !== second, 'two runs going at once, two tokens');
+      for (const env of envs) assert.strictEqual('RUNDOCK_CONVO_ID' in env, false, 'and no conversation');
+      const [runA, runB] = sched.runningRuns().map((r) => r.id);
+      assert.strictEqual(auth.hookTokenRun(first), runA, 'each bound to its own run');
+      assert.strictEqual(auth.hookTokenRun(second), runB);
+      assert.strictEqual(auth.hookTokenScope(first), null, 'and to no conversation');
+      for (const record of sched.readRunRecords()) {
+        const text = JSON.stringify(record);
+        assert.ok(!text.includes(first) && !text.includes(second), 'never written to a record');
+      }
+
+      children[0].emit('error', new Error('ended'));
+      assert.strictEqual(sched.readRunRecords().find((r) => r.id === runA).status, 'failed', 'the first run\'s record closed');
+      assert.strictEqual(auth.hookTokenScope(first), undefined, 'and its token is unknown from then on');
+      assert.strictEqual(auth.hookTokenRun(first), null);
+      assert.strictEqual(auth.hookTokenRun(second), runB, 'while the run still going keeps its own');
+      children[1].emit('error', new Error('ended'));
+      assert.strictEqual(auth.hookTokenScope(second), undefined);
+    });
+  });
+});
+
 // The cost of listening to both: a failure that reports twice must not be
 // recorded twice. Counted through the broadcast, which happens once when a run
 // starts and once per outcome, so a second outcome is a third broadcast.

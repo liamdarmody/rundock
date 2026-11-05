@@ -24,6 +24,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 
+const auth = require('../../lib/auth/index.js');
 const config = require('../../lib/config.js');
 const router = require('../../lib/http-router.js');
 const claudeRt = require('../../lib/runtime/claude.js');
@@ -117,8 +118,8 @@ before(async () => {
     pendingPermissionRequests: () => pending,
     safeSend: (s) => sent.push(JSON.parse(s)),
     getPermissionTimeoutMs: () => timeoutMs,
-    // The scheduler's own lookup, stood in for: the routine's session is its run's.
-    routineRunForSession: (sid) => (sid === ROUTINE_SESSION ? ROUTINE_RUN : null),
+    // The scheduler's own lookup of a live run, stood in for.
+    routineRun: (id) => (id === ROUTINE_RUN.id ? ROUTINE_RUN : null),
   });
   server = http.createServer(router.handleHttpRequest);
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
@@ -134,9 +135,11 @@ after(async () => {
   fs.rmSync(outside, { recursive: true, force: true });
 });
 
-// What the scheduler spawns a routine with, and what every conversation spawn,
-// a delegated agent's included, spawns with.
-const routineEnv = () => claudeRt.getSpawnEnv(null);
+// What the scheduler spawns a routine with (its run's own token, and no
+// conversation), and what every conversation spawn, a delegated agent's
+// included, spawns with.
+const ROUTINE_TOKEN = auth.issueRunHookToken(ROUTINE_RUN.id);
+const routineEnv = () => claudeRt.getSpawnEnv(null, ROUTINE_TOKEN);
 const conversationEnv = (convo) => claudeRt.getSpawnEnv(convo);
 
 function runHook(env, input, { preload } = {}) {

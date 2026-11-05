@@ -122,8 +122,6 @@ if (!up) { console.log(withoutKey(serverLog.slice(-2000))); process.exit(1); }
 const signInUrl = await waitForSignInLink(() => serverLog);
 record('S0 server prints its sign-in link', !!signInUrl);
 if (!signInUrl) { console.log(withoutKey(serverLog.slice(-2000))); process.exit(1); }
-// What an agent's hook started for no conversation would carry.
-const routineHookToken = await askHookToken(server, null);
 
 const { chromium } = require('@playwright/test');
 const browser = await chromium.launch();
@@ -179,16 +177,20 @@ record('S4 specialist scope return hands back (handback event, kind return)', !!
 // Low-risk read-only commands are AUTO-APPROVED by the client's risk policy
 // (permissions.js): no card, silent allow. High-risk commands must card and
 // wait for a click. Both behaviours are product contract; both are checked.
+// Asked as the agent of the conversation on screen would ask: a hook token is
+// bound to a conversation, or to a routine run that is going.
+const s5Convo = await page.evaluate(() => (window.activeConversation && window.activeConversation.id) || '');
+const s5HookToken = await askHookToken(server, s5Convo || null);
 const lowP = fetch(`http://127.0.0.1:${PORT}/api/permission-request`, {
-  method: 'POST', headers: { 'content-type': 'application/json', 'x-rundock-hook-token': routineHookToken },
-  body: JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'echo smoke' }, conversation_id: '', session_id: '' }),
+  method: 'POST', headers: { 'content-type': 'application/json', 'x-rundock-hook-token': s5HookToken },
+  body: JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'echo smoke' }, conversation_id: s5Convo, session_id: '' }),
 }).then(r => r.json()).catch(() => null);
 const lowResult = await Promise.race([lowP, new Promise(r => setTimeout(() => r(null), 15000))]);
 record('S5 low-risk command auto-approves without a card', !!(lowResult && lowResult.allow === true));
 
 const highP = fetch(`http://127.0.0.1:${PORT}/api/permission-request`, {
-  method: 'POST', headers: { 'content-type': 'application/json', 'x-rundock-hook-token': routineHookToken },
-  body: JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'rm -rf build && git push --force' }, conversation_id: '', session_id: '' }),
+  method: 'POST', headers: { 'content-type': 'application/json', 'x-rundock-hook-token': s5HookToken },
+  body: JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'rm -rf build && git push --force' }, conversation_id: s5Convo, session_id: '' }),
 }).then(r => r.json()).catch(() => null);
 const allowBtn = await waitFor(() => page.locator('.permission-card .btn-allow').first().isVisible().catch(() => false), 15000);
 record('S5 high-risk command shows the permission card', !!allowBtn);
@@ -212,8 +214,8 @@ record('S5 permission event recorded', s5ev);
 // folder the boundary frees reads of and refuses writes to.
 const HOME_DIR = os.homedir();
 const askPermission = (command) => fetch(`http://127.0.0.1:${PORT}/api/permission-request`, {
-  method: 'POST', headers: { 'content-type': 'application/json', 'x-rundock-hook-token': routineHookToken },
-  body: JSON.stringify({ tool_name: 'Bash', tool_input: { command }, conversation_id: '', session_id: '' }),
+  method: 'POST', headers: { 'content-type': 'application/json', 'x-rundock-hook-token': s5HookToken },
+  body: JSON.stringify({ tool_name: 'Bash', tool_input: { command }, conversation_id: s5Convo, session_id: '' }),
 }).then(r => r.json()).catch(() => null);
 
 // Reported: listing the runtime's own agents and skills drew a card, because

@@ -120,12 +120,11 @@ describe('lib/auth: the hook\'s tokens', () => {
     assert.strictEqual(auth.hookTokenScope(a), 'convo-same');
   });
 
-  test('a routine run\'s token belongs to no conversation; an unknown token to nothing at all', () => {
-    const routine = auth.issueHookToken(null);
-    assert.strictEqual(auth.hookTokenScope(routine), null);
+  test('no conversation is no token: no token is shared by every routine run; an unknown token belongs to nothing', () => {
+    for (const none of [null, undefined, '']) assert.strictEqual(auth.issueHookToken(none), null);
     assert.strictEqual(auth.hookTokenScope('made-up'), undefined);
     assert.strictEqual(auth.hookTokenScope(''), undefined);
-    assert.strictEqual(auth.hookScopeOf(fakeReq({ [auth.HOOK_HEADER]: routine })), null);
+    assert.strictEqual(auth.hookScopeOf(fakeReq({})), undefined);
   });
 
   test('each routine run gets a token of its own, bound to that run and to no conversation', () => {
