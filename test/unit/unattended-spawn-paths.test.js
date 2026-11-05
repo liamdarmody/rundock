@@ -41,7 +41,7 @@ const rel = (p) => path.relative(ROOT, p).split(path.sep).join('/');
 // `passes` is the argument the call gives getSpawnEnv; `conversation` is what
 // the agent is started with, as the driving tests assert it.
 const AGENT_SPAWNS = [
-  { at: 'lib/scheduler.js | beginRun | spawnClaude(argsFor(asAgent))', passes: 'null', notice: 'unattended',
+  { at: 'lib/scheduler.js | beginRun | spawnClaude(argsFor(asAgent))', passes: 'null, run.hookToken', notice: 'unattended',
     what: "a routine's run, started by the scheduler",
     conversation: 'none',
     drivenBy: ["lib/scheduler.js beginRun: a routine's run is started with no conversation, and told to carry on or say it failed"] },
@@ -268,7 +268,7 @@ describe('every process the app starts is in the inventory, with its case', () =
       const env = s.all.match(/env:\s*getSpawnEnv\(([^()]*)\)/);
       assert.ok(env, `${s.at} (line ${s.line}) is given getSpawnEnv's environment`);
       assert.strictEqual(env[1].trim(), entry.passes, `${s.at} passes ${entry.passes}`);
-      assert.strictEqual(entry.notice, entry.passes === 'null' ? 'unattended' : 'attended');
+      assert.strictEqual(entry.notice, entry.passes.split(',')[0] === 'null' ? 'unattended' : 'attended');
     }
     assert.deepStrictEqual(AGENT_SPAWNS.filter((e) => e.notice === 'unattended').map((e) => e.at), ['lib/scheduler.js | beginRun | spawnClaude(argsFor(asAgent))'],
       'only the scheduler starts an agent with no conversation');

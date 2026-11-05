@@ -394,20 +394,18 @@ describe('permission bridge', () => {
     assert.deepStrictEqual(JSON.parse(res.body), { allow: true });
   });
 
-  test('an unattributable request (no conversation_id, unmatched session) still raises a card', async () => {
-    // L10: a request with no conversation_id and a session id no live process
-    // owns cannot be attributed. It must NOT be pinned to whatever
-    // conversation is on screen; it is logged, and the card goes out with an
-    // empty conversation so the user can still answer it.
+  test('a request with no conversation whose token names no run going is refused, never filed unattributed', async () => {
+    // L10: a request with no conversation_id cannot be attributed to a
+    // conversation, and must NOT be pinned to whatever conversation is on
+    // screen. A routine's request is attributed to its run by its token; one
+    // whose token names no run going is refused, and raises no card at all.
     const since = client.messages.length;
-    const pending = postJson('/api/permission-request', {
+    const res = await postJson('/api/permission-request', {
       tool_name: 'Bash', tool_input: { command: 'true' }, session_id: 'sess-nobody-owns',
     });
-    const { msg: card } = await client.waitFor(m => m.type === 'control_request', { since, label: 'unattributed card' });
-    assert.strictEqual(card._conversationId, '', 'never misattributed to an open conversation');
-    client.send({ type: 'permission_response', requestId: card.request_id, allow: false, conversationId: '' });
-    const res = await pending;
-    assert.deepStrictEqual(JSON.parse(res.body), { allow: false });
+    assert.strictEqual(res.status, 401);
+    await h.delay(200);
+    assert.deepStrictEqual(client.messages.slice(since).filter(m => m.type === 'control_request'), [], 'no card, in any conversation');
   });
 
   test('deny resolves with {allow:false}', async () => {

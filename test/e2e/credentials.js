@@ -23,9 +23,11 @@ const PORT = Number(process.env.E2E_PORT || 34517);
 const DIR = path.join(os.tmpdir(), `rundock-e2e-${PORT}`);
 const STORAGE_STATE = path.join(DIR, 'storage-state.json');
 const HOOK_TOKENS = path.join(DIR, 'hook-tokens.json');
-// The conversations whose hook tokens are issued up front: `null` is the
-// routine-run token, the rest are conversation ids the specs raise cards in.
-const HOOK_SCOPES = [null, 'c1', 'c2', 'c3'];
+// The conversations whose hook tokens are issued up front, the ids the specs
+// raise cards in. A routine run's token is its own, issued when the run starts
+// and handed only to its process, so a spec raises a routine's card through
+// the run's own hook.
+const HOOK_SCOPES = ['c1', 'c2', 'c3'];
 
 const SESSION_FILE = path.join(DIR, 'session-token');
 // The headers a spec's own socket or request sends as the test browser's page.

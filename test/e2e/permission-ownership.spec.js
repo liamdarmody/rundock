@@ -4,10 +4,10 @@
 //
 // A ROUTINE'S CARD. A routine has no conversation, so the request its agent
 // raises used to be drawn in whichever conversation was open. The run is
-// started by pressing it on the stub runtime, its session is read off its own
-// record, and a request is raised for that session exactly as the permission
-// hook raises one. The card must be absent from the open conversation and
-// present in the approvals dock, naming the routine and the agent.
+// started by pressing it on the stub runtime, and its agent raises the request
+// through the real permission hook, carrying the token the run was started
+// with. The card must be absent from the open conversation and present in the
+// approvals dock, naming the routine and the agent.
 //
 // A CARD THAT OUTLIVED ITS REQUEST. A request for a conversation that is not
 // on screen is left to time out, then that conversation is opened. The card
@@ -17,6 +17,7 @@
 // serve.js), which is what lets the second case run in seconds.
 const { test, expect } = require('@playwright/test');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const WebSocket = require('ws');
 const credentials = require('./credentials.js');
@@ -52,19 +53,22 @@ function raise(body) {
 }
 
 test('a routine\'s request is shown in the approvals dock, named for the routine and the agent, and never in the open conversation', async ({ page }) => {
-  const { workspace, version } = await overWs(async ({ send, waitFor }) => {
+  const { version } = await overWs(async ({ send, waitFor }) => {
     send({ type: 'get_runtime_status' });
     const status = await waitFor(m => m.type === 'runtime_status');
     const version = status.claude && status.claude.version;
-    if (version !== STUB_VERSION) return { workspace: null, version };
+    if (version !== STUB_VERSION) return { version };
     send({ type: 'get_workspaces' });
     const set = await waitFor(m => m.type === 'workspaces' && m.current);
+    // A read outside the workspace, which always raises a card.
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'e2e-routine-outside-'));
+    fs.writeFileSync(path.join(outside, 'labels.md'), '# labels\n');
     fs.writeFileSync(path.join(set.current, 'stub-scenario.json'), JSON.stringify({
-      rules: [{ match: { agent: 'wren', promptIncludes: PROMPT }, delayMs: 20000, turn: [{ text: 'held run ran' }] }],
+      rules: [{ match: { agent: 'wren', promptIncludes: PROMPT }, hooks: [{ tool: 'Bash', input: { command: `cat ${path.join(outside, 'labels.md')}`, description: 'Read the labels' } }], delayMs: 20000, turn: [{ text: 'held run ran' }] }],
     }));
     send({ type: 'save_routine', agentId: 'wren', routine: { name: ROUTINE, schedule: SCHEDULE, prompt: PROMPT, runOn: 'local' } });
     await waitFor(m => m.type === 'routine_saved' && m.name === ROUTINE);
-    return { workspace: set.current, version };
+    return { version };
   });
   expect(version, 'the server must resolve the stub runtime, or nothing may be pressed').toBe(STUB_VERSION);
 
@@ -78,18 +82,6 @@ test('a routine\'s request is shown in the approvals dock, named for the routine
     send({ type: 'run_routine_now', agentId: 'wren', name: ROUTINE, occurrence: 0 });
     await waitFor(m => m.type === 'routine_run_started');
   });
-  const runsDir = path.join(workspace, '.rundock', 'runs');
-  let run = null;
-  await expect.poll(() => {
-    // The records only: a run still going also keeps its child's stderr
-    // beside its record until it ends.
-    run = fs.readdirSync(runsDir).filter(n => n.endsWith('.json'))
-      .map(n => JSON.parse(fs.readFileSync(path.join(runsDir, n), 'utf-8')))
-      .find(r => r.routine === ROUTINE && r.status === 'running' && r.sessionId) || null;
-    return !!run;
-  }).toBe(true);
-
-  raise({ tool_name: 'Bash', tool_input: { command: 'sh scripts/apply-labels.sh --ids a,b,c', description: 'Apply labels' }, session_id: run.sessionId, conversation_id: '' });
 
   const dockCard = page.locator('#approvals-dock .msg-permission');
   await expect(dockCard).toHaveCount(1);

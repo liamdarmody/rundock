@@ -481,6 +481,106 @@ test('a child that never launched puts the reason it gave in the run record', as
   });
 });
 
+// EACH RUN'S OWN HOOK TOKEN. Issued as the run opens, handed to its child in
+// its environment and written nowhere, and retired as its record closes, so a
+// request carrying it afterwards is refused as unknown (lib/auth). Two runs
+// going at once never share one.
+test('each run is started with a hook token of its own, bound to it, and retired as its record closes', async () => {
+  const auth = require('../../lib/auth/index.js');
+  await withTempWorkspaceAsync(async () => {
+    const children = [];
+    const envs = [];
+    const spawnOne = (args, opts) => { envs.push(opts.env); const c = new EventEmitter(); children.push(c); return c; };
+    await withFakeSpawn(spawnOne, async (sched) => {
+      assert.strictEqual(sched.executeRoutine(AGENT, ROUTINE, KEY), true);
+      assert.strictEqual(sched.executeRoutine(AGENT, { name: 'r2', prompt: 'p' }, 'runner:r2'), true);
+      const [first, second] = envs.map((e) => e.RUNDOCK_HOOK_TOKEN);
+      assert.ok(first && second && first !== second, 'two runs going at once, two tokens');
+      for (const env of envs) assert.strictEqual('RUNDOCK_CONVO_ID' in env, false, 'and no conversation');
+      const [runA, runB] = sched.runningRuns().map((r) => r.id);
+      assert.strictEqual(auth.hookTokenRun(first), runA, 'each bound to its own run');
+      assert.strictEqual(auth.hookTokenRun(second), runB);
+      assert.strictEqual(auth.hookTokenScope(first), null, 'and to no conversation');
+      for (const record of sched.readRunRecords()) {
+        const text = JSON.stringify(record);
+        assert.ok(!text.includes(first) && !text.includes(second), 'never written to a record');
+      }
+
+      children[0].emit('error', new Error('ended'));
+      assert.strictEqual(sched.readRunRecords().find((r) => r.id === runA).status, 'failed', 'the first run\'s record closed');
+      assert.strictEqual(auth.hookTokenScope(first), undefined, 'and its token is unknown from then on');
+      assert.strictEqual(auth.hookTokenRun(first), null);
+      assert.strictEqual(auth.hookTokenRun(second), runB, 'while the run still going keeps its own');
+      children[1].emit('error', new Error('ended'));
+      assert.strictEqual(auth.hookTokenScope(second), undefined);
+    });
+  });
+});
+
+// THE REFUSED-CARD COUNT. Counted on the live run named, written to its open
+// record as it goes and to its closed one at the end, and only once there is
+// one to count. A run that has ended, or one never started, counts nothing.
+test('a refused card is counted on its live run, open record and closed, and nowhere once the run has ended', async () => {
+  await withTempWorkspaceAsync(async () => {
+    const children = [];
+    await withFakeSpawn(() => { const c = new EventEmitter(); children.push(c); return c; }, async (sched) => {
+      assert.strictEqual(sched.executeRoutine(AGENT, ROUTINE, KEY), true);
+      assert.strictEqual(sched.executeRoutine(AGENT, { name: 'r2', prompt: 'p' }, 'runner:r2'), true);
+      const [a, b] = sched.runningRuns().map((r) => r.id);
+      const recordOf = (id) => sched.readRunRecords().find((r) => r.id === id);
+      assert.strictEqual('refusedCards' in recordOf(a), false, 'none until there is one');
+
+      assert.strictEqual(sched.noteRefusedCard(a), true);
+      assert.strictEqual(recordOf(a).refusedCards, 1, 'written to the open record at once');
+      assert.strictEqual(recordOf(a).status, 'running');
+      assert.strictEqual(sched.noteRefusedCard(a), true);
+      assert.strictEqual(recordOf(a).refusedCards, 2);
+      assert.strictEqual('refusedCards' in recordOf(b), false, 'and only on the run named');
+
+      for (const id of ['run-never-started', '', null, undefined, 7]) assert.strictEqual(sched.noteRefusedCard(id), false);
+
+      children[0].emit('close', 0);
+      const closed = recordOf(a);
+      assert.strictEqual(closed.status, 'succeeded');
+      assert.strictEqual(closed.refusedCards, 2, 'the closed record keeps the count');
+      assert.strictEqual(sched.noteRefusedCard(a), false, 'an ended run counts nothing');
+      assert.deepStrictEqual(recordOf(a), closed, 'and its record is not reopened');
+
+      children[1].emit('close', 0);
+      assert.strictEqual('refusedCards' in recordOf(b), false, 'a run with none closes with none');
+    });
+  });
+});
+
+// A RUN'S CARDS STILL OPEN AS IT CLOSES are settled first, while it is still
+// going, so what they count is on the closed record (the server refuses and
+// counts them: settleRunCards in lib/http-router.js). A settling that throws
+// costs those cards' count and never the closing.
+test('a run\'s open cards are settled as it closes and counted on the closed record, and a settling that throws does not stop the close', async () => {
+  await withTempWorkspaceAsync(async () => {
+    const children = [];
+    await withFakeSpawn(() => { const c = new EventEmitter(); children.push(c); return c; }, async (sched) => {
+      assert.strictEqual(sched.executeRoutine(AGENT, ROUTINE, KEY), true);
+      assert.strictEqual(sched.executeRoutine(AGENT, { name: 'r2', prompt: 'p' }, 'runner:r2'), true);
+      const [a, b] = sched.runningRuns().map((r) => r.id);
+      const recordOf = (id) => sched.readRunRecords().find((r) => r.id === id);
+      const settled = [];
+      // Two cards still open on run A, counted as the server counts them.
+      sched.wireSchedulerDeps({ settleRunCards: (id) => { settled.push(id); sched.noteRefusedCard(id); sched.noteRefusedCard(id); } });
+      children[0].emit('close', 0);
+      assert.deepStrictEqual(settled, [a], 'settled once, for the run that closed');
+      assert.strictEqual(recordOf(a).status, 'succeeded');
+      assert.strictEqual(recordOf(a).refusedCards, 2, 'its open cards are on the closed record');
+
+      sched.wireSchedulerDeps({ settleRunCards: () => { throw new Error('the settling fell over'); } });
+      children[1].emit('close', 0);
+      assert.strictEqual(recordOf(b).status, 'succeeded', 'the record closes with its outcome all the same');
+      assert.strictEqual('refusedCards' in recordOf(b), false);
+      assert.deepStrictEqual(sched.runningRuns(), [], 'and no run is left listed as going');
+    });
+  });
+});
+
 // The cost of listening to both: a failure that reports twice must not be
 // recorded twice. Counted through the broadcast, which happens once when a run
 // starts and once per outcome, so a second outcome is a third broadcast.

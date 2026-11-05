@@ -701,6 +701,7 @@ schedulerLib.wireSchedulerDeps({
   // The same reader every conversation spawn uses, so a routine is handed the
   // same list for the same mode.
   getDisallowedTools,
+  settleRunCards: (runId) => httpRouter.settleRunCards(runId),
 });
 const httpRouter = require('./lib/http-router.js');
 const claudeConsole = require('./lib/runtime/claude-console.js');
@@ -712,7 +713,8 @@ httpRouter.wireHttpRouterDeps({
   getSearchEngine: () => searchEngine,
   fileIndexInProgress,
   getPermissionTimeoutMs: () => PERMISSION_TIMEOUT_MS,
-  routineRunForSession: (sessionId) => schedulerLib.runForSession(sessionId),
+  routineRun: (runId) => schedulerLib.runById(runId),
+  noteRefusedCard: (runId) => schedulerLib.noteRefusedCard(runId),
   // The reconnect card's two routes. The check's answer is also the runtime
   // status's evidence, when it could find out: a failed turn counts as signed
   // out only when its words are a sign-in failure (isAuthError).

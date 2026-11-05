@@ -108,12 +108,49 @@ describe('lib/auth: the hook\'s tokens', () => {
     assert.strictEqual(auth.hookTokenScope(a), 'convo-a');
   });
 
-  test('a routine run\'s token belongs to no conversation; an unknown token to nothing at all', () => {
-    const routine = auth.issueHookToken(null);
-    assert.strictEqual(auth.hookTokenScope(routine), null);
+  test('a conversation\'s token is issued and checked as it always was, and belongs to no run', () => {
+    const a = auth.issueHookToken('convo-same');
+    assert.match(a, /^[A-Za-z0-9_-]{32}$/, '24 random bytes, base64url');
+    assert.strictEqual(auth.issueHookToken('convo-same'), a);
+    assert.strictEqual(auth.hookScopeOf(fakeReq({ [auth.HOOK_HEADER]: a })), 'convo-same');
+    assert.strictEqual(auth.hookTokenRun(a), null);
+    assert.strictEqual(auth.hookRunOf(fakeReq({ [auth.HOOK_HEADER]: a })), null);
+    // Retiring a run's token is no way to retire a conversation's.
+    auth.retireRunHookToken(a);
+    assert.strictEqual(auth.hookTokenScope(a), 'convo-same');
+  });
+
+  test('no conversation is no token: no token is shared by every routine run; an unknown token belongs to nothing', () => {
+    for (const none of [null, undefined, '']) assert.strictEqual(auth.issueHookToken(none), null);
     assert.strictEqual(auth.hookTokenScope('made-up'), undefined);
     assert.strictEqual(auth.hookTokenScope(''), undefined);
-    assert.strictEqual(auth.hookScopeOf(fakeReq({ [auth.HOOK_HEADER]: routine })), null);
+    assert.strictEqual(auth.hookScopeOf(fakeReq({})), undefined);
+  });
+
+  test('each routine run gets a token of its own, bound to that run and to no conversation', () => {
+    const one = auth.issueRunHookToken('run-one');
+    const two = auth.issueRunHookToken('run-two');
+    const again = auth.issueRunHookToken('run-one');
+    assert.match(one, /^[A-Za-z0-9_-]{32}$/, '24 random bytes, base64url');
+    assert.strictEqual(new Set([one, two, again]).size, 3, 'never shared, not even by two runs of one id');
+    assert.strictEqual(auth.hookTokenScope(one), null, 'no conversation');
+    assert.strictEqual(auth.hookTokenRun(one), 'run-one');
+    assert.strictEqual(auth.hookTokenRun(two), 'run-two');
+    assert.strictEqual(auth.hookRunOf(fakeReq({ [auth.HOOK_HEADER]: two })), 'run-two');
+    assert.strictEqual(auth.hookTokenRun('made-up'), null);
+    assert.throws(() => auth.issueRunHookToken(null), TypeError);
+    assert.throws(() => auth.issueRunHookToken(''), TypeError);
+  });
+
+  test('a retired run token is unknown, as one never issued is, and its run\'s other tokens are not touched', () => {
+    const token = auth.issueRunHookToken('run-retired');
+    const other = auth.issueRunHookToken('run-still-going');
+    auth.retireRunHookToken(token);
+    assert.strictEqual(auth.hookTokenScope(token), undefined);
+    assert.strictEqual(auth.hookTokenRun(token), null);
+    assert.strictEqual(auth.hookScopeOf(fakeReq({ [auth.HOOK_HEADER]: token })), undefined);
+    assert.strictEqual(auth.hookTokenRun(other), 'run-still-going');
+    assert.doesNotThrow(() => auth.retireRunHookToken(undefined));
   });
 
   test('a hook token is never the window\'s key', () => {
