@@ -543,13 +543,95 @@ describe('input the hook cannot read is refused inside Rundock, and passes throu
   });
 });
 
-// A standard output that cannot be written, as when its reader has gone: every
-// write, or only the first.
-const writeFails = `throw Object.assign(new Error('write EPIPE (forced)'), { code: 'EPIPE' });`;
-const stdoutFails = preloadFile('stdout-fails', `process.stdout.write = () => { ${writeFails} };`);
-const stdoutFailsOnce = preloadFile('stdout-fails-once', `
-  const write = process.stdout.write;
-  process.stdout.write = function () { process.stdout.write = write; ${writeFails} };
+// STANDARD OUTPUT THAT TAKES NOTHING, for real, through the hook's own process.
+// 'gone': its reader closes its end before the hook writes, as a runtime that
+// has stopped listening does, so every write to it fails. 'stalled': its reader
+// is alive and never reads, so once the pipe is full (fillsStdout fills it
+// ahead of the hook) a write to it can never finish. 'slow': the same, except
+// that the reader starts reading once the hook is waiting to write, and what
+// it read is the run's `stdout`, filler and all. Otherwise nothing written can
+// be read back, so a run is its exit status and its standard error. A run
+// still going after ten seconds is ended, and its status is then null.
+function runHookInto(how, payload, { preload, env = {}, raw, port = 1 } = {}) {
+  return new Promise((resolve) => {
+    const sink = how === 'stalled' || how === 'slow'
+      ? spawn(process.execPath, ['-e', 'process.on("message", () => { process.stdin.pipe(process.stdout); process.disconnect(); })'],
+        { stdio: ['pipe', 'pipe', 'ignore', 'ipc'] })
+      : null;
+    let read = '';
+    if (sink) sink.stdout.on('data', (c) => { read += c; });
+    const args = [...[].concat(preload || []).flatMap((file) => ['--require', file]), HOOK];
+    const proc = spawn(process.execPath, args, {
+      stdio: ['pipe', sink ? sink.stdin : 'pipe', 'pipe'],
+      env: { ...process.env, NODE_V8_COVERAGE: '', RUNDOCK: '1', RUNDOCK_PORT: String(port), RUNDOCK_WORKSPACE: ws, RUNDOCK_CONVO_ID: '', RUNDOCK_CODE_MODE: '', RUNDOCK_TEST_SEAMS: '1', RUNDOCK_TEST_PLATFORM: 'darwin', ...(how === 'slow' ? { FILLED_SAYS_WAITING: '1' } : {}), ...env },
+    });
+    const ending = setTimeout(() => proc.kill('SIGKILL'), 10000);
+    let err = '';
+    proc.stderr.on('data', (c) => {
+      err += c;
+      if (how === 'slow' && err.includes('waiting\n') && sink.connected) sink.send('read');
+    });
+    proc.on('close', (status) => {
+      clearTimeout(ending);
+      if (!sink) { resolve({ status, stderr: err }); return; }
+      if (how !== 'slow') { sink.kill('SIGKILL'); resolve({ status, stderr: err }); return; }
+      // The hook has gone, so once this end closes the reader reaches the end.
+      sink.on('close', () => resolve({ status, stderr: err.replace('waiting\n', ''), stdout: read.trim() }));
+      sink.stdin.destroy();
+      setTimeout(() => sink.kill('SIGKILL'), 5000);
+    });
+    const send = () => proc.stdin.end(raw !== undefined ? raw : JSON.stringify({ hook_event_name: 'PreToolUse', cwd: ws, session_id: 's', ...payload }));
+    if (how === 'gone') {
+      proc.stdout.on('close', send);
+      proc.stdout.destroy();
+    } else send();
+  });
+}
+// Fills standard output ahead of the hook until not one more byte fits. Asked
+// to (the 'slow' reader asks), it says `waiting` on standard error the first
+// time the hook finds the pipe full, and changes nothing else.
+const fillsStdout = preloadFile('fills-stdout', `
+  void process.stdout;
+  const fs = require('fs');
+  const writeSync = fs.writeSync;
+  for (const size of [65536, 4096, 256, 1]) {
+    const chunk = Buffer.alloc(size, ' ');
+    for (;;) {
+      try { writeSync(1, chunk); } catch (e) { if (e.code === 'EAGAIN') break; throw e; }
+    }
+  }
+  if (process.env.FILLED_SAYS_WAITING) {
+    let said = false;
+    fs.writeSync = function (fd, ...rest) {
+      try {
+        return writeSync.call(this, fd, ...rest);
+      } catch (e) {
+        if (fd === 1 && e.code === 'EAGAIN' && !said) { said = true; writeSync(2, 'waiting\\n'); }
+        throw e;
+      }
+    };
+  }
+`);
+// The first write to standard output fails, as a write to a reader that has
+// gone fails, and every later one goes through, so anything printed after a
+// failed answer is seen.
+const firstWriteFails = preloadFile('first-write-fails', `
+  const fs = require('fs');
+  const writeSync = fs.writeSync;
+  fs.writeSync = function (fd, ...rest) {
+    if (fd !== 1) return writeSync.call(this, fd, ...rest);
+    fs.writeSync = writeSync;
+    throw Object.assign(new Error('write EPIPE (forced)'), { code: 'EPIPE' });
+  };
+`);
+// The hook's first exit throws, as an 'exit' listener that throws makes it:
+// an error arriving as the hook ends the call.
+const exitThrowsOnce = preloadFile('exit-throws-once', `
+  const exit = process.exit;
+  process.exit = function () {
+    process.exit = exit;
+    throw new Error('forced error as the hook exits');
+  };
 `);
 // A server that answers every card with `reply`, or holds it unanswered.
 const cardServer = (reply) => new Promise((resolve) => {
@@ -561,40 +643,108 @@ const cardServer = (reply) => new Promise((resolve) => {
   s.listen(0, '127.0.0.1', () => resolve(s));
 });
 const stopServer = (server) => new Promise((resolve) => { server.closeAllConnections(); server.close(resolve); });
+const couldNotCheckWords = (unattended) => couldNotCheck(unattended).hookSpecificOutput.permissionDecisionReason;
 
 // 5. THE CONTROL FAILING.
-describe('the refusal holds when what refuses fails too', () => {
-  // Claude Code reads exit code 2 from a PreToolUse hook as a block, with
-  // standard error as the reason, whatever standard output holds.
-  test('a refusal that cannot be written still refuses: the hook exits 2, the runtime\'s block, and says why on standard error', () => {
+describe('an answer counts only once the whole of it has been written', () => {
+  // An answer used to count as given as soon as the write to standard output
+  // returned. To a pipe, that write returns before the text has gone anywhere,
+  // and a failure is reported later, after the exit that follows every answer:
+  // the call was left with no answer and exit code 0, which the runtime reads
+  // as no objection. Claude Code reads exit code 2 from a PreToolUse hook as a
+  // block, with standard error as the reason, whatever standard output holds.
+  test('when the reader has gone, every answer the hook decides ends in exit 2, the runtime\'s block, with its reason on standard error', async () => {
     for (const [env, unattended] of [[ROUTINE, true], [CONVERSATION, false]]) {
-      const why = couldNotCheck(unattended).hookSpecificOutput.permissionDecisionReason;
-      for (const [what, r] of [
-        ['input it cannot read', runHook(null, { raw: '', preload: stdoutFails, env })],
-        ['a failure while judging', runHook(ORDINARY, { preload: [stdoutFails, throwsOnRequest], env })],
-        ['an allow it cannot write', runHook(ORDINARY, { preload: stdoutFails, env })],
+      const why = couldNotCheckWords(unattended);
+      const refusal = reasonOf(runHook(GUARDED, { env }));
+      assert.match(refusal, /Keychain/);
+      for (const [what, r, reason] of [
+        ['input it cannot read', await runHookInto('gone', null, { raw: '', env }), why],
+        ['a failure while judging', await runHookInto('gone', ORDINARY, { preload: throwsOnRequest, env }), why],
+        ['an allow', await runHookInto('gone', ORDINARY, { env }), why],
+        ['a refusal, in its own words', await runHookInto('gone', GUARDED, { env }), refusal],
       ]) {
         assert.strictEqual(r.status, 2, `${what}: ${r.stderr}`);
-        assert.strictEqual(r.stdout, '', what);
-        assert.strictEqual(r.stderr.trim(), why, what);
+        assert.strictEqual(r.stderr.trim(), reason, what);
       }
     }
-    // Outside Rundock the hook decides nothing, so it blocks nothing either.
-    const outside = runHook(ORDINARY, { preload: stdoutFails, env: { RUNDOCK: '' } });
-    assert.strictEqual(outside.status, 0, outside.stderr);
-    assert.strictEqual(outside.stdout, '');
   });
 
-  test('a refusal whose writing fails is never followed by an allow', async () => {
-    // The card is refused, and writing that refusal fails once. A reply that
-    // could not be read allows ordinary access, so the failed write must never
-    // be taken for one.
+  test('a card approved in Rundock whose allow cannot be written is blocked, and a card refused keeps its words', async () => {
+    const approved = await cardServer({ allow: true });
+    try {
+      const port = approved.address().port;
+      assert.strictEqual(decision(await runHookAgainst(port, ORDINARY)), 'allow');
+      const r = await runHookInto('gone', ORDINARY, { port });
+      assert.strictEqual(r.status, 2, r.stderr);
+      assert.strictEqual(r.stderr.trim(), couldNotCheckWords(true));
+    } finally { await stopServer(approved); }
+    const refused = await cardServer({ allow: false });
+    try {
+      const port = refused.address().port;
+      const given = await runHookAgainst(port, ORDINARY);
+      assert.strictEqual(decision(given), 'deny', given.stdout);
+      const r = await runHookInto('gone', ORDINARY, { port });
+      assert.strictEqual(r.status, 2, r.stderr);
+      assert.strictEqual(r.stderr.trim(), reasonOf(given));
+    } finally { await stopServer(refused); }
+  });
+
+  test('when the reader never reads, the hook stops waiting after a bounded time, and blocks', async () => {
+    for (const [env, unattended] of [[ROUTINE, true], [CONVERSATION, false]]) {
+      const r = await runHookInto('stalled', ORDINARY, { preload: fillsStdout, env });
+      assert.strictEqual(r.status, 2, `the hook ended by itself, with the runtime's block: ${r.stderr}`);
+      assert.strictEqual(r.stderr.trim(), couldNotCheckWords(unattended));
+    }
+  });
+
+  test('a reader that is slow to read, but reads within the wait, gets the whole answer, once', async () => {
+    const r = await runHookInto('slow', ORDINARY, { preload: fillsStdout });
+    assert.strictEqual(r.status, 0, r.stderr);
+    assert.deepStrictEqual(JSON.parse(r.stdout), runHook(ORDINARY).answer);
+  });
+
+  test('an error arriving as the hook blocks the call changes nothing: it still blocks, and prints nothing', () => {
+    for (const call of [ORDINARY, GUARDED]) {
+      const r = runHook(call, { preload: [firstWriteFails, exitThrowsOnce] });
+      assert.strictEqual(r.status, 2, r.stderr);
+      assert.strictEqual(r.stdout, '');
+    }
+  });
+
+  test('after a write that fails, nothing more is printed: not the answer again, not a refusal, not an allow', async () => {
+    for (const [what, r] of [
+      ['an allow', runHook(ORDINARY, { preload: firstWriteFails })],
+      ['a refusal', runHook(GUARDED, { preload: firstWriteFails })],
+      ['input it cannot read', runHook(null, { raw: '', preload: firstWriteFails })],
+      ['a failure while judging', runHook(ORDINARY, { preload: [firstWriteFails, throwsOnRequest] })],
+    ]) {
+      assert.strictEqual(r.status, 2, `${what}: ${r.stderr}`);
+      assert.strictEqual(r.stdout, '', what);
+    }
+    // A reply that cannot be read allows ordinary access, so a card refused
+    // whose refusal fails to be written is where an allow could follow.
     const server = await cardServer({ allow: false });
     try {
-      const r = await runHookAgainst(server.address().port, ORDINARY, {}, { preload: stdoutFailsOnce });
-      assert.strictEqual(r.status, 0);
-      assert.deepStrictEqual(r.answer, couldNotCheck(true), r.stdout);
+      const r = await runHookAgainst(server.address().port, ORDINARY, {}, { preload: firstWriteFails });
+      assert.strictEqual(r.status, 2);
+      assert.strictEqual(r.stdout, '');
     } finally { await stopServer(server); }
+  });
+
+  test('outside Rundock, and after a tool has run, an answer that cannot be written ends in exit 0, as it always has', async () => {
+    const outside = { RUNDOCK: '' };
+    const afterTool = { hook_event_name: 'PostToolUse', ...bash('echo x'), tool_response: {} };
+    for (const [what, r] of [
+      ['outside Rundock, the reader gone', await runHookInto('gone', ORDINARY, { env: outside })],
+      ['outside Rundock, the reader stalled', await runHookInto('stalled', ORDINARY, { preload: fillsStdout, env: outside })],
+      ['outside Rundock, a write that fails', runHook(ORDINARY, { preload: firstWriteFails, env: outside })],
+      ['after a tool has run, the reader gone', await runHookInto('gone', afterTool)],
+      ['after a tool has run, a write that fails', runHook(afterTool, { preload: firstWriteFails })],
+    ]) {
+      assert.strictEqual(r.status, 0, `${what}: ${r.stderr}`);
+      if ('stdout' in r) assert.strictEqual(r.stdout, '', `${what}: and nothing printed after it`);
+    }
   });
 
   test('a rejection while the server is being asked still refuses, a routine and a conversation each in their own words, where the runtime is told to do nothing about one', () => {
@@ -623,22 +773,27 @@ describe('the refusal holds when what refuses fails too', () => {
 });
 
 describe('what these tests use to force a failure', () => {
-  test('can only make the hook refuse, never allow, and none of it is reachable from a tool call', () => {
+  test('can only make the hook refuse, never allow, and none of it is reachable from a tool call', async () => {
     // A refusal is a deny, or the runtime's block when not even that could be
-    // written.
-    const refused = (r) => decision(r) === 'deny' || (r.status === 2 && r.stdout === '');
+    // written, with nothing printed.
+    const refused = (r) => decision(r) === 'deny' || (r.status === 2 && !r.stdout);
     for (const [what, preload, env] of [
       ['a failure while judging', throwsOnRequest, {}],
       ['a hook that cannot load', throwsOnLoad, {}],
       ...REJECTION_MODES.map((mode) => [`a rejection under ${mode}`, rejectsOnRequest, rejections(mode)]),
-      ['a standard output that cannot be written', stdoutFails, {}],
-      ['a first write that fails', stdoutFailsOnce, {}],
+      ['a first write that fails', firstWriteFails, {}],
     ]) {
       assert.ok(refused(runHook(ORDINARY, { preload, env })), `${what} refuses a call the hook would allow`);
       assert.ok(refused(runHook(GUARDED, { preload, env })), `${what} still refuses one the hook refuses`);
     }
+    // And a standard output the test leaves unable to take the answer.
+    for (const [what, how, preload] of [['a reader that has gone', 'gone', null], ['a full pipe nobody reads', 'stalled', fillsStdout]]) {
+      for (const call of [ORDINARY, GUARDED]) {
+        assert.ok(refused(await runHookInto(how, call, { preload })), `${what} refuses ${call.tool_name}`);
+      }
+    }
     // One arriving after the answer forces nothing, and a refusal stays one.
-    for (const preload of [rejectionAfterAnswer, errorAfterAnswer]) {
+    for (const preload of [rejectionAfterAnswer, errorAfterAnswer, exitThrowsOnce]) {
       assert.strictEqual(decision(runHook(GUARDED, { preload })), 'deny');
     }
     // Each is loaded by the test's own command line. The hook has no switch

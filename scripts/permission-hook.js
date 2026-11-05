@@ -17,7 +17,9 @@
  * --unhandled-rejections mode, a hook that cannot load, a process left with
  * nothing to wait for) or cannot read its input (not JSON, empty, cut off), the
  * call is refused inside Rundock and passes through outside it. Either way the
- * hook prints one answer for the call.
+ * hook prints one answer for the call, and it counts only once the whole of it
+ * has been written: inside Rundock, an answer that cannot be written blocks the
+ * call with exit code 2 and its reason on standard error.
  */
 
 // A HOOK THAT STOPS WITHOUT ANSWERING REFUSES THE TOOL CALL. The runtime reads a
@@ -30,49 +32,98 @@
 // left to refuse. Input that cannot be read at all is refused by the same
 // function, where it is parsed, below.
 let hookInput = '';
-// ONE ANSWER FOR EACH CALL. Set once an answer has been written whole. Nothing
-// in this file runs between an answer and its exit, so a rejection or an error
-// arriving after one can only have been forced from outside; it then prints no
-// second answer and leaves the first as it was, so a refusal stays a refusal.
-let answered = false;
+// ONE ANSWER FOR EACH CALL, AND IT COUNTS ONLY ONCE IT HAS ARRIVED. `answer` is
+// set as an answer starts to be written, so nothing after that, a rejection or
+// an error forced from outside included, ever prints a second one; `delivered`
+// once the whole of it has been written. writeAnswer returns only then: an
+// answer that cannot be written ends the call in `undelivered`.
+let answer = null;
+let delivered = false;
 function writeAnswer(output) {
-  process.stdout.write(JSON.stringify(output));
-  answered = true;
+  if (answer) {
+    if (!delivered) undelivered(answer);
+    return;
+  }
+  answer = output;
+  delivered = writeWhole(1, JSON.stringify(output));
+  if (!delivered) undelivered(output);
+}
+// AN ANSWER THAT DID NOT ARRIVE, after which nothing more is printed. A call
+// this hook decides is blocked: the runtime reads exit code 2 from a
+// PreToolUse hook as a block, with standard error as the reason, whatever
+// reached standard output, and on macOS and Linux the launcher execs this
+// file, so the code reaches the runtime as it is. A refusal keeps its words;
+// an allow that never arrived is blocked in the words of any request the hook
+// could not check. Outside Rundock nothing is decided, and a finished tool has
+// nothing left to refuse, so neither is blocked.
+function undelivered(output) {
+  if (!decidingCall()) process.exit(0);
+  const own = output && output.hookSpecificOutput;
+  const reason = own && own.permissionDecision === 'deny' && own.permissionDecisionReason;
+  writeWhole(2, `${reason || couldNotCheck()}\n`);
+  process.exit(2);
+}
+// THE WHOLE TEXT, OR FALSE. Written straight to the descriptor, not through
+// process.stdout: its write returns before the text has gone anywhere and
+// reports a failure, a reader that has gone for one, only later, by which time
+// the exit that follows every answer here has happened, and the call was left
+// with no answer and exit code 0, which the runtime reads as no objection.
+// Here the text has been written when this returns true. A pipe Node has
+// opened as process.stdout or process.stderr does not block, so a reader that
+// has stopped reading shows as EAGAIN, and is waited on for ANSWER_WAIT_MS at
+// most. An answer is far smaller than any pipe holds, so a write that has to
+// wait at all is one whose reader has stopped.
+const ANSWER_WAIT_MS = 2000;
+function writeWhole(fd, text) {
+  try {
+    void (fd === 1 ? process.stdout : process.stderr);
+    const fs = require('fs');
+    const bytes = Buffer.from(text);
+    const until = Date.now() + ANSWER_WAIT_MS;
+    for (let at = 0; at < bytes.length;) {
+      try {
+        at += fs.writeSync(fd, bytes, at, bytes.length - at);
+      } catch (e) {
+        if (!e || e.code !== 'EAGAIN' || Date.now() >= until) return false;
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+      }
+    }
+    return true;
+  } catch (e) {
+    return false;
+  }
 }
 // What a routine is told to do next, the same sentence as UNATTENDED_NEXT in
 // scripts/refusal-notice.js. Copied rather than required because this runs
 // when the hook could not load, which is when a require fails; held equal to
 // that one by test/unit/hook-never-crashes.test.js.
 const UNATTENDED_NEXT_UNLOADED = 'This run has nobody to ask, so carry on with the rest of the job without that step. If you cannot finish without it, make the last line of your final message: RUN STATUS: failed: <one-line reason>';
-function refuseUnanswered() {
-  if (answered) process.exit(0);
+// Whether this hook decides the call: a PreToolUse call inside Rundock. Input
+// that cannot be read is taken for one, and refused below.
+function decidingCall() {
   let event = 'PreToolUse';
   try { event = JSON.parse(hookInput).hook_event_name || event; } catch (e) { /* refused below */ }
   const deciding = process.env.RUNDOCK && event === 'PreToolUse';
+  return Boolean(deciding);
+}
+// The words of any request the hook could not check. A routine, which has
+// nobody to ask, is told what to do next as every other refusal tells it
+// (unattendedRun, below: a declaration, so it is there before anything else in
+// this file has run).
+function couldNotCheck() {
   const refused = 'Rundock could not check this request, so it was refused rather than approved on your behalf.';
-  const output = !deciding ? {} : {
+  return unattendedRun() ? `${refused} ${UNATTENDED_NEXT_UNLOADED}` : refused;
+}
+function refuseUnanswered() {
+  writeAnswer(!decidingCall() ? {} : {
     hookSpecificOutput: {
       hookEventName: 'PreToolUse',
       permissionDecision: 'deny',
-      // A routine, which has nobody to ask, is told what to do next as every
-      // other refusal tells it (unattendedRun, below: a declaration, so it is
-      // there before anything else in this file has run).
-      permissionDecisionReason: unattendedRun() ? `${refused} ${UNATTENDED_NEXT_UNLOADED}` : refused,
+      // A routine, which has nobody to ask, is told what to do next, in
+      // couldNotCheck, above.
+      permissionDecisionReason: couldNotCheck(),
     },
-  };
-  try {
-    writeAnswer(output);
-  } catch (e) {
-    // A REFUSAL THAT CANNOT BE WRITTEN STILL REFUSES. The runtime reads exit
-    // code 2 from a PreToolUse hook as a block, with standard error as the
-    // reason, whatever standard output holds; on macOS and Linux the launcher
-    // execs this file, so the code reaches the runtime as it is. Outside
-    // Rundock nothing is decided, so nothing is blocked either.
-    if (deciding) {
-      try { process.stderr.write(`${output.hookSpecificOutput.permissionDecisionReason}\n`); } catch (e2) { /* the code alone blocks */ }
-      process.exit(2);
-    }
-  }
+  });
   process.exit(0);
 }
 if (require.main === module) {
@@ -3680,7 +3731,6 @@ fetchAgentNotice((agentNotice) => {
     let body = '';
     res.on('data', chunk => { body += chunk; });
     res.on('end', () => {
-      let decided;
       try {
         const result = JSON.parse(body);
         // A refusal tells the agent, in this same answer, that it was on
@@ -3695,22 +3745,17 @@ fetchAgentNotice((agentNotice) => {
         // asked nobody (a standing grant, an always-allow rule): only an
         // answer from a card carries `card`.
         const approved = result.allow === true && result.card === true ? approvalNotice(data.tool_name) : null;
-        decided = {
+        writeDecision(({
           hookSpecificOutput: {
             hookEventName: 'PreToolUse',
             permissionDecision: result.allow ? 'allow' : 'deny',
             permissionDecisionReason: reason,
             ...(approved ? { additionalContext: approved } : {}),
           }
-        };
+        }));
       } catch (e) {
         unanswered('Rundock hook: could not parse server response.');
       }
-      // WRITTEN OUTSIDE THE CATCH. A reply that cannot be read allows ordinary
-      // access, so a write that fails must never be taken for one: inside the
-      // catch, a refusal whose writing failed was answered again as an allow.
-      // A failed write ends in refuseUnanswered, at the top, instead.
-      writeDecision(decided);
       process.exit(0);
     });
   });

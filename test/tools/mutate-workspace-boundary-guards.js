@@ -3195,12 +3195,39 @@ const MUTATIONS = [
   [HOOK_CRASH, 'Hook crash: a rejection is left to whatever the runtime was told to do with one',
     "process.on('unhandledRejection', refuseUnanswered);",
     "process.on('neverEmitted', refuseUnanswered);"],
+  // One answer for each call, and it counts only once the whole of it has
+  // been written.
   [HOOK_CRASH, 'Hook crash: a failure after the answer prints a second one',
-    "  if (answered) process.exit(0);\n  let event = 'PreToolUse';",
-    "  let event = 'PreToolUse';"],
-  [HOOK_CRASH, 'Hook crash: an answer written is never counted as given',
-    "  process.stdout.write(JSON.stringify(output));\n  answered = true;",
-    "  process.stdout.write(JSON.stringify(output));"],
+    "  if (answer) {\n    if (!delivered) undelivered(answer);\n    return;\n  }\n  answer = output;",
+    "  answer = output;"],
+  [HOOK_CRASH, 'Hook crash: a failure after an answer that never arrived lets the call through',
+    "    if (!delivered) undelivered(answer);\n    return;",
+    "    return;"],
+  [HOOK_CRASH, 'Hook crash: an answer counts as given before it has arrived',
+    "  delivered = writeWhole(1, JSON.stringify(output));\n  if (!delivered) undelivered(output);",
+    "  writeWhole(1, JSON.stringify(output));\n  delivered = true;"],
+  [HOOK_CRASH, 'Hook crash: a write counts as done once it has started',
+    "        at += fs.writeSync(fd, bytes, at, bytes.length - at);",
+    "        (fd === 1 ? process.stdout : process.stderr).write(text); at = bytes.length;"],
+  [HOOK_CRASH, 'Hook crash: a reader that stops reading is waited on for good',
+    "if (!e || e.code !== 'EAGAIN' || Date.now() >= until) return false;",
+    "if (!e || e.code !== 'EAGAIN') return false;"],
+  [HOOK_CRASH, 'Hook crash: a reader slow to read is not waited on at all',
+    "if (!e || e.code !== 'EAGAIN' || Date.now() >= until) return false;",
+    "return false;"],
+  // An answer that cannot be written ends in the runtime's own block instead.
+  [HOOK_CRASH, 'Hook crash: an answer that cannot be written lets the call through',
+    "  writeWhole(2, `${reason || couldNotCheck()}\\n`);\n  process.exit(2);",
+    "  writeWhole(2, `${reason || couldNotCheck()}\\n`);\n  process.exit(0);"],
+  [HOOK_CRASH, 'Hook crash: an answer that cannot be written says why nowhere',
+    "  writeWhole(2, `${reason || couldNotCheck()}\\n`);\n",
+    ""],
+  [HOOK_CRASH, 'Hook crash: a refusal that cannot be written loses its words',
+    "  const reason = own && own.permissionDecision === 'deny' && own.permissionDecisionReason;",
+    "  const reason = '';"],
+  [HOOK_CRASH, 'Hook crash: an answer that cannot be written blocks outside Rundock and after a tool too',
+    "  if (!decidingCall()) process.exit(0);\n  const own",
+    "  const own"],
   // Input the hook cannot read passed through before, which the runtime reads
   // as no objection; it is refused now, inside Rundock.
   [HOOK_CRASH, 'Hook crash: input the hook cannot read passes through again',
@@ -3212,40 +3239,6 @@ const MUTATIONS = [
   [HOOK_CRASH, 'Hook crash: a JSON list is read as a request',
     "if (!finished || typeof finished !== 'object' || Array.isArray(finished))",
     "if (!finished || typeof finished !== 'object')"],
-  // A refusal that cannot be written ends in the runtime's own block instead.
-  [HOOK_CRASH, 'Hook crash: a refusal that cannot be written lets the call through',
-    "      process.exit(2);",
-    "      process.exit(0);"],
-  [HOOK_CRASH, 'Hook crash: a refusal that cannot be written says why nowhere',
-    "      try { process.stderr.write(`${output.hookSpecificOutput.permissionDecisionReason}\\n`); } catch (e2) { /* the code alone blocks */ }\n",
-    ""],
-  [HOOK_CRASH, 'Hook crash: an output that cannot be written blocks the call outside Rundock too',
-    "    if (deciding) {\n      try { process.stderr.write(",
-    "    if (true) {\n      try { process.stderr.write("],
-  [HOOK_CRASH, "Hook crash: a card's answer that fails to be written is answered again as a reply that could not be read",
-    "        decided = {\n"
-    + "          hookSpecificOutput: {\n"
-    + "            hookEventName: 'PreToolUse',\n"
-    + "            permissionDecision: result.allow ? 'allow' : 'deny',\n"
-    + "            permissionDecisionReason: reason,\n"
-    + "            ...(approved ? { additionalContext: approved } : {}),\n"
-    + "          }\n"
-    + "        };\n"
-    + "      } catch (e) {\n"
-    + "        unanswered('Rundock hook: could not parse server response.');\n"
-    + "      }\n",
-    "        writeDecision({\n"
-    + "          hookSpecificOutput: {\n"
-    + "            hookEventName: 'PreToolUse',\n"
-    + "            permissionDecision: result.allow ? 'allow' : 'deny',\n"
-    + "            permissionDecisionReason: reason,\n"
-    + "            ...(approved ? { additionalContext: approved } : {}),\n"
-    + "          }\n"
-    + "        });\n"
-    + "      } catch (e) {\n"
-    + "        unanswered('Rundock hook: could not parse server response.');\n"
-    + "      }\n"
-    + "      if (answered) process.exit(0);\n"],
   [HOOK_CRASH, 'Hook crash: the refusal is armed in everything that requires the file',
     "if (require.main === module) {\n  process.on('uncaughtException', refuseUnanswered);",
     "if (true) {\n  process.on('uncaughtException', refuseUnanswered);"],
