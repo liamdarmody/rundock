@@ -69,5 +69,11 @@ describe('withRoutineState', () => {
     const spaced = withRoutineState(incoming, [{ name: 'Morning briefing', occurrence: 0, fields: { enabled: ' true' } }]);
     assert.ok(spaced.includes('    enabled: " true"'), 'the spaced value is written in quotes');
     assert.strictEqual(blocksOf(spaced)[0].enabled, ' true', 'and reads back as written');
+    // A switch that still cannot land is refused, never written and passed.
+    // A block that repeats the key is one: the writer changes the first line
+    // and the reader keeps the last, so what was written does not read back.
+    const repeated = agent(block('Morning briefing', 'Go.', '    enabled: false\n    enabled: false\n'));
+    assert.throws(() => withRoutineState(repeated, [{ name: 'Morning briefing', occurrence: 0, fields: { enabled: 'true' } }]),
+      /cannot carry "enabled" onto the routine "Morning briefing"/, 'a switch that did not land is a refusal');
   });
 });

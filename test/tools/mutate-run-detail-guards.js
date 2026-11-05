@@ -156,8 +156,8 @@ const MUTATIONS = [
 
   // ===== NO RAW STATUS WORD =====
   [MODEL, 'the state is looked up, never taken from the record',
-    "        : (Object.prototype.hasOwnProperty.call(RUN_STATES, record.status) ? RUN_STATES[record.status] : UNRECOGNISED_STATE));",
-    '        : (RUN_STATES[record.status] || { tone: \'bad\', chip: record.status, headline: `This run is ${record.status}.`, guidance: null }));'],
+    "          : (Object.prototype.hasOwnProperty.call(RUN_STATES, record.status) ? RUN_STATES[record.status] : UNRECOGNISED_STATE)));",
+    '          : (RUN_STATES[record.status] || { tone: \'bad\', chip: record.status, headline: `This run is ${record.status}.`, guidance: null })));'],
   // A failure the agent declared, read as a failure its process had. The two
   // send a reader to different places, so the chip and headline must differ.
   [MODEL, 'a failure the agent declared is told apart from one its process had',

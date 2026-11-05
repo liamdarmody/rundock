@@ -193,7 +193,7 @@ function splitRules(values) {
 }
 function notModelled(what) {
   // Synchronous, so the line is out before the exit.
-  fs.writeSync(2, `stub claude: ${what} is not modeled\n`);
+  fs.writeSync(2, `stub claude: ${what} is not modelled\n`);
   process.exit(2);
 }
 const DENY_RULES = splitRules(variadicValues('--disallowed-tools')).map((text) => {
@@ -231,7 +231,7 @@ function deniedWrite(tool, file) {
 // Only shell entries are put to the hooks here: a file-tool write never is,
 // which matches the CLI for every write a path rule refuses (it never asks the
 // hook about one) and leaves the hook unasked for the writes it allows. An
-// answer of ask, and a hook exiting 2, are not modeled.
+// answer of ask, and a hook exiting 2, are not modelled.
 const SETTINGS = (() => {
   const value = argValue('--settings');
   if (!value) return {};
