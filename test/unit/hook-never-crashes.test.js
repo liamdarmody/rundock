@@ -652,7 +652,8 @@ describe('an answer counts only once the whole of it has been written', () => {
   // and a failure is reported later, after the exit that follows every answer:
   // the call was left with no answer and exit code 0, which the runtime reads
   // as no objection. Claude Code reads exit code 2 from a PreToolUse hook as a
-  // block, with standard error as the reason, whatever standard output holds.
+  // block, with standard error as the reason, whatever standard output holds,
+  // and was measured doing so (test/unit/hook-block-capture.test.js).
   test('when the reader has gone, every answer the hook decides ends in exit 2, the runtime\'s block, with its reason on standard error', async () => {
     for (const [env, unattended] of [[ROUTINE, true], [CONVERSATION, false]]) {
       const why = couldNotCheckWords(unattended);
