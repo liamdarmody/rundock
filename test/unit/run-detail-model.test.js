@@ -574,3 +574,31 @@ test('a process failure still reads as stopped early, and a success is untouched
   const odd = declaredModel.describeRun({ ...base, status: 'succeeded', declared: true, error: null });
   assert.strictEqual(odd.state.chip, declaredModel.RUN_STATES.succeeded.chip);
 });
+
+// HOW MANY OF ITS CARDS WERE REFUSED, said when there were any. The count is
+// the server's (refusedCards), so a run that carried on past a refused step
+// and said nothing about it still shows it. A record with none, and every
+// record written before the count existed, says nothing, rather than "0".
+describe('the cards a run had refused', () => {
+  test('a run with refused cards says how many, in words', () => {
+    assert.strictEqual(model.describeRun({ ...base, status: 'succeeded', refusedCards: 1 }).refused,
+      '1 permission card was refused or left unanswered.');
+    assert.strictEqual(model.describeRun({ ...base, status: 'failed', declared: true, error: 'x', refusedCards: 3 }).refused,
+      '3 permission cards were refused or left unanswered.');
+  });
+
+  test('a record without the count, an older one included, says nothing', () => {
+    assert.strictEqual(model.describeRun({ ...base, status: 'succeeded' }).refused, null);
+    assert.strictEqual(model.describeRun({ ...base, status: 'succeeded', refusedCards: 0 }).refused, null);
+  });
+
+  test('a count that is not a whole number above nought says nothing', () => {
+    for (const odd of [-1, 1.5, NaN, Infinity, '2', null, true, {}]) {
+      assert.strictEqual(model.describeRun({ ...base, status: 'succeeded', refusedCards: odd }).refused, null, `refusedCards: ${String(odd)}`);
+    }
+  });
+
+  test('no record says nothing either', () => {
+    assert.strictEqual(model.describeRun(null).refused, null);
+  });
+});

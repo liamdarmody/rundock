@@ -51,6 +51,9 @@ const REGISTRY_SUITES = [
   // No test may POST a permission card to a live Rundock: the hook defaults to
   // port 3000, so an unpinned test storms whoever is running the app.
   'test/unit/no-live-server-in-tests.test.js',
+  // Only the scheduler starts an agent with no conversation, which is what
+  // tells a routine's refused card apart from a conversation's.
+  'test/unit/unattended-spawn-paths.test.js',
   // Every innerHTML assignment is classified, and the totals beside it.
   'test/unit/innerhtml-inventory.test.js',
   // Documents that state the code's own numbers, names and lists.
@@ -151,6 +154,7 @@ const NOT_CHEAP = {
   'test/unit/page-ready.test.js': 'behaviour: drives the smoke journeys\' page helpers against a page that is slow in the ways a loaded machine is. It reads the persona journey\'s orchestrator file out of its source, which is why the inventory names it, but the read serves one check on that journey rather than a bookkeeping one',
   'test/unit/packages-manage.test.js': 'behaviour: boots a document, renders the Packages section through the shipped settings view and presses its controls. It counts the settings nav entries it cuts out of index.html, which is why the inventory names it, but the count serves a rendered check',
   'test/unit/permissions.test.js': 'behaviour: grades real command text against the risk rules',
+  'test/unit/hook-never-crashes.test.js': 'behavior: runs the real permission hook as its own process, over and over, with failures forced into it. It reads the test-only names out of the hook source to show the hook has no switch of its own for those failures, which is why the inventory names it',
   'test/unit/permissions-view.test.js': 'behaviour: boots a document and renders the settings pane, then presses what it drew. It walks the stylesheets to prove no class is left unstyled, which is why the inventory names it, but the walk is in service of a rendered check rather than a bookkeeping one',
   'test/unit/working-folders-view.test.js': 'behaviour: boots a document and presses controls',
   'test/unit/pins-view.test.js': 'behaviour: boots a document and drives the shipped pins view, pressing the header control and the row affordance and asserting what was sent. It counts the panes it cuts out of index.html, which is why the inventory names it, but the count is in service of a rendered check rather than a bookkeeping one',

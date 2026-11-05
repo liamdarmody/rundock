@@ -164,6 +164,27 @@ const STOP_ASK_HOOK = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), s
 const STOP_ASK_LINE = { src: path.join(ROOT, 'scripts', 'refusal-notice.js'), suite: 'test/unit/stop-and-ask.test.js' };
 const STOP_ASK_SCAFFOLD = { src: path.join(ROOT, 'lib', 'workspace', 'scaffold.js'), suite: 'test/unit/stop-and-ask.test.js' };
 const STOP_ASK_GLUE = { src: path.join(ROOT, 'lib', 'runtime', 'codex-glue.js'), suite: 'test/integration/codex-stop-and-ask.test.js' };
+// A run nobody can be asked from is told to carry on or say it failed: the
+// hook that decides who can be asked and hands every refusal over in those
+// words, and the words themselves, each driven by the suite that runs the real
+// hook with the environment each kind of spawn builds.
+const UNATTENDED_HOOK = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/unattended-refusal.test.js' };
+const UNATTENDED_LINE = { src: path.join(ROOT, 'scripts', 'refusal-notice.js'), suite: 'test/unit/unattended-refusal.test.js' };
+// The same words when the check itself fails (a crash, a stall, a reply cut
+// off), driven by the suite that forces each failure on the real hook.
+const UNATTENDED_CRASH = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/hook-never-crashes.test.js' };
+const UNATTENDED_CRASH_LINE = { src: path.join(ROOT, 'scripts', 'refusal-notice.js'), suite: 'test/unit/hook-never-crashes.test.js' };
+// Each spawn of an agent, with the conversation it passes, driven through a
+// refused card by the suite that starts each one for real.
+const SPAWN_SERVER = { src: path.join(ROOT, 'server.js'), suite: 'test/integration/spawn-path-wording.test.js' };
+const SPAWN_ENGINE = { src: path.join(ROOT, 'lib', 'delegation', 'engine.js'), suite: 'test/integration/spawn-path-wording.test.js' };
+const SPAWN_SCHEDULER = { src: path.join(ROOT, 'lib', 'scheduler.js'), suite: 'test/integration/spawn-path-wording.test.js' };
+// The inventory of every process the app starts, read from the source.
+const INVENTORY_ENGINE = { src: path.join(ROOT, 'lib', 'delegation', 'engine.js'), suite: 'test/unit/unattended-spawn-paths.test.js' };
+const INVENTORY_FILES = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'files.js'), suite: 'test/unit/unattended-spawn-paths.test.js' };
+const INVENTORY_SCHEDULER = { src: path.join(ROOT, 'lib', 'scheduler.js'), suite: 'test/unit/unattended-spawn-paths.test.js' };
+const INVENTORY_SERVER = { src: path.join(ROOT, 'server.js'), suite: 'test/unit/unattended-spawn-paths.test.js' };
+const SPAWN_CONVO_ENV = { src: path.join(ROOT, 'lib', 'runtime', 'claude.js'), suite: 'test/integration/spawn-path-wording.test.js' };
 const STOP_ASK_CLIENT = { src: path.join(ROOT, 'codex-appserver.js'), suite: 'test/integration/codex-stop-and-ask.test.js' };
 // After a person approves a card, the agent is told in the same step: the
 // hook's added context, the handler that says a card was answered, the click
@@ -204,6 +225,17 @@ const AUTH_SPAWN = { src: path.join(ROOT, 'lib', 'runtime', 'claude.js'), suite:
 const AUTH_HOOK = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/integration/boundary-permissions.test.js' };
 const AUTH_WINDOW = { src: path.join(ROOT, 'electron', 'window-key.js'), suite: 'test/unit/control-auth.test.js' };
 const AUTH_SIGNIN = { src: path.join(ROOT, 'public', 'sign-in-model.js'), suite: 'test/unit/control-auth.test.js' };
+// A routine run's own hook token: checked at the card route, watched by the
+// file that runs the real hook against the real route; issued and retired by
+// the scheduler, watched by the file that starts runs with a stand-in spawn;
+// and the card's answer, read once, watched by the file that answers real
+// hook requests through the real route.
+const RUN_TOKEN_ROUTE = { src: path.join(ROOT, 'lib', 'http-router.js'), suite: 'test/unit/routine-run-token.test.js' };
+const RUN_TOKEN_SCHED = { src: path.join(ROOT, 'lib', 'scheduler.js'), suite: 'test/unit/scheduler-lib.test.js' };
+const RUN_END_CLOSE = { src: path.join(ROOT, 'lib', 'scheduler.js'), suite: 'test/integration/routine-run-token.test.js' };
+const RUN_END_ANSWER = { src: path.join(ROOT, 'lib', 'http-router.js'), suite: 'test/integration/routine-run-token.test.js' };
+const RUN_END_DENY = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'process-control.js'), suite: 'test/integration/routine-run-token.test.js' };
+const ANSWER_READ = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'process-control.js'), suite: 'test/unit/unattended-refusal.test.js' };
 // The key the Windows launcher makes and hands over, consumed and never echoed.
 const LAUNCHER = { src: path.join(ROOT, 'lib', 'auth', 'index.js'), suite: 'test/unit/launcher-code.test.js' };
 const LAUNCHER_BANNER = { src: path.join(ROOT, 'server.js'), suite: 'test/unit/launcher-code.test.js' };
@@ -230,6 +262,7 @@ const SHELL_CODE = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suit
 // The same file, the suite that runs it as its own process: a hook that dies
 // answers nothing, and the runtime carries on as though nothing had objected.
 const HOOK_CRASH = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/hook-never-crashes.test.js' };
+const HOOK_BLOCK_CAPTURE = { src: path.join(ROOT, 'scripts', 'hook-block-truth', 'capture.js'), suite: 'test/unit/hook-block-capture.test.js' };
 // The same file, the suite that times it: the folder each word starts from is
 // worked out once per command, or the check grows with the square of it.
 const SHELL_TIMING = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/shell-code-timing.test.js' };
@@ -1812,8 +1845,8 @@ const MUTATIONS = [
     '  verifyClient: ({ req }) => true\n'],
   // ===== ONLY RUNDOCK'S OWN WINDOW DRIVES THE SERVER =====
   [AUTH_UNIT, 'Auth: an unknown hook token belongs to no conversation',
-    '  return hookScopes.has(token) ? hookScopes.get(token) : undefined;',
-    '  return hookScopes.has(token) ? hookScopes.get(token) : null;'],
+    '  return runTokens.has(token) ? null : undefined;',
+    '  return null;'],
   [AUTH_DOOR, 'Auth: every WebSocket upgrade asks for the key',
     '    && auth.authenticate(req, server.address().port),',
     '    && true,'],
@@ -1845,8 +1878,62 @@ const MUTATIONS = [
     '(fs.constants.O_NOFOLLOW || 0);\n  const fd',
     '0;\n  const fd'],
   [AUTH_SPAWN, 'Auth: an agent is started with its conversation\'s hook token',
-    "  env.RUNDOCK_HOOK_TOKEN = require('../auth/index.js').issueHookToken(convoId || null);\n",
+    "  const hookToken = convoId ? require('../auth/index.js').issueHookToken(convoId) : runToken;\n",
+    '  const hookToken = runToken;\n'],
+  [AUTH_UNIT, 'Run token: a retired token still names its run',
+    "  if (typeof token === 'string') runTokens.delete(token);",
+    '  return token;'],
+  [AUTH_UNIT, 'Run token: two runs are handed one token',
+    "  const token = crypto.randomBytes(24).toString('base64url');\n  runTokens.set(token, runId);",
+    "  const token = [...runTokens.keys()][0] || crypto.randomBytes(24).toString('base64url');\n  runTokens.set(token, runId);"],
+  [RUN_TOKEN_ROUTE, 'Run token: a token with no live run behind it files a card that names no run',
+    '    if (scope === null && !run) {',
+    '    if (false) {'],
+  [RUN_TOKEN_ROUTE, 'Run token: a run lookup that fails is not caught',
+    "  try {\n    const runId = auth.hookRunOf(req);\n    return (runId && deps.routineRun(runId)) || null;\n  } catch (e) {",
+    "  {\n    const runId = auth.hookRunOf(req);\n    return (runId && deps.routineRun(runId)) || null;\n  } if (0) { const e = 0;"],
+  [RUN_TOKEN_ROUTE, 'Run token: a late body files its card on a run that has since ended',
+    '      if (run && (!still || still.id !== run.id)) {',
+    '      if (false) {'],
+  [RUN_TOKEN_ROUTE, 'Run token: a late body is checked only for its token still being issued',
+    '      if (run && (!still || still.id !== run.id)) {',
+    '      if (run && !auth.hookRunOf(req)) {'],
+  [RUN_TOKEN_ROUTE, 'Run token: a late body is checked only for some run being found',
+    '      if (run && (!still || still.id !== run.id)) {',
+    '      if (run && !still) {'],
+  [RUN_TOKEN_SCHED, 'Run end: a run\'s open cards are not settled as it closes',
+    '  try { deps.settleRunCards(run.id); } catch (e) {',
+    '  try { } catch (e) {'],
+  [RUN_TOKEN_SCHED, 'Run end: a settling that throws stops the record closing',
+    '  try { deps.settleRunCards(run.id); } catch (e) {',
+    '  { deps.settleRunCards(run.id); } if (0) { const e = 0;'],
+  [RUN_TOKEN_ROUTE, 'Run end: a card settled as its run ends stays open, so a later answer counts it again',
+    "    deps.pendingPermissionRequests().delete(requestId);\n    clearTimeout(pending.timer);\n    console.log(`[Permission] Refused (its run ended)",
+    "    clearTimeout(pending.timer);\n    console.log(`[Permission] Refused (its run ended)"],
+  [RUN_TOKEN_ROUTE, 'Run end: a card settled as its run ends lets its hook through',
+    "      pending.res.end(JSON.stringify({ allow: false, reason: 'run-ended' }));",
+    "      pending.res.end(JSON.stringify({ allow: true, reason: 'run-ended' }));"],
+  [RUN_END_CLOSE, 'Run end, through real runs: a run\'s open cards are not settled as it closes',
+    '  try { deps.settleRunCards(run.id); } catch (e) {',
+    '  try { } catch (e) {'],
+  [RUN_END_ANSWER, 'Run end, through real runs: a card settled as its run ends lets its hook through',
+    "      pending.res.end(JSON.stringify({ allow: false, reason: 'run-ended' }));",
+    "      pending.res.end(JSON.stringify({ allow: true, reason: 'run-ended' }));"],
+  [RUN_END_ANSWER, 'Run end, through real runs: a card settled as its run ends stays open, so a later answer counts it again',
+    "    deps.pendingPermissionRequests().delete(requestId);\n    clearTimeout(pending.timer);\n    console.log(`[Permission] Refused (its run ended)",
+    "    clearTimeout(pending.timer);\n    console.log(`[Permission] Refused (its run ended)"],
+  [RUN_END_DENY, 'Run end: a card a denial settled is counted again as its run closes',
+    '    ctx.pendingPermissions.delete(msg.requestId);\n',
     ''],
+  [RUN_TOKEN_SCHED, 'Run token: a run\'s token outlives its record',
+    '  auth.retireRunHookToken(run.hookToken);\n',
+    ''],
+  [RUN_TOKEN_SCHED, 'Run token: a routine is started without its run\'s token',
+    '    env: getSpawnEnv(null, run.hookToken),',
+    '    env: getSpawnEnv(null),'],
+  [ANSWER_READ, 'Answer: any truthy answer approves the card',
+    '    const allow = msg.allow === true;',
+    '    const allow = !!msg.allow;'],
   [AUTH_HOOK, 'Auth: the hook sends its token with a card request',
     "      'Content-Length': Buffer.byteLength(payload),\n      ...hookTokenHeader(),",
     "      'Content-Length': Buffer.byteLength(payload),"],
@@ -2209,16 +2296,16 @@ const MUTATIONS = [
     '          grant_dir: (boundaryCrossings[0] && boundaryCrossings[0].grantDir) || access.grantDir || null,'],
   // ===== STOP AND ASK AFTER A REFUSAL =====
   [STOP_ASK_HOOK, "Stop and ask: a denied card goes back to inviting another route",
-    ": refusalNotice(result.reason === 'timeout' ? 'timeout' : 'denied', data.tool_name);",
+    ": refusalNotice(result.reason === 'timeout' ? 'timeout' : 'denied', data.tool_name, { unattended: unattendedRun() });",
     ": 'This command was not approved. Acknowledge and move on.';"],
   [STOP_ASK_HOOK, "Stop and ask: a timed-out card is told as a denial",
-    "refusalNotice(result.reason === 'timeout' ? 'timeout' : 'denied', data.tool_name)",
-    "refusalNotice('denied', data.tool_name)"],
+    "refusalNotice(result.reason === 'timeout' ? 'timeout' : 'denied', data.tool_name, { unattended: unattendedRun() })",
+    "refusalNotice('denied', data.tool_name, { unattended: unattendedRun() })"],
   [STOP_ASK_HOOK, "Stop and ask: a failed call never reaches the after-call branch",
     "if (hookEvent === 'PostToolUse' || hookEvent === 'PostToolUseFailure') {",
     "if (hookEvent === 'PostToolUse') {"],
   [STOP_ASK_HOOK, "Stop and ask: a sandbox block is never told",
-    "blocked ? refusalNotice('sandbox', finished.tool_name) : null",
+    "blocked ? refusalNotice('sandbox', finished.tool_name, { unattended: unattendedRun() }) : null",
     "null"],
   [STOP_ASK_HOOK, "Stop and ask: told outside Rundock too",
     "const blocked = !!process.env.RUNDOCK && sandboxBlocked(",
@@ -2238,6 +2325,94 @@ const MUTATIONS = [
   [STOP_ASK_LINE, "Stop and ask: a kind that is no refusal still gets a line",
     "const what = Object.prototype.hasOwnProperty.call(WHAT, kind) ? WHAT[kind] : null;",
     "const what = WHAT[kind] || null;"],
+  // ===== A RUN NOBODY CAN BE ASKED FROM =====
+  [UNATTENDED_HOOK, "Unattended: a routine's refused card is told to stop and ask",
+    ": refusalNotice(result.reason === 'timeout' ? 'timeout' : 'denied', data.tool_name, { unattended: unattendedRun() });",
+    ": refusalNotice(result.reason === 'timeout' ? 'timeout' : 'denied', data.tool_name);"],
+  [UNATTENDED_HOOK, "Unattended: a routine's own timeout is told to stop and ask",
+    "permissionDecisionReason: refusalNotice('timeout', data.tool_name, { unattended: unattendedRun() })",
+    "permissionDecisionReason: refusalNotice('timeout', data.tool_name)"],
+  [UNATTENDED_HOOK, "Unattended: a routine's sandbox block is told to stop and ask",
+    "blocked ? refusalNotice('sandbox', finished.tool_name, { unattended: unattendedRun() }) : null",
+    "blocked ? refusalNotice('sandbox', finished.tool_name) : null"],
+  [UNATTENDED_HOOK, "Unattended: a conversation is told it has nobody to ask",
+    "function unattendedRun(env = process.env) { return !env.RUNDOCK_CONVO_ID; }",
+    "function unattendedRun(env = process.env) { return true; }"],
+  [UNATTENDED_HOOK, "Unattended: a routine is told what a conversation is told",
+    "function unattendedRun(env = process.env) { return !env.RUNDOCK_CONVO_ID; }",
+    "function unattendedRun(env = process.env) { return false; }"],
+  [UNATTENDED_LINE, "Unattended: the line ignores who can be asked",
+    "  if (options && options.unattended === true) return `${refused} ${UNATTENDED_NEXT}`;\n",
+    ""],
+  [UNATTENDED_LINE, "Unattended: any truthy option makes a conversation a routine",
+    "  if (options && options.unattended === true) return `${refused} ${UNATTENDED_NEXT}`;",
+    "  if (options && options.unattended) return `${refused} ${UNATTENDED_NEXT}`;"],
+  [UNATTENDED_LINE, "Unattended: a routine is no longer told not to work round the refusal",
+    "  if (options && options.unattended === true) return `${refused} ${UNATTENDED_NEXT}`;",
+    "  if (options && options.unattended === true) return `${what(subjectFor(toolName))} ${UNATTENDED_NEXT}`;"],
+  [UNATTENDED_LINE, "Unattended: a routine is not told the failure line its record reads",
+    " If you cannot finish without it, make the last line of your final message: RUN STATUS: failed: <one-line reason>';",
+    " If you cannot finish without it, say so in your final message.';"],
+  [UNATTENDED_CRASH, "Unattended: a hook that cannot check tells a routine nothing of what to do next",
+    "return unattendedRun() ? `${refused} ${UNATTENDED_NEXT_UNLOADED}` : refused;",
+    "return refused;"],
+  [UNATTENDED_CRASH, "Unattended: a hook that cannot check swaps a routine's words for a conversation's",
+    "return unattendedRun() ? `${refused} ${UNATTENDED_NEXT_UNLOADED}` : refused;",
+    "return !unattendedRun() ? `${refused} ${UNATTENDED_NEXT_UNLOADED}` : refused;"],
+  [UNATTENDED_CRASH, "Unattended: the copy a hook that cannot load uses drifts from every refusal's",
+    "const UNATTENDED_NEXT_UNLOADED = 'This run has nobody to ask, so carry on with the rest of the job without that step.",
+    "const UNATTENDED_NEXT_UNLOADED = 'This run has nobody to ask, so carry on without that step."],
+  [UNATTENDED_CRASH, "Unattended: a routine whose reply is cut off is not told what to do next",
+    "failClosed ? unansweredNotice(`${reason} ${why}`, { unattended: unattendedRun() }) : reason,",
+    "failClosed ? `${reason} ${why}` : reason,"],
+  [UNATTENDED_CRASH, "Unattended: a routine left waiting by a stalled server is told to stop and ask",
+    "permissionDecisionReason: refusalNotice('timeout', data.tool_name, { unattended: unattendedRun() })",
+    "permissionDecisionReason: refusalNotice('timeout', data.tool_name)"],
+  [UNATTENDED_CRASH_LINE, "Unattended: a failed check tells a conversation it has nobody to ask",
+    "  return options && options.unattended === true ? `${reason} ${UNATTENDED_NEXT}` : reason;",
+    "  return `${reason} ${UNATTENDED_NEXT}`;"],
+  [SPAWN_SCHEDULER, "Spawn path: a routine's run is started with a conversation",
+    "    env: getSpawnEnv(null, run.hookToken),",
+    "    env: getSpawnEnv('routine', run.hookToken),"],
+  [SPAWN_SERVER, "Spawn path: a conversation's interactive turn is started with none",
+    "              cwd: WORKSPACE,\n              env: getSpawnEnv(convoId),",
+    "              cwd: WORKSPACE,\n              env: getSpawnEnv(null),"],
+  [SPAWN_SERVER, "Spawn path: a conversation's legacy turn is started with none",
+    "            cwd: WORKSPACE,\n            env: getSpawnEnv(convoId),",
+    "            cwd: WORKSPACE,\n            env: getSpawnEnv(null),"],
+  [SPAWN_SERVER, "Spawn path: a chat message with no conversation id is started with none",
+    "const convoId = msg.conversationId || 'default';",
+    "const convoId = msg.conversationId || '';"],
+  [SPAWN_ENGINE, "Spawn path: a delegate started fresh without its session is started with no conversation",
+    "spawnClaude(withoutResume(args), {\n    cwd: config.getWorkspace(),\n    env: getSpawnEnv(convoId),",
+    "spawnClaude(withoutResume(args), {\n    cwd: config.getWorkspace(),\n    env: getSpawnEnv(null),"],
+  [SPAWN_ENGINE, "Spawn path: the orchestrator started for a handback is started with no conversation",
+    "' resume=none'}`);\n\n  const proc = spawnClaude(args, {\n    cwd: config.getWorkspace(),\n    env: getSpawnEnv(convoId),",
+    "' resume=none'}`);\n\n  const proc = spawnClaude(args, {\n    cwd: config.getWorkspace(),\n    env: getSpawnEnv(null),"],
+  [SPAWN_ENGINE, "Spawn path: a caller resumed after a blocked handoff is started with no conversation",
+    "const proc = spawnClaude(args, { cwd: config.getWorkspace(), env: getSpawnEnv(convoId),",
+    "const proc = spawnClaude(args, { cwd: config.getWorkspace(), env: getSpawnEnv(null),"],
+  [SPAWN_ENGINE, "Spawn path: a delegate is started with no conversation",
+    ": spawnClaude(delegateArgs, {\n        cwd: config.getWorkspace(),\n        env: getSpawnEnv(convoId),",
+    ": spawnClaude(delegateArgs, {\n        cwd: config.getWorkspace(),\n        env: getSpawnEnv(null),"],
+  [SPAWN_ENGINE, "Spawn path: a parent resumed after its delegate is started with no conversation",
+    "const resumeProc = spawnClaude(resumeArgs, {\n        cwd: config.getWorkspace(),\n        env: getSpawnEnv(convoId),",
+    "const resumeProc = spawnClaude(resumeArgs, {\n        cwd: config.getWorkspace(),\n        env: getSpawnEnv(null),"],
+  [SPAWN_CONVO_ENV, "Spawn path: the spawn environment drops the conversation it is given",
+    "  if (convoId) env.RUNDOCK_CONVO_ID = convoId;\n",
+    ""],
+  [INVENTORY_ENGINE, "Inventory: a second agent spawn added beside a listed one goes unlisted",
+    "  const proc = spawnClaude(args, { cwd: config.getWorkspace(), env: getSpawnEnv(convoId),",
+    "  if (opts.twice) spawnClaude(args, { cwd: config.getWorkspace(), env: getSpawnEnv(convoId) });\n  const proc = spawnClaude(args, { cwd: config.getWorkspace(), env: getSpawnEnv(convoId),"],
+  [INVENTORY_FILES, "Inventory: another program started where one is listed goes unlisted",
+    "try { require('child_process').spawn('open', ['-R', full], { stdio: 'ignore' }); } catch (e) {}",
+    "try { require('child_process').spawn('open', ['-R', full], { stdio: 'ignore' }); require('child_process').spawn('claude', ['-p', full]); } catch (e) {}"],
+  [INVENTORY_SCHEDULER, "Inventory: getSpawnEnv given to something other than an agent spawn",
+    "    env: getSpawnEnv(null, run.hookToken),",
+    "    env: getSpawnEnv(null, run.hookToken), shadow: getSpawnEnv('x'),"],
+  [INVENTORY_SERVER, "Inventory: a conversation's spawn passes no conversation",
+    "              cwd: WORKSPACE,\n              env: getSpawnEnv(convoId),",
+    "              cwd: WORKSPACE,\n              env: getSpawnEnv(null),"],
   [STOP_ASK_SCAFFOLD, "Stop and ask: the failure hook is never registered",
     "for (const event of ['PostToolUse', 'PostToolUseFailure']) {",
     "for (const event of ['PostToolUse']) {"],
@@ -2266,17 +2441,17 @@ const MUTATIONS = [
     "return `The person approved ${subjectFor(toolName)} in Rundock after a permission card.`;",
     "return `The person approved this ${toolName} in Rundock after a permission card.`;"],
   [APPROVED_HANDLER, "Approved: the handler drops that a card was answered",
-    "pending.res.end(JSON.stringify(card ? { allow: true, card: true } : { allow: msg.allow }));",
-    "pending.res.end(JSON.stringify({ allow: msg.allow }));"],
+    "pending.res.end(JSON.stringify(card ? { allow: true, card: true } : { allow }));",
+    "pending.res.end(JSON.stringify({ allow }));"],
   [APPROVED_HANDLER, "Approved: a card flag on a denial counts as an approval",
-    "const card = msg.allow === true && msg.card === true;",
+    "const card = allow && msg.card === true;",
     "const card = msg.card === true;"],
   [APPROVED_CLICK, "Approved: a click on a card does not say it was a card",
     "    card: true,\n    toolInput: pending.toolInput || {}",
     "    toolInput: pending.toolInput || {}"],
   [APPROVED_HANDLER_CODEX, "Approved: a Codex decision never hears that a card was answered",
-    "pending.onDecision(msg.allow === true, 'user', { card });",
-    "pending.onDecision(msg.allow === true, 'user');"],
+    "pending.onDecision(allow, 'user', { card });",
+    "pending.onDecision(allow, 'user');"],
   [APPROVED_GLUE, "Approved: a Codex approval on a card is never told",
     "if (ev.respond('accept') !== false && how && how.card) tellCodexApproval(convoId, ev, toolName);",
     "ev.respond('accept');"],
@@ -3083,12 +3258,79 @@ const MUTATIONS = [
   [HOOK_CRASH, 'Hook crash: a hook that runs out of things to wait for says nothing',
     "process.on('beforeExit', refuseUnanswered);",
     "process.on('neverEmitted', refuseUnanswered);"],
+  [HOOK_CRASH, 'Hook crash: a rejection is left to whatever the runtime was told to do with one',
+    "process.on('unhandledRejection', refuseUnanswered);",
+    "process.on('neverEmitted', refuseUnanswered);"],
+  // One answer for each call, and it counts only once the whole of it has
+  // been written.
+  [HOOK_CRASH, 'Hook crash: a failure after the answer prints a second one',
+    "  if (answer) {\n    if (!delivered) undelivered(answer);\n    return;\n  }\n  if (allows(output) && !turnOver) {",
+    "  if (allows(output) && !turnOver) {"],
+  [HOOK_CRASH, 'Hook crash: a failure after an answer that never arrived lets the call through',
+    "    if (!delivered) undelivered(answer);\n    return;",
+    "    return;"],
+  [HOOK_CRASH, 'Hook crash: an answer counts as given before it has arrived',
+    "  delivered = writeWhole(1, JSON.stringify(output));\n  if (!delivered) undelivered(output);",
+    "  writeWhole(1, JSON.stringify(output));\n  delivered = true;"],
+  [HOOK_CRASH, 'Hook crash: a write counts as done once it has started',
+    "        at += fs.writeSync(fd, bytes, at, bytes.length - at);",
+    "        (fd === 1 ? process.stdout : process.stderr).write(text); at = bytes.length;"],
+  [HOOK_CRASH, 'Hook crash: a reader that stops reading is waited on for good',
+    "if (!e || e.code !== 'EAGAIN' || Date.now() >= until) return false;",
+    "if (!e || e.code !== 'EAGAIN') return false;"],
+  [HOOK_CRASH, 'Hook crash: a reader slow to read is not waited on at all',
+    "if (!e || e.code !== 'EAGAIN' || Date.now() >= until) return false;",
+    "return false;"],
+  // An answer that cannot be written ends in the runtime's own block instead.
+  [HOOK_CRASH, 'Hook crash: an answer that cannot be written lets the call through',
+    "  writeWhole(2, `${reason || couldNotCheck()}\\n`);\n  process.exit(2);",
+    "  writeWhole(2, `${reason || couldNotCheck()}\\n`);\n  process.exit(0);"],
+  [HOOK_CRASH, 'Hook crash: an answer that cannot be written says why nowhere',
+    "  writeWhole(2, `${reason || couldNotCheck()}\\n`);\n",
+    ""],
+  [HOOK_CRASH, 'Hook crash: a refusal that cannot be written loses its words',
+    "  const reason = own && own.permissionDecision === 'deny' && own.permissionDecisionReason;",
+    "  const reason = '';"],
+  [HOOK_CRASH, 'Hook crash: an answer that cannot be written blocks outside Rundock and after a tool too',
+    "  if (!decidingCall()) process.exit(0);\n  const own",
+    "  const own"],
+  // An allow waits one turn, so a rejection from the turn it was decided in
+  // refuses first.
+  [HOOK_CRASH, 'Hook crash: an allow is written in the turn it was decided',
+    "  if (allows(output) && !turnOver) {",
+    "  if (false) {"],
+  [HOOK_CRASH, 'Hook crash: the call ends before a waiting allow is written',
+    "  if (!allowWaiting || answer) process.exit(0);",
+    "  process.exit(0);"],
+  [HOOK_CRASH, 'Hook crash: a refusal waits a turn as an allow does',
+    "  if (allows(output) && !turnOver) {",
+    "  if (Boolean(output && output.hookSpecificOutput && output.hookSpecificOutput.permissionDecision) && !turnOver) {"],
+  [HOOK_CRASH, 'Hook crash: a file inside the workspace goes on to ask for a card after it is allowed',
+    "        permissionDecisionReason: 'In-workspace file access'\n      }\n    }));\n    endCall();\n    return;",
+    "        permissionDecisionReason: 'In-workspace file access'\n      }\n    }));\n    endCall();"],
+  [HOOK_CRASH, 'Hook crash: a command in Code mode goes on to ask for a card after it is allowed',
+    "        permissionDecisionReason: 'Auto-approved: workspace is in Code mode'\n      }\n    }));\n    endCall();\n    return;",
+    "        permissionDecisionReason: 'Auto-approved: workspace is in Code mode'\n      }\n    }));\n    endCall();"],
+  [HOOK_CRASH, 'Hook crash: a connector read goes on to ask for a card after it is allowed',
+    "        permissionDecisionReason: 'Auto-approved: MCP read'\n      }\n    }));\n    endCall();\n    return;",
+    "        permissionDecisionReason: 'Auto-approved: MCP read'\n      }\n    }));\n    endCall();"],
+  // Input the hook cannot read passed through before, which the runtime reads
+  // as no objection; it is refused now, inside Rundock.
+  [HOOK_CRASH, 'Hook crash: input the hook cannot read passes through again',
+    "if (!finished || typeof finished !== 'object' || Array.isArray(finished)) { refuseUnanswered(); return; }",
+    "if (!finished || typeof finished !== 'object' || Array.isArray(finished)) { writeAnswer({}); process.exit(0); }"],
+  [HOOK_CRASH, 'Hook crash: JSON that is not an object is read as a request',
+    "if (!finished || typeof finished !== 'object' || Array.isArray(finished))",
+    "if (!finished || Array.isArray(finished))"],
+  [HOOK_CRASH, 'Hook crash: a JSON list is read as a request',
+    "if (!finished || typeof finished !== 'object' || Array.isArray(finished))",
+    "if (!finished || typeof finished !== 'object')"],
   [HOOK_CRASH, 'Hook crash: the refusal is armed in everything that requires the file',
     "if (require.main === module) {\n  process.on('uncaughtException', refuseUnanswered);",
     "if (true) {\n  process.on('uncaughtException', refuseUnanswered);"],
   [HOOK_CRASH, 'Hook crash: a failure allows the call instead of refusing it',
-    "hookEventName: 'PreToolUse',\n      permissionDecision: 'deny',\n      permissionDecisionReason: 'Rundock could not",
-    "hookEventName: 'PreToolUse',\n      permissionDecision: 'allow',\n      permissionDecisionReason: 'Rundock could not"],
+    "hookEventName: 'PreToolUse',\n      permissionDecision: 'deny',\n      // A routine, which has nobody to ask, is told what to do next",
+    "hookEventName: 'PreToolUse',\n      permissionDecision: 'allow',\n      // A routine, which has nobody to ask, is told what to do next"],
   [HOOK_CRASH, 'Hook crash: a failure after a tool has finished refuses too',
     "const deciding = process.env.RUNDOCK && event === 'PreToolUse';",
     "const deciding = process.env.RUNDOCK;"],
@@ -3098,6 +3340,17 @@ const MUTATIONS = [
   [HOOK_CRASH, 'Hook crash: the refusal never sees which event it is answering',
     "input += chunk; hookInput = input;",
     "input += chunk;"],
+  // The capture works in a folder made new for the run, outside the
+  // repository, so no link left inside the repository can lead it elsewhere.
+  [HOOK_BLOCK_CAPTURE, 'Hook block capture: a run works under the repository again',
+    "  return fs.mkdtempSync(path.join(tmp, 'rundock-hook-block-'));",
+    "  const dir = path.join(ROOT, '.rundock', 'scratch', 'hook-block-truth'); fs.mkdirSync(dir, { recursive: true }); return dir;"],
+  [HOOK_BLOCK_CAPTURE, 'Hook block capture: a case clears its folder before using it',
+    "  fs.mkdirSync(root);\n  const dirs = {",
+    "  fs.rmSync(root, { recursive: true, force: true });\n  fs.mkdirSync(root);\n  const dirs = {"],
+  [HOOK_BLOCK_CAPTURE, "Hook block capture: the run's folder is left behind",
+    "  fs.rmSync(runRoot, { recursive: true, force: true });",
+    ""],
   // ===== WHAT THE SHELL CHECK READS IN CODE AND TEXT =====
   [SHELL_CODE, "Shell code: a backslash in a Bash word is a Windows separator again on a POSIX host",
     "    const pmod = winWorld ? path.win32 : flavourFor(t, workspaceRoot, posixText);",

@@ -1,0 +1,38 @@
+{
+  "runtime": "Claude Code 2.1.318",
+  "how": "Measured, not written by hand: one headless run in a scratch workspace, started with a fixed session id and a PreToolUse hook that appended every payload it was given. The agent read a file, then started a general-purpose subagent with its Task tool, and the subagent read the same file. The two payloads are as the runtime gave them, with the workspace and transcript paths replaced by placeholders.",
+  "parent": {
+    "session_id": "11111111-2222-4333-8444-555555555555",
+    "transcript_path": "<transcript>",
+    "cwd": "<workspace>",
+    "prompt_id": "9d4ea8e0-493a-40b7-aa00-960b0cf6cda6",
+    "permission_mode": "default",
+    "effort": {
+      "level": "medium"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Read",
+    "tool_input": {
+      "file_path": "<workspace>/notes.md"
+    },
+    "tool_use_id": "toolu_0129nn2zD3mFzx9Ms1osBQfZ"
+  },
+  "subagent": {
+    "session_id": "11111111-2222-4333-8444-555555555555",
+    "transcript_path": "<transcript>",
+    "cwd": "<workspace>",
+    "prompt_id": "9d4ea8e0-493a-40b7-aa00-960b0cf6cda6",
+    "permission_mode": "default",
+    "agent_id": "ac31372851eb0c6ae",
+    "agent_type": "general-purpose",
+    "effort": {
+      "level": "medium"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Read",
+    "tool_input": {
+      "file_path": "<workspace>/notes.md"
+    },
+    "tool_use_id": "toolu_01SAxyM3iSLYRyhu4EWVfFBN"
+  }
+}

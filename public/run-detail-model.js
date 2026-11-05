@@ -163,6 +163,22 @@
     guidance: null,
   };
 
+  // A RUN THAT WENT AHEAD WITHOUT ITS AGENT. Claude Code could not load the
+  // agent's file, so the run went ahead once as a plain session, without the
+  // instructions or the tools: line that file holds (lib/scheduler.js writes
+  // the record's `notice` when it does). The plain session finished, which is
+  // why the record says succeeded, and it is shown apart from a run that
+  // finished as its agent, because it did not: whatever it did, it did as
+  // somebody else, and the file that caused it is still there to fix. The
+  // notice is the guidance, and names the file and the fix.
+  const WITHOUT_AGENT_STATE = {
+    filesLabel: 'complete',
+    tone: 'bad',
+    chip: 'Ran without its agent',
+    headline: 'This run went ahead without its agent, because Claude Code could not load the agent file.',
+    guidance: null,
+  };
+
   const UNRECOGNISED_STATE = {
     tone: 'unwitnessed',
     chip: 'Not recognised',
@@ -303,6 +319,22 @@
   }
 
   /**
+   * How many of a run's permission cards were refused, in words, or null.
+   *
+   * The count is the server's, written only once there is one (refusedCards),
+   * so a run that carried on past a refused step and said nothing about it
+   * still shows it. Null for none, for a record from before the count
+   * existed, and for anything that is not a whole number above nought: the
+   * line is a fact the server wrote, never a guess at a malformed one.
+   */
+  function refusedWords(count) {
+    if (typeof count !== 'number' || !Number.isInteger(count) || count < 1) return null;
+    return count === 1
+      ? '1 permission card was refused or left unanswered.'
+      : `${count} permission cards were refused or left unanswered.`;
+  }
+
+  /**
    * How long a run took, in words, or null where nothing knows.
    *
    * NULL FOR A RUN STILL GOING AND FOR ONE WHOSE ENDING NEVER RAN, because in
@@ -436,7 +468,9 @@
       ? NO_RECORD_STATE
       : (record.status === 'failed' && record.declared === true
         ? DECLARED_FAILED_STATE
-        : (Object.prototype.hasOwnProperty.call(RUN_STATES, record.status) ? RUN_STATES[record.status] : UNRECOGNISED_STATE));
+        : (record.status === 'succeeded' && noticeOf(record)
+          ? WITHOUT_AGENT_STATE
+          : (Object.prototype.hasOwnProperty.call(RUN_STATES, record.status) ? RUN_STATES[record.status] : UNRECOGNISED_STATE)));
     // WHICH HEADING THE FILE LIST TAKES, carried by the state rather than
     // derived from a boolean. A boolean could only say "did it reach the end",
     // which lumps a run that stopped partway together with one whose ending
@@ -467,6 +501,7 @@
         stoppable: !!state.stoppable,
       },
       duration: found ? durationWords(record.durationMs) : null,
+      refused: found ? refusedWords(record.refusedCards) : null,
       files: changedFiles(found ? record : null, FILES_LABELS[state.filesLabel] || FILES_LABELS.complete),
     };
   }
@@ -479,6 +514,17 @@
    * message is the whole of what anybody has to go on.
    */
   function guidanceFor(state, record) {
+    const own = ownGuidanceFor(state, record);
+    // THAT THE AGENT DID NOT LOAD IS SAID WHATEVER ELSE HAPPENED. A plain
+    // session that then failed, or was stopped, or is still going, still ran
+    // without its agent, and the file that caused it is still there to fix.
+    const notice = state === WITHOUT_AGENT_STATE ? null : noticeOf(record);
+    if (!notice) return own;
+    return own ? `${own} ${notice}` : notice;
+  }
+
+  function ownGuidanceFor(state, record) {
+    if (state === WITHOUT_AGENT_STATE) return noticeOf(record);
     if (state !== RUN_STATES.failed && state !== DECLARED_FAILED_STATE) return state.guidance;
     const reason = failureReason(record);
     if (!reason) return NO_REASON_GIVEN;
@@ -492,6 +538,11 @@
     return record && typeof record.error === 'string' && record.error.trim() ? record.error.trim() : null;
   }
 
+  // The record's notice, when it carries one a reader can be shown.
+  function noticeOf(record) {
+    return record && typeof record.notice === 'string' && record.notice.trim() ? record.notice.trim() : null;
+  }
+
   // The raw words behind a described failure, as `guidanceDetail`, or nothing.
   function guidanceDetailFor(state, record) {
     if (state !== RUN_STATES.failed && state !== DECLARED_FAILED_STATE) return {};
@@ -501,8 +552,8 @@
   }
 
   return {
-    RUN_STATES, DECLARED_FAILED_STATE, UNRECOGNISED_STATE, NO_RECORD_STATE, FILES_UNKNOWN_WORDS, FILES_UNKNOWN_FALLBACK,
+    RUN_STATES, DECLARED_FAILED_STATE, WITHOUT_AGENT_STATE, UNRECOGNISED_STATE, NO_RECORD_STATE, FILES_UNKNOWN_WORDS, FILES_UNKNOWN_FALLBACK,
     CHANGE_LABELS, CHANGE_FALLBACK, FILES_LABELS, NO_FILES_CHANGED, UNKNOWN_FILES_LEAD, NO_REASON_GIVEN,
-    changedFiles, unknownWords, durationWords, describeRun, baseName, startedWords, triggerOf, STARTED_MANUALLY,
+    changedFiles, unknownWords, durationWords, refusedWords, describeRun, baseName, startedWords, triggerOf, STARTED_MANUALLY,
   };
 }));

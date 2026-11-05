@@ -13,33 +13,153 @@
  * If not running inside Rundock (no RUNDOCK env var), passes through silently.
  * If the Rundock server is unreachable, a request that always asks is refused
  * and any other is allowed, to avoid blocking.
+ * If the hook cannot answer (an exception, an unhandled rejection under any
+ * --unhandled-rejections mode, a hook that cannot load, a process left with
+ * nothing to wait for) or cannot read its input (not JSON, empty, cut off), the
+ * call is refused inside Rundock and passes through outside it. Either way the
+ * hook prints one answer for the call, and it counts only once the whole of it
+ * has been written: inside Rundock, an answer that cannot be written blocks the
+ * call with exit code 2 and its reason on standard error.
  */
 
 // A HOOK THAT STOPS WITHOUT ANSWERING REFUSES THE TOOL CALL. The runtime reads a
 // hook with nothing to say as a hook with no objection and carries on, so an
-// exception here, or a reply that never finishes, would let the call through
-// with the checks below skipped. Every answer in this file ends in
-// process.exit, so `beforeExit` only ever means none was given. Installed ahead
-// of the requires, so a hook that cannot load refuses too; an unhandled
-// rejection arrives here as well. Outside Rundock this hook decides nothing, and
-// a finished tool has nothing left to refuse. Input that cannot be read at all
-// is handled where it is parsed, below.
+// exception here, an unhandled rejection, or a reply that never finishes, would
+// let the call through with the checks below skipped. Every answer in this file
+// ends in process.exit, so `beforeExit` only ever means none was given.
+// Installed ahead of the requires, so a hook that cannot load refuses too.
+// Outside Rundock this hook decides nothing, and a finished tool has nothing
+// left to refuse. Input that cannot be read at all is refused by the same
+// function, where it is parsed, below.
 let hookInput = '';
-function refuseUnanswered() {
+// ONE ANSWER FOR EACH CALL, AND IT COUNTS ONLY ONCE IT HAS ARRIVED. `answer` is
+// set as an answer starts to be written, so nothing after that, a rejection or
+// an error forced from outside included, ever prints a second one; `delivered`
+// once the whole of it has been written. writeAnswer returns only then: an
+// answer that cannot be written ends the call in `undelivered`.
+let answer = null;
+let delivered = false;
+// AN ALLOW WAITS ONE TURN. Node hands an unhandled rejection to its handler,
+// below, only once the turn that made it is over, and an allow written, and
+// exited on, inside that turn let the call through with the rejection never
+// handled. So an allow is written by setImmediate, after that turn and the
+// rejections from it have been dealt with: a rejection from the turn has
+// refused the call by then, and the allow, finding it answered, prints
+// nothing. The allow ends the call itself, so the code that decided it ends
+// with endCall, which leaves the call to the allow. A refusal, and an answer
+// that decides nothing, are written in their own turn, as before.
+let allowWaiting = false;
+function writeAnswer(output, turnOver = false) {
+  if (answer) {
+    if (!delivered) undelivered(answer);
+    return;
+  }
+  if (allows(output) && !turnOver) {
+    if (!allowWaiting) {
+      allowWaiting = true;
+      setImmediate(() => { writeAnswer(output, true); process.exit(0); });
+    }
+    return;
+  }
+  answer = output;
+  delivered = writeWhole(1, JSON.stringify(output));
+  if (!delivered) undelivered(output);
+}
+function allows(output) {
+  const own = output && output.hookSpecificOutput;
+  return Boolean(own) && own.permissionDecision === 'allow';
+}
+// The end of a call whose answer may be an allow waiting for its turn.
+function endCall() {
+  if (!allowWaiting || answer) process.exit(0);
+}
+// AN ANSWER THAT DID NOT ARRIVE, after which nothing more is printed. A call
+// this hook decides is blocked: the runtime reads exit code 2 from a
+// PreToolUse hook as a block, with standard error as the reason, whatever
+// reached standard output, and on macOS and Linux the launcher execs this
+// file, so the code reaches the runtime as it is. A refusal keeps its words;
+// an allow that never arrived is blocked in the words of any request the hook
+// could not check. Outside Rundock nothing is decided, and a finished tool has
+// nothing left to refuse, so neither is blocked.
+function undelivered(output) {
+  if (!decidingCall()) process.exit(0);
+  const own = output && output.hookSpecificOutput;
+  const reason = own && own.permissionDecision === 'deny' && own.permissionDecisionReason;
+  writeWhole(2, `${reason || couldNotCheck()}\n`);
+  process.exit(2);
+}
+// THE WHOLE TEXT, OR FALSE. Written straight to the descriptor, not through
+// process.stdout: its write returns before the text has gone anywhere and
+// reports a failure, a reader that has gone for one, only later, by which time
+// the exit that follows every answer here has happened, and the call was left
+// with no answer and exit code 0, which the runtime reads as no objection.
+// Here the text has been written when this returns true. A pipe Node has
+// opened as process.stdout or process.stderr does not block, so a reader that
+// has stopped reading shows as EAGAIN, and is waited on for ANSWER_WAIT_MS at
+// most. An answer is far smaller than any pipe holds, so a write that has to
+// wait at all is one whose reader has stopped.
+const ANSWER_WAIT_MS = 2000;
+function writeWhole(fd, text) {
+  try {
+    void (fd === 1 ? process.stdout : process.stderr);
+    const fs = require('fs');
+    const bytes = Buffer.from(text);
+    const until = Date.now() + ANSWER_WAIT_MS;
+    for (let at = 0; at < bytes.length;) {
+      try {
+        at += fs.writeSync(fd, bytes, at, bytes.length - at);
+      } catch (e) {
+        if (!e || e.code !== 'EAGAIN' || Date.now() >= until) return false;
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+      }
+    }
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+// What a routine is told to do next, the same sentence as UNATTENDED_NEXT in
+// scripts/refusal-notice.js. Copied rather than required because this runs
+// when the hook could not load, which is when a require fails; held equal to
+// that one by test/unit/hook-never-crashes.test.js.
+const UNATTENDED_NEXT_UNLOADED = 'This run has nobody to ask, so carry on with the rest of the job without that step. If you cannot finish without it, make the last line of your final message: RUN STATUS: failed: <one-line reason>';
+// Whether this hook decides the call: a PreToolUse call inside Rundock. Input
+// that cannot be read is taken for one, and refused below.
+function decidingCall() {
   let event = 'PreToolUse';
   try { event = JSON.parse(hookInput).hook_event_name || event; } catch (e) { /* refused below */ }
   const deciding = process.env.RUNDOCK && event === 'PreToolUse';
-  process.stdout.write(JSON.stringify(!deciding ? {} : {
+  return Boolean(deciding);
+}
+// The words of any request the hook could not check. A routine, which has
+// nobody to ask, is told what to do next as every other refusal tells it
+// (unattendedRun, below: a declaration, so it is there before anything else in
+// this file has run).
+function couldNotCheck() {
+  const refused = 'Rundock could not check this request, so it was refused rather than approved on your behalf.';
+  return unattendedRun() ? `${refused} ${UNATTENDED_NEXT_UNLOADED}` : refused;
+}
+function refuseUnanswered() {
+  writeAnswer(!decidingCall() ? {} : {
     hookSpecificOutput: {
       hookEventName: 'PreToolUse',
       permissionDecision: 'deny',
-      permissionDecisionReason: 'Rundock could not check this request, so it was refused rather than approved on your behalf.',
+      // A routine, which has nobody to ask, is told what to do next, in
+      // couldNotCheck, above.
+      permissionDecisionReason: couldNotCheck(),
     },
-  }));
+  });
   process.exit(0);
 }
 if (require.main === module) {
   process.on('uncaughtException', refuseUnanswered);
+  // A REJECTION NOBODY HANDLES, under every --unhandled-rejections mode that
+  // NODE_OPTIONS, inherited from wherever Rundock was started, can name. Under
+  // `strict` one arrives as an exception, above; under `throw` (the default),
+  // `warn`, `warn-with-error-code` and `none` it arrives here, and without this
+  // the last three let the hook carry on and answer as though nothing had
+  // gone wrong.
+  process.on('unhandledRejection', refuseUnanswered);
   process.on('beforeExit', refuseUnanswered);
 }
 
@@ -67,7 +187,7 @@ const { isReadOnlyShellCommand, isDestructiveShellCommand, shellSegments } = req
 const { codeModeVerdict, keychainVerdict } = require('./code-mode-verdict.js');
 const { lexSegments, lexWords, stripHeredocs, substitutions } = require('./code-mode-parse.js');
 const devPaths = require('./dev-paths.js');
-const { refusalNotice, approvalNotice, sandboxBlocked } = require('./refusal-notice.js');
+const { refusalNotice, unansweredNotice, approvalNotice, sandboxBlocked } = require('./refusal-notice.js');
 
 // One directory, several names. macOS keeps /tmp and /var as symlinks into
 // /private, Dropbox and iCloud vaults are commonly reached through a symlink
@@ -3376,7 +3496,7 @@ module.exports = {
   agentHomeRoot, codexHomeRoot, runtimeHomes,
   isWorkspaceAnswerFile, isRuntimeGuardedAnswerFile, isRundockConsolePath, RUNDOCK_CONSOLE_DIR,
   WORKSPACE_ANSWER_FILES, RUNDOCK_ANSWER_FILES, RUNTIME_GUARDED_ANSWER_FILES, LAUNCHER_FILES, WHAT_RUNS_FILES, WHAT_RUNS_DIRS,
-  boundaryCrossingsFor, CODE_READS_ALLOWED,
+  boundaryCrossingsFor, CODE_READS_ALLOWED, UNATTENDED_NEXT_UNLOADED,
   REFUSED_CLAUDE_EDIT_DIRS, isReadOnlyShellCommand, isRundockAnswerFileAnywhere, isRundockWorkspaceSettingsFile, isAnswerFileOfAnyWorkspace, otherWorkspaceRootOf, isOtherWorkspaceAgentSurface,
   INSTRUCTION_SURFACES, isInstructionSurface, hiddenHomeRootOf, alwaysAsksCrossing, SHELL_TOOLS, keychainPlatform,
 };
@@ -3458,6 +3578,14 @@ function hookTokenHeader() {
   const token = process.env.RUNDOCK_HOOK_TOKEN || '';
   return token ? { 'X-Rundock-Hook-Token': token } : {};
 }
+
+// A RUN NOBODY CAN BE ASKED FROM: a routine's. Rundock starts every
+// conversation's agent, a delegated one included, with the conversation it
+// belongs to (getSpawnEnv in lib/runtime/claude.js), and only the scheduler
+// starts one with none, which is also how the server tells a routine's card
+// from a conversation's. Every refusal this hook hands over is worded from
+// this one answer, so a routine is told the same thing wherever it is told.
+function unattendedRun(env = process.env) { return !env.RUNDOCK_CONVO_ID; }
 function fetchAgentNotice(done, { check = false } = {}) {
   const id = process.env.RUNDOCK_CONVO_ID || '';
   if (!process.env.RUNDOCK || !AGENT_NOTICE_ID.test(id)) { done(null); return; }
@@ -3494,7 +3622,8 @@ process.stdin.on('end', () => {
 // once, whichever asks first.
 //
 // A command the sandbox refused is told in the same step too, by the same
-// route: the agent is to stop and ask, not look for another way round.
+// route: the agent is not to look for another way round, and is told what to
+// do next in the words every refusal uses (scripts/refusal-notice.js).
 let hookEvent = '';
 let finished = null;
 try { finished = JSON.parse(input); hookEvent = finished.hook_event_name || ''; } catch (e) { /* judged below */ }
@@ -3504,27 +3633,31 @@ if (hookEvent === 'PostToolUse' || hookEvent === 'PostToolUseFailure') {
     : (finished.tool_response && finished.tool_response.stderr);
   const blocked = !!process.env.RUNDOCK && sandboxBlocked(finished.tool_name, finished.tool_input, said, { codeMode: process.env.RUNDOCK_CODE_MODE === '1' });
   fetchAgentNotice((note) => {
-    const context = [note, blocked ? refusalNotice('sandbox', finished.tool_name) : null].filter(Boolean).join('\n');
-    process.stdout.write(JSON.stringify(context ? { hookSpecificOutput: { hookEventName: hookEvent, additionalContext: context } } : {}));
+    const context = [note, blocked ? refusalNotice('sandbox', finished.tool_name, { unattended: unattendedRun() }) : null].filter(Boolean).join('\n');
+    writeAnswer(context ? { hookSpecificOutput: { hookEventName: hookEvent, additionalContext: context } } : {});
     process.exit(0);
   }, { check: true });
   return;
 }
+// INPUT THIS HOOK CANNOT READ IS REFUSED, inside Rundock, in the words of any
+// request it could not check (refuseUnanswered, at the top), a routine's
+// included. Input that is not JSON, is empty, is cut off, or is JSON but not an
+// object says nothing about what it was asking for, so nothing about it can be
+// checked, and the pass-through it used to get was read by the runtime as no
+// objection. Refused before anything is asked of Rundock, so it raises no card
+// and leaves the line Rundock left for this agent to the next answer. Which
+// event it was cannot be read either, so it is taken as the one this hook
+// decides; outside Rundock it still passes through.
+if (!finished || typeof finished !== 'object' || Array.isArray(finished)) { refuseUnanswered(); return; }
 fetchAgentNotice((agentNotice) => {
   // Not running in Rundock: pass through (no decision, Claude Code handles normally)
   if (!process.env.RUNDOCK) {
-    process.stdout.write(JSON.stringify({}));
+    writeAnswer({});
     process.exit(0);
   }
 
-  let data;
-  try {
-    data = JSON.parse(input);
-  } catch (e) {
-    // Bad input: pass through, since nothing says what it was asking for.
-    process.stdout.write(JSON.stringify({}));
-    process.exit(0);
-  }
+  // Read once, above, where input that could not be read was refused.
+  const data = finished;
 
   const wsRoot = process.env.RUNDOCK_WORKSPACE || process.cwd();
   // Every answer this hook gives from here on also hands over any line
@@ -3533,10 +3666,10 @@ fetchAgentNotice((agentNotice) => {
   // server before deciding (agentNotice, below); it is never read from a file.
   const writeDecision = (answer) => {
     const note = agentNotice;
-    if (!note) { process.stdout.write(JSON.stringify(answer)); return; }
+    if (!note) { writeAnswer(answer); return; }
     const own = answer.hookSpecificOutput || { hookEventName: 'PreToolUse' };
     const context = [own.additionalContext, note].filter(Boolean).join('\n');
-    process.stdout.write(JSON.stringify({ ...answer, hookSpecificOutput: { ...own, additionalContext: context } }));
+    writeAnswer({ ...answer, hookSpecificOutput: { ...own, additionalContext: context } });
   };
   // THE FOLDERS AS THEY ARE NOW, not only as they were when this agent started.
   //
@@ -3714,7 +3847,8 @@ fetchAgentNotice((agentNotice) => {
         permissionDecisionReason: 'In-workspace file access'
       }
     }));
-    process.exit(0);
+    endCall();
+    return;
   }
 
   // CODE MODE: ordinary work runs with no card. Out-of-workspace access still
@@ -3750,7 +3884,8 @@ fetchAgentNotice((agentNotice) => {
         permissionDecisionReason: 'Auto-approved: workspace is in Code mode'
       }
     }));
-    process.exit(0);
+    endCall();
+    return;
   }
   // Notes mode keeps its own definition of an irreversible command, unchanged.
   const destructive = !codeMode && shellCommand !== null && isDestructiveShellCommand(shellCommand);
@@ -3767,7 +3902,8 @@ fetchAgentNotice((agentNotice) => {
         permissionDecisionReason: 'Auto-approved: MCP read'
       }
     }));
-    process.exit(0);
+    endCall();
+    return;
   }
 
   const port = process.env.RUNDOCK_PORT || 3000;
@@ -3908,10 +4044,10 @@ fetchAgentNotice((agentNotice) => {
       hookSpecificOutput: {
         hookEventName: 'PreToolUse',
         permissionDecision: failClosed ? 'deny' : 'allow',
-        permissionDecisionReason: failClosed ? `${reason} ${why}` : reason,
+        permissionDecisionReason: failClosed ? unansweredNotice(`${reason} ${why}`, { unattended: unattendedRun() }) : reason,
       }
     }));
-    process.exit(0);
+    endCall();
   }
 
   const req = http.request({
@@ -3932,10 +4068,11 @@ fetchAgentNotice((agentNotice) => {
       try {
         const result = JSON.parse(body);
         // A refusal tells the agent, in this same answer, that it was on
-        // purpose and to stop and ask (scripts/refusal-notice.js). The old
-        // wording for a timeout invited the retry this exists to prevent.
+        // purpose and what to do next (scripts/refusal-notice.js): stop and
+        // ask in a conversation, carry on or say it failed in a routine. The
+        // old wording for a timeout invited the retry this exists to prevent.
         const reason = result.allow ? 'Approved in Rundock'
-          : refusalNotice(result.reason === 'timeout' ? 'timeout' : 'denied', data.tool_name);
+          : refusalNotice(result.reason === 'timeout' ? 'timeout' : 'denied', data.tool_name, { unattended: unattendedRun() });
         // An approval a person gave on a card is told to the agent too. The
         // runtime never shows the model an allow's reason, so without this an
         // approval reads as a question never asked. Not for an allow that
@@ -3953,7 +4090,7 @@ fetchAgentNotice((agentNotice) => {
       } catch (e) {
         unanswered('Rundock hook: could not parse server response.');
       }
-      process.exit(0);
+      endCall();
     });
   });
 
@@ -3969,7 +4106,7 @@ fetchAgentNotice((agentNotice) => {
       hookSpecificOutput: {
         hookEventName: 'PreToolUse',
         permissionDecision: 'deny',
-        permissionDecisionReason: refusalNotice('timeout', data.tool_name)
+        permissionDecisionReason: refusalNotice('timeout', data.tool_name, { unattended: unattendedRun() })
       }
     }));
     process.exit(0);

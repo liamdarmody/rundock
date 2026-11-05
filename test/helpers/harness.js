@@ -87,8 +87,10 @@ async function boot(opts = {}) {
   return { internal, port, workspaceDir };
 }
 
-function writeScenario(rules) {
-  fs.writeFileSync(path.join(workspaceDir, 'stub-scenario.json'), JSON.stringify({ rules }, null, 2));
+// `extra` sets the stub's top-level options, read once when a child starts
+// (see test/helpers/stub-claude/claude): `loadAgentFiles`, for one.
+function writeScenario(rules, extra = {}) {
+  fs.writeFileSync(path.join(workspaceDir, 'stub-scenario.json'), JSON.stringify({ ...extra, rules }, null, 2));
 }
 
 // App-server scenario rules for the stub codex binary (see the rule shape
@@ -157,6 +159,14 @@ function readStubOutputs() {
 // and inferring success from the rule firing: that pattern fails as a timeout
 // with no expected-vs-actual, and is how handback payload bugs stayed hidden.
 // Codex equivalent: codexTurnPrompts().
+// What the permission hook answered each `hooks` call a stub made, in order
+// (test/helpers/stub-claude/claude, runHookCalls).
+function readHookAnswers() {
+  const file = path.join(workspaceDir, 'stub-hook-answers.jsonl');
+  if (!fs.existsSync(file)) return [];
+  return fs.readFileSync(file, 'utf-8').split('\n').filter(Boolean).map(l => JSON.parse(l));
+}
+
 function readPrompts() {
   const file = path.join(workspaceDir, 'stub-prompts.jsonl');
   if (!fs.existsSync(file)) return [];
@@ -224,15 +234,20 @@ function authHeaders() {
   const auth = authModule();
   return auth ? { [auth.KEY_HEADER]: auth.launchKey() } : {};
 }
-/** A permission hook's token for one conversation (null: a routine run). */
+/**
+ * A permission hook's token for one conversation. With none, a routine run's
+ * token, for a run that is not going: a real run's is issued by the scheduler
+ * and handed only to that run's process.
+ */
 function hookToken(conversationId = null) {
   const auth = authModule();
-  return auth ? auth.issueHookToken(conversationId) : '';
+  if (!auth) return '';
+  return conversationId ? auth.issueHookToken(conversationId) : auth.issueRunHookToken('no-run-going');
 }
 /** The header the permission hook sends its token in, with a token for `conversationId`. */
 function hookHeaders(conversationId = null) {
   const auth = authModule();
-  return auth ? { [auth.HOOK_HEADER]: auth.issueHookToken(conversationId) } : {};
+  return auth ? { [auth.HOOK_HEADER]: hookToken(conversationId) } : {};
 }
 
 // WebSocket test client that records every message. Signed in as Rundock's
@@ -371,7 +386,7 @@ function freshConvoId(prefix = 'it') {
 module.exports = {
   boot, shutdown, connect, writeScenario, writeCodexScenario, codexTurnPrompts,
   readInvocations, clearInvocations,
-  readGrandchildren, readStubOutputs, pidAlive, waitForPidExit,
+  readGrandchildren, readStubOutputs, readHookAnswers, pidAlive, waitForPidExit,
   readPrompts, promptsFor, unmatchedPrompts, assertAllPromptsMatched, clearPrompts,
   delay, waitUntil, freshConvoId, reapConvo,
   authHeaders, hookToken, hookHeaders,

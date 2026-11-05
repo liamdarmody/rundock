@@ -58,7 +58,7 @@ before(async () => {
     pendingPermissionRequests: () => pending,
     safeSend: (s) => sent.push(JSON.parse(s)),
     getPermissionTimeoutMs: () => timeoutMs,
-    routineRunForSession: () => null,
+    routineRun: () => null,
   });
   server = http.createServer(router.handleHttpRequest);
   await new Promise((r) => server.listen(0, '127.0.0.1', r));

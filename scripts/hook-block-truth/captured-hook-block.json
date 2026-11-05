@@ -1,0 +1,61 @@
+{
+  "about": "What the installed Claude Code did with a tool call whose PreToolUse hook could not answer on standard output, measured by scripts/hook-block-truth/capture.js. test/unit/hook-block-capture.test.js holds it to what it claims.",
+  "runtimeVersion": "2.1.318",
+  "method": "The real CLI in print mode (-p --permission-mode default --output-format stream-json --verbose --strict-mcp-config), in a fresh workspace whose .claude/settings.local.json allows Bash and registers one PreToolUse hook for Bash the way Rundock registers its own (a launcher started with sh, a timeout of 300 seconds), with fresh, empty HOME and CLAUDE_CONFIG_DIR folders, a placeholder API key, and a stand-in for the messages API on 127.0.0.1 that asked for one Bash call (echo ran > sentinel.txt) and ended the turn once it had the result. No account was used and no model was called. The environment was a routine's inside Rundock (RUNDOCK set, no conversation), with a stand-in for Rundock's server that approved every card. Rundock's permission hook was started with Node in place of Rundock's runtime. The reader of its standard output was closed before it was given its input by scripts/hook-block-truth/reader-gone.js, which passes on its exit code and standard error. Paths are relative to the case's folder.",
+  "cases": [
+    {
+      "name": "Rundock's permission hook, its standard output read",
+      "observed": {
+        "cliExitCode": 0,
+        "rundockAsked": [
+          "POST /api/permission-request"
+        ],
+        "toolResult": {
+          "isError": false,
+          "text": "(Bash completed with no output)"
+        },
+        "sentinelExists": true
+      }
+    },
+    {
+      "name": "Rundock's permission hook, the reader of its standard output gone",
+      "observed": {
+        "cliExitCode": 0,
+        "hookExitCode": 2,
+        "hookStderr": "Rundock could not check this request, so it was refused rather than approved on your behalf. This run has nobody to ask, so carry on with the rest of the job without that step. If you cannot finish without it, make the last line of your final message: RUN STATUS: failed: <one-line reason>\n",
+        "rundockAsked": [
+          "POST /api/permission-request"
+        ],
+        "toolResult": {
+          "isError": true,
+          "text": "PreToolUse:Bash hook error: [sh \"hook.sh\"]: Rundock could not check this request, so it was refused rather than approved on your behalf. This run has nobody to ask, so carry on with the rest of the job without that step. If you cannot finish without it, make the last line of your final message: RUN STATUS: failed: <one-line reason>\n"
+        },
+        "sentinelExists": false
+      }
+    },
+    {
+      "name": "a hook that exits 2 with a reason on standard error",
+      "observed": {
+        "cliExitCode": 0,
+        "rundockAsked": [],
+        "toolResult": {
+          "isError": true,
+          "text": "PreToolUse:Bash hook error: [sh \"hook.sh\"]: Blocked by a hook that exited 2.\n"
+        },
+        "sentinelExists": false
+      }
+    },
+    {
+      "name": "a hook that exits 0 with nothing on standard output",
+      "observed": {
+        "cliExitCode": 0,
+        "rundockAsked": [],
+        "toolResult": {
+          "isError": false,
+          "text": "(Bash completed with no output)"
+        },
+        "sentinelExists": true
+      }
+    }
+  ]
+}

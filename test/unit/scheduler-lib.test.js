@@ -481,6 +481,106 @@ test('a child that never launched puts the reason it gave in the run record', as
   });
 });
 
+// EACH RUN'S OWN HOOK TOKEN. Issued as the run opens, handed to its child in
+// its environment and written nowhere, and retired as its record closes, so a
+// request carrying it afterwards is refused as unknown (lib/auth). Two runs
+// going at once never share one.
+test('each run is started with a hook token of its own, bound to it, and retired as its record closes', async () => {
+  const auth = require('../../lib/auth/index.js');
+  await withTempWorkspaceAsync(async () => {
+    const children = [];
+    const envs = [];
+    const spawnOne = (args, opts) => { envs.push(opts.env); const c = new EventEmitter(); children.push(c); return c; };
+    await withFakeSpawn(spawnOne, async (sched) => {
+      assert.strictEqual(sched.executeRoutine(AGENT, ROUTINE, KEY), true);
+      assert.strictEqual(sched.executeRoutine(AGENT, { name: 'r2', prompt: 'p' }, 'runner:r2'), true);
+      const [first, second] = envs.map((e) => e.RUNDOCK_HOOK_TOKEN);
+      assert.ok(first && second && first !== second, 'two runs going at once, two tokens');
+      for (const env of envs) assert.strictEqual('RUNDOCK_CONVO_ID' in env, false, 'and no conversation');
+      const [runA, runB] = sched.runningRuns().map((r) => r.id);
+      assert.strictEqual(auth.hookTokenRun(first), runA, 'each bound to its own run');
+      assert.strictEqual(auth.hookTokenRun(second), runB);
+      assert.strictEqual(auth.hookTokenScope(first), null, 'and to no conversation');
+      for (const record of sched.readRunRecords()) {
+        const text = JSON.stringify(record);
+        assert.ok(!text.includes(first) && !text.includes(second), 'never written to a record');
+      }
+
+      children[0].emit('error', new Error('ended'));
+      assert.strictEqual(sched.readRunRecords().find((r) => r.id === runA).status, 'failed', 'the first run\'s record closed');
+      assert.strictEqual(auth.hookTokenScope(first), undefined, 'and its token is unknown from then on');
+      assert.strictEqual(auth.hookTokenRun(first), null);
+      assert.strictEqual(auth.hookTokenRun(second), runB, 'while the run still going keeps its own');
+      children[1].emit('error', new Error('ended'));
+      assert.strictEqual(auth.hookTokenScope(second), undefined);
+    });
+  });
+});
+
+// THE REFUSED-CARD COUNT. Counted on the live run named, written to its open
+// record as it goes and to its closed one at the end, and only once there is
+// one to count. A run that has ended, or one never started, counts nothing.
+test('a refused card is counted on its live run, open record and closed, and nowhere once the run has ended', async () => {
+  await withTempWorkspaceAsync(async () => {
+    const children = [];
+    await withFakeSpawn(() => { const c = new EventEmitter(); children.push(c); return c; }, async (sched) => {
+      assert.strictEqual(sched.executeRoutine(AGENT, ROUTINE, KEY), true);
+      assert.strictEqual(sched.executeRoutine(AGENT, { name: 'r2', prompt: 'p' }, 'runner:r2'), true);
+      const [a, b] = sched.runningRuns().map((r) => r.id);
+      const recordOf = (id) => sched.readRunRecords().find((r) => r.id === id);
+      assert.strictEqual('refusedCards' in recordOf(a), false, 'none until there is one');
+
+      assert.strictEqual(sched.noteRefusedCard(a), true);
+      assert.strictEqual(recordOf(a).refusedCards, 1, 'written to the open record at once');
+      assert.strictEqual(recordOf(a).status, 'running');
+      assert.strictEqual(sched.noteRefusedCard(a), true);
+      assert.strictEqual(recordOf(a).refusedCards, 2);
+      assert.strictEqual('refusedCards' in recordOf(b), false, 'and only on the run named');
+
+      for (const id of ['run-never-started', '', null, undefined, 7]) assert.strictEqual(sched.noteRefusedCard(id), false);
+
+      children[0].emit('close', 0);
+      const closed = recordOf(a);
+      assert.strictEqual(closed.status, 'succeeded');
+      assert.strictEqual(closed.refusedCards, 2, 'the closed record keeps the count');
+      assert.strictEqual(sched.noteRefusedCard(a), false, 'an ended run counts nothing');
+      assert.deepStrictEqual(recordOf(a), closed, 'and its record is not reopened');
+
+      children[1].emit('close', 0);
+      assert.strictEqual('refusedCards' in recordOf(b), false, 'a run with none closes with none');
+    });
+  });
+});
+
+// A RUN'S CARDS STILL OPEN AS IT CLOSES are settled first, while it is still
+// going, so what they count is on the closed record (the server refuses and
+// counts them: settleRunCards in lib/http-router.js). A settling that throws
+// costs those cards' count and never the closing.
+test('a run\'s open cards are settled as it closes and counted on the closed record, and a settling that throws does not stop the close', async () => {
+  await withTempWorkspaceAsync(async () => {
+    const children = [];
+    await withFakeSpawn(() => { const c = new EventEmitter(); children.push(c); return c; }, async (sched) => {
+      assert.strictEqual(sched.executeRoutine(AGENT, ROUTINE, KEY), true);
+      assert.strictEqual(sched.executeRoutine(AGENT, { name: 'r2', prompt: 'p' }, 'runner:r2'), true);
+      const [a, b] = sched.runningRuns().map((r) => r.id);
+      const recordOf = (id) => sched.readRunRecords().find((r) => r.id === id);
+      const settled = [];
+      // Two cards still open on run A, counted as the server counts them.
+      sched.wireSchedulerDeps({ settleRunCards: (id) => { settled.push(id); sched.noteRefusedCard(id); sched.noteRefusedCard(id); } });
+      children[0].emit('close', 0);
+      assert.deepStrictEqual(settled, [a], 'settled once, for the run that closed');
+      assert.strictEqual(recordOf(a).status, 'succeeded');
+      assert.strictEqual(recordOf(a).refusedCards, 2, 'its open cards are on the closed record');
+
+      sched.wireSchedulerDeps({ settleRunCards: () => { throw new Error('the settling fell over'); } });
+      children[1].emit('close', 0);
+      assert.strictEqual(recordOf(b).status, 'succeeded', 'the record closes with its outcome all the same');
+      assert.strictEqual('refusedCards' in recordOf(b), false);
+      assert.deepStrictEqual(sched.runningRuns(), [], 'and no run is left listed as going');
+    });
+  });
+});
+
 // The cost of listening to both: a failure that reports twice must not be
 // recorded twice. Counted through the broadcast, which happens once when a run
 // starts and once per outcome, so a second outcome is a third broadcast.
@@ -913,12 +1013,13 @@ function writeTranscript(home, sessionId, lines) {
 
 // Read straight off the disk rather than through readRunRecords, so what is
 // asserted is the file a restarted process would meet rather than a reading
-// performed by the module under test.
+// performed by the module under test. The records only: a run still going
+// also keeps what its child says on stderr beside its record, until it ends.
 function runRecords(ws) {
   const dir = path.join(ws, '.rundock', 'runs');
   let names;
   try { names = fs.readdirSync(dir); } catch (e) { return []; }
-  return names.map(n => JSON.parse(fs.readFileSync(path.join(dir, n), 'utf-8')));
+  return names.filter(n => n.endsWith('.json')).map(n => JSON.parse(fs.readFileSync(path.join(dir, n), 'utf-8')));
 }
 
 // The real workspace open path, driven for a scheduler that has only just been
@@ -1195,6 +1296,252 @@ test('closing a restart-orphaned record writes nothing to the value double-fire 
     });
   });
 });
+
+// A PLAIN SESSION THAT CANNOT EVEN START, after Claude Code could not load the
+// agent file, is the run's outcome. It is recorded as failed with the reason
+// the start gave, the notice stays on the record, the routine is released,
+// and nothing is tried a third time.
+test('a fallback whose plain session cannot start is recorded as failed with its reason, and keeps its notice', async () => {
+  await withTempWorkspaceAsync(async (ws) => {
+    await withTempHomeAsync(async () => {
+      const spawns = [];
+      await withFakeSpawn((args, options) => {
+        spawns.push(args);
+        if (spawns.length > 1) throw new Error('spawn refused');
+        // What Claude Code writes when it cannot load the file, into the
+        // capture the scheduler handed the child, and then its exit code.
+        const child = new EventEmitter();
+        fs.writeSync(options.stdio[2], "--agent 'Runner' not found. Available agents: claude, Explore\n");
+        setImmediate(() => child.emit('close', 1));
+        return child;
+      }, async (sched) => {
+        sched.executeRoutine({ ...AGENT, fileName: 'runner.md', description: 'Runs' }, ROUTINE, KEY);
+        assert.ok(await until(() => sched.routineState[KEY] && sched.routineState[KEY].status !== 'running'), 'the run ended');
+
+        assert.strictEqual(spawns.length, 2, 'the agent, then one plain session, and nothing after it');
+        assert.ok(spawns[0].includes('--agent'), 'started as its agent');
+        assert.ok(!spawns[1].includes('--agent'), 'then as a plain session');
+        assert.strictEqual(sched.routineState[KEY].status, 'failed', 'and the routine is released as failed');
+        const [record] = runRecords(ws);
+        assert.strictEqual(record.status, 'failed');
+        assert.strictEqual(record.error, 'spawn refused', 'with the reason the plain session gave');
+        assert.match(record.notice, /could not load the agent file \.claude\/agents\/runner\.md/, 'and the notice kept');
+        assert.deepStrictEqual(fs.readdirSync(path.join(ws, '.rundock', 'runs')).filter(n => !n.endsWith('.json')), [],
+          'with no capture left behind');
+      });
+    });
+  });
+});
+
+// WHAT A DEAD PROCESS'S CHILD SAID IS NOT LEFT BEHIND. A run keeps its
+// child's stderr in a file beside its record until the run ends, and a run
+// whose process died never ends. So the startup close that closes its record
+// removes that file too, and leaves alone the capture of a run still going in
+// the process doing the closing.
+test('a capture a dead process left beside its record is removed when the record is closed', async () => {
+  await withTempWorkspaceAsync(async (ws) => {
+    await withTempHomeAsync(async () => {
+      const runs = path.join(ws, '.rundock', 'runs');
+      fs.mkdirSync(runs, { recursive: true });
+      fs.writeFileSync(path.join(runs, 'orphan.json'), JSON.stringify({
+        id: 'orphan', agent: 'runner', routine: 'r', sessionId: null,
+        status: 'running', startedAt: new Date(2026, 7, 11, 9, 0, 0).toISOString(), endedAt: null,
+        durationMs: null, error: null, files: null, filesStatus: 'unknown', filesReason: 'running',
+      }));
+      fs.writeFileSync(path.join(runs, 'orphan.stderr'), "--agent 'runner' not found.\n");
+
+      await withFakeSpawn(() => new EventEmitter(), async (sched) => {
+        // A run going in this process, whose capture must survive the close.
+        sched.executeRoutine({ ...AGENT, fileName: 'runner.md' }, ROUTINE, KEY);
+        const live = sched.runningRuns()[0];
+        assert.ok(live, 'a run is going here');
+        assert.ok(fs.existsSync(path.join(runs, `${live.id}.stderr`)), 'and its capture is open beside its record');
+        if (process.platform !== 'win32') {
+          assert.strictEqual(fs.statSync(path.join(runs, `${live.id}.stderr`)).mode & 0o777, 0o600,
+            'readable by this user alone');
+        }
+
+        sched.loadRoutineState();
+
+        assert.strictEqual(runRecords(ws).find(r => r.id === 'orphan').status, 'interrupted',
+          'the orphaned record really was closed by this load');
+        assert.ok(!fs.existsSync(path.join(runs, 'orphan.stderr')), 'and the capture its child left went with it');
+        assert.ok(fs.existsSync(path.join(runs, `${live.id}.stderr`)), 'while the capture of the run still going stays');
+      });
+    });
+  });
+});
+
+// WHAT THE FILE CHECK CANNOT JUDGE, IT DOES NOT CALL BROKEN. With nothing
+// read from Claude Code, the agent file is asked instead, and a file Rundock
+// cannot read, one holding YAML outside the rules it was measured by, or one
+// the reader throws on, is not called refused: that would run the routine
+// without its tools: line on a guess. The run fails once, in plain words, and
+// a throw from the reader goes no further than the check.
+const LOAD_KEY = require.resolve('../../lib/agents/claude-code-load.js');
+const UNREADABLE = { label: 'a file Rundock cannot read', text: null };
+const UNMODELED = { label: 'YAML the rules do not model', text: '---\nname: Runner\ndescription: Runs\nroutines:\n  - name: r\n    prompt: &p do it\n---\n' };
+const READER_THROWS = { label: 'a reader that throws', text: '---\nname: Runner\ndescription: Runs\n---\n', throws: true };
+// Capture unopenable, the agent file as the case has it, and a first child
+// that exits 1 before any session. Returns the spawns and the run's record.
+// Both stand-ins are put back before it returns, so a test can call it more
+// than once and leave the real ones to the tests after it.
+async function runWithoutStderr(t, { text, throws }, end = (child) => setImmediate(() => child.emit('close', 1))) {
+  const realOpen = fs.openSync;
+  const opening = t.mock.method(fs, 'openSync', function (file, ...rest) {
+    if (String(file).endsWith('.stderr')) throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
+    return realOpen.call(fs, file, ...rest);
+  });
+  const load = require(LOAD_KEY);
+  const realRead = load.readAgentFile;
+  if (throws) load.readAgentFile = () => { throw new RangeError('the reader broke'); };
+  try {
+    return await withTempWorkspaceAsync(async (ws) => withTempHomeAsync(async () => {
+      if (text) {
+        fs.mkdirSync(path.join(ws, '.claude', 'agents'), { recursive: true });
+        fs.writeFileSync(path.join(ws, '.claude', 'agents', 'runner.md'), text);
+      }
+      const spawns = [];
+      return withFakeSpawn((args) => {
+        spawns.push(args);
+        const child = new EventEmitter();
+        end(child);
+        return child;
+      }, async (sched) => {
+        sched.executeRoutine({ ...AGENT, fileName: 'runner.md', description: 'Runs' }, ROUTINE, KEY);
+        const ended = await until(() => sched.routineState[KEY] && sched.routineState[KEY].status !== 'running');
+        return { ended, spawns, record: runRecords(ws)[0], state: sched.routineState[KEY] };
+      });
+    }));
+  } finally {
+    load.readAgentFile = realRead;
+    opening.mock.restore();
+  }
+}
+
+for (const c of [UNREADABLE, UNMODELED, READER_THROWS]) {
+  test(`with nothing read from Claude Code, ${c.label} is not run again without its agent`, async (t) => {
+    const { ended, spawns, record } = await runWithoutStderr(t, c);
+    assert.ok(ended, 'the run ended');
+    assert.strictEqual(spawns.length, 1, 'one child, and no plain session after it');
+    assert.strictEqual(record.status, 'failed');
+    assert.match(record.error, /^Claude Code stopped before the session started, and Rundock could not read why\./);
+    assert.ok(!('notice' in record), 'and no notice');
+  });
+}
+
+// A FILE RUNDOCK COULD NOT CHECK IS A FAILED RUN, DELIBERATELY, AND ITS REASON
+// SAYS WHAT TO DO. Not a fallback, for the reason above; but a bare "could not
+// read why" would leave a person nothing to act on. So the reason names the
+// file, says Rundock could not check its YAML and where, and gives the one
+// command whose answer says whether Claude Code loads it.
+test('a file Rundock could not check fails with a reason that names the file and how to check it', async (t) => {
+  const { record } = await runWithoutStderr(t, UNMODELED);
+  assert.strictEqual(record.error, [
+    'Claude Code stopped before the session started, and Rundock could not read why.',
+    'The agent file .claude/agents/runner.md uses YAML Rundock cannot check (at line 6 of the file), so Rundock could not tell whether Claude Code loads it, and did not run the routine without it.',
+    'To check, run claude --print --agent \'Runner\' "say hello" in the workspace: if Claude Code answers --agent \'Runner\' not found, it cannot load the file, and that line is the place to start.',
+  ].join(' '));
+  const thrown = (await runWithoutStderr(t, READER_THROWS)).record;
+  assert.match(thrown.error, /The agent file \.claude\/agents\/runner\.md uses YAML Rundock cannot check, so/,
+    'a reading that failed says the same, without a line it does not have');
+  assert.match(thrown.error, /it cannot load the file\.$/);
+  const unreadable = (await runWithoutStderr(t, UNREADABLE)).record;
+  assert.strictEqual(unreadable.error, 'Claude Code stopped before the session started, and Rundock could not read why.',
+    'while a file that could not be read at all has nothing more to say');
+});
+
+// EVERY CLOSE ENDS IN AN OUTCOME. A throw anywhere in settling how a run
+// ended, here forced on the way into the plain session, is caught in the
+// handler: the run is recorded as failed with that reason, the routine is
+// released, and nothing escapes to take the process down.
+test('a throw while settling how a run ended still records the run, and escapes nothing', async (t) => {
+  const realLog = console.log;
+  t.mock.method(console, 'log', (...args) => {
+    if (String(args[0]).includes('runs once as a plain session')) throw new Error('forced while handing on');
+    return realLog.apply(console, args);
+  });
+  const { ended, spawns, record, state } = await runWithoutStderr(t, { text: '---\nname: Runner\n---\n' });
+  assert.ok(ended, 'the run ended');
+  assert.strictEqual(state.status, 'failed', 'and the routine is released');
+  assert.strictEqual(spawns.length, 1, 'the plain session never started');
+  assert.strictEqual(record.status, 'failed');
+  assert.strictEqual(record.error, 'forced while handing on', 'with the reason the throw gave');
+});
+
+// A CHILD THAT WRITES WITHOUT END TO STDERR IS NEVER MADE TO WAIT, AND NEVER
+// FILLS THE DISK. A real child, handed the descriptor the scheduler made,
+// writes far more than the capture keeps and exits by itself; the capture is
+// watched while it writes, and never holds more than the start it keeps plus
+// what the child wrote between two cuts.
+test('a child writing far past what the capture keeps finishes, and the capture stays small', async () => {
+  const { spawn } = require('node:child_process');
+  const CHUNK = 16 * 1024;
+  const CHUNKS = 600;
+  const WRITER = `const b = Buffer.alloc(${CHUNK}, 120); const pause = new Int32Array(new SharedArrayBuffer(4));
+for (let i = 0; i < ${CHUNKS}; i++) { require('fs').writeSync(2, b); Atomics.wait(pause, 0, 0, 2); }`;
+  await withTempWorkspaceAsync(async (ws) => {
+    await withTempHomeAsync(async () => {
+      await withFakeSpawn((args, options) => spawn(process.execPath, ['-e', WRITER], { stdio: options.stdio }), async (sched) => {
+        sched.executeRoutine({ ...AGENT, fileName: 'runner.md' }, ROUTINE, KEY);
+        const live = sched.runningRuns()[0];
+        const file = path.join(ws, '.rundock', 'runs', `${live.id}.stderr`);
+        let biggest = 0;
+        let looks = 0;
+        assert.ok(await until(() => {
+          try { biggest = Math.max(biggest, fs.statSync(file).size); looks++; } catch (e) { /* gone at the end */ }
+          return sched.routineState[KEY] && sched.routineState[KEY].status !== 'running';
+        }, 6000), 'the child finished by itself');
+        assert.ok(looks > 10, 'the capture was watched while the child wrote');
+        assert.strictEqual(sched.routineState[KEY].status, 'completed', 'and the run is the success it was');
+        assert.ok(biggest < (CHUNK * CHUNKS) / 5,
+          `the capture peaked at ${biggest} bytes of the ${CHUNK * CHUNKS} the child wrote`);
+        assert.ok(!fs.existsSync(file), 'and is gone once the run ended');
+      });
+    });
+  });
+});
+
+// THE CAPTURE KEEPS THE END. A real child prints 8 KB of something else and
+// refuses as Claude Code refuses: exiting at once, so nothing is cut and the
+// end of the file is read; or with a pause long enough for the capture to be
+// cut back either before the refusal is written, or after it, which puts the
+// refusal itself in memory and empties the file before the child exits. Each
+// way the refusal is what the ending reads, and the run falls back once with
+// the notice.
+for (const [when, order] of [
+  ['with no cut at all', 'noise, refusal'],
+  ['when the capture is cut back before the refusal', 'noise, pause, refusal'],
+  ['when the capture is cut back after the refusal', 'noise, refusal, pause'],
+]) {
+  test(`a refusal after 8 KB of other output is still read ${when}`, async () => {
+    const { spawn } = require('node:child_process');
+    const steps = {
+      noise: "fs.writeSync(2, 'warning: something else entirely\\n'.repeat(256));",
+      pause: 'Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 300);',
+      refusal: "fs.writeSync(2, \"--agent 'Runner' not found. Available agents: claude, Explore\\n\");",
+    };
+    const CHILD = `const fs = require('fs'); ${order.split(', ').map(x => steps[x]).join(' ')} process.exit(1);`;
+    await withTempWorkspaceAsync(async (ws) => {
+      await withTempHomeAsync(async () => {
+        const spawns = [];
+        await withFakeSpawn((args, options) => {
+          spawns.push(args);
+          if (spawns.length === 1) return spawn(process.execPath, ['-e', CHILD], { stdio: options.stdio });
+          const child = new EventEmitter();
+          setImmediate(() => child.emit('close', 0));
+          return child;
+        }, async (sched) => {
+          sched.executeRoutine({ ...AGENT, fileName: 'runner.md', description: 'Runs' }, ROUTINE, KEY);
+          assert.ok(await until(() => sched.routineState[KEY] && sched.routineState[KEY].status !== 'running', 600), 'the run ended');
+          assert.strictEqual(spawns.length, 2, 'the agent, refused, then one plain session');
+          const [record] = runRecords(ws);
+          assert.match(record.notice, /Claude Code said: --agent 'Runner' not found\./, 'the refusal was read from the end');
+        });
+      });
+    });
+  });
+}
 
 // A start that threw is an ending too, and it has to leave the run
 // unreachable. A handle left in the map would answer every later stop with yes

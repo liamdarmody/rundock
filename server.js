@@ -17,7 +17,7 @@ const codexRuntime = require('./codex.js');
 const PKG_VERSION = require('./package.json').version;
 const searchLib = require('./search.js');
 const { resolvePermissionConvoId } = require('./permission-routing.js');
-const { normalizeWorkspaceMode } = require('./lib/workspace/mode.js');
+const { normalizeWorkspaceMode, NOTES_DISALLOWED_TOOLS } = require('./lib/workspace/mode.js');
 const { resolveMarkers, noteHandoffMarker, HANDOFF_MODES, stripRundockMarkers } = require('./lib/delegation/markers.js');
 const { createHandbackBuilder } = require('./lib/delegation/handback.js');
 const { createDelegationRecord, attachDelegationRecord } = require('./lib/delegation/state.js');
@@ -259,8 +259,10 @@ function isSafeCreatePath(rel) {
   return !segments.some((seg) => seg.startsWith('.'));
 }
 
-// Shared constants to avoid repetition across process spawn sites
-const DISALLOWED_TOOLS_KNOWLEDGE = 'Write(*.js),Write(*.jsx),Write(*.ts),Write(*.tsx),Write(*.py),Write(*.sh),Write(*.bash),Write(*.rb),Write(*.pl),Write(*.exe),Write(*.dll),Write(*.so),Edit(*.js),Edit(*.jsx),Edit(*.ts),Edit(*.tsx),Edit(*.py),Edit(*.sh),Edit(*.bash),Edit(*.rb),Edit(*.pl),Edit(*.exe)';
+// Shared constants to avoid repetition across process spawn sites.
+// The Notes-mode list is built in lib/workspace/mode.js, which says what it
+// contains and why.
+const DISALLOWED_TOOLS_KNOWLEDGE = NOTES_DISALLOWED_TOOLS;
 // Backward compat: DISALLOWED_TOOLS used by existing code paths
 const DISALLOWED_TOOLS = DISALLOWED_TOOLS_KNOWLEDGE;
 // Base allow-lists. MCP tools are intentionally NOT pre-approved here. All MCP
@@ -696,6 +698,10 @@ schedulerLib.wireSchedulerDeps({
   // The client set is read through an accessor: wss is created later at
   // boot. The spawn plumbing is a direct lib require inside the scheduler.
   getWssClients: () => wss.clients,
+  // The same reader every conversation spawn uses, so a routine is handed the
+  // same list for the same mode.
+  getDisallowedTools,
+  settleRunCards: (runId) => httpRouter.settleRunCards(runId),
 });
 const httpRouter = require('./lib/http-router.js');
 const claudeConsole = require('./lib/runtime/claude-console.js');
@@ -707,7 +713,8 @@ httpRouter.wireHttpRouterDeps({
   getSearchEngine: () => searchEngine,
   fileIndexInProgress,
   getPermissionTimeoutMs: () => PERMISSION_TIMEOUT_MS,
-  routineRunForSession: (sessionId) => schedulerLib.runForSession(sessionId),
+  routineRun: (runId) => schedulerLib.runById(runId),
+  noteRefusedCard: (runId) => schedulerLib.noteRefusedCard(runId),
   // The reconnect card's two routes. The check's answer is also the runtime
   // status's evidence, when it could find out: a failed turn counts as signed
   // out only when its words are a sign-in failure (isAuthError).

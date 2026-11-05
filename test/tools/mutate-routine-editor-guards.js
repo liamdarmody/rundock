@@ -468,7 +468,7 @@ const MUTATIONS = [
   // The check sits on the writer, which is the road an edit takes as well as
   // the road a creation takes. Removing it has to be noticed from both.
   [ROUTINES_TZ, 'a written timezone is checked on the road every write takes',
-    '    assertFieldValue(key, formatted);\n',
+    '    assertFieldValue(key, readValue(formatted));\n',
     ''],
   [ROUTINES_TZ, 'a routine is not created carrying an empty timezone',
     "  if (timezone !== null && unquote(timezone) === '') {",

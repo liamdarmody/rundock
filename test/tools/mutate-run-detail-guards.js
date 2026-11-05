@@ -94,6 +94,16 @@ const REASONS = { src: path.join(ROOT, 'public', 'run-detail-model.js'), suite: 
 const ROUTINES_VIEW = { src: path.join(ROOT, 'public', 'views', 'routines.js'), suite: 'test/unit/run-detail-doors.test.js' };
 const APP = { src: path.join(ROOT, 'public', 'app.js'), suite: 'test/unit/run-detail-doors.test.js' };
 const VIEW_DOORS = { src: path.join(ROOT, 'public', 'views', 'run-detail.js'), suite: 'test/unit/run-detail-doors.test.js' };
+// The count of a run's refused cards. Kept by the scheduler, watched by the
+// file that starts runs with a stand-in spawn and reads their records; wired
+// by the server, watched by the file that drives real routine runs through
+// the real hook; counted by the permission route and the card's handler,
+// watched by the file that answers real hook requests through the real route
+// with a stand-in for the scheduler's count.
+const COUNT_WRITER = { src: path.join(ROOT, 'lib', 'scheduler.js'), suite: 'test/unit/scheduler-lib.test.js' };
+const COUNT_WIRING = { src: path.join(ROOT, 'server.js'), suite: 'test/integration/unattended-refusal.test.js' };
+const COUNT_ROUTE = { src: path.join(ROOT, 'lib', 'http-router.js'), suite: 'test/unit/unattended-refusal.test.js' };
+const COUNT_DENY = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'process-control.js'), suite: 'test/unit/unattended-refusal.test.js' };
 
 // [target, label, the guard as it is written, what it becomes without it]
 const MUTATIONS = [
@@ -156,8 +166,8 @@ const MUTATIONS = [
 
   // ===== NO RAW STATUS WORD =====
   [MODEL, 'the state is looked up, never taken from the record',
-    "        : (Object.prototype.hasOwnProperty.call(RUN_STATES, record.status) ? RUN_STATES[record.status] : UNRECOGNISED_STATE));",
-    '        : (RUN_STATES[record.status] || { tone: \'bad\', chip: record.status, headline: `This run is ${record.status}.`, guidance: null }));'],
+    "          : (Object.prototype.hasOwnProperty.call(RUN_STATES, record.status) ? RUN_STATES[record.status] : UNRECOGNISED_STATE)));",
+    '          : (RUN_STATES[record.status] || { tone: \'bad\', chip: record.status, headline: `This run is ${record.status}.`, guidance: null })));'],
   // A failure the agent declared, read as a failure its process had. The two
   // send a reader to different places, so the chip and headline must differ.
   [MODEL, 'a failure the agent declared is told apart from one its process had',
@@ -233,6 +243,65 @@ const MUTATIONS = [
   [VIEW, 'a reply for another routine is not drawn on this screen',
     '  if (reply.agentId !== asked.agentId || reply.routine !== asked.routine) return;',
     '  if (!reply.run && !asked) return;'],
+  // ===== THE COUNT OF REFUSED CARDS =====
+  [COUNT_WRITER, 'Refused count: a refused card is never added to its run',
+    '  run.refusedCards = (run.refusedCards || 0) + 1;',
+    '  run.refusedCards = run.refusedCards || 0;'],
+  [COUNT_WRITER, 'Refused count: the open record is not rewritten when a card is refused',
+    '  run.refusedCards = (run.refusedCards || 0) + 1;\n  writeOpeningRecord(run);',
+    '  run.refusedCards = (run.refusedCards || 0) + 1;'],
+  [COUNT_WRITER, 'Refused count: an ended run is counted, and its record reopened',
+    "  const run = typeof runId === 'string' ? liveRuns.get(runId) : null;\n  if (!run) return false;",
+    "  const run = typeof runId === 'string' ? (liveRuns.get(runId) || { id: runId, dir: runsDir() }) : null;\n  if (!run) return false;"],
+  [COUNT_WRITER, 'Refused count: an open record with none carries the field',
+    "    filesReason: 'running',\n    // Only once there is one to count, so the record of a run with none is\n    // byte for byte what it was, and an older reader meets nothing new.\n    ...(run.refusedCards > 0 ? { refusedCards: run.refusedCards } : {}),",
+    "    filesReason: 'running',\n    refusedCards: run.refusedCards,"],
+  [COUNT_WRITER, 'Refused count: the closing write drops the count',
+    '    ...(run.refusedCards > 0 ? { refusedCards: run.refusedCards } : {}),\n    files: observed.files,',
+    '    files: observed.files,'],
+  [COUNT_WRITER, 'Refused count: a run with none closes with the field',
+    '    ...(run.refusedCards > 0 ? { refusedCards: run.refusedCards } : {}),\n    files: observed.files,',
+    '    refusedCards: run.refusedCards,\n    files: observed.files,'],
+  [COUNT_WIRING, 'Refused count: the server never hands the route the count',
+    '  noteRefusedCard: (runId) => schedulerLib.noteRefusedCard(runId),',
+    '  noteRefusedCard: () => false,'],
+  [COUNT_ROUTE, 'Refused count: a card nobody answered is never counted',
+    '              if (pending.countRefusal) pending.countRefusal();\n',
+    ''],
+  [COUNT_ROUTE, "Refused count: a conversation's card is counted too",
+    '          ...(run ? { countRefusal: refusalCounter(run) } : {}),',
+    '          countRefusal: refusalCounter(run || { id: convoId }),'],
+  [COUNT_ROUTE, 'Refused count: a count that throws costs the answer',
+    "    try { deps.noteRefusedCard(run.id); } catch (e) {\n      console.warn(`[Permission] Could not count a refused card for run ${run.id}: ${e && e.message ? e.message : e}`);\n    }",
+    '    deps.noteRefusedCard(run.id);'],
+  [COUNT_DENY, 'Refused count: a denied card is never counted',
+    '      if (!allow && pending.countRefusal) pending.countRefusal();\n',
+    ''],
+  [COUNT_DENY, 'Refused count: an approval is counted as a refusal',
+    '      if (!allow && pending.countRefusal) pending.countRefusal();',
+    '      if (pending.countRefusal) pending.countRefusal();'],
+  [COUNT_DENY, 'Refused count: a string "true" is counted as an approval',
+    '      if (!allow && pending.countRefusal) pending.countRefusal();',
+    '      if (msg.allow !== true && msg.allow !== \'true\' && pending.countRefusal) pending.countRefusal();'],
+  // The count on the run screen.
+  [MODEL, 'Refused count: the screen is never told the count',
+    '      refused: found ? refusedWords(record.refusedCards) : null,',
+    '      refused: null,'],
+  [MODEL, 'Refused count: a run with none says nought were refused',
+    "    if (typeof count !== 'number' || !Number.isInteger(count) || count < 1) return null;",
+    "    if (typeof count !== 'number' || !Number.isInteger(count) || count < 0) return null;"],
+  [MODEL, 'Refused count: a count that is not a whole number is said',
+    "    if (typeof count !== 'number' || !Number.isInteger(count) || count < 1) return null;",
+    '    if (!count) return null;'],
+  [MODEL, 'Refused count: one card is said in the plural',
+    '    return count === 1\n',
+    '    return false\n'],
+  [MODEL_VIEW, 'Refused count: an older record renders differently from one with none',
+    "    if (typeof count !== 'number' || !Number.isInteger(count) || count < 1) return null;",
+    '    if (count === undefined) return null;'],
+  [VIEW, 'Refused count: the line is never drawn',
+    '    + refused\n',
+    ''],
 ];
 
 // The reporter is named explicitly rather than left to the default, which

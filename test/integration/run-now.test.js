@@ -32,7 +32,10 @@ after(async () => {
 });
 
 const runsDir = () => path.join(h.workspaceDir, '.rundock', 'runs');
+// The records only: a run still going also keeps its child's stderr beside
+// its record until it ends.
 const records = () => (fs.existsSync(runsDir()) ? fs.readdirSync(runsDir()) : [])
+  .filter(name => name.endsWith('.json'))
   .map(name => JSON.parse(fs.readFileSync(path.join(runsDir(), name), 'utf-8')));
 const stateFile = () => path.join(h.workspaceDir, '.rundock', 'routine-state.json');
 const readIfThere = (file) => (fs.existsSync(file) ? fs.readFileSync(file, 'utf-8') : null);
