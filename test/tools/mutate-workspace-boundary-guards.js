@@ -64,6 +64,8 @@ const READ_ONLY_CLIENT = { src: path.join(ROOT, 'public', 'read-only-shell.js'),
 // The card grader's PowerShell branch, through the suite that asks the grader
 // and the shared reading about the same command.
 const PS_GRADER = { src: path.join(ROOT, 'public', 'permissions.js'), suite: 'test/unit/permissions.test.js' };
+// The grader again, through the real hook, server and client permission path.
+const PS_GRADER_FLOW = { src: path.join(ROOT, 'public', 'permissions.js'), suite: 'test/integration/powershell-read-approvals.test.js' };
 // The hook, run as its own process, against a home holding hook scripts.
 const PS_HOOK_REAL = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/powershell-reads-hook.test.js' };
 // The mode-persisted-before-scaffold ordering guard lives in the protocol
@@ -1013,6 +1015,9 @@ const MUTATIONS = [
   // command, as it was, and its delete test put back to looking only after
   // `;`, `&` or `|`.
   [PS_GRADER, 'PowerShell grader: low only when the shared reading reads every part, never by the first word',
+    "      if (isReadOnlyPowerShellCommand(cmd)) return 'low';",
+    "      if (/^(Get-[A-Za-z]+|ls|dir|gci|gc|cat|type|pwd|gl|echo|Write-Output|Write-Host|Select-Object|Where-Object|Measure-Object|Test-Path|Resolve-Path|Split-Path|Format-Table|Format-List|Sort-Object)\\b/i.test(cmd)) return 'low';"],
+  [PS_GRADER_FLOW, 'PowerShell grader, end to end: a write or a send after a read reaches a card through the hook, the server and the client',
     "      if (isReadOnlyPowerShellCommand(cmd)) return 'low';",
     "      if (/^(Get-[A-Za-z]+|ls|dir|gci|gc|cat|type|pwd|gl|echo|Write-Output|Write-Host|Select-Object|Where-Object|Measure-Object|Test-Path|Resolve-Path|Split-Path|Format-Table|Format-List|Sort-Object)\\b/i.test(cmd)) return 'low';"],
   [PS_GRADER, 'PowerShell grader: a delete is looked for inside brackets and blocks and after a new line',
