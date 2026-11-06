@@ -1155,4 +1155,49 @@ describe('ARCHITECTURE.md: a write to a stopped process is logged, left to its c
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  test('and each logs a failed write in one line, naming the process and the error, with no log of its own', { timeout: 30000 }, async () => {
+    // Neither start path is given a log here, which is how each runs when
+    // nothing asks for its lines: the line still comes, on stderr.
+    const claude = require('../../lib/runtime/claude.js');
+    const { createCodexAppServer } = require('../../codex-appserver.js');
+    const epipe = () => Object.assign(new Error('write EPIPE'), { code: 'EPIPE', errno: -32, syscall: 'write' });
+    const lines = [];
+    const realError = console.error;
+    console.error = (...args) => {
+      const line = args.map(String).join(' ');
+      if (line.startsWith('[Stdin]')) lines.push(line); else realError(...args);
+    };
+    try {
+      const prev = claude.wireClaudeRuntimeDeps({ onClaudeSpawn: () => {} });
+      let proc;
+      try {
+        proc = claude.spawnClaude(['--version', '--agent', 'some-agent'], { cwd: ROOT, env: { ...process.env, RUNDOCK_CONVO_ID: 'convo-1' }, stdio: ['pipe', 'ignore', 'ignore'] });
+      } finally { claude.wireClaudeRuntimeDeps(prev); }
+      try {
+        proc.stdin.emit('error', epipe());
+        assert.deepStrictEqual(lines.length, 1, `spawnClaude: one line: ${JSON.stringify(lines)}`);
+        assert.match(lines[0], new RegExp(`^\\[Stdin\\] claude \\(agent some-agent, conversation convo-1\\) pid=${proc.pid}: a write failed \\(EPIPE: write EPIPE\\)`));
+      } finally {
+        const gone = new Promise((resolve) => proc.once('close', resolve));
+        try { proc.kill('SIGKILL'); } catch (e) { /* already gone */ }
+        await gone;
+      }
+
+      const dir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'doc-claims-codex-'));
+      fs.writeFileSync(path.join(dir, 'stub-codex-scenario.json'), JSON.stringify({ appServer: {} }));
+      const server = createCodexAppServer({ binPath: path.join(ROOT, 'test', 'helpers', 'stub-codex', 'codex'), cwd: dir, shutdownGraceMs: 1000 });
+      try {
+        await server.start();
+        server._proc.stdin.emit('error', epipe());
+        assert.deepStrictEqual(lines.length, 2, `the Codex app-server: one line: ${JSON.stringify(lines)}`);
+        assert.match(lines[1], new RegExp(`^\\[Stdin\\] codex app-server pid=${server._proc.pid}: a write failed \\(EPIPE: write EPIPE\\)`));
+      } finally {
+        await server.shutdown();
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    } finally {
+      console.error = realError;
+    }
+  });
 });

@@ -92,3 +92,35 @@ test('a request written after the app-server stopped is logged once, rejected by
     if (proc) for (const s of [proc.stdin, proc.stdout, proc.stderr]) { try { s.unref(); } catch (e) { /* nothing to let go */ } }
   }
 });
+
+// THE DEFAULT LOG. A client made with no `log` of its own logs nothing else,
+// but a failed write is still one line, on stderr, exactly as the Claude path
+// gives it: a write that failed is never silent.
+test('with no log given, a request written after the app-server stopped is still logged once, on stderr', { timeout: 30000 }, async () => {
+  const stderrLines = [];
+  const realError = console.error;
+  console.error = (...args) => {
+    const line = args.map(String).join(' ');
+    if (line.startsWith('[Stdin]')) stderrLines.push(line); else realError(...args);
+  };
+  const { server, dir } = makeServer(undefined);
+  let proc = null;
+  try {
+    await server.start();
+    proc = server._proc;
+    const restarted = once(server, 'ready', { signal: AbortSignal.timeout(10000) });
+    endUnheard(proc);
+    await assert.rejects(server.startThread({ cwd: dir }), /exited before responding/);
+    await restarted;
+
+    assert.deepStrictEqual(uncaught.map((e) => `${e.code || ''} ${e.message}`), [],
+      'nothing reaches the host as an uncaught exception');
+    assert.strictEqual(stderrLines.length, 1, `one line, for the one failed write: ${JSON.stringify(stderrLines)}`);
+    assert.match(stderrLines[0], new RegExp(`^\\[Stdin\\] codex app-server pid=${proc.pid}: a write failed \\((EPIPE|ENOTCONN|ECONNRESET): `),
+      'naming the process and the error, as the Claude path does');
+  } finally {
+    console.error = realError;
+    await server.shutdown();
+    if (proc) for (const s of [proc.stdin, proc.stdout, proc.stderr]) { try { s.unref(); } catch (e) { /* nothing to let go */ } }
+  }
+});
