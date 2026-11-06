@@ -388,6 +388,10 @@ const SECRET_REACH_GRANT = { src: path.join(ROOT, 'lib', 'workspace', 'boundary.
 // suite that drives the real hook and the classifier over its spellings; what
 // happens when the reading gives up is proven where the hook is made to fail.
 const SECRET_FOLDER = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/secret-folder-read.test.js' };
+// Where the server decides whether a stored grant answers a request. Proven
+// only through the real server, with the real hook's request and a grant
+// stored over the runtime folder.
+const SECRET_FOLDER_GRANT = { src: path.join(ROOT, 'lib', 'http-router.js'), suite: 'test/integration/secret-reach-card.test.js' };
 
 const MUTATIONS = [
   // ===== ONE DIRECTORY UNDER TWO NAMES IS ONE IDENTITY =====
@@ -3653,6 +3657,15 @@ const MUTATIONS = [
   [SECRET_FOLDER, "Folder reads: the first folder rg --files lists is taken for a pattern",
     "spec.patterns && !lists && !has(",
     "spec.patterns && !has("],
+  // A stored grant never answers a shell command, nor a crossing tagged
+  // secret. Two guards hold that, the request's `grantable: false` and the
+  // secret check in crossingCovered, and either alone keeps the card, so this
+  // breaks the decision itself: a stored grant reaching every path answers.
+  [SECRET_FOLDER_GRANT, "Folder reads: a stored grant over the runtime folder answers a read of everything in it",
+    "        const uncovered = grantable ? crossings.filter(c => !crossingCovered(c)) : crossings;\n"
+    + "        if (data.boundary && grantable && crossings.length && uncovered.length === 0) {",
+    "        const uncovered = crossings.filter(c => !require('./workspace/boundary.js').boundaryGrantCovers(c.path));\n"
+    + "        if (data.boundary && crossings.length && uncovered.length === 0) {"],
 ];
 const REPORTER = ['--test-reporter', 'spec'];
 

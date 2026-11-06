@@ -255,6 +255,44 @@ describe('a credential file that is a link, against a grant on where it leads', 
   }
 });
 
+// A STORED GRANT OVER THE RUNTIME FOLDER DOES NOT ANSWER A READ OF ALL OF IT.
+// The grant is kept as the server keeps any, over `~/.claude` and over home
+// itself, and the real hook asks the real server. A recursive read of the
+// folder still reaches the browser as a secret card rather than being let
+// through, and the same command sent again is not answered by the grant
+// either.
+describe('a stored grant over a runtime folder, against a read of everything in it', () => {
+  const READS = ['grep -r token ~/.claude', 'cd ~/.claude && rg -e token', 'find -L ~/.claude -exec cat {} +', 'env -u FOO rg token ~/.claude'];
+  for (const [label, env] of MODES) {
+    test(`${label}: the grant answers neither the read nor the same read again`, POSIX, async () => {
+      const answers = boundary.boundaryPermissionsPath();
+      const kept = fs.existsSync(answers) ? fs.readFileSync(answers) : null;
+      try {
+        boundary.addBoundaryGrant(path.join(home, '.claude'));
+        boundary.addBoundaryGrant(home);
+        const grants = boundary.readBoundaryGrants();
+        assert.ok(boundary.boundaryGrantCovers(credentials), 'sanity: the stored grant reaches the credential file');
+        for (const command of READS) {
+          for (const attempt of ['asked', 'asked again']) {
+            const since = client.messages.length;
+            const pending = runHook(command, env);
+            const first = await Promise.race([pending.then(out => ({ out })), client.waitFor(isCard, { since, timeout: 4000, label: `${label}: ${command}` }).catch(() => null)]);
+            assert.ok(first && first.msg, `${command}, ${attempt}: the browser is asked, not answered from the grant`);
+            assert.ok(secretOf(first.msg.request), `${command}, ${attempt}: the card names the credential file as a secret`);
+            assert.strictEqual(first.msg.request.grant_dir, null, `${command}, ${attempt}: no folder is offered to remember`);
+            assert.match(draw(first.msg), /credential file for your Claude account/, `${command}, ${attempt}: drawn as a secret card`);
+            answer(first.msg, { allow: false });
+            assert.strictEqual(decisionOf(await pending), 'deny', `${command}, ${attempt}: refused, as the card was`);
+          }
+        }
+        assert.deepStrictEqual(boundary.readBoundaryGrants(), grants, 'the stored grants are as they were');
+      } finally {
+        if (kept === null) fs.rmSync(answers, { force: true }); else fs.writeFileSync(answers, kept);
+      }
+    });
+  }
+});
+
 // NOTHING ELSE GAINS A CARD, AS A PERSON SEES IT. Each command that must keep
 // its answer goes from the real hook through the real server to the browser's
 // card code, and what happens is compared with what happens to main's hook's
