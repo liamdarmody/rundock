@@ -3636,6 +3636,15 @@ const MUTATIONS = [
     "    found = require('../lib/runtime/claude-lookup.js').installedClaude();\n",
     "    const bin = execSync('which claude', { timeout: 5000, encoding: 'utf-8' }).trim();\n"
       + "    found = bin ? { bin, version: require('../lib/runtime/claude-lookup.js').readClaudeVersion(bin) } : null;\n"],
+  [LOOKUP, 'Claude lookup: the login shell is given the PATH with the install folders in front',
+    '    env: { ...shellEnv(env), PATH: deps.startPath || SYSTEM_PATH }, cwd: env.HOME || os.homedir(), stdio: codexRuntime.PROBE_STDIO,\n',
+    '    env: shellEnv(env), cwd: env.HOME || os.homedir(), stdio: codexRuntime.PROBE_STDIO,\n'],
+  [LOOKUP, 'Claude lookup: the login shell is asked on every look while nothing is found',
+    '  if (answer && answer.key === key && now >= answer.at && now - answer.at < LOGIN_ANSWER_MS) return { ...answer.login, asked: false };\n',
+    ''],
+  [LOOKUP_DESKTOP, "Claude lookup: the desktop app's sign-in check runs whichever claude comes first on its PATH",
+    "  const bin = require('../lib/runtime/claude-lookup.js').lookupClaude().bin;\n",
+    "  const bin = 'claude';\n"],
 ];
 const REPORTER = ['--test-reporter', 'spec'];
 

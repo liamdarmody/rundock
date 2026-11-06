@@ -1258,7 +1258,10 @@
       "Claude lookup: what the startup files print outside the markers is taken as the answer": 48.8,
       "Claude lookup: a login shell that cannot answer blocks the chat instead of falling back": 41.06,
       "Claude lookup: a relative PATH entry is used": 39.66,
-      "Claude lookup: the desktop app's check keeps its own which": 57.43
+      "Claude lookup: the desktop app's check keeps its own which": 57.43,
+      "Claude lookup: the login shell is given the PATH with the install folders in front": 21.14,
+      "Claude lookup: the login shell is asked on every look while nothing is found": 20.72,
+      "Claude lookup: the desktop app's sign-in check runs whichever claude comes first on its PATH": 19.84
     }
   }
 }
