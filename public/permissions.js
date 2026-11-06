@@ -376,12 +376,41 @@
     return key === POWERSHELL_CATCH_ALL ? null : key;
   }
 
+  // A SAVED KEY ANSWERS ONLY WHAT IT COVERS. A key used to answer any request
+  // whose first word it named, so one saved for `Get-Date` answered
+  // `Get-Date; Add-Content notes.md x` with no card. Now every part must be
+  // covered: a read on its own, or a part that starts with a command a saved
+  // key names. A part holding anything the shared reading cannot follow is
+  // never covered, and nothing is when the reading fails or the saved keys
+  // cannot be read. The catch-all an earlier release saved covers nothing. A
+  // command of reads alone is answered by the low-risk policy, not by a key.
+  function powerShellAllowCovers(command, alwaysAllowedSet) {
+    try {
+      var names = powerShellCommandNames(String(command || ''));
+      if (!names) return false;
+      var keyed = false;
+      for (var n = 0; n < names.length; n++) {
+        if (isPowerShellReadName(names[n])) continue;
+        var key = 'PowerShell:' + names[n];
+        if (!POWERSHELL_COMMAND_NAME.test(names[n])) return false;
+        if (key === POWERSHELL_CATCH_ALL) return false;
+        if (!alwaysAllowedSet.has(key)) return false;
+        keyed = true;
+      }
+      return keyed;
+    } catch (unanswerable) {
+      return false;
+    }
+  }
+
   // The auto-allow decision path. Given the classified risk, the allow key,
   // and the session's always-allowed set, returns:
   //   { action: 'allow', reason: 'always-allowed' }  user granted a standing allow
   //   { action: 'allow', reason: 'low-risk' }        read-only auto-approve policy
   //   { action: 'card' }                             ask the human
-  function decidePermission(risk, key, alwaysAllowedSet, verdict) {
+  // The request ({ toolName, input }) is what a PowerShell command is matched
+  // by: every part of it, never the key of its first word.
+  function decidePermission(risk, key, alwaysAllowedSet, verdict, request) {
     // THE HOOK'S VERDICT DECIDES, whatever this grader would have painted.
     // Always asks is carded ahead of every standing allow; Asks once is
     // answered only by a standing allow under its own rule key, never by a
@@ -404,7 +433,9 @@
     // that shares the key. High-risk requests never offer "Always allow"
     // either (offersAlwaysAllow), so nothing legitimate depends on this path.
     if (risk === 'high') return { action: 'card' };
-    if (alwaysAllowedSet && alwaysAllowedSet.has(key)) return { action: 'allow', reason: 'always-allowed' };
+    if (request && request.toolName === 'PowerShell') {
+      if (powerShellAllowCovers(request.input && request.input.command, alwaysAllowedSet)) return { action: 'allow', reason: 'always-allowed' };
+    } else if (alwaysAllowedSet && alwaysAllowedSet.has(key)) return { action: 'allow', reason: 'always-allowed' };
     if (risk === 'low') return { action: 'allow', reason: 'low-risk' };
     return { action: 'card' };
   }

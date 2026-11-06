@@ -1052,6 +1052,31 @@ const MUTATIONS = [
   [PS_CARD, 'PowerShell card: no Always allow when there is no key to save',
     '!boundary && !answerFile && key && RundockPermissions.offersAlwaysAllow(risk, verdict)',
     '!boundary && !answerFile && RundockPermissions.offersAlwaysAllow(risk, verdict)'],
+  // WHAT A SAVED POWERSHELL KEY ANSWERS. The first puts back the match on the
+  // command's first word; the rest each let one kind of part count as covered.
+  [PS_GRADER, 'PowerShell key: a request is answered by every part it covers, not by its first word',
+    "      if (powerShellAllowCovers(request.input && request.input.command, alwaysAllowedSet)) return { action: 'allow', reason: 'always-allowed' };",
+    "      if (alwaysAllowedSet && alwaysAllowedSet.has('PowerShell:' + ((String(request.input && request.input.command || '').trim().match(/^[A-Za-z][\\w-]*/) || ['PowerShell'])[0]))) return { action: 'allow', reason: 'always-allowed' };"],
+  [PS_GRADER, 'PowerShell key: a part the reading cannot judge is never covered',
+    '      if (!names) return false;',
+    "      if (!names) names = [String(command || '').trim().split(/\\s+/)[0]];"],
+  [PS_GRADER, 'PowerShell key: a part that starts with no command name is never covered',
+    '        if (!POWERSHELL_COMMAND_NAME.test(names[n])) return false;\n',
+    ''],
+  [PS_GRADER, 'PowerShell key: the catch-all an earlier release saved covers nothing',
+    '        if (key === POWERSHELL_CATCH_ALL) return false;\n',
+    ''],
+  [PS_GRADER, 'PowerShell key: a failure while the parts are matched answers nothing',
+    '    } catch (unanswerable) {\n      return false;',
+    '    } catch (unanswerable) {\n      return true;'],
+  // The card code handing the request to the decision, so a PowerShell
+  // request is matched part by part, in a conversation and in a routine.
+  [PS_CARD, 'PowerShell card: a conversation\'s request is matched part by part',
+    'RundockPermissions.decidePermission(risk, key, alwaysAllowedTools, verdict, { toolName, input });',
+    'RundockPermissions.decidePermission(risk, key, alwaysAllowedTools, verdict);'],
+  [PS_CARD, 'PowerShell card: a routine\'s request is matched part by part',
+    'req.code_mode_verdict || undefined,\n      { toolName, input });',
+    'req.code_mode_verdict || undefined);'],
   // The hook reading a PowerShell command by the Bash rules again: in process,
   // and through the real hook.
   [HOOK, 'the hook reads a PowerShell command with the PowerShell reading',

@@ -707,7 +707,7 @@ function handlePermissionRequest(d, convoId) {
   // the user would never see that it had happened.
   const decision = (req.boundary || req.answer_file === true)
     ? { action: 'card' }
-    : RundockPermissions.decidePermission(risk, key, alwaysAllowedTools, verdict);
+    : RundockPermissions.decidePermission(risk, key, alwaysAllowedTools, verdict, { toolName, input });
   const isActive = activeConversation?.id === convoId;
   const route = RundockPermissions.routePermissionRequest(decision, isActive);
   // A card that will be shown, here or when its conversation opens, is
@@ -1549,7 +1549,8 @@ function handleOwnerlessPermissionRequest(d) {
   const decision = (req.boundary || req.answer_file === true)
     ? { action: 'card' }
     : RundockPermissions.decidePermission(classifyRisk(toolName, input),
-      RundockPermissions.verdictAllowKey(req.code_mode_verdict) || toolAllowKey(toolName, input), alwaysAllowedTools, req.code_mode_verdict || undefined);
+      RundockPermissions.verdictAllowKey(req.code_mode_verdict) || toolAllowKey(toolName, input), alwaysAllowedTools, req.code_mode_verdict || undefined,
+      { toolName, input });
   if (decision && decision.action === 'allow') {
     if (ws) ws.send(JSON.stringify({ type: 'permission_response', requestId, conversationId: '', allow: true }));
     return;

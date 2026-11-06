@@ -150,6 +150,68 @@ describe('Always allow is offered only when there is one command to save', () =>
   });
 });
 
+describe('a saved key answers what it covers, in a conversation and in a routine', () => {
+  for (const where of WHERE) {
+    test(`in a ${where}: a chain whose every command is saved runs with no card, every time`, () => {
+      chat.setStandingToolAllows(['PowerShell:npm', 'PowerShell:git']);
+      for (let i = 0; i < 3; i++) {
+        assert.ok(ranWithNoCard(ask('npm test; git status', where)), `try ${i + 1}`);
+        assert.ok(ranWithNoCard(ask('Get-Date; npm test', where)), `try ${i + 1}`);
+      }
+      assert.ok(cardOf(ask('npm test; Set-Content notes.md x', where)), 'a part no saved key names is carded');
+      assert.ok(cardOf(ask('npm test $(Set-Content notes.md x)', where)), 'and so is a part the reading cannot follow');
+    });
+  }
+
+  test('Settings lists a catch-all key from an earlier release with its remove control, it answers nothing, and removing a key cards what it answered', () => {
+    const settings = require('../../public/views/settings.js');
+    document.body.insertAdjacentHTML('beforeend', '<div id="tool-allows-block"></div>');
+    global.setStandingToolAllows = chat.setStandingToolAllows;
+    global.WebSocket = { OPEN: 1 };
+    global.ws.readyState = 1;
+    try {
+      settings.toolAllowsArrived({ tools: ['PowerShell:PowerShell', 'PowerShell:npm'] });
+      const rows = [...document.querySelectorAll('#tool-allows-block .tool-allow-row')];
+      assert.deepStrictEqual(rows.map(r => r.querySelector('.tool-allow-key').textContent), ['PowerShell:PowerShell', 'PowerShell:npm']);
+      assert.ok(rows[0].querySelector('.settings-row-remove'), 'the old key has its remove control');
+      const chain = '$t = Get-Date; Add-Content time-log.md $t';
+      assert.ok(cardOf(ask(chain, 'conversation')), 'the catch-all answers nothing');
+      assert.ok(ranWithNoCard(ask('Get-Date; npm test', 'conversation')), 'a key naming the command answers it');
+
+      settings.revokeToolAllowAt(0);
+      assert.deepStrictEqual(sent.filter(m => m.type === 'remove_tool_allow'), [{ type: 'remove_tool_allow', key: 'PowerShell:PowerShell' }]);
+      settings.toolAllowsArrived({ tools: ['PowerShell:npm'] });
+      assert.ok(cardOf(ask(chain, 'conversation')), 'removing the catch-all changes nothing: the chain still cards');
+      assert.ok(ranWithNoCard(ask('Get-Date; npm test', 'conversation')), 'and the chain the other key answers still runs');
+
+      settings.revokeToolAllowAt(0);
+      settings.toolAllowsArrived({ tools: [] });
+      assert.ok(cardOf(ask('Get-Date; npm test', 'conversation')), 'removing the key cards the chain it answered');
+    } finally {
+      delete global.setStandingToolAllows;
+      document.getElementById('tool-allows-block').remove();
+    }
+  });
+
+  for (const where of WHERE) {
+    test(`in a ${where}: saved keys that are not strings, or a reading that fails, answer nothing`, () => {
+      chat.setStandingToolAllows([42, null, { key: 'PowerShell:npm' }, ['PowerShell:npm']]);
+      assert.ok(cardOf(ask('Get-Date; npm test', where)), 'keys that are not strings answer nothing');
+      chat.setStandingToolAllows('PowerShell:npm');
+      assert.ok(cardOf(ask('Get-Date; npm test', where)), 'nor does a list that is not a list');
+      chat.setStandingToolAllows(['PowerShell:npm']);
+      const seam = require('../../public/read-only-shell.js').powerShellReadingSeam;
+      const kept = seam.beforeReading;
+      seam.beforeReading = () => { throw new Error('forced failure'); };
+      let id;
+      try { id = ask('npm test', where); } finally { seam.beforeReading = kept; }
+      assert.ok(cardOf(id), 'a failure while the parts are matched cards');
+      assert.ok(!sent.some(m => m.requestId === id), 'and nothing is answered on the person\'s behalf');
+      assert.ok(ranWithNoCard(ask('npm test', where)), 'with the reading back, the saved key answers again');
+    });
+  }
+});
+
 describe('a failure forced inside the shared definition cards, and never allows', () => {
   const seam = require('../../public/read-only-shell.js').powerShellReadingSeam;
   for (const where of WHERE) {

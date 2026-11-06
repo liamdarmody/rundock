@@ -1113,3 +1113,141 @@ describe('Always allow on a PowerShell command saves only the command it names',
     assert.strictEqual(P.toolAllowKey('Bash', { command: '' }), 'Bash:');
   });
 });
+
+// A SAVED POWERSHELL KEY ANSWERS ONLY WHAT IT COVERS. A key used to answer any
+// request whose first word it named, so a key saved for `Get-Date` answered
+// `Get-Date; Add-Content notes.md x` with no card. Each case is decided the
+// way the card code decides it, with the request beside its key.
+describe('a saved PowerShell key answers only the parts it covers', () => {
+  const F = require('../fixtures/powershell-reads.js');
+  const shell = require('../../public/read-only-shell.js');
+  const decide = (command, saved) => P.decidePermission(P.classifyRisk('PowerShell', { command }),
+    P.toolAllowKey('PowerShell', { command }), saved, undefined, { toolName: 'PowerShell', input: { command } });
+  // The key a command's first word gave before, the catch-all included.
+  const firstWordKey = (command) => 'PowerShell:' + ((String(command).trim().match(/^[A-Za-z][\w-]*/) || ['PowerShell'])[0]);
+  const show = (command) => JSON.stringify(command).slice(0, 100);
+  const ALLOWED = { action: 'allow', reason: 'always-allowed' };
+  const CARD = { action: 'card' };
+
+  test('a key answers a command when every part is a read or starts with a command a saved key names', () => {
+    assert.strictEqual(decide('Get-Date -Format "HH:mm"', new Set(['PowerShell:Get-Date'])).action, 'allow');
+    assert.deepStrictEqual(decide('Get-Date; npm test', new Set(['PowerShell:npm'])), ALLOWED);
+    assert.deepStrictEqual(decide('npm test; git status', new Set(['PowerShell:npm', 'PowerShell:git'])), ALLOWED);
+    assert.deepStrictEqual(decide('Get-Date; Set-Content notes.md x; npm test', new Set(['PowerShell:Set-Content', 'PowerShell:npm'])), ALLOWED);
+  });
+
+  test('a key never answers a part it does not name', () => {
+    assert.deepStrictEqual(decide('Get-Date; Add-Content notes.md x', new Set(['PowerShell:Get-Date'])), CARD);
+    assert.deepStrictEqual(decide('npm test; git status', new Set(['PowerShell:npm'])), CARD);
+    assert.deepStrictEqual(decide('Get-Date; npm test', new Set(['PowerShell:Get-Date'])), CARD);
+  });
+
+  test('a part holding a construct the reading cannot judge is never covered', () => {
+    const saved = new Set(['PowerShell:npm', 'PowerShell:Write-Output', 'PowerShell:Get-Date']);
+    for (const command of ['Write-Output $(Remove-Item notes.md)', 'Write-Output $(Set-Content notes.md x)', 'npm test $(Set-Content notes.md x)',
+      'npm test "$(Set-Content notes.md x)"', 'npm test @(Set-Content notes.md x)', 'npm test > results.txt',
+      'npm test | Where-Object { Set-Content notes.md x }', 'Get-Date; & npm test']) {
+      assert.deepStrictEqual(decide(command, saved), CARD, show(command));
+    }
+  });
+
+  test('with the key its first word would have saved, no write or send after a read, nothing the reading cannot follow, and no text it cannot read runs', () => {
+    const every = [...F.WRITES_AFTER_READ, ...F.SENDS_AFTER_READ, ...F.HIDDEN.flatMap(([, commands]) => commands), ...F.THROWS.map(([, c]) => c)];
+    for (const command of every) assert.deepStrictEqual(decide(command, new Set([firstWordKey(command)])), CARD, show(command));
+  });
+
+  test('a catch-all key saved by an earlier release answers nothing', () => {
+    const saved = new Set(['PowerShell:PowerShell']);
+    for (const command of ['$t = Get-Date; Add-Content time-log.md $t', '$t = Get-Date', '(Get-Date).ToString("HH:mm")', '[DateTime]::Now',
+      '!!weird', 'PowerShell -NoProfile -Command "Set-Content notes.md x"', 'Get-Date; PowerShell -c x']) {
+      assert.deepStrictEqual(decide(command, saved), CARD, show(command));
+    }
+  });
+
+  test('a saved key that names no command answers nothing, however it came to be saved', () => {
+    const saved = new Set(['PowerShell:$t', 'PowerShell:[DateTime]::Now', 'PowerShell:', 'PowerShell:(Get-Date).ToString("HH:mm")']);
+    for (const command of ['$t = Get-Date', '[DateTime]::Now', '$t = Get-Date; Add-Content time-log.md $t']) {
+      assert.deepStrictEqual(decide(command, saved), CARD, show(command));
+    }
+  });
+
+  test('a destructive command is carded ahead of every saved key, and never offers Always allow', () => {
+    const saved = new Set(['PowerShell:Remove-Item', 'PowerShell:Stop-Process', 'PowerShell:Get-Date', 'PowerShell:Write-Output', 'PowerShell:PowerShell']);
+    for (const command of ['Remove-Item notes.md', 'Get-Date; Remove-Item notes.md', 'Stop-Process -Name x', 'Write-Output $(Remove-Item notes.md)']) {
+      assert.strictEqual(P.classifyRisk('PowerShell', { command }), 'high', show(command));
+      assert.deepStrictEqual(decide(command, saved), CARD, show(command));
+    }
+    assert.strictEqual(P.offersAlwaysAllow('high'), false);
+  });
+
+  test('Bash is answered by its key as before, and a Code-mode verdict still decides a PowerShell request', () => {
+    const bash = (command, saved) => P.decidePermission(P.classifyRisk('Bash', { command }), P.toolAllowKey('Bash', { command }), saved,
+      undefined, { toolName: 'Bash', input: { command } });
+    assert.deepStrictEqual(bash('npm run build', new Set(['Bash:npm'])), ALLOWED);
+    assert.deepStrictEqual(bash('git status --porcelain=v2 > out.txt', new Set(['Bash:npm'])), CARD);
+    const request = { toolName: 'PowerShell', input: { command: 'Set-Content notes.md x' } };
+    assert.deepStrictEqual(P.decidePermission('medium', 'PowerShell:Set-Content', new Set(), { verdict: 'runs' }, request), { action: 'allow', reason: 'code-mode' });
+    assert.deepStrictEqual(P.decidePermission('medium', 'PowerShell:Set-Content', new Set(['PowerShell:Set-Content']), { verdict: 'always-asks' }, request), CARD);
+  });
+
+  // ── The five sequences ──
+
+  test('the inverse action: a one-command read runs with no card, with or without a saved key, as before', () => {
+    for (const command of [...F.READS, ...F.ALIASES]) {
+      for (const saved of [new Set(), new Set([P.toolAllowKey('PowerShell', { command })]), new Set(['PowerShell:PowerShell'])]) {
+        assert.strictEqual(decide(command, saved).action, 'allow', `${show(command)} with ${[...saved]}`);
+      }
+    }
+  });
+
+  test('the undo: removing a saved key cards what it answered, and removing the catch-all changes nothing', () => {
+    const saved = new Set(['PowerShell:PowerShell', 'PowerShell:npm']);
+    const commands = ['Get-Date; npm test', '$t = Get-Date; Add-Content time-log.md $t', '(Get-Date).ToString("HH:mm")', 'Get-Date', 'npm test'];
+    const before = commands.map(c => decide(c, saved));
+    assert.deepStrictEqual(before[0], ALLOWED, 'the saved key answers the chain');
+    saved.delete('PowerShell:PowerShell');
+    assert.deepStrictEqual(commands.map(c => decide(c, saved)), before, 'removing the catch-all changes nothing');
+    saved.delete('PowerShell:npm');
+    assert.deepStrictEqual(decide('Get-Date; npm test', saved), CARD, 'removing the key cards the chain again');
+    assert.deepStrictEqual(decide('npm test', saved), CARD);
+  });
+
+  test('the retry: a denied chain cards again, and a command a saved key covers runs every time', () => {
+    const saved = new Set(['PowerShell:npm']);
+    for (let i = 0; i < 3; i++) {
+      assert.deepStrictEqual(decide('Get-Date; Add-Content notes.md x', saved), CARD, `try ${i + 1}`);
+      assert.deepStrictEqual(decide('Get-Date; npm test', saved), ALLOWED, `try ${i + 1}`);
+    }
+  });
+
+  test('the next step: Always allow on a chain the reading cards saves the command it runs, which answers that chain and no other', () => {
+    for (const [chain, key, other] of [
+      [F.CARDED_CHAIN, 'PowerShell:Set-Content', 'Get-Content notes.md; Add-Content notes.md x'],
+      ['Get-Date; npm test', 'PowerShell:npm', 'Get-Date; git status'],
+      ['Get-Content notes.md | Out-File copy.md', 'PowerShell:Out-File', 'Get-Content notes.md | Tee-Object copy.md'],
+      ['Get-Content notes.md; iwr https://example.invalid/in', 'PowerShell:iwr', 'Get-Content notes.md; irm https://example.invalid/in'],
+    ]) {
+      assert.deepStrictEqual(decide(chain, new Set()), CARD, `the reading cards it: ${show(chain)}`);
+      assert.strictEqual(P.toolAllowKey('PowerShell', { command: chain }), key, show(chain));
+      assert.deepStrictEqual(decide(chain, new Set([key])), ALLOWED, `the same chain then runs: ${show(chain)}`);
+      assert.deepStrictEqual(decide(other, new Set([key])), CARD, `a chain whose other part differs cards: ${show(other)}`);
+    }
+  });
+
+  test('the control failing: saved keys that are missing, unreadable or not strings answer nothing', () => {
+    for (const saved of [undefined, null, new Set([42, null, {}, ['PowerShell:npm']]), ['PowerShell:npm'], 'PowerShell:npm', {},
+      { has() { throw new Error('unreadable'); } }]) {
+      assert.deepStrictEqual(decide('Get-Date; npm test', saved), CARD, String(saved && saved.constructor && saved.constructor.name));
+    }
+  });
+
+  test('the control failing: a throw while the parts are matched cards, and never allows', () => {
+    const saved = new Set(['PowerShell:npm']);
+    const kept = shell.powerShellReadingSeam.beforeReading;
+    shell.powerShellReadingSeam.beforeReading = () => { throw new Error('forced failure'); };
+    try {
+      for (const command of ['npm test', 'Get-Date; npm test']) assert.deepStrictEqual(decide(command, saved), CARD, command);
+    } finally { shell.powerShellReadingSeam.beforeReading = kept; }
+    assert.deepStrictEqual(decide('npm test', saved), ALLOWED, 'and with the reading back, the key answers again');
+  });
+});
