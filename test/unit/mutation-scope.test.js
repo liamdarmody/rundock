@@ -564,6 +564,16 @@ describe('three outcomes: pass, fail, no verdict', () => {
     assert.strictEqual(aggregate({ id: 'x', shards: [] }, []).outcome, PASS, 'an empty plan has nothing to fail');
   });
 
+  test('a failed plan is titled as one, and names no step only one workflow has', () => {
+    // Both workflows read this message. The nightly's plan job runs no fixture
+    // check, so naming one there sent a reader looking for a step that is not
+    // there; the plan job's own log names the step that failed.
+    const r = aggregate(null, [], { planResult: 'failure', shardsResult: 'skipped' });
+    assert.strictEqual(r.outcome, FAIL);
+    assert.strictEqual(r.title, 'The plan failed: see its job');
+    assert.ok(!r.causes.join(' ').includes('fixture'), r.causes.join('; '));
+  });
+
   test('a harness exiting 3, or killed, is no verdict from the run and from the aggregator', () => {
     const root = fixtureRoot();
     write(root, 'test/tools/mutate-a-guards.js', harnessSource([['A', 'lib/a.js', 'test/unit/a.test.js']], { exitCode: 3 }));

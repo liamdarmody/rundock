@@ -578,9 +578,11 @@ const noVerdict = (causes) => ({ outcome: NO_VERDICT, causes, title: `No verdict
  * result that was not given at all is no verdict.
  */
 function aggregate(plan, verdicts, { planResult = 'success', shardsResult = 'success' } = {}) {
+  // Both workflows read this, and their plan jobs run different steps, so the
+  // cause names none: the plan job's own log names the one that failed.
   if (planResult !== 'success') {
     return planResult === 'failure'
-      ? { outcome: FAIL, causes: ['the plan job failed (the fixture check, or the selection itself)'], title: 'Mutation guards failed' }
+      ? { outcome: FAIL, causes: ['the plan job failed: its log names the step'], title: 'The plan failed: see its job' }
       : noVerdict([`the plan job was ${planResult || 'not run'}`]);
   }
   if (!plan || !Array.isArray(plan.shards)) return noVerdict(['no plan was found']);
