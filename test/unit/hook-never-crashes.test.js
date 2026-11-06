@@ -373,6 +373,90 @@ describe('anything else that goes wrong in the hook is a refusal', () => {
   });
 });
 
+// A CREDENTIAL FILE NAMED AFTER A CD OR BY A GLOB is asked about like the
+// direct spelling of it, so each way the hook can fail has to refuse it too:
+// a failure while asking, a reply cut short, and a word built to make the
+// matching slow. Run against a temporary home, never the real one.
+describe('a credential file named after a cd or by a glob, when something fails', () => {
+  const home = path.join(root, 'home');
+  fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.claude', '.credentials.json'), '{}');
+  const homeEnv = { HOME: home, USERPROFILE: home };
+  const COVERED = ['cd ~/.claude && cat .credentials.json', 'cd "$X" && cat .credentials.json', 'cat ~/.claude/.cred*'];
+  const MODES = [['Notes mode', {}], ['Code mode', { RUNDOCK_CODE_MODE: '1' }]];
+  const POSIX = { skip: process.platform === 'win32' && 'the home folder is read from HOME here' };
+  const throwsOnRequest = path.join(root, 'secret-throws-on-request.js');
+  fs.writeFileSync(throwsOnRequest, `require('http').request = () => { throw new Error('forced failure'); };`);
+  // A server that answers each card with a refusal, or with headers and a
+  // cut-off body.
+  const serve = (cutShort) => new Promise((resolve) => {
+    const cards = [];
+    const server = http.createServer((req, res) => {
+      let body = '';
+      req.on('data', (c) => { body += c; });
+      req.on('end', () => {
+        if (!req.url.startsWith('/api/permission-request')) { res.end('{}'); return; }
+        cards.push(JSON.parse(body));
+        if (!cutShort) { res.end(JSON.stringify({ allow: false })); return; }
+        res.writeHead(200, { 'Content-Length': '100' });
+        res.flushHeaders();
+        res.write('{');
+        setImmediate(() => req.socket.destroy());
+      });
+    });
+    server.listen(0, '127.0.0.1', () => resolve({ server, cards }));
+  });
+  const close = (server) => new Promise((resolve) => { server.closeAllConnections(); server.close(resolve); });
+  const secretCard = (cards) => cards.some(c => (c.crossings || []).some(x => x && x.secret));
+  const inTime = (promise, ms) => Promise.race([promise, new Promise((_, reject) => setTimeout(() => reject(new Error('the hook ran out of time')), ms))]);
+
+  for (const [label, env] of MODES) {
+    for (const command of COVERED) {
+      test(`${label}: a failure while asking refuses ${command}`, POSIX, () => {
+        const r = runHook(bash(command), { preload: throwsOnRequest, env: { ...homeEnv, ...env } });
+        assert.strictEqual(r.status, 0, r.stderr);
+        assert.strictEqual(decision(r), 'deny');
+        assert.match(r.answer.hookSpecificOutput.permissionDecisionReason, /refused/);
+      });
+
+      test(`${label}: a card's reply cut short refuses ${command}`, POSIX, async () => {
+        const { server, cards } = await serve(true);
+        try {
+          const r = await runHookAgainst(server.address().port, bash(command), { ...homeEnv, ...env });
+          assert.strictEqual(r.status, 0);
+          assert.strictEqual(decision(r), 'deny');
+          assert.ok(secretCard(cards), 'the card it was waiting on was a secret one');
+        } finally { await close(server); }
+      });
+    }
+
+    test(`${label}: a word made of stars beside a credential file cannot stall the hook`, POSIX, async () => {
+      const { server, cards } = await serve(false);
+      try {
+        for (const command of [
+          `cd ~/.claude && cat .c${'*'.repeat(40)}s.json`,
+          `cat ~/.claude/.c${'*'.repeat(40)}s.json`,
+          `cat ~/${'**/'.repeat(30)}.credentials.json`,
+          // Absolute, so every name above home is matched too.
+          `cat /${'**/'.repeat(60)}.credentials.json`,
+        ]) {
+          const before = cards.length;
+          const r = await inTime(runHookAgainst(server.address().port, bash(command), { ...homeEnv, ...env }), 10000);
+          assert.strictEqual(r.status, 0);
+          assert.strictEqual(decision(r), 'deny', `${command}: refused by the card`);
+          assert.ok(secretCard(cards.slice(before)), `${command}: and the card was a secret one`);
+        }
+        for (const word of [`~/.claude/.c${'*'.repeat(40)}z`, `/${'**/'.repeat(60)}nothing-by-this-name.json`]) {
+          const from = cards.length;
+          const miss = await inTime(runHookAgainst(server.address().port, bash(`cat ${word}`), { ...homeEnv, ...env }), 10000);
+          assert.strictEqual(miss.status, 0);
+          assert.ok(!secretCard(cards.slice(from)), `${word}: a word that cannot name one raises no secret card`);
+        }
+      } finally { await close(server); }
+    });
+  }
+});
+
 // ===== A REJECTION NOBODY HANDLES, AND INPUT THE HOOK CANNOT READ =====
 
 // What any request the hook could not check is refused with, in a
