@@ -263,6 +263,22 @@ describe('the candidates are read in order, and a copy below the floor is passed
       assert.strictEqual(current.chats().length, 1);
     } finally { done(); }
   });
+
+  test('a shell that answers with a PATH holding no claude ends in no copy, though one is on the PATH Rundock has', async () => {
+    // Today's lookup stands in only when the shell cannot answer. An answer
+    // that names no copy is an answer.
+    const m = machine();
+    const elsewhere = makeClaude(m.dir('only-on-the-app-path'), CURRENT);
+    const warn = quietWarn();
+    try {
+      await on(m, { today: [elsewhere.dir] }, () => {
+        assert.strictEqual(lookup().lookupClaude().bin, null);
+      });
+      assert.strictEqual(m.shell.runs().length, 1, 'the shell answered');
+      assert.deepStrictEqual(warn.lookupLines(), [], 'so nothing failed, and nothing is logged');
+      assert.deepStrictEqual(elsewhere.runs(), []);
+    } finally { warn.restore(); }
+  });
 });
 
 // ── How the shell is run ──
