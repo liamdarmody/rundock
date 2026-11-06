@@ -120,9 +120,9 @@ describe('what opens the console, per platform', () => {
 describe('a Claude Code without its login command', () => {
   // `claude auth login` arrived in Claude Code 2.1.41 ("Added `claude auth
   // login`, `claude auth status`, and `claude auth logout` CLI subcommands").
-  // Rundock declares no minimum version, so on an older one, or one whose
-  // version is not known, the reconnect console runs `claude` bare, as before,
-  // rather than a command Claude Code does not have.
+  // The oldest Claude Code Rundock starts is older than that, so on an older
+  // one, or one whose version is not known, the reconnect console runs
+  // `claude` bare, as before, rather than a command Claude Code does not have.
   const BIN = '/opt/example/bin/claude';
   const HOME = '/home/example';
   const env = { DISPLAY: ':0' };

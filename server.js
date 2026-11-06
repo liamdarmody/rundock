@@ -2523,6 +2523,10 @@ function handleChatSpawnError(err, convoId) {
         userMessage = 'Claude Code not found on PATH. Run `claude --version` to check your install.';
       } else if (err.code === 'EACCES') {
         userMessage = "Couldn't start Claude Code: permission denied. Check your install.";
+      } else if (err.code === 'CLAUDE_TOO_OLD') {
+        // The whole notice: the copy found, the version needed, what to do
+        // (lib/runtime/claude-floor.js).
+        userMessage = err.message;
       } else {
         userMessage = `Couldn't start Claude Code: ${err.message}. Run \`claude --version\` to check your install.`;
       }

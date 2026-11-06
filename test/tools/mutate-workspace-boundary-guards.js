@@ -134,6 +134,13 @@ const VERDICT_CODEX = { src: path.join(ROOT, 'scripts', 'code-mode-verdict.js'),
 // The answer-file guard around Claude turns, and the spawn point that starts it.
 const CLAUDE_TURN_GUARD = { src: path.join(ROOT, 'lib', 'runtime', 'claude-turn-guard.js'), suite: 'test/unit/claude-answer-file-guard.test.js' };
 const CLAUDE_SPAWN = { src: path.join(ROOT, 'lib', 'runtime', 'claude.js'), suite: 'test/unit/claude-answer-file-guard.test.js' };
+// The oldest Claude Code the spawn point starts: the comparison in the flag
+// table's module, the verdicts spawnClaude keeps, and the check on every path,
+// each driven by the suite that notices it.
+const FLOOR_TABLE = { src: path.join(ROOT, 'lib', 'runtime', 'claude-floor.js'), suite: 'test/unit/claude-version-floor.test.js' };
+const FLOOR_SPAWN = { src: path.join(ROOT, 'lib', 'runtime', 'claude.js'), suite: 'test/unit/claude-version-floor.test.js' };
+const FLOOR_PATHS = { src: path.join(ROOT, 'lib', 'runtime', 'claude.js'), suite: 'test/integration/claude-version-floor.test.js' };
+const FLOOR_EACCES = { src: path.join(ROOT, 'lib', 'runtime', 'claude.js'), suite: 'test/integration/claude-version-floor-eacces.test.js' };
 const DEV_HOME = { src: path.join(ROOT, 'scripts', 'dev-paths.js'), suite: 'test/unit/code-mode-home-in-temp.test.js' };
 const SCAFFOLD_CM = { src: path.join(ROOT, 'lib', 'workspace', 'scaffold.js'), suite: 'test/unit/code-mode-boundary.test.js' };
 const CM_PARSE = { src: path.join(ROOT, 'scripts', 'code-mode-parse.js'), suite: 'test/unit/code-mode-verdict.test.js' };
@@ -3566,6 +3573,40 @@ const MUTATIONS = [
   [SHELL_CODE, "Shell code: a cd to a variable is trusted as a base",
     " || CD_NOT_LITERAL.test(target)) return null;",
     ") return null;"],
+  // ===== THE OLDEST CLAUDE CODE RUNDOCK STARTS =====
+  [FLOOR_TABLE, "Version floor: the comparison is inverted",
+    "x[i] < y[i] ? -1 : 1",
+    "x[i] > y[i] ? -1 : 1"],
+  [FLOOR_SPAWN, "Version floor: a copy below the floor is remembered, so updating it needs a restart",
+    "  else _floorVerdicts.set(bin, null);",
+    "  _floorVerdicts.set(bin, refusal);"],
+  [FLOOR_SPAWN, "Version floor: a version that cannot be read blocks the spawn",
+    "verdict === false ? tooOldError(version, bin) : null",
+    "verdict !== true ? tooOldError(version, bin) : null"],
+  [FLOOR_PATHS, "Version floor: a resumed chat skips the check",
+    "  const refusal = floorRefusal();",
+    "  const refusal = args.includes('--resume') ? null : floorRefusal();"],
+  [FLOOR_TABLE, "Version floor: any three-part number in the output is taken as the version",
+    "  const m = firstLine(lines, NAMED_LINE) || firstLine(lines, BARE_LINE);",
+    "  const m = /(\\d+)\\.(\\d+)\\.(\\d+)/.exec(lines.join('\\n'));"],
+  [FLOOR_SPAWN, "Version floor: the probe is a command line a shell reads",
+    "    return execFileSync(bin, ['--version'], { timeout, encoding: 'utf-8', stdio: codexRuntime.PROBE_STDIO });",
+    "    return require('child_process').execSync(`\"${bin}\" --version`, { timeout, encoding: 'utf-8', stdio: codexRuntime.PROBE_STDIO });"],
+  [FLOOR_SPAWN, "Version floor: a Windows .cmd or .bat copy is run for its version",
+    "  if (platform === 'win32' && /\\.(cmd|bat)$/i.test(bin)) return launcherPackageVersion(bin);",
+    "  // every copy is run for its version"],
+  [FLOOR_SPAWN, "Version floor: the spawn's options are not the caller's",
+    "{ ...options, detached: process.platform !== 'win32' }",
+    "{ ...options, stdio: 'ignore', detached: false }"],
+  [FLOOR_EACCES, "Version floor: a copy that cannot be run is refused as too old",
+    "verdict === false ? tooOldError(version, bin) : null",
+    "verdict !== true ? tooOldError(version, bin) : null"],
+  [FLOOR_SPAWN, "Version floor: the stand-in for a refused copy keeps an unguarded stdin",
+    "    guardChildStdin(standIn, 'claude (not started: below the version floor)');",
+    "    // the stand-in's stdin is left unguarded"],
+  [FLOOR_SPAWN, "Version floor: a .cmd launcher's package version is ignored",
+    "  if (platform === 'win32' && /\\.(cmd|bat)$/i.test(bin)) return launcherPackageVersion(bin);",
+    "  if (platform === 'win32' && /\\.(cmd|bat)$/i.test(bin)) return null;"],
 ];
 const REPORTER = ['--test-reporter', 'spec'];
 
