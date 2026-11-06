@@ -382,6 +382,10 @@ const MUTATIONS = [
     'a refused delegate\'s close starts it again fresh and ends nothing else, so the delegation ends once',
     '      startWithoutSession(delegateEntry, convoId, delegateArgs, freshDelegateContext, delegateWire, handleDelegateClose);\n      return;\n',
     '      startWithoutSession(delegateEntry, convoId, delegateArgs, freshDelegateContext, delegateWire, handleDelegateClose);\n'],
+  [only({ src: STDIN_UNIT.src, suite: STOPPED }, 'the retry: a second write to the same refused delegate is logged once more and ends nothing a second time'),
+    'a failed write after the first is only logged: one that ended the delegation again would end it twice',
+    '      if (err) report(err);\n',
+    "      if (err) { report(err); if (stdin.rundockFailedBefore) proc.emit('close', 1, null); stdin.rundockFailedBefore = true; }\n"],
 ];
 
 const REPORTER = ['--test-reporter', 'spec'];

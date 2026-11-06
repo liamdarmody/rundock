@@ -328,67 +328,97 @@ describe('a delegate whose resume is refused before it reads its brief', () => {
   });
 
   test('the retry: a second write to the same refused delegate is logged once more and ends nothing a second time', LIMIT, async () => {
-    // The refused delegate lingers, so the person's message reaches it while
-    // its brief is still being written; both writes fail when it exits.
+    // Two writes made after the refused delegate has stopped, before the
+    // server has heard: the delegate is ended and gone, and the person's two
+    // messages are handed to the server in that same tick. Its brief is still
+    // being written, as in the test above, which is what lets both reach the
+    // same child: with nothing waiting in the pipe, the first of them fails at
+    // once and the second goes to a new process instead. Three writes fail:
+    // the brief, and the two made after the delegate stopped.
     const { convoId, tag, prefix } = delegation('retried', { refusalExitMs: 1500 });
-    const since = client.messages.length;
-    client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: `ASK-${tag} please`, sessionId: `live-orch-${prefix}` });
-    await client.waitFor((m) => m.subtype === 'session_expired' && m._conversationId === convoId,
-      { since, label: 'the delegate is refused and still lingering', timeout: 20000 });
-    const refusedEntry = h.internal.chatProcesses.get(convoId);
-    assert.ok(refusedEntry && refusedEntry.agentId === 'content-lead', 'the refused delegate is the conversation\'s');
-    client.send({ type: 'chat', conversationId: convoId, agent: 'content-lead', content: `FOLLOW-${tag} one more thing` });
-    await waitForResult(convoId, `LEAD-FOLLOWED-${tag}`, since, 'the follow-up is answered by the fresh delegate');
-    await h.delay(200);
+    try {
+      const since = client.messages.length;
+      client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: `ASK-${tag} please`, sessionId: `live-orch-${prefix}` });
+      await client.waitFor((m) => m.subtype === 'session_expired' && m._conversationId === convoId,
+        { since, label: 'the delegate is refused and still lingering', timeout: 20000 });
+      const refusedEntry = h.internal.chatProcesses.get(convoId);
+      assert.ok(refusedEntry && refusedEntry.agentId === 'content-lead', 'the refused delegate is the conversation\'s');
+      const refusedProcess = refusedEntry.process;
+      assert.ok(refusedProcess.stdin.writableLength > 0, 'its brief is still being written');
+      const toLead = (content) => serverSocket().emit('message', JSON.stringify({ type: 'chat', conversationId: convoId, agent: 'content-lead', content }));
+      endUnheard(refusedProcess);
+      toLead(`FOLLOW-${tag} first`);
+      toLead(`FOLLOW-${tag} second`);
+      assert.ok(h.internal.chatProcesses.get(convoId) === refusedEntry && refusedEntry.process === refusedProcess && !refusedEntry.exited
+        && refusedProcess.exitCode === null && refusedProcess.signalCode === null,
+        'both were written to the stopped delegate, still the conversation\'s, whose exit the server had not yet heard');
+      const followed = () => messagesFor(convoId, since).filter((m) => m.type === 'result' && String(m.result || '').includes(`LEAD-FOLLOWED-${tag}`));
+      assert.ok(await h.waitUntil(() => followed().length === 2, { timeout: 20000 }), 'both messages are answered by the fresh delegate');
+      await h.delay(200);
 
-    assertServerUp('two writes to a delegate that was refused and exited');
-    assert.strictEqual(stdinLines.length, 2, `one line per failed write: ${JSON.stringify(stdinLines)}`);
-    for (const line of stdinLines) assert.match(line, /content-lead/, 'each naming the delegate');
-    const lead = spawnsFor(convoId).filter((i) => i.agent === 'content-lead');
-    assert.deepStrictEqual(lead.map((i) => i.resume), [`dead-lead-${prefix}`, null], 'started fresh once, not once per failed write');
-    const after = messagesFor(convoId, since);
-    assert.strictEqual(after.filter((m) => m.subtype === 'info' && m.expiredSessionId === `dead-lead-${prefix}`).length, 1,
-      'and said once');
-    const prompts = h.promptsFor('content-lead');
-    assert.strictEqual(prompts.filter((p) => p.includes(`BRIEF-${tag}`)).length, 1, 'the fresh delegate is briefed once');
-    assert.deepStrictEqual(prompts.filter((p) => p.includes(`FOLLOW-${tag}`)), [`FOLLOW-${tag} one more thing`],
-      'and given the person\'s message once, as sent');
-    assert.deepStrictEqual(after.filter((m) => m.type === 'error').map((m) => m.content), []);
+      assertServerUp('two writes to a delegate that had stopped');
+      assert.strictEqual(stdinLines.length, 3, `one line per failed write, the brief and the two after: ${JSON.stringify(stdinLines)}`);
+      for (const line of stdinLines) {
+        assert.match(line, new RegExp(`^\\[Stdin\\] claude \\(agent content-lead, conversation ${convoId}\\) pid=${refusedProcess.pid}: a write failed `),
+          'each naming the stopped delegate');
+      }
+      assert.match(stdinLines[0], /\((EPIPE|ENOTCONN|ECONNRESET): /, 'the first refused by the pipe');
+      for (const line of stdinLines.slice(1)) {
+        assert.match(line, /\((EPIPE|ENOTCONN|ECONNRESET|ERR_STREAM_DESTROYED): /, 'the rest by the pipe, or by the stream the first failure closed');
+      }
+      const lead = spawnsFor(convoId).filter((i) => i.agent === 'content-lead');
+      assert.deepStrictEqual(lead.map((i) => i.resume), [`dead-lead-${prefix}`, null], 'started fresh once, not once per failed write');
+      const after = messagesFor(convoId, since);
+      assert.strictEqual(after.filter((m) => m.subtype === 'info' && m.expiredSessionId === `dead-lead-${prefix}`).length, 1,
+        'and said once');
+      const prompts = h.promptsFor('content-lead');
+      assert.strictEqual(prompts.filter((p) => p.includes(`BRIEF-${tag}`)).length, 1, 'the fresh delegate is briefed once');
+      assert.deepStrictEqual(prompts.filter((p) => p.includes(`FOLLOW-${tag}`)), [`FOLLOW-${tag} first`, `FOLLOW-${tag} second`],
+        'and given each of the person\'s messages once, as sent, in order');
+      assert.deepStrictEqual(after.filter((m) => m.type === 'error').map((m) => m.content), []);
 
-    // Read once the delegation has ended: the delegate auto-returns, and the
-    // orchestrator is handed what it did.
-    await h.waitUntil(() => h.promptsFor('chief-of-staff').some((p) => p.includes('pipeline-complete')), { timeout: 20000 });
-    await h.delay(300);
-    const all = messagesFor(convoId, since);
+      // Read once the delegation has ended: the delegate auto-returns, and the
+      // orchestrator is handed what it did.
+      await h.waitUntil(() => h.promptsFor('chief-of-staff').some((p) => p.includes('pipeline-complete')), { timeout: 20000 });
+      await h.delay(300);
+      const all = messagesFor(convoId, since);
 
-    // THE REFUSED PROCESS ENDED ONCE, BY ITS CLOSE. Neither failed write ended
-    // anything: its close did, once, as it ends any refused resume, by starting
-    // the delegate again fresh and saying why. The fresh delegate keeps the
-    // entry, and with it the process id, so the delegate's messages are read
-    // in order: what ends the refused process, each answered turn's done, and
-    // the delegation's own end.
-    const ofDelegate = all.filter((m) => m._processId === refusedEntry.processId);
-    const leadName = h.internal.discoverAgents().find((a) => a.id === 'content-lead').displayName;
-    assert.deepStrictEqual(ofDelegate.filter((m) => m.type === 'system' && m.subtype === 'info').map((m) => [m.content, m.expiredSessionId]),
-      [[startingFresh(leadName), `dead-lead-${prefix}`]],
-      'the refused process ends exactly once, the way its close path ends a refused resume: the session was gone, so the delegate starts fresh');
-    const freshAt = ofDelegate.findIndex((m) => m.type === 'system' && m.subtype === 'info');
-    assert.deepStrictEqual(ofDelegate.slice(0, freshAt).filter((m) => m.type === 'system' && ['done', 'cancelled'].includes(m.subtype)), [],
-      'and nothing else ends it: no turn or delegation is ended for the refused process');
-    // A done no result came just before ends what a process was doing when it
-    // closed; one straight after a result ends that answered turn.
-    const ended = ofDelegate.filter((m, i) => m.type === 'system' && m.subtype === 'done' && !(i > 0 && ofDelegate[i - 1].type === 'result'));
-    assert.strictEqual(ended.length, 1, `the delegation ends exactly once, not once per failed write: ${JSON.stringify(ended)}`);
+      // THE REFUSED PROCESS ENDED ONCE, BY ITS CLOSE. Neither failed write ended
+      // anything: its close did, once, as it ends any refused resume, by starting
+      // the delegate again fresh and saying why. The fresh delegate keeps the
+      // entry, and with it the process id, so the delegate's messages are read
+      // in order: what ends the refused process, each answered turn's done, and
+      // the delegation's own end.
+      const ofDelegate = all.filter((m) => m._processId === refusedEntry.processId);
+      const leadName = h.internal.discoverAgents().find((a) => a.id === 'content-lead').displayName;
+      assert.deepStrictEqual(ofDelegate.filter((m) => m.type === 'system' && m.subtype === 'info').map((m) => [m.content, m.expiredSessionId]),
+        [[startingFresh(leadName), `dead-lead-${prefix}`]],
+        'the refused process ends exactly once, the way its close path ends a refused resume: the session was gone, so the delegate starts fresh');
+      const freshAt = ofDelegate.findIndex((m) => m.type === 'system' && m.subtype === 'info');
+      assert.deepStrictEqual(ofDelegate.slice(0, freshAt).filter((m) => m.type === 'system' && ['done', 'cancelled'].includes(m.subtype)), [],
+        'and nothing else ends it: no turn or delegation is ended for the refused process');
+      // A done no result came just before ends what a process was doing when it
+      // closed; one straight after a result ends that answered turn.
+      const ended = ofDelegate.filter((m, i) => m.type === 'system' && m.subtype === 'done' && !(i > 0 && ofDelegate[i - 1].type === 'result'));
+      assert.strictEqual(ended.length, 1, `the delegation ends exactly once, not once per failed write: ${JSON.stringify(ended)}`);
 
-    // THE ORCHESTRATOR HEARS ONCE, after both writes have failed.
-    const handedBack = all.filter((m) => m.type === 'system' && m.subtype === 'agent_switch' && m.returning);
-    assert.deepStrictEqual(handedBack.map((m) => [m.fromAgent, m.toAgent]), [['content-lead', 'chief-of-staff']],
-      'the conversation is handed back to the orchestrator once');
-    const backAt = client.messages.indexOf(handedBack[0]);
-    assert.ok(stdinAt.length === 2 && stdinAt.every((n) => n <= backAt), 'and only after both writes had failed');
-    assert.strictEqual(h.promptsFor('chief-of-staff').filter((p) => p.includes(`LEAD-FRESH-${tag}`)).length, 1,
-      'the orchestrator is handed the delegate\'s result exactly once');
-    assertServerUp('the delegation\'s end');
-    h.reapConvo(convoId);
+      // THE ORCHESTRATOR HEARS ONCE, after both writes have failed.
+      const handedBack = all.filter((m) => m.type === 'system' && m.subtype === 'agent_switch' && m.returning);
+      assert.deepStrictEqual(handedBack.map((m) => [m.fromAgent, m.toAgent]), [['content-lead', 'chief-of-staff']],
+        'the conversation is handed back to the orchestrator once');
+      const backAt = client.messages.indexOf(handedBack[0]);
+      assert.ok(stdinAt.length === 3 && stdinAt.every((n) => n <= backAt), 'and only after every write had failed');
+      assert.strictEqual(h.promptsFor('chief-of-staff').filter((p) => p.includes(`LEAD-FRESH-${tag}`)).length, 1,
+        'the orchestrator is handed the delegate\'s result exactly once');
+      assertServerUp('the delegation\'s end');
+    } finally {
+      // Whatever the outcome, every process this conversation started is
+      // reaped, so a run that fails ends at its failure: a child left over by
+      // a broken guard would otherwise hold this file open.
+      for (const { pid } of spawnsFor(convoId)) {
+        try { process.kill(pid, 'SIGKILL'); } catch (e) { /* already gone */ }
+      }
+      h.reapConvo(convoId);
+    }
   });
 });
