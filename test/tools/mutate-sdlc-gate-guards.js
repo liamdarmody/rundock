@@ -571,6 +571,11 @@ const MUTATIONS = [
   [SCOPE, "a shard with no verdict file is no verdict",
     "    if (!v) {\n      outcomes.push(NO_VERDICT);",
     "    if (!v) {\n      outcomes.push(PASS);"],
+  // A shard that left a file modified uploads a passing verdict from a failed
+  // job, so the shard jobs' result is what keeps the check red.
+  [SCOPE, "a failed shard job is green when every verdict passes",
+    "  if (shardsResult === 'success' || (shardsResult === 'skipped' && !plan.shards.length)) {\n",
+    "  if (true) {\n"],
   // A harness whose rows differ in cost is cut where the time falls: cut by
   // row count, the slice holding its slow rows ran past the job's limit.
   [SCOPE, "the cost table's costs by label are not read",
