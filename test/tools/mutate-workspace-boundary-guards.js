@@ -3629,6 +3629,20 @@ const MUTATIONS = [
   [SECRET_FOLDER, "Folder reads: a search given no folder is not read where it runs",
     "    if (!operands.length && SEARCHES_CWD_UNNAMED.has(family)) operands = ['.'];",
     ""],
+  // find's own options come before its folders. Read one as the expression
+  // and `find -L ~/.claude -exec cat {} +` is judged as a search of `.`.
+  [SECRET_FOLDER, "Folder reads: an option find takes before its folders ends them",
+    "    if (/^-[HLPEXdsx]+$/.test(a)) continue;",
+    ""],
+  [SECRET_FOLDER, "Folder reads: the folder BSD find's -f names is not counted",
+    "    if (/^-[HLPEXdsx]*f$/.test(a)) { if (k + 1 < args.length) roots.push(args[++k]); continue; }",
+    ""],
+  [SECRET_FOLDER, "Folder reads: GNU find's -D list is taken for a folder",
+    "    if (a === '-D') { k++; continue; }",
+    ""],
+  [SECRET_FOLDER, "Folder reads: find's -- is taken for the expression",
+    "    if (a === '--') { k++; break; }\n    if (a === '-D')",
+    "    if (a === '-D')"],
 ];
 const REPORTER = ['--test-reporter', 'spec'];
 

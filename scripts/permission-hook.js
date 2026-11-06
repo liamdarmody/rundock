@@ -966,6 +966,28 @@ function shellCommandsIn(text, posixText = true, offset = 0, depth = 0, out = []
   return out;
 }
 
+// THE FOLDERS find IS GIVEN come after its own options: `-H`, `-L` and `-P`,
+// BSD's `-E`, `-X`, `-d`, `-s` and `-x`, alone or run together, BSD's `-f`,
+// whose value is a folder, and GNU's `-D LIST` and `-O LEVEL`. They run from
+// there to the first word of the expression. With none, find searches where
+// it runs, which the caller supplies.
+function findRoots(args) {
+  const roots = [];
+  let k = 0;
+  for (; k < args.length; k++) {
+    const a = args[k];
+    if (a === '--') { k++; break; }
+    if (a === '-D') { k++; continue; }
+    if (/^-O\d*$/.test(a)) continue;
+    if (/^-[HLPEXdsx]*f$/.test(a)) { if (k + 1 < args.length) roots.push(args[++k]); continue; }
+    if (/^-f[/~.]/.test(a)) { roots.push(a.slice(2)); continue; }
+    if (/^-[HLPEXdsx]+$/.test(a)) continue;
+    break;
+  }
+  for (; k < args.length && !/^[-(!),]/.test(args[k]); k++) roots.push(args[k]);
+  return roots;
+}
+
 // A command's words from its first in command position, past a keyword (`if`,
 // `do`, `!`). `time` is left for programIndex, which knows its options.
 function pastKeywords(words) {
@@ -1007,8 +1029,7 @@ function recursiveReadWords(command, posixText = true) {
       if (spec.into) operands = operands.concat(values(...spec.into));
     } else if (verb === 'find') {
       if (!args.some(a => RUNS_PER_NAME.has(a)) && !runsXargs(pipedTo)) continue;
-      const end = args.findIndex(a => a.startsWith('-') || a === '(' || a === '!');
-      operands = (end < 0 ? args : args.slice(0, end));
+      operands = findRoots(args);
     } else {
       const flagged = args.some(a => /^-[A-Za-z]*[rR][A-Za-z]*$/.test(a)) || args.includes('--recursive');
       if (!RECURSIVE_READERS.has(verb) && (LISTS_NAMES_ONLY.has(verb) || !flagged)) continue;

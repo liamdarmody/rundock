@@ -390,7 +390,9 @@ describe('a credential file named after a cd or by a glob, when something fails'
     // Behind a program that runs the next one.
     'env -u FOO rg token ~/.claude',
     // No folder given, the pattern given to -e.
-    'cd ~/.claude && rg -e token', 'cd ~/.claude && grep -r -e token'];
+    'cd ~/.claude && rg -e token', 'cd ~/.claude && grep -r -e token',
+    // find's options before its folder.
+    'find -L ~/.claude -exec cat {} +'];
   const MODES = [['Notes mode', {}], ['Code mode', { RUNDOCK_CODE_MODE: '1' }]];
   const POSIX = { skip: process.platform === 'win32' && 'the home folder is read from HOME here' };
   const throwsOnRequest = path.join(root, 'secret-throws-on-request.js');

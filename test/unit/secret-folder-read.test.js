@@ -154,6 +154,11 @@ const CLAUDE = [
   'grep -r -e token ~/.claude', 'grep -r -e a -e b ~/.claude', 'rg -e token ~/.claude', 'rg -f /tmp/patterns ~/.claude',
   'grep -r --include "*.json" token ~/.claude', 'grep -d recurse token ~/.claude', 'grep --directories=recurse token ~/.claude',
   'grep -drecurse token ~/.claude', 'grep --recur token ~/.claude', 'cp --arch ~/.claude /tmp/x', 'cp -rt /tmp/x ~/.claude',
+  // find's options before its folders.
+  'find -L ~/.claude -exec cat {} +', 'find -H ~/.claude -type f -exec cat {} \\;', 'find -P -x ~/.claude -exec cat {} +',
+  'find -LE ~/.claude -exec cat {} +', 'find -f ~/.claude -exec cat {} +', 'find -L -f ~/.claude -exec cat {} +',
+  'find -D tree ~/.claude -exec cat {} +', 'find -O3 ~/.claude -exec cat {} +', 'find -- ~/.claude -exec cat {} +',
+  'find -L ~/.claude -type f | xargs cat', 'find /tmp ~/.claude -exec cat {} +',
 ];
 // The same, reached through a cd, or by a reader given no folder after one.
 const LANDED = [
@@ -170,6 +175,8 @@ const LANDED = [
   'cd ~/.claude && grep -r -m 1 token', 'cd ~/.claude && rg -g "*.json" token', 'cd ~/.claude && rg -t json token',
   'cd ~/.claude && rg -r X token', 'cd ~/.claude && ag -G json token', 'cd ~/.claude && ack --match token',
   'cd ~/.claude && grep -d recurse token',
+  'cd ~/.claude && find -L -exec cat {} +', 'cd ~/.claude && find -L . -exec cat {} +', 'cd ~/.claude && find -exec cat {} +',
+  'cd ~/.claude && find | xargs cat',
 ];
 // Listing names, and reading a free file, answer as they do today.
 const FREE = [
@@ -179,6 +186,7 @@ const FREE = [
   'cd ~/.claude && cd /tmp && grep -r token',
   // Not recursive, however the options are given.
   'grep -e token ~/.claude/settings.json', 'grep -d skip token ~/.claude', 'grep --include "*.json" token ~/.claude/settings.json',
+  "find -L ~/.claude -name '*.md'", 'find -H ~/.claude -type f',
 ];
 
 describe('a recursive reader handed a runtime folder', { skip: POSIX, concurrency: 8 }, () => {
@@ -249,7 +257,7 @@ const INVERSE = [
 // The undo: a subfolder holding no credential file, with what main answers.
 const UNDO = [
   ['grep -r token ~/.claude/projects'], ['grep -r token ~/\\.claude/projects'], ['env -u FOO rg token ~/.claude/projects'],
-  ['cd ~/.claude/projects && rg -e token'], ['grep -r -e token ~/.claude/projects'],
+  ['cd ~/.claude/projects && rg -e token'], ['grep -r -e token ~/.claude/projects'], ['find -L ~/.claude/projects -exec cat {} +'],
   // Main cards these copies in both modes, as a copy into the workspace, and
   // the home folder this spelling of the subfolder starts with, as a place
   // outside.
@@ -257,10 +265,12 @@ const UNDO = [
   ['grep -r token "$HOME"/.claude/projects', { decision: 'deny', cards: 1 }],
 ];
 const RETRY = ['grep -r token ~/.claude', 'grep -r token "$HOME"/.claude', '(cd ~/.claude && grep -r token)', 'env -u FOO rg token ~/.claude',
-  'cd ~/.claude && rg -e token'];
+  'cd ~/.claude && rg -e token', 'find -L ~/.claude -exec cat {} +'];
 // The command carded, then the free read that most often follows it.
 const NEXT = [['grep -r token ~/.claude', 'cat ~/.claude/settings.json'], ['grep -r token ~/\\.claude', 'cat ~/.claude/settings.json'],
-  ['nice -n 5 rg token ~/.claude', 'cat ~/.claude/settings.json'], ['cd ~/.claude && grep -r -e token', 'cat ~/.claude/settings.json']];
+  ['nice -n 5 rg token ~/.claude', 'cat ~/.claude/settings.json'], ['cd ~/.claude && grep -r -e token', 'cat ~/.claude/settings.json'],
+  // Listing the names, after reading them all was asked about.
+  ['find -L ~/.claude -exec cat {} +', "find -L ~/.claude -name '*.md'"]];
 // The rule: a program this does not know, given a runtime folder after `-r`,
 // `-R` or `--recursive`, is a recursive reader.
 const UNKNOWN = [['foo -r ~/.claude', CLAUDE_FILES], ['foo -R ~/.claude', CLAUDE_FILES], ['foo --recursive ~/.codex', CODEX_FILES],
