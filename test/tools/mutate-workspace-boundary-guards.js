@@ -144,6 +144,11 @@ const FLOOR_EACCES = { src: path.join(ROOT, 'lib', 'runtime', 'claude.js'), suit
 // The floor's version read lives with the lookup that also reads candidates
 // with it (lib/runtime/claude-lookup.js); the floor's own suite still proves it.
 const FLOOR_READ = { src: path.join(ROOT, 'lib', 'runtime', 'claude-lookup.js'), suite: 'test/unit/claude-version-floor.test.js' };
+// Which Claude Code is started: the copy the person's login shell finds,
+// read with the floor's version read, and the desktop app's check asking the
+// same lookup rather than running its own.
+const LOOKUP = { src: path.join(ROOT, 'lib', 'runtime', 'claude-lookup.js'), suite: 'test/unit/claude-lookup.test.js' };
+const LOOKUP_DESKTOP = { src: path.join(ROOT, 'electron', 'main.js'), suite: 'test/unit/claude-lookup.test.js' };
 const DEV_HOME = { src: path.join(ROOT, 'scripts', 'dev-paths.js'), suite: 'test/unit/code-mode-home-in-temp.test.js' };
 const SCAFFOLD_CM = { src: path.join(ROOT, 'lib', 'workspace', 'scaffold.js'), suite: 'test/unit/code-mode-boundary.test.js' };
 const CM_PARSE = { src: path.join(ROOT, 'scripts', 'code-mode-parse.js'), suite: 'test/unit/code-mode-verdict.test.js' };
@@ -3610,6 +3615,27 @@ const MUTATIONS = [
   [FLOOR_READ, "Version floor: a .cmd launcher's package version is ignored",
     "  if (platform === 'win32' && /\\.(cmd|bat)$/i.test(bin)) return launcherPackageVersion(bin);",
     "  if (platform === 'win32' && /\\.(cmd|bat)$/i.test(bin)) return null;"],
+  // #401: an old copy in a folder the desktop app puts first beat the copy the
+  // person's own shell finds.
+  [LOOKUP, "Claude lookup: the login shell's PATH is ignored, so today's order wins",
+    '  const login = loginShellPath();\n',
+    "  const login = { failed: 'the login shell was not asked' };\n"],
+  [LOOKUP, 'Claude lookup: a copy below the floor is not passed over',
+    '    if (meetsFloor(versionIn(read.versionText)) !== false) return read;\n',
+    '    return read;\n'],
+  [LOOKUP, "Claude lookup: what the startup files print outside the markers is taken as the answer",
+    "  const value = output.slice(at + BEGIN.length, end).replace(/^\\r?\\n/, '').replace(/\\r?\\n$/, '');\n",
+    "  const value = output.split('\\n').find((line) => line.startsWith('/')) || '';\n"],
+  [LOOKUP, 'Claude lookup: a login shell that cannot answer blocks the chat instead of falling back',
+    'looking for claude on the PATH Rundock was started with`);\n    return { bin: pathLookup(false)[0] || null };\n',
+    'looking for claude on the PATH Rundock was started with`);\n    return { bin: null };\n'],
+  [LOOKUP, 'Claude lookup: a relative PATH entry is used',
+    '    if (!path.isAbsolute(dir)) continue;\n',
+    ''],
+  [LOOKUP_DESKTOP, "Claude lookup: the desktop app's check keeps its own which",
+    "    found = require('../lib/runtime/claude-lookup.js').installedClaude();\n",
+    "    const bin = execSync('which claude', { timeout: 5000, encoding: 'utf-8' }).trim();\n"
+      + "    found = bin ? { bin, version: require('../lib/runtime/claude-lookup.js').readClaudeVersion(bin) } : null;\n"],
 ];
 const REPORTER = ['--test-reporter', 'spec'];
 
