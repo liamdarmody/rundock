@@ -723,6 +723,48 @@ describe('the desktop app\'s check reports the copy the lookup chose, with the v
 
 // ── Windows keeps where.exe, and the floor is applied across its answer ──
 
+// ── The desktop app's sign-in check runs the copy chats start ──
+
+// isClaudeAuthenticated as the desktop app has it, run here with the lookup
+// this file wires.
+function signInCheck() {
+  const check = body(src('electron/main.js'), 'isClaudeAuthenticated');
+  // Nothing is run before this holds: a check that hands a command line to a
+  // shell would run it on the machine running the suite.
+  assert.doesNotMatch(check, /\bexecSync\(|\bexec\(|shell:\s*true/, 'the sign-in check hands nothing to a shell');
+  const desktopRequire = (id) => require(id.startsWith('.') ? path.join(ROOT, 'electron', id) : id);
+  return new Function('require', 'process', `${check}\nreturn isClaudeAuthenticated;`)(desktopRequire, process);
+}
+
+describe('the desktop app\'s sign-in check runs the copy the lookup chose, with no shell', { skip: POSIX }, () => {
+  test('it runs the copy chats start, with its arguments, and nothing in a folder name holding $(...) runs', async () => {
+    const m = machine();
+    const marker = path.join(m.root, 'ran-in-a-shell');
+    const old = makeClaude(m.folders.local, OLD);
+    const current = makeClaude(m.dir('q$(touch $SIGN_IN_MARKER)'), CURRENT);
+    m.shell.plan({ loginPath: loginPath(current.dir) });
+    const { rt, done } = runtime();
+    try {
+      await on(m, { today: [old.dir, current.dir], env: { SIGN_IN_MARKER: marker } }, () => {
+        assert.strictEqual(desktopCheck().findClaude(), current.bin);
+        assert.strictEqual(signInCheck()(), true, 'the copy said it is signed in');
+        assert.strictEqual(rt.resolveClaudeBin(), current.bin, 'and it is the copy chats start');
+      });
+      assert.deepStrictEqual(current.chats().map((r) => r.args), [['--print', 'test', '--output-format', 'text']]);
+      assert.deepStrictEqual(old.runs(), [], 'the old copy ensurePath put first never ran');
+      assert.strictEqual(fs.existsSync(marker), false, 'nothing in the folder name ran');
+    } finally { done(); }
+  });
+
+  test('with no copy found it says not signed in and runs nothing', async () => {
+    const m = machine();
+    await on(m, { today: [] }, () => {
+      assert.strictEqual(desktopCheck().findClaude(), null);
+      assert.strictEqual(signInCheck()(), false);
+    });
+  });
+});
+
 // Windows has no login shell to ask. Its copies are stood in by scripts named
 // as Windows names them, an npm claude.cmd beside the package it starts, and
 // `where.exe` by a script on the PATH printing them in its own order.

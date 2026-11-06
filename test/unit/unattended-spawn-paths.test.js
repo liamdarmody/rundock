@@ -102,8 +102,8 @@ const OTHER_CLAUDE_LAUNCHES = [
   { at: 'lib/runtime/claude-lookup.js | readClaudeVersion | execFileSync(bin)',
     why: 'asks a copy the lookup found, or the one spawnClaude is about to start, for its version (`--version`, no shell), with the app\'s own environment, and exits: it starts no agent and runs no tool',
     testedBy: [HERE, 'the app never marks its own environment as Rundock\'s'] },
-  { at: 'electron/main.js | isClaudeAuthenticated | execSync(\'claude --print "test" --output-format text\')',
-    why: 'the desktop\'s sign-in check, run in its main process with no --settings and the desktop\'s own environment, so the hook decides nothing for it; it cannot be started from a test without the desktop',
+  { at: 'electron/main.js | isClaudeAuthenticated | execFileSync(bin)',
+    why: 'the desktop\'s sign-in check: the copy the lookup chose, run with its arguments and no shell, in the main process with no --settings and the desktop\'s own environment, so the hook decides nothing for it; test/unit/claude-lookup.test.js runs it, lifted from main.js, against stub copies',
     testedBy: [ENVIRONMENTS, 'the hook decides nothing for a process started with the app\'s own environment'] },
 ];
 
