@@ -49,13 +49,21 @@ const isOurs = (h) => !!h && typeof h.command === 'string' && h.command.includes
 const ourPre = (settings) => settings.hooks.PreToolUse.filter((e) => (e.hooks || []).some(isOurs));
 
 // What a release before this one wrote: this release's file with no onFailure
-// on any entry, because that field is the only thing this change adds to it.
+// on any entry. The record below shows that this is exactly what the v0.15.7
+// release's own code writes in a new workspace.
 function asAnEarlierReleaseWroteIt(dir) {
   const settings = read(dir);
   for (const e of settings.hooks.PreToolUse) for (const h of e.hooks) delete h.onFailure;
   save(dir, settings);
   return settings;
 }
+
+// What the v0.15.7 release's own code did, captured by
+// scripts/hook-on-failure-undo/capture.js, which is run by hand because it
+// needs the release tags. The workspace's path is written in it as
+// <workspace>.
+const RELEASE = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'scripts', 'hook-on-failure-undo', 'captured-earlier-release.json'), 'utf-8'));
+const inWorkspace = (settings, dir) => JSON.parse(JSON.stringify(settings).split('<workspace>').join(JSON.stringify(dir).slice(1, -1)));
 
 // Every time the code under test replaces one file, counted, and still made:
 // a write straight to it, or a rename onto it.
@@ -276,15 +284,25 @@ describe('the five sequences', () => {
     assert.ok(refused.answer.permissionDecisionReason.length > 0, 'with its reason');
   });
 
-  test('the undo: entries an earlier release wrote without the field are upgraded again on the next open', () => {
+  // The record is captured for a platform that starts the hook with sh.
+  test('the undo: after the earlier release has opened a workspace this one wrote, the next open leaves every Rundock entry on "block" and changes nothing else', { skip: process.platform === 'win32' }, () => {
+    assert.strictEqual(RELEASE.release, 'v0.15.7');
+    assert.deepStrictEqual(ourPre(RELEASE.written).map((e) => e.hooks[0].onFailure), ['block', 'block', 'block', 'block'], 'the record starts from a file this release wrote');
     const dir = workspace();
-    open(dir);
-    const ours = bytes(dir);
-    const earlier = asAnEarlierReleaseWroteIt(dir);
-    assert.ok(earlier.hooks.PreToolUse.every((e) => !('onFailure' in e.hooks[0])), 'the earlier release\'s entries have no field');
-    open(dir);
-    assert.deepStrictEqual(ourPre(read(dir)).map((e) => e.hooks[0].onFailure), ['block', 'block', 'block', 'block'], 'every entry has it again');
-    assert.strictEqual(bytes(dir), ours, 'upgraded back to exactly what this release wrote');
+    const left = inWorkspace(RELEASE.leftByRelease, dir);
+    save(dir, left);
+    open(dir, RELEASE.platform);
+    const after = read(dir);
+    assert.deepStrictEqual(ourPre(after).map((e) => e.hooks[0].onFailure), ['block', 'block', 'block', 'block'], 'every Rundock entry has it');
+    const expected = JSON.parse(JSON.stringify(left));
+    for (const e of ourPre(expected)) for (const h of e.hooks) if (isOurs(h)) h.onFailure = 'block';
+    assert.deepStrictEqual(after, expected, 'and nothing else changed');
+  });
+
+  test('a workspace the earlier release created is this release\'s file with the field taken out, which is where the other sequences start', () => {
+    const without = JSON.parse(JSON.stringify(RELEASE.written));
+    for (const e of without.hooks.PreToolUse) for (const h of e.hooks) delete h.onFailure;
+    assert.deepStrictEqual(RELEASE.createdByRelease, without);
   });
 
   test('the retry: opening the same workspace twice writes the file once, and the second open finds nothing to change', () => {
