@@ -770,12 +770,18 @@ describe('PowerShell: no card unless every part of the command is a listed read'
     } finally { seam.beforeReading = kept; }
     assert.deepStrictEqual(decide('Get-Date'), { action: 'allow', reason: 'low-risk' }, 'and with it put back it runs again');
   });
-  test('the grader keeps no PowerShell read list of its own', () => {
+
+  test('the hook and the grader read PowerShell with the same function, and neither keeps a list of its own', () => {
     const fs = require('node:fs');
     const path = require('node:path');
-    const src = fs.readFileSync(path.join(__dirname, '..', '..', 'public', 'permissions.js'), 'utf8');
-    assert.ok(!/Get-\[A-Za-z\]/.test(src), 'it matches no Get- wildcard');
-    assert.ok(!/Where-Object\|Measure-Object/.test(src), 'and keeps no read list');
+    const hook = require('../../scripts/permission-hook.js');
+    assert.strictEqual(typeof shell.isReadOnlyPowerShellCommand, 'function', 'the shared definition reads PowerShell');
+    assert.strictEqual(hook.isReadOnlyPowerShellCommand, shell.isReadOnlyPowerShellCommand, 'and the hook reads it from there');
+    const src = (rel) => fs.readFileSync(path.join(__dirname, '..', '..', rel), 'utf8');
+    for (const rel of ['public/permissions.js', 'public/read-only-shell.js', 'scripts/permission-hook.js']) {
+      assert.ok(!/Get-\[A-Za-z\]/.test(src(rel)), `${rel} matches no Get- wildcard`);
+    }
+    assert.ok(!/Where-Object\|Measure-Object/.test(src('public/permissions.js')), 'and the grader keeps no read list of its own');
   });
 });
 
