@@ -4,7 +4,7 @@
 // A PreToolUse command hook that exits non-zero, is killed, passes its
 // timeout, prints JSON that does not parse, or cannot start lets the tool call
 // go ahead with every check skipped, unless its entry carries
-// `"onFailure": "block"`, which Claude Code honours from 2.1.295. Every
+// `"onFailure": "block"`, which Claude Code honors from 2.1.295. Every
 // PreToolUse entry Rundock writes now carries it.
 //
 // The value is load-bearing in the other direction as well: on those versions
