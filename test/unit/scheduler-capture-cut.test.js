@@ -26,6 +26,29 @@
 // says the line survived the cut, and a run recorded as failed without one
 // says it was lost. The file on disk is read between looks for what the cut
 // did to it.
+//
+// COVERAGE, COMPARED ACROSS THREE RUNS. With this file in place,
+// `npm run test:coverage` was run three times, one after another, on one tree
+// (the commit that adds this paragraph changes only comments and
+// docs/FLAKES.md), and the lines of lib/scheduler.js each run covered were
+// compared line by line from its lcov:
+//
+//   - every run covered the same 2583 of the file's 2587 lines, and no line
+//     was covered in some runs and not others;
+//   - the scheduler's floors held on all three (test/tools/coverage-areas.js
+//     on each run's lcov: all 53 floors hold);
+//   - the line that takes the grown size was run 6, 6 and 4 times. The 4 are
+//     this file's, the same on every run. The other 2 came from real children
+//     whose writes happened to land between two looks, and in the third run
+//     none did, which before this file left the line uncovered.
+//
+// The four lines no run covered are two catches, the same in all three and
+// the only lines of lib/scheduler.js a passing Coverage floors run on CI left
+// uncovered (run 42087236537): the catch around the signal that forces a stop,
+// which needs a signaller that throws on the second, forced call, and no test
+// supplies one; and the catch around closing abandoned run records, which
+// needs a routine state load with no workspace root. Neither depends on
+// timing: each is missed on every run, and the floor's tolerance absorbs them.
 const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
