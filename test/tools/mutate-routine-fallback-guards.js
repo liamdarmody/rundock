@@ -25,6 +25,9 @@ const READER = { src: path.join(ROOT, 'lib', 'agents', 'claude-code-load.js'), s
 // The scheduler's ending, watched by the unit file that drives it with a
 // stand-in child and stands in for the reader.
 const ENDING = { src: path.join(ROOT, 'lib', 'scheduler.js'), suite: 'test/unit/scheduler-lib.test.js' };
+// The cut that keeps the capture small, watched by the file that drives it one
+// look at a time, so a row here is judged by the same looks on every run.
+const CUT = { src: path.join(ROOT, 'lib', 'scheduler.js'), suite: 'test/unit/scheduler-capture-cut.test.js' };
 
 // [target, label, the guard as it is written, what it becomes without it]
 const MUTATIONS = [
@@ -55,6 +58,27 @@ const MUTATIONS = [
   [ENDING, 'the capture is cut back at all',
     '      if (size <= CAPTURE_BYTES) return;',
     '      return;'],
+  // ===== A WRITE THAT LANDS WHILE THE FILE IS BEING CUT IS KEPT =====
+  [CUT, 'the cut looks at the size again after reading the tail',
+    '      for (let look = 0; look < 3; look++) {\n        const now = deps.captureSize(capture.fd);\n'
+      + '        if (now === size) break;\n        size = now;\n        tail = readTail(capture.fd, size, CAPTURE_BYTES);\n      }\n',
+    ''],
+  [CUT, 'the looks stop when the size holds, not when it grows',
+    '        if (now === size) break;',
+    '        if (now !== size) break;'],
+  [CUT, 'the tail kept is the one read at the last look, not the first',
+    '        size = now;\n        tail = readTail(capture.fd, size, CAPTURE_BYTES);',
+    '        size = now;'],
+  [CUT, 'a tail is read from the end of the file, not its start',
+    '  return buf.subarray(0, n ? deps.captureRead(fd, buf, end - n) : 0);',
+    '  return buf.subarray(0, n ? deps.captureRead(fd, buf, 0) : 0);'],
+  // ===== A CUT THAT FAILS LOSES NOTHING, AND IS TRIED AGAIN =====
+  [CUT, 'a cut that fails leaves the file as it was',
+    '    } catch (e) { /* the next look tries again */ }',
+    '    } catch (e) { try { fs.ftruncateSync(capture.fd, 0); } catch (x) { /* already gone */ } }'],
+  [CUT, 'a cut that fails is tried again at the next look',
+    '    } catch (e) { /* the next look tries again */ }',
+    '    } catch (e) { clearInterval(capture.trim); }'],
   // ===== A FILE RUNDOCK COULD NOT CHECK IS A FAILED RUN, AND SAYS WHY =====
   [ENDING, 'YAML the rules do not model is never called refused',
     '    return read.unmodeled ? { refused: false, unchecked: { line: read.line } } : { refused: true };',
