@@ -66,6 +66,8 @@ const READ_ONLY_CLIENT = { src: path.join(ROOT, 'public', 'read-only-shell.js'),
 const PS_GRADER = { src: path.join(ROOT, 'public', 'permissions.js'), suite: 'test/unit/permissions.test.js' };
 // The grader again, through the real hook, server and client permission path.
 const PS_GRADER_FLOW = { src: path.join(ROOT, 'public', 'permissions.js'), suite: 'test/integration/powershell-read-approvals.test.js' };
+// The app's own message dispatch, between the real server's socket and the card.
+const PS_DISPATCH_FLOW = { src: path.join(ROOT, 'public', 'app.js'), suite: 'test/integration/powershell-read-approvals.test.js' };
 // The hook, run as its own process, against a home holding hook scripts.
 const PS_HOOK_REAL = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/powershell-reads-hook.test.js' };
 // The mode-persisted-before-scaffold ordering guard lives in the protocol
@@ -1020,6 +1022,11 @@ const MUTATIONS = [
   [PS_GRADER_FLOW, 'PowerShell grader, end to end: a write or a send after a read reaches a card through the hook, the server and the client',
     "      if (isReadOnlyPowerShellCommand(cmd)) return 'low';",
     "      if (/^(Get-[A-Za-z]+|ls|dir|gci|gc|cat|type|pwd|gl|echo|Write-Output|Write-Host|Select-Object|Where-Object|Measure-Object|Test-Path|Resolve-Path|Split-Path|Format-Table|Format-List|Sort-Object)\\b/i.test(cmd)) return 'low';"],
+  // A request the server sends that the app never hands to the card code is
+  // neither allowed nor carded: the agent waits until the server gives up.
+  [PS_DISPATCH_FLOW, 'end to end, the app hands the server\'s permission request to the card code',
+    '      if (convoId) handlePermissionRequest(d, convoId);',
+    '      if (convoId) {}'],
   [PS_GRADER, 'PowerShell grader: a delete is looked for inside brackets and blocks and after a new line',
     '  var POWERSHELL_COMMAND_START = /(^|[;&|\\r\\n({]\\s*)/.source;',
     '  var POWERSHELL_COMMAND_START = /(^|[;&|]\\s*)/.source;'],

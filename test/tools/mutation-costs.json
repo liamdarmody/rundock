@@ -631,6 +631,7 @@
       "PowerShell: no Get- wildcard, only the names on the list": 1.68,
       "PowerShell grader: low only when the shared reading reads every part, never by the first word": 1.48,
       "PowerShell grader, end to end: a write or a send after a read reaches a card through the hook, the server and the client": 3.06,
+      "end to end, the app hands the server's permission request to the card code": 1.06,
       "PowerShell grader: a delete is looked for inside brackets and blocks and after a new line": 1.67,
       "the hook reads a PowerShell command with the PowerShell reading": 5.12,
       "the real hook frees a PowerShell crossing only on the PowerShell reading": 2.29,
