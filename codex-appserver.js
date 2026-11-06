@@ -42,6 +42,10 @@ const { EventEmitter } = require('node:events');
 const { spawn } = require('node:child_process');
 
 const { classifyCodexError, resolveCodexBin } = require('./codex.js');
+const { guardChildStdin } = require('./lib/runtime/child-stdin.js');
+
+// The log a client is given when it is given none: it says nothing.
+const NO_LOG = () => {};
 
 let PKG_VERSION = '0.0.0';
 try { PKG_VERSION = require('./package.json').version || PKG_VERSION; } catch (e) { /* packaged builds carry package.json */ }
@@ -123,7 +127,7 @@ class CodexAppServer extends EventEmitter {
     // Defaults to the halfway point of the failsafe window; injectable.
     this._interruptRetryMs = opts.interruptRetryMs ?? Math.floor(this._interruptFailsafeMs / 2);
     this._shutdownGraceMs = opts.shutdownGraceMs ?? 3000;
-    this._log = typeof opts.log === 'function' ? opts.log : () => {};
+    this._log = typeof opts.log === 'function' ? opts.log : NO_LOG;
 
     this._proc = null;
     this._spawnError = null;
@@ -214,6 +218,13 @@ class CodexAppServer extends EventEmitter {
     });
     this._proc = proc;
     this._readBuffer = '';
+    // A request written after the process stopped, before its close has
+    // run, fails asynchronously with EPIPE. That is logged and left to the
+    // close below, which rejects what was in flight; it never ends the host
+    // (lib/runtime/child-stdin.js). A client given no log of its own says
+    // nothing else, but a failed write still is: the line goes to stderr,
+    // as the Claude path's does.
+    guardChildStdin(proc, 'codex app-server', { log: this._log === NO_LOG ? undefined : (line) => this._log(line) });
     proc.stdout.setEncoding('utf-8');
     proc.stdout.on('data', chunk => { if (this._proc === proc) this._onData(chunk); });
     proc.stderr.setEncoding('utf-8');
