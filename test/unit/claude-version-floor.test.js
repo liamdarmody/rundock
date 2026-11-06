@@ -41,7 +41,8 @@ function freshClaudeRuntime() {
 // time it runs, so a test can update the copy in place: STALL never answers,
 // CRASH exits 3 having printed nothing. Each run is logged with its
 // arguments, its working folder, a variable from the environment it was
-// given, and whether its stdin was closed (the null device) or a pipe.
+// given, whether its stdin was closed (the null device) or a pipe, and what
+// each of its three standard streams is.
 function stubSource() {
   return `#!${process.execPath}
 const fs = require('fs');
@@ -49,7 +50,8 @@ const path = require('path');
 const args = process.argv.slice(2);
 let stdin = 'unknown';
 try { stdin = fs.fstatSync(0).isCharacterDevice() ? 'closed' : 'open'; } catch (e) { stdin = 'closed'; }
-fs.appendFileSync(path.join(__dirname, 'runs.jsonl'), JSON.stringify({ args, cwd: process.cwd(), marker: process.env.FLOOR_TEST_MARKER || null, stdin }) + '\\n');
+const kind = (fd) => { try { const s = fs.fstatSync(fd); return s.isCharacterDevice() ? 'null' : (s.isFIFO() || s.isSocket()) ? 'pipe' : 'other'; } catch (e) { return 'none'; } };
+fs.appendFileSync(path.join(__dirname, 'runs.jsonl'), JSON.stringify({ args, cwd: process.cwd(), marker: process.env.FLOOR_TEST_MARKER || null, stdin, fds: [0, 1, 2].map(kind) }) + '\\n');
 if (args[0] === '--version') {
   const said = fs.readFileSync(path.join(__dirname, 'said'), 'utf8');
   if (said === 'STALL') setTimeout(() => {}, 20000);
@@ -108,14 +110,24 @@ function wired(rt) {
 const CHAT_ARGS = ['--output-format', 'stream-json', '--verbose', '--agent', 'writer'];
 
 // Start one spawn and settle on how it ended: the error the callback was
-// handed, or the close of a process that started.
+// handed, or the close of a process that started. The process is on the
+// returned promise too, for a look at it while it runs.
 function spawnAndSettle(rt, args, options) {
-  return new Promise((resolve) => {
+  let proc = null;
+  const settled = new Promise((resolve) => {
     let error = null;
-    const proc = rt.spawnClaude(args, options, (err) => { error = err; });
+    proc = rt.spawnClaude(args, options, (err) => { error = err; });
     const timer = setTimeout(() => resolve({ proc, error, closed: false }), 10000);
     proc.on('close', () => { clearTimeout(timer); resolve({ proc, error, closed: true }); });
   });
+  settled.proc = proc;
+  return settled;
+}
+
+// Whether a process group with this id exists: one a detached child leads.
+// Signal 0 tests for it and delivers nothing.
+function leadsGroup(pid) {
+  try { process.kill(-pid, 0); return true; } catch (e) { return e.code === 'ESRCH' ? false : `unknown (${e.code})`; }
 }
 
 const frozen = (version, bin) => `Rundock found Claude Code ${version} at ${bin}. Rundock needs 2.0.59 or later. `
@@ -125,13 +137,20 @@ const POSIX = process.platform === 'win32' ? 'the stub is a POSIX script found w
 
 // ── The flag table and the floor ──
 
+// Every quoted flag literal in a source: two dashes, then letters, digits and
+// hyphens, in single, double or back quotes.
+const flagsIn = (src) => [...src.matchAll(/(['"`])(--[A-Za-z0-9][A-Za-z0-9-]*)\1/g)].map((m) => m[2]);
+
 describe('the flag table and the floor', () => {
   test('every flag the spawn paths pass to Claude Code has a row in the flag table', () => {
     const { FLAG_SINCE } = floorLib();
+    // The pattern reads a flag with a digit in it, in any quotes, and nothing
+    // that only starts like one.
+    assert.deepStrictEqual(flagsIn("f('--a2b', \"--c3\", `--d-4`, '--E5', '--', '- -x', '--x y')"), ['--a2b', '--c3', '--d-4', '--E5'],
+      'the pattern reads every quoted flag literal');
     const found = new Set();
     for (const file of ['server.js', 'lib/runtime/claude.js', 'lib/delegation/engine.js', 'lib/scheduler.js']) {
-      const src = fs.readFileSync(path.join(ROOT, file), 'utf8');
-      for (const m of src.matchAll(/'(--[a-z][a-z-]*)'/g)) found.add(m[1]);
+      for (const flag of flagsIn(fs.readFileSync(path.join(ROOT, file), 'utf8'))) found.add(flag);
     }
     // The read is held to what it must find, so a pattern that stops matching
     // fails here rather than passing on an empty inventory.
@@ -290,24 +309,48 @@ describe('below the floor nothing is started', { skip: POSIX }, () => {
 
 // ── spawnClaude at or above the floor ──
 
+// A private runtime whose spawn is watched: claude.js takes `spawn` from
+// child_process as it loads, so the copy loaded here calls through the
+// recorder, and every other copy keeps the real one.
+function watchedRuntime() {
+  const cp = require('node:child_process');
+  const real = cp.spawn;
+  const calls = [];
+  cp.spawn = function recordedSpawn(file, args, options) {
+    calls.push({ file, args, options });
+    return real.apply(this, arguments);
+  };
+  try { return { rt: freshClaudeRuntime(), calls }; } finally { cp.spawn = real; }
+}
+
 describe('at or above the floor the spawn is exactly as before', { skip: POSIX }, () => {
   for (const said of ['2.0.59', '2.0.59 (Claude Code)', '2.0.100 (Claude Code)', '2.10.0-beta.1', '2.1.318 (Claude Code)']) {
     test(`${said}: started with the same arguments, options and pid tracking`, async () => {
       const stub = makeStub(said);
-      const rt = freshClaudeRuntime();
+      const { rt, calls } = watchedRuntime();
       const w = wired(rt);
       try {
         const cwd = makeTempDir('claude-floor-cwd-');
         const env = { ...process.env, FLOOR_TEST_MARKER: 'given-env', RUNDOCK_CONVO_ID: 'convo-floor' };
         let tracked = null;
+        let given = null;
+        let leads = null;
         const { proc, error, closed } = await withPath([stub.dir], () => {
-          const p = spawnAndSettle(rt, [...CHAT_ARGS, rt.INHERIT_MARKER], { cwd, env: { ...env, PATH: process.env.PATH }, stdio: 'ignore' });
+          given = { cwd, env: { ...env, PATH: process.env.PATH }, stdio: ['pipe', 'pipe', 'ignore'] };
+          const p = spawnAndSettle(rt, [...CHAT_ARGS, rt.INHERIT_MARKER], given);
           tracked = rt.loadPidFile();
+          leads = leadsGroup(p.proc.pid);
           return p;
         });
         assert.strictEqual(error, null);
         assert.strictEqual(closed, true);
         assert.ok(proc.pid > 0, 'a real process');
+        // The spawn contract, as spawnClaude has always kept it: the
+        // caller's options as given, with detached added on POSIX.
+        assert.deepStrictEqual(calls.map((c) => [c.file, c.args, c.options]),
+          [[stub.bin, CHAT_ARGS, { ...given, detached: process.platform !== 'win32' }]], 'one spawn, with the options the caller gave');
+        assert.strictEqual(calls[0].options.env, given.env, 'the very environment the caller built');
+        assert.strictEqual(calls[0].options.stdio, given.stdio, 'and the very stdio it asked for');
         assert.deepStrictEqual(tracked.map((r) => [r.pid, r.cmd]), [[proc.pid, 'claude']], 'its pid recorded as it started');
         assert.deepStrictEqual(rt.loadPidFile(), [], 'and forgotten when it closed');
         const chats = chatsOf(stub);
@@ -315,6 +358,8 @@ describe('at or above the floor the spawn is exactly as before', { skip: POSIX }
         assert.deepStrictEqual(chats[0].args, CHAT_ARGS, 'the arguments as given, the internal marker taken out');
         assert.strictEqual(chats[0].cwd, fs.realpathSync(cwd));
         assert.strictEqual(chats[0].marker, 'given-env', 'the environment it was given');
+        assert.deepStrictEqual(chats[0].fds, ['pipe', 'pipe', 'null'], 'the child has the stdio it was asked for');
+        assert.strictEqual(leads, true, 'and, detached, leads a process group of its own');
         assert.deepStrictEqual(w.guarded, [{ convoId: 'convo-floor', agentId: 'writer' }], 'handed to the answer-file guard');
       } finally { w.restore(); }
     });
@@ -459,6 +504,24 @@ describe('when no version can be read, the spawn goes ahead as before, logged on
       assert.ok(waited < rt.VERSION_PROBE_TIMEOUT_MS + 3000, `the spawn waited ${waited}ms`);
       assert.strictEqual(chatsOf(stub).length, 1, 'and started');
       assert.strictEqual(warn.said.filter((line) => line.includes(stub.bin)).length, 1, 'logged once');
+    } finally { warn.restore(); w.restore(); }
+  });
+
+  test('a copy that cannot be run is an unknown version, and the spawn still fails with EACCES', async () => {
+    const stub = makeStub('2.1.318 (Claude Code)');
+    const rt = freshClaudeRuntime();
+    const w = wired(rt);
+    const warn = quietWarn();
+    try {
+      const { error } = await withPath([stub.dir], () => {
+        assert.strictEqual(rt.resolveClaudeBin(), stub.bin, 'found while it could still be run');
+        fs.chmodSync(stub.bin, 0o644);
+        return spawnAndSettle(rt, CHAT_ARGS, { stdio: 'ignore' });
+      });
+      assert.ok(error, 'the callback ran');
+      assert.strictEqual(error.code, 'EACCES', 'the error a copy that cannot be run has always given');
+      assert.deepStrictEqual(runsOf(stub), [], 'neither the probe nor the chat could run it');
+      assert.strictEqual(warn.said.filter((line) => line.includes(stub.bin)).length, 1, 'the unknown version logged once');
     } finally { warn.restore(); w.restore(); }
   });
 
