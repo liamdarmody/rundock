@@ -835,10 +835,98 @@ function secretsReachedBy(word, { starts, unfollowed, relative, entries, folds, 
 // handed `-r`, `-R` or `--recursive`, is judged to read the folder, the safe
 // direction for a file with nothing beneath the card.
 const RECURSIVE_READERS = new Set(['rg', 'ag', 'ack', 'rsync', 'tar', 'gtar', 'bsdtar', 'zip', '7z', '7za', 'ditto', 'pax', 'cpio']);
-const RECURSIVE_WHEN_FLAGGED = { grep: /[rR]/, egrep: /[rR]/, fgrep: /[rR]/, cp: /[rRa]/, scp: /r/, diff: /r/ };
-const SEARCHES_CWD_UNNAMED = new Set(['grep', 'egrep', 'fgrep', 'rg', 'ag', 'ack', 'find']);
+const SEARCHES_CWD_UNNAMED = new Set(['grep', 'rg', 'ag', 'ack', 'find']);
 const LISTS_NAMES_ONLY = new Set(['ls', 'du', 'tree', 'stat', 'file', 'cd', 'pushd', 'popd', 'test', '[', 'realpath', 'readlink', 'dirname', 'basename', 'pwd', 'mkdir', 'echo', 'printf', 'true', 'false']);
 const RUNS_PER_NAME = new Set(['-exec', '-execdir', '-ok', '-okdir']);
+// HOW EACH OF THESE PROGRAMS TAKES ITS OPTIONS, read as getopt reads them, so
+// an option's value is never taken for a folder and the pattern given to `-e`
+// or `-f` leaves every other word a folder: `cd ~/.claude && rg -e token`
+// searches the folder it runs in. `short`: the letters that take a value, the
+// rest of the word or the next word. `long`: the long options that take one,
+// as `--x=v` or `--x v`. `patterns`: the options that give the pattern, after
+// which no word is one. `into`: the options naming a folder copied into.
+// `names`, for a program whose getopt takes a long option shortened
+// (`--recur`), every long option it has, so a shortened one is the option it
+// stands for. A program here that reads a folder only when told to say so in
+// recursiveFor.
+const GREP_VALUES = ['regexp', 'file', 'after-context', 'before-context', 'context', 'max-count', 'devices', 'directories',
+  'include', 'exclude', 'exclude-dir', 'exclude-from', 'include-dir', 'label', 'binary-files', 'group-separator'];
+const CP_VALUES = ['target-directory', 'suffix', 'sparse', 'no-preserve'];
+const READER_OPTIONS = {
+  grep: {
+    short: 'efABCmDd', long: GREP_VALUES, patterns: ['e', 'f', 'regexp', 'file'],
+    names: [...GREP_VALUES, 'basic-regexp', 'binary', 'byte-offset', 'color', 'colour', 'count', 'dereference-recursive', 'extended-regexp',
+      'files-with-matches', 'files-without-match', 'fixed-strings', 'help', 'ignore-case', 'initial-tab', 'invert-match', 'line-buffered',
+      'line-number', 'line-regexp', 'no-filename', 'no-group-separator', 'no-ignore-case', 'no-messages', 'null', 'null-data', 'only-matching',
+      'perl-regexp', 'quiet', 'recursive', 'silent', 'text', 'version', 'with-filename', 'word-regexp'],
+  },
+  rg: {
+    short: 'efABCmgtTEjMrd', patterns: ['e', 'f', 'regexp', 'file'],
+    long: ['regexp', 'file', 'after-context', 'before-context', 'context', 'max-count', 'glob', 'iglob', 'type', 'type-not', 'type-add',
+      'type-clear', 'encoding', 'threads', 'max-columns', 'max-depth', 'maxdepth', 'max-filesize', 'path-separator', 'replace', 'color',
+      'colors', 'context-separator', 'field-context-separator', 'field-match-separator', 'ignore-file', 'pre', 'pre-glob', 'sort', 'sortr',
+      'engine', 'dfa-size-limit', 'regex-size-limit', 'hostname-bin', 'hyperlink-format', 'generate'],
+  },
+  // `-g PATTERN` picks files by name, so every word is then a folder.
+  ag: {
+    short: 'ABCGgmpW', patterns: ['g', 'filename-pattern'],
+    long: ['after', 'before', 'context', 'file-search-regex', 'filename-pattern', 'max-count', 'path-to-ignore', 'width', 'ignore',
+      'ignore-dir', 'depth', 'pager', 'color-line-number', 'color-match', 'color-path', 'workers'],
+  },
+  // `-f` and `-g PATTERN` pick files without a pattern to search for.
+  ack: {
+    short: 'ABCmg', patterns: ['f', 'g', 'match'],
+    long: ['match', 'type', 'ignore-dir', 'ignore-directory', 'noignore-dir', 'noignore-directory', 'ignore-file', 'output', 'pager',
+      'range-start', 'range-end', 'files-from', 'ackrc', 'type-add', 'type-set', 'type-del', 'color-filename', 'color-match',
+      'color-lineno', 'color-colno', 'after-context', 'before-context', 'context', 'max-count'],
+  },
+  cp: {
+    short: 'tS', long: CP_VALUES, into: ['t', 'target-directory'],
+    names: [...CP_VALUES, 'archive', 'attributes-only', 'backup', 'copy-contents', 'debug', 'dereference', 'force', 'interactive',
+      'keep-directory-symlink', 'link', 'no-clobber', 'no-dereference', 'no-target-directory', 'one-file-system', 'parents', 'preserve',
+      'recursive', 'reflink', 'remove-destination', 'strip-trailing-slashes', 'symbolic-link', 'update', 'verbose', 'help', 'version'],
+  },
+  scp: { short: 'cDFiJloPSX', long: [] },
+};
+const READER_FAMILY = { egrep: 'grep', fgrep: 'grep', ggrep: 'grep' };
+// Whether one of these reads the folders it is given: a recursive grep, cp or
+// scp; the others always do.
+function recursiveFor(family, has, values) {
+  if (family === 'grep') return has('r', 'R', 'recursive', 'dereference-recursive') || values('d', 'directories').includes('recurse');
+  if (family === 'cp') return has('r', 'R', 'a', 'recursive', 'archive');
+  if (family === 'scp') return has('r');
+  return true;
+}
+// The options a command was given, [name, value] with a long one by its whole
+// name, and the words that are not options, in order. Options may sit among
+// the other words, and `--` ends them.
+function readOptions(args, spec) {
+  const given = [];
+  const operands = [];
+  const longName = (written) => {
+    if (!spec.names || spec.names.includes(written)) return written;
+    const could = spec.names.filter(n => n.startsWith(written));
+    return could.length === 1 ? could[0] : written;
+  };
+  for (let k = 0; k < args.length; k++) {
+    const a = args[k];
+    if (a === '--') { operands.push(...args.slice(k + 1)); break; }
+    if (a.startsWith('--')) {
+      const eq = a.indexOf('=');
+      const name = longName(a.slice(2, eq < 0 ? a.length : eq));
+      let value = eq < 0 ? null : a.slice(eq + 1);
+      if (value === null && spec.long.includes(name) && k + 1 < args.length) value = args[++k];
+      given.push([name, value]);
+    } else if (a.length > 1 && a[0] === '-') {
+      for (let c = 1; c < a.length; c++) {
+        if (!spec.short.includes(a[c])) { given.push([a[c], null]); continue; }
+        given.push([a[c], c + 1 < a.length ? a.slice(c + 1) : (k + 1 < args.length ? args[++k] : null)]);
+        break;
+      }
+    } else operands.push(a);
+  }
+  return { given, operands };
+}
 // THE COMMANDS THE SHELL RUNS, each with its words AS BASH FORMS THEM: quotes
 // and escapes taken out and the pieces of one word joined, so `~/\.claude` and
 // `"$HOME"/.claude` are the `~/.claude` they name. Read by the lexer the
@@ -906,25 +994,27 @@ function recursiveReadWords(command, posixText = true) {
     const ws = pastKeywords(words);
     const i = programIndex(ws);
     const verb = (ws[i] || '').split('/').pop();
+    const family = READER_FAMILY[verb] || verb;
     const args = ws.slice(i + 1);
-    const shortFlags = args.filter(a => /^-[A-Za-z]+$/.test(a));
-    const longFlag = (re) => args.some(a => re.test(a));
-    const pipedToXargs = runsXargs(pipedTo);
-    let reads;
-    if (verb === 'find') reads = args.some(a => RUNS_PER_NAME.has(a)) || pipedToXargs;
-    else if (RECURSIVE_READERS.has(verb)) reads = true;
-    else if (Object.prototype.hasOwnProperty.call(RECURSIVE_WHEN_FLAGGED, verb)) {
-      reads = shortFlags.some(a => RECURSIVE_WHEN_FLAGGED[verb].test(a.slice(1))) || longFlag(/^--(recursive|dereference-recursive|archive|directories=recurse)$/) || (args.includes('-d') && args[args.indexOf('-d') + 1] === 'recurse');
-    } else reads = !LISTS_NAMES_ONLY.has(verb) && (shortFlags.some(a => /[rR]/.test(a)) || longFlag(/^--recursive$/));
-    if (!reads) continue;
-    let operands = args.filter(a => !a.startsWith('-'));
-    if (verb === 'find') {
+    const spec = Object.prototype.hasOwnProperty.call(READER_OPTIONS, family) ? READER_OPTIONS[family] : null;
+    let operands;
+    if (spec) {
+      const opt = readOptions(args, spec);
+      const has = (...names) => opt.given.some(([n]) => names.includes(n));
+      const values = (...names) => opt.given.filter(([n, v]) => names.includes(n) && v !== null).map(([, v]) => v);
+      if (!recursiveFor(family, has, values)) continue;
+      operands = spec.patterns && !has(...spec.patterns) ? opt.operands.slice(1) : opt.operands;
+      if (spec.into) operands = operands.concat(values(...spec.into));
+    } else if (verb === 'find') {
+      if (!args.some(a => RUNS_PER_NAME.has(a)) && !runsXargs(pipedTo)) continue;
       const end = args.findIndex(a => a.startsWith('-') || a === '(' || a === '!');
       operands = (end < 0 ? args : args.slice(0, end));
-    } else if (SEARCHES_CWD_UNNAMED.has(verb) && !args.some(a => /^-(e|f)$|^--(regexp|file)(=|$)/.test(a))) {
-      operands = operands.slice(1);
+    } else {
+      const flagged = args.some(a => /^-[A-Za-z]*[rR][A-Za-z]*$/.test(a)) || args.includes('--recursive');
+      if (!RECURSIVE_READERS.has(verb) && (LISTS_NAMES_ONLY.has(verb) || !flagged)) continue;
+      operands = args.filter(a => !a.startsWith('-'));
     }
-    if (!operands.length && SEARCHES_CWD_UNNAMED.has(verb)) operands = ['.'];
+    if (!operands.length && SEARCHES_CWD_UNNAMED.has(family)) operands = ['.'];
     for (const o of operands) found.push({ word: o, at });
   }
   return found;

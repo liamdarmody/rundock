@@ -3605,6 +3605,30 @@ const MUTATIONS = [
   [SECRET_FOLDER, "Folder reads: a loop word naming home is left with its ~ unread",
     ".flatMap(loopForms).map(homeIn)) {",
     ".flatMap(loopForms)) {"],
+  // An option's value is not a folder, and a pattern given to -e or -f leaves
+  // every other word one. Break either half and a search given no folder
+  // (`cd ~/.claude && rg -e token`) takes its pattern for one.
+  [SECRET_FOLDER, "Folder reads: a long option's value given as the next word is taken for a folder",
+    "      if (value === null && spec.long.includes(name) && k + 1 < args.length) value = args[++k];",
+    ""],
+  [SECRET_FOLDER, "Folder reads: a short option's value given as the next word is taken for a folder",
+    "        given.push([a[c], c + 1 < a.length ? a.slice(c + 1) : (k + 1 < args.length ? args[++k] : null)]);",
+    "        given.push([a[c], c + 1 < a.length ? a.slice(c + 1) : null]);"],
+  [SECRET_FOLDER, "Folder reads: the first folder is taken for the pattern even when -e gave it",
+    "      operands = spec.patterns && !has(...spec.patterns) ? opt.operands.slice(1) : opt.operands;",
+    "      operands = opt.operands.slice(1);"],
+  [SECRET_FOLDER, "Folder reads: a shortened long option is not the option it stands for",
+    "    return could.length === 1 ? could[0] : written;",
+    "    return written;"],
+  [SECRET_FOLDER, "Folder reads: a folder cp copies into with -t is not counted",
+    "      if (spec.into) operands = operands.concat(values(...spec.into));",
+    ""],
+  [SECRET_FOLDER, "Folder reads: grep's -d recurse is not read as recursive",
+    " || values('d', 'directories').includes('recurse');",
+    ";"],
+  [SECRET_FOLDER, "Folder reads: a search given no folder is not read where it runs",
+    "    if (!operands.length && SEARCHES_CWD_UNNAMED.has(family)) operands = ['.'];",
+    ""],
 ];
 const REPORTER = ['--test-reporter', 'spec'];
 
