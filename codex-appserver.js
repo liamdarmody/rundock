@@ -42,6 +42,7 @@ const { EventEmitter } = require('node:events');
 const { spawn } = require('node:child_process');
 
 const { classifyCodexError, resolveCodexBin } = require('./codex.js');
+const { guardChildStdin } = require('./lib/runtime/child-stdin.js');
 
 let PKG_VERSION = '0.0.0';
 try { PKG_VERSION = require('./package.json').version || PKG_VERSION; } catch (e) { /* packaged builds carry package.json */ }
@@ -214,6 +215,11 @@ class CodexAppServer extends EventEmitter {
     });
     this._proc = proc;
     this._readBuffer = '';
+    // A request written after the process stopped, before its close has
+    // run, fails asynchronously with EPIPE. That is logged and left to the
+    // close below, which rejects what was in flight; it never ends the host
+    // (lib/runtime/child-stdin.js).
+    guardChildStdin(proc, 'codex app-server', { log: (line) => this._log(line) });
     proc.stdout.setEncoding('utf-8');
     proc.stdout.on('data', chunk => { if (this._proc === proc) this._onData(chunk); });
     proc.stderr.setEncoding('utf-8');
