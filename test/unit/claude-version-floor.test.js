@@ -243,6 +243,38 @@ describe('below the floor nothing is started', { skip: POSIX }, () => {
     } finally { w.restore(); }
   });
 
+  test('what stands in for a refused copy has its stdin guarded: a write after its end is logged, never uncaught', async () => {
+    // A caller writes the message to the process it was handed; a write that
+    // lands after the stand-in's stdin has ended fails, and with no handler
+    // that failure would end the server (lib/runtime/child-stdin.js).
+    const { failureLog } = require('../../lib/runtime/child-stdin.js');
+    const stub = makeStub('2.0.58 (Claude Code)');
+    const rt = freshClaudeRuntime();
+    const w = wired(rt);
+    const lines = [];
+    const realWrite = failureLog.write;
+    failureLog.write = (line) => { lines.push(line); };
+    const uncaught = [];
+    const onUncaught = (err) => { uncaught.push(err); };
+    process.on('uncaughtException', onUncaught);
+    try {
+      const { proc, error } = await withPath([stub.dir], () => spawnAndSettle(rt, CHAT_ARGS, { stdio: 'ignore' }));
+      assert.strictEqual(error && error.code, 'CLAUDE_TOO_OLD');
+      proc.stdin.end();
+      proc.stdin.write('a message after the end\n');
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      assert.deepStrictEqual(uncaught.map((err) => err.code), [], 'no uncaught error');
+      const logged = lines.filter((line) => line.startsWith('[Stdin]'));
+      assert.strictEqual(logged.length, 1, 'one [Stdin] line for the failed write');
+      assert.match(logged[0], /claude \(not started: below the version floor\)/);
+      assert.match(logged[0], /ERR_STREAM_WRITE_AFTER_END/);
+    } finally {
+      process.removeListener('uncaughtException', onUncaught);
+      failureLog.write = realWrite;
+      w.restore();
+    }
+  });
+
   test('sending again while the copy is still old reads it again and starts nothing again', async () => {
     const stub = makeStub('2.0.58 (Claude Code)');
     const rt = freshClaudeRuntime();

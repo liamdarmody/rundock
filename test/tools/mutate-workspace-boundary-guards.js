@@ -3601,6 +3601,9 @@ const MUTATIONS = [
   [FLOOR_EACCES, "Version floor: a copy that cannot be run is refused as too old",
     "verdict === false ? tooOldError(version, bin) : null",
     "verdict !== true ? tooOldError(version, bin) : null"],
+  [FLOOR_SPAWN, "Version floor: the stand-in for a refused copy keeps an unguarded stdin",
+    "    guardChildStdin(standIn, 'claude (not started: below the version floor)');",
+    "    // the stand-in's stdin is left unguarded"],
 ];
 const REPORTER = ['--test-reporter', 'spec'];
 
