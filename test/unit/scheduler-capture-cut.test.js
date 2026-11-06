@@ -30,6 +30,49 @@
 // to a plain session, so most cases also end in that line and check the
 // record's notice quotes it. The file on disk is read between looks for what
 // the cut did to it.
+//
+// COVERAGE, COMPARED ACROSS THREE RUNS. With this file as it is,
+// `npm run test:coverage` was run three times, one after another, on commit
+// 31f3c000, and the lines of lib/scheduler.js each run covered were compared
+// line by line from its lcov. The commit that adds this paragraph changes
+// comments and docs/FLAKES.md only, so the code those runs measured is the
+// code here, byte for byte.
+//
+//   - every run covered the same 2598 of the file's 2602 lines, and no line
+//     was covered in some runs and not others;
+//   - the floors held on all three (test/tools/coverage-areas.js on each
+//     run's lcov: all 53 floors hold);
+//   - the line that takes the grown size ran 8, 9 and 7 times. 5 of those
+//     are this file's, the same on every run: this file alone, under
+//     coverage, runs the line 5 times. The rest came from real children
+//     whose writes happened to land between two looks, the timing that,
+//     before this file, decided whether the line was covered at all.
+//
+// The four lines no run covered are two catches (lines 896 and 897, and 1318
+// and 1319), the same in all three and the only lines of lib/scheduler.js a
+// passing Coverage floors run on CI left uncovered (run 42087236537): the
+// catch around the signal that forces a stop, which needs a signaller that
+// throws on the second, forced call, and no test supplies one; and the catch
+// around closing abandoned run records, which needs a routine state load with
+// no workspace root. Neither depends on timing: each is missed on every run,
+// and the floor's tolerance absorbs them.
+//
+// The three runs were made where `ps` cannot be spawned, so the same three
+// tests in test/unit/red-first-orphans.test.js, which read the process table,
+// failed in each (two of them say so in their message), and the script
+// stopped before its own floor check; test/tools/coverage-areas.js was then
+// run on each run's lcov. Every other test passed in all three: 8618 of 8638,
+// with 17 skipped.
+//
+// THE CAPTURE TESTS THAT CAME BEFORE THIS FILE pass unchanged. On the same
+// commit, with neither file changed alongside this one, each run on its own
+// with `node --test`:
+//
+//   - test/integration/scheduler-run-records.test.js: 34 of 34 passed;
+//   - test/unit/scheduler-lib.test.js, which holds the capture tests the
+//     scheduler already had: 76 of 76 passed.
+//
+// Both also passed in all three coverage runs.
 const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
