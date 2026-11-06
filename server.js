@@ -1633,6 +1633,11 @@ wss.on('connection', (ws) => {
             existing.sawTextDelta = false; // reset per-turn text-source flag (defensive)
             safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: processId, _agent: existing.agentId }));
             existing.responseText = '';
+            // A new turn, with no result yet. Left as the last turn's, a process
+            // that stops before answering this one (a write to it that failed,
+            // a crash) closed without the done that ends the turn, and the
+            // window was left waiting.
+            existing.resultSent = false;
             existing.idle = false; existing.idleSince = null;
             existing.toolCalls = [];
             existing.turnStartTime = Date.now();

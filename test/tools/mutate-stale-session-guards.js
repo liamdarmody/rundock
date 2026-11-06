@@ -49,6 +49,15 @@ const ENGINE_UNIT = { src: path.join(ROOT, 'lib', 'delegation', 'engine.js'), su
 const RULES = { src: path.join(ROOT, 'lib', 'runtime', 'missing-session.js'), suite: 'test/unit/missing-session.test.js' };
 // How a handback prompt is headed for an orchestrator starting fresh.
 const CATCHUP = { src: path.join(ROOT, 'lib', 'delegation', 'catch-up.js'), suite: STALE };
+// A write to a process that has stopped (a refused resume among them): where
+// each child's stdin is given its handler, the handler itself, and the
+// inventory that holds every write to those start paths.
+const STOPPED = 'test/integration/stopped-child-write.test.js';
+const SPAWN_STDIN = { src: path.join(ROOT, 'lib', 'runtime', 'claude.js'), suite: STOPPED };
+const SERVER_STOPPED = { src: path.join(ROOT, 'server.js'), suite: STOPPED };
+const CODEX_STDIN = { src: path.join(ROOT, 'codex-appserver.js'), suite: 'test/unit/codex-appserver-stdin.test.js' };
+const STDIN_UNIT = { src: path.join(ROOT, 'lib', 'runtime', 'child-stdin.js'), suite: 'test/unit/child-stdin.test.js' };
+const STDIN_INVENTORY = { src: path.join(ROOT, 'test', 'unit', 'child-stdin-inventory.test.js'), suite: 'test/unit/child-stdin-inventory.test.js' };
 
 // ONE NAMED TEST, FOR A ROW WHOSE SUITE STARTS A SERVER. The whole
 // stale-session suite takes some twenty seconds unbroken, and a broken guard
@@ -304,6 +313,79 @@ const MUTATIONS = [
   [CLIENT, 'a record from before the chain still resumes its primary',
     '    return chain.length ? null : (convo.sessionId || null);',
     '    return null;'],
+
+  // ===== A WRITE TO A PROCESS THAT HAS STOPPED NEVER ENDS THE SERVER =====
+  // The stdin of each child is given its error handler where the child
+  // starts. Without it a write in the gap between the process stopping and
+  // the server hearing so is an uncaught exception, which ends the server.
+  [only(SPAWN_STDIN, 'is logged in one line naming the process, the server stays up, and the close ends the turn once'),
+    'every Claude process has its stdin handler from the start (a follow-up to a stopped process)',
+    "  guardChildStdin(proc, () => `claude (agent ${agentId}, conversation ${convoId || 'none'})`);\n",
+    ''],
+  [only(SPAWN_STDIN, 'the failed write is logged once, the delegate starts fresh once, and the orchestrator hears of it once and carries on'),
+    'every Claude process has its stdin handler from the start (a brief to a refused delegate)',
+    "  guardChildStdin(proc, () => `claude (agent ${agentId}, conversation ${convoId || 'none'})`);\n",
+    ''],
+  [only({ src: SPAWN_STDIN.src, suite: STALE }, 'is logged in one line, the server stays up, and the fresh delegate answers it'),
+    'every Claude process has its stdin handler from the start (a follow-up to a refused delegate that has just stopped)',
+    "  guardChildStdin(proc, () => `claude (agent ${agentId}, conversation ${convoId || 'none'})`);\n",
+    ''],
+  [CODEX_STDIN, 'the handler is on both start paths, not one: the Codex app-server has it too',
+    "    guardChildStdin(proc, 'codex app-server', { log: this._log === NO_LOG ? undefined : (line) => this._log(line) });\n",
+    ''],
+  [CODEX_STDIN, 'a Codex client given no log of its own still logs a failed write, on stderr',
+    'this._log === NO_LOG ? undefined : (line) => this._log(line)',
+    '(line) => this._log(line)'],
+  [only({ src: CODEX_STDIN.src, suite: 'test/unit/doc-claims.test.js' }, 'and each logs a failed write in one line, naming the process and the error, with no log of its own'),
+    'the page\'s claim of one line per failed write holds for the Codex start path with no log of its own',
+    'this._log === NO_LOG ? undefined : (line) => this._log(line)',
+    '(line) => this._log(line)'],
+  [STDIN_UNIT, 'the handler listens for the stream\'s error, so a failed write throws nothing',
+    "  stdin.on('error', (err) => {\n    if (err && typeof err === 'object' && logged.has(err)) return;\n    report(err);\n  });\n",
+    ''],
+  [STDIN_UNIT, 'each failed write is logged, a retry once more, not only the first',
+    '      if (err) report(err);\n',
+    ''],
+  [STDIN_UNIT, 'a log that throws is swallowed, so the handler failing never ends the server either',
+    '    } catch (e) { /* the log failing must not end the server either */ }',
+    '    } finally { /* nothing caught */ }'],
+  [STDIN_UNIT, 'a stdin is given its handler once, so a failed write is logged once',
+    '  if (stdin[GUARDED]) return true;\n',
+    ''],
+  [only(SERVER_STOPPED, 'is logged in one line naming the process, the server stays up, and the close ends the turn once'),
+    'a follow-up starts its turn with no result, so the close of a process that stopped before answering ends it',
+    '            existing.resultSent = false;\n',
+    ''],
+  [STDIN_INVENTORY, 'the inventory names every write: the app-server\'s left out',
+    "  { at: 'codex-appserver.js | _writeLine | proc.stdin.write', from: APP_SERVER, what: 'every request and notification to the Codex app-server' },\n",
+    ''],
+  [STDIN_INVENTORY, 'the inventory names every write: a delegate\'s brief left out',
+    "  { at: 'lib/delegation/engine.js | handleDelegation | delegateProc.stdin.write', from: STARTED_HERE, what: 'the brief to the agent delegated to' },\n",
+    ''],
+  // The scan that finds the writes reads the source as code: a // inside a
+  // string is not a comment, a block comment runs to its */, and code inside
+  // a template's ${} is code.
+  [STDIN_INVENTORY, 'the scan reads a string as a string, so a URL in one hides no write after it',
+    "    } else if (c === \"'\" || c === '\"') {\n",
+    '    } else if (false) {\n'],
+  [STDIN_INVENTORY, 'the scan reads a block comment to its end, across lines',
+    "      while (i < n && !(text[i] === '*' && text[i + 1] === '/')) blankBoth(i++);\n",
+    "      while (i < n && text[i] !== '\\n' && !(text[i] === '*' && text[i + 1] === '/')) blankBoth(i++);\n"],
+  [STDIN_INVENTORY, 'the scan reads code inside a template\'s placeholder as code',
+    "      if (c === '$' && text[i + 1] === '{') { i += 2; placeholders.push(depth); depth++; last = '{'; return; }\n",
+    ''],
+  // Two writes to a refused delegate both fail, and its close still ends
+  // what it was doing once: the delegation ends once, and the orchestrator
+  // hears once. This row ends the delegation twice: the refused process's
+  // close starts the delegate fresh and then ends the delegation as well.
+  [only({ src: ENGINE.src, suite: STOPPED }, 'the retry: a second write to the same refused delegate is logged once more and ends nothing a second time'),
+    'a refused delegate\'s close starts it again fresh and ends nothing else, so the delegation ends once',
+    '      startWithoutSession(delegateEntry, convoId, delegateArgs, freshDelegateContext, delegateWire, handleDelegateClose);\n      return;\n',
+    '      startWithoutSession(delegateEntry, convoId, delegateArgs, freshDelegateContext, delegateWire, handleDelegateClose);\n'],
+  [only({ src: STDIN_UNIT.src, suite: STOPPED }, 'the retry: a second write to the same refused delegate is logged once more and ends nothing a second time'),
+    'a failed write after the first is only logged: one that ended the delegation again would end it twice',
+    '      if (err) report(err);\n',
+    "      if (err) { report(err); if (stdin.rundockFailedBefore) proc.emit('close', 1, null); stdin.rundockFailedBefore = true; }\n"],
 ];
 
 const REPORTER = ['--test-reporter', 'spec'];
@@ -315,9 +397,17 @@ function redTests(suite) {
   let out = '';
   let failed = false;
   const [file, testName] = String(suite).split('#');
+  // NODE_TEST_CONTEXT must not reach the run: a nested node --test that
+  // inherits it reports its failures in a form this cannot read and still
+  // exits 0, so a red run would read as green.
+  const env = { ...process.env };
+  delete env.NODE_TEST_CONTEXT;
   try {
-    out = execFileSync('node', ['--test', ...REPORTER, ...(testName ? ['--test-name-pattern', exactly(testName)] : []), file],
-      { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    // Bounded twice over: each test by node's own timeout, and the whole
+    // suite by a kill, so a broken guard that leaves a run waiting costs
+    // minutes and reports, rather than holding the harness for hours.
+    out = execFileSync('node', ['--test', '--test-timeout=120000', ...REPORTER, ...(testName ? ['--test-name-pattern', exactly(testName)] : []), file],
+      { cwd: ROOT, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 280000, killSignal: 'SIGKILL' });
   } catch (e) {
     failed = true;
     out = (e.stdout || '') + (e.stderr || '');
@@ -337,6 +427,36 @@ function redTests(suite) {
     if (m && !names.includes(m[1])) names.push(m[1]);
   }
   return names;
+}
+
+// THE HARNESS'S OWN RUN IS CHECKED BEFORE ANY ROW IS READ. Every row is read
+// through the one invocation above, so a fault in it, an option this node
+// refuses or output that no longer parses, would misreport every row at once.
+// Before anything is mutated, that same invocation is made on a fixture of two
+// tests, one that passes and one that fails. It must read the passing one as
+// green and the failing one as red, by name, or the run is refused with no
+// verdict. Returns what it read wrong, or null.
+const FIXTURE_GREEN = 'passes with nothing broken';
+const FIXTURE_RED = 'fails when broken';
+function invocationProblem(runTests = redTests) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'stale-session-harness-'));
+  const file = path.join(dir, 'invocation.test.js');
+  try {
+    fs.writeFileSync(file, "'use strict';\nconst { test } = require('node:test');\n"
+      + `test(${JSON.stringify(FIXTURE_GREEN)}, () => {});\n`
+      + `test(${JSON.stringify(FIXTURE_RED)}, () => { throw new Error('broken'); });\n`);
+    const green = runTests(`${file}#${FIXTURE_GREEN}`);
+    if (!Array.isArray(green) || green.length !== 0) {
+      return `a run of a passing test read as ${JSON.stringify(green)}, not green`;
+    }
+    const red = runTests(`${file}#${FIXTURE_RED}`);
+    if (!Array.isArray(red) || red.length !== 1 || red[0] !== FIXTURE_RED) {
+      return `a run of a failing test read as ${JSON.stringify(red)}, not that test red`;
+    }
+    return null;
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 function run() {
@@ -431,6 +551,11 @@ function requireSaneTempRoot() {
 if (require.main === module) {
   requireSaneTempRoot();
   if (process.argv.includes('--preflight-only')) process.exit(0);
+  const problem = invocationProblem();
+  if (problem) {
+    console.error(`Refusing to start a mutation run: the run every row is read through misreads a result: ${problem}.`);
+    process.exit(NO_VERDICT);
+  }
   const results = run();
   const failed = report(results, process.argv.includes('--markdown'));
   if (failed) {
@@ -440,4 +565,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { MUTATIONS, run };
+module.exports = { MUTATIONS, run, redTests, invocationProblem };
