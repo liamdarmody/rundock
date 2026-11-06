@@ -444,6 +444,13 @@ describe('the version probe', { skip: POSIX }, () => {
     // what holds it back, not the file.
     assert.strictEqual(versionIn(rt.readClaudeVersion(named[0], 5000, 'linux')), '2.0.58');
     assert.strictEqual(probesOf(stub).length, 1);
+    // A Windows executable is run for its version as on any platform, with no
+    // shell, its timeout and stdin closed.
+    const exe = path.join(stub.dir, 'claude.exe');
+    fs.copyFileSync(stub.bin, exe);
+    fs.chmodSync(exe, 0o755);
+    assert.strictEqual(versionIn(rt.readClaudeVersion(exe, 5000, 'win32')), '2.0.58', 'claude.exe is read');
+    assert.deepStrictEqual(probesOf(stub).map((r) => r.stdin), ['closed', 'closed']);
   });
 
   test('the probe is bounded by its timeout', () => {
