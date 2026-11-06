@@ -405,6 +405,54 @@ describe('a login shell that cannot answer leaves today\'s lookup in place, logg
       } finally { done(); }
     });
   }
+
+  // What the lookup may take beyond the shell's own five seconds, for the
+  // stall to be noticed and the killed shell reaped: scheduling, not work.
+  const ALLOWANCE_MS = 300;
+  test(`a stalled shell and today's lookup share one five-second budget: the lookup resolves within it and ${ALLOWANCE_MS}ms, finds the copy, and logs once`, async (t) => {
+    const s = failing({ fail: 'stall' });
+    // A `which` that never answers, first on the PATH Rundock has: today's
+    // lookup must not need a process, or the stall would cost its time too.
+    const tools = s.m.dir('slow-tools');
+    const ran = path.join(tools, 'ran');
+    fs.mkdirSync(tools);
+    fs.writeFileSync(path.join(tools, 'which'), `#!${process.execPath}\nrequire('fs').appendFileSync(${JSON.stringify(ran)}, 'which\\n');\nsetTimeout(() => {}, 8000);\n`);
+    fs.chmodSync(path.join(tools, 'which'), 0o755);
+    const warn = quietWarn();
+    try {
+      await on(s.m, { today: [tools, s.today.dir] }, () => {
+        const started = process.hrtime.bigint();
+        const found = lookup().lookupClaude();
+        const ms = Number(process.hrtime.bigint() - started) / 1e6;
+        t.diagnostic(`the lookup took ${ms.toFixed(1)}ms`);
+        assert.ok(ms <= lookup().LOGIN_SHELL_TIMEOUT_MS + ALLOWANCE_MS, `the lookup took ${Math.round(ms)}ms`);
+        assert.strictEqual(found.bin, s.today.bin, 'today\'s lookup found the copy');
+      });
+      assert.strictEqual(warn.lookupLines().length, 1, `logged once: ${JSON.stringify(warn.said)}`);
+      assert.strictEqual(fs.existsSync(ran), false, 'and no `which` was run');
+    } finally { warn.restore(); }
+  });
+
+  test(`when no folder on the PATH holds a copy, \`which\` is asked only with what is left of the budget: after a stalled shell, nothing, and the lookup still ends within it and ${ALLOWANCE_MS}ms`, async (t) => {
+    const s = failing({ fail: 'stall' });
+    const tools = s.m.dir('slow-tools');
+    const ran = path.join(tools, 'ran');
+    fs.mkdirSync(tools);
+    fs.writeFileSync(path.join(tools, 'which'), `#!${process.execPath}\nrequire('fs').appendFileSync(${JSON.stringify(ran)}, 'which\\n');\nsetTimeout(() => {}, 8000);\n`);
+    fs.chmodSync(path.join(tools, 'which'), 0o755);
+    const warn = quietWarn();
+    try {
+      await on(s.m, { today: [tools] }, () => {
+        const started = process.hrtime.bigint();
+        const found = lookup().lookupClaude();
+        const ms = Number(process.hrtime.bigint() - started) / 1e6;
+        t.diagnostic(`the lookup took ${ms.toFixed(1)}ms`);
+        assert.ok(ms <= lookup().LOGIN_SHELL_TIMEOUT_MS + ALLOWANCE_MS, `the lookup took ${Math.round(ms)}ms`);
+        assert.strictEqual(found.bin, null, 'no copy');
+      });
+      assert.strictEqual(warn.lookupLines().length, 1, `logged once: ${JSON.stringify(warn.said)}`);
+    } finally { warn.restore(); }
+  });
 });
 
 // ── The five sequences ──
@@ -583,7 +631,7 @@ describe('one module finds claude, and nothing reads its version through a shell
     for (const file of files) {
       const text = src(file);
       if (file === 'lib/runtime/claude-lookup.js') {
-        assert.ok([...text.matchAll(LOOKUP_COMMAND)].length >= 2, 'the lookup itself is where today\'s lookup is run');
+        assert.ok([...text.matchAll(LOOKUP_COMMAND)].length >= 1, 'the lookup itself is where today\'s Windows lookup is run');
         continue;
       }
       for (const m of text.matchAll(LOOKUP_COMMAND)) found.push(`${file}: ${m[0]}`);

@@ -3627,7 +3627,7 @@ const MUTATIONS = [
     "  const value = output.slice(at + BEGIN.length, end).replace(/^\\r?\\n/, '').replace(/\\r?\\n$/, '');\n",
     "  const value = output.split('\\n').find((line) => line.startsWith('/')) || '';\n"],
   [LOOKUP, 'Claude lookup: a login shell that cannot answer blocks the chat instead of falling back',
-    'looking for claude on the PATH Rundock was started with`);\n    return { bin: pathLookup(false)[0] || null };\n',
+    'looking for claude on the PATH Rundock was started with`);\n    return { bin: todaysLookup(deadline) };\n',
     'looking for claude on the PATH Rundock was started with`);\n    return { bin: null };\n'],
   [LOOKUP, 'Claude lookup: a relative PATH entry is used',
     '    if (!path.isAbsolute(dir)) continue;\n',
