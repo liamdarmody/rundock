@@ -3645,6 +3645,28 @@ const MUTATIONS = [
   [LOOKUP_DESKTOP, "Claude lookup: the desktop app's sign-in check runs whichever claude comes first on its PATH",
     "  const bin = lookup().lookupClaude().bin;\n",
     "  const bin = 'claude';\n"],
+  [LOOKUP, 'Claude lookup: a Windows npm launcher is started itself, not through its package',
+    "  if (platform !== 'win32' || !/\\.(cmd|bat)$/i.test(bin)) return { command: bin, args: [] };\n",
+    '  return { command: bin, args: [] };\n'],
+  [LOOKUP, "Claude lookup: an npm package's entry outside the package folder is started",
+    "  if (!inside || inside === '..' || inside.startsWith(`..${path.sep}`) || path.isAbsolute(inside)) {\n",
+    '  if (false) {\n'],
+  [LOOKUP, "Claude lookup: today's lookup runs after a shell answer that names no copy",
+    '  return firstNotBelowFloor(executablesAlong([...login.dirs, ...extra]), versionPlatform);\n',
+    '  const candidates = executablesAlong([...login.dirs, ...extra]);\n'
+      + '  return candidates.length ? firstNotBelowFloor(candidates, versionPlatform) : { bin: todaysLookup(deadline) };\n'],
+  [LOOKUP, 'Claude lookup: a start PATH recorded empty is given to the shell as the system default',
+    '    env: { ...shellEnv(env), PATH: deps.startPath === undefined ? SYSTEM_PATH : deps.startPath }, cwd: env.HOME || os.homedir(), stdio: codexRuntime.PROBE_STDIO,\n',
+    '    env: { ...shellEnv(env), PATH: deps.startPath || SYSTEM_PATH }, cwd: env.HOME || os.homedir(), stdio: codexRuntime.PROBE_STDIO,\n'],
+  [LOOKUP, "Claude lookup: today's lookup takes five seconds of its own after a stalled shell",
+    "  if (left <= 0) return null;\n  try {\n    return execSync('which claude', { timeout: left,",
+    "  try {\n    return execSync('which claude', { timeout: 5000,"],
+  [LOOKUP, 'Claude lookup: the lookup module reads a version through a shell',
+    '  const said = justRead ? versionText : readClaudeVersion(bin, VERSION_PROBE_TIMEOUT_MS, platform);\n',
+    '  const said = justRead ? versionText : String(execSync(`"${bin}" --version`, { timeout: VERSION_PROBE_TIMEOUT_MS }));\n'],
+  [LOOKUP_DESKTOP, "Claude lookup: the setup wizard's check says ready without the sign-in check",
+    "    if (!isClaudeAuthenticated()) return { status: 'not-authenticated' };\n",
+    ''],
 ];
 const REPORTER = ['--test-reporter', 'spec'];
 
