@@ -69,6 +69,16 @@ const MUTATIONS = [
   [CUT, 'the tail kept is the one read at the last look, not the first',
     '        size = now;\n        tail = readTail(capture.fd, size, CAPTURE_BYTES);',
     '        size = now;'],
+  [CUT, 'a tail is read from the end of the file, not its start',
+    '  return buf.subarray(0, n ? deps.captureRead(fd, buf, end - n) : 0);',
+    '  return buf.subarray(0, n ? deps.captureRead(fd, buf, 0) : 0);'],
+  // ===== A CUT THAT FAILS LOSES NOTHING, AND IS TRIED AGAIN =====
+  [CUT, 'a cut that fails leaves the file as it was',
+    '    } catch (e) { /* the next look tries again */ }',
+    '    } catch (e) { try { fs.ftruncateSync(capture.fd, 0); } catch (x) { /* already gone */ } }'],
+  [CUT, 'a cut that fails is tried again at the next look',
+    '    } catch (e) { /* the next look tries again */ }',
+    '    } catch (e) { clearInterval(capture.trim); }'],
   // ===== A FILE RUNDOCK COULD NOT CHECK IS A FAILED RUN, AND SAYS WHY =====
   [ENDING, 'YAML the rules do not model is never called refused',
     '    return read.unmodeled ? { refused: false, unchecked: { line: read.line } } : { refused: true };',
