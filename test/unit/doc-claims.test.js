@@ -249,6 +249,17 @@ describe('ARCHITECTURE.md: what happens to a call when the permission hook fails
       for (const e of settings.hooks[event]) assert.ok(!('onFailure' in e.hooks[0]), `${event} does not`);
     }
   });
+
+  test('going back to an earlier release keeps the field, as the record the passage names shows', () => {
+    const named = passage.match(/`(scripts\/hook-on-failure-undo\/[a-z-]+\.json)`/);
+    assert.ok(named, 'the passage names the record');
+    const record = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', named[1]), 'utf-8'));
+    assert.match(passage, new RegExp(`the ${record.release.replace(/\./g, '\\.')} release's own scaffold`), 'the release the passage names is the one recorded');
+    assert.match(passage, /left the settings file byte for byte/);
+    assert.strictEqual(record.releaseChangedTheFile, false, 'and the record says the release left it as it was');
+    assert.deepStrictEqual(record.leftByRelease, record.written);
+    assert.match(passage, /renamed over it only once that write has finished/, 'the passage says the file is written whole');
+  });
 });
 
 describe('SKILLS.md: only slugs are injected into the prompt', () => {
