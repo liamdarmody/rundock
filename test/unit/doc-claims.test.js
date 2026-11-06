@@ -262,6 +262,18 @@ describe('ARCHITECTURE.md: what happens to a call when the permission hook fails
   });
 });
 
+describe('ARCHITECTURE.md: the oldest Claude Code Rundock starts', () => {
+  // The number a contributor reads is the one the flag table derives, so a
+  // flag that raises the floor fails here until the sentence says so.
+  test('the runtime section names the floor the flag table derives, and where the table is', () => {
+    const { FLOOR } = require('../../lib/runtime/claude-floor.js');
+    const paragraph = architecture.split('\n').find((line) => line.includes('`lib/runtime/claude-floor.js`'));
+    assert.ok(paragraph, 'the runtime section names the flag table');
+    assert.ok(paragraph.includes(`below ${FLOOR}, the first release that accepts every flag Rundock passes`),
+      `and the floor it derives, ${FLOOR}`);
+  });
+});
+
 describe('SKILLS.md: only slugs are injected into the prompt', () => {
   // The claim: "Rundock injects a bare list of slugs into the agent's prompt
   // (`Skills: alpha, beta`) and nothing else: no description, no summary."
