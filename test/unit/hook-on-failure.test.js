@@ -57,16 +57,62 @@ function asAnEarlierReleaseWroteIt(dir) {
   return settings;
 }
 
-// Every write the code under test makes to one file, counted, and still made.
+// Every time the code under test replaces one file, counted, and still made:
+// a write straight to it, or a rename onto it.
 function writesTo(file, fn) {
-  const real = fs.writeFileSync;
+  const real = { writeFileSync: fs.writeFileSync, renameSync: fs.renameSync };
+  let resolved = file;
+  try { resolved = fs.realpathSync(file); } catch (e) { /* not there yet */ }
+  const hits = (p) => [file, resolved].includes(path.resolve(String(p)));
   let count = 0;
   fs.writeFileSync = function (target, ...rest) {
-    if (path.resolve(String(target)) === file) count++;
-    return real.call(this, target, ...rest);
+    if (hits(target)) count++;
+    return real.writeFileSync.call(this, target, ...rest);
   };
-  try { fn(); } finally { fs.writeFileSync = real; }
+  fs.renameSync = function (from, to, ...rest) {
+    if (hits(to)) count++;
+    return real.renameSync.call(this, from, to, ...rest);
+  };
+  try { fn(); } finally { Object.assign(fs, real); }
   return count;
+}
+
+// A Rundock entry the next open has to repair, so that open writes the file.
+function needingRepair(dir) {
+  const settings = read(dir);
+  for (const e of ourPre(settings)) e.hooks[0].onFailure = 'continue';
+  save(dir, settings);
+}
+
+// Temporary files left beside the settings file.
+const leftovers = (dir) => fs.readdirSync(path.join(dir, '.claude')).filter((n) => n.startsWith('settings.local.json.'));
+
+const enospc = () => Object.assign(new Error('ENOSPC: no space left on device, write'), { code: 'ENOSPC' });
+
+// A write that starts and then fails partway, as a full disk does. Any file
+// whose name starts with the settings file's gets its first ten bytes and
+// then ENOSPC, whether it is written through a descriptor or in one call
+// straight over the file.
+function failingPartway(fn) {
+  const real = { openSync: fs.openSync, writeSync: fs.writeSync, writeFileSync: fs.writeFileSync };
+  const named = (p) => path.basename(String(p)).startsWith('settings.local.json');
+  const opened = new Set();
+  fs.openSync = function (p, flags, ...rest) {
+    const fd = real.openSync.call(this, p, flags, ...rest);
+    if (named(p) && /[wa+]/.test(String(flags))) opened.add(fd);
+    return fd;
+  };
+  fs.writeSync = function (fd, data, ...rest) {
+    if (!opened.has(fd)) return real.writeSync.call(this, fd, data, ...rest);
+    real.writeSync.call(this, fd, Buffer.from(data).subarray(0, 10));
+    throw enospc();
+  };
+  fs.writeFileSync = function (p, data, ...rest) {
+    if (!named(p)) return real.writeFileSync.call(this, p, data, ...rest);
+    real.writeFileSync.call(this, p, Buffer.from(data).subarray(0, 10));
+    throw enospc();
+  };
+  try { return fn(); } finally { Object.assign(fs, real); }
 }
 
 // What the code under test said through console.warn, kept off the screen.
@@ -299,24 +345,75 @@ describe('the five sequences', () => {
       assert.ok(said.some((w) => w.includes(settingsPath(dir))), 'the failure is logged, naming the file');
     });
 
-    test('a settings file the reconcile cannot write is left as it is and logged, and never holds a value but "block"', () => {
+    test('a write that fails partway leaves the settings file byte for byte, logs it, and leaves no temporary file', () => {
       const dir = workspace();
       open(dir);
-      asAnEarlierReleaseWroteIt(dir);
+      needingRepair(dir);
       const before = bytes(dir);
-      const file = settingsPath(dir);
-      const real = fs.writeFileSync;
-      fs.writeFileSync = function (target, ...rest) {
-        if (path.resolve(String(target)) === file) throw Object.assign(new Error('ENOSPC: no space left on device, write'), { code: 'ENOSPC' });
-        return real.call(this, target, ...rest);
-      };
-      let said;
-      try { said = warnings(() => open(dir)); } finally { fs.writeFileSync = real; }
-      assert.strictEqual(bytes(dir), before, 'left as it is');
-      assert.ok(said.some((w) => w.includes('ENOSPC')), 'the failure is logged');
+      const said = failingPartway(() => warnings(() => open(dir)));
+      assert.strictEqual(bytes(dir), before, 'left as it was, not cut short');
+      assert.ok(said.some((w) => w.includes('ENOSPC') && w.includes(settingsPath(dir))), 'the failure is logged, naming the file');
+      assert.deepStrictEqual(leftovers(dir), [], 'and the temporary file is gone');
       open(dir);
       const values = read(dir).hooks.PreToolUse.flatMap((e) => e.hooks.map((h) => h.onFailure));
       assert.deepStrictEqual([...new Set(values)], ['block'], 'the next open that can write writes "block", and nothing else');
     });
+
+    test('a write whose last step, the rename, fails leaves the settings file as it was and no temporary file', () => {
+      const dir = workspace();
+      open(dir);
+      needingRepair(dir);
+      const before = bytes(dir);
+      const real = fs.renameSync;
+      fs.renameSync = function (from, to, ...rest) {
+        if (path.basename(String(to)) === 'settings.local.json') throw Object.assign(new Error('EXDEV: cross-device link not permitted, rename'), { code: 'EXDEV' });
+        return real.call(this, from, to, ...rest);
+      };
+      let said;
+      try { said = warnings(() => open(dir)); } finally { fs.renameSync = real; }
+      assert.strictEqual(bytes(dir), before);
+      assert.ok(said.some((w) => w.includes('EXDEV') && w.includes(settingsPath(dir))), 'the failure is logged, naming the file');
+      assert.deepStrictEqual(leftovers(dir), []);
+    });
+
+    test('a settings file that cannot be written is left as it is rather than replaced, and logged', { skip: process.platform === 'win32' || (process.getuid && process.getuid() === 0) }, () => {
+      const dir = workspace();
+      open(dir);
+      needingRepair(dir);
+      const before = bytes(dir);
+      fs.chmodSync(settingsPath(dir), 0o444);
+      let said;
+      try { said = warnings(() => open(dir)); } finally { fs.chmodSync(settingsPath(dir), 0o644); }
+      assert.strictEqual(bytes(dir), before, 'a read-only file is not swapped for a new one');
+      assert.ok(said.some((w) => w.includes(settingsPath(dir))), 'the failure is logged, naming the file');
+      assert.deepStrictEqual(leftovers(dir), []);
+    });
+
+    test('a settings file reached through a link is written through it, and keeps its permissions', { skip: process.platform === 'win32' }, () => {
+      const dir = workspace();
+      open(dir);
+      needingRepair(dir);
+      const elsewhere = path.join(makeTempDir('hook-on-failure-kept-'), 'settings.json');
+      fs.renameSync(settingsPath(dir), elsewhere);
+      fs.symlinkSync(elsewhere, settingsPath(dir));
+      fs.chmodSync(elsewhere, 0o600);
+      open(dir);
+      assert.ok(fs.lstatSync(settingsPath(dir)).isSymbolicLink(), 'still a link');
+      const values = JSON.parse(fs.readFileSync(elsewhere, 'utf-8')).hooks.PreToolUse.map((e) => e.hooks[0].onFailure);
+      assert.deepStrictEqual(values, ['block', 'block', 'block', 'block'], 'the file it names was written');
+      assert.strictEqual(fs.statSync(elsewhere).mode & 0o777, 0o600, 'with its permissions as they were');
+      assert.deepStrictEqual(fs.readdirSync(path.dirname(elsewhere)), ['settings.json'], 'and nothing left beside it');
+    });
+  });
+});
+
+describe('the other writers of the settings file write it whole as well', () => {
+  test('switching the sandbox block, when the write fails partway, leaves the file as it was', () => {
+    const dir = workspace();
+    open(dir);
+    const before = bytes(dir);
+    assert.throws(() => failingPartway(() => scaffold.reconcileSandboxForMode(dir, 'off', 'darwin')), /ENOSPC/);
+    assert.strictEqual(bytes(dir), before);
+    assert.deepStrictEqual(leftovers(dir), []);
   });
 });
