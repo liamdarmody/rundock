@@ -408,6 +408,9 @@ describe('the five sequences', () => {
 });
 
 describe('the other writers of the settings file write it whole as well', () => {
+  const config = require('../../lib/config.js');
+  const sandboxStatus = require('../../lib/workspace/sandbox-status.js');
+
   test('switching the sandbox block, when the write fails partway, leaves the file as it was', () => {
     const dir = workspace();
     open(dir);
@@ -415,5 +418,20 @@ describe('the other writers of the settings file write it whole as well', () => 
     assert.throws(() => failingPartway(() => scaffold.reconcileSandboxForMode(dir, 'off', 'darwin')), /ENOSPC/);
     assert.strictEqual(bytes(dir), before);
     assert.deepStrictEqual(leftovers(dir), []);
+  });
+
+  test('bringing a person\'s own sandbox rules in, when the write and the put-back both fail partway, leaves the file as it was', () => {
+    const dir = workspace();
+    fs.writeFileSync(path.join(dir, '.rundock', 'state.json'), JSON.stringify({ workspaceMode: 'code' }, null, 2));
+    save(dir, { sandbox: { enabled: true, filesystem: { allowWrite: [dir], denyWrite: ['*.env'] } }, hooks: { PreToolUse: [] } });
+    const original = config.getWorkspace();
+    config.setWorkspace(dir);
+    try {
+      const { digest } = sandboxStatus.reviewSandboxImport(dir, 'darwin');
+      const before = bytes(dir);
+      warnings(() => assert.throws(() => failingPartway(() => sandboxStatus.importSandboxRules(dir, digest, 'darwin')), /ENOSPC/));
+      assert.strictEqual(bytes(dir), before);
+      assert.deepStrictEqual(leftovers(dir), []);
+    } finally { config.setWorkspace(original); }
   });
 });
