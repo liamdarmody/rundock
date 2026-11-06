@@ -377,6 +377,13 @@ const KEYCHAIN_PARSE = { src: path.join(ROOT, 'scripts', 'code-mode-parse.js'), 
 const KEYCHAIN_HOOK_UNIT = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/keychain-commands.test.js' };
 const KEYCHAIN_SPAWN_ENV = { src: path.join(ROOT, 'lib', 'runtime', 'claude.js'), suite: 'test/unit/claude-runtime-lib.test.js' };
 const KEYCHAIN_HOOK_FLOW = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/integration/keychain-approvals.test.js' };
+// A credential file reached by a relative name, a glob or a link. Where the
+// shell can be when a word runs is proven by the suite that drives the hook
+// over those spellings. The grant check's trust in a `secret` tag is proven
+// only through the real server, because the tag the hook attaches is what
+// reaches that check.
+const SECRET_REACH = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/secret-reach.test.js' };
+const SECRET_REACH_GRANT = { src: path.join(ROOT, 'lib', 'workspace', 'boundary.js'), suite: 'test/integration/secret-reach-card.test.js' };
 
 const MUTATIONS = [
   // ===== ONE DIRECTORY UNDER TWO NAMES IS ONE IDENTITY =====
@@ -1014,6 +1021,13 @@ const MUTATIONS = [
   [BOUNDARY, 'a secrets-registry crossing is covered by no stored grant, however broad',
     '  if (crossing.secret === true || isSecretPath(crossing.path, home)) return false;',
     '  if (crossing.secret === true) return false;'],
+  // The other half. A credential file that is a link arrives at the path it
+  // leads to, which no registry entry names, so only the `secret` tag the hook
+  // attached says what it is. Drop the tag check and a grant on the folder the
+  // link leads into answers for the credential file with no card.
+  [SECRET_REACH_GRANT, 'a crossing tagged secret is covered by no stored grant, even where the registry does not name its path',
+    '  if (crossing.secret === true || isSecretPath(crossing.path, home)) return false;',
+    '  if (isSecretPath(crossing.path, home)) return false;'],
   [CHAT_VIEW, 'the whole-folder button is never offered for a secrets-tier crossing, nor where an answer file is among the places reached',
     '  const wholeFolderOffered = grantable\n'
     + '    && !(flaggedCrossing && (flaggedCrossing.secret || flaggedCrossing.answerFile))\n'
@@ -3476,6 +3490,13 @@ const MUTATIONS = [
   [SHELL_CODE, "Shell code: a new line or ; before a cd is not trusted",
     "words[0].raw === 'cd' && ['', ';', '\\n', '&&'].includes(seg.op)",
     "words[0].raw === 'cd' && ['', '&&'].includes(seg.op)"],
+  // `certain` says a move lasts for the words after it. Call every move
+  // certain and a cd that may not last (in a group, an `if`, a loop or a
+  // pipeline, or after `||`) is taken as where the shell is, so a credential
+  // file named relative to where the shell really is goes unasked.
+  [SECRET_REACH, "Credential reads: a cd that may not last is not taken as where the shell is",
+    "      const certain = depth === 0 && compound === 0 && plain\n        && ['', ';', '\\n', '&&'].includes(seg.op) && !['|', '&'].includes(after);",
+    "      const certain = true;"],
   [SHELL_CODE, "Shell code: a command found in code is spliced into the shell's text again",
     "    for (const c of [...code.commands, ...subs.bodies]) commands.push({ text: c, at });",
     "    for (const c of [...code.commands, ...subs.bodies]) text += c + '\\n';"],
