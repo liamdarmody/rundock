@@ -69,6 +69,15 @@ function writesTo(file, fn) {
   return count;
 }
 
+// What the code under test said through console.warn, kept off the screen.
+function warnings(fn) {
+  const real = console.warn;
+  const said = [];
+  console.warn = (...args) => { said.push(args.join(' ')); };
+  try { fn(); } finally { console.warn = real; }
+  return said;
+}
+
 describe('every PreToolUse entry Rundock writes carries onFailure: "block"', () => {
   test('the value is one constant, and that constant is exactly the string "block"', () => {
     assert.strictEqual(scaffold.HOOK_ON_FAILURE, 'block');
@@ -266,5 +275,48 @@ describe('the five sequences', () => {
     for (const e of ourPre(after)) assert.strictEqual(e.hooks[0].onFailure, 'block', `${e.matcher} gets the field`);
     for (const e of ourPre(after)) delete e.hooks[0].onFailure;
     assert.deepStrictEqual(after, earlier, 'and with the field taken out again, the file is the earlier release\'s, key for key');
+  });
+
+  describe('the control failing', () => {
+    test('a settings file the reconcile cannot parse is left byte for byte, and the failure is logged', () => {
+      const bodies = ['{"hooks": {"PreToolUse": [', '// my notes\n{}', 'not json', '[]', 'null', '"block"'];
+      for (const body of bodies) {
+        const dir = workspace();
+        fs.writeFileSync(settingsPath(dir), body);
+        let written;
+        const said = warnings(() => { written = writesTo(settingsPath(dir), () => open(dir)); });
+        assert.strictEqual(bytes(dir), body, `${JSON.stringify(body)} is left as it is`);
+        assert.strictEqual(written, 0, `${JSON.stringify(body)}: nothing is written`);
+        assert.ok(said.some((w) => w.includes(settingsPath(dir))), `${JSON.stringify(body)}: the failure is logged, naming the file`);
+      }
+    });
+
+    test('a settings file the reconcile cannot read is left as it is, and the failure is logged', () => {
+      const dir = workspace();
+      fs.mkdirSync(settingsPath(dir));
+      const said = warnings(() => open(dir));
+      assert.ok(fs.statSync(settingsPath(dir)).isDirectory(), 'still what it was');
+      assert.ok(said.some((w) => w.includes(settingsPath(dir))), 'the failure is logged, naming the file');
+    });
+
+    test('a settings file the reconcile cannot write is left as it is and logged, and never holds a value but "block"', () => {
+      const dir = workspace();
+      open(dir);
+      asAnEarlierReleaseWroteIt(dir);
+      const before = bytes(dir);
+      const file = settingsPath(dir);
+      const real = fs.writeFileSync;
+      fs.writeFileSync = function (target, ...rest) {
+        if (path.resolve(String(target)) === file) throw Object.assign(new Error('ENOSPC: no space left on device, write'), { code: 'ENOSPC' });
+        return real.call(this, target, ...rest);
+      };
+      let said;
+      try { said = warnings(() => open(dir)); } finally { fs.writeFileSync = real; }
+      assert.strictEqual(bytes(dir), before, 'left as it is');
+      assert.ok(said.some((w) => w.includes('ENOSPC')), 'the failure is logged');
+      open(dir);
+      const values = read(dir).hooks.PreToolUse.flatMap((e) => e.hooks.map((h) => h.onFailure));
+      assert.deepStrictEqual([...new Set(values)], ['block'], 'the next open that can write writes "block", and nothing else');
+    });
   });
 });
