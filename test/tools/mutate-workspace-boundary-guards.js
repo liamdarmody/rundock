@@ -170,6 +170,7 @@ const STOP_ASK_SCAFFOLD = { src: path.join(ROOT, 'lib', 'workspace', 'scaffold.j
 // with the one the code writes.
 const ON_FAILURE = { src: path.join(ROOT, 'lib', 'workspace', 'scaffold.js'), suite: 'test/unit/hook-on-failure.test.js' };
 const ON_FAILURE_DOC = { src: path.join(ROOT, 'lib', 'workspace', 'scaffold.js'), suite: 'test/unit/doc-claims.test.js' };
+const ON_FAILURE_IMPORT = { src: path.join(ROOT, 'lib', 'workspace', 'sandbox-status.js'), suite: 'test/unit/hook-on-failure.test.js' };
 const STOP_ASK_GLUE = { src: path.join(ROOT, 'lib', 'runtime', 'codex-glue.js'), suite: 'test/integration/codex-stop-and-ask.test.js' };
 // A run nobody can be asked from is told to carry on or say it failed: the
 // hook that decides who can be asked and hands every refusal over in those
@@ -3611,6 +3612,33 @@ const MUTATIONS = [
   [ON_FAILURE, 'On failure: a settings file holding JSON that is not an object is rewritten',
     "    if (!settingsLocal || typeof settingsLocal !== 'object' || Array.isArray(settingsLocal)) {\n      throw new Error(`left ${settingsLocalPath} as it is, it does not hold a JSON object`);\n    }\n",
     ''],
+  [ON_FAILURE, 'On failure: the settings file is written in place, with no temporary file and no rename',
+    'function writeWhole(file, body) {\n',
+    'function writeWhole(file, body) {\n  fs.writeFileSync(file, body); return;\n'],
+  [ON_FAILURE, 'On failure: the temporary file is left behind when the write fails',
+    '    if (temp !== null) { try { fs.rmSync(temp, { force: true }); } catch (e2) { /* nothing to remove */ } }\n',
+    ''],
+  [ON_FAILURE, 'On failure: a read-only settings file is replaced, because its folder is writable',
+    '      fs.accessSync(target, fs.constants.W_OK);\n',
+    ''],
+  [ON_FAILURE, 'On failure: a settings file reached through a link is replaced by a plain file',
+    '      target = fs.realpathSync(file);\n',
+    ''],
+  [ON_FAILURE, 'On failure: the settings file loses its permission bits when it is written',
+    '      mode = fs.statSync(target).mode & 0o7777;\n',
+    ''],
+  [ON_FAILURE, 'On failure: the reconcile on open writes the settings file in place',
+    '      writeWhole(settingsLocalPath, body);',
+    '      fs.writeFileSync(settingsLocalPath, body);'],
+  [ON_FAILURE, 'On failure: the sandbox switch writes the settings file in place',
+    '\n    writeWhole(settingsLocalPath, body);',
+    '\n    fs.writeFileSync(settingsLocalPath, body);'],
+  [ON_FAILURE_IMPORT, 'On failure: bringing in a person\'s sandbox rules writes the settings file in place',
+    '    writeWhole(settingsFile(dir), body);',
+    '    fs.writeFileSync(settingsFile(dir), body);'],
+  [ON_FAILURE_IMPORT, 'On failure: the put-back after a failed import writes the settings file in place',
+    'if (s.bytes) { writeWhole(s.file, s.bytes);',
+    'if (s.bytes) { fs.writeFileSync(s.file, s.bytes);'],
 ];
 const REPORTER = ['--test-reporter', 'spec'];
 
