@@ -8,18 +8,17 @@
 // The permission decision path spans THREE layers (see ARCHITECTURE.md):
 // the PreToolUse hook script, the server bridge, and THIS module in the
 // browser. The auto-allow POLICY for low-risk read-only commands lives here,
-// client-side, and nowhere else; what counts as read-only FOR A BASH COMMAND
-// is a separate question, answered once in public/read-only-shell.js and read
-// by the hook as well, because a command the hook read as harmless used to be
-// carded here anyway by a narrower list kept alongside the policy.
+// client-side, and nowhere else; what counts as read-only is a separate
+// question, answered once in public/read-only-shell.js and read by the hook as
+// well, because a command the hook read as harmless used to be carded here
+// anyway by a narrower list kept alongside the policy.
 //
-// SCOPED TO BASH, DELIBERATELY. classifyRisk's PowerShell branch below still
-// judges read-only-ness with a wider heuristic of its own (any `Get-*`,
-// `Where-Object`) that the shared module does not know about, so the hook and
-// this file can still disagree about the same PowerShell text in exactly the
-// shape the Bash path no longer can. That is a known gap carried on its own
-// card; this comment states where the single answer stops rather than
-// implying the whole file has one.
+// ONE ANSWER FOR EACH SHELL, AND NO LIST HERE. A Bash command is low only when
+// isReadOnlyShellCommand reads it as read-only, and a PowerShell command only
+// when isReadOnlyPowerShellCommand does. The PowerShell branch below used to
+// keep a heuristic of its own, anchored to the start of the command (any
+// `Get-*` first), so a write, a send or a delete after a read or inside its
+// brackets ran with no card, on the platform with no sandbox under it.
 //
 // What this module decides (pinned by test/unit/permissions.test.js):
 //   classifyRisk()        low / medium / high per tool request
@@ -39,6 +38,7 @@
   var DISCARDING_REDIRECT_RE = RundockReadOnlyShell.DISCARDING_REDIRECT_RE;
   var shellSegments = RundockReadOnlyShell.shellSegments;
   var isReadOnlyShellCommand = RundockReadOnlyShell.isReadOnlyShellCommand;
+  var isReadOnlyPowerShellCommand = RundockReadOnlyShell.isReadOnlyPowerShellCommand;
   var isDestructiveShellCommand = RundockReadOnlyShell.isDestructiveShellCommand;
 
   const BASH_DESCRIPTIONS = {
@@ -68,6 +68,15 @@
   // confirmation on Remove-Item, Copy-Item, Move-Item, Set-Content and
   // New-Item, which is why it was here in the first place.
   var FORCE_SAFE_READ_CMDLETS = /^(Get-ChildItem|gci|dir|ls|Get-Content|gc|cat|type|Get-Item|gi|Get-Location|gl|Test-Path|Resolve-Path|Split-Path|Select-String|sls|Get-Acl|Get-ItemProperty)\b/i;
+
+  // WHERE POWERSHELL STARTS A COMMAND: the start of the line, after `;`, `&`,
+  // `|` or a new line, and inside `( )`, `$( )`, `@( )` or a block, each of
+  // which runs what it holds. A delete is looked for at every one, so one
+  // inside a read's brackets is graded as the delete it is.
+  var POWERSHELL_COMMAND_START = /(^|[;&|\r\n({]\s*)/.source;
+  var POWERSHELL_DELETE = new RegExp(POWERSHELL_COMMAND_START + '(Remove-Item|ri|rm|del|erase|rmdir|rd)\\b', 'i');
+  var POWERSHELL_DESTRUCTIVE = new RegExp(POWERSHELL_COMMAND_START
+    + '(Remove-Item|ri|rm|del|erase|rmdir|rd|Stop-Process|spps|kill|Stop-Service|Format-Volume|Clear-Content|Clear-Item|Set-ExecutionPolicy|Uninstall-[A-Za-z]+)\\b', 'i');
 
   function forceIsDestructive(cmd) {
     if (!/-Force\b/i.test(cmd)) return false;
@@ -150,13 +159,13 @@
       // Windows shell tool. Same input shape as Bash (a `command` field).
       // Destructive checks run first so a read that also deletes can't be low.
       const cmd = (input.command || '').trim();
-      const highRisk = /(^|[;&|]\s*)(Remove-Item|ri|rm|del|erase|rmdir|rd|Stop-Process|spps|kill|Stop-Service|Format-Volume|Clear-Content|Clear-Item|Set-ExecutionPolicy|Uninstall-[A-Za-z]+)\b/i.test(cmd)
+      const highRisk = POWERSHELL_DESTRUCTIVE.test(cmd)
         || forceIsDestructive(cmd)
         || /\b(iex|Invoke-Expression)\b/i.test(cmd)
         || /\b(irm|Invoke-RestMethod|iwr|Invoke-WebRequest|curl|wget)\b[\s\S]*\|\s*(iex|Invoke-Expression)/i.test(cmd);
       if (highRisk) return 'high';
-      const lowRisk = /^(Get-[A-Za-z]+|ls|dir|gci|gc|cat|type|pwd|gl|echo|Write-Output|Write-Host|Select-Object|Where-Object|Measure-Object|Test-Path|Resolve-Path|Split-Path|Format-Table|Format-List|Sort-Object)\b/i.test(cmd);
-      if (lowRisk) return 'low';
+      // Low only when the shared reading reads every part of it as a read.
+      if (isReadOnlyPowerShellCommand(cmd)) return 'low';
       return 'medium';
     }
     if (toolName === 'WriteFile') {
@@ -206,7 +215,7 @@
       const cmd = (input.command || '').trim();
       detail = cmd;
       summary = input.description || 'Run PowerShell command';
-      if (/(^|[;&|]\s*)(Remove-Item|ri|rm|del|erase|rmdir|rd)\b/i.test(cmd)) context = 'This will delete files';
+      if (POWERSHELL_DELETE.test(cmd)) context = 'This will delete files';
       else if (forceIsDestructive(cmd)) context = 'This uses -Force and may overwrite or delete without confirmation';
       else if (/\b(iex|Invoke-Expression)\b/i.test(cmd)) context = 'This executes a downloaded or dynamic script';
     } else if (toolName === 'WriteFile') {
