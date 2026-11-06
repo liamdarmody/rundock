@@ -102,7 +102,7 @@ const OTHER_CLAUDE_LAUNCHES = [
   { at: 'lib/runtime/claude-lookup.js | readClaudeVersion | execFileSync(bin)',
     why: 'asks a copy the lookup found, or the one spawnClaude is about to start, for its version (`--version`, no shell), with the app\'s own environment, and exits: it starts no agent and runs no tool',
     testedBy: [HERE, 'the app never marks its own environment as Rundock\'s'] },
-  { at: 'electron/main.js | isClaudeAuthenticated | execFileSync(launch.command)',
+  { at: 'electron/claude-check.js | isClaudeAuthenticated | execFileSync(launch.command)',
     why: 'the desktop\'s sign-in check: the copy the lookup chose, run with its arguments and no shell, in the main process with no --settings and the desktop\'s own environment, so the hook decides nothing for it; test/unit/claude-lookup.test.js runs it, lifted from main.js, against stub copies',
     testedBy: [ENVIRONMENTS, 'the hook decides nothing for a process started with the app\'s own environment'] },
 ];
@@ -113,7 +113,7 @@ const NOT_CLAUDE = [
   { at: 'codex.js | resolveCodexBin | exec(lookupCmd)', runs: 'a lookup of the Codex binary on the PATH' },
   { at: "codex.js | detectCodex | exec(platform === 'win32' ? 'where.exe codex' : 'which codex')", runs: 'a lookup of the Codex binary on the PATH' },
   { at: 'codex.js | detectCodex | exec(`"${bin}" --version`)', runs: "Codex's version" },
-  { at: 'electron/main.js | ensureClaudeOnUserPath | execSync(`powershell -NoProfile -ExecutionPolicy Bypass -Command "${psCmd}"`)', runs: 'a PowerShell change to the Windows PATH' },
+  { at: 'electron/claude-check.js | ensureClaudeOnUserPath | execSync(`powershell -NoProfile -ExecutionPolicy Bypass -Command "${psCmd}"`)', runs: 'a PowerShell change to the Windows PATH' },
   { at: 'electron/main.js | launchCodexSignIn | spawn(`start "Sign in to Codex" cmd /k ""${bin}" login"`)', runs: "Codex's own sign-in, on Windows" },
   { at: "electron/main.js | launchCodexSignIn | spawn('open')", runs: "Codex's own sign-in, on macOS" },
   { at: "electron/main.js | launchCodexSignIn | spawn('x-terminal-emulator')", runs: "Codex's own sign-in, on Linux" },
@@ -134,7 +134,7 @@ const NOT_CLAUDE = [
 // The files that load child_process at all. A new one fails here, so a launch
 // through a name this scan does not know cannot arrive unseen with it.
 const LOADS_CHILD_PROCESS = [
-  'codex-appserver.js', 'codex.js', 'electron/main.js', 'lib/delegation/engine.js', 'lib/packages/extension-source.js',
+  'codex-appserver.js', 'codex.js', 'electron/claude-check.js', 'electron/main.js', 'lib/delegation/engine.js', 'lib/packages/extension-source.js',
   'lib/protocol/handlers/files.js', 'lib/protocol/handlers/workspace.js', 'lib/runtime/claude-console.js', 'lib/runtime/claude-lookup.js', 'lib/runtime/claude.js',
   'scripts/code-mode-git.js', 'server.js',
 ];

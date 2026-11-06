@@ -85,8 +85,10 @@ function makeLoginShell(parent, plan, name = 'zsh') {
 // --version is read from `said` beside it on every run, so a copy can be
 // updated in place: CRASH exits 3 having printed nothing, STALL never
 // answers. Every run is logged with its arguments, so a version probe can be
-// told from a chat it was handed. `name` stands in a Windows copy, such as
-// claude.exe or an npm claude.cmd, as a script this machine can run.
+// told from a chat it was handed. Anything else it exits 0 for, as a
+// signed-in copy does, or 1 once signOut() has been called. `name` stands in
+// a Windows copy, such as claude.exe or an npm claude.cmd, as a script this
+// machine can run.
 function makeClaude(dir, said, name = 'claude') {
   fs.mkdirSync(dir, { recursive: true });
   const bin = path.join(dir, name);
@@ -101,13 +103,14 @@ if (args[0] === '--version') {
   else if (said === 'CRASH') process.exit(3);
   else { process.stdout.write(said + '\\n'); process.exit(0); }
 } else {
-  setTimeout(() => process.exit(0), 50);
+  setTimeout(() => process.exit(fs.existsSync(path.join(__dirname, 'signed-out')) ? 1 : 0), 50);
 }
 `);
   fs.chmodSync(bin, 0o755);
   const copy = {
     dir, bin,
     say: (next) => fs.writeFileSync(path.join(dir, 'said'), next),
+    signOut: () => fs.writeFileSync(path.join(dir, 'signed-out'), ''),
     runs: () => {
       const log = path.join(dir, 'runs.jsonl');
       return fs.existsSync(log) ? fs.readFileSync(log, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)) : [];

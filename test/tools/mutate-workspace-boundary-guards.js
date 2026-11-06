@@ -148,7 +148,7 @@ const FLOOR_READ = { src: path.join(ROOT, 'lib', 'runtime', 'claude-lookup.js'),
 // read with the floor's version read, and the desktop app's check asking the
 // same lookup rather than running its own.
 const LOOKUP = { src: path.join(ROOT, 'lib', 'runtime', 'claude-lookup.js'), suite: 'test/unit/claude-lookup.test.js' };
-const LOOKUP_DESKTOP = { src: path.join(ROOT, 'electron', 'main.js'), suite: 'test/unit/claude-lookup.test.js' };
+const LOOKUP_DESKTOP = { src: path.join(ROOT, 'electron', 'claude-check.js'), suite: 'test/unit/claude-lookup.test.js' };
 const DEV_HOME = { src: path.join(ROOT, 'scripts', 'dev-paths.js'), suite: 'test/unit/code-mode-home-in-temp.test.js' };
 const SCAFFOLD_CM = { src: path.join(ROOT, 'lib', 'workspace', 'scaffold.js'), suite: 'test/unit/code-mode-boundary.test.js' };
 const CM_PARSE = { src: path.join(ROOT, 'scripts', 'code-mode-parse.js'), suite: 'test/unit/code-mode-verdict.test.js' };
@@ -3633,9 +3633,9 @@ const MUTATIONS = [
     '    if (!path.isAbsolute(dir)) continue;\n',
     ''],
   [LOOKUP_DESKTOP, "Claude lookup: the desktop app's check keeps its own which",
-    "    found = require('../lib/runtime/claude-lookup.js').installedClaude();\n",
+    "    return lookup().installedClaude();\n",
     "    const bin = execSync('which claude', { timeout: 5000, encoding: 'utf-8' }).trim();\n"
-      + "    found = bin ? { bin, version: require('../lib/runtime/claude-lookup.js').readClaudeVersion(bin) } : null;\n"],
+      + "    return bin ? { bin, version: lookup().readClaudeVersion(bin) } : null;\n"],
   [LOOKUP, 'Claude lookup: the login shell is given the PATH with the install folders in front',
     '    env: { ...shellEnv(env), PATH: deps.startPath === undefined ? SYSTEM_PATH : deps.startPath }, cwd: env.HOME || os.homedir(), stdio: codexRuntime.PROBE_STDIO,\n',
     '    env: shellEnv(env), cwd: env.HOME || os.homedir(), stdio: codexRuntime.PROBE_STDIO,\n'],
@@ -3643,7 +3643,7 @@ const MUTATIONS = [
     '  if (answer && answer.key === key && now >= answer.at && now - answer.at < LOGIN_ANSWER_MS) return { ...answer.login, asked: false };\n',
     ''],
   [LOOKUP_DESKTOP, "Claude lookup: the desktop app's sign-in check runs whichever claude comes first on its PATH",
-    "  const bin = lookup.lookupClaude().bin;\n",
+    "  const bin = lookup().lookupClaude().bin;\n",
     "  const bin = 'claude';\n"],
 ];
 const REPORTER = ['--test-reporter', 'spec'];

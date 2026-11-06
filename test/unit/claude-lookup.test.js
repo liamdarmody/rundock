@@ -666,11 +666,10 @@ describe('one module finds claude, and nothing reads its version through a shell
     const probe = body(src('server.js'), 'getRuntimeStatus');
     assert.ok(probe.includes('claudeLookup.lookupClaude({ retryMissing: true })'), 'the Settings probe asks the lookup');
     assert.ok(probe.includes('claudeLookup.readClaudeVersion(bin)'), 'and reads the version with no shell');
-    const main = src('electron/main.js');
-    const find = body(main, 'findClaude');
-    assert.ok(find.includes("require('../lib/runtime/claude-lookup.js').installedClaude()"), 'findClaude asks the lookup');
-    assert.doesNotMatch(find, /\bexec(?:Sync|FileSync)?\(|\bspawn(?:Sync)?\(/, 'and runs nothing of its own');
-    assert.ok(body(main, 'ensurePath').includes("require('../lib/runtime/claude-lookup.js').addInstallFolders()"), 'the folders the app adds are the lookup\'s, and it keeps the PATH from before them');
+    const installed = body(src('electron/claude-check.js'), 'installedCopy');
+    assert.ok(installed.includes('lookup().installedClaude()'), 'the desktop app\'s install check asks the lookup');
+    assert.ok(installed.includes('lookup().addInstallFolders()'), 'the folders the app adds are the lookup\'s, and it keeps the PATH from before them');
+    assert.doesNotMatch(installed, /\bexec(?:Sync|FileSync)?\(|\bspawn(?:Sync)?\(/, 'and runs nothing of its own');
   });
 });
 
@@ -678,15 +677,23 @@ describe('one module finds claude, and nothing reads its version through a shell
 
 // findClaude and ensurePath as the desktop app has them, run here with the
 // lookup this file wires, so the desktop app's own code is what is checked.
+// The desktop app's Claude Code checks, from the module electron/main.js
+// takes them from (electron/claude-check.js), run here with the lookup this
+// file wires. findClaude in main.js keeps what installedCopy found and its
+// version, and nothing more (the source check below holds it to that), as
+// this does.
+const claudeCheck = () => require('../../electron/claude-check.js');
 function desktopCheck() {
-  const main = src('electron/main.js');
-  const find = body(main, 'findClaude');
-  // Nothing is run before this holds: a check that runs a command line of its
-  // own would run it on the machine running the suite.
-  assert.doesNotMatch(find, /\bexec(?:Sync)?\(/, 'findClaude builds no command line');
-  const code = `${body(main, 'ensurePath')}\nlet claudeFoundVersion = null;\n${find}\nreturn { findClaude, version: () => claudeFoundVersion };`;
-  const desktopRequire = (id) => require(id.startsWith('.') ? path.join(ROOT, 'electron', id) : id);
-  return new Function('require', 'path', 'process', code)(desktopRequire, path, process);
+  let version = null;
+  return {
+    findClaude: () => {
+      const found = claudeCheck().installedCopy();
+      if (!found) return null;
+      version = found.version;
+      return found.bin;
+    },
+    version: () => version,
+  };
 }
 
 describe('the desktop app\'s check reports the copy the lookup chose, with the version it read', { skip: POSIX }, () => {
@@ -822,16 +829,8 @@ describe('the desktop app\'s check reports the copy the lookup chose, with the v
 
 // ── The desktop app's sign-in check runs the copy chats start ──
 
-// isClaudeAuthenticated as the desktop app has it, run here with the lookup
-// this file wires.
-function signInCheck() {
-  const check = body(src('electron/main.js'), 'isClaudeAuthenticated');
-  // Nothing is run before this holds: a check that hands a command line to a
-  // shell would run it on the machine running the suite.
-  assert.doesNotMatch(check, /\bexecSync\(|\bexec\(|shell:\s*true/, 'the sign-in check hands nothing to a shell');
-  const desktopRequire = (id) => require(id.startsWith('.') ? path.join(ROOT, 'electron', id) : id);
-  return new Function('require', 'process', `${check}\nreturn isClaudeAuthenticated;`)(desktopRequire, process);
-}
+// The sign-in check the desktop app calls, from the same module.
+const signInCheck = () => claudeCheck().isClaudeAuthenticated;
 
 describe('the desktop app\'s sign-in check runs the copy the lookup chose, with no shell', { skip: POSIX }, () => {
   test('it runs the copy chats start, with its arguments, and nothing in a folder name holding $(...) runs', async () => {
@@ -859,6 +858,66 @@ describe('the desktop app\'s sign-in check runs the copy the lookup chose, with 
       assert.strictEqual(desktopCheck().findClaude(), null);
       assert.strictEqual(signInCheck()(), false);
     });
+  });
+});
+
+describe('the setup wizard\'s check is the handler the desktop app registers, run on stub copies', { skip: POSIX }, () => {
+  test('it runs the copy the lookup chose, with its arguments, runs nothing in a folder name holding $(...), and says ready', async () => {
+    const m = machine();
+    const marker = path.join(m.root, 'ran-in-a-shell');
+    const old = makeClaude(m.folders.local, OLD);
+    const current = makeClaude(m.dir('q$(touch $WIZARD_MARKER)'), CURRENT);
+    m.shell.plan({ loginPath: loginPath(current.dir) });
+    const { rt, done } = runtime();
+    try {
+      await on(m, { today: [old.dir, current.dir], env: { WIZARD_MARKER: marker } }, () => {
+        assert.deepStrictEqual(claudeCheck().wizardCheckRuntimes().claude, { status: 'ready' });
+        assert.strictEqual(rt.resolveClaudeBin(), current.bin, 'the copy it ran is the one chats start');
+      });
+      assert.deepStrictEqual(current.chats().map((r) => r.args), [SIGN_IN_ARGS]);
+      assert.deepStrictEqual(old.runs(), []);
+      assert.strictEqual(fs.existsSync(marker), false, 'nothing in the folder name ran');
+    } finally { done(); }
+  });
+
+  test('a copy that is not signed in is reported as such, and with no copy it is not installed and nothing runs', async () => {
+    const m = machine();
+    const current = makeClaude(m.dir('current'), CURRENT);
+    current.signOut();
+    m.shell.plan({ loginPath: loginPath(current.dir) });
+    await on(m, { today: [] }, () => {
+      assert.deepStrictEqual(claudeCheck().wizardCheckRuntimes().claude, { status: 'not-authenticated' });
+    });
+    assert.deepStrictEqual(current.chats().map((r) => r.args), [SIGN_IN_ARGS]);
+    const empty = machine();
+    await on(empty, { today: [] }, () => {
+      assert.deepStrictEqual(claudeCheck().wizardCheckRuntimes().claude, { status: 'not-installed' });
+    });
+  });
+
+  test('on Windows it starts an npm install through its package (launchFor), with its arguments, and says ready', async () => {
+    const m = machine();
+    const npm = npmLauncher(m.dir('npm'), '2.1.318');
+    const { done } = runtime({ platform: () => 'win32' });
+    try {
+      await on(m, { today: [windows(m, [npm])], platform: 'win32' }, () => {
+        assert.deepStrictEqual(claudeCheck().wizardCheckRuntimes().claude, { status: 'ready' });
+      });
+      assert.deepStrictEqual(npm.node.runs().map((r) => r.args), [[npm.entry, ...SIGN_IN_ARGS]]);
+      assert.deepStrictEqual(npm.runs(), [], 'the launcher itself never ran');
+    } finally { done(); }
+  });
+
+  test('electron/main.js registers that handler and calls that sign-in check, and keeps no check of its own', () => {
+    const main = src('electron/main.js');
+    assert.ok(main.includes("ipcMain.handle('wizard-check-runtimes', wizardCheckRuntimes);"), 'the wizard handler is the module\'s function');
+    assert.match(main, /const \{[^}]*\bisClaudeAuthenticated\b[^}]*\bwizardCheckRuntimes\b[^}]*\} = require\('\.\/claude-check\.js'\);/, 'both come from electron/claude-check.js');
+    for (const own of ['isClaudeAuthenticated', 'ensurePath', 'ensureClaudeOnUserPath', 'detectCodexForWizard']) {
+      assert.ok(!main.includes(`function ${own}(`), `main.js defines no ${own} of its own`);
+    }
+    const find = body(main, 'findClaude');
+    assert.ok(find.includes("require('./claude-check.js').installedCopy()"), 'findClaude asks the module');
+    assert.doesNotMatch(find, /\bexec(?:Sync|FileSync)?\(|\bspawn(?:Sync)?\(/, 'and runs nothing of its own');
   });
 });
 
