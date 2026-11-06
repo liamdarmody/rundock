@@ -99,9 +99,6 @@ const OTHER_CLAUDE_LAUNCHES = [
   { at: 'lib/runtime/claude-console.js | openClaudeConsole | spawn(c.command)',
     why: 'opens a terminal window for the person to sign in themselves: no agent of Rundock\'s, no --settings, and no environment of Rundock\'s',
     testedBy: [ENVIRONMENTS, 'the sign-in console is opened with no environment of Rundock\'s'] },
-  { at: 'server.js | getRuntimeStatus | execSync(`"${resolveClaudeBin()}" --version`)',
-    why: 'asks for the version and exits: it starts no agent and runs no tool',
-    testedBy: [HERE, 'the app never marks its own environment as Rundock\'s'] },
   { at: 'lib/runtime/claude-lookup.js | readClaudeVersion | execFileSync(bin)',
     why: 'asks a copy the lookup found, or the one spawnClaude is about to start, for its version (`--version`, no shell), with the app\'s own environment, and exits: it starts no agent and runs no tool',
     testedBy: [HERE, 'the app never marks its own environment as Rundock\'s'] },
@@ -134,7 +131,6 @@ const NOT_CLAUDE = [
   { at: 'lib/runtime/claude-lookup.js | loginShellPath | spawnSync(shell)', runs: "the person's login shell, asked for the PATH it builds, with a fixed command and no environment of Rundock's" },
   { at: "lib/runtime/claude.js | killProcessTree | spawn('taskkill')", runs: 'taskkill, to stop an agent on Windows' },
   { at: "scripts/code-mode-git.js | git | execFileSync('git')", runs: "git, for the hook's Code-mode checks" },
-  { at: "server.js | getRuntimeStatus | execSync(isWindows ? 'where.exe claude' : 'which claude')", runs: 'a lookup of the Claude binary on the PATH' },
 ];
 
 // The files that load child_process at all. A new one fails here, so a launch
