@@ -4,6 +4,9 @@
 // workspace, and several assert cross-view navigation state on that shared
 // app instance.
 const { defineConfig } = require('@playwright/test');
+// The server and every spec go without the developer's own login shell
+// (test/helpers/no-login-shell.js says why).
+require('./test/helpers/no-login-shell.js');
 
 const PORT = Number(process.env.E2E_PORT || 34517);
 

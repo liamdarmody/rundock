@@ -117,6 +117,8 @@ function launchEnv(fixture, profile, base = process.env) {
   delete env.RUNDOCK_ELECTRON;
   delete env.ELECTRON_RUN_AS_NODE;
   delete env.RUNDOCK_SMOKE_TEST;
+  // Never the developer's own login shell (test/helpers/no-login-shell.js).
+  delete env.SHELL;
   return env;
 }
 
