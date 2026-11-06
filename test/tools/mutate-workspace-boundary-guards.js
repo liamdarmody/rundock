@@ -3587,6 +3587,24 @@ const MUTATIONS = [
   [HOOK_CRASH, "Folder reads: a reader nested past the depth read is taken to read nothing",
     "    out.push({ words: null, loose: [...loose, '.'], at: offset, pipedTo: null });",
     "    out.push({ words: null, loose: [], at: offset, pipedTo: null });"],
+  // The program is found past the programs that run the next one, and their
+  // options' values, as the shell's own -c is. Take the first word instead and
+  // `env -u FOO rg token ~/.claude` is a run of env.
+  [SECRET_FOLDER, "Folder reads: the program is the first word, whatever runs it",
+    "    const i = programIndex(ws);",
+    "    const i = 0;"],
+  [SECRET_FOLDER, "Folder reads: a keyword before the program is taken as the program",
+    "  while (lead < words.length - 1 && COMMAND_LEADS.has(words[lead]) && words[lead] !== 'time') lead++;",
+    ""],
+  [SECRET_FOLDER, "Folder reads: xargs behind a program that runs it is not seen",
+    "  return ws.slice(0, programIndex(ws) + 1).some(w => w.split('/').pop() === 'xargs');",
+    "  return (ws[0] || '').split('/').pop() === 'xargs';"],
+  [SECRET_FOLDER, "Folder reads: env's --unset is taken to have no value, so the name it unsets is the program",
+    "env: /^(?:-[uSCP]|--unset|--chdir|--split-string)$/,",
+    "env: /^(?:-[uSCP]|--chdir|--split-string)$/,"],
+  [SECRET_FOLDER, "Folder reads: a loop word naming home is left with its ~ unread",
+    ".flatMap(loopForms).map(homeIn)) {",
+    ".flatMap(loopForms)) {"],
 ];
 const REPORTER = ['--test-reporter', 'spec'];
 

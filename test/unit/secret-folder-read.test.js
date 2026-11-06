@@ -143,6 +143,12 @@ const CLAUDE = [
   `grep -r token "$HOME"'/.claude'`,
   // And inside a group, a function body or a substitution.
   '(grep -r token ~/.claude)', '{ grep -r token ~/.claude; }', 'f() { grep -r token ~/.claude; }; f', 'echo "$(grep -rl token ~/.claude)"',
+  // Behind a program that runs the next one, past its options and their
+  // values, and after a keyword.
+  'env -u FOO rg token ~/.claude', 'env --unset FOO rg token ~/.claude', 'env -i FOO=1 rg token ~/.claude', 'nice -n 5 rg token ~/.claude',
+  'timeout -k 5 10 rg token ~/.claude', 'sudo -u root rg token ~/.claude', 'exec -a name rg token ~/.claude', 'stdbuf -o L rg token ~/.claude',
+  'command -p rg token ~/.claude', 'time -p rg token ~/.claude', 'if grep -rq token ~/.claude; then echo y; fi', '! rg token ~/.claude',
+  'for d in ~/.claude; do grep -r token "$d"; done', 'find ~/.claude -type f | sudo -u root xargs cat',
 ];
 // The same, reached through a cd, or by a reader given no folder after one.
 const LANDED = [
@@ -150,6 +156,7 @@ const LANDED = [
   'cd ~/.claude && find . -exec cat {} \\;', 'cd ~ && grep -r token .claude', 'cd ~/.claude/projects && grep -r token ..',
   'cd ~/.claude; grep -r token .', 'pushd ~/.claude && tar czf - .', 'command cd ~/.claude && grep -r token',
   'cd ~/\\.claude && grep -r token', 'cd "$HOME"/.claude && grep -r token .', '(cd ~/.claude && grep -r token)',
+  'cd ~/.claude && env -u FOO rg token', 'cd ~/.claude && nice -n 5 ag token',
 ];
 // Listing names, and reading a free file, answer as they do today.
 const FREE = [
@@ -221,22 +228,25 @@ describe('listing names, and reading a free file, stay as they are', { skip: POS
 const INVERSE = [
   ['cp -r /tmp/x ~/.claude', CLAUDE_FILES], ['rsync -a /tmp/x/ ~/.claude/', CLAUDE_FILES], ['cp -a /tmp/y ~/.codex', CODEX_FILES],
   ['cp -r /tmp/x ~/\\.claude', CLAUDE_FILES], ['rsync -a /tmp/x/ "$HOME"/.claude/', CLAUDE_FILES],
+  ['env -u FOO cp -r /tmp/x ~/.claude', CLAUDE_FILES],
 ];
 // The undo: a subfolder holding no credential file, with what main answers.
 const UNDO = [
-  ['grep -r token ~/.claude/projects'], ['grep -r token ~/\\.claude/projects'],
+  ['grep -r token ~/.claude/projects'], ['grep -r token ~/\\.claude/projects'], ['env -u FOO rg token ~/.claude/projects'],
   // Main cards these copies in both modes, as a copy into the workspace, and
   // the home folder this spelling of the subfolder starts with, as a place
   // outside.
   ['cp -r ~/.claude/skills/x ./x', { decision: 'deny', cards: 1 }],
   ['grep -r token "$HOME"/.claude/projects', { decision: 'deny', cards: 1 }],
 ];
-const RETRY = ['grep -r token ~/.claude', 'grep -r token "$HOME"/.claude', '(cd ~/.claude && grep -r token)'];
+const RETRY = ['grep -r token ~/.claude', 'grep -r token "$HOME"/.claude', '(cd ~/.claude && grep -r token)', 'env -u FOO rg token ~/.claude'];
 // The command carded, then the free read that most often follows it.
-const NEXT = [['grep -r token ~/.claude', 'cat ~/.claude/settings.json'], ['grep -r token ~/\\.claude', 'cat ~/.claude/settings.json']];
+const NEXT = [['grep -r token ~/.claude', 'cat ~/.claude/settings.json'], ['grep -r token ~/\\.claude', 'cat ~/.claude/settings.json'],
+  ['nice -n 5 rg token ~/.claude', 'cat ~/.claude/settings.json']];
 // The rule: a program this does not know, given a runtime folder after `-r`,
 // `-R` or `--recursive`, is a recursive reader.
-const UNKNOWN = [['foo -r ~/.claude', CLAUDE_FILES], ['foo -R ~/.claude', CLAUDE_FILES], ['foo --recursive ~/.codex', CODEX_FILES]];
+const UNKNOWN = [['foo -r ~/.claude', CLAUDE_FILES], ['foo -R ~/.claude', CLAUDE_FILES], ['foo --recursive ~/.codex', CODEX_FILES],
+  ['env -u FOO foo -r ~/.claude', CLAUDE_FILES]];
 
 describe('the five sequences', { skip: POSIX, concurrency: 4 }, () => {
   for (const [label, env] of MODES) {

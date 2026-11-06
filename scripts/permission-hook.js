@@ -838,7 +838,6 @@ const RECURSIVE_READERS = new Set(['rg', 'ag', 'ack', 'rsync', 'tar', 'gtar', 'b
 const RECURSIVE_WHEN_FLAGGED = { grep: /[rR]/, egrep: /[rR]/, fgrep: /[rR]/, cp: /[rRa]/, scp: /r/, diff: /r/ };
 const SEARCHES_CWD_UNNAMED = new Set(['grep', 'egrep', 'fgrep', 'rg', 'ag', 'ack', 'find']);
 const LISTS_NAMES_ONLY = new Set(['ls', 'du', 'tree', 'stat', 'file', 'cd', 'pushd', 'popd', 'test', '[', 'realpath', 'readlink', 'dirname', 'basename', 'pwd', 'mkdir', 'echo', 'printf', 'true', 'false']);
-const RUNS_THE_NEXT_WORD = new Set(['sudo', 'env', 'nice', 'nohup', 'time', 'command', 'builtin', 'exec', 'timeout', 'stdbuf', 'xargs']);
 const RUNS_PER_NAME = new Set(['-exec', '-execdir', '-ok', '-okdir']);
 // THE COMMANDS THE SHELL RUNS, each with its words AS BASH FORMS THEM: quotes
 // and escapes taken out and the pieces of one word joined, so `~/\.claude` and
@@ -879,6 +878,21 @@ function shellCommandsIn(text, posixText = true, offset = 0, depth = 0, out = []
   return out;
 }
 
+// A command's words from its first in command position, past a keyword (`if`,
+// `do`, `!`). `time` is left for programIndex, which knows its options.
+function pastKeywords(words) {
+  let lead = 0;
+  while (lead < words.length - 1 && COMMAND_LEADS.has(words[lead]) && words[lead] !== 'time') lead++;
+  return words.slice(lead);
+}
+// Whether a command hands what it reads on its input to xargs, behind any
+// program that runs the next one (`sudo xargs cat`).
+function runsXargs(words) {
+  if (!words) return false;
+  const ws = pastKeywords(words);
+  return ws.slice(0, programIndex(ws) + 1).some(w => w.split('/').pop() === 'xargs');
+}
+
 // [{ word, at }]: each word a reader was handed as a folder, as bash forms it,
 // with where its command starts. A reader that searches the folder it runs in
 // and was handed none (`cd ~/.claude && grep -r token`) is handed `.`.
@@ -886,18 +900,16 @@ function recursiveReadWords(command, posixText = true) {
   const found = [];
   for (const { words, loose, at, pipedTo } of shellCommandsIn(command, posixText)) {
     if (loose) { for (const o of loose) found.push({ word: o, at }); continue; }
-    const ws = words;
-    let i = 0;
-    while (i < ws.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(ws[i])) i++;
-    while (i < ws.length && RUNS_THE_NEXT_WORD.has(ws[i].split('/').pop())) {
-      const prefix = ws[i++].split('/').pop();
-      while (i < ws.length && (ws[i].startsWith('-') || /=/.test(ws[i]) || (prefix === 'timeout' && /^\d/.test(ws[i])))) i++;
-    }
+    // THE PROGRAM, past a keyword (`if`, `do`, `!`) and the programs that run
+    // the next one, with their options and the values those take, as the
+    // shell's own `-c` is found (see programIndex): `env -u FOO rg` runs rg.
+    const ws = pastKeywords(words);
+    const i = programIndex(ws);
     const verb = (ws[i] || '').split('/').pop();
     const args = ws.slice(i + 1);
     const shortFlags = args.filter(a => /^-[A-Za-z]+$/.test(a));
     const longFlag = (re) => args.some(a => re.test(a));
-    const pipedToXargs = !!pipedTo && (pipedTo[0] || '').split('/').pop() === 'xargs';
+    const pipedToXargs = runsXargs(pipedTo);
     let reads;
     if (verb === 'find') reads = args.some(a => RUNS_PER_NAME.has(a)) || pipedToXargs;
     else if (RECURSIVE_READERS.has(verb)) reads = true;
@@ -2790,7 +2802,7 @@ const SHELL_NAMES = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'fish']);
 const RUNS_WHAT_FOLLOWS = new Set(['env', 'exec', 'command', 'nohup', 'nice', 'time', 'sudo', 'doas', 'timeout', 'gtimeout', 'xargs',
   'stdbuf', 'ionice', 'caffeinate', 'npx', 'uv run']);
 const PREFIX_TAKES_VALUE = {
-  sudo: /^-[ugCDhpr]$/, doas: /^-[uC]$/, nice: /^-n$/, env: /^-[uS]$/,
+  sudo: /^-[ugCDhpr]$/, doas: /^-[uC]$/, nice: /^-n$/, env: /^(?:-[uSCP]|--unset|--chdir|--split-string)$/, exec: /^-a$/,
   timeout: /^(?:-[sk]|--signal|--kill-after)$/, gtimeout: /^(?:-[sk]|--signal|--kill-after)$/,
   // BSD's -J, -R and -S as well as GNU's options.
   xargs: /^(?:-[nLPsIEdaJRS]|--(?:max-args|max-lines|max-procs|max-chars|eof|delimiter|arg-file|process-slot-var))$/,
@@ -3227,19 +3239,21 @@ function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), 
   // runs in. Each folder is judged from where the shell can be, as a word is
   // below, and asks as the credential files it holds. A folder copied INTO is
   // counted too: what lands there can replace the credential file.
-  for (const { word, at, fromStart } of folderReads) {
-    let t = word;
-    for (const re of HOME_PREFIX) { if (re.test(t)) { t = t.replace(re, home); break; } }
-    if (t === word) {
-      for (const re of ENV_PREFIX) {
-        const m = re.exec(t);
-        const val = m && devPaths.envValue(opts.env || process.env, m[1]);
-        if (val) { t = val + t.slice(m[0].length); break; }
-      }
+  // Home is put in after a loop's words are, which can name it (`for d in
+  // ~/.claude; do grep -r token "$d"; done`).
+  const homeIn = (word) => {
+    for (const re of HOME_PREFIX) { if (re.test(word)) return word.replace(re, home); }
+    for (const re of ENV_PREFIX) {
+      const m = re.exec(word);
+      const val = m && devPaths.envValue(opts.env || process.env, m[1]);
+      if (val) return val + word.slice(m[0].length);
     }
+    return word;
+  };
+  for (const { word, at, fromStart } of folderReads) {
     const here = fromStart ? null : possibleFoldersAt(at);
     const starts = here || [basesFor(path, fromStart)(at), ...cdStarts(path, at, fromStart)];
-    for (const form of braceForms(t).flatMap(loopForms)) {
+    for (const form of braceForms(homeIn(word)).flatMap(loopForms).map(homeIn)) {
       for (const h of homesReadBy(form, starts)) for (const e of entriesUnder(h)) reportSecret(e.path);
     }
   }

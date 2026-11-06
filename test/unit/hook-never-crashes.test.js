@@ -386,7 +386,9 @@ describe('a credential file named after a cd or by a glob, when something fails'
     // A folder holding one, handed to a program that reads all of it.
     'grep -r token ~/.claude', 'cd ~/.claude && grep -r token', 'foo -r ~/.claude',
     // The folder as bash forms the word, and a reader inside a group.
-    'grep -r token ~/\\.claude', 'grep -r token "$HOME"/.claude', '(cd ~/.claude && grep -r token)'];
+    'grep -r token ~/\\.claude', 'grep -r token "$HOME"/.claude', '(cd ~/.claude && grep -r token)',
+    // Behind a program that runs the next one.
+    'env -u FOO rg token ~/.claude'];
   const MODES = [['Notes mode', {}], ['Code mode', { RUNDOCK_CODE_MODE: '1' }]];
   const POSIX = { skip: process.platform === 'win32' && 'the home folder is read from HOME here' };
   const throwsOnRequest = path.join(root, 'secret-throws-on-request.js');
