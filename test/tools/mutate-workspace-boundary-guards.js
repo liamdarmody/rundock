@@ -141,6 +141,9 @@ const FLOOR_TABLE = { src: path.join(ROOT, 'lib', 'runtime', 'claude-floor.js'),
 const FLOOR_SPAWN = { src: path.join(ROOT, 'lib', 'runtime', 'claude.js'), suite: 'test/unit/claude-version-floor.test.js' };
 const FLOOR_PATHS = { src: path.join(ROOT, 'lib', 'runtime', 'claude.js'), suite: 'test/integration/claude-version-floor.test.js' };
 const FLOOR_EACCES = { src: path.join(ROOT, 'lib', 'runtime', 'claude.js'), suite: 'test/integration/claude-version-floor-eacces.test.js' };
+// The floor's version read lives with the lookup that also reads candidates
+// with it (lib/runtime/claude-lookup.js); the floor's own suite still proves it.
+const FLOOR_READ = { src: path.join(ROOT, 'lib', 'runtime', 'claude-lookup.js'), suite: 'test/unit/claude-version-floor.test.js' };
 const DEV_HOME = { src: path.join(ROOT, 'scripts', 'dev-paths.js'), suite: 'test/unit/code-mode-home-in-temp.test.js' };
 const SCAFFOLD_CM = { src: path.join(ROOT, 'lib', 'workspace', 'scaffold.js'), suite: 'test/unit/code-mode-boundary.test.js' };
 const CM_PARSE = { src: path.join(ROOT, 'scripts', 'code-mode-parse.js'), suite: 'test/unit/code-mode-verdict.test.js' };
@@ -3589,10 +3592,10 @@ const MUTATIONS = [
   [FLOOR_TABLE, "Version floor: any three-part number in the output is taken as the version",
     "  const m = firstLine(lines, NAMED_LINE) || firstLine(lines, BARE_LINE);",
     "  const m = /(\\d+)\\.(\\d+)\\.(\\d+)/.exec(lines.join('\\n'));"],
-  [FLOOR_SPAWN, "Version floor: the probe is a command line a shell reads",
+  [FLOOR_READ, "Version floor: the probe is a command line a shell reads",
     "    return execFileSync(bin, ['--version'], { timeout, encoding: 'utf-8', stdio: codexRuntime.PROBE_STDIO });",
     "    return require('child_process').execSync(`\"${bin}\" --version`, { timeout, encoding: 'utf-8', stdio: codexRuntime.PROBE_STDIO });"],
-  [FLOOR_SPAWN, "Version floor: a Windows .cmd or .bat copy is run for its version",
+  [FLOOR_READ, "Version floor: a Windows .cmd or .bat copy is run for its version",
     "  if (platform === 'win32' && /\\.(cmd|bat)$/i.test(bin)) return launcherPackageVersion(bin);",
     "  // every copy is run for its version"],
   [FLOOR_SPAWN, "Version floor: the spawn's options are not the caller's",
@@ -3604,7 +3607,7 @@ const MUTATIONS = [
   [FLOOR_SPAWN, "Version floor: the stand-in for a refused copy keeps an unguarded stdin",
     "    guardChildStdin(standIn, 'claude (not started: below the version floor)');",
     "    // the stand-in's stdin is left unguarded"],
-  [FLOOR_SPAWN, "Version floor: a .cmd launcher's package version is ignored",
+  [FLOOR_READ, "Version floor: a .cmd launcher's package version is ignored",
     "  if (platform === 'win32' && /\\.(cmd|bat)$/i.test(bin)) return launcherPackageVersion(bin);",
     "  if (platform === 'win32' && /\\.(cmd|bat)$/i.test(bin)) return null;"],
 ];

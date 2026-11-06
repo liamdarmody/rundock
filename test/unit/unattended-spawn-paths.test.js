@@ -102,8 +102,8 @@ const OTHER_CLAUDE_LAUNCHES = [
   { at: 'server.js | getRuntimeStatus | execSync(`"${resolveClaudeBin()}" --version`)',
     why: 'asks for the version and exits: it starts no agent and runs no tool',
     testedBy: [HERE, 'the app never marks its own environment as Rundock\'s'] },
-  { at: 'lib/runtime/claude.js | readClaudeVersion | execFileSync(bin)',
-    why: 'asks the copy spawnClaude is about to start for its version (`--version`, no shell), with the app\'s own environment, and exits: it starts no agent and runs no tool',
+  { at: 'lib/runtime/claude-lookup.js | readClaudeVersion | execFileSync(bin)',
+    why: 'asks a copy the lookup found, or the one spawnClaude is about to start, for its version (`--version`, no shell), with the app\'s own environment, and exits: it starts no agent and runs no tool',
     testedBy: [HERE, 'the app never marks its own environment as Rundock\'s'] },
   { at: 'electron/main.js | findClaude | execSync(`"${bin}" --version`)',
     why: 'the desktop asks for the version and exits: it starts no agent and runs no tool',
@@ -140,7 +140,7 @@ const NOT_CLAUDE = [
 // through a name this scan does not know cannot arrive unseen with it.
 const LOADS_CHILD_PROCESS = [
   'codex-appserver.js', 'codex.js', 'electron/main.js', 'lib/delegation/engine.js', 'lib/packages/extension-source.js',
-  'lib/protocol/handlers/files.js', 'lib/protocol/handlers/workspace.js', 'lib/runtime/claude-console.js', 'lib/runtime/claude.js',
+  'lib/protocol/handlers/files.js', 'lib/protocol/handlers/workspace.js', 'lib/runtime/claude-console.js', 'lib/runtime/claude-lookup.js', 'lib/runtime/claude.js',
   'scripts/code-mode-git.js', 'server.js',
 ];
 
