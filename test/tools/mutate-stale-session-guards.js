@@ -397,12 +397,17 @@ function redTests(suite) {
   let out = '';
   let failed = false;
   const [file, testName] = String(suite).split('#');
+  // NODE_TEST_CONTEXT must not reach the run: a nested node --test that
+  // inherits it reports its failures in a form this cannot read and still
+  // exits 0, so a red run would read as green.
+  const env = { ...process.env };
+  delete env.NODE_TEST_CONTEXT;
   try {
     // Bounded twice over: each test by node's own timeout, and the whole
     // suite by a kill, so a broken guard that leaves a run waiting costs
     // minutes and reports, rather than holding the harness for hours.
     out = execFileSync('node', ['--test', '--test-timeout=120000', ...REPORTER, ...(testName ? ['--test-name-pattern', exactly(testName)] : []), file],
-      { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 280000, killSignal: 'SIGKILL' });
+      { cwd: ROOT, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 280000, killSignal: 'SIGKILL' });
   } catch (e) {
     failed = true;
     out = (e.stdout || '') + (e.stderr || '');
@@ -422,6 +427,36 @@ function redTests(suite) {
     if (m && !names.includes(m[1])) names.push(m[1]);
   }
   return names;
+}
+
+// THE HARNESS'S OWN RUN IS CHECKED BEFORE ANY ROW IS READ. Every row is read
+// through the one invocation above, so a fault in it, an option this node
+// refuses or output that no longer parses, would misreport every row at once.
+// Before anything is mutated, that same invocation is made on a fixture of two
+// tests, one that passes and one that fails. It must read the passing one as
+// green and the failing one as red, by name, or the run is refused with no
+// verdict. Returns what it read wrong, or null.
+const FIXTURE_GREEN = 'passes with nothing broken';
+const FIXTURE_RED = 'fails when broken';
+function invocationProblem(runTests = redTests) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'stale-session-harness-'));
+  const file = path.join(dir, 'invocation.test.js');
+  try {
+    fs.writeFileSync(file, "'use strict';\nconst { test } = require('node:test');\n"
+      + `test(${JSON.stringify(FIXTURE_GREEN)}, () => {});\n`
+      + `test(${JSON.stringify(FIXTURE_RED)}, () => { throw new Error('broken'); });\n`);
+    const green = runTests(`${file}#${FIXTURE_GREEN}`);
+    if (!Array.isArray(green) || green.length !== 0) {
+      return `a run of a passing test read as ${JSON.stringify(green)}, not green`;
+    }
+    const red = runTests(`${file}#${FIXTURE_RED}`);
+    if (!Array.isArray(red) || red.length !== 1 || red[0] !== FIXTURE_RED) {
+      return `a run of a failing test read as ${JSON.stringify(red)}, not that test red`;
+    }
+    return null;
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 function run() {
@@ -516,6 +551,11 @@ function requireSaneTempRoot() {
 if (require.main === module) {
   requireSaneTempRoot();
   if (process.argv.includes('--preflight-only')) process.exit(0);
+  const problem = invocationProblem();
+  if (problem) {
+    console.error(`Refusing to start a mutation run: the run every row is read through misreads a result: ${problem}.`);
+    process.exit(NO_VERDICT);
+  }
   const results = run();
   const failed = report(results, process.argv.includes('--markdown'));
   if (failed) {
@@ -525,4 +565,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { MUTATIONS, run };
+module.exports = { MUTATIONS, run, redTests, invocationProblem };
