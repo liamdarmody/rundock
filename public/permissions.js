@@ -40,6 +40,8 @@
   var isReadOnlyShellCommand = RundockReadOnlyShell.isReadOnlyShellCommand;
   var isReadOnlyPowerShellCommand = RundockReadOnlyShell.isReadOnlyPowerShellCommand;
   var isDestructiveShellCommand = RundockReadOnlyShell.isDestructiveShellCommand;
+  var powerShellCommandNames = RundockReadOnlyShell.powerShellCommandNames;
+  var isPowerShellReadName = RundockReadOnlyShell.isPowerShellReadName;
 
   const BASH_DESCRIPTIONS = {
     ls: 'List directory contents', cat: 'Read file contents', head: 'Read start of file',
@@ -332,16 +334,46 @@
     return { summary: `${verb} the connector ${i.name || ''}`.trim(), context: said.join(' '), detail: lines.length ? lines.join('\n') : JSON.stringify(i) };
   }
 
-  // Key for always-allow matching.
+  // Key for always-allow matching. Null when there is nothing to save, and
+  // then the card offers Allow and Deny only.
   function toolAllowKey(toolName, input) {
     if (toolName === 'Bash') {
       return 'Bash:' + bashBin((input.command || '').trim());
     }
-    if (toolName === 'PowerShell') {
-      const verb = ((input.command || '').trim().match(/^[A-Za-z][\w-]*/) || ['PowerShell'])[0];
-      return 'PowerShell:' + verb;
-    }
+    if (toolName === 'PowerShell') return powerShellAllowKey(input.command || '');
     return toolName;
+  }
+
+  // ── What Always allow saves for a PowerShell command ──────────────────────
+  // ON WINDOWS THE CARD IS ALL THERE IS, so one press of Always allow decides
+  // every later command its key answers with no card. The key used to be the
+  // command's first word, and `PowerShell:PowerShell` when it had none, so
+  // Always allow on `$t = Get-Date` saved a key that answered every later
+  // command starting with a bracket, `$` or `[`, a write included.
+  //
+  // A KEY NAMES ONE COMMAND, OR THERE IS NO KEY. It is the one command the
+  // parts run besides reads, read by the shared PowerShell reading, or the
+  // first name when every part is a read. There is none, and so no Always
+  // allow, when a part starts with no command name, when the parts run two or
+  // more different commands besides reads, and when the reading cannot follow
+  // the command all the way, because no key could ever answer that command.
+  // A key a chain's first word would give never covers the command after it,
+  // so the person who pressed Always allow would be asked again every time.
+  var POWERSHELL_COMMAND_NAME = /^[A-Za-z][\w.-]*$/;
+  // What an earlier release saved for a command with no name to key on. It
+  // is never derived now, and it answers nothing (powerShellAllowCovers).
+  var POWERSHELL_CATCH_ALL = 'PowerShell:PowerShell';
+  function powerShellAllowKey(command) {
+    var names = powerShellCommandNames(String(command));
+    if (!names || !names.length) return null;
+    var runs = [];
+    for (var n = 0; n < names.length; n++) {
+      if (!POWERSHELL_COMMAND_NAME.test(names[n])) return null;
+      if (!isPowerShellReadName(names[n]) && runs.indexOf(names[n]) < 0) runs.push(names[n]);
+    }
+    if (runs.length > 1) return null;
+    var key = 'PowerShell:' + (runs.length ? runs[0] : names[0]);
+    return key === POWERSHELL_CATCH_ALL ? null : key;
   }
 
   // The auto-allow decision path. Given the classified risk, the allow key,

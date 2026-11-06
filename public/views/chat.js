@@ -1268,7 +1268,7 @@ function renderPermissionCard(d, convoId, host) {
         <button class="btn-perm ${RundockPermissions.allowButtonClass(allowLabel, answerFile)}" data-perm-id="${escAttr(requestId)}" data-perm-action="allow">${esc(allowLabel)}</button>
         ${wholeFolderOffered
           ? `<button class="btn-perm btn-always" data-perm-id="${escAttr(requestId)}" data-perm-action="allow-folder">Always allow this folder</button>`
-          : (!boundary && !answerFile && RundockPermissions.offersAlwaysAllow(risk, verdict) ? `<button class="btn-perm btn-always" data-perm-id="${escAttr(requestId)}" data-perm-action="always">${esc(alwaysLabel)}</button>` : '')}
+          : (!boundary && !answerFile && key && RundockPermissions.offersAlwaysAllow(risk, verdict) ? `<button class="btn-perm btn-always" data-perm-id="${escAttr(requestId)}" data-perm-action="always">${esc(alwaysLabel)}</button>` : '')}
         <button class="btn-perm btn-deny" data-perm-id="${escAttr(requestId)}" data-perm-action="deny">Deny</button>
       </div>
     </div>
@@ -1624,8 +1624,9 @@ function respondPermission(requestId, allow, always, allowFolder) {
     toolInput: pending.toolInput || {}
   }));
 
-  // Store always-allow pattern if requested
-  if (allow && always) {
+  // Store always-allow pattern if requested. A request with no key has no
+  // Always allow on its card, and saves nothing however it is answered.
+  if (allow && always && pending.key) {
     alwaysAllowedTools.add(pending.key);
     // Written back so the answer outlives this tab. The cache is updated first
     // so the next card in the same session is silent whether or not the write

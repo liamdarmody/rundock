@@ -70,6 +70,8 @@ const PS_GRADER_FLOW = { src: path.join(ROOT, 'public', 'permissions.js'), suite
 const PS_DISPATCH_FLOW = { src: path.join(ROOT, 'public', 'app.js'), suite: 'test/integration/powershell-read-approvals.test.js' };
 // The hook, run as its own process, against a home holding hook scripts.
 const PS_HOOK_REAL = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/powershell-reads-hook.test.js' };
+// The card a person answers for a PowerShell command, through the real chat view.
+const PS_CARD = { src: path.join(ROOT, 'public', 'views', 'chat.js'), suite: 'test/unit/powershell-read-cards.test.js' };
 // The mode-persisted-before-scaffold ordering guard lives in the protocol
 // handler, not the scaffold layer, and is reachable only through the real
 // workspace-open path (the scaffold-layer tests call scaffoldWorkspace
@@ -1030,6 +1032,26 @@ const MUTATIONS = [
   [PS_GRADER, 'PowerShell grader: a delete is looked for inside brackets and blocks and after a new line',
     '  var POWERSHELL_COMMAND_START = /(^|[;&|\\r\\n({]\\s*)/.source;',
     '  var POWERSHELL_COMMAND_START = /(^|[;&|]\\s*)/.source;'],
+  // WHAT ALWAYS ALLOW SAVES FOR A POWERSHELL COMMAND, one rule at a time. The
+  // first puts back the catch-all an earlier release saved for a command with
+  // no name to key on; the second keys a chain on its first word again.
+  [PS_GRADER, 'PowerShell key: a command with no command name saves no key, never the catch-all',
+    '      if (!POWERSHELL_COMMAND_NAME.test(names[n])) return null;',
+    '      if (!POWERSHELL_COMMAND_NAME.test(names[n])) return POWERSHELL_CATCH_ALL;'],
+  [PS_GRADER, 'PowerShell key: a chain is keyed on the one command it runs besides reads, not its first word',
+    "    var key = 'PowerShell:' + (runs.length ? runs[0] : names[0]);",
+    "    var key = 'PowerShell:' + names[0];"],
+  [PS_GRADER, 'PowerShell key: a chain running two commands besides reads saves no key',
+    '    if (runs.length > 1) return null;\n',
+    ''],
+  [PS_GRADER, 'PowerShell key: a command named PowerShell is never keyed on the catch-all',
+    '    return key === POWERSHELL_CATCH_ALL ? null : key;',
+    '    return key;'],
+  // A card offering Always allow with nothing to save: the press would save
+  // nothing the next request could be answered by.
+  [PS_CARD, 'PowerShell card: no Always allow when there is no key to save',
+    '!boundary && !answerFile && key && RundockPermissions.offersAlwaysAllow(risk, verdict)',
+    '!boundary && !answerFile && RundockPermissions.offersAlwaysAllow(risk, verdict)'],
   // The hook reading a PowerShell command by the Bash rules again: in process,
   // and through the real hook.
   [HOOK, 'the hook reads a PowerShell command with the PowerShell reading',

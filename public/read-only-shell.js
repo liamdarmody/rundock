@@ -451,6 +451,26 @@
     }
   }
 
+  // THE NAMES A STANDING ALLOW IS JUDGED BY, from this same reading. A saved
+  // "Always allow" for a PowerShell command is keyed on, and answers, the
+  // names its parts start with (public/permissions.js). Null when the command
+  // holds something this reading does not follow, and null when the reading
+  // fails, through the same seam, so a command it cannot read all the way is
+  // given no key and answered by none.
+  function powerShellCommandNames(command) {
+    try {
+      powerShellReadingSeam.beforeReading(command);
+      return powerShellPartNames(command);
+    } catch (failed) {
+      return null;
+    }
+  }
+
+  // Whether a part that starts with this name is a read on its own.
+  function isPowerShellReadName(name) {
+    return READ_ONLY_POWERSHELL_COMMANDS.indexOf(String(name).toLowerCase()) >= 0;
+  }
+
   // ── The other end of the same question ────────────────────────────────
   // A command that destroys, escalates, or fetches-and-executes. This lived
   // only in the card grader, where its single job was to colour a card red.
@@ -511,6 +531,6 @@
   // that force a failure inside the PowerShell reading.
   return {
     DISCARDING_REDIRECT_RE, shellSegments, isReadOnlyShellCommand, isReadOnlyPowerShellCommand,
-    isDestructiveShellCommand, powerShellReadingSeam,
+    isDestructiveShellCommand, powerShellReadingSeam, powerShellCommandNames, isPowerShellReadName,
   };
 }));

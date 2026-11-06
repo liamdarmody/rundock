@@ -6,7 +6,8 @@
 // A plain read runs with no card, in a conversation and in a routine. A chain
 // that reads and then writes is carded, and what the person answers on that
 // card does not change how the next command is judged, except for Always
-// allow, whose key is recorded below as it stands today.
+// allow, which saves the one command the chain runs besides reads and answers
+// only what that command covers.
 const { test, describe, before, after, beforeEach } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -109,19 +110,43 @@ describe('a chain that reads and then writes is carded, and the answer does not 
     });
   }
 
-  // RECORDED AS IT STANDS, so a change to what Always allow keeps shows here
-  // as a diff. The key is the command's first word, so it answers the same
-  // chain again with no card, and any other command that starts with it.
-  test('Always allow on the chain keeps its first word, which answers the chain again', () => {
+  // The key is the one command the chain runs besides its reads, so it
+  // answers the same chain again with no card, and a chain whose other part
+  // differs is carded.
+  test('Always allow on the chain saves the command it runs besides reads, which answers the chain again', () => {
     const always = ask(F.CARDED_CHAIN, 'conversation');
     press(always, 'always');
-    assert.deepStrictEqual(sent.filter(m => m.type === 'add_tool_allow'), [{ type: 'add_tool_allow', key: 'PowerShell:Get-Content' }]);
+    assert.deepStrictEqual(sent.filter(m => m.type === 'add_tool_allow'), [{ type: 'add_tool_allow', key: 'PowerShell:Set-Content' }]);
     const again = ask(F.CARDED_CHAIN, 'conversation');
     assert.ok(ranWithNoCard(again), 'the saved key answers the same chain with no card');
     const other = ask('Get-Content notes.md; Add-Content notes.md y', 'conversation');
-    assert.ok(ranWithNoCard(other), 'and another chain that starts with the same word');
+    assert.ok(cardOf(other), 'a chain whose other part differs is carded');
     const removal = ask('Get-Content notes.md; Remove-Item notes.md', 'conversation');
     assert.ok(cardOf(removal), 'a removal is carded whatever was saved');
+  });
+});
+
+describe('Always allow is offered only when there is one command to save', () => {
+  const buttons = (id) => [...cardOf(id).querySelectorAll('[data-perm-action]')].map(b => b.getAttribute('data-perm-action'));
+  for (const where of WHERE) {
+    test(`in a ${where}: a command with no command name, or two commands besides reads, offers Allow and Deny only`, () => {
+      for (const command of ['(Get-Date).ToString("HH:mm")', '$t = Get-Date', '[DateTime]::Now',
+        'Get-Date; Set-Content notes.md x; npm test']) {
+        const id = ask(command, where);
+        assert.ok(cardOf(id), `carded: ${command}`);
+        assert.deepStrictEqual(buttons(id), ['allow', 'deny'], `Allow and Deny only: ${command}`);
+      }
+      assert.ok(!sent.some(m => m.type === 'add_tool_allow'), 'and nothing is saved');
+    });
+  }
+
+  test('Always allow on a read and one command saves that command, and the same chain then runs with no card', () => {
+    const id = ask('Get-Date; npm test', 'conversation');
+    assert.deepStrictEqual(buttons(id), ['allow', 'always', 'deny'], 'Always allow is offered');
+    press(id, 'always');
+    assert.deepStrictEqual(sent.filter(m => m.type === 'add_tool_allow'), [{ type: 'add_tool_allow', key: 'PowerShell:npm' }]);
+    assert.ok(ranWithNoCard(ask('Get-Date; npm test', 'conversation')), 'the same chain runs with no card');
+    assert.ok(cardOf(ask('Get-Date; git status', 'conversation')), 'a chain whose other part differs is carded');
   });
 });
 

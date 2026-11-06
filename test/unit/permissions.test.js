@@ -882,10 +882,10 @@ describe('describeToolRequest', () => {
 // ── toolAllowKey ────────────────────────────────────────────────────────────
 
 describe('toolAllowKey', () => {
-  test('Bash keys on the binary, PowerShell on the leading verb', () => {
+  test('Bash keys on the binary, PowerShell on the one command it runs besides reads', () => {
     assert.strictEqual(P.toolAllowKey('Bash', { command: '/usr/bin/git status' }), 'Bash:git');
-    assert.strictEqual(P.toolAllowKey('PowerShell', { command: 'Get-Date; foo' }), 'PowerShell:Get-Date');
-    assert.strictEqual(P.toolAllowKey('PowerShell', { command: '!!weird' }), 'PowerShell:PowerShell');
+    assert.strictEqual(P.toolAllowKey('PowerShell', { command: 'Get-Date; foo' }), 'PowerShell:foo');
+    assert.strictEqual(P.toolAllowKey('PowerShell', { command: '!!weird' }), null);
   });
 
   test('other tools key on the tool name', () => {
@@ -1038,5 +1038,78 @@ describe('a standing allow answers only what it was ever allowed to answer', () 
     // behaviour for a fresh workspace must be unchanged.
     assert.strictEqual(P.decidePermission('medium', 'Bash:git', new Set()).action, 'card');
     assert.strictEqual(P.decidePermission('low', 'Bash:ls', new Set()).action, 'allow');
+  });
+});
+
+// ── Always allow on a PowerShell command ────────────────────────────────────
+//
+// ON WINDOWS THE CARD IS ALL THERE IS, so what one press of Always allow saves
+// decides every later command it answers with no card. A PowerShell key used
+// to be the command's first word, and `PowerShell:PowerShell` when it had
+// none, which answered every later command that started with a bracket, `$`
+// or `[`, a write included.
+describe('Always allow on a PowerShell command saves only the command it names', () => {
+  const F = require('../fixtures/powershell-reads.js');
+  const key = (command) => P.toolAllowKey('PowerShell', { command });
+  const show = (command) => JSON.stringify(command).slice(0, 100);
+
+  test('a command with no leading command name saves no key', () => {
+    for (const command of ['(Get-Date).ToString("HH:mm")', '$t = Get-Date', '[DateTime]::Now',
+      '$t = Get-Date; Add-Content time-log.md $t', '!!weird', '.\\setup.ps1', '', '   ']) {
+      assert.strictEqual(key(command), null, show(command));
+    }
+    assert.strictEqual(P.toolAllowKey('PowerShell', {}), null, 'nor one with no command at all');
+  });
+
+  test('no command is keyed on the catch-all, whatever it holds', () => {
+    const every = [...F.READS, ...F.ALIASES, ...F.READ_SPELLINGS, ...F.WRITES_AFTER_READ, ...F.SENDS_AFTER_READ,
+      ...F.HIDDEN.flatMap(([, commands]) => commands), ...F.THROWS.map(([, c]) => c), ...F.GET_BUT_NOT_LISTED,
+      'PowerShell -NoProfile -Command Get-Date', 'PowerShell', 'Get-Date; PowerShell -c x'];
+    for (const command of every) assert.notStrictEqual(key(command), 'PowerShell:PowerShell', show(command));
+  });
+
+  test('a chain is keyed on the one command it runs besides reads', () => {
+    assert.strictEqual(key('Get-Date; npm test'), 'PowerShell:npm');
+    assert.strictEqual(key('Get-Date; npm test; Get-Location'), 'PowerShell:npm');
+    assert.strictEqual(key('npm test; npm run build'), 'PowerShell:npm', 'the same command twice is one command');
+    assert.strictEqual(key(F.CARDED_CHAIN), 'PowerShell:Set-Content');
+    assert.strictEqual(key('Get-Content notes.md | Out-File copy.md'), 'PowerShell:Out-File');
+    assert.strictEqual(key('Get-Date; node.exe build.js'), 'PowerShell:node.exe', 'a name is kept whole, its extension included');
+  });
+
+  test('a chain that runs two or more commands besides reads saves no key', () => {
+    for (const command of ['Get-Date; Set-Content notes.md x; npm test', 'npm test; git status', 'Set-Content a.md x | Add-Content b.md']) {
+      assert.strictEqual(key(command), null, show(command));
+    }
+  });
+
+  test('one command, or reads alone, keep the key they had', () => {
+    for (const [command, saved] of [['npm test', 'PowerShell:npm'], ['Set-Content notes.md x', 'PowerShell:Set-Content'], ['Get-Date -Format "HH:mm"', 'PowerShell:Get-Date'],
+      ['Get-ChildItem; Get-Location', 'PowerShell:Get-ChildItem']]) {
+      assert.strictEqual(key(command), saved, show(command));
+    }
+  });
+
+  test('a command the reading cannot follow saves no key, since no key would ever answer it', () => {
+    for (const command of ['Write-Output $(Set-Content notes.md x)', 'npm test > results.txt', 'npm test $(Set-Content notes.md x)',
+      ...F.THROWS.map(([, c]) => c)]) {
+      assert.strictEqual(key(command), null, show(command));
+    }
+  });
+
+  test('a failure forced inside the reading saves no key', () => {
+    const seam = require('../../public/read-only-shell.js').powerShellReadingSeam;
+    const kept = seam.beforeReading;
+    seam.beforeReading = () => { throw new Error('forced failure'); };
+    try {
+      assert.strictEqual(key('npm test'), null);
+    } finally { seam.beforeReading = kept; }
+    assert.strictEqual(key('npm test'), 'PowerShell:npm', 'and with the reading back, the key is derived again');
+  });
+
+  test('Bash keys stay on the first word, chains included', () => {
+    assert.strictEqual(P.toolAllowKey('Bash', { command: 'ls -la; rm -rf build' }), 'Bash:ls');
+    assert.strictEqual(P.toolAllowKey('Bash', { command: 'npm test && git push' }), 'Bash:npm');
+    assert.strictEqual(P.toolAllowKey('Bash', { command: '' }), 'Bash:');
   });
 });
