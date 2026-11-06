@@ -72,26 +72,12 @@ if (!gotLock) {
 
 // ===== CLAUDE CODE DETECTION =====
 
-// Electron packaged apps don't inherit the user's full shell PATH.
-// Ensure common Claude Code install locations are on PATH so the lookup works.
+// Electron packaged apps don't inherit the user's full shell PATH, so the
+// folders Claude Code's installers use are put on it (the same folders the
+// lookup in lib/runtime/claude-lookup.js tries after the login shell's PATH,
+// and the lookup it falls back to when the shell cannot answer).
 function ensurePath() {
-  const home = require('os').homedir();
-  const isWindows = process.platform === 'win32';
-  const extraDirs = isWindows
-    ? [
-        // Anthropic's PowerShell installer drops claude.exe here.
-        path.join(home, '.local', 'bin'),
-        // WinGet shim location.
-        process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'Microsoft', 'WinGet', 'Links') : null,
-        // npm global bin (Claude installed via `npm install -g`).
-        process.env.APPDATA ? path.join(process.env.APPDATA, 'npm') : null,
-      ].filter(Boolean)
-    : [
-        path.join(home, '.local', 'bin'),
-        path.join(home, '.claude', 'bin'),
-        '/usr/local/bin',
-        '/opt/homebrew/bin',
-      ];
+  const extraDirs = require('../lib/runtime/claude-lookup.js').installFolders();
   const current = process.env.PATH || '';
   const segments = current.split(path.delimiter);
   const missing = extraDirs.filter(d => !segments.includes(d));
@@ -104,35 +90,21 @@ function ensurePath() {
 // the reconnect console runs Claude Code's login command only on a version
 // that has it (lib/runtime/claude-console.js, hasAuthLogin).
 let claudeFoundVersion = null;
+// Is Claude Code installed: the copy every spawn and the Settings probe start,
+// found the way the person's login shell finds it, and the version it says it
+// is, read with no shell (lib/runtime/claude-lookup.js). null when there is no
+// copy, or when it cannot be run for its version.
 function findClaude() {
-  ensurePath();
-  const isWindows = process.platform === 'win32';
+  let found = null;
   try {
-    // Windows: where.exe returns one absolute path per line, possibly multiple
-    // candidates when both .exe and .cmd shims are present. Prefer .exe so the
-    // recommended PowerShell-installer path wins over an npm .cmd shim.
-    // Unix: which returns a single absolute path.
-    const lookupCmd = isWindows ? 'where.exe claude' : 'which claude';
-    const output = execSync(lookupCmd, { timeout: 5000, encoding: 'utf-8' }).trim();
-    if (!output) return null;
-    let bin;
-    if (isWindows) {
-      const candidates = output.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
-      const exe = candidates.find(c => c.toLowerCase().endsWith('.exe'));
-      const cmd = candidates.find(c => c.toLowerCase().endsWith('.cmd'));
-      bin = exe || cmd || candidates[0];
-      if (!bin) return null;
-    } else {
-      bin = output;
-    }
-    // Sanity-check the resolved binary, keeping the version it reports. Quote
-    // the path so a directory with spaces (common on Windows) does not split
-    // the command.
-    claudeFoundVersion = String(execSync(`"${bin}" --version`, { timeout: 10000 }));
-    return bin;
+    ensurePath();
+    found = require('../lib/runtime/claude-lookup.js').installedClaude();
   } catch {
     return null;
   }
+  if (!found) return null;
+  claudeFoundVersion = found.version;
+  return found.bin;
 }
 
 // Anthropic's Windows installer drops claude.exe in ~/.local/bin but does NOT

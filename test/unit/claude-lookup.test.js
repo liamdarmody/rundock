@@ -504,3 +504,139 @@ describe('the sequences', { skip: POSIX }, () => {
     });
   }
 });
+
+// ── One lookup, and no version read through a shell ──
+
+// Every source file the app runs: the server, lib and the desktop app.
+function appSources() {
+  const out = ['server.js'];
+  const walk = (rel) => {
+    for (const entry of fs.readdirSync(path.join(ROOT, rel), { withFileTypes: true })) {
+      const next = path.join(rel, entry.name);
+      if (entry.isDirectory()) { if (entry.name !== 'node_modules') walk(next); } else if (/\.(c|m)?js$/.test(entry.name)) out.push(next);
+    }
+  };
+  walk('lib');
+  walk('electron');
+  return out.map((rel) => rel.split(path.sep).join('/'));
+}
+// A lookup of `claude` written as a command line.
+const LOOKUP_COMMAND = /\b(?:which|where\.exe)\s+claude\b/g;
+// A shell call whose command line, as written, asks for `--version`, and a
+// command line built from a path with `--version` after it.
+const SHELL_CALL = /\bexec(?:Sync)?\(\s*(`(?:[^`\\]|\\.)*`|'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*")/g;
+const BUILT_VERSION_LINE = /\$\{[^}]*\}["']?\s+--version\b/g;
+function versionThroughAShell(text) {
+  const hits = [];
+  for (const m of text.matchAll(SHELL_CALL)) if (m[1].includes('--version')) hits.push(m[0]);
+  for (const m of text.matchAll(BUILT_VERSION_LINE)) hits.push(m[0]);
+  return hits;
+}
+// The body of a top-level function, from its declaration to its closing brace.
+function body(text, name) {
+  const at = text.indexOf(`function ${name}(`);
+  assert.ok(at >= 0, `${name} is declared`);
+  const end = text.indexOf('\n}\n', at);
+  assert.ok(end > at, `${name} ends`);
+  return text.slice(at, end + 2);
+}
+
+describe('one module finds claude, and nothing reads its version through a shell', () => {
+  test('the scans see what they look for: the old lookups and probes are found, and a version read with arguments is not', () => {
+    // As they were written before the one lookup.
+    const before = [
+      "    const lookupCmd = isWindows ? 'where.exe claude' : 'which claude';",
+      "      execSync(isWindows ? 'where.exe claude' : 'which claude', { timeout: 5000, encoding: 'utf-8', stdio: codexRuntime.PROBE_STDIO });",
+    ];
+    for (const line of before) assert.strictEqual([...line.matchAll(LOOKUP_COMMAND)].length, 2, line);
+    assert.strictEqual(versionThroughAShell('    claudeFoundVersion = String(execSync(`"${bin}" --version`, { timeout: 10000 }));').length, 2);
+    assert.strictEqual(versionThroughAShell('        const out = execSync(`"${resolveClaudeBin()}" --version`, { timeout: 5000 });').length, 2);
+    assert.strictEqual(versionThroughAShell("execSync('claude --version')").length, 1);
+    assert.strictEqual(versionThroughAShell('const cmd = `${bin} --version`;').length, 1);
+    // Reading a version with arguments, and telling a person what to run, are not shell strings.
+    assert.deepStrictEqual(versionThroughAShell("execFileSync(bin, ['--version'], { timeout })"), []);
+    assert.deepStrictEqual(versionThroughAShell('userMessage = `Couldn\'t start Claude Code: ${err.message}. Run \\`claude --version\\` to check your install.`;'), []);
+  });
+
+  test('no file but the lookup runs `which claude` or `where.exe claude`, or builds a `--version` command line', () => {
+    const files = appSources();
+    assert.ok(files.length >= 40, `the walk read only ${files.length} files: it has gone blind`);
+    for (const must of ['server.js', 'electron/main.js', 'lib/runtime/claude.js', 'lib/runtime/claude-lookup.js']) assert.ok(files.includes(must), `${must} is scanned`);
+    const found = [];
+    for (const file of files) {
+      const text = src(file);
+      if (file === 'lib/runtime/claude-lookup.js') {
+        assert.ok([...text.matchAll(LOOKUP_COMMAND)].length >= 2, 'the lookup itself is where today\'s lookup is run');
+        continue;
+      }
+      for (const m of text.matchAll(LOOKUP_COMMAND)) found.push(`${file}: ${m[0]}`);
+      for (const hit of versionThroughAShell(text)) found.push(`${file}: ${hit}`);
+    }
+    assert.deepStrictEqual(found, [], 'claude is looked for only by lib/runtime/claude-lookup.js, and its version read only with arguments');
+  });
+
+  test('every spawn, the Settings probe and the desktop app\'s check get their copy from the lookup', () => {
+    assert.match(body(src('lib/runtime/claude.js'), 'resolveClaudeBin'), /return lookupClaude\(\{ versionPlatform: deps\.platform\(\) \}\)\.bin \|\| 'claude';/);
+    const probe = body(src('server.js'), 'getRuntimeStatus');
+    assert.ok(probe.includes('claudeLookup.lookupClaude({ retryMissing: true })'), 'the Settings probe asks the lookup');
+    assert.ok(probe.includes('claudeLookup.readClaudeVersion(bin)'), 'and reads the version with no shell');
+    const main = src('electron/main.js');
+    const find = body(main, 'findClaude');
+    assert.ok(find.includes("require('../lib/runtime/claude-lookup.js').installedClaude()"), 'findClaude asks the lookup');
+    assert.doesNotMatch(find, /\bexec(?:Sync|FileSync)?\(|\bspawn(?:Sync)?\(/, 'and runs nothing of its own');
+    assert.ok(body(main, 'ensurePath').includes("require('../lib/runtime/claude-lookup.js').installFolders()"), 'the folders the app adds are the lookup\'s');
+  });
+});
+
+// ── The desktop app's check reads a version with no shell ──
+
+// findClaude and ensurePath as the desktop app has them, run here with the
+// lookup this file wires, so the desktop app's own code is what is checked.
+function desktopCheck() {
+  const main = src('electron/main.js');
+  const find = body(main, 'findClaude');
+  // Nothing is run before this holds: a check that runs a command line of its
+  // own would run it on the machine running the suite.
+  assert.doesNotMatch(find, /\bexec(?:Sync)?\(/, 'findClaude builds no command line');
+  const code = `${body(main, 'ensurePath')}\nlet claudeFoundVersion = null;\n${find}\nreturn { findClaude, version: () => claudeFoundVersion };`;
+  const desktopRequire = (id) => require(id.startsWith('.') ? path.join(ROOT, 'electron', id) : id);
+  return new Function('require', 'path', 'process', code)(desktopRequire, path, process);
+}
+
+describe('the desktop app\'s check reports the copy the lookup chose, with the version it read', { skip: POSIX }, () => {
+  test('a copy found in a folder holding $(...) is reported with its version, and nothing in the folder name runs', async () => {
+    const m = machine();
+    const marker = path.join(m.root, 'ran-in-a-shell');
+    const old = makeClaude(m.folders.local, OLD);
+    const current = makeClaude(m.dir('q$(touch $DESKTOP_CHECK_MARKER)'), CURRENT);
+    m.shell.plan({ loginPath: loginPath(current.dir) });
+    const warn = quietWarn();
+    try {
+      await on(m, { today: [old.dir, current.dir], env: { DESKTOP_CHECK_MARKER: marker } }, () => {
+        const desktop = desktopCheck();
+        assert.strictEqual(desktop.findClaude(), current.bin, 'the current copy, not the old one ensurePath puts first');
+        assert.strictEqual(String(desktop.version()).trim(), CURRENT, 'with the version it said');
+        assert.ok(process.env.PATH.split(':').includes(m.folders.homebrew), 'ensurePath still adds the install folders');
+      });
+      assert.strictEqual(fs.existsSync(marker), false, 'nothing in the folder name was run');
+      assert.deepStrictEqual(current.probes().map((r) => r.args), [['--version']], 'asked once, with arguments');
+      assert.deepStrictEqual(old.runs(), [], 'the old copy was never run');
+    } finally { warn.restore(); }
+  });
+
+  test('no copy, or one that cannot be run for its version, is not installed; a copy installed afterwards is found', async () => {
+    const m = machine();
+    m.shell.plan({ loginPath: loginPath(m.dir('later')) });
+    const warn = quietWarn();
+    try {
+      await on(m, { today: [] }, () => {
+        const desktop = desktopCheck();
+        assert.strictEqual(desktop.findClaude(), null, 'nothing installed');
+        const broken = makeClaude(m.dir('later'), 'CRASH');
+        assert.strictEqual(desktop.findClaude(), null, 'a copy that cannot say its version is not taken as installed');
+        broken.say(CURRENT);
+        assert.strictEqual(desktop.findClaude(), broken.bin, 'once it answers, it is found, with no restart');
+      });
+    } finally { warn.restore(); }
+  });
+});

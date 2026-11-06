@@ -3197,8 +3197,8 @@ const MUTATIONS = [
     ', version: _claudeProbeCache && _claudeProbeCache.version',
     ''],
   [CONSOLE_DESKTOP, 'Reconnect: the desktop app keeps no version from its lookup',
-    'claudeFoundVersion = String(execSync(',
-    'String(execSync('],
+    '  claudeFoundVersion = found.version;\n',
+    '  void found.version;\n'],
   // A path that ends its line starts a command of its own on the next.
   [CLAUDE_CONSOLE, 'Reconnect: a line break or NUL in the Claude Code path is written onto the command line',
     "  if (/[\\0\\r\\n]/.test(found)) return Promise.resolve({ ok: false, reason: 'unsupported' });\n",
