@@ -17,6 +17,72 @@
 // played by the real reducer and the real stored-session rules from
 // public/conversation-state.js, so what it saves back and what it resumes next
 // are the window's own decisions, not the test's.
+//
+// AN EPIPE AFTER THE LAST TEST, AND WHAT IS KNOWN OF IT. On Node 24 in CI (two
+// runs, 2026-11-05) this file failed with every test passing: node:test
+// reported that the before hook below "generated asynchronous activity after
+// the test ended", whose error was "write EPIPE", once in one run and twice in
+// the other. The CI output carried no stack, so which write failed cannot be
+// read from it. What the evidence does show:
+//
+//   - Every write to a child's stdin in this file's process is the server's.
+//     The file's own code writes to no child's stdin except the forced test's
+//     probe below, which writes to the stopped child's descriptor with
+//     fs.writeSync, synchronously and inside a try, so its EPIPE is caught
+//     where it is thrown and cannot surface later. The helpers it loads
+//     (test/helpers/harness.js, workspace.js, approvals.js) write to none. The
+//     stub agents write to a hook script's stdin, but in their own processes,
+//     where a failure cannot reach this one. A run of the file with every
+//     write to a child's stdin recorded with its caller (a preload wrapping
+//     child_process.spawn, Node v24.12.0, macOS) agrees: 90 writes, all from
+//     server.js and lib/delegation/engine.js, none from a test or a helper.
+//   - Nor was it the window's WebSocket, opened in the before hook: both its
+//     ends attach an error listener to their socket as they open (ws's
+//     setSocket), and ws writes nothing to a socket once it has closed, so an
+//     EPIPE there is handled and never reaches the process as the uncaught
+//     error node:test reported.
+//   - The trace reached ten write sites. At nine, every write was made before
+//     the code that spawned the process had yielded, and the pipe took it
+//     whole: a write made before the child can have run, with nothing left
+//     queued, cannot fail later. The tenth, the follow-up in the chat handler
+//     in server.js (`existing.process.stdin.write`), wrote to processes already
+//     running (10 of its 15 writes), so it is the one the trace finds that can
+//     reach a process that has stopped before the server has heard. The other
+//     four sites in test/unit/child-stdin-inventory.test.js were not reached
+//     in that run.
+//   - Forced (the process stopped unheard the moment a message for it reaches
+//     the server), on the code before the handler, that write gives exactly
+//     the CI failure: the test passes, the fresh delegate answers the message,
+//     and the file fails with the before hook having "generated asynchronous
+//     activity after the test ended" whose error is "write EPIPE" (six runs of
+//     six, Node v24.12.0, macOS). With the handler, the same run logs one
+//     [Stdin] line and passes (six of six). The message comes through the
+//     window's socket, opened in the before hook, which is why the error is
+//     charged to that hook; node:test prints it when the file ends, so where
+//     it is printed says nothing about which test made it. That forced run is
+//     the test 'a message that reaches a refused delegate the moment after it
+//     stopped' below, which fails on the code before the handler.
+//   - So that write is the cause this change handles, identified by
+//     elimination and by its matching signature rather than read off a stack.
+//     A sighting from here on would print a [Stdin] line naming the process
+//     and conversation whose write failed, which would confirm it or rule it
+//     out. The first CI run of this file with the handler in place (Node 24)
+//     passed with no [Stdin] line: the window did not open in that run, which
+//     says nothing either way about the race itself.
+//
+// Every write to an agent's stdin now goes to a stdin given its error handler
+// where the process started (lib/runtime/child-stdin.js), so such a write is
+// logged as one [Stdin] line naming the agent and conversation, and the
+// process's close ends what it was doing.
+//
+// Twenty runs in a row of this file on Node v24.12.0 (`node --version`; the
+// only Node on the macOS machine that ran them), one at a time, with the
+// handler in place and the forced test included: 20 passed, 34 tests each.
+// In each, the only failed write was the forced test's own, logged as its one
+// [Stdin] line, and no hook reported asynchronous activity after a test.
+// Unforced, the EPIPE has never happened on macOS, before the handler or
+// after: the twenty runs show the file is unharmed by the change, and the
+// forced test is what shows the CI failure is handled.
 const { test, describe, before, after } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -306,6 +372,84 @@ describe('a message sent while a refused delegate is still starting', () => {
     assert.strictEqual(prompts[1], 'FOLLOW-Q one more thing', 'then what the person sent');
     assertNoRawRefusal(convoId, since);
     h.reapConvo(convoId);
+  });
+});
+
+describe('a message that reaches a refused delegate the moment after it stopped', () => {
+  // THE ONE WRITE THE HEADER'S TRACE FINDS CAN REACH A STOPPED PROCESS, MADE
+  // TO. The follow-up comes through the window's socket, as in the test above,
+  // and a listener ahead of the server's own stops the refused delegate the
+  // moment the message reaches the server: the process is gone, and the server
+  // has not heard. The server then writes the message to it, and the write
+  // fails.
+  const READER_GONE = new Set(['EPIPE', 'ENOTCONN', 'ECONNRESET']);
+  function endUnheard(child) {
+    const fd = child.stdin && child.stdin._handle && child.stdin._handle.fd;
+    assert.ok(Number.isInteger(fd) && fd >= 0, 'the child\'s stdin is a pipe this platform can write to directly');
+    process.kill(child.pid, 'SIGKILL');
+    const deadline = Date.now() + 10000;
+    while (Date.now() < deadline) {
+      try { fs.writeSync(fd, '\n'); } catch (e) {
+        if (READER_GONE.has(e.code)) return;
+        if (e.code !== 'EAGAIN') throw e;
+      }
+    }
+    assert.fail('the child did not stop within ten seconds of SIGKILL');
+  }
+
+  test('is logged in one line, the server stays up, and the fresh delegate answers it', { timeout: 60000 }, async () => {
+    const convoId = h.freshConvoId('stale-follow-stopped');
+    const record = seed(convoId, {
+      agentId: 'chief-of-staff', sessionId: 'live-orch-w',
+      sessionIds: [{ agentId: 'chief-of-staff', sessionId: 'live-orch-w' }, { agentId: 'content-lead', sessionId: 'dead-lead-w' }],
+    });
+    scenario([
+      { match: { resume: true, promptIncludes: 'ASK-W', promptExcludes: 'DELEGATION BRIEF' },
+        turn: [{ agentTool: { subagent_type: 'content-lead', description: 'To the lead.', prompt: 'BRIEF-ONE w' } }] },
+      { match: { agent: 'content-lead', promptIncludes: 'BRIEF-ONE' }, turn: [{ text: 'LEAD-BRIEFED-W' }] },
+      { match: { agent: 'content-lead', promptIncludes: 'FOLLOW-W' }, turn: [{ text: 'LEAD-FOLLOWED-W' }] },
+    ], ['dead-lead-w'], { refusalExitMs: 1200 });
+    h.clearInvocations();
+    const uncaught = [];
+    const monitor = (err) => uncaught.push(err);
+    const stdinLines = [];
+    const realError = console.error;
+    process.on('uncaughtExceptionMonitor', monitor);
+    console.error = (...args) => {
+      const line = args.map(String).join(' ');
+      if (line.startsWith('[Stdin]')) stdinLines.push(line);
+      realError(...args);
+    };
+    try {
+      const win = windowFor(record);
+      const since = client.messages.length;
+      win.send('ASK-W please');
+      await client.waitFor(m => m.subtype === 'session_expired' && m._conversationId === convoId,
+        { since, label: 'the delegate is refused and still lingering', timeout: 15000 });
+      const refused = h.internal.chatProcesses.get(convoId);
+      assert.ok(refused && refused.agentId === 'content-lead', 'the refused delegate is the conversation\'s');
+      // Held now: the fresh delegate takes over the same entry.
+      const refusedProcess = refused.process;
+      const serverSide = [...h.internal.wss.clients].find(c => c.readyState === 1);
+      serverSide.prependOnceListener('message', () => endUnheard(refusedProcess));
+      win.send('FOLLOW-W one more thing');
+      await waitForResult(convoId, 'LEAD-FOLLOWED-W', since, 'the follow-up is answered by the fresh delegate');
+
+      assert.deepStrictEqual(uncaught.map(e => `${e.code || ''} ${e.message}`), [],
+        'the failed write reaches nothing as an uncaught exception, which would end the server');
+      assert.strictEqual(stdinLines.length, 1, `one line, for the one failed write: ${JSON.stringify(stdinLines)}`);
+      assert.match(stdinLines[0], new RegExp(`^\\[Stdin\\] claude \\(agent content-lead, conversation ${convoId}\\) pid=${refusedProcess.pid}: a write failed \\((EPIPE|ENOTCONN|ECONNRESET): `),
+        'naming the delegate, its conversation and the error');
+      assert.deepStrictEqual(spawnsFor(convoId).filter(i => i.agent === 'content-lead').map(i => i.resume), ['dead-lead-w', null],
+        'the refused process\'s close starts the delegate fresh, once');
+      assert.strictEqual(h.promptsFor('content-lead').filter(p => p === 'FOLLOW-W one more thing').length, 1,
+        'and the message is carried to it once, as sent');
+      assertNoRawRefusal(convoId, since);
+    } finally {
+      console.error = realError;
+      process.removeListener('uncaughtExceptionMonitor', monitor);
+      h.reapConvo(convoId);
+    }
   });
 });
 

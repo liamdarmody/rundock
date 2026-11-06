@@ -378,6 +378,15 @@ describe('shards are planned by time, not rows', () => {
     assert.deepStrictEqual(planShards(many, { costs }), a);
   });
 
+  test('a plan the cap does not reach is the same whatever the cap', () => {
+    // The cap only binds once a plan needs more shards than it allows, so
+    // raising it changes the full nightly set and leaves a scoped plan alone.
+    const scoped = [h('slow', 120), h('fast', 120)];
+    const at = (maxShards) => planShards(scoped, { costs, maxShards });
+    assert.ok(at(MAX_SHARDS).shards.length < MAX_SHARDS - 1, 'sanity: this plan is well under the cap');
+    assert.deepStrictEqual(at(MAX_SHARDS - 1), at(MAX_SHARDS));
+  });
+
   test('the committed cost table is well formed, and names only harnesses that exist', () => {
     // A harness missing from the table is planned at the default, so adding a
     // harness still touches only the harness; a stale entry is flagged here.

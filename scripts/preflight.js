@@ -54,6 +54,10 @@ const REGISTRY_SUITES = [
   // Only the scheduler starts an agent with no conversation, which is what
   // tells a routine's refused card apart from a conversation's.
   'test/unit/unattended-spawn-paths.test.js',
+  // Every write to a child's stdin goes to a child whose stdin was given its
+  // error handler where it started, so a write to one that has stopped is
+  // logged and never ends the server.
+  'test/unit/child-stdin-inventory.test.js',
   // Every innerHTML assignment is classified, and the totals beside it.
   'test/unit/innerhtml-inventory.test.js',
   // Documents that state the code's own numbers, names and lists.

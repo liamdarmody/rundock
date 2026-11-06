@@ -66,6 +66,8 @@ Agents with `runtime: codex` run on the official Codex CLI instead, through ONE 
 
 The subprocess speaks **stream-json** on stdout: a sequence of newline-delimited JSON events (assistant tokens, tool calls, tool results, system events). The server reads this stream line by line and forwards relevant events to the browser as WebSocket messages.
 
+Every message reaches an agent on its process's stdin, and a process can stop before the server has heard that it stopped: Claude Code refuses a resume and exits before reading anything, or the process crashes or is ended. **A write to a stopped process is logged and handled by that process's close, and never ends the server.** Each process's stdin is given its error handler once, where the process is started (`lib/runtime/child-stdin.js`, called from `spawnClaude` in `lib/runtime/claude.js` and from the Codex app-server's spawn in `codex-appserver.js`), so no write site needs one of its own. The handler logs one line per failed write, naming the process and the error, and does nothing else: the process's close then ends its turn or its delegation exactly as it does for any process that stops. Pinned by `test/unit/doc-claims.test.js`, and every write to a child's stdin is held to those two start paths by `test/unit/child-stdin-inventory.test.js`.
+
 The subprocess's working directory is the workspace. Its file access, tool availability, and permissions are governed by Claude Code itself, not by Rundock. Rundock can only configure the spawn arguments and intercept the streamed output.
 
 ### Conversations: resume vs spawn fresh
