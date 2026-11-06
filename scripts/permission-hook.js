@@ -835,9 +835,10 @@ function secretsReachedBy(word, { starts, unfollowed, relative, entries, folds, 
 // handed `-r`, `-R` or `--recursive`, is judged to read the folder, the safe
 // direction for a file with nothing beneath the card.
 // `pax` is here because writing an archive it reads every file beneath the
-// folder with no flag asking it to. `cpio` is not: it takes the names it
-// copies on its input, never from a folder it is handed. rg, ag and ack are
-// read through READER_OPTIONS below.
+// folder with no flag asking it to. `cpio` is not: it reads only the files
+// named on its input, never a folder it is handed. What it is handed, or the
+// folder it runs in, can be the folder it copies into, which cpioFolders
+// finds. rg, ag and ack are read through READER_OPTIONS below.
 const RECURSIVE_READERS = new Set(['rsync', 'tar', 'gtar', 'bsdtar', 'zip', '7z', '7za', 'ditto', 'pax']);
 const SEARCHES_CWD_UNNAMED = new Set(['grep', 'rg', 'ag', 'ack', 'find']);
 const LISTS_NAMES_ONLY = new Set(['ls', 'du', 'tree', 'stat', 'file', 'cd', 'pushd', 'popd', 'test', '[', 'realpath', 'readlink', 'dirname', 'basename', 'pwd', 'mkdir', 'echo', 'printf', 'true', 'false']);
@@ -858,6 +859,8 @@ const RUNS_PER_NAME = new Set(['-exec', '-execdir', '-ok', '-okdir']);
 const GREP_VALUES = ['regexp', 'file', 'after-context', 'before-context', 'context', 'max-count', 'devices', 'directories',
   'include', 'exclude', 'exclude-dir', 'exclude-from', 'include-dir', 'label', 'binary-files', 'group-separator'];
 const CP_VALUES = ['target-directory', 'suffix', 'sparse', 'no-preserve'];
+const CPIO_VALUES = ['block-size', 'directory', 'file', 'format', 'io-size', 'message', 'owner', 'passphrase', 'pattern-file',
+  'rename-batch-file', 'rsh-command', 'warning'];
 const READER_OPTIONS = {
   grep: {
     short: 'efABCmDd', long: GREP_VALUES, patterns: ['e', 'f', 'regexp', 'file'],
@@ -893,6 +896,16 @@ const READER_OPTIONS = {
       'recursive', 'reflink', 'remove-destination', 'strip-trailing-slashes', 'symbolic-link', 'update', 'verbose', 'help', 'version'],
   },
   scp: { short: 'cDFiJloPSX', long: [] },
+  // GNU's and BSD's options together. BSD's `-f PATTERN` is left out, so a
+  // folder after it is still counted; GNU's `-f` takes no value.
+  cpio: {
+    short: 'CDEFHIMORW', long: CPIO_VALUES,
+    names: [...CPIO_VALUES, 'absolute-filenames', 'append', 'binary', 'create', 'dereference', 'device-independent', 'dot', 'extract',
+      'force-local', 'help', 'ignore-devno', 'insecure', 'link', 'list', 'lrzip', 'lz4', 'lzma', 'lzop', 'make-directories',
+      'no-absolute-filenames', 'no-preserve-owner', 'nonmatching', 'null', 'numeric-uid-gid', 'only-verify-crc', 'pass-through',
+      'preserve-modification-time', 'preserve-owner', 'pwb', 'quiet', 'rename', 'renumber-inodes', 'reproducible', 'reset-access-time',
+      'sparse', 'swap', 'swap-bytes', 'swap-halfwords', 'to-stdout', 'unconditional', 'usage', 'verbose', 'version', 'xz', 'zstd'],
+  },
 };
 const READER_FAMILY = { egrep: 'grep', fgrep: 'grep', ggrep: 'grep' };
 // Whether one of these reads the folders it is given: a recursive grep, cp or
@@ -902,6 +915,20 @@ function recursiveFor(family, has, values) {
   if (family === 'cp') return has('r', 'R', 'a', 'recursive', 'archive');
   if (family === 'scp') return has('r');
   return true;
+}
+// THE FOLDERS cpio COPIES INTO, which can replace a credential file there as
+// `cp -r /tmp/x ~/.claude` can. In pass-through (`-p`) that is every folder it
+// is handed, a relative one measured from GNU's `-D DIR`; copy-in (`-i`)
+// extracts into the folder it runs in, or `-D DIR`, unless it only lists or
+// writes to its output. Copy-out (`-o`) copies into no folder. A mode written
+// as a shortened long option counts as each mode it could be.
+function cpioFolders(opt, has, values) {
+  const mode = (letter, name) => has(letter) || opt.given.some(([n]) => n.length > 1 && name.startsWith(n));
+  const dir = values('D', 'directory').pop();
+  const folders = [];
+  if (mode('p', 'pass-through')) folders.push(...opt.operands.map(o => (dir && !/^[/~$]/.test(o) ? `${dir}/${o}` : o)));
+  if (mode('i', 'extract') && !has('t', 'list', 'to-stdout', 'only-verify-crc')) folders.push(dir || '.');
+  return folders;
 }
 // The options a command was given, [name, value] with a long one by its whole
 // name, and the words that are not options, in order. Options may sit among
@@ -1030,6 +1057,7 @@ function recursiveReadWords(command, posixText = true) {
       const opt = readOptions(args, spec);
       const has = (...names) => opt.given.some(([n]) => names.includes(n));
       const values = (...names) => opt.given.filter(([n, v]) => names.includes(n) && v !== null).map(([, v]) => v);
+      if (family === 'cpio') { for (const o of cpioFolders(opt, has, values)) found.push({ word: o, at }); continue; }
       const lists = !!spec.lists && has(...spec.lists);
       if (lists && !runsXargs(pipedTo)) continue;
       if (!recursiveFor(family, has, values)) continue;

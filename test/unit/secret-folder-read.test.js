@@ -198,6 +198,41 @@ const FREE = [
   'rg --files --hidden ~/.claude', 'cd ~/.claude && rg --type-list',
 ];
 
+// A FOLDER cpio COPIES INTO. cpio copies the files named on its input, so it
+// reads no folder it is handed, but in pass-through (`-p`) the folder it is
+// handed is where those files land, and copy-in (`-i`) extracts an archive
+// into the folder it runs in, or GNU's `-D DIR`. Measured with the system cpio:
+// each replaces an older credential file there or makes one where there was
+// none, and with `-u` replaces a newer one too, so a runtime folder there asks
+// as `cp -r /tmp/x ~/.claude` does. Before this, with a workspace file named
+// `.credentials.json`, the first of these replaced the credential file with no
+// secret card.
+const CPIO_INTO = [
+  "printf '%s\\n' .credentials.json | cpio -pu ~/.claude", 'echo .credentials.json | cpio -p ~/.claude',
+  'find . -name .credentials.json | cpio -pdm ~/.claude', 'echo .credentials.json | cpio -pdmu "$HOME"/.claude',
+  'echo .credentials.json | cpio --pass-through ~/.claude', 'echo .credentials.json | cpio --pass-through --unconditional ~/.claude/',
+  'echo .credentials.json | cpio -dmp ~/.claude', 'echo .credentials.json | cpio -u -p ~/\\.claude',
+  // An option's value is not the folder, and GNU's -D is where a relative one
+  // is measured from.
+  'echo .credentials.json | cpio -pu -R root ~/.claude', 'echo .credentials.json | cpio -p -D ~ .claude',
+  'echo .credentials.json | cpio -p /tmp/a ~/.claude',
+  // Behind a program that runs the next one.
+  'echo .credentials.json | sudo cpio -pu ~/.claude', 'echo .credentials.json | env -u FOO cpio -pu ~/.claude',
+  'echo .credentials.json | nice -n 5 cpio --pass-through ~/.claude',
+  // After a cd, and an archive extracted into the folder it runs in.
+  'cd ~ && echo .credentials.json | cpio -pu .claude', 'cd ~/.claude && cpio -i < /tmp/x.cpio', 'cd ~/.claude && cpio -idu < /tmp/x.cpio',
+  'cd ~/.claude && cpio --extract -F /tmp/x.cpio', 'cd ~/.claude && sudo cpio -iu < /tmp/x.cpio',
+  'cpio -i -D ~/.claude < /tmp/x.cpio', 'cpio -idu --directory="$HOME"/.claude -F /tmp/x.cpio', 'cpio -i --dir ~/.claude < /tmp/x.cpio',
+];
+// A cpio copy that lands nowhere a credential file is, copy-out, which writes
+// an archive to its output, and a copy-in that only lists, answer as they do
+// today. Measured on the branch before this change, each answers as ON_MAIN.
+const CPIO_AS_TODAY = [
+  'echo notes.md | cpio -pdm out', "printf '%s\\n' notes.md | cpio -pdm /tmp/out", 'find . | cpio -pdm /tmp/out',
+  'echo notes.md | env -u FOO cpio -pu /tmp/out', 'find . | cpio -o > /tmp/x.cpio', 'cpio -i < /tmp/x.cpio', 'cpio -idv < /tmp/x.cpio',
+  'cd ~/.claude && cpio -it < /tmp/x.cpio', 'cd ~/.claude && cpio -i --list < /tmp/x.cpio', 'cd ~/.claude && cpio -i --to-stdout < /tmp/x.cpio',
+];
+
 describe('a recursive reader handed a runtime folder', { skip: POSIX, concurrency: 8 }, () => {
   for (const [label, env] of MODES) {
     for (const command of CLAUDE) {
@@ -321,6 +356,62 @@ describe('the five sequences', { skip: POSIX, concurrency: 4 }, () => {
   }
 });
 
+describe('a runtime folder cpio copies into', { skip: POSIX, concurrency: 8 }, () => {
+  for (const [label, env] of MODES) {
+    for (const command of CPIO_INTO) {
+      test(`${label}: ${command}`, async () => { await assertFolderCard(command, CLAUDE_FILES, env); });
+    }
+    test(`${label}: ~/.codex, and a copy-in the runtime starts in the folder`, async () => {
+      await assertFolderCard('echo auth.json | cpio -pu ~/.codex', CODEX_FILES, env);
+      await assertFolderCard('cpio -i < /tmp/x.cpio', CLAUDE_FILES, env, { cwd: path.join(home, '.claude') });
+    });
+    for (const command of CPIO_AS_TODAY) {
+      test(`${label}, as today: ${command}`, async () => { await assertAsOnMain(label, command, env); });
+    }
+
+    // The inverse: the credential file copied out of the folder, named on
+    // cpio's input, asks as that file, as it did before this change.
+    test(`${label}, the inverse: the credential file copied out of the folder asks`, async () => {
+      for (const command of ['cd ~/.claude && echo .credentials.json | cpio -pdm /tmp/x', 'echo ~/.claude/.credentials.json | cpio -pdm /tmp/x']) {
+        const r = await ask(command, env);
+        assert.strictEqual(r.decision, 'deny', command);
+        assert.ok(r.cards.length === 1 && secrets(r.cards[0]).some(c => c.path === CREDENTIALS), `${command}: the card names the credential file`);
+      }
+    });
+
+    // The undo: the same copies into a subfolder holding no credential file.
+    test(`${label}, the undo: a copy into a subfolder holding no credential file raises no secret card`, async () => {
+      for (const command of ['echo notes.md | cpio -pdm ~/.claude/projects', 'cd ~/.claude/projects && cpio -i < /tmp/x.cpio']) {
+        await assertAsOnMain(label, command, env);
+      }
+    });
+
+    test(`${label}, the retry: the same copy raises the same card`, async () => {
+      for (const command of ["printf '%s\\n' .credentials.json | cpio -pu ~/.claude", 'cd ~/.claude && cpio -i < /tmp/x.cpio']) {
+        const first = await assertFolderCard(command, CLAUDE_FILES, env);
+        const again = await assertFolderCard(command, CLAUDE_FILES, env);
+        assert.deepStrictEqual(again.crossings, first.crossings, command);
+      }
+    });
+
+    // The next step: a look at what landed, which stays free.
+    test(`${label}, the next step: listing the folder after the copy`, async () => {
+      await assertFolderCard("printf '%s\\n' .credentials.json | cpio -pu ~/.claude", CLAUDE_FILES, env);
+      await assertAsOnMain(label, 'ls -la ~/.claude', env);
+      await assertAsOnMain(label, 'cat ~/.claude/settings.json', env);
+    });
+
+    // The control failing closed: a mode written as a long option shortened
+    // to what it could be, or a list-only option that is not certain, asks.
+    test(`${label}, the control failing: a mode cpio could take asks`, async () => {
+      for (const command of ['echo .credentials.json | cpio --pass ~/.claude', 'cd ~/.claude && cpio --ex < /tmp/x.cpio',
+        'cd ~/.claude && cpio -i --li < /tmp/x.cpio']) {
+        await assertFolderCard(command, CLAUDE_FILES, env);
+      }
+    });
+  }
+});
+
 describe('with the server unreachable', { skip: POSIX, concurrency: 4 }, () => {
   let closed;
   before(async () => {
@@ -335,6 +426,9 @@ describe('with the server unreachable', { skip: POSIX, concurrency: 4 }, () => {
         ['grep -r token ~/.claude', `grep token ${named(CLAUDE_FILES)}`],
         ['cd ~/.claude && grep -r token', `grep token ${named(CLAUDE_FILES)}`],
         ['cp -a ~/.codex /tmp/y', `cp -a ${named(CODEX_FILES)} /tmp/y`],
+        // A copy writes, so its direct spelling is the same copy naming each file.
+        ['echo .credentials.json | cpio -pu ~/.claude', `echo .credentials.json | cpio -pu ${named(CLAUDE_FILES)}`],
+        ['cd ~/.claude && cpio -i < /tmp/x.cpio', 'cd ~/.claude && cpio -i .credentials.json .config.json < /tmp/x.cpio'],
       ]) {
         const via = await ask(command, env, { at: closed });
         const plain = await ask(plainCommand, env, { at: closed });
@@ -376,6 +470,14 @@ describe('through classifyShellAccess', { skip: POSIX }, () => {
         const plain = classify(direct(files, program), codeMode);
         assert.deepStrictEqual(assertClassified(command, files, codeMode).crossings.slice().sort(byPath), plain.crossings.slice().sort(byPath), command);
       }
+    });
+
+    test(`${label}: a runtime folder cpio copies into`, () => {
+      for (const command of CPIO_INTO) assertClassified(command, CLAUDE_FILES, codeMode);
+      assertClassified('echo auth.json | cpio -pu ~/.codex', CODEX_FILES, codeMode);
+      assertClassified('cpio -i < /tmp/x.cpio', CLAUDE_FILES, codeMode, { cwd: path.join(home, '.claude') });
+      for (const command of CPIO_AS_TODAY) assert.deepStrictEqual(secretPaths(classify(command, codeMode)), [], command);
+      assert.strictEqual(classify('echo notes.md | cpio -pdm out', codeMode), null, 'a copy inside the workspace crosses nothing');
     });
 
     test(`${label}: listing names and reading a free file give no secret crossing`, () => {

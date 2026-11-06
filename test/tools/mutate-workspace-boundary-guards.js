@@ -392,6 +392,8 @@ const SECRET_FOLDER = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), s
 // only through the real server, with the real hook's request and a grant
 // stored over the runtime folder.
 const SECRET_FOLDER_GRANT = { src: path.join(ROOT, 'lib', 'http-router.js'), suite: 'test/integration/secret-reach-card.test.js' };
+// The same folder rule, through the real hook and the real server.
+const SECRET_FOLDER_CARD = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/integration/secret-reach-card.test.js' };
 
 const MUTATIONS = [
   // ===== ONE DIRECTORY UNDER TWO NAMES IS ONE IDENTITY =====
@@ -3675,6 +3677,31 @@ const MUTATIONS = [
   [SECRET_FOLDER, "Folder reads: a program this does not know is never a reader, whatever its flags",
     "      const flagged = args.some(a => /^-[A-Za-z]*[rR][A-Za-z]*$/.test(a)) || args.includes('--recursive');",
     "      const flagged = false;"],
+  // A folder cpio copies into: every folder pass-through is handed, and the
+  // folder copy-in extracts into. Drop either and a workspace file named
+  // `.credentials.json` replaces the credential file with no secret card.
+  [SECRET_FOLDER, "Folder reads: the folder a cpio pass-through copies into is not counted",
+    "  if (mode('p', 'pass-through')) folders.push(...opt.operands.map(o => (dir && !/^[/~$]/.test(o) ? `${dir}/${o}` : o)));",
+    ""],
+  [SECRET_FOLDER_CARD, "Folder reads: the folder a cpio pass-through copies into is not counted, against the real server",
+    "  if (mode('p', 'pass-through')) folders.push(...opt.operands.map(o => (dir && !/^[/~$]/.test(o) ? `${dir}/${o}` : o)));",
+    ""],
+  [HOOK_CRASH, "Folder reads: the folder a cpio pass-through copies into is not counted, when something fails",
+    "  if (mode('p', 'pass-through')) folders.push(...opt.operands.map(o => (dir && !/^[/~$]/.test(o) ? `${dir}/${o}` : o)));",
+    ""],
+  [SECRET_FOLDER, "Folder reads: the folder a cpio copy-in extracts into is not counted",
+    "  if (mode('i', 'extract') && !has('t', 'list', 'to-stdout', 'only-verify-crc')) folders.push(dir || '.');",
+    ""],
+  [SECRET_FOLDER, "Folder reads: a cpio mode written as a shortened long option is not counted",
+    "  const mode = (letter, name) => has(letter) || opt.given.some(([n]) => n.length > 1 && name.startsWith(n));",
+    "  const mode = (letter, name) => has(letter, name);"],
+  [SECRET_FOLDER, "Folder reads: a relative cpio pass-through folder is not measured from -D",
+    "(dir && !/^[/~$]/.test(o) ? `${dir}/${o}` : o)",
+    "o"],
+  // The other side: a copy-in that only lists stays as it is today.
+  [SECRET_FOLDER, "Folder reads: a cpio copy-in that only lists is counted as extracting",
+    "!has('t', 'list', 'to-stdout', 'only-verify-crc')",
+    "true"],
 ];
 const REPORTER = ['--test-reporter', 'spec'];
 

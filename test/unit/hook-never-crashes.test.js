@@ -394,7 +394,9 @@ describe('a credential file named after a cd or by a glob, when something fails'
     // find's options before its folder.
     'find -L ~/.claude -exec cat {} +',
     // Names listed and handed to xargs.
-    'rg --files ~/.claude | xargs cat'];
+    'rg --files ~/.claude | xargs cat',
+    // A folder cpio copies into, in pass-through and on copy-in.
+    "printf '%s\\n' .credentials.json | cpio -pu ~/.claude", 'cd ~/.claude && cpio -i < /tmp/x.cpio'];
   const MODES = [['Notes mode', {}], ['Code mode', { RUNDOCK_CODE_MODE: '1' }]];
   const POSIX = { skip: process.platform === 'win32' && 'the home folder is read from HOME here' };
   const throwsOnRequest = path.join(root, 'secret-throws-on-request.js');

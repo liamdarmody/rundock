@@ -262,7 +262,9 @@ describe('a credential file that is a link, against a grant on where it leads', 
 // through, and the same command sent again is not answered by the grant
 // either.
 describe('a stored grant over a runtime folder, against a read of everything in it', () => {
-  const READS = ['grep -r token ~/.claude', 'cd ~/.claude && rg -e token', 'find -L ~/.claude -exec cat {} +', 'env -u FOO rg token ~/.claude'];
+  const READS = ['grep -r token ~/.claude', 'cd ~/.claude && rg -e token', 'find -L ~/.claude -exec cat {} +', 'env -u FOO rg token ~/.claude',
+    // A copy into it, which can replace the credential file.
+    'echo .credentials.json | cpio -pu ~/.claude'];
   for (const [label, env] of MODES) {
     test(`${label}: the grant answers neither the read nor the same read again`, POSIX, async () => {
       const answers = boundary.boundaryPermissionsPath();
