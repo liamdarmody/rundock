@@ -640,3 +640,102 @@ describe('the desktop app\'s check reports the copy the lookup chose, with the v
     } finally { warn.restore(); }
   });
 });
+
+// ── Windows keeps where.exe, and the floor is applied across its answer ──
+
+// Windows has no login shell to ask. Its copies are stood in by scripts named
+// as Windows names them, an npm claude.cmd beside the package it starts, and
+// `where.exe` by a script on the PATH printing them in its own order.
+function windows(m, listed) {
+  const where = m.dir('where-exe');
+  fs.mkdirSync(where, { recursive: true });
+  fs.writeFileSync(path.join(where, 'answer'), listed.map((c) => `${c.bin}\r\n`).join(''));
+  fs.writeFileSync(path.join(where, 'where.exe'), '#!/bin/sh\ncat "$(dirname "$0")/answer"\n');
+  fs.chmodSync(path.join(where, 'where.exe'), 0o755);
+  return where;
+}
+function npmLauncher(dir, version) {
+  const copy = makeClaude(dir, 'CRASH', 'claude.cmd');
+  const pkg = path.join(dir, 'node_modules', '@anthropic-ai', 'claude-code');
+  fs.mkdirSync(pkg, { recursive: true });
+  fs.writeFileSync(path.join(pkg, 'package.json'), JSON.stringify({ name: '@anthropic-ai/claude-code', version }));
+  return copy;
+}
+
+describe('Windows keeps where.exe and its order, and passes over a copy below the floor', { skip: POSIX }, () => {
+  async function onWindows(m, listed, fn, extra) {
+    const { rt, warn, done } = runtime({ platform: () => 'win32', ...extra });
+    try {
+      return await on(m, { today: [windows(m, listed)], platform: 'win32' }, () => fn(rt));
+    } finally {
+      done();
+      assert.deepStrictEqual(m.shell.runs(), [], 'no login shell is asked on Windows');
+      assert.deepStrictEqual(warn.lookupLines(), []);
+    }
+  }
+
+  test('where.exe lists a plain copy, a .cmd and an .exe: the .exe is chosen, as before', async () => {
+    const m = machine();
+    const plain = makeClaude(m.dir('plain'), CURRENT);
+    const cmd = npmLauncher(m.dir('npm'), '2.1.318');
+    const exe = makeClaude(m.dir('exe'), CURRENT, 'claude.exe');
+    await onWindows(m, [plain, cmd, exe], (rt) => assert.strictEqual(rt.resolveClaudeBin(), exe.bin));
+  });
+
+  test('where.exe lists a plain copy and a .cmd: the .cmd is chosen, as before', async () => {
+    const m = machine();
+    const plain = makeClaude(m.dir('plain'), CURRENT);
+    const cmd = npmLauncher(m.dir('npm'), '2.1.318');
+    await onWindows(m, [plain, cmd], (rt) => assert.strictEqual(rt.resolveClaudeBin(), cmd.bin));
+    assert.deepStrictEqual(plain.runs(), [], 'the plain copy was not needed');
+  });
+
+  test('an old .exe and a current npm .cmd: the .cmd starts, read from its package and never run for its version', async () => {
+    const m = machine();
+    const exe = makeClaude(m.dir('exe'), OLD, 'claude.exe');
+    const cmd = npmLauncher(m.dir('npm'), '2.1.318');
+    await onWindows(m, [exe, cmd], async (rt) => {
+      assert.strictEqual(rt.resolveClaudeBin(), cmd.bin);
+      assert.strictEqual((await spawnAndSettle(rt)).error, null);
+    });
+    assert.deepStrictEqual(cmd.probes(), [], 'the .cmd was never run for its version');
+    assert.strictEqual(cmd.chats().length, 1, 'the .cmd was started');
+    assert.strictEqual(exe.probes().length, 1, 'the old .exe was read once');
+    assert.deepStrictEqual(exe.chats(), [], 'and never started');
+  });
+
+  test('with the platform itself Windows, the lookup through cmd.exe passes an old .exe over for a current .cmd', () => {
+    // As spawn-plumbing probes it: a fresh process, the platform patched after
+    // the runtime loads, and where.exe answered by a `cmd.exe` on the PATH,
+    // which node runs a command line through on Windows.
+    const m = machine();
+    const exe = makeClaude(m.dir('exe'), OLD, 'claude.exe');
+    const cmd = npmLauncher(m.dir('npm'), '2.1.318');
+    const where = windows(m, [exe, cmd]);
+    fs.writeFileSync(path.join(where, 'cmd.exe'), '#!/bin/sh\ncat "$(dirname "$0")/answer"\n');
+    fs.chmodSync(path.join(where, 'cmd.exe'), 0o755);
+    const script = [
+      `const rt = require(${JSON.stringify(LIB_KEY)});`,
+      "Object.defineProperty(process, 'platform', { value: 'win32' });",
+      "console.log('RESOLVED:' + rt.resolveClaudeBin());",
+    ].join('\n');
+    const env = { PATH: [where, '/usr/bin', '/bin'].join(':'), HOME: m.home };
+    const res = require('node:child_process').spawnSync(process.execPath, ['-e', script], { env, encoding: 'utf8', timeout: 30000 });
+    const line = String(res.stdout).split('\n').find((l) => l.startsWith('RESOLVED:'));
+    assert.ok(line, `the probe printed a resolution (stderr: ${String(res.stderr).slice(0, 300)})`);
+    assert.strictEqual(line.slice('RESOLVED:'.length), cmd.bin);
+    assert.deepStrictEqual(cmd.runs(), [], 'the .cmd was read from its package, never run');
+  });
+
+  test('an old .exe and an old npm .cmd: the .exe is refused by name, and nothing starts', async () => {
+    const m = machine();
+    const exe = makeClaude(m.dir('exe'), OLD, 'claude.exe');
+    const cmd = npmLauncher(m.dir('npm'), '2.0.58');
+    await onWindows(m, [exe, cmd], async (rt) => {
+      const { error } = await spawnAndSettle(rt);
+      assert.strictEqual(error && error.message, frozen('2.0.58', exe.bin));
+    });
+    assert.deepStrictEqual(exe.chats(), []);
+    assert.deepStrictEqual(cmd.runs(), [], 'the .cmd was read from its package, never run');
+  });
+});

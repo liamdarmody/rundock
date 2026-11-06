@@ -82,10 +82,11 @@ function makeLoginShell(parent, plan, name = 'zsh') {
 // --version is read from `said` beside it on every run, so a copy can be
 // updated in place: CRASH exits 3 having printed nothing, STALL never
 // answers. Every run is logged with its arguments, so a version probe can be
-// told from a chat it was handed.
-function makeClaude(dir, said) {
+// told from a chat it was handed. `name` stands in a Windows copy, such as
+// claude.exe or an npm claude.cmd, as a script this machine can run.
+function makeClaude(dir, said, name = 'claude') {
   fs.mkdirSync(dir, { recursive: true });
-  const bin = path.join(dir, 'claude');
+  const bin = path.join(dir, name);
   fs.writeFileSync(bin, `#!${process.execPath}
 const fs = require('fs');
 const path = require('path');
