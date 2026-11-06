@@ -17,6 +17,9 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
+// spawnClaude below finds `claude` the way Rundock does, and with $SHELL set
+// that would ask the login shell of whoever runs the suite.
+require('../helpers/no-login-shell.js');
 
 const config = require('../../lib/config.js');
 const glue = require('../../lib/runtime/codex-glue.js');
