@@ -834,7 +834,11 @@ function secretsReachedBy(word, { starts, unfollowed, relative, entries, folds, 
 // UNKNOWN WITH A RECURSIVE FLAG MEANS A READER: a program not named below,
 // handed `-r`, `-R` or `--recursive`, is judged to read the folder, the safe
 // direction for a file with nothing beneath the card.
-const RECURSIVE_READERS = new Set(['rg', 'ag', 'ack', 'rsync', 'tar', 'gtar', 'bsdtar', 'zip', '7z', '7za', 'ditto', 'pax', 'cpio']);
+// `pax` is here because writing an archive it reads every file beneath the
+// folder with no flag asking it to. `cpio` is not: it takes the names it
+// copies on its input, never from a folder it is handed. rg, ag and ack are
+// read through READER_OPTIONS below.
+const RECURSIVE_READERS = new Set(['rsync', 'tar', 'gtar', 'bsdtar', 'zip', '7z', '7za', 'ditto', 'pax']);
 const SEARCHES_CWD_UNNAMED = new Set(['grep', 'rg', 'ag', 'ack', 'find']);
 const LISTS_NAMES_ONLY = new Set(['ls', 'du', 'tree', 'stat', 'file', 'cd', 'pushd', 'popd', 'test', '[', 'realpath', 'readlink', 'dirname', 'basename', 'pwd', 'mkdir', 'echo', 'printf', 'true', 'false']);
 const RUNS_PER_NAME = new Set(['-exec', '-execdir', '-ok', '-okdir']);

@@ -3666,6 +3666,15 @@ const MUTATIONS = [
     + "        if (data.boundary && grantable && crossings.length && uncovered.length === 0) {",
     "        const uncovered = crossings.filter(c => !require('./workspace/boundary.js').boundaryGrantCovers(c.path));\n"
     + "        if (data.boundary && crossings.length && uncovered.length === 0) {"],
+  // pax writing an archive reads all of a folder with no flag to say so.
+  [SECRET_FOLDER, "Folder reads: pax is not a reader",
+    "'7z', '7za', 'ditto', 'pax']);",
+    "'7z', '7za', 'ditto']);"],
+  // The control failing: a program this does not know, given a folder after a
+  // recursive flag, reads it. Recursive diff is read only this way.
+  [SECRET_FOLDER, "Folder reads: a program this does not know is never a reader, whatever its flags",
+    "      const flagged = args.some(a => /^-[A-Za-z]*[rR][A-Za-z]*$/.test(a)) || args.includes('--recursive');",
+    "      const flagged = false;"],
 ];
 const REPORTER = ['--test-reporter', 'spec'];
 

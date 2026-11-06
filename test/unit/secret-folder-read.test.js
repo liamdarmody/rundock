@@ -162,6 +162,9 @@ const CLAUDE = [
   // Names listed and handed to xargs, which reads each one; and a listing of
   // the files that match, which reads them to know.
   'rg --files ~/.claude | xargs cat', 'rg --files ~/.claude | xargs grep token', 'rg -l token ~/.claude', 'rg --files-with-matches token ~/.claude',
+  // pax writing an archive reads every file under the folder, with no flag
+  // asking it to.
+  'pax -w ~/.claude', 'pax -w -f /tmp/x.pax ~/.claude',
 ];
 // The same, reached through a cd, or by a reader given no folder after one.
 const LANDED = [
@@ -282,7 +285,9 @@ const NEXT = [['grep -r token ~/.claude', 'cat ~/.claude/settings.json'], ['grep
 // The rule: a program this does not know, given a runtime folder after `-r`,
 // `-R` or `--recursive`, is a recursive reader.
 const UNKNOWN = [['foo -r ~/.claude', CLAUDE_FILES], ['foo -R ~/.claude', CLAUDE_FILES], ['foo --recursive ~/.codex', CODEX_FILES],
-  ['env -u FOO foo -r ~/.claude', CLAUDE_FILES]];
+  ['env -u FOO foo -r ~/.claude', CLAUDE_FILES],
+  // Recursive diff is one: it has no rule of its own.
+  ['diff -r ~/.claude /tmp/x', CLAUDE_FILES], ['diff -ru /tmp/x ~/.claude', CLAUDE_FILES], ['diff --recursive ~/.claude /tmp/x', CLAUDE_FILES]];
 
 describe('the five sequences', { skip: POSIX, concurrency: 4 }, () => {
   for (const [label, env] of MODES) {
