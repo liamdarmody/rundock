@@ -1251,3 +1251,38 @@ describe('a saved PowerShell key answers only the parts it covers', () => {
     assert.deepStrictEqual(decide('npm test', saved), ALLOWED, 'and with the reading back, the key answers again');
   });
 });
+
+// A COMMAND RUNNER IS A CATCH-ALL BY ANOTHER ROUTE. A key saved for
+// `powershell`, `cmd`, `iex` or `Start-Process` answers whatever text it is
+// handed, so a runner is never keyed, and no saved key answers it, one saved
+// before this change included.
+describe('a command runner is never keyed, and no saved key answers it', () => {
+  const key = (command) => P.toolAllowKey('PowerShell', { command });
+  const decide = (command, saved) => P.decidePermission(P.classifyRisk('PowerShell', { command }),
+    P.toolAllowKey('PowerShell', { command }), new Set(saved), undefined, { toolName: 'PowerShell', input: { command } });
+  const RUNS = ['powershell -c "Remove-Item x"', 'iex $s', 'Start-Process notepad', 'pwsh -Command "Set-Content notes.md x"',
+    'PWSH.EXE -File build.ps1', 'powershell.exe -NoProfile', 'cmd /c dir', 'cmd.exe /c dir', 'Invoke-Expression $s', 'saps notepad',
+    'start notepad', 'Invoke-Command -FilePath build.ps1', 'icm -FilePath build.ps1', 'Start-Job -FilePath build.ps1', 'sajb -FilePath build.ps1',
+    'wsl ls', 'bash -c ls', 'sh -c ls', 'Get-Date; pwsh -c x', 'Get-Content notes.md | iex'];
+
+  test('a runner saves no key, alone or after a read', () => {
+    for (const command of RUNS) assert.strictEqual(key(command), null, command);
+  });
+
+  test('a saved key naming a runner answers nothing, whatever its case or suffix', () => {
+    const saved = ['PowerShell:pwsh', 'PowerShell:PWSH.EXE', 'PowerShell:powershell', 'PowerShell:cmd', 'PowerShell:iex',
+      'PowerShell:Start-Process', 'PowerShell:start', 'PowerShell:Invoke-Command', 'PowerShell:wsl', 'PowerShell:bash', 'PowerShell:sh',
+      'PowerShell:Invoke-Expression', 'PowerShell:saps', 'PowerShell:icm', 'PowerShell:Start-Job', 'PowerShell:sajb', 'PowerShell:cmd.exe',
+      'PowerShell:powershell.exe'];
+    for (const command of RUNS) assert.deepStrictEqual(decide(command, saved), { action: 'card' }, command);
+    assert.deepStrictEqual(decide('pwsh -Command "Set-Content notes.md x"', ['PowerShell:pwsh']), { action: 'card' }, 'a saved pwsh key answers nothing');
+  });
+
+  test('a command that is not a runner keys and is answered as before', () => {
+    for (const [command, saved] of [['npm test', 'PowerShell:npm'], ['Get-Date; npm test', 'PowerShell:npm'],
+      ['Start-Service spooler', 'PowerShell:Start-Service'], ['shx ls', 'PowerShell:shx'], ['cmdkey /list', 'PowerShell:cmdkey']]) {
+      assert.strictEqual(key(command), saved, command);
+      assert.deepStrictEqual(decide(command, [saved]), { action: 'allow', reason: 'always-allowed' }, command);
+    }
+  });
+});

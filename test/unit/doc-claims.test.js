@@ -1280,7 +1280,21 @@ describe('ARCHITECTURE.md: a saved Always allow for a PowerShell command answers
       'A saved key answers a request only when every part is covered',
       'a part holding anything the reading cannot follow is never covered (`powerShellAllowCovers`)',
       'is never saved now and answers nothing; it stays listed in Settings, where it can be removed',
+      'a runner is never keyed, so its card offers Allow and Deny only, and no saved key answers it',
     ]) assert.ok(passage.includes(said), `the page says: ${said}`);
+  });
+
+  test('the runners the page names are the list the code reads, and each is never keyed nor answered', () => {
+    const named = /A command runner \(([^)]+)\)/.exec(passage);
+    assert.ok(named, 'the page names the runners');
+    const onPage = [...named[1].matchAll(/`([A-Za-z-]+)`/g)].map(m => m[1].toLowerCase()).filter(n => n !== 'exe').sort();
+    assert.deepStrictEqual(onPage, [...P.POWERSHELL_RUNNERS].sort(), 'the page names exactly the list');
+    assert.ok(Object.isFrozen(P.POWERSHELL_RUNNERS), 'and the list is frozen');
+    for (const runner of onPage) {
+      const command = `${runner.toUpperCase()}.EXE x`;
+      assert.strictEqual(P.toolAllowKey('PowerShell', { command }), null, command);
+      assert.strictEqual(decide(`${runner} x`, [`PowerShell:${runner}`]).action, 'card', runner);
+    }
   });
 
   test('the header of public/permissions.js says the same', () => {
@@ -1288,7 +1302,7 @@ describe('ARCHITECTURE.md: a saved Always allow for a PowerShell command answers
       'Always allow on a PowerShell command saves the one command its parts run',
       'answers a request only when every part is a read or starts with a command a',
       'The catch-all `PowerShell:PowerShell` an earlier release',
-      'saved answers nothing.']) {
+      'saved answers nothing.', 'A command runner (POWERSHELL_RUNNERS) is never keyed,']) {
       assert.ok(graderSrc.includes(said), `the header says: ${said}`);
     }
     assert.ok(graderSrc.includes('function powerShellAllowCovers('), 'and the function the page names is there');

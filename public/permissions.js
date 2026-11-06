@@ -27,7 +27,8 @@
 // commands, or when the shared reading cannot follow the command. A saved key
 // answers a request only when every part is a read or starts with a command a
 // saved key names. The catch-all `PowerShell:PowerShell` an earlier release
-// saved answers nothing. Bash keys are still the first word.
+// saved answers nothing. A command runner (POWERSHELL_RUNNERS) is never keyed,
+// and no saved key answers it. Bash keys are still the first word.
 //
 // What this module decides (pinned by test/unit/permissions.test.js):
 //   classifyRisk()        low / medium / high per tool request
@@ -364,14 +365,26 @@
   // parts run besides reads, read by the shared PowerShell reading, or the
   // first name when every part is a read. There is none, and so no Always
   // allow, when a part starts with no command name, when the parts run two or
-  // more different commands besides reads, and when the reading cannot follow
-  // the command all the way, because no key could ever answer that command.
+  // more different commands besides reads, when that command is a runner,
+  // and when the reading cannot follow the command all the way, because no
+  // key could ever answer that command.
   // A key a chain's first word would give never covers the command after it,
   // so the person who pressed Always allow would be asked again every time.
   var POWERSHELL_COMMAND_NAME = /^[A-Za-z][\w.-]*$/;
-  // What an earlier release saved for a command with no name to key on. It
-  // is never derived now, and it answers nothing (powerShellAllowCovers).
-  var POWERSHELL_CATCH_ALL = 'PowerShell:PowerShell';
+  // A COMMAND RUNNER IS A CATCH-ALL BY ANOTHER ROUTE. A key saved for one
+  // answers whatever text it is handed, so a runner is never keyed and no
+  // saved key covers it, one saved before this change included. Compared in
+  // any case, with a `.exe` suffix taken off. This is a list of runners, so
+  // it cannot be complete: a runner left off it is asked about less often
+  // than it should be, and nothing on it is ever asked about more. It also
+  // holds `powershell`, so the catch-all `PowerShell:PowerShell` an earlier
+  // release saved for a command with no name to key on is never derived and
+  // covers nothing.
+  var POWERSHELL_RUNNERS = Object.freeze(['powershell', 'pwsh', 'cmd', 'iex', 'invoke-expression', 'start-process', 'saps', 'start',
+    'invoke-command', 'icm', 'start-job', 'sajb', 'wsl', 'bash', 'sh']);
+  function isPowerShellRunner(name) {
+    return POWERSHELL_RUNNERS.indexOf(String(name).toLowerCase().replace(/\.exe$/, '')) >= 0;
+  }
   function powerShellAllowKey(command) {
     var names = powerShellCommandNames(String(command));
     if (!names || !names.length) return null;
@@ -381,8 +394,8 @@
       if (!isPowerShellReadName(names[n]) && runs.indexOf(names[n]) < 0) runs.push(names[n]);
     }
     if (runs.length > 1) return null;
-    var key = 'PowerShell:' + (runs.length ? runs[0] : names[0]);
-    return key === POWERSHELL_CATCH_ALL ? null : key;
+    if (runs.length && isPowerShellRunner(runs[0])) return null;
+    return 'PowerShell:' + (runs.length ? runs[0] : names[0]);
   }
 
   // A SAVED KEY ANSWERS ONLY WHAT IT COVERS. A key used to answer any request
@@ -390,9 +403,9 @@
   // `Get-Date; Add-Content notes.md x` with no card. Now every part must be
   // covered: a read on its own, or a part that starts with a command a saved
   // key names. A part holding anything the shared reading cannot follow is
-  // never covered, and nothing is when the reading fails or the saved keys
-  // cannot be read. The catch-all an earlier release saved covers nothing. A
-  // command of reads alone is answered by the low-risk policy, not by a key.
+  // never covered, nor is a runner, and nothing is when the reading fails or
+  // the saved keys cannot be read. A command of reads alone is answered by
+  // the low-risk policy, not by a key.
   function powerShellAllowCovers(command, alwaysAllowedSet) {
     try {
       var names = powerShellCommandNames(String(command || ''));
@@ -400,10 +413,9 @@
       var keyed = false;
       for (var n = 0; n < names.length; n++) {
         if (isPowerShellReadName(names[n])) continue;
-        var key = 'PowerShell:' + names[n];
         if (!POWERSHELL_COMMAND_NAME.test(names[n])) return false;
-        if (key === POWERSHELL_CATCH_ALL) return false;
-        if (!alwaysAllowedSet.has(key)) return false;
+        if (isPowerShellRunner(names[n])) return false;
+        if (!alwaysAllowedSet.has('PowerShell:' + names[n])) return false;
         keyed = true;
       }
       return keyed;
@@ -913,7 +925,7 @@
   // reach the same table, and new callers should use alwaysAskCopy.
   const agentHomeBoundaryCopy = alwaysAskCopy;
 
-  return { BASH_DESCRIPTIONS, bashBin, classifyRisk, describeToolRequest, toolAllowKey, decidePermission, offersAlwaysAllow, alwaysAskCopy, answerFileCopy, answerFileSummary, answerFileKind,
+  return { BASH_DESCRIPTIONS, bashBin, classifyRisk, describeToolRequest, toolAllowKey, decidePermission, offersAlwaysAllow, POWERSHELL_RUNNERS, alwaysAskCopy, answerFileCopy, answerFileSummary, answerFileKind,
     MCP_SEND_VERBS, MCP_DESTRUCTIVE_VERBS, mcpActionWords, connectorServerName, isConnectorSend,
     putBackCardCopy, putBackDiffLines,
     verdictAllowKey, verdictCardCopy, ruleKeyLabel, ALWAYS_ASKS_CLOSING, allowButtonClass,

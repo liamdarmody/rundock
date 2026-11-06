@@ -140,6 +140,16 @@ describe('Always allow is offered only when there is one command to save', () =>
     });
   }
 
+  for (const where of WHERE) {
+    test(`in a ${where}: a command runner offers Allow and Deny only`, () => {
+      for (const command of ['powershell -c "Remove-Item x"', 'iex $s', 'Start-Process notepad', 'PWSH.EXE -File build.ps1']) {
+        const id = ask(command, where);
+        assert.ok(cardOf(id), `carded: ${command}`);
+        assert.deepStrictEqual(buttons(id), ['allow', 'deny'], `Allow and Deny only: ${command}`);
+      }
+    });
+  }
+
   test('Always allow on a read and one command saves that command, and the same chain then runs with no card', () => {
     const id = ask('Get-Date; npm test', 'conversation');
     assert.deepStrictEqual(buttons(id), ['allow', 'always', 'deny'], 'Always allow is offered');
@@ -163,13 +173,19 @@ describe('a saved key answers what it covers, in a conversation and in a routine
     });
   }
 
-  test('Settings lists a catch-all key from an earlier release with its remove control, it answers nothing, and removing a key cards what it answered', () => {
+  test('Settings lists a catch-all or runner key from an earlier release with its remove control, it answers nothing, and removing a key cards what it answered', () => {
     const settings = require('../../public/views/settings.js');
     document.body.insertAdjacentHTML('beforeend', '<div id="tool-allows-block"></div>');
     global.setStandingToolAllows = chat.setStandingToolAllows;
     global.WebSocket = { OPEN: 1 };
     global.ws.readyState = 1;
     try {
+      settings.toolAllowsArrived({ tools: ['PowerShell:pwsh'] });
+      const runner = [...document.querySelectorAll('#tool-allows-block .tool-allow-row')];
+      assert.deepStrictEqual(runner.map(r => r.querySelector('.tool-allow-key').textContent), ['PowerShell:pwsh']);
+      assert.ok(runner[0].querySelector('.settings-row-remove'), 'a runner key saved before has its remove control');
+      assert.ok(cardOf(ask('pwsh -Command "Set-Content notes.md x"', 'conversation')), 'and it answers nothing');
+
       settings.toolAllowsArrived({ tools: ['PowerShell:PowerShell', 'PowerShell:npm'] });
       const rows = [...document.querySelectorAll('#tool-allows-block .tool-allow-row')];
       assert.deepStrictEqual(rows.map(r => r.querySelector('.tool-allow-key').textContent), ['PowerShell:PowerShell', 'PowerShell:npm']);
