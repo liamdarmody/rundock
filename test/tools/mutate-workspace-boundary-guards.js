@@ -3615,7 +3615,7 @@ const MUTATIONS = [
     "        given.push([a[c], c + 1 < a.length ? a.slice(c + 1) : (k + 1 < args.length ? args[++k] : null)]);",
     "        given.push([a[c], c + 1 < a.length ? a.slice(c + 1) : null]);"],
   [SECRET_FOLDER, "Folder reads: the first folder is taken for the pattern even when -e gave it",
-    "      operands = spec.patterns && !has(...spec.patterns) ? opt.operands.slice(1) : opt.operands;",
+    "      operands = spec.patterns && !lists && !has(...spec.patterns) ? opt.operands.slice(1) : opt.operands;",
     "      operands = opt.operands.slice(1);"],
   [SECRET_FOLDER, "Folder reads: a shortened long option is not the option it stands for",
     "    return could.length === 1 ? could[0] : written;",
@@ -3643,6 +3643,16 @@ const MUTATIONS = [
   [SECRET_FOLDER, "Folder reads: find's -- is taken for the expression",
     "    if (a === '--') { k++; break; }\n    if (a === '-D')",
     "    if (a === '-D')"],
+  // A mode that lists names opens no file, unless the names go on to xargs.
+  [SECRET_FOLDER, "Folder reads: rg --files is read as a search",
+    "      if (lists && !runsXargs(pipedTo)) continue;",
+    ""],
+  [SECRET_FOLDER, "Folder reads: the names rg --files hands to xargs are not read",
+    "      if (lists && !runsXargs(pipedTo)) continue;",
+    "      if (lists) continue;"],
+  [SECRET_FOLDER, "Folder reads: the first folder rg --files lists is taken for a pattern",
+    "spec.patterns && !lists && !has(",
+    "spec.patterns && !has("],
 ];
 const REPORTER = ['--test-reporter', 'spec'];
 

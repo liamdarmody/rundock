@@ -845,6 +845,8 @@ const RUNS_PER_NAME = new Set(['-exec', '-execdir', '-ok', '-okdir']);
 // rest of the word or the next word. `long`: the long options that take one,
 // as `--x=v` or `--x v`. `patterns`: the options that give the pattern, after
 // which no word is one. `into`: the options naming a folder copied into.
+// `lists`: the options that make it list names and open no file (`rg
+// --files`), so it reads nothing unless the names go on to xargs.
 // `names`, for a program whose getopt takes a long option shortened
 // (`--recur`), every long option it has, so a shortened one is the option it
 // stands for. A program here that reads a folder only when told to say so in
@@ -861,7 +863,7 @@ const READER_OPTIONS = {
       'perl-regexp', 'quiet', 'recursive', 'silent', 'text', 'version', 'with-filename', 'word-regexp'],
   },
   rg: {
-    short: 'efABCmgtTEjMrd', patterns: ['e', 'f', 'regexp', 'file'],
+    short: 'efABCmgtTEjMrd', patterns: ['e', 'f', 'regexp', 'file'], lists: ['files', 'type-list'],
     long: ['regexp', 'file', 'after-context', 'before-context', 'context', 'max-count', 'glob', 'iglob', 'type', 'type-not', 'type-add',
       'type-clear', 'encoding', 'threads', 'max-columns', 'max-depth', 'maxdepth', 'max-filesize', 'path-separator', 'replace', 'color',
       'colors', 'context-separator', 'field-context-separator', 'field-match-separator', 'ignore-file', 'pre', 'pre-glob', 'sort', 'sortr',
@@ -1024,8 +1026,10 @@ function recursiveReadWords(command, posixText = true) {
       const opt = readOptions(args, spec);
       const has = (...names) => opt.given.some(([n]) => names.includes(n));
       const values = (...names) => opt.given.filter(([n, v]) => names.includes(n) && v !== null).map(([, v]) => v);
+      const lists = !!spec.lists && has(...spec.lists);
+      if (lists && !runsXargs(pipedTo)) continue;
       if (!recursiveFor(family, has, values)) continue;
-      operands = spec.patterns && !has(...spec.patterns) ? opt.operands.slice(1) : opt.operands;
+      operands = spec.patterns && !lists && !has(...spec.patterns) ? opt.operands.slice(1) : opt.operands;
       if (spec.into) operands = operands.concat(values(...spec.into));
     } else if (verb === 'find') {
       if (!args.some(a => RUNS_PER_NAME.has(a)) && !runsXargs(pipedTo)) continue;
