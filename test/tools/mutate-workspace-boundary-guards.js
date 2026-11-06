@@ -140,6 +140,7 @@ const CLAUDE_SPAWN = { src: path.join(ROOT, 'lib', 'runtime', 'claude.js'), suit
 const FLOOR_TABLE = { src: path.join(ROOT, 'lib', 'runtime', 'claude-floor.js'), suite: 'test/unit/claude-version-floor.test.js' };
 const FLOOR_SPAWN = { src: path.join(ROOT, 'lib', 'runtime', 'claude.js'), suite: 'test/unit/claude-version-floor.test.js' };
 const FLOOR_PATHS = { src: path.join(ROOT, 'lib', 'runtime', 'claude.js'), suite: 'test/integration/claude-version-floor.test.js' };
+const FLOOR_EACCES = { src: path.join(ROOT, 'lib', 'runtime', 'claude.js'), suite: 'test/integration/claude-version-floor-eacces.test.js' };
 const DEV_HOME = { src: path.join(ROOT, 'scripts', 'dev-paths.js'), suite: 'test/unit/code-mode-home-in-temp.test.js' };
 const SCAFFOLD_CM = { src: path.join(ROOT, 'lib', 'workspace', 'scaffold.js'), suite: 'test/unit/code-mode-boundary.test.js' };
 const CM_PARSE = { src: path.join(ROOT, 'scripts', 'code-mode-parse.js'), suite: 'test/unit/code-mode-verdict.test.js' };
@@ -3585,6 +3586,21 @@ const MUTATIONS = [
   [FLOOR_PATHS, "Version floor: a resumed chat skips the check",
     "  const refusal = floorRefusal();",
     "  const refusal = args.includes('--resume') ? null : floorRefusal();"],
+  [FLOOR_TABLE, "Version floor: any three-part number in the output is taken as the version",
+    "  const m = firstLine(lines, NAMED_LINE) || firstLine(lines, BARE_LINE);",
+    "  const m = /(\\d+)\\.(\\d+)\\.(\\d+)/.exec(lines.join('\\n'));"],
+  [FLOOR_SPAWN, "Version floor: the probe is a command line a shell reads",
+    "    return execFileSync(bin, ['--version'], { timeout, encoding: 'utf-8', stdio: codexRuntime.PROBE_STDIO });",
+    "    return require('child_process').execSync(`\"${bin}\" --version`, { timeout, encoding: 'utf-8', stdio: codexRuntime.PROBE_STDIO });"],
+  [FLOOR_SPAWN, "Version floor: a Windows .cmd or .bat copy is run for its version",
+    "  if (platform === 'win32' && /\\.(cmd|bat)$/i.test(bin)) return null;",
+    "  // every copy is run for its version"],
+  [FLOOR_SPAWN, "Version floor: the spawn's options are not the caller's",
+    "{ ...options, detached: process.platform !== 'win32' }",
+    "{ ...options, stdio: 'ignore', detached: false }"],
+  [FLOOR_EACCES, "Version floor: a copy that cannot be run is refused as too old",
+    "verdict === false ? tooOldError(version, bin) : null",
+    "verdict !== true ? tooOldError(version, bin) : null"],
 ];
 const REPORTER = ['--test-reporter', 'spec'];
 
