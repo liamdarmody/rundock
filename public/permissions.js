@@ -20,10 +20,19 @@
 // `Get-*` first), so a write, a send or a delete after a read or inside its
 // brackets ran with no card, on the platform with no sandbox under it.
 //
+// A SAVED POWERSHELL KEY ANSWERS ONLY THE COMMAND IT NAMES, WITH READS BESIDE
+// IT. Always allow on a PowerShell command saves the one command its parts run
+// besides reads, or the first name when every part is a read, and nothing when
+// a part starts with no command name, when the parts run two or more such
+// commands, or when the shared reading cannot follow the command. A saved key
+// answers a request only when every part is a read or starts with a command a
+// saved key names. The catch-all `PowerShell:PowerShell` an earlier release
+// saved answers nothing. Bash keys are still the first word.
+//
 // What this module decides (pinned by test/unit/permissions.test.js):
 //   classifyRisk()        low / medium / high per tool request
 //   describeToolRequest() human-readable card copy (summary/context/detail)
-//   toolAllowKey()        the pattern "Always allow" matches on
+//   toolAllowKey()        what "Always allow" saves, or null when nothing can be
 //   decidePermission()    auto-allow (always-allowed or low-risk) vs card
 //   offersAlwaysAllow()   high-risk requests never get a standing allow
 (function (root, factory) {
