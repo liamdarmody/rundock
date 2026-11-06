@@ -77,13 +77,7 @@ if (!gotLock) {
 // lookup in lib/runtime/claude-lookup.js tries after the login shell's PATH,
 // and the lookup it falls back to when the shell cannot answer).
 function ensurePath() {
-  const extraDirs = require('../lib/runtime/claude-lookup.js').installFolders();
-  const current = process.env.PATH || '';
-  const segments = current.split(path.delimiter);
-  const missing = extraDirs.filter(d => !segments.includes(d));
-  if (missing.length) {
-    process.env.PATH = missing.join(path.delimiter) + path.delimiter + current;
-  }
+  require('../lib/runtime/claude-lookup.js').addInstallFolders();
 }
 
 // What `claude --version` said the last time findClaude found Claude Code:

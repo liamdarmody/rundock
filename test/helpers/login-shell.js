@@ -10,7 +10,9 @@
 // `echo $PATH`; anything else is an unknown command, exit 127, as a shell
 // says. What it does is read from `plan.json` beside it on every run, so a
 // test can change it between runs:
-//   loginPath  the PATH its startup files built (printenv PATH prints it)
+//   loginPath  the PATH its startup files built (printenv PATH prints it),
+//              or 'given': startup files that never touch PATH, so it
+//              prints back the PATH it was started with
 //   before     what the startup files print before the command runs
 //   after      what is printed after it, as a logout file would
 //   fail       'crash' (killed by a signal after its noise), 'stall' (never
@@ -39,6 +41,7 @@ if (plan.fail === 'crash') process.kill(process.pid, 'SIGKILL');
 if (plan.fail === 'stall') { setInterval(() => {}, 1000); return; }
 if (plan.fail === 'silent') process.exit(0);
 if (plan.fail === 'cut') { out('_RUNDOCK_LOGIN_PATH_BEGIN_\\n' + String(plan.loginPath).slice(0, 8)); process.exit(0); }
+const loginPath = plan.loginPath === 'given' ? process.env.PATH : plan.loginPath;
 const command = args[args.indexOf('-c') + 1] || '';
 const words = (s) => s.split(/\\s+/).filter(Boolean).map((w) => w.replace(/^'(.*)'$/, '$1').replace(/^"(.*)"$/, '$1'));
 for (const statement of command.split(';').map((s) => s.trim()).filter(Boolean)) {
@@ -47,9 +50,9 @@ for (const statement of command.split(';').map((s) => s.trim()).filter(Boolean))
     let i = 0;
     out(rest[0].replace(/%s/g, () => rest[1 + i++] || '').replace(/\\\\n/g, '\\n'));
   } else if (name === 'printenv' && rest[0] === 'PATH') {
-    out(plan.loginPath + '\\n');
+    out(loginPath + '\\n');
   } else if (name === 'echo' && rest[0] === '$PATH') {
-    out((plan.style === 'fish' ? plan.loginPath.split(':').join(' ') : plan.loginPath) + '\\n');
+    out((plan.style === 'fish' ? loginPath.split(':').join(' ') : loginPath) + '\\n');
   } else {
     process.stderr.write(name + ': command not found\\n');
     process.exit(127);

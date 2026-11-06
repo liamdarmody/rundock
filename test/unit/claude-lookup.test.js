@@ -296,7 +296,7 @@ describe('the login shell is run as decided', { skip: POSIX }, () => {
         assert.strictEqual(fs.realpathSync(run.cwd), fs.realpathSync(m.home), 'from the home folder');
         assert.deepStrictEqual(Object.keys(run.env).filter((n) => !n.startsWith('__CF')).sort(),
           ['HOME', 'LANG', 'LC_ALL', 'LOGNAME', 'PATH', 'SHELL', 'TMPDIR', 'USER'], 'only the environment a shell needs, none of Rundock\'s');
-        assert.strictEqual(run.env.PATH, process.env.PATH, 'with the PATH Rundock has');
+        assert.strictEqual(run.env.PATH, '/usr/bin:/bin:/usr/sbin:/sbin', 'with the system default PATH, as nothing recorded the one Rundock started with');
         assert.strictEqual(run.env.HOME, m.home);
         assert.strictEqual(run.env.SHELL, shell);
         assert.strictEqual(fs.existsSync(marker), false, 'nothing in the shell\'s own path was run');
@@ -584,7 +584,7 @@ describe('one module finds claude, and nothing reads its version through a shell
     const find = body(main, 'findClaude');
     assert.ok(find.includes("require('../lib/runtime/claude-lookup.js').installedClaude()"), 'findClaude asks the lookup');
     assert.doesNotMatch(find, /\bexec(?:Sync|FileSync)?\(|\bspawn(?:Sync)?\(/, 'and runs nothing of its own');
-    assert.ok(body(main, 'ensurePath').includes("require('../lib/runtime/claude-lookup.js').installFolders()"), 'the folders the app adds are the lookup\'s');
+    assert.ok(body(main, 'ensurePath').includes("require('../lib/runtime/claude-lookup.js').addInstallFolders()"), 'the folders the app adds are the lookup\'s, and it keeps the PATH from before them');
   });
 });
 
@@ -622,6 +622,40 @@ describe('the desktop app\'s check reports the copy the lookup chose, with the v
       assert.deepStrictEqual(current.probes().map((r) => r.args), [['--version']], 'asked once, with arguments');
       assert.deepStrictEqual(old.runs(), [], 'the old copy was never run');
     } finally { warn.restore(); }
+  });
+
+  test('the shell is given the PATH Rundock started with, not the one ensurePath put the install folders in front of', async () => {
+    // Startup files that never touch PATH: the shell answers with the PATH it
+    // was given. Given the desktop app's PATH, ~/.local/bin came first (#401).
+    const m = machine({ loginPath: 'given' });
+    const old = makeClaude(m.folders.local, OLD);
+    const current = makeClaude(m.dir('npm-global-bin'), CURRENT);
+    const warn = quietWarn();
+    try {
+      await on(m, { today: [current.dir] }, () => {
+        const started = process.env.PATH;
+        const desktop = desktopCheck();
+        assert.strictEqual(desktop.findClaude(), current.bin);
+        assert.strictEqual(process.env.PATH.split(':')[0], m.folders.local, 'ensurePath put ~/.local/bin first on the PATH the app has');
+        const runs = m.shell.runs();
+        assert.strictEqual(runs.length, 1);
+        assert.strictEqual(runs[0].env.PATH, started, 'the shell was given the PATH from before ensurePath');
+      });
+      assert.deepStrictEqual(old.runs(), [], 'so ~/.local/bin did not come first, and the old copy there was never read');
+      assert.deepStrictEqual(warn.lookupLines(), []);
+    } finally { warn.restore(); }
+  });
+
+  test('with no PATH recorded from before ensurePath, the shell is given the system default', async () => {
+    const m = machine({ loginPath: 'given' });
+    const old = makeClaude(m.folders.local, OLD);
+    const { rt, done } = runtime();
+    try {
+      await on(m, { today: [m.folders.local] }, () => {
+        assert.strictEqual(rt.resolveClaudeBin(), old.bin, 'found after the login PATH, among the install folders');
+        assert.strictEqual(m.shell.runs()[0].env.PATH, '/usr/bin:/bin:/usr/sbin:/sbin');
+      });
+    } finally { done(); }
   });
 
   test('no copy, or one that cannot be run for its version, is not installed; a copy installed afterwards is found', async () => {
