@@ -323,6 +323,23 @@ describe('the five sequences', { skip: POSIX, concurrency: 8 }, () => {
       }
     });
 
+    // A `cd` the shell may skip, or one that moves only a shell of its own,
+    // does not move the words after it, even when only `&&` stands between
+    // them: after `||` it runs only when the command before it failed, and in
+    // a subshell it moves that subshell alone. Taken as a move, either would
+    // put the shell in /tmp, and the credential file it really reads would go
+    // unasked. Joined by `;` or a pipe instead, the folder before it is kept
+    // anyway, so only `&&` shows whether such a move is trusted.
+    test(`${label}: a cd that may not last, after || or in a subshell, does not move where a name is read from`, async () => {
+      for (const command of [
+        'cd ~/.claude && true || cd /tmp && cat .credentials.json',
+        'cd ~/.claude && (cd /tmp) && cat .credentials.json',
+        'cd ~/.claude && (cd /tmp && true) && cat .credentials.json',
+      ]) {
+        await assertSecretCard(command, CREDENTIALS, null, env);
+      }
+    });
+
     test(`${label}: a cd run through command or builtin moves the shell as cd does`, async () => {
       await assertSecretCard('command cd ~/.claude && cat .credentials.json', CREDENTIALS, null, env);
       await assertSecretCard('builtin cd ~/.claude && cat .credentials.json', CREDENTIALS, null, env);
