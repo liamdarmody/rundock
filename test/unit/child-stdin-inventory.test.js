@@ -97,7 +97,103 @@ function appFiles() {
   return [...out].sort();
 }
 
-const codeOf = (line) => (/^\s*(\*|\/\*|\/\/)/.test(line) ? '' : line.replace(/\/\/.*$/, ''));
+// THE SOURCE AS THE SCANS READ IT, as two views of every line, each the same
+// length as the line it came from, so a position or a line number in either
+// means the same place in the file: `kept`, with every comment blanked; and
+// `code`, with every string's, template's and regular expression's text
+// blanked as well. The patterns run over `code`, so neither a comment nor
+// text inside a string can be taken for a write or hide one; the function a
+// line is in is read from `kept`, because the message handler is named by a
+// string ('chat').
+//
+// Read by one pass over the characters, which knows where each comment,
+// string, template and regular expression starts and ends, rather than by
+// cutting each line at its first `//`: a line cut that way loses everything
+// after a URL in a string. A `/` starts a regular expression where an operand
+// is expected, and divides where one has just ended.
+const REGEX_AFTER_WORD = new Set(['return', 'typeof', 'instanceof', 'in', 'of', 'new', 'delete', 'void', 'throw', 'case', 'do', 'else', 'yield', 'await']);
+function sourceViews(text) {
+  const kept = text.split('');
+  const code = text.split('');
+  const n = text.length;
+  const blankBoth = (k) => { if (text[k] !== '\n') { kept[k] = ' '; code[k] = ' '; } };
+  const blankText = (k) => { if (text[k] !== '\n') code[k] = ' '; };
+  const placeholders = []; // the brace depth each open `${` returns to
+  let depth = 0;
+  let last = ''; // the last token: '' at the start, 'w:<word>', 'v' for a value, or the punctuator
+  let i = 0;
+  const regexMayStart = () => (last === '' ? true
+    : last.startsWith('w:') ? REGEX_AFTER_WORD.has(last.slice(2))
+      : last !== 'v' && last !== ')' && last !== ']');
+  // Template text from `i`, to its closing backtick or its next placeholder.
+  const template = () => {
+    while (i < n) {
+      const c = text[i];
+      if (c === '\\') { blankText(i); blankText(i + 1); i += 2; continue; }
+      if (c === '`') { i++; last = 'v'; return; }
+      if (c === '$' && text[i + 1] === '{') { i += 2; placeholders.push(depth); depth++; last = '{'; return; }
+      blankText(i); i++;
+    }
+  };
+  if (text.startsWith('#!')) while (i < n && text[i] !== '\n') blankBoth(i++);
+  while (i < n) {
+    const c = text[i];
+    const d = text[i + 1];
+    if (c === '/' && d === '/') {
+      while (i < n && text[i] !== '\n') blankBoth(i++);
+    } else if (c === '/' && d === '*') {
+      blankBoth(i); blankBoth(i + 1); i += 2;
+      while (i < n && !(text[i] === '*' && text[i + 1] === '/')) blankBoth(i++);
+      if (i < n) { blankBoth(i); blankBoth(i + 1); i += 2; }
+    } else if (c === "'" || c === '"') {
+      i++;
+      while (i < n && text[i] !== c && text[i] !== '\n') {
+        if (text[i] === '\\') { blankText(i); i++; }
+        blankText(i); i++;
+      }
+      i++; last = 'v';
+    } else if (c === '`') {
+      i++; template();
+    } else if (c === '/' && regexMayStart()) {
+      i++;
+      let inClass = false;
+      while (i < n && text[i] !== '\n') {
+        const r = text[i];
+        if (r === '\\') { blankText(i); i++; blankText(i); i++; continue; }
+        if (r === '[') inClass = true;
+        else if (r === ']') inClass = false;
+        else if (r === '/' && !inClass) break;
+        blankText(i); i++;
+      }
+      i++;
+      while (i < n && /[A-Za-z]/.test(text[i])) i++;
+      last = 'v';
+    } else if (/[A-Za-z_$]/.test(c)) {
+      let j = i;
+      while (j < n && /[\w$]/.test(text[j])) j++;
+      last = `w:${text.slice(i, j)}`;
+      i = j;
+    } else if (/[0-9]/.test(c)) {
+      while (i < n && /[\w.]/.test(text[i])) i++;
+      last = 'v';
+    } else if (/\s/.test(c)) {
+      i++;
+    } else if (c === '{') {
+      depth++; last = '{'; i++;
+    } else if (c === '}') {
+      depth--; i++;
+      if (placeholders.length && depth === placeholders[placeholders.length - 1]) { placeholders.pop(); template(); } else last = '}';
+    } else {
+      last = c; i++;
+    }
+  }
+  return { kept: kept.join('').split('\n'), code: code.join('').split('\n') };
+}
+const viewsByFile = new Map();
+function viewsOf(file) {
+  if (!viewsByFile.has(file)) viewsByFile.set(file, sourceViews(fs.readFileSync(file, 'utf8')));
+  return viewsByFile.get(file);
+}
 
 // The function a line is in, and the line it starts on: the message handler
 // in server.js, a top-level function, or a class method.
@@ -117,7 +213,7 @@ function contextOf(lines, i) {
 function initializerOf(lines, start, i, name) {
   const decl = new RegExp(`^\\s*(?:const|let)\\s+${name}\\s*=`);
   for (let j = i; j >= start; j--) {
-    if (!decl.test(codeOf(lines[j]))) continue;
+    if (!decl.test(lines[j])) continue;
     const text = lines.slice(j).join('\n');
     const from = text.indexOf('=') + 1;
     let depth = 0;
@@ -135,17 +231,20 @@ function initializerOf(lines, start, i, name) {
 // Sites matching `pattern` in the app's files, each keyed `file | function |
 // <the match's first group>`, the same key twice in one function told apart
 // by its order there.
+// `lines` on each site is the `code` view.
+function sitesIn({ kept, code }, pattern, name) {
+  const sites = [];
+  code.forEach((line, i) => {
+    for (const m of line.matchAll(pattern)) {
+      const ctx = contextOf(kept, i);
+      sites.push({ base: `${name} | ${ctx.name} | ${m[1]}`, match: m, lines: code, line: i, start: ctx.start, file: name, fn: ctx.name });
+    }
+  });
+  return sites;
+}
 function sitesOf(pattern) {
   const sites = [];
-  for (const file of appFiles()) {
-    const lines = fs.readFileSync(file, 'utf8').split('\n');
-    lines.forEach((line, i) => {
-      for (const m of codeOf(line).matchAll(pattern)) {
-        const ctx = contextOf(lines, i);
-        sites.push({ base: `${rel(file)} | ${ctx.name} | ${m[1]}`, match: m, lines, line: i, start: ctx.start, file: rel(file), fn: ctx.name });
-      }
-    });
-  }
+  for (const file of appFiles()) sites.push(...sitesIn(viewsOf(file), pattern, rel(file)));
   const count = new Map();
   for (const s of sites) count.set(s.base, (count.get(s.base) || 0) + 1);
   const seen = new Map();
@@ -207,7 +306,7 @@ describe('every write to a child\'s stdin goes to a child whose stdin was given 
   test('the app-server is written to only through the process its guarded spawn set', () => {
     const [site] = writes().filter((w) => WRITES.find((e) => e.at === w.at).from === APP_SERVER);
     assert.strictEqual(initializerOf(site.lines, site.start, site.line, 'proc'), 'this._proc', 'the writer reads the current process');
-    const src = fs.readFileSync(path.join(ROOT, 'codex-appserver.js'), 'utf8').split('\n').map(codeOf).join('\n');
+    const src = viewsOf(path.join(ROOT, 'codex-appserver.js')).code.join('\n');
     const sets = [...src.matchAll(/this\._proc\s*=(?!=)\s*([^;]+);/g)].map((m) => m[1].trim());
     assert.deepStrictEqual(sets.sort(), ['null', 'null', 'proc'],
       'and that process is set only by the spawn, and otherwise only cleared (in the constructor and on exit)');
@@ -215,20 +314,20 @@ describe('every write to a child\'s stdin goes to a child whose stdin was given 
 
   test('each start path gives the stdin its handler straight after the spawn, and nothing else does', () => {
     for (const g of GUARDED_STARTS) {
-      const lines = fs.readFileSync(path.join(ROOT, g.file), 'utf8').split('\n');
-      const spawnAt = lines.findIndex((l) => codeOf(l).includes(`const proc = ${g.spawn}`));
+      const { kept, code: lines } = viewsOf(path.join(ROOT, g.file));
+      const spawnAt = lines.findIndex((l) => l.includes(`const proc = ${g.spawn}`));
       assert.ok(spawnAt >= 0, `${g.file} ${g.fn} starts ${g.starts} with ${g.spawn}`);
-      assert.strictEqual(contextOf(lines, spawnAt).name, g.fn, `in ${g.fn}`);
+      assert.strictEqual(contextOf(kept, spawnAt).name, g.fn, `in ${g.fn}`);
       let guardAt = -1;
-      for (let j = spawnAt + 1; j < lines.length && contextOf(lines, j).name === g.fn; j++) {
-        const c = codeOf(lines[j]);
+      for (let j = spawnAt + 1; j < lines.length && contextOf(kept, j).name === g.fn; j++) {
+        const c = lines[j];
         if (/(?<![\w$.])guardChildStdin\(proc\b/.test(c)) { guardAt = j; break; }
         assert.ok(!/\bproc\.stdin\.write\(|\breturn proc\b|this\._proc\s*=(?!=)\s*null/.test(c),
           `${g.fn} writes to or hands on its process before guarding it (line ${j + 1})`);
       }
       assert.ok(guardAt > spawnAt, `${g.fn} calls guardChildStdin(proc) after its spawn`);
     }
-    const calls = sitesOf(/(?<![\w$.])(guardChildStdin)\s*\(/g).filter((s) => !/function\s+$/.test(codeOf(s.lines[s.line]).slice(0, s.match.index)));
+    const calls = sitesOf(/(?<![\w$.])(guardChildStdin)\s*\(/g).filter((s) => !/function\s+$/.test(s.lines[s.line].slice(0, s.match.index)));
     assert.deepStrictEqual(calls.map((s) => `${s.file} | ${s.fn}`).sort(), GUARDED_STARTS.map((g) => `${g.file} | ${g.fn}`).sort(),
       'guardChildStdin is called in the start paths and nowhere else');
   });
@@ -240,6 +339,53 @@ describe('every write to a child\'s stdin goes to a child whose stdin was given 
 });
 
 describe('the scans, on specimens', () => {
+  test('the scan keeps its place through every file the app loads: both views of each still compile', () => {
+    // Blanking only text inside comments, strings, templates and regular
+    // expressions leaves a file that still compiles. A pass that lost its
+    // place (a regular expression read as a division, a string never closed)
+    // would blank code or keep text, and the file would not.
+    const vm = require('node:vm');
+    const files = appFiles();
+    assert.ok(files.length > 50, `sanity: the app's files were read (${files.length})`);
+    for (const file of files) {
+      const { kept, code } = viewsOf(file);
+      for (const [name, view] of [['kept', kept], ['code', code]]) {
+        assert.doesNotThrow(() => vm.compileFunction(view.join('\n'), ['require', 'module', 'exports', '__filename', '__dirname']),
+          `${rel(file)}: the ${name} view no longer compiles, so the scan lost its place in it`);
+      }
+    }
+  });
+
+  // Each specimen is scanned exactly as an app file is, through sourceViews
+  // and sitesIn, so what the scan cannot see is shown here, by name.
+  const found = (text) => sitesIn(sourceViews(text), WRITE, 'specimen').map((s) => `${s.line + 1}:${s.match[1]}`);
+
+  test('a write after a string holding // is found: a URL is not a comment', () => {
+    assert.deepStrictEqual(found("const url = 'https://x'; child.stdin.write('x');"), ['1:child.stdin.write']);
+    assert.deepStrictEqual(found('const url = "https://x"; child.stdin.write(\'x\');'), ['1:child.stdin.write']);
+    assert.deepStrictEqual(found('const url = `https://${host}/`; child.stdin.write(\'x\');'), ['1:child.stdin.write']);
+  });
+
+  test('a write in a comment, of either kind, or in a string, is not a write', () => {
+    assert.deepStrictEqual(found("// child.stdin.write('x');"), []);
+    assert.deepStrictEqual(found("go(); // then child.stdin.write('x');"), []);
+    assert.deepStrictEqual(found("/* child.stdin.write('x'); */ go();"), []);
+    assert.deepStrictEqual(found("log('child.stdin.write(x)'); log(\"proc.stdin.write(y)\");"), []);
+    assert.deepStrictEqual(found('log(`proc.stdin.write(x) at ${when}`);'), []);
+  });
+
+  test('a block comment that spans lines hides what is inside it, and nothing after it', () => {
+    const text = ["go(); /* a comment", "   child.stdin.write('inside');", "   ends here */ proc.stdin.write('after');", "next.stdin.write('x');"].join('\n');
+    assert.deepStrictEqual(found(text), ['3:proc.stdin.write', '4:next.stdin.write'], 'and the line numbers are the file\'s');
+  });
+
+  test('code inside a template\'s placeholder is code, and a // in a regular expression is not a comment', () => {
+    assert.deepStrictEqual(found('const s = `sent ${child.stdin.write(x)}`;'), ['1:child.stdin.write']);
+    assert.deepStrictEqual(found("const re = /\\/\\//; proc.stdin.write('x');"), ['1:proc.stdin.write']);
+    assert.deepStrictEqual(found("const re = /'/; proc.stdin.write('x'); const q = '/';"), ['1:proc.stdin.write']);
+    assert.deepStrictEqual(found("const half = a / 2; proc.stdin.write('x'); const third = b / 3;"), ['1:proc.stdin.write']);
+  });
+
   test('the write pattern finds a child\'s write, through an entry or not, and never process.stdin', () => {
     const hit = (s) => [...s.matchAll(WRITE)].map((m) => m[1]);
     assert.deepStrictEqual(hit("proc.stdin.write('x');"), ['proc.stdin.write']);

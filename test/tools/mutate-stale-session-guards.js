@@ -351,6 +351,18 @@ const MUTATIONS = [
   [STDIN_INVENTORY, 'the inventory names every write: a delegate\'s brief left out',
     "  { at: 'lib/delegation/engine.js | handleDelegation | delegateProc.stdin.write', from: STARTED_HERE, what: 'the brief to the agent delegated to' },\n",
     ''],
+  // The scan that finds the writes reads the source as code: a // inside a
+  // string is not a comment, a block comment runs to its */, and code inside
+  // a template's ${} is code.
+  [STDIN_INVENTORY, 'the scan reads a string as a string, so a URL in one hides no write after it',
+    "    } else if (c === \"'\" || c === '\"') {\n",
+    '    } else if (false) {\n'],
+  [STDIN_INVENTORY, 'the scan reads a block comment to its end, across lines',
+    "      while (i < n && !(text[i] === '*' && text[i + 1] === '/')) blankBoth(i++);\n",
+    "      while (i < n && text[i] !== '\\n' && !(text[i] === '*' && text[i + 1] === '/')) blankBoth(i++);\n"],
+  [STDIN_INVENTORY, 'the scan reads code inside a template\'s placeholder as code',
+    "      if (c === '$' && text[i + 1] === '{') { i += 2; placeholders.push(depth); depth++; last = '{'; return; }\n",
+    ''],
 ];
 
 const REPORTER = ['--test-reporter', 'spec'];
