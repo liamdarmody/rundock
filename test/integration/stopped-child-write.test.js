@@ -70,6 +70,10 @@ beforeEach(() => { uncaught.length = 0; stdinLines.length = 0; });
 // write of it is still going when a child that never reads it exits.
 const BIG = 1024 * 1024;
 
+// Each test is bounded, so a write that a broken handler leaves half torn
+// down fails its test rather than holding the file open.
+const LIMIT = { timeout: 60000 };
+
 function scenario(rules, deadSessions = [], extra = {}) {
   fs.writeFileSync(path.join(h.workspaceDir, 'stub-scenario.json'), JSON.stringify({ ...extra, rules, deadSessions }));
 }
@@ -170,7 +174,7 @@ function assertEndedOnce(convoId, since, processId) {
 }
 
 describe('a message written to a conversation whose process has just stopped', () => {
-  test('is logged in one line naming the process, the server stays up, and the close ends the turn once', async () => {
+  test('is logged in one line naming the process, the server stays up, and the close ends the turn once', LIMIT, async () => {
     const { convoId, tag, entry } = await liveConversation('gone');
     const since = client.messages.length;
     endUnheard(entry.process);
@@ -196,7 +200,7 @@ describe('a message written to a conversation whose process has just stopped', (
     h.reapConvo(convoId);
   });
 
-  test('the inverse: a follow-up to a live process is delivered exactly as before, and its turn runs', async () => {
+  test('the inverse: a follow-up to a live process is delivered exactly as before, and its turn runs', LIMIT, async () => {
     const { convoId, tag, entry } = await liveConversation('alive');
     const since = client.messages.length;
     sendNow(convoId, `TWO-${tag} second`);
@@ -210,7 +214,7 @@ describe('a message written to a conversation whose process has just stopped', (
     h.reapConvo(convoId);
   });
 
-  test('the undo: a stopped conversation sent a message straight away starts a new process and answers it', async () => {
+  test('the undo: a stopped conversation sent a message straight away starts a new process and answers it', LIMIT, async () => {
     const convoId = h.freshConvoId('undo');
     scenario([
       { match: { promptIncludes: 'LONG-UNDO' }, delayMs: 30000, turn: [{ text: 'SHOULD-NOT-FINISH-UNDO' }] },
@@ -237,7 +241,7 @@ describe('a message written to a conversation whose process has just stopped', (
     h.reapConvo(convoId);
   });
 
-  test('the control failing: when the log line itself cannot be written, the server still stays up', async () => {
+  test('the control failing: when the log line itself cannot be written, the server still stays up', LIMIT, async () => {
     const { convoId, tag, entry } = await liveConversation('broken-log');
     const since = client.messages.length;
     const restore = seam ? seam.failureLog.write : null;
@@ -280,7 +284,7 @@ describe('a delegate whose resume is refused before it reads its brief', () => {
     return { convoId, tag, prefix };
   }
 
-  test('the failed write is logged once, the delegate starts fresh once, and the orchestrator hears of it once and carries on', async () => {
+  test('the failed write is logged once, the delegate starts fresh once, and the orchestrator hears of it once and carries on', LIMIT, async () => {
     const { convoId, tag, prefix } = delegation('refused');
     const since = client.messages.length;
     client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: `ASK-${tag} please`, sessionId: `live-orch-${prefix}` });
@@ -314,7 +318,7 @@ describe('a delegate whose resume is refused before it reads its brief', () => {
     h.reapConvo(convoId);
   });
 
-  test('the retry: a second write to the same refused delegate is logged once more and ends nothing a second time', async () => {
+  test('the retry: a second write to the same refused delegate is logged once more and ends nothing a second time', LIMIT, async () => {
     // The refused delegate lingers, so the person's message reaches it while
     // its brief is still being written; both writes fail when it exits.
     const { convoId, tag, prefix } = delegation('retried', { refusalExitMs: 1500 });

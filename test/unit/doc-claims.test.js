@@ -1095,7 +1095,7 @@ describe('ARCHITECTURE.md: a write to a stopped process is logged, left to its c
     assert.match(runtime, /logs one line per failed write, naming the process and the error/);
   });
 
-  test('and it is so: a write to a child that stops before reading logs one line, throws nothing, and the close still runs', async () => {
+  test('and it is so: a write to a child that stops before reading logs one line, throws nothing, and the close still runs', { timeout: 20000 }, async () => {
     const { guardChildStdin } = require('../../lib/runtime/child-stdin.js');
     const uncaught = [];
     const monitor = (err) => uncaught.push(err);
@@ -1104,10 +1104,22 @@ describe('ARCHITECTURE.md: a write to a stopped process is logged, left to its c
     try {
       const child = spawn(process.execPath, ['-e', 'setTimeout(() => process.exit(0), 200);'], { stdio: ['pipe', 'pipe', 'pipe'] });
       guardChildStdin(child, 'a child that never reads', { log: (l) => lines.push(l) });
-      const closed = new Promise((resolve) => child.once('close', (code) => resolve(code)));
-      child.stdin.write('x'.repeat(1024 * 1024) + '\n');
-      assert.strictEqual(await closed, 0, "the child's own close runs, as it does for any process that stops");
-      await new Promise((r) => setTimeout(r, 50));
+      // Bounded, and the child let go however it ends: a broken handler throws
+      // out of the stream's teardown, its pipe stays open and 'close' never
+      // comes, which must fail this test rather than hold the file open.
+      const closed = new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error("the child's close did not come within eight seconds")), 8000);
+        child.once('close', (code) => { clearTimeout(timer); resolve(code); });
+      });
+      try {
+        child.stdin.write('x'.repeat(1024 * 1024) + '\n');
+        assert.strictEqual(await closed, 0, "the child's own close runs, as it does for any process that stops");
+        await new Promise((r) => setTimeout(r, 50));
+      } finally {
+        try { child.kill('SIGKILL'); } catch (e) { /* already gone */ }
+        for (const s of [child.stdin, child.stdout, child.stderr]) { try { s.unref(); } catch (e) { /* nothing to let go */ } }
+        child.unref();
+      }
     } finally {
       process.removeListener('uncaughtExceptionMonitor', monitor);
     }
@@ -1116,7 +1128,7 @@ describe('ARCHITECTURE.md: a write to a stopped process is logged, left to its c
     assert.match(lines[0], /a child that never reads pid=\d+: a write failed \((EPIPE|ECONNRESET): /, 'naming the process and the error');
   });
 
-  test('both start paths hand back a stdin that already has its handler', async () => {
+  test('both start paths hand back a stdin that already has its handler', { timeout: 30000 }, async () => {
     const claude = require('../../lib/runtime/claude.js');
     const { createCodexAppServer } = require('../../codex-appserver.js');
     const prev = claude.wireClaudeRuntimeDeps({ onClaudeSpawn: () => {} });

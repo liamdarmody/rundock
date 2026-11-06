@@ -49,6 +49,15 @@ const ENGINE_UNIT = { src: path.join(ROOT, 'lib', 'delegation', 'engine.js'), su
 const RULES = { src: path.join(ROOT, 'lib', 'runtime', 'missing-session.js'), suite: 'test/unit/missing-session.test.js' };
 // How a handback prompt is headed for an orchestrator starting fresh.
 const CATCHUP = { src: path.join(ROOT, 'lib', 'delegation', 'catch-up.js'), suite: STALE };
+// A write to a process that has stopped (a refused resume among them): where
+// each child's stdin is given its handler, the handler itself, and the
+// inventory that holds every write to those start paths.
+const STOPPED = 'test/integration/stopped-child-write.test.js';
+const SPAWN_STDIN = { src: path.join(ROOT, 'lib', 'runtime', 'claude.js'), suite: STOPPED };
+const SERVER_STOPPED = { src: path.join(ROOT, 'server.js'), suite: STOPPED };
+const CODEX_STDIN = { src: path.join(ROOT, 'codex-appserver.js'), suite: 'test/unit/codex-appserver-stdin.test.js' };
+const STDIN_UNIT = { src: path.join(ROOT, 'lib', 'runtime', 'child-stdin.js'), suite: 'test/unit/child-stdin.test.js' };
+const STDIN_INVENTORY = { src: path.join(ROOT, 'test', 'unit', 'child-stdin-inventory.test.js'), suite: 'test/unit/child-stdin-inventory.test.js' };
 
 // ONE NAMED TEST, FOR A ROW WHOSE SUITE STARTS A SERVER. The whole
 // stale-session suite takes some twenty seconds unbroken, and a broken guard
@@ -304,6 +313,44 @@ const MUTATIONS = [
   [CLIENT, 'a record from before the chain still resumes its primary',
     '    return chain.length ? null : (convo.sessionId || null);',
     '    return null;'],
+
+  // ===== A WRITE TO A PROCESS THAT HAS STOPPED NEVER ENDS THE SERVER =====
+  // The stdin of each child is given its error handler where the child
+  // starts. Without it a write in the gap between the process stopping and
+  // the server hearing so is an uncaught exception, which ends the server.
+  [only(SPAWN_STDIN, 'is logged in one line naming the process, the server stays up, and the close ends the turn once'),
+    'every Claude process has its stdin handler from the start (a follow-up to a stopped process)',
+    "  guardChildStdin(proc, () => `claude (agent ${agentId}, conversation ${convoId || 'none'})`);\n",
+    ''],
+  [only(SPAWN_STDIN, 'the failed write is logged once, the delegate starts fresh once, and the orchestrator hears of it once and carries on'),
+    'every Claude process has its stdin handler from the start (a brief to a refused delegate)',
+    "  guardChildStdin(proc, () => `claude (agent ${agentId}, conversation ${convoId || 'none'})`);\n",
+    ''],
+  [CODEX_STDIN, 'the handler is on both start paths, not one: the Codex app-server has it too',
+    "    guardChildStdin(proc, 'codex app-server', { log: (line) => this._log(line) });\n",
+    ''],
+  [STDIN_UNIT, 'the handler listens for the stream\'s error, so a failed write throws nothing',
+    "  stdin.on('error', (err) => {\n    if (err && typeof err === 'object' && logged.has(err)) return;\n    report(err);\n  });\n",
+    ''],
+  [STDIN_UNIT, 'each failed write is logged, a retry once more, not only the first',
+    '      if (err) report(err);\n',
+    ''],
+  [STDIN_UNIT, 'a log that throws is swallowed, so the handler failing never ends the server either',
+    '    } catch (e) { /* the log failing must not end the server either */ }',
+    '    } finally { /* nothing caught */ }'],
+  [STDIN_UNIT, 'a stdin is given its handler once, so a failed write is logged once',
+    '  if (stdin[GUARDED]) return true;\n',
+    ''],
+  [only(SERVER_STOPPED, 'is logged in one line naming the process, the server stays up, and the close ends the turn once'),
+    'a follow-up starts its turn with no result, so the close of a process that stopped before answering ends it',
+    '            existing.resultSent = false;\n',
+    ''],
+  [STDIN_INVENTORY, 'the inventory names every write: the app-server\'s left out',
+    "  { at: 'codex-appserver.js | _writeLine | proc.stdin.write', from: APP_SERVER, what: 'every request and notification to the Codex app-server' },\n",
+    ''],
+  [STDIN_INVENTORY, 'the inventory names every write: a delegate\'s brief left out',
+    "  { at: 'lib/delegation/engine.js | handleDelegation | delegateProc.stdin.write', from: STARTED_HERE, what: 'the brief to the agent delegated to' },\n",
+    ''],
 ];
 
 const REPORTER = ['--test-reporter', 'spec'];

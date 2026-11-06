@@ -60,12 +60,16 @@ function endUnheard(proc) {
   assert.fail('the app-server did not stop within ten seconds of SIGKILL');
 }
 
-test('a request written after the app-server stopped is logged once, rejected by its close, and the server restarts', async () => {
+// Bounded, and the stopped process let go at the end: with the handler gone,
+// the error is thrown out of the stream's teardown and leaves its pipe open,
+// which must fail this test in seconds rather than hold the file open.
+test('a request written after the app-server stopped is logged once, rejected by its close, and the server restarts', { timeout: 30000 }, async () => {
   const lines = [];
   const { server, dir } = makeServer((line) => lines.push(line));
+  let proc = null;
   try {
     await server.start();
-    const proc = server._proc;
+    proc = server._proc;
     assert.ok(proc && proc.pid === server.pid(), 'the app-server is running');
     const restarted = once(server, 'ready', { signal: AbortSignal.timeout(10000) });
     endUnheard(proc);
@@ -85,5 +89,6 @@ test('a request written after the app-server stopped is logged once, rejected by
     assert.strictEqual(lines.filter((l) => l.startsWith('[Stdin]')).length, 1, 'and logs no failure of its own');
   } finally {
     await server.shutdown();
+    if (proc) for (const s of [proc.stdin, proc.stdout, proc.stderr]) { try { s.unref(); } catch (e) { /* nothing to let go */ } }
   }
 });
