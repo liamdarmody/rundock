@@ -408,6 +408,28 @@ describe('shards are planned by time, not rows', () => {
   });
 });
 
+describe('every harness, asked for and none found, is refused rather than planned as nothing to do', () => {
+  test('--all with no harnesses found exits non-zero, says so, and writes no plan', () => {
+    // Zero shards skips every shard job, and the aggregate reads a plan of no
+    // shards as nothing to fail. The tool is copied into a fixture whose tools
+    // folder holds the envelope and no harness, and run there.
+    const root = tempDir('mutation-scope-no-harnesses-');
+    for (const rel of ['scripts/mutation-scope.js', 'scripts/lib/run-record.js', 'test/tools/mutation-run.js']) {
+      write(root, rel, fs.readFileSync(path.join(REPO, rel), 'utf8'));
+    }
+    assert.deepStrictEqual(harnessFiles(tools(root)), [], 'sanity: the tools folder holds no harness');
+    const env = { ...process.env };
+    for (const k of ['GITHUB_ACTIONS', 'GITHUB_STEP_SUMMARY', 'GITHUB_OUTPUT']) delete env[k];
+    const out = path.join(root, 'mutation-plan.json');
+    for (const argv of [['--all', '--plan', '--out', out], ['--all', '--explain']]) {
+      const r = spawnSync(process.execPath, [path.join(root, 'scripts', 'mutation-scope.js'), ...argv], { cwd: root, encoding: 'utf8', env });
+      assert.notStrictEqual(r.status, 0, `${argv.join(' ')}: refused\n${r.stdout}${r.stderr}`);
+      assert.ok(r.stderr.includes('found no harnesses'), `${argv.join(' ')}: and says why\n${r.stderr}`);
+    }
+    assert.ok(!fs.existsSync(out), 'no plan is written for the shards to read as nothing to do');
+  });
+});
+
 describe('a run refuses to start over a file with unstaged changes', () => {
   // Each harness refuses on its own, but only when its turn comes, so a full
   // run spent its time on the others and ended "fail". The run as a whole now
