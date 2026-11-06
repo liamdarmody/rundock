@@ -76,8 +76,14 @@ const argv = process.argv.slice(2);
 // Version probe: answer immediately without touching stdin or the scenario,
 // so runtime detection never hangs on the stub. No invocation is logged for
 // version probes (they are not conversation spawns).
+//
+// The version is the Claude Code the stub's behaviour was last measured
+// against (test/fixtures/claude-cli-*.json), so it is one Rundock will start:
+// spawnClaude starts nothing older than the flags it passes. `-stub` is how a
+// test tells it from a real install. A test that needs another version sets
+// STUB_CLAUDE_VERSION, read on every probe.
 if (argv.includes('--version')) {
-  process.stdout.write('0.0.0-stub (Claude Code)\n');
+  process.stdout.write(`${process.env.STUB_CLAUDE_VERSION || '2.1.318-stub'} (Claude Code)\n`);
   process.exit(0);
 }
 
