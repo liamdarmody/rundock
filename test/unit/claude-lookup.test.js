@@ -597,6 +597,26 @@ function versionThroughAShell(text) {
   for (const m of text.matchAll(BUILT_VERSION_LINE)) hits.push(m[0]);
   return hits;
 }
+// What the scan finds in one file: `claude` named to a lookup, and a
+// `--version` command line handed to a shell. The lookup module is read like
+// every other file, except that its own two lookups, today's on macOS and
+// Linux and the Windows one, may name `claude`, each once, in the function
+// that is for it.
+const OWN_LOOKUPS = { file: 'lib/runtime/claude-lookup.js', fns: ['todaysLookup', 'whereClaude'] };
+function scanned(file, text) {
+  let rest = text;
+  if (file === OWN_LOOKUPS.file) {
+    for (const fn of OWN_LOOKUPS.fns) {
+      const own = body(text, fn);
+      assert.strictEqual([...own.matchAll(LOOKUP_COMMAND)].length, 1, `${fn} is a lookup`);
+      rest = rest.replace(own, '');
+    }
+  }
+  return [
+    ...[...rest.matchAll(LOOKUP_COMMAND)].map((m) => `${file}: ${m[0]}`),
+    ...versionThroughAShell(text).map((hit) => `${file}: ${hit}`),
+  ];
+}
 // The body of a top-level function, from its declaration to its closing brace.
 function body(text, name) {
   const at = text.indexOf(`function ${name}(`);
@@ -627,17 +647,18 @@ describe('one module finds claude, and nothing reads its version through a shell
     const files = appSources();
     assert.ok(files.length >= 40, `the walk read only ${files.length} files: it has gone blind`);
     for (const must of ['server.js', 'electron/main.js', 'lib/runtime/claude.js', 'lib/runtime/claude-lookup.js']) assert.ok(files.includes(must), `${must} is scanned`);
-    const found = [];
-    for (const file of files) {
-      const text = src(file);
-      if (file === 'lib/runtime/claude-lookup.js') {
-        assert.ok([...text.matchAll(LOOKUP_COMMAND)].length >= 1, 'the lookup itself is where today\'s Windows lookup is run');
-        continue;
-      }
-      for (const m of text.matchAll(LOOKUP_COMMAND)) found.push(`${file}: ${m[0]}`);
-      for (const hit of versionThroughAShell(text)) found.push(`${file}: ${hit}`);
-    }
+    const found = files.flatMap((file) => scanned(file, src(file)));
     assert.deepStrictEqual(found, [], 'claude is looked for only by lib/runtime/claude-lookup.js, and its version read only with arguments');
+  });
+
+  test('the scan reads the lookup module too: a probe through a shell planted there is found, and so is a lookup outside its own two', () => {
+    const file = 'lib/runtime/claude-lookup.js';
+    const text = src(file);
+    const plant = (from, to) => { assert.ok(text.includes(from), `the specimen's anchor is there: ${from}`); return text.replace(from, to); };
+    const probe = plant('readClaudeVersion(bin, VERSION_PROBE_TIMEOUT_MS, platform);\n  if (said', 'String(execSync(`"${bin}" --version`, { timeout: VERSION_PROBE_TIMEOUT_MS }));\n  if (said');
+    assert.ok(scanned(file, probe).length > 0, 'a --version command line in the lookup module is found');
+    const stray = plant('function installedClaude(', "const stray = () => execSync('which claude');\nfunction installedClaude(");
+    assert.ok(scanned(file, stray).length > 0, 'a lookup outside todaysLookup and whereClaude is found');
   });
 
   test('every spawn, the Settings probe and the desktop app\'s check get their copy from the lookup', () => {
