@@ -383,8 +383,8 @@ const MUTATIONS = [
   // Compare unresolved again and every symlink, alias and case spelling of
   // an inside path reads as outside: the false-positive half of the storm.
   [HOOK, 'file targets are canonicalised before the comparison',
-    '  const resolvedPath = canonicalize(path.resolve(workspaceRoot, target), path, resolvedPathFoldsCase);',
-    '  const resolvedPath = path.resolve(workspaceRoot, target);'],
+    '  const resolvedPath = canonicalize(spelled, path, resolvedPathFoldsCase);',
+    '  const resolvedPath = spelled;'],
   // The refusal and the tier classifier decide the same paths, so they must
   // decide them the same way. Drop the folding here and only here, and a
   // variant spelling misses the refusal, falls through, and is offered as an
@@ -603,7 +603,7 @@ const MUTATIONS = [
   // the runtime homes: drop the tag and the card loses its secret wording and
   // its refusal to remember.
   [HOOK, 'outside the runtime homes the tags still carry a home-level secret',
-    '  if (!agentHome) return { agentHome: false, secret: isHomeSecretFile(resolvedPath, home, foldsCase), persistenceSurface: false };\n',
+    '  if (!agentHome) return { agentHome: false, secret: isSecretPath(resolvedPath, home, foldsCase, spelled), persistenceSurface: false };\n',
     '  if (!agentHome) return { agentHome: false, secret: false, persistenceSurface: false };\n'],
   // The backup carries the same contents as the file itself.
   [HOOK, 'the backup of the user-level state file is a secret too',
@@ -867,7 +867,7 @@ const MUTATIONS = [
     '  if (tags.agentHome && !tags.secret) {'],
   // Both tags must come from the registry, not a hardcoded literal.
   [HOOK, 'a crossing\'s secret and persistence-surface tags come from the registry, not a hardcoded false',
-    "  const tags = { agentHome: true, secret: isSecretPath(resolvedPath, home, foldsCase), persistenceSurface: isPersistenceSurface(resolvedPath, home, foldsCase) };",
+    "  const tags = { agentHome: true, secret: isSecretPath(resolvedPath, home, foldsCase, spelled), persistenceSurface: isPersistenceSurface(resolvedPath, home, foldsCase) };",
     "  const tags = { agentHome: true, secret: false, persistenceSurface: false };"],
   // Drop tier three's exemption and a shell command merely touching scratch is reported as a crossing.
   [HOOK, 'a shell crossing into tier three (neither secret nor a persistence surface) is not reported at all',
@@ -1007,10 +1007,13 @@ const MUTATIONS = [
   [HOOK_INTEGRATION, 'a file crossing\'s tags reach the request the hook actually emits',
     "    path: access.resolvedPath, grantDir: access.grantDir,\n    agentHome: access.agentHome, secret: access.secret,\n    persistenceSurface: access.persistenceSurface, answerFile: access.answerFile,\n",
     "    path: access.resolvedPath, grantDir: access.grantDir,\n"],
-  // Drop the registry check and a broad grant silences the credential file inside it.
+  // Drop the registry check and a broad grant silences the credential file
+  // inside it. Only the registry half is dropped, so the row proves the check
+  // made here at the point of decision: a crossing that arrives without a
+  // `secret` tag must still be refused.
   [BOUNDARY, 'a secrets-registry crossing is covered by no stored grant, however broad',
-    '  if (isSecretPath(crossing.path, home)) return false;',
-    '  if (false) return false;'],
+    '  if (crossing.secret === true || isSecretPath(crossing.path, home)) return false;',
+    '  if (crossing.secret === true) return false;'],
   [CHAT_VIEW, 'the whole-folder button is never offered for a secrets-tier crossing, nor where an answer file is among the places reached',
     '  const wholeFolderOffered = grantable\n'
     + '    && !(flaggedCrossing && (flaggedCrossing.secret || flaggedCrossing.answerFile))\n'
@@ -1673,8 +1676,8 @@ const MUTATIONS = [
     '    for (const b of [...starts, ...out.map(l => l.base)]) {',
     '    for (const b of starts) {'],
   [ANSWER_WRITES, 'Answer-file writes: a cd after then or do is not seen',
-    '    while (i < words.length - 1 && COMMAND_LEADS.has(words[i].raw)) i++;\n    const lead',
-    '    const lead'],
+    '    while (i < words.length - 1 && COMMAND_LEADS.has(words[i].raw)) i++;\n    const plain',
+    '    const plain'],
   [ANSWER_WRITES, "Answer-file writes: a cd in a command handed to a shell counts for no word",
     '        .map(l => ({ base: l.base, at: c.at, scope: c.at })));',
     '        .map(l => ({ base: l.base, at: c.at, scope: -1 })));'],
@@ -3459,8 +3462,8 @@ const MUTATIONS = [
     "      if (depth === 0 && seg.op !== '&&') return { ...found, to: start };",
     "      if (false) return { ...found, to: start };"],
   [SHELL_CODE, "Shell code: a cd after || or a pipe is trusted",
-    "['', ';', '\\n', '&&'].includes(seg.op)",
-    "true"],
+    "words[0].raw === 'cd' && ['', ';', '\\n', '&&'].includes(seg.op)",
+    "words[0].raw === 'cd' && true"],
   [SHELL_CODE, "Shell code: cd - is trusted as a base",
     " || target.startsWith('-') || ",
     " || "],
@@ -3471,8 +3474,8 @@ const MUTATIONS = [
     "const CD_ANYWHERE = /(?:^|[^\\w./-])cd(?=[\\s;&|()'\"`]|$)/g;",
     "const CD_ANYWHERE = /(?:^|[;&|]|\\s)cd\\s/g;"],
   [SHELL_CODE, "Shell code: a new line or ; before a cd is not trusted",
-    "['', ';', '\\n', '&&'].includes(seg.op)",
-    "['', '&&'].includes(seg.op)"],
+    "words[0].raw === 'cd' && ['', ';', '\\n', '&&'].includes(seg.op)",
+    "words[0].raw === 'cd' && ['', '&&'].includes(seg.op)"],
   [SHELL_CODE, "Shell code: a command found in code is spliced into the shell's text again",
     "    for (const c of [...code.commands, ...subs.bodies]) commands.push({ text: c, at });",
     "    for (const c of [...code.commands, ...subs.bodies]) text += c + '\\n';"],
