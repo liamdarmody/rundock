@@ -3593,7 +3593,7 @@ const MUTATIONS = [
     "    return execFileSync(bin, ['--version'], { timeout, encoding: 'utf-8', stdio: codexRuntime.PROBE_STDIO });",
     "    return require('child_process').execSync(`\"${bin}\" --version`, { timeout, encoding: 'utf-8', stdio: codexRuntime.PROBE_STDIO });"],
   [FLOOR_SPAWN, "Version floor: a Windows .cmd or .bat copy is run for its version",
-    "  if (platform === 'win32' && /\\.(cmd|bat)$/i.test(bin)) return null;",
+    "  if (platform === 'win32' && /\\.(cmd|bat)$/i.test(bin)) return launcherPackageVersion(bin);",
     "  // every copy is run for its version"],
   [FLOOR_SPAWN, "Version floor: the spawn's options are not the caller's",
     "{ ...options, detached: process.platform !== 'win32' }",
@@ -3604,6 +3604,9 @@ const MUTATIONS = [
   [FLOOR_SPAWN, "Version floor: the stand-in for a refused copy keeps an unguarded stdin",
     "    guardChildStdin(standIn, 'claude (not started: below the version floor)');",
     "    // the stand-in's stdin is left unguarded"],
+  [FLOOR_SPAWN, "Version floor: a .cmd launcher's package version is ignored",
+    "  if (platform === 'win32' && /\\.(cmd|bat)$/i.test(bin)) return launcherPackageVersion(bin);",
+    "  if (platform === 'win32' && /\\.(cmd|bat)$/i.test(bin)) return null;"],
 ];
 const REPORTER = ['--test-reporter', 'spec'];
 

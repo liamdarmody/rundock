@@ -97,14 +97,23 @@ function withPath(dirs, fn) {
   return out;
 }
 
-// A workspace for the pid file, and the guard hand-off recorded.
-function wired(rt) {
+// A workspace for the pid file, and the guard hand-off recorded. `extra` is
+// wired beside it: `platform`, to stand in another platform for the floor.
+function wired(rt, extra = {}) {
   const ws = makeTempDir('claude-floor-ws-');
   const previousWs = config.getWorkspace();
   config.setWorkspace(ws);
   const guarded = [];
-  const prev = rt.wireClaudeRuntimeDeps({ onClaudeSpawn: (proc, info) => guarded.push(info) });
+  const prev = rt.wireClaudeRuntimeDeps({ onClaudeSpawn: (proc, info) => guarded.push(info), ...extra });
   return { ws, guarded, restore: () => { rt.wireClaudeRuntimeDeps(prev); config.setWorkspace(previousWs); } };
+}
+
+// What spawnClaude logs, kept rather than printed.
+function quietWarn() {
+  const said = [];
+  const real = console.warn;
+  console.warn = (...args) => { said.push(args.join(' ')); };
+  return { said, restore: () => { console.warn = real; } };
 }
 
 const CHAT_ARGS = ['--output-format', 'stream-json', '--verbose', '--agent', 'writer'];
@@ -457,7 +466,7 @@ describe('the version probe', { skip: POSIX }, () => {
     } finally { delete process.env.FLOOR_SHELL_MARKER; w.restore(); }
   });
 
-  test('on Windows a .cmd or .bat copy is not run for its version: no shell line is built, and the version is unknown', () => {
+  test('on Windows a .cmd or .bat with no package beside it is never run, and its version is unknown', () => {
     // Node runs a .cmd or .bat only through a shell. The probe passes
     // `win32` in place of the platform it is on; the files are the POSIX
     // stub under those names, so a run would show in its log.
@@ -495,16 +504,112 @@ describe('the version probe', { skip: POSIX }, () => {
   });
 });
 
+// ── A Windows npm launcher ──
+
+// A folder laid out as npm lays out a global install on Windows
+// (`%APPDATA%\npm`): the launcher on PATH, and the package it starts beside
+// it in node_modules. The launcher is the stub under a Windows name, so a run
+// of it shows in its log, and it answers --version with `said`, never with
+// the package's version, so a version read from the package is told from one
+// read by running it. `pkg` is the package.json text, or null for none.
+// `where.exe` finds the launcher on Windows; here a `which` that names it,
+// first on PATH, stands in.
+function npmGlobal(pkg, { said = '2.1.318 (Claude Code)', name = 'claude.cmd' } = {}) {
+  const stub = makeStub(said);
+  const bin = path.join(stub.dir, name);
+  fs.renameSync(stub.bin, bin);
+  if (pkg !== null) {
+    const pkgDir = path.join(stub.dir, 'node_modules', '@anthropic-ai', 'claude-code');
+    fs.mkdirSync(pkgDir, { recursive: true });
+    fs.writeFileSync(path.join(pkgDir, 'package.json'), pkg);
+  }
+  const finder = makeTempDir('claude-floor-which-');
+  fs.writeFileSync(path.join(finder, 'which'), `#!/bin/sh\nprintf '%s\\n' '${bin}'\n`);
+  fs.chmodSync(path.join(finder, 'which'), 0o755);
+  return { ...stub, bin, finder };
+}
+const packageJson = (version) => JSON.stringify({ name: '@anthropic-ai/claude-code', version });
+
+describe('a Windows npm launcher is never run: its version is read from the package beside it', { skip: POSIX }, () => {
+  test('a claude.cmd whose package says 2.0.58 is refused with the frozen message, and the launcher is never run', async () => {
+    const npm = npmGlobal(packageJson('2.0.58'));
+    const rt = freshClaudeRuntime();
+    const w = wired(rt, { platform: () => 'win32' });
+    try {
+      const { error } = await withPath([npm.finder], () => spawnAndSettle(rt, CHAT_ARGS, { stdio: 'ignore' }));
+      assert.strictEqual(error && error.code, 'CLAUDE_TOO_OLD');
+      assert.strictEqual(error.version, '2.0.58');
+      assert.strictEqual(error.path, npm.bin);
+      assert.strictEqual(error.message, frozen('2.0.58', npm.bin));
+      assert.deepStrictEqual(runsOf(npm), [], 'the launcher was never run, for its version or for the chat');
+    } finally { w.restore(); }
+  });
+
+  test('a claude.cmd whose package says 2.0.59 passes and starts, never run for its version', async () => {
+    const npm = npmGlobal(packageJson('2.0.59'));
+    const rt = freshClaudeRuntime();
+    const w = wired(rt, { platform: () => 'win32' });
+    const warn = quietWarn();
+    try {
+      await withPath([npm.finder], async () => {
+        for (let i = 0; i < 2; i++) assert.strictEqual((await spawnAndSettle(rt, CHAT_ARGS, { stdio: 'ignore' })).error, null);
+      });
+      assert.deepStrictEqual(probesOf(npm), [], 'never run for its version');
+      assert.strictEqual(chatsOf(npm).length, 2, 'and started for both chats');
+      assert.deepStrictEqual(warn.said.filter((line) => line.includes(npm.bin)), [], 'its version was read, so nothing is logged');
+    } finally { warn.restore(); w.restore(); }
+  });
+
+  for (const [beside, pkg] of [
+    ['no package.json', null],
+    ['a package.json that does not parse', '{ "name": "@anthropic-ai/claude-code", "version": "2.0.58", '],
+    ['a package.json with no version', JSON.stringify({ name: '@anthropic-ai/claude-code' })],
+  ]) {
+    test(`a claude.cmd with ${beside} beside it is an unknown version: it starts, logged once, never run for its version`, async () => {
+      const npm = npmGlobal(pkg);
+      const rt = freshClaudeRuntime();
+      const w = wired(rt, { platform: () => 'win32' });
+      const warn = quietWarn();
+      try {
+        await withPath([npm.finder], async () => {
+          for (let i = 0; i < 2; i++) assert.strictEqual((await spawnAndSettle(rt, CHAT_ARGS, { stdio: 'ignore' })).error, null);
+        });
+        assert.deepStrictEqual(probesOf(npm), [], 'never run for its version');
+        assert.strictEqual(chatsOf(npm).length, 2, 'both spawns started');
+        assert.strictEqual(warn.said.filter((line) => line.includes(npm.bin)).length, 1, 'logged once');
+      } finally { warn.restore(); w.restore(); }
+    });
+  }
+
+  test('.cmd, .BAT and .Cmd are read the same way, by the same rules, and none is run', () => {
+    const { versionIn, meetsFloor } = floorLib();
+    const rt = freshClaudeRuntime();
+    for (const name of ['claude.cmd', 'CLAUDE.BAT', 'claude.Cmd', 'claude.bat']) {
+      const npm = npmGlobal(packageJson('2.0.58'), { name });
+      assert.strictEqual(versionIn(rt.readClaudeVersion(npm.bin, 5000, 'win32')), '2.0.58', `${name} reads its package's version`);
+      assert.deepStrictEqual(runsOf(npm), [], `${name} was never run`);
+    }
+    const beta = npmGlobal(packageJson('2.10.0-beta.1'));
+    assert.strictEqual(meetsFloor(versionIn(rt.readClaudeVersion(beta.bin, 5000, 'win32'))), true, 'a suffix is read past, and parts compare as numbers');
+  });
+
+  test('on linux the same layout is probed by running the binary, as before', async () => {
+    const npm = npmGlobal(packageJson('2.0.58'));
+    const rt = freshClaudeRuntime();
+    const w = wired(rt, { platform: () => 'linux' });
+    try {
+      const { error } = await withPath([npm.finder], () => spawnAndSettle(rt, CHAT_ARGS, { stdio: 'ignore' }));
+      assert.strictEqual(error, null, 'the 2.1.318 it prints passes: the package beside it is not read');
+      assert.strictEqual(probesOf(npm).length, 1, 'it was run for its version');
+      assert.strictEqual(chatsOf(npm).length, 1);
+    } finally { w.restore(); }
+    assert.strictEqual(rt.readClaudeVersion(npm.bin, 5000, 'linux').trim(), '2.1.318 (Claude Code)');
+  });
+});
+
 // ── An unknown version ──
 
 describe('when no version can be read, the spawn goes ahead as before, logged once', { skip: POSIX }, () => {
-  function quietWarn() {
-    const said = [];
-    const real = console.warn;
-    console.warn = (...args) => { said.push(args.join(' ')); };
-    return { said, restore: () => { console.warn = real; } };
-  }
-
   for (const [name, said] of [
     ['crashes', 'CRASH'],
     ['prints something unreadable', 'Claude Code, version unknown'],
