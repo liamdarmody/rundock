@@ -141,10 +141,10 @@ jobs:
   # THREE JOBS, ONE REQUIRED CHECK. The plan decides which harnesses this
   # change can reach (scripts/mutation-scope.js, against the merge base), the
   # shards run them in parallel, and `Mutation guards` reads every shard's
-  # verdict and reports one outcome. Only `Mutation guards` is meant to be a
-  # required check: its name does not change with the shard count, and
-  # `always()` keeps it from being skipped, which a required check would
-  # otherwise count as passing.
+  # verdict, and how the shard jobs ended, and reports one outcome. Only
+  # `Mutation guards` is meant to be a required check: its name does not
+  # change with the shard count, and `always()` keeps it from being skipped,
+  # which a required check would otherwise count as passing.
   #
   # The complete set runs nightly, in mutation-nightly.yml, as the backstop for
   # what a scoped run cannot reach.
@@ -277,9 +277,30 @@ jobs:
           --plan-file mutation-plan.json --verdict "verdict-$SHARD.json"
 
       # The tools restore what they mutate, including when a run throws. A
-      # shard that leaves any file modified is itself worth seeing.
+      # shard that leaves any file modified fails here, naming each file in
+      # this log and in the job summary. The verdict above was written before
+      # this ran and is uploaded below whatever happens here, so it can still
+      # say pass: what makes this failure count is `Mutation guards` reading
+      # the shard jobs' result, which no step in a shard can change. Run
+      # always(), so a shard whose guard survived is checked as well.
       - name: Fail if any tool left a file modified
-        run: git diff --exit-code
+        if: always()
+        run: |
+          modified="$(git diff --name-only HEAD)"
+          if [ -z "$modified" ]; then
+            echo "No tool left a file modified."
+            exit 0
+          fi
+          echo "::error title=A tool left files modified::$(printf '%s' "$modified" | tr '\n' ' ')"
+          echo "A tool left these files modified:"
+          printf '%s\n' "$modified" | sed 's/^/  /'
+          git --no-pager diff HEAD
+          {
+            echo '## A tool left files modified'
+            echo
+            printf '%s\n' "$modified" | sed 's/^/- /'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 1
 
       - name: Keep this shard's verdict, whether it passed or not
         if: always()
@@ -320,13 +341,22 @@ jobs:
       # cancelled or timed out) is no verdict for that shard. No verdict ends
       # this job non-green, titled "No verdict", so the merge stays blocked
       # without anyone being sent to look for a guard that failed.
+      #
+      # THE VERDICTS ARE NOT THE ONLY WITNESS. A verdict is the shard's own
+      # file, uploaded even when a later step in its job failed, so the shard
+      # jobs' result goes in too: GitHub sets it, and no step in a shard can
+      # change it. Anything but success is not green, titled "A shard failed:
+      # see its job", unless a verdict already explains it ("A guard
+      # survived"). "Re-run failed jobs" re-runs this job with the shards it
+      # needs, so a shard that comes back clean turns it green.
       - name: One outcome from every shard
         env:
           PLAN_RESULT: ${{ needs.mutation-plan.result }}
+          SHARDS_RESULT: ${{ needs.mutation-shard.result }}
         run: >-
           node scripts/mutation-scope.js --aggregate
           --plan-file mutation/mutation-plan.json --verdicts mutation
-          --plan-result "$PLAN_RESULT"
+          --plan-result "$PLAN_RESULT" --shards-result "$SHARDS_RESULT"
 
   # Coverage floors: the suite runs WITH coverage and the per-area floors in
   # test/tools/coverage-floors.json are enforced. Deleting a covered test, or
