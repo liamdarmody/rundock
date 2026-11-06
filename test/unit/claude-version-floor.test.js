@@ -182,6 +182,19 @@ describe('versions are compared as numbers, part by part', () => {
       assert.strictEqual(meetsFloor(versionIn(said)), null);
     }
   });
+
+  test('only the Claude Code version line counts, never another number in the output', () => {
+    const { versionIn } = floorLib();
+    // A line before the version line, with a number of its own, is read past.
+    assert.strictEqual(versionIn('Warning: helper 2.1.318\n2.0.58 (Claude Code)\n'), '2.0.58');
+    assert.strictEqual(versionIn('Warning: helper 2.1.318\r\n2.0.58 (Claude Code)\r\n'), '2.0.58');
+    assert.strictEqual(versionIn('Update available: 2.1.318\n2.0.58\n'), '2.0.58', 'a line that is only a version is the version');
+    assert.strictEqual(versionIn('note 1.0.0\n2.0.59 (Claude Code)\n3.0.0\n'), '2.0.59', 'the line naming Claude Code wins');
+    // A number that is not on a version line is no version at all.
+    for (const said of ['Warning: helper 2.0.58', 'claude 2.0.58 build', 'node v2.0.58', '2.0.58 (Something Else)', 'Error: 2.0.58 (Claude Code) is broken']) {
+      assert.strictEqual(versionIn(said), null, `nothing read from ${JSON.stringify(said)}`);
+    }
+  });
 });
 
 // ── spawnClaude below the floor ──
@@ -238,6 +251,18 @@ describe('below the floor nothing is started', { skip: POSIX }, () => {
       });
       assert.strictEqual(chatsOf(stub).length, 1, 'and it was handed the chat');
       assert.deepStrictEqual(chatsOf(stub)[0].args, CHAT_ARGS);
+    } finally { w.restore(); }
+  });
+
+  test('a copy whose version line says 2.0.58 is refused as 2.0.58, whatever number another line holds', async () => {
+    const stub = makeStub('Warning: helper 2.1.318\n2.0.58 (Claude Code)');
+    const rt = freshClaudeRuntime();
+    const w = wired(rt);
+    try {
+      const { error } = await withPath([stub.dir], () => spawnAndSettle(rt, CHAT_ARGS, { stdio: 'ignore' }));
+      assert.strictEqual(error && error.code, 'CLAUDE_TOO_OLD');
+      assert.strictEqual(error.version, '2.0.58');
+      assert.deepStrictEqual(chatsOf(stub), []);
     } finally { w.restore(); }
   });
 
@@ -340,7 +365,11 @@ describe('when no version can be read, the spawn goes ahead as before, logged on
     return { said, restore: () => { console.warn = real; } };
   }
 
-  for (const [name, said] of [['crashes', 'CRASH'], ['prints something unreadable', 'Claude Code, version unknown']]) {
+  for (const [name, said] of [
+    ['crashes', 'CRASH'],
+    ['prints something unreadable', 'Claude Code, version unknown'],
+    ['prints an unrelated 2.0.58 and no Claude Code version', 'Warning: helper 2.0.58'],
+  ]) {
     test(`a probe that ${name} lets the spawn go ahead, logged once`, async () => {
       const stub = makeStub(said);
       const rt = freshClaudeRuntime();
