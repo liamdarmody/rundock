@@ -61,8 +61,11 @@ if (args[0] === '--version') {
 `;
 }
 
-function makeStub(said) {
-  const dir = makeTempDir('claude-floor-stub-');
+// `folder`, when given, is the name of the folder the stub sits in, inside a
+// fresh temp folder: a name a shell would read as more than a name.
+function makeStub(said, folder) {
+  let dir = makeTempDir('claude-floor-stub-');
+  if (folder) { dir = path.join(dir, folder); fs.mkdirSync(dir); }
   const bin = path.join(dir, 'claude');
   fs.writeFileSync(bin, stubSource());
   fs.chmodSync(bin, 0o755);
@@ -343,6 +346,59 @@ describe('the version probe', { skip: POSIX }, () => {
       assert.deepStrictEqual(probesOf(stub).map((r) => r.stdin), ['closed'], 'the probe gets the null device');
       assert.deepStrictEqual(chatsOf(stub).map((r) => r.stdin), ['open'], 'while the chat keeps the stdin its caller asked for');
     } finally { w.restore(); }
+  });
+
+  // The probe runs the binary itself, never a command line a shell reads, so
+  // the path it was found at is a path whatever characters it holds.
+  test('a copy in a folder whose name holds a double quote gets the verdict any other copy gets', async () => {
+    const stub = makeStub('2.0.58 (Claude Code)', 'with"quote');
+    const rt = freshClaudeRuntime();
+    const w = wired(rt);
+    try {
+      const { error } = await withPath([stub.dir], () => spawnAndSettle(rt, CHAT_ARGS, { stdio: 'ignore' }));
+      assert.strictEqual(error && error.code, 'CLAUDE_TOO_OLD', 'refused, as at an ordinary path');
+      assert.strictEqual(error.path, stub.bin);
+      assert.strictEqual(error.message, frozen('2.0.58', stub.bin));
+      assert.strictEqual(probesOf(stub).length, 1, 'the probe ran this copy');
+      assert.deepStrictEqual(chatsOf(stub), []);
+    } finally { w.restore(); }
+  });
+
+  test('a copy in a folder whose name holds $(...) is probed as a path: nothing in the name is run', async () => {
+    const marker = path.join(makeTempDir('claude-floor-marker-'), 'ran-in-a-shell');
+    const stub = makeStub('2.0.58 (Claude Code)', 'q$(touch $FLOOR_SHELL_MARKER)');
+    const rt = freshClaudeRuntime();
+    const w = wired(rt);
+    process.env.FLOOR_SHELL_MARKER = marker;
+    try {
+      const { error } = await withPath([stub.dir], () => spawnAndSettle(rt, CHAT_ARGS, { stdio: 'ignore' }));
+      assert.strictEqual(fs.existsSync(marker), false, 'no shell ran the command in the folder name');
+      assert.strictEqual(error && error.code, 'CLAUDE_TOO_OLD', 'refused, as at an ordinary path');
+      assert.strictEqual(error.path, stub.bin);
+      assert.strictEqual(probesOf(stub).length, 1, 'the probe ran this copy');
+      assert.deepStrictEqual(chatsOf(stub), []);
+    } finally { delete process.env.FLOOR_SHELL_MARKER; w.restore(); }
+  });
+
+  test('on Windows a .cmd or .bat copy is not run for its version: no shell line is built, and the version is unknown', () => {
+    // Node runs a .cmd or .bat only through a shell. The probe passes
+    // `win32` in place of the platform it is on; the files are the POSIX
+    // stub under those names, so a run would show in its log.
+    const { versionIn } = floorLib();
+    const stub = makeStub('2.0.58 (Claude Code)');
+    const rt = freshClaudeRuntime();
+    const named = ['claude.cmd', 'CLAUDE.BAT', 'claude.Cmd'].map((name) => {
+      const bin = path.join(stub.dir, name);
+      fs.copyFileSync(stub.bin, bin);
+      fs.chmodSync(bin, 0o755);
+      return bin;
+    });
+    for (const bin of named) assert.strictEqual(rt.readClaudeVersion(bin, 5000, 'win32'), null, `${path.basename(bin)} reads as unknown`);
+    assert.deepStrictEqual(probesOf(stub), [], 'and none of them was run');
+    // The same file on another platform is run and read: the platform is
+    // what holds it back, not the file.
+    assert.strictEqual(versionIn(rt.readClaudeVersion(named[0], 5000, 'linux')), '2.0.58');
+    assert.strictEqual(probesOf(stub).length, 1);
   });
 
   test('the probe is bounded by its timeout', () => {
