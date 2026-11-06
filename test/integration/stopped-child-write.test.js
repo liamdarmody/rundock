@@ -34,6 +34,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 const h = require('../helpers/harness.js');
+const { startingFresh } = require('../../lib/runtime/missing-session.js');
 
 // The guard's logging seam, where it exists.
 const seam = (() => {
@@ -46,15 +47,18 @@ const seam = (() => {
 const uncaught = [];
 process.on('uncaughtExceptionMonitor', (err) => { uncaught.push(err); });
 
-// Every line the guard logs. It logs through console.error.
+// Every line the guard logs. It logs through console.error. And how many
+// messages the window had when each was logged, so a test can tell what was
+// said after a write failed.
 const stdinLines = [];
+const stdinAt = [];
 const realConsoleError = console.error;
 
 let client;
 before(async () => {
   console.error = (...args) => {
     const line = args.map((a) => (a instanceof Error ? a.message : String(a))).join(' ');
-    if (line.startsWith('[Stdin]')) stdinLines.push(line);
+    if (line.startsWith('[Stdin]')) { stdinLines.push(line); stdinAt.push(client ? client.messages.length : 0); }
     realConsoleError.apply(console, args);
   };
   await h.boot();
@@ -64,7 +68,7 @@ after(async () => {
   console.error = realConsoleError;
   await h.shutdown();
 });
-beforeEach(() => { uncaught.length = 0; stdinLines.length = 0; });
+beforeEach(() => { uncaught.length = 0; stdinLines.length = 0; stdinAt.length = 0; });
 
 // More than a pipe to a child holds on any platform this runs on, so a
 // write of it is still going when a child that never reads it exits.
@@ -350,6 +354,41 @@ describe('a delegate whose resume is refused before it reads its brief', () => {
     assert.deepStrictEqual(prompts.filter((p) => p.includes(`FOLLOW-${tag}`)), [`FOLLOW-${tag} one more thing`],
       'and given the person\'s message once, as sent');
     assert.deepStrictEqual(after.filter((m) => m.type === 'error').map((m) => m.content), []);
+
+    // Read once the delegation has ended: the delegate auto-returns, and the
+    // orchestrator is handed what it did.
+    await h.waitUntil(() => h.promptsFor('chief-of-staff').some((p) => p.includes('pipeline-complete')), { timeout: 20000 });
+    await h.delay(300);
+    const all = messagesFor(convoId, since);
+
+    // THE REFUSED PROCESS ENDED ONCE, BY ITS CLOSE. Neither failed write ended
+    // anything: its close did, once, as it ends any refused resume, by starting
+    // the delegate again fresh and saying why. The fresh delegate keeps the
+    // entry, and with it the process id, so the delegate's messages are read
+    // in order: what ends the refused process, each answered turn's done, and
+    // the delegation's own end.
+    const ofDelegate = all.filter((m) => m._processId === refusedEntry.processId);
+    const leadName = h.internal.discoverAgents().find((a) => a.id === 'content-lead').displayName;
+    assert.deepStrictEqual(ofDelegate.filter((m) => m.type === 'system' && m.subtype === 'info').map((m) => [m.content, m.expiredSessionId]),
+      [[startingFresh(leadName), `dead-lead-${prefix}`]],
+      'the refused process ends exactly once, the way its close path ends a refused resume: the session was gone, so the delegate starts fresh');
+    const freshAt = ofDelegate.findIndex((m) => m.type === 'system' && m.subtype === 'info');
+    assert.deepStrictEqual(ofDelegate.slice(0, freshAt).filter((m) => m.type === 'system' && ['done', 'cancelled'].includes(m.subtype)), [],
+      'and nothing else ends it: no turn or delegation is ended for the refused process');
+    // A done no result came just before ends what a process was doing when it
+    // closed; one straight after a result ends that answered turn.
+    const ended = ofDelegate.filter((m, i) => m.type === 'system' && m.subtype === 'done' && !(i > 0 && ofDelegate[i - 1].type === 'result'));
+    assert.strictEqual(ended.length, 1, `the delegation ends exactly once, not once per failed write: ${JSON.stringify(ended)}`);
+
+    // THE ORCHESTRATOR HEARS ONCE, after both writes have failed.
+    const handedBack = all.filter((m) => m.type === 'system' && m.subtype === 'agent_switch' && m.returning);
+    assert.deepStrictEqual(handedBack.map((m) => [m.fromAgent, m.toAgent]), [['content-lead', 'chief-of-staff']],
+      'the conversation is handed back to the orchestrator once');
+    const backAt = client.messages.indexOf(handedBack[0]);
+    assert.ok(stdinAt.length === 2 && stdinAt.every((n) => n <= backAt), 'and only after both writes had failed');
+    assert.strictEqual(h.promptsFor('chief-of-staff').filter((p) => p.includes(`LEAD-FRESH-${tag}`)).length, 1,
+      'the orchestrator is handed the delegate\'s result exactly once');
+    assertServerUp('the delegation\'s end');
     h.reapConvo(convoId);
   });
 });

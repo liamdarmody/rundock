@@ -370,6 +370,14 @@ const MUTATIONS = [
   [STDIN_INVENTORY, 'the scan reads code inside a template\'s placeholder as code',
     "      if (c === '$' && text[i + 1] === '{') { i += 2; placeholders.push(depth); depth++; last = '{'; return; }\n",
     ''],
+  // Two writes to a refused delegate both fail, and its close still ends
+  // what it was doing once: the delegation ends once, and the orchestrator
+  // hears once. This row ends the delegation twice: the refused process's
+  // close starts the delegate fresh and then ends the delegation as well.
+  [only({ src: ENGINE.src, suite: STOPPED }, 'the retry: a second write to the same refused delegate is logged once more and ends nothing a second time'),
+    'a refused delegate\'s close starts it again fresh and ends nothing else, so the delegation ends once',
+    '      startWithoutSession(delegateEntry, convoId, delegateArgs, freshDelegateContext, delegateWire, handleDelegateClose);\n      return;\n',
+    '      startWithoutSession(delegateEntry, convoId, delegateArgs, freshDelegateContext, delegateWire, handleDelegateClose);\n'],
 ];
 
 const REPORTER = ['--test-reporter', 'spec'];
@@ -382,8 +390,11 @@ function redTests(suite) {
   let failed = false;
   const [file, testName] = String(suite).split('#');
   try {
-    out = execFileSync('node', ['--test', ...REPORTER, ...(testName ? ['--test-name-pattern', exactly(testName)] : []), file],
-      { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    // Bounded twice over: each test by node's own timeout, and the whole
+    // suite by a kill, so a broken guard that leaves a run waiting costs
+    // minutes and reports, rather than holding the harness for hours.
+    out = execFileSync('node', ['--test', '--test-timeout=120000', ...REPORTER, ...(testName ? ['--test-name-pattern', exactly(testName)] : []), file],
+      { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 280000, killSignal: 'SIGKILL' });
   } catch (e) {
     failed = true;
     out = (e.stdout || '') + (e.stderr || '');
