@@ -213,6 +213,55 @@ describe('the workspace boundary says what it enforces, per platform', () => {
   });
 });
 
+describe('ARCHITECTURE.md: what happens to a call when the permission hook fails', () => {
+  // The claim: on Claude Code 2.1.295 and later a failing permission hook
+  // blocks the call, earlier versions let it through with the hook's own
+  // refusal the only answer, and a wrong value for the field voids the whole
+  // settings file, which is why only one constant is ever written. A reader
+  // trusting the first half while the field had quietly gone from the entries
+  // would be trusting a block that is not there, so the value the passage
+  // quotes is checked against what an open actually writes.
+  const scaffoldLib = require('../../lib/workspace/scaffold.js');
+  const passage = architecture.split('\n\n').find((p) => p.includes('onFailure') && p.includes('2.1.295 and later')) || '';
+
+  test('the passage gives the outcome by version, as observed, and says why only the constant is written', () => {
+    assert.ok(passage, 'a paragraph names the field and the versions that honor it');
+    assert.match(passage, /2\.1\.294/, 'and the last version observed to ignore it');
+    assert.match(passage, /[Oo]bserved/, 'stated as observed, not as a guess');
+    assert.match(passage, /hook's own refusal is the only answer/, 'before 2.1.295 the hook alone answers');
+    assert.match(passage, /skip the whole settings file/, 'a wrong value voids the file');
+    assert.match(passage, /only the constant is ever written/, 'and that is why one constant is written');
+    assert.match(passage, /`HOOK_ON_FAILURE`/, 'naming it');
+    assert.doesNotMatch(passage, /\/Users\/|\/home\/|[A-Z]:\\/, 'with no personal paths');
+    assert.doesNotMatch(architecture, /registration does not set/, 'the sentence saying Rundock does not set it is gone');
+  });
+
+  test('the value the passage quotes is the one every PreToolUse entry gets, and no PostToolUse entry', () => {
+    const quoted = passage.match(/`"onFailure": "([^"]*)"`/);
+    assert.ok(quoted, 'the passage quotes the field as it is written');
+    assert.strictEqual(quoted[1], scaffoldLib.HOOK_ON_FAILURE, 'the quoted value is the constant');
+    const dir = useWorkspace({ claudeMd: '# x' });
+    srv.scaffoldWorkspace(dir, { platform: 'darwin' });
+    const settings = JSON.parse(fs.readFileSync(path.join(dir, '.claude', 'settings.local.json'), 'utf-8'));
+    assert.strictEqual(settings.hooks.PreToolUse.length, 4);
+    for (const e of settings.hooks.PreToolUse) assert.strictEqual(e.hooks[0].onFailure, quoted[1], `${e.matcher} carries it`);
+    for (const event of ['PostToolUse', 'PostToolUseFailure']) {
+      for (const e of settings.hooks[event]) assert.ok(!('onFailure' in e.hooks[0]), `${event} does not`);
+    }
+  });
+
+  test('going back to an earlier release keeps the field, as the record the passage names shows', () => {
+    const named = passage.match(/`(scripts\/hook-on-failure-undo\/[a-z-]+\.json)`/);
+    assert.ok(named, 'the passage names the record');
+    const record = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', named[1]), 'utf-8'));
+    assert.match(passage, new RegExp(`the ${record.release.replace(/\./g, '\\.')} release's own scaffold`), 'the release the passage names is the one recorded');
+    assert.match(passage, /left the settings file byte for byte/);
+    assert.strictEqual(record.releaseChangedTheFile, false, 'and the record says the release left it as it was');
+    assert.deepStrictEqual(record.leftByRelease, record.written);
+    assert.match(passage, /renamed over it only once that write has finished/, 'the passage says the file is written whole');
+  });
+});
+
 describe('ARCHITECTURE.md: the oldest Claude Code Rundock starts', () => {
   // The number a contributor reads is the one the flag table derives, so a
   // flag that raises the floor fails here until the sentence says so.

@@ -170,6 +170,14 @@ const AGENT_NOTICE_STORE = { src: path.join(ROOT, 'lib', 'runtime', 'agent-notic
 const STOP_ASK_HOOK = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/stop-and-ask.test.js' };
 const STOP_ASK_LINE = { src: path.join(ROOT, 'scripts', 'refusal-notice.js'), suite: 'test/unit/stop-and-ask.test.js' };
 const STOP_ASK_SCAFFOLD = { src: path.join(ROOT, 'lib', 'workspace', 'scaffold.js'), suite: 'test/unit/stop-and-ask.test.js' };
+// Claude Code blocks the call when the permission hook fails: the field on
+// every PreToolUse entry, its one value, the reconcile that repairs it and what
+// that leaves alone, and the settings file the open will not rebuild. The doc
+// suite is paired too, because its pin compares the value the passage quotes
+// with the one the code writes.
+const ON_FAILURE = { src: path.join(ROOT, 'lib', 'workspace', 'scaffold.js'), suite: 'test/unit/hook-on-failure.test.js' };
+const ON_FAILURE_DOC = { src: path.join(ROOT, 'lib', 'workspace', 'scaffold.js'), suite: 'test/unit/doc-claims.test.js' };
+const ON_FAILURE_IMPORT = { src: path.join(ROOT, 'lib', 'workspace', 'sandbox-status.js'), suite: 'test/unit/hook-on-failure.test.js' };
 const STOP_ASK_GLUE = { src: path.join(ROOT, 'lib', 'runtime', 'codex-glue.js'), suite: 'test/integration/codex-stop-and-ask.test.js' };
 // A run nobody can be asked from is told to carry on or say it failed: the
 // hook that decides who can be asked and hands every refusal over in those
@@ -3573,6 +3581,71 @@ const MUTATIONS = [
   [SHELL_CODE, "Shell code: a cd to a variable is trusted as a base",
     " || CD_NOT_LITERAL.test(target)) return null;",
     ") return null;"],
+
+  // ===== CLAUDE CODE BLOCKS THE CALL WHEN THE PERMISSION HOOK FAILS =====
+  // Without the field, a hook that fails lets the call through. With any value
+  // but "block" (or "continue"), Claude Code 2.1.295 and later skip the whole
+  // settings file. So: the field on every fresh entry, the one value, the
+  // repair of a missing or wrong one, nothing given to an entry or a hook that
+  // is not Rundock's, nothing on the PostToolUse entry, and a file the open
+  // cannot read never rebuilt into one holding something else.
+  [ON_FAILURE, 'On failure: a PreToolUse entry is written without the field',
+    '      hooks: [{ ...hookCommand(300), onFailure: HOOK_ON_FAILURE }],',
+    '      hooks: [hookCommand(300)],'],
+  [ON_FAILURE, 'On failure: the constant holds a value other than "block"',
+    "const HOOK_ON_FAILURE = 'block';",
+    "const HOOK_ON_FAILURE = 'continue';"],
+  [ON_FAILURE_DOC, 'On failure: the value the doc quotes is not the value written',
+    "const HOOK_ON_FAILURE = 'block';",
+    "const HOOK_ON_FAILURE = 'continue';"],
+  [ON_FAILURE, 'On failure: the reconcile repairs a missing field but not a wrong value',
+    'h && hookUpToDate(h) && h.onFailure !== HOOK_ON_FAILURE',
+    'h && hookUpToDate(h) && h.onFailure === undefined'],
+  [ON_FAILURE, 'On failure: the reconcile repairs nothing, so an earlier release\'s workspace never gets the field',
+    '          h.onFailure = HOOK_ON_FAILURE;\n          dirty = true;\n',
+    ''],
+  [ON_FAILURE, 'On failure: the reconcile gives the field to an entry under a matcher Rundock never writes',
+    '!PRE_MATCHERS.includes(e.matcher) || ',
+    ''],
+  [ON_FAILURE, 'On failure: the reconcile gives the field to a person\'s hook',
+    'h && hookUpToDate(h) && h.onFailure',
+    'h && h.onFailure'],
+  [ON_FAILURE, 'On failure: the PostToolUse entry carries the field too',
+    'hooks: [hookCommand(10)]',
+    'hooks: [{ ...hookCommand(10), onFailure: HOOK_ON_FAILURE }]'],
+  [ON_FAILURE, 'On failure: a settings file that does not parse is rebuilt from {}',
+    "      if (e.code !== 'ENOENT') throw new Error(`left ${settingsLocalPath} as it is, it could not be read: ${e.message}`);\n",
+    ''],
+  [ON_FAILURE, 'On failure: a settings file holding JSON that is not an object is rewritten',
+    "    if (!settingsLocal || typeof settingsLocal !== 'object' || Array.isArray(settingsLocal)) {\n      throw new Error(`left ${settingsLocalPath} as it is, it does not hold a JSON object`);\n    }\n",
+    ''],
+  [ON_FAILURE, 'On failure: the settings file is written in place, with no temporary file and no rename',
+    'function writeWhole(file, body) {\n',
+    'function writeWhole(file, body) {\n  fs.writeFileSync(file, body); return;\n'],
+  [ON_FAILURE, 'On failure: the temporary file is left behind when the write fails',
+    '    if (temp !== null) { try { fs.rmSync(temp, { force: true }); } catch (e2) { /* nothing to remove */ } }\n',
+    ''],
+  [ON_FAILURE, 'On failure: a read-only settings file is replaced, because its folder is writable',
+    '      fs.accessSync(target, fs.constants.W_OK);\n',
+    ''],
+  [ON_FAILURE, 'On failure: a settings file reached through a link is replaced by a plain file',
+    '      target = fs.realpathSync(file);\n',
+    ''],
+  [ON_FAILURE, 'On failure: the settings file loses its permission bits when it is written',
+    '      mode = fs.statSync(target).mode & 0o7777;\n',
+    ''],
+  [ON_FAILURE, 'On failure: the reconcile on open writes the settings file in place',
+    '      writeWhole(settingsLocalPath, body);',
+    '      fs.writeFileSync(settingsLocalPath, body);'],
+  [ON_FAILURE, 'On failure: the sandbox switch writes the settings file in place',
+    '\n    writeWhole(settingsLocalPath, body);',
+    '\n    fs.writeFileSync(settingsLocalPath, body);'],
+  [ON_FAILURE_IMPORT, 'On failure: bringing in a person\'s sandbox rules writes the settings file in place',
+    '    writeWhole(settingsFile(dir), body);',
+    '    fs.writeFileSync(settingsFile(dir), body);'],
+  [ON_FAILURE_IMPORT, 'On failure: the put-back after a failed import writes the settings file in place',
+    'if (s.bytes) { writeWhole(s.file, s.bytes);',
+    'if (s.bytes) { fs.writeFileSync(s.file, s.bytes);'],
   // ===== THE OLDEST CLAUDE CODE RUNDOCK STARTS =====
   [FLOOR_TABLE, "Version floor: the comparison is inverted",
     "x[i] < y[i] ? -1 : 1",
