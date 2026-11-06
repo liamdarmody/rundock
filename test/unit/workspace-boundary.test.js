@@ -1668,6 +1668,37 @@ describe('a named working folder covers what is beneath it, and stops at the run
       'and the shell half agrees, rather than the two disagreeing about one path');
   });
 
+  test('a write to a persistence surface through a linked runtime home still cards, whatever is named', () => {
+    // THE SAME STOP, FOR THE TIER THAT HAS NO SECOND CHECK. A credential file
+    // is also judged by the name it is reached by, so the test above holds
+    // even when the stop compares the home root unresolved. A persistence
+    // surface is judged only by where it is, so with the root unresolved the
+    // linked home stops being the runtime home, the named folder holding its
+    // real directory covers the write, and a new agent file lands with no
+    // card at all. Where the temp folder is itself reached through a link, as
+    // on macOS, every runtime-home test notices an unresolved root; where it
+    // is already its real path, as on a Linux runner, only a linked home like
+    // this one does.
+    const home = tmp('nf-linksurface-');
+    const realStore = tmp('nf-linksurface-real-');
+    const claudeReal = path.join(realStore, 'claude-data');
+    fs.mkdirSync(path.join(claudeReal, 'agents'), { recursive: true });
+    try { fs.symlinkSync(claudeReal, path.join(home, '.claude'), 'dir'); } catch (e) { return; }
+    assert.notStrictEqual(fs.realpathSync(path.join(home, '.claude')), path.join(home, '.claude'),
+      'the link and its target must differ, or this passes vacuously');
+    const ws = tmp('nf-linksurface-ws-');
+    const agentFile = path.join(home, '.claude', 'agents', 'new.md');
+
+    // realStore is named, and it CONTAINS the runtime home's real directory.
+    const write = hook.classifyFileAccess('Write', { file_path: agentFile }, ws, [realStore], home);
+    assert.strictEqual(write.where, 'outside', 'the write is not covered by the named folder that holds the link\'s target');
+    assert.strictEqual(write.agentHome, true, 'the linked home is still the runtime home');
+    assert.strictEqual(write.persistenceSurface, true, 'and its agents folder is still a persistence surface');
+    const shell = hook.classifyShellAccess('Bash', { command: `touch ${agentFile}` }, ws, [realStore], home);
+    assert.ok(shell && shell.crossings.length === 1 && shell.crossings[0].persistenceSurface === true,
+      'and the shell half agrees, rather than the two disagreeing about one path');
+  });
+
   test('a named folder is canonicalised, so a folder reached through a symlink still covers its files', () => {
     // Dropbox and iCloud folders are routinely symlinked, and the storm this
     // setting ends is partly a symlink story already. A named folder compared
