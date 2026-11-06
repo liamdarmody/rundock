@@ -3643,7 +3643,7 @@ const MUTATIONS = [
     '  if (answer && answer.key === key && now >= answer.at && now - answer.at < LOGIN_ANSWER_MS) return { ...answer.login, asked: false };\n',
     ''],
   [LOOKUP_DESKTOP, "Claude lookup: the desktop app's sign-in check runs whichever claude comes first on its PATH",
-    "  const bin = require('../lib/runtime/claude-lookup.js').lookupClaude().bin;\n",
+    "  const bin = lookup.lookupClaude().bin;\n",
     "  const bin = 'claude';\n"],
 ];
 const REPORTER = ['--test-reporter', 'spec'];

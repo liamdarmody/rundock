@@ -90,7 +90,7 @@ const AGENT_SPAWNS = [
 // processes they start), and the hook decides nothing outside Rundock. Each
 // says why it cannot be driven end to end, and which test here covers it.
 const OTHER_CLAUDE_LAUNCHES = [
-  { at: 'lib/runtime/claude.js | spawnClaude | spawn(resolveClaudeBin())',
+  { at: 'lib/runtime/claude.js | spawnClaude | spawn(launch.command)',
     why: 'the one function every agent spawn above starts through: it passes on the environment it is given and adds nothing, so each agent spawn\'s own test drives it',
     testedBy: [ENVIRONMENTS, 'the funnel every agent spawn goes through passes on the environment it is given'] },
   { at: 'lib/runtime/claude-console.js | checkConnection | spawn(bin)',
@@ -102,7 +102,7 @@ const OTHER_CLAUDE_LAUNCHES = [
   { at: 'lib/runtime/claude-lookup.js | readClaudeVersion | execFileSync(bin)',
     why: 'asks a copy the lookup found, or the one spawnClaude is about to start, for its version (`--version`, no shell), with the app\'s own environment, and exits: it starts no agent and runs no tool',
     testedBy: [HERE, 'the app never marks its own environment as Rundock\'s'] },
-  { at: 'electron/main.js | isClaudeAuthenticated | execFileSync(bin)',
+  { at: 'electron/main.js | isClaudeAuthenticated | execFileSync(launch.command)',
     why: 'the desktop\'s sign-in check: the copy the lookup chose, run with its arguments and no shell, in the main process with no --settings and the desktop\'s own environment, so the hook decides nothing for it; test/unit/claude-lookup.test.js runs it, lifted from main.js, against stub copies',
     testedBy: [ENVIRONMENTS, 'the hook decides nothing for a process started with the app\'s own environment'] },
 ];
@@ -125,6 +125,7 @@ const NOT_CLAUDE = [
   { at: "lib/runtime/claude.js | psCommand | execFileSync('ps')", runs: "ps, to read a process's command line" },
   { at: "lib/runtime/claude-lookup.js | whereClaude | execSync('where.exe claude')", runs: 'the Windows lookup of the Claude binary on the PATH' },
   { at: "lib/runtime/claude-lookup.js | todaysLookup | execSync('which claude')", runs: 'a lookup of the Claude binary on the PATH, when the login shell cannot answer and no folder on the PATH holds it' },
+  { at: "lib/runtime/claude-lookup.js | nodeFor | execFileSync('where.exe')", runs: 'where.exe, on Windows, for the node.exe an npm install of Claude Code is started with' },
   { at: 'lib/runtime/claude-lookup.js | askLoginShell | spawnSync(shell)', runs: "the person's login shell, asked for the PATH it builds, with a fixed command and no environment of Rundock's" },
   { at: "lib/runtime/claude.js | killProcessTree | spawn('taskkill')", runs: 'taskkill, to stop an agent on Windows' },
   { at: "scripts/code-mode-git.js | git | execFileSync('git')", runs: "git, for the hook's Code-mode checks" },

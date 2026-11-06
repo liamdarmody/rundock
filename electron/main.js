@@ -128,13 +128,17 @@ function ensureClaudeOnUserPath(binDir) {
 }
 
 // Is the person signed in: the copy the lookup chose (the one findClaude just
-// reported, and the one chats start) is run with its arguments, never through
-// a shell, so nothing in the path it was found at is read as a command.
+// reported, and the one chats start) is started as chats start it (launchFor:
+// a Windows npm launcher through its package's entry), with its arguments and
+// never through a shell, so nothing in the path it was found at is read as a
+// command.
 function isClaudeAuthenticated() {
-  const bin = require('../lib/runtime/claude-lookup.js').lookupClaude().bin;
+  const lookup = require('../lib/runtime/claude-lookup.js');
+  const bin = lookup.lookupClaude().bin;
   if (!bin) return false;
+  const launch = lookup.launchFor(bin);
   try {
-    require('child_process').execFileSync(bin, ['--print', 'test', '--output-format', 'text'], { timeout: 15000 });
+    require('child_process').execFileSync(launch.command, [...launch.args, '--print', 'test', '--output-format', 'text'], { timeout: 15000 });
     return true;
   } catch {
     return false;

@@ -864,34 +864,132 @@ describe('the desktop app\'s sign-in check runs the copy the lookup chose, with 
 
 // Windows has no login shell to ask. Its copies are stood in by scripts named
 // as Windows names them, an npm claude.cmd beside the package it starts, and
-// `where.exe` by a script on the PATH printing them in its own order.
-function windows(m, listed) {
+// `where.exe` by a script on the PATH printing them in its own order: the
+// copies of claude when asked for claude, and `nodes` when asked for node.exe.
+function windows(m, listed, nodes = []) {
   const where = m.dir('where-exe');
   fs.mkdirSync(where, { recursive: true });
   fs.writeFileSync(path.join(where, 'answer'), listed.map((c) => `${c.bin}\r\n`).join(''));
-  fs.writeFileSync(path.join(where, 'where.exe'), '#!/bin/sh\ncat "$(dirname "$0")/answer"\n');
+  fs.writeFileSync(path.join(where, 'answer-node'), nodes.map((n) => `${n}\r\n`).join(''));
+  fs.writeFileSync(path.join(where, 'where.exe'), '#!/bin/sh\nif [ "$1" = node.exe ]; then exec cat "$(dirname "$0")/answer-node"; fi\ncat "$(dirname "$0")/answer"\n');
   fs.chmodSync(path.join(where, 'where.exe'), 0o755);
   return where;
 }
-function npmLauncher(dir, version) {
+// A node.exe that records the arguments it is started with, and answers as a
+// signed-in Claude Code would (or not, once the folder holds `signed-out`).
+function makeNode(dir) {
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, 'node.exe');
+  const log = path.join(dir, 'node-runs.jsonl');
+  fs.writeFileSync(file, `#!${process.execPath}
+const fs = require('fs');
+const path = require('path');
+fs.appendFileSync(path.join(__dirname, 'node-runs.jsonl'), JSON.stringify({ args: process.argv.slice(2) }) + '\\n');
+setTimeout(() => process.exit(fs.existsSync(path.join(__dirname, 'signed-out')) ? 1 : 0), 50);
+`);
+  fs.chmodSync(file, 0o755);
+  return { file, runs: () => (fs.existsSync(log) ? fs.readFileSync(log, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []) };
+}
+// An npm install as npm lays it out on Windows (`%APPDATA%\\npm`): the
+// claude.cmd launcher, a stub that records any run of it, and beside it the
+// package it starts, whose package.json names its entry in `bin`. `node`
+// puts a node.exe beside the launcher, as npm's own launcher prefers.
+function npmLauncher(dir, version, { bin = { claude: 'cli.js' }, node = true } = {}) {
   const copy = makeClaude(dir, 'CRASH', 'claude.cmd');
   const pkg = path.join(dir, 'node_modules', '@anthropic-ai', 'claude-code');
   fs.mkdirSync(pkg, { recursive: true });
-  fs.writeFileSync(path.join(pkg, 'package.json'), JSON.stringify({ name: '@anthropic-ai/claude-code', version }));
+  fs.writeFileSync(path.join(pkg, 'package.json'), JSON.stringify({ name: '@anthropic-ai/claude-code', version, ...(bin === undefined ? {} : { bin }) }));
+  fs.writeFileSync(path.join(pkg, 'cli.js'), '// the entry\n');
+  copy.pkg = pkg;
+  copy.entry = fs.realpathSync(path.join(pkg, 'cli.js'));
+  copy.node = node ? makeNode(dir) : null;
   return copy;
 }
+const SIGN_IN_ARGS = ['--print', 'test', '--output-format', 'text'];
 
 describe('Windows keeps where.exe and its order, and passes over a copy below the floor', { skip: POSIX }, () => {
-  async function onWindows(m, listed, fn, extra) {
-    const { rt, warn, done } = runtime({ platform: () => 'win32', ...extra });
+  async function onWindows(m, listed, fn, { nodes = [], logged = [] } = {}) {
+    const { rt, warn, done } = runtime({ platform: () => 'win32' });
     try {
-      return await on(m, { today: [windows(m, listed)], platform: 'win32' }, () => fn(rt));
+      return await on(m, { today: [windows(m, listed, nodes)], platform: 'win32' }, () => fn(rt));
     } finally {
       done();
       assert.deepStrictEqual(m.shell.runs(), [], 'no login shell is asked on Windows');
-      assert.deepStrictEqual(warn.lookupLines(), []);
+      assert.strictEqual(warn.lookupLines().length, logged.length, `logged: ${JSON.stringify(warn.lookupLines())}`);
+      logged.forEach((what, i) => assert.ok(warn.lookupLines()[i].includes(what), `the log names ${what}`));
     }
   }
+
+  test('an npm install starts its package\'s entry with the node.exe beside its launcher: a chat and the sign-in check, each with its arguments and no shell', async () => {
+    const m = machine();
+    const npm = npmLauncher(m.dir('npm'), '2.1.318');
+    await onWindows(m, [npm], async (rt) => {
+      assert.strictEqual((await spawnAndSettle(rt)).error, null, 'the chat started');
+      assert.strictEqual(signInCheck()(), true, 'the sign-in check says signed in');
+    });
+    assert.deepStrictEqual(npm.node.runs().map((r) => r.args), [[npm.entry, ...CHAT_ARGS], [npm.entry, ...SIGN_IN_ARGS]]);
+    assert.deepStrictEqual(npm.runs(), [], 'the launcher itself never ran');
+  });
+
+  test('with no node.exe beside the launcher, the first node.exe where.exe lists starts the entry, by its full path', async () => {
+    const m = machine();
+    const npm = npmLauncher(m.dir('npm'), '2.1.318', { node: false });
+    const node = makeNode(m.dir('nodejs'));
+    const other = makeNode(m.dir('other-nodejs'));
+    await onWindows(m, [npm], async (rt) => {
+      assert.strictEqual((await spawnAndSettle(rt)).error, null);
+    }, { nodes: [node.file, other.file] });
+    assert.deepStrictEqual(node.runs().map((r) => r.args), [[npm.entry, ...CHAT_ARGS]]);
+    assert.deepStrictEqual(other.runs(), []);
+    assert.deepStrictEqual(npm.runs(), []);
+  });
+
+  test('an entry that is an .exe is started itself, and a copy where.exe lists as claude.exe still starts as before', async () => {
+    const m = machine();
+    const npm = npmLauncher(m.dir('npm'), '2.1.318', { bin: { claude: 'bin/claude.exe' } });
+    const entry = makeClaude(path.join(npm.pkg, 'bin'), CURRENT, 'claude.exe');
+    await onWindows(m, [npm], async (rt) => {
+      assert.strictEqual((await spawnAndSettle(rt)).error, null);
+    });
+    assert.deepStrictEqual(entry.chats().map((r) => r.args), [CHAT_ARGS], 'the package\'s claude.exe started, with the arguments');
+    assert.deepStrictEqual(npm.runs(), []);
+    assert.deepStrictEqual(npm.node.runs(), [], 'no node.exe needed');
+    const m2 = machine();
+    const exe = makeClaude(m2.dir('exe'), CURRENT, 'claude.exe');
+    await onWindows(m2, [exe], async (rt) => {
+      assert.strictEqual((await spawnAndSettle(rt)).error, null);
+    });
+    assert.deepStrictEqual(exe.chats().map((r) => r.args), [CHAT_ARGS]);
+  });
+
+  for (const [how, layOut] of [
+    ['by ..', (npm, m) => { fs.writeFileSync(m.dir('outside.js'), '// not the package\n'); return { claude: path.relative(npm.pkg, m.dir('outside.js')) }; }],
+    ['by a link', (npm, m) => { fs.writeFileSync(m.dir('outside.js'), '// not the package\n'); fs.symlinkSync(m.dir('outside.js'), path.join(npm.pkg, 'linked.js')); return { claude: 'linked.js' }; }],
+  ]) {
+    test(`an entry outside the package folder, ${how}, is refused: the launcher starts as before, logged once`, async () => {
+      const m = machine();
+      const npm = npmLauncher(m.dir('npm'), '2.1.318');
+      const bin = layOut(npm, m);
+      const pkgJson = path.join(npm.pkg, 'package.json');
+      fs.writeFileSync(pkgJson, JSON.stringify({ ...JSON.parse(fs.readFileSync(pkgJson, 'utf8')), bin }));
+      await onWindows(m, [npm], async (rt) => {
+        for (let i = 0; i < 2; i++) assert.strictEqual((await spawnAndSettle(rt)).error, null);
+      }, { logged: [npm.pkg] });
+      assert.strictEqual(npm.chats().length, 2, 'the launcher was started, as before');
+      assert.deepStrictEqual(npm.node.runs(), [], 'and nothing outside the package was');
+    });
+  }
+
+  test('with no package beside the launcher, the launcher starts as before, logged once', async () => {
+    const m = machine();
+    const npm = npmLauncher(m.dir('npm'), '2.1.318');
+    fs.rmSync(path.join(m.dir('npm'), 'node_modules'), { recursive: true });
+    await onWindows(m, [npm], async (rt) => {
+      for (let i = 0; i < 2; i++) assert.strictEqual((await spawnAndSettle(rt)).error, null);
+    }, { logged: [npm.pkg] });
+    assert.strictEqual(npm.chats().length, 2);
+    assert.deepStrictEqual(npm.node.runs(), []);
+  });
 
   test('where.exe lists a plain copy, a .cmd and an .exe: the .exe is chosen, as before', async () => {
     const m = machine();
@@ -909,7 +1007,7 @@ describe('Windows keeps where.exe and its order, and passes over a copy below th
     assert.deepStrictEqual(plain.runs(), [], 'the plain copy was not needed');
   });
 
-  test('an old .exe and a current npm .cmd: the .cmd starts, read from its package and never run for its version', async () => {
+  test('an old .exe and a current npm .cmd: the npm install starts, read from its package and never run for its version', async () => {
     const m = machine();
     const exe = makeClaude(m.dir('exe'), OLD, 'claude.exe');
     const cmd = npmLauncher(m.dir('npm'), '2.1.318');
@@ -917,8 +1015,8 @@ describe('Windows keeps where.exe and its order, and passes over a copy below th
       assert.strictEqual(rt.resolveClaudeBin(), cmd.bin);
       assert.strictEqual((await spawnAndSettle(rt)).error, null);
     });
-    assert.deepStrictEqual(cmd.probes(), [], 'the .cmd was never run for its version');
-    assert.strictEqual(cmd.chats().length, 1, 'the .cmd was started');
+    assert.deepStrictEqual(cmd.runs(), [], 'the .cmd was never run, for its version or the chat');
+    assert.deepStrictEqual(cmd.node.runs().map((r) => r.args), [[cmd.entry, ...CHAT_ARGS]], 'its package was started');
     assert.strictEqual(exe.probes().length, 1, 'the old .exe was read once');
     assert.deepStrictEqual(exe.chats(), [], 'and never started');
   });
