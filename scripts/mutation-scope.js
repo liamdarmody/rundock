@@ -495,11 +495,14 @@ function outcomeOf(code, signal) {
   return { outcome: FAIL, cause: `exit ${code}` };
 }
 
-/** Any fail is fail; otherwise any no verdict is no verdict; otherwise pass. */
+/**
+ * Any fail is fail; otherwise every pass is pass; anything else, an outcome
+ * missing or spelled some other way included, is no verdict.
+ */
 function combine(outcomes) {
   if (outcomes.some((o) => o === FAIL)) return FAIL;
-  if (outcomes.some((o) => o === NO_VERDICT)) return NO_VERDICT;
-  return PASS;
+  if (outcomes.every((o) => o === PASS)) return PASS;
+  return NO_VERDICT;
 }
 
 function unitLabel(u) {
@@ -587,12 +590,17 @@ function aggregate(plan, verdicts, { planResult = 'success', shardsResult = 'suc
     const v = verdicts.find((x) => x && x.shard === shard.index);
     if (!v) {
       outcomes.push(NO_VERDICT);
-      causes.push(`shard ${shard.index} wrote no verdict (it died, was cancelled or timed out)`);
+      causes.push(`shard ${shard.index} wrote no verdict that could be read (it died, was cancelled or timed out, or its file is damaged)`);
       continue;
     }
     if (v.plan !== plan.id) {
       outcomes.push(NO_VERDICT);
       causes.push(`shard ${shard.index} ran a different plan`);
+      continue;
+    }
+    if (![PASS, FAIL, NO_VERDICT].includes(v.outcome)) {
+      outcomes.push(NO_VERDICT);
+      causes.push(`shard ${shard.index} wrote a verdict with no outcome that can be read`);
       continue;
     }
     outcomes.push(v.outcome);
@@ -700,34 +708,45 @@ function readPlan(file) {
   return JSON.parse(fs.readFileSync(file, 'utf8'));
 }
 
-async function main(argv = process.argv.slice(2)) {
-  if (argv.includes('--aggregate')) {
-    const planFile = argValue(argv, '--plan-file');
-    const dir = argValue(argv, '--verdicts');
-    let plan = null;
-    try { plan = planFile ? readPlan(planFile) : null; } catch { plan = null; }
-    const verdicts = [];
-    try {
-      for (const n of fs.readdirSync(dir)) {
-        if (!/^verdict-\d+\.json$/.test(n)) continue;
-        try { verdicts.push(JSON.parse(fs.readFileSync(path.join(dir, n), 'utf8'))); } catch { /* unreadable is missing */ }
-      }
-    } catch { /* no directory is no verdicts */ }
-    // NO DEFAULT FOR THE SHARD JOBS' RESULT. Absent, or empty as a mistyped
-    // needs expression makes it, it is no verdict rather than a pass.
-    const result = aggregate(plan, verdicts, {
-      planResult: argValue(argv, '--plan-result') || 'success',
-      shardsResult: argValue(argv, '--shards-result'),
-    });
-    const { title } = result;
-    console.log(`[mutation-scope] ${title}`);
-    for (const c of result.causes) console.log(`[mutation-scope]   ${c}`);
-    if (process.env.GITHUB_ACTIONS && result.outcome !== PASS) {
-      console.log(`::error title=${escapeProperty(title)}::${escapeData(result.causes.join('; '))}`);
+/**
+ * The aggregate step: read the plan and every verdict, report one outcome,
+ * and return its exit code. The readers are parameters so a test can make
+ * them fail: a file that cannot be read is a file that is missing, which is
+ * no verdict, and anything else that throws reaches the caller.
+ */
+function aggregateCommand(argv, {
+  readFile = (file) => fs.readFileSync(file, 'utf8'), listDir = (dir) => fs.readdirSync(dir),
+  env = process.env, log = console.log,
+} = {}) {
+  const planFile = argValue(argv, '--plan-file');
+  const dir = argValue(argv, '--verdicts');
+  let plan = null;
+  try { plan = planFile ? JSON.parse(readFile(planFile)) : null; } catch { plan = null; }
+  const verdicts = [];
+  try {
+    for (const n of listDir(dir)) {
+      if (!/^verdict-\d+\.json$/.test(n)) continue;
+      try { verdicts.push(JSON.parse(readFile(path.join(dir, n)))); } catch { /* unreadable is missing */ }
     }
-    appendTo(process.env.GITHUB_STEP_SUMMARY, `## ${title}\n\n${result.causes.map((c) => `- ${c}`).join('\n')}\n`);
-    return EXIT[result.outcome];
+  } catch { /* no directory is no verdicts */ }
+  // NO DEFAULT FOR THE SHARD JOBS' RESULT. Absent, or empty as a mistyped
+  // needs expression makes it, it is no verdict rather than a pass.
+  const result = aggregate(plan, verdicts, {
+    planResult: argValue(argv, '--plan-result') || 'success',
+    shardsResult: argValue(argv, '--shards-result'),
+  });
+  const { title } = result;
+  log(`[mutation-scope] ${title}`);
+  for (const c of result.causes) log(`[mutation-scope]   ${c}`);
+  if (env.GITHUB_ACTIONS && result.outcome !== PASS) {
+    log(`::error title=${escapeProperty(title)}::${escapeData(result.causes.join('; '))}`);
   }
+  appendTo(env.GITHUB_STEP_SUMMARY, `## ${title}\n\n${result.causes.map((c) => `- ${c}`).join('\n')}\n`);
+  return EXIT[result.outcome];
+}
+
+async function main(argv = process.argv.slice(2)) {
+  if (argv.includes('--aggregate')) return aggregateCommand(argv);
 
   // A shard handed the plan file runs exactly what the plan job decided, with
   // no second decision that could disagree with the first.
@@ -793,10 +812,17 @@ async function main(argv = process.argv.slice(2)) {
 
 module.exports = {
   harnessFiles, loadHarnesses, pathReferences, makeReaderIndex, selectHarnesses,
-  resolveBase, changedFiles, dependencyChangeIn, planShards, outcomeOf, combine, aggregate,
+  resolveBase, changedFiles, dependencyChangeIn, planShards, outcomeOf, combine, aggregate, aggregateCommand,
   decide, buildPlan, main, escapeProperty, RUN_EVERYTHING_WHEN_TOUCHED, SECONDS_PER_SHARD, MAX_SHARDS, readCosts,
   unstagedTargets,
   PASS, FAIL, NO_VERDICT, EXIT,
 };
 
-if (require.main === module) main().then((code) => process.exit(code));
+// A CRASH IS NEVER A PASS. Left to Node, an unhandled rejection ends the
+// process 0 under --unhandled-rejections=warn, which a runner reads as green.
+if (require.main === module) {
+  main().then((code) => process.exit(code), (err) => {
+    console.error(`[mutation-scope] no verdict: the run crashed (${err && err.stack ? err.stack : err})`);
+    process.exit(EXIT[NO_VERDICT]);
+  });
+}

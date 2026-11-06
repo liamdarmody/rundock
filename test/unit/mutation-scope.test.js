@@ -17,7 +17,7 @@ const {
   harnessFiles, loadHarnesses, pathReferences, makeReaderIndex, selectHarnesses, resolveBase,
   changedFiles, dependencyChangeIn, planShards, outcomeOf, combine, aggregate, decide, buildPlan,
   RUN_EVERYTHING_WHEN_TOUCHED, SECONDS_PER_SHARD, MAX_SHARDS, readCosts, PASS, FAIL, NO_VERDICT,
-  unstagedTargets,
+  unstagedTargets, aggregateCommand,
 } = require('../../scripts/mutation-scope.js');
 
 const REPO = path.join(__dirname, '..', '..');
@@ -652,6 +652,54 @@ describe('the shard jobs\' result is a witness no shard can write', () => {
     assert.ok(cli.stdout.includes('A guard survived'), cli.stdout);
     assert.ok(cli.stdout.includes('mutate-x-guards.js rows 3:9'), 'the step names the slice that let a guard through');
     assert.ok(!cli.stdout.includes(SHARD_FAILED), 'and does not send the reader to a job for a reason the verdict already gives');
+  });
+
+  test('a verdict with no outcome that can be read is no verdict, never a pass', () => {
+    for (const odd of [{ plan: 'p2', shard: 2 }, { plan: 'p2', shard: 2, outcome: 'passed', results: [] }]) {
+      const r = aggregate(PLAN_2, [passed(1), odd], { shardsResult: 'success' });
+      assert.strictEqual(r.outcome, NO_VERDICT, JSON.stringify(odd));
+      assert.ok(r.title.startsWith('No verdict: shard 2'), `the title names the shard: ${r.title}`);
+    }
+    assert.strictEqual(combine([PASS, undefined]), NO_VERDICT, 'an outcome nobody wrote is not a pass');
+    assert.strictEqual(combine([PASS, 'passed']), NO_VERDICT, 'nor is one spelled wrong');
+    assert.strictEqual(combine([PASS, PASS]), PASS);
+  });
+
+  test('the control failing: a truncated verdict file leaves the step non-green', () => {
+    const dir = verdictDir(PLAN_2, PASSING);
+    const file = path.join(dir, 'verdict-2.json');
+    const whole = fs.readFileSync(file, 'utf8');
+    fs.writeFileSync(file, whole.slice(0, Math.floor(whole.length / 2)));
+    const cli = aggregateCli(dir, ['--plan-result', 'success', '--shards-result', 'success']);
+    assert.strictEqual(cli.status, 3, cli.stdout + cli.stderr);
+    assert.ok(cli.stdout.includes('No verdict: shard 2'), cli.stdout);
+  });
+
+  test('the control failing: a reader that throws leaves the step non-green', () => {
+    const dir = verdictDir(PLAN_2, PASSING);
+    const argv = ['--aggregate', '--plan-file', path.join(dir, 'plan.json'), '--verdicts', dir,
+      '--plan-result', 'success', '--shards-result', 'success'];
+    const quiet = { log: () => {}, env: {} };
+    const real = (f) => fs.readFileSync(f, 'utf8');
+    assert.strictEqual(aggregateCommand(argv, quiet), 0, 'sanity: the same files, read, pass');
+    const throws = () => { throw new Error('EIO: the disk went away'); };
+    assert.strictEqual(aggregateCommand(argv, { ...quiet, readFile: throws }), 3, 'no file could be read');
+    assert.strictEqual(aggregateCommand(argv, { ...quiet, listDir: throws }), 3, 'the verdicts could not be listed');
+    assert.strictEqual(aggregateCommand(argv, { ...quiet, readFile: (f) => (f.endsWith('verdict-1.json') ? throws() : real(f)) }), 3,
+      'one verdict could not be read');
+  });
+
+  test('the control failing: a crash in the step exits non-zero, however Node is told to treat it', () => {
+    // A summary that cannot be written throws after the title is printed.
+    // Left to Node, an unhandled rejection under --unhandled-rejections=warn
+    // ends the process 0, which a runner reads as green.
+    const summary = tempDir('mutation-summary-is-a-directory-');
+    for (const NODE_OPTIONS of ['', '--unhandled-rejections=warn']) {
+      const cli = aggregateCli(verdictDir(PLAN_2, PASSING), ['--plan-result', 'success', '--shards-result', 'success'],
+        { GITHUB_STEP_SUMMARY: summary, NODE_OPTIONS });
+      assert.notStrictEqual(cli.status, 0, `NODE_OPTIONS=${NODE_OPTIONS}: a crash is never green\n${cli.stdout}${cli.stderr}`);
+      assert.ok(cli.stderr.includes('EISDIR'), `and the crash is shown\n${cli.stderr}`);
+    }
   });
 
   test('a shard jobs\' result that was not given, or is empty, is no verdict, never a pass', () => {
