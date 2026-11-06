@@ -138,6 +138,11 @@ async function liveConversation(prefix) {
   const since = client.messages.length;
   client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: `ONE-${tag} first` });
   await waitForResult(convoId, `ANSWER-ONE-${tag}`, since);
+  // And for the done that ends this turn, which is a frame of its own: one
+  // that arrived after a caller took its `since` was counted as ending the
+  // caller's turn instead (seen on a loaded CI runner).
+  await client.waitFor((m) => m.type === 'system' && m.subtype === 'done' && m._conversationId === convoId,
+    { since, label: 'the first turn ended', timeout: 20000 });
   await h.waitUntil(() => { const e = h.internal.chatProcesses.get(convoId); return Boolean(e && e.idle); });
   const entry = h.internal.chatProcesses.get(convoId);
   assert.ok(entry && entry.process && !entry.exited, 'the conversation has a live process');
