@@ -659,6 +659,18 @@ describe('the desktop app\'s check reports the copy the lookup chose, with the v
     } finally { done(); }
   });
 
+  test('a PATH recorded empty is given to the shell as it was, and the system default only when none was recorded', async () => {
+    const m = machine({ loginPath: 'given' });
+    const warn = quietWarn();
+    try {
+      await on(m, {}, () => {
+        lookup().addInstallFolders({ PATH: '' });
+        lookup().lookupClaude();
+      });
+      assert.strictEqual(m.shell.runs()[0].env.PATH, '', 'the empty PATH Rundock was started with');
+    } finally { warn.restore(); }
+  });
+
   test('while nothing is found, looks within a minute ask the shell once, and a copy installed on the PATH it gave is found on the next look without asking again', async () => {
     // The setup wizard polls while the person installs. The clock is the
     // lookup's own, stood in: nothing here waits.
