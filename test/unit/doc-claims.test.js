@@ -1072,3 +1072,75 @@ describe('AGENTS.md and SKILLS.md: Notes mode holds routines as well as conversa
     assert.strictEqual(listsFor('notes').routine, NOTES_DISALLOWED_TOOLS);
   });
 });
+
+// ---------------------------------------------------------------------------
+// ARCHITECTURE.md: a write to a stopped process never ends the server
+// ---------------------------------------------------------------------------
+
+describe('ARCHITECTURE.md: a write to a stopped process is logged, left to its close, and never ends the server', () => {
+  // The claim a contributor relies on when adding a write to an agent's
+  // stdin: that it needs no handler of its own. Pinned by doing it, to a real
+  // child that stops before reading, through the handler the page names, and
+  // by asking each start path the page names whether the stdin it hands back
+  // has that handler. The code is required inside each test, so a missing
+  // module fails that test rather than the whole block before it registers.
+  const { spawn } = require('node:child_process');
+  const runtime = architecture.slice(architecture.indexOf('### Runtime subprocesses'),
+    architecture.indexOf('### Conversations: resume vs spawn fresh'));
+
+  test('the page says it, where it describes how agent processes run, and names the handler and both start paths', () => {
+    assert.ok(runtime.length > 0, 'the runtime subprocesses section is there');
+    assert.match(runtime, /A write to a stopped process is logged and handled by that process's close, and never ends the server\./);
+    assert.match(runtime, /`lib\/runtime\/child-stdin\.js`, called from `spawnClaude` in `lib\/runtime\/claude\.js` and from the Codex app-server's spawn in `codex-appserver\.js`/);
+    assert.match(runtime, /logs one line per failed write, naming the process and the error/);
+  });
+
+  test('and it is so: a write to a child that stops before reading logs one line, throws nothing, and the close still runs', async () => {
+    const { guardChildStdin } = require('../../lib/runtime/child-stdin.js');
+    const uncaught = [];
+    const monitor = (err) => uncaught.push(err);
+    process.on('uncaughtExceptionMonitor', monitor);
+    const lines = [];
+    try {
+      const child = spawn(process.execPath, ['-e', 'setTimeout(() => process.exit(0), 200);'], { stdio: ['pipe', 'pipe', 'pipe'] });
+      guardChildStdin(child, 'a child that never reads', { log: (l) => lines.push(l) });
+      const closed = new Promise((resolve) => child.once('close', (code) => resolve(code)));
+      child.stdin.write('x'.repeat(1024 * 1024) + '\n');
+      assert.strictEqual(await closed, 0, "the child's own close runs, as it does for any process that stops");
+      await new Promise((r) => setTimeout(r, 50));
+    } finally {
+      process.removeListener('uncaughtExceptionMonitor', monitor);
+    }
+    assert.deepStrictEqual(uncaught, [], 'nothing reaches the server as an uncaught exception');
+    assert.strictEqual(lines.length, 1, 'one line, for the one failed write');
+    assert.match(lines[0], /a child that never reads pid=\d+: a write failed \((EPIPE|ECONNRESET): /, 'naming the process and the error');
+  });
+
+  test('both start paths hand back a stdin that already has its handler', async () => {
+    const claude = require('../../lib/runtime/claude.js');
+    const { createCodexAppServer } = require('../../codex-appserver.js');
+    const prev = claude.wireClaudeRuntimeDeps({ onClaudeSpawn: () => {} });
+    let proc;
+    try {
+      proc = claude.spawnClaude(['--version'], { cwd: ROOT, env: process.env, stdio: ['pipe', 'ignore', 'ignore'] });
+    } finally { claude.wireClaudeRuntimeDeps(prev); }
+    try {
+      assert.strictEqual(proc.stdin.listenerCount('error'), 1, 'spawnClaude: an agent process\'s stdin has its error handler before anyone writes to it');
+    } finally {
+      const gone = new Promise((resolve) => proc.once('close', resolve));
+      try { proc.kill('SIGKILL'); } catch (e) { /* already gone */ }
+      await gone;
+    }
+
+    const dir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'doc-claims-codex-'));
+    fs.writeFileSync(path.join(dir, 'stub-codex-scenario.json'), JSON.stringify({ appServer: {} }));
+    const server = createCodexAppServer({ binPath: path.join(ROOT, 'test', 'helpers', 'stub-codex', 'codex'), cwd: dir, shutdownGraceMs: 1000 });
+    try {
+      await server.start();
+      assert.strictEqual(server._proc.stdin.listenerCount('error'), 1, "the Codex app-server's stdin has its error handler too");
+    } finally {
+      await server.shutdown();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
