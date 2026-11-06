@@ -840,17 +840,53 @@ const SEARCHES_CWD_UNNAMED = new Set(['grep', 'egrep', 'fgrep', 'rg', 'ag', 'ack
 const LISTS_NAMES_ONLY = new Set(['ls', 'du', 'tree', 'stat', 'file', 'cd', 'pushd', 'popd', 'test', '[', 'realpath', 'readlink', 'dirname', 'basename', 'pwd', 'mkdir', 'echo', 'printf', 'true', 'false']);
 const RUNS_THE_NEXT_WORD = new Set(['sudo', 'env', 'nice', 'nohup', 'time', 'command', 'builtin', 'exec', 'timeout', 'stdbuf', 'xargs']);
 const RUNS_PER_NAME = new Set(['-exec', '-execdir', '-ok', '-okdir']);
-// [{ word, at }]: each word a reader was handed as a folder, as it is written,
-// with where its segment starts. A reader that searches the folder it runs in
-// and was handed none (`cd ~/.claude && grep -r token`) is handed `.`.
-function recursiveReadWords(command) {
-  const found = [];
-  const text = String(command);
+// THE COMMANDS THE SHELL RUNS, each with its words AS BASH FORMS THEM: quotes
+// and escapes taken out and the pieces of one word joined, so `~/\.claude` and
+// `"$HOME"/.claude` are the `~/.claude` they name. Read by the lexer the
+// verdict reads with, not a second one. Each carries where it starts in the
+// text (`at`) and the words of the command its output is piped to. What a
+// group, a function body or a substitution runs is read as commands too.
+//
+// PAST A FEW LEVELS DEEP, NOTHING IS LEFT UNREAD: every word there is taken as
+// a folder read whole, and so is the folder it runs in, which can only ask
+// more.
+const READ_DEPTH = 8;
+function shellCommandsIn(text, posixText = true, offset = 0, depth = 0, out = []) {
+  const s = String(text);
+  if (depth > READ_DEPTH) {
+    const loose = (s.match(/[^\s;|&<>(){}`'"]+/g) || []).map(w => (posixText ? w.replace(/\\(.)/g, '$1') : w));
+    out.push({ words: null, loose: [...loose, '.'], at: offset, pipedTo: null });
+    return out;
+  }
+  const dialect = posixText ? 'bash' : 'ps';
+  const segs = [];
   let from = 0;
-  for (const seg of shellSegments(text)) {
-    const segAt = text.indexOf(seg, from);
-    if (segAt >= 0) from = segAt + seg.length;
-    const ws = (seg.match(/'([^']*)'|"([^"]*)"|[^\s]+/g) || []).filter(w => !REDIRECT.test(w) && !INPUT_REDIRECT.test(w)).map(w => w.replace(/^['"]|['"]$/g, ''));
+  for (const seg of lexSegments(s, dialect)) {
+    const start = s.indexOf(seg.text, from);
+    if (start >= 0) from = start + seg.text.length;
+    segs.push({ op: seg.op, text: seg.text, at: offset + Math.max(0, start), lexed: lexWords(seg.text, dialect) });
+  }
+  for (let k = 0; k < segs.length; k++) {
+    const seg = segs[k];
+    for (const w of seg.lexed) {
+      const close = { '(': ')', '{': '}' }[w.raw[0]];
+      if (close) shellCommandsIn(w.raw.slice(1, w.raw.lastIndexOf(close)), posixText, seg.at + Math.max(0, seg.text.indexOf(w.raw)) + 1, depth + 1, out);
+    }
+    for (const body of substitutions(seg.text, dialect).bodies) shellCommandsIn(body, posixText, seg.at + Math.max(0, seg.text.indexOf(body)), depth + 1, out);
+    const next = segs[k + 1];
+    out.push({ words: seg.lexed.map(w => w.text), at: seg.at, pipedTo: next && next.op === '|' ? next.lexed.map(w => w.text) : null });
+  }
+  return out;
+}
+
+// [{ word, at }]: each word a reader was handed as a folder, as bash forms it,
+// with where its command starts. A reader that searches the folder it runs in
+// and was handed none (`cd ~/.claude && grep -r token`) is handed `.`.
+function recursiveReadWords(command, posixText = true) {
+  const found = [];
+  for (const { words, loose, at, pipedTo } of shellCommandsIn(command, posixText)) {
+    if (loose) { for (const o of loose) found.push({ word: o, at }); continue; }
+    const ws = words;
     let i = 0;
     while (i < ws.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(ws[i])) i++;
     while (i < ws.length && RUNS_THE_NEXT_WORD.has(ws[i].split('/').pop())) {
@@ -861,7 +897,7 @@ function recursiveReadWords(command) {
     const args = ws.slice(i + 1);
     const shortFlags = args.filter(a => /^-[A-Za-z]+$/.test(a));
     const longFlag = (re) => args.some(a => re.test(a));
-    const pipedToXargs = /^\s*\|(?!\|)\s*xargs\b/.test(text.slice(Math.max(0, segAt) + seg.length));
+    const pipedToXargs = !!pipedTo && (pipedTo[0] || '').split('/').pop() === 'xargs';
     let reads;
     if (verb === 'find') reads = args.some(a => RUNS_PER_NAME.has(a)) || pipedToXargs;
     else if (RECURSIVE_READERS.has(verb)) reads = true;
@@ -877,7 +913,7 @@ function recursiveReadWords(command) {
       operands = operands.slice(1);
     }
     if (!operands.length && SEARCHES_CWD_UNNAMED.has(verb)) operands = ['.'];
-    for (const o of operands) found.push({ word: o, at: Math.max(0, segAt) });
+    for (const o of operands) found.push({ word: o, at });
   }
   return found;
 }
@@ -3099,10 +3135,15 @@ function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), 
   const entriesUnder = (h) => secretEntries.filter(e => e.reach.some(x => under(x, h.root)) || under(e.path, h.real));
   const folderReads = [];
   for (const [text, at] of [[view.text, null], ...view.commands.map(c => [c.text, c.at])]) {
-    for (const r of recursiveReadWords(text)) folderReads.push(at === null ? { ...r, fromStart: false } : { word: r.word, at, fromStart: true });
+    for (const r of recursiveReadWords(text, posixText)) folderReads.push(at === null ? { ...r, fromStart: false } : { word: r.word, at, fromStart: true });
   }
   // The runtime homes a word handed to such a reader reaches, from `starts`.
+  // Worked out once for each word and set of starts: a long chain hands the
+  // same folder to the same reader many times.
+  const homesKnown = new Map();
   const homesReadBy = (word, starts) => {
+    const key = [word, ...starts].join('\0');
+    if (homesKnown.has(key)) return homesKnown.get(key);
     const out = [];
     const glob = /[*?[]/.test(word);
     for (const b of starts) {
@@ -3114,6 +3155,7 @@ function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), 
         if (hit) out.push(h);
       }
     }
+    homesKnown.set(key, out);
     return out;
   };
   // A CREDENTIAL FILE IS REPORTED AS ITS DIRECT SPELLING WOULD BE: the same

@@ -137,12 +137,19 @@ const CLAUDE = [
   'find ~/.claude -type f -exec cat {} +', 'find ~/.claude -execdir cat {} \\;', 'find ~/.claude -ok cat {} \\;', 'find ~/.claude -okdir cat {} \\;',
   'find ~/.claude -type f | xargs cat',
   'grep -r token "$HOME/.claude"', 'grep -r token $HOME/.claude/', `grep -r token ${path.join(home, '.claude')}`,
+  // The folder as bash forms the word: an escape, and quoted and unquoted
+  // pieces joined into one word.
+  'grep -r token ~/\\.claude', 'grep -r token ~/.cl\\aude', 'grep -r token "$HOME"/.claude', 'grep -r token ~/".claude"',
+  `grep -r token "$HOME"'/.claude'`,
+  // And inside a group, a function body or a substitution.
+  '(grep -r token ~/.claude)', '{ grep -r token ~/.claude; }', 'f() { grep -r token ~/.claude; }; f', 'echo "$(grep -rl token ~/.claude)"',
 ];
 // The same, reached through a cd, or by a reader given no folder after one.
 const LANDED = [
   'cd ~/.claude && grep -r token .', 'cd ~/.claude && grep -r token', 'cd ~/.claude && rg token', 'cd ~/.claude && ag token',
   'cd ~/.claude && find . -exec cat {} \\;', 'cd ~ && grep -r token .claude', 'cd ~/.claude/projects && grep -r token ..',
   'cd ~/.claude; grep -r token .', 'pushd ~/.claude && tar czf - .', 'command cd ~/.claude && grep -r token',
+  'cd ~/\\.claude && grep -r token', 'cd "$HOME"/.claude && grep -r token .', '(cd ~/.claude && grep -r token)',
 ];
 // Listing names, and reading a free file, answer as they do today.
 const FREE = [
@@ -206,39 +213,58 @@ describe('listing names, and reading a free file, stay as they are', { skip: POS
   }
 });
 
+// THE FIVE SEQUENCES, each over every spelling the rule reads, so a spelling
+// added to the rule is held to all five.
+// The inverse: a folder copied back over a runtime folder. On the branch
+// before this change Code mode let these through with no card; what lands
+// there can replace the credential file.
+const INVERSE = [
+  ['cp -r /tmp/x ~/.claude', CLAUDE_FILES], ['rsync -a /tmp/x/ ~/.claude/', CLAUDE_FILES], ['cp -a /tmp/y ~/.codex', CODEX_FILES],
+  ['cp -r /tmp/x ~/\\.claude', CLAUDE_FILES], ['rsync -a /tmp/x/ "$HOME"/.claude/', CLAUDE_FILES],
+];
+// The undo: a subfolder holding no credential file, with what main answers.
+const UNDO = [
+  ['grep -r token ~/.claude/projects'], ['grep -r token ~/\\.claude/projects'],
+  // Main cards these copies in both modes, as a copy into the workspace, and
+  // the home folder this spelling of the subfolder starts with, as a place
+  // outside.
+  ['cp -r ~/.claude/skills/x ./x', { decision: 'deny', cards: 1 }],
+  ['grep -r token "$HOME"/.claude/projects', { decision: 'deny', cards: 1 }],
+];
+const RETRY = ['grep -r token ~/.claude', 'grep -r token "$HOME"/.claude', '(cd ~/.claude && grep -r token)'];
+// The command carded, then the free read that most often follows it.
+const NEXT = [['grep -r token ~/.claude', 'cat ~/.claude/settings.json'], ['grep -r token ~/\\.claude', 'cat ~/.claude/settings.json']];
+// The rule: a program this does not know, given a runtime folder after `-r`,
+// `-R` or `--recursive`, is a recursive reader.
+const UNKNOWN = [['foo -r ~/.claude', CLAUDE_FILES], ['foo -R ~/.claude', CLAUDE_FILES], ['foo --recursive ~/.codex', CODEX_FILES]];
+
 describe('the five sequences', { skip: POSIX, concurrency: 4 }, () => {
   for (const [label, env] of MODES) {
-    // On the branch before this change, Code mode let both through with no
-    // card; what lands there can replace the credential file.
     test(`${label}, the inverse: a folder copied back over a runtime folder asks`, async () => {
-      await assertFolderCard('cp -r /tmp/x ~/.claude', CLAUDE_FILES, env);
-      await assertFolderCard('rsync -a /tmp/x/ ~/.claude/', CLAUDE_FILES, env);
-      await assertFolderCard('cp -a /tmp/y ~/.codex', CODEX_FILES, env);
+      for (const [command, files] of INVERSE) await assertFolderCard(command, files, env);
     });
 
     test(`${label}, the undo: a subfolder holding no credential file raises no secret card`, async () => {
-      await assertAsOnMain(label, 'grep -r token ~/.claude/projects', env);
-      // Main cards this copy in both modes, as a copy into the workspace.
-      await assertAsOnMain(label, 'cp -r ~/.claude/skills/x ./x', env, undefined, { decision: 'deny', cards: 1 });
+      for (const [command, onMain] of UNDO) await assertAsOnMain(label, command, env, undefined, onMain);
     });
 
     test(`${label}, the retry: the same command raises the same card`, async () => {
-      const first = await assertFolderCard('grep -r token ~/.claude', CLAUDE_FILES, env);
-      const again = await assertFolderCard('grep -r token ~/.claude', CLAUDE_FILES, env);
-      assert.deepStrictEqual(again.crossings, first.crossings);
+      for (const command of RETRY) {
+        const first = await assertFolderCard(command, CLAUDE_FILES, env);
+        const again = await assertFolderCard(command, CLAUDE_FILES, env);
+        assert.deepStrictEqual(again.crossings, first.crossings, command);
+      }
     });
 
     test(`${label}, the next step: a free file in the folder, read directly`, async () => {
-      await assertFolderCard('grep -r token ~/.claude', CLAUDE_FILES, env);
-      await assertAsOnMain(label, 'cat ~/.claude/settings.json', env);
+      for (const [command, next] of NEXT) {
+        await assertFolderCard(command, CLAUDE_FILES, env);
+        await assertAsOnMain(label, next, env);
+      }
     });
 
-    // The rule: a program this does not know, given a runtime folder after
-    // `-r`, `-R` or `--recursive`, is a recursive reader.
     test(`${label}, the control failing: an unknown program with a recursive flag`, async () => {
-      await assertFolderCard('foo -r ~/.claude', CLAUDE_FILES, env);
-      await assertFolderCard('foo -R ~/.claude', CLAUDE_FILES, env);
-      await assertFolderCard('foo --recursive ~/.codex', CODEX_FILES, env);
+      for (const [command, files] of UNKNOWN) await assertFolderCard(command, files, env);
       await assertAsOnMain(label, 'foo ~/.claude', env);
     });
   }

@@ -384,6 +384,10 @@ const KEYCHAIN_HOOK_FLOW = { src: path.join(ROOT, 'scripts', 'permission-hook.js
 // reaches that check.
 const SECRET_REACH = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/secret-reach.test.js' };
 const SECRET_REACH_GRANT = { src: path.join(ROOT, 'lib', 'workspace', 'boundary.js'), suite: 'test/integration/secret-reach-card.test.js' };
+// A runtime folder handed to a program that reads all of it. Proven by the
+// suite that drives the real hook and the classifier over its spellings; what
+// happens when the reading gives up is proven where the hook is made to fail.
+const SECRET_FOLDER = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/secret-folder-read.test.js' };
 
 const MUTATIONS = [
   // ===== ONE DIRECTORY UNDER TWO NAMES IS ONE IDENTITY =====
@@ -3566,6 +3570,23 @@ const MUTATIONS = [
   [SHELL_CODE, "Shell code: a cd to a variable is trusted as a base",
     " || CD_NOT_LITERAL.test(target)) return null;",
     ") return null;"],
+  // ===== A RUNTIME FOLDER HANDED TO A PROGRAM THAT READS ALL OF IT =====
+  // A word kept as written, its quotes and escapes in place, is not the
+  // folder it names: `~/\.claude` and `"$HOME"/.claude` go unasked.
+  [SECRET_FOLDER, "Folder reads: a reader's words are kept as written, quotes and escapes in",
+    "    out.push({ words: seg.lexed.map(w => w.text), at: seg.at, pipedTo: next && next.op === '|' ? next.lexed.map(w => w.text) : null });",
+    "    out.push({ words: seg.lexed.map(w => w.raw), at: seg.at, pipedTo: next && next.op === '|' ? next.lexed.map(w => w.raw) : null });"],
+  [SECRET_FOLDER, "Folder reads: a group or a function body is not read as commands",
+    "      if (close) shellCommandsIn(w.raw.slice(1, w.raw.lastIndexOf(close)), posixText, seg.at + Math.max(0, seg.text.indexOf(w.raw)) + 1, depth + 1, out);",
+    ""],
+  [SECRET_FOLDER, "Folder reads: a substitution is not read as commands",
+    "    for (const body of substitutions(seg.text, dialect).bodies) shellCommandsIn(body, posixText, seg.at + Math.max(0, seg.text.indexOf(body)), depth + 1, out);",
+    ""],
+  // Past the depth read, the words there are taken as folders read whole.
+  // Take none instead and a reader nested deep goes unasked.
+  [HOOK_CRASH, "Folder reads: a reader nested past the depth read is taken to read nothing",
+    "    out.push({ words: null, loose: [...loose, '.'], at: offset, pipedTo: null });",
+    "    out.push({ words: null, loose: [], at: offset, pipedTo: null });"],
 ];
 const REPORTER = ['--test-reporter', 'spec'];
 

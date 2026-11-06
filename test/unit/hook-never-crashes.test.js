@@ -384,7 +384,9 @@ describe('a credential file named after a cd or by a glob, when something fails'
   const homeEnv = { HOME: home, USERPROFILE: home };
   const COVERED = ['cd ~/.claude && cat .credentials.json', 'cd "$X" && cat .credentials.json', 'cat ~/.claude/.cred*',
     // A folder holding one, handed to a program that reads all of it.
-    'grep -r token ~/.claude', 'cd ~/.claude && grep -r token', 'foo -r ~/.claude'];
+    'grep -r token ~/.claude', 'cd ~/.claude && grep -r token', 'foo -r ~/.claude',
+    // The folder as bash forms the word, and a reader inside a group.
+    'grep -r token ~/\\.claude', 'grep -r token "$HOME"/.claude', '(cd ~/.claude && grep -r token)'];
   const MODES = [['Notes mode', {}], ['Code mode', { RUNDOCK_CODE_MODE: '1' }]];
   const POSIX = { skip: process.platform === 'win32' && 'the home folder is read from HOME here' };
   const throwsOnRequest = path.join(root, 'secret-throws-on-request.js');
@@ -453,6 +455,27 @@ describe('a credential file named after a cd or by a glob, when something fails'
           const miss = await inTime(runHookAgainst(server.address().port, bash(`cat ${word}`), { ...homeEnv, ...env }), 10000);
           assert.strictEqual(miss.status, 0);
           assert.ok(!secretCard(cards.slice(from)), `${word}: a word that cannot name one raises no secret card`);
+        }
+      } finally { await close(server); }
+    });
+
+    // Nested past what is read, the words there are all taken as folders read
+    // whole, so the reader still asks; and a long chain of readers is read in
+    // time.
+    test(`${label}: a reader nested deep, or repeated down a long chain, cannot stall the hook and still asks`, POSIX, async () => {
+      const { server, cards } = await serve(false);
+      try {
+        for (const command of [
+          `${'('.repeat(40)}grep -r token ~/.claude${')'.repeat(40)}`,
+          `${'echo "$('.repeat(20)}grep -r token ~/.claude${')"'.repeat(20)}`,
+          `${'{ '.repeat(40)}grep -r token ~/.claude${'; }'.repeat(40)}`,
+          Array.from({ length: 1000 }, () => 'cd ~/.claude && grep -r token').join('; '),
+        ]) {
+          const before = cards.length;
+          const r = await inTime(runHookAgainst(server.address().port, bash(command), { ...homeEnv, ...env }), 30000);
+          assert.strictEqual(r.status, 0);
+          assert.strictEqual(decision(r), 'deny', `${command.slice(0, 60)}: refused by the card`);
+          assert.ok(secretCard(cards.slice(before)), `${command.slice(0, 60)}: and the card was a secret one`);
         }
       } finally { await close(server); }
     });
