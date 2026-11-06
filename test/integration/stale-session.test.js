@@ -17,6 +17,31 @@
 // played by the real reducer and the real stored-session rules from
 // public/conversation-state.js, so what it saves back and what it resumes next
 // are the window's own decisions, not the test's.
+//
+// AN EPIPE AFTER THE LAST TEST, AND WHAT IT WAS. On Node 24 in CI (two runs,
+// 2026-11-05) this file failed with every test passing: node:test reported
+// that the before hook below "generated asynchronous activity after the test
+// ended", whose error was "write EPIPE", once in one run and twice in the
+// other. Both times the log just before it was the last block here, which
+// stops a refused process while it lingers after a brief or a handback was
+// written to it. The harness writes to no child's stdin, the window's and the
+// server's sockets have error listeners, and nothing here starts Codex, so it
+// was the server writing to an agent process that had stopped before the
+// server heard: the same unhandled write as a delegate's brief to a refused
+// resume. Every write to an agent's stdin now goes to a stdin given its error
+// handler where the process started (lib/runtime/child-stdin.js), so such a
+// write is logged as one [Stdin] line naming the agent and conversation, and
+// the process's close ends what it was doing. The CI output carried no stack,
+// so which write it was is not known; that line names it if it happens again.
+// The write itself is reproduced, and fails on the code before the handler,
+// on every platform by test/integration/stopped-child-write.test.js.
+//
+// Twenty runs in a row of this file on Node v24.12.0 (`node --version`; the
+// only Node on the macOS machine that ran them), with the handler in place:
+// 20 passed, 33 tests each, with no EPIPE and no [Stdin] line in any. The
+// EPIPE has never reproduced on macOS, before the handler or after, so those
+// runs show the file is unharmed by the change, not that the CI failure is
+// gone.
 const { test, describe, before, after } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
