@@ -606,9 +606,9 @@ const MUTATIONS = [
   [HOOK, 'a home-level secret is recognised by the secrets check',
     '  if (!h) return isHomeSecretFile(candidate, home, foldsCase);\n',
     '  if (!h) return false;\n'],
-  // The shell and file-tool graders read the tags, not isSecretPath, outside
-  // the runtime homes: drop the tag and the card loses its secret wording and
-  // its refusal to remember.
+  // Outside the runtime homes the secret tag comes from isSecretPath, and the
+  // shell and file-tool graders read that tag rather than asking again: drop
+  // it and the card loses its secret wording and its refusal to remember.
   [HOOK, 'outside the runtime homes the tags still carry a home-level secret',
     '  if (!agentHome) return { agentHome: false, secret: isSecretPath(resolvedPath, home, foldsCase, spelled), persistenceSurface: false };\n',
     '  if (!agentHome) return { agentHome: false, secret: false, persistenceSurface: false };\n'],
