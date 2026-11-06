@@ -125,6 +125,11 @@
     'sort-object', 'format-table', 'format-list', 'out-string', 'write-output',
     'write-host', 'echo', 'get-date', 'where-object',
   ];
+  // FOR THE POWERSHELL READING ONLY. These joined the list above when
+  // PowerShell got a reading of its own, and Bash reads that list too. Bash's
+  // answer was not to move with PowerShell's, so Bash reads the list as it
+  // stood before and these two are not reads there, as they were not.
+  var POWERSHELL_ONLY_READS = ['get-date', 'where-object'];
 
   // NO NAME OF ANY PARTICULAR TOOL LIVES HERE, and a package runner is not a
   // read whatever follows it.
@@ -315,6 +320,7 @@
       && EXECUTING_FLAGS[first].test(segment)) return false;
     if (Object.prototype.hasOwnProperty.call(WRITING_FLAGS, first)
       && WRITING_FLAGS[first].test(segment)) return false;
+    if (POWERSHELL_ONLY_READS.indexOf(first.toLowerCase()) >= 0) return false;
     if (READ_ONLY_SHELL_COMMANDS.indexOf(first) >= 0) return true;
     if (NO_TARGET_COMMANDS.indexOf(first) >= 0) return true;
     if (READ_ONLY_POWERSHELL_COMMANDS.indexOf(first.toLowerCase()) >= 0) return true;

@@ -951,6 +951,11 @@ const MUTATIONS = [
   [READ_ONLY, 'the read-only registry answers for PowerShell as well as the Unix shells',
     '    if (READ_ONLY_POWERSHELL_COMMANDS.indexOf(first.toLowerCase()) >= 0) return true;',
     ''],
+  // The names the list gained for the PowerShell reading. Read them in Bash
+  // and `get-date <path>` frees a crossing there that it never freed before.
+  [READ_ONLY, 'Bash does not read the PowerShell entries added for the PowerShell reading',
+    '    if (POWERSHELL_ONLY_READS.indexOf(first.toLowerCase()) >= 0) return false;\n',
+    ''],
   // Compare case-sensitively and half the spellings agents actually write
   // (get-childitem, GCI) stop being reads, because PowerShell is not.
   [READ_ONLY, 'PowerShell commands are compared case-insensitively, because PowerShell is',

@@ -975,15 +975,27 @@ describe('the agent\'s own folder: three tiers, one registry', () => {
     }
   });
 
-  test("Bash's reading is unchanged by the PowerShell one: dir and type still read", () => {
-    // Bash has always read these two through the PowerShell list, and the
-    // PowerShell reading changes nothing about how Bash is read.
+  test("Bash's reading is unchanged by the PowerShell one: dir and type still read, and the names added for PowerShell do not", () => {
+    // Bash has always read the PowerShell list's names, `dir` and `type`
+    // among them, and the PowerShell reading changes nothing about how Bash
+    // is read. That list grew by `get-date` and `where-object` for the
+    // PowerShell reading, and in Bash they are not reads, as they were not.
+    const { isReadOnlyShellCommand } = require('../../public/read-only-shell.js');
+    for (const command of ['dir notes', 'type notes.md', 'DIR notes']) {
+      assert.strictEqual(isReadOnlyShellCommand(command), true, `Bash no longer reads: ${command}`);
+    }
+    for (const command of ['get-date notes.md', 'where-object notes.md', 'Get-Date notes.md', 'Where-Object notes.md']) {
+      assert.strictEqual(isReadOnlyShellCommand(command), false, `Bash now reads: ${command}`);
+    }
     const home = tmp('af-bash-dir-home-');
     const agents = path.join(home, '.claude', 'agents');
     fs.mkdirSync(agents, { recursive: true });
     const ws = tmp('af-bash-dir-ws-');
     for (const command of [`dir ${agents}`, `type ${path.join(agents, 'x.md')}`]) {
       assert.strictEqual(hook.classifyShellAccess('Bash', { command }, ws, [], home), null, command);
+    }
+    for (const command of [`get-date ${agents}`, `where-object ${path.join(agents, 'x.md')}`]) {
+      assert.notStrictEqual(hook.classifyShellAccess('Bash', { command }, ws, [], home), null, `freed in Bash: ${command}`);
     }
   });
 

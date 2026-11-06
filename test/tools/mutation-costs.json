@@ -613,6 +613,7 @@
       "the shared vocabulary adds only the word the reported command needs": 5.2,
       "the read-only registry answers for PowerShell as well as the Unix shells": 2.1,
       "PowerShell commands are compared case-insensitively, because PowerShell is": 2.1,
+      "Bash does not read the PowerShell entries added for the PowerShell reading": 7.17,
       "PowerShell: a command in brackets is never a read": 1.27,
       "PowerShell: a script block is never a read": 1.65,
       "PowerShell: a subexpression inside double quotes is never a read": 1.2,
