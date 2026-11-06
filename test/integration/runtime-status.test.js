@@ -33,7 +33,7 @@ describe('runtime status', () => {
 
     assert.strictEqual(msg.defaultRuntime, 'claude');
     assert.strictEqual(msg.claude.installed, true);
-    assert.strictEqual(msg.claude.version, '0.0.0-stub');
+    assert.strictEqual(msg.claude.version, '2.1.318-stub');
     assert.strictEqual(msg.claude.authenticated, null, 'no auth claim without evidence');
     assert.strictEqual(msg.codex.installed, true);
     assert.strictEqual(msg.codex.version, '0.0.0-stub');
