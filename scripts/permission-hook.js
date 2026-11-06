@@ -824,6 +824,259 @@ function secretsReachedBy(word, { starts, unfollowed, relative, entries, folds, 
   if (unfollowed && relative) for (const e of entries) if (named(e)) hits.add(e.path);
   return [...hits];
 }
+// THE FOLDERS A COMMAND READS EVERYTHING INSIDE, for the credential check.
+// `~/.claude` and `~/.codex` are free to read, so a word naming either is never
+// reported, and `grep -r token ~/.claude`, `cp -r ~/.claude /tmp/x` and
+// `tar czf - ~/.claude` read the credential files inside with no card. A
+// program here reads the contents of a folder it is handed; one that lists
+// names (`ls -R`, `du`, a `find` that runs nothing) does not, and stays free.
+//
+// UNKNOWN WITH A RECURSIVE FLAG MEANS A READER: a program not named below,
+// handed `-r`, `-R` or `--recursive`, is judged to read the folder, the safe
+// direction for a file with nothing beneath the card.
+// `pax` is here because writing an archive it reads every file beneath the
+// folder with no flag asking it to. `cpio` is not: it reads only the files
+// named on its input, never a folder it is handed. What it is handed, or the
+// folder it runs in, can be the folder it copies into, which cpioFolders
+// finds. rg, ag and ack are read through READER_OPTIONS below.
+const RECURSIVE_READERS = new Set(['rsync', 'tar', 'gtar', 'bsdtar', 'zip', '7z', '7za', 'ditto', 'pax']);
+const SEARCHES_CWD_UNNAMED = new Set(['grep', 'rg', 'ag', 'ack', 'find']);
+const LISTS_NAMES_ONLY = new Set(['ls', 'du', 'tree', 'stat', 'file', 'cd', 'pushd', 'popd', 'test', '[', 'realpath', 'readlink', 'dirname', 'basename', 'pwd', 'mkdir', 'echo', 'printf', 'true', 'false']);
+const RUNS_PER_NAME = new Set(['-exec', '-execdir', '-ok', '-okdir']);
+// HOW EACH OF THESE PROGRAMS TAKES ITS OPTIONS, read as getopt reads them, so
+// an option's value is never taken for a folder and the pattern given to `-e`
+// or `-f` leaves every other word a folder: `cd ~/.claude && rg -e token`
+// searches the folder it runs in. `short`: the letters that take a value, the
+// rest of the word or the next word. `long`: the long options that take one,
+// as `--x=v` or `--x v`. `patterns`: the options that give the pattern, after
+// which no word is one. `into`: the options naming a folder copied into.
+// `lists`: the options that make it list names and open no file (`rg
+// --files`), so it reads nothing unless the names go on to xargs.
+// `names`, for a program whose getopt takes a long option shortened
+// (`--recur`), every long option it has, so a shortened one is the option it
+// stands for. A program here that reads a folder only when told to say so in
+// recursiveFor.
+const GREP_VALUES = ['regexp', 'file', 'after-context', 'before-context', 'context', 'max-count', 'devices', 'directories',
+  'include', 'exclude', 'exclude-dir', 'exclude-from', 'include-dir', 'label', 'binary-files', 'group-separator'];
+const CP_VALUES = ['target-directory', 'suffix', 'sparse', 'no-preserve'];
+const CPIO_VALUES = ['block-size', 'directory', 'file', 'format', 'io-size', 'message', 'owner', 'passphrase', 'pattern-file',
+  'rename-batch-file', 'rsh-command', 'warning'];
+const READER_OPTIONS = {
+  grep: {
+    short: 'efABCmDd', long: GREP_VALUES, patterns: ['e', 'f', 'regexp', 'file'],
+    names: [...GREP_VALUES, 'basic-regexp', 'binary', 'byte-offset', 'color', 'colour', 'count', 'dereference-recursive', 'extended-regexp',
+      'files-with-matches', 'files-without-match', 'fixed-strings', 'help', 'ignore-case', 'initial-tab', 'invert-match', 'line-buffered',
+      'line-number', 'line-regexp', 'no-filename', 'no-group-separator', 'no-ignore-case', 'no-messages', 'null', 'null-data', 'only-matching',
+      'perl-regexp', 'quiet', 'recursive', 'silent', 'text', 'version', 'with-filename', 'word-regexp'],
+  },
+  rg: {
+    short: 'efABCmgtTEjMrd', patterns: ['e', 'f', 'regexp', 'file'], lists: ['files', 'type-list'],
+    long: ['regexp', 'file', 'after-context', 'before-context', 'context', 'max-count', 'glob', 'iglob', 'type', 'type-not', 'type-add',
+      'type-clear', 'encoding', 'threads', 'max-columns', 'max-depth', 'maxdepth', 'max-filesize', 'path-separator', 'replace', 'color',
+      'colors', 'context-separator', 'field-context-separator', 'field-match-separator', 'ignore-file', 'pre', 'pre-glob', 'sort', 'sortr',
+      'engine', 'dfa-size-limit', 'regex-size-limit', 'hostname-bin', 'hyperlink-format', 'generate'],
+  },
+  // `-g PATTERN` picks files by name, so every word is then a folder.
+  ag: {
+    short: 'ABCGgmpW', patterns: ['g', 'filename-pattern'],
+    long: ['after', 'before', 'context', 'file-search-regex', 'filename-pattern', 'max-count', 'path-to-ignore', 'width', 'ignore',
+      'ignore-dir', 'depth', 'pager', 'color-line-number', 'color-match', 'color-path', 'workers'],
+  },
+  // `-f` and `-g PATTERN` pick files without a pattern to search for.
+  ack: {
+    short: 'ABCmg', patterns: ['f', 'g', 'match'],
+    long: ['match', 'type', 'ignore-dir', 'ignore-directory', 'noignore-dir', 'noignore-directory', 'ignore-file', 'output', 'pager',
+      'range-start', 'range-end', 'files-from', 'ackrc', 'type-add', 'type-set', 'type-del', 'color-filename', 'color-match',
+      'color-lineno', 'color-colno', 'after-context', 'before-context', 'context', 'max-count'],
+  },
+  cp: {
+    short: 'tS', long: CP_VALUES, into: ['t', 'target-directory'],
+    names: [...CP_VALUES, 'archive', 'attributes-only', 'backup', 'copy-contents', 'debug', 'dereference', 'force', 'interactive',
+      'keep-directory-symlink', 'link', 'no-clobber', 'no-dereference', 'no-target-directory', 'one-file-system', 'parents', 'preserve',
+      'recursive', 'reflink', 'remove-destination', 'strip-trailing-slashes', 'symbolic-link', 'update', 'verbose', 'help', 'version'],
+  },
+  scp: { short: 'cDFiJloPSX', long: [] },
+  // GNU's and BSD's options together. BSD's `-f PATTERN` is left out, so a
+  // folder after it is still counted; GNU's `-f` takes no value.
+  cpio: {
+    short: 'CDEFHIMORW', long: CPIO_VALUES,
+    names: [...CPIO_VALUES, 'absolute-filenames', 'append', 'binary', 'create', 'dereference', 'device-independent', 'dot', 'extract',
+      'force-local', 'help', 'ignore-devno', 'insecure', 'link', 'list', 'lrzip', 'lz4', 'lzma', 'lzop', 'make-directories',
+      'no-absolute-filenames', 'no-preserve-owner', 'nonmatching', 'null', 'numeric-uid-gid', 'only-verify-crc', 'pass-through',
+      'preserve-modification-time', 'preserve-owner', 'pwb', 'quiet', 'rename', 'renumber-inodes', 'reproducible', 'reset-access-time',
+      'sparse', 'swap', 'swap-bytes', 'swap-halfwords', 'to-stdout', 'unconditional', 'usage', 'verbose', 'version', 'xz', 'zstd'],
+  },
+};
+const READER_FAMILY = { egrep: 'grep', fgrep: 'grep', ggrep: 'grep' };
+// Whether one of these reads the folders it is given: a recursive grep, cp or
+// scp; the others always do.
+function recursiveFor(family, has, values) {
+  if (family === 'grep') return has('r', 'R', 'recursive', 'dereference-recursive') || values('d', 'directories').includes('recurse');
+  if (family === 'cp') return has('r', 'R', 'a', 'recursive', 'archive');
+  if (family === 'scp') return has('r');
+  return true;
+}
+// THE FOLDERS cpio COPIES INTO, which can replace a credential file there as
+// `cp -r /tmp/x ~/.claude` can. In pass-through (`-p`) that is every folder it
+// is handed, a relative one measured from GNU's `-D DIR`; copy-in (`-i`)
+// extracts into the folder it runs in, or `-D DIR`, unless it only lists or
+// writes to its output. Copy-out (`-o`) copies into no folder. A mode written
+// as a shortened long option counts as each mode it could be.
+function cpioFolders(opt, has, values) {
+  const mode = (letter, name) => has(letter) || opt.given.some(([n]) => n.length > 1 && name.startsWith(n));
+  const dir = values('D', 'directory').pop();
+  const folders = [];
+  if (mode('p', 'pass-through')) folders.push(...opt.operands.map(o => (dir && !/^[/~$]/.test(o) ? `${dir}/${o}` : o)));
+  if (mode('i', 'extract') && !has('t', 'list', 'to-stdout', 'only-verify-crc')) folders.push(dir || '.');
+  return folders;
+}
+// The options a command was given, [name, value] with a long one by its whole
+// name, and the words that are not options, in order. Options may sit among
+// the other words, and `--` ends them.
+function readOptions(args, spec) {
+  const given = [];
+  const operands = [];
+  const longName = (written) => {
+    if (!spec.names || spec.names.includes(written)) return written;
+    const could = spec.names.filter(n => n.startsWith(written));
+    return could.length === 1 ? could[0] : written;
+  };
+  for (let k = 0; k < args.length; k++) {
+    const a = args[k];
+    if (a === '--') { operands.push(...args.slice(k + 1)); break; }
+    if (a.startsWith('--')) {
+      const eq = a.indexOf('=');
+      const name = longName(a.slice(2, eq < 0 ? a.length : eq));
+      let value = eq < 0 ? null : a.slice(eq + 1);
+      if (value === null && spec.long.includes(name) && k + 1 < args.length) value = args[++k];
+      given.push([name, value]);
+    } else if (a.length > 1 && a[0] === '-') {
+      for (let c = 1; c < a.length; c++) {
+        if (!spec.short.includes(a[c])) { given.push([a[c], null]); continue; }
+        given.push([a[c], c + 1 < a.length ? a.slice(c + 1) : (k + 1 < args.length ? args[++k] : null)]);
+        break;
+      }
+    } else operands.push(a);
+  }
+  return { given, operands };
+}
+// THE COMMANDS THE SHELL RUNS, each with its words AS BASH FORMS THEM: quotes
+// and escapes taken out and the pieces of one word joined, so `~/\.claude` and
+// `"$HOME"/.claude` are the `~/.claude` they name. Read by the lexer the
+// verdict reads with, not a second one. Each carries where it starts in the
+// text (`at`) and the words of the command its output is piped to. What a
+// group, a function body or a substitution runs is read as commands too.
+//
+// PAST A FEW LEVELS DEEP, NOTHING IS LEFT UNREAD: every word there is taken as
+// a folder read whole, and so is the folder it runs in, which can only ask
+// more.
+const READ_DEPTH = 8;
+function shellCommandsIn(text, posixText = true, offset = 0, depth = 0, out = []) {
+  const s = String(text);
+  if (depth > READ_DEPTH) {
+    const loose = (s.match(/[^\s;|&<>(){}`'"]+/g) || []).map(w => (posixText ? w.replace(/\\(.)/g, '$1') : w));
+    out.push({ words: null, loose: [...loose, '.'], at: offset, pipedTo: null });
+    return out;
+  }
+  const dialect = posixText ? 'bash' : 'ps';
+  const segs = [];
+  let from = 0;
+  for (const seg of lexSegments(s, dialect)) {
+    const start = s.indexOf(seg.text, from);
+    if (start >= 0) from = start + seg.text.length;
+    segs.push({ op: seg.op, text: seg.text, at: offset + Math.max(0, start), lexed: lexWords(seg.text, dialect) });
+  }
+  for (let k = 0; k < segs.length; k++) {
+    const seg = segs[k];
+    for (const w of seg.lexed) {
+      const close = { '(': ')', '{': '}' }[w.raw[0]];
+      if (close) shellCommandsIn(w.raw.slice(1, w.raw.lastIndexOf(close)), posixText, seg.at + Math.max(0, seg.text.indexOf(w.raw)) + 1, depth + 1, out);
+    }
+    for (const body of substitutions(seg.text, dialect).bodies) shellCommandsIn(body, posixText, seg.at + Math.max(0, seg.text.indexOf(body)), depth + 1, out);
+    const next = segs[k + 1];
+    out.push({ words: seg.lexed.map(w => w.text), at: seg.at, pipedTo: next && next.op === '|' ? next.lexed.map(w => w.text) : null });
+  }
+  return out;
+}
+
+// THE FOLDERS find IS GIVEN come after its own options: `-H`, `-L` and `-P`,
+// BSD's `-E`, `-X`, `-d`, `-s` and `-x`, alone or run together, BSD's `-f`,
+// whose value is a folder, and GNU's `-D LIST` and `-O LEVEL`. They run from
+// there to the first word of the expression. With none, find searches where
+// it runs, which the caller supplies.
+function findRoots(args) {
+  const roots = [];
+  let k = 0;
+  for (; k < args.length; k++) {
+    const a = args[k];
+    if (a === '--') { k++; break; }
+    if (a === '-D') { k++; continue; }
+    if (/^-O\d*$/.test(a)) continue;
+    if (/^-[HLPEXdsx]*f$/.test(a)) { if (k + 1 < args.length) roots.push(args[++k]); continue; }
+    if (/^-f[/~.]/.test(a)) { roots.push(a.slice(2)); continue; }
+    if (/^-[HLPEXdsx]+$/.test(a)) continue;
+    break;
+  }
+  for (; k < args.length && !/^[-(!),]/.test(args[k]); k++) roots.push(args[k]);
+  return roots;
+}
+
+// A command's words from its first in command position, past a keyword (`if`,
+// `do`, `!`). `time` is left for programIndex, which knows its options.
+function pastKeywords(words) {
+  let lead = 0;
+  while (lead < words.length - 1 && COMMAND_LEADS.has(words[lead]) && words[lead] !== 'time') lead++;
+  return words.slice(lead);
+}
+// Whether a command hands what it reads on its input to xargs, behind any
+// program that runs the next one (`sudo xargs cat`).
+function runsXargs(words) {
+  if (!words) return false;
+  const ws = pastKeywords(words);
+  return ws.slice(0, programIndex(ws) + 1).some(w => w.split('/').pop() === 'xargs');
+}
+
+// [{ word, at }]: each word a reader was handed as a folder, as bash forms it,
+// with where its command starts. A reader that searches the folder it runs in
+// and was handed none (`cd ~/.claude && grep -r token`) is handed `.`.
+function recursiveReadWords(command, posixText = true) {
+  const found = [];
+  for (const { words, loose, at, pipedTo } of shellCommandsIn(command, posixText)) {
+    if (loose) { for (const o of loose) found.push({ word: o, at }); continue; }
+    // THE PROGRAM, past a keyword (`if`, `do`, `!`) and the programs that run
+    // the next one, with their options and the values those take, as the
+    // shell's own `-c` is found (see programIndex): `env -u FOO rg` runs rg.
+    const ws = pastKeywords(words);
+    const i = programIndex(ws);
+    const verb = (ws[i] || '').split('/').pop();
+    const family = READER_FAMILY[verb] || verb;
+    const args = ws.slice(i + 1);
+    const spec = Object.prototype.hasOwnProperty.call(READER_OPTIONS, family) ? READER_OPTIONS[family] : null;
+    let operands;
+    if (spec) {
+      const opt = readOptions(args, spec);
+      const has = (...names) => opt.given.some(([n]) => names.includes(n));
+      const values = (...names) => opt.given.filter(([n, v]) => names.includes(n) && v !== null).map(([, v]) => v);
+      if (family === 'cpio') { for (const o of cpioFolders(opt, has, values)) found.push({ word: o, at }); continue; }
+      const lists = !!spec.lists && has(...spec.lists);
+      if (lists && !runsXargs(pipedTo)) continue;
+      if (!recursiveFor(family, has, values)) continue;
+      operands = spec.patterns && !lists && !has(...spec.patterns) ? opt.operands.slice(1) : opt.operands;
+      if (spec.into) operands = operands.concat(values(...spec.into));
+    } else if (verb === 'find') {
+      if (!args.some(a => RUNS_PER_NAME.has(a)) && !runsXargs(pipedTo)) continue;
+      operands = findRoots(args);
+    } else {
+      const flagged = args.some(a => /^-[A-Za-z]*[rR][A-Za-z]*$/.test(a)) || args.includes('--recursive');
+      if (!RECURSIVE_READERS.has(verb) && (LISTS_NAMES_ONLY.has(verb) || !flagged)) continue;
+      operands = args.filter(a => !a.startsWith('-'));
+    }
+    if (!operands.length && SEARCHES_CWD_UNNAMED.has(family)) operands = ['.'];
+    for (const o of operands) found.push({ word: o, at });
+  }
+  return found;
+}
+
 // Whether a resolved glob can expand to `target`: every segment from the first
 // one holding a glob is matched against the segments of `target` below the
 // folder before it, a `**` standing for any number of them.
@@ -2696,7 +2949,7 @@ const SHELL_NAMES = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'fish']);
 const RUNS_WHAT_FOLLOWS = new Set(['env', 'exec', 'command', 'nohup', 'nice', 'time', 'sudo', 'doas', 'timeout', 'gtimeout', 'xargs',
   'stdbuf', 'ionice', 'caffeinate', 'npx', 'uv run']);
 const PREFIX_TAKES_VALUE = {
-  sudo: /^-[ugCDhpr]$/, doas: /^-[uC]$/, nice: /^-n$/, env: /^-[uS]$/,
+  sudo: /^-[ugCDhpr]$/, doas: /^-[uC]$/, nice: /^-n$/, env: /^(?:-[uSCP]|--unset|--chdir|--split-string)$/, exec: /^-a$/,
   timeout: /^(?:-[sk]|--signal|--kill-after)$/, gtimeout: /^(?:-[sk]|--signal|--kill-after)$/,
   // BSD's -J, -R and -S as well as GNU's options.
   xargs: /^(?:-[nLPsIEdaJRS]|--(?:max-args|max-lines|max-procs|max-chars|eof|delimiter|arg-file|process-slot-var))$/,
@@ -3026,6 +3279,44 @@ function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), 
     return { path: c, reach: [...new Set([p, ...(spelled.get(c) || [])])], name: path.basename(p) };
   });
   const secretNames = new Set(secretEntries.map(e => foldCase(e.name, foldsCase)));
+  // The runtime homes, which hold credential files and are free to read, and
+  // the words and places the command reads everything inside of. Each home is
+  // known by both its spellings, as written under home and where its links
+  // lead, so a linked `~/.claude` is the same folder.
+  // As a glob lists each one: by its own name under home, as given and as home
+  // resolves, the runtime folder itself not resolved (the registry's roots are).
+  const homeRoots = winWorld ? [] : runtimeHomes(home).map((h, i) => ({
+    root: h.root,
+    real: canonicalize(h.root),
+    listed: [...new Set(homeSpellings.map(s => path.join(s, ['.claude', '.codex'][i])))],
+  }));
+  const under = (p, dir) => foldCase(p, foldsCase).startsWith(foldCase(dir, foldsCase) + path.sep);
+  const entriesUnder = (h) => secretEntries.filter(e => e.reach.some(x => under(x, h.root)) || under(e.path, h.real));
+  const folderReads = [];
+  for (const [text, at] of [[view.text, null], ...view.commands.map(c => [c.text, c.at])]) {
+    for (const r of recursiveReadWords(text, posixText)) folderReads.push(at === null ? { ...r, fromStart: false } : { word: r.word, at, fromStart: true });
+  }
+  // The runtime homes a word handed to such a reader reaches, from `starts`.
+  // Worked out once for each word and set of starts: a long chain hands the
+  // same folder to the same reader many times.
+  const homesKnown = new Map();
+  const homesReadBy = (word, starts) => {
+    const key = [word, ...starts].join('\0');
+    if (homesKnown.has(key)) return homesKnown.get(key);
+    const out = [];
+    const glob = /[*?[]/.test(word);
+    for (const b of starts) {
+      const r = canonicalize(path.resolve(b, word));
+      for (const h of homeRoots) {
+        const hit = glob
+          ? h.listed.some(x => globReachesPath(r, x, foldsCase)) || globReachesPath(r, h.real, foldsCase)
+          : foldCase(r, foldsCase) === foldCase(h.real, foldsCase) || foldCase(r, foldsCase) === foldCase(h.root, foldsCase);
+        if (hit) out.push(h);
+      }
+    }
+    homesKnown.set(key, out);
+    return out;
+  };
   // A CREDENTIAL FILE IS REPORTED AS ITS DIRECT SPELLING WOULD BE: the same
   // exemption (the workspace's own files) and the same tags, so the card a relative
   // or glob spelling raises is the one `cat ~/.claude/.credentials.json`
@@ -3087,6 +3378,30 @@ function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), 
       const target = canonicalize(pmod.join(d, pmod.basename(src)), pmod);
       if (isWorkspaceAnswerFile(target, workspaceRoot, foldsCase, pmod) || isAnswerFileOfAnyWorkspace(target, pmod) || reachesAnswerFiles(null, target, pmod)
         || isRundockConsolePath(target, home, foldsCase, pmod)) addAnswer(target, pmod);
+    }
+  }
+  // A RUNTIME HOME HANDED TO A PROGRAM THAT READS EVERYTHING INSIDE IT reads
+  // the credential files there: `grep -r token ~/.claude`, `tar czf - ~/.claude`,
+  // or `cd ~/.claude && grep -r token`, whose reader searches the folder it
+  // runs in. Each folder is judged from where the shell can be, as a word is
+  // below, and asks as the credential files it holds. A folder copied INTO is
+  // counted too: what lands there can replace the credential file.
+  // Home is put in after a loop's words are, which can name it (`for d in
+  // ~/.claude; do grep -r token "$d"; done`).
+  const homeIn = (word) => {
+    for (const re of HOME_PREFIX) { if (re.test(word)) return word.replace(re, home); }
+    for (const re of ENV_PREFIX) {
+      const m = re.exec(word);
+      const val = m && devPaths.envValue(opts.env || process.env, m[1]);
+      if (val) return val + word.slice(m[0].length);
+    }
+    return word;
+  };
+  for (const { word, at, fromStart } of folderReads) {
+    const here = fromStart ? null : possibleFoldersAt(at);
+    const starts = here || [basesFor(path, fromStart)(at), ...cdStarts(path, at, fromStart)];
+    for (const form of braceForms(homeIn(word)).flatMap(loopForms).map(homeIn)) {
+      for (const h of homesReadBy(form, starts)) for (const e of entriesUnder(h)) reportSecret(e.path);
     }
   }
   let previous = '';
