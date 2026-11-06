@@ -65,8 +65,9 @@ const loginPath = (...dirs) => [...dirs, '/usr/bin', '/bin'].join(':');
 
 // Runs `fn` on the machine: HOME is its home, SHELL its stub shell (or
 // `shell`), and the PATH Rundock was started with is `today` plus the system
-// folders `which` lives in. Restored afterwards.
-async function on(m, { today = [], shell = m.shell.file, env = {}, platform } = {}, fn) {
+// folders `which` lives in. `deps` stands in more of the lookup's own, such as
+// its clock. Restored afterwards.
+async function on(m, { today = [], shell = m.shell.file, env = {}, platform, deps = {} } = {}, fn) {
   const names = ['PATH', 'HOME', 'SHELL', ...Object.keys(env)];
   const before = Object.fromEntries(names.map((n) => [n, process.env[n]]));
   const set = (n, v) => { if (v === undefined || v === null) delete process.env[n]; else process.env[n] = v; };
@@ -74,7 +75,7 @@ async function on(m, { today = [], shell = m.shell.file, env = {}, platform } = 
   set('HOME', m.home);
   set('SHELL', shell);
   for (const [n, v] of Object.entries(env)) set(n, v);
-  const prev = lookup().wireLookupDeps({ installFolders: () => Object.values(m.folders), ...(platform ? { platform: () => platform } : {}) });
+  const prev = lookup().wireLookupDeps({ installFolders: () => Object.values(m.folders), ...(platform ? { platform: () => platform } : {}), ...deps });
   lookup().forget();
   try { return await fn(); } finally {
     lookup().wireLookupDeps(prev);
@@ -656,6 +657,51 @@ describe('the desktop app\'s check reports the copy the lookup chose, with the v
         assert.strictEqual(m.shell.runs()[0].env.PATH, '/usr/bin:/bin:/usr/sbin:/sbin');
       });
     } finally { done(); }
+  });
+
+  test('while nothing is found, looks within a minute ask the shell once, and a copy installed on the PATH it gave is found on the next look without asking again', async () => {
+    // The setup wizard polls while the person installs. The clock is the
+    // lookup's own, stood in: nothing here waits.
+    const m = machine();
+    const npm = m.dir('npm-global-bin');
+    fs.mkdirSync(npm);
+    m.shell.plan({ loginPath: loginPath(npm) });
+    const start = 1000000;
+    let now = start;
+    await on(m, { deps: { now: () => now } }, () => {
+      for (const s of [0, 15, 30, 45, 59]) {
+        now = start + s * 1000;
+        assert.strictEqual(lookup().installedClaude(), null, `nothing found at ${s}s`);
+      }
+      assert.strictEqual(m.shell.runs().length, 1, 'five looks within a minute asked the shell once');
+      const current = makeClaude(npm, CURRENT);
+      const found = lookup().installedClaude();
+      assert.strictEqual(found && found.bin, current.bin, 'found on the next look, along the PATH the shell gave');
+      assert.strictEqual(m.shell.runs().length, 1, 'with no new shell run');
+    });
+  });
+
+  test('a minute after its answer, a look that still finds nothing asks the shell again, and a shell that cannot answer is asked and logged once a minute too', async () => {
+    const m = machine();
+    const npm = m.dir('npm-global-bin');
+    fs.mkdirSync(npm);
+    m.shell.plan({ loginPath: loginPath(npm) });
+    const start = 1000000;
+    let now = start;
+    const warn = quietWarn();
+    try {
+      await on(m, { deps: { now: () => now } }, () => {
+        assert.strictEqual(lookup().installedClaude(), null);
+        now = start + 60 * 1000;
+        assert.strictEqual(lookup().installedClaude(), null);
+        assert.strictEqual(m.shell.runs().length, 2, 'asked again after a minute');
+        m.shell.plan({ fail: 'crash' });
+        now = start + 120 * 1000;
+        for (let i = 0; i < 3; i++) { assert.strictEqual(lookup().installedClaude(), null); now += 10 * 1000; }
+        assert.strictEqual(m.shell.runs().length, 3, 'the shell that could not answer was asked once');
+        assert.strictEqual(warn.lookupLines().length, 1, 'and logged once');
+      });
+    } finally { warn.restore(); }
   });
 
   test('no copy, or one that cannot be run for its version, is not installed; a copy installed afterwards is found', async () => {

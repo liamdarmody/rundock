@@ -124,7 +124,7 @@ const NOT_CLAUDE = [
   { at: "lib/protocol/handlers/workspace.js | handlePickFolder | execFile('osascript')", runs: 'the folder picker' },
   { at: "lib/runtime/claude.js | psCommand | execFileSync('ps')", runs: "ps, to read a process's command line" },
   { at: "lib/runtime/claude-lookup.js | pathLookup | execSync(isWindows ? 'where.exe claude' : 'which claude')", runs: 'a lookup of the Claude binary on the PATH' },
-  { at: 'lib/runtime/claude-lookup.js | loginShellPath | spawnSync(shell)', runs: "the person's login shell, asked for the PATH it builds, with a fixed command and no environment of Rundock's" },
+  { at: 'lib/runtime/claude-lookup.js | askLoginShell | spawnSync(shell)', runs: "the person's login shell, asked for the PATH it builds, with a fixed command and no environment of Rundock's" },
   { at: "lib/runtime/claude.js | killProcessTree | spawn('taskkill')", runs: 'taskkill, to stop an agent on Windows' },
   { at: "scripts/code-mode-git.js | git | execFileSync('git')", runs: "git, for the hook's Code-mode checks" },
 ];
