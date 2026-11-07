@@ -284,8 +284,12 @@ jobs:
       # this log and in the job summary. The verdict above was written before
       # this ran and is uploaded below whatever happens here, so it can still
       # say pass: what makes this failure count is `Mutation guards` reading
-      # the shard jobs' result, which no step in a shard can change. Run
-      # always(), so a shard whose guard survived is checked as well.
+      # the shard jobs' result, which the runner records from how these steps
+      # ended and which nothing the shard uploads can rewrite afterwards. This
+      # catches what is still modified when it runs: a harness that restores
+      # or hides its own leftovers first, or changes what this step runs with,
+      # is outside it. Run always(), so a shard whose guard survived is
+      # checked as well.
       - name: Fail if any tool left a file modified
         if: always()
         run: |
@@ -351,8 +355,10 @@ jobs:
       #
       # THE VERDICTS ARE NOT THE ONLY WITNESS. A verdict is the shard's own
       # file, uploaded even when a later step in its job failed, so the shard
-      # jobs' result goes in too: GitHub sets it, and no step in a shard can
-      # change it. Anything but success is not green, titled "A shard failed:
+      # jobs' result goes in too: the runner records it from how each shard's
+      # steps ended, and nothing a shard uploads can rewrite it afterwards,
+      # which is what closes the gap a passing verdict from a failed job left.
+      # Anything but success is not green, titled "A shard failed:
       # see its job", unless a verdict already explains it ("A guard
       # survived"). "Re-run failed jobs" re-runs this job with the shards it
       # needs, so a shard that comes back clean turns it green.

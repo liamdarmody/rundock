@@ -145,8 +145,11 @@ jobs:
       # shard that leaves any file modified fails here, naming each file in
       # this log and in the job summary. The verdict above can still say pass:
       # what makes this failure count is the verdict job reading the shard
-      # jobs' result. The same check as ci.yml's, and run always() for the
-      # same reason: a shard whose guard survived is checked as well.
+      # jobs' result, which nothing the shard uploads can rewrite afterwards.
+      # As in ci.yml, a harness that restores or hides its own leftovers
+      # before this runs, or changes what it runs with, is outside it. The
+      # same check as ci.yml's, and run always() for the same reason: a shard
+      # whose guard survived is checked as well.
       - name: Fail if any tool left a file modified
         if: always()
         run: |
@@ -207,7 +210,8 @@ jobs:
       # ends non-green, titled "No verdict". As in ci.yml, the shard jobs'
       # result goes in beside the verdicts, and anything but success is not
       # green: a shard that left a file modified uploaded a passing verdict
-      # from a failed job.
+      # from a failed job, and nothing it uploads can rewrite how that job
+      # ended.
       - name: One outcome from every shard
         env:
           PLAN_RESULT: ${{ needs.mutation-plan.result }}

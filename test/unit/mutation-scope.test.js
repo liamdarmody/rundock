@@ -655,7 +655,8 @@ describe('three outcomes: pass, fail, no verdict', () => {
 // whether or not the steps after the verdict passed. So a shard whose harness
 // left a file modified failed its own job at the diff check and still uploaded
 // a passing verdict. How GitHub recorded the shard jobs ending is set by the
-// runner, which no step inside a shard can change, and the aggregate reads it.
+// runner from how their steps ended, and nothing a shard uploads can rewrite
+// it afterwards, so the aggregate reads it.
 const SCOPE = path.join(REPO, 'scripts', 'mutation-scope.js');
 const SHARD_FAILED = 'A shard failed: see its job';
 const PLAN_2 = { id: 'p2', shards: [{ index: 1 }, { index: 2 }] };
@@ -679,7 +680,7 @@ function aggregateCli(dir, extra = [], env = {}) {
     { encoding: 'utf8', env: { ...clean, ...env } });
 }
 
-describe('the shard jobs\' result is a witness no shard can write', () => {
+describe('the shard jobs\' result is a witness nothing a shard uploads can rewrite', () => {
   test('a shard job that did not succeed is not green, even when every verdict passes', () => {
     for (const shardsResult of ['failure', 'cancelled', 'skipped']) {
       const r = aggregate(PLAN_2, PASSING, { planResult: 'success', shardsResult });

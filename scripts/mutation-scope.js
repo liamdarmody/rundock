@@ -569,13 +569,17 @@ const noVerdict = (causes) => ({ outcome: NO_VERDICT, causes, title: `No verdict
  * A shard with no verdict file died, was cancelled or timed out before it
  * could write one, and that is no verdict for that shard: never a pass.
  *
- * THE SHARD JOBS' RESULT IS THE WITNESS A SHARD CANNOT WRITE. A verdict is the
- * shard's own file, uploaded whether or not the steps after it passed, so a
- * shard that left a file modified failed its job at the diff check and still
- * uploaded a passing verdict. The result is set by the runner, and anything
- * but success is not green, whatever the verdicts say. Skipped counts as
- * success only for a plan of no shards, the one time no shard job runs. A
- * result that was not given at all is no verdict.
+ * THE SHARD JOBS' RESULT IS THE WITNESS A SHARD'S UPLOADS CANNOT REWRITE. A
+ * verdict is the shard's own file, uploaded whether or not the steps after it
+ * passed, so a shard that left a file modified failed its job at the diff
+ * check and still uploaded a passing verdict. The runner records the result
+ * from how the shard's steps ended, and nothing the shard uploads changes it
+ * afterwards, so anything but success is not green, whatever the verdicts
+ * say. It is only as good as those steps: a harness that restores or hides
+ * its own leftovers before the diff check leaves that check passing, and is
+ * outside what this catches. Skipped counts as success only for a plan of no
+ * shards, the one time no shard job runs. A result that was not given at all
+ * is no verdict.
  */
 function aggregate(plan, verdicts, { planResult, shardsResult } = {}) {
   // NEITHER RESULT DEFAULTS TO SUCCESS. Each is how a job ended, and one that
