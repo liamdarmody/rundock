@@ -669,11 +669,8 @@ const liveSuites = new Map();
 let stopping = null;
 
 // How often an ending looks to see whether the leader was killed from outside
-// during the grace, or the group has gone after SIGKILL, and how long a group
-// sent SIGKILL gets to leave the process table before the ending stops
-// waiting for it.
+// during the grace.
 const SUITE_POLL_MS = 100;
-const SUITE_REAP_MS = 2000;
 
 // THE WAITS ON A SUITE'S PROCESSES RUN ON THE WALL CLOCK, captured here. A
 // process does not run on a mocked clock, so a test that mocks the clock to
@@ -683,18 +680,8 @@ const { setTimeout: wallSetTimeout, clearTimeout: wallClearTimeout } = globalThi
 const nap = (ms) => new Promise((resolve) => { wallSetTimeout(resolve, ms); });
 
 /**
- * Whether any process is left in a group. EPERM means one is, owned by
- * someone this process may not signal. Signal 0 only asks; it delivers
- * nothing, so asking about an id since handed to another group is harmless.
- */
-function groupExists(pgid) {
-  try { process.kill(-pgid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
-}
-
-/**
  * End a suite's process group: hold its leader, SIGTERM the group, give the
- * rest of it the grace, then SIGKILL the group, and a short wait for the
- * kernel to drop it.
+ * rest of it the grace, then SIGKILL the group, and return.
  *
  * A GROUP IS SIGNALLED ONLY WHILE ITS LEADER IS HELD. A group's id is its
  * leader's pid, and once Node has collected the leader that number can be
@@ -713,9 +700,10 @@ function groupExists(pgid) {
  * which is the price of the guarantee, and the grace is waited in full, since
  * a group holding its stopped leader never empties on its own.
  *
- * WITHOUT BLOCKING, unlike the pre-commit gate's ending of a step's group:
- * waiting here lets Node collect the leader as it dies, and init collects
- * whatever the suite started.
+ * NO WAIT AFTER SIGKILL. Nothing in the group can run again once it is sent,
+ * so the next row may start at once, and the call that timed out returns
+ * within its limit plus the grace. The kernel drops the killed processes, and
+ * Node collects the leader, on their own time.
  */
 async function endSuiteGroup(pgid, live) {
   const send = (target, signal) => {
@@ -729,10 +717,6 @@ async function endSuiteGroup(pgid, live) {
     if (live.released) return;
   }
   send(-pgid, 'SIGKILL');
-  for (const deadline = Date.now() + SUITE_REAP_MS; Date.now() < deadline;) {
-    await nap(SUITE_POLL_MS);
-    if (!groupExists(pgid)) return;
-  }
 }
 
 /**
@@ -836,6 +820,9 @@ function didNotFinishWhy(seconds) {
  * A suite that exits on its own is not signalled afterwards: its group's id
  * can be handed to another process from the moment it is collected, so
  * whatever it left running is left to finish on its own, as before.
+ *
+ * A suite that runs past its limit returns within the limit plus the grace,
+ * since the ending does not wait for the kernel to drop what it killed.
  *
  * `limitMs` and `graceMs` exist for this module's own tests, which cannot wait
  * minutes for a limit. No harness passes them: a row's limit is the runner's.

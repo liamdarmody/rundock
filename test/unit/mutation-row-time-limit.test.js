@@ -47,10 +47,10 @@ const HARNESS = path.join(FIXTURES, 'harness.js');
 const fixture = (name) => path.join(FIXTURES, name);
 
 // How much later than the limit plus the grace a return may come and still be
-// "within the grace". Ending a group is SIGTERM, a wait of at most the grace,
-// then SIGKILL and the kernel's reaping of the entries; this is room for that
-// last step and for a loaded machine, not for any further waiting.
-const SLACK_MS = 3000;
+// "within the grace". Ending a group is SIGTERM, the grace, then SIGKILL, and
+// the runner returns without waiting for the kernel to drop what it killed;
+// this is room for timers firing late on a loaded machine, not for any wait.
+const SLACK_MS = 1000;
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 async function until(predicate, ms = 15000) {
@@ -192,11 +192,13 @@ describe('the runner every harness starts a row\'s suite with', () => {
   // group of its own. Until then the leader is running, or dead and not yet
   // collected, and either way still holds the number. So a group signal is
   // safe only while the leader's pid is still held, and this records every one
-  // sent after it was not.
+  // sent after it was not, beside every call made to a group at all.
   function watchGroupSignals(t) {
     const real = process.kill;
     const late = [];
+    const calls = [];
     process.kill = function kill(pid, signal) {
+      if (pid < 0) calls.push(signal);
       if (pid < 0 && signal !== 0) {
         let held = true;
         try { real.call(process, -pid, 0); } catch (e) { held = e.code === 'EPERM'; }
@@ -205,19 +207,24 @@ describe('the runner every harness starts a row\'s suite with', () => {
       return real.apply(process, arguments);
     };
     t.after(() => { process.kill = real; });
-    return late;
+    return { late, calls };
   }
 
   test('a group is never signalled after its leader has been collected, when the suite runs out of time', { timeout: 60000 }, async (t) => {
     // The suite here dies of SIGTERM and its grandchild ignores it, so the
     // grandchild can only be ended by a SIGKILL sent to the group after the
     // suite's own SIGTERM: the leader must still be held when it is sent.
-    const late = watchGroupSignals(t);
+    const { late, calls } = watchGroupSignals(t);
     const pids = pidFolder(t);
     const { error } = await settle(runSuite(process.execPath, [fixture('holds-output.js')],
       { cwd: REPO, env: childEnv({ MUTATION_FIXTURE_PIDS: pids }), limitMs: 1500, graceMs: 1000 }));
     assert.ok(error && error.didNotFinish, 'the suite did not finish');
     assert.deepStrictEqual(late, [], 'no group was signalled once its id could belong to another process');
+    // NOTHING AFTER THE SIGKILL, not even a look: the return waits for no
+    // process table, so a call that timed out comes back within its limit
+    // plus the grace.
+    assert.strictEqual(calls[calls.length - 1], 'SIGKILL',
+      `the runner returned straight after the SIGKILL, without waiting on the group: ${calls.join(', ')}`);
     for (const { role, pid } of recorded(pids)) assert.ok(await gone(pid), `the ${role} (pid ${pid}) is still running`);
   });
 
@@ -225,7 +232,7 @@ describe('the runner every harness starts a row\'s suite with', () => {
     // Its group id is free to be handed out from the moment it is collected,
     // so the process it left behind, holding none of its output, is not the
     // runner's to end: a signal sent to that id could reach someone else's.
-    const late = watchGroupSignals(t);
+    const { late } = watchGroupSignals(t);
     const pids = pidFolder(t);
     const out = await runSuite(process.execPath, [fixture('leaves-a-process.js')],
       { cwd: REPO, env: childEnv({ MUTATION_FIXTURE_PIDS: pids }), limitMs: 30000, graceMs: 1000 });
