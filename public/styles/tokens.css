@@ -295,7 +295,7 @@ body.light {
    the values: macOS traffic lights sit left, Windows caption buttons sit
    right. Both are 0 in a browser and on Linux, which is the same path.
    There is deliberately NO per-platform CSS anywhere; chrome-insets.js is the
-   only platform-aware code. See Window-Chrome-Topbar-Spec. */
+   only platform-aware code. */
 /* The bar is as tall as the rail is wide, so the chrome's corner is a true
    square rather than an arbitrary rectangle, and the rail's icons sit on the
    same rhythm as the bar above them. */
