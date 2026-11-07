@@ -20,6 +20,7 @@ const CODEX_GLUE_KEY = require.resolve('../../lib/runtime/codex-glue.js');
 const { createCodexAppServer } = require('../../codex-appserver.js');
 const { discoverAgents, invalidateAgentCache } = require('../../lib/agents/discovery.js');
 const { agentFile } = require('../helpers/workspace.js');
+const { readAppendedLog } = require('../helpers/appended-log.js');
 const asfx = require('../fixtures/codex-appserver-protocol.js');
 const fx = require('../fixtures/session-transcript.js');
 const PROMPT_KEY = require.resolve('../../lib/agents/prompt.js');
@@ -1816,10 +1817,7 @@ async function withRealCodexClient(dir, fn) {
 
 // Every request the stub app-server received, read off its own log.
 function stubRequests(dir) {
-  const file = path.join(dir, 'stub-invocations.jsonl');
-  let raw;
-  try { raw = fs.readFileSync(file, 'utf-8'); } catch (e) { return []; }
-  return raw.split('\n').filter(Boolean).map(line => JSON.parse(line));
+  return readAppendedLog(path.join(dir, 'stub-invocations.jsonl'));
 }
 
 async function untilRequest(dir, method, tries = 400) {
