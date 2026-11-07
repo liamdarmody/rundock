@@ -204,6 +204,11 @@ const APP_E2E = { src: path.join(ROOT, 'public', 'app.js'), suite: 'test/unit/ro
 // switch handler and the rollback with a real capturing client on the real
 // broadcast set.
 const ROOT_SERVER = { src: path.join(ROOT, 'server.js'), suite: 'test/unit/protocol-handlers-lib.test.js' };
+// WHOSE CLOCK A ROUTINE FIRES ON, watched by the suite that builds a roster in
+// one zone and draws it in a window in another. The server's half reports the
+// zone; the list's half hands it to every row.
+const DISCOVERY_ZONE = { src: path.join(ROOT, 'lib', 'agents', 'discovery.js'), suite: 'test/unit/schedule-zone.test.js' };
+const VIEW_ZONE = { src: path.join(ROOT, 'public', 'views', 'routines.js'), suite: 'test/unit/schedule-zone.test.js' };
 // The server's half: telling every window where the scheduler went. Watched by
 // the file that drives the switch handler through a context whose broadcast it
 // can read, because a notice sent only to the socket that asked is exactly the
@@ -702,7 +707,7 @@ const MUTATIONS = [
   // ===== THE VALUE THAT IS CONSTRAINED, NOT COPY =====
   // The second one this file exists for: the literal two design frames wrote.
   [MODEL, 'the next-run label renders the instant it is handed, with no value of its own',
-    '    const words = timeWords(input && input.nextRun, input && input.now, input && input.zone);',
+    '    const words = timeWords(input && input.nextRun, input && input.now, clock.zone, clock.inZone);',
     "    const words = 'tomorrow, 7:00am, London time';"],
 
   // ===== THE THREE TONES =====
@@ -753,20 +758,20 @@ const MUTATIONS = [
     "      text = `Missed: Rundock was closed at ${place ? `${when}, ${place} time` : when}`;",
     '      text = `Missed: the routine did not run at ${when}`;'],
   [MODEL, 'a caught-up row names the time it was due as well as the time it ran',
-    '      text = `Caught up: ran ${timeWords(input.lastStart, now, zone)}, due ${clockWords(input.lastSlot)}`;',
-    '      text = `Caught up: ran ${timeWords(input.lastStart, now, zone)}`;'],
+    '      text = `Caught up: ran ${timeWords(input.lastStart, now, zone, inZone)}, due ${clockWords(input.lastSlot, inZone)}`;',
+    '      text = `Caught up: ran ${timeWords(input.lastStart, now, zone, inZone)}`;'],
   [MODEL, 'a punctual row reads as the time, with no label in front of it',
-    '      text = `Ran ${timeWords(input.lastStart, now, zone)}`;',
-    '      text = `Ran on time: ${timeWords(input.lastStart, now, zone)}`;'],
+    '      text = `Ran ${timeWords(input.lastStart, now, zone, inZone)}`;',
+    '      text = `Ran on time: ${timeWords(input.lastStart, now, zone, inZone)}`;'],
   [MODEL, 'a day near now is a word rather than a date',
     "    if (gap === 1) return 'tomorrow';",
     "    if (gap === 1) return DAYS[when.getDay()];"],
   [MODEL, 'a day word counts calendar days, not hours',
-    '    const a = new Date(from.getFullYear(), from.getMonth(), from.getDate());\n    const b = new Date(to.getFullYear(), to.getMonth(), to.getDate());\n    return Math.round((b - a) / 86400000);',
-    '    return Math.round((to - from) / 86400000);'],
+    '    return Math.round((Date.UTC(to.year, to.month, to.day) - Date.UTC(from.year, from.month, from.day)) / 86400000);',
+    '    return Math.round((Date.UTC(to.year, to.month, to.day, to.hour, to.minute) - Date.UTC(from.year, from.month, from.day, from.hour, from.minute)) / 86400000);'],
   [MODEL, 'midnight and noon read as twelve rather than zero',
-    '    const hour12 = hour % 12 === 0 ? 12 : hour % 12;',
-    '    const hour12 = hour % 12;'],
+    '    const hour12 = at.hour % 12 === 0 ? 12 : at.hour % 12;',
+    '    const hour12 = at.hour % 12;'],
   [MODEL, 'the zone reaches the words as a place',
     '    return place ? `${day}, ${clock}, ${place} time` : `${day}, ${clock}`;',
     '    return `${day}, ${clock}`;'],
@@ -1063,8 +1068,8 @@ const MUTATIONS = [
   // The forbidden act itself: a next-run time drawn against a routine no
   // scheduler is going to fire.
   [MODEL_WORKSPACE, 'a routine nothing is serving is drawn with no next run',
-    '    if (!isServed(input)) return null;\n    const words = timeWords(input && input.nextRun, input && input.now, input && input.zone);',
-    '    const words = timeWords(input && input.nextRun, input && input.now, input && input.zone);'],
+    '    if (!isServed(input)) return null;\n    const clock = rowClock(input);',
+    '    const clock = rowClock(input);'],
   [MODEL_WORKSPACE, 'the row says where Rundock went',
     '      workspaceNote: workspaceNote(input),\n',
     ''],
@@ -1148,6 +1153,23 @@ const MUTATIONS = [
     "  safeSend(JSON.stringify({ type: 'serving_workspace', path: null }));"],
   [DISCOVERY_WORKSPACE, 'the roster message carries the workspace it was read from',
     '    workspace: getWorkspace(),\n',
+    ''],
+
+  // ===== WHOSE CLOCK A ROUTINE FIRES ON =====
+  // A schedule is read on the server's clock and the window can be in another
+  // zone. Each of these puts the window's clock, or a stale zone, back where
+  // the server's belongs.
+  [DISCOVERY_ZONE, 'the zone is read each time a roster is built, not kept from start',
+    'function scheduleZone() {\n  let zone = null;',
+    'const STARTED_IN = Intl.DateTimeFormat().resolvedOptions().timeZone;\nfunction scheduleZone() {\n  return STARTED_IN;\n  let zone = null;'],
+  [DISCOVERY_ZONE, 'a runtime that does not know its zone reports none',
+    "  return typeof zone === 'string' && zone !== 'Etc/Unknown' ? zone : null;",
+    "  return typeof zone === 'string' ? zone : null;"],
+  [VIEW_ZONE, 'the list hands every row the zone the server reported',
+    '    serverZone: routinesServerZone(),\n',
+    ''],
+  [MODEL, 'a row on a server in another zone is worked out in the server\'s zone',
+    '    if (server && server !== here) return { zone: server, inZone: server };\n',
     ''],
 
 ];
