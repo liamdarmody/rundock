@@ -153,6 +153,7 @@ function arrive(w, message) {
 const text = (el) => (el ? el.textContent.replace(/\s+/g, ' ').trim() : '');
 const zoneCaption = (doc) => text(doc.querySelector('[data-routine-editor="workspace-caveat"]'));
 const readyCaption = (doc) => text(doc.querySelector('.re-caption'));
+const nextRunOnRow = (doc) => text(doc.querySelector('.routine-row .next-run'));
 
 /** Open the editor on Piper's skill, as the agent's Add routine button does. */
 function openOnSchedule(w) {
@@ -230,6 +231,31 @@ describe('the editor names the server\'s zone, never the window\'s', () => {
     openOnSchedule(w);
     assert.match(zoneCaption(doc), /runs on, New York time, never/);
     assert.doesNotMatch(zoneCaption(doc), /London/);
+    dom.window.close();
+  });
+});
+
+describe('the zone goes from one to another and back', () => {
+  // The inverse action. The caption and the row both follow the server's zone
+  // there and back, and the row's next run is the hour its own sentence says.
+  test('London, New York, London: the caption and the row follow it both ways', () => {
+    const dir = workspace();
+    const { w, doc, dom } = windowShell();
+    const seen = [];
+    for (const zone of ['Europe/London', 'America/New_York', 'Europe/London']) {
+      arrive(w, rosterFrom(zone, dir));
+      openOnSchedule(w);
+      seen.push({ caption: (zoneCaption(doc).match(/runs on, (.+?) time, never/) || [])[1], next: null });
+      w.routineEditorLeave();
+      w.renderRoutines();
+      seen[seen.length - 1].next = nextRunOnRow(doc);
+      assert.match(text(doc.querySelector('.routine-row .rr-sentence')), /^Every day at 8:00am, run: Morning briefing/);
+    }
+    assert.deepStrictEqual(seen, [
+      { caption: 'London', next: 'Next run: today, 8:00am, London time' },
+      { caption: 'New York', next: 'Next run: today, 8:00am, New York time' },
+      { caption: 'London', next: 'Next run: today, 8:00am, London time' },
+    ]);
     dom.window.close();
   });
 });
