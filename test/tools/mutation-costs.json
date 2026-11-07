@@ -1,5 +1,5 @@
 {
-  "about": "Seconds per mutation row. secondsPerRow is measured on the CI runner from the shard logs of two full runs of every harness: each harness's measured seconds over its rows, averaged. secondsPerRowLabel, for each harness CI runs in slices, is inferred, not measured: no run records a row's own time, so each slice's measured seconds are shared among its rows in proportion to one plus the tests each turned red, averaged over the runs. secondsPerIntegrationRow is the mean of those inferred costs over a harness's integration rows, the rate for an integration row with no cost of its own. The plan weights shards by these so no shard nears its time limit. A harness missing here is planned at defaultSecondsPerRow, and any other row missing from its harness's labels at that harness's rate; re-measure when a shard runs past fifteen minutes. mutate-stale-session-guards.js is measured on a developer machine, one row at a time, its costs by label measured rather than inferred, until shard logs record it.",
+  "about": "Seconds per mutation row. secondsPerRow is measured on the CI runner from the shard logs of two full runs of every harness: each harness's measured seconds over its rows, averaged. secondsPerRowLabel, for each harness CI runs in slices, is inferred, not measured: no run records a row's own time, so each slice's measured seconds are shared among its rows in proportion to one plus the tests each turned red, averaged over the runs. secondsPerIntegrationRow is the mean of those inferred costs over a harness's integration rows, the rate for an integration row with no cost of its own. The plan weights shards by these so no shard nears its time limit. A harness missing here is planned at defaultSecondsPerRow, and any other row missing from its harness's labels at that harness's rate; re-measure when a shard runs past fifteen minutes. mutate-stale-session-guards.js is measured on a developer machine, one row at a time, its costs by label measured rather than inferred, until shard logs record it; so is the one labelled row of mutate-history-guards.js.",
   "defaultSecondsPerRow": 5,
   "secondsPerRow": {
     "mutate-approve-once-guards.js": 0.89,
@@ -169,6 +169,9 @@
       "the navigation guard reaches extension frames only, never every sub-frame": 5.2,
       "the request filter reaches extension frames only, never the app": 3.9,
       "WebRTC is off for the window": 2.6
+    },
+    "mutate-history-guards.js": {
+      "the transcript is merged when no session id is left": 1.1
     },
     "mutate-rundock-ui-guards.js": {
       "an alert with an action aligns message and action on the first baseline": 4.1,

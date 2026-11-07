@@ -98,6 +98,7 @@ function handlePersistedConversations(persisted, persistedLastActiveId) {
       lastAgentId: entry.lastAgentId || null,
       lastMessagePreview: entry.lastMessagePreview || null,
       messageCount: entry.messageCount,  // Server-enriched count; client falls back to messages.length when undefined
+      hasTranscript: entry.hasTranscript === true,  // Server-enriched: history to show even with no session left
       persisted: true  // Flag: this was loaded from disk, has no in-memory messages
     };
     conversations.push(convo);
@@ -858,7 +859,10 @@ function openConversation(id, withAnchor) {
   // badge in the chat header (handled in toggleConvoStatus).
   setupChat(c);
   const el=document.getElementById('messages'); el.innerHTML='';
-  if(c.persisted && c.messages.length===0 && (c.sessionId || (c.sessionIds && c.sessionIds.length))) {
+  // A TRANSCRIPT IS HISTORY TOO. A conversation whose every session Claude
+  // Code removed is kept for its transcript; asking for nothing, it opened
+  // with its title over an empty body.
+  if(c.persisted && c.messages.length===0 && (c.sessionId || (c.sessionIds && c.sessionIds.length) || c.hasTranscript)) {
     // Persisted conversation from a previous session: load history from JSONL transcript(s)
     el.innerHTML=`<div id="history-loading" style="text-align:center;padding:24px 0;color:var(--text-3);font-size:var(--caption)">Loading conversation history...</div>`;
     // Send all sessionIds so server can merge history across delegation chain
