@@ -43,13 +43,17 @@
 //     "refusalSplitAt": 0,           // write the refusal line in pieces
 //     "refusalPreamble": "...",      // stderr written just before the refusal
 //     "refusalAfterInit": false,     // send the init envelope before refusing
-//     "loadAgentFiles": false }      // read agent files as Claude Code does, and
+//     "loadAgentFiles": false,       // read agent files as Claude Code does, and
 //                                    // refuse an --agent no file loads for
 //                                    // (see AGENT_NOT_LOADED below)
+//     "refusalUntilFile": "..." }    // hold that refusal open until this file
+//                                    // exists, then exit as it would have
 // A crash rule may give "stderrChunks": [...] to write its stderr in pieces.
 // A crash rule may give "beforeSession": true to fail at startup, before the
 // session's transcript exists, as an expired login does.
 // Any rule may give "exitAfterTurn": n to exit with code n after its turn.
+// Any rule may give "untilFile": "<path>" to hold its turn until that file
+// exists, so a test decides the moment a run ends rather than racing a delay.
 // A rule may give "shell": ["rm a.md", "mv b.md c.md"], commands the run
 // gives its shell tool. Each is put to the PreToolUse hooks the --settings
 // file names first, as Claude Code does, and really runs unless a hook or the
@@ -136,7 +140,12 @@ try {
       // The hook token this agent was started with, so a test can tell two
       // runs' tokens apart, and use one after its run has ended.
       RUNDOCK_HOOK_TOKEN: process.env.RUNDOCK_HOOK_TOKEN || null,
+      // The workspace the permission hook is told it is answering for.
+      RUNDOCK_WORKSPACE: process.env.RUNDOCK_WORKSPACE || null,
     },
+    // The folder this process was started in, which is also where this log
+    // and the scenario are read from.
+    cwd: process.cwd(),
   }) + '\n');
 } catch (e) { /* logging is best-effort */ }
 
@@ -426,9 +435,16 @@ const AGENT_NOT_LOADED = (() => {
   // before it refused, which puts the refusal last.
   if (TOP.refusalPreamble) writeErr(String(TOP.refusalPreamble));
   writeErr(`${agents.agentNotFoundLine(AGENT, available)}\n`);
-  exitWhenWritten(1);
+  whenFileExists(TOP.refusalUntilFile, () => exitWhenWritten(1));
   return true;
 })();
+
+// Carry on once `file` exists, or at once when no file is named. Polled, so a
+// test releases a held process by writing the file.
+function whenFileExists(file, then) {
+  if (!file || fs.existsSync(file)) { then(); return; }
+  setTimeout(() => whenFileExists(file, then), 20);
+}
 
 // Write stderr in pieces a moment apart, so each reaches the reader as its
 // own chunk, then carry on.
@@ -689,10 +705,10 @@ function handleUserMessage(content) {
     return;
   }
   const delay = rule.delayMs || 0;
-  const speak = () => {
+  const speak = () => whenFileExists(rule.untilFile, () => {
     if (delay > 0) setTimeout(() => emitTurn(rule, content), delay);
     else emitTurn(rule, content);
-  };
+  });
   if (Array.isArray(rule.hooks)) runHookCalls(rule.hooks, speak);
   else speak();
 }
