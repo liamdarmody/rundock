@@ -29,6 +29,11 @@ function tempDir(prefix) {
 
 const runs = (step, text) => (step.run || '').includes(text);
 
+// A command that ends green whatever came before it: `|| true`, `|| :` or
+// `|| exit 0`. Each is anchored on what may follow it (whitespace, `;`, `)`
+// or the end) rather than on a word boundary, which `:` never has.
+const swallowsFailure = (run) => /\|\|\s*(?:true|:|exit 0)(?=[\s;)]|$)/.test(run || '');
+
 // The three mutation jobs, found by what they run rather than by their ids,
 // each exactly once.
 function mutationJobs(wf) {
@@ -141,6 +146,16 @@ describe('the aggregate reads how GitHub recorded the shard jobs ending', () => 
     }
   });
 
+  test('the check for a step that swallows its own failure catches each form it names', () => {
+    const aggregate = 'node scripts/mutation-scope.js --aggregate --plan-file p.json';
+    for (const tail of [' || true', ' || :', ' || exit 0', ' ||:', ' || :\necho next', ' || true; echo next', ' || exit 0 ']) {
+      assert.ok(swallowsFailure(`${aggregate}${tail}`), `flagged: ${JSON.stringify(tail)}`);
+    }
+    for (const tail of ['', ' || exit 1', ' || exit 3', ' || echo failed >&2', ' || truncate -s 0 x']) {
+      assert.ok(!swallowsFailure(`${aggregate}${tail}`), `not flagged: ${JSON.stringify(tail)}`);
+    }
+  });
+
   test('the aggregate job is bounded, and nothing in it ends green by giving up', () => {
     // Stalled, it is cut off at its limit, and a job cut off has failed.
     for (const file of WORKFLOWS) {
@@ -149,7 +164,7 @@ describe('the aggregate reads how GitHub recorded the shard jobs ending', () => 
       assert.strictEqual(verdict.continueOnError, undefined, `${file}: the aggregate job may not continue on error`);
       for (const s of verdict.steps) {
         assert.strictEqual(s.continueOnError, undefined, `${file}: step "${s.name}" may not continue on error`);
-        assert.ok(!/\|\|\s*(?:true|:|exit 0)\b/.test(s.run || ''), `${file}: step "${s.name}" swallows its own failure`);
+        assert.ok(!swallowsFailure(s.run), `${file}: step "${s.name}" swallows its own failure`);
       }
     }
   });
