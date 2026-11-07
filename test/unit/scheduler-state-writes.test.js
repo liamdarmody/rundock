@@ -98,14 +98,15 @@ function writeMode(flags) {
 }
 
 // Run `fn` with the fs calls a write can make recorded, in order. `fail`, when
-// given, is asked before each call and may throw in its place.
+// given, is asked before each call, with what has been recorded so far, and
+// may throw in its place.
 function recordingFs(fn, fail = () => {}) {
   const log = [];
   const real = {};
   const wrap = (name, note) => {
     real[name] = fs[name];
     fs[name] = function (...args) {
-      fail(name, args);
+      fail(name, args, log);
       const result = real[name].apply(this, args);
       const entry = note(args, result);
       if (entry) log.push({ op: name, ...entry });
@@ -213,31 +214,42 @@ describe('every write of a state file replaces it whole', () => {
   }
 });
 
-// The control failing: a write cut off after its bytes are down and before the
-// rename. Whatever stopped it, the last whole file must still be the file.
+// The control failing: a write cut off at any step before its rename takes
+// effect, by a write of its bytes that fails (a full disk), a flush that fails,
+// or a rename that fails. Whatever stopped it, the last whole file must still
+// be the file, with nothing of the write's left beside it.
+const isTempOf = (target, log, fd) => log.some(e => e.op === 'openSync' && e.fd === fd
+  && e.path.startsWith(`${target}.`) && e.path.endsWith('.tmp'));
+const CUTS = [
+  ['its bytes are written', 'writeFileSync', (args, target, log) => isTempOf(target, log, args[0]), 'ENOSPC'],
+  ['they are flushed', 'fsyncSync', (args, target, log) => isTempOf(target, log, args[0]), 'EIO'],
+  ['it is renamed over the file', 'renameSync', (args, target) => path.resolve(String(args[1])) === target, 'EIO'],
+];
 describe('a write cut off before its rename leaves the last whole file', () => {
-  for (const writer of WRITERS) {
-    test(`${writer.store}: the previous file stays, and the next load reads it rather than starting empty`, () => {
-      withWorkspace((ws) => {
-        const sched = freshScheduler();
-        writer.before(sched, ws);
-        const target = path.resolve(writer.target(ws));
-        const previous = fs.readFileSync(target);
-        const folder = fs.readdirSync(path.dirname(target)).sort();
-        let cut = 0;
-        errorsDuring(() => recordingFs(() => writer.write(sched, ws), (name, args) => {
-          if (name === 'renameSync' && path.resolve(String(args[1])) === target) {
-            cut++;
-            throw Object.assign(new Error('EIO: i/o error, rename'), { code: 'EIO' });
-          }
-        }));
-        assert.ok(fs.readFileSync(target).equals(previous), `${writer.store} changed although its write was cut off`);
-        assert.strictEqual(cut, 1, `sanity: the write reached its rename (${cut})`);
-        assert.deepStrictEqual(fs.readdirSync(path.dirname(target)).sort(), folder,
-          'the cut-off write left a file behind');
-        writer.readBack(ws);
+  for (const [when, call, aimedAt, code] of CUTS) {
+    for (const writer of WRITERS) {
+      test(`${writer.store}, cut off as ${when}: the previous file stays, and the next load reads it rather than starting empty`, () => {
+        withWorkspace((ws) => {
+          const sched = freshScheduler();
+          writer.before(sched, ws);
+          const target = path.resolve(writer.target(ws));
+          const previous = fs.readFileSync(target);
+          const folder = fs.readdirSync(path.dirname(target)).sort();
+          let cut = 0;
+          errorsDuring(() => recordingFs(() => writer.write(sched, ws), (name, args, log) => {
+            if (name === call && aimedAt(args, target, log)) {
+              cut++;
+              throw Object.assign(new Error(`${code}: cut off here, ${call}`), { code });
+            }
+          }));
+          assert.ok(fs.readFileSync(target).equals(previous), `${writer.store} changed although its write was cut off`);
+          assert.strictEqual(cut, 1, `sanity: the write reached the step that is cut (${cut})`);
+          assert.deepStrictEqual(fs.readdirSync(path.dirname(target)).sort(), folder,
+            'the cut-off write left a file behind');
+          writer.readBack(ws);
+        });
       });
-    });
+    }
   }
 });
 
