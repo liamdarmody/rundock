@@ -1,5 +1,5 @@
 {
-  "about": "Seconds per mutation row. secondsPerRow is measured on the CI runner from the shard logs of two full runs of every harness: each harness's measured seconds over its rows, averaged. secondsPerRowLabel, for each harness CI runs in slices, is inferred, not measured: no run records a row's own time, so each slice's measured seconds are shared among its rows in proportion to one plus the tests each turned red, averaged over the runs. secondsPerIntegrationRow is the mean of those inferred costs over a harness's integration rows, the rate for an integration row with no cost of its own. The plan weights shards by these so no shard nears its time limit. A harness missing here is planned at defaultSecondsPerRow, and any other row missing from its harness's labels at that harness's rate; re-measure when a shard runs past fifteen minutes. mutate-stale-session-guards.js is measured on a developer machine, one row at a time, its costs by label measured rather than inferred, until shard logs record it.",
+  "about": "Seconds per mutation row. secondsPerRow is measured on the CI runner from the shard logs of two full runs of every harness: each harness's measured seconds over its rows, averaged. secondsPerRowLabel, for each harness CI runs in slices, is inferred, not measured: no run records a row's own time, so each slice's measured seconds are shared among its rows in proportion to one plus the tests each turned red, averaged over the runs. secondsPerIntegrationRow is the mean of those inferred costs over a harness's integration rows, the rate for an integration row with no cost of its own. The plan weights shards by these so no shard nears its time limit. A harness missing here is planned at defaultSecondsPerRow, and any other row missing from its harness's labels at that harness's rate; re-measure when a shard runs past fifteen minutes. mutate-stale-session-guards.js is measured on a developer machine, one row at a time, its costs by label measured rather than inferred, until shard logs record it. Two labels of mutate-workspace-boundary-guards.js, the run lookup that fails and the open cards not settled through real runs, are measured the same way, each run alone with --rows after its suite was made to fail fast.",
   "defaultSecondsPerRow": 5,
   "secondsPerRow": {
     "mutate-approve-once-guards.js": 0.89,
@@ -1262,7 +1262,9 @@
       "Shell code: a URL in code is judged as a path": 1.1,
       "Shell code: a cd into a working folder is not a base": 1.1,
       "Shell code: pushd and popd are not counted when the command cannot be lexed": 1.1,
-      "Shell code: a cd to a variable is trusted as a base": 1.1
+      "Shell code: a cd to a variable is trusted as a base": 1.1,
+      "Run token: a run lookup that fails is not caught": 18,
+      "Run end, through real runs: a run's open cards are not settled as it closes": 10
     }
   }
 }

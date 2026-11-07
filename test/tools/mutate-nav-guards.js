@@ -36,9 +36,9 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
 const {
   beginMutationRun, targetsFromRows, rowsForShard, exitCodeFor,
+  runSuite, didNotFinishWhy,
 } = require('./mutation-run.js');
 
 const ROOT = path.join(__dirname, '..', '..');
@@ -175,13 +175,13 @@ const MUTATIONS = [
 // varies with whether stdout is a TTY.
 const REPORTER = ['--test-reporter=spec', '--test-reporter-destination=stdout'];
 
-function redTests(suite) {
+async function redTests(suite) {
   let out = '';
   let failed = false;
   try {
-    out = execFileSync('node', ['--test', ...REPORTER, suite],
-      { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    out = await runSuite('node', ['--test', ...REPORTER, suite], { cwd: ROOT });
   } catch (e) {
+    if (e.didNotFinish) return { didNotFinish: e.didNotFinish };
     failed = true;
     out = (e.stdout || '') + (e.stderr || '');
   }
@@ -204,7 +204,7 @@ function redTests(suite) {
   return names;
 }
 
-function run() {
+async function run() {
   const targets = targetsFromRows(MUTATIONS);
   const session = beginMutationRun({ files: targets.map((target) => target.src) });
   const originals = new Map();
@@ -227,8 +227,9 @@ function run() {
         continue;
       }
       fs.writeFileSync(target.src, original.replace(guard, without));
-      const red = redTests(target.suite);
-      results.push(red && red.unparsable
+      const red = await redTests(target.suite);
+      if (red && red.didNotFinish) results.push({ label, applied: true, didNotFinish: red.didNotFinish, red: [] });
+      else results.push(red && red.unparsable
         ? { label, applied: true, unparsable: true, red: [] }
         : { label, applied: true, red });
       fs.writeFileSync(target.src, original);
@@ -242,7 +243,13 @@ function run() {
 function report(results, markdown) {
   let failed = 0;
   const lines = [];
-  for (const { label, applied, red, ambiguous, unparsable } of results) {
+  for (const { label, applied, red, ambiguous, unparsable, didNotFinish } of results) {
+    if (didNotFinish) {
+      failed++;
+      const why = didNotFinishWhy(didNotFinish);
+      lines.push(markdown ? `| ${label} | **${why}** | |` : `${label}\n  ${why.toUpperCase()}`);
+      continue;
+    }
     if (unparsable) {
       failed++;
       const why = 'no verdict: the suite failed but its output could not be parsed, so nothing '
@@ -286,12 +293,13 @@ function report(results, markdown) {
 // requiring it, so a harness that ran on require would start mutating source
 // inside a tool that only asked what it touches.
 if (require.main === module) {
-  const results = run();
-  const failed = report(results, process.argv.includes('--markdown'));
-  if (failed) {
-    console.error(`\n${failed} mutation${failed === 1 ? '' : 's'} turned nothing red, or could not be applied.`);
-    process.exit(exitCodeFor(failed, results));
-  }
+  run().then((results) => {
+    const failed = report(results, process.argv.includes('--markdown'));
+    if (failed) {
+      console.error(`\n${failed} mutation${failed === 1 ? '' : 's'} turned nothing red, or could not be applied.`);
+      process.exit(exitCodeFor(failed, results));
+    }
+  });
 }
 
 module.exports = { MUTATIONS, run };

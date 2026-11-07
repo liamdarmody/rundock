@@ -491,7 +491,7 @@ function planId(shards) {
 function outcomeOf(code, signal) {
   if (signal) return { outcome: NO_VERDICT, cause: `ended by signal ${signal}` };
   if (code === 0) return { outcome: PASS };
-  if (code === HARNESS_NO_VERDICT) return { outcome: NO_VERDICT, cause: 'the harness reached no verdict (an unreadable suite, or a temp root it refused)' };
+  if (code === HARNESS_NO_VERDICT) return { outcome: NO_VERDICT, cause: 'the harness reached no verdict (a suite that did not finish in its limit, an unreadable suite, or a temp root it refused)' };
   return { outcome: FAIL, cause: `exit ${code}` };
 }
 
