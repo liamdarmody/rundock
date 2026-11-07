@@ -383,6 +383,16 @@ const MUTATIONS = [
     '  /* Computed again here from the light --accent-text and --text-1; see :root. */\n'
       + '  --link-text: color-mix(in srgb, var(--accent-text) 85%, var(--text-1));\n',
     ''],
+  // ===== STOP THIS RUN =====
+  [VIEW, 'Stop: back on settings-btn-danger',
+    '<button class="rd-stop" type="button" data-run-detail="stop" onclick="runDetailStop()">Stop this run</button>',
+    '<button class="settings-btn-danger rd-stop" type="button" data-run-detail="stop" onclick="runDetailStop()">Stop this run</button>'],
+  [STYLES, 'Stop: the focus rule removed',
+    '.rd-stop:not(:disabled):hover, .rd-stop:focus-visible { background: color-mix(in srgb, var(--danger) 5%, var(--elevated)); '
+      + 'color: var(--danger-text); border-color: var(--danger-text); }\n'
+      + '.rd-stop:focus-visible { outline: 2px solid var(--accent-control); outline-offset: 2px; }\n',
+    '.rd-stop:not(:disabled):hover { background: color-mix(in srgb, var(--danger) 5%, var(--elevated)); '
+      + 'color: var(--danger-text); border-color: var(--danger-text); }\n'],
 ];
 
 // The reporter is named explicitly rather than left to the default, which

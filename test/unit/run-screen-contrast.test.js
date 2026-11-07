@@ -101,6 +101,10 @@ function declared(selector, prop) {
 const ROWS = [
   ['R1', 'a linked file name', '.rd-file-link', 'color', 'var(--card)', 4.5, 5.05, 5.55],
   ['R2', 'a linked file name\'s focus ring', '.rd-file-link:focus-visible', 'outline', 'var(--card)', 3, 4.43, 3.28],
+  ['R3', 'Stop\'s label at rest', '.rd-stop', 'color', 'var(--card)', 4.5, 10.82, 14.90],
+  ['R4', 'Stop\'s edge at rest', '.rd-stop', 'border', 'var(--card)', 3, 3.20, 3.91],
+  ['R5', 'Stop\'s label on hover and focus', '.rd-stop:not(:disabled):hover', 'color',
+    'color-mix(in srgb, var(--danger) 5%, var(--elevated))', 4.5, 5.02, 4.63],
   ['R6', 'the shell note', '.rd-note', 'color', 'var(--elevated)', 4.5, 5.55, 5.86],
   ['R7', 'why some names are plain', '.rd-cannot-open', 'color', 'var(--elevated)', 4.5, 5.55, 5.86],
 ];

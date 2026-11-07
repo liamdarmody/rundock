@@ -222,6 +222,11 @@ function filesHtml(files, links) {
  * raw status word leaves this file": this screen never asks whether
  * `record.status === 'running'` itself.
  *
+ * A NEUTRAL OUTLINE, in the danger colours only while pointed at or focused.
+ * The run is already going and one press asks for a stop with no
+ * confirmation, so the control is not dressed as a destructive confirmation:
+ * the danger fill is kept for those.
+ *
  * TWO STATES, NOT A DISABLED BUTTON THAT LOOKS THE SAME PRESSED OR NOT. A
  * click here cannot confirm the run has stopped: cancelRun only sends the
  * signal, and the ending arrives later on its own clock (see runDetailStop),
@@ -231,11 +236,11 @@ function stopHtml(view) {
   if (!view.state.stoppable) return '';
   if (stopRequested) {
     return '<div class="rd-stop-row">'
-      + '<button class="settings-btn rd-stop" type="button" data-run-detail="stop" disabled>Stopping…</button>'
+      + '<button class="rd-stop" type="button" data-run-detail="stop" disabled>Stopping…</button>'
       + '</div>';
   }
   return '<div class="rd-stop-row">'
-    + '<button class="settings-btn-danger rd-stop" type="button" data-run-detail="stop" onclick="runDetailStop()">Stop this run</button>'
+    + '<button class="rd-stop" type="button" data-run-detail="stop" onclick="runDetailStop()">Stop this run</button>'
     + '</div>';
 }
 

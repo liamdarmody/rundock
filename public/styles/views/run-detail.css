@@ -57,6 +57,13 @@
 /* Only ever drawn on a run that is still going (view.state.stoppable), so it
    sits last in the card, after the facts, closest to .rd-card's own gap. */
 .rd-stop-row { margin-top: 4px; }
+/* STOP THIS RUN, a neutral outline at rest. It takes the danger colours only
+   while pointed at or focused, and never the danger fill, which is kept for
+   confirmations: this one press asks for a stop with nothing to confirm. */
+.rd-stop { padding: 6px 14px; font-family: inherit; font-size: var(--caption); font-weight: 600; border-radius: var(--radius-md); background: transparent; color: var(--text-1); border: 1px solid var(--border-strong); transition: all var(--duration-base) ease; cursor: pointer; }
+.rd-stop:not(:disabled):hover, .rd-stop:focus-visible { background: color-mix(in srgb, var(--danger) 5%, var(--elevated)); color: var(--danger-text); border-color: var(--danger-text); }
+.rd-stop:focus-visible { outline: 2px solid var(--accent-control); outline-offset: 2px; }
+.rd-stop:disabled { opacity: 0.6; cursor: default; }
 
 /* The way back. It takes .profile-back's type and colour and resets the button
    chrome underneath, because a control that acts is a button and .profile-back

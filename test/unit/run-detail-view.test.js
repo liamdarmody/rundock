@@ -811,3 +811,63 @@ describe('a linked name and the plain-name sentence, in the stylesheet', () => {
     assert.strictEqual(cssRule('.rd-cannot-open').get('color'), 'var(--text-2-strong)');
   });
 });
+
+describe('Stop this run is a neutral outline until it is pointed at', () => {
+  const RUNNING = record({ status: 'running', endedAt: null, durationMs: null, files: null, filesStatus: 'unknown', filesReason: 'running' });
+  // Every rule, in the run screen's stylesheet and in the settings one whose
+  // button classes it used to borrow, that names one of `classes`.
+  const SHEETS = CSS_SRC + read('public', 'styles', 'views', 'settings.css');
+  const rulesFor = (classes) => [...SHEETS.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+    .flatMap(m => m[1].split(',').map(s => s.trim())
+      .filter(s => classes.some(c => new RegExp(`\\.${c}(?![\\w-])`).test(s)))
+      .map(s => [s, cssRule(s, SHEETS)]));
+
+  test('the control carries none of the danger button\'s classes, before or after it is pressed', () => {
+    const { w, doc, dom } = draw(RUNNING);
+    const stop = () => doc.querySelector('[data-run-detail="stop"]');
+    assert.strictEqual(stop().textContent, 'Stop this run');
+    assert.deepStrictEqual([...stop().classList], ['rd-stop']);
+    w.runDetailStop();
+    assert.strictEqual(stop().textContent, 'Stopping…');
+    assert.deepStrictEqual([...stop().classList], ['rd-stop']);
+    dom.window.close();
+  });
+
+  test('at rest: no fill, a --text-1 label and a 1px --border-strong edge', () => {
+    const rest = cssRule('.rd-stop');
+    assert.strictEqual(rest.get('background'), 'transparent');
+    assert.strictEqual(rest.get('color'), 'var(--text-1)');
+    assert.strictEqual(rest.get('border'), '1px solid var(--border-strong)');
+  });
+
+  test('on hover: the label and edge in --danger-text over a 5% --danger tint on --elevated', () => {
+    const hover = cssRule('.rd-stop:not(:disabled):hover');
+    assert.strictEqual(hover.get('background'), 'color-mix(in srgb, var(--danger) 5%, var(--elevated))');
+    assert.strictEqual(hover.get('color'), 'var(--danger-text)');
+    assert.strictEqual(hover.get('border-color'), 'var(--danger-text)');
+  });
+
+  test('on keyboard focus: the same colours, plus a 2px --accent-control ring', () => {
+    const focus = cssRule('.rd-stop:focus-visible');
+    assert.strictEqual(focus.get('background'), 'color-mix(in srgb, var(--danger) 5%, var(--elevated))');
+    assert.strictEqual(focus.get('color'), 'var(--danger-text)');
+    assert.strictEqual(focus.get('border-color'), 'var(--danger-text)');
+    assert.strictEqual(focus.get('outline'), '2px solid var(--accent-control)');
+    assert.strictEqual(focus.get('outline-offset'), '2px');
+  });
+
+  test('no rule gives the control a --danger fill in any state', () => {
+    const { w, doc, dom } = draw(RUNNING);
+    const classes = [...doc.querySelector('[data-run-detail="stop"]').classList];
+    w.runDetailStop();
+    classes.push(...doc.querySelector('[data-run-detail="stop"]').classList);
+    dom.window.close();
+    const rules = rulesFor([...new Set(classes)]);
+    assert.ok(rules.length >= 3, 'sanity: the rules that draw the control were found');
+    for (const [selector, decl] of rules) {
+      for (const prop of ['background', 'background-color']) {
+        assert.notStrictEqual((decl.get(prop) || '').trim(), 'var(--danger)', `${selector} fills the control with --danger`);
+      }
+    }
+  });
+});
