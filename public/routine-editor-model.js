@@ -116,9 +116,10 @@
   // The frequencies the scheduler recognises, and only those.
   //
   // The mock illustrates this field with the word "weekday". The scheduler
-  // reads `every day at HH:MM` or `every <weekday name> at HH:MM` and nothing
-  // else, so a routine saved as "every weekday" would parse, save, appear in
-  // the list and never once fire. Offering it would be the same defect as
+  // reads `every day at HH:MM`, `every <weekday name> at HH:MM` and the two
+  // monthly forms, which this editor does not build, and nothing else, so a
+  // routine saved as "every weekday" would parse, save, appear in the list and
+  // never once fire. Offering it would be the same defect as
   // promising a run while the computer is off: a control that says something
   // the product does not do. Every value here round-trips through the
   // scheduler's own format, asserted in the model's tests.

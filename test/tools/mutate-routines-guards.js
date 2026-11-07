@@ -179,6 +179,14 @@ const EDIT_DOOR_ROW = { src: path.join(ROOT, 'public', 'views', 'routines.js'), 
 // tests establish is what the EXISTING guard does across an edit; mutating it
 // here is what proves they are watching the guard rather than restating it.
 const SCHEDULER_EDIT = { src: path.join(ROOT, 'lib', 'scheduler.js'), suite: 'test/unit/routine-edit-duplicate-run.test.js' };
+// A MONTHLY SCHEDULE, each guard watched by the suite that asks the question it
+// answers: the period by the sweep that holds the tick and the walk to one
+// window, the grammar by the table every copy of it answers, the slot by the
+// calendar cases, and the firing by the tick driven through real runs.
+const SCHEDULER_PERIOD = { src: path.join(ROOT, 'lib', 'scheduler.js'), suite: 'test/unit/scheduler-period.test.js' };
+const SCHEDULER_GRAMMAR = { src: path.join(ROOT, 'lib', 'scheduler.js'), suite: 'test/unit/schedule-grammar-inventory.test.js' };
+const SCHEDULER_SLOTS = { src: path.join(ROOT, 'lib', 'scheduler.js'), suite: 'test/unit/scheduler-slots-dst.test.js' };
+const SCHEDULER_MONTHLY = { src: path.join(ROOT, 'lib', 'scheduler.js'), suite: 'test/integration/scheduler-monthly.test.js' };
 // WHERE A ROUTINE RUNS, WATCHED AT THE RENDERED SURFACE AND NOWHERE ELSE.
 //
 // The rule is that a routine in a workspace this window does not have open is
@@ -234,10 +242,10 @@ const MUTATIONS = [
   // A run serves only the slot of its own period, so the row steps at most one
   // period and there is no walk left to bound.
   [SCHEDULER, 'a period the last run already served is stepped over',
-    '  if (lastRun && slotServed(slot, lastRun)) slot = stepSlots(parsed, slot, 1);\n',
+    '  if (lastRun && periodOf(parsed, slot).served(lastRun)) slot = stepSlots(parsed, slot, 1);\n',
     ''],
   [SCHEDULER, 'the slot the last run served is named',
-    '    lastSlot: started ? slotFor(parsed, started).toISOString() : null,\n',
+    '    lastSlot: started ? periodOf(parsed, started).slot.toISOString() : null,\n',
     '    lastSlot: null,\n'],
   [SCHEDULER, 'the most recent recorded miss is the one reported',
     '  const missed = entry && entry.missed.length ? entry.missed[entry.missed.length - 1].slot : null;',
@@ -267,8 +275,8 @@ const MUTATIONS = [
     "  if (typeof seconds !== 'number' || !isFinite(seconds)) return ended;\n",
     ''],
   [SCHEDULER, 'the slot a run served is the one on the day it started',
-    '    lastSlot: started ? slotFor(parsed, started).toISOString() : null,',
-    '    lastSlot: lastRunStartedAt(key) ? slotFor(parsed, new Date(routineState[key].lastRun)).toISOString() : null,'],
+    '    lastSlot: started ? periodOf(parsed, started).slot.toISOString() : null,',
+    '    lastSlot: lastRunStartedAt(key) ? periodOf(parsed, new Date(routineState[key].lastRun)).slot.toISOString() : null,'],
   [VIEW_E2E, 'the row asks the roster for the instant the run began',
     '    lastStart: r.lastStart,',
     '    lastStart: r.state ? r.state.lastRun : null,'],
@@ -281,10 +289,10 @@ const MUTATIONS = [
   // the criteria call constrained rather than chosen, failing in exactly the
   // situation the row exists for.
   [END_TO_END, 'the anchor is the period now falls in, not the last one a tick recorded',
-    '  let slot = slotFor(parsed, deps.now());',
+    '  let slot = periodOf(parsed, deps.now()).slot;',
     '  const anchored = routineSlots.routines[key];\n  if (!anchored) return null;\n  let slot = new Date(anchored.due);'],
   [SCHEDULER, 'a row can name a next run before any tick has seen the routine',
-    '  let slot = slotFor(parsed, deps.now());',
+    '  let slot = periodOf(parsed, deps.now()).slot;',
     '  const anchored = routineSlots.routines[key];\n  if (!anchored) return null;\n  let slot = new Date(anchored.due);'],
 
   // ===== UNCHANGED BYTES ARE NOT AN ANSWER =====
@@ -511,32 +519,56 @@ const MUTATIONS = [
   // A routine keeps its run stamp when its schedule moves, because the state is
   // keyed by identity. Each of these breaks one half of the comparison that
   // then decides whether it runs again, runs twice, or never runs. The
-  // comparison is one function for both shapes, asked by the tick and by the
-  // row, so each row here breaks it, or the one call that asks it, once.
+  // comparison is the period's own, asked by the tick and by the row, so each
+  // row here breaks it, or the one call that asks it, once.
   [SCHEDULER_EDIT, 'the suppression compares the time, not just the day',
-    '  return lastRun >= slot && lastRun.toDateString() === slot.toDateString();',
-    '  return lastRun.toDateString() === slot.toDateString();'],
+    '  return { slot, closes, served: (stamp) => stamp >= slot && stamp < closes };',
+    '  return { slot, closes, served: (stamp) => stamp >= new Date(slot.getFullYear(), slot.getMonth(), slot.getDate()) && stamp < closes };'],
   // Watched by the file that holds the row and the tick to each other, because
   // only a run stamped on a later day can show the bound is there, and no
   // schedule edit produces one.
   [SCHEDULER, 'the suppression compares the day, not just the time',
-    '  return lastRun >= slot && lastRun.toDateString() === slot.toDateString();',
-    '  return lastRun >= slot;'],
+    '  return { slot, closes, served: (stamp) => stamp >= slot && stamp < closes };',
+    '  return { slot, closes, served: (stamp) => stamp >= slot };'],
   [SCHEDULER_EDIT, 'a weekly routine that already ran at its time on its day is not run again',
-    '  if (lastRunISO && slotServed(slot, new Date(lastRunISO))) return null;',
-    "  if (lastRunISO && parsed.kind !== 'weekly' && slotServed(slot, new Date(lastRunISO))) return null;"],
+    '  if (lastRunISO && period.served(new Date(lastRunISO))) return null;',
+    "  if (lastRunISO && parsed.kind !== 'weekly' && period.served(new Date(lastRunISO))) return null;"],
   // The comparison this guard replaced, in each of its two shapes: the stamp's
   // hour against the scheduled hour, which held a routine moved to a later
   // minute in the same hour, and a weekly routine held by its weekday alone,
   // which held one moved to any later time on its own day.
   [SCHEDULER_EDIT, 'the suppression compares the minute, not just the hour',
-    '  return lastRun >= slot && lastRun.toDateString() === slot.toDateString();',
-    '  return lastRun.getHours() >= slot.getHours() && lastRun.toDateString() === slot.toDateString();'],
+    '  return { slot, closes, served: (stamp) => stamp >= slot && stamp < closes };',
+    '  return { slot, closes, served: (stamp) => stamp >= new Date(slot.getFullYear(), slot.getMonth(), slot.getDate(), slot.getHours()) && stamp < closes };'],
   [SCHEDULER_EDIT, 'a weekly routine is held by the time it ran, not by its weekday alone',
-    '  if (lastRunISO && slotServed(slot, new Date(lastRunISO))) return null;',
+    '  if (lastRunISO && period.served(new Date(lastRunISO))) return null;',
     "  if (lastRunISO && (parsed.kind === 'weekly'\n"
     + '    ? (now - new Date(lastRunISO)) / 86400000 < 1 && new Date(lastRunISO).getDay() === parsed.day\n'
-    + '    : slotServed(slot, new Date(lastRunISO)))) return null;'],
+    + '    : period.served(new Date(lastRunISO)))) return null;'],
+
+  // ===== A MONTHLY SCHEDULE =====
+  //
+  // A month-long window cut to a day records a slot as missed the morning after
+  // while the tick would still have fired it, which is the phantom gap the
+  // period exists to prevent.
+  [SCHEDULER_PERIOD, "the helper's monthly window ends on the slot's own day",
+    '    ? new Date(slot.getFullYear(), slot.getMonth() + 1, 1)\n',
+    '    ? new Date(slot.getFullYear(), slot.getMonth(), slot.getDate() + 1)\n'],
+  // "on day 15 of every month at 09:00" ends in a weekly-shaped "every month at
+  // 09:00", which the weekly branch refuses, so matched second it never fires.
+  [SCHEDULER_GRAMMAR, 'the monthly pattern is matched after the weekly one',
+    '  if (monthlyMatch) {\n',
+    '  if (monthlyMatch && !/every (\\w+) at (\\d{2}):(\\d{2})/.test(s)) {\n'],
+  [SCHEDULER_SLOTS, 'the last day is computed as day 30',
+    "  const day = parsed.day === 'last' ? new Date(year, month + 1, 0).getDate() : parsed.day;",
+    "  const day = parsed.day === 'last' ? 30 : parsed.day;"],
+  [SCHEDULER_MONTHLY, 'dueAt is dropped from the record',
+    '    dueAt: dueAt ? dueAt.toISOString() : null,\n',
+    '    dueAt: null,\n'],
+  // The row names a slot the tick will not fire: the approval came after it.
+  [SCHEDULER_MONTHLY, 'the owed line ignores the consent moment',
+    '  const consentAt = routine ? approvalStore.approvedAt(getWorkspace(), routine) : null;\n',
+    '  const consentAt = null;\n'],
 
   // ===== THE THIRD CONTROL ON THE ROW =====
   //

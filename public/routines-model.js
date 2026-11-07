@@ -142,17 +142,18 @@
   /**
    * What a row says when the scheduler cannot read its schedule.
    *
-   * THE SILENCE THIS ENDS. `parseSchedule` accepts two shapes and returns null
-   * for everything else, at which point the tick skips the routine with no
-   * error, no warning and no log line. A cron-scheduled routine then sits in a
-   * first-class Routines view looking exactly like a routine, and the silence
-   * has moved from a log nobody reads to a surface everybody reads. Migration
-   * never touches a schedule, so every such entry survives an upgrade exactly
-   * as written, which means anyone arriving from cron arrives with these.
+   * THE SILENCE THIS ENDS. `parseSchedule` accepts daily, weekly and monthly
+   * shapes and returns null for everything else, at which point the tick skips
+   * the routine with no error, no warning and no log line. A cron-scheduled
+   * routine then sits in a first-class Routines view looking exactly like a
+   * routine, and the silence has moved from a log nobody reads to a surface
+   * everybody reads. Migration never touches a schedule, so every such entry
+   * survives an upgrade exactly as written, which means anyone arriving from
+   * cron arrives with these.
    *
    * IT NAMES WHAT TO CHANGE, BY EXAMPLE. "Unsupported schedule" sends the
-   * reader to documentation this product does not put in front of them. The
-   * two shapes that work, written out, send them to the editor instead. Both
+   * reader to documentation this product does not put in front of them. Two
+   * shapes that work, written out, send them to the editor instead. Both
    * are given because a reader whose job is weekly should not have to guess
    * that the daily example generalises.
    */
