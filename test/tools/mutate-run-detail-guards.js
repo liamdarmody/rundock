@@ -109,6 +109,9 @@ const COUNT_DENY = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'proces
 // file that closes real runs of a private scheduler with a stand-in reader.
 const SHELL_READER = { src: path.join(ROOT, 'lib', 'runtime', 'session-transcript.js'), suite: 'test/unit/session-transcript.test.js' };
 const SHELL_RECORD = { src: path.join(ROOT, 'lib', 'scheduler.js'), suite: 'test/unit/run-record-shell.test.js' };
+// The link colour, watched by the file that measures the run screen's colours
+// in both themes as the browser computes them.
+const LINK_TOKEN = { src: path.join(ROOT, 'public', 'styles', 'tokens.css'), suite: 'test/unit/run-screen-contrast.test.js' };
 
 // [target, label, the guard as it is written, what it becomes without it]
 const MUTATIONS = [
@@ -375,6 +378,10 @@ const MUTATIONS = [
     '  const listed = drawn;'],
   [VIEW, 'File links: the tree redraw removed',
     '  if (JSON.stringify(links) !== drawnLinks) renderRunDetail();',
+    ''],
+  [LINK_TOKEN, 'File links: --link-text declared only on the root',
+    '  /* Computed again here from the light --accent-text and --text-1; see :root. */\n'
+      + '  --link-text: color-mix(in srgb, var(--accent-text) 85%, var(--text-1));\n',
     ''],
 ];
 

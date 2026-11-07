@@ -782,3 +782,32 @@ describe('a changed file opens from the record', () => {
     dom.window.close();
   });
 });
+
+describe('a linked name and the plain-name sentence, in the stylesheet', () => {
+  test('a linked name draws in --link-text, underlined at rest, thickening to 2px on hover', () => {
+    const rest = cssRule('.rd-file-link');
+    assert.strictEqual(rest.get('color'), 'var(--link-text)');
+    assert.strictEqual(rest.get('text-decoration'), 'underline');
+    assert.strictEqual(rest.get('text-underline-offset'), '2px');
+    assert.strictEqual(cssRule('.rd-file-link:hover').get('text-decoration-thickness'), '2px');
+  });
+
+  test('a linked name shows keyboard focus as a 2px --accent-control ring at a 2px offset', () => {
+    const focus = cssRule('.rd-file-link:focus-visible');
+    assert.strictEqual(focus.get('outline'), '2px solid var(--accent-control)');
+    assert.strictEqual(focus.get('outline-offset'), '2px');
+  });
+
+  test('a linked name is a button with none of a button\'s chrome', () => {
+    const rest = cssRule('.rd-file-link');
+    assert.strictEqual(rest.get('background'), 'none');
+    assert.strictEqual(rest.get('border'), '0');
+    assert.strictEqual(rest.get('padding'), '0');
+    assert.strictEqual(rest.get('font-family'), 'inherit');
+    assert.strictEqual(rest.get('cursor'), 'pointer');
+  });
+
+  test('the plain-name sentence draws in the strong secondary text', () => {
+    assert.strictEqual(cssRule('.rd-cannot-open').get('color'), 'var(--text-2-strong)');
+  });
+});
