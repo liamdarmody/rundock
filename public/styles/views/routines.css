@@ -5,8 +5,8 @@
    THE THREE TONES ARE THE POINT OF THIS FILE, and they are a ruling rather
    than a palette choice. A run that happened late is a SUCCESS, so Caught up
    keeps the success colour and is told apart from Ran on time by weight and by
-   its leading word. A slot that passed unserved is HISTORY, so Missed takes the
-   idle grey, the one state where nothing ran at all. Only a real failure is
+   its leading word. A slot that passed unserved is HISTORY, so Missed takes a
+   quiet grey, the one state where nothing ran at all. Only a real failure is
    red.
 
    AMBER APPEARS ON NONE OF THE FOUR OUTCOMES, deliberately. var(--attention)
@@ -62,31 +62,31 @@
    from the line it sits in, so the sentence reads as one sentence and the
    name is told apart by colour and by the underline that arrives on hover.
    A second declaration of the size here is how the two drift apart. */
-.rr-skill-link { font: inherit; color: var(--accent); background: none; border: 0; padding: 0; cursor: pointer; text-decoration: none; }
+.rr-skill-link { font: inherit; color: var(--link-text); background: none; border: 0; padding: 0; cursor: pointer; text-decoration: none; }
 .rr-skill-link:hover { color: var(--accent-hover); text-decoration: underline; }
 
 /* The meta lines WRAP. Both of a row's facts have to survive together at any
    width, and the row with the longest status text is exactly the one a
    no-wrap line would drop the next-run time from. */
-.rr-meta { font-size: var(--caption); color: var(--text-2); display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.rr-meta .sep { color: var(--text-3); }
+.rr-meta { font-size: var(--caption); color: var(--text-2-strong); display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.rr-meta .sep { color: var(--text-2-strong); }
 /* The spacing every second line on a row shares. One rule rather than three
    identical ones: the lines differ in what they say and in their tone, not in
    where they sit. */
 .rr-run-line, .rr-problem-line, .rr-offer-line, .rr-note-line, .rr-consent-line { margin-top: 2px; }
 
 .run-status { font-size: var(--caption); }
-.run-status.ok { font-weight: 600; color: var(--success); }
-.run-status.ok-quiet { font-weight: 500; color: var(--success); }
-.run-status.neutral { font-weight: 500; color: var(--idle); }
+.run-status.ok { font-weight: 600; color: var(--success-text); }
+.run-status.ok-quiet { font-weight: 500; color: var(--success-text); }
+.run-status.neutral { font-weight: 500; color: var(--text-2-strong); }
 .run-status.failed { font-weight: 600; color: var(--danger-text); }
 /* A run in progress. Not one of the model's four tones (outcomeOf never
    returns while lastRunStatus is 'running'): this is the row's own "Still
    going" line, styled to match run-detail's .rd-chip.live on the same token. */
-.run-status.live { font-weight: 500; color: var(--working); }
+.run-status.live { font-weight: 500; color: var(--working-text); }
 
-.next-run { font-size: var(--caption); font-weight: 600; color: var(--success); }
-.next-run.paused-label { color: var(--text-3); font-weight: 500; }
+.next-run { font-size: var(--caption); font-weight: 600; color: var(--success-text); }
+.next-run.paused-label { color: var(--text-2-strong); font-weight: 500; }
 
 /* One tap each, directly on the row: no overflow menu, because pause and
    delete are named as immediate actions. */
@@ -107,8 +107,8 @@
    user, not an error": full weight, an inset ring, a sentence naming what
    changed. Rendered alike, the second would be resumed reflexively. */
 .rr-paused-label { display: inline-flex; align-items: center; gap: 6px; }
-.rr-paused-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-3); flex-shrink: 0; }
-.rr-resume-quiet { font-size: var(--caption); font-weight: 600; color: var(--accent); background: none; border: 0; padding: 0; font-family: inherit; cursor: pointer; transition: opacity var(--duration-base) ease; }
+.rr-paused-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-2-strong); flex-shrink: 0; }
+.rr-resume-quiet { font-size: var(--caption); font-weight: 600; color: var(--link-text); background: none; border: 0; padding: 0; font-family: inherit; cursor: pointer; transition: opacity var(--duration-base) ease; }
 .rr-resume-quiet:hover { opacity: 0.8; }
 .routine-row.paused-consent { opacity: 1; box-shadow: 0 0 0 1px var(--attention) inset; }
 .rr-consent-text { font-size: var(--caption); font-weight: 500; color: var(--attention); line-height: 1.5; }
@@ -139,7 +139,7 @@
 
 /* The way into a run's own record, on the line that carries the last-run
    fact. Quiet: it is an offer to read more, not the thing the row is for. */
-.rr-view-run { font-size: var(--caption); font-weight: 500; color: var(--text-2); background: none; border: 0; padding: 0; font-family: inherit; cursor: pointer; transition: color var(--duration-base) ease; }
+.rr-view-run { font-size: var(--caption); font-weight: 500; color: var(--text-2-strong); background: none; border: 0; padding: 0; font-family: inherit; cursor: pointer; transition: color var(--duration-base) ease; }
 .rr-view-run:hover { color: var(--accent); }
 
 /* A schedule nothing here can read, and a routine with no instruction to send.

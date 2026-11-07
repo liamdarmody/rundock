@@ -97,6 +97,11 @@
      where --attention as text measured about 2:1. Borders and glows stay on
      --attention. Pinned by test/unit/attention-token.test.js. */
   --attention-text: #E8A84C;
+  /* The working hue as TEXT, following --attention-text: the hue itself in
+     dark (4.91:1 on --card), darker in light (see body.light), where
+     --working as text measured 2.20:1 on the card. Dots and fills stay on
+     --working. Pinned by test/unit/routine-screens-contrast.test.js. */
+  --working-text: #7AA2E8;
   /* The status set had no red, so every destructive and error surface reached
      for a hex of its own and they drifted: three near-identical reds were in
      the stylesheets when this token was added. This is the one, and it is TWO
@@ -259,6 +264,8 @@ body.light {
   --attention-glow: rgba(232,168,76,0.14);
   /* 4.78:1 on --base, 5.03 on --surface, 5.33 on --elevated, 4.57 on --card. */
   --attention-text: #94600C;
+  /* 5.01:1 on --card. */
+  --working-text: #3A63B0;
   /* Danger text in light is the fill value itself, which reads on every light
      surface. The dark theme's lifted value would wash out here. */
   --danger-text: #D42C2A;
@@ -281,6 +288,18 @@ body.light {
      (elevated 3.83, surface 3.61, base 3.43, card 3.28). */
   --accent-control: #DB5933; --accent-control-hover: #DD6440;
   --graph-edge: rgba(122,117,110,0.30); --graph-dim: 0.22;
+}
+
+/* The brand hue as LINK TEXT: --accent-text mixed 85% with --text-1, the
+   recipe the Settings pane uses for its own links. 5.06:1 on --card in dark,
+   5.53:1 in light.
+
+   ONE RULE FOR BOTH THEMES, and it has to name both. A custom property is
+   computed on the element that declares it, so declared on :root alone it
+   would be mixed once from the dark pair and body.light would inherit that
+   dark mix unchanged. Pinned by test/unit/routine-screens-contrast.test.js. */
+:root, body.light {
+  --link-text: color-mix(in srgb, var(--accent-text) 85%, var(--text-1));
 }
 
 /* The window chrome reserves an inset on each side and the platform supplies

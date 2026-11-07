@@ -27,7 +27,7 @@
 .files-menu-divider { height: 1px; background: var(--border); margin: 4px 6px; }
 .files-menu-field { padding: 2px; }
 .files-menu-field input { width: 100%; background: var(--elevated); border: 1px solid var(--accent); border-radius: var(--radius-md); color: var(--text-1); font-size: var(--body); padding: 6px 8px; outline: none; }
-.sidebar-label { font-size: var(--label); font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-2); }
+.sidebar-label { font-size: var(--label); font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-2-strong); }
 
 /* Compact agent status list */
 .agent-status-list { flex: 1; overflow-y: auto; padding: 8px; }
@@ -50,10 +50,15 @@
 .scope-item { display: flex; align-items: center; gap: 8px; padding: 9px 10px; border-radius: var(--radius-lg); cursor: pointer; color: var(--text-1); transition: background var(--duration-base) ease; }
 .scope-item:hover { background: var(--elevated); }
 .scope-item.active { background: var(--accent-glow); }
-.scope-item.active .scope-name { color: var(--accent); font-weight: 600; }
-.scope-item.active .scope-count { color: var(--accent); }
+.scope-item.active .scope-name { color: var(--accent-text); font-weight: 600; }
+.scope-item.active .scope-count { color: var(--accent-text); }
+/* The keyboard focus ring, drawn INSIDE the row because the panel clips
+   anything drawn outside it. --accent-control rather than the app's --accent
+   ring, which measures 2.69:1 on the light sidebar: this one is 3.61:1 on the
+   sidebar and 3.35:1 on the selected fill. */
+.scope-item:focus-visible { outline: 2px solid var(--accent-control); outline-offset: -2px; }
 .scope-name { flex: 1; font-size: var(--body); font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.scope-count { font-size: var(--caption); font-weight: 600; color: var(--text-3); flex-shrink: 0; font-variant-numeric: tabular-nums; }
+.scope-count { font-size: var(--caption); font-weight: 600; color: var(--text-2-strong); flex-shrink: 0; font-variant-numeric: tabular-nums; }
 /* The rail's own clock on the row that means the whole surface. */
 .scope-all-icon { width: 24px; height: 24px; border-radius: var(--radius-circle); display: flex; align-items: center; justify-content: center; flex-shrink: 0; color: var(--text-2); background: var(--card); }
 .scope-all-icon svg { width: 13px; height: 13px; }
@@ -171,8 +176,8 @@
    accepted separator. */
 .convo-unread { width: 8px; height: 8px; min-width: 8px; background: var(--success); border-radius: var(--radius-circle); }
 .convo-working { width: 8px; height: 8px; min-width: 8px; background: var(--success); border-radius: var(--radius-circle); margin-left: auto; animation: orgPulse 2s ease-in-out infinite; }
-.nav-badge { position: absolute; top: 6px; right: 6px; width: 7px; height: 7px; background: var(--attention); border-radius: var(--radius-circle); pointer-events: none; }
-.nav-badge-working { position: absolute; top: 6px; right: 6px; width: 7px; height: 7px; background: var(--success); border-radius: var(--radius-circle); pointer-events: none; animation: orgPulse 2s ease-in-out infinite; }
+.nav-badge { position: absolute; top: 6px; right: 6px; width: 7px; height: 7px; background: var(--attention-text); border-radius: var(--radius-circle); pointer-events: none; }
+.nav-badge-working { position: absolute; top: 6px; right: 6px; width: 7px; height: 7px; background: var(--success-text); border-radius: var(--radius-circle); pointer-events: none; animation: orgPulse 2s ease-in-out infinite; }
 /* .nav-badge-failed (a failed-routine dot here) removed 2026-08-27: read as
    distracting in practice. See app.js, where updateRoutineFailureBadge used
    to live. */

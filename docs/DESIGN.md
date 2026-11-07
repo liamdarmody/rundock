@@ -83,12 +83,14 @@ including the worst case of `--elevated`. If you need something fainter than
 | `--accent-control` | The fill of a control shape that carries no text or icon: the checked checkbox, the toggle when on, the slider's fill and thumb, a selected radio dot, a meter's fill. Needs 3:1 against its surface, not 4.5:1. The brand itself in dark (4.43:1 on `--card`), `#DB5933` in light (3.28 to 3.83:1). The white tick and thumb drawn on it measure 2.85:1 in dark, an accepted exception because the state is carried by shape and position |
 | `--accent-control-hover` | That fill on hover: the brand's hover in dark, `#DD6440` in light |
 | `--accent-text` | The brand hue as text, light theme only: `#BF401B`, 4.54 to 5.30:1 on the light surfaces, where `--accent` as text measured 2.44 to 2.85:1. In dark it is the brand value itself, so dark is unchanged. Used by `.linkbtn.accent`, by wikilinks in a note's body, and by links in the properties panel in light (in dark the panel's links take `--accent-hover`, since the brand measures 4.43:1 on `--card`) |
+| `--link-text` | Link text that has to read on a card: a routine row's skill name and its quiet Resume. `--accent-text` mixed 85% with `--text-1`, the recipe the Settings pane uses for its own links, declared for both themes in one rule so each theme mixes its own pair. 5.06:1 on `--card` in dark, 5.53:1 in light |
 | `--accent-action-hover` | That fill, darker, on hover only, so the contrast grows rather than shrinks. `#B45126` |
 | `--success` | Something succeeded or is allowed |
 | `--attention` | Something needs the user, and is not an error |
 | `--attention-glow` | The attention hue at low alpha, for a notice's tinted background |
 | `--attention-text` | The attention hue as text and as an icon: the hue itself in dark (8.40:1 on `--base`), `#94600C` in light, 4.78:1 on `--base` and 4.57:1 on `--card`, where `--attention` as text measured about 2:1. Borders and glows stay on `--attention` |
 | `--working` | Something is running |
+| `--working-text` | The working hue as text: the routine screens' Still going chip and row line. The hue itself in dark (4.91:1 on `--card`), `#3A63B0` in light (5.01:1), where `--working` as text measures 2.20:1. Dots and fills stay on `--working` |
 | `--idle` | Something is present but not doing anything |
 | `--danger` | Destructive actions and errors, as a fill or an edge: `background`, `border-color`, `box-shadow`, and the `color-mix()` tints feeding those. `#D42C2A` in both themes |
 | `--danger-text` | Destructive actions and errors, as text: any `color` declaration. `#F0706E` in dark, `#D42C2A` in light. One edge too: a notice on a tinted card that failed (the reconnect card's "could not open the window"), where the fill as an edge measures 2.56:1 in dark and this measures 4.43:1 |
