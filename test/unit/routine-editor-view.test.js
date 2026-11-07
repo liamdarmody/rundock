@@ -166,11 +166,12 @@ describe('routine editor view: choosing a skill', () => {
 });
 
 describe('routine editor view: the two ways in', () => {
-  // The entry points read the app's roster and the browser's time zone, which
-  // is the only place any of this touches the machine. The zone is stubbed
-  // here rather than inherited, so this test says the same thing wherever it
-  // runs; what it checks is that the value travels, not what the value is.
-  function withRoster(agentId) {
+  // The entry points read the app's roster, the zone the server reported
+  // beside it, and the browser's own time zone, which is the only place any of
+  // this touches the machine. The browser's zone is stubbed here rather than
+  // inherited, and is a different zone from the server's, so these tests say
+  // the same thing wherever they run and can tell the two apart.
+  function withRoster(agentId, serverZone) {
     const dom = new JSDOM('<!doctype html><html><body>'
       + '<div id="view-routine-editor"><div id="routine-editor-content"></div></div>'
       + '</body></html>', { runScripts: 'dangerously' });
@@ -182,6 +183,7 @@ describe('routine editor view: the two ways in', () => {
     w.agents = [{ id: 'piper', displayName: 'Piper' }, { id: 'doc', displayName: 'Doc' }];
     w.skills = skillFixture();
     w.Intl = { DateTimeFormat: () => ({ resolvedOptions: () => ({ timeZone: 'Pacific/Auckland' }) }) };
+    if (serverZone !== undefined) w.serverZone = serverZone;
     w.addRoutineForAgent(agentId);
     return { w, doc: w.document, dom };
   }
@@ -253,21 +255,39 @@ describe('routine editor view: the two ways in', () => {
     dom.window.close();
   });
 
-  test('the browser\'s zone reaches the schedule step as words', () => {
-    const { w, doc, dom } = withRoster('piper');
+  // The schedule is read on the server's clock, and the window can be on
+  // another computer in another zone. So the view hands both captions the zone
+  // the server reported, and the browser's own zone, which it can still read,
+  // reaches neither.
+  const textOf = (el) => (el ? el.textContent.replace(/\s+/g, ' ').trim() : '');
+
+  test('the view passes the server\'s zone, not browserTimezone(), to both captions', () => {
+    const { w, doc, dom } = withRoster('piper', 'Europe/London');
+    assert.strictEqual(w.browserTimezone(), 'Pacific/Auckland', 'sanity: the window has a zone of its own');
     w.routineEditorPick('ops-summary:piper');
     w.routineEditorStep('schedule');
-    assert.match(text(doc), /Your time zone: Auckland\./);
+    const caption = textOf(doc.querySelector('[data-routine-editor="workspace-caveat"]'));
+    assert.match(caption, /^Piper reads this on the clock of the computer Rundock runs on, London time, never/);
+    assert.doesNotMatch(caption, /Auckland/);
+    w.routineEditorStep('ready');
+    const ready = textOf(doc.querySelector('.re-caption'));
+    assert.match(ready, /^London time\. /);
+    assert.doesNotMatch(ready, /Auckland/);
     dom.window.close();
   });
 
-  test('a zone the browser will not give up drops the line rather than guessing', () => {
+  // A server that reported no zone, an older one or one whose runtime gave
+  // none. The window's zone is right there and is not the schedule's, so the
+  // caption names no place at all rather than fall back to it.
+  test('a server that reports no zone leaves the place out, and the window\'s zone stays out', () => {
     const { w, doc, dom } = withRoster('piper');
-    w.Intl = { DateTimeFormat: () => { throw new Error('no'); } };
-    w.addRoutineForAgent('piper');
     w.routineEditorPick('ops-summary:piper');
     w.routineEditorStep('schedule');
-    assert.ok(!text(doc).includes('Your time zone'));
+    const caption = textOf(doc.querySelector('[data-routine-editor="workspace-caveat"]'));
+    assert.match(caption, /^Piper reads this on the clock of the computer Rundock runs on, never the Agent Computer's\./);
+    assert.doesNotMatch(caption, /Auckland/);
+    w.routineEditorStep('ready');
+    assert.doesNotMatch(textOf(doc.querySelector('.re-caption')), /Auckland/);
     dom.window.close();
   });
 });
@@ -469,7 +489,7 @@ describe('routine editor view: where it runs', () => {
     dom.window.routineEditorPick('ops-summary:piper');
     dom.window.routineEditorStep('schedule');
     const body = text(doc);
-    assert.match(body, /Your time zone: Sydney\./);
+    assert.match(body, /runs on, Sydney time, never/);
     assert.ok(!/GMT|UTC[+-]|[+-]\d{2}:?\d{2}/.test(body), `an offset leaked: ${body}`);
     dom.window.close();
   });

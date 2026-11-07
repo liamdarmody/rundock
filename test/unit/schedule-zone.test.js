@@ -18,7 +18,10 @@ const { test, describe, after } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
+const { JSDOM } = require('jsdom');
 
+const ROOT = path.join(__dirname, '..', '..');
+const read = (...parts) => fs.readFileSync(path.join(ROOT, ...parts), 'utf-8');
 const { agentFile, makeWorkspace, cleanup } = require('../helpers/workspace.js');
 const { invalidateAgentCache, rosterMessage } = require('../../lib/agents/discovery.js');
 const sched = require('../../lib/scheduler.js');
@@ -32,11 +35,18 @@ const WINDOW_ZONE = 'UTC';
 // run is today's slot.
 const NOW = new Date(Date.UTC(2026, 9, 7, 5, 0));
 const SCHEDULE = 'every day at 08:00';
+const SKILL_KEY = 'morning-briefing:piper';
 
 /** Run `fn` as the server does, in `zone`, then come back to the window's. */
 function asServer(zone, fn) {
   process.env.TZ = zone;
   try { return fn(); } finally { process.env.TZ = WINDOW_ZONE; }
+}
+
+/** The hour and minute an instant reads as in a named zone. */
+function clockIn(instant, zone) {
+  return new Intl.DateTimeFormat('en-GB', { timeZone: zone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+    .format(instant);
 }
 
 function workspace() {
@@ -84,6 +94,73 @@ function withIntlAnswering(options, fn) {
   try { return fn(); } finally { Intl.DateTimeFormat = real; }
 }
 
+const EDITOR_MODEL_SRC = read('public', 'routine-editor-model.js');
+const EDITOR_VIEW_SRC = read('public', 'views', 'routine-editor.js');
+const SKILLS_MODEL_SRC = read('public', 'skills-model.js');
+const MODEL_SRC = read('public', 'routines-model.js');
+const VIEW_SRC = read('public', 'views', 'routines.js');
+const APP_SRC = read('public', 'app.js');
+
+// The client's roster case, cut out of app.js and RUN, so what the window
+// knows about the server's zone is what that case records and nothing a test
+// planted.
+const ROSTER_CASE = (() => {
+  const found = APP_SRC.match(/case 'agents': ([\s\S]*?) break;/);
+  assert.ok(found && found[1].trim(), 'app.js no longer carries the roster case of the client dispatch');
+  return found[1];
+})();
+
+/**
+ * A window in this process's zone, which is UTC, with the routines list and
+ * the routine editor loaded the way index.html loads them.
+ */
+function windowShell() {
+  const dom = new JSDOM('<!doctype html><html><body>'
+    + '<nav class="nav-rail"><button class="nav-item" data-nav="routines"></button></nav>'
+    + '<div id="view-routines"><div id="routines-content"></div></div>'
+    + '<div id="view-routine-editor"><div id="routine-editor-content"></div></div>'
+    + '</body></html>', { runScripts: 'dangerously' });
+  const w = dom.window;
+  for (const src of [EDITOR_MODEL_SRC, SKILLS_MODEL_SRC, MODEL_SRC, VIEW_SRC, EDITOR_VIEW_SRC]) w.eval(src);
+  w.esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  w.sent = [];
+  w.ws = { send: (m) => w.sent.push(JSON.parse(m)) };
+  w.showView = () => {};
+  w.setNavState = () => {};
+  w.switchNav = () => {};
+  w.showProfile = () => {};
+  w.routinesNow = () => NOW;
+  w.skills = [{ id: 'morning-briefing', slug: 'morning-briefing', name: 'Morning briefing',
+    assignedAgents: [{ id: 'piper', name: 'Piper' }] }];
+  w.skillsLoaded = true;
+  // Everything else the roster case draws, which this file does not own.
+  for (const stub of ['renderAgentList', 'renderOrgChart', 'renderRoutinesPanel', 'renderConvoList',
+    'runDetailRosterUpdated', 'setRosterWorkspace']) {
+    w[stub] = () => {};
+  }
+  // The window really is in UTC: its own Intl says so, unstubbed.
+  assert.strictEqual(w.eval('Intl.DateTimeFormat().resolvedOptions().timeZone'), WINDOW_ZONE,
+    'sanity: the window is not in the zone this file says it is');
+  return { w, doc: w.document, dom };
+}
+
+/** A roster arriving at the window, through the client's own dispatch. */
+function arrive(w, message) {
+  w.d = message;
+  w.eval(`(function (d) {${ROSTER_CASE}\n})(window.d)`);
+}
+
+const text = (el) => (el ? el.textContent.replace(/\s+/g, ' ').trim() : '');
+const zoneCaption = (doc) => text(doc.querySelector('[data-routine-editor="workspace-caveat"]'));
+const readyCaption = (doc) => text(doc.querySelector('.re-caption'));
+
+/** Open the editor on Piper's skill, as the agent's Add routine button does. */
+function openOnSchedule(w) {
+  w.addRoutineForAgent('piper');
+  w.routineEditorPick(SKILL_KEY);
+  w.routineEditorStep('schedule');
+}
+
 describe('the server says which zone it reads a schedule in', () => {
   test('a roster carries the zone the server process is in', () => {
     const dir = workspace();
@@ -100,6 +177,63 @@ describe('the server says which zone it reads a schedule in', () => {
   });
 });
 
+describe('the editor names the server\'s zone, never the window\'s', () => {
+  // The most common next step: read the caption, save a daily 08:00 routine.
+  // The zone the caption names has to be the zone the slot is worked out in,
+  // which is the whole of what the caption is for.
+  test('with the server on London and the window on UTC, the caption names London and the slot is 08:00 London', () => {
+    const dir = workspace();
+    const message = rosterFrom('Europe/London', dir);
+    const { w, doc, dom } = windowShell();
+    arrive(w, message);
+    openOnSchedule(w);
+    w.routineEditorSetField('time', '08:00');
+
+    const caption = zoneCaption(doc);
+    assert.ok(caption.startsWith(
+      'Piper reads this on the clock of the computer Rundock runs on, London time, never the Agent Computer\'s.'),
+    `the caption does not say whose clock it is: ${caption}`);
+    assert.doesNotMatch(caption, /UTC|your local time/i, 'the window\'s zone was presented as the schedule\'s');
+
+    w.routineEditorStep('ready');
+    assert.ok(readyCaption(doc).startsWith('London time. '), `the ready caption: ${readyCaption(doc)}`);
+    assert.doesNotMatch(readyCaption(doc), /UTC/);
+
+    doc.querySelector('[data-routine-editor="save"]').click();
+    const saved = w.sent.find(m => m.type === 'save_routine');
+    assert.ok(saved, 'the save was not sent');
+    assert.strictEqual(saved.routine.schedule, SCHEDULE);
+
+    // The slot the tick fires at, worked out by the server in its own zone.
+    const slot = asServer('Europe/London', () => onWorkspace(dir, () => sched.getNextRun(saved.routine.schedule, null)));
+    assert.strictEqual(slot.toISOString(), '2026-10-07T07:00:00.000Z');
+    // The place the caption named is the zone the server reported, and the
+    // slot reads 08:00 in exactly that zone.
+    assert.ok(caption.includes(`${w.RundockRoutineEditorModel.timezoneWords(message.zone)} time`));
+    assert.strictEqual(clockIn(slot, message.zone), '08:00');
+    assert.notStrictEqual(clockIn(slot, WINDOW_ZONE), '08:00',
+      'sanity: in the window\'s zone the same slot is another hour, which is what naming it would have hidden');
+    dom.window.close();
+  });
+
+  // The retry: an editor opened again after the server's zone moved names the
+  // zone it reports now, not the one from the first opening.
+  test('opened, closed, and opened again after the zone changed, the editor names the new zone', () => {
+    const dir = workspace();
+    const { w, doc, dom } = windowShell();
+    arrive(w, rosterFrom('Europe/London', dir));
+    openOnSchedule(w);
+    assert.match(zoneCaption(doc), /runs on, London time, never/);
+    w.routineEditorLeave();
+
+    arrive(w, rosterFrom('America/New_York', dir));
+    openOnSchedule(w);
+    assert.match(zoneCaption(doc), /runs on, New York time, never/);
+    assert.doesNotMatch(zoneCaption(doc), /London/);
+    dom.window.close();
+  });
+});
+
 describe('a server that reports no zone', () => {
   // The path failing: the runtime gives no zone. The server says nothing
   // rather than guess, and ICU's own word for not knowing counts as nothing.
@@ -107,6 +241,25 @@ describe('a server that reports no zone', () => {
     const dir = workspace();
     assert.strictEqual(withIntlAnswering({}, () => rosterFrom('Europe/London', dir)).zone, null);
     assert.strictEqual(withIntlAnswering({ timeZone: 'Etc/Unknown' }, () => rosterFrom('Europe/London', dir)).zone, null);
+  });
+
+  // An older server sends no field at all. The caption still says whose clock
+  // it is, names no place, and never falls back to the window's zone.
+  test('a roster with no zone leaves the captions naming no place, and never the window\'s', () => {
+    const dir = workspace();
+    const message = rosterFrom('Europe/London', dir);
+    delete message.zone;
+    const { w, doc, dom } = windowShell();
+    arrive(w, message);
+    openOnSchedule(w);
+    assert.ok(zoneCaption(doc).startsWith(
+      'Piper reads this on the clock of the computer Rundock runs on, never the Agent Computer\'s.'),
+    `the caption: ${zoneCaption(doc)}`);
+    assert.doesNotMatch(zoneCaption(doc), /UTC| time,/);
+    w.routineEditorStep('ready');
+    assert.ok(readyCaption(doc).startsWith('Runs while Rundock is open here.'), `the ready caption: ${readyCaption(doc)}`);
+    assert.doesNotMatch(readyCaption(doc), /UTC/);
+    dom.window.close();
   });
 });
 

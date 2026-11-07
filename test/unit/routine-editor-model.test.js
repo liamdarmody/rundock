@@ -624,13 +624,41 @@ describe('routine editor: time zones are words, and never the runner\'s', () => 
     }
   });
 
+  // The caption says whose clock a schedule follows: the computer Rundock runs
+  // on, which on a server is the server's, never the window's.
   test('the caption names the agent when there is one, and the team when there is not', () => {
-    assert.match(model.timezoneCaption({ zone: 'Europe/London', agentName: 'Piper' }), /^Your time zone: London\. Piper reads/);
-    assert.match(model.timezoneCaption({ zone: 'Europe/London', agentName: null }), /^Your time zone: London\. Your agents read/);
+    assert.strictEqual(model.timezoneCaption({ zone: 'Europe/London', agentName: 'Piper' }),
+      'Piper reads this on the clock of the computer Rundock runs on, London time, never the Agent Computer\'s.');
+    assert.strictEqual(model.timezoneCaption({ zone: 'Europe/London', agentName: null }),
+      'Your agents read this on the clock of the computer Rundock runs on, London time, never the Agent Computer\'s.');
   });
 
-  test('an absent zone drops the caption rather than inventing one', () => {
-    assert.strictEqual(model.timezoneCaption({ zone: '', agentName: 'Piper' }), null);
+  // The zone a caption is handed is the one the server reports. With the
+  // server on London and the window on UTC, the window's zone has no way in,
+  // and neither caption may still call the schedule the reader's local time.
+  test('with the server reporting London and the window on UTC, neither caption names UTC or your local time', () => {
+    const SERVER_ZONE = 'Europe/London';
+    const captions = [
+      model.timezoneCaption({ zone: SERVER_ZONE, agentName: 'Piper' }),
+      model.timezoneCaption({ zone: SERVER_ZONE, agentName: null }),
+      model.readyCaption({ zone: SERVER_ZONE, runOn: 'local' }),
+    ];
+    for (const caption of captions) {
+      assert.match(caption, /London time/);
+      assert.doesNotMatch(caption, /UTC/, `the window's zone reached: ${caption}`);
+      assert.doesNotMatch(caption, /your local time/i, `the schedule is still called local time: ${caption}`);
+    }
+  });
+
+  // No zone reported, by an older server or by a runtime that gave none. The
+  // caption still says whose clock it is, and names no place rather than one
+  // it would have to guess.
+  test('an absent zone leaves the place out rather than inventing one', () => {
+    assert.strictEqual(model.timezoneCaption({ zone: '', agentName: 'Piper' }),
+      'Piper reads this on the clock of the computer Rundock runs on, never the Agent Computer\'s.');
+    assert.strictEqual(model.timezoneCaption({ zone: null, agentName: null }),
+      'Your agents read this on the clock of the computer Rundock runs on, never the Agent Computer\'s.');
+    assert.strictEqual(model.readyCaption({ zone: null, runOn: 'local' }), 'Runs while Rundock is open here.');
     assert.strictEqual(model.timezoneWords(''), null);
   });
 });

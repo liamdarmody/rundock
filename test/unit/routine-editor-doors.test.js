@@ -254,6 +254,9 @@ function shell() {
   w.renderOrgChart = () => {};
   w.renderAgentList = () => {};
   w.Intl = { DateTimeFormat: () => ({ resolvedOptions: () => ({ timeZone: 'Europe/London' }) }) };
+  // The zone the server reported beside its roster, which is the zone the
+  // editor names: a schedule is read on the server's clock, not the window's.
+  w.serverZone = 'Europe/London';
   return { w, doc: w.document, dom };
 }
 
