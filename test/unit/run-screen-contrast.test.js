@@ -1,10 +1,10 @@
 'use strict';
-// Every colour the run screen gives a changed file's link, the notes about
+// Every color the run screen gives a changed file's link, the notes about
 // its file list, and Stop, measured in both themes from the real tokens and
 // the real run screen stylesheet.
 //
 // Each row names a rule in public/styles/views/run-detail.css and the
-// property carrying the colour, resolves it through tokens.css for the theme,
+// property carrying the color, resolves it through tokens.css for the theme,
 // and computes the WCAG 2 ratio against the surface it is drawn on. Text is
 // held to 4.5:1, a focus ring and a control's edge to 3:1.
 //
@@ -13,7 +13,7 @@
 // that declares it, and its var() references are read there. --link-text is
 // a mix of --accent-text and --text-1; declared only on :root, it is computed
 // once with the dark values and body.light inherits that result, so a light
-// link would draw in a dark-theme colour. A resolver that merged the two
+// link would draw in a dark-theme color. A resolver that merged the two
 // blocks into one table would read the light values into it and pass. This
 // one computes a :root declaration from :root alone.
 const { test, describe } = require('node:test');
@@ -87,13 +87,13 @@ function ratio(a, b) {
 }
 const twoPlaces = (x) => Math.round(x * 100) / 100;
 
-/** The colour a rule declares: a property's whole value, or the colour in a shorthand. */
+/** The color a rule declares: a property's whole value, or the color in a shorthand. */
 function declared(selector, prop) {
   const r = SCREEN.get(selector);
   assert.ok(r && r.has(prop), `run-detail.css has no ${prop} on ${selector}`);
   const value = r.get(prop);
-  const colour = /var\(--[\w-]+\)$/.exec(value);
-  return prop === 'color' || !colour ? value : colour[0];
+  const found = /var\(--[\w-]+\)$/.exec(value);
+  return prop === 'color' || !found ? value : found[0];
 }
 
 // [row, what, selector, property, surface, bar, dark ratio, light ratio]
@@ -123,7 +123,7 @@ describe('the measuring instrument', () => {
   });
 });
 
-describe('the link colour is computed in each theme from that theme\'s own tokens', () => {
+describe('the link color is computed in each theme from that theme\'s own tokens', () => {
   for (const theme of ['dark', 'light']) {
     test(`in ${theme}, --link-text is 85% of ${theme} --accent-text over ${theme} --text-1`, () => {
       const own = mix(token('--accent-text', theme, theme), token('--text-1', theme, theme), 0.85);
@@ -132,7 +132,7 @@ describe('the link colour is computed in each theme from that theme\'s own token
   }
 });
 
-describe('every colour on the run screen passes its bar in both themes', () => {
+describe('every color on the run screen passes its bar in both themes', () => {
   for (const [row, what, selector, prop, surface, bar, ...expected] of ROWS) {
     for (const [i, theme] of ['dark', 'light'].entries()) {
       test(`${row}, ${what}, in ${theme}: at least ${bar}:1`, () => {

@@ -847,7 +847,7 @@ describe('Stop this run is a neutral outline until it is pointed at', () => {
     assert.strictEqual(hover.get('border-color'), 'var(--danger-text)');
   });
 
-  test('on keyboard focus: the same colours, plus a 2px --accent-control ring', () => {
+  test('on keyboard focus: the same colors, plus a 2px --accent-control ring', () => {
     const focus = cssRule('.rd-stop:focus-visible');
     assert.strictEqual(focus.get('background'), 'color-mix(in srgb, var(--danger) 5%, var(--elevated))');
     assert.strictEqual(focus.get('color'), 'var(--danger-text)');

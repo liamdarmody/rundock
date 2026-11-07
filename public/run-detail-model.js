@@ -367,7 +367,7 @@
     const full = slashes(recorded);
     // The root, then one separator, compared exactly and in the same case: a
     // sibling folder whose name starts with the workspace's has no separator
-    // there. The rest is looked up AS IT IS, never normalised: the tree's
+    // there. The rest is looked up AS IT IS, never normalized: the tree's
     // paths hold no `.`, `..` or empty segment, so a path holding one is not
     // a path the tree lists, whatever it would resolve to.
     if (!full.startsWith(prefix)) return null;

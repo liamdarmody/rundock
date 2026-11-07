@@ -94,18 +94,18 @@ test('pressing Run disables the control while the stub runtime runs, and the row
 const OPENED = 'Opened from run';
 const OPENED_PROMPT = 'opened e2e body';
 
-// A computed colour, in either form a browser reports, as 0..255 channels:
+// A computed color, in either form a browser reports, as 0..255 channels:
 // rgb(r, g, b) in whole channels, or color(srgb r g b) in fractions of one.
 function channels(css) {
   const scale = css.startsWith('color(srgb ') ? 255 : css.startsWith('rgb') ? 1 : null;
-  if (scale === null) throw new Error(`cannot read the colour ${css}`);
+  if (scale === null) throw new Error(`cannot read the color ${css}`);
   return css.slice(css.indexOf('(') + 1, css.indexOf(')')).replace('srgb', '').replace(/,/g, ' ')
     .trim().split(/\s+/).slice(0, 3).map(n => Number(n) * scale);
 }
 const hexChannels = (hex) => { const n = parseInt(hex.trim().slice(1), 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; };
 const near = (a, b) => a.every((c, i) => Math.abs(c - b[i]) <= 1);
 
-test('a changed file the tree lists opens from the run screen, by click and by Enter, in the link colour', async ({ page }) => {
+test('a changed file the tree lists opens from the run screen, by click and by Enter, in the link color', async ({ page }) => {
   const { workspace, version } = await overWs(async ({ send, waitFor }) => {
     send({ type: 'get_runtime_status' });
     const status = await waitFor(m => m.type === 'runtime_status');
@@ -152,11 +152,11 @@ test('a changed file the tree lists opens from the run screen, by click and by E
   const plainNote = page.locator('[data-run-detail="plain-names"]');
   await expect(plainNote).toHaveText("Names in plain text can't be opened here: hidden files and folders, code and config files, and files that have since been moved or deleted.");
 
-  // The link colour and the plain-name sentence, in the light theme, as the
+  // The link color and the plain-name sentence, in the light theme, as the
   // browser computes them from the light tokens.
   await page.evaluate(() => { if (!document.body.classList.contains('light')) toggleTheme(); });
   await expect.poll(() => page.evaluate(() => document.body.classList.contains('light'))).toBe(true);
-  const colours = await page.evaluate(() => {
+  const colors = await page.evaluate(() => {
     const body = getComputedStyle(document.body);
     return {
       accentText: body.getPropertyValue('--accent-text'), text1: body.getPropertyValue('--text-1'),
@@ -165,10 +165,10 @@ test('a changed file the tree lists opens from the run screen, by click and by E
       plain: getComputedStyle(document.querySelector('[data-run-detail="plain-names"]')).color,
     };
   });
-  expect(colours.accentText.trim().toUpperCase(), 'sanity: the light --accent-text').toBe('#BF401B');
-  const mixed = hexChannels(colours.accentText).map((c, i) => c * 0.85 + hexChannels(colours.text1)[i] * 0.15);
-  expect(near(channels(colours.link), mixed), `the link draws in ${colours.link}, not the light mix ${mixed.map(Math.round)}`).toBe(true);
-  expect(near(channels(colours.plain), hexChannels(colours.text2Strong)), `the sentence draws in ${colours.plain}`).toBe(true);
+  expect(colors.accentText.trim().toUpperCase(), 'sanity: the light --accent-text').toBe('#BF401B');
+  const mixed = hexChannels(colors.accentText).map((c, i) => c * 0.85 + hexChannels(colors.text1)[i] * 0.15);
+  expect(near(channels(colors.link), mixed), `the link draws in ${colors.link}, not the light mix ${mixed.map(Math.round)}`).toBe(true);
+  expect(near(channels(colors.plain), hexChannels(colors.text2Strong)), `the sentence draws in ${colors.plain}`).toBe(true);
 
   // A click opens the file in Files, its tree row highlighted.
   await link.click();

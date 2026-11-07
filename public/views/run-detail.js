@@ -222,7 +222,7 @@ function filesHtml(files, links) {
  * raw status word leaves this file": this screen never asks whether
  * `record.status === 'running'` itself.
  *
- * A NEUTRAL OUTLINE, in the danger colours only while pointed at or focused.
+ * A NEUTRAL OUTLINE, in the danger colors only while pointed at or focused.
  * The run is already going and one press asks for a stop with no
  * confirmation, so the control is not dressed as a destructive confirmation:
  * the danger fill is kept for those.

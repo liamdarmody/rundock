@@ -57,7 +57,7 @@
 /* Only ever drawn on a run that is still going (view.state.stoppable), so it
    sits last in the card, after the facts, closest to .rd-card's own gap. */
 .rd-stop-row { margin-top: 4px; }
-/* STOP THIS RUN, a neutral outline at rest. It takes the danger colours only
+/* STOP THIS RUN, a neutral outline at rest. It takes the danger colors only
    while pointed at or focused, and never the danger fill, which is kept for
    confirmations: this one press asks for a stop with nothing to confirm. */
 .rd-stop { padding: 6px 14px; font-family: inherit; font-size: var(--caption); font-weight: 600; border-radius: var(--radius-md); background: transparent; color: var(--text-1); border: 1px solid var(--border-strong); transition: all var(--duration-base) ease; cursor: pointer; }
@@ -101,7 +101,7 @@
 
 /* A NOTE ABOUT THE LIST, directly under its label: today, that the run used
    the shell, whose writes the list cannot hold. Bordered and quiet rather
-   than a warning colour, because nothing went wrong: the list is honest about
+   than a warning color, because nothing went wrong: the list is honest about
    what it can see. */
 .rd-note { display: flex; gap: 8px; align-items: flex-start; font-size: var(--caption); line-height: 1.5; color: var(--text-2-strong); margin: 0 0 8px; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--elevated); }
 .rd-note-ic { width: 16px; height: 16px; flex-shrink: 0; margin-top: 1px; }
@@ -111,9 +111,9 @@
 .rd-file { display: flex; align-items: center; gap: 10px; padding: 12px 14px; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius-lg); }
 .rd-file-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
 .rd-file-name { font-size: var(--body); color: var(--text-1); }
-/* A NAME THAT OPENS ITS FILE, a button drawn as a link: the link colour and
+/* A NAME THAT OPENS ITS FILE, a button drawn as a link: the link color and
    an underline at rest, so it reads as one beside the plain names without
-   relying on colour alone. Sized to the name rather than the row, so the
+   relying on color alone. Sized to the name rather than the row, so the
    control is where the words are. */
 .rd-file-link { align-self: flex-start; background: none; border: 0; padding: 0; font-family: inherit; text-align: left; cursor: pointer; color: var(--link-text); text-decoration: underline; text-underline-offset: 2px; }
 .rd-file-link:hover { text-decoration-thickness: 2px; }
@@ -128,7 +128,7 @@
 .rd-tag { font-size: var(--caption); color: var(--text-2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 2px 8px; flex-shrink: 0; }
 
 /* Why some names are plain, under the list, in the strong secondary text:
-   .settings-caption's colour is defined only inside the settings pane. */
+   .settings-caption's color is defined only inside the settings pane. */
 .rd-cannot-open { font-size: var(--caption); line-height: 1.6; color: var(--text-2-strong); margin: 10px 0 0; }
 
 /* A run that changed nothing. A plain sentence, in ordinary text colour: this
