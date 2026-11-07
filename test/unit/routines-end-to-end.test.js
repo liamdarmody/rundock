@@ -6,7 +6,7 @@
 // objects by hand, with nextRun, lastStart, lastSlot and missedSlot already on
 // them. That proves the view reads those fields. It says nothing about whether
 // anything PUTS them there, so the lines in lib/agents/discovery.js that
-// attach them could be deleted and Missed and Caught up would become
+// attach them could be deleted and Missed and Ran late would become
 // unreachable in the real product with the whole suite green.
 //
 // That is the door class again, in the data flow rather than in the wiring,
@@ -45,7 +45,7 @@ const TOMORROWS_SLOT = new Date(2026, 7, 21, 7, 0);
 const SCHEDULE = 'every day at 07:00';
 const iso = (d) => d.toISOString();
 
-const NAMES = ['Ran on time', 'Caught up', 'Missed', 'Failed'];
+const NAMES = ['Ran on time', 'Ran late', 'Missed', 'Failed'];
 
 // What the scheduler's two stores hold in each of the four cases. Written as
 // the scheduler itself writes them: `lastRun` is the moment a finished run
@@ -58,14 +58,14 @@ function seedStores() {
     'piper:Ran on time': { lastRun: iso(new Date(2026, 7, 20, 7, 11, 12)), status: 'completed', duration: 11 * 60 },
     // The machine was shut at 7:00 and opened at 9:14, so this one started
     // late and took two minutes.
-    'piper:Caught up': { lastRun: iso(new Date(2026, 7, 20, 9, 16)), status: 'completed', duration: 120 },
+    'piper:Ran late': { lastRun: iso(new Date(2026, 7, 20, 9, 16)), status: 'completed', duration: 120 },
     // Last ran two days ago; yesterday's slot went by with nobody watching.
     'piper:Missed': { lastRun: iso(new Date(2026, 7, 18, 7, 0, 30)), status: 'completed', duration: 30 },
     'piper:Failed': { lastRun: iso(new Date(2026, 7, 20, 7, 0, 5)), status: 'failed', duration: 5 },
   };
   const slots = {
     'piper:Ran on time': { due: iso(TODAYS_SLOT), schedule: 'daily:7:0', missed: [] },
-    'piper:Caught up': { due: iso(TODAYS_SLOT), schedule: 'daily:7:0', missed: [] },
+    'piper:Ran late': { due: iso(TODAYS_SLOT), schedule: 'daily:7:0', missed: [] },
     'piper:Missed': { due: iso(TODAYS_SLOT), schedule: 'daily:7:0', missed: [{ slot: iso(YESTERDAYS_SLOT) }] },
     'piper:Failed': { due: iso(TODAYS_SLOT), schedule: 'daily:7:0', missed: [] },
   };
@@ -188,7 +188,7 @@ describe('the roster carries what the row renders', () => {
       assert.deepStrictEqual(rows.map(r => text(r.querySelector('.run-status'))), [
         'Missed: Rundock was closed at 7:00am yesterday, London time',
         'Ran today, 7:00am, London time',
-        'Caught up: ran today, 9:14am, London time, due 7:00am',
+        'Ran late: today, 9:14am. Due 7:00am.',
         'Failed: today, 7:00am, London time',
       ]);
       assert.deepStrictEqual(rows.map(r => r.querySelector('.run-status').className), [
@@ -217,11 +217,11 @@ describe('the roster carries what the row renders', () => {
     });
   });
 
-  test('a run that started late reads as caught up, end to end', () => {
+  test('a run that started late reads as ran late, end to end', () => {
     roster((agents) => {
       const { doc, dom } = render(agents);
-      const second = rowNamed(doc, 'Caught up');
-      assert.match(text(second.querySelector('.run-status')), /^Caught up: ran today, 9:14am/);
+      const second = rowNamed(doc, 'Ran late');
+      assert.match(text(second.querySelector('.run-status')), /^Ran late: today, 9:14am\./);
       dom.window.close();
     });
   });
@@ -870,7 +870,7 @@ describe('a window whose server has moved to another workspace', () => {
 // press on the row opens the editor on what the roster carried.
 const EDITOR_VIEW_SRC = read('public', 'views', 'routine-editor.js');
 
-function monthlyWorkspace(routines, fn, now = NOW) {
+function monthlyWorkspace(routines, fn, now = NOW, seed = () => {}) {
   const dir = makeWorkspace({
     agents: { piper: agentFile({ name: 'piper', displayName: 'Piper', type: 'specialist', order: 1, routines }) },
   });
@@ -879,14 +879,21 @@ function monthlyWorkspace(routines, fn, now = NOW) {
   config.setWorkspace(dir);
   invalidateAgentCache();
   const previousDeps = sched.wireSchedulerDeps({ now: () => now });
+  const stateBefore = JSON.parse(JSON.stringify(sched.routineState));
+  const slotsBefore = JSON.parse(JSON.stringify(sched.routineSlots.routines));
   try {
     discoverAgents();
     invalidateAgentCache();
+    seed();
     return fn({ dir, file });
   } finally {
     config.setWorkspace(originalWorkspace);
     invalidateAgentCache();
     sched.wireSchedulerDeps(previousDeps);
+    for (const key of Object.keys(sched.routineState)) delete sched.routineState[key];
+    Object.assign(sched.routineState, stateBefore);
+    for (const key of Object.keys(sched.routineSlots.routines)) delete sched.routineSlots.routines[key];
+    Object.assign(sched.routineSlots.routines, slotsBefore);
   }
 }
 
@@ -958,5 +965,57 @@ describe('a monthly routine, end to end', () => {
       assert.strictEqual(text(rowNamed(again.doc, 'Month end').querySelector('.schedule-problem-body')), DAY_31_BODY);
       again.dom.window.close();
     });
+  });
+});
+
+// Saturday 14 November 2026, ten past ten. The stores are seeded the way the
+// tick writes them, and the row is read off what discovery then sends.
+describe('a monthly row, out of a real roster', () => {
+  const NOV = new Date(2026, 10, 14, 10, 10);
+  const FIRST = new Date(2026, 10, 1, 9, 0);
+  const LEDGER = [{ name: 'Ledger', schedule: 'on day 1 of every month at 09:00', prompt: 'p', enabled: true }];
+  const slots = (entry) => () => {
+    sched.routineSlots.routines['piper:Ledger'] = { due: iso(FIRST), schedule: 'monthly:1:9:0', missed: [], ...entry };
+  };
+  const nextRunOf = (seed) => monthlyWorkspace(LEDGER, () => {
+    const { doc, dom } = listAndEditor(NOV);
+    const line = rowNamed(doc, 'Ledger').querySelector('.next-run');
+    dom.window.close();
+    return line ? text(line) : null;
+  }, NOV, seed);
+
+  test('a slot the tick still owes reads as shortly, with the date it was due', () => {
+    assert.strictEqual(nextRunOf(slots({ since: iso(new Date(2026, 9, 1)) })),
+      'Next run: shortly. It was due 1 November, 9:00am.');
+  });
+
+  test('a slot that was never owed names next month instead', () => {
+    // First seen after the slot, and held through it.
+    assert.strictEqual(nextRunOf(slots({ since: iso(new Date(2026, 10, 5)) })), 'Next run: 1 December, 9:00am, London time');
+    assert.strictEqual(nextRunOf(slots({ since: iso(new Date(2026, 9, 1)), heldAt: iso(new Date(2026, 10, 10)) })),
+      'Next run: 1 December, 9:00am, London time');
+  });
+
+  test('a late run names the date it was due, and a month that closed unserved says so', () => {
+    const late = () => {
+      slots({ since: iso(new Date(2026, 9, 1)) })();
+      sched.routineState['piper:Ledger'] = { lastRun: iso(new Date(2026, 10, 14, 9, 4)), status: 'completed', duration: 120 };
+    };
+    monthlyWorkspace(LEDGER, () => {
+      const { doc, dom } = listAndEditor(NOV);
+      assert.strictEqual(text(rowNamed(doc, 'Ledger').querySelector('.run-status')), 'Ran late: today, 9:02am. Due 1 November, 9:00am.');
+      assert.strictEqual(text(rowNamed(doc, 'Ledger').querySelector('.next-run')), 'Next run: 1 December, 9:00am, London time');
+      dom.window.close();
+    }, NOV, late);
+    const missed = () => {
+      slots({ since: iso(new Date(2026, 8, 1)), missed: [{ slot: iso(new Date(2026, 9, 1, 9, 0)) }] })();
+      sched.routineState['piper:Ledger'] = { lastRun: iso(new Date(2026, 8, 1, 9, 2)), status: 'completed', duration: 120 };
+    };
+    monthlyWorkspace(LEDGER, () => {
+      const { doc, dom } = listAndEditor(NOV);
+      assert.strictEqual(text(rowNamed(doc, 'Ledger').querySelector('.run-status')),
+        'Missed: Rundock was closed at 9:00am 1 October, London time, and not opened again before the month ended.');
+      dom.window.close();
+    }, NOV, missed);
   });
 });

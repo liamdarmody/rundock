@@ -214,7 +214,22 @@
       "the day 29 to 31 body names the file's own time": 0.2,
       "the notice is drawn as a lead and a body": 2,
       "the notice lead takes the danger token made for a card": 2.1,
-      "the notice body is quiet": 2.1
+      "the notice body is quiet": 2.1,
+      "each outcome carries its own leading word": 0.2,
+      "a late run leads with Ran late, not Caught up": 0.2,
+      "a caught-up row names the time it was due as well as the time it ran": 0.2,
+      "the row reads a monthly routine off the server's kind": 0.2,
+      "a monthly late run names the date it was due": 0.2,
+      "a missed monthly slot is named by its date": 0.2,
+      "a missed monthly slot says the month ended first": 0.2,
+      "the owed line is monthly only": 0.2,
+      "the owed line waits on the tick's own answer": 0.2,
+      "only a slot that has come is owed": 0.2,
+      "the owed line names when it was due": 0.2,
+      "the server says which form it read": 1.2,
+      "the roster carries the form the server read": 0.9,
+      "the row hands the server's form to the model": 2.1,
+      "a routine nothing is serving is drawn with no next run": 0.9
     },
     "mutate-rundock-ui-guards.js": {
       "an alert with an action aligns message and action on the first baseline": 4.1,

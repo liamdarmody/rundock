@@ -55,7 +55,7 @@ const FOUR_ROWS = [
     state: { status: 'completed', duration: 3 }, lastStart: iso(new Date(2026, 7, 20, 7, 0, 12)),
     lastSlot: iso(TODAYS_SLOT), nextRun: iso(TOMORROWS_SLOT),
   }),
-  routine('Caught up', {
+  routine('Ran late', {
     state: { status: 'completed', duration: 3 }, lastStart: iso(new Date(2026, 7, 20, 9, 14)),
     lastSlot: iso(TODAYS_SLOT), nextRun: iso(TOMORROWS_SLOT),
   }),
@@ -516,12 +516,12 @@ describe('the four rows', () => {
     assert.deepStrictEqual(statuses.map(s => text(s)), [
       'Missed: Rundock was closed at 7:00am yesterday, London time',
       'Ran today, 7:00am, London time',
-      'Caught up: ran today, 9:14am, London time, due 7:00am',
+      'Ran late: today, 9:14am. Due 7:00am.',
       'Failed: today, 7:00am, London time',
     ]);
     // The ruling: a late run is a success and keeps the success class, and the
     // one state where nothing ran is the only one told apart by colour.
-    assert.match(rowNamed(doc, 'Caught up').querySelector('.run-status').className, /ok-quiet/,
+    assert.match(rowNamed(doc, 'Ran late').querySelector('.run-status').className, /ok-quiet/,
       'a late run must not be dressed as a warning');
     assert.match(rowNamed(doc, 'Missed').querySelector('.run-status').className, /neutral/,
       'a passed slot is history, not an error');
@@ -677,7 +677,7 @@ describe('a run still going', () => {
     const { doc, w, dom } = shell();
     w.renderRoutines();
     assert.strictEqual(rows(doc).length, 4);
-    for (const name of ['Ran on time', 'Caught up', 'Missed', 'Failed']) {
+    for (const name of ['Ran on time', 'Ran late', 'Missed', 'Failed']) {
       assert.notStrictEqual(text(rowNamed(doc, name).querySelector('.run-status')), 'Still going');
     }
     dom.window.close();
@@ -1960,6 +1960,28 @@ describe('a routine the upgrade held back', () => {
     assert.strictEqual(style(body).color, 'var(--text-2-strong)');
     assert.strictEqual(style(body).fontWeight, '400');
     dom.window.close();
+  });
+
+  // "Ran late" replaced "Caught up" as the word for a late run, daily, weekly
+  // and monthly, so the old word is nowhere on the list in any of its states,
+  // and no file that writes the row or the run screen still spells it.
+  test('no row says Caught up, and nothing that draws a row or a run spells it', () => {
+    const monthly = (name, extra) => routine(name, {
+      schedule: 'on day 20 of every month at 07:00', scheduleKind: 'monthly', ...extra,
+    });
+    const { doc, w, dom } = shell([
+      ...FOUR_ROWS,
+      monthly('Monthly late', { state: { status: 'completed', duration: 3 }, lastStart: iso(new Date(2026, 7, 20, 9, 14)), lastSlot: iso(TODAYS_SLOT) }),
+      monthly('Monthly owed', { nextRun: iso(TODAYS_SLOT), refusal: null }),
+    ]);
+    w.renderRoutines();
+    assert.match(text(rowNamed(doc, 'Monthly late')), /Ran late: today, 9:14am\. Due 20 August, 7:00am\./);
+    assert.doesNotMatch(doc.body.textContent, /caught up/i);
+    dom.window.close();
+    for (const file of ['public/routines-model.js', 'public/views/routines.js', 'public/run-detail-model.js', 'public/views/run-detail.js']) {
+      const src = fs.readFileSync(path.join(__dirname, '..', '..', file), 'utf-8');
+      assert.doesNotMatch(src, /['"`]Caught up/, `${file} still writes "Caught up"`);
+    }
   });
 
   // THE DELETE CONFIRMATION DRAWS A ROW TOO, and it makes two decisions about

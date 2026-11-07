@@ -754,6 +754,20 @@ describe('ROUTINES.md: a monthly routine runs once a month and catches up within
       'having caught up on the 20th, it is not due again that month');
   });
 
+  // The row's word for a late run is the model's own lead, read off it, so the
+  // page and the row cannot part company on it.
+  test('the page calls a late run what the row calls it', () => {
+    const { OUTCOMES, CATCH_UP_AFTER_MS } = require('../../public/routines-model.js');
+    const lead = OUTCOMES['caught-up'].lead;
+    assert.strictEqual(lead, 'Ran late');
+    assert.match(routinesDoc, /The row's on-time, ran-late and missed verdicts are computed from scheduled runs only/,
+      'the verdict words follow the row');
+    assert.ok(behaviour.includes(`its row then leads with **${lead}**, naming when it started and when it was due`),
+      'and so does the description of a late run');
+    assert.match(behaviour, new RegExp(`A run counts as late from ${CATCH_UP_AFTER_MS / 60000} minutes after its slot\\.`));
+    assert.doesNotMatch(routinesDoc, /caught-up verdict|Caught up:/, 'the old word is gone from the page');
+  });
+
   test('the page no longer says there are only two forms, or a run once per day or week', () => {
     assert.doesNotMatch(routinesDoc, /only two patterns|the two forms that work|both forms that work|two accepted forms|once per day or week/,
       'every sentence that counted two forms follows the change');

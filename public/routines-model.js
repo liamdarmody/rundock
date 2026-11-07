@@ -17,7 +17,7 @@
  * behaving perfectly, and teaches its user to ignore the one signal that
  * matters.
  *
- * So: Ran on time and Caught up share the success colour, Caught up one weight
+ * So: Ran on time and Ran late share the success colour, Ran late one weight
  * quieter because it is still a success. Missed is idle grey, the only state
  * where nothing ran at all. Failed is the danger colour. Amber appears
  * nowhere: the palette already spends it on "needs the user, not an error",
@@ -69,7 +69,7 @@
    */
   const OUTCOMES = {
     'on-time': { tone: 'ok', lead: 'Ran' },
-    'caught-up': { tone: 'ok-quiet', lead: 'Caught up' },
+    'caught-up': { tone: 'ok-quiet', lead: 'Ran late' },
     'missed': { tone: 'neutral', lead: 'Missed' },
     'failed': { tone: 'failed', lead: 'Failed' },
     // A run somebody deliberately stopped. History, like a missed slot,
@@ -548,6 +548,12 @@
     return editor.timezoneWords(zone);
   }
 
+  /** "1 November", the date a monthly slot is named by, however near it is. */
+  function dateWords(instant) {
+    const when = asDate(instant);
+    return when ? `${when.getDate()} ${MONTHS[when.getMonth()]}` : null;
+  }
+
   /** "today, 7:00am, London time", the shape every time in this list takes. */
   function timeWords(instant, now, zone) {
     const day = dayWords(instant, now);
@@ -693,24 +699,32 @@
   /**
    * What happened last time, in the words and the tone that state gets.
    *
-   * Caught up names BOTH times, the actual and the due, so it is legible as a
+   * Ran late names BOTH times, the actual and the due, so it is legible as a
    * delay rather than an event with no explanation. Missed names the cause,
    * Rundock being closed, and the slot it was closed through.
+   *
+   * A MONTHLY ROUTINE NAMES DATES. Its slot can be weeks before the run that
+   * served it, so the due time carries its date, and a missed slot, which the
+   * scheduler records only once its month has closed, says the month ended
+   * first. Which form a routine is comes from the server (`scheduleKind`).
    */
   function runStatus(input) {
     const kind = outcomeOf(input);
     if (!kind) return null;
     const now = asDate(input && input.now);
     const zone = (input && input.zone) || null;
+    const monthly = input.scheduleKind === 'monthly';
     const outcome = OUTCOMES[kind];
     let text = null;
     if (kind === 'missed') {
       const slot = asDate(input.missedSlot);
       const place = zoneWords(zone);
-      const when = `${clockWords(slot)} ${dayWords(slot, now)}`;
+      const when = `${clockWords(slot)} ${monthly ? dateWords(slot) : dayWords(slot, now)}`;
       text = `Missed: Rundock was closed at ${place ? `${when}, ${place} time` : when}`;
+      if (monthly) text += ', and not opened again before the month ended.';
     } else if (kind === 'caught-up') {
-      text = `Caught up: ran ${timeWords(input.lastStart, now, zone)}, due ${clockWords(input.lastSlot)}`;
+      const due = monthly ? `${dateWords(input.lastSlot)}, ${clockWords(input.lastSlot)}` : clockWords(input.lastSlot);
+      text = `Ran late: ${timeWords(input.lastStart, now, null)}. Due ${due}.`;
     } else if (kind === 'failed') {
       text = `Failed: ${timeWords(input.lastStart, now, zone)}`;
     } else if (kind === 'stopped') {
@@ -1206,6 +1220,15 @@
     // which is the exact reassurance the reader came for and the one this row
     // must not give. The note below takes its place.
     if (!isServed(input)) return null;
+    // A MONTHLY SLOT THE TICK STILL OWES. The server names a monthly slot that
+    // has passed only when the tick will fire it (it steps over one that was
+    // never owed), so with no refusal it is a catch-up a moment away, and a
+    // time in the past would read as a fault. Daily and weekly keep theirs.
+    const at = asDate(input.nextRun);
+    const now = asDate(input.now);
+    if (input.scheduleKind === 'monthly' && !input.refusal && at && now && at <= now) {
+      return { text: `Next run: shortly. It was due ${dateWords(at)}, ${clockWords(at)}.`, className: 'next-run' };
+    }
     const words = timeWords(input && input.nextRun, input && input.now, input && input.zone);
     if (!words) return null;
     return { text: `Next run: ${words}`, className: 'next-run' };

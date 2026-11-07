@@ -320,6 +320,8 @@ function rowHtml(entry, index, withActions) {
     scheduleReadable: r.scheduleReadable,
     // And its reading of a hand-typed day 29 to 31, for the notice's body.
     unreadableMonthDay: r.unreadableMonthDay,
+    // Which form the scheduler reads it as, so a monthly row names dates.
+    scheduleKind: r.scheduleKind,
     // THE SCHEDULER'S OWN REFUSAL, published beside the roster by the same
     // enrichment that stamps scheduleReadable, and passed through untouched
     // for the same reason: the row's offer promises what the tick would do,
@@ -428,7 +430,7 @@ function rowHtml(entry, index, withActions) {
   }
   // A run in progress, checked before the three-tone line below and instead
   // of it: outcomeOf (routines-model.js) deliberately answers `null` while
-  // `lastRunStatus` is 'running', because "on time / caught up / missed /
+  // `lastRunStatus` is 'running', because "on time / ran late / missed /
   // failed" are all verdicts on a run that has ENDED, and this one has not.
   // That withholding is right for the model; it is not a reason for the row
   // to say nothing. Before this, the row went blank for exactly as long as a
