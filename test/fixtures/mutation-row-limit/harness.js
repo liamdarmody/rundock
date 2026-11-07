@@ -12,9 +12,10 @@
 //   node harness.js <repo> '<config as JSON>' [--markdown] [--rows a:b]
 //
 // config: { rows: [{ suite, label, guard, without }], limitMs, graceMs,
-//           spawnThrows }
+//           spawnThrows, command }
 // `suite` is a file in this folder. `spawnThrows` makes starting any suite
-// throw, the control failing on the runner's side.
+// throw, the control failing on the runner's side. `command` replaces node as
+// what starts each suite, so a case can name one the system cannot find.
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -47,7 +48,7 @@ async function redTests(suite) {
   let out = '';
   let failed = false;
   try {
-    out = await runSuite('node', ['--test', ...REPORTER, suite], { cwd: root, ...LIMITS });
+    out = await runSuite(config.command || 'node', ['--test', ...REPORTER, suite], { cwd: root, ...LIMITS });
   } catch (e) {
     if (e.didNotFinish) return { didNotFinish: e.didNotFinish };
     failed = true;

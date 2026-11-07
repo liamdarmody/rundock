@@ -397,6 +397,20 @@ describe('a harness whose row does not finish in time', () => {
     for (const { role, pid } of recorded(pids)) assert.ok(await gone(pid), `an earlier run's ${role} (pid ${pid}) is still running`);
   });
 
+  test('a suite command the system cannot find makes the row no verdict, and the harness exits non-zero', { timeout: 60000 }, async (t) => {
+    // The start failure a real harness meets: the command is missing, so the
+    // child is created with no pid and reports 'error' later, rather than the
+    // call throwing on the spot.
+    const fx = repo(t);
+    const run = await start(t, fx, fx.config({ rows: [CATCH], command: 'rundock-mutation-fixture-no-such-command' })).ended;
+    t.diagnostic(`exit ${run.status} ${run.signal || ''}\n${run.stdout}\n${run.stderr}`);
+    assert.strictEqual(run.signal, null, 'the harness ended on its own rather than being killed for hanging');
+    assert.match(lineFor(run.stdout, CATCH.label) || '', /no verdict/, `the row is no verdict:\n${run.stdout}\n${run.stderr}`);
+    assert.strictEqual(run.status, mutationRun.NO_VERDICT, 'and the harness exits with the no-verdict code');
+    assert.strictEqual(fs.readFileSync(fx.src, 'utf8'), SOURCE, 'the file is byte-identical to its original');
+    assert.deepStrictEqual(markers(fx.root), [], 'and the run left no record');
+  });
+
   test('a runner that throws while starting a suite makes the row no verdict, and the harness exits non-zero', { timeout: 60000 }, async (t) => {
     const fx = repo(t);
     const run = await start(t, fx, fx.config({ rows: [CATCH], spawnThrows: true })).ended;
