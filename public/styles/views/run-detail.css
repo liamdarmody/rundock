@@ -113,7 +113,9 @@
 .rd-ic { width: 16px; height: 16px; flex-shrink: 0; color: var(--text-2); }
 .rd-tag { font-size: var(--caption); color: var(--text-2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 2px 8px; flex-shrink: 0; }
 
-.rd-cannot-open { margin-top: 10px; }
+/* Why some names are plain, under the list, in the strong secondary text:
+   .settings-caption's colour is defined only inside the settings pane. */
+.rd-cannot-open { font-size: var(--caption); line-height: 1.6; color: var(--text-2-strong); margin: 10px 0 0; }
 
 /* A run that changed nothing. A plain sentence, in ordinary text colour: this
    is a routine working normally and it should not read as a warning. */

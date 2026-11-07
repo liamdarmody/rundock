@@ -104,6 +104,34 @@ function draw(run, { agentId = 'default', routine = 'Hello World' } = {}) {
   return { w, doc, dom, html: doc.getElementById('run-detail-content').innerHTML };
 }
 
+// The words around a name that opens, pinned exactly.
+const PLAIN_NAMES = "Names in plain text can't be opened here: hidden files and folders, code and config files, "
+  + 'and files that have since been moved or deleted.';
+const OPEN_IN_FILES = 'Open in Files';
+
+// The workspace the records above were written in, and the tree the server
+// would send for it: the record's one file, and nothing else.
+const TREE_ROOT = '/w';
+const fileNode = (p) => ({ type: 'file', name: p.split('/').pop(), path: p, kind: 'note' });
+const folderNode = (p, children) => ({ type: 'folder', name: p.split('/').pop(), path: p, children });
+const TREE = [folderNode('Hello World', [fileNode('Hello World/hello-world-2026-08-24.md')])];
+
+/**
+ * Draw a record with a workspace root and a file tree loaded, as the shell
+ * holds them once the roster and the tree have arrived, and a stand-in for
+ * the Files view's open that records what it was asked to open.
+ */
+function drawLinked(run, { tree = TREE, root = TREE_ROOT } = {}) {
+  const { w, doc, dom } = shell();
+  w.rosterWorkspacePath = root;
+  w.cachedFileTree = tree;
+  w.opened = [];
+  w.openWorkspaceFilePath = (p) => { w.opened.push(p); };
+  w.openRunDetail('default', 'Hello World');
+  w.runArrived({ type: 'run', runId: null, agentId: 'default', routine: 'Hello World', run });
+  return { w, doc, dom };
+}
+
 /** The text a reader actually sees, with markup and entities out of the way. */
 function pageText(doc) {
   return doc.getElementById('run-detail-content').textContent.replace(/\s+/g, ' ').trim();
@@ -332,17 +360,26 @@ describe('what the run changed', () => {
     bad.dom.window.close();
   });
 
-  test('the screen says plainly that it cannot open a changed file, and why', () => {
-    // The card allows either: files that open, or a plain statement that this
-    // release cannot. This is the statement, and it has to be ON THE PAGE
-    // rather than in a comment, so a reader who expects a link is told why
-    // there is none instead of clicking a name that does nothing.
-    const { doc, dom } = draw(record());
-    assert.match(pageText(doc), /can't be opened from here yet/i);
-    assert.match(pageText(doc), /records each file as a full path on the computer that ran/i);
-    assert.strictEqual(doc.querySelectorAll('#run-detail-content a[href]').length, 0,
-      'a file name is a link that goes nowhere, which is worse than no link');
-    dom.window.close();
+  test('the screen says which names cannot be opened, under the list, only while one cannot', () => {
+    // A name in plain text beside names that open needs its reason ON THE
+    // PAGE, so a reader is told why it does not open instead of clicking it.
+    // With no tree loaded every name is plain, so the sentence shows; once the
+    // tree lists the file, the name opens and the sentence goes.
+    const plain = draw(record());
+    const note = plain.doc.querySelector('[data-run-detail="plain-names"]');
+    assert.ok(note, 'a list with a plain name says why');
+    assert.strictEqual(note.textContent, PLAIN_NAMES);
+    assert.strictEqual(plain.doc.querySelector('[data-run-detail="files"]').nextElementSibling, note, 'directly under the list');
+    const linked = drawLinked(record());
+    assert.strictEqual(linked.doc.querySelector('[data-run-detail="plain-names"]'), null, 'every name opens, so there is nothing to explain');
+    for (const { doc } of [plain, linked]) {
+      assert.ok(!/can't be opened from here yet|records each file as a full path/i.test(pageText(doc)),
+        'the old reason, which no longer applies, is gone');
+      assert.strictEqual(doc.querySelectorAll('#run-detail-content a[href]').length, 0,
+        'a name that opens is a button, never a link that navigates away');
+    }
+    plain.dom.window.close();
+    linked.dom.window.close();
   });
 
   test('a file is named by the part a reader recognises, with its path underneath', () => {
@@ -626,5 +663,122 @@ describe('a run that used the shell, on the page', () => {
     assert.strictEqual(rule.get('border'), '1px solid var(--border)');
     assert.strictEqual(rule.get('background'), 'var(--elevated)');
     assert.strictEqual(rule.get('color'), 'var(--text-2-strong)');
+  });
+});
+
+describe('a changed file opens from the record', () => {
+  const names = (doc) => [...doc.querySelectorAll('[data-run-detail="file-name"]')];
+  const TWO = record({ files: [
+    { path: '/w/Hello World/hello-world-2026-08-24.md', tool: 'Write', change: 'created', at: null, source: 'transcript' },
+    { path: '/w/scripts/tidy.py', tool: 'Write', change: 'created', at: null, source: 'transcript' },
+  ] });
+
+  test('a name the tree lists is a button titled "Open in Files", and one it does not list is plain text', () => {
+    const { doc, dom } = drawLinked(TWO);
+    const [linked, plain] = names(doc);
+    assert.strictEqual(linked.tagName, 'BUTTON');
+    assert.strictEqual(linked.type, 'button');
+    assert.strictEqual(linked.title, OPEN_IN_FILES);
+    assert.strictEqual(linked.textContent, 'hello-world-2026-08-24.md');
+    assert.strictEqual(plain.tagName, 'SPAN');
+    assert.strictEqual(plain.textContent, 'tidy.py');
+    assert.strictEqual(doc.querySelectorAll('[data-run-detail="file"]')[1].querySelector('button'), null,
+      'a name the tree does not list has no control at all');
+    assert.strictEqual(doc.querySelector('[data-run-detail="plain-names"]').textContent, PLAIN_NAMES,
+      'and the list says why one name is plain');
+    dom.window.close();
+  });
+
+  test("clicking a linked name opens the tree's own path in Files, never the recorded string", () => {
+    const { w, doc, dom } = drawLinked(TWO);
+    names(doc)[0].click();
+    assert.deepStrictEqual(w.opened, ['Hello World/hello-world-2026-08-24.md']);
+    names(doc)[1].click();
+    assert.deepStrictEqual(w.opened, ['Hello World/hello-world-2026-08-24.md'], 'a plain name opens nothing');
+    dom.window.close();
+  });
+
+  test('a second click on a linked name opens the same file again', () => {
+    const { w, doc, dom } = drawLinked(TWO);
+    names(doc)[0].click();
+    names(doc)[0].click();
+    assert.deepStrictEqual(w.opened, ['Hello World/hello-world-2026-08-24.md', 'Hello World/hello-world-2026-08-24.md']);
+    dom.window.close();
+  });
+
+  test("a name and path holding quotes and markup render as their own characters and open the tree's path", () => {
+    // A file of this name is one the tree can list: it ends .md and starts
+    // with no dot. So it renders as a button, and what is tested is that the
+    // path reaches the click as data, never as markup or as script.
+    const name = `It's "done" <b>now <img src=x onerror="window.__xss=1">.md`;
+    const tree = [folderNode('notes', [fileNode(`notes/${name}`)])];
+    const run = record({ files: [{ path: `/w/notes/${name}`, tool: 'Write', change: 'created', at: null, source: 'transcript' }] });
+    const { w, doc, dom } = drawLinked(run, { tree });
+    const content = doc.getElementById('run-detail-content');
+    const [button] = names(doc);
+    assert.strictEqual(button.tagName, 'BUTTON');
+    assert.strictEqual(button.textContent, name);
+    assert.strictEqual(content.querySelector('b, img'), null, 'the name created no element');
+    assert.deepStrictEqual([...button.attributes].map(a => a.name).sort(),
+      ['class', 'data-path', 'data-run-detail', 'onclick', 'title', 'type'], 'no attribute was broken out of');
+    assert.strictEqual(button.getAttribute('onclick'), 'runDetailOpenFile(this)', 'the handler carries no path');
+    button.click();
+    assert.deepStrictEqual(w.opened, [`notes/${name}`]);
+    assert.notStrictEqual(w.__xss, 1);
+    dom.window.close();
+  });
+
+  test('a click on a name whose file has left the tree opens nothing, and the name turns plain', () => {
+    const { w, doc, dom } = drawLinked(TWO);
+    assert.strictEqual(names(doc)[0].tagName, 'BUTTON', 'sanity: the name opened when it was drawn');
+    // The tree changes underneath the drawn screen, before any redraw.
+    w.cachedFileTree = [folderNode('Hello World', [])];
+    names(doc)[0].click();
+    assert.deepStrictEqual(w.opened, [], 'a file the current tree no longer lists is not opened');
+    assert.strictEqual(names(doc)[0].tagName, 'SPAN', 'and the screen now agrees with the tree');
+    dom.window.close();
+  });
+
+  test('names link when the tree arrives, and turn plain when a later tree drops the file', () => {
+    const { w, doc, dom } = drawLinked(record(), { tree: null });
+    assert.strictEqual(names(doc)[0].tagName, 'SPAN', 'with no tree loaded every name is plain');
+    assert.ok(doc.querySelector('[data-run-detail="plain-names"]'), 'and the list says why');
+    w.cachedFileTree = TREE;
+    w.runDetailTreeUpdated();
+    assert.strictEqual(names(doc)[0].tagName, 'BUTTON', 'the tree arrived, so the name links');
+    assert.strictEqual(doc.querySelector('[data-run-detail="plain-names"]'), null);
+    w.cachedFileTree = [folderNode('Hello World', [])];
+    w.runDetailTreeUpdated();
+    assert.strictEqual(names(doc)[0].tagName, 'SPAN', 'the file was deleted since the draw, so the name is plain again');
+    assert.ok(doc.querySelector('[data-run-detail="plain-names"]'));
+    dom.window.close();
+  });
+
+  test('a tree push that changes no name leaves the screen as drawn, focus included', () => {
+    // The client asks for the tree after every file-writing tool call, and
+    // the server sends it to every client: a redraw on each would take
+    // keyboard focus off the name, or off Stop, every turn.
+    const { w, doc, dom } = drawLinked(record());
+    const button = names(doc)[0];
+    button.focus();
+    w.cachedFileTree = JSON.parse(JSON.stringify(TREE));
+    w.runDetailTreeUpdated();
+    assert.strictEqual(names(doc)[0], button, 'the name was not redrawn');
+    assert.strictEqual(doc.activeElement, button, 'and keeps focus');
+    dom.window.close();
+  });
+
+  test('leaving the screen and coming back draws the same links, plain names and note', () => {
+    const run = record({ ...TWO, usedShell: true });
+    const { w, doc, dom } = drawLinked(run);
+    const before = doc.getElementById('run-detail-content').innerHTML;
+    assert.ok(doc.querySelector('[data-run-detail="shell-note"]') && names(doc)[0].tagName === 'BUTTON' && names(doc)[1].tagName === 'SPAN',
+      'sanity: the first draw has a link, a plain name and the note');
+    w.runDetailBack();
+    assert.strictEqual(w.navigatedTo, 'routines');
+    w.openRunDetail('default', 'Hello World');
+    w.runArrived({ type: 'run', runId: null, agentId: 'default', routine: 'Hello World', run });
+    assert.strictEqual(doc.getElementById('run-detail-content').innerHTML, before);
+    dom.window.close();
   });
 });

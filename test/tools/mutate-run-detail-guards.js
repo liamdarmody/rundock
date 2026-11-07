@@ -224,9 +224,14 @@ const MUTATIONS = [
   [MODEL, 'a list from a run that stopped partway says so',
     '      files: changedFiles(found ? record : null, FILES_LABELS[state.filesLabel] || FILES_LABELS.complete),',
     '      files: changedFiles(found ? record : null, FILES_LABELS.complete),'],
-  [VIEW, 'the screen says plainly that it cannot open a changed file',
-    '    + `<p class="settings-caption rd-cannot-open">${escText(CANNOT_OPEN)}</p>`;',
-    ';'],
+  // Why some names are plain, drawn only while one is: drawn always here,
+  // then never in the row beside it.
+  [VIEW, 'the screen says which names cannot be opened, only while one cannot',
+    '    + (links.some(link => !link) ? ',
+    '    + (true ? '],
+  [VIEW, 'Plain names: the sentence never drawn',
+    '    + (links.some(link => !link) ? ',
+    '    + (false ? '],
 
   // ===== THE WAY IN AND THE WAY BACK =====
   [ROUTINES_VIEW, 'a row with a last run carries a way into that run',
@@ -358,6 +363,19 @@ const MUTATIONS = [
   [MODEL, 'File links: the Windows separator mapping removed',
     "    const slashes = (p) => (windows ? p.replace(/\\\\/g, '/') : p);",
     '    const slashes = (p) => p;'],
+  // The link on the run screen, watched by the file that draws it.
+  [VIEW, 'File links: the recorded string opened in place of the tree path',
+    'data-path="${attrText(links[i])}"',
+    'data-path="${attrText(entry.path)}"'],
+  [VIEW, 'File links: the path written into an inline handler',
+    ' onclick="runDetailOpenFile(this)">',
+    " onclick=\"openWorkspaceFilePath('${attrText(links[i])}')\">"],
+  [VIEW, 'File links: the click re-check removed',
+    '  const listed = root && drawn ? treePathOf(`${root}/${drawn}`) : null;',
+    '  const listed = drawn;'],
+  [VIEW, 'File links: the tree redraw removed',
+    '  if (JSON.stringify(links) !== drawnLinks) renderRunDetail();',
+    ''],
 ];
 
 // The reporter is named explicitly rather than left to the default, which
