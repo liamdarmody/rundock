@@ -59,21 +59,28 @@ after(async () => {
   await h.shutdown();
 });
 
-// A workspace whose keeper runs `prompt` every day at 09:00. With `held`, its
-// child holds the turn until the file named by the returned `release` exists.
-function keeperWorkspace(prompt, { held = false, state = null } = {}) {
+// A workspace whose keeper runs `prompt` every day at 09:00 as keep-check, and
+// any `others` beside it on the same schedule. With `held`, the keep-check
+// child holds its turn until the file named by the returned `release` exists.
+// `state` is written as the workspace's routine state file.
+function keeperWorkspace(prompt, { held = false, state = null, others = [] } = {}) {
+  const routines = [{ name: ROUTINE, prompt }, ...others];
   const dir = makeWorkspace({
     claudeMd: '# Keeper fixture\n',
     agents: {
       [AGENT]: agentFile({
         name: AGENT, type: 'specialist', order: 1,
-        routines: [{ name: ROUTINE, schedule: SCHEDULE, prompt, enabled: true }],
+        routines: routines.map(r => ({ name: r.name, schedule: SCHEDULE, prompt: r.prompt, enabled: true })),
       }),
     },
   });
   const release = path.join(dir, 'release-run');
   fs.writeFileSync(path.join(dir, 'stub-scenario.json'), JSON.stringify({
-    rules: [{ match: { promptIncludes: prompt }, ...(held ? { untilFile: release } : {}), turn: [{ text: 'kept' }] }],
+    rules: routines.map(r => ({
+      match: { promptIncludes: r.prompt },
+      ...(held && r.name === ROUTINE ? { untilFile: release } : {}),
+      turn: [{ text: 'kept' }],
+    })),
   }));
   if (state) {
     fs.mkdirSync(path.join(dir, '.rundock'), { recursive: true });
@@ -271,3 +278,135 @@ test('the workspace switch does not release a run that is still going', async (t
   await h.waitUntil(() => recordsIn(a.dir).filter(r => r.status !== 'running').length === 2);
   assert.strictEqual(recordsIn(a.dir).filter(r => r.status !== 'running').length, 2, 'and the second run ended too');
 });
+
+// ===== WHERE THE ENDING LANDS =====
+//
+// Every test below starts a run in A, switches to B, and lets the run end
+// there. B holds a routine of the same key, which last ran the day before: the
+// collision that let A's ending stamp B's file, so that B's routine read as
+// not due that day.
+
+const stateFile = (dir) => path.join(dir, '.rundock', 'routine-state.json');
+const ranTheDayBefore = (day) => ({ lastRun: dayAt(day - 1, 9, 0).toISOString(), status: 'completed', duration: 3 });
+const promptedWith = (dir, body) => promptsIn(dir).filter(p => String(p.prompt).includes(body)).length;
+const closedIn = (dir) => recordsIn(dir).filter(r => r.status !== 'running').length;
+
+test(`a run that outlives a switch records its ending in its own workspace and no other (${SIDE})`, async (t) => {
+  const before = ranTheDayBefore(6);
+  const a = keeperWorkspace('origin body', { held: true });
+  const b = keeperWorkspace('same key elsewhere body', { state: { [KEY]: before } });
+  await startHeldRun(t, a, dayAt(6, 9, 30));
+
+  await choose(b.dir);
+  const bBytes = fs.readFileSync(stateFile(b.dir));
+  assert.deepStrictEqual(h.internal.routineState[KEY], before, 'the open state is B\'s own');
+
+  clock.at = dayAt(6, 9, 40);
+  assertEndedAsItsChildSaid(a, await finish(a), 'after switching to B');
+
+  assert.ok(fs.readFileSync(stateFile(b.dir)).equals(bBytes),
+    `B's state file is byte-identical before and after A's run ended:\n${fs.readFileSync(stateFile(b.dir), 'utf-8')}`);
+  assert.deepStrictEqual(h.internal.routineState[KEY], before, 'and B\'s state for that key, in memory, is unchanged');
+  assert.deepStrictEqual(stateIn(a.dir)[KEY], { lastRun: dayAt(6, 9, 40).toISOString(), status: 'completed', duration: 600 },
+    'A\'s entry moved from running to the run\'s outcome, stamped with its ending');
+});
+
+// Carrying on in B, which is what most people do next: B's ticks run B's
+// routines, and B's routine of the same key, held while A's run was going,
+// runs on the first tick after that run ends. Delayed, not lost.
+test(`carrying on in B: its ticks run its routines, and the one sharing the run's key runs once that run ends (${SIDE})`, async (t) => {
+  const a = keeperWorkspace('origin for B ticks body', { held: true });
+  const b = keeperWorkspace('B same key body', {
+    state: { [KEY]: ranTheDayBefore(8), [`${AGENT}:side-check`]: ranTheDayBefore(8) },
+    others: [{ name: 'side-check', prompt: 'B side body' }],
+  });
+  await startHeldRun(t, a, dayAt(8, 9, 30));
+  await choose(b.dir);
+
+  clock.at = dayAt(8, 9, 31);
+  tick(t);
+  await h.waitUntil(() => closedIn(b.dir) === 1);
+  assert.strictEqual(promptedWith(b.dir, 'B side body'), 1, 'B\'s tick ran B\'s routine while A\'s run went on');
+  assert.strictEqual(promptedWith(b.dir, 'B same key body'), 0,
+    'and held the one sharing the key of A\'s run, which is still going');
+
+  clock.at = dayAt(8, 9, 40);
+  await finish(a);
+
+  clock.at = dayAt(8, 9, 41);
+  tick(t);
+  await h.waitUntil(() => closedIn(b.dir) === 2, { timeout: 4000 });
+  assert.strictEqual(promptedWith(b.dir, 'B same key body'), 1,
+    'B\'s routine of the same key ran on the first tick after A\'s run ended, because nothing stamped it');
+  assert.strictEqual(promptedWith(a.dir, 'origin for B ticks body'), 1, 'and nothing ran in A');
+});
+
+// The inverse: the run ends in B's time, then A is opened again. And the
+// retry: A fires at its next slot as usual, because its stamp is its real
+// ending.
+test(`coming back after the run ended elsewhere: A reads its real outcome, B never changed, and A fires at its next slot (${SIDE})`, async (t) => {
+  const a = keeperWorkspace('inverse body', { held: true });
+  const b = keeperWorkspace('inverse elsewhere body', { state: { [KEY]: ranTheDayBefore(10) } });
+  await startHeldRun(t, a, dayAt(10, 9, 30));
+  await choose(b.dir);
+  const bBytes = fs.readFileSync(stateFile(b.dir));
+
+  clock.at = dayAt(10, 9, 40);
+  await finish(a);
+  await choose(a.dir);
+
+  assert.deepStrictEqual(h.internal.routineState[KEY], { lastRun: dayAt(10, 9, 40).toISOString(), status: 'completed', duration: 600 },
+    'A reads the run\'s real outcome, never interrupted');
+  assert.ok(fs.readFileSync(stateFile(b.dir)).equals(bBytes), 'and B\'s state never changed');
+
+  clock.at = dayAt(10, 10, 0);
+  tick(t);
+  await h.delay(300);
+  assert.strictEqual(promptedWith(a.dir, 'inverse body'), 1, 'A\'s routine is not run again in the period it already ran in');
+
+  clock.at = dayAt(11, 9, 1);
+  tick(t);
+  await h.waitUntil(() => closedIn(a.dir) === 2);
+  assert.strictEqual(promptedWith(a.dir, 'inverse body'), 2, 'and runs at its next slot as usual');
+});
+
+// The control failing, which must fail closed: A cannot be written when the
+// run ends. The error names A's file, B is untouched, A's last good file is
+// unchanged, and A's routine is not due again that period, because the stamp
+// its start wrote is still there. At worst it reads interrupted.
+test('an origin workspace that cannot be written at the ending fails closed',
+  { skip: process.getuid && process.getuid() === 0 ? 'root writes through folder permissions' : false },
+  async (t) => {
+    const a = keeperWorkspace('unwritable origin body', { held: true });
+    const b = keeperWorkspace('unwritable elsewhere body', { state: { [KEY]: ranTheDayBefore(12) } });
+    await startHeldRun(t, a, dayAt(12, 9, 30));
+    await choose(b.dir);
+    const aBytes = fs.readFileSync(stateFile(a.dir));
+    const bBytes = fs.readFileSync(stateFile(b.dir));
+
+    const errors = [];
+    const realError = console.error;
+    console.error = (...args) => { errors.push(args.map(String).join(' ')); };
+    const rundock = path.join(a.dir, '.rundock');
+    fs.chmodSync(rundock, 0o500);
+    try {
+      clock.at = dayAt(12, 9, 40);
+      await finish(a);
+    } finally {
+      fs.chmodSync(rundock, 0o755);
+      console.error = realError;
+    }
+
+    assert.ok(errors.some(line => line.includes(stateFile(a.dir))),
+      `the ending logged an error naming A's file:\n${errors.join('\n')}`);
+    assert.ok(fs.readFileSync(stateFile(b.dir)).equals(bBytes), 'B is untouched');
+    assert.ok(fs.readFileSync(stateFile(a.dir)).equals(aBytes), 'and A\'s last good file is unchanged');
+
+    await choose(a.dir);
+    assert.strictEqual(h.internal.routineState[KEY].status, 'interrupted', 'at worst A\'s row reads interrupted');
+    clock.at = dayAt(12, 10, 0);
+    tick(t);
+    await h.delay(300);
+    assert.strictEqual(promptedWith(a.dir, 'unwritable origin body'), 1,
+      'and A\'s routine is not due again that period, because the stamp its start wrote is still there');
+  });
