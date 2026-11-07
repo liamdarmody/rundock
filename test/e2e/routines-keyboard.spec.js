@@ -74,7 +74,7 @@ async function unseed(routines, seeded) {
 // A token as the browser resolves it, inside <body> where the light theme's
 // overrides apply: a fresh probe painted with the token, with no transition,
 // so the value read is the token's own rather than one partway to it.
-function tokenColour(page, prop, name) {
+function tokenColor(page, prop, name) {
   return page.evaluate(([p, token]) => {
     const probe = document.createElement('span');
     probe.style.transition = 'none';
@@ -92,7 +92,7 @@ function tokenColour(page, prop, name) {
 // has arrived at the light base.
 async function goLight(page) {
   await page.evaluate(() => { if (!document.body.classList.contains('light')) toggleTheme(); });
-  const base = await tokenColour(page, 'background-color', '--base');
+  const base = await tokenColor(page, 'background-color', '--base');
   await expect.poll(() => page.evaluate(() => getComputedStyle(document.body).backgroundColor),
     { message: 'the light theme must settle' }).toBe(base);
 }
@@ -125,11 +125,11 @@ test('in the light theme the run screen\'s context line, Took line and guidance 
       await expect(screen.locator(sel)).toBeVisible();
     }
     await expect(screen.locator('.rd-context')).toHaveText('Wren');
-    const want = await tokenColour(page, 'color', '--text-2-strong');
+    const want = await tokenColor(page, 'color', '--text-2-strong');
     expect(want, 'sanity: the light strong secondary text token reads as a color').toBe('rgb(105, 100, 93)');
     await expect.poll(() => screen.evaluate((el) => {
-      const colour = (sel) => getComputedStyle(el.querySelector(sel)).color;
-      return { context: colour('.rd-context'), took: colour('.rd-took'), guidance: colour('[data-run-detail="guidance"]') };
+      const color = (sel) => getComputedStyle(el.querySelector(sel)).color;
+      return { context: color('.rd-context'), took: color('.rd-took'), guidance: color('[data-run-detail="guidance"]') };
     })).toEqual({ context: want, took: want, guidance: want });
   } finally {
     await unseed(routines, seeded);
@@ -196,9 +196,9 @@ test.describe('the scope rows from the keyboard', () => {
       document.body.appendChild(probe);
       const want = getComputedStyle(probe).color;
       probe.remove();
-      return { style: cs.outlineStyle, width: cs.outlineWidth, offset: cs.outlineOffset, colour: cs.outlineColor, want };
+      return { style: cs.outlineStyle, width: cs.outlineWidth, offset: cs.outlineOffset, color: cs.outlineColor, want };
     });
-    expect(ring).toEqual({ style: 'solid', width: '2px', offset: '-2px', colour: ring.want, want: ring.want });
+    expect(ring).toEqual({ style: 'solid', width: '2px', offset: '-2px', color: ring.want, want: ring.want });
 
     await tabTo(page, 'wren');
     await page.keyboard.press('Enter');
@@ -279,9 +279,9 @@ test.describe('the scope rows from the keyboard', () => {
 
     // The selected fill on All, which the page opens on, and the hover fill.
     const fill = (selector) => page.locator(selector).evaluate((el) => getComputedStyle(el).backgroundColor);
-    expect(await fill('#sidebar-routines .scope-item.active')).toBe(await tokenColour(page, 'background-color', '--accent-glow'));
+    expect(await fill('#sidebar-routines .scope-item.active')).toBe(await tokenColor(page, 'background-color', '--accent-glow'));
     await page.locator('#sidebar-routines .scope-item[data-scope="wren"]').hover();
-    const hover = await tokenColour(page, 'background-color', '--elevated');
+    const hover = await tokenColor(page, 'background-color', '--elevated');
     await expect.poll(() => fill('#sidebar-routines .scope-item[data-scope="wren"]'), { message: 'the hover fill' }).toBe(hover);
   });
 });

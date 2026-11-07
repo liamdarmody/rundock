@@ -557,7 +557,7 @@ describe('a scope row is a real button', () => {
 
 describe('a scope row keeps its metrics as a button', () => {
   // A button takes neither the page's type nor the full width of its column,
-  // and centres what it holds. The row states all three, so it lays out as
+  // and centers what it holds. The row states all three, so it lays out as
   // the div it replaced did.
   const sidebar = read('public', 'styles', 'components', 'sidebar.css');
   const declarations = (selector) => {

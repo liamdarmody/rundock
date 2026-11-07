@@ -80,11 +80,11 @@
    the outcome. NOT the danger colour: the record says the ending never
    happened, which is an absence of evidence rather than evidence of a
    problem, and painting it red makes a claim nobody witnessed. Amber is spent
-   elsewhere in this palette on "needs the user", so this takes a quiet grey
+   elsewhere in this palette on "needs the user", so this takes a quiet gray
    and is told apart from the two outcomes by colour and by weight both. */
 .rd-chip.unwitnessed { color: var(--text-2-strong); font-weight: 500; }
 /* A run somebody stopped. Not the danger colour: unlike `bad`, this ending
-   was witnessed and asked for, not a failure. Shares its grey with
+   was witnessed and asked for, not a failure. Shares its gray with
    `unwitnessed` (same visual weight, "not an error") but keeps its own class
    rather than reusing that one, since a stopped run's ending is fully known
    and an unwitnessed one's is not: the two must never read as one state. */

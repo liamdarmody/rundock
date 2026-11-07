@@ -6,7 +6,7 @@
    than a palette choice. A run that happened late is a SUCCESS, so Caught up
    keeps the success colour and is told apart from Ran on time by weight and by
    its leading word. A slot that passed unserved is HISTORY, so Missed takes a
-   quiet grey, the one state where nothing ran at all. Only a real failure is
+   quiet gray, the one state where nothing ran at all. Only a real failure is
    red.
 
    AMBER APPEARS ON NONE OF THE FOUR OUTCOMES, deliberately. var(--attention)
@@ -104,7 +104,7 @@
 .icon-btn.run:hover { color: var(--accent); background: var(--accent-glow); border-color: var(--accent); }
 
 /* The two paused states, told apart by tone AND words. A pause the reader
-   applied takes a quiet grey, "history, not alarm", and its avatar dims. A
+   applied takes a quiet gray, "history, not alarm", and its avatar dims. A
    pause the plan's own change applied takes var(--attention), "needs the
    user, not an error": full weight, an inset ring, a sentence naming what
    changed. Rendered alike, the second would be resumed reflexively. */

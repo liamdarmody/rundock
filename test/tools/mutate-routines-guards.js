@@ -1309,7 +1309,7 @@ const MUTATIONS = [
   [STYLES_PANEL, 'a scope row loses the full width of the list',
     'gap: 8px; width: 100%; padding: 9px 10px;',
     'gap: 8px; padding: 9px 10px;'],
-  [STYLES_PANEL, 'a scope row centres what it holds, as a button does',
+  [STYLES_PANEL, 'a scope row centers what it holds, as a button does',
     'font: inherit; text-align: start;',
     'font: inherit;'],
   [STYLES_PANEL, 'a scope row takes the browser\'s button type rather than the panel\'s',

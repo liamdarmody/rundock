@@ -221,7 +221,7 @@
       "a redraw nobody pressed pulls the focus into the panel": 0.7,
       "the focus goes back to the first row rather than the pressed one": 0.8,
       "a scope row loses the full width of the list": 0.8,
-      "a scope row centres what it holds, as a button does": 0.9,
+      "a scope row centers what it holds, as a button does": 1,
       "a scope row takes the browser's button type rather than the panel's": 0.9
     },
     "mutate-run-detail-guards.js": {
