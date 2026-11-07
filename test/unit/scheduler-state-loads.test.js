@@ -22,6 +22,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 
 const SCHEDULER_KEY = require.resolve('../../lib/scheduler.js');
 const claude = require('../../lib/runtime/claude.js');
@@ -359,6 +360,40 @@ describe('the slot file and the pid file are set aside and start empty', () => {
       assert.deepStrictEqual(errorsDuring(() => assert.deepStrictEqual(claude.loadPidFile(), [])), []);
     });
   });
+});
+
+// A write stopped between its open and its rename leaves its temporary file,
+// and nothing else ever removes it. The next load removes those whose process
+// has gone. One whose process is still running may be a write in progress, and
+// a name of any other shape is not the helper's to remove.
+describe('a temporary file a stopped process left is removed on load', () => {
+  // A process that has run and exited, so its id names no running process.
+  const gonePid = () => spawnSync(process.execPath, ['-e', '']).pid;
+  const STORES = [
+    ['routine-state.json', stateFile, (sched) => sched.loadRoutineState()],
+    ['routine-slots.json', slotsFile, (sched) => sched.loadRoutineSlots()],
+    ['a run record', (ws) => recordFile(ws), (sched) => sched.loadRoutineState()],
+    ['child-pids.json', pidFile, () => claude.loadPidFile()],
+  ];
+  for (const [store, target, load] of STORES) {
+    test(`${store}: one whose process has gone is removed; one whose process runs, and any other name, is kept`, () => {
+      withWorkspace((ws) => {
+        const file = target(ws);
+        const gone = gonePid();
+        const left = `${file}.${gone}.1.tmp`;
+        const writing = `${file}.${process.pid}.999999.tmp`;
+        const others = [
+          `${file}.tmp`, `${file}.${gone}.tmp`, `${file}.0${gone}.1.tmp`, `${file}.${gone}.1.tmp.keep`,
+          path.join(path.dirname(file), `notes.json.${gone}.1.tmp`),
+        ];
+        for (const f of [left, writing, ...others]) fs.writeFileSync(f, '{}');
+        errorsDuring(() => load(freshScheduler()));
+        assert.ok(!fs.existsSync(left), `${store}: the temporary file a stopped process left is still there`);
+        assert.ok(fs.existsSync(writing), `${store}: the temporary file of a process still running was removed`);
+        for (const f of others) assert.ok(fs.existsSync(f), `${store}: ${path.basename(f)} is not the helper's, and was removed`);
+      });
+    });
+  }
 });
 
 describe('a temporary file in runs/ is never a run', () => {
