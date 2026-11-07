@@ -410,3 +410,60 @@ test('an origin workspace that cannot be written at the ending fails closed',
     assert.strictEqual(promptedWith(a.dir, 'unwritable origin body'), 1,
       'and A\'s routine is not due again that period, because the stamp its start wrote is still there');
   });
+
+// ===== EVERY LATER STEP USES THE WORKSPACE THE RUN STARTED IN =====
+//
+// Read once, at the start. Each test switches between the start and the step
+// it is about.
+
+const real = (p) => fs.realpathSync(p);
+const argAfter = (argv, flag) => { const i = argv.indexOf(flag); return i < 0 ? null : argv[i + 1]; };
+const pidsIn = (dir) => {
+  try { return JSON.parse(fs.readFileSync(path.join(dir, '.rundock', 'child-pids.json'), 'utf-8')).map(r => r.pid); } catch (e) { return []; }
+};
+
+// The plain session a run falls back to when Claude Code cannot load the
+// agent's file. Its working folder, its spawn environment (the workspace the
+// permission hook is told it answers for) and its arguments are the starting
+// workspace's, though B is open when it starts.
+test(`a run that falls back after a switch runs its plain session in its own workspace (${SIDE})`, async (t) => {
+  const a = keeperWorkspace('fallback body');
+  const b = keeperWorkspace('fallback elsewhere body');
+  // The keeper's file has no description, so the stub, reading it as Claude
+  // Code does, refuses --agent keeper. The refusal is held until the switch.
+  const refusal = path.join(a.dir, 'release-refusal');
+  const scenario = path.join(a.dir, 'stub-scenario.json');
+  fs.writeFileSync(scenario, JSON.stringify({ ...JSON.parse(fs.readFileSync(scenario, 'utf-8')), loadAgentFiles: true, refusalUntilFile: refusal }));
+
+  await choose(a.dir);
+  clock.at = dayAt(14, 9, 30);
+  tick(t);
+  await h.waitUntil(() => invocationsIn(a.dir).length === 1);
+  await choose(b.dir);
+  fs.writeFileSync(refusal, '');
+  await h.waitUntil(() => closedIn(a.dir) === 1);
+
+  const [asAgent, plain] = invocationsIn(a.dir);
+  assert.strictEqual(argAfter(asAgent.argv, '--agent'), AGENT, 'the run started as its agent, and was refused');
+  assert.ok(plain && !plain.argv.includes('--agent'), `the plain session started, and it started in A: ${JSON.stringify(invocationsIn(b.dir))}`);
+  assert.strictEqual(real(plain.cwd), real(a.dir), 'its working folder is the workspace the run started in');
+  assert.strictEqual(plain.env.RUNDOCK_WORKSPACE, a.dir, 'and so is the workspace its permission hook answers for');
+  assert.strictEqual(argAfter(plain.argv, '--add-dir'), a.dir, 'and the workspace its arguments name');
+  assert.deepStrictEqual(plain.argv.filter(arg => String(arg).includes(b.dir)), [], 'nothing it was given names B');
+  assert.deepStrictEqual(invocationsIn(b.dir), [], 'and nothing started in B');
+  assert.strictEqual(recordsIn(a.dir)[0].status, 'succeeded', 'the plain session\'s outcome is the run\'s');
+});
+
+// The pid file a child is taken off when it closes is the one it was
+// registered in.
+test(`a run's child is taken off the pid file it was registered in, though another workspace is open (${SIDE})`, async (t) => {
+  const a = keeperWorkspace('pid file body', { held: true });
+  const b = keeperWorkspace('pid file elsewhere body');
+  const pid = await startHeldRun(t, a, dayAt(15, 9, 30));
+  assert.ok(pidsIn(a.dir).includes(pid), 'the child was registered in A\'s pid file');
+
+  await choose(b.dir);
+  await finish(a);
+  await h.waitUntil(() => !pidsIn(a.dir).includes(pid), { timeout: 2000 });
+  assert.ok(!pidsIn(a.dir).includes(pid), 'and taken off it when it closed, with B open');
+});
