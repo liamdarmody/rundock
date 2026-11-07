@@ -323,6 +323,19 @@ const MUTATIONS = [
   [SHELL_RECORD, 'Shell use: the shell field dropped from the startup close',
     "        // From the same reader as the ending's, on the same terms.\n        ...(observed.usedShell === true ? { usedShell: true } : {}),\n",
     ''],
+  // The note on the run screen, watched by the file that draws records
+  // through the real render.
+  [MODEL_VIEW, 'Shell use: the note drawn only on an empty list',
+    '      shell: shell ? (record.files.length ? SHELL_USED_SOME : SHELL_USED_NONE) : null,',
+    '      shell: shell && !record.files.length ? SHELL_USED_NONE : null,'],
+  [MODEL_VIEW, 'Shell use: the note on an empty list replaced by the old sentence',
+    '      shell: shell ? (record.files.length ? SHELL_USED_SOME : SHELL_USED_NONE) : null,',
+    '      shell: shell ? (record.files.length ? SHELL_USED_SOME : NO_FILES_CHANGED) : null,'],
+  [VIEW, 'Shell use: the note drawn on an unknown list',
+    '      + `<p class="rd-unknown-why">${escText(files.reason)}</p></div>`;',
+    '      + `<p class="rd-unknown-why">${escText(files.reason)}</p></div>`'
+      + ' + (record && record.usedShell ? `<p class="rd-note" data-run-detail="shell-note">${escText(\'This run used the shell. '
+      + 'Files written that way are not counted, so this list may be incomplete.\')}</p>` : \'\');'],
 ];
 
 // The reporter is named explicitly rather than left to the default, which

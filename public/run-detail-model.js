@@ -257,6 +257,15 @@
   const NO_FILES_CHANGED = 'This run changed no files.';
   const UNKNOWN_FILES_LEAD = 'Rundock cannot tell what this run changed.';
 
+  // A RUN THAT USED THE SHELL. A file the shell writes never reaches the list,
+  // because there is no path argument to read, so a list from such a run may
+  // be short and an empty one may be wrong. The record says when the shell was
+  // used (`usedShell: true`), and the list says so under its heading: one
+  // sentence beside files, and one in place of NO_FILES_CHANGED.
+  const SHELL_USED_SOME = 'This run used the shell. Files written that way are not counted, so this list may be incomplete.';
+  const SHELL_USED_NONE = 'No files were changed through the editor. This run used the shell, and files written that way '
+    + 'are not counted. Check your workspace if you expect one.';
+
   /**
    * The file list, or the reason there is none.
    *
@@ -266,7 +275,9 @@
    * `label` is the heading the list takes, chosen by the caller from the
    * state, because how a run ended decides how its list has to be read.
    *
-   * Returns `{ known: true, entries, label }` or `{ known: false, reason }`.
+   * Returns `{ known: true, entries, label, empty, shell }` or
+   * `{ known: false, reason }`. `shell` is the note for a run that used the
+   * shell, or null.
    * The unknown shape carries NO `entries` key: a caller that reaches for one
    * gets `undefined` and fails loudly, rather than getting `[]` and rendering
    * a confident, wrong answer about a routine nobody could observe.
@@ -289,10 +300,16 @@
     if (!Array.isArray(record.files)) {
       return { known: false, lead: UNKNOWN_FILES_LEAD, reason: FILES_UNKNOWN_FALLBACK };
     }
+    // ONLY A KNOWN LIST CAN BE QUALIFIED, which is why this sits below both
+    // unknown answers: a list nobody can read says nothing about the shell.
+    // `true` and nothing else, so a record from before the field existed, or
+    // one carrying any other value, keeps the words it always had.
+    const shell = record.usedShell === true;
     return {
       known: true,
       label,
-      empty: record.files.length === 0 ? NO_FILES_CHANGED : null,
+      empty: record.files.length === 0 && !shell ? NO_FILES_CHANGED : null,
+      shell: shell ? (record.files.length ? SHELL_USED_SOME : SHELL_USED_NONE) : null,
       entries: record.files.map(entry => ({
         path: entry && typeof entry.path === 'string' ? entry.path : '',
         name: baseName(entry && entry.path),
@@ -554,6 +571,7 @@
   return {
     RUN_STATES, DECLARED_FAILED_STATE, WITHOUT_AGENT_STATE, UNRECOGNISED_STATE, NO_RECORD_STATE, FILES_UNKNOWN_WORDS, FILES_UNKNOWN_FALLBACK,
     CHANGE_LABELS, CHANGE_FALLBACK, FILES_LABELS, NO_FILES_CHANGED, UNKNOWN_FILES_LEAD, NO_REASON_GIVEN,
+    SHELL_USED_SOME, SHELL_USED_NONE,
     changedFiles, unknownWords, durationWords, refusedWords, describeRun, baseName, startedWords, triggerOf, STARTED_MANUALLY,
   };
 }));

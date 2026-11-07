@@ -103,6 +103,12 @@ const FILE_ICON = '<svg class="rd-ic" viewBox="0 0 24 24" fill="none" stroke="cu
 const CANNOT_OPEN = 'These can\'t be opened from here yet. A run records each file as a full path '
   + 'on the computer that ran it, which is not always somewhere this workspace can reach.';
 
+// The mark beside a note about the list, as the design draws it.
+const INFO_ICON = '<svg class="rd-note-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor"'
+  + ' stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+  + '<circle cx="12" cy="12" r="9"/><line x1="12" y1="16" x2="12" y2="12"/>'
+  + '<line x1="12" y1="8" x2="12.01" y2="8"/></svg>';
+
 const WAITING = 'Reading this run\'s record.';
 
 const BACK = '← Back to Routines';
@@ -155,9 +161,15 @@ function filesHtml(files) {
       + `<p class="rd-unknown-lead">${escText(files.lead)}</p>`
       + `<p class="rd-unknown-why">${escText(files.reason)}</p></div>`;
   }
-  if (files.empty) {
-    return `<div class="rd-files-label">${escText(files.label)}</div>`
-      + `<p class="rd-empty" data-run-detail="files-empty">${escText(files.empty)}</p>`;
+  const label = `<div class="rd-files-label">${escText(files.label)}</div>`;
+  // THE SHELL NOTE, directly under the label it qualifies, whichever of the
+  // three labels that is. Beside files it says the list may be incomplete; on
+  // an empty list it stands in place of "This run changed no files.".
+  const note = files.shell
+    ? `<p class="rd-note" data-run-detail="shell-note">${INFO_ICON}<span>${escText(files.shell)}</span></p>` : '';
+  if (!files.entries.length) {
+    return label + note
+      + (files.empty ? `<p class="rd-empty" data-run-detail="files-empty">${escText(files.empty)}</p>` : '');
   }
   const rows = files.entries.map(entry => '<div class="rd-file" data-run-detail="file">'
     + FILE_ICON
@@ -165,7 +177,7 @@ function filesHtml(files) {
     + `<span class="rd-file-name" data-run-detail="file-name">${escText(entry.name)}</span>`
     + `<span class="rd-file-path">${pathWithBreaks(entry.path)}</span></div>`
     + `<span class="rd-tag" data-run-detail="change">${escText(entry.changeLabel)}</span></div>`).join('');
-  return `<div class="rd-files-label">${escText(files.label)}</div>`
+  return label + note
     + `<div class="rd-files" data-run-detail="files">${rows}</div>`
     + `<p class="settings-caption rd-cannot-open">${escText(CANNOT_OPEN)}</p>`;
 }

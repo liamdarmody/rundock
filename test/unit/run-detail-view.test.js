@@ -543,3 +543,88 @@ describe('the cards a run had refused, on the page', () => {
     dom.window.close();
   });
 });
+
+/**
+ * The declarations a stylesheet rule gives `selector`, merged across every
+ * rule that names it, read from the stylesheet text. jsdom does not resolve
+ * custom properties, so a token is asserted by name here and its contrast is
+ * measured from tokens.css in test/unit/run-screen-contrast.test.js.
+ */
+function cssRule(selector, src = CSS_SRC) {
+  const out = new Map();
+  for (const m of src.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    if (!m[1].split(',').map(s => s.trim()).includes(selector)) continue;
+    for (const d of m[2].split(';')) {
+      const i = d.indexOf(':');
+      if (i > 0) out.set(d.slice(0, i).trim(), d.slice(i + 1).trim());
+    }
+  }
+  return out;
+}
+
+describe('a run that used the shell, on the page', () => {
+  const SOME = 'This run used the shell. Files written that way are not counted, so this list may be incomplete.';
+  const NONE = 'No files were changed through the editor. This run used the shell, and files written that way are not counted. '
+    + 'Check your workspace if you expect one.';
+  const note = (doc) => doc.querySelector('[data-run-detail="shell-note"]');
+
+  // One test per label, because the note qualifies whichever heading the list
+  // takes, and each heading is reached by a different ending.
+  for (const [label, over] of [
+    ['Files changed', {}],
+    ['Files changed before it stopped', { status: 'failed', error: 'x' }],
+    ['What was recorded before Rundock closed', { status: 'interrupted', endedAt: null, durationMs: null }],
+  ]) {
+    test(`the note sits directly under the "${label}" label of a list with files`, () => {
+      const { doc, dom } = draw(record({ ...over, usedShell: true }));
+      const heading = doc.querySelector('.rd-files-label');
+      assert.strictEqual(heading.textContent, label);
+      assert.ok(note(doc), 'the note is drawn');
+      assert.strictEqual(heading.nextElementSibling, note(doc), 'directly under the label it qualifies');
+      assert.strictEqual(note(doc).textContent, SOME);
+      assert.strictEqual(doc.querySelectorAll('[data-run-detail="file"]').length, 1, 'and the list is still drawn');
+      dom.window.close();
+    });
+  }
+
+  test('on an empty list the note stands in place of "This run changed no files."', () => {
+    const { doc, dom } = draw(record({ files: [], usedShell: true }));
+    assert.strictEqual(note(doc).textContent, NONE);
+    assert.strictEqual(doc.querySelector('.rd-files-label').nextElementSibling, note(doc));
+    assert.strictEqual(doc.querySelector('[data-run-detail="files-empty"]'), null);
+    assert.ok(!pageText(doc).includes('This run changed no files.'));
+    dom.window.close();
+  });
+
+  test('a known list without shell use, and a record with no shell field, draw neither note', () => {
+    for (const run of [record(), record({ usedShell: false }), CHANGED_NOTHING, record({ files: [], usedShell: false })]) {
+      const { doc, dom } = draw(run);
+      assert.strictEqual(note(doc), null);
+      assert.ok(!pageText(doc).includes(SOME) && !pageText(doc).includes(NONE.slice(0, 40)));
+      dom.window.close();
+    }
+    const { doc, dom } = draw(CHANGED_NOTHING);
+    assert.strictEqual(doc.querySelector('[data-run-detail="files-empty"]').textContent, 'This run changed no files.');
+    dom.window.close();
+  });
+
+  test('an unknown list draws neither note, whatever the shell field holds', () => {
+    for (const run of [
+      record({ files: null, filesStatus: 'unknown', filesReason: 'no-transcript', usedShell: true }),
+      record({ files: null, filesStatus: 'unknown', filesReason: 'running', status: 'running', usedShell: true }),
+    ]) {
+      const { doc, dom } = draw(run);
+      assert.strictEqual(note(doc), null);
+      assert.ok(!pageText(doc).includes(SOME) && !pageText(doc).includes(NONE.slice(0, 40)),
+        'a list nobody can read says nothing about the shell');
+      dom.window.close();
+    }
+  });
+
+  test('the note is a 1px border edge on the elevated fill, its words in the strong secondary text', () => {
+    const rule = cssRule('.rd-note');
+    assert.strictEqual(rule.get('border'), '1px solid var(--border)');
+    assert.strictEqual(rule.get('background'), 'var(--elevated)');
+    assert.strictEqual(rule.get('color'), 'var(--text-2-strong)');
+  });
+});

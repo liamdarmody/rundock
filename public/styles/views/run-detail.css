@@ -92,6 +92,13 @@
 
 .rd-files-label { font-size: var(--caption); font-weight: 600; color: var(--text-2); margin: 18px 0 8px; }
 
+/* A NOTE ABOUT THE LIST, directly under its label: today, that the run used
+   the shell, whose writes the list cannot hold. Bordered and quiet rather
+   than a warning colour, because nothing went wrong: the list is honest about
+   what it can see. */
+.rd-note { display: flex; gap: 8px; align-items: flex-start; font-size: var(--caption); line-height: 1.5; color: var(--text-2-strong); margin: 0 0 8px; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--elevated); }
+.rd-note-ic { width: 16px; height: 16px; flex-shrink: 0; margin-top: 1px; }
+
 .rd-files { display: flex; flex-direction: column; gap: 6px; }
 
 .rd-file { display: flex; align-items: center; gap: 10px; padding: 12px 14px; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius-lg); }

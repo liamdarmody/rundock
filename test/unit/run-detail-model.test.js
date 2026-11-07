@@ -602,3 +602,53 @@ describe('the cards a run had refused', () => {
     assert.strictEqual(model.describeRun(null).refused, null);
   });
 });
+
+// ===== A RUN THAT USED THE SHELL =====
+//
+// A file the shell wrote is never on the list, so a list from a run that used
+// the shell may be short, and an empty one may be wrong. The record says when
+// the shell was used (`usedShell: true`), and these are the words for it,
+// pinned exactly.
+describe('a run that used the shell', () => {
+  const SOME = 'This run used the shell. Files written that way are not counted, so this list may be incomplete.';
+  const NONE = 'No files were changed through the editor. This run used the shell, and files written that way are not counted. '
+    + 'Check your workspace if you expect one.';
+
+  test('a list with files says it may be incomplete, and keeps its files exactly', () => {
+    const view = model.describeRun(livingRecord({ usedShell: true }), { now: NOW });
+    assert.strictEqual(view.files.shell, SOME);
+    assert.strictEqual(view.files.empty, null);
+    assert.deepStrictEqual(view.files.entries.map(e => e.path), ['/w/Hello World/hello-world-2026-08-24.md']);
+  });
+
+  test('an empty list says so in place of the sentence for a run that changed nothing', () => {
+    const view = model.describeRun(livingRecord({ files: [], usedShell: true }), { now: NOW });
+    assert.strictEqual(view.files.shell, NONE);
+    assert.strictEqual(view.files.empty, null, 'the shell note stands in place of "This run changed no files."');
+    assert.ok(!words(view).includes(model.NO_FILES_CHANGED));
+  });
+
+  test('a known list without shell use, and a record with no shell field, carry neither note', () => {
+    for (const over of [{}, { usedShell: false }, { usedShell: 'true' }, { files: [] }, { files: [], usedShell: false }]) {
+      const view = model.describeRun(livingRecord(over), { now: NOW });
+      assert.strictEqual(view.files.shell, null, `${JSON.stringify(over)} drew a shell note`);
+      assert.ok(!words(view).some(s => s === SOME || s === NONE));
+    }
+    // The old sentence, unchanged, for a known empty list without the shell.
+    assert.strictEqual(model.describeRun(CHANGED_NOTHING, { now: NOW }).files.empty, 'This run changed no files.');
+  });
+
+  test('an unknown list carries no shell note, whatever the shell field holds', () => {
+    for (const over of [
+      { files: null, filesStatus: 'unknown', filesReason: 'no-transcript' },
+      { files: null, filesStatus: 'unknown', filesReason: 'delegated' },
+      // An unknown claim beside a list, and a record that makes no claim.
+      { filesStatus: 'unknown', filesReason: 'running' },
+      { filesStatus: undefined },
+    ]) {
+      const view = model.describeRun(livingRecord({ ...over, usedShell: true }), { now: NOW });
+      assert.strictEqual(view.files.known, false);
+      assert.ok(!words(view).some(s => s === SOME || s === NONE), `${JSON.stringify(over)} drew a shell note on an unknown list`);
+    }
+  });
+});
