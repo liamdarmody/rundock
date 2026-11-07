@@ -1249,6 +1249,10 @@ test('a restart leaves a run that already reached an outcome exactly as it was',
   });
 });
 
+// A record a dead process left open, under the name records are written and
+// read under: its run's uuid.
+const ORPHAN = '0e7a2b3c-4d5e-4f60-8172-8394a5b6c7d8';
+
 // AC-7, and it is the way this card most likely breaks something already
 // shipped. routineState.lastRun is the ONLY input to double-fire suppression.
 // This card touches startup, which is where the stores are loaded together, so
@@ -1270,8 +1274,8 @@ test('closing a restart-orphaned record writes nothing to the value double-fire 
       fs.writeFileSync(path.join(dir, 'routine-state.json'), JSON.stringify({
         [KEY]: { lastRun: cutOff.toISOString(), status: 'running', duration: null },
       }));
-      fs.writeFileSync(path.join(dir, 'runs', 'orphan.json'), JSON.stringify({
-        id: 'orphan', agent: 'runner', routine: 'r', sessionId: null,
+      fs.writeFileSync(path.join(dir, 'runs', `${ORPHAN}.json`), JSON.stringify({
+        id: ORPHAN, agent: 'runner', routine: 'r', sessionId: null,
         status: 'running', startedAt: cutOff.toISOString(), endedAt: null,
         durationMs: null, error: null, files: null, filesStatus: 'unknown', filesReason: 'running',
       }));
@@ -1344,12 +1348,12 @@ test('a capture a dead process left beside its record is removed when the record
     await withTempHomeAsync(async () => {
       const runs = path.join(ws, '.rundock', 'runs');
       fs.mkdirSync(runs, { recursive: true });
-      fs.writeFileSync(path.join(runs, 'orphan.json'), JSON.stringify({
-        id: 'orphan', agent: 'runner', routine: 'r', sessionId: null,
+      fs.writeFileSync(path.join(runs, `${ORPHAN}.json`), JSON.stringify({
+        id: ORPHAN, agent: 'runner', routine: 'r', sessionId: null,
         status: 'running', startedAt: new Date(2026, 7, 11, 9, 0, 0).toISOString(), endedAt: null,
         durationMs: null, error: null, files: null, filesStatus: 'unknown', filesReason: 'running',
       }));
-      fs.writeFileSync(path.join(runs, 'orphan.stderr'), "--agent 'runner' not found.\n");
+      fs.writeFileSync(path.join(runs, `${ORPHAN}.stderr`), "--agent 'runner' not found.\n");
 
       await withFakeSpawn(() => new EventEmitter(), async (sched) => {
         // A run going in this process, whose capture must survive the close.
@@ -1364,9 +1368,9 @@ test('a capture a dead process left beside its record is removed when the record
 
         sched.loadRoutineState();
 
-        assert.strictEqual(runRecords(ws).find(r => r.id === 'orphan').status, 'interrupted',
+        assert.strictEqual(runRecords(ws).find(r => r.id === ORPHAN).status, 'interrupted',
           'the orphaned record really was closed by this load');
-        assert.ok(!fs.existsSync(path.join(runs, 'orphan.stderr')), 'and the capture its child left went with it');
+        assert.ok(!fs.existsSync(path.join(runs, `${ORPHAN}.stderr`)), 'and the capture its child left went with it');
         assert.ok(fs.existsSync(path.join(runs, `${live.id}.stderr`)), 'while the capture of the run still going stays');
       });
     });
