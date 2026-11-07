@@ -6,8 +6,6 @@ looping GIFs and social cards, all from a realistic but fully sanitized demo
 workspace driven through the real app with Playwright. Everything lands in a single local review folder with a manifest;
 nothing is written into the README, `docs/`, the Rundock Site, or the docs site.
 
-Spec: the marketing screenshot pipeline spec, kept in the private workspace (not shipped here).
-
 ## Run it
 
 ```bash

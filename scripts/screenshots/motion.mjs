@@ -493,7 +493,7 @@ async function clipRoutineEditor(page, { mark }) {
 }
 
 // Clip registry. `themes` is which themes to record (theme reads in all of
-// these, but the spec only mandates parity for the org-status clip; the others
+// these, but only the org-status clip must match in both themes; the others
 // default to both for completeness).
 // `gif` overrides the default {fps:15, width:1280} for clips that would
 // otherwise crowd the file-size budget (the review clip has a lot of motion:

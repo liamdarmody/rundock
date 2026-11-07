@@ -711,7 +711,7 @@ describe('receipts record each decision beside the item it governed', () => {
     for (const entry of receipt.items) assert.ok(entry.decision, `${entry.id} carries its decision`);
   });
 
-  // Amendment R1 to the receipts addendum: the zero-write shortcut governs
+  // The zero-write shortcut governs
   // destination files, never the decision record. A person who skipped
   // everything still confirmed decisions, and that is what a receipt records;
   // only a pure replay, every item already at its approved bytes, records
