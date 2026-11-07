@@ -1890,7 +1890,9 @@ wss.on('connection', (ws) => {
 
           safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: processId, _agent: entry.agentId }));
 
-          proc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: msg.content } }) + '\n');
+          // Behind any catch-up stored for this agent, as on the interactive path.
+          const legacyCatchUp = takeStoredCatchUp(convoId, entry.agentId);
+          proc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: legacyCatchUp + msg.content } }) + '\n');
 
           // Legacy mode: no interception, no transcript, no idle tracking
           const legacyStderrRef = wireProcessHandlers(entry, convoId, ws, {
@@ -1913,6 +1915,8 @@ wss.on('connection', (ws) => {
               console.log(`[Chat] Resume failed for session ${msg.sessionId}, retrying fresh`);
               entry.missingSessionRecovered = true; // started again below
               processes.delete(convoId);
+              entry.freshCatchUp = legacyCatchUp; // never read: it goes to the fresh start
+              storeHeldCatchUp(convoId, entry);
               const freshName = (agentData && agentData.displayName) || null;
               safeSend(JSON.stringify({ type: 'system', subtype: 'info', content: startingFresh(freshName),
                 ...(entry.missingSession ? { expiredSessionId: entry.missingSession } : {}),

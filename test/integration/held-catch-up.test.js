@@ -392,3 +392,61 @@ describe('a stored catch-up stays on the server', () => {
       { agentId: 'chief-of-staff', text: `${ARRIVING}\nHELD-N1 kept for the next message\n\n` }, 'the store still holds it for the next message');
   });
 });
+
+describe('the legacy chat path, one process per message', () => {
+  // Chosen by RUNDOCK_LEGACY_SPAWN=1 in the server's environment, read on
+  // every chat message: with it set, every message the window sends comes
+  // this way, so a stored catch-up has to be given here too.
+  async function legacy(fn) {
+    process.env.RUNDOCK_LEGACY_SPAWN = '1';
+    try { return await fn(); } finally { delete process.env.RUNDOCK_LEGACY_SPAWN; }
+  }
+
+  test('gives a stored catch-up to its first message, once', async () => {
+    const convoId = h.freshConvoId('held-legacy');
+    seed(convoId, {
+      agentId: 'chief-of-staff', activeAgentId: 'chief-of-staff', sessionId: null, sessionIds: [],
+      freshCatchUp: { agentId: 'chief-of-staff', text: `${ARRIVING}\nHELD-L1 what happened while it was away\n\n` },
+    });
+    scenario([
+      { match: { promptIncludes: 'ASK-L1' }, turn: [{ text: 'ANSWER-L1' }] },
+      { match: { promptIncludes: 'AGAIN-L1' }, turn: [{ text: 'ANSWER-AGAIN-L1' }] },
+    ]);
+    h.clearInvocations();
+    await legacy(async () => {
+      let since = client.messages.length;
+      client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: 'ASK-L1 hello' });
+      await waitForResult(convoId, 'ANSWER-L1', since, 'the first message is answered');
+      since = client.messages.length;
+      client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: 'AGAIN-L1 hello' });
+      await waitForResult(convoId, 'ANSWER-AGAIN-L1', since, 'and the next');
+    });
+    assert.strictEqual(prompts().length, 2);
+    assert.ok(prompts()[0].includes('HELD-L1') && prompts()[0].endsWith('ASK-L1 hello'), 'the catch-up, then the message');
+    assert.strictEqual(prompts()[1], 'AGAIN-L1 hello', 'given once');
+    assert.ok(!('freshCatchUp' in stored(convoId)), 'and spent');
+    h.reapConvo(convoId);
+  });
+
+  test('hands a stored catch-up on from a refused resume to the fresh start, once', async () => {
+    const convoId = h.freshConvoId('held-legacy-refused');
+    seed(convoId, {
+      agentId: 'chief-of-staff', activeAgentId: 'chief-of-staff', sessionId: 'dead-orch-l2',
+      sessionIds: [{ agentId: 'chief-of-staff', sessionId: 'dead-orch-l2' }],
+      freshCatchUp: { agentId: 'chief-of-staff', text: `${ARRIVING}\nHELD-L2 what happened while it was away\n\n` },
+    });
+    scenario([{ match: { promptIncludes: 'ASK-L2' }, turn: [{ text: 'FRESH-L2' }] }], ['dead-orch-l2']);
+    h.clearInvocations();
+    await legacy(async () => {
+      const since = client.messages.length;
+      client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: 'ASK-L2 hello', sessionId: 'dead-orch-l2' });
+      await waitForResult(convoId, 'FRESH-L2', since, 'the fresh start answers');
+    });
+    assert.deepStrictEqual(h.readInvocations().filter((i) => i.env && i.env.RUNDOCK_CONVO_ID === convoId).map((i) => i.resume),
+      ['dead-orch-l2', null], 'refused once, then started fresh');
+    assert.strictEqual(prompts().length, 1, 'the refused process read nothing');
+    assert.ok(prompts()[0].includes('HELD-L2') && prompts()[0].endsWith('ASK-L2 hello'), 'the fresh start is given it');
+    assert.ok(!('freshCatchUp' in stored(convoId)), 'and it is spent');
+    h.reapConvo(convoId);
+  });
+});
