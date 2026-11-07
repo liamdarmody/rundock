@@ -310,6 +310,22 @@ describe('shards are planned by time, not rows', () => {
     assert.deepStrictEqual(covered, [...Array(rowLabels.length).keys()], 'every row once, in order');
   });
 
+  test('a slow row just past a slice\'s share starts the next slice rather than stretching this one', () => {
+    // A slice used to end at the first row that took it past its share, so a
+    // slow row whose start sat just short of the share was taken whole and the
+    // slice ran on by nearly that row's cost. Ending each slice at whichever
+    // boundary is nearer its share keeps it within a row's half of the share.
+    const rowLabels = Array.from({ length: 100 }, (_, i) => `row ${i}`);
+    const lumpy = { tool: 'lumpy', rows: rowLabels.length, rowLabels };
+    const weighted = { ...costs, perLabel: { lumpy: { 'row 85': 400 } } };
+    const { shards, seconds } = planShards([lumpy], { costs: weighted });
+    assert.strictEqual(seconds, 99 * 5 + 400, 'sanity: one row of 400s among rows at the 5s rate');
+    const units = shards.flatMap((s) => s.units).sort((a, b) => a.start - b.start);
+    assert.deepStrictEqual(units.map((u) => [u.start, u.end, u.seconds]), [[0, 85, 425], [85, 100, 470]],
+      'the slow row opens the second slice; taken into the first, that slice would be 825s');
+    for (const u of units) assert.ok(u.seconds <= SECONDS_PER_SHARD, `rows ${u.start}:${u.end} are planned at ${u.seconds}s`);
+  });
+
   test('an integration row with no cost of its own is planned at its harness\'s integration rate', () => {
     // Integration rows start a server and run several times slower than the
     // rest, so a new one planned at the harness's average was planned short.
