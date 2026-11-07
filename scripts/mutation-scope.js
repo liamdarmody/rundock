@@ -495,11 +495,14 @@ function outcomeOf(code, signal) {
   return { outcome: FAIL, cause: `exit ${code}` };
 }
 
-/** Any fail is fail; otherwise any no verdict is no verdict; otherwise pass. */
+/**
+ * Any fail is fail; otherwise every pass is pass; anything else, an outcome
+ * missing or spelled some other way included, is no verdict.
+ */
 function combine(outcomes) {
   if (outcomes.some((o) => o === FAIL)) return FAIL;
-  if (outcomes.some((o) => o === NO_VERDICT)) return NO_VERDICT;
-  return PASS;
+  if (outcomes.every((o) => o === PASS)) return PASS;
+  return NO_VERDICT;
 }
 
 function unitLabel(u) {
@@ -552,26 +555,44 @@ async function runUnits(units, { root = ROOT, run = runHarness } = {}) {
   return { outcome: combine(results.map((r) => r.outcome)), results };
 }
 
+const TITLE_PASS = 'Mutation guards passed';
+const TITLE_SURVIVED = 'A guard survived';
+const TITLE_SHARD_FAILED = 'A shard failed: see its job';
+const noVerdict = (causes) => ({ outcome: NO_VERDICT, causes, title: `No verdict: ${causes[0] || 'unknown'}` });
+
 /**
- * One outcome from a plan and the verdicts its shards wrote.
+ * One outcome, and the title it is reported under, from a plan, the verdicts
+ * its shards wrote, and how GitHub recorded the plan job and the shard jobs
+ * ending (`planResult`, `shardsResult`: success, failure, cancelled or
+ * skipped).
  *
  * A shard with no verdict file died, was cancelled or timed out before it
  * could write one, and that is no verdict for that shard: never a pass.
+ *
+ * THE SHARD JOBS' RESULT IS THE WITNESS A SHARD CANNOT WRITE. A verdict is the
+ * shard's own file, uploaded whether or not the steps after it passed, so a
+ * shard that left a file modified failed its job at the diff check and still
+ * uploaded a passing verdict. The result is set by the runner, and anything
+ * but success is not green, whatever the verdicts say. Skipped counts as
+ * success only for a plan of no shards, the one time no shard job runs. A
+ * result that was not given at all is no verdict.
  */
-function aggregate(plan, verdicts, { planResult = 'success' } = {}) {
+function aggregate(plan, verdicts, { planResult = 'success', shardsResult = 'success' } = {}) {
+  // Both workflows read this, and their plan jobs run different steps, so the
+  // cause names none: the plan job's own log names the one that failed.
   if (planResult !== 'success') {
     return planResult === 'failure'
-      ? { outcome: FAIL, causes: ['the plan job failed (the fixture check, or the selection itself)'] }
-      : { outcome: NO_VERDICT, causes: [`the plan job was ${planResult || 'not run'}`] };
+      ? { outcome: FAIL, causes: ['the plan job failed: its log names the step'], title: 'The plan failed: see its job' }
+      : noVerdict([`the plan job was ${planResult || 'not run'}`]);
   }
-  if (!plan || !Array.isArray(plan.shards)) return { outcome: NO_VERDICT, causes: ['no plan was found'] };
+  if (!plan || !Array.isArray(plan.shards)) return noVerdict(['no plan was found']);
   const causes = [];
   const outcomes = [];
   for (const shard of plan.shards) {
     const v = verdicts.find((x) => x && x.shard === shard.index);
     if (!v) {
       outcomes.push(NO_VERDICT);
-      causes.push(`shard ${shard.index} wrote no verdict (it died, was cancelled or timed out)`);
+      causes.push(`shard ${shard.index} wrote no verdict that could be read (it died, was cancelled or timed out, or its file is damaged)`);
       continue;
     }
     if (v.plan !== plan.id) {
@@ -579,12 +600,31 @@ function aggregate(plan, verdicts, { planResult = 'success' } = {}) {
       causes.push(`shard ${shard.index} ran a different plan`);
       continue;
     }
+    if (![PASS, FAIL, NO_VERDICT].includes(v.outcome)) {
+      outcomes.push(NO_VERDICT);
+      causes.push(`shard ${shard.index} wrote a verdict with no outcome that can be read`);
+      continue;
+    }
     outcomes.push(v.outcome);
     for (const r of v.results || []) {
       if (r.outcome !== PASS) causes.push(`shard ${shard.index}: ${r.unit} ${r.outcome}${r.cause ? ` (${r.cause})` : ''}`);
     }
   }
-  return { outcome: combine(outcomes), causes };
+  // A verdict that explains a failed shard job is the better report: a guard
+  // that survived fails its shard step, so its job failed too.
+  const outcome = combine(outcomes);
+  if (outcome === FAIL) return { outcome, causes, title: TITLE_SURVIVED };
+  if (outcome === NO_VERDICT) return noVerdict(causes);
+  if (shardsResult === 'success' || (shardsResult === 'skipped' && !plan.shards.length)) {
+    return { outcome: PASS, causes, title: TITLE_PASS };
+  }
+  if (!shardsResult) return noVerdict(['the shard jobs\' result was not given, so no shard job can be shown to have passed']);
+  return {
+    outcome: FAIL,
+    causes: [`the shard jobs ended ${shardsResult} though every verdict passed: a step after the verdict failed `
+      + '(a shard that left a file modified fails this way), or a shard job was cut off'],
+    title: TITLE_SHARD_FAILED,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -670,31 +710,45 @@ function readPlan(file) {
   return JSON.parse(fs.readFileSync(file, 'utf8'));
 }
 
-async function main(argv = process.argv.slice(2)) {
-  if (argv.includes('--aggregate')) {
-    const planFile = argValue(argv, '--plan-file');
-    const dir = argValue(argv, '--verdicts');
-    let plan = null;
-    try { plan = planFile ? readPlan(planFile) : null; } catch { plan = null; }
-    const verdicts = [];
-    try {
-      for (const n of fs.readdirSync(dir)) {
-        if (!/^verdict-\d+\.json$/.test(n)) continue;
-        try { verdicts.push(JSON.parse(fs.readFileSync(path.join(dir, n), 'utf8'))); } catch { /* unreadable is missing */ }
-      }
-    } catch { /* no directory is no verdicts */ }
-    const result = aggregate(plan, verdicts, { planResult: argValue(argv, '--plan-result') || 'success' });
-    const title = result.outcome === PASS ? 'Mutation guards passed'
-      : result.outcome === FAIL ? 'Mutation guards failed'
-        : `No verdict: ${result.causes[0] || 'unknown'}`;
-    console.log(`[mutation-scope] ${title}`);
-    for (const c of result.causes) console.log(`[mutation-scope]   ${c}`);
-    if (process.env.GITHUB_ACTIONS && result.outcome !== PASS) {
-      console.log(`::error title=${escapeProperty(title)}::${escapeData(result.causes.join('; '))}`);
+/**
+ * The aggregate step: read the plan and every verdict, report one outcome,
+ * and return its exit code. The readers are parameters so a test can make
+ * them fail: a file that cannot be read is a file that is missing, which is
+ * no verdict, and anything else that throws reaches the caller.
+ */
+function aggregateCommand(argv, {
+  readFile = (file) => fs.readFileSync(file, 'utf8'), listDir = (dir) => fs.readdirSync(dir),
+  env = process.env, log = console.log,
+} = {}) {
+  const planFile = argValue(argv, '--plan-file');
+  const dir = argValue(argv, '--verdicts');
+  let plan = null;
+  try { plan = planFile ? JSON.parse(readFile(planFile)) : null; } catch { plan = null; }
+  const verdicts = [];
+  try {
+    for (const n of listDir(dir)) {
+      if (!/^verdict-\d+\.json$/.test(n)) continue;
+      try { verdicts.push(JSON.parse(readFile(path.join(dir, n)))); } catch { /* unreadable is missing */ }
     }
-    appendTo(process.env.GITHUB_STEP_SUMMARY, `## ${title}\n\n${result.causes.map((c) => `- ${c}`).join('\n')}\n`);
-    return EXIT[result.outcome];
+  } catch { /* no directory is no verdicts */ }
+  // NO DEFAULT FOR THE SHARD JOBS' RESULT. Absent, or empty as a mistyped
+  // needs expression makes it, it is no verdict rather than a pass.
+  const result = aggregate(plan, verdicts, {
+    planResult: argValue(argv, '--plan-result') || 'success',
+    shardsResult: argValue(argv, '--shards-result'),
+  });
+  const { title } = result;
+  log(`[mutation-scope] ${title}`);
+  for (const c of result.causes) log(`[mutation-scope]   ${c}`);
+  if (env.GITHUB_ACTIONS && result.outcome !== PASS) {
+    log(`::error title=${escapeProperty(title)}::${escapeData(result.causes.join('; '))}`);
   }
+  appendTo(env.GITHUB_STEP_SUMMARY, `## ${title}\n\n${result.causes.map((c) => `- ${c}`).join('\n')}\n`);
+  return EXIT[result.outcome];
+}
+
+async function main(argv = process.argv.slice(2)) {
+  if (argv.includes('--aggregate')) return aggregateCommand(argv);
 
   // A shard handed the plan file runs exactly what the plan job decided, with
   // no second decision that could disagree with the first.
@@ -707,7 +761,16 @@ async function main(argv = process.argv.slice(2)) {
       return EXIT[NO_VERDICT];
     }
   } else {
-    plan = buildPlan(decide(argv));
+    const decision = decide(argv);
+    // EVERY HARNESS, AND NONE FOUND, IS NOT A PASS. A plan of zero shards skips
+    // every shard job, and the aggregate reads that as nothing to fail, so the
+    // complete set asked for and not found is refused before a plan is written.
+    if (argv.includes('--all') && !decision.harnesses.length) {
+      console.error(`[mutation-scope] no verdict: --all found no harnesses (mutate-*-guards.js) in ${rel(ROOT, TOOLS)}, `
+        + 'so there is nothing to plan, and planning nothing would read as a pass');
+      return EXIT[NO_VERDICT];
+    }
+    plan = buildPlan(decision);
   }
   console.log(explain(plan, plan.run.length + plan.skipped.length));
 
@@ -760,10 +823,17 @@ async function main(argv = process.argv.slice(2)) {
 
 module.exports = {
   harnessFiles, loadHarnesses, pathReferences, makeReaderIndex, selectHarnesses,
-  resolveBase, changedFiles, dependencyChangeIn, planShards, outcomeOf, combine, aggregate,
+  resolveBase, changedFiles, dependencyChangeIn, planShards, outcomeOf, combine, aggregate, aggregateCommand,
   decide, buildPlan, main, escapeProperty, RUN_EVERYTHING_WHEN_TOUCHED, SECONDS_PER_SHARD, MAX_SHARDS, readCosts,
   unstagedTargets,
   PASS, FAIL, NO_VERDICT, EXIT,
 };
 
-if (require.main === module) main().then((code) => process.exit(code));
+// A CRASH IS NEVER A PASS. Left to Node, an unhandled rejection ends the
+// process 0 under --unhandled-rejections=warn, which a runner reads as green.
+if (require.main === module) {
+  main().then((code) => process.exit(code), (err) => {
+    console.error(`[mutation-scope] no verdict: the run crashed (${err && err.stack ? err.stack : err})`);
+    process.exit(EXIT[NO_VERDICT]);
+  });
+}

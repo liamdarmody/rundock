@@ -17,7 +17,7 @@ const {
   harnessFiles, loadHarnesses, pathReferences, makeReaderIndex, selectHarnesses, resolveBase,
   changedFiles, dependencyChangeIn, planShards, outcomeOf, combine, aggregate, decide, buildPlan,
   RUN_EVERYTHING_WHEN_TOUCHED, SECONDS_PER_SHARD, MAX_SHARDS, readCosts, PASS, FAIL, NO_VERDICT,
-  unstagedTargets,
+  unstagedTargets, aggregateCommand,
 } = require('../../scripts/mutation-scope.js');
 
 const REPO = path.join(__dirname, '..', '..');
@@ -408,6 +408,28 @@ describe('shards are planned by time, not rows', () => {
   });
 });
 
+describe('every harness, asked for and none found, is refused rather than planned as nothing to do', () => {
+  test('--all with no harnesses found exits non-zero, says so, and writes no plan', () => {
+    // Zero shards skips every shard job, and the aggregate reads a plan of no
+    // shards as nothing to fail. The tool is copied into a fixture whose tools
+    // folder holds the envelope and no harness, and run there.
+    const root = tempDir('mutation-scope-no-harnesses-');
+    for (const rel of ['scripts/mutation-scope.js', 'scripts/lib/run-record.js', 'test/tools/mutation-run.js']) {
+      write(root, rel, fs.readFileSync(path.join(REPO, rel), 'utf8'));
+    }
+    assert.deepStrictEqual(harnessFiles(tools(root)), [], 'sanity: the tools folder holds no harness');
+    const env = { ...process.env };
+    for (const k of ['GITHUB_ACTIONS', 'GITHUB_STEP_SUMMARY', 'GITHUB_OUTPUT']) delete env[k];
+    const out = path.join(root, 'mutation-plan.json');
+    for (const argv of [['--all', '--plan', '--out', out], ['--all', '--explain']]) {
+      const r = spawnSync(process.execPath, [path.join(root, 'scripts', 'mutation-scope.js'), ...argv], { cwd: root, encoding: 'utf8', env });
+      assert.notStrictEqual(r.status, 0, `${argv.join(' ')}: refused\n${r.stdout}${r.stderr}`);
+      assert.ok(r.stderr.includes('found no harnesses'), `${argv.join(' ')}: and says why\n${r.stderr}`);
+    }
+    assert.ok(!fs.existsSync(out), 'no plan is written for the shards to read as nothing to do');
+  });
+});
+
 describe('a run refuses to start over a file with unstaged changes', () => {
   // Each harness refuses on its own, but only when its turn comes, so a full
   // run spent its time on the others and ended "fail". The run as a whole now
@@ -542,6 +564,16 @@ describe('three outcomes: pass, fail, no verdict', () => {
     assert.strictEqual(aggregate({ id: 'x', shards: [] }, []).outcome, PASS, 'an empty plan has nothing to fail');
   });
 
+  test('a failed plan is titled as one, and names no step only one workflow has', () => {
+    // Both workflows read this message. The nightly's plan job runs no fixture
+    // check, so naming one there sent a reader looking for a step that is not
+    // there; the plan job's own log names the step that failed.
+    const r = aggregate(null, [], { planResult: 'failure', shardsResult: 'skipped' });
+    assert.strictEqual(r.outcome, FAIL);
+    assert.strictEqual(r.title, 'The plan failed: see its job');
+    assert.ok(!r.causes.join(' ').includes('fixture'), r.causes.join('; '));
+  });
+
   test('a harness exiting 3, or killed, is no verdict from the run and from the aggregator', () => {
     const root = fixtureRoot();
     write(root, 'test/tools/mutate-a-guards.js', harnessSource([['A', 'lib/a.js', 'test/unit/a.test.js']], { exitCode: 3 }));
@@ -570,5 +602,144 @@ describe('three outcomes: pass, fail, no verdict', () => {
     assert.strictEqual(r.status, 3, r.stdout + r.stderr);
     assert.match(r.stdout, /No verdict: shard 2 wrote no verdict/);
     assert.doesNotMatch(r.stdout, /failed/i, 'no verdict is never titled a failure');
+  });
+});
+
+// A verdict is a file the shard writes and uploads itself, and the upload runs
+// whether or not the steps after the verdict passed. So a shard whose harness
+// left a file modified failed its own job at the diff check and still uploaded
+// a passing verdict. How GitHub recorded the shard jobs ending is set by the
+// runner, which no step inside a shard can change, and the aggregate reads it.
+const SCOPE = path.join(REPO, 'scripts', 'mutation-scope.js');
+const SHARD_FAILED = 'A shard failed: see its job';
+const PLAN_2 = { id: 'p2', shards: [{ index: 1 }, { index: 2 }] };
+const passed = (shard) => ({ plan: 'p2', shard, outcome: PASS, results: [{ unit: `mutate-${shard}-guards.js`, outcome: PASS }] });
+const PASSING = [passed(1), passed(2)];
+
+// A plan and its verdicts on disk, as the aggregate job downloads them.
+function verdictDir(plan, verdicts) {
+  const dir = tempDir('mutation-aggregate-');
+  fs.writeFileSync(path.join(dir, 'plan.json'), JSON.stringify(plan));
+  for (const v of verdicts) fs.writeFileSync(path.join(dir, `verdict-${v.shard}.json`), JSON.stringify(v));
+  return dir;
+}
+
+// The aggregate step as CI runs it, from this checkout. It reads files and
+// runs no harness.
+function aggregateCli(dir, extra = [], env = {}) {
+  const clean = { ...process.env };
+  for (const k of ['GITHUB_ACTIONS', 'GITHUB_STEP_SUMMARY', 'GITHUB_OUTPUT', 'NODE_OPTIONS']) delete clean[k];
+  return spawnSync(process.execPath, [SCOPE, '--aggregate', '--plan-file', path.join(dir, 'plan.json'), '--verdicts', dir, ...extra],
+    { encoding: 'utf8', env: { ...clean, ...env } });
+}
+
+describe('the shard jobs\' result is a witness no shard can write', () => {
+  test('a shard job that did not succeed is not green, even when every verdict passes', () => {
+    for (const shardsResult of ['failure', 'cancelled', 'skipped']) {
+      const r = aggregate(PLAN_2, PASSING, { shardsResult });
+      assert.notStrictEqual(r.outcome, PASS, `shards ${shardsResult}: never a pass`);
+      assert.strictEqual(r.title, SHARD_FAILED, `shards ${shardsResult}: titled for what happened`);
+      assert.ok(r.causes.some((c) => c.includes(shardsResult)), `shards ${shardsResult}: the cause names the result`);
+
+      const cli = aggregateCli(verdictDir(PLAN_2, PASSING), ['--plan-result', 'success', '--shards-result', shardsResult]);
+      assert.notStrictEqual(cli.status, 0, `shards ${shardsResult}: the step exits non-zero\n${cli.stdout}${cli.stderr}`);
+      assert.ok(cli.stdout.includes(SHARD_FAILED), `shards ${shardsResult}: the step says so\n${cli.stdout}`);
+    }
+  });
+
+  test('the inverse: clean shards with passing verdicts are still green', () => {
+    const r = aggregate(PLAN_2, PASSING, { shardsResult: 'success' });
+    assert.strictEqual(r.outcome, PASS);
+    assert.strictEqual(r.title, 'Mutation guards passed');
+    const cli = aggregateCli(verdictDir(PLAN_2, PASSING), ['--plan-result', 'success', '--shards-result', 'success']);
+    assert.strictEqual(cli.status, 0, cli.stdout + cli.stderr);
+    assert.ok(cli.stdout.includes('Mutation guards passed'), cli.stdout);
+    // A plan with no shards runs no shard job, so GitHub records it skipped.
+    const none = { id: 'p0', shards: [] };
+    assert.strictEqual(aggregate(none, [], { shardsResult: 'skipped' }).outcome, PASS, 'nothing planned, nothing to fail');
+    assert.strictEqual(aggregateCli(verdictDir(none, []), ['--plan-result', 'success', '--shards-result', 'skipped']).status, 0);
+  });
+
+  test('the retry: a re-run that comes back clean is green, one still dirty stays red', () => {
+    // "Re-run failed jobs" re-runs the failed shard and the aggregate that
+    // needs it; the verdicts are the same files, and only the result moves.
+    assert.strictEqual(aggregate(PLAN_2, PASSING, { shardsResult: 'failure' }).outcome, FAIL, 'the first attempt');
+    assert.strictEqual(aggregate(PLAN_2, PASSING, { shardsResult: 'success' }).outcome, PASS, 'a clean re-run');
+    assert.strictEqual(aggregate(PLAN_2, PASSING, { shardsResult: 'failure' }).title, SHARD_FAILED, 'a re-run still dirty');
+  });
+
+  test('a guard that survived is still reported as one, naming where, though its shard job failed too', () => {
+    // A surviving guard fails its shard step, so the shard jobs' result is
+    // failure here as well. The verdict explains it, and its title says so.
+    const survived = { plan: 'p2', shard: 2, outcome: FAIL, results: [
+      { unit: 'mutate-x-guards.js rows 0:3', outcome: PASS },
+      { unit: 'mutate-x-guards.js rows 3:9', outcome: FAIL, cause: 'exit 1' },
+    ] };
+    const r = aggregate(PLAN_2, [passed(1), survived], { shardsResult: 'failure' });
+    assert.strictEqual(r.outcome, FAIL);
+    assert.strictEqual(r.title, 'A guard survived');
+    assert.deepStrictEqual(r.causes, ['shard 2: mutate-x-guards.js rows 3:9 fail (exit 1)']);
+    const cli = aggregateCli(verdictDir(PLAN_2, [passed(1), survived]), ['--plan-result', 'success', '--shards-result', 'failure']);
+    assert.strictEqual(cli.status, 1, cli.stdout + cli.stderr);
+    assert.ok(cli.stdout.includes('A guard survived'), cli.stdout);
+    assert.ok(cli.stdout.includes('mutate-x-guards.js rows 3:9'), 'the step names the slice that let a guard through');
+    assert.ok(!cli.stdout.includes(SHARD_FAILED), 'and does not send the reader to a job for a reason the verdict already gives');
+  });
+
+  test('a verdict with no outcome that can be read is no verdict, never a pass', () => {
+    for (const odd of [{ plan: 'p2', shard: 2 }, { plan: 'p2', shard: 2, outcome: 'passed', results: [] }]) {
+      const r = aggregate(PLAN_2, [passed(1), odd], { shardsResult: 'success' });
+      assert.strictEqual(r.outcome, NO_VERDICT, JSON.stringify(odd));
+      assert.ok(r.title.startsWith('No verdict: shard 2'), `the title names the shard: ${r.title}`);
+    }
+    assert.strictEqual(combine([PASS, undefined]), NO_VERDICT, 'an outcome nobody wrote is not a pass');
+    assert.strictEqual(combine([PASS, 'passed']), NO_VERDICT, 'nor is one spelled wrong');
+    assert.strictEqual(combine([PASS, PASS]), PASS);
+  });
+
+  test('the control failing: a truncated verdict file leaves the step non-green', () => {
+    const dir = verdictDir(PLAN_2, PASSING);
+    const file = path.join(dir, 'verdict-2.json');
+    const whole = fs.readFileSync(file, 'utf8');
+    fs.writeFileSync(file, whole.slice(0, Math.floor(whole.length / 2)));
+    const cli = aggregateCli(dir, ['--plan-result', 'success', '--shards-result', 'success']);
+    assert.strictEqual(cli.status, 3, cli.stdout + cli.stderr);
+    assert.ok(cli.stdout.includes('No verdict: shard 2'), cli.stdout);
+  });
+
+  test('the control failing: a reader that throws leaves the step non-green', () => {
+    const dir = verdictDir(PLAN_2, PASSING);
+    const argv = ['--aggregate', '--plan-file', path.join(dir, 'plan.json'), '--verdicts', dir,
+      '--plan-result', 'success', '--shards-result', 'success'];
+    const quiet = { log: () => {}, env: {} };
+    const real = (f) => fs.readFileSync(f, 'utf8');
+    assert.strictEqual(aggregateCommand(argv, quiet), 0, 'sanity: the same files, read, pass');
+    const throws = () => { throw new Error('EIO: the disk went away'); };
+    assert.strictEqual(aggregateCommand(argv, { ...quiet, readFile: throws }), 3, 'no file could be read');
+    assert.strictEqual(aggregateCommand(argv, { ...quiet, listDir: throws }), 3, 'the verdicts could not be listed');
+    assert.strictEqual(aggregateCommand(argv, { ...quiet, readFile: (f) => (f.endsWith('verdict-1.json') ? throws() : real(f)) }), 3,
+      'one verdict could not be read');
+  });
+
+  test('the control failing: a crash in the step exits non-zero, however Node is told to treat it', () => {
+    // A summary that cannot be written throws after the title is printed.
+    // Left to Node, an unhandled rejection under --unhandled-rejections=warn
+    // ends the process 0, which a runner reads as green.
+    const summary = tempDir('mutation-summary-is-a-directory-');
+    for (const NODE_OPTIONS of ['', '--unhandled-rejections=warn']) {
+      const cli = aggregateCli(verdictDir(PLAN_2, PASSING), ['--plan-result', 'success', '--shards-result', 'success'],
+        { GITHUB_STEP_SUMMARY: summary, NODE_OPTIONS });
+      assert.notStrictEqual(cli.status, 0, `NODE_OPTIONS=${NODE_OPTIONS}: a crash is never green\n${cli.stdout}${cli.stderr}`);
+      assert.ok(cli.stderr.includes('EISDIR'), `and the crash is shown\n${cli.stderr}`);
+    }
+  });
+
+  test('a shard jobs\' result that was not given, or is empty, is no verdict, never a pass', () => {
+    // An empty value is what a mistyped needs expression gives.
+    for (const extra of [[], ['--shards-result', '']]) {
+      const cli = aggregateCli(verdictDir(PLAN_2, PASSING), ['--plan-result', 'success', ...extra]);
+      assert.strictEqual(cli.status, 3, `${JSON.stringify(extra)}\n${cli.stdout}${cli.stderr}`);
+      assert.ok(cli.stdout.includes('No verdict:'), cli.stdout);
+    }
   });
 });

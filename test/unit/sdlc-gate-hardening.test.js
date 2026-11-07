@@ -16,6 +16,8 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 
+const { parseWorkflow, readWorkflow, runCommands } = require('../helpers/workflow-text.js');
+
 const ROOT = path.join(__dirname, '..', '..');
 const read = (...parts) => fs.readFileSync(path.join(ROOT, ...parts), 'utf8');
 
@@ -303,6 +305,7 @@ const ENUMERATIONS = [
   { file: 'test/tools/style-resolve-diff.js', extraction: 'declarations and rule blocks out of stylesheets', failLoudBy: 'count', where: 'its companion test file proves the patterns on specimens', anchor: 'tokensAt' },
   { file: 'test/unit/sdlc-gate-hardening.test.js', extraction: 'destructive commands in tracked markdown, redTests and report bodies out of the harnesses, scanner rules out of check-internal-refs', failLoudBy: 'count', where: 'specimen self-tests, document and per-directory floors, and exact extraction counts throughout this file', anchor: 'looksLikeExtraction' },
   { file: 'test/helpers/scheduler-statuses.js', extraction: 'status literals out of the scheduler writers', failLoudBy: 'count', where: 'its consumers assert the vocabulary in both directions (profile-boxes) and drive every word', anchor: 'statusesTheSchedulerRecords' },
+  { file: 'test/helpers/workflow-text.js', extraction: 'jobs, steps and the commands each step runs, out of the workflow files', failLoudBy: 'count', where: 'it refuses a workflow with no jobs and a job with no steps, its consumers floor the jobs and commands they read and find each mutation job exactly once, and mutation-workflows.test.js proves it on a specimen workflow', anchor: 'the workflow text has no jobs' },
   { file: 'test/integration/http-api.test.js', extraction: 'script and stylesheet links out of served index.html', failLoudBy: 'count', where: 'floors on both lists plus a token-sheet canary', anchor: 'tokens.css' },
   { file: 'test/integration/ws-handler-edges.test.js', extraction: 'frontmatter and order lines out of written agent files', failLoudBy: 'count', where: 'exact match counts; missing frontmatter refuses', anchor: 'exactly one order line' },
   { file: 'test/tools/innerhtml-sites.js', extraction: 'innerHTML assignment sites across the client', failLoudBy: 'count', where: 'pinned per-file totals in innerhtml-inventory.test.js', anchor: 'ASSIGNMENT.source' },
@@ -438,6 +441,11 @@ const HARNESSES = fs.readdirSync(path.join(ROOT, 'test', 'tools'))
   .map(f => `test/tools/${f}`)
   .sort();
 
+// The workflow steps that ask the selector for every harness, read from what
+// each step runs: a comment that names the command is not a step.
+const allHarnessRuns = (workflow) => runCommands(workflow).filter((r) => /mutation-scope\.js --all\b/.test(r.run));
+const unplannedAllRuns = (workflow) => allHarnessRuns(workflow).filter((r) => !/--plan(?=\s|$)/.test(r.run));
+
 // THE ROLL IS THE DIRECTORY. A hand-kept chain of every harness used to sit in
 // package.json beside this list, so adding a harness meant editing two places
 // and forgetting one meant a harness that never ran. The selector, CI and the
@@ -568,9 +576,32 @@ describe('a mutation result that cannot be parsed is a refusal, not a crash', ()
       assert.doesNotMatch(cmd, /test\/tools\/mutate-[\w-]+-guards\.js/,
         `package.json script ${name} names a harness by hand`);
     }
-    const nightly = read('.github', 'workflows', 'mutation-nightly.yml');
-    assert.match(nightly, /node scripts\/mutation-scope\.js --all/,
+    assert.ok(allHarnessRuns(readWorkflow('mutation-nightly.yml')).some((r) => r.run.startsWith('node scripts/mutation-scope.js --all')),
       'the nightly sweep no longer asks the selector for every harness');
+  });
+
+  // THE SCAN FOR --all READS WHAT RUNS. Read over the whole file, a comment
+  // that names the command (one explaining why the sweep plans, say) was read
+  // as a step running every harness in one job, and a command folded over two
+  // lines was not read at all.
+  test('the nightly scan for every harness reads what each step runs, never a comment', () => {
+    const specimen = parseWorkflow([
+      'jobs:',
+      '  sweep:',
+      '    steps:',
+      '      # node scripts/mutation-scope.js --all, named in a comment',
+      '      - run: node scripts/mutation-scope.js --all --plan --out plan.json',
+      '      - run: >-',
+      '          node scripts/mutation-scope.js',
+      '          --all',
+      '',
+    ].join('\n'), 'specimen');
+    assert.deepStrictEqual(allHarnessRuns(specimen).map((r) => r.run), [
+      'node scripts/mutation-scope.js --all --plan --out plan.json',
+      'node scripts/mutation-scope.js --all',
+    ], 'the planned command and the folded one are read, and the comment is not');
+    assert.deepStrictEqual(unplannedAllRuns(specimen).map((r) => r.run), ['node scripts/mutation-scope.js --all'],
+      'only the folded command runs every harness unplanned');
   });
 
   // ONE JOB OUTGREW ITS CLOCK. Run end to end in a single job, the complete set
@@ -589,9 +620,11 @@ describe('a mutation result that cannot be parsed is a refusal, not a crash', ()
       else if (current && !/^ {2}#/.test(line)) jobs[current] = `${jobs[current] || ''}${line}\n`;
     }
     const names = Object.keys(jobs);
-    assert.doesNotMatch(nightly, /mutation-scope\.js --all(?![^\n]*--plan)/,
+    const workflow = readWorkflow('mutation-nightly.yml');
+    assert.deepStrictEqual(unplannedAllRuns(workflow), [],
       'a nightly step runs every harness in one job; the complete set must be planned into shards');
-    const plan = names.find((n) => /mutation-scope\.js --all\b[^\n]*--plan\b/.test(jobs[n])
+    const planned = allHarnessRuns(workflow).map((r) => r.job);
+    const plan = names.find((n) => planned.includes(n)
       && /^ +matrix: \$\{\{ steps\.[\w-]+\.outputs\.matrix \}\}/m.test(jobs[n]));
     assert.ok(plan, 'no nightly job plans every harness (--all --plan) and publishes the matrix');
     const shard = names.find((n) => jobs[n].includes(`fromJSON(needs.${plan}.outputs.matrix)`));
