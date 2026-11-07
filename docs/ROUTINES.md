@@ -27,7 +27,7 @@ Each entry in the `routines:` array is a YAML object with five fields. The parse
 | Field | Type | Scope | Required | Purpose | Example |
 |---|---|---|---|---|---|
 | `name` | string | Rundock-only | Yes | Display name for the routine. Shown in the Routines panel, on the agent profile, and in the scheduler logs. Required: a routine without a `name` is dropped during parse. | `name: Morning briefing` |
-| `schedule` | string | Rundock-only | Yes | When the routine runs. Accepts only the human-readable forms documented below. A schedule in any other form never runs, and the routine's row in the Routines list says so and gives a daily and a weekly form that works. | `schedule: every day at 05:00` |
+| `schedule` | string | Rundock-only | Yes | When the routine runs. Accepts only the human-readable forms documented below. A schedule in any other form never runs, and the routine's row in the Routines list says so and gives a daily, a weekly and a monthly form that works. | `schedule: every day at 05:00` |
 | `prompt` | string | Rundock-only | Yes | The instruction sent to the agent when the routine fires. Treated as a single user message: the same text the user would type. A routine with no `prompt`, or one that is blank, is refused when its time comes rather than run, and the routine's row in the Routines list says so and shows no next run. | `prompt: Run the morning briefing` |
 | `description` | string | Rundock-only | No | One-line plain English explanation of the routine, surfaced on the agent profile. Optional: omitting it does not break the routine. | `description: Triage today's tasks, calendar, and content pipeline.` |
 | `enabled` | boolean | Rundock-only | No | Whether the scheduler may run this routine. `true`, `yes` and `on` all mean yes; `false`, `no` and `off` all mean no, in any case and with or without quotes. **An absent key, or a value that is not a boolean in any of those spellings, means not enabled**, so the routine is listed and waits to be turned on. See [Upgrading a workspace that already has routines](#upgrading-a-workspace-that-already-has-routines). The editor writes it explicitly, so a routine created there is live at once. | `enabled: true` |
@@ -47,7 +47,7 @@ The `schedule` field accepts only the four patterns below: daily, weekly, and tw
 | Monthly, on a day | `on day N of every month at HH:MM` | N is a day from 1 to 28, with or without one leading zero (`5` and `05` are the same schedule). Two-digit zero-padded time. |
 | Monthly, on the last day | `on the last day of every month at HH:MM` | Each month's own last day: 31 January, 28 February (29 in a leap year), 30 April. Two-digit zero-padded time. |
 
-Days 29, 30 and 31 are refused, because they are not in every month, and Rundock will not move a slot to another date. Rundock refuses to save one, with a message saying so, and one typed into the file by hand is a schedule Rundock cannot read, which never runs. For a routine at month end, use the last-day form.
+Days 29, 30 and 31 are refused, because they are not in every month, and Rundock will not move a slot to another date. Rundock refuses to save one, with a message saying so, and one typed into the file by hand is a schedule Rundock cannot read, which never runs. Its row says that day is not in every month and names the last-day form at the same time, and Edit schedule opens on the last day, saying so, without changing the file until you save. For a routine at month end, use the last-day form.
 
 Examples that work:
 
@@ -72,7 +72,7 @@ schedule: on day 31 of every month at 09:00  # not in every month: use the last-
 schedule: every month at 09:00     # a monthly schedule names its day
 ```
 
-Cron expressions are not supported. The parser does not raise an error on a cron schedule and the scheduler's next-run calculation returns null, so the routine is skipped on every tick. That much is unchanged; what is no longer silent is the reporting. The routine's row in the Routines list says Rundock cannot read the schedule and gives a daily and a weekly form that works, and it shows no next run, so a routine that will never fire is distinguishable from one that is simply not due yet.
+Cron expressions are not supported. The parser does not raise an error on a cron schedule and the scheduler's next-run calculation returns null, so the routine is skipped on every tick. That much is unchanged; what is no longer silent is the reporting. The routine's row in the Routines list says Rundock cannot read the schedule and gives a daily, a weekly and a monthly form that works, and it shows no next run, so a routine that will never fire is distinguishable from one that is simply not due yet.
 
 The schedule is interpreted in the local timezone of the machine running Rundock. There is no timezone field on a routine.
 
@@ -98,7 +98,7 @@ The first read of an agent file also fills the absent keys in, so the file ends 
 
 Nothing at all, which is the point. **Migration never touches a `schedule`, so a cron expression survives an upgrade exactly as it was written.** It is not translated, not rewritten, and not removed.
 
-It also still does not run, and it never did: cron is not one of the accepted forms, so the next-run calculation returns null and every tick skips the routine. What has changed is that the silence is over. The routine's row in the Routines list now says Rundock cannot read the schedule, and gives a daily and a weekly form that works, so a routine that will never fire is told apart from one that is simply not due yet.
+It also still does not run, and it never did: cron is not one of the accepted forms, so the next-run calculation returns null and every tick skips the routine. What has changed is that the silence is over. The routine's row in the Routines list now says Rundock cannot read the schedule, and gives a daily, a weekly and a monthly form that works, so a routine that will never fire is told apart from one that is simply not due yet.
 
 A cron-scheduled routine is therefore held back twice over: its schedule cannot be read, and, if its block never carried `enabled`, it is not enabled either. Fixing the schedule is the part that matters, because a routine turned on with a schedule nothing can read still never runs.
 
@@ -448,7 +448,7 @@ routines:
 
 A few specific things that go wrong silently.
 
-**Cron expressions never fire.** The scheduler does not understand cron. A routine with `schedule: 0 5 * * *` parses fine, registers fine, and never runs. There is still no error and no log line, but it is no longer invisible: the routine's row in the Routines list reports the unreadable schedule and gives a daily and a weekly form that works. If a routine appears to do nothing, its row is the first place to look and the schedule string is the first thing to check.
+**Cron expressions never fire.** The scheduler does not understand cron. A routine with `schedule: 0 5 * * *` parses fine, registers fine, and never runs. There is still no error and no log line, but it is no longer invisible: the routine's row in the Routines list reports the unreadable schedule and gives a daily, a weekly and a monthly form that works. If a routine appears to do nothing, its row is the first place to look and the schedule string is the first thing to check.
 
 **Hours without a leading zero never fire.** The pattern is exact. `every day at 9:00` does not match `every day at (\d{2}):(\d{2})`. Always zero-pad.
 

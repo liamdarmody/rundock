@@ -186,7 +186,8 @@
       "a new monthly routine saves the day it shows": 1,
       "an edited monthly routine saves the day it shows": 1,
       "Edit schedule opens on the day it read": 1,
-      "choosing a frequency follows the model's rule for the day": 1
+      "choosing a frequency follows the model's rule for the day": 1,
+      "Edit schedule carries the server's day 29 to 31": 1
     },
     "mutate-routines-guards.js": {
       "a period the last run already served is stepped over": 0.3,
@@ -205,7 +206,15 @@
       "dueAt is dropped from the record": 1.4,
       "the owed line ignores the consent moment": 1.2,
       "a stored schedule is looked up rather than split apart": 1.2,
-      "both halves of the schedule are looked up, never formatted from the string": 0.2
+      "both halves of the schedule are looked up, never formatted from the string": 0.2,
+      "the server names a day 29 to 31 only at a time a form reads": 0.2,
+      "the roster carries the server's day 29 to 31": 1.1,
+      "the row hands the server's day 29 to 31 to the model": 2,
+      "the day 29 to 31 body is the server's answer, not the client's reading": 0.2,
+      "the day 29 to 31 body names the file's own time": 0.2,
+      "the notice is drawn as a lead and a body": 2,
+      "the notice lead takes the danger token made for a card": 2.1,
+      "the notice body is quiet": 2.1
     },
     "mutate-rundock-ui-guards.js": {
       "an alert with an action aligns message and action on the first baseline": 4.1,

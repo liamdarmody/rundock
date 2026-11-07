@@ -543,6 +543,9 @@ const MUTATIONS = [
   [VIEW, 'Edit schedule opens on the day it read',
     '      day: parsed ? parsed.day : null,',
     '      day: null,'],
+  [VIEW, 'Edit schedule carries the server\'s day 29 to 31',
+    '        unreadableMonthDay: routine.unreadableMonthDay || null,\n',
+    ''],
   [VIEW, 'choosing a frequency follows the model\'s rule for the day',
     "    if (field === 'frequency') Object.assign(state, model().chooseFrequency(state, value));\n"
     + "    else if (field === 'time' || field === 'day') state[field] = value;",

@@ -862,3 +862,101 @@ describe('a window whose server has moved to another workspace', () => {
     });
   });
 });
+
+// ===== A MONTHLY ROUTINE, END TO END =====
+//
+// Real agent files, the real stores, discoverAgents, and then the real
+// routines list with the real routine editor beside it in one window, so a
+// press on the row opens the editor on what the roster carried.
+const EDITOR_VIEW_SRC = read('public', 'views', 'routine-editor.js');
+
+function monthlyWorkspace(routines, fn, now = NOW) {
+  const dir = makeWorkspace({
+    agents: { piper: agentFile({ name: 'piper', displayName: 'Piper', type: 'specialist', order: 1, routines }) },
+  });
+  const file = path.join(dir, '.claude', 'agents', 'piper.md');
+  const originalWorkspace = config.getWorkspace();
+  config.setWorkspace(dir);
+  invalidateAgentCache();
+  const previousDeps = sched.wireSchedulerDeps({ now: () => now });
+  try {
+    discoverAgents();
+    invalidateAgentCache();
+    return fn({ dir, file });
+  } finally {
+    config.setWorkspace(originalWorkspace);
+    invalidateAgentCache();
+    sched.wireSchedulerDeps(previousDeps);
+  }
+}
+
+// The routines list and the editor in one window, drawn from a fresh roster.
+function listAndEditor(now = NOW) {
+  invalidateAgentCache();
+  const dom = new JSDOM('<!doctype html><html><head><style>' + ROUTINES_CSS + '</style></head><body>'
+    + '<nav class="nav-rail"><button class="nav-item" data-nav="routines"></button></nav>'
+    + '<div id="view-routines"><div id="routines-content"></div></div>'
+    + '<div id="view-routine-editor"><div id="routine-editor-content"></div></div>'
+    + '</body></html>', { runScripts: 'dangerously' });
+  const w = dom.window;
+  w.eval(EDITOR_MODEL_SRC);
+  w.eval(SKILLS_MODEL_SRC);
+  w.eval(MODEL_SRC);
+  w.eval(VIEW_SRC);
+  w.eval(EDITOR_VIEW_SRC);
+  w.agents = discoverAgents();
+  w.rosterWorkspacePath = config.getWorkspace();
+  w.servingWorkspacePath = config.getWorkspace();
+  w.esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  w.sent = [];
+  w.ws = { send: (m) => w.sent.push(JSON.parse(m)) };
+  w.showView = () => {};
+  w.switchNav = () => {};
+  w.setNavState = () => {};
+  w.routinesNow = () => now;
+  w.Intl = { DateTimeFormat: () => ({ resolvedOptions: () => ({ timeZone: 'Europe/London' }) }) };
+  w.renderRoutines();
+  return { w, doc: w.document, dom };
+}
+
+const NOTICE_LEAD = 'Rundock cannot read this schedule, so this routine will not run.';
+const DAY_31_BODY = 'Day 31 is not in every month, and Rundock will not pick another day for you. '
+  + 'To run on the last day of every month, change it to on the last day of every month at 09:00, '
+  + 'or use Edit schedule.';
+
+describe('a monthly routine, end to end', () => {
+  // The path failing: a day typed by hand that no month is sure to have. The
+  // server names the day beside its verdict, and the row tells the reader the
+  // form to write instead.
+  test('a hand-typed day 31 reaches the row with the day 29 to 31 body, and no next run', () => {
+    monthlyWorkspace([{ name: 'Month end', schedule: 'on day 31 of every month at 09:00', prompt: 'p', enabled: true }], () => {
+      const { doc, dom } = listAndEditor();
+      const row = rowNamed(doc, 'Month end');
+      assert.strictEqual(text(row.querySelector('.schedule-problem-lead')), NOTICE_LEAD);
+      assert.strictEqual(text(row.querySelector('.schedule-problem-body')), DAY_31_BODY);
+      assert.strictEqual(row.querySelector('.next-run'), null, 'a routine that never runs promises no run');
+      dom.window.close();
+    });
+  });
+
+  // The undo: opening Edit schedule on it and leaving changes nothing.
+  test('Edit schedule on a day 31 routine, then leaving, leaves the file byte-identical and the notice on the row', () => {
+    monthlyWorkspace([{ name: 'Month end', schedule: 'on day 31 of every month at 09:00', prompt: 'p', enabled: true }], ({ file }) => {
+      const before = fs.readFileSync(file, 'utf-8');
+      const { doc, w, dom } = listAndEditor();
+      rowNamed(doc, 'Month end').querySelector('[data-routines-action="edit"]').click();
+      assert.strictEqual(doc.querySelector('select[data-routine-field="frequency"]').value, 'month');
+      assert.strictEqual(doc.querySelector('select[data-routine-field="day"]').value, 'last');
+      assert.match(doc.querySelector('[data-routine-editor="stored-schedule"]').textContent,
+        /The last day of the month is selected instead\. Saving replaces it\./);
+      doc.querySelector('.re-actions .settings-btn-primary').click();
+      doc.querySelector('[data-routine-editor="back"]').click();
+      assert.deepStrictEqual(w.sent, [], 'nothing was asked of the server');
+      assert.strictEqual(fs.readFileSync(file, 'utf-8'), before, 'the agent file changed without a save');
+      dom.window.close();
+      const again = listAndEditor();
+      assert.strictEqual(text(rowNamed(again.doc, 'Month end').querySelector('.schedule-problem-body')), DAY_31_BODY);
+      again.dom.window.close();
+    });
+  });
+});

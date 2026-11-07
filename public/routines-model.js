@@ -152,14 +152,22 @@
    * cron arrives with these.
    *
    * IT NAMES WHAT TO CHANGE, BY EXAMPLE. "Unsupported schedule" sends the
-   * reader to documentation this product does not put in front of them. Two
-   * shapes that work, written out, send them to the editor instead. Both
-   * are given because a reader whose job is weekly should not have to guess
+   * reader to documentation this product does not put in front of them. The
+   * editor, and three shapes that work written out, send them to a fix
+   * instead: a reader whose job is weekly or monthly should not have to guess
    * that the daily example generalises.
+   *
+   * A hand-typed day 29 to 31 gets a body of its own (`monthDay`), naming the
+   * last-day form at the file's own time, because that is almost always what
+   * was meant and Rundock will not move the slot itself.
    */
   const SCHEDULE_PROBLEM = {
     lead: 'Rundock cannot read this schedule, so this routine will not run.',
-    body: 'Change it to say every day at 07:00, or a weekday, like every Monday at 07:00.',
+    body: 'Use Edit schedule, or change the file to say every day at 07:00, every Monday at 07:00 '
+      + 'or on day 15 of every month at 07:00.',
+    monthDay: 'Day {day} is not in every month, and Rundock will not pick another day for you. '
+      + 'To run on the last day of every month, change it to on the last day of every month at {time}, '
+      + 'or use Edit schedule.',
   };
 
   /**
@@ -854,13 +862,21 @@
    * fault, and telling its owner to change a schedule they never wrote is an
    * answer to a question nobody asked.
    *
-   * @param {{schedule?: any, scheduleReadable?: boolean}} [input]
+   * THE BODY FOR A DAY 29 TO 31 IS THE SERVER'S ANSWER TOO, sent beside the
+   * verdict as `unreadableMonthDay`, for the same reason: reading those days
+   * here would be a second copy of the grammar.
+   *
+   * @param {{schedule?: any, scheduleReadable?: boolean, unreadableMonthDay?: {day: number, time: string}|null}} [input]
    */
   function scheduleProblem(input) {
     if (!input || input.scheduleReadable !== false) return null;
     const schedule = input.schedule;
     if (typeof schedule !== 'string' || !schedule.trim()) return null;
-    return { text: `${SCHEDULE_PROBLEM.lead} ${SCHEDULE_PROBLEM.body}` };
+    const fact = input.unreadableMonthDay;
+    const body = fact
+      ? SCHEDULE_PROBLEM.monthDay.replace('{day}', () => String(fact.day)).replace('{time}', () => fact.time)
+      : SCHEDULE_PROBLEM.body;
+    return { lead: SCHEDULE_PROBLEM.lead, body, text: `${SCHEDULE_PROBLEM.lead} ${body}` };
   }
 
   /**

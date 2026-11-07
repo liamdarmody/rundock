@@ -1161,6 +1161,54 @@ describe('a routine whose schedule the scheduler cannot read', () => {
   });
 });
 
+// ===== THE UNREADABLE-SCHEDULE NOTICE =====
+//
+// A red lead that says the routine will not run, and a quiet body that says
+// what to write instead. A hand-typed day 29, 30 or 31 gets a body of its own,
+// and which body shows is the server's answer, carried beside
+// scheduleReadable: this side keeps no reading of those days.
+describe('the unreadable-schedule notice: a red lead and a quiet body', () => {
+  const LEAD = 'Rundock cannot read this schedule, so this routine will not run.';
+
+  test('any other schedule is shown three forms that work', () => {
+    const p = m.scheduleProblem({ schedule: 'every month at 09:00', scheduleReadable: false });
+    assert.strictEqual(p.lead, LEAD);
+    assert.strictEqual(p.body, 'Use Edit schedule, or change the file to say every day at 07:00, '
+      + 'every Monday at 07:00 or on day 15 of every month at 07:00.');
+    assert.strictEqual(p.text, `${p.lead} ${p.body}`);
+  });
+
+  test('a day 29, 30 or 31 is told the last-day form, at its own time', () => {
+    for (const [day, time] of [[29, '07:30'], [30, '18:00'], [31, '09:00']]) {
+      const p = m.scheduleProblem({
+        schedule: `on day ${day} of every month at ${time}`, scheduleReadable: false,
+        unreadableMonthDay: { day, time },
+      });
+      assert.strictEqual(p.lead, LEAD);
+      assert.strictEqual(p.body, `Day ${day} is not in every month, and Rundock will not pick another day for you. `
+        + `To run on the last day of every month, change it to on the last day of every month at ${time}, `
+        + 'or use Edit schedule.');
+    }
+  });
+
+  test('which body shows is the server\'s answer, not a reading of the text here', () => {
+    assert.match(m.scheduleProblem({ schedule: 'on day 31 of every month at 09:00', scheduleReadable: false }).body,
+      /^Use Edit schedule/, 'a roster that did not say gets the general body');
+    assert.match(m.scheduleProblem({
+      schedule: '0 7 * * *', scheduleReadable: false, unreadableMonthDay: { day: 30, time: '06:00' },
+    }).body, /^Day 30 is not in every month/);
+  });
+
+  test('the row carries both parts', () => {
+    const row = m.row({
+      name: 'Context review', schedule: 'on day 31 of every month at 09:00', scheduleReadable: false,
+      unreadableMonthDay: { day: 31, time: '09:00' }, enabled: true, now: NOW, zone: ZONE,
+    });
+    assert.strictEqual(row.scheduleProblem.lead, LEAD);
+    assert.match(row.scheduleProblem.body, /^Day 31 is not in every month/);
+  });
+});
+
 // ===== A ROUTINE WITH NOTHING TO SAY =====
 //
 // A routine that declares a schedule and no prompt used to be indistinguishable

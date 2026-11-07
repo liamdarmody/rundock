@@ -566,6 +566,36 @@ const MUTATIONS = [
     '    dueAt: dueAt ? dueAt.toISOString() : null,\n',
     '    dueAt: null,\n'],
   // The row names a slot the tick will not fire: the approval came after it.
+  // A hand-typed day 29 to 31: the server names it, and only at a time a form
+  // reads, because the row suggests writing that time back.
+  [SCHEDULER_GRAMMAR, 'the server names a day 29 to 31 only at a time a form reads',
+    '/on day (29|30|31) of every month at (([01]\\d|2[0-3]):[0-5]\\d)/',
+    '/on day (29|30|31) of every month at ((\\d{2}):\\d{2})/'],
+  [DISCOVERY, 'the roster carries the server\'s day 29 to 31',
+    '        r.unreadableMonthDay = facts.unreadableMonthDay || null;\n',
+    ''],
+  [VIEW, 'the row hands the server\'s day 29 to 31 to the model',
+    '    unreadableMonthDay: r.unreadableMonthDay,\n',
+    ''],
+  // Which body shows is the server's answer. Read off the schedule here, it
+  // would be a second copy of the grammar, free to disagree with the tick.
+  [MODEL, 'the day 29 to 31 body is the server\'s answer, not the client\'s reading',
+    '    const fact = input.unreadableMonthDay;',
+    '    const day = /on day (29|30|31) of every month at (\\d{2}:\\d{2})/.exec(schedule.toLowerCase());\n'
+    + '    const fact = day ? { day: Number(day[1]), time: day[2] } : null;'],
+  [MODEL, 'the day 29 to 31 body names the file\'s own time',
+    ".replace('{time}', () => fact.time)",
+    ".replace('{time}', () => '09:00')"],
+  [VIEW, 'the notice is drawn as a lead and a body',
+    '      + `<span class="schedule-problem-lead">${esc(row.scheduleProblem.lead)}</span> `\n'
+    + '      + `<span class="schedule-problem-body">${esc(row.scheduleProblem.body)}</span>`',
+    '      + `${esc(row.scheduleProblem.text)}`'],
+  [STYLES, 'the notice lead takes the danger token made for a card',
+    '.schedule-problem-lead { color: var(--danger-text-card); }',
+    '.schedule-problem-lead { color: var(--danger-text); }'],
+  [STYLES, 'the notice body is quiet',
+    '.schedule-problem-body { color: var(--text-2-strong); font-weight: 400; }',
+    '.schedule-problem-body { }'],
   [SCHEDULER_MONTHLY, 'the owed line ignores the consent moment',
     '  const consentAt = routine ? approvalStore.approvedAt(getWorkspace(), routine) : null;\n',
     '  const consentAt = null;\n'],

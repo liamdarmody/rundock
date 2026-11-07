@@ -114,6 +114,26 @@ test('the save check is never looser than the scheduler', () => {
   }
 });
 
+// A HAND-TYPED DAY 29 TO 31 IS NAMED BY THE SERVER, beside the verdict that it
+// cannot be read, so the row can say what to write instead and the editor can
+// open on the last day. It is the scheduler's answer, sent on the roster: the
+// client keeps no reading of those days of its own.
+test('the server names the day and time of an unreadable day 29 to 31, and of nothing else', () => {
+  const said = (schedule) => scheduler.routineDisplayFacts('inventory:probe', schedule).unreadableMonthDay || null;
+  const named = {
+    'on day 29 of every month at 09:00': { day: 29, time: '09:00' },
+    'on day 30 of every month at 09:00': { day: 30, time: '09:00' },
+    'on day 31 of every month at 09:00': { day: 31, time: '09:00' },
+  };
+  for (const [schedule] of ROWS) {
+    assert.deepStrictEqual(said(schedule), named[schedule] || null, `on "${schedule}"`);
+  }
+  assert.deepStrictEqual(said('ON DAY 30 OF EVERY MONTH AT 23:30'), { day: 30, time: '23:30' });
+  assert.deepStrictEqual(said('on day 29 of every month at 07:03'), { day: 29, time: '07:03' });
+  assert.strictEqual(said('on day 31 of every month at 24:00'), null, 'a time no form reads is no time to suggest');
+  assert.strictEqual(said('on day 32 of every month at 09:00'), null);
+});
+
 // Two spellings of one day are one schedule, so editing a file from one to the
 // other is not a schedule edit and moves no anchor.
 test('a leading zero on the day reads as the same schedule as the day without it', () => {

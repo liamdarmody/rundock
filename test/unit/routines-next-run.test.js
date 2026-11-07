@@ -342,7 +342,7 @@ describe('one path produces every row\'s next-run time', () => {
       // than being inferred from an absent instant.
       assert.deepStrictEqual(sched.routineDisplayFacts(KEY, '0 7 * * *'),
         { nextRun: null, lastStart: null, lastSlot: null, missedSlot: null,
-          scheduleReadable: false });
+          scheduleReadable: false, unreadableMonthDay: null });
     });
   });
 

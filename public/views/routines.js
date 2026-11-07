@@ -318,6 +318,8 @@ function rowHtml(entry, index, withActions) {
     // roster. Passed through untouched: a client that decided this for itself
     // would be a second copy of a grammar that lives beside the tick.
     scheduleReadable: r.scheduleReadable,
+    // And its reading of a hand-typed day 29 to 31, for the notice's body.
+    unreadableMonthDay: r.unreadableMonthDay,
     // THE SCHEDULER'S OWN REFUSAL, published beside the roster by the same
     // enrichment that stamps scheduleReadable, and passed through untouched
     // for the same reason: the row's offer promises what the tick would do,
@@ -370,9 +372,10 @@ function rowHtml(entry, index, withActions) {
   // confirmation too, unlike the controls: somebody about to remove a routine
   // is entitled to know it was never going to run.
   if (row.scheduleProblem) {
-    body += '<div class="rr-meta rr-problem-line">'
-      + `<span class="schedule-problem">${esc(row.scheduleProblem.text)}</span>`
-      + '</div>';
+    body += '<div class="rr-meta rr-problem-line"><span class="schedule-problem">'
+      + `<span class="schedule-problem-lead">${esc(row.scheduleProblem.lead)}</span> `
+      + `<span class="schedule-problem-body">${esc(row.scheduleProblem.body)}</span>`
+      + '</span></div>';
   }
   // AND THE OTHER FAULT OF THE SAME KIND: a routine that says when it runs and
   // never says what to do. Drawn on its own line and in the same tone, because

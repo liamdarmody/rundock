@@ -137,3 +137,13 @@ describe('each new use clears 4.5:1 on its surface, in both themes', () => {
     });
   }
 });
+
+describe('the rules that draw them read those tokens', () => {
+  test('the notice lead and body', () => {
+    const css = rules('public/styles/views/routines.css');
+    assert.ok(css.has('.schedule-problem-lead'), 'routines.css has no rule for the notice lead');
+    assert.strictEqual(css.get('.schedule-problem-lead').get('color'), 'var(--danger-text-card)');
+    assert.ok(css.has('.schedule-problem-body'), 'routines.css has no rule for the notice body');
+    assert.strictEqual(css.get('.schedule-problem-body').get('color'), 'var(--text-2-strong)');
+  });
+});

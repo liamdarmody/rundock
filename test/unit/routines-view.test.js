@@ -1937,6 +1937,31 @@ describe('a routine the upgrade held back', () => {
     dom.window.close();
   });
 
+  // The notice in two parts: the lead in the danger token made for a card, the
+  // body in the strong secondary text, each read off the page.
+  test('the unreadable-schedule notice draws a red lead and a quiet body', () => {
+    const { doc, w, dom } = shell([
+      routine('Context review', {
+        schedule: 'on day 31 of every month at 09:00', scheduleReadable: false,
+        unreadableMonthDay: { day: 31, time: '09:00' },
+      }),
+    ]);
+    w.renderRoutines();
+    const lead = doc.querySelector('.schedule-problem .schedule-problem-lead');
+    const body = doc.querySelector('.schedule-problem .schedule-problem-body');
+    assert.ok(lead && body, 'the notice is not drawn in two parts');
+    assert.strictEqual(text(lead), 'Rundock cannot read this schedule, so this routine will not run.');
+    assert.strictEqual(text(body), 'Day 31 is not in every month, and Rundock will not pick another day for you. '
+      + 'To run on the last day of every month, change it to on the last day of every month at 09:00, '
+      + 'or use Edit schedule.');
+    const style = (el) => dom.window.getComputedStyle(el);
+    assert.strictEqual(style(lead).color, 'var(--danger-text-card)');
+    assert.strictEqual(style(lead).fontWeight, '600');
+    assert.strictEqual(style(body).color, 'var(--text-2-strong)');
+    assert.strictEqual(style(body).fontWeight, '400');
+    dom.window.close();
+  });
+
   // THE DELETE CONFIRMATION DRAWS A ROW TOO, and it makes two decisions about
   // it that nothing was pressing: it withholds every control, and it keeps the
   // schedule fault. Both could have been inverted without a failure.
