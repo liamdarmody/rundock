@@ -126,10 +126,15 @@ describe('a routine state that does not parse is set aside and rebuilt from the 
           `the error line does not name both paths: ${errors[0]}`);
 
         // Put back at once, so a restart before the next run does not find
-        // no file and start empty.
+        // no file and start empty. The undo: that restart reads the rebuilt
+        // file as any other, quietly, and sets nothing aside a second time.
         const next = freshScheduler();
-        next.loadRoutineState();
+        const again = errorsDuring(() => next.loadRoutineState());
         assert.deepStrictEqual(next.routineState[KEY], state, 'the rebuilt state was not saved');
+        assert.deepStrictEqual(again, [], 'the load after the rebuild said something');
+        assert.deepStrictEqual(setAsideBeside(stateFile(ws)), aside, 'the load after the rebuild set a file aside again');
+        assert.ok(fs.readFileSync(aside[0]).equals(bytes), 'the set-aside file changed');
+        assert.deepStrictEqual(JSON.parse(fs.readFileSync(stateFile(ws), 'utf-8'))[KEY], state, 'the state file does not hold the rebuilt state');
       });
     });
   }
