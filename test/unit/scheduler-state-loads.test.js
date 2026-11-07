@@ -155,6 +155,29 @@ describe('a routine state that does not parse is set aside and rebuilt from the 
     });
   });
 
+  // The inverse. A file that parses is read exactly as before: nothing set
+  // aside, nothing written, and the clock, which only names a set-aside file,
+  // never read. A clock that throws must not cost a load that never needed it.
+  test('a state file that parses loads as before, without reading the clock', () => {
+    withWorkspace((ws) => {
+      fs.writeFileSync(stateFile(ws), WHOLE_STATE);
+      const slots = JSON.stringify({ observedAt: RAN_AT.toISOString(), routines: {} }, null, 2);
+      fs.writeFileSync(slotsFile(ws), slots);
+      writeRecord(ws, runRecord());
+      const folder = fs.readdirSync(path.join(ws, '.rundock')).sort();
+      const sched = freshScheduler();
+      let reads = 0;
+      sched.wireSchedulerDeps({ now: () => { reads++; throw new Error('the clock is not available'); } });
+      const errors = errorsDuring(() => sched.loadRoutineState());
+      assert.deepStrictEqual(sched.routineState[KEY], JSON.parse(WHOLE_STATE)[KEY], 'the file that parses was not loaded');
+      assert.strictEqual(sched.routineSlots.observedAt, RAN_AT.toISOString(), 'the slot file that parses was not loaded');
+      assert.strictEqual(reads, 0, 'the clock was read by a load that set nothing aside');
+      assert.deepStrictEqual(errors, []);
+      assert.strictEqual(fs.readFileSync(stateFile(ws), 'utf-8'), WHOLE_STATE, 'the file was rewritten');
+      assert.deepStrictEqual(fs.readdirSync(path.join(ws, '.rundock')).sort(), folder, 'the folder changed');
+    });
+  });
+
   test('a missing state file still starts empty, and says nothing', () => {
     withWorkspace((ws) => {
       writeRecord(ws, runRecord());
