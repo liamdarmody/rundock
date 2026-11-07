@@ -1,5 +1,5 @@
 {
-  "about": "Seconds per mutation row. secondsPerRow is measured on the CI runner from the shard logs of two full runs of every harness: each harness's measured seconds over its rows, averaged. secondsPerRowLabel, for each harness CI runs in slices, is inferred, not measured: no run records a row's own time, so each slice's measured seconds are shared among its rows in proportion to one plus the tests each turned red, averaged over the runs. secondsPerIntegrationRow is the mean of those inferred costs over a harness's integration rows, the rate for an integration row with no cost of its own. The plan weights shards by these so no shard nears its time limit. A harness missing here is planned at defaultSecondsPerRow, and any other row missing from its harness's labels at that harness's rate; re-measure when a shard runs past fifteen minutes. mutate-stale-session-guards.js is measured on a developer machine, one row at a time, its costs by label measured rather than inferred, until shard logs record it.",
+  "about": "Seconds per mutation row. secondsPerRow is measured on the CI runner from the shard logs of two full runs of every harness: each harness's measured seconds over its rows, averaged. secondsPerRowLabel, for each harness CI runs in slices, is inferred, not measured: no run records a row's own time, so each slice's measured seconds are shared among its rows in proportion to one plus the tests each turned red, averaged over the runs. secondsPerIntegrationRow is the mean of those inferred costs over a harness's integration rows, the rate for an integration row with no cost of its own. The plan weights shards by these so no shard nears its time limit. A harness missing here is planned at defaultSecondsPerRow, and any other row missing from its harness's labels at that harness's rate; re-measure when a shard runs past fifteen minutes. mutate-stale-session-guards.js is measured on a developer machine, one row at a time, its costs by label measured rather than inferred, until shard logs record it. mutate-run-detail-guards.js has costs by label for some of its rows, each measured on a developer machine running that row alone; its other rows are planned at its rate.",
   "defaultSecondsPerRow": 5,
   "secondsPerRow": {
     "mutate-approve-once-guards.js": 0.89,
@@ -1253,6 +1253,31 @@
       "Shell code: a cd into a working folder is not a base": 1.1,
       "Shell code: pushd and popd are not counted when the command cannot be lexed": 1.1,
       "Shell code: a cd to a variable is trusted as a base": 1.1
+    },
+    "mutate-run-detail-guards.js": {
+      "the screen says which names cannot be opened, only while one cannot": 1.35,
+      "Plain names: the sentence never drawn": 1.22,
+      "Shell use: the shell tool names removed from the reader": 0.23,
+      "Shell use: the sidechain shell scan removed": 0.21,
+      "Shell use: the shell field dropped from endRunRecord": 0.26,
+      "Shell use: the shell field written on every record": 0.25,
+      "Shell use: the shell field dropped from the startup close": 0.27,
+      "Shell use: the note drawn only on an empty list": 1.27,
+      "Shell use: the note on an empty list replaced by the old sentence": 1.25,
+      "Shell use: the note drawn on an unknown list": 1.3,
+      "File links: the tree lookup removed, so any path under the root links": 0.24,
+      "File links: the remainder normalized before the lookup": 0.28,
+      "File links: the separator check removed": 0.22,
+      "File links: a suffix match in place of the root prefix": 0.26,
+      "File links: a case-blind comparison": 0.18,
+      "File links: the Windows separator mapping removed": 0.26,
+      "File links: the recorded string opened in place of the tree path": 1.5,
+      "File links: the path written into an inline handler": 1.58,
+      "File links: the click re-check removed": 1.33,
+      "File links: the tree redraw removed": 1.43,
+      "File links: --link-text declared only on the root": 0.21,
+      "Stop: back on settings-btn-danger": 1.42,
+      "Stop: the focus rule removed": 1.28
     }
   }
 }
