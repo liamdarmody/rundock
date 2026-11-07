@@ -154,9 +154,6 @@ if (require.main === module) {
   if (process.argv.includes('--preflight-only')) process.exit(0);
   const results = run();
   const failed = report(results, process.argv.includes('--markdown'));
-  // Throwaway: leave a file modified on purpose, after every guard has been
-  // restored and judged, to show the required check goes red. Revert this.
-  fs.appendFileSync(path.join(__dirname, '..', '..', 'codex.js'), '// left modified by a mutation harness on purpose\n');
   if (failed) {
     console.error(`\n${failed} mutation(s) proved nothing. A guard no test notices is not guarded.`);
     process.exit(exitCodeFor(failed, results));
