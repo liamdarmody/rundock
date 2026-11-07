@@ -571,11 +571,11 @@ describe('rosters and system prompt', () => {
   });
 
   test('buildSystemPrompt: a lead with direct reports gets the sequential-delegation rule, same as the orchestrator', () => {
-    // The 0.8.5 sequential rule was added
-    // inside the orchestrator branch only. An agent with direct reports takes
-    // the hasDirectReports branch, was never told, and promised the user
-    // parallel execution the engine cannot deliver ("I'll get Ana on the
-    // cadence question in parallel", conversation 2026-07-29).
+    // The rule was first written into the orchestrator's branch of the prompt
+    // only. An agent with direct reports takes the hasDirectReports branch
+    // instead, so it was never told, and it promised the user parallel work
+    // the engine cannot deliver ("I'll get Ana on the cadence question in
+    // parallel"). Both branches must carry it.
     useWorkspace({ agents: standardTeam() });
     const agents = srv.discoverAgents();
     const orch = srv.buildSystemPrompt(agents.find(a => a.id === 'chief-of-staff'));

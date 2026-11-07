@@ -243,8 +243,8 @@ const KNOWN = {
   'meter / value over its limit / dark / --card': 4.36,
   'meter / value over its limit / light / --base': 4.49,
   'meter / value over its limit / light / --card': 4.29,
-  // ---- ACCEPTED: the white thumb on control orange in dark (BUILD-SPEC
-  // 3.10, approved). State is carried by position, and the track stands at
+  // ---- ACCEPTED: the white thumb on control orange in dark, a reasoned
+  // exception. State is carried by position, and the track stands at
   // 4.43:1 against its card; a dark thumb would pass and is the look the
   // design moved away from. The checkbox tick is the same pairing, pinned in
   // the orange rule's own test.
@@ -306,7 +306,7 @@ describe('Rundock UI contrast, computed from tokens.css and rundock-ui.css', () 
   });
 });
 
-describe('the pairings BUILD-SPEC 3.8 fixed hold their new ratios', () => {
+describe('the pairings raised to pass contrast hold their new ratios', () => {
   const at = (key) => {
     const r = measure().find((m) => m.key === key);
     assert.ok(r, `no measured pairing ${key}`);
@@ -337,7 +337,7 @@ describe('the pairings BUILD-SPEC 3.8 fixed hold their new ratios', () => {
     assert.strictEqual(at('button / danger label, pressed / light / .rui-btn-danger:active:not(:disabled)'), 4.56);
   });
   test('the alert icons are decorative: measured, and recorded as such rather than as a shortfall', () => {
-    // The message states the tone in words (BUILD-SPEC 3.8), so the icon is
+    // The message states the tone in words, so the icon is
     // not a graphical object needed to understand the alert (WCAG 1.4.11).
     const { light } = THEMES;
     const card = resolve(declared('.rui-alert', 'background', 'light'), light, 'alert');
@@ -423,7 +423,7 @@ describe('the orange rule: action orange carries text or an icon, control orange
   });
 
   test('the white tick and thumb on control orange: 3.83:1 in light, and the accepted 2.85:1 in dark', () => {
-    // The one reasoned exception (tokens.css, BUILD-SPEC 3.10): state is
+    // The one reasoned exception (tokens.css): state is
     // carried by shape and position, and the control stands at 4.43:1
     // against its card. Pinned, so it cannot slip further unnoticed.
     const white = [255, 255, 255];

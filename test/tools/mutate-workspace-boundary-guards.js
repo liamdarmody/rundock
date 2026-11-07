@@ -3251,6 +3251,14 @@ const MUTATIONS = [
   [CLAUDE_CONSOLE, 'Reconnect: the macOS script takes its mode from the umask',
     '    fs.fchmodSync(fd, 0o700);\n',
     ''],
+  // One write call may take only part of the script, and Terminal runs
+  // whatever the file holds: half a script is half a command.
+  [CLAUDE_CONSOLE, 'Reconnect: the macOS script is left at whatever one write call took',
+    '    at += wrote;\n',
+    '    at = bytes.length;\n'],
+  [CLAUDE_CONSOLE, 'Reconnect: a write of the macOS script that takes nothing is tried for ever',
+    '    if (!(wrote > 0)) {\n',
+    '    if (false) {\n'],
   // A frame inside the main window, such as one a page embeds, taken for the
   // window itself.
   [CLAUDE_CONSOLE, 'Reconnect: a frame inside the window is taken for the window',

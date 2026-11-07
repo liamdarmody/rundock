@@ -2,7 +2,7 @@
 // Unit tests for public/palette-model.js: the universal-search palette model.
 // Grouping, counts-as-floors, recent labelling, selection wrap, stale-reply
 // guarding, highlight conversion, and anchor matching are the extraction
-// contract with app.js's shipped behaviour (SR1).
+// contract with app.js's shipped behaviour.
 const { test, describe } = require('node:test');
 const assert = require('node:assert');
 

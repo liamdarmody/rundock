@@ -9,13 +9,13 @@
 // sync problem).
 //
 // Engine choice: the index runs on `node:sqlite`
-// (DatabaseSync), NOT better-sqlite3 as the July spec drafted. Verified
+// (DatabaseSync), NOT better-sqlite3 as first planned. Verified
 // empirically: node:sqlite ships FTS5 (including the trigram tokenizer)
 // unflagged on Node 22.16+ and on Electron 35's bundled Node, where server.js
 // runs in-process (electron/main.js requires server.js directly, so a native
 // module would have needed Electron's ABI). node:sqlite is compiled into Node
 // itself with platform-uniform build flags, so Windows carries zero
-// native-binary risk: this removes the spec's #1 risk (native prebuilds)
+// native-binary risk: this removes the largest risk (native prebuilds)
 // wholesale, with the same synchronous API surface. Runtimes without
 // node:sqlite (Node 20/21/early 22) degrade to the legacy grep path behind
 // the capability probe below; search never hard-fails on a platform.
@@ -23,7 +23,7 @@
 // The index is a DERIVED ARTIFACT at <workspace>/.rundock/search-index.db:
 // deleting it loses nothing; it rebuilds from the source files. There are no
 // schema migrations, ever: a schema version bump or a corrupt file deletes
-// the db and rebuilds (spec "Never" boundary). No embeddings, no vectors, no
+// the db and rebuilds. No embeddings, no vectors, no
 // user-facing configuration.
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -58,7 +58,7 @@ function probeSqlite({ disabled } = {}) {
   }
   if (!DatabaseSync) return { available: false, reason: 'node:sqlite present but DatabaseSync missing' };
   // FTS5 is a compile-time SQLite option; assert it really works rather than
-  // assuming (spec risk 3).
+  // assuming it does.
   try {
     const db = new DatabaseSync(':memory:');
     db.exec("CREATE VIRTUAL TABLE __fts_probe USING fts5(x)");
@@ -357,8 +357,7 @@ CREATE TABLE IF NOT EXISTS session_marks (
  * Extract indexable messages from one parsed Claude Code jsonl line.
  * Mirrors parseSessionHistory's display semantics: user messages with string
  * content, and assistant text blocks (trim-filtered). Tool calls and tool
- * results are excluded in v1: they are the main source of grep noise the
- * spec calls out.
+ * results are excluded in v1: they are the main source of grep noise.
  * Returns {role, text, tsMs} or null.
  */
 function extractIndexableMessage(obj) {

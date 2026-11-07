@@ -1258,6 +1258,8 @@
       "Reconnect: a leftover macOS script, or a link in its place, is not removed first": 2.8,
       "Reconnect: the macOS script is written through whatever appears at its path": 1.4,
       "Reconnect: the macOS script takes its mode from the umask": 1.4,
+      "Reconnect: the macOS script is left at whatever one write call took": 0.25,
+      "Reconnect: a write of the macOS script that takes nothing is tried for ever": 0.28,
       "Reconnect: a frame inside the window is taken for the window": 1.4,
       "Reconnect: the desktop channel answers any frame of the main window": 1.4,
       "Reconnect: the wizard reads an error the opener never gives": 1.4,
