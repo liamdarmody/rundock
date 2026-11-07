@@ -1019,3 +1019,175 @@ describe('a monthly row, out of a real roster', () => {
     }, NOV, missed);
   });
 });
+
+// ===== MADE IN THE EDITOR, RUN AT ITS SLOT =====
+//
+// A private scheduler whose children are the test's, loaded after the spawn is
+// stood in for, because the scheduler takes its spawn when it loads. Discovery
+// reads the scheduler at call time, so the roster is this one's for the
+// length of the test. Everything is put back before it returns.
+const SCHEDULER_KEY = require.resolve('../../lib/scheduler.js');
+const CLAUDE_KEY = require.resolve('../../lib/runtime/claude.js');
+const { EventEmitter } = require('node:events');
+const { handleSaveRoutine, handleSetRoutineSchedule } = require('../../lib/protocol/handlers/team.js');
+
+function withPrivateScheduler(fn) {
+  const children = [];
+  const claude = require(CLAUDE_KEY);
+  const real = { spawnClaude: claude.spawnClaude, killProcessTree: claude.killProcessTree };
+  const prevClaudeDeps = claude.wireClaudeRuntimeDeps({ getActualPort: () => 0 });
+  claude.spawnClaude = () => {
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    children.push(child);
+    return child;
+  };
+  claude.killProcessTree = () => {};
+  const cached = require.cache[SCHEDULER_KEY];
+  delete require.cache[SCHEDULER_KEY];
+  try {
+    const priv = require(SCHEDULER_KEY);
+    const clock = { at: null };
+    priv.wireSchedulerDeps({ now: () => clock.at, getWssClients: () => [] });
+    return fn(priv, clock, children);
+  } finally {
+    delete require.cache[SCHEDULER_KEY];
+    if (cached) require.cache[SCHEDULER_KEY] = cached;
+    Object.assign(claude, real);
+    claude.wireClaudeRuntimeDeps(prevClaudeDeps);
+  }
+}
+
+// What a save handler is handed: the real cache, and a socket that keeps what
+// it is told.
+function handlerContext(dir) {
+  const sent = [];
+  return {
+    sent,
+    ctx: {
+      agents: { invalidateAgentCache, discoverSkills: () => [], flagRosterRefresh: () => {} },
+      workspace: { isInsideWorkspace: (p) => p.startsWith(dir) },
+    },
+    ws: { send: (m) => sent.push(JSON.parse(m)), readyState: 1 },
+  };
+}
+
+function chooseIn(w, field, value) {
+  const select = w.document.querySelector(`select[data-routine-field="${field}"]`);
+  assert.ok(select, `there is no ${field} dropdown to choose from`);
+  select.value = value;
+  assert.strictEqual(select.value, value, `the ${field} dropdown offers no ${value}`);
+  select.dispatchEvent(new w.Event('change'));
+}
+
+const OPS_SKILL = { id: 'ops-summary', slug: 'ops-summary', name: 'Compile the ops summary',
+  assignedAgents: [{ id: 'piper', name: 'Piper' }] };
+
+describe('a monthly routine made in the editor', () => {
+  test('saved, it reads as its sentence and next run, runs once at its slot, and then reads as ran with next month next', (t) => {
+    withPrivateScheduler((priv, clock, children) => {
+      const created = new Date(2026, 10, 2, 10, 0);
+      clock.at = created;
+      const dir = makeWorkspace({
+        agents: { piper: agentFile({ name: 'piper', displayName: 'Piper', type: 'specialist', order: 1 }) },
+      });
+      const originalWorkspace = config.getWorkspace();
+      config.setWorkspace(dir);
+      require('../helpers/approvals.js').seenHere(dir);
+      invalidateAgentCache();
+      try {
+        // In the editor: month, the 15th, 9:00am, saved.
+        const page = listAndEditor(created);
+        page.w.openRoutineEditor({ agentId: 'piper', agentName: 'Piper', skills: [OPS_SKILL], zone: 'Europe/London' });
+        page.w.routineEditorPick('ops-summary:piper');
+        page.w.routineEditorStep('schedule');
+        chooseIn(page.w, 'frequency', 'month');
+        chooseIn(page.w, 'day', '15');
+        chooseIn(page.w, 'time', '09:00');
+        page.doc.querySelector('.re-actions .settings-btn-primary').click();
+        page.doc.querySelector('[data-routine-editor="save"]').click();
+        assert.strictEqual(page.w.sent.length, 1);
+        assert.strictEqual(page.w.sent[0].routine.schedule, 'on day 15 of every month at 09:00');
+        page.dom.window.close();
+        const h = handlerContext(dir);
+        handleSaveRoutine(h.ctx, h.ws, page.w.sent[0]);
+        assert.ok(h.sent.some((m) => m.type === 'routine_saved'), `the save went through: ${JSON.stringify(h.sent)}`);
+
+        const rowAt = (now) => {
+          const view = listAndEditor(now);
+          const row = view.doc.querySelector('.routine-row');
+          const read = {
+            sentence: text(row.querySelector('.rr-sentence')),
+            status: row.querySelector('.run-status') ? text(row.querySelector('.run-status')) : null,
+            next: row.querySelector('.next-run') ? text(row.querySelector('.next-run')) : null,
+          };
+          view.dom.window.close();
+          return read;
+        };
+        assert.deepStrictEqual(rowAt(created), {
+          sentence: 'Every month on the 15th at 9:00am, run: Compile the ops summary',
+          status: null,
+          next: 'Next run: 15 November, 9:00am, London time',
+        });
+
+        t.mock.timers.enable({ apis: ['setInterval'] });
+        priv.startScheduler();
+        try {
+          const tickAt = (when) => { clock.at = when; t.mock.timers.tick(60_000); };
+          tickAt(new Date(2026, 10, 2, 10, 1));
+          tickAt(new Date(2026, 10, 14, 9, 0));
+          tickAt(new Date(2026, 10, 15, 8, 59));
+          assert.strictEqual(children.length, 0, 'nothing before the slot');
+          tickAt(new Date(2026, 10, 15, 9, 0));
+          assert.strictEqual(children.length, 1, 'one run at the slot');
+          clock.at = new Date(2026, 10, 15, 9, 2);
+          children[0].emit('close', 0);
+          for (const when of [new Date(2026, 10, 15, 9, 3), new Date(2026, 10, 15, 21, 0), new Date(2026, 10, 20, 9, 0)]) tickAt(when);
+          assert.strictEqual(children.length, 1, 'and no second run that month');
+        } finally {
+          priv.stopScheduler();
+          t.mock.timers.reset();
+        }
+
+        const after = rowAt(new Date(2026, 10, 20, 9, 5));
+        assert.strictEqual(after.status, 'Ran Sunday, 9:00am, London time');
+        assert.strictEqual(after.next, 'Next run: 15 December, 9:00am, London time');
+        assert.strictEqual(rowAt(new Date(2026, 10, 15, 9, 5)).status, 'Ran today, 9:00am, London time');
+      } finally {
+        config.setWorkspace(originalWorkspace);
+        invalidateAgentCache();
+      }
+    });
+  });
+
+  // The inverse action, through the row and the editor: monthly back to daily.
+  test('changed back to daily through Edit schedule, it saves the daily words and reopens as daily', () => {
+    monthlyWorkspace([{ name: 'Ledger', schedule: 'on day 15 of every month at 09:00', prompt: 'p', enabled: true }], ({ dir, file }) => {
+      const page = listAndEditor();
+      rowNamed(page.doc, 'Ledger').querySelector('[data-routines-action="edit"]').click();
+      assert.strictEqual(page.doc.querySelector('select[data-routine-field="day"]').value, '15');
+      chooseIn(page.w, 'frequency', 'day');
+      assert.strictEqual(page.doc.querySelector('select[data-routine-field="day"]'), null, 'no day for a daily routine');
+      assert.strictEqual(page.doc.querySelector('select[data-routine-field="time"]').value, '09:00', 'the time is kept');
+      page.doc.querySelector('.re-actions .settings-btn-primary').click();
+      page.doc.querySelector('[data-routine-editor="save"]').click();
+      assert.strictEqual(page.w.sent.length, 1);
+      assert.strictEqual(page.w.sent[0].type, 'set_routine_schedule');
+      assert.strictEqual(page.w.sent[0].schedule, 'every day at 09:00');
+      page.dom.window.close();
+      const h = handlerContext(dir);
+      handleSetRoutineSchedule(h.ctx, h.ws, page.w.sent[0]);
+      assert.ok(h.sent.some((m) => m.type === 'routine_rescheduled'), `the save went through: ${JSON.stringify(h.sent)}`);
+      assert.match(fs.readFileSync(file, 'utf-8'), /schedule: every day at 09:00/);
+
+      const again = listAndEditor();
+      assert.match(text(rowNamed(again.doc, 'Ledger').querySelector('.rr-sentence')), /^Every day at 9:00am, run: Ledger/);
+      rowNamed(again.doc, 'Ledger').querySelector('[data-routines-action="edit"]').click();
+      assert.strictEqual(again.doc.querySelector('select[data-routine-field="frequency"]').value, 'day');
+      assert.strictEqual(again.doc.querySelector('select[data-routine-field="time"]').value, '09:00');
+      assert.strictEqual(again.doc.querySelector('select[data-routine-field="day"]'), null);
+      again.dom.window.close();
+    });
+  });
+});
