@@ -762,11 +762,13 @@ async function main(argv = process.argv.slice(2)) {
     }
   } else {
     const decision = decide(argv);
-    // EVERY HARNESS, AND NONE FOUND, IS NOT A PASS. A plan of zero shards skips
-    // every shard job, and the aggregate reads that as nothing to fail, so the
-    // complete set asked for and not found is refused before a plan is written.
-    if (argv.includes('--all') && !decision.harnesses.length) {
-      console.error(`[mutation-scope] no verdict: --all found no harnesses (mutate-*-guards.js) in ${rel(ROOT, TOOLS)}, `
+    // NO HARNESSES FOUND IS NOT A PASS, WITH OR WITHOUT --all. A plan of zero
+    // shards skips every shard job, and the aggregate reads that as nothing to
+    // fail, so a change that removed or renamed every harness would plan
+    // nothing and go green. Refused before a plan is written. Harnesses found
+    // and none selected is a different zero, and still a plan.
+    if (!decision.harnesses.length) {
+      console.error(`[mutation-scope] no verdict: found no harnesses (mutate-*-guards.js) in ${rel(ROOT, TOOLS)}, `
         + 'so there is nothing to plan, and planning nothing would read as a pass');
       return EXIT[NO_VERDICT];
     }

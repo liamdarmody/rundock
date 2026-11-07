@@ -428,6 +428,47 @@ describe('every harness, asked for and none found, is refused rather than planne
     }
     assert.ok(!fs.existsSync(out), 'no plan is written for the shards to read as nothing to do');
   });
+
+  test('no harnesses found is refused without --all as well, as the scoped plan CI runs', () => {
+    // CI's plan has no --all. A change that removed or renamed every harness
+    // planned zero shards there, the shard job was skipped, and the aggregate
+    // read a plan of nothing as a pass.
+    const root = tempDir('mutation-scope-no-harnesses-scoped-');
+    for (const rel of ['scripts/mutation-scope.js', 'scripts/lib/run-record.js', 'test/tools/mutation-run.js']) {
+      write(root, rel, fs.readFileSync(path.join(REPO, rel), 'utf8'));
+    }
+    assert.deepStrictEqual(harnessFiles(tools(root)), [], 'sanity: the tools folder holds no harness');
+    const env = { ...process.env };
+    for (const k of ['GITHUB_ACTIONS', 'GITHUB_STEP_SUMMARY', 'GITHUB_OUTPUT']) delete env[k];
+    const out = path.join(tempDir('mutation-scope-no-harnesses-out-'), 'mutation-plan.json');
+    for (const argv of [['--plan', '--out', out, '--base', 'HEAD^1'], ['--plan', '--out', out], ['--explain']]) {
+      const r = spawnSync(process.execPath, [path.join(root, 'scripts', 'mutation-scope.js'), ...argv], { cwd: root, encoding: 'utf8', env });
+      assert.strictEqual(r.status, 3, `${argv.join(' ')}: refused as no verdict\n${r.stdout}${r.stderr}`);
+      assert.ok(r.stderr.includes('found no harnesses'), `${argv.join(' ')}: and says why\n${r.stderr}`);
+    }
+    assert.ok(!fs.existsSync(out), 'no plan is written for the shards to read as nothing to do');
+  });
+
+  test('harnesses found and none selected is still a plan of nothing to do, and green', () => {
+    // The legitimate zero: a change that touches nothing any harness guards.
+    const { root, commit } = fixtureRepo();
+    for (const rel of ['scripts/mutation-scope.js', 'scripts/lib/run-record.js', 'test/tools/mutation-run.js']) {
+      write(root, rel, fs.readFileSync(path.join(REPO, rel), 'utf8'));
+    }
+    commit('the tool');
+    write(root, 'notes.md', 'guarded by nothing\n');
+    commit('a change no harness guards');
+    const outDir = tempDir('mutation-scope-none-selected-out-');
+    const out = path.join(outDir, 'mutation-plan.json');
+    const githubOutput = path.join(outDir, 'github-output');
+    const env = { ...process.env, GITHUB_OUTPUT: githubOutput };
+    for (const k of ['GITHUB_ACTIONS', 'GITHUB_STEP_SUMMARY']) delete env[k];
+    const r = spawnSync(process.execPath, [path.join(root, 'scripts', 'mutation-scope.js'), '--plan', '--out', out, '--base', 'HEAD^1'],
+      { cwd: root, encoding: 'utf8', env });
+    assert.strictEqual(r.status, 0, r.stdout + r.stderr);
+    assert.strictEqual(JSON.parse(fs.readFileSync(out, 'utf8')).shards.length, 0, 'a plan of no shards is written');
+    assert.match(fs.readFileSync(githubOutput, 'utf8'), /^count=0$/m);
+  });
 });
 
 describe('a run refuses to start over a file with unstaged changes', () => {
