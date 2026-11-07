@@ -519,6 +519,17 @@ describe('three outcomes: pass, fail, no verdict', () => {
     assert.match(outcomeOf(null, 'SIGKILL').cause, /signal SIGKILL/);
   });
 
+  test('a harness\'s no verdict names a row whose suite did not finish among its causes, and never reads as a lost runner', () => {
+    // Exit 3 now also means a row whose suite ran past the runner's limit, so
+    // the cause a reader is shown has to say so. CI re-runs a no-verdict
+    // annotation that mentions a signal, as a runner that was lost; a row that
+    // ran out of time is a test to fix, and a re-run would only repeat it.
+    const { outcome, cause } = outcomeOf(3, null);
+    assert.strictEqual(outcome, NO_VERDICT);
+    assert.match(cause, /a suite that did not finish in its limit/);
+    assert.doesNotMatch(cause, /signal/i);
+  });
+
   test('any fail is fail; otherwise any no verdict is no verdict', () => {
     assert.strictEqual(combine([PASS, NO_VERDICT, FAIL]), FAIL);
     assert.strictEqual(combine([PASS, NO_VERDICT]), NO_VERDICT);
