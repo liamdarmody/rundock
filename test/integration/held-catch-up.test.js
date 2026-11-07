@@ -59,6 +59,13 @@ function prompts() {
   return h.readPrompts().map((p) => p.prompt);
 }
 
+/** The last session an agent's process started in this conversation, or null. */
+function ownSession(convoId, agentId) {
+  const inits = client.messages.filter((m) => m._conversationId === convoId && m.type === 'system' && m.subtype === 'init'
+    && m._agent === agentId && m._sessionId);
+  return inits.length ? inits[inits.length - 1]._sessionId : null;
+}
+
 /** How many prompts carried the conversation's catch-up. */
 function catchUps() {
   return prompts().filter((p) => p.includes(ARRIVING)).length;
@@ -446,6 +453,99 @@ describe('the legacy chat path, one process per message', () => {
       ['dead-orch-l2', null], 'refused once, then started fresh');
     assert.strictEqual(prompts().length, 1, 'the refused process read nothing');
     assert.ok(prompts()[0].includes('HELD-L2') && prompts()[0].endsWith('ASK-L2 hello'), 'the fresh start is given it');
+    assert.ok(!('freshCatchUp' in stored(convoId)), 'and it is spent');
+    h.reapConvo(convoId);
+  });
+});
+
+describe('an orchestrator the engine starts for a later handback', () => {
+  test('with no session to resume, takes the stored catch-up in front of the handback, and it is not given again', async () => {
+    // The person, after the pause, turns to the specialist directly instead
+    // of the orchestrator, and the specialist hands back. The orchestrator
+    // the engine starts for that handback has no session that ever read the
+    // conversation: the paused fresh start never received a message, so it
+    // never began one. Left in the store, the catch-up would reach a later
+    // start, after this orchestrator had already been told what came since.
+    const tag = 'E1';
+    const { convoId } = await pausedFreshStart(tag, [
+      { match: { resume: true, promptIncludes: 'SPEC-E1' }, turn: [{ text: 'Over to you for E1. <!-- RUNDOCK:RETURN -->' }] },
+      { match: { promptIncludes: ['routing-request', 'Over to you for E1'] }, turn: [{ text: 'ORCH-ROUTED-E1' }] },
+      { match: { promptIncludes: 'NEXT-E1' }, turn: [{ text: 'ORCH-NEXT-E1' }] },
+    ]);
+    await reap(convoId);
+
+    let since = client.messages.length;
+    client.send({ type: 'chat', conversationId: convoId, agent: 'content-lead', content: 'SPEC-E1 straight to the specialist', sessionId: `live-lead-${tag}` });
+    await waitForResult(convoId, 'ORCH-ROUTED-E1', since, 'the orchestrator answers the handback');
+    const handback = prompts().find((p) => p.includes('routing-request'));
+    assert.ok(handback, 'the orchestrator was sent the handback');
+    assert.ok(handback.startsWith(ARRIVING), 'led by the stored catch-up');
+    assert.match(handback, /do TASK-E1/, 'which holds the conversation before the pause');
+    assert.match(handback, /Not mine, handing back E1\./, 'and the handback that was paused');
+    assert.match(handback, /Over to you for E1\./, 'then the handback now');
+    assert.ok(!('freshCatchUp' in stored(convoId)), 'and the store no longer holds it');
+
+    // The next message, to the orchestrator, resuming the session that
+    // handback started.
+    const own = ownSession(convoId, 'chief-of-staff');
+    assert.ok(own, 'the handback started a session of its own');
+    await reap(convoId);
+    since = client.messages.length;
+    client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: 'NEXT-E1 please', sessionId: own });
+    await waitForResult(convoId, 'ORCH-NEXT-E1', since, 'the next message is answered');
+    assert.strictEqual(prompts()[prompts().length - 1], 'NEXT-E1 please', 'as sent: the catch-up is not given again');
+    assert.strictEqual(catchUps(), 1);
+    h.reapConvo(convoId);
+  });
+
+  test('paused again by the circuit breaker, holds what it took for the message that drives it', async () => {
+    const tag = 'E2';
+    const { convoId } = await pausedFreshStart(tag, [
+      { match: { resume: true, promptIncludes: 'SPEC-E2' }, turn: [{ text: 'Over to you for E2. <!-- RUNDOCK:RETURN -->' }] },
+      { match: { promptIncludes: 'NEXT-E2' }, turn: [{ text: 'ORCH-NEXT-E2' }] },
+    ]);
+    await reap(convoId);
+    h.internal.agentAutoResumeCount.set(convoId, h.internal.MAX_CONSECUTIVE_AGENT_RESUMES - 1);
+    let since = client.messages.length;
+    client.send({ type: 'chat', conversationId: convoId, agent: 'content-lead', content: 'SPEC-E2 straight to the specialist', sessionId: `live-lead-${tag}` });
+    await client.waitFor((m) => m.type === 'assistant' && m._conversationId === convoId && /Auto-paused/.test(JSON.stringify(m)),
+      { since, label: 'the handback is paused again', timeout: 15000 });
+    assert.strictEqual(catchUps(), 0, 'the paused orchestrator was sent nothing');
+    assert.ok(stored(convoId).freshCatchUp, 'what it took is held, and stored');
+
+    // The next message, to the orchestrator, which still has no session: the
+    // paused start was sent nothing, so it never began one.
+    assert.strictEqual(ownSession(convoId, 'chief-of-staff'), null);
+    await reap(convoId);
+    since = client.messages.length;
+    client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: 'NEXT-E2 please' });
+    await waitForResult(convoId, 'ORCH-NEXT-E2', since, 'the next message is answered');
+    assert.strictEqual(prompts().length, 2);
+    const next = prompts()[1];
+    assert.ok(next.startsWith(ARRIVING) && next.includes('do TASK-E2') && next.endsWith('NEXT-E2 please'), 'led by the catch-up');
+    assert.strictEqual(catchUps(), 1, 'once');
+    h.reapConvo(convoId);
+  });
+
+  test('resuming a session, spends the stored catch-up without repeating it', async () => {
+    // A resumed orchestrator is told what it missed since its last turn: the
+    // stored copy would only say it again.
+    const convoId = h.freshConvoId('held-resumed');
+    seed(convoId, {
+      agentId: 'chief-of-staff', activeAgentId: 'content-lead', sessionId: 'live-orch-e3',
+      sessionIds: [{ agentId: 'chief-of-staff', sessionId: 'live-orch-e3' }, { agentId: 'content-lead', sessionId: 'live-lead-e3' }],
+      freshCatchUp: { agentId: 'chief-of-staff', text: `${ARRIVING}\nHELD-E3 already known to the resumed session\n\n` },
+    });
+    scenario([
+      { match: { promptIncludes: 'routing-request' }, turn: [{ text: 'ORCH-ROUTED-E3' }] },
+      { match: { resume: true, promptIncludes: 'SPEC-E3' }, turn: [{ text: 'Over to you for E3. <!-- RUNDOCK:RETURN -->' }] },
+    ]);
+    h.clearInvocations();
+    const since = client.messages.length;
+    client.send({ type: 'chat', conversationId: convoId, agent: 'content-lead', content: 'SPEC-E3 to the specialist', sessionId: 'live-lead-e3' });
+    await waitForResult(convoId, 'ORCH-ROUTED-E3', since, 'the resumed orchestrator answers the handback');
+    assert.ok(h.readInvocations().some((i) => i.env && i.env.RUNDOCK_CONVO_ID === convoId && i.resume === 'live-orch-e3'), 'the orchestrator was resumed');
+    assert.ok(!prompts().some((p) => p.includes('HELD-E3')), 'the stored copy is not repeated');
     assert.ok(!('freshCatchUp' in stored(convoId)), 'and it is spent');
     h.reapConvo(convoId);
   });
