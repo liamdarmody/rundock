@@ -321,6 +321,7 @@ const ENUMERATIONS = [
   { file: 'test/unit/packages-manage.test.js', extraction: "the Packages page stylesheet block cut between its two markers and read rule by rule, the settings nav items out of index.html, and the roster-carrying dispatch arms and the roster wiring cut out of app.js and run", failLoudBy: 'count', where: 'the block is asserted found and floored on its rule count before any literal scan, each rule lookup refuses when its selector is missing, the nav parse is held to exact order equality, and appPiece refuses when an arm or function is missing before it is run against a stub window', anchor: 'an empty read here is a broken instrument' },
   { file: 'test/unit/claude-version-floor.test.js', extraction: "every quoted '--flag' literal in the four files that start Claude Code, to hold each to a row in the flag table", failLoudBy: 'count', where: 'the read is floored on its size and must find five named specimens before any flag is checked for a row, so a pattern that stops matching fails rather than passing on an empty inventory', anchor: 'the inventory read no flags: the pattern has gone blind' },
   { file: 'test/unit/hook-never-crashes.test.js', extraction: "the test-only environment names the permission hook reads, out of permission-hook.js", failLoudBy: 'count', where: 'the collected names are compared with an exact deepStrictEqual against the Keychain platform pair, so a pattern that stops matching fails rather than proving the hook has no other switch by finding none', anchor: "['RUNDOCK_TEST_PLATFORM', 'RUNDOCK_TEST_SEAMS']" },
+  { file: 'test/unit/mutation-harness-runner.test.js', extraction: 'the calls that start a process, the runner import and the awaited calls out of every mutation harness, read past string and comment text, and each harness\'s redTests, push site and report cut out and driven', failLoudBy: 'count', where: 'a floor on the harness count, a specimen the literal reader must classify, each harness\'s redTests, entry point and exports found as code exactly once before its calls are trusted, and every cut-out asserted found exactly once', anchor: 'assert.ok(HARNESS_FILES.length >= 35' },
 ];
 
 // What makes a file a source-walking extraction. Deliberately the same
@@ -467,12 +468,12 @@ assert.deepStrictEqual(HARNESSES, DISCOVERED_HARNESSES,
 // drives all of them: uniformity is a claim, and a claim needs a test.
 function buildRedTests(file) {
   const src = read(file);
-  const m = src.match(/function redTests\((?:suite)?\) \{[\s\S]*?\n\}/);
+  const m = src.match(/async function redTests\((?:suite)?\) \{[\s\S]*?\n\}/);
   assert.ok(m, `${file}: redTests could not be cut out; if it moved or was renamed, update this extraction`);
   const body = m[0];
-  return (fakeExec) => {
-    const factory = new Function('execFileSync', 'REPORTER', 'ROOT', 'SUITE', `${body}; return redTests;`);
-    return factory(fakeExec, [], ROOT, 'stub-suite');
+  return (fakeRun) => {
+    const factory = new Function('runSuite', 'REPORTER', 'ROOT', 'SUITE', `${body}; return redTests;`);
+    return factory(fakeRun, [], ROOT, 'stub-suite');
   };
 }
 
@@ -487,18 +488,18 @@ describe('a mutation result that cannot be parsed is a refusal, not a crash', ()
   const GARBAGE = 'Bootstrapping… progress 42%\ninterleaved output with no summary at all\n';
 
   for (const file of HARNESSES) {
-    test(`${path.basename(file)} refuses unreadable output and reads readable output`, () => {
+    test(`${path.basename(file)} refuses unreadable output and reads readable output`, async () => {
       const build = buildRedTests(file);
 
-      const unparsable = build(failWith(GARBAGE))();
+      const unparsable = await build(failWith(GARBAGE))();
       assert.deepStrictEqual(unparsable, { unparsable: true },
         `${file}: a failed suite with no readable summary must come back as a named refusal, never a throw`);
 
-      const red = build(failWith(WELL_FORMED))();
+      const red = await build(failWith(WELL_FORMED))();
       assert.deepStrictEqual(red, ['the guard was noticed'],
         `${file}: a well-formed summary must still yield the red test names`);
 
-      const green = build(() => 'all fine\n')();
+      const green = await build(() => 'all fine\n')();
       assert.deepStrictEqual(green, [], `${file}: a passing suite reads as no red tests`);
     });
   }

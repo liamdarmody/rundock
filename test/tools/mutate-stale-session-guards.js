@@ -24,11 +24,11 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
 const os = require('node:os');
 const { preflight } = require('../helpers/temp-root.js');
 const {
   beginMutationRun, targetsFromRows, rowsForShard, exitCodeFor, NO_VERDICT,
+  runSuite, didNotFinishWhy,
 } = require('./mutation-run.js');
 
 const ROOT = path.join(__dirname, '..', '..');
@@ -393,7 +393,7 @@ const REPORTER = ['--test-reporter', 'spec'];
 // The exact name, as a pattern node --test can match and nothing else can.
 const exactly = (name) => `^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`;
 
-function redTests(suite) {
+async function redTests(suite) {
   let out = '';
   let failed = false;
   const [file, testName] = String(suite).split('#');
@@ -404,11 +404,13 @@ function redTests(suite) {
   delete env.NODE_TEST_CONTEXT;
   try {
     // Bounded twice over: each test by node's own timeout, and the whole
-    // suite by a kill, so a broken guard that leaves a run waiting costs
-    // minutes and reports, rather than holding the harness for hours.
-    out = execFileSync('node', ['--test', '--test-timeout=120000', ...REPORTER, ...(testName ? ['--test-name-pattern', exactly(testName)] : []), file],
-      { cwd: ROOT, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 280000, killSignal: 'SIGKILL' });
+    // suite by the runner's limit, so a broken guard that leaves a run
+    // waiting costs minutes and reports, rather than holding the harness for
+    // hours.
+    out = await runSuite('node', ['--test', '--test-timeout=120000', ...REPORTER, ...(testName ? ['--test-name-pattern', exactly(testName)] : []), file],
+      { cwd: ROOT, env });
   } catch (e) {
+    if (e.didNotFinish) return { didNotFinish: e.didNotFinish };
     failed = true;
     out = (e.stdout || '') + (e.stderr || '');
   }
@@ -438,18 +440,18 @@ function redTests(suite) {
 // verdict. Returns what it read wrong, or null.
 const FIXTURE_GREEN = 'passes with nothing broken';
 const FIXTURE_RED = 'fails when broken';
-function invocationProblem(runTests = redTests) {
+async function invocationProblem(runTests = redTests) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'stale-session-harness-'));
   const file = path.join(dir, 'invocation.test.js');
   try {
     fs.writeFileSync(file, "'use strict';\nconst { test } = require('node:test');\n"
       + `test(${JSON.stringify(FIXTURE_GREEN)}, () => {});\n`
       + `test(${JSON.stringify(FIXTURE_RED)}, () => { throw new Error('broken'); });\n`);
-    const green = runTests(`${file}#${FIXTURE_GREEN}`);
+    const green = await runTests(`${file}#${FIXTURE_GREEN}`);
     if (!Array.isArray(green) || green.length !== 0) {
       return `a run of a passing test read as ${JSON.stringify(green)}, not green`;
     }
-    const red = runTests(`${file}#${FIXTURE_RED}`);
+    const red = await runTests(`${file}#${FIXTURE_RED}`);
     if (!Array.isArray(red) || red.length !== 1 || red[0] !== FIXTURE_RED) {
       return `a run of a failing test read as ${JSON.stringify(red)}, not that test red`;
     }
@@ -459,7 +461,7 @@ function invocationProblem(runTests = redTests) {
   }
 }
 
-function run() {
+async function run() {
   const targets = targetsFromRows(MUTATIONS);
   const session = beginMutationRun({ files: [...new Set(targets.map((target) => target.src))] });
   const originals = new Map();
@@ -482,8 +484,9 @@ function run() {
         continue;
       }
       fs.writeFileSync(target.src, original.replace(guard, without));
-      const red = redTests(target.suite);
-      results.push(red && red.unparsable
+      const red = await redTests(target.suite);
+      if (red && red.didNotFinish) results.push({ label, applied: true, didNotFinish: red.didNotFinish, red: [] });
+      else results.push(red && red.unparsable
         ? { label, applied: true, unparsable: true, red: [] }
         : { label, applied: true, red });
       fs.writeFileSync(target.src, original);
@@ -497,7 +500,13 @@ function run() {
 function report(results, markdown) {
   let failed = 0;
   const lines = [];
-  for (const { label, applied, red, ambiguous, unparsable } of results) {
+  for (const { label, applied, red, ambiguous, unparsable, didNotFinish } of results) {
+    if (didNotFinish) {
+      failed++;
+      const why = didNotFinishWhy(didNotFinish);
+      lines.push(markdown ? `| ${label} | **${why}** | |` : `${label}\n  ${why.toUpperCase()}`);
+      continue;
+    }
     if (unparsable) {
       failed++;
       const why = 'no verdict: the suite failed but its output could not be parsed, so nothing '
@@ -551,18 +560,20 @@ function requireSaneTempRoot() {
 if (require.main === module) {
   requireSaneTempRoot();
   if (process.argv.includes('--preflight-only')) process.exit(0);
-  const problem = invocationProblem();
-  if (problem) {
-    console.error(`Refusing to start a mutation run: the run every row is read through misreads a result: ${problem}.`);
-    process.exit(NO_VERDICT);
-  }
-  const results = run();
-  const failed = report(results, process.argv.includes('--markdown'));
-  if (failed) {
-    console.error(`\n${failed} mutation(s) proved nothing. A guard no test notices is not guarded,`
-      + ' and a mutation that could break more than one place proves nothing about either.');
-    process.exit(exitCodeFor(failed, results));
-  }
+  invocationProblem().then((problem) => {
+    if (problem) {
+      console.error(`Refusing to start a mutation run: the run every row is read through misreads a result: ${problem}.`);
+      process.exit(NO_VERDICT);
+    }
+    return run();
+  }).then((results) => {
+    const failed = report(results, process.argv.includes('--markdown'));
+    if (failed) {
+      console.error(`\n${failed} mutation(s) proved nothing. A guard no test notices is not guarded,`
+        + ' and a mutation that could break more than one place proves nothing about either.');
+      process.exit(exitCodeFor(failed, results));
+    }
+  });
 }
 
 module.exports = { MUTATIONS, run, redTests, invocationProblem };

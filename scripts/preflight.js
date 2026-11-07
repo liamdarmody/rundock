@@ -58,6 +58,10 @@ const REGISTRY_SUITES = [
   // error handler where it started, so a write to one that has stopped is
   // logged and never ends the server.
   'test/unit/child-stdin-inventory.test.js',
+  // Every mutation harness starts a row's suite through the bounded runner and
+  // reports a row whose suite did not finish as its own outcome, so a harness
+  // added with a runner of its own fails here.
+  'test/unit/mutation-harness-runner.test.js',
   // Every innerHTML assignment is classified, and the totals beside it.
   'test/unit/innerhtml-inventory.test.js',
   // Documents that state the code's own numbers, names and lists.

@@ -48,11 +48,11 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
 const os = require('node:os');
 const { preflight } = require('../helpers/temp-root.js');
 const {
   beginMutationRun, targetsFromRows, rowsForShard, exitCodeFor, NO_VERDICT,
+  runSuite, didNotFinishWhy,
 } = require('./mutation-run.js');
 
 const ROOT = path.join(__dirname, '..', '..');
@@ -308,13 +308,13 @@ const MUTATIONS = [
 // varies with whether stdout is a TTY.
 const REPORTER = ['--test-reporter=spec', '--test-reporter-destination=stdout'];
 
-function redTests(suite) {
+async function redTests(suite) {
   let out = '';
   let failed = false;
   try {
-    out = execFileSync('node', ['--test', ...REPORTER, suite],
-      { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    out = await runSuite('node', ['--test', ...REPORTER, suite], { cwd: ROOT });
   } catch (e) {
+    if (e.didNotFinish) return { didNotFinish: e.didNotFinish };
     failed = true;
     out = (e.stdout || '') + (e.stderr || '');
   }
@@ -337,7 +337,7 @@ function redTests(suite) {
   return names;
 }
 
-function run() {
+async function run() {
   const targets = targetsFromRows(MUTATIONS);
   const session = beginMutationRun({ files: targets.map((target) => target.src) });
   const originals = new Map();
@@ -361,8 +361,9 @@ function run() {
         continue;
       }
       fs.writeFileSync(target.src, original.replace(guard, without));
-      const red = redTests(target.suite);
-      results.push(red && red.unparsable
+      const red = await redTests(target.suite);
+      if (red && red.didNotFinish) results.push({ label, applied: true, didNotFinish: red.didNotFinish, red: [] });
+      else results.push(red && red.unparsable
         ? { label, applied: true, unparsable: true, red: [] }
         : { label, applied: true, red });
       fs.writeFileSync(target.src, original);
@@ -385,6 +386,12 @@ function report(results, markdown) {
       const why = r.ambiguous
         ? `AMBIGUOUS: the guard text matches ${r.ambiguous} places`
         : 'THE GUARD TEXT WAS NOT FOUND';
+      console.log(markdown ? `| ${r.label} | **${why}** |` : `  ${why}: ${r.label}`);
+      continue;
+    }
+    if (r.didNotFinish) {
+      bad++;
+      const why = didNotFinishWhy(r.didNotFinish);
       console.log(markdown ? `| ${r.label} | **${why}** |` : `  ${why}: ${r.label}`);
       continue;
     }
@@ -421,13 +428,14 @@ if (require.main === module) {
   // read after the check, so deleting the check still fails that test rather
   // than passing it.
   if (process.argv.includes('--preflight-only')) process.exit(0);
-  const results = run();
-  const bad = report(results, process.argv.includes('--markdown'));
-  if (bad) {
-    console.error(`\n${bad} guard(s) could not be shown to be guarded. `
-      + 'A mutation that turns nothing red is an unexecuted experiment.');
-    process.exit(exitCodeFor(bad, results));
-  }
+  run().then((results) => {
+    const bad = report(results, process.argv.includes('--markdown'));
+    if (bad) {
+      console.error(`\n${bad} guard(s) could not be shown to be guarded. `
+        + 'A mutation that turns nothing red is an unexecuted experiment.');
+      process.exit(exitCodeFor(bad, results));
+    }
+  });
 }
 
 module.exports = { MUTATIONS, run };
