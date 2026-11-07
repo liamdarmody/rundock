@@ -171,6 +171,10 @@ const STOP_ASK_HOOK = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), s
 const STOP_ASK_LINE = { src: path.join(ROOT, 'scripts', 'refusal-notice.js'), suite: 'test/unit/stop-and-ask.test.js' };
 const STOP_ASK_SCAFFOLD = { src: path.join(ROOT, 'lib', 'workspace', 'scaffold.js'), suite: 'test/unit/stop-and-ask.test.js' };
 const STOP_ASK_GLUE = { src: path.join(ROOT, 'lib', 'runtime', 'codex-glue.js'), suite: 'test/integration/codex-stop-and-ask.test.js' };
+// A workspace switch retires the shared Codex app-server, and one a routine
+// turn still holds shuts down when that turn ends: the switch never ends a
+// running routine. Watched by the suite that switches mid-turn.
+const SWITCH_CODEX_GLUE = { src: path.join(ROOT, 'lib', 'runtime', 'codex-glue.js'), suite: 'test/integration/routine-outlives-switch.test.js' };
 // A run nobody can be asked from is told to carry on or say it failed: the
 // hook that decides who can be asked and hands every refusal over in those
 // words, and the words themselves, each driven by the suite that runs the real
@@ -2449,6 +2453,9 @@ const MUTATIONS = [
   [STOP_ASK_GLUE, "Stop and ask: a Codex without turn/steer is never told",
     "Promise.resolve().then(() => ev.steer(line)).catch(later);",
     "Promise.resolve().then(() => ev.steer(line)).catch(() => {});"],
+  [SWITCH_CODEX_GLUE, "Workspace switch: the Codex app-server is shut down while a routine turn still holds it",
+    "  if (_routineTurns.has(server)) _retiring.add(server);\n  else stopCodexAppServer(server);",
+    "  stopCodexAppServer(server);"],
   [STOP_ASK_CLIENT, "Stop and ask: the approval event carries no way to steer",
     "{ type: 'approval', kind, requestId: id, params, respond, steer }",
     "{ type: 'approval', kind, requestId: id, params, respond }"],

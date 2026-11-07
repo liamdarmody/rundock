@@ -53,6 +53,24 @@ const SOURCE_SAVE_ANSWER = {
   src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'sources.js'),
   suite: 'test/unit/short-write-saves.test.js',
 };
+// A state file replaced whole: the scheduler's routine state, slot records and
+// run records, and the runtime's child pid list. Watched by the file that
+// records each writer's filesystem calls and cuts one short, because a write
+// in place still leaves every byte on a disk that takes them.
+const WHOLE_FILE = {
+  src: path.join(ROOT, 'lib', 'store', 'whole-file.js'),
+  suite: 'test/unit/scheduler-state-writes.test.js',
+};
+// And one that does not parse, watched by the file that cuts each store.
+const SET_ASIDE = {
+  src: path.join(ROOT, 'lib', 'store', 'whole-file.js'),
+  suite: 'test/unit/scheduler-state-loads.test.js',
+};
+// What a test reads back from a log a stub process is still appending to.
+const APPENDED_LOG = {
+  src: path.join(ROOT, 'test', 'helpers', 'appended-log.js'),
+  suite: 'test/integration/harness-log-readers.test.js',
+};
 // The page's half: what its own failed write left is its own, never an
 // outside edit, until the next save is sent.
 const PAGE_MARK = {
@@ -196,6 +214,18 @@ const MUTATIONS = [
   [PAGE_ANSWER, 'an incomplete source save is said after its own sentence',
     'd.incomplete ? `${d.reason} ${INCOMPLETE_SAVE_NOTE}` : d.reason',
     'd.reason'],
+  [WHOLE_FILE, 'a state file is renamed over whole, never written under its own name',
+    '    fs.renameSync(temp, file);',
+    '    fs.writeFileSync(file, contents);'],
+  [WHOLE_FILE, 'the temporary file is flushed before it is renamed over',
+    '    fs.fsyncSync(fd);\n',
+    ''],
+  [SET_ASIDE, 'a state file that does not parse is set aside, not read as empty',
+    '    const aside = `${file}.unparsed-',
+    '    throw e;\n    const aside = `${file}.unparsed-'],
+  [APPENDED_LOG, 'a stub log line still being appended is left out, not parsed',
+    '  lines.pop();\n',
+    ''],
 ];
 
 // Guards deliberately NOT mutated, each with the reason. A named exclusion is

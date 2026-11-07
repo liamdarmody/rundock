@@ -1,5 +1,5 @@
 {
-  "about": "Seconds per mutation row. secondsPerRow is measured on the CI runner from the shard logs of two full runs of every harness: each harness's measured seconds over its rows, averaged. secondsPerRowLabel, for each harness CI runs in slices, is inferred, not measured: no run records a row's own time, so each slice's measured seconds are shared among its rows in proportion to one plus the tests each turned red, averaged over the runs. secondsPerIntegrationRow is the mean of those inferred costs over a harness's integration rows, the rate for an integration row with no cost of its own. The plan weights shards by these so no shard nears its time limit. A harness missing here is planned at defaultSecondsPerRow, and any other row missing from its harness's labels at that harness's rate; re-measure when a shard runs past fifteen minutes. mutate-stale-session-guards.js is measured on a developer machine, one row at a time, its costs by label measured rather than inferred, until shard logs record it.",
+  "about": "Seconds per mutation row. secondsPerRow is measured on the CI runner from the shard logs of two full runs of every harness: each harness's measured seconds over its rows, averaged. secondsPerRowLabel, for each harness CI runs in slices, is inferred, not measured: no run records a row's own time, so each slice's measured seconds are shared among its rows in proportion to one plus the tests each turned red, averaged over the runs. secondsPerIntegrationRow is the mean of those inferred costs over a harness's integration rows, the rate for an integration row with no cost of its own. The plan weights shards by these so no shard nears its time limit. A harness missing here is planned at defaultSecondsPerRow, and any other row missing from its harness's labels at that harness's rate; re-measure when a shard runs past fifteen minutes. mutate-stale-session-guards.js is measured on a developer machine, one row at a time, its costs by label measured rather than inferred, until shard logs record it. The state file rows labelled under mutate-atomic-write-guards.js and mutate-routines-guards.js are measured the same way, on a developer machine, one row at a time, and so are the workspace switch rows labelled under mutate-routines-guards.js and mutate-workspace-boundary-guards.js.",
   "defaultSecondsPerRow": 5,
   "secondsPerRow": {
     "mutate-approve-once-guards.js": 0.89,
@@ -41,6 +41,12 @@
     "mutate-workspace-boundary-guards.js": 6.36
   },
   "secondsPerRowLabel": {
+    "mutate-atomic-write-guards.js": {
+      "a state file is renamed over whole, never written under its own name": 0.42,
+      "the temporary file is flushed before it is renamed over": 0.3,
+      "a state file that does not parse is set aside, not read as empty": 0.29,
+      "a stub log line still being appended is left out, not parsed": 0.54
+    },
     "mutate-extension-host-guards.js": {
       "a request with no user action at all is refused, never put to the person": 6.9,
       "in a view the person uses from the keyboard, a script-sent ask with no key press is refused": 6.9,
@@ -169,6 +175,14 @@
       "the navigation guard reaches extension frames only, never every sub-frame": 5.2,
       "the request filter reaches extension frames only, never the app": 3.9,
       "WebRTC is off for the window": 2.6
+    },
+    "mutate-routines-guards.js": {
+      "a routine state that does not parse is rebuilt from the run records, not started empty": 0.34,
+      "a complete copy left under a temporary name in runs/ is never read as a run": 0.3,
+      "the orphan cleanup a switch runs leaves a live run's child alone": 8.74,
+      "the orphan cleanup skips a live run's pid before the process table is asked": 0.34,
+      "a run's ending records into the workspace it started in": 12.24,
+      "the plain session a run falls back to starts in the workspace the run started in": 8.86
     },
     "mutate-rundock-ui-guards.js": {
       "an alert with an action aligns message and action on the first baseline": 4.1,
@@ -963,6 +977,7 @@
       "Stop and ask: a declined Codex approval is never told": 7.3,
       "Stop and ask: a Codex timeout is told as a denial": 3.6,
       "Stop and ask: a Codex without turn/steer is never told": 3.6,
+      "Workspace switch: the Codex app-server is shut down while a routine turn still holds it": 7.82,
       "Stop and ask: the approval event carries no way to steer": 5.5,
       "Approved: an approval on a card is never told to the agent": 10.9,
       "Approved: an allow that asked nobody is told as a card": 5.5,

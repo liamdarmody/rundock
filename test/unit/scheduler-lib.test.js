@@ -20,6 +20,7 @@ const CODEX_GLUE_KEY = require.resolve('../../lib/runtime/codex-glue.js');
 const { createCodexAppServer } = require('../../codex-appserver.js');
 const { discoverAgents, invalidateAgentCache } = require('../../lib/agents/discovery.js');
 const { agentFile } = require('../helpers/workspace.js');
+const { readAppendedLog } = require('../helpers/appended-log.js');
 const asfx = require('../fixtures/codex-appserver-protocol.js');
 const fx = require('../fixtures/session-transcript.js');
 const PROMPT_KEY = require.resolve('../../lib/agents/prompt.js');
@@ -786,99 +787,12 @@ test('a codex run that cannot start its thread releases the routine', async () =
   });
 });
 
-// The decision that the in-flight set is NOT reset by a workspace switch,
-// pinned so it cannot be quietly corrected into consistency with the two
-// states beside it that ARE reset. Those describe the workspace being left.
-// A run in flight is a child process that is still running, and clearing its
-// key would free the routine to start again while the first run was still
-// going, with the eventual release then having nothing to release.
-//
-// Driven through the real switch handler, re-selecting the same workspace
-// (which the open path treats as a switch, and which keeps the state file the
-// test wrote). Killing the children is ctx's, injected, and stubbed here: the
-// child in this test is the test's to end, and what is pinned is that the
-// SWITCH does not let go of a routine whose run is still going.
-test('the workspace switch does not release a run that is still going', async () => {
-  await withTempWorkspaceAsync(async (dir, config) => {
-    const child = new EventEmitter();
-    await withFakeSpawn(() => child, async (sched) => {
-      assert.strictEqual(sched.executeRoutine(AGENT, ROUTINE, KEY), true, 'the run started');
-
-      const sent = [];
-      const ws = { send: (raw) => sent.push(JSON.parse(raw)) };
-      const noop = () => {};
-      const ctx = {
-        signals: { phaseTimer: () => ({ mark: noop, summary: () => '' }), reportStartup: noop },
-        runtime: { killAllChildren: noop, cleanOrphanedProcesses: noop },
-        workspace: {
-          setWorkspaceRoot: (d) => config.setWorkspace(d),
-          armAgentsDirWatcher: noop, armFileTreeWatcher: noop, healWorkspaceIfMoved: noop,
-          saveRecentWorkspace: noop, fileTreeForSend: () => [],
-        },
-        agents: { armAgentsDirWatcher: noop, invalidateAgentCache: noop },
-        store: { clearSearchFailure: noop, ensureSearchEngine: noop },
-      broadcast: noop,
-        // The switch tells every connected client where the scheduler went, so
-        // a window that did not ask stops promising runs it will not get.
-        broadcast: noop,
-      };
-      // WHAT PROVES THE SWITCH'S RESETS RAN, planted before the switch and
-      // read after it.
-      //
-      // This test used to prove that from the run state's status: a live run
-      // persists 'running', the load rewrote 'running' to 'interrupted', and
-      // finding 'interrupted' meant the load had been through. It no longer
-      // rewrites a run this process is still running, and correcting that is
-      // the whole point of the change beside this one, so the proof has to
-      // come from somewhere the correction cannot reach.
-      //
-      // Both stores the load rebuilds are given a fact that exists only on
-      // disk, for a routine with no live run to complicate it. Neither value
-      // can be in memory unless the load put it there, and only
-      // loadRoutineState and the slot load it calls ever put them there. That
-      // is a strictly wider proof than the status was: the status said the run
-      // state had been rebuilt and said nothing at all about the slot records
-      // being reloaded beside it.
-      const PLANTED_KEY = 'planted:by-the-file';
-      const PLANTED_STAMP = '2026-08-10T07:00:00.000Z';
-      const OBSERVED_AT = '2026-08-10T07:01:00.000Z';
-      const rundock = path.join(dir, '.rundock');
-      const stateFile = path.join(rundock, 'routine-state.json');
-      const onDisk = JSON.parse(fs.readFileSync(stateFile, 'utf-8'));
-      onDisk[PLANTED_KEY] = { lastRun: PLANTED_STAMP, status: 'completed', duration: 2 };
-      fs.writeFileSync(stateFile, JSON.stringify(onDisk));
-      fs.writeFileSync(path.join(rundock, 'routine-slots.json'),
-        JSON.stringify({ observedAt: OBSERVED_AT, routines: {} }));
-      assert.strictEqual(sched.routineState[PLANTED_KEY], undefined,
-        'and it is only on disk: nothing in memory knows about it yet');
-      assert.strictEqual(sched.routineSlots.observedAt, null,
-        'nor about the observation beside it');
-
-      const handlers = freshWorkspaceHandlers(sched);
-      handlers.handleSetWorkspace(ctx, ws, { type: 'set_workspace', path: dir });
-      assert.ok(sent.some(m => m.type === 'workspace_set'),
-        'the switch ran its open path to the end rather than into the rollback');
-
-      // REPLACES the assertion on KEY's status being rewritten to
-      // 'interrupted', which said "the switch rebuilt the run state from the
-      // workspace file" and now says it of a value the correction cannot
-      // touch.
-      assert.deepStrictEqual(sched.routineState[PLANTED_KEY],
-        { lastRun: PLANTED_STAMP, status: 'completed', duration: 2 },
-        'the switch rebuilt the run state from the workspace file');
-      assert.strictEqual(sched.routineSlots.observedAt, OBSERVED_AT,
-        'and reloaded the slot records beside it, which the old proof never covered');
-      assert.strictEqual(sched.routineState[KEY].status, 'running',
-        'while the run that is still going goes on saying so, which is what the switch must not change');
-      assert.strictEqual(sched.executeRoutine(AGENT, ROUTINE, KEY), false,
-        'and the hold survived it, because the child it describes is still running');
-      child.emit('close', 0);
-      assert.strictEqual(sched.executeRoutine(AGENT, ROUTINE, KEY), true,
-        'the run ending is the only thing that releases it, switch or no switch');
-      await endedAfter(sched, async () => { child.emit('close', 0); });
-    });
-  });
-});
+// The decision that the in-flight set is NOT reset by a workspace switch is
+// pinned in test/integration/routine-outlives-switch.test.js ('the workspace
+// switch does not release a run that is still going'), through the real open
+// path with a real child. It was pinned here with killAllChildren and
+// cleanOrphanedProcesses stubbed as no-ops, and those two are what ended the
+// run, so the stubbed test could not see it.
 
 // AC-6, at the call site it is about rather than at one that stands in for it.
 test('a start whose spawn throws does not hold the routine', async () => {
@@ -1248,6 +1162,10 @@ test('a restart leaves a run that already reached an outcome exactly as it was',
   });
 });
 
+// A record a dead process left open, under the name records are written and
+// read under: its run's uuid.
+const ORPHAN = '0e7a2b3c-4d5e-4f60-8172-8394a5b6c7d8';
+
 // AC-7, and it is the way this card most likely breaks something already
 // shipped. routineState.lastRun is the ONLY input to double-fire suppression.
 // This card touches startup, which is where the stores are loaded together, so
@@ -1269,8 +1187,8 @@ test('closing a restart-orphaned record writes nothing to the value double-fire 
       fs.writeFileSync(path.join(dir, 'routine-state.json'), JSON.stringify({
         [KEY]: { lastRun: cutOff.toISOString(), status: 'running', duration: null },
       }));
-      fs.writeFileSync(path.join(dir, 'runs', 'orphan.json'), JSON.stringify({
-        id: 'orphan', agent: 'runner', routine: 'r', sessionId: null,
+      fs.writeFileSync(path.join(dir, 'runs', `${ORPHAN}.json`), JSON.stringify({
+        id: ORPHAN, agent: 'runner', routine: 'r', sessionId: null,
         status: 'running', startedAt: cutOff.toISOString(), endedAt: null,
         durationMs: null, error: null, files: null, filesStatus: 'unknown', filesReason: 'running',
       }));
@@ -1343,12 +1261,12 @@ test('a capture a dead process left beside its record is removed when the record
     await withTempHomeAsync(async () => {
       const runs = path.join(ws, '.rundock', 'runs');
       fs.mkdirSync(runs, { recursive: true });
-      fs.writeFileSync(path.join(runs, 'orphan.json'), JSON.stringify({
-        id: 'orphan', agent: 'runner', routine: 'r', sessionId: null,
+      fs.writeFileSync(path.join(runs, `${ORPHAN}.json`), JSON.stringify({
+        id: ORPHAN, agent: 'runner', routine: 'r', sessionId: null,
         status: 'running', startedAt: new Date(2026, 7, 11, 9, 0, 0).toISOString(), endedAt: null,
         durationMs: null, error: null, files: null, filesStatus: 'unknown', filesReason: 'running',
       }));
-      fs.writeFileSync(path.join(runs, 'orphan.stderr'), "--agent 'runner' not found.\n");
+      fs.writeFileSync(path.join(runs, `${ORPHAN}.stderr`), "--agent 'runner' not found.\n");
 
       await withFakeSpawn(() => new EventEmitter(), async (sched) => {
         // A run going in this process, whose capture must survive the close.
@@ -1363,9 +1281,9 @@ test('a capture a dead process left beside its record is removed when the record
 
         sched.loadRoutineState();
 
-        assert.strictEqual(runRecords(ws).find(r => r.id === 'orphan').status, 'interrupted',
+        assert.strictEqual(runRecords(ws).find(r => r.id === ORPHAN).status, 'interrupted',
           'the orphaned record really was closed by this load');
-        assert.ok(!fs.existsSync(path.join(runs, 'orphan.stderr')), 'and the capture its child left went with it');
+        assert.ok(!fs.existsSync(path.join(runs, `${ORPHAN}.stderr`)), 'and the capture its child left went with it');
         assert.ok(fs.existsSync(path.join(runs, `${live.id}.stderr`)), 'while the capture of the run still going stays');
       });
     });
@@ -1816,10 +1734,7 @@ async function withRealCodexClient(dir, fn) {
 
 // Every request the stub app-server received, read off its own log.
 function stubRequests(dir) {
-  const file = path.join(dir, 'stub-invocations.jsonl');
-  let raw;
-  try { raw = fs.readFileSync(file, 'utf-8'); } catch (e) { return []; }
-  return raw.split('\n').filter(Boolean).map(line => JSON.parse(line));
+  return readAppendedLog(path.join(dir, 'stub-invocations.jsonl'));
 }
 
 async function untilRequest(dir, method, tries = 400) {

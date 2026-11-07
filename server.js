@@ -2464,20 +2464,31 @@ function killAllChildren() {
   savePidFile(loadPidFile().filter(rec => pidRecordAlive(rec)));
 }
 
-// Clean up orphaned processes from a previous crash (PIDs left in the file)
-function cleanOrphanedProcesses() {
+// Clean up orphaned processes from a previous crash (PIDs left in the file).
+//
+// A ROUTINE RUN THIS PROCESS IS STILL RUNNING IS NOT AN ORPHAN. Its child sits
+// in this file like any other, and a workspace switch runs this cleanup, so
+// re-selecting the workspace a run started in, or coming back to it, used to
+// kill that run. It is skipped, and kept on file for a later launch to reap if
+// this process stops first. Decided from the scheduler's own record of what it
+// started, before the recycled-pid guard is asked anything, so the outcome is
+// the same whether a command line can be read or not. `readCommand` is that
+// guard's reader, a parameter so a test can see which pids reach it.
+function cleanOrphanedProcesses(readCommand = processCommand) {
   const records = loadPidFile();
   if (records.length === 0) return;
+  const running = schedulerLib.liveRunPids();
   let cleaned = 0;
   const survivors = [];
   for (const rec of records) {
     const pid = pidOf(rec);
-    if (!pidRecordAlive(rec)) continue; // gone, or the pid now belongs to something else
+    if (running.has(pid)) { survivors.push(rec); continue; }
+    if (!pidRecordAlive(rec, readCommand)) continue; // gone, or the pid now belongs to something else
     killProcessTree(pid, 'SIGTERM');
     cleaned++;
     // Keep it until a later launch observes it gone: a process that ignores
     // SIGTERM must not be forgotten just because we signalled it once.
-    if (pidRecordAlive(rec)) survivors.push(rec);
+    if (pidRecordAlive(rec, readCommand)) survivors.push(rec);
   }
   if (cleaned > 0) {
     console.log(`[Cleanup] Killed ${cleaned} orphaned process tree(s) from a previous session`);
@@ -2720,9 +2731,9 @@ process.on('exit', () => {
     }
   }
   // The shared Codex app-server may still be draining its graceful
-  // SIGTERM; it must not outlive the server process.
-  const codexAppServerPid = codexGlue.getCodexAppServerPid();
-  if (codexAppServerPid) {
+  // SIGTERM, and one a routine turn held past a switch may still be running;
+  // neither may outlive the server process.
+  for (const codexAppServerPid of codexGlue.getCodexAppServerPids()) {
     try { killProcessTree(codexAppServerPid, 'SIGKILL'); } catch (e) {}
   }
 });
