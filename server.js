@@ -1459,8 +1459,8 @@ const { wireProcessHandlers, handleScopeReturn, handleDelegation, handleEndDeleg
 // ===== WS DISPATCH (lib/protocol/handlers/) =====
 // Every WS message type except the four root shims (chat, delegate,
 // end_delegation, flush_buffer) is handled in lib/protocol/handlers/ and
-// selected from this table. The context object's member list is frozen by
-// the decomposition spec: handlers reach root-owned capabilities through it
+// selected from this table. The context object's member list is fixed, and
+// a test pins it: handlers reach root-owned capabilities through it
 // (and lib modules by direct require); they never require the root.
 const protocolHandlers = require('./lib/protocol/handlers/index.js');
 const wsDispatch = protocolHandlers.buildDispatch();
@@ -3153,7 +3153,7 @@ function reconcileSearchBeforeQuery() {
 }
 
 // Live-path hook, called after an agent turn's transcript append. Guarded so
-// an index failure can never affect message persistence (spec risk 2): the
+// an index failure can never affect message persistence: the
 // jsonl is written by Claude Code regardless, and the next reconcile-on-search
 // or reconcile-on-open catches anything missed here.
 function noteSearchConversationActivity(convoId) {
