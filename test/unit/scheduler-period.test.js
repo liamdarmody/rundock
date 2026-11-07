@@ -10,9 +10,10 @@
 // both readers about every slot across two years, at instants either side of
 // its window, and fails on the first instant they disagree.
 //
-// THE WINDOW IS COMPUTED HERE, independently: the slot's calendar day, for a
-// daily and a weekly routine alike. Taking it from the scheduler would let the
-// two readers agree on a wrong window and pass.
+// THE WINDOW IS COMPUTED HERE, independently: the slot's calendar day for a
+// daily and a weekly routine, and the slot's calendar month for a monthly one.
+// Taking it from the scheduler would let the two readers agree on a wrong
+// window and pass.
 //
 // ITS OWN FILE, because it needs a timezone with daylight saving and
 // continuous integration runs in UTC. Set before the first require, and
@@ -46,11 +47,16 @@ const LAST = new Date(2028, 2, 1);
 function* days() {
   for (let d = new Date(FIRST); d < LAST; d = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1)) yield d;
 }
+function* months() {
+  for (let m = new Date(FIRST); m < LAST; m = new Date(m.getFullYear(), m.getMonth() + 1, 1)) yield m;
+}
 
 const nextDay = (s) => new Date(s.getFullYear(), s.getMonth(), s.getDate() + 1);
+const nextMonth = (s) => new Date(s.getFullYear(), s.getMonth() + 1, 1);
 
-// Each schedule with its slots and its window, written out longhand. The time
-// is chosen to land on the clock changes: 00:30 on both changing Sundays.
+// Each schedule with its slots and its window, written out longhand. The times
+// are chosen to land on the clock changes: 00:30 on both changing Sundays, and
+// 01:30 on 28 March 2027, inside the hour the clocks skip.
 const SCHEDULES = [
   {
     schedule: 'every day at 00:30',
@@ -62,6 +68,26 @@ const SCHEDULES = [
     slots: () => [...days()].filter(d => d.getDay() === 0)
       .map(d => new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 30)),
     closes: nextDay,
+  },
+  {
+    schedule: 'on day 1 of every month at 00:30',
+    slots: () => [...months()].map(m => new Date(m.getFullYear(), m.getMonth(), 1, 0, 30)),
+    closes: nextMonth,
+  },
+  {
+    schedule: 'on day 15 of every month at 09:00',
+    slots: () => [...months()].map(m => new Date(m.getFullYear(), m.getMonth(), 15, 9, 0)),
+    closes: nextMonth,
+  },
+  {
+    schedule: 'on day 28 of every month at 01:30',
+    slots: () => [...months()].map(m => new Date(m.getFullYear(), m.getMonth(), 28, 1, 30)),
+    closes: nextMonth,
+  },
+  {
+    schedule: 'on the last day of every month at 23:30',
+    slots: () => [...months()].map(m => new Date(m.getFullYear(), m.getMonth() + 1, 0, 23, 30)),
+    closes: nextMonth,
   },
 ];
 
