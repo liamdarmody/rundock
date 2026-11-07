@@ -190,6 +190,141 @@ describe('a routine state that does not parse is set aside and rebuilt from the 
   });
 });
 
+// Run `fn` with the replacement of the state file failing at one step: the
+// create, the write or the flush of the temporary file it is written to. The
+// count of failures is returned, so a test can tell a write that was cut off
+// from one that never got that far.
+function withStateWriteFailing(ws, step, code, fn) {
+  const target = stateFile(ws);
+  const isTemp = (p) => typeof p === 'string' && path.resolve(p).startsWith(`${target}.`) && p.endsWith('.tmp');
+  const real = { openSync: fs.openSync, writeFileSync: fs.writeFileSync, fsyncSync: fs.fsyncSync, closeSync: fs.closeSync };
+  const temps = new Set();
+  let fired = 0;
+  const fail = (syscall) => {
+    fired++;
+    throw Object.assign(new Error(`${code}: made to fail here, ${syscall}`), { code, syscall });
+  };
+  fs.openSync = function (p, ...rest) {
+    if (isTemp(p) && step === 'open') fail('open');
+    const fd = real.openSync.call(this, p, ...rest);
+    if (isTemp(p)) temps.add(fd);
+    return fd;
+  };
+  fs.writeFileSync = function (p, ...rest) {
+    if (temps.has(p) && step === 'write') fail('write');
+    return real.writeFileSync.call(this, p, ...rest);
+  };
+  fs.fsyncSync = function (fd, ...rest) {
+    if (temps.has(fd) && step === 'fsync') fail('fsync');
+    return real.fsyncSync.call(this, fd, ...rest);
+  };
+  fs.closeSync = function (fd, ...rest) {
+    temps.delete(fd);
+    return real.closeSync.call(this, fd, ...rest);
+  };
+  try { fn(); } finally { Object.assign(fs, real); }
+  return fired;
+}
+
+// The control failing. A state file that does not parse is written back at
+// once, rebuilt from the run records, and that write can fail: a full disk
+// fails a write where a rename needs no space. Whatever stops it, a restart
+// must still find the file, rebuild again, and not fire a routine that already
+// ran. Renamed aside before the write, it would find no file and start empty.
+describe('a state file whose replacement cannot be written stays where it is', () => {
+  const CUTS = [
+    ['the disk is full when the replacement is written', 'write', 'ENOSPC'],
+    ['the flush of the replacement fails', 'fsync', 'EIO'],
+    ['the replacement cannot be created', 'open', 'EEXIST'],
+  ];
+  for (const [how, step, code] of CUTS) {
+    test(`${how}: a restart rebuilds again, and the routine that ran at 09:03 is not due at 10:00`, () => {
+      withWorkspace((ws) => {
+        const bytes = DAMAGE[0][1];
+        fs.writeFileSync(stateFile(ws), bytes);
+        writeRecord(ws, runRecord());
+        const folder = fs.readdirSync(path.join(ws, '.rundock')).sort();
+        const sched = freshScheduler();
+        let fired = 0;
+        const errors = errorsDuring(() => { fired = withStateWriteFailing(ws, step, code, () => sched.loadRoutineState()); });
+        const leftOnDisk = fs.existsSync(stateFile(ws)) ? fs.readFileSync(stateFile(ws)) : null;
+        const leftBeside = fs.readdirSync(path.join(ws, '.rundock')).sort();
+
+        // The retry: another start, with the disk working again.
+        const next = freshScheduler();
+        const again = errorsDuring(() => next.loadRoutineState());
+        assert.strictEqual(next.getNextRun(SCHEDULE, next.routineState[KEY] && next.routineState[KEY].lastRun), null,
+          `after a write-back that failed, a restart finds the routine that ran at 09:03 due again at 10:00: it loaded ${JSON.stringify(next.routineState[KEY])}`);
+
+        assert.strictEqual(fired, 1, `sanity: the write-back reached the step made to fail (${fired})`);
+        assert.strictEqual(sched.getNextRun(SCHEDULE, sched.routineState[KEY] && sched.routineState[KEY].lastRun), null,
+          'the process whose write-back failed would fire the routine again');
+        assert.ok(leftOnDisk && leftOnDisk.equals(bytes), 'the state file is not the one that was there before the write-back failed');
+        assert.deepStrictEqual(leftBeside, folder, 'the failed write-back left the folder changed');
+        assert.strictEqual(errors.length, 1, `not one error line:\n${errors.join('\n')}`);
+        assert.ok(errors[0].includes(stateFile(ws)) && errors[0].includes(code), `the error line does not say which file, or why: ${errors[0]}`);
+
+        // That start rebuilt it, kept the bytes once and wrote back a file that parses.
+        assert.deepStrictEqual(next.routineState[KEY], { lastRun: RAN_AT.toISOString(), status: 'completed', duration: 180 });
+        const aside = setAsideBeside(stateFile(ws));
+        assert.strictEqual(aside.length, 1, `the file was not set aside once: ${aside.join(', ')}`);
+        assert.ok(fs.readFileSync(aside[0]).equals(bytes), 'the set-aside file does not hold the original bytes');
+        JSON.parse(fs.readFileSync(stateFile(ws), 'utf-8'));
+        assert.strictEqual(again.length, 1, `not one error line on the retry:\n${again.join('\n')}`);
+      });
+    });
+  }
+
+  test('a clock that fails when the file is set aside: nothing is written over it, and a restart rebuilds again', () => {
+    withWorkspace((ws) => {
+      const bytes = DAMAGE[0][1];
+      fs.writeFileSync(stateFile(ws), bytes);
+      writeRecord(ws, runRecord());
+      const folder = fs.readdirSync(path.join(ws, '.rundock')).sort();
+      const sched = freshScheduler();
+      sched.wireSchedulerDeps({ now: () => { throw new Error('the clock is not available'); } });
+      const errors = errorsDuring(() => sched.loadRoutineState());
+      // Back, for the question below: what is due is asked of the clock.
+      sched.wireSchedulerDeps({ now: () => NOW });
+      assert.strictEqual(sched.getNextRun(SCHEDULE, sched.routineState[KEY] && sched.routineState[KEY].lastRun), null,
+        'the process whose clock failed would fire the routine again');
+      assert.ok(fs.readFileSync(stateFile(ws)).equals(bytes), 'the state file was written over without its bytes kept');
+      assert.deepStrictEqual(fs.readdirSync(path.join(ws, '.rundock')).sort(), folder, 'the folder changed');
+      assert.strictEqual(errors.length, 1, `not one error line:\n${errors.join('\n')}`);
+      assert.ok(errors[0].includes(stateFile(ws)), `the error line does not name the file: ${errors[0]}`);
+
+      const next = freshScheduler();
+      errorsDuring(() => next.loadRoutineState());
+      assert.strictEqual(next.getNextRun(SCHEDULE, next.routineState[KEY] && next.routineState[KEY].lastRun), null,
+        'a restart finds the routine that ran at 09:03 due again at 10:00');
+      assert.strictEqual(setAsideBeside(stateFile(ws)).length, 1, 'the restart did not set the file aside');
+    });
+  });
+
+  // A filesystem with no hard links (FAT, some network shares) keeps the bytes
+  // as a copy instead.
+  test('where the filesystem refuses a second name, the bytes are kept as a copy', () => {
+    withWorkspace((ws) => {
+      const bytes = DAMAGE[0][1];
+      fs.writeFileSync(stateFile(ws), bytes);
+      writeRecord(ws, runRecord());
+      const sched = freshScheduler();
+      const realLink = fs.linkSync;
+      let refused = 0;
+      fs.linkSync = () => { refused++; throw Object.assign(new Error('EPERM: operation not permitted, link'), { code: 'EPERM' }); };
+      let errors;
+      try { errors = errorsDuring(() => sched.loadRoutineState()); } finally { fs.linkSync = realLink; }
+      assert.strictEqual(refused, 1, 'sanity: the second name was asked for');
+      const aside = setAsideBeside(stateFile(ws));
+      assert.strictEqual(aside.length, 1, `the file was not set aside once: ${aside.join(', ')}`);
+      assert.ok(fs.readFileSync(aside[0]).equals(bytes), 'the copy does not hold the original bytes');
+      assert.deepStrictEqual(JSON.parse(fs.readFileSync(stateFile(ws), 'utf-8'))[KEY], { lastRun: RAN_AT.toISOString(), status: 'completed', duration: 180 });
+      assert.strictEqual(errors.length, 1, `not one error line:\n${errors.join('\n')}`);
+      assert.ok(errors[0].includes(stateFile(ws)) && errors[0].includes(aside[0]), `the error line does not name both paths: ${errors[0]}`);
+    });
+  });
+});
+
 describe('the slot file and the pid file are set aside and start empty', () => {
   test('a slot file that does not parse', () => {
     withWorkspace((ws) => {
