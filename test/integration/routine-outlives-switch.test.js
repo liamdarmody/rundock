@@ -588,3 +588,78 @@ test('an app-server that stalls on the deferred shutdown is killed after the gra
   assert.ok(h.pidAlive(server), 'so it was still running');
   assert.ok(await h.waitForPidExit(server, 6000), 'until SIGKILL ended it after the grace period');
 });
+
+// ===== RUNDOCK STOPPED WHILE A RUN OUTLIVES A SWITCH =====
+//
+// The control this change leans on, failing: the process that could have
+// recorded the run's ending is gone. The child is a real orphan now, and the
+// next launch on its workspace reaps it from the pid file it was registered
+// in and closes its record as interrupted, so the cleanup still reaps what it
+// exists for. Two processes of their own, because one that has stopped cannot
+// be the one asserting.
+
+const ROOT = path.join(__dirname, '..', '..');
+const { spawn } = require('node:child_process');
+const { makeTempDir } = require('../helpers/workspace.js');
+
+// The first Rundock: starts the run in A, switches to B as the open path does
+// (stop the conversation children, set the workspace, clean up orphans), says
+// so, and waits to be stopped.
+const FIRST_RUNDOCK = `
+const fs = require('fs');
+const path = require('path');
+const [a, b] = process.argv.slice(1);
+const srv = require(${JSON.stringify(path.join(ROOT, 'server.js'))})._internal;
+srv.setWorkspace(a);
+const keeper = srv.discoverAgents().find(agent => agent.id === ${JSON.stringify(AGENT)});
+srv.executeRoutine(keeper, keeper.routines.find(r => r.name === ${JSON.stringify(ROUTINE)}), ${JSON.stringify(KEY)});
+const started = setInterval(() => {
+  if (!fs.existsSync(path.join(a, 'stub-invocations.jsonl'))) return;
+  clearInterval(started);
+  srv.killAllChildren();
+  srv.setWorkspace(b);
+  srv.cleanOrphanedProcesses();
+  console.log('switched');
+}, 20);
+setInterval(() => {}, 1 << 30);
+`;
+
+function launch(args, env) {
+  const proc = spawn(process.execPath, args, { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] });
+  const said = { text: '' };
+  proc.stdout.on('data', (d) => { said.text += d; });
+  proc.stderr.on('data', (d) => { said.text += d; });
+  const closed = new Promise((resolve) => proc.once('close', resolve));
+  return { proc, said, stop: async () => { if (proc.exitCode === null && proc.signalCode === null) proc.kill('SIGTERM'); await closed; } };
+}
+
+test('a run that outlived a switch is reaped by the next launch on its workspace once Rundock has stopped', async () => {
+  const a = keeperWorkspace('stopped run body', { held: true });
+  const b = keeperWorkspace('stopped elsewhere body');
+  const env = { ...process.env, RUNDOCK_DISABLE_SCHEDULER: '1' };
+  delete env.WORKSPACE;
+
+  const first = launch(['-e', FIRST_RUNDOCK, a.dir, b.dir], { ...env, HOME: makeTempDir('first-home-') });
+  try {
+    assert.ok(await h.waitUntil(() => first.said.text.includes('switched'), { timeout: 15000 }),
+      `the first Rundock started the run and switched:\n${first.said.text}`);
+  } finally {
+    await first.stop();
+  }
+  const [child] = invocationsIn(a.dir);
+  assert.ok(child && h.pidAlive(child.pid), 'Rundock stopping left the run\'s child running: a real orphan now');
+  assert.deepStrictEqual(recordsIn(a.dir).map(r => r.status), ['running'], 'with its record left open');
+  assert.ok(pidsIn(a.dir).includes(child.pid), 'and its pid still in the file it was registered in');
+
+  const next = launch([path.join(ROOT, 'server.js')], { ...env, HOME: makeTempDir('next-home-'), WORKSPACE: a.dir, PORT: '0' });
+  try {
+    assert.ok(await h.waitUntil(() => /Routines: /.test(next.said.text), { timeout: 15000 }),
+      `the next launch opened A:\n${next.said.text}`);
+    assert.match(next.said.text, /\[Cleanup\] Killed 1 orphaned process tree\(s\) from a previous session/,
+      'its cleanup signalled the orphan, by its own account');
+    assert.ok(await h.waitForPidExit(child.pid, 4000), 'and the orphan is gone');
+    assert.deepStrictEqual(recordsIn(a.dir).map(r => r.status), ['interrupted'], 'its record closed as interrupted');
+  } finally {
+    await next.stop();
+  }
+});
