@@ -135,6 +135,9 @@
   --border-strong: #808080;
   --text-2-strong: #A29D97;
   --success-text: var(--success);
+  /* The permission card's own surface: the plain card in dark, and a color of
+     its own in light (see body.light). */
+  --permission-card: var(--card);
 
   /* Map canvas. A canvas resolves no CSS variables: every fill and stroke is
      a literal read out of the computed style at paint time, so a value the
@@ -276,7 +279,7 @@ body.light {
      unchanged. --accent itself, the brand, does not move. */
   --accent-text: #BF401B;
   /* The permission card's quieter buttons in light, following the dark note:
-     measured on the light permission card (#E8E3DB), --border-strong 3.58:1
+     measured on the light permission card (--permission-card), --border-strong 3.58:1
      as the Deny outline, --text-2-strong 4.59:1 as Deny's label, and
      --success-text 5.14:1 as Always allow's and Allow once's label and edge
      (4.84:1 on their hover tint). Plain --success as text measures 1.64:1
@@ -284,6 +287,10 @@ body.light {
   --border-strong: #7A756E;
   --text-2-strong: #69645D;
   --success-text: #266A36;
+  /* The permission card in light, darker than the code block inside it
+     (which stays --elevated, pure white) rather than sharing that white and
+     merging with it: 1.28:1 of separation, where --elevated gave 1.00:1. */
+  --permission-card: #E8E3DB;
   /* Control orange in light: clears 3:1 on all four light surfaces
      (elevated 3.83, surface 3.61, base 3.43, card 3.28). */
   --accent-control: #DB5933; --accent-control-hover: #DD6440;
