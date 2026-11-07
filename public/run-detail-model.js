@@ -336,6 +336,58 @@
   }
 
   /**
+   * The path the file tree gives a file a run recorded, or null.
+   *
+   * WHAT DECIDES WHETHER A NAME OPENS. A recorded path is data from a
+   * transcript: the routine's agent named it, and an agent can be steered by
+   * anything it read during the run. A record can also come from another
+   * computer, because records live in the workspace and a synced workspace
+   * carries them. So a name opens only when its path is this workspace's
+   * root, ONE separator, then a path the current tree lists as a file. The
+   * tree is the server's own list of what the Files sidebar can open: it
+   * leaves out every dot name, node_modules, and every file it has no viewer
+   * for. Whatever it does not list stays plain text here, and the server's
+   * read confinement stays the second line behind this one.
+   *
+   * THE TREE'S OWN PATH IS RETURNED, never the recorded string, so what is
+   * opened is a path the tree produced.
+   *
+   * `root` is the workspace the server says is open and `tree` the last tree
+   * it sent; with neither yet, nothing links.
+   */
+  function treePathFor(recorded, root, tree) {
+    if (typeof recorded !== 'string' || typeof root !== 'string' || !root || !Array.isArray(tree)) return null;
+    // A WINDOWS ROOT, a drive letter or a share, separates with backslashes,
+    // and so does every path recorded under it, where the tree uses forward
+    // slashes. Mapped only under such a root: elsewhere a backslash is a
+    // character in a file's name, and mapping it would open another file.
+    const windows = /^(?:[A-Za-z]:\\|\\\\)/.test(root);
+    const slashes = (p) => (windows ? p.replace(/\\/g, '/') : p);
+    const prefix = `${slashes(root)}/`;
+    const full = slashes(recorded);
+    // The root, then one separator, compared exactly and in the same case: a
+    // sibling folder whose name starts with the workspace's has no separator
+    // there. The rest is looked up AS IT IS, never normalised: the tree's
+    // paths hold no `.`, `..` or empty segment, so a path holding one is not
+    // a path the tree lists, whatever it would resolve to.
+    if (!full.startsWith(prefix)) return null;
+    return listedFile(tree, full.slice(prefix.length));
+  }
+
+  /** The tree's own path for `wanted` when the tree lists it as a file. */
+  function listedFile(nodes, wanted) {
+    for (const node of nodes) {
+      if (!node || typeof node !== 'object') continue;
+      if (node.type === 'file' && node.path === wanted) return node.path;
+      if (node.type === 'folder' && Array.isArray(node.children)) {
+        const found = listedFile(node.children, wanted);
+        if (found) return found;
+      }
+    }
+    return null;
+  }
+
+  /**
    * How many of a run's permission cards were refused, in words, or null.
    *
    * The count is the server's, written only once there is one (refusedCards),
@@ -573,5 +625,6 @@
     CHANGE_LABELS, CHANGE_FALLBACK, FILES_LABELS, NO_FILES_CHANGED, UNKNOWN_FILES_LEAD, NO_REASON_GIVEN,
     SHELL_USED_SOME, SHELL_USED_NONE,
     changedFiles, unknownWords, durationWords, refusedWords, describeRun, baseName, startedWords, triggerOf, STARTED_MANUALLY,
+    treePathFor,
   };
 }));

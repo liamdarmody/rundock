@@ -336,6 +336,28 @@ const MUTATIONS = [
     '      + `<p class="rd-unknown-why">${escText(files.reason)}</p></div>`'
       + ' + (record && record.usedShell ? `<p class="rd-note" data-run-detail="shell-note">${escText(\'This run used the shell. '
       + 'Files written that way are not counted, so this list may be incomplete.\')}</p>` : \'\');'],
+  // ===== WHICH RECORDED PATH OPENS A FILE =====
+  // The matcher, watched by its case table.
+  [MODEL, 'File links: the tree lookup removed, so any path under the root links',
+    '    return listedFile(tree, full.slice(prefix.length));',
+    '    return full.slice(prefix.length);'],
+  [MODEL, 'File links: the remainder normalized before the lookup',
+    '    return listedFile(tree, full.slice(prefix.length));',
+    "    return listedFile(tree, full.slice(prefix.length).split('/')"
+      + ".reduce((kept, s) => (s === '..' ? kept.slice(0, -1) : (s && s !== '.' ? [...kept, s] : kept)), []).join('/'));"],
+  [MODEL, 'File links: the separator check removed',
+    '    if (!full.startsWith(prefix)) return null;',
+    '    if (!full.startsWith(slashes(root))) return null;'],
+  [MODEL, 'File links: a suffix match in place of the root prefix',
+    '    if (!full.startsWith(prefix)) return null;\n    return listedFile(tree, full.slice(prefix.length));',
+    "    const flat = (ns) => ns.flatMap(n => (n && n.type === 'folder' ? flat(n.children || []) : (n && n.type === 'file' ? [n.path] : [])));\n"
+      + '    return flat(tree).find(p => full.endsWith(`/${p}`)) || null;'],
+  [MODEL, 'File links: a case-blind comparison',
+    "      if (node.type === 'file' && node.path === wanted) return node.path;",
+    "      if (node.type === 'file' && node.path.toLowerCase() === wanted.toLowerCase()) return node.path;"],
+  [MODEL, 'File links: the Windows separator mapping removed',
+    "    const slashes = (p) => (windows ? p.replace(/\\\\/g, '/') : p);",
+    '    const slashes = (p) => p;'],
 ];
 
 // The reporter is named explicitly rather than left to the default, which
