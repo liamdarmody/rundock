@@ -3,7 +3,7 @@ const { installExtensionFrameGuards } = require('./extension-frame-guards');
 const { installExternalLinkGuards } = require('./external-links');
 const path = require('path');
 const fs = require('fs');
-const { execSync } = require('child_process');
+const { isClaudeAuthenticated, wizardCheckRuntimes } = require('./claude-check.js');
 const buildContextMenuTemplate = require('./context-menu-template.js');
 const { resolveUpdateFeed } = require('./update-feed.js');
 const { resolveUserData } = require('./user-data.js');
@@ -72,117 +72,19 @@ if (!gotLock) {
 
 // ===== CLAUDE CODE DETECTION =====
 
-// Electron packaged apps don't inherit the user's full shell PATH.
-// Ensure common Claude Code install locations are on PATH so the lookup works.
-function ensurePath() {
-  const home = require('os').homedir();
-  const isWindows = process.platform === 'win32';
-  const extraDirs = isWindows
-    ? [
-        // Anthropic's PowerShell installer drops claude.exe here.
-        path.join(home, '.local', 'bin'),
-        // WinGet shim location.
-        process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'Microsoft', 'WinGet', 'Links') : null,
-        // npm global bin (Claude installed via `npm install -g`).
-        process.env.APPDATA ? path.join(process.env.APPDATA, 'npm') : null,
-      ].filter(Boolean)
-    : [
-        path.join(home, '.local', 'bin'),
-        path.join(home, '.claude', 'bin'),
-        '/usr/local/bin',
-        '/opt/homebrew/bin',
-      ];
-  const current = process.env.PATH || '';
-  const segments = current.split(path.delimiter);
-  const missing = extraDirs.filter(d => !segments.includes(d));
-  if (missing.length) {
-    process.env.PATH = missing.join(path.delimiter) + path.delimiter + current;
-  }
-}
-
 // What `claude --version` said the last time findClaude found Claude Code:
 // the reconnect console runs Claude Code's login command only on a version
 // that has it (lib/runtime/claude-console.js, hasAuthLogin).
 let claudeFoundVersion = null;
+// Is Claude Code installed: the copy every spawn and the Settings probe start,
+// with the version it says it is (installedCopy in electron/claude-check.js,
+// where the sign-in check and the setup wizard's check also live). null when
+// there is no copy, or when it cannot be run for its version.
 function findClaude() {
-  ensurePath();
-  const isWindows = process.platform === 'win32';
-  try {
-    // Windows: where.exe returns one absolute path per line, possibly multiple
-    // candidates when both .exe and .cmd shims are present. Prefer .exe so the
-    // recommended PowerShell-installer path wins over an npm .cmd shim.
-    // Unix: which returns a single absolute path.
-    const lookupCmd = isWindows ? 'where.exe claude' : 'which claude';
-    const output = execSync(lookupCmd, { timeout: 5000, encoding: 'utf-8' }).trim();
-    if (!output) return null;
-    let bin;
-    if (isWindows) {
-      const candidates = output.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
-      const exe = candidates.find(c => c.toLowerCase().endsWith('.exe'));
-      const cmd = candidates.find(c => c.toLowerCase().endsWith('.cmd'));
-      bin = exe || cmd || candidates[0];
-      if (!bin) return null;
-    } else {
-      bin = output;
-    }
-    // Sanity-check the resolved binary, keeping the version it reports. Quote
-    // the path so a directory with spaces (common on Windows) does not split
-    // the command.
-    claudeFoundVersion = String(execSync(`"${bin}" --version`, { timeout: 10000 }));
-    return bin;
-  } catch {
-    return null;
-  }
-}
-
-// Anthropic's Windows installer drops claude.exe in ~/.local/bin but does NOT
-// add that directory to the user's PATH, so `claude` is unrecognised in the
-// terminal even though it's installed. Rundock detects claude regardless (see
-// ensurePath), but the user still needs `claude` on PATH to run the one-time
-// sign-in. Since we know where claude lives, persist its directory onto the
-// user's PATH so a freshly opened terminal recognises `claude`. Idempotent,
-// Windows-only, best-effort (never throws). Takes effect in new terminals.
-function ensureClaudeOnUserPath(binDir) {
-  if (process.platform !== 'win32' || !binDir) return;
-  const d = binDir.replace(/'/g, "''"); // escape for PowerShell single-quoted string
-  const psCmd = [
-    `$d='${d}';`,
-    `$p=[Environment]::GetEnvironmentVariable('Path','User'); if(-not $p){$p=''};`,
-    `if(($p -split ';') -notcontains $d){`,
-    `  if($p){$p=$p.TrimEnd(';')+';'+$d}else{$p=$d};`,
-    `  [Environment]::SetEnvironmentVariable('Path',$p,'User')`,
-    `}`,
-  ].join(' ');
-  try {
-    execSync(`powershell -NoProfile -ExecutionPolicy Bypass -Command "${psCmd}"`, { timeout: 8000 });
-  } catch {
-    // Best-effort: if PATH can't be written, the user can still sign in via the
-    // full path; we never block first-run on this.
-  }
-}
-
-function isClaudeAuthenticated() {
-  try {
-    execSync('claude --print "test" --output-format text', { timeout: 15000 });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-// Codex detection for the wizard. Reuses the server-side detector in codex.js
-// (packaged with the app) rather than porting it: binary resolution is
-// .cmd-shim aware on Windows, auth detection is the PRESENCE of auth.json
-// under $CODEX_HOME or ~/.codex, contents never read. Detection must never
-// break the wizard's Claude path, so failures collapse to "not installed".
-function detectCodexForWizard() {
-  try {
-    const { detectCodex } = require('../codex.js');
-    const d = detectCodex();
-    return { installed: !!d.installed, authenticated: !!d.authenticated };
-  } catch {
-    return { installed: false, authenticated: false };
-  }
+  const found = require('./claude-check.js').installedCopy();
+  if (!found) return null;
+  claudeFoundVersion = found.version;
+  return found.bin;
 }
 
 // Launch Codex's sign-in (`codex login`) in a visible terminal, mirroring
@@ -264,22 +166,9 @@ function showWizard() {
 
     wizard.loadFile(path.join(__dirname, 'wizard.html'));
 
-    // Wizard polls for both runtimes via IPC. The Claude checks are unchanged;
-    // Codex detection rides alongside so the wizard can adapt honestly to what
-    // the user has (a Codex user is told why Claude Code is still needed, and
-    // can sign in to Codex as an optional final step).
-    ipcMain.handle('wizard-check-runtimes', () => {
-      const claude = (() => {
-        const bin = findClaude();
-        if (!bin) return { status: 'not-installed' };
-        // Claude is installed: make sure its directory is on the user's PATH so
-        // they can simply type `claude` in a new terminal to sign in.
-        ensureClaudeOnUserPath(path.dirname(bin));
-        if (!isClaudeAuthenticated()) return { status: 'not-authenticated' };
-        return { status: 'ready' };
-      })();
-      return { claude, codex: detectCodexForWizard() };
-    });
+    // Wizard polls for both runtimes via IPC (wizardCheckRuntimes in
+    // electron/claude-check.js, where the tests run it).
+    ipcMain.handle('wizard-check-runtimes', wizardCheckRuntimes);
 
     // Launch Claude's browser sign-in for the user (no terminal needed).
     ipcMain.handle('wizard-signin-claude', () => launchClaudeSignIn());

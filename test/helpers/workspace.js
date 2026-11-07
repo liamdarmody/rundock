@@ -22,6 +22,9 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { PREFIX, sweepStale } = require('./temp-root.js');
+// Every process that builds fixtures goes without the developer's own login
+// shell (see the file).
+require('./no-login-shell.js');
 
 const created = [];
 

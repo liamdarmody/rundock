@@ -141,6 +141,14 @@ const FLOOR_TABLE = { src: path.join(ROOT, 'lib', 'runtime', 'claude-floor.js'),
 const FLOOR_SPAWN = { src: path.join(ROOT, 'lib', 'runtime', 'claude.js'), suite: 'test/unit/claude-version-floor.test.js' };
 const FLOOR_PATHS = { src: path.join(ROOT, 'lib', 'runtime', 'claude.js'), suite: 'test/integration/claude-version-floor.test.js' };
 const FLOOR_EACCES = { src: path.join(ROOT, 'lib', 'runtime', 'claude.js'), suite: 'test/integration/claude-version-floor-eacces.test.js' };
+// The floor's version read lives with the lookup that also reads candidates
+// with it (lib/runtime/claude-lookup.js); the floor's own suite still proves it.
+const FLOOR_READ = { src: path.join(ROOT, 'lib', 'runtime', 'claude-lookup.js'), suite: 'test/unit/claude-version-floor.test.js' };
+// Which Claude Code is started: the copy the person's login shell finds,
+// read with the floor's version read, and the desktop app's check asking the
+// same lookup rather than running its own.
+const LOOKUP = { src: path.join(ROOT, 'lib', 'runtime', 'claude-lookup.js'), suite: 'test/unit/claude-lookup.test.js' };
+const LOOKUP_DESKTOP = { src: path.join(ROOT, 'electron', 'claude-check.js'), suite: 'test/unit/claude-lookup.test.js' };
 const DEV_HOME = { src: path.join(ROOT, 'scripts', 'dev-paths.js'), suite: 'test/unit/code-mode-home-in-temp.test.js' };
 const SCAFFOLD_CM = { src: path.join(ROOT, 'lib', 'workspace', 'scaffold.js'), suite: 'test/unit/code-mode-boundary.test.js' };
 const CM_PARSE = { src: path.join(ROOT, 'scripts', 'code-mode-parse.js'), suite: 'test/unit/code-mode-verdict.test.js' };
@@ -3194,8 +3202,8 @@ const MUTATIONS = [
     ', version: _claudeProbeCache && _claudeProbeCache.version',
     ''],
   [CONSOLE_DESKTOP, 'Reconnect: the desktop app keeps no version from its lookup',
-    'claudeFoundVersion = String(execSync(',
-    'String(execSync('],
+    '  claudeFoundVersion = found.version;\n',
+    '  void found.version;\n'],
   // A path that ends its line starts a command of its own on the next.
   [CLAUDE_CONSOLE, 'Reconnect: a line break or NUL in the Claude Code path is written onto the command line',
     "  if (/[\\0\\r\\n]/.test(found)) return Promise.resolve({ ok: false, reason: 'unsupported' });\n",
@@ -3589,10 +3597,10 @@ const MUTATIONS = [
   [FLOOR_TABLE, "Version floor: any three-part number in the output is taken as the version",
     "  const m = firstLine(lines, NAMED_LINE) || firstLine(lines, BARE_LINE);",
     "  const m = /(\\d+)\\.(\\d+)\\.(\\d+)/.exec(lines.join('\\n'));"],
-  [FLOOR_SPAWN, "Version floor: the probe is a command line a shell reads",
+  [FLOOR_READ, "Version floor: the probe is a command line a shell reads",
     "    return execFileSync(bin, ['--version'], { timeout, encoding: 'utf-8', stdio: codexRuntime.PROBE_STDIO });",
     "    return require('child_process').execSync(`\"${bin}\" --version`, { timeout, encoding: 'utf-8', stdio: codexRuntime.PROBE_STDIO });"],
-  [FLOOR_SPAWN, "Version floor: a Windows .cmd or .bat copy is run for its version",
+  [FLOOR_READ, "Version floor: a Windows .cmd or .bat copy is run for its version",
     "  if (platform === 'win32' && /\\.(cmd|bat)$/i.test(bin)) return launcherPackageVersion(bin);",
     "  // every copy is run for its version"],
   [FLOOR_SPAWN, "Version floor: the spawn's options are not the caller's",
@@ -3604,9 +3612,61 @@ const MUTATIONS = [
   [FLOOR_SPAWN, "Version floor: the stand-in for a refused copy keeps an unguarded stdin",
     "    guardChildStdin(standIn, 'claude (not started: below the version floor)');",
     "    // the stand-in's stdin is left unguarded"],
-  [FLOOR_SPAWN, "Version floor: a .cmd launcher's package version is ignored",
+  [FLOOR_READ, "Version floor: a .cmd launcher's package version is ignored",
     "  if (platform === 'win32' && /\\.(cmd|bat)$/i.test(bin)) return launcherPackageVersion(bin);",
     "  if (platform === 'win32' && /\\.(cmd|bat)$/i.test(bin)) return null;"],
+  // #401: an old copy in a folder the desktop app puts first beat the copy the
+  // person's own shell finds.
+  [LOOKUP, "Claude lookup: the login shell's PATH is ignored, so today's order wins",
+    '  const login = loginShellPath();\n',
+    "  const login = { failed: 'the login shell was not asked' };\n"],
+  [LOOKUP, 'Claude lookup: a copy below the floor is not passed over',
+    '    if (meetsFloor(versionIn(read.versionText)) !== false) return read;\n',
+    '    return read;\n'],
+  [LOOKUP, "Claude lookup: what the startup files print outside the markers is taken as the answer",
+    "  const value = output.slice(at + BEGIN.length, end).replace(/^\\r?\\n/, '').replace(/\\r?\\n$/, '');\n",
+    "  const value = output.split('\\n').find((line) => line.startsWith('/')) || '';\n"],
+  [LOOKUP, 'Claude lookup: a login shell that cannot answer blocks the chat instead of falling back',
+    'looking for claude on the PATH Rundock was started with`);\n    return { bin: todaysLookup(deadline) };\n',
+    'looking for claude on the PATH Rundock was started with`);\n    return { bin: null };\n'],
+  [LOOKUP, 'Claude lookup: a relative PATH entry is used',
+    '    if (!path.isAbsolute(dir)) continue;\n',
+    ''],
+  [LOOKUP_DESKTOP, "Claude lookup: the desktop app's check keeps its own which",
+    "    return lookup().installedClaude();\n",
+    "    const bin = execSync('which claude', { timeout: 5000, encoding: 'utf-8' }).trim();\n"
+      + "    return bin ? { bin, version: lookup().readClaudeVersion(bin) } : null;\n"],
+  [LOOKUP, 'Claude lookup: the login shell is given the PATH with the install folders in front',
+    '    env: { ...shellEnv(env), PATH: deps.startPath === undefined ? SYSTEM_PATH : deps.startPath }, cwd: env.HOME || os.homedir(), stdio: codexRuntime.PROBE_STDIO,\n',
+    '    env: shellEnv(env), cwd: env.HOME || os.homedir(), stdio: codexRuntime.PROBE_STDIO,\n'],
+  [LOOKUP, 'Claude lookup: the login shell is asked on every look while nothing is found',
+    '  if (answer && answer.key === key && now >= answer.at && now - answer.at < LOGIN_ANSWER_MS) return { ...answer.login, asked: false };\n',
+    ''],
+  [LOOKUP_DESKTOP, "Claude lookup: the desktop app's sign-in check runs whichever claude comes first on its PATH",
+    "  const bin = lookup().lookupClaude().bin;\n",
+    "  const bin = 'claude';\n"],
+  [LOOKUP, 'Claude lookup: a Windows npm launcher is started itself, not through its package',
+    "  if (platform !== 'win32' || !/\\.(cmd|bat)$/i.test(bin)) return { command: bin, args: [] };\n",
+    '  return { command: bin, args: [] };\n'],
+  [LOOKUP, "Claude lookup: an npm package's entry outside the package folder is started",
+    "  if (!inside || inside === '..' || inside.startsWith(`..${path.sep}`) || path.isAbsolute(inside)) {\n",
+    '  if (false) {\n'],
+  [LOOKUP, "Claude lookup: today's lookup runs after a shell answer that names no copy",
+    '  return firstNotBelowFloor(executablesAlong([...login.dirs, ...extra]), versionPlatform);\n',
+    '  const candidates = executablesAlong([...login.dirs, ...extra]);\n'
+      + '  return candidates.length ? firstNotBelowFloor(candidates, versionPlatform) : { bin: todaysLookup(deadline) };\n'],
+  [LOOKUP, 'Claude lookup: a start PATH recorded empty is given to the shell as the system default',
+    '    env: { ...shellEnv(env), PATH: deps.startPath === undefined ? SYSTEM_PATH : deps.startPath }, cwd: env.HOME || os.homedir(), stdio: codexRuntime.PROBE_STDIO,\n',
+    '    env: { ...shellEnv(env), PATH: deps.startPath || SYSTEM_PATH }, cwd: env.HOME || os.homedir(), stdio: codexRuntime.PROBE_STDIO,\n'],
+  [LOOKUP, "Claude lookup: today's lookup takes five seconds of its own after a stalled shell",
+    "  if (left <= 0) return null;\n  try {\n    return execSync('which claude', { timeout: left,",
+    "  try {\n    return execSync('which claude', { timeout: 5000,"],
+  [LOOKUP, 'Claude lookup: the lookup module reads a version through a shell',
+    '  const said = justRead ? versionText : readClaudeVersion(bin, VERSION_PROBE_TIMEOUT_MS, platform);\n',
+    '  const said = justRead ? versionText : String(execSync(`"${bin}" --version`, { timeout: VERSION_PROBE_TIMEOUT_MS }));\n'],
+  [LOOKUP_DESKTOP, "Claude lookup: the setup wizard's check says ready without the sign-in check",
+    "    if (!isClaudeAuthenticated()) return { status: 'not-authenticated' };\n",
+    ''],
 ];
 const REPORTER = ['--test-reporter', 'spec'];
 

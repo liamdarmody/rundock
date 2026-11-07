@@ -175,7 +175,7 @@ describe('a Claude Code without its login command', () => {
     assert.ok(src('server.js').includes("openClaudeConsole({ bin: resolveClaudeBin(), version: _claudeProbeCache && _claudeProbeCache.version, purpose: 'reconnect' })"));
     const main = src('electron/main.js');
     assert.ok(main.includes('openClaudeConsole({ findBin: findClaude, findVersion: () => claudeFoundVersion, purpose })'));
-    assert.ok(main.includes('claudeFoundVersion = String(execSync(`"${bin}" --version`, { timeout: 10000 }));'));
+    assert.ok(main.includes('  claudeFoundVersion = found.version;\n'));
   });
 });
 

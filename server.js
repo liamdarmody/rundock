@@ -658,6 +658,7 @@ workspaceScaffold.wireScaffoldDeps({ invalidateAgentCache, rebaselineAgentsWatch
 // killProcessTree, and spawnClaude. Only the listening port is wired in:
 // everything else the module needs is lib-owned or read at use time.
 const claudeRuntime = require('./lib/runtime/claude.js');
+const claudeLookup = require('./lib/runtime/claude-lookup.js');
 const {
   modelArgs, modelForLog, logFlags, getBareArgs, getSpawnEnv,
   resolveClaudeBin, killProcessTree, spawnClaude,
@@ -2603,10 +2604,8 @@ let _claudeAuthEvidence = null;
 let _claudeProbeCache = null;
 let _claudeProbeTime = 0;
 function getRuntimeStatus() {
-  const { execSync } = require('child_process');
-  const isWindows = process.platform === 'win32';
-  // The install/version probe shells out (claude --version can take seconds)
-  // and this runs on the WebSocket handler path, so cache it. 60s keeps a
+  // The install/version probe runs Claude Code (claude --version can take
+  // seconds) and this runs on the WebSocket handler path, so cache it. 60s keeps a
   // fresh install visible quickly without blocking every settings open.
   // A cached "not installed" is never trusted: the user may have just
   // installed, and that is exactly when they will open settings to check.
@@ -2614,20 +2613,16 @@ function getRuntimeStatus() {
   if (_claudeProbeCache && _claudeProbeCache.installed && (Date.now() - _claudeProbeTime) < 60000) {
     ({ installed: claudeInstalled, version: claudeVersion } = _claudeProbeCache);
   } else {
-    claudeInstalled = true;
-    try {
-      // Closed stdin (PROBE_STDIO): an open piped stdin can hang a Windows
-      // version/which probe for its full timeout (Findings 4/5, verified
-      // live for the codex probe; applied consistently to both runtimes).
-      execSync(isWindows ? 'where.exe claude' : 'which claude', { timeout: 5000, encoding: 'utf-8', stdio: codexRuntime.PROBE_STDIO });
-    } catch (e) { claudeInstalled = false; }
+    // The copy every spawn starts, found by the one lookup
+    // (lib/runtime/claude-lookup.js), looked for again while none is found,
+    // and its version read with no shell, stdin closed.
+    const { bin } = claudeLookup.lookupClaude({ retryMissing: true });
+    claudeInstalled = !!bin;
     claudeVersion = null;
-    if (claudeInstalled) {
-      try {
-        const out = execSync(`"${resolveClaudeBin()}" --version`, { timeout: 5000, encoding: 'utf-8', stdio: codexRuntime.PROBE_STDIO });
-        const m = String(out).match(/(\d+\.\d+(?:\.\d+)?(?:-[A-Za-z0-9.]+)?)/);
-        claudeVersion = m ? m[1] : null;
-      } catch (e) { /* installed but --version failed */ }
+    if (bin) {
+      const out = claudeLookup.readClaudeVersion(bin);
+      const m = out ? String(out).match(/(\d+\.\d+(?:\.\d+)?(?:-[A-Za-z0-9.]+)?)/) : null;
+      claudeVersion = m ? m[1] : null;
     }
     _claudeProbeCache = { installed: claudeInstalled, version: claudeVersion };
     _claudeProbeTime = Date.now();

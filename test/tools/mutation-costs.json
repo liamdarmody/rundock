@@ -1,5 +1,5 @@
 {
-  "about": "Seconds per mutation row. secondsPerRow is measured on the CI runner from the shard logs of two full runs of every harness: each harness's measured seconds over its rows, averaged. secondsPerRowLabel, for each harness CI runs in slices, is inferred, not measured: no run records a row's own time, so each slice's measured seconds are shared among its rows in proportion to one plus the tests each turned red, averaged over the runs. secondsPerIntegrationRow is the mean of those inferred costs over a harness's integration rows, the rate for an integration row with no cost of its own. The plan weights shards by these so no shard nears its time limit. A harness missing here is planned at defaultSecondsPerRow, and any other row missing from its harness's labels at that harness's rate; re-measure when a shard runs past fifteen minutes. mutate-stale-session-guards.js is measured on a developer machine, one row at a time, its costs by label measured rather than inferred, until shard logs record it.",
+  "about": "Seconds per mutation row. secondsPerRow is measured on the CI runner from the shard logs of two full runs of every harness: each harness's measured seconds over its rows, averaged. secondsPerRowLabel, for each harness CI runs in slices, is inferred, not measured: no run records a row's own time, so each slice's measured seconds are shared among its rows in proportion to one plus the tests each turned red, averaged over the runs. secondsPerIntegrationRow is the mean of those inferred costs over a harness's integration rows, the rate for an integration row with no cost of its own. The plan weights shards by these so no shard nears its time limit. A harness missing here is planned at defaultSecondsPerRow, and any other row missing from its harness's labels at that harness's rate; re-measure when a shard runs past fifteen minutes. mutate-stale-session-guards.js is measured on a developer machine, one row at a time, its costs by label measured rather than inferred, until shard logs record it. The Claude lookup rows of mutate-workspace-boundary-guards.js are measured the same way, on a developer machine, one row at a time, until shard logs record them.",
   "defaultSecondsPerRow": 5,
   "secondsPerRow": {
     "mutate-approve-once-guards.js": 0.89,
@@ -1252,7 +1252,23 @@
       "Shell code: a URL in code is judged as a path": 1.1,
       "Shell code: a cd into a working folder is not a base": 1.1,
       "Shell code: pushd and popd are not counted when the command cannot be lexed": 1.1,
-      "Shell code: a cd to a variable is trusted as a base": 1.1
+      "Shell code: a cd to a variable is trusted as a base": 1.1,
+      "Claude lookup: the login shell's PATH is ignored, so today's order wins": 18.66,
+      "Claude lookup: a copy below the floor is not passed over": 42.72,
+      "Claude lookup: what the startup files print outside the markers is taken as the answer": 40.86,
+      "Claude lookup: a login shell that cannot answer blocks the chat instead of falling back": 46.97,
+      "Claude lookup: a relative PATH entry is used": 46.25,
+      "Claude lookup: the desktop app's check keeps its own which": 45.3,
+      "Claude lookup: the login shell is given the PATH with the install folders in front": 44.82,
+      "Claude lookup: the login shell is asked on every look while nothing is found": 42.38,
+      "Claude lookup: the desktop app's sign-in check runs whichever claude comes first on its PATH": 43.48,
+      "Claude lookup: a Windows npm launcher is started itself, not through its package": 45.67,
+      "Claude lookup: an npm package's entry outside the package folder is started": 56.16,
+      "Claude lookup: today's lookup runs after a shell answer that names no copy": 40.81,
+      "Claude lookup: a start PATH recorded empty is given to the shell as the system default": 38.1,
+      "Claude lookup: today's lookup takes five seconds of its own after a stalled shell": 56.63,
+      "Claude lookup: the lookup module reads a version through a shell": 50.15,
+      "Claude lookup: the setup wizard's check says ready without the sign-in check": 47.19
     }
   }
 }

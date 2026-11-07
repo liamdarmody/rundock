@@ -27,7 +27,7 @@ test('the funnel every agent spawn goes through passes on the environment it is 
   // spawnClaude hands its options to spawn unchanged but for `detached`, so
   // the environment an agent runs with is the one its caller built.
   const src = fs.readFileSync(path.join(ROOT, 'lib', 'runtime', 'claude.js'), 'utf8');
-  assert.match(src, /const proc = spawn\(resolveClaudeBin\(\), args, \{ \.\.\.options, detached: process\.platform !== 'win32' \}\);/);
+  assert.match(src, /const proc = spawn\(launch\.command, \[\.\.\.launch\.args, \.\.\.args\], \{ \.\.\.options, detached: process\.platform !== 'win32' \}\);/);
 });
 
 test('a routine is started with no conversation, even when the app was given one, and a conversation with its own', () => {
