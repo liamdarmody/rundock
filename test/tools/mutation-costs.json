@@ -1269,6 +1269,14 @@
       "Shell code: a cd into a working folder is not a base": 1.1,
       "Shell code: pushd and popd are not counted when the command cannot be lexed": 1.1,
       "Shell code: a cd to a variable is trusted as a base": 1.1
+    },
+    "mutate-routines-guards.js": {
+      "a period the last run already served is stepped over": 0.3,
+      "the suppression compares the time, not just the day": 0.3,
+      "the suppression compares the day, not just the time": 0.4,
+      "a weekly routine that already ran at its time on its day is not run again": 0.3,
+      "the suppression compares the minute, not just the hour": 0.3,
+      "a weekly routine is held by the time it ran, not by its weekday alone": 0.3
     }
   }
 }
