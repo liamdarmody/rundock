@@ -1268,7 +1268,13 @@
       "Claude lookup: a start PATH recorded empty is given to the shell as the system default": 38.1,
       "Claude lookup: today's lookup takes five seconds of its own after a stalled shell": 56.63,
       "Claude lookup: the lookup module reads a version through a shell": 50.15,
-      "Claude lookup: the setup wizard's check says ready without the sign-in check": 47.19
+      "Claude lookup: the setup wizard's check says ready without the sign-in check": 47.19,
+      "Claude lookup: a Windows npm launcher that cannot be resolved is started itself": 38.8,
+      "Claude lookup: the chat shows a launcher that cannot be started as a raw spawn error": 35.66,
+      "Claude lookup: a launcher that cannot be started is described by the raw error it met": 38.45,
+      "Claude lookup: the setup wizard's check says not signed in for a copy that cannot be started, and not why": 44.69,
+      "Claude lookup: a launcher that cannot be started is kept, so a copy installed afterwards needs a restart": 37.03,
+      "Claude lookup: a launcher that cannot be started is logged on every look": 39.44
     }
   }
 }

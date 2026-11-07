@@ -149,6 +149,9 @@ const FLOOR_READ = { src: path.join(ROOT, 'lib', 'runtime', 'claude-lookup.js'),
 // same lookup rather than running its own.
 const LOOKUP = { src: path.join(ROOT, 'lib', 'runtime', 'claude-lookup.js'), suite: 'test/unit/claude-lookup.test.js' };
 const LOOKUP_DESKTOP = { src: path.join(ROOT, 'electron', 'claude-check.js'), suite: 'test/unit/claude-lookup.test.js' };
+// A Windows npm install that cannot be started without a shell: what the chat
+// shows for it is the server's to word.
+const LOOKUP_CHAT = { src: path.join(ROOT, 'server.js'), suite: 'test/unit/claude-lookup.test.js' };
 const DEV_HOME = { src: path.join(ROOT, 'scripts', 'dev-paths.js'), suite: 'test/unit/code-mode-home-in-temp.test.js' };
 const SCAFFOLD_CM = { src: path.join(ROOT, 'lib', 'workspace', 'scaffold.js'), suite: 'test/unit/code-mode-boundary.test.js' };
 const CM_PARSE = { src: path.join(ROOT, 'scripts', 'code-mode-parse.js'), suite: 'test/unit/code-mode-verdict.test.js' };
@@ -3667,6 +3670,27 @@ const MUTATIONS = [
   [LOOKUP_DESKTOP, "Claude lookup: the setup wizard's check says ready without the sign-in check",
     "    if (!isClaudeAuthenticated()) return { status: 'not-authenticated' };\n",
     ''],
+  // A Windows npm install whose package entry, or a node.exe to run it with,
+  // cannot be found is never started, and the chat and the setup wizard say
+  // which copy and why.
+  [LOOKUP, 'Claude lookup: a Windows npm launcher that cannot be resolved is started itself',
+    '    return { command: null, args: [], refusal: cannotStartError(bin, reason) };\n',
+    '    return { command: bin, args: [] };\n'],
+  [LOOKUP_CHAT, 'Claude lookup: the chat shows a launcher that cannot be started as a raw spawn error',
+    "      } else if (err.code === 'CLAUDE_TOO_OLD' || err.code === 'CLAUDE_CANNOT_START') {\n",
+    "      } else if (err.code === 'CLAUDE_TOO_OLD') {\n"],
+  [LOOKUP, 'Claude lookup: a launcher that cannot be started is described by the raw error it met',
+    "    const reason = e.plain ? e.message : 'its npm package could not be checked';\n",
+    '    const reason = e.message;\n'],
+  [LOOKUP_DESKTOP, "Claude lookup: the setup wizard's check says not signed in for a copy that cannot be started, and not why",
+    "    if (why) return { status: 'cannot-start', message: why };\n",
+    ''],
+  [LOOKUP, 'Claude lookup: a launcher that cannot be started is kept, so a copy installed afterwards needs a restart',
+    '    forget();\n    return { command: null, args: [], refusal',
+    '    return { command: null, args: [], refusal'],
+  [LOOKUP, 'Claude lookup: a launcher that cannot be started is logged on every look',
+    '    if (!launchesLogged.has(bin)) {\n',
+    '    if (true) {\n'],
 ];
 const REPORTER = ['--test-reporter', 'spec'];
 
