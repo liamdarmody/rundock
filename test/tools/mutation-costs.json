@@ -213,7 +213,16 @@
       "contrast: the light working text takes the dark value": 0.2,
       "contrast: the link text is declared on :root alone": 0.3,
       "contrast: a paused row is dimmed as a whole again": 0.2,
-      "contrast: a paused row's avatar dims less than half": 0.2
+      "contrast: a paused row's avatar dims less than half": 0.2,
+      "a scope row is a div again": 1.2,
+      "a scope row restates a role and a tab stop a button already has": 0.8,
+      "a block is put inside a scope row's button": 0.8,
+      "the focus is not put back on the pressed row after the redraw": 0.8,
+      "a redraw nobody pressed pulls the focus into the panel": 0.7,
+      "the focus goes back to the first row rather than the pressed one": 0.8,
+      "a scope row loses the full width of the list": 0.8,
+      "a scope row centres what it holds, as a button does": 0.9,
+      "a scope row takes the browser's button type rather than the panel's": 0.9
     },
     "mutate-run-detail-guards.js": {
       "a run whose ending never ran is not painted as a failure": 1.3

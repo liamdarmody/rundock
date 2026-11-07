@@ -484,6 +484,109 @@ describe('a scope row is visibly not a roster row', () => {
   });
 });
 
+// ===== A SCOPE ROW IS A REAL BUTTON =====
+//
+// A row drawn as a div with a role and a tabindex took the focus and announced
+// itself as a button, and then did nothing for Enter or Space, because nothing
+// handled a key. A real button does both with no handler of its own. The
+// redraw a press causes replaces every row, so the panel also puts the focus
+// back on the row it was on: a keyboard user who pressed a scope is still on
+// that scope, not back at the top of the page.
+
+describe('a scope row is a real button', () => {
+  test('each row is a button of type button, with no role or tabindex standing in for one', () => {
+    const { doc, w, dom } = shell();
+    w.renderRoutinesPanel();
+    const rows = scopeRows(doc);
+    assert.ok(rows.length >= 3, 'sanity: All and the owners are drawn');
+    for (const row of rows) {
+      const which = row.getAttribute('data-scope');
+      assert.strictEqual(row.tagName, 'BUTTON', `the ${which} row is a ${row.tagName.toLowerCase()}, not a button`);
+      assert.strictEqual(row.getAttribute('type'), 'button', `the ${which} row would submit a form it sat in`);
+      assert.strictEqual(row.getAttribute('role'), null, `the ${which} row restates a role it already has`);
+      assert.strictEqual(row.getAttribute('tabindex'), null, `the ${which} row restates a tab stop it already has`);
+      assert.strictEqual(row.querySelector('div'), null, `the ${which} row holds a block, which a button may not`);
+    }
+    dom.window.close();
+  });
+
+  test('a crafted agent id travels whole in data-scope, selects its own scope and adds no element', () => {
+    // An agent id is a filename, so anything that can write one chooses it.
+    const crafted = 'x" onfocus="alert(1)"><img src=x>\'<b>';
+    const agents = roster();
+    agents[1] = Object.assign({}, agents[1], { id: crafted });
+    const { doc, w, dom } = shell({ agents });
+    w.renderRoutinesPanel();
+    const count = () => doc.querySelectorAll('#sidebar-routines *').length;
+    const before = count();
+    const row = scopeRows(doc).find((el) => el.getAttribute('data-scope') === crafted);
+    assert.ok(row, 'the crafted id did not arrive whole in data-scope');
+    assert.strictEqual(row.getAttribute('onfocus'), null, 'the crafted id wrote an attribute');
+    assert.strictEqual(doc.querySelector('#sidebar-routines img, #sidebar-routines b'), null, 'the crafted id wrote an element');
+    row.click();
+    assert.strictEqual(activeScope(doc), crafted, 'pressing the crafted row selected some other scope');
+    assert.strictEqual(count(), before, 'the redraw drew a different number of elements');
+    assert.strictEqual(doc.querySelector('#sidebar-routines img, #sidebar-routines b'), null, 'the redraw wrote an element');
+    dom.window.close();
+  });
+
+  test('pressing a row keeps the focus on that scope through the redraw', () => {
+    const { doc, w, dom } = shell();
+    w.renderRoutinesPanel();
+    const row = scopeRows(doc).find((el) => el.getAttribute('data-scope') === 'doc');
+    row.focus();
+    assert.strictEqual(doc.activeElement, row, 'sanity: the row takes the focus');
+    row.click();
+    assert.strictEqual(activeScope(doc), 'doc');
+    assert.notStrictEqual(doc.activeElement, row, 'sanity: the redraw replaced the row');
+    assert.strictEqual(doc.activeElement.getAttribute('data-scope'), 'doc', 'the focus fell off the panel');
+    dom.window.close();
+  });
+
+  test('a redraw nobody pressed leaves the focus where it was', () => {
+    const { doc, w, dom } = shell();
+    w.renderRoutinesPanel();
+    const elsewhere = doc.createElement('input');
+    doc.body.appendChild(elsewhere);
+    elsewhere.focus();
+    w.renderRoutinesPanel();
+    assert.strictEqual(doc.activeElement, elsewhere, 'a roster redraw pulled the focus into the panel');
+    dom.window.close();
+  });
+});
+
+describe('a scope row keeps its metrics as a button', () => {
+  // A button takes neither the page's type nor the full width of its column,
+  // and centres what it holds. The row states all three, so it lays out as
+  // the div it replaced did.
+  const sidebar = read('public', 'styles', 'components', 'sidebar.css');
+  const declarations = (selector) => {
+    const at = sidebar.indexOf(`\n${selector} {`);
+    assert.ok(at !== -1, `sidebar.css has no ${selector} rule`);
+    const body = sidebar.slice(sidebar.indexOf('{', at) + 1, sidebar.indexOf('}', at));
+    const out = new Map();
+    for (const d of body.split(';')) {
+      const i = d.indexOf(':');
+      if (i > 0) out.set(d.slice(0, i).trim(), d.slice(i + 1).trim());
+    }
+    return out;
+  };
+
+  test('full width, start-aligned, and the panel\'s own font size and line height', () => {
+    const row = declarations('.scope-item');
+    assert.strictEqual(row.get('width'), '100%');
+    assert.strictEqual(row.get('text-align'), 'start');
+    assert.strictEqual(row.get('font'), 'inherit');
+  });
+
+  test('at rest it draws no fill and no edge of its own, as the div did', () => {
+    const row = declarations('.scope-item');
+    assert.ok(!row.has('background') && !row.has('border'), 'the row draws a rest fill or edge of its own');
+    const base = read('public', 'styles', 'base.css');
+    assert.ok(base.includes('button { border: none; background: none;'), 'the base button reset is gone, so a row would draw the browser\'s button');
+  });
+});
+
 // ===========================================================================
 // THE SURFACES THAT DO NOT ASK WHETHER A ROUTINE IS BEING SERVED
 // ===========================================================================

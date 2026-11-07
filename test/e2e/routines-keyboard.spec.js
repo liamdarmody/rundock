@@ -135,3 +135,153 @@ test('in the light theme the run screen\'s context line, Took line and guidance 
     await unseed(routines, seeded);
   }
 });
+
+// ===== THE SCOPE ROWS, FROM THE KEYBOARD =====
+//
+// Two owners, so the panel draws a row for each beside All. Wren's routine and
+// the orchestrator's are told apart by name, and every check on the list is
+// about which of the two is listed, so a routine another spec left behind
+// changes nothing here.
+const WREN = { agentId: 'wren', name: 'Keyboard wren', prompt: 'keyboard e2e wren' };
+const LEAD = { agentId: 'default', name: 'Keyboard lead', prompt: 'keyboard e2e lead' };
+
+async function openRoutines(page) {
+  await page.goto('/');
+  await page.click('.nav-item[data-nav="routines"]');
+  await expect(page.locator('#sidebar-routines .scope-item[data-scope="wren"]')).toBeVisible();
+  await expect(page.locator('#sidebar-routines .scope-item[data-scope="default"]')).toBeVisible();
+}
+
+const focusedScope = (page) => page.evaluate(() => {
+  const el = document.activeElement;
+  return el && el.closest('#sidebar-routines') ? el.getAttribute('data-scope') : null;
+});
+const activeScope = (page) => page.locator('#sidebar-routines .scope-item.active').getAttribute('data-scope');
+// Whether the list holds a routine, by the name its sentence ends on.
+const lists = async (page, name) => (await page.locator('#view-routines .routine-row .rr-sentence')
+  .allTextContents()).some((t) => t.includes(name));
+
+// Tab (or Shift+Tab) until the focus is on the named scope row, from wherever
+// it is, and fail by name if the row is never reached.
+async function tabTo(page, scope, key = 'Tab') {
+  for (let i = 0; i < 8; i++) {
+    if (await focusedScope(page) === scope) return;
+    await page.keyboard.press(key);
+  }
+  expect(await focusedScope(page), `${key} never reached the ${scope} scope row`).toBe(scope);
+}
+
+test.describe('the scope rows from the keyboard', () => {
+  let seeded;
+  test.beforeAll(async () => {
+    seeded = await seed([WREN, LEAD]);
+    expect(seeded.version, 'the server must resolve the stub runtime').toBe(STUB_VERSION);
+  });
+  test.afterAll(async () => { if (seeded) await unseed([WREN, LEAD], seeded); });
+
+  test('Enter selects a scope, Space selects All again, and the full list comes back', async ({ page }) => {
+    const errors = [];
+    page.on('pageerror', (e) => errors.push(e.message));
+    await openRoutines(page);
+    await page.locator('#routines-add-btn').focus();
+    await page.keyboard.press('Tab');
+    expect(await focusedScope(page), 'Tab from the header control lands on All').toBe('all');
+
+    // The ring a keyboard focus draws: 2px of the control accent, inside the row.
+    const ring = await page.evaluate(() => {
+      const cs = getComputedStyle(document.activeElement);
+      const probe = document.createElement('span');
+      probe.style.transition = 'none';
+      probe.style.color = 'var(--accent-control)';
+      document.body.appendChild(probe);
+      const want = getComputedStyle(probe).color;
+      probe.remove();
+      return { style: cs.outlineStyle, width: cs.outlineWidth, offset: cs.outlineOffset, colour: cs.outlineColor, want };
+    });
+    expect(ring).toEqual({ style: 'solid', width: '2px', offset: '-2px', colour: ring.want, want: ring.want });
+
+    await tabTo(page, 'wren');
+    await page.keyboard.press('Enter');
+    await expect.poll(() => activeScope(page), { message: 'Enter on the Wren row selects Wren' }).toBe('wren');
+    expect(await lists(page, WREN.name), 'Wren\'s routine is listed').toBe(true);
+    expect(await lists(page, LEAD.name), 'the lead\'s routine is not listed').toBe(false);
+    expect(await focusedScope(page), 'the focus stays on the row that was pressed').toBe('wren');
+
+    await tabTo(page, 'all', 'Shift+Tab');
+    await page.keyboard.press('Space');
+    await expect.poll(() => activeScope(page), { message: 'Space on All selects All' }).toBe('all');
+    expect([await lists(page, WREN.name), await lists(page, LEAD.name)], 'All lists both routines again').toEqual([true, true]);
+
+    await tabTo(page, 'default');
+    await page.keyboard.press('Space');
+    await expect.poll(() => activeScope(page), { message: 'Space on an owner selects that owner' }).toBe('default');
+    expect(await lists(page, LEAD.name), 'the lead\'s routine is listed').toBe(true);
+    expect(await lists(page, WREN.name), 'Wren\'s routine is not listed').toBe(false);
+    expect(errors).toEqual([]);
+  });
+
+  test('Enter twice on one scope selects it once, and only ever draws that scope', async ({ page }) => {
+    const errors = [];
+    page.on('pageerror', (e) => errors.push(e.message));
+    await openRoutines(page);
+    await page.evaluate(() => {
+      const real = window.setRoutinesScope;
+      window.scopesDrawn = [];
+      window.setRoutinesScope = (id) => { window.scopesDrawn.push(id); return real(id); };
+    });
+    await page.locator('#sidebar-routines .scope-item[data-scope="wren"]').focus();
+    await page.keyboard.press('Enter');
+    await page.keyboard.press('Enter');
+    await expect.poll(() => page.evaluate(() => window.scopesDrawn), { message: 'both presses reach the Wren row' })
+      .toEqual(['wren', 'wren']);
+    expect(await activeScope(page)).toBe('wren');
+    expect(await lists(page, WREN.name), 'Wren\'s routine is listed').toBe(true);
+    expect(await lists(page, LEAD.name), 'the lead\'s routine is not listed').toBe(false);
+    expect(errors).toEqual([]);
+  });
+
+  test('Tab from a selected scope moves into that scope\'s routines', async ({ page }) => {
+    await openRoutines(page);
+    await page.locator('#sidebar-routines .scope-item[data-scope="wren"]').focus();
+    await page.keyboard.press('Enter');
+    await expect.poll(() => activeScope(page)).toBe('wren');
+    let row = null;
+    for (let i = 0; i < 12 && row === null; i++) {
+      await page.keyboard.press('Tab');
+      row = await page.evaluate(() => {
+        const r = document.activeElement && document.activeElement.closest('#view-routines .routine-row');
+        return r ? r.querySelector('.rr-sentence').textContent : null;
+      });
+    }
+    expect(row, 'Tab never reached a routine row').not.toBeNull();
+    expect(row.includes(LEAD.name), 'Tab reached a routine of a scope that is not selected').toBe(false);
+    expect(await lists(page, LEAD.name)).toBe(false);
+  });
+
+  test('a scope row lays out as it did: full width, the panel\'s type, and its fills', async ({ page }) => {
+    await openRoutines(page);
+    const got = await page.evaluate(() => {
+      const list = document.querySelector('#sidebar-routines .routines-scope-list');
+      const row = list.querySelector('.scope-item[data-scope="wren"]');
+      const lcs = getComputedStyle(list);
+      const inner = list.clientWidth - parseFloat(lcs.paddingLeft) - parseFloat(lcs.paddingRight);
+      const cs = getComputedStyle(row);
+      return {
+        fullWidth: Math.abs(row.getBoundingClientRect().width - inner) < 0.5,
+        align: cs.textAlign,
+        size: cs.fontSize === lcs.fontSize,
+        lineHeight: cs.lineHeight === lcs.lineHeight,
+        rest: cs.backgroundColor,
+        edge: cs.borderTopStyle,
+      };
+    });
+    expect(got).toEqual({ fullWidth: true, align: 'start', size: true, lineHeight: true, rest: 'rgba(0, 0, 0, 0)', edge: 'none' });
+
+    // The selected fill on All, which the page opens on, and the hover fill.
+    const fill = (selector) => page.locator(selector).evaluate((el) => getComputedStyle(el).backgroundColor);
+    expect(await fill('#sidebar-routines .scope-item.active')).toBe(await tokenColour(page, 'background-color', '--accent-glow'));
+    await page.locator('#sidebar-routines .scope-item[data-scope="wren"]').hover();
+    const hover = await tokenColour(page, 'background-color', '--elevated');
+    await expect.poll(() => fill('#sidebar-routines .scope-item[data-scope="wren"]'), { message: 'the hover fill' }).toBe(hover);
+  });
+});

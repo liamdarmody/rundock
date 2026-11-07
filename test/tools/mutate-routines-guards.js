@@ -1285,6 +1285,37 @@ const MUTATIONS = [
     '.routine-row.paused .avatar { opacity: 0.5; }',
     '.routine-row.paused .avatar { opacity: 0.72; }'],
 
+  // ===== A SCOPE ROW IS A REAL BUTTON =====
+  // Enter and Space press a button with no handler of its own; a div with a
+  // role and a tabindex took the focus and did nothing for either key.
+  [PANEL, 'a scope row is a div again',
+    '  return `<button type="button" class="scope-item',
+    '  return `<div role="button" tabindex="0" class="scope-item'],
+  [PANEL, 'a scope row restates a role and a tab stop a button already has',
+    '    + ` onclick="setRoutinesScope(this.dataset.scope)">`',
+    '    + ` role="button" tabindex="0" onclick="setRoutinesScope(this.dataset.scope)">`'],
+  [PANEL, 'a block is put inside a scope row\'s button',
+    '`<span class="scope-all-icon">${ALL_ICON}</span>`',
+    '`<div class="scope-all-icon">${ALL_ICON}</div>`'],
+  [PANEL, 'the focus is not put back on the pressed row after the redraw',
+    '  if (again) again.focus();\n',
+    ''],
+  [PANEL, 'a redraw nobody pressed pulls the focus into the panel',
+    '  if (kept === undefined) return;\n',
+    ''],
+  [PANEL, 'the focus goes back to the first row rather than the pressed one',
+    'rows.find((el) => el.dataset.scope === kept) ||',
+    'rows[0] ||'],
+  [STYLES_PANEL, 'a scope row loses the full width of the list',
+    'gap: 8px; width: 100%; padding: 9px 10px;',
+    'gap: 8px; padding: 9px 10px;'],
+  [STYLES_PANEL, 'a scope row centres what it holds, as a button does',
+    'font: inherit; text-align: start;',
+    'font: inherit;'],
+  [STYLES_PANEL, 'a scope row takes the browser\'s button type rather than the panel\'s',
+    'color: var(--text-1); font: inherit;',
+    'color: var(--text-1);'],
+
 ];
 
 // The reporter is named explicitly rather than left to the default, which
