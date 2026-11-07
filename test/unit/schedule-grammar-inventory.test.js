@@ -1,19 +1,19 @@
 'use strict';
 // Every copy of the schedule grammar, asked the same questions.
 //
-// A schedule is read in five places: the scheduler (parseSchedule), the
-// writer's save check (isWritableSchedule), the editor's reopen
-// (readSchedule), the row's sentence (scheduleWords) and the package install
-// disclosure. Nothing else ties them together, so this table pins every copy's
-// verdict on every row: a form added to one copy and not to another fails here,
-// on the row and the copy that disagree.
+// A schedule is read by the scheduler (parseSchedule), the writer's save check
+// (isWritableSchedule), the editor's reopen (readSchedule), the row's sentence
+// (scheduleWords, which reads through the editor's reopen) and the package
+// install disclosure. Nothing else ties them together, so this table pins every
+// reader's verdict on every row: a form added to one and not to another fails
+// here, on the row and the reader that disagree.
 //
 // THE SCHEDULER DECIDES WHAT RUNS. The save check may be stricter, never
 // looser: everything it accepts, the scheduler reads. The editor's reopen and
 // the row's sentence read only what the editor can build, so they answer
-// nothing for a schedule the editor cannot show, which today includes both
-// monthly forms. The disclosure paraphrases the daily and weekly forms and
-// quotes anything else as written.
+// nothing for a schedule the editor cannot show: a minute off the half hour, or
+// a day the scheduler does not read. The disclosure paraphrases the daily and
+// weekly forms and quotes anything else as written.
 
 const { test } = require('node:test');
 const assert = require('node:assert');
@@ -44,14 +44,19 @@ function read(schedule) {
 }
 
 const monthly = (day, hour = 9, minute = 0) => ({ kind: 'monthly', day, hour, minute });
+// What the editor reopens a monthly schedule as, and the row's sentence for it.
+const reopen = (day, time = '09:00') => ({ frequency: 'month', day, time });
+const ordinal = (n) => n + (n % 10 === 1 && n !== 11 ? 'st' : n % 10 === 2 && n !== 12 ? 'nd' : n % 10 === 3 && n !== 13 ? 'rd' : 'th');
 
 // [schedule, scheduler, save check, editor reopen, row sentence, disclosure]
 const ROWS = [];
 for (let n = 1; n <= 28; n++) {
-  ROWS.push([`on day ${n} of every month at 09:00`, monthly(n), true, null, null, 'quoted']);
+  ROWS.push([`on day ${n} of every month at 09:00`, monthly(n), true,
+    reopen(String(n)), `Every month on the ${ordinal(n)} at 9:00am`, 'quoted']);
 }
 ROWS.push(
-  ['on the last day of every month at 09:00', monthly('last'), true, null, null, 'quoted'],
+  ['on the last day of every month at 09:00', monthly('last'), true,
+    reopen('last'), 'Every month on the last day at 9:00am', 'quoted'],
 
   // Not in every month, so never read: Rundock will not move one to another date.
   ['on day 0 of every month at 09:00', null, false, null, null, 'quoted'],
@@ -61,13 +66,16 @@ ROWS.push(
   ['every month at 09:00', null, false, null, null, 'quoted'],
 
   // Case is folded, as it is for the daily and weekly forms.
-  ['On Day 15 Of Every Month At 09:00', monthly(15), true, null, null, 'quoted'],
-  ['ON THE LAST DAY OF EVERY MONTH AT 09:00', monthly('last'), true, null, null, 'quoted'],
+  ['On Day 15 Of Every Month At 09:00', monthly(15), true,
+    reopen('15'), 'Every month on the 15th at 9:00am', 'quoted'],
+  ['ON THE LAST DAY OF EVERY MONTH AT 09:00', monthly('last'), true,
+    reopen('last'), 'Every month on the last day at 9:00am', 'quoted'],
   // Spacing is not folded, by any copy.
   ['on day 15 of every  month at 09:00', null, false, null, null, 'quoted'],
   ['on the last day of  every month at 09:00', null, false, null, null, 'quoted'],
   // One leading zero on the day is read as the day without it, and no more.
-  ['on day 05 of every month at 09:00', monthly(5), true, null, null, 'quoted'],
+  ['on day 05 of every month at 09:00', monthly(5), true,
+    reopen('5'), 'Every month on the 5th at 9:00am', 'quoted'],
   ['on day 005 of every month at 09:00', null, false, null, null, 'quoted'],
   // Any minute is read, as it is for the other forms; the editor offers the half hour.
   ['on day 15 of every month at 09:07', monthly(15, 9, 7), true, null, null, 'quoted'],
@@ -113,17 +121,17 @@ test('a leading zero on the day reads as the same schedule as the day without it
     scheduler.parseSchedule('on day 5 of every month at 09:00'));
 });
 
-// ===== NO SIXTH COPY =====
+// ===== NO FIFTH COPY =====
 // A copy of the grammar is a regular expression that reads "every ... at" up to
-// the group that captures the time. Five files hold one today; a sixth would be
-// a sixth place for the forms to drift, and it fails here until it is either
-// removed or added to the table above.
+// the group that captures the time. Four files hold one today; a fifth would be
+// a fifth place for the forms to drift, and it fails here until it is either
+// removed or added to the table above. The row's sentence reads through the
+// editor's copy rather than holding its own.
 const COPIES = [
   'lib/agents/routines.js',
   'lib/scheduler.js',
   'public/packages-install-model.js',
   'public/routine-editor-model.js',
-  'public/routines-model.js',
 ];
 
 function sourceFiles(dir) {
@@ -142,7 +150,7 @@ function holdsAGrammar(rel) {
     .some(line => /every.* at \(/.test(line));
 }
 
-test('the grammar is copied into these five files and no others', () => {
+test('the grammar is copied into these four files and no others', () => {
   const found = [...sourceFiles('lib'), ...sourceFiles('public')].filter(holdsAGrammar).sort();
   assert.deepStrictEqual(found, COPIES,
     'a copy of the schedule grammar appeared, or one went; add it to the table above or remove it');

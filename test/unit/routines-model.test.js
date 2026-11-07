@@ -305,6 +305,17 @@ describe('the rest of the row', () => {
     assert.strictEqual(m.scheduleWords('every monday at 08:00'), 'Every Monday at 8:00am');
   });
 
+  // A monthly row's sentence, for a day and for the last day, in the editor's
+  // words: an ordinal, never the "day 15" the file says.
+  test('a monthly routine reads as every month on its day', () => {
+    assert.strictEqual(m.routineSentence({ schedule: 'on day 15 of every month at 09:00', name: 'Context review' }),
+      'Every month on the 15th at 9:00am, run: Context review');
+    assert.strictEqual(m.routineSentence({ schedule: 'on the last day of every month at 18:00', name: 'Context review' }),
+      'Every month on the last day at 6:00pm, run: Context review');
+    assert.strictEqual(m.scheduleWords('on day 1 of every month at 09:00'), 'Every month on the 1st at 9:00am');
+    assert.strictEqual(m.scheduleWords('on day 31 of every month at 09:00'), null);
+  });
+
   // AC-11. Delete says what stops, what does not, and that it is final.
   test('delete states what stops', () => {
     const confirm = m.deleteConfirmation({

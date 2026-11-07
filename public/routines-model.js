@@ -553,19 +553,15 @@
    * The plain sentence a routine reads as: its schedule, then the skill it
    * runs.
    *
-   * BOTH HALVES ARE LOOKED UP IN THE EDITOR'S OWN LISTS, never formatted from
-   * the string. A schedule the editor never offered has no plain words, so it
+   * READ THROUGH THE EDITOR'S OWN REOPEN AND WORDS, never formatted from the
+   * string. A schedule the editor never offered has no plain words, so it
    * assembles into nothing rather than into a sentence that reads as though
-   * the product understood it.
+   * the product understood it, and the row says a schedule exactly as the
+   * editor's preview does.
    */
   function scheduleWords(schedule) {
-    if (!schedule || typeof schedule !== 'string') return null;
-    const parts = /^every ([a-z]+) at (\d{2}:\d{2})$/.exec(schedule.toLowerCase());
-    if (!parts) return null;
-    const freq = editor.FREQUENCIES.filter(f => f.value === parts[1])[0];
-    const time = editor.times().filter(t => t.value === parts[2])[0];
-    if (!freq || !time) return null;
-    return `Every ${freq.label} at ${time.label}`;
+    const words = editor.whenWords(editor.readSchedule(schedule));
+    return words ? words.charAt(0).toUpperCase() + words.slice(1) : null;
   }
 
   /**

@@ -180,6 +180,19 @@ describe('routine editor: choosing a skill', () => {
   });
 });
 
+// Every choice the builder offers: each frequency at each time, and a monthly
+// one on each of its days.
+function everyChoice() {
+  const out = [];
+  for (const frequency of model.FREQUENCIES) {
+    for (const time of model.times()) {
+      if (frequency.value !== 'month') out.push({ frequency: frequency.value, time: time.value });
+      else for (const day of model.monthDays()) out.push({ frequency: 'month', day: day.value, time: time.value });
+    }
+  }
+  return out;
+}
+
 describe('routine editor: the schedule is built, not typed', () => {
   // AC-3
   test('a schedule is assembled from the offered words', () => {
@@ -217,12 +230,11 @@ describe('routine editor: the schedule is built, not typed', () => {
   // the editor writes routines that never fire and says nothing. Pinned
   // against the format the scheduler documents rather than against itself.
   test('every offered combination matches the schedule format the scheduler reads', () => {
-    const recognised = /^every (day|monday|tuesday|wednesday|thursday|friday|saturday|sunday) at ([01]\d|2[0-3]):[0-5]\d$/;
-    for (const frequency of model.FREQUENCIES) {
-      for (const time of model.times()) {
-        const built = model.buildSchedule({ frequency: frequency.value, time: time.value });
-        assert.match(built, recognised, `${frequency.value} at ${time.value} is not a schedule the scheduler reads`);
-      }
+    const recognised = new RegExp('^(every (day|monday|tuesday|wednesday|thursday|friday|saturday|sunday)'
+      + '|on day ([1-9]|1\\d|2[0-8]) of every month|on the last day of every month) at ([01]\\d|2[0-3]):[0-5]\\d$');
+    for (const choice of everyChoice()) {
+      const built = model.buildSchedule(choice);
+      assert.match(built, recognised, `${JSON.stringify(choice)} is not a schedule the scheduler reads`);
     }
   });
 
@@ -266,14 +278,11 @@ describe('routine editor: a stored schedule read back into the builder', () => {
   // the same string. Nothing the editor can write is a schedule it then cannot
   // reopen.
   test('every schedule the builder can produce survives the round trip', () => {
-    for (const frequency of model.FREQUENCIES) {
-      for (const time of model.times()) {
-        const built = model.buildSchedule({ frequency: frequency.value, time: time.value });
-        assert.deepStrictEqual(model.readSchedule(built),
-          { frequency: frequency.value, time: time.value },
-          `${built} did not read back as the values that built it`);
-        assert.strictEqual(model.buildSchedule(model.readSchedule(built)), built);
-      }
+    for (const choice of everyChoice()) {
+      const built = model.buildSchedule(choice);
+      assert.deepStrictEqual(model.readSchedule(built), choice,
+        `${built} did not read back as the values that built it`);
+      assert.strictEqual(model.buildSchedule(model.readSchedule(built)), built);
     }
   });
 
@@ -541,6 +550,134 @@ describe('routine editor: what save produces', () => {
   });
 });
 
+// ===== A MONTHLY SCHEDULE =====
+//
+// The scheduler reads two monthly forms: a day from 1 to 28, and the last day.
+// The builder offers both as a third dropdown that only month has, and writes
+// the day without a leading zero.
+
+// A routine whose file says day 31, as the roster carries it: the schedule as
+// written, and the server's reading of the day and time it names.
+const DAY_31 = { schedule: 'on day 31 of every month at 09:00', unreadableMonthDay: { day: 31, time: '09:00' } };
+
+describe('routine editor: a monthly schedule', () => {
+  test('month is offered last, after Sunday, and nothing before it moves', () => {
+    assert.deepStrictEqual(model.FREQUENCIES.map(f => f.value),
+      ['day', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday', 'month']);
+    assert.strictEqual(model.FREQUENCIES[8].label, 'month');
+  });
+
+  test('the days are 1st to 28th, then the last day after a rule', () => {
+    const days = model.monthDays();
+    assert.deepStrictEqual(days.map(d => d.label), [
+      '1st', '2nd', '3rd', '4th', '5th', '6th', '7th', '8th', '9th', '10th',
+      '11th', '12th', '13th', '14th', '15th', '16th', '17th', '18th', '19th', '20th',
+      '21st', '22nd', '23rd', '24th', '25th', '26th', '27th', '28th', 'last day',
+    ]);
+    assert.deepStrictEqual(days.map(d => d.value),
+      [...Array.from({ length: 28 }, (_, i) => String(i + 1)), 'last']);
+    assert.deepStrictEqual(days.filter(d => d.afterRule).map(d => d.value), ['last'],
+      'the rule sits before the last day and nowhere else');
+  });
+
+  test('choosing month starts on the 1st and keeps the time; any other frequency drops the day', () => {
+    assert.deepStrictEqual(model.chooseFrequency({ frequency: 'day', day: null, time: '07:30' }, 'month'),
+      { frequency: 'month', day: '1', time: '07:30' });
+    assert.deepStrictEqual(model.chooseFrequency({ frequency: 'month', day: '15', time: '07:30' }, 'month'),
+      { frequency: 'month', day: '15', time: '07:30' }, 'choosing month again keeps the day already chosen');
+    assert.deepStrictEqual(model.chooseFrequency({ frequency: 'month', day: '15', time: '07:30' }, 'day'),
+      { frequency: 'day', day: null, time: '07:30' });
+    assert.deepStrictEqual(model.chooseFrequency({ frequency: 'month', day: 'last', time: '18:00' }, 'friday'),
+      { frequency: 'friday', day: null, time: '18:00' });
+  });
+
+  test('the preview names the day, and reads its last clause off the chosen option', () => {
+    const local = model.runOnOption('local');
+    assert.strictEqual(local.sentence, 'this computer');
+    assert.strictEqual(
+      model.previewSentence({ frequency: 'month', day: '15', time: '09:00', skillName: 'Context review', runOn: 'local' }),
+      `Run Context review every month on the 15th at 9:00am, on ${local.sentence}.`);
+    assert.strictEqual(
+      model.previewSentence({ frequency: 'month', day: 'last', time: '18:00', skillName: 'Context review', runOn: 'local' }),
+      'Run Context review every month on the last day at 6:00pm, on this computer.');
+    assert.strictEqual(
+      model.previewSentence({ frequency: 'month', time: '09:00', skillName: 'Context review', runOn: 'local' }), null,
+      'a month with no day is not a schedule, so there is no sentence to show');
+  });
+
+  test('the grey note ends on the monthly catch-up for month, and on the same-day one otherwise', () => {
+    const rule = 'Rundock only runs the routines of the workspace that is open, '
+      + "so this one's do not run while you are elsewhere. ";
+    assert.strictEqual(model.scheduleStepFields({ frequency: 'month' }).workspaceCaveat,
+      rule + 'A missed slot is caught up the next time Rundock is open that month.');
+    for (const frequency of ['day', 'monday', 'sunday', undefined]) {
+      assert.strictEqual(model.scheduleStepFields({ frequency }).workspaceCaveat,
+        rule + 'A missed slot is caught up the same day you return.', `the note for ${frequency}`);
+    }
+    assert.strictEqual(model.scheduleStepFields().workspaceCaveat, model.WORKSPACE_CAVEAT);
+  });
+
+  test('the saved text names the day without a leading zero, or the last day', () => {
+    assert.strictEqual(model.buildSchedule({ frequency: 'month', day: '5', time: '09:00' }),
+      'on day 5 of every month at 09:00');
+    assert.strictEqual(model.buildSchedule({ frequency: 'month', day: '28', time: '23:30' }),
+      'on day 28 of every month at 23:30');
+    assert.strictEqual(model.buildSchedule({ frequency: 'month', day: 'last', time: '00:00' }),
+      'on the last day of every month at 00:00');
+    for (const day of [undefined, null, '', '0', '05', '29', '31', 'first', 5]) {
+      assert.strictEqual(model.buildSchedule({ frequency: 'month', day, time: '09:00' }), null,
+        `day ${JSON.stringify(day)} was not offered, so it builds nothing`);
+    }
+    assert.strictEqual(model.buildSchedule({ frequency: 'month', day: '5', time: '09:07' }), null);
+  });
+
+  test('a monthly schedule on disk reopens on its day and time, and one the builder cannot show does not', () => {
+    assert.deepStrictEqual(model.readSchedule('on day 15 of every month at 09:00'),
+      { frequency: 'month', day: '15', time: '09:00' });
+    assert.deepStrictEqual(model.readSchedule('on day 05 of every month at 09:00'),
+      { frequency: 'month', day: '5', time: '09:00' }, 'one leading zero is read, as the scheduler reads it');
+    assert.deepStrictEqual(model.readSchedule('ON THE LAST DAY OF EVERY MONTH AT 18:30'),
+      { frequency: 'month', day: 'last', time: '18:30' });
+    for (const stored of [
+      'on day 29 of every month at 09:00',
+      'on day 31 of every month at 09:00',
+      'on day 0 of every month at 09:00',
+      'on day 005 of every month at 09:00',
+      'on day 15 of every month at 09:07',
+      'on day 15 of every  month at 09:00',
+      'every month at 09:00',
+      'run on day 15 of every month at 09:00',
+    ]) {
+      assert.strictEqual(model.readSchedule(stored), null, `${stored} must not reopen as values`);
+    }
+  });
+
+  // A day the scheduler never reads, typed into the file by hand. The roster
+  // carries the server's reading of it, and the editor opens on the nearest
+  // schedule it can build, saying so; the file is untouched until a save.
+  test('a hand-typed day 29 to 31 reopens on month and the last day, at its own time when offered', () => {
+    assert.deepStrictEqual(model.reopenSchedule(DAY_31), { frequency: 'month', day: 'last', time: '09:00' });
+    assert.deepStrictEqual(model.reopenSchedule({
+      schedule: 'on day 30 of every month at 09:07', unreadableMonthDay: { day: 30, time: '09:07' },
+    }), { frequency: 'month', day: 'last', time: null }, 'a time the builder cannot show leaves the default standing');
+    assert.strictEqual(model.storedScheduleNote(DAY_31),
+      "This routine's schedule, on day 31 of every month at 09:00, is not one this editor can build. "
+      + 'The last day of the month is selected instead. Saving replaces it.');
+  });
+
+  test('any other unreadable schedule keeps today\'s note and the defaults', () => {
+    assert.strictEqual(model.reopenSchedule({ schedule: 'every month at 09:00' }), null);
+    assert.strictEqual(model.reopenSchedule({ schedule: 'on day 31 of every month at 09:00' }), null,
+      'without the server\'s reading, the day is not read here');
+    assert.deepStrictEqual(model.reopenSchedule({ schedule: 'every monday at 07:00' }),
+      { frequency: 'monday', time: '07:00' });
+    assert.strictEqual(model.reopenSchedule(null), null);
+    assert.strictEqual(model.storedScheduleNote({ schedule: 'every month at 09:00' }),
+      "This routine's schedule, every month at 09:00, is not one this editor can build. "
+      + 'Saving replaces it with the one above.');
+  });
+});
+
 describe('routine editor: the words it ships', () => {
   // AC-12. The repository's check (npm run check:refs) runs over every tracked
   // file and is the enforcement. This narrows it to the copy this card adds
@@ -569,6 +706,10 @@ describe('routine editor: the words it ships', () => {
       model.STEP_LEADS,
       model.UNASSIGNED_REASON,
       model.storedScheduleNote({ schedule: 'every fortnight at 07:00' }),
+      model.monthDays(),
+      model.previewSentence({ frequency: 'month', day: 'last', time: '07:00', skillName: 'A skill', runOn: 'local' }),
+      model.scheduleStepFields({ frequency: 'month' }).workspaceCaveat,
+      model.storedScheduleNote(DAY_31),
     ]);
   }
 

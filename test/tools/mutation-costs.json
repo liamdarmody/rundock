@@ -170,6 +170,24 @@
       "the request filter reaches extension frames only, never the app": 3.9,
       "WebRTC is off for the window": 2.6
     },
+    "mutate-routine-editor-guards.js": {
+      "the preview sentence reads the run-on words off the option": 0.3,
+      "the time zone reaches the page": 1.3,
+      "the step carries the caveat, so a render of the step cannot drop it": 1,
+      "the day dropdown offers no day after the 28th": 0.2,
+      "the monthly catch-up note is for month only": 0.2,
+      "leaving month drops its day": 0.2,
+      "the day is looked up, never taken from the input": 0.2,
+      "a stored monthly schedule is read whole, not found inside a longer line": 0.2,
+      "only the server's day 29 to 31 reopens on the last day": 0.2,
+      "only the server's day 29 to 31 gets the last-day note": 0.2,
+      "the day dropdown is drawn for month only": 1,
+      "the rule before the last day is drawn": 1,
+      "a new monthly routine saves the day it shows": 1,
+      "an edited monthly routine saves the day it shows": 1,
+      "Edit schedule opens on the day it read": 1,
+      "choosing a frequency follows the model's rule for the day": 1
+    },
     "mutate-routines-guards.js": {
       "a period the last run already served is stepped over": 0.3,
       "the suppression compares the time, not just the day": 0.3,
@@ -185,7 +203,9 @@
       "the monthly pattern is matched after the weekly one": 0.4,
       "the last day is computed as day 30": 0.3,
       "dueAt is dropped from the record": 1.4,
-      "the owed line ignores the consent moment": 1.2
+      "the owed line ignores the consent moment": 1.2,
+      "a stored schedule is looked up rather than split apart": 1.2,
+      "both halves of the schedule are looked up, never formatted from the string": 0.2
     },
     "mutate-rundock-ui-guards.js": {
       "an alert with an action aligns message and action on the first baseline": 4.1,
