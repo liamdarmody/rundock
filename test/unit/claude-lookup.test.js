@@ -1145,7 +1145,7 @@ function unstartable(c) {
 
 describe('a Windows npm install that cannot be started without a shell says so, and starts nothing', { skip: POSIX }, () => {
   for (const c of UNSTARTABLE) {
-    test(`${c.what}: each chat says this copy cannot be started and why, nothing is run, and it is logged once`, async () => {
+    test(`${c.what}: each chat and the sign-in check say this copy cannot be started and why, nothing is run, and it is logged once`, async () => {
       const { m, npm, reason } = unstartable(c);
       const notice = cannotStart(npm.bin, reason);
       await onWindows(m, [npm], async (rt) => {
@@ -1155,6 +1155,9 @@ describe('a Windows npm install that cannot be started without a shell says so, 
           assert.strictEqual(error.message, notice, `${which} says which copy and why`);
           assert.ok(closed && proc.pid === undefined, `${which} ends with nothing started`);
         }
+        assert.strictEqual(signInCheck()(), false, 'the sign-in check runs nothing and says not signed in');
+        assert.deepStrictEqual(claudeCheck().wizardCheckRuntimes().claude, { status: 'cannot-start', message: notice },
+          'and the setup wizard\'s check says which copy and why');
       }, { whereFails: c.whereFails, logged: [`${npm.bin}: ${reason}`] });
       assert.deepStrictEqual(npm.runs(), [], 'the launcher was never run, so nothing went through a shell');
       if (npm.node) assert.deepStrictEqual(npm.node.runs(), [], 'and nothing else was started');
@@ -1192,6 +1195,45 @@ describe('a Windows npm install that cannot be started without a shell says so, 
     }, { whereFails: true, logged: [npm.bin] });
     assert.deepStrictEqual(native.chats().map((r) => r.args), [CHAT_ARGS], 'the native copy, with the arguments');
     assert.deepStrictEqual(npm.runs(), [], 'and the launcher was never run');
+  });
+
+  test('the next step in the setup wizard: while it says this copy cannot be started, installing the native claude.exe makes its next check signed in', async () => {
+    const { m, npm, reason } = unstartable(UNSTARTABLE.find((c) => c.whereFails));
+    const native = makeClaude(m.dir('native'), CURRENT, 'claude.exe');
+    await onWindows(m, [npm], async () => {
+      assert.deepStrictEqual(claudeCheck().wizardCheckRuntimes().claude, { status: 'cannot-start', message: cannotStart(npm.bin, reason) });
+      windows(m, [npm, native]);
+      assert.deepStrictEqual(claudeCheck().wizardCheckRuntimes().claude, { status: 'ready' }, 'the next poll finds the native copy and signs in through it');
+    }, { whereFails: true, logged: [npm.bin] });
+    assert.deepStrictEqual(native.chats().map((r) => r.args), [SIGN_IN_ARGS]);
+    assert.deepStrictEqual(npm.runs(), []);
+  });
+
+  test('the setup wizard shows the reason, as text, in place of the sign-in step, and offers Check again', async () => {
+    const { JSDOM } = require('jsdom');
+    const message = cannotStart('C:\\Users\\person\\AppData\\Roaming\\npm\\claude.cmd', NO_NODE).replace('person', '<b>person</b>');
+    const runtimes = { claude: { status: 'cannot-start', message }, codex: { installed: false, authenticated: false } };
+    const dom = new JSDOM(src('electron/wizard.html'), {
+      runScripts: 'dangerously',
+      beforeParse(window) {
+        window.electronAPI = { platform: 'win32', checkRuntimes: async () => runtimes, signInClaude: async () => ({ ok: true }), signInCodex: async () => ({ ok: true }), wizardDone: () => {} };
+      },
+    });
+    try {
+      const { document } = dom.window;
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      const problem = document.getElementById('install-problem');
+      assert.strictEqual(problem.textContent, message, 'the reason, word for word');
+      assert.strictEqual(problem.querySelector('b'), null, 'as text: nothing in a path is read as markup');
+      assert.notStrictEqual(problem.style.display, 'none');
+      assert.ok(document.getElementById('step-install').className.includes('attention'), 'the install step needs action');
+      assert.ok(!document.getElementById('step-auth').className.includes('active'), 'the sign-in step is not offered');
+      assert.strictEqual(document.getElementById('btn-signin').style.display, 'none');
+      assert.notStrictEqual(document.getElementById('btn-check').style.display, 'none', 'Check again is');
+      runtimes.claude = { status: 'not-authenticated' };
+      await dom.window.checkNow();
+      assert.strictEqual(problem.style.display, 'none', 'once the copy can be started, the reason goes');
+    } finally { dom.window.close(); }
   });
 
   test('the control failing: when working out how to start it throws, nothing is run through a shell, and the person gets a plain reason', async (t) => {

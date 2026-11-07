@@ -31,17 +31,29 @@ function installedCopy() {
 // just found, and the one chats start) is started as chats start it
 // (launchFor: a Windows npm launcher through its package's entry), with its
 // arguments and never through a shell, so nothing in the path it was found
-// at is read as a command.
+// at is read as a command. A copy that cannot be started without a shell is
+// not started at all, so it is not signed in, and cannotStart says why.
 function isClaudeAuthenticated() {
   const bin = lookup().lookupClaude().bin;
   if (!bin) return false;
   const launch = lookup().launchFor(bin);
+  if (launch.refusal) return false;
   try {
     execFileSync(launch.command, [...launch.args, '--print', 'test', '--output-format', 'text'], { timeout: 15000 });
     return true;
   } catch {
     return false;
   }
+}
+
+// Why the copy the lookup chose cannot be started, in the words a chat shows
+// (launchFor's refusal: a Windows npm install whose package entry, or a
+// node.exe to run it with, cannot be found), or null when it can be, or when
+// there is no copy.
+function cannotStart() {
+  const bin = lookup().lookupClaude().bin;
+  const refusal = bin ? lookup().launchFor(bin).refusal : null;
+  return refusal ? refusal.message : null;
 }
 
 // Anthropic's Windows installer drops claude.exe in ~/.local/bin but does NOT
@@ -86,10 +98,12 @@ function detectCodexForWizard() {
   }
 }
 
-// The wizard polls for both runtimes. The Claude checks are unchanged; Codex
-// detection rides alongside so the wizard can adapt honestly to what the user
-// has (a Codex user is told why Claude Code is still needed, and can sign in
-// to Codex as an optional final step).
+// The wizard polls for both runtimes. Codex detection rides alongside so the
+// wizard can adapt honestly to what the user has (a Codex user is told why
+// Claude Code is still needed, and can sign in to Codex as an optional final
+// step). A copy that is installed but cannot be started is reported with why,
+// which the wizard shows in place of the sign-in step; the refusal lets the
+// lookup's answer go, so the next poll finds a copy installed meanwhile.
 function wizardCheckRuntimes() {
   const claude = (() => {
     const found = installedCopy();
@@ -97,10 +111,12 @@ function wizardCheckRuntimes() {
     // Claude is installed: make sure its directory is on the user's PATH so
     // they can simply type `claude` in a new terminal to sign in.
     ensureClaudeOnUserPath(path.dirname(found.bin));
+    const why = cannotStart();
+    if (why) return { status: 'cannot-start', message: why };
     if (!isClaudeAuthenticated()) return { status: 'not-authenticated' };
     return { status: 'ready' };
   })();
   return { claude, codex: detectCodexForWizard() };
 }
 
-module.exports = { installedCopy, isClaudeAuthenticated, wizardCheckRuntimes };
+module.exports = { installedCopy, isClaudeAuthenticated, cannotStart, wizardCheckRuntimes };

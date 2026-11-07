@@ -180,6 +180,7 @@
         <div class="step-icon pending" id="icon-install">1</div>
         <div class="step-text">
           <div>Install Claude Code</div>
+          <div class="hint" id="install-problem" style="display:none"></div>
           <div class="hint" id="install-hint"><a href="https://docs.anthropic.com/en/docs/claude-code/overview" target="_blank">Installation guide</a></div>
         </div>
       </div>
@@ -311,6 +312,26 @@
       document.getElementById('subtitle').textContent =
         (codex.installed && result.status !== 'ready') ? CODEX_SUBTITLE : BASE_SUBTITLE;
 
+      // A copy that is installed but cannot be started (a Windows npm install
+      // whose package Rundock cannot start without a shell) comes with why, in
+      // the words a chat would show. It is set as text: the path in it is the
+      // person's own, never markup.
+      const problem = document.getElementById('install-problem');
+      const cannotStart = result.status === 'cannot-start';
+      problem.textContent = cannotStart ? (result.message || '') : '';
+      problem.style.display = cannotStart ? '' : 'none';
+
+      if (cannotStart) {
+        // Action needed on the install, with the install instructions beside
+        // the reason, and Check again rather than a sign-in that cannot work.
+        updateStep('install', 'attention');
+        updateStep('auth', 'pending');
+        renderCodexStep(codex, false);
+        signinBtn.style.display = 'none';
+        checkBtn.style.display = 'inline-block';
+        return false;
+      }
+
       if (result.status === 'not-installed') {
         // Action needed, not in progress: numbered attention state, never the
         // spinner, so it does not read as "checking" forever before install.
@@ -433,7 +454,9 @@
         if (++pollCount >= 20) {
           clearInterval(polling); polling = null;
           const hint = document.getElementById('install-hint');
-          if (hint) hint.insertAdjacentHTML('beforeend',
+          // A copy that was found and cannot be started already says why.
+          const found = document.getElementById('install-problem').style.display !== 'none';
+          if (hint && !found) hint.insertAdjacentHTML('beforeend',
             '<br><span style="color:#E8A84C">Still not detecting Claude Code. Make sure you ran the install command in the terminal (not the desktop app), then click Check again.</span>');
         }
       }, 3000);
