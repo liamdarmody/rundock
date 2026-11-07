@@ -351,7 +351,7 @@ test('a run leaves one record, open while it runs and closed when it ends', asyn
   // because the closing write rewrites the whole file from the handle and
   // repairs any omission before anything looks.
   assert.deepStrictEqual(Object.keys(open[0]).sort(),
-    ['agent', 'durationMs', 'endedAt', 'error', 'files', 'filesReason', 'filesStatus', 'id', 'routine', 'sessionId', 'startedAt', 'status', 'trigger'],
+    ['agent', 'dueAt', 'durationMs', 'endedAt', 'error', 'files', 'filesReason', 'filesStatus', 'id', 'routine', 'sessionId', 'startedAt', 'status', 'trigger'],
     'an open record carries every field a closed one does');
   assert.strictEqual(open[0].agent, 'keeper', 'including the agent it belongs to');
   assert.strictEqual(open[0].routine, 'briefing', 'and the routine it belongs to');
@@ -981,8 +981,8 @@ test('the reader returns what the writer wrote, from disk, keeping every field',
   assert.deepStrictEqual(rec, onDisk,
     'and the reader hands back exactly what is on disk, dropping no field the writer wrote');
   assert.deepStrictEqual(Object.keys(onDisk).sort(),
-    ['agent', 'durationMs', 'endedAt', 'error', 'files', 'filesReason', 'filesStatus', 'id', 'routine', 'sessionId', 'startedAt', 'status', 'trigger'],
-    'which is the whole record: identity, ownership, the session it ran under, both instants, the outcome, how long, any reason, and what it changed');
+    ['agent', 'dueAt', 'durationMs', 'endedAt', 'error', 'files', 'filesReason', 'filesStatus', 'id', 'routine', 'sessionId', 'startedAt', 'status', 'trigger'],
+    'which is the whole record: identity, ownership, the session it ran under, the slot it was due at, both instants, the outcome, how long, any reason, and what it changed');
 });
 
 test('the reader keeps going past a file it cannot use', async (t) => {
@@ -1366,4 +1366,56 @@ test('a file the reader once threw on, with the capture unreadable, still ends t
     const res = await fetch(`http://127.0.0.1:${h.port}/`, { headers: h.authHeaders() });
     assert.strictEqual(res.status, 200, 'and the server is still answering');
   });
+});
+
+// ---------------------------------------------------------------------------
+// When a run was due
+// ---------------------------------------------------------------------------
+
+// A scheduled run's record names the slot the tick fired it for: the slot
+// itself on an on-time run, and the slot it caught up on a late one. A pressed
+// run was due at no slot and names none. The field lives on the record and
+// nowhere else: the run state is the one input to double-fire suppression and
+// the slot store is what the missed rows read, and both files are written
+// exactly as their own objects say, with no trace of it.
+test('a scheduled run records the slot it was due at, a pressed run none, and nothing else carries it', async (t) => {
+  const rundock = path.join(h.workspaceDir, '.rundock');
+  const stateFile = path.join(rundock, 'routine-state.json');
+  const slotsFile = path.join(rundock, 'routine-slots.json');
+
+  begin(27, [KEEPER], 5, 0);
+  driveTicks(t);
+  clock.at = dayAt(27, 5, 2);
+  assert.ok(await settled(KEEPER), 'the on-time run finished');
+  let [rec] = records();
+  assert.strictEqual(rec.dueAt, dayAt(27, 5, 0).toISOString(), 'an on-time run was due at its own slot');
+
+  begin(28, [KEEPER], 9, 0);
+  driveTicks(t);
+  clock.at = dayAt(28, 9, 2);
+  assert.ok(await settled(KEEPER), 'the late run finished');
+  [rec] = records();
+  assert.strictEqual(rec.startedAt, dayAt(28, 9, 0).toISOString(), 'it started four hours late');
+  assert.strictEqual(rec.dueAt, dayAt(28, 5, 0).toISOString(), 'and was due at the slot it caught up');
+
+  assert.deepStrictEqual(Object.keys(h.internal.routineState[KEEPER]).sort(), ['duration', 'lastRun', 'status'],
+    'the run state kept its shape');
+  assert.strictEqual(fs.readFileSync(stateFile, 'utf-8'), JSON.stringify(h.internal.routineState, null, 2),
+    'and its file is exactly that object, with no due instant in it');
+  assert.ok(!fs.readFileSync(slotsFile, 'utf-8').includes('dueAt'), 'the slot file carries none either');
+
+  wipeRuns();
+  clock.at = dayAt(28, 14, 0);
+  const stateBefore = fs.readFileSync(stateFile, 'utf-8');
+  const slotsBefore = fs.readFileSync(slotsFile, 'utf-8');
+  const agent = require('../../lib/agents/discovery.js').discoverAgents().find(a => a.id === 'keeper');
+  assert.strictEqual(scheduler.runRoutineNow(agent, agent.routines[0], KEEPER).started, true, 'the press started a run');
+  clock.at = dayAt(28, 14, 2);
+  assert.ok(await h.waitUntil(() => scheduler.runningRuns().length === 0 && records().length === 1
+    && records()[0].status !== 'running'), 'the pressed run finished');
+  [rec] = records();
+  assert.strictEqual(rec.trigger, 'manual');
+  assert.strictEqual('dueAt' in rec, false, 'a pressed run was due at no slot, and its record says none');
+  assert.strictEqual(fs.readFileSync(stateFile, 'utf-8'), stateBefore, 'and the run state file is byte-identical');
+  assert.strictEqual(fs.readFileSync(slotsFile, 'utf-8'), slotsBefore, 'and so is the slot file');
 });
