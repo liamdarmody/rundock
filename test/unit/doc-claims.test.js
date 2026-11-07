@@ -515,6 +515,18 @@ describe('ROUTINES.md: the hook experiment reports the capture\'s own numbers', 
       + 'again would be worse than one that could not be stopped');
   });
 
+  test('a run that used the shell is said to be one, on the record and on the run screen', () => {
+    // A shell write is not on the list, and the page used to stop there. The
+    // record now says when the shell was used, under the field name the
+    // scheduler writes, and the run screen says what that means for the list.
+    assert.match(routinesDoc, /The record says when the run used the shell \(`usedShell: true`\), and the run screen says so under the list/,
+      'ROUTINES.md must say the run screen tells you when a run used the shell');
+    assert.ok(fs.readFileSync(path.join(ROOT, 'lib', 'scheduler.js'), 'utf-8').includes('{ usedShell: true }'),
+      'the field the page names is the one the scheduler writes');
+    assert.doesNotMatch(routinesDoc, /shell command is invisible/,
+      'the page no longer says only that shell writes are invisible');
+  });
+
   test('the word a restart-orphaned record reports is the routine state\'s own', () => {
     // The page and the two stores have to use ONE word here. A run cut off by
     // a restart is described in three places (the routine's status, the run's

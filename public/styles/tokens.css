@@ -88,6 +88,12 @@
   /* The brand hue as TEXT. In dark it IS the brand, unchanged; only light
      overrides it (see body.light), following --danger-text. */
   --accent-text: #E87A5A;
+  /* A link in running text that has to read as a link beside plain names:
+     the brand text hue, pulled 15% toward --text-1 so it clears 4.5:1 on
+     --card in both themes (dark 5.05, light 5.55). Declared again in
+     body.light: a custom property is computed where it is declared, so this
+     one alone would carry the dark values into light. */
+  --link-text: color-mix(in srgb, var(--accent-text) 85%, var(--text-1));
   --success: #6BC67E; --attention: #E8A84C; --working: #7AA2E8; --idle: #7A756E;
   /* The attention hue as a quiet fill, for a notice that asks to be read
      before continuing and is not an error. */
@@ -268,6 +274,8 @@ body.light {
      --card 4.54). Dark declares it as the brand value itself, so dark is
      unchanged. --accent itself, the brand, does not move. */
   --accent-text: #BF401B;
+  /* Computed again here from the light --accent-text and --text-1; see :root. */
+  --link-text: color-mix(in srgb, var(--accent-text) 85%, var(--text-1));
   /* The permission card's quieter buttons in light, following the dark note:
      measured on the light permission card (#E8E3DB), --border-strong 3.58:1
      as the Deny outline, --text-2-strong 4.59:1 as Deny's label, and

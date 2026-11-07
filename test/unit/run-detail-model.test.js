@@ -602,3 +602,120 @@ describe('the cards a run had refused', () => {
     assert.strictEqual(model.describeRun(null).refused, null);
   });
 });
+
+// ===== A RUN THAT USED THE SHELL =====
+//
+// A file the shell wrote is never on the list, so a list from a run that used
+// the shell may be short, and an empty one may be wrong. The record says when
+// the shell was used (`usedShell: true`), and these are the words for it,
+// pinned exactly.
+describe('a run that used the shell', () => {
+  const SOME = 'This run used the shell. Files written that way are not counted, so this list may be incomplete.';
+  const NONE = 'No files were changed through the editor. This run used the shell, and files written that way are not counted. '
+    + 'Check your workspace if you expect one.';
+
+  test('a list with files says it may be incomplete, and keeps its files exactly', () => {
+    const view = model.describeRun(livingRecord({ usedShell: true }), { now: NOW });
+    assert.strictEqual(view.files.shell, SOME);
+    assert.strictEqual(view.files.empty, null);
+    assert.deepStrictEqual(view.files.entries.map(e => e.path), ['/w/Hello World/hello-world-2026-08-24.md']);
+  });
+
+  test('an empty list says so in place of the sentence for a run that changed nothing', () => {
+    const view = model.describeRun(livingRecord({ files: [], usedShell: true }), { now: NOW });
+    assert.strictEqual(view.files.shell, NONE);
+    assert.strictEqual(view.files.empty, null, 'the shell note stands in place of "This run changed no files."');
+    assert.ok(!words(view).includes(model.NO_FILES_CHANGED));
+  });
+
+  test('a known list without shell use, and a record with no shell field, carry neither note', () => {
+    for (const over of [{}, { usedShell: false }, { usedShell: 'true' }, { files: [] }, { files: [], usedShell: false }]) {
+      const view = model.describeRun(livingRecord(over), { now: NOW });
+      assert.strictEqual(view.files.shell, null, `${JSON.stringify(over)} drew a shell note`);
+      assert.ok(!words(view).some(s => s === SOME || s === NONE));
+    }
+    // The old sentence, unchanged, for a known empty list without the shell.
+    assert.strictEqual(model.describeRun(CHANGED_NOTHING, { now: NOW }).files.empty, 'This run changed no files.');
+  });
+
+  test('an unknown list carries no shell note, whatever the shell field holds', () => {
+    for (const over of [
+      { files: null, filesStatus: 'unknown', filesReason: 'no-transcript' },
+      { files: null, filesStatus: 'unknown', filesReason: 'delegated' },
+      // An unknown claim beside a list, and a record that makes no claim.
+      { filesStatus: 'unknown', filesReason: 'running' },
+      { filesStatus: undefined },
+    ]) {
+      const view = model.describeRun(livingRecord({ ...over, usedShell: true }), { now: NOW });
+      assert.strictEqual(view.files.known, false);
+      assert.ok(!words(view).some(s => s === SOME || s === NONE), `${JSON.stringify(over)} drew a shell note on an unknown list`);
+    }
+  });
+});
+
+// ===== WHICH RECORDED PATH OPENS A FILE =====
+//
+// A recorded path is data from a transcript, shaped by whatever the routine's
+// agent read during the run, and a run record can arrive from another computer
+// through a synced workspace. So a name becomes a link only when its path is
+// this workspace's root, one separator, then a path the CURRENT file tree lists
+// as a file, and the link opens the tree's own path. The tree leaves out every
+// dot name, node_modules, and every file it cannot open, so anything it does
+// not list stays plain text. One table, a named row per case.
+test('a recorded path links only when it is this workspace\'s root, one separator, then a file the tree lists', async (t) => {
+  const ROOT_DIR = '/Users/me/Vault';
+  const file = (p, kind = 'note') => ({ type: 'file', name: p.split('/').pop(), path: p, kind });
+  const folder = (p, children) => ({ type: 'folder', name: p.split('/').pop(), path: p, children });
+  const TREE = [
+    folder('-old', [file('-old/a.md')]),
+    folder('boards', [file('boards/q4.kanban', 'extension')]),
+    folder('notes', [file('notes/plan.md')]),
+    // What a sibling folder's path would leave once a matcher took off the
+    // root without checking for the separator after it.
+    folder('old', [file('old/a.md')]),
+    file('Roadmap.md'),
+  ];
+  const WIN_ROOT = 'C:\\Users\\me\\Vault';
+  const ROWS = [
+    // [name, recorded, root, tree, the tree path it opens or null]
+    ['a file the tree lists, under this workspace\'s root', `${ROOT_DIR}/notes/plan.md`, ROOT_DIR, TREE, 'notes/plan.md'],
+    ['a file at the top of the workspace', `${ROOT_DIR}/Roadmap.md`, ROOT_DIR, TREE, 'Roadmap.md'],
+    ['a file of a type an enabled extension claims', `${ROOT_DIR}/boards/q4.kanban`, ROOT_DIR, TREE, 'boards/q4.kanban'],
+    ['a Windows path with backslashes under a Windows root opens the tree\'s forward-slash path', `${WIN_ROOT}\\notes\\plan.md`, WIN_ROOT, TREE, 'notes/plan.md'],
+    ['a path under another workspace\'s root', '/Users/me/Other/notes/plan.md', ROOT_DIR, TREE, null],
+    ['a path from another computer, under a different home folder holding a folder of the same name', '/Users/someone-else/Vault/notes/plan.md', ROOT_DIR, TREE, null],
+    ['a sibling folder whose name begins with the workspace folder\'s name', '/Users/me/Vault-old/a.md', ROOT_DIR, TREE, null],
+    ['a .. segment that would resolve to a file the tree lists', `${ROOT_DIR}/notes/../Roadmap.md`, ROOT_DIR, TREE, null],
+    ['a .. segment that climbs out and back in', `${ROOT_DIR}/../Vault/notes/plan.md`, ROOT_DIR, TREE, null],
+    ['an absolute path outside the workspace', '/etc/hosts', ROOT_DIR, TREE, null],
+    ['a dot file at the top of the workspace', `${ROOT_DIR}/.env`, ROOT_DIR, TREE, null],
+    ['a dot file deeper down', `${ROOT_DIR}/notes/.secret.md`, ROOT_DIR, TREE, null],
+    ['a file inside a dot folder', `${ROOT_DIR}/.rundock/runs/run.json`, ROOT_DIR, TREE, null],
+    ['a path the current tree does not list, such as a file moved or deleted since the run', `${ROOT_DIR}/notes/gone.md`, ROOT_DIR, TREE, null],
+    ['a Python script the tree leaves out', `${ROOT_DIR}/scripts/build.py`, ROOT_DIR, TREE, null],
+    ['a YAML file the tree leaves out', `${ROOT_DIR}/config.yaml`, ROOT_DIR, TREE, null],
+    ['a path inside node_modules', `${ROOT_DIR}/node_modules/pkg/README.md`, ROOT_DIR, TREE, null],
+    ['a . segment', `${ROOT_DIR}/./notes/plan.md`, ROOT_DIR, TREE, null],
+    ['an empty segment after the root', `${ROOT_DIR}//notes/plan.md`, ROOT_DIR, TREE, null],
+    ['an empty segment deeper down', `${ROOT_DIR}/notes//plan.md`, ROOT_DIR, TREE, null],
+    ['a relative path', 'notes/plan.md', ROOT_DIR, TREE, null],
+    ['an empty string', '', ROOT_DIR, TREE, null],
+    ['a value that is not a string: null', null, ROOT_DIR, TREE, null],
+    ['a value that is not a string: a number', 42, ROOT_DIR, TREE, null],
+    ['a value that is not a string: an object', { path: `${ROOT_DIR}/notes/plan.md` }, ROOT_DIR, TREE, null],
+    ['a folder\'s path', `${ROOT_DIR}/notes`, ROOT_DIR, TREE, null],
+    ['the workspace root itself', ROOT_DIR, ROOT_DIR, TREE, null],
+    ['a path that differs from the tree\'s only in letter case', `${ROOT_DIR}/Notes/Plan.md`, ROOT_DIR, TREE, null],
+    ['a root that differs only in letter case', '/users/me/vault/notes/plan.md', ROOT_DIR, TREE, null],
+    ['a Windows path under another drive', 'D:\\Users\\me\\Vault\\notes\\plan.md', WIN_ROOT, TREE, null],
+    ['a backslash under a root that is not a Windows one is a character in a name', `${ROOT_DIR}/notes\\plan.md`, ROOT_DIR, TREE, null],
+    ['any path while no tree has loaded', `${ROOT_DIR}/notes/plan.md`, ROOT_DIR, null, null],
+    ['any path while no root is known', `${ROOT_DIR}/notes/plan.md`, null, TREE, null],
+  ];
+  assert.strictEqual(typeof model.treePathFor, 'function', 'the matcher is exported from the model');
+  for (const [name, recorded, root, tree, expected] of ROWS) {
+    await t.test(name, () => {
+      assert.strictEqual(model.treePathFor(recorded, root, tree), expected);
+    });
+  }
+});
