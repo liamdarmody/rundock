@@ -215,6 +215,26 @@ describe('a shard that left a file modified fails, names each file, and its verd
     return { ...r, summary: fs.readFileSync(summary, 'utf8') };
   }
 
+  test('a re-run attempt can upload the plan and its verdict again, so a clean retry can go green', () => {
+    // "Re-run failed jobs" keeps the run, and the first attempt's artifact of
+    // the same name is still there. Without overwrite the second upload is
+    // refused, the re-run job fails at its upload however clean its run was,
+    // and the aggregate stays red over a retry that should turn it green.
+    for (const file of WORKFLOWS) {
+      const { plan, shard } = mutationJobs(readWorkflow(file));
+      const uploads = (job, what) => {
+        const found = job.steps.filter((s) => (s.uses || '').startsWith('actions/upload-artifact@')
+          && (s.with.path || '').includes(what));
+        assert.strictEqual(found.length, 1, `${file}: ${job.id} uploads ${what} exactly once`);
+        return found[0];
+      };
+      for (const [job, what] of [[plan, 'mutation-plan.json'], [shard, 'verdict-']]) {
+        assert.strictEqual(uploads(job, what).with.overwrite, 'true',
+          `${file}: ${job.id}'s upload of ${what} overwrites an artifact a previous attempt left`);
+      }
+    }
+  });
+
   test('the diff check fails naming every file left modified, in its log and in the job summary', () => {
     const root = fixtureRepo();
     const clean = runCheck(root);

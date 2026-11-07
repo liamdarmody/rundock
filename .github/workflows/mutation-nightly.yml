@@ -87,12 +87,15 @@ jobs:
         id: plan
         run: node scripts/mutation-scope.js --all --plan --out mutation-plan.json
 
+      # Overwrite, because a re-run of this job keeps the run, and the first
+      # attempt's artifact of this name would refuse a second upload.
       - name: Keep the plan for the shards and the verdict
         uses: actions/upload-artifact@v7
         with:
           name: mutation-plan
           path: mutation-plan.json
           retention-days: 7
+          overwrite: true
 
   mutation-shard:
     name: Sweep shard ${{ matrix.shard }}
@@ -163,6 +166,9 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           exit 1
 
+      # Overwrite, because "Re-run failed jobs" keeps the run, and the first
+      # attempt's verdict of this name would refuse a second upload: the re-run
+      # shard would fail here however clean its run, and the check stay red.
       - name: Keep this shard's verdict, whether it passed or not
         if: always()
         uses: actions/upload-artifact@v7
@@ -171,6 +177,7 @@ jobs:
           path: verdict-${{ matrix.shard }}.json
           retention-days: 7
           if-no-files-found: ignore
+          overwrite: true
 
   mutation-sweep:
     name: Complete set verdict
