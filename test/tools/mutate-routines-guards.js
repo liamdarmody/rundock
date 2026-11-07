@@ -209,6 +209,11 @@ const ROOT_SERVER = { src: path.join(ROOT, 'server.js'), suite: 'test/unit/proto
 // can read, because a notice sent only to the socket that asked is exactly the
 // silence this change removes and every client-side test would stay green.
 const ROUTINES = { src: path.join(ROOT, 'lib', 'agents', 'routines.js'), suite: 'test/unit/routine-actions.test.js' };
+// A routine state that does not parse, and a run record written under a
+// temporary name. Watched by the file that cuts the state file and leaves a
+// complete copy beside a record, because with either guard gone every other
+// suite still loads a whole file and lists every record once.
+const SCHEDULER_LOADS = { src: path.join(ROOT, 'lib', 'scheduler.js'), suite: 'test/unit/scheduler-state-loads.test.js' };
 
 // [target, label, the guard as it is written, what it becomes without it]
 const MUTATIONS = [
@@ -1148,6 +1153,14 @@ const MUTATIONS = [
     "  safeSend(JSON.stringify({ type: 'serving_workspace', path: null }));"],
   [DISCOVERY_WORKSPACE, 'the roster message carries the workspace it was read from',
     '    workspace: getWorkspace(),\n',
+    ''],
+  // A routine state that does not parse is rebuilt from the run records, so a
+  // routine that already ran this period is not fired again.
+  [SCHEDULER_LOADS, 'a routine state that does not parse is rebuilt from the run records, not started empty',
+    'saved || stampsFromRunRecords()',
+    'saved || {}'],
+  [SCHEDULER_LOADS, 'a complete copy left under a temporary name in runs/ is never read as a run',
+    '    if (!RUN_RECORD_NAME.test(name)) continue;\n',
     ''],
 
 ];
