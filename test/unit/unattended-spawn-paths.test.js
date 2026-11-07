@@ -322,7 +322,7 @@ describe('nothing else gives a process the conversation or the mark', () => {
 
   test('the funnel starts the copy the lookup chose', () => {
     const lines = fs.readFileSync(path.join(ROOT, 'lib', 'runtime', 'claude.js'), 'utf8').split('\n');
-    const at = lines.indexOf('  const launch = launchFor(resolveClaudeBin(), deps.platform());');
+    const at = lines.indexOf('  const launch = launchFor(resolveClaudeBin());');
     assert.ok(at >= 0, 'launch is launchFor\'s answer for the copy resolveClaudeBin\'s lookup chose');
     assert.strictEqual(contextOf(lines, at), 'spawnClaude', 'set in the function whose spawn starts launch.command');
   });

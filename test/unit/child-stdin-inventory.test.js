@@ -64,7 +64,7 @@ const WRITES = [
 // command for the copy resolveClaudeBin's lookup chose, where it started
 // resolveClaudeBin() itself.
 const GUARDED_STARTS = [
-  { file: 'lib/runtime/claude.js', fn: 'spawnClaude', spawn: 'spawn(launch.command', from: 'const launch = launchFor(resolveClaudeBin(), deps.platform());', starts: 'every Claude agent process' },
+  { file: 'lib/runtime/claude.js', fn: 'spawnClaude', spawn: 'spawn(launch.command', from: 'const launch = launchFor(resolveClaudeBin());', starts: 'every Claude agent process' },
   { file: 'codex-appserver.js', fn: '_spawn', spawn: 'spawn(this._binPath', starts: 'the Codex app-server' },
 ];
 
@@ -73,6 +73,7 @@ const GUARDED_STARTS = [
 // caller writes to it as to any process it was handed.
 const GUARDED_STAND_INS = [
   { file: 'lib/runtime/claude.js', fn: 'spawnClaude', made: 'unstarted(refusal)', name: 'standIn', stands: 'a Claude Code below the version floor' },
+  { file: 'lib/runtime/claude.js', fn: 'spawnClaude', made: 'unstarted(launch.refusal)', name: 'unstartable', stands: 'a Windows npm install of Claude Code that cannot be started without a shell' },
 ];
 
 // The two places that replace a stdin's write: the handler itself, and the

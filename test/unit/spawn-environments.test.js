@@ -37,7 +37,7 @@ test('the funnel every agent spawn goes through passes on the environment it is 
   const start = src.indexOf('\nfunction spawnClaude(');
   assert.ok(start >= 0, 'spawnClaude is declared');
   const fn = src.slice(start, src.indexOf('\n}\n', start));
-  const launch = fn.indexOf('\n  const launch = launchFor(resolveClaudeBin(), deps.platform());\n');
+  const launch = fn.indexOf('\n  const launch = launchFor(resolveClaudeBin());\n');
   const spawn = fn.indexOf("\n  const proc = spawn(launch.command, [...launch.args, ...args], { ...options, detached: process.platform !== 'win32' });\n");
   assert.ok(launch >= 0, 'what spawnClaude starts is launchFor\'s answer for the copy resolveClaudeBin\'s lookup chose');
   assert.ok(spawn > launch, 'and the spawn starts that, with its arguments in an array and the caller\'s options, detached except on Windows');

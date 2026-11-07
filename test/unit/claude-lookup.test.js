@@ -968,19 +968,24 @@ function npmLauncher(dir, version, { bin = { claude: 'cli.js' }, node = true } =
 }
 const SIGN_IN_ARGS = ['--print', 'test', '--output-format', 'text'];
 
-describe('Windows keeps where.exe and its order, and passes over a copy below the floor', { skip: POSIX }, () => {
-  async function onWindows(m, listed, fn, { nodes = [], logged = [] } = {}) {
-    const { rt, warn, done } = runtime({ platform: () => 'win32' });
-    try {
-      return await on(m, { today: [windows(m, listed, nodes)], platform: 'win32' }, () => fn(rt));
-    } finally {
-      done();
-      assert.deepStrictEqual(m.shell.runs(), [], 'no login shell is asked on Windows');
-      assert.strictEqual(warn.lookupLines().length, logged.length, `logged: ${JSON.stringify(warn.lookupLines())}`);
-      logged.forEach((what, i) => assert.ok(warn.lookupLines()[i].includes(what), `the log names ${what}`));
-    }
+// Runs `fn` with a spawn runtime on the machine as Windows, where.exe listing
+// `listed` (and `nodes` when asked for node.exe, or failing as it does when it
+// finds none, with `whereFails`), then holds the lookup to what it logged.
+async function onWindows(m, listed, fn, { nodes = [], logged = [], whereFails = false } = {}) {
+  const { rt, warn, done } = runtime({ platform: () => 'win32' });
+  try {
+    const where = windows(m, listed, nodes);
+    if (whereFails) fs.rmSync(path.join(where, 'answer-node'));
+    return await on(m, { today: [where], platform: 'win32' }, () => fn(rt));
+  } finally {
+    done();
+    assert.deepStrictEqual(m.shell.runs(), [], 'no login shell is asked on Windows');
+    assert.strictEqual(warn.lookupLines().length, logged.length, `logged: ${JSON.stringify(warn.lookupLines())}`);
+    logged.forEach((what, i) => assert.ok(warn.lookupLines()[i].includes(what), `the log names ${what}`));
   }
+}
 
+describe('Windows keeps where.exe and its order, and passes over a copy below the floor', { skip: POSIX }, () => {
   test('an npm install starts its package\'s entry with the node.exe beside its launcher: a chat and the sign-in check, each with its arguments and no shell', async () => {
     const m = machine();
     const npm = npmLauncher(m.dir('npm'), '2.1.318');
@@ -1021,35 +1026,6 @@ describe('Windows keeps where.exe and its order, and passes over a copy below th
       assert.strictEqual((await spawnAndSettle(rt)).error, null);
     });
     assert.deepStrictEqual(exe.chats().map((r) => r.args), [CHAT_ARGS]);
-  });
-
-  for (const [how, layOut] of [
-    ['by ..', (npm, m) => { fs.writeFileSync(m.dir('outside.js'), '// not the package\n'); return { claude: path.relative(npm.pkg, m.dir('outside.js')) }; }],
-    ['by a link', (npm, m) => { fs.writeFileSync(m.dir('outside.js'), '// not the package\n'); fs.symlinkSync(m.dir('outside.js'), path.join(npm.pkg, 'linked.js')); return { claude: 'linked.js' }; }],
-  ]) {
-    test(`an entry outside the package folder, ${how}, is refused: the launcher starts as before, logged once`, async () => {
-      const m = machine();
-      const npm = npmLauncher(m.dir('npm'), '2.1.318');
-      const bin = layOut(npm, m);
-      const pkgJson = path.join(npm.pkg, 'package.json');
-      fs.writeFileSync(pkgJson, JSON.stringify({ ...JSON.parse(fs.readFileSync(pkgJson, 'utf8')), bin }));
-      await onWindows(m, [npm], async (rt) => {
-        for (let i = 0; i < 2; i++) assert.strictEqual((await spawnAndSettle(rt)).error, null);
-      }, { logged: [npm.pkg] });
-      assert.strictEqual(npm.chats().length, 2, 'the launcher was started, as before');
-      assert.deepStrictEqual(npm.node.runs(), [], 'and nothing outside the package was');
-    });
-  }
-
-  test('with no package beside the launcher, the launcher starts as before, logged once', async () => {
-    const m = machine();
-    const npm = npmLauncher(m.dir('npm'), '2.1.318');
-    fs.rmSync(path.join(m.dir('npm'), 'node_modules'), { recursive: true });
-    await onWindows(m, [npm], async (rt) => {
-      for (let i = 0; i < 2; i++) assert.strictEqual((await spawnAndSettle(rt)).error, null);
-    }, { logged: [npm.pkg] });
-    assert.strictEqual(npm.chats().length, 2);
-    assert.deepStrictEqual(npm.node.runs(), []);
   });
 
   test('where.exe lists a plain copy, a .cmd and an .exe: the .exe is chosen, as before', async () => {
@@ -1116,4 +1092,160 @@ describe('Windows keeps where.exe and its order, and passes over a copy below th
     assert.deepStrictEqual(exe.chats(), []);
     assert.deepStrictEqual(cmd.runs(), [], 'the .cmd was read from its package, never run');
   });
+});
+
+// ── A Windows npm install that cannot be started says so, and starts nothing ──
+
+// What a chat and the sign-in check say when Rundock cannot start a Windows
+// npm install of Claude Code without a shell, for each reason. Node refuses
+// to start a .cmd without one, and a shell would read the prompt in the
+// arguments as part of a command, so the launcher is never run.
+const cannotStart = (bin, reason) => `Rundock found Claude Code at ${bin}, but can't start it: ${reason}. `
+  + 'Rundock starts an npm install of Claude Code through Node.js, never through a command shell. '
+  + 'Install Claude Code with `irm https://claude.ai/install.ps1 | iex` in PowerShell, or reinstall it with `npm install -g @anthropic-ai/claude-code`, then try again.';
+const NO_NODE = 'no node.exe was found to run it with';
+const setBin = (npm, bin) => {
+  const pkgJson = path.join(npm.pkg, 'package.json');
+  fs.writeFileSync(pkgJson, JSON.stringify({ ...JSON.parse(fs.readFileSync(pkgJson, 'utf8')), bin }));
+};
+
+// Each way an npm install can leave nothing to start without a shell: how it
+// is laid out, and the reason the person is given.
+const UNSTARTABLE = [
+  { what: 'no package beside the launcher',
+    lay: (npm) => fs.rmSync(path.join(path.dirname(npm.bin), 'node_modules'), { recursive: true }),
+    reason: () => 'the npm package it starts, @anthropic-ai/claude-code, is not installed beside it' },
+  { what: 'a package.json that does not parse',
+    lay: (npm) => fs.writeFileSync(path.join(npm.pkg, 'package.json'), '{ "version": '),
+    reason: () => "the package.json of the npm package it starts can't be read" },
+  { what: 'no bin entry', options: { bin: null },
+    reason: () => 'its package.json names no `bin` entry for claude' },
+  { what: 'a bin entry naming no file there', options: { bin: { claude: 'missing.js' } },
+    reason: () => 'the program its package.json names, missing.js, is not there' },
+  { what: 'a bin entry that is not a file', options: { bin: { claude: 'cli-folder' } },
+    lay: (npm) => fs.mkdirSync(path.join(npm.pkg, 'cli-folder')),
+    reason: () => 'the program its package.json names, cli-folder, is not a file' },
+  { what: 'a bin entry outside the package, by ..',
+    lay: (npm, m) => { fs.writeFileSync(m.dir('outside.js'), '// not the package\n'); setBin(npm, { claude: path.relative(npm.pkg, m.dir('outside.js')) }); },
+    reason: (npm, m) => `the program its package.json names, ${path.relative(npm.pkg, m.dir('outside.js'))}, is outside the package` },
+  { what: 'a bin entry outside the package, by a link',
+    lay: (npm, m) => { fs.writeFileSync(m.dir('outside.js'), '// not the package\n'); fs.symlinkSync(m.dir('outside.js'), path.join(npm.pkg, 'linked.js')); setBin(npm, { claude: 'linked.js' }); },
+    reason: () => 'the program its package.json names, linked.js, is outside the package' },
+  { what: 'no node.exe beside the launcher, and none where.exe lists', options: { node: false },
+    reason: () => NO_NODE },
+  { what: 'no node.exe beside the launcher, and where.exe failing as it does when it finds none', options: { node: false }, whereFails: true,
+    reason: () => NO_NODE },
+];
+function unstartable(c) {
+  const m = machine();
+  const npm = npmLauncher(m.dir('npm'), '2.1.318', c.options);
+  if (c.lay) c.lay(npm, m);
+  return { m, npm, reason: c.reason(npm, m) };
+}
+
+describe('a Windows npm install that cannot be started without a shell says so, and starts nothing', { skip: POSIX }, () => {
+  for (const c of UNSTARTABLE) {
+    test(`${c.what}: each chat says this copy cannot be started and why, nothing is run, and it is logged once`, async () => {
+      const { m, npm, reason } = unstartable(c);
+      const notice = cannotStart(npm.bin, reason);
+      await onWindows(m, [npm], async (rt) => {
+        for (const which of ['the chat', 'a second chat']) {
+          const { proc, error, closed } = await spawnAndSettle(rt);
+          assert.strictEqual(error && error.code, 'CLAUDE_CANNOT_START', `${which} is refused, not started`);
+          assert.strictEqual(error.message, notice, `${which} says which copy and why`);
+          assert.ok(closed && proc.pid === undefined, `${which} ends with nothing started`);
+        }
+      }, { whereFails: c.whereFails, logged: [`${npm.bin}: ${reason}`] });
+      assert.deepStrictEqual(npm.runs(), [], 'the launcher was never run, so nothing went through a shell');
+      if (npm.node) assert.deepStrictEqual(npm.node.runs(), [], 'and nothing else was started');
+    });
+  }
+
+  test('the conversation shows the notice as it is, and no raw spawn error reaches it', async () => {
+    const srv = require('../../server.js')._internal;
+    const { m, npm, reason } = unstartable(UNSTARTABLE.find((c) => c.whereFails));
+    const sent = [];
+    const client = { readyState: 1, send: (text) => sent.push(JSON.parse(text)) };
+    const convoId = `cannot-start-${process.pid}-${Date.now()}`;
+    srv.connectedClients.add(client);
+    try {
+      await onWindows(m, [npm], async (rt) => {
+        const proc = rt.spawnClaude(CHAT_ARGS, { stdio: 'ignore' }, (err) => srv.handleChatSpawnError(err, convoId));
+        await new Promise((resolve) => proc.on('close', resolve));
+      }, { whereFails: true, logged: [npm.bin] });
+    } finally { srv.connectedClients.delete(client); }
+    const mine = sent.filter((x) => x._conversationId === convoId);
+    assert.deepStrictEqual(mine.filter((x) => x.subtype === 'info').map((x) => x.content), [cannotStart(npm.bin, reason)]);
+    assert.ok(mine.some((x) => x.subtype === 'done'), 'and the thinking state clears');
+    assert.deepStrictEqual(npm.runs(), []);
+  });
+
+  test('the next step: once the native claude.exe is installed, the next chat finds it and starts it, with no restart', async () => {
+    const { m, npm, reason } = unstartable(UNSTARTABLE.find((c) => c.whereFails));
+    const native = makeClaude(m.dir('native'), CURRENT, 'claude.exe');
+    await onWindows(m, [npm], async (rt) => {
+      assert.strictEqual((await spawnAndSettle(rt)).error.message, cannotStart(npm.bin, reason));
+      windows(m, [npm, native]);
+      const { error, closed } = await spawnAndSettle(rt);
+      assert.strictEqual(error, null, 'the chat started');
+      assert.ok(closed);
+    }, { whereFails: true, logged: [npm.bin] });
+    assert.deepStrictEqual(native.chats().map((r) => r.args), [CHAT_ARGS], 'the native copy, with the arguments');
+    assert.deepStrictEqual(npm.runs(), [], 'and the launcher was never run');
+  });
+
+  test('the control failing: when working out how to start it throws, nothing is run through a shell, and the person gets a plain reason', async (t) => {
+    const m = machine();
+    const npm = npmLauncher(m.dir('npm'), '2.1.318');
+    const reason = 'its npm package could not be checked';
+    await onWindows(m, [npm], async (rt) => {
+      t.mock.method(fs, 'realpathSync', () => { throw Object.assign(new Error('EPERM: operation not permitted, realpath'), { code: 'EPERM' }); });
+      const { error } = await spawnAndSettle(rt);
+      t.mock.restoreAll();
+      assert.strictEqual(error && error.code, 'CLAUDE_CANNOT_START');
+      assert.strictEqual(error.message, cannotStart(npm.bin, reason), 'a plain reason, not the error it met');
+    }, { logged: [`${npm.bin}: ${reason} (EPERM: operation not permitted, realpath)`] });
+    assert.deepStrictEqual(npm.runs(), []);
+    assert.deepStrictEqual(npm.node.runs(), []);
+  });
+});
+
+// ── launchFor's answer ──
+
+describe('launchFor answers with what to start, or with why nothing can be', { skip: POSIX }, () => {
+  const launchOn = async (m, listed, bin, { nodes = [], whereFails = false, platform = 'win32' } = {}) => {
+    const where = windows(m, listed, nodes);
+    if (whereFails) fs.rmSync(path.join(where, 'answer-node'));
+    const warn = quietWarn();
+    try { return await on(m, { today: [where], platform }, () => lookup().launchFor(bin, platform)); } finally { warn.restore(); }
+  };
+
+  test('success: the node.exe beside the launcher with the entry, the first node.exe where.exe lists, the entry itself when it is an .exe, and any other copy, or any copy off Windows, itself', async () => {
+    const m = machine();
+    const npm = npmLauncher(m.dir('npm'), '2.1.318');
+    assert.deepStrictEqual(await launchOn(m, [npm], npm.bin), { command: npm.node.file, args: [npm.entry] });
+    const bare = npmLauncher(m.dir('npm-no-node'), '2.1.318', { node: false });
+    const node = makeNode(m.dir('nodejs'));
+    assert.deepStrictEqual(await launchOn(m, [bare], bare.bin, { nodes: [node.file] }), { command: node.file, args: [bare.entry] });
+    const exeEntry = npmLauncher(m.dir('npm-exe'), '2.1.318', { bin: { claude: 'bin/claude.exe' } });
+    const entry = makeClaude(path.join(exeEntry.pkg, 'bin'), CURRENT, 'claude.exe');
+    assert.deepStrictEqual(await launchOn(m, [exeEntry], exeEntry.bin), { command: fs.realpathSync(entry.bin), args: [] });
+    const exe = makeClaude(m.dir('exe'), CURRENT, 'claude.exe');
+    assert.deepStrictEqual(await launchOn(m, [exe], exe.bin), { command: exe.bin, args: [] });
+    assert.deepStrictEqual(await launchOn(m, [npm], npm.bin, { platform: 'darwin' }), { command: npm.bin, args: [] });
+    assert.deepStrictEqual([npm, bare, exeEntry, exe].flatMap((c) => c.runs()), [], 'nothing was run to answer');
+  });
+
+  for (const c of UNSTARTABLE) {
+    test(`${c.what}: no command, no arguments, and a refusal naming the copy and the reason`, async () => {
+      const { m, npm, reason } = unstartable(c);
+      const got = await launchOn(m, [npm], npm.bin, { whereFails: c.whereFails });
+      assert.deepStrictEqual(Object.keys(got).sort(), ['args', 'command', 'refusal']);
+      const { code, path: copy, reason: why, message } = got.refusal;
+      assert.deepStrictEqual({ command: got.command, args: got.args, refusal: { code, path: copy, reason: why, message } },
+        { command: null, args: [], refusal: { code: 'CLAUDE_CANNOT_START', path: npm.bin, reason, message: cannotStart(npm.bin, reason) } });
+      assert.ok(got.refusal instanceof Error, 'an error, as the floor\'s refusal is, so each caller\'s error surface shows it');
+      assert.deepStrictEqual(npm.runs(), []);
+    });
+  }
 });
