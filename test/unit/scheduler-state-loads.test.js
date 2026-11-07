@@ -17,15 +17,21 @@
 //
 // The run record reader is held to the names records are written under, so a
 // temporary file left by a write cut off before its rename is never a run.
-const { test, describe } = require('node:test');
+const { test, describe, after, mock } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
+const { EventEmitter } = require('node:events');
 
 const SCHEDULER_KEY = require.resolve('../../lib/scheduler.js');
 const claude = require('../../lib/runtime/claude.js');
+const signals = require('../../lib/signals.js');
+const { agentFile, cleanup } = require('../helpers/workspace.js');
+const { invalidateAgentCache } = require('../../lib/agents/discovery.js');
+const { computePlanHash } = require('../../lib/agents/routines.js');
+after(cleanup);
 
 // A private copy per test, so wiring and state never leak into the shared one.
 function freshScheduler() {
@@ -237,6 +243,69 @@ function withStateWriteFailing(ws, step, code, fn) {
 // fails a write where a rename needs no space. Whatever stops it, a restart
 // must still find the file, rebuild again, and not fire a routine that already
 // ran. Renamed aside before the write, it would find no file and start empty.
+// The most common next step after a rebuild: the scheduler's next tick. It
+// must not start the routine whose run the rebuild found. With no run to find,
+// the same tick starts it, which shows the tick was live.
+describe('the tick after a rebuild', () => {
+  function startsOnTheTickAfterALoad(ws) {
+    const agents = path.join(ws, '.claude', 'agents');
+    fs.mkdirSync(agents, { recursive: true });
+    const routine = { name: 'Compile the ops summary', schedule: SCHEDULE, prompt: 'go', runOn: 'local', enabled: true };
+    fs.writeFileSync(path.join(agents, 'piper.md'), agentFile({
+      name: 'piper', displayName: 'Piper', type: 'specialist', order: 1,
+      routines: [{ ...routine, planApprovedHash: computePlanHash(routine) }],
+    }));
+    require('../helpers/approvals.js').seenHere(ws);
+    invalidateAgentCache();
+    // In place before the scheduler is required: it takes both at require time.
+    const realSpawn = claude.spawnClaude;
+    const realRecordEvent = signals.recordEvent;
+    const prevClaudeDeps = claude.wireClaudeRuntimeDeps({ getActualPort: () => 0 });
+    const started = [];
+    claude.spawnClaude = (args) => {
+      const child = new EventEmitter();
+      child.pid = 4000 + started.length;
+      child.kill = () => {};
+      started.push(args);
+      return child;
+    };
+    signals.recordEvent = () => {};
+    try {
+      const sched = freshScheduler();
+      errorsDuring(() => sched.loadRoutineState());
+      mock.timers.enable({ apis: ['setInterval'] });
+      try {
+        sched.startScheduler();
+        mock.timers.tick(60_000);
+      } finally {
+        sched.stopScheduler();
+        mock.timers.reset();
+      }
+      return started.length;
+    } finally {
+      claude.spawnClaude = realSpawn;
+      signals.recordEvent = realRecordEvent;
+      claude.wireClaudeRuntimeDeps(prevClaudeDeps);
+      invalidateAgentCache();
+    }
+  }
+
+  test('the routine that ran at 09:03 is not started again by the 10:00 tick', () => {
+    withWorkspace((ws) => {
+      fs.writeFileSync(stateFile(ws), DAMAGE[0][1]);
+      writeRecord(ws, runRecord());
+      assert.strictEqual(startsOnTheTickAfterALoad(ws), 0, 'the tick after the rebuild started the routine again');
+    });
+  });
+
+  test('with no run to find, the same tick starts it', () => {
+    withWorkspace((ws) => {
+      fs.writeFileSync(stateFile(ws), DAMAGE[0][1]);
+      assert.strictEqual(startsOnTheTickAfterALoad(ws), 1, 'the tick did not start a routine due since 09:00, so it proves nothing');
+    });
+  });
+});
+
 describe('a state file whose replacement cannot be written stays where it is', () => {
   const CUTS = [
     ['the disk is full when the replacement is written', 'write', 'ENOSPC'],
