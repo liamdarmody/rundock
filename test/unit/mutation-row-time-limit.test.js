@@ -186,6 +186,57 @@ describe('the runner every harness starts a row\'s suite with', () => {
     assert.ok(await gone(suite.pid), 'and is gone');
   });
 
+  // EVERY SIGNAL THE RUNNER SENDS A GROUP, CHECKED AS IT IS SENT. A group's id
+  // is its leader's pid, and once the runner has collected the leader that
+  // number can be handed to any process started afterwards, which may lead a
+  // group of its own. Until then the leader is running, or dead and not yet
+  // collected, and either way still holds the number. So a group signal is
+  // safe only while the leader's pid is still held, and this records every one
+  // sent after it was not.
+  function watchGroupSignals(t) {
+    const real = process.kill;
+    const late = [];
+    process.kill = function kill(pid, signal) {
+      if (pid < 0 && signal !== 0) {
+        let held = true;
+        try { real.call(process, -pid, 0); } catch (e) { held = e.code === 'EPERM'; }
+        if (!held) late.push(`${signal} to group ${-pid}, after its leader was collected`);
+      }
+      return real.apply(process, arguments);
+    };
+    t.after(() => { process.kill = real; });
+    return late;
+  }
+
+  test('a group is never signalled after its leader has been collected, when the suite runs out of time', { timeout: 60000 }, async (t) => {
+    // The suite here dies of SIGTERM and its grandchild ignores it, so the
+    // grandchild can only be ended by a SIGKILL sent to the group after the
+    // suite's own SIGTERM: the leader must still be held when it is sent.
+    const late = watchGroupSignals(t);
+    const pids = pidFolder(t);
+    const { error } = await settle(runSuite(process.execPath, [fixture('holds-output.js')],
+      { cwd: REPO, env: childEnv({ MUTATION_FIXTURE_PIDS: pids }), limitMs: 1500, graceMs: 1000 }));
+    assert.ok(error && error.didNotFinish, 'the suite did not finish');
+    assert.deepStrictEqual(late, [], 'no group was signalled once its id could belong to another process');
+    for (const { role, pid } of recorded(pids)) assert.ok(await gone(pid), `the ${role} (pid ${pid}) is still running`);
+  });
+
+  test('a suite that finishes on its own is never signalled afterwards, and what it left running is left alone', { timeout: 60000 }, async (t) => {
+    // Its group id is free to be handed out from the moment it is collected,
+    // so the process it left behind, holding none of its output, is not the
+    // runner's to end: a signal sent to that id could reach someone else's.
+    const late = watchGroupSignals(t);
+    const pids = pidFolder(t);
+    const out = await runSuite(process.execPath, [fixture('leaves-a-process.js')],
+      { cwd: REPO, env: childEnv({ MUTATION_FIXTURE_PIDS: pids }), limitMs: 30000, graceMs: 1000 });
+    assert.strictEqual(out, 'suite finished, leaving a process behind\n', 'the suite is read as having passed');
+    await wait(500);
+    assert.deepStrictEqual(late, [], 'no group was signalled once its id could belong to another process');
+    const leftover = recorded(pids).find((r) => r.role === 'leftover');
+    assert.ok(leftover, 'the suite started a process before it finished');
+    assert.ok(alive(leftover.pid), 'and that process was never signalled; this case ends it');
+  });
+
   test('a suite sees TMPDIR as the real path of the temp folder, even when it was given a link', { timeout: 60000 }, async (t) => {
     const base = makeTempDir('row-limit-tmp-');
     t.after(() => { try { fs.rmSync(base, { recursive: true, force: true }); } catch { /* gone */ } });

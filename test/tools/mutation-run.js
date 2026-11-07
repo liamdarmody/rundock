@@ -605,10 +605,13 @@ function exitCodeFor(failed, results) {
 // stopped nor put its file back until the suite ended, which it never did.
 //
 // So a suite is started here, asynchronously, in a process group of its own,
-// and at its limit the whole group is ended: SIGTERM, a grace for its own
-// tidying (test fixtures are removed from SIGTERM handlers), then SIGKILL.
-// The wait is on the direct child's exit and a short drain, never on the pipes
-// closing, so nothing a suite leaves behind can hold the runner.
+// and at its limit the whole group is ended: its leader held, SIGTERM, a grace
+// for the rest of the group's tidying (test fixtures are removed from SIGTERM
+// handlers), then SIGKILL. The wait is on the direct child's exit and a short
+// drain, never on the pipes closing, so nothing a suite leaves behind can hold
+// the runner. A group is only ever signalled while its leader is held (see
+// endSuiteGroup), so a signal can never reach a group whose id has been handed
+// to another process.
 
 // THE LIMIT, one for every row of a kind. A node:test suite that runs past it
 // is stuck rather than slow: the slowest real rows measured locally took
@@ -657,14 +660,16 @@ function suiteEnv(env) {
 }
 
 // THE GROUPS OF THE SUITES RUNNING NOW, keyed by group id, and the only thing
-// the listeners below ever signal.
+// the listeners below ever signal. An entry leaves the moment its leader is
+// seen to exit, and after the SIGKILL that ends it, and never comes back.
 const liveSuites = new Map();
 // Set once this process has been told to stop. A suite ended for that reason
 // has no verdict for anyone, and its row must not hand control back to a
 // harness loop that would mutate the next row on the way out.
 let stopping = null;
 
-// How often an ending asks whether the group has gone, and how long a group
+// How often an ending looks to see whether the leader was killed from outside
+// during the grace, or the group has gone after SIGKILL, and how long a group
 // sent SIGKILL gets to leave the process table before the ending stops
 // waiting for it.
 const SUITE_POLL_MS = 100;
@@ -679,60 +684,93 @@ const nap = (ms) => new Promise((resolve) => { wallSetTimeout(resolve, ms); });
 
 /**
  * Whether any process is left in a group. EPERM means one is, owned by
- * someone this process may not signal.
+ * someone this process may not signal. Signal 0 only asks; it delivers
+ * nothing, so asking about an id since handed to another group is harmless.
  */
 function groupExists(pgid) {
   try { process.kill(-pgid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
 }
 
 /**
- * End a suite's process group: SIGTERM, up to `graceMs` for it to go, then
- * SIGKILL, and a short wait for the kernel to drop it.
+ * End a suite's process group: hold its leader, SIGTERM the group, give the
+ * rest of it the grace, then SIGKILL the group, and a short wait for the
+ * kernel to drop it.
  *
- * WITHOUT BLOCKING, unlike the pre-commit gate's ending of a step's group. A
- * child that has died keeps its group id until its parent collects it, and a
- * blocked parent collects nothing, so the group would go on looking alive
- * until the process table said otherwise, and some sandboxes will not let a
- * process read that table. Waiting here lets Node collect the suite as it
- * dies; whatever the suite started is collected by init when it dies. So the
- * group is gone exactly when nothing in it is left, and asking the kernel
- * whether it exists is the whole check.
+ * A GROUP IS SIGNALLED ONLY WHILE ITS LEADER IS HELD. A group's id is its
+ * leader's pid, and once Node has collected the leader that number can be
+ * handed to any process started afterwards, which may lead a group of its
+ * own. Until the leader's 'exit' event it is running, or dead and not yet
+ * collected, and either way its pid, and so the group's id, is still the
+ * suite's. So the leader is stopped first, and SIGTERM cannot end it: the
+ * SIGKILL at the end of the grace goes to a group whose id is provably still
+ * the suite's. A leader seen to exit meanwhile, killed from outside, ends the
+ * ending there, and nothing signals its group again; anything of the suite's
+ * still running then is left to finish on its own.
+ *
+ * The rest of the group gets SIGTERM and the grace for its tidying: under
+ * node --test the tests run in a process of their own, and that is where
+ * their SIGTERM handlers remove fixtures. The leader, stopped, gets none,
+ * which is the price of the guarantee, and the grace is waited in full, since
+ * a group holding its stopped leader never empties on its own.
+ *
+ * WITHOUT BLOCKING, unlike the pre-commit gate's ending of a step's group:
+ * waiting here lets Node collect the leader as it dies, and init collects
+ * whatever the suite started.
  */
-async function endSuiteGroup(pgid, graceMs) {
-  const gone = () => !groupExists(pgid);
-  const send = (signal) => { try { process.kill(-pgid, signal); } catch { /* gone since the check */ } };
-  if (gone()) return;
-  send('SIGTERM');
-  for (const deadline = Date.now() + graceMs; Date.now() < deadline;) {
+async function endSuiteGroup(pgid, live) {
+  const send = (target, signal) => {
+    if (live.released) return;
+    try { process.kill(target, signal); } catch { /* gone */ }
+  };
+  send(pgid, 'SIGSTOP');
+  send(-pgid, 'SIGTERM');
+  for (const deadline = Date.now() + live.graceMs; Date.now() < deadline;) {
     await nap(SUITE_POLL_MS);
-    if (gone()) return;
+    if (live.released) return;
   }
-  send('SIGKILL');
+  send(-pgid, 'SIGKILL');
   for (const deadline = Date.now() + SUITE_REAP_MS; Date.now() < deadline;) {
     await nap(SUITE_POLL_MS);
-    if (gone()) return;
+    if (!groupExists(pgid)) return;
   }
+}
+
+/**
+ * Forget a suite's group for good, so nothing signals it again: the moment
+ * its leader is seen to exit, and after the SIGKILL that ends it.
+ */
+function releaseSuite(pgid, live) {
+  live.released = true;
+  if (liveSuites.get(pgid) === live) liveSuites.delete(pgid);
+  if (!liveSuites.size && !stopping) disarmSuites();
 }
 
 /** End one live suite and everything it started, then forget it. */
 async function endSuite(pgid) {
   const live = liveSuites.get(pgid);
   if (!live) return;
-  if (POSIX) await endSuiteGroup(pgid, live.graceMs);
-  else { try { live.kid.kill('SIGKILL'); } catch { /* gone */ } }
-  liveSuites.delete(pgid);
-  if (!liveSuites.size && !stopping) disarmSuites();
+  if (POSIX) await endSuiteGroup(pgid, live);
+  else if (!live.released) { try { live.kid.kill('SIGKILL'); } catch { /* gone */ } }
+  releaseSuite(pgid, live);
+}
+
+// Kill every live suite outright. Each entry's leader has not been seen to
+// exit, so each group id is still its suite's.
+function killLiveSuites() {
+  for (const [pgid, live] of liveSuites) {
+    if (live.released) continue;
+    if (POSIX) { try { process.kill(-pgid, 'SIGKILL'); } catch { /* gone */ } }
+    else { try { live.kid.kill('SIGKILL'); } catch { /* gone */ } }
+    live.released = true;
+  }
+  liveSuites.clear();
 }
 
 // The way out that cannot wait: by 'exit' the event loop has finished, and a
 // suite given a grace here would outlive the process that was to end it. So a
 // suite still running when this process exits is killed outright.
 function onSuitesExit() {
-  for (const [pgid, live] of liveSuites) {
-    if (POSIX) { try { process.kill(-pgid, 'SIGKILL'); } catch { /* gone */ } }
-    else { try { live.kid.kill('SIGKILL'); } catch { /* gone */ } }
-  }
-  liveSuites.clear();
+  killLiveSuites();
 }
 
 function reRaise(signal) {
@@ -754,8 +792,7 @@ function reRaise(signal) {
  */
 function onSuitesSignal(signal) {
   if (stopping) {
-    for (const pgid of liveSuites.keys()) { try { process.kill(-pgid, 'SIGKILL'); } catch { /* gone */ } }
-    liveSuites.clear();
+    killLiveSuites();
     disarmSuites();
     reRaise(signal);
     return;
@@ -795,8 +832,10 @@ function didNotFinishWhy(seconds) {
  * reports as its own outcome: never caught, never survived.
  *
  * The wait is on the suite's exit and a short drain, never on its pipes
- * closing, so a process it left behind holding them cannot hold the runner;
- * whatever it left behind is ended with its group once it has exited.
+ * closing, so a process it left behind holding them cannot hold the runner.
+ * A suite that exits on its own is not signalled afterwards: its group's id
+ * can be handed to another process from the moment it is collected, so
+ * whatever it left running is left to finish on its own, as before.
  *
  * `limitMs` and `graceMs` exist for this module's own tests, which cannot wait
  * minutes for a limit. No harness passes them: a row's limit is the runner's.
@@ -813,9 +852,10 @@ function runSuite(command, args, { cwd = ROOT, env = process.env, limitMs, grace
     const kid = spawn(command, args, { cwd, env: suiteEnv(env), stdio: ['ignore', 'pipe', 'pipe'], detached: POSIX });
     // Recorded on the line the child is created: from here on there is a
     // group on this machine that only this map knows about.
-    if (kid.pid) {
+    const live = kid.pid ? { kid, graceMs, released: false } : null;
+    if (live) {
       if (!liveSuites.size) armSuites();
-      liveSuites.set(kid.pid, { kid, graceMs });
+      liveSuites.set(kid.pid, live);
     }
     let stdout = '';
     let stderr = '';
@@ -852,6 +892,10 @@ function runSuite(command, args, { cwd = ROOT, env = process.env, limitMs, grace
     }, limit);
     kid.on('error', (err) => settle(() => reject(Object.assign(err, { stdout, stderr }))));
     kid.on('exit', (status, signal) => {
+      // COLLECTED. From here the suite's pid, its group's id, can be handed to
+      // a process started after it, so the group is released and nothing
+      // signals it again.
+      if (live) releaseSuite(kid.pid, live);
       exited = { status, signal };
       drain = wallSetTimeout(finished, SUITE_DRAIN_MS);
     });
