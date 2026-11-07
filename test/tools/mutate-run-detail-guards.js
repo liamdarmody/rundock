@@ -104,6 +104,11 @@ const COUNT_WRITER = { src: path.join(ROOT, 'lib', 'scheduler.js'), suite: 'test
 const COUNT_WIRING = { src: path.join(ROOT, 'server.js'), suite: 'test/integration/unattended-refusal.test.js' };
 const COUNT_ROUTE = { src: path.join(ROOT, 'lib', 'http-router.js'), suite: 'test/unit/unattended-refusal.test.js' };
 const COUNT_DENY = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'process-control.js'), suite: 'test/unit/unattended-refusal.test.js' };
+// Whether a run used the shell: found by the transcript reader, watched by
+// the reader's own suite; written by the two record writers, watched by the
+// file that closes real runs of a private scheduler with a stand-in reader.
+const SHELL_READER = { src: path.join(ROOT, 'lib', 'runtime', 'session-transcript.js'), suite: 'test/unit/session-transcript.test.js' };
+const SHELL_RECORD = { src: path.join(ROOT, 'lib', 'scheduler.js'), suite: 'test/unit/run-record-shell.test.js' };
 
 // [target, label, the guard as it is written, what it becomes without it]
 const MUTATIONS = [
@@ -301,6 +306,22 @@ const MUTATIONS = [
     '    if (count === undefined) return null;'],
   [VIEW, 'Refused count: the line is never drawn',
     '    + refused\n',
+    ''],
+  // ===== WHETHER A RUN USED THE SHELL =====
+  [SHELL_READER, 'Shell use: the shell tool names removed from the reader',
+    "const SHELL_TOOLS = new Set(['Bash', 'PowerShell']);",
+    'const SHELL_TOOLS = new Set([]);'],
+  [SHELL_READER, 'Shell use: the sidechain shell scan removed',
+    '      if (SHELL_TOOLS.has(block.name)) shell = true;\n',
+    ''],
+  [SHELL_RECORD, 'Shell use: the shell field dropped from endRunRecord',
+    '    ...(observed.usedShell === true ? { usedShell: true } : {}),\n  });\n  // THE ONE PLACE A RUN STOPS BEING OPEN',
+    '  });\n  // THE ONE PLACE A RUN STOPS BEING OPEN'],
+  [SHELL_RECORD, 'Shell use: the shell field written on every record',
+    '    ...(observed.usedShell === true ? { usedShell: true } : {}),\n  });\n  // THE ONE PLACE A RUN STOPS BEING OPEN',
+    '    usedShell: observed.usedShell === true,\n  });\n  // THE ONE PLACE A RUN STOPS BEING OPEN'],
+  [SHELL_RECORD, 'Shell use: the shell field dropped from the startup close',
+    "        // From the same reader as the ending's, on the same terms.\n        ...(observed.usedShell === true ? { usedShell: true } : {}),\n",
     ''],
 ];
 

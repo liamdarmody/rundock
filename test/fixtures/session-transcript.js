@@ -132,6 +132,21 @@ function sidechainWrite(sessionId, { file, tool = 'Write', at = '2026-08-22T19:1
   });
 }
 
+/**
+ * A subagent's shell call, in the subagent's own transcript: the ask, and an
+ * outcome that is a sentence with no payload, as sidechainWrite's is.
+ */
+function sidechainShell(sessionId, { command, at = '2026-08-22T19:15:21.000Z' } = {}) {
+  const id = toolId();
+  return line({
+    type: 'assistant', sessionId, timestamp: at, isSidechain: true, agentId: 'agent_fixture',
+    message: { role: 'assistant', content: [{ type: 'tool_use', id, name: 'Bash', input: { command, description: 'shell' } }] },
+  }) + line({
+    type: 'user', sessionId, timestamp: at, isSidechain: true, agentId: 'agent_fixture',
+    message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: '(Bash completed with no output)' }] },
+  });
+}
+
 /** A subagent that only ever talked, which changes nothing anywhere. */
 function sidechainSay(sessionId, text, at = '2026-08-22T19:15:22.000Z') {
   return line({
@@ -141,16 +156,19 @@ function sidechainSay(sessionId, text, at = '2026-08-22T19:15:22.000Z') {
 }
 
 /**
- * A shell command and what came back, as the stub `claude` records one. Made
- * for the stub's own transcript, not captured: the session reader reads file
- * tools only and passes over this, and the tests that read it want the
- * refusal, which is the CLI's own words (test/fixtures/claude-cli-notes-mode.json).
+ * A shell command and what came back, as the stub `claude` records one. The
+ * session reader lists no file from it and notes that the shell was used; the
+ * tests that read the refusal want the CLI's own words
+ * (test/fixtures/claude-cli-notes-mode.json). The ask's shape matches a
+ * transcript Claude Code 2.1.319 wrote for a Bash call and a PowerShell call:
+ * an assistant entry whose tool_use block names the tool and carries
+ * `{ command, description }`.
  */
-function shellTool(sessionId, { command, refusal = null, at = '2026-08-22T19:15:09.000Z' } = {}) {
+function shellTool(sessionId, { command, refusal = null, tool = 'Bash', at = '2026-08-22T19:15:09.000Z' } = {}) {
   const id = toolId();
   return line({
     type: 'assistant', sessionId, timestamp: at,
-    message: { role: 'assistant', content: [{ type: 'tool_use', id, name: 'Bash', input: { command, description: 'shell' } }] },
+    message: { role: 'assistant', content: [{ type: 'tool_use', id, name: tool, input: { command, description: 'shell' } }] },
   }) + line({
     type: 'user', sessionId, timestamp: at,
     toolUseResult: refusal ? `Error: ${refusal}` : { stdout: '', stderr: '', interrupted: false },
@@ -169,4 +187,4 @@ function completed(sessionId, opts) {
   return ask + answered;
 }
 
-module.exports = { prompt, say, fileTool, shellTool, unanswered, completed, delegate, sidechainWrite, sidechainSay };
+module.exports = { prompt, say, fileTool, shellTool, unanswered, completed, delegate, sidechainWrite, sidechainShell, sidechainSay };

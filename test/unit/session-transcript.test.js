@@ -391,6 +391,70 @@ describe('a run that handed work to a subagent', () => {
 });
 
 // ---------------------------------------------------------------------------
+// A run that used the shell
+// ---------------------------------------------------------------------------
+
+describe('a run that used the shell says so', () => {
+  // A file written through the shell has no path argument to read, so the
+  // list cannot hold it. What the reader CAN say is that the shell was used,
+  // which is what tells a reader of the record that a short or empty list may
+  // be incomplete. Each list below is non-empty where it can be, so "it read
+  // the shell call" cannot pass for "it read nothing".
+  test('a Bash call reports shell use, beside the files the file tools wrote', () => {
+    const sid = 'e1000000-0000-4000-8000-000000000001';
+    writeTranscript(sid, [fx.prompt(sid, 'go'), fx.shellTool(sid, { command: 'touch digest.md' }),
+      fx.completed(sid, { file: '/w/notes.md' })]);
+    const result = readSessionTranscript(sid);
+    assert.strictEqual(result.status, 'known', 'a shell call does not make the list unknown');
+    assert.deepStrictEqual(paths(result), ['/w/notes.md'], 'and the file tools\' own list is kept exactly');
+    assert.strictEqual(result.usedShell, true, 'the shell call is reported');
+  });
+
+  test('a PowerShell call reports shell use', () => {
+    const sid = 'e1000000-0000-4000-8000-000000000002';
+    writeTranscript(sid, [fx.prompt(sid, 'go'), fx.shellTool(sid, { tool: 'PowerShell', command: 'New-Item digest.md' })]);
+    const result = readSessionTranscript(sid);
+    assert.strictEqual(result.status, 'known');
+    assert.deepStrictEqual(result.files, []);
+    assert.strictEqual(result.usedShell, true, 'the Windows shell counts as the shell');
+  });
+
+  // An error result cannot tell a call that was refused from one that ran,
+  // wrote a file, and then exited non-zero. Only the second matters here, and
+  // the two are indistinguishable, so both report the shell.
+  test('a shell call whose result is an error still reports shell use', () => {
+    const sid = 'e1000000-0000-4000-8000-000000000003';
+    writeTranscript(sid, [fx.prompt(sid, 'go'), fx.shellTool(sid, { command: 'make digest', refusal: 'Exit code 3' })]);
+    const result = readSessionTranscript(sid);
+    assert.strictEqual(result.status, 'known');
+    assert.strictEqual(result.usedShell, true, 'a shell call that ended in an error may have written first');
+  });
+
+  test('a shell call in a subagent\'s own transcript reports shell use for the run', () => {
+    const sid = 'e1000000-0000-4000-8000-000000000004';
+    writeTranscript(sid, [fx.prompt(sid, 'go'), fx.completed(sid, { file: '/w/parent.md' }), fx.delegate(sid)]);
+    writeSidechain(sid, [fx.sidechainSay(sid, 'on it'), fx.sidechainShell(sid, { command: 'touch digest.md' })]);
+    const result = readSessionTranscript(sid);
+    assert.strictEqual(result.status, 'known', 'a subagent that used only the shell asked to change no file');
+    assert.deepStrictEqual(paths(result), ['/w/parent.md'], 'so the parent\'s list stands');
+    assert.strictEqual(result.usedShell, true, 'and the run reports the shell its subagent used');
+  });
+
+  // The record of a run that used only the file tools must be exactly what it
+  // was, so the field is absent rather than false.
+  test('a run of file tools only reports no shell use, and carries no shell field', () => {
+    const sid = 'e1000000-0000-4000-8000-000000000005';
+    writeTranscript(sid, [fx.prompt(sid, 'go'), fx.completed(sid, { file: '/w/only.md' })]);
+    writeSidechain(sid, [fx.sidechainSay(sid, 'read a file and reported back')]);
+    const result = readSessionTranscript(sid);
+    assert.strictEqual(result.status, 'known');
+    assert.deepStrictEqual(paths(result), ['/w/only.md']);
+    assert.ok(!('usedShell' in result), 'no shell field at all on a run that never used the shell');
+    assert.deepStrictEqual(Object.keys(result), ['status', 'reason', 'files', 'activity']);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Progress while it runs
 // ---------------------------------------------------------------------------
 
