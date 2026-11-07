@@ -476,6 +476,7 @@
       "a stored catch-up is removed once a new process is given it": 1.89,
       "a stored catch-up is removed once the live process gives it": 1.88,
       "a catch-up given to a refused resume goes to the fresh start": 0.71,
+      "the conversation list leaves the stored catch-up out": 0.43,
       "a handback prompt honors the arrival heading it is asked for": 0.99,
       "a message sent into a process still starting is kept": 15.96,
       "a turn started again is given what was kept, after its prompt": 16.03,

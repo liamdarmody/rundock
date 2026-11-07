@@ -372,3 +372,23 @@ describe('a message sent between an init and a refused resume', () => {
     h.reapConvo(convoId);
   });
 });
+
+describe('a stored catch-up stays on the server', () => {
+  test('the conversation list a window is sent leaves it out, and the store keeps it', async () => {
+    const convoId = h.freshConvoId('held-not-sent');
+    seed(convoId, {
+      agentId: 'chief-of-staff', activeAgentId: 'chief-of-staff', sessionId: null, sessionIds: [],
+      createdAt: new Date().toISOString(), lastActiveAt: new Date().toISOString(),
+      freshCatchUp: { agentId: 'chief-of-staff', text: `${ARRIVING}\nHELD-N1 kept for the next message\n\n` },
+    });
+    const since = client.messages.length;
+    client.send({ type: 'get_conversations' });
+    const { msg } = await client.waitFor((m) => m.type === 'conversations', { since, label: 'the conversation list' });
+    const listed = msg.conversations.find((c) => c.id === convoId);
+    assert.ok(listed, 'the conversation is listed');
+    assert.ok(!('freshCatchUp' in listed), 'without the catch-up, which is the server\'s');
+    assert.ok(!JSON.stringify(msg).includes('HELD-N1'), 'nor its words anywhere in the list');
+    assert.deepStrictEqual(stored(convoId).freshCatchUp,
+      { agentId: 'chief-of-staff', text: `${ARRIVING}\nHELD-N1 kept for the next message\n\n` }, 'the store still holds it for the next message');
+  });
+});
