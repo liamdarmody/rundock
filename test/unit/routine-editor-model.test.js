@@ -605,7 +605,7 @@ describe('routine editor: a monthly schedule', () => {
       'a month with no day is not a schedule, so there is no sentence to show');
   });
 
-  test('the grey note ends on the monthly catch-up for month, and on the same-day one otherwise', () => {
+  test('the catch-up note ends on the monthly sentence for month, and on the same-day one otherwise', () => {
     const rule = 'Rundock only runs the routines of the workspace that is open, '
       + "so this one's do not run while you are elsewhere. ";
     assert.strictEqual(model.scheduleStepFields({ frequency: 'month' }).workspaceCaveat,

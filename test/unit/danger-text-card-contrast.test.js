@@ -1,5 +1,5 @@
 'use strict';
-// The colours the monthly schedule work adds, measured in the dark theme and
+// The colors the monthly schedule work adds, measured in the dark theme and
 // the light theme from the token values in tokens.css.
 //
 // Two new things on the routines screens carry text: the unreadable-schedule
