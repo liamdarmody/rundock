@@ -467,3 +467,124 @@ test(`a run's child is taken off the pid file it was registered in, though anoth
   await h.waitUntil(() => !pidsIn(a.dir).includes(pid), { timeout: 2000 });
   assert.ok(!pidsIn(a.dir).includes(pid), 'and taken off it when it closed, with B open');
 });
+
+// ===== A CODEX ROUTINE =====
+//
+// Codex routines run on one app-server the whole Rundock process shares with
+// Codex conversations. A switch shuts that server down, which ended any Codex
+// routine turn on it. The server a routine turn runs on is now held until the
+// turn ends: the switch interrupts the conversation turns of the workspace
+// being left, and the server shuts down once its last routine turn has ended.
+
+const SCRIBE_KEY = 'scribe:note-check';
+const appServerLog = (dir) => invocationsIn(dir).filter(e => e.mode === 'app-server');
+const appServerPid = (dir) => { const spawn = appServerLog(dir).find(e => e.event === 'spawn'); return spawn ? spawn.pid : null; };
+const requests = (dir, method) => appServerLog(dir).filter(e => e.method === method);
+const turnFor = (dir, body) => requests(dir, 'turn/start').find(e => JSON.stringify(e.params.input).includes(body));
+
+// A workspace whose scribe, a Codex agent, runs `prompt` every day at 09:00.
+// `rule` is merged into the routine's rule; `appServer` and `rules` into the
+// stub app-server's scenario.
+function scribeWorkspace(prompt, { rule = {}, appServer = {}, rules = [] } = {}) {
+  const dir = makeWorkspace({
+    claudeMd: '# Scribe fixture\n',
+    agents: {
+      scribe: agentFile({
+        name: 'scribe', description: 'Writes things down', type: 'specialist', order: 1, runtime: 'codex',
+        routines: [{ name: 'note-check', schedule: SCHEDULE, prompt, enabled: true }],
+      }),
+    },
+  });
+  fs.writeFileSync(path.join(dir, 'stub-codex-scenario.json'), JSON.stringify({
+    appServer: { ...appServer, rules: [...rules, { match: { promptIncludes: prompt }, text: 'noted', ...rule }] },
+  }));
+  return dir;
+}
+
+async function startCodexRun(t, dir, at) {
+  await choose(dir);
+  clock.at = at;
+  tick(t);
+}
+
+test('a Codex routine turn survives a switch, which interrupts only the conversation turns being left', async (t) => {
+  const release = path.join(h.workspaceDir, `release-codex-${process.pid}`);
+  const a = scribeWorkspace('codex routine body', {
+    rule: { untilFile: release },
+    rules: [{ match: { promptIncludes: 'codex conversation body' }, deltas: ['working '], holdForInterrupt: true }],
+  });
+  const b = keeperWorkspace('codex elsewhere body');
+  await startCodexRun(t, a, dayAt(16, 9, 30));
+  await h.waitUntil(() => turnFor(a, 'codex routine body'));
+  assert.ok(turnFor(a, 'codex routine body'), 'the routine\'s turn started on the shared app-server');
+  const server = appServerPid(a);
+
+  // A conversation in A, on the same server, with a turn going.
+  const convoId = h.freshConvoId('carry');
+  client.send({ type: 'chat', conversationId: convoId, agent: 'scribe', content: 'codex conversation body' });
+  await h.waitUntil(() => turnFor(a, 'codex conversation body'));
+  const convoThread = turnFor(a, 'codex conversation body').params.threadId;
+  const routineThread = turnFor(a, 'codex routine body').params.threadId;
+  assert.notStrictEqual(convoThread, routineThread, 'two turns, on two threads');
+
+  await choose(a);
+  await h.waitUntil(() => requests(a, 'turn/interrupt').length > 0, { timeout: 3000 });
+  assert.deepStrictEqual(requests(a, 'turn/interrupt').map(e => e.params.threadId), [convoThread],
+    're-selecting the workspace interrupted the conversation\'s turn, and only that one');
+  await choose(b.dir);
+  await h.delay(300);
+  assert.deepStrictEqual(recordsIn(a).map(r => r.status), ['running'], 'the routine run is still going after both switches');
+  assert.ok(h.pidAlive(server), 'and so is the app-server it runs on');
+  assert.deepStrictEqual(requests(a, 'turn/interrupt').map(e => e.params.threadId), [convoThread],
+    'its turn was never interrupted');
+
+  fs.writeFileSync(release, '');
+  await h.waitUntil(() => closedIn(a) === 1);
+  assert.strictEqual(recordsIn(a)[0].status, 'succeeded', 'the run ends with the outcome its turn gave');
+  assert.strictEqual(stateIn(a)[SCRIBE_KEY].status, 'completed', 'recorded in its own workspace');
+  assert.ok(await h.waitForPidExit(server, 5000), 'and the app-server shut down once its last routine turn ended');
+});
+
+// The switch lands while the app-server is still starting, before any routine
+// or conversation holds it. Nothing will ever hold it as the shared server
+// again, so once the routine's turn on it ends nobody would shut it down.
+test('a switch while the app-server is still starting leaves no app-server nothing will shut down', async (t) => {
+  const started = path.join(h.workspaceDir, `release-codex-start-${process.pid}`);
+  const a = scribeWorkspace('codex start body', { appServer: { initializeUntilFile: started } });
+  const b = keeperWorkspace('codex start elsewhere body');
+  await startCodexRun(t, a, dayAt(17, 9, 30));
+  await h.waitUntil(() => requests(a, 'initialize').length > 0);
+  const server = appServerPid(a);
+  assert.ok(server, 'the app-server was spawned, and is held in its start');
+
+  await choose(b.dir);
+  fs.writeFileSync(started, '');
+  await h.waitUntil(() => closedIn(a) === 1);
+
+  assert.strictEqual(recordsIn(a)[0].status, 'succeeded', 'the run went on once the server had started');
+  const [thread] = requests(a, 'thread/start');
+  assert.strictEqual(thread.params.cwd, a, 'and its thread was opened in the workspace the run started in');
+  assert.ok(await h.waitForPidExit(server, 5000), 'no app-server outlives the run');
+});
+
+// The control failing: the deferred shutdown meets an app-server that does not
+// stop on SIGTERM. It is sent SIGKILL after the grace period, as any shutdown
+// of it is.
+test('an app-server that stalls on the deferred shutdown is killed after the grace period', async (t) => {
+  const release = path.join(h.workspaceDir, `release-codex-stall-${process.pid}`);
+  const a = scribeWorkspace('codex stall body', { rule: { untilFile: release }, appServer: { ignoreSigterm: true } });
+  const b = keeperWorkspace('codex stall elsewhere body');
+  await startCodexRun(t, a, dayAt(18, 9, 30));
+  await h.waitUntil(() => turnFor(a, 'codex stall body'));
+  const server = appServerPid(a);
+
+  await choose(b.dir);
+  fs.writeFileSync(release, '');
+  await h.waitUntil(() => closedIn(a) === 1);
+  assert.strictEqual(recordsIn(a)[0].status, 'succeeded', 'the run ended with its turn');
+
+  await h.waitUntil(() => appServerLog(a).some(e => e.event === 'sigterm-ignored'), { timeout: 3000 });
+  assert.ok(appServerLog(a).some(e => e.event === 'sigterm-ignored'), 'the deferred shutdown sent SIGTERM, which it ignored');
+  assert.ok(h.pidAlive(server), 'so it was still running');
+  assert.ok(await h.waitForPidExit(server, 6000), 'until SIGKILL ended it after the grace period');
+});

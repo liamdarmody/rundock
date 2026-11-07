@@ -2731,9 +2731,9 @@ process.on('exit', () => {
     }
   }
   // The shared Codex app-server may still be draining its graceful
-  // SIGTERM; it must not outlive the server process.
-  const codexAppServerPid = codexGlue.getCodexAppServerPid();
-  if (codexAppServerPid) {
+  // SIGTERM, and one a routine turn held past a switch may still be running;
+  // neither may outlive the server process.
+  for (const codexAppServerPid of codexGlue.getCodexAppServerPids()) {
     try { killProcessTree(codexAppServerPid, 'SIGKILL'); } catch (e) {}
   }
 });
