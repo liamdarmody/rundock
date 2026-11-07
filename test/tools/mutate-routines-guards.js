@@ -582,6 +582,9 @@ const MUTATIONS = [
   [STYLES, 'a failure is not dressed as a success',
     '.run-status.failed { font-weight: 600; color: var(--danger-text); }',
     '.run-status.failed { font-weight: 600; color: var(--success); }'],
+  [STYLES, 'a failure is not dressed as the success text the successes wear',
+    '.run-status.failed { font-weight: 600; color: var(--danger-text); }',
+    '.run-status.failed { font-weight: 600; color: var(--success-text); }'],
 
   // ===== THE SAVE DESTINATION, AND THE SILENCE AROUND IT =====
   // The trap the criteria name. Each of these is a way for a written routine

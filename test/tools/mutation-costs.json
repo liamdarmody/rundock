@@ -174,6 +174,8 @@
       "a late run keeps the success colour, and no state is amber": 2.5,
       "a late run is quieter than a punctual one": 2.3,
       "a slot nobody served is not dressed as a failure": 2.4,
+      "a failure is not dressed as a success": 2.2,
+      "a failure is not dressed as the success text the successes wear": 2.1,
       "contrast: .sidebar-label back to --text-2": 0.2,
       "contrast: .scope-item.active .scope-name back to --accent": 0.3,
       "contrast: .scope-item.active .scope-count back to --accent": 0.2,
