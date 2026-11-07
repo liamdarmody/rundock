@@ -26,6 +26,7 @@ const path = require('node:path');
 const ROOT = path.join(__dirname, '..', '..');
 const SCHEDULER_KEY = require.resolve('../../lib/scheduler.js');
 const claude = require('../../lib/runtime/claude.js');
+const { writeWholeFile } = require('../../lib/store/whole-file.js');
 
 // A private copy per test, so wiring and state never leak into the shared one.
 function freshScheduler() {
@@ -238,6 +239,69 @@ describe('a write cut off before its rename leaves the last whole file', () => {
       });
     });
   }
+});
+
+// The name the helper's next temporary file in `target`'s folder takes, learned
+// from a write of its own beside it: the process and a count.
+function nextTempName(target) {
+  const probe = path.join(path.dirname(target), 'probe.json');
+  const log = recordingFs(() => writeWholeFile(probe, '{}'));
+  fs.rmSync(probe);
+  const opened = log.find(e => e.op === 'openSync' && e.write);
+  const count = Number(/\.(\d+)\.tmp$/.exec(opened.path)[1]);
+  return `${target}.${process.pid}.${count + 1}.tmp`;
+}
+
+// A file or a link already at the name a temporary file takes is never written
+// through: the temporary file is created new, or the write fails. A link
+// followed there would put the state wherever it points, and its rename would
+// then put the link itself in place of the file.
+describe('a temporary file is created new, never opened through what is already there', () => {
+  for (const writer of WRITERS) {
+    test(`${writer.store}: a link at the next temporary name leaves its target, and the file, as they were`, () => {
+      withWorkspace((ws) => {
+        const sched = freshScheduler();
+        writer.before(sched, ws);
+        const target = path.resolve(writer.target(ws));
+        const previous = fs.readFileSync(target);
+        const elsewhere = path.join(ws, 'elsewhere.txt');
+        fs.writeFileSync(elsewhere, 'untouched\n');
+        const planted = nextTempName(target);
+        fs.symlinkSync(elsewhere, planted);
+        errorsDuring(() => writer.write(sched, ws));
+        assert.strictEqual(fs.readFileSync(elsewhere, 'utf-8'), 'untouched\n', `${writer.store}: the write went through the link`);
+        assert.ok(!fs.lstatSync(target).isSymbolicLink(), `${writer.store}: the link was renamed over the file`);
+        assert.ok(fs.readFileSync(target).equals(previous), `${writer.store}: the file changed although its write could not start`);
+        assert.ok(fs.lstatSync(planted).isSymbolicLink(), `${writer.store}: what was at the temporary name was removed or replaced`);
+        writer.readBack(ws);
+      });
+    });
+  }
+
+  test('the helper throws, as for any other failed write, and leaves the file as it was', () => {
+    withWorkspace((ws) => {
+      const target = stateFile(ws);
+      writeWholeFile(target, '{"before":true}');
+      const planted = nextTempName(target);
+      fs.writeFileSync(planted, 'somebody else\'s\n');
+      assert.throws(() => writeWholeFile(target, '{"after":true}'), (e) => e.code === 'EEXIST');
+      assert.strictEqual(fs.readFileSync(target, 'utf-8'), '{"before":true}');
+      assert.strictEqual(fs.readFileSync(planted, 'utf-8'), 'somebody else\'s\n', 'a file it did not make was written or removed');
+    });
+  });
+
+  // Readable by its owner alone, as the run's stderr capture beside the records is.
+  test('a state file is written readable by its owner alone', { skip: process.platform === 'win32' && 'no POSIX modes' }, () => {
+    withWorkspace((ws) => {
+      for (const writer of WRITERS) {
+        const sched = freshScheduler();
+        writer.before(sched, ws);
+        writer.write(sched, ws);
+        const mode = fs.statSync(writer.target(ws)).mode & 0o777;
+        assert.strictEqual(mode, 0o600, `${writer.store} is written as ${mode.toString(8)}`);
+      }
+    });
+  });
 });
 
 // ── AC: the inventory ──────────────────────────────────────────────────────
