@@ -4,6 +4,12 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
+## Unreleased
+
+### Fixed
+
+- **Claude Code installed with npm on Windows starts again:** current versions of Node refuse to start a `.cmd` file without a command shell, so when Claude Code was installed with `npm install -g`, every chat ended in "Couldn't start Claude Code: spawn EINVAL". Rundock now starts the package npm installed through Node, with the package's own entry point, for chats and for the setup wizard's sign-in check, and never through a command shell, which would read your message as part of a command. If that entry point, or a Node to run it with, can't be found, Rundock starts nothing and says which copy it found, why it can't start it, and how to install one it can.
+
 ## 0.15.7: See What You Approve (2026-11-02)
 
 Connector cards now show who an email goes to and what it says before you allow it, and in Notes mode a Claude Code agent's connector action with send as a whole word in its name always asks. An expired Claude session reconnects from the app. Code in a here-document raises fewer of the false cards that stopped routines, and agents now ask before changing the files that decide what runs outside the sandbox.
