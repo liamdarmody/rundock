@@ -352,6 +352,51 @@ describe('the script macOS\'s Terminal is opened on', { skip: process.platform =
     assert.throws(() => C.writeConsoleScript(file, CONTENT, { uid: process.getuid() + 1 }));
     assert.strictEqual(fs.existsSync(file), false);
   });
+
+  // One write call may take fewer bytes than it is handed (a nearly full
+  // drive, a limit on file size), and the count it returns is the only sign.
+  // Terminal runs whatever the file holds, so a script cut short would run
+  // half a command. Here the system call is swapped for one that really
+  // writes at most `most` bytes of what it is handed, at the position it was
+  // asked for. A runaway loop is stopped with an error of its own rather
+  // than left to hang the suite, and the standard streams pass straight
+  // through.
+  const realWriteSync = fs.writeSync;
+  function writesAtMost(most) {
+    const stub = function writeSync(fd, buffer, offset, length, position) {
+      if (fd <= 2) return realWriteSync.apply(fs, arguments);
+      stub.calls += 1;
+      if (stub.calls > 1000) throw new Error('the write was tried over a thousand times');
+      // Either shape fs.writeSync takes: a string with its position and
+      // encoding, or a buffer with an offset, a length and a position.
+      const text = typeof buffer === 'string';
+      const bytes = text
+        ? Buffer.from(buffer, typeof length === 'string' ? length : 'utf8')
+        : buffer.subarray(offset || 0, length == null ? buffer.length : (offset || 0) + length);
+      return realWriteSync(fd, bytes, 0, Math.min(most, bytes.length), text ? offset : position);
+    };
+    stub.calls = 0;
+    return stub;
+  }
+  test('a write the system takes a few bytes at a time still leaves the whole script', (t) => {
+    // A character of two bytes in the path, so a cut can land inside one.
+    const whole = "#!/bin/sh\nexec '/opt/café tools/claude' auth login\n";
+    const file = scriptAt(madeUpHome());
+    const stub = writesAtMost(5);
+    t.mock.method(fs, 'writeSync', stub);
+    C.writeConsoleScript(file, whole);
+    t.mock.restoreAll();
+    assert.ok(stub.calls > 2, `the write was cut short more than once (${stub.calls} calls)`);
+    assert.ok(fs.readFileSync(file).equals(Buffer.from(whole, 'utf8')), 'every byte of the script is on disk');
+    assert.strictEqual(mode(file), 0o700);
+  });
+  test('a write that takes nothing fails the script rather than leaving it short or trying forever', (t) => {
+    const file = scriptAt(madeUpHome());
+    t.mock.method(fs, 'writeSync', writesAtMost(0));
+    try {
+      assert.throws(() => C.writeConsoleScript(file, CONTENT), { code: 'EIO' });
+    } finally { t.mock.restoreAll(); }
+  });
 });
 
 describe('opening it', () => {
