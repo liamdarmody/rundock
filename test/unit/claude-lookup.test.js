@@ -677,25 +677,23 @@ describe('one module finds claude, and nothing reads its version through a shell
 
 // ── The desktop app's check reads a version with no shell ──
 
-// findClaude and ensurePath as the desktop app has them, run here with the
-// lookup this file wires, so the desktop app's own code is what is checked.
-// The desktop app's Claude Code checks, from the module electron/main.js
-// takes them from (electron/claude-check.js), run here with the lookup this
-// file wires. findClaude in main.js keeps what installedCopy found and its
-// version, and nothing more (the source check below holds it to that), as
-// this does.
+// The desktop app's Claude Code checks come from electron/claude-check.js,
+// run here with the lookup this file wires. findClaude itself is the body
+// electron/main.js has, read out of the file and run here with the version it
+// keeps, requiring ./claude-check.js from the electron folder as main.js
+// does. So an edit to it in main.js, such as dropping the version it records
+// or asking for another platform, is what these tests run.
 const claudeCheck = () => require('../../electron/claude-check.js');
 function desktopCheck() {
-  let version = null;
-  return {
-    findClaude: () => {
-      const found = claudeCheck().installedCopy();
-      if (!found) return null;
-      version = found.version;
-      return found.bin;
-    },
-    version: () => version,
-  };
+  const main = src('electron/main.js');
+  const find = body(main, 'findClaude');
+  // Nothing is run before this holds: a check that runs a command line of its
+  // own would run it on the machine running the suite.
+  assert.doesNotMatch(find, /\bexec(?:Sync|FileSync)?\(|\bspawn(?:Sync)?\(/, 'findClaude runs nothing of its own');
+  assert.ok(main.includes('\nlet claudeFoundVersion = null;\n'), 'main.js keeps the version findClaude records, for the reconnect console');
+  const code = `let claudeFoundVersion = null;\n${find}\nreturn { findClaude, version: () => claudeFoundVersion };`;
+  const desktopRequire = (id) => require(id.startsWith('.') ? path.join(ROOT, 'electron', id) : id);
+  return new Function('require', 'process', code)(desktopRequire, process);
 }
 
 describe('the desktop app\'s check reports the copy the lookup chose, with the version it read', { skip: POSIX }, () => {
@@ -807,6 +805,20 @@ describe('the desktop app\'s check reports the copy the lookup chose, with the v
         assert.strictEqual(m.shell.runs().length, 3, 'the shell that could not answer was asked once');
         assert.strictEqual(warn.lookupLines().length, 1, 'and logged once');
       });
+    } finally { warn.restore(); }
+  });
+
+  test('on Windows it reports an npm install by its launcher, with the version its package names, and never runs the launcher', async () => {
+    const m = machine();
+    const npm = npmLauncher(m.dir('npm'), '2.1.318');
+    const warn = quietWarn();
+    try {
+      await on(m, { today: [windows(m, [npm])], platform: 'win32' }, () => {
+        const desktop = desktopCheck();
+        assert.strictEqual(desktop.findClaude(), npm.bin, 'the launcher where.exe lists');
+        assert.strictEqual(desktop.version(), '2.1.318', 'with its package\'s version, read for the platform the lookup runs for');
+      });
+      assert.deepStrictEqual(npm.runs(), [], 'the launcher was never run, for its version or anything else');
     } finally { warn.restore(); }
   });
 
