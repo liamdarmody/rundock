@@ -176,7 +176,16 @@
       "the suppression compares the day, not just the time": 0.4,
       "a weekly routine that already ran at its time on its day is not run again": 0.3,
       "the suppression compares the minute, not just the hour": 0.3,
-      "a weekly routine is held by the time it ran, not by its weekday alone": 0.3
+      "a weekly routine is held by the time it ran, not by its weekday alone": 0.3,
+      "the slot the last run served is named": 0.3,
+      "the slot a run served is the one on the day it started": 0.4,
+      "the anchor is the period now falls in, not the last one a tick recorded": 1.6,
+      "a row can name a next run before any tick has seen the routine": 0.4,
+      "the helper's monthly window ends on the slot's own day": 0.4,
+      "the monthly pattern is matched after the weekly one": 0.4,
+      "the last day is computed as day 30": 0.3,
+      "dueAt is dropped from the record": 1.4,
+      "the owed line ignores the consent moment": 1.2
     },
     "mutate-rundock-ui-guards.js": {
       "an alert with an action aligns message and action on the first baseline": 4.1,

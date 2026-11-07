@@ -179,6 +179,14 @@ const EDIT_DOOR_ROW = { src: path.join(ROOT, 'public', 'views', 'routines.js'), 
 // tests establish is what the EXISTING guard does across an edit; mutating it
 // here is what proves they are watching the guard rather than restating it.
 const SCHEDULER_EDIT = { src: path.join(ROOT, 'lib', 'scheduler.js'), suite: 'test/unit/routine-edit-duplicate-run.test.js' };
+// A MONTHLY SCHEDULE, each guard watched by the suite that asks the question it
+// answers: the period by the sweep that holds the tick and the walk to one
+// window, the grammar by the table every copy of it answers, the slot by the
+// calendar cases, and the firing by the tick driven through real runs.
+const SCHEDULER_PERIOD = { src: path.join(ROOT, 'lib', 'scheduler.js'), suite: 'test/unit/scheduler-period.test.js' };
+const SCHEDULER_GRAMMAR = { src: path.join(ROOT, 'lib', 'scheduler.js'), suite: 'test/unit/schedule-grammar-inventory.test.js' };
+const SCHEDULER_SLOTS = { src: path.join(ROOT, 'lib', 'scheduler.js'), suite: 'test/unit/scheduler-slots-dst.test.js' };
+const SCHEDULER_MONTHLY = { src: path.join(ROOT, 'lib', 'scheduler.js'), suite: 'test/integration/scheduler-monthly.test.js' };
 // WHERE A ROUTINE RUNS, WATCHED AT THE RENDERED SURFACE AND NOWHERE ELSE.
 //
 // The rule is that a routine in a workspace this window does not have open is
@@ -537,6 +545,30 @@ const MUTATIONS = [
     "  if (lastRunISO && (parsed.kind === 'weekly'\n"
     + '    ? (now - new Date(lastRunISO)) / 86400000 < 1 && new Date(lastRunISO).getDay() === parsed.day\n'
     + '    : period.served(new Date(lastRunISO)))) return null;'],
+
+  // ===== A MONTHLY SCHEDULE =====
+  //
+  // A month-long window cut to a day records a slot as missed the morning after
+  // while the tick would still have fired it, which is the phantom gap the
+  // period exists to prevent.
+  [SCHEDULER_PERIOD, "the helper's monthly window ends on the slot's own day",
+    '    ? new Date(slot.getFullYear(), slot.getMonth() + 1, 1)\n',
+    '    ? new Date(slot.getFullYear(), slot.getMonth(), slot.getDate() + 1)\n'],
+  // "on day 15 of every month at 09:00" ends in a weekly-shaped "every month at
+  // 09:00", which the weekly branch refuses, so matched second it never fires.
+  [SCHEDULER_GRAMMAR, 'the monthly pattern is matched after the weekly one',
+    '  if (monthlyMatch) {\n',
+    '  if (monthlyMatch && !/every (\\w+) at (\\d{2}):(\\d{2})/.test(s)) {\n'],
+  [SCHEDULER_SLOTS, 'the last day is computed as day 30',
+    "  const day = parsed.day === 'last' ? new Date(year, month + 1, 0).getDate() : parsed.day;",
+    "  const day = parsed.day === 'last' ? 30 : parsed.day;"],
+  [SCHEDULER_MONTHLY, 'dueAt is dropped from the record',
+    '    dueAt: dueAt ? dueAt.toISOString() : null,\n',
+    '    dueAt: null,\n'],
+  // The row names a slot the tick will not fire: the approval came after it.
+  [SCHEDULER_MONTHLY, 'the owed line ignores the consent moment',
+    '  const consentAt = routine ? approvalStore.approvedAt(getWorkspace(), routine) : null;\n',
+    '  const consentAt = null;\n'],
 
   // ===== THE THIRD CONTROL ON THE ROW =====
   //
