@@ -58,6 +58,13 @@ const SERVER_STOPPED = { src: path.join(ROOT, 'server.js'), suite: STOPPED };
 const CODEX_STDIN = { src: path.join(ROOT, 'codex-appserver.js'), suite: 'test/unit/codex-appserver-stdin.test.js' };
 const STDIN_UNIT = { src: path.join(ROOT, 'lib', 'runtime', 'child-stdin.js'), suite: 'test/unit/child-stdin.test.js' };
 const STDIN_INVENTORY = { src: path.join(ROOT, 'test', 'unit', 'child-stdin-inventory.test.js'), suite: 'test/unit/child-stdin-inventory.test.js' };
+// A catch-up held for the next message, kept with the conversation through a
+// reap or a restart, and given once.
+const HELD = 'test/integration/held-catch-up.test.js';
+const ENGINE_HELD = { src: ENGINE.src, suite: HELD };
+const SERVER_HELD = { src: SERVER.src, suite: HELD };
+const SAVE_HELD = { src: SAVE.src, suite: HELD };
+const RULES_HELD = { src: RULES.src, suite: HELD };
 
 // ONE NAMED TEST, FOR A ROW WHOSE SUITE STARTS A SERVER. The whole
 // stale-session suite takes some twenty seconds unbroken, and a broken guard
@@ -178,6 +185,45 @@ const MUTATIONS = [
   [RULES, 'a catch-up is held for the next message',
     '  if (entry && prefix) entry.freshCatchUp = prefix;',
     ''],
+  [only(ENGINE_HELD, 'reaches the next message once after the idle reaper ends the fresh start'), 'a held catch-up is stored with the conversation',
+    '  storeHeldCatchUp(convoId, entry);\n  wireProcessHandlers(entry, convoId, null, wireOptions);',
+    '  wireProcessHandlers(entry, convoId, null, wireOptions);'],
+  [only(SAVE_HELD, 'reaches the next message once after the idle reaper ends the fresh start'), 'a save from the window keeps the stored catch-up',
+    '  if (stored && stored.freshCatchUp !== undefined) entry.freshCatchUp = stored.freshCatchUp;\n',
+    ''],
+  [only(SERVER_HELD, 'reaches the next message once after a restart'), 'a new process gives the stored catch-up to its first message',
+    '            const heldCatchUp = takeStoredCatchUp(convoId, entry.agentId);',
+    "            const heldCatchUp = '';"],
+  [only(RULES_HELD, 'reaches the next message once after the idle reaper ends the fresh start'), 'a stored catch-up is removed once a new process is given it',
+    "  storeCatchUp(convoId, null);\n  return readable ? held.text : '';",
+    "  return readable ? held.text : '';"],
+  [only(RULES_HELD, 'given by the live process, it is not given again after a reap or a restart'), 'a stored catch-up is removed once the live process gives it',
+    '  if (prefix && entry.catchUpStoredIn) storeCatchUp(entry.catchUpStoredIn, null);\n',
+    ''],
+  [only(SERVER_HELD, 'a stored catch-up the resume it was given to never read goes to the fresh start, once'), 'a catch-up given to a refused resume goes to the fresh start',
+    '                entry.freshCatchUp = heldCatchUp;\n',
+    ''],
+  [only(SAVE_HELD, 'the conversation list a window is sent leaves it out, and the store keeps it'), 'the conversation list leaves the stored catch-up out',
+    '    delete c.freshCatchUp;\n',
+    ''],
+  [only(SERVER_HELD, 'gives a stored catch-up to its first message, once'), 'the legacy chat path gives the stored catch-up to its first message',
+    '          const legacyCatchUp = takeStoredCatchUp(convoId, entry.agentId);',
+    "          const legacyCatchUp = '';"],
+  [only(SERVER_HELD, 'hands a stored catch-up on from a refused resume to the fresh start, once'), 'the legacy chat path hands a refused resume\'s catch-up to the fresh start',
+    '              entry.freshCatchUp = legacyCatchUp; // never read: it goes to the fresh start\n',
+    ''],
+  [only(ENGINE_HELD, 'with no session to resume, takes the stored catch-up in front of the handback, and it is not given again'), 'a handback start settles a stored catch-up',
+    '  const storedCatchUp = takeStoredCatchUp(convoId, orchestrator.id);',
+    "  const storedCatchUp = '';"],
+  [only(ENGINE_HELD, 'with no session to resume, takes the stored catch-up in front of the handback, and it is not given again'), 'a handback start with no session gives the catch-up with the handback',
+    '      const prompt = coldCatchUp + buildScopeReturnPrompt({',
+    '      const prompt = buildScopeReturnPrompt({'],
+  [only(ENGINE_HELD, 'resuming a session, spends the stored catch-up without repeating it'), 'a resumed handback start only spends the catch-up',
+    "  const coldCatchUp = orchestratorSession ? '' : storedCatchUp;",
+    '  const coldCatchUp = storedCatchUp;'],
+  [only(ENGINE_HELD, 'paused again by the circuit breaker, holds what it took for the message that drives it'), 'a paused handback start holds what it took for the next message',
+    '    holdFreshCatchUp(orchEntry, coldCatchUp);\n',
+    ''],
   [only(CATCHUP, 'in continue mode too, the fresh orchestrator is told the request it never saw'), 'a handback prompt honors the arrival heading it is asked for',
     '  const catchUp = catchUpPrefix(orchMissed, arriving);',
     '  const catchUp = catchUpPrefix(orchMissed);'],
@@ -204,8 +250,8 @@ const MUTATIONS = [
   [only(SERVER, 'a handback paused by the circuit breaker gives the next message the catch-up instead'), 'a message sent to a fresh start with no prompt carries the catch-up',
     '            const followUp = withFreshCatchUp(existing, msg.content);',
     '            const followUp = msg.content;'],
-  [RULES, 'nothing is kept once the session has started',
-    '  if (!entry || entry.sessionId) return;',
+  [RULES, 'nothing is kept once a turn has answered',
+    '  if (!entry || entry.answered) return;',
     '  if (!entry) return;'],
   [RULES, 'what is kept is handed over once',
     '  if (entry) entry.unstartedWrites = [];\n',
@@ -275,9 +321,9 @@ const MUTATIONS = [
   [only(SERVER, 'the legacy spawn starts a refusal that came after an init again fresh too'), 'the legacy path retries a refusal after an init too',
     '(!entry.sessionId || entry.missingSession) &&\n              (legacyStderrRef',
     '!entry.sessionId &&\n              (legacyStderrRef'],
-  [ENGINE_UNIT, 'once the session starts, nothing kept for a refused start is kept',
-    '          // this point, they could be sent a second time.\n          takeUnstartedWrites(entry);\n',
-    '          // this point, they could be sent a second time.\n'],
+  [ENGINE_UNIT, 'the kept list is cleared on the first result',
+    '          noteAnswered(entry);\n',
+    ''],
   [only(SERVER, 'forgets exactly that session: the orchestrator\'s live primary survives, and the window says why'), 'the chat path\'s own retry counts as starting again',
     '\n                entry.missingSessionRecovered = true; // started again below',
     ''],
