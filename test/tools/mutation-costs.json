@@ -229,7 +229,28 @@
       "the server says which form it read": 1.2,
       "the roster carries the form the server read": 0.9,
       "the row hands the server's form to the model": 2.1,
-      "a routine nothing is serving is drawn with no next run": 0.9
+      "a routine nothing is serving is drawn with no next run": 0.9,
+      "an on-time run is not one whose slot went unseen": 1.1,
+      "a slot a tick saw is not one that went unseen": 1.1,
+      "the run carries whether its slot went unseen": 1,
+      "the opening record says its slot went unseen": 1,
+      "the closing record says its slot went unseen": 1.2
+    },
+    "mutate-run-detail-guards.js": {
+      "a pressed run is never called late": 0.2,
+      "a run within 5 minutes of its slot is not late": 0.2,
+      "late is the row's 5 minutes": 0.1,
+      "a record with no dueAt says nothing about it": 0.2,
+      "Rundock was closed is said only when the record says so": 0.2,
+      "the late line names the date it was due": 0.2,
+      "the screen is handed the late line": 0.2,
+      "the late line is drawn under the start time": 1.2,
+      "the late line leads with its word": 1,
+      "the late line sits on the raised surface, in the strong secondary text": 1,
+      "the late line's lead word takes the primary text": 1
+    },
+    "mutate-run-now-guards.js": {
+      "the tick starts its runs as scheduled": 0.8
     },
     "mutate-rundock-ui-guards.js": {
       "an alert with an action aligns message and action on the first baseline": 4.1,

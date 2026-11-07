@@ -146,4 +146,12 @@ describe('the rules that draw them read those tokens', () => {
     assert.ok(css.has('.schedule-problem-body'), 'routines.css has no rule for the notice body');
     assert.strictEqual(css.get('.schedule-problem-body').get('color'), 'var(--text-2-strong)');
   });
+
+  test('the late line on a run, on its elevated surface', () => {
+    const css = rules('public/styles/views/run-detail.css');
+    assert.ok(css.has('.rd-late') && css.has('.rd-late b'), 'run-detail.css has no rule for the late line');
+    assert.strictEqual(css.get('.rd-late').get('background-color'), 'var(--elevated)');
+    assert.strictEqual(css.get('.rd-late').get('color'), 'var(--text-2-strong)');
+    assert.strictEqual(css.get('.rd-late b').get('color'), 'var(--text-1)');
+  });
 });

@@ -565,7 +565,23 @@ const MUTATIONS = [
   [SCHEDULER_MONTHLY, 'dueAt is dropped from the record',
     '    dueAt: dueAt ? dueAt.toISOString() : null,\n',
     '    dueAt: null,\n'],
-  // The row names a slot the tick will not fire: the approval came after it.
+  // Whether no tick saw the slot pass: true only for a slot the previous tick
+  // came before and this one a whole interval after, and on both records.
+  [SCHEDULER_MONTHLY, 'an on-time run is not one whose slot went unseen',
+    '    const unobserved = !!observedBefore && observedBefore < nextRun && now - nextRun >= checkInterval;',
+    '    const unobserved = !!observedBefore && observedBefore < nextRun;'],
+  [SCHEDULER_MONTHLY, 'a slot a tick saw is not one that went unseen',
+    '    const unobserved = !!observedBefore && observedBefore < nextRun && now - nextRun >= checkInterval;',
+    '    const unobserved = !!observedBefore && now - nextRun >= checkInterval;'],
+  [SCHEDULER_MONTHLY, 'the run carries whether its slot went unseen',
+    '    dueUnobserved: dueUnobserved === true,\n',
+    '    dueUnobserved: false,\n'],
+  [SCHEDULER_MONTHLY, 'the opening record says its slot went unseen',
+    '    ...(run.dueUnobserved ? { dueUnobserved: true } : {}),\n    endedAt: null,',
+    '    endedAt: null,'],
+  [SCHEDULER_MONTHLY, 'the closing record says its slot went unseen',
+    '    ...(run.dueUnobserved ? { dueUnobserved: true } : {}),\n    endedAt: endedAt.toISOString(),',
+    '    endedAt: endedAt.toISOString(),'],
   // A hand-typed day 29 to 31: the server names it, and only at a time a form
   // reads, because the row suggests writing that time back.
   [SCHEDULER_GRAMMAR, 'the server names a day 29 to 31 only at a time a form reads',
@@ -596,6 +612,7 @@ const MUTATIONS = [
   [STYLES, 'the notice body is quiet',
     '.schedule-problem-body { color: var(--text-2-strong); font-weight: 400; }',
     '.schedule-problem-body { }'],
+  // The row names a slot the tick will not fire: the approval came after it.
   [SCHEDULER_MONTHLY, 'the owed line ignores the consent moment',
     '  const consentAt = routine ? approvalStore.approvedAt(getWorkspace(), routine) : null;\n',
     '  const consentAt = null;\n'],
