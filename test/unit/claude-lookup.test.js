@@ -311,7 +311,9 @@ describe('the login shell is run as decided', { skip: POSIX }, () => {
         assert.strictEqual(lookup().LOGIN_SHELL_COMMAND, FIXED_COMMAND);
         assert.strictEqual(run.stdin, 'closed');
         assert.strictEqual(fs.realpathSync(run.cwd), fs.realpathSync(m.home), 'from the home folder');
-        assert.deepStrictEqual(Object.keys(run.env).filter((n) => !n.startsWith('__CF')).sort(),
+        // Under --experimental-test-coverage Node adds NODE_V8_COVERAGE to every
+        // child's environment itself, even an explicit one, so it is not Rundock's.
+        assert.deepStrictEqual(Object.keys(run.env).filter((n) => !n.startsWith('__CF') && n !== 'NODE_V8_COVERAGE').sort(),
           ['HOME', 'LANG', 'LC_ALL', 'LOGNAME', 'PATH', 'SHELL', 'TMPDIR', 'USER'], 'only the environment a shell needs, none of Rundock\'s');
         assert.strictEqual(run.env.PATH, '/usr/bin:/bin:/usr/sbin:/sbin', 'with the system default PATH, as nothing recorded the one Rundock started with');
         assert.strictEqual(run.env.HOME, m.home);
