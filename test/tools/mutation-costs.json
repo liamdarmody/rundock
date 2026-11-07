@@ -1,5 +1,5 @@
 {
-  "about": "Seconds per mutation row. secondsPerRow is measured on the CI runner from the shard logs of two full runs of every harness: each harness's measured seconds over its rows, averaged. secondsPerRowLabel, for each harness CI runs in slices, is inferred, not measured: no run records a row's own time, so each slice's measured seconds are shared among its rows in proportion to one plus the tests each turned red, averaged over the runs. secondsPerIntegrationRow is the mean of those inferred costs over a harness's integration rows, the rate for an integration row with no cost of its own. The plan weights shards by these so no shard nears its time limit. A harness missing here is planned at defaultSecondsPerRow, and any other row missing from its harness's labels at that harness's rate; re-measure when a shard runs past fifteen minutes. mutate-stale-session-guards.js is measured on a developer machine, one row at a time, its costs by label measured rather than inferred, until shard logs record it.",
+  "about": "Seconds per mutation row. secondsPerRow is measured on the CI runner from the shard logs of two full runs of every harness: each harness's measured seconds over its rows, averaged. secondsPerRowLabel, for each harness CI runs in slices, is inferred, not measured: no run records a row's own time, so each slice's measured seconds are shared among its rows in proportion to one plus the tests each turned red, averaged over the runs. secondsPerIntegrationRow is the mean of those inferred costs over a harness's integration rows, the rate for an integration row with no cost of its own. The plan weights shards by these so no shard nears its time limit. A harness missing here is planned at defaultSecondsPerRow, and any other row missing from its harness's labels at that harness's rate; re-measure when a shard runs past fifteen minutes. mutate-stale-session-guards.js, and the time-zone rows of mutate-routine-editor-guards.js and mutate-routines-guards.js, are measured on a developer machine, one row at a time, their costs by label measured rather than inferred, until shard logs record them.",
   "defaultSecondsPerRow": 5,
   "secondsPerRow": {
     "mutate-approve-once-guards.js": 0.89,
@@ -1253,6 +1253,18 @@
       "Shell code: a cd into a working folder is not a base": 1.1,
       "Shell code: pushd and popd are not counted when the command cannot be lexed": 1.1,
       "Shell code: a cd to a variable is trusted as a base": 1.1
+    },
+    "mutate-routine-editor-guards.js": {
+      "a caption names the zone the server reports, never the window's": 1.23,
+      "a server that reports no zone is not covered for with the window's": 0.98,
+      "with no zone reported the caption still says whose clock it is": 0.17,
+      "the client records the zone the server sent beside its roster": 0.64
+    },
+    "mutate-routines-guards.js": {
+      "the zone is read each time a roster is built, not kept from start": 0.58,
+      "a runtime that does not know its zone reports none": 0.62,
+      "the list hands every row the zone the server reported": 0.61,
+      "a row on a server in another zone is worked out in the server's zone": 0.2
     }
   }
 }

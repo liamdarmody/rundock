@@ -66,7 +66,7 @@ schedule: every day @ 05:00        # only "at" is recognised
 
 Cron expressions are not supported. The parser does not raise an error on a cron schedule and the scheduler's next-run calculation returns null, so the routine is skipped on every tick. That much is unchanged; what is no longer silent is the reporting. The routine's row in the Routines list says Rundock cannot read the schedule and names both forms that work, and it shows no next run, so a routine that will never fire is distinguishable from one that is simply not due yet.
 
-The schedule is interpreted in the local timezone of the machine running Rundock. There is no timezone field on a routine.
+A schedule follows the clock of the computer Rundock runs on. For a Rundock on a server reached through a tunnel, that is the server's clock, whatever zone the computer showing the window is in. A routine can carry a `timezone` field that names a zone as words, like `Europe/London`. Rundock checks that it is written that way, and doesn't read it when deciding when the routine runs. Firing in a routine's own zone is not supported.
 
 ## Upgrading a workspace that already has routines
 
@@ -201,6 +201,8 @@ ssh -N -L 3000:localhost:3000 you@your-server
 ```
 
 Leave that running, and open Rundock in your browser at `localhost:3000`. Keep the browser on `localhost`: Rundock answers only requests addressed to `localhost:<port>` or `127.0.0.1:<port>`, so the address of the server itself, or any other name for it, is refused. If port 3000 is already taken on your computer, change the first number (`-L 3100:localhost:3000`) and the port in the link to match.
+
+**Routine times follow the server's clock:** a routine set for 08:00 runs at 08:00 in the server's time zone, whatever zone your own computer is in, and the routine editor and the Routines list name that zone.
 
 **The link Rundock prints when it starts.** Each browser needs it once; after that, new tabs and restarts open Rundock as before. When Rundock runs as a systemd service, its output goes to the service's journal, so that is where the link is:
 

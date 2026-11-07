@@ -947,6 +947,74 @@ describe('ROUTINES.md: running a routine now, and consent as change-consent', ()
 });
 
 // ---------------------------------------------------------------------------
+// docs/ROUTINES.md: whose clock a schedule follows
+//
+// The page used to say there was no timezone field on a routine, which was
+// false, and said the schedule followed "the machine running Rundock" without
+// saying which machine that is when the window is on another one. Both halves
+// are pinned to the behavior they describe: a declared zone changes nothing
+// about when a routine is due, and the process's own zone changes everything.
+// ---------------------------------------------------------------------------
+
+describe('ROUTINES.md: a schedule follows the clock of the computer Rundock runs on', () => {
+  const scheduler = require('../../lib/scheduler.js');
+  const { normalizeRoutine } = require('../../lib/agents/routines.js');
+  const CLOCK = 'A schedule follows the clock of the computer Rundock runs on. For a Rundock on a server '
+    + 'reached through a tunnel, that is the server\'s clock, whatever zone the computer showing the window is in.';
+  const FIELD = 'A routine can carry a `timezone` field that names a zone as words, like `Europe/London`. '
+    + 'Rundock checks that it is written that way, and doesn\'t read it when deciding when the routine runs. '
+    + 'Firing in a routine\'s own zone is not supported.';
+  const SERVER = 'Routine times follow the server\'s clock:';
+
+  /** Run `fn` with the process in `zone` and the scheduler's clock held still. */
+  function inZone(zone, now, fn) {
+    const was = process.env.TZ;
+    process.env.TZ = zone;
+    const previous = scheduler.wireSchedulerDeps({ now: () => now });
+    try { return fn(); } finally {
+      scheduler.wireSchedulerDeps(previous);
+      if (was === undefined) delete process.env.TZ; else process.env.TZ = was;
+    }
+  }
+
+  test('the page no longer says a routine has no timezone field', () => {
+    assert.doesNotMatch(routinesDoc, /There is no timezone field/i);
+  });
+
+  test('the page says whose clock it is, what the field is, and says it on the server section too', () => {
+    assert.ok(routinesDoc.includes(`${CLOCK} ${FIELD}`), 'ROUTINES.md must say whose clock a schedule follows');
+    const server = routinesDoc.slice(routinesDoc.indexOf('#### Reaching a Rundock on a server'));
+    assert.ok(server.includes(SERVER), 'and the server section must say routine times follow the server\'s clock');
+  });
+
+  // "Doesn't read it when deciding when the routine runs", as behavior.
+  test('a routine declaring Pacific/Auckland is judged due exactly as one declaring nothing', () => {
+    inZone('Europe/London', new Date(Date.UTC(2026, 9, 7, 9, 30)), () => {
+      const declared = normalizeRoutine(
+        { name: 'r', schedule: 'every day at 08:00', prompt: 'p', timezone: 'Pacific/Auckland' }, { owner: 'piper' });
+      const plain = normalizeRoutine({ name: 'r', schedule: 'every day at 08:00', prompt: 'p' }, { owner: 'piper' });
+      assert.strictEqual(declared.timezone, 'Pacific/Auckland', 'sanity: the zone survived to the comparison');
+      const due = scheduler.getNextRun(declared.schedule, null);
+      assert.ok(due instanceof Date, 'the routine was not judged due at all');
+      assert.strictEqual(due.getTime(), scheduler.getNextRun(plain.schedule, null).getTime());
+      const ranToday = new Date(Date.UTC(2026, 9, 7, 7, 0)).toISOString();
+      assert.strictEqual(scheduler.getNextRun(declared.schedule, ranToday), null);
+      assert.strictEqual(scheduler.getNextRun(plain.schedule, ranToday), null);
+    });
+  });
+
+  // "The clock of the computer Rundock runs on", as behavior: the same
+  // schedule at the same instant is a different slot in a different zone.
+  test('the same schedule gives different slot instants under two values of the process zone', () => {
+    const now = new Date(Date.UTC(2026, 9, 7, 5, 0));
+    const london = inZone('Europe/London', now, () => scheduler.getNextRun('every day at 08:00', null));
+    const newYork = inZone('America/New_York', now, () => scheduler.getNextRun('every day at 08:00', null));
+    assert.strictEqual(london.toISOString(), '2026-10-07T07:00:00.000Z');
+    assert.strictEqual(newYork.toISOString(), '2026-10-07T12:00:00.000Z');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // docs/PACKAGES.md: what a receipt records
 // ---------------------------------------------------------------------------
 

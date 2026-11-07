@@ -136,6 +136,13 @@ function routinesRosterWorkspace() {
   return typeof rosterWorkspacePath === 'string' && rosterWorkspacePath ? rosterWorkspacePath : null;
 }
 
+/**
+ * This window's own time zone, which is NOT the zone a routine fires in.
+ *
+ * The server reads every schedule on its own clock (routinesServerZone below),
+ * and this window can be on another computer in another zone. The row is
+ * handed both, so it can tell when they differ and say the server's.
+ */
 function routinesZone() {
   try {
     return Intl.DateTimeFormat().resolvedOptions().timeZone || null;
@@ -143,6 +150,11 @@ function routinesZone() {
     // A runtime with no zone database says nothing rather than guessing one.
     return null;
   }
+}
+
+/** The zone the server reported beside its last roster, or null when it reported none. */
+function routinesServerZone() {
+  return typeof serverZone === 'string' && serverZone ? serverZone : null;
 }
 
 function routinesModel() {
@@ -341,6 +353,7 @@ function rowHtml(entry, index, withActions) {
     servingWorkspace: routinesServingWorkspace(),
     now: routinesClock(),
     zone: routinesZone(),
+    serverZone: routinesServerZone(),
   });
   // A schedule the editor never offered has no plain words. The routine is
   // still real and still listed, so it reads as its own name rather than as a

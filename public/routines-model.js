@@ -30,8 +30,10 @@
  * NOTHING HERE READS THE MACHINE IT RUNS ON. No clock, no locale, no ambient
  * time zone. `now` and every instant arrive from the caller, day and clock
  * words are arithmetic over local date components, and the zone is a string
- * passed in. So this module behaves identically wherever it runs and whenever,
- * and so does every test of it.
+ * passed in. The one exception is a server in a zone the window is not in:
+ * then the components are the ones Intl gives for that named zone, as numbers.
+ * So this module behaves identically wherever it runs and whenever, and so
+ * does every test of it.
  */
 (/** @param {any} root @param {(editor: any) => object} factory */ function (root, factory) {
   if (typeof module === 'object' && module.exports) {
@@ -488,6 +490,33 @@
   }
 
   /**
+   * The calendar day and clock an instant reads as: on this window's clock,
+   * or on `zone`'s when one is given.
+   *
+   * A zone is given only when the server reads schedules in one this window
+   * is not in (rowClock below). Intl is asked for NUMBERS in that zone, never
+   * for words, so no locale reaches a row. Null when the runtime cannot answer
+   * for the zone, and the row then says no time rather than a wrong one.
+   */
+  function wallClock(when, zone) {
+    if (!zone) {
+      return { year: when.getFullYear(), month: when.getMonth(), day: when.getDate(),
+        weekday: when.getDay(), hour: when.getHours(), minute: when.getMinutes() };
+    }
+    try {
+      const n = {};
+      const options = { timeZone: zone, hourCycle: 'h23', year: 'numeric', month: 'numeric', day: 'numeric',
+        hour: 'numeric', minute: 'numeric' };
+      for (const part of Intl.DateTimeFormat('en-US', options).formatToParts(when)) n[part.type] = Number(part.value);
+      if (![n.year, n.month, n.day, n.hour, n.minute].every(Number.isFinite)) return null;
+      const weekday = new Date(Date.UTC(n.year, n.month - 1, n.day)).getUTCDay();
+      return { year: n.year, month: n.month - 1, day: n.day, weekday, hour: n.hour % 24, minute: n.minute };
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /**
    * Whole calendar days from `from` to `to`, counted as days and not as hours.
    *
    * Ten past midnight tomorrow is tomorrow even though it is under three hours
@@ -496,9 +525,7 @@
    * wrong, which is why both ends are flattened to midnight first.
    */
   function dayGap(from, to) {
-    const a = new Date(from.getFullYear(), from.getMonth(), from.getDate());
-    const b = new Date(to.getFullYear(), to.getMonth(), to.getDate());
-    return Math.round((b - a) / 86400000);
+    return Math.round((Date.UTC(to.year, to.month, to.day) - Date.UTC(from.year, from.month, from.day)) / 86400000);
   }
 
   /**
@@ -508,25 +535,28 @@
    * build, which would make this a statement about the machine rather than
    * about the code, and would make every test of it one too.
    */
-  function dayWords(instant, now) {
+  function dayWords(instant, now, zone) {
     const when = asDate(instant);
     const from = asDate(now);
     if (!when || !from) return null;
-    const gap = dayGap(from, when);
+    const a = wallClock(from, zone);
+    const b = wallClock(when, zone);
+    if (!a || !b) return null;
+    const gap = dayGap(a, b);
     if (gap === 0) return 'today';
     if (gap === 1) return 'tomorrow';
     if (gap === -1) return 'yesterday';
-    if (gap > -7 && gap < 7) return DAYS[when.getDay()];
-    return `${when.getDate()} ${MONTHS[when.getMonth()]}`;
+    if (gap > -7 && gap < 7) return DAYS[b.weekday];
+    return `${b.day} ${MONTHS[b.month]}`;
   }
 
   /** The clock, in the same plain words the editor offers times in. */
-  function clockWords(instant) {
+  function clockWords(instant, zone) {
     const when = asDate(instant);
-    if (!when) return null;
-    const hour = when.getHours();
-    const hour12 = hour % 12 === 0 ? 12 : hour % 12;
-    return `${hour12}:${String(when.getMinutes()).padStart(2, '0')}${hour < 12 ? 'am' : 'pm'}`;
+    const at = when ? wallClock(when, zone) : null;
+    if (!at) return null;
+    const hour12 = at.hour % 12 === 0 ? 12 : at.hour % 12;
+    return `${hour12}:${String(at.minute).padStart(2, '0')}${at.hour < 12 ? 'am' : 'pm'}`;
   }
 
   /**
@@ -539,13 +569,33 @@
     return editor.timezoneWords(zone);
   }
 
-  /** "today, 7:00am, London time", the shape every time in this list takes. */
-  function timeWords(instant, now, zone) {
-    const day = dayWords(instant, now);
-    const clock = clockWords(instant);
+  /**
+   * "today, 7:00am, London time", the shape every time in this list takes,
+   * worked out on `inZone`'s clock when one is given.
+   */
+  function timeWords(instant, now, zone, inZone) {
+    const day = dayWords(instant, now, inZone);
+    const clock = clockWords(instant, inZone);
     if (!day || !clock) return null;
     const place = zoneWords(zone);
     return place ? `${day}, ${clock}, ${place} time` : `${day}, ${clock}`;
+  }
+
+  /**
+   * The zone a row's times are named as, and the zone they are worked out in.
+   *
+   * A ROUTINE FIRES ON THE SERVER'S CLOCK. When the server reports a zone this
+   * window is not in, this window's clock shows the right instant at an hour
+   * nobody scheduled: "Every day at 8:00am" beside "Next run: 7:00am". So the
+   * times are worked out in the server's zone and named as it, and the time
+   * shown is the time the routine fires. Otherwise they are this window's
+   * clock, named as the server's zone when it reported one.
+   */
+  function rowClock(input) {
+    const here = (input && input.zone) || null;
+    const server = (input && input.serverZone) || null;
+    if (server && server !== here) return { zone: server, inZone: server };
+    return { zone: server || here, inZone: null };
   }
 
   /**
@@ -696,22 +746,22 @@
     const kind = outcomeOf(input);
     if (!kind) return null;
     const now = asDate(input && input.now);
-    const zone = (input && input.zone) || null;
+    const { zone, inZone } = rowClock(input);
     const outcome = OUTCOMES[kind];
     let text = null;
     if (kind === 'missed') {
       const slot = asDate(input.missedSlot);
       const place = zoneWords(zone);
-      const when = `${clockWords(slot)} ${dayWords(slot, now)}`;
+      const when = `${clockWords(slot, inZone)} ${dayWords(slot, now, inZone)}`;
       text = `Missed: Rundock was closed at ${place ? `${when}, ${place} time` : when}`;
     } else if (kind === 'caught-up') {
-      text = `Caught up: ran ${timeWords(input.lastStart, now, zone)}, due ${clockWords(input.lastSlot)}`;
+      text = `Caught up: ran ${timeWords(input.lastStart, now, zone, inZone)}, due ${clockWords(input.lastSlot, inZone)}`;
     } else if (kind === 'failed') {
-      text = `Failed: ${timeWords(input.lastStart, now, zone)}`;
+      text = `Failed: ${timeWords(input.lastStart, now, zone, inZone)}`;
     } else if (kind === 'stopped') {
-      text = `Stopped ${timeWords(input.lastStart, now, zone)}`;
+      text = `Stopped ${timeWords(input.lastStart, now, zone, inZone)}`;
     } else {
-      text = `Ran ${timeWords(input.lastStart, now, zone)}`;
+      text = `Ran ${timeWords(input.lastStart, now, zone, inZone)}`;
     }
     return { kind: kind, tone: outcome.tone, lead: outcome.lead, text: text };
   }
@@ -1138,11 +1188,12 @@
     // says nothing too rather than inventing a time.
     const when = asDate(input.nextRun);
     const now = asDate(input.now);
+    const clock = rowClock(input);
     let timing = '';
     if (when && now) {
       timing = when <= now
         ? ` ${NOT_ENABLED.catchUpGone}`
-        : ` ${NOT_ENABLED.catchUpAhead.replace('{when}', () => timeWords(when, now, input.zone))}`;
+        : ` ${NOT_ENABLED.catchUpAhead.replace('{when}', () => timeWords(when, now, clock.zone, clock.inZone))}`;
     }
     return {
       text: `${NOT_ENABLED.lead} ${NOT_ENABLED.body}${timing}`,
@@ -1193,7 +1244,8 @@
     // which is the exact reassurance the reader came for and the one this row
     // must not give. The note below takes its place.
     if (!isServed(input)) return null;
-    const words = timeWords(input && input.nextRun, input && input.now, input && input.zone);
+    const clock = rowClock(input);
+    const words = timeWords(input && input.nextRun, input && input.now, clock.zone, clock.inZone);
     if (!words) return null;
     return { text: `Next run: ${words}`, className: 'next-run' };
   }

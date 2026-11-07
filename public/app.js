@@ -74,6 +74,10 @@ const fileSaves = RundockSaveScheduler.create();
 // The server's OS, learned from the server_info handshake. Gates OS-specific
 // affordances (e.g. Reveal in Finder) so a dead row never shows off macOS.
 let serverPlatform = null;
+// The zone the server reads a schedule in, as it reported it beside the last
+// roster, or null when it reported none. Never this window's own zone, which
+// can differ when the server is on another computer.
+let serverZone = null;
 // File-type registry: non-markdown views live in public/viewers/.
 // Loaded on demand, same pattern as the editor module above.
 let _viewersModule = null, _viewersModuleResolved = null, activeFileViewer = null;
@@ -580,8 +584,9 @@ function handle(d) {
     //
     // THE WORKSPACE THE ROSTER WAS READ FROM ARRIVES WITH IT, on the same
     // message, so the routines list can never compare rows against a workspace
-    // value that moved after they did. Assigned before anything draws.
-    case 'agents': agents=d.agents; setRosterWorkspace(d.workspace); renderAgentList(); renderOrgChart(); renderRoutinesPanel(); renderRoutines(); renderConvoList(); runDetailRosterUpdated(); break;
+    // value that moved after they did. Assigned before anything draws, and so
+    // is the zone the server reads every schedule in.
+    case 'agents': agents=d.agents; setRosterWorkspace(d.workspace); serverZone=d.zone||null; renderAgentList(); renderOrgChart(); renderRoutinesPanel(); renderRoutines(); renderConvoList(); runDetailRosterUpdated(); break;
     // renderRoutines as well as renderSkills: the routines empty state asks
     // whether the workspace has a skill, so the reply that answers that
     // question is the reply that has to redraw it. Without this the list sits

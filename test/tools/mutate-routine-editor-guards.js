@@ -89,6 +89,10 @@ const DISPATCH = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'index.js
 // each mutation runs exactly one suite, and these guards are watched by that
 // one. Both entries read and restore the same file, one mutation at a time.
 const ROUTINES_TZ = { src: path.join(ROOT, 'lib', 'agents', 'routines.js'), suite: 'test/unit/routine-timezone.test.js' };
+// The client's roster case, watched by the suite that delivers a roster built
+// in one zone to a window in another, because that is where the zone it
+// records is read back.
+const APP_ZONE = { src: path.join(ROOT, 'public', 'app.js'), suite: 'test/unit/schedule-zone.test.js' };
 
 // [target, label, the guard as it is written, what it becomes without it]
 const MUTATIONS = [
@@ -502,6 +506,23 @@ const MUTATIONS = [
   [MODEL, 'the caveat names the rule rather than only the consequence',
     "  const WORKSPACE_CAVEAT = 'Rundock only runs the routines of the workspace that is open, '",
     "  const WORKSPACE_CAVEAT = 'Routines run on a schedule, '"],
+
+  // WHOSE CLOCK THE SCHEDULE FOLLOWS. The first is the defect in its exact
+  // form: the window's own zone back in the caption. On the machine a routine
+  // was made on it names the right place, which is why only a suite that puts
+  // the window and the server in different zones can see it.
+  [VIEW, 'a caption names the zone the server reports, never the window\'s',
+    "    return typeof serverZone === 'string' && serverZone ? serverZone : null;",
+    '    return browserTimezone();'],
+  [VIEW, 'a server that reports no zone is not covered for with the window\'s',
+    "    return typeof serverZone === 'string' && serverZone ? serverZone : null;",
+    "    return typeof serverZone === 'string' && serverZone ? serverZone : browserTimezone();"],
+  [MODEL, 'with no zone reported the caption still says whose clock it is',
+    '    const words = timezoneWords(input && input.zone);\n    const agentName = (input && input.agentName) || null;',
+    '    const words = timezoneWords(input && input.zone);\n    if (!words) return null;\n    const agentName = (input && input.agentName) || null;'],
+  [APP_ZONE, 'the client records the zone the server sent beside its roster',
+    ' serverZone=d.zone||null;',
+    ''],
 ];
 
 // The reporter is named explicitly rather than left to the default, which
