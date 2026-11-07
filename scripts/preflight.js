@@ -58,6 +58,9 @@ const REGISTRY_SUITES = [
   // error handler where it started, so a write to one that has stopped is
   // logged and never ends the server.
   'test/unit/child-stdin-inventory.test.js',
+  // No test keeps a child it starts out of coverage by deleting the key,
+  // which Node puts back: each sets it to an empty value.
+  'test/unit/child-coverage-switch.test.js',
   // Every innerHTML assignment is classified, and the totals beside it.
   'test/unit/innerhtml-inventory.test.js',
   // Documents that state the code's own numbers, names and lists.
