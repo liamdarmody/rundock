@@ -480,7 +480,7 @@
       "the legacy chat path gives the stored catch-up to its first message": 0.54,
       "the legacy chat path hands a refused resume's catch-up to the fresh start": 0.55,
       "a handback start settles a stored catch-up": 1.72,
-      "a handback start with no session gives the catch-up with the handback": 1.7,
+      "a handback start with no session gives the catch-up with the handback": 1.74,
       "a resumed handback start only spends the catch-up": 1.05,
       "a paused handback start holds what it took for the next message": 1.64,
       "a handback prompt honors the arrival heading it is asked for": 0.99,

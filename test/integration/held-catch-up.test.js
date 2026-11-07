@@ -170,7 +170,8 @@ async function reap(convoId) {
 
 /**
  * A restart, as this conversation sees one. The harness runs the server in
- * this process and boots it once, so a second boot is not open to it; this is
+ * this process and boots it once, so a second boot is not open to it (a real
+ * one is in held-catch-up-restart.test.js, which starts its own servers); this is
  * the state a second boot finds: nothing the server held in memory for the
  * conversation (its process, ended, and its entry; its cached transcript; the
  * circuit breaker's count), only what is on disk. The window that comes back
