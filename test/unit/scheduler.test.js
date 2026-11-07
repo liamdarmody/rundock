@@ -65,15 +65,15 @@ describe('getNextRun: daily grammar', () => {
     assert.ok(new Date() >= next, 'scheduler fire condition (now >= nextRun) is satisfied');
   });
 
-  test('pinned as-is: lastRun earlier today but BEFORE the scheduled hour does not suppress (getHours comparison)', () => {
+  test('pinned as-is: lastRun earlier today but BEFORE the scheduled time does not suppress', () => {
     atTime(new Date(2026, 6, 1, 14, 30, 0));
     const lastRun = new Date(2026, 6, 1, 13, 59, 0).toISOString(); // ran 13:59, schedule 14:00
     const next = srv.getNextRun('every day at 14:00', lastRun);
     assert.notStrictEqual(next, null);
   });
 
-  test('pinned as-is: suppression compares getHours() only, so a 14:59 run yesterday-style edge inside the same hour suppresses', () => {
-    // lastRun 14:59 today, schedule 14:00 -> lastRun.getHours() (14) >= 14 -> null
+  test('pinned as-is: a 14:59 run today is after the 14:00 slot, so it suppresses', () => {
+    // lastRun 14:59 today, schedule 14:00 -> at or after the slot, on its day -> null
     atTime(new Date(2026, 6, 1, 15, 30, 0));
     const lastRun = new Date(2026, 6, 1, 14, 59, 0).toISOString();
     assert.strictEqual(srv.getNextRun('every day at 14:00', lastRun), null);

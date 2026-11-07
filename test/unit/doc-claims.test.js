@@ -646,6 +646,51 @@ describe('ROUTINES.md: same-day catch-up', () => {
 });
 
 // ---------------------------------------------------------------------------
+// docs/ROUTINES.md: the run guard, said by time
+// ---------------------------------------------------------------------------
+
+describe('ROUTINES.md: the run guard holds a slot by time, not by hour', () => {
+  const { getNextRun, wireSchedulerDeps } = require('../../lib/scheduler.js');
+  // The paragraph that says what the guard does, found by its first words.
+  const paragraph = routinesDoc.split('\n').find(line => line.startsWith('Each routine has a `lastRun` guard.')) || '';
+
+  // The claim, asked of getNextRun at a fixed instant rather than the wall
+  // clock, so it says the same thing whenever the suite runs. Friday 3 July
+  // 2026, built from local components.
+  const friday = (hour, minute) => new Date(2026, 6, 3, hour, minute);
+  function askedAt(now, schedule, lastRun) {
+    const previous = wireSchedulerDeps({ now: () => now });
+    try {
+      return getNextRun(schedule, lastRun.toISOString());
+    } finally {
+      wireSchedulerDeps(previous);
+    }
+  }
+
+  test('the doc states the guard by time and says what a later time on the same day does', () => {
+    assert.match(paragraph, /Daily and weekly routines do not re-fire once they have run at or after their scheduled time in that period/,
+      'ROUTINES.md must state the guard by time');
+    assert.match(paragraph, /Moving one to a later time on a day it has already run makes it run again at the new time, including a later time that has already gone/,
+      'ROUTINES.md must say what a move to a later time on the same day does');
+    assert.match(paragraph, /A run still going at the new time counts for it/);
+    assert.doesNotMatch(paragraph, /scheduled hour|same weekday/,
+      'ROUTINES.md must not keep the rule by hour, or by weekday alone, beside it');
+  });
+
+  for (const schedule of ['every day at 20:30', 'every friday at 20:30']) {
+    test(`a run stamped at 20:03 does not hold a 20:30 slot: ${schedule}`, () => {
+      assert.deepStrictEqual(askedAt(friday(20, 30), schedule, friday(20, 3)), friday(20, 30),
+        'moved to 20:30 after a run at 20:01, it runs at 20:30');
+    });
+
+    test(`a run stamped at 20:31 holds the 20:30 slot: ${schedule}`, () => {
+      assert.strictEqual(askedAt(friday(20, 45), schedule, friday(20, 31)), null,
+        'having run at 20:30, it does not re-fire that day');
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // docs/ROUTINES.md: where a routine actually runs
 //
 // The page RECOMMENDS keeping Rundock on a VPS with the workspace synced. Two
