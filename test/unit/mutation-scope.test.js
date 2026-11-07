@@ -87,6 +87,9 @@ function fixtureRepo() {
 
 const tools = (root) => path.join(root, 'test', 'tools');
 const explain = (root, argv) => decide(argv, { root, toolsDir: tools(root) });
+// How GitHub records a plan job and shard jobs that both ended well. The
+// aggregate defaults neither to success, so a test that means it says so.
+const SUCCEEDED = { planResult: 'success', shardsResult: 'success' };
 
 describe('what a harness guards comes from its rows', () => {
   test('every real harness loads, and names the files it mutates and the suites it reads', () => {
@@ -591,18 +594,19 @@ describe('three outcomes: pass, fail, no verdict', () => {
   test('the aggregator reads a missing verdict file as no verdict for that shard', () => {
     const plan = { id: 'p1', shards: [{ index: 1 }, { index: 2 }] };
     const one = [{ plan: 'p1', shard: 1, outcome: PASS, results: [] }];
-    const r = aggregate(plan, one);
+    const r = aggregate(plan, one, SUCCEEDED);
     assert.strictEqual(r.outcome, NO_VERDICT);
     assert.match(r.causes[0], /shard 2 wrote no verdict/);
-    assert.strictEqual(aggregate(plan, [...one, { plan: 'p1', shard: 2, outcome: PASS }]).outcome, PASS);
-    assert.strictEqual(aggregate(plan, [...one, { plan: 'other', shard: 2, outcome: PASS }]).outcome, NO_VERDICT);
-    assert.strictEqual(aggregate(plan, [...one, { plan: 'p1', shard: 2, outcome: FAIL }]).outcome, FAIL);
+    assert.strictEqual(aggregate(plan, [...one, { plan: 'p1', shard: 2, outcome: PASS }], SUCCEEDED).outcome, PASS);
+    assert.strictEqual(aggregate(plan, [...one, { plan: 'other', shard: 2, outcome: PASS }], SUCCEEDED).outcome, NO_VERDICT);
+    assert.strictEqual(aggregate(plan, [...one, { plan: 'p1', shard: 2, outcome: FAIL }], SUCCEEDED).outcome, FAIL);
   });
 
   test('a failed plan job is a failure; a cancelled one is no verdict', () => {
-    assert.strictEqual(aggregate(null, [], { planResult: 'failure' }).outcome, FAIL);
-    assert.strictEqual(aggregate(null, [], { planResult: 'cancelled' }).outcome, NO_VERDICT);
-    assert.strictEqual(aggregate({ id: 'x', shards: [] }, []).outcome, PASS, 'an empty plan has nothing to fail');
+    assert.strictEqual(aggregate(null, [], { planResult: 'failure', shardsResult: 'skipped' }).outcome, FAIL);
+    assert.strictEqual(aggregate(null, [], { planResult: 'cancelled', shardsResult: 'skipped' }).outcome, NO_VERDICT);
+    assert.strictEqual(aggregate({ id: 'x', shards: [] }, [], { planResult: 'success', shardsResult: 'skipped' }).outcome, PASS,
+      'an empty plan has nothing to fail');
   });
 
   test('a failed plan is titled as one, and names no step only one workflow has', () => {
@@ -626,7 +630,7 @@ describe('three outcomes: pass, fail, no verdict', () => {
     assert.deepStrictEqual(outcomes.map((o) => o.outcome), [NO_VERDICT, NO_VERDICT]);
     const plan = { id: 'p', shards: [{ index: 1 }, { index: 2 }] };
     const verdicts = outcomes.map((o, i) => ({ plan: 'p', shard: i + 1, outcome: combine([o.outcome]), results: [{ unit: 'u', ...o }] }));
-    const r = aggregate(plan, verdicts);
+    const r = aggregate(plan, verdicts, { planResult: 'success', shardsResult: 'failure' });
     assert.strictEqual(r.outcome, NO_VERDICT);
     assert.ok(r.causes.some((c) => /signal SIGTERM/.test(c)), 'the cause names the signal');
   });
@@ -639,7 +643,8 @@ describe('three outcomes: pass, fail, no verdict', () => {
     delete env.GITHUB_ACTIONS;
     delete env.GITHUB_STEP_SUMMARY;
     const r = spawnSync(process.execPath, [path.join(REPO, 'scripts', 'mutation-scope.js'), '--aggregate',
-      '--plan-file', path.join(dir, 'plan.json'), '--verdicts', dir], { encoding: 'utf8', env });
+      '--plan-file', path.join(dir, 'plan.json'), '--verdicts', dir, '--plan-result', 'success', '--shards-result', 'success'],
+    { encoding: 'utf8', env });
     assert.strictEqual(r.status, 3, r.stdout + r.stderr);
     assert.match(r.stdout, /No verdict: shard 2 wrote no verdict/);
     assert.doesNotMatch(r.stdout, /failed/i, 'no verdict is never titled a failure');
@@ -677,7 +682,7 @@ function aggregateCli(dir, extra = [], env = {}) {
 describe('the shard jobs\' result is a witness no shard can write', () => {
   test('a shard job that did not succeed is not green, even when every verdict passes', () => {
     for (const shardsResult of ['failure', 'cancelled', 'skipped']) {
-      const r = aggregate(PLAN_2, PASSING, { shardsResult });
+      const r = aggregate(PLAN_2, PASSING, { planResult: 'success', shardsResult });
       assert.notStrictEqual(r.outcome, PASS, `shards ${shardsResult}: never a pass`);
       assert.strictEqual(r.title, SHARD_FAILED, `shards ${shardsResult}: titled for what happened`);
       assert.ok(r.causes.some((c) => c.includes(shardsResult)), `shards ${shardsResult}: the cause names the result`);
@@ -689,7 +694,7 @@ describe('the shard jobs\' result is a witness no shard can write', () => {
   });
 
   test('the inverse: clean shards with passing verdicts are still green', () => {
-    const r = aggregate(PLAN_2, PASSING, { shardsResult: 'success' });
+    const r = aggregate(PLAN_2, PASSING, { planResult: 'success', shardsResult: 'success' });
     assert.strictEqual(r.outcome, PASS);
     assert.strictEqual(r.title, 'Mutation guards passed');
     const cli = aggregateCli(verdictDir(PLAN_2, PASSING), ['--plan-result', 'success', '--shards-result', 'success']);
@@ -697,16 +702,16 @@ describe('the shard jobs\' result is a witness no shard can write', () => {
     assert.ok(cli.stdout.includes('Mutation guards passed'), cli.stdout);
     // A plan with no shards runs no shard job, so GitHub records it skipped.
     const none = { id: 'p0', shards: [] };
-    assert.strictEqual(aggregate(none, [], { shardsResult: 'skipped' }).outcome, PASS, 'nothing planned, nothing to fail');
+    assert.strictEqual(aggregate(none, [], { planResult: 'success', shardsResult: 'skipped' }).outcome, PASS, 'nothing planned, nothing to fail');
     assert.strictEqual(aggregateCli(verdictDir(none, []), ['--plan-result', 'success', '--shards-result', 'skipped']).status, 0);
   });
 
   test('the retry: a re-run that comes back clean is green, one still dirty stays red', () => {
     // "Re-run failed jobs" re-runs the failed shard and the aggregate that
     // needs it; the verdicts are the same files, and only the result moves.
-    assert.strictEqual(aggregate(PLAN_2, PASSING, { shardsResult: 'failure' }).outcome, FAIL, 'the first attempt');
-    assert.strictEqual(aggregate(PLAN_2, PASSING, { shardsResult: 'success' }).outcome, PASS, 'a clean re-run');
-    assert.strictEqual(aggregate(PLAN_2, PASSING, { shardsResult: 'failure' }).title, SHARD_FAILED, 'a re-run still dirty');
+    assert.strictEqual(aggregate(PLAN_2, PASSING, { planResult: 'success', shardsResult: 'failure' }).outcome, FAIL, 'the first attempt');
+    assert.strictEqual(aggregate(PLAN_2, PASSING, { planResult: 'success', shardsResult: 'success' }).outcome, PASS, 'a clean re-run');
+    assert.strictEqual(aggregate(PLAN_2, PASSING, { planResult: 'success', shardsResult: 'failure' }).title, SHARD_FAILED, 'a re-run still dirty');
   });
 
   test('a guard that survived is still reported as one, naming where, though its shard job failed too', () => {
@@ -716,7 +721,7 @@ describe('the shard jobs\' result is a witness no shard can write', () => {
       { unit: 'mutate-x-guards.js rows 0:3', outcome: PASS },
       { unit: 'mutate-x-guards.js rows 3:9', outcome: FAIL, cause: 'exit 1' },
     ] };
-    const r = aggregate(PLAN_2, [passed(1), survived], { shardsResult: 'failure' });
+    const r = aggregate(PLAN_2, [passed(1), survived], { planResult: 'success', shardsResult: 'failure' });
     assert.strictEqual(r.outcome, FAIL);
     assert.strictEqual(r.title, 'A guard survived');
     assert.deepStrictEqual(r.causes, ['shard 2: mutate-x-guards.js rows 3:9 fail (exit 1)']);
@@ -729,7 +734,7 @@ describe('the shard jobs\' result is a witness no shard can write', () => {
 
   test('a verdict with no outcome that can be read is no verdict, never a pass', () => {
     for (const odd of [{ plan: 'p2', shard: 2 }, { plan: 'p2', shard: 2, outcome: 'passed', results: [] }]) {
-      const r = aggregate(PLAN_2, [passed(1), odd], { shardsResult: 'success' });
+      const r = aggregate(PLAN_2, [passed(1), odd], { planResult: 'success', shardsResult: 'success' });
       assert.strictEqual(r.outcome, NO_VERDICT, JSON.stringify(odd));
       assert.ok(r.title.startsWith('No verdict: shard 2'), `the title names the shard: ${r.title}`);
     }
@@ -780,7 +785,36 @@ describe('the shard jobs\' result is a witness no shard can write', () => {
     for (const extra of [[], ['--shards-result', '']]) {
       const cli = aggregateCli(verdictDir(PLAN_2, PASSING), ['--plan-result', 'success', ...extra]);
       assert.strictEqual(cli.status, 3, `${JSON.stringify(extra)}\n${cli.stdout}${cli.stderr}`);
-      assert.ok(cli.stdout.includes('No verdict:'), cli.stdout);
+      assert.ok(cli.stdout.includes('No verdict: the shard jobs\' result was not given'), cli.stdout);
     }
+  });
+
+  test('a plan job\'s result that was not given, or is empty, is no verdict, never a pass', () => {
+    // The same class of input as the shard jobs' result, and the same mistyped
+    // needs expression empties it.
+    for (const extra of [[], ['--plan-result', '']]) {
+      const cli = aggregateCli(verdictDir(PLAN_2, PASSING), [...extra, '--shards-result', 'success']);
+      assert.strictEqual(cli.status, 3, `${JSON.stringify(extra)}\n${cli.stdout}${cli.stderr}`);
+      assert.ok(cli.stdout.includes('No verdict: the plan job\'s result was not given'), cli.stdout);
+    }
+  });
+
+  test('the function defaults neither job\'s result to success: a caller that means success says so', () => {
+    const cases = [
+      [undefined, 'plan job\'s'],
+      [{}, 'plan job\'s'],
+      [{ shardsResult: 'success' }, 'plan job\'s'],
+      [{ planResult: '', shardsResult: 'success' }, 'plan job\'s'],
+      [{ planResult: 'success' }, 'shard jobs\''],
+      [{ planResult: 'success', shardsResult: '' }, 'shard jobs\''],
+      [{ planResult: 'success', shardsResult: null }, 'shard jobs\''],
+    ];
+    for (const [given, missing] of cases) {
+      const r = aggregate(PLAN_2, PASSING, given);
+      assert.strictEqual(r.outcome, NO_VERDICT, `${JSON.stringify(given)}: never a pass`);
+      assert.ok(r.title.startsWith(`No verdict: the ${missing} result was not given`), `${JSON.stringify(given)}: ${r.title}`);
+    }
+    assert.strictEqual(aggregate(PLAN_2, PASSING, { planResult: 'success', shardsResult: 'success' }).outcome, PASS,
+      'the inverse: both given as success, with passing verdicts, is green');
   });
 });

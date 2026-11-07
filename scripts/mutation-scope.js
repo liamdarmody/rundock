@@ -577,13 +577,18 @@ const noVerdict = (causes) => ({ outcome: NO_VERDICT, causes, title: `No verdict
  * success only for a plan of no shards, the one time no shard job runs. A
  * result that was not given at all is no verdict.
  */
-function aggregate(plan, verdicts, { planResult = 'success', shardsResult = 'success' } = {}) {
+function aggregate(plan, verdicts, { planResult, shardsResult } = {}) {
+  // NEITHER RESULT DEFAULTS TO SUCCESS. Each is how a job ended, and one that
+  // was not given, or is empty as a mistyped needs expression makes it, is no
+  // verdict: a caller that means success says so.
+  if (!planResult) return noVerdict(['the plan job\'s result was not given, so the plan cannot be shown to have succeeded']);
+  if (!shardsResult) return noVerdict(['the shard jobs\' result was not given, so no shard job can be shown to have passed']);
   // Both workflows read this, and their plan jobs run different steps, so the
   // cause names none: the plan job's own log names the one that failed.
   if (planResult !== 'success') {
     return planResult === 'failure'
       ? { outcome: FAIL, causes: ['the plan job failed: its log names the step'], title: 'The plan failed: see its job' }
-      : noVerdict([`the plan job was ${planResult || 'not run'}`]);
+      : noVerdict([`the plan job was ${planResult}`]);
   }
   if (!plan || !Array.isArray(plan.shards)) return noVerdict(['no plan was found']);
   const causes = [];
@@ -618,7 +623,6 @@ function aggregate(plan, verdicts, { planResult = 'success', shardsResult = 'suc
   if (shardsResult === 'success' || (shardsResult === 'skipped' && !plan.shards.length)) {
     return { outcome: PASS, causes, title: TITLE_PASS };
   }
-  if (!shardsResult) return noVerdict(['the shard jobs\' result was not given, so no shard job can be shown to have passed']);
   return {
     outcome: FAIL,
     causes: [`the shard jobs ended ${shardsResult} though every verdict passed: a step after the verdict failed `
@@ -731,10 +735,11 @@ function aggregateCommand(argv, {
       try { verdicts.push(JSON.parse(readFile(path.join(dir, n)))); } catch { /* unreadable is missing */ }
     }
   } catch { /* no directory is no verdicts */ }
-  // NO DEFAULT FOR THE SHARD JOBS' RESULT. Absent, or empty as a mistyped
-  // needs expression makes it, it is no verdict rather than a pass.
+  // NO DEFAULT FOR EITHER JOB'S RESULT, here or in aggregate(). Absent, or
+  // empty as a mistyped needs expression makes it, each is no verdict rather
+  // than a pass.
   const result = aggregate(plan, verdicts, {
-    planResult: argValue(argv, '--plan-result') || 'success',
+    planResult: argValue(argv, '--plan-result'),
     shardsResult: argValue(argv, '--shards-result'),
   });
   const { title } = result;
