@@ -175,7 +175,27 @@ describe('a Claude Code without its login command', () => {
     assert.ok(src('server.js').includes("openClaudeConsole({ bin: resolveClaudeBin(), version: _claudeProbeCache && _claudeProbeCache.version, purpose: 'reconnect' })"));
     const main = src('electron/main.js');
     assert.ok(main.includes('openClaudeConsole({ findBin: findClaude, findVersion: () => claudeFoundVersion, purpose })'));
-    assert.ok(main.includes('  claudeFoundVersion = found.version;\n'));
+    // Moved when the desktop app's check began to take its copy from the one
+    // lookup (lib/runtime/claude-lookup.js). The version was what the path
+    // findClaude had just found printed for `--version`, read through a shell.
+    // It is still the version of that same path, read now by the lookup with
+    // no shell: findClaude keeps the version and returns the path of one
+    // answer, installedCopy's, which is the lookup's installedClaude, and that
+    // answer's version is readClaudeVersion's for its path, run with arguments.
+    // test/unit/claude-lookup.test.js runs findClaude's body on stub copies.
+    assert.ok(main.includes([
+      'function findClaude() {',
+      "  const found = require('./claude-check.js').installedCopy();",
+      '  if (!found) return null;',
+      '  claudeFoundVersion = found.version;',
+      '  return found.bin;',
+      '}',
+    ].join('\n')));
+    assert.ok(src('electron/claude-check.js').includes('    return lookup().installedClaude();\n'));
+    const lookup = src('lib/runtime/claude-lookup.js');
+    assert.ok(lookup.includes('  const said = justRead ? versionText : readClaudeVersion(bin, VERSION_PROBE_TIMEOUT_MS, platform);\n'));
+    assert.ok(lookup.includes('  return { bin, version: said };\n'));
+    assert.ok(lookup.includes("    return execFileSync(bin, ['--version'], { timeout, encoding: 'utf-8', stdio: codexRuntime.PROBE_STDIO });\n"));
   });
 });
 

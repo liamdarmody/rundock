@@ -26,8 +26,22 @@ const { checkConnection, openClaudeConsole, consoleGate } = require('../../lib/r
 test('the funnel every agent spawn goes through passes on the environment it is given', () => {
   // spawnClaude hands its options to spawn unchanged but for `detached`, so
   // the environment an agent runs with is the one its caller built.
+  //
+  // Moved when a Windows npm install of Claude Code began to be started
+  // through its package's entry (launchFor in lib/runtime/claude-lookup.js):
+  // the spawn starts launchFor's command for the copy resolveClaudeBin's
+  // lookup chose, where it started resolveClaudeBin() itself. It holds what it
+  // held before: the binary comes from the lookup, the arguments are an array
+  // with no shell, and the process is detached except on Windows.
   const src = fs.readFileSync(path.join(ROOT, 'lib', 'runtime', 'claude.js'), 'utf8');
-  assert.match(src, /const proc = spawn\(launch\.command, \[\.\.\.launch\.args, \.\.\.args\], \{ \.\.\.options, detached: process\.platform !== 'win32' \}\);/);
+  const start = src.indexOf('\nfunction spawnClaude(');
+  assert.ok(start >= 0, 'spawnClaude is declared');
+  const fn = src.slice(start, src.indexOf('\n}\n', start));
+  const launch = fn.indexOf('\n  const launch = launchFor(resolveClaudeBin(), deps.platform());\n');
+  const spawn = fn.indexOf("\n  const proc = spawn(launch.command, [...launch.args, ...args], { ...options, detached: process.platform !== 'win32' });\n");
+  assert.ok(launch >= 0, 'what spawnClaude starts is launchFor\'s answer for the copy resolveClaudeBin\'s lookup chose');
+  assert.ok(spawn > launch, 'and the spawn starts that, with its arguments in an array and the caller\'s options, detached except on Windows');
+  assert.strictEqual(fn.split(/(?<![\w$.])launch\s*=(?!=)/).length, 2, 'and nothing sets launch again');
 });
 
 test('a routine is started with no conversation, even when the app was given one, and a conversation with its own', () => {

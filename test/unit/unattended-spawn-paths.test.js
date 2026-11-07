@@ -90,6 +90,11 @@ const AGENT_SPAWNS = [
 // processes they start), and the hook decides nothing outside Rundock. Each
 // says why it cannot be driven end to end, and which test here covers it.
 const OTHER_CLAUDE_LAUNCHES = [
+  // Moved when a Windows npm install of Claude Code began to be started
+  // through its package's entry: the spawn's first argument was
+  // resolveClaudeBin() itself, and is now launchFor's command for the copy
+  // resolveClaudeBin's lookup chose (held below, in "the funnel starts the copy
+  // the lookup chose").
   { at: 'lib/runtime/claude.js | spawnClaude | spawn(launch.command)',
     why: 'the one function every agent spawn above starts through: it passes on the environment it is given and adds nothing, so each agent spawn\'s own test drives it',
     testedBy: [ENVIRONMENTS, 'the funnel every agent spawn goes through passes on the environment it is given'] },
@@ -313,6 +318,13 @@ describe('nothing else gives a process the conversation or the mark', () => {
     assert.deepStrictEqual(marked, ['lib/runtime/claude.js', 'lib/runtime/codex-glue.js']);
     const named = appFiles().filter((f) => /\.RUNDOCK_CONVO_ID\s*=(?!=)/.test(fs.readFileSync(f, 'utf8'))).map(rel);
     assert.deepStrictEqual(named, ['lib/runtime/claude.js'], 'and only getSpawnEnv names a conversation');
+  });
+
+  test('the funnel starts the copy the lookup chose', () => {
+    const lines = fs.readFileSync(path.join(ROOT, 'lib', 'runtime', 'claude.js'), 'utf8').split('\n');
+    const at = lines.indexOf('  const launch = launchFor(resolveClaudeBin(), deps.platform());');
+    assert.ok(at >= 0, 'launch is launchFor\'s answer for the copy resolveClaudeBin\'s lookup chose');
+    assert.strictEqual(contextOf(lines, at), 'spawnClaude', 'set in the function whose spawn starts launch.command');
   });
 
   test('a chat message with no conversation id is the default conversation, never none', () => {

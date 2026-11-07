@@ -58,8 +58,13 @@ const WRITES = [
 
 // Where a child's stdin is given its handler: straight after the spawn that
 // starts it, in the one function each kind of child is started through.
+// `from`, where there is one, is what the spawn starts, set earlier in that
+// function. spawnClaude's spawn moved when a Windows npm install of Claude
+// Code began to be started through its package's entry: it starts launchFor's
+// command for the copy resolveClaudeBin's lookup chose, where it started
+// resolveClaudeBin() itself.
 const GUARDED_STARTS = [
-  { file: 'lib/runtime/claude.js', fn: 'spawnClaude', spawn: 'spawn(launch.command', starts: 'every Claude agent process' },
+  { file: 'lib/runtime/claude.js', fn: 'spawnClaude', spawn: 'spawn(launch.command', from: 'const launch = launchFor(resolveClaudeBin(), deps.platform());', starts: 'every Claude agent process' },
   { file: 'codex-appserver.js', fn: '_spawn', spawn: 'spawn(this._binPath', starts: 'the Codex app-server' },
 ];
 
@@ -325,6 +330,10 @@ describe('every write to a child\'s stdin goes to a child whose stdin was given 
       const spawnAt = lines.findIndex((l) => l.includes(`const proc = ${g.spawn}`));
       assert.ok(spawnAt >= 0, `${g.file} ${g.fn} starts ${g.starts} with ${g.spawn}`);
       assert.strictEqual(contextOf(kept, spawnAt).name, g.fn, `in ${g.fn}`);
+      if (g.from) {
+        const fromAt = lines.findIndex((l) => l.includes(g.from));
+        assert.ok(fromAt >= 0 && fromAt < spawnAt && contextOf(kept, fromAt).name === g.fn, `${g.fn} starts what ${g.from} sets, before its spawn`);
+      }
       let guardAt = -1;
       for (let j = spawnAt + 1; j < lines.length && contextOf(kept, j).name === g.fn; j++) {
         const c = lines[j];
