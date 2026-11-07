@@ -234,10 +234,10 @@ const MUTATIONS = [
   // A run serves only the slot of its own period, so the row steps at most one
   // period and there is no walk left to bound.
   [SCHEDULER, 'a period the last run already served is stepped over',
-    '  if (lastRun && slotServed(slot, lastRun)) slot = stepSlots(parsed, slot, 1);\n',
+    '  if (lastRun && periodOf(parsed, slot).served(lastRun)) slot = stepSlots(parsed, slot, 1);\n',
     ''],
   [SCHEDULER, 'the slot the last run served is named',
-    '    lastSlot: started ? slotFor(parsed, started).toISOString() : null,\n',
+    '    lastSlot: started ? periodOf(parsed, started).slot.toISOString() : null,\n',
     '    lastSlot: null,\n'],
   [SCHEDULER, 'the most recent recorded miss is the one reported',
     '  const missed = entry && entry.missed.length ? entry.missed[entry.missed.length - 1].slot : null;',
@@ -267,8 +267,8 @@ const MUTATIONS = [
     "  if (typeof seconds !== 'number' || !isFinite(seconds)) return ended;\n",
     ''],
   [SCHEDULER, 'the slot a run served is the one on the day it started',
-    '    lastSlot: started ? slotFor(parsed, started).toISOString() : null,',
-    '    lastSlot: lastRunStartedAt(key) ? slotFor(parsed, new Date(routineState[key].lastRun)).toISOString() : null,'],
+    '    lastSlot: started ? periodOf(parsed, started).slot.toISOString() : null,',
+    '    lastSlot: lastRunStartedAt(key) ? periodOf(parsed, new Date(routineState[key].lastRun)).slot.toISOString() : null,'],
   [VIEW_E2E, 'the row asks the roster for the instant the run began',
     '    lastStart: r.lastStart,',
     '    lastStart: r.state ? r.state.lastRun : null,'],
@@ -281,10 +281,10 @@ const MUTATIONS = [
   // the criteria call constrained rather than chosen, failing in exactly the
   // situation the row exists for.
   [END_TO_END, 'the anchor is the period now falls in, not the last one a tick recorded',
-    '  let slot = slotFor(parsed, deps.now());',
+    '  let slot = periodOf(parsed, deps.now()).slot;',
     '  const anchored = routineSlots.routines[key];\n  if (!anchored) return null;\n  let slot = new Date(anchored.due);'],
   [SCHEDULER, 'a row can name a next run before any tick has seen the routine',
-    '  let slot = slotFor(parsed, deps.now());',
+    '  let slot = periodOf(parsed, deps.now()).slot;',
     '  const anchored = routineSlots.routines[key];\n  if (!anchored) return null;\n  let slot = new Date(anchored.due);'],
 
   // ===== UNCHANGED BYTES ARE NOT AN ANSWER =====
@@ -511,32 +511,32 @@ const MUTATIONS = [
   // A routine keeps its run stamp when its schedule moves, because the state is
   // keyed by identity. Each of these breaks one half of the comparison that
   // then decides whether it runs again, runs twice, or never runs. The
-  // comparison is one function for both shapes, asked by the tick and by the
-  // row, so each row here breaks it, or the one call that asks it, once.
+  // comparison is the period's own, asked by the tick and by the row, so each
+  // row here breaks it, or the one call that asks it, once.
   [SCHEDULER_EDIT, 'the suppression compares the time, not just the day',
-    '  return lastRun >= slot && lastRun.toDateString() === slot.toDateString();',
-    '  return lastRun.toDateString() === slot.toDateString();'],
+    '  return { slot, closes, served: (stamp) => stamp >= slot && stamp < closes };',
+    '  return { slot, closes, served: (stamp) => stamp >= new Date(slot.getFullYear(), slot.getMonth(), slot.getDate()) && stamp < closes };'],
   // Watched by the file that holds the row and the tick to each other, because
   // only a run stamped on a later day can show the bound is there, and no
   // schedule edit produces one.
   [SCHEDULER, 'the suppression compares the day, not just the time',
-    '  return lastRun >= slot && lastRun.toDateString() === slot.toDateString();',
-    '  return lastRun >= slot;'],
+    '  return { slot, closes, served: (stamp) => stamp >= slot && stamp < closes };',
+    '  return { slot, closes, served: (stamp) => stamp >= slot };'],
   [SCHEDULER_EDIT, 'a weekly routine that already ran at its time on its day is not run again',
-    '  if (lastRunISO && slotServed(slot, new Date(lastRunISO))) return null;',
-    "  if (lastRunISO && parsed.kind !== 'weekly' && slotServed(slot, new Date(lastRunISO))) return null;"],
+    '  if (lastRunISO && period.served(new Date(lastRunISO))) return null;',
+    "  if (lastRunISO && parsed.kind !== 'weekly' && period.served(new Date(lastRunISO))) return null;"],
   // The comparison this guard replaced, in each of its two shapes: the stamp's
   // hour against the scheduled hour, which held a routine moved to a later
   // minute in the same hour, and a weekly routine held by its weekday alone,
   // which held one moved to any later time on its own day.
   [SCHEDULER_EDIT, 'the suppression compares the minute, not just the hour',
-    '  return lastRun >= slot && lastRun.toDateString() === slot.toDateString();',
-    '  return lastRun.getHours() >= slot.getHours() && lastRun.toDateString() === slot.toDateString();'],
+    '  return { slot, closes, served: (stamp) => stamp >= slot && stamp < closes };',
+    '  return { slot, closes, served: (stamp) => stamp >= new Date(slot.getFullYear(), slot.getMonth(), slot.getDate(), slot.getHours()) && stamp < closes };'],
   [SCHEDULER_EDIT, 'a weekly routine is held by the time it ran, not by its weekday alone',
-    '  if (lastRunISO && slotServed(slot, new Date(lastRunISO))) return null;',
+    '  if (lastRunISO && period.served(new Date(lastRunISO))) return null;',
     "  if (lastRunISO && (parsed.kind === 'weekly'\n"
     + '    ? (now - new Date(lastRunISO)) / 86400000 < 1 && new Date(lastRunISO).getDay() === parsed.day\n'
-    + '    : slotServed(slot, new Date(lastRunISO)))) return null;'],
+    + '    : period.served(new Date(lastRunISO)))) return null;'],
 
   // ===== THE THIRD CONTROL ON THE ROW =====
   //
