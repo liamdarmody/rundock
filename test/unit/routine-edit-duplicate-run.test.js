@@ -28,6 +28,7 @@ const path = require('node:path');
 const { handleSetRoutineSchedule } = require('../../lib/protocol/handlers/team.js');
 const { invalidateAgentCache, discoverAgents, extractFrontmatterText, parseRoutines } = require('../../lib/agents/discovery.js');
 const config = require('../../lib/config.js');
+const routinesModel = require('../../public/routines-model.js');
 const { makeWorkspace, cleanup } = require('../helpers/workspace.js');
 
 after(cleanup);
@@ -51,6 +52,7 @@ function withScheduler(now, fn) {
 // built from local components, so this suite says the same thing in any zone.
 const WED = [2026, 6, 1];
 const FRI = [2026, 6, 3];
+const SAT = [2026, 6, 4];
 const at = ([y, m, d], hour, minute = 0) => new Date(y, m, d, hour, minute, 0);
 
 const AGENT_NAME = 'piper';
@@ -130,21 +132,31 @@ function listRunState(dir) {
 
 // The tick's own two lines, in the order it runs them: work out when this
 // routine is next due from the schedule on disk and the stamp in run state,
-// then fire it if that moment has arrived.
+// then fire it if that moment has arrived. Beside them, the next run the
+// routine's row shows, read from the same state at the same instant, so a test
+// can hold the row to what the tick will do.
 function tickVerdict({ schedule, lastRun, now }) {
   return withScheduler(now, (sched) => {
     if (lastRun) sched.routineState[KEY] = { lastRun: lastRun.toISOString(), status: 'completed', duration: 30 };
     const nextRun = sched.getNextRun(schedule, sched.routineState[KEY] && sched.routineState[KEY].lastRun);
-    return { nextRun, due: !!nextRun && now >= nextRun };
+    const row = sched.routineDisplayFacts(KEY, schedule).nextRun;
+    return { nextRun, due: !!nextRun && now >= nextRun, row: row ? new Date(row) : null };
   });
+}
+
+// The words that row puts beside the routine, from the model that draws it.
+function rowWords(verdict, now) {
+  const label = routinesModel.nextRunLabel({ nextRun: verdict.row ? verdict.row.toISOString() : null, now: now.toISOString() });
+  return label ? label.text : null;
 }
 
 describe('a schedule edit and the guard that stops a second run', () => {
   // ===== MOVED LATER, ON A DAY IT HAS ALREADY RUN =====
   //
-  // The daily suppression asks whether the stamp is from today AND from an hour
-  // at or after the scheduled one. A 9am run against a 2pm schedule fails the
-  // second half, so it does not suppress, and the routine becomes due at 2pm.
+  // The suppression asks whether the stamp is at or after the scheduled TIME
+  // and on the same day as that slot. A 9am run against a 2pm schedule fails
+  // the first half, so it does not suppress, and the routine becomes due at
+  // 2pm.
   //
   // NAMED PLAINLY BECAUSE IT IS A SECOND RUN: this routine runs twice on the
   // day it is moved, once at the old time before the edit and once at the new
@@ -163,6 +175,28 @@ describe('a schedule edit and the guard that stops a second run', () => {
     const atTwo = tickVerdict({ schedule, lastRun: ranThisMorning, now: at(WED, 14) });
     assert.deepStrictEqual(atTwo.nextRun, at(WED, 14));
     assert.strictEqual(atTwo.due, true, 'at two o\'clock the tick fires it');
+  });
+
+  // THE SAME MOVE INSIDE ONE HOUR, which is the case the hour comparison got
+  // wrong. A run at 20:01 held a routine moved to 20:30 because both are in
+  // hour 20, while the row promised 20:30 and nothing said why it never came.
+  // The minute counts now, as the hour always did.
+  test('moved later in the same hour today, it fires once at the new time', () => {
+    const schedule = reschedule('every day at 20:01', 'every day at 20:30');
+    // Started at 20:01 and stamped when it finished, two minutes later.
+    const ranAtOnePast = at(FRI, 20, 3);
+
+    const justBefore = tickVerdict({ schedule, lastRun: ranAtOnePast, now: at(FRI, 20, 29) });
+    assert.deepStrictEqual(justBefore.nextRun, at(FRI, 20, 30),
+      'the run at 20:01 did not serve the 20:30 slot, though both are in the same hour');
+    assert.strictEqual(justBefore.due, false, 'and a minute before it, it is not due yet');
+
+    const atTheNewTime = tickVerdict({ schedule, lastRun: ranAtOnePast, now: at(FRI, 20, 30) });
+    assert.deepStrictEqual(atTheNewTime.nextRun, at(FRI, 20, 30));
+    assert.strictEqual(atTheNewTime.due, true, 'at 20:30 the tick fires it');
+
+    const afterIt = tickVerdict({ schedule, lastRun: at(FRI, 20, 31), now: at(FRI, 20, 45) });
+    assert.strictEqual(afterIt.nextRun, null, 'and once it has run at 20:30 it is not run again that day');
   });
 
   // ===== MOVED EARLIER, TO AN HOUR THAT HAS ALREADY PASSED TODAY =====
@@ -204,32 +238,36 @@ describe('a schedule edit and the guard that stops a second run', () => {
     assert.strictEqual(tomorrow.due, true);
   });
 
-  // ===== THE WEEKLY BRANCH DOES NOT AGREE WITH THE DAILY ONE =====
+  // ===== THE WEEKLY BRANCH AGREES WITH THE DAILY ONE =====
   //
-  // Recorded rather than corrected, because correcting it is a scheduler change.
-  //
-  // The daily suppression compares the HOUR of the stamp against the scheduled
-  // hour. The weekly one does not compare hours at all: a run on the target
-  // weekday within the last day suppresses, whatever time either happened. So a
-  // weekly routine moved to a LATER hour on the very day it already ran does NOT
-  // become due that day, which is the opposite of what the daily branch does
-  // with the same edit.
-  //
-  // Neither answer is a duplicate run, and this one is the more conservative of
-  // the two: nobody gets a second run they did not ask for. What it costs is
-  // that a weekly routine moved from Friday morning to Friday afternoon waits a
-  // week rather than running that afternoon.
-  test('a weekly routine moved later on its own day waits a week, unlike a daily one', () => {
+  // Both shapes ask the stamp the same question: is it at or after the
+  // scheduled time, on that slot's own day. The weekly suppression used to ask
+  // only whether the stamp was on the target weekday and less than a day old,
+  // whatever time either happened, so a weekly routine moved from Friday
+  // morning to Friday afternoon waited a week while its row said that
+  // afternoon. It runs that afternoon, as a daily routine moved the same way
+  // does.
+  test('a weekly routine moved later on its own day runs at the new time, as a daily one does', () => {
     const schedule = reschedule('every friday at 09:00', 'every friday at 14:00');
     const ranThisMorning = at(FRI, 9, 5);
 
     const sameDay = tickVerdict({ schedule, lastRun: ranThisMorning, now: at(FRI, 11) });
-    assert.strictEqual(sameDay.nextRun, null,
-      'the weekly branch suppresses on the weekday alone, without comparing hours');
+    assert.deepStrictEqual(sameDay.nextRun, at(FRI, 14),
+      'this morning\'s run did not serve the afternoon slot');
+    assert.strictEqual(sameDay.due, false, 'and at eleven it is not due yet');
 
-    const nextWeek = tickVerdict({ schedule, lastRun: ranThisMorning, now: at([2026, 6, 10], 14) });
+    const atTwo = tickVerdict({ schedule, lastRun: ranThisMorning, now: at(FRI, 14) });
+    assert.deepStrictEqual(atTwo.nextRun, at(FRI, 14));
+    assert.strictEqual(atTwo.due, true, 'at two o\'clock the tick fires it');
+
+    // Once, not every tick for the rest of the day.
+    const ranAtTwo = at(FRI, 14, 2);
+    const afterIt = tickVerdict({ schedule, lastRun: ranAtTwo, now: at(FRI, 14, 30) });
+    assert.strictEqual(afterIt.nextRun, null, 'having run at the new time, it is not run again that day');
+
+    const nextWeek = tickVerdict({ schedule, lastRun: ranAtTwo, now: at([2026, 6, 10], 14) });
     assert.deepStrictEqual(nextWeek.nextRun, at([2026, 6, 10], 14),
-      'so the new time takes effect the following Friday');
+      'and the following Friday it runs at the new time again');
     assert.strictEqual(nextWeek.due, true);
   });
 
@@ -244,6 +282,62 @@ describe('a schedule edit and the guard that stops a second run', () => {
     assert.deepStrictEqual(verdict.nextRun, at(FRI, 9),
       'Monday\'s run says nothing about a Friday schedule');
     assert.strictEqual(verdict.due, false, 'and Friday has not arrived yet');
+  });
+
+  // ===== MOVED LATER, TO A TIME THAT HAS ALREADY GONE =====
+  //
+  // The stamp is when the last run finished, and an edit leaves no mark of its
+  // own, so a run at 7:00 says nothing about a 7:30 slot whether the move
+  // happened at 7:10 or at 9:00. Moved at 9:00 to 7:30, the routine is owed
+  // 7:30 and runs once on the next tick, late, exactly as a move to 8:30
+  // does. Telling those two apart would need the moment of the edit as a
+  // second input to the guard, and `lastRun` is the only input it has.
+  test('moved after a run to a later time that has already gone today, it runs once, late', () => {
+    const ranAtSeven = at(WED, 7, 2);
+    for (const [to, slot] of [['every day at 07:30', at(WED, 7, 30)], ['every day at 08:30', at(WED, 8, 30)]]) {
+      const schedule = reschedule('every day at 07:00', to);
+
+      const atNine = tickVerdict({ schedule, lastRun: ranAtSeven, now: at(WED, 9) });
+      assert.deepStrictEqual(atNine.nextRun, slot, `${to}: the 7:00 run did not serve the later slot`);
+      assert.strictEqual(atNine.due, true, `${to}: so the next tick runs it, late`);
+
+      const afterIt = tickVerdict({ schedule, lastRun: at(WED, 9, 1), now: at(WED, 9, 30) });
+      assert.strictEqual(afterIt.nextRun, null, `${to}: and only once`);
+    }
+  });
+
+  // ===== MOVED LATER, AND THEN BACK =====
+  //
+  // The inverse of the move, once the new time has come and gone. The run at
+  // 20:30 is stamped after 20:01, so moving the routine back to 20:01 owes it
+  // nothing more that day, and the row looks to tomorrow.
+  test('moved later, run at the new time, then moved back, it is not run again that day', () => {
+    reschedule('every day at 20:01', 'every day at 20:30');
+    const schedule = reschedule('every day at 20:30', 'every day at 20:01');
+    const ranAtHalfPast = at(FRI, 20, 31);
+
+    for (const now of [at(FRI, 20, 45), at(FRI, 23, 59)]) {
+      const verdict = tickVerdict({ schedule, lastRun: ranAtHalfPast, now });
+      assert.strictEqual(verdict.nextRun, null, `at ${now.toTimeString().slice(0, 5)} it is not owed another run`);
+      assert.deepStrictEqual(verdict.row, at(SAT, 20, 1), 'and its row looks to tomorrow');
+      assert.strictEqual(rowWords(verdict, now), 'Next run: tomorrow, 8:01pm');
+    }
+  });
+
+  // The undo: moved later and back again before the new time came. The run at
+  // 20:01 is the run that day, and the edits in between leave nothing behind
+  // that could ask for another.
+  test('moved later and back again before the new time came, it runs once that day', () => {
+    reschedule('every day at 20:01', 'every day at 20:30');
+    const schedule = reschedule('every day at 20:30', 'every day at 20:01');
+    const ranAtOnePast = at(FRI, 20, 3);
+
+    for (const now of [at(FRI, 20, 20), at(FRI, 20, 30), at(FRI, 23, 59)]) {
+      const verdict = tickVerdict({ schedule, lastRun: ranAtOnePast, now });
+      assert.strictEqual(verdict.nextRun, null, `at ${now.toTimeString().slice(0, 5)} there is no second run`);
+      assert.deepStrictEqual(verdict.row, at(SAT, 20, 1));
+      assert.strictEqual(rowWords(verdict, now), 'Next run: tomorrow, 8:01pm');
+    }
   });
 
   // ===== A ROUTINE THAT HAS NEVER RUN =====
