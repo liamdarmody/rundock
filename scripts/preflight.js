@@ -62,6 +62,9 @@ const REGISTRY_SUITES = [
   // reports a row whose suite did not finish as its own outcome, so a harness
   // added with a runner of its own fails here.
   'test/unit/mutation-harness-runner.test.js',
+  // No test keeps a child it starts out of coverage by deleting the key,
+  // which Node puts back: each sets it to an empty value.
+  'test/unit/child-coverage-switch.test.js',
   // Every innerHTML assignment is classified, and the totals beside it.
   'test/unit/innerhtml-inventory.test.js',
   // Documents that state the code's own numbers, names and lists.
@@ -195,6 +198,7 @@ const NOT_CHEAP = {
   'test/unit/routines-panel.test.js': 'behaviour: boots a document and renders the routines panel',
   'test/unit/run-detail-view.test.js': 'behaviour: boots a document and renders a run',
   'test/unit/skills-empty.test.js': 'behaviour: boots a document and renders the empty skills state',
+  'test/unit/artifact-review-attach.test.js': 'behavior: runs the files view\'s review attach against a stand-in frame and a stubbed fetch, in each order the frame\'s document and the comments can arrive. It cuts that function out of files.js, which is why the inventory names it, but the cut serves a driven check rather than a bookkeeping one',
 };
 
 /**

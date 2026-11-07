@@ -783,8 +783,8 @@ describe('the empty state, where a skill exists', () => {
 
   // THE LOCKED COPY, WORD FOR WORD, and the point of asserting it at the
   // surface as well as in the model is that this state is the one the
-  // amendment does NOT touch. A variant added beside it that quietly reworded
-  // this one would be the amendment doing more than it was asked to.
+  // empty-state change does NOT touch. A variant added beside it that quietly
+  // reworded this one would be that change doing more than it was asked to.
   test('where any skill exists the locked copy is untouched, aside included', () => {
     const { doc, w, dom } = shell([]);
     w.renderRoutines();
@@ -800,7 +800,7 @@ describe('the empty state, where a skill exists', () => {
 });
 
 describe('the empty state, where no skill exists', () => {
-  // AMENDMENT 5. The locked body presupposes a tested skill, which gating
+  // The locked body presupposes a tested skill, which gating
   // quietly guaranteed: you could not reach this view without having had a
   // routine, and you could not have had a routine without a skill. A permanent
   // rail entry removes the guarantee and exposes a state the locked copy was

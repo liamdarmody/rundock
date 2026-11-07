@@ -170,6 +170,14 @@
       "the request filter reaches extension frames only, never the app": 3.9,
       "WebRTC is off for the window": 2.6
     },
+    "mutate-routines-guards.js": {
+      "a period the last run already served is stepped over": 0.3,
+      "the suppression compares the time, not just the day": 0.3,
+      "the suppression compares the day, not just the time": 0.4,
+      "a weekly routine that already ran at its time on its day is not run again": 0.3,
+      "the suppression compares the minute, not just the hour": 0.3,
+      "a weekly routine is held by the time it ran, not by its weekday alone": 0.3
+    },
     "mutate-rundock-ui-guards.js": {
       "an alert with an action aligns message and action on the first baseline": 4.1,
       "the alert icon joins the first line": 4.1,
@@ -1190,6 +1198,8 @@
       "Reconnect: a leftover macOS script, or a link in its place, is not removed first": 2.8,
       "Reconnect: the macOS script is written through whatever appears at its path": 1.4,
       "Reconnect: the macOS script takes its mode from the umask": 1.4,
+      "Reconnect: the macOS script is left at whatever one write call took": 0.25,
+      "Reconnect: a write of the macOS script that takes nothing is tried for ever": 0.28,
       "Reconnect: a frame inside the window is taken for the window": 1.4,
       "Reconnect: the desktop channel answers any frame of the main window": 1.4,
       "Reconnect: the wizard reads an error the opener never gives": 1.4,
