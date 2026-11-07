@@ -48,6 +48,12 @@
    secondary fact the way .rd-guidance and .rd-took are: it is one of the two
    things this box exists to say, the other being the outcome itself. */
 .rd-when { font-size: var(--caption); font-weight: 600; color: var(--text-2); margin: 0; }
+/* A run that started late, said under its start time on its own raised
+   surface: 12.79:1 and 17.40:1 for the lead word, 5.55:1 and 5.86:1 for the
+   rest, dark and light. */
+.rd-late { display: flex; gap: 8px; align-items: flex-start; font-size: var(--caption); color: var(--text-2-strong); line-height: 1.5; margin: 0; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-lg); background-color: var(--elevated); }
+.rd-late svg { flex: none; margin-top: 2px; }
+.rd-late b { color: var(--text-1); font-weight: 600; }
 .rd-took { font-size: var(--caption); color: var(--text-3); margin: 6px 0 0; }
 /* The count of refused cards. A secondary fact beside the duration, but one
    a reader should notice: a run can read as finished and still have skipped

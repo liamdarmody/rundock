@@ -107,6 +107,43 @@ const COUNT_DENY = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'proces
 
 // [target, label, the guard as it is written, what it becomes without it]
 const MUTATIONS = [
+  // ===== A RUN THAT STARTED LATE =====
+  // A scheduled run 5 minutes or more after its slot, said under its start
+  // time; the closed sentence only when the record says no tick saw the slot.
+  [MODEL, 'a pressed run is never called late',
+    "    if (triggerOf(record) !== 'scheduled') return null;\n    const due = record.dueAt",
+    '    const due = record.dueAt'],
+  [MODEL, 'a run within 5 minutes of its slot is not late',
+    '    if (started - due < LATE_AFTER_MS) return null;',
+    '    if (started - due < 0) return null;'],
+  [MODEL, 'late is the row\'s 5 minutes',
+    '  const LATE_AFTER_MS = 5 * 60 * 1000;',
+    '  const LATE_AFTER_MS = 4 * 60 * 1000;'],
+  [MODEL, 'a record with no dueAt says nothing about it',
+    "    if (!due || !started || isNaN(due.getTime()) || isNaN(started.getTime())) return null;",
+    "    if (!started) return null;"],
+  [MODEL, 'Rundock was closed is said only when the record says so',
+    "record.dueUnobserved === true ? `${text} ${LATE.closed}` : text",
+    '`${text} ${LATE.closed}`'],
+  [MODEL, 'the late line names the date it was due',
+    "    const text = LATE.due.replace('{date}', () => `${due.getDate()} ${MONTHS[due.getMonth()]}`)",
+    "    const text = LATE.due.replace('{date}', () => `${MONTHS[due.getMonth()]} ${due.getDate()}`)"],
+  [MODEL, 'the screen is handed the late line',
+    '      late: found ? lateWords(record) : null,\n',
+    ''],
+  [VIEW, 'the late line is drawn under the start time',
+    '    + when\n    + late\n',
+    '    + when\n'],
+  [VIEW, 'the late line leads with its word',
+    '<span><b>${escText(view.late.lead)}</b> ${escText(view.late.text)}</span>',
+    '<span>${escText(view.late.text)}</span>'],
+  [STYLES, 'the late line sits on the raised surface, in the strong secondary text',
+    'color: var(--text-2-strong); line-height: 1.5; margin: 0; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-lg); background-color: var(--elevated); }',
+    'color: var(--text-3); line-height: 1.5; margin: 0; padding: 8px 10px; }'],
+  [STYLES, 'the late line\'s lead word takes the primary text',
+    '.rd-late b { color: var(--text-1); font-weight: 600; }',
+    '.rd-late b { }'],
+
   // ===== UNKNOWN IS NOT EMPTY =====
   // THE ONE THIS FILE EXISTS FOR, in its exact form: the default that turns
   // "nobody could tell" into "it changed nothing".
