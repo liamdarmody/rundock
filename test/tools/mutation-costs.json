@@ -170,6 +170,14 @@
       "the request filter reaches extension frames only, never the app": 3.9,
       "WebRTC is off for the window": 2.6
     },
+    "mutate-routines-guards.js": {
+      "a period the last run already served is stepped over": 0.3,
+      "the suppression compares the time, not just the day": 0.3,
+      "the suppression compares the day, not just the time": 0.4,
+      "a weekly routine that already ran at its time on its day is not run again": 0.3,
+      "the suppression compares the minute, not just the hour": 0.3,
+      "a weekly routine is held by the time it ran, not by its weekday alone": 0.3
+    },
     "mutate-rundock-ui-guards.js": {
       "an alert with an action aligns message and action on the first baseline": 4.1,
       "the alert icon joins the first line": 4.1,
