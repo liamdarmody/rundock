@@ -43,9 +43,18 @@
   "secondsPerRowLabel": {
     "mutate-atomic-write-guards.js": {
       "a state file is renamed over whole, never written under its own name": 0.42,
-      "the temporary file is flushed before it is renamed over": 0.3,
-      "a state file that does not parse is set aside, not read as empty": 0.29,
-      "a stub log line still being appended is left out, not parsed": 0.54
+      "the temporary file is flushed before it is renamed over": 0.25,
+      "a state file that does not parse is set aside, not read as empty": 0.45,
+      "a stub log line still being appended is left out, not parsed": 0.54,
+      "a temporary file is created new, never opened through what is already there": 0.44,
+      "a state file is written readable by its owner alone": 0.34,
+      "a write cut off removes its temporary file": 0.36,
+      "the clock is read only for a file that does not parse": 0.38,
+      "an unparseable routine state keeps its name until the file that replaces it is written": 0.35,
+      "a replacement that cannot be written takes the dated name away again": 0.37,
+      "a temporary file a stopped process left is removed on load": 0.39,
+      "a temporary file whose process still runs is never removed": 0.42,
+      "a temporary file of another store is never removed": 0.41
     },
     "mutate-extension-host-guards.js": {
       "a request with no user action at all is refused, never put to the person": 6.9,
@@ -177,8 +186,9 @@
       "WebRTC is off for the window": 2.6
     },
     "mutate-routines-guards.js": {
-      "a routine state that does not parse is rebuilt from the run records, not started empty": 0.34,
-      "a complete copy left under a temporary name in runs/ is never read as a run": 0.3
+      "a routine state that does not parse is rebuilt from the run records, not started empty": 0.44,
+      "a complete copy left under a temporary name in runs/ is never read as a run": 0.42,
+      "a routine state that does not parse is set aside and written back at once": 0.35
     },
     "mutate-rundock-ui-guards.js": {
       "an alert with an action aligns message and action on the first baseline": 4.1,

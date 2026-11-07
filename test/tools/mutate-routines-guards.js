@@ -1162,6 +1162,11 @@ const MUTATIONS = [
   [SCHEDULER_LOADS, 'a complete copy left under a temporary name in runs/ is never read as a run',
     '    if (!RUN_RECORD_NAME.test(name)) continue;\n',
     ''],
+  // And it is set aside and written back at once, so a restart before the
+  // next run finds the rebuilt state rather than the same damage.
+  [SCHEDULER_LOADS, 'a routine state that does not parse is set aside and written back at once',
+    '    if (unparsed) setAsideOnceReplaced(file, unparsed, () => deps.now(), saveRoutineState);\n',
+    ''],
 
 ];
 
