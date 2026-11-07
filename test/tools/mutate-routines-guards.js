@@ -1277,6 +1277,13 @@ const MUTATIONS = [
   [CONTRAST_TOKENS, 'contrast: the link text is declared on :root alone',
     ':root, body.light {\n  --link-text:',
     ':root {\n  --link-text:'],
+  // A paused row keeps its text at full strength: only the avatar dims.
+  [CONTRAST_ROUTINES, 'contrast: a paused row is dimmed as a whole again',
+    '.routine-row.paused .avatar { opacity: 0.5; }',
+    '.routine-row.paused { opacity: 0.72; }'],
+  [CONTRAST_ROUTINES, 'contrast: a paused row\'s avatar dims less than half',
+    '.routine-row.paused .avatar { opacity: 0.5; }',
+    '.routine-row.paused .avatar { opacity: 0.72; }'],
 
 ];
 

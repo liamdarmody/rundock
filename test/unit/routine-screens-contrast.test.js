@@ -264,6 +264,25 @@ describe('the two text tokens these rows added', () => {
   });
 });
 
+
+describe('a paused row keeps its text at full strength', () => {
+  const css = rules(SHEETS.routines);
+
+  test('nothing dims a paused row as a whole', () => {
+    // At 72% the row's own secondary text measured 3.19:1 in dark and 2.87:1
+    // in light, below 4.5:1 even with every token above in place.
+    const dimming = [...css].filter(([sel, decls]) => /\.routine-row\.paused(?![\w-])/.test(sel)
+      && !/\.avatar$/.test(sel) && decls.has('opacity'));
+    assert.deepStrictEqual(dimming.map(([sel]) => sel), [], 'a paused row is dimmed as a whole');
+  });
+
+  test('the avatar alone dims, at half strength', () => {
+    const avatar = css.get('.routine-row.paused .avatar');
+    assert.ok(avatar, 'routines.css has no rule for a paused row\'s avatar');
+    assert.strictEqual(avatar.get('opacity'), '0.5');
+  });
+});
+
 describe('the measuring instrument', () => {
   const row = (where) => {
     const found = ROWS.find(r => r[0] === where);

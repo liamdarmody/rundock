@@ -211,7 +211,9 @@
       "contrast: the scope focus ring is drawn outside the row": 0.3,
       "contrast: the scope focus ring takes the app accent": 0.2,
       "contrast: the light working text takes the dark value": 0.2,
-      "contrast: the link text is declared on :root alone": 0.3
+      "contrast: the link text is declared on :root alone": 0.3,
+      "contrast: a paused row is dimmed as a whole again": 0.2,
+      "contrast: a paused row's avatar dims less than half": 0.2
     },
     "mutate-run-detail-guards.js": {
       "a run whose ending never ran is not painted as a failure": 1.3

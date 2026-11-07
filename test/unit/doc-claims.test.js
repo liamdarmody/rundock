@@ -1213,3 +1213,17 @@ describe('ARCHITECTURE.md: a write to a stopped process is logged, left to its c
     }
   });
 });
+
+// docs/ROUTINES.md: what a pause you applied looks like on its row
+describe('ROUTINES.md: a pause you applied dims the avatar, not the row', () => {
+  test('the doc says the avatar dims and the text stays at full strength, which is what the stylesheet does', () => {
+    const paragraph = routinesDoc.split('\n').find(l => l.includes('A pause you applied is quieter'));
+    assert.ok(paragraph, 'ROUTINES.md describes a pause you applied');
+    assert.ok(paragraph.includes('A pause you applied is quieter: its avatar dims while its text stays at full strength'),
+      'ROUTINES.md must say what a pause you applied dims');
+    assert.ok(!paragraph.includes('the row dims'), 'the old sentence, which is no longer true, is gone');
+    const css = fs.readFileSync(path.join(ROOT, 'public', 'styles', 'views', 'routines.css'), 'utf-8');
+    assert.ok(css.includes('.routine-row.paused .avatar { opacity: 0.5; }'), 'the sentence is true of the stylesheet');
+    assert.ok(!css.includes('.routine-row.paused { opacity'), 'and nothing dims the row as a whole');
+  });
+});

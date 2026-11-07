@@ -50,7 +50,9 @@
 /* The list */
 .routine-table { display: flex; flex-direction: column; gap: 10px; }
 .routine-row { display: flex; align-items: center; gap: 14px; padding: 14px 16px; background: var(--card); border-radius: var(--radius-lg); }
-.routine-row.paused { opacity: 0.72; }
+/* A paused row dims its avatar alone. Dimming the whole row took its own
+   secondary text below 4.5:1 in both themes, whatever token it drew. */
+.routine-row.paused .avatar { opacity: 0.5; }
 .rr-body { flex: 1; min-width: 0; }
 .rr-sentence { font-size: var(--body); font-weight: 600; color: var(--text-1); margin-bottom: 3px; }
 
@@ -102,7 +104,7 @@
 .icon-btn.run:hover { color: var(--accent); background: var(--accent-glow); border-color: var(--accent); }
 
 /* The two paused states, told apart by tone AND words. A pause the reader
-   applied takes the idle grey of "history, not alarm" and the row dims. A
+   applied takes a quiet grey, "history, not alarm", and its avatar dims. A
    pause the plan's own change applied takes var(--attention), "needs the
    user, not an error": full weight, an inset ring, a sentence naming what
    changed. Rendered alike, the second would be resumed reflexively. */
