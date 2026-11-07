@@ -600,6 +600,9 @@ const MUTATIONS = [
   [SCOPE, "a harness with costs by label is never cut",
     "        if (i === h.rows - 1 || (piece < pieces && spent >= (est * piece) / pieces)) {",
     "        if (i === h.rows - 1) {"],
+  [SCOPE, "a slow row that crosses a share is always taken into the slice it starts in",
+    " && share - spent < after - share) {",
+    " && false) {"],
 
   // ===== THE CI RETRY: ONCE, AND ONLY FOR A LOST RUNNER =====
   [CI_VERDICT, "a runner shutdown is retried",
