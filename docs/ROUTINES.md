@@ -66,7 +66,7 @@ schedule: every day @ 05:00        # only "at" is recognised
 
 Cron expressions are not supported. The parser does not raise an error on a cron schedule and the scheduler's next-run calculation returns null, so the routine is skipped on every tick. That much is unchanged; what is no longer silent is the reporting. The routine's row in the Routines list says Rundock cannot read the schedule and names both forms that work, and it shows no next run, so a routine that will never fire is distinguishable from one that is simply not due yet.
 
-A schedule follows the clock of the computer Rundock runs on. For a Rundock on a server reached through a tunnel, that is the server's clock, whatever zone the computer showing the window is in. A routine does have a `timezone` field: it records the zone the schedule was set in, as words, and it is not read when deciding when the routine runs. Firing in a routine's own zone is not supported.
+A schedule follows the clock of the computer Rundock runs on. For a Rundock on a server reached through a tunnel, that is the server's clock, whatever zone the computer showing the window is in. A routine can carry a `timezone` field that names a zone as words, like `Europe/London`. Rundock checks that it is written that way, and doesn't read it when deciding when the routine runs. Firing in a routine's own zone is not supported.
 
 ## Upgrading a workspace that already has routines
 

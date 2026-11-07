@@ -961,8 +961,9 @@ describe('ROUTINES.md: a schedule follows the clock of the computer Rundock runs
   const { normalizeRoutine } = require('../../lib/agents/routines.js');
   const CLOCK = 'A schedule follows the clock of the computer Rundock runs on. For a Rundock on a server '
     + 'reached through a tunnel, that is the server\'s clock, whatever zone the computer showing the window is in.';
-  const FIELD = 'A routine does have a `timezone` field: it records the zone the schedule was set in, as words, '
-    + 'and it is not read when deciding when the routine runs. Firing in a routine\'s own zone is not supported.';
+  const FIELD = 'A routine can carry a `timezone` field that names a zone as words, like `Europe/London`. '
+    + 'Rundock checks that it is written that way, and doesn\'t read it when deciding when the routine runs. '
+    + 'Firing in a routine\'s own zone is not supported.';
   const SERVER = 'Routine times follow the server\'s clock:';
 
   /** Run `fn` with the process in `zone` and the scheduler's clock held still. */
@@ -986,7 +987,7 @@ describe('ROUTINES.md: a schedule follows the clock of the computer Rundock runs
     assert.ok(server.includes(SERVER), 'and the server section must say routine times follow the server\'s clock');
   });
 
-  // "Not read when deciding when the routine runs", as behavior.
+  // "Doesn't read it when deciding when the routine runs", as behavior.
   test('a routine declaring Pacific/Auckland is judged due exactly as one declaring nothing', () => {
     inZone('Europe/London', new Date(Date.UTC(2026, 9, 7, 9, 30)), () => {
       const declared = normalizeRoutine(
