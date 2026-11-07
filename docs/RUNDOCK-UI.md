@@ -106,7 +106,7 @@ Returns a native `<button>`. States: default, hover, focus-visible, active, disa
 - **danger** is for a button that *starts* a destructive action from a list or a menu (Uninstall, Remove): red text on a red outline, never a fill.
 - **danger-confirm** is the one solid red button: the final, destructive action itself.
 
-The rule is about where the click lands, not whether a dialog exists. A button that *starts* a destructive action, one that a confirmation step follows, is the outline. A button that *is* the destructive action, with nothing after it to confirm, is solid: the confirm button inside a dialog, and also a button that acts at once with no dialog at all, such as Rundock's own "Stop this run". If a confirmation step is ever added in front of such a button, it becomes the outline half of the pair and the new confirm button carries the solid fill.
+The rule is about where the click lands, not whether a dialog exists. A button that *starts* a destructive action, one that a confirmation step follows, is the outline. A button that *is* the destructive action, with nothing after it to confirm, is solid: the confirm button inside a dialog, and also a button that acts at once with no dialog at all. Rundock's own "Stop this run" is the exception: it asks a run that is already going to stop and says "Stopping…" at once, so it is a neutral outline that takes the danger colours on hover and keyboard focus, and the solid fill is kept for confirmations. If a confirmation step is ever added in front of such a button, it becomes the outline half of the pair and the new confirm button carries the solid fill.
 
 ### iconButton
 
