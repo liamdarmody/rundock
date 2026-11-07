@@ -69,8 +69,9 @@ not expect a clean git diff to tell you whether a GIF actually changed.
 - **Node 22+** and the repo's dependencies (`npm install`).
 - **Playwright Chromium**, already installed with the dev dependencies.
 - **ffmpeg** for the GIFs. Resolved in order: the `FFMPEG_PATH` env, a system
-  `ffmpeg` on `PATH`, then the `ffmpeg-static` dev dependency. If none is found,
-  stills are still produced and motion is skipped with a note.
+  `ffmpeg` on `PATH`, then the `ffmpeg-static` optional dependency, which an
+  install leaves out where it publishes no binary (Windows on Arm, for one). If
+  none is found, stills are still produced and motion is skipped with a note.
 - **sips** (macOS built-in) for resizing and format conversion. On this build it
   cannot write WebP, so WebP derivations are skipped and the PNG masters serve
   as the source.

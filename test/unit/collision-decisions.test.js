@@ -23,7 +23,7 @@ const model = require('../../public/packages-install-model.js');
 // so the rows rendered here are the product's, with no page and no copy of
 // the escaping rule in this file.
 const settings = require('../../public/views/settings.js');
-const { buildPlan, decide } = require('../../lib/packages/import-plan.js');
+const { decide } = require('../../lib/packages/import-plan.js');
 const { applyImport } = require('../../lib/packages/import-apply.js');
 const { evaluateImport, APPROVAL_SCHEMA, ABSENT_DIGEST } = require('../../lib/packages/import-evaluate.js');
 const { buildDispatch } = require('../../lib/protocol/handlers/index.js');
