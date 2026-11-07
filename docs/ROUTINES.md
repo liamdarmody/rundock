@@ -27,7 +27,7 @@ Each entry in the `routines:` array is a YAML object with five fields. The parse
 | Field | Type | Scope | Required | Purpose | Example |
 |---|---|---|---|---|---|
 | `name` | string | Rundock-only | Yes | Display name for the routine. Shown in the Routines panel, on the agent profile, and in the scheduler logs. Required: a routine without a `name` is dropped during parse. | `name: Morning briefing` |
-| `schedule` | string | Rundock-only | Yes | When the routine runs. Accepts only the human-readable forms documented below. A schedule in any other form never runs, and the routine's row in the Routines list says so and names the two forms that work. | `schedule: every day at 05:00` |
+| `schedule` | string | Rundock-only | Yes | When the routine runs. Accepts only the human-readable forms documented below. A schedule in any other form never runs, and the routine's row in the Routines list says so and gives a daily and a weekly form that works. | `schedule: every day at 05:00` |
 | `prompt` | string | Rundock-only | Yes | The instruction sent to the agent when the routine fires. Treated as a single user message: the same text the user would type. A routine with no `prompt`, or one that is blank, is refused when its time comes rather than run, and the routine's row in the Routines list says so and shows no next run. | `prompt: Run the morning briefing` |
 | `description` | string | Rundock-only | No | One-line plain English explanation of the routine, surfaced on the agent profile. Optional: omitting it does not break the routine. | `description: Triage today's tasks, calendar, and content pipeline.` |
 | `enabled` | boolean | Rundock-only | No | Whether the scheduler may run this routine. `true`, `yes` and `on` all mean yes; `false`, `no` and `off` all mean no, in any case and with or without quotes. **An absent key, or a value that is not a boolean in any of those spellings, means not enabled**, so the routine is listed and waits to be turned on. See [Upgrading a workspace that already has routines](#upgrading-a-workspace-that-already-has-routines). The editor writes it explicitly, so a routine created there is live at once. | `enabled: true` |
@@ -38,12 +38,16 @@ A routine written by hand needs `name`, `schedule`, `prompt` and `enabled: true`
 
 ## Schedule format
 
-The `schedule` field accepts only two patterns. Both are exact regex matches.
+The `schedule` field accepts only the four patterns below: daily, weekly, and two monthly forms. Each is an exact regex match.
 
 | Pattern | Format | Notes |
 |---|---|---|
 | Daily | `every day at HH:MM` | Hour and minute must be two-digit, zero-padded. `09:00` works; `9:00` does not match. |
 | Weekly | `every <weekday> at HH:MM` | Weekday must be one of `monday`, `tuesday`, `wednesday`, `thursday`, `friday`, `saturday`, `sunday`, lowercase, full word. Two-digit zero-padded time. |
+| Monthly, on a day | `on day N of every month at HH:MM` | N is a day from 1 to 28, with or without one leading zero (`5` and `05` are the same schedule). Two-digit zero-padded time. |
+| Monthly, on the last day | `on the last day of every month at HH:MM` | Each month's own last day: 31 January, 28 February (29 in a leap year), 30 April. Two-digit zero-padded time. |
+
+Days 29, 30 and 31 are refused, because they are not in every month, and Rundock will not move a slot to another date. Rundock refuses to save one, with a message saying so, and one typed into the file by hand is a schedule Rundock cannot read, which never runs. For a routine at month end, use the last-day form.
 
 Examples that work:
 
@@ -53,6 +57,8 @@ schedule: every day at 21:30
 schedule: every monday at 09:00
 schedule: every friday at 04:00
 schedule: every saturday at 03:00
+schedule: on day 1 of every month at 09:00
+schedule: on the last day of every month at 18:00
 ```
 
 Examples that look correct but silently never fire:
@@ -62,9 +68,11 @@ schedule: 0 5 * * *                # cron: not supported
 schedule: every day at 9:00        # missing leading zero on the hour
 schedule: every weekday at 18:00   # "weekday" is not a recognised day
 schedule: every day @ 05:00        # only "at" is recognised
+schedule: on day 31 of every month at 09:00  # not in every month: use the last-day form
+schedule: every month at 09:00     # a monthly schedule names its day
 ```
 
-Cron expressions are not supported. The parser does not raise an error on a cron schedule and the scheduler's next-run calculation returns null, so the routine is skipped on every tick. That much is unchanged; what is no longer silent is the reporting. The routine's row in the Routines list says Rundock cannot read the schedule and names both forms that work, and it shows no next run, so a routine that will never fire is distinguishable from one that is simply not due yet.
+Cron expressions are not supported. The parser does not raise an error on a cron schedule and the scheduler's next-run calculation returns null, so the routine is skipped on every tick. That much is unchanged; what is no longer silent is the reporting. The routine's row in the Routines list says Rundock cannot read the schedule and gives a daily and a weekly form that works, and it shows no next run, so a routine that will never fire is distinguishable from one that is simply not due yet.
 
 The schedule is interpreted in the local timezone of the machine running Rundock. There is no timezone field on a routine.
 
@@ -90,7 +98,7 @@ The first read of an agent file also fills the absent keys in, so the file ends 
 
 Nothing at all, which is the point. **Migration never touches a `schedule`, so a cron expression survives an upgrade exactly as it was written.** It is not translated, not rewritten, and not removed.
 
-It also still does not run, and it never did: cron is not one of the two accepted forms, so the next-run calculation returns null and every tick skips the routine. What has changed is that the silence is over. The routine's row in the Routines list now says Rundock cannot read the schedule, and names the two forms that work, so a routine that will never fire is told apart from one that is simply not due yet.
+It also still does not run, and it never did: cron is not one of the accepted forms, so the next-run calculation returns null and every tick skips the routine. What has changed is that the silence is over. The routine's row in the Routines list now says Rundock cannot read the schedule, and gives a daily and a weekly form that works, so a routine that will never fire is told apart from one that is simply not due yet.
 
 A cron-scheduled routine is therefore held back twice over: its schedule cannot be read, and, if its block never carried `enabled`, it is not enabled either. Fixing the schedule is the part that matters, because a routine turned on with a schedule nothing can read still never runs.
 
@@ -104,11 +112,13 @@ The scheduler ticks every 60 seconds. On each tick:
 
 A routine that has come due is still refused if its own fields say it should not run: it is paused, it is not enabled, it names a run target this release cannot run, or it has no prompt to send. A refusal is announced in the log once, naming the field that decided, and records no run, so a refused routine keeps whatever history it already had. A routine with no prompt says so on its own row in the Routines list, in the same place and the same tone a schedule nothing can read says so, and neither row shows a next run.
 
-Each routine has a `lastRun` guard. Daily and weekly routines do not re-fire once they have run at or after their scheduled time in that period, which is the calendar day that time falls on. Moving one to a later time on a day it has already run makes it run again at the new time, including a later time that has already gone, which then runs once, late, on the next tick. A run still going at the new time counts for it. (Pinned by `test/unit/doc-claims.test.js`.) The guard the tick reads is held in memory. It is filled from `.rundock/routine-state.json` in the workspace when Rundock starts and when you switch workspace, and written back in full after every run, so it survives a restart and a routine is not fired twice by one. Nothing on the tick path re-reads that file, which is what the always-on section below is about.
+Each routine has a `lastRun` guard. Daily and weekly routines do not re-fire once they have run at or after their scheduled time in that period, which is the calendar day that time falls on. A monthly routine does not re-fire once it has run at or after its scheduled time in that month. Moving one to a later time on a day it has already run makes it run again at the new time, including a later time that has already gone, which then runs once, late, on the next tick. A run still going at the new time counts for it. (Pinned by `test/unit/doc-claims.test.js`.) The guard the tick reads is held in memory. It is filled from `.rundock/routine-state.json` in the workspace when Rundock starts and when you switch workspace, and written back in full after every run, so it survives a restart and a routine is not fired twice by one. Nothing on the tick path re-reads that file, which is what the always-on section below is about.
 
 **Routines fire only while Rundock is running, but a missed slot is caught up the same day.** If Rundock is closed at 05:00 and you open it at 09:00, the 05:00 routine fires shortly after launch. A next-run time that has already passed stays on today rather than rolling forward to tomorrow, and the scheduler fires anything already due on its next tick.
 
 The catch-up window is the calendar day for daily routines and the weekday for weekly ones. (Pinned by `test/unit/doc-claims.test.js`: change the scheduler's window and that test fails, so this sentence and the behaviour move together.) Closed all of Tuesday means Tuesday's daily run is lost: you get one run on Wednesday, not two. Closed all of Friday means a Friday weekly routine waits until the following Friday.
+
+**A monthly routine catches up within its month.** If Rundock is closed when its slot comes due, it runs once, at the first tick Rundock is open later in the same month, and its row marks the run as late, naming when it was due. If the month ends first, it does not run, and the slot is recorded as missed: closed from the 14th to the 2nd of the next month, a routine due on the 15th never runs for that month. Its run record names the slot it was due at, in a `dueAt` field, on every scheduled run. A monthly slot is not owed at all if it passed before the routine existed, while it was paused or switched off, or before its plan was approved, so making, resuming, turning on or approving a routine after its day never runs it for that month: it waits for next month's slot, which its row names. Whether it was paused or off is known only from what the scheduler saw while Rundock was running on this computer. A routine paused and resumed while Rundock was closed here, for example on another computer sharing the workspace, is still owed the slot that passed in between, and runs it late.
 
 Catch-up means routines run late, not on time. A 05:00 briefing on a machine opened at 09:00 runs at 09:00. If the timing matters rather than the fact that it ran, see the always-on options below.
 
@@ -438,7 +448,7 @@ routines:
 
 A few specific things that go wrong silently.
 
-**Cron expressions never fire.** The scheduler does not understand cron. A routine with `schedule: 0 5 * * *` parses fine, registers fine, and never runs. There is still no error and no log line, but it is no longer invisible: the routine's row in the Routines list reports the unreadable schedule and names the two forms that work. If a routine appears to do nothing, its row is the first place to look and the schedule string is the first thing to check.
+**Cron expressions never fire.** The scheduler does not understand cron. A routine with `schedule: 0 5 * * *` parses fine, registers fine, and never runs. There is still no error and no log line, but it is no longer invisible: the routine's row in the Routines list reports the unreadable schedule and gives a daily and a weekly form that works. If a routine appears to do nothing, its row is the first place to look and the schedule string is the first thing to check.
 
 **Hours without a leading zero never fire.** The pattern is exact. `every day at 9:00` does not match `every day at (\d{2}):(\d{2})`. Always zero-pad.
 
@@ -450,7 +460,7 @@ A few specific things that go wrong silently.
 
 **Two routines on the same agent fire in the same minute.** Both routines spawn Claude Code subprocesses concurrently. They do not share context, conversation history, or file locks. Stagger the schedules unless the routines are genuinely independent and idempotent.
 
-**A routine takes longer than the next scheduler tick.** Long-running routines (a weekly research digest can run for many minutes) are fine. The scheduler runs every 60 seconds, but the daily and weekly schedule guards prevent the same routine being launched twice in the same window. The next-run calculation only fires once per day or week, regardless of how long the previous run took.
+**A routine takes longer than the next scheduler tick.** Long-running routines (a weekly research digest can run for many minutes) are fine. The scheduler runs every 60 seconds, but the schedule guards prevent the same routine being launched twice in the same window. The next-run calculation only fires once per period (a day, a week or a month), regardless of how long the previous run took.
 
 **Routine name changed after first run.** The routine's lastRun guard is keyed on `agentId:name`. Renaming a routine creates a new key, which means the new name has no run history and may fire immediately on the next tick if its schedule has already passed. To rename a routine without an immediate re-fire, do it just after a known successful run rather than just before the next due time.
 
