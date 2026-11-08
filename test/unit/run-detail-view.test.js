@@ -109,6 +109,48 @@ function pageText(doc) {
   return doc.getElementById('run-detail-content').textContent.replace(/\s+/g, ' ').trim();
 }
 
+// One line under the start time on a run that started late, with the lead
+// word in the primary text and the rest in the strong secondary.
+describe('a run that started late', () => {
+  const LATE = record({
+    trigger: 'scheduled', startedAt: new Date(2026, 7, 24, 8, 2).toISOString(),
+    dueAt: new Date(2026, 7, 21, 7, 0).toISOString(), dueUnobserved: true,
+  });
+
+  test('says so under the start time, and the chip stays Finished', () => {
+    // The clock built in the page's own realm, so the start time is drawn.
+    const { w, doc, dom } = shell();
+    w.runDetailNow = () => new w.Date(2026, 7, 24, 9, 0);
+    w.openRunDetail('default', 'Hello World');
+    w.runArrived({ type: 'run', runId: null, agentId: 'default', routine: 'Hello World', run: LATE });
+    const late = doc.querySelector('[data-run-detail="late"]');
+    assert.ok(late, 'no late line');
+    const when = doc.querySelector('[data-run-detail="when"]');
+    assert.strictEqual(when.textContent, 'today, 8:02am');
+    assert.strictEqual(late.previousElementSibling, when, 'it sits under the start time');
+    assert.strictEqual(late.textContent.replace(/\s+/g, ' ').trim(),
+      'Ran late. It was due on 21 August at 7:00am. Rundock was closed then, so it started when Rundock next opened.');
+    assert.strictEqual(late.querySelector('b').textContent, 'Ran late.');
+    assert.strictEqual(doc.querySelector('[data-run-detail="chip"]').textContent, 'Finished');
+    const style = (el) => dom.window.getComputedStyle(el);
+    assert.strictEqual(style(late).color, 'var(--text-2-strong)');
+    assert.strictEqual(style(late).backgroundColor, 'var(--elevated)');
+    assert.strictEqual(style(late.querySelector('b')).color, 'var(--text-1)');
+    assert.doesNotMatch(pageText(doc), /caught up/i);
+    dom.window.close();
+  });
+
+  test('is not drawn on an on-time run, a pressed run, or a record with no dueAt', () => {
+    const { dueAt, ...older } = LATE;
+    assert.ok(dueAt);
+    for (const run of [record({ ...LATE, startedAt: new Date(2026, 7, 21, 7, 1).toISOString() }), record({ ...LATE, trigger: 'manual' }), older]) {
+      const { doc, dom } = draw(run);
+      assert.strictEqual(doc.querySelector('[data-run-detail="late"]'), null);
+      dom.window.close();
+    }
+  });
+});
+
 describe('the record on screen', () => {
   test('a run that failed on a system error says so plainly, with the raw words behind Details', () => {
     const { doc, dom } = draw(record({ status: 'failed', files: [], error: 'spawn claude ENOENT' }));

@@ -188,6 +188,44 @@ test('closed from the 14th to the 20th, a 15th slot runs once on the 20th', asyn
   });
 });
 
+// Whether the slot passed with no tick to see it, recorded on the run so its
+// screen says Rundock was closed only when that is what happened.
+test('a late run records that its slot passed unobserved, and only then', async (t) => {
+  resetTimeline();
+  write('ledger', DAY_15);
+  await withTicks(t, async () => {
+    await tickAt(t, at(10, 1, 8));
+    await tickAt(t, at(10, 14, 8));
+    // Read before the run can end, so the opening record is the one read.
+    clock.at = at(10, 20, 10);
+    t.mock.timers.tick(60_000);
+    let [record] = recordsFor('ledger');
+    assert.strictEqual(record.status, 'running');
+    assert.strictEqual(record.dueUnobserved, true, 'closed through the slot, said from the moment the record opens');
+    await tickAt(t, at(10, 20, 10, 1));
+    [record] = recordsFor('ledger');
+    assert.strictEqual(record.status, 'succeeded');
+    assert.strictEqual(record.dueUnobserved, true, 'and kept when it closes');
+
+    // On time: a tick a minute before the slot, then the slot.
+    fs.rmSync(path.join(h.workspaceDir, '.rundock', 'runs'), { recursive: true, force: true });
+    await tickAt(t, at(11, 15, 8, 59));
+    await tickAt(t, at(11, 15, 9, 0));
+    [record] = recordsFor('ledger');
+    assert.strictEqual(record.dueAt, iso(at(11, 15, 9)));
+    assert.strictEqual('dueUnobserved' in record, false, 'an on-time run says nothing about it');
+
+    // Late, but seen: a tick after the slot that did not start it.
+    fs.rmSync(path.join(h.workspaceDir, '.rundock', 'runs'), { recursive: true, force: true });
+    await tickAt(t, at(12, 15, 8, 0));
+    h.internal.routineSlots.observedAt = iso(at(12, 15, 9, 30));
+    await tickAt(t, at(12, 15, 10, 0));
+    [record] = recordsFor('ledger');
+    assert.strictEqual(record.dueAt, iso(at(12, 15, 9)), 'it ran late');
+    assert.strictEqual('dueUnobserved' in record, false, 'and a tick had seen the slot, so it says nothing');
+  });
+});
+
 test('closed from 14 October to 2 November, the October slot is recorded and never run', async (t) => {
   resetTimeline();
   write('ledger', DAY_15);

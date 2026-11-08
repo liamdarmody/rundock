@@ -110,6 +110,9 @@
   const WORKSPACE_CAVEAT = 'Rundock only runs the routines of the workspace that is open, '
     + "so this one's do not run while you are elsewhere. "
     + 'A missed slot is caught up the same day you return.';
+  // A monthly slot is caught up anywhere in its month, so its note says that.
+  const MONTHLY_WORKSPACE_CAVEAT = WORKSPACE_CAVEAT
+    .replace('the same day you return.', 'the next time Rundock is open that month.');
 
   const RUN_ON_LABEL = 'Run on';
 
@@ -117,12 +120,13 @@
   //
   // The mock illustrates this field with the word "weekday". The scheduler
   // reads `every day at HH:MM`, `every <weekday name> at HH:MM` and the two
-  // monthly forms, which this editor does not build, and nothing else, so a
+  // monthly forms (month, with a day from `monthDays`), and nothing else, so a
   // routine saved as "every weekday" would parse, save, appear in the list and
   // never once fire. Offering it would be the same defect as
   // promising a run while the computer is off: a control that says something
   // the product does not do. Every value here round-trips through the
-  // scheduler's own format, asserted in the model's tests.
+  // scheduler's own format, asserted in the model's tests. Month is last, so no
+  // option that was already here moves.
   const FREQUENCIES = [
     { value: 'day', label: 'day' },
     { value: 'monday', label: 'Monday' },
@@ -132,6 +136,7 @@
     { value: 'friday', label: 'Friday' },
     { value: 'saturday', label: 'Saturday' },
     { value: 'sunday', label: 'Sunday' },
+    { value: 'month', label: 'month' },
   ];
 
   // The lead line above each step. The agent's name is substituted rather than
@@ -181,10 +186,14 @@
    */
   const STORED_SCHEDULE_NOTE = "This routine's schedule, {schedule}, is not one this editor can build. "
     + 'Saving replaces it with the one above.';
+  // A hand-typed day 29 to 31, which the editor reopens on the last day.
+  const LAST_DAY_NOTE = "This routine's schedule, {schedule}, is not one this editor can build. "
+    + 'The last day of the month is selected instead. Saving replaces it.';
 
   function storedScheduleNote(input) {
     const schedule = input && typeof input.schedule === 'string' ? input.schedule.trim() : '';
     if (!schedule || readSchedule(schedule)) return null;
+    if (input.unreadableMonthDay) return LAST_DAY_NOTE.replace('{schedule}', schedule);
     return STORED_SCHEDULE_NOTE.replace('{schedule}', schedule);
   }
 
@@ -240,13 +249,14 @@
    * reason: a view that assembled the step out of three separate exports could
    * drop this one and still draw a complete-looking step.
    */
-  function scheduleStepFields() {
+  function scheduleStepFields(input) {
     return {
       lead: STEP_LEADS.schedule,
       frequencies: FREQUENCIES,
+      days: monthDays(),
       times: times(),
       runOn: runOnField(),
-      workspaceCaveat: WORKSPACE_CAVEAT,
+      workspaceCaveat: input && input.frequency === 'month' ? MONTHLY_WORKSPACE_CAVEAT : WORKSPACE_CAVEAT,
     };
   }
 
@@ -382,8 +392,39 @@
     return out;
   }
 
+  /**
+   * The days a monthly routine can run on: 1st to 28th, which every month
+   * has, then the month's last day, drawn after a rule. Days 29 to 31 are not
+   * offered because the scheduler does not read them: they are not in every
+   * month, and nothing moves a slot to another date.
+   */
+  function monthDays() {
+    const out = [];
+    for (let n = 1; n <= 28; n++) {
+      const tens = n % 100 >= 11 && n % 100 <= 13;
+      const suffix = !tens && n % 10 === 1 ? 'st' : !tens && n % 10 === 2 ? 'nd' : !tens && n % 10 === 3 ? 'rd' : 'th';
+      out.push({ value: String(n), label: `${n}${suffix}` });
+    }
+    out.push({ value: 'last', label: 'last day', afterRule: true });
+    return out;
+  }
+
   function frequency(value) {
     return FREQUENCIES.filter(f => f.value === value)[0] || null;
+  }
+
+  function monthDay(value) {
+    return monthDays().filter(d => d.value === value)[0] || null;
+  }
+
+  /**
+   * The builder's values after the frequency changes. Month starts on the 1st
+   * unless a day is already chosen, any other frequency has no day, and the
+   * time stays as it was.
+   */
+  function chooseFrequency(choice, value) {
+    const day = value === 'month' ? ((choice && choice.frequency === 'month' && choice.day) || '1') : null;
+    return { frequency: value, day, time: choice ? choice.time : null };
   }
 
   function timeOption(value) {
@@ -402,6 +443,15 @@
   function buildSchedule(input) {
     const freq = frequency(input && input.frequency);
     const time = timeOption(input && input.time);
+    // The day is written without a leading zero, the form the save check and
+    // the scheduler both read.
+    if (freq && freq.value === 'month') {
+      const day = monthDay(input.day);
+      if (!day || !time) return null;
+      return day.value === 'last'
+        ? `on the last day of every month at ${time.value}`
+        : `on day ${day.value} of every month at ${time.value}`;
+    }
     if (!freq || !time) return null;
     return `every ${freq.value} at ${time.value}`;
   }
@@ -433,8 +483,19 @@
    */
   function readSchedule(schedule) {
     if (!schedule || typeof schedule !== 'string') return null;
+    // The monthly forms, with one leading zero on the day read as the
+    // scheduler reads it, and the day handed back in the builder's spelling.
+    const monthly = /^on (?:day 0?([1-9]|1\d|2[0-8])|the last day) of every month at (\d{2}:\d{2})$/
+      .exec(schedule.toLowerCase());
+    if (monthly) {
+      const time = timeOption(monthly[2]);
+      if (!time) return null;
+      return { frequency: 'month', day: monthly[1] ? String(Number(monthly[1])) : 'last', time: time.value };
+    }
     const parts = /^every ([a-z]+) at (\d{2}:\d{2})$/.exec(schedule.toLowerCase());
     if (!parts) return null;
+    // A month needs its day: "every month at 09:00" is no schedule.
+    if (parts[1] === 'month') return null;
     const freq = frequency(parts[1]);
     const time = timeOption(parts[2]);
     if (!freq || !time) return null;
@@ -449,12 +510,38 @@
    * this whole module is shaped around.
    */
   function previewSentence(input) {
-    const freq = frequency(input && input.frequency);
-    const time = timeOption(input && input.time);
+    const when = whenWords(input);
     const option = runOnOption(input && input.runOn);
     const skillName = (input && input.skillName) || null;
-    if (!freq || !time || !option || !skillName) return null;
-    return `Run ${skillName} every ${freq.label} at ${time.label}, on ${option.sentence}.`;
+    if (!when || !option || !skillName) return null;
+    return `Run ${skillName} ${when}, on ${option.sentence}.`;
+  }
+
+  /**
+   * "every month on the 15th at 9:00am": the builder's values in words, or
+   * null for values it did not offer. The routine row's sentence reads this
+   * too, so the two say a schedule the same way.
+   */
+  function whenWords(input) {
+    const freq = frequency(input && input.frequency);
+    const time = timeOption(input && input.time);
+    if (!freq || !time) return null;
+    if (freq.value !== 'month') return `every ${freq.label} at ${time.label}`;
+    const day = monthDay(input.day);
+    return day ? `every month on the ${day.label} at ${time.label}` : null;
+  }
+
+  /**
+   * What Edit schedule opens on for a routine on the roster: its own values
+   * when the builder can show them; for a hand-typed day 29 to 31, which the
+   * server reports beside the schedule, month and the last day at the file's
+   * time where the builder offers it; otherwise nothing, and the defaults.
+   */
+  function reopenSchedule(routine) {
+    const read = readSchedule(routine && routine.schedule);
+    if (read || !routine || !routine.unreadableMonthDay) return read;
+    const time = timeOption(routine.unreadableMonthDay.time);
+    return { frequency: 'month', day: 'last', time: time ? time.value : null };
   }
 
   // ===== TIME ZONES, IN WORDS =====
@@ -533,7 +620,7 @@
     UNASSIGNED_REASON, STORED_SCHEDULE_NOTE, storedScheduleNote,
     runOnOptions, runOnOption, runOnField, scheduleStepFields,
     skillChoices, stepLead,
-    times, buildSchedule, readSchedule, previewSentence,
+    times, monthDays, chooseFrequency, buildSchedule, readSchedule, reopenSchedule, previewSentence, whenWords,
     timezoneWords, timezoneCaption, readyCaption,
     routineDraft,
   };
