@@ -3863,6 +3863,9 @@ const MUTATIONS = [
   [STARTUP_HOOK_NAMES, "Startup files: the record's folder counts as one holding a startup file",
     '    if (e.record) continue;\n',
     ''],
+  [STARTUP_HOOK, 'Startup files: the dotfiles folder a startup file links into is not matched',
+    '    if (link) forms.push(canonicalize(e.path));\n',
+    ''],
 ];
 const REPORTER = ['--test-reporter', 'spec'];
 

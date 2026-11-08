@@ -835,10 +835,19 @@ function startupFolderAt(resolvedPath, home = os.homedir(), foldsCase = hostFold
   const h = canonicalize(home);
   if (c === foldCase(h, foldsCase)) return null;
   const belowHome = c.startsWith(foldCase(h, foldsCase) + path.sep);
+  // Asked of every path a command writes, so each folder is resolved once
+  // (ten entries share home), and an entry on its own only when it is a link:
+  // for anything else, where it leads is where it is listed.
+  const folders = new Map([[path.resolve(home), h]]);
+  const folderOf = d => { if (!folders.has(d)) folders.set(d, canonicalize(d)); return folders.get(d); };
   for (const e of shellStartupEntries(home, env)) {
     if (e.record) continue;
     // As listed, its folders resolved, and where it leads, if it is a link.
-    for (const p of [path.join(canonicalize(path.dirname(e.path)), path.basename(e.path)), canonicalize(e.path)]) {
+    const forms = [path.join(folderOf(path.dirname(e.path)), path.basename(e.path))];
+    let link = false;
+    try { const st = fs.lstatSync(e.path, { throwIfNoEntry: false }); link = !!st && st.isSymbolicLink(); } catch (err) { /* nothing there to lead anywhere */ }
+    if (link) forms.push(canonicalize(e.path));
+    for (const p of forms) {
       const f = foldCase(p, foldsCase);
       if (f.startsWith(c + path.sep) && (belowHome || foldCase(path.dirname(p), foldsCase) === c)) return { path: at, name: homeSpelled(at, h) };
     }
