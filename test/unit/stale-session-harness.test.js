@@ -12,26 +12,26 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const harness = require('../tools/mutate-stale-session-guards.js');
 
-test('the harness\'s own invocation reads a passing test as green and a failing one as red, by name', () => {
-  assert.strictEqual(harness.invocationProblem(), null);
+test('the harness\'s own invocation reads a passing test as green and a failing one as red, by name', async () => {
+  assert.strictEqual(await harness.invocationProblem(), null);
 });
 
 // Read through the invocation the test above proves: on its own, a run that
 // exits 0 with output this cannot read would look green here too.
-test('a row\'s run is green with nothing mutated', () => {
+test('a row\'s run is green with nothing mutated', async () => {
   const row = harness.MUTATIONS.find(([target]) => /(^|\/)child-stdin\.test\.js$/.test(target.suite));
   assert.ok(row, 'a row runs the stdin handler\'s unit suite');
-  assert.deepStrictEqual(harness.redTests(row[0].suite), [], `${row[0].suite} is green, read through the rows' own invocation`);
+  assert.deepStrictEqual(await harness.redTests(row[0].suite), [], `${row[0].suite} is green, read through the rows' own invocation`);
 });
 
-test('an invocation that misreads either result, or gives none, is refused', () => {
+test('an invocation that misreads either result, or gives none, is refused', async () => {
   const answering = (green, red) => (suite) => (suite.endsWith('#passes with nothing broken') ? green : red);
-  assert.strictEqual(harness.invocationProblem(answering([], ['fails when broken'])), null, 'a correct read passes');
-  assert.match(harness.invocationProblem(answering(['passes with nothing broken'], ['fails when broken'])), /not green/,
+  assert.strictEqual(await harness.invocationProblem(answering([], ['fails when broken'])), null, 'a correct read passes');
+  assert.match(await harness.invocationProblem(answering(['passes with nothing broken'], ['fails when broken'])), /not green/,
     'a passing test read as red');
-  assert.match(harness.invocationProblem(answering({ unparsable: true }, ['fails when broken'])), /not green/,
+  assert.match(await harness.invocationProblem(answering({ unparsable: true }, ['fails when broken'])), /not green/,
     'a run with no verdict, as an option node refuses gives');
-  assert.match(harness.invocationProblem(answering([], [])), /not that test red/, 'a failing test read as green');
-  assert.match(harness.invocationProblem(answering([], { unparsable: true })), /not that test red/, 'a failing run with no verdict');
-  assert.match(harness.invocationProblem(answering([], ['some other test'])), /not that test red/, 'a failure read under the wrong name');
+  assert.match(await harness.invocationProblem(answering([], [])), /not that test red/, 'a failing test read as green');
+  assert.match(await harness.invocationProblem(answering([], { unparsable: true })), /not that test red/, 'a failing run with no verdict');
+  assert.match(await harness.invocationProblem(answering([], ['some other test'])), /not that test red/, 'a failure read under the wrong name');
 });
