@@ -703,6 +703,97 @@ describe('ROUTINES.md: the run guard holds a slot by time, not by hour', () => {
 });
 
 // ---------------------------------------------------------------------------
+// docs/ROUTINES.md: a monthly schedule, and its window
+// ---------------------------------------------------------------------------
+
+describe('ROUTINES.md: a monthly routine runs once a month and catches up within it', () => {
+  const { getNextRun, wireSchedulerDeps } = require('../../lib/scheduler.js');
+  const section = (heading) => {
+    const start = routinesDoc.indexOf(`\n## ${heading}\n`);
+    const end = routinesDoc.indexOf('\n## ', start + 1);
+    return start === -1 ? '' : routinesDoc.slice(start, end === -1 ? undefined : end);
+  };
+  const format = section('Schedule format');
+  const behaviour = section('Scheduler behaviour');
+
+  // Asked at fixed instants in October 2026, built from local components.
+  const october = (day, hour, minute = 0) => new Date(2026, 9, day, hour, minute);
+  function askedAt(now, schedule, lastRun) {
+    const previous = wireSchedulerDeps({ now: () => now });
+    try {
+      return getNextRun(schedule, lastRun ? lastRun.toISOString() : null);
+    } finally {
+      wireSchedulerDeps(previous);
+    }
+  }
+  const DAY_15 = 'on day 15 of every month at 09:00';
+
+  test('the format table gives both monthly forms, and says why 29 to 31 are refused', () => {
+    assert.match(format, /\| `on day N of every month at HH:MM` \|.*N is a day from 1 to 28/,
+      'ROUTINES.md must give the day-of-month form with its range');
+    assert.match(format, /\| `on the last day of every month at HH:MM` \|/, 'and the last-day form');
+    assert.match(format, /Days 29, 30 and 31 are refused, because they are not in every month, and Rundock will not move a slot to another date/,
+      'and why the days some months lack are refused');
+  });
+
+  test('both forms parse, and day 31 does not', () => {
+    assert.ok(askedAt(october(1, 8), DAY_15, null), 'the day-of-month form is read');
+    assert.ok(askedAt(october(1, 8), 'on the last day of every month at 18:00', null), 'and the last-day form');
+    assert.strictEqual(askedAt(october(1, 8), 'on day 31 of every month at 09:00', null), null, 'day 31 is not');
+  });
+
+  test('the catch-up section gives the monthly window, and what is never owed', () => {
+    assert.match(behaviour, /A monthly routine catches up within its month\./);
+    assert.match(behaviour, /runs once, at the first tick Rundock is open later in the same month, and its row marks the run as late/);
+    assert.match(behaviour, /If the month ends first, it does not run, and the slot is recorded as missed/);
+    assert.match(behaviour, /not owed at all if it passed before the routine existed, while it was paused or switched off, or before its plan was approved/);
+    assert.match(behaviour, /A monthly routine does not re-fire once it has run at or after its scheduled time in that month/,
+      'and the guard sentence covers the monthly period');
+  });
+
+  // What a late monthly run carries is its record's dueAt, and its row marks it
+  // late, naming when it was due.
+  test('the catch-up section says the record carries dueAt, and the row marks a late run', () => {
+    assert.match(behaviour, /Its run record names the slot it was due at, in a `dueAt` field, on every scheduled run/);
+    assert.match(behaviour, /its row marks the run as late, naming when it was due/);
+  });
+
+  test('a slot earlier this month is still due', () => {
+    assert.deepStrictEqual(askedAt(october(20, 10), DAY_15, null), october(15, 9),
+      'on the 20th, the 15th is still owed and the next tick fires it');
+  });
+
+  test("last month's slot is not", () => {
+    const next = askedAt(october(2, 10), DAY_15, null);
+    assert.deepStrictEqual(next, october(15, 9), "on 2 October, the next run is this month's, not September's");
+  });
+
+  test('one that ran this month is suppressed', () => {
+    assert.strictEqual(askedAt(october(25, 10), DAY_15, october(20, 10, 5)), null,
+      'having caught up on the 20th, it is not due again that month');
+  });
+
+  // The row's word for a late run is the model's own lead, read off it, so the
+  // page and the row cannot part company on it.
+  test('the page calls a late run what the row calls it', () => {
+    const { OUTCOMES, CATCH_UP_AFTER_MS } = require('../../public/routines-model.js');
+    const lead = OUTCOMES['caught-up'].lead;
+    assert.strictEqual(lead, 'Ran late');
+    assert.match(routinesDoc, /The row's on-time, ran-late and missed verdicts are computed from scheduled runs only/,
+      'the verdict words follow the row');
+    assert.ok(behaviour.includes(`its row then leads with **${lead}**, naming when it started and when it was due`),
+      'and so does the description of a late run');
+    assert.match(behaviour, new RegExp(`A run counts as late from ${CATCH_UP_AFTER_MS / 60000} minutes after its slot\\.`));
+    assert.doesNotMatch(routinesDoc, /caught-up verdict|Caught up:/, 'the old word is gone from the page');
+  });
+
+  test('the page no longer says there are only two forms, or a run once per day or week', () => {
+    assert.doesNotMatch(routinesDoc, /only two patterns|the two forms that work|both forms that work|two accepted forms|once per day or week/,
+      'every sentence that counted two forms follows the change');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // docs/ROUTINES.md: where a routine actually runs
 //
 // The page RECOMMENDS keeping Rundock on a VPS with the workspace synced. Two

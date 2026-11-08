@@ -273,11 +273,20 @@ function detailHtml(view, title, agent, links) {
   // real outcomes: finished, stopped early, stopped by request, still going,
   // and ending unwitnessed.
   const when = view.when ? `<p class="rd-when" data-run-detail="when">${escText(view.when)}</p>` : '';
+  // THAT IT STARTED LATE, under the start time, with when it was due.
+  const late = view.late
+    ? '<p class="rd-late" data-run-detail="late">'
+      + '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" '
+      + 'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/>'
+      + '<polyline points="12 7 12 12 15.5 14"/></svg>'
+      + `<span><b>${escText(view.late.lead)}</b> ${escText(view.late.text)}</span></p>`
+    : '';
   return headHtml(title, agent)
     + '<div class="settings-card rd-card">'
     + `<span class="rd-chip ${escText(view.state.tone)}" data-run-detail="chip">`
     + `<span class="rd-dot"></span>${escText(view.state.chip)}</span>`
     + when
+    + late
     + `<p class="rd-headline" data-run-detail="headline">${escText(view.state.headline)}</p>`
     + (view.state.guidance
       ? `<p class="rd-guidance" data-run-detail="guidance">${escText(view.state.guidance)}</p>`

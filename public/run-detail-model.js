@@ -539,6 +539,30 @@
     return words ? `${words}, ${STARTED_MANUALLY}` : STARTED_MANUALLY;
   }
 
+  // A RUN THAT STARTED LATE says so under its start time: a scheduled run
+  // that began 5 minutes or more after the slot its record names. The same
+  // line the routine row draws between on time and late, so the two screens
+  // agree about which runs were late.
+  const LATE_AFTER_MS = 5 * 60 * 1000;
+  const LATE = {
+    lead: 'Ran late.',
+    due: 'It was due on {date} at {time}.',
+    // Said only when the record says no tick saw the slot pass. Rundock being
+    // closed is one cause of a late run among several.
+    closed: 'Rundock was closed then, so it started when Rundock next opened.',
+  };
+
+  function lateWords(record) {
+    if (triggerOf(record) !== 'scheduled') return null;
+    const due = record.dueAt ? new Date(record.dueAt) : null;
+    const started = record.startedAt ? new Date(record.startedAt) : null;
+    if (!due || !started || isNaN(due.getTime()) || isNaN(started.getTime())) return null;
+    if (started - due < LATE_AFTER_MS) return null;
+    const text = LATE.due.replace('{date}', () => `${due.getDate()} ${MONTHS[due.getMonth()]}`)
+      .replace('{time}', () => clockWords(due));
+    return { lead: LATE.lead, text: record.dueUnobserved === true ? `${text} ${LATE.closed}` : text };
+  }
+
   /**
    * One run's record, as the words a reader sees.
    *
@@ -578,6 +602,8 @@
       // Which of the two ways a run can start this one did, as a word the
       // screen can branch on without reading the record's own field.
       trigger: found ? triggerOf(record) : null,
+      // That it started late, and when it was due, or null.
+      late: found ? lateWords(record) : null,
       now: opts.now || null,
       state: {
         tone: state.tone,
@@ -644,5 +670,6 @@
     SHELL_USED_SOME, SHELL_USED_NONE,
     changedFiles, unknownWords, durationWords, refusedWords, describeRun, baseName, startedWords, triggerOf, STARTED_MANUALLY,
     treePathFor,
+    LATE_AFTER_MS,
   };
 }));

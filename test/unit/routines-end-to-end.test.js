@@ -6,7 +6,7 @@
 // objects by hand, with nextRun, lastStart, lastSlot and missedSlot already on
 // them. That proves the view reads those fields. It says nothing about whether
 // anything PUTS them there, so the lines in lib/agents/discovery.js that
-// attach them could be deleted and Missed and Caught up would become
+// attach them could be deleted and Missed and Ran late would become
 // unreachable in the real product with the whole suite green.
 //
 // That is the door class again, in the data flow rather than in the wiring,
@@ -45,7 +45,7 @@ const TOMORROWS_SLOT = new Date(2026, 7, 21, 7, 0);
 const SCHEDULE = 'every day at 07:00';
 const iso = (d) => d.toISOString();
 
-const NAMES = ['Ran on time', 'Caught up', 'Missed', 'Failed'];
+const NAMES = ['Ran on time', 'Ran late', 'Missed', 'Failed'];
 
 // What the scheduler's two stores hold in each of the four cases. Written as
 // the scheduler itself writes them: `lastRun` is the moment a finished run
@@ -58,14 +58,14 @@ function seedStores() {
     'piper:Ran on time': { lastRun: iso(new Date(2026, 7, 20, 7, 11, 12)), status: 'completed', duration: 11 * 60 },
     // The machine was shut at 7:00 and opened at 9:14, so this one started
     // late and took two minutes.
-    'piper:Caught up': { lastRun: iso(new Date(2026, 7, 20, 9, 16)), status: 'completed', duration: 120 },
+    'piper:Ran late': { lastRun: iso(new Date(2026, 7, 20, 9, 16)), status: 'completed', duration: 120 },
     // Last ran two days ago; yesterday's slot went by with nobody watching.
     'piper:Missed': { lastRun: iso(new Date(2026, 7, 18, 7, 0, 30)), status: 'completed', duration: 30 },
     'piper:Failed': { lastRun: iso(new Date(2026, 7, 20, 7, 0, 5)), status: 'failed', duration: 5 },
   };
   const slots = {
     'piper:Ran on time': { due: iso(TODAYS_SLOT), schedule: 'daily:7:0', missed: [] },
-    'piper:Caught up': { due: iso(TODAYS_SLOT), schedule: 'daily:7:0', missed: [] },
+    'piper:Ran late': { due: iso(TODAYS_SLOT), schedule: 'daily:7:0', missed: [] },
     'piper:Missed': { due: iso(TODAYS_SLOT), schedule: 'daily:7:0', missed: [{ slot: iso(YESTERDAYS_SLOT) }] },
     'piper:Failed': { due: iso(TODAYS_SLOT), schedule: 'daily:7:0', missed: [] },
   };
@@ -188,7 +188,7 @@ describe('the roster carries what the row renders', () => {
       assert.deepStrictEqual(rows.map(r => text(r.querySelector('.run-status'))), [
         'Missed: Rundock was closed at 7:00am yesterday, London time',
         'Ran today, 7:00am, London time',
-        'Caught up: ran today, 9:14am, London time, due 7:00am',
+        'Ran late: today, 9:14am. Due 7:00am.',
         'Failed: today, 7:00am, London time',
       ]);
       assert.deepStrictEqual(rows.map(r => r.querySelector('.run-status').className), [
@@ -217,11 +217,11 @@ describe('the roster carries what the row renders', () => {
     });
   });
 
-  test('a run that started late reads as caught up, end to end', () => {
+  test('a run that started late reads as ran late, end to end', () => {
     roster((agents) => {
       const { doc, dom } = render(agents);
-      const second = rowNamed(doc, 'Caught up');
-      assert.match(text(second.querySelector('.run-status')), /^Caught up: ran today, 9:14am/);
+      const second = rowNamed(doc, 'Ran late');
+      assert.match(text(second.querySelector('.run-status')), /^Ran late: today, 9:14am\./);
       dom.window.close();
     });
   });
@@ -309,11 +309,11 @@ describe('the roster carries what the row renders', () => {
 
 // ===== A SCHEDULE THE SCHEDULER CANNOT READ =====
 //
-// `parseSchedule` accepts two shapes and returns null for everything else, at
-// which point `getNextRun` returns null and the tick skips the routine with no
-// error, no warning and no log line. A cron-scheduled routine therefore sits in
-// a first-class Routines view looking exactly like a routine, with nothing
-// saying it will never fire. The silence moved from a log nobody reads to a
+// `parseSchedule` accepts daily, weekly and monthly shapes and returns null
+// for everything else, at which point `getNextRun` returns null and the tick
+// skips the routine with no error, no warning and no log line. A
+// cron-scheduled routine therefore sits in a first-class Routines view looking
+// exactly like a routine, with nothing saying it will never fire. The silence moved from a log nobody reads to a
 // surface everybody reads.
 //
 // AND MIGRATION NEVER TOUCHES A SCHEDULE, so every such entry survives an
@@ -859,6 +859,335 @@ describe('a window whose server has moved to another workspace', () => {
       config.setWorkspace(first.dir);
       assert.strictEqual(stamped, config.getWorkspace(),
         'the roster stamp and the path the server announces are the same value');
+    });
+  });
+});
+
+// ===== A MONTHLY ROUTINE, END TO END =====
+//
+// Real agent files, the real stores, discoverAgents, and then the real
+// routines list with the real routine editor beside it in one window, so a
+// press on the row opens the editor on what the roster carried.
+const EDITOR_VIEW_SRC = read('public', 'views', 'routine-editor.js');
+
+function monthlyWorkspace(routines, fn, now = NOW, seed = () => {}) {
+  const dir = makeWorkspace({
+    agents: { piper: agentFile({ name: 'piper', displayName: 'Piper', type: 'specialist', order: 1, routines }) },
+  });
+  const file = path.join(dir, '.claude', 'agents', 'piper.md');
+  const originalWorkspace = config.getWorkspace();
+  config.setWorkspace(dir);
+  invalidateAgentCache();
+  const previousDeps = sched.wireSchedulerDeps({ now: () => now });
+  const stateBefore = JSON.parse(JSON.stringify(sched.routineState));
+  const slotsBefore = JSON.parse(JSON.stringify(sched.routineSlots.routines));
+  try {
+    discoverAgents();
+    invalidateAgentCache();
+    seed();
+    return fn({ dir, file });
+  } finally {
+    config.setWorkspace(originalWorkspace);
+    invalidateAgentCache();
+    sched.wireSchedulerDeps(previousDeps);
+    for (const key of Object.keys(sched.routineState)) delete sched.routineState[key];
+    Object.assign(sched.routineState, stateBefore);
+    for (const key of Object.keys(sched.routineSlots.routines)) delete sched.routineSlots.routines[key];
+    Object.assign(sched.routineSlots.routines, slotsBefore);
+  }
+}
+
+// The routines list and the editor in one window, drawn from a fresh roster.
+function listAndEditor(now = NOW) {
+  invalidateAgentCache();
+  const dom = new JSDOM('<!doctype html><html><head><style>' + ROUTINES_CSS + '</style></head><body>'
+    + '<nav class="nav-rail"><button class="nav-item" data-nav="routines"></button></nav>'
+    + '<div id="view-routines"><div id="routines-content"></div></div>'
+    + '<div id="view-routine-editor"><div id="routine-editor-content"></div></div>'
+    + '</body></html>', { runScripts: 'dangerously' });
+  const w = dom.window;
+  w.eval(EDITOR_MODEL_SRC);
+  w.eval(SKILLS_MODEL_SRC);
+  w.eval(MODEL_SRC);
+  w.eval(VIEW_SRC);
+  w.eval(EDITOR_VIEW_SRC);
+  w.agents = discoverAgents();
+  w.rosterWorkspacePath = config.getWorkspace();
+  w.servingWorkspacePath = config.getWorkspace();
+  w.esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  w.sent = [];
+  w.ws = { send: (m) => w.sent.push(JSON.parse(m)) };
+  w.showView = () => {};
+  w.switchNav = () => {};
+  w.setNavState = () => {};
+  w.routinesNow = () => now;
+  w.Intl = { DateTimeFormat: () => ({ resolvedOptions: () => ({ timeZone: 'Europe/London' }) }) };
+  w.renderRoutines();
+  return { w, doc: w.document, dom };
+}
+
+const NOTICE_LEAD = 'Rundock cannot read this schedule, so this routine will not run.';
+const DAY_31_BODY = 'Day 31 is not in every month, and Rundock will not pick another day for you. '
+  + 'To run on the last day of every month, change it to on the last day of every month at 09:00, '
+  + 'or use Edit schedule.';
+
+describe('a monthly routine, end to end', () => {
+  // The path failing: a day typed by hand that no month is sure to have. The
+  // server names the day beside its verdict, and the row tells the reader the
+  // form to write instead.
+  test('a hand-typed day 31 reaches the row with the day 29 to 31 body, and no next run', () => {
+    monthlyWorkspace([{ name: 'Month end', schedule: 'on day 31 of every month at 09:00', prompt: 'p', enabled: true }], () => {
+      const { doc, dom } = listAndEditor();
+      const row = rowNamed(doc, 'Month end');
+      assert.strictEqual(text(row.querySelector('.schedule-problem-lead')), NOTICE_LEAD);
+      assert.strictEqual(text(row.querySelector('.schedule-problem-body')), DAY_31_BODY);
+      assert.strictEqual(row.querySelector('.next-run'), null, 'a routine that never runs promises no run');
+      dom.window.close();
+    });
+  });
+
+  // The undo: opening Edit schedule on it and leaving changes nothing.
+  test('Edit schedule on a day 31 routine, then leaving, leaves the file byte-identical and the notice on the row', () => {
+    monthlyWorkspace([{ name: 'Month end', schedule: 'on day 31 of every month at 09:00', prompt: 'p', enabled: true }], ({ file }) => {
+      const before = fs.readFileSync(file, 'utf-8');
+      const { doc, w, dom } = listAndEditor();
+      rowNamed(doc, 'Month end').querySelector('[data-routines-action="edit"]').click();
+      assert.strictEqual(doc.querySelector('select[data-routine-field="frequency"]').value, 'month');
+      assert.strictEqual(doc.querySelector('select[data-routine-field="day"]').value, 'last');
+      assert.match(doc.querySelector('[data-routine-editor="stored-schedule"]').textContent,
+        /The last day of the month is selected instead\. Saving replaces it\./);
+      doc.querySelector('.re-actions .settings-btn-primary').click();
+      doc.querySelector('[data-routine-editor="back"]').click();
+      assert.deepStrictEqual(w.sent, [], 'nothing was asked of the server');
+      assert.strictEqual(fs.readFileSync(file, 'utf-8'), before, 'the agent file changed without a save');
+      dom.window.close();
+      const again = listAndEditor();
+      assert.strictEqual(text(rowNamed(again.doc, 'Month end').querySelector('.schedule-problem-body')), DAY_31_BODY);
+      again.dom.window.close();
+    });
+  });
+});
+
+// Saturday 14 November 2026, ten past ten. The stores are seeded the way the
+// tick writes them, and the row is read off what discovery then sends.
+describe('a monthly row, out of a real roster', () => {
+  const NOV = new Date(2026, 10, 14, 10, 10);
+  const FIRST = new Date(2026, 10, 1, 9, 0);
+  const LEDGER = [{ name: 'Ledger', schedule: 'on day 1 of every month at 09:00', prompt: 'p', enabled: true }];
+  const slots = (entry) => () => {
+    sched.routineSlots.routines['piper:Ledger'] = { due: iso(FIRST), schedule: 'monthly:1:9:0', missed: [], ...entry };
+  };
+  const nextRunOf = (seed) => monthlyWorkspace(LEDGER, () => {
+    const { doc, dom } = listAndEditor(NOV);
+    const line = rowNamed(doc, 'Ledger').querySelector('.next-run');
+    dom.window.close();
+    return line ? text(line) : null;
+  }, NOV, seed);
+
+  test('a slot the tick still owes reads as shortly, with the date it was due', () => {
+    assert.strictEqual(nextRunOf(slots({ since: iso(new Date(2026, 9, 1)) })),
+      'Next run: shortly. It was due 1 November, 9:00am.');
+  });
+
+  test('a slot that was never owed names next month instead', () => {
+    // First seen after the slot, and held through it.
+    assert.strictEqual(nextRunOf(slots({ since: iso(new Date(2026, 10, 5)) })), 'Next run: 1 December, 9:00am, London time');
+    assert.strictEqual(nextRunOf(slots({ since: iso(new Date(2026, 9, 1)), heldAt: iso(new Date(2026, 10, 10)) })),
+      'Next run: 1 December, 9:00am, London time');
+  });
+
+  test('a late run names the date it was due, and a month that closed unserved says so', () => {
+    const late = () => {
+      slots({ since: iso(new Date(2026, 9, 1)) })();
+      sched.routineState['piper:Ledger'] = { lastRun: iso(new Date(2026, 10, 14, 9, 4)), status: 'completed', duration: 120 };
+    };
+    monthlyWorkspace(LEDGER, () => {
+      const { doc, dom } = listAndEditor(NOV);
+      assert.strictEqual(text(rowNamed(doc, 'Ledger').querySelector('.run-status')), 'Ran late: today, 9:02am. Due 1 November, 9:00am.');
+      assert.strictEqual(text(rowNamed(doc, 'Ledger').querySelector('.next-run')), 'Next run: 1 December, 9:00am, London time');
+      dom.window.close();
+    }, NOV, late);
+    const missed = () => {
+      slots({ since: iso(new Date(2026, 8, 1)), missed: [{ slot: iso(new Date(2026, 9, 1, 9, 0)) }] })();
+      sched.routineState['piper:Ledger'] = { lastRun: iso(new Date(2026, 8, 1, 9, 2)), status: 'completed', duration: 120 };
+    };
+    monthlyWorkspace(LEDGER, () => {
+      const { doc, dom } = listAndEditor(NOV);
+      assert.strictEqual(text(rowNamed(doc, 'Ledger').querySelector('.run-status')),
+        'Missed: Rundock was closed at 9:00am 1 October, London time, and not opened again before the month ended.');
+      dom.window.close();
+    }, NOV, missed);
+  });
+});
+
+// ===== MADE IN THE EDITOR, RUN AT ITS SLOT =====
+//
+// A private scheduler whose children are the test's, loaded after the spawn is
+// stood in for, because the scheduler takes its spawn when it loads. Discovery
+// reads the scheduler at call time, so the roster is this one's for the
+// length of the test. Everything is put back before it returns.
+const SCHEDULER_KEY = require.resolve('../../lib/scheduler.js');
+const CLAUDE_KEY = require.resolve('../../lib/runtime/claude.js');
+const { EventEmitter } = require('node:events');
+const { handleSaveRoutine, handleSetRoutineSchedule } = require('../../lib/protocol/handlers/team.js');
+
+function withPrivateScheduler(fn) {
+  const children = [];
+  const claude = require(CLAUDE_KEY);
+  const real = { spawnClaude: claude.spawnClaude, killProcessTree: claude.killProcessTree };
+  const prevClaudeDeps = claude.wireClaudeRuntimeDeps({ getActualPort: () => 0 });
+  claude.spawnClaude = () => {
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    children.push(child);
+    return child;
+  };
+  claude.killProcessTree = () => {};
+  const cached = require.cache[SCHEDULER_KEY];
+  delete require.cache[SCHEDULER_KEY];
+  try {
+    const priv = require(SCHEDULER_KEY);
+    const clock = { at: null };
+    priv.wireSchedulerDeps({ now: () => clock.at, getWssClients: () => [] });
+    return fn(priv, clock, children);
+  } finally {
+    delete require.cache[SCHEDULER_KEY];
+    if (cached) require.cache[SCHEDULER_KEY] = cached;
+    Object.assign(claude, real);
+    claude.wireClaudeRuntimeDeps(prevClaudeDeps);
+  }
+}
+
+// What a save handler is handed: the real cache, and a socket that keeps what
+// it is told.
+function handlerContext(dir) {
+  const sent = [];
+  return {
+    sent,
+    ctx: {
+      agents: { invalidateAgentCache, discoverSkills: () => [], flagRosterRefresh: () => {} },
+      workspace: { isInsideWorkspace: (p) => p.startsWith(dir) },
+    },
+    ws: { send: (m) => sent.push(JSON.parse(m)), readyState: 1 },
+  };
+}
+
+function chooseIn(w, field, value) {
+  const select = w.document.querySelector(`select[data-routine-field="${field}"]`);
+  assert.ok(select, `there is no ${field} dropdown to choose from`);
+  select.value = value;
+  assert.strictEqual(select.value, value, `the ${field} dropdown offers no ${value}`);
+  select.dispatchEvent(new w.Event('change'));
+}
+
+const OPS_SKILL = { id: 'ops-summary', slug: 'ops-summary', name: 'Compile the ops summary',
+  assignedAgents: [{ id: 'piper', name: 'Piper' }] };
+
+describe('a monthly routine made in the editor', () => {
+  test('saved, it reads as its sentence and next run, runs once at its slot, and then reads as ran with next month next', (t) => {
+    withPrivateScheduler((priv, clock, children) => {
+      const created = new Date(2026, 10, 2, 10, 0);
+      clock.at = created;
+      const dir = makeWorkspace({
+        agents: { piper: agentFile({ name: 'piper', displayName: 'Piper', type: 'specialist', order: 1 }) },
+      });
+      const originalWorkspace = config.getWorkspace();
+      config.setWorkspace(dir);
+      require('../helpers/approvals.js').seenHere(dir);
+      invalidateAgentCache();
+      try {
+        // In the editor: month, the 15th, 9:00am, saved.
+        const page = listAndEditor(created);
+        page.w.openRoutineEditor({ agentId: 'piper', agentName: 'Piper', skills: [OPS_SKILL], zone: 'Europe/London' });
+        page.w.routineEditorPick('ops-summary:piper');
+        page.w.routineEditorStep('schedule');
+        chooseIn(page.w, 'frequency', 'month');
+        chooseIn(page.w, 'day', '15');
+        chooseIn(page.w, 'time', '09:00');
+        page.doc.querySelector('.re-actions .settings-btn-primary').click();
+        page.doc.querySelector('[data-routine-editor="save"]').click();
+        assert.strictEqual(page.w.sent.length, 1);
+        assert.strictEqual(page.w.sent[0].routine.schedule, 'on day 15 of every month at 09:00');
+        page.dom.window.close();
+        const h = handlerContext(dir);
+        handleSaveRoutine(h.ctx, h.ws, page.w.sent[0]);
+        assert.ok(h.sent.some((m) => m.type === 'routine_saved'), `the save went through: ${JSON.stringify(h.sent)}`);
+
+        const rowAt = (now) => {
+          const view = listAndEditor(now);
+          const row = view.doc.querySelector('.routine-row');
+          const read = {
+            sentence: text(row.querySelector('.rr-sentence')),
+            status: row.querySelector('.run-status') ? text(row.querySelector('.run-status')) : null,
+            next: row.querySelector('.next-run') ? text(row.querySelector('.next-run')) : null,
+          };
+          view.dom.window.close();
+          return read;
+        };
+        assert.deepStrictEqual(rowAt(created), {
+          sentence: 'Every month on the 15th at 9:00am, run: Compile the ops summary',
+          status: null,
+          next: 'Next run: 15 November, 9:00am, London time',
+        });
+
+        t.mock.timers.enable({ apis: ['setInterval'] });
+        priv.startScheduler();
+        try {
+          const tickAt = (when) => { clock.at = when; t.mock.timers.tick(60_000); };
+          tickAt(new Date(2026, 10, 2, 10, 1));
+          tickAt(new Date(2026, 10, 14, 9, 0));
+          tickAt(new Date(2026, 10, 15, 8, 59));
+          assert.strictEqual(children.length, 0, 'nothing before the slot');
+          tickAt(new Date(2026, 10, 15, 9, 0));
+          assert.strictEqual(children.length, 1, 'one run at the slot');
+          clock.at = new Date(2026, 10, 15, 9, 2);
+          children[0].emit('close', 0);
+          for (const when of [new Date(2026, 10, 15, 9, 3), new Date(2026, 10, 15, 21, 0), new Date(2026, 10, 20, 9, 0)]) tickAt(when);
+          assert.strictEqual(children.length, 1, 'and no second run that month');
+        } finally {
+          priv.stopScheduler();
+          t.mock.timers.reset();
+        }
+
+        const after = rowAt(new Date(2026, 10, 20, 9, 5));
+        assert.strictEqual(after.status, 'Ran Sunday, 9:00am, London time');
+        assert.strictEqual(after.next, 'Next run: 15 December, 9:00am, London time');
+        assert.strictEqual(rowAt(new Date(2026, 10, 15, 9, 5)).status, 'Ran today, 9:00am, London time');
+      } finally {
+        config.setWorkspace(originalWorkspace);
+        invalidateAgentCache();
+      }
+    });
+  });
+
+  // The inverse action, through the row and the editor: monthly back to daily.
+  test('changed back to daily through Edit schedule, it saves the daily words and reopens as daily', () => {
+    monthlyWorkspace([{ name: 'Ledger', schedule: 'on day 15 of every month at 09:00', prompt: 'p', enabled: true }], ({ dir, file }) => {
+      const page = listAndEditor();
+      rowNamed(page.doc, 'Ledger').querySelector('[data-routines-action="edit"]').click();
+      assert.strictEqual(page.doc.querySelector('select[data-routine-field="day"]').value, '15');
+      chooseIn(page.w, 'frequency', 'day');
+      assert.strictEqual(page.doc.querySelector('select[data-routine-field="day"]'), null, 'no day for a daily routine');
+      assert.strictEqual(page.doc.querySelector('select[data-routine-field="time"]').value, '09:00', 'the time is kept');
+      page.doc.querySelector('.re-actions .settings-btn-primary').click();
+      page.doc.querySelector('[data-routine-editor="save"]').click();
+      assert.strictEqual(page.w.sent.length, 1);
+      assert.strictEqual(page.w.sent[0].type, 'set_routine_schedule');
+      assert.strictEqual(page.w.sent[0].schedule, 'every day at 09:00');
+      page.dom.window.close();
+      const h = handlerContext(dir);
+      handleSetRoutineSchedule(h.ctx, h.ws, page.w.sent[0]);
+      assert.ok(h.sent.some((m) => m.type === 'routine_rescheduled'), `the save went through: ${JSON.stringify(h.sent)}`);
+      assert.match(fs.readFileSync(file, 'utf-8'), /schedule: every day at 09:00/);
+
+      const again = listAndEditor();
+      assert.match(text(rowNamed(again.doc, 'Ledger').querySelector('.rr-sentence')), /^Every day at 9:00am, run: Ledger/);
+      rowNamed(again.doc, 'Ledger').querySelector('[data-routines-action="edit"]').click();
+      assert.strictEqual(again.doc.querySelector('select[data-routine-field="frequency"]').value, 'day');
+      assert.strictEqual(again.doc.querySelector('select[data-routine-field="time"]').value, '09:00');
+      assert.strictEqual(again.doc.querySelector('select[data-routine-field="day"]'), null);
+      again.dom.window.close();
     });
   });
 });
