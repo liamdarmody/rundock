@@ -88,6 +88,9 @@ const REGISTRY_SUITES = [
   'test/unit/attention-token.test.js',
   // The same arithmetic over the colours links in a note are drawn in.
   'test/unit/editor-link-contrast.test.js',
+  // The same arithmetic over the routine screens' text, badges and focus
+  // ring, in both themes.
+  'test/unit/routine-screens-contrast.test.js',
   // Manifest equality over discovered call sites and doors. Each of these fails
   // when something is ADDED and not written down, which is the membership rule,
   // and each was previously reported only after the suite had run under coverage.

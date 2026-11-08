@@ -105,12 +105,7 @@
    of the four places that needed it, which is why the path and the Show
    command disclosure sat flush left while the sentence above them and the
    buttons below them were indented. */
-.permission-card { background: var(--card); border-radius: var(--radius-xl); padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; --permission-text-column: 24px; }
-/* A colour of its own in light, darker than the code block inside it (which
-   stays --elevated, pure white) rather than sharing that white and merging
-   with it: 1.28:1 of separation, where --elevated gave 1.00:1. Dark is the
-   plain --card. */
-body.light .permission-card { background: #E8E3DB; }
+.permission-card { background: var(--permission-card); border-radius: var(--radius-xl); padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; --permission-text-column: 24px; }
 .permission-card.risk-low { border: 1px solid var(--border); }
 .permission-card.risk-medium { border: 1px solid var(--border); }
 .permission-card.risk-high { border: 1px solid var(--attention); }

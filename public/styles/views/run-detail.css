@@ -21,7 +21,7 @@
 
 .rd-title { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
 .rd-name { margin-bottom: 0; }
-.rd-context { margin-bottom: 18px; }
+.rd-context { color: var(--text-2-strong); margin-bottom: 18px; }
 
 /* padding: 16px IS THE FIX, not a restyle. .settings-card's own padding
    (4px 0) is written for a list of .settings-row children that each carry
@@ -39,7 +39,7 @@
    three exists in any shipped stylesheet, so markup carrying them renders as
    unstyled paragraphs. */
 .rd-headline { font-size: var(--body); color: var(--text-1); line-height: 1.5; margin: 0; }
-.rd-guidance { font-size: var(--caption); color: var(--text-2); line-height: 1.5; margin: 0; }
+.rd-guidance { font-size: var(--caption); color: var(--text-2-strong); line-height: 1.5; margin: 0; }
 /* WHEN THE RUN STARTED. Sits between the chip and the headline: the chip
    names the outcome, this names the moment, and the headline is the
    sentence about what happened, which is the order a reader would ask the
@@ -47,13 +47,13 @@
    still going, even one nobody saw the end of), so this is not toned as a
    secondary fact the way .rd-guidance and .rd-took are: it is one of the two
    things this box exists to say, the other being the outcome itself. */
-.rd-when { font-size: var(--caption); font-weight: 600; color: var(--text-2); margin: 0; }
-.rd-took { font-size: var(--caption); color: var(--text-3); margin: 6px 0 0; }
+.rd-when { font-size: var(--caption); font-weight: 600; color: var(--text-2-strong); margin: 0; }
+.rd-took { font-size: var(--caption); color: var(--text-2-strong); margin: 6px 0 0; }
 /* The count of refused cards. A secondary fact beside the duration, but one
    a reader should notice: a run can read as finished and still have skipped
    the steps it was refused, so it takes the guidance colour, not the quieter
    one .rd-took has. */
-.rd-refused { font-size: var(--caption); color: var(--text-2); margin: 6px 0 0; }
+.rd-refused { font-size: var(--caption); color: var(--text-2-strong); margin: 6px 0 0; }
 /* Only ever drawn on a run that is still going (view.state.stoppable), so it
    sits last in the card, after the facts, closest to .rd-card's own gap. */
 .rd-stop-row { margin-top: 4px; }
@@ -69,28 +69,28 @@
 .rd-chip .rd-dot { width: 8px; height: 8px; border-radius: var(--radius-circle); background: currentColor; }
 
 /* A run that got to the end and did what it was asked to. */
-.rd-chip.ok { color: var(--success); font-weight: 600; }
+.rd-chip.ok { color: var(--success-text); font-weight: 600; }
 /* A run that started and did not get through. Full weight, danger, because
    something is wrong and a user has a decision to make. */
 .rd-chip.bad { color: var(--danger-text); font-weight: 600; }
 /* A run still going. Its own colour, because "not settled yet" is not an
    outcome and must not borrow one. */
-.rd-chip.live { color: var(--working); font-weight: 500; }
+.rd-chip.live { color: var(--working-text); font-weight: 500; }
 /* A run whose ending never ran, and every other case where nobody witnessed
    the outcome. NOT the danger colour: the record says the ending never
    happened, which is an absence of evidence rather than evidence of a
    problem, and painting it red makes a claim nobody witnessed. Amber is spent
-   elsewhere in this palette on "needs the user", so this takes the idle token
+   elsewhere in this palette on "needs the user", so this takes a quiet gray
    and is told apart from the two outcomes by colour and by weight both. */
-.rd-chip.unwitnessed { color: var(--idle); font-weight: 500; }
+.rd-chip.unwitnessed { color: var(--text-2-strong); font-weight: 500; }
 /* A run somebody stopped. Not the danger colour: unlike `bad`, this ending
-   was witnessed and asked for, not a failure. Shares the idle token with
+   was witnessed and asked for, not a failure. Shares its gray with
    `unwitnessed` (same visual weight, "not an error") but keeps its own class
    rather than reusing that one, since a stopped run's ending is fully known
    and an unwitnessed one's is not: the two must never read as one state. */
-.rd-chip.stopped { color: var(--idle); font-weight: 500; }
+.rd-chip.stopped { color: var(--text-2-strong); font-weight: 500; }
 
-.rd-files-label { font-size: var(--caption); font-weight: 600; color: var(--text-2); margin: 18px 0 8px; }
+.rd-files-label { font-size: var(--caption); font-weight: 600; color: var(--text-2-strong); margin: 18px 0 8px; }
 
 .rd-files { display: flex; flex-direction: column; gap: 6px; }
 
@@ -102,15 +102,15 @@
    after each separator, so a long path breaks at a directory boundary rather
    than mid-word; overflow-wrap: anywhere is the floor under that for the one
    segment a separator cannot help, a single name longer than the box. */
-.rd-file-path { font-size: var(--caption); color: var(--text-3); overflow-wrap: anywhere; }
+.rd-file-path { font-size: var(--caption); color: var(--text-2-strong); overflow-wrap: anywhere; }
 .rd-ic { width: 16px; height: 16px; flex-shrink: 0; color: var(--text-2); }
-.rd-tag { font-size: var(--caption); color: var(--text-2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 2px 8px; flex-shrink: 0; }
+.rd-tag { font-size: var(--caption); color: var(--text-2-strong); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 2px 8px; flex-shrink: 0; }
 
 .rd-cannot-open { margin-top: 10px; }
 
 /* A run that changed nothing. A plain sentence, in ordinary text colour: this
    is a routine working normally and it should not read as a warning. */
-.rd-empty { font-size: var(--body); color: var(--text-2); margin: 0; }
+.rd-empty { font-size: var(--body); color: var(--text-2-strong); margin: 0; }
 
 /* A run whose changes nobody can read. DELIBERATELY NOT THE SAME BLOCK as the
    one above, and deliberately not silent: something is wrong with the
@@ -118,4 +118,4 @@
    user is deciding on when they choose whether to trust an unattended run. */
 .rd-unknown { padding: 14px 16px; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius-lg); }
 .rd-unknown-lead { font-size: var(--body); color: var(--text-1); margin: 0 0 6px; }
-.rd-unknown-why { font-size: var(--caption); color: var(--text-2); line-height: 1.5; margin: 0; }
+.rd-unknown-why { font-size: var(--caption); color: var(--text-2-strong); line-height: 1.5; margin: 0; }

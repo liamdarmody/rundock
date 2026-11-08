@@ -709,7 +709,7 @@ describe('the row', () => {
     assert.deepStrictEqual(w.sent.map(m => m.type), ['set_routine_paused', 'approve_routine_plan'], 'the bound actions differ');
     assert.strictEqual(w.sent[0].paused, false);
     const colour = (el) => w.getComputedStyle(el).color;
-    assert.strictEqual(colour(selfLabel), 'var(--text-3)');
+    assert.strictEqual(colour(selfLabel), 'var(--text-2-strong)');
     assert.strictEqual(colour(consentText), 'var(--attention)');
     dom.window.close();
   });

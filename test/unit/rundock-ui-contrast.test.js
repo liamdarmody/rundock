@@ -492,12 +492,13 @@ describe('the app carries the approved diffs', () => {
 
   test('the permission card: its own light colour, a separate code block, a readable light title', () => {
     const chat = read('views/chat.css');
-    assert.match(chat, /body\.light \.permission-card \{ background: #E8E3DB; \}/);
+    assert.match(chat, /\.permission-card \{ background: var\(--permission-card\);/);
     assert.match(chat, /body\.light \.risk-high \.permission-header \{ color: var\(--text-1\); \}/);
     assert.match(chat, /\.permission-detail \{ display: block; background: var\(--base\);/);
     assert.match(chat, /body\.light \.permission-detail \{ background: var\(--elevated\); \}/);
     const { light, dark } = THEMES;
-    const card = [0xE8, 0xE3, 0xDB];
+    const card = hex(light.get('--permission-card'), '--permission-card');
+    assert.deepStrictEqual(card, [0xE8, 0xE3, 0xDB]);
     assert.strictEqual(two(ratio(hex(light.get('--elevated'), 'e'), card)), 1.28, 'code block against the light card');
     assert.strictEqual(two(ratio(hex(dark.get('--base'), 'b'), hex(dark.get('--card'), 'c'))), 1.38, 'code block against the dark card');
     assert.ok(ratio(hex(light.get('--text-1'), 't'), card) >= 4.5, 'the light title reads on the light card');
