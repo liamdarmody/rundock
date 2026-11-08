@@ -416,6 +416,8 @@ const STARTUP_GLUE = { src: path.join(ROOT, 'lib', 'runtime', 'codex-glue.js'), 
 const STARTUP_CHAT = { src: path.join(ROOT, 'public', 'views', 'chat.js'), suite: 'test/unit/shell-startup-files.test.js' };
 const STARTUP_HOOK_NAMES = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/codex-startup-files.test.js' };
 const STARTUP_COPY_NAMES = { src: path.join(ROOT, 'public', 'permissions.js'), suite: 'test/unit/codex-startup-files.test.js' };
+// The put-back card, whose words a startup file's name alone chooses.
+const STARTUP_COPY_PUTBACK = { src: path.join(ROOT, 'public', 'permissions.js'), suite: 'test/unit/startup-file-guard.test.js' };
 // The test preload that keeps every test off the account's own startup files.
 const STARTUP_PRELOAD = { src: path.join(ROOT, 'test', 'helpers', 'account-home-refused.js'), suite: 'test/unit/startup-file-guard.test.js' };
 const MUTATIONS = [
@@ -2541,7 +2543,7 @@ const MUTATIONS = [
     "      if (n >= 2 && parts[n - 2] === '.rundock' && /^permission-hook\\.(sh|cmd)$/.test(parts[n - 1])) return 'launcher';\n",
     ''],
   [WHAT_RUNS_CLIENT, 'What runs: the stakes on a card that also reaches outside ignore which file it is',
-    '    if (crossing.answerFile) return answerFileCopy(crossing.path);',
+    '    if (crossing.answerFile) return answerFileCopy(crossing.path, crossing.startupFile);',
     '    if (crossing.answerFile) return answerFileCopy();'],
   [WHAT_RUNS_VIEW, 'What runs: the card reads no path when choosing its words',
     '    const named = [req.resolved_path, ...crossingList.map(c => c && c.path)].filter(Boolean);',
@@ -2800,7 +2802,7 @@ const MUTATIONS = [
     '  return `${relative} changed while no agent was running, and Rundock kept it as it is. `',
     '  return `A file changed while no agent was running, and Rundock kept it as it is. `'],
   [GUARD_RUNS, 'Guard: a hook script added after the guard started is not watched',
-    '  watchNewHookScripts(key(workspace), g);\n',
+    '  part(() => watchNewHookScripts(key(workspace), g));\n',
     ''],
   [GUARD_RUNS, 'Guard: a new hook script is taken as the starting point',
     '    if (!g.snapshot.has(f)) { g.files.push(f); g.snapshot.set(f, null); }',
@@ -2827,8 +2829,8 @@ const MUTATIONS = [
     'const isShared = relative => SHARED_FILES.has(relative) || relative.startsWith(`${HOOK_SCRIPTS_DIR}/`);',
     'const isShared = relative => SHARED_FILES.has(relative);'],
   [GUARD_RUNS, 'Guard: the launcher is offered on a keep card',
-    '  if (LAUNCHERS.has(relative)) { putLauncherBack(g.root, g, f, was, relative); return null; }\n',
-    ''],
+    '  const relative = g.relativeOf(f);\n  if (LAUNCHERS.has(relative)) { putLauncherBack(g.root, g, f, was, relative); return null; }\n  // A change the person allowed',
+    '  const relative = g.relativeOf(f);\n  // A change the person allowed'],
   [GUARD_RUNS, "Guard: the launcher is put back to the baseline, not this copy's latest",
     '    if (mine) writePlain(f, mine.bytes, mine.mode); else restore(f, was);',
     '    restore(f, was);'],
@@ -3734,7 +3736,7 @@ const MUTATIONS = [
   [STARTUP_HOOK, 'Startup files: matched by the path as written, not the real path',
     '  const c = canonicalize(resolvedPath);\n  for (const e of shellStartupEntries(home, env)) {\n    const at = canonicalize(e.path);',
     '  const c = path.resolve(resolvedPath);\n  for (const e of shellStartupEntries(home, env)) {\n    const at = path.resolve(e.path);'],
-  [STARTUP_COPY, 'Startup files: the card is worded as one about permission answers',
+  [STARTUP_COPY_PUTBACK, 'Startup files: the card is worded as one about permission answers',
     "      if (STARTUP_NAMES.includes(parts[n - 1]) ||",
     "      if (false ||"],
   [STARTUP_BOUNDARY, 'Startup files: a stored grant over the home folder answers a write to one',
