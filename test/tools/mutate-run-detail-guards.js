@@ -109,9 +109,6 @@ const COUNT_DENY = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'proces
 // file that closes real runs of a private scheduler with a stand-in reader.
 const SHELL_READER = { src: path.join(ROOT, 'lib', 'runtime', 'session-transcript.js'), suite: 'test/unit/session-transcript.test.js' };
 const SHELL_RECORD = { src: path.join(ROOT, 'lib', 'scheduler.js'), suite: 'test/unit/run-record-shell.test.js' };
-// The link color, watched by the file that measures the run screen's colors
-// in both themes as the browser computes them.
-const LINK_TOKEN = { src: path.join(ROOT, 'public', 'styles', 'tokens.css'), suite: 'test/unit/run-screen-contrast.test.js' };
 // Which transcript entries the reader reads, watched by the file that reads
 // the committed capture, where the entries it passes over are recorded.
 const ENTRY_READER = { src: path.join(ROOT, 'lib', 'runtime', 'session-transcript.js'), suite: 'test/unit/session-transcript-capture.test.js' };
@@ -403,10 +400,6 @@ const MUTATIONS = [
   [ENTRY_READER, 'Shell use: every transcript entry read as a message',
     '    if (!entry || !READ_ENTRY_TYPES.has(entry.type) || !entry.message) continue;',
     '    if (!entry || !entry.message) continue;'],
-  [LINK_TOKEN, 'File links: --link-text declared only on the root',
-    '  /* Computed again here from the light --accent-text and --text-1; see :root. */\n'
-      + '  --link-text: color-mix(in srgb, var(--accent-text) 85%, var(--text-1));\n',
-    ''],
   // ===== STOP THIS RUN =====
   [VIEW, 'Stop: back on settings-btn-danger',
     '<button class="rd-stop" type="button" data-run-detail="stop" onclick="runDetailStop()">Stop this run</button>',

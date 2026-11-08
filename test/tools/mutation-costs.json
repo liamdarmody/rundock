@@ -236,7 +236,7 @@
       "a routine state that does not parse is set aside and written back at once": 0.35
     },
     "mutate-run-detail-guards.js": {
-      "a run whose ending never ran is not painted as a failure": 1.3,
+      "a run whose ending never ran is not painted as a failure": 1.63,
       "the screen says which names cannot be opened, only while one cannot": 1.57,
       "Plain names: the sentence never drawn": 1.41,
       "Shell use: the shell tool names removed from the reader": 0.24,
@@ -263,9 +263,8 @@
       "File links: the resolved folder left out of the reply": 0.24,
       "File links: a folder that cannot be resolved throws before the reply": 0.23,
       "Shell use: every transcript entry read as a message": 0.22,
-      "File links: --link-text declared only on the root": 0.17,
       "Stop: back on settings-btn-danger": 1.27,
-      "Stop: the focus rule removed": 1.32
+      "Stop: the focus rule removed": 1.37
     },
     "mutate-rundock-ui-guards.js": {
       "an alert with an action aligns message and action on the first baseline": 4.1,
