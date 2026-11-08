@@ -36,6 +36,8 @@ const ROOT = path.join(__dirname, '..', '..');
 const HISTORY = path.join(ROOT, 'lib', 'protocol', 'handlers', 'history.js');
 const MERGE = { src: HISTORY, suite: 'test/unit/session-history-merge.test.js' };
 const MERGE_SERVER = { src: HISTORY, suite: 'test/integration/session-history.test.js' };
+// A conversation opened with no session left, through the view and the server.
+const TRANSCRIPT_ONLY = { src: HISTORY, suite: 'test/integration/transcript-only-conversation.test.js' };
 // Which session lines are Rundock's own, and the message counts that read them.
 const LINES = { src: path.join(ROOT, 'lib', 'delegation', 'rundock-lines.js'), suite: 'test/unit/session-history-merge.test.js' };
 const COUNTS = { src: path.join(ROOT, 'server.js'), suite: 'test/integration/session-history.test.js' };
@@ -52,6 +54,12 @@ const MUTATIONS = [
   [MERGE_SERVER, 'the earlier history is left out once a transcript exists, through the server',
     '        merged.push(...sessionOnlyHistory(before));\n',
     ''],
+  // ===== A CONVERSATION WITH NO SESSION LEFT =====
+  // Merged only beside session ids, a conversation kept for its transcript
+  // alone opens with its title over an empty body.
+  [TRANSCRIPT_ONLY, 'the transcript is merged when no session id is left',
+    '  if (sessions.length > 0 || (!sessionId && conversationId)) {',
+    '  if (sessions.length > 0) {'],
   // ===== WHEN THE TRANSCRIPT BEGAN =====
   // A transcript that opens with an agent turn was started by a prompt Rundock
   // sent: taking its time as the start shows that prompt as a message.
