@@ -448,11 +448,23 @@ function planShards(harnesses, { costs = { perRow: {}, fallback: FALLBACK_SECOND
     if (!h.rows || est <= cap) { units.push({ tool: h.tool, rows: h.rows, seconds: round(est) }); continue; }
     const pieces = Math.ceil(est / cap);
     if (h.costs) {
-      // Cut where the time, not the row count, reaches each piece's share.
+      // Cut where the time, not the row count, reaches each piece's share, at
+      // whichever side of the row that crosses it is nearer the share. Ending
+      // at the first row past the share took a slow row whole into the slice
+      // its start fell short in, and stretched that slice by nearly the row's
+      // cost: two of the slowest rows a few apart put one shard past fifteen
+      // minutes while the rest planned near thirteen.
       let start = 0;
       let spent = 0;
       for (let i = 0, piece = 1; i < h.rows; i++) {
-        spent += h.costs[i];
+        const share = (est * piece) / pieces;
+        const after = spent + h.costs[i];
+        if (piece < pieces && i > start && spent < share && after >= share && share - spent < after - share) {
+          units.push({ tool: h.tool, start, end: i, rows: i - start, seconds: round(sum(h.costs.slice(start, i))) });
+          start = i;
+          piece++;
+        }
+        spent = after;
         if (i === h.rows - 1 || (piece < pieces && spent >= (est * piece) / pieces)) {
           units.push({ tool: h.tool, start, end: i + 1, rows: i + 1 - start, seconds: round(sum(h.costs.slice(start, i + 1))) });
           start = i + 1;
