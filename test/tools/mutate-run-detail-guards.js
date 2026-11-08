@@ -112,6 +112,9 @@ const SHELL_RECORD = { src: path.join(ROOT, 'lib', 'scheduler.js'), suite: 'test
 // The link color, watched by the file that measures the run screen's colors
 // in both themes as the browser computes them.
 const LINK_TOKEN = { src: path.join(ROOT, 'public', 'styles', 'tokens.css'), suite: 'test/unit/run-screen-contrast.test.js' };
+// Which transcript entries the reader reads, watched by the file that reads
+// the committed capture, where the entries it passes over are recorded.
+const ENTRY_READER = { src: path.join(ROOT, 'lib', 'runtime', 'session-transcript.js'), suite: 'test/unit/session-transcript-capture.test.js' };
 
 // [target, label, the guard as it is written, what it becomes without it]
 const MUTATIONS = [
@@ -379,6 +382,27 @@ const MUTATIONS = [
   [VIEW, 'File links: the tree redraw removed',
     '  if (JSON.stringify(links) !== drawnLinks) renderRunDetail();',
     ''],
+  // A workspace opened through a symbolic link: the reply names the folder it
+  // resolves to, and the screen matches that spelling for its own workspace.
+  [MODEL, 'File links: only the first spelling of the root tried',
+    '    for (const spelling of Array.isArray(root) ? root : [root]) {',
+    '    for (const spelling of Array.isArray(root) ? root.slice(0, 1) : [root]) {'],
+  [VIEW, 'File links: the resolved folder used for any workspace',
+    '  return root && resolvedRoot.workspace === root ? [root, resolvedRoot.real] : root;',
+    '  return root ? [root, resolvedRoot.real] : root;'],
+  [VIEW, 'File links: the resolved folder used with no root known',
+    '  return root && resolvedRoot.workspace === root ? [root, resolvedRoot.real] : root;',
+    '  return resolvedRoot.workspace === root ? [root, resolvedRoot.real] : root;'],
+  [HANDLER, 'File links: the resolved folder left out of the reply',
+    '    ...workspaceSpellings(),\n',
+    ''],
+  [HANDLER, 'File links: a folder that cannot be resolved throws before the reply',
+    '  try { workspaceRealPath = fs.realpathSync.native(workspace); } catch { workspaceRealPath = null; }',
+    '  workspaceRealPath = fs.realpathSync.native(workspace);'],
+  // The entries the reader reads: every entry read as a message here.
+  [ENTRY_READER, 'Shell use: every transcript entry read as a message',
+    '    if (!entry || !READ_ENTRY_TYPES.has(entry.type) || !entry.message) continue;',
+    '    if (!entry || !entry.message) continue;'],
   [LINK_TOKEN, 'File links: --link-text declared only on the root',
     '  /* Computed again here from the light --accent-text and --text-1; see :root. */\n'
       + '  --link-text: color-mix(in srgb, var(--accent-text) 85%, var(--text-1));\n',
