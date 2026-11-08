@@ -166,6 +166,26 @@ describe('the retry: every other way of writing it is refused too', () => {
   }
 });
 
+describe('a bare name in code, with the workspace at home, is the startup file it names', () => {
+  // No slash, so not shaped like a place: only the names read for the answer
+  // files see it, and from the home folder `.zshrc` is `~/.zshrc`.
+  test('a write by python3 -c or node -e to .zshrc from the home folder asks, and is refused with nobody to ask', async () => {
+    for (const mode of MODES) {
+      for (const command of [`python3 -c "open('.zshrc', 'a').write('x')"`, `node -e "require('fs').appendFileSync('.bashrc', 'x')"`]) {
+        const r = await judge(SETUPS()[0], mode, 'Bash', { command });
+        assert.strictEqual(r.dead.decision, 'deny', `${mode.label}: ${command}`);
+        assert.ok(r.payload && (r.payload.crossings || []).some(c => c.answerFile && c.startupFile), `${mode.label}: ${command} names the startup file`);
+      }
+    }
+  });
+  test('the same name read, or written inside a project, is ordinary work', async () => {
+    for (const mode of MODES) {
+      const r = await judge(SETUPS()[0], mode, 'Bash', { command: `python3 -c "open('Projects/ws/app/.zshrc', 'w').write('x')"` });
+      assert.ok(!(r.payload && (r.payload.startup_file || (r.payload.crossings || []).some(c => c.startupFile))), `${mode.label}: no startup-file card`);
+    }
+  });
+});
+
 describe('the inverse: a read, and a file of the same name elsewhere, are as they were', () => {
   test('a read of each listed file carries no startup-file tag, and is free in a home-folder workspace', async () => {
     const setup = SETUPS()[0];

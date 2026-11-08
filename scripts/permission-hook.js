@@ -1979,6 +1979,8 @@ function literalIsPlace(lit, reading = null) {
 // in it. Read for the answer files only, whether or not it is shaped like a
 // place: `open('.mcp.json', 'w')` names one with no slash at all.
 const MAY_NAME_ANSWER_FILE = /\.(?:mcp\.json|rundock|claude)/i;
+// The same for a shell startup file: `open('.zshrc', 'a')` from the home folder.
+const MAY_NAME_STARTUP_FILE = new RegExp(`(?:^|[\\\\/])(?:${SHELL_STARTUP_FILES.map(f => f.replace(/\./g, '\\.')).join('|')}|config\\.fish)$|fish[\\\\/]conf\\.d`, 'i');
 
 // A mode that writes: Python's, Node's and Ruby's letters, and Perl's arrows.
 const WRITE_MODE = /^(?:[rbtUs]*[wax+][rbtUswax+]*|\+<|\+?>>?)(?::.*)?$/;
@@ -2695,7 +2697,7 @@ function codeParts(code, reading = null) {
   for (const node of nodes) {
     for (const v of node.values) {
       addLiteral(v, !node.quiet);
-      if (!node.quiet && MAY_NAME_ANSWER_FILE.test(v)) names.push(v);
+      if (!node.quiet && (MAY_NAME_ANSWER_FILE.test(v) || MAY_NAME_STARTUP_FILE.test(v))) names.push(v);
     }
   }
   return { literals, names: [...new Set(names)], commands: [...commands, ...run] };
