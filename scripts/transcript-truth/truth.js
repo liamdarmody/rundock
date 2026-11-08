@@ -24,7 +24,7 @@
 // never exercised. The partition below closes it. Every tool the reader names
 // must be either witnessed by the capture, and checked against it, or listed
 // as unwitnessed with the reason, and a tool that is neither fails this file.
-const { FILE_TOOLS, KNOWN_BLOCK_TYPES, DELEGATION_TOOLS } = require('../../lib/runtime/session-transcript.js');
+const { FILE_TOOLS, KNOWN_BLOCK_TYPES, DELEGATION_TOOLS, READ_ENTRY_TYPES } = require('../../lib/runtime/session-transcript.js');
 
 // Tools the committed capture really contains, each checked below against the
 // shapes it produced. Adding a tool to the reader means adding it here and
@@ -78,12 +78,30 @@ function checkTranscriptInvariants(lines) {
 
   const say = (ok, msg) => { if (!ok) failures.push(msg); };
 
-  const messages = entries.filter(e => e && (e.type === 'user' || e.type === 'assistant') && e.message);
+  // The checks below hold the entries the reader reads, and no others: an
+  // entry it passes over may carry blocks it does not know, and several
+  // answers at once, without changing what it reports.
+  const messages = entries.filter(e => e && READ_ENTRY_TYPES.has(e.type) && e.message);
   say(messages.length > 0, 'no user/assistant message envelopes at all: the reader would understand nothing');
+
+  // NOTHING THE READER NEEDS IS RECORDED ONLY WHERE IT DOES NOT LOOK. The
+  // entries it passes over repeat asks and answers the messages hold; an ask
+  // or an answer found only there is one the reader would never see, which is
+  // a list missing a write, or a write left open.
+  const idsIn = (list, type, key) => new Set(list.flatMap(blocksOf).filter(b => b.type === type).map(b => b[key]));
+  const passedOver = entries.filter(e => e && !READ_ENTRY_TYPES.has(e.type));
+  const readAsks = idsIn(messages, 'tool_use', 'id');
+  const readAnswers = idsIn(messages, 'tool_result', 'tool_use_id');
+  for (const id of idsIn(passedOver, 'tool_use', 'id')) {
+    say(readAsks.has(id), `a tool call (${id}) is recorded only in an entry the reader passes over`);
+  }
+  for (const id of idsIn(passedOver, 'tool_result', 'tool_use_id')) {
+    say(readAnswers.has(id), `the answer to a tool call (${id}) is recorded only in an entry the reader passes over`);
+  }
 
   const uses = [];
   const results = [];
-  for (const entry of entries) {
+  for (const entry of messages) {
     const content = entry && entry.message ? entry.message.content : null;
     if (!Array.isArray(content)) continue;
     for (const block of content) {
@@ -238,6 +256,10 @@ function checkCaptureAnswers(captured) {
   for (const sub of subagents) {
     let subEntries;
     try { subEntries = parseLines(sub.lines); } catch (e) { failures.push(`${sub.name}: ${e.message}`); continue; }
+    // The messages only, as for the session: a copy of a request carries the
+    // subagent's answers with no payload of its own, and would satisfy the
+    // payload check below whatever the real answer carried.
+    subEntries = subEntries.filter(e => e && READ_ENTRY_TYPES.has(e.type));
     const ids = new Set();
     for (const entry of subEntries) {
       for (const block of blocksOf(entry)) {

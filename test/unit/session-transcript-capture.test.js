@@ -35,6 +35,12 @@ const { checkTranscriptInvariants, checkDeclarationsAgree, checkCaptureAnswers, 
 const captured = JSON.parse(fs.readFileSync(
   path.join(__dirname, '..', '..', 'scripts', 'transcript-truth', 'captured-transcript.json'), 'utf-8'));
 
+// The content blocks of one transcript entry, or none.
+const blocksOf = (entry) => {
+  const content = ((entry && entry.message) || {}).content;
+  return Array.isArray(content) ? content.filter(b => b && typeof b === 'object') : [];
+};
+
 let home = null;
 let realHome = null;
 
@@ -344,6 +350,36 @@ describe('the declarations the reader owns', () => {
       'and says the capture no longer contains the call, rather than blaming its outcome');
     assert.deepStrictEqual(checkTranscriptInvariants(captured.lines), [],
       'and says nothing about the capture that does exercise it');
+  });
+
+  // THE ENTRIES THE READER PASSES OVER. A transcript holds entries beside
+  // the conversation's messages, which may carry blocks the reader does not
+  // know and several answers in one entry. The reader reads only the
+  // messages, so the checks hold the messages, and a further check makes sure
+  // nothing the reader needs is recorded only in an entry it passes over.
+  test('an answer recorded only in an entry the reader passes over is complained about', () => {
+    let moved = false;
+    const lines = captured.lines.map(line => {
+      const entry = JSON.parse(line);
+      if (moved || entry.type !== 'user' || !blocksOf(entry).some(b => b.type === 'tool_result')) return line;
+      moved = true;
+      return JSON.stringify({ ...entry, type: 'api-request-blob' });
+    });
+    assert.ok(moved, 'the capture really did hold an answer in a message');
+    assert.ok(checkTranscriptInvariants(lines).some(f => /only in an entry the reader passes over/.test(f)),
+      'an answer the reader would never see is drift, not a skipped entry');
+  });
+
+  test('a block the reader does not know, in a message, is still drift', () => {
+    let added = false;
+    const lines = captured.lines.map(line => {
+      const entry = JSON.parse(line);
+      if (added || entry.type !== 'assistant' || !blocksOf(entry).length) return line;
+      added = true;
+      return JSON.stringify({ ...entry, message: { ...entry.message, content: [...entry.message.content, { type: 'tool_addition', tool: {} }] } });
+    });
+    assert.ok(added);
+    assert.ok(checkTranscriptInvariants(lines).some(f => /"tool_addition" is one the reader does not know/.test(f)));
   });
 
   // A fourth copy, which the reader's own comment appeals to. types.d.ts
