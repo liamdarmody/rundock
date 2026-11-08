@@ -21,6 +21,7 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 
 const { makeWorkspace, standardTeam } = require('../helpers/workspace.js');
+const { readAppendedLog } = require('../helpers/appended-log.js');
 const { CATCH_UP_HEADINGS } = require('../../lib/delegation/catch-up.js');
 
 const ARRIVING = CATCH_UP_HEADINGS.arriving;
@@ -101,10 +102,10 @@ async function until(fn, label, timeout = 20000) {
 }
 
 const file = (name) => path.join(workspace, name);
-function readLines(name) {
-  if (!fs.existsSync(file(name))) return [];
-  return fs.readFileSync(file(name), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
-}
+// The stubs append to these logs from their own processes while this test
+// polls them, so they are read with the one reader that leaves out a line
+// still being written.
+const readLines = (name) => readAppendedLog(file(name));
 const prompts = () => readLines('stub-prompts.jsonl').map((p) => p.prompt);
 function stored() {
   const all = JSON.parse(fs.readFileSync(file(path.join('.rundock', 'conversations.json')), 'utf8'));
