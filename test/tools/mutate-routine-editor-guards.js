@@ -33,11 +33,11 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
 const os = require('node:os');
 const { preflight } = require('../helpers/temp-root.js');
 const {
   beginMutationRun, targetsFromRows, rowsForShard, exitCodeFor, NO_VERDICT,
+  runSuite, didNotFinishWhy, suiteOutput,
 } = require('./mutation-run.js');
 
 const ROOT = path.join(__dirname, '..', '..');
@@ -559,13 +559,13 @@ const MUTATIONS = [
 // unguarded guards instead of one clear message about the reporter.
 const REPORTER = ['--test-reporter=spec', '--test-reporter-destination=stdout'];
 
-function redTests(suite) {
+async function redTests(suite) {
   let out = '';
   let failed = false;
   try {
-    out = execFileSync('node', ['--test', ...REPORTER, suite],
-      { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    out = await runSuite('node', ['--test', ...REPORTER, suite], { cwd: ROOT });
   } catch (e) {
+    if (e.didNotFinish) return { didNotFinish: e.didNotFinish };
     failed = true;
     out = (e.stdout || '') + (e.stderr || '');
   }
@@ -588,7 +588,7 @@ function redTests(suite) {
   return names;
 }
 
-function run() {
+async function run() {
   // Every file is read up front and all of them are restored together, so a
   // throw part way through cannot leave one mutated, and neither can a signal.
   const targets = targetsFromRows(MUTATIONS);
@@ -622,9 +622,10 @@ function run() {
         continue;
       }
       fs.writeFileSync(target.src, original.replace(guard, without));
-      const red = redTests(target.suite);
-      results.push(red && red.unparsable
-        ? { label, applied: true, unparsable: true, red: [] }
+      const red = await redTests(target.suite);
+      if (red && red.didNotFinish) results.push({ label, applied: true, didNotFinish: red.didNotFinish, output: suiteOutput(), red: [] });
+      else results.push(red && red.unparsable
+        ? { label, applied: true, unparsable: true, output: suiteOutput(), red: [] }
         : { label, applied: true, red });
       fs.writeFileSync(target.src, original);
     }
@@ -637,7 +638,13 @@ function run() {
 function report(results, markdown) {
   let failed = 0;
   const lines = [];
-  for (const { label, applied, red, ambiguous, unparsable } of results) {
+  for (const { label, applied, red, ambiguous, unparsable, didNotFinish } of results) {
+    if (didNotFinish) {
+      failed++;
+      const why = didNotFinishWhy(didNotFinish);
+      lines.push(markdown ? `| ${label} | **${why}** | |` : `${label}\n  ${why.toUpperCase()}`);
+      continue;
+    }
     if (unparsable) {
       failed++;
       const why = 'no verdict: the suite failed but its output could not be parsed, so nothing '
@@ -707,13 +714,14 @@ if (require.main === module) {
   // source file mutated on every red run. The flag is read after the check, so
   // deleting the check still fails that test rather than passing it.
   if (process.argv.includes('--preflight-only')) process.exit(0);
-  const results = run();
-  const failed = report(results, process.argv.includes('--markdown'));
-  if (failed) {
-    console.error(`\n${failed} mutation(s) proved nothing. A guard no test notices is not guarded,`
-      + ' and a mutation that could break more than one place proves nothing about either.');
-    process.exit(exitCodeFor(failed, results));
-  }
+  run().then((results) => {
+    const failed = report(results, process.argv.includes('--markdown'));
+    if (failed) {
+      console.error(`\n${failed} mutation(s) proved nothing. A guard no test notices is not guarded,`
+        + ' and a mutation that could break more than one place proves nothing about either.');
+      process.exit(exitCodeFor(failed, results));
+    }
+  });
 }
 
 module.exports = { MUTATIONS, run };

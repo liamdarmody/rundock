@@ -277,8 +277,10 @@ const MANIFEST = {
     "renderRunDetail",
     "runArrived",
     "runDetailBack",
+    "runDetailOpenFile",
     "runDetailRosterUpdated",
     "runDetailStop",
+    "runDetailTreeUpdated",
     "stopRequestArrived",
   ],
   "settings.js": [

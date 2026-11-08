@@ -690,6 +690,101 @@ describe('classifyRisk PowerShell', () => {
   });
 });
 
+// ── PowerShell: no card unless every part is a listed read ──────────────────
+//
+// ON WINDOWS THERE IS NO SANDBOX, so a low grade here is the only thing between
+// an agent's PowerShell command and what it does. A low grade used to come from
+// the start of the command alone: any `Get-` cmdlet first, and whatever followed
+// a `;`, a pipe, a new line or a bracket ran with no card.
+//
+// EACH CASE ASKS BOTH READERS: this grader, which decides whether a card is
+// drawn, and the shared definition the permission hook reads to free a crossing
+// into the runtime's own home. The commands are in
+// test/fixtures/powershell-reads.js, which the hook's and the card's tests read
+// as well.
+describe('PowerShell: no card unless every part of the command is a listed read', () => {
+  const shell = require('../../public/read-only-shell.js');
+  const F = require('../fixtures/powershell-reads.js');
+  const grade = (command) => P.classifyRisk('PowerShell', { command });
+  const decide = (command) => P.decidePermission(grade(command), P.toolAllowKey('PowerShell', { command }), new Set());
+  const show = (command) => JSON.stringify(command).slice(0, 100);
+  function assertCards(command) {
+    assert.strictEqual(decide(command).action, 'card', `ran with no card (graded ${grade(command)}): ${show(command)}`);
+    assert.strictEqual(shell.isReadOnlyPowerShellCommand(command), false, `the shared definition reads it as a read: ${show(command)}`);
+  }
+  function assertRuns(command) {
+    assert.deepStrictEqual(decide(command), { action: 'allow', reason: 'low-risk' }, `carded (graded ${grade(command)}): ${show(command)}`);
+    assert.strictEqual(shell.isReadOnlyPowerShellCommand(command), true, `the shared definition does not read it as a read: ${show(command)}`);
+  }
+
+  test('a write after a read cards', () => { for (const c of F.WRITES_AFTER_READ) assertCards(c); });
+  test('a send after a read cards', () => { for (const c of F.SENDS_AFTER_READ) assertCards(c); });
+  for (const [construct, commands] of F.HIDDEN) {
+    test(`a command holding ${construct} cards`, () => { for (const c of commands) assertCards(c); });
+  }
+
+  test('a delete inside brackets, a block or after a new line is graded high', () => {
+    for (const c of ['Get-Content (Remove-Item notes.md)', 'Write-Output $(Remove-Item notes.md)', 'Write-Output "$(rm notes.md)"',
+      'Write-Output @(del notes.md)', 'Get-ChildItem | Where-Object { Remove-Item notes.md }', 'Get-Date\nRemove-Item notes.md',
+      'Get-Date\r\nRemove-Item notes.md']) {
+      assert.strictEqual(grade(c), 'high', show(c));
+    }
+  });
+
+  test('plain reads run with no card', () => { for (const c of F.READS) assertRuns(c); });
+  test('each listed alias runs with no card', () => { for (const c of F.ALIASES) assertRuns(c); });
+  test('a read in another case, with a variable, a quoted path or discarded output, runs with no card', () => {
+    for (const c of F.READ_SPELLINGS) assertRuns(c);
+  });
+
+  test('a Get- name is not enough: no cmdlet reads unless it is listed', () => {
+    for (const c of [...F.GET_BUT_NOT_LISTED, 'Get-Process', 'Get-Secret vault', 'Get-Anything']) assertCards(c);
+  });
+
+  test('the grader grades low exactly what the shared definition reads', () => {
+    const every = [...F.READS, ...F.ALIASES, ...F.READ_SPELLINGS, ...F.WRITES_AFTER_READ, ...F.SENDS_AFTER_READ,
+      ...F.HIDDEN.flatMap(([, commands]) => commands), ...F.THROWS.map(([, c]) => c), ...F.GET_BUT_NOT_LISTED];
+    for (const c of every) {
+      assert.strictEqual(grade(c) === 'low', shell.isReadOnlyPowerShellCommand(c), `the two answer differently: ${show(c)}`);
+    }
+  });
+
+  test('text the reading throws on is not a read, and grades medium or high, never low', () => {
+    for (const [what, command] of F.THROWS) {
+      assert.strictEqual(shell.isReadOnlyPowerShellCommand(command), false, what);
+      assert.ok(['medium', 'high'].includes(grade(command)), `${what}: graded ${grade(command)}`);
+    }
+  });
+
+  test('a failure forced inside the shared definition cards in the grader, and never allows', () => {
+    const seam = shell.powerShellReadingSeam;
+    assert.deepStrictEqual(decide('Get-Date'), { action: 'allow', reason: 'low-risk' }, 'sanity: without the failure it runs');
+    const kept = seam.beforeReading;
+    seam.beforeReading = () => { throw new Error('forced failure'); };
+    try {
+      for (const c of [...F.READS, ...F.ALIASES]) {
+        assert.strictEqual(shell.isReadOnlyPowerShellCommand(c), false, show(c));
+        assert.ok(['medium', 'high'].includes(grade(c)), `graded ${grade(c)}: ${show(c)}`);
+        assert.strictEqual(decide(c).action, 'card', show(c));
+      }
+    } finally { seam.beforeReading = kept; }
+    assert.deepStrictEqual(decide('Get-Date'), { action: 'allow', reason: 'low-risk' }, 'and with it put back it runs again');
+  });
+
+  test('the hook and the grader read PowerShell with the same function, and neither keeps a list of its own', () => {
+    const fs = require('node:fs');
+    const path = require('node:path');
+    const hook = require('../../scripts/permission-hook.js');
+    assert.strictEqual(typeof shell.isReadOnlyPowerShellCommand, 'function', 'the shared definition reads PowerShell');
+    assert.strictEqual(hook.isReadOnlyPowerShellCommand, shell.isReadOnlyPowerShellCommand, 'and the hook reads it from there');
+    const src = (rel) => fs.readFileSync(path.join(__dirname, '..', '..', rel), 'utf8');
+    for (const rel of ['public/permissions.js', 'public/read-only-shell.js', 'scripts/permission-hook.js']) {
+      assert.ok(!/Get-\[A-Za-z\]/.test(src(rel)), `${rel} matches no Get- wildcard`);
+    }
+    assert.ok(!/Where-Object\|Measure-Object/.test(src('public/permissions.js')), 'and the grader keeps no read list of its own');
+  });
+});
+
 // ── classifyRisk: WriteFile and MCP ─────────────────────────────────────────
 
 describe('classifyRisk other tools', () => {

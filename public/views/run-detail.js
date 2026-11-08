@@ -69,6 +69,19 @@ let record;
 // would tell the reader their stop landed on the wrong one.
 let stopRequested = false;
 
+// Which names the screen last drew as opening, so a tree that changes none of
+// them redraws nothing (see runDetailTreeUpdated).
+let drawnLinks = null;
+
+// The folder the open workspace resolves to, as named by the reply that
+// carried the record, with the workspace it was read for. A run records its
+// files under that folder, which for a workspace opened through a symbolic
+// link is a different spelling from the one the shell holds. Replaced by each
+// record that arrives; used only while the shell holds the workspace it names.
+// Either may be missing or malformed: the matcher passes over a spelling that
+// is not a non-empty string.
+let resolvedRoot = { workspace: null, real: null };
+
 // The clock, taken from the global so a test can supply one. Undeclared
 // identifiers are safe under typeof, so this works when the module is required
 // in node with no global at all.
@@ -86,22 +99,59 @@ function escText(value) {
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+// For a value inside a double-quoted attribute: element escaping plus quotes.
+function attrText(value) {
+  return escText(value).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+// The workspace the server says is open and the last tree it sent, both kept
+// by the shell (app.js). Read at call time; either may not have arrived yet.
+function workspaceRoot() {
+  return typeof rosterWorkspacePath === 'string' && rosterWorkspacePath ? rosterWorkspacePath : null;
+}
+function fileTree() {
+  return typeof cachedFileTree !== 'undefined' && Array.isArray(cachedFileTree) ? cachedFileTree : null;
+}
+
+// The spellings of the open workspace a recorded path may begin with: the one
+// the shell holds and, while the last reply was read for that same workspace,
+// the folder it resolves to.
+function rootSpellings() {
+  const root = workspaceRoot();
+  return root && resolvedRoot.workspace === root ? [root, resolvedRoot.real] : root;
+}
+
+/** The tree path a recorded path opens, or null where the name stays plain. */
+function treePathOf(recorded) {
+  const model = runDetailModel();
+  return model ? model.treePathFor(recorded, rootSpellings(), fileTree()) : null;
+}
+
+/** For each listed file, the tree path its name opens, or null. */
+function linksOf(files) {
+  return files && files.known ? files.entries.map(entry => treePathOf(entry.path)) : [];
+}
+
 const FILE_ICON = '<svg class="rd-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor"'
   + ' stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'
   + '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>'
   + '<polyline points="14 2 14 8 20 8"/></svg>';
 
-// WHY THE FILE NAMES ARE NOT LINKS, said on the page rather than in a comment.
-//
-// The card allows either: names that open, or a plain statement that this
-// release cannot and why. This is the statement. The reason is real: a record
-// names each file by its whole path on the machine that ran the routine, the
-// editor addresses files by where they sit inside the workspace open now, and
-// those are not the same thing for a run that happened in another workspace or
-// on another computer. A name that looks like a link and opens nothing is
-// worse than a name that does not, so there is no anchor here at all.
-const CANNOT_OPEN = 'These can\'t be opened from here yet. A run records each file as a full path '
-  + 'on the computer that ran it, which is not always somewhere this workspace can reach.';
+// WHICH NAMES OPEN. A record names each file by its whole path on the
+// computer that ran the routine, and the Files view opens files by where they
+// sit in the tree of the workspace open now. A name opens only where the
+// model's treePathFor finds the one in the other, and then it opens the
+// tree's own path. Every other name stays plain text, and one sentence under
+// the list says which kinds of file those are, drawn only when there is one.
+const PLAIN_NAMES = 'Names in plain text can\'t be opened here: hidden files and folders, code and config files, '
+  + 'and files that have since been moved or deleted.';
+const OPEN_IN_FILES = 'Open in Files';
+
+// The mark beside a note about the list, as the design draws it.
+const INFO_ICON = '<svg class="rd-note-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor"'
+  + ' stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+  + '<circle cx="12" cy="12" r="9"/><line x1="12" y1="16" x2="12" y2="12"/>'
+  + '<line x1="12" y1="8" x2="12.01" y2="8"/></svg>';
 
 const WAITING = 'Reading this run\'s record.';
 
@@ -145,7 +195,7 @@ function pathWithBreaks(filePath) {
     .join('');
 }
 
-function filesHtml(files) {
+function filesHtml(files, links) {
   // THREE ANSWERS, AND THE UNKNOWN ONE CARRIES NO LIST TO RENDER. The model's
   // unknown shape has no `entries` key at all, so there is nothing here that
   // could iterate an empty array and draw a confident, wrong answer.
@@ -155,19 +205,32 @@ function filesHtml(files) {
       + `<p class="rd-unknown-lead">${escText(files.lead)}</p>`
       + `<p class="rd-unknown-why">${escText(files.reason)}</p></div>`;
   }
-  if (files.empty) {
-    return `<div class="rd-files-label">${escText(files.label)}</div>`
-      + `<p class="rd-empty" data-run-detail="files-empty">${escText(files.empty)}</p>`;
+  const label = `<div class="rd-files-label">${escText(files.label)}</div>`;
+  // THE SHELL NOTE, directly under the label it qualifies, whichever of the
+  // three labels that is. Beside files it says the list may be incomplete; on
+  // an empty list it stands in place of "This run changed no files.".
+  const note = files.shell
+    ? `<p class="rd-note" data-run-detail="shell-note">${INFO_ICON}<span>${escText(files.shell)}</span></p>` : '';
+  if (!files.entries.length) {
+    return label + note
+      + (files.empty ? `<p class="rd-empty" data-run-detail="files-empty">${escText(files.empty)}</p>` : '');
   }
-  const rows = files.entries.map(entry => '<div class="rd-file" data-run-detail="file">'
+  // A NAME THAT OPENS IS A BUTTON, and its handler takes the button and
+  // nothing else: the tree path rides in a data attribute, so no path, which
+  // a file's name decides, is ever written into script.
+  const nameHtml = (entry, i) => (links[i]
+    ? `<button class="rd-file-name rd-file-link" type="button" data-run-detail="file-name" data-path="${attrText(links[i])}"`
+      + ` title="${attrText(OPEN_IN_FILES)}" onclick="runDetailOpenFile(this)">${escText(entry.name)}</button>`
+    : `<span class="rd-file-name" data-run-detail="file-name">${escText(entry.name)}</span>`);
+  const rows = files.entries.map((entry, i) => '<div class="rd-file" data-run-detail="file">'
     + FILE_ICON
     + '<div class="rd-file-body">'
-    + `<span class="rd-file-name" data-run-detail="file-name">${escText(entry.name)}</span>`
+    + nameHtml(entry, i)
     + `<span class="rd-file-path">${pathWithBreaks(entry.path)}</span></div>`
     + `<span class="rd-tag" data-run-detail="change">${escText(entry.changeLabel)}</span></div>`).join('');
-  return `<div class="rd-files-label">${escText(files.label)}</div>`
+  return label + note
     + `<div class="rd-files" data-run-detail="files">${rows}</div>`
-    + `<p class="settings-caption rd-cannot-open">${escText(CANNOT_OPEN)}</p>`;
+    + (links.some(link => !link) ? `<p class="rd-cannot-open" data-run-detail="plain-names">${escText(PLAIN_NAMES)}</p>` : '');
 }
 
 /**
@@ -175,6 +238,11 @@ function filesHtml(files) {
  * still going: the model's own answer, per public/run-detail-model.js's "no
  * raw status word leaves this file": this screen never asks whether
  * `record.status === 'running'` itself.
+ *
+ * A NEUTRAL OUTLINE, in the danger colors only while pointed at or focused.
+ * The run is already going and one press asks for a stop with no
+ * confirmation, so the control is not dressed as a destructive confirmation:
+ * the danger fill is kept for those.
  *
  * TWO STATES, NOT A DISABLED BUTTON THAT LOOKS THE SAME PRESSED OR NOT. A
  * click here cannot confirm the run has stopped: cancelRun only sends the
@@ -185,15 +253,15 @@ function stopHtml(view) {
   if (!view.state.stoppable) return '';
   if (stopRequested) {
     return '<div class="rd-stop-row">'
-      + '<button class="settings-btn rd-stop" type="button" data-run-detail="stop" disabled>Stopping…</button>'
+      + '<button class="rd-stop" type="button" data-run-detail="stop" disabled>Stopping…</button>'
       + '</div>';
   }
   return '<div class="rd-stop-row">'
-    + '<button class="settings-btn-danger rd-stop" type="button" data-run-detail="stop" onclick="runDetailStop()">Stop this run</button>'
+    + '<button class="rd-stop" type="button" data-run-detail="stop" onclick="runDetailStop()">Stop this run</button>'
     + '</div>';
 }
 
-function detailHtml(view, title, agent) {
+function detailHtml(view, title, agent, links) {
   const meta = view.duration ? `<p class="settings-caption rd-took">${escText(`Took ${view.duration}.`)}</p>` : '';
   // How many of its cards were refused, beside how long it took: both are
   // facts the server recorded about the run, said only when there is one.
@@ -228,7 +296,7 @@ function detailHtml(view, title, agent) {
     + refused
     + stopHtml(view)
     + '</div>'
-    + filesHtml(view.files);
+    + filesHtml(view.files, links);
 }
 
 /**
@@ -249,10 +317,44 @@ function renderRunDetail() {
     return;
   }
   const view = runDetailModel().describeRun(record, { now: runDetailClock() });
+  const links = linksOf(view.files);
+  drawnLinks = JSON.stringify(links);
   // The routine's name comes from the record when there is one and from what
   // was asked for when there is not, so a screen with no record still names
   // what the reader was looking at.
-  content.innerHTML = detailHtml(view, view.routine || asked.routine, agent);
+  content.innerHTML = detailHtml(view, view.routine || asked.routine, agent, links);
+}
+
+/**
+ * A linked name was pressed: open its file in the Files view.
+ *
+ * ASKED AGAIN AT CLICK TIME. The tree can change between the draw and the
+ * click, so the matcher runs once more on the current tree, and a file that
+ * has left it opens nothing; the screen is redrawn so the name reads as plain
+ * and the sentence under the list says why. What opens is the matcher's
+ * answer, the tree's own path.
+ */
+function runDetailOpenFile(button) {
+  const root = workspaceRoot();
+  const drawn = button && button.getAttribute('data-path');
+  const listed = root && drawn ? treePathOf(`${root}/${drawn}`) : null;
+  if (!listed) { renderRunDetail(); return; }
+  if (typeof openWorkspaceFilePath === 'function') openWorkspaceFilePath(listed);
+}
+
+/**
+ * A new file tree arrived. Called from app.js's 'file_tree' case.
+ *
+ * REDRAWS ONLY WHEN A NAME CHANGES. The client asks for the tree after every
+ * file-writing tool call and the server sends it to every client, so most
+ * trees change nothing here, and a redraw would take keyboard focus off the
+ * name or off Stop each time.
+ */
+function runDetailTreeUpdated() {
+  const model = runDetailModel();
+  if (!asked || record === undefined || !model) return;
+  const links = linksOf(model.describeRun(record, { now: runDetailClock() }).files);
+  if (JSON.stringify(links) !== drawnLinks) renderRunDetail();
 }
 
 /**
@@ -289,6 +391,7 @@ function runArrived(reply) {
   // `null` is kept as `null`: it means no record, which is a state of its own
   // and is not a run that changed nothing.
   record = reply.run === undefined ? null : reply.run;
+  resolvedRoot = { workspace: reply.workspace, real: reply.workspaceRealPath };
   // A PENDING STOP SURVIVES A RECORD THAT STILL SAYS THE RUN IS GOING.
   // cancelRun only sends the signal; the ending arrives later on its own
   // clock (see runDetailStop), so a record that still reads as stoppable is
@@ -381,5 +484,6 @@ function runDetailBack() {
 return {
   renderRunDetail, openRunDetail, runArrived, runDetailBack,
   runDetailStop, stopRequestArrived, runDetailRosterUpdated,
+  runDetailOpenFile, runDetailTreeUpdated,
 };
 }));

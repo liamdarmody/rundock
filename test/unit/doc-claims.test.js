@@ -564,6 +564,18 @@ describe('ROUTINES.md: the hook experiment reports the capture\'s own numbers', 
       + 'again would be worse than one that could not be stopped');
   });
 
+  test('a run that used the shell is said to be one, on the record and on the run screen', () => {
+    // A shell write is not on the list, and the page used to stop there. The
+    // record now says when the shell was used, under the field name the
+    // scheduler writes, and the run screen says what that means for the list.
+    assert.match(routinesDoc, /The record says when the run used the shell \(`usedShell: true`\), and the run screen says so under the list/,
+      'ROUTINES.md must say the run screen tells you when a run used the shell');
+    assert.ok(fs.readFileSync(path.join(ROOT, 'lib', 'scheduler.js'), 'utf-8').includes('{ usedShell: true }'),
+      'the field the page names is the one the scheduler writes');
+    assert.doesNotMatch(routinesDoc, /shell command is invisible/,
+      'the page no longer says only that shell writes are invisible');
+  });
+
   test('the word a restart-orphaned record reports is the routine state\'s own', () => {
     // The page and the two stores have to use ONE word here. A run cut off by
     // a restart is described in three places (the routine's status, the run's
@@ -1471,6 +1483,87 @@ describe('rundock-guide.md: a long conversation is summarized automatically and 
     } finally {
       if (was === undefined) delete process.env.HOME; else process.env.HOME = was;
       fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('ARCHITECTURE.md: a PowerShell command runs with no card only when every part of it is a read Rundock can name', () => {
+  // The claim a reader on Windows relies on, where no sandbox sits under the
+  // card. Pinned by asking the reading the page names about the very cmdlets
+  // and constructs the page lists, so the page cannot keep saying it after the
+  // code stops doing it.
+  const shell = require('../../public/read-only-shell.js');
+  const P = require('../../public/permissions.js');
+  const LEAD = '**A PowerShell command runs with no card only when every part of it is a read Rundock can name.**';
+  const at = architecture.indexOf(LEAD);
+  const passage = at >= 0 ? architecture.slice(at, architecture.indexOf('\n', at)) : '';
+  const sharedSrc = fs.readFileSync(path.join(ROOT, 'public', 'read-only-shell.js'), 'utf-8');
+  const graderSrc = fs.readFileSync(path.join(ROOT, 'public', 'permissions.js'), 'utf-8');
+
+  test('the audit section says what a PowerShell read is, why the list is named, and that anything not read all the way cards', () => {
+    assert.ok(passage.length > LEAD.length, 'the paragraph is in the audit section');
+    assert.ok(passage.includes('`isReadOnlyPowerShellCommand` in `public/read-only-shell.js`'), 'it names the one reading');
+    assert.ok(passage.includes('every part of it, split at `;`, `|`, `&&`, `||` and each new line, starts with one of these, in any case:'),
+      'it says what a read is');
+    assert.ok(passage.includes('named one cmdlet at a time and not matched by verb'), 'it says why the list is named');
+    assert.ok(passage.includes('Anything the reading cannot follow all the way is not a read, and cards'), 'it says what cards');
+  });
+
+  test('the comments beside the list say the same three things', () => {
+    for (const said of ['A POWERSHELL READ IS A COMMAND WHOSE EVERY PART STARTS WITH A NAME ON THIS', 'NAMED, NOT MATCHED BY VERB.',
+      'ANYTHING NOT READ ALL THE WAY CARDS.']) {
+      assert.ok(sharedSrc.includes(said), `the shared definition says: ${said}`);
+    }
+    assert.ok(!graderSrc.includes('SCOPED TO BASH'), 'and the grader no longer says its PowerShell answer is its own');
+    assert.ok(graderSrc.includes('ONE ANSWER FOR EACH SHELL, AND NO LIST HERE.'), 'it says there is one answer for each shell');
+  });
+
+  test('the cmdlets the page names are the list the code reads, and each is a read', () => {
+    const named = /starts with one of these, in any case: ([^.]+)\./.exec(passage);
+    assert.ok(named, 'the page names the list');
+    const onPage = [...named[1].matchAll(/`([A-Za-z-]+)`/g)].map(m => m[1].toLowerCase()).sort();
+    const declared = /var READ_ONLY_POWERSHELL_COMMANDS = \[([^\]]+)\]/.exec(sharedSrc);
+    assert.ok(declared, 'the shared definition declares the list');
+    const inCode = [...declared[1].matchAll(/'([a-z-]+)'/g)].map(m => m[1]).sort();
+    assert.ok(inCode.length >= 20, `the list was read whole: ${inCode.length} names`);
+    assert.deepStrictEqual(onPage, inCode, 'the page names exactly the list');
+    for (const name of onPage) {
+      assert.strictEqual(shell.isReadOnlyPowerShellCommand(name), true, `${name} is a read`);
+      assert.strictEqual(P.classifyRisk('PowerShell', { command: name }), 'low', `${name} runs with no card`);
+    }
+  });
+
+  test('what the page says cards does card', () => {
+    for (const command of ['Get-Clipboard', 'Get-Credential', 'Get-Content (Remove-Item notes.md)', 'Write-Output "$(Set-Content notes.md x)"',
+      'Write-Output @(Set-Content notes.md x)', 'Get-ChildItem | Where-Object { Remove-Item notes.md }', 'Get-Date; & Set-Content notes.md x',
+      'Get-Date; . .\\setup.ps1', "Write-Output `'x", 'Get-Date --% x', 'Get-Date # x', 'Get-Content notes.md > copy.md',
+      'Gеt-Date', '$cmd notes.md', "Get-Content 'notes.md", 'Get-Date; powershell -c x', 'Get-Date; cmd /c x']) {
+      assert.strictEqual(shell.isReadOnlyPowerShellCommand(command), false, command);
+      assert.notStrictEqual(P.classifyRisk('PowerShell', { command }), 'low', command);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// docs/RUNDOCK-UI.md: one rule for a destructive button that acts at once
+// ---------------------------------------------------------------------------
+
+describe('RUNDOCK-UI.md: the danger rule says the same thing in both places', () => {
+  // The button section names "Stop this run" as a destructive button that
+  // acts at once and is drawn as a neutral outline. The design rules near
+  // the end of the page state the danger rule again, and a reader who meets
+  // only that statement must not be told every such button is solid.
+  const uiDoc = fs.readFileSync(path.join(ROOT, 'docs', 'RUNDOCK-UI.md'), 'utf-8');
+  const ruleOf = (start) => uiDoc.split('\n').find(line => line.startsWith(start)) || '';
+
+  test('the design rule names the outline exception the button section makes', () => {
+    const button = ruleOf('The rule is about where the click lands');
+    const design = ruleOf('- **Danger differs by form as well as colour.**');
+    assert.ok(button && design, 'both statements of the danger rule are on the page');
+    for (const [where, text] of [['the button section', button], ['the design rules', design]]) {
+      assert.match(text, /Stop this run/, `${where} names the control the exception is for`);
+      assert.match(text, /neutral outline that takes the danger colors on hover and keyboard focus/,
+        `${where} says how that control is drawn`);
     }
   });
 });

@@ -27,11 +27,11 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
 const os = require('node:os');
 const { preflight } = require('../helpers/temp-root.js');
 const {
   beginMutationRun, targetsFromRows, rowsForShard, exitCodeFor, NO_VERDICT,
+  runSuite, didNotFinishWhy, suiteOutput,
 } = require('./mutation-run.js');
 
 const ROOT = path.join(__dirname, '..', '..');
@@ -90,6 +90,12 @@ const CI_VERDICT = { src: path.join(ROOT, 'scripts', 'ci-verdict.js'), suite: 't
 // The checks a change passes before it is reported done, and the guards the
 // mutation tooling keeps around a person's own edits.
 const ENVELOPE_RUN = { src: path.join(ROOT, 'test', 'tools', 'mutation-run.js'), suite: 'test/unit/mutation-run-cleanup.test.js' };
+// The end of a suite's output a row with no verdict shows, kept and scrubbed
+// by the runner and printed as the run ends, watched by the suite that drives
+// the runner and a fixture harness; and one harness's hand-off of it to the
+// row, watched by the inventory that cuts out every harness's push sites.
+const SUITE_OUTPUT = { src: path.join(ROOT, 'test', 'tools', 'mutation-run.js'), suite: 'test/unit/mutation-suite-output.test.js' };
+const OUTPUT_HANDOFF = { src: path.join(ROOT, 'test', 'tools', 'mutate-workspace-rollback-guards.js'), suite: 'test/unit/mutation-harness-runner.test.js' };
 const FIXTURE_NOTICE = { src: path.join(ROOT, 'test', 'helpers', 'code-mode-fixture.js'), suite: 'test/unit/code-mode-fixture-root.test.js' };
 const PREFLIGHT = { src: path.join(ROOT, 'scripts', 'preflight.js'), suite: 'test/unit/preflight.test.js' };
 const LANE_DONE = { src: path.join(ROOT, 'scripts', 'lane-done.js'), suite: 'test/unit/lane-done.test.js' };
@@ -227,6 +233,9 @@ const MUTATIONS = [
   [TRANSCRIPT_CAPTURE, "the transcript capture is scrubbed before it is written",
     "  fs.writeFileSync(CAPTURE_FILE, scrubCapture(JSON.stringify({",
     "  fs.writeFileSync(CAPTURE_FILE, (JSON.stringify({"],
+  [TRANSCRIPT_CAPTURE, "the shell call's capture is scrubbed before it is written",
+    "  fs.writeFileSync(SHELL_CAPTURE_FILE, scrubCapture(JSON.stringify(shell, null, 2) + '\\n',",
+    "  fs.writeFileSync(SHELL_CAPTURE_FILE, (JSON.stringify(shell, null, 2) + '\\n',"],
 
   // ===== NO CONNECTED SERVICE IN A CAPTURE =====
   [PERSONAL, "a connected service named in a capture is a finding",
@@ -699,6 +708,43 @@ const MUTATIONS = [
   [ENVELOPE_RUN, "a missing fixture folder is a problem the run names",
     "  if (probe.skip) {\n",
     "  if (false) {\n"],
+  // ===== A ROW WITH NO VERDICT SHOWS WHAT ITS SUITE PRINTED =====
+  [SUITE_OUTPUT, "the end of a settled suite's output is kept",
+    "      lastOutput = { stdout: outputTail(stdout, { root: cwd }), stderr: outputTail(stderr, { root: cwd }) };\n",
+    ""],
+  [SUITE_OUTPUT, "a suite that starts clears what the one before it printed",
+    "  lastOutput = null;\n  const limit =",
+    "  const limit ="],
+  [SUITE_OUTPUT, "what is kept is cut to its end",
+    "  return end.length > chars ? fromLine(end.slice(-chars), true) : end;",
+    "  return end;"],
+  [SUITE_OUTPUT, "what is kept starts at a line",
+    "  return end.length > chars ? fromLine(end.slice(-chars), true) : end;",
+    "  return end.length > chars ? end.slice(-chars) : end;"],
+  [SUITE_OUTPUT, "a path outside the repository is taken out",
+    "  return out.replace(OUTSIDE_PATH, '<path>');",
+    "  return out;"],
+  [SUITE_OUTPUT, "a path inside the repository is made relative",
+    "  for (const r of [...new Set([path.resolve(root), path.resolve(real)])]",
+    "  for (const r of []"],
+  [SUITE_OUTPUT, "the repository's real spelling is the repository too",
+    "  for (const r of [...new Set([path.resolve(root), path.resolve(real)])]",
+    "  for (const r of [...new Set([path.resolve(root)])]"],
+  [SUITE_OUTPUT, "a file URL is read as the path it names",
+    "  let out = String(text).replace(/file:\\/\\//g, '');",
+    "  let out = String(text);"],
+  [SUITE_OUTPUT, "a run with rows of no verdict prints what their suites printed",
+    "  if (said) console.log(said);\n",
+    ""],
+  [SUITE_OUTPUT, "a row whose suite did not finish shows its output too",
+    "  const rows = (results || []).filter((r) => r && (r.unparsable || r.didNotFinish) && r.output);",
+    "  const rows = (results || []).filter((r) => r && r.unparsable && r.output);"],
+  [OUTPUT_HANDOFF, "a harness hands a row it could not read its suite's output",
+    "unparsable: true, output: suiteOutput(), red: [] }",
+    "unparsable: true, red: [] }"],
+  [OUTPUT_HANDOFF, "a harness hands a row that did not finish its suite's output",
+    "didNotFinish: red.didNotFinish, output: suiteOutput(), red: [] }",
+    "didNotFinish: red.didNotFinish, red: [] }"],
   [FIXTURE_NOTICE, "a skipped Code-mode suite says so in one line",
     "  if (!quiet && !toldOnce) {\n",
     "  if (false) {\n"],
@@ -754,13 +800,13 @@ const MUTATIONS = [
 
 const REPORTER = ['--test-reporter', 'spec'];
 
-function redTests(suite) {
+async function redTests(suite) {
   let out = '';
   let failed = false;
   try {
-    out = execFileSync('node', ['--test', ...REPORTER, suite],
-      { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    out = await runSuite('node', ['--test', ...REPORTER, suite], { cwd: ROOT });
   } catch (e) {
+    if (e.didNotFinish) return { didNotFinish: e.didNotFinish };
     failed = true;
     out = (e.stdout || '') + (e.stderr || '');
   }
@@ -783,7 +829,7 @@ function redTests(suite) {
   return names;
 }
 
-function run() {
+async function run() {
   // Derived from the rows, so a row naming a new target cannot crash the run
   // on a target nobody listed.
   const targets = targetsFromRows(MUTATIONS);
@@ -808,9 +854,10 @@ function run() {
         continue;
       }
       fs.writeFileSync(target.src, original.replace(guard, without));
-      const red = redTests(target.suite);
-      results.push(red && red.unparsable
-        ? { label, applied: true, unparsable: true, red: [] }
+      const red = await redTests(target.suite);
+      if (red && red.didNotFinish) results.push({ label, applied: true, didNotFinish: red.didNotFinish, output: suiteOutput(), red: [] });
+      else results.push(red && red.unparsable
+        ? { label, applied: true, unparsable: true, output: suiteOutput(), red: [] }
         : { label, applied: true, red });
       fs.writeFileSync(target.src, original);
     }
@@ -823,7 +870,13 @@ function run() {
 function report(results, markdown) {
   let failed = 0;
   const lines = [];
-  for (const { label, applied, red, ambiguous, unparsable } of results) {
+  for (const { label, applied, red, ambiguous, unparsable, didNotFinish } of results) {
+    if (didNotFinish) {
+      failed++;
+      const why = didNotFinishWhy(didNotFinish);
+      lines.push(markdown ? `| ${label} | **${why}** | |` : `${label}\n  ${why.toUpperCase()}`);
+      continue;
+    }
     if (unparsable) {
       failed++;
       const why = 'no verdict: the suite failed but its output could not be parsed, so nothing '
@@ -877,13 +930,14 @@ function requireSaneTempRoot() {
 if (require.main === module) {
   requireSaneTempRoot();
   if (process.argv.includes('--preflight-only')) process.exit(0);
-  const results = run();
-  const failed = report(results, process.argv.includes('--markdown'));
-  if (failed) {
-    console.error(`\n${failed} mutation(s) proved nothing. A guard no test notices is not guarded,`
-      + ' and a mutation that could break more than one place proves nothing about either.');
-    process.exit(exitCodeFor(failed, results));
-  }
+  run().then((results) => {
+    const failed = report(results, process.argv.includes('--markdown'));
+    if (failed) {
+      console.error(`\n${failed} mutation(s) proved nothing. A guard no test notices is not guarded,`
+        + ' and a mutation that could break more than one place proves nothing about either.');
+      process.exit(exitCodeFor(failed, results));
+    }
+  });
 }
 
 module.exports = { MUTATIONS, run };

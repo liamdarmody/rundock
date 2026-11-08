@@ -20,11 +20,11 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
 const os = require('node:os');
 const { preflight } = require('../helpers/temp-root.js');
 const {
   beginMutationRun, targetsFromRows, rowsForShard, exitCodeFor, NO_VERDICT,
+  runSuite, didNotFinishWhy, suiteOutput,
 } = require('./mutation-run.js');
 
 const ROOT = path.join(__dirname, '..', '..');
@@ -61,6 +61,15 @@ const READ_ONLY = { src: path.join(ROOT, 'public', 'read-only-shell.js'), suite:
 // where the tests that drive BOTH graders over one command live. A row here
 // belongs to the suite that actually notices it, not to the file's usual one.
 const READ_ONLY_CLIENT = { src: path.join(ROOT, 'public', 'read-only-shell.js'), suite: 'test/unit/permissions.test.js' };
+// The card grader's PowerShell branch, through the suite that asks the grader
+// and the shared reading about the same command.
+const PS_GRADER = { src: path.join(ROOT, 'public', 'permissions.js'), suite: 'test/unit/permissions.test.js' };
+// The grader again, through the real hook, server and client permission path.
+const PS_GRADER_FLOW = { src: path.join(ROOT, 'public', 'permissions.js'), suite: 'test/integration/powershell-read-approvals.test.js' };
+// The app's own message dispatch, between the real server's socket and the card.
+const PS_DISPATCH_FLOW = { src: path.join(ROOT, 'public', 'app.js'), suite: 'test/integration/powershell-read-approvals.test.js' };
+// The hook, run as its own process, against a home holding hook scripts.
+const PS_HOOK_REAL = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/powershell-reads-hook.test.js' };
 // The mode-persisted-before-scaffold ordering guard lives in the protocol
 // handler, not the scaffold layer, and is reachable only through the real
 // workspace-open path (the scaffold-layer tests call scaffoldWorkspace
@@ -966,16 +975,94 @@ const MUTATIONS = [
     "  var NO_TARGET_COMMANDS = ['cd'];",
     "  const NO_TARGET_COMMANDS = ['cd', 'pushd', 'popd', 'true', 'date', 'diff',\n"
     + "    'printenv', 'sort', 'uniq', 'which', 'whoami'];"],
-  // Drop the PowerShell half and Windows keeps the storm this release ended
-  // on macOS: every Get-ChildItem under the runtime home grades as a write.
+  // Bash has always read `dir` and `type` through the PowerShell list. Drop it
+  // and Bash's reading changes, which the PowerShell reading must not do.
   [READ_ONLY, 'the read-only registry answers for PowerShell as well as the Unix shells',
     '    if (READ_ONLY_POWERSHELL_COMMANDS.indexOf(first.toLowerCase()) >= 0) return true;',
+    ''],
+  // The names the list gained for the PowerShell reading. Read them in Bash
+  // and `get-date <path>` frees a crossing there that it never freed before.
+  [READ_ONLY, 'Bash does not read the PowerShell entries added for the PowerShell reading',
+    '    if (POWERSHELL_ONLY_READS.indexOf(first.toLowerCase()) >= 0) return false;\n',
     ''],
   // Compare case-sensitively and half the spellings agents actually write
   // (get-childitem, GCI) stop being reads, because PowerShell is not.
   [READ_ONLY, 'PowerShell commands are compared case-insensitively, because PowerShell is',
-    'READ_ONLY_POWERSHELL_COMMANDS.indexOf(first.toLowerCase()) >= 0',
-    'READ_ONLY_POWERSHELL_COMMANDS.indexOf(first) >= 0'],
+    'READ_ONLY_POWERSHELL_COMMANDS.indexOf(names[i].toLowerCase())',
+    'READ_ONLY_POWERSHELL_COMMANDS.indexOf(names[i])'],
+  // THE POWERSHELL READING, one check at a time. Each notices a way PowerShell
+  // text runs a second command, and each must turn the grader's suite red:
+  // on Windows the card it stops drawing is all there is under the command.
+  [READ_ONLY_CLIENT, 'PowerShell: a command in brackets is never a read',
+    "      if (c === '(') { open.push(')'); plain = false; word += c; continue; }",
+    "      if (c === '(') { open.push(')'); word += c; continue; }"],
+  [READ_ONLY_CLIENT, 'PowerShell: a script block is never a read',
+    "      if (c === '{') { open.push('}'); plain = false; word += c; continue; }",
+    "      if (c === '{') { open.push('}'); word += c; continue; }"],
+  [READ_ONLY_CLIENT, 'PowerShell: a subexpression inside double quotes is never a read',
+    "        else if (c === '$' && text[i + 1] === '(') plain = false;\n",
+    ''],
+  [READ_ONLY_CLIENT, 'PowerShell: a here-string, an array or splatting is never a read',
+    "      if (c === '@') { plain = false; word += c; continue; }",
+    "      if (c === '@') { word += c; continue; }"],
+  [READ_ONLY_CLIENT, 'PowerShell: a comment is never a read',
+    "      if (c === '#') { plain = false; word += c; continue; }",
+    "      if (c === '#') { word += c; continue; }"],
+  [READ_ONLY_CLIENT, 'PowerShell: the stop-parsing token is never a read',
+    "      if (c === '-' && text.substr(i, 3) === '--%') { plain = false; word += c; continue; }\n",
+    ''],
+  [READ_ONLY_CLIENT, 'PowerShell: a backtick escape is never a read',
+    '        plain = false; word += c + text[++i]; continue;',
+    '        word += c + text[++i]; continue;'],
+  [READ_ONLY_CLIENT, 'PowerShell: the call and background operators are never a read',
+    "        plain = false; word += c; continue;\n      }\n      if (c === '|')",
+    "        word += c; continue;\n      }\n      if (c === '|')"],
+  [READ_ONLY_CLIENT, 'PowerShell: a redirection to a file is never a read',
+    '        else plain = false;\n',
+    ''],
+  [READ_ONLY_CLIENT, 'PowerShell: a character outside plain ASCII that is not a letter is never a read',
+    '    var plain = !NOT_PLAIN.test(text);',
+    '    var plain = true;'],
+  [READ_ONLY_CLIENT, 'PowerShell: text the reading cannot read is never a read',
+    "    if (UNREADABLE.test(text)) throw new Error('a character this reading cannot read');\n",
+    ''],
+  [READ_ONLY_CLIENT, 'PowerShell: text longer than the reading follows is never a read',
+    "    if (text.length > POWERSHELL_READ_LIMIT) throw new Error('longer than this reading follows');\n",
+    ''],
+  [READ_ONLY_CLIENT, 'PowerShell: a failure inside the reading is never a read',
+    '    } catch (unreadable) {\n      return false;',
+    '    } catch (unreadable) {\n      return true;'],
+  [READ_ONLY_CLIENT, 'PowerShell: every part is judged, not only the first',
+    '      for (var i = 0; i < names.length; i++) {',
+    '      for (var i = 0; i < 1; i++) {'],
+  [READ_ONLY_CLIENT, 'PowerShell: no Get- wildcard, only the names on the list',
+    '        if (READ_ONLY_POWERSHELL_COMMANDS.indexOf(names[i].toLowerCase()) < 0) return false;',
+    '        if (READ_ONLY_POWERSHELL_COMMANDS.indexOf(names[i].toLowerCase()) < 0 && !/^get-[a-z]+$/i.test(names[i])) return false;'],
+  // The grader's own two: its low grade put back on the first word of the
+  // command, as it was, and its delete test put back to looking only after
+  // `;`, `&` or `|`.
+  [PS_GRADER, 'PowerShell grader: low only when the shared reading reads every part, never by the first word',
+    "      if (isReadOnlyPowerShellCommand(cmd)) return 'low';",
+    "      if (/^(Get-[A-Za-z]+|ls|dir|gci|gc|cat|type|pwd|gl|echo|Write-Output|Write-Host|Select-Object|Where-Object|Measure-Object|Test-Path|Resolve-Path|Split-Path|Format-Table|Format-List|Sort-Object)\\b/i.test(cmd)) return 'low';"],
+  [PS_GRADER_FLOW, 'PowerShell grader, end to end: a write or a send after a read reaches a card through the hook, the server and the client',
+    "      if (isReadOnlyPowerShellCommand(cmd)) return 'low';",
+    "      if (/^(Get-[A-Za-z]+|ls|dir|gci|gc|cat|type|pwd|gl|echo|Write-Output|Write-Host|Select-Object|Where-Object|Measure-Object|Test-Path|Resolve-Path|Split-Path|Format-Table|Format-List|Sort-Object)\\b/i.test(cmd)) return 'low';"],
+  // A request the server sends that the app never hands to the card code is
+  // neither allowed nor carded: the agent waits until the server gives up.
+  [PS_DISPATCH_FLOW, 'end to end, the app hands the server\'s permission request to the card code',
+    '      if (convoId) handlePermissionRequest(d, convoId);',
+    '      if (convoId) {}'],
+  [PS_GRADER, 'PowerShell grader: a delete is looked for inside brackets and blocks and after a new line',
+    '  var POWERSHELL_COMMAND_START = /(^|[;&|\\r\\n({]\\s*)/.source;',
+    '  var POWERSHELL_COMMAND_START = /(^|[;&|]\\s*)/.source;'],
+  // The hook reading a PowerShell command by the Bash rules again: in process,
+  // and through the real hook.
+  [HOOK, 'the hook reads a PowerShell command with the PowerShell reading',
+    "  const readsPart = opts.shellTool === 'PowerShell' ? isReadOnlyPowerShellCommand : isReadOnlyShellCommand;",
+    '  const readsPart = isReadOnlyShellCommand;'],
+  [PS_HOOK_REAL, 'the real hook frees a PowerShell crossing only on the PowerShell reading',
+    "  const readsPart = opts.shellTool === 'PowerShell' ? isReadOnlyPowerShellCommand : isReadOnlyShellCommand;",
+    '  const readsPart = isReadOnlyShellCommand;'],
   // Every segment of a compound command must qualify, not merely one of
   // them: drop `every` for `some` and `ls x && rm -rf x` reads as free
   // because its first segment alone is a read.
@@ -1557,8 +1644,11 @@ const MUTATIONS = [
     '  if (c.startsWith(foldCase(canonicalize(root, pmod), folds) + pmod.sep)\n',
     '  if ((c + pmod.sep).startsWith(foldCase(canonicalize(root, pmod), folds) + pmod.sep)\n'],
   [ANSWER_WRITES, 'Answer-file writes: a comparer or viewer naming one still asks as a change',
-    "    let reads = isReadOnlyShellCommand(rest.join(' ')) || READS_NAMED_FILES.has(verb);",
-    "    let reads = isReadOnlyShellCommand(rest.join(' '));"],
+    "    let reads = readsPart(rest.join(' ')) || READS_NAMED_FILES.has(verb);",
+    "    let reads = readsPart(rest.join(' '));"],
+  [ANSWER_WRITES, 'Answer-file writes: a PowerShell part is read with the PowerShell reading',
+    '      const w = answerFileWriteWords(text, posixText, readsPart);',
+    '      const w = answerFileWriteWords(text, posixText);'],
   [ANSWER_WRITES, 'Answer-file writes: a pager, sdiff or bat is taken as only reading',
     "const READS_NAMED_FILES = new Set(['jq', 'diff', 'cmp', 'comm', 'md5', 'md5sum', 'shasum', 'sha1sum', 'sha256sum', 'cksum', 'strings']);",
     "const READS_NAMED_FILES = new Set(['jq', 'diff', 'cmp', 'comm', 'sdiff', 'md5', 'md5sum', 'shasum', 'sha1sum', 'sha256sum', 'cksum', 'strings', 'less', 'more', 'bat']);"],
@@ -3836,7 +3926,7 @@ const MUTATIONS = [
 ];
 const REPORTER = ['--test-reporter', 'spec'];
 
-function redTests(suite) {
+async function redTests(suite) {
   let out = '';
   let failed = false;
   // A suite under test/electron/ is a run of the shipped desktop app, not a
@@ -3844,8 +3934,9 @@ function redTests(suite) {
   // expectation that did not hold, and exits 1 when there are any.
   if (String(suite || '').startsWith('test/electron/')) {
     try {
-      out = execFileSync('node', [suite], { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 240000 });
+      out = await runSuite('node', [suite], { cwd: ROOT });
     } catch (e) {
+      if (e.didNotFinish) return { didNotFinish: e.didNotFinish };
       failed = true;
       out = e.stdout || '';
     }
@@ -3856,9 +3947,9 @@ function redTests(suite) {
     return { unparsable: true };
   }
   try {
-    out = execFileSync('node', ['--test', ...REPORTER, suite],
-      { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    out = await runSuite('node', ['--test', ...REPORTER, suite], { cwd: ROOT });
   } catch (e) {
+    if (e.didNotFinish) return { didNotFinish: e.didNotFinish };
     failed = true;
     out = (e.stdout || '') + (e.stderr || '');
   }
@@ -3888,7 +3979,7 @@ function targetsFor(mutations) {
   return targetsFromRows(mutations);
 }
 
-function run() {
+async function run() {
   const targets = targetsFor(MUTATIONS);
   // The suites go to the envelope too: several of them build the Code-mode
   // fixture, and without its folder they skip and every row aimed at them
@@ -3917,9 +4008,10 @@ function run() {
         continue;
       }
       fs.writeFileSync(target.src, original.replace(guard, without));
-      const red = redTests(target.suite);
-      results.push(red && red.unparsable
-        ? { label, applied: true, unparsable: true, red: [] }
+      const red = await redTests(target.suite);
+      if (red && red.didNotFinish) results.push({ label, applied: true, didNotFinish: red.didNotFinish, output: suiteOutput(), red: [] });
+      else results.push(red && red.unparsable
+        ? { label, applied: true, unparsable: true, output: suiteOutput(), red: [] }
         : { label, applied: true, red });
       fs.writeFileSync(target.src, original);
     }
@@ -3932,7 +4024,13 @@ function run() {
 function report(results, markdown) {
   let failed = 0;
   const lines = [];
-  for (const { label, applied, red, ambiguous, unparsable } of results) {
+  for (const { label, applied, red, ambiguous, unparsable, didNotFinish } of results) {
+    if (didNotFinish) {
+      failed++;
+      const why = didNotFinishWhy(didNotFinish);
+      lines.push(markdown ? `| ${label} | **${why}** | |` : `${label}\n  ${why.toUpperCase()}`);
+      continue;
+    }
     if (unparsable) {
       failed++;
       const why = 'no verdict: the suite failed but its output could not be parsed, so nothing '
@@ -3986,13 +4084,14 @@ function requireSaneTempRoot() {
 if (require.main === module) {
   requireSaneTempRoot();
   if (process.argv.includes('--preflight-only')) process.exit(0);
-  const results = run();
-  const failed = report(results, process.argv.includes('--markdown'));
-  if (failed) {
-    console.error(`\n${failed} mutation(s) proved nothing. A guard no test notices is not guarded,`
-      + ' and a mutation that could break more than one place proves nothing about either.');
-    process.exit(exitCodeFor(failed, results));
-  }
+  run().then((results) => {
+    const failed = report(results, process.argv.includes('--markdown'));
+    if (failed) {
+      console.error(`\n${failed} mutation(s) proved nothing. A guard no test notices is not guarded,`
+        + ' and a mutation that could break more than one place proves nothing about either.');
+      process.exit(exitCodeFor(failed, results));
+    }
+  });
 }
 
 module.exports = { MUTATIONS, run, targetsFor };

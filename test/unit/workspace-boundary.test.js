@@ -951,6 +951,54 @@ describe('the agent\'s own folder: three tiers, one registry', () => {
     assert.strictEqual(secret.crossings[0].secret, true, 'a PowerShell read of the credential file still cards');
   });
 
+  test('a PowerShell command is read by the PowerShell reading, so a command inside a read is not freed', () => {
+    // The shared definition read PowerShell with the Bash rules, which take
+    // `( )` and a block as harmless. A removal inside a read's brackets was
+    // freed under the runtime's own home like the read it started with, and
+    // on Windows nothing sits under the hook.
+    const home = tmp('af-ps-inner-home-');
+    const hooks = path.join(home, '.claude', 'hooks');
+    fs.mkdirSync(hooks, { recursive: true });
+    const ws = tmp('af-ps-inner-ws-');
+    const script = path.join(hooks, 'x.ps1');
+    for (const command of [
+      `Get-Content (Remove-Item ${script})`,
+      `Get-ChildItem ${hooks} | Sort-Object { Remove-Item ${script} }`,
+      `Write-Output $(Set-Content ${script} x)`,
+    ]) {
+      const verdict = hook.classifyShellAccess('PowerShell', { command }, ws, [], home);
+      assert.ok(verdict && verdict.crossings.some(c => c.persistenceSurface && c.write), `freed: ${command}`);
+    }
+    // A plain read there is still free, Get-Date and Where-Object included.
+    for (const command of [`Get-Date; Get-ChildItem ${hooks}`, `Get-ChildItem ${hooks} | Where-Object Name -like '*.ps1'`]) {
+      assert.strictEqual(hook.classifyShellAccess('PowerShell', { command }, ws, [], home), null, command);
+    }
+  });
+
+  test("Bash's reading is unchanged by the PowerShell one: dir and type still read, and the names added for PowerShell do not", () => {
+    // Bash has always read the PowerShell list's names, `dir` and `type`
+    // among them, and the PowerShell reading changes nothing about how Bash
+    // is read. That list grew by `get-date` and `where-object` for the
+    // PowerShell reading, and in Bash they are not reads, as they were not.
+    const { isReadOnlyShellCommand } = require('../../public/read-only-shell.js');
+    for (const command of ['dir notes', 'type notes.md', 'DIR notes']) {
+      assert.strictEqual(isReadOnlyShellCommand(command), true, `Bash no longer reads: ${command}`);
+    }
+    for (const command of ['get-date notes.md', 'where-object notes.md', 'Get-Date notes.md', 'Where-Object notes.md']) {
+      assert.strictEqual(isReadOnlyShellCommand(command), false, `Bash now reads: ${command}`);
+    }
+    const home = tmp('af-bash-dir-home-');
+    const agents = path.join(home, '.claude', 'agents');
+    fs.mkdirSync(agents, { recursive: true });
+    const ws = tmp('af-bash-dir-ws-');
+    for (const command of [`dir ${agents}`, `type ${path.join(agents, 'x.md')}`]) {
+      assert.strictEqual(hook.classifyShellAccess('Bash', { command }, ws, [], home), null, command);
+    }
+    for (const command of [`get-date ${agents}`, `where-object ${path.join(agents, 'x.md')}`]) {
+      assert.notStrictEqual(hook.classifyShellAccess('Bash', { command }, ws, [], home), null, `freed in Bash: ${command}`);
+    }
+  });
+
   test('a bare & joins two commands, so the second is graded on its own and cannot ride the first', () => {
     // A single `&` backgrounds what precedes it and runs what follows, so it
     // joins two commands exactly as `&&` does. The segmenter split on `&&`,

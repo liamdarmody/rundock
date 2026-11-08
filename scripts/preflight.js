@@ -58,6 +58,10 @@ const REGISTRY_SUITES = [
   // error handler where it started, so a write to one that has stopped is
   // logged and never ends the server.
   'test/unit/child-stdin-inventory.test.js',
+  // Every mutation harness starts a row's suite through the bounded runner and
+  // reports a row whose suite did not finish as its own outcome, so a harness
+  // added with a runner of its own fails here.
+  'test/unit/mutation-harness-runner.test.js',
   // No test keeps a child it starts out of coverage by deleting the key,
   // which Node puts back: each sets it to an empty value.
   'test/unit/child-coverage-switch.test.js',
@@ -273,6 +277,7 @@ const CHECKS = [
 const PINNED_RUNTIMES = [
   { name: 'stream grammar', capture: 'scripts/stream-truth/captured-grammar.json', recapture: 'npm run stream:truth -- --capture' },
   { name: 'transcript', capture: 'scripts/transcript-truth/captured-transcript.json', recapture: 'npm run transcript:truth -- --capture' },
+  { name: 'shell call', capture: 'scripts/transcript-truth/captured-shell-call.json', recapture: 'npm run transcript:truth -- --capture' },
 ];
 
 function installedRuntimeVersion() {
