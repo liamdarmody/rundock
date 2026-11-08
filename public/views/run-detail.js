@@ -78,7 +78,9 @@ let drawnLinks = null;
 // files under that folder, which for a workspace opened through a symbolic
 // link is a different spelling from the one the shell holds. Replaced by each
 // record that arrives; used only while the shell holds the workspace it names.
-let resolvedRoot = null;
+// Either may be missing or malformed: the matcher passes over a spelling that
+// is not a non-empty string.
+let resolvedRoot = { workspace: null, real: null };
 
 // The clock, taken from the global so a test can supply one. Undeclared
 // identifiers are safe under typeof, so this works when the module is required
@@ -116,8 +118,7 @@ function fileTree() {
 // the folder it resolves to.
 function rootSpellings() {
   const root = workspaceRoot();
-  if (!root || !resolvedRoot || resolvedRoot.workspace !== root || resolvedRoot.real === root) return root;
-  return [root, resolvedRoot.real];
+  return root && resolvedRoot.workspace === root ? [root, resolvedRoot.real] : root;
 }
 
 /** The tree path a recorded path opens, or null where the name stays plain. */
@@ -381,10 +382,7 @@ function runArrived(reply) {
   // `null` is kept as `null`: it means no record, which is a state of its own
   // and is not a run that changed nothing.
   record = reply.run === undefined ? null : reply.run;
-  resolvedRoot = typeof reply.workspace === 'string' && reply.workspace
-    && typeof reply.workspaceRealPath === 'string' && reply.workspaceRealPath
-    ? { workspace: reply.workspace, real: reply.workspaceRealPath }
-    : null;
+  resolvedRoot = { workspace: reply.workspace, real: reply.workspaceRealPath };
   // A PENDING STOP SURVIVES A RECORD THAT STILL SAYS THE RUN IS GOING.
   // cancelRun only sends the signal; the ending arrives later on its own
   // clock (see runDetailStop), so a record that still reads as stoppable is

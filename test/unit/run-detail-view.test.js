@@ -748,6 +748,11 @@ describe('a changed file opens from the record', () => {
       assert.strictEqual(names(doc)[0].tagName, 'SPAN', `${JSON.stringify(reply)}: the name stays plain`);
       dom.window.close();
     }
+    // With no workspace known to the shell, a reply naming none is not a
+    // match for it: the resolved folder alone links nothing.
+    const { doc, dom } = drawLinked(RESOLVED, { root: null, reply: { workspace: null, workspaceRealPath: '/private/w' } });
+    assert.strictEqual(names(doc)[0].tagName, 'SPAN', 'with no root known, the name stays plain');
+    dom.window.close();
   });
 
   test("a name and path holding quotes and markup render as their own characters and open the tree's path", () => {
