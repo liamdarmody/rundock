@@ -292,8 +292,9 @@ describe('the OS sandbox block is unchanged', () => {
     const block = scaffold.sandboxSettings('/w/ws', 'darwin', '/Users/someone', ['/var/folders/zz/T', '/private/var/folders/zz/T'], ['/Users/someone/Projects'], 'code');
     // Recorded from v0.15.0 with these exact inputs. The one change since is
     // entries APPENDED to denyWrite: the runtimes' credential files, the
-    // user-level state file, and the paths the runtime acts on outside the
-    // sandbox, which narrows what the block permits and widens nothing.
+    // user-level state file, the paths the runtime acts on outside the
+    // sandbox, and the shell startup files, which narrows what the block
+    // permits and widens nothing.
     assert.deepStrictEqual(block, {
       enabled: false,
       filesystem: {
@@ -311,6 +312,11 @@ describe('the OS sandbox block is unchanged', () => {
           '/Users/someone/.claude-local-oauth.json', '/Users/someone/.claude-custom-oauth.json',
           '/w/ws/.claude/settings.json', '/w/ws/.mcp.json', '/w/ws/.rundock/permission-hook.sh', '/w/ws/.rundock/mcp-secrets.json',
           '/Users/someone/.rundock-console',
+          '/Users/someone/.zshenv', '/Users/someone/.zprofile', '/Users/someone/.zshrc', '/Users/someone/.zlogin', '/Users/someone/.zlogout',
+          '/Users/someone/.bash_profile', '/Users/someone/.bash_login', '/Users/someone/.profile', '/Users/someone/.bashrc', '/Users/someone/.bash_logout',
+          '/Users/someone/.config/fish/config.fish', '/Users/someone/.config/fish/conf.d',
+          // Rundock's record of them, and a ZDOTDIR's own when this process has one.
+          ...hook.shellStartupEntries('/Users/someone').slice(12).map(e => e.path),
         ],
       },
     }, 'the development paths are a card rule, not a widening of what the operating system allows');
