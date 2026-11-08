@@ -24,7 +24,7 @@
 // never exercised. The partition below closes it. Every tool the reader names
 // must be either witnessed by the capture, and checked against it, or listed
 // as unwitnessed with the reason, and a tool that is neither fails this file.
-const { FILE_TOOLS, KNOWN_BLOCK_TYPES, DELEGATION_TOOLS, READ_ENTRY_TYPES } = require('../../lib/runtime/session-transcript.js');
+const { FILE_TOOLS, KNOWN_BLOCK_TYPES, DELEGATION_TOOLS, SHELL_TOOLS, READ_ENTRY_TYPES } = require('../../lib/runtime/session-transcript.js');
 
 // Tools the committed capture really contains, each checked below against the
 // shapes it produced. Adding a tool to the reader means adding it here and
@@ -37,6 +37,15 @@ const WITNESSED_TOOLS = new Set(['Write', 'Edit', 'NotebookEdit']);
 // shape reports drift rather than being guessed at.
 const UNWITNESSED_TOOLS = {
   MultiEdit: 'the installed runtime does not offer this tool at all (it is absent from the tool list a run announces), so nothing can produce one. It is carried because the permission hook matcher includes it, and because a runtime that brings it back should not silently drop its writes.',
+};
+
+// THE SAME PARTITION FOR THE SHELL TOOLS. A run's record says it used the
+// shell only when a call carries one of these names, so a name the capture
+// never witnessed is a record that can quietly stop saying so: the list then
+// reads as complete for a run that wrote through the shell.
+const WITNESSED_SHELL_TOOLS = new Set(['Bash']);
+const UNWITNESSED_SHELL_TOOLS = {
+  PowerShell: 'the capture is taken on macOS, where the runtime offers no PowerShell tool (it is absent from the tool list a run announces), so nothing there can produce one. It is carried because the permission hook matchers name it for Windows, where a run that used it must still be reported as one that used the shell.',
 };
 
 function parseLines(lines) {
@@ -63,6 +72,17 @@ function checkDeclarationsAgree() {
   }
   for (const tool of Object.keys(UNWITNESSED_TOOLS)) {
     if (!FILE_TOOLS[tool]) failures.push(`${tool} is recorded as unwitnessed but the reader no longer handles it`);
+  }
+  for (const tool of SHELL_TOOLS) {
+    if (WITNESSED_SHELL_TOOLS.has(tool)) continue;
+    if (UNWITNESSED_SHELL_TOOLS[tool]) continue;
+    failures.push(`the reader counts ${tool} as a shell tool and this file says nothing about it: add it to WITNESSED_SHELL_TOOLS and extend the capture prompt to exercise it, or record why no capture can witness it`);
+  }
+  for (const tool of WITNESSED_SHELL_TOOLS) {
+    if (!SHELL_TOOLS.has(tool)) failures.push(`${tool} is claimed as a witnessed shell tool but the reader no longer counts it`);
+  }
+  for (const tool of Object.keys(UNWITNESSED_SHELL_TOOLS)) {
+    if (!SHELL_TOOLS.has(tool)) failures.push(`${tool} is recorded as an unwitnessed shell tool but the reader no longer counts it`);
   }
   return failures;
 }
@@ -169,6 +189,24 @@ function checkTranscriptInvariants(lines) {
     // exactly the mistake this capture caught.
     say(answered.some(r => typeof r.entry.toolUseResult[FILE_TOOLS[tool].result] === 'string'),
       `${tool} outcomes in the capture do not name the file in ${FILE_TOOLS[tool].result}, which is where the reader looks`);
+  }
+
+  // Every shell tool claimed as witnessed, called, and answered both ways. The
+  // reader counts the ASK, whatever the answer, because an error cannot tell a
+  // refused command from one that wrote a file and then failed. That rests on
+  // a failed call being the same tool_use answered with is_error, so a capture
+  // whose calls all succeeded leaves the claim unwitnessed.
+  for (const tool of WITNESSED_SHELL_TOOLS) {
+    const used = uses.filter(u => u.block.name === tool).map(u => u.block.id);
+    if (used.length === 0) {
+      failures.push(`${tool} is claimed as witnessed and the capture contains no ${tool} call: extend the capture prompt or stop claiming it`);
+      continue;
+    }
+    const answered = results.filter(r => used.includes(r.block.tool_use_id));
+    say(answered.some(r => r.block.is_error !== true),
+      `no ${tool} call in the capture succeeded, so the shape of one that ran is unwitnessed`);
+    say(answered.some(r => r.block.is_error === true),
+      `no ${tool} call in the capture was answered with is_error, so nothing witnesses that a failed shell call is the same ask the reader counts`);
   }
 
   return failures;
@@ -280,6 +318,23 @@ function checkCaptureAnswers(captured) {
   }
   say(sawDelegatedWrite, `no subagent transcript asks to write ${EXPECTED_DELEGATED}: the delegation did not do what the capture prompt asked, so nothing here is evidence`);
   say(sawOutcomeWithoutPayload, `the delegated write's outcome now carries a payload: a subagent's changes may be readable after all, and the reader refuses to list them on the grounds that they are not`);
+
+  // The reader scans a subagent's transcript for shell use as it scans the
+  // session's, so a subagent's shell call has to be in the capture too.
+  const subShell = subagents.some(sub => {
+    try {
+      return parseLines(sub.lines).some(e => e && READ_ENTRY_TYPES.has(e.type)
+        && blocksOf(e).some(b => b.type === 'tool_use' && SHELL_TOOLS.has(b.name)));
+    } catch (e) { return false; }
+  });
+  say(subShell, 'no shell call in any subagent transcript: the reader reports a subagent\'s shell use for the run, and nothing witnesses the call it looks for');
+
+  // The file the session's shell call wrote, which no file tool may name: it
+  // is the case the record's shell field exists for.
+  const namesShellFile = (value) => typeof value === 'string' && value.endsWith(`/${EXPECTED_SHELL_WRITTEN}`);
+  say(!entries.some(entry => blocksOf(entry).some(b => b.type === 'tool_use' && FILE_TOOLS[b.name]
+    && b.input && namesShellFile(b.input[FILE_TOOLS[b.name].input]))),
+  `a file tool in the session's transcript names ${EXPECTED_SHELL_WRITTEN}: the capture no longer shows a file that only the shell wrote`);
   return failures;
 }
 
@@ -301,7 +356,12 @@ const EXPECTED_EXTRACTION = [
 // The write the run attempted and did not make. Never a file it changed.
 const EXPECTED_ABSENT = 'capture-blocked.txt';
 
+// The file the run wrote through the shell. It is on disk after the run and
+// never on the list, which is why the record says the shell was used.
+const EXPECTED_SHELL_WRITTEN = 'shell.md';
+
 module.exports = {
   checkTranscriptInvariants, checkDeclarationsAgree, checkCaptureAnswers, withoutDelegation,
-  EXPECTED_EXTRACTION, EXPECTED_ABSENT, EXPECTED_DELEGATED, WITNESSED_TOOLS, UNWITNESSED_TOOLS,
+  EXPECTED_EXTRACTION, EXPECTED_ABSENT, EXPECTED_DELEGATED, EXPECTED_SHELL_WRITTEN,
+  WITNESSED_TOOLS, UNWITNESSED_TOOLS, WITNESSED_SHELL_TOOLS, UNWITNESSED_SHELL_TOOLS,
 };

@@ -134,7 +134,9 @@ function sidechainWrite(sessionId, { file, tool = 'Write', at = '2026-08-22T19:1
 
 /**
  * A subagent's shell call, in the subagent's own transcript: the ask, and an
- * outcome that is a sentence with no payload, as sidechainWrite's is.
+ * outcome that is a sentence with no payload, as sidechainWrite's is. Held to
+ * the subagent's shell call in the committed capture by
+ * test/unit/session-transcript-capture.test.js.
  */
 function sidechainShell(sessionId, { command, at = '2026-08-22T19:15:21.000Z' } = {}) {
   const id = toolId();
@@ -159,10 +161,13 @@ function sidechainSay(sessionId, text, at = '2026-08-22T19:15:22.000Z') {
  * A shell command and what came back, as the stub `claude` records one. The
  * session reader lists no file from it and notes that the shell was used; the
  * tests that read the refusal want the CLI's own words
- * (test/fixtures/claude-cli-notes-mode.json). The ask's shape matches a
- * transcript Claude Code 2.1.319 wrote for a Bash call and a PowerShell call:
+ * (test/fixtures/claude-cli-notes-mode.json). The Bash call is held to the
+ * ones in the committed capture by test/unit/session-transcript-capture.test.js:
  * an assistant entry whose tool_use block names the tool and carries
- * `{ command, description }`.
+ * `{ command, description }`, answered by an object on success and, on a
+ * failure, by an error string with `is_error` on the result block. A
+ * PowerShell call is built the same way, which no capture on macOS can
+ * witness (see UNWITNESSED_SHELL_TOOLS in scripts/transcript-truth/truth.js).
  */
 function shellTool(sessionId, { command, refusal = null, tool = 'Bash', at = '2026-08-22T19:15:09.000Z' } = {}) {
   const id = toolId();
@@ -171,8 +176,8 @@ function shellTool(sessionId, { command, refusal = null, tool = 'Bash', at = '20
     message: { role: 'assistant', content: [{ type: 'tool_use', id, name: tool, input: { command, description: 'shell' } }] },
   }) + line({
     type: 'user', sessionId, timestamp: at,
-    toolUseResult: refusal ? `Error: ${refusal}` : { stdout: '', stderr: '', interrupted: false },
-    message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, ...(refusal ? { is_error: true } : {}), content: refusal || '' }] },
+    toolUseResult: refusal ? `Error: ${refusal}` : { stdout: '', stderr: '', interrupted: false, isImage: false, noOutputExpected: false },
+    message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, ...(refusal ? { is_error: true } : {}), content: refusal || `(${tool} completed with no output)` }] },
   });
 }
 

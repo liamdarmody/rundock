@@ -82,6 +82,8 @@ describe('the fixture builder', () => {
       fx.completed(sid, { tool: 'Edit', file: '/w/edited.md', outcome: 'update' }),
       fx.completed(sid, { tool: 'NotebookEdit', file: '/w/book.ipynb', outcome: 'update' }),
       fx.completed(sid, { file: '/System/refused.md', outcome: 'error' }),
+      fx.shellTool(sid, { command: 'echo seven > shell.md' }),
+      fx.shellTool(sid, { command: 'cat missing.txt', refusal: 'Exit code 1' }),
       fx.unanswered(sid, { file: '/w/in-flight.md' }),
     ].join('').split('\n').filter(Boolean);
 

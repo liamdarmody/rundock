@@ -12,11 +12,12 @@
 // and was taken from a run driven the way the scheduler drives one: print
 // mode, permissions skipped, output discarded, session named by the caller.
 // It contains a file created, a file edited, a file overwritten, a write that
-// was refused, two writes issued in parallel from a single message, a web
-// search, and work delegated to a subagent. The last two are there because
-// they were open questions the packet could not answer either way, and the
-// only thing that settles a question about somebody else's format is an
-// artefact from their software.
+// was refused, two writes issued in parallel from a single message, a shell
+// command that wrote a file, a shell command that failed, a web search, and
+// work delegated to a subagent that wrote a file and used the shell. The web
+// search and the delegation are there because they were open questions the
+// packet could not answer either way, and the only thing that settles a
+// question about somebody else's format is an artefact from their software.
 //
 // This half runs in continuous integration, which has no runtime to spend.
 // The half that checks the capture is still CURRENT (the installed CLI's
@@ -29,17 +30,40 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 
-const { readSessionTranscript, FILE_TOOLS, KNOWN_BLOCK_TYPES } = require('../../lib/runtime/session-transcript.js');
-const { checkTranscriptInvariants, checkDeclarationsAgree, checkCaptureAnswers, withoutDelegation, EXPECTED_EXTRACTION, EXPECTED_ABSENT, EXPECTED_DELEGATED, WITNESSED_TOOLS, UNWITNESSED_TOOLS } = require('../../scripts/transcript-truth/truth.js');
+const { readSessionTranscript, FILE_TOOLS, KNOWN_BLOCK_TYPES, SHELL_TOOLS, READ_ENTRY_TYPES } = require('../../lib/runtime/session-transcript.js');
+const { checkTranscriptInvariants, checkDeclarationsAgree, checkCaptureAnswers, withoutDelegation, EXPECTED_EXTRACTION, EXPECTED_ABSENT, EXPECTED_DELEGATED, EXPECTED_SHELL_WRITTEN, WITNESSED_TOOLS, UNWITNESSED_TOOLS, WITNESSED_SHELL_TOOLS, UNWITNESSED_SHELL_TOOLS } = require('../../scripts/transcript-truth/truth.js');
+const fx = require('../fixtures/session-transcript.js');
 
 const captured = JSON.parse(fs.readFileSync(
   path.join(__dirname, '..', '..', 'scripts', 'transcript-truth', 'captured-transcript.json'), 'utf-8'));
 
-// The content blocks of one transcript entry, or none.
+// The content blocks of one transcript entry, or of one line, or none.
 const blocksOf = (entry) => {
   const content = ((entry && entry.message) || {}).content;
   return Array.isArray(content) ? content.filter(b => b && typeof b === 'object') : [];
 };
+const contentOf = (line) => blocksOf(JSON.parse(line));
+const toolUsesIn = (lines) => lines.flatMap(contentOf).filter(b => b.type === 'tool_use');
+
+// The lines with every ask `drop` picks taken out, and the answer each got.
+// The runtime writes one block per line, so a line is the ask or the answer.
+function withoutAsks(lines, drop) {
+  const ids = new Set();
+  return lines.filter(line => {
+    const blocks = contentOf(line);
+    if (blocks.some(b => b.type === 'tool_use' && drop(b) && ids.add(b.id))) return false;
+    return !blocks.some(b => b.type === 'tool_result' && ids.has(b.tool_use_id));
+  });
+}
+
+// A run whose only shell call was its subagent's: the parent's own shell
+// calls taken out, and the subagent's file write taken out so that its
+// transcript asks to change nothing and the run's list stays known.
+const SUBAGENT_SHELL_SESSION = 'e0000000-0000-4000-8000-0000000051e1';
+const subagentShellOnly = () => ({
+  lines: withoutAsks(captured.lines, b => SHELL_TOOLS.has(b.name)),
+  subagents: (captured.subagents || []).map(sub => ({ ...sub, lines: withoutAsks(sub.lines, b => !!FILE_TOOLS[b.name]) })),
+});
 
 let home = null;
 let realHome = null;
@@ -71,6 +95,12 @@ before(() => {
     fs.writeFileSync(path.join(sidechains, sub.name), sub.lines.join('\n') + '\n');
   }
   fs.writeFileSync(path.join(dir, `${NO_DELEGATION_SESSION}.jsonl`), withoutDelegation(captured.lines).join('\n') + '\n');
+  const only = subagentShellOnly();
+  fs.writeFileSync(path.join(dir, `${SUBAGENT_SHELL_SESSION}.jsonl`), only.lines.join('\n') + '\n');
+  fs.mkdirSync(path.join(dir, SUBAGENT_SHELL_SESSION, 'subagents'), { recursive: true });
+  for (const sub of only.subagents) {
+    fs.writeFileSync(path.join(dir, SUBAGENT_SHELL_SESSION, 'subagents', sub.name), sub.lines.join('\n') + '\n');
+  }
   process.env.HOME = home;
 });
 
@@ -164,9 +194,12 @@ describe('a run that used a web tool', () => {
   // types in a transcript containing one are the four the reader already
   // knows. The concern was reasonable and it is unfounded, and the capture is
   // what stops it having to be re-argued.
+  // In the entries the reader reads. The copies of each request a transcript
+  // also holds carry blocks describing the tools on offer, which the reader
+  // passes over with the entry ('the entries the reader passes over' below).
   test('produces no content block the reader does not know', () => {
-    const uses = captured.lines.flatMap(l => {
-      const content = (JSON.parse(l).message || {}).content;
+    const uses = captured.lines.map(l => JSON.parse(l)).filter(e => e && READ_ENTRY_TYPES.has(e.type)).flatMap(e => {
+      const content = (e.message || {}).content;
       return Array.isArray(content) ? content : [];
     });
     assert.ok(uses.some(b => b && b.type === 'tool_use' && b.name === 'WebSearch'),
@@ -204,6 +237,71 @@ describe('a run that delegated to a subagent', () => {
     assert.strictEqual(result.reason, 'delegated', 'and it names where the rest of the answer went');
     assert.strictEqual(result.files, null, 'with no list at all');
     assert.ok(result.activity, 'while what the run was last seen doing survives');
+  });
+});
+
+describe('a run that used the shell', () => {
+  // THE QUESTION: a file written through the shell has no path argument to
+  // read, so it never reaches the list, and the record says the shell was
+  // used so the list can be read as possibly short. Every other test of that
+  // is written against shell calls this repository built; these hold the
+  // reader and those builders to the calls a real run made.
+  const shapeOf = (block) => ({ type: block.type, name: block.name, input: Object.keys(block.input || {}).sort() });
+  const builtLines = (text) => text.split('\n').filter(Boolean).map(l => JSON.parse(l));
+  const realShell = () => toolUsesIn(captured.lines).filter(b => SHELL_TOOLS.has(b.name));
+  const answerTo = (lines, id) => lines.map(l => JSON.parse(l))
+    .find(entry => blocksOf(entry).some(b => b.type === 'tool_result' && b.tool_use_id === id));
+
+  test('is reported as one, from the capture', () => {
+    const result = readSessionTranscript(NO_DELEGATION_SESSION);
+    assert.strictEqual(result.status, 'known', 'the real transcript is one this reader understands');
+    assert.strictEqual(result.usedShell, true, 'and the shell calls in it are reported as shell use');
+  });
+
+  test('the file the shell wrote is on disk and not on the list, which is why the record says so', () => {
+    assert.strictEqual(captured.shellWrite && captured.shellWrite.file, EXPECTED_SHELL_WRITTEN,
+      'the capture names the file its shell call wrote');
+    assert.strictEqual(captured.shellWrite.onDisk, true, 'and the run really did write it');
+    const result = readSessionTranscript(NO_DELEGATION_SESSION);
+    assert.ok(!result.files.some(f => path.basename(f.path) === EXPECTED_SHELL_WRITTEN),
+      'a file the shell wrote never reaches the list');
+  });
+
+  test('the hand-written shell call has the type, name and input fields of the captured one', () => {
+    const real = realShell();
+    assert.ok(real.length >= 2, 'the capture holds the shell calls it was asked to make');
+    for (const block of real) {
+      const [ask] = builtLines(fx.shellTool('fixture', { command: 'true', tool: block.name }));
+      assert.deepStrictEqual(shapeOf(ask.message.content[0]), shapeOf(block),
+        `the ${block.name} call the fixture builds is shaped as the real one is`);
+    }
+  });
+
+  test('a shell call that failed is answered with is_error, as the fixture builds one', () => {
+    const failed = realShell().map(b => answerTo(captured.lines, b.id))
+      .filter(entry => entry && blocksOf(entry).some(b => b.is_error === true));
+    assert.ok(failed.length > 0, 'the capture holds a shell call that failed');
+    const [, answer] = builtLines(fx.shellTool('fixture', { command: 'false', refusal: 'Exit code 1' }));
+    assert.strictEqual(answer.message.content[0].is_error, true, 'and the fixture answers a failed call the same way');
+    assert.strictEqual(typeof answer.toolUseResult, typeof failed[0].toolUseResult,
+      'with the outcome payload in the same form');
+  });
+
+  test('a subagent\'s shell call has the type, name and input fields the sidechain fixture builds', () => {
+    const real = (captured.subagents || []).flatMap(sub => toolUsesIn(sub.lines)).filter(b => SHELL_TOOLS.has(b.name));
+    assert.ok(real.length > 0, 'the subagent in the capture used the shell');
+    const [ask, answer] = builtLines(fx.sidechainShell('fixture', { command: 'true' }));
+    for (const block of real) assert.deepStrictEqual(shapeOf(ask.message.content[0]), shapeOf(block));
+    const realAnswer = (captured.subagents || []).map(sub => answerTo(sub.lines, real[0].id)).find(Boolean);
+    assert.ok(realAnswer, 'the subagent\'s shell call was answered');
+    assert.strictEqual(typeof answer.toolUseResult, typeof realAnswer.toolUseResult,
+      'and its answer carries a payload exactly when the fixture\'s does');
+  });
+
+  test('a subagent\'s shell use is reported for the run, when the subagent changed no file', () => {
+    const result = readSessionTranscript(SUBAGENT_SHELL_SESSION);
+    assert.strictEqual(result.status, 'known', 'a subagent that asked to change no file leaves the run\'s list known');
+    assert.strictEqual(result.usedShell, true, 'and its shell call is shell use by the run');
   });
 });
 
@@ -352,11 +450,71 @@ describe('the declarations the reader owns', () => {
       'and says nothing about the capture that does exercise it');
   });
 
+  // The same rule for the shell tools. A run's record says it used the shell
+  // only when a call carries one of these names, so a name nothing witnesses
+  // is a record that can quietly stop saying so.
+  test('every shell tool the reader counts is either witnessed by the capture or recorded as unwitnessed', () => {
+    assert.deepStrictEqual(checkDeclarationsAgree(), [], 'the reader and the capture harness agree today');
+    assert.ok(WITNESSED_SHELL_TOOLS.size > 0, 'the capture witnesses a shell tool');
+    for (const tool of WITNESSED_SHELL_TOOLS) assert.ok(SHELL_TOOLS.has(tool), `${tool} is claimed as witnessed and is a shell tool the reader counts`);
+    for (const [tool, reason] of Object.entries(UNWITNESSED_SHELL_TOOLS)) {
+      assert.ok(SHELL_TOOLS.has(tool), `${tool} is recorded as unwitnessed and is still a shell tool the reader counts`);
+      assert.ok(reason.length > 40, `${tool} carries a reason somebody can weigh, not a label`);
+    }
+  });
+
+  test('a shell tool added to the reader alone fails the agreement', () => {
+    SHELL_TOOLS.add('Zsh');
+    try {
+      const failures = checkDeclarationsAgree();
+      assert.strictEqual(failures.length, 1, 'the new shell tool is complained about, exactly once');
+      assert.match(failures[0], /Zsh/, 'and it is named');
+      assert.match(failures[0], /witness/i, 'with what has to happen about it');
+    } finally {
+      SHELL_TOOLS.delete('Zsh');
+    }
+    assert.deepStrictEqual(checkDeclarationsAgree(), [], 'and the complaint goes away when the tool does');
+  });
+
+  test('a witnessed shell tool missing from the capture is complained about by name', () => {
+    for (const tool of WITNESSED_SHELL_TOOLS) {
+      const stripped = withoutAsks(captured.lines, b => b.name === tool);
+      assert.ok(stripped.length < captured.lines.length, `the capture really did contain the ${tool} calls that were removed`);
+      assert.ok(checkTranscriptInvariants(stripped).some(f => new RegExp(`contains no ${tool} call`).test(f)),
+        'the harness says the capture no longer contains the call');
+    }
+  });
+
+  test('a capture whose shell calls all succeeded is complained about', () => {
+    const failedIds = new Set();
+    for (const line of captured.lines) {
+      for (const b of contentOf(line)) if (b.type === 'tool_result' && b.is_error === true) failedIds.add(b.tool_use_id);
+    }
+    const stripped = withoutAsks(captured.lines, b => SHELL_TOOLS.has(b.name) && failedIds.has(b.id));
+    assert.ok(stripped.length < captured.lines.length, 'the capture really did contain a shell call that failed');
+    assert.ok(checkTranscriptInvariants(stripped).some(f => /answered with is_error/.test(f)),
+      'a failed shell call is what shows an error answer still counts as shell use');
+  });
+
+  test('a capture whose subagent never used the shell is complained about', () => {
+    const subagents = (captured.subagents || []).map(sub => ({ ...sub, lines: withoutAsks(sub.lines, b => SHELL_TOOLS.has(b.name)) }));
+    assert.ok(checkCaptureAnswers({ ...captured, subagents }).some(f => /no shell call in any subagent/.test(f)),
+      'the reader scans a subagent\'s transcript for shell use, and nothing else witnesses what it scans');
+  });
+
   // THE ENTRIES THE READER PASSES OVER. A transcript holds entries beside
-  // the conversation's messages, which may carry blocks the reader does not
-  // know and several answers in one entry. The reader reads only the
-  // messages, so the checks hold the messages, and a further check makes sure
-  // nothing the reader needs is recorded only in an entry it passes over.
+  // the conversation's messages, and on the captured runtime one of them (a
+  // copy of a request as it was sent) carries a block type the reader does not
+  // know and several answers in one entry. The reader reads only the messages,
+  // so the checks hold the messages, and a further check makes sure nothing
+  // the reader needs is recorded only in an entry it passes over.
+  test('the capture holds entries the reader passes over, one with a block it does not know', () => {
+    const passed = captured.lines.map(l => JSON.parse(l)).filter(e => e && !READ_ENTRY_TYPES.has(e.type));
+    assert.ok(passed.some(e => blocksOf(e).some(b => !KNOWN_BLOCK_TYPES.has(b.type))),
+      'an entry the reader passes over carries a block type it does not know, so scoping the checks is witnessed');
+    assert.deepStrictEqual(checkTranscriptInvariants(captured.lines), [], 'and the capture satisfies every check on the messages');
+  });
+
   test('an answer recorded only in an entry the reader passes over is complained about', () => {
     let moved = false;
     const lines = captured.lines.map(line => {
