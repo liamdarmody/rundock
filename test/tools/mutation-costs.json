@@ -1434,7 +1434,7 @@
       "Startup files: a check that throws ends the polling": 1.9,
       "Startup files: the kept-change notice says only that the file decides what runs": 2.2,
       "Startup files: a bare name in code is not read for one": 23.4,
-      "Startup files: a link put in place of a folder is removed as a file": 2.1,
+      "Answer-file guard: a folder in the way is unlinked like a file": 1.2,
       "Startup files: a folder swapped for a link is left as the link": 2.1,
       "Startup files: a put-back writes through whatever a link leads to now": 2.0,
       "Startup files: under test, the account's own startup files are watched like any": 2.1,
