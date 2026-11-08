@@ -55,7 +55,7 @@ const os = require('node:os');
 const { preflight } = require('../helpers/temp-root.js');
 const {
   beginMutationRun, targetsFromRows, rowsForShard, exitCodeFor, NO_VERDICT,
-  runSuite, didNotFinishWhy,
+  runSuite, didNotFinishWhy, suiteOutput,
 } = require('./mutation-run.js');
 
 const ROOT = path.join(__dirname, '..', '..');
@@ -190,9 +190,9 @@ async function run() {
       }
       fs.writeFileSync(target.src, original.replace(guard, without));
       const red = await redTests(target.suite);
-      if (red && red.didNotFinish) results.push({ label, applied: true, matches, suite: target.suite, didNotFinish: red.didNotFinish, red: [] });
+      if (red && red.didNotFinish) results.push({ label, applied: true, matches, suite: target.suite, didNotFinish: red.didNotFinish, output: suiteOutput(), red: [] });
       else results.push(red && red.unparsable
-        ? { label, applied: true, matches, suite: target.suite, unparsable: true, red: [] }
+        ? { label, applied: true, matches, suite: target.suite, unparsable: true, output: suiteOutput(), red: [] }
         : { label, applied: true, matches, suite: target.suite, red });
       fs.writeFileSync(target.src, original);
     }

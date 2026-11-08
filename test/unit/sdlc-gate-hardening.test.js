@@ -523,9 +523,9 @@ describe('a mutation result that cannot be parsed is a refusal, not a crash', ()
     const src = read(file);
     const m = src.match(/results\.push\(red && red\.unparsable[\s\S]*?\);/);
     assert.ok(m, `${file}: the run() push site for a parser refusal could not be cut out; update this extraction with the new shape`);
-    const factory = new Function('red', 'label', 'matches', 'target',
+    const factory = new Function('red', 'label', 'matches', 'target', 'suiteOutput',
       `const rows = []; const results = { push: (r) => rows.push(r) }; ${m[0]}; return rows[0];`);
-    return factory({ unparsable: true }, 'probe-mutation', 1, { suite: 'stub-suite' });
+    return factory({ unparsable: true }, 'probe-mutation', 1, { suite: 'stub-suite' }, () => null);
   }
 
   for (const file of HARNESSES) {

@@ -29,7 +29,7 @@ if (config.spawnThrows) {
 }
 
 const {
-  beginMutationRun, targetsFromRows, rowsForShard, exitCodeFor, runSuite, didNotFinishWhy,
+  beginMutationRun, targetsFromRows, rowsForShard, exitCodeFor, runSuite, didNotFinishWhy, suiteOutput,
 } = require('../../tools/mutation-run.js');
 
 const SRC = path.join(root, 'src.js');
@@ -75,8 +75,8 @@ async function run() {
       if (matches !== 1) { results.push({ label, applied: false, ambiguous: matches > 1 ? matches : 0, red: [] }); continue; }
       fs.writeFileSync(target.src, original.replace(guard, without));
       const red = await redTests(target.suite);
-      if (red && red.didNotFinish) results.push({ label, applied: true, didNotFinish: red.didNotFinish, red: [] });
-      else results.push(red && red.unparsable ? { label, applied: true, unparsable: true, red: [] } : { label, applied: true, red });
+      if (red && red.didNotFinish) results.push({ label, applied: true, didNotFinish: red.didNotFinish, output: suiteOutput(), red: [] });
+      else results.push(red && red.unparsable ? { label, applied: true, unparsable: true, output: suiteOutput(), red: [] } : { label, applied: true, red });
       fs.writeFileSync(target.src, original);
     }
   } finally {

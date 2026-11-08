@@ -580,10 +580,35 @@ function rowsForShard(rows, argv = process.argv) {
  */
 function exitCodeFor(failed, results) {
   if (!failed) return 0;
+  // Every harness ends through here, so this is where a row with no verdict
+  // gets the end of what its suite printed: once, for all of them.
+  const said = noVerdictOutput(results);
+  if (said) console.log(said);
   // A row whose suite did not finish is no verdict too: a hang is not a test
   // noticing, and it is not a guard nobody watches either.
   const unreadable = (results || []).filter((r) => r && (r.unparsable || r.didNotFinish)).length;
   return unreadable >= failed ? NO_VERDICT : 1;
+}
+
+/**
+ * The end of what each row with no verdict had its suite print, by the row's
+ * label, or '' when no such row carries any.
+ *
+ * WITHOUT IT, A NO-VERDICT ROW SAYS ONLY THAT. Its suite failed with output
+ * the harness could not read, or ran out of time, and what the suite printed
+ * went with the row, so the cause was a guess until the row was run again; on
+ * CI a rerun was the only way to see it at all. The `output` a row carries is
+ * the runner's (see suiteOutput), already cut to its end and with paths
+ * outside the repository taken out.
+ */
+function noVerdictOutput(results) {
+  const rows = (results || []).filter((r) => r && (r.unparsable || r.didNotFinish) && r.output);
+  if (!rows.length) return '';
+  const stream = (name, text) => (text
+    ? `  ${name}:\n${text.split('\n').map((l) => `    ${l}`).join('\n')}`
+    : `  ${name}: (nothing)`);
+  return '\nThe end of what each suite with no verdict printed, with paths outside the repository taken out:\n'
+    + rows.map((r) => `\n${r.label}\n${stream('stdout', r.output.stdout)}\n${stream('stderr', r.output.stderr)}`).join('\n');
 }
 
 // ---------------------------------------------------------------------------
@@ -635,7 +660,72 @@ const SUITE_DRAIN_MS = 250;
 // without stopping until its limit.
 const SUITE_OUTPUT_KEPT = 8 * 1024 * 1024;
 
+// How much of the end of each stream a row with no verdict shows: enough for
+// an error and the lines that led to it, little enough for a CI log.
+const SUITE_TAIL_CHARS = 400;
+
 const POSIX = process.platform !== 'win32';
+
+// A path outside the repository, as a suite prints one: from a slash, or a
+// drive letter, to the next space or quote. One that follows a letter, a
+// colon or a slash is inside a word or a web address and is left alone.
+const OUTSIDE_PATH = /(?<![\w.~:/@%+-])\/(?:[\w.@%+~-]+\/)+[\w.@%+~-]*|\b[A-Za-z]:\\(?:[^\\\s'"`()<>|]+\\)+[^\\\s'"`()<>|]*/g;
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * `text` as a CI log may show it: the repository's own paths made relative
+ * to it, under either spelling it is reached by, and every other absolute
+ * path replaced with `<path>`.
+ *
+ * THESE LINES ARE PRINTED WHERE ANYONE CAN READ THEM, so what a suite says
+ * about the machine it ran on, a home folder or a temp folder, stays out. A
+ * path is taken to end at a space, so one with a space in it keeps what
+ * follows the space.
+ */
+function scrubPaths(text, root = ROOT) {
+  // A file URL is a path: without its scheme it is read as one below.
+  let out = String(text).replace(/file:\/\//g, '');
+  let real = root;
+  try { real = fs.realpathSync(root); } catch { /* no such folder: its own spelling only */ }
+  for (const r of [...new Set([path.resolve(root), path.resolve(real)])].sort((a, b) => b.length - a.length)) {
+    out = out.replace(new RegExp(`${escapeRe(r)}(?:${escapeRe(path.sep)}|(?![\\w.@%+~/-]))`, 'g'),
+      (m) => (m === r ? '.' : ''));
+  }
+  return out.replace(OUTSIDE_PATH, '<path>');
+}
+
+/**
+ * The end of a suite's stream as a row with no verdict shows it: at most
+ * SUITE_TAIL_CHARS characters, starting at a line, scrubbed (see scrubPaths).
+ *
+ * Scrubbed before it is cut, from a generous end that starts at a line, so a
+ * path is never halved where it can no longer be recognised.
+ */
+function outputTail(text, { root = ROOT, chars = SUITE_TAIL_CHARS } = {}) {
+  const fromLine = (s, cut) => {
+    if (!cut) return s;
+    const nl = s.indexOf('\n');
+    if (nl !== -1 && nl < s.length - 1) return s.slice(nl + 1);
+    const space = s.search(/\s/);
+    return space === -1 ? s : s.slice(space + 1);
+  };
+  const raw = String(text || '');
+  const wide = chars * 8;
+  let end = fromLine(raw.length > wide ? raw.slice(-wide) : raw, raw.length > wide);
+  end = scrubPaths(end, root).replace(/\s+$/, '');
+  return end.length > chars ? fromLine(end.slice(-chars), true) : end;
+}
+
+// WHAT THE SUITE RUN LAST PRINTED, the end of each stream, set as it settles
+// and cleared as the next one starts, so a row is never shown another row's
+// output. A harness takes it for a row with no verdict (suiteOutput) right
+// after the row's suite returns.
+let lastOutput = null;
+
+/** The end of each stream of the suite run last, or null while one runs. */
+function suiteOutput() {
+  return lastOutput;
+}
 
 /** The limit for a suite, from the arguments that start it. */
 function suiteLimitSeconds(args) {
@@ -824,6 +914,9 @@ function didNotFinishWhy(seconds) {
  * A suite that runs past its limit returns within the limit plus the grace,
  * since the ending does not wait for the kernel to drop what it killed.
  *
+ * Once it settles, the end of each of its streams is what suiteOutput
+ * returns, for a harness to hand a row with no verdict.
+ *
  * `limitMs` and `graceMs` exist for this module's own tests, which cannot wait
  * minutes for a limit. No harness passes them: a row's limit is the runner's.
  *
@@ -833,6 +926,9 @@ function didNotFinishWhy(seconds) {
  * @returns {Promise<string>}
  */
 function runSuite(command, args, { cwd = ROOT, env = process.env, limitMs, graceMs = SUITE_END_GRACE_MS } = {}) {
+  // Cleared before anything can fail, so a suite that never starts shows no
+  // output rather than the row before it's.
+  lastOutput = null;
   const limit = limitMs === undefined ? suiteLimitSeconds(args) * 1000 : limitMs;
   const seconds = limit / 1000;
   return new Promise((resolve, reject) => {
@@ -868,6 +964,7 @@ function runSuite(command, args, { cwd = ROOT, env = process.env, limitMs, grace
       kid.stdout.destroy();
       kid.stderr.destroy();
       if (stopping) return;
+      lastOutput = { stdout: outputTail(stdout, { root: cwd }), stderr: outputTail(stderr, { root: cwd }) };
       outcome();
     };
     const fail = (message, fields) => Object.assign(new Error(message), { stdout, stderr, ...fields });
@@ -899,4 +996,5 @@ module.exports = {
   beginMutationRun, inspect, markerPath, markerDir, readMarkers, recoverAbandoned, MARKER, MARKER_DIR, ROOT,
   targetsFromRows, rowsForShard, exitCodeFor, suiteFile, NO_VERDICT, unstaged, unstagedRefusal, fixtureRootProblem,
   runSuite, didNotFinishWhy, SUITE_LIMIT_SECONDS, ELECTRON_SUITE_LIMIT_SECONDS, SUITE_END_GRACE_MS,
+  suiteOutput, outputTail, noVerdictOutput, SUITE_TAIL_CHARS,
 };

@@ -8,7 +8,7 @@
 // went back to starting its own suite, with a synchronous call and no limit,
 // would bring back the run that waited six hours with a mutation in the
 // source, and nothing else would notice until a row hung. So every harness is
-// read here, and held to four things:
+// read here, and held to five things:
 //
 // - it starts no process itself and loads no child_process;
 // - it takes runSuite from the runner and awaits it, and sets no limit of its
@@ -16,11 +16,14 @@
 // - its run waits for each row, so a row's result is never a pending promise;
 // - a row whose suite did not finish is carried from its redTests, through
 //   the push site in its run, to its report as "did not finish", by its own
-//   code, never as caught and never as survived.
+//   code, never as caught and never as survived;
+// - a row with no verdict takes the end of its suite's output from the runner
+//   at its push site, so the run can end by printing it.
 //
-// The last is driven rather than read: each harness's own redTests, push site
-// and report are cut out and run against a runner that says the suite did not
-// finish, the way the parsing tests in sdlc-gate-hardening drive a refusal.
+// The last two are driven rather than read: each harness's own redTests, push
+// sites and report are cut out and run against a runner that says the suite
+// did not finish, the way the parsing tests in sdlc-gate-hardening drive a
+// refusal.
 
 const { test, describe } = require('node:test');
 const assert = require('node:assert');
@@ -217,9 +220,9 @@ describe('every mutation harness starts a row\'s suite through the runner', () =
 
       // Its run's push site, given that result.
       const push = cut(name, src, /if \(red && red\.didNotFinish\) results\.push\([\s\S]*?\);/, 'the push site for a suite that did not finish');
-      const row = new Function('red', 'label', 'matches', 'target',
+      const row = new Function('red', 'label', 'matches', 'target', 'suiteOutput',
         `const rows = []; const results = { push: (r) => rows.push(r) }; ${push}; return rows[0];`)(
-        { didNotFinish: LIMIT_SECONDS }, 'probe-mutation', 1, { suite: 'stub-suite' });
+        { didNotFinish: LIMIT_SECONDS }, 'probe-mutation', 1, { suite: 'stub-suite' }, () => null);
       assert.strictEqual(row && row.label, 'probe-mutation', `${name}: run() dropped the label of a row that did not finish`);
       assert.strictEqual(row.didNotFinish, LIMIT_SECONDS, `${name}: run() dropped the limit the row ran out of`);
       assert.ok(!row.unparsable && (!row.red || row.red.length === 0), `${name}: a row that did not finish is recorded as something else`);
@@ -240,6 +243,26 @@ describe('every mutation harness starts a row\'s suite through the runner', () =
         assert.doesNotMatch(out, /nothing turned red|could not be parsed/i, `${name}: the ${shape} report reads the row as survived or unreadable`);
         assert.ok(failures >= 1, `${name}: a row that did not finish must count as a failure`);
       }
+    });
+
+    // A ROW WITH NO VERDICT CARRIES ITS SUITE'S OUTPUT. The runner keeps the
+    // end of what the suite it ran last printed, and prints it for each such
+    // row as the run ends; a push site that does not take it at the row
+    // leaves the log saying "no verdict" with nothing about why.
+    test(`${name} hands a row with no verdict the end of its suite's output, at both push sites`, () => {
+      const src = fs.readFileSync(path.join(TOOLS, name), 'utf8');
+      assert.ok(/\{[^}]*\bsuiteOutput\b[^}]*\}\s*=\s*require\('\.\/mutation-run\.js'\)/.test(src), `${name} does not take suiteOutput from the runner`);
+      const kept = { stdout: 'what the suite printed', stderr: 'and why it stopped' };
+      const construct = (re, what, red) => new Function('red', 'label', 'matches', 'target', 'suiteOutput',
+        `const rows = []; const results = { push: (r) => rows.push(r) }; ${cut(name, src, re, what)}; return rows[0];`)(
+        red, 'probe-mutation', 1, { suite: 'stub-suite' }, () => kept);
+      const unreadable = construct(/results\.push\(red && red\.unparsable[\s\S]*?\);/, 'the push site for a parser refusal', { unparsable: true });
+      assert.ok(unreadable && unreadable.unparsable, `${name}: the push site no longer records a parser refusal`);
+      assert.strictEqual(unreadable.output, kept, `${name}: a row whose output could not be read does not carry the end of that output`);
+      const unfinished = construct(/if \(red && red\.didNotFinish\) results\.push\([\s\S]*?\);/, 'the push site for a suite that did not finish', { didNotFinish: LIMIT_SECONDS });
+      assert.strictEqual(unfinished.output, kept, `${name}: a row whose suite did not finish does not carry the end of its output`);
+      const caught = construct(/results\.push\(red && red\.unparsable[\s\S]*?\);/, 'the push site for a parser refusal', ['the guard holds']);
+      assert.strictEqual(caught.output, undefined, `${name}: a row with a verdict carries no output`);
     });
   }
 });
