@@ -227,6 +227,9 @@ const MUTATIONS = [
   [TRANSCRIPT_CAPTURE, "the transcript capture is scrubbed before it is written",
     "  fs.writeFileSync(CAPTURE_FILE, scrubCapture(JSON.stringify({",
     "  fs.writeFileSync(CAPTURE_FILE, (JSON.stringify({"],
+  [TRANSCRIPT_CAPTURE, "the shell call's capture is scrubbed before it is written",
+    "  fs.writeFileSync(SHELL_CAPTURE_FILE, scrubCapture(JSON.stringify(shell, null, 2) + '\\n',",
+    "  fs.writeFileSync(SHELL_CAPTURE_FILE, (JSON.stringify(shell, null, 2) + '\\n',"],
 
   // ===== NO CONNECTED SERVICE IN A CAPTURE =====
   [PERSONAL, "a connected service named in a capture is a finding",
