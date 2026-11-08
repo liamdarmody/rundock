@@ -126,13 +126,16 @@ const PLUS_ICON = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" s
  * by anything that can create a file in .claude/agents, which includes an
  * agent writing a RUNDOCK:SAVE_AGENT block. The id now travels as data and
  * the handler reads it back, which is the shape that does not care.
+ *
+ * A REAL BUTTON, so Enter and Space press it with no key handler of its own.
+ * Everything inside it is a span, since a button holds phrasing content only.
  */
 function scopeRowHtml(row, mark) {
-  return `<div class="scope-item${row.active ? ' active' : ''}" data-scope="${escA(row.id)}"`
-    + ` role="button" tabindex="0" onclick="setRoutinesScope(this.dataset.scope)">`
+  return `<button type="button" class="scope-item${row.active ? ' active' : ''}" data-scope="${escA(row.id)}"`
+    + ` onclick="setRoutinesScope(this.dataset.scope)">`
     + mark
     + `<span class="scope-name">${esc(row.name)}</span>`
-    + `<span class="scope-count">${row.count}</span></div>`;
+    + `<span class="scope-count">${row.count}</span></button>`;
 }
 
 function panelHtml() {
@@ -148,11 +151,11 @@ function panelHtml() {
     + ` aria-label="${esc(m.COPY.add)}" onclick="routinesPanelAdd()">${PLUS_ICON}</button></div>`;
 
   h += '<div class="routines-scope-list">';
-  h += scopeRowHtml(list.all, `<div class="scope-all-icon">${ALL_ICON}</div>`);
+  h += scopeRowHtml(list.all, `<span class="scope-all-icon">${ALL_ICON}</span>`);
   if (list.owners.length) h += '<div class="scope-divider"></div>';
   for (const row of list.owners) {
     h += scopeRowHtml(row,
-      `<div class="avatar sm" style="background:${agentColour(row.colour, 'var(--idle)')}">${esc(row.icon)}</div>`);
+      `<span class="avatar sm" style="background:${agentColour(row.colour, 'var(--idle)')}">${esc(row.icon)}</span>`);
   }
   h += '</div>';
 
@@ -165,7 +168,18 @@ function panelHtml() {
 function renderRoutinesPanel() {
   const panel = document.getElementById('sidebar-routines');
   if (!panel || !scopeModel()) return;
+  // THE REDRAW REPLACES THE ROW THE KEYBOARD IS ON, so pressing a scope would
+  // drop the focus to the top of the page. The row for the same scope takes it
+  // back. Found by reading each row's data-scope, never by a selector built
+  // from the id, which is a filename anything can choose. Only a focus that was
+  // on a scope row moves: a redraw from elsewhere leaves the focus alone.
+  const had = /** @type {HTMLElement | null} */ (document.activeElement);
+  const kept = had && panel.contains(had) ? had.dataset.scope : undefined;
   panel.innerHTML = panelHtml();
+  if (kept === undefined) return;
+  const rows = /** @type {HTMLElement[]} */ (Array.from(panel.querySelectorAll('.scope-item')));
+  const again = rows.find((el) => el.dataset.scope === kept) || rows.find((el) => el.classList.contains('active'));
+  if (again) again.focus();
 }
 
 /**

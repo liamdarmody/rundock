@@ -184,7 +184,7 @@ const MUTATIONS = [
     "      headline: 'This run ran.',"],
   // The same ruling where a reader actually resolves it.
   [STYLES, 'a run whose ending never ran is not painted as a failure',
-    '.rd-chip.unwitnessed { color: var(--idle); font-weight: 500; }',
+    '.rd-chip.unwitnessed { color: var(--text-2-strong); font-weight: 500; }',
     '.rd-chip.unwitnessed { color: var(--danger-text); font-weight: 600; }'],
   // A run with no record on file is a third absence, and it has its own
   // sentence: blaming a reason code nobody can read describes a record that
