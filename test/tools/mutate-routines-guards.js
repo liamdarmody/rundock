@@ -582,6 +582,11 @@ const MUTATIONS = [
   [SCHEDULER_MONTHLY, 'the owed line ignores the consent moment',
     '  const consentAt = routine ? approvalStore.approvedAt(getWorkspace(), routine) : null;\n',
     '  const consentAt = null;\n'],
+  // Any recorded hold waiving the slot cancels the month's run for a routine
+  // held and back before its day, and every later month's with it.
+  [SCHEDULER_MONTHLY, 'a hold waives only a slot at or before it',
+    "  if (entry && typeof entry.heldAt === 'string' && slot <= new Date(entry.heldAt)) return false;\n",
+    "  if (entry && typeof entry.heldAt === 'string') return false;\n"],
 
   // ===== THE THIRD CONTROL ON THE ROW =====
   //
