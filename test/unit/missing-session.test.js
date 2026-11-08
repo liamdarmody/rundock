@@ -5,7 +5,7 @@ const { test, describe } = require('node:test');
 const assert = require('node:assert');
 const {
   REFUSAL, refusedResume, resumedSessionOf, mayBeRefusal, noteExpired, isExpired, withoutResume,
-  noteUnstartedWrite, takeUnstartedWrites, holdFreshCatchUp, withFreshCatchUp, startingFresh, notResumedNotice,
+  noteUnstartedWrite, takeUnstartedWrites, noteAnswered, holdFreshCatchUp, withFreshCatchUp, startingFresh, notResumedNotice,
 } = require('../../lib/runtime/missing-session.js');
 
 const resumed = (id) => ({ spawnargs: ['claude', '--model', 'm', '--resume', id, '--agent', 'writer'] });
@@ -66,10 +66,16 @@ describe('what was written into a process before it started its session', () => 
     assert.deepStrictEqual(takeUnstartedWrites(entry), [], 'nothing is handed over twice');
   });
 
-  test('is not kept once the session has started, when no refusal can follow', () => {
-    const entry = { sessionId: 'sess-live' };
+  test('is kept past an init, and not once a turn has answered, when no refusal can follow', () => {
+    // An init can come before a refusal: nothing promises Claude Code's order.
+    // Only a turn's result proves the session ran and read what it was sent.
+    const entry = { sessionId: 'sess-started' };
+    noteUnstartedWrite(entry, 'written after the init');
+    assert.deepStrictEqual(entry.unstartedWrites, ['written after the init'], 'an init alone does not end the keeping');
+    noteAnswered(entry);
+    assert.deepStrictEqual(takeUnstartedWrites(entry), [], 'the first result spends what was kept');
     noteUnstartedWrite(entry, 'read by the live process');
-    assert.deepStrictEqual(takeUnstartedWrites(entry), []);
+    assert.deepStrictEqual(takeUnstartedWrites(entry), [], 'and nothing is kept after it, so nothing is sent twice');
   });
 
   test('a missing entry keeps and hands over nothing', () => {
