@@ -319,6 +319,106 @@ test('a slot that passed while the routine was switched off is not owed once it 
   });
 });
 
+// A HOLD WAIVES ONLY THE SLOTS AT OR BEFORE IT. The two tests above end the
+// hold after the slot, which a rule that waived the slot for any recorded hold
+// would pass too, and that rule cancels the month's run for a routine paused
+// for a week before its day, and every later month's with it. So the hold ends
+// here before the slot, with Rundock open throughout, and once after October's
+// slot with November's still to come.
+for (const [how, held] of [['paused', { paused: true }], ['switched off', { enabled: false }]]) {
+  test(`a monthly routine ${how} and back before its slot runs once at the slot`, async (t) => {
+    resetTimeline();
+    write('ledger', DAY_15);
+    await withTicks(t, async () => {
+      await tickAt(t, at(10, 1, 8));
+      write('ledger', DAY_15, held);
+      await tickAt(t, at(10, 3, 8));
+      await tickAt(t, at(10, 7, 8));
+      write('ledger', DAY_15);
+      await tickAt(t, at(10, 10, 8));
+      assert.strictEqual(row('ledger').nextRun, iso(at(10, 15, 9)), "back before its slot, the row names this month's");
+      await tickAt(t, at(10, 14, 23, 59));
+      assert.strictEqual(runs('ledger'), 0, 'not before its slot');
+
+      await tickAt(t, at(10, 15, 9, 0));
+      assert.strictEqual(runs('ledger'), 1, 'it runs at the slot');
+      await tickAt(t, at(10, 15, 9, 1));
+      await tickAt(t, at(10, 31, 23, 59));
+      assert.strictEqual(runs('ledger'), 1, 'exactly once that month');
+      assert.deepStrictEqual(missed('ledger'), []);
+    });
+  });
+}
+
+test("a monthly routine held through October's slot runs at November's", async (t) => {
+  resetTimeline();
+  write('ledger', DAY_15);
+  await withTicks(t, async () => {
+    await tickAt(t, at(10, 1, 8));
+    write('ledger', DAY_15, { paused: true });
+    await tickAt(t, at(10, 14, 8));
+    await tickAt(t, at(10, 15, 10));
+    write('ledger', DAY_15);
+    await tickAt(t, at(10, 16, 8));
+    await tickAt(t, at(10, 31, 23, 59));
+    assert.strictEqual(runs('ledger'), 0, "October's slot passed while it was held");
+
+    await tickAt(t, at(11, 14, 8));
+    assert.strictEqual(row('ledger').nextRun, iso(at(11, 15, 9)), "the row names November's slot");
+    await tickAt(t, at(11, 15, 9, 0));
+    assert.strictEqual(runs('ledger'), 1, "and November's slot fires: the October hold does not reach it");
+  });
+});
+
+/** Put `slug` in service on `schedule` too, beside the routine write() made live. */
+function alsoLive(slug, schedule) {
+  fs.writeFileSync(path.join(h.workspaceDir, '.claude', 'agents', `${slug}.md`), fileFor(slug, schedule));
+  invalidateAgentCache();
+}
+
+// THE HOLD IS KEPT ON DISK. The tick writes it into routine-slots.json and the
+// loader reads it back, so a restart between the hold and the resume does not
+// turn a slot the hold waived back into one owed. A monthly routine kept in
+// service beside it, never held, carries no heldAt key at all: the shape its
+// entry had before holds were recorded.
+test('a hold seen before a restart still waives the slot after it, read back from the slot file', async (t) => {
+  resetTimeline();
+  const NEVER_HELD = 'on day 28 of every month at 23:00';
+  const slotsFile = path.join(h.workspaceDir, '.rundock', 'routine-slots.json');
+  write('ledger', DAY_15);
+  alsoLive('breaker', NEVER_HELD);
+  await withTicks(t, async () => {
+    await tickAt(t, at(10, 1, 8));
+    write('ledger', DAY_15, { paused: true });
+    alsoLive('breaker', NEVER_HELD);
+    await tickAt(t, at(10, 14, 8));
+    await tickAt(t, at(10, 15, 10));
+
+    const onDisk = JSON.parse(fs.readFileSync(slotsFile, 'utf8')).routines;
+    assert.strictEqual(onDisk[KEYS.ledger].heldAt, iso(at(10, 15, 10)), 'the file holds the last instant a tick saw it held');
+    assert.strictEqual('heldAt' in onDisk[KEYS.breaker], false, 'and an entry for a routine never held has no heldAt key');
+
+    // A restart with nothing left in memory, so whatever comes back came from
+    // the files: loadRoutineState reads the run state, and the slot store
+    // through loadRoutineSlots.
+    h.internal.stopScheduler();
+    for (const key of Object.values(KEYS)) delete h.internal.routineState[key];
+    h.internal.routineSlots.observedAt = null;
+    for (const k of Object.keys(h.internal.routineSlots.routines)) delete h.internal.routineSlots.routines[k];
+    h.internal.loadRoutineState();
+    assert.strictEqual(entry('ledger').heldAt, iso(at(10, 15, 10)), 'the hold is read back');
+    assert.strictEqual('heldAt' in entry('breaker'), false, 'and nothing is invented for the routine never held');
+
+    write('ledger', DAY_15);
+    alsoLive('breaker', NEVER_HELD);
+    h.internal.startScheduler();
+    await tickAt(t, at(10, 16, 8));
+    await tickAt(t, at(10, 31, 23, 59));
+    assert.strictEqual(runs('ledger'), 0, 'resumed after the restart, it does not run that month');
+    assert.strictEqual(row('ledger').nextRun, iso(at(11, 15, 9)), 'and the row names 15 November');
+  });
+});
+
 test('a slot that passed before the plan was approved is not owed', async (t) => {
   resetTimeline();
   write('ledger', DAY_15);

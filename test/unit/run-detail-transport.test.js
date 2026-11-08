@@ -36,17 +36,29 @@ function socket() {
   return { sent, send: (raw) => sent.push(JSON.parse(raw)) };
 }
 
+// A record is read only under the name it is written under, a run's uuid, so
+// every id here is one.
+const RUN = {
+  known: '7d1e0c52-0000-4000-8000-000000000001',
+  empty: '7d1e0c52-0000-4000-8000-000000000002',
+  unknown: '7d1e0c52-0000-4000-8000-000000000003',
+  older: '7d1e0c52-0000-4000-8000-000000000004',
+  newer: '7d1e0c52-0000-4000-8000-000000000005',
+  other: '7d1e0c52-0000-4000-8000-000000000006',
+  extra: '7d1e0c52-0000-4000-8000-000000000007',
+};
+
 const KNOWN = {
-  id: 'run-known', agent: 'default', routine: 'Hello World', sessionId: 's1',
+  id: RUN.known, agent: 'default', routine: 'Hello World', sessionId: 's1',
   status: 'succeeded', startedAt: '2026-08-24T00:30:32.036Z', endedAt: '2026-08-24T00:30:45.199Z',
   durationMs: 13163, error: null,
   files: [{ path: '/w/a.md', tool: 'Write', change: 'created', at: '2026-08-24T00:30:43.206Z', source: 'transcript' }],
   filesStatus: 'known', filesReason: null,
 };
 
-const CHANGED_NOTHING = { ...KNOWN, id: 'run-empty', files: [], filesStatus: 'known', filesReason: null };
+const CHANGED_NOTHING = { ...KNOWN, id: RUN.empty, files: [], filesStatus: 'known', filesReason: null };
 
-const UNKNOWN = { ...KNOWN, id: 'run-unknown', files: null, filesStatus: 'unknown', filesReason: 'no-transcript' };
+const UNKNOWN = { ...KNOWN, id: RUN.unknown, files: null, filesStatus: 'unknown', filesReason: 'no-transcript' };
 
 /**
  * Drive the handler against an enumeration THIS TEST states, in a stated order.
@@ -80,16 +92,16 @@ describe('a run record reaches the client', () => {
   test('a run asked for by id comes back', () => {
     withRecords([KNOWN, UNKNOWN], () => {
       const ws = socket();
-      runs.handleGetRun({}, ws, { type: 'get_run', runId: 'run-known' });
+      runs.handleGetRun({}, ws, { type: 'get_run', runId: RUN.known });
       assert.strictEqual(ws.sent.length, 1);
       assert.strictEqual(ws.sent[0].type, 'run');
-      assert.strictEqual(ws.sent[0].run.id, 'run-known');
+      assert.strictEqual(ws.sent[0].run.id, RUN.known);
     });
   });
 
   test('the newest run of a routine comes back, in whichever order the reader hands them over', () => {
-    const older = { ...KNOWN, id: 'run-older', startedAt: '2026-08-20T00:00:00.000Z' };
-    const newer = { ...KNOWN, id: 'run-newer', startedAt: '2026-08-24T00:00:00.000Z' };
+    const older = { ...KNOWN, id: RUN.older, startedAt: '2026-08-20T00:00:00.000Z' };
+    const newer = { ...KNOWN, id: RUN.newer, startedAt: '2026-08-24T00:00:00.000Z' };
     // BOTH ORDERS ARE ACTUALLY DIFFERENT, which is the point. An earlier
     // version of this test wrote the two files in two orders and asserted the
     // same thing twice: the names were identical in both arrangements, so both
@@ -99,7 +111,7 @@ describe('a run record reaches the client', () => {
       withReader(order, () => {
         const ws = socket();
         runs.handleGetRun({}, ws, { type: 'get_run', agentId: 'default', routine: 'Hello World' });
-        assert.strictEqual(ws.sent[0].run.id, 'run-newer',
+        assert.strictEqual(ws.sent[0].run.id, RUN.newer,
           `the first record the reader handed over was taken rather than the newest, `
           + `with the reader ordered ${order.map(r => r.id).join(' then ')}`);
       });
@@ -115,17 +127,17 @@ describe('a run record reaches the client', () => {
     // leaves the screen waiting forever.
     withRecords([KNOWN], (dir) => {
       const runsDir = path.join(dir, '.rundock', 'runs');
-      fs.writeFileSync(path.join(runsDir, 'a-null.json'), 'null');
-      fs.writeFileSync(path.join(runsDir, 'b-half-written.json'), '{"id": "trunc"');
+      fs.writeFileSync(path.join(runsDir, '7d1e0c52-0000-4000-8000-0000000000a1.json'), 'null');
+      fs.writeFileSync(path.join(runsDir, '7d1e0c52-0000-4000-8000-0000000000b2.json'), '{"id": "trunc"');
       // A later start than the real record, so a resolver that saw it would
       // return it and the id below would be undefined.
-      fs.writeFileSync(path.join(runsDir, 'c-no-id.json'), JSON.stringify(
+      fs.writeFileSync(path.join(runsDir, '7d1e0c52-0000-4000-8000-0000000000c3.json'), JSON.stringify(
         { agent: 'default', routine: 'Hello World', startedAt: '2027-01-01T00:00:00.000Z' }));
       const ws = socket();
       runs.handleGetRun({}, ws, { type: 'get_run', agentId: 'default', routine: 'Hello World' });
       assert.strictEqual(ws.sent.length, 1,
         'the handler threw before replying, so the screen would wait forever');
-      assert.strictEqual(ws.sent[0].run.id, 'run-known');
+      assert.strictEqual(ws.sent[0].run.id, RUN.known);
     });
   });
 
@@ -139,7 +151,7 @@ describe('a run record reaches the client', () => {
   });
 
   test('the run belongs to the routine that was asked about', () => {
-    const other = { ...KNOWN, id: 'run-other', agent: 'piper', routine: 'Something Else' };
+    const other = { ...KNOWN, id: RUN.other, agent: 'piper', routine: 'Something Else' };
     withRecords([other], () => {
       const ws = socket();
       runs.handleGetRun({}, ws, { type: 'get_run', agentId: 'default', routine: 'Hello World' });
@@ -153,7 +165,7 @@ describe('the transport keeps unknown and empty apart', () => {
   test('a null file list crosses the wire as null', () => {
     withRecords([UNKNOWN], () => {
       const ws = socket();
-      runs.handleGetRun({}, ws, { type: 'get_run', runId: 'run-unknown' });
+      runs.handleGetRun({}, ws, { type: 'get_run', runId: RUN.unknown });
       const run = ws.sent[0].run;
       assert.strictEqual(run.files, null,
         'the transport turned an unknown file list into an empty one, which is permanent');
@@ -166,8 +178,8 @@ describe('the transport keeps unknown and empty apart', () => {
     withRecords([CHANGED_NOTHING, UNKNOWN], () => {
       const empty = socket();
       const unknown = socket();
-      runs.handleGetRun({}, empty, { type: 'get_run', runId: 'run-empty' });
-      runs.handleGetRun({}, unknown, { type: 'get_run', runId: 'run-unknown' });
+      runs.handleGetRun({}, empty, { type: 'get_run', runId: RUN.empty });
+      runs.handleGetRun({}, unknown, { type: 'get_run', runId: RUN.unknown });
       assert.deepStrictEqual(empty.sent[0].run.files, []);
       assert.strictEqual(unknown.sent[0].run.files, null);
       assert.notDeepStrictEqual(empty.sent[0].run.files, unknown.sent[0].run.files);
@@ -178,10 +190,10 @@ describe('the transport keeps unknown and empty apart', () => {
     // A handler that names the fields it forwards silently drops anything a
     // later writer adds, and this store's whole reason for existing is that
     // the write and the read can happen in different versions.
-    const withExtra = { ...KNOWN, id: 'run-extra', somethingAddedLater: 'kept' };
+    const withExtra = { ...KNOWN, id: RUN.extra, somethingAddedLater: 'kept' };
     withRecords([withExtra], () => {
       const ws = socket();
-      runs.handleGetRun({}, ws, { type: 'get_run', runId: 'run-extra' });
+      runs.handleGetRun({}, ws, { type: 'get_run', runId: RUN.extra });
       assert.deepStrictEqual(ws.sent[0].run, withExtra);
     });
   });
@@ -203,7 +215,7 @@ describe('the request is answered even when it cannot be met', () => {
     config.setWorkspace(dir);
     try {
       const ws = socket();
-      runs.handleGetRun({}, ws, { type: 'get_run', runId: 'run-known' });
+      runs.handleGetRun({}, ws, { type: 'get_run', runId: RUN.known });
       assert.strictEqual(ws.sent[0].run, null);
     } finally { config.setWorkspace(previous); }
   });

@@ -571,18 +571,42 @@ describe('rosters and system prompt', () => {
   });
 
   test('buildSystemPrompt: a lead with direct reports gets the sequential-delegation rule, same as the orchestrator', () => {
-    // The 0.8.5 sequential rule was added
-    // inside the orchestrator branch only. An agent with direct reports takes
-    // the hasDirectReports branch, was never told, and promised the user
-    // parallel execution the engine cannot deliver ("I'll get Ana on the
-    // cadence question in parallel", conversation 2026-07-29).
+    // The rule was first written into the orchestrator's branch of the prompt
+    // only. An agent with direct reports takes the hasDirectReports branch
+    // instead, so it was never told, and it promised the user parallel work
+    // the engine cannot deliver ("I'll get Ana on the cadence question in
+    // parallel"). Both branches must carry it.
     useWorkspace({ agents: standardTeam() });
     const agents = srv.discoverAgents();
     const orch = srv.buildSystemPrompt(agents.find(a => a.id === 'chief-of-staff'));
     const lead = srv.buildSystemPrompt(agents.find(a => a.id === 'content-lead'));
     assert.ok(orch.includes('Delegation is sequential'), 'orchestrator wording unchanged');
     assert.ok(lead.includes('Delegation is sequential'), 'lead with direct reports gets the rule');
-    assert.ok(lead.includes('"in parallel"'), 'the forbidden claim is named for leads');
+    assert.ok(lead.includes('Never describe delegated work as concurrent, in any wording'), 'the forbidden claim is named for leads');
+  });
+
+  test('buildSystemPrompt: both branches forbid the claim of concurrent work, in any wording, and say what to promise', () => {
+    // A list of phrases is a list of ways not to say it. An agent that may not
+    // say "in parallel" can still promise "starting the research while I draft
+    // the summary", and the person believes work is running at once when the
+    // engine runs one agent at a time. So the rule forbids the claim itself,
+    // and says what to promise instead.
+    useWorkspace({ agents: standardTeam() });
+    const agents = srv.discoverAgents();
+    const branches = {
+      orchestrator: { prompt: srv.buildSystemPrompt(agents.find(a => a.id === 'chief-of-staff')), who: 'specialist' },
+      lead: { prompt: srv.buildSystemPrompt(agents.find(a => a.id === 'content-lead')), who: 'team member' },
+    };
+    for (const [branch, { prompt, who }] of Object.entries(branches)) {
+      const rule = prompt.split('\n').find(l => l.startsWith('- Delegation is sequential'));
+      assert.strictEqual(rule, `- Delegation is sequential: you hand off to one ${who}, they complete their work, then you can hand off to the next.`
+        + ` Never describe delegated work as concurrent, in any wording: no ${who} works while another does, and none works while you do.`
+        + ` When a request needs more than one ${who}, promise them one at a time, named in the order you will bring them in.`,
+      `${branch}: the rule states the claim and what to promise instead`);
+      for (const phrase of ['"in parallel"', '"simultaneously"', '"at the same time"']) {
+        assert.ok(!prompt.includes(phrase), `${branch}: the old phrase list is gone (${phrase})`);
+      }
+    }
   });
 
   test('buildSystemPrompt: injects the concrete review-annotation handle instead of a derivation rule', () => {

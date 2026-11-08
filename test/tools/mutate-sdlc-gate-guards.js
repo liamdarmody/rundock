@@ -600,6 +600,18 @@ const MUTATIONS = [
   [SCOPE, "a harness with costs by label is never cut",
     "        if (i === h.rows - 1 || (piece < pieces && spent >= (est * piece) / pieces)) {",
     "        if (i === h.rows - 1) {"],
+  [SCOPE, "a slow row that crosses a share is always taken into the slice it starts in",
+    " && share - spent < after - share) {",
+    " && false) {"],
+  [SCOPE, "an early cut can end a slice before its first row, leaving it empty",
+    "piece < pieces && i > start && spent < share",
+    "piece < pieces && spent < share"],
+  [SCOPE, "a share exactly midway through a row cuts before the row",
+    " && share - spent < after - share) {",
+    " && share - spent <= after - share) {"],
+  [SCOPE, "the nearer-side comparison is turned around, so a share nearer the row's end cuts before it",
+    " && share - spent < after - share) {",
+    " && after - share < share - spent) {"],
 
   // ===== THE CI RETRY: ONCE, AND ONLY FOR A LOST RUNNER =====
   [CI_VERDICT, "a runner shutdown is retried",

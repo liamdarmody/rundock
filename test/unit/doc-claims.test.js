@@ -739,6 +739,13 @@ describe('ROUTINES.md: a monthly routine runs once a month and catches up within
       'and the guard sentence covers the monthly period');
   });
 
+  // What a late monthly run carries is its record's dueAt, and its row marks it
+  // late, naming when it was due.
+  test('the catch-up section says the record carries dueAt, and the row marks a late run', () => {
+    assert.match(behaviour, /Its run record names the slot it was due at, in a `dueAt` field, on every scheduled run/);
+    assert.match(behaviour, /its row marks the run as late, naming when it was due/);
+  });
+
   test('a slot earlier this month is still due', () => {
     assert.deepStrictEqual(askedAt(october(20, 10), DAY_15, null), october(15, 9),
       'on the 20th, the 15th is still owed and the next tick fires it');
@@ -1339,6 +1346,82 @@ describe('ARCHITECTURE.md: a write to a stopped process is logged, left to its c
       }
     } finally {
       console.error = realError;
+    }
+  });
+});
+
+// docs/ROUTINES.md: what a pause you applied looks like on its row
+describe('ROUTINES.md: a pause you applied dims the avatar, not the row', () => {
+  test('the doc says the avatar dims and the text stays at full strength, which is what the stylesheet does', () => {
+    const paragraph = routinesDoc.split('\n').find(l => l.includes('A pause you applied is quieter'));
+    assert.ok(paragraph, 'ROUTINES.md describes a pause you applied');
+    assert.ok(paragraph.includes('A pause you applied is quieter: its avatar dims while its text stays at full strength'),
+      'ROUTINES.md must say what a pause you applied dims');
+    assert.ok(!paragraph.includes('the row dims'), 'the old sentence, which is no longer true, is gone');
+    const css = fs.readFileSync(path.join(ROOT, 'public', 'styles', 'views', 'routines.css'), 'utf-8');
+    assert.ok(css.includes('.routine-row.paused .avatar { opacity: 0.5; }'), 'the sentence is true of the stylesheet');
+    assert.ok(!css.includes('.routine-row.paused { opacity'), 'and nothing dims the row as a whole');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// scaffold/rundock-guide.md: what happens to a long conversation
+// ---------------------------------------------------------------------------
+
+describe('rundock-guide.md: a long conversation is summarized automatically and stays on screen', () => {
+  // What Doc answers when someone asks what happens once a conversation grows
+  // past what the agent can hold. The runtime's half, that Claude Code and
+  // Codex summarize a long session on their own and the agent then works
+  // from the summary, is theirs: it is stated here, not run. Rundock's half
+  // is pinned by doing it: a session holding a summary is read back through
+  // the history the chat is drawn from, and everything said before the
+  // summary is still there, without the summary itself.
+  const guide = fs.readFileSync(path.join(ROOT, 'scaffold', 'rundock-guide.md'), 'utf-8');
+  const section = (() => {
+    const from = guide.indexOf('### Conversations');
+    const to = guide.indexOf('\n#', from + 1);
+    return from < 0 ? '' : guide.slice(from, to < 0 ? undefined : to);
+  })();
+
+  test('the guide says it where it explains conversations, and names no limit or number', () => {
+    assert.ok(section.length > 0, 'the guide has a Conversations section among what Doc knows');
+    assert.ok(guide.indexOf('### Conversations') > guide.indexOf('## What you know'), 'and it is among what Doc knows');
+    assert.match(section, /A long conversation is summarized automatically so the agent can carry on: Claude Code and Codex each do this on their own when a conversation grows past what the agent can hold at once\./);
+    assert.match(section, /The whole conversation stays on screen in Rundock, but from then on the agent works from the summary rather than every earlier message, so details from early on can be lost\./);
+    assert.match(section, /A new topic is best started in a new conversation\./);
+    assert.doesNotMatch(section, /\d/, 'the section names no limit or number');
+  });
+
+  test('and the whole conversation stays on screen: the history keeps every message before a summary, and not the summary', async () => {
+    const home = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'doc-claims-home-'));
+    const was = process.env.HOME;
+    try {
+      process.env.HOME = home;
+      const dir = useWorkspace();
+      const sessions = path.join(home, '.claude', 'projects', dir.replace(/\//g, '-'));
+      fs.mkdirSync(sessions, { recursive: true });
+      const at = (n) => `2026-01-14T09:${String(n).padStart(2, '0')}:00.000Z`;
+      const said = (role, text, n) => (role === 'user'
+        ? { type: 'user', message: { role: 'user', content: text }, timestamp: at(n) }
+        : { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text }] }, timestamp: at(n) });
+      // Claude Code's own lines when it summarizes a session: a boundary, and
+      // the summary written as the person's message.
+      const lines = [
+        said('user', 'Plan the launch.', 0),
+        said('assistant', 'Here is the plan.', 1),
+        { type: 'system', subtype: 'compact_boundary', content: 'Conversation compacted', timestamp: at(2) },
+        { type: 'user', isCompactSummary: true, isVisibleInTranscriptOnly: true, timestamp: at(3),
+          message: { role: 'user', content: 'This session is being continued from a previous conversation that ran out of context. The conversation is summarized below: planning the launch.' } },
+        said('user', 'Add a timeline.', 4),
+        said('assistant', 'Timeline added.', 5),
+      ];
+      fs.writeFileSync(path.join(sessions, 'doc-claims-summarized.jsonl'), lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
+      const history = await srv.parseSessionHistory('doc-claims-summarized', 50);
+      assert.deepStrictEqual(history.messages.map((m) => m.content),
+        ['Plan the launch.', 'Here is the plan.', 'Add a timeline.', 'Timeline added.']);
+    } finally {
+      if (was === undefined) delete process.env.HOME; else process.env.HOME = was;
+      fs.rmSync(home, { recursive: true, force: true });
     }
   });
 });
