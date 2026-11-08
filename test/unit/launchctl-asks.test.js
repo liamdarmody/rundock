@@ -41,7 +41,7 @@ after(() => { if (ws) fs.rmSync(ws, { recursive: true, force: true }); });
 function notesHook(command) {
   const env = { ...process.env, RUNDOCK: '1', RUNDOCK_WORKSPACE: ws, RUNDOCK_PORT: String(closed), RUNDOCK_EXTRA_DIRS: '' };
   delete env.RUNDOCK_CODE_MODE;
-  delete env.NODE_V8_COVERAGE;
+  env.NODE_V8_COVERAGE = '';
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [HOOK], { env, stdio: ['pipe', 'pipe', 'pipe'] });
     let out = '';

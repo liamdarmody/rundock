@@ -104,10 +104,26 @@ function decl(selector, prop) {
   assert.ok(rule.has(prop), `${selector} declares no ${prop}`);
   return rule.get(prop);
 }
+// THE CARD'S SURFACE IS A NAMED TOKEN, drawn by the one rule both themes
+// read, so every ratio below is measured against the token by name. A literal
+// put back in its place, or a light rule laid over it, fails the two tests
+// that follow rather than going on measuring a color nobody can find.
+const CARD_TOKEN = '--permission-card';
 function cardBackground(themeName) {
-  if (themeName === 'light') return rgb(resolve(decl('body.light .permission-card', 'background'), T.light, 'light card'), 'light card');
-  return rgb(resolve(decl('.permission-card', 'background'), T.dark, 'dark card'), 'dark card');
+  return rgb(resolve(decl('.permission-card', 'background'), T[themeName], `${themeName} card`), `${themeName} card`);
 }
+
+describe('the card surface', () => {
+  test(`both themes draw the card through ${CARD_TOKEN}`, () => {
+    assert.strictEqual(decl('.permission-card', 'background'), `var(${CARD_TOKEN})`);
+    assert.ok(!R.has('body.light .permission-card'), 'a light rule laid over the token draws a color the token does not name');
+  });
+
+  test(`${CARD_TOKEN} is #E8E3DB in light and the plain card in dark`, () => {
+    assert.strictEqual(T.light.get(CARD_TOKEN), '#E8E3DB');
+    assert.strictEqual(T.dark.get(CARD_TOKEN), 'var(--card)');
+  });
+});
 
 // THE FOCUS RING SITS ON THE BAR IN LIGHT. It is --accent-control, which is the
 // brand --accent in dark (4.43:1 on the card) and #DB5933 in light, 2.9955:1 on

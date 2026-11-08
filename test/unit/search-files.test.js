@@ -1,5 +1,5 @@
 'use strict';
-// SR1 universal search: index lifecycle + files corpus.
+// Universal search: index lifecycle + files corpus.
 // The db is a derived artifact: every test asserting rebuild behaviour
 // deletes or corrupts it and expects identical results after reconcile.
 const { test, describe, beforeEach, afterEach } = require('node:test');

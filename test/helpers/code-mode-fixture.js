@@ -303,7 +303,7 @@ function hookEnv(world, { port, codeMode = true, extraDirs, home } = {}) {
     GIT_CONFIG_NOSYSTEM: '1',
   };
   if (codeMode) env.RUNDOCK_CODE_MODE = '1'; else delete env.RUNDOCK_CODE_MODE;
-  delete env.NODE_V8_COVERAGE;
+  env.NODE_V8_COVERAGE = '';
   return env;
 }
 
