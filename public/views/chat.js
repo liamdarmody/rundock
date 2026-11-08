@@ -1077,7 +1077,8 @@ function renderPermissionCard(d, convoId, host) {
     // what runs when they act.
     const named = [req.resolved_path, ...crossingList.map(c => c && c.path)].filter(Boolean);
     summary = RundockPermissions.answerFileSummary(named);
-    detail = req.resolved_path || detail;
+    // A shell startup file is named as `~/.zshrc`, wherever the write reached it.
+    detail = req.startup_file || (crossingList.find(c => c && c.startupFile) || {}).startupFile || req.resolved_path || detail;
     context = RundockPermissions.answerFileCopy(named);
   } else if (boundary) {
     const reads = toolName === 'Read' || toolName === 'Glob' || toolName === 'Grep';

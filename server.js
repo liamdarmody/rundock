@@ -1527,7 +1527,8 @@ wss.on('connection', (ws) => {
         // conversation comes back on screen is rebuilt HERE, so a field not
         // named here is lost on that path even though the first delivery
         // carried it.
-        ...(pending.answerFile && !pending.boundary ? { answer_file: true, resolved_path: pending.resolvedPath, grant_dir: null } : {})
+        ...(pending.answerFile && !pending.boundary ? { answer_file: true, resolved_path: pending.resolvedPath, grant_dir: null } : {}),
+        ...(pending.startupFile ? { startup_file: pending.startupFile } : {})
       },
       _conversationId: pending.conversationId,
       ...(pending.run ? { _run: pending.run } : {})
@@ -2669,7 +2670,7 @@ function getRuntimeStatus() {
 // Code-mode verdict, a boundary crossing, an answer file), in the same fields a
 // hook request carries, so the card is drawn the same way whichever runtime
 // asked. Only those fields pass.
-const SERVER_REQUEST_FIELDS = ['code_mode_verdict', 'boundary', 'resolved_path', 'grant_dir', 'crossings', 'answer_file', 'put_back'];
+const SERVER_REQUEST_FIELDS = ['code_mode_verdict', 'boundary', 'resolved_path', 'grant_dir', 'crossings', 'answer_file', 'startup_file', 'put_back'];
 function requestServerPermission({ convoId, toolName, toolInput, onDecision, grading }) {
   // An id nothing can guess: an answer is matched to its card by this alone.
   const requestId = 'perm-' + require('crypto').randomBytes(16).toString('hex');

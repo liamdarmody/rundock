@@ -769,6 +769,62 @@ const RUNDOCK_CONSOLE_DIR = '.rundock-console';
 function isRundockConsolePath(resolvedPath, home = os.homedir(), foldsCase = hostFoldsCase(), pmod = path) {
   return matchesAnswerFileSet([RUNDOCK_CONSOLE_DIR], resolvedPath, home, foldsCase, pmod, true);
 }
+// THE SHELL STARTUP FILES, under the home folder rather than any workspace.
+// A terminal runs them each time it opens, with the person's full access and
+// outside every sandbox, so a write to one is asked about every time like an
+// answer file, wherever the workspace is. The logout files are listed because
+// a login shell reads them as it exits, and `.bashrc` because most
+// `.bash_profile` files source it. The zsh files are listed again under
+// ZDOTDIR, and fish's under XDG_CONFIG_HOME, when this process's environment
+// sets them. Then Rundock's own record of which of them an agent could have
+// written, which only Rundock writes: beside the recent-workspaces file,
+// under home in the desktop app and in the checkout when run from source.
+// Each entry is matched by its real path, so a startup file kept in a dotfiles
+// folder through a link is matched at its target too.
+const SHELL_STARTUP_FILES = ['.zshenv', '.zprofile', '.zshrc', '.zlogin', '.zlogout', '.bash_profile', '.bash_login', '.profile', '.bashrc', '.bash_logout'];
+const STARTUP_FILE_EXPOSURE_RECORD = { app: '.rundock-startup-file-exposure.json', source: '.startup-file-exposure.json' };
+function exposureRecordPath(home = os.homedir(), env = process.env) {
+  return env.RUNDOCK_ELECTRON ? path.join(home, STARTUP_FILE_EXPOSURE_RECORD.app) : path.join(__dirname, '..', STARTUP_FILE_EXPOSURE_RECORD.source);
+}
+// Every listed path, as { path, name, dir, record }: `name` is how a card
+// spells it (`~/.zshrc`), and `dir` marks fish's `conf.d`, matched with
+// everything in it.
+function shellStartupEntries(home = os.homedir(), env = process.env) {
+  const absolute = v => (typeof v === 'string' && path.isAbsolute(v) ? v : null);
+  const fish = path.join(absolute(env.XDG_CONFIG_HOME) || path.join(home, '.config'), 'fish');
+  const zdot = absolute(env.ZDOTDIR);
+  const out = [
+    ...SHELL_STARTUP_FILES.map(f => ({ path: path.join(home, f) })),
+    { path: path.join(fish, 'config.fish') }, { path: path.join(fish, 'conf.d'), dir: true },
+    { path: exposureRecordPath(home, env), record: true },
+    ...(zdot && path.resolve(zdot) !== path.resolve(home) ? SHELL_STARTUP_FILES.slice(0, 5).map(f => ({ path: path.join(zdot, f) })) : []),
+  ];
+  return out.map(e => ({ ...e, name: homeSpelled(e.path, home) }));
+}
+function homeSpelled(p, home) {
+  const rel = path.relative(path.resolve(home), p);
+  return rel && !rel.startsWith('..') && !path.isAbsolute(rel) ? `~/${rel.split(path.sep).join('/')}` : p;
+}
+// The listed entry `resolvedPath` is, or lies in: { path, name, record } as the
+// registry spells it, or null. Both sides canonicalised.
+function startupFileAt(resolvedPath, home = os.homedir(), foldsCase = hostFoldsCase(), pmod = path, env = process.env) {
+  if (pmod !== path || typeof resolvedPath !== 'string' || !resolvedPath) return null;
+  const c = canonicalize(resolvedPath);
+  for (const e of shellStartupEntries(home, env)) {
+    const at = canonicalize(e.path);
+    if (foldCase(c, foldsCase) === foldCase(at, foldsCase)) return e;
+    if (e.dir && foldCase(c, foldsCase).startsWith(foldCase(at, foldsCase) + path.sep)) {
+      const rest = c.slice(at.length + 1);
+      return { path: path.join(e.path, rest), name: `${e.name}/${rest.split(path.sep).join('/')}` };
+    }
+  }
+  return null;
+}
+// The listed entries a glob can expand to: `sed -i ... ~/.z*`.
+function startupFilesGlobbed(resolvedGlob, home = os.homedir(), foldsCase = hostFoldsCase(), pmod = path) {
+  if (pmod !== path || !/[*?[]/.test(String(resolvedGlob))) return [];
+  return shellStartupEntries(home).filter(e => [e.path, canonicalize(e.path)].some(p => globReachesPath(resolvedGlob, p, foldsCase)));
+}
 // A glob at the home folder, or inside the console folder, that can match it:
 // `rm -rf ~/.rundock-*`, `rm ~/.rundock-console/*`.
 function globReachesConsole(resolvedPath, home = os.homedir(), foldsCase = hostFoldsCase(), pmod = path) {
@@ -1039,6 +1095,10 @@ function classifyFileAccess(toolName, toolInput, workspaceRoot, extraDirs = [], 
   if (writing && isRundockConsolePath(resolvedPath, home, foldsCase)) {
     return { where: inside ? 'inside' : 'outside', resolvedPath, grantDir: null, answerFile: true };
   }
+  // A shell startup file, or Rundock's record of them, the same way, named as
+  // the registry spells it (see SHELL_STARTUP_FILES).
+  const startup = writing ? startupFileAt(resolvedPath, home, foldsCase) : null;
+  if (startup) return { where: inside ? 'inside' : 'outside', resolvedPath: startup.path, grantDir: null, answerFile: true, startupFile: startup.name };
   if (inside) return { where: 'inside', resolvedPath };
   // CODE MODE'S DEVELOPMENT PATHS: the temp folders and package caches are
   // working folders there, and git's own settings are free to read. Notes mode
@@ -2836,9 +2896,13 @@ function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), 
   const intoFolders = new Set(writes.into.map(i => i.dest));
   const reachesAnswerFiles = (raw, resolved, pmod) => !intoFolders.has(raw)
     && (holdsAnswerFiles(resolved, workspaceRoot, foldsCase, pmod) || globReachesAnswerFiles(resolved, workspaceRoot, foldsCase, pmod));
+  // A startup file is reported as the registry spells it, whichever spelling reached it.
+  const startupAt = (r, pmod) => startupFileAt(r, home, foldsCase, pmod);
   const addAnswer = (resolved, pmod) => {
-    const akey = pmod === path.win32 ? resolved.toLowerCase() : resolved;
-    if (!seen.has(akey)) { seen.add(akey); found.push({ path: resolved, answerFile: true }); }
+    const sf = startupAt(resolved, pmod);
+    const at = sf ? sf.path : resolved;
+    const akey = pmod === path.win32 ? at.toLowerCase() : at;
+    if (!seen.has(akey)) { seen.add(akey); found.push({ path: at, answerFile: true, ...(sf ? { startupFile: sf.name } : {}) }); }
   };
   const ran = view.commands.flatMap(c => shellPathWords(c.text, posixText).map(w => ({ t: w.t, at: c.at, fromStart: true })));
   const words = shellPathWords(view.text, posixText).concat(view.literals, ran).sort((a, b) => a.at - b.at);
@@ -3072,12 +3136,15 @@ function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), 
       const flavour = winWorld ? path.win32 : flavourFor(t, workspaceRoot, posixText);
       const r = canonicalize(flavour.resolve(basesFor(flavour, false)(at), t), flavour);
       if (isWorkspaceAnswerFile(r, workspaceRoot, foldsCase, flavour) || isAnswerFileOfAnyWorkspace(r, flavour)
-        || holdsAnswerFiles(r, workspaceRoot, foldsCase, flavour) || isRundockConsolePath(r, home, foldsCase, flavour)) addAnswer(r, flavour);
+        || holdsAnswerFiles(r, workspaceRoot, foldsCase, flavour) || isRundockConsolePath(r, home, foldsCase, flavour) || startupAt(r, flavour)) addAnswer(r, flavour);
     }
   }
   // What a copy, move or link writes into a folder: the file of each source's
   // name there (`cp backup/.mcp.json .`), from the folder its segment starts in.
-  for (const { dest, sources, at, fromStart } of writes.into) {
+  for (const { dest: named, sources, at, fromStart } of writes.into) {
+    // `cp x ~/` writes into the home folder, not a folder called `~`.
+    const re = HOME_PREFIX.find(r => r.test(named));
+    const dest = re ? named.replace(re, home) : named;
     const pmod = winWorld ? path.win32 : flavourFor(dest, workspaceRoot, posixText);
     const d = canonicalize(pmod.resolve(basesFor(pmod, fromStart)(at), dest), pmod);
     let folder = /[\\/]$/.test(dest);
@@ -3086,7 +3153,7 @@ function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), 
     for (const src of sources) {
       const target = canonicalize(pmod.join(d, pmod.basename(src)), pmod);
       if (isWorkspaceAnswerFile(target, workspaceRoot, foldsCase, pmod) || isAnswerFileOfAnyWorkspace(target, pmod) || reachesAnswerFiles(null, target, pmod)
-        || isRundockConsolePath(target, home, foldsCase, pmod)) addAnswer(target, pmod);
+        || isRundockConsolePath(target, home, foldsCase, pmod) || startupAt(target, pmod)) addAnswer(target, pmod);
     }
   }
   let previous = '';
@@ -3147,12 +3214,16 @@ function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), 
       const forms = braceForms(t);
       const spellings = forms.flatMap(loopForms);
       const starts = [base, ...cdStarts(pmod, at, fromStart)];
-      const hits = (spellings.length > 1 || starts.length > 1 ? starts.flatMap(b => spellings.map(f => canonicalize(pmod.resolve(b, f), pmod))) : [resolved])
+      const tried = spellings.length > 1 || starts.length > 1 ? starts.flatMap(b => spellings.map(f => canonicalize(pmod.resolve(b, f), pmod))) : [resolved];
+      const hits = tried
         .filter(r => isWorkspaceAnswerFile(r, workspaceRoot, foldsCase, pmod) || isAnswerFileOfAnyWorkspace(r, pmod) || reachesAnswerFiles(raw, r, pmod)
           // Rundock's console folder under home, wherever the workspace is.
-          || isRundockConsolePath(r, home, foldsCase, pmod) || globReachesConsole(r, home, foldsCase, pmod));
-      if (hits.length) {
+          || isRundockConsolePath(r, home, foldsCase, pmod) || globReachesConsole(r, home, foldsCase, pmod) || startupAt(r, pmod));
+      // A glob a startup file can match is that file.
+      const globbed = tried.flatMap(r => startupFilesGlobbed(r, home, foldsCase, pmod));
+      if (hits.length || globbed.length) {
         for (const r of hits) addAnswer(r, pmod);
+        for (const e of globbed) addAnswer(e.path, pmod);
         continue;
       }
     }
@@ -3495,6 +3566,7 @@ module.exports = {
   HOME_SECRET_FILES, secretsRegistry,
   agentHomeRoot, codexHomeRoot, runtimeHomes,
   isWorkspaceAnswerFile, isRuntimeGuardedAnswerFile, isRundockConsolePath, RUNDOCK_CONSOLE_DIR,
+  SHELL_STARTUP_FILES, STARTUP_FILE_EXPOSURE_RECORD, exposureRecordPath, shellStartupEntries, startupFileAt,
   WORKSPACE_ANSWER_FILES, RUNDOCK_ANSWER_FILES, RUNTIME_GUARDED_ANSWER_FILES, LAUNCHER_FILES, WHAT_RUNS_FILES, WHAT_RUNS_DIRS,
   boundaryCrossingsFor, CODE_READS_ALLOWED, UNATTENDED_NEXT_UNLOADED,
   REFUSED_CLAUDE_EDIT_DIRS, isReadOnlyShellCommand, isRundockAnswerFileAnywhere, isRundockWorkspaceSettingsFile, isAnswerFileOfAnyWorkspace, otherWorkspaceRootOf, isOtherWorkspaceAgentSurface,
@@ -3525,6 +3597,7 @@ function boundaryCrossingsFor(access) {
     agentHome: access.agentHome, secret: access.secret,
     persistenceSurface: access.persistenceSurface, answerFile: access.answerFile,
     ...(access.instructionFile ? { instructionFile: true } : {}),
+    ...(access.startupFile ? { startupFile: access.startupFile } : {}),
     ...(access.hiddenHome ? { hiddenHome: access.hiddenHome } : {}),
     ...(access.write ? { write: true } : {}),
   }];
@@ -3914,6 +3987,7 @@ fetchAgentNotice((agentNotice) => {
   // secrets-registry crossing already carries no grantDir (stripped at
   // classification), so the request emitted for one is never grantable.
   const boundaryCrossings = boundaryCrossingsFor(access);
+  const startupName = (access && access.startupFile) || (boundaryCrossings.find(c => c && c.startupFile) || {}).startupFile || null;
 
   // LABEL, NOT A DECISION. Sent under its own name so it can never be mistaken
   // for `crossings`, which is what the server acts on. The server must not read
@@ -3938,6 +4012,8 @@ fetchAgentNotice((agentNotice) => {
     ...(access && access.answerFile && access.where !== 'outside'
       ? { answer_file: true, resolved_path: access.resolvedPath || null, grant_dir: null }
       : {}),
+    // A shell startup file, named as the card spells it (`~/.zshrc`): a label.
+    ...(startupName ? { startup_file: startupName } : {}),
     ...(access && access.where === 'outside'
       ? {
           boundary: true,
