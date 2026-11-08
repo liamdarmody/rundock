@@ -181,7 +181,7 @@ const fs = require('fs');
 // directory resolves on disk rather than inside the archive. The shared module
 // is named in package.json's asarUnpack for that reason, and a test binds the
 // two so a later shared module cannot be added without it.
-const { isReadOnlyShellCommand, isDestructiveShellCommand, shellSegments } = require('../public/read-only-shell.js');
+const { isReadOnlyShellCommand, isReadOnlyPowerShellCommand, isDestructiveShellCommand, shellSegments } = require('../public/read-only-shell.js');
 // The Code-mode verdict and the development paths live beside this file, in
 // scripts/, so they are unpacked with it (package.json asarUnpack scripts/**).
 const { codeModeVerdict, keychainVerdict } = require('./code-mode-verdict.js');
@@ -1752,7 +1752,8 @@ const INPUT_REDIRECT = /^\d*(?:<<<|<(?![<>(]))(.*)$/;
 // `posixText` reads an unquoted word as bash does, each `\X` being X, the way
 // shellPathWords reads it, so the words compare. Each `into` entry carries
 // `at`, where its segment starts in `command`, for the folder it starts from.
-function answerFileWriteWords(command, posixText = false) {
+// `readsPart` is the reading for the shell the command is written for.
+function answerFileWriteWords(command, posixText = false, readsPart = isReadOnlyShellCommand) {
   const out = new Set();
   const into = [];
   const bare = (w) => {
@@ -1779,7 +1780,7 @@ function answerFileWriteWords(command, posixText = false) {
     while (at < rest.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(rest[at])) at++;
     const verb = bare(rest[at] || '').split('/').pop();
     const args = rest.slice(at + 1).map(bare);
-    let reads = isReadOnlyShellCommand(rest.join(' ')) || READS_NAMED_FILES.has(verb);
+    let reads = readsPart(rest.join(' ')) || READS_NAMED_FILES.has(verb);
     if (verb === 'git') {
       let i = 0;
       while (i < args.length && args[i].startsWith('-')) i += (args[i] === '-C' || args[i] === '-c') ? 2 : 1;
@@ -2896,8 +2897,11 @@ function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), 
   // Computed once for the whole command, not per token: whether it may read
   // a persistence surface under the runtime's OWN home free is a property of
   // the command as a whole (see isReadOnlyShellCommand), never of one target
-  // in isolation.
-  const readOnly = isReadOnlyShellCommand(command);
+  // in isolation. A PowerShell command is read by the PowerShell reading,
+  // never by the Bash rules, which take `( )` and a block as harmless where
+  // PowerShell runs what they hold.
+  const readsPart = opts.shellTool === 'PowerShell' ? isReadOnlyPowerShellCommand : isReadOnlyShellCommand;
+  const readOnly = readsPart(command);
   // A BACKSLASH IN A BASH WORD ON A POSIX HOST IS BASH'S, NOT WINDOWS'. It
   // escapes the next character when the word is unquoted and is an ordinary
   // character inside quotes; it never separates folders. Judged as a Windows
@@ -2921,7 +2925,7 @@ function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), 
   if (!readOnly) {
     for (const lit of view.literals) if (lit.written) writes.words.add(lit.t);
     for (const [text, fromStart] of [[view.text, false], ...view.commands.map(c => [c.text, true])]) {
-      const w = answerFileWriteWords(text, posixText);
+      const w = answerFileWriteWords(text, posixText, readsPart);
       for (const x of w.words) writes.words.add(x);
       for (const i of w.into) writes.into.push({ ...i, fromStart });
     }
@@ -3606,7 +3610,7 @@ module.exports = {
   SHELL_STARTUP_FILES, STARTUP_FILE_EXPOSURE_RECORD, exposureRecordPath, shellStartupEntries, startupFileAt, startupFolderAt, homeSpelled,
   WORKSPACE_ANSWER_FILES, RUNDOCK_ANSWER_FILES, RUNTIME_GUARDED_ANSWER_FILES, LAUNCHER_FILES, WHAT_RUNS_FILES, WHAT_RUNS_DIRS,
   boundaryCrossingsFor, CODE_READS_ALLOWED, UNATTENDED_NEXT_UNLOADED,
-  REFUSED_CLAUDE_EDIT_DIRS, isReadOnlyShellCommand, isRundockAnswerFileAnywhere, isRundockWorkspaceSettingsFile, isAnswerFileOfAnyWorkspace, otherWorkspaceRootOf, isOtherWorkspaceAgentSurface,
+  REFUSED_CLAUDE_EDIT_DIRS, isReadOnlyShellCommand, isReadOnlyPowerShellCommand, isRundockAnswerFileAnywhere, isRundockWorkspaceSettingsFile, isAnswerFileOfAnyWorkspace, otherWorkspaceRootOf, isOtherWorkspaceAgentSurface,
   INSTRUCTION_SURFACES, isInstructionSurface, hiddenHomeRootOf, alwaysAsksCrossing, SHELL_TOOLS, keychainPlatform,
 };
 

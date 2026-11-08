@@ -196,6 +196,24 @@ describe('a command asks about an answer file only when it can write it', () => 
     assert.ok(a && hook.boundaryCrossingsFor(a).length > 0, "tree -o into the runtime's own settings is a crossing");
   });
 
+  // A POWERSHELL COMMAND IS READ BY THE POWERSHELL READING HERE TOO. A write
+  // inside a read's brackets or block names the file it writes, and read by
+  // the Bash rules the whole part counted as a read, so the write was never
+  // looked for.
+  test('a PowerShell write inside a read writes the answer file it names', () => {
+    const psAnswerFile = (command) => {
+      const a = hook.classifyShellAccess('PowerShell', { command }, ws, [], os.homedir(), true, { cwd: ws });
+      return !!(a && hook.boundaryCrossingsFor(a).some(c => c && c.answerFile));
+    };
+    for (const c of ['Get-Content (Set-Content .mcp.json x)', 'Get-ChildItem | Sort-Object { Set-Content .mcp.json x }',
+      'Get-Content .mcp.json; Set-Content .mcp.json x']) {
+      assert.strictEqual(psAnswerFile(c), true, c);
+    }
+    for (const c of ['Get-Content .mcp.json', 'Get-Content .mcp.json | Select-String mcpServers']) {
+      assert.strictEqual(psAnswerFile(c), false, c);
+    }
+  });
+
   // `git clean -x` and `-X` name no file, yet remove what git ignores, and the
   // workspace's own `.rundock` folder is ignored: the permission answers, the
   // launcher and the connector secrets go with it. Notes mode grades the
