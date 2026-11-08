@@ -84,6 +84,8 @@
       // step says so out loud.
       frequency: (input && input.frequency) || 'day',
       time: (input && input.time) || '09:00',
+      // A monthly routine's day, '1' to '28' or 'last'; null for any other.
+      day: (input && input.day) || null,
       // The default is the only value this release can honour. It is read from
       // the supported set rather than typed, so it cannot drift from it. An
       // edit carries the routine's own value instead, which it SHOWS and never
@@ -243,7 +245,7 @@
 
   function scheduleStep(m, option) {
     const sentence = m.previewSentence({
-      frequency: state.frequency, time: state.time, skillName: option && option.name, runOn: state.runOn,
+      frequency: state.frequency, day: state.day, time: state.time, skillName: option && option.name, runOn: state.runOn,
     });
     const zone = m.timezoneCaption({ zone: state.zone, agentName: state.agentName });
 
@@ -273,7 +275,21 @@
     for (const f of m.FREQUENCIES) {
       h += `<option value="${escText(f.value)}"${f.value === state.frequency ? ' selected' : ''}>${escText(f.label)}</option>`;
     }
-    h += '</select></span><span class="re-word">at</span>';
+    h += '</select></span>';
+    // The day, for month only, in the same native select and wrapper as the
+    // other two, so the keyboard works it as it works them. The rule before
+    // the last day is not an option, so it cannot be chosen or landed on.
+    if (state.frequency === 'month') {
+      h += '<span class="re-word">on the</span><span class="re-select-wrap">';
+      h += `<select class="re-select" data-routine-field="day"
+      onchange="routineEditorSetField('day', this.value)">`;
+      for (const d of m.monthDays()) {
+        if (d.afterRule) h += '<hr>';
+        h += `<option value="${escText(d.value)}"${d.value === state.day ? ' selected' : ''}>${escText(d.label)}</option>`;
+      }
+      h += '</select></span>';
+    }
+    h += '<span class="re-word">at</span>';
     h += '<span class="re-select-wrap">';
     h += `<select class="re-select" data-routine-field="time"
       onchange="routineEditorSetField('time', this.value)">`;
@@ -299,7 +315,7 @@
     // this line those defaults would read as its current times, and the reader
     // would replace a schedule they never saw. The note names the stored one
     // verbatim and says what saving does to it.
-    const stored = state.edit ? m.storedScheduleNote({ schedule: state.edit.schedule }) : null;
+    const stored = state.edit ? m.storedScheduleNote(state.edit) : null;
     if (stored) h += `<p class="re-caveat" data-routine-editor="stored-schedule">${escText(stored)}</p>`;
     h += state.edit ? fixedRunOnField(m) : runOnField(m);
     // ONE NOTE, NOT TWO. The zone and the workspace fact used to be two
@@ -317,7 +333,7 @@
     // visible here. The `data-routine-editor="workspace-caveat"` attribute
     // stays on this element, unmoved, because the doors test that checks this
     // screen names which workspace a routine will run in reads it there.
-    const note = [zone, m.scheduleStepFields().workspaceCaveat].filter(Boolean).join(' ');
+    const note = [zone, m.scheduleStepFields({ frequency: state.frequency }).workspaceCaveat].filter(Boolean).join(' ');
     if (note) h += `<p class="re-caveat" data-routine-editor="workspace-caveat">${escText(note)}</p>`;
     h += `<div class="re-actions">
       <button class="settings-btn-primary" type="button" ${sentence ? '' : 'disabled'}
@@ -328,7 +344,7 @@
 
   function readyStep(m, option) {
     const sentence = m.previewSentence({
-      frequency: state.frequency, time: state.time, skillName: option && option.name, runOn: state.runOn,
+      frequency: state.frequency, day: state.day, time: state.time, skillName: option && option.name, runOn: state.runOn,
     });
     const caption = m.readyCaption({ zone: state.zone, runOn: state.runOn });
     if (!sentence) {
@@ -582,7 +598,7 @@
     // order: the nth namesake here is the nth block in the file.
     const routine = (agent.routines || []).filter(r => r && r.name === name)[occurrence] || null;
     if (!routine) return;
-    const parsed = model().readSchedule(routine.schedule);
+    const parsed = model().reopenSchedule(routine);
     openRoutineEditor({
       step: 'schedule',
       agentId: agent.id,
@@ -592,7 +608,11 @@
       runOn: routine.runOn || null,
       frequency: parsed ? parsed.frequency : null,
       time: parsed ? parsed.time : null,
-      edit: { agentId: agent.id, name: routine.name, occurrence, schedule: routine.schedule },
+      day: parsed ? parsed.day : null,
+      edit: {
+        agentId: agent.id, name: routine.name, occurrence, schedule: routine.schedule,
+        unreadableMonthDay: routine.unreadableMonthDay || null,
+      },
     });
   }
 
@@ -610,7 +630,8 @@
 
   function routineEditorSetField(field, value) {
     if (!state) return;
-    if (field === 'frequency' || field === 'time') state[field] = value;
+    if (field === 'frequency') Object.assign(state, model().chooseFrequency(state, value));
+    else if (field === 'time' || field === 'day') state[field] = value;
     renderRoutineEditor();
   }
 
@@ -772,6 +793,7 @@
       skill: { id: option.id, slug: option.slug, name: option.name },
       agentId: option.agentId,
       frequency: state.frequency,
+      day: state.day,
       time: state.time,
       runOn: state.runOn,
     });
@@ -811,7 +833,7 @@
    * server to store it.
    */
   function sendScheduleEdit(m) {
-    const schedule = m.buildSchedule({ frequency: state.frequency, time: state.time });
+    const schedule = m.buildSchedule({ frequency: state.frequency, day: state.day, time: state.time });
     if (!schedule) return;
     if (typeof ws === 'undefined' || !ws) return;
     state.saving = true;

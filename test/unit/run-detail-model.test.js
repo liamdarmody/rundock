@@ -547,6 +547,64 @@ describe('what the run did', () => {
   });
 });
 
+// ===== A RUN THAT STARTED LATE =====
+//
+// One line under the start time, on a scheduled run that started 5 minutes or
+// more after the slot its record names. Its second sentence, that Rundock was
+// closed, is said only when the record says the slot passed with no tick to
+// see it.
+describe('a run that started late', () => {
+  const NOW_L = new Date(2026, 10, 14, 10, 0);
+  const DUE = new Date(2026, 10, 1, 9, 0);
+  const LATE_RUN = {
+    id: 'r-late', agent: 'ada', routine: 'Ledger', files: [], filesStatus: 'known', filesReason: null,
+    endedAt: new Date(2026, 10, 14, 9, 4).toISOString(), durationMs: 120000, status: 'succeeded', trigger: 'scheduled',
+    dueAt: DUE.toISOString(), startedAt: new Date(2026, 10, 14, 9, 2).toISOString(),
+  };
+  const lateLine = (over) => model.describeRun({ ...LATE_RUN, ...over }, { now: NOW_L }).late;
+
+  test('a slot that passed with Rundock closed says so', () => {
+    assert.deepStrictEqual(lateLine({ dueUnobserved: true }), {
+      lead: 'Ran late.',
+      text: 'It was due on 1 November at 9:00am. Rundock was closed then, so it started when Rundock next opened.',
+    });
+  });
+
+  test('otherwise the first sentence stands alone', () => {
+    for (const dueUnobserved of [undefined, false, 'true', 1]) {
+      assert.deepStrictEqual(lateLine({ dueUnobserved }), { lead: 'Ran late.', text: 'It was due on 1 November at 9:00am.' },
+        `dueUnobserved ${String(dueUnobserved)}`);
+    }
+  });
+
+  test('late means the row\'s 5 minutes, measured from the start', () => {
+    const routines = require('../../public/routines-model.js');
+    assert.strictEqual(model.LATE_AFTER_MS, routines.CATCH_UP_AFTER_MS);
+    const startedAfter = (ms) => lateLine({ startedAt: new Date(DUE.getTime() + ms).toISOString() });
+    assert.strictEqual(startedAfter(model.LATE_AFTER_MS - 1000), null);
+    assert.ok(startedAfter(model.LATE_AFTER_MS));
+    // A daily slot today is named by its date too.
+    assert.strictEqual(lateLine({ dueAt: new Date(2026, 10, 14, 7, 0).toISOString() }).text, 'It was due on 14 November at 7:00am.');
+  });
+
+  test('no line on an on-time run, a pressed run, or a record with no dueAt field', () => {
+    assert.strictEqual(lateLine({ startedAt: new Date(2026, 10, 1, 9, 0, 40).toISOString() }), null, 'on time');
+    assert.strictEqual(lateLine({ trigger: 'manual' }), null, 'pressed');
+    const { dueAt, ...older } = LATE_RUN;
+    assert.ok(dueAt);
+    assert.strictEqual(model.describeRun(older, { now: NOW_L }).late, null, 'no dueAt field');
+    assert.strictEqual(lateLine({ dueAt: 'not a date' }), null, 'a dueAt nobody can read');
+    assert.strictEqual(model.describeRun(null, { now: NOW_L }).late, null, 'no record');
+  });
+
+  test('the outcome is unchanged by it', () => {
+    const { dueAt, ...older } = LATE_RUN;
+    assert.ok(dueAt);
+    assert.deepStrictEqual(model.describeRun(LATE_RUN, { now: NOW_L }).state, model.describeRun(older, { now: NOW_L }).state);
+    assert.strictEqual(model.describeRun(LATE_RUN, { now: NOW_L }).state.chip, 'Finished');
+  });
+});
+
 // ===== A FAILURE THE AGENT DECLARED =====
 // Both are recorded as failed; only the first carries `declared: true`,
 // written by the scheduler when the agent's final line is

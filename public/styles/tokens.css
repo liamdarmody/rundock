@@ -122,6 +122,11 @@
      which also recomputes every ratio above from these values. */
   --danger: #D42C2A;
   --danger-text: #F0706E;
+  /* Danger text on --card, where --danger-text misses 4.5:1 by a hair. The
+     recipe Settings uses (--settings-danger-text), as a token, declared again
+     on body.light so it mixes the light values there. Measured by
+     test/unit/danger-text-card-contrast.test.js. */
+  --danger-text-card: color-mix(in srgb, var(--danger-text) 85%, var(--text-1));
 
   /* The permission card's quieter buttons, which must still read as buttons.
      --border-strong is a control EDGE (the Deny outline), held to 3:1;
@@ -272,6 +277,7 @@ body.light {
   /* Danger text in light is the fill value itself, which reads on every light
      surface. The dark theme's lifted value would wash out here. */
   --danger-text: #D42C2A;
+  --danger-text-card: color-mix(in srgb, var(--danger-text) 85%, var(--text-1));
   /* The brand hue as TEXT, light theme only, following --danger-text: plain
      --accent as text measured 2.44 to 2.85:1 on the light surfaces. This
      clears 4.5:1 on all four (--elevated 5.30, --surface 5.00, --base 4.74,
