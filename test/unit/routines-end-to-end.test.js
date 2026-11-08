@@ -309,11 +309,11 @@ describe('the roster carries what the row renders', () => {
 
 // ===== A SCHEDULE THE SCHEDULER CANNOT READ =====
 //
-// `parseSchedule` accepts two shapes and returns null for everything else, at
-// which point `getNextRun` returns null and the tick skips the routine with no
-// error, no warning and no log line. A cron-scheduled routine therefore sits in
-// a first-class Routines view looking exactly like a routine, with nothing
-// saying it will never fire. The silence moved from a log nobody reads to a
+// `parseSchedule` accepts daily, weekly and monthly shapes and returns null
+// for everything else, at which point `getNextRun` returns null and the tick
+// skips the routine with no error, no warning and no log line. A
+// cron-scheduled routine therefore sits in a first-class Routines view looking
+// exactly like a routine, with nothing saying it will never fire. The silence moved from a log nobody reads to a
 // surface everybody reads.
 //
 // AND MIGRATION NEVER TOUCHES A SCHEDULE, so every such entry survives an

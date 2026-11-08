@@ -4,10 +4,13 @@
 // independent of when the suite runs. All dates are constructed with local
 // components so the tests are timezone-independent.
 //
-// getNextRun supports exactly two grammars:
+// getNextRun supports these grammars:
 //   "every day at HH:MM"
 //   "every <weekday> at HH:MM"
-// Everything else silently returns null. Those silent-null behaviors are
+//   "on day N of every month at HH:MM", N from 1 to 28
+//   "on the last day of every month at HH:MM"
+// The two monthly forms are pinned in their own suites. Everything else
+// silently returns null. Those silent-null behaviors are
 // pinned AS-IS below; if they should later warn or throw, these tests flip
 // deliberately.
 const { test, describe, mock, afterEach } = require('node:test');
