@@ -8,6 +8,11 @@
 // are real directories, real symlinks and the machine's own /private alias,
 // because every false card in the field came from a spelling a hand-built
 // fixture would not have thought to write.
+// The blocks here are built for a made-up home folder, so the zsh and fish
+// files they deny resolve under it, not under an inherited ZDOTDIR or
+// XDG_CONFIG_HOME.
+delete process.env.ZDOTDIR;
+delete process.env.XDG_CONFIG_HOME;
 const { test, describe, after } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');

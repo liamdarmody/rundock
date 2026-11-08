@@ -14,6 +14,8 @@
 //
 // Through the real hook where the question is what a person sees; in process
 // where the question is a registry or a settings file.
+// Its turns run the guard, which watches the home folder's shell startup files.
+require('../helpers/made-up-home.js');
 const { test, describe, before, after } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');

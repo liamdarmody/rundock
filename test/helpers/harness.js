@@ -53,6 +53,10 @@ async function boot(opts = {}) {
   // RUNDOCK_ELECTRON routes the recent-workspaces file into $HOME (now a temp
   // dir) instead of the repo checkout.
   process.env.RUNDOCK_ELECTRON = '1';
+  // The shell startup files a turn's guard watches resolve under the temp
+  // home too, not under an inherited ZDOTDIR or XDG_CONFIG_HOME.
+  delete process.env.ZDOTDIR;
+  delete process.env.XDG_CONFIG_HOME;
   for (const [k, v] of Object.entries(opts.env || {})) process.env[k] = v;
 
   workspaceDir = makeWorkspace({ agents: opts.agents || standardTeam(), claudeMd: '# Test Workspace\n', ...(opts.workspaceOpts || {}) });
