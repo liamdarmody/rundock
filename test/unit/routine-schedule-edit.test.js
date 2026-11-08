@@ -86,9 +86,13 @@ const routinesIn = (content, owner) =>
 describe('a schedule the writer will accept', () => {
   test('every schedule the editor can build is one the writer accepts', () => {
     for (const frequency of editorModel.FREQUENCIES) {
-      for (const time of editorModel.times()) {
-        const built = editorModel.buildSchedule({ frequency: frequency.value, time: time.value });
-        assert.strictEqual(isWritableSchedule(built), true, `${built} is one the editor offers`);
+      // A monthly schedule is built with a day, so every day it offers is tried.
+      const days = frequency.value === 'month' ? editorModel.monthDays().map((d) => d.value) : [null];
+      for (const day of days) {
+        for (const time of editorModel.times()) {
+          const built = editorModel.buildSchedule({ frequency: frequency.value, day, time: time.value });
+          assert.strictEqual(isWritableSchedule(built), true, `${built} is one the editor offers`);
+        }
       }
     }
   });

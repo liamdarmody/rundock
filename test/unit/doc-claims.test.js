@@ -732,32 +732,18 @@ describe('ROUTINES.md: a monthly routine runs once a month and catches up within
 
   test('the catch-up section gives the monthly window, and what is never owed', () => {
     assert.match(behaviour, /A monthly routine catches up within its month\./);
-    assert.match(behaviour, /runs once, at the first tick Rundock is open later in the same month\./);
+    assert.match(behaviour, /runs once, at the first tick Rundock is open later in the same month, and its row marks the run as late/);
     assert.match(behaviour, /If the month ends first, it does not run, and the slot is recorded as missed/);
     assert.match(behaviour, /not owed at all if it passed before the routine existed, while it was paused or switched off, or before its plan was approved/);
     assert.match(behaviour, /A monthly routine does not re-fire once it has run at or after its scheduled time in that month/,
       'and the guard sentence covers the monthly period');
   });
 
-  // What a late monthly run carries is its record's dueAt. The row still words
-  // a catch-up by the clock alone, so the section quotes the row as the model
-  // draws it, from the slot the period gives, and claims no more: a row that
-  // names the day it was due moves this pin and the section with it.
-  test('the catch-up section says the record carries dueAt, and quotes the row as it is drawn', () => {
-    const { parseSchedule, periodOf } = require('../../lib/scheduler.js');
-    const model = require('../../public/routines-model.js');
+  // What a late monthly run carries is its record's dueAt, and its row marks it
+  // late, naming when it was due.
+  test('the catch-up section says the record carries dueAt, and the row marks a late run', () => {
     assert.match(behaviour, /Its run record names the slot it was due at, in a `dueAt` field, on every scheduled run/);
-    const ran = october(20, 10);
-    const drawn = model.runStatus({
-      lastStart: ran.toISOString(),
-      lastSlot: periodOf(parseSchedule(DAY_15), ran).slot.toISOString(),
-      now: october(20, 12).toISOString(),
-      lastRunStatus: 'success',
-    });
-    assert.strictEqual(drawn.kind, 'caught-up');
-    assert.ok(behaviour.includes(`\`${drawn.text}\``),
-      `the section quotes the row a run caught up on the 20th for the 15th draws: ${drawn.text}`);
-    assert.doesNotMatch(behaviour, /row marks the run as late/, 'and does not say the row marks it late');
+    assert.match(behaviour, /its row marks the run as late, naming when it was due/);
   });
 
   test('a slot earlier this month is still due', () => {
@@ -773,6 +759,20 @@ describe('ROUTINES.md: a monthly routine runs once a month and catches up within
   test('one that ran this month is suppressed', () => {
     assert.strictEqual(askedAt(october(25, 10), DAY_15, october(20, 10, 5)), null,
       'having caught up on the 20th, it is not due again that month');
+  });
+
+  // The row's word for a late run is the model's own lead, read off it, so the
+  // page and the row cannot part company on it.
+  test('the page calls a late run what the row calls it', () => {
+    const { OUTCOMES, CATCH_UP_AFTER_MS } = require('../../public/routines-model.js');
+    const lead = OUTCOMES['caught-up'].lead;
+    assert.strictEqual(lead, 'Ran late');
+    assert.match(routinesDoc, /The row's on-time, ran-late and missed verdicts are computed from scheduled runs only/,
+      'the verdict words follow the row');
+    assert.ok(behaviour.includes(`its row then leads with **${lead}**, naming when it started and when it was due`),
+      'and so does the description of a late run');
+    assert.match(behaviour, new RegExp(`A run counts as late from ${CATCH_UP_AFTER_MS / 60000} minutes after its slot\\.`));
+    assert.doesNotMatch(routinesDoc, /caught-up verdict|Caught up:/, 'the old word is gone from the page');
   });
 
   test('the page no longer says there are only two forms, or a run once per day or week', () => {
