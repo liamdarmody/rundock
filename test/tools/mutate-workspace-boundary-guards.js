@@ -1250,6 +1250,15 @@ const MUTATIONS = [
   [CARD_TOKENS, "Permission card: light success text falls back to the fill",
     "  --success-text: #266A36;\n",
     ""],
+  [CARD_CSS, "Permission card: the light surface is a literal laid over the token again",
+    ".permission-card.risk-low {",
+    "body.light .permission-card { background: #E8E3DB; }\n.permission-card.risk-low {"],
+  [CARD_CSS, "Permission card: the card draws the plain card rather than its surface token",
+    ".permission-card { background: var(--permission-card);",
+    ".permission-card { background: var(--card);"],
+  [CARD_TOKENS, "Permission card: the light surface token moves off #E8E3DB",
+    "  --permission-card: #E8E3DB;",
+    "  --permission-card: #F0EDE8;"],
   [CM_BOUNDARY, "A backslash escape in a Bash command is read as a path again",
     "    if (opts.shellTool !== 'PowerShell' && BASH_ESCAPE.test(raw)) continue;",
     ""],
@@ -3242,6 +3251,14 @@ const MUTATIONS = [
   [CLAUDE_CONSOLE, 'Reconnect: the macOS script takes its mode from the umask',
     '    fs.fchmodSync(fd, 0o700);\n',
     ''],
+  // One write call may take only part of the script, and Terminal runs
+  // whatever the file holds: half a script is half a command.
+  [CLAUDE_CONSOLE, 'Reconnect: the macOS script is left at whatever one write call took',
+    '    at += wrote;\n',
+    '    at = bytes.length;\n'],
+  [CLAUDE_CONSOLE, 'Reconnect: a write of the macOS script that takes nothing is tried for ever',
+    '    if (!(wrote > 0)) {\n',
+    '    if (false) {\n'],
   // A frame inside the main window, such as one a page embeds, taken for the
   // window itself.
   [CLAUDE_CONSOLE, 'Reconnect: a frame inside the window is taken for the window',

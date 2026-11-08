@@ -132,12 +132,12 @@ describe('the run record carries an explicit trigger from both writers', () => {
   test('a record written before the field existed crosses the wire as written and reads as scheduled', () => {
     withRun(({ sched, ws }) => {
       const old = {
-        id: 'old', agent: AGENT, routine: ROUTINE, sessionId: null, status: 'succeeded',
+        id: '01d0c0de-0000-4000-8000-000000000001', agent: AGENT, routine: ROUTINE, sessionId: null, status: 'succeeded',
         startedAt: NOW.toISOString(), endedAt: NOW.toISOString(), durationMs: 1000, error: null,
         files: [], filesStatus: 'known', filesReason: null,
       };
       fs.mkdirSync(runsDir(ws), { recursive: true });
-      fs.writeFileSync(path.join(runsDir(ws), 'old.json'), JSON.stringify(old));
+      fs.writeFileSync(path.join(runsDir(ws), `${old.id}.json`), JSON.stringify(old));
       const [record] = sched.readRunRecords();
       assert.deepStrictEqual(record, old, 'the reader hands the record over exactly as it was written');
       const model = require('../../public/run-detail-model.js');
@@ -709,7 +709,7 @@ describe('the row', () => {
     assert.deepStrictEqual(w.sent.map(m => m.type), ['set_routine_paused', 'approve_routine_plan'], 'the bound actions differ');
     assert.strictEqual(w.sent[0].paused, false);
     const colour = (el) => w.getComputedStyle(el).color;
-    assert.strictEqual(colour(selfLabel), 'var(--text-3)');
+    assert.strictEqual(colour(selfLabel), 'var(--text-2-strong)');
     assert.strictEqual(colour(consentText), 'var(--attention)');
     dom.window.close();
   });
