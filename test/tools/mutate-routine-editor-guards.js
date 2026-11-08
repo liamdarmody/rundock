@@ -414,11 +414,11 @@ const MUTATIONS = [
     "  ['schedule', assertWritableSchedule],\n",
     ''],
   [ROUTINES_SCHEDULE, 'the grammar is the one the scheduler actually reads',
-    "const SCHEDULE_WORDS =\n  /^every (day|monday|tuesday|wednesday|thursday|friday|saturday|sunday) at ([01]\\d|2[0-3]):[0-5]\\d$/;",
+    "const SCHEDULE_WORDS =\n  /^(every (day|monday|tuesday|wednesday|thursday|friday|saturday|sunday)|on day 0?([1-9]|1\\d|2[0-8]) of every month|on the last day of every month) at ([01]\\d|2[0-3]):[0-5]\\d$/;",
     'const SCHEDULE_WORDS = /^every (\\w+) at (\\d{2}):(\\d{2})$/;'],
   [ROUTINES_SCHEDULE, 'a schedule is read whole, not found inside a longer line',
-    "const SCHEDULE_WORDS =\n  /^every (day|monday|tuesday|wednesday|thursday|friday|saturday|sunday) at ([01]\\d|2[0-3]):[0-5]\\d$/;",
-    'const SCHEDULE_WORDS = /every (day|monday|tuesday|wednesday|thursday|friday|saturday|sunday) at ([01]\\d|2[0-3]):[0-5]\\d/;'],
+    "const SCHEDULE_WORDS =\n  /^(every (day|monday|tuesday|wednesday|thursday|friday|saturday|sunday)|on day 0?([1-9]|1\\d|2[0-8]) of every month|on the last day of every month) at ([01]\\d|2[0-3]):[0-5]\\d$/;",
+    'const SCHEDULE_WORDS = /(every (day|monday|tuesday|wednesday|thursday|friday|saturday|sunday)|on day 0?([1-9]|1\\d|2[0-8]) of every month|on the last day of every month) at ([01]\\d|2[0-3]):[0-5]\\d/;'],
   // A REFUSAL BELONGS TO THE SURFACE THAT ASKED, and for this one that surface
   // is the editor. The reader is looking at the sentence builder with a save in
   // flight; routine_action_error draws on the routines list they have left.
