@@ -166,6 +166,48 @@ describe('the retry: every other way of writing it is refused too', () => {
   }
 });
 
+// A FOLDER THAT HOLDS A STARTUP FILE IS THE STARTUP FILE. Moving, removing or
+// replacing fish's folder, `~/.config` above it, a ZDOTDIR or the dotfiles
+// folder a startup file links into changes what runs as surely as writing the
+// file: `mv ~/.config/fish x && ln -s /tmp/x ~/.config/fish` has fish run the
+// agent's `config.fish`.
+describe('a write to a folder that holds a startup file asks, and is refused when Rundock cannot be asked', () => {
+  const FOLDER_WRITES = [
+    ['mv ~/.config/fish ~/.config/fish.bak', '~/.config/fish'], ['rm -rf ~/.config/fish', '~/.config/fish'],
+    ['ln -sfn /tmp/x ~/.config/fish', '~/.config/fish'], ['mv ~/.config ~/config-old', '~/.config'],
+    ['mv ~/dotfiles ~/dotfiles-old', '~/dotfiles'], ['rm -rf ~/dotfiles', '~/dotfiles'],
+  ];
+  for (const setup of SETUPS()) {
+    test(`moving, removing or replacing one, when ${setup.label}`, async () => {
+      for (const mode of MODES) {
+        for (const [command, folder] of FOLDER_WRITES) {
+          const r = await judge(setup, mode, 'Bash', { command });
+          assert.strictEqual(r.dead.decision, 'deny', `${mode.label}: ${command}`);
+          assert.ok(r.payload && (r.payload.crossings || []).some(c => c.answerFile && c.startupFile === folder), `${mode.label}: ${command} asks about ${folder}`);
+        }
+      }
+    });
+  }
+  test('a ZDOTDIR folder too, when Rundock\'s environment sets it', async () => {
+    const zdot = path.join(home, 'zdot-folder');
+    fx.write(path.join(zdot, '.zshrc'), ORIGINAL);
+    for (const mode of MODES) {
+      const r = await judge(SETUPS()[1], mode, 'Bash', { command: 'mv ~/zdot-folder ~/zdot-old' }, { ZDOTDIR: zdot });
+      assert.strictEqual(r.dead.decision, 'deny', mode.label);
+      assert.ok(r.payload && (r.payload.crossings || []).some(c => c.startupFile === '~/zdot-folder'), mode.label);
+    }
+  });
+  test('the inverse: a read of the folder, or a write to another file in it, carries no startup-file tag', () => {
+    for (const setup of SETUPS()) {
+      for (const command of ['ls ~/.config/fish', 'cat ~/dotfiles/bash_profile', 'echo x > ~/dotfiles/README.md', 'mkdir -p ~/.config/nvim', 'touch ~/.config/fish/fish_variables.bak']) {
+        const a = hook.classifyShellAccess('Bash', { command }, setup.ws, setup.extraDirs, home, true, { cwd: setup.ws });
+        const tagged = !!(a && (a.startupFile || hook.boundaryCrossingsFor(a).some(c => c && c.startupFile)));
+        assert.strictEqual(tagged, false, `${setup.label}: ${command}`);
+      }
+    }
+  });
+});
+
 describe('a bare name in code, with the workspace at home, is the startup file it names', () => {
   // No slash, so not shaped like a place: only the names read for the answer
   // files see it, and from the home folder `.zshrc` is `~/.zshrc`.
@@ -296,6 +338,16 @@ describe('nothing stored answers it', () => {
     }
   });
 
+  test('a folder\'s card is worded as one about what runs when you open a terminal, and names the folder', async () => {
+    for (const setup of SETUPS()) {
+      const r = await judge(setup, MODES[0], 'Bash', { command: 'rm -rf ~/.config/fish' });
+      const html = ask(relayed(r.payload));
+      assert.match(html, /permission-summary">Wants to change what runs when you open a terminal</, setup.label);
+      assert.ok(html.includes('~/.config/fish'), `${setup.label}: names the folder`);
+      assert.doesNotMatch(html, /data-perm-action="always"|data-perm-action="allow-folder"|Always allow/, setup.label);
+    }
+  });
+
   test('the record\'s card names it as Rundock\'s own record', async () => {
     const r = await judge(SETUPS()[1], MODES[0], 'Write', { file_path: abs('~/.rundock-startup-file-exposure.json'), content: '{}' });
     const html = ask(relayed(r.payload));
@@ -316,6 +368,11 @@ describe('nothing stored answers it', () => {
         assert.strictEqual(boundary.crossingCovered({ path: abs(t) }, home), false, `and still does not answer for ${t}`);
       }
       assert.strictEqual(boundary.crossingCovered({ path: path.join(home, '.zshrc.bak') }, home), true, 'a file beside them is still covered');
+      // Nor a write to a folder that holds one; a read of that folder stays covered.
+      for (const folder of ['.config/fish', '.config', 'dotfiles']) {
+        assert.strictEqual(boundary.crossingCovered({ path: path.join(home, folder), answerFile: true, startupFile: `~/${folder}` }, home), false, `a write to ~/${folder}`);
+        assert.strictEqual(boundary.crossingCovered({ path: path.join(home, folder) }, home), true, `a read of ~/${folder}`);
+      }
     } finally {
       config.setWorkspace(prev);
       fs.rmSync(store, { force: true });

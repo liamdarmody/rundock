@@ -533,7 +533,7 @@
   function alwaysAskCopy(crossing) {
     if (!crossing) return null;
     if (crossing.secret) return ALWAYS_ASK_COPY.secret;
-    if (crossing.answerFile) return answerFileCopy(crossing.path);
+    if (crossing.answerFile) return answerFileCopy(crossing.path, crossing.startupFile);
     if (crossing.instructionFile) return ALWAYS_ASK_COPY.instructionFile;
     if (crossing.hiddenHome) return hiddenHomeCopy(crossing.hiddenHome, crossing.write === true);
     if (crossing.persistenceSurface) return ALWAYS_ASK_COPY.persistenceSurface;
@@ -746,8 +746,16 @@
     });
     return ['launcher', 'console', 'record', 'startup', 'runs', 'connectorSecrets'].find(k => kinds.includes(k)) || 'answers';
   }
-  function answerFileCopy(paths) { return ANSWER_FILE_COPY[answerFileKind(paths)].context; }
-  function answerFileSummary(paths) { return ANSWER_FILE_COPY[answerFileKind(paths)].summary; }
+  // A startup label (the `startup_file` the hook or Codex grading put on the
+  // request) marks a startup file, or a folder holding one, whatever its path
+  // is called: `~/.config/fish`, or `~` itself.
+  function answerFileKindFor(paths, startupLabel) {
+    const kind = answerFileKind(paths);
+    if (!startupLabel || ['launcher', 'console', 'record', 'startup'].includes(kind)) return kind;
+    return answerFileKind(startupLabel) === 'record' ? 'record' : 'startup';
+  }
+  function answerFileCopy(paths, startupLabel) { return ANSWER_FILE_COPY[answerFileKindFor(paths, startupLabel)].context; }
+  function answerFileSummary(paths, startupLabel) { return ANSWER_FILE_COPY[answerFileKindFor(paths, startupLabel)].summary; }
 
   // ── The put-back card ────────────────────────────────────────────────────
   // Rundock has already put back a change to one of the workspace's permission

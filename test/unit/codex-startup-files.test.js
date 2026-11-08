@@ -71,6 +71,27 @@ describe('a Codex file change that touches a listed file is the answer-file card
       });
     }
   }
+  test('a change to a folder that holds one is named as that folder, and worded as what runs when you open a terminal', () => {
+    const RP = require('../../public/permissions.js');
+    for (const [grantRoot, name] of [[home, '~'], [path.join(home, '.config', 'fish'), '~/.config/fish'], [path.join(home, '.config'), '~/.config'], [path.join(home, 'dotfiles'), '~/dotfiles']]) {
+      const r = gradeCodexApproval({ kind: 'fileChange', params: { grantRoot }, workspaceRoot: ws, extraDirs: [home], home }).request;
+      assert.strictEqual(r.startup_file, name, grantRoot);
+      assert.strictEqual(r.crossings[0].startupFile, name, grantRoot);
+      const named = [r.resolved_path, ...r.crossings.map(c => c.path)];
+      assert.strictEqual(RP.answerFileSummary(named, r.startup_file), 'Wants to change what runs when you open a terminal', grantRoot);
+      assert.match(RP.answerFileCopy(named, r.startup_file), /runs each time you open a terminal/, grantRoot);
+    }
+  });
+  test('run from source, a change to the checkout that holds the record is named by the record', () => {
+    const RP = require('../../public/permissions.js');
+    delete process.env.RUNDOCK_ELECTRON;
+    try {
+      const checkout = path.join(__dirname, '..', '..');
+      const r = gradeCodexApproval({ kind: 'fileChange', params: { grantRoot: checkout }, workspaceRoot: ws, extraDirs: [checkout], home }).request;
+      assert.strictEqual(path.basename(r.startup_file), '.startup-file-exposure.json');
+      assert.strictEqual(RP.answerFileSummary([r.resolved_path], r.startup_file), 'Wants to change Rundock\'s own record');
+    } finally { process.env.RUNDOCK_ELECTRON = '1'; }
+  });
   test('the card names the file as the registry spells it', () => {
     const g = gradeCodexApproval({ kind: 'fileChange', params: { grantRoot: path.join(home, 'dotfiles', 'zprofile') }, workspaceRoot: ws, extraDirs: [home], home });
     assert.strictEqual(g.request.crossings[0].startupFile, '~/.zprofile');

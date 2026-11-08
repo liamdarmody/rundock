@@ -403,6 +403,11 @@ const STARTUP_CODEX = { src: path.join(ROOT, 'lib', 'runtime', 'codex-approval.j
 const STARTUP_SANDBOX = { src: path.join(ROOT, 'lib', 'workspace', 'scaffold.js'), suite: 'test/unit/sandbox-settings.test.js' };
 const STARTUP_GUARD = { src: path.join(ROOT, 'lib', 'workspace', 'answer-file-guard.js'), suite: 'test/unit/startup-file-guard.test.js' };
 const STARTUP_GLUE = { src: path.join(ROOT, 'lib', 'runtime', 'codex-glue.js'), suite: 'test/unit/startup-file-guard.test.js' };
+// A folder that holds a startup file: the card's words where the window builds
+// them, and the hook's naming as Codex grading uses it.
+const STARTUP_CHAT = { src: path.join(ROOT, 'public', 'views', 'chat.js'), suite: 'test/unit/shell-startup-files.test.js' };
+const STARTUP_HOOK_NAMES = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/codex-startup-files.test.js' };
+const STARTUP_COPY_NAMES = { src: path.join(ROOT, 'public', 'permissions.js'), suite: 'test/unit/codex-startup-files.test.js' };
 // The test preload that keeps every test off the account's own startup files.
 const STARTUP_PRELOAD = { src: path.join(ROOT, 'test', 'helpers', 'account-home-refused.js'), suite: 'test/unit/startup-file-guard.test.js' };
 const MUTATIONS = [
@@ -3666,8 +3671,8 @@ const MUTATIONS = [
     '  const exact = hook.startupFileAt(g, home);',
     '  const exact = null;'],
   [STARTUP_CODEX, 'Startup files: Codex grading accepts a change to a folder that holds one',
-    '  const startup = exact || hook.shellStartupEntries(home).find(e => under(hook.canonicalize(e.path), g));',
-    '  const startup = exact;'],
+    '  const held = exact ? [exact] : hook.shellStartupEntries(home).filter(e => under(hook.canonicalize(e.path), g));',
+    '  const held = exact ? [exact] : [];'],
   [STARTUP_SANDBOX, 'Startup files: the sandbox block leaves them writable',
     '    ...shellStartupEntries(home).map(e => e.path),\n',
     ''],
@@ -3752,6 +3757,38 @@ const MUTATIONS = [
     '  const g = homeGuards.get(key(os.homedir()));\n  if (!g || !turns.size) return [];\n'],
   [STARTUP_GUARD, 'Startup files: Keep on a change that could not be read removes the file',
     "  if (change.unread) throw new Error('what the agent left there could not be read, so there is nothing to keep');\n",
+    ''],
+  // A write to a folder that holds a startup file is asked about, and named as
+  // that folder, in words about what runs when a terminal opens.
+  [STARTUP_HOOK, 'Startup files: a write to a folder that holds one is ordinary work',
+    ' || startupFolderAt(r, home, foldsCase, pmod);',
+    ';'],
+  [STARTUP_BOUNDARY, 'Startup files: a stored grant over home answers a write to a folder that holds one',
+    '  if (crossing.answerFile === true && startupFolderAt(crossing.path, home)) return false;\n',
+    ''],
+  [STARTUP_CHAT, 'Startup files: the card for a folder that holds one is worded from its path alone',
+    '    summary = RundockPermissions.answerFileSummary(named, startupLabel);',
+    '    summary = RundockPermissions.answerFileSummary(named);'],
+  [STARTUP_COPY, 'Startup files: the label on the request does not choose the card\'s words',
+    "    if (!startupLabel || ['launcher', 'console', 'record', 'startup'].includes(kind)) return kind;",
+    '    return kind;'],
+  [STARTUP_COPY_NAMES, 'Startup files: a label naming the record is worded as a startup file',
+    "    return answerFileKind(startupLabel) === 'record' ? 'record' : 'startup';",
+    "    return 'startup';"],
+  [STARTUP_CODEX, 'Startup files: Codex grading names a folder by a file inside it',
+    '    const name = exact ? exact.name : onlyRecord ? held[0].name : hook.homeSpelled(g, hook.canonicalize(home));',
+    '    const name = exact ? exact.name : held[0].name;'],
+  [STARTUP_CODEX, 'Startup files: Codex grading names the checkout as a startup folder',
+    '    const onlyRecord = !exact && !folder && held.every(e => e.record);',
+    '    const onlyRecord = false;'],
+  [STARTUP_CODEX, 'Startup files: Codex grading words a folder holding the answers too as one about permissions',
+    '  if (exact || folder || held.length) {',
+    '  if (!touchesAnswerFile(g, workspaceRoot) && (exact || folder || held.length)) {'],
+  [STARTUP_HOOK_NAMES, 'Startup files: home is named by its full path',
+    "  if (rel === '') return '~';\n",
+    ''],
+  [STARTUP_HOOK_NAMES, "Startup files: the record's folder counts as one holding a startup file",
+    '    if (e.record) continue;\n',
     ''],
 ];
 const REPORTER = ['--test-reporter', 'spec'];

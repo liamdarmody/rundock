@@ -803,6 +803,7 @@ function shellStartupEntries(home = os.homedir(), env = process.env) {
 }
 function homeSpelled(p, home) {
   const rel = path.relative(path.resolve(home), p);
+  if (rel === '') return '~';
   return rel && !rel.startsWith('..') && !path.isAbsolute(rel) ? `~/${rel.split(path.sep).join('/')}` : p;
 }
 // The listed entry `resolvedPath` is, or lies in: { path, name, record } as the
@@ -816,6 +817,30 @@ function startupFileAt(resolvedPath, home = os.homedir(), foldsCase = hostFoldsC
     if (e.dir && foldCase(c, foldsCase).startsWith(foldCase(at, foldsCase) + path.sep)) {
       const rest = c.slice(at.length + 1);
       return { path: path.join(e.path, rest), name: `${e.name}/${rest.split(path.sep).join('/')}` };
+    }
+  }
+  return null;
+}
+// A FOLDER THAT HOLDS A LISTED STARTUP FILE: fish's folder or `~/.config`
+// above it, a ZDOTDIR, or the dotfiles folder a startup file links into, below
+// home, or the folder the file sits in when that is outside home. Removing,
+// moving or replacing one changes what runs as surely as writing the file, so
+// a write to the folder itself is asked about the same way, named as the
+// folder: { path, name } or null. Home is none: every write lands in it. Nor is
+// the record's folder, which is Rundock's own, or the checkout it runs from.
+function startupFolderAt(resolvedPath, home = os.homedir(), foldsCase = hostFoldsCase(), pmod = path, env = process.env) {
+  if (pmod !== path || typeof resolvedPath !== 'string' || !resolvedPath) return null;
+  const at = canonicalize(resolvedPath);
+  const c = foldCase(at, foldsCase);
+  const h = canonicalize(home);
+  if (c === foldCase(h, foldsCase)) return null;
+  const belowHome = c.startsWith(foldCase(h, foldsCase) + path.sep);
+  for (const e of shellStartupEntries(home, env)) {
+    if (e.record) continue;
+    // As listed, its folders resolved, and where it leads, if it is a link.
+    for (const p of [path.join(canonicalize(path.dirname(e.path)), path.basename(e.path)), canonicalize(e.path)]) {
+      const f = foldCase(p, foldsCase);
+      if (f.startsWith(c + path.sep) && (belowHome || foldCase(path.dirname(p), foldsCase) === c)) return { path: at, name: homeSpelled(at, h) };
     }
   }
   return null;
@@ -2898,8 +2923,9 @@ function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), 
   const intoFolders = new Set(writes.into.map(i => i.dest));
   const reachesAnswerFiles = (raw, resolved, pmod) => !intoFolders.has(raw)
     && (holdsAnswerFiles(resolved, workspaceRoot, foldsCase, pmod) || globReachesAnswerFiles(resolved, workspaceRoot, foldsCase, pmod));
-  // A startup file is reported as the registry spells it, whichever spelling reached it.
-  const startupAt = (r, pmod) => startupFileAt(r, home, foldsCase, pmod);
+  // A startup file is reported as the registry spells it, whichever spelling
+  // reached it, and a folder holding one as that folder.
+  const startupAt = (r, pmod) => startupFileAt(r, home, foldsCase, pmod) || startupFolderAt(r, home, foldsCase, pmod);
   const addAnswer = (resolved, pmod) => {
     const sf = startupAt(resolved, pmod);
     const at = sf ? sf.path : resolved;
@@ -3568,7 +3594,7 @@ module.exports = {
   HOME_SECRET_FILES, secretsRegistry,
   agentHomeRoot, codexHomeRoot, runtimeHomes,
   isWorkspaceAnswerFile, isRuntimeGuardedAnswerFile, isRundockConsolePath, RUNDOCK_CONSOLE_DIR,
-  SHELL_STARTUP_FILES, STARTUP_FILE_EXPOSURE_RECORD, exposureRecordPath, shellStartupEntries, startupFileAt,
+  SHELL_STARTUP_FILES, STARTUP_FILE_EXPOSURE_RECORD, exposureRecordPath, shellStartupEntries, startupFileAt, startupFolderAt, homeSpelled,
   WORKSPACE_ANSWER_FILES, RUNDOCK_ANSWER_FILES, RUNTIME_GUARDED_ANSWER_FILES, LAUNCHER_FILES, WHAT_RUNS_FILES, WHAT_RUNS_DIRS,
   boundaryCrossingsFor, CODE_READS_ALLOWED, UNATTENDED_NEXT_UNLOADED,
   REFUSED_CLAUDE_EDIT_DIRS, isReadOnlyShellCommand, isRundockAnswerFileAnywhere, isRundockWorkspaceSettingsFile, isAnswerFileOfAnyWorkspace, otherWorkspaceRootOf, isOtherWorkspaceAgentSurface,
