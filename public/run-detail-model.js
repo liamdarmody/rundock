@@ -354,9 +354,27 @@
    *
    * `root` is the workspace the server says is open and `tree` the last tree
    * it sent; with neither yet, nothing links.
+   *
+   * A ROOT CAN HAVE TWO SPELLINGS. A run records its files under the folder
+   * its working directory resolves to, so for a workspace opened through a
+   * symbolic link the record's paths begin with a different string from the
+   * one the client holds, though both name one folder. `root` may then be a
+   * list of those spellings, each tried in turn by the same rule; an entry
+   * that is not a non-empty string is passed over. The tree is the same tree
+   * whichever spelling matched, so what opens is still a path it lists.
    */
   function treePathFor(recorded, root, tree) {
-    if (typeof recorded !== 'string' || typeof root !== 'string' || !root || !Array.isArray(tree)) return null;
+    if (typeof recorded !== 'string' || !Array.isArray(tree)) return null;
+    for (const spelling of Array.isArray(root) ? root : [root]) {
+      const found = underRoot(recorded, spelling, tree);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  /** The tree's path for `recorded` under one spelling of the root, or null. */
+  function underRoot(recorded, root, tree) {
+    if (typeof root !== 'string' || !root) return null;
     // A WINDOWS ROOT, a drive letter or a share, separates with backslashes,
     // and so does every path recorded under it, where the tree uses forward
     // slashes. Mapped only under such a root: elsewhere a backslash is a

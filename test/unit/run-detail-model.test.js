@@ -676,6 +676,8 @@ test('a recorded path links only when it is this workspace\'s root, one separato
     file('Roadmap.md'),
   ];
   const WIN_ROOT = 'C:\\Users\\me\\Vault';
+  const REAL_DIR = '/Volumes/Data/Vault';
+  const BOTH = [ROOT_DIR, REAL_DIR];
   const ROWS = [
     // [name, recorded, root, tree, the tree path it opens or null]
     ['a file the tree lists, under this workspace\'s root', `${ROOT_DIR}/notes/plan.md`, ROOT_DIR, TREE, 'notes/plan.md'],
@@ -711,6 +713,16 @@ test('a recorded path links only when it is this workspace\'s root, one separato
     ['a backslash under a root that is not a Windows one is a character in a name', `${ROOT_DIR}/notes\\plan.md`, ROOT_DIR, TREE, null],
     ['any path while no tree has loaded', `${ROOT_DIR}/notes/plan.md`, ROOT_DIR, null, null],
     ['any path while no root is known', `${ROOT_DIR}/notes/plan.md`, null, TREE, null],
+    // A workspace opened through a symbolic link: a run records its files
+    // under the folder the link resolves to, so the root comes as the two
+    // spellings of one folder, the one opened and the resolved one.
+    ['a path under the resolved spelling of the root links', `${REAL_DIR}/notes/plan.md`, BOTH, TREE, 'notes/plan.md'],
+    ['a path under the opened spelling still links when both are known', `${ROOT_DIR}/notes/plan.md`, BOTH, TREE, 'notes/plan.md'],
+    ['a sibling of the resolved spelling', `${REAL_DIR}-old/a.md`, BOTH, TREE, null],
+    ['a dot file under the resolved spelling', `${REAL_DIR}/.env`, BOTH, TREE, null],
+    ['a path under neither spelling', '/Users/me/Other/notes/plan.md', BOTH, TREE, null],
+    ['a spelling that is not a string is passed over', `${ROOT_DIR}/notes/plan.md`, [null, 42, ROOT_DIR], TREE, 'notes/plan.md'],
+    ['an empty list of spellings', `${ROOT_DIR}/notes/plan.md`, [], TREE, null],
   ];
   assert.strictEqual(typeof model.treePathFor, 'function', 'the matcher is exported from the model');
   for (const [name, recorded, root, tree, expected] of ROWS) {

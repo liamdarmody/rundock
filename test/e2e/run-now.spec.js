@@ -89,8 +89,10 @@ test('pressing Run disables the control while the stub runtime runs, and the row
 // absolute paths built from the workspace the server reports, which is the
 // spelling the run screen holds as the root. The stub would otherwise name
 // them from its own working directory, which on a machine whose temporary
-// folder sits behind a symlink is another spelling of the same folder, and
-// every name would then stay plain: the safe failure, and not this test.
+// folder sits behind a symlink is the resolved spelling of the same folder.
+// The screen links that spelling too (test/integration/
+// run-record-linked-root.test.js); this test keeps to one spelling so what it
+// checks is the click, the key and the color on every machine.
 const OPENED = 'Opened from run';
 const OPENED_PROMPT = 'opened e2e body';
 

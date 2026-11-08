@@ -73,6 +73,13 @@ let stopRequested = false;
 // them redraws nothing (see runDetailTreeUpdated).
 let drawnLinks = null;
 
+// The folder the open workspace resolves to, as named by the reply that
+// carried the record, with the workspace it was read for. A run records its
+// files under that folder, which for a workspace opened through a symbolic
+// link is a different spelling from the one the shell holds. Replaced by each
+// record that arrives; used only while the shell holds the workspace it names.
+let resolvedRoot = null;
+
 // The clock, taken from the global so a test can supply one. Undeclared
 // identifiers are safe under typeof, so this works when the module is required
 // in node with no global at all.
@@ -104,10 +111,19 @@ function fileTree() {
   return typeof cachedFileTree !== 'undefined' && Array.isArray(cachedFileTree) ? cachedFileTree : null;
 }
 
+// The spellings of the open workspace a recorded path may begin with: the one
+// the shell holds and, while the last reply was read for that same workspace,
+// the folder it resolves to.
+function rootSpellings() {
+  const root = workspaceRoot();
+  if (!root || !resolvedRoot || resolvedRoot.workspace !== root || resolvedRoot.real === root) return root;
+  return [root, resolvedRoot.real];
+}
+
 /** The tree path a recorded path opens, or null where the name stays plain. */
 function treePathOf(recorded) {
   const model = runDetailModel();
-  return model ? model.treePathFor(recorded, workspaceRoot(), fileTree()) : null;
+  return model ? model.treePathFor(recorded, rootSpellings(), fileTree()) : null;
 }
 
 /** For each listed file, the tree path its name opens, or null. */
@@ -365,6 +381,10 @@ function runArrived(reply) {
   // `null` is kept as `null`: it means no record, which is a state of its own
   // and is not a run that changed nothing.
   record = reply.run === undefined ? null : reply.run;
+  resolvedRoot = typeof reply.workspace === 'string' && reply.workspace
+    && typeof reply.workspaceRealPath === 'string' && reply.workspaceRealPath
+    ? { workspace: reply.workspace, real: reply.workspaceRealPath }
+    : null;
   // A PENDING STOP SURVIVES A RECORD THAT STILL SAYS THE RUN IS GOING.
   // cancelRun only sends the signal; the ending arrives later on its own
   // clock (see runDetailStop), so a record that still reads as stoppable is

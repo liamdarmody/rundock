@@ -121,14 +121,14 @@ const TREE = [folderNode('Hello World', [fileNode('Hello World/hello-world-2026-
  * holds them once the roster and the tree have arrived, and a stand-in for
  * the Files view's open that records what it was asked to open.
  */
-function drawLinked(run, { tree = TREE, root = TREE_ROOT } = {}) {
+function drawLinked(run, { tree = TREE, root = TREE_ROOT, reply = {} } = {}) {
   const { w, doc, dom } = shell();
   w.rosterWorkspacePath = root;
   w.cachedFileTree = tree;
   w.opened = [];
   w.openWorkspaceFilePath = (p) => { w.opened.push(p); };
   w.openRunDetail('default', 'Hello World');
-  w.runArrived({ type: 'run', runId: null, agentId: 'default', routine: 'Hello World', run });
+  w.runArrived({ type: 'run', runId: null, agentId: 'default', routine: 'Hello World', run, ...reply });
   return { w, doc, dom };
 }
 
@@ -723,6 +723,31 @@ describe('a changed file opens from the record', () => {
     name.click();
     assert.deepStrictEqual(w.opened, ['notes/plan.md', 'notes/plan.md'], 'again on a second click');
     dom.window.close();
+  });
+
+  // A workspace opened through a symbolic link. A run records its files under
+  // the folder the link resolves to, so the reply carrying the record names
+  // that spelling beside the workspace it was read from.
+  const RESOLVED = record({ files: [{
+    path: '/private/w/Hello World/hello-world-2026-08-24.md', tool: 'Write', change: 'created', at: '2026-08-24T00:30:43.206Z', source: 'transcript',
+  }] });
+
+  test("a file recorded under a linked workspace's resolved folder links, and opens the tree's path", () => {
+    const { w, doc, dom } = drawLinked(RESOLVED, { reply: { workspace: TREE_ROOT, workspaceRealPath: '/private/w' } });
+    const [name] = names(doc);
+    assert.strictEqual(name.tagName, 'BUTTON', 'the name links');
+    name.click();
+    assert.deepStrictEqual(w.opened, ['Hello World/hello-world-2026-08-24.md'], 'and the click opens the tree\'s own path');
+    assert.strictEqual(doc.querySelector('[data-run-detail="plain-names"]'), null, 'with no plain name to explain');
+    dom.window.close();
+  });
+
+  test('the resolved folder counts only for the workspace the reply was read from', () => {
+    for (const reply of [{}, { workspace: '/elsewhere', workspaceRealPath: '/private/w' }, { workspace: TREE_ROOT, workspaceRealPath: 42 }]) {
+      const { doc, dom } = drawLinked(RESOLVED, { reply });
+      assert.strictEqual(names(doc)[0].tagName, 'SPAN', `${JSON.stringify(reply)}: the name stays plain`);
+      dom.window.close();
+    }
   });
 
   test("a name and path holding quotes and markup render as their own characters and open the tree's path", () => {
