@@ -97,7 +97,7 @@
     }
   },
   "public/styles/views/chat.css": {
-    "why": "Permission and status cards. Every red became --danger or a color-mix tint of it, the bubble radius became a named token, and the pills and the error card joined the scale. What remains is accent, success, working and attention tints, one shadow black, one dark-on-bright-fill text colour, and one transition duration. The dark text colour sits on a BRIGHT status fill and is correct in both themes; tokenising it would make it light-on-light in light mode. Tints are a token re-typed as raw channels, waiting on a decision about how a tint of a token is written, since color-mix and relative colour both change the computed value. The light permission card's own colour (#E8E3DB) is a one-surface value: darker than the white code block inside it (1.28:1 of separation) and not a surface anywhere else, so it is not a token. The send button's glow is --accent-action's channels, the same tint pattern as the rest of this file. One animation duration, 1.8s: the reconnect card's waiting pulse runs the thinking indicator's agentPulse at the thinking indicator's own 1.8s, so the two read as one rhythm; an animation duration, timed to what it says, not a transition.",
+    "why": "Permission and status cards. Every red became --danger or a color-mix tint of it, the bubble radius became a named token, and the pills and the error card joined the scale. What remains is accent, success, working and attention tints, one shadow black, one dark-on-bright-fill text colour, and one transition duration. The dark text colour sits on a BRIGHT status fill and is correct in both themes; tokenising it would make it light-on-light in light mode. Tints are a token re-typed as raw channels, waiting on a decision about how a tint of a token is written, since color-mix and relative colour both change the computed value. The send button's glow is --accent-action's channels, the same tint pattern as the rest of this file. One animation duration, 1.8s: the reconnect card's waiting pulse runs the thinking indicator's agentPulse at the thinking indicator's own 1.8s, so the two read as one rhythm; an animation duration, timed to what it says, not a transition.",
     "allow": {
       "1.8s": 1,
       "#1a1a1a": 1,
@@ -110,7 +110,6 @@
       "rgba(122,162,232,0.35)": 1,
       "rgba(107,198,126,0.06)": 1,
       "0.25s": 1,
-      "#E8E3DB": 1,
       "rgba(193,87,41,0.3)": 1,
       "rgba(193,87,41,0.4)": 1
     }

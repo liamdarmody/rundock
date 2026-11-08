@@ -75,6 +75,37 @@ const FOUR_ROWS = [
 const ROUTINES_CSS = read('public', 'styles', 'views', 'routines.css');
 const TOKENS_CSS = read('public', 'styles', 'tokens.css');
 
+// A token's value in one theme, its var() chain followed, as an upper-case
+// hex. The light theme restates some tokens on body.light and inherits the
+// rest from :root, where a token that names another is computed with the dark
+// values, so a token body.light does not declare is read as dark.
+function themedToken(name, theme) {
+  const clean = TOKENS_CSS.replace(/\/\*[\s\S]*?\*\//g, '');
+  const block = (selector) => {
+    const start = clean.indexOf(`${selector} {`);
+    assert.ok(start !== -1, `tokens.css has no ${selector} block`);
+    const out = new Map();
+    for (const d of clean.slice(clean.indexOf('{', start) + 1, clean.indexOf('}', start)).split(';')) {
+      const i = d.indexOf(':');
+      if (i > 0 && d.slice(0, i).trim().startsWith('--')) out.set(d.slice(0, i).trim(), d.slice(i + 1).trim());
+    }
+    return out;
+  };
+  const dark = block(':root');
+  const light = block('body.light');
+  assert.ok(dark.size > 30 && light.size > 10, 'the token parse found almost nothing, so nothing is compared');
+  const follow = (token, inLight, seen) => {
+    assert.ok(seen.length < 10, `${seen.join(' -> ')} does not end in a color`);
+    const own = inLight && light.has(token);
+    const raw = own ? light.get(token) : dark.get(token);
+    assert.ok(raw !== undefined, `${token} is declared nowhere in tokens.css`);
+    const m = /^var\((--[\w-]+)\)$/.exec(raw);
+    if (m) return follow(m[1], own, [...seen, token]);
+    return raw.toUpperCase();
+  };
+  return follow(`--${name}`, theme === 'light', []);
+}
+
 // The rail, the sidebar and both view panels are CUT OUT OF index.html rather
 // than written here. Whether an entry is on the rail is a claim about the
 // shipped page, and a hand-built rail in this file answers that question
@@ -729,6 +760,39 @@ describe('the ruling, against what the page resolves', () => {
     const tone = resolved();
     assert.notStrictEqual(tone['failed'].colour, tone['ok'].colour);
     assert.notStrictEqual(tone['failed'].colour, tone['ok-quiet'].colour);
+  });
+
+  // The rules above are compared as the tokens they name, because the document
+  // here does not resolve a var(). A failure drawn in a DIFFERENT success token
+  // than the successes wear (the fill, --success, where the successes wear the
+  // text token, --success-text) names a different token and passes those
+  // checks while painting the same green. So the failure's color is also
+  // followed through tokens.css to its value, in each theme, and held apart
+  // from every color a success draws: both success tones and both success
+  // tokens.
+  test('a failure resolves to no color a success paints, in either theme', () => {
+    const tone = resolved();
+    const named = (where, colour) => {
+      const m = /^var\(--([\w-]+)\)$/.exec(colour);
+      assert.ok(m, `${where} draws ${colour}, not a token this can follow`);
+      return m[1];
+    };
+    // Every clash in both themes is collected before anything is asserted, so
+    // the failure names each theme it paints green in.
+    const clashes = [];
+    for (const theme of ['dark', 'light']) {
+      const failed = themedToken(named('failed', tone['failed'].colour), theme);
+      const successes = {
+        'the ok tone': themedToken(named('ok', tone['ok'].colour), theme),
+        'the ok-quiet tone': themedToken(named('ok-quiet', tone['ok-quiet'].colour), theme),
+        '--success': themedToken('success', theme),
+        '--success-text': themedToken('success-text', theme),
+      };
+      for (const [what, value] of Object.entries(successes)) {
+        if (failed === value) clashes.push(`${theme}: a failure paints ${failed}, which is ${what}`);
+      }
+    }
+    assert.deepStrictEqual(clashes, []);
   });
 
   test('nothing on this row reaches for amber', () => {
