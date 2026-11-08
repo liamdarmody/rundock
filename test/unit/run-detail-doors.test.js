@@ -85,6 +85,12 @@ const REPLIES = [
     surface: 'a roster broadcast, which may mean the run on screen just ended',
     pressedBy: 'a roster broadcast through the real dispatch refreshes a run still going',
   },
+  {
+    call: 'runDetailTreeUpdated',
+    on: "case 'file_tree':",
+    surface: 'a new file tree, which decides which changed files open',
+    pressedBy: 'a file tree through the real dispatch redraws which names open',
+  },
 ];
 
 // Ways in that exist in the flow and are deliberately not pressed here, each
@@ -363,6 +369,27 @@ describe('the doors, pressed', () => {
     w.eval(`(function () {${body}\n})()`);
     assert.deepStrictEqual(w.sent, [{ type: 'get_run', agentId: 'piper', routine: 'Compile the ops summary' }],
       'the agents case does not call runDetailRosterUpdated');
+    dom.window.close();
+  });
+});
+
+describe('the tree, pressed', () => {
+  test('a file tree through the real dispatch redraws which names open', () => {
+    const { w, doc, dom } = shell();
+    w.renderRoutines();
+    doc.querySelectorAll('[data-routines-action="view-run"]')[1].click();
+    w.rosterWorkspacePath = '/w';
+    w.runArrived({ type: 'run', agentId: 'piper', routine: 'Compile the ops summary', run: RECORD });
+    const name = () => doc.querySelector('[data-run-detail="file-name"]');
+    assert.strictEqual(name().tagName, 'SPAN', 'sanity: with no tree yet, the name is plain');
+    const at = APP_SRC.indexOf("case 'file_tree':");
+    assert.ok(at !== -1, 'app.js no longer carries the file_tree case of the client dispatch');
+    // This arm is a block, so its opening brace is cut off with the case.
+    const body = APP_SRC.slice(at + "case 'file_tree':".length, APP_SRC.indexOf('break;', at)).replace(/^\s*\{/, '');
+    w.renderFileTree = () => {};
+    w.d = { type: 'file_tree', tree: [{ type: 'file', name: 'Ops Summary.md', path: 'Ops Summary.md', kind: 'note' }] };
+    w.eval(`(function () {${body}\n})()`);
+    assert.strictEqual(name().tagName, 'BUTTON', 'the file_tree case does not call runDetailTreeUpdated');
     dom.window.close();
   });
 });

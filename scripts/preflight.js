@@ -277,6 +277,7 @@ const CHECKS = [
 const PINNED_RUNTIMES = [
   { name: 'stream grammar', capture: 'scripts/stream-truth/captured-grammar.json', recapture: 'npm run stream:truth -- --capture' },
   { name: 'transcript', capture: 'scripts/transcript-truth/captured-transcript.json', recapture: 'npm run transcript:truth -- --capture' },
+  { name: 'shell call', capture: 'scripts/transcript-truth/captured-shell-call.json', recapture: 'npm run transcript:truth -- --capture' },
 ];
 
 function installedRuntimeVersion() {

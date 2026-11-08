@@ -564,6 +564,18 @@ describe('ROUTINES.md: the hook experiment reports the capture\'s own numbers', 
       + 'again would be worse than one that could not be stopped');
   });
 
+  test('a run that used the shell is said to be one, on the record and on the run screen', () => {
+    // A shell write is not on the list, and the page used to stop there. The
+    // record now says when the shell was used, under the field name the
+    // scheduler writes, and the run screen says what that means for the list.
+    assert.match(routinesDoc, /The record says when the run used the shell \(`usedShell: true`\), and the run screen says so under the list/,
+      'ROUTINES.md must say the run screen tells you when a run used the shell');
+    assert.ok(fs.readFileSync(path.join(ROOT, 'lib', 'scheduler.js'), 'utf-8').includes('{ usedShell: true }'),
+      'the field the page names is the one the scheduler writes');
+    assert.doesNotMatch(routinesDoc, /shell command is invisible/,
+      'the page no longer says only that shell writes are invisible');
+  });
+
   test('the word a restart-orphaned record reports is the routine state\'s own', () => {
     // The page and the two stores have to use ONE word here. A run cut off by
     // a restart is described in three places (the routine's status, the run's
@@ -1471,6 +1483,30 @@ describe('rundock-guide.md: a long conversation is summarized automatically and 
     } finally {
       if (was === undefined) delete process.env.HOME; else process.env.HOME = was;
       fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// docs/RUNDOCK-UI.md: one rule for a destructive button that acts at once
+// ---------------------------------------------------------------------------
+
+describe('RUNDOCK-UI.md: the danger rule says the same thing in both places', () => {
+  // The button section names "Stop this run" as a destructive button that
+  // acts at once and is drawn as a neutral outline. The design rules near
+  // the end of the page state the danger rule again, and a reader who meets
+  // only that statement must not be told every such button is solid.
+  const uiDoc = fs.readFileSync(path.join(ROOT, 'docs', 'RUNDOCK-UI.md'), 'utf-8');
+  const ruleOf = (start) => uiDoc.split('\n').find(line => line.startsWith(start)) || '';
+
+  test('the design rule names the outline exception the button section makes', () => {
+    const button = ruleOf('The rule is about where the click lands');
+    const design = ruleOf('- **Danger differs by form as well as colour.**');
+    assert.ok(button && design, 'both statements of the danger rule are on the page');
+    for (const [where, text] of [['the button section', button], ['the design rules', design]]) {
+      assert.match(text, /Stop this run/, `${where} names the control the exception is for`);
+      assert.match(text, /neutral outline that takes the danger colors on hover and keyboard focus/,
+        `${where} says how that control is drawn`);
     }
   });
 });
