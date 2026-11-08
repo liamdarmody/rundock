@@ -350,8 +350,8 @@ export function attachReviewPanel({ paneElement, editor = null, surface = null, 
     // comment text, and wire-format ids never render.
     head.appendChild(el('span', 'review-badge comment-badge', String(number)));
     head.appendChild(authorBadge(item.meta));
-    // Sidecar anchors whose passage no longer exists in the document: kept
-    // visible (spec: orphaned, never dropped) and labelled honestly.
+    // Sidecar anchors whose passage no longer exists in the document are kept
+    // visible, never dropped, and marked as orphaned.
     if (item.orphaned) head.appendChild(el('span', 'review-badge orphaned', 'Orphaned'));
     card.appendChild(head);
     if (item.anchor) {

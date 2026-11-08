@@ -50,7 +50,7 @@
 .re-row.sel .re-dot { border-color: var(--accent); background: transparent; }
 .re-body { min-width: 0; }
 .re-name { font-size: var(--body); font-weight: 600; color: var(--text-1); }
-.re-meta { font-size: var(--caption); color: var(--text-2); line-height: 1.5; margin-top: 2px; }
+.re-meta { font-size: var(--caption); color: var(--text-2-strong); line-height: 1.5; margin-top: 2px; }
 
 /* The zero-skills state. Centred, one line, one thing to press: it is an offer
    and it is shaped like one. */

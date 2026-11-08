@@ -7,8 +7,8 @@
 // working for an honest view: a store keyed by note alone still reads back,
 // a state with a Date in it still saves as something, a table that ignores
 // its floor still draws. So each rule is broken on purpose here and a named
-// test must go red for it, one row per rule, at both ends where the spec
-// asks for both (the host and the server).
+// test must go red for it, one row per rule, at both ends where a rule is
+// held at both (the host and the server).
 //
 // A guard whose mutation turns nothing red is reported as a FAILURE rather
 // than passed over. An experiment that changes nothing has not been run.

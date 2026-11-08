@@ -992,9 +992,10 @@ test('the reader keeps going past a file it cannot use', async (t) => {
 
   // A truncated write, and a file that parses to something that is not a
   // record. Both are reachable by hand-editing a directory the product invites
-  // people to look in.
-  fs.writeFileSync(path.join(runsDir(), 'half-written.json'), '{"id": "abc",');
-  fs.writeFileSync(path.join(runsDir(), 'empty.json'), 'null');
+  // people to look in. Each is named as a record is, so the reader opens it
+  // rather than passing over its name.
+  fs.writeFileSync(path.join(runsDir(), '5e1f0a2b-0000-4000-8000-00000000000a.json'), '{"id": "abc",');
+  fs.writeFileSync(path.join(runsDir(), '5e1f0a2b-0000-4000-8000-00000000000b.json'), 'null');
 
   const recs = records();
   assert.strictEqual(recs.length, 1, 'the record that is a record is still returned');

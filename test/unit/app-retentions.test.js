@@ -1,7 +1,7 @@
 'use strict';
-// The decomposition acceptance line, as a test rather than a judgement call.
+// The client's view split, held as a test rather than a judgement call.
 //
-// The spec says app.js contains no view rendering outside its enumerated
+// The rule: app.js contains no view rendering outside its enumerated
 // retentions. That line was claimed complete twice and failed both times,
 // because both checks classified app.js by reading the section banner above a
 // line rather than the code around it, and the banners had gone stale as
@@ -19,8 +19,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 // Every function in app.js allowed to write DOM, and the retention that covers
-// it. Adding an entry here is amending the spec's retention list, so it should
-// be as deliberate as that: a named reason, written down at the time.
+// it. Adding an entry here adds a retention, so it should be deliberate: a
+// named reason, written down at the time.
 const ALLOWED = {
   showWorkspacePicker: 'retention 2: workspace picker',
   renderUpdateStrip: 'retention 3: update strip',
@@ -70,7 +70,7 @@ test('every DOM-writing function in app.js is an enumerated retention', () => {
 
   assert.deepStrictEqual(
     unenumerated, [],
-    'app.js renders outside its enumerated retentions; either move it into a view module or amend the spec with a named reason and add it here'
+    'app.js renders outside its enumerated retentions; either move it into a view module or add it here as a retention with a named reason'
   );
 });
 
@@ -80,6 +80,6 @@ test('the retention manifest has no entries that stopped rendering', () => {
   const stale = Object.keys(ALLOWED).filter(name => !owners.has(name));
   assert.deepStrictEqual(
     stale, [],
-    'these are listed as retentions but no longer write DOM in app.js; drop them here and from the spec'
+    'these are listed as retentions but no longer write DOM in app.js; drop them here'
   );
 });

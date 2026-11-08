@@ -5,7 +5,7 @@
 // session-history, search, chat-close and friends); these tests pin the
 // SEAMS themselves: the dispatch table routes exactly the enumerated
 // message types (and never the four root shims), the composition root's
-// context object keeps the spec-frozen member list with identity-preserved
+// context object keeps its fixed member list with identity-preserved
 // live state, and handlers reach root capabilities only through ctx.
 const { test, describe } = require('node:test');
 const assert = require('node:assert');
@@ -329,12 +329,12 @@ describe('dispatch table', () => {
   });
 });
 
-describe('the composition root context (spec-frozen member list)', () => {
+describe('the composition root context (a fixed member list)', () => {
   test('carries exactly the eleven frozen members', () => {
     assert.deepStrictEqual(Object.keys(srv.wsHandlerContext).sort(), [
       'agents', 'broadcast', 'clients', 'config', 'pendingPermissions',
       'processes', 'runtime', 'signals', 'store', 'transitions', 'workspace',
-    ], 'the context member list is frozen by the decomposition spec');
+    ], 'the context member list is fixed: a member added or removed is a deliberate change, made here too');
   });
 
   test('live state members are the root objects by identity', () => {
