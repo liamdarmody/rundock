@@ -706,6 +706,25 @@ describe('a changed file opens from the record', () => {
     dom.window.close();
   });
 
+  // The click asks the matcher again with the root, a forward slash and the
+  // drawn path, which under a Windows root is a path of mixed separators. The
+  // matcher maps them before the prefix check, so the click still opens the
+  // tree's forward-slash path.
+  test("under a Windows root, a click opens the tree's forward-slash path", () => {
+    const run = record({ files: [{
+      path: 'C:\\Users\\me\\Vault\\notes\\plan.md', tool: 'Write', change: 'created', at: '2026-08-24T00:30:43.206Z', source: 'transcript',
+    }] });
+    const tree = [folderNode('notes', [fileNode('notes/plan.md')])];
+    const { w, doc, dom } = drawLinked(run, { root: 'C:\\Users\\me\\Vault', tree });
+    const [name] = names(doc);
+    assert.strictEqual(name.tagName, 'BUTTON', 'the name links under a Windows root');
+    name.click();
+    assert.deepStrictEqual(w.opened, ['notes/plan.md'], 'and opens the path the tree gives it');
+    name.click();
+    assert.deepStrictEqual(w.opened, ['notes/plan.md', 'notes/plan.md'], 'again on a second click');
+    dom.window.close();
+  });
+
   test("a name and path holding quotes and markup render as their own characters and open the tree's path", () => {
     // A file of this name is one the tree can list: it ends .md and starts
     // with no dot. So it renders as a button, and what is tested is that the
