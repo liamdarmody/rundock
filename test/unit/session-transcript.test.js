@@ -22,7 +22,7 @@ const os = require('node:os');
 
 const fx = require('../fixtures/session-transcript.js');
 const { readSessionTranscript } = require('../../lib/runtime/session-transcript.js');
-const { checkTranscriptInvariants } = require('../../scripts/transcript-truth/truth.js');
+const { checkTranscriptInvariants, checkShellInvariants } = require('../../scripts/transcript-truth/truth.js');
 
 let home = null;
 let realHome = null;
@@ -64,11 +64,12 @@ const paths = (result) => (result.files || []).map(f => f.path);
 // here stayed green: the reader would simply tolerate both, and the day the
 // two disagreed would be the day the product met a real transcript.
 //
-// So the fixture is run through the same invariant checker the capture is
-// held to. One check is excluded and only one: the parallel batch, which the
-// fixture does not model, because it emits one tool call per message where a
-// real batch shares a message id across two. That exclusion is named rather
-// than filtered by shape, so a second failure cannot hide behind it.
+// So the fixture is run through the same invariant checkers the captures are
+// held to, the shell call's included. One check is excluded and only one: the
+// parallel batch, which the fixture does not model, because it emits one tool
+// call per message where a real batch shares a message id across two. That
+// exclusion is named rather than filtered by shape, so a second failure
+// cannot hide behind it.
 describe('the fixture builder', () => {
   const PARALLEL_CHECK = 'no parallel tool batch in this capture';
 
@@ -87,7 +88,7 @@ describe('the fixture builder', () => {
       fx.unanswered(sid, { file: '/w/in-flight.md' }),
     ].join('').split('\n').filter(Boolean);
 
-    const failures = checkTranscriptInvariants(lines);
+    const failures = [...checkTranscriptInvariants(lines), ...checkShellInvariants(lines)];
     const excluded = failures.filter(f => f.includes(PARALLEL_CHECK));
     assert.strictEqual(excluded.length, 1,
       'the one exclusion is real: the fixture genuinely does not model a parallel batch, so this check must be failing');

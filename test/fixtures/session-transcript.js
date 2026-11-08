@@ -135,7 +135,7 @@ function sidechainWrite(sessionId, { file, tool = 'Write', at = '2026-08-22T19:1
 /**
  * A subagent's shell call, in the subagent's own transcript: the ask, and an
  * outcome that is a sentence with no payload, as sidechainWrite's is. Held to
- * the subagent's shell call in the committed capture by
+ * the subagent's shell call in the shell call's capture by
  * test/unit/session-transcript-capture.test.js.
  */
 function sidechainShell(sessionId, { command, at = '2026-08-22T19:15:21.000Z' } = {}) {
@@ -162,7 +162,7 @@ function sidechainSay(sessionId, text, at = '2026-08-22T19:15:22.000Z') {
  * session reader lists no file from it and notes that the shell was used; the
  * tests that read the refusal want the CLI's own words
  * (test/fixtures/claude-cli-notes-mode.json). The Bash call is held to the
- * ones in the committed capture by test/unit/session-transcript-capture.test.js:
+ * ones in the shell call's capture by test/unit/session-transcript-capture.test.js:
  * an assistant entry whose tool_use block names the tool and carries
  * `{ command, description }`, answered by an object on success and, on a
  * failure, by an error string with `is_error` on the result block. A

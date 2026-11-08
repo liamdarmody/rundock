@@ -2,7 +2,7 @@
 // A run in a workspace opened through a symbolic link, and the run screen's
 // link check.
 //
-// THE FACT THIS RESTS ON, from the committed transcript capture
+// THE FACT THIS RESTS ON, from the committed shell call's capture
 // (scripts/transcript-truth, `recordedPaths`): a run spawned in a folder
 // reached through a symbolic link records its working directory and every
 // file it wrote under the folder the link resolves to, not the spelling it

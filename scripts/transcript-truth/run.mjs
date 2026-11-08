@@ -3,8 +3,14 @@
 // Transcript-truth harness: pin the session transcript's shape to a real one.
 //
 // Modes:
-//   npm run transcript:truth              # check: committed capture vs the reader
+//   npm run transcript:truth              # check: committed captures vs the reader
 //   npm run transcript:truth -- --capture # re-capture from the REAL CLI (live spend)
+//
+// ONE RUN, TWO CAPTURES. The transcript capture is the whole run. The shell
+// call's capture is the slice of it that holds the shell calls (shellExcerpt
+// in truth.js), which is what the record's shell field is checked against.
+// A re-capture writes both; until then each records the runtime and the
+// prompt it was taken with, and the checks below hold each to what it holds.
 //
 // WHY THIS EXISTS. lib/runtime/session-transcript.js reads a file written by
 // the agent tool, in a format nobody here owns and nothing here can hold
@@ -22,7 +28,7 @@
 // either truth harness: they live in the release gate, so a pull request can
 // go green with a capture that reality has left behind. The half of this
 // harness that CI DOES run is test/unit/session-transcript-capture.test.js,
-// which holds the reader to the committed artefact without needing a runtime.
+// which holds the reader to the committed artefacts without needing a runtime.
 // The version check below only warns: a newer runtime is not a changed one.
 import fs from 'node:fs';
 import os from 'node:os';
@@ -35,7 +41,10 @@ import { randomUUID } from 'node:crypto';
 const require = createRequire(import.meta.url);
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..', '..');
-const { checkTranscriptInvariants, checkCaptureAnswers, withoutDelegation, EXPECTED_EXTRACTION, EXPECTED_ABSENT, EXPECTED_SHELL_WRITTEN } = require('./truth.js');
+const {
+  checkTranscriptInvariants, checkCaptureAnswers, checkShellInvariants, checkShellAnswers, withoutDelegation,
+  shellExcerpt, shellCapture, EXPECTED_EXTRACTION, EXPECTED_ABSENT, EXPECTED_SHELL_WRITTEN,
+} = require('./truth.js');
 // THE READER'S OWN LOOKUP, not a copy of it. This harness used to scan for the
 // session id itself, with a comment saying it was doing what the reader does,
 // which is a rule stated twice and true only while both copies are edited
@@ -52,6 +61,7 @@ const { readSessionTranscript, findTranscript, sidechainTranscripts, FILE_TOOLS 
   require(path.join(ROOT, 'lib', 'runtime', 'session-transcript.js'));
 
 const CAPTURE_FILE = path.join(HERE, 'captured-transcript.json');
+const SHELL_CAPTURE_FILE = path.join(HERE, 'captured-shell-call.json');
 // A capture is committed to a public repository, so it is scrubbed of the
 // person who took it before it is written (scripts/capture-scrub.js).
 const { scrubCapture, machineValues } = require('../capture-scrub.js');
@@ -79,10 +89,10 @@ function cliVersion(bin) {
 // record says the shell was used, and a failed command counts as use because
 // an error cannot tell a refused command from one that wrote and then failed.
 //
-// Every tool the reader claims and this capture is meant to witness has a
+// Every tool the reader claims and these captures are meant to witness has a
 // step here. scripts/transcript-truth/truth.js fails if a witnessed tool is
-// missing from the capture, so a tool added to the reader cannot narrow what
-// this prompt covers without saying so.
+// missing from the capture that witnesses it, so a tool added to the reader
+// cannot narrow what this prompt covers without saying so.
 //
 // THE LAST TWO STEPS SETTLE QUESTIONS RATHER THAN WITNESSING A TOOL, and both
 // were raised as things the packet could not answer either way.
@@ -251,7 +261,15 @@ async function capture() {
   // say: the transcript holds the command and never the file.
   const shellWrite = { file: EXPECTED_SHELL_WRITTEN, onDisk: fs.existsSync(path.join(dir, EXPECTED_SHELL_WRITTEN)) };
   const recordedPaths = recordedPathForm(dir, lines);
-  const problems = [...checkTranscriptInvariants(lines), ...checkCaptureAnswers({ lines, subagents })];
+  // The whole run is held to every check, and the cut to the shell checks, so
+  // a cut that dropped what the shell call's capture needs is refused here.
+  const cut = shellExcerpt({ lines, subagents });
+  const problems = [
+    ...checkTranscriptInvariants(lines), ...checkCaptureAnswers({ lines, subagents }),
+    ...checkShellInvariants(lines), ...checkShellAnswers({ lines, subagents }),
+    ...checkShellInvariants(cut.lines).map(p => `in the shell call's cut: ${p}`),
+    ...checkShellAnswers(cut).map(p => `in the shell call's cut: ${p}`),
+  ];
   if (!shellWrite.onDisk) problems.push(`the shell step left no ${EXPECTED_SHELL_WRITTEN} on disk, so the capture witnesses no file written through the shell`);
   if (problems.length) {
     // The run happened and cost what it cost, so the artefact is kept where
@@ -280,36 +298,46 @@ async function capture() {
       spawn: 'the routine shape: --print --output-format stream-json --verbose --dangerously-skip-permissions --session-id <uuid>, output discarded',
       ...hook,
     },
-    shellWrite,
-    recordedPaths,
     lines,
     // The subagent's own transcript, kept beside the session's because the
     // whole point is that they are different files with different shapes.
     subagents,
   }, null, 2) + '\n', { ...machineValues(), sessionIds: [sessionId] }));
+  // CUT FROM THE CAPTURE JUST WRITTEN, so each of its entries is that entry
+  // exactly: the scrubber numbers the connected services a capture names in
+  // the order they first appear, and a cut scrubbed on its own would number
+  // them differently from the run it came from.
+  const shell = shellCapture(JSON.parse(fs.readFileSync(CAPTURE_FILE, 'utf8')), { shellWrite, recordedPaths });
+  fs.writeFileSync(SHELL_CAPTURE_FILE, scrubCapture(JSON.stringify(shell, null, 2) + '\n', { ...machineValues(), sessionIds: [sessionId] }));
   fs.rmSync(dir, { recursive: true, force: true });
   console.log(`[transcript-truth] permission hook under skipped permissions: ${hook.fired ? `FIRED (${hook.calls} calls, tools: ${hook.tools.join(', ')})` : 'DID NOT FIRE'}`);
   console.log(`[transcript-truth] delegation: ${subagents.length} subagent transcript(s), filed under the session's own directory`);
   console.log(`[transcript-truth] recorded paths, spawned ${recordedPaths.spawnedThroughLink ? 'through' : 'with no'} symbolic link: cwd ${recordedPaths.cwd.join('/')}, files ${recordedPaths.files.join('/')}`);
-  console.log(`[transcript-truth] capture written: ${path.relative(ROOT, CAPTURE_FILE)} (${lines.length} lines; commit it)`);
+  console.log(`[transcript-truth] captures written: ${path.relative(ROOT, CAPTURE_FILE)} (${lines.length} lines) and ${path.relative(ROOT, SHELL_CAPTURE_FILE)} (${shell.lines.length} lines); commit both`);
 }
 
 function check() {
   if (!fs.existsSync(CAPTURE_FILE)) fail('no captured-transcript.json: run with --capture first (needs the real CLI)');
+  if (!fs.existsSync(SHELL_CAPTURE_FILE)) fail('no captured-shell-call.json: run with --capture first (needs the real CLI)');
   const captured = JSON.parse(fs.readFileSync(CAPTURE_FILE, 'utf8'));
+  const shell = JSON.parse(fs.readFileSync(SHELL_CAPTURE_FILE, 'utf8'));
 
   let installed = null;
   try { installed = cliVersion('claude'); } catch { /* no real CLI on this machine (CI) */ }
   // A newer runtime is a warning, not a failure: see the same check in
   // scripts/stream-truth/run.mjs for why.
-  if (installed && installed !== captured.runtimeVersion) {
-    console.warn(`[transcript-truth] WARNING: installed CLI is ${installed} but the capture is from ${captured.runtimeVersion}. ` +
-      'The checks below still hold the reader to the capture. To see whether the runtime moved: npm run transcript:truth -- --capture');
+  for (const [what, c] of [['the capture', captured], ["the shell call's capture", shell]]) {
+    if (installed && installed !== c.runtimeVersion) {
+      console.warn(`[transcript-truth] WARNING: installed CLI is ${installed} but ${what} is from ${c.runtimeVersion}. ` +
+        'The checks below still hold the reader to the capture. To see whether the runtime moved: npm run transcript:truth -- --capture');
+    }
   }
-  if (!installed) console.log(`[transcript-truth] no real CLI here; checking the reader against the capture from ${captured.runtimeVersion}`);
+  if (!installed) console.log(`[transcript-truth] no real CLI here; checking the reader against the captures from ${captured.runtimeVersion} and ${shell.runtimeVersion}`);
 
   const problems = [...checkTranscriptInvariants(captured.lines), ...checkCaptureAnswers(captured)];
   if (problems.length) fail(`the committed capture does not satisfy what the reader assumes:\n  - ${problems.join('\n  - ')}`);
+  const shellProblems = [...checkShellInvariants(shell.lines), ...checkShellAnswers(shell)];
+  if (shellProblems.length) fail(`the committed shell call's capture does not satisfy what the reader assumes:\n  - ${shellProblems.join('\n  - ')}`);
   if (!captured.permissionHook || typeof captured.permissionHook.fired !== 'boolean') {
     fail('the capture carries no answer on whether the permission hook fires with permissions skipped; re-capture');
   }
@@ -324,40 +352,42 @@ function check() {
   // delegate and its file list must come out exactly; laid down whole, with the
   // subagent's transcript where the runtime files it, the same run must report
   // that it cannot say. Both are readings of a real transcript.
-  const readAs = (lines, subagents) => {
+  const readAs = (sessionId, lines, subagents) => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'transcript-truth-home-'));
     const realHome = process.env.HOME;
     try {
       const dir = path.join(home, '.claude', 'projects', 'captured');
-      fs.mkdirSync(path.join(dir, captured.sessionId, 'subagents'), { recursive: true });
-      fs.writeFileSync(path.join(dir, `${captured.sessionId}.jsonl`), lines.join('\n') + '\n');
+      fs.mkdirSync(path.join(dir, sessionId, 'subagents'), { recursive: true });
+      fs.writeFileSync(path.join(dir, `${sessionId}.jsonl`), lines.join('\n') + '\n');
       for (const sub of subagents) {
-        fs.writeFileSync(path.join(dir, captured.sessionId, 'subagents', sub.name), sub.lines.join('\n') + '\n');
+        fs.writeFileSync(path.join(dir, sessionId, 'subagents', sub.name), sub.lines.join('\n') + '\n');
       }
       process.env.HOME = home;
-      return readSessionTranscript(captured.sessionId);
+      return readSessionTranscript(sessionId);
     } finally {
       process.env.HOME = realHome;
       fs.rmSync(home, { recursive: true, force: true });
     }
   };
 
-  const plain = readAs(withoutDelegation(captured.lines), []);
+  const plain = readAs(captured.sessionId, withoutDelegation(captured.lines), []);
   if (plain.status !== 'known') fail(`the reader could not read the captured transcript: ${plain.reason}`);
   const got = plain.files.map(f => [path.basename(f.path), f.change]);
   if (JSON.stringify(got) !== JSON.stringify(EXPECTED_EXTRACTION)) {
     fail(`the reader extracts ${JSON.stringify(got)} from the capture, expected ${JSON.stringify(EXPECTED_EXTRACTION)}`);
   }
   if (got.some(([name]) => name === EXPECTED_ABSENT)) fail(`${EXPECTED_ABSENT} was attempted and refused; it must never be listed as changed`);
-  if (!captured.shellWrite || captured.shellWrite.onDisk !== true) fail(`the capture does not record that its shell step wrote ${EXPECTED_SHELL_WRITTEN}; re-capture`);
-  if (!captured.recordedPaths || typeof captured.recordedPaths.spawnedThroughLink !== 'boolean') fail('the capture carries no answer on which path form a run records; re-capture');
-  if (plain.usedShell !== true) fail('the reader does not report the shell calls in the capture as shell use, so a run that wrote through the shell would read as one whose list is complete');
 
-  const delegated = readAs(captured.lines, captured.subagents || []);
+  const delegated = readAs(captured.sessionId, captured.lines, captured.subagents || []);
   if (delegated.status !== 'unknown' || delegated.reason !== 'delegated') {
     fail(`the run that delegated reports ${delegated.status}/${delegated.reason}: a subagent's writes are recorded where this reader cannot read their outcome, so the only honest answer is that the list is not known`);
   }
-  console.log(`[transcript-truth] PASS: the reader matches the ${captured.runtimeVersion} capture`);
+
+  if (!shell.shellWrite || shell.shellWrite.onDisk !== true) fail(`the shell call's capture does not record that its shell step wrote ${EXPECTED_SHELL_WRITTEN}; re-capture`);
+  if (!shell.recordedPaths || typeof shell.recordedPaths.spawnedThroughLink !== 'boolean') fail('the shell call\'s capture carries no answer on which path form a run records; re-capture');
+  const shellUse = readAs(shell.sessionId, withoutDelegation(shell.lines), []);
+  if (shellUse.status !== 'known' || shellUse.usedShell !== true) fail('the reader does not report the shell calls in the shell call\'s capture as shell use, so a run that wrote through the shell would read as one whose list is complete');
+  console.log(`[transcript-truth] PASS: the reader matches the ${captured.runtimeVersion} capture and the ${shell.runtimeVersion} shell call's capture`);
 }
 
 if (CAPTURE) await capture();
