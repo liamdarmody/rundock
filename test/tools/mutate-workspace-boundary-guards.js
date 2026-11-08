@@ -3679,8 +3679,8 @@ const MUTATIONS = [
     '  for (const e of entries) watchHomeFile(g, e.path, read(e.path));\n',
     ''],
   [STARTUP_GUARD, 'Startup files: the checks a turn makes skip them',
-    '  return outsideTurn ? found : found.concat(checkShellStartupFiles());',
-    '  return found;'],
+    '  const all = outsideTurn ? found : found.concat(part(checkShellStartupFiles));',
+    '  const all = found;'],
   [STARTUP_GUARD, 'Startup files: a change made while no turn ran is put back',
     'keptBetweenTurns: rel => rel !== record,',
     'keptBetweenTurns: () => false,'],
@@ -3732,6 +3732,22 @@ const MUTATIONS = [
   [STARTUP_GUARD, 'Startup files: an account home that cannot be read is taken as nobody\'s',
     'const inside = p => !account || forms(p)',
     'const inside = p => !!account && forms(p)'],
+  // One file whose check fails never stops the others being checked.
+  [STARTUP_GUARD, 'Startup files: one file whose check fails stops the files after it being checked',
+    '    try {\n      change = checkFile(g, f, outsideTurn);\n      g.unchecked.delete(f);\n    } catch (e) {\n      failed = failed || e;\n      change = putBackUnchecked(g, f, outsideTurn);\n    }',
+    '    change = checkFile(g, f, outsideTurn);'],
+  [STARTUP_GUARD, "Startup files: a failure in the workspace's files stops the startup files being checked",
+    '  const found = part(() => checkGuard(g, outsideTurn));',
+    '  const found = checkGuard(g, outsideTurn);'],
+  [STARTUP_GUARD, 'Startup files: a check that keeps failing asks again at every pass',
+    '  if (seen) return null;\n',
+    ''],
+  [STARTUP_GUARD, 'Startup files: a build that threw as the turn started is never tried again',
+    '  if (!turns.size) return [];\n  const g = homeGuard();\n',
+    '  const g = homeGuards.get(key(os.homedir()));\n  if (!g || !turns.size) return [];\n'],
+  [STARTUP_GUARD, 'Startup files: Keep on a change that could not be read removes the file',
+    "  if (change.unread) throw new Error('what the agent left there could not be read, so there is nothing to keep');\n",
+    ''],
 ];
 const REPORTER = ['--test-reporter', 'spec'];
 
