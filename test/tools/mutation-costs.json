@@ -1368,7 +1368,12 @@
       "Startup files: a bare name in code is not read for one": 23.4,
       "Startup files: a link put in place of a folder is removed as a file": 2.1,
       "Startup files: a folder swapped for a link is left as the link": 2.1,
-      "Startup files: a put-back writes through whatever a link leads to now": 2.0
+      "Startup files: a put-back writes through whatever a link leads to now": 2.0,
+      "Startup files: under test, the account's own startup files are watched like any": 2.1,
+      "Startup files: under test, a path is judged by its name, not where it leads": 2.1,
+      "Startup files: under test, a new snippet is watched wherever it leads": 2.1,
+      "Startup files: under test, a dropped file leaves the run passing": 2.2,
+      "Startup files: an account home that cannot be read is taken as nobody's": 2.1
     },
     "mutate-atomic-write-guards.js": {
       "a state file is renamed over whole, never written under its own name": 0.42,

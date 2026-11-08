@@ -3717,6 +3717,21 @@ const MUTATIONS = [
   [STARTUP_GUARD, 'Startup files: a put-back writes through whatever a link leads to now',
     ' sameBytes(at.bytes, was.bytes))) writePlain(was.real, was.bytes, was.mode);',
     ' sameBytes(at.bytes, was.bytes))) fs.writeFileSync(file, was.bytes);'],
+  [STARTUP_GUARD, 'Startup files: under test, the account\'s own startup files are watched like any',
+    '  if (!underTest()) return items;\n',
+    '  return items;\n'],
+  [STARTUP_GUARD, 'Startup files: under test, a path is judged by its name, not where it leads',
+    '  const forms = p => [path.resolve(p), canonicalize(p)]',
+    '  const forms = p => [path.resolve(p)]'],
+  [STARTUP_GUARD, 'Startup files: under test, a new snippet is watched wherever it leads',
+    ' || !notTheAccounts([f], x => x).length) continue;',
+    ') continue;'],
+  [STARTUP_GUARD, 'Startup files: under test, a dropped file leaves the run passing',
+    '  process.exitCode = 1;\n',
+    ''],
+  [STARTUP_GUARD, 'Startup files: an account home that cannot be read is taken as nobody\'s',
+    'const inside = p => !account || forms(p)',
+    'const inside = p => !!account && forms(p)'],
 ];
 const REPORTER = ['--test-reporter', 'spec'];
 
