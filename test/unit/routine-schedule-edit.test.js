@@ -86,9 +86,13 @@ const routinesIn = (content, owner) =>
 describe('a schedule the writer will accept', () => {
   test('every schedule the editor can build is one the writer accepts', () => {
     for (const frequency of editorModel.FREQUENCIES) {
-      for (const time of editorModel.times()) {
-        const built = editorModel.buildSchedule({ frequency: frequency.value, time: time.value });
-        assert.strictEqual(isWritableSchedule(built), true, `${built} is one the editor offers`);
+      // A monthly schedule is built with a day, so every day it offers is tried.
+      const days = frequency.value === 'month' ? editorModel.monthDays().map((d) => d.value) : [null];
+      for (const day of days) {
+        for (const time of editorModel.times()) {
+          const built = editorModel.buildSchedule({ frequency: frequency.value, day, time: time.value });
+          assert.strictEqual(isWritableSchedule(built), true, `${built} is one the editor offers`);
+        }
       }
     }
   });
@@ -124,6 +128,34 @@ describe('a schedule the writer will accept', () => {
   // fires today. Refusing it here would refuse a schedule the product runs.
   test('a schedule written in capitals is accepted, because the scheduler reads it', () => {
     assert.strictEqual(isWritableSchedule('Every Monday at 07:00'), true);
+  });
+
+  // The two monthly forms, on a day from 1 to 28 with or without one leading
+  // zero, or on the last day. Days 29 to 31 are not in every month, and a
+  // schedule naming one would skip the months without it, so it is refused
+  // rather than written and left to wait.
+  test('a monthly schedule on a day every month has is accepted, and one on 29 to 31 is not', () => {
+    for (const schedule of [
+      'on day 1 of every month at 09:00',
+      'on day 28 of every month at 23:30',
+      'on day 05 of every month at 07:03',
+      'on the last day of every month at 18:00',
+      'On The Last Day Of Every Month At 18:00',
+    ]) {
+      assert.strictEqual(isWritableSchedule(schedule), true, schedule);
+    }
+    for (const schedule of [
+      'on day 0 of every month at 09:00',
+      'on day 29 of every month at 09:00',
+      'on day 30 of every month at 09:00',
+      'on day 31 of every month at 09:00',
+      'every month at 09:00',
+      'on day 15 of every month at 24:00',
+      'on day 15 of every month at 9:00',
+      'run on day 15 of every month at 09:00',
+    ]) {
+      assert.strictEqual(isWritableSchedule(schedule), false, schedule);
+    }
   });
 
   // WIDER THAN THE EDITOR'S OWN LIST, DELIBERATELY. The editor offers the half
@@ -404,6 +436,36 @@ describe('the handler behind the edit', () => {
       handleSetRoutineSchedule(f.ctx, f.ws, message({ schedule: 'every day at 08:00' }));
       assert.strictEqual(f.sent[0].type, 'routine_rescheduled');
       assert.strictEqual(f.sent[0].schedule, 'every day at 08:00');
+    } finally { f.restore(); }
+  });
+
+  // A MONTHLY SCHEDULE IS ONE THE SCHEDULER READS, so the writer takes it, on
+  // any day every month has.
+  test('a schedule on a day every month has is written', () => {
+    for (const schedule of ['on day 15 of every month at 09:00', 'on the last day of every month at 18:00']) {
+      const f = fixture();
+      try {
+        handleSetRoutineSchedule(f.ctx, f.ws, message({ schedule }));
+        assert.strictEqual(f.sent[0].type, 'routine_rescheduled', schedule);
+        const changed = routinesIn(f.read('piper'), 'piper').find(r => r.name === 'morning-digest');
+        assert.strictEqual(changed.schedule, schedule);
+      } finally { f.restore(); }
+    }
+  });
+
+  // A DAY SOME MONTHS DO NOT HAVE, sent straight to the save, past the editor
+  // that never offers it. Rundock will not move it to another date, so the
+  // writer refuses it in its own words and the file is untouched.
+  test('day 31 sent straight to the save is refused with the writer\'s words, and nothing is written', () => {
+    const f = fixture();
+    try {
+      const before = f.read('piper');
+      handleSetRoutineSchedule(f.ctx, f.ws, message({ schedule: 'on day 31 of every month at 09:00' }));
+      assert.strictEqual(f.read('piper'), before, 'the file is byte-identical');
+      assert.strictEqual(f.sent[0].type, 'routine_error');
+      assert.match(f.sent[0].message, /schedule "on day 31 of every month at 09:00" is not one the scheduler reads/);
+      assert.match(f.sent[0].message, /on day 15 of every month at 09:00/, 'and it names a monthly form that works');
+      assert.ok(!f.calls.includes('routine_rescheduled'));
     } finally { f.restore(); }
   });
 

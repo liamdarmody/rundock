@@ -3,7 +3,7 @@
    the run-status line.
 
    THE THREE TONES ARE THE POINT OF THIS FILE, and they are a ruling rather
-   than a palette choice. A run that happened late is a SUCCESS, so Caught up
+   than a palette choice. A run that happened late is a SUCCESS, so Ran late
    keeps the success colour and is told apart from Ran on time by weight and by
    its leading word. A slot that passed unserved is HISTORY, so Missed takes a
    quiet gray, the one state where nothing ran at all. Only a real failure is
@@ -156,6 +156,10 @@
    reading differently. They keep separate NAMES because a row can carry both
    at once and each names a different thing to fix. */
 .schedule-problem, .prompt-problem { font-size: var(--caption); font-weight: 600; color: var(--danger-text); }
+/* The schedule notice in two parts: the fault in red, and what to write
+   instead in quiet text, each 4.5:1 or better on the card in both themes. */
+.schedule-problem-lead { color: var(--danger-text-card); }
+.schedule-problem-body { color: var(--text-2-strong); font-weight: 400; }
 
 /* The row for a routine the scheduler has moved away from.
 
