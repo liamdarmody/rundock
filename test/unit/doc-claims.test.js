@@ -1332,3 +1332,27 @@ describe('rundock-guide.md: a long conversation is summarized automatically and 
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// docs/RUNDOCK-UI.md: one rule for a destructive button that acts at once
+// ---------------------------------------------------------------------------
+
+describe('RUNDOCK-UI.md: the danger rule says the same thing in both places', () => {
+  // The button section names "Stop this run" as a destructive button that
+  // acts at once and is drawn as a neutral outline. The design rules near
+  // the end of the page state the danger rule again, and a reader who meets
+  // only that statement must not be told every such button is solid.
+  const uiDoc = fs.readFileSync(path.join(ROOT, 'docs', 'RUNDOCK-UI.md'), 'utf-8');
+  const ruleOf = (start) => uiDoc.split('\n').find(line => line.startsWith(start)) || '';
+
+  test('the design rule names the outline exception the button section makes', () => {
+    const button = ruleOf('The rule is about where the click lands');
+    const design = ruleOf('- **Danger differs by form as well as colour.**');
+    assert.ok(button && design, 'both statements of the danger rule are on the page');
+    for (const [where, text] of [['the button section', button], ['the design rules', design]]) {
+      assert.match(text, /Stop this run/, `${where} names the control the exception is for`);
+      assert.match(text, /neutral outline that takes the danger colors on hover and keyboard focus/,
+        `${where} says how that control is drawn`);
+    }
+  });
+});
