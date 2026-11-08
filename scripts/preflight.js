@@ -90,6 +90,7 @@ const REGISTRY_SUITES = [
   // is the membership rule for this phase exactly.
   'test/unit/danger-token.test.js',
   'test/unit/attention-token.test.js',
+  'test/unit/danger-text-card-contrast.test.js',
   // The same arithmetic over the colours links in a note are drawn in.
   'test/unit/editor-link-contrast.test.js',
   // The same arithmetic over the routine screens' text, badges and focus

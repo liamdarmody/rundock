@@ -577,6 +577,24 @@ const MUTATIONS = [
   [SCOPE, "a shard with no verdict file is no verdict",
     "    if (!v) {\n      outcomes.push(NO_VERDICT);",
     "    if (!v) {\n      outcomes.push(PASS);"],
+  // A shard that left a file modified uploads a passing verdict from a failed
+  // job, so the shard jobs' result is what keeps the check red.
+  [SCOPE, "a failed shard job is green when every verdict passes",
+    "  if (shardsResult === 'success' || (shardsResult === 'skipped' && !plan.shards.length)) {\n",
+    "  if (true) {\n"],
+  // The scoped plan CI runs has no --all, so a change that removed every
+  // harness planned zero shards there and read as a pass.
+  [SCOPE, "no harnesses found is refused only under --all",
+    "    if (!decision.harnesses.length) {\n",
+    "    if (argv.includes('--all') && !decision.harnesses.length) {\n"],
+  // How a job ended is never assumed: a result that was not given is no
+  // verdict, in the function and on the command line.
+  [SCOPE, "a job's result that was not given defaults to success in the aggregate",
+    "function aggregate(plan, verdicts, { planResult, shardsResult } = {}) {",
+    "function aggregate(plan, verdicts, { planResult = 'success', shardsResult = 'success' } = {}) {"],
+  [SCOPE, "an absent --plan-result is read as success",
+    "    planResult: argValue(argv, '--plan-result'),\n",
+    "    planResult: argValue(argv, '--plan-result') || 'success',\n"],
   // A harness whose rows differ in cost is cut where the time falls: cut by
   // row count, the slice holding its slow rows ran past the job's limit.
   [SCOPE, "the cost table's costs by label are not read",
