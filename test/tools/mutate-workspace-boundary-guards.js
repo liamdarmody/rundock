@@ -1339,8 +1339,8 @@ const MUTATIONS = [
     "  try { st = fs.lstatSync(file); } catch (e) { return null; }",
     "  try { st = fs.statSync(file); } catch (e) { return null; }"],
   [CM_ANSWER_GUARD, "Answer-file guard: a restore writes through whatever stands at the path",
-    "  if (st) fs.rmSync(file, { force: true, recursive: st.isDirectory() });\n  if (bytes === null) return;\n  fs.mkdirSync(path.dirname(file), { recursive: true });\n  fs.writeFileSync(file, bytes, { flag: 'wx' });",
-    "  if (bytes === null) { if (st) fs.rmSync(file, { force: true, recursive: st.isDirectory() }); return; }\n  fs.mkdirSync(path.dirname(file), { recursive: true });\n  fs.writeFileSync(file, bytes);"],
+    "  if (st) { if (st.isSymbolicLink()) fs.unlinkSync(file); else fs.rmSync(file, { force: true, recursive: st.isDirectory() }); }\n  if (bytes === null) return;\n  fs.mkdirSync(path.dirname(file), { recursive: true });\n  fs.writeFileSync(file, bytes, { flag: 'wx' });",
+    "  if (bytes === null) { if (st) { if (st.isSymbolicLink()) fs.unlinkSync(file); else fs.rmSync(file, { force: true, recursive: st.isDirectory() }); } return; }\n  fs.mkdirSync(path.dirname(file), { recursive: true });\n  fs.writeFileSync(file, bytes);"],
   [CM_ANSWER_GUARD, "Answer-file guard: an approved change is written through a link",
     "  writePlain(at, change.agentContent, change.link ? change.link.mode : change.mode);",
     "  require('fs').writeFileSync(at, change.agentContent);"],
@@ -3708,6 +3708,15 @@ const MUTATIONS = [
   [STARTUP_HOOK, 'Startup files: a bare name in code is not read for one',
     ' || MAY_NAME_STARTUP_FILE.test(v))) names.push(v);',
     ')) names.push(v);'],
+  [STARTUP_GUARD, 'Startup files: a link put in place of a folder is removed as a file',
+    'if (st) { if (st.isSymbolicLink()) fs.unlinkSync(file); else fs.rmSync(',
+    'if (st) { fs.rmSync('],
+  [STARTUP_GUARD, 'Startup files: a folder swapped for a link is left as the link',
+    '  if (was.dir && !(read(file) || {}).dir) { writePlain(file, null); fs.mkdirSync(file, { recursive: true }); }\n',
+    ''],
+  [STARTUP_GUARD, 'Startup files: a put-back writes through whatever a link leads to now',
+    ' sameBytes(at.bytes, was.bytes))) writePlain(was.real, was.bytes, was.mode);',
+    ' sameBytes(at.bytes, was.bytes))) fs.writeFileSync(file, was.bytes);'],
 ];
 const REPORTER = ['--test-reporter', 'spec'];
 
