@@ -53,6 +53,24 @@ const SOURCE_SAVE_ANSWER = {
   src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'sources.js'),
   suite: 'test/unit/short-write-saves.test.js',
 };
+// A state file replaced whole: the scheduler's routine state, slot records and
+// run records, and the runtime's child pid list. Watched by the file that
+// records each writer's filesystem calls and cuts one short, because a write
+// in place still leaves every byte on a disk that takes them.
+const WHOLE_FILE = {
+  src: path.join(ROOT, 'lib', 'store', 'whole-file.js'),
+  suite: 'test/unit/scheduler-state-writes.test.js',
+};
+// And one that does not parse, watched by the file that cuts each store.
+const SET_ASIDE = {
+  src: path.join(ROOT, 'lib', 'store', 'whole-file.js'),
+  suite: 'test/unit/scheduler-state-loads.test.js',
+};
+// What a test reads back from a log a stub process is still appending to.
+const APPENDED_LOG = {
+  src: path.join(ROOT, 'test', 'helpers', 'appended-log.js'),
+  suite: 'test/integration/harness-log-readers.test.js',
+};
 // The page's half: what its own failed write left is its own, never an
 // outside edit, until the next save is sent.
 const PAGE_MARK = {
@@ -196,6 +214,45 @@ const MUTATIONS = [
   [PAGE_ANSWER, 'an incomplete source save is said after its own sentence',
     'd.incomplete ? `${d.reason} ${INCOMPLETE_SAVE_NOTE}` : d.reason',
     'd.reason'],
+  [WHOLE_FILE, 'a state file is renamed over whole, never written under its own name',
+    '    fs.renameSync(temp, file);',
+    '    fs.writeFileSync(file, contents);'],
+  [WHOLE_FILE, 'the temporary file is flushed before it is renamed over',
+    '    fs.fsyncSync(fd);\n',
+    ''],
+  [SET_ASIDE, 'a state file that does not parse is set aside, not read as empty',
+    '    let aside = null;\n    try {\n      aside = asideName(file, clock());\n      fs.renameSync(file, aside);',
+    '    throw e;\n    let aside = null;\n    try {\n      aside = asideName(file, clock());\n      fs.renameSync(file, aside);'],
+  [WHOLE_FILE, 'a temporary file is created new, never opened through what is already there',
+    '  let fd = fs.openSync(temp, TEMP_FLAGS, 0o600);',
+    "  let fd = fs.openSync(temp, 'w', 0o600);"],
+  [WHOLE_FILE, 'a state file is written readable by its owner alone',
+    'fs.openSync(temp, TEMP_FLAGS, 0o600)',
+    'fs.openSync(temp, TEMP_FLAGS)'],
+  [WHOLE_FILE, 'a write cut off removes its temporary file',
+    "    try { fs.rmSync(temp, { force: true }); } catch (removing) { /* the write's own error is the one to report */ }\n",
+    ''],
+  [SET_ASIDE, 'the clock is read only for a file that does not parse',
+    '  try {\n    return JSON.parse(text);',
+    '  clock();\n  try {\n    return JSON.parse(text);'],
+  [SET_ASIDE, 'an unparseable routine state keeps its name until the file that replaces it is written',
+    '    fs.linkSync(file, aside);',
+    '    fs.renameSync(file, aside);'],
+  [SET_ASIDE, 'a replacement that cannot be written takes the dated name away again',
+    "    try { fs.rmSync(aside, { force: true }); } catch (removing) { /* the write's own error is the one to report */ }\n",
+    ''],
+  [SET_ASIDE, 'a temporary file a stopped process left is removed on load',
+    '    try { fs.rmSync(path.join(folder, name), { force: true }); } catch (e) { /* the next load tries again */ }\n',
+    ''],
+  [SET_ASIDE, 'a temporary file whose process still runs is never removed',
+    ' || running(Number(shape[2]))) continue;',
+    ') continue;'],
+  [SET_ASIDE, 'a temporary file of another store is never removed',
+    'if (!shape || !isTarget(shape[1]) || running',
+    'if (!shape || running'],
+  [APPENDED_LOG, 'a stub log line still being appended is left out, not parsed',
+    '  lines.pop();\n',
+    ''],
 ];
 
 // Guards deliberately NOT mutated, each with the reason. A named exclusion is
