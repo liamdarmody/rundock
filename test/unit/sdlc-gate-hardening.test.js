@@ -281,6 +281,7 @@ const ENUMERATIONS = [
   { file: 'test/unit/extension-install.test.js', extraction: "the onclick names inside packagesSectionHtml out of settings.js, and the packages reply dispatch case cut out of app.js and run", failLoudBy: 'count', where: 'the section match is asserted found before it is parsed, a specimen name the markup must carry is asserted in the parsed set, and the dispatch case is asserted found before it is turned into the function every rendered-view test routes replies through, so a pattern that stops matching fails rather than routing nothing', anchor: 'app.js no longer carries the packages reply dispatch case' },
   { file: 'test/unit/rundock-ui-contrast.test.js', extraction: 'the colour declarations of every Rundock UI component out of rundock-ui.css, and the dark and light token blocks out of tokens.css', failLoudBy: 'mutation', where: 'every pairing names its rule and property and refuses when either is missing, and test/tools/mutate-rundock-ui-guards.js removes a measured rule and requires this suite to redden', anchor: 'if the rule moved, move this row with it' },
   { file: 'test/unit/permission-card-contrast.test.js', extraction: 'the permission card button rules out of chat.css, and the dark and light token blocks out of tokens.css', failLoudBy: 'mutation', where: 'every pairing names its rule and property and refuses when either is missing, and test/tools/mutate-workspace-boundary-guards.js removes the Deny edge and the light success text and requires this suite to redden', anchor: 'declares no ${prop}' },
+  { file: 'test/unit/run-screen-contrast.test.js', extraction: 'the run screen rules out of run-detail.css, and the :root and body.light token blocks out of tokens.css', failLoudBy: 'mutation', where: 'every pairing names its rule and property and refuses when either is missing, a specimen known to fail must measure below the bar, and test/tools/mutate-run-detail-guards.js takes body.light out of the link color\u2019s rule, leaving it declared on the root alone so the light theme inherits the dark mix, reddening this suite', anchor: 'run-detail.css has no' },
   { file: 'test/unit/editor-link-contrast.test.js', extraction: 'the link and value colour rules out of editor.css, the pane background out of base.css, and the dark and light token blocks out of tokens.css', failLoudBy: 'count', where: 'every pairing names its rule and property and refuses when either is missing, and each token read refuses when tokens.css does not declare it', anchor: 'if the rule moved, move this row with it' },
   { file: 'test/unit/full-bleed.test.js', extraction: 'the full-bleed rules out of editor.css, extension-frame.css, embed.css and extension-base.css', failLoudBy: 'mutation', where: 'every rule it reads refuses when missing, and test/tools/mutate-rundock-ui-guards.js removes the pane padding rule, the frame and document colours and the document padding, each reddening this suite', anchor: 'has no rule for' },
   { file: 'test/unit/rundock-ui-frame.test.js', extraction: "the frame document's scripts, styles and policy out of the srcdoc the host builds", failLoudBy: 'mutation', where: 'exact counts of scripts and styles in their order, and test/tools/mutate-rundock-ui-guards.js removes the library from each builder and reorders it, each reddening this suite', anchor: 'bootstrap, library, entry' },
@@ -329,6 +330,7 @@ const ENUMERATIONS = [
   { file: 'test/unit/claude-version-floor.test.js', extraction: "every quoted '--flag' literal in the four files that start Claude Code, to hold each to a row in the flag table", failLoudBy: 'count', where: 'the read is floored on its size and must find five named specimens before any flag is checked for a row, so a pattern that stops matching fails rather than passing on an empty inventory', anchor: 'the inventory read no flags: the pattern has gone blind' },
   { file: 'test/unit/routine-screens-contrast.test.js', extraction: 'the rules of tokens.css and of the routine screens\' four stylesheets, read rule by rule, and each token resolved in each theme', failLoudBy: 'count', where: 'the token parse is floored on :root and on body.light before anything is measured, each rule lookup refuses when its selector or property is missing, and a token taken out of a specimen tokens.css fails its row by name', anchor: 'the token parse found almost nothing on :root, so nothing below is measured' },
   { file: 'test/unit/hook-never-crashes.test.js', extraction: "the test-only environment names the permission hook reads, out of permission-hook.js", failLoudBy: 'count', where: 'the collected names are compared with an exact deepStrictEqual against the Keychain platform pair, so a pattern that stops matching fails rather than proving the hook has no other switch by finding none', anchor: "['RUNDOCK_TEST_PLATFORM', 'RUNDOCK_TEST_SEAMS']" },
+  { file: 'test/unit/mutation-harness-runner.test.js', extraction: 'the calls that start a process, the runner import and the awaited calls out of every mutation harness, read past string and comment text, and each harness\'s redTests, push site and report cut out and driven', failLoudBy: 'count', where: 'a floor on the harness count, a specimen the literal reader must classify, each harness\'s redTests, entry point and exports found as code exactly once before its calls are trusted, and every cut-out asserted found exactly once', anchor: 'assert.ok(HARNESS_FILES.length >= 35' },
   { file: 'test/unit/child-coverage-switch.test.js', extraction: 'every line in the test tree that deletes the coverage key from a child\'s environment, and every file that sets it to an empty value', failLoudBy: 'count', where: 'the deletion pattern must match a specimen in every form it is written and miss the forms that are not one, and the walk is floored on the files it reads and on the files that set the key to an empty value', anchor: 'a deletion the scan must see' },
   { file: 'test/unit/artifact-review-attach.test.js', extraction: "the files view's attachArtifactReviewForCurrentFile, cut out of files.js and run against a stand-in frame", failLoudBy: 'count', where: 'the cut asserts the function is found and still imports the review module the way the test stubs it, so a rename fails by name rather than testing nothing', anchor: 'public/views/files.js no longer carries attachArtifactReviewForCurrentFile' },
 ];
@@ -482,12 +484,12 @@ assert.deepStrictEqual(HARNESSES, DISCOVERED_HARNESSES,
 // drives all of them: uniformity is a claim, and a claim needs a test.
 function buildRedTests(file) {
   const src = read(file);
-  const m = src.match(/function redTests\((?:suite)?\) \{[\s\S]*?\n\}/);
+  const m = src.match(/async function redTests\((?:suite)?\) \{[\s\S]*?\n\}/);
   assert.ok(m, `${file}: redTests could not be cut out; if it moved or was renamed, update this extraction`);
   const body = m[0];
-  return (fakeExec) => {
-    const factory = new Function('execFileSync', 'REPORTER', 'ROOT', 'SUITE', `${body}; return redTests;`);
-    return factory(fakeExec, [], ROOT, 'stub-suite');
+  return (fakeRun) => {
+    const factory = new Function('runSuite', 'REPORTER', 'ROOT', 'SUITE', `${body}; return redTests;`);
+    return factory(fakeRun, [], ROOT, 'stub-suite');
   };
 }
 
@@ -502,18 +504,18 @@ describe('a mutation result that cannot be parsed is a refusal, not a crash', ()
   const GARBAGE = 'Bootstrapping… progress 42%\ninterleaved output with no summary at all\n';
 
   for (const file of HARNESSES) {
-    test(`${path.basename(file)} refuses unreadable output and reads readable output`, () => {
+    test(`${path.basename(file)} refuses unreadable output and reads readable output`, async () => {
       const build = buildRedTests(file);
 
-      const unparsable = build(failWith(GARBAGE))();
+      const unparsable = await build(failWith(GARBAGE))();
       assert.deepStrictEqual(unparsable, { unparsable: true },
         `${file}: a failed suite with no readable summary must come back as a named refusal, never a throw`);
 
-      const red = build(failWith(WELL_FORMED))();
+      const red = await build(failWith(WELL_FORMED))();
       assert.deepStrictEqual(red, ['the guard was noticed'],
         `${file}: a well-formed summary must still yield the red test names`);
 
-      const green = build(() => 'all fine\n')();
+      const green = await build(() => 'all fine\n')();
       assert.deepStrictEqual(green, [], `${file}: a passing suite reads as no red tests`);
     });
   }
@@ -531,9 +533,9 @@ describe('a mutation result that cannot be parsed is a refusal, not a crash', ()
     const src = read(file);
     const m = src.match(/results\.push\(red && red\.unparsable[\s\S]*?\);/);
     assert.ok(m, `${file}: the run() push site for a parser refusal could not be cut out; update this extraction with the new shape`);
-    const factory = new Function('red', 'label', 'matches', 'target',
+    const factory = new Function('red', 'label', 'matches', 'target', 'suiteOutput',
       `const rows = []; const results = { push: (r) => rows.push(r) }; ${m[0]}; return rows[0];`);
-    return factory({ unparsable: true }, 'probe-mutation', 1, { suite: 'stub-suite' });
+    return factory({ unparsable: true }, 'probe-mutation', 1, { suite: 'stub-suite' }, () => null);
   }
 
   for (const file of HARNESSES) {

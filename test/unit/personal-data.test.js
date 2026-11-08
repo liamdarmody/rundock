@@ -256,7 +256,7 @@ describe('a capture is scrubbed of the person who took it', () => {
   test('both capture scripts scrub before they write', () => {
     for (const f of ['scripts/stream-truth/run.mjs', 'scripts/transcript-truth/run.mjs']) {
       const src = fs.readFileSync(path.join(ROOT, f), 'utf8');
-      const writes = [...src.matchAll(/fs\.writeFileSync\(CAPTURE_FILE, ([^\n]*)/g)].map((m) => m[1]);
+      const writes = [...src.matchAll(/fs\.writeFileSync\(\w*CAPTURE_FILE, ([^\n]*)/g)].map((m) => m[1]);
       assert.ok(writes.length >= 1, `${f} writes its capture`);
       for (const w of writes) assert.match(w, /^scrubCapture\(/, `${f}: every capture write goes through the scrubber`);
     }
@@ -264,7 +264,7 @@ describe('a capture is scrubbed of the person who took it', () => {
 
   test('no committed capture carries this machine\'s HOME, USER or an email', () => {
     const user = (() => { try { return os.userInfo().username; } catch { return process.env.USER || ''; } })();
-    for (const f of ['scripts/stream-truth/captured-grammar.json', 'scripts/transcript-truth/captured-transcript.json']) {
+    for (const f of ['scripts/stream-truth/captured-grammar.json', 'scripts/transcript-truth/captured-transcript.json', 'scripts/transcript-truth/captured-shell-call.json']) {
       const text = fs.readFileSync(path.join(ROOT, f), 'utf8');
       assert.ok(!text.includes(os.homedir()), `${f} carries no real home directory`);
       if (user.length >= 4) assert.ok(!text.includes(user), `${f} carries no username`);
