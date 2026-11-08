@@ -256,7 +256,7 @@ describe('the five sequences', () => {
   // Runs the command a written entry registers, the way Claude Code runs it.
   function runRegistered(dir, command, toolName, toolInput) {
     const env = { ...process.env, HOME: home, RUNDOCK: '1', RUNDOCK_WORKSPACE: dir, RUNDOCK_PORT: String(closedPort), RUNDOCK_EXTRA_DIRS: '' };
-    delete env.NODE_V8_COVERAGE;
+    env.NODE_V8_COVERAGE = '';
     delete env.RUNDOCK_CODE_MODE;
     const input = JSON.stringify({ hook_event_name: 'PreToolUse', session_id: 's', cwd: dir, tool_name: toolName, tool_input: toolInput });
     const r = spawnSync('sh', ['-c', command], { input, env, encoding: 'utf-8', timeout: 60000 });
