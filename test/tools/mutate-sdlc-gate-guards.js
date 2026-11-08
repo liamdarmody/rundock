@@ -90,6 +90,12 @@ const CI_VERDICT = { src: path.join(ROOT, 'scripts', 'ci-verdict.js'), suite: 't
 // The checks a change passes before it is reported done, and the guards the
 // mutation tooling keeps around a person's own edits.
 const ENVELOPE_RUN = { src: path.join(ROOT, 'test', 'tools', 'mutation-run.js'), suite: 'test/unit/mutation-run-cleanup.test.js' };
+// The end of a suite's output a row with no verdict shows, kept and scrubbed
+// by the runner and printed as the run ends, watched by the suite that drives
+// the runner and a fixture harness; and one harness's hand-off of it to the
+// row, watched by the inventory that cuts out every harness's push sites.
+const SUITE_OUTPUT = { src: path.join(ROOT, 'test', 'tools', 'mutation-run.js'), suite: 'test/unit/mutation-suite-output.test.js' };
+const OUTPUT_HANDOFF = { src: path.join(ROOT, 'test', 'tools', 'mutate-workspace-rollback-guards.js'), suite: 'test/unit/mutation-harness-runner.test.js' };
 const FIXTURE_NOTICE = { src: path.join(ROOT, 'test', 'helpers', 'code-mode-fixture.js'), suite: 'test/unit/code-mode-fixture-root.test.js' };
 const PREFLIGHT = { src: path.join(ROOT, 'scripts', 'preflight.js'), suite: 'test/unit/preflight.test.js' };
 const LANE_DONE = { src: path.join(ROOT, 'scripts', 'lane-done.js'), suite: 'test/unit/lane-done.test.js' };
@@ -681,6 +687,43 @@ const MUTATIONS = [
   [ENVELOPE_RUN, "a missing fixture folder is a problem the run names",
     "  if (probe.skip) {\n",
     "  if (false) {\n"],
+  // ===== A ROW WITH NO VERDICT SHOWS WHAT ITS SUITE PRINTED =====
+  [SUITE_OUTPUT, "the end of a settled suite's output is kept",
+    "      lastOutput = { stdout: outputTail(stdout, { root: cwd }), stderr: outputTail(stderr, { root: cwd }) };\n",
+    ""],
+  [SUITE_OUTPUT, "a suite that starts clears what the one before it printed",
+    "  lastOutput = null;\n  const limit =",
+    "  const limit ="],
+  [SUITE_OUTPUT, "what is kept is cut to its end",
+    "  return end.length > chars ? fromLine(end.slice(-chars), true) : end;",
+    "  return end;"],
+  [SUITE_OUTPUT, "what is kept starts at a line",
+    "  return end.length > chars ? fromLine(end.slice(-chars), true) : end;",
+    "  return end.length > chars ? end.slice(-chars) : end;"],
+  [SUITE_OUTPUT, "a path outside the repository is taken out",
+    "  return out.replace(OUTSIDE_PATH, '<path>');",
+    "  return out;"],
+  [SUITE_OUTPUT, "a path inside the repository is made relative",
+    "  for (const r of [...new Set([path.resolve(root), path.resolve(real)])]",
+    "  for (const r of []"],
+  [SUITE_OUTPUT, "the repository's real spelling is the repository too",
+    "  for (const r of [...new Set([path.resolve(root), path.resolve(real)])]",
+    "  for (const r of [...new Set([path.resolve(root)])]"],
+  [SUITE_OUTPUT, "a file URL is read as the path it names",
+    "  let out = String(text).replace(/file:\\/\\//g, '');",
+    "  let out = String(text);"],
+  [SUITE_OUTPUT, "a run with rows of no verdict prints what their suites printed",
+    "  if (said) console.log(said);\n",
+    ""],
+  [SUITE_OUTPUT, "a row whose suite did not finish shows its output too",
+    "  const rows = (results || []).filter((r) => r && (r.unparsable || r.didNotFinish) && r.output);",
+    "  const rows = (results || []).filter((r) => r && r.unparsable && r.output);"],
+  [OUTPUT_HANDOFF, "a harness hands a row it could not read its suite's output",
+    "unparsable: true, output: suiteOutput(), red: [] }",
+    "unparsable: true, red: [] }"],
+  [OUTPUT_HANDOFF, "a harness hands a row that did not finish its suite's output",
+    "didNotFinish: red.didNotFinish, output: suiteOutput(), red: [] }",
+    "didNotFinish: red.didNotFinish, red: [] }"],
   [FIXTURE_NOTICE, "a skipped Code-mode suite says so in one line",
     "  if (!quiet && !toldOnce) {\n",
     "  if (false) {\n"],
