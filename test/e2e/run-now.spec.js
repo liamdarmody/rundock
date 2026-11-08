@@ -19,7 +19,7 @@ const WebSocket = require('ws');
 const credentials = require('./credentials.js');
 
 // What the stub answers `--version` with, as the server's probe reads it.
-const STUB_VERSION = '0.0.0-stub';
+const STUB_VERSION = '2.1.318-stub';
 const PORT = Number(process.env.E2E_PORT || 34517);
 const ROUTINE = 'Pressed check';
 const WEEKDAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];

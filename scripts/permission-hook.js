@@ -570,7 +570,7 @@ function isRuntimeHomeSurfaceEdit(toolName, toolInput, home = os.homedir(), fold
   return isPersistenceSurface(resolved, home, foldsCase);
 }
 
-// Workspace file-access boundary (spec: anything outside the workspace
+// Workspace file-access boundary (the rule: anything outside the workspace
 // requires a permission card unless a standing per-workspace folder grant
 // covers it; the server owns the grants). This function only CLASSIFIES:
 // inside targets are allowed instantly with no server round-trip, outside

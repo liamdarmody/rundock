@@ -63,6 +63,13 @@ const GUARDED_STARTS = [
   { file: 'codex-appserver.js', fn: '_spawn', spawn: 'spawn(this._binPath', starts: 'the Codex app-server' },
 ];
 
+// Where a stand-in for a process that was never started is handed back in
+// place of one, and guarded the same way, straight after it is made: a
+// caller writes to it as to any process it was handed.
+const GUARDED_STAND_INS = [
+  { file: 'lib/runtime/claude.js', fn: 'spawnClaude', made: 'unstarted(refusal)', name: 'standIn', stands: 'a Claude Code below the version floor' },
+];
+
 // The two places that replace a stdin's write: the handler itself, and the
 // answer-file guard, which wraps the write the handler has already wrapped.
 const WRITE_WRAPPERS = ['lib/runtime/child-stdin.js | guardChildStdin', 'lib/runtime/claude-turn-guard.js | watchClaudeTurns'];
@@ -327,9 +334,24 @@ describe('every write to a child\'s stdin goes to a child whose stdin was given 
       }
       assert.ok(guardAt > spawnAt, `${g.fn} calls guardChildStdin(proc) after its spawn`);
     }
+    for (const g of GUARDED_STAND_INS) {
+      const { kept, code: lines } = viewsOf(path.join(ROOT, g.file));
+      const madeAt = lines.findIndex((l) => l.includes(`const ${g.name} = ${g.made}`));
+      assert.ok(madeAt >= 0, `${g.file} ${g.fn} makes the stand-in for ${g.stands} with ${g.made}`);
+      assert.strictEqual(contextOf(kept, madeAt).name, g.fn, `in ${g.fn}`);
+      let guardAt = -1;
+      for (let j = madeAt + 1; j < lines.length && contextOf(kept, j).name === g.fn; j++) {
+        const c = lines[j];
+        if (new RegExp(`(?<![\\w$.])guardChildStdin\\(${g.name}\\b`).test(c)) { guardAt = j; break; }
+        assert.ok(!new RegExp(`\\b${g.name}\\.stdin\\.write\\(|\\breturn\\b`).test(c),
+          `${g.fn} writes to or hands on its stand-in before guarding it (line ${j + 1})`);
+      }
+      assert.ok(guardAt > madeAt, `${g.fn} calls guardChildStdin(${g.name}) straight after making it`);
+    }
     const calls = sitesOf(/(?<![\w$.])(guardChildStdin)\s*\(/g).filter((s) => !/function\s+$/.test(s.lines[s.line].slice(0, s.match.index)));
-    assert.deepStrictEqual(calls.map((s) => `${s.file} | ${s.fn}`).sort(), GUARDED_STARTS.map((g) => `${g.file} | ${g.fn}`).sort(),
-      'guardChildStdin is called in the start paths and nowhere else');
+    assert.deepStrictEqual(calls.map((s) => `${s.file} | ${s.fn}`).sort(),
+      [...GUARDED_STARTS, ...GUARDED_STAND_INS].map((g) => `${g.file} | ${g.fn}`).sort(),
+      'guardChildStdin is called in the start paths, and for the stand-ins, and nowhere else');
   });
 
   test('only the handler and the answer-file guard replace a stdin\'s write', () => {
