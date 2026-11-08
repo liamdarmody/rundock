@@ -587,6 +587,15 @@ const MUTATIONS = [
   [SCHEDULER_MONTHLY, 'a hold waives only a slot at or before it',
     "  if (entry && typeof entry.heldAt === 'string' && slot <= new Date(entry.heldAt)) return false;\n",
     "  if (entry && typeof entry.heldAt === 'string') return false;\n"],
+  // The hold lives in the slot file, so it has to be written there and read
+  // back: dropped either way, a restart between a hold and its resume turns the
+  // slot it waived back into one the tick fires.
+  [SCHEDULER_MONTHLY, 'the slot file reads back when a routine was held',
+    "      if (typeof entry.heldAt === 'string') routineSlots.routines[key].heldAt = entry.heldAt;\n",
+    ''],
+  [SCHEDULER_MONTHLY, 'the tick records when it saw a monthly routine held',
+    '            routineSlots.routines[key].heldAt = now.toISOString();\n',
+    ''],
 
   // ===== THE THIRD CONTROL ON THE ROW =====
   //
