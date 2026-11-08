@@ -403,6 +403,8 @@ const STARTUP_CODEX = { src: path.join(ROOT, 'lib', 'runtime', 'codex-approval.j
 const STARTUP_SANDBOX = { src: path.join(ROOT, 'lib', 'workspace', 'scaffold.js'), suite: 'test/unit/sandbox-settings.test.js' };
 const STARTUP_GUARD = { src: path.join(ROOT, 'lib', 'workspace', 'answer-file-guard.js'), suite: 'test/unit/startup-file-guard.test.js' };
 const STARTUP_GLUE = { src: path.join(ROOT, 'lib', 'runtime', 'codex-glue.js'), suite: 'test/unit/startup-file-guard.test.js' };
+// The test preload that keeps every test off the account's own startup files.
+const STARTUP_PRELOAD = { src: path.join(ROOT, 'test', 'helpers', 'account-home-refused.js'), suite: 'test/unit/startup-file-guard.test.js' };
 const MUTATIONS = [
   // ===== ONE DIRECTORY UNDER TWO NAMES IS ONE IDENTITY =====
   // Compare unresolved again and every symlink, alias and case spelling of
@@ -3717,21 +3719,24 @@ const MUTATIONS = [
   [STARTUP_GUARD, 'Startup files: a put-back writes through whatever a link leads to now',
     ' sameBytes(at.bytes, was.bytes))) writePlain(was.real, was.bytes, was.mode);',
     ' sameBytes(at.bytes, was.bytes))) fs.writeFileSync(file, was.bytes);'],
-  [STARTUP_GUARD, 'Startup files: under test, the account\'s own startup files are watched like any',
-    '  if (!underTest()) return items;\n',
-    '  return items;\n'],
-  [STARTUP_GUARD, 'Startup files: under test, a path is judged by its name, not where it leads',
-    '  const forms = p => [path.resolve(p), canonicalize(p)]',
-    '  const forms = p => [path.resolve(p)]'],
-  [STARTUP_GUARD, 'Startup files: under test, a new snippet is watched wherever it leads',
-    ' || !notTheAccounts([f], x => x).length) continue;',
-    ') continue;'],
-  [STARTUP_GUARD, 'Startup files: under test, a dropped file leaves the run passing',
-    '  process.exitCode = 1;\n',
+  [STARTUP_PRELOAD, 'Startup files: under test, the account\'s own startup files are watched like any',
+    'guard.refuseStartupFiles(accountsOwn);\n',
     ''],
-  [STARTUP_GUARD, 'Startup files: an account home that cannot be read is taken as nobody\'s',
-    'const inside = p => !account || forms(p)',
-    'const inside = p => !!account && forms(p)'],
+  [STARTUP_PRELOAD, 'Startup files: under test, a path is judged by its name, not where it leads',
+    'const forms = p => [path.resolve(p), canonicalize(p)]',
+    'const forms = p => [path.resolve(p)]'],
+  [STARTUP_GUARD, 'Startup files: under test, a new snippet is watched wherever it leads',
+    ' || !mayWatch(f)) continue;',
+    ') continue;'],
+  [STARTUP_PRELOAD, 'Startup files: under test, a dropped file leaves the run passing',
+    '    process.exitCode = 1;\n',
+    ''],
+  [STARTUP_PRELOAD, 'Startup files: an account home that cannot be read is taken as nobody\'s',
+    'const inside = !account || forms(p)',
+    'const inside = !!account && forms(p)'],
+  [STARTUP_GUARD, 'Startup files: the guard takes no notice of the test preload\'s refusal',
+    'const entries = shellStartupEntries(home).filter(e => mayWatch(e.path));',
+    'const entries = shellStartupEntries(home);'],
   // One file whose check fails never stops the others being checked.
   [STARTUP_GUARD, 'Startup files: one file whose check fails stops the files after it being checked',
     '    try {\n      change = checkFile(g, f, outsideTurn);\n      g.unchecked.delete(f);\n    } catch (e) {\n      failed = failed || e;\n      change = putBackUnchecked(g, f, outsideTurn);\n    }',

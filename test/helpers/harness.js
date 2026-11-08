@@ -7,6 +7,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const assert = require('node:assert');
 
+// No turn a booted server runs ever watches the account's own startup files.
+require('./account-home-refused.js');
 const { makeWorkspace, makeTempDir, standardTeam } = require('./workspace.js');
 const { readAppendedLog } = require('./appended-log.js');
 

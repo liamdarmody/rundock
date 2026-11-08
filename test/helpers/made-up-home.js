@@ -4,8 +4,9 @@
 // that reads the home folder: HOME points at a fresh temp folder, the desktop
 // app's layout puts Rundock's own records there too, and ZDOTDIR and
 // XDG_CONFIG_HOME are cleared so the zsh and fish files resolve under it.
-// Under test the guard refuses the account's own home anyway, and fails the
-// run naming the files (lib/workspace/answer-file-guard.js notTheAccounts).
+// The test preload refuses the account's own home anyway, and fails the run
+// naming the files (account-home-refused.js), so it is loaded here too.
+require('./account-home-refused.js');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
