@@ -159,6 +159,54 @@ describe('a run record reaches the client', () => {
         'a routine with no runs was answered with another routine\'s run');
     });
   });
+
+  // A run records its files under the folder its working directory resolves
+  // to, which for a workspace opened through a symbolic link is not the
+  // spelling the client holds. So the reply names both, beside the record and
+  // never inside it: the record still crosses the wire whole.
+  test('the reply names the workspace and the folder it resolves to, beside a record left whole', () => {
+    withRecords([KNOWN], (dir) => {
+      const link = path.join(makeTempDir('rundock-runs-link-'), 'linked');
+      fs.symlinkSync(dir, link, 'dir');
+      config.setWorkspace(link);
+      const ws = socket();
+      runs.handleGetRun({}, ws, { type: 'get_run', runId: RUN.known });
+      assert.strictEqual(ws.sent[0].workspace, link, 'the workspace as the server holds it');
+      assert.strictEqual(ws.sent[0].workspaceRealPath, fs.realpathSync.native(dir), 'and the same folder, resolved');
+      assert.deepStrictEqual(ws.sent[0].run, KNOWN, 'with the record exactly as it was written');
+    });
+  });
+
+  test('with no workspace open, the reply names no folder', () => {
+    const previous = config.getWorkspace();
+    config.setWorkspace(null);
+    try {
+      withReader([KNOWN], () => {
+        const ws = socket();
+        runs.handleGetRun({}, ws, { type: 'get_run', runId: RUN.known });
+        assert.strictEqual(ws.sent[0].workspace, null);
+        assert.strictEqual(ws.sent[0].workspaceRealPath, null);
+      });
+    } finally { config.setWorkspace(previous); }
+  });
+
+  // The control failing: the folder cannot be resolved because it has gone.
+  // The reply must still go out, or the screen waits forever.
+  test('a workspace whose folder has gone is still answered, with no resolved folder', () => {
+    const previous = config.getWorkspace();
+    const gone = path.join(makeTempDir('rundock-runs-gone-'), 'removed');
+    config.setWorkspace(gone);
+    try {
+      withReader([KNOWN], () => {
+        const ws = socket();
+        runs.handleGetRun({}, ws, { type: 'get_run', runId: RUN.known });
+        assert.strictEqual(ws.sent.length, 1, 'the reply went out');
+        assert.strictEqual(ws.sent[0].workspace, gone, 'naming the workspace as held');
+        assert.strictEqual(ws.sent[0].workspaceRealPath, null, 'and no resolved folder');
+        assert.deepStrictEqual(ws.sent[0].run, KNOWN, 'beside the record');
+      });
+    } finally { config.setWorkspace(previous); }
+  });
 });
 
 describe('the transport keeps unknown and empty apart', () => {

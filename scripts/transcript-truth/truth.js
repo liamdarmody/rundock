@@ -5,9 +5,17 @@
 //
 // Two callers, deliberately. The capture runner checks them against a
 // transcript a REAL run just produced, so a runtime that has moved is caught
-// at capture time. The unit test checks them against the COMMITTED capture and
-// then runs the reader over it, so continuous integration, which has no
+// at capture time. The unit test checks them against the COMMITTED captures and
+// then runs the reader over them, so continuous integration, which has no
 // runtime to spend, still pins the reader to a real artefact.
+//
+// TWO COMMITTED CAPTURES, each held to the checks about what it holds. The
+// transcript capture (captured-transcript.json) is a whole run and answers for
+// the file tools, the web search and the delegation. The shell call's capture
+// (captured-shell-call.json) is the slice of a run that holds its shell calls,
+// cut by shellExcerpt below, and answers for the shell tools. A re-capture
+// writes both from one run; until then each records the runtime and the
+// prompt it was taken with.
 //
 // Every entry here is a claim the reader would be wrong without. Adding a
 // dependency on some other part of the shape means adding it here too, or the
@@ -24,7 +32,7 @@
 // never exercised. The partition below closes it. Every tool the reader names
 // must be either witnessed by the capture, and checked against it, or listed
 // as unwitnessed with the reason, and a tool that is neither fails this file.
-const { FILE_TOOLS, KNOWN_BLOCK_TYPES, DELEGATION_TOOLS } = require('../../lib/runtime/session-transcript.js');
+const { FILE_TOOLS, KNOWN_BLOCK_TYPES, DELEGATION_TOOLS, SHELL_TOOLS, READ_ENTRY_TYPES } = require('../../lib/runtime/session-transcript.js');
 
 // Tools the committed capture really contains, each checked below against the
 // shapes it produced. Adding a tool to the reader means adding it here and
@@ -37,6 +45,16 @@ const WITNESSED_TOOLS = new Set(['Write', 'Edit', 'NotebookEdit']);
 // shape reports drift rather than being guessed at.
 const UNWITNESSED_TOOLS = {
   MultiEdit: 'the installed runtime does not offer this tool at all (it is absent from the tool list a run announces), so nothing can produce one. It is carried because the permission hook matcher includes it, and because a runtime that brings it back should not silently drop its writes.',
+};
+
+// THE SAME PARTITION FOR THE SHELL TOOLS, witnessed by the shell call's
+// capture. A run's record says it used the shell only when a call carries one
+// of these names, so a name no capture witnessed is a record that can quietly
+// stop saying so: the list then reads as complete for a run that wrote
+// through the shell.
+const WITNESSED_SHELL_TOOLS = new Set(['Bash']);
+const UNWITNESSED_SHELL_TOOLS = {
+  PowerShell: 'the capture is taken on macOS, where the runtime offers no PowerShell tool (it is absent from the tool list a run announces), so nothing there can produce one. It is carried because the permission hook matchers name it for Windows, where a run that used it must still be reported as one that used the shell.',
 };
 
 function parseLines(lines) {
@@ -64,7 +82,47 @@ function checkDeclarationsAgree() {
   for (const tool of Object.keys(UNWITNESSED_TOOLS)) {
     if (!FILE_TOOLS[tool]) failures.push(`${tool} is recorded as unwitnessed but the reader no longer handles it`);
   }
+  for (const tool of SHELL_TOOLS) {
+    if (WITNESSED_SHELL_TOOLS.has(tool)) continue;
+    if (UNWITNESSED_SHELL_TOOLS[tool]) continue;
+    failures.push(`the reader counts ${tool} as a shell tool and this file says nothing about it: add it to WITNESSED_SHELL_TOOLS and extend the capture prompt to exercise it, or record why no capture can witness it`);
+  }
+  for (const tool of WITNESSED_SHELL_TOOLS) {
+    if (!SHELL_TOOLS.has(tool)) failures.push(`${tool} is claimed as a witnessed shell tool but the reader no longer counts it`);
+  }
+  for (const tool of Object.keys(UNWITNESSED_SHELL_TOOLS)) {
+    if (!SHELL_TOOLS.has(tool)) failures.push(`${tool} is recorded as an unwitnessed shell tool but the reader no longer counts it`);
+  }
   return failures;
+}
+
+/**
+ * The entries the reader reads, with a failure for anything it needs that is
+ * recorded only in an entry it passes over.
+ *
+ * The checks hold the entries the reader reads, and no others: an entry it
+ * passes over may carry blocks it does not know, and several answers at once,
+ * without changing what it reports.
+ */
+function messagesOf(entries, say) {
+  const messages = entries.filter(e => e && READ_ENTRY_TYPES.has(e.type) && e.message);
+  say(messages.length > 0, 'no user/assistant message envelopes at all: the reader would understand nothing');
+
+  // NOTHING THE READER NEEDS IS RECORDED ONLY WHERE IT DOES NOT LOOK. The
+  // entries it passes over repeat asks and answers the messages hold; an ask
+  // or an answer found only there is one the reader would never see, which is
+  // a list missing a write, or a write left open.
+  const idsIn = (list, type, key) => new Set(list.flatMap(blocksOf).filter(b => b.type === type).map(b => b[key]));
+  const passedOver = entries.filter(e => e && !READ_ENTRY_TYPES.has(e.type));
+  const readAsks = idsIn(messages, 'tool_use', 'id');
+  const readAnswers = idsIn(messages, 'tool_result', 'tool_use_id');
+  for (const id of idsIn(passedOver, 'tool_use', 'id')) {
+    say(readAsks.has(id), `a tool call (${id}) is recorded only in an entry the reader passes over`);
+  }
+  for (const id of idsIn(passedOver, 'tool_result', 'tool_use_id')) {
+    say(readAnswers.has(id), `the answer to a tool call (${id}) is recorded only in an entry the reader passes over`);
+  }
+  return messages;
 }
 
 /**
@@ -77,13 +135,11 @@ function checkTranscriptInvariants(lines) {
   try { entries = parseLines(lines); } catch (e) { return [e.message]; }
 
   const say = (ok, msg) => { if (!ok) failures.push(msg); };
-
-  const messages = entries.filter(e => e && (e.type === 'user' || e.type === 'assistant') && e.message);
-  say(messages.length > 0, 'no user/assistant message envelopes at all: the reader would understand nothing');
+  const messages = messagesOf(entries, say);
 
   const uses = [];
   const results = [];
-  for (const entry of entries) {
+  for (const entry of messages) {
     const content = entry && entry.message ? entry.message.content : null;
     if (!Array.isArray(content)) continue;
     for (const block of content) {
@@ -153,6 +209,37 @@ function checkTranscriptInvariants(lines) {
       `${tool} outcomes in the capture do not name the file in ${FILE_TOOLS[tool].result}, which is where the reader looks`);
   }
 
+  return failures;
+}
+
+/**
+ * What the reader assumes about a shell call, checked against the shell
+ * call's capture. Returns a list of failures, as the check above does.
+ *
+ * Every shell tool claimed as witnessed, called, and answered both ways. The
+ * reader counts the ASK, whatever the answer, because an error cannot tell a
+ * refused command from one that wrote a file and then failed. That rests on a
+ * failed call being the same tool_use answered with is_error, so a capture
+ * whose calls all succeeded leaves the claim unwitnessed.
+ */
+function checkShellInvariants(lines) {
+  const failures = [];
+  let entries;
+  try { entries = parseLines(lines); } catch (e) { return [e.message]; }
+  const say = (ok, msg) => { if (!ok) failures.push(msg); };
+  const blocks = messagesOf(entries, say).flatMap(blocksOf);
+  for (const tool of WITNESSED_SHELL_TOOLS) {
+    const used = blocks.filter(b => b.type === 'tool_use' && b.name === tool).map(b => b.id);
+    if (used.length === 0) {
+      failures.push(`${tool} is claimed as witnessed and the capture contains no ${tool} call: extend the capture prompt or stop claiming it`);
+      continue;
+    }
+    const answered = blocks.filter(b => b.type === 'tool_result' && used.includes(b.tool_use_id));
+    say(answered.some(b => b.is_error !== true),
+      `no ${tool} call in the capture succeeded, so the shape of one that ran is unwitnessed`);
+    say(answered.some(b => b.is_error === true),
+      `no ${tool} call in the capture was answered with is_error, so nothing witnesses that a failed shell call is the same ask the reader counts`);
+  }
   return failures;
 }
 
@@ -238,6 +325,10 @@ function checkCaptureAnswers(captured) {
   for (const sub of subagents) {
     let subEntries;
     try { subEntries = parseLines(sub.lines); } catch (e) { failures.push(`${sub.name}: ${e.message}`); continue; }
+    // The messages only, as for the session: a copy of a request carries the
+    // subagent's answers with no payload of its own, and would satisfy the
+    // payload check below whatever the real answer carried.
+    subEntries = subEntries.filter(e => e && READ_ENTRY_TYPES.has(e.type));
     const ids = new Set();
     for (const entry of subEntries) {
       for (const block of blocksOf(entry)) {
@@ -262,6 +353,37 @@ function checkCaptureAnswers(captured) {
 }
 
 /**
+ * What the shell call's capture rides along to show, as checkCaptureAnswers
+ * does for the transcript capture: a subagent's shell call, and a file the
+ * session's shell call wrote that no file tool names.
+ */
+function checkShellAnswers(captured) {
+  const failures = [];
+  const say = (ok, msg) => { if (!ok) failures.push(msg); };
+  let entries;
+  try { entries = parseLines(captured.lines); } catch (e) { return [e.message]; }
+  const subagents = Array.isArray(captured.subagents) ? captured.subagents : [];
+
+  // The reader scans a subagent's transcript for shell use as it scans the
+  // session's, so a subagent's shell call has to be in the capture too.
+  const subShell = subagents.some(sub => {
+    try {
+      return parseLines(sub.lines).some(e => e && READ_ENTRY_TYPES.has(e.type)
+        && blocksOf(e).some(b => b.type === 'tool_use' && SHELL_TOOLS.has(b.name)));
+    } catch (e) { return false; }
+  });
+  say(subShell, 'no shell call in any subagent transcript: the reader reports a subagent\'s shell use for the run, and nothing witnesses the call it looks for');
+
+  // The file the session's shell call wrote, which no file tool may name: it
+  // is the case the record's shell field exists for.
+  const namesShellFile = (value) => typeof value === 'string' && value.endsWith(`/${EXPECTED_SHELL_WRITTEN}`);
+  say(!entries.some(entry => blocksOf(entry).some(b => b.type === 'tool_use' && FILE_TOOLS[b.name]
+    && b.input && namesShellFile(b.input[FILE_TOOLS[b.name].input]))),
+  `a file tool in the session's transcript names ${EXPECTED_SHELL_WRITTEN}: the capture no longer shows a file that only the shell wrote`);
+  return failures;
+}
+
+/**
  * What the reader must extract from the committed capture, by file name and
  * what happened to it. Names rather than absolute paths, because the capture
  * was taken in a temporary directory whose path belongs to the machine that
@@ -279,7 +401,74 @@ const EXPECTED_EXTRACTION = [
 // The write the run attempted and did not make. Never a file it changed.
 const EXPECTED_ABSENT = 'capture-blocked.txt';
 
+// The file the run wrote through the shell. It is on disk after the run and
+// never on the list, which is why the record says the shell was used.
+const EXPECTED_SHELL_WRITTEN = 'shell.md';
+
+/**
+ * THE SHELL CALL'S CAPTURE, cut from a whole run rather than taken by a run of
+ * its own, so one run answers for both captures.
+ *
+ * Kept from the session's transcript: each message that asks a shell tool or
+ * the delegation tool, and the message that answers each such ask; and the
+ * first entry the reader passes over that carries a block it does not know and
+ * asks or answers nothing, which is what shows that passing such entries over
+ * is a rule about real transcripts. Kept from each subagent's transcript: each
+ * message that asks a shell tool, and its answer. Every entry is the line the
+ * runtime wrote, in the order it wrote them, and nothing else is kept: the
+ * whole run is in the transcript capture.
+ */
+function shellExcerpt({ lines, subagents }) {
+  const cut = (source, tools, witnessPassedOver) => {
+    const asked = new Set();
+    let witnessed = !witnessPassedOver;
+    return source.filter(line => {
+      let entry;
+      try { entry = JSON.parse(line); } catch (e) { return false; }
+      const blocks = blocksOf(entry);
+      if (!entry || !READ_ENTRY_TYPES.has(entry.type)) {
+        if (witnessed || blocks.some(b => b.type === 'tool_use' || b.type === 'tool_result')) return false;
+        witnessed = blocks.some(b => !KNOWN_BLOCK_TYPES.has(b.type));
+        return witnessed;
+      }
+      let keep = false;
+      for (const b of blocks) {
+        if (b.type === 'tool_use' && tools.has(b.name)) { asked.add(b.id); keep = true; }
+        if (b.type === 'tool_result' && asked.has(b.tool_use_id)) keep = true;
+      }
+      return keep;
+    });
+  };
+  return {
+    lines: cut(lines, new Set([...SHELL_TOOLS, ...DELEGATION_TOOLS]), true),
+    subagents: (Array.isArray(subagents) ? subagents : []).map(sub => ({ name: sub.name, lines: cut(sub.lines, SHELL_TOOLS, false) })),
+  };
+}
+
+/**
+ * The shell call's capture as it is committed: the run's own record of which
+ * runtime, session, folder and prompt it was, what the run's folder showed,
+ * and the excerpt. `captured` is the transcript capture of the same run.
+ */
+function shellCapture(captured, { shellWrite, recordedPaths }) {
+  const { lines, subagents } = shellExcerpt(captured);
+  return {
+    runtimeVersion: captured.runtimeVersion,
+    capturedAt: captured.capturedAt,
+    sessionId: captured.sessionId,
+    workspace: captured.workspace,
+    prompt: captured.prompt,
+    excerpt: 'the entries of one run that hold its shell calls and its delegation, and one entry the reader passes over, cut by shellExcerpt in scripts/transcript-truth/truth.js, each as the runtime wrote it',
+    shellWrite,
+    recordedPaths,
+    lines,
+    subagents,
+  };
+}
+
 module.exports = {
-  checkTranscriptInvariants, checkDeclarationsAgree, checkCaptureAnswers, withoutDelegation,
-  EXPECTED_EXTRACTION, EXPECTED_ABSENT, EXPECTED_DELEGATED, WITNESSED_TOOLS, UNWITNESSED_TOOLS,
+  checkTranscriptInvariants, checkShellInvariants, checkDeclarationsAgree, checkCaptureAnswers, checkShellAnswers,
+  withoutDelegation, shellExcerpt, shellCapture,
+  EXPECTED_EXTRACTION, EXPECTED_ABSENT, EXPECTED_DELEGATED, EXPECTED_SHELL_WRITTEN,
+  WITNESSED_TOOLS, UNWITNESSED_TOOLS, WITNESSED_SHELL_TOOLS, UNWITNESSED_SHELL_TOOLS,
 };
