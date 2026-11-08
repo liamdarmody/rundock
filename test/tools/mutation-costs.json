@@ -1,5 +1,5 @@
 {
-  "about": "Seconds per mutation row. secondsPerRow is measured on the CI runner from the shard logs of two full runs of every harness: each harness's measured seconds over its rows, averaged. secondsPerRowLabel, for each harness CI runs in slices, is inferred, not measured: no run records a row's own time, so each slice's measured seconds are shared among its rows in proportion to one plus the tests each turned red, averaged over the runs. secondsPerIntegrationRow is the mean of those inferred costs over a harness's integration rows, the rate for an integration row with no cost of its own. The plan weights shards by these so no shard nears its time limit. A harness missing here is planned at defaultSecondsPerRow, and any other row missing from its harness's labels at that harness's rate; re-measure when a shard runs past fifteen minutes. mutate-stale-session-guards.js is measured on a developer machine, one row at a time, its costs by label measured rather than inferred, until shard logs record it. The rows of mutate-workspace-boundary-guards.js that guard a runtime folder handed to a program that reads all of it, their labels beginning \"Folder reads:\", are measured the same way, on a developer machine, one row at a time, until shard logs record them. mutate-routines-guards.js and mutate-run-detail-guards.js have costs by label for some of their rows only, measured on a developer machine one row at a time; their other rows are planned at the harness rate. The state file rows labelled under mutate-atomic-write-guards.js and mutate-routines-guards.js are measured the same way, on a developer machine, one row at a time.",
+  "about": "Seconds per mutation row. secondsPerRow is measured on the CI runner from the shard logs of two full runs of every harness: each harness's measured seconds over its rows, averaged. secondsPerRowLabel, for each harness CI runs in slices, is inferred, not measured: no run records a row's own time, so each slice's measured seconds are shared among its rows in proportion to one plus the tests each turned red, averaged over the runs. secondsPerIntegrationRow is the mean of those inferred costs over a harness's integration rows, the rate for an integration row with no cost of its own. The plan weights shards by these so no shard nears its time limit. A harness missing here is planned at defaultSecondsPerRow, and any other row missing from its harness's labels at that harness's rate; re-measure when a shard runs past fifteen minutes. mutate-stale-session-guards.js is measured on a developer machine, one row at a time, its costs by label measured rather than inferred, until shard logs record it; so is the one labelled row of mutate-history-guards.js. The rows of mutate-workspace-boundary-guards.js that guard a runtime folder handed to a program that reads all of it, their labels beginning \"Folder reads:\", are measured the same way, on a developer machine, one row at a time, until shard logs record them. mutate-routines-guards.js and mutate-run-detail-guards.js have costs by label for some of their rows only, measured on a developer machine one row at a time; their other rows are planned at the harness rate. The state file rows labelled under mutate-atomic-write-guards.js and mutate-routines-guards.js are measured the same way, on a developer machine, one row at a time.",
   "defaultSecondsPerRow": 5,
   "secondsPerRow": {
     "mutate-approve-once-guards.js": 0.89,
@@ -169,6 +169,9 @@
       "the navigation guard reaches extension frames only, never every sub-frame": 5.2,
       "the request filter reaches extension frames only, never the app": 3.9,
       "WebRTC is off for the window": 2.6
+    },
+    "mutate-history-guards.js": {
+      "the transcript is merged when no session id is left": 1.1
     },
     "mutate-routines-guards.js": {
       "a late run keeps the success colour, and no state is amber": 2.5,
@@ -535,6 +538,19 @@
       "and what the specialist handed back": 0.99,
       "a held catch-up is given once": 0.19,
       "a catch-up is held for the next message": 0.22,
+      "a held catch-up is stored with the conversation": 1.28,
+      "a save from the window keeps the stored catch-up": 1.25,
+      "a new process gives the stored catch-up to its first message": 1.22,
+      "a stored catch-up is removed once a new process is given it": 1.89,
+      "a stored catch-up is removed once the live process gives it": 1.88,
+      "a catch-up given to a refused resume goes to the fresh start": 0.71,
+      "the conversation list leaves the stored catch-up out": 0.43,
+      "the legacy chat path gives the stored catch-up to its first message": 0.54,
+      "the legacy chat path hands a refused resume's catch-up to the fresh start": 0.55,
+      "a handback start settles a stored catch-up": 1.72,
+      "a handback start with no session gives the catch-up with the handback": 1.74,
+      "a resumed handback start only spends the catch-up": 1.05,
+      "a paused handback start holds what it took for the next message": 1.64,
       "a handback prompt honors the arrival heading it is asked for": 0.99,
       "a message sent into a process still starting is kept": 15.96,
       "a turn started again is given what was kept, after its prompt": 16.03,
@@ -543,7 +559,7 @@
       "the chat path's retry sends what was kept after the first message": 15.44,
       "the chat path hands on what was kept after any failure before the init": 15.39,
       "a message sent to a fresh start with no prompt carries the catch-up": 1.03,
-      "nothing is kept once the session has started": 0.21,
+      "nothing is kept once a turn has answered": 0.52,
       "what is kept is handed over once": 0.19,
       "starting again drops the resume and keeps everything else": 15.35,
       "dropping the resume drops its id with it": 0.23,
@@ -566,7 +582,7 @@
       "the legacy path retries only a process that never started its session": 2.03,
       "a refusal after an init is still retried": 15.35,
       "the legacy path retries a refusal after an init too": 15.4,
-      "once the session starts, nothing kept for a refused start is kept": 0.41,
+      "the kept list is cleared on the first result": 0.59,
       "the chat path's own retry counts as starting again": 0.44,
       "the legacy chat path's retry counts as starting again": 0.39,
       "info naming the expired session forgets that one, not the primary": 0.22,
