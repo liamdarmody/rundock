@@ -668,7 +668,9 @@ const {
 } = claudeRuntime;
 const codexGlue = require('./lib/runtime/codex-glue.js');
 const { watchClaudeTurns } = require('./lib/runtime/claude-turn-guard.js');
-const { startingFresh, noteUnstartedWrite, takeUnstartedWrites, withFreshCatchUp } = require('./lib/runtime/missing-session.js');
+const {
+  startingFresh, noteUnstartedWrite, takeUnstartedWrites, withFreshCatchUp, storeHeldCatchUp, takeStoredCatchUp,
+} = require('./lib/runtime/missing-session.js');
 claudeRuntime.wireClaudeRuntimeDeps({
   getActualPort: () => ACTUAL_PORT,
   // Every Claude turn runs under the same answer-file guard as a Codex turn.
@@ -1649,8 +1651,8 @@ wss.on('connection', (ws) => {
             // A fresh start that had no prompt of its own gives its first
             // message the catch-up it is owed; every other message is as sent.
             const followUp = withFreshCatchUp(existing, msg.content);
-            // Kept until this process has started its session: one still
-            // starting may yet be refused, and then never reads this.
+            // Kept until this process has answered a turn: until then it may
+            // yet be refused, and then never reads this.
             noteUnstartedWrite(existing, followUp);
             existing.process.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: followUp } }) + '\n');
           } else {
@@ -1719,8 +1721,11 @@ wss.on('connection', (ws) => {
 
             safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: processId, _agent: entry.agentId }));
 
-            // Send the first message via stdin
-            proc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: msg.content } }) + '\n');
+            // Send the first message via stdin, behind any catch-up a fresh
+            // start held for this agent whose process has since gone (reaped,
+            // or the server restarted): given here, once.
+            const heldCatchUp = takeStoredCatchUp(convoId, entry.agentId);
+            proc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: heldCatchUp + msg.content } }) + '\n');
 
             const stderrRef = wireProcessHandlers(entry, convoId, ws, {
               enableInterception: true,
@@ -1788,6 +1793,10 @@ wss.on('connection', (ws) => {
                 console.log(`[Chat] Resume failed for session ${msg.sessionId}, retrying fresh`);
                 entry.missingSessionRecovered = true; // started again below
                 processes.delete(convoId);
+                // A catch-up this process was given was never read: it goes
+                // with the message into the fresh start.
+                entry.freshCatchUp = heldCatchUp;
+                storeHeldCatchUp(convoId, entry);
                 // Naming the session Claude Code refused, when it was refused,
                 // so the window forgets that one and not whichever is primary.
                 const freshName = (agentData && agentData.displayName) || null;
@@ -1801,9 +1810,9 @@ wss.on('connection', (ws) => {
                 // follows it, in order, into the fresh one: the first emit has
                 // already put a live process in place for these to reach. After
                 // any failure, not only a refusal: what is still kept went to a
-                // process that never started a session (its init clears the
-                // list), so it acted on none of it, and dropping it lost what
-                // the person had said.
+                // process that never answered a turn (its first result clears
+                // the list), so it acted on none of it, and dropping it lost
+                // what the person had said.
                 for (const carried of takeUnstartedWrites(entry)) {
                   liveWs.emit('message', JSON.stringify({ ...freshMsg, content: carried }));
                 }
@@ -1882,7 +1891,9 @@ wss.on('connection', (ws) => {
 
           safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: processId, _agent: entry.agentId }));
 
-          proc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: msg.content } }) + '\n');
+          // Behind any catch-up stored for this agent, as on the interactive path.
+          const legacyCatchUp = takeStoredCatchUp(convoId, entry.agentId);
+          proc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: legacyCatchUp + msg.content } }) + '\n');
 
           // Legacy mode: no interception, no transcript, no idle tracking
           const legacyStderrRef = wireProcessHandlers(entry, convoId, ws, {
@@ -1905,6 +1916,8 @@ wss.on('connection', (ws) => {
               console.log(`[Chat] Resume failed for session ${msg.sessionId}, retrying fresh`);
               entry.missingSessionRecovered = true; // started again below
               processes.delete(convoId);
+              entry.freshCatchUp = legacyCatchUp; // never read: it goes to the fresh start
+              storeHeldCatchUp(convoId, entry);
               const freshName = (agentData && agentData.displayName) || null;
               safeSend(JSON.stringify({ type: 'system', subtype: 'info', content: startingFresh(freshName),
                 ...(entry.missingSession ? { expiredSessionId: entry.missingSession } : {}),
