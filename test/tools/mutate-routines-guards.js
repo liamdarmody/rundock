@@ -128,6 +128,14 @@ const SKILLS_VIEW = { src: path.join(ROOT, 'public', 'views', 'skills.js'), suit
 // The three-tone ruling is about what a reader SEES, and a dot proven against
 // a token name in a module is the mistake this project already made once.
 const SIDEBAR_CSS = { src: path.join(ROOT, 'public', 'styles', 'components', 'sidebar.css'), suite: 'test/unit/routines-view.test.js' };
+// The routine screens' text, badge and ring colors, watched by the file that
+// measures each rule against the surface it sits on, in both themes.
+const CONTRAST_SUITE = 'test/unit/routine-screens-contrast.test.js';
+const CONTRAST_SIDEBAR = { src: path.join(ROOT, 'public', 'styles', 'components', 'sidebar.css'), suite: CONTRAST_SUITE };
+const CONTRAST_ROUTINES = { src: path.join(ROOT, 'public', 'styles', 'views', 'routines.css'), suite: CONTRAST_SUITE };
+const CONTRAST_RUN_DETAIL = { src: path.join(ROOT, 'public', 'styles', 'views', 'run-detail.css'), suite: CONTRAST_SUITE };
+const CONTRAST_EDITOR = { src: path.join(ROOT, 'public', 'styles', 'views', 'routine-editor.css'), suite: CONTRAST_SUITE };
+const CONTRAST_TOKENS = { src: path.join(ROOT, 'public', 'styles', 'tokens.css'), suite: CONTRAST_SUITE };
 // The dispatch call that settles which routines empty state is shown, watched
 // by the enumeration of everything that draws this list.
 const APP_SKILLS = { src: path.join(ROOT, 'public', 'app.js'), suite: 'test/unit/routines-view-doors.test.js' };
@@ -209,6 +217,11 @@ const ROOT_SERVER = { src: path.join(ROOT, 'server.js'), suite: 'test/unit/proto
 // can read, because a notice sent only to the socket that asked is exactly the
 // silence this change removes and every client-side test would stay green.
 const ROUTINES = { src: path.join(ROOT, 'lib', 'agents', 'routines.js'), suite: 'test/unit/routine-actions.test.js' };
+// A routine state that does not parse, and a run record written under a
+// temporary name. Watched by the file that cuts the state file and leaves a
+// complete copy beside a record, because with either guard gone every other
+// suite still loads a whole file and lists every record once.
+const SCHEDULER_LOADS = { src: path.join(ROOT, 'lib', 'scheduler.js'), suite: 'test/unit/scheduler-state-loads.test.js' };
 
 // [target, label, the guard as it is written, what it becomes without it]
 const MUTATIONS = [
@@ -231,12 +244,11 @@ const MUTATIONS = [
   [SCHEDULER, 'the suppression reads the run state and never the slot store',
     '        const nextRun = getNextRun(routine.schedule, routineState[key]?.lastRun);',
     '        const nextRun = getNextRun(routine.schedule, routineSlots.routines[key]?.due);'],
+  // A run serves only the slot of its own period, so the row steps at most one
+  // period and there is no walk left to bound.
   [SCHEDULER, 'a period the last run already served is stepped over',
-    '  for (let step = 0; served && served >= slot && step < MAX_SLOTS_PER_WAKE; step++) {\n    slot = stepSlots(parsed, slot, 1);\n  }',
+    '  if (lastRun && slotServed(slot, lastRun)) slot = stepSlots(parsed, slot, 1);\n',
     ''],
-  [SCHEDULER, 'the walk is bounded rather than counting every day since the anchor',
-    'step < MAX_SLOTS_PER_WAKE; step++',
-    'step < 100000; step++'],
   [SCHEDULER, 'the slot the last run served is named',
     '    lastSlot: started ? slotFor(parsed, started).toISOString() : null,\n',
     '    lastSlot: null,\n'],
@@ -511,16 +523,33 @@ const MUTATIONS = [
   //
   // A routine keeps its run stamp when its schedule moves, because the state is
   // keyed by identity. Each of these breaks one half of the comparison that
-  // then decides whether it runs again, runs twice, or never runs.
-  [SCHEDULER_EDIT, 'the daily suppression compares the hour, not just the day',
-    '      if (lastRun.toDateString() === now.toDateString() && lastRun.getHours() >= parsed.hour) return null;',
-    '      if (lastRun.toDateString() === now.toDateString()) return null;'],
-  [SCHEDULER_EDIT, 'the daily suppression compares the day, not just the hour',
-    '      if (lastRun.toDateString() === now.toDateString() && lastRun.getHours() >= parsed.hour) return null;',
-    '      if (lastRun.getHours() >= parsed.hour) return null;'],
-  [SCHEDULER_EDIT, 'a weekly routine that already ran on its day is not run again',
-    '    if (daysSinceLastRun < 1 && lastRun.getDay() === parsed.day) return null;',
-    '    if (false) return null;'],
+  // then decides whether it runs again, runs twice, or never runs. The
+  // comparison is one function for both shapes, asked by the tick and by the
+  // row, so each row here breaks it, or the one call that asks it, once.
+  [SCHEDULER_EDIT, 'the suppression compares the time, not just the day',
+    '  return lastRun >= slot && lastRun.toDateString() === slot.toDateString();',
+    '  return lastRun.toDateString() === slot.toDateString();'],
+  // Watched by the file that holds the row and the tick to each other, because
+  // only a run stamped on a later day can show the bound is there, and no
+  // schedule edit produces one.
+  [SCHEDULER, 'the suppression compares the day, not just the time',
+    '  return lastRun >= slot && lastRun.toDateString() === slot.toDateString();',
+    '  return lastRun >= slot;'],
+  [SCHEDULER_EDIT, 'a weekly routine that already ran at its time on its day is not run again',
+    '  if (lastRunISO && slotServed(slot, new Date(lastRunISO))) return null;',
+    "  if (lastRunISO && parsed.kind !== 'weekly' && slotServed(slot, new Date(lastRunISO))) return null;"],
+  // The comparison this guard replaced, in each of its two shapes: the stamp's
+  // hour against the scheduled hour, which held a routine moved to a later
+  // minute in the same hour, and a weekly routine held by its weekday alone,
+  // which held one moved to any later time on its own day.
+  [SCHEDULER_EDIT, 'the suppression compares the minute, not just the hour',
+    '  return lastRun >= slot && lastRun.toDateString() === slot.toDateString();',
+    '  return lastRun.getHours() >= slot.getHours() && lastRun.toDateString() === slot.toDateString();'],
+  [SCHEDULER_EDIT, 'a weekly routine is held by the time it ran, not by its weekday alone',
+    '  if (lastRunISO && slotServed(slot, new Date(lastRunISO))) return null;',
+    "  if (lastRunISO && (parsed.kind === 'weekly'\n"
+    + '    ? (now - new Date(lastRunISO)) / 86400000 < 1 && new Date(lastRunISO).getDay() === parsed.day\n'
+    + '    : slotServed(slot, new Date(lastRunISO)))) return null;'],
 
   // ===== THE THIRD CONTROL ON THE ROW =====
   //
@@ -563,17 +592,20 @@ const MUTATIONS = [
 
   // ===== THE THREE TONES, AS THE PAGE RESOLVES THEM =====
   [STYLES, 'a late run keeps the success colour, and no state is amber',
-    '.run-status.ok-quiet { font-weight: 500; color: var(--success); }',
+    '.run-status.ok-quiet { font-weight: 500; color: var(--success-text); }',
     '.run-status.ok-quiet { font-weight: 500; color: var(--attention); }'],
   [STYLES, 'a late run is quieter than a punctual one',
-    '.run-status.ok { font-weight: 600; color: var(--success); }',
-    '.run-status.ok { font-weight: 500; color: var(--success); }'],
+    '.run-status.ok { font-weight: 600; color: var(--success-text); }',
+    '.run-status.ok { font-weight: 500; color: var(--success-text); }'],
   [STYLES, 'a slot nobody served is not dressed as a failure',
-    '.run-status.neutral { font-weight: 500; color: var(--idle); }',
+    '.run-status.neutral { font-weight: 500; color: var(--text-2-strong); }',
     '.run-status.neutral { font-weight: 500; color: var(--danger-text); }'],
   [STYLES, 'a failure is not dressed as a success',
     '.run-status.failed { font-weight: 600; color: var(--danger-text); }',
     '.run-status.failed { font-weight: 600; color: var(--success); }'],
+  [STYLES, 'a failure is not dressed as the success text the successes wear',
+    '.run-status.failed { font-weight: 600; color: var(--danger-text); }',
+    '.run-status.failed { font-weight: 600; color: var(--success-text); }'],
 
   // ===== THE SAVE DESTINATION, AND THE SILENCE AROUND IT =====
   // The trap the criteria name. Each of these is a way for a written routine
@@ -1149,6 +1181,177 @@ const MUTATIONS = [
   [DISCOVERY_WORKSPACE, 'the roster message carries the workspace it was read from',
     '    workspace: getWorkspace(),\n',
     ''],
+  // A routine state that does not parse is rebuilt from the run records, so a
+  // routine that already ran this period is not fired again.
+  [SCHEDULER_LOADS, 'a routine state that does not parse is rebuilt from the run records, not started empty',
+    'saved || stampsFromRunRecords()',
+    'saved || {}'],
+  [SCHEDULER_LOADS, 'a complete copy left under a temporary name in runs/ is never read as a run',
+    '    if (!RUN_RECORD_NAME.test(name)) continue;\n',
+    ''],
+  // And it is set aside and written back at once, so a restart before the
+  // next run finds the rebuilt state rather than the same damage.
+  [SCHEDULER_LOADS, 'a routine state that does not parse is set aside and written back at once',
+    '    if (unparsed) setAsideOnceReplaced(file, unparsed, () => deps.now(), saveRoutineState);\n',
+    ''],
+
+  // ===== THE ROUTINE SCREENS' COLORS, MEASURED IN BOTH THEMES =====
+  // Each rule moved to a token that reads in light is put back to the token it
+  // had, which measured below its bar there. The suite measures every rule
+  // against its surface from the real tokens, so each of these must turn red
+  // by the rule's own name.
+  [CONTRAST_SIDEBAR, "contrast: .sidebar-label back to --text-2",
+    ".sidebar-label { font-size: var(--label); font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-2-strong);",
+    ".sidebar-label { font-size: var(--label); font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-2);"],
+  [CONTRAST_SIDEBAR, "contrast: .scope-item.active .scope-name back to --accent",
+    ".scope-item.active .scope-name { color: var(--accent-text);",
+    ".scope-item.active .scope-name { color: var(--accent);"],
+  [CONTRAST_SIDEBAR, "contrast: .scope-item.active .scope-count back to --accent",
+    ".scope-item.active .scope-count { color: var(--accent-text);",
+    ".scope-item.active .scope-count { color: var(--accent);"],
+  [CONTRAST_SIDEBAR, "contrast: .scope-count back to --text-3",
+    ".scope-count { font-size: var(--caption); font-weight: 600; color: var(--text-2-strong);",
+    ".scope-count { font-size: var(--caption); font-weight: 600; color: var(--text-3);"],
+  [CONTRAST_SIDEBAR, "contrast: .nav-badge back to --attention",
+    ".nav-badge { position: absolute; top: 6px; right: 6px; width: 7px; height: 7px; background: var(--attention-text);",
+    ".nav-badge { position: absolute; top: 6px; right: 6px; width: 7px; height: 7px; background: var(--attention);"],
+  [CONTRAST_SIDEBAR, "contrast: .nav-badge-working back to --success",
+    ".nav-badge-working { position: absolute; top: 6px; right: 6px; width: 7px; height: 7px; background: var(--success-text);",
+    ".nav-badge-working { position: absolute; top: 6px; right: 6px; width: 7px; height: 7px; background: var(--success);"],
+  [CONTRAST_ROUTINES, "contrast: .rr-skill-link back to --accent",
+    ".rr-skill-link { font: inherit; color: var(--link-text);",
+    ".rr-skill-link { font: inherit; color: var(--accent);"],
+  [CONTRAST_ROUTINES, "contrast: .rr-meta back to --text-2",
+    ".rr-meta { font-size: var(--caption); color: var(--text-2-strong);",
+    ".rr-meta { font-size: var(--caption); color: var(--text-2);"],
+  [CONTRAST_ROUTINES, "contrast: .rr-meta .sep back to --text-3",
+    ".rr-meta .sep { color: var(--text-2-strong);",
+    ".rr-meta .sep { color: var(--text-3);"],
+  [CONTRAST_ROUTINES, "contrast: .run-status.ok back to --success",
+    ".run-status.ok { font-weight: 600; color: var(--success-text);",
+    ".run-status.ok { font-weight: 600; color: var(--success);"],
+  [CONTRAST_ROUTINES, "contrast: .run-status.ok-quiet back to --success",
+    ".run-status.ok-quiet { font-weight: 500; color: var(--success-text);",
+    ".run-status.ok-quiet { font-weight: 500; color: var(--success);"],
+  [CONTRAST_ROUTINES, "contrast: .run-status.neutral back to --idle",
+    ".run-status.neutral { font-weight: 500; color: var(--text-2-strong);",
+    ".run-status.neutral { font-weight: 500; color: var(--idle);"],
+  [CONTRAST_ROUTINES, "contrast: .run-status.live back to --working",
+    ".run-status.live { font-weight: 500; color: var(--working-text);",
+    ".run-status.live { font-weight: 500; color: var(--working);"],
+  [CONTRAST_ROUTINES, "contrast: .next-run back to --success",
+    ".next-run { font-size: var(--caption); font-weight: 600; color: var(--success-text);",
+    ".next-run { font-size: var(--caption); font-weight: 600; color: var(--success);"],
+  [CONTRAST_ROUTINES, "contrast: .next-run.paused-label back to --text-3",
+    ".next-run.paused-label { color: var(--text-2-strong);",
+    ".next-run.paused-label { color: var(--text-3);"],
+  [CONTRAST_ROUTINES, "contrast: .rr-paused-dot back to --text-3",
+    ".rr-paused-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-2-strong);",
+    ".rr-paused-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-3);"],
+  [CONTRAST_ROUTINES, "contrast: .rr-resume-quiet back to --accent",
+    ".rr-resume-quiet { font-size: var(--caption); font-weight: 600; color: var(--link-text);",
+    ".rr-resume-quiet { font-size: var(--caption); font-weight: 600; color: var(--accent);"],
+  [CONTRAST_ROUTINES, "contrast: .rr-view-run back to --text-2",
+    ".rr-view-run { font-size: var(--caption); font-weight: 500; color: var(--text-2-strong);",
+    ".rr-view-run { font-size: var(--caption); font-weight: 500; color: var(--text-2);"],
+  [CONTRAST_RUN_DETAIL, "contrast: .rd-context draws no color of its own again",
+    ".rd-context { color: var(--text-2-strong); margin-bottom: 18px; }",
+    ".rd-context { margin-bottom: 18px; }"],
+  [CONTRAST_RUN_DETAIL, "contrast: .rd-guidance back to --text-2",
+    ".rd-guidance { font-size: var(--caption); color: var(--text-2-strong);",
+    ".rd-guidance { font-size: var(--caption); color: var(--text-2);"],
+  [CONTRAST_RUN_DETAIL, "contrast: .rd-when back to --text-2",
+    ".rd-when { font-size: var(--caption); font-weight: 600; color: var(--text-2-strong);",
+    ".rd-when { font-size: var(--caption); font-weight: 600; color: var(--text-2);"],
+  [CONTRAST_RUN_DETAIL, "contrast: .rd-took back to --text-3",
+    ".rd-took { font-size: var(--caption); color: var(--text-2-strong);",
+    ".rd-took { font-size: var(--caption); color: var(--text-3);"],
+  [CONTRAST_RUN_DETAIL, "contrast: .rd-refused back to --text-2",
+    ".rd-refused { font-size: var(--caption); color: var(--text-2-strong);",
+    ".rd-refused { font-size: var(--caption); color: var(--text-2);"],
+  [CONTRAST_RUN_DETAIL, "contrast: .rd-chip.ok back to --success",
+    ".rd-chip.ok { color: var(--success-text);",
+    ".rd-chip.ok { color: var(--success);"],
+  [CONTRAST_RUN_DETAIL, "contrast: .rd-chip.live back to --working",
+    ".rd-chip.live { color: var(--working-text);",
+    ".rd-chip.live { color: var(--working);"],
+  [CONTRAST_RUN_DETAIL, "contrast: .rd-chip.unwitnessed back to --idle",
+    ".rd-chip.unwitnessed { color: var(--text-2-strong);",
+    ".rd-chip.unwitnessed { color: var(--idle);"],
+  [CONTRAST_RUN_DETAIL, "contrast: .rd-chip.stopped back to --idle",
+    ".rd-chip.stopped { color: var(--text-2-strong);",
+    ".rd-chip.stopped { color: var(--idle);"],
+  [CONTRAST_RUN_DETAIL, "contrast: .rd-files-label back to --text-2",
+    ".rd-files-label { font-size: var(--caption); font-weight: 600; color: var(--text-2-strong);",
+    ".rd-files-label { font-size: var(--caption); font-weight: 600; color: var(--text-2);"],
+  [CONTRAST_RUN_DETAIL, "contrast: .rd-file-path back to --text-3",
+    ".rd-file-path { font-size: var(--caption); color: var(--text-2-strong);",
+    ".rd-file-path { font-size: var(--caption); color: var(--text-3);"],
+  [CONTRAST_RUN_DETAIL, "contrast: .rd-tag back to --text-2",
+    ".rd-tag { font-size: var(--caption); color: var(--text-2-strong);",
+    ".rd-tag { font-size: var(--caption); color: var(--text-2);"],
+  [CONTRAST_RUN_DETAIL, "contrast: .rd-empty back to --text-2",
+    ".rd-empty { font-size: var(--body); color: var(--text-2-strong);",
+    ".rd-empty { font-size: var(--body); color: var(--text-2);"],
+  [CONTRAST_RUN_DETAIL, "contrast: .rd-unknown-why back to --text-2",
+    ".rd-unknown-why { font-size: var(--caption); color: var(--text-2-strong);",
+    ".rd-unknown-why { font-size: var(--caption); color: var(--text-2);"],
+  [CONTRAST_EDITOR, "contrast: .re-meta back to --text-2",
+    ".re-meta { font-size: var(--caption); color: var(--text-2-strong);",
+    ".re-meta { font-size: var(--caption); color: var(--text-2);"],
+  [CONTRAST_SIDEBAR, 'contrast: the scope focus ring is removed',
+    '.scope-item:focus-visible { outline: 2px solid var(--accent-control); outline-offset: -2px; }\n',
+    ''],
+  [CONTRAST_SIDEBAR, 'contrast: the scope focus ring is drawn outside the row',
+    '.scope-item:focus-visible { outline: 2px solid var(--accent-control); outline-offset: -2px; }',
+    '.scope-item:focus-visible { outline: 2px solid var(--accent-control); outline-offset: 2px; }'],
+  [CONTRAST_SIDEBAR, 'contrast: the scope focus ring takes the app accent',
+    '.scope-item:focus-visible { outline: 2px solid var(--accent-control);',
+    '.scope-item:focus-visible { outline: 2px solid var(--accent);'],
+  [CONTRAST_TOKENS, 'contrast: the light working text takes the dark value',
+    '  --working-text: #3A63B0;',
+    '  --working-text: #7AA2E8;'],
+  [CONTRAST_TOKENS, 'contrast: the link text is declared on :root alone',
+    ':root, body.light {\n  --link-text:',
+    ':root {\n  --link-text:'],
+  // A paused row keeps its text at full strength: only the avatar dims.
+  [CONTRAST_ROUTINES, 'contrast: a paused row is dimmed as a whole again',
+    '.routine-row.paused .avatar { opacity: 0.5; }',
+    '.routine-row.paused { opacity: 0.72; }'],
+  [CONTRAST_ROUTINES, 'contrast: a paused row\'s avatar dims less than half',
+    '.routine-row.paused .avatar { opacity: 0.5; }',
+    '.routine-row.paused .avatar { opacity: 0.72; }'],
+
+  // ===== A SCOPE ROW IS A REAL BUTTON =====
+  // Enter and Space press a button with no handler of its own; a div with a
+  // role and a tabindex took the focus and did nothing for either key.
+  [PANEL, 'a scope row is a div again',
+    '  return `<button type="button" class="scope-item',
+    '  return `<div role="button" tabindex="0" class="scope-item'],
+  [PANEL, 'a scope row restates a role and a tab stop a button already has',
+    '    + ` onclick="setRoutinesScope(this.dataset.scope)">`',
+    '    + ` role="button" tabindex="0" onclick="setRoutinesScope(this.dataset.scope)">`'],
+  [PANEL, 'a block is put inside a scope row\'s button',
+    '`<span class="scope-all-icon">${ALL_ICON}</span>`',
+    '`<div class="scope-all-icon">${ALL_ICON}</div>`'],
+  [PANEL, 'the focus is not put back on the pressed row after the redraw',
+    '  if (again) again.focus();\n',
+    ''],
+  [PANEL, 'a redraw nobody pressed pulls the focus into the panel',
+    '  if (kept === undefined) return;\n',
+    ''],
+  [PANEL, 'the focus goes back to the first row rather than the pressed one',
+    'rows.find((el) => el.dataset.scope === kept) ||',
+    'rows[0] ||'],
+  [STYLES_PANEL, 'a scope row loses the full width of the list',
+    'gap: 8px; width: 100%; padding: 9px 10px;',
+    'gap: 8px; padding: 9px 10px;'],
+  [STYLES_PANEL, 'a scope row centers what it holds, as a button does',
+    'font: inherit; text-align: start;',
+    'font: inherit;'],
+  [STYLES_PANEL, 'a scope row takes the browser\'s button type rather than the panel\'s',
+    'color: var(--text-1); font: inherit;',
+    'color: var(--text-1);'],
 
 ];
 

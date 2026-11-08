@@ -58,6 +58,9 @@ const REGISTRY_SUITES = [
   // error handler where it started, so a write to one that has stopped is
   // logged and never ends the server.
   'test/unit/child-stdin-inventory.test.js',
+  // No test keeps a child it starts out of coverage by deleting the key,
+  // which Node puts back: each sets it to an empty value.
+  'test/unit/child-coverage-switch.test.js',
   // Every innerHTML assignment is classified, and the totals beside it.
   'test/unit/innerhtml-inventory.test.js',
   // Documents that state the code's own numbers, names and lists.
@@ -85,6 +88,9 @@ const REGISTRY_SUITES = [
   'test/unit/attention-token.test.js',
   // The same arithmetic over the colours links in a note are drawn in.
   'test/unit/editor-link-contrast.test.js',
+  // The same arithmetic over the routine screens' text, badges and focus
+  // ring, in both themes.
+  'test/unit/routine-screens-contrast.test.js',
   // Manifest equality over discovered call sites and doors. Each of these fails
   // when something is ADDED and not written down, which is the membership rule,
   // and each was previously reported only after the suite had run under coverage.
@@ -160,6 +166,7 @@ const NOT_CHEAP = {
   'test/unit/permissions.test.js': 'behaviour: grades real command text against the risk rules',
   'test/unit/claude-version-floor.test.js': 'behavior: starts stub Claude Code binaries through spawnClaude, one of them a probe that stalls for its whole timeout. It reads the flags the spawn paths pass to hold each to a row in the flag table, which is why the inventory names it, but most of the file drives spawns',
   'test/unit/claude-lookup.test.js': 'behavior: runs stub login shells and starts stub Claude Code binaries through spawnClaude, one shell stalling for its whole timeout. It scans the app\'s sources for a second lookup of claude or a version read through a shell, which is why the inventory names it, but most of the file drives lookups and spawns',
+  'test/unit/scheduler-state-writes.test.js': 'behavior: builds workspaces on disk and drives the real state writers, with their filesystem calls recorded or made to fail. It reads the write calls out of lib/ to hold the state files to the whole-file helper, which is why the inventory names it, but most of the file drives writes',
   'test/unit/hook-never-crashes.test.js': 'behavior: runs the real permission hook as its own process, over and over, with failures forced into it. It reads the test-only names out of the hook source to show the hook has no switch of its own for those failures, which is why the inventory names it',
   'test/unit/permissions-view.test.js': 'behaviour: boots a document and renders the settings pane, then presses what it drew. It walks the stylesheets to prove no class is left unstyled, which is why the inventory names it, but the walk is in service of a rendered check rather than a bookkeeping one',
   'test/unit/working-folders-view.test.js': 'behaviour: boots a document and presses controls',
@@ -192,6 +199,7 @@ const NOT_CHEAP = {
   'test/unit/routines-panel.test.js': 'behaviour: boots a document and renders the routines panel',
   'test/unit/run-detail-view.test.js': 'behaviour: boots a document and renders a run',
   'test/unit/skills-empty.test.js': 'behaviour: boots a document and renders the empty skills state',
+  'test/unit/artifact-review-attach.test.js': 'behavior: runs the files view\'s review attach against a stand-in frame and a stubbed fetch, in each order the frame\'s document and the comments can arrive. It cuts that function out of files.js, which is why the inventory names it, but the cut serves a driven check rather than a bookkeeping one',
 };
 
 /**

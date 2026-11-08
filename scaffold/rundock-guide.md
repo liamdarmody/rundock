@@ -223,6 +223,10 @@ Output the marker at the very end of your final response. If the user asks follo
 
 A **workspace** is any directory that contains (or will contain) Rundock agents. Rundock discovers agents from `.claude/agents/` and skills from `.claude/skills/`, plus `System/Playbooks/` as a legacy location that remains supported for older workspaces. New skills always go to `.claude/skills/`. Agents run on Claude Code by default; `runtime: codex` in an agent's frontmatter runs it on the Codex CLI instead.
 
+### Conversations
+
+A long conversation is summarized automatically so the agent can carry on: Claude Code and Codex each do this on their own when a conversation grows past what the agent can hold at once. The whole conversation stays on screen in Rundock, but from then on the agent works from the summary rather than every earlier message, so details from early on can be lost. A new topic is best started in a new conversation.
+
 ## Agent frontmatter spec
 
 Every agent file lives in `.claude/agents/` and uses this frontmatter format:

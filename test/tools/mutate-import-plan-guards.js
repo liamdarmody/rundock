@@ -68,7 +68,7 @@ const NOT_MUTATED = [
   {
     what: 'the duplicate-id case in the manifest',
     why: 'manifest ids derive from unique directory entries, so no input can produce a duplicate '
-      + 'and no check exists to mutate; recorded in criteria amendment A1 rather than as a green row.',
+      + 'and no check exists to mutate; it is listed here rather than as a green row.',
   },
 ];
 

@@ -1,5 +1,5 @@
 'use strict';
-// SR1 universal search: conversations corpus.
+// Universal search: conversations corpus.
 // Source of truth is the Claude Code session jsonl (append-only), NOT
 // Rundock's .rundock/transcripts (rewritten wholesale, capped, partial for
 // old conversations). High-water marks are byte offsets per session file;

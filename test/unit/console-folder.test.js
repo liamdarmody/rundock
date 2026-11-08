@@ -46,7 +46,7 @@ after(() => { if (home) fs.rmSync(home, { recursive: true, force: true }); });
 function decision(ws, tool_name, tool_input, codeMode) {
   const env = { ...process.env, HOME: home, RUNDOCK: '1', RUNDOCK_WORKSPACE: ws, RUNDOCK_PORT: String(closed), RUNDOCK_EXTRA_DIRS: '' };
   delete env.RUNDOCK_CODE_MODE;
-  delete env.NODE_V8_COVERAGE;
+  env.NODE_V8_COVERAGE = '';
   if (codeMode) env.RUNDOCK_CODE_MODE = '1';
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [HOOK], { env, stdio: ['pipe', 'pipe', 'pipe'] });
