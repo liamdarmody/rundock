@@ -56,7 +56,7 @@ test('preflight: a stale capture is a warning, not a failed check', () => {
     { cwd: ROOT, env, encoding: 'utf8' });
     assert.strictEqual(r.status, 0, r.stderr);
     const found = JSON.parse(r.stdout);
-    assert.ok(Array.isArray(found.stale) && found.stale.length === 2, 'both captures are named as stale');
+    assert.ok(Array.isArray(found.stale) && found.stale.length === 3, 'every capture is named as stale');
     const start = src.indexOf('} else if (captures.stale.length) {');
     assert.ok(start > 0, 'the stale branch is where this test expects it');
     const branch = src.slice(start, src.indexOf('} else {', start + 1));
