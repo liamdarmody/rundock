@@ -406,4 +406,17 @@ describe('the control failing: a check that throws is tried again, and the turn 
       assert.strictEqual(read('.zshrc'), `${ORIGINAL}between turns\n`, 'put back to the kept between-turn change');
     } finally { g.release(); }
   });
+
+  test('a caller of the exported check is told it failed, never handed an empty answer', () => {
+    const g = guard.acquireAnswerFileGuard(ws, () => {}, { intervalMs: 60_000 });
+    const real = crypto.createHash;
+    try {
+      fs.appendFileSync(at('.zshrc'), 'during\n');
+      crypto.createHash = () => { throw new Error('forced'); };
+      assert.throws(() => guard.checkShellStartupFiles(), /forced/, 'a check that could not run is not a clean one');
+      crypto.createHash = real;
+      assert.strictEqual(guard.checkShellStartupFiles().length, 1, 'and the change is still there to be found');
+      assert.strictEqual(read('.zshrc'), ORIGINAL);
+    } finally { crypto.createHash = real; g.release(); }
+  });
 });
