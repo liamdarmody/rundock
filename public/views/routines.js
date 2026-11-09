@@ -79,6 +79,12 @@ let pendingProblemDetail = null;
 // Held apart from pendingProblem because it answers the switch, not a row.
 let hereProblem = null;
 let hereProblemDetail = null;
+// The state the switch showed, and the workspace it was for, when that save
+// failed. A roster that arrives with either changed answers the question the
+// failure was about (another window made the change, or this one moved
+// workspace), so the line is dropped rather than left describing a switch
+// that no longer looks that way.
+let hereProblemFor = null;
 
 // The "Details" control under a failure's plain sentence: the raw words of a
 // system error (public/readable-error.js), or nothing when there are none.
@@ -652,6 +658,11 @@ const LAPTOP_SVG = '<svg class="routines-here-icon" viewBox="0 0 24 24" width="2
  * drawn. A save that fails leaves it where it was, with the reason under it.
  */
 function hereHtml() {
+  if (hereProblemFor && (hereProblemFor.off !== routinesOffHere() || hereProblemFor.workspace !== routinesRosterWorkspace())) {
+    hereProblem = null;
+    hereProblemDetail = null;
+    hereProblemFor = null;
+  }
   const view = routinesModel().hereSwitch({ workspace: routinesRosterWorkspace(), here: routinesHereState() });
   if (!view) return '';
   let h = `<div class="routines-here${view.off ? ' off' : ''}" data-routines-here>`
@@ -686,6 +697,7 @@ function routinesSetHere(event) {
   if (!here || !workspace || typeof ws === 'undefined' || !ws) return;
   hereProblem = null;
   hereProblemDetail = null;
+  hereProblemFor = null;
   ws.send(JSON.stringify({ type: 'set_routines_here', on: here.off === true, workspace }));
 }
 
@@ -697,6 +709,7 @@ function routinesSetHere(event) {
 function routinesHereFailed(reply) {
   hereProblem = routinesModel().hereProblem(!!(reply && reply.on === false));
   hereProblemDetail = reply && typeof reply.detail === 'string' && reply.detail ? reply.detail : null;
+  hereProblemFor = { off: routinesOffHere(), workspace: routinesRosterWorkspace() };
   renderRoutines();
 }
 
@@ -745,7 +758,10 @@ function emptyHtml() {
   // above a card rather than as one thing. The header carries the title only
   // now; the box carries the whole message, what is true and what to do about
   // it, in one place.
-  let h = headerHtml(null)
+  // THE SWITCH IS HERE TOO. A workspace with no routines yet, or a list
+  // scoped to nothing, is still a workspace whose routines can be off on this
+  // computer, and the editor sends the reader here to turn them back on.
+  let h = headerHtml(null, null, hereHtml())
     + '<div class="settings-card flow routines-empty-card">'
     + `<p class="routines-empty-state">${esc(state.lead)}</p>`
     + `<p class="settings-lead">${esc(state.body)}</p>`;
@@ -814,11 +830,18 @@ function renderRoutines() {
   // removed it or because the panel stopped showing it, and either way the
   // reader is returned to the list rather than shown a question about
   // something they can no longer see.
+  // THE SWITCH KEEPS THE FOCUS ACROSS THE REDRAW its own answer causes. A
+  // press is answered by a roster that redraws this pane, and without this a
+  // keyboard reader who pressed Space is left on the page's body.
+  const active = document.activeElement;
+  const onSwitch = !!(active && content.contains(active) && active.matches('[data-routines-action="here"]'));
   const pending = pendingEntry(list);
   if (!pending) pendingDelete = null;
   if (pending) content.innerHTML = confirmHtml(pending, list.indexOf(pending));
   else if (list.length === 0) content.innerHTML = emptyHtml();
   else content.innerHTML = listHtml(list);
+  const again = onSwitch ? content.querySelector('[data-routines-action="here"]') : null;
+  if (again) again.focus();
 }
 
 /**
@@ -851,6 +874,7 @@ function showRoutinesForAgent(agentId) {
   // control pressed on a list the reader has now left.
   hereProblem = null;
   hereProblemDetail = null;
+  hereProblemFor = null;
   pendingDelete = null;
   pendingProblem = null;
   if (typeof showView === 'function') showView('routines');

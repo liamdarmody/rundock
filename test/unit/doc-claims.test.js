@@ -1079,6 +1079,18 @@ describe('ROUTINES.md: turning routines off on one computer', () => {
     assert.ok(section.includes(`**${routinesModel.HERE.label}**`), 'the switch is named in other words than its label');
     assert.ok(section.includes(`**${routinesModel.HERE.row}**`), 'the row\'s words are not the model\'s');
     assert.ok(section.includes('**Paused**'), 'and a paused routine still says Paused');
+    assert.match(section, /It sits under the Routines header whether or not the workspace has routines yet/);
+    assert.match(section, /a routine nobody has turned on still offers \*\*Turn on\*\*, because that writes the agent file every computer reads/);
+    // The empty pane draws the switch the list does, and Turn on is offered
+    // whatever the switch says.
+    const viewSrc = fs.readFileSync(path.join(ROOT, 'public', 'views', 'routines.js'), 'utf-8');
+    assert.match(between(viewSrc, 'function emptyHtml()', 'function confirmHtml('), /headerHtml\(null, null, hereHtml\(\)\)/,
+      'the empty pane draws no switch');
+    const offer = { enabled: false, refusal: 'enabled', schedule: 'every day at 07:00', prompt: 'p', workspace: '/w/a',
+      servingWorkspace: '/w/a', nextRun: '2026-10-07T06:00:00.000Z', now: '2026-10-06T08:00:00.000Z' };
+    assert.deepStrictEqual(!!routinesModel.enableOffer({ ...offer, offHere: true }), !!routinesModel.enableOffer(offer),
+      'Turn on is offered differently while routines are off here');
+    assert.ok(routinesModel.enableOffer(offer), 'sanity: the routine is offered Turn on');
   });
 
   test('it covers this workspace on this computer, is kept outside every workspace, and does not sync', () => {
@@ -1122,7 +1134,8 @@ describe('ROUTINES.md: turning routines off on one computer', () => {
 
   test('a record that cannot be read reads on, and a failed save changes nothing', () => {
     assert.match(section, /set aside under a dated name beside it, as the scheduler's state files are, and the switch reads on/);
-    assert.match(section, /the record is left as it was, the switch stays where it was, and a short line under it says the change did not happen/);
+    assert.match(section, /set aside the same way before the next change is written in its place, so the entries it holds for other workspaces are never written over; if it cannot be set aside, the change is not saved/);
+    assert.match(section, /the record is left as it was, the switch stays where it was, and a short line under it says the change did not happen, until it is pressed again or a change made in another window arrives/);
     withRecord((dir) => {
       const a = path.join(dir, 'a');
       fs.mkdirSync(a);
@@ -1130,6 +1143,16 @@ describe('ROUTINES.md: turning routines off on one computer', () => {
       const error = console.error;
       console.error = () => {};
       try { assert.strictEqual(here.offHere(a), false, 'a record nobody can read turned routines off'); } finally { console.error = error; }
+      // A record of the wrong shape reads on, and is kept rather than written over.
+      const held = JSON.stringify({ workspaces: [] });
+      fs.writeFileSync(here.storePath(), held);
+      console.error = () => {};
+      try {
+        assert.strictEqual(here.offHere(a), false);
+        here.setOffHere(a, true);
+      } finally { console.error = error; }
+      const kept = fs.readdirSync(dir).filter(n => n.startsWith('routines-here.json.unparsed-'));
+      assert.ok(kept.some(n => fs.readFileSync(path.join(dir, n), 'utf-8') === held), 'the record was written over');
     });
   });
 
