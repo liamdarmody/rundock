@@ -178,11 +178,45 @@ This run was planned with this table, so "Planned then" is this table's own plan
 | 14 | rundock-ui 90:262, stale-session, routine-fallback, package-update | 14.8 | 12.4 | 12.8 | 14.8 | +19% |
 | 15 | rundock-ui 0:90, routines, map-foothold, import-apply | 14.8 | 18.7 | 19.1 | 14.8 | -21% |
 
-Shard 3 held `mutate-sdlc-gate-guards.js` and `mutate-readable-error-guards.js`, planned at 14.8 minutes. Like the first attempt of #428's shard 1, its runner was lost at 35 minutes with no log kept. The sdlc-gate harness ran whole in 13.7 minutes in run 42640417868. This change adds a test to `test/unit/mutation-scope.test.js`, which 27 of that harness's rows run after breaking the planner, so rows 127:163, which hold all 27, were run on this branch on a developer machine to rule out a hang: every row turned a test red, and the run finished in minutes.
+Shard 3 held `mutate-sdlc-gate-guards.js` and `mutate-readable-error-guards.js`, planned at 14.8 minutes. Like the first attempt of #428's shard 1, its runner was lost at 35 minutes with no log kept, so this run says nothing about how long that shard takes. The same shard, the same two harnesses, ended in a pass in 14.6 minutes in this change's next run, below.
 
 ### Why the later runs are not in the table
 
 Folding the three later runs in leaves the boundary harness's total where it is (7,857 s against 7,844 s) and moves 5% of its labels by more than 20%. It also moves where the full set's cuts fall: the full set's longest shard goes from 892 s to 936 s, past the 900 s the planner suite holds it to, and only more shards, through `MAX_SHARDS`, fix that. This change leaves `MAX_SHARDS` alone, so the later runs serve as the held-out check above.
+
+## This change's own CI run
+
+Run 42689058445 is this change at `9d3ff21a`, merged with main at `04dafdf0`. A change to `scripts/mutation-scope.js` makes CI run every harness, so it ran all 35 harnesses, 3,033 rows, in 15 shards planned with this table. Every shard's log ends in a verdict, and every verdict is a pass. "Harness" runs from the shard's first unit starting to its verdict line; "Job" is the whole job, setup included. "Error" is the plan less the harness time, over the harness time. Minutes.
+
+| Shard | Slices | Planned | Harness | Job | Error |
+|---|---|---|---|---|---|
+| 1 | workspace-boundary 685:831, import-apply, import-plan | 14.8 | 15.1 | 15.4 | -2% |
+| 2 | workspace-boundary 497:561, region-markup, install-flow | 14.8 | 15.1 | 15.3 | -2% |
+| 3 | sdlc-gate, readable-error | 14.8 | 14.6 | 14.8 | +2% |
+| 4 | workspace-boundary 954:1040, fence, collision-decisions | 14.8 | 14.3 | 14.6 | +4% |
+| 5 | workspace-boundary 0:165, run-now | 14.9 | 13.8 | 14.1 | +8% |
+| 6 | workspace-boundary 165:367, factory-shape | 14.8 | 13.6 | 13.8 | +9% |
+| 7 | workspace-boundary 367:497, map-view | 14.9 | 14.8 | 15.1 | +0% |
+| 8 | workspace-boundary 561:685, workspace-rollback | 14.9 | 18.1 | 18.3 | -18% |
+| 9 | workspace-boundary 891:954, routines-truth | 14.8 | 11.5 | 11.7 | +29% |
+| 10 | workspace-boundary 831:891, map-foothold, import-protocol | 14.8 | 13.6 | 13.8 | +9% |
+| 11 | host-wiring, view-state, routine-editor, package-update | 14.8 | 15.0 | 15.3 | -1% |
+| 12 | extension-host 0:35, extension-install, frontmatter-links, render, atomic-write | 14.8 | 13.0 | 13.4 | +14% |
+| 13 | extension-host 35:127, history, run-detail, packages-manage, nav | 14.8 | 15.0 | 15.3 | -1% |
+| 14 | rundock-ui 90:262, stale-session, routine-fallback, approve-once | 14.8 | 11.1 | 11.4 | +33% |
+| 15 | rundock-ui 0:90, routines, pins | 14.8 | 19.0 | 19.4 | -22% |
+
+Shard 3 holds `mutate-sdlc-gate-guards.js` and `mutate-readable-error-guards.js`, the pair whose runner was lost in run 42647247770. Here it ended with a verdict 14.6 minutes after its first unit started, and the job took 14.8:
+
+```
+2026-11-09T20:17:18.0305409Z [mutation-scope] pass: all 2 unit(s) in shard 3 passed
+```
+
+27 of the sdlc-gate harness's rows break the planner and run `test/unit/mutation-scope.test.js`, the suite this change adds tests to. All 27 ran in that shard and each turned a test red.
+
+Thirteen of the 15 shards are planned within 25% of what they ran. The two outside it were planned longer than they ran, so both finished early: shard 9, whose boundary rows 891:954 ran in 11.2 minutes, and shard 14, whose harnesses this change does not cost. The longest job, shard 15 at 19.4 minutes, holds three harnesses this change does not cost; its plan is 22% short of the 19.0 minutes they ran.
+
+The commits after `9d3ff21a` change tests, comments and docs only. The planner gives the full set the same plan before and after them.
 
 ## Other harnesses
 
@@ -220,7 +254,7 @@ Left as they are: every other harness above is within 25%, or costed above what 
 ## Plans with the new table
 
 - **The boundary harness alone** plans 14 shards, the longest at 609 s. Rows 731:903 fall in four of them.
-- **The full set** plans 15 shards, the cap, at 13,331 s in all; the longest is 892 s. `test/unit/mutation-scope.test.js` holds every shard of the full plan to 900 s, so a few more rows will turn that test red, and the fix then is a higher `MAX_SHARDS`. Main's table planned the full set short, which hid how close the cap is.
+- **The full set** plans 15 shards, the cap, at 13,331 s in all; the longest is 892 s. `test/unit/mutation-scope.test.js` holds every shard of the full plan to 900 s, so a few more rows will turn that test red. Its failure message says what the red means: the costs come from CI, so the full set needs more shards, through a higher `MAX_SHARDS` in a change of its own, and no cost is to be lowered to fit. Main's table planned the full set short, which hid how close the cap is.
 
 ## Costing a new row
 
@@ -228,6 +262,50 @@ The `about` text of `test/tools/mutation-costs.json` now says:
 
 > Cost a new row from CI, never from a run on a developer machine, whose times are not the runner's. A new row that runs a suite other rows of its harness already run is costed at the mean of their costs by label. A row whose suite no row runs yet has no cost by label until a CI run has run it, its own pull request's run included, and is planned meanwhile at its harness's rate, or its integration rate for an integration row; its cost is then the measured seconds of the slice that ran it, less what this table gives the slice's other rows, shared among its new rows. Do not leave it at the rate once CI has run it: rows left there though their suites take four times it on CI planned a slice at nine minutes that CI ran for twenty-eight.
 
+The repo has no separate guide to writing a mutation row. A row's shape is defined in the doc comment on `targetsFromRows` in `test/tools/mutation-run.js`, which every harness loads its rows through, so the rule is there too, and CONTRIBUTING.md points to it from its section on testing a change.
+
 ## The planner test
 
-"the boundary harness is planned at what CI measured: every shard within the margin, every slice CI timed planned near its time, and no overrun slice in one shard" in `test/unit/mutation-scope.test.js` plans the boundary harness with the committed table. It holds every planned shard to 900 s. Because a shard planned under that margin still runs long when its rows are costed short, it also plans each slice CI timed, from its first row's label to its last, and requires at least 75% of the seconds CI took: the nine slices of run 42640417868, which between them hold every row the harness has, and the two overrun slices. Each overrun slice must also span at least two shards. With main's table it fails: "rows 305:489 are planned at 681s; CI run 42640417868 took 1040s over them". With the new table it passes.
+"the boundary harness is planned at what CI measured: every shard within the margin, every slice CI timed planned near its time, and no overrun slice in one shard" in `test/unit/mutation-scope.test.js` plans the boundary harness with the committed table. It holds every planned shard to 900 s. Because a shard planned under that margin still runs long when its rows are costed short, it also plans each slice CI timed, from its first row's label to its last, and requires at least 75% of the seconds CI took: the nine slices of run 42640417868, which between them held every row the harness had, and the two overrun slices. Each overrun slice must also span at least two shards.
+
+A slice whose first or last label has since been renamed or removed is skipped rather than failed, so relabeling a row does not turn the test red. The test fails instead when fewer than three quarters of the eleven slices are still found, and says to time them again. The shard margin is checked whatever the lookups find, and every slice still found is checked. Two tests hold that. One renames a slice's last label and finds nothing wrong, then, with every row costed at a tenth of a second, finds the slices still found planned short. The other renames the first labels of three slices and finds too few slices left.
+
+### Red with main's table, green with this one
+
+`scripts/red-first.js` reverts a change's source and keeps its tests, and it counts every file under `test/` as a test, `test/tools/mutation-costs.json` included. It has no option to revert a file there, so on this change it keeps the new table and reverts only what the suite does not read, the comment in `scripts/mutation-scope.js` and two documents, and reports NOT-DISCRIMINATING: 61 tests passed with the change and 0 failed without it, with three source files reverted and three test files kept. The red was run by hand instead, at this change's head, swapping only the table:
+
+```
+git show 2ac7cce6:test/tools/mutation-costs.json > test/tools/mutation-costs.json
+node --test --test-timeout=120000 test/unit/mutation-scope.test.js
+```
+
+`2ac7cce6` is the commit this change was cut from, and main's table has not changed since. With that table the suite exits 1:
+
+```
+ℹ tests 61
+ℹ pass 59
+ℹ fail 2
+
+✖ the boundary harness is planned at what CI measured: every shard within the margin, every slice CI timed planned near its time, and no overrun slice in one shard (60.171583ms)
+  AssertionError [ERR_ASSERTION]: rows 305:489 are planned at 681s; CI run 42640417868 took 1040s over them
+  rows 524:582 are planned at 666s; CI run 42640417868 took 1244s over them
+  rows 582:824 are planned at 687s; CI run 42640417868 took 1037s over them
+  rows 824:932 are planned at 683s; CI run 42640417868 took 1321s over them
+  rows 953:1040 are planned at 682s; CI run 42640417868 took 996s over them
+  rows 745:903 are planned at 560s; CI run 42625901207 took 1704s over them
+  rows 731:915 are planned at 617s; CI run 42626462142 took 1788s over them
+✖ a timed slice whose endpoint is renamed is skipped, and the rest are still held to what CI took (60.792042ms)
+```
+
+The second failure is the rename test, whose remaining slices fail the same way. With this change's table put back, the same command exits 0:
+
+```
+git show HEAD:test/tools/mutation-costs.json > test/tools/mutation-costs.json
+node --test --test-timeout=120000 test/unit/mutation-scope.test.js
+```
+
+```
+ℹ tests 61
+ℹ pass 61
+ℹ fail 0
+```
