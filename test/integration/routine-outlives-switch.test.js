@@ -137,7 +137,10 @@ function recordsIn(dir) {
 }
 
 // Start a held run in `a`, from a tick at `at`, and return its child's pid.
+// Released when the test ends, whatever it ended as, so a test that fails
+// before its run ends leaves no child holding the suite open.
 async function startHeldRun(t, a, at) {
+  t.after(() => fs.writeFileSync(a.release, ''));
   await choose(a.dir);
   clock.at = at;
   tick(t);
@@ -705,6 +708,9 @@ test(`a Codex run's pid follows its server through a restart, so re-selecting th
   t.after(() => fs.writeFileSync(release, ''));
   const a = scribeWorkspace('codex restart body', { rule: { untilFile: release } });
   await choose(a);
+  // Only this test's own tick starts the routine, never the interval the open
+  // armed, however long the wait below takes.
+  h.internal.stopScheduler();
   const first = (await glue.getCodexAppServer()).pid();
   assert.ok(first, 'a shared app-server is up in A, as one is once any Codex turn has run there');
   process.kill(first, 'SIGKILL');
@@ -842,6 +848,7 @@ test('a Codex app-server a routine turn holds past a switch does not outlive Run
 
   const first = launch(['-e', CODEX_RUNDOCK, a, b.dir], { ...env, HOME: makeTempDir('codex-first-home-') });
   let server = null;
+  const gone = () => first.proc.exitCode !== null || first.proc.signalCode !== null;
   try {
     try {
       // The line it prints once it has switched, once that line is whole.
@@ -851,7 +858,7 @@ test('a Codex app-server a routine turn holds past a switch does not outlive Run
         const end = at < 0 ? -1 : text.indexOf('\n', at);
         return end < 0 ? null : JSON.parse(text.slice(at, end)).switched;
       };
-      assert.ok(await h.waitUntil(() => switched() !== null, { timeout: 15000 }),
+      assert.ok(await h.waitUntil(() => switched() !== null || gone(), { timeout: 15000 }) && switched() !== null,
         `the first Rundock started the routine's turn and switched:\n${first.said.text}`);
       server = appServerPid(a);
       assert.deepStrictEqual(switched(), [server],
@@ -862,6 +869,8 @@ test('a Codex app-server a routine turn holds past a switch does not outlive Run
     }
     assert.ok(await h.waitForPidExit(server, 4000), 'Rundock stopping took the app-server with it');
   } finally {
-    if (server && h.pidAlive(server)) process.kill(server, 'SIGKILL');
+    for (const spawned of appServerLog(a).filter(e => e.event === 'spawn')) {
+      if (h.pidAlive(spawned.pid)) process.kill(spawned.pid, 'SIGKILL');
+    }
   }
 });
