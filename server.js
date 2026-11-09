@@ -336,6 +336,11 @@ require('./lib/agents/approval-store.js').configureApprovalStore(process.env.RUN
   // install had opened before it kept approvals itself.
   recentPaths: () => { try { return JSON.parse(fs.readFileSync(RECENT_FILE, 'utf-8')).map((r) => r && r.path); } catch (e) { return []; } },
 });
+// Where routines are off on this computer (lib/agents/routines-here.js):
+// beside the routine approvals, outside every workspace, so it never syncs.
+require('./lib/agents/routines-here.js').configureRoutinesHere(process.env.RUNDOCK_ELECTRON
+  ? path.join(require('os').homedir(), '.rundock-routines-here.json')
+  : path.join(__dirname, '.routines-here.json'));
 auth.configureSessionStore(process.env.RUNDOCK_ELECTRON
   ? path.join(require('os').homedir(), '.rundock-browser-sessions.json')
   : path.join(__dirname, '.browser-sessions.json'));

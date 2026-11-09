@@ -230,6 +230,12 @@ const ROUTINES = { src: path.join(ROOT, 'lib', 'agents', 'routines.js'), suite: 
 // complete copy beside a record, because with either guard gone every other
 // suite still loads a whole file and lists every record once.
 const SCHEDULER_LOADS = { src: path.join(ROOT, 'lib', 'scheduler.js'), suite: 'test/unit/scheduler-state-loads.test.js' };
+// Routines off on this computer, for one workspace. The tick's check and what
+// it records while off are watched by the suite that drives the tick across a
+// daily, a weekly and a monthly routine; the record's key and its failure path
+// by the record's own suite.
+const SCHEDULER_OFF_HERE = { src: path.join(ROOT, 'lib', 'scheduler.js'), suite: 'test/integration/routines-off-here.test.js' };
+const OFF_HERE_RECORD = { src: path.join(ROOT, 'lib', 'agents', 'routines-here.js'), suite: 'test/unit/routines-here.test.js' };
 
 // [target, label, the guard as it is written, what it becomes without it]
 const MUTATIONS = [
@@ -1485,6 +1491,23 @@ const MUTATIONS = [
   [STYLES_PANEL, 'a scope row takes the browser\'s button type rather than the panel\'s',
     'color: var(--text-1); font: inherit;',
     'color: var(--text-1);'],
+
+  // ===== ROUTINES OFF ON THIS COMPUTER =====
+  [SCHEDULER_OFF_HERE, 'off on this computer: the tick fires a due routine anyway',
+    '          if (offHere) continue;\n',
+    ''],
+  [SCHEDULER_OFF_HERE, 'off on this computer: a slot that passes while off is recorded as missed',
+    'routine.enabled !== false && !offHere);',
+    'routine.enabled !== false);'],
+  [SCHEDULER_OFF_HERE, 'off on this computer: a monthly slot that passed while off is run when they come back on',
+    '(routine.paused || !routine.enabled || offHere)',
+    '(routine.paused || !routine.enabled)'],
+  [OFF_HERE_RECORD, 'off on this computer: one switch for every workspace rather than one per workspace',
+    '  return workspaceKey(dir);',
+    "  return 'every-workspace';"],
+  [OFF_HERE_RECORD, 'off on this computer: a record nobody can read turns routines off',
+    '  if (!data) return false;',
+    '  if (!data) return true;'],
 
 ];
 

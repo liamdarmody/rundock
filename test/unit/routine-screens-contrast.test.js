@@ -42,6 +42,8 @@ const SHEETS = {
   routines: read('views', 'routines.css'),
   run: read('views', 'run-detail.css'),
   editor: read('views', 'routine-editor.css'),
+  // The shared switch, which the routines list draws for this computer.
+  ui: read('rundock-ui.css'),
 };
 
 // Every rule in a stylesheet, as selector => declarations. A selector list is
@@ -139,8 +141,14 @@ function declared(sheet, selector, prop) {
   assert.ok(rule.has(prop), `${selector} declares no ${prop}`);
   return rule.get(prop);
 }
-// The color a declaration paints. An outline shorthand paints its last word.
+// The color a declaration paints. An outline or border shorthand paints its
+// last word.
 function paint(prop, raw) {
+  if (prop === 'border') {
+    const edge = /^1px solid (var\(--[\w-]+\))$/.exec(raw);
+    assert.ok(edge, `the edge is a 1px solid token, not ${raw}`);
+    return edge[1];
+  }
   if (prop !== 'outline') return raw;
   const m = /^2px solid (var\(--[\w-]+\))$/.exec(raw);
   assert.ok(m, `the ring is a 2px solid token, not ${raw}`);
@@ -190,6 +198,20 @@ const ROWS = [
   ['the refused line and the unknown reason', 'run', ['.rd-refused', '.rd-unknown-why'], 'color', '--text-2-strong', '--card', 4.5, 4.70, 5.02],
   ['the empty sentence and the file label', 'run', ['.rd-empty', '.rd-files-label'], 'color', '--text-2-strong', '--elevated', 4.5, 5.55, 5.86],
   ['the row\'s skill link and quiet Resume', 'routines', ['.rr-skill-link', '.rr-resume-quiet'], 'color', '--link-text', '--card', 4.5, 5.06, 5.53],
+  // The switch that turns routines off on this computer: its row sits on
+  // --surface inside the list's --elevated panel, so its edge is measured
+  // against the panel, and the row's own words against its fill.
+  ['the switch row\'s title', 'routines', ['.routines-here-title'], 'color', '--text-1', '--surface', 4.5, 13.79, 16.42],
+  ['the switch row\'s On and Off', 'routines', ['.routines-here-word'], 'color', '--text-1', '--surface', 4.5, 13.79, 16.42],
+  ['the switch row\'s hint', 'routines', ['.routines-here-hint'], 'color', '--text-2-strong', '--surface', 4.5, 5.99, 5.53],
+  ['the switch row\'s laptop', 'routines', ['.routines-here-icon'], 'color', '--text-2-strong', '--surface', 3, 5.99, 5.53],
+  ['the switch row\'s edge while off', 'routines', ['.routines-here.off'], 'border-color', '--border-strong', '--elevated', 3, 3.78, 4.57],
+  ['the switch\'s edge while off', 'ui', ['.rui-toggle'], 'border', '--text-3', '--surface', 3, 3.32, 3.40],
+  ['the switch\'s fill while on', 'ui', ['.rui-toggle:checked'], 'background', '--accent-control', '--surface', 3, 5.65, 3.61],
+  ['the switch\'s focus ring', 'routines', ['.routines-here .rui-toggle:focus-visible'], 'outline', '--accent-control', '--surface', 3, 5.65, 3.61],
+  ['Off on this computer', 'routines', ['.next-run.paused-label'], 'color', '--text-2-strong', '--card', 4.5, 4.70, 5.02],
+  ['the dot beside Off on this computer', 'routines', ['.rr-paused-dot'], 'background', '--text-2-strong', '--card', 3, 4.70, 5.02],
+  ['the header line while off', 'routines', ['.routines-workspace'], 'color', '--text-2', '--elevated', 4.5, 5.03, 4.57],
   ['the selected scope row\'s name and count', 'sidebar', ['.scope-item.active .scope-name', '.scope-item.active .scope-count'], 'color', '--accent-text', SELECTED, 4.5, 4.72, 4.64],
 ];
 

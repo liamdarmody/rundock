@@ -117,6 +117,12 @@ const RENDERERS = [
     surface: 'a refused pause or delete coming back from the server',
     pressedBy: 'a refused action is answered on this list and nowhere else',
   },
+  {
+    file: 'views/routines.js',
+    line: 'function routinesHereFailed(reply)',
+    surface: 'a change to the switch for this computer that could not be saved',
+    pressedBy: 'a switch change that could not be saved is answered under the switch',
+  },
   // The scope changing is a redraw of this list, not only of the panel. The
   // panel is the only surface that can change which routines are listed
   // without changing which routines exist, so a scope pressed and no list
@@ -139,6 +145,14 @@ const REPLIES = [
     on: "case 'routine_action_error':",
     surface: 'the refusal a pause or delete came back with',
     pressedBy: 'a refused action is answered on this list and nowhere else',
+  },
+  // The switch that turns routines off on this computer, when a change to it
+  // could not be saved: answered under the switch, on this list.
+  {
+    call: 'routinesHereFailed',
+    on: "case 'routines_here_failed':",
+    surface: 'the switch for this computer, when a change to it could not be saved',
+    pressedBy: 'a switch change that could not be saved is answered under the switch',
   },
   {
     call: 'routinesActionCleared',
@@ -1229,6 +1243,28 @@ describe('every reply that reaches this view is enumerated', () => {
     assert.deepStrictEqual(w.said, [], 'the refusal went to the conversation transcript as well');
     assert.deepStrictEqual(w.editorTold, [],
       'a refused delete called the editor\'s save-failure callback outside any save');
+    dom.window.close();
+  });
+
+  // The switch for this computer asked, so the switch is answered: under it,
+  // with the switch left where the record has it, and nowhere else.
+  test('a switch change that could not be saved is answered under the switch', () => {
+    const { w, doc, dom } = shell();
+    w.rosterWorkspacePath = '/w/ledger';
+    w.rosterRoutinesHere = { off: false, computer: 'quartz-desk' };
+    w.renderRoutines();
+    w.said = [];
+    w.addSystemMsg = (t) => w.said.push(t);
+    const body = appPiece(/case 'routines_here_failed':([\s\S]*?)\bbreak;/, 'the switch failure case');
+    w.d = { type: 'routines_here_failed', on: false, detail: 'EACCES: permission denied' };
+    w.eval(`(function () {${body}\n})()`);
+
+    const problem = doc.querySelector('[data-routines-here-problem]');
+    assert.ok(problem, 'the switch that was pressed says nothing');
+    assert.strictEqual(problem.textContent.trim(), 'Could not turn routines off on this computer. They are still on here.');
+    assert.strictEqual(doc.querySelector('[data-routines-here] input').checked, true,
+      'the switch moved to a state the record does not hold');
+    assert.deepStrictEqual(w.said, [], 'the failure went to the conversation transcript as well');
     dom.window.close();
   });
 

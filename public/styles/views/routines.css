@@ -47,6 +47,22 @@
    about the list rather than a description of what the list contains. */
 .routines-workspace { font-size: var(--caption); color: var(--text-2); margin-top: 4px; }
 
+/* The switch that turns routines off on this computer, for this workspace,
+   under the header text. On the panel's --surface with a quiet edge; off, the
+   edge strengthens so the row reads as a setting someone changed. NOTHING HERE
+   IS AMBER OR RED: off is a choice, the same class of fact as a pause. */
+.routines-here { display: flex; align-items: center; gap: 12px; padding: 12px 14px; margin: -8px 0 20px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); font-size: var(--caption); color: var(--text-1); line-height: 1.5; }
+.routines-here.off { border-color: var(--border-strong); }
+.routines-here-icon { flex-shrink: 0; color: var(--text-2-strong); }
+.routines-here-text { flex: 1; min-width: 0; }
+.routines-here-title { display: block; font-size: var(--body); font-weight: 600; color: var(--text-1); }
+.routines-here-hint { color: var(--text-2-strong); }
+.routines-here-switch { display: inline-flex; align-items: center; gap: 8px; flex-shrink: 0; min-height: 32px; cursor: pointer; }
+.routines-here-word { font-weight: 600; color: var(--text-1); min-width: 22px; text-align: right; }
+/* The focus ring on the control accent rather than the brand one, which is
+   under 3:1 on this surface in light. */
+.routines-here .rui-toggle:focus-visible { outline: 2px solid var(--accent-control); outline-offset: 2px; }
+
 /* The list */
 .routine-table { display: flex; flex-direction: column; gap: 10px; }
 .routine-row { display: flex; align-items: center; gap: 14px; padding: 14px 16px; background: var(--card); border-radius: var(--radius-lg); }

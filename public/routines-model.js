@@ -264,7 +264,69 @@
     // reads the shipped copy here rather than assembling it out of a template
     // and a variable somewhere else.
     scopedLead: "Every scheduled skill {agent} runs, and when it runs next.",
+    // AND WHEN ROUTINES ARE OFF ON THIS COMPUTER, for this workspace. Said in
+    // place of the workspace line rather than beside it, for the reason the
+    // moved line is: none of these rows is going to fire here.
+    offHereLine: 'These are the routines in {workspace}. Routines are off on this computer, so none of these are running here.',
   };
+
+  /**
+   * THE SWITCH THAT TURNS ROUTINES OFF ON THIS COMPUTER, for this workspace.
+   *
+   * One workspace synced to two computers runs every routine on each, and a
+   * pause in the agent file syncs, so it pauses both. This is the answer kept
+   * on one computer only. `{workspace}` is the workspace's name and
+   * `{computer}` is this computer's, read by the server, so in a browser on a
+   * server it names the server. When no name can be read, `computer` says so.
+   *
+   * NOTHING HERE IS AMBER OR RED. Off is a choice the person made, the same
+   * class of fact as a pause, and it takes the quiet tone a pause does.
+   */
+  const HERE = {
+    label: 'Routines on this computer',
+    onTitle: 'Routines on this computer',
+    onHint: 'Turn it off here if another computer runs these routines, so each one runs once. Applies to {workspace} on {computer} only, and does not sync.',
+    offTitle: 'Routines are off on this computer',
+    offHint: 'Nothing in {workspace} runs on a schedule here. Your other computers are not affected. Turn the switch on to run them here again.',
+    on: 'On',
+    off: 'Off',
+    // In place of Next run on every row, while off.
+    row: 'Off on this computer',
+    computer: 'this computer',
+    workspace: 'this workspace',
+    // A save that did not happen. The switch stays where it was, and says so.
+    failedOff: 'Could not turn routines off on this computer. They are still on here.',
+    failedOn: 'Could not turn routines back on on this computer. They are still off here.',
+  };
+
+  /**
+   * The switch's row, as data: its title, its hint and its word, from the
+   * state the server sent beside the roster. Null when no state was sent,
+   * which is a roster that names no workspace: a switch drawn then would claim
+   * a state nobody read.
+   *
+   * @param {{workspace?: any, here?: {off?: boolean, computer?: any}|null}} [input]
+   */
+  function hereSwitch(input) {
+    const here = input && input.here;
+    if (!here || typeof here !== 'object') return null;
+    const off = here.off === true;
+    const workspace = workspaceWords(input.workspace) || HERE.workspace;
+    const computer = typeof here.computer === 'string' && here.computer.trim() ? here.computer.trim() : HERE.computer;
+    const fill = (text) => text.replace('{workspace}', () => workspace).replace('{computer}', () => computer);
+    return {
+      off,
+      label: HERE.label,
+      title: off ? HERE.offTitle : HERE.onTitle,
+      hint: fill(off ? HERE.offHint : HERE.onHint),
+      word: off ? HERE.off : HERE.on,
+    };
+  }
+
+  /** What the switch row says when a change to it could not be saved. */
+  function hereProblem(wantedOff) {
+    return wantedOff ? HERE.failedOff : HERE.failedOn;
+  }
 
   /**
    * The header this view heads itself with: a title and the sentence under it.
@@ -299,6 +361,8 @@
     let workspaceLine = null;
     if (workspaceName && isServed(input)) {
       workspaceLine = LEAD.workspaceLine.replace('{workspace}', () => workspaceName);
+      // Routines off on this computer: none of these is running here.
+      if (input.offHere) workspaceLine = LEAD.offHereLine.replace('{workspace}', () => workspaceName);
     } else if (workspaceName && servingName) {
       workspaceLine = LEAD.movedLine
         .replace('{workspace}', () => workspaceName)
@@ -834,6 +898,9 @@
     // this routine back and moving it would promise a run that the press
     // cannot deliver.
     if (!isServed(input)) return true;
+    // NOR ONE TURNED OFF ON THIS COMPUTER: turning it on here would start
+    // nothing here, so the offer's sentence would be false.
+    if (input.offHere) return true;
     // A roster that did not name a run target says nothing, for the same
     // reason an absent scheduleReadable says nothing: silence is not a fault.
     if (input.refusal === undefined && input.runOn !== undefined && input.runOn !== null) {
@@ -1191,6 +1258,10 @@
     // A routine whose consent was withdrawn is paused too, and promises no
     // next run: the consent line takes this line's place.
     if (approvalOffer(input)) return null;
+    // ROUTINES OFF ON THIS COMPUTER: none of them runs here on a schedule, so
+    // every row says so where its next run would be, in a pause's quiet tone.
+    // Not when Rundock has moved elsewhere, where the row's note says more.
+    if (input && input.offHere && isServed(input)) return { text: HERE.row, className: 'next-run paused-label', off: true };
     // A ROUTINE NOBODY HAS TURNED ON PROMISES NOTHING, and the guard is here
     // rather than at the caller because the instant is real. The server works
     // a next run out from the schedule alone, so a routine the upgrade held
@@ -1352,8 +1423,8 @@
   }
 
   return {
-    OUTCOMES, LEAD, EMPTY, ACTION_PROBLEM, NOT_ENABLED, SCHEDULE_PROBLEM, PROMPT_PROBLEM, NOT_SERVED, CATCH_UP_AFTER_MS,
-    actionProblem, emptyState, header,
+    OUTCOMES, LEAD, HERE, EMPTY, ACTION_PROBLEM, NOT_ENABLED, SCHEDULE_PROBLEM, PROMPT_PROBLEM, NOT_SERVED, CATCH_UP_AFTER_MS,
+    actionProblem, emptyState, header, hereSwitch, hereProblem,
     dayWords, clockWords, zoneWords, timeWords, workspaceWords, workspaceNames,
     scheduleWords, routineSentence, sentenceParts,
     RUN_STATUS_WORDS, REFUSALS_UNDERSTOOD, PAUSED_WORDS, RUNNING_WORDS,
