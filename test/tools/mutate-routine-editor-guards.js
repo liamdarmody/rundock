@@ -89,6 +89,10 @@ const DISPATCH = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'index.js
 // each mutation runs exactly one suite, and these guards are watched by that
 // one. Both entries read and restore the same file, one mutation at a time.
 const ROUTINES_TZ = { src: path.join(ROOT, 'lib', 'agents', 'routines.js'), suite: 'test/unit/routine-timezone.test.js' };
+// The client's roster case, watched by the suite that delivers a roster built
+// in one zone to a window in another, because that is where the zone it
+// records is read back.
+const APP_ZONE = { src: path.join(ROOT, 'public', 'app.js'), suite: 'test/unit/schedule-zone.test.js' };
 // The editor's model, watched by the suite for a routine on a set of days.
 const DAYS_MODEL = { src: path.join(ROOT, 'public', 'routine-editor-model.js'), suite: 'test/unit/routine-days.test.js' };
 // The page's script order, watched by the suite that pins the order the
@@ -568,6 +572,22 @@ const MUTATIONS = [
     + "    else if (field === 'time' || field === 'day') state[field] = value;",
     "    if (field === 'frequency' || field === 'time' || field === 'day') state[field] = value;"],
 
+  // WHOSE CLOCK THE SCHEDULE FOLLOWS. The first is the defect in its exact
+  // form: the window's own zone back in the caption. On the machine a routine
+  // was made on it names the right place, which is why only a suite that puts
+  // the window and the server in different zones can see it.
+  [VIEW, 'a caption names the zone the server reports, never the window\'s',
+    "    return typeof serverZone === 'string' && serverZone ? serverZone : null;",
+    '    return browserTimezone();'],
+  [VIEW, 'a server that reports no zone is not covered for with the window\'s',
+    "    return typeof serverZone === 'string' && serverZone ? serverZone : null;",
+    "    return typeof serverZone === 'string' && serverZone ? serverZone : browserTimezone();"],
+  [MODEL, 'with no zone reported the caption still says whose clock it is',
+    '    const words = timezoneWords(input && input.zone);\n    const agentName = (input && input.agentName) || null;',
+    '    const words = timezoneWords(input && input.zone);\n    if (!words) return null;\n    const agentName = (input && input.agentName) || null;'],
+  [APP_ZONE, 'the client records the zone the server sent beside its roster',
+    ' serverZone=d.zone||null;',
+    ''],
   // ===== THE DAYS OF A WEEK =====
   //
   // A week with no day ticked saves nothing: Continue is pressable, and stops

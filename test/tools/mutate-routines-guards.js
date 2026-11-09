@@ -225,6 +225,15 @@ const APP_E2E = { src: path.join(ROOT, 'public', 'app.js'), suite: 'test/unit/ro
 // switch handler and the rollback with a real capturing client on the real
 // broadcast set.
 const ROOT_SERVER = { src: path.join(ROOT, 'server.js'), suite: 'test/unit/protocol-handlers-lib.test.js' };
+// WHOSE CLOCK A ROUTINE FIRES ON, watched by the suite that builds a roster in
+// one zone and draws it in a window in another. The server's half reports the
+// zone; the list's half hands it to every row.
+const DISCOVERY_ZONE = { src: path.join(ROOT, 'lib', 'agents', 'discovery.js'), suite: 'test/unit/schedule-zone.test.js' };
+const VIEW_ZONE = { src: path.join(ROOT, 'public', 'views', 'routines.js'), suite: 'test/unit/schedule-zone.test.js' };
+// And the scheduler's half, watched by the doc claim that a routine's declared
+// zone changes nothing about when it runs, because that claim drives the tick
+// and the row with the routine objects discovery reads out of a file.
+const SCHEDULER_DOC = { src: path.join(ROOT, 'lib', 'scheduler.js'), suite: 'test/unit/doc-claims.test.js' };
 // The server's half: telling every window where the scheduler went. Watched by
 // the file that drives the switch handler through a context whose broadcast it
 // can read, because a notice sent only to the socket that asked is exactly the
@@ -855,7 +864,7 @@ const MUTATIONS = [
   // ===== THE VALUE THAT IS CONSTRAINED, NOT COPY =====
   // The second one this file exists for: the literal two design frames wrote.
   [MODEL, 'the next-run label renders the instant it is handed, with no value of its own',
-    '    const words = timeWords(input && input.nextRun, input && input.now, input && input.zone);',
+    '    const words = timeWords(input && input.nextRun, input && input.now, clock.zone, clock.inZone);',
     "    const words = 'tomorrow, 7:00am, London time';"],
 
   // ===== THE THREE TONES =====
@@ -910,18 +919,18 @@ const MUTATIONS = [
     "      text = `Missed: Rundock was closed at ${place ? `${when}, ${place} time` : when}`;",
     '      text = `Missed: the routine did not run at ${when}`;'],
   [MODEL, 'a caught-up row names the time it was due as well as the time it ran',
-    '      text = `Ran late: ${timeWords(input.lastStart, now, null)}. Due ${due}.`;',
-    '      text = `Ran late: ${timeWords(input.lastStart, now, null)}.`;'],
+    '      text = `Ran late: ${timeWords(input.lastStart, now, null, inZone)}. Due ${due}.`;',
+    '      text = `Ran late: ${timeWords(input.lastStart, now, null, inZone)}.`;'],
   // A monthly row names dates, read off the server's word for the form.
   [MODEL, 'the row reads a monthly routine off the server\'s kind',
     "    const monthly = input.scheduleKind === 'monthly';",
     '    const monthly = false;'],
   [MODEL, 'a monthly late run names the date it was due',
-    '      const due = monthly ? `${dateWords(input.lastSlot)}, ${clockWords(input.lastSlot)}` : clockWords(input.lastSlot);',
-    '      const due = clockWords(input.lastSlot);'],
+    '      const due = monthly ? `${dateWords(input.lastSlot, inZone)}, ${clockWords(input.lastSlot, inZone)}` : clockWords(input.lastSlot, inZone);',
+    '      const due = clockWords(input.lastSlot, inZone);'],
   [MODEL, 'a missed monthly slot is named by its date',
-    'monthly ? dateWords(slot) : dayWords(slot, now)',
-    'dayWords(slot, now)'],
+    'monthly ? dateWords(slot, inZone) : dayWords(slot, now, inZone)',
+    'dayWords(slot, now, inZone)'],
   [MODEL, 'a missed monthly slot says the month ended first',
     "      if (monthly) text += ', and not opened again before the month ended.';\n",
     ''],
@@ -937,7 +946,7 @@ const MUTATIONS = [
     "    if (input.scheduleKind === 'monthly' && !input.refusal && at && now && at <= now) {",
     "    if (input.scheduleKind === 'monthly' && !input.refusal && at && now) {"],
   [MODEL, 'the owed line names when it was due',
-    '      return { text: `Next run: shortly. It was due ${dateWords(at)}, ${clockWords(at)}.`, className: \'next-run\' };',
+    '      return { text: `Next run: shortly. It was due ${dateWords(at, clock.inZone)}, ${clockWords(at, clock.inZone)}.`, className: \'next-run\' };',
     "      return { text: 'Next run: shortly.', className: 'next-run' };"],
   [END_TO_END, 'the server says which form it read',
     '    scheduleKind: parsed.kind,\n',
@@ -949,17 +958,17 @@ const MUTATIONS = [
     '    scheduleKind: r.scheduleKind,\n',
     ''],
   [MODEL, 'a punctual row reads as the time, with no label in front of it',
-    '      text = `Ran ${timeWords(input.lastStart, now, zone)}`;',
-    '      text = `Ran on time: ${timeWords(input.lastStart, now, zone)}`;'],
+    '      text = `Ran ${timeWords(input.lastStart, now, zone, inZone)}`;',
+    '      text = `Ran on time: ${timeWords(input.lastStart, now, zone, inZone)}`;'],
   [MODEL, 'a day near now is a word rather than a date',
     "    if (gap === 1) return 'tomorrow';",
     "    if (gap === 1) return DAYS[when.getDay()];"],
   [MODEL, 'a day word counts calendar days, not hours',
-    '    const a = new Date(from.getFullYear(), from.getMonth(), from.getDate());\n    const b = new Date(to.getFullYear(), to.getMonth(), to.getDate());\n    return Math.round((b - a) / 86400000);',
-    '    return Math.round((to - from) / 86400000);'],
+    '    return Math.round((Date.UTC(to.year, to.month, to.day) - Date.UTC(from.year, from.month, from.day)) / 86400000);',
+    '    return Math.round((Date.UTC(to.year, to.month, to.day, to.hour, to.minute) - Date.UTC(from.year, from.month, from.day, from.hour, from.minute)) / 86400000);'],
   [MODEL, 'midnight and noon read as twelve rather than zero',
-    '    const hour12 = hour % 12 === 0 ? 12 : hour % 12;',
-    '    const hour12 = hour % 12;'],
+    '    const hour12 = at.hour % 12 === 0 ? 12 : at.hour % 12;',
+    '    const hour12 = at.hour % 12;'],
   [MODEL, 'the zone reaches the words as a place',
     '    return place ? `${day}, ${clock}, ${place} time` : `${day}, ${clock}`;',
     '    return `${day}, ${clock}`;'],
@@ -1585,6 +1594,43 @@ const MUTATIONS = [
   [OFF_HERE_ROSTER, 'off on this computer: a record nobody can read reaches the window as off',
     '  if (!data) return false;',
     '  if (!data) return true;'],
+
+  // ===== WHOSE CLOCK A ROUTINE FIRES ON =====
+  // A schedule is read on the server's clock and the window can be in another
+  // zone. Each of these puts the window's clock, or a stale zone, back where
+  // the server's belongs.
+  [DISCOVERY_ZONE, 'the zone is read each time a roster is built, not kept from start',
+    'function scheduleZone() {\n  let zone = null;',
+    'const STARTED_IN = Intl.DateTimeFormat().resolvedOptions().timeZone;\nfunction scheduleZone() {\n  return STARTED_IN;\n  let zone = null;'],
+  [DISCOVERY_ZONE, 'a runtime that does not know its zone reports none',
+    "  return typeof zone === 'string' && zone !== 'Etc/Unknown' ? zone : null;",
+    "  return typeof zone === 'string' ? zone : null;"],
+  [VIEW_ZONE, 'the list hands every row the zone the server reported',
+    '    serverZone: routinesServerZone(),\n',
+    ''],
+  [MODEL, 'a row on a server in another zone is worked out in the server\'s zone',
+    '    if (server && server !== here) return { zone: server, inZone: server };\n',
+    ''],
+  [MODEL, 'a zone this window cannot read leaves the row\'s times out',
+    '    return !!inZone && !wallClock(new Date(0), inZone);',
+    '    return false;'],
+  // The other way round: a routine's own `timezone` field read where the
+  // process's zone belongs. The field is words nothing reads when deciding
+  // when a routine runs, so each of these works one routine's slot out in its
+  // declared zone, once in the tick's due decision and once in the row's next
+  // run, and the doc claim that hands both the routine objects must see it.
+  [SCHEDULER_DOC, 'the tick never reads a routine\'s declared zone',
+    '        const nextRun = getNextRun(routine.schedule, routineState[key]?.lastRun);\n',
+    '        const zoneWas = process.env.TZ;\n'
+    + '        if (routine.timezone) process.env.TZ = routine.timezone;\n'
+    + '        const nextRun = getNextRun(routine.schedule, routineState[key]?.lastRun);\n'
+    + '        if (zoneWas === undefined) delete process.env.TZ; else process.env.TZ = zoneWas;\n'],
+  [SCHEDULER_DOC, 'a row\'s next run never reads a routine\'s declared zone',
+    '  const next = nextRunFor(key, schedule, routine);\n',
+    '  const zoneWas = process.env.TZ;\n'
+    + '  if (routine && routine.timezone) process.env.TZ = routine.timezone;\n'
+    + '  const next = nextRunFor(key, schedule, routine);\n'
+    + '  if (zoneWas === undefined) delete process.env.TZ; else process.env.TZ = zoneWas;\n'],
 
   // ===== A SET OF DAYS =====
   //

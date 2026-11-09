@@ -1335,6 +1335,145 @@ describe('ROUTINES.md: running a routine now, and consent as change-consent', ()
 });
 
 // ---------------------------------------------------------------------------
+// docs/ROUTINES.md: whose clock a schedule follows
+//
+// The page used to say there was no timezone field on a routine, which was
+// false, and said the schedule followed "the machine running Rundock" without
+// saying which machine that is when the window is on another one. Both halves
+// are pinned to the behavior they describe: a declared zone changes nothing
+// about when a routine is due, and the process's own zone changes everything.
+// ---------------------------------------------------------------------------
+
+describe('ROUTINES.md: a schedule follows the clock of the computer Rundock runs on', () => {
+  const scheduler = require('../../lib/scheduler.js');
+  const CLOCK = 'A schedule follows the clock of the computer Rundock runs on. For a Rundock on a server '
+    + 'reached through a tunnel, that is the server\'s clock, whatever zone the computer showing the window is in.';
+  const FIELD = 'A routine can carry a `timezone` field that names a zone as words, like `Europe/London`. '
+    + 'Rundock checks that it is written that way, and doesn\'t read it when deciding when the routine runs. '
+    + 'Firing in a routine\'s own zone is not supported.';
+  const SERVER = 'Routine times follow the server\'s clock:';
+
+  /** Run `fn` with the process in `zone` and the scheduler's clock held still. */
+  function inZone(zone, now, fn) {
+    const was = process.env.TZ;
+    process.env.TZ = zone;
+    const previous = scheduler.wireSchedulerDeps({ now: () => now });
+    try { return fn(); } finally {
+      scheduler.wireSchedulerDeps(previous);
+      if (was === undefined) delete process.env.TZ; else process.env.TZ = was;
+    }
+  }
+
+  test('the page no longer says a routine has no timezone field', () => {
+    assert.doesNotMatch(routinesDoc, /There is no timezone field/i);
+  });
+
+  test('the page says whose clock it is, what the field is, and says it on the server section too', () => {
+    assert.ok(routinesDoc.includes(`${CLOCK} ${FIELD}`), 'ROUTINES.md must say whose clock a schedule follows');
+    const server = routinesDoc.slice(routinesDoc.indexOf('#### Reaching a Rundock on a server'));
+    assert.ok(server.includes(SERVER), 'and the server section must say routine times follow the server\'s clock');
+  });
+
+  // "Doesn't read it when deciding when the routine runs", as behavior.
+  //
+  // HANDED THE ROUTINES THEMSELVES, never their schedule strings. Two routines
+  // with one schedule hand the scheduler the same string, so a comparison of
+  // what it makes of the strings cannot see a scheduler that starts reading
+  // the routine's own zone. Here both routines are read out of an agent file
+  // by discovery, one declaring Pacific/Auckland and one declaring nothing,
+  // and the tick and the row are each given the routine objects, as they are
+  // in the product. Each must decide the same for both: the slot, whether it
+  // fires, and the next run after it.
+  //
+  // The process is in London, where 08:00 on 7 October 2026 is 07:00 UTC.
+  // 08:00 in Auckland that day was 19:00 UTC the evening before, so a
+  // scheduler that read the declared zone would find that routine already due
+  // at half past six in London, and fire it an hour and a half early.
+  test('a routine declaring Pacific/Auckland is judged due exactly as one declaring nothing', () => {
+    const { agentFile } = require('../helpers/workspace.js');
+    const discovery = require('../../lib/agents/discovery.js');
+    const claude = require('../../lib/runtime/claude.js');
+    const key = require.resolve('../../lib/scheduler.js');
+    const SCHEDULE = 'every day at 08:00';
+    const KEYS = ['piper:declared', 'piper:plain'];
+    const SLOT = '2026-10-07T07:00:00.000Z';
+    const TOMORROW = '2026-10-08T07:00:00.000Z';
+    useWorkspace({ agents: { piper: agentFile({ name: 'piper', type: 'specialist', order: 1, routines: [
+      { name: 'declared', schedule: SCHEDULE, prompt: 'go', enabled: true, timezone: 'Pacific/Auckland' },
+      { name: 'plain', schedule: SCHEDULE, prompt: 'go', enabled: true },
+    ] }) } });
+
+    // A private scheduler whose children are stand-ins, loaded after the spawn
+    // is swapped because it takes the spawn when it loads, and whose tick is
+    // the interval it arms, run by hand.
+    const was = process.env.TZ;
+    process.env.TZ = 'Europe/London';
+    const cached = require.cache[key]; delete require.cache[key];
+    const realSpawn = claude.spawnClaude;
+    const realSetInterval = global.setInterval;
+    const prevDeps = claude.wireClaudeRuntimeDeps({ getActualPort: () => 0 });
+    const children = [];
+    claude.spawnClaude = () => { const c = new (require('node:events').EventEmitter)(); c.kill = () => {}; children.push(c); return c; };
+    let sched = null;
+    try {
+      sched = require(key);
+      const clock = { at: new Date(Date.UTC(2026, 9, 7, 5, 30)) }; // 06:30 in London
+      sched.wireSchedulerDeps({ now: () => clock.at, getWssClients: () => [] });
+      let tick = null;
+      global.setInterval = (fn) => { tick = fn; return { unref() {} }; };
+      try { sched.startScheduler(); } finally { global.setInterval = realSetInterval; }
+      const tickAt = (at) => { clock.at = at; tick(); };
+
+      discovery.invalidateAgentCache();
+      const routines = discovery.discoverAgents().find(a => a.id === 'piper').routines;
+      const byKey = Object.fromEntries(routines.map(r => [`piper:${r.name}`, r]));
+      assert.strictEqual(byKey['piper:declared'].timezone, 'Pacific/Auckland', 'sanity: discovery kept the declared zone');
+      assert.ok(!byKey['piper:plain'].timezone, 'sanity: and the other routine declares none');
+      const each = (fn) => KEYS.map(k => fn(k, byKey[k]));
+      const nextRuns = () => each((k, r) => sched.routineDisplayFacts(k, r.schedule, r).nextRun);
+      const ran = () => each(k => (sched.routineState[k] ? sched.routineState[k].lastRun : null));
+
+      assert.deepStrictEqual(nextRuns(), [SLOT, SLOT], 'the row names the same next run for both before the slot');
+      tickAt(new Date(Date.UTC(2026, 9, 7, 5, 30)));
+      assert.strictEqual(children.length, 0, 'neither fired at 06:30, before its slot');
+      assert.deepStrictEqual(ran(), [null, null]);
+      assert.deepStrictEqual(each(k => sched.routineSlots.routines[k].due), [SLOT, SLOT],
+        'the tick placed both slots at the same instant');
+
+      tickAt(new Date(SLOT));
+      assert.strictEqual(children.length, 2, 'both fired at 08:00 in London');
+      assert.deepStrictEqual(ran(), [SLOT, SLOT]);
+      const dueAt = Object.fromEntries(sched.readRunRecords().map(rec => [`${rec.agent}:${rec.routine}`, rec.dueAt]));
+      assert.deepStrictEqual(each(k => dueAt[k]), [SLOT, SLOT], 'and each run is on record as due at that slot');
+
+      clock.at = new Date(Date.UTC(2026, 9, 7, 7, 5));
+      for (const child of children) child.emit('close', 0);
+      assert.deepStrictEqual(nextRuns(), [TOMORROW, TOMORROW], 'and the row names tomorrow\'s 08:00 for both');
+      tickAt(new Date(Date.UTC(2026, 9, 7, 7, 30)));
+      assert.strictEqual(children.length, 2, 'and neither fired again that morning');
+    } finally {
+      if (sched) sched.stopScheduler();
+      global.setInterval = realSetInterval;
+      claude.spawnClaude = realSpawn;
+      claude.wireClaudeRuntimeDeps(prevDeps);
+      delete require.cache[key]; if (cached) require.cache[key] = cached;
+      discovery.invalidateAgentCache();
+      if (was === undefined) delete process.env.TZ; else process.env.TZ = was;
+    }
+  });
+
+  // "The clock of the computer Rundock runs on", as behavior: the same
+  // schedule at the same instant is a different slot in a different zone.
+  test('the same schedule gives different slot instants under two values of the process zone', () => {
+    const now = new Date(Date.UTC(2026, 9, 7, 5, 0));
+    const london = inZone('Europe/London', now, () => scheduler.getNextRun('every day at 08:00', null));
+    const newYork = inZone('America/New_York', now, () => scheduler.getNextRun('every day at 08:00', null));
+    assert.strictEqual(london.toISOString(), '2026-10-07T07:00:00.000Z');
+    assert.strictEqual(newYork.toISOString(), '2026-10-07T12:00:00.000Z');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // docs/PACKAGES.md: what a receipt records
 // ---------------------------------------------------------------------------
 

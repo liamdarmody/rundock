@@ -91,9 +91,12 @@ const SECONDS_PER_SHARD = 600;
 // holds it to. Raised again from thirteen when the set grew until a change
 // adding rows on top planned one shard past that limit. At fourteen the
 // longest shard sits close to the average, so the next rows would put one
-// past it again; fifteen leaves room for them
+// past it again; fifteen leaves room for them. Raised to sixteen once costs
+// taken from CI shard logs put the full set at the fifteen-shard bound: main
+// planned its longest shard 2 s under the limit, and a change adding rows on
+// top planned one past it. Sixteen is the smallest cap that fits both
 // (docs/evidence/mutation-shard-cap-evidence.md has the plans).
-const MAX_SHARDS = 15;
+const MAX_SHARDS = 16;
 const COSTS_FILE = 'mutation-costs.json';
 const FALLBACK_SECONDS_PER_ROW = 5;
 

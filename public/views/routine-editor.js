@@ -501,16 +501,29 @@
   }
 
   /**
-   * The time zone the schedule is read in.
+   * This window's own time zone, which is NOT the zone a schedule is read in.
    *
-   * THE ONE PLACE THIS CODE READS THE MACHINE, and it is at an entry point
-   * rather than anywhere a test can inherit it. Everything downstream takes
-   * the zone as a value, which is why the editor's tests say the same thing
-   * in London and in Auckland. The zone travels as WORDS from here on: no
-   * offset is ever computed from it.
+   * The server reads a schedule on its own clock, and this window can be on
+   * another computer in another zone, so no caption is handed this value:
+   * putting it there would name an hour the routine does not fire at. It is
+   * THE ONE PLACE THIS CODE READS THE MACHINE, kept and named so that is plain.
    */
   function browserTimezone() {
     try { return Intl.DateTimeFormat().resolvedOptions().timeZone || null; } catch (e) { return null; }
+  }
+
+  /**
+   * The time zone a schedule is read in: the one the server reported beside
+   * its last roster, or nothing.
+   *
+   * Read when the editor opens, so an editor opened after the server's zone
+   * changed names the new one. Nothing reported, by an older server or by one
+   * whose runtime gave no zone, stays nothing: the caption then names no
+   * place, and never falls back to this window's. The zone travels as WORDS
+   * from here on: no offset is ever computed from it.
+   */
+  function scheduleTimezone() {
+    return typeof serverZone === 'string' && serverZone ? serverZone : null;
   }
 
   /**
@@ -543,7 +556,7 @@
       agentName: agent ? agent.displayName : null,
       skills: loaded && typeof skills !== 'undefined' && skills ? skills : [],
       loading: !loaded,
-      zone: browserTimezone(),
+      zone: scheduleTimezone(),
     });
     requestSkillsIfMissing(loaded);
   }
@@ -625,7 +638,7 @@
       selectedKey: only ? `${skill.id}:${only.id}` : null,
       originSkillId: skill ? skill.id : null,
       originSkillName: skill ? skill.name : null,
-      zone: browserTimezone(),
+      zone: scheduleTimezone(),
     });
   }
 
@@ -670,7 +683,7 @@
       agentId: agent.id,
       agentName: agent.displayName || agent.name || null,
       skills: [],
-      zone: browserTimezone(),
+      zone: scheduleTimezone(),
       runOn: routine.runOn || null,
       frequency: parsed ? parsed.frequency : null,
       time: parsed ? parsed.time : null,
