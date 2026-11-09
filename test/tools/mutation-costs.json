@@ -298,7 +298,9 @@
       "the zone is read each time a roster is built, not kept from start": 0.58,
       "a runtime that does not know its zone reports none": 0.62,
       "the list hands every row the zone the server reported": 0.61,
-      "a row on a server in another zone is worked out in the server's zone": 0.2
+      "a row on a server in another zone is worked out in the server's zone": 0.2,
+      "the tick never reads a routine's declared zone": 1.03,
+      "a row's next run never reads a routine's declared zone": 0.99
     },
     "mutate-run-detail-guards.js": {
       "a run whose ending never ran is not painted as a failure": 1.63,

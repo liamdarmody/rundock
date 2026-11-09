@@ -225,6 +225,10 @@ const ROOT_SERVER = { src: path.join(ROOT, 'server.js'), suite: 'test/unit/proto
 // zone; the list's half hands it to every row.
 const DISCOVERY_ZONE = { src: path.join(ROOT, 'lib', 'agents', 'discovery.js'), suite: 'test/unit/schedule-zone.test.js' };
 const VIEW_ZONE = { src: path.join(ROOT, 'public', 'views', 'routines.js'), suite: 'test/unit/schedule-zone.test.js' };
+// And the scheduler's half, watched by the doc claim that a routine's declared
+// zone changes nothing about when it runs, because that claim drives the tick
+// and the row with the routine objects discovery reads out of a file.
+const SCHEDULER_DOC = { src: path.join(ROOT, 'lib', 'scheduler.js'), suite: 'test/unit/doc-claims.test.js' };
 // The server's half: telling every window where the scheduler went. Watched by
 // the file that drives the switch handler through a context whose broadcast it
 // can read, because a notice sent only to the socket that asked is exactly the
@@ -1507,6 +1511,23 @@ const MUTATIONS = [
   [MODEL, 'a row on a server in another zone is worked out in the server\'s zone',
     '    if (server && server !== here) return { zone: server, inZone: server };\n',
     ''],
+  // The other way round: a routine's own `timezone` field read where the
+  // process's zone belongs. The field is words nothing reads when deciding
+  // when a routine runs, so each of these works one routine's slot out in its
+  // declared zone, once in the tick's due decision and once in the row's next
+  // run, and the doc claim that hands both the routine objects must see it.
+  [SCHEDULER_DOC, 'the tick never reads a routine\'s declared zone',
+    '        const nextRun = getNextRun(routine.schedule, routineState[key]?.lastRun);\n',
+    '        const zoneWas = process.env.TZ;\n'
+    + '        if (routine.timezone) process.env.TZ = routine.timezone;\n'
+    + '        const nextRun = getNextRun(routine.schedule, routineState[key]?.lastRun);\n'
+    + '        if (zoneWas === undefined) delete process.env.TZ; else process.env.TZ = zoneWas;\n'],
+  [SCHEDULER_DOC, 'a row\'s next run never reads a routine\'s declared zone',
+    '  const next = nextRunFor(key, schedule, routine);\n',
+    '  const zoneWas = process.env.TZ;\n'
+    + '  if (routine && routine.timezone) process.env.TZ = routine.timezone;\n'
+    + '  const next = nextRunFor(key, schedule, routine);\n'
+    + '  if (zoneWas === undefined) delete process.env.TZ; else process.env.TZ = zoneWas;\n'],
 
 ];
 
