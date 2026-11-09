@@ -411,6 +411,99 @@ test('an origin workspace that cannot be written at the ending fails closed',
       'and A\'s routine is not due again that period, because the stamp its start wrote is still there');
   });
 
+// Two switches while the run goes on, A to B and then B to C. A's state is
+// carried at the first, while it is still the state in memory. The second load
+// finds it carried already and keeps it, because by then the state in memory
+// is B's, and taking it again would write B's into A's file at the ending.
+test(`a run that outlives two switches records into its own workspace, not the one between (${SIDE})`, async (t) => {
+  const aOwn = {
+    'keeper:a-weekly': { lastRun: dayAt(19, 8, 0).toISOString(), status: 'completed', duration: 4 },
+    'scout:digest': { lastRun: dayAt(18, 7, 0).toISOString(), status: 'failed', duration: 9 },
+  };
+  const bOwn = {
+    [KEY]: ranTheDayBefore(20),
+    'keeper:b-only': { lastRun: dayAt(19, 11, 0).toISOString(), status: 'completed', duration: 2 },
+    'scout:digest': { lastRun: dayAt(19, 12, 0).toISOString(), status: 'completed', duration: 5 },
+  };
+  const cOwn = { 'keeper:c-only': { lastRun: dayAt(19, 13, 0).toISOString(), status: 'completed', duration: 6 } };
+  const a = keeperWorkspace('two switches body', { held: true, state: aOwn });
+  const b = keeperWorkspace('two switches B body', { state: bOwn });
+  const c = keeperWorkspace('two switches C body', { state: cOwn });
+  const bBytes = fs.readFileSync(stateFile(b.dir));
+  const cBytes = fs.readFileSync(stateFile(c.dir));
+  await startHeldRun(t, a, dayAt(20, 9, 30));
+
+  await choose(b.dir);
+  await choose(c.dir);
+  clock.at = dayAt(20, 9, 40);
+  assertEndedAsItsChildSaid(a, await finish(a), 'after two switches');
+
+  const { [KEY]: ending, ...others } = stateIn(a.dir);
+  assert.deepStrictEqual(ending, { lastRun: dayAt(20, 9, 40).toISOString(), status: 'completed', duration: 600 },
+    'A\'s entry for the run moved from running to its outcome');
+  assert.deepStrictEqual(others, aOwn,
+    'A\'s entries for every other routine are its own, unchanged, with none of B\'s keys or stamps among them');
+  assert.ok(fs.readFileSync(stateFile(b.dir)).equals(bBytes), 'B\'s state file is byte-identical before and after');
+  assert.ok(fs.readFileSync(stateFile(c.dir)).equals(cBytes), 'and so is C\'s');
+});
+
+// THE CASE THAT MUST FAIL CLOSED: a run ending in a workspace that is not open,
+// with no state carried for it. Every load carries one for each workspace a
+// run is still going in, so this is forced through the carried states the
+// scheduler exports. The ending is built from the run's own workspace's file
+// and written there, and the open workspace's state and file hear nothing.
+test(`a run's ending with no state carried for its workspace lands in that workspace's own file (${SIDE})`, async (t) => {
+  const aOwn = { 'keeper:a-weekly': { lastRun: dayAt(20, 8, 0).toISOString(), status: 'completed', duration: 4 } };
+  const before = ranTheDayBefore(21);
+  const a = keeperWorkspace('nothing carried body', { held: true, state: aOwn });
+  const b = keeperWorkspace('nothing carried elsewhere body', { state: { [KEY]: before } });
+  await startHeldRun(t, a, dayAt(21, 9, 30));
+  await choose(b.dir);
+  const bBytes = fs.readFileSync(stateFile(b.dir));
+
+  scheduler.carriedStates.clear();
+  clock.at = dayAt(21, 9, 40);
+  assertEndedAsItsChildSaid(a, await finish(a), 'with nothing carried');
+
+  assert.ok(fs.readFileSync(stateFile(b.dir)).equals(bBytes),
+    `B's state file is byte-identical before and after:\n${fs.readFileSync(stateFile(b.dir), 'utf-8')}`);
+  assert.deepStrictEqual(h.internal.routineState[KEY], before, 'and B\'s state for that key, in memory, is unchanged');
+  assert.deepStrictEqual(stateIn(a.dir),
+    { ...aOwn, [KEY]: { lastRun: dayAt(21, 9, 40).toISOString(), status: 'completed', duration: 600 } },
+    'A\'s file holds the run\'s outcome beside its other entries, unchanged');
+});
+
+// And with that file there but unreadable, there is nothing to build on. The
+// ending is not written over it, which would keep the one stamp and drop the
+// rest; the error names it, and the next open of A rebuilds it from its run
+// records.
+test('a run\'s ending with no state carried and its own file unreadable writes nothing, and names that file', async (t) => {
+  const before = ranTheDayBefore(22);
+  const a = keeperWorkspace('unreadable carried body', { held: true });
+  const b = keeperWorkspace('unreadable carried elsewhere body', { state: { [KEY]: before } });
+  await startHeldRun(t, a, dayAt(22, 9, 30));
+  await choose(b.dir);
+  const bBytes = fs.readFileSync(stateFile(b.dir));
+  const cutOff = '{ "keeper:keep-check": { "lastRun": "2026-07-22T';
+  fs.writeFileSync(stateFile(a.dir), cutOff);
+
+  scheduler.carriedStates.clear();
+  const errors = [];
+  const realError = console.error;
+  console.error = (...args) => { errors.push(args.map(String).join(' ')); };
+  try {
+    clock.at = dayAt(22, 9, 40);
+    assertEndedAsItsChildSaid(a, await finish(a), 'with nothing carried and A unreadable');
+  } finally {
+    console.error = realError;
+  }
+
+  assert.ok(errors.some(line => line.includes(stateFile(a.dir))), `the ending logged an error naming A's file:\n${errors.join('\n')}`);
+  assert.strictEqual(fs.readFileSync(stateFile(a.dir), 'utf-8'), cutOff, 'and wrote nothing over it');
+  assert.ok(fs.readFileSync(stateFile(b.dir)).equals(bBytes), 'nor anything into B\'s');
+  assert.deepStrictEqual(h.internal.routineState[KEY], before, 'and B\'s state in memory is unchanged');
+});
+
 // ===== EVERY LATER STEP USES THE WORKSPACE THE RUN STARTED IN =====
 //
 // Read once, at the start. Each test switches between the start and the step

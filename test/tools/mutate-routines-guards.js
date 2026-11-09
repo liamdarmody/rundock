@@ -1513,6 +1513,21 @@ const MUTATIONS = [
   [SWITCH_SCHEDULER, 'the plain session a run falls back to starts in the workspace the run started in',
     '    const workspace = run.workspace;\n    const capture = openCapture(run);',
     '    const workspace = getWorkspace();\n    const capture = openCapture(run);'],
+  // A WORKSPACE'S STATE IS CARRIED ONCE, at the first load after it was left.
+  // Taken again at a second switch, it is the state in memory by then, the
+  // workspace in between's, and the ending writes that into the run's file.
+  [SWITCH_SCHEDULER, 'a workspace\'s state is carried at the first load after it was left, not again at a second switch',
+    '    if (workspace !== open && !carriedStates.has(workspace)) carriedStates.set(workspace, { ...routineState });\n',
+    '    if (workspace !== open) carriedStates.set(workspace, { ...routineState });\n'],
+  // A RUN'S ENDING WITH NO STATE CARRIED FAILS CLOSED. Falling back to the
+  // open workspace's state, it writes the open workspace's file.
+  [SWITCH_SCHEDULER, 'a run\'s ending with no state carried never records into the open workspace',
+    '  if (workspace === getWorkspace()) return routineState;\n  if (!carriedStates.has(workspace)) carriedStates.set(workspace, stateInItsFile(workspace));\n  return carriedStates.get(workspace);\n',
+    '  return (workspace !== getWorkspace() && carriedStates.get(workspace)) || routineState;\n'],
+  // AND A FILE IT CANNOT READ IS NOT WRITTEN OVER with the one ending.
+  [SWITCH_SCHEDULER, 'a run\'s own state file that cannot be read is not written over with its ending',
+    '    else if (unreadStates.has(states)) throw new Error(`${unreadStates.get(states)}, so it is left as it is`);\n',
+    ''],
 
 ];
 

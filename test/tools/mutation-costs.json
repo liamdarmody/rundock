@@ -294,6 +294,9 @@
       "the orphan cleanup skips a live run's pid before the process table is asked": 0.34,
       "a run's ending records into the workspace it started in": 12.24,
       "the plain session a run falls back to starts in the workspace the run started in": 8.86,
+      "a workspace's state is carried at the first load after it was left, not again at a second switch": 12.31,
+      "a run's ending with no state carried never records into the open workspace": 12.88,
+      "a run's own state file that cannot be read is not written over with its ending": 13.53,
       "a routine state that does not parse is set aside and written back at once": 0.35
     },
     "mutate-run-detail-guards.js": {
