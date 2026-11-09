@@ -157,6 +157,8 @@
 /* The caveat sits inside the field, under the options it qualifies, because
    where a routine runs and what that costs are one fact. */
 .re-caveat { font-size: var(--caption); color: var(--text-2); line-height: 1.5; margin: 0; }
+/* The caveat's way out: the thing to do about the sentence before it. */
+.re-caveat b { color: var(--text-1); font-weight: 600; }
 /* This one carries the merged "how this actually runs" note (the time zone
    plus the workspace caveat, joined in the view rather than drawn as two
    paragraphs) as a page-level sibling of the run-on field above it, not

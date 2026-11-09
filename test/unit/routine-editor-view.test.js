@@ -359,7 +359,7 @@ describe('routine editor view: the schedule is built, not typed', () => {
     w.routineEditorSetField('time', '07:00');
     assert.match(
       doc.querySelector('[data-routine-editor="sentence"]').textContent,
-      /Run Compile the ops summary every Monday at 7:00am, on this computer\./,
+      /Run Compile the ops summary every Monday at 7:00am, on your computers\./,
     );
     dom.window.close();
   });
@@ -379,8 +379,23 @@ describe('routine editor view: where it runs', () => {
     const local = doc.querySelector('[data-run-on="local"]');
     assert.ok(local, 'the local option is on the page');
     const body = local.textContent.replace(/\s+/g, ' ');
-    assert.match(body, /This computer/);
-    assert.match(body, /Runs while Rundock is open here\./);
+    assert.match(body, /Your computers/);
+    assert.match(body, /Runs on each computer that has this workspace open, while Rundock is open there\./);
+    assert.doesNotMatch(body, /Routines are off on this computer/, 'routines are on here, and the option says they are off');
+    dom.window.close();
+  });
+
+  // Routines off on this computer, as the roster says: the option adds the
+  // sentence that says this one will not run here, and where to turn them on.
+  test('while routines are off on this computer, the local option says so', () => {
+    const { doc, w, dom } = mount({ agentId: 'piper', agentName: 'Piper' });
+    w.rosterRoutinesHere = { off: true, computer: 'quartz-desk' };
+    w.routineEditorPick('ops-summary:piper');
+    w.routineEditorStep('schedule');
+    const local = doc.querySelector('[data-run-on="local"]');
+    assert.match(local.textContent.replace(/\s+/g, ' '),
+      /Runs on each computer that has this workspace open, while Rundock is open there\. Routines are off on this computer, so this one will not run here until you turn them on, from the Routines page\./);
+    assert.doesNotMatch(doc.querySelector('[data-run-on="agent-computer"]').textContent, /Routines are off/);
     dom.window.close();
   });
 
@@ -406,7 +421,7 @@ describe('routine editor view: where it runs', () => {
     // printed the local option's name on both would pass every assertion
     // above: the promise would still be present on one row and absent from the
     // other, and the page would name one option twice.
-    assert.match(local.textContent, /This computer/);
+    assert.match(local.textContent, /Your computers/);
     assert.match(alwaysOn.textContent, /Your Agent Computer/);
     dom.window.close();
   });
@@ -429,9 +444,12 @@ describe('routine editor view: where it runs', () => {
     const caveat = field.querySelector('[data-routine-editor="caveat"]');
     assert.ok(caveat, 'the caveat belongs to the field, not to a help page');
     const body = caveat.textContent.replace(/\s+/g, ' ');
-    assert.match(body, /machine they were made on/i);
-    assert.match(body, /more than one computer/i);
-    assert.match(body, /each of them/i);
+    assert.strictEqual(body.trim(), 'If you use this workspace on more than one computer, each one runs its routines. '
+      + 'To run them on one only, turn routines off on the others, from the Routines page.');
+    // The way out carries the weight: the second sentence alone is bold.
+    const bold = caveat.querySelectorAll('b');
+    assert.strictEqual(bold.length, 1);
+    assert.strictEqual(bold[0].textContent, 'To run them on one only, turn routines off on the others, from the Routines page.');
     // Both options are inside the same field, so the caveat cannot be rendered
     // without the choice it qualifies being on screen.
     assert.ok(field.querySelector('[data-run-on="local"]'));
@@ -489,8 +507,8 @@ describe('routine editor view: saving', () => {
   test('the confirmation step reads the whole thing back in one sentence', () => {
     const { doc, dom } = atReady();
     const body = text(doc);
-    assert.match(body, /Run Compile the ops summary every Monday at 7:00am, on this computer\./);
-    assert.match(body, /London time\. Runs while Rundock is open here\./);
+    assert.match(body, /Run Compile the ops summary every Monday at 7:00am, on your computers\./);
+    assert.match(body, /London time\. Runs on each computer that has this workspace open, while Rundock is open there\./);
     dom.window.close();
   });
 
@@ -962,8 +980,8 @@ describe('routine editor view: editing a saved routine', () => {
 
     const fixed = doc.querySelector('[data-routine-editor="run-on-fixed"]');
     assert.ok(fixed, 'and it is shown rather than dropped: a field that vanishes reads as a setting lost');
-    assert.match(fixed.textContent, /This computer/);
-    assert.match(fixed.textContent, /Runs while Rundock is open here/);
+    assert.match(fixed.textContent, /Your computers/);
+    assert.match(fixed.textContent, /Runs on each computer that has this workspace open, while Rundock is open there/);
     assert.strictEqual(fixed.getAttribute('onclick'), null, 'nothing on it is pressable');
 
     // The skill is the pill in the sentence, which is a value rather than a
@@ -987,7 +1005,7 @@ describe('routine editor view: editing a saved routine', () => {
   test('the caveat about several computers is still shown', () => {
     const { doc, dom } = openEdit();
     assert.match(doc.querySelector('[data-routine-editor="caveat"]').textContent,
-      /Routines run on the machine they were made on/);
+      /If you use this workspace on more than one computer, each one runs its routines\./);
     dom.window.close();
   });
 
@@ -1186,10 +1204,10 @@ describe('routine editor view: a monthly schedule', () => {
     choose(w, 'frequency', 'month');
     choose(w, 'day', '15');
     choose(w, 'time', '09:00');
-    assert.strictEqual(preview(doc), 'Run Compile the ops summary every month on the 15th at 9:00am, on this computer.');
+    assert.strictEqual(preview(doc), 'Run Compile the ops summary every month on the 15th at 9:00am, on your computers.');
     assert.match(caveat(doc), /A missed slot is caught up the next time Rundock is open that month\.$/);
     choose(w, 'day', 'last');
-    assert.strictEqual(preview(doc), 'Run Compile the ops summary every month on the last day at 9:00am, on this computer.');
+    assert.strictEqual(preview(doc), 'Run Compile the ops summary every month on the last day at 9:00am, on your computers.');
     doc.querySelector('.re-actions .settings-btn-primary').click();
     doc.querySelector('[data-routine-editor="save"]').click();
     assert.strictEqual(w.sent.length, 1);
@@ -1204,7 +1222,7 @@ describe('routine editor view: a monthly schedule', () => {
     choose(w, 'frequency', 'month');
     choose(w, 'day', '15');
     choose(w, 'frequency', 'day');
-    assert.strictEqual(preview(doc), 'Run Compile the ops summary every day at 7:30am, on this computer.');
+    assert.strictEqual(preview(doc), 'Run Compile the ops summary every day at 7:30am, on your computers.');
     assert.match(caveat(doc), /A missed slot is caught up the same day you return\.$/);
     choose(w, 'frequency', 'month');
     assert.strictEqual(doc.querySelector('select[data-routine-field="day"]').value, '1',

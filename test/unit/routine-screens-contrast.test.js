@@ -212,6 +212,7 @@ const ROWS = [
   ['Off on this computer', 'routines', ['.next-run.paused-label'], 'color', '--text-2-strong', '--card', 4.5, 4.70, 5.02],
   ['the dot beside Off on this computer', 'routines', ['.rr-paused-dot'], 'background', '--text-2-strong', '--card', 3, 4.70, 5.02],
   ['the header line while off', 'routines', ['.routines-workspace'], 'color', '--text-2', '--elevated', 4.5, 5.03, 4.57],
+  ['the editor caveat\'s way out', 'editor', ['.re-caveat b'], 'color', '--text-1', '--elevated', 4.5, 12.79, 17.40],
   ['the selected scope row\'s name and count', 'sidebar', ['.scope-item.active .scope-name', '.scope-item.active .scope-count'], 'color', '--accent-text', SELECTED, 4.5, 4.72, 4.64],
 ];
 
