@@ -20,6 +20,11 @@
  * hook prints one answer for the call, and it counts only once the whole of it
  * has been written: inside Rundock, an answer that cannot be written blocks the
  * call with exit code 2 and its reason on standard error.
+ * A request the hook cannot name (no tool name, or one that is not a string,
+ * is empty or is only spaces), or whose input it cannot read (a file, shell or
+ * connector tool whose input is missing or is not an object), is refused
+ * inside Rundock the same way, before Rundock is asked, and passes through
+ * outside it.
  */
 
 // A HOOK THAT STOPS WITHOUT ANSWERING REFUSES THE TOOL CALL. The runtime reads a
@@ -4040,6 +4045,19 @@ function fetchAgentNotice(done, { check = false } = {}) {
   req.end();
 }
 
+// WHETHER THIS HOOK CAN JUDGE A REQUEST AT ALL: a tool name that is a string
+// with something in it besides spaces, and, for a tool whose checks read what
+// it was given (a file tool, a shell tool, a connector action), input that is
+// an object. A tool named properly whose checks read no input is judged as
+// any other request is; a tool the hook does not know is not refused here.
+function cannotJudge(request) {
+  const name = request.tool_name;
+  if (typeof name !== 'string' || !name.trim()) return true;
+  const input = request.tool_input;
+  const readsInput = Object.prototype.hasOwnProperty.call(FILE_TOOL_PATH_FIELD, name) || SHELL_TOOLS.has(name) || /^mcp__/.test(name);
+  return readsInput && (!input || typeof input !== 'object' || Array.isArray(input));
+}
+
 function main() {
 let input = '';
 process.stdin.on('data', chunk => { input += chunk; hookInput = input; });
@@ -4078,6 +4096,14 @@ if (hookEvent === 'PostToolUse' || hookEvent === 'PostToolUseFailure') {
 // event it was cannot be read either, so it is taken as the one this hook
 // decides; outside Rundock it still passes through.
 if (!finished || typeof finished !== 'object' || Array.isArray(finished)) { refuseUnanswered(); return; }
+// A REQUEST THIS HOOK CANNOT NAME, OR WHOSE INPUT IT CANNOT READ, is refused
+// the same way, and before anything is asked of Rundock, so it raises no card.
+// Every check below keys on the tool name, and the file, shell and connector
+// checks read the tool's input too, so a request with no name to read, or one
+// of those tools with input that is not an object, matched none of them:
+// nothing marked it as one to refuse, and with Rundock unreachable it was
+// allowed as ordinary access. A finished tool was answered above, as before.
+if (cannotJudge(finished)) { refuseUnanswered(); return; }
 fetchAgentNotice((agentNotice) => {
   // Not running in Rundock: pass through (no decision, Claude Code handles normally)
   if (!process.env.RUNDOCK) {

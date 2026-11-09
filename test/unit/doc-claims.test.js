@@ -926,26 +926,35 @@ describe('ROUTINES.md: where a routine actually runs', () => {
   //
   // ASSERTED AGAINST THE SOURCE BECAUSE THE CLAIM IS THAT NOTHING EXISTS, and
   // a behavioural test can only ever show that one particular thing did not
-  // happen. Read at the time of writing: the file is named in exactly three
-  // places in lib/scheduler.js, one comment, one read inside loadRoutineState
-  // and one write inside saveRoutineState, and no watcher anywhere in the
-  // server names it.
-  test('nothing but the load ever reads the state file', () => {
+  // happen. Read at the time of writing: the file is named in lib/scheduler.js
+  // in comments, in one read inside loadRoutineState, in one write inside the
+  // save, and in one read of a workspace that is NOT open, for a run of it that
+  // ends with no state carried. That last read fills only the state carried for
+  // that workspace, which the tick never decides with. No watcher anywhere in
+  // the server names the file.
+  test('nothing but the load ever reads the open workspace\'s state file', () => {
     const scheduler = fs.readFileSync(path.join(ROOT, 'lib', 'scheduler.js'), 'utf-8');
     // Code lines only: a comment naming the file is prose, not a reader.
     const touches = scheduler.split('\n')
       .filter(line => line.includes('routine-state.json') && !line.trim().startsWith('//'));
-    assert.strictEqual(touches.length, 2,
-      `the state file is named in ${touches.length} code lines, not the read and the write:\n${touches.join('\n')}`);
+    assert.strictEqual(touches.length, 3,
+      `the state file is named in ${touches.length} code lines, not the read, the write and the read for a workspace not open:\n${touches.join('\n')}`);
 
-    // And each of the two sits in the one function it belongs to, so neither
-    // can be reached except by loading the state or saving it.
+    // And each sits in the one function it belongs to, so none can be reached
+    // except by loading the state, saving it, or building a closed workspace's.
     const between = (from, to) => scheduler.slice(scheduler.indexOf(from), scheduler.indexOf(to));
     const load = between('function loadRoutineState()', 'function saveRoutineState()');
     const save = between('function saveRoutineState()', '// ===== SLOTS THAT PASSED UNSERVED =====');
     assert.match(load, /readFileSync[\s\S]{0,80}routine-state\.json|routine-state\.json[\s\S]{0,80}readFileSync/,
-      'the only read is inside the load, which runs at boot and on a workspace switch');
+      'the only read of the open workspace\'s file is inside the load, which runs at boot and on a workspace switch');
     assert.match(save, /routine-state\.json/, 'and the only write is inside the save');
+    const built = between('function stateInItsFile(', '// ===== RUN RECORDS =====');
+    assert.match(built, /routine-state\.json[\s\S]{0,80}readFileSync/, 'the other read builds the state of a workspace');
+    const routed = between('function statesFor(', 'function stateInItsFile(');
+    assert.match(routed,
+      /if \(workspace === getWorkspace\(\)\) return routineState;\n\s*if \(!carriedStates\.has\(workspace\)\) carriedStates\.set\(workspace, stateInItsFile\(workspace\)\);/,
+      'only one that is not open, into the state carried for it, never into the one the tick reads');
+    assert.strictEqual(scheduler.split('stateInItsFile(').length, 3, 'and it is built there and nowhere else');
     // And nothing watches the folder it lives in.
     for (const file of ['lib/scheduler.js', 'server.js']) {
       const src = fs.readFileSync(path.join(ROOT, file), 'utf-8');
@@ -1635,6 +1644,53 @@ describe('ARCHITECTURE.md: a PowerShell command runs with no card only when ever
       assert.strictEqual(shell.isReadOnlyPowerShellCommand(command), false, command);
       assert.notStrictEqual(P.classifyRisk('PowerShell', { command }), 'low', command);
     }
+  });
+});
+
+describe('ARCHITECTURE.md and the hook header: a request the hook cannot name, or whose input it cannot read, is refused inside Rundock', () => {
+  // The claim a reader of either relies on when the runtime's request changes
+  // shape. Pinned by running the hook on such requests, so neither can keep
+  // saying it after the hook stops doing it.
+  const { spawnSync } = require('node:child_process');
+  const HOOK = path.join(ROOT, 'scripts', 'permission-hook.js');
+  const LEAD = '**A permission hook that cannot answer, or cannot read what it was asked, refuses the call.**';
+  const at = architecture.indexOf(LEAD);
+  const passage = at >= 0 ? architecture.slice(at, architecture.indexOf('\n', at)) : '';
+  const hookSrc = fs.readFileSync(HOOK, 'utf-8');
+  const header = hookSrc.slice(0, hookSrc.indexOf('*/')).split('\n').map(line => line.replace(/^\s*\*\s?/, '')).join(' ').replace(/\s+/g, ' ');
+  const COULD_NOT_CHECK = 'Rundock could not check this request, so it was refused rather than approved on your behalf.';
+  const hook = (raw, env) => {
+    const r = spawnSync(process.execPath, [HOOK], {
+      input: raw,
+      encoding: 'utf8',
+      env: { ...process.env, NODE_V8_COVERAGE: '', RUNDOCK: '1', RUNDOCK_PORT: '1', RUNDOCK_WORKSPACE: ROOT, RUNDOCK_CONVO_ID: 'c1', RUNDOCK_CODE_MODE: '', ...env },
+    });
+    let answer = null;
+    try { answer = JSON.parse(r.stdout); } catch (e) { /* asserted below */ }
+    return answer;
+  };
+  const request = (fields) => JSON.stringify({ hook_event_name: 'PreToolUse', cwd: ROOT, session_id: 's', ...fields });
+
+  test('the audit section and the hook header both say it', () => {
+    assert.ok(passage.length > LEAD.length, 'the paragraph is in the audit section');
+    assert.ok(passage.includes('A request the hook cannot name, or whose input it cannot read, is refused inside Rundock the same way, before anything is asked of the server'),
+      'the audit section says it');
+    assert.ok(passage.includes('a file, shell or connector tool whose `tool_input` is missing or is not an object'), 'and which input it means');
+    assert.ok(header.includes('A request the hook cannot name (no tool name, or one that is not a string, is empty or is only spaces), or whose input it cannot read (a file, shell or connector tool whose input is missing or is not an object), is refused inside Rundock'),
+      'the hook header says it');
+  });
+
+  test('and the hook does it: each is refused inside Rundock with nobody to ask, and passes through outside it', () => {
+    for (const raw of ['{}', request({ tool_name: 7 }), request({ tool_name: '' }), request({ tool_name: '  ' }),
+      request({ tool_name: 'Bash' }), request({ tool_name: 'Write', tool_input: 'x' }), request({ tool_name: 'mcp__example__update_thing', tool_input: null })]) {
+      const inside = hook(raw, {});
+      assert.strictEqual(inside && inside.hookSpecificOutput && inside.hookSpecificOutput.permissionDecision, 'deny', `${raw}: ${JSON.stringify(inside)}`);
+      assert.strictEqual(inside.hookSpecificOutput.permissionDecisionReason, COULD_NOT_CHECK, raw);
+      assert.deepStrictEqual(hook(raw, { RUNDOCK: '' }), {}, `${raw}, outside Rundock`);
+    }
+    const named = hook(request({ tool_name: 'WebFetch' }), {});
+    assert.strictEqual(named && named.hookSpecificOutput && named.hookSpecificOutput.permissionDecision, 'allow',
+      `a tool named properly whose checks read no input is judged as before: ${JSON.stringify(named)}`);
   });
 });
 

@@ -62,9 +62,9 @@ test('wireCodexGlueDeps returns the previous set, restorable by identity', () =>
   );
 });
 
-test('the app-server pid accessor answers null before any server exists', () => {
+test('the app-server pid accessor answers no pids before any server exists', () => {
   const glue = freshGlue();
-  assert.strictEqual(glue.getCodexAppServerPid(), null);
+  assert.deepStrictEqual(glue.getCodexAppServerPids(), []);
 });
 
 test('agent instructions resolve the workspace at USE time: a switch redirects the next read', () => {
