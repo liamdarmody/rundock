@@ -1,4 +1,4 @@
-# The mutation shard cap at thirteen, and the plans that call for it
+# The mutation shard cap, and the plans that call for it
 
 `MAX_SHARDS` in `scripts/mutation-scope.js` caps how many shards the full mutation set is cut into. `test/unit/mutation-scope.test.js` holds every shard of the full plan to fifteen minutes ("the full set, planned with the real costs, keeps every shard well under its limit"). This file records the plans behind raising the cap from twelve to thirteen.
 
@@ -23,3 +23,34 @@ A shard is cut at the first row that takes it past its share. Two of the boundar
 
 - **The nightly sweep** reads its shard matrix from the plan, so a thirteenth shard needs no workflow change: the plan step runs `node scripts/mutation-scope.js --all --plan` (`.github/workflows/mutation-nightly.yml:87`), its output carries the matrix (`:65`), and the shard job's matrix is that output (`:107`). Each shard keeps its 30-minute timeout (`:104`).
 - **A pull request's scoped plan** is the same at either cap unless it needs more shards than the cap allows. `test/unit/mutation-scope.test.js` pins that: "a plan the cap does not reach is the same whatever the cap".
+
+## Raised to fifteen
+
+Main grew after the cap was set at thirteen. Its full set now plans its longest shard at 791 s at thirteen, still under the limit. The credential-folder read change (#403) adds rows to the boundary harness. Merged onto main at `36714997` (tree `59b5df34`), that change's full plan puts one shard at 917 s at thirteen, so its planner test fails and the pre-commit gate refuses the merge. On CI, a full-set run of that change merged onto an earlier main had one mutation shard cancelled at its 30-minute timeout.
+
+Each plan below is `node scripts/mutation-scope.js --all --plan --out plan.json`, run in an export (`git archive`) of the tree named, with the cap set as shown. Average is the plan's seconds over its shards. Measured 2026-11-09.
+
+| Rows | Cap | Shards | Longest shard | Average | Shards at 900 s or more |
+|---|---|---|---|---|---|
+| main at `36714997` (2,963 rows) | 13 | 13 | 791 s | 775 s | 0 |
+| main at `36714997` | 14 | 14 | 726 s | 720 s | 0 |
+| main at `36714997` | 15 | 15 | 695 s | 672 s | 0 |
+| main at `36714997` | 16 | 16 | 686 s | 630 s | 0 |
+| main at `36714997` | 17 | 17 | 646 s | 593 s | 0 |
+| the credential-folder read change on main, tree `59b5df34` (2,996 rows) | 13 | 13 | 917 s | 867 s | 1 |
+| tree `59b5df34` | 14 | 14 | 812 s | 806 s | 0 |
+| tree `59b5df34` | 15 | 15 | 791 s | 752 s | 0 |
+| tree `59b5df34` | 16 | 16 | 711 s | 705 s | 0 |
+| tree `59b5df34` | 17 | 17 | 695 s | 663 s | 0 |
+
+## Why fifteen
+
+At fourteen the change's plan clears the limit, but its longest shard is 812 s against an average of 806 s. Every shard is close to full, so the next rows added would put one past 900 s again. At fifteen the longest is 791 s and the average 752 s. Each shard past that is another CI job on every pull request that runs the full set. The planner's ten-minute target (`SECONDS_PER_SHARD`) would want about nineteen shards for this set (11,277 s over 600 s), so the cap is what holds the count, as before.
+
+## Both workflows read the shard count from the plan
+
+Fifteen shards need no workflow change, in either workflow that runs the full set:
+
+- **Pull requests** (`.github/workflows/ci.yml`): the plan step runs `node scripts/mutation-scope.js --plan --out mutation-plan.json` (`:219` and `:221`), which plans the full set when a change touches what every harness depends on. Its output carries the matrix (`matrix: ${{ steps.plan.outputs.matrix }}`, `:157`), and the shard job's matrix is that output (`matrix: ${{ fromJSON(needs.mutation-plan.outputs.matrix) }}`, `:252`). Each shard keeps its 30-minute timeout (`:249`).
+- **The nightly sweep** (`.github/workflows/mutation-nightly.yml`): `node scripts/mutation-scope.js --all --plan --out mutation-plan.json` (`:88`), the matrix output (`:65`) and the shard job's matrix (`:111`), with the same 30-minute timeout (`:108`).
+
