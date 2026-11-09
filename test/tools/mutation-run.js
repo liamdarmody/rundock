@@ -522,6 +522,15 @@ function suiteFile(suite) {
  * absolute path and `suite` repository-relative. A harness whose rows all
  * break one file may leave the target off and pass it as `fallback`.
  *
+ * COSTING A NEW ROW. CI splits the harnesses across shards by the seconds each
+ * row is written down to take in test/tools/mutation-costs.json, so a row
+ * costed short puts its shard past the job's limit. Cost a row from CI, never
+ * from a run on a developer machine, whose times are not the runner's. Until
+ * a CI run has run it, give it the mean cost by label of the rows that run the
+ * same suite, or no cost by label when no row runs that suite yet (it is then
+ * planned at its harness's rate). Once one has, take its cost from that run's
+ * shard log. The table's `about` says how.
+ *
  * Returns the target objects themselves (identity kept, so a harness can key
  * its originals by them). Throws, naming the row, when a target is missing,
  * malformed, or names a file or suite that does not exist: a run must fail
