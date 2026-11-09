@@ -723,6 +723,27 @@ describe('the copy this card ships', () => {
     for (const line of copyShipped()) assert.ok(!/[\u2014\u2013]/.test(line), `dash in: ${line}`);
   });
 
+  // A routine on a set of days runs on the days ticked, holiday or not, and
+  // nothing a row says suggests otherwise: not the copy it builds, not any
+  // string the model exports, and not its source.
+  test('no copy the routines model ships mentions a holiday', () => {
+    const owed = {
+      nextRun: new Date(2026, 10, 9, 9, 0).toISOString(), now: new Date(2026, 10, 9, 10, 15).toISOString(),
+      scheduleKind: 'days', enabled: true, prompt: 'Run the digest skill.', runOn: 'local', zone: ZONE,
+    };
+    const lines = copyShipped().concat(everyString(Object.values(m)), everyString([
+      m.nextRunLabel(owed),
+      m.routineSentence({ schedule: 'every weekday at 09:00', name: 'Digest' }),
+      m.routineSentence({ schedule: 'every monday, wednesday and sunday at 09:00', name: 'Digest' }),
+      m.scheduleProblem({ schedule: 'every mon and fri at 07:00', scheduleReadable: false }),
+    ]));
+    assert.ok(lines.length > 50, `sanity: the copy was walked, found ${lines.length} strings`);
+    assert.ok(lines.includes(m.SCHEDULE_PROBLEM.body), 'sanity: the walk reaches the hint');
+    for (const line of lines) assert.ok(!/holiday/i.test(line), `a holiday in: ${line}`);
+    const src = fs.readFileSync(path.join(__dirname, '..', '..', 'public', 'routines-model.js'), 'utf-8');
+    assert.ok(!/holiday/i.test(src), 'public/routines-model.js mentions a holiday');
+  });
+
   test('the copy is UK spelling', () => {
     for (const line of copyShipped()) {
       assert.ok(!/\b\w+ize[sd]?\b/i.test(line), `US spelling in: ${line}`);

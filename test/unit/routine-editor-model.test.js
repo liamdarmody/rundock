@@ -755,6 +755,22 @@ describe('routine editor: the words it ships', () => {
     }
   });
 
+  // A routine on a set of days runs on the days ticked, holiday or not, and
+  // nothing the editor says suggests otherwise: not the copy it builds, not
+  // any string it exports, and not its source.
+  test('no copy the editor ships mentions a holiday', () => {
+    const lines = copyShipped().concat(everyString(Object.values(model)), everyString([
+      model.scheduleStepFields(),
+      model.scheduleStepFields({ frequency: 'week' }),
+      model.previewSentence({ frequency: 'day', time: '07:00', skillName: 'A skill', runOn: 'local' }),
+    ]));
+    assert.ok(lines.length > 50, `sanity: the copy was walked, found ${lines.length} strings`);
+    assert.ok(lines.includes(model.WEEK_DAYS.none), 'sanity: the walk reaches the week\'s own words');
+    for (const line of lines) assert.ok(!/holiday/i.test(line), `a holiday in: ${line}`);
+    const src = fs.readFileSync(path.join(__dirname, '..', '..', 'public', 'routine-editor-model.js'), 'utf-8');
+    assert.ok(!/holiday/i.test(src), 'public/routine-editor-model.js mentions a holiday');
+  });
+
   // The files this card adds carry no dash either, which is what the
   // repository's own check enforces across the tree.
   test('the files this card adds carry no em dash or en dash', () => {
