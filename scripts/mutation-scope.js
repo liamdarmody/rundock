@@ -88,8 +88,12 @@ const SECONDS_PER_SHARD = 600;
 // from twelve when a slice cut by time took two of the slowest rows of its
 // harness together and was planned past fifteen minutes; at thirteen every
 // shard of the full set plans under the fifteen-minute limit the planner test
-// holds it to (docs/evidence/mutation-shard-cap-evidence.md has the plans).
-const MAX_SHARDS = 13;
+// holds it to. Raised again from thirteen when the set grew until a change
+// adding rows on top planned one shard past that limit. At fourteen the
+// longest shard sits close to the average, so the next rows would put one
+// past it again; fifteen leaves room for them
+// (docs/evidence/mutation-shard-cap-evidence.md has the plans).
+const MAX_SHARDS = 15;
 const COSTS_FILE = 'mutation-costs.json';
 const FALLBACK_SECONDS_PER_ROW = 5;
 
