@@ -976,4 +976,16 @@ describe('the script order the unguarded model read depends on', () => {
       'views/skills.js now loads before routine-editor-model.js, so its unguarded '
       + 'routineEditorModel().UNASSIGNED_REASON read on an unassigned skill\'s page will throw');
   });
+
+  // The editor's model is built in the browser from `root.RundockScheduleDays`,
+  // which only exists once schedule-days.js has run. Loaded after it, the model
+  // is built with nothing to read days through, and the page fails as it loads.
+  test('index.html loads schedule-days.js before routine-editor-model.js', () => {
+    const daysAt = INDEX_SRC.indexOf('<script src="/schedule-days.js">');
+    const editorModelAt = INDEX_SRC.indexOf('<script src="/routine-editor-model.js">');
+    assert.ok(daysAt !== -1, 'index.html no longer loads schedule-days.js');
+    assert.ok(editorModelAt !== -1, 'index.html no longer loads routine-editor-model.js');
+    assert.ok(daysAt < editorModelAt,
+      'routine-editor-model.js now loads before schedule-days.js, so the model is built without the days it reads');
+  });
 });
