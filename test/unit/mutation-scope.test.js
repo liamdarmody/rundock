@@ -454,6 +454,45 @@ describe('shards are planned by time, not rows', () => {
     const plan = buildPlan(decide(['--all'], { root: REPO, toolsDir: tools }), { toolsDir: tools });
     for (const s of plan.shards) assert.ok(s.seconds <= 15 * 60, `shard ${s.index} is planned at ${s.seconds}s`);
   });
+
+  // Two slices of the boundary harness that CI ran in one shard each, from the
+  // first row's label to the last, and the seconds their harness run took.
+  // A third of their rows had no cost of their own and were planned at the
+  // harness's average, a fraction of what their suites take on CI, and the
+  // rest had costs inferred from older runs or timed on a developer machine,
+  // so the plan put each at about nine minutes: the first took twenty-eight,
+  // and the second ran to the job's thirty-minute limit and was cancelled.
+  const BOUNDARY = 'mutate-workspace-boundary-guards.js';
+  const OVERRUNS = [
+    { run: 42625901207, first: 'Connector card: a well-known key makes the card warn',
+      last: 'Credential reads: a cd that may not last is not taken as where the shell is', seconds: 1704 },
+    { run: 42626462142, first: 'Connector card: the fields past those shown are not drawn',
+      last: 'Shell code: a route-shaped literal whose first folder is not on this machine is a place', seconds: 1788 },
+  ];
+
+  test('the boundary harness is planned at what CI measured: no shard past the margin, and no overrun slice in one shard', () => {
+    // Half the job's thirty minutes, the bound the full set is held to above.
+    // A row costed below what CI takes plans a slice short and the shard runs
+    // long, so the plan is checked against the slices CI timed, as well as
+    // against the margin.
+    const MARGIN = 15 * 60;
+    const tools = path.join(REPO, 'test', 'tools');
+    const costs = readCosts(tools);
+    const h = loadHarnesses({ toolsDir: tools, root: REPO }).find((x) => x.tool === BOUNDARY);
+    const { shards } = planShards([h], { costs });
+    for (const s of shards) assert.ok(s.seconds <= MARGIN, `shard ${s.index} is planned at ${s.seconds}s, past ${MARGIN}s`);
+    for (const o of OVERRUNS) {
+      const from = h.rowLabels.indexOf(o.first);
+      const to = h.rowLabels.indexOf(o.last);
+      assert.ok(from !== -1 && to > from, `sanity: the slice run ${o.run} timed is rows today (${from}, ${to})`);
+      const slice = { tool: BOUNDARY, rows: to + 1 - from, rowLabels: h.rowLabels.slice(from, to + 1), rowSuites: h.rowSuites.slice(from, to + 1) };
+      const planned = planShards([slice], { costs, target: Infinity }).seconds;
+      assert.ok(planned >= o.seconds * 0.75,
+        `rows ${from}:${to + 1} are planned at ${planned}s; CI run ${o.run} took ${o.seconds}s over them`);
+      const holding = shards.filter((s) => s.units.some((u) => u.tool === BOUNDARY && (u.start ?? 0) <= to && (u.end ?? h.rows) > from));
+      assert.ok(holding.length >= 2, `rows ${from}:${to + 1} are planned in ${holding.length} shard(s)`);
+    }
+  });
 });
 
 describe('every harness, asked for and none found, is refused rather than planned as nothing to do', () => {
