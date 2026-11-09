@@ -408,6 +408,16 @@ const KEYCHAIN_HOOK_FLOW = { src: path.join(ROOT, 'scripts', 'permission-hook.js
 // reaches that check.
 const SECRET_REACH = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/secret-reach.test.js' };
 const SECRET_REACH_GRANT = { src: path.join(ROOT, 'lib', 'workspace', 'boundary.js'), suite: 'test/integration/secret-reach-card.test.js' };
+// A runtime folder handed to a program that reads all of it. Proven by the
+// suite that drives the real hook and the classifier over its spellings; what
+// happens when the reading gives up is proven where the hook is made to fail.
+const SECRET_FOLDER = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/secret-folder-read.test.js' };
+// Where the server decides whether a stored grant answers a request. Proven
+// only through the real server, with the real hook's request and a grant
+// stored over the runtime folder.
+const SECRET_FOLDER_GRANT = { src: path.join(ROOT, 'lib', 'http-router.js'), suite: 'test/integration/secret-reach-card.test.js' };
+// The same folder rule, through the real hook and the real server.
+const SECRET_FOLDER_CARD = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/integration/secret-reach-card.test.js' };
 
 // The shell startup files and Rundock's record of them: the hook's match and
 // its card's words, the stored-grant check, Codex grading, the sandbox block,
@@ -3708,6 +3718,132 @@ const MUTATIONS = [
   [SHELL_CODE, "Shell code: a cd to a variable is trusted as a base",
     " || CD_NOT_LITERAL.test(target)) return null;",
     ") return null;"],
+  // ===== A RUNTIME FOLDER HANDED TO A PROGRAM THAT READS ALL OF IT =====
+  // A word kept as written, its quotes and escapes in place, is not the
+  // folder it names: `~/\.claude` and `"$HOME"/.claude` go unasked.
+  [SECRET_FOLDER, "Folder reads: a reader's words are kept as written, quotes and escapes in",
+    "    out.push({ words: seg.lexed.map(w => w.text), at: seg.at, pipedTo: next && next.op === '|' ? next.lexed.map(w => w.text) : null });",
+    "    out.push({ words: seg.lexed.map(w => w.raw), at: seg.at, pipedTo: next && next.op === '|' ? next.lexed.map(w => w.raw) : null });"],
+  [SECRET_FOLDER, "Folder reads: a group or a function body is not read as commands",
+    "      if (close) shellCommandsIn(w.raw.slice(1, w.raw.lastIndexOf(close)), posixText, seg.at + Math.max(0, seg.text.indexOf(w.raw)) + 1, depth + 1, out);",
+    ""],
+  [SECRET_FOLDER, "Folder reads: a substitution is not read as commands",
+    "    for (const body of substitutions(seg.text, dialect).bodies) shellCommandsIn(body, posixText, seg.at + Math.max(0, seg.text.indexOf(body)), depth + 1, out);",
+    ""],
+  // Past the depth read, the words there are taken as folders read whole.
+  // Take none instead and a reader nested deep goes unasked.
+  [HOOK_CRASH, "Folder reads: a reader nested past the depth read is taken to read nothing",
+    "    out.push({ words: null, loose: [...loose, '.'], at: offset, pipedTo: null });",
+    "    out.push({ words: null, loose: [], at: offset, pipedTo: null });"],
+  // The program is found past the programs that run the next one, and their
+  // options' values, as the shell's own -c is. Take the first word instead and
+  // `env -u FOO rg token ~/.claude` is a run of env.
+  [SECRET_FOLDER, "Folder reads: the program is the first word, whatever runs it",
+    "    const i = programIndex(ws);",
+    "    const i = 0;"],
+  [SECRET_FOLDER, "Folder reads: a keyword before the program is taken as the program",
+    "  while (lead < words.length - 1 && COMMAND_LEADS.has(words[lead]) && words[lead] !== 'time') lead++;",
+    ""],
+  [SECRET_FOLDER, "Folder reads: xargs behind a program that runs it is not seen",
+    "  return ws.slice(0, programIndex(ws) + 1).some(w => w.split('/').pop() === 'xargs');",
+    "  return (ws[0] || '').split('/').pop() === 'xargs';"],
+  [SECRET_FOLDER, "Folder reads: env's --unset is taken to have no value, so the name it unsets is the program",
+    "env: /^(?:-[uSCP]|--unset|--chdir|--split-string)$/,",
+    "env: /^(?:-[uSCP]|--chdir|--split-string)$/,"],
+  [SECRET_FOLDER, "Folder reads: a loop word naming home is left with its ~ unread",
+    ".flatMap(loopForms).map(homeIn)) {",
+    ".flatMap(loopForms)) {"],
+  // An option's value is not a folder, and a pattern given to -e or -f leaves
+  // every other word one. Break either half and a search given no folder
+  // (`cd ~/.claude && rg -e token`) takes its pattern for one.
+  [SECRET_FOLDER, "Folder reads: a long option's value given as the next word is taken for a folder",
+    "      if (value === null && spec.long.includes(name) && k + 1 < args.length) value = args[++k];",
+    ""],
+  [SECRET_FOLDER, "Folder reads: a short option's value given as the next word is taken for a folder",
+    "        given.push([a[c], c + 1 < a.length ? a.slice(c + 1) : (k + 1 < args.length ? args[++k] : null)]);",
+    "        given.push([a[c], c + 1 < a.length ? a.slice(c + 1) : null]);"],
+  [SECRET_FOLDER, "Folder reads: the first folder is taken for the pattern even when -e gave it",
+    "      operands = spec.patterns && !lists && !has(...spec.patterns) ? opt.operands.slice(1) : opt.operands;",
+    "      operands = opt.operands.slice(1);"],
+  [SECRET_FOLDER, "Folder reads: a shortened long option is not the option it stands for",
+    "    return could.length === 1 ? could[0] : written;",
+    "    return written;"],
+  [SECRET_FOLDER, "Folder reads: a folder cp copies into with -t is not counted",
+    "      if (spec.into) operands = operands.concat(values(...spec.into));",
+    ""],
+  [SECRET_FOLDER, "Folder reads: grep's -d recurse is not read as recursive",
+    " || values('d', 'directories').includes('recurse');",
+    ";"],
+  [SECRET_FOLDER, "Folder reads: a search given no folder is not read where it runs",
+    "    if (!operands.length && SEARCHES_CWD_UNNAMED.has(family)) operands = ['.'];",
+    ""],
+  // find's own options come before its folders. Read one as the expression
+  // and `find -L ~/.claude -exec cat {} +` is judged as a search of `.`.
+  [SECRET_FOLDER, "Folder reads: an option find takes before its folders ends them",
+    "    if (/^-[HLPEXdsx]+$/.test(a)) continue;",
+    ""],
+  [SECRET_FOLDER, "Folder reads: the folder BSD find's -f names is not counted",
+    "    if (/^-[HLPEXdsx]*f$/.test(a)) { if (k + 1 < args.length) roots.push(args[++k]); continue; }",
+    ""],
+  [SECRET_FOLDER, "Folder reads: GNU find's -D list is taken for a folder",
+    "    if (a === '-D') { k++; continue; }",
+    ""],
+  [SECRET_FOLDER, "Folder reads: find's -- is taken for the expression",
+    "    if (a === '--') { k++; break; }\n    if (a === '-D')",
+    "    if (a === '-D')"],
+  // A mode that lists names opens no file, unless the names go on to xargs.
+  [SECRET_FOLDER, "Folder reads: rg --files is read as a search",
+    "      if (lists && !runsXargs(pipedTo)) continue;",
+    ""],
+  [SECRET_FOLDER, "Folder reads: the names rg --files hands to xargs are not read",
+    "      if (lists && !runsXargs(pipedTo)) continue;",
+    "      if (lists) continue;"],
+  [SECRET_FOLDER, "Folder reads: the first folder rg --files lists is taken for a pattern",
+    "spec.patterns && !lists && !has(",
+    "spec.patterns && !has("],
+  // A stored grant never answers a shell command, nor a crossing tagged
+  // secret. Two guards hold that, the request's `grantable: false` and the
+  // secret check in crossingCovered, and either alone keeps the card, so this
+  // breaks the decision itself: a stored grant reaching every path answers.
+  [SECRET_FOLDER_GRANT, "Folder reads: a stored grant over the runtime folder answers a read of everything in it",
+    "        const uncovered = grantable ? crossings.filter(c => !crossingCovered(c)) : crossings;\n"
+    + "        if (data.boundary && grantable && crossings.length && uncovered.length === 0) {",
+    "        const uncovered = crossings.filter(c => !require('./workspace/boundary.js').boundaryGrantCovers(c.path));\n"
+    + "        if (data.boundary && crossings.length && uncovered.length === 0) {"],
+  // pax writing an archive reads all of a folder with no flag to say so.
+  [SECRET_FOLDER, "Folder reads: pax is not a reader",
+    "'7z', '7za', 'ditto', 'pax']);",
+    "'7z', '7za', 'ditto']);"],
+  // The control failing: a program this does not know, given a folder after a
+  // recursive flag, reads it. Recursive diff is read only this way.
+  [SECRET_FOLDER, "Folder reads: a program this does not know is never a reader, whatever its flags",
+    "      const flagged = args.some(a => /^-[A-Za-z]*[rR][A-Za-z]*$/.test(a)) || args.includes('--recursive');",
+    "      const flagged = false;"],
+  // A folder cpio copies into: every folder pass-through is handed, and the
+  // folder copy-in extracts into. Drop either and a workspace file named
+  // `.credentials.json` replaces the credential file with no secret card.
+  [SECRET_FOLDER, "Folder reads: the folder a cpio pass-through copies into is not counted",
+    "  if (mode('p', 'pass-through')) folders.push(...opt.operands.map(o => (dir && !/^[/~$]/.test(o) ? `${dir}/${o}` : o)));",
+    ""],
+  [SECRET_FOLDER_CARD, "Folder reads: the folder a cpio pass-through copies into is not counted, against the real server",
+    "  if (mode('p', 'pass-through')) folders.push(...opt.operands.map(o => (dir && !/^[/~$]/.test(o) ? `${dir}/${o}` : o)));",
+    ""],
+  [HOOK_CRASH, "Folder reads: the folder a cpio pass-through copies into is not counted, when something fails",
+    "  if (mode('p', 'pass-through')) folders.push(...opt.operands.map(o => (dir && !/^[/~$]/.test(o) ? `${dir}/${o}` : o)));",
+    ""],
+  [SECRET_FOLDER, "Folder reads: the folder a cpio copy-in extracts into is not counted",
+    "  if (mode('i', 'extract') && !has('t', 'list', 'to-stdout', 'only-verify-crc')) folders.push(dir || '.');",
+    ""],
+  [SECRET_FOLDER, "Folder reads: a cpio mode written as a shortened long option is not counted",
+    "  const mode = (letter, name) => has(letter) || opt.given.some(([n]) => n.length > 1 && name.startsWith(n));",
+    "  const mode = (letter, name) => has(letter, name);"],
+  [SECRET_FOLDER, "Folder reads: a relative cpio pass-through folder is not measured from -D",
+    "(dir && !/^[/~$]/.test(o) ? `${dir}/${o}` : o)",
+    "o"],
+  // The other side: a copy-in that only lists stays as it is today.
+  [SECRET_FOLDER, "Folder reads: a cpio copy-in that only lists is counted as extracting",
+    "!has('t', 'list', 'to-stdout', 'only-verify-crc')",
+    "true"],
 
   // ===== CLAUDE CODE BLOCKS THE CALL WHEN THE PERMISSION HOOK FAILS =====
   // Without the field, a hook that fails lets the call through. With any value
