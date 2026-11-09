@@ -95,6 +95,9 @@ const EXPECTED_TYPES = [
   'save_routine', 'delete_routine', 'set_routine_paused',
   'set_routine_enabled', 'set_routine_schedule', 'approve_routine_plan',
   'allow_held_routines', 'dismiss_held_routines',
+  // Routines off on this computer, for the open workspace. Pressed by
+  // test/unit/routines-here.test.js.
+  'set_routines_here',
   'search_conversations', 'search_universal', 'get_session_history',
   'save_file', 'create_path', 'reveal_in_finder',
   // Named sources for an extension view, pressed by

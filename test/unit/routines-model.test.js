@@ -368,7 +368,7 @@ describe('the rest of the row', () => {
     });
     assert.strictEqual(row.sentence, 'Every day at 7:00am, run: Compile the ops summary');
     assert.strictEqual(row.meta, 'Piper');
-    assert.strictEqual(row.runsOn, 'Runs on this computer');
+    assert.strictEqual(row.runsOn, 'Runs on your computers');
     assert.strictEqual(row.status.text, 'Ran today, 7:00am, London time');
     assert.strictEqual(row.nextRun.text, 'Next run: tomorrow, 7:00am, London time');
   });

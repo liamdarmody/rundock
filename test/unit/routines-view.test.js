@@ -636,7 +636,7 @@ describe('the four rows', () => {
     w.renderRoutines();
     const meta = text(rowNamed(doc, 'Ran on time').querySelector('.rr-meta:not(.rr-run-line)'));
     assert.match(meta, /Piper/);
-    assert.match(meta, /Runs on this computer/);
+    assert.match(meta, /Runs on your computers/);
     dom.window.close();
   });
 

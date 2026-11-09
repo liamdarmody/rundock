@@ -188,6 +188,7 @@ const NOT_CHEAP = {
   'test/unit/routine-write.test.js': 'behaviour: writes routine files and reads them back',
   'test/unit/routines-end-to-end.test.js': 'behaviour: drives a routine from creation to run',
   'test/unit/routines-view.test.js': 'behaviour: boots a document and presses the routine rows',
+  'test/unit/routines-here-view.test.js': 'behavior: boots a document and presses the switch that turns routines off on this computer',
   'test/unit/run-detail-model.test.js': 'behaviour: reduces run events into the shape a screen renders',
   'test/unit/team-sidebar.test.js': 'behaviour: boots a document and renders the roster',
   'test/unit/style-resolve-diff.test.js': 'deliberately not wired into the gate at all, so the cheap phase '

@@ -714,10 +714,10 @@ describe('the whole journey, by pressing only', () => {
     choose(doc, w, 'time', '07:00');
     press(doc, '[data-run-on="local"]');
 
-    assert.match(editorText(doc), /Run Compile the ops summary every Monday at 7:00am, on this computer\./);
+    assert.match(editorText(doc), /Run Compile the ops summary every Monday at 7:00am, on your computers\./);
     press(doc, '.re-actions .settings-btn-primary');
 
-    assert.match(editorText(doc), /London time\. Runs while Rundock is open here\./);
+    assert.match(editorText(doc), /London time\. Runs on each computer that has this workspace open, while Rundock is open there\./);
     press(doc, '[data-routine-editor="save"]');
 
     assert.strictEqual(w.sent.length, 1);
