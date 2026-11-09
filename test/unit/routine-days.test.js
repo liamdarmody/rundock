@@ -312,19 +312,34 @@ describe('the editor: day, week and month', () => {
 });
 
 describe('the words', () => {
-  const preview = (days) => editor.previewSentence({
-    frequency: 'week', days, time: '09:00', skillName: 'Digest', runOn: 'local',
+  const preview = (days, runOn = 'local') => editor.previewSentence({
+    frequency: 'week', days, time: '09:00', skillName: 'Digest', runOn,
   });
 
+  // THE LAST WORDS ARE THE RUN ON OPTION'S OWN. Every preview ends on the
+  // chosen option's `sentence`, so each line is written out in full with that
+  // sentence read off the option, for every option the field has: if the
+  // option's words change, these lines follow them, and a set preview that
+  // wrote its own ending would differ from the option, and from the daily
+  // preview beside it, here.
   test('the preview says weekday in full, and a set by its short names with commas and "and"', () => {
-    const place = editor.runOnOption('local').sentence;
-    assert.strictEqual(preview(WEEKDAYS), `Run Digest every weekday (Monday to Friday) at 9:00am, on ${place}.`);
-    assert.strictEqual(preview(['monday', 'wednesday', 'sunday']), `Run Digest every Mon, Wed and Sun at 9:00am, on ${place}.`);
-    assert.strictEqual(preview(['monday', 'friday']), `Run Digest every Mon and Fri at 9:00am, on ${place}.`);
-    assert.strictEqual(preview(['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday']),
-      `Run Digest every Mon, Tue, Wed, Thu, Fri and Sat at 9:00am, on ${place}.`);
-    assert.strictEqual(preview(['thursday']), `Run Digest every Thursday at 9:00am, on ${place}.`, 'one day, as today');
-    assert.strictEqual(preview(WEEK), `Run Digest every day at 9:00am, on ${place}.`);
+    const options = editor.runOnOptions();
+    assert.ok(options.length >= 2, 'sanity: the field has its options');
+    for (const option of options) {
+      const place = option.sentence;
+      const run = (days) => preview(days, option.value);
+      assert.strictEqual(run(WEEKDAYS), `Run Digest every weekday (Monday to Friday) at 9:00am, on ${place}.`);
+      assert.strictEqual(run(['monday', 'friday']), `Run Digest every Mon and Fri at 9:00am, on ${place}.`, 'two days');
+      assert.strictEqual(run(['monday', 'wednesday', 'sunday']),
+        `Run Digest every Mon, Wed and Sun at 9:00am, on ${place}.`, 'three days');
+      assert.strictEqual(run(['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday']),
+        `Run Digest every Mon, Tue, Wed, Thu, Fri and Sat at 9:00am, on ${place}.`, 'six days');
+      assert.strictEqual(run(['thursday']), `Run Digest every Thursday at 9:00am, on ${place}.`, 'one day, as today');
+      assert.strictEqual(run(WEEK), `Run Digest every day at 9:00am, on ${place}.`);
+      const daily = editor.previewSentence({ frequency: 'day', time: '09:00', skillName: 'Digest', runOn: option.value });
+      assert.strictEqual(run(['monday', 'friday']).split(' at 9:00am')[1], daily.split(' at 9:00am')[1],
+        `a set ends as the daily preview does, on ${option.value}`);
+    }
   });
 
   test('the row says weekday, a set by its short names, and one day as it does today', () => {
