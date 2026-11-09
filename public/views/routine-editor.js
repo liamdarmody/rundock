@@ -172,8 +172,25 @@
     return h;
   }
 
+  // Whether routines are off on this computer for the open workspace: the
+  // server's answer, carried on the roster. The local option says so.
+  function offHere() {
+    return typeof rosterRoutinesHere !== 'undefined' && !!rosterRoutinesHere && rosterRoutinesHere.off === true;
+  }
+
+  // The caveat, with its way out given weight: the second sentence is the
+  // thing to do about the first.
+  function caveatHtml(field) {
+    const action = field.caveatAction;
+    const at = action ? field.caveat.lastIndexOf(action) : -1;
+    const body = at > 0
+      ? `${escText(field.caveat.slice(0, at))}<b>${escText(action)}</b>${escText(field.caveat.slice(at + action.length))}`
+      : escText(field.caveat);
+    return `<p class="re-caveat" data-routine-editor="caveat">${body}</p>`;
+  }
+
   function runOnField(m) {
-    const field = m.runOnField();
+    const field = m.runOnField({ offHere: offHere() });
     let h = `<div class="re-field" data-routine-editor="run-on-field">
       <p class="re-field-label">${escText(field.label)}</p>
       <div class="re-list">`;
@@ -197,7 +214,7 @@
     // Inside the field, because the requirement is that it appears where the
     // choice is made. A caveat rendered next to the field is a caveat one
     // layout change away from a help page.
-    h += `<p class="re-caveat" data-routine-editor="caveat">${escText(field.caveat)}</p>`;
+    h += caveatHtml(field);
     return h + '</div>';
   }
 
@@ -230,8 +247,10 @@
    * the reader is setting its time for the first time or the second.
    */
   function fixedRunOnField(m) {
-    const field = m.runOnField();
-    const option = m.runOnOption(state.runOn);
+    const field = m.runOnField({ offHere: offHere() });
+    // Off the field rather than off runOnOption, so the option carries the
+    // same words here as on the picker, the off sentence included.
+    const option = field.options.filter(o => o.value === state.runOn)[0];
     if (!option) return '';
     return `<div class="re-field" data-routine-editor="run-on-field">
       <p class="re-field-label">${escText(field.label)}</p>
@@ -239,7 +258,7 @@
         <div class="re-name">${escText(option.name)}</div>
         <div class="re-meta">${escText(option.meta)}</div>
       </div>
-      <p class="re-caveat" data-routine-editor="caveat">${escText(field.caveat)}</p>
+      ${caveatHtml(field)}
     </div>`;
   }
 

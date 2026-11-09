@@ -285,3 +285,54 @@ test.describe('the scope rows from the keyboard', () => {
     await expect.poll(() => fill('#sidebar-routines .scope-item[data-scope="wren"]'), { message: 'the hover fill' }).toBe(hover);
   });
 });
+
+// ===== THE SWITCH FOR THIS COMPUTER, FROM THE KEYBOARD =====
+//
+// The Routines page draws the switch whatever the shared workspace holds, on
+// the list or on the empty pane. Tab reaches it, its name and state are
+// exposed as a switch, and Space asks the server: the switch moves when the
+// server's roster says so, and the focus stays on it across that redraw.
+// Routines are turned back on afterwards over the spec's own socket, whatever
+// happened, because the specs that run after this one share the workspace.
+async function routinesOnAgain() {
+  await overWs(async ({ send, waitFor }) => {
+    send({ type: 'get_agents' });
+    const roster = await waitFor(m => m.type === 'agents' && m.workspace);
+    if (!roster.routinesHere || roster.routinesHere.off !== true) return;
+    send({ type: 'set_routines_here', on: true, workspace: roster.workspace });
+    await waitFor(m => m.type === 'routines_here_failed'
+      || (m.type === 'agents' && m.routinesHere && m.routinesHere.off === false));
+  });
+}
+
+test.describe('the switch for this computer from the keyboard', () => {
+  test.afterAll(routinesOnAgain);
+
+  test('Tab reaches it, it is a named switch, and Space turns routines off and on through the server', async ({ page }) => {
+    const errors = [];
+    page.on('pageerror', (e) => errors.push(e.message));
+    await page.goto('/');
+    await page.click('.nav-item[data-nav="routines"]');
+    const toggle = page.getByRole('switch', { name: 'Routines on this computer' });
+    await expect(toggle).toBeVisible();
+    await expect(toggle).toBeChecked();
+
+    // From the header control, Tab until the switch has the focus.
+    await page.locator('#routines-add-btn').focus();
+    const onSwitch = () => page.evaluate(() => !!document.activeElement
+      && document.activeElement.matches('[data-routines-here] input[role="switch"]'));
+    for (let i = 0; i < 40 && !(await onSwitch()); i++) await page.keyboard.press('Tab');
+    expect(await onSwitch(), 'Tab never reached the switch').toBe(true);
+
+    await page.keyboard.press('Space');
+    await expect(toggle, 'Space did not turn routines off through the server').not.toBeChecked();
+    await expect(page.locator('.routines-here-title')).toHaveText('Routines are off on this computer');
+    expect(await onSwitch(), 'the redraw the answer caused took the focus off the switch').toBe(true);
+
+    await page.keyboard.press('Space');
+    await expect(toggle, 'Space did not turn routines back on').toBeChecked();
+    await expect(page.locator('.routines-here-title')).toHaveText('Routines on this computer');
+    expect(await onSwitch()).toBe(true);
+    expect(errors).toEqual([]);
+  });
+});

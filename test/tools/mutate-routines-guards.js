@@ -239,6 +239,20 @@ const SWITCH = 'test/integration/routine-outlives-switch.test.js';
 const SWITCH_CLEANUP = { src: path.join(ROOT, 'server.js'), suite: SWITCH };
 const LIVE_RUN_CLEANUP = { src: path.join(ROOT, 'server.js'), suite: 'test/unit/orphan-cleanup-live-runs.test.js' };
 const SWITCH_SCHEDULER = { src: path.join(ROOT, 'lib', 'scheduler.js'), suite: SWITCH };
+// Routines off on this computer, for one workspace. The tick's check and what
+// it records while off are watched by the suite that drives the tick across a
+// daily, a weekly and a monthly routine; the record's key and its failure path
+// by the record's own suite.
+const SCHEDULER_OFF_HERE = { src: path.join(ROOT, 'lib', 'scheduler.js'), suite: 'test/integration/routines-off-here.test.js' };
+const OFF_HERE_RECORD = { src: path.join(ROOT, 'lib', 'agents', 'routines-here.js'), suite: 'test/unit/routines-here.test.js' };
+// The switch as a page draws it: on the empty pane as on the list, from the
+// state the server's roster carries through the shell's own roster case, and
+// a failure line that goes once another window's change arrives. Watched by
+// the suite that drives the real roster message into that case.
+const OFF_HERE_VIEW = { src: path.join(ROOT, 'public', 'views', 'routines.js'), suite: 'test/unit/routines-here-view.test.js' };
+const OFF_HERE_APP = { src: path.join(ROOT, 'public', 'app.js'), suite: 'test/unit/routines-here-view.test.js' };
+const OFF_HERE_MODEL = { src: path.join(ROOT, 'public', 'routines-model.js'), suite: 'test/unit/routines-here-view.test.js' };
+const OFF_HERE_ROSTER = { src: path.join(ROOT, 'lib', 'agents', 'routines-here.js'), suite: 'test/unit/routines-here-view.test.js' };
 
 // [target, label, the guard as it is written, what it becomes without it]
 const MUTATIONS = [
@@ -1197,7 +1211,7 @@ const MUTATIONS = [
     '      + (subtitle ? `<div class="routines-subtitle">${esc(subtitle)}</div>` : \'\')',
     "      + ''"],
   [VIEW, 'the empty pane takes its own state line rather than the sentence about a full list',
-    '  let h = headerHtml(null)',
+    '  let h = headerHtml(null, null, hereHtml())',
     '  let h = listHeaderHtml()'],
   [MODEL, 'the scoped subtitle names the agent rather than repeating the unscoped sentence',
     "      subtitle: agentName ? LEAD.scopedLead.replace('{agent}', () => agentName) : LEAD.lead,",
@@ -1528,6 +1542,44 @@ const MUTATIONS = [
   [SWITCH_SCHEDULER, 'a run\'s own state file that cannot be read is not written over with its ending',
     '    else if (unreadStates.has(states)) throw new Error(`${unreadStates.get(states)}, so it is left as it is`);\n',
     ''],
+
+  // ===== ROUTINES OFF ON THIS COMPUTER =====
+  [SCHEDULER_OFF_HERE, 'off on this computer: the tick fires a due routine anyway',
+    '          if (offHere) continue;\n',
+    ''],
+  [SCHEDULER_OFF_HERE, 'off on this computer: a slot that passes while off is recorded as missed',
+    'routine.enabled !== false && !offHere);',
+    'routine.enabled !== false);'],
+  [SCHEDULER_OFF_HERE, 'off on this computer: a monthly slot that passed while off is run when they come back on',
+    '(routine.paused || !routine.enabled || offHere)',
+    '(routine.paused || !routine.enabled)'],
+  [OFF_HERE_RECORD, 'off on this computer: one switch for every workspace rather than one per workspace',
+    '  return workspaceKey(dir);',
+    "  return 'every-workspace';"],
+  [OFF_HERE_RECORD, 'off on this computer: a record nobody can read turns routines off',
+    '  if (!data) return false;',
+    '  if (!data) return true;'],
+  [OFF_HERE_RECORD, 'off on this computer: a record that could not be read is written over',
+    '    setAsideUnread();\n',
+    ''],
+  [OFF_HERE_VIEW, 'off on this computer: the empty pane draws no switch',
+    '  let h = headerHtml(null, null, hereHtml())',
+    "  let h = headerHtml(null, null, '')"],
+  [OFF_HERE_APP, 'off on this computer: the roster case does not record the switch\'s state',
+    'agents=d.agents; rosterRoutinesHere=d.routinesHere||null; ',
+    'agents=d.agents; '],
+  [OFF_HERE_VIEW, 'off on this computer: a failure line outlives the change another window made',
+    '  if (hereProblemFor && (hereProblemFor.off !== routinesOffHere() || hereProblemFor.workspace !== routinesRosterWorkspace())) {',
+    '  if (false) {'],
+  [OFF_HERE_VIEW, 'off on this computer: the switch loses the focus to the redraw its press causes',
+    '  if (again) again.focus();\n',
+    ''],
+  [OFF_HERE_MODEL, 'off on this computer: Turn on is withheld while routines are off here',
+    '    if (!isServed(input)) return true;\n',
+    '    if (!isServed(input)) return true;\n    if (input.offHere) return true;\n'],
+  [OFF_HERE_ROSTER, 'off on this computer: a record nobody can read reaches the window as off',
+    '  if (!data) return false;',
+    '  if (!data) return true;'],
 
 ];
 
