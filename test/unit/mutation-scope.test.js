@@ -452,7 +452,14 @@ describe('shards are planned by time, not rows', () => {
   test('the full set, planned with the real costs, keeps every shard well under its limit', () => {
     const tools = path.join(REPO, 'test', 'tools');
     const plan = buildPlan(decide(['--all'], { root: REPO, toolsDir: tools }), { toolsDir: tools });
-    for (const s of plan.shards) assert.ok(s.seconds <= 15 * 60, `shard ${s.index} is planned at ${s.seconds}s`);
+    // The costs come from CI shard logs, so a red here is the cap, not a
+    // cost: the full set has outgrown MAX_SHARDS. Raise it in a change of its
+    // own rather than lowering a cost to fit.
+    for (const s of plan.shards) {
+      assert.ok(s.seconds <= 15 * 60, `shard ${s.index} is planned at ${s.seconds}s, past ${15 * 60}s. `
+        + 'The costs in test/tools/mutation-costs.json are taken from CI, so this means the full set needs more shards: '
+        + 'raise MAX_SHARDS in scripts/mutation-scope.js in a separate change, and do not lower a cost to make it fit.');
+    }
   });
 
   // Every slice of the boundary harness that CI ran on main at 2ac7cce6, run
@@ -492,37 +499,74 @@ describe('shards are planned by time, not rows', () => {
       last: 'Shell code: a route-shaped literal whose first folder is not on this machine is a place', seconds: 1788 },
   ];
 
-  test('the boundary harness is planned at what CI measured: every shard within the margin, every slice CI timed planned near its time, and no overrun slice in one shard', () => {
-    // Half the job's thirty minutes, the bound the full set is held to above.
-    // A shard's planned seconds are only as good as its rows' costs: a row
-    // costed below what CI takes plans its shard short, and the shard runs
-    // long however far under the margin it was planned. So every shard is
-    // held to the margin, and every slice CI timed, which together reach
-    // every row, must be planned at three quarters or more of what it took.
-    const MARGIN = 15 * 60;
-    const tools = path.join(REPO, 'test', 'tools');
-    const costs = readCosts(tools);
-    const h = loadHarnesses({ toolsDir: tools, root: REPO }).find((x) => x.tool === BOUNDARY);
+  // What the boundary harness's plan gets wrong against CI, as a list of
+  // problems. Every planned shard is held to the margin. A shard planned under
+  // it still runs long when its rows are costed short, so each slice CI timed
+  // must also be planned at three quarters or more of what it took, and each
+  // overrun slice must span at least two shards. A slice is found by its first
+  // and last row's labels; one whose endpoint was renamed or removed is
+  // skipped rather than failed, as long as most slices are still found.
+  function boundaryPlanProblems(h, costs, { timed, overruns, margin = 15 * 60, found = 0.75 }) {
+    const problems = [];
     const { shards } = planShards([h], { costs });
-    for (const s of shards) assert.ok(s.seconds <= MARGIN, `shard ${s.index} is planned at ${s.seconds}s, past ${MARGIN}s`);
-    const rowsOf = (o, run) => {
+    for (const s of shards) if (s.seconds > margin) problems.push(`shard ${s.index} is planned at ${s.seconds}s, past ${margin}s`);
+    const rowsOf = (o) => {
       const from = h.rowLabels.indexOf(o.first);
       const to = h.rowLabels.indexOf(o.last);
-      assert.ok(from !== -1 && to > from, `sanity: the slice run ${run} timed is rows today (${from}, ${to})`);
-      return { from, to };
+      return from !== -1 && to > from ? { from, to } : null;
     };
-    for (const o of [...TIMED.map((t) => ({ ...t, run: 42640417868 })), ...OVERRUNS]) {
-      const { from, to } = rowsOf(o, o.run);
-      const slice = { tool: BOUNDARY, rows: to + 1 - from, rowLabels: h.rowLabels.slice(from, to + 1), rowSuites: h.rowSuites.slice(from, to + 1) };
+    const slices = [...timed.map((t) => ({ ...t, overrun: false })), ...overruns.map((o) => ({ ...o, overrun: true }))];
+    let resolved = 0;
+    for (const o of slices) {
+      const at = rowsOf(o);
+      if (!at) continue;
+      resolved++;
+      const { from, to } = at;
+      const slice = { tool: h.tool, rows: to + 1 - from, rowLabels: h.rowLabels.slice(from, to + 1), rowSuites: h.rowSuites.slice(from, to + 1) };
       const planned = planShards([slice], { costs, target: Infinity }).seconds;
-      assert.ok(planned >= o.seconds * 0.75,
-        `rows ${from}:${to + 1} are planned at ${planned}s; CI run ${o.run} took ${o.seconds}s over them`);
+      if (planned < o.seconds * 0.75) problems.push(`rows ${from}:${to + 1} are planned at ${planned}s; CI run ${o.run} took ${o.seconds}s over them`);
+      if (o.overrun) {
+        const holding = shards.filter((s) => s.units.some((u) => u.tool === h.tool && (u.start ?? 0) <= to && (u.end ?? h.rows) > from));
+        if (holding.length < 2) problems.push(`rows ${from}:${to + 1} are planned in ${holding.length} shard(s)`);
+      }
     }
-    for (const o of OVERRUNS) {
-      const { from, to } = rowsOf(o, o.run);
-      const holding = shards.filter((s) => s.units.some((u) => u.tool === BOUNDARY && (u.start ?? 0) <= to && (u.end ?? h.rows) > from));
-      assert.ok(holding.length >= 2, `rows ${from}:${to + 1} are planned in ${holding.length} shard(s)`);
+    if (resolved < Math.ceil(found * slices.length)) {
+      problems.push(`only ${resolved} of the ${slices.length} slices CI timed are still found by their labels: `
+        + 'time the harness again from a recent CI run and name its slices here');
     }
+    return problems;
+  }
+
+  const boundary = () => {
+    const tools = path.join(REPO, 'test', 'tools');
+    const h = loadHarnesses({ toolsDir: tools, root: REPO }).find((x) => x.tool === BOUNDARY);
+    return { h, costs: readCosts(tools) };
+  };
+  const SLICES = { timed: TIMED.map((t) => ({ ...t, run: 42640417868 })), overruns: OVERRUNS };
+  const renamed = (h, labels) => ({ ...h, rowLabels: h.rowLabels.map((l) => (labels.includes(l) ? `${l} (renamed)` : l)) });
+
+  test('the boundary harness is planned at what CI measured: every shard within the margin, every slice CI timed planned near its time, and no overrun slice in one shard', () => {
+    const { h, costs } = boundary();
+    const problems = boundaryPlanProblems(h, costs, SLICES);
+    assert.ok(problems.length === 0, problems.join('\n'));
+  });
+
+  test('a timed slice whose endpoint is renamed is skipped, and the rest are still held to what CI took', () => {
+    const { h, costs } = boundary();
+    assert.deepStrictEqual(boundaryPlanProblems(renamed(h, [TIMED[3].last]), costs, SLICES), []);
+    // The checks that remain still bite: the same rename with every row
+    // costed at a tenth of a second fails on the slices still found.
+    const cheap = { ...costs, perLabel: { ...costs.perLabel, [BOUNDARY]: Object.fromEntries(h.rowLabels.map((l) => [l, 0.1])) } };
+    const problems = boundaryPlanProblems(renamed(h, [TIMED[3].last]), cheap, SLICES);
+    assert.ok(problems.some((p) => /CI run 42640417868 took/.test(p)), problems.join('\n'));
+    assert.ok(!problems.some((p) => /still found/.test(p)), problems.join('\n'));
+  });
+
+  test('when too few timed slices are found by their labels, the check fails and says to time them again', () => {
+    const { h, costs } = boundary();
+    const gone = TIMED.slice(0, 3).map((t) => t.first);
+    const problems = boundaryPlanProblems(renamed(h, gone), costs, SLICES);
+    assert.ok(problems.some((p) => /^only 8 of the 11 slices CI timed are still found/.test(p)), problems.join('\n'));
   });
 });
 
